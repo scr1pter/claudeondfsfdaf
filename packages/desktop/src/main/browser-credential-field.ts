@@ -20,7 +20,43 @@ export function isCredentialField(field: {
   if (/one-time-code|current-password|new-password|cc-number|cc-csc/.test((field.autocomplete || "").toLowerCase())) {
     return true
   }
-  return /pass(word|wd)|pwd|otp|totp|mfa|2fa|one-?time|verification-?code|security-?code|card-?number|cc-?num|cvv|cvc|csc/.test(
-    `${field.name || ""} ${field.id || ""}`.toLowerCase(),
-  )
+  // Names and ids are read as words, split on separators, camelCase and a letter followed by a digit, so card_number,
+  // payment[cc_number], oneTimeCode, cvv2 and otp1 match while footprint, timeSlotPicker and phone-time, which only hold
+  // the letters, do not. A digit followed by letters stays one word (2fa). The long words count anywhere inside another
+  // one (newpassword, creditcardnumber), and the short ones at either end of one (smsotp, otpinput, userpwd, cardcvv).
+  // csc is left out of those ends: cscope is no field to refuse.
+  const inside = ["password", "passwd", "cardnumber", "verificationcode", "securitycode", "onetimecode"]
+  const ends = ["pwd", "otp", "totp", "mfa", "cvv", "cvc"]
+  const words = new Set([
+    "pwd",
+    "otp",
+    "otpcode",
+    "totp",
+    "mfa",
+    "mfacode",
+    "2fa",
+    "cvv",
+    "cvc",
+    "csc",
+    "ccnum",
+    "ccnumber",
+    "onetime",
+  ])
+  const pairs = new Set(["one time", "verification code", "security code", "card number", "cc num", "cc number"])
+  return [field.name, field.id].some((value) => {
+    const tokens = (value || "")
+      .replace(/([a-z])([A-Z])/g, "$1 $2")
+      .replace(/([A-Z])([A-Z][a-z])/g, "$1 $2")
+      .replace(/([a-zA-Z])(\d)/g, "$1 $2")
+      .toLowerCase()
+      .split(/[-_\s[\].:]+/)
+      .filter(Boolean)
+    return tokens.some(
+      (token, index) =>
+        inside.some((word) => token.includes(word)) ||
+        words.has(token) ||
+        ends.some((word) => token.startsWith(word) || token.endsWith(word)) ||
+        pairs.has(`${token} ${tokens[index + 1] ?? ""}`),
+    )
+  })
 }

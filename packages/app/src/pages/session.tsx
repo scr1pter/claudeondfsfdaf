@@ -72,6 +72,7 @@ import {
   focusTerminalById,
   shouldFocusTerminalOnKeyDown,
   shouldShowFileTree,
+  typingTerminal,
 } from "@/pages/session/helpers"
 import { checkCommitMessage, commitWarning, type CommitCheck } from "@/pages/session/commit-check"
 import { MessageTimeline } from "@/pages/session/timeline/message-timeline"
@@ -1177,9 +1178,9 @@ export default function Page() {
       return
     }
 
-    // Prefer the open terminal over the composer when it can take focus
+    // Prefer the open terminal over the composer when it can take focus, unless an agent's program runs there
     if (view().terminal.opened()) {
-      const id = terminal.active()
+      const id = typingTerminal(terminal.all(), terminal.active())
       if (id && shouldFocusTerminalOnKeyDown(event) && focusTerminalById(id)) return
     }
 

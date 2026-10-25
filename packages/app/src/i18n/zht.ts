@@ -543,6 +543,9 @@ export const dict = {
   "terminal.title": "終端機",
   "terminal.title.numbered": "終端機 {{number}}",
   "terminal.close": "關閉終端機",
+  "terminal.agent": "由代理程式開啟",
+  "terminal.exited": "已結束 {{code}}",
+  "terminal.ended": "已結束",
 
   "terminal.connectionLost.title": "連線中斷",
   "terminal.connectionLost.description": "終端機連線已中斷。這可能會在伺服器重新啟動時發生。",

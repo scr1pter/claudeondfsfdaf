@@ -70,6 +70,7 @@ export type Event =
   | EventPtyUpdated
   | EventPtyExited
   | EventPtyDeleted
+  | EventPtyRevealed
   | EventQuestionV2Asked
   | EventQuestionV2Replied
   | EventQuestionV2Rejected
@@ -741,6 +742,11 @@ export type Prompt = {
   agent?: string
 }
 
+export type PtyOwner = {
+  kind: "agent"
+  sessionID: string
+}
+
 export type Pty = {
   id: string
   title: string
@@ -750,6 +756,7 @@ export type Pty = {
   status: "running" | "exited"
   pid: number
   exitCode?: number
+  owner?: PtyOwner
 }
 
 export type Todo = {
@@ -1524,6 +1531,14 @@ export type GlobalEvent = {
         type: "pty.deleted"
         properties: {
           id: string
+        }
+      }
+    | {
+        id: string
+        type: "pty.revealed"
+        properties: {
+          id: string
+          focus: boolean
         }
       }
     | {
@@ -5315,6 +5330,7 @@ export type V2Event =
   | PtyUpdated
   | PtyExited
   | PtyDeleted
+  | PtyRevealed
   | QuestionV2Asked
   | QuestionV2Replied
   | QuestionV2Rejected
@@ -8520,6 +8536,24 @@ export type PtyDeleted = {
   }
 }
 
+export type PtyRevealed = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "pty.revealed"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    id: string
+    focus: boolean
+  }
+}
+
 export type QuestionV2Asked = {
   id: string
   metadata?: {
@@ -9933,6 +9967,15 @@ export type EventPtyDeleted = {
   type: "pty.deleted"
   properties: {
     id: string
+  }
+}
+
+export type EventPtyRevealed = {
+  id: string
+  type: "pty.revealed"
+  properties: {
+    id: string
+    focus: boolean
   }
 }
 

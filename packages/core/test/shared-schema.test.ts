@@ -131,6 +131,7 @@ test("Core reuses the canonical shared schemas", async () => {
     [coreProjectCopy.Event, ProjectDirectories.Event],
     [PluginV2.ID, Plugin.ID],
     [PluginV2.Event, Plugin.Event],
+    [corePty.Owner, Pty.Owner],
     [corePty.Info, Pty.Info],
     [corePty.Event, Pty.Event],
     [coreProject.ID, Project.ID],

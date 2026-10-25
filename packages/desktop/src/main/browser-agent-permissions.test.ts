@@ -12,6 +12,12 @@ class FakeSession {
   check?: Handler
   installs = 0
   readonly listeners = new Map<string, Handler>()
+  readonly web = new Map<string, Handler>()
+  readonly webRequest = {
+    onSendHeaders: (listener: Handler) => void this.web.set("sendHeaders", listener),
+    onCompleted: (listener: Handler) => void this.web.set("completed", listener),
+    onErrorOccurred: (listener: Handler) => void this.web.set("errorOccurred", listener),
+  }
   setPermissionRequestHandler(handler: Handler) {
     this.installs++
     this.request = handler
@@ -28,10 +34,14 @@ class FakeSession {
 const page = { stuck: false }
 const answer = () => (page.stuck ? new Promise<never>(() => undefined) : Promise.resolve(undefined))
 const worlds: { world: number; code: string }[] = []
+const ids = { contents: 0 }
 const contents = () => {
   const state = { closed: false }
   return {
+    id: ++ids.contents,
     on: () => undefined,
+    once: () => undefined,
+    removeListener: () => undefined,
     setWindowOpenHandler: () => undefined,
     isDestroyed: () => state.closed,
     getURL: () => "",
@@ -69,17 +79,35 @@ class FakeView {
   }
 }
 
-const fakeWindow = () => ({
-  contentView: { addChildView: () => undefined, removeChildView: () => undefined },
-  webContents: { send: () => undefined },
-  once: () => undefined,
-  isDestroyed: () => false,
-})
+// Every window made, the park window included, with the views it holds.
+const made: FakeWindow[] = []
+class FakeWindow {
+  readonly children = new Set<FakeView>()
+  readonly contentView = {
+    addChildView: (view: FakeView) => void this.children.add(view),
+    removeChildView: (view: FakeView) => void this.children.delete(view),
+  }
+  readonly webContents = { send: () => undefined }
+  destroyed = false
+  constructor(readonly options?: Record<string, unknown>) {
+    made.push(this)
+  }
+  once() {}
+  isDestroyed() {
+    return this.destroyed
+  }
+  destroy() {
+    this.destroyed = true
+  }
+}
+const fakeWindow = () => new FakeWindow()
+// The hidden window that holds every view no Preview shows.
+const parked = () => made.find((window) => window.options?.show === false && !window.destroyed)
 
 const partitions = new Map<string, FakeSession>()
-const windows = new Map<unknown, ReturnType<typeof fakeWindow>>()
+const windows = new Map<unknown, FakeWindow>()
 const electron = {
-  BrowserWindow: { fromWebContents: (sender: unknown) => windows.get(sender) },
+  BrowserWindow: Object.assign(FakeWindow, { fromWebContents: (sender: unknown) => windows.get(sender) }),
   WebContentsView: FakeView,
   session: {
     fromPartition: (name: string) => {
@@ -176,17 +204,22 @@ describe("dialogs over the agent browser", () => {
   const context = (id: string, window: object, visible: boolean) => {
     const view = new FakeView()
     view.visible = visible
-    return { id, view, hostWindow: window } as unknown as agent.BrowserContext
+    return {
+      id,
+      tabs: [{ id: "tab_1", view, window }],
+      active: "tab_1",
+      hostWindow: window,
+    } as unknown as agent.BrowserContext
   }
 
   test("hide every view in the dialog's window, and restore only the ones they hid", () => {
     const window = fakeWindow()
     const elsewhere = fakeWindow()
     const shown = context("shown", window, true)
-    const parked = context("parked", window, false)
+    const hidden = context("hidden", window, false)
     const other = context("other", elsewhere, true)
-    const all = [shown, parked, other]
-    const visible = () => all.map((item) => (item.view as unknown as FakeView).visible)
+    const all = [shown, hidden, other]
+    const visible = () => all.map((item) => (item.tabs[0]!.view as unknown as FakeView).visible)
 
     agent.setWindowVisible(window as never, false, all)
     expect(visible()).toEqual([false, false, true])
@@ -198,30 +231,38 @@ describe("dialogs over the agent browser", () => {
 
   test("the app's dialog hides the attached browser whatever context it names, and a view attached under it waits", async () => {
     const { event, window } = panel()
-    await run({ contextId: "ses_panel", command: "attach", bounds: { x: 0, y: 0, width: 800, height: 600 } }, event)
+    const bounds = { x: 0, y: 0, width: 800, height: 600 }
+    await run({ contextId: "ses_panel", command: "attach", bounds }, event)
     const view = created.at(-1)!
     expect(view.visible).toBe(true)
+    expect(window.children.has(view)).toBe(true)
 
     expect((await run({ contextId: "modal", command: "setVisible", visible: false }, event)).browserStatus).toBe(
       "stopped",
     )
     expect(view.visible).toBe(false)
 
-    await run({ contextId: "ses_panel_late", command: "attach" }, event)
+    await run({ contextId: "ses_panel_late", command: "attach", bounds }, event)
     const late = created.at(-1)!
     expect(late).not.toBe(view)
     expect(late.visible).toBe(false)
 
     await run({ contextId: "modal", command: "setVisible", visible: true }, event)
-    // The view attached last is the one the panel shows; attaching it parked the first.
+    // The view attached last is the one the panel shows; attaching it parked the first, which keeps drawing there.
     expect(late.visible).toBe(true)
-    expect(view.visible).toBe(false)
+    expect(window.children.has(late)).toBe(true)
+    expect(window.children.has(view)).toBe(false)
+    expect(parked()!.children.has(view)).toBe(true)
+    expect(view.visible).toBe(true)
     expect(windows.get(event.sender)).toBe(window)
   })
 
   test("a show request that does not come from the panel waits for the dialog to close too", async () => {
     const { event } = panel()
-    await run({ contextId: "ses_bridge_show", command: "attach" }, event)
+    await run(
+      { contextId: "ses_bridge_show", command: "attach", bounds: { x: 0, y: 0, width: 800, height: 600 } },
+      event,
+    )
     const view = created.at(-1)!
     await run({ contextId: "modal", command: "setVisible", visible: false }, event)
     expect(view.visible).toBe(false)

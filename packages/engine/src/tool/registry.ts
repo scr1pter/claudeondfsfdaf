@@ -1,4 +1,5 @@
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
+import { LocationServiceMap, locationServiceMapLayer } from "@vectordevai/core/location-services"
 import { httpClient } from "@vectordevai/core/effect/app-node-platform"
 import { Ripgrep } from "@vectordevai/core/ripgrep"
 import { PlanExitTool } from "./plan"
@@ -6,6 +7,7 @@ import { Session } from "@/session/session"
 import { SessionStatus } from "@/session/status"
 import { QuestionTool } from "./question"
 import { ShellTool } from "./shell"
+import { TerminalTool } from "./terminal"
 import { EditTool } from "./edit"
 import { GlobTool } from "./glob"
 import { GrepTool } from "./grep"
@@ -150,6 +152,7 @@ const layer = Layer.effect(
     const plan = yield* PlanExitTool
     const webfetch = yield* WebFetchTool
     const shell = yield* ShellTool
+    const terminaltool = yield* TerminalTool
     const globtool = yield* GlobTool
     const writetool = yield* WriteTool
     const edit = yield* EditTool
@@ -276,6 +279,7 @@ const layer = Layer.effect(
           invalid: Tool.init(invalid),
           escalate: Tool.init(escalate),
           shell: Tool.init(shell),
+          terminal: Tool.init(terminaltool),
           read: Tool.init(read),
           glob: Tool.init(globtool),
           grep: Tool.init(greptool),
@@ -309,6 +313,7 @@ const layer = Layer.effect(
             tool.invalid,
             ...(questionEnabled ? [tool.question] : []),
             tool.shell,
+            tool.terminal,
             tool.read,
             tool.glob,
             tool.grep,
@@ -522,6 +527,13 @@ function isJsonSchemaObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
 }
 
+// The same location services the app's terminal routes reach, so the terminal tool sees the terminals the panel shows.
+const locationServiceMapNode = LayerNode.make({
+  service: LocationServiceMap.Service,
+  layer: locationServiceMapLayer,
+  deps: [],
+})
+
 export const node = LayerNode.make({
   service: Service,
   layer,
@@ -557,6 +569,7 @@ export const node = LayerNode.make({
     Global.node,
     ResearchStore.node,
     ResearchRun.node,
+    locationServiceMapNode,
   ],
 })
 

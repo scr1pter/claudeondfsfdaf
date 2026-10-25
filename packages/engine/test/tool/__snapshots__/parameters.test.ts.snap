@@ -538,3 +538,163 @@ exports[`tool parameters JSON Schema (wire shape) write 1`] = `
   "type": "object",
 }
 `;
+
+exports[`tool parameters JSON Schema (wire shape) terminal 1`] = `
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "action": {
+      "description": "The terminal action to perform",
+      "enum": [
+        "list",
+        "open",
+        "read",
+        "type",
+        "keys",
+        "wait",
+        "resize",
+        "close",
+        "reveal",
+      ],
+      "type": "string",
+    },
+    "args": {
+      "description": "open: arguments for command, which is then a program, not a command line",
+      "items": {
+        "type": "string",
+      },
+      "type": "array",
+    },
+    "cols": {
+      "description": "open, resize: columns",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer",
+    },
+    "command": {
+      "description": "open: a command line, run by your shell as the shell tool runs it. With args, the program to start directly. Omit for an interactive shell.",
+      "type": "string",
+    },
+    "cursor": {
+      "description": "read, wait: start from this output cursor, as an earlier result gave it",
+      "maximum": 9007199254740991,
+      "minimum": 0,
+      "type": "integer",
+    },
+    "cwd": {
+      "description": "open: working directory, the project directory by default",
+      "type": "string",
+    },
+    "enter": {
+      "description": "type: press Enter after the text",
+      "type": "boolean",
+    },
+    "exit": {
+      "description": "wait: wait for the process to exit",
+      "type": "boolean",
+    },
+    "focus": {
+      "description": "reveal: also move the user's keyboard focus to it",
+      "type": "boolean",
+    },
+    "id": {
+      "description": "The terminal (pty_…) from list or open. Required for every action but list and open.",
+      "type": "string",
+    },
+    "keys": {
+      "description": "keys: keys to press, in order",
+      "items": {
+        "enum": [
+          "enter",
+          "tab",
+          "escape",
+          "backspace",
+          "delete",
+          "up",
+          "down",
+          "left",
+          "right",
+          "home",
+          "end",
+          "page_up",
+          "page_down",
+          "space",
+          "ctrl-a",
+          "ctrl-b",
+          "ctrl-c",
+          "ctrl-d",
+          "ctrl-e",
+          "ctrl-f",
+          "ctrl-g",
+          "ctrl-h",
+          "ctrl-k",
+          "ctrl-l",
+          "ctrl-n",
+          "ctrl-o",
+          "ctrl-p",
+          "ctrl-r",
+          "ctrl-t",
+          "ctrl-u",
+          "ctrl-w",
+          "ctrl-x",
+          "ctrl-y",
+          "ctrl-z",
+        ],
+        "type": "string",
+      },
+      "maxItems": 32,
+      "type": "array",
+    },
+    "lines": {
+      "description": "read: without a cursor, how many of the last lines to show (200 by default, at most 2000)",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer",
+    },
+    "pattern": {
+      "description": "wait: a regular expression to wait for in the output",
+      "type": "string",
+    },
+    "quiet": {
+      "description": "wait: wait until there is no new output for this many milliseconds",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer",
+    },
+    "reveal": {
+      "description": "open: show it to the user right away",
+      "type": "boolean",
+    },
+    "rows": {
+      "description": "open, resize: rows",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer",
+    },
+    "text": {
+      "description": "type: the text to type. A line break submits the line, as Enter does.",
+      "type": "string",
+    },
+    "timeout": {
+      "description": "wait: give up after this many milliseconds (30000 by default, at most 60000)",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer",
+    },
+    "title": {
+      "description": "open: the tab title",
+      "maxLength": 80,
+      "type": "string",
+    },
+  },
+  "required": [
+    "action",
+  ],
+  "type": "object",
+}
+`;

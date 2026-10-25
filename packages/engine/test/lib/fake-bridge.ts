@@ -51,6 +51,15 @@ export function start(handler: Handler = () => ({})): Bridge {
   }
 }
 
+/** What the engine sent the visible browser from call `from` on: each command's body, in order. */
+export function sent(bridge: Bridge, from = 0) {
+  return bridge
+    .calls()
+    .slice(from)
+    .filter((call) => call.path === "/command")
+    .map((call) => call.body)
+}
+
 /** Points the engine at this bridge, as the desktop app does, until `off`. */
 export function use(bridge: Bridge) {
   process.env.VECTOR_BROWSER_BRIDGE_URL = bridge.url

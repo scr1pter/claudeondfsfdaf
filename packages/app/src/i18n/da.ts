@@ -550,6 +550,9 @@ export const dict = {
   "terminal.title": "Terminal",
   "terminal.title.numbered": "Terminal {{number}}",
   "terminal.close": "Luk terminal",
+  "terminal.agent": "Åbnet af en agent",
+  "terminal.exited": "afsluttet {{code}}",
+  "terminal.ended": "afsluttet",
 
   "terminal.connectionLost.title": "Forbindelse mistet",
   "terminal.connectionLost.description": "Terminalforbindelsen blev afbrudt. Dette kan ske, når serveren genstarter.",

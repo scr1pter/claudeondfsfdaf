@@ -28,6 +28,7 @@ import { ModelV2 } from "@vectordevai/core/model"
 import { SessionProjector } from "@vectordevai/core/session/projector"
 import { LLMEvent, Usage } from "@vectordevai/llm"
 import { Snapshot } from "../../src/snapshot"
+import { Permission } from "../../src/permission"
 
 const summary = Layer.succeed(
   SessionSummary.Service,
@@ -1567,6 +1568,83 @@ it.live("session admission settles reported complete usage once despite persiste
         expect(settled).toHaveLength(1)
         expect(settled[0]).toMatchObject({ complete: true, context: 10, cost: 0, usage: { totalTokens: 11 } })
         expect(yield* llm.calls).toBe(1)
+      }),
+    { trusted: true, config: (url) => providerCfg(url) },
+  ),
+)
+
+// The doom-loop check asks the session's agent (build's defaults ask doom_loop), so the pending asks show it.
+const itAsks = testEffect(
+  LayerNode.compile(
+    LayerNode.group([
+      root,
+      Permission.node,
+      LayerNode.make({ service: TestLLMServer, layer: TestLLMServer.layer, deps: [] }),
+    ]),
+    replacements,
+  ),
+)
+
+// One assistant step that makes the same terminal call three times, answered by a stand-in terminal tool.
+const repeatTerminal = Effect.fn("test.repeatTerminal")(function* (
+  dir: string,
+  llm: TestLLMServer["Service"],
+  input: Record<string, string>,
+) {
+  const { processors, session, provider } = yield* boot()
+  yield* llm.push(reply().tool("terminal", input).tool("terminal", input).tool("terminal", input))
+  const chat = yield* session.create({})
+  const parent = yield* user(chat.id, "terminal")
+  const msg = yield* assistant(chat.id, parent.id, path.resolve(dir))
+  const mdl = yield* provider.getModel(ref.providerID, ref.modelID)
+  const handle = yield* processors.create({ assistantMessage: msg, sessionID: chat.id, model: mdl })
+  const run = yield* handle
+    .process({
+      user: {
+        id: parent.id,
+        sessionID: chat.id,
+        role: "user",
+        time: parent.time,
+        agent: parent.agent,
+        model: { providerID: ref.providerID, modelID: ref.modelID },
+      } satisfies SessionV1.User,
+      sessionID: chat.id,
+      model: mdl,
+      agent: agent(),
+      system: [],
+      messages: [{ role: "user", content: "terminal" }],
+      tools: {
+        terminal: tool({
+          description: "Terminal",
+          inputSchema: z.object({ action: z.string(), id: z.string(), text: z.string().optional() }),
+          execute: async () => ({ title: "Terminal", output: "cursor=0", metadata: {} }),
+        }),
+      },
+    })
+    .pipe(Effect.forkChild)
+  return { run, msg }
+})
+
+itAsks.live("session.processor polling a terminal with the same call is progress, not a doom loop", () =>
+  provideTmpdirServer(
+    ({ dir, llm }) =>
+      Effect.gen(function* () {
+        const permission = yield* Permission.Service
+        const polled = yield* repeatTerminal(dir, llm, { action: "read", id: "pty_1" })
+        expect(yield* Fiber.join(polled.run)).toBe("continue")
+        expect(yield* permission.list()).toEqual([])
+        const parts = yield* MessageV2.parts(polled.msg.id)
+        expect(parts.filter((part) => part.type === "tool" && part.state.status === "completed")).toHaveLength(3)
+
+        // The same input typed three times is not polling: it still asks.
+        const typed = yield* repeatTerminal(dir, llm, { action: "type", id: "pty_1", text: "y" })
+        const asked = yield* waitFor(
+          permission.list().pipe(Effect.map((list) => list.find((item) => item.permission === "doom_loop"))),
+          "doom_loop was not asked",
+        )
+        expect(asked.patterns).toEqual(["terminal"])
+        yield* permission.reply({ requestID: asked.id, reply: "once" })
+        yield* Fiber.join(typed.run)
       }),
     { trusted: true, config: (url) => providerCfg(url) },
   ),

@@ -23,6 +23,8 @@ const DEFAULT_TOGGLE_TERMINAL_KEYBIND = "ctrl+`"
 export interface TerminalProps extends ComponentProps<"div"> {
   pty: LocalPTY
   autoFocus?: boolean
+  /** An agent's terminal whose process ended: shows what the server replays, once, and takes no input. */
+  readOnly?: boolean
   onSubmit?: () => void
   onCleanup?: (pty: Partial<LocalPTY> & { id: string }) => void
   onConnect?: () => void
@@ -172,7 +174,15 @@ export const Terminal = (props: TerminalProps) => {
   const password = auth?.password ?? ""
   const sameOrigin = new URL(url, location.href).origin === location.origin
   let container!: HTMLDivElement
-  const [local, others] = splitProps(props, ["pty", "class", "classList", "autoFocus", "onConnect", "onConnectError"])
+  const [local, others] = splitProps(props, [
+    "pty",
+    "class",
+    "classList",
+    "autoFocus",
+    "readOnly",
+    "onConnect",
+    "onConnectError",
+  ])
   const id = local.pty.id
   const restore = typeof local.pty.buffer === "string" ? local.pty.buffer : ""
   const restoreSize =
@@ -443,6 +453,7 @@ export const Terminal = (props: TerminalProps) => {
       })
       cleanups.push(() => disposeIfDisposable(onResize))
       const onData = t.onData((data) => {
+        if (local.readOnly) return
         if (data.includes("\r")) {
           const at = Date.now()
           if (at - lastTerminalStartAt > 1200) {
@@ -655,6 +666,8 @@ export const Terminal = (props: TerminalProps) => {
           socket.removeEventListener("error", handleError)
           socket.removeEventListener("close", handleClose)
           if (disposed) return
+          // The server replays a finished terminal and closes; when its PTY is gone, the screen it kept is all there is.
+          if (local.readOnly) return
           if (event.code === 1000) {
             dispatchTerminalActivity(
               "success",

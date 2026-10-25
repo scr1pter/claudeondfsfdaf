@@ -498,6 +498,9 @@ export const dict = {
   "terminal.title": "ターミナル",
   "terminal.title.numbered": "ターミナル {{number}}",
   "terminal.close": "ターミナルを閉じる",
+  "terminal.agent": "エージェントが開いたターミナル",
+  "terminal.exited": "終了 {{code}}",
+  "terminal.ended": "終了",
   "terminal.connectionLost.title": "接続が失われました",
   "terminal.connectionLost.description":
     "ターミナルの接続が中断されました。これはサーバーが再起動したときに発生することがあります。",

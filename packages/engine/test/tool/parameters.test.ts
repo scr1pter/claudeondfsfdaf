@@ -21,6 +21,7 @@ import { Parameters as Read } from "../../src/tool/read"
 import { Parameters as Shell } from "../../src/tool/shell"
 import { Parameters as Skill } from "../../src/tool/skill"
 import { BatchParameters, Parameters as Task } from "../../src/tool/task"
+import { Parameters as Terminal } from "../../src/tool/terminal"
 import { Parameters as Todo } from "../../src/tool/todo"
 import { Parameters as WebFetch } from "../../src/tool/webfetch"
 import { Parameters as Write } from "../../src/tool/write"
@@ -47,6 +48,7 @@ describe("tool parameters", () => {
     test("read", () => expect(toJsonSchema(Read)).toMatchSnapshot())
     test("skill", () => expect(toJsonSchema(Skill)).toMatchSnapshot())
     test("task", () => expect(toJsonSchema(BatchParameters)).toMatchSnapshot())
+    test("terminal", () => expect(toJsonSchema(Terminal)).toMatchSnapshot())
     test("todo", () => expect(toJsonSchema(Todo)).toMatchSnapshot())
     test("webfetch", () => expect(toJsonSchema(WebFetch)).toMatchSnapshot())
     test("write", () => expect(toJsonSchema(Write)).toMatchSnapshot())
@@ -114,6 +116,30 @@ describe("tool parameters", () => {
     })
     test("rejects missing command", () => {
       expect(accepts(Shell, {})).toBe(false)
+    })
+  })
+
+  describe("terminal", () => {
+    test("accepts every action with its own fields", () => {
+      expect(parse(Terminal, { action: "list" })).toEqual({ action: "list" })
+      expect(parse(Terminal, { action: "open", command: "npm", args: ["run", "dev"], reveal: true })).toEqual({
+        action: "open",
+        command: "npm",
+        args: ["run", "dev"],
+        reveal: true,
+      })
+      expect(accepts(Terminal, { action: "keys", id: "pty_1", keys: ["ctrl-c", "up", "page_down", "space"] })).toBe(
+        true,
+      )
+      expect(accepts(Terminal, { action: "wait", id: "pty_1", pattern: "ready", timeout: 1000, cursor: 0 })).toBe(true)
+    })
+    test("rejects unknown actions and keys, long titles and out-of-range numbers", () => {
+      expect(accepts(Terminal, { action: "evaluate" })).toBe(false)
+      expect(accepts(Terminal, { action: "keys", id: "pty_1", keys: ["ctrl-q"] })).toBe(false)
+      expect(accepts(Terminal, { action: "keys", id: "pty_1", keys: Array(33).fill("enter") })).toBe(false)
+      expect(accepts(Terminal, { action: "open", title: "x".repeat(81) })).toBe(false)
+      expect(accepts(Terminal, { action: "read", id: "pty_1", cursor: -1 })).toBe(false)
+      expect(accepts(Terminal, { action: "read", id: "pty_1", lines: 0 })).toBe(false)
     })
   })
 

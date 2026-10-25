@@ -165,6 +165,75 @@ it.instance(
 )
 
 it.instance(
+  "the page reached after a sign-in is kept and shown with its code and tokens redacted (B18)",
+  () =>
+    Effect.gen(function* () {
+      const test = yield* setup()
+      const sessions = yield* Session.Service
+      const session = yield* sessions.create({ title: "Dashboard" })
+      const callback =
+        "http://localhost:4000/callback?code=c0de42#access_token=eyJsecret&refresh_token=r3fr3sh&type=magiclink"
+      bridge.answer(visible(callback).handler)
+      yield* answer(CONTINUE)
+      yield* test.llm.tool("browser", { action: "handoff", reason: "Sign in to the staging dashboard." })
+      yield* test.llm.text("Done.")
+      yield* send({ sessionID: session.id, agent: "build", text: "Check the staging dashboard's numbers." })
+      const [handoff] = yield* calls(session.id, "browser")
+      expect(handoff?.state.status === "completed" ? handoff.state.metadata.url : undefined).toBe(
+        "http://localhost:4000/callback?code=%5BREDACTED%5D#access_token=%5BREDACTED%5D&refresh_token=%5BREDACTED%5D&type=magiclink",
+      )
+      for (const secret of ["c0de42", "eyJsecret", "r3fr3sh"]) expect(JSON.stringify(handoff)).not.toContain(secret)
+    }),
+  90_000,
+)
+
+it.instance(
+  "in Deep research the lead reads the page the user reached after a sign-in that left tokens in its address",
+  () =>
+    Effect.gen(function* () {
+      const test = yield* setup()
+      const sessions = yield* Session.Service
+      const session = yield* sessions.create({
+        title: "Research",
+        permission: [{ permission: "research_read", pattern: "*", action: "allow" }],
+      })
+      const paywall = web.url("paywall", "/")
+      const browser = visible("about:blank")
+      // Signing in lands the user back on the article, with the site's code and tokens in the address.
+      bridge.answer((call) => {
+        const answered = browser.handler(call)
+        if (call.body.command === "openUrl")
+          browser.state.current = `${String(call.body.url)}?code=c0de42#access_token=eyJsecret`
+        return answered
+      })
+      yield* answer(CONTINUE)
+      yield* test.llm.tool("research_plan", plan())
+      yield* test.llm.tool("browser", { action: "handoff", url: paywall, reason: "The article is for subscribers." })
+      yield* test.llm.tool("browser", { action: "read" })
+      yield* test.llm.text("Done.")
+      yield* send({ sessionID: session.id, agent: "research", text: `Research heat pump supply prices: ${paywall}` })
+
+      const [handoff, read] = yield* calls(session.id, "browser")
+      expect(output(handoff)).toContain("The user finished in the browser.")
+      // The handed page is compared by its redacted address, so the lead reads it, and nothing it keeps holds a token.
+      expect(output(read)).toContain("S1 · ")
+      expect(output(read)).toContain("the compressor makers plan to raise prices")
+      for (const secret of ["c0de42", "eyJsecret"]) {
+        expect(JSON.stringify(handoff)).not.toContain(secret)
+        expect(JSON.stringify(read)).not.toContain(secret)
+      }
+      const research = yield* ResearchRun.Service
+      const store = yield* ResearchStore.Service
+      const runID = read?.state.status === "completed" ? String(read.state.metadata.runID) : ""
+      const saved = yield* store.source(yield* research.place(), runID, "S1")
+      expect(saved?.private).toBe(true)
+      expect(JSON.stringify(saved?.source)).not.toContain("c0de42")
+      expect(guard.outside()).toEqual([])
+    }),
+  120_000,
+)
+
+it.instance(
   "a cancelled handoff carries on without the page",
   () =>
     Effect.gen(function* () {

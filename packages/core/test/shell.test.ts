@@ -63,6 +63,20 @@ describe("shell", () => {
     expect(zsh.at(-1)).toBe("/tmp")
   })
 
+  test("shows the command line a shell runs, not the bash or zsh wrapper around it", () => {
+    const line = 'sleep 30 && npm run dev -- --host "0.0.0.0"\necho done'
+    for (const shell of ["/bin/zsh", "/bin/bash"])
+      expect(Shell.commandLine(shell, Shell.args(shell, line, "/tmp"))).toBe(line)
+    // Other shells take the line as their last argument, and a program its own arguments.
+    expect(Shell.commandLine("/bin/sh", Shell.args("/bin/sh", "echo hi", "/tmp"))).toBe("/bin/sh -c echo hi")
+    expect(Shell.commandLine("/usr/bin/node", ["server.js", "--port", "3000"])).toBe(
+      "/usr/bin/node server.js --port 3000",
+    )
+    // A wrapper-shaped argv whose last line is no string the wrapper would have written is shown as it is.
+    const odd = ["-l", "-c", 'cd -- "$1"\neval "\\x"\n', "vector", "/tmp"]
+    expect(Shell.commandLine("/bin/bash", odd)).toBe(["/bin/bash", ...odd].join(" "))
+  })
+
   if (process.platform === "win32") {
     test("rejects blacklisted shells case-insensitively", async () => {
       await withShell("NU.EXE", async () => {

@@ -500,6 +500,9 @@ export const dict = {
   "terminal.title": "Terminal",
   "terminal.title.numbered": "Terminal {{number}}",
   "terminal.close": "Fechar terminal",
+  "terminal.agent": "Aberto por um agente",
+  "terminal.exited": "encerrado {{code}}",
+  "terminal.ended": "encerrado",
   "terminal.connectionLost.title": "Conexão Perdida",
   "terminal.connectionLost.description":
     "A conexão do terminal foi interrompida. Isso pode acontecer quando o servidor reinicia.",

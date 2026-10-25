@@ -443,6 +443,36 @@ export type BrowserAutomationRun = {
   inputs: { tag: string; selector: string; placeholder?: string; type?: string; name?: string }[]
   browserStatus?: "stopped" | "launching" | "running"
   currentPage?: string
+  tabs?: BrowserAgentTab[]
+  activeTab?: string
+  /** JavaScript dialogs the page opened since the last report, all answered automatically (dismissed). */
+  dialogs?: BrowserAgentDialog[]
+  /** readLogs: the active tab's request log, oldest first, at most 200. */
+  network?: BrowserAgentRequest[]
+  /** inspectPageHtml: the length of the whole document's HTML, of which pageHtml is the start. */
+  pageHtmlTotal?: number
+  /** Driving commands: how the page settled afterwards. */
+  settled?: { navigated: boolean; idle: boolean; waitedMs: number }
+}
+
+export type BrowserAgentTab = { id: string; url: string; title: string; active: boolean; loading: boolean }
+
+export type BrowserAgentDialog = {
+  type: "alert" | "confirm" | "prompt" | "beforeunload"
+  message: string
+  url: string
+  at: string
+}
+
+export type BrowserAgentRequest = {
+  method: string
+  url: string
+  status?: number
+  /** Electron's resourceType: mainFrame, subFrame, script, xhr, fetch, image, stylesheet, … */
+  type: string
+  error?: string
+  at: string
+  durationMs?: number
 }
 
 export type BrowserAgentInput = {
@@ -472,10 +502,21 @@ export type BrowserAgentInput = {
     | "readPage"
     | "observePage"
     | "clickRef"
+    | "typeRef"
+    | "selectOption"
+    | "hover"
+    | "listTabs"
+    | "openTab"
+    | "switchTab"
+    | "closeTab"
+    | "readLogs"
   url?: string
   allowExternal?: boolean
   selector?: string
-  /** A ref_N handle from observePage, for clickRef, or for inspectDom to name what a click there would press. */
+  /**
+   * A ref_N handle from observePage, for clickRef, typeRef, selectOption and hover, or for inspectDom to name what a
+   * click there would press.
+   */
   ref?: string
   text?: string
   key?: string
@@ -483,6 +524,16 @@ export type BrowserAgentInput = {
   deltaY?: number
   bounds?: BrowserAgentBounds
   visible?: boolean
+  /** A tab handle from listTabs (tab_N), for switchTab and closeTab. */
+  tabId?: string
+  /** selectOption: the option values or visible labels to select. */
+  values?: string[]
+  /** A driving command runs only while the active tab's page still has this origin: the one the engine checked and asked about. */
+  expectOrigin?: string
+  /** A click runs only while its target still has this name (clickTargetLabel): the one the engine judged. */
+  expectLabel?: string
+  /** false: return once the action is sent, without waiting for the page to settle. */
+  settle?: boolean
 }
 
 export type ParallelWorkspaceStatus =

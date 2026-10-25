@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test"
 import {
   AUTOMATION_SETTLE_MS,
+  DRIVING_COMMANDS,
   USER_NAVIGATION_WINDOW_MS,
+  automationTurn,
   beginAutomation,
   browserOrigin,
   endAutomation,
@@ -84,5 +86,30 @@ describe("who is driving the browser", () => {
     endAutomation(intent, 5_200)
     recordPageInput(intent, "mouseDown", 5_200 + AUTOMATION_SETTLE_MS)
     expect(isUserNavigation(intent, 5_300 + AUTOMATION_SETTLE_MS)).toBe(true)
+  })
+
+  test("every command that moves the page or puts input into it drives the browser, the new ones included", () => {
+    for (const command of ["typeRef", "selectOption", "hover", "openTab", "openUrl", "click", "clickRef", "press"])
+      expect({ command, driving: DRIVING_COMMANDS.has(command) }).toEqual({ command, driving: true })
+    for (const command of ["listTabs", "switchTab", "closeTab", "readLogs", "observePage", "takeScreenshot"])
+      expect({ command, driving: DRIVING_COMMANDS.has(command) }).toEqual({ command, driving: false })
+  })
+
+  test("a command given up at its deadline ends its hold once, so its late end leaves the next command's alone", () => {
+    const intent = navigationIntent()
+    const stuck = automationTurn(intent)
+    stuck.begin()
+    // The turn gives the stuck command up: the user's own clicks count again once the automation settles.
+    stuck.end(1_000)
+    recordPageInput(intent, "mouseDown", 1_000 + AUTOMATION_SETTLE_MS)
+    expect(isUserNavigation(intent, 1_100 + AUTOMATION_SETTLE_MS)).toBe(true)
+    const next = automationTurn(intent)
+    next.begin()
+    // The stuck command finishing late ends nothing more: the next command still holds the browser.
+    stuck.end(5_000)
+    recordPageInput(intent, "mouseDown", 6_000)
+    expect(isUserNavigation(intent, 6_100)).toBe(false)
+    next.end(7_000)
+    expect(intent.driving).toBe(0)
   })
 })

@@ -37,10 +37,14 @@ export function isAllowedBrowserNavigation(rawUrl: string, allowedExternalOrigin
 // input the page receives belongs to the automation, not the user.
 export const DRIVING_COMMANDS = new Set([
   "openUrl",
+  "openTab",
   "click",
   "clickRef",
   "type",
+  "typeRef",
   "press",
+  "selectOption",
+  "hover",
   "reload",
   "goBack",
   "goForward",
@@ -67,6 +71,26 @@ export function beginAutomation(intent: NavigationIntent) {
 export function endAutomation(intent: NavigationIntent, now: number) {
   intent.driving = Math.max(0, intent.driving - 1)
   intent.drivenUntil = now + AUTOMATION_SETTLE_MS
+}
+
+/**
+ * One command's hold on the browser, ended once: by the command finishing, or by its turn giving it up at the deadline
+ * or on close, whichever comes first. A command the turn gave up may still be running, and its late end must not end
+ * another command's hold.
+ */
+export function automationTurn(intent: NavigationIntent) {
+  const state = { held: false }
+  return {
+    begin() {
+      state.held = true
+      beginAutomation(intent)
+    },
+    end(now: number) {
+      if (!state.held) return
+      state.held = false
+      endAutomation(intent, now)
+    },
+  }
 }
 
 export function recordPageInput(intent: NavigationIntent, type: string | undefined, now: number) {

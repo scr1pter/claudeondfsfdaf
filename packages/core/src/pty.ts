@@ -51,6 +51,10 @@ export type UpdateInput = Types.DeepMutable<typeof UpdateInput.Type>
 
 export const Event = Pty.Event
 
+export const Owner = Pty.Owner
+
+export type Owner = Types.DeepMutable<typeof Owner.Type>
+
 export type AttachInput = {
   // Absolute output cursor to replay from. -1 tails from the current end; omitted replays the full retained buffer.
   readonly cursor?: number
@@ -71,6 +75,28 @@ export type Attachment = {
   readonly detach: () => void
 }
 
+export type ReadInput = {
+  // Absolute output cursor to read from. Omitted: the retained tail, cut to `lines`.
+  readonly cursor?: number
+  // Without a cursor: the most trailing lines to return. Omitted: no line limit.
+  readonly lines?: number
+  // The most output to return, in UTF-16 units, at most BUFFER_LIMIT. From a cursor the first units are kept, for a
+  // tail the last ones.
+  readonly limit?: number
+}
+
+export type ReadOutput = {
+  readonly info: Info
+  // Raw retained output from `start` to `cursor`, escape sequences included.
+  readonly output: string
+  // Absolute cursor of output's first unit: above the requested cursor when that output was already trimmed.
+  readonly start: number
+  // Absolute cursor after `output`: the cursor to read from next.
+  readonly cursor: number
+  // Absolute cursor at the end of everything the session wrote. `cursor < end` means more is retained.
+  readonly end: number
+}
+
 export class NotFoundError extends Schema.TaggedErrorClass<NotFoundError>()("Pty.NotFoundError", {
   ptyID: PtyID,
 }) {}
@@ -82,11 +108,16 @@ export class ExitedError extends Schema.TaggedErrorClass<ExitedError>()("Pty.Exi
 export interface Interface {
   readonly list: () => Effect.Effect<Info[]>
   readonly get: (id: PtyID) => Effect.Effect<Info, NotFoundError>
-  readonly create: (input: CreateInput) => Effect.Effect<Info>
+  // `owner` is set only in process (the engine's terminal tool); HTTP routes never pass it.
+  readonly create: (input: CreateInput, owner?: Owner) => Effect.Effect<Info>
   readonly update: (id: PtyID, input: UpdateInput) => Effect.Effect<Info, NotFoundError>
   readonly remove: (id: PtyID) => Effect.Effect<void, NotFoundError>
   readonly write: (id: PtyID, data: string) => Effect.Effect<void, NotFoundError>
   readonly attach: (id: PtyID, input: AttachInput) => Effect.Effect<Attachment, NotFoundError | ExitedError>
+  // Retained output without subscribing, for a running or an exited session.
+  readonly read: (id: PtyID, input?: ReadInput) => Effect.Effect<ReadOutput, NotFoundError>
+  // Publishes Event.Revealed. Works for exited sessions too.
+  readonly reveal: (id: PtyID, input?: { readonly focus?: boolean }) => Effect.Effect<void, NotFoundError>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@vector/v2/Pty") {}
@@ -164,7 +195,7 @@ const layer = Layer.effect(
       return (yield* requireSession(id)).info
     })
 
-    const create = Effect.fn("Pty.create")(function* (input: CreateInput) {
+    const create = Effect.fn("Pty.create")(function* (input: CreateInput, owner?: Owner) {
       const id = PtyID.ascending()
       const shell = (yield* config.entries())
         .filter(
@@ -176,7 +207,9 @@ const layer = Layer.effect(
         .at(-1)
       const command =
         input.command || Shell.preferred(shell?.info.shell, shell?.path ? path.dirname(shell.path) : location.directory)
-      const args = Shell.login(command) ? [...(input.args ?? []), "-l"] : [...(input.args ?? [])]
+      // The default interactive shell starts as a login shell. Arguments a caller passes are the program's whole
+      // argv: the terminal tool scans exactly them, so nothing is added after them.
+      const args = input.args === undefined && Shell.login(command) ? ["-l"] : [...(input.args ?? [])]
       const cwd = input.cwd || location.directory
       // The terminal runs whatever the user or a project script launches, so it must not inherit
       // Vector's vault key, server passwords or bridge tokens that live in this process. The shared
@@ -199,6 +232,7 @@ const layer = Layer.effect(
         cwd,
         status: "running",
         pid: proc.pid,
+        ...(owner ? { owner } : {}),
       }
       const session: Active = {
         info,
@@ -319,9 +353,41 @@ const layer = Layer.effect(
       }
     })
 
-    return Service.of({ list, get, create, update, remove, write, attach })
+    const read = Effect.fn("Pty.read")(function* (id: PtyID, input?: ReadInput) {
+      const session = yield* requireSession(id)
+      const end = session.cursor
+      const limit = Math.max(0, Math.min(input?.limit ?? BUFFER_LIMIT, BUFFER_LIMIT))
+      if (input?.cursor === undefined) {
+        const tail = tailLines(session.buffer, input?.lines)
+        const output = tail.slice(Math.max(0, tail.length - limit))
+        return { info: session.info, output, start: end - output.length, cursor: end, end }
+      }
+      // Output before bufferCursor is gone: start where retention starts, so `start > cursor` reports the loss.
+      const start = Math.min(Math.max(input.cursor, session.bufferCursor), end)
+      const output = session.buffer.slice(start - session.bufferCursor, start - session.bufferCursor + limit)
+      return { info: session.info, output, start, cursor: start + output.length, end }
+    })
+
+    const reveal = Effect.fn("Pty.reveal")(function* (id: PtyID, input?: { readonly focus?: boolean }) {
+      yield* requireSession(id)
+      yield* events.publish(Event.Revealed, { id, focus: input?.focus === true })
+    })
+
+    return Service.of({ list, get, create, update, remove, write, attach, read, reveal })
   }),
 )
+
+// The last `lines` lines of `buffer`. A trailing line break ends the last line; it does not start an empty one.
+function tailLines(buffer: string, lines: number | undefined) {
+  if (lines === undefined) return buffer
+  let index = buffer.endsWith("\n") ? buffer.length - 1 : buffer.length
+  for (let count = 0; count < lines; count++) {
+    if (index <= 0) return buffer
+    index = buffer.lastIndexOf("\n", index - 1)
+    if (index === -1) return buffer
+  }
+  return buffer.slice(index + 1)
+}
 
 export const locationLayer = layer.pipe(Layer.provide(Config.locationLayer))
 

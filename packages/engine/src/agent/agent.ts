@@ -131,6 +131,8 @@ const RESEARCH_DENIED = [
   "websearch",
   "skill",
   "escalate",
+  "terminal",
+  "terminal_input",
 ]
 
 const GeneratedAgent = Schema.Struct({
@@ -240,6 +242,11 @@ const layer = Layer.effect(
           "*": "allow",
           doom_loop: "ask",
           unsandboxed_shell: "ask",
+          // Terminals the agent did not open (the user's, or another session's) ask before the agent types into,
+          // resizes or closes them. Reading any terminal asks nothing, and a submitted line also goes through the
+          // shell's own rules.
+          terminal: { "*": "allow", "other:*": "ask" },
+          terminal_input: { "*": "allow", "other:*": "ask" },
           browser_external: "ask",
           browser_interact: "ask",
           browser_sensitive: "ask",
@@ -452,6 +459,8 @@ const layer = Layer.effect(
                 },
               }),
               user,
+              // After the user's rules: plan mode never types into a terminal, whatever they allow.
+              Permission.fromConfig({ terminal_input: "deny" }),
             ),
             mode: "primary",
             native: true,

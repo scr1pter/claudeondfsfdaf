@@ -770,6 +770,51 @@ it.instance("default permission asks for risky and unsandboxed operations", () =
   }),
 )
 
+it.instance("terminals the agent did not open ask before input, resizing or closing; its own do not", () =>
+  Effect.gen(function* () {
+    for (const name of ["build", "general", "debug", "test"]) {
+      const agent = (yield* load((svc) => svc.get(name)))!
+      for (const permission of ["terminal", "terminal_input"]) {
+        expect(Permission.evaluate(permission, "own:pty_1", agent.permission).action).toBe("allow")
+        expect(Permission.evaluate(permission, "other:pty_1", agent.permission).action).toBe("ask")
+      }
+      expect(Permission.disabled(["terminal"], agent.permission).size).toBe(0)
+    }
+    // The read-only specialists and the quick lane deny everything else, which hides the tool.
+    for (const name of ["explore", "review", "judge", "security", "quick"]) {
+      const agent = (yield* load((svc) => svc.get(name)))!
+      expect(Permission.disabled(["terminal"], agent.permission).has("terminal")).toBe(true)
+      expect(Permission.evaluate("terminal_input", "own:pty_1", agent.permission).action).toBe("deny")
+    }
+  }),
+)
+
+it.instance(
+  "plan mode never types into a terminal, whatever the user's rules allow",
+  () =>
+    Effect.gen(function* () {
+      const plan = (yield* load((svc) => svc.get("plan")))!
+      const build = (yield* load((svc) => svc.get("build")))!
+      expect(Permission.evaluate("terminal_input", "own:pty_1", plan.permission).action).toBe("deny")
+      expect(Permission.evaluate("terminal_input", "other:pty_1", plan.permission).action).toBe("deny")
+      // Reading, waiting and its own terminals' lifecycle stay as the defaults have them.
+      expect(Permission.evaluate("terminal", "own:pty_1", plan.permission).action).toBe("allow")
+      expect(Permission.disabled(["terminal"], plan.permission).size).toBe(0)
+      expect(Permission.evaluate("terminal_input", "other:pty_1", build.permission).action).toBe("allow")
+    }),
+  { trusted: true, config: { permission: { terminal_input: "allow" } } },
+)
+
+it.instance("research agents are never handed a terminal", () =>
+  Effect.gen(function* () {
+    for (const name of ["research", RESEARCHER]) {
+      const agent = (yield* load((svc) => svc.get(name)))!
+      expect(Permission.evaluate("terminal", "own:pty_1", agent.permission).action).toBe("deny")
+      expect(Permission.evaluate("terminal_input", "own:pty_1", agent.permission).action).toBe("deny")
+    }
+  }),
+)
+
 it.instance("Vector Cloud publishing, database and host environment changes ask by default", () =>
   Effect.gen(function* () {
     for (const name of ["build", "plan", "general", "debug", "test", "performance", "migration"]) {

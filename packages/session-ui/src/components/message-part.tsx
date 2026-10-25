@@ -488,6 +488,8 @@ export function getToolInfo(tool: string, input: any = {}): ToolInfo {
         title: i18n.t("ui.tool.shell"),
         subtitle: input.command,
       }
+    case "terminal":
+      return { icon: "console", title: "Terminal", subtitle: input.title ?? input.command ?? input.id ?? input.action }
     case "edit":
       return {
         icon: "code-lines",

@@ -498,7 +498,7 @@ export function terminalLaunch(input: {
   ]
     .filter(Boolean)
     .join("\n")
-  // The engine's terminal appends -l when it starts sh; after -c's script that only names $0, which the script ignores.
+  // The engine's terminal starts sh with exactly these arguments: it adds -l only to a shell started with none.
   return { title: input.title, display: input.display, command: "/bin/sh", args: ["-c", script], cwd: input.cwd, env }
 }
 

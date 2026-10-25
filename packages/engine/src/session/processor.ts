@@ -40,6 +40,7 @@ import { Auth } from "@/auth"
 import { ModelSlots } from "@vectordevai/core/local-mode/model-slots"
 import { LocalErrors } from "@vectordevai/core/local-mode/errors"
 import { Token } from "@vectordevai/core/util/token"
+import { POLLING_ACTIONS, TerminalTool } from "@/tool/terminal"
 
 const DOOM_LOOP_THRESHOLD = 3
 // Tools that change files. Without a snapshot to diff, a successful call to one of these counts as a file change for
@@ -560,6 +561,9 @@ const layer = Layer.effect(
                 ? { ...value.providerMetadata, providerExecuted: true }
                 : value.providerMetadata,
             }))
+
+            // Polling a terminal repeats the same call while its output moves on: progress, not a loop.
+            if (value.name === TerminalTool.id && POLLING_ACTIONS.has(String(input.action))) return
 
             const parts = yield* MessageV2.parts(ctx.assistantMessage.id).pipe(
               Effect.provideService(Database.Service, database),

@@ -606,6 +606,9 @@ export const dict = {
   "terminal.title": "Термінал",
   "terminal.title.numbered": "Термінал {{number}}",
   "terminal.close": "Закрити термінал",
+  "terminal.agent": "Відкрито агентом",
+  "terminal.exited": "завершено {{code}}",
+  "terminal.ended": "завершено",
   "terminal.connectionLost.title": "З'єднання втрачено",
   "terminal.connectionLost.abnormalClose": "WebSocket закрито аномально: {{code}}",
   "terminal.connectionLost.description":

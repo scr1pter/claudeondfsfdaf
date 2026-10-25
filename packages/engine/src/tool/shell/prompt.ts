@@ -6,6 +6,9 @@ import { ShellID } from "./id"
 
 const PS = new Set(["powershell", "pwsh"])
 const CMD = new Set(["cmd"])
+// The same for every shell: work that keeps running or waits for input goes to the terminal tool.
+const TERMINAL_NOTE =
+  "Long-running or interactive work (dev servers, watchers, REPLs, prompts that wait for input, ssh) belongs in the terminal tool: open it there, wait for it to be ready and read its output. Never start it here with & or nohup: this tool waits for every process it starts and gives it no input."
 
 export type Limits = {
   maxLines: number
@@ -76,6 +79,7 @@ function bashCommandSection(chain: string, limits: Limits, defaultTimeoutMs: num
 
 Usage notes:
   - Commands time out after ${defaultTimeoutMs}ms unless you set a timeout.
+  - ${TERMINAL_NOTE}
   - ${truncation(limits, "`head`, `tail`")}
   - Communicate directly instead of printing progress with echo/printf.
   - When issuing multiple commands:
@@ -105,6 +109,7 @@ Before executing the command:
 
 Usage notes:
   - Commands time out after ${defaultTimeoutMs}ms unless you set a timeout.
+  - ${TERMINAL_NOTE}
   - ${truncation(limits, "`Select-Object -First`, `Select-Object -Last`")}
   - Communicate directly instead of printing progress with Write-Output/Write-Host.
   - When issuing multiple commands:
@@ -127,6 +132,7 @@ Before executing the command:
 
 Usage notes:
   - Commands time out after ${defaultTimeoutMs}ms unless you set a timeout.
+  - ${TERMINAL_NOTE}
   - ${truncation(limits, "`more`")}
   - Communicate directly instead of printing progress with echo.
   - When issuing multiple commands:

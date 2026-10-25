@@ -11,6 +11,7 @@ import { Config } from "@/config/config"
 import { Shell } from "@vectordevai/core/shell"
 import { ShellTool } from "../../src/tool/shell"
 import { UNREAD } from "../../src/tool/shell/unread"
+import { ShellPrompt } from "../../src/tool/shell/prompt"
 import { Filesystem } from "@/util/filesystem"
 import { provideInstance, testInstanceStoreLayer, tmpdirScoped } from "../fixture/fixture"
 import { Permission } from "../../src/permission"
@@ -199,6 +200,16 @@ const mustTruncate = (result: {
 }
 
 describe("tool.shell", () => {
+  test("every shell's description sends long-running and interactive work to the terminal tool", () => {
+    for (const name of ["bash", "zsh", "pwsh", "powershell", "cmd"]) {
+      const description = ShellPrompt.render(name, "linux", { maxLines: 2000, maxBytes: 30_000 }, 120_000).description
+      expect(description).toContain(
+        "Long-running or interactive work (dev servers, watchers, REPLs, prompts that wait for input, ssh) belongs in the terminal tool",
+      )
+      expect(description).toContain("Never start it here with & or nohup")
+    }
+  })
+
   each("basic", () =>
     runIn(
       projectRoot,

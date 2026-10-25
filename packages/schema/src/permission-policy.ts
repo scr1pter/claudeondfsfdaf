@@ -42,6 +42,26 @@ export const AFTER_WEB = "after-web "
 export const AFTER_WEB_REASON =
   "This conversation read the web, and this address is new: neither you nor an earlier result gave it. A page can steer the agent into putting your data in an address."
 
+/** Resizing or closing a terminal, asked by the terminal tool for a terminal the agent did not open. */
+export const TERMINAL = "terminal"
+
+/** Typing or pressing keys in a terminal. A line it submits is also asked as the shell command it is. */
+export const TERMINAL_INPUT = "terminal_input"
+
+/** The pattern prefix of a terminal the session's own agent opened (`own:pty_…`). */
+export const TERMINAL_OWN = "own:"
+
+/** The pattern prefix of any other terminal: the user's, or another session's agent's (`other:pty_…`). */
+export const TERMINAL_OTHER = "other:"
+
+/**
+ * A terminal line the shell may have filled from somewhere Vector cannot read: its history, its kill ring, an editor,
+ * or a command name tab completion finished. It may run a Vercel or Supabase command on the command-line tool's own
+ * login, which the shell asks for every time, so it asks every time too: a Vector Cloud permission with no "always"
+ * (requiresCloudApproval), which no rule, saved approval or auto-accept answers.
+ */
+export const CLOUD_UNREAD = "vector_cloud_unread"
+
 /**
  * Whether a request asks the user every time: account mutations, changes to memory's own files, and the asks Vector
  * Local adds for the agent's network commands and its new addresses after the web.

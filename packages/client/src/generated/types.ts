@@ -3616,6 +3616,7 @@ export type PtysListOutput = {
     readonly status: "running" | "exited"
     readonly pid: number
     readonly exitCode?: number
+    readonly owner?: { readonly kind: "agent"; readonly sessionID: string }
   }>
 }
 
@@ -3675,6 +3676,7 @@ export type PtysCreateOutput = {
     readonly status: "running" | "exited"
     readonly pid: number
     readonly exitCode?: number
+    readonly owner?: { readonly kind: "agent"; readonly sessionID: string }
   }
 }
 
@@ -3700,6 +3702,7 @@ export type PtysGetOutput = {
     readonly status: "running" | "exited"
     readonly pid: number
     readonly exitCode?: number
+    readonly owner?: { readonly kind: "agent"; readonly sessionID: string }
   }
 }
 
@@ -3730,6 +3733,7 @@ export type PtysUpdateOutput = {
     readonly status: "running" | "exited"
     readonly pid: number
     readonly exitCode?: number
+    readonly owner?: { readonly kind: "agent"; readonly sessionID: string }
   }
 }
 

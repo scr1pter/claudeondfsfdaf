@@ -1,4 +1,4 @@
-import { afterAll, afterEach, describe, expect, mock, test } from "bun:test"
+import { afterAll, afterEach, describe, expect, jest, mock, test } from "bun:test"
 import type { LookupAddress } from "node:dns"
 import http from "node:http"
 import net from "node:net"
@@ -106,6 +106,8 @@ class FakeSession extends Emitter {
     onHeadersReceived: (listener: Listener) => void (this.web.headersReceived = listener),
     onCompleted: (listener: Listener) => void (this.web.completed = listener),
     onErrorOccurred: (listener: Listener) => void (this.web.errorOccurred = listener),
+    // The visible agent browser's request log, on its own session.
+    onSendHeaders: (listener: Listener) => void (this.web.sendHeaders = listener),
   }
   constructor(readonly name: string) {
     super()
@@ -289,6 +291,7 @@ class FakeView {
     this.bounds = bounds
   }
   setBackgroundColor() {}
+  setVisible() {}
 }
 
 const windows: FakeWindow[] = []
@@ -483,6 +486,28 @@ describe("research browsers", () => {
     ).toEqual(["ses_lead", "ses_r2"])
     await close("ses_lead")
     await close("ses_r2")
+  })
+
+  test("commands that overlap leave one idle timer, so no stale one closes a browser still in use", async () => {
+    await send({ command: "research.scroll", sessionID: "ses_idle" })
+    const open = () => research.ResearchWatch.list().some((chip) => chip.sessionID === "ses_idle")
+    jest.useFakeTimers()
+    try {
+      await Promise.all([
+        send({ command: "research.scroll", sessionID: "ses_idle" }),
+        send({ command: "research.scroll", sessionID: "ses_idle" }),
+      ])
+      jest.advanceTimersByTime(research.IDLE_MS - 60_000)
+      // The agent works on: this command replaces the idle timer the overlapping ones left.
+      await send({ command: "research.scroll", sessionID: "ses_idle" })
+      jest.advanceTimersByTime(60_001)
+      expect(open()).toBe(true)
+      // Idle for the whole time after its last command, it closes.
+      jest.advanceTimersByTime(research.IDLE_MS)
+      expect(open()).toBe(false)
+    } finally {
+      jest.useRealTimers()
+    }
   })
 
   test("a slot session is hardened, sends everything through the browser's own proxy, and keeps the rule's listener", async () => {

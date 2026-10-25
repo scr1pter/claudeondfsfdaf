@@ -36,4 +36,115 @@ describe("isCredentialField", () => {
     expect(isCredentialField({ type: "search", name: "q" })).toBe(false)
     expect(isCredentialField({})).toBe(false)
   })
+
+  test("names are read as words, whatever separates them: snake_case, brackets and camelCase", () => {
+    for (const name of [
+      "password",
+      "user_password",
+      "passwd",
+      "pwd",
+      "otp",
+      "one_time_code",
+      "oneTimeCode",
+      "verification_code",
+      "verificationCode",
+      "security_code",
+      "card_number",
+      "cardNumber",
+      "cardnumber",
+      "cc_number",
+      "payment[cc_number]",
+      "authorizenet_cc_number",
+      "ccnum",
+      "cvv",
+      "cvc",
+      "csc",
+      "mfa_code",
+      "2fa",
+      "totp",
+      "newpassword",
+    ]) {
+      expect({ name, refused: isCredentialField({ type: "text", name }) }).toEqual({ name, refused: true })
+      expect({ id: name, refused: isCredentialField({ type: "text", id: name }) }).toEqual({ id: name, refused: true })
+    }
+  })
+
+  // Names the substring match before the word reading refused, which a word reading must still refuse: a short word
+  // with a digit after it (split OTP boxes, cvv2), a short word at either end of a longer one, and 2FA in capitals.
+  const numbered = [
+    "cvv2",
+    "CVV2",
+    "Cvv2",
+    "cvc2",
+    "card_cvv2",
+    "card-cvv2",
+    "cc_cvv2",
+    "creditCardCvv2",
+    "cvv2Number",
+    "otp1",
+    "otp6",
+    "otp1Code",
+    "pwd1",
+    "totp1",
+    "mfa1",
+    "smsotp",
+    "emailotp",
+    "otpinput",
+    "totpcode",
+    "mfatoken",
+    "userpwd",
+    "loginpwd",
+    "newpwd",
+    "cardcvv",
+    "cardcvc",
+    "cardNumber1",
+    "cardNumber2",
+    "securityCode2",
+    "verificationCode1",
+    "2FA",
+    "code2fa",
+    "2faCode",
+  ]
+
+  test("a credential word with a digit after it, or at either end of a longer word, is still refused", () => {
+    for (const name of numbered) {
+      expect({ name, refused: isCredentialField({ type: "text", name }) }).toEqual({ name, refused: true })
+      expect({ id: name, refused: isCredentialField({ type: "text", id: name }) }).toEqual({ id: name, refused: true })
+    }
+  })
+
+  test("a word that only holds a credential word's letters is an ordinary field", () => {
+    for (const name of [
+      "footprint",
+      "timeSlotPicker",
+      "phone-time",
+      "hotpot",
+      "zonetime",
+      "compass",
+      "email",
+      "q",
+      "address1",
+      "address2",
+      "line1",
+      "line2",
+      "phone2",
+      "zip5",
+      "laptop",
+      "desktop",
+      "spotprice",
+      "shotput",
+      "notpaid",
+      "cscope",
+    ]) {
+      expect({ name, refused: isCredentialField({ type: "text", name, id: name }) }).toEqual({ name, refused: false })
+    }
+  })
+
+  test("is self-contained, so it runs when stringified into the page", () => {
+    const run = new Function(`return (${isCredentialField.toString()})`)() as typeof isCredentialField
+    expect(run({ type: "text", name: "payment[cc_number]" })).toBe(true)
+    expect(run({ type: "text", name: "footprint" })).toBe(false)
+    for (const name of numbered) expect({ name, refused: run({ type: "text", name }) }).toEqual({ name, refused: true })
+    expect(run({ type: "text", name: "address1" })).toBe(false)
+  })
 })

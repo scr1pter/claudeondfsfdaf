@@ -548,6 +548,9 @@ export const dict = {
   "terminal.title": "เทอร์มินัล",
   "terminal.title.numbered": "เทอร์มินัล {{number}}",
   "terminal.close": "ปิดเทอร์มินัล",
+  "terminal.agent": "เปิดโดยเอเจนต์",
+  "terminal.exited": "จบแล้ว {{code}}",
+  "terminal.ended": "จบแล้ว",
   "terminal.connectionLost.title": "การเชื่อมต่อขาดหาย",
   "terminal.connectionLost.description": "การเชื่อมต่อเทอร์มินัลถูกขัดจังหวะ อาจเกิดขึ้นเมื่อเซิร์ฟเวอร์รีสตาร์ท",
 

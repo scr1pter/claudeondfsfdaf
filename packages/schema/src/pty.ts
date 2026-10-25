@@ -19,6 +19,13 @@ export const ID = IDSchema.pipe(
 )
 export type ID = typeof ID.Type
 
+/** Who opened a terminal, when it was not the user: an agent, in the session named here. */
+export const Owner = Schema.Struct({
+  kind: Schema.Literal("agent"),
+  sessionID: Schema.String,
+}).annotate({ identifier: "PtyOwner" })
+export interface Owner extends Schema.Schema.Type<typeof Owner> {}
+
 export const Info = Schema.Struct({
   id: ID,
   title: Schema.String,
@@ -28,6 +35,8 @@ export const Info = Schema.Struct({
   status: Schema.Literals(["running", "exited"]),
   pid: NonNegativeInt,
   exitCode: optional(NonNegativeInt),
+  // Absent for the user's own terminals.
+  owner: optional(Owner),
 }).annotate({ identifier: "Pty" })
 export interface Info extends Schema.Schema.Type<typeof Info> {}
 
@@ -35,7 +44,16 @@ const Created = define({ type: "pty.created", schema: { info: Info } })
 const Updated = define({ type: "pty.updated", schema: { info: Info } })
 const Exited = define({ type: "pty.exited", schema: { id: ID, exitCode: NonNegativeInt } })
 const Deleted = define({ type: "pty.deleted", schema: { id: ID } })
-export const Event = { Created, Updated, Exited, Deleted, Definitions: inventory(Created, Updated, Exited, Deleted) }
+// Asks every client showing this location's terminals to bring one to the front; `focus` also moves keyboard focus.
+const Revealed = define({ type: "pty.revealed", schema: { id: ID, focus: Schema.Boolean } })
+export const Event = {
+  Created,
+  Updated,
+  Exited,
+  Deleted,
+  Revealed,
+  Definitions: inventory(Created, Updated, Exited, Deleted, Revealed),
+}
 
 export const CreateInput = Schema.Struct({
   command: optional(Schema.String),
