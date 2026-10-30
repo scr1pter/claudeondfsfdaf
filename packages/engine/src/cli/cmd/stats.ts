@@ -1,10 +1,12 @@
-import { Effect } from "effect"
+import { DateTime, Effect, Schema } from "effect"
 import { effectCmd } from "../effect-cmd"
 import { Session } from "@/session/session"
 import { NotFoundError } from "@/storage/storage"
 import { Database } from "@vectordevai/core/database/database"
 import { SessionMessageTable, SessionTable } from "@vectordevai/core/session/sql"
-import { and, eq, gte } from "drizzle-orm"
+import { EventTable } from "@vectordevai/core/event/sql"
+import { SessionEvent } from "@vectordevai/schema/session-event"
+import { and, eq, gte, inArray } from "drizzle-orm"
 import { Project } from "@/project/project"
 import { InstanceRef } from "@/effect/instance-ref"
 
@@ -12,6 +14,7 @@ interface SessionStats {
   totalSessions: number
   totalMessages: number
   totalCost: number
+  unpricedSteps: number
   totalTokens: {
     input: number
     output: number
@@ -45,7 +48,7 @@ interface SessionStats {
   costPerDay: number
   tokensPerSession: number
   medianTokensPerSession: number
-  // What Vector's hidden helpers (a Vectorscope review, autocomplete) spent. It is part of the cost and token totals
+  // What Vector's hidden helpers (reviews, autocomplete, titles and memory learning) spent. It is part of the totals
   // above, but the helpers are not sessions of the user's, so they are left out of the session and message counts and
   // the per-session figures.
   helpers: { cost: number; tokens: number }
@@ -116,7 +119,7 @@ export const aggregateSessionStats = Effect.fn("Cli.stats.aggregate")(function* 
     return days
   })()
 
-  let filteredSessions = cutoffTime > 0 ? sessions.filter((session) => session.time.updated >= cutoffTime) : sessions
+  let filteredSessions = sessions
 
   if (projectFilter !== undefined) {
     if (projectFilter === "") {
@@ -126,11 +129,15 @@ export const aggregateSessionStats = Effect.fn("Cli.stats.aggregate")(function* 
       filteredSessions = filteredSessions.filter((session) => session.projectID === projectFilter)
     }
   }
+  const selected = new Set(filteredSessions.map((session) => session.id))
+  filteredSessions =
+    cutoffTime > 0 ? filteredSessions.filter((session) => session.time.updated >= cutoffTime) : filteredSessions
 
   const stats: SessionStats = {
     totalSessions: filteredSessions.length,
     totalMessages: 0,
     totalCost: 0,
+    unpricedSteps: 0,
     totalTokens: {
       input: 0,
       output: 0,
@@ -166,6 +173,44 @@ export const aggregateSessionStats = Effect.fn("Cli.stats.aggregate")(function* 
   let latestTime = 0
 
   const sessionTotalTokens: number[] = []
+  const ancillaryRows = (yield* db
+    .select({ data: EventTable.data })
+    .from(EventTable)
+    .innerJoin(SessionTable, eq(EventTable.aggregate_id, SessionTable.id))
+    .where(
+      and(
+        inArray(EventTable.type, SessionEvent.AncillaryUsageStored),
+        projectFilter === undefined ? undefined : eq(SessionTable.project_id, filteredSessions[0].projectID),
+      ),
+    )
+    .all()
+    .pipe(Effect.orDie))
+    .map((event) => Schema.decodeUnknownSync(SessionEvent.AncillaryUsage.data)(event.data))
+    .filter((usage) => selected.has(usage.sessionID))
+  // Local archive imports preserve the identity of the paid attempt while remapping sessions/event IDs.
+  // Conflicting copies have no reliable amount or date, so retain one unknown request instead of choosing a copy.
+  const attempts = new Map<string, (typeof ancillaryRows)[number] | undefined>()
+  const receiptsBySession = new Map<string, typeof ancillaryRows>()
+  const inWindow = new Set<string>()
+  const same = Schema.toEquivalence(SessionEvent.AncillaryUsage.data)
+  for (const usage of ancillaryRows) {
+    const receipts = receiptsBySession.get(usage.sessionID) ?? []
+    receipts.push(usage)
+    receiptsBySession.set(usage.sessionID, receipts)
+    if (DateTime.toEpochMillis(usage.timestamp) >= cutoffTime) inWindow.add(usage.usageID)
+    if (!attempts.has(usage.usageID)) {
+      attempts.set(usage.usageID, usage)
+      continue
+    }
+    const previous = attempts.get(usage.usageID)
+    if (previous && !same(previous, { ...usage, sessionID: previous.sessionID })) attempts.set(usage.usageID, undefined)
+  }
+  const ancillary = [...attempts.values()].filter(
+    (usage): usage is (typeof ancillaryRows)[number] =>
+      usage !== undefined && DateTime.toEpochMillis(usage.timestamp) >= cutoffTime,
+  )
+  const uncertain = (usage: (typeof ancillaryRows)[number]) =>
+    !!usage.unpriced || !!usage.incomplete || usage.cost === undefined || usage.tokens === undefined
 
   const results = yield* Effect.forEach(
     filteredSessions,
@@ -181,7 +226,9 @@ export const aggregateSessionStats = Effect.fn("Cli.stats.aggregate")(function* 
             message.info.time.created >= cutoffTime && !(message.info.role === "assistant" && message.info.forked),
         )
         const v1Steps = messages.flatMap((message) =>
-          message.info.role === "assistant" ? [{ cost: message.info.cost, tokens: message.info.tokens }] : [],
+          message.info.role === "assistant"
+            ? [{ cost: message.info.cost, tokens: message.info.tokens, unpriced: !!message.info.unpriced }]
+            : [],
         )
         // A V2-engine session keeps its replies and compaction summaries in the session message table instead.
         const v2Steps =
@@ -197,16 +244,25 @@ export const aggregateSessionStats = Effect.fn("Cli.stats.aggregate")(function* 
                 )
                 .all()
                 .pipe(Effect.orDie)).flatMap((row) => {
-                const data = row.data as { cost?: number; tokens?: (typeof v1Steps)[number]["tokens"] }
+                const data = row.data as {
+                  cost?: number
+                  tokens?: (typeof v1Steps)[number]["tokens"]
+                  unpriced?: boolean
+                }
                 return (row.type === "assistant" || row.type === "compaction") && data.tokens
-                  ? [{ cost: data.cost ?? 0, tokens: data.tokens }]
+                  ? [{ cost: data.cost ?? 0, tokens: data.tokens, unpriced: !!data.unpriced }]
                   : []
               })
             : []
         const steps = [...v1Steps, ...v2Steps]
-
+        const receipts = receiptsBySession.get(session.id) ?? []
+        // Remove every projected ancillary receipt from lifetime counters before adding the deduplicated attempts
+        // globally. Transcript/archive duplication outside ancillary usage is not changed by this calculation.
         const sessionCost =
-          cutoffTime > 0 ? steps.reduce((sum, step) => sum + (step.cost || 0), 0) : (session.cost ?? 0)
+          cutoffTime > 0
+            ? steps.reduce((sum, step) => sum + (step.cost || 0), 0)
+            : Math.max(0, (session.cost ?? 0) - receipts.reduce((sum, usage) => sum + (usage.cost ?? 0), 0))
+        const lifetimeTokens = session.tokens ?? { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }
         const sessionTokens =
           cutoffTime > 0
             ? {
@@ -218,7 +274,32 @@ export const aggregateSessionStats = Effect.fn("Cli.stats.aggregate")(function* 
                   write: steps.reduce((sum, step) => sum + (step.tokens.cache?.write || 0), 0),
                 },
               }
-            : (session.tokens ?? { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } })
+            : {
+                input: Math.max(
+                  0,
+                  lifetimeTokens.input - receipts.reduce((sum, usage) => sum + (usage.tokens?.input ?? 0), 0),
+                ),
+                output: Math.max(
+                  0,
+                  lifetimeTokens.output - receipts.reduce((sum, usage) => sum + (usage.tokens?.output ?? 0), 0),
+                ),
+                reasoning: Math.max(
+                  0,
+                  lifetimeTokens.reasoning - receipts.reduce((sum, usage) => sum + (usage.tokens?.reasoning ?? 0), 0),
+                ),
+                cache: {
+                  read: Math.max(
+                    0,
+                    lifetimeTokens.cache.read -
+                      receipts.reduce((sum, usage) => sum + (usage.tokens?.cache.read ?? 0), 0),
+                  ),
+                  write: Math.max(
+                    0,
+                    lifetimeTokens.cache.write -
+                      receipts.reduce((sum, usage) => sum + (usage.tokens?.cache.write ?? 0), 0),
+                  ),
+                },
+              }
         let sessionToolUsage: Record<string, number> = {}
         let sessionModelUsage: Record<
           string,
@@ -259,9 +340,12 @@ export const aggregateSessionStats = Effect.fn("Cli.stats.aggregate")(function* 
         }
 
         return {
-          // Updates such as a share or a rename also bump a session, so a window counts only sessions with messages in it.
           active: cutoffTime === 0 || messages.length > 0 || v2Steps.length > 0,
           helper: session.internal !== undefined,
+          unpricedSteps:
+            cutoffTime > 0
+              ? steps.filter((step) => step.unpriced).length
+              : Math.max(0, (session.unpricedSteps ?? 0) - receipts.filter(uncertain).length),
           messageCount: messages.length + v2Steps.length,
           sessionCost,
           sessionTokens,
@@ -286,10 +370,8 @@ export const aggregateSessionStats = Effect.fn("Cli.stats.aggregate")(function* 
   for (const result of active) {
     earliestTime = Math.min(earliestTime, result.earliestTime)
     latestTime = Math.max(latestTime, result.latestTime)
-    if (result.helper) {
-      stats.helpers.cost += result.sessionCost
-      stats.helpers.tokens += result.sessionTotalTokens
-    }
+    stats.helpers.cost += result.helper ? result.sessionCost : 0
+    stats.helpers.tokens += result.helper ? result.sessionTotalTokens : 0
     // A helper's replies are Vector's own, not messages in the user's sessions.
     if (!result.helper) {
       sessionTotalTokens.push(result.sessionTotalTokens)
@@ -297,6 +379,7 @@ export const aggregateSessionStats = Effect.fn("Cli.stats.aggregate")(function* 
     }
 
     stats.totalCost += result.sessionCost
+    stats.unpricedSteps += result.unpricedSteps
     stats.totalTokens.input += result.sessionTokens.input
     stats.totalTokens.output += result.sessionTokens.output
     stats.totalTokens.reasoning += result.sessionTokens.reasoning
@@ -322,6 +405,37 @@ export const aggregateSessionStats = Effect.fn("Cli.stats.aggregate")(function* 
       stats.modelUsage[model].tokens.cache.write += usage.tokens.cache.write
       stats.modelUsage[model].cost += usage.cost
     }
+  }
+
+  stats.unpricedSteps += [...attempts].filter(([id, usage]) => !usage && inWindow.has(id)).length
+  for (const usage of ancillary) {
+    const cost = usage.cost ?? 0
+    const tokens = usage.tokens ?? { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }
+    stats.totalCost += cost
+    stats.helpers.cost += cost
+    stats.unpricedSteps += Number(uncertain(usage))
+    stats.totalTokens.input += tokens.input
+    stats.totalTokens.output += tokens.output
+    stats.totalTokens.reasoning += tokens.reasoning
+    stats.totalTokens.cache.read += tokens.cache.read
+    stats.totalTokens.cache.write += tokens.cache.write
+    stats.helpers.tokens += tokens.input + tokens.output + tokens.reasoning + tokens.cache.read + tokens.cache.write
+    const modelKey = `${usage.model.providerID}/${usage.model.id}`
+    const current = stats.modelUsage[modelKey] ?? {
+      messages: 0,
+      tokens: { input: 0, output: 0, cache: { read: 0, write: 0 } },
+      cost: 0,
+    }
+    current.messages++
+    current.cost += cost
+    current.tokens.input += tokens.input
+    current.tokens.output += tokens.output + tokens.reasoning
+    current.tokens.cache.read += tokens.cache.read
+    current.tokens.cache.write += tokens.cache.write
+    stats.modelUsage[modelKey] = current
+    const at = DateTime.toEpochMillis(usage.timestamp)
+    earliestTime = Math.min(earliestTime, at)
+    latestTime = Math.max(latestTime, at)
   }
 
   const rangeDays = Math.max(1, Math.ceil((latestTime - earliestTime) / MS_IN_DAY))
@@ -374,7 +488,9 @@ export function displayStats(stats: SessionStats, toolLimit?: number, modelLimit
   const cost = isNaN(stats.totalCost) ? 0 : stats.totalCost
   const costPerDay = isNaN(stats.costPerDay) ? 0 : stats.costPerDay
   const tokensPerSession = isNaN(stats.tokensPerSession) ? 0 : stats.tokensPerSession
-  console.log(renderRow("Total Cost", `$${cost.toFixed(2)}`))
+  console.log(renderRow("Recorded Cost", `$${cost.toFixed(2)}${stats.unpricedSteps > 0 ? " + unknown" : ""}`))
+  if (stats.unpricedSteps > 0)
+    console.log(renderRow("Unpriced/incomplete requests", stats.unpricedSteps.toLocaleString()))
   if (stats.helpers.cost > 0 || stats.helpers.tokens > 0)
     console.log(
       renderRow(
@@ -382,12 +498,13 @@ export function displayStats(stats: SessionStats, toolLimit?: number, modelLimit
         `$${stats.helpers.cost.toFixed(2)} · ${formatNumber(stats.helpers.tokens)} tokens`,
       ),
     )
-  console.log(renderRow("Avg Cost/Day", `$${costPerDay.toFixed(2)}`))
+  console.log(renderRow("Avg Recorded Cost/Day", `$${costPerDay.toFixed(2)}`))
   console.log(renderRow("Avg Tokens/Session", formatNumber(Math.round(tokensPerSession))))
   const medianTokensPerSession = isNaN(stats.medianTokensPerSession) ? 0 : stats.medianTokensPerSession
   console.log(renderRow("Median Tokens/Session", formatNumber(Math.round(medianTokensPerSession))))
-  console.log(renderRow("Input", formatNumber(stats.totalTokens.input)))
-  console.log(renderRow("Output", formatNumber(stats.totalTokens.output)))
+  console.log(renderRow("Uncached Input", formatNumber(stats.totalTokens.input)))
+  console.log(renderRow("Visible Output", formatNumber(stats.totalTokens.output)))
+  console.log(renderRow("Reasoning", formatNumber(stats.totalTokens.reasoning)))
   console.log(renderRow("Cache Read", formatNumber(stats.totalTokens.cache.read)))
   console.log(renderRow("Cache Write", formatNumber(stats.totalTokens.cache.write)))
   console.log("└────────────────────────────────────────────────────────┘")
@@ -405,8 +522,8 @@ export function displayStats(stats: SessionStats, toolLimit?: number, modelLimit
     for (const [model, usage] of modelsToDisplay) {
       console.log(`│ ${model.padEnd(54)} │`)
       console.log(renderRow("  Messages", usage.messages.toLocaleString()))
-      console.log(renderRow("  Input Tokens", formatNumber(usage.tokens.input)))
-      console.log(renderRow("  Output Tokens", formatNumber(usage.tokens.output)))
+      console.log(renderRow("  Uncached Input", formatNumber(usage.tokens.input)))
+      console.log(renderRow("  Output + Reasoning", formatNumber(usage.tokens.output)))
       console.log(renderRow("  Cache Read", formatNumber(usage.tokens.cache.read)))
       console.log(renderRow("  Cache Write", formatNumber(usage.tokens.cache.write)))
       console.log(renderRow("  Cost", `$${usage.cost.toFixed(4)}`))
