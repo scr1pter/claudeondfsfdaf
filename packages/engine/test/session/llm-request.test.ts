@@ -244,7 +244,9 @@ describe("system prompt layout across sessions", () => {
       plugin: {
         ...value.plugin,
         trigger: (name, _input, output) =>
-          Effect.succeed(name === "chat.headers" ? { ...output, headers: { "X-SESSION-ID": "ses_from_plugin" } } : output),
+          Effect.succeed(
+            name === "chat.headers" ? { ...output, headers: { "X-SESSION-ID": "ses_from_plugin" } } : output,
+          ),
       } as Input["plugin"],
     })
     expect(new Headers(prepared.headers).get("x-session-id")).toBe(value.sessionID)
@@ -262,5 +264,84 @@ describe("system prompt layout across sessions", () => {
       },
     })
     expect(Object.keys(prepared.tools)).toEqual(["bash", "read", "todowrite"])
+  })
+})
+
+describe("automatic title output budget", () => {
+  test.each([
+    { fast: false, allowance: undefined, output: 128_000, context: 400_000, expected: 512 },
+    { fast: true, allowance: 32_000, output: 128_000, context: 400_000, expected: 512 },
+    { fast: true, allowance: 96, output: 128_000, context: 400_000, expected: 96 },
+    { fast: false, allowance: 32_000, output: 128, context: 400_000, expected: 128 },
+    { fast: false, allowance: 32_000, output: 0, context: 1_024, expected: 256 },
+  ])("a title keeps its $expected-token allowance with fast=$fast", async (selected) => {
+    const value = input({ model: gpt, directory: "/work/title" })
+    const prepared = await prepare({
+      ...value,
+      agent: { ...value.agent, name: "title" },
+      small: true,
+      user: selected.fast ? { ...value.user, executionMode: "fast" } : value.user,
+      flags: { ...value.flags, outputTokenMax: selected.allowance },
+      model: { ...gpt, limit: { output: selected.output, context: selected.context } },
+    })
+    expect(prepared.params.maxOutputTokens).toBe(selected.expected)
+  })
+
+  test.each([
+    { name: "build", small: false, fast: false, expected: 32_000 },
+    { name: "build", small: false, fast: true, expected: 48_000 },
+    { name: "brain.learn", small: true, fast: false, expected: 32_000 },
+    { name: "summary", small: true, fast: false, expected: 32_000 },
+    { name: "compaction", small: false, fast: false, expected: 32_000 },
+    { name: "title", small: false, fast: false, expected: 32_000 },
+  ])("leaves $name small=$small fast=$fast at $expected tokens", async (selected) => {
+    const value = input({ model: gpt, directory: "/work/task" })
+    const prepared = await prepare({
+      ...value,
+      agent: { ...value.agent, name: selected.name },
+      small: selected.small,
+      user: selected.fast ? { ...value.user, executionMode: "fast" } : value.user,
+    })
+    expect(prepared.params.maxOutputTokens).toBe(selected.expected)
+  })
+
+  test("the real SDK sends the automatic title cap to the provider", async () => {
+    const requests: Array<Record<string, unknown>> = []
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch(request) {
+        requests.push((await request.json()) as Record<string, unknown>)
+        const events = [
+          { type: "response.created", response: { id: "resp_title", created_at: 1, model: gpt.api.id } },
+          { type: "response.completed", response: { usage: { input_tokens: 1, output_tokens: 1 } } },
+        ]
+        return new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""), {
+          headers: { "content-type": "text/event-stream" },
+        })
+      },
+    })
+    try {
+      const value = input({ model: gpt, directory: "/work/title" })
+      const prepared = await prepare({
+        ...value,
+        agent: { ...value.agent, name: "title", prompt: "Output only a short title." },
+        user: { ...value.user, executionMode: "fast" },
+        small: true,
+        tools: {},
+      })
+      const sdk = createOpenAI({ apiKey: "local-test-only", baseURL: `${server.url.origin}/v1` })
+      await streamText({
+        model: sdk.responses(gpt.api.id),
+        messages: prepared.messages,
+        maxOutputTokens: prepared.params.maxOutputTokens,
+        providerOptions: ProviderTransform.providerOptions(gpt, prepared.params.options),
+      }).consumeStream()
+
+      expect(requests).toHaveLength(1)
+      expect(requests[0]?.max_output_tokens).toBe(512)
+    } finally {
+      server.stop(true)
+    }
   })
 })
