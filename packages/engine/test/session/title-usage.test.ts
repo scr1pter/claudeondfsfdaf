@@ -262,6 +262,31 @@ it.effect("an unknown catalog with explicit zero counters and no measured bill s
   }),
 )
 
+for (const cost of [0, 0.0005]) {
+  it.effect(`a catalog-priced helper persists and guards its provider-reported OpenRouter cost of $${cost}`, () =>
+    Effect.gen(function* () {
+      const test = yield* setup()
+      yield* test.guard.begin(sessionID, { usd: 1, unpricedSteps: 1 })
+      const spend = yield* test.guard.capture(sessionID)
+      const usage = TitleUsage.create({ sessionID, model, publish: test.events.publish, spend })
+      yield* usage.record(
+        LLMEvent.stepFinish({
+          index: 0,
+          reason: "stop",
+          usage: { inputTokens: 1_000, outputTokens: 100 },
+          providerMetadata: { openrouter: { usage: { cost } } },
+        }),
+      )
+      yield* usage.finish()
+      expect((yield* test.records)[0]?.data).toMatchObject({ cost })
+      expect((yield* test.session)?.cost).toBe(cost)
+      expect(yield* test.guard.snapshot(sessionID)).toMatchObject({ spentUsd: cost, unpricedSteps: 0 })
+      expect(yield* test.guard.stopped(sessionID)).toBeUndefined()
+      yield* spend.release
+    }),
+  )
+}
+
 it.effect("prices a title using its own model and settles once without transcript messages", () =>
   Effect.gen(function* () {
     const test = yield* setup()

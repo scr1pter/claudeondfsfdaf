@@ -1509,52 +1509,65 @@ for (const scenario of [
   )
 }
 
-for (const cost of [0, 0.03]) {
-  itGateway.live(`session.processor accounting preserves a metadata-only gateway bill of $${cost}`, () =>
-    provideTmpdirInstance(
-      (dir) =>
-        Effect.gen(function* () {
-          const { session, processors, provider } = yield* boot()
-          const guard = yield* SpendGuard.Service
-          const chat = yield* session.create({})
-          const parent = yield* user(chat.id, String(cost))
-          const msg = yield* assistant(chat.id, parent.id, path.resolve(dir))
-          const listed = yield* provider.getModel(ref.providerID, ref.modelID)
-          const model = { ...listed, cost: { ...listed.cost, unpriced: true } }
-          const handle = yield* processors.create({ assistantMessage: msg, sessionID: chat.id, model })
-          yield* guard.begin(chat.id, { usd: 1, unpricedSteps: 1 })
-          yield* handle.process({
-            user: { ...parent, model: ref },
-            sessionID: chat.id,
-            model,
-            agent: agent(),
-            system: [],
-            messages: [{ role: "user", content: String(cost) }],
-            tools: {},
-          })
-          const stored = yield* MessageV2.get({ sessionID: chat.id, messageID: msg.id })
-          expect(stored.info).toMatchObject({ cost, unpriced: true })
-          expect(stored.parts.find((part) => part.type === "step-finish")).toMatchObject({ cost, unpriced: true })
-          expect(yield* guard.snapshot(chat.id)).toMatchObject({
-            costKind: "priced",
-            spentUsd: cost,
-            steps: 1,
-            unpricedSteps: 0,
-          })
-          expect(yield* guard.stopped(chat.id)).toBeUndefined()
-        }),
-      {
-        trusted: true,
-        config: {
-          provider: {
-            lmstudio: {
-              ...cfg.provider.lmstudio,
-              options: { ...cfg.provider.lmstudio.options, baseURL: "https://example.invalid/v1" },
+for (const selected of [
+  { cost: 0, catalog: false },
+  { cost: 0.03, catalog: false },
+  { cost: 0, catalog: true },
+  { cost: 0.03, catalog: true },
+]) {
+  const cost = selected.cost
+  itGateway.live(
+    `session.processor accounting preserves a metadata-only gateway bill of $${cost} with catalog=${selected.catalog}`,
+    () =>
+      provideTmpdirInstance(
+        (dir) =>
+          Effect.gen(function* () {
+            const { session, processors, provider } = yield* boot()
+            const guard = yield* SpendGuard.Service
+            const chat = yield* session.create({})
+            const parent = yield* user(chat.id, String(cost))
+            const msg = yield* assistant(chat.id, parent.id, path.resolve(dir))
+            const listed = yield* provider.getModel(ref.providerID, ref.modelID)
+            const model = {
+              ...listed,
+              cost: selected.catalog
+                ? { input: 2, output: 10, cache: { read: 0.1, write: 2.5 } }
+                : { ...listed.cost, unpriced: true },
+            }
+            const handle = yield* processors.create({ assistantMessage: msg, sessionID: chat.id, model })
+            yield* guard.begin(chat.id, { usd: 1, unpricedSteps: 1 })
+            yield* handle.process({
+              user: { ...parent, model: ref },
+              sessionID: chat.id,
+              model,
+              agent: agent(),
+              system: [],
+              messages: [{ role: "user", content: String(cost) }],
+              tools: {},
+            })
+            const stored = yield* MessageV2.get({ sessionID: chat.id, messageID: msg.id })
+            expect(stored.info).toMatchObject({ cost, unpriced: true })
+            expect(stored.parts.find((part) => part.type === "step-finish")).toMatchObject({ cost, unpriced: true })
+            expect(yield* guard.snapshot(chat.id)).toMatchObject({
+              costKind: "priced",
+              spentUsd: cost,
+              steps: 1,
+              unpricedSteps: 0,
+            })
+            expect(yield* guard.stopped(chat.id)).toBeUndefined()
+          }),
+        {
+          trusted: true,
+          config: {
+            provider: {
+              lmstudio: {
+                ...cfg.provider.lmstudio,
+                options: { ...cfg.provider.lmstudio.options, baseURL: "https://example.invalid/v1" },
+              },
             },
           },
         },
-      },
-    ),
+      ),
   )
 }
 

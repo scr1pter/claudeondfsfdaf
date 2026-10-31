@@ -505,14 +505,10 @@ export const getUsage = (input: {
 
   const costInfo = costAt(input.model.cost, inputTokens)
   const totalNanoAiu = input.metadata?.["copilot"]?.["totalNanoAiu"]
-  // OpenRouter reports what it billed for each step. A model the catalog lists no price for, as an OpenRouter model
-  // added by hand often is, takes that amount instead of reading as unpriced.
+  // A valid provider-reported OpenRouter cost takes precedence over a catalog estimate, including a zero charge.
   // @ts-expect-error provider metadata is untyped JSON
   const reported: unknown = input.metadata?.["openrouter"]?.["usage"]?.["cost"]
-  const reportedCost =
-    input.model.cost?.unpriced === true && typeof reported === "number" && Number.isFinite(reported) && reported >= 0
-      ? reported
-      : undefined
+  const reportedCost = typeof reported === "number" && Number.isFinite(reported) && reported >= 0 ? reported : undefined
   const billed =
     (typeof totalNanoAiu === "number" && Number.isFinite(totalNanoAiu) && totalNanoAiu >= 0) ||
     reportedCost !== undefined
