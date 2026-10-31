@@ -190,6 +190,17 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
     },
   )
 
+  // Provider hooks may omit a normal task's limit. An automatic title must keep its smaller ceiling afterwards.
+  if (input.small && input.agent.name === "title")
+    params.maxOutputTokens = ProviderTransform.maxOutputTokens(
+      input.model,
+      Math.min(
+        params.maxOutputTokens ?? Infinity,
+        input.flags.outputTokenMax ?? ProviderTransform.OUTPUT_TOKEN_MAX,
+        512,
+      ),
+    )
+
   const { headers } = yield* input.plugin.trigger(
     "chat.headers",
     {
