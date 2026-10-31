@@ -91,6 +91,25 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
     system.push(header, rest.join("\n"))
   }
 
+  const stablePrefix =
+    input.provider.options.promptCacheBreakpoints === true ? prompt.filter(Boolean).join("\n") : undefined
+  const cachePrefix =
+    input.provider.options.promptCacheBreakpoints === true &&
+    input.provider.id === "openai" &&
+    input.model.api.npm === "@ai-sdk/openai" &&
+    input.model.api.id === "gpt-6.1-sol" &&
+    (input.auth?.type === "api" ||
+      (!input.auth && (typeof input.provider.options.apiKey === "string" || typeof input.provider.key === "string"))) &&
+    !input.small &&
+    !input.isWorkflow &&
+    !input.flags.experimentalNativeLlm &&
+    input.stableSystem?.length &&
+    stablePrefix?.trim() &&
+    system[0] === header &&
+    system[0]?.startsWith(stablePrefix)
+      ? ProviderTransform.promptCachePrefix(stablePrefix)
+      : undefined
+
   const picked =
     !input.small && input.model.variants && input.user.model.variant
       ? input.model.variants[input.user.model.variant]
@@ -230,9 +249,15 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
           "User-Agent": USER_AGENT,
           ...input.model.headers,
           ...headers,
-        }).filter(([key]) => key.toLowerCase() !== "x-session-id"),
+        }).filter(
+          ([key]) =>
+            key.toLowerCase() !== "x-session-id" && key.toLowerCase() !== ProviderTransform.PROMPT_CACHE_PREFIX_HEADER,
+        ),
       ),
-      { "X-Session-Id": input.sessionID },
+      {
+        "X-Session-Id": input.sessionID,
+        ...(cachePrefix ? { [ProviderTransform.PROMPT_CACHE_PREFIX_HEADER]: cachePrefix } : {}),
+      },
     ),
   }
 })

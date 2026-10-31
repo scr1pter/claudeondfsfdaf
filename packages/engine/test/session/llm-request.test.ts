@@ -84,6 +84,54 @@ const prepare = (value: Input) => Effect.runPromise(LLMRequestPrep.prepare(value
 const systemMessages = (prepared: LLMRequestPrep.Prepared) =>
   prepared.messages.flatMap((message) => (message.role === "system" ? [message.content] : []))
 
+describe("internal stable-prefix marker", () => {
+  const selected = model("gpt-6.1-sol", "@ai-sdk/openai", "openai")
+  const marked = () => {
+    const value = input({ model: selected, directory: "/work/cache" })
+    return { ...value, provider: { ...value.provider, options: { promptCacheBreakpoints: true, apiKey: "test-key" } } }
+  }
+
+  test("marks only the exact unchanged stable prefix and does not change model-facing text", async () => {
+    const value = marked()
+    const prepared = await prepare(value)
+    const baseline = await prepare({ ...value, provider: { ...value.provider, options: { apiKey: "test-key" } } })
+    const prefix = [...SystemPrompt.provider(selected), STABLE].join("\n")
+    expect(prepared.headers[ProviderTransform.PROMPT_CACHE_PREFIX_HEADER]).toBe(
+      ProviderTransform.promptCachePrefix(prefix),
+    )
+    expect(prepared.messages).toEqual(baseline.messages)
+    expect(prepared.params).toEqual(baseline.params)
+  })
+
+  test("does not mark OAuth, native, helpers, unsupported models, or plugin-rewritten prefixes", async () => {
+    const base = marked()
+    const plugin: Input["plugin"] = {
+      ...base.plugin,
+      trigger: (name, _input, output) => {
+        if (name === "experimental.chat.system.transform") {
+          const changed = output as { system: string[] }
+          changed.system[0] = "Rewritten by plugin"
+        }
+        return Effect.succeed(output)
+      },
+    }
+    const variants: Input[] = [
+      { ...base, auth: { type: "oauth", access: "test", refresh: "test", expires: 0 } },
+      { ...base, flags: { ...base.flags, experimentalNativeLlm: true } },
+      { ...base, small: true },
+      { ...base, model: gpt },
+      { ...base, plugin },
+    ]
+    for (const value of variants) {
+      const prepared = await prepare({
+        ...value,
+        model: { ...value.model, headers: { [ProviderTransform.PROMPT_CACHE_PREFIX_HEADER]: "forged" } },
+      })
+      expect(prepared.headers[ProviderTransform.PROMPT_CACHE_PREFIX_HEADER]).toBeUndefined()
+    }
+  })
+})
+
 describe("system prompt layout across sessions", () => {
   test("a ChatGPT sign-in keeps instructions the same from session to session and sends the session after them", async () => {
     const first = await prepare(input({ model: gpt, directory: "/work/a", oauth: true }))

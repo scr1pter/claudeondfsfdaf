@@ -8,8 +8,87 @@ import { Option, Schema } from "effect"
 import type { RuntimeFlags } from "@/effect/runtime-flags"
 import { iife } from "@/util/iife"
 import { isRecord } from "@/util/record"
+import { createHash } from "node:crypto"
 
 const decodeJson = Schema.decodeUnknownOption(Schema.UnknownFromJsonString)
+
+// Internal request metadata only. The provider fetch removes this before any transport runs.
+export const PROMPT_CACHE_PREFIX_HEADER = "x-vector-prompt-cache-prefix"
+
+export function promptCachePrefix(text: string) {
+  return `${text.length}:${createHash("sha256").update(text).digest("hex")}`
+}
+
+// Compatibility with the pinned SDK, which cannot express Responses text-block breakpoints.
+// An exact prefix marker from request preparation prevents inferring a boundary from arbitrary text.
+export function promptCacheBreakpointBody(input: {
+  enabled: boolean
+  url: string
+  marker: string | null
+  body: unknown
+}) {
+  if (!input.enabled || !input.marker || typeof input.body !== "string") return undefined
+  const url = URL.parse(input.url)
+  if (
+    !url ||
+    url.username ||
+    url.password ||
+    !url.pathname.endsWith("/responses") ||
+    !(
+      (url.protocol === "https:" && url.hostname === "api.openai.com" && !url.port) ||
+      (url.protocol === "http:" && ["127.0.0.1", "[::1]"].includes(url.hostname))
+    )
+  )
+    return undefined
+  const marker = /^([1-9]\d{0,6}):([a-f0-9]{64})$/.exec(input.marker)
+  const decoded = decodeJson(input.body)
+  if (!marker || Option.isNone(decoded) || !isRecord(decoded.value)) return undefined
+  const body = decoded.value
+  if (
+    body.model !== "gpt-6.1-sol" ||
+    body.prompt_cache_options !== undefined ||
+    body.prompt_cache_retention !== undefined ||
+    !Array.isArray(body.input) ||
+    !isRecord(body.input[0])
+  )
+    return undefined
+  const first = body.input[0]
+  if (first.role !== "developer" && first.role !== "system") return undefined
+  const parts = typeof first.content === "string" ? [{ type: "input_text", text: first.content }] : first.content
+  if (
+    !Array.isArray(parts) ||
+    parts.length === 0 ||
+    !parts.every(
+      (part): part is Record<string, unknown> & { type: "input_text"; text: string } =>
+        isRecord(part) &&
+        part.type === "input_text" &&
+        typeof part.text === "string" &&
+        part.prompt_cache_breakpoint === undefined,
+    )
+  )
+    return undefined
+  const length = Number(marker[1])
+  const text = parts.map((part) => part.text).join("")
+  if (length > text.length || promptCachePrefix(text.slice(0, length)) !== input.marker) return undefined
+  const ends = parts.map((part, index) => parts.slice(0, index + 1).reduce((sum, item) => sum + item.text.length, 0))
+  const boundary = ends.findIndex((end) => end >= length)
+  const part = parts[boundary]
+  if (!part) return undefined
+  const offset = length - (ends[boundary - 1] ?? 0)
+  const content = parts.flatMap((item, index) =>
+    index !== boundary
+      ? [item]
+      : [
+          { ...item, text: item.text.slice(0, offset), prompt_cache_breakpoint: { mode: "explicit", ttl: "30m" } },
+          ...(offset < item.text.length ? [{ ...item, text: item.text.slice(offset) }] : []),
+        ],
+  )
+  return JSON.stringify({
+    ...body,
+    prompt_cache_options: { mode: "implicit", ttl: "30m" },
+    input: [{ ...first, content }, ...body.input.slice(1)],
+  })
+}
 
 type Modality = NonNullable<ModelCatalog.Model["modalities"]>["input"][number]
 
