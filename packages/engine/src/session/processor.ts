@@ -361,6 +361,7 @@ const layer = Layer.effect(
       const recordStep = Effect.fn("SessionProcessor.recordStep")(function* (
         step: {
           costUsd: number
+          billed: boolean
           unpriced: boolean
           tokens: SessionV1.Assistant["tokens"]
           continues: boolean
@@ -378,8 +379,9 @@ const layer = Layer.effect(
           ctx.sessionID,
           {
             costUsd: step.costUsd,
+            unpriced: step.unpriced && !step.billed,
             // A model the catalog lists no price for is still priced when its provider reported what the step cost.
-            costKind: kind === "unknown" && step.costUsd > 0 && !step.unpriced ? "priced" : kind,
+            costKind: kind === "unknown" && step.billed ? "priced" : kind,
             price: rates && SpendGuard.priceOf(rates),
             contextTokens,
             cachedTokens: step.tokens.cache.read,
@@ -641,6 +643,8 @@ const layer = Layer.effect(
             throw new Error(value.message)
 
           case "step-start":
+            // No usage report may follow an aborted response. Keep the started attempt as unknown rather than free.
+            ctx.started ??= new Usage({})
             yield* session.updatePart({
               id: PartID.ascending(),
               messageID: ctx.assistantMessage.id,
@@ -654,7 +658,8 @@ const layer = Layer.effect(
             const usage = Session.getUsage({
               model: ctx.model,
               usage: value.usage ?? new Usage({}),
-              metadata: value.providerMetadata,
+              metadata: value.providerMetadata ?? value.usage?.providerMetadata,
+              incomplete: ["other", "error", "abort", "unknown"].includes(value.reason),
             })
             if (attempt) {
               attempt = {
@@ -718,6 +723,7 @@ const layer = Layer.effect(
             yield* recordStep(
               {
                 costUsd: usage.cost,
+                billed: usage.billed,
                 unpriced: usage.unpriced,
                 tokens: usage.tokens,
                 // The loop's own rule: it goes on after "tool-calls", and after local tool calls under any finish
@@ -798,7 +804,12 @@ const layer = Layer.effect(
         const started = ctx.started
         if (!started) return
         ctx.started = undefined
-        const usage = Session.getUsage({ model: ctx.model, usage: started })
+        const usage = Session.getUsage({
+          model: ctx.model,
+          usage: started,
+          metadata: started.providerMetadata,
+          incomplete: true,
+        })
         if (attempt) {
           attempt = {
             usage: started,
@@ -815,6 +826,7 @@ const layer = Layer.effect(
         // Billed too, so it counts against the run, as a step that stopped where it was.
         yield* recordStep({
           costUsd: usage.cost,
+          billed: usage.billed,
           unpriced: usage.unpriced,
           tokens: usage.tokens,
           continues: false,
@@ -1018,7 +1030,14 @@ const layer = Layer.effect(
                       started: (usage) => {
                         ctx.started = Usage.from(usage)
                         if (attempt)
-                          observe?.(attempt.cost + Session.getUsage({ model: ctx.model, usage: ctx.started }).cost)
+                          observe?.(
+                            attempt.cost +
+                              Session.getUsage({
+                                model: ctx.model,
+                                usage: ctx.started,
+                                metadata: ctx.started.providerMetadata,
+                              }).cost,
+                          )
                       },
                     })
                     .pipe(

@@ -1,4 +1,5 @@
 import { SessionV1 } from "@vectordevai/core/v1/session"
+import { SpendGuard } from "@vectordevai/core/spend-guard"
 import { Database } from "@vectordevai/core/database/database"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { EventV2Bridge } from "@/event-v2-bridge"
@@ -179,6 +180,7 @@ const root = LayerNode.group([
   Database.node,
   EventV2Bridge.node,
   SessionStatus.node,
+  SpendGuard.node,
   CrossSpawnSpawner.node,
 ])
 const replacements = [
@@ -290,6 +292,22 @@ const unfinishedLLM = Layer.succeed(
   }),
 )
 const itUnfinished = testEffect(LayerNode.compile(root, [...replacements, [LLM.node, unfinishedLLM]]))
+const gatewayLLM = Layer.succeed(
+  LLM.Service,
+  LLM.Service.of({
+    stream: (input) =>
+      Stream.make(
+        LLMEvent.stepStart({ index: 0 }),
+        LLMEvent.stepFinish({
+          index: 0,
+          reason: "stop",
+          providerMetadata: { openrouter: { usage: { cost: Number(input.messages[0]?.content) } } },
+        }),
+        LLMEvent.finish({ reason: "stop" }),
+      ),
+  }),
+)
+const itGateway = testEffect(LayerNode.compile(root, [...replacements, [LLM.node, gatewayLLM]]))
 const itStalledSnapshot = testEffect(
   LayerNode.compile(root, [...replacements, [LLM.node, billedLLM], [Snapshot.node, stalledSnapshot()]]),
 )
@@ -1445,6 +1463,100 @@ const admissionTurn = Effect.fn("test.admissionTurn")(function* (dir: string, se
     }),
   }
 })
+
+for (const scenario of [
+  { label: "a terminal step missing usage", runner: itProviderError },
+  { label: "a failed streaming step missing usage", runner: itFragmentFailure },
+]) {
+  scenario.runner.live(`session.processor accounting keeps ${scenario.label} uncertain on a priced model`, () =>
+    provideTmpdirInstance(
+      (dir) =>
+        Effect.gen(function* () {
+          const session = yield* Session.Service
+          const guard = yield* SpendGuard.Service
+          const chat = yield* session.create({})
+          yield* guard.begin(chat.id, { usd: 1, unpricedSteps: 1 })
+          const turn = yield* admissionTurn(dir, chat.id)
+          yield* turn.run
+          const stored = yield* MessageV2.get({ sessionID: chat.id, messageID: turn.handle.message.id })
+          const steps = stored.parts.filter((part) => part.type === "step-finish")
+          expect(steps).toHaveLength(1)
+          expect(steps[0]).toMatchObject({ cost: 0, unpriced: true })
+          expect(stored.info).toMatchObject({ cost: 0, unpriced: true })
+          expect((yield* session.get(chat.id)).unpricedSteps).toBe(1)
+          expect(yield* guard.snapshot(chat.id)).toMatchObject({
+            costKind: "priced",
+            spentUsd: 0,
+            steps: 1,
+            unpricedSteps: 1,
+          })
+          expect((yield* guard.stopped(chat.id))?.reason).toBe("unpriced")
+        }),
+      {
+        trusted: true,
+        config: {
+          provider: {
+            lmstudio: {
+              ...cfg.provider.lmstudio,
+              models: {
+                "test-model": { ...cfg.provider.lmstudio.models["test-model"], cost: { input: 3, output: 15 } },
+              },
+            },
+          },
+        },
+      },
+    ),
+  )
+}
+
+for (const cost of [0, 0.03]) {
+  itGateway.live(`session.processor accounting preserves a metadata-only gateway bill of $${cost}`, () =>
+    provideTmpdirInstance(
+      (dir) =>
+        Effect.gen(function* () {
+          const { session, processors, provider } = yield* boot()
+          const guard = yield* SpendGuard.Service
+          const chat = yield* session.create({})
+          const parent = yield* user(chat.id, String(cost))
+          const msg = yield* assistant(chat.id, parent.id, path.resolve(dir))
+          const listed = yield* provider.getModel(ref.providerID, ref.modelID)
+          const model = { ...listed, cost: { ...listed.cost, unpriced: true } }
+          const handle = yield* processors.create({ assistantMessage: msg, sessionID: chat.id, model })
+          yield* guard.begin(chat.id, { usd: 1, unpricedSteps: 1 })
+          yield* handle.process({
+            user: { ...parent, model: ref },
+            sessionID: chat.id,
+            model,
+            agent: agent(),
+            system: [],
+            messages: [{ role: "user", content: String(cost) }],
+            tools: {},
+          })
+          const stored = yield* MessageV2.get({ sessionID: chat.id, messageID: msg.id })
+          expect(stored.info).toMatchObject({ cost, unpriced: true })
+          expect(stored.parts.find((part) => part.type === "step-finish")).toMatchObject({ cost, unpriced: true })
+          expect(yield* guard.snapshot(chat.id)).toMatchObject({
+            costKind: "priced",
+            spentUsd: cost,
+            steps: 1,
+            unpricedSteps: 0,
+          })
+          expect(yield* guard.stopped(chat.id)).toBeUndefined()
+        }),
+      {
+        trusted: true,
+        config: {
+          provider: {
+            lmstudio: {
+              ...cfg.provider.lmstudio,
+              options: { ...cfg.provider.lmstudio.options, baseURL: "https://example.invalid/v1" },
+            },
+          },
+        },
+      },
+    ),
+  )
+}
 
 it.live("session admission refusal stops before the provider without a retryable error", () =>
   provideTmpdirServer(

@@ -84,6 +84,8 @@ import { DOCUMENTS as MEMORY_DOCUMENTS } from "@/tool/memory"
 import { FreeModelGuests } from "@vectordevai/core/free-model-guests"
 import { SessionTools } from "./tools"
 import { TitleUsage } from "./title-usage"
+import { Auth } from "@/auth"
+import { providerCredentialAllowed, providerUsable } from "@vectordevai/core/provider-policy"
 import { LLMEvent } from "@vectordevai/llm"
 import { SpendGuard } from "@vectordevai/core/spend-guard"
 import { RunBudget } from "@vectordevai/schema/run-budget"
@@ -240,6 +242,7 @@ const layer = Layer.effect(
     const sessions = yield* Session.Service
     const agents = yield* Agent.Service
     const provider = yield* Provider.Service
+    const auth = yield* Auth.Service
     const freeModels = yield* FreeModels.Service
     const freeCredentials = yield* FreeModels.CredentialsService
     const processor = yield* SessionProcessor.Service
@@ -404,6 +407,23 @@ const layer = Layer.effect(
       return parts
     })
 
+    const helperCostKind = Effect.fn("SessionPrompt.helperCostKind")(function* (model: Provider.Model) {
+      const signIn = yield* auth.get(model.providerID).pipe(Effect.catch(() => Effect.succeed(undefined)))
+      const line = yield* provider.line(model)
+      return SpendGuard.costKindOf({
+        free: isFreeModel(model) || model.freeModel !== undefined,
+        oauthPlan:
+          signIn?.type === "oauth" &&
+          providerCredentialAllowed(
+            model.providerID,
+            signIn,
+            providerUsable(model.providerID, { npm: model.api.npm, api: model.api.url }),
+          ),
+        listed: model.cost.input > 0 || model.cost.output > 0,
+        local: line?.local ?? false,
+      })
+    })
+
     const title = Effect.fn("SessionPrompt.ensureTitle")(function* (input: {
       session: Session.Info
       history: SessionV1.WithParts[]
@@ -413,6 +433,7 @@ const layer = Layer.effect(
       answering: Effect.Effect<boolean>
       // Completes when the run ends.
       ended: Effect.Effect<void>
+      spend: SpendGuard.Captured
       // For a sized session: the request this run answers, whether it is only a greeting, and whether it is the
       // session's first request that is more than one.
       sized?: { users: readonly SessionV1.WithParts[]; chat: boolean; first: boolean }
@@ -492,7 +513,14 @@ const layer = Layer.effect(
       // compete with the run's own requests.
       if (isFreeModel(mdl)) yield* input.ended
       if (!(yield* kept)) return
-      const usage = TitleUsage.create({ sessionID: input.session.id, model: mdl, publish: events.publish })
+      if (yield* input.spend.stopped) return
+      const usage = TitleUsage.create({
+        sessionID: input.session.id,
+        model: mdl,
+        publish: events.publish,
+        spend: input.spend,
+        costKind: yield* helperCostKind(mdl),
+      })
       // A title sent to the session's provider needs a connection of its own beside the one opened for the first step.
       yield* provider.preconnect(mdl)
       const text = yield* llm
@@ -2237,26 +2265,34 @@ const layer = Layer.effect(
 
         if (step === 1 && !resumed) {
           const background = yield* InstanceState.get(backgroundTasks)
-          const fiber = yield* title({
-            session,
-            modelID: lastUser.model.modelID,
-            providerID: lastUser.model.providerID,
-            history: msgs,
-            answering: Deferred.await(answering),
-            ended,
-            // The composer's Quick mode is a greeting lane of its own, titled the same way.
-            ...(lastUser.agent === "quick"
-              ? { sized: { users: [], chat: true, first: false } }
-              : sized
-                ? {
-                    sized: {
-                      users: sized.users,
-                      chat: sized.tier === "chat",
-                      first: !requests.slice(0, -1).some((request) => request.tier !== "chat"),
-                    },
-                  }
-                : {}),
-          }).pipe(Effect.ignore, Effect.forkIn(background.scope))
+          const fiber = yield* Effect.uninterruptibleMask((restore) =>
+            Effect.gen(function* () {
+              const spend = yield* guard.capture(sessionID)
+              return yield* restore(
+                title({
+                  session,
+                  spend,
+                  modelID: lastUser.model.modelID,
+                  providerID: lastUser.model.providerID,
+                  history: msgs,
+                  answering: Deferred.await(answering),
+                  ended,
+                  // The composer's Quick mode is a greeting lane of its own, titled the same way.
+                  ...(lastUser.agent === "quick"
+                    ? { sized: { users: [], chat: true, first: false } }
+                    : sized
+                      ? {
+                          sized: {
+                            users: sized.users,
+                            chat: sized.tier === "chat",
+                            first: !requests.slice(0, -1).some((request) => request.tier !== "chat"),
+                          },
+                        }
+                      : {}),
+                }),
+              ).pipe(Effect.ensuring(spend.release), Effect.ignore, Effect.forkIn(background.scope))
+            }),
+          )
           background.titles.add(fiber)
           fiber.addObserver(() => background.titles.delete(fiber))
         }
@@ -2721,9 +2757,15 @@ const layer = Layer.effect(
           ),
         )
         if (later) {
-          const learner = yield* later.pipe(
-            Effect.catchCause(() => Effect.void),
-            Effect.forkIn(background.scope),
+          const learner = yield* Effect.uninterruptibleMask((restore) =>
+            Effect.gen(function* () {
+              const spend = yield* guard.capture(sessionID)
+              return yield* restore(later(spend)).pipe(
+                Effect.ensuring(spend.release),
+                Effect.catchCause(() => Effect.void),
+                Effect.forkIn(background.scope),
+              )
+            }),
           )
           learners.set(sessionID, learner)
           background.titles.add(learner)
@@ -2841,19 +2883,21 @@ const layer = Layer.effect(
       const msgs = yield* sessions.messages({ sessionID: session.id })
       const tainted = SessionMemory.taint(msgs) !== undefined
       const before = msgs.filter((message) => message.info.id < user.id)
-      return Effect.gen(function* () {
-        const learned = yield* modelLearn({
-          session,
-          user,
-          typed: last.typed,
-          reply: SessionTaskSize.closingText(before).slice(-600),
-          tainted,
-          settings,
+      return (spend: SpendGuard.Captured) =>
+        Effect.gen(function* () {
+          const learned = yield* modelLearn({
+            session,
+            user,
+            typed: last.typed,
+            reply: SessionTaskSize.closingText(before).slice(-600),
+            tainted,
+            settings,
+            spend,
+          })
+          // A model's own words wait for the user, never for the same words from another session: a model would
+          // write them again.
+          yield* write(last.message, learned, "review")
         })
-        // A model's own words wait for the user, never for the same words from another session: a model would
-        // write them again.
-        yield* write(last.message, learned, "review")
-      })
     })
 
     // The optional model learner (section 6.3): one small-model request reads a correction ("no, I meant…") after the
@@ -2869,7 +2913,9 @@ const layer = Layer.effect(
       reply: string
       tainted: boolean
       settings: Brain.LearnSettings
+      spend: SpendGuard.Captured
     }) {
+      if (yield* input.spend.stopped) return []
       const primary = yield* provider
         .getModel(input.user.model.providerID, input.user.model.modelID)
         .pipe(Effect.option)
@@ -2884,6 +2930,8 @@ const layer = Layer.effect(
         model,
         publish: events.publish,
         purpose: "memory",
+        spend: input.spend,
+        costKind: yield* helperCostKind(model),
       })
       const reply = yield* llm
         .stream({
@@ -4143,6 +4191,7 @@ export const node = LayerNode.make({
     Session.node,
     Agent.node,
     Provider.node,
+    Auth.node,
     FreeModels.node,
     FreeModels.credentialsNode,
     SessionProcessor.node,

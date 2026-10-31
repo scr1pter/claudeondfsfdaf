@@ -448,7 +448,12 @@ export const costAt = (cost: Provider.Model["cost"] | undefined, contextTokens: 
   // experimentalOver200K is models.dev's 200K stand-in for the exact tiers, so it applies only without them.
   (cost?.experimentalOver200K && !cost.tiers?.length && contextTokens > 200_000 ? cost.experimentalOver200K : cost)
 
-export const getUsage = (input: { model: Provider.Model; usage: Usage; metadata?: ProviderMetadata }) => {
+export const getUsage = (input: {
+  model: Provider.Model
+  usage: Usage
+  metadata?: ProviderMetadata
+  incomplete?: boolean
+}) => {
   const safe = (value: number) => {
     if (!Number.isFinite(value)) return 0
     return Math.max(0, value)
@@ -456,22 +461,29 @@ export const getUsage = (input: { model: Provider.Model; usage: Usage; metadata?
   const inputTokens = safe(input.usage.inputTokens ?? 0)
   const outputTokens = safe(input.usage.outputTokens ?? 0)
   const reasoningTokens = safe(input.usage.reasoningTokens ?? 0)
-
   const cacheReadInputTokens = safe(input.usage.cacheReadInputTokens ?? 0)
-  const cacheWriteInputTokens = safe(
-    Number(
-      input.usage.cacheWriteInputTokens ??
-        input.metadata?.["anthropic"]?.["cacheCreationInputTokens"] ??
-        // google-vertex-anthropic returns metadata under "vertex" key
-        // (AnthropicMessagesLanguageModel custom provider key from 'vertex.anthropic.messages')
-        input.metadata?.["vertex"]?.["cacheCreationInputTokens"] ??
-        // @ts-expect-error
-        input.metadata?.["bedrock"]?.["usage"]?.["cacheWriteInputTokens"] ??
-        // @ts-expect-error
-        input.metadata?.["venice"]?.["usage"]?.["cacheCreationInputTokens"] ??
-        0,
-    ),
-  )
+  const reportedCacheWrite =
+    input.usage.cacheWriteInputTokens ??
+    input.metadata?.["anthropic"]?.["cacheCreationInputTokens"] ??
+    // google-vertex-anthropic returns metadata under "vertex" key
+    // (AnthropicMessagesLanguageModel custom provider key from 'vertex.anthropic.messages')
+    input.metadata?.["vertex"]?.["cacheCreationInputTokens"] ??
+    // @ts-expect-error
+    input.metadata?.["bedrock"]?.["usage"]?.["cacheWriteInputTokens"] ??
+    // @ts-expect-error
+    input.metadata?.["venice"]?.["usage"]?.["cacheCreationInputTokens"] ??
+    0
+  const cacheWriteInputTokens = safe(Number(reportedCacheWrite))
+  const valid = (value: unknown) => typeof value === "number" && Number.isFinite(value) && value >= 0
+  const complete =
+    !input.incomplete &&
+    [input.usage.inputTokens, input.usage.outputTokens].every(valid) &&
+    [input.usage.reasoningTokens, input.usage.cacheReadInputTokens, input.usage.totalTokens].every(
+      (value) => value === undefined || valid(value),
+    ) &&
+    valid(reportedCacheWrite) &&
+    cacheReadInputTokens + cacheWriteInputTokens <= inputTokens &&
+    reasoningTokens <= outputTokens
 
   // AI SDK v6 normalized inputTokens to include cached tokens across all providers
   // (including Anthropic/Bedrock which previously excluded them). Always subtract cache
@@ -505,12 +517,14 @@ export const getUsage = (input: { model: Provider.Model; usage: Usage; metadata?
     (typeof totalNanoAiu === "number" && Number.isFinite(totalNanoAiu) && totalNanoAiu >= 0) ||
     reportedCost !== undefined
   return {
-    // The model lists no price and the provider reported no charge, so the cost below is 0 for want of a price.
-    // A step that used no tokens owes nothing either way.
+    // A measured bill is known even when the provider omitted token counters.
+    billed,
+    // Missing counters are not measured zero usage. Keep known subtotals while flagging incomplete usage or rates.
     unpriced:
-      !billed &&
-      input.model.cost?.unpriced === true &&
-      tokens.input + tokens.output + tokens.reasoning + tokens.cache.read + tokens.cache.write > 0,
+      !complete ||
+      (!billed &&
+        input.model.cost?.unpriced === true &&
+        tokens.input + tokens.output + tokens.reasoning + tokens.cache.read + tokens.cache.write > 0),
     cost:
       reportedCost !== undefined
         ? reportedCost

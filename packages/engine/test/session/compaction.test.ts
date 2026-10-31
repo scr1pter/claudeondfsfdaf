@@ -2057,8 +2057,11 @@ describe("SessionNs.getUsage", () => {
     expect(SessionNs.getUsage({ model: unpriced, usage: used })).toMatchObject({ cost: 0, unpriced: true })
     // An explicit zero price is a free model, not an unknown one.
     expect(SessionNs.getUsage({ model: free, usage: used })).toMatchObject({ cost: 0, unpriced: false })
-    // A step that used no tokens owes nothing whatever the price.
-    expect(SessionNs.getUsage({ model: unpriced, usage: usage({}) }).unpriced).toBe(false)
+    // Explicit zero counters are known; absent counters may hide a billed response.
+    expect(SessionNs.getUsage({ model: unpriced, usage: usage({ inputTokens: 0, outputTokens: 0 }) }).unpriced).toBe(
+      false,
+    )
+    expect(SessionNs.getUsage({ model: unpriced, usage: usage({}) }).unpriced).toBe(true)
     // Copilot's billed nano-AIU prices the step even without listed rates.
     expect(
       SessionNs.getUsage({ model: unpriced, usage: used, metadata: { copilot: { totalNanoAiu: 4_000_000_000 } } }),
