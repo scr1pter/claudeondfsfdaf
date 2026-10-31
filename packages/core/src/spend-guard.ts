@@ -91,6 +91,8 @@ export type Run = {
 export type Step = {
   readonly costUsd?: number
   readonly costKind: CostKind
+  // Usage may be incomplete even when the model's catalog price is known.
+  readonly unpriced?: boolean
   readonly price?: ReviewPrice
   // The step's whole context, and the part of it the provider reported as cache reads.
   readonly contextTokens: number
@@ -169,8 +171,10 @@ export function afterStep(run: Run, step: Step, sessionID = run.rootID): { run: 
   const counted = {
     ...run,
     steps: run.steps + 1,
-    spentUsd: run.spentUsd + (step.costKind === "priced" ? Math.max(step.costUsd ?? 0, 0) : 0),
-    unpricedSteps: run.unpricedSteps + (step.costKind === "unknown" ? 1 : 0),
+    spentUsd:
+      run.spentUsd + (step.costKind === "priced" || step.costKind === "unknown" ? Math.max(step.costUsd ?? 0, 0) : 0),
+    unpricedSteps:
+      run.unpricedSteps + (step.costKind === "unknown" || (step.costKind === "priced" && step.unpriced) ? 1 : 0),
     costKind: step.costKind,
   }
   if (run.stopped) return { run: counted, verdict: { state: "stopped", ...run.stopped } }
@@ -194,7 +198,7 @@ export function stopMessage(reason: RunBudget.StopReason, run: Run, detail: Stop
   if (reason === "predicted")
     return `Stopped before the next step: ${formatUsd(run.spentUsd)} spent of a ${cap} cap, and the next step was estimated at ${formatRange(detail.estimate ?? { lowUsd: 0, highUsd: 0 })} at catalog list prices.`
   if (reason === "unpriced")
-    return `Stopped after ${run.unpricedSteps} unpriced steps: Vector has no per-token price for this model, so it cannot count what they cost against your ${cap} cap. Without a dollar cap, step and loop limits still apply.`
+    return `Stopped after ${run.unpricedSteps} unpriced or incomplete steps: Vector cannot fully measure their cost against your ${cap} cap. Without a dollar cap, step and loop limits still apply.`
   if (reason === "steps")
     return `Step limit reached: ${run.steps} of ${run.budget.steps ?? run.steps} steps used for this run.`
   const tool = detail.loop?.tool ?? "a tool"
@@ -241,7 +245,10 @@ function checkLimits(run: Run, step: Step, sessionID: SessionID): Verdict {
       reason: "cap",
       message: stopMessage("cap", run, { final: !step.continues && sessionID === run.rootID }),
     }
-  if (step.costKind === "unknown" && run.unpricedSteps >= (run.budget.unpricedSteps ?? UNPRICED_STEPS))
+  if (
+    (step.costKind === "unknown" || step.unpriced) &&
+    run.unpricedSteps >= (run.budget.unpricedSteps ?? UNPRICED_STEPS)
+  )
     return { state: "stopped", reason: "unpriced", message: stopMessage("unpriced", run) }
   const estimate =
     step.continues && step.price
@@ -339,7 +346,15 @@ export type ScopeSnapshot = {
   readonly stopped?: Stop
 }
 
+// An ancillary request keeps the run/scopes that launched it, even after that session starts another run.
+export interface Captured {
+  readonly record: (usageID: string, step: Step) => Effect.Effect<Verdict>
+  readonly stopped: Effect.Effect<Stop | undefined>
+  readonly release: Effect.Effect<void>
+}
+
 export interface Interface {
+  readonly capture: (sessionID: SessionID) => Effect.Effect<Captured>
   // Sets the budget for the root of `sessionID`: replaces an active run's budget, or holds it for begin().
   readonly arm: (sessionID: SessionID, budget: RunBudget.Info) => Effect.Effect<void>
   // Like arm, for a sender who may not raise the owner's limits, such as an invited guest: each limit can only get
@@ -411,13 +426,14 @@ type State = {
   readonly bindings: ReadonlyMap<SessionID, Binding>
   readonly armed: ReadonlyMap<SessionID, Armed>
   readonly quiet: ReadonlySet<SessionID>
+  readonly pins: ReadonlyMap<number, number>
 }
 
 // A live child pins its launch ledger even after the parent has answered or started another run. Completed
 // attempts keep observations for the same bounded history as roots, without retaining every old task forever.
 function prune(current: State): State {
   const last = new Map([...current.last].slice(-LAST_RUNS))
-  const retained = new Set([...current.active.values(), ...last.values()])
+  const retained = new Set([...current.active.values(), ...last.values(), ...current.pins.keys()])
   current.bindings.forEach((binding) => {
     if (binding.live) retained.add(binding.run)
   })
@@ -452,6 +468,7 @@ const layer = Layer.effect(
       bindings: new Map(),
       armed: new Map(),
       quiet: new Set(),
+      pins: new Map(),
     })
     const rootIn = (current: State, sessionID: SessionID) => current.roots.get(sessionID) ?? sessionID
     const runKey = (current: State, sessionID: SessionID, previous = false) =>
@@ -462,8 +479,8 @@ const layer = Layer.effect(
       const run = runKey(current, sessionID)
       return [...new Set([...(run === undefined ? [] : [run]), ...(current.bindings.get(sessionID)?.scopes ?? [])])]
     }
-    const apply = (current: State, sessionID: SessionID, step: Step) =>
-      keys(current, sessionID).flatMap((key) => {
+    const apply = (current: State, sessionID: SessionID, step: Step, captured?: readonly number[]) =>
+      (captured ?? keys(current, sessionID)).flatMap((key) => {
         const ledger = current.ledgers.get(key)
         if (!ledger) return []
         // Loop detection belongs to the launch run, not to several nested budgets. Every scope still counts
@@ -481,7 +498,111 @@ const layer = Layer.effect(
       results.find((item) => item.next.verdict.state === "warn") ??
       results[0]
 
+    const record = Effect.fn("SpendGuard.record")(function* (
+      sessionID: SessionID,
+      input: Step,
+      confirm?: Effect.Effect<boolean>,
+      captured?: readonly number[],
+    ) {
+      const guess = verdict(apply(yield* Ref.get(state), sessionID, input, captured))?.next.verdict
+      const step =
+        confirm && !input.patched && guess?.state === "stopped" && guess.reason === "loop"
+          ? { ...input, patched: yield* confirm }
+          : input
+      const results = yield* Ref.modify(state, (current) => {
+        const results = apply(current, sessionID, step, captured)
+        return [
+          results,
+          {
+            ...current,
+            ledgers: new Map([
+              ...current.ledgers,
+              ...results.map((item) => [item.key, { ...item.ledger, run: item.next.run }] as const),
+            ]),
+          },
+        ] as const
+      })
+      const selected = verdict(results)
+      if (!selected) return { state: "ok" } satisfies Verdict
+      const root = results.find((item) => item.ledger.kind === "run")
+      // Old launch work must not overwrite the new run's spend meter, and a child-only cap must not present
+      // the parent as stopped. Its own session receives the scoped verdict instead.
+      const current = yield* Ref.get(state)
+      if (captured && !keys(current, sessionID).includes(selected.key)) return selected.next.verdict
+      const published = root && current.active.get(root.next.run.rootID) === root.key ? root : selected
+      yield* events.publish(SessionStatusEvent.Spend, {
+        sessionID: published === root ? published.next.run.rootID : sessionID,
+        state: published.next.verdict.state,
+        reason: published.next.verdict.reason,
+        message: published.next.verdict.message,
+        spentUsd: published.next.run.spentUsd,
+        capUsd: published.next.run.budget.usd,
+        steps: published.next.run.steps,
+        unpricedSteps: published.next.run.unpricedSteps,
+        costKind: step.costKind,
+        estimate: published.next.verdict.estimate,
+      })
+      if (selected !== published)
+        yield* events.publish(SessionStatusEvent.Spend, {
+          sessionID,
+          state: selected.next.verdict.state,
+          reason: selected.next.verdict.reason,
+          message: selected.next.verdict.message,
+          spentUsd: selected.next.run.spentUsd,
+          capUsd: selected.next.run.budget.usd,
+          steps: selected.next.run.steps,
+          unpricedSteps: selected.next.run.unpricedSteps,
+          costKind: step.costKind,
+          estimate: selected.next.verdict.estimate,
+        })
+      return selected.next.verdict
+    })
+
     return Service.of({
+      capture: Effect.fn("SpendGuard.capture")(function* (sessionID) {
+        const captured = yield* Ref.modify(state, (current) => {
+          const captured = keys(current, sessionID)
+          const pins = new Map(current.pins)
+          captured.forEach((key) => pins.set(key, (pins.get(key) ?? 0) + 1))
+          return [captured, { ...current, pins }] as const
+        })
+        const receipt = yield* Ref.make({ closed: false, ids: new Set<string>() })
+        return {
+          record: Effect.fn("SpendGuard.capturedRecord")(function* (usageID: string, step: Step) {
+            const fresh = yield* Ref.modify(receipt, (current) =>
+              current.closed || current.ids.has(usageID)
+                ? ([false, current] as const)
+                : ([true, { ...current, ids: new Set(current.ids).add(usageID) }] as const),
+            )
+            if (!fresh) return { state: "ok" } satisfies Verdict
+            return yield* record(sessionID, step, undefined, captured)
+          }, Effect.uninterruptible),
+          stopped: Ref.get(state).pipe(
+            Effect.map((current) =>
+              captured.map((key) => current.ledgers.get(key)?.run.stopped).find((stop) => stop !== undefined),
+            ),
+          ),
+          release: Effect.gen(function* () {
+            const open = yield* Ref.modify(
+              receipt,
+              (current) => [!current.closed, { ...current, closed: true }] as const,
+            )
+            if (!open) return
+            yield* Ref.update(state, (current) => {
+              const pins = new Map(current.pins)
+              captured.forEach((key) => {
+                const count = pins.get(key) ?? 0
+                if (count <= 1) {
+                  pins.delete(key)
+                  return
+                }
+                pins.set(key, count - 1)
+              })
+              return prune({ ...current, pins })
+            })
+          }).pipe(Effect.uninterruptible),
+        } satisfies Captured
+      }),
       arm: Effect.fn("SpendGuard.arm")(function* (sessionID, budget) {
         yield* Ref.update(state, (current) => {
           const rootID = rootIn(current, sessionID)
@@ -677,59 +798,7 @@ const layer = Layer.effect(
         const key = runKey(current, sessionID)
         return key !== undefined && current.active.get(rootIn(current, sessionID)) === key
       }),
-      record: Effect.fn("SpendGuard.record")(function* (sessionID, input, confirm) {
-        const guess = verdict(apply(yield* Ref.get(state), sessionID, input))?.next.verdict
-        const step =
-          confirm && !input.patched && guess?.state === "stopped" && guess.reason === "loop"
-            ? { ...input, patched: yield* confirm }
-            : input
-        const results = yield* Ref.modify(state, (current) => {
-          const results = apply(current, sessionID, step)
-          return [
-            results,
-            {
-              ...current,
-              ledgers: new Map([
-                ...current.ledgers,
-                ...results.map((item) => [item.key, { ...item.ledger, run: item.next.run }] as const),
-              ]),
-            },
-          ] as const
-        })
-        const selected = verdict(results)
-        if (!selected) return { state: "ok" } satisfies Verdict
-        const root = results.find((item) => item.ledger.kind === "run")
-        // Old launch work must not overwrite the new run's spend meter, and a child-only cap must not present
-        // the parent as stopped. Its own session receives the scoped verdict instead.
-        const current = yield* Ref.get(state)
-        const published = root && current.active.get(root.next.run.rootID) === root.key ? root : selected
-        yield* events.publish(SessionStatusEvent.Spend, {
-          sessionID: published === root ? published.next.run.rootID : sessionID,
-          state: published.next.verdict.state,
-          reason: published.next.verdict.reason,
-          message: published.next.verdict.message,
-          spentUsd: published.next.run.spentUsd,
-          capUsd: published.next.run.budget.usd,
-          steps: published.next.run.steps,
-          unpricedSteps: published.next.run.unpricedSteps,
-          costKind: step.costKind,
-          estimate: published.next.verdict.estimate,
-        })
-        if (selected !== published)
-          yield* events.publish(SessionStatusEvent.Spend, {
-            sessionID,
-            state: selected.next.verdict.state,
-            reason: selected.next.verdict.reason,
-            message: selected.next.verdict.message,
-            spentUsd: selected.next.run.spentUsd,
-            capUsd: selected.next.run.budget.usd,
-            steps: selected.next.run.steps,
-            unpricedSteps: selected.next.run.unpricedSteps,
-            costKind: step.costKind,
-            estimate: selected.next.verdict.estimate,
-          })
-        return selected.next.verdict
-      }),
+      record,
       changed: Effect.fn("SpendGuard.changed")(function* (sessionID) {
         yield* Ref.update(state, (current) => {
           const key = runKey(current, sessionID)
