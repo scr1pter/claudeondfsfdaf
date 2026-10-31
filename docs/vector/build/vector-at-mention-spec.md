@@ -836,7 +836,7 @@ It is typed locally and structurally against Codium's `GatewayHook` (`api/_lib/m
 | `binder-left:<account>` | SET | repository ids whose binder lost access while bound to the account (2.5) | none (a member goes when the account binds that repository again; the key on erase) |
 | `bind-code:<sha256 hex of the whole code>` | STRING | JSON (below) | 600 s |
 | `ticket:<sha256>` | STRING | JSON | 900 s |
-| `binder-ok:<repositoryId>` | STRING | `1`: the binder's write access was verified through the App | 1 hour |
+| `binder-ok:<repositoryId>` | STRING | JSON `{githubId, generation}`: the verified binder and binding generation | 1 hour |
 | `default-branch:<repositoryId>` | STRING | a public repository's default branch, read without credentials | 1 hour |
 | `live:<account>` | HASH | `rid` → JSON `LiveRun` | extended at each fresh reserve to at least that reserve's `used` expiry and its deadline + 1 day; never shortened; goes with its last run |
 | `used:<account>:<meterEpoch>` | STRING | seconds charged: settled runs, plus the reservations of live runs (a settle gives back the unused part; 2.6) | `max(periodEnd, now)` + 40 days, set at each fresh reserve |
@@ -1031,6 +1031,16 @@ type GithubIdentity = {
 4. 403 `EVENT_NOT_ALLOWED`: an event outside the audience's list, checked last.
 
 So a review-comment token signed for `token`, `installation` or `bind` fails at its ref (401) before the event list, and a `[bot]` actor anywhere but a mint dispatch fails at the actor pattern (401).
+
+### App verification interfaces (V09)
+
+`createGithubApp` takes optional `store` (the persistent-store command function) for the binder cache.
+
+- `verifyRun(identity, options)` takes `options: {job: "agent" | "review", commentId?: number, pullRequest?: number, thread: string, bot?: boolean, binder: {githubId: string, login: string}, defaultRef: string, generation: number}`. The binding supplies `binder`, `defaultRef` and `generation`; no request body supplies them. It returns `{installed: false}` or `{installed: true, binder: "ok" | "binder-left"}` and never a credential. V12 accepts `bot: true` only after its one-time ticket check. A review comment must have a matching `pullRequest` and signed `identity.pullRequest`.
+- `verifyBind(identity)` accepts only a bind-audience workflow dispatch in the `Vector bind` job. It returns `{installed: false}` or `{installed: true, adminVerified: boolean, defaultRef: string}`. `adminVerified` comes from the actor's current collaborator permission, never a client value.
+- The binder cache stores exactly `{githubId, generation}`. Both must match the binding before reuse; an older binder's cache never authorizes a new binder or generation. A missing or differently bound value triggers a fresh check; a malformed cache or store failure fails closed with 503 `PERSISTENT_STORE_UNAVAILABLE`. Only successful write-access checks are cached, with an exact one-hour TTL.
+- `githubProof(request, response, audience, verify = verifyGithubOidc)` accepts `GithubOidcPurpose` and returns `{body, identity}`. It performs no replay consumption; the eventual operation consumes the proof after its policy checks.
+- Human actor and triggering-actor checks still read GitHub's run objects and current collaborator permissions on every authorization. Thus dispatch and schedule bots without a `[bot]` suffix are refused too. The only Bot exception is the configured App bot in a ticket-approved mint dispatch, with its id checked against GitHub's `/users/<slug>[bot]` response. A different rerun actor must be a human writer.
 
 ## 2.11 Workflow v3 (`packages/core/src/review/workflow.ts`) and the version handshake
 
