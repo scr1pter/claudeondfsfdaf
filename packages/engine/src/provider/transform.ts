@@ -19,6 +19,35 @@ export function promptCachePrefix(text: string) {
   return `${text.length}:${createHash("sha256").update(text).digest("hex")}`
 }
 
+export function promptCacheBreakpointsEnabled(input: {
+  setting: unknown
+  providerID: string
+  npm: string
+  modelID: string
+  apiKey: boolean
+  url: unknown
+}) {
+  if (
+    (input.setting !== undefined && input.setting !== true) ||
+    !input.apiKey ||
+    input.providerID !== "openai" ||
+    input.npm !== "@ai-sdk/openai" ||
+    input.modelID !== "gpt-6.1-sol"
+  )
+    return false
+  if (input.url !== undefined && typeof input.url !== "string") return false
+  const url = URL.parse(input.url ?? "https://api.openai.com/v1")
+  if (!url || url.username || url.password) return false
+  const official =
+    url.protocol === "https:" &&
+    url.hostname === "api.openai.com" &&
+    !url.port &&
+    ["/v1", "/v1/", "/v1/responses"].includes(url.pathname)
+  const loopback = url.protocol === "http:" && ["127.0.0.1", "[::1]"].includes(url.hostname)
+  if (input.setting === true) return official || loopback
+  return official && !url.search && !url.hash
+}
+
 // Compatibility with the pinned SDK, which cannot express Responses text-block breakpoints.
 // An exact prefix marker from request preparation prevents inferring a boundary from arbitrary text.
 export function promptCacheBreakpointBody(input: {
@@ -49,6 +78,13 @@ export function promptCacheBreakpointBody(input: {
     body.prompt_cache_options !== undefined ||
     body.prompt_cache_retention !== undefined ||
     !Array.isArray(body.input) ||
+    body.input.some(
+      (item) =>
+        isRecord(item) &&
+        (item.prompt_cache_breakpoint !== undefined ||
+          (Array.isArray(item.content) &&
+            item.content.some((part) => isRecord(part) && part.prompt_cache_breakpoint !== undefined))),
+    ) ||
     !isRecord(body.input[0])
   )
     return undefined
@@ -1248,10 +1284,9 @@ export function options(input: {
     }
   }
 
-  // Every OpenAI request names its session as the prompt cache key, on every model, as the Codex CLI does. OpenAI
-  // routes a request by its opening tokens together with this key, and spills a group that passes roughly 15 requests
-  // a minute onto other cache machines. Without a key every Vector session shares one group, because their opening
-  // tokens (the tool definitions) are the same, so parallel sessions and subagents push each other off their cache.
+  // Preserve session-scoped cache accounting by default. A key separates cache reuse between request groups;
+  // newer OpenAI models route automatically, while older models also use the key to help route related requests.
+  // Callers can opt out with setCacheKey: false, and explicit model or agent keys are merged later.
   if (
     input.providerOptions?.setCacheKey === true ||
     (input.model.providerID === "openai" && input.providerOptions?.setCacheKey !== false)

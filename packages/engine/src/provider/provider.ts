@@ -2530,12 +2530,14 @@ const layer = Layer.effect(
           ) !== undefined
         const chunkTimeout = options["chunkTimeout"] ?? (hosted ? LOCAL_CHUNK_TIMEOUT : undefined)
         const headerTimeout = options["headerTimeout"] ?? (hosted ? LOCAL_HEADER_TIMEOUT : undefined)
-        const promptCacheBreakpoints =
-          options["promptCacheBreakpoints"] === true &&
-          model.providerID === "openai" &&
-          model.api.npm === "@ai-sdk/openai" &&
-          model.api.id === "gpt-6.1-sol" &&
-          (credential?.type === "api" || (!credential && typeof options["apiKey"] === "string"))
+        const promptCacheBreakpoints = ProviderTransform.promptCacheBreakpointsEnabled({
+          setting: options["promptCacheBreakpoints"],
+          providerID: model.providerID,
+          npm: model.api.npm,
+          modelID: model.api.id,
+          apiKey: credential?.type === "api" || (!credential && typeof options["apiKey"] === "string"),
+          url: baseURL,
+        })
         delete options["promptCacheBreakpoints"]
         delete options["chunkTimeout"]
         delete options["headerTimeout"]

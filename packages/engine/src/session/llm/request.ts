@@ -91,15 +91,19 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
     system.push(header, rest.join("\n"))
   }
 
-  const stablePrefix =
-    input.provider.options.promptCacheBreakpoints === true ? prompt.filter(Boolean).join("\n") : undefined
+  const breakpoints = ProviderTransform.promptCacheBreakpointsEnabled({
+    setting: input.provider.options.promptCacheBreakpoints,
+    providerID: input.provider.id,
+    npm: input.model.api.npm,
+    modelID: input.model.api.id,
+    apiKey:
+      input.auth?.type === "api" ||
+      (!input.auth && (typeof input.provider.options.apiKey === "string" || typeof input.provider.key === "string")),
+    url: input.provider.options.baseURL ?? input.model.api.url,
+  })
+  const stablePrefix = breakpoints ? prompt.filter(Boolean).join("\n") : undefined
   const cachePrefix =
-    input.provider.options.promptCacheBreakpoints === true &&
-    input.provider.id === "openai" &&
-    input.model.api.npm === "@ai-sdk/openai" &&
-    input.model.api.id === "gpt-6.1-sol" &&
-    (input.auth?.type === "api" ||
-      (!input.auth && (typeof input.provider.options.apiKey === "string" || typeof input.provider.key === "string"))) &&
+    breakpoints &&
     !input.small &&
     !input.isWorkflow &&
     !input.flags.experimentalNativeLlm &&

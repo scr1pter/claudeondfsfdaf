@@ -102,4 +102,26 @@ describe("opt-in Responses stable-prefix breakpoint", () => {
     ])
       expect(transform(body)).toBeUndefined()
   })
+
+  test("leaves existing later-item breakpoints unchanged, including mixed TTL policies", () => {
+    for (const ttl of ["30m", "12h"]) {
+      const body = {
+        ...original,
+        input: [
+          original.input[0],
+          {
+            role: "user",
+            content: [{ type: "input_text", text: "Question", prompt_cache_breakpoint: { mode: "explicit", ttl } }],
+          },
+        ],
+      }
+      expect(transform(body)).toBeUndefined()
+    }
+    expect(
+      transform({
+        ...original,
+        input: [...original.input, { role: "developer", content: "Later policy", prompt_cache_breakpoint: {} }],
+      }),
+    ).toBeUndefined()
+  })
 })

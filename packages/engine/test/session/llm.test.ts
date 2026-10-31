@@ -973,6 +973,97 @@ function createEventResponse(chunks: unknown[], includeDone = false) {
 }
 
 describe("session.llm.stream", () => {
+  for (const selected of [
+    { name: "official default", route: "official", setting: undefined, expected: true },
+    { name: "official opt-out", route: "official", setting: false, expected: false },
+    { name: "custom default", route: "custom", setting: undefined, expected: false },
+    { name: "loopback default", route: "loopback", setting: undefined, expected: false },
+  ] as const) {
+    it.instance(
+      `resolves breakpoint ${selected.name} through the production SDK transport`,
+      () =>
+        Effect.gen(function* () {
+          const request = waitRequest(
+            "/responses",
+            createEventResponse([
+              {
+                type: "response.created",
+                response: { id: "resp-cache-default", created_at: 1, model: "gpt-6.1-sol", service_tier: null },
+              },
+              {
+                type: "response.completed",
+                response: {
+                  usage: {
+                    input_tokens: 1200,
+                    input_tokens_details: { cached_tokens: 0, cache_write_tokens: 1200 },
+                    output_tokens: 1,
+                  },
+                },
+              },
+            ]),
+          )
+          const providers = yield* Provider.Service
+          const provider = yield* providers.getProvider(ProviderV2.ID.openai)
+          // Keep the real SDK and provider wrapper, replacing only the final transport. Even an official URL reaches
+          // this fixture server; this regression must never contact a provider or use a real credential.
+          provider.options.fetch = (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+            const url = new URL(input instanceof Request ? input.url : String(input))
+            return fetch(`http://127.0.0.1:${state.server!.port}${url.pathname}`, init)
+          }
+          const resolved = yield* providers.getModel(ProviderV2.ID.openai, ModelV2.ID.make("gpt-6.1-sol"))
+          const sessionID = SessionID.make(`ses_cache_default_${selected.name.replaceAll(" ", "_")}`)
+          yield* drain({
+            user: {
+              id: MessageID.make(`msg_cache_default_${selected.name.replaceAll(" ", "_")}`),
+              sessionID,
+              role: "user",
+              time: { created: 1 },
+              agent: "test",
+              model: { providerID: ProviderV2.ID.openai, modelID: resolved.id },
+            },
+            sessionID,
+            model: resolved,
+            agent: { name: "test", mode: "primary", options: {}, permission: [], prompt: "Stable provider policy." },
+            stableSystem: ["Stable tool policy."],
+            system: ["Per-session context."],
+            messages: [{ role: "user", content: "Question" }],
+            tools: {},
+          })
+          const capture = yield* Effect.promise(() => request)
+          expect(capture.headers.has(ProviderTransform.PROMPT_CACHE_PREFIX_HEADER)).toBe(false)
+          expect(capture.body.prompt_cache_key).toBe(sessionID)
+          expect(capture.body.prompt_cache_options).toEqual(
+            selected.expected ? { mode: "implicit", ttl: "30m" } : undefined,
+          )
+          const messages = capture.body.input as {
+            role: string
+            content: string | { text: string; prompt_cache_breakpoint?: { mode: string; ttl: string } }[]
+          }[]
+          const content = messages[0]!.content
+          expect(typeof content === "string" ? content : content.map((part) => part.text).join("")).toBe(
+            "Stable provider policy.\nStable tool policy.\nPer-session context.",
+          )
+          expect(Array.isArray(content) && content.some((part) => part.prompt_cache_breakpoint !== undefined)).toBe(
+            selected.expected,
+          )
+        }),
+      {
+        trusted: true,
+        config: () => {
+          const url =
+            selected.route === "official"
+              ? "https://api.openai.com/v1"
+              : selected.route === "custom"
+                ? "https://proxy.example/v1"
+                : `http://127.0.0.1:${state.server!.port}/v1`
+          const config = openAIConfig({ ...loadFixture("openai", "gpt-5.2").model, id: "gpt-6.1-sol" }, url)
+          if (selected.setting !== undefined)
+            config.provider!.openai!.options!.promptCacheBreakpoints = selected.setting
+          return config
+        },
+      },
+    )
+  }
   for (const enabled of [false, true]) {
     it.instance(
       `keeps the internal cache marker off the real SDK wire with breakpoint opt-in ${enabled}`,

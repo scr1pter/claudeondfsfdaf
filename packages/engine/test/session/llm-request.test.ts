@@ -85,7 +85,10 @@ const systemMessages = (prepared: LLMRequestPrep.Prepared) =>
   prepared.messages.flatMap((message) => (message.role === "system" ? [message.content] : []))
 
 describe("internal stable-prefix marker", () => {
-  const selected = model("gpt-6.1-sol", "@ai-sdk/openai", "openai")
+  const selected = {
+    ...model("gpt-6.1-sol", "@ai-sdk/openai", "openai"),
+    api: { id: "gpt-6.1-sol", npm: "@ai-sdk/openai", url: "https://api.openai.com/v1" },
+  }
   const marked = () => {
     const value = input({ model: selected, directory: "/work/cache" })
     return { ...value, provider: { ...value.provider, options: { promptCacheBreakpoints: true, apiKey: "test-key" } } }
@@ -101,6 +104,87 @@ describe("internal stable-prefix marker", () => {
     )
     expect(prepared.messages).toEqual(baseline.messages)
     expect(prepared.params).toEqual(baseline.params)
+  })
+
+  test.each([
+    { setting: undefined, url: "https://api.openai.com/v1", expected: true },
+    { setting: false, url: "https://api.openai.com/v1", expected: false },
+    { setting: undefined, url: "https://proxy.example/v1", expected: false },
+    { setting: undefined, url: "http://127.0.0.1:1234/v1", expected: false },
+    { setting: true, url: "http://127.0.0.1:1234/v1", expected: true },
+  ])("resolves cache marker default for $url with setting $setting", async ({ setting, url, expected }) => {
+    const value = marked()
+    const prepared = await prepare({
+      ...value,
+      provider: {
+        ...value.provider,
+        options: {
+          apiKey: "test-key",
+          baseURL: url,
+          ...(setting !== undefined ? { promptCacheBreakpoints: setting } : {}),
+        },
+      },
+    })
+    expect(prepared.headers[ProviderTransform.PROMPT_CACHE_PREFIX_HEADER] !== undefined).toBe(expected)
+  })
+
+  test("default eligibility accepts stored or provider API keys but never an OAuth credential", async () => {
+    const value = marked()
+    for (const selected of [
+      { auth: { type: "api", key: "test-key" }, providerKey: undefined, expected: true },
+      { auth: undefined, providerKey: "test-key", expected: true },
+      { auth: undefined, providerKey: undefined, expected: false },
+      {
+        auth: { type: "oauth", access: "test", refresh: "test", expires: 0 },
+        providerKey: "test-key",
+        expected: false,
+      },
+    ] as const) {
+      const prepared = await prepare({
+        ...value,
+        auth: selected.auth,
+        provider: { ...value.provider, key: selected.providerKey, options: {} },
+      })
+      expect(prepared.headers[ProviderTransform.PROMPT_CACHE_PREFIX_HEADER] !== undefined).toBe(selected.expected)
+    }
+  })
+
+  test("default breakpoints preserve separate session cache keys", async () => {
+    const value = marked()
+    const prepared = await Promise.all(
+      ["ses_alpha", "ses_beta"].map((sessionID) =>
+        prepare({ ...value, sessionID, provider: { ...value.provider, options: { apiKey: "test-key" } } }),
+      ),
+    )
+    expect(prepared.map((item) => item.params.options.promptCacheKey)).toEqual(["ses_alpha", "ses_beta"])
+    expect(prepared.every((item) => item.headers[ProviderTransform.PROMPT_CACHE_PREFIX_HEADER] !== undefined)).toBe(
+      true,
+    )
+  })
+
+  test.each([
+    { setCacheKey: true, expected: "session" },
+    { setCacheKey: false, expected: undefined },
+    { setCacheKey: undefined, modelKey: "model-cache", expected: "model-cache" },
+    { setCacheKey: undefined, modelKey: "model-cache", agentKey: "agent-cache", expected: "agent-cache" },
+  ])("preserves explicit key controls with default breakpoints: $expected", async (selected) => {
+    const value = marked()
+    const prepared = await prepare({
+      ...value,
+      model: { ...value.model, options: { ...(selected.modelKey ? { promptCacheKey: selected.modelKey } : {}) } },
+      agent: { ...value.agent, options: { ...(selected.agentKey ? { promptCacheKey: selected.agentKey } : {}) } },
+      provider: {
+        ...value.provider,
+        options: {
+          apiKey: "test-key",
+          ...(selected.setCacheKey !== undefined ? { setCacheKey: selected.setCacheKey } : {}),
+        },
+      },
+    })
+    expect(prepared.params.options.promptCacheKey).toBe(
+      selected.expected === "session" ? value.sessionID : selected.expected,
+    )
+    expect(prepared.headers[ProviderTransform.PROMPT_CACHE_PREFIX_HEADER]).toBeDefined()
   })
 
   test("does not mark OAuth, native, helpers, unsupported models, or plugin-rewritten prefixes", async () => {
@@ -119,6 +203,7 @@ describe("internal stable-prefix marker", () => {
       { ...base, auth: { type: "oauth", access: "test", refresh: "test", expires: 0 } },
       { ...base, flags: { ...base.flags, experimentalNativeLlm: true } },
       { ...base, small: true },
+      { ...base, isWorkflow: true },
       { ...base, model: gpt },
       { ...base, plugin },
     ]
