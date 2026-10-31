@@ -75,6 +75,8 @@ import { SessionMemory } from "./memory"
 import { Egress } from "@vectordevai/core/local-mode/egress"
 import type { LocalMode } from "@vectordevai/schema/local-mode"
 import { Brain } from "@vectordevai/core/brain/brain"
+import { BrainDatabase } from "@vectordevai/core/brain/database"
+import { BrainRevocation } from "@vectordevai/core/brain/revocation"
 import { BrainKnowledge } from "@vectordevai/core/brain/knowledge"
 import { BrainLearn } from "@vectordevai/core/brain/learn"
 import type { BrainSchema } from "@vectordevai/core/brain/schema"
@@ -270,6 +272,7 @@ const layer = Layer.effect(
     const database = yield* Database.Service
     const guard = yield* SpendGuard.Service
     const brain = yield* Brain.Service
+    const brainDatabase = yield* BrainDatabase.Service
     const knowledge = yield* BrainKnowledge.Service
     const guests = yield* FreeModelGuests.Service
     const git = yield* Git.Service
@@ -285,7 +288,8 @@ const layer = Layer.effect(
     // system prompt ahead of the whole conversation, so re-reading them every step meant one edit, often the agent's own
     // memory update, re-wrote the entire cached context at the cache-write price. They are read again only when that
     // context is re-written anyway: after compaction gives the session a new history start, on another model, or once
-    // the provider's cache has expired. An edit the agent makes itself is already in its context. Keyed by session, so
+    // the provider's cache has expired. Explicit user revocations also refresh it; normal learned writes do not.
+    // An edit the agent makes itself is already in its context. Keyed by session, so
     // concurrent sessions keep their own snapshot.
     // `personal` counts the owner's own entries the digest carries, for Vector Local's network log.
     const instructionSnapshots = new Map<
@@ -313,15 +317,16 @@ const layer = Layer.effect(
         readonly files: boolean
       },
     ) {
+      const place = yield* instruction.place()
+      const revoked = yield* BrainRevocation.revision(brainDatabase.db, place.repository)
       const snapshot = instructionSnapshots.get(sessionID)
-      const full = `${key}|${memory.personal ? "personal" : "shared"}|${memory.index ? "index" : "plain"}|${memory.audience}|${memory.kinds?.join(",") ?? "all"}|${memory.facets?.join(",") ?? "all"}|${memory.files ? "files" : "brief"}`
+      const full = `${key}|${memory.personal ? "personal" : "shared"}|${memory.index ? "index" : "plain"}|${memory.audience}|${memory.kinds?.join(",") ?? "all"}|${memory.facets?.join(",") ?? "all"}|${memory.files ? "files" : "brief"}|${revoked}`
       // Re-inserting keeps the most recently used sessions at the end; the oldest go once there are too many.
       instructionSnapshots.delete(sessionID)
       if (snapshot && snapshot.key === full && !cold) {
         instructionSnapshots.set(sessionID, snapshot)
         return snapshot
       }
-      const place = yield* instruction.place()
       // The repository's documents get one line beside the memory index, taken with the rest of the snapshot, and the
       // memory tool says how to open them for as long as the snapshot holds.
       // A role whose output leaves the machine is not told which private documents there are.
@@ -4219,6 +4224,7 @@ export const node = LayerNode.make({
     Database.node,
     SpendGuard.node,
     Brain.node,
+    BrainDatabase.node,
     BrainKnowledge.node,
     FreeModelGuests.node,
     Git.node,

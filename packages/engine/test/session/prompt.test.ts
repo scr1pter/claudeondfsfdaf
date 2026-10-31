@@ -14,6 +14,7 @@ import { SessionProjector } from "@vectordevai/core/session/projector"
 import { eq } from "drizzle-orm"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { afterAll, expect, test } from "bun:test"
+import { $ } from "bun"
 import { Cause, Deferred, Duration, Effect, Exit, Fiber, Layer, Stream } from "effect"
 import path from "path"
 import { dynamicTool, jsonSchema, type Tool } from "ai"
@@ -66,6 +67,9 @@ import { TestInstance, tmpdirScoped, trustWorkspace } from "../fixture/fixture"
 import { awaitWithTimeout, pollWithTimeout, testEffect } from "../lib/effect"
 import { reply, TestLLMServer, type Reply } from "../lib/llm-server"
 import { SpendGuard } from "@vectordevai/core/spend-guard"
+import { Brain } from "@vectordevai/core/brain/brain"
+import { BrainKnowledge } from "@vectordevai/core/brain/knowledge"
+import { FreeModelGuests } from "@vectordevai/core/free-model-guests"
 import { Auth } from "@/auth"
 import { isRecord } from "@/util/record"
 import { RuntimeFlags } from "@/effect/runtime-flags"
@@ -197,6 +201,9 @@ const runtimeFlags = RuntimeFlags.layer({ experimentalEventSystem: true })
 const testLLMServerNode = LayerNode.make({ service: TestLLMServer, layer: TestLLMServer.layer, deps: [] })
 
 const promptRoot = LayerNode.group([
+  Brain.node,
+  BrainKnowledge.node,
+  FreeModelGuests.node,
   SessionPrompt.node,
   Session.node,
   SessionProjector.node,
@@ -500,6 +507,14 @@ function providerCfg(url: string) {
       },
     },
   }
+}
+
+function systemPrefix(hit: { body: Record<string, unknown> }) {
+  return JSON.stringify(
+    Array.isArray(hit.body.messages)
+      ? hit.body.messages.filter((message) => isRecord(message) && message.role === "system")
+      : [],
+  )
 }
 
 const writeText = Effect.fn("test.writeText")(function* (file: string, text: string) {
@@ -1151,12 +1166,221 @@ it.instance("a session reads its instruction files once, so an edit mid-session 
     yield* turn(fresh.id, "inspect the repository")
 
     const bodies = (yield* llm.hits).map((hit) => JSON.stringify(hit.body))
+    const prefixes = (yield* llm.hits).map(systemPrefix)
     expect(bodies).toHaveLength(3)
+    expect(prefixes[0]).not.toBe("[]")
+    expect(prefixes[1]).toBe(prefixes[0])
+    expect(prefixes[2]).not.toBe(prefixes[0])
     expect(bodies[1]).toContain("# First rules")
     expect(bodies[1]).not.toContain("# Second rules")
     // A new session reads the files as they are now.
     expect(bodies[2]).toContain("# Second rules")
   }),
+)
+
+it.instance(
+  "explicitly forgetting pinned memory refreshes an active session without refreshing ordinary learned writes",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const instruction = yield* Instruction.Service
+      const brain = yield* Brain.Service
+      const place = yield* instruction.place()
+      const instance = yield* InstanceRef
+      if (!instance) return yield* Effect.die("no instance")
+      const rules = path.join(instance.directory, "AGENTS.md")
+      yield* Effect.promise(() => Bun.write(rules, "# First cached rules"))
+      const saved = yield* brain.propose(place, {
+        origin: "user",
+        scope: "repository",
+        kind: "decision",
+        text: "Reports use the sapphire forecast window.",
+      })
+      if (saved.type === "refused") return yield* Effect.die(saved.message)
+      yield* brain.update(place, saved.entry.id, { pinned: true }, "user")
+      const turn = (sessionID: SessionID) =>
+        Effect.gen(function* () {
+          yield* prompt.prompt({
+            sessionID,
+            agent: "build",
+            noReply: true,
+            parts: [{ type: "text", text: "inspect the repository" }],
+          })
+          yield* llm.text("ok")
+          yield* prompt.loop({ sessionID })
+        })
+      const chat = yield* sessions.create({
+        title: "Memory revocation",
+        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+      })
+      yield* turn(chat.id)
+      yield* Effect.promise(() => Bun.write(rules, "# Updated rules after ordinary learning"))
+      const learned = yield* brain.propose(place, {
+        origin: "agent",
+        scope: "repository",
+        kind: "preference",
+        text: "Prefer narrow source changes.",
+        evidence: { type: "message", quote: "Prefer narrow source changes.", verified: true },
+      })
+      expect(learned.type).not.toBe("refused")
+      yield* turn(chat.id)
+      expect(yield* brain.forget(place, saved.entry.id)).toBe("forgotten")
+      yield* turn(chat.id)
+
+      const bodies = (yield* llm.hits).map((hit) => JSON.stringify(hit.body))
+      expect(bodies).toHaveLength(3)
+      expect(bodies[0]).toContain("Reports use the sapphire forecast window.")
+      expect(bodies[1]).toContain("Reports use the sapphire forecast window.")
+      expect(bodies[1]).toContain("# First cached rules")
+      expect(bodies[1]).not.toContain("# Updated rules after ordinary learning")
+      expect(bodies[2]).not.toContain("Reports use the sapphire forecast window.")
+      expect(bodies[2]).toContain("# Updated rules after ordinary learning")
+    }),
+)
+
+it.instance(
+  "explicitly forgetting a document removes its cached index title from an active session",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const instruction = yield* Instruction.Service
+      const knowledge = yield* BrainKnowledge.Service
+      const place = yield* instruction.place()
+      const added = yield* knowledge.add(place, {
+        type: "text",
+        name: "SapphireMemo.md",
+        text: "# SapphireMemo\n\nThe forecast window spans sixteen weeks.",
+        origin: "upload",
+      })
+      if (added.type === "refused") return yield* Effect.die(added.message)
+      yield* knowledge.wait(place, added.document.id, "searchable", 20_000)
+      const turn = (sessionID: SessionID) =>
+        Effect.gen(function* () {
+          yield* prompt.prompt({
+            sessionID,
+            agent: "build",
+            noReply: true,
+            parts: [{ type: "text", text: "inspect the repository" }],
+          })
+          yield* llm.text("ok")
+          yield* prompt.loop({ sessionID })
+        })
+      const chat = yield* sessions.create({
+        title: "Document revocation",
+        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+      })
+      yield* turn(chat.id)
+      expect(yield* knowledge.remove(place, added.document.id)).toBe("removed")
+      expect(yield* knowledge.digest(place, { personal: true })).toBeUndefined()
+      yield* turn(chat.id)
+
+      const bodies = (yield* llm.hits).map((hit) => JSON.stringify(hit.body))
+      expect(bodies).toHaveLength(2)
+      expect(bodies[0]?.includes("SapphireMemo")).toBe(true)
+      expect(bodies[1]?.includes("SapphireMemo")).toBe(false)
+      expect(bodies[1]?.includes("Vector also holds 1 document")).toBe(false)
+    }),
+  30_000,
+)
+
+it.instance(
+  "making a shared document private refreshes a live guest session's cached titles",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const instruction = yield* Instruction.Service
+      const knowledge = yield* BrainKnowledge.Service
+      const guests = yield* FreeModelGuests.Service
+      const place = yield* instruction.place()
+      const added = yield* knowledge.add(place, {
+        type: "text",
+        name: "SapphireMemo.md",
+        title: "SapphireMemo",
+        text: "# SapphireMemo\n\nThe forecast window spans sixteen weeks.",
+        origin: "upload",
+      })
+      if (added.type === "refused") return yield* Effect.die(added.message)
+      yield* knowledge.wait(place, added.document.id, "searchable", 20_000)
+      yield* knowledge.update(place, added.document.id, { visibility: "repository" })
+      const chat = yield* sessions.create({
+        title: "Shared document privacy",
+        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+      })
+      yield* guests.mark(chat.id)
+      const turn = Effect.gen(function* () {
+        yield* prompt.prompt({
+          sessionID: chat.id,
+          agent: "build",
+          noReply: true,
+          parts: [{ type: "text", text: "inspect the repository" }],
+        })
+        yield* llm.text("ok")
+        yield* prompt.loop({ sessionID: chat.id })
+      })
+      yield* turn
+      expect((yield* llm.hits).map(systemPrefix)[0]?.includes("SapphireMemo")).toBe(true)
+      expect(yield* knowledge.update(place, added.document.id, { visibility: "private" })).toBe("updated")
+      expect(yield* knowledge.digest(place, { personal: false })).toBeUndefined()
+      expect(yield* knowledge.digest(place, { personal: true })).toContain("SapphireMemo")
+      yield* turn
+      const prefixes = (yield* llm.hits).map(systemPrefix)
+      expect(prefixes).toHaveLength(2)
+      expect(prefixes[1]?.includes("SapphireMemo")).toBe(false)
+    }),
+  30_000,
+)
+
+it.instance(
+  "turning repository documents off withdraws titles from an active session",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const instruction = yield* Instruction.Service
+      const knowledge = yield* BrainKnowledge.Service
+      const place = yield* instruction.place()
+      yield* writeText(path.join(place.root, "README.md"), "# CobaltManual\n\nUse cobalt values for archived reports.")
+      yield* Effect.promise(() => $`git add README.md`.cwd(place.root).quiet())
+      const added = yield* knowledge.add(place, {
+        type: "path",
+        path: "README.md",
+        title: "CobaltManual",
+        origin: "repository",
+      })
+      if (added.type === "refused") return yield* Effect.die(added.message)
+      yield* knowledge.wait(place, added.document.id, "searchable", 20_000)
+      const chat = yield* sessions.create({
+        title: "Repository document withdrawal",
+        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+      })
+      const turn = Effect.gen(function* () {
+        yield* prompt.prompt({
+          sessionID: chat.id,
+          agent: "build",
+          noReply: true,
+          parts: [{ type: "text", text: "inspect the repository" }],
+        })
+        yield* llm.text("ok")
+        yield* prompt.loop({ sessionID: chat.id })
+      })
+      yield* turn
+      expect((yield* llm.hits).map(systemPrefix)[0]?.includes("CobaltManual")).toBe(true)
+      yield* knowledge.configure(place, { repositoryDocs: false })
+      expect(yield* knowledge.digest(place, { personal: true })).toBeUndefined()
+      yield* turn
+      const prefixes = (yield* llm.hits).map(systemPrefix)
+      expect(prefixes).toHaveLength(2)
+      expect(prefixes[1]?.includes("CobaltManual")).toBe(false)
+    }),
+  { git: true },
+  30_000,
 )
 
 withMcpInstructions.instance(
