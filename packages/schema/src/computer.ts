@@ -1158,6 +1158,8 @@ const HelperRequestId = NonNegativeInt.check(Schema.isLessThanOrEqualTo(Number.M
 const Version = Schema.Struct({ min: PositiveInt, max: PositiveInt })
 const Service = Schema.Literals(["screen", "accessibility"])
 const WindowId = Id
+export type NativePhase = { readonly sessionId: string; readonly phaseRevision: number }
+const ExpectedPhase = { sessionId: optional(Id), phaseRevision: optional(NonNegativeInt) }
 
 export interface PermissionsStatus extends Schema.Schema.Type<typeof PermissionsStatus> {}
 export const PermissionsStatus = Schema.Struct({
@@ -1189,6 +1191,10 @@ export interface SessionBegin extends Schema.Schema.Type<typeof SessionBegin> {}
 export const SessionBegin = Schema.Struct({
   sessionId: Id,
   mode: Mode,
+  /** Main's phase gate; paused sessions may observe but cannot post input or change focus. */
+  paused: optional(Schema.Boolean),
+  /** Orders phase changes independently of transport timing; older async updates cannot unpause a newer phase. */
+  phaseRevision: optional(NonNegativeInt),
   /** Apps granted for this task. The helper refuses every op outside this set and never self-approves. */
   approved: Schema.Array(AppIdentity),
   vectorPids: Schema.Array(PositiveInt),
@@ -1312,6 +1318,7 @@ export const HitResult = Schema.Struct({
 export const InputOp = Schema.Union([
   Schema.Struct({
     op: Schema.Literal("input.click"),
+    ...ExpectedPhase,
     captureId: Id,
     x: Schema.Int,
     y: Schema.Int,
@@ -1319,9 +1326,10 @@ export const InputOp = Schema.Union([
     count: Schema.Literals([1, 2, 3]),
     modifiers: Modifiers,
   }),
-  Schema.Struct({ op: Schema.Literal("input.move"), captureId: Id, x: Schema.Int, y: Schema.Int }),
+  Schema.Struct({ op: Schema.Literal("input.move"), ...ExpectedPhase, captureId: Id, x: Schema.Int, y: Schema.Int }),
   Schema.Struct({
     op: Schema.Literal("input.drag"),
+    ...ExpectedPhase,
     captureId: Id,
     path: Schema.Array(Point).check(Schema.isLengthBetween(LIMITS.dragPointsMin, LIMITS.dragPointsMax)),
     button: Button,
@@ -1329,6 +1337,7 @@ export const InputOp = Schema.Union([
   }),
   Schema.Struct({
     op: Schema.Literal("input.scroll"),
+    ...ExpectedPhase,
     captureId: Id,
     unit: optional(Schema.Literal("pixel")),
     x: Schema.Int,
@@ -1338,6 +1347,7 @@ export const InputOp = Schema.Union([
   }),
   Schema.Struct({
     op: Schema.Literal("input.key"),
+    ...ExpectedPhase,
     pid: PositiveInt,
     windowId: optional(WindowId),
     ref: optional(Id),
@@ -1346,6 +1356,7 @@ export const InputOp = Schema.Union([
   }),
   Schema.Struct({
     op: Schema.Literal("input.type"),
+    ...ExpectedPhase,
     pid: PositiveInt,
     windowId: optional(WindowId),
     ref: optional(Id),
@@ -1353,6 +1364,7 @@ export const InputOp = Schema.Union([
   }),
   Schema.Struct({
     op: Schema.Literal("input.hold"),
+    ...ExpectedPhase,
     pid: PositiveInt,
     windowId: optional(WindowId),
     ref: optional(Id),
@@ -1365,7 +1377,10 @@ export type InputOp = typeof InputOp.Type
 const op = <const O extends string, const F extends Schema.Struct.Fields>(name: O, fields: F) =>
   Schema.Struct({ op: Schema.Literal(name), ...fields })
 
-const LaunchTarget = Schema.Union([op("app.launch", { identity: AppIdentity }), op("app.launch", { path: Path })])
+const LaunchTarget = Schema.Union([
+  op("app.launch", { identity: AppIdentity, ...ExpectedPhase }),
+  op("app.launch", { path: Path, ...ExpectedPhase }),
+])
 
 /**
  * Every helper op: `args` is the request without its `id`, `result` is the success response without `id` and
@@ -1381,9 +1396,13 @@ export const HelperOps = {
   "session.begin": { args: op("session.begin", SessionBegin.fields), result: Schema.Struct({}) },
   "session.update": {
     args: op("session.update", {
+      /** Expected active session identity, never a request to replace it. */
+      sessionId: optional(Id),
+      phaseRevision: optional(NonNegativeInt),
       approved: optional(SessionBegin.fields.approved),
       mode: optional(Mode),
       escStops: optional(Schema.Boolean),
+      paused: optional(Schema.Boolean),
       overlayWindowIds: optional(SessionBegin.fields.overlayWindowIds),
     }),
     result: Schema.Struct({}),
@@ -1396,12 +1415,12 @@ export const HelperOps = {
     result: Schema.Struct({ apps: Schema.Array(HelperApp) }),
   },
   "app.activate": {
-    args: op("app.activate", { identity: AppIdentity }),
+    args: op("app.activate", { identity: AppIdentity, ...ExpectedPhase }),
     result: Schema.Struct({ foreground: optional(Schema.Boolean) }),
   },
   "app.launch": { args: LaunchTarget, result: Schema.Struct({ foreground: optional(Schema.Boolean) }) },
   "window.focus": {
-    args: op("window.focus", { windowId: WindowId }),
+    args: op("window.focus", { windowId: WindowId, ...ExpectedPhase }),
     result: Schema.Struct({ foreground: optional(Schema.Boolean) }),
   },
   capture: {
@@ -1412,11 +1431,11 @@ export const HelperOps = {
   "ui.hittest": { args: op("ui.hittest", { captureId: Id, x: Schema.Int, y: Schema.Int }), result: HitResult },
   "ui.focused": { args: op("ui.focused", {}), result: HitResult },
   "ui.perform": {
-    args: op("ui.perform", { ref: Id, action: Bounded(64) }),
+    args: op("ui.perform", { ref: Id, action: Bounded(64), ...ExpectedPhase }),
     result: Schema.Struct({ took: optional(Schema.Boolean) }),
   },
   "ui.setValue": {
-    args: op("ui.setValue", { ref: Id, value: Bounded(LIMITS.typeTextChars) }),
+    args: op("ui.setValue", { ref: Id, value: Bounded(LIMITS.typeTextChars), ...ExpectedPhase }),
     result: Schema.Struct({ took: optional(Schema.Boolean) }),
   },
   "input.click": { args: InputOp.members[0], result: Schema.Struct({}) },
@@ -1428,7 +1447,10 @@ export const HelperOps = {
   "input.hold": { args: InputOp.members[6], result: Schema.Struct({}) },
   "input.releaseAll": { args: op("input.releaseAll", {}), result: Schema.Struct({ released: NonNegativeInt }) },
   "clipboard.read": { args: op("clipboard.read", {}), result: Schema.Struct({ text: Bounded(1_000_000) }) },
-  "clipboard.write": { args: op("clipboard.write", { text: Bounded(1_000_000) }), result: Schema.Struct({}) },
+  "clipboard.write": {
+    args: op("clipboard.write", { text: Bounded(1_000_000), ...ExpectedPhase }),
+    result: Schema.Struct({}),
+  },
   /** A clean no-op when idle. `target` is the id of the request to cancel (the envelope already uses `id`). */
   cancel: { args: op("cancel", { target: optional(HelperRequestId) }), result: Schema.Struct({}) },
   /** Releases input, ends the session and exits. */
@@ -1527,16 +1549,16 @@ export interface ComputerBackend {
   heartbeat(): Promise<void>
   displays(): Promise<DisplayInfo[]>
   apps(q?: { installed?: boolean }): Promise<HelperApp[]>
-  activate(app: AppIdentity): Promise<void>
-  launch(target: AppIdentity | { path: string }): Promise<void>
-  focusWindow(id: string): Promise<void>
+  activate(app: AppIdentity, phase?: NativePhase): Promise<void>
+  launch(target: AppIdentity | { path: string }, phase?: NativePhase): Promise<void>
+  focusWindow(id: string, phase?: NativePhase): Promise<void>
   /** `bytes` is a Uint8Array so the interface stays browser-safe; a Node Buffer satisfies it. */
   capture(req: CaptureRequest, deadlineMs: number): Promise<{ header: CaptureHeader; bytes: Uint8Array }>
   tree(req: TreeRequest, deadlineMs: number): Promise<TreeResult>
   hitTest(captureId: string, x: number, y: number): Promise<HitResult>
   focused(): Promise<HitResult>
-  perform(ref: string, action: string): Promise<{ took?: boolean }>
-  setValue(ref: string, value: string): Promise<{ took?: boolean }>
+  perform(ref: string, action: string, phase?: NativePhase): Promise<{ took?: boolean }>
+  setValue(ref: string, value: string, phase?: NativePhase): Promise<{ took?: boolean }>
   input(op: InputOp, deadlineMs: number): Promise<void>
   releaseAll(): Promise<number>
   cancel(id?: string): Promise<void>

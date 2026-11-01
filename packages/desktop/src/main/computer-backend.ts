@@ -106,11 +106,14 @@ export class NativeHelperBackend implements Computer.ComputerBackend {
 
   async updateSession(session: Partial<Computer.SessionBegin>): Promise<void> {
     if (session.mode === "background") await this.requireFeatures("background")
-    // Session identity and Vector's process/window exclusions are immutable until the next begin.
+    // sessionId is an expected identity, not a replacement. Vector's process/window exclusions stay immutable.
     await this.client.request("session.update", {
+      ...(session.sessionId === undefined ? {} : { sessionId: session.sessionId }),
+      ...(session.phaseRevision === undefined ? {} : { phaseRevision: session.phaseRevision }),
       ...(session.approved === undefined ? {} : { approved: session.approved }),
       ...(session.mode === undefined ? {} : { mode: session.mode }),
       ...(session.escStops === undefined ? {} : { escStops: session.escStops }),
+      ...(session.paused === undefined ? {} : { paused: session.paused }),
       ...(session.overlayWindowIds === undefined ? {} : { overlayWindowIds: session.overlayWindowIds }),
     })
   }
@@ -132,24 +135,24 @@ export class NativeHelperBackend implements Computer.ComputerBackend {
     return (await this.client.request<{ apps: Computer.HelperApp[] }>("apps.list", query)).apps
   }
 
-  async activate(app: Computer.AppIdentity): Promise<void> {
+  async activate(app: Computer.AppIdentity, phase?: Computer.NativePhase): Promise<void> {
     await this.requireFeatures("apps.open")
-    requireForeground(await this.client.request<{ foreground?: boolean }>("app.activate", { identity: app }))
+    requireForeground(await this.client.request<{ foreground?: boolean }>("app.activate", { identity: app, ...phase }))
   }
 
-  async launch(target: Computer.AppIdentity | { path: string }): Promise<void> {
+  async launch(target: Computer.AppIdentity | { path: string }, phase?: Computer.NativePhase): Promise<void> {
     await this.requireFeatures("apps.open")
     requireForeground(
       await this.client.request<{ foreground?: boolean }>(
         "app.launch",
-        "platform" in target ? { identity: target } : { path: target.path },
+        "platform" in target ? { identity: target, ...phase } : { path: target.path, ...phase },
       ),
     )
   }
 
-  async focusWindow(windowId: string): Promise<void> {
+  async focusWindow(windowId: string, phase?: Computer.NativePhase): Promise<void> {
     await this.requireFeatures("apps.open")
-    requireForeground(await this.client.request<{ foreground?: boolean }>("window.focus", { windowId }))
+    requireForeground(await this.client.request<{ foreground?: boolean }>("window.focus", { windowId, ...phase }))
   }
 
   async capture(request: Computer.CaptureRequest, deadlineMs: number) {
@@ -183,14 +186,14 @@ export class NativeHelperBackend implements Computer.ComputerBackend {
     return this.client.request<Computer.HitResult>("ui.focused")
   }
 
-  async perform(ref: string, action: string) {
+  async perform(ref: string, action: string, phase?: Computer.NativePhase) {
     await this.requireFeatures("ui.actions")
-    return this.client.request<{ took?: boolean }>("ui.perform", { ref, action })
+    return this.client.request<{ took?: boolean }>("ui.perform", { ref, action, ...phase })
   }
 
-  async setValue(ref: string, value: string) {
+  async setValue(ref: string, value: string, phase?: Computer.NativePhase) {
     await this.requireFeatures("ui.actions", "ui.secureFieldDetect")
-    return this.client.request<{ took?: boolean }>("ui.setValue", { ref, value })
+    return this.client.request<{ took?: boolean }>("ui.setValue", { ref, value, ...phase })
   }
 
   async input(input: Computer.InputOp, deadlineMs: number): Promise<void> {

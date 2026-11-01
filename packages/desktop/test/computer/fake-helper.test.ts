@@ -15,6 +15,62 @@ import { encodeFrame, readTranscript, replay, type Channel } from "./transcript"
 const FIXTURES = path.join(import.meta.dir, "../fixtures/computer-protocol")
 const FULL_DISPLAY = { maxWidth: 4096, maxHeight: 4096, maxPixels: 4096 * 4096 }
 
+for (const platform of ["macos", "windows"] as const) {
+  test(`${platform}: a paused phase observes without posting input and stale unpause cannot reopen it`, () => {
+    const fake = start({ platform })
+    fake.begin(["notes", "calculator"], { phaseRevision: 0, paused: true })
+    fake.helper.desktop.activate("notes")
+    fake.helper.desktop.select("notes-1", "notes.body")
+    const focused = fake.call("ui.focused")
+    const capture = fake.capture({ display: fake.helper.desktop.displays[0]!.id }).header
+    expect(capture).toMatchObject({ ok: true })
+    expect(fake.call("ui.tree", { windowId: "notes-1", maxNodes: 50, maxDepth: 4 })).toMatchObject({ ok: true })
+    const pid = fake.identity("notes").pid
+    for (const [op, args] of [
+      ["input.type", { pid, text: "blocked" }],
+      ["input.key", { pid, combo: ["a"], repeat: 1 }],
+      ["input.hold", { pid, combo: ["a"], ms: 10 }],
+      ["input.click", { captureId: capture.captureId, x: 0, y: 0, button: "left", count: 1, modifiers: [] }],
+      ["app.activate", { identity: fake.identity("calculator") }],
+      ["window.focus", { windowId: "calc-1" }],
+      ["ui.perform", { ref: focused.ref, action: "AXPress" }],
+      ["ui.setValue", { ref: focused.ref, value: "blocked" }],
+    ] as const)
+      expect(fake.call(op, args)).toMatchObject({ ok: false, code: "paused" })
+    expect(fake.call("session.update", { sessionId: "test", phaseRevision: 2, paused: true })).toMatchObject({
+      ok: true,
+    })
+    expect(fake.call("session.update", { sessionId: "test", phaseRevision: 1, paused: false })).toMatchObject({
+      code: "changed",
+    })
+    expect(fake.call("session.update", { sessionId: "old-run", phaseRevision: 99, paused: false })).toMatchObject({
+      code: "changed",
+    })
+    expect(fake.call("session.update", { paused: false })).toMatchObject({ code: "changed" })
+    expect(fake.call("input.type", { pid, text: "still blocked" })).toMatchObject({ code: "paused" })
+    expect(fake.call("session.update", { sessionId: "test", phaseRevision: 2, paused: false })).toMatchObject({
+      ok: true,
+    })
+    expect(fake.call("input.type", { pid, text: "old phase", sessionId: "test", phaseRevision: 1 })).toMatchObject({
+      code: "changed",
+    })
+    expect(fake.call("input.type", { pid, text: "missing phase" })).toMatchObject({ code: "changed" })
+    expect(fake.call("input.type", { pid, text: "allowed", sessionId: "test", phaseRevision: 2 })).toMatchObject({
+      ok: true,
+    })
+    fake.begin(["notes"], { sessionId: "new-run", phaseRevision: 0, paused: true })
+    expect(fake.call("session.update", { sessionId: "test", phaseRevision: 100, paused: false })).toMatchObject({
+      code: "changed",
+    })
+    expect(fake.call("input.type", { pid, text: "old request" })).toMatchObject({ code: "paused" })
+    fake.call("session.update", { sessionId: "new-run", phaseRevision: 0, paused: false })
+    expect(
+      fake.call("input.type", { pid, text: "late old request", sessionId: "test", phaseRevision: 2 }),
+    ).toMatchObject({ code: "changed" })
+    fake.call("shutdown")
+  })
+}
+
 type Message = Record<string, any>
 
 /** An in-process fake with a request helper that returns the reply, and every frame and event it sent. */

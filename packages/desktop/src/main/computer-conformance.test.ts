@@ -112,8 +112,10 @@ describe("NativeHelperBackend on the actual codec and client", () => {
             : { screen: "n/a", accessibility: "n/a", captureBlocked: false },
         )
         const notes = fake.helper.desktop.app("notes")!
+        const phase = { sessionId: "backend-conformance", phaseRevision: 0 }
         const session: Computer.SessionBegin = {
-          sessionId: "backend-conformance",
+          ...phase,
+          paused: true,
           mode: "foreground",
           approved: [notes.identity],
           vectorPids: [fake.helper.desktop.app("vector")!.pid],
@@ -124,22 +126,22 @@ describe("NativeHelperBackend on the actual codec and client", () => {
           heartbeatMs: Computer.LIMITS.heartbeatMs,
         }
         await backend.beginSession(session)
-        await backend.updateSession({ escStops: true, mode: "foreground" })
+        await backend.updateSession({ ...phase, paused: false, escStops: true, mode: "foreground" })
         await backend.heartbeat()
         expect((await backend.displays()).length).toBeGreaterThan(0)
         expect((await backend.apps({ installed: true })).some((app) => app.identity.name === notes.identity.name)).toBe(
           true,
         )
-        await backend.activate(notes.identity)
-        await backend.launch(notes.identity)
+        await backend.activate(notes.identity, phase)
+        await backend.launch(notes.identity, phase)
         const launchPath =
           notes.identity.platform === "macos"
             ? notes.identity.path
             : "exe" in notes.identity
               ? notes.identity.exe
               : undefined
-        if (launchPath) await backend.launch({ path: launchPath })
-        await backend.focusWindow("notes-1")
+        if (launchPath) await backend.launch({ path: launchPath }, phase)
+        await backend.focusWindow("notes-1", phase)
         const tree = await backend.tree({ op: "ui.tree", pid: notes.pid, maxNodes: 100, maxDepth: 8 }, 15000)
         expect(tree.nodes.length).toBeGreaterThan(0)
         const frame = await backend.capture(
@@ -163,15 +165,15 @@ describe("NativeHelperBackend on the actual codec and client", () => {
         expect(hit.name).toBe("Title")
         expect((await backend.focused()).owner).toEqual(notes.identity)
         await backend.input(
-          { op: "input.scroll", captureId: frame.header.captureId, x, y, dx: 0, dy: 123, unit: "pixel" },
+          { op: "input.scroll", ...phase, captureId: frame.header.captureId, x, y, dx: 0, dy: 123, unit: "pixel" },
           10000,
         )
         expect(fake.helper.log.find((entry) => entry.kind === "input" && entry.op === "scroll")).toMatchObject({
           dy: 123,
           unit: "pixel",
         })
-        await backend.input({ op: "input.key", pid: notes.pid, combo: ["ArrowRight"], repeat: 1 }, 10000)
-        await backend.input({ op: "input.type", pid: notes.pid, text: "Hello, 世界" }, 10000)
+        await backend.input({ op: "input.key", ...phase, pid: notes.pid, combo: ["ArrowRight"], repeat: 1 }, 10000)
+        await backend.input({ op: "input.type", ...phase, pid: notes.pid, text: "Hello, 世界" }, 10000)
         expect(await backend.releaseAll()).toBe(0)
         await backend.cancel()
         fake.helper.control({ type: "lock", locked: true })
@@ -261,7 +263,7 @@ describe("NativeHelperBackend on the actual codec and client", () => {
     }
   })
 
-  test("session updates cannot replace the holder identity or Vector's process exclusions", async () => {
+  test("session updates bind the expected holder phase and cannot replace Vector's process exclusions", async () => {
     const calls: { op: Computer.HelperOpName; args?: Record<string, unknown> }[] = []
     const backend = new NativeHelperBackend({
       request: async <T>(op: Computer.HelperOpName, args?: Record<string, unknown>) => {
@@ -272,7 +274,9 @@ describe("NativeHelperBackend on the actual codec and client", () => {
       close: async () => {},
     })
     await backend.updateSession({
-      sessionId: "replacement",
+      sessionId: "current",
+      phaseRevision: 7,
+      paused: true,
       vectorPids: [1234],
       vectorWindowIds: ["replacement"],
       heartbeatMs: 2000,
@@ -282,7 +286,17 @@ describe("NativeHelperBackend on the actual codec and client", () => {
       approved: [],
     })
     expect(calls).toEqual([
-      { op: "session.update", args: { approved: [], escStops: true, overlayWindowIds: ["overlay"] } },
+      {
+        op: "session.update",
+        args: {
+          sessionId: "current",
+          phaseRevision: 7,
+          approved: [],
+          escStops: true,
+          paused: true,
+          overlayWindowIds: ["overlay"],
+        },
+      },
     ])
     await backend.close()
   })

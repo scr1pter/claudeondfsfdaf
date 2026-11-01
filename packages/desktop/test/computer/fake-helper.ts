@@ -127,7 +127,10 @@ type Outcome =
   | Refusal
 type Target = { readonly ok: true; readonly window: FakeWindow; readonly node?: FakeNode }
 type Session = {
+  readonly sessionId: string
+  readonly phaseRevision?: number
   readonly mode: Computer.Mode
+  readonly paused: boolean
   readonly approved: ReadonlySet<string>
   readonly vectorPids: ReadonlySet<number>
   readonly vectorWindowIds: ReadonlySet<string>
@@ -513,6 +516,7 @@ export function createFakeHelper(options: FakeOptions, io: FakeIo) {
     if (state.halted === "heartbeat") return refuse("stopped", "Input stopped: Vector sent no heartbeat")
     if (state.halted === "stop") return refuse("stopped", "Stopped by the user")
     if (state.locked) return refuse("locked", "The screen is locked")
+    if (state.session?.paused) return refuse("paused", "Vector Hands is paused")
   }
   const inputGate = () => actGate() ?? accessibility()
   const background = () => state.session?.mode === "background"
@@ -755,6 +759,22 @@ export function createFakeHelper(options: FakeOptions, io: FakeIo) {
     const feature = featureOf(args)
     if (feature && !features[feature]) return refuse("unsupported_action", `This helper has ${feature} turned off`)
     if (!SESSIONLESS.has(args.op) && !state.session) return refuse("unavailable", "No session is active")
+    if (
+      (args.op.startsWith("input.") && args.op !== "input.releaseAll") ||
+      ["app.activate", "app.launch", "window.focus", "ui.perform", "ui.setValue", "clipboard.write"].includes(args.op)
+    ) {
+      const gate = actGate()
+      if (gate) return gate
+      const session = state.session!
+      if (
+        session.phaseRevision !== undefined &&
+        (!("sessionId" in args) ||
+          args.sessionId !== session.sessionId ||
+          !("phaseRevision" in args) ||
+          args.phaseRevision !== session.phaseRevision)
+      )
+        return refuse("changed", "The computer session phase changed")
+    }
     switch (args.op) {
       case "hello":
         if (args.protocol.max < range.min || args.protocol.min > range.max)
@@ -785,7 +805,10 @@ export function createFakeHelper(options: FakeOptions, io: FakeIo) {
           return refuse("unsupported_action", "This helper cannot work in the background")
         state.sessions++
         state.session = {
+          sessionId: args.sessionId,
+          ...(args.phaseRevision === undefined ? {} : { phaseRevision: args.phaseRevision }),
           mode: args.mode,
+          paused: args.paused === true,
           approved: new Set(args.approved.map(Computer.appKey)),
           vectorPids: new Set(args.vectorPids),
           vectorWindowIds: new Set(args.vectorWindowIds),
@@ -802,10 +825,20 @@ export function createFakeHelper(options: FakeOptions, io: FakeIo) {
         if (args.mode === "background" && !features.background)
           return refuse("unsupported_action", "This helper cannot work in the background")
         const session = state.session!
+        if (
+          (args.sessionId !== undefined && args.sessionId !== session.sessionId) ||
+          (session.phaseRevision !== undefined &&
+            (args.sessionId !== session.sessionId ||
+              args.phaseRevision === undefined ||
+              args.phaseRevision < session.phaseRevision))
+        )
+          return refuse("changed", "The computer session phase changed")
         state.session = {
           ...session,
+          ...(args.phaseRevision === undefined ? {} : { phaseRevision: args.phaseRevision }),
           ...(args.mode ? { mode: args.mode } : {}),
           ...(args.escStops === undefined ? {} : { escStops: args.escStops }),
+          ...(args.paused === undefined ? {} : { paused: args.paused }),
           ...(args.approved ? { approved: new Set(args.approved.map(Computer.appKey)) } : {}),
           ...(args.overlayWindowIds ? { overlayWindowIds: new Set(args.overlayWindowIds) } : {}),
         }
@@ -1078,10 +1111,13 @@ export function createFakeHelper(options: FakeOptions, io: FakeIo) {
       }
       case "clipboard.read":
         return ok({ text: desktop.clipboard })
-      case "clipboard.write":
+      case "clipboard.write": {
+        const gate = actGate()
+        if (gate) return gate
         desktop.clipboard = args.text
         record("clipboard", { action: "write", length: args.text.length })
         return ok()
+      }
       case "cancel": {
         const queued = args.target === undefined ? -1 : queue.findIndex((item) => item.id === args.target)
         if (queued !== -1) answer(queue.splice(queued, 1)[0]!, refuse("failed", "Cancelled"))
