@@ -3,6 +3,8 @@ import { LocationServiceMap, locationServiceMapLayer } from "@vectordevai/core/l
 import { httpClient } from "@vectordevai/core/effect/app-node-platform"
 import { Ripgrep } from "@vectordevai/core/ripgrep"
 import { PlanExitTool } from "./plan"
+import { WorkflowTool } from "./workflow"
+import { WorkflowRuns } from "@/orchestration/runs"
 import { Session } from "@/session/session"
 import { SessionStatus } from "@/session/status"
 import { QuestionTool } from "./question"
@@ -149,6 +151,7 @@ const layer = Layer.effect(
     const escalate = yield* EscalateTool
     const task = yield* TaskTool
     const taskManage = yield* TaskManageTool
+    const workflow = yield* WorkflowTool.make(() => Tool.init(task))
     const read = yield* ReadTool
     const question = yield* QuestionTool
     const todo = yield* TodoWriteTool
@@ -294,6 +297,7 @@ const layer = Layer.effect(
           write: Tool.init(writetool),
           task: Tool.init(task),
           taskManage: Tool.init(taskManage),
+          workflow: Tool.init(workflow),
           fetch: Tool.init(webfetch),
           todo: Tool.init(todo),
           teammate: Tool.init(teammate),
@@ -328,6 +332,7 @@ const layer = Layer.effect(
             tool.write,
             tool.task,
             tool.taskManage,
+            tool.workflow,
             tool.fetch,
             tool.todo,
             ...(team ? [tool.teammate] : []),
@@ -573,6 +578,7 @@ export const node = LayerNode.make({
     Ripgrep.node,
     SpendGuard.node,
     TaskManager.node,
+    WorkflowRuns.node,
     TaskNotify.node,
     TaskLimits.node,
     Global.node,

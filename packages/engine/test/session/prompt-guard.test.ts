@@ -49,6 +49,8 @@ describe("what counts as a prompt source", () => {
     ["a nested agent", path.join(config, "agent", "team", "review.md")],
     ["a mode", path.join(config, "modes", "fast.md")],
     ["a command", path.join(worktree, ".vector", "commands", "ship.md")],
+    ["a saved workflow", path.join(config, "workflows", "review.json")],
+    ["a repository workflow", path.join(worktree, ".vector", "workflow", "review.json")],
     ["a skill", path.join(config, "skills", "deploy", "SKILL.md")],
     ["a file beside a skill", path.join(config, "skills", "deploy", "run.sh")],
     ["a plugin", path.join(config, "plugins", "guard.ts")],
@@ -72,6 +74,8 @@ describe("what counts as a prompt source", () => {
     ["source code", path.join(worktree, "src", "foo.ts")],
     ["a note beside the config", path.join(config, "notes.md")],
     ["a non-markdown file among agents", path.join(config, "agents", "readme.txt")],
+    ["a non-JSON workflow file", path.join(config, "workflow", "readme.md")],
+    ["a nested workflow file", path.join(config, "workflows", "nested", "review.json")],
     ["a relative instruction entry, the repository's own", path.join(worktree, "docs", "style.md")],
     ["a file below an instruction pattern's folder", path.join(home, "notes", "old", "style.md")],
   ])("%s is not", (_, file) => {

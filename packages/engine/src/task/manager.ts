@@ -291,6 +291,7 @@ const layer = Layer.effect(
       started: boolean,
     ) {
       if (!flags.backgroundSubagents || SubagentLifecycle.stopping.has(session.id) || !session.parentID) return {}
+      if (record.workflow) return {}
       const background = ACTIVE.has(status) && job?.status === "running" && job.metadata?.background !== true
       const resume =
         !ACTIVE.has(status) &&
@@ -353,6 +354,28 @@ const layer = Layer.effect(
         .get()
         .pipe(Effect.orDie)
       const tokens = session.tokens ?? { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }
+      const workflow =
+        current.workflow?.role === "run"
+          ? Option.getOrUndefined(
+              Schema.decodeUnknownOption(Task.Workflow)({
+                ...current.workflow.progress,
+                role: "run",
+                runID: session.id,
+                title: current.workflow.title,
+                stages: Array.isArray(current.workflow.progress.stages)
+                  ? current.workflow.progress.stages.map((stage) =>
+                      typeof stage === "object" && stage !== null
+                        ? { ...stage, phase: "phase" in stage ? (stage.phase ?? "") : "" }
+                        : stage,
+                    )
+                  : undefined,
+              }),
+            )
+          : current.workflow?.role === "agent"
+            ? { ...current.workflow }
+            : undefined
+      const workflowUsage =
+        current.workflow?.role === "run" ? (yield* SubagentLifecycle.observe(sessions, session.id))?.usage : undefined
       // A registry that cannot be read leaves this task's isolation unreported rather than failing every list.
       const privateWork = yield* isolation
         .find(session.id)
@@ -385,15 +408,20 @@ const layer = Layer.effect(
               : tool.tool.slice(0, 240)
             : undefined,
         lastTool: tool?.type === "tool" ? tool.tool : undefined,
-        usage: {
-          cost: session.cost ?? 0,
-          tokens,
-          total: tokens.input + tokens.output + tokens.reasoning + tokens.cache.read + tokens.cache.write,
-          toolUses: Number(counts?.tools ?? 0),
-          steps: Number(counts?.steps ?? 0),
-          unpricedSteps: session.unpricedSteps,
-          codiumSteps: session.codiumSteps,
-        },
+        usage:
+          current.workflow?.role === "run"
+            ? workflowUsage
+            : {
+                cost: session.cost ?? 0,
+                tokens,
+                total: tokens.input + tokens.output + tokens.reasoning + tokens.cache.read + tokens.cache.write,
+                toolUses: Number(counts?.tools ?? 0),
+                steps: Number(counts?.steps ?? 0),
+                unpricedSteps: session.unpricedSteps,
+                codiumSteps: session.codiumSteps,
+              },
+        ...(workflow ? { workflow } : {}),
+        ...(current.workflow?.role === "agent" ? { groupID: `workflow:${current.workflow.runID}` } : {}),
         ownedPaths: current.ownedPaths ?? [],
         dependsOn: current.dependsOn ?? [],
         resultAvailable: Boolean(
@@ -414,7 +442,11 @@ const layer = Layer.effect(
           : current.budgetScopes,
         controls: {
           inspect: true,
-          message: ACTIVE.has(status) && job?.status === "running" && !SubagentLifecycle.stopping.has(session.id),
+          message:
+            current.workflow?.role !== "run" &&
+            ACTIVE.has(status) &&
+            job?.status === "running" &&
+            !SubagentLifecycle.stopping.has(session.id),
           stop: ACTIVE.has(status) && !SubagentLifecycle.stopping.has(session.id),
           ...(yield* offers(session, current, job, status, recent.length > 0)),
           ...(privateWork
@@ -546,7 +578,7 @@ const layer = Layer.effect(
           if (seen.has(child.id)) continue
           seen.add(child.id)
           if (!input.active || SubagentLifecycle.open(SubagentLifecycle.read(child))) found.push(child)
-          if (input.descendants) queue.push(child.id)
+          if (input.descendants && SubagentLifecycle.read(child)?.workflow?.role !== "run") queue.push(child.id)
         }
         if (!input.descendants) break
       }
@@ -717,6 +749,10 @@ const layer = Layer.effect(
       const mail = yield* exchanged(session)
       // A structured child's last answer, as text a client shows and never renders (5.E.2).
       const record = SubagentLifecycle.read(session)
+      const report =
+        record?.workflow?.role === "run" && typeof record.workflow.progress.report === "string"
+          ? record.workflow.progress.report
+          : text
       const answer = record?.structured ? TaskStructured.latest(messages) : undefined
       const pretty = answer === undefined ? undefined : JSON.stringify(JSON.parse(answer), null, 2)
       const cut =
@@ -729,9 +765,11 @@ const layer = Layer.effect(
       return {
         task,
         steps,
-        output: text.slice(-OUTPUT_LIMIT),
+        output: record?.workflow?.role === "run" ? report.slice(0, OUTPUT_LIMIT) : report.slice(-OUTPUT_LIMIT),
         truncated:
-          messages.length >= 8 || text.length > OUTPUT_LIMIT || parts.filter((part) => part.type === "tool").length > 8,
+          messages.length >= 8 ||
+          report.length > OUTPUT_LIMIT ||
+          parts.filter((part) => part.type === "tool").length > 8,
         ...(mail.length > 0 ? { messages: mail } : {}),
         ...(pretty !== undefined
           ? {
@@ -852,6 +890,12 @@ const layer = Layer.effect(
           const requester = yield* get(input.sessionID)
           const relation = requester.parentID && requester.parentID === session.parentID ? "peer" : "parent"
           const record = SubagentLifecycle.read(session)!
+          if (record.workflow?.role === "run")
+            return yield* new Error({
+              code: "invalid",
+              message:
+                "Workflow runs do not take messages. Stop the run, then resume it through workflow with an edited spec.",
+            })
           if ((yield* jobs.get(session.id))?.status !== "running")
             return yield* new Error({
               code: "finished",
@@ -1115,11 +1159,16 @@ const layer = Layer.effect(
             const listed = board.cut.native
               ? [...board.tasks, ...(yield* unlisted(input.sessionID, board.tasks))]
               : board.tasks
-            const reachable = input.helpers ? listed.filter(helper) : listed
-            const selected = input.all ? reachable.map((task) => task.id) : (input.taskIDs ?? [])
+            const reachable = new Map((input.helpers ? listed.filter(helper) : listed).map((task) => [task.id, task]))
+            const selected = input.all ? [...reachable.keys()] : (input.taskIDs ?? [])
             if (input.all && selected.length === 0) return { native: [], remote: [], board: listed }
-            yield* select(input.sessionID, selected, !input.all)
+            // Only the caller's selection is capped at 200. Its verified descendant closure can be larger.
+            const chosen = yield* select(input.sessionID, selected, !input.all)
+            chosen.forEach((task) => reachable.set(task.id, task))
             const ids = new Set(selected)
+            const discovered = new Set<string>()
+            const expanded = new Set<string>()
+            const visited = new Set(reachable.keys())
             let changed = true
             while (changed) {
               changed = false
@@ -1129,8 +1178,46 @@ const layer = Layer.effect(
                 ids.add(task.id)
                 changed = true
               })
+              for (const id of ids) {
+                if (discovered.has(id) || DesktopTasks.owns(id)) continue
+                discovered.add(id)
+                const task = reachable.get(id)!
+                if (expanded.has(id) || (task.workflow?.role === "agent" && expanded.has(task.parentSessionID)))
+                  continue
+                const session = yield* requireTask(input.sessionID, id)
+                const record = SubagentLifecycle.read(session)!
+                // An agent's siblings may depend on it. Read its actual parent, never a marker naming another run.
+                const run =
+                  record.workflow?.role === "run"
+                    ? session
+                    : record.workflow?.role === "agent" && session.parentID
+                      ? yield* get(session.parentID)
+                      : undefined
+                if (!run || expanded.has(run.id) || SubagentLifecycle.read(run)?.workflow?.role !== "run") continue
+                expanded.add(run.id)
+                const queue = [run.id]
+                const walked = new Set<string>(queue)
+                // The public board intentionally hides run agents. Rebuild their trusted parent graph here, before
+                // claiming or stopping anything, so missing runner fibers cannot leave durable children running.
+                while (queue.length) {
+                  for (const child of yield* sessions.children(queue.shift()!)) {
+                    if (child.internal || !SubagentLifecycle.read(child) || walked.has(child.id)) continue
+                    if (!visited.has(child.id) && visited.size >= MAX_VISITED)
+                      return yield* new Error({
+                        code: "invalid",
+                        message: "Too many workflow descendants to stop atomically; select a narrower parent session.",
+                      })
+                    visited.add(child.id)
+                    walked.add(child.id)
+                    queue.push(child.id)
+                    if (reachable.has(child.id) || !SubagentLifecycle.open(SubagentLifecycle.read(child))) continue
+                    reachable.set(child.id, yield* observe(child))
+                    changed = true
+                  }
+                }
+              }
             }
-            const tasks = yield* select(input.sessionID, [...ids], !input.all)
+            const tasks = yield* select(input.sessionID, [...ids], false)
             const native = yield* Effect.forEach(
               tasks.filter((task) => !DesktopTasks.owns(task.id)),
               (task) =>
@@ -1301,6 +1388,11 @@ const layer = Layer.effect(
       text: string | undefined,
     ) {
       const found = yield* requireTask(root.id, taskID)
+      if (SubagentLifecycle.read(found)?.workflow)
+        return yield* new Error({
+          code: "invalid",
+          message: "Resume workflow runs through workflow so their plan and cumulative limits are checked.",
+        })
       if (found.parentID !== root.id)
         return yield* new Error({
           code: "invalid",

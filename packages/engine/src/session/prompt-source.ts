@@ -25,11 +25,18 @@ import { Glob } from "@vectordevai/core/util/glob"
  * every system prompt (`experimental.chat.system.transform`), so plugins and the modules beside them count as well.
  */
 const CONFIG = {
-  ask: ["{agent,agents,mode,modes}/**/*.md", "{command,commands}/**/*.md", "{skill,skills}/**", "{plugin,plugins}/**"],
+  ask: [
+    "{agent,agents,mode,modes}/**/*.md",
+    "{command,commands}/**/*.md",
+    "{skill,skills}/**",
+    "{plugin,plugins}/**",
+    "{workflow,workflows}/*.json",
+  ],
   load: [
     "{agent,agents}/**/*.md",
     "{mode,modes}/*.md",
     "{command,commands}/**/*.md",
+    "{workflow,workflows}/*.json",
     "{skill,skills}/**/SKILL.md",
     ConfigPlugin.ENTRIES,
     ConfigPlugin.HELPERS,

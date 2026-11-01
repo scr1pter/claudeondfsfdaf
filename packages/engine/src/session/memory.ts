@@ -352,6 +352,8 @@ const LOCAL_TOOLS = new Set([
   "StructuredOutput",
 ])
 
+const DELEGATION_TOOLS = new Set(["task", "workflow", "task_manage", "send_teammate_message"])
+
 // Tools whose output is the web's: pages, search results, the browsers, Vector Cloud's logs, and every research tool
 // (a research run reads the web by design, and its notes and reports quote pages; research_browser is the research
 // agents' own browser, and research is the build agent's way to start a run).
@@ -961,10 +963,13 @@ export function taint(messages: readonly SessionV1.WithParts[]): BrainSchema.Hol
     )
   )
     return "mcp"
+  // Direct MCP content keeps its stronger hold when the same history also contains delegation.
+  if (commands.includes("mcp") || tools.some((tool) => !LOCAL_TOOLS.has(tool) && !DELEGATION_TOOLS.has(tool)))
+    return "mcp"
   // A background subagent's report, note up, waiting or interruption arrives as a synthetic note in a user message. A
   // background command's exit note adds nothing, like a foreground command's result.
   if (
-    tools.some((tool) => tool === "task" || tool === "task_manage" || tool === "send_teammate_message") ||
+    tools.some((tool) => DELEGATION_TOOLS.has(tool)) ||
     messages.some((message) =>
       message.parts.some(
         (part) => part.type === "text" && SUBAGENT_NOTES.some((key) => part.metadata?.[key] !== undefined),
@@ -972,7 +977,6 @@ export function taint(messages: readonly SessionV1.WithParts[]): BrainSchema.Hol
     )
   )
     return "subagent"
-  if (commands.includes("mcp") || tools.some((tool) => !LOCAL_TOOLS.has(tool))) return "mcp"
   return undefined
 }
 

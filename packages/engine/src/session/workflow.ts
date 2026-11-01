@@ -231,7 +231,9 @@ const layer = Layer.effect(
         steps: input.run?.steps ?? 0,
         unpricedSteps: input.run?.unpricedSteps ?? 0,
         tokens,
-        partial: input.background > 0,
+        partial:
+          input.background > 0 ||
+          turn.some((message) => message.parts.some((part) => part.type === "tool" && part.tool === "workflow")),
         ...(input.run?.stopped ? { stop: input.run.stopped.reason } : {}),
         ...(taint ? { taint } : {}),
         ...(step.advice ? { advice: step.advice } : {}),

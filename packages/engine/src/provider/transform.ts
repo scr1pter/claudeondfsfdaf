@@ -4,6 +4,7 @@ import type { JSONSchema7 } from "@ai-sdk/provider"
 import type * as Provider from "./provider"
 import type { ModelCatalog } from "@vectordevai/core/model-catalog"
 import type { TaskSize } from "@vectordevai/core/task-size"
+import { JsonSchemaCheck } from "@vectordevai/core/json-schema-check"
 import { Option, Schema } from "effect"
 import type { RuntimeFlags } from "@/effect/runtime-flags"
 import { iife } from "@/util/iife"
@@ -1677,6 +1678,44 @@ function restateBounds(node: unknown, keys: readonly string[]): unknown {
 
 export function schema(model: Provider.Model, schema: JSONSchema7, options: { restate?: boolean } = {}): JSONSchema7 {
   if (options.restate) {
+    const checked = JsonSchemaCheck.accept(schema)
+    if (checked.ok) {
+      let structural = false
+      const lower = (value: unknown): unknown => {
+        if (typeof value === "boolean") {
+          structural = true
+          // OpenAI cannot take a boolean schema. The exact rule remains in the bounded engine contract below.
+          return model.api.npm === "@ai-sdk/openai" || model.api.npm === "@ai-sdk/azure" ? {} : value
+        }
+        if (!isPlainObject(value)) return value
+        const next: JsonRecord = { ...value }
+        for (const key of ["properties", "$defs", "definitions"])
+          if (isPlainObject(value[key]))
+            next[key] = Object.fromEntries(Object.entries(value[key]).map(([name, child]) => [name, lower(child)]))
+        for (const key of ["items", "not"]) if (key in value) next[key] = lower(value[key])
+        if (isPlainObject(value.additionalProperties)) next.additionalProperties = lower(value.additionalProperties)
+        for (const key of ["anyOf", "oneOf", "allOf"]) if (Array.isArray(value[key])) next[key] = value[key].map(lower)
+        structural ||= "not" in value || value.nullable === true
+        if (value.nullable === true && (model.api.npm === "@ai-sdk/openai" || model.api.npm === "@ai-sdk/azure")) {
+          delete next.nullable
+          return { anyOf: [next, { type: "null" }] }
+        }
+        if (typeof value.$ref === "string" && Object.keys(value).some((key) => key !== "$ref")) {
+          structural = true
+          // Moonshot rejects ref siblings. Keep their conjunction and root definitions instead of deleting them.
+          if (model.providerID === "moonshotai" || model.api.id.toLowerCase().includes("kimi")) {
+            const { $ref, $defs, definitions, ...siblings } = next
+            return { ...($defs ? { $defs } : {}), ...(definitions ? { definitions } : {}), allOf: [{ $ref }, siblings] }
+          }
+        }
+        return next
+      }
+      schema = lower(schema) as JSONSchema7
+      // Some SDK wire formats cannot express not/boolean/ref-sibling rules. Preserve their exact meaning for the
+      // model, with at most the already accepted 16 KiB schema, while the engine checks the original on every call.
+      if (structural)
+        schema.description = `${schema.description ? `${schema.description}\n` : ""}Your response must satisfy this JSON Schema: ${checked.normalized}`
+    }
     const dropped = droppedBounds(model)
     if (dropped.length > 0) schema = restateBounds(schema, dropped) as JSONSchema7
   }

@@ -57,6 +57,8 @@ import { isRecord } from "@/util/record"
 import { SessionFork } from "@/session/fork"
 import { usable } from "@/session/overflow"
 import { Token } from "@vectordevai/core/util/token"
+import { WorkflowMarkers } from "@/orchestration/constants"
+import { WorkflowPlan } from "@vectordevai/core/orchestration/plan"
 
 export interface TaskPromptOps {
   cancel(sessionID: SessionID): Effect.Effect<void>
@@ -530,6 +532,66 @@ export const TaskTool = Tool.define(
         )
       }
       const parent = yield* sessions.get(ctx.sessionID)
+      const workflowRun =
+        ctx.extra?.[WorkflowMarkers.RUN] === undefined
+          ? undefined
+          : yield* Schema.decodeUnknownEffect(
+              Schema.Struct({
+                title: Schema.String.check(Schema.isLengthBetween(1, 80)),
+                revision: Schema.Int.check(Schema.isGreaterThan(0)),
+                callerAgent: Schema.String,
+                permissionKey: Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/)),
+                quiet: Schema.optional(Schema.Boolean),
+              }),
+            )(ctx.extra[WorkflowMarkers.RUN]).pipe(Effect.mapError(() => new Error("Invalid workflow run marker.")))
+      const workflowAgent =
+        ctx.extra?.[WorkflowMarkers.AGENT] === undefined
+          ? undefined
+          : yield* Schema.decodeUnknownEffect(
+              Schema.Struct({
+                runID: Schema.String,
+                stage: Schema.String,
+                phase: Schema.String,
+                item: Schema.String,
+                key: Schema.String,
+                round: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
+                verifier: Schema.optional(Schema.Boolean),
+              }),
+            )(ctx.extra[WorkflowMarkers.AGENT]).pipe(Effect.mapError(() => new Error("Invalid workflow agent marker.")))
+      const ownerWorkflow = SubagentLifecycle.read(parent)?.workflow
+      if (
+        workflowRun &&
+        (parent.parentID ||
+          params.subagent_type !== WorkflowMarkers.WORKFLOW_AGENT ||
+          workflowAgent ||
+          params.fork ||
+          batch ||
+          ctx.extra?.[TaskLimits.EXEMPT] === true)
+      )
+        return yield* Effect.fail(
+          new Error("A workflow coordinator starts only from its main conversation through workflow."),
+        )
+      if (
+        workflowAgent &&
+        (ownerWorkflow?.role !== "run" ||
+          parent.agent !== WorkflowMarkers.WORKFLOW_AGENT ||
+          workflowAgent.runID !== parent.id ||
+          !parent.parentID ||
+          params.fork ||
+          batch ||
+          params.subagent_type === WorkflowMarkers.WORKFLOW_AGENT ||
+          ctx.extra?.[TaskLimits.EXEMPT] === true)
+      )
+        return yield* Effect.fail(new Error("Workflow agents start only from their own trusted coordinator."))
+      if (parent.agent === WorkflowMarkers.WORKFLOW_AGENT && !workflowAgent)
+        return yield* Effect.fail(new Error("A workflow run launches only its planned agents."))
+      if (ctx.extra?.[WorkflowMarkers.GUARD_PARENT] !== undefined && !workflowAgent)
+        return yield* Effect.fail(new Error("Only a workflow agent may inherit a workflow group budget."))
+      if (
+        ctx.extra?.[WorkflowMarkers.GUARD_PARENT] !== undefined &&
+        typeof ctx.extra[WorkflowMarkers.GUARD_PARENT] !== "string"
+      )
+        return yield* Effect.fail(new Error("Invalid workflow budget parent."))
       // A subagent's background task would report back after the subagent's own run has ended, starting a turn no one
       // reads, so inside a subagent it runs in the foreground and its result stays in that run.
       const runInBackground = flags.backgroundSubagents && params.background !== false && !parent.parentID
@@ -554,6 +616,16 @@ export const TaskTool = Tool.define(
       if (session && session.parentID !== ctx.sessionID) {
         return yield* Effect.fail(new Error(`Task ${params.task_id} is not a subagent of this session.`))
       }
+      const resumedWorkflow = session && SubagentLifecycle.read(session)?.workflow
+      if ((params.subagent_type === WorkflowMarkers.WORKFLOW_AGENT || resumedWorkflow?.role === "run") && !workflowRun)
+        return yield* Effect.fail(new Error("Workflow runs start and resume through workflow, not task."))
+      if (
+        resumedWorkflow?.role === "agent" &&
+        (!workflowAgent || resumedWorkflow.runID !== workflowAgent.runID || resumedWorkflow.key !== workflowAgent.key)
+      )
+        return yield* Effect.fail(new Error("Workflow agents resume only through their owning workflow node."))
+      if (workflowRun && session && resumedWorkflow?.role !== "run")
+        return yield* Effect.fail(new Error("This task is not a workflow run."))
       // A fork of this conversation (5.E.3), started now or resumed by its task_id. It runs as this agent, so it skips
       // the checks a brief's agent type goes through.
       const resumedFork = session ? SubagentLifecycle.read(session)?.fork : undefined
@@ -794,6 +866,71 @@ export const TaskTool = Tool.define(
         )
 
       const { root, depth } = yield* lineage(parent)
+      const policyParent = workflowAgent ? root : parent
+      const callerName =
+        workflowAgent && ownerWorkflow?.role === "run" && typeof ownerWorkflow.progress.callerAgent === "string"
+          ? ownerWorkflow.progress.callerAgent
+          : ctx.agent
+      if (workflowAgent && callerName === WorkflowMarkers.WORKFLOW_AGENT)
+        return yield* Effect.fail(new Error("The workflow's original caller policy is missing."))
+      const guardParent =
+        typeof ctx.extra?.[WorkflowMarkers.GUARD_PARENT] === "string"
+          ? SessionID.make(ctx.extra[WorkflowMarkers.GUARD_PARENT])
+          : ctx.sessionID
+      const guardLineage = Effect.gen(function* () {
+        if (guardParent === ctx.sessionID) return
+        if (!workflowAgent || !guardParent.startsWith("ses_workflow_group_"))
+          return yield* Effect.fail(new Error("Invalid workflow budget parent."))
+        const expected = yield* guard.scopes(ctx.sessionID)
+        const inherited = yield* guard.scopes(guardParent)
+        if (
+          !expected.some((scope) => scope.kind === "child" && scope.id === ctx.sessionID) ||
+          !expected.some((scope) => scope.kind === "delegated") ||
+          !inherited.some((scope) => scope.kind === "child" && scope.id === guardParent) ||
+          !expected.every((scope) => inherited.some((item) => item.id === scope.id && item.kind === scope.kind))
+        )
+          return yield* Effect.fail(new Error("The workflow group lost its run or delegated budget lineage."))
+      })
+      yield* guardLineage
+      const currentWorkflowPolicy = Effect.gen(function* () {
+        if (!workflowRun && !workflowAgent) return
+        const currentRoot = yield* sessions.get(root.id)
+        // Pin approval across automatic retries; re-entering TaskTool must not silently approve changed rules.
+        const approved =
+          workflowRun?.permissionKey ??
+          (ownerWorkflow?.role === "run" ? ownerWorkflow.progress.permissionKey : undefined)
+        if (approved !== WorkflowPlan.key(currentRoot.permission ?? []))
+          return yield* Effect.fail(
+            new Error(
+              "The workflow's approved session permissions changed. Resume the workflow to validate them again.",
+            ),
+          )
+        if (yield* guests.marked(root.id))
+          return yield* Effect.fail(new Error("Workflows are unavailable after a guest joins the conversation."))
+        const currentCaller = yield* agent.get(callerName)
+        if (!currentCaller)
+          return yield* Effect.fail(new Error("The workflow's original caller is no longer available."))
+        const disabled = Permission.disabled(
+          ["task", "workflow"],
+          Permission.merge(currentCaller.permission, currentRoot.permission ?? []),
+        )
+        if (disabled.has("task") || disabled.has("workflow"))
+          return yield* Effect.fail(new Error("Task or workflow permission is no longer available."))
+        if (workflowAgent) {
+          const currentAgent = yield* agent.get(subagentType)
+          if (
+            !currentAgent ||
+            currentAgent.mode === "primary" ||
+            (currentAgent.native && currentAgent.hidden) ||
+            Agent.researchTools(subagentType) ||
+            Permission.evaluate(id, subagentType, currentCaller.permission).action === "deny" ||
+            Permission.evaluate(id, subagentType, currentCaller.permission, currentRoot.permission ?? []).action ===
+              "deny"
+          )
+            return yield* Effect.fail(new Error("The workflow's caller may no longer launch this agent."))
+        }
+      })
+      yield* currentWorkflowPolicy
       const resumed = session && SubagentLifecycle.read(session)
       // A brief's schema, else the one a resumed child was given: it applies to every later run (5.E.2).
       const structured: TaskStructured.Accepted | undefined = asked?.ok
@@ -816,8 +953,17 @@ export const TaskTool = Tool.define(
       const missing = !generalOff && !known.has(subagentType)
       // Naming one agent lets the user launch that agent without a prompt, not every subagent this turn.
       const invoked =
-        !forking && Array.isArray(ctx.extra?.invokedAgents) && ctx.extra.invokedAgents.includes(subagentType)
-      const caller = parent.internal ? yield* agent.helper(ctx.agent) : yield* agent.get(ctx.agent)
+        !!workflowRun ||
+        !!workflowAgent ||
+        (!forking && Array.isArray(ctx.extra?.invokedAgents) && ctx.extra.invokedAgents.includes(subagentType))
+      const caller = policyParent.internal ? yield* agent.helper(callerName) : yield* agent.get(callerName)
+      if (
+        workflowAgent &&
+        (!caller ||
+          Permission.evaluate(id, subagentType, caller.permission).action === "deny" ||
+          Permission.evaluate(id, subagentType, caller.permission, policyParent.permission ?? []).action === "deny")
+      )
+        return yield* Effect.fail(new Error("The workflow's caller may no longer launch this agent."))
       // The task permission's pattern "fork" decides forks: denied here, asked below.
       if (
         forking &&
@@ -912,6 +1058,12 @@ export const TaskTool = Tool.define(
         brief?.type === "ok" && brief.budget ? SpendGuard.tighter(params.budget, brief.budget) : params.budget
 
       const next = yield* agent.get(subagentType)
+      if (
+        workflowAgent &&
+        next &&
+        (next.mode === "primary" || (next.native && next.hidden) || Agent.researchTools(next.name))
+      )
+        return yield* Effect.fail(new Error("This agent type cannot run inside a workflow."))
       if (!next) {
         return yield* Effect.fail(new Error(`Unknown agent type: ${subagentType} is not a valid agent type`))
       }
@@ -974,7 +1126,13 @@ export const TaskTool = Tool.define(
       // Admission (5.B.2) comes before the ask, so a launch past a limit is refused without asking the user. Its places
       // and slots go back when this call's scope closes, unless bind() below hands them to the child.
       const delegation = yield* delegationOf(ctx, parent, root)
-      const origin: TaskLimits.Origin = session ? "resume" : parent.parentID ? "nested" : "root"
+      const origin: TaskLimits.Origin = workflowAgent
+        ? "workflow"
+        : session
+          ? "resume"
+          : parent.parentID
+            ? "nested"
+            : "root"
       const admission = delegation
         ? yield* limits
             .admit({
@@ -984,6 +1142,7 @@ export const TaskTool = Tool.define(
               origin,
               count: 1,
               parentID: ctx.sessionID,
+              ...(workflowRun ? { coordinator: true } : {}),
               // A research lead holds its researchers' slots too, when it is shallow enough to launch them (5.B.5).
               ...(brief?.type === "ok" && brief.reserve && depth + 2 <= MAX_SUBAGENT_DEPTH
                 ? { reserve: brief.reserve }
@@ -1004,13 +1163,14 @@ export const TaskTool = Tool.define(
       // found free went to another child before its run began. A user's slash command waits on its card (5.B.4).
       const slotted = admission?.waits === true
       const movable =
+        !workflowAgent &&
         !runInBackground &&
         !parent.parentID &&
         !batch?.multiple &&
         flags.backgroundSubagents &&
         ctx.extra?.[SUBTASK] !== true
       const promoteNow = slotted && movable
-      const busy = !batch && admission !== undefined && admission.active > TaskLimits.BUSY
+      const busy = !workflowAgent && !batch && admission !== undefined && admission.active > TaskLimits.BUSY
 
       if (!invoked) {
         yield* ctx.ask({
@@ -1042,7 +1202,7 @@ export const TaskTool = Tool.define(
 
       const { kind, custom } = subagentKind(next)
       const childPermission = deriveSubagentSessionPermission({
-        parentSessionPermission: parent.permission ?? [],
+        parentSessionPermission: policyParent.permission ?? [],
         subagent: next,
       })
       const childToolDenies = [
@@ -1061,8 +1221,8 @@ export const TaskTool = Tool.define(
       // Plan mode promises no edits, so a subagent it launches takes on its edit rules, which come after the
       // subagent's own. Elsewhere a read-only agent may deliberately hand edits to a subagent that can make them.
       const inheritedEdits =
-        ctx.agent === "plan" && !forking
-          ? ((yield* agent.get(ctx.agent))?.permission ?? []).filter((rule) => rule.permission === "edit")
+        callerName === "plan" && !forking
+          ? ((yield* agent.get(callerName))?.permission ?? []).filter((rule) => rule.permission === "edit")
           : []
       const ops = ctx.extra?.promptOps as TaskPromptOps
       if (!ops) return yield* Effect.fail(new Error("TaskTool requires promptOps in ctx.extra"))
@@ -1111,6 +1271,23 @@ export const TaskTool = Tool.define(
             ? { slotReason: fresh ? LAUNCHING_REASON : SLOT_REASON }
             : {}),
           startedAt,
+          ...(workflowRun
+            ? {
+                workflow: {
+                  role: "run" as const,
+                  title: workflowRun.title,
+                  revision: workflowRun.revision,
+                  ...(workflowRun.quiet ? { quiet: true } : {}),
+                  progress: {
+                    ...(resumedWorkflow?.role === "run" ? resumedWorkflow.progress : {}),
+                    callerAgent: workflowRun.callerAgent,
+                    permissionKey: workflowRun.permissionKey,
+                  },
+                },
+              }
+            : workflowAgent
+              ? { workflow: { role: "agent" as const, ...workflowAgent } }
+              : {}),
           // Each run counts its own attempts and says whether its answer matched.
           ...(structured ? { structured: { ...structured, attempts: 0 } } : {}),
           ...(isolationCheck ? { isolation: { mode: isolationCheck.mode, state: "preparing" } } : {}),
@@ -1126,15 +1303,20 @@ export const TaskTool = Tool.define(
         // A subagent launched before Plan mode keeps the edits it was launched with, so Plan mode resuming it takes
         // them away for good; a fresh task is the way to edit again.
         const stored = session?.permission ?? []
+        const resumedDenies = workflowAgent ? childPermission.filter((rule) => rule.action === "deny") : []
+        const inherited = [...inheritedEdits, ...resumedDenies]
         if (
           session &&
-          !inheritedEdits.every((rule) =>
-            stored.some((item) => item.permission === rule.permission && item.pattern === rule.pattern),
+          !inherited.every((rule) =>
+            stored.some(
+              (item) =>
+                item.permission === rule.permission && item.pattern === rule.pattern && item.action === rule.action,
+            ),
           )
         )
           yield* sessions.setPermission({
             sessionID: session.id,
-            permission: [...stored, ...inheritedEdits],
+            permission: [...stored, ...inherited],
           })
         const nextSession =
           session ??
@@ -1187,6 +1369,11 @@ export const TaskTool = Tool.define(
           ...(ownedPaths.length > 0 ? { ownedPaths } : {}),
           ...(params.success_criteria?.length ? { successCriteria: params.success_criteria } : {}),
           ...(runInBackground ? { background: true } : {}),
+          ...(workflowAgent
+            ? { groupID: `workflow:${workflowAgent.runID}`, workflow: record.workflow }
+            : workflowRun
+              ? { workflow: record.workflow }
+              : {}),
         }
         // Lifecycle fields that change after launch. They are laid over `metadata`
         // on every write of this call's tool part, so the part and the child's
@@ -1370,6 +1557,8 @@ export const TaskTool = Tool.define(
             }
             const runModel = turn?.shape.model ?? { providerID: model.providerID, modelID: model.modelID }
             const runVariant = turn ? turn.shape.variant : childVariant
+            yield* currentWorkflowPolicy
+            yield* guardLineage
             const result = yield* ops.prompt({
               messageID: since,
               sessionID: nextSession.id,
@@ -1453,7 +1642,7 @@ export const TaskTool = Tool.define(
             if (launched === "stopped") return yield* Effect.interrupt
           }
           // The slot is taken only once the prerequisites are met, so a child waiting on a dependency holds none (5.B.3).
-          if (!delegation) return yield* work
+          if (!delegation || workflowRun) return yield* work
           return yield* limits.run(
             {
               conversationID: delegation.conversationID,
@@ -1587,7 +1776,8 @@ export const TaskTool = Tool.define(
             if (ctx.abort.aborted)
               return yield* Effect.fail(new Error("Stopped before the message reached the background task."))
             yield* assertDependencies(nextSession.id, dependencies)
-            yield* guard.link(nextSession.id, ctx.sessionID, { budget, ...(delegated ? { delegated } : {}) })
+            yield* guardLineage
+            yield* guard.link(nextSession.id, guardParent, { budget, ...(delegated ? { delegated } : {}) })
             const busy = dependencies.length === 0 && (yield* statuses.get(nextSession.id)).type !== "idle"
             const claim = { taskID: nextSession.id, dependencies }
             const release = Effect.sync(() => dependencyClaims.delete(claim))
@@ -1704,7 +1894,8 @@ export const TaskTool = Tool.define(
               record.attempt = attempt
               metadata.attempt = attempt
             }
-            yield* guard.link(nextSession.id, ctx.sessionID, {
+            yield* guardLineage
+            yield* guard.link(nextSession.id, guardParent, {
               budget,
               ...(batch ? { batch: { id: batchID, budget: batch.budget } } : {}),
               renew: session !== undefined && (yield* background.get(nextSession.id))?.status !== "running",
@@ -1744,6 +1935,7 @@ export const TaskTool = Tool.define(
                 type: id,
                 title,
                 metadata,
+                ...(workflowAgent ? { promotable: false } : {}),
                 // A row in vector.db, so a restart can tell the parent this child was interrupted (D.3).
                 durable: {
                   parentSessionID: ctx.sessionID,

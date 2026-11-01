@@ -23,6 +23,7 @@ import { BackgroundJobStore } from "@vectordevai/core/background-job-store"
 import { BackgroundJob } from "@/background/job"
 import { SessionMemory } from "@/session/memory"
 import { SessionTaskSize } from "@/session/task-size"
+import { WorkflowMarkers } from "@/orchestration/constants"
 
 /*
  * Lifecycle bookkeeping for task-tool subagents.
@@ -52,7 +53,8 @@ const partLock = Semaphore.makeUnsafe(1)
 export { claims, type Claim } from "@/task/claims"
 
 /** The reason an interrupted helper's record carries. */
-export const INTERRUPTED_REASON = "Interrupted when Vector stopped (an update, restart or crash); partial work was kept."
+export const INTERRUPTED_REASON =
+  "Interrupted when Vector stopped (an update, restart or crash); partial work was kept."
 /** The error an orphaned launching tool part is settled with. */
 export const INTERRUPTED_ERROR = "Interrupted when Vector stopped"
 /** The brief a resumed interrupted helper starts from. */
@@ -122,7 +124,9 @@ export const liveness = Effect.fnUntraced(function* (
 
 /** Whether resuming this helper waits for the user: it was interrupted and not resumed since, or the user stopped it. */
 export function needsHuman(record: Pick<SubagentRecord, "interruption" | "stop">) {
-  return (record.interruption !== undefined && record.interruption.resumedAt === undefined) || record.stop?.by === "user"
+  return (
+    (record.interruption !== undefined && record.interruption.resumedAt === undefined) || record.stop?.by === "user"
+  )
 }
 
 /** Why the agent may not resume a helper that `needsHuman` holds for. */
@@ -273,30 +277,69 @@ function extensions(value: Record<string, unknown>): Partial<SubagentRecord> {
 
 export function read(info: Pick<Session.Info, "metadata">): SubagentRecord | undefined {
   const value = info.metadata?.[METADATA_KEY]
-  if (!isRecord(value) || typeof value.title !== "string" || typeof value.agent !== "string" ||
-    typeof value.parentSessionID !== "string" || typeof value.parentMessageID !== "string" ||
-    typeof value.startedAt !== "number" || !Number.isFinite(value.startedAt) ||
+  if (
+    !isRecord(value) ||
+    typeof value.title !== "string" ||
+    typeof value.agent !== "string" ||
+    typeof value.parentSessionID !== "string" ||
+    typeof value.parentMessageID !== "string" ||
+    typeof value.startedAt !== "number" ||
+    !Number.isFinite(value.startedAt) ||
     !["queued", "running", "completed", "error", "cancelled"].includes(String(value.status)) ||
-    !isRecord(value.model) || typeof value.model.providerID !== "string" || typeof value.model.modelID !== "string") return undefined
-  const strings = (input: unknown) => Array.isArray(input) ? input.filter((item): item is string => typeof item === "string") : undefined
-  const optionalString = (input: unknown) => typeof input === "string" ? input : undefined
+    !isRecord(value.model) ||
+    typeof value.model.providerID !== "string" ||
+    typeof value.model.modelID !== "string"
+  )
+    return undefined
+  const strings = (input: unknown) =>
+    Array.isArray(input) ? input.filter((item): item is string => typeof item === "string") : undefined
+  const optionalString = (input: unknown) => (typeof input === "string" ? input : undefined)
   const budget = Schema.decodeUnknownOption(RunBudget.Info)(value.budget)
   const scopes = Schema.decodeUnknownOption(Schema.Array(Task.BudgetScope))(value.budgetScopes)
   return {
     ...value,
-    ownedPaths: strings(value.ownedPaths), dependsOn: strings(value.dependsOn), successCriteria: strings(value.successCriteria),
-    batchID: optionalString(value.batchID), resultRef: optionalString(value.resultRef), resultSummary: optionalString(value.resultSummary),
-    reason: optionalString(value.reason), error: optionalString(value.error),
-    completedAt: typeof value.completedAt === "number" && Number.isFinite(value.completedAt) ? value.completedAt : undefined,
-    attempt: typeof value.attempt === "number" && Number.isInteger(value.attempt) && value.attempt > 0 ? value.attempt : undefined,
+    ownedPaths: strings(value.ownedPaths),
+    dependsOn: strings(value.dependsOn),
+    successCriteria: strings(value.successCriteria),
+    batchID: optionalString(value.batchID),
+    resultRef: optionalString(value.resultRef),
+    resultSummary: optionalString(value.resultSummary),
+    reason: optionalString(value.reason),
+    error: optionalString(value.error),
+    completedAt:
+      typeof value.completedAt === "number" && Number.isFinite(value.completedAt) ? value.completedAt : undefined,
+    attempt:
+      typeof value.attempt === "number" && Number.isInteger(value.attempt) && value.attempt > 0
+        ? value.attempt
+        : undefined,
     budget: budget._tag === "Some" ? budget.value : undefined,
     budgetScopes: scopes._tag === "Some" ? scopes.value : undefined,
-    notification: isRecord(value.notification) && typeof value.notification.text === "string" && typeof value.notification.launchID === "string" && ["completed", "error", "cancelled"].includes(String(value.notification.state))
-      ? {
-        ...value.notification, messageID: optionalString(value.notification.messageID),
-        claimedAt: typeof value.notification.claimedAt === "number" && Number.isFinite(value.notification.claimedAt) ? value.notification.claimedAt : undefined,
-      } : undefined,
-    mailbox: Array.isArray(value.mailbox) ? value.mailbox.filter((item) => isRecord(item) && typeof item.id === "string" && typeof item.sender === "string" && typeof item.text === "string" && ["steer", "queue"].includes(String(item.delivery)) && typeof item.createdAt === "number" && Number.isFinite(item.createdAt)) : undefined,
+    notification:
+      isRecord(value.notification) &&
+      typeof value.notification.text === "string" &&
+      typeof value.notification.launchID === "string" &&
+      ["completed", "error", "cancelled"].includes(String(value.notification.state))
+        ? {
+            ...value.notification,
+            messageID: optionalString(value.notification.messageID),
+            claimedAt:
+              typeof value.notification.claimedAt === "number" && Number.isFinite(value.notification.claimedAt)
+                ? value.notification.claimedAt
+                : undefined,
+          }
+        : undefined,
+    mailbox: Array.isArray(value.mailbox)
+      ? value.mailbox.filter(
+          (item) =>
+            isRecord(item) &&
+            typeof item.id === "string" &&
+            typeof item.sender === "string" &&
+            typeof item.text === "string" &&
+            ["steer", "queue"].includes(String(item.delivery)) &&
+            typeof item.createdAt === "number" &&
+            Number.isFinite(item.createdAt),
+        )
+      : undefined,
     ...extensions(value),
   } as SubagentRecord
 }
@@ -327,7 +370,12 @@ export const locked =
     Effect.uninterruptibleMask((restore) => lock.withPermits(1)(restore(effect)))
 
 /** Merges a patch into the child's record. setMetadata replaces the whole metadata object, so this reads first. */
-export function write(sessions: Session.Interface, sessionID: SessionID, patch: Partial<SubagentRecord>, attempt?: number) {
+export function write(
+  sessions: Session.Interface,
+  sessionID: SessionID,
+  patch: Partial<SubagentRecord>,
+  attempt?: number,
+) {
   return Effect.gen(function* () {
     const info = yield* sessions.get(sessionID)
     if (attempt !== undefined && read(info)?.attempt !== attempt) return
@@ -354,7 +402,12 @@ export function setPublicMetadata(
   }).pipe(locked(metadataLock))
 }
 
-export function update(sessions: Session.Interface, sessionID: SessionID, patch: Partial<SubagentRecord>, attempt?: number) {
+export function update(
+  sessions: Session.Interface,
+  sessionID: SessionID,
+  patch: Partial<SubagentRecord>,
+  attempt?: number,
+) {
   return write(sessions, sessionID, patch, attempt).pipe(
     Effect.catchCause((cause) => Effect.logWarning("subagent lifecycle update failed", { sessionID, cause })),
     Effect.withSpan("SubagentLifecycle.update"),
@@ -474,24 +527,38 @@ export function releaseNotifications(
 }
 
 /** Recover undelivered reports only into a human's next prompt, never into a paid retry after a crash. */
-export function recover(sessions: Session.Interface, database: Database.Interface, parentID: SessionID, messageID: MessageID) {
+export function recover(
+  sessions: Session.Interface,
+  database: Database.Interface,
+  parentID: SessionID,
+  messageID: MessageID,
+) {
   return Effect.gen(function* () {
     const children = (yield* sessions.children(parentID)).filter((child) => !child.internal)
-    return (yield* Effect.forEach(children, (child) => Effect.gen(function* () {
-      const record = read(child)
-      const note = record?.notification
-      if (!note || ownedHere(record)) return []
-      // A claim whose message was never written (its engine stopped first) is taken over once its grace has passed.
-      const stale = note.messageID
-      if (stale && ((note.claimedAt ?? 0) > Date.now() - CLAIM_GRACE || (yield* written(database, parentID, stale))))
-        return []
-      if (!(yield* written(database, parentID, note.launchID))) {
-        yield* write(sessions, child.id, { notification: undefined }, record.attempt)
-        return []
-      }
-      if (!(yield* claimNotification(sessions, database, child.id, record.attempt, messageID, { stale }))) return []
-      return [{ type: "text" as const, synthetic: true, text: note.text, metadata: { taskNotification: { taskID: child.id, state: note.state, recovered: true } } }]
-    }))).flat()
+    return (yield* Effect.forEach(children, (child) =>
+      Effect.gen(function* () {
+        const record = read(child)
+        const note = record?.notification
+        if (!note || ownedHere(record)) return []
+        // A claim whose message was never written (its engine stopped first) is taken over once its grace has passed.
+        const stale = note.messageID
+        if (stale && ((note.claimedAt ?? 0) > Date.now() - CLAIM_GRACE || (yield* written(database, parentID, stale))))
+          return []
+        if (!(yield* written(database, parentID, note.launchID))) {
+          yield* write(sessions, child.id, { notification: undefined }, record.attempt)
+          return []
+        }
+        if (!(yield* claimNotification(sessions, database, child.id, record.attempt, messageID, { stale }))) return []
+        return [
+          {
+            type: "text" as const,
+            synthetic: true,
+            text: note.text,
+            metadata: { taskNotification: { taskID: child.id, state: note.state, recovered: true } },
+          },
+        ]
+      }),
+    )).flat()
   })
 }
 
@@ -511,10 +578,15 @@ export function failure(
  * projector sums from every step-finish part, plus tool and step counts. Also
  * returns the error the last assistant message ended with, if any.
  */
-export function observe(sessions: Session.Interface, sessionID: SessionID) {
+export function observe(
+  sessions: Session.Interface,
+  sessionID: SessionID,
+): Effect.Effect<{ usage: SubagentUsage; failure: ReturnType<typeof failure> } | undefined> {
   return Effect.gen(function* () {
     const info = yield* sessions.get(sessionID)
     const messages = yield* sessions.messages({ sessionID })
+    const record = read(info)
+    const workflow = record?.workflow?.role === "run"
     let toolUses = 0
     let steps = 0
     for (const message of messages) {
@@ -523,20 +595,50 @@ export function observe(sessions: Session.Interface, sessionID: SessionID) {
         if (part.type === "step-finish") steps += 1
       }
     }
+    if (record?.workflow?.role === "run") {
+      if (record.workflow.progress.runtime !== undefined) {
+        const { WorkflowState } = yield* Effect.promise(() => import("@/orchestration/state"))
+        const runtime = yield* WorkflowState.decode(record.workflow.progress.runtime)
+        const children = Object.values(runtime.sessions)
+        steps += Math.max(
+          runtime.usage.steps,
+          children.reduce((sum, child) => sum + child.steps, 0),
+        )
+        toolUses += children.reduce((sum, child) => sum + child.toolUses, 0)
+      } else {
+        // Before the first checkpoint (or an older trusted record), use real children; never invent zero usage.
+        const children = (yield* sessions.children(sessionID)).filter((child) => {
+          const role = read(child)?.workflow
+          return role?.role === "agent" && role.runID === sessionID
+        })
+        // Real runs checkpoint before every admission. Missing legacy metadata must not make Stop scan an
+        // unbounded history; larger runs keep usage unknown until their durable checkpoint can be read.
+        if (children.length > WorkflowMarkers.MAX_READY) return undefined
+        for (const child of children) {
+          const result = yield* observe(sessions, child.id)
+          if (!result) return undefined
+          steps += result.usage.steps
+          toolUses += result.usage.toolUses
+        }
+      }
+    }
     const tokens = {
-      input: info.tokens?.input ?? 0,
-      output: info.tokens?.output ?? 0,
-      reasoning: info.tokens?.reasoning ?? 0,
-      cache: { read: info.tokens?.cache.read ?? 0, write: info.tokens?.cache.write ?? 0 },
+      input: (info.tokens?.input ?? 0) + (workflow ? (info.subagentTokens?.input ?? 0) : 0),
+      output: (info.tokens?.output ?? 0) + (workflow ? (info.subagentTokens?.output ?? 0) : 0),
+      reasoning: (info.tokens?.reasoning ?? 0) + (workflow ? (info.subagentTokens?.reasoning ?? 0) : 0),
+      cache: {
+        read: (info.tokens?.cache.read ?? 0) + (workflow ? (info.subagentTokens?.cache.read ?? 0) : 0),
+        write: (info.tokens?.cache.write ?? 0) + (workflow ? (info.subagentTokens?.cache.write ?? 0) : 0),
+      },
     }
     const usage: SubagentUsage = {
-      cost: info.cost ?? 0,
+      cost: (info.cost ?? 0) + (workflow ? (info.subagentCost ?? 0) : 0),
       tokens,
       total: tokens.input + tokens.output + tokens.reasoning + tokens.cache.read + tokens.cache.write,
       toolUses,
       steps,
-      unpricedSteps: info.unpricedSteps,
-      codiumSteps: info.codiumSteps,
+      unpricedSteps: (info.unpricedSteps ?? 0) + (workflow ? (info.subagentUnpricedSteps ?? 0) : 0),
+      codiumSteps: (info.codiumSteps ?? 0) + (workflow ? (info.subagentCodiumSteps ?? 0) : 0),
     }
     const last = messages.findLast((message) => message.info.role === "assistant")
     return { usage, failure: last?.info.role === "assistant" ? failure(last.info.error) : undefined }
@@ -588,7 +690,9 @@ export function scopeFields(
 ): Pick<SubagentRecord, "budgetScopes" | "delegatedScope"> {
   const delegated = scopes.find((scope) => scope.kind === "delegated")
   return {
-    budgetScopes: scopes.filter((scope): scope is SpendGuard.ScopeSnapshot & Task.BudgetScope => scope.kind !== "delegated"),
+    budgetScopes: scopes.filter(
+      (scope): scope is SpendGuard.ScopeSnapshot & Task.BudgetScope => scope.kind !== "delegated",
+    ),
     ...(delegated && {
       delegatedScope: {
         id: delegated.id,
@@ -716,9 +820,11 @@ function editPart(
   }).pipe(
     locked(partLock),
     Effect.catchCause((cause) =>
-      Effect.logWarning("subagent tool part edit failed", { messageID: input.messageID, callID: input.callID, cause }).pipe(
-        Effect.as(false),
-      ),
+      Effect.logWarning("subagent tool part edit failed", {
+        messageID: input.messageID,
+        callID: input.callID,
+        cause,
+      }).pipe(Effect.as(false)),
     ),
     Effect.withSpan(span),
   )

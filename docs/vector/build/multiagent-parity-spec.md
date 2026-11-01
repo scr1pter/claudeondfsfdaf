@@ -1303,11 +1303,13 @@ Template refs: item(.seg)*, index, inputs.<name>(.seg)*, stages.<id>.output(.seg
   - `task` is not offered;
   - a run is already running past `budget.workflow.runs`;
   - resuming a running run.
+- After approval, revalidate the effective plan, models and root permissions and refuse if they changed. Recheck guest and task/workflow admission before coordinator or worker execution. A worker queued across a root permission change refuses before any provider call; explicit workflow resume validates the new policy and carries current inherited denies into the existing child.
 
 **G.4 Running.**
 - **The run.** A run is a child session with the hidden native agent `workflow`. Its permission is `merge(defaults, user, {"*": "deny"})` and it has no prompt. It is launched through the task tool with custom prompt ops by `WorkflowRuns.launch`: `subagent_type: WORKFLOW_AGENT`, the `RUN` marker, and `budget: {usd, steps}`.
   - Dispatch routes on `input.sessionID === runID && input.agent === WORKFLOW_AGENT` to `WorkflowRunner.run`. Everything else, including the completion note to the parent, goes to the session's ops.
   - The run reuses background start, notes, revert handling, `vector run` waiting, the stop cascade and task_id resume. The runner never calls a model.
+  - The trusted coordinator counts against the workflow-run and request launch caps and inherits delegated accounting, but holds zero execution slots. Its admission creates no held, prepaid, reserved, demand or queued slot, even while the admission scope stays open. Actual workflow agents keep ordinary workflow slot priority and reserve rules. This is an engine-only admission mode, not the exempt marker.
   - `task.ts` refuses `subagent_type: "workflow"` and resuming a run session without the `RUN` marker.
   - `SessionPrompt.prompt`, `command`, `shell` and `revert` refuse a session whose agent is `workflow`.
 - **Messages.** The spec is stored as a synthetic user message in the run session. Runner messages are assistant messages with agent `workflow`, the parent's model and cost 0, rolled over every 50 task parts.
@@ -1342,7 +1344,7 @@ Template refs: item(.seg)*, index, inputs.<name>(.seg)*, stages.<id>.output(.seg
 - the start of the results follows.
 - The complete report stays within 64 KiB of UTF-8. When many nested stages expand, omit excess stage summaries with an explicit count while preserving the header, full artifact path, failures and a complete bounded results envelope. The artifact path is engine-generated and retained exactly; untrusted summary text is escaped separately.
 
-The run ends `error` with partial results when a limit stopped it. `subagent-lifecycle observe` reports the run's usage as its own plus `subagentCost` and `subagentTokens`.
+The run ends `error` with partial results when a limit stopped it. `subagent-lifecycle observe` reports the run's usage as its own plus `subagentCost` and `subagentTokens`; step and tool totals use the validated durable checkpoint. Before a checkpoint exists, at most 64 verified workflow children may supply those counts. Missing or unreadable checkpoint accounting, or a larger fallback family, yields unknown usage, never a partial subtotal or zero. The runtime's own ledgers and admission checks do not use this presentation fallback. Agent completion and attention notes are durable quiet messages in the coordinator, with no model prompt. Owner-started runs default to quiet parent completion; their owner-only option may request a summary. Run completion notes retain workflow resume/inspect/stop guidance and aggregate usage when known.
 
 **G.6 Resume** (`workflow {action: "resume", run_id}`, route 12, `vector workflow resume`).
 - It reuses every completed, final node whose content key matches. The key is a sha256 over the stage hash, item key, round, rendered prompt, settings, schema and owned paths.

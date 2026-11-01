@@ -28,7 +28,11 @@ export function mapBusy<A, R>(self: Effect.Effect<A, Session.BusyError, R>) {
 // state simply no longer allows it, and the client needs to tell the user their
 // files were left untouched.
 export function mapRevert<A, R>(
-  self: Effect.Effect<A, Session.BusyError | Snapshot.SnapshotUnavailableError | SessionRevert.IsolatedError, R>,
+  self: Effect.Effect<
+    A,
+    Session.BusyError | Snapshot.SnapshotUnavailableError | SessionRevert.IsolatedError | SessionRevert.WorkflowError,
+    R
+  >,
 ) {
   return self.pipe(
     Effect.catchTag("SessionBusyError", (error) =>
@@ -48,6 +52,9 @@ export function mapRevert<A, R>(
             : "The snapshot for this change is no longer available, so your files were left as they are.",
         }),
       ),
+    ),
+    Effect.catchTag("SessionRevert.WorkflowError", (error) =>
+      Effect.fail(new ApiError.ConflictError({ resource: "workflow", message: error.message })),
     ),
     Effect.catchTag("SessionRevert.IsolatedError", (error) =>
       Effect.fail(new ApiError.ConflictError({ resource: "isolated-task", message: error.message })),

@@ -1,4 +1,5 @@
 import { TaskClaims } from "@/task/claims"
+import { WorkflowMarkers } from "@/orchestration/constants"
 import { assertWritable } from "@/tool/owned-path"
 import { SubagentLifecycle } from "@/tool/subagent-lifecycle"
 import { Agent } from "@/agent/agent"
@@ -156,6 +157,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
       outward: input.outward === true,
       invokedAgents: input.invokedAgents,
       promptOps: input.promptOps,
+      [WorkflowMarkers.TASK_OFFERED]: Object.hasOwn(tools, "task"),
       ...(input.taskSize ? { taskSize: input.taskSize } : {}),
       ...(input.delegation ? { delegation: input.delegation } : {}),
       ...(input.effort ? { effort: input.effort } : {}),

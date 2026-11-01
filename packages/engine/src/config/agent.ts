@@ -9,14 +9,14 @@ import { configEntryNameFromPath } from "./entry-name"
 import * as ConfigMarkdown from "./markdown"
 import { ConfigParse } from "./parse"
 
-/** Names no agent may take: the task tool's fork option, and its permission pattern, use "fork". */
-export const RESERVED: readonly string[] = ["fork"]
+/** Engine-owned names cannot be replaced by user or repository agent definitions. */
+export const RESERVED: readonly string[] = ["fork", "workflow"]
 
 function refuseReserved(name: string, file: string) {
   if (RESERVED.includes(name))
     throw new InvalidError({
       path: file,
-      message: `An agent cannot be named ${name}; the task tool's ${name} option uses it.`,
+      message: `An agent cannot be named ${name}; the engine reserves that name.`,
     })
 }
 

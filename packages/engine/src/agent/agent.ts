@@ -253,6 +253,7 @@ const layer = Layer.effect(
           doom_loop: "ask",
           // A learned skill Vector put in use on its own, after two matching runs, asks before it first loads.
           learned_skill: "ask",
+          workflow: "ask",
           unsandboxed_shell: "ask",
           // Terminals the agent did not open (the user's, or another session's) ask before the agent reads, waits
           // on, types into, resizes or closes them, and a submitted line also goes through the shell's own rules.
@@ -655,6 +656,14 @@ const layer = Layer.effect(
             mode: "subagent",
             native: true,
           },
+          workflow: {
+            name: "workflow",
+            mode: "subagent",
+            native: true,
+            hidden: true,
+            permission: Permission.merge(defaults, user, Permission.fromConfig({ "*": "deny" })),
+            options: {},
+          },
           compaction: {
             name: "compaction",
             mode: "primary",
@@ -720,7 +729,7 @@ const layer = Layer.effect(
         for (const [key, value] of Object.entries(cfg.agent ?? {})) {
           // A markdown agent with a reserved name fails to load (ConfigAgent); one from a config file is left out.
           if (ConfigAgent.RESERVED.includes(key)) {
-            yield* Effect.logWarning(`agent "${key}" is ignored: the task tool's ${key} option uses that name`)
+            yield* Effect.logWarning(`agent "${key}" is ignored: that name is reserved by Vector`)
             continue
           }
           if (value.disable && !isNativeSpecialist(key)) {
@@ -852,6 +861,9 @@ const layer = Layer.effect(
             Permission.fromConfig({ external_directory: { [Truncate.GLOB]: "allow" } }),
           )
         }
+
+        // The coordinator never calls tools or a model, including built-in external-directory allowances.
+        agents.workflow.permission = Permission.merge(defaults, user, Permission.fromConfig({ "*": "deny" }))
 
         // Vector's own helpers run as Subagent specialists: a Vectorscope review prompts review and security. One
         // turned off leaves the agent list and `get`, but a helper session still gets it, hidden, from `helper`.

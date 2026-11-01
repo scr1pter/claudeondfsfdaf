@@ -256,6 +256,8 @@ export type AdmitInput = {
   count: number
   /** Extra slots held for the child's own launches, such as a research lead's researchers (B.5). */
   reserve?: number
+  /** Engine-only no-model coordinator: request admission still counts, but it reserves no execution slot. */
+  coordinator?: boolean
   /** The launching session. A launch from a subagent first uses a slot that subagent reserved. */
   parentID?: string
 }
@@ -387,7 +389,7 @@ function demand(pool: Pool, origin: Origin) {
 // Admitted children not yet running, beside running and waiting ones.
 function uncommitted(pool: Pool) {
   let total = 0
-  pool.open.forEach((open) => (total += open.count - open.started.length))
+  pool.open.forEach((open) => (total += open.each === 0 ? 0 : open.count - open.started.length))
   pool.prepaid.forEach((paid) => {
     if (!pool.open.has(paid.admission)) total += 1
   })
@@ -456,7 +458,7 @@ function place(pool: Pool, i: AdmitInput, id: number): readonly [Placed, Pool] {
   if (counted && request.launched + request.pending + i.count > i.limits.perRequest)
     return [{ refused: perRequest(request.launched + request.pending, i.limits.perRequest) }, current]
   // A reserve never asks for every slot of the conversation, so it can always be granted.
-  const each = 1 + Math.min(Math.max(0, Math.floor(i.reserve ?? 0)), i.limits.running - 1)
+  const each = i.coordinator === true ? 0 : 1 + Math.min(Math.max(0, Math.floor(i.reserve ?? 0)), i.limits.running - 1)
   const need = i.count * each
   const lender = i.parentID === undefined ? undefined : lenderOf(current, i.parentID)
   // A launch from a subagent, or a resume from one, cannot wait for a slot its own parent may be holding.
@@ -465,7 +467,9 @@ function place(pool: Pool, i: AdmitInput, id: number): readonly [Placed, Pool] {
   let prepaid = false
   let from: string | undefined
   let waits = false
-  if (nested) {
+  if (each === 0) {
+    // No queue, prepayment, lender or implicit pending demand for a coordinator. Its children take their own slots.
+  } else if (nested) {
     if (lender && lender.spare >= need && i.parentID !== undefined) {
       from = i.parentID
       next = lend(next, i.parentID, -need)
@@ -889,7 +893,11 @@ const layer = Layer.effect(
         const [next, woken] = limited(current, limits)
         return [{ pool: next, request, woken }, next] as const
       }
-      const { pool: current, request, woken } = requestID
+      const {
+        pool: current,
+        request,
+        woken,
+      } = requestID
         ? (yield* withSeed(pool, conversationID, requestID, read)).value
         : yield* change(pool, (value) => read(value))
       yield* wake(woken)

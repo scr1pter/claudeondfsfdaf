@@ -396,7 +396,13 @@ const layer = Layer.effect(
     const within = <A, E, R>(sessionID: SessionID, effect: Effect.Effect<A, E, R>) =>
       sessions.get(sessionID).pipe(
         Effect.orDie,
-        Effect.andThen(() => TaskPlace.within(sessionID)(effect)),
+        Effect.andThen((session) =>
+          session.agent === "workflow"
+            ? Effect.die(
+                new Error("Workflow runs cannot receive prompts or commands; resume them with the workflow tool."),
+              )
+            : TaskPlace.within(sessionID)(effect),
+        ),
       )
     const admit: Interface["admit"] = (sessionID) =>
       within(

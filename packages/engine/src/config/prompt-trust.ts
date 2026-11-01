@@ -209,6 +209,9 @@ export function notice(count: number) {
 export function fingerprint(file: string) {
   const text = PromptSource.readText(file)
   if (text === undefined) return
+  // A saved workflow is executable prompt content, not a vector.json configuration object.
+  if (file.endsWith(".json") && ["workflow", "workflows"].includes(path.basename(path.dirname(file))))
+    return digest(text)
   if (!/\.jsonc?$/.test(file)) return digest(text)
   const keys = PromptSource.promptKeys(text, file)
   return keys && digest(canonical(keys))

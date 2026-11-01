@@ -10,6 +10,15 @@ export const MAX_NODES = 32_000
 export const MAX_READY = 64
 export const MAX_BUFFERED_ITEMS = 32_000
 export const GUARD_PARENT = "vector.workflow.guard-parent"
+export const TASK_OFFERED = "vector.workflow.task-offered"
+
+export type Run = {
+  readonly title: string
+  readonly revision: number
+  readonly callerAgent: string
+  readonly permissionKey: string
+  readonly quiet?: boolean
+}
 
 export type Agent = {
   readonly runID: string

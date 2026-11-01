@@ -15,7 +15,9 @@ import { SessionStatus } from "@/session/status"
 import { MessageV2 } from "@/session/message-v2"
 import { SessionMemory } from "@/session/memory"
 import { SessionTaskSize } from "@/session/task-size"
-import { MessageID, SessionID } from "@/session/schema"
+import { MessageID, PartID, SessionID } from "@/session/schema"
+import { ModelV2 } from "@vectordevai/core/model"
+import { ProviderV2 } from "@vectordevai/core/provider"
 import type { SubagentUsage } from "@/agent/subagent-kind"
 import { SubagentLifecycle } from "@/tool/subagent-lifecycle"
 import type { TaskPromptOps } from "@/tool/task"
@@ -160,6 +162,7 @@ export function render(input: {
   /** A checked JSON answer, shown in place of the text. */
   json?: TaskStructured.Shown
   isolation?: string
+  workflow?: boolean
 }) {
   const codium = input.usage?.codiumSteps ?? 0
   const codiumOnly = codium > 0 && input.usage?.total === 0
@@ -172,7 +175,9 @@ export function render(input: {
       : []),
     ...(input.duration === undefined ? [] : [`duration="${Locale.duration(Math.max(0, input.duration))}"`]),
   ]
-  const guidance = GUIDANCE[input.state]
+  const guidance = input.workflow
+    ? "Check the workflow report and its full results artifact, then tell the user the outcome and any partial work. Resume through workflow with run_id; use task_manage to inspect or stop the run. Do not send a message to the coordinator."
+    : GUIDANCE[input.state]
   const tag = input.state === "completed" ? "task_result" : "task_error"
   return [
     `<task-notification ${attributes.join(" ")}>`,
@@ -391,7 +396,9 @@ const layer = Layer.effect(
     // `now`: the notes are written before this returns, and never start a turn.
     const deliver = Effect.fnUntraced(function* (parentID: SessionID, batch: readonly Pending[], now = false) {
       // A revert started while the notes were held is waited out here too.
-      yield* unreverted(parentID, 1_000)
+      const parent = yield* unreverted(parentID, 1_000)
+      const workflow = SubagentLifecycle.read(parent)
+      const coordinator = workflow?.workflow?.role === "run"
       const kept = (yield* Effect.forEach(batch, (item) =>
         current(parentID, item.note).pipe(Effect.map((ok) => (ok ? [item] : []))),
       )).flat()
@@ -438,40 +445,58 @@ const layer = Layer.effect(
       })).flat()
       const lead = sent[0]
       if (!lead) return
-      const silent = now || fenced.has(parentID) || halted || !sent.some((item) => wakes(item.note))
+      const silent = coordinator || now || fenced.has(parentID) || halted || !sent.some((item) => wakes(item.note))
       // The parent's turn runs on its own: the window is free again once the message is on its way, so a note landing
       // during that turn joins it. A prompt that never wrote the message gives its claims back for recovery.
-      const write = lead.ops
-        .prompt({
-          sessionID: parentID,
-          messageID,
-          agent: lead.agent,
-          ...(latest
-            ? {
-                model: { providerID: latest.model.providerID, modelID: latest.model.modelID },
-                variant: latest.model.variant,
-                ...(latest.executionMode ? { executionMode: latest.executionMode } : {}),
-                ...(latest.format ? { format: latest.format } : {}),
-              }
-            : { variant: lead.variant }),
-          ...(silent ? { noReply: true } : {}),
-          parts: sent.map(({ note }) => ({
-            type: "text" as const,
-            synthetic: true,
-            text: note.text,
-            metadata: metadata(note, silent),
-          })),
-        })
-        .pipe(
-          Effect.onError(() =>
-            SubagentLifecycle.releaseNotifications(sessions, database, parentID, messageID, claimed),
-          ),
-          Effect.catchCause((cause) =>
-            Cause.hasInterrupts(cause)
-              ? Effect.void
-              : Effect.logWarning("the parent could not take its task notes", { parentID, cause }),
-          ),
-        )
+      const prompt = {
+        sessionID: parentID,
+        messageID,
+        agent: lead.agent,
+        ...(latest
+          ? {
+              model: { providerID: latest.model.providerID, modelID: latest.model.modelID },
+              variant: latest.model.variant,
+              ...(latest.executionMode ? { executionMode: latest.executionMode } : {}),
+              ...(latest.format ? { format: latest.format } : {}),
+            }
+          : { variant: lead.variant }),
+        ...(silent ? { noReply: true } : {}),
+        parts: sent.map(({ note }) => ({
+          type: "text" as const,
+          synthetic: true,
+          text: note.text,
+          metadata: metadata(note, silent),
+        })),
+      }
+      // A coordinator has no model loop. Its trusted engine notes are durable quiet messages, never prompt inputs.
+      const write = (
+        coordinator
+          ? Effect.gen(function* () {
+              const info = yield* sessions.updateMessage({
+                id: messageID,
+                sessionID: parentID,
+                role: "user",
+                agent: "workflow",
+                model: {
+                  providerID: ProviderV2.ID.make(workflow.model.providerID),
+                  modelID: ModelV2.ID.make(workflow.model.modelID),
+                },
+                time: { created: yield* Clock.currentTimeMillis },
+              })
+              const parts = yield* Effect.forEach(prompt.parts, (part) =>
+                sessions.updatePart({ ...part, id: PartID.ascending(), messageID, sessionID: parentID }),
+              )
+              return { info, parts }
+            })
+          : lead.ops.prompt(prompt)
+      ).pipe(
+        Effect.onError(() => SubagentLifecycle.releaseNotifications(sessions, database, parentID, messageID, claimed)),
+        Effect.catchCause((cause) =>
+          Cause.hasInterrupts(cause)
+            ? Effect.void
+            : Effect.logWarning("the parent could not take its task notes", { parentID, cause }),
+        ),
+      )
       yield* now ? write : write.pipe(Effect.interruptible, Effect.forkIn(scope, { startImmediately: true }))
     })
 
@@ -598,6 +623,7 @@ const layer = Layer.effect(
           spend: yield* spendLine(input.taskID),
           ...(line ? { isolation: line } : {}),
           ...(json ? { json } : {}),
+          ...(child?.workflow?.role === "run" ? { workflow: true } : {}),
         })
         yield* SubagentLifecycle.write(
           sessions,
@@ -614,7 +640,13 @@ const layer = Layer.effect(
             attempt: input.attempt,
             state: input.state,
             text,
-            wake: input.state !== "cancelled",
+            wake:
+              input.state !== "cancelled" &&
+              child?.workflow?.role !== "agent" &&
+              !(child?.workflow?.role === "run" && child.workflow.quiet),
+            ...(child?.workflow?.role === "agent" || (child?.workflow?.role === "run" && child.workflow.quiet)
+              ? { quiet: true }
+              : {}),
             ...(input.hold ? { hold: input.hold } : {}),
           },
           ops: input.ops,

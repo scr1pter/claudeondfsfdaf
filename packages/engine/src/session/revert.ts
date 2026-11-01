@@ -22,6 +22,10 @@ export class IsolatedError extends Schema.TaggedErrorClass<IsolatedError>()("Ses
   message: Schema.String,
 }) {}
 
+export class WorkflowError extends Schema.TaggedErrorClass<WorkflowError>()("SessionRevert.WorkflowError", {
+  message: Schema.String,
+}) {}
+
 export const RevertInput = Schema.Struct({
   sessionID: SessionID,
   messageID: MessageID,
@@ -35,10 +39,16 @@ export interface Interface {
   // reporting a successful undo that restored nothing.
   readonly revert: (
     input: RevertInput,
-  ) => Effect.Effect<Session.Info, Session.BusyError | Snapshot.SnapshotUnavailableError | IsolatedError>
+  ) => Effect.Effect<
+    Session.Info,
+    Session.BusyError | Snapshot.SnapshotUnavailableError | IsolatedError | WorkflowError
+  >
   readonly unrevert: (input: {
     sessionID: SessionID
-  }) => Effect.Effect<Session.Info, Session.BusyError | Snapshot.SnapshotUnavailableError | IsolatedError>
+  }) => Effect.Effect<
+    Session.Info,
+    Session.BusyError | Snapshot.SnapshotUnavailableError | IsolatedError | WorkflowError
+  >
   readonly cleanup: (session: Session.Info) => Effect.Effect<void>
 }
 
@@ -60,7 +70,11 @@ const layer = Layer.effect(
     const instruction = yield* Instruction.Service
     const guests = yield* FreeModelGuests.Service
     const isolation = yield* TaskIsolation.Service
-    const refuseIsolated = Effect.fn("SessionRevert.refuseIsolated")(function* (sessionID: SessionID) {
+    const refuseProtected = Effect.fn("SessionRevert.refuseProtected")(function* (sessionID: SessionID) {
+      if ((yield* sessions.get(sessionID).pipe(Effect.orDie)).agent === "workflow")
+        return yield* new WorkflowError({
+          message: "Workflow runs cannot be reverted; resume them with the workflow tool.",
+        })
       if (yield* isolation.find(sessionID).pipe(Effect.orDie))
         return yield* new IsolatedError({
           message:
@@ -69,7 +83,7 @@ const layer = Layer.effect(
     })
 
     const revert = Effect.fn("SessionRevert.revert")(function* (input: RevertInput) {
-      yield* refuseIsolated(input.sessionID)
+      yield* refuseProtected(input.sessionID)
       yield* state.assertNotBusy(input.sessionID)
       const all = yield* sessions.messages({ sessionID: input.sessionID }).pipe(Effect.orDie)
       let lastUser: SessionV1.User | undefined
@@ -124,7 +138,7 @@ const layer = Layer.effect(
     })
 
     const unrevert = Effect.fn("SessionRevert.unrevert")(function* (input: { sessionID: SessionID }) {
-      yield* refuseIsolated(input.sessionID)
+      yield* refuseProtected(input.sessionID)
       yield* Effect.logInfo("unreverting", { sessionID: input.sessionID })
       yield* state.assertNotBusy(input.sessionID)
       const session = yield* sessions.get(input.sessionID).pipe(Effect.orDie)
