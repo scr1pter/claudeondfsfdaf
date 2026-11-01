@@ -111,6 +111,10 @@ jobs:
           echo "Desktop computer-use check: the bundled bridge under Node $(node --version)"
           bun build ./src/main/computer-bridge.ts --target=node --format=esm --outfile "$RUNNER_TEMP/computer-bridge.mjs" &&
             node ./test/computer/bridge-node.ts "$RUNNER_TEMP/computer-bridge.mjs" || status=1
+          echo "Desktop computer-use check: helper pipes and process lifetime under Node $(node --version)"
+          bun build ./src/main/computer-helper.ts --target=node --format=esm --define 'import.meta.env.VECTOR_CHANNEL="prod"' --outfile "$RUNNER_TEMP/computer-helper.mjs" &&
+            bun build ./test/computer/fake-helper.ts --target=node --format=esm --outfile "$RUNNER_TEMP/computer-fake-helper.mjs" &&
+            node ./test/computer/helper-node.ts "$RUNNER_TEMP/computer-helper.mjs" "$RUNNER_TEMP/computer-fake-helper.mjs" || status=1
           exit $status
 
       - name: Check generated client

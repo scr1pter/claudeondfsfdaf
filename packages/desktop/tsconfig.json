@@ -24,6 +24,7 @@
     "scripts/channel-ids.ts",
     "scripts/computer-helper-identity.ts",
     "test/computer/bridge-node.ts",
+    "test/computer/helper-node.ts",
     "test/computer/fake-desktop.ts",
     "test/computer/fake-helper.ts",
     "test/computer/png.ts",

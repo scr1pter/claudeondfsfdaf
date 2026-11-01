@@ -6,9 +6,11 @@ The detailed continuation prompt is [hands-handoff.md](./hands-handoff.md), in t
 
 ## Resumed build checkpoint
 
-At `b904ea97`, 33 of 73 packages are implemented and pushed; D14 is the current package. The historical D5b handoff and the older “commit D13” line below are superseded by this checkpoint. The UI safety/portability review is complete; the remaining automatic-Quick routing issue now has a tested internal task-size correction. The two CI fixtures use controlled timing without relaxing their assertions. These review changes precede D14 and are recorded in the continuation-review deviations.
+D14 is implemented on top of `6a4f225b`; this brings the branch to 34 of 73 implemented packages when its commit is pushed. D15 is next. The historical D5b handoff and the older “commit D13” line below are superseded by this checkpoint. The UI safety/portability review is complete; the remaining automatic-Quick routing issue now has a tested internal task-size correction. The two CI fixtures use controlled timing without relaxing their assertions. These review changes precede D14 and are recorded in the continuation-review deviations.
 
 Focused local checks, run one file at a time: core task-size 20 tests, engine task-size history 26, app task-intelligence 14, app submit 86, and app economics traffic 1 passed. The isolated engine network-guard fixture requires loopback binding, so that file ran with the sandbox network restriction lifted; it did not use external services. App/browser execution remains CI-only. Core, engine, app and browser-fixture typechecks passed, serially. The post-change production comparison and browser execution remain pending in CI.
+
+D14 local validation, each Bun file run alone: protocol 18 tests, supervisor/client/preflight 28, conformance/backend 28; all passed. Desktop typecheck passed. The bundled supervisor/fake passed Node 24 checks for stdio, POSIX fd 3, EOF and parent death. A production supervisor bundle contains no dev-helper environment lookup. Native Windows transport/build and Electron runtime remain CI/later-package validation. Focused UI run 41255805687 and production comparison 41255807800 at `6a4f225b` are queued; their results are not yet claimed.
 
 Fresh full D13 CI [41254671244](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/41254671244) is running. Both unit jobs, including the desktop computer-use step, have passed. The prior Linux count failure and Windows Bun crash did not recur in those jobs; their timing/runtime causes are not inferred to be fixed by that result.
 
