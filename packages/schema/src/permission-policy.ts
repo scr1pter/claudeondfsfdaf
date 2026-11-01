@@ -62,6 +62,13 @@ export const NETWORK_COMMAND_REASON =
  */
 export const AFTER_WEB = "after-web "
 
+/** Declarative workflow execution. Elevated plans always ask, including on older clients. */
+export const WORKFLOW = "workflow"
+
+export function workflowPattern(reason?: "web" | "mcp" | "agent" | "large") {
+  return reason ? `${AFTER_WEB}workflow:${reason}` : "run"
+}
+
 /** Why an address after the web asks, as the ask shows it. */
 export const AFTER_WEB_REASON =
   "This conversation read the web, and this address is new: neither you nor an earlier result gave it. A page can steer the agent into putting your data in an address."
@@ -101,6 +108,7 @@ export function requiresApproval(permission?: string, always?: readonly string[]
     permission === AGENT_MARKER ||
     permission === RESEARCH_KEEP ||
     permission === NETWORK_COMMAND ||
+    (permission === WORKFLOW && (!patterns?.length || patterns.some((pattern) => pattern !== "run"))) ||
     Boolean(patterns?.some((pattern) => pattern.startsWith(AFTER_WEB))) ||
     requiresCloudApproval(permission, always)
   )

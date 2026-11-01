@@ -25,3 +25,30 @@ test("a command that drops the agent marker always asks and can never be approve
   expect(PermissionPolicy.canAutoApprove(PermissionPolicy.AGENT_MARKER, ["*"])).toBe(false)
   expect(PermissionPolicy.canAlwaysApprove(PermissionPolicy.AGENT_MARKER, ["*"])).toBe(false)
 })
+
+test("ordinary workflow plans may use auto and Always approval", () => {
+  expect(PermissionPolicy.workflowPattern()).toBe("run")
+  expect(PermissionPolicy.canAutoApprove(PermissionPolicy.WORKFLOW, ["run"], ["run"])).toBe(true)
+  expect(PermissionPolicy.canAlwaysApprove(PermissionPolicy.WORKFLOW, ["run"], ["run"])).toBe(true)
+})
+
+test("elevated workflow plans require a fresh answer in current and shipped clients", async () => {
+  const legacy = await import("./fixtures/199111/permission-policy")
+  for (const reason of ["web", "mcp", "agent", "large"] as const) {
+    const patterns = [PermissionPolicy.workflowPattern(reason)]
+    // A permissive caller cannot turn an elevated plan into an Always rule.
+    for (const always of [[], ["run"], ["*"]]) {
+      expect(PermissionPolicy.canAutoApprove("workflow", always, patterns)).toBe(false)
+      expect(PermissionPolicy.canAlwaysApprove("workflow", always, patterns)).toBe(false)
+      expect(legacy.canAutoApprove("workflow", always, patterns)).toBe(false)
+      expect(legacy.canAlwaysApprove("workflow", always, patterns)).toBe(false)
+    }
+  }
+})
+
+test("an omitted or unknown workflow pattern cannot grant broad approval", () => {
+  for (const patterns of [undefined, [], ["*"], ["run", "other"]]) {
+    expect(PermissionPolicy.canAutoApprove("workflow", ["*"], patterns)).toBe(false)
+    expect(PermissionPolicy.canAlwaysApprove("workflow", ["*"], patterns)).toBe(false)
+  }
+})

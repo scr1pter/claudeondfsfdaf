@@ -1133,3 +1133,26 @@ Diagnosis uses the logs of all eight Windows engine jobs. Summed reported test d
 Repair: distribute Windows engine files over twelve Bun shards instead of eight, with the existing 30-minute step deadline, 30-second per-test deadline, package cwd, preloads and assertions unchanged. No test is skipped or made less strict. A rough redistribution of the logged file durations puts the busiest twelve-way group near 24 minutes, versus nearly 29 minutes for ten groups. That estimate is incomplete because the timed-out job did not reach every file, and future file additions change Bun's assignment; only a fresh complete native run establishes the result. Linux sharding stays unchanged.
 
 Validation: a static check confirms each Windows matrix shard 1–12 appears exactly once, the displayed and executed denominator is 12, and both deadlines remain unchanged; `git diff --check` passes. The combined branch's workflow compliance file passes all 22 tests; no test was skipped. The mandatory pre-push hook checks all packages before publication. A full `test.yml` run on the integrated source remains required. No product code changed for CI7.
+
+
+## 2026-11-01 WP29 — pure workflow core and schema
+
+Implemented the v1 grammar, strict unknown-field validation with nearby-key hints, size and depth checks, supported output-schema checks, template scopes and data envelopes, fixed predicates, DAG/nested expansion, stable content keys, limit accounting, durable progress projection and bounded completion reports. Added browser-safe public Workflow contracts, approval policy compatibility, the schema generator and generated `workflow.json`, website retention and route smoke-check coverage. The guide's three complete examples are exercised directly by the parser tests. Runtime execution, owner-start admission and tool/routes remain WP30–WP32.
+
+Contract clarifications from independent review (recorded in §5.G):
+- `constructor` and `prototype` are reserved stage/input names because template traversal refuses them. Nested input references must name an actual outer input, even when the child input is optional; aggregate condition paths end exactly in `done`, `failed` or `items`.
+- Graph dependencies and completion barriers are separate. A `from` edge participates in DAG validation but can stream; explicit `after`, aggregate conditions and stage-output templates add completion barriers. WP30 handles `wait: all` and sorting as source buffering.
+- Approval metadata includes verifier asks and write placement. A writable verifier with no ownership or worktree marks the stage serial even when its producer is read-only; WP30 must use the same writer gate.
+- A nested saved workflow retains its own resolved limits in `groupLimits`, and each expanded stage names its group. Parent and group limits apply together; unrelated outer stages do not inherit a child's budget. WP30 cannot launch nested work until group accounting is enforced, including resume and verifier calls. Nested result-stage references are validated at their child path, and `groupResults` retains namespaced stage selection, filter and max-items for WP30 group output. This resolves how nested limits combine; they are never silently discarded or used to raise a parent limit.
+- Public node errors/previews and reports validate UTF-8 byte caps, not only character counts. The report caps the total at 64 KiB, omits excess stage summaries with a count, keeps the actual engine artifact path intact, and never cuts a data envelope midway. Node-only planning uses Node crypto/path; browser surfaces consume the public wire schemas. Text byte counts use TextEncoder.
+- The public Plan shape remains §4.5. WP31's approval presentation still must show the shared delegated ceiling in addition to the run USD budget; WP29 does not claim to implement that engine-side presentation.
+
+Evidence (2026-11-01, Linux; one file at a time through `/workspace/.tools/vector-serial`, package cwd, `--timeout 30000`):
+- core: spec 8, template 4, predicate 2, plan 10, limits 3, progress 1, report 4, schema-file 1 — 33 passing cases;
+- schema: workflow 5 and permission-policy 6 — 11 passing cases;
+- web: deployed-schemas 2 passing cases; the first run could not bind loopback under the sandbox, and rerunning with local network permission passed;
+- core and schema typechecks passed; the final core check ran after review fixes, including the targeted nested-result regression rerun; generated workflow.json equals the generator output; diff-check passed.
+
+Permission compatibility uses the actual shipped 1.99.111 policy from `ee6b9a4100bf22113f7edc2a24cd7f3d16d0513b`, identified by successful release run 40236084221. The test fixture is the source file plus a provenance comment. All elevated workflow reasons refuse auto and Always approval under both policies.
+
+Review: workflow_core checked graph/template/input limits; codium_review checked permissions, wire schemas, publication and reports. Findings above were fixed with regressions. This entry records local WP29 evidence, not a publication or full-suite result. Full general CI 41255692359 is running on the preceding integration/CI7 commit 6d34acd7; its result is recorded separately by the coordinating agent.

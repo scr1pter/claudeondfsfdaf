@@ -1271,6 +1271,7 @@ Template refs: item(.seg)*, index, inputs.<name>(.seg)*, stages.<id>.output(.seg
 - **Streaming.** `from` streams: each upstream node's output (at `path`; an array yields one item per element) becomes items as soon as that node settles. `wait: "all"` and `sort_by` buffer until every source stage settles, and `after` is a barrier. With `batch: n`, items arrive as arrays of n, keyed by their member keys.
 - **Stage `if`** gates a whole stage on aggregate state. **Item `when`** gates one item.
 - **Sources.** `changed_files` drops deleted paths unless `include_deleted` is set. `files` skips hidden files unless `hidden` is set, and the plan says so.
+- **Identifiers.** Stage and input identifiers additionally reserve `constructor` and `prototype`; template paths never traverse these properties.
 - **Templates and predicates.** Templates are path lookups only. Predicates are fixed comparisons with one level of all, any or not, and use no regex.
 - **Envelope.** An agent-derived value renders inside `[vector:workflow-data from="<stage>#<label>"]`, then a fixed data-not-instructions line, then `{"value":…}` with `<`, `>`, `@`, `[` and `]` escaped as `\u` sequences, then `[/vector:workflow-data]`. Escaping `@` keeps `resolvePromptParts` from attaching files named in agent output. Escaping the brackets keeps a value from printing a fake closing marker.
 
@@ -1281,7 +1282,8 @@ Template refs: item(.seg)*, index, inputs.<name>(.seg)*, stages.<id>.output(.seg
 - **owned_paths.** A template's agent-derived values must contain no `..` segment, absolute or drive path, backslash or control character. The normalized path must start with the template's literal prefix: the text before the first `{{`.
 - **Sizes.** A model-written spec is at most 32 KiB, with literal items at most 200; the guide says to use `files`, `changed_files` or `from` for large lists. Saved and owner specs are at most 256 KiB.
 - **Graph.** The stages must form a DAG (Kahn), every reference must resolve, and template scopes are checked.
-- **Writer stages.** A writer stage with no `owned_paths` and no worktree is marked `serial`, with a warning.
+- **Writer stages.** A writer stage with no `owned_paths` and no worktree is marked `serial`, with a warning. A writable verifier participates in the same marking, permission disclosure and gate, using its effective isolation and the stage ownership.
+- **Nested limits.** Each expanded saved workflow retains its own resolved limits and counters. They apply to that nested group alongside the parent run limits, including across resume; they never replace or raise the parent limits, and do not restrict unrelated outer stages. WP30 must enforce both before launching a nested producer or verifier.
 
 **G.3 Approval** (the `workflow` tool's ask; `permission: "workflow"`).
 - **Metadata** is the `Plan`:
@@ -1338,6 +1340,7 @@ Template refs: item(.seg)*, index, inputs.<name>(.seg)*, stages.<id>.output(.seg
 - `WorkflowReport.render` writes the header: outcome, agents, duration, cost or "unknown", per-stage counts, and up to 5 failures;
 - line 2 is `Full results: <path>`, so it survives the 3 KB note;
 - the start of the results follows.
+- The complete report stays within 64 KiB of UTF-8. When many nested stages expand, omit excess stage summaries with an explicit count while preserving the header, full artifact path, failures and a complete bounded results envelope. The artifact path is engine-generated and retained exactly; untrusted summary text is escaped separately.
 
 The run ends `error` with partial results when a limit stopped it. `subagent-lifecycle observe` reports the run's usage as its own plus `subagentCost` and `subagentTokens`.
 
