@@ -1,0 +1,250 @@
+// Offline audit reproductions, deliberately outside the product repository.
+// Two BUG tests assert the intended contract and are expected to fail on main 7852605.
+// Only the event persistence boundary is synthetic; normalization, title settlement and the spend guard are production.
+// This does not exercise the processor's full stream loop or a provider's real bill.
+import { describe, expect, test } from "bun:test";
+import {
+  Effect,
+  Layer,
+  Stream,
+} from "__VECTOR_ROOT__/node_modules/effect/dist/index.js";
+import { EventV2 } from "__VECTOR_ROOT__/packages/core/src/event";
+import { LayerNode } from "__VECTOR_ROOT__/packages/core/src/effect/layer-node";
+import { SpendGuard } from "__VECTOR_ROOT__/packages/core/src/spend-guard";
+import { ModelV2 } from "__VECTOR_ROOT__/packages/core/src/model";
+import { ProviderV2 } from "__VECTOR_ROOT__/packages/core/src/provider";
+import { SessionID } from "__VECTOR_ROOT__/packages/schema/src/session-id";
+import { SessionEvent } from "__VECTOR_ROOT__/packages/schema/src/session-event";
+import {
+  LLMEvent,
+  Usage,
+} from "__VECTOR_ROOT__/packages/llm/src/schema/events";
+import { Session } from "__VECTOR_ROOT__/packages/engine/src/session/session";
+import { TitleUsage } from "__VECTOR_ROOT__/packages/engine/src/session/title-usage";
+
+type Model = Parameters<typeof Session.getUsage>[0]["model"];
+// These synthetic rates are test constants, not current provider prices.
+const priced = {
+  id: ModelV2.ID.make("synthetic-accounting"),
+  providerID: ProviderV2.ID.make("synthetic-provider"),
+  cost: { input: 2, output: 10, cache: { read: 0.1, write: 2.5 } },
+} as Model;
+const unlisted = {
+  ...priced,
+  cost: { input: 0, output: 0, cache: { read: 0, write: 0 }, unpriced: true },
+};
+const root = SessionID.make("ses_accounting_probe");
+
+// A local broker with projection callbacks. It performs no database, filesystem or network work.
+// Its purpose is to observe whether the real spend guard subscribes to ancillary usage.
+function broker() {
+  const published: EventV2.Payload[] = [];
+  const projectors = new Map<string, EventV2.Subscriber[]>();
+  const listeners = new Set<EventV2.Subscriber>();
+  const publish: EventV2.Interface["publish"] = (definition, data, options) =>
+    Effect.gen(function* () {
+      const payload = {
+        id: options?.id ?? EventV2.ID.create(),
+        type: definition.type,
+        data,
+      };
+      published.push(payload);
+      yield* Effect.forEach(
+        projectors.get(definition.type) ?? [],
+        (projector) => projector(payload),
+      );
+      yield* Effect.forEach([...listeners], (listener) => listener(payload));
+      return payload;
+    });
+  const events = EventV2.Service.of({
+    publish,
+    project: (definition, projector) =>
+      Effect.sync(() => {
+        projectors.set(definition.type, [
+          ...(projectors.get(definition.type) ?? []),
+          projector as EventV2.Subscriber,
+        ]);
+      }),
+    listen: (listener) =>
+      Effect.sync(() => {
+        listeners.add(listener);
+        return Effect.sync(() => {
+          listeners.delete(listener);
+        });
+      }),
+    subscribe: () => Stream.empty,
+    all: () => Stream.empty,
+    durable: () => Stream.empty,
+    replay: () => Effect.void,
+    replayAll: () => Effect.succeed(undefined),
+    importAll: () => Effect.void,
+    remove: () => Effect.void,
+    claim: () => Effect.void,
+  });
+  return { published, events };
+}
+
+describe("accounting audit: positive controls", () => {
+  test("OpenAI inclusive input/cache and output/reasoning are not double counted", () => {
+    const normalized = Session.getUsage({
+      model: priced,
+      usage: new Usage({
+        inputTokens: 1_000,
+        outputTokens: 120,
+        reasoningTokens: 20,
+        cacheReadInputTokens: 600,
+        cacheWriteInputTokens: 100,
+        totalTokens: 1_120,
+      }),
+    });
+    expect(normalized.tokens).toMatchObject({
+      input: 300,
+      output: 100,
+      reasoning: 20,
+      cache: { read: 600, write: 100 },
+    });
+    expect(normalized.cost).toBeCloseTo(0.00211, 10);
+    expect(normalized.unpriced).toBe(false);
+  });
+
+  test("Anthropic's already-inclusive adapter result prices combined thinking/output once", () => {
+    const normalized = Session.getUsage({
+      model: priced,
+      usage: new Usage({
+        inputTokens: 1_000,
+        outputTokens: 120,
+        cacheReadInputTokens: 600,
+        cacheWriteInputTokens: 100,
+      }),
+    });
+    expect(normalized.tokens).toMatchObject({
+      input: 300,
+      output: 120,
+      reasoning: 0,
+      cache: { read: 600, write: 100 },
+    });
+    expect(normalized.cost).toBeCloseTo(0.00211, 10);
+  });
+
+  test("an explicit zero-cost OpenRouter metadata charge is known, not unknown", () => {
+    const normalized = Session.getUsage({
+      model: unlisted,
+      usage: new Usage({ inputTokens: 100, outputTokens: 10 }),
+      metadata: { openrouter: { usage: { cost: 0 } } },
+    });
+    expect(normalized.cost).toBe(0);
+    expect(normalized.unpriced).toBe(false);
+    console.log(JSON.stringify({ probe: "metadata-zero", actual: normalized }));
+  });
+
+  test("a truly unlisted model with tokens but no reported bill stays unknown", () => {
+    const normalized = Session.getUsage({
+      model: unlisted,
+      usage: new Usage({ inputTokens: 100, outputTokens: 10 }),
+    });
+    expect(normalized.cost).toBe(0);
+    expect(normalized.unpriced).toBe(true);
+  });
+
+  test("title settlement preserves missing-usage uncertainty", async () => {
+    const captured = broker();
+    const title = TitleUsage.create({
+      sessionID: root,
+      model: priced,
+      publish: captured.events.publish,
+    });
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        yield* title.record(
+          LLMEvent.textDelta({
+            id: "synthetic-title",
+            text: "Synthetic title",
+          }),
+        );
+        yield* title.finish();
+      }),
+    );
+    const record = captured.published.find(
+      (event) => event.type === SessionEvent.AncillaryUsage.type,
+    );
+    expect(record?.data).toMatchObject({ unpriced: true, incomplete: true });
+  });
+});
+
+describe("accounting audit: baseline defects (expected red)", () => {
+  test("BUG: a paid response with missing usage must remain unknown instead of measured zero", () => {
+    const normalized = Session.getUsage({
+      model: priced,
+      usage: new Usage({}),
+    });
+    console.log(
+      JSON.stringify({
+        probe: "missing-priced-usage",
+        actual: normalized,
+        expectedUnpriced: true,
+      }),
+    );
+    expect(normalized.unpriced).toBe(true);
+  });
+
+  test("BUG: title spending must count against the actual active guard", async () => {
+    const captured = broker();
+    const layer = LayerNode.compile(SpendGuard.node, [
+      [EventV2.node, Layer.succeed(EventV2.Service, captured.events)],
+    ]);
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const guard = yield* SpendGuard.Service;
+        yield* guard.begin(root, { usd: 0.1 });
+        yield* guard.record(root, {
+          costKind: "priced",
+          costUsd: 0.09,
+          contextTokens: 100,
+          cachedTokens: 0,
+          continues: false,
+          tools: [],
+          patched: false,
+        });
+        const title = TitleUsage.create({
+          sessionID: root,
+          model: priced,
+          publish: captured.events.publish,
+        });
+        yield* title.record(
+          LLMEvent.stepFinish({
+            index: 0,
+            reason: "stop",
+            usage: {
+              inputTokens: 15_000,
+              outputTokens: 0,
+              totalTokens: 15_000,
+            },
+          }),
+        );
+        yield* title.finish();
+        const records = captured.published.filter(
+          (event) => event.type === SessionEvent.AncillaryUsage.type,
+        );
+        const helperCost = records.reduce(
+          (sum, event) => sum + ((event.data as { cost?: number }).cost ?? 0),
+          0,
+        );
+        const snapshot = yield* guard.snapshot(root);
+        const stopped = yield* guard.stopped(root);
+        console.log(
+          JSON.stringify({
+            probe: "title-versus-run-guard",
+            helperCost,
+            actualGuardSpend: snapshot?.spentUsd,
+            expectedGuardSpend: 0.12,
+            actualStop: stopped ?? null,
+            expectedStop: "cap",
+          }),
+        );
+        expect(helperCost).toBeCloseTo(0.03, 10);
+        expect(snapshot?.spentUsd).toBeCloseTo(0.12, 10);
+        expect(stopped?.reason).toBe("cap");
+      }).pipe(Effect.provide(layer)),
+    );
+  });
+});

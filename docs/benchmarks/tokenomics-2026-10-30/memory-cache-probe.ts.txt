@@ -1,0 +1,73 @@
+// Offline, synthetic-only production Brain dependency probe. No model/network calls.
+// It proves Brain.lines() changes the bytes that prompt.ts:3236/3265 fills into old
+// personal/mixed recall parts. It does not invoke the private withheldRecall function
+// or claim a measured provider cache miss. Run only when no other Bun workload runs.
+import fs from "node:fs/promises"
+import os from "node:os"
+import path from "node:path"
+import { createHash } from "node:crypto"
+import { Effect, Layer } from "__VECTOR_ROOT__/node_modules/effect/dist/index.js"
+import { Brain } from "__VECTOR_ROOT__/packages/core/src/brain/brain.ts"
+import { BrainDatabase } from "__VECTOR_ROOT__/packages/core/src/brain/database.ts"
+import { Global } from "__VECTOR_ROOT__/packages/core/src/global.ts"
+
+const directory = await fs.mkdtemp(path.join(os.tmpdir(), "vector-memory-cache-probe-"))
+const config = path.join(directory, "config")
+const data = path.join(directory, "data")
+const root = path.join(directory, "repository")
+await Promise.all([config, data, root].map((item) => fs.mkdir(item, { recursive: true })))
+const place = { repository: "synthetic-cache-probe", root, sources: [], held: false }
+const layer = Brain.layer.pipe(
+  Layer.provideMerge(BrainDatabase.layerFor(":memory:")),
+  Layer.provide(Layer.succeed(Global.Service, Global.make({ config, data }))),
+)
+const hash = (value: string) => createHash("sha256").update(value).digest("hex")
+try {
+  const report = await Effect.runPromise(Effect.gen(function* () {
+    const brain = yield* Brain.Service
+    const saved = yield* brain.propose(place, {
+      kind: "preference",
+      text: "I prefer research reports with side by side comparison tables.",
+      scope: "personal",
+      origin: "user",
+    })
+    if (saved.type === "refused") throw new Error(`Synthetic setup refused: ${saved.reason}`)
+    const recall = yield* brain.recall(place, {
+      query: "research reports comparison tables",
+      budget: 500,
+      personal: true,
+      sessionID: "synthetic-session",
+    })
+    if (!recall.ids.includes(saved.entry.id)) throw new Error("Synthetic personal entry was not recalled")
+    const originalLines = yield* brain.lines(place, recall.ids, { personal: true })
+    const original = Brain.recallText(recall.ids.flatMap((id) => originalLines.get(id) ?? []), { newest: recall.newest })
+    const edit = yield* brain.update(place, saved.entry.id, {
+      text: "I prefer research reports with brief bullet points.",
+    }, "user")
+    if (!edit || edit.type === "refused") throw new Error("Synthetic edit failed")
+    const updatedLines = yield* brain.lines(place, recall.ids, { personal: true })
+    const updated = Brain.recallText(recall.ids.flatMap((id) => updatedLines.get(id) ?? []), { newest: recall.newest })
+    const archived = yield* brain.update(place, saved.entry.id, { action: "archive" }, "user")
+    if (!archived || archived.type === "refused") throw new Error("Synthetic archive failed")
+    const archivedLines = yield* brain.lines(place, recall.ids, { personal: true })
+    const afterArchive = Brain.recallText(recall.ids.flatMap((id) => archivedLines.get(id) ?? []), { newest: recall.newest })
+    return {
+      evidence: "production Brain.recall/lines/update + production Brain.recallText; private engine fill path verified by code only",
+      recalledPersonalIDs: recall.personal?.length ?? 0,
+      sameID: saved.entry.id === edit.entry.id,
+      initialStatus: saved.entry.status,
+      original,
+      updated,
+      afterArchive,
+      byteStableAfterEdit: original === updated,
+      byteStableAfterArchive: original === afterArchive,
+      digests: { original: hash(original), updated: hash(updated), afterArchive: hash(afterArchive) },
+      qualification: "Privacy revocation and forgetting must still remove data; this is not a recommendation to freeze revoked memory.",
+    }
+  }).pipe(Effect.provide(layer)))
+  console.log(JSON.stringify(report, null, 2))
+} finally {
+  // Only the absolute path returned by this probe's own mkdtemp is removed.
+  if (!directory.startsWith(path.join(os.tmpdir(), "vector-memory-cache-probe-"))) throw new Error("Unexpected temporary path")
+  await fs.rm(directory, { recursive: true, force: true })
+}
