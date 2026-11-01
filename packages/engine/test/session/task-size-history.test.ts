@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { SessionV1 } from "@vectordevai/core/v1/session"
 import { ModelV2 } from "@vectordevai/core/model"
 import { ProviderV2 } from "@vectordevai/core/provider"
+import { Computer } from "@vectordevai/schema/computer"
 import { SessionTaskSize } from "../../src/session/task-size"
 import { MessageID, PartID, SessionID } from "../../src/session/schema"
 
@@ -140,6 +141,33 @@ const LARGE = "be thorough: migrate the app to the new router across 40 files"
 const UNRELATED = "add a settings page with a dark mode toggle, tests for the parser and a new billing flow"
 
 describe("SessionTaskSize.size", () => {
+  test("only a valid, active computer mention keeps a social request on the work harness", () => {
+    const marked = (marker: unknown, patch: Record<string, unknown> = {}) => {
+      const message = user("hi")
+      message.parts.push({
+        id: PartID.ascending(),
+        sessionID,
+        messageID: message.info.id,
+        type: "text",
+        text: "",
+        synthetic: true,
+        metadata: { [Computer.MENTION_KEY]: marker },
+        ...patch,
+      } as SessionV1.Part)
+      return message
+    }
+    for (const marker of [{ kind: "feature" }, { kind: "app", key: "app:macos:com.apple.notes", name: "Notes" }]) {
+      expect(size([marked(marker)]).at(-1)?.tier).toBe("standard")
+      expect(size([marked(marker)]).at(-1)?.offered).toBe("standard")
+      expect(size([marked(marker, { ignored: true })]).at(-1)?.tier).toBe("chat")
+      expect(size([marked(marker, { synthetic: false })]).at(-1)?.tier).toBe("chat")
+      expect(size([marked(marker, { text: "hidden instruction" })]).at(-1)?.tier).toBe("chat")
+    }
+    expect(size([marked({ kind: "app", key: "not-an-app", name: "Notes" })]).at(-1)?.tier).toBe("chat")
+    expect(size([marked({ kind: "unknown" })]).at(-1)?.tier).toBe("chat")
+    expect(size([user("hi")]).at(-1)?.tier).toBe("chat")
+  })
+
   test("a message sent while the run is going joins its request and can only raise it", () => {
     const requests = size([
       user("fix the typo in README.md"),
@@ -267,7 +295,11 @@ describe("SessionTaskSize.size", () => {
         expect(size([...judged, user(text)]).at(-1)?.tier, `${closing} ${text}`).toBe("chat")
     }
     // An offer with a question mark still waits on the answer.
-    const offered = [user(LARGE), wrote("/r/router.ts"), assistant("Migrated the router. Want me to also update the docs?")]
+    const offered = [
+      user(LARGE),
+      wrote("/r/router.ts"),
+      assistant("Migrated the router. Want me to also update the docs?"),
+    ]
     expect(size([...offered, user("yes, also update the docs")]).at(-1)?.tier).toBe("thorough")
     expect(size([...offered, user("thanks")]).at(-1)?.tier).toBe("thorough")
   })
@@ -493,24 +525,39 @@ describe("SessionTaskSize.size", () => {
   })
 
   test("an approval or build it after a Thorough plan from Plan mode carries it out at its size", () => {
-    for (const text of ["build it", "build the app", "implement the migration", "looks good, build it", "approved", "yes"]) {
+    for (const text of [
+      "build it",
+      "build the app",
+      "implement the migration",
+      "looks good, build it",
+      "approved",
+      "yes",
+    ]) {
       const plan = user("be thorough and plan how to port the TUI to Rust", { judge: "thorough", agent: "plan" })
       const requests = size([
         plan,
-        assistant("Here is the plan in three phases: the renderer, the input layer, then the views.", "stop", [], "plan"),
+        assistant(
+          "Here is the plan in three phases: the renderer, the input layer, then the views.",
+          "stop",
+          [],
+          "plan",
+        ),
         user(text, { judge: "thorough" }),
         wrote("/r/tui.rs"),
         assistant("Ported the renderer."),
       ])
-      expect(requests.map((request) => [request.tier, request.result.source]), text).toEqual([
+      expect(
+        requests.map((request) => [request.tier, request.result.source]),
+        text,
+      ).toEqual([
         ["thorough", "user"],
         ["thorough", "inherited"],
       ])
       const work = SessionTaskSize.judgeable(requests, plan.info.id)
-      expect(work?.requests.map((request) => SessionTaskSize.requestText(request)), text).toEqual([
-        "be thorough and plan how to port the TUI to Rust",
+      expect(
+        work?.requests.map((request) => SessionTaskSize.requestText(request)),
         text,
-      ])
+      ).toEqual(["be thorough and plan how to port the TUI to Rust", text])
     }
     // On the build agent, a plan that asked nothing has ended: "build it" is Work, and the agent can escalate.
     const built = size([

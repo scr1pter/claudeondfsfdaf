@@ -4,6 +4,15 @@ import { TaskSize } from "../src/task-size"
 const tier = (text: string, input: Partial<TaskSize.Input> = {}) => TaskSize.classify({ text, ...input }).tier
 
 describe("TaskSize.classify", () => {
+  test("an explicit computer mention needs tools even with only a greeting or a chat size choice", () => {
+    for (const text of ["hi", "thanks", ""]) {
+      expect(tier(text, { computer: true }), text).toBe("standard")
+      expect(tier(text, { computer: true, choice: "chat" }), text).toBe("standard")
+      expect(tier(text, { computer: false }), text).toBe(tier(text))
+    }
+    expect(tier("be thorough: check the app", { computer: true })).toBe("thorough")
+  })
+
   test("a social message is a direct reply", () => {
     for (const text of [
       "hi",

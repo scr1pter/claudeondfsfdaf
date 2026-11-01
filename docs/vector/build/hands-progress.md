@@ -4,6 +4,14 @@ The build contract is [hands-build-spec.md](./hands-build-spec.md). Read [hands-
 
 The detailed continuation prompt is [hands-handoff.md](./hands-handoff.md), in the original five-section briefing format. It records the code checkpoint at `49155228`, all remaining work packages and validation boundaries. Implementation resumed from that handoff with D5b, committed on `hands` on top of `50ac11c9`.
 
+## Resumed build checkpoint
+
+At `b904ea97`, 33 of 73 packages are implemented and pushed; D14 is the current package. The historical D5b handoff and the older “commit D13” line below are superseded by this checkpoint. The UI safety/portability review is complete; the remaining automatic-Quick routing issue now has a tested internal task-size correction. The two CI fixtures use controlled timing without relaxing their assertions. These review changes precede D14 and are recorded in the continuation-review deviations.
+
+Focused local checks, run one file at a time: core task-size 20 tests, engine task-size history 26, app task-intelligence 14, app submit 86, and app economics traffic 1 passed. The isolated engine network-guard fixture requires loopback binding, so that file ran with the sandbox network restriction lifted; it did not use external services. App/browser execution remains CI-only. Core, engine, app and browser-fixture typechecks passed, serially. The post-change production comparison and browser execution remain pending in CI.
+
+Fresh full D13 CI [41254671244](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/41254671244) is running. Both unit jobs, including the desktop computer-use step, have passed. The prior Linux count failure and Windows Bun crash did not recur in those jobs; their timing/runtime causes are not inferred to be fixed by that result.
+
 ## Completed and current work
 
 The first 23 work packages, through D6a, are implemented and pushed. D6a in `3bb67725` has passing local model/controller/copy tests, app/browser-fixture typechecks and Linux/Windows browser tests. D5b is committed in `d1c04c5d` with its CI evidence below. D6b (the Settings page) is committed in `48ce11f6`; its focused browser run found one failing case, fixed in the D6b follow-up below. D7 (the share dialog's screenshot opt-in and the public viewer's screenshots) follows it. D8, D9, D10, D11 and D12 follow, each with its own item below.

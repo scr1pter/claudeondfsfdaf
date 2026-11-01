@@ -178,12 +178,12 @@ test("first run: onboarding to Ready, a marked send, each ask, take-over and han
   await expect(dock.getByRole("heading", { name: `Allow ${Hands.NAME} to use Numbers?`, exact: true })).toBeVisible()
   await expect(dock.getByText("You mentioned Numbers in your message.", { exact: true })).toBeVisible()
   const allow = dock.getByRole("button", { name: "Allow", exact: true })
-  await page.clock.runFor(699)
+  await journey.arm(699)
   await expect(allow).toBeDisabled()
   // A forced click bypasses Playwright's enabled wait, not the browser's disabled button.
   await allow.click({ force: true })
   expect(journey.replies).toEqual([])
-  await page.clock.runFor(1)
+  await journey.arm(700)
   await expect(allow).toBeEnabled()
   await allow.click()
   await expect
@@ -248,7 +248,7 @@ test("first run: onboarding to Ready, a marked send, each ask, take-over and han
   await expect(sensitive.getByText("This sends a message.", { exact: true })).toBeVisible()
   await expect(sensitive.getByRole("button", { name: "Always allow", exact: true })).toHaveCount(0)
   const once = sensitive.getByRole("button", { name: "Allow once", exact: true })
-  await page.clock.runFor(700)
+  await journey.arm(700)
   await expect(once).toBeEnabled()
   await once.focus()
   await page.keyboard.press("Enter")
@@ -417,11 +417,11 @@ test("second run: Always allow, Stop on the card, then Settings lists Numbers", 
   await pushState(page, holding(0, { phase: "asking", ask: askState(ask.id, "app") }))
   const dock = await journey.ask(ask)
   const always = dock.getByRole("button", { name: "Always allow", exact: true })
-  await page.clock.runFor(699)
+  await journey.arm(699)
   await expect(always).toBeDisabled()
   await always.click({ force: true })
   expect(journey.replies).toEqual([])
-  await page.clock.runFor(1)
+  await journey.arm(700)
   await expect(always).toBeEnabled()
   await always.click()
   await expect.poll(() => journey.replies).toEqual([{ path: `/permission/${ask.id}/reply`, body: { reply: "always" } }])
@@ -755,6 +755,7 @@ async function openJourney(
   const turn = { parentID: "", steps: [] as string[] }
   const close = (outcome: Outcome) =>
     message(assistant(turn.steps.at(-1)!, turn.parentID, START + turn.steps.length * 1_000, outcome))
+  let armAt: number | undefined
 
   return {
     composer,
@@ -834,20 +835,45 @@ async function openJourney(
       await status("busy")
     },
     /**
-     * Raises an ask with the page clock held from just before it lands, so the 700 ms arm starts at a known time.
-     * The SDK's first event flush is a zero-delay timer; it is drained without moving the clock.
+     * Raises an ask with the page clock held. Observe when its dock is inserted, then measure the 700 ms arm from
+     * that instant. The SDK can flush up to 16 ms after its previous batch, so a zero-delay drain can leave the ask
+     * queued forever. Advancing the queue must not count that delivery time toward the arm assertions.
      */
     async ask(request: PermissionRequest) {
       await beat()
       await page.clock.pauseAt((await page.evaluate(() => Date.now())) + 1000)
-      await asked(request)
-      await expect
-        .poll(async () => {
-          await page.clock.runFor(0)
-          return dock.isVisible()
+      const shown = await page.evaluateHandle(() => {
+        const state: { at?: number } = {}
+        const observer = new MutationObserver(() => {
+          if (!document.querySelector('[data-component="dock-prompt"][data-kind="permission"]')) return
+          state.at = Date.now()
+          observer.disconnect()
         })
-        .toBe(true)
+        observer.observe(document.body, { childList: true, subtree: true })
+        return { state, dispose: () => observer.disconnect() }
+      })
+      try {
+        await asked(request)
+        await expect
+          .poll(async () => {
+            await page.clock.runFor(16)
+            return dock.isVisible()
+          })
+          .toBe(true)
+        armAt = await shown.evaluate(({ state }) => state.at)
+        expect(armAt).toBeDefined()
+      } finally {
+        await shown.evaluate(({ dispose }) => dispose())
+        await shown.dispose()
+      }
       return dock
+    },
+    /** Advance to an exact elapsed time from the current ask's observed appearance, not its network delivery. */
+    async arm(ms: number) {
+      if (armAt === undefined) throw new Error("The journey has not shown an ask")
+      const remaining = armAt + ms - (await page.evaluate(() => Date.now()))
+      expect(remaining).toBeGreaterThanOrEqual(0)
+      await page.clock.runFor(remaining)
     },
   }
 }

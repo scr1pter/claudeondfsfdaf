@@ -2126,6 +2126,32 @@ describe("computer mention send gate", () => {
     expect(capabilityCalls).toEqual([])
   })
 
+  test("a social app name in a real computer pill keeps submit and dispatch off the quick lane", async () => {
+    params = { id: "session-1" }
+    promptValue = [
+      { type: "text", content: "hi ", start: 0, end: 3 },
+      {
+        type: "computer",
+        content: "@Hello",
+        start: 3,
+        end: 9,
+        app: { key: "app:macos:com.example.hello", name: "Hello" },
+      },
+    ]
+    platformComputer = readyComputer()
+    await submitFor().handleSubmit(event)
+    await settle()
+    expect(sentPrompts).toHaveLength(1)
+    expect(sentPrompts[0].input.agent).toBe("agent")
+    expect(sentPrompts[0].input.parts?.filter((part) => part.metadata?.[Hands.MARKER])).toMatchObject([
+      {
+        metadata: {
+          [Hands.MARKER]: { kind: "app", key: "app:macos:com.example.hello", name: "Hello" },
+        },
+      },
+    ])
+  })
+
   test("a second Enter while the gate is pending sends the message once", async () => {
     params = { id: "session-1" }
     promptValue = marked()

@@ -5,7 +5,8 @@
 // refresh queue re-bootstraps a directory), the economics recorder and the layout's status reconciliation. Set
 // VECTOR_TRAFFIC_REPORT=1 to print the counts, and VECTOR_TRAFFIC_PROVIDER_BODY to serve a real /provider body for
 // byte counts.
-import { expect, test } from "bun:test"
+import { afterEach, beforeEach, expect, test, vi } from "bun:test"
+import { setImmediate } from "node:timers"
 import { QueryClient } from "@tanstack/solid-query"
 import { createStore } from "solid-js/store"
 import { createVectorClient, type Event } from "@vectordevai/sdk/v2/client"
@@ -19,6 +20,12 @@ import { createSessionEconomics } from "./session-economics"
 
 const directory = "/repo"
 const model = { providerID: "openai", modelID: "gpt-6.1" }
+const nextTask = setImmediate
+
+// Step pacing and the live ancestor meter's debounce must use the same clock. Wall-clock work on a loaded runner
+// must not turn the script's three-step burst into two bursts and add a legitimate metadata read.
+beforeEach(() => vi.useFakeTimers())
+afterEach(() => vi.useRealTimers())
 
 type Info = Record<string, unknown> & { id: string; time: { created: number; updated: number }; parentID?: string }
 type Entry = { info: Record<string, unknown> & { id: string }; parts: Record<string, unknown>[] }
@@ -180,7 +187,9 @@ function createApp(engine: ReturnType<typeof createEngine>) {
 async function settle(engine: ReturnType<typeof createEngine>) {
   for (let quiet = 0; quiet < 3; ) {
     const before = engine.requests.length
-    await Bun.sleep(25)
+    vi.advanceTimersByTime(25)
+    // Let SDK response parsing and its promise chain settle without advancing the controlled app clock.
+    await new Promise<void>((resolve) => nextTask(resolve))
     quiet = engine.state.inflight === 0 && engine.requests.length === before ? quiet + 1 : 0
   }
 }
@@ -382,7 +391,7 @@ async function runSession(providerBody: string) {
     const start = engine.requests.length
     await run()
     // Include the live ancestor meter's 400ms coalescing window in this phase, not the following review.
-    await Bun.sleep(425)
+    vi.advanceTimersByTime(425)
     await settle(engine)
     phases.push({ name, requests: engine.requests.slice(start) })
   }

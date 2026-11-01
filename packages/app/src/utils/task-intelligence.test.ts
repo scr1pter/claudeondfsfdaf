@@ -112,6 +112,7 @@ describe("task intelligence", () => {
       expect(classifyTaskDifficulty(text, { images: 1 }), text).toBe("standard")
       expect(classifyTaskDifficulty(text, { files: 1 }), text).toBe("standard")
       expect(classifyTaskDifficulty(text, { agents: ["explore"] }), text).toBe("standard")
+      expect(classifyTaskDifficulty(text, { computer: true }), text).toBe("standard")
     }
   })
 
@@ -156,7 +157,12 @@ describe("task intelligence", () => {
   })
 
   test("a plan waits on the user until a reply that is not a greeting's comes from another agent", () => {
-    const reply = (id: string, extra: object) => ({ id, role: "assistant", time: { created: 1, completed: 2 }, ...extra })
+    const reply = (id: string, extra: object) => ({
+      id,
+      role: "assistant",
+      time: { created: 1, completed: 2 },
+      ...extra,
+    })
     const user = { id: "u", role: "user", time: { created: 0 } }
     expect(planPending([user, reply("p", { agent: "plan" })])).toBe(true)
     // A thanks and its quick reply in between are not the work.

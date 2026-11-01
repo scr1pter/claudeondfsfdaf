@@ -129,13 +129,14 @@ const draftText = (prompt: Prompt) => prompt.map((part) => ("content" in part ? 
 const draftImages = (prompt: Prompt) => prompt.filter((part): part is ImageAttachmentPart => part.type === "image")
 
 // What a message carries besides its text, as the engine counts it when it sizes the message: a greeting with a
-// screenshot, a file or a named subagent is never a bare reply.
+// screenshot, a file, a named subagent or a computer pill is never a bare reply.
 const attachments = (prompt: Prompt, context: readonly unknown[]) => {
   const images = draftImages(prompt).filter((part) => part.mime.startsWith("image/")).length
   return {
     images,
     files: prompt.filter((part) => part.type === "file" || part.type === "image").length - images + context.length,
     agents: prompt.flatMap((part) => (part.type === "agent" ? [part.name] : [])),
+    computer: ComputerSendGate.marked(prompt),
   }
 }
 
@@ -149,7 +150,8 @@ export async function sendFollowupDraft(input: FollowupSendInput) {
   const images = draftImages(input.draft.prompt)
   const messages = input.sync.data.message?.[input.draft.sessionID] ?? []
   const difficulty =
-    input.draft.difficulty ??
+    // A cached composer hint can predate computer-aware sizing. The structured draft is authoritative at dispatch.
+    (ComputerSendGate.marked(input.draft.prompt) ? undefined : input.draft.difficulty) ??
     classifyTaskDifficulty(text, {
       open: workOpen(messages, (id) => input.sync.data.part?.[id]),
       plan: planPending(messages),
