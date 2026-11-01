@@ -99,11 +99,12 @@ exports[`workflow v3 Codium golden, header, and explicit permissions 1`] = `
             "VECTOR_MODE": "codium",
             "VECTOR_WORKFLOW_VERSION": "3",
           },
+          "id": "sandbox_finish",
           "if": "always()",
           "run": "vector github sandbox finish",
         },
         {
-          "if": "always() && steps.agent.outcome != 'skipped'",
+          "if": "always() && steps.agent.outcome != 'skipped' && steps.sandbox_finish.outcome == 'success'",
           "uses": "actions/upload-artifact@v4",
           "with": {
             "name": "vector-run-\${{ github.run_id }}-\${{ github.run_attempt }}",
@@ -112,7 +113,7 @@ exports[`workflow v3 Codium golden, header, and explicit permissions 1`] = `
           },
         },
         {
-          "if": "always() && steps.agent.outcome != 'skipped'",
+          "if": "always() && steps.agent.outcome != 'skipped' && steps.sandbox_finish.outcome == 'success'",
           "uses": "actions/upload-artifact@v4",
           "with": {
             "if-no-files-found": "ignore",
@@ -475,11 +476,12 @@ exports[`workflow v3 own key auto-review golden, header, and explicit permission
             "VECTOR_MODE": "own-key",
             "VECTOR_WORKFLOW_VERSION": "3",
           },
+          "id": "sandbox_finish",
           "if": "always()",
           "run": "vector github sandbox finish",
         },
         {
-          "if": "always() && steps.agent.outcome != 'skipped'",
+          "if": "always() && steps.agent.outcome != 'skipped' && steps.sandbox_finish.outcome == 'success'",
           "uses": "actions/upload-artifact@v4",
           "with": {
             "name": "vector-run-\${{ github.run_id }}-\${{ github.run_attempt }}",
@@ -846,11 +848,12 @@ exports[`workflow v3 scheduled App publishing golden, header, and explicit permi
             "VECTOR_MODE": "own-key",
             "VECTOR_WORKFLOW_VERSION": "3",
           },
+          "id": "sandbox_finish",
           "if": "always()",
           "run": "vector github sandbox finish",
         },
         {
-          "if": "always() && steps.agent.outcome != 'skipped'",
+          "if": "always() && steps.agent.outcome != 'skipped' && steps.sandbox_finish.outcome == 'success'",
           "uses": "actions/upload-artifact@v4",
           "with": {
             "name": "vector-run-\${{ github.run_id }}-\${{ github.run_attempt }}",

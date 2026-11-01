@@ -665,10 +665,15 @@ export function buildAgentsWorkflow(options: AgentsWorkflowOptions): string {
       shell,
       env: agentEnv,
     },
-    { run: "vector github sandbox finish", if: "always()", env: { ...base, VECTOR_MODE: opts.mode } },
+    {
+      id: "sandbox_finish",
+      run: "vector github sandbox finish",
+      if: "always()",
+      env: { ...base, VECTOR_MODE: opts.mode },
+    },
     {
       uses: "actions/upload-artifact@v4",
-      if: "always() && steps.agent.outcome != 'skipped'",
+      if: "always() && steps.agent.outcome != 'skipped' && steps.sandbox_finish.outcome == 'success'",
       with: {
         path: "${{ runner.temp }}/vector-out/",
         name: "vector-run-${{ github.run_id }}-${{ github.run_attempt }}",
@@ -679,7 +684,7 @@ export function buildAgentsWorkflow(options: AgentsWorkflowOptions): string {
       ? [
           {
             uses: "actions/upload-artifact@v4",
-            if: "always() && steps.agent.outcome != 'skipped'",
+            if: "always() && steps.agent.outcome != 'skipped' && steps.sandbox_finish.outcome == 'success'",
             with: {
               path: "${{ runner.temp }}/vector-session/",
               name: "vector-session-${{ needs.route.outputs.thread }}",

@@ -25,6 +25,7 @@ on:
       - packages/web/test/github-*.ts
       - packages/web/test/cloud-agents-*.ts
       - packages/engine/test/cli/github*.ts
+      - packages/engine/test/fixture/sandbox-*.ts
       - packages/engine/test/tool/registry*.ts
       - packages/core/test/github-agents.test.ts
       - packages/core/test/review/**
@@ -192,3 +193,96 @@ jobs:
         working-directory: packages/engine
         timeout-minutes: 5
         run: node script/smoke-node-bundle.ts
+
+  sandbox-probe:
+    name: sandbox (${{ matrix.mode }}, ${{ matrix.scenario }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - mode: codium
+            scenario: success
+          - mode: own-key
+            scenario: success
+          - mode: codium
+            scenario: bundle-refusal
+          - mode: codium
+            scenario: cancelled
+    env:
+      VECTOR_MODE: ${{ matrix.mode }}
+      VECTOR_SECRET_ENV_NAMES: DEEPSEEK_KEY
+      GITHUB_TOKEN: probe-github-private-92bc
+      VECTOR_CLI_TOKEN: vct_probe.signature
+      DEEPSEEK_KEY: probe-provider-private-44de
+      ACTIONS_ID_TOKEN_REQUEST_TOKEN: probe-oidc-private-73af
+      PROBE_SCENARIO: ${{ matrix.scenario }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+
+      - name: Setup Bun
+        uses: ./.github/actions/setup-bun
+        with:
+          install-flags: --frozen-lockfile
+
+      - name: Compile and install the disposable probe harness
+        run: |
+          set -euo pipefail
+          mkdir -m 700 "$RUNNER_TEMP/vector-probe-tools"
+          bun packages/engine/src/index.ts github sandbox --help > "$RUNNER_TEMP/vector-probe-tools/cli-help.txt" 2>&1
+          rg -q 'prepare' "$RUNNER_TEMP/vector-probe-tools/cli-help.txt"
+          rg -q 'run' "$RUNNER_TEMP/vector-probe-tools/cli-help.txt"
+          rg -q 'finish' "$RUNNER_TEMP/vector-probe-tools/cli-help.txt"
+          bun build --target=node packages/engine/test/fixture/sandbox-runner.ts --outfile "$RUNNER_TEMP/vector-probe-tools/runner.mjs"
+          bun build --target=node packages/engine/test/fixture/sandbox-probe.ts --outfile "$RUNNER_TEMP/vector-probe-tools/probe.mjs"
+          sudo -n install -m 0555 "$RUNNER_TEMP/vector-probe-tools/probe.mjs" /opt/vector-sandbox-probe.mjs
+          node "$RUNNER_TEMP/vector-probe-tools/runner.mjs" --install
+
+      - name: Prepare the agent sandbox
+        run: vector github sandbox prepare
+
+      - name: Run the unprivileged probe
+        id: agent
+        shell: env -u ACTIONS_ID_TOKEN_REQUEST_URL -u ACTIONS_ID_TOKEN_REQUEST_TOKEN bash --noprofile --norc -eo pipefail {0}
+        run: |
+          if [ "$PROBE_SCENARIO" = bundle-refusal ]; then
+            vector github sandbox run -- node /opt/vector-sandbox-probe.mjs --bundle-refusal
+          else
+            vector github sandbox run -- node /opt/vector-sandbox-probe.mjs
+          fi
+
+      - name: Observe the synthetic probe report
+        if: always()
+        run: node "$RUNNER_TEMP/vector-probe-tools/runner.mjs" --observe
+
+      - name: Finish the agent sandbox
+        id: sandbox_finish
+        if: always()
+        continue-on-error: true
+        run: vector github sandbox finish
+
+      - name: Artifact boundary sentinel
+        id: artifact_boundary
+        if: always() && steps.agent.outcome != 'skipped' && steps.sandbox_finish.outcome == 'success'
+        working-directory: ${{ runner.temp }}
+        run: touch "$RUNNER_TEMP/vector-probe-tools/upload-allowed"
+
+      - name: Assert isolation, crash protection and cleanup
+        if: always()
+        working-directory: ${{ runner.temp }}
+        env:
+          PROBE_FINISH_OUTCOME: ${{ steps.sandbox_finish.outcome }}
+          PROBE_UPLOAD_OUTCOME: ${{ steps.artifact_boundary.outcome }}
+        run: node /opt/vector-sandbox-probe.mjs --assert

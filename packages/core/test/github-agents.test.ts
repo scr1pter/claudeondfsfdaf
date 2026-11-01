@@ -254,6 +254,8 @@ describe("credentials", () => {
         "RUNNER_OS",
         "MENTIONS",
         "MODEL",
+        "SHARE",
+        "VECTOR_SHARE_CONSENT",
         "VECTOR_MODE",
         "VECTOR_THREAD",
         "VECTOR_PROMPT",

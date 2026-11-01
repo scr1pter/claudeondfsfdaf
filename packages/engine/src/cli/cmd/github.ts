@@ -40,6 +40,25 @@ export const GithubBindCommand = effectCmd({
     }),
 })
 
+export const GithubSandboxCommand = effectCmd({
+  command: "sandbox <action>",
+  describe: "isolate a GitHub Actions agent and collect its bundle",
+  builder: (yargs) =>
+    yargs
+      .positional("action", { choices: ["prepare", "run", "finish"] as const, demandOption: true })
+      .parserConfiguration({ "populate--": true }),
+  instance: false,
+  handler: (args) =>
+    Effect.gen(function* () {
+      const sandbox = yield* Effect.promise(() => import("./github.sandbox"))
+      if (args.action === "run") {
+        process.exitCode = yield* Effect.promise(() => sandbox.run(args["--"] ?? []))
+        return
+      }
+      return yield* Effect.promise(() => (args.action === "prepare" ? sandbox.prepare() : sandbox.finish()))
+    }),
+})
+
 // Capture workflow consent before project configuration and plugins are loaded.
 const sharing = new WeakMap<object, PublicSession.Consent | undefined>()
 
@@ -113,6 +132,7 @@ export const GithubCommand = cmd({
       .command(GithubReviewCommand)
       .command(GithubMintCommand)
       .command(GithubBindCommand)
+      .command(GithubSandboxCommand)
       .demandCommand(),
   async handler() {},
 })

@@ -133,6 +133,10 @@ describe("release workflow supply-chain policy", () => {
 // requests, so this lane is the only CI the build branch's pushes get, and each work package cites its result.
 describe("@vector CI lane", () => {
   type Step = {
+    id?: string
+    if?: string
+    shell?: string
+    "continue-on-error"?: boolean
     uses?: string
     run?: string
     env?: Record<string, string>
@@ -140,6 +144,8 @@ describe("@vector CI lane", () => {
     "working-directory"?: string
   }
   type Job = {
+    "runs-on"?: string
+    strategy?: { matrix?: { include?: Array<{ mode: string; scenario: string }> } }
     environment?: unknown
     permissions?: unknown
     services?: Record<string, { image?: string; ports?: unknown[] }>
@@ -298,6 +304,40 @@ describe("@vector CI lane", () => {
     expect(step?.["working-directory"]).toBe("packages/web")
     expect(step?.env?.VECTOR_TEST_REDIS_URL).toBe("redis://127.0.0.1:6379")
     expect(api?.services?.valkey?.ports).toEqual(["6379:6379"])
+  })
+
+  test("the hosted sandbox probe covers both credential domains and refuses upload after cleanup failure", async () => {
+    const job = (await lane()).jobs["sandbox-probe"]
+    expect(job?.["runs-on"]).toBe("ubuntu-24.04")
+    expect(job?.strategy?.matrix?.include).toEqual([
+      { mode: "codium", scenario: "success" },
+      { mode: "own-key", scenario: "success" },
+      { mode: "codium", scenario: "bundle-refusal" },
+      { mode: "codium", scenario: "cancelled" },
+    ])
+    const steps = job?.steps ?? []
+    const agent = steps.findIndex((step) => step.id === "agent")
+    const finish = steps.findIndex((step) => step.id === "sandbox_finish")
+    const boundary = steps.findIndex((step) => step.id === "artifact_boundary")
+    expect(agent).toBeGreaterThan(steps.findIndex((step) => step.run === "vector github sandbox prepare"))
+    expect(steps[agent]?.shell).toBe(
+      "env -u ACTIONS_ID_TOKEN_REQUEST_URL -u ACTIONS_ID_TOKEN_REQUEST_TOKEN bash --noprofile --norc -eo pipefail {0}",
+    )
+    expect(finish).toBeGreaterThan(agent)
+    expect(steps[finish]).toMatchObject({
+      if: "always()",
+      run: "vector github sandbox finish",
+      "continue-on-error": true,
+    })
+    expect(boundary).toBeGreaterThan(finish)
+    expect(steps[boundary]?.if).toBe(
+      "always() && steps.agent.outcome != 'skipped' && steps.sandbox_finish.outcome == 'success'",
+    )
+    expect(steps.at(-1)).toMatchObject({
+      if: "always()",
+      run: "node /opt/vector-sandbox-probe.mjs --assert",
+      "working-directory": "${{ runner.temp }}",
+    })
   })
 })
 

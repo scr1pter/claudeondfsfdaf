@@ -694,11 +694,14 @@ describe("workflow v3", () => {
       )
       expect(steps[agent]!.run).toBe("vector github sandbox run -- vector github run --phase agent")
       expect(steps[finish]!.if).toBe("always()")
+      expect(steps[finish]!.id).toBe("sandbox_finish")
       for (const [index, step] of steps.entries())
         if (step.uses === "actions/upload-artifact@v4") {
           expect(index).toBeGreaterThan(finish)
           expect(step.with!.path).toMatch(/^\$\{\{ runner.temp \}\}\/vector-(out|session)\/$/)
-          expect(step.if).toBe("always() && steps.agent.outcome != 'skipped'")
+          expect(step.if).toBe(
+            "always() && steps.agent.outcome != 'skipped' && steps.sandbox_finish.outcome == 'success'",
+          )
         }
       expect(steps.filter((step) => step.uses === "actions/upload-artifact@v4")).toHaveLength(codium ? 2 : 1)
       expect(steps[agent]!.env!.VECTOR_PROMPT).toBe("${{ inputs.prompt }}")
