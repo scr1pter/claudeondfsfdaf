@@ -225,7 +225,9 @@ function integrationTests() {
       expect(Buffer.from(issued.code.slice(4), "base64url")).toHaveLength(32)
       expect(issued.expiresAt).toBe(T + 600_000)
       const key = `${PREFIX}bind-code:${sha256(issued.code)}`
-      expect(commands).toEqual([["SET", key, expect.any(String), "EX", "600", "NX"]])
+      expect(commands).toEqual([
+        ["EVAL", expect.any(String), "2", key, `vector:cli-revoked:${account}`, expect.any(String), "600"],
+      ])
       expect(commands.flat().some((part) => part.includes(issued.code.slice(4)))).toBe(false)
       const raw = (await redis.send("GET", [key])) as string
       expect(JSON.parse(raw)).toStrictEqual({

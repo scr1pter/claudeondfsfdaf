@@ -13,6 +13,7 @@ import {
   takeoverAllowed,
 } from "./cloud-agents-binding.js"
 import { cloudAgentEntitlement } from "./cloud-agents-entitlement.js"
+import { listCloudRuns } from "./cloud-agents-runs.js"
 import { githubProof } from "./github-api.js"
 import { githubApp, type createGithubApp } from "./github-app.js"
 import { githubApiVersion, githubId, githubRecord, githubResponseBytes, githubUnavailable } from "./github-http.js"
@@ -196,6 +197,12 @@ export function createCloudAgentsApi(
     json(response, 200, { ok: true })
   }
 
+  async function runs(request: ApiRequest, response: ApiResponse) {
+    const user = await account(request, response, "GET")
+    await readLimit(request, response, user.id)
+    json(response, 200, { runs: await listCloudRuns(user.id, {}, store) })
+  }
+
   async function publicDefaultBranch(identity: GithubIdentity) {
     if (identity.repositoryVisibility !== "public") throw needsDefaultBranch()
     const key = `vector:cloud-agents:default-branch:${identity.repositoryId}`
@@ -258,7 +265,13 @@ export function createCloudAgentsApi(
       throw storeUnavailable()
   }
 
-  return { bindCode: safe(bindCode), bind: safe(bind), bindings: safe(bindings), unbind: safe(unbind) }
+  return {
+    bindCode: safe(bindCode),
+    bind: safe(bind),
+    bindings: safe(bindings),
+    unbind: safe(unbind),
+    runs: safe(runs),
+  }
 }
 
 async function ipLimit(request: ApiRequest, response: ApiResponse) {

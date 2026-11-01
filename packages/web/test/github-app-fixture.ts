@@ -264,9 +264,11 @@ export async function githubAppFixture(input: { store?: typeof persistentStore }
           const saved = state.cache.get(key)
           return saved && saved.until > state.clock ? saved.value : null
         }
-        expect(command[0]).toBe("SET")
-        expect(command.slice(3)).toEqual(["EX", 3600])
-        state.cache.set(key, { value: String(command[2]), until: state.clock + 3_600_000 })
+        expect(command[0]).toBe("EVAL")
+        expect(command[2]).toBe("2")
+        expect(String(command[4]).startsWith("vector:cli-revoked:")).toBe(true)
+        expect(command[6]).toBe(3600)
+        state.cache.set(String(command[3]), { value: String(command[5]), until: state.clock + 3_600_000 })
         return "OK"
       }),
   })

@@ -137,10 +137,24 @@ export async function createBindCode(
     ...(input.defaultRef === undefined ? {} : { defaultRef: input.defaultRef }),
     exp,
   })
-  const reply = await store(["SET", codeKey(code), record, "EX", String(GithubAgents.BIND_CODE_SECONDS), "NX"])
+  const reply = await store([
+    "EVAL",
+    ISSUE_CODE,
+    "2",
+    codeKey(code),
+    `vector:cli-revoked:${input.account}`,
+    record,
+    GithubAgents.BIND_CODE_SECONDS,
+  ])
+  if (reply === "revoked") throw new ApiError(401, "CLI_TOKEN_INVALID", "Sign in to Vector again to continue.")
   if (reply !== "OK") throw storeUnavailable()
   return { code, expiresAt: exp }
 }
+
+const ISSUE_CODE = `
+if redis.call('GET', KEYS[2]) then return 'revoked' end
+return redis.call('SET', KEYS[1], ARGV[1], 'EX', ARGV[2], 'NX')
+`
 
 /** Every refusal is the same 403, whatever its cause, and nothing is consumed. */
 export async function peekBindCode(code: string, identity: BindIdentity, now = Date.now(), store = persistentStore) {
@@ -208,13 +222,14 @@ export async function recordRepoBinding(input: RedeemInput, store = persistentSt
   const reply = await store([
     "EVAL",
     REDEEM,
-    "6",
+    "7",
     codeKey(input.code),
     bindingKey(identity.repositoryId),
     generationKey(identity.repositoryId),
     accountKey(input.account),
     accountKey(input.current ?? input.account),
     binderLeftKey(input.account),
+    `vector:cli-revoked:${input.account}`,
     String(input.now),
     input.account,
     input.current ?? "",
@@ -329,10 +344,11 @@ export async function suspendBinding(
   const reply = await store([
     "EVAL",
     SUSPEND,
-    "3",
+    "4",
     bindingKey(binding.repositoryId),
     generationKey(binding.repositoryId),
     binderLeftKey(binding.account),
+    `vector:cli-revoked:${binding.account}`,
     reason,
     String(binding.generation),
     binding.account,
@@ -373,10 +389,11 @@ local reasons = { transferred = true, deleted = true, ['binder-left'] = true }
 `
 
 // KEYS: the code, the binding, the generation, the code account's set, the set of the account the caller judged
-// (the code account's own set when there was none), the code account's binder-left set. ARGV: now, account, judged
+// (the code account's own set when there was none), the code account's binder-left set, its revocation key. ARGV: now, account, judged
 // account or "", repository, repository id, owner id, actor, actor id, ref, visibility, workflow version, admin
 // verified, allowance inactive, O6 window.
 const REDEEM = `${STORED_RULES}
+if redis.call('GET', KEYS[7]) then return 'code' end
 local raw = redis.call('GET', KEYS[1])
 if not raw then return 'code' end
 local decoded, code = pcall(cjson.decode, raw)
@@ -445,7 +462,7 @@ if tonumber(ARGV[1]) > last then redis.call('HSET', KEYS[1], 'lastUsedAt', ARGV[
 return 1
 `
 
-// KEYS: the binding, the generation, the read account's binder-left set. ARGV: the reason, and the generation,
+// KEYS: the binding, the generation, the read account's binder-left set, its revocation key. ARGV: the reason, and the generation,
 // account and repository id of the binding the caller read. That binding keeps its generation until its own first
 // suspension moves it by one; every rebind, takeover, unbind or bind after an unbind moves it too and clears the
 // suspension, so a stored binding that is neither, or that names another account, is a later one, and it and the
@@ -454,6 +471,7 @@ return 1
 // repository: the set then ends as if this script had run first. Only a later binding of the account's own skips it;
 // its binder had write access when it bound, and its bind clears the member anyway.
 const SUSPEND = `${STORED_RULES}
+if redis.call('GET', KEYS[4]) then return 'stale' end
 local expected = tonumber(ARGV[2])
 -- On these two late paths the SADD is the only write, so a set of another type fails the script with nothing written.
 if redis.call('EXISTS', KEYS[1]) == 0 then

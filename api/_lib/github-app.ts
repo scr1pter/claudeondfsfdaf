@@ -43,6 +43,7 @@ export type GithubRunVerification = {
   thread: string
   bot?: boolean
   binder: { githubId: string; login: string }
+  account: string
   defaultRef: string
   generation: number
 }
@@ -55,6 +56,8 @@ const validationPermissions = {
   metadata: "read",
 } as const
 const githubApi = "https://api.github.com"
+const saveBinderCache =
+  "if redis.call('GET', KEYS[2]) then return 'revoked' end; return redis.call('SET', KEYS[1], ARGV[1], 'EX', ARGV[2])"
 
 export function githubAppConfiguration(
   env: Record<string, string | undefined> = process.env,
@@ -468,7 +471,11 @@ export function createGithubApp(
     token: string,
   ): Promise<"ok" | "binder-left"> {
     const key = `vector:cloud-agents:binder-ok:${identity.repositoryId}`
-    const value = JSON.stringify({ githubId: githubId(options.binder.githubId), generation: options.generation })
+    const value = JSON.stringify({
+      account: options.account,
+      githubId: githubId(options.binder.githubId),
+      generation: options.generation,
+    })
     const read = await Promise.resolve()
       .then(() => store(["GET", key]))
       .catch(() => {
@@ -488,7 +495,10 @@ export function createGithubApp(
         !cached ||
         typeof cached !== "object" ||
         Array.isArray(cached) ||
-        Object.keys(cached).length !== 2 ||
+        Object.keys(cached).length !== ("account" in cached ? 3 : 2) ||
+        ("account" in cached &&
+          (typeof cached.account !== "string" ||
+            !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(cached.account))) ||
         !("githubId" in cached) ||
         !("generation" in cached) ||
         typeof cached.githubId !== "string" ||
@@ -499,6 +509,7 @@ export function createGithubApp(
       )
         throw storeUnavailable()
     }
+    // Legacy caches have no account attribution. Never reuse them; a fresh successful check writes the new format.
     const user = await api(`/user/${options.binder.githubId}`, token, { missing: true })
     if (!user) return "binder-left"
     if (
@@ -514,7 +525,7 @@ export function createGithubApp(
     if (githubId(checked.id) !== options.binder.githubId || checked.login !== user.login) throw githubUnavailable()
     if (!["write", "maintain", "admin"].includes(String(permission.permission))) return "binder-left"
     const saved = await Promise.resolve()
-      .then(() => store(["SET", key, value, "EX", 3600]))
+      .then(() => store(["EVAL", saveBinderCache, "2", key, `vector:cli-revoked:${options.account}`, value, 3600]))
       .catch(() => {
         throw storeUnavailable()
       })
@@ -532,6 +543,7 @@ export function createGithubApp(
         identity.audience !== githubOidcAudiences.mint ||
         !["agent", "review"].includes(options.job) ||
         !GithubAgents.THREAD_PATTERN.test(options.thread) ||
+        !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(options.account) ||
         !Number.isSafeInteger(options.generation) ||
         options.generation < 1
       )

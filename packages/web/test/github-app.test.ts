@@ -175,6 +175,7 @@ async function runFixture(event = "issue_comment") {
     thread: "17",
     commentId: 123,
     binder: { githubId: "790", login: "fixture-binder" },
+    account: crypto.randomUUID(),
     defaultRef: "refs/heads/main",
     generation: 1,
   }
@@ -216,7 +217,7 @@ test("run verification revokes its only credential and caches only the current b
     installed: true,
     binder: "binder-left",
   })
-  expect(fixture.state.storeCommands.filter((x) => x[0] === "SET")).toHaveLength(1)
+  expect(fixture.state.storeCommands.filter((x) => x[0] === "EVAL")).toHaveLength(1)
 })
 
 test("a cache for a former binder never authorizes a replacement binder", async () => {
@@ -230,6 +231,30 @@ test("a cache for a former binder never authorizes a replacement binder", async 
       binder: { githubId: "791", login: "fixture-binder" },
     }),
   ).toEqual({ installed: true, binder: "binder-left" })
+})
+
+test("another account and an unattributable legacy cache require a fresh binder permission check", async () => {
+  await using fixture = await runFixture()
+  const identity = await fixture.runIdentity()
+  await fixture.app.verifyRun(identity, fixture.options)
+  fixture.state.binderPermission = "read"
+  expect(await fixture.app.verifyRun(identity, { ...fixture.options, account: crypto.randomUUID() })).toEqual({
+    installed: true,
+    binder: "binder-left",
+  })
+  const key = `vector:cloud-agents:binder-ok:${fixture.repositoryId}`
+  fixture.state.cache.set(key, {
+    value: JSON.stringify({ githubId: "790", generation: 1 }),
+    until: fixture.state.clock + 3_600_000,
+  })
+  expect(await fixture.app.verifyRun(identity, fixture.options)).toEqual({ installed: true, binder: "binder-left" })
+  fixture.state.binderPermission = "write"
+  expect(await fixture.app.verifyRun(identity, fixture.options)).toEqual({ installed: true, binder: "ok" })
+  expect(JSON.parse(fixture.state.cache.get(key)!.value)).toEqual({
+    account: fixture.options.account,
+    githubId: "790",
+    generation: 1,
+  })
 })
 
 test.each(["author", "changed", "thread", "permission", "bot-author", "fork-without-body-pr"])(

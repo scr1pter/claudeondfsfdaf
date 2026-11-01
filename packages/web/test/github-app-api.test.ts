@@ -357,12 +357,15 @@ function integrationTests() {
       thread: "17",
       commentId: 123,
       binder: { githubId: "790", login: "fixture-binder" },
+      account: crypto.randomUUID(),
       defaultRef: "refs/heads/main",
       generation: 1,
     }
     expect(await fixture.app.verifyRun(identity, options)).toEqual({ installed: true, binder: "ok" })
     const key = `vector:cloud-agents:binder-ok:${fixture.repositoryId}`
-    expect(await redis.send("GET", [key])).toBe(JSON.stringify({ githubId: "790", generation: 1 }))
+    expect(await redis.send("GET", [key])).toBe(
+      JSON.stringify({ account: options.account, githubId: "790", generation: 1 }),
+    )
     expect(Number(await redis.send("TTL", [key]))).toBeGreaterThan(3590)
     expect(Number(await redis.send("TTL", [key]))).toBeLessThanOrEqual(3600)
     fixture.state.binderPermission = "read"
