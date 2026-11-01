@@ -161,7 +161,7 @@ export function note(
     return `<task_size>Light request: do it directly, without a to-do list, and launch no subagents.${escalate}${capped}</task_size>`
   // When to delegate is the subagent policy's; the note does not say it again.
   if (tier === "standard")
-    return `<task_size>Standard request: keep a short to-do list for multi-step work.${escalate}${capped}</task_size>`
+    return `<task_size>Standard request: Track only substantial milestones or a user-requested plan.${escalate}${capped}</task_size>`
   if (tier === "thorough")
     return `<task_size>Thorough request: plan with the to-do list, split independent substantial parts across subagents launched together in the background when that is cheaper, and verify with the strongest checks available.${options.judge ? " Vector runs the judge after you finish, so do not launch it yourself." : ""}${options.solo ? " In this repository, Thorough work has passed as often without subagents for less: split only clearly independent, large parts." : ""}${capped}</task_size>`
   // A greeting goes out on the quick lane, which carries no note.

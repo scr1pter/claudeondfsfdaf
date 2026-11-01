@@ -69,3 +69,21 @@ field no longer proved the guard's required field; it now narrows the guard and
 public scope types together. The test fixture's stop reason also retains its
 literal type. These are type-only corrections. Core and final engine package
 typechecks pass on the integrated source.
+
+## Approved fixes integration
+
+The feature branch also merges `approved-fixes` at `279d4292` (PR 19), preserving
+its benchmark evidence and commit lineage. Standard task guidance now tracks
+substantial milestones or a requested plan while retaining current delegation
+and user caps. Client-assigned titles, planned 550B+ Velocity copy and typed SSE
+deadline cleanup retain the reviewed behavior. The footprint harness accepts
+both configuration overrides and the optional task-size/judge controls.
+
+Independent static review found no blocking conflict. Focused combined checks
+passed: 35 task-size, 3 title, 59 composer, 1 provider deadline, 1 client-named
+prompt, 22 workflow compliance, 3 footprint controls, 14 landing-copy and 14
+investor-page tests, plus the native Node cleanup regression. These checks do
+not replace the final branch CI. The twelve Windows engine shards are retained;
+manual production-navigation and offline-footprint jobs remain off by default.
+PR 18's timing fixture was already patch-equivalent in this branch, so its older
+branch did not need a separate merge. No main merge or release is implied.

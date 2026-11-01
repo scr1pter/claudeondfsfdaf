@@ -15,6 +15,7 @@
 //   bun script/agent-eval/footprint.ts --scenario solo-fix --out report.json --dump requests/
 //   bun script/agent-eval/footprint.ts --config-content '{"agent":{"build":{"prompt":"…"}}}'
 //                                                                        Vector with this configuration added
+//   bun script/agent-eval/footprint.ts --runtime vector,vector-openai --scenario solo-fix --sessions 2 --task-size standard --judge off
 
 import { spawn, spawnSync } from "node:child_process"
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
@@ -22,6 +23,7 @@ import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { taskById } from "./tasks"
 import { actorScript, type ActorPlan, type ActorStep } from "./footprint-actors"
+import { footprintControlArgs, footprintControls } from "./footprint-controls"
 import {
   continued,
   createPromptCache,
@@ -529,6 +531,8 @@ await writeFile(
       models: { anthropic: MODEL, openai: OPENAI_MODEL, codex: CODEX_MODEL },
       rates: RATES,
       sessions: SESSIONS,
+      // Null means the caller left the existing CLI default in place.
+      executionOverrides: { taskSize: flags.taskSize ?? null, judge: flags.judge ?? null },
       websocket: flags.ws,
       engineRoot: resolve(flags.engineRoot ?? REPO_ROOT),
       engineRevision: spawnSync("git", ["rev-parse", "HEAD"], { cwd: resolve(flags.engineRoot ?? REPO_ROOT) })
@@ -759,6 +763,7 @@ function vectorArgs(prompt: string, runtime: Runtime) {
     "--model",
     runtime === "vector-openai" ? `openai/${OPENAI_MODEL}` : `anthropic/${MODEL}`,
     "--dangerously-skip-permissions",
+    ...footprintControlArgs(flags),
     prompt,
   ]
 }
@@ -1295,6 +1300,7 @@ function parseFlags(argv: string[]) {
     return at === -1 ? undefined : argv[at + 1]
   }
   return {
+    ...footprintControls(argv),
     engineRoot: value("engine-root"),
     scenario: value("scenario"),
     runtime: value("runtime"),
