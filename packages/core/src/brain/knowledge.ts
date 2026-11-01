@@ -61,6 +61,7 @@ import { BrainStructure } from "./structure"
 import { BrainVector } from "./vector"
 import { BrainWorker } from "./worker/host"
 import type { BrainWorkerProtocol } from "./worker/protocol"
+import type { CostKind } from "../review/types"
 
 // Documents in the brain: what the user gives Vector to know (a PDF, a Word file, a spec in Markdown, the repository's
 // own docs), read on this computer into sections, passages and typed records, and kept in brain.db beside memory.
@@ -209,7 +210,7 @@ export type DistillRun = {
     readonly cacheWrite: number
   }
   readonly cost: number
-  readonly costKind: "free" | "priced" | "plan" | "local" | "unknown"
+  readonly costKind: CostKind
   readonly dropped: BrainDistill.Dropped
   readonly error?: string
 }

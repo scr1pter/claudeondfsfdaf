@@ -324,6 +324,7 @@ const api: ElectronAPI = {
     logout: () => ipcRenderer.invoke("vector-account-logout"),
     codium: () => ipcRenderer.invoke("vector-account-codium"),
     offers: () => ipcRenderer.invoke("vector-account-offers"),
+    refreshModels: () => ipcRenderer.invoke("vector-account-refresh-models"),
     billing: (request) => ipcRenderer.invoke("vector-account-billing", request),
     confirmDeletion: () => ipcRenderer.invoke("vector-account-confirm-deletion"),
     cancelDeletion: () => ipcRenderer.invoke("vector-account-cancel-deletion"),

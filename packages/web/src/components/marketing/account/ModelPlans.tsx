@@ -113,7 +113,7 @@ export function ModelPlans(props: { accessToken: string; preview?: ModelPlansPre
           <span className="model-plans-badge">{monthly.cancelAtPeriodEnd ? "Ending this period" : "Active"}</span>
         )}
       </div>
-      <p>The same coding model catalog for every budget. Subscribe monthly or buy credits when you need them.</p>
+      <p>The same coding model catalog for every budget. Subscribe monthly for Codium access.</p>
       {!props.accessToken && !preview && <p>Sign in to view your model plan.</p>}
       {loading && <p role="status">Loading model plans…</p>}
       {error && (
@@ -252,9 +252,9 @@ export function ModelPlans(props: { accessToken: string; preview?: ModelPlansPre
             repeated context also counts toward usage.
           </p>
           <p>
-            Monthly credits reset each billing period; purchased credits carry forward. No automatic overage charges or
-            top-ups: usage stops when your available credits cannot cover a request. Your own provider keys remain
-            available separately. <a href="/legal/terms#codium">Codium terms</a> explain billing and credit usage.
+            Monthly credits reset each billing period. No automatic overage charges or top-ups: usage stops when your
+            available credits cannot cover a request. Your own provider keys remain available separately.{" "}
+            <a href="/legal/terms#codium">Codium terms</a> explain billing and credit usage.
           </p>
         </div>
       )}

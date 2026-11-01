@@ -30,43 +30,97 @@ describe("Codium on the Account page", () => {
     expect(codiumSummary(status({ enabled: false, access: false }))).toEqual({ kind: "coming-soon" })
   })
 
-  test("keeps billing reachable for someone with past invoices but no plan or credits", () => {
+  test("keeps billing reachable for someone with past invoices but no plan", () => {
     expect(codiumSummary(status({ enabled: false, access: false, customer: true }))).toMatchObject({
       kind: "plan",
       plan: "Free",
       billing: true,
     })
+    // Purchased credits from an older answer neither keep Codium showing nor appear anywhere.
+    const old = codiumSummary(status({ enabled: false, access: false, purchased: { bought: true, state: "low" } }))
+    expect(old).toEqual({ kind: "coming-soon" })
   })
 
-  test("shows the plan and the share of this month's credits left, never an amount", () => {
+  test("shows the plan and the share of this month's usage left, never an amount, credits or top-ups", () => {
     const summary = codiumSummary(
       status({
-        plan: { id: "vector-50", name: "Pro", left: 0.4237, renewsAt, cancelAtPeriodEnd: false },
+        plan: { id: "vector-50", name: "Pro", left: 0.4237, renewsAt, cancelAtPeriodEnd: false, state: "active" },
         purchased: { bought: true, state: "low" },
       }),
     )
-    expect(summary).toMatchObject({
+    expect(summary).toEqual({
       kind: "plan",
       plan: "Pro",
       left: 0.4237,
-      credits: "42% of this month's credits left",
+      usage: "42% of this month's usage left",
       renewal: { label: "Renews", date: ModelPlanStatus.formatDate(renewsAt) },
-      purchased: "Running low",
+      notice: undefined,
       billing: true,
     })
+    expect(JSON.stringify(summary)).not.toMatch(/credit|purchased|top-?up/i)
     if (summary.kind !== "plan") throw new Error("Expected the plan summary")
-    // The balance lines carry a percentage and a state, never a credit count.
-    expect(`${summary.credits} ${summary.purchased}`).not.toMatch(/\d(?!\d*%)/)
+    expect(summary.usage).not.toMatch(/\d(?!\d*%)/)
   })
 
-  test("names an ending plan, an unverified balance and an account with no plan, which is on Free", () => {
+  test("names an ending plan, an unverified share and an account with no plan, which is on Free", () => {
     expect(
       codiumSummary(status({ plan: { id: "vector-10", name: "Plus", renewsAt, cancelAtPeriodEnd: true } })),
-    ).toMatchObject({ credits: "Balance unavailable", renewal: { label: "Ends" } })
+    ).toMatchObject({ usage: "Usage unavailable", renewal: { label: "Ends" } })
     const none = codiumSummary(status())
-    expect(none).toMatchObject({ kind: "plan", plan: "Free", purchased: "None", billing: false })
-    expect(none).not.toHaveProperty("credits")
+    expect(none).toMatchObject({ kind: "plan", plan: "Free", billing: false })
+    expect(none).not.toHaveProperty("usage")
     expect(none).not.toHaveProperty("renewal")
+    expect(none).not.toHaveProperty("purchased")
+  })
+
+  test("a smaller plan scheduled for renewal shows its name and date", () => {
+    const summary = codiumSummary(
+      status({
+        plan: {
+          id: "vector-50",
+          name: "Pro",
+          left: 0.5,
+          renewsAt,
+          cancelAtPeriodEnd: false,
+          state: "active",
+          scheduled: { id: "vector-10", name: "Plus", at: renewsAt },
+        },
+      }),
+    )
+    expect(summary).toMatchObject({ scheduled: { name: "Plus", date: ModelPlanStatus.formatDate(renewsAt) } })
+    expect(summary).not.toHaveProperty("payment")
+  })
+
+  test("a paused plan says what starts it again: a new card, or confirming the payment", () => {
+    const paused = (action?: "update-card" | "confirm-payment") =>
+      codiumSummary(
+        status({
+          access: false,
+          plan: {
+            id: "vector-50",
+            name: "Pro",
+            left: 0.5,
+            renewsAt,
+            cancelAtPeriodEnd: false,
+            state: "paused",
+            reason: action === "confirm-payment" ? "action_required" : "payment_failed",
+            ...(action ? { action } : {}),
+          },
+        }),
+      )
+    expect(paused("update-card")).toMatchObject({
+      payment: "update-card",
+      notice: {
+        kind: "empty",
+        text: "Your Codium plan is paused until its payment goes through. Update your card to continue.",
+      },
+    })
+    expect(paused("confirm-payment")).toMatchObject({
+      payment: "confirm-payment",
+      notice: { kind: "empty", text: "Your Codium plan is paused until you confirm its payment." },
+    })
+    // A paused answer without an action still needs a working card.
+    expect(paused()).toMatchObject({ payment: "update-card" })
   })
 
   test("keeps a subscriber's plan visible when sales pause, with the server's notice", () => {

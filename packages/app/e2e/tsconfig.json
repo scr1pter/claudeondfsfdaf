@@ -17,6 +17,7 @@
     "./performance/timeline/session-tab-*.ts",
     "./performance/timeline/session-timeline-stress.fixture.ts",
     "./performance/timeline/timeline-test-helpers.ts",
+    "./regression/account-settings.spec.ts",
     "./regression/agent-launcher.spec.ts",
     "./regression/external-agent-chat.spec.ts",
     "./regression/free-models.spec.ts",

@@ -76,7 +76,7 @@ import { ModelV2 } from "@vectordevai/core/model"
 import { LocationServiceMap, locationServiceMapLayer } from "@vectordevai/core/location-services"
 import { WorkspaceTrust } from "@vectordevai/core/workspace-trust/workspace-trust"
 import { Global } from "@vectordevai/core/global"
-import { codiumGateway, codiumModel } from "../../../core/test/fixture/codium-gateway"
+import { codiumCatalogV2, codiumGateway, codiumModel } from "../../../core/test/fixture/codium-gateway"
 
 const summary = Layer.succeed(
   SessionSummary.Service,
@@ -406,7 +406,8 @@ const codiumPrompts = testEffect(
       Layer.succeed(ModelPlans.Service, {
         catalog: (token) =>
           Effect.succeed(
-            token === codiumToken ? { enabled: true, models: [codiumModel] } : { enabled: false, models: [] },
+            // The v2 catalog names Codium Auto, whose floor is the helper model titles use (A19).
+            token === codiumToken ? codiumCatalogV2 : { enabled: false, models: [] },
           ),
         request: gateway.forward,
       }),
@@ -939,7 +940,7 @@ it.instance("a title on a model server on this computer is brief, and one cut of
   }),
 )
 
-codiumPrompts.instance("a Codium session's title goes through the gateway and counts its tokens, not dollars", () =>
+codiumPrompts.instance("a Codium session's title goes through the gateway and counts as a Codium step", () =>
   Effect.gen(function* () {
     gateway.state.mode = "text"
     const prompt = yield* SessionPrompt.Service
@@ -964,18 +965,24 @@ codiumPrompts.instance("a Codium session's title goes through the gateway and co
     const recorded = yield* database.db.select().from(EventTable).where(eq(EventTable.aggregate_id, chat.id)).all()
     const usage = recorded.filter((event) => event.type === `${SessionEvent.AncillaryUsage.type}.2`)
     expect(usage).toHaveLength(1)
-    // Title spend counts toward the session in tokens; credits are a share of the plan, never dollars to add up.
+    // The title's record keeps its tokens beside the Codium flag; the session counts it as a Codium step, and its
+    // totals carry neither those tokens nor dollars.
     expect(usage[0]?.data).toMatchObject({
       purpose: "title",
       model: { providerID: ModelPlans.PROVIDER_ID, id: codiumModel.id },
       cost: 0,
       unpriced: true,
+      billing: "codium",
     })
     expect(usage[0]?.data.tokens).toMatchObject({ input: 200, output: 6 })
+    const totals = yield* sessions.get(chat.id)
+    expect(totals.codiumSteps).toBeGreaterThan(0)
+    expect(totals.codiumSteps).toBe(totals.unpricedSteps)
+    expect(totals.tokens).toEqual({ input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } })
   }),
 )
 
-codiumPrompts.instance("a Codium subagent's steps count once, in tokens, and add no dollars", () =>
+codiumPrompts.instance("a Codium subagent's steps count once, as Codium steps, and add no tokens or dollars", () =>
   Effect.gen(function* () {
     gateway.state.mode = "text"
     const prompt = yield* SessionPrompt.Service
@@ -1009,6 +1016,14 @@ codiumPrompts.instance("a Codium subagent's steps count once, in tokens, and add
     expect(parent.subagentUnpricedSteps).toBe(spent.unpricedSteps)
     expect((parent.cost ?? 0) + (parent.subagentCost ?? 0)).toBe(0)
     expect((parent.unpricedSteps ?? 0) + (parent.subagentUnpricedSteps ?? 0)).toBe(sent.length)
+    // Every one of those steps ran on Codium, so each is a Codium step, and no token total counts them.
+    const none = { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }
+    expect(spent.codiumSteps).toBe(spent.unpricedSteps)
+    expect(parent.codiumSteps ?? 0).toBe(parent.unpricedSteps ?? 0)
+    expect(parent.subagentCodiumSteps).toBe(spent.unpricedSteps)
+    expect(spent.tokens).toEqual(none)
+    expect(parent.tokens).toEqual(none)
+    expect(parent.subagentTokens).toBeUndefined()
   }),
 )
 

@@ -39,9 +39,13 @@ export const Info = Schema.Struct({
   cost: Schema.Finite,
   // Requests with unknown pricing or incomplete usage; their cost is not a complete measure of session spend.
   unpricedSteps: Schema.Finite.pipe(optional),
+  // How many of those unpriced steps ran on Vector Codium; own unpriced steps are unpricedSteps − codiumSteps.
+  codiumSteps: Schema.Finite.pipe(optional),
   // What the subagent sessions below this one spent, which cost leaves out, and how many of their steps were unpriced.
   subagentCost: Schema.Finite.pipe(optional),
   subagentUnpricedSteps: Schema.Finite.pipe(optional),
+  // How many of the subagent unpriced steps ran on Vector Codium.
+  subagentCodiumSteps: Schema.Finite.pipe(optional),
   // The tokens those sessions used, which tokens leaves out.
   subagentTokens: Tokens.pipe(optional),
   tokens: Tokens,

@@ -6,6 +6,7 @@
 // for it would claim the run was free when Vector simply cannot price it, so
 // such a session reads "cost unknown" instead.
 
+import { Billing } from "@vectordevai/schema/billing"
 import { isFreeModel } from "@vectordevai/schema/free-model"
 import { formatSessionCost } from "@/utils/session-cost"
 import { ratesFor, type ModelRates } from "./model-pricing"
@@ -21,8 +22,6 @@ export type SpendCatalog = ReadonlyMap<
     models?: Record<string, { cost?: ModelRates & { plan?: boolean }; freeModel?: { source: string } } | undefined>
   }
 >
-
-const CODIUM_PROVIDER_ID = "vector-plan"
 
 const money = new Intl.NumberFormat("en-US", {
   style: "currency",
@@ -42,7 +41,7 @@ export function spendKind(
   // The engine zeroes a plan model's rates and marks them, so its zero rates are not an unknown price.
   if (model?.cost?.plan) return "plan"
   // Codium's catalog carries no prices, so it is named before the unpriced check.
-  if (providerID === CODIUM_PROVIDER_ID) return "codium"
+  if (Billing.isCodium(providerID)) return "codium"
   if (!ratesFor(providers, providerID, modelID)) return "unpriced"
   return "priced"
 }

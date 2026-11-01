@@ -3885,6 +3885,105 @@ describe("tool.task", () => {
     }),
   )
 
+  for (const mix of ["codium", "mixed", "unpriced"] as const)
+    background.instance(
+      `a background note for a ${mix === "codium" ? "Codium-only" : mix === "mixed" ? "mixed" : "mixed, partly unpriced"} child labels its Codium work`,
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Session.Service
+          const jobs = yield* BackgroundJob.Service
+          const { chat, assistant } = yield* seed()
+          const tool = yield* TaskTool
+          const def = yield* singleTaskDefinition(tool)
+          const notes: SessionPrompt.PromptInput[] = []
+          // One step on Vector Codium as the processor records it, and for a mixed child an own step beside it:
+          // priced, or on a model with no listed price.
+          const work = (sessionID: SessionID) =>
+            Effect.gen(function* () {
+              const message = yield* sessions.updateMessage({
+                id: MessageID.ascending(),
+                role: "assistant",
+                parentID: MessageID.ascending(),
+                sessionID,
+                mode: "general",
+                agent: "general",
+                cost: 0,
+                path: { cwd: "/tmp", root: "/tmp" },
+                tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+                modelID: ModelV2.ID.make("deepseek"),
+                providerID: ProviderV2.ID.make("vector-plan"),
+                time: { created: Date.now() },
+                finish: "stop",
+              } satisfies SessionV1.Assistant)
+              yield* sessions.updatePart({
+                id: PartID.ascending(),
+                messageID: message.id,
+                sessionID,
+                type: "step-finish",
+                reason: "tool-calls",
+                cost: 0,
+                unpriced: true,
+                billing: "codium",
+                tokens: { input: 900, output: 40, reasoning: 0, cache: { read: 0, write: 0 } },
+              } satisfies SessionV1.StepFinishPart)
+              if (mix !== "codium") yield* spend(sessions, sessionID)
+              if (mix === "unpriced")
+                yield* sessions.updatePart({
+                  id: PartID.ascending(),
+                  messageID: message.id,
+                  sessionID,
+                  type: "step-finish",
+                  reason: "stop",
+                  cost: 0,
+                  unpriced: true,
+                  tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+                } satisfies SessionV1.StepFinishPart)
+            })
+          const promptOps: TaskPromptOps = {
+            ...stubOps(),
+            prompt: (input) => {
+              if (input.sessionID === chat.id) {
+                notes.push(input)
+                return Effect.succeed(reply(input, "noted"))
+              }
+              return work(input.sessionID).pipe(Effect.as(reply(input, "Done.")))
+            },
+          }
+          const started = yield* def.execute(
+            { description: "survey", prompt: "Survey the code.", subagent_type: "general", background: true },
+            taskContext({ sessionID: chat.id, messageID: assistant.id, promptOps }),
+          )
+          yield* jobs.wait({ id: started.metadata.sessionId })
+          yield* pollWithTimeout(
+            Effect.sync(() => (notes.length > 0 ? true : undefined)),
+            "the parent never heard back",
+            "3 seconds",
+          )
+
+          const part = notes[0]?.parts[0]
+          const text = part?.type === "text" ? part.text : ""
+          expect(text).toStartWith(`<task-notification id="${started.metadata.sessionId}" state="completed"`)
+          // Codium's tokens are never shown (a mixed child's count is its own), and a Codium step's pricing is not
+          // unknown.
+          if (mix === "codium") {
+            expect(text).not.toContain("tokens=")
+            expect(text).toContain(` state="completed" tool_calls="0" duration="`)
+            expect(text).toContain("Its steps ran on Vector Codium, which shows no token or cost figures.")
+            expect(text).not.toContain("Some of its steps")
+          }
+          if (mix !== "codium") {
+            expect(text).toContain(`tokens="${childUsage.total}" tool_calls="${childUsage.toolUses}" duration="`)
+            expect(text).toContain("Some of its steps ran on Vector Codium.")
+            expect(text).not.toContain("Its steps ran on Vector Codium")
+          }
+          if (mix === "unpriced")
+            expect(text).toContain(
+              "Pricing is unknown for 1 provider steps; recorded cost is only a measured subtotal.",
+            )
+          if (mix !== "unpriced") expect(text).not.toContain("Pricing is unknown")
+        }),
+    )
+
   it.instance("task calls in one message run at the same time", () =>
     Effect.gen(function* () {
       const { chat, assistant } = yield* seed()

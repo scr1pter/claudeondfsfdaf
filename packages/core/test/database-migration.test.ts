@@ -27,6 +27,7 @@ import sessionMetadataMigration from "@vectordevai/core/database/migration/20260
 import sessionInternalHelpersMigration from "@vectordevai/core/database/migration/20261011044552_session_internal_helpers"
 import classifyEarlyReviewHelpersMigration from "@vectordevai/core/database/migration/20261015171500_classify_early_review_helpers"
 import backgroundJobMigration from "@vectordevai/core/database/migration/20261028021005_background_job"
+import sessionCodiumStepsMigration from "@vectordevai/core/database/migration/20261031070337_session_codium_steps"
 import type { SqlClient as SqlClientService } from "effect/unstable/sql/SqlClient"
 import { Database } from "@vectordevai/core/database/database"
 import { SessionProjector } from "@vectordevai/core/session/projector"
@@ -558,6 +559,57 @@ describe("DatabaseMigration", () => {
           { id: "vecbot", internal: "vectorscope.security", cost: 0.75 },
           { id: "vecbot-cli", internal: "vectorscope.review", cost: 0.75 },
         ])
+      }),
+    )
+  })
+
+  test("adds the Codium step counts to existing sessions at 0 and leaves their totals as they were", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        yield* db.run(
+          sql`CREATE TABLE session (id text PRIMARY KEY, cost real DEFAULT 0 NOT NULL, unpriced_steps integer DEFAULT 0 NOT NULL, subagent_unpriced_steps integer DEFAULT 0 NOT NULL, tokens_input integer DEFAULT 0 NOT NULL)`,
+        )
+        // Recorded before the counts existed: Codium steps among them stay in these totals (no backfill).
+        yield* db.run(
+          sql`INSERT INTO session (id, cost, unpriced_steps, subagent_unpriced_steps, tokens_input) VALUES ('parent', 0.5, 2, 3, 40), ('child', 0, 3, 0, 12)`,
+        )
+
+        yield* DatabaseMigration.applyOnly(db, [sessionCodiumStepsMigration])
+
+        expect(
+          yield* db.all(
+            sql`SELECT id, cost, unpriced_steps, subagent_unpriced_steps, tokens_input, codium_steps, subagent_codium_steps FROM session ORDER BY id`,
+          ),
+        ).toEqual([
+          {
+            id: "child",
+            cost: 0,
+            unpriced_steps: 3,
+            subagent_unpriced_steps: 0,
+            tokens_input: 12,
+            codium_steps: 0,
+            subagent_codium_steps: 0,
+          },
+          {
+            id: "parent",
+            cost: 0.5,
+            unpriced_steps: 2,
+            subagent_unpriced_steps: 3,
+            tokens_input: 40,
+            codium_steps: 0,
+            subagent_codium_steps: 0,
+          },
+        ])
+        // A session created afterwards takes the defaults too.
+        yield* db.run(sql`INSERT INTO session (id) VALUES ('later')`)
+        expect(yield* db.get(sql`SELECT codium_steps, subagent_codium_steps FROM session WHERE id = 'later'`)).toEqual({
+          codium_steps: 0,
+          subagent_codium_steps: 0,
+        })
+        expect(yield* db.get(sql`SELECT id FROM migration WHERE id = ${sessionCodiumStepsMigration.id}`)).toEqual({
+          id: sessionCodiumStepsMigration.id,
+        })
       }),
     )
   })

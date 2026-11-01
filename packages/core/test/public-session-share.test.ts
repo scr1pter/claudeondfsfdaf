@@ -1091,6 +1091,110 @@ for (const engine of ["v1", "v2"] as const) {
     }),
   )
 
+  it.effect(`${engine} local archives keep Codium records and counts, and public transcripts carry neither`, () =>
+    Effect.gen(function* () {
+      const archives = yield* SessionArchive.Service
+      const events = yield* EventV2.Service
+      const database = yield* Database.Service
+      const original = yield* archives.import({
+        archive: source,
+        targetEngine: engine,
+        location: { directory: AbsolutePath.make("/tmp") },
+      })
+      const codium = { id: ModelV2.ID.make("deepseek"), providerID: ProviderV2.ID.make("vector-plan") }
+      const tokens = { input: 25, output: 3, reasoning: 0, cache: { read: 5, write: 0 } }
+      const usageID = EventV2.ID.create()
+      yield* events.publish(
+        SessionEvent.AncillaryUsage,
+        {
+          sessionID: original.sessionID,
+          timestamp: DateTime.makeUnsafe(3),
+          usageID,
+          purpose: "title",
+          model: codium,
+          cost: 0,
+          unpriced: true,
+          billing: "codium",
+          tokens,
+        },
+        { id: usageID },
+      )
+      const exported = yield* archives.export(original)
+      expect(exported.info).toMatchObject({ unpricedSteps: 1, codiumSteps: 1 })
+      // The archive's steps ran on Codium too: the assistant message, and for V1 its step-finish part, carry the flag.
+      const stamped =
+        "engine" in exported
+          ? Schema.encodeSync(SessionArchive.Native)({
+              ...exported,
+              messages: exported.messages.map((message) =>
+                message.type === "assistant"
+                  ? { ...message, model: codium, cost: 0, unpriced: true, billing: "codium" as const, tokens }
+                  : message,
+              ),
+            })
+          : Schema.encodeSync(SessionArchive.Legacy)({
+              ...exported,
+              messages: exported.messages.map((message) =>
+                message.info.role === "assistant"
+                  ? {
+                      info: {
+                        ...message.info,
+                        providerID: codium.providerID,
+                        cost: 0,
+                        unpriced: true,
+                        billing: "codium" as const,
+                        tokens,
+                      },
+                      parts: [
+                        ...message.parts,
+                        {
+                          id: SessionV1.PartID.ascending(),
+                          sessionID: message.info.sessionID,
+                          messageID: message.info.id,
+                          type: "step-finish" as const,
+                          reason: "stop",
+                          cost: 0,
+                          unpriced: true,
+                          billing: "codium" as const,
+                          tokens,
+                        },
+                      ],
+                    }
+                  : message,
+              ),
+            })
+      const imported = yield* archives.import({ archive: stamped, location: { directory: AbsolutePath.make("/tmp") } })
+      const row = yield* database.db.select().from(SessionTable).where(eq(SessionTable.id, imported.sessionID)).get()
+      // One Codium step from the transcript and one from the title, and no tokens or dollars from either.
+      expect(row).toMatchObject({
+        cost: 0,
+        unpriced_steps: 2,
+        codium_steps: 2,
+        tokens_input: 0,
+        tokens_output: 0,
+        tokens_cache_read: 0,
+      })
+      const roundtrip = yield* archives.export(imported)
+      expect(roundtrip.info).toMatchObject({ unpricedSteps: 2, codiumSteps: 2 })
+      expect(roundtrip.ancillaryUsage?.[0]).toMatchObject({ usageID, billing: "codium", tokens })
+      // The local archive keeps each step's flag beside its own tokens (label plan D-2).
+      expect(
+        "engine" in roundtrip
+          ? roundtrip.messages.flatMap((message) =>
+              message.type === "assistant" ? [{ billing: message.billing, tokens: message.tokens }] : [],
+            )
+          : roundtrip.messages.flatMap((message) =>
+              message.parts.flatMap((part) =>
+                part.type === "step-finish" ? [{ billing: part.billing, tokens: part.tokens }] : [],
+              ),
+            ),
+      ).toMatchObject([{ billing: "codium", tokens }])
+      const shared = JSON.stringify(SessionArchive.publicArchive(roundtrip))
+      for (const key of ["billing", "codiumSteps", "subagentCodiumSteps", "unpriced", "cost", "tokens"])
+        expect(shared).not.toContain(`"${key}"`)
+    }),
+  )
+
   it.effect(`${engine} local archives keep the usage an older build wrote beside the model learner's`, () =>
     Effect.gen(function* () {
       const archives = yield* SessionArchive.Service

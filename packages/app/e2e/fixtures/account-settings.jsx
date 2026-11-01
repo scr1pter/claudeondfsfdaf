@@ -1,5 +1,7 @@
+import { Suspense } from "solid-js"
 import { render } from "solid-js/web"
 import { CodiumPlan } from "@vectordevai/schema/codium-plan"
+import { ModelPlanStatus } from "@vectordevai/core/model-plan-status"
 import { DialogProvider } from "@vectordevai/ui/context/dialog"
 import { PlatformProvider } from "../../src/context/platform"
 import { SettingsWorkspace } from "../../src/components/settings-v2"
@@ -10,13 +12,16 @@ import "../../src/vector-premium.css"
 
 // Settings > Account against a stand-in for the desktop's account bridge. The query picks the account: ?account=
 // signed-out, signed-in (no photo), photo, broken (a photo that will not decode) or email (no name and no photo),
-// ?codium= coming-soon, plan, low, ended, none (on sale, never bought) or
-// error, and ?billing= how the
-// billing window ends (completed, cancelled, closed, website, busy or failed; pending keeps it open until
+// ?codium= coming-soon, plan, exhausted, low, ended, none (on sale, never bought), paused-card (a failed payment),
+// paused-confirm (the bank asks to confirm), scheduled (Pro with Plus starting at renewal) or error, and ?billing= how
+// a billing window ends (completed, cancelled, closed, website, busy or failed; pending keeps it open until
 // accountFixture.finish() closes it). Links the page opens, billing requests and account actions it takes are kept on
 // window.accountFixture for the spec to read; accountFixture.confirm() stands in for the browser sign-in that confirms
-// deleting the account. ?view=codium-error shows a Codium turn that ran out of
-// credits instead of Settings.
+// deleting the account. ?view=codium-error shows a failed Codium turn instead of Settings, worded as the engine words
+// the gateway's ?error= answer: required (no plan, the default), exhausted (a subscriber's month used up), update-card,
+// confirm-payment or daily, inside a Suspense boundary as the app's route has one around the timeline. ?status=pending
+// holds every Codium status read until accountFixture.answer() lets them through, and ?status=failed fails every one
+// as the desktop bridge does when it cannot answer at all.
 const query = new URLSearchParams(location.search)
 const renewsAt = Date.UTC(2026, 10, 1, 12)
 const codium = {
@@ -32,9 +37,71 @@ const codium = {
     signedIn: true,
     enabled: true,
     access: true,
-    plan: { id: "vector-50", name: "Pro", left: 0.64, renewsAt, cancelAtPeriodEnd: false },
-    purchased: { bought: true, state: "available" },
+    plan: { id: "vector-50", name: "Pro", left: 0.64, renewsAt, cancelAtPeriodEnd: false, state: "active" },
+    purchased: { bought: false },
     empty: false,
+    low: false,
+  },
+  "paused-card": {
+    signedIn: true,
+    enabled: true,
+    access: false,
+    plan: {
+      id: "vector-50",
+      name: "Pro",
+      left: 0.64,
+      renewsAt,
+      cancelAtPeriodEnd: false,
+      state: "paused",
+      reason: "payment_failed",
+      action: "update-card",
+    },
+    purchased: { bought: false },
+    empty: false,
+    low: false,
+  },
+  "paused-confirm": {
+    signedIn: true,
+    enabled: true,
+    access: false,
+    plan: {
+      id: "vector-50",
+      name: "Pro",
+      left: 0.64,
+      renewsAt,
+      cancelAtPeriodEnd: false,
+      state: "paused",
+      reason: "action_required",
+      action: "confirm-payment",
+    },
+    purchased: { bought: false },
+    empty: false,
+    low: false,
+  },
+  scheduled: {
+    signedIn: true,
+    enabled: true,
+    access: true,
+    plan: {
+      id: "vector-50",
+      name: "Pro",
+      left: 0.64,
+      renewsAt,
+      cancelAtPeriodEnd: false,
+      state: "active",
+      scheduled: { id: "vector-10", name: "Plus", at: renewsAt },
+    },
+    purchased: { bought: false },
+    empty: false,
+    low: false,
+  },
+  exhausted: {
+    signedIn: true,
+    enabled: true,
+    access: true,
+    plan: { id: "vector-50", name: "Pro", left: 0, renewsAt, cancelAtPeriodEnd: false },
+    purchased: { bought: false },
+    empty: true,
     low: false,
   },
   low: {
@@ -92,16 +159,15 @@ const initial =
     email: { authenticated: true, pending: false, email: "ana.diaz@example.com", expiresAt: signedIn.expiresAt },
   }[query.get("account") ?? ""] ?? signedIn
 
-// What /api/model-plans/config lists, by name and price; nothing is available while Codium is coming soon.
+// The desktop's monthly offers. Nothing is available while Codium is coming soon. Codium sells no top-ups.
 const sale = codium.enabled
 const offers = {
   enabled: sale,
   plans: CodiumPlan.PLANS.map((plan) => ({ id: plan.id, name: plan.name, price: plan.price, available: sale })),
-  topups: CodiumPlan.TOPUPS.map((pack) => ({ id: pack.id, name: pack.name, price: pack.price, available: sale })),
 }
 const outcome = query.get("billing") ?? "completed"
 
-const state = { account: initial, opened: [], actions: [], billing: [], codiumReads: 0 }
+const state = { account: initial, opened: [], actions: [], billing: [], codiumReads: 0, modelReads: 0 }
 const listeners = new Set()
 const change = (next) => {
   state.account = next
@@ -114,6 +180,9 @@ state.confirm = () => change({ ...state.account, deletion: "confirmed" })
 // The person closes the open billing window.
 const open = []
 state.finish = () => open.shift()?.()
+// Codium status reads held by ?status=pending, until vectordev.ai "answers".
+const held = []
+state.answer = () => held.splice(0).forEach((release) => release())
 
 const platform = {
   platform: "desktop",
@@ -139,13 +208,45 @@ const platform = {
     },
     codium: async () => {
       state.codiumReads += 1
+      if (query.get("status") === "pending") await new Promise((resolve) => held.push(resolve))
+      if (query.get("status") === "failed") throw new Error("The desktop could not read the Codium status.")
       return state.account.authenticated
         ? codium
         : { signedIn: false, enabled: false, access: false, purchased: { bought: false }, empty: false, low: false }
     },
     offers: async () => offers,
+    // The desktop has the local server read the account's Codium models again (a credential write, no reload).
+    refreshModels: async () => {
+      if (state.account.authenticated) state.modelReads += 1
+    },
     billing: async (request) => {
       state.billing.push(request)
+      if (request.kind === "topup") throw new Error("Unexpected top-up billing request: Codium is monthly-only.")
+      if (request.kind === "checkout" && (!sale || !CodiumPlan.PLANS.some((plan) => plan.id === request.plan)))
+        throw new Error("Unexpected monthly checkout request.")
+      // The real API refuses a legacy portal plan change, and any change but the scheduled one while a smaller plan is
+      // scheduled (409 MODEL_PLAN_CHANGE_UNAVAILABLE).
+      const refused = { outcome: "failed", message: "Change plans on vectordev.ai/account." }
+      if (request.kind === "portal" && request.flow === "change") return refused
+      if (request.kind === "change") {
+        const plan = codium.plan
+        if (!plan || !CodiumPlan.isPlanId(request.plan) || request.plan === plan.id)
+          throw new Error("Unexpected change.")
+        if (plan.scheduled && plan.scheduled.id !== request.plan) return refused
+        // A smaller plan is scheduled for renewal with no window; an upgrade opens checkout and ends as it does.
+        if (CodiumPlan.rank(request.plan) < CodiumPlan.rank(plan.id))
+          return { outcome: "scheduled", plan: request.plan, at: plan.renewsAt }
+      } else if (request.kind === "keep") {
+        if (!codium.plan?.scheduled) throw new Error("Unexpected keep request.")
+        return { outcome: "kept" }
+      } else if (
+        request.kind !== "checkout" &&
+        !(
+          request.kind === "portal" &&
+          (request.flow === undefined || request.flow === "cancel" || request.flow === "payment_method_update")
+        )
+      )
+        throw new Error("Unexpected billing action.")
       if (outcome === "pending") {
         await new Promise((resolve) => open.push(resolve))
         return { outcome: "closed" }
@@ -175,16 +276,44 @@ const platform = {
   },
 }
 
+// A failed Codium turn as the engine words the gateway's answer (ModelPlanStatus.gatewayFailure), so the card reads
+// exactly what a real turn stores.
+const answers = {
+  required: [402, "MODEL_PLAN_REQUIRED", "Choose a Vector Codium plan to use this model."],
+  exhausted: [
+    402,
+    "MODEL_PLAN_EXHAUSTED",
+    "This month's Vector Codium usage cannot cover this model's largest request.",
+  ],
+  "update-card": [
+    402,
+    "MODEL_PLAN_PAYMENT_REQUIRED",
+    "Your last Vector Codium payment did not go through. Update your card to keep using Vector Codium.",
+    "update-card",
+  ],
+  "confirm-payment": [
+    402,
+    "MODEL_PLAN_PAYMENT_REQUIRED",
+    "Your bank needs you to confirm your Vector Codium payment.",
+    "confirm-payment",
+  ],
+  daily: [429, "MODEL_PLAN_DAILY_LIMIT", "Your Codium daily limit has been reached. Try again tomorrow."],
+}
+const [status, code, message, action] = answers[query.get("error") ?? "required"]
+const failure = ModelPlanStatus.gatewayFailure(
+  status,
+  JSON.stringify({ error: { code, message, ...(action ? { action } : {}) } }),
+)
+
 yieldLaunchScreen("app")
 render(
   () => (
     <PlatformProvider value={platform}>
       <DialogProvider>
         {query.get("view") === "codium-error" ? (
-          <CodiumError
-            text="You have no Codium credits available. Buy credits to use Codium models."
-            action="credits"
-          />
+          <Suspense fallback={<p data-suspended>Suspended</p>}>
+            <CodiumError text={failure.message} action={failure.action ?? "unavailable"} />
+          </Suspense>
         ) : (
           <SettingsWorkspace section="account" />
         )}

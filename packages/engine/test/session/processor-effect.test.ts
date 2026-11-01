@@ -290,6 +290,38 @@ const unfinishedLLM = Layer.succeed(
   }),
 )
 const itUnfinished = testEffect(LayerNode.compile(root, [...replacements, [LLM.node, unfinishedLLM]]))
+// A Vector Codium step that settles, reporting an OpenRouter charge that would price any other unpriced model, or one
+// that reports its usage as it starts and is then stopped or fails, as unfinishedLLM does.
+const codiumLLM = Layer.succeed(
+  LLM.Service,
+  LLM.Service.of({
+    stream: (input) =>
+      Stream.suspend(() => {
+        const prompt = input.messages[0]?.content
+        if (prompt === "settled")
+          return Stream.make(
+            LLMEvent.stepStart({ index: 0 }),
+            LLMEvent.textStart({ id: "text-1" }),
+            LLMEvent.textDelta({ id: "text-1", text: "done" }),
+            LLMEvent.textEnd({ id: "text-1" }),
+            LLMEvent.stepFinish({
+              index: 0,
+              reason: "stop",
+              usage: new Usage({ inputTokens: 1_000, outputTokens: 50, totalTokens: 1_050 }),
+              providerMetadata: { openrouter: { usage: { cost: 0.05 } } },
+            }),
+            LLMEvent.finish({ reason: "stop" }),
+          )
+        input.started?.({ inputTokens: 1_000, outputTokens: 1, totalTokens: 1_001 })
+        return Stream.make(
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.textStart({ id: "text-1" }),
+          LLMEvent.textDelta({ id: "text-1", text: "partial" }),
+        ).pipe(Stream.concat(prompt === "fail" ? Stream.fail(new Error("stream broke")) : Stream.never))
+      }),
+  }),
+)
+const itCodium = testEffect(LayerNode.compile(root, [...replacements, [LLM.node, codiumLLM]]))
 const itStalledSnapshot = testEffect(
   LayerNode.compile(root, [...replacements, [LLM.node, billedLLM], [Snapshot.node, stalledSnapshot()]]),
 )
@@ -1414,6 +1446,95 @@ for (const guarded of [false, true]) {
         ),
     )
   }
+}
+
+for (const outcome of ["settled", "stopped", "fail"] as const) {
+  itCodium.live(
+    `session.processor effect tests record a ${outcome === "fail" ? "failed" : outcome} Vector Codium step as a Codium step with no tokens in the totals`,
+    () =>
+      provideTmpdirInstance(
+        (dir) =>
+          Effect.gen(function* () {
+            const database = yield* Database.Service
+            const { processors, session, provider } = yield* boot()
+            const chat = yield* session.create({})
+            const parent = yield* user(chat.id, outcome)
+            // As Provider.fromModelPlans lists a Codium model: no dollar price.
+            const listed = yield* provider.getModel(ref.providerID, ref.modelID)
+            const mdl: Provider.Model = {
+              ...listed,
+              providerID: ProviderV2.ID.make("vector-plan"),
+              cost: { ...listed.cost, unpriced: true },
+            }
+            const msg: SessionV1.Assistant = {
+              id: MessageID.ascending(),
+              role: "assistant",
+              sessionID: chat.id,
+              mode: "build",
+              agent: "build",
+              path: { cwd: path.resolve(dir), root: path.resolve(dir) },
+              cost: 0,
+              tokens: { total: 0, input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+              modelID: mdl.id,
+              providerID: mdl.providerID,
+              parentID: parent.id,
+              time: { created: Date.now() },
+            }
+            yield* session.updateMessage(msg)
+            const handle = yield* processors.create({ assistantMessage: msg, sessionID: chat.id, model: mdl })
+            const run = yield* handle
+              .process({
+                user: {
+                  id: parent.id,
+                  sessionID: chat.id,
+                  role: "user",
+                  time: parent.time,
+                  agent: parent.agent,
+                  model: { providerID: mdl.providerID, modelID: mdl.id },
+                } satisfies SessionV1.User,
+                sessionID: chat.id,
+                model: mdl,
+                agent: agent(),
+                system: [],
+                messages: [{ role: "user", content: outcome }],
+                tools: {},
+              })
+              .pipe(Effect.forkChild)
+            if (outcome === "stopped") {
+              yield* waitFor(
+                MessageV2.parts(msg.id).pipe(
+                  Effect.map((parts) => parts.find((part) => part.type === "text")),
+                  Effect.provideService(Database.Service, database),
+                ),
+                "the step never streamed",
+              )
+              yield* Fiber.interrupt(run)
+              yield* Fiber.await(run)
+            }
+            if (outcome !== "stopped") yield* Fiber.join(run)
+
+            const saved = yield* MessageV2.get({ sessionID: chat.id, messageID: msg.id })
+            const finished = saved.parts.filter((part) => part.type === "step-finish")
+            expect(finished).toHaveLength(1)
+            // The step keeps its tokens, for compaction and the context meter, beside the flag; it is never priced.
+            expect(finished[0]).toMatchObject({
+              reason: outcome === "settled" ? "stop" : outcome === "fail" ? "error" : "abort",
+              cost: 0,
+              unpriced: true,
+              billing: "codium",
+              tokens: { input: 1_000 },
+            })
+            expect(saved.info).toMatchObject({ role: "assistant", cost: 0, unpriced: true, billing: "codium" })
+            expect(yield* session.get(chat.id)).toMatchObject({
+              cost: 0,
+              unpricedSteps: 1,
+              codiumSteps: 1,
+              tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+            })
+          }),
+        { trusted: true, config: cfg },
+      ),
+  )
 }
 
 // The transport is the real AI SDK against the local HTTP fixture. These tests count provider requests, not just

@@ -1,3 +1,4 @@
+import { ModelPlanStatus } from "@vectordevai/core/model-plan-status"
 import {
   BoxRenderable,
   RGBA,
@@ -309,9 +310,11 @@ export function Prompt(props: PromptProps) {
       if (msg.agent && isPrimaryAgent) {
         // Keep command line --agent if specified.
         if (!args.agent) local.agent.set(msg.agent)
-        if (msg.model) {
-          local.model.set(msg.model)
-          local.model.variant.set(msg.model.variant)
+        // A session on Codium Auto continues on Auto, not on the model it picked for the last message.
+        const model = ModelPlanStatus.sessionModel(msg)
+        if (model) {
+          local.model.set(model)
+          local.model.variant.set(model.variant)
         }
       }
     }

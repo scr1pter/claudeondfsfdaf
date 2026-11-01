@@ -26,6 +26,8 @@ export const Usage = Schema.Struct({
   toolUses: Schema.Finite,
   steps: Schema.Finite,
   unpricedSteps: optional(Schema.Finite),
+  // How many of those unpriced steps ran on Vector Codium, as in the session totals.
+  codiumSteps: optional(Schema.Finite),
 }).annotate({ identifier: "Task.Usage" })
 export interface Usage extends Schema.Schema.Type<typeof Usage> {}
 
@@ -36,6 +38,8 @@ export const BudgetScope = Schema.Struct({
   spentUsd: Schema.Finite,
   steps: Schema.Finite,
   unpricedSteps: Schema.Finite,
+  // Steps that ran on Vector Codium. The guard counts them apart: its unpricedSteps counts only unknown steps.
+  codiumSteps: optional(Schema.Finite),
   costKind: optional(RunBudget.CostKind),
   stopped: optional(Schema.Struct({ reason: RunBudget.StopReason, message: Schema.String })),
 }).annotate({ identifier: "Task.BudgetScope" })

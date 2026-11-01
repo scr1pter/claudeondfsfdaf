@@ -36,17 +36,52 @@ function sign(payload: string, domain = "vector-cli-v1") {
  * a dotfile or a screenshot, so it never opens the billing portal (see verifyDesktopToken). Verifiers from before the
  * mark ignore it, so a marked token works everywhere an unmarked one does.
  */
-export function mintCliToken(user: CliTokenUser, now = Date.now(), client?: "desktop") {
+export function mintCliToken(user: CliTokenUser, now = Date.now(), client?: "desktop" | "cli") {
   const expiresAt = now + CLI_TOKEN_TTL_MS
   const payload = encode(
-    JSON.stringify({ v: 1, sub: user.id, email: user.email, exp: expiresAt, ...(client ? { client } : {}) }),
+    JSON.stringify({
+      v: 1,
+      sub: user.id,
+      email: user.email,
+      exp: expiresAt,
+      ...(client ? { client } : {}),
+      ...(client === "cli" ? { jti: randomBytes(16).toString("base64url") } : {}),
+    }),
   )
   return { token: `vct_${payload}.${sign(payload)}`, expiresAt }
 }
 
 export function verifyCliToken(token: string, now = Date.now()): CliTokenUser {
+  const claims = verifyCliTokenClaims(token, now)
+  return { id: claims.id, email: claims.email }
+}
+
+/** Signed account claims for caller admission and per-token revocation; existing user-only projections stay stable. */
+export function verifyCliTokenClaims(token: string, now = Date.now()) {
   const parsed = cliPayload(token, now)
-  return { id: parsed.sub, email: parsed.email }
+  const client = parsed.client
+  const jti = parsed.jti
+  if (
+    (client !== undefined && client !== "desktop" && client !== "cli") ||
+    (jti !== undefined && !validCliTokenID(jti)) ||
+    (client === "cli" && jti === undefined)
+  )
+    throw new ApiError(401, "CLI_TOKEN_INVALID", "That CLI token is not valid. Generate a new one.")
+  return {
+    id: parsed.sub,
+    email: parsed.email,
+    ...(client ? { client } : {}),
+    ...(typeof jti === "string" ? { jti } : {}),
+    expiresAt: parsed.exp,
+  }
+}
+
+export function validCliTokenID(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    /^[A-Za-z0-9_-]{22}$/.test(value) &&
+    Buffer.from(value, "base64url").toString("base64url") === value
+  )
 }
 
 /**
@@ -55,10 +90,10 @@ export function verifyCliToken(token: string, now = Date.now()): CliTokenUser {
  * gets DESKTOP_SIGN_IN_REQUIRED, and the desktop then opens the account page on the website.
  */
 export function verifyDesktopToken(token: string, now = Date.now()): CliTokenUser {
-  const parsed = cliPayload(token, now)
-  if (parsed.client !== "desktop")
+  const claims = verifyCliTokenClaims(token, now)
+  if (claims.client !== "desktop")
     throw new ApiError(403, "DESKTOP_SIGN_IN_REQUIRED", "Sign in to Vector again to manage billing in the app.")
-  return { id: parsed.sub, email: parsed.email }
+  return { id: claims.id, email: claims.email }
 }
 
 function cliPayload(token: string, now: number) {
@@ -68,9 +103,10 @@ function cliPayload(token: string, now: number) {
     "vector-cli-v1",
     new ApiError(401, "CLI_TOKEN_INVALID", "That CLI token is not valid. Generate a new one."),
   )
-  if (typeof parsed.exp !== "number" || parsed.exp <= now)
-    throw new ApiError(401, "CLI_TOKEN_EXPIRED", "That CLI token has expired. Generate a new one.")
-  return parsed
+  if (typeof parsed.exp !== "number" || !Number.isSafeInteger(parsed.exp) || parsed.exp < 0)
+    throw new ApiError(401, "CLI_TOKEN_INVALID", "That CLI token is not valid. Generate a new one.")
+  if (parsed.exp <= now) throw new ApiError(401, "CLI_TOKEN_EXPIRED", "That CLI token has expired. Generate a new one.")
+  return { ...parsed, exp: parsed.exp }
 }
 
 /**
@@ -99,7 +135,13 @@ export function verifyDeletionGrant(grant: string, now = Date.now()) {
     "This confirmation is no longer valid. Confirm with your Vector sign-in again.",
   )
   const parsed = signedPayload(grant, "vdg_", "vector-delete-v1", invalid)
-  if (typeof parsed.exp !== "number" || parsed.exp <= now || typeof parsed.jti !== "string" || !parsed.jti)
+  if (
+    typeof parsed.exp !== "number" ||
+    !Number.isSafeInteger(parsed.exp) ||
+    parsed.exp <= now ||
+    typeof parsed.jti !== "string" ||
+    !parsed.jti
+  )
     throw invalid
   return { id: parsed.sub, email: parsed.email, jti: parsed.jti, expiresAt: parsed.exp }
 }
@@ -115,8 +157,17 @@ const Signed = Schema.Struct({
 
 function signedPayload(token: string, prefix: string, domain: string, invalid: ApiError) {
   if (typeof token !== "string" || !token.startsWith(prefix)) throw invalid
-  const [payload, signature] = token.slice(prefix.length).split(".")
-  if (!payload || !signature) throw invalid
+  const parts = token.slice(prefix.length).split(".")
+  const [payload, signature] = parts
+  if (
+    parts.length !== 2 ||
+    !payload ||
+    !signature ||
+    !/^[A-Za-z0-9_-]+$/.test(payload) ||
+    !/^[A-Za-z0-9_-]{43}$/.test(signature) ||
+    Buffer.from(payload, "base64url").toString("base64url") !== payload
+  )
+    throw invalid
   const expected = Buffer.from(sign(payload, domain))
   const provided = Buffer.from(signature)
   if (expected.length !== provided.length || !timingSafeEqual(expected, provided)) throw invalid

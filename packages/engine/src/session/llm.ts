@@ -1,3 +1,4 @@
+import { ModelPlanStatus } from "@vectordevai/core/model-plan-status"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { llmClient } from "@vectordevai/core/effect/app-node-platform"
 import { PermissionV1 } from "@vectordevai/core/v1/permission"
@@ -60,6 +61,9 @@ export type StreamInput = {
   // Reasoning effort from the request's task size (LLMRequestPrep.prepare).
   effort?: TaskSize.Effort
   tools: Record<string, Tool>
+  // What a Vector Codium request is for (X-Vector-Purpose): "title", "brain", a Vectorscope review's "review"; without
+  // one, a judge agent's request is "judge" and anything else "chat".
+  purpose?: ModelPlanStatus.Purpose
   retries?: number
   // "required" is sent as "auto" where the provider refuses forced tool use with thinking on
   // (ProviderTransform.toolChoice); `chose` hears what was sent.

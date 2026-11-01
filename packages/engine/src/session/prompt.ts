@@ -1,5 +1,6 @@
 import { SubagentLifecycle } from "@/tool/subagent-lifecycle"
 import { FreeModels } from "@vectordevai/core/free-models"
+import { ModelPlanStatus } from "@vectordevai/core/model-plan-status"
 import { freeModelDataPolicy } from "@vectordevai/core/free-model-catalog"
 import {
   FREE_MODEL_RESUME_UNAVAILABLE,
@@ -103,6 +104,7 @@ import { LearnedSkill } from "@/skill/learned"
 import { BackgroundJob } from "@/background/job"
 import { TaskPlace } from "@/task/place"
 import { TaskJobs } from "@/task/jobs"
+import { SessionCodiumAuto } from "./codium-auto"
 import { parseJudgeVerdict } from "./judge-verdict"
 import { isRecord } from "@/util/record"
 import { ResearchRun } from "@/tool/research-run"
@@ -550,11 +552,20 @@ const layer = Layer.effect(
       const ag = yield* agents.get("title")
       if (!ag) return
       const primary = yield* provider.getModel(input.providerID, input.modelID)
+      // Codium Auto as the title agent's own model is a listing entry the gateway never serves: the title goes to the
+      // helper model a Codium conversation gets, whichever provider this conversation is on, or is not generated.
+      const own = SessionCodiumAuto.isAuto(ag.model) ? undefined : ag.model
+      const from =
+        own || !ag.model ? input : { providerID: ProviderV2.ID.make(ModelPlanStatus.PROVIDER_ID), modelID: undefined }
+      const small =
+        isFreeModel(primary) || own ? undefined : yield* provider.getSmallModel(from.providerID, from.modelID)
+      // A Codium conversation without a helper model gets no generated title rather than one on its own model.
+      if (!isFreeModel(primary) && !own && !small && from.providerID === ModelPlanStatus.PROVIDER_ID) return
       const mdl = isFreeModel(primary)
         ? primary
-        : ag.model
-          ? yield* provider.getModel(ag.model.providerID, ag.model.modelID)
-          : ((yield* provider.getSmallModel(input.providerID, input.modelID)) ?? primary)
+        : own
+          ? yield* provider.getModel(own.providerID, own.modelID)
+          : (small ?? primary)
       // A shared free model allows a few requests a minute, so its title waits until the run is done rather than
       // compete with the run's own requests.
       if (isFreeModel(mdl)) yield* input.ended
@@ -571,6 +582,7 @@ const layer = Layer.effect(
           tools: {},
           model: mdl,
           sessionID: input.session.id,
+          purpose: "title",
           retries: 2,
           started: usage.started,
           messages: [
@@ -614,10 +626,15 @@ const layer = Layer.effect(
       const ctx = yield* InstanceState.context
       const promptOps = yield* ops()
       const { task: taskTool } = yield* registry.named()
-      const taskModel =
+      // A free selection keeps its subtasks on the free model, so a subtask's own model, Codium Auto included, is not read.
+      // A subtask on Auto runs on the model Auto picks for standard work; its subagent starts a history of its own.
+      const named =
         isFreeSelection({ providerID: model.providerID, modelID: model.id }) || !task.model
-          ? model
-          : yield* getModel(task.model.providerID, task.model.modelID, sessionID)
+          ? undefined
+          : SessionCodiumAuto.isAuto(task.model)
+            ? yield* autoModel({ sessionID, tier: "standard", visible: [] })
+            : task.model
+      const taskModel = named ? yield* getModel(named.providerID, named.modelID, sessionID) : model
       const assistantMessage: SessionV1.Assistant = yield* sessions.updateMessage({
         id: MessageID.ascending(),
         role: "assistant",
@@ -799,6 +816,7 @@ const layer = Layer.effect(
         time: { created: Date.now() },
         agent: lastUser.agent,
         model: lastUser.model,
+        ...(lastUser.selected ? { selected: lastUser.selected } : {}),
         executionMode: lastUser.executionMode,
       }
       yield* sessions.updateMessage(summaryUserMsg)
@@ -1048,6 +1066,7 @@ const layer = Layer.effect(
         // A repair after a quick-lane thanks is build work: it runs on the build agent with the work's tools.
         agent: parent.name,
         model: input.lastUser.model,
+        ...(input.lastUser.selected ? { selected: input.lastUser.selected } : {}),
         executionMode: input.lastUser.executionMode,
       }
       yield* sessions.updateMessage(followup)
@@ -1286,6 +1305,7 @@ const layer = Layer.effect(
         time: { created: Date.now() },
         agent: ResearchRun.LEAD,
         model: input.lastUser.model,
+        ...(input.lastUser.selected ? { selected: input.lastUser.selected } : {}),
         executionMode: input.lastUser.executionMode,
       }
       yield* sessions.updateMessage(followup)
@@ -1320,7 +1340,16 @@ const layer = Layer.effect(
               yield* events.publish(Session.Event.Error, { sessionID: input.sessionID, error: error.toObject() })
               throw error
             }
-            const model = input.model ?? (yield* currentModel(input.sessionID, agent.model))
+            const chosen = input.model ?? (yield* currentModel(input.sessionID, agent.model))
+            // A shell message on Codium Auto records the model Auto picks for standard work, so a turn that answers it
+            // never sends Auto itself. The command is local: when Auto cannot pick a model now (signed out, Vector Local
+            // on, no Auto on the plan), it still runs, and its message keeps Auto for a model turn to resolve or refuse.
+            const picked = SessionCodiumAuto.isAuto(chosen)
+              ? Option.getOrUndefined(
+                  yield* pickAuto({ sessionID: input.sessionID, tier: "standard" }).pipe(Effect.option),
+                )
+              : undefined
+            const model = picked ?? chosen
             const userMsg: SessionV1.User = {
               id: input.messageID ?? MessageID.ascending(),
               sessionID: input.sessionID,
@@ -1328,6 +1357,7 @@ const layer = Layer.effect(
               role: "user",
               agent: input.agent,
               model: { providerID: model.providerID, modelID: model.modelID },
+              ...(picked ? { selected: { providerID: chosen.providerID, modelID: chosen.modelID } } : {}),
             }
             yield* sessions.updateMessage(userMsg)
             const userPart: SessionV1.Part = {
@@ -1453,21 +1483,38 @@ const layer = Layer.effect(
       const exit = yield* provider.getModel(providerID, modelID).pipe(Effect.exit)
       if (Exit.isSuccess(exit)) return exit.value
       const err = Cause.squash(exit.cause)
-      if (Provider.ModelNotFoundError.isInstance(err)) {
-        yield* events.publish(Session.Event.Error, {
-          sessionID,
-          // A Codium notice carries its action, so the app can offer Sign in to Vector next to it.
-          error: err.codium
-            ? new SessionV1.APIError({
-                message: err.unavailable?.message ?? err.message,
-                isRetryable: false,
-                metadata: { codium: err.codium },
-              }).toObject()
-            : new NamedError.Unknown({ message: err.message }).toObject(),
-        })
-      }
+      if (Provider.ModelNotFoundError.isInstance(err))
+        yield* events.publish(Session.Event.Error, { sessionID, error: SessionCodiumAuto.notice(err) })
       return yield* Effect.die(err)
     })
+
+    // The model Codium Auto picks for one user message, from its size and the context it adds to after the last
+    // compaction boundary. Fails with the notice a chosen model would give when Auto cannot run.
+    const pickAuto = Effect.fn("SessionPrompt.pickAuto")(function* (input: {
+      sessionID: SessionID
+      tier: TaskSize.Tier
+      visible?: SessionV1.WithParts[]
+      added?: readonly SessionV1.Part[]
+    }) {
+      const visible =
+        input.visible ??
+        (yield* MessageV2.filterCompactedEffect(input.sessionID).pipe(
+          Effect.provideService(Database.Service, database),
+        ))
+      return yield* provider.codiumAuto({
+        tier: input.tier,
+        contextTokens: SessionCodiumAuto.contextTokens(visible, input.added),
+      })
+    })
+
+    // Auto for a model turn: when Auto cannot run, the turn fails with that notice on the session.
+    const autoModel = (input: Parameters<typeof pickAuto>[0]) =>
+      pickAuto(input).pipe(
+        Effect.tapError((err) =>
+          events.publish(Session.Event.Error, { sessionID: input.sessionID, error: SessionCodiumAuto.notice(err) }),
+        ),
+        Effect.orDie,
+      )
 
     const currentModel = Effect.fnUntraced(function* (sessionID: SessionID, configured?: PromptInput["model"]) {
       const current = yield* db
@@ -1492,8 +1539,10 @@ const layer = Layer.effect(
         .findMessage(sessionID, (m) => m.info.role === "user" && !!m.info.model)
         .pipe(Effect.orDie)
       if (Option.isSome(match) && match.value.info.role === "user") {
-        const saved = yield* provider.savedModel(match.value.info.model)
-        if (saved) return configured && !isFreeSelection(saved) ? configured : { ...match.value.info.model, ...saved }
+        // A message Codium Auto ran keeps Auto as the choice, not the model Auto picked for it.
+        const chosen = match.value.info.selected ?? match.value.info.model
+        const saved = yield* provider.savedModel(chosen)
+        if (saved) return configured && !isFreeSelection(saved) ? configured : { ...chosen, ...saved }
       }
       if (configured) return configured
       return yield* provider.defaultModel().pipe(Effect.orDie)
@@ -1981,6 +2030,29 @@ const layer = Layer.effect(
         Effect.map((x) => x.flat().map(assign)),
       )
 
+      // Codium Auto picks this message's model once, from the size of the request it opens or joins and the context it
+      // adds to. The message stores that model and Auto as the choice; the session stays on Auto.
+      if (SessionCodiumAuto.isAuto(info.model)) {
+        const visible = yield* MessageV2.filterCompactedEffect(input.sessionID).pipe(
+          Effect.provideService(Database.Service, database),
+        )
+        const sizing = (yield* config.get()).sizing
+        const tier = sizable(current, info)
+          ? (SessionTaskSize.size({
+              messages: [...visible, { info, parts: resolvedParts }],
+              caching: false,
+              lifetime: 0,
+              auto: sizing?.auto,
+              judge: sizing?.judge,
+            }).at(-1)?.tier ?? "standard")
+          : input.size && input.size !== "auto"
+            ? input.size
+            : "standard"
+        const chosen = yield* autoModel({ sessionID: input.sessionID, tier, visible, added: resolvedParts })
+        info.selected = { providerID: info.model.providerID, modelID: info.model.modelID }
+        info.model = { ...chosen, variant: info.model.variant }
+      }
+
       yield* plugin.trigger(
         "chat.message",
         {
@@ -2353,6 +2425,15 @@ const layer = Layer.effect(
         }
 
         step++
+        // A shell message on Codium Auto keeps Auto when Auto could not pick a model then. The turn that answers it picks
+        // once, here, and stores the pick beside Auto, so every step of the request stays on one model and its cache.
+        // When Auto still cannot pick, the turn fails with its notice and nothing is sent.
+        if (SessionCodiumAuto.isAuto(lastUser.model)) {
+          const chosen = yield* autoModel({ sessionID, tier: "standard", visible: msgs })
+          lastUser.selected = { providerID: lastUser.model.providerID, modelID: lastUser.model.modelID }
+          lastUser.model = { providerID: chosen.providerID, modelID: chosen.modelID }
+          yield* sessions.updateMessage(lastUser)
+        }
         const selectedModel = yield* getModel(lastUser.model.providerID, lastUser.model.modelID, sessionID)
         const model =
           lastUser.executionMode === "fast" && !selectedModel.id.endsWith("-fast")
@@ -2481,7 +2562,13 @@ const layer = Layer.effect(
           lastFinished.summary !== true &&
           (yield* compaction.isOverflow({ tokens: lastFinished.tokens, model }))
         ) {
-          yield* compaction.create({ sessionID, agent: lastUser.agent, model: lastUser.model, auto: true })
+          yield* compaction.create({
+            sessionID,
+            agent: lastUser.agent,
+            model: lastUser.model,
+            ...(lastUser.selected ? { selected: lastUser.selected } : {}),
+            auto: true,
+          })
           continue
         }
 
@@ -3012,6 +3099,8 @@ const layer = Layer.effect(
             ...(keyed && session.parentID ? { cacheKey: session.parentID } : {}),
             ...(inheritedCount > 0 ? { boundary: inheritedCount - 1 } : {}),
             retries: warm ? warm.retries : retries,
+            // A Vectorscope review's helper sessions (vectorscope.review, vectorscope.verify, ...) say so to Codium.
+            ...(session.internal?.startsWith("vectorscope.") ? { purpose: "review" as const } : {}),
             answering: () => Deferred.doneUnsafe(answering, Effect.succeed(true)),
             // The digest in the system prompt carries the owner's rules, MEMORY.md and pinned entries too.
             carried: carried && { ...carried, personal: carried.personal + snapshot.personal },
@@ -3060,6 +3149,7 @@ const layer = Layer.effect(
               sessionID,
               agent: lastUser.agent,
               model: lastUser.model,
+              ...(lastUser.selected ? { selected: lastUser.selected } : {}),
               auto: true,
               overflow: !handle.message.finish,
             })
@@ -3363,8 +3453,10 @@ const layer = Layer.effect(
         .getModel(input.user.model.providerID, input.user.model.modelID)
         .pipe(Effect.option)
       if (Option.isNone(primary)) return []
-      const model =
-        (yield* provider.getSmallModel(input.user.model.providerID, input.user.model.modelID)) ?? primary.value
+      const small = yield* provider.getSmallModel(input.user.model.providerID, input.user.model.modelID)
+      // A Codium conversation without a helper model learns nothing rather than spend its own model on it.
+      if (!small && input.user.model.providerID === ModelPlanStatus.PROVIDER_ID) return []
+      const model = small ?? primary.value
       if (freeModelMayTrain(primary.value) || freeModelMayTrain(model)) return []
       const title = yield* agents.get("title")
       if (!title) return []
@@ -3384,6 +3476,7 @@ const layer = Layer.effect(
           tools: {},
           model,
           sessionID: input.session.id,
+          purpose: "brain",
           retries: 1,
           started: usage.started,
           messages: [{ role: "user", content: BrainLearn.request({ typed: input.typed, reply: input.reply }) }],
@@ -4131,7 +4224,9 @@ const layer = Layer.effect(
       // Command and agent defaults cannot spend money on behalf of a free selection.
       const taskModel = isFreeSelection(selectedModel) ? selectedModel : (commandModel ?? selectedModel)
 
-      yield* getModel(taskModel.providerID, taskModel.modelID, input.sessionID)
+      // Codium Auto is checked where it is resolved: by the command's message, or by its subtask.
+      if (!SessionCodiumAuto.isAuto(taskModel))
+        yield* getModel(taskModel.providerID, taskModel.modelID, input.sessionID)
 
       // A slash command's text is not the user's words: a template someone wrote, an MCP server's prompt, a skill or
       // what its snippets printed. Memory takes only the arguments as theirs, and memory written after outside content

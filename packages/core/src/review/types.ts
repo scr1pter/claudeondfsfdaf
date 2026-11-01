@@ -18,7 +18,8 @@ export type Side = "RIGHT" | "LEFT"
 export type Risk = "low" | "medium" | "high"
 export type Trust = "trusted" | "untrusted"
 export type Trigger = "auto" | "command" | "local" | "desktop"
-export type CostKind = "free" | "priced" | "plan" | "local" | "unknown"
+// "codium" is billed to the account's Vector Codium plan and never priced locally.
+export type CostKind = "free" | "priced" | "plan" | "local" | "unknown" | "codium"
 
 export interface ModelFinding {
   path: string

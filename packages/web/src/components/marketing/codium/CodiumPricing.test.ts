@@ -16,20 +16,6 @@ const config: ModelPlanConfig = {
     { id: "vector-10", name: "Plus", price: 10, available: true, tasks: [[60, 550], null] },
     { id: "vector-50", name: "Pro", price: 50, available: true, multiple: 5, tasks: [[300, 2700], null] },
   ],
-  topups: [
-    { id: "codium-topup-10", name: "$10 credit top-up", price: 10, available: true, tasks: [[60, 550], null] },
-    {
-      id: "codium-topup-50",
-      name: "$50 credit top-up",
-      price: 50,
-      available: true,
-      multiple: 5,
-      tasks: [
-        [300, 2700],
-        [160, 1400],
-      ],
-    },
-  ],
   models: [
     {
       id: "deepseek/deepseek-v4.1-flash-1017",
@@ -47,13 +33,11 @@ const selling: ModelPlanConfig = {
   ...live,
   enabled: true,
   plans: live.plans.map((plan) => ({ ...plan, available: true })),
-  topups: live.topups?.map((pack) => ({ ...pack, available: true })),
 }
 const closed = (value: ModelPlanConfig): ModelPlanConfig => ({
   ...value,
   enabled: false,
   plans: value.plans.map((plan) => ({ ...plan, available: false })),
-  topups: value.topups?.map((pack) => ({ ...pack, available: false })),
 })
 
 const render = (value: ModelPlanConfig, mode?: CodiumMode) =>
@@ -61,13 +45,12 @@ const render = (value: ModelPlanConfig, mode?: CodiumMode) =>
 const questions = (value: ModelPlanConfig) =>
   renderToStaticMarkup(createElement(CodiumQuestions, { models: codiumPricing(value).models }))
 // One part of the island's markup: a tab's panel, or the comparison table.
-const part = (html: string, name: "monthly" | "topup" | "compare") => {
+const part = (html: string, name: "monthly" | "compare") => {
   const starts = {
     monthly: html.indexOf('<div class="cx-panel" data-mode="monthly">'),
-    topup: html.indexOf('<div class="cx-panel" data-mode="topup">'),
     compare: html.indexOf('<section class="cx-compare"'),
   }
-  const ends = { monthly: starts.topup, topup: html.indexOf('<p class="cx-note'), compare: html.length }
+  const ends = { monthly: html.indexOf('<p class="cx-note'), compare: html.length }
   return html.slice(starts[name], ends[name])
 }
 const text = (html: string) =>
@@ -80,16 +63,19 @@ const cards = (html: string) => html.split('<article class="cx-card">').slice(1)
 const page = () => Bun.file(new URL("../../../pages/codium.astro", import.meta.url)).text()
 
 describe("Codium pricing page", () => {
-  test("both tabs render before hydration, and the tab from the address is chosen before the page paints", async () => {
+  test("monthly plans render before hydration without a top-up tab", async () => {
     const html = render(selling)
     expect(cards(part(html, "monthly"))).toHaveLength(4)
-    expect(cards(part(html, "topup"))).toHaveLength(2)
+    expect(html).not.toContain('data-mode="topup"')
+    expect(html).not.toContain('aria-label="Plan type"')
     const source = await page()
     expect(source.indexOf("document.documentElement.dataset.codiumMode")).toBeLessThan(
       source.indexOf('<div class="cx-page">'),
     )
     expect(source).toContain("<CodiumPricing client:load")
     expect(source).toContain("<CodiumQuestions client:load")
+    expect(source).toContain("topupsAvailable && new URLSearchParams")
+    expect(source).not.toContain("plans and top-ups")
   })
 
   test("offers the four monthly plans by name, Plus, Pro, Max and Ultra, with no free card, and highlights Pro", () => {
@@ -155,46 +141,21 @@ describe("Codium pricing page", () => {
     expect(sample[1]).not.toContain("Hard Coder:")
   })
 
-  test("the top-ups tab pairs one top-up card, with a picker for the four amounts, and a card for the plans", () => {
-    const topups = part(render(selling, "topup"), "topup")
-    expect(live.topups?.map((pack) => pack.price)).toEqual([10, 50, 100, 200])
-    const [pack, plans] = cards(topups)
-    expect(pack).toContain('<fieldset class="cx-seg cx-picker" aria-label="Top-up amount">')
-    // Each amount is a radio named as checkout names it, by its amount, so a top-up never shares a plan's name.
-    for (const [index, item] of (live.topups ?? []).entries()) {
-      expect(item.name).toBe(`$${item.price} credit top-up`)
-      // The accessible name starts with the amount the radio shows.
-      expect(pack).toContain(
-        `aria-label="${item.name}" name="cx-topup"${index === 0 ? ' checked=""' : ""} value="${index}"/>`,
-      )
-      expect(pack).toContain(`<span>$${item.price}</span>`)
+  test("monthly-only configurations do not offer packs, including visits from old top-up links", () => {
+    expect(live.topups).toBeUndefined()
+    for (const value of [config, live, selling]) {
+      for (const mode of ["monthly", "topup"] as const) {
+        const html = render(value, mode)
+        expect(cards(part(html, "monthly"))).toHaveLength(value.plans.length)
+        for (const offer of [
+          'data-mode="topup"',
+          'aria-label="Plan type"',
+          'aria-label="Top-up amount"',
+          "credit top-up",
+        ])
+          expect(html).not.toContain(offer)
+      }
     }
-    expect(pack).toContain('<span class="cx-amount cx-type-lg">$10</span><span class="cx-per">one-time</span>')
-    expect(pack).toContain('<button class="cx-btn" type="button">Buy $10 credit top-up</button>')
-    expect(text(pack)).toContain("Codium credits that carry forward, with no subscription")
-    expect(text(pack)).toContain("DeepSeek V4.1 Flash 1017: 50–500 tasks")
-    expect(text(pack)).toContain("Unused credits carry forward")
-    // The chosen top-up is named visibly, as checkout and the account page name it.
-    expect(text(pack)).toContain("*$10 credit top-up: one-time purchase.")
-    expect(text(pack)).not.toMatch(/never expire|no expiration|expiry/i)
-    expect(plans).toContain('<span class="cx-amount cx-type-lg">$10–$200</span><span class="cx-per">/month</span>')
-    expect(plans).toContain('<button class="cx-btn cx-btn--secondary" type="button">Compare plans</button>')
-    expect(text(plans)).toContain("Plans from Plus to Ultra")
-    expect(text(plans)).toContain("Up to 20x the usage of Plus")
-  })
-
-  test("the plan type is a native radio group, so it has one tab stop and arrow keys move between the tabs", () => {
-    for (const mode of ["monthly", "topup"] as const) {
-      const html = render(config, mode)
-      expect(html).toContain('<fieldset class="cx-seg cx-toggle" aria-label="Plan type">')
-      const radios = [...html.matchAll(/<label data-value="(?:monthly|topup)">(<input [^>]*>)<span>(.*?)<\/span>/g)]
-      expect(radios.map((match) => match[2])).toEqual(["Individual", "Top-ups"])
-      for (const match of radios) expect(match[1]).toContain('type="radio" name="cx-plan-type"')
-      expect(radios.map((match) => match[1]!.includes('checked=""'))).toEqual(
-        mode === "monthly" ? [true, false] : [false, true],
-      )
-    }
-    expect(render({ ...config, topups: undefined })).not.toContain('aria-label="Plan type"')
   })
 
   test("the tab is kept in the address, so links, reloads and history restore it", () => {
@@ -213,13 +174,13 @@ describe("Codium pricing page", () => {
     for (const plan of cards(part(html, "monthly"))) expect(plan).toContain("*Renews monthly until you cancel.")
     const note = text(html.slice(html.indexOf('<p class="cx-note')))
     expect(note).toContain("Plans renew monthly at the listed price until you cancel")
-    expect(note).toContain("unused top-up credits carry forward separately from your subscription")
+    expect(note).toContain("monthly credits reset each billing period")
+    expect(note).not.toContain("top-up credits")
     expect(note).toContain("Any applicable taxes are shown before payment")
     expect(html).toContain('<a href="/legal/terms#codium">Codium terms</a>')
     expect(html.indexOf('<p class="cx-note')).toBeGreaterThan(html.lastIndexOf("<article"))
     const terms = await Bun.file(new URL("../../../pages/legal/terms.astro", import.meta.url)).text()
     expect(terms).toContain("renew automatically at the")
-    expect(terms).toContain("carry forward separately from your subscription")
     expect(terms).toContain("Any applicable")
   })
 
@@ -261,7 +222,8 @@ describe("Codium pricing page", () => {
       "Any provider with your own key",
     ])
       expect(rows.get(feature)).toEqual(Array(4).fill("Included"))
-    expect(rows.get("Top-ups when credits run low")).toEqual(Array(4).fill("Included"))
+    expect(rows.get("Monthly plans only")).toEqual(Array(4).fill("Included"))
+    expect(rows.has("Top-ups when credits run low")).toBe(false)
     // A model without a reviewed range shows a dash for every plan.
     const sample = part(render(config), "compare")
     expect(sample).toContain('<tr><th scope="row">Hard Coder</th><td><span class="cx-mark cx-mark--no cx-type-md">—')
@@ -334,7 +296,9 @@ describe("Codium pricing page", () => {
         "work across repositories, and Ultra long sessions with parallel agents.",
     )
     expect(answers).not.toMatch(/Codium \d/)
-    expect(answers).toContain("no overage charges and no automatic top-ups")
+    expect(answers).toContain("no overage charges and no top-ups")
+    expect(answers).not.toContain("Buy a top-up")
+    expect(answers).not.toContain("a top-up covers a busy week")
     expect(answers).toContain("routes them only to zero-data-retention endpoints")
     for (const model of live.models ?? []) expect(html).toContain(`<strong>${model.name}</strong>`)
     expect(html).toContain('<a href="/account">account page</a>')
@@ -357,16 +321,16 @@ describe("Codium pricing page", () => {
     for (const value of [config, live]) {
       const html = render(closed(value))
       const buys = [...html.matchAll(/<button class="(cx-btn[^"]*)" type="button"( disabled="")?>(.*?)<\/button>/g)]
-      // Card buttons and table buttons for each plan, the top-up card's button, and the switch to the plans.
-      expect(buys).toHaveLength(value.plans.length * 2 + 2)
-      for (const match of buys.filter((item) => item[3] !== "Compare plans")) {
+      // Each monthly plan has a card button and a comparison-table button.
+      expect(buys).toHaveLength(value.plans.length * 2)
+      for (const match of buys) {
         expect(match[2]).toBe(' disabled=""')
         expect(match[3]).toBe("Coming soon")
       }
       // The same classes as when sales are on, so the same size; only the table's buttons are small.
       const open = [...render(value).matchAll(/<button class="(cx-btn[^"]*)"/g)].map((match) => match[1])
       expect(buys.map((match) => match[1])).toEqual(open)
-      expect(html).toContain('<button class="cx-btn cx-btn--secondary" type="button">Compare plans</button>')
+      expect(html).not.toContain(">Compare plans</button>")
       expect(html).not.toMatch(/>(?:Get|Buy) [^<]*<\/button>/)
     }
     // A plan that reports itself available still waits while the product as a whole is off.

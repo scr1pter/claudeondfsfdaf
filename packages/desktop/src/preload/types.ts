@@ -689,6 +689,8 @@ export type SwarmModelCandidate = {
   provider: string
   model: string
   label?: string
+  /** Codium Auto, a model the plan does not include, or one chosen only by name: a swarm never adds these itself. */
+  codium?: { locked?: boolean; manualOnly?: boolean; auto?: boolean }
 }
 
 export type SwarmTaskRecord = {

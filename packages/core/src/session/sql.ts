@@ -52,6 +52,10 @@ export const SessionTable = sqliteTable(
     // the work it delegated.
     subagent_cost: real().notNull().default(0),
     subagent_unpriced_steps: integer().notNull().default(0),
+    // How many of unpriced_steps and subagent_unpriced_steps ran on Vector Codium, kept by the same step accounting.
+    // A Codium step adds no tokens to these totals.
+    codium_steps: integer().notNull().default(0),
+    subagent_codium_steps: integer().notNull().default(0),
     // The tokens those subagent sessions used, kept beside subagent_cost.
     subagent_tokens_input: integer().notNull().default(0),
     subagent_tokens_output: integer().notNull().default(0),

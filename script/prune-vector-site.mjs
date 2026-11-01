@@ -21,6 +21,8 @@ const keep = new Set([
   "support",
   // The owner's usage dashboard; api/usage/summary decides who sees any numbers.
   "usage",
+  // Private owner shells contain no data; the owner API authorizes every read and mutation.
+  "owner",
   "install",
   "install.ps1",
   "index.html",

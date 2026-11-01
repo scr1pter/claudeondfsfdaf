@@ -29,6 +29,7 @@ export function create(input: {
         ...(measured || usage.cost > 0 ? { cost: usage.cost } : {}),
         ...(measured ? { tokens: usage.tokens } : {}),
         ...(usage.unpriced || incomplete || !measured ? { unpriced: true } : {}),
+        ...(usage.billing ? { billing: usage.billing } : {}),
         ...(incomplete ? { incomplete: true } : {}),
       },
       { id },

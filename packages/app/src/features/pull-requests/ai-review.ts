@@ -375,6 +375,7 @@ type CatalogProvider = {
       id: string
       cost?: { input: number; output: number; cache?: { read: number; write: number } }
       limit?: { context: number }
+      codium?: ModelPlanStatus.Listing
     }
   >
 }
@@ -383,26 +384,30 @@ export function reviewCatalog(providers: readonly CatalogProvider[]): ReviewMode
   return providers
     .filter((provider) => providerUsable(provider.id, provider))
     .flatMap((provider) =>
-      Object.values(provider.models).map((model) => {
-        const costKind: CostKind = costKindOf(provider, model.cost, model.id)
-        const cost = model.cost
-        const price: ReviewPrice | undefined =
-          costKind === "priced" && cost
-            ? {
-                input: cost.input,
-                output: cost.output,
-                ...(cost.cache && cost.cache.read > 0 ? { cacheRead: cost.cache.read } : {}),
-                ...(cost.cache && cost.cache.write > 0 ? { cacheWrite: cost.cache.write } : {}),
-              }
-            : undefined
-        return {
-          providerID: provider.id,
-          modelID: model.id,
-          ...(model.limit?.context ? { context: model.limit.context } : {}),
-          ...(price ? { price } : {}),
-          costKind,
-        }
-      }),
+      Object.values(provider.models)
+        // A Codium model the plan no longer includes is listed for the picker (choosing it opens Change plan), but
+        // every review request to it would be refused, so a review never runs on it, chosen or configured.
+        .filter((model) => !ModelPlanStatus.isLocked(model))
+        .map((model) => {
+          const costKind: CostKind = costKindOf(provider, model.cost, model.id)
+          const cost = model.cost
+          const price: ReviewPrice | undefined =
+            costKind === "priced" && cost
+              ? {
+                  input: cost.input,
+                  output: cost.output,
+                  ...(cost.cache && cost.cache.read > 0 ? { cacheRead: cost.cache.read } : {}),
+                  ...(cost.cache && cost.cache.write > 0 ? { cacheWrite: cost.cache.write } : {}),
+                }
+              : undefined
+          return {
+            providerID: provider.id,
+            modelID: model.id,
+            ...(model.limit?.context ? { context: model.limit.context } : {}),
+            ...(price ? { price } : {}),
+            costKind,
+          }
+        }),
     )
 }
 

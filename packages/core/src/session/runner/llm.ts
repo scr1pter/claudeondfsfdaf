@@ -11,6 +11,7 @@ import {
   type ProviderErrorEvent,
 } from "@vectordevai/llm"
 import { Cause, DateTime, Effect, FiberSet, Layer, Option, Semaphore, Stream } from "effect"
+import { Billing } from "@vectordevai/schema/billing"
 import { and, desc, eq, inArray } from "drizzle-orm"
 import { AgentV2 } from "../../agent"
 import { Config } from "../../config"
@@ -414,9 +415,15 @@ const layer = Layer.effect(
                 assistantMessageID: yield* publisher.startAssistant(),
                 finish: stepSettlement.finish,
                 // The durable event keeps a finite cost, so an unknown price is recorded as 0 and marked unpriced:
-                // readers then tell it apart from a free model instead of counting it as measured free spend.
-                cost: spend.costUsd ?? 0,
-                ...(spend.costUsd === undefined && used > 0 ? { unpriced: true } : {}),
+                // readers then tell it apart from a free model instead of counting it as measured free spend. A Vector
+                // Codium step is billed to the account's plan on vectordev.ai, so it is never priced here, whatever
+                // the provider metadata reports.
+                ...(Billing.isCodium(model.provider)
+                  ? { cost: 0, unpriced: true, billing: "codium" as const }
+                  : {
+                      cost: spend.costUsd ?? 0,
+                      ...(spend.costUsd === undefined && used > 0 ? { unpriced: true } : {}),
+                    }),
                 tokens,
                 snapshot: endSnapshot,
                 files,

@@ -535,6 +535,7 @@ export function observe(sessions: Session.Interface, sessionID: SessionID) {
       toolUses,
       steps,
       unpricedSteps: info.unpricedSteps,
+      codiumSteps: info.codiumSteps,
     }
     const last = messages.findLast((message) => message.info.role === "assistant")
     return { usage, failure: last?.info.role === "assistant" ? failure(last.info.error) : undefined }

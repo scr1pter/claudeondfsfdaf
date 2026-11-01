@@ -1,118 +1,64 @@
+import { MODEL_PLAN_PRICES, modelPlanOrigin, modelPlans } from "../../../api/_lib/model-plan-config"
+import { MODEL_PLAN_STRIPE_VERSION, MODEL_PLAN_WEBHOOK_EVENTS } from "../../../api/_lib/model-plan-stripe"
 import {
-  MODEL_PLAN_STRIPE_VERSION,
-  MODEL_PLAN_WEBHOOK_EVENTS,
-  modelPlanStripe,
-  stripeRecord,
-} from "../../../api/_lib/model-plan-stripe"
-import { MODEL_PLAN_PRICES, modelPlanOrigin, modelPlans, modelTopups } from "../../../api/_lib/model-plan-config"
-import { modelPlanChangePortalConfiguration, modelPlanPortalConfiguration, modelPlanWebhook } from "./model-plan-setup"
+  archiveModelPlanTopups,
+  modelPlanMonthlyPrices,
+  modelPlanPortalConfiguration,
+  modelPlanWebhook,
+  requireModelPlanSetupKey,
+} from "./model-plan-setup"
 
-// A protected preview deployment lets Stripe's notifications through only with Vercel's automation bypass secret.
-const bypass = process.env.VERCEL_AUTOMATION_BYPASS_SECRET?.trim()
-const webhook = `${modelPlanOrigin()}/api/model-plans/webhook${bypass ? `?${new URLSearchParams({ "x-vercel-protection-bypass": bypass })}` : ""}`
-
-// Dry-run by default. Execute with --apply only in the intended Stripe account.
-if (!Bun.argv.includes("--apply")) {
-  console.log(
-    `Vector Codium: monthly subscriptions and one-time top-ups at ${MODEL_PLAN_PRICES.map((price) => `$${price}`).join(", ")}.`,
+/** Dry-run is zero-network; explicit apply is testable through the same owner setup boundaries as the CLI. */
+export async function setupModelPlans(
+  options: { apply?: boolean; fetcher?: typeof fetch; log?: (line: string) => void } = {},
+) {
+  const log = options.log ?? console.log
+  const plans = modelPlans()
+  const bypass = process.env.VERCEL_AUTOMATION_BYPASS_SECRET?.trim()
+  const webhook = `${modelPlanOrigin()}/api/model-plans/webhook${bypass ? `?${new URLSearchParams({ "x-vercel-protection-bypass": bypass })}` : ""}`
+  if (!options.apply) {
+    log(
+      `Vector Codium: four monthly subscriptions at ${MODEL_PLAN_PRICES.map((price) => `$${price}`).join(", ")}. There are no top-ups.`,
+    )
+    for (const plan of plans)
+      log(`${plan.name}: $${plan.price}/month; lookup vector-models-${plan.price}-monthly-v1; tax_behavior=exclusive.`)
+    log("Four owned monthly products use statement descriptor VECTORDEV CODIUM and Codium plan metadata.")
+    log("Archives only verified legacy Codium top-up prices; creates no top-up products or prices.")
+    log(
+      "One no-change portal allows payment methods, invoices and cancellation at period end. Old marked change portals are deactivated.",
+    )
+    log(
+      `Webhook ${modelPlanOrigin()}/api/model-plans/webhook${bypass ? " (preview protection bypass configured)" : ""}: API ${MODEL_PLAN_STRIPE_VERSION}, exactly ${MODEL_PLAN_WEBHOOK_EVENTS.length} events: ${MODEL_PLAN_WEBHOOK_EVENTS.join(", ")}.`,
+    )
+    log(
+      "No changes made. Use the owner's local STRIPE_SECRET_KEY=sk_test_… setup key with --apply; do not use the deployed rk_* runtime key.",
+    )
+    return { applied: false as const }
+  }
+  requireModelPlanSetupKey()
+  const fetcher = options.fetcher ?? fetch
+  const archived = await archiveModelPlanTopups(fetcher)
+  for (const price of archived) log(`Archived legacy Codium top-up price ${price}.`)
+  const monthly = await modelPlanMonthlyPrices(fetcher)
+  for (const plan of monthly) log(`STRIPE_MODEL_PLAN_${plan.amount}_PRICE_ID=${plan.price}`)
+  const portal = await modelPlanPortalConfiguration(fetcher)
+  log(`STRIPE_MODEL_PLAN_PORTAL_CONFIG_ID=${portal.id}`)
+  for (const id of portal.retired)
+    log(`Deactivated legacy Codium plan-change portal ${id}. Remove its obsolete environment value.`)
+  const endpoint = await modelPlanWebhook(webhook, fetcher)
+  if (endpoint.created) log(`STRIPE_MODEL_PLAN_WEBHOOK_SECRET=${endpoint.secret}`)
+  else
+    log(
+      `Webhook ${endpoint.id} is enabled with exactly the supported events. Keep its existing signing secret; Stripe's dashboard holds it.`,
+    )
+  log(
+    "Setup verified. Keep MODEL_PLANS_ENABLED=false until allowances, catalog, funding, legal and protected provider acceptance checks are complete.",
   )
-  console.table(
-    modelPlans().map((plan) => ({
-      plan: plan.name,
-      price: plan.price,
-      monthlyCredits: plan.credits,
-      topupCredits: modelTopups().find((pack) => pack.price === plan.price)?.credits,
-    })),
-  )
-  console.log("Also creates a billing portal with payment-method updates, invoices and cancellation at period end.")
-  console.log(
-    "And a second portal that also changes plans: a bigger plan starts a new month today, charged in full; a smaller one waits for renewal.",
-  )
-  console.log(
-    `And a webhook to ${modelPlanOrigin()}/api/model-plans/webhook${bypass ? " (with the preview's protection bypass)" : ""} (API ${MODEL_PLAN_STRIPE_VERSION}) for: ${MODEL_PLAN_WEBHOOK_EVENTS.join(", ")}.`,
-  )
-  console.log(
-    "No changes made. Set STRIPE_SECRET_KEY to a test key and run again with --apply to prepare test billing.",
-  )
-  process.exit(0)
+  return { applied: true as const, monthly, archived, portal, endpoint }
 }
 
-const monthly: { product: string; price: string }[] = []
-for (const plan of modelPlans()) {
-  const amount = plan.price
-  const lookup = `vector-models-${amount}-monthly-v1`
-  const result = await modelPlanStripe(`prices?${new URLSearchParams({ "lookup_keys[]": lookup, limit: "2" })}`)
-  const existing = Array.isArray(result.data) ? result.data.filter(stripeRecord) : []
-  if (existing.length > 1) throw new Error(`More than one Stripe price matches ${lookup}.`)
-  const price =
-    existing[0] ??
-    (await modelPlanStripe("prices", {
-      method: "POST",
-      idempotency: lookup,
-      body: new URLSearchParams({
-        currency: "usd",
-        unit_amount: String(amount * 100),
-        "recurring[interval]": "month",
-        // Only a new price makes a product; an existing product keeps the name it has in Stripe.
-        "product_data[name]": `Vector Codium ${plan.name}`,
-        lookup_key: lookup,
-      }),
-    }))
-  if (
-    price.currency !== "usd" ||
-    price.unit_amount !== amount * 100 ||
-    price.active !== true ||
-    !stripeRecord(price.recurring) ||
-    price.recurring.interval !== "month" ||
-    price.recurring.interval_count !== 1 ||
-    typeof price.id !== "string" ||
-    typeof price.product !== "string"
-  )
-    throw new Error(`Existing Stripe price ${lookup} has unexpected billing settings.`)
-  monthly.push({ product: price.product, price: price.id })
-  console.log(`STRIPE_MODEL_PLAN_${amount}_PRICE_ID=${price.id}`)
-}
-
-for (const pack of modelTopups()) {
-  const lookup = `vector-codium-topup-${pack.price}-v1`
-  const result = await modelPlanStripe(`prices?${new URLSearchParams({ "lookup_keys[]": lookup, limit: "2" })}`)
-  const existing = Array.isArray(result.data) ? result.data.filter(stripeRecord) : []
-  if (existing.length > 1) throw new Error(`More than one Stripe price matches ${lookup}.`)
-  const price =
-    existing[0] ??
-    (await modelPlanStripe("prices", {
-      method: "POST",
-      idempotency: lookup,
-      body: new URLSearchParams({
-        currency: "usd",
-        unit_amount: String(pack.price * 100),
-        "product_data[name]": `Vector Codium ${pack.name}`,
-        lookup_key: lookup,
-      }),
-    }))
-  if (
-    price.currency !== "usd" ||
-    price.unit_amount !== pack.price * 100 ||
-    price.active !== true ||
-    price.recurring ||
-    typeof price.id !== "string"
-  )
-    throw new Error(`Existing Stripe price ${lookup} has unexpected billing settings.`)
-  console.log(`STRIPE_MODEL_TOPUP_${pack.price}_PRICE_ID=${price.id}`)
-}
-
-const portal = await modelPlanPortalConfiguration()
-console.log(`STRIPE_MODEL_PLAN_PORTAL_CONFIG_ID=${portal.id}`)
-const changes = await modelPlanChangePortalConfiguration(monthly)
-console.log(`STRIPE_MODEL_PLAN_CHANGE_PORTAL_CONFIG_ID=${changes.id}`)
-
-const endpoint = await modelPlanWebhook(webhook)
-if (endpoint.created) console.log(`STRIPE_MODEL_PLAN_WEBHOOK_SECRET=${endpoint.secret}`)
-if (!endpoint.created)
-  console.log(
-    `Webhook ${endpoint.id} already sends to ${modelPlanOrigin()}/api/model-plans/webhook; its signing secret is in the Stripe dashboard.` +
-      (endpoint.missing.length ? ` Add these events to it: ${endpoint.missing.join(", ")}.` : ""),
-  )
-console.log(
-  "Prices are prepared. Keep MODEL_PLANS_ENABLED=false until allowances, model catalog, webhook, funding and live verification are complete.",
-)
+if (import.meta.main)
+  await setupModelPlans({ apply: process.argv.includes("--apply") }).catch((error: unknown) => {
+    console.error(error instanceof Error ? error.message : "Codium setup failed.")
+    process.exitCode = 1
+  })

@@ -45,7 +45,9 @@ const RENEWS_RESET = "*Renews monthly until you cancel. Credits reset each billi
  * account's checkout.
  */
 export function CodiumPricing(props: { pricing: CodiumPricingView; mode?: CodiumMode }) {
-  const [mode, setMode] = React.useState<CodiumMode>(props.mode ?? "monthly")
+  const [mode, setMode] = React.useState<CodiumMode>(
+    props.pricing.topups.length ? (props.mode ?? "monthly") : "monthly",
+  )
   const [pending, setPending] = React.useState<{ id: string; signIn?: boolean }>()
   const [failure, setFailure] = React.useState<{ id: string; message: string }>()
   const [pack, setPack] = React.useState(0)
@@ -82,7 +84,7 @@ export function CodiumPricing(props: { pricing: CodiumPricingView; mode?: Codium
   // The tab lives in the address (?type=topups), so a shared link, a reload and the back button all restore it.
   React.useEffect(() => {
     const restore = () => {
-      const next = codiumMode(location.search)
+      const next = topups.length ? codiumMode(location.search) : "monthly"
       setMode(next)
       document.documentElement.dataset.codiumMode = next
     }
@@ -163,7 +165,7 @@ export function CodiumPricing(props: { pricing: CodiumPricingView; mode?: Codium
       rows: [
         "No provider keys needed",
         "No overage charges",
-        "Top-ups when credits run low",
+        "Monthly plans only",
         "Balance in Settings and your account",
         "Cancel any time",
       ].map((label) => ({ label, values: plans.map(() => true as const) })),
@@ -396,8 +398,7 @@ export function CodiumPricing(props: { pricing: CodiumPricingView; mode?: Codium
         )}
         <p className="cx-note cx-type-xs">
           Any applicable taxes are shown before payment. Plans renew monthly at the listed price until you cancel, and
-          monthly credits reset each billing period. Top-ups don't renew, and unused top-up credits carry forward
-          separately from your subscription. Typical tasks are estimates, not commitments. See the{" "}
+          monthly credits reset each billing period. Typical tasks are estimates, not commitments. See the{" "}
           <a href="/legal/terms#codium">Codium terms</a>.
         </p>
       </div>
@@ -521,7 +522,6 @@ export function CodiumQuestions(props: { models: CodiumPricingView["models"] }) 
         <p>
           Start with {STARTER.name} to try Codium on everyday coding. {REGULAR.name} suits coding with agents most days,{" "}
           {DAILY.name} daily agent work across repositories, and {HEAVY.name} long sessions with parallel agents.
-          Whichever plan you choose, a top-up covers a busy week without changing plans.
         </p>
       ),
     },
@@ -540,10 +540,9 @@ export function CodiumQuestions(props: { models: CodiumPricingView["models"] }) 
       question: "How do Codium credits work?",
       answer: (
         <p>
-          Every purchase adds credits to your Vector account. Each request spends credits for the tokens it actually
-          uses with the model you picked: input, output and reasoning all count, and cached input costs less. Monthly
-          credits are spent first and reset when each billing period ends. Top-up credits don't renew and carry forward
-          separately from your subscription. Credits from a refunded or disputed payment are removed.
+          Each monthly plan includes Codium credits. Each request spends credits for the tokens it actually uses with
+          the model you picked: input, output and reasoning all count, and cached input costs less. Monthly credits
+          reset when each billing period ends. Credits from a refunded or disputed payment are removed.
         </p>
       ),
     },
@@ -553,8 +552,8 @@ export function CodiumQuestions(props: { models: CodiumPricingView["models"] }) 
       answer: (
         <p>
           Before each Codium request, Vector checks that your credits can cover it. When they can't, Codium requests
-          pause: there are no overage charges and no automatic top-ups. Buy a top-up, wait for your plan to renew, or
-          keep working with your own provider keys or free models. The Vector workspace keeps working either way.
+          pause: there are no overage charges and no top-ups. Wait for your plan to renew, or keep working with your own
+          provider keys or free models. The Vector workspace keeps working either way.
         </p>
       ),
     },
@@ -564,7 +563,7 @@ export function CodiumQuestions(props: { models: CodiumPricingView["models"] }) 
       answer: (
         <React.Fragment>
           <p>
-            Every plan and top-up includes the same {props.models.length} coding models.
+            Every plan includes the same {props.models.length} coding models.
             {props.models[0] && ` ${props.models[0].name} is the recommended default; you choose which model to use.`}
             {names("advanced") && " The advanced models use credits faster."}
           </p>
@@ -596,8 +595,8 @@ export function CodiumQuestions(props: { models: CodiumPricingView["models"] }) 
       question: "Where can I see my balance?",
       answer: (
         <p>
-          In Vector's Settings, and on your <a href="/account">account page</a> while you're signed in. Monthly and
-          top-up credits are listed separately, and a balance can lag behind requests that are still finishing.
+          In Vector's Settings, and on your <a href="/account">account page</a> while you're signed in. Your monthly
+          balance can lag behind requests that are still finishing.
         </p>
       ),
     },
@@ -621,8 +620,7 @@ export function CodiumQuestions(props: { models: CodiumPricingView["models"] }) 
       answer: (
         <p>
           Yes. Cancel through your account's billing before renewal. Cancelling stops future renewals and keeps your
-          access for the rest of the paid period. Monthly credits end with that period; unused top-up credits stay on
-          your account.
+          access for the rest of the paid period. Monthly credits end with that period.
         </p>
       ),
     },

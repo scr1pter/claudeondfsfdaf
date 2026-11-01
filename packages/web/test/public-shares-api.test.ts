@@ -5,7 +5,8 @@ import { createServer, request } from "node:http"
 import createHandler from "../../../api/shares/index"
 import itemHandler from "../../../api/shares/[id]"
 import cleanupHandler from "../../../api/shares/cleanup"
-import { mintCliToken } from "../../../api/_lib/cli-token"
+import { mintCliToken, verifyCliTokenClaims } from "../../../api/_lib/cli-token"
+import { revokeCliToken } from "../../../api/_lib/revocation"
 import type { ApiRequest } from "../../../api/_lib/http"
 import { PublicSession } from "../../schema/src/public-session"
 
@@ -304,6 +305,24 @@ test("revocation, expiry and account deletion hide public content and prevent re
   expect(rows[0].owner_id).toBeNull()
   expect(rows[0].snapshot).toBeNull()
   expect(Number(rows[0].deleted_at)).toBeGreaterThan(0)
+})
+
+test("single CLI revocation stops share mutations while sibling grants and existing public links remain usable", async () => {
+  const user = { id: state.owner, email: "fixture@example.test" }
+  const token = mintCliToken(user, Date.now(), "cli").token
+  const sibling = mintCliToken(user, Date.now(), "cli").token
+  const claims = verifyCliTokenClaims(token)
+  const input = fixture()
+  const key = `vector:cli-revoked:${claims.id}:token:${claims.jti}`
+  try {
+    expect((await send("POST", undefined, input, { authorization: `Bearer ${token}` })).status).toBe(200)
+    await revokeCliToken(claims.id, claims.jti!, claims.expiresAt)
+    expect((await send("POST", undefined, fixture(), { authorization: `Bearer ${token}` })).status).toBe(401)
+    expect((await send("GET", input.id)).status).toBe(200)
+    expect((await send("POST", undefined, fixture(), { authorization: `Bearer ${sibling}` })).status).toBe(200)
+  } finally {
+    await redis.send("DEL", [key])
+  }
 })
 
 test("storage, KV, redirects and anonymous database access fail closed", async () => {

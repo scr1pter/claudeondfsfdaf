@@ -26,7 +26,12 @@ export type SwarmModelCandidate = {
   provider: string
   model: string
   label?: string
+  /** What Vector Codium's list says about the entry, from the app's model list. */
+  codium?: SwarmCodiumListing
 }
+
+/** Codium Auto, a model the plan does not include (locked) and a model chosen only by name (manual-only). */
+export type SwarmCodiumListing = { locked?: boolean; manualOnly?: boolean; auto?: boolean }
 
 export type RoutedSwarmPlanTask = SwarmPlanTask & {
   provider: string
@@ -249,18 +254,39 @@ export function selectSwarmPlannerModel(candidates: SwarmModelCandidate[], strat
 
 /**
  * The models a swarm may route work to: the chosen primary model first, then the other connected models, once each.
- * Vector Codium spends the account's credits, so its models join only a swarm whose primary model is a Codium model.
+ * Vector Codium spends the account's plan, so its models join only a swarm whose primary model is a Codium model, and
+ * never Codium Auto, a locked or a manual-only entry the person did not choose (§4.12). The chosen primary stays even
+ * when it is Auto (the engine picks a model for each task's message) or manual-only, since the person named it; one the
+ * plan does not include is refused, as every request to it would be.
  */
 export function swarmModelPool(primary: SwarmModelCandidate, connected: readonly SwarmModelCandidate[]) {
   const codium = primary.provider === ModelPlanStatus.PROVIDER_ID
+  // The app lists the primary among the connected models, with its label and Codium flags.
+  const chosen = { ...connected.find((candidate) => modelKey(candidate) === modelKey(primary)), ...primary }
+  if (codium && chosen.codium?.locked)
+    throw new Error(
+      `Change your Codium plan to use ${chosen.label ?? chosen.model}, or choose another model for the swarm.`,
+    )
   return [
     ...new Map(
-      [primary, ...connected]
+      [chosen, ...connected.filter(automaticCodium)]
         .filter((candidate) => candidate.provider.trim() && candidate.model.trim())
         .filter((candidate) => codium || candidate.provider !== ModelPlanStatus.PROVIDER_ID)
         .map((candidate) => [modelKey(candidate), candidate]),
     ).values(),
   ]
+}
+
+// A connected model the swarm may add by itself: anything outside Codium, and a Codium entry that is not Auto, locked
+// or manual-only.
+function automaticCodium(candidate: SwarmModelCandidate) {
+  if (candidate.provider !== ModelPlanStatus.PROVIDER_ID) return true
+  return (
+    candidate.model !== ModelPlanStatus.AUTO_ID &&
+    !candidate.codium?.auto &&
+    !candidate.codium?.locked &&
+    !candidate.codium?.manualOnly
+  )
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

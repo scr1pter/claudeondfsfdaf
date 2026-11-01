@@ -3,40 +3,44 @@ import { ModelPlanStatus } from "@vectordevai/core/model-plan-status"
 import { CodiumPlan } from "@vectordevai/schema/codium-plan"
 import { createSignal, onCleanup, onMount, Show } from "solid-js"
 import { usePlatform } from "@/context/platform"
+import { newestRead, onCodiumChange } from "@/vector-account"
 import { CodiumBillingStatus, createCodiumBilling, useCodiumPurchase } from "./codium-purchase"
 
-/** Vector Codium plan and balances. The desktop main process reads them, so the account token never reaches here. */
+/** Vector Codium plan and usage. The desktop main process reads them, so the account token never reaches here. */
 export function SettingsVectorCodium() {
   const platform = usePlatform()
   const [status, setStatus] = createSignal<ModelPlanStatus.Status>()
   const [busy, setBusy] = createSignal(false)
+  // Reads overlap after a purchase or an account change; an older answer never replaces a newer one, and every
+  // announcement starts its own read rather than waiting on one that may predate the change.
+  const statusRead = newestRead()
   const refresh = async () => {
     const account = platform.vectorAccount
-    if (!account?.codium || busy()) return
+    if (!account?.codium) return
+    const newest = statusRead()
     setBusy(true)
-    await account
-      .codium()
-      .then(setStatus)
-      .catch(() =>
-        setStatus({
-          signedIn: true,
-          enabled: false,
-          access: false,
-          purchased: { bought: false },
-          empty: false,
-          low: false,
-          error: "Vector could not load your Codium balance. Try again shortly.",
-        }),
-      )
-      .finally(() => setBusy(false))
+    const next = await account.codium().catch(() => ({
+      signedIn: true,
+      enabled: false,
+      access: false,
+      purchased: { bought: false },
+      empty: false,
+      low: false,
+      error: "Vector could not load your Codium usage. Try again shortly.",
+    }))
+    if (!newest()) return
+    setStatus(next)
+    setBusy(false)
   }
-  const billing = createCodiumBilling(refresh)
+  const billing = createCodiumBilling()
   const purchase = useCodiumPurchase()
   onMount(() => {
     const account = platform.vectorAccount
     if (!account?.codium) return
-    // Signing in or out changes whose balance this shows.
+    // Signing in or out changes whose plan this shows.
     onCleanup(account.onChange(() => void refresh()))
+    // A billing request, and a purchase's later reads, say the plan may have changed.
+    onCleanup(onCodiumChange(() => void refresh()))
     void refresh()
   })
   const plan = () => status()?.plan
@@ -52,8 +56,8 @@ export function SettingsVectorCodium() {
             Vector Codium
           </h3>
           <p class="text-12-regular text-text-weak mt-1">
-            Coding models you pay for with Codium credits, available whenever you are signed in to Vector. Monthly
-            credits are used first, then purchased credits. Vector itself stays free.
+            Coding models included in your Vector Codium plan, available whenever you are signed in to Vector. Usage
+            shows as a share of this month. Vector itself stays free.
           </p>
         </div>
         <Show when={status()}>
@@ -77,10 +81,10 @@ export function SettingsVectorCodium() {
                     {(active) => (
                       <>
                         <div>
-                          <dt>Monthly credits</dt>
+                          <dt>This month</dt>
                           <dd>
                             {active().left === undefined
-                              ? "Balance unavailable"
+                              ? "Usage unavailable"
                               : `${ModelPlanStatus.formatShare(active().left!)} left this month`}
                           </dd>
                         </div>
@@ -91,10 +95,6 @@ export function SettingsVectorCodium() {
                       </>
                     )}
                   </Show>
-                  <div>
-                    <dt>Purchased credits</dt>
-                    <dd>{ModelPlanStatus.formatPurchased(current().purchased)}</dd>
-                  </div>
                 </dl>
                 <Show when={ModelPlanStatus.notice(current())}>
                   {(notice) => (
@@ -112,17 +112,17 @@ export function SettingsVectorCodium() {
           )}
         </Show>
         <div class="flex flex-wrap gap-2">
-          {/* In the desktop the plans and top-ups open in Vector, where each reads Coming soon until Codium is on sale. */}
+          {/* In the desktop the plans open in Vector, where each reads Coming soon until Codium is on sale. */}
           <Show when={status()?.signedIn && (platform.vectorAccount?.billing || status()?.enabled)}>
             <Button
               onClick={() =>
                 platform.vectorAccount?.billing ? purchase() : platform.openLink(ModelPlanStatus.PURCHASE_URL)
               }
             >
-              Buy credits
+              {plan() ? "Change plan" : "See plans"}
             </Button>
           </Show>
-          <Show when={plan() || status()?.purchased.bought || status()?.customer}>
+          <Show when={plan() || status()?.customer}>
             <Button variant="secondary" disabled={billing.busy()} onClick={() => void billing.run({ kind: "portal" })}>
               Manage billing and invoices
             </Button>

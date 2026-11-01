@@ -3,7 +3,7 @@ import { ButtonV2 } from "@vectordevai/ui/v2/button-v2"
 import { Match, Show, Switch, createMemo, createSignal, onCleanup, onMount } from "solid-js"
 import { CodiumBillingStatus, CodiumPurchase, createCodiumBilling } from "@/components/codium-purchase"
 import { usePlatform } from "@/context/platform"
-import { accountChip, codiumChanged, type VectorAccountStatus } from "@/vector-account"
+import { accountChip, codiumChanged, newestRead, onCodiumChange, type VectorAccountStatus } from "@/vector-account"
 import { accountIdentity, codiumSummary, deletionStep, sameEmail } from "./account-model"
 import "./settings-v2.css"
 import "./settings-account.css"
@@ -40,20 +40,22 @@ export function SettingsAccountV2(props: { onUsage: () => void }) {
   const step = createMemo(() => deletionStep(deleting(), account().deletion))
   const typedMatches = createMemo(() => sameEmail(typed(), account().email))
 
+  // Reads overlap after a purchase or an account change; an older answer never replaces a newer one.
+  const codiumRead = newestRead()
   const refreshCodium = async () => {
     const read = platform.vectorAccount?.codium
     if (!read) return
-    setCodium(
-      await read().catch(() => ({
-        signedIn: true,
-        enabled: false,
-        access: false,
-        purchased: { bought: false },
-        empty: false,
-        low: false,
-        error: "Vector could not load your Codium balance. Try again shortly.",
-      })),
-    )
+    const newest = codiumRead()
+    const next = await read().catch(() => ({
+      signedIn: true,
+      enabled: false,
+      access: false,
+      purchased: { bought: false },
+      empty: false,
+      low: false,
+      error: "Vector could not load your Codium usage. Try again shortly.",
+    }))
+    if (newest()) setCodium(next)
   }
 
   onMount(() => {
@@ -81,6 +83,8 @@ export function SettingsAccountV2(props: { onUsage: () => void }) {
         setAccount({ authenticated: false, pending: false, error: "Vector could not load your account. Try again." }),
       )
       .finally(() => setLoaded(true))
+    // A billing request, a purchase's later reads and Refresh elsewhere all say the plan may have changed.
+    onCleanup(onCodiumChange(() => void refreshCodium()))
     void refreshCodium()
   })
 
@@ -96,7 +100,7 @@ export function SettingsAccountV2(props: { onUsage: () => void }) {
       .finally(() => setBusy(false))
   }
 
-  const billing = createCodiumBilling(refreshCodium)
+  const billing = createCodiumBilling()
 
   // The desktop's own account token never deletes the account: it is stored on this machine and carries the email to
   // type. So deletion asks for a fresh sign-in in the browser, and the desktop deletes with what that sign-in gives.
@@ -153,7 +157,7 @@ export function SettingsAccountV2(props: { onUsage: () => void }) {
           <p class="settings-v2-page-kicker">Vector account</p>
           <h2 class="settings-v2-page-title">Account</h2>
           <p class="settings-v2-page-subtitle">
-            Your Vector sign-in, your Vector Codium plan and billing, and the credits left this month.
+            Your Vector sign-in, your Vector Codium plan and billing, and what is left of this month's usage.
           </p>
         </div>
       </div>
@@ -259,9 +263,7 @@ export function SettingsAccountV2(props: { onUsage: () => void }) {
           <div class="settings-account-section-head">
             <div>
               <h3>Vector Codium</h3>
-              <p>
-                Coding models you pay for with Codium credits. Monthly credits are used first, then purchased credits.
-              </p>
+              <p>Coding models included in your Vector Codium plan. Usage shows as a share of this month.</p>
             </div>
             <Show when={summary().kind === "coming-soon"}>
               <span class="settings-account-badge">Coming soon</span>
@@ -276,7 +278,7 @@ export function SettingsAccountV2(props: { onUsage: () => void }) {
             </Match>
             <Match when={summary().kind === "coming-soon"}>
               <p class="settings-account-muted">
-                Vector Codium plans are not on sale yet. Your plan and the credits left this month will show here.
+                Vector Codium plans are not on sale yet. Your plan and this month's usage will show here.
               </p>
             </Match>
             <Match when={failure()}>
@@ -294,16 +296,16 @@ export function SettingsAccountV2(props: { onUsage: () => void }) {
                       <dt>Plan</dt>
                       <dd>{current().plan}</dd>
                     </div>
-                    <Show when={current().credits}>
-                      {(credits) => (
+                    <Show when={current().usage}>
+                      {(usage) => (
                         <div>
-                          <dt>Monthly credits</dt>
-                          <dd>{credits()}</dd>
+                          <dt>This month</dt>
+                          <dd>{usage()}</dd>
                           <Show when={current().left !== undefined}>
                             <span
                               class="settings-account-meter"
                               role="meter"
-                              aria-label="Share of this month's credits left"
+                              aria-label="Share of this month's usage left"
                               aria-valuemin="0"
                               aria-valuemax="100"
                               aria-valuenow={Math.round((current().left ?? 0) * 100)}
@@ -323,11 +325,23 @@ export function SettingsAccountV2(props: { onUsage: () => void }) {
                         </div>
                       )}
                     </Show>
-                    <div>
-                      <dt>Purchased credits</dt>
-                      <dd>{current().purchased}</dd>
-                    </div>
                   </dl>
+                  <Show when={current().scheduled}>
+                    {(scheduled) => (
+                      <div class="settings-account-scheduled" data-component="settings-account-scheduled">
+                        <p role="status">
+                          Switches to {scheduled().name} on {scheduled().date}.
+                        </p>
+                        <ButtonV2
+                          variant="outline"
+                          disabled={billing.busy()}
+                          onClick={() => void billing.run({ kind: "keep" })}
+                        >
+                          Keep my plan
+                        </ButtonV2>
+                      </div>
+                    )}
+                  </Show>
                   <Show when={current().notice}>
                     {(notice) => (
                       <p
@@ -337,6 +351,25 @@ export function SettingsAccountV2(props: { onUsage: () => void }) {
                       >
                         {notice().text}
                       </p>
+                    )}
+                  </Show>
+                  <Show when={current().payment}>
+                    {(payment) => (
+                      <div class="settings-account-links">
+                        <ButtonV2
+                          class="settings-account-primary"
+                          variant="contrast"
+                          disabled={billing.busy()}
+                          onClick={() =>
+                            void (payment() === "update-card"
+                              ? billing.run({ kind: "portal", flow: "payment_method_update" })
+                              : // The portal's home ends as closed, though the payment may have gone through there.
+                                billing.run({ kind: "portal" }, { paying: true }))
+                          }
+                        >
+                          {payment() === "update-card" ? "Update card" : "Confirm payment"}
+                        </ButtonV2>
+                      </div>
                     )}
                   </Show>
                 </>
@@ -355,10 +388,10 @@ export function SettingsAccountV2(props: { onUsage: () => void }) {
                 onClick={() =>
                   platform.vectorAccount?.offers
                     ? setPurchasing((value) => !value)
-                    : platform.openLink(ModelPlanStatus.PURCHASE_URL)
+                    : platform.openLink(codium()?.plan ? ModelPlanStatus.MANAGE_URL : ModelPlanStatus.PURCHASE_URL)
                 }
               >
-                Buy credits
+                {codium()?.plan ? "Change plan" : "See plans"}
               </ButtonV2>
             </Show>
             <Show when={codium()?.plan && !codium()?.plan?.cancelAtPeriodEnd && summary().kind === "plan"}>
@@ -380,15 +413,15 @@ export function SettingsAccountV2(props: { onUsage: () => void }) {
               </ButtonV2>
             </Show>
             <Show when={summary().kind !== "coming-soon"}>
-              <ButtonV2 variant="ghost" icon="reset" onClick={() => void refreshCodium().then(codiumChanged)}>
+              <ButtonV2 variant="ghost" icon="reset" onClick={codiumChanged}>
                 Refresh
               </ButtonV2>
             </Show>
           </div>
           <Show when={purchasing()}>
-            <CodiumPurchase plan={codium()?.plan} billing={billing} />
+            <CodiumPurchase status={codium()} billing={billing} />
           </Show>
-          <CodiumBillingStatus billing={billing} />
+          <CodiumBillingStatus billing={billing} plan={codium()?.plan?.id} />
         </div>
       </Show>
 
@@ -405,7 +438,7 @@ export function SettingsAccountV2(props: { onUsage: () => void }) {
               <div class="settings-account-confirm" role="group" aria-label="Confirm account deletion">
                 <p>
                   Vector deletes your account and sign-in and stops the CLI tokens this account has issued. Any Vector
-                  Codium plan ends at once, and the credits left, this month's or purchased, can no longer be used.
+                  Codium plan ends at once, and what is left of this month's Codium usage can no longer be used.
                   Repositories on this machine are not touched, and neither is anything you have already published to
                   your own cloud accounts.
                 </p>

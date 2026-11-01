@@ -444,7 +444,12 @@ declare global {
           objective: string
           primaryProvider: string
           primaryModel: string
-          modelPool?: { provider: string; model: string; label?: string }[]
+          modelPool?: {
+            provider: string
+            model: string
+            label?: string
+            codium?: { locked?: boolean; manualOnly?: boolean; auto?: boolean }
+          }[]
           strategy?: "economy" | "balanced" | "quality"
           maxAgents?: number
           maxConcurrency?: number

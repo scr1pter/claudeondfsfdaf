@@ -33,6 +33,7 @@ import { samePolledRecords, sameWorkspaceRevisions } from "@/utils/workspace-rev
 import { Persist, persisted } from "@/utils/persist"
 import { modelDisplayName } from "@/utils/provider-brand"
 import { ModelPlanStatus } from "@vectordevai/core/model-plan-status"
+import { onCodiumChange } from "@/vector-account"
 import { decodeRouteSegment, projectPathFromWorkspaceRoute, sessionIDFromRouteValue } from "@/utils/project-route"
 import { taskScopeId, taskScopeSearch, type TaskScope } from "@/utils/task-scope"
 import { WORKSPACE_FILE_SAVED_EVENT, workspaceFileSavedDetail } from "@/utils/workspace-file-saved"
@@ -459,7 +460,12 @@ type SwarmOrchestratorApi = {
     objective: string
     primaryProvider: string
     primaryModel: string
-    modelPool?: { provider: string; model: string; label?: string }[]
+    modelPool?: {
+      provider: string
+      model: string
+      label?: string
+      codium?: { locked?: boolean; manualOnly?: boolean; auto?: boolean }
+    }[]
     strategy?: "economy" | "balanced" | "quality"
     maxAgents?: number
     maxConcurrency?: number
@@ -746,16 +752,26 @@ export default function NewLayout(props: ParentProps) {
         providerName: provider.name || provider.id,
         modelID: model.id,
         modelName: modelDisplayName({ ...model, provider }) || model.id,
+        // What a swarm needs to keep Codium Auto, locked and manual-only entries out of the models it adds itself.
+        codium: model.codium && {
+          locked: ModelPlanStatus.isLocked(model),
+          manualOnly: model.codium.manualOnly === true,
+          auto: ModelPlanStatus.isAuto(model),
+        },
       })),
     ),
   )
   createEffect(() => {
     const options = parallelModelOptions()
     if (options.length === 0) return
+    // A recent model the plan no longer includes is not picked again by itself: every request to it would be refused.
     const recent = byokModels.recent
       .list()
       .find((item) =>
-        options.some((option) => option.providerID === item.providerID && option.modelID === item.modelID),
+        options.some(
+          (option) =>
+            option.providerID === item.providerID && option.modelID === item.modelID && !option.codium?.locked,
+        ),
       )
     // Without a recent or current choice, the first connected model that is not Codium: Codium spends the account's
     // credits, so a swarm only runs on it when the person picks it.
@@ -859,6 +875,15 @@ export default function NewLayout(props: ParentProps) {
   }
 
   onCleanup(() => stopNavigationResize?.())
+  // A purchase, an upgrade or a plan change can change which Codium models the plan includes.
+  onCleanup(
+    onCodiumChange(
+      () =>
+        void serverSync()
+          .refreshProviders()
+          .catch(() => undefined),
+    ),
+  )
 
   // The Browser Agent's live page is a native Electron WebContentsView that
   // composites on top of all DOM, so it paints over any modal dialog. Hide it
@@ -2245,6 +2270,7 @@ export default function NewLayout(props: ParentProps) {
           provider: option.providerID,
           model: option.modelID,
           label: `${option.providerName} ${option.modelName}`,
+          ...(option.codium ? { codium: option.codium } : {}),
         })),
         strategy: swarmStrategy(),
         maxAgents: swarmMaxAgents(),

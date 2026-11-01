@@ -29,8 +29,10 @@ export function fromRow(row: typeof SessionTable.$inferSelect): SessionSchema.In
       : undefined,
     cost: row.cost,
     unpricedSteps: row.unpriced_steps || undefined,
+    codiumSteps: row.codium_steps || undefined,
     subagentCost: row.subagent_cost || undefined,
     subagentUnpricedSteps: row.subagent_unpriced_steps || undefined,
+    subagentCodiumSteps: row.subagent_codium_steps || undefined,
     subagentTokens: subagentTokens(row),
     tokens: {
       input: row.tokens_input,

@@ -253,6 +253,40 @@ describe("system prompt layout across sessions", () => {
     expect(new Headers(prepared.headers).get("x-session-id")).toBe(value.sessionID)
   })
 
+  test("a Codium request's purpose is set last, cannot be overridden and reaches Codium only", async () => {
+    const codium = model("vendor/coder", "@ai-sdk/openai-compatible", "vector-plan", false)
+    const plugin = (headers: Record<string, string>) =>
+      ({
+        ...input({ model: codium, directory: "/work/a" }).plugin,
+        trigger: (name: string, _input: unknown, output: { headers: Record<string, string> }) =>
+          Effect.succeed(name === "chat.headers" ? { ...output, headers } : output),
+      }) as Input["plugin"]
+    const purpose = async (value: Partial<Input>) =>
+      new Headers((await prepare({ ...input({ model: codium, directory: "/work/a" }), ...value })).headers).get(
+        "x-vector-purpose",
+      )
+    expect(await purpose({})).toBe("chat")
+    expect(await purpose({ purpose: "title" })).toBe("title")
+    expect(
+      await purpose({ agent: { name: "judge", mode: "subagent", options: {}, permission: [] } as Input["agent"] }),
+    ).toBe("judge")
+    // Neither model configuration nor a plugin can claim another purpose.
+    expect(
+      await purpose({
+        purpose: "brain",
+        model: { ...codium, headers: { "X-Vector-Purpose": "review" } } as Input["model"],
+        plugin: plugin({ "x-vector-purpose": "race" }),
+      }),
+    ).toBe("brain")
+    // Any other provider never sees the header, even when a plugin adds it.
+    const other = await prepare({
+      ...input({ model: gpt, directory: "/work/a" }),
+      purpose: "title",
+      plugin: plugin({ "X-Vector-Purpose": "title" }),
+    })
+    expect(new Headers(other.headers).has("x-vector-purpose")).toBe(false)
+  })
+
   test("tools go out in name order whatever order they were offered in", async () => {
     const value = input({ model: gpt, directory: "/work/a" })
     const schema = jsonSchema({ type: "object", properties: {} })

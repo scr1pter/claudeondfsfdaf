@@ -106,9 +106,6 @@ describe("account model plans", () => {
             enabled: false,
             product: "Vector Codium",
             plans: [{ ...config.plans[0]!, ...allowance, name: "Plus", available: false, tasks: [[60, 550], null] }],
-            topups: [
-              { id: "codium-topup-10", name: "$10 credit top-up", price: 10, available: false, tasks: [[60, 550]] },
-            ],
             models: [
               { id: "vendor/coder", name: "Coding Model", category: "everyday", description: "Routine coding tasks." },
               { id: "vendor/hard", name: "Hard Model", category: "advanced" },
@@ -119,12 +116,12 @@ describe("account model plans", () => {
       }),
     )
     expect(html).toContain("Monthly subscriptions")
-    expect(html).toContain("One-time credit packs")
+    expect(html).not.toContain("One-time credit packs")
     expect(html).toContain("About 60–550 typical tasks a month with Coding Model")
-    expect(html).toContain("About 60–550 typical tasks with Coding Model")
-    expect(html).toContain("Credits carry forward")
+    expect(html).not.toContain("credit top-up")
+    expect(html).not.toContain("buy credits when you need them")
     expect(html).toContain("do not roll over")
-    expect(html).toContain("no automatic top-ups")
+    expect(html).toContain("No automatic overage charges or top-ups")
     expect(html).toContain("Everyday")
     expect(html).toContain("reasoning affect usage")
     expect(html).toContain("repeated context also counts")
@@ -134,7 +131,7 @@ describe("account model plans", () => {
     for (const leak of ["Codium credits /", "4321", "tokens", "80% input", "markup"]) expect(html).not.toContain(leak)
   })
 
-  test("plans are offered as Plus, Pro, Max and Ultra and top-ups by their amount, as the server names them", () => {
+  test("only monthly Plus, Pro, Max and Ultra plans are offered, as the server names them", () => {
     const html = renderToStaticMarkup(
       createElement(ModelPlans, {
         accessToken: "",
@@ -145,7 +142,8 @@ describe("account model plans", () => {
       }),
     )
     for (const name of ["Plus", "Pro", "Max", "Ultra"]) expect(html).toContain(`<h4>${name}</h4>`)
-    for (const price of [10, 50, 100, 200]) expect(html).toContain(`<h4>$${price} credit top-up</h4>`)
+    expect(html).not.toContain("credit top-up")
+    expect(html).not.toContain("One-time credit packs")
     expect(html).not.toMatch(/Codium \d/)
   })
 

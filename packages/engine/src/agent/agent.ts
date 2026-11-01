@@ -9,6 +9,9 @@ import { generateObject, streamObject, type ModelMessage } from "ai"
 import { Truncate } from "@/tool/truncate"
 import { Auth } from "../auth"
 import { ProviderTransform } from "@/provider/transform"
+import { SessionCodiumAuto } from "@/session/codium-auto"
+import { Token } from "@/util/token"
+import { ModelPlanStatus } from "@vectordevai/core/model-plan-status"
 
 import PROMPT_GENERATE from "./generate.txt"
 import PROMPT_COMPACTION from "./prompt/compaction.txt"
@@ -926,7 +929,15 @@ const layer = Layer.effect(
         model?: { providerID: ProviderV2.ID; modelID: ModelV2.ID }
       }) {
         const cfg = yield* config.get()
-        const model = input.model ?? (yield* provider.defaultModel())
+        const named = input.model ?? (yield* provider.defaultModel())
+        // Codium Auto is a listing entry, never a model the gateway serves: this one request runs on the model Auto
+        // picks for standard work, and fails with Auto's notice before anything is sent when the plan offers none.
+        const model = SessionCodiumAuto.isAuto(named)
+          ? yield* provider.codiumAuto({
+              tier: "standard",
+              contextTokens: Token.estimate(`${PROMPT_GENERATE}\n${input.description}`),
+            })
+          : named
         const resolved = yield* provider.getModel(model.providerID, model.modelID)
         const language = yield* provider.getLanguage(resolved)
         // The OpenTelemetry tracer package loads only when the experimental exporter is configured.
@@ -974,14 +985,20 @@ const layer = Layer.effect(
           ),
         } satisfies Parameters<typeof generateObject>[0]
 
-        if (isOpenaiOauth) {
+        // A ChatGPT sign-in and the Codium gateway both answer only as a stream: a whole-answer request to Codium would
+        // be sent, and spend the plan's usage, with no answer Vector could read.
+        if (isOpenaiOauth || resolved.providerID === ModelPlanStatus.PROVIDER_ID) {
           return yield* Effect.promise(async () => {
             const result = streamObject({
               ...params,
-              providerOptions: ProviderTransform.providerOptions(resolved, {
-                instructions: system.join("\n"),
-                store: false,
-              }),
+              ...(isOpenaiOauth
+                ? {
+                    providerOptions: ProviderTransform.providerOptions(resolved, {
+                      instructions: system.join("\n"),
+                      store: false,
+                    }),
+                  }
+                : {}),
               onError: () => {},
             })
             for await (const part of result.fullStream) {

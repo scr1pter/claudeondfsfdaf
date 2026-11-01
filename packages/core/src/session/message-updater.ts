@@ -215,9 +215,11 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
           draft.time.completed = event.data.timestamp
           draft.finish = event.data.finish
           draft.cost = event.data.cost
-          // A later settlement replaces the earlier one, marker included.
+          // A later settlement replaces the earlier one, markers included.
           if (event.data.unpriced) draft.unpriced = true
           else delete draft.unpriced
+          if (event.data.billing) draft.billing = event.data.billing
+          else delete draft.billing
           draft.tokens = event.data.tokens
           if (event.data.snapshot || event.data.files)
             draft.snapshot = {
@@ -398,6 +400,8 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
             recent: event.data.recent,
             ...(event.data.cost === undefined ? {} : { cost: event.data.cost }),
             ...(event.data.unpriced ? { unpriced: true } : {}),
+            // A compaction row names no model, so this flag is the only sign that it ran on Vector Codium.
+            ...(event.data.billing ? { billing: event.data.billing } : {}),
             ...(event.data.tokens === undefined ? {} : { tokens: event.data.tokens }),
             time: { created: event.data.timestamp },
           }),

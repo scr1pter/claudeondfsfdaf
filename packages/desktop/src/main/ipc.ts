@@ -263,6 +263,7 @@ export function registerIpcHandlers(deps: Deps) {
   handle("vector-account-logout", () => vectorAccount.logout())
   handle("vector-account-codium", () => vectorAccount.codium())
   handle("vector-account-offers", () => vectorAccount.offers())
+  handle("vector-account-refresh-models", () => vectorAccount.refreshModels())
   handle("vector-account-billing", (_event, input: unknown) => vectorAccount.billing(input))
   handle("vector-account-confirm-deletion", () => vectorAccount.confirmDeletion())
   handle("vector-account-cancel-deletion", () => vectorAccount.cancelDeletion())

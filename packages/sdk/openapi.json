@@ -27469,10 +27469,18 @@
             "type": "integer",
             "minimum": 0
           },
+          "codiumSteps": {
+            "type": "integer",
+            "minimum": 0
+          },
           "subagentCost": {
             "type": "number"
           },
           "subagentUnpricedSteps": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "subagentCodiumSteps": {
             "type": "integer",
             "minimum": 0
           },
@@ -27746,6 +27754,19 @@
             "required": ["providerID", "modelID"],
             "additionalProperties": false
           },
+          "selected": {
+            "type": "object",
+            "properties": {
+              "providerID": {
+                "type": "string"
+              },
+              "modelID": {
+                "type": "string"
+              }
+            },
+            "required": ["providerID", "modelID"],
+            "additionalProperties": false
+          },
           "system": {
             "type": "string"
           },
@@ -27953,6 +27974,10 @@
                 "type": "integer",
                 "minimum": 0
               },
+              "codiumSteps": {
+                "type": "integer",
+                "minimum": 0
+              },
               "estimate": {
                 "type": "object",
                 "properties": {
@@ -28154,6 +28179,9 @@
           },
           "unpriced": {
             "type": "boolean"
+          },
+          "billing": {
+            "$ref": "#/components/schemas/BillingKind"
           },
           "tokens": {
             "type": "object",
@@ -28799,6 +28827,9 @@
           "unpriced": {
             "type": "boolean"
           },
+          "billing": {
+            "$ref": "#/components/schemas/BillingKind"
+          },
           "tokens": {
             "type": "object",
             "properties": {
@@ -29250,7 +29281,7 @@
       },
       "CostKind": {
         "type": "string",
-        "enum": ["free", "priced", "plan", "local", "unknown"]
+        "enum": ["free", "priced", "plan", "local", "unknown", "codium"]
       },
       "QuestionOption": {
         "type": "object",
@@ -29696,6 +29727,9 @@
                       },
                       "unpriced": {
                         "type": "boolean"
+                      },
+                      "billing": {
+                        "$ref": "#/components/schemas/BillingKind"
                       },
                       "tokens": {
                         "type": "object",
@@ -30209,6 +30243,9 @@
                       },
                       "unpriced": {
                         "type": "boolean"
+                      },
+                      "billing": {
+                        "$ref": "#/components/schemas/BillingKind"
                       },
                       "tokens": {
                         "type": "object",
@@ -31051,6 +31088,9 @@
                       "unpriced": {
                         "type": "boolean"
                       },
+                      "billing": {
+                        "$ref": "#/components/schemas/BillingKind"
+                      },
                       "tokens": {
                         "type": "object",
                         "properties": {
@@ -31122,6 +31162,9 @@
                       },
                       "unpriced": {
                         "type": "boolean"
+                      },
+                      "billing": {
+                        "$ref": "#/components/schemas/BillingKind"
                       },
                       "tokens": {
                         "type": "object",
@@ -32407,6 +32450,10 @@
                         "minimum": 0
                       },
                       "unpricedSteps": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "codiumSteps": {
                         "type": "integer",
                         "minimum": 0
                       },
@@ -35576,6 +35623,9 @@
             "additionalProperties": {
               "type": "object"
             }
+          },
+          "codium": {
+            "$ref": "#/components/schemas/ModelCodium"
           }
         },
         "required": [
@@ -35844,10 +35894,18 @@
             "type": "integer",
             "minimum": 0
           },
+          "codiumSteps": {
+            "type": "integer",
+            "minimum": 0
+          },
           "subagentCost": {
             "type": "number"
           },
           "subagentUnpricedSteps": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "subagentCodiumSteps": {
             "type": "integer",
             "minimum": 0
           },
@@ -36071,6 +36129,10 @@
           "tasks": {
             "type": "integer",
             "minimum": 0
+          },
+          "codium": {
+            "type": "integer",
+            "minimum": 0
           }
         },
         "required": ["date", "tokens", "cost", "tasks"],
@@ -36096,6 +36158,10 @@
           },
           "cost": {
             "type": "number"
+          },
+          "codiumSteps": {
+            "type": "integer",
+            "minimum": 0
           }
         },
         "required": ["id", "sessions", "responses", "tokens", "cost"],
@@ -36112,6 +36178,10 @@
             "type": "number"
           },
           "unpricedResponses": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "codiumResponses": {
             "type": "integer",
             "minimum": 0
           },
@@ -41305,10 +41375,18 @@
             "type": "integer",
             "minimum": 0
           },
+          "codiumSteps": {
+            "type": "integer",
+            "minimum": 0
+          },
           "subagentCost": {
             "type": "number"
           },
           "subagentUnpricedSteps": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "subagentCodiumSteps": {
             "type": "integer",
             "minimum": 0
           },
@@ -41517,10 +41595,18 @@
             "type": "integer",
             "minimum": 0
           },
+          "codiumSteps": {
+            "type": "integer",
+            "minimum": 0
+          },
           "subagentCost": {
             "type": "number"
           },
           "subagentUnpricedSteps": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "subagentCodiumSteps": {
             "type": "integer",
             "minimum": 0
           },
@@ -41765,10 +41851,18 @@
             "type": "integer",
             "minimum": 0
           },
+          "codiumSteps": {
+            "type": "integer",
+            "minimum": 0
+          },
           "subagentCost": {
             "type": "number"
           },
           "subagentUnpricedSteps": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "subagentCodiumSteps": {
             "type": "integer",
             "minimum": 0
           },
@@ -42023,10 +42117,18 @@
             "type": "integer",
             "minimum": 0
           },
+          "codiumSteps": {
+            "type": "integer",
+            "minimum": 0
+          },
           "subagentCost": {
             "type": "number"
           },
           "subagentUnpricedSteps": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "subagentCodiumSteps": {
             "type": "integer",
             "minimum": 0
           },
@@ -42235,10 +42337,18 @@
             "type": "integer",
             "minimum": 0
           },
+          "codiumSteps": {
+            "type": "integer",
+            "minimum": 0
+          },
           "subagentCost": {
             "type": "number"
           },
           "subagentUnpricedSteps": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "subagentCodiumSteps": {
             "type": "integer",
             "minimum": 0
           },
@@ -42458,10 +42568,18 @@
             "type": "integer",
             "minimum": 0
           },
+          "codiumSteps": {
+            "type": "integer",
+            "minimum": 0
+          },
           "subagentCost": {
             "type": "number"
           },
           "subagentUnpricedSteps": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "subagentCodiumSteps": {
             "type": "integer",
             "minimum": 0
           },
@@ -42815,10 +42933,18 @@
             "type": "integer",
             "minimum": 0
           },
+          "codiumSteps": {
+            "type": "integer",
+            "minimum": 0
+          },
           "subagentCost": {
             "type": "number"
           },
           "subagentUnpricedSteps": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "subagentCodiumSteps": {
             "type": "integer",
             "minimum": 0
           },
@@ -43027,10 +43153,18 @@
             "type": "integer",
             "minimum": 0
           },
+          "codiumSteps": {
+            "type": "integer",
+            "minimum": 0
+          },
           "subagentCost": {
             "type": "number"
           },
           "subagentUnpricedSteps": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "subagentCodiumSteps": {
             "type": "integer",
             "minimum": 0
           },
@@ -43551,6 +43685,10 @@
             "minimum": 0
           },
           "unpricedSteps": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "codiumSteps": {
             "type": "integer",
             "minimum": 0
           },
@@ -44530,6 +44668,10 @@
         "required": ["id", "url", "expiresAt", "updatedAt", "revision", "updates"],
         "additionalProperties": false
       },
+      "BillingKind": {
+        "type": "string",
+        "enum": ["codium"]
+      },
       "ModelRef": {
         "type": "object",
         "properties": {
@@ -45106,6 +45248,9 @@
           },
           "message": {
             "type": "string"
+          },
+          "code": {
+            "type": "string"
           }
         },
         "required": ["type", "action", "message"],
@@ -45200,6 +45345,9 @@
           "unpriced": {
             "type": "boolean"
           },
+          "billing": {
+            "$ref": "#/components/schemas/BillingKind"
+          },
           "tokens": {
             "type": "object",
             "properties": {
@@ -45258,6 +45406,9 @@
           },
           "unpriced": {
             "type": "boolean"
+          },
+          "billing": {
+            "$ref": "#/components/schemas/BillingKind"
           },
           "tokens": {
             "type": "object",
@@ -46001,6 +46152,9 @@
                   },
                   "unpriced": {
                     "type": "boolean"
+                  },
+                  "billing": {
+                    "$ref": "#/components/schemas/BillingKind"
                   },
                   "tokens": {
                     "type": "object",
@@ -46787,6 +46941,9 @@
                   },
                   "unpriced": {
                     "type": "boolean"
+                  },
+                  "billing": {
+                    "$ref": "#/components/schemas/BillingKind"
                   },
                   "tokens": {
                     "type": "object",
@@ -47791,6 +47948,9 @@
                   "unpriced": {
                     "type": "boolean"
                   },
+                  "billing": {
+                    "$ref": "#/components/schemas/BillingKind"
+                  },
                   "tokens": {
                     "type": "object",
                     "properties": {
@@ -47883,6 +48043,9 @@
                   },
                   "unpriced": {
                     "type": "boolean"
+                  },
+                  "billing": {
+                    "$ref": "#/components/schemas/BillingKind"
                   },
                   "tokens": {
                     "type": "object",
@@ -48142,6 +48305,64 @@
         "type": "string",
         "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$"
       },
+      "ModelCodium": {
+        "type": "object",
+        "properties": {
+          "lab": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string",
+            "enum": ["floor", "default", "ceiling"]
+          },
+          "manualOnly": {
+            "type": "boolean"
+          },
+          "locked": {
+            "type": "object",
+            "properties": {
+              "plan": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "previewUntil": {
+                "type": "number"
+              }
+            },
+            "required": ["plan", "name"],
+            "additionalProperties": false
+          },
+          "preview": {
+            "type": "object",
+            "properties": {
+              "until": {
+                "type": "number"
+              }
+            },
+            "required": ["until"],
+            "additionalProperties": false
+          },
+          "auto": {
+            "type": "object",
+            "properties": {
+              "floor": {
+                "type": "string"
+              },
+              "default": {
+                "type": "string"
+              },
+              "ceiling": {
+                "type": "string"
+              }
+            },
+            "required": ["floor", "default", "ceiling"],
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      },
       "TaskStatus": {
         "type": "string",
         "enum": ["queued", "running", "waiting_on_user", "completed", "failed", "stopped"]
@@ -48192,6 +48413,9 @@
           },
           "unpricedSteps": {
             "type": "number"
+          },
+          "codiumSteps": {
+            "type": "number"
           }
         },
         "required": ["cost", "tokens", "total", "toolUses", "steps"],
@@ -48217,6 +48441,9 @@
             "type": "number"
           },
           "unpricedSteps": {
+            "type": "number"
+          },
+          "codiumSteps": {
             "type": "number"
           },
           "costKind": {
@@ -49558,10 +49785,16 @@
           "unpricedSteps": {
             "type": "number"
           },
+          "codiumSteps": {
+            "type": "number"
+          },
           "subagentCost": {
             "type": "number"
           },
           "subagentUnpricedSteps": {
+            "type": "number"
+          },
+          "subagentCodiumSteps": {
             "type": "number"
           },
           "subagentTokens": {
@@ -49768,6 +50001,9 @@
               },
               "unpriced": {
                 "type": "boolean"
+              },
+              "billing": {
+                "$ref": "#/components/schemas/BillingKind"
               },
               "tokens": {
                 "type": "object",
@@ -50567,6 +50803,9 @@
               },
               "unpriced": {
                 "type": "boolean"
+              },
+              "billing": {
+                "$ref": "#/components/schemas/BillingKind"
               },
               "tokens": {
                 "type": "object",
@@ -51578,6 +51817,9 @@
               "unpriced": {
                 "type": "boolean"
               },
+              "billing": {
+                "$ref": "#/components/schemas/BillingKind"
+              },
               "tokens": {
                 "type": "object",
                 "properties": {
@@ -51671,6 +51913,9 @@
               },
               "unpriced": {
                 "type": "boolean"
+              },
+              "billing": {
+                "$ref": "#/components/schemas/BillingKind"
               },
               "tokens": {
                 "type": "object",
@@ -52093,6 +52338,9 @@
             },
             "required": ["context", "output"],
             "additionalProperties": false
+          },
+          "codium": {
+            "$ref": "#/components/schemas/ModelCodium"
           }
         },
         "required": [
@@ -55547,6 +55795,10 @@
                 "type": "integer",
                 "minimum": 0
               },
+              "codiumSteps": {
+                "type": "integer",
+                "minimum": 0
+              },
               "costKind": {
                 "$ref": "#/components/schemas/CostKind"
               },
@@ -56760,6 +57012,9 @@
               "unpriced": {
                 "type": "boolean"
               },
+              "billing": {
+                "$ref": "#/components/schemas/BillingKind"
+              },
               "tokens": {
                 "type": "object",
                 "properties": {
@@ -57272,6 +57527,9 @@
               },
               "unpriced": {
                 "type": "boolean"
+              },
+              "billing": {
+                "$ref": "#/components/schemas/BillingKind"
               },
               "tokens": {
                 "type": "object",
@@ -58106,6 +58364,9 @@
               "unpriced": {
                 "type": "boolean"
               },
+              "billing": {
+                "$ref": "#/components/schemas/BillingKind"
+              },
               "tokens": {
                 "type": "object",
                 "properties": {
@@ -58177,6 +58438,9 @@
               },
               "unpriced": {
                 "type": "boolean"
+              },
+              "billing": {
+                "$ref": "#/components/schemas/BillingKind"
               },
               "tokens": {
                 "type": "object",
@@ -59325,6 +59589,10 @@
                 "minimum": 0
               },
               "unpricedSteps": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "codiumSteps": {
                 "type": "integer",
                 "minimum": 0
               },

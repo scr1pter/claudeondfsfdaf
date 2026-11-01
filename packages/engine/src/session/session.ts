@@ -57,6 +57,7 @@ import { TaskPlace } from "@/task/place"
 import { TaskJobs } from "@/task/jobs"
 import { InstanceRef } from "@/effect/instance-ref"
 import { SessionCleanup } from "./cleanup"
+import { Billing } from "@vectordevai/schema/billing"
 
 const parentTitlePrefix = "New session - "
 const childTitlePrefix = "Child session - "
@@ -110,8 +111,10 @@ export function fromRow(row: SessionRow): Info {
     summary,
     cost: row.cost,
     unpricedSteps: row.unpriced_steps || undefined,
+    codiumSteps: row.codium_steps || undefined,
     subagentCost: row.subagent_cost || undefined,
     subagentUnpricedSteps: row.subagent_unpriced_steps || undefined,
+    subagentCodiumSteps: row.subagent_codium_steps || undefined,
     subagentTokens: subagentTokens(row),
     tokens: {
       input: row.tokens_input,
@@ -158,8 +161,10 @@ export function toRow(info: Info) {
     metadata: info.metadata,
     cost: info.cost ?? 0,
     unpriced_steps: info.unpricedSteps ?? 0,
+    codium_steps: info.codiumSteps ?? 0,
     subagent_cost: info.subagentCost ?? 0,
     subagent_unpriced_steps: info.subagentUnpricedSteps ?? 0,
+    subagent_codium_steps: info.subagentCodiumSteps ?? 0,
     subagent_tokens_input: info.subagentTokens?.input ?? 0,
     subagent_tokens_output: info.subagentTokens?.output ?? 0,
     subagent_tokens_reasoning: info.subagentTokens?.reasoning ?? 0,
@@ -264,9 +269,13 @@ export const Info = Schema.Struct({
   cost: optional(Schema.Finite),
   // Steps that ran on a model with no listed price; cost leaves them out, so a session with any is not fully priced.
   unpricedSteps: optional(NonNegativeInt),
+  // How many of those unpriced steps ran on Vector Codium; own unpriced steps are unpricedSteps − codiumSteps.
+  codiumSteps: optional(NonNegativeInt),
   // What the subagent sessions below this one spent, which cost leaves out, and how many of their steps were unpriced.
   subagentCost: optional(Schema.Finite),
   subagentUnpricedSteps: optional(NonNegativeInt),
+  // How many of the subagent unpriced steps ran on Vector Codium.
+  subagentCodiumSteps: optional(NonNegativeInt),
   // The tokens those sessions used, which tokens leaves out.
   subagentTokens: optional(Tokens),
   tokens: optional(Tokens),
@@ -301,6 +310,8 @@ export const UsageDay = Schema.Struct({
   // Known recorded spend, including ancillary model work; task activity remains transcript-only.
   cost: Schema.Finite,
   tasks: NonNegativeInt,
+  // Vector Codium responses that day: an activity count, never tokens. A day that counts them leaves their tokens out.
+  codium: optional(NonNegativeInt),
 }).annotate({ identifier: "SessionUsageDay" })
 export type UsageDay = Types.DeepMutable<Schema.Schema.Type<typeof UsageDay>>
 
@@ -330,6 +341,9 @@ export const UsageHelper = Schema.Struct({
   responses: NonNegativeInt,
   tokens: NonNegativeInt,
   cost: Schema.Finite,
+  // The helper's steps on Vector Codium: an activity count, never tokens. A helper that counts them leaves their tokens
+  // out.
+  codiumSteps: optional(NonNegativeInt),
 }).annotate({ identifier: "SessionUsageHelper" })
 export type UsageHelper = Types.DeepMutable<Schema.Schema.Type<typeof UsageHelper>>
 
@@ -339,6 +353,9 @@ export const UsageSummary = Schema.Struct({
   // Model work with unknown price or incomplete usage, including ancillary attempts.
   // lifetimeCost is the known subtotal; this count is independent of transcript modelResponses.
   unpricedResponses: optional(NonNegativeInt),
+  // How many of those unpriced responses ran on Vector Codium: an activity count, never tokens. A summary that counts
+  // them leaves their tokens out of every token total.
+  codiumResponses: optional(NonNegativeInt),
   inputTokens: NonNegativeInt,
   outputTokens: NonNegativeInt,
   reasoningTokens: NonNegativeInt,
@@ -495,6 +512,10 @@ export const getUsage = (input: { model: Provider.Model; usage: Usage; metadata?
       read: cacheReadInputTokens,
     },
   }
+
+  // A Vector Codium step is billed to the account's plan on vectordev.ai, so it is never priced from what the provider
+  // metadata reports, and every step is unpriced and marked Codium: totals leave its tokens out and show "Codium".
+  if (Billing.isCodium(input.model.providerID)) return { unpriced: true, billing: "codium" as const, cost: 0, tokens }
 
   const costInfo = costAt(input.model.cost, inputTokens)
   const totalNanoAiu = input.metadata?.["copilot"]?.["totalNanoAiu"]
@@ -887,8 +908,12 @@ const layer: Layer.Layer<
 
     const updateMessage = <T extends SessionV1.Info>(msg: T): Effect.Effect<T> =>
       Effect.gen(function* () {
-        yield* events.publish(SessionV1.Event.MessageUpdated, { sessionID: msg.sessionID, info: msg })
-        return msg
+        // Every V1 assistant message, compaction included, is published here, so this is where a Vector Codium
+        // message gets its flag. The published copy carries it; the caller's object is left as it was.
+        const info =
+          msg.role === "assistant" && Billing.isCodium(msg.providerID) ? { ...msg, billing: "codium" as const } : msg
+        yield* events.publish(SessionV1.Event.MessageUpdated, { sessionID: info.sessionID, info })
+        return info
       }).pipe(Effect.withSpan("Session.updateMessage"))
 
     const updatePart = <T extends SessionV1.Part>(part: T): Effect.Effect<T> =>
@@ -996,6 +1021,7 @@ const layer: Layer.Layer<
                   ...part,
                   cost: 0,
                   unpriced: undefined,
+                  billing: undefined,
                   tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
                 }
               : part),

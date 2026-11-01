@@ -1,27 +1,38 @@
-import { createHash } from "node:crypto"
+import { createHash, randomInt } from "node:crypto"
 import { once } from "node:events"
 import { Option, Schema } from "effect"
 import { enforceRateLimit, requireTrustedJsonRequest } from "./abuse.js"
-import { verifyCliToken } from "./cli-token.js"
-import { modelPlanCredential } from "./model-plan-account.js"
+import { CodiumPlan } from "../../packages/schema/src/codium-plan.js"
+import type { EntitlementSnapshot } from "../../packages/schema/src/codium-entitlements.js"
+import { requireModelPlanCaller, requireModelPlanClient, type ModelPlanCaller } from "./model-plan-caller.js"
+import { readModelPlanAccount, snapshotPoolCredential } from "./model-plan-account.js"
+import { admitModelPlan, settleModelPlanDurably, type AdmissionTicket } from "./model-plan-admit.js"
+import { gatewayPlanModels, verifiedGatewayModel, type ModelPlanCatalogOptions } from "./model-plan-catalog-policy.js"
+import { beforeAdmit, afterSettle, type GatewayHookOptions } from "./model-plan-gateway-hooks.js"
+import { requireEntitlement, requireUsableSnapshot, reconcileOnDemand } from "./codium-entitlements.js"
+import { readDisabledSet } from "./codium-switches.js"
+import { CODIUM_TIER_MODELS } from "./codium-catalog.js"
+import { usdToMicroCeil } from "./codium-pool.js"
+import { modelSpendStale } from "./codium-spend-ledger.js"
 import {
-  configuredPlanModels,
+  effectiveModel,
+  modelAccess,
+  modelPlanAttempts,
   MODEL_PLAN_OPTIONS,
   MODEL_PLAN_ROOT,
-  modelPlanRequestCredits,
+  modelPlanReservation,
   requireModelPlans,
   type ModelPlanModel,
 } from "./model-plan-config.js"
 import { stripeRecord } from "./model-plan-stripe.js"
 import { ApiError, json, readJson, requireMethod, type ApiRequest, type ApiResponse } from "./http.js"
-import { requireUnrevokedAccount } from "./revocation.js"
+import { requireUnrevokedCliToken } from "./revocation.js"
 
 const MAX_BYTES = 4_500_000
 export async function requireModelPlanUser(request: ApiRequest, fetcher: typeof fetch = fetch, now = Date.now()) {
   const token = /^Bearer (vct_[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+)$/.exec(String(request.headers.authorization ?? ""))?.[1]
-  const account = verifyCliToken(token ?? "", now)
-  await requireUnrevokedAccount(account.id, fetcher)
-  return account
+  const account = await requireUnrevokedCliToken(token ?? "", fetcher, now)
+  return { id: account.id, email: account.email }
 }
 
 export function modelPlanRequest(body: unknown, models: readonly ModelPlanModel[]) {
@@ -123,7 +134,7 @@ export function modelPlanRequest(body: unknown, models: readonly ModelPlanModel[
           ),
         }
       : {}),
-    model: model.id,
+    model: model.upstream ?? model.id,
     messages: model.explicitCache ? cacheBreakpoints(messages, model.cacheStyle) : messages,
     ...(model.explicitCache && model.cacheStyle === "openai"
       ? { prompt_cache_options: { mode: "explicit", ttl: "30m" } }
@@ -148,6 +159,7 @@ export function modelPlanRequest(body: unknown, models: readonly ModelPlanModel[
       data_collection: "deny",
       zdr: true,
       require_parameters: true,
+      ...(model.providerOnly ? { only: [...model.providerOnly], allow_fallbacks: false } : {}),
       ...(model.quantizations ? { quantizations: model.quantizations } : {}),
       // Media and native add-ons are rejected above. An image-price filter would also remove Gemini's text route.
       max_price: { prompt: model.inputPrice, completion: model.outputPrice, request: 0 },
@@ -232,8 +244,15 @@ function promptBound(text: string, bytes: number, escapes: number) {
 /**
  * Streams the provider's answer to Vector. Once the answer finishes it returns what the provider said it charged; when
  * Vector goes away first it returns nothing, since the provider may still be producing, and billing, the answer.
+ * `signal` is the request's deadline: a client that stops reading but keeps its connection open would otherwise hold
+ * the wait for `drain` until the platform kills the function, and a killed function settles nothing.
  */
-export async function streamModelPlanResponse(upstream: Response, response: ApiResponse) {
+export async function streamModelPlanResponse(
+  upstream: Response,
+  response: ApiResponse,
+  onByte?: () => void,
+  signal?: AbortSignal,
+) {
   if (upstream.status === 402 || upstream.status === 429) {
     const retry = upstream.headers.get("retry-after")
     if (retry && /^\d+$/.test(retry) && Number(retry) > 0)
@@ -271,6 +290,7 @@ export async function streamModelPlanResponse(upstream: Response, response: ApiR
   try {
     while (!response.destroyed) {
       const part = await reader.read()
+      if (part.value?.byteLength) onByte?.()
       state.pending += decoder.decode(part.value, { stream: !part.done })
       if (state.pending.length > 1_000_000)
         throw new ApiError(503, "MODEL_PLAN_STREAM", "The model returned an invalid response stream.")
@@ -299,7 +319,9 @@ export async function streamModelPlanResponse(upstream: Response, response: ApiR
         const cost = stripeRecord(parsed.value.usage) ? parsed.value.usage.cost : undefined
         if (typeof cost === "number" && Number.isFinite(cost) && cost >= 0) state.charge = cost
         if (!response.write(`data: ${JSON.stringify(forwardedChunk(parsed.value))}\n\n`))
-          await once(response, "drain", { signal: controller.signal })
+          await once(response, "drain", {
+            signal: signal ? AbortSignal.any([controller.signal, signal]) : controller.signal,
+          })
       }
       if (part.done) throw new ApiError(503, "MODEL_PLAN_STREAM", "The model response ended before completion.")
     }
@@ -352,15 +374,28 @@ function contextRefused(body: string) {
   return /context[ _-]?(length|window)|maximum context|too many tokens|prompt is too long/i.test(body.slice(0, 8_192))
 }
 
-export async function handleModelPlanChat(request: ApiRequest, response: ApiResponse, fetcher: typeof fetch = fetch) {
+/** Explicit trusted dependencies for local fakes; production uses the captured active catalog and qualification. */
+export type ModelPlanGatewayOptions = GatewayHookOptions & ModelPlanCatalogOptions
+
+export async function handleModelPlanChat(
+  request: ApiRequest,
+  response: ApiResponse,
+  fetcher: typeof fetch = fetch,
+  options: ModelPlanGatewayOptions = {},
+) {
   const controller = new AbortController()
   const close = () => controller.abort()
-  // The credits held for this request until it settles, and how its answer went: whether the provider began one, and
-  // what it charged once the answer finished.
-  const hold = {
-    release: async (_charge?: number) => {},
-    required: 0,
+  const startedAt = Date.now()
+  const state = {
+    caller: undefined as ModelPlanCaller | undefined,
+    snapshot: undefined as EntitlementSnapshot | undefined,
+    model: undefined as ModelPlanModel | undefined,
+    ticket: undefined as AdmissionTicket | undefined,
     streamed: false,
+    dispatched: false,
+    dispatchedAttempts: 0,
+    attemptMicro: 0,
+    uncertainAttempts: 0,
     finished: undefined as { charge?: number } | undefined,
   }
   response.once("close", close)
@@ -368,41 +403,147 @@ export async function handleModelPlanChat(request: ApiRequest, response: ApiResp
     requireMethod(request, "POST")
     requireTrustedJsonRequest(request, MAX_BYTES)
     requireModelPlans()
-    const account = await requireModelPlanUser(request, fetcher)
-    const body = modelPlanRequest(await readJson(request, MAX_BYTES), configuredPlanModels())
+    // A misconfigured gateway refuses at the enabled gate, before any credential, provider or store call.
+    const limits = globalAdmissionLimits()
+    requireModelPlanClient(request)
+    const caller = await requireModelPlanCaller(request, fetcher, Date.now(), options.runVerifiers)
+    state.caller = caller
+    const catalog = options.models ?? gatewayPlanModels()
+    const qualify = options.qualify ?? verifiedGatewayModel
+    const raw = await readJson<unknown>(request, MAX_BYTES)
+    const selected = stripeRecord(raw) && typeof raw.model === "string" ? raw.model : ""
+    const model = catalog.find((model) => model.id === selected)
+    // A staged candidate is not served yet; anything else outside the catalog is an invalid request (400).
+    if (!model && CODIUM_TIER_MODELS.some((candidate) => candidate.id === selected)) throw modelUnavailable()
+    const body = modelPlanRequest(raw, catalog)
+    const disabled = await readDisabledSet("models-off", fetcher)
+    // A switched-off or unqualified route (ROUTE_ACCEPTANCES is empty until external acceptance) is unavailable before
+    // the snapshot, so it costs no Stripe, credential, hold or provider call.
+    if (!model || disabled.has(selected) || (model.upstream && disabled.has(model.upstream)) || !qualify(model))
+      throw modelUnavailable()
+    state.model = model
+    const snapshot = await requireEntitlement(caller.account.id, "codium", fetcher)
+    state.snapshot = snapshot
+    if (!snapshot.plan || !CodiumPlan.isPlanId(snapshot.plan))
+      throw new ApiError(402, "MODEL_PLAN_REQUIRED", "Choose a Vector Codium plan to use this model.")
     await enforceRateLimit(request, response, {
       scope: "model-plan-minute",
-      identifier: account.id,
-      limit: 30,
+      identifier: caller.account.id,
+      limit: snapshot.caps.perMinute,
       windowSeconds: 60,
       requirePersistent: true,
     })
-    const model = configuredPlanModels().find((model) => model.id === body.model)!
-    // Check the context, tool schemas included, before reserving provider credit.
-    requireModelPlanContext(body, model)
-    hold.required = modelPlanRequestCredits(model)
-    const funding = await modelPlanCredential(account.id, fetcher, Date.now(), hold.required)
-    hold.release = funding.release
-    const upstream = await fetcher(`${MODEL_PLAN_ROOT}/chat/completions`, {
-      method: "POST",
-      redirect: "error",
-      signal: AbortSignal.any([controller.signal, AbortSignal.timeout(600_000)]),
-      headers: {
-        authorization: `Bearer ${funding.key}`,
-        "content-type": "application/json",
-        "HTTP-Referer": "https://vectordev.ai/",
-        "X-OpenRouter-Title": "Vector",
+    const current = await refreshLockedModel(caller, snapshot, model, fetcher)
+    state.snapshot = current
+    if (!current.plan || !CodiumPlan.isPlanId(current.plan))
+      throw new ApiError(402, "MODEL_PLAN_REQUIRED", "Choose a Vector Codium plan to use this model.")
+    if (!modelAccess(model, current.plan)) throw modelUpgradeRequired(model)
+    const effective = effectiveModel(model, current.plan)
+    // A tier variant is its own route: it is qualified again before anything is reserved for it.
+    if (!qualify(effective)) throw modelUnavailable()
+    state.model = effective
+    requireModelPlanContext(body, effective)
+    const toolNames =
+      stripeRecord(raw) && Array.isArray(raw.tools)
+        ? raw.tools.flatMap((tool: unknown) =>
+            stripeRecord(tool)
+              ? [tool.type, stripeRecord(tool.function) ? tool.function.name : undefined].filter(
+                  (name): name is string => typeof name === "string",
+                )
+              : [],
+          )
+        : []
+    await beforeAdmit(caller, { snapshot: current, model: effective, toolNames }, options)
+    if (controller.signal.aborted) throw new ApiError(499, "MODEL_PLAN_CANCELLED", "The request was cancelled.")
+    const reservation = (options.reservation ?? modelPlanReservation)(effective, current.plan)
+    if (
+      !Number.isSafeInteger(reservation.attemptMicro) ||
+      reservation.attemptMicro < 1 ||
+      reservation.attempts !== modelPlanAttempts(current.plan) ||
+      reservation.requiredMicro !== reservation.attempts * reservation.attemptMicro ||
+      !Number.isSafeInteger(reservation.requiredMicro)
+    )
+      throw new ApiError(503, "MODEL_PLANS_CONFIGURATION", "Vector Codium is temporarily unavailable.")
+    state.attemptMicro = reservation.attemptMicro
+    // M4: the credential comes from the snapshot and one OpenRouter read, never from Stripe. A key that is not ready
+    // gets one on-demand reconcile (at most one a minute per account); a newer snapshot means the caller starts again.
+    const funding =
+      (await snapshotPoolCredential(caller.account.id, current, fetcher)) ??
+      (await reconcileOnDemand(caller.account.id, fetcher).then((fresh) =>
+        fresh && requireUsableSnapshot(fresh).version === current.version
+          ? snapshotPoolCredential(caller.account.id, fresh, fetcher)
+          : undefined,
+      ))
+    if (!funding) throw modelSpendStale()
+    // The admission deadline starts after every credential wait.
+    const admittedAt = Date.now()
+    if (caller.run && caller.run.deadline <= admittedAt)
+      throw new ApiError(
+        401,
+        "MODEL_PLAN_RUN_EXPIRED",
+        "This run is no longer authorized. Save your work and finish the run.",
+      )
+    if (controller.signal.aborted) throw new ApiError(499, "MODEL_PLAN_CANCELLED", "The request was cancelled.")
+    state.ticket = await admitModelPlan(
+      {
+        snapshot: current,
+        funding,
+        requiredMicro: reservation.requiredMicro,
+        purpose: caller.purpose,
+        run: caller.run,
+        ...limits,
       },
-      body: JSON.stringify({ ...body, user: createHash("sha256").update(account.id).digest("hex") }),
-    })
-    hold.streamed = upstream.ok
-    hold.finished = await streamModelPlanResponse(upstream, response)
+      fetcher,
+      admittedAt,
+    )
+    const deadline = Math.min(admittedAt + 600_000, caller.run?.deadline ?? Infinity)
+    const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(Math.max(1, deadline - Date.now()))])
+    const send = async () => {
+      if (signal.aborted || Date.now() >= deadline)
+        throw new ApiError(503, "MODEL_PLAN_UNAVAILABLE", "This model request timed out. Try again shortly.")
+      state.dispatched = true
+      state.dispatchedAttempts++
+      return fetcher(`${MODEL_PLAN_ROOT}/chat/completions`, {
+        method: "POST",
+        redirect: "error",
+        signal,
+        headers: {
+          authorization: `Bearer ${funding.key}`,
+          "content-type": "application/json",
+          "HTTP-Referer": "https://vectordev.ai/",
+          "X-OpenRouter-Title": "Vector",
+        },
+        body: JSON.stringify({ ...body, user: createHash("sha256").update(caller.account.id).digest("hex") }),
+      })
+    }
+    const first = await send()
+    const retry = CodiumPlan.rank(current.plan) >= 3 && (first.status === 429 || first.status === 503)
+    if (retry) {
+      state.uncertainAttempts++
+      await first.body?.cancel().catch(() => undefined)
+    }
+    const upstream = retry ? await send() : first
+    // A refusal or transport failure after dispatch can still have cost. The fixed reserve covers both possible attempts.
+    state.finished = await streamModelPlanResponse(
+      upstream,
+      response,
+      () => {
+        state.streamed = true
+      },
+      signal,
+    )
   } catch (error) {
     if (response.destroyed) return
+    const code = error instanceof ApiError ? error.code : "MODEL_PLAN_UNAVAILABLE"
     const payload = {
       error: {
-        code: error instanceof ApiError ? error.code : "MODEL_PLAN_UNAVAILABLE",
+        ...(error instanceof ApiError ? error.detail : {}),
+        code,
         message: error instanceof ApiError ? error.message : "Model access is temporarily unavailable.",
+        // Every attempt sent to the provider is committed in full below (unknown outcomes are charged), so an answer
+        // given after one says so, whatever its code: a client that resent it by itself would commit another whole
+        // reservation each time. A context refusal is not resent as it is; the client compacts the conversation first.
+        ...(state.dispatched && code !== "MODEL_PLAN_CONTEXT" ? { dispatched: true } : {}),
       },
     }
     if (response.headersSent) {
@@ -414,15 +555,90 @@ export async function handleModelPlanChat(request: ApiRequest, response: ApiResp
       json(response, 429, payload)
       return
     }
+    if (error instanceof ApiError && error.retryAfterSeconds !== undefined)
+      response.setHeader("retry-after", String(Math.max(1, Math.ceil(error.retryAfterSeconds))))
+    if (error instanceof ApiError && error.code === "MODEL_PLAN_CONCURRENCY")
+      response.setHeader("retry-after-ms", String(randomInt(1500, 4001)))
     json(response, error instanceof ApiError ? error.statusCode : 503, payload)
   } finally {
     request.resume()
     response.off("close", close)
     controller.abort()
-    // A request the provider never answered frees its hold at once, and one whose answer finished keeps only its charge,
-    // or its largest cost when the provider named none, until the key's usage shows it. An answer that broke off or
-    // that Vector cancelled may still be billed when the provider finishes, so its hold stays until it lapses.
-    if (!hold.streamed || hold.finished)
-      await hold.release(hold.finished ? (hold.finished.charge ?? hold.required) : undefined).catch(() => undefined)
+    if (state.ticket) {
+      const outcome = state.finished
+        ? {
+            kind: "complete" as const,
+            chargeMicro:
+              (state.finished.charge === undefined ? state.attemptMicro : usdToMicroCeil(state.finished.charge)) +
+              state.uncertainAttempts * state.attemptMicro,
+          }
+        : state.dispatched
+          ? { kind: "broken" as const, chargeMicro: state.dispatchedAttempts * state.attemptMicro }
+          : { kind: "cancel" as const }
+      // Settlement is idempotent. A lost response gets one retry, then the outbox retries the same known outcome.
+      await settleModelPlanDurably(state.ticket, outcome, fetcher)
+      // Every admitted request reaches the services' hooks once, after its known outcome is recorded or queued (or,
+      // when even the queue failed, left counting in full): a lost settle answer must not hide a request from them.
+      if (state.caller && state.snapshot && state.model)
+        await afterSettle(
+          state.caller,
+          {
+            snapshot: state.snapshot,
+            model: state.model,
+            charge: state.finished?.charge,
+            startedAt,
+            endedAt: Date.now(),
+            streamed: state.streamed,
+          },
+          options,
+        ).catch(() => undefined)
+    }
   }
+}
+
+function modelUnavailable() {
+  return new ApiError(
+    503,
+    "MODEL_PLAN_MODEL_UNAVAILABLE",
+    "This model is temporarily unavailable. Choose another included model.",
+  )
+}
+function modelUpgradeRequired(model: ModelPlanModel) {
+  const plan =
+    model.previewUntil !== undefined && Date.now() < model.previewUntil ? "vector-200" : (model.minPlan ?? "vector-10")
+  return new ApiError(403, "MODEL_PLAN_UPGRADE_REQUIRED", "Change your Codium plan to use this model.", {
+    detail: {
+      plan,
+      planName: CodiumPlan.name(plan),
+      ...(model.previewUntil ? { previewUntil: model.previewUntil } : {}),
+    },
+  })
+}
+async function refreshLockedModel(
+  caller: ModelPlanCaller,
+  snapshot: EntitlementSnapshot,
+  model: ModelPlanModel,
+  fetcher: typeof fetch,
+) {
+  if (!snapshot.plan || modelAccess(model, snapshot.plan)) return snapshot
+  const account = await readModelPlanAccount(caller.account.id, fetcher)
+  const checkout = account?.checkout
+  if (!checkout || checkout.expires - 30 * 60_000 < Date.now() - 60 * 60_000) return snapshot
+  const fresh = await reconcileOnDemand(caller.account.id, fetcher)
+  // A reconciled snapshot gets the same state answers as the first one (402, 403, 409), never a retryable 503.
+  return fresh ? requireUsableSnapshot(fresh) : snapshot
+}
+function globalAdmissionLimits() {
+  const configured = process.env.MODEL_PLAN_GLOBAL_INFLIGHT?.trim()
+  const reserve = process.env.MODEL_PLAN_PRIORITY_RESERVE?.trim()
+  const globalLimit = configured ? Number(configured) : undefined
+  const priorityReserve = reserve ? Number(reserve) : 0.2
+  if (
+    (globalLimit !== undefined && (!Number.isSafeInteger(globalLimit) || globalLimit < 1 || globalLimit > 100000)) ||
+    !Number.isFinite(priorityReserve) ||
+    priorityReserve < 0 ||
+    priorityReserve >= 1
+  )
+    throw new ApiError(503, "MODEL_PLANS_CONFIGURATION", "Vector Codium is temporarily unavailable.")
+  return { globalLimit, priorityReserve }
 }

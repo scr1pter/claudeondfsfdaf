@@ -64,6 +64,7 @@ export const PlanExitTool = Tool.define(
             time: { created: Date.now() },
             agent: "build",
             model,
+            ...(lastUser?.info.role === "user" && lastUser.info.selected ? { selected: lastUser.info.selected } : {}),
           }
           yield* session.updateMessage(msg)
           yield* session.updatePart({

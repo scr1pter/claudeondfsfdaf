@@ -1,9 +1,9 @@
 {
   "version": "7",
   "dialect": "sqlite",
-  "id": "42b5ff7f-ee68-41be-adfc-f0125f1b7bf1",
+  "id": "4a4ee77e-c401-4948-8f0f-93829a334ac3",
   "prevIds": [
-    "9ac77c90-e175-469f-91fa-1f88f52db1d7"
+    "42b5ff7f-ee68-41be-adfc-f0125f1b7bf1"
   ],
   "ddl": [
     {
@@ -1743,6 +1743,26 @@
       "default": "0",
       "generated": null,
       "name": "subagent_unpriced_steps",
+      "entityType": "columns",
+      "table": "session"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "0",
+      "generated": null,
+      "name": "codium_steps",
+      "entityType": "columns",
+      "table": "session"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "0",
+      "generated": null,
+      "name": "subagent_codium_steps",
       "entityType": "columns",
       "table": "session"
     },

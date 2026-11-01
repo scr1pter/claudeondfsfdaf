@@ -392,6 +392,7 @@ const replaySessionProjection = (id: SessionV2.ID) =>
       .set({
         cost: 0,
         unpriced_steps: 0,
+        codium_steps: 0,
         tokens_input: 0,
         tokens_output: 0,
         tokens_reasoning: 0,
@@ -741,6 +742,112 @@ describe("SessionRunnerLLM", () => {
       yield* replaySessionProjection(sessionID)
 
       expect(yield* session.get(sessionID)).toMatchObject({ cost: 0, unpricedSteps: 1 })
+    }),
+  )
+
+  it.effect("marks a Vector Codium turn as Codium and never prices it from provider metadata, through replay", () =>
+    Effect.gen(function* () {
+      yield* setup
+      currentModel = Model.make({ id: "deepseek", provider: "vector-plan", route: OpenAIChat.route })
+      const session = yield* SessionV2.Service
+      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Measure this turn" }), resume: false })
+      response = [
+        LLMEvent.stepStart({ index: 0 }),
+        LLMEvent.stepFinish({
+          index: 0,
+          reason: "stop",
+          // A charge reported in metadata prices any other model's step; a Codium step is billed to the plan instead.
+          usage: {
+            inputTokens: 1_000,
+            outputTokens: 100,
+            providerMetadata: { copilot: { totalNanoAiu: 4_473_525_000 } },
+          },
+        }),
+        LLMEvent.finish({ reason: "stop" }),
+      ]
+
+      yield* session.resume(sessionID)
+
+      // The step keeps its tokens, for compaction and the context meter; the session totals leave them out.
+      expect(yield* session.context(sessionID)).toMatchObject([
+        { type: "user" },
+        { type: "assistant", cost: 0, unpriced: true, billing: "codium", tokens: { input: 1_000, output: 100 } },
+      ])
+      const counted = {
+        cost: 0,
+        unpricedSteps: 1,
+        codiumSteps: 1,
+        tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+      }
+      expect(yield* session.get(sessionID)).toMatchObject(counted)
+
+      yield* replaySessionProjection(sessionID)
+
+      expect(yield* session.get(sessionID)).toMatchObject(counted)
+    }),
+  )
+
+  it.effect("marks a Vector Codium compaction summary as Codium and counts no tokens for it", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      response = fragmentFixture("text", "text-first", ["Earlier answer"]).completeEvents
+      yield* session.prompt({
+        sessionID,
+        prompt: Prompt.make({ text: "Earlier question ".repeat(180) }),
+        resume: false,
+      })
+      yield* session.resume(sessionID)
+
+      currentModel = Model.make({
+        id: "compact",
+        provider: "vector-plan",
+        route: OpenAIChat.route.with({ limits: { context: 4_000, output: 50 } }),
+      })
+      requests.length = 0
+      responses = [
+        [
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.textStart({ id: "text-summary" }),
+          LLMEvent.textDelta({ id: "text-summary", text: "## Goal\n- Preserve the task" }),
+          LLMEvent.textEnd({ id: "text-summary" }),
+          LLMEvent.stepFinish({
+            index: 0,
+            reason: "stop",
+            usage: {
+              inputTokens: 100_000,
+              outputTokens: 1_000,
+              providerMetadata: { copilot: { totalNanoAiu: 4_473_525_000 } },
+            },
+          }),
+          LLMEvent.finish({ reason: "stop" }),
+        ],
+        fragmentFixture("text", "text-final", ["Continued"]).completeEvents,
+      ]
+      yield* session.prompt({
+        sessionID,
+        prompt: Prompt.make({ text: "Recent exact request ".repeat(180) }),
+        resume: false,
+      })
+      yield* session.resume(sessionID)
+
+      expect(requests).toHaveLength(2)
+      const context = yield* (yield* SessionStore.Service).context(sessionID)
+      // A compaction row names no model, so its flag is the only sign it ran on Codium.
+      expect(context[0]).toMatchObject({
+        type: "compaction",
+        cost: 0,
+        unpriced: true,
+        billing: "codium",
+        tokens: { input: 100_000, output: 1_000 },
+      })
+      // The summary and the follow-up step are both Codium steps; neither adds a token or a dollar.
+      expect(yield* session.get(sessionID)).toMatchObject({
+        cost: 0,
+        unpricedSteps: 2,
+        codiumSteps: 2,
+        tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+      })
     }),
   )
 

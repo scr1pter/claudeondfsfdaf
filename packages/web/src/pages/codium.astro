@@ -18,10 +18,10 @@ const prices = pricing.monthly.map((plan) => plan.price)
 
 <MarketingLayout
   title="Pricing · Vector Codium"
-  description={`Vector is free. Codium offers DeepSeek, Claude Haiku, GPT-6 Luna, Kimi and Gemini with credits: plans and top-ups${prices.length ? ` from $${Math.min(...prices)} to $${Math.max(...prices)}` : ""}, with no automatic overages.`}
+  description={`Vector is free. Codium offers DeepSeek, Claude Haiku, GPT-6 Luna, Kimi and Gemini with monthly plans${prices.length ? ` from $${Math.min(...prices)} to $${Math.max(...prices)}` : ""}, with no automatic overages.`}
 >
-<script is:inline>
-  document.documentElement.dataset.codiumMode = new URLSearchParams(location.search).get("type") === "topups" ? "topup" : "monthly";
+<script is:inline define:vars={{ topupsAvailable: pricing.topups.length > 0 }}>
+  document.documentElement.dataset.codiumMode = topupsAvailable && new URLSearchParams(location.search).get("type") === "topups" ? "topup" : "monthly";
 </script>
   <div class="cx-page">
     {/* The landing page's top bar and footer retain the same materials. */}

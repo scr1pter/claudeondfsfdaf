@@ -2,6 +2,7 @@ export * as SessionCompaction from "./compaction"
 
 import { LLM, LLMError, LLMEvent, Message, type LLMRequest, type Model, type Usage } from "@vectordevai/llm"
 import { DateTime, Effect, Stream } from "effect"
+import { Billing } from "@vectordevai/schema/billing"
 import type { Config } from "../config"
 import type { EventV2 } from "../event"
 import { SessionEvent } from "./event"
@@ -242,8 +243,11 @@ export const make = (dependencies: Dependencies) => {
     const cost = SessionRunnerModel.calculateCost(input.model, tokens, usage?.providerMetadata)
     const used = tokens.input + tokens.output + tokens.reasoning + tokens.cache.read + tokens.cache.write
     // The provider bills the request whether or not it produced a summary. As with a step, an unknown price is
-    // recorded as 0 and marked unpriced rather than read as free.
-    const spent = { cost: cost ?? 0, ...(cost === undefined && used > 0 ? { unpriced: true } : {}), tokens }
+    // recorded as 0 and marked unpriced rather than read as free, and a Vector Codium summary, billed to the account's
+    // plan, is never priced here.
+    const spent = Billing.isCodium(input.model.provider)
+      ? { cost: 0, unpriced: true, billing: "codium" as const, tokens }
+      : { cost: cost ?? 0, ...(cost === undefined && used > 0 ? { unpriced: true } : {}), tokens }
     if (!summarized || failed || !summary.trim()) {
       failures.set(input.sessionID, requestSize(input.request))
       yield* dependencies.events.publish(SessionEvent.Compaction.Failed, {

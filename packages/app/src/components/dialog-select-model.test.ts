@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import {
   buildModelSections,
+  codiumBadge,
   contextLabel,
   contextTitle,
   isCodingModel,
@@ -20,6 +21,7 @@ import {
   pickerRowKey,
   pickerSectionLabel,
   pickerSectionViews,
+  pickModel,
   readOpenSections,
   releaseTitle,
   toggleOpenSection,
@@ -109,18 +111,21 @@ describe("modelAccess", () => {
     expect(modelAccess(model(openaiKey, "custom", "Custom", { cost: { input: 0 } })).kind).toBe("none")
   })
 
-  test("Vector Codium models say they use Codium credits in their tooltip, spoken label and search", () => {
+  test("Vector Codium models say they are included in the Codium plan in their tooltip, spoken label and search", () => {
     const codium: Provider = { id: "vector-plan", name: "Vector Codium", source: "custom", env: [], options: {} }
     const coder = model(codium, "qwen/qwen3-coder-next", "Qwen3 Coder Next", { cost: { input: 0.12 } })
     expect(modelAccess(coder)).toEqual({
       kind: "codium",
-      label: "Codium credits",
-      title: "Uses your Vector Codium credits",
-      spoken: "uses your Codium credits",
+      label: "Codium",
+      title: "Included in your Vector Codium plan",
+      spoken: "included in your Codium plan",
     })
-    expect(modelTitle(coder)).toContain("Uses your Vector Codium credits")
-    expect(modelAriaLabel(coder, NOW)).toContain("uses your Codium credits")
+    expect(modelTitle(coder)).toContain("Included in your Vector Codium plan")
+    expect(modelAriaLabel(coder, NOW)).toContain("included in your Codium plan")
     expect(matchRank(coder, "codium", NOW)).toBe(3)
+    // Usage is a share of the plan: no row says credits.
+    expect(`${modelTitle(coder)} ${modelAriaLabel(coder, NOW)}`).not.toMatch(/credit/i)
+    expect(matchRank(coder, "credits", NOW)).toBeUndefined()
     // The header is the provider's name alone: how its models are paid for is never on it.
     expect(buildModelSections({ models: [coder], now: NOW })).toEqual([
       {
@@ -153,6 +158,65 @@ describe("modelAccess", () => {
     expect(names(codium)).toEqual(["DeepSeek V4.1 Flash", "Xiaomi MiMo V2.6 Flash", "Claude Haiku 5.5"])
     // Undated models of any other provider still sort by name.
     expect(names(local)).toEqual(["Claude Haiku 5.5", "DeepSeek V4.1 Flash", "Xiaomi MiMo V2.6 Flash"])
+  })
+
+  test("Codium Auto leads Vector Codium, and models the plan does not include carry their plan's badge", () => {
+    const codium: Provider = { id: "vector-plan", name: "Vector Codium", source: "custom", env: [], options: {} }
+    const entry = (id: string, name: string, extra: Partial<PickerModel> = {}) =>
+      model(codium, id, name, { release_date: "", cost: { input: 0 }, limit: { context: 131_072 }, ...extra })
+    const deepseek = entry("deepseek/deepseek-v4.1-flash", "DeepSeek V4.1 Flash", { codium: { role: "default" } })
+    // The engine lists Auto after DeepSeek, as /models answers.
+    const auto = entry("vector/codium-auto", "Codium Auto", {
+      codium: { auto: { floor: "openai/gpt-6-luna", default: deepseek.id, ceiling: "openai/gpt-6-sol" } },
+    })
+    const sonnet = entry("anthropic/claude-sonnet-5.5", "Claude Sonnet 5.5", {
+      codium: { locked: { plan: "vector-100", name: "Max" } },
+    })
+    const preview = entry("labs/next", "Next", {
+      codium: { locked: { plan: "vector-200", name: "Ultra", previewUntil: NOW + 30 * DAY } },
+    })
+    const sections = buildModelSections({ models: [deepseek, auto, sonnet, preview], now: NOW })
+    expect(sections.find((section) => section.kind === "provider")?.items.map((item) => item.name)).toEqual([
+      "Codium Auto",
+      "DeepSeek V4.1 Flash",
+      "Claude Sonnet 5.5",
+      "Next",
+    ])
+    // A search keeps Auto first among equally good matches.
+    expect(
+      buildModelSections({ models: [deepseek, auto], term: "codium", now: NOW })[0]?.items.map((item) => item.name),
+    ).toEqual(["Codium Auto", "DeepSeek V4.1 Flash"])
+
+    expect(codiumBadge(sonnet)).toEqual({ label: "Codium · Max", title: "Included in Max and above" })
+    expect(codiumBadge(preview)).toEqual({ label: "Preview · Ultra", title: "Only in Ultra during its preview" })
+    expect(codiumBadge(deepseek)).toBeUndefined()
+    expect(codiumBadge(auto)).toBeUndefined()
+    // The tooltip and the spoken label say which plan includes it, never that the account's plan does, a price or
+    // credits.
+    expect(modelTitle(sonnet)).toContain("Included in Max and above")
+    expect(modelTitle(sonnet)).not.toContain("Included in your Vector Codium plan")
+    expect(modelAriaLabel(sonnet, NOW)).toContain("included in max and above")
+    expect(modelAriaLabel(sonnet, NOW)).not.toContain("included in your codium plan")
+    expect(modelTitle(deepseek)).toContain("Included in your Vector Codium plan")
+    expect(`${modelTitle(sonnet)} ${modelAriaLabel(preview, NOW)}`).not.toMatch(/credit|\$/i)
+    // Another provider's model never reads a Codium badge, whatever it carries.
+    expect(codiumBadge(model(openaiKey, "gpt", "GPT", { codium: { locked: { plan: "x", name: "Max" } } }))).toBe(
+      undefined,
+    )
+  })
+
+  test("choosing a Codium model the plan does not include opens Change plan and keeps the current model", () => {
+    const codium: Provider = { id: "vector-plan", name: "Vector Codium", source: "custom", env: [], options: {} }
+    const locked = model(codium, "anthropic/claude-sonnet-5.5", "Claude Sonnet 5.5", {
+      codium: { locked: { plan: "vector-100", name: "Max" } },
+    })
+    const usable = model(codium, "deepseek/deepseek-v4.1-flash", "DeepSeek V4.1 Flash")
+    const manual = model(codium, "moonshotai/kimi-k3:long", "Kimi Long", { codium: { manualOnly: true } })
+    const other = model(openaiKey, "gpt", "GPT", { codium: { locked: { plan: "x", name: "Max" } } })
+    const calls: string[] = []
+    const actions = { set: (item: PickerModel) => calls.push(`set ${item.id}`), plans: () => calls.push("plans") }
+    for (const item of [locked, usable, manual, other]) pickModel(item, actions)
+    expect(calls).toEqual(["plans", "set deepseek/deepseek-v4.1-flash", "set moonshotai/kimi-k3:long", "set gpt"])
   })
 
   test("ambiguous environment credentials and unlisted providers claim no access method", () => {

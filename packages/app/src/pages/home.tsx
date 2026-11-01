@@ -32,6 +32,7 @@ import { MenuV2 } from "@vectordevai/ui/v2/menu-v2"
 import { TooltipV2 } from "@vectordevai/ui/v2/tooltip-v2"
 import { getProjectAvatarVariant, useLayout, type HomeProjectSelection, type LocalProject } from "@/context/layout"
 import { base64Encode } from "@vectordevai/core/util/encode"
+import { ModelPlanStatus } from "@vectordevai/core/model-plan-status"
 import { Icon } from "@vectordevai/ui/icon"
 import { DateTime } from "luxon"
 import { useDialog } from "@vectordevai/ui/context/dialog"
@@ -434,7 +435,11 @@ export function NewHome() {
     const api = automationsApi()
     if (!api) return false
     await models.ready.promise
-    const recent = models.recent.list().find((item) => models.find(item))
+    // A Codium model the plan no longer includes stays in recents, but every unattended run on it would be refused.
+    const recent = models.recent.list().find((item) => {
+      const model = models.find(item)
+      return model && !ModelPlanStatus.isLocked(model)
+    })
     if (!recent) {
       showToast({
         variant: "error",

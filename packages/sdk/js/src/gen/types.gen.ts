@@ -216,8 +216,10 @@ export type Session = {
   }
   cost?: number
   unpricedSteps?: number
+  codiumSteps?: number
   subagentCost?: number
   subagentUnpricedSteps?: number
+  subagentCodiumSteps?: number
   subagentTokens?: {
     input: number
     output: number
@@ -306,6 +308,10 @@ export type UserMessage = {
     modelID: string
     variant?: string
   }
+  selected?: {
+    providerID: string
+    modelID: string
+  }
   system?: string
   tools?: {
     [key: string]: boolean
@@ -378,6 +384,7 @@ export type BudgetStopError = {
     spentUsd?: number
     capUsd?: number
     unpricedSteps?: number
+    codiumSteps?: number
     estimate?: {
       lowUsd: number
       highUsd: number
@@ -444,6 +451,7 @@ export type AssistantMessage = {
   summary?: boolean
   cost: number
   unpriced?: boolean
+  billing?: BillingKind
   tokens: {
     total?: number
     input: number
@@ -656,6 +664,7 @@ export type StepFinishPart = {
   snapshot?: string
   cost: number
   unpriced?: boolean
+  billing?: BillingKind
   tokens: {
     total?: number
     input: number
@@ -803,7 +812,7 @@ export type SessionStatus =
       type: "busy"
     }
 
-export type CostKind = "free" | "priced" | "plan" | "local" | "unknown"
+export type CostKind = "free" | "priced" | "plan" | "local" | "unknown" | "codium"
 
 export type QuestionOption = {
   /**
@@ -953,6 +962,7 @@ export type GlobalEvent = {
           model: ModelRef
           cost?: number
           unpriced?: boolean
+          billing?: BillingKind
           tokens?: {
             input: number
             output: number
@@ -1098,6 +1108,7 @@ export type GlobalEvent = {
           finish: string
           cost: number
           unpriced?: boolean
+          billing?: BillingKind
           tokens: {
             input: number
             output: number
@@ -1339,6 +1350,7 @@ export type GlobalEvent = {
           recent: string
           cost?: number
           unpriced?: boolean
+          billing?: BillingKind
           tokens?: {
             input: number
             output: number
@@ -1360,6 +1372,7 @@ export type GlobalEvent = {
           reason: "auto" | "manual"
           cost?: number
           unpriced?: boolean
+          billing?: BillingKind
           tokens?: {
             input: number
             output: number
@@ -1736,6 +1749,7 @@ export type GlobalEvent = {
           capUsd?: number
           steps: number
           unpricedSteps: number
+          codiumSteps?: number
           costKind: CostKind
           estimate?: {
             lowUsd: number
@@ -2786,6 +2800,7 @@ export type Model = {
       [key: string]: unknown
     }
   }
+  codium?: ModelCodium
 }
 
 export type Provider = {
@@ -2884,8 +2899,10 @@ export type GlobalSession = {
   }
   cost?: number
   unpricedSteps?: number
+  codiumSteps?: number
   subagentCost?: number
   subagentUnpricedSteps?: number
+  subagentCodiumSteps?: number
   subagentTokens?: {
     input: number
     output: number
@@ -2955,6 +2972,7 @@ export type SessionUsageDay = {
   tokens: number
   cost: number
   tasks: number
+  codium?: number
 }
 
 export type SessionUsageHelper = {
@@ -2963,12 +2981,14 @@ export type SessionUsageHelper = {
   responses: number
   tokens: number
   cost: number
+  codiumSteps?: number
 }
 
 export type SessionUsageSummary = {
   lifetimeTokens: number
   lifetimeCost: number
   unpricedResponses?: number
+  codiumResponses?: number
   inputTokens: number
   outputTokens: number
   reasoningTokens: number
@@ -4658,8 +4678,10 @@ export type Session1 = {
   }
   cost?: number
   unpricedSteps?: number
+  codiumSteps?: number
   subagentCost?: number
   subagentUnpricedSteps?: number
+  subagentCodiumSteps?: number
   subagentTokens?: {
     input: number
     output: number
@@ -4724,8 +4746,10 @@ export type Session2 = {
   }
   cost?: number
   unpricedSteps?: number
+  codiumSteps?: number
   subagentCost?: number
   subagentUnpricedSteps?: number
+  subagentCodiumSteps?: number
   subagentTokens?: {
     input: number
     output: number
@@ -4803,8 +4827,10 @@ export type Session3 = {
   }
   cost?: number
   unpricedSteps?: number
+  codiumSteps?: number
   subagentCost?: number
   subagentUnpricedSteps?: number
+  subagentCodiumSteps?: number
   subagentTokens?: {
     input: number
     output: number
@@ -4881,8 +4907,10 @@ export type Session4 = {
   }
   cost?: number
   unpricedSteps?: number
+  codiumSteps?: number
   subagentCost?: number
   subagentUnpricedSteps?: number
+  subagentCodiumSteps?: number
   subagentTokens?: {
     input: number
     output: number
@@ -4947,8 +4975,10 @@ export type Session5 = {
   }
   cost?: number
   unpricedSteps?: number
+  codiumSteps?: number
   subagentCost?: number
   subagentUnpricedSteps?: number
+  subagentCodiumSteps?: number
   subagentTokens?: {
     input: number
     output: number
@@ -5017,8 +5047,10 @@ export type Session6 = {
   }
   cost?: number
   unpricedSteps?: number
+  codiumSteps?: number
   subagentCost?: number
   subagentUnpricedSteps?: number
+  subagentCodiumSteps?: number
   subagentTokens?: {
     input: number
     output: number
@@ -5131,8 +5163,10 @@ export type Session7 = {
   }
   cost?: number
   unpricedSteps?: number
+  codiumSteps?: number
   subagentCost?: number
   subagentUnpricedSteps?: number
+  subagentCodiumSteps?: number
   subagentTokens?: {
     input: number
     output: number
@@ -5197,8 +5231,10 @@ export type Session8 = {
   }
   cost?: number
   unpricedSteps?: number
+  codiumSteps?: number
   subagentCost?: number
   subagentUnpricedSteps?: number
+  subagentCodiumSteps?: number
   subagentTokens?: {
     input: number
     output: number
@@ -5366,6 +5402,7 @@ export type SpendSnapshot = {
   spentUsd: number
   steps: number
   unpricedSteps: number
+  codiumSteps?: number
   costKind?: CostKind
 }
 
@@ -5699,6 +5736,8 @@ export type PublicSessionInfo = {
   updates: boolean
 }
 
+export type BillingKind = "codium"
+
 export type ModelRef = {
   id: string
   providerID: string
@@ -5914,6 +5953,7 @@ export type SessionErrorCodium = {
   type: "codium"
   action: "credits" | "sign-in" | "unavailable"
   message: string
+  code?: string
 }
 
 export type SessionErrorAssistant = SessionErrorUnknown | FreeModelLimit | SessionErrorCodium
@@ -5939,6 +5979,7 @@ export type SessionMessageAssistant = {
   finish?: string
   cost?: number
   unpriced?: boolean
+  billing?: BillingKind
   tokens?: {
     input: number
     output: number
@@ -5958,6 +5999,7 @@ export type SessionMessageCompaction = {
   recent: string
   cost?: number
   unpriced?: boolean
+  billing?: BillingKind
   tokens?: {
     input: number
     output: number
@@ -6215,6 +6257,7 @@ export type SyncEventSessionNextAncillaryUsage = {
       model: ModelRef
       cost?: number
       unpriced?: boolean
+      billing?: BillingKind
       tokens?: {
         input: number
         output: number
@@ -6451,6 +6494,7 @@ export type SyncEventSessionNextStepEnded = {
       finish: string
       cost: number
       unpriced?: boolean
+      billing?: BillingKind
       tokens: {
         input: number
         output: number
@@ -6754,6 +6798,7 @@ export type SyncEventSessionNextCompactionEnded = {
       recent: string
       cost?: number
       unpriced?: boolean
+      billing?: BillingKind
       tokens?: {
         input: number
         output: number
@@ -6782,6 +6827,7 @@ export type SyncEventSessionNextCompactionFailed = {
       reason: "auto" | "manual"
       cost?: number
       unpriced?: boolean
+      billing?: BillingKind
       tokens?: {
         input: number
         output: number
@@ -6865,6 +6911,25 @@ export type ConfigV2ExperimentalPolicy = {
 
 export type TeamsId = string
 
+export type ModelCodium = {
+  lab?: string
+  role?: "floor" | "default" | "ceiling"
+  manualOnly?: boolean
+  locked?: {
+    plan: string
+    name: string
+    previewUntil?: number
+  }
+  preview?: {
+    until: number
+  }
+  auto?: {
+    floor: string
+    default: string
+    ceiling: string
+  }
+}
+
 export type TaskStatus = "queued" | "running" | "waiting_on_user" | "completed" | "failed" | "stopped"
 
 export type TaskUsage = {
@@ -6882,6 +6947,7 @@ export type TaskUsage = {
   toolUses: number
   steps: number
   unpricedSteps?: number
+  codiumSteps?: number
 }
 
 export type TaskBudgetScope = {
@@ -6891,6 +6957,7 @@ export type TaskBudgetScope = {
   spentUsd: number
   steps: number
   unpricedSteps: number
+  codiumSteps?: number
   costKind?: CostKind
   stopped?: {
     reason: RunBudgetStopReason
@@ -7312,8 +7379,10 @@ export type SessionV2Info = {
   model?: ModelRef
   cost: number
   unpricedSteps?: number
+  codiumSteps?: number
   subagentCost?: number
   subagentUnpricedSteps?: number
+  subagentCodiumSteps?: number
   subagentTokens?: {
     input: number
     output: number
@@ -7381,6 +7450,7 @@ export type SessionNextAncillaryUsage = {
     model: ModelRef
     cost?: number
     unpriced?: boolean
+    billing?: BillingKind
     tokens?: {
       input: number
       output: number
@@ -7656,6 +7726,7 @@ export type SessionNextStepEnded = {
     finish: string
     cost: number
     unpriced?: boolean
+    billing?: BillingKind
     tokens: {
       input: number
       output: number
@@ -8004,6 +8075,7 @@ export type SessionNextCompactionEnded = {
     recent: string
     cost?: number
     unpriced?: boolean
+    billing?: BillingKind
     tokens?: {
       input: number
       output: number
@@ -8035,6 +8107,7 @@ export type SessionNextCompactionFailed = {
     reason: "auto" | "manual"
     cost?: number
     unpriced?: boolean
+    billing?: BillingKind
     tokens?: {
       input: number
       output: number
@@ -8181,6 +8254,7 @@ export type ModelV2Info = {
     input?: number
     output: number
   }
+  codium?: ModelCodium
 }
 
 export type ProviderAisdk = {
@@ -9325,6 +9399,7 @@ export type SessionSpend = {
     capUsd?: number
     steps: number
     unpricedSteps: number
+    codiumSteps?: number
     costKind: CostKind
     estimate?: {
       lowUsd: number
@@ -9752,6 +9827,7 @@ export type EventSessionNextAncillaryUsage = {
     model: ModelRef
     cost?: number
     unpriced?: boolean
+    billing?: BillingKind
     tokens?: {
       input: number
       output: number
@@ -9910,6 +9986,7 @@ export type EventSessionNextStepEnded = {
     finish: string
     cost: number
     unpriced?: boolean
+    billing?: BillingKind
     tokens: {
       input: number
       output: number
@@ -10170,6 +10247,7 @@ export type EventSessionNextCompactionEnded = {
     recent: string
     cost?: number
     unpriced?: boolean
+    billing?: BillingKind
     tokens?: {
       input: number
       output: number
@@ -10192,6 +10270,7 @@ export type EventSessionNextCompactionFailed = {
     reason: "auto" | "manual"
     cost?: number
     unpriced?: boolean
+    billing?: BillingKind
     tokens?: {
       input: number
       output: number
@@ -10552,6 +10631,7 @@ export type EventSessionSpend = {
     capUsd?: number
     steps: number
     unpricedSteps: number
+    codiumSteps?: number
     costKind: CostKind
     estimate?: {
       lowUsd: number

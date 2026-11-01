@@ -273,6 +273,8 @@ export default {
           \`unpriced_steps\` integer DEFAULT 0 NOT NULL,
           \`subagent_cost\` real DEFAULT 0 NOT NULL,
           \`subagent_unpriced_steps\` integer DEFAULT 0 NOT NULL,
+          \`codium_steps\` integer DEFAULT 0 NOT NULL,
+          \`subagent_codium_steps\` integer DEFAULT 0 NOT NULL,
           \`subagent_tokens_input\` integer DEFAULT 0 NOT NULL,
           \`subagent_tokens_output\` integer DEFAULT 0 NOT NULL,
           \`subagent_tokens_reasoning\` integer DEFAULT 0 NOT NULL,

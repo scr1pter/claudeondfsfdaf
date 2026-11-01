@@ -84,6 +84,8 @@ export type SubagentUsage = {
   /** Model steps the subagent took. */
   steps: number
   unpricedSteps?: number
+  /** How many of unpricedSteps ran on Vector Codium. Their tokens are not in tokens or total. */
+  codiumSteps?: number
 }
 
 /**

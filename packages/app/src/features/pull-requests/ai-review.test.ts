@@ -1151,6 +1151,42 @@ describe("models", () => {
     ])
   })
 
+  test("a Codium model the plan no longer includes is never a review model, so the next candidate runs it", () => {
+    // Listed with its lock (choosing it in the picker opens Change plan); still first in the person's recents.
+    const providers: Parameters<typeof workflowModel>[1] = [
+      {
+        id: "vector-plan",
+        source: "custom",
+        models: {
+          "anthropic/claude-opus-5.5": {
+            id: "anthropic/claude-opus-5.5",
+            codium: { locked: { plan: "vector-200", name: "Ultra" } },
+          },
+          "deepseek/deepseek-v4.1-flash": { id: "deepseek/deepseek-v4.1-flash", codium: { role: "default" } },
+        },
+      },
+      {
+        id: "anthropic",
+        source: "env",
+        env: ["ANTHROPIC_API_KEY"],
+        models: { sonnet: { id: "claude-sonnet-4-5", cost: { input: 3, output: 15 } } },
+      },
+    ]
+    const catalog = reviewCatalog(providers)
+    expect(catalog.map((model) => `${model.providerID}/${model.modelID}`)).toEqual([
+      "vector-plan/deepseek/deepseek-v4.1-flash",
+      "anthropic/claude-sonnet-4-5",
+    ])
+    expect(pickReviewModel(["vector-plan/anthropic/claude-opus-5.5", "anthropic/claude-sonnet-4-5"], catalog)).toEqual(
+      catalog[1],
+    )
+    // A review configured on it falls through too, and so does the model GitHub Actions would run.
+    expect(workflowModel(["vector-plan/anthropic/claude-opus-5.5"], providers)).toEqual({
+      model: "anthropic/claude-sonnet-4-5",
+      keys: ["ANTHROPIC_API_KEY"],
+    })
+  })
+
   test("automatic reviews run on the model a review here picks, with its provider's key variables as secrets", () => {
     const providers: Parameters<typeof workflowModel>[1] = [
       {

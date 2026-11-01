@@ -16,6 +16,7 @@ import { SessionContextEpoch } from "./context-epoch"
 import { MessageTable, PartTable, SessionInputTable, SessionMessageTable, SessionTable } from "./sql"
 import type { DeepMutable } from "../schema"
 import { PublicSession } from "@vectordevai/schema/public-session"
+import { Billing } from "@vectordevai/schema/billing"
 
 type DatabaseService = Database.Interface["db"]
 
@@ -28,6 +29,9 @@ type Usage = {
   cost: number
   // The step ran on a model with no listed price; it counts towards the session's unpriced_steps.
   unpriced?: boolean
+  // The step ran on Vector Codium. Only the flag stored on the record routes it, never the provider id: a Codium step
+  // recorded before the flag existed was counted as an ordinary step, so it must be subtracted as one.
+  billing?: "codium"
   tokens: {
     input: number
     output: number
@@ -44,6 +48,7 @@ function usage(part: (typeof SessionV1.Event.PartUpdated.Type)["data"]["part"] |
   return {
     cost: value.cost as Usage["cost"],
     unpriced: value.unpriced === true,
+    billing: value.billing === "codium" ? "codium" : undefined,
     tokens: value.tokens as Usage["tokens"],
   }
 }
@@ -57,7 +62,7 @@ function rowUsage(row: typeof SessionMessageTable.$inferSelect | undefined): Usa
 function messageUsage(message: SessionMessage.Message): Usage | undefined {
   if (message.type !== "assistant" && message.type !== "compaction") return undefined
   if (message.cost === undefined || message.tokens === undefined) return undefined
-  return { cost: message.cost, unpriced: message.unpriced === true, tokens: message.tokens }
+  return { cost: message.cost, unpriced: message.unpriced === true, billing: message.billing, tokens: message.tokens }
 }
 
 function sessionRow(info: SessionV1.SessionInfo): typeof SessionTable.$inferInsert {
@@ -83,8 +88,10 @@ function sessionRow(info: SessionV1.SessionInfo): typeof SessionTable.$inferInse
     metadata: info.metadata,
     cost: info.cost ?? 0,
     unpriced_steps: info.unpricedSteps ?? 0,
+    codium_steps: info.codiumSteps ?? 0,
     subagent_cost: info.subagentCost ?? 0,
     subagent_unpriced_steps: info.subagentUnpricedSteps ?? 0,
+    subagent_codium_steps: info.subagentCodiumSteps ?? 0,
     subagent_tokens_input: info.subagentTokens?.input ?? 0,
     subagent_tokens_output: info.subagentTokens?.output ?? 0,
     subagent_tokens_reasoning: info.subagentTokens?.reasoning ?? 0,
@@ -125,14 +132,19 @@ function applyUsage(
   previous?: Usage,
 ) {
   return Effect.gen(function* () {
+    // Each record is routed by its own flag on both sides, so a replaced, reverted, removed or moved Codium step takes
+    // back exactly what it added.
+    const next = contribution(value)
+    const prior = contribution(previous)
     const delta = {
-      cost: value.cost * sign - (previous?.cost ?? 0),
-      unpriced: Number(Boolean(value.unpriced)) * sign - Number(Boolean(previous?.unpriced)),
-      input: value.tokens.input * sign - (previous?.tokens.input ?? 0),
-      output: value.tokens.output * sign - (previous?.tokens.output ?? 0),
-      reasoning: value.tokens.reasoning * sign - (previous?.tokens.reasoning ?? 0),
-      read: value.tokens.cache.read * sign - (previous?.tokens.cache.read ?? 0),
-      write: value.tokens.cache.write * sign - (previous?.tokens.cache.write ?? 0),
+      cost: next.cost * sign - prior.cost,
+      unpriced: next.unpriced * sign - prior.unpriced,
+      codium: next.codium * sign - prior.codium,
+      input: next.input * sign - prior.input,
+      output: next.output * sign - prior.output,
+      reasoning: next.reasoning * sign - prior.reasoning,
+      read: next.read * sign - prior.read,
+      write: next.write * sign - prior.write,
     }
     if (Object.values(delta).every((value) => value === 0)) return
     yield* db
@@ -140,6 +152,7 @@ function applyUsage(
       .set({
         cost: sql`${SessionTable.cost} + ${delta.cost}`,
         unpriced_steps: sql`${SessionTable.unpriced_steps} + ${delta.unpriced}`,
+        codium_steps: sql`${SessionTable.codium_steps} + ${delta.codium}`,
         tokens_input: sql`${SessionTable.tokens_input} + ${delta.input}`,
         tokens_output: sql`${SessionTable.tokens_output} + ${delta.output}`,
         tokens_reasoning: sql`${SessionTable.tokens_reasoning} + ${delta.reasoning}`,
@@ -160,6 +173,7 @@ function applyUsage(
       .set({
         subagent_cost: sql`${SessionTable.subagent_cost} + ${delta.cost}`,
         subagent_unpriced_steps: sql`${SessionTable.subagent_unpriced_steps} + ${delta.unpriced}`,
+        subagent_codium_steps: sql`${SessionTable.subagent_codium_steps} + ${delta.codium}`,
         subagent_tokens_input: sql`${SessionTable.subagent_tokens_input} + ${delta.input}`,
         subagent_tokens_output: sql`${SessionTable.subagent_tokens_output} + ${delta.output}`,
         subagent_tokens_reasoning: sql`${SessionTable.subagent_tokens_reasoning} + ${delta.reasoning}`,
@@ -173,6 +187,23 @@ function applyUsage(
       .run()
       .pipe(Effect.orDie)
   })
+}
+
+// What one record adds to the session totals. A Codium step is one unpriced step and one Codium step and nothing else:
+// its tokens stay on the record, for compaction and the context meter, but every token total leaves them out.
+function contribution(value: Usage | undefined) {
+  if (value?.billing === "codium")
+    return { cost: 0, unpriced: 1, codium: 1, input: 0, output: 0, reasoning: 0, read: 0, write: 0 }
+  return {
+    cost: value?.cost ?? 0,
+    unpriced: Number(Boolean(value?.unpriced)),
+    codium: 0,
+    input: value?.tokens.input ?? 0,
+    output: value?.tokens.output ?? 0,
+    reasoning: value?.tokens.reasoning ?? 0,
+    read: value?.tokens.cache.read ?? 0,
+    write: value?.tokens.cache.write ?? 0,
+  }
 }
 
 function run(db: DatabaseService, event: SessionEvent.Event) {
@@ -321,8 +352,10 @@ const layer = Layer.effectDiscard(
       const {
         cost: _,
         unpriced_steps: _unpriced,
+        codium_steps: _codium,
         subagent_cost: _subagentCost,
         subagent_unpriced_steps: _subagentUnpriced,
+        subagent_codium_steps: _subagentCodium,
         subagent_tokens_input: _subagentInput,
         subagent_tokens_output: _subagentOutput,
         subagent_tokens_reasoning: _subagentReasoning,
@@ -538,6 +571,9 @@ const layer = Layer.effectDiscard(
               event.data.incomplete ||
               event.data.cost === undefined ||
               event.data.tokens === undefined,
+            // Nothing subtracts ancillary usage, so its model's provider id can route it as well as the flag.
+            billing:
+              event.data.billing === "codium" || Billing.isCodium(event.data.model.providerID) ? "codium" : undefined,
             tokens: event.data.tokens ?? { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
           },
           1,
@@ -568,6 +604,7 @@ const layer = Layer.effectDiscard(
           {
             cost: event.data.cost,
             unpriced: event.data.unpriced === true,
+            billing: event.data.billing,
             tokens: event.data.tokens,
           },
           1,
@@ -585,6 +622,7 @@ const layer = Layer.effectDiscard(
           {
             cost: event.data.cost,
             unpriced: event.data.unpriced === true,
+            billing: event.data.billing,
             tokens: event.data.tokens,
           },
           1,

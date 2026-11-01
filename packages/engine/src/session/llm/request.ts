@@ -1,3 +1,4 @@
+import { ModelPlanStatus } from "@vectordevai/core/model-plan-status"
 import { PermissionV1 } from "@vectordevai/core/v1/permission"
 import type { Auth } from "@/auth"
 import { SessionV1 } from "@vectordevai/core/v1/session"
@@ -35,6 +36,7 @@ type PrepareInput = {
   // reasons at whatever effort the user chose for real work.
   readonly effort?: TaskSize.Effort
   readonly tools: Record<string, Tool>
+  readonly purpose?: ModelPlanStatus.Purpose
   readonly provider: Provider.Info
   readonly auth: Auth.Info | undefined
   readonly plugin: Plugin.Interface
@@ -223,7 +225,8 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
     params,
     messageTransformOptions: options,
     // The session header goes last and in one spelling: the free-model fetch reads it to apply the guest rule
-    // (FreeModelGuests), so model configuration and plugins can neither replace it nor join a second value to it.
+    // (FreeModelGuests), so model configuration and plugins can neither replace it nor join a second value to it. A
+    // Codium request's purpose is fixed the same way and is sent to Codium only.
     headers: Object.assign(
       Object.fromEntries(
         Object.entries({
@@ -232,9 +235,12 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
           "User-Agent": USER_AGENT,
           ...input.model.headers,
           ...headers,
-        }).filter(([key]) => key.toLowerCase() !== "x-session-id"),
+        }).filter(([key]) => !["x-session-id", "x-vector-purpose"].includes(key.toLowerCase())),
       ),
       { "X-Session-Id": input.sessionID },
+      input.model.providerID === ModelPlanStatus.PROVIDER_ID
+        ? { "X-Vector-Purpose": input.purpose ?? (input.agent.name === "judge" ? "judge" : "chat") }
+        : {},
     ),
   }
 })
