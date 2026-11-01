@@ -69,7 +69,14 @@ jobs:
       # search files: it has to be installed (engine/test/preload.ts).
       - name: Install ripgrep
         if: runner.os == 'Linux'
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends ripgrep && rg --version
+        timeout-minutes: 5
+        run: |
+          if command -v rg >/dev/null 2>&1 && rg --version; then
+            exit 0
+          fi
+          sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=60 update -qq
+          sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=60 install -y -qq --no-install-recommends ripgrep
+          rg --version
 
       - name: Configure git identity
         run: |
@@ -104,7 +111,7 @@ jobs:
         working-directory: packages/desktop
         run: |
           status=0
-          for file in ./scripts/computer-helper-identity.test.ts ./test/computer/*.test.ts ./src/main/computer-*.test.ts ./src/main/config-skew.test.ts ./src/main/ipc-security.test.ts; do
+          for file in ./scripts/computer-helper-identity.test.ts ./test/computer/*.test.ts ./src/main/computer-*.test.ts ./src/main/config-skew.test.ts ./src/main/ipc-security.test.ts ./src/main/keep-awake.test.ts; do
             echo "Desktop computer-use test: $file"
             GITHUB_ACTIONS=false bun --no-env-file test --timeout 30000 --only-failures "$file" || status=1
           done
@@ -204,7 +211,14 @@ jobs:
       # The engine suite runs under the strict network guard, so Vector may not download ripgrep for the tests that
       # search files: it has to be installed (engine/test/preload.ts).
       - name: Install ripgrep
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends ripgrep && rg --version
+        timeout-minutes: 5
+        run: |
+          if command -v rg >/dev/null 2>&1 && rg --version; then
+            exit 0
+          fi
+          sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=60 update -qq
+          sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=60 install -y -qq --no-install-recommends ripgrep
+          rg --version
 
       - name: Configure git identity
         run: |
@@ -251,6 +265,7 @@ jobs:
       # The engine suite runs under the strict network guard, so Vector may not download ripgrep for the tests that
       # search files: it has to be installed (engine/test/preload.ts).
       - name: Install ripgrep
+        timeout-minutes: 5
         shell: pwsh
         run: |
           choco install ripgrep -y --no-progress
