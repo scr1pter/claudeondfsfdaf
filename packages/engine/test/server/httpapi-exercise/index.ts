@@ -119,6 +119,56 @@ const scenarios: Scenario[] = [
       check(body.healthy === true, "server should report healthy")
     }),
   http.protected
+    .get("/experimental/session/usage", "experimental.session.usage.codium")
+    .inProject({ git: true })
+    .seeded((ctx) => ctx.codiumSession())
+    .json(200, (body) => {
+      object(body)
+      check(body.lifetimeTokens === 0 && body.lifetimeCost === 0, "Codium usage must not expose tokens or dollars")
+      check(
+        body.inputTokens === 0 && body.outputTokens === 0 && body.reasoningTokens === 0 && body.cachedTokens === 0,
+        "all token components must exclude Codium",
+      )
+      check(body.codiumResponses === 1 && body.modelResponses === 1, "Codium response activity should remain visible")
+      check(body.completedChats === 1 && body.activeDays === 1, "Codium should retain chat and day activity")
+      array(body.favoriteModels)
+      check(body.favoriteModels.length === 0, "Codium must not appear in token-share preferences")
+      array(body.days)
+      object(body.days[0])
+      check(body.days[0].tokens === 0 && body.days[0].codium === 1, "Codium-only days should remain visible")
+    }),
+  http.protected
+    .get("/api/session/{sessionID}", "v2.session.get.codium")
+    .inProject({ git: true })
+    .seeded((ctx) => ctx.codiumSession())
+    .at((ctx) => ({ path: route("/api/session/{sessionID}", { sessionID: ctx.state.id }), headers: ctx.headers() }))
+    .json(
+      200,
+      data((body) => {
+        object(body)
+        check(body.codiumSteps === 1, "session info should expose the stored Codium step count")
+        check(body.cost === 0, "Codium steps must not count as local dollar spend")
+        object(body.tokens)
+        check(body.tokens.input === 0 && body.tokens.output === 0, "session totals should exclude Codium tokens")
+      }),
+    ),
+  http.protected
+    .get("/api/session/{sessionID}/spend", "v2.session.spend.codium")
+    .inProject({ git: true })
+    .seeded((ctx) => ctx.codiumSession())
+    .at((ctx) => ({
+      path: route("/api/session/{sessionID}/spend", { sessionID: ctx.state.id }),
+      headers: ctx.headers(),
+    }))
+    .json(
+      200,
+      data((body) => {
+        object(body)
+        check(body.costKind === "codium" && body.codiumSteps === 1, "spend response should preserve Codium billing")
+        check(body.unpricedSteps === 0 && body.spentUsd === 0, "Codium must not consume dollar or unknown-step caps")
+      }),
+    ),
+  http.protected
     .get("/global/event", "global.event")
     .global()
     .stream()
@@ -734,7 +784,10 @@ const scenarios: Scenario[] = [
       200,
       (body) => {
         object(body)
-        check(body.text === "HTTP API memory: releases go out on Thursdays.", "memory create should return the saved text")
+        check(
+          body.text === "HTTP API memory: releases go out on Thursdays.",
+          "memory create should return the saved text",
+        )
         check(body.status === "active", "a memory the user adds is active")
       },
       "status",
@@ -782,10 +835,7 @@ const scenarios: Scenario[] = [
     .mutating()
     .at((ctx) => ({ path: route("/memory/{memoryID}", { memoryID: "m0none" }), headers: ctx.headers() }))
     .json(400, object, "status"),
-  http.protected
-    .post("/memory/tidy", "memory.tidy")
-    .mutating()
-    .json(200, object, "status"),
+  http.protected.post("/memory/tidy", "memory.tidy").mutating().json(200, object, "status"),
   http.protected
     .post("/memory/erase", "memory.erase")
     .mutating()
@@ -806,7 +856,11 @@ const scenarios: Scenario[] = [
   http.protected
     .post("/memory/import", "memory.import")
     .mutating()
-    .at((ctx) => ({ path: "/memory/import", headers: ctx.headers(), body: { text: "# Notes\n\nNothing to bring in." } }))
+    .at((ctx) => ({
+      path: "/memory/import",
+      headers: ctx.headers(),
+      body: { text: "# Notes\n\nNothing to bring in." },
+    }))
     .json(
       200,
       (body) => {
@@ -817,7 +871,10 @@ const scenarios: Scenario[] = [
     ),
   http.protected.get("/memory/settings", "memory.settings.get").json(200, (body) => {
     object(body)
-    check(typeof body.facets === "object" && body.modelLearner === "local-only", "learning settings should say each facet and the model learner")
+    check(
+      typeof body.facets === "object" && body.modelLearner === "local-only",
+      "learning settings should say each facet and the model learner",
+    )
   }),
   http.protected
     .patch("/memory/settings", "memory.settings.update")
@@ -833,7 +890,10 @@ const scenarios: Scenario[] = [
     object(body)
     check(body.state === "absent", "no search model is downloaded until the user asks")
     check(body.downloads === false, "tests turn search model downloads off")
-    check(Array.isArray(body.options) && body.options.length === 2, "the model status should list what can be downloaded")
+    check(
+      Array.isArray(body.options) && body.options.length === 2,
+      "the model status should list what can be downloaded",
+    )
   }),
   // Downloads are off in tests; installing from a folder is what an offline computer does instead.
   http.protected
@@ -848,7 +908,10 @@ const scenarios: Scenario[] = [
     object(body)
     check(Array.isArray(body.documents), "documents list should return documents")
     check(typeof body.indexing === "boolean", "documents list should say whether anything is being read")
-    check(isRecord(body.limits) && body.limits.upload === 64 * 1024 * 1024, "documents list should give the upload limit")
+    check(
+      isRecord(body.limits) && body.limits.upload === 64 * 1024 * 1024,
+      "documents list should give the upload limit",
+    )
   }),
   // The upload takes multipart form data only; memory-documents.test.ts sends real files.
   http.protected
@@ -912,12 +975,18 @@ const scenarios: Scenario[] = [
     .json(400, object, "status"),
   http.protected
     .get("/memory/documents/{documentID}/file", "memory.documents.file")
-    .at((ctx) => ({ path: route("/memory/documents/{documentID}/file", { documentID: "dnone" }), headers: ctx.headers() }))
+    .at((ctx) => ({
+      path: route("/memory/documents/{documentID}/file", { documentID: "dnone" }),
+      headers: ctx.headers(),
+    }))
     .json(400, object, "status"),
   // Nothing is sent to a model here: the flag is off by default, and no document dnone exists either way.
   http.protected
     .get("/memory/documents/{documentID}/distill", "memory.distill.estimate")
-    .at((ctx) => ({ path: route("/memory/documents/{documentID}/distill", { documentID: "dnone" }), headers: ctx.headers() }))
+    .at((ctx) => ({
+      path: route("/memory/documents/{documentID}/distill", { documentID: "dnone" }),
+      headers: ctx.headers(),
+    }))
     .json(200, (body) => {
       object(body)
       check(typeof body.refused === "object", "an estimate for a document that is not there says why it would not run")
@@ -950,7 +1019,11 @@ const scenarios: Scenario[] = [
     .json(400, object, "status"),
   http.protected
     .post("/memory/posting-check", "memory.posting.check")
-    .at((ctx) => ({ path: "/memory/posting-check", headers: ctx.headers(), body: { parts: ["Fixed the retry loop."], typed: false } }))
+    .at((ctx) => ({
+      path: "/memory/posting-check",
+      headers: ctx.headers(),
+      body: { parts: ["Fixed the retry loop."], typed: false },
+    }))
     .json(200, (body) => {
       object(body)
       check(body.status === "clean", "text that repeats nothing of the owner's memory posts as it is")

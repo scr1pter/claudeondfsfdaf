@@ -1,5 +1,6 @@
 export * as SessionRunnerModel from "./model"
 
+import { Billing } from "@vectordevai/schema/billing"
 import { makeLocationNode } from "../../effect/app-node"
 import { HttpOptions, LLMRequest, type Model, type ProviderMetadata } from "@vectordevai/llm"
 import * as AnthropicMessages from "@vectordevai/llm/protocols/anthropic-messages"
@@ -190,7 +191,7 @@ export const isFree = (model: Model) =>
 // One settled provider step as the spend guard counts it. An unpriced step's cost stays undefined, never $0. A
 // catalog entry with no input and no output rate still prices every step at $0, so a step is listed only with real
 // catalog rates or a cost the provider reported (Copilot's metered cost). That is Vectorscope's rule, so both call such
-// a model unknown. A Vector Codium step carries neither, so it counts as unpriced.
+// a model unknown. A Vector Codium step is counted separately from dollar-priced or unknown work.
 export const spendStep = (
   model: Model,
   settlement: { readonly tokens: Tokens; readonly providerMetadata?: ProviderMetadata },
@@ -202,6 +203,7 @@ export const spendStep = (
   return {
     costUsd,
     costKind: SpendGuard.costKindOf({
+      codium: Billing.isCodium(model.provider),
       free: isFree(model),
       // V2 does not detect OAuth plans yet.
       oauthPlan: false,

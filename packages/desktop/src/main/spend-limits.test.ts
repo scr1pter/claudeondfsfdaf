@@ -750,3 +750,16 @@ describe("durability", () => {
     expect((await ledger.summary({ at })).all.month.costUsd).toBe(0)
   })
 })
+
+test("known Codium runs bypass spent dollar windows and reserve no headroom", async () => {
+  const { ledger } = await newLedger()
+  const at = new Date(2026, 7, 19, 10, 0)
+  await ledger.setPolicy({ unattended: { perDay: { usd: 1 } } })
+  await spender(ledger)({ runId: "spent", costUsd: 1, at })
+  expect((await ledger.checkAllowance({ runId: "own", source: "scheduled", at })).allowed).toBe(false)
+  expect(
+    await ledger.checkAllowance({ runId: "codium", source: "scheduled", at, reserve: true, billing: "codium" }),
+  ).toEqual({ allowed: true, state: "ok", unmeasuredRuns: 0 })
+  await ledger.setPolicy({ unattended: { perDay: { usd: 2 } } })
+  expect((await ledger.checkAllowance({ runId: "own", source: "scheduled", at })).remainingUsd).toBe(1)
+})

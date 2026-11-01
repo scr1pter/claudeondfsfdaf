@@ -1,3 +1,4 @@
+import { Billing } from "@vectordevai/schema/billing"
 import { Context, Duration, Effect, Exit, Layer, Option } from "effect"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import type { Brain } from "@vectordevai/core/brain/brain"
@@ -115,7 +116,9 @@ const layer = Layer.effect(
       if (!model)
         return refuse(
           "no-model",
-          input.model ? `${input.model} is not available. Check the provider and its key.` : "Connect a provider or choose a model first.",
+          input.model
+            ? `${input.model} is not available. Check the provider and its key.`
+            : "Connect a provider or choose a model first.",
         )
       const info = yield* provider.getProvider(model.providerID).pipe(Effect.option)
       const urls = [model.api.url, Option.isSome(info) ? info.value.options.baseURL : undefined].filter(
@@ -136,13 +139,17 @@ const layer = Layer.effect(
       const name = `${model.providerID}/${model.id}`
       if (!model.capabilities.toolcall)
         return refuse("no-model", `${name} cannot answer through a tool, which suggestions need. Choose another model.`)
-      if (model.limit.context > 0 && model.limit.context < picked.tokens + BrainDistill.OVERHEAD + BrainDistill.LIMIT.output)
+      if (
+        model.limit.context > 0 &&
+        model.limit.context < picked.tokens + BrainDistill.OVERHEAD + BrainDistill.LIMIT.output
+      )
         return refuse(
           "no-model",
           `${name} cannot hold this request. Choose a model with a larger context, or send less with a lower token limit.`,
         )
       const signIn = yield* auth.get(model.providerID).pipe(Effect.catch(() => Effect.succeed(undefined)))
       const costKind = SpendGuard.costKindOf({
+        codium: Billing.isCodium(model.providerID),
         free: isFreeModel(model),
         oauthPlan:
           signIn?.type === "oauth" &&
@@ -209,8 +216,17 @@ const layer = Layer.effect(
           sessionID: session.id,
           agent: "distill",
           model: { providerID: planned.model.providerID, modelID: planned.model.id },
-          format: new SessionV1.OutputFormatJsonSchema({ type: "json_schema", schema: BrainDistill.SCHEMA, retryCount: 0 }),
-          parts: [{ type: "text", text: BrainDistill.prompt({ title: planned.document.title, sections: planned.picked.sections }) }],
+          format: new SessionV1.OutputFormatJsonSchema({
+            type: "json_schema",
+            schema: BrainDistill.SCHEMA,
+            retryCount: 0,
+          }),
+          parts: [
+            {
+              type: "text",
+              text: BrainDistill.prompt({ title: planned.document.title, sections: planned.picked.sections }),
+            },
+          ],
         })
         .pipe(
           Effect.provideService(SessionAdmission.Current, policy),

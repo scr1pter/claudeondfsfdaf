@@ -75,6 +75,35 @@ const reads = (count: number) =>
   Array.from({ length: count }, (_, index) => step({ tools: [{ tool: "read", input: `src/${index}.ts` }] }))
 
 describe("SpendGuard.afterStep", () => {
+  test("Codium ignores dollar pricing and the unpriced step cap while counting its steps", () => {
+    expect(SpendGuard.costKindOf({ codium: true, free: true, oauthPlan: true, listed: true })).toBe("codium")
+    const result = play(
+      { usd: 1 },
+      Array.from({ length: 45 }, () => step({ costKind: "codium", costUsd: 100 })),
+    )
+    expect(result.verdicts.every((verdict) => verdict.state === "ok")).toBe(true)
+    expect(result.run).toMatchObject({ spentUsd: 0, steps: 45, unpricedSteps: 0, codiumSteps: 45 })
+  })
+
+  test("Codium still stops on step and loop limits", () => {
+    const capped = play(
+      { usd: 1, steps: 3 },
+      Array.from({ length: 3 }, () => step({ costKind: "codium" })),
+    )
+    expect(capped.verdicts[2]?.reason).toBe("steps")
+    const looped = play(
+      { usd: 1 },
+      Array.from({ length: 3 }, () => step({ costKind: "codium", tools: [bash("pwd")] })),
+    )
+    expect(looped.verdicts[2]?.reason).toBe("loop")
+  })
+
+  test("mixed Codium and own-key runs stop on own spend", () => {
+    const result = play({ usd: 1 }, [step({ costKind: "codium", costUsd: 99 }), step({ costUsd: 1.1 })])
+    expect(result.run).toMatchObject({ spentUsd: 1.1, codiumSteps: 1, unpricedSteps: 0 })
+    expect(result.verdicts[1]?.reason).toBe("cap")
+  })
+
   test("warns once at 80% of the cap", () => {
     const result = play({ usd: 5 }, [step({ costUsd: 4.1 }), step({ costUsd: 0.1 })])
     expect(result.verdicts[0]).toEqual({
@@ -867,6 +896,22 @@ describe("SpendGuard service", () => {
 })
 
 describe("SpendGuard task scopes", () => {
+  it.effect("Codium propagates to root, batch and child scopes without unknown spend", () =>
+    Effect.gen(function* () {
+      const guard = yield* SpendGuard.Service
+      yield* guard.begin(root, { usd: 1 })
+      yield* guard.link(child, root, { budget: { usd: 0.1 }, batch: { id: "codium-batch", budget: { usd: 0.2 } } })
+      yield* guard.record(child, step({ costKind: "codium", costUsd: 100 }))
+      expect(yield* guard.snapshot(root)).toMatchObject({ codiumSteps: 1, unpricedSteps: 0, spentUsd: 0 })
+      const scopes = yield* guard.scopes(child)
+      expect(scopes.map((scope) => scope.kind)).toEqual(["run", "batch", "child"])
+      expect(
+        scopes.every((scope) => scope.codiumSteps === 1 && scope.unpricedSteps === 0 && scope.spentUsd === 0),
+      ).toBe(true)
+      expect(yield* guard.stopped(child)).toBeUndefined()
+    }),
+  )
+
   it.effect("checks child, batch and root ceilings while recording each step once per applicable scope", () =>
     Effect.gen(function* () {
       const guard = yield* SpendGuard.Service

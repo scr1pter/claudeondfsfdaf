@@ -1,3 +1,4 @@
+import { SpendGuard } from "@vectordevai/core/spend-guard"
 import { SessionV1 } from "@vectordevai/core/v1/session"
 import { Database } from "@vectordevai/core/database/database"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
@@ -172,6 +173,7 @@ const assistant = Effect.fn("TestSession.assistant")(function* (
 })
 
 const root = LayerNode.group([
+  SpendGuard.node,
   SessionProcessor.node,
   Session.node,
   SessionProjector.node,
@@ -1458,6 +1460,8 @@ for (const outcome of ["settled", "stopped", "fail"] as const) {
             const database = yield* Database.Service
             const { processors, session, provider } = yield* boot()
             const chat = yield* session.create({})
+            const guard = yield* SpendGuard.Service
+            yield* guard.begin(chat.id, { usd: 1 })
             const parent = yield* user(chat.id, outcome)
             // As Provider.fromModelPlans lists a Codium model: no dollar price.
             const listed = yield* provider.getModel(ref.providerID, ref.modelID)
@@ -1525,6 +1529,12 @@ for (const outcome of ["settled", "stopped", "fail"] as const) {
               tokens: { input: 1_000 },
             })
             expect(saved.info).toMatchObject({ role: "assistant", cost: 0, unpriced: true, billing: "codium" })
+            expect(yield* guard.snapshot(chat.id)).toMatchObject({
+              costKind: "codium",
+              codiumSteps: 1,
+              unpricedSteps: 0,
+              spentUsd: 0,
+            })
             expect(yield* session.get(chat.id)).toMatchObject({
               cost: 0,
               unpricedSteps: 1,

@@ -134,3 +134,20 @@ describe("ResearchEstimate.copy", () => {
     expect(guard.attempts()).toEqual([])
   })
 })
+
+test("Codium research never exposes a price estimate even when catalog prices exist", () => {
+  const estimate = ResearchEstimate.estimate({
+    pages: 2,
+    searches: 1,
+    prompt: 1000,
+    chunkTokens: 1000,
+    kind: "codium",
+    price,
+  })
+  expect(estimate.usd).toBeUndefined()
+  const copy = ResearchEstimate.copy({ pages: 2, searches: 1, estimate, kind: "codium", capUsd: 1, capSteps: 80 })
+  expect(copy).toContain("Uses your Vector Codium plan; Vector shows no cost estimate for Codium.")
+  expect(copy).toContain("Step cap 80")
+  expect(copy).not.toContain("$")
+  expect(copy).not.toContain("tokens")
+})

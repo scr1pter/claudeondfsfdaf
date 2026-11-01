@@ -429,14 +429,14 @@ test("a native Codium turn streams text and a tool call and leaves its credits o
   // The step spent credits, not dollars Vector could add up, so its cost is unknown and it is recorded unpriced.
   expect(finish.usage).toMatchObject({ inputTokens: 1000, outputTokens: 50 })
   expect(SessionRunnerModel.calculateCost(route, tokens, finish.usage?.providerMetadata)).toBeUndefined()
-  // The run guard counts it the same way: an unpriced step, never $0 and never a priced one.
+  // The run guard counts Codium separately, without treating it as unknown dollar spend.
   expect(
     SessionRunnerModel.spendStep(
       route,
       { tokens, providerMetadata: finish.usage?.providerMetadata },
       { continues: true, patched: false },
     ),
-  ).toMatchObject({ costUsd: undefined, costKind: "unknown" })
+  ).toMatchObject({ costUsd: undefined, costKind: "codium" })
   const sent = gateway.seen.slice(before)
   expect(sent.map((item) => item.path)).toEqual(["/api/model-plans/chat"])
   expect(sent[0].authorization).toBe(`Bearer ${token}`)

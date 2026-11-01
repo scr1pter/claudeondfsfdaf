@@ -231,6 +231,7 @@ function harness(options: {
   // `prompted` says whether this session has been prompted in this harness,
   // so a reading can differ before and after the run.
   spend?: (sessionId: string, prompted: boolean) => unknown
+  sessionModel?: { providerID: string; id: string }
   promptFailure?: string
   // How the turn's last assistant message finished, "stop" unless set.
   finish?: string
@@ -243,7 +244,7 @@ function harness(options: {
   const promptedAt = new Map<string, number>()
   const created: string[] = []
   const createdModels: unknown[] = []
-  const spendChecks: Array<{ runId: string; source: string; reserve?: boolean }> = []
+  const spendChecks: Array<{ runId: string; source: string; reserve?: boolean; billing?: "codium" }> = []
   const reserved = new Map<string, number>()
   const released: string[] = []
   const prompts: unknown[] = []
@@ -274,6 +275,7 @@ function harness(options: {
     spend: async () => ({
       checkAllowance: async (input) => {
         spendChecks.push(input)
+        if (input.billing === "codium") return { allowed: true, state: "ok", unmeasuredRuns: 0 }
         const allowance = {
           unmeasuredRuns: 0,
           ...(options.allowance ?? { allowed: true, state: "ok" as const }),
@@ -327,7 +329,7 @@ function harness(options: {
               reasoning: 0,
               cache: { read: 0, write: 0 },
             },
-            model: { providerID: "provider-test", id: "model-test" },
+            model: options.sessionModel ?? { providerID: "provider-test", id: "model-test" },
           },
         }
       }
@@ -868,9 +870,7 @@ describe("legacy single-directory records", () => {
     const record = harnessed.record("task-legacy")
     expect(harnessed.created).toEqual([])
     expect(record?.directory).toBe("/repos/legacy")
-    expect(record?.results?.map((result) => [result.directory, result.status])).toEqual([
-      ["/repos/legacy", "failed"],
-    ])
+    expect(record?.results?.map((result) => [result.directory, result.status])).toEqual([["/repos/legacy", "failed"]])
     expect(record?.status).toBe("scheduled")
     expect(record?.results?.[0]?.error).toContain("saved without a model")
     expect(new Date(record?.runAt ?? 0).getDate()).toBe(20)
@@ -1058,4 +1058,35 @@ describe("manual runs and reporting", () => {
     expect(harnessed.runtime.workState().nextRunAt).toBe(soon.getTime())
     expect(harnessed.runtime.workState().inFlightRuns).toBe(0)
   })
+})
+
+test("a saved Codium schedule cannot bypass dollars when its existing session now uses an own key", async () => {
+  const harnessed = harness({
+    at: new Date(2026, 7, 19, 10, 0),
+    records: [
+      scheduledRecord({
+        model: { providerID: "vector-plan", id: "codium-model" },
+        targets: [{ directory: "/repos/alpha", sessionId: "ses_established" }],
+      }),
+    ],
+    sessionModel: { providerID: "provider-own", id: "own-model" },
+    allowance: { allowed: false, state: "blocked", reason: "Own-key dollars exhausted" },
+  })
+  await harnessed.runtime.tick()
+  expect(harnessed.spendChecks[0]?.billing).toBeUndefined()
+  expect(harnessed.prompts).toEqual([])
+  expect(harnessed.record()?.results?.[0]?.error).toContain("Own-key dollars exhausted")
+})
+
+test("a continued Codium session uses its actual model despite an older own-key schedule", async () => {
+  const harnessed = harness({
+    at: new Date(2026, 7, 19, 10, 0),
+    records: [scheduledRecord({ targets: [{ directory: "/repos/alpha", sessionId: "ses_established" }] })],
+    sessionModel: { providerID: "vector-plan", id: "codium-model" },
+    allowance: { allowed: false, state: "blocked", reason: "Own-key dollars exhausted" },
+  })
+  await harnessed.runtime.tick()
+  expect(harnessed.spendChecks[0]?.billing).toBe("codium")
+  expect(harnessed.prompts).toHaveLength(1)
+  expect(harnessed.reserved.size).toBe(0)
 })

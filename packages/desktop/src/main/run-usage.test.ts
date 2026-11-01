@@ -12,13 +12,19 @@ import {
   usageDelta,
 } from "./run-usage"
 
-const snapshot = (input: { spentUsd: number; unpricedSteps?: number; costKind?: "priced" | "unknown" | "free" }) => ({
+const snapshot = (input: {
+  spentUsd: number
+  unpricedSteps?: number
+  codiumSteps?: number
+  costKind?: "priced" | "unknown" | "free" | "codium"
+}) => ({
   sessionID: SessionID.make("ses_run_usage"),
   state: "ok" as const,
   budget: { usd: 5 },
   spentUsd: input.spentUsd,
   steps: 3,
   unpricedSteps: input.unpricedSteps ?? 0,
+  ...(input.codiumSteps !== undefined ? { codiumSteps: input.codiumSteps } : {}),
   costKind: input.costKind ?? "priced",
 })
 
@@ -138,4 +144,12 @@ describe("formatUsd", () => {
     expect(formatUsd(0.004)).toBe("<$0.01")
     expect(formatUsd(0)).toBe("$0.00")
   })
+})
+
+test("Codium drains combine without counting unknown or dollar spend", () => {
+  const first = snapshot({ spentUsd: 0, costKind: "codium", codiumSteps: 2 })
+  expect(measuredCost(first, 0, 0)).toBe(0)
+  const mixed = combineSpend(first, snapshot({ spentUsd: 0.3 }))
+  expect(mixed).toMatchObject({ spentUsd: 0.3, codiumSteps: 2, unpricedSteps: 0 })
+  expect(combineSpend(mixed, first)).toMatchObject({ spentUsd: 0.3, codiumSteps: 4, unpricedSteps: 0 })
 })
