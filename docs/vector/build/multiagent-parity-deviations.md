@@ -1156,3 +1156,25 @@ Evidence (2026-11-01, Linux; one file at a time through `/workspace/.tools/vecto
 Permission compatibility uses the actual shipped 1.99.111 policy from `ee6b9a4100bf22113f7edc2a24cd7f3d16d0513b`, identified by successful release run 40236084221. The test fixture is the source file plus a provenance comment. All elevated workflow reasons refuse auto and Always approval under both policies.
 
 Review: workflow_core checked graph/template/input limits; codium_review checked permissions, wire schemas, publication and reports. Findings above were fixed with regressions. This entry records local WP29 evidence, not a publication or full-suite result. Full general CI 41255692359 is running on the preceding integration/CI7 commit 6d34acd7; its result is recorded separately by the coordinating agent.
+
+## 2026-11-01 CI8 — bounded Linux dependency installation
+
+Run [41255692359](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/41255692359)
+on `6d34acd7` passed all twelve Windows engine shards, the other three Linux
+engine shards, both browser jobs, Windows units and the desktop Node bundle
+(19 jobs). This supplies the native Windows evidence requested by CI7. Linux
+units failed one billing fixture whose three sequential two-second waits exceeded
+its five-second timeout; `4a0234b3` includes the tested repair from `67e3161e`.
+Production billing deadlines did not change.
+
+The remaining Linux engine shard never reached its tests: its unbounded
+`Install ripgrep` step started at 00:12:53 UTC and was still running after
+00:43 UTC. The job-log artifact was not available while it ran. Cancellation
+was requested after preserving the completed-job evidence; this run is not a
+successful full-suite result and supplies no coverage for that Linux shard.
+
+All three Linux ripgrep setup sites in the general test workflow now reuse an
+already installed executable, otherwise use bounded package-manager connection,
+retry and lock waits, with a five-minute step deadline. Test deadlines, shard
+counts and assertions are unchanged. A new complete run is still required on
+the repaired integrated source.
