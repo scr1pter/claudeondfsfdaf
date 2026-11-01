@@ -1,0 +1,118 @@
+{
+  "study": "Vector tokenomics: matched local Foundry application builds",
+  "updatedUtc": "2026-11-01T18:12:31.218058+00:00",
+  "model": "gpt-6.1-sol",
+  "reasoning": "high",
+  "autonomousCodingAgentsPerRuntime": 1,
+  "contextTokenLimit": 1050000,
+  "outputTokenCeiling": 32000,
+  "specSha256": "62c42361ffec2b6cf91ef3ef5fb49706503aa05ff420ecf315e270904467c35a",
+  "promptSha256": "49833c627d3c388231d92af5caea6b33fe66076ea7b58c97c2c02fb6dc50a7e6",
+  "evaluatorManifestSha256": "fcc3611fc1a5ca397405e00073936c51a60c5d2327ac93373563dc11d89966bd",
+  "implementationHead": "1d0246d14af322cda477987b60b5dabafb4bf411",
+  "originalAndNativeSource": "70613cc47a175f29a96d17b8883df55c774d1373",
+  "readinessBenchmarkSource": "0586df500618520e7f4be3df74f391dbbed3f965",
+  "results": {
+    "vectorOriginal": {
+      "firstRequests": 68,
+      "firstUsd": 1.5378689,
+      "agentWallMs": 1035250,
+      "firstApi": 32,
+      "firstBrowser": 40,
+      "episodeRequests": 77,
+      "episodeUsd": 1.7343447,
+      "reviewer1Code": 37,
+      "reviewer1Visual": 25
+    },
+    "codexOriginal": {
+      "firstRequests": 46,
+      "firstUsd": 1.5790564,
+      "agentWallMs": 1115828,
+      "firstApi": 32,
+      "firstBrowser": 40,
+      "episodeRequests": 53,
+      "episodeUsd": 1.8089226,
+      "reviewer1Code": 39,
+      "reviewer1Visual": 25,
+      "reviewer2Code": 39,
+      "reviewer2Visual": 24
+    },
+    "vectorNativePatch": {
+      "firstRequests": 73,
+      "firstUsd": 1.6664941,
+      "agentWallMs": 1147640,
+      "firstApi": 31,
+      "firstBrowser": 40,
+      "finalApi": 32,
+      "finalBrowser": 40,
+      "episodeRequests": 98,
+      "episodeUsd": 2.2288281,
+      "reviewer2Code": 38,
+      "reviewer2Visual": 24,
+      "defaultPromoted": false
+    },
+    "vectorReadiness": {
+      "firstRequests": 55,
+      "firstUsd": 1.5751466,
+      "agentWallMs": 1040219,
+      "firstApi": 32,
+      "firstBrowser": 40,
+      "episodeRequests": 86,
+      "episodeUsd": 2.5160773,
+      "harnessInducedRepairUsdRetained": 0.9409307,
+      "reviewer2Code": 39,
+      "reviewer2Visual": 25,
+      "combinedReadinessOpens": 3,
+      "separateReadinessWaits": 0,
+      "rawEpisodeControllerStopped": true
+    }
+  },
+  "functionalMaxima": {
+    "apiGroups": 32,
+    "browserChecks": 40
+  },
+  "qualityMaxima": {
+    "code": 48,
+    "visual": 40
+  },
+  "qualityScope": "Blinded static code and supplied screenshots; not an interactive usability or production-readiness audit. Original/native/readiness comparisons use specified reviewers, not pooled scores.",
+  "correctedInstrument": {
+    "sourceFilesManuallyChanged": false,
+    "reevaluatedSubmissions": 5,
+    "modelCalls": 0,
+    "pureModalControlsPassed": 30,
+    "syntheticChromiumModalControlsPassed": 11,
+    "instrumentAndOriginalResultsRetained": true
+  },
+  "localValidation": {
+    "terminalActualToolSyntheticPtyPassed": 9,
+    "preexistingRealPtySkippedOnWindows": 26,
+    "tuiAndAppFocusedPassed": 22,
+    "focusedFailed": 0,
+    "engineTypecheckExitCode": 0,
+    "tuiTypecheckExitCode": 0,
+    "appTypecheckExitCode": 0,
+    "appProductionBuildExitCode": 0
+  },
+  "costAccounting": {
+    "method": "Recorded provider usage times study rate schedule; not invoice reconciliation",
+    "authorizedCapUsd": 48,
+    "providerReceipts": 449,
+    "allAttemptsUsd": 11.2319408,
+    "allRepairsAndEarlierDiagnosticsIncluded": true,
+    "active": 0,
+    "reservedUsd": 0,
+    "openBatchCalls": 0,
+    "credentialHolderStopped": true,
+    "noKeyInEvidence": true
+  },
+  "conclusion": "Cost parity on this single task, with equal code-rubric scores in the latest comparison. No significant general cost advantage or global quality parity demonstrated.",
+  "limitations": [
+    "One stochastic application task with different generated implementations",
+    "Additional unused worker-tool definitions were removed for the readiness trial; total effect is not attributable solely to readiness",
+    "Corrected evaluator exposed false failures; all original failed checks and repair charges retained",
+    "More expensive output can offset reductions in cached input and requests",
+    "Local fixes are committed but not merged, released or pushed",
+    "Cloud work stopped by owner; no paid cloud-agent task ran"
+  ]
+}
