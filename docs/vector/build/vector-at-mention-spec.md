@@ -836,7 +836,7 @@ It is typed locally and structurally against Codium's `GatewayHook` (`api/_lib/m
 | `binder-left:<account>` | SET | repository ids whose binder lost access while bound to the account (2.5) | none (a member goes when the account binds that repository again; the key on erase) |
 | `bind-code:<sha256 hex of the whole code>` | STRING | JSON (below) | 600 s |
 | `ticket:<sha256>` | STRING | JSON | 900 s |
-| `binder-ok:<repositoryId>` | STRING | JSON `{githubId, generation}`: the verified binder and binding generation | 1 hour |
+| `binder-ok:<repositoryId>` | STRING | JSON `{account, githubId, generation}`: the owning Vector account, verified binder and binding generation | 1 hour |
 | `default-branch:<repositoryId>` | STRING | a public repository's default branch, read without credentials | 1 hour |
 | `live:<account>` | HASH | `rid` → JSON `LiveRun` | extended at each fresh reserve to at least that reserve's `used` expiry and its deadline + 1 day; never shortened; goes with its last run |
 | `used:<account>:<meterEpoch>` | STRING | seconds charged: settled runs, plus the reservations of live runs (a settle gives back the unused part; 2.6) | `max(periodEnd, now)` + 40 days, set at each fresh reserve |
@@ -1042,9 +1042,9 @@ So a review-comment token signed for `token`, `installation` or `bind` fails at 
 
 `createGithubApp` takes optional `store` (the persistent-store command function) for the binder cache.
 
-- `verifyRun(identity, options)` takes `options: {job: "agent" | "review", commentId?: number, pullRequest?: number, thread: string, bot?: boolean, binder: {githubId: string, login: string}, defaultRef: string, generation: number}`. The binding supplies `binder`, `defaultRef` and `generation`; no request body supplies them. It returns `{installed: false}` or `{installed: true, binder: "ok" | "binder-left"}` and never a credential. V12 accepts `bot: true` only after its one-time ticket check. A review comment must have a matching `pullRequest` and signed `identity.pullRequest`.
+- `verifyRun(identity, options)` takes `options: {job: "agent" | "review", commentId?: number, pullRequest?: number, thread: string, bot?: boolean, binder: {githubId: string, login: string}, account: string, defaultRef: string, generation: number}`. The binding supplies `binder`, `account`, `defaultRef` and `generation`; no request body supplies them. It returns `{installed: false}` or `{installed: true, binder: "ok" | "binder-left"}` and never a credential. V12 accepts `bot: true` only after its one-time ticket check. A review comment must have a matching `pullRequest` and signed `identity.pullRequest`.
 - `verifyBind(identity)` accepts only a bind-audience workflow dispatch in the `Vector bind` job. It returns `{installed: false}` or `{installed: true, adminVerified: boolean, defaultRef: string}`. `adminVerified` comes from the actor's current collaborator permission, never a client value.
-- The binder cache stores exactly `{githubId, generation}`. Both must match the binding before reuse; an older binder's cache never authorizes a new binder or generation. A missing or differently bound value triggers a fresh check; a malformed cache or store failure fails closed with 503 `PERSISTENT_STORE_UNAVAILABLE`. Only successful write-access checks are cached, with an exact one-hour TTL.
+- The binder cache stores exactly `{account, githubId, generation}`. All three must match the binding before reuse; an older binder's cache never authorizes a new binder or generation. A missing or differently bound value triggers a fresh check; a malformed cache or store failure fails closed with 503 `PERSISTENT_STORE_UNAVAILABLE`. Only successful write-access checks are cached, with an exact one-hour TTL. V11 adds the account for scoped erasure after takeover. Legacy `{githubId, generation}` entries are stale, never reused: a fresh successful GitHub check rewrites them. If never read again, they expire within their existing hour; erasure cannot attribute legacy entries to an account and does not claim otherwise. Production acceptance must start with the new format or wait out that legacy TTL.
 - `githubProof(request, response, audience, verify = verifyGithubOidc)` accepts `GithubOidcPurpose` and returns `{body, identity}`. It performs no replay consumption; the eventual operation consumes the proof after its policy checks.
 - Human actor and triggering-actor checks still read GitHub's run objects and current collaborator permissions on every authorization. Thus dispatch and schedule bots without a `[bot]` suffix are refused too. The only Bot exception is the configured App bot in a ticket-approved mint dispatch, with its id checked against GitHub's `/users/<slug>[bot]` response. A different rerun actor must be a human writer.
 
@@ -1320,19 +1320,31 @@ Without webhooks, the mint's owner-id check still catches a transfer (INV-S11). 
 ## 2.16 Run records (`api/_lib/cloud-agents-runs.ts`)
 
 ```ts
-type CloudRun = { rid: string; repository: string; repositoryId: string; runUrl: string; event: string
+type RunRecordIdentity = { account: string; generation: number; jti: string }
+type CloudRun = { rid: string; repository?: string; repositoryId: string; runUrl?: string; event: string
   source: RunSource; purpose: "task" | "review" | "scheduled"; startedAt: number; endedAt?: number
   outcome?: Outcome; verdict?: "pass" | "fail" | "none"
-  trigger?: { source: RunSource; purpose: RunTrigger["purpose"] }   // server-started runs only
-  actor?: { login: string; id: string } }                           // from run:<rid>:actor; gone after 90 days
-recordRunStart(input): Promise<void>; recordRunEnd(rid, outcome, now): Promise<void>
-listCloudRuns(account: string, input?: { limit?: number }): Promise<CloudRun[]>   // Codium's /api/remote/cloud-runs (A40) reads this
-eraseCloudAgentsAccount(account: string): Promise<void>                           // Codium's A57 calls this
+  trigger?: { source: RunSource; purpose: RunTrigger["purpose"] }
+  actor?: { login: string; id: string } }
+type RunStart = RunRecordIdentity & { rid: string; repository: string; repositoryId: string; runId: string
+  event: string; source: LedgerSource; purpose: LedgerPurpose; startedAt: number
+  actor: { login: string; id: string }; trigger?: CloudRun["trigger"] }
+// All four functions take a final optional persistent-store command function.
+recordRunStart(input: RunStart, store?): Promise<void>
+recordRunEnd(rid: string, outcome: Outcome, now: number, identity: RunRecordIdentity, store?): Promise<boolean>
+listCloudRuns(account: string, input?: { limit?: number }, store?): Promise<CloudRun[]>
+eraseCloudAgentsAccount(account: string, store?): Promise<void>
 ```
 
-- The actor's login and id live in a separate `run:<rid>:actor` key with a 90-day expiry.
-- `verdict` is derived by the server at settle: `changes` → `pass`; `draft` and `failed` → `fail`; anything else → `none`. Ship Desk (A49) reads a run's verdict from this record, never from the PR body. Publish writes the marker `<!-- vector:rid <rid> -->` (from `VECTOR_RUN_ID`) into every PR body so A49 can find the record; A49 trusts a record only when its `repositoryId` matches the PR's repository.
-- For a binding suspended as `binder-left`, and for every run of a repository in the account's `binder-left:<account>` set (2.5, 2.7), `listCloudRuns` and the bindings list omit the repository name, run URL and actor, whatever the stored visibility: it is the bind token's, and nothing updates it. Runs read the set, never only the binding, because an unbind or a takeover deletes the binding and its runs stay.
+- Inputs are server-derived from the verified GitHub identity, stored binding, ledger reservation and optional validated ticket. `runUrl` is constructed from the verified repository and `runId`; it is never an input URL. `rid` must be the matching GitHub repository/run id. Account, generation and token id are internal fields, never listed to a client.
+- `recordRunStart` atomically checks the account is not revoked, the current binding/generation still belongs to it, and the live ledger record has its generation and token id. A stale start fails closed. A renewal retains the ledger's original start and refreshes the record's token identity; an older mint cannot overwrite the newer record. Different-account replacements leave only the new account's record visible; stale index entries never expose it to the old account.
+- `recordRunEnd` compares account, generation and token id before updating. An earlier token, a delayed settle after replacement, or a repeated settle changes nothing and returns false; the first matching settle returns true. Its `verdict` is derived by the server: `changes` → `pass`; `draft` and `failed` → `fail`; everything else → `none`. The record expires 90 days after its latest start or first matching end. Ship Desk reads this verdict from the record, never from a PR body, and still requires the repository id to match.
+- The actor's login and id live only in the separate `run:<rid>:actor` hash, expiring 90 days after start; an end does not extend that TTL. A renewal keeps the original actor/expiry when the same account, generation and start are retained. No actor is required when its key has expired.
+- `runs:<account>` is ordered newest first, with deterministic run-id tie breaking, trimmed to 200 and refreshed for 90 days when a run starts. `listCloudRuns` defaults to 20 and accepts integer limits from 1 to 200. Missing/expired records and records now belonging to another account are skipped. A read takes each record and actor in one atomic snapshot.
+- For a binding suspended as `binder-left`, and for every run of a repository in the account's `binder-left:<account>` set, listings omit repository name, run URL and actor regardless of stored visibility. The public type makes those fields optional. The set outlives an unbind or takeover (2.5).
+- Erasure requires the existing account revocation marker first (A57's ordering); it removes owned bindings while incrementing their generation, the account's binding/binder-left/run indexes, live runs, used/scheduled ledgers, bind codes, tickets, run records and actors, and attributable binder caches. Records trimmed out of the 200-entry index are included. Each shared record is deleted only if its stored account still matches, so a takeover cannot cause another account's data to be erased. Generation counters and public-repository default-branch caches are retained. Bind redemption and run writes also check revocation atomically to prevent delayed operations recreating erased data.
+- Stored run hashes contain exactly `rid`, `account`, `repository`, `repositoryId`, `runUrl`, `event`, `source`, `purpose`, `startedAt`, `generation`, `jti`, optionally paired `triggerSource`/`triggerPurpose`, and after a matching end `endedAt`, `outcome`, `verdict`. Actor hashes contain only `login`, `id`. Times and generations are decimal strings in hashes; ids remain strings.
+- V11's stored-data assertion exercises the binding, bind-code, ledger and run modules available at that point, and checks the documented cache formats alongside V09/V10's real-store tests. The ticket-through-its-own-function part moves to V13 and is repeated in V30; V11 does not claim ticket-creation coverage before that module exists.
 
 ## 2.17 Copy rules and fixed strings
 
@@ -1358,12 +1370,12 @@ This list is exactly what we store (INV-P3). V11's test compares the store's key
 | Repository id → Vector account binding: repository id, owner id, repository name, visibility, default branch, binding generation, workflow version, bound at, last used at, suspension reason | `binding:<repositoryId>`, `bindings:<account>`, `gen:<repositoryId>` (the counter holds no personal data) | until unbind, account erasure, or a takeover |
 | The binder's GitHub user id and login (to show "bound by" and to check the binder still has access) | `binding:<repositoryId>` | as the binding |
 | Repositories whose binder lost access while bound to the account (repository ids only), so its bindings and run lists keep hiding their detail | `binder-left:<account>` | until the account binds that repository again, or account erasure |
-| Run record: run id, repository id and name, run URL, event, source, purpose, start and stop times, outcome, verdict, and for server-started runs the trigger's source and purpose | `run:<rid>`, `runs:<account>` | 90 days |
+| Run record: run id, owning Vector account, binding generation and token id (internal only), repository id and name, run URL, event, source, purpose, start and stop times, outcome, verdict, and for server-started runs the trigger's source and purpose | `run:<rid>`, `runs:<account>` | 90 days |
 | The triggering GitHub login and user id | `run:<rid>:actor` | 90 days |
 | Agent time per meter epoch (seconds: settled runs plus live runs' reservations) and scheduled runs per UTC day (a count) | `used:…`, `sched:…` | 40 days past the period's end (or past the last reservation, when later); 2 days |
 | Live run state: start, deadline, last heartbeat, last Codium request, meter epoch, repository id, thread, source, purpose, whether it counted a scheduled run, binding generation, token id | `live:<account>` | until settled (by its token, or once idle by the account's next reserve or agent-time read), at most as long as the account's agent time (40 days past the period's end) or a run's deadline plus 1 day, when later |
 | One-time bind codes, stored under the code's hash with the account, the repository name and, when given, its id, the requesting GitHub user id and the default branch, and the expiry; run tickets (hashed) | `bind-code:…`, `ticket:…` | 10 and 15 minutes |
-| Short-lived caches: the binder's verified access, a public repository's default branch | `binder-ok:…`, `default-branch:…` | 1 hour |
+| Short-lived caches: the owning account, binder GitHub id and generation for verified access; a public repository name, owner id and default branch | `binder-ok:…`, `default-branch:…` | 1 hour |
 | Session artifacts | the repository's own GitHub Actions artifacts, encrypted per conversation | 7 days (GitHub's storage) |
 
 Actions logs are GitHub's and are public on public repositories.
@@ -1587,7 +1599,7 @@ Each package lists its files, changes, tests, done-criteria and the checks that 
 - **Done:** the test passes; `test/api-module-loading.test.ts` passes.
 
 ### V11. Run records and the stored-data list
-- **Files:** `api/_lib/cloud-agents-runs.ts` (new); `api/cloud-agents/runs.ts` (new); `packages/web/test/cloud-agents-runs.test.ts` (new).
+- **Files:** `api/_lib/cloud-agents-runs.ts` (new); `api/_lib/cloud-agents-api.ts` (runs handler); `api/_lib/cloud-agents-binding.ts` (atomic revocation check); `api/_lib/github-app.ts` (attributable binder cache); `api/cloud-agents/runs.ts` (new); `packages/web/test/cloud-agents-runs.test.ts` (new).
 - **Changes:** 2.16, 2.18, plus `GET /api/cloud-agents/runs`.
 - **Tests:**
   - INV-P3: after writing a binding, a bind code, a ticket, a live run, a settled run and a run record through the modules' own functions, the store's keys and fields equal the 2.18 list exactly (V30 repeats the check after the full journey);
