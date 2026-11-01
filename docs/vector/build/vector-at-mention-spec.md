@@ -1270,6 +1270,12 @@ type RunSummary = { v: 1; mode: "codium" | "own-key"; outcome: Outcome
 
 **Heartbeat and settle** run only when the loader holds a `vrt_` run token, never on own key (INV-K1).
 
+**V15 credential boundary.** The secret holder is process-local memory, with an initially unauthorized run token. Loading a well-formed channel/file does not grant model authority: only a successful, strictly decoded starting heartbeat authorizes its `vector-plan` credential. Failure has no offline grace or account/own-key fallback. The channel has exactly the named version/credential/key fields, bounded string values, and generator-compatible key names; it never populates `process.env`. The private run-token reader rejects links and insecure file/directory permissions, reads at most 1,024 bytes, and unlinks the file. The loader removes GitHub/CLI/provider credentials from the environment after capture. Own-key provider keys are made available through the provider's memory-backed environment service, never the OS environment. The existing v2/ordinary CLI path is unchanged when no channel or Codium run file is requested.
+
+The fixed Codium `/models` and chat transports may use the authorized run token; their service-side `vrt_` verifier remains mandatory at A59 integration. The generic free-model request resolver rejects `vrt_` before returning any shared free-model authority, covering both legacy and V2 callers and explicit selections. Existing sharing transport's strict `vct_` validation is reused and tested to refuse a run token before authenticated network access. Neither catalog hiding nor a workflow flag alone is the enforcement boundary.
+
+Successful cloud responses reject unknown fields and malformed values; failure bodies are never printed. Mint's replay/rate retries use fresh OIDC proof and at most three retries. Rate-limit waits are bounded to 30 seconds each (a malformed/missing retry header uses one second), separate from the at-once loop's at most twenty 30-second waits. A private-file or file-command failure throws a neutral local error and never emits a token as an Actions output or environment value.
+
 **New environment names:**
 - `VECTOR_MODE`
 - `VECTOR_RUN_DEADLINE`, `VECTOR_RUN_ID` (the run token itself is never an environment variable)

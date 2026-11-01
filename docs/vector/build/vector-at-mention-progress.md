@@ -667,3 +667,9 @@ None yet (contract section 4).
 - Independent review found and closed missing own-key review secret-name declarations, an unverifiable own-key bot-ticket exception, unreserved review-control environment names, and future invalid-version fallback. Tests cover the real child-environment filter for nonsuffix credentials, own-key bot refusal, canonical version validation and final-newline rejection. The reviewer’s final source reread is clear.
 - Final runtime tests passed separately: workflow 35 tests / 713 assertions with three parsed goldens, and route 17 / 529. The initial preload without network permission failed before any test; the loopback-enabled runs above passed. Core and engine types passed. Three test matcher overloads were corrected without changing their assertions; the final workflow rerun confirms the same result. Commit/hook/exact-head CI remain pending.
 - V15 may use a loader-held, starting-heartbeat-authorized run token only at the fixed Codium models/chat boundary. Root and the Codium lead confirmed this existing section 2.13 contract; no CLI/account grant, persistence, redirect or free-provider/sharing fallback is authorized. Its shared account/provider files are coordinated and available after V14 gates; A59 must retain the integrated run-domain tests.
+
+
+### V14 pushed; V15 contract preparation
+
+- V14 is `867d6a09a0c6f4e79046f7b7c03d1e0f2989e369`, pushed normally after all 23 mandatory package typechecks passed (21 cached, 52.5 seconds). Exact-head CI is `41264075399`; all three jobs were queued at the latest observation, so no CI success is claimed yet.
+- V15 shared ownership is coordinated with root, Codium and multiagent. The isolated GitHub cloud/secrets/lifecycle modules and account/provider startup seams are approved, as is the common free-model actual-use guard. Public sharing already has the strict credential-domain check. Contract details above are recorded before implementation.
