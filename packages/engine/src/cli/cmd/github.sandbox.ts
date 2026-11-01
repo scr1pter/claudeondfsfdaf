@@ -11,11 +11,15 @@ const execute = promisify(execFile)
 const USER = GithubAgents.SANDBOX_USER
 const AGENT_HOME = `/home/${USER}`
 const SYSTEM_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+const STAGING_PARENTS = ["/mnt", "/var/lib", "/home"] as const
+const STAGING_CONTAINERS = STAGING_PARENTS.map((parent) => path.join(parent, "vector-agent-sandbox"))
 const FILE_COMMANDS = ["GITHUB_ENV", "GITHUB_OUTPUT", "GITHUB_PATH", "GITHUB_STATE", "GITHUB_STEP_SUMMARY"] as const
 const State = z
   .object({
     v: z.literal(1),
     workspace: z.string(),
+    container: z.string().refine((value) => STAGING_CONTAINERS.includes(value)),
+    created: z.boolean(),
     mode: z.enum(["codium", "own-key"]),
     sudo: z.boolean(),
     uid: z.number().int().positive().optional(),
@@ -77,7 +81,11 @@ async function command(file: string, args: readonly string[], allowed = [0]) {
       stdout: typeof error.stdout === "string" ? error.stdout : "",
     }),
   )
-  if (!allowed.includes(result.code)) throw refused()
+  if (!allowed.includes(result.code)) {
+    // Fixed executable names only: argv/stdout/stderr can contain private paths or credentials.
+    const operation = file === "/usr/bin/sudo" ? args[1] : file
+    throw new Error(`Sandbox operation ${path.basename(operation ?? file)} failed or timed out; the run is refused.`)
+  }
   return result
 }
 
@@ -139,10 +147,125 @@ async function writeState(env: Env, state: State, first = false) {
   }
 }
 
+/** Inspect without following repository links before any recursive ownership change. */
+export async function validateCheckoutTree(directory: string) {
+  const root = await fs.lstat(directory)
+  if (!root.isDirectory() || (await fs.realpath(directory)) !== directory) throw refused()
+  let entries = 0
+  async function walk(current: string, depth: number): Promise<void> {
+    if (depth > 64) throw refused()
+    const handle = await fs.opendir(current)
+    for await (const entry of handle) {
+      if (++entries > 200_000) throw refused()
+      const name = path.join(current, entry.name)
+      const info = await fs.lstat(name)
+      if (info.dev !== root.dev) throw refused()
+      if (info.isDirectory()) await walk(name, depth + 1)
+      else if (info.isFile()) {
+        if (info.nlink !== 1) throw refused()
+      } else if (!info.isSymbolicLink()) throw refused()
+    }
+  }
+  await walk(directory, 0)
+}
+
+async function trustedParent(directory: string) {
+  for (let current = directory; ; current = path.dirname(current)) {
+    const info = await fs.lstat(current)
+    if (
+      !info.isDirectory() ||
+      info.uid !== 0 ||
+      info.mode & 0o022 ||
+      !(info.mode & 0o001) ||
+      (await fs.realpath(current)) !== current
+    )
+      throw refused()
+    if (current === path.dirname(current)) break
+  }
+}
+
+async function stagingContainer(workspace: string) {
+  const device = (await fs.lstat(workspace)).dev
+  for (const parent of STAGING_PARENTS) {
+    try {
+      await trustedParent(parent)
+      if ((await fs.lstat(parent)).dev !== device) continue
+      const candidate = path.join(parent, "vector-agent-sandbox")
+      if (
+        await fs.lstat(candidate).catch((error: NodeJS.ErrnoException) => {
+          if (error.code !== "ENOENT") throw refused()
+          return undefined
+        })
+      )
+        continue
+      return candidate
+    } catch {
+      // Only fixed candidates are considered; unsupported layouts are refused, never recursively copied.
+    }
+  }
+  throw refused()
+}
+
+async function verifyContainer(container: string, ready = false) {
+  if (!STAGING_CONTAINERS.includes(container)) throw refused()
+  await trustedParent(path.dirname(container))
+  const info = await fs.lstat(container)
+  const permissions = info.mode & 0o777
+  if (
+    !info.isDirectory() ||
+    (await fs.realpath(container)) !== container ||
+    (ready
+      ? info.uid !== 0 || permissions !== 0o755
+      : !(
+          (info.uid === 0 && [0o700, 0o755].includes(permissions)) ||
+          (info.uid === process.getuid?.() && permissions === 0o700)
+        ))
+  )
+    throw refused()
+}
+
+async function placeholder(workspace: string, create = false) {
+  if (create)
+    await fs.mkdir(workspace, { mode: 0o700 }).catch((error: NodeJS.ErrnoException) => {
+      if (error.code !== "EEXIST") throw refused()
+    })
+  await privateDirectory(workspace)
+  if ((await fs.readdir(workspace)).length !== 0) throw refused()
+}
+
+async function prepareBundle(directory: string) {
+  const info = await fs.lstat(directory).catch((error: NodeJS.ErrnoException) => {
+    if (error.code !== "ENOENT") throw refused()
+    return undefined
+  })
+  if (!info) return
+  if (!info.isDirectory() || (await fs.realpath(directory)) !== directory) throw refused()
+  const owner = `${process.getuid?.()}:${process.getgid?.()}`
+  await sudo(["/usr/bin/chown", "-h", owner, "--", directory])
+  await sudo(["/usr/bin/chmod", "0700", "--", directory])
+  for (const name of [...GithubAgents.BUNDLE_FILES, GithubAgents.SESSION_FILE]) {
+    const file = path.join(directory, name)
+    const item = await fs.lstat(file).catch((error: NodeJS.ErrnoException) => {
+      if (error.code !== "ENOENT") throw refused()
+      return undefined
+    })
+    if (!item) continue
+    const limit =
+      name === "patch.diff"
+        ? GithubAgents.PATCH_LIMITS.bytes
+        : name === "summary.json"
+          ? GithubAgents.PATCH_LIMITS.summaryBytes
+          : GithubAgents.PATCH_LIMITS.sessionBytes
+    if (!item.isFile() || item.nlink !== 1 || item.size > limit) throw refused()
+    await sudo(["/usr/bin/chown", "-h", owner, "--", file])
+    await sudo(["/usr/bin/chmod", "0600", "--", file])
+  }
+}
+
 /** The caller supplies only trusted paths; no secret name or credential enters the child's OS environment. */
 export function sandboxEnvironment(
   env: Env,
-  locations: { home: string; temporary: string; event: string },
+  locations: { home: string; temporary: string; event: string; node: string },
 ): Record<string, string> {
   mode(env)
   const names = new Set(env.VECTOR_SECRET_ENV_NAMES?.split(",") ?? [])
@@ -154,6 +277,15 @@ export function sandboxEnvironment(
           : [[name, env[name]!]],
       ),
     ),
+    // Keep installed Go/Rust/other runner toolchains reachable, while pinning the resolved Node interpreter and
+    // excluding current-directory/relative lookups. The parent supplies this PATH before any agent code runs.
+    PATH: [
+      ...new Set([
+        path.dirname(absolute(locations.node)),
+        ...(names.has("PATH") ? [] : (env.PATH ?? "").split(path.delimiter).filter(path.isAbsolute)),
+        ...SYSTEM_PATH.split(":"),
+      ]),
+    ].join(path.delimiter),
     HOME: absolute(locations.home),
     RUNNER_TEMP: absolute(locations.temporary),
     GITHUB_EVENT_PATH: absolute(locations.event),
@@ -235,9 +367,32 @@ export async function prepare(env: Env = process.env) {
   if (env.RUNNER_ENVIRONMENT !== "github-hosted") throw refused()
   const workspace = await checkout(env)
   if ((await command("/usr/bin/id", ["-u", USER], [0, 1])).code === 0) throw refused()
-  const state: State = { v: 1, workspace, mode: selected, sudo: env.VECTOR_AGENT_SUDO === "1", prepared: false }
+  await validateCheckoutTree(workspace)
+  const container = await stagingContainer(workspace)
+  const staged = path.join(container, "checkout")
+  const state: State = {
+    v: 1,
+    workspace,
+    container,
+    created: false,
+    mode: selected,
+    sudo: env.VECTOR_AGENT_SUDO === "1",
+    prepared: false,
+  }
+  // Record cleanup authority before creating the container or moving the checkout.
   await writeState(env, state, true)
-  if ((await fs.stat(workspace)).dev !== (await fs.stat(stateDirectory(env))).dev) throw refused()
+  await sudo(["/usr/bin/mkdir", "-m", "0700", "--", container])
+  state.created = true
+  await writeState(env, state)
+  await sudo(["/usr/bin/chown", "-h", `${process.getuid?.()}:${process.getgid?.()}`, "--", container])
+  await verifyContainer(container)
+  await privateDirectory(path.join(container, "cleanup"), true)
+  // rename(2) cannot fall back to recursive copying. A partial preparation never restores repository contents.
+  await fs.rename(workspace, staged)
+  await placeholder(workspace, true)
+  await sudo(["/usr/bin/chown", "-h", "0:0", "--", container])
+  await sudo(["/usr/bin/chmod", "0755", "--", container])
+  await verifyContainer(container, true)
   await sudo([
     "/usr/sbin/useradd",
     "--user-group",
@@ -264,7 +419,7 @@ export async function prepare(env: Env = process.env) {
     String(state.gid),
     `${AGENT_HOME}/tmp`,
   ])
-  await sudo(["/usr/bin/chown", "-hR", `${state.uid}:${state.gid}`, "--", workspace])
+  await sudo(["/usr/bin/chown", "-hR", `${state.uid}:${state.gid}`, "--", staged])
   await sudo(["/usr/bin/systemctl", "stop", "docker.socket", "docker.service"])
   if (await fs.lstat("/var/run/docker.sock").catch(() => undefined))
     await sudo(["/usr/bin/chmod", "0600", "/var/run/docker.sock"])
@@ -361,7 +516,12 @@ export async function run(args: readonly string[], env: Env = process.env) {
   const state = hosted ? await readState(env) : undefined
   if (
     hosted &&
-    (!state?.prepared || !state.uid || !state.gid || state.workspace !== workspace || state.mode !== env.VECTOR_MODE)
+    (!state?.prepared ||
+      !state.created ||
+      !state.uid ||
+      !state.gid ||
+      state.workspace !== workspace ||
+      state.mode !== env.VECTOR_MODE)
   )
     throw refused()
   if (
@@ -371,6 +531,12 @@ export async function run(args: readonly string[], env: Env = process.env) {
       Number((await command("/usr/bin/id", ["-u", USER])).stdout.trim()) !== state!.uid)
   )
     throw refused()
+  if (hosted) {
+    await verifyContainer(state!.container, true)
+    await placeholder(workspace)
+  }
+  const working = hosted ? path.join(state!.container, "checkout") : workspace
+  if ((await fs.realpath(working)) !== working || !(await fs.lstat(working)).isDirectory()) throw refused()
   const home = hosted ? AGENT_HOME : absolute(env.HOME)
   const temporary = path.join(home, "tmp", "vector-agent")
   if (hosted)
@@ -380,11 +546,12 @@ export async function run(args: readonly string[], env: Env = process.env) {
     console.warn("This self-hosted own-key run uses a clean credential channel but has no separate-user sandbox.")
   }
   const clean = sandboxEnvironment(env, {
+    node,
     home,
     temporary,
     event: hosted ? `${AGENT_HOME}/event.json` : absolute(env.GITHUB_EVENT_PATH),
   })
-  clean.PATH = `${path.dirname(node)}:${SYSTEM_PATH}`
+  clean.GITHUB_WORKSPACE = working
   const channel = await secretChannel(env)
   const launcher = hosted ? "/usr/bin/sudo" : binary
   const arguments_ = hosted
@@ -401,6 +568,7 @@ export async function run(args: readonly string[], env: Env = process.env) {
         "--",
         "/usr/bin/env",
         "-i",
+        `--chdir=${working}`,
         ...Object.entries(clean).map(([name, value]) => `${name}=${value}`),
         binary,
         ...args.slice(1),
@@ -408,7 +576,8 @@ export async function run(args: readonly string[], env: Env = process.env) {
     : args.slice(1)
   return new Promise<number>((resolve, reject) => {
     const child = spawn(launcher, arguments_, {
-      cwd: workspace,
+      // GNU env changes to the staged directory only after setpriv. A mode-0700 checkout is owned by the agent.
+      cwd: hosted ? workspace : working,
       env: hosted ? { PATH: SYSTEM_PATH } : clean,
       stdio: ["pipe", "inherit", "inherit"],
     })
@@ -453,13 +622,55 @@ export async function finish(env: Env = process.env) {
     if (hosted && !state) return
     const workspace = checkoutPath(env)
     if (state && state.workspace !== workspace) throw refused()
-    const quarantine = hosted ? path.join(stateDirectory(env), "checkout") : workspace
-    if (hosted)
-      await fs.rename(workspace, quarantine).catch((error: NodeJS.ErrnoException) => {
-        if (error.code !== "ENOENT") throw refused()
-      })
-    // The original checkout is absent before any slow process or tree operation. Even forced termination from here
-    // cannot make checkout's post step execute an agent-written configuration at its original path.
+    if (state && !state.created) {
+      if (state.prepared || state.uid || state.gid) throw refused()
+      // No move or user creation preceded this phase. Never inspect/copy/remove another operation's container.
+      await fs.rm(stateDirectory(env), { recursive: true })
+      return
+    }
+    const container = state?.container
+    let quarantine = workspace
+    let cleanupAllowed = false
+    let isolationError: unknown
+    try {
+      if (hosted) {
+        if (!container || (!state?.created && (state?.prepared || state?.uid))) throw refused()
+        quarantine = path.join(container, "cleanup", "checkout")
+        // A selected path is not ownership. Only an exclusive mkdir acknowledged in private state grants cleanup.
+        if (state?.created) {
+          await trustedParent(path.dirname(container))
+          cleanupAllowed = true
+          const exists = await fs.lstat(container).catch((error: NodeJS.ErrnoException) => {
+            if (error.code !== "ENOENT") throw refused()
+            return undefined
+          })
+          if (exists) {
+            await verifyContainer(container)
+            // Close traversal first. The agent never obtains parent-write permission during this transition.
+            await sudo(["/usr/bin/chmod", "0700", "--", container])
+            await sudo(["/usr/bin/chown", "-h", `${process.getuid?.()}:${process.getgid?.()}`, "--", container])
+            await privateDirectory(container)
+            const staged = path.join(container, "checkout")
+            const checkoutExists = await fs.lstat(staged).catch((error: NodeJS.ErrnoException) => {
+              if (error.code !== "ENOENT") throw refused()
+              return undefined
+            })
+            if (checkoutExists) {
+              if (!checkoutExists.isDirectory() || (await fs.realpath(staged)) !== staged) throw refused()
+              await privateDirectory(path.join(container, "cleanup"), true)
+              await placeholder(workspace, true)
+              await sudo(["/usr/bin/chown", "-h", `${process.getuid?.()}:${process.getgid?.()}`, "--", staged])
+              await sudo(["/usr/bin/chmod", "0700", "--", staged])
+              await fs.rename(staged, quarantine)
+            } else if (state?.prepared) await placeholder(workspace)
+          } else if (state?.prepared) await placeholder(workspace)
+        }
+      }
+    } catch (error) {
+      // Failure to seal/quarantine still requires UID shutdown and owned-path cleanup, but never artifact copying.
+      isolationError = error
+    }
+    // The original workspace was replaced before agent launch. Post actions never regain an agent-written tree.
     let stopped = !hosted
     try {
       if (hosted) {
@@ -478,10 +689,11 @@ export async function finish(env: Env = process.env) {
             if (!stopped) await new Promise((resolve) => setTimeout(resolve, 100))
           }
           if (!stopped) throw new Error("The sandbox could not stop every agent process. Artifact upload is refused.")
-          if (await fs.lstat(quarantine).catch(() => undefined))
-            await sudo(["/usr/bin/chown", "-hR", `${process.getuid?.()}:${process.getgid?.()}`, "--", quarantine])
+          if (!cancelled && !isolationError && (await fs.lstat(quarantine).catch(() => undefined)))
+            await prepareBundle(path.join(quarantine, GithubAgents.BUNDLE_DIR))
         }
       }
+      if (isolationError) throw isolationError
       if (!cancelled)
         for (const name of [...GithubAgents.BUNDLE_FILES, GithubAgents.SESSION_FILE]) {
           const directory = path.join(
@@ -496,7 +708,13 @@ export async function finish(env: Env = process.env) {
         }
     } finally {
       const removed = await (
-        hosted ? sudo(["/usr/bin/rm", "-rf", "--", quarantine]) : fs.rm(workspace, { recursive: true, force: true })
+        hosted
+          ? !state?.created
+            ? Promise.resolve()
+            : cleanupAllowed
+              ? sudo(["/usr/bin/rm", "-rf", "--", container!])
+              : Promise.reject(refused())
+          : fs.rm(workspace, { recursive: true, force: true })
       ).then(
         () => true,
         () => false,

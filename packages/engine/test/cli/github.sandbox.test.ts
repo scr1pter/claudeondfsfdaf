@@ -4,7 +4,12 @@ import os from "node:os"
 import path from "node:path"
 import { GithubAgents } from "@vectordevai/core/github-agents"
 import { GithubSecrets } from "../../src/cli/cmd/github.secrets"
-import { copyBundleFile, sandboxEnvironment, secretChannel } from "../../src/cli/cmd/github.sandbox"
+import {
+  copyBundleFile,
+  sandboxEnvironment,
+  secretChannel,
+  validateCheckoutTree,
+} from "../../src/cli/cmd/github.sandbox"
 
 async function fixture() {
   const directory = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "vector-sandbox-")))
@@ -36,7 +41,9 @@ test("the sandbox environment excludes every credential and runner file command 
   const env = {
     ...f.env,
     VECTOR_MODE: "own-key",
-    PATH: "/usr/bin",
+    PATH: [path.join(f.directory, "go", "bin"), path.join(f.directory, "rust", "bin"), ".", "relative/bin", ""].join(
+      path.delimiter,
+    ),
     MODEL: "anthropic/example",
     SHARE: "true",
     VECTOR_SHARE_CONSENT: "explicit-fixture-consent",
@@ -53,6 +60,7 @@ test("the sandbox environment excludes every credential and runner file command 
     UNLISTED_VALUE: "not-in-the-contract",
   }
   const clean = sandboxEnvironment(env, {
+    node: path.join(f.directory, "node", "bin", "node"),
     home: f.directory,
     temporary: f.directory,
     event: path.join(f.directory, "event"),
@@ -64,6 +72,13 @@ test("the sandbox environment excludes every credential and runner file command 
   expect(clean.MODEL).toBe(env.MODEL)
   expect(clean.VECTOR_SECRET_CHANNEL).toBe("stdin")
   expect(clean.HOME).toBe(f.directory)
+  const paths = clean.PATH!.split(path.delimiter)
+  expect(paths[0]).toBe(path.join(f.directory, "node", "bin"))
+  expect(paths).toContain(path.join(f.directory, "go", "bin"))
+  expect(paths).toContain(path.join(f.directory, "rust", "bin"))
+  expect(paths).not.toContain(".")
+  expect(paths).not.toContain("relative/bin")
+  expect(paths).not.toContain("")
   for (const [name, value] of Object.entries(env)) {
     if (
       name.startsWith("ACTIONS_") ||
@@ -169,4 +184,28 @@ test("bundle copy refuses unknown names, directories, links and oversized files"
   const linked = path.join(f.directory, "linked")
   await fs.symlink(f.source, linked, "dir")
   await expect(copyBundleFile(linked, f.destination, "summary.json")).rejects.toThrow()
+})
+
+test("checkout preflight permits ordinary repository symlinks without following them but refuses multiply linked files", async () => {
+  await using f = await fixture()
+  const outside = path.join(f.directory, "outside")
+  await fs.writeFile(outside, "outside checkout")
+  await fs.symlink(outside, path.join(f.source, "link"))
+  await fs.mkdir(path.join(f.source, "nested"))
+  await fs.writeFile(path.join(f.source, "nested", "file"), "repository")
+  await validateCheckoutTree(f.source)
+  expect(await fs.readFile(outside, "utf8")).toBe("outside checkout")
+  await fs.link(outside, path.join(f.source, "hardlink"))
+  await expect(validateCheckoutTree(f.source)).rejects.toThrow("refused")
+  await expect(validateCheckoutTree(path.join(f.source, "link"))).rejects.toThrow("refused")
+})
+
+test("checkout preflight bounds directory depth before any privileged operation", async () => {
+  await using f = await fixture()
+  let directory = f.source
+  for (let level = 0; level < 65; level++) {
+    directory = path.join(directory, "d")
+    await fs.mkdir(directory)
+  }
+  await expect(validateCheckoutTree(f.source)).rejects.toThrow("refused")
 })

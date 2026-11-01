@@ -178,8 +178,27 @@ if (process.argv[2] === "--crash") {
     report.scan.docker
   )
     throw new Error("The sandbox probe found an isolation failure")
-  if (await fs.stat(process.env.GITHUB_WORKSPACE!).catch(() => undefined))
-    throw new Error("The checkout survived cleanup")
+  const stage = JSON.parse(
+    await fs.readFile(path.join(process.env.RUNNER_TEMP!, "vector-probe-tools", "stage.json"), "utf8"),
+  )
+  if (stage.workspace !== process.env.GITHUB_WORKSPACE || stage.uid !== report.detached.uid)
+    throw new Error("The observed staging identity changed")
+  const original = await fs.lstat(stage.workspace)
+  if (
+    !original.isDirectory() ||
+    original.uid !== process.getuid?.() ||
+    (original.mode & 0o777) !== 0o700 ||
+    (await fs.realpath(stage.workspace)) !== stage.workspace ||
+    (await fs.readdir(stage.workspace)).length
+  )
+    throw new Error("The original workspace is not an empty private runner placeholder")
+  if (
+    await fs.lstat(stage.container).catch((error: NodeJS.ErrnoException) => {
+      if (error.code !== "ENOENT") throw error
+      return undefined
+    })
+  )
+    throw new Error("The staged checkout survived cleanup")
   const current = await identity(report.detached.pid).catch(() => undefined)
   const status = await fs.readFile(`/proc/${report.detached.pid}/status`, "utf8").catch(() => "")
   if (
@@ -213,7 +232,7 @@ if (process.argv[2] === "--crash") {
   await new Promise((resolve) => setTimeout(resolve, 250))
   if (await fs.stat(escaped).catch(() => undefined)) throw new Error("The detached process reached the next step")
   console.log(
-    "Sandbox probe passed: channel private, runner capabilities inaccessible, detached child stopped, checkout removed.",
+    "Sandbox probe passed: channel private, runner capabilities inaccessible, detached child stopped, staged checkout removed, original workspace empty.",
   )
 } else {
   if (!(await fs.stat(process.env.GITHUB_WORKSPACE!)).isDirectory())

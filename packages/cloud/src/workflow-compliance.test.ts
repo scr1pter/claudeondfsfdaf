@@ -314,8 +314,11 @@ describe("@vector CI lane", () => {
       { mode: "own-key", scenario: "success" },
       { mode: "codium", scenario: "bundle-refusal" },
       { mode: "codium", scenario: "cancelled" },
+      { mode: "codium", scenario: "seal-refusal" },
     ])
     const steps = job?.steps ?? []
+    expect(steps.some((step) => step.uses?.startsWith("./"))).toBe(false)
+    expect(steps.some((step) => step.uses === "oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6")).toBe(true)
     const agent = steps.findIndex((step) => step.id === "agent")
     const finish = steps.findIndex((step) => step.id === "sandbox_finish")
     const boundary = steps.findIndex((step) => step.id === "artifact_boundary")

@@ -210,6 +210,8 @@ jobs:
             scenario: bundle-refusal
           - mode: codium
             scenario: cancelled
+          - mode: codium
+            scenario: seal-refusal
     env:
       VECTOR_MODE: ${{ matrix.mode }}
       VECTOR_SECRET_ENV_NAMES: DEEPSEEK_KEY
@@ -233,9 +235,15 @@ jobs:
           node-version: "24"
 
       - name: Setup Bun
-        uses: ./.github/actions/setup-bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
-          install-flags: --frozen-lockfile
+          bun-version-file: package.json
+
+      - name: Install probe build dependencies
+        run: |
+          bun install --frozen-lockfile --ignore-scripts
+          bun run script/prepare-gitlab.ts
+          bun run --cwd packages/core fix-node-pty
 
       - name: Compile and install the disposable probe harness
         run: |
