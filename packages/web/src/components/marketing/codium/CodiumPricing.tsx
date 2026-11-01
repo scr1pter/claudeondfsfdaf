@@ -348,7 +348,7 @@ export function CodiumQuestions(props: { models: CodiumPricingView["models"] }) 
       question: "What is the right plan for me?",
       answer: (
         <p>
-          Start with Plus for occasional coding, Pro for regular work, Max for demanding projects, or Ultra for the most
+          Start with Plus for occasional coding, Pro for regular work, Max for demanding tasks, or Ultra for the most
           monthly usage and no daily limit. Compare the models and currently listed features above.
         </p>
       ),
