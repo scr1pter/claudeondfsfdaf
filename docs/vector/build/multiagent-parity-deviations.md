@@ -1178,3 +1178,22 @@ already installed executable, otherwise use bounded package-manager connection,
 retry and lock waits, with a five-minute step deadline. Test deadlines, shard
 counts and assertions are unchanged. A new complete run is still required on
 the repaired integrated source.
+
+## 2026-11-01 CI9 — keep release evidence checks in native Node
+
+General run `41260900526`, Linux engine shard 1 job `124713782992`, reached all
+1,732 selected cases and failed only the new packaged-sidecar IPC check. Its
+`.test.mjs` filename caused Bun's automatic discovery to include a native Node
+test. The test's `process.execPath` correctly followed its runner, so its child
+was Bun, which does not export Node 24's `node:module.registerHooks`. The timeout
+reported that exact startup error. The same 19 checks had passed under Node in
+the completed release study.
+
+The file is now `script/smoke-release-evidence.mjs`, matching the existing native
+Node smoke convention. Both the ordinary desktop Node job and the optional
+release study explicitly run it under Node 24, alongside the three provenance
+checks. No assertion, deadline, engine source or measured release bytes change.
+Remaining jobs in the old general run continue so their evidence is retained;
+a repaired native CI result is still required. Shard numbers alone do not prove
+a particular file ran, because adding or removing a discovered file changes
+Bun's shard assignments.
