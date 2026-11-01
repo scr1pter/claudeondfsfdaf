@@ -9,7 +9,7 @@
   "specSha256": "62c42361ffec2b6cf91ef3ef5fb49706503aa05ff420ecf315e270904467c35a",
   "promptSha256": "49833c627d3c388231d92af5caea6b33fe66076ea7b58c97c2c02fb6dc50a7e6",
   "evaluatorManifestSha256": "fcc3611fc1a5ca397405e00073936c51a60c5d2327ac93373563dc11d89966bd",
-  "implementationHead": "1d0246d14af322cda477987b60b5dabafb4bf411",
+  "implementationHead": "bd537fd2ccd35984bf705264daa1331bb4f39feb",
   "originalAndNativeSource": "70613cc47a175f29a96d17b8883df55c774d1373",
   "readinessBenchmarkSource": "0586df500618520e7f4be3df74f391dbbed3f965",
   "results": {
@@ -114,5 +114,30 @@
     "More expensive output can offset reductions in cached input and requests",
     "Local fixes are committed but not merged, released or pushed",
     "Cloud work stopped by owner; no paid cloud-agent task ran"
-  ]
+  ],
+  "followupRegression": {
+    "atUtc": "2026-11-01T23:39:09.356542+00:00",
+    "implementationHead": "bd537fd2ccd35984bf705264daa1331bb4f39feb",
+    "change": "Omit invalid provider total-token counters before durable receipt encoding; preserve known cost and uncertainty",
+    "regressionBeforeFix": {
+      "passed": 25,
+      "failed": 4
+    },
+    "regressionAfterFix": {
+      "passed": 29,
+      "failed": 0
+    },
+    "latestFocusedSuiteTestsPassed": 104,
+    "latestFocusedSuiteTestsFailed": 0,
+    "existingWindowsPtyCasesSkipped": 26,
+    "engineTypecheckExitCode": 0,
+    "peerReview": "No actionable findings",
+    "initialColdHookTimeoutRetained": true,
+    "initialColdHookTimeoutResolvedByUnchangedTestRerun": true,
+    "providerCalls": 0,
+    "additionalApiCostUsd": 0,
+    "cloudActions": 0,
+    "newDefectObservedInPaidReceipts": false,
+    "paidBenchmarkRerun": false
+  }
 }

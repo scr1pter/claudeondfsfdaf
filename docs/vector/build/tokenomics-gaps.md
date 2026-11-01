@@ -2,7 +2,7 @@
 
 Updated November 1, 2026. The large coding study is complete. The latest Vector submission passes the same functional gate as Codex, receives the same blinded code-quality score, and costs essentially the same: **$1.5751466 versus $1.5790564**. This does not demonstrate a significant general price advantage.
 
-The data supports a combined terminal-start/readiness operation and several accounting and context-display corrections. It does not support making raw-text patch format the default. Product fixes are committed locally on `tokenomics-efficiency`, final head `1d0246d14af322cda477987b60b5dabafb4bf411`; they have not been pushed, merged or released.
+The data supports a combined terminal-start/readiness operation and several accounting and context-display corrections. It does not support making raw-text patch format the default. Product fixes are committed locally on `tokenomics-efficiency`, final head `bd537fd2ccd35984bf705264daa1331bb4f39feb`; they have not been pushed, merged or released.
 
 The [sanitized results](../../benchmarks/tokenomics-2026-11-01/live-results.json) contain costs, revisions, evaluation hashes and limitations. The [earlier offline audit](tokenomics-gaps-offline-2026-10-30.md) remains a historical snapshot; its pending work and approval requests describe that earlier stage.
 
@@ -91,3 +91,13 @@ The authorized study cap is $48. No historical charges, failed attempts or repai
 On November 1 the owner stopped cloud work and requested coding-only tests. No paid cloud-agent task ran. Previously created synthetic repositories and a disposable seed deployment remain unchanged; they are not benchmark passes. There are no pending deployment or authentication actions in this study.
 
 The earlier Relay comparison used Vector Thorough with two child agents versus Codex without children, so it is not a matched single-agent result. Small probes and an optional cache-key-off experiment likewise do not establish a large-task default-policy saving. The supported conclusion is competitive cost and measured quality on this one substantial application task, with demonstrated workflow improvements and specific remaining quality limits.
+
+## Followup: accounting regression fixed
+
+A subsequent coding-only recheck found another defensive accounting defect: `getUsage` returned a provider's malformed total-token counter unchanged, while durable message/step schemas require finite numbers. A valid input/output subtotal and charge could therefore coexist with a receipt that failed encoding. This case was not observed in the 449 paid receipts and is not a measured cost-saving claim.
+
+Commit `bd537fd` omits invalid totals while preserving known input/output counters, the calculated charge, and `unpriced: true`. It keeps valid and missing totals unchanged rather than inventing a replacement. Six new cases exercise the actual accounting function and durable step encoder. Before the fix, the suite had 25 passing and four failing tests; after the fix, all 29 pass.
+
+The recheck's latest results across 12 focused suites are 104 passing tests and zero failures, with 26 existing real-PTY cases skipped on Windows. Cache eligibility, cache breakpoints, title caps, usage, CLI budget stops, stats, readiness, TUI context and app cost/context checks are covered. Engine typecheck and formatting checks pass. One initial cache-suite hook timeout remains recorded; all six assertions passed then, and the unchanged test's retry completed with no hook failure. These totals replace overlapping rerun counts rather than adding them.
+
+This followup used no provider calls, no further cloud actions and no additional API spend. It did not rerun the large paid application benchmark or change its results. The source changes remain committed locally and unreleased.
