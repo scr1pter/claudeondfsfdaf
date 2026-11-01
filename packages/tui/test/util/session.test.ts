@@ -45,4 +45,40 @@ describe("delegatedSpendLines", () => {
       "$0.50 · 3.0K tokens by Vector's helpers",
     ])
   })
+  test("Codium-only helpers remain visible without token or dollar quantities", () => {
+    expect(
+      delegatedSpendLines({ title: "root", subagentCodiumSteps: 2, subagentUnpricedSteps: 2 }, [
+        { title: "helper", internal: "brain.distill", codiumSteps: 2, unpricedSteps: 2 },
+      ]),
+    ).toEqual(["Codium by Vector's helpers"])
+  })
+  test("legacy child evidence masks inseparable parent totals while retaining own dollars", () => {
+    expect(
+      delegatedSpendLines({ title: "root", subagentCost: 0.12, subagentTokens: tokens(999_999) }, [
+        {
+          title: "helper",
+          internal: "brain.distill",
+          cost: 0.12,
+          tokens: tokens(999_999),
+          model: { id: "test", providerID: "vector-plan" },
+        },
+      ]),
+    ).toEqual(["$0.12 + Codium by Vector's helpers"])
+  })
+})
+
+test("legacy delegated totals retain known own unknown children", () => {
+  expect(
+    delegatedSpendLines(
+      {
+        title: "root",
+        subagentCost: 0.12,
+        subagentTokens: { input: 999999, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+      },
+      [
+        { title: "helper", internal: "brain.distill", model: { providerID: "vector-plan", id: "m" } },
+        { title: "own child", cost: 0.12, unpricedSteps: 2, codiumSteps: 0 },
+      ],
+    ),
+  ).toEqual(["$0.12 + unpriced by subagents", "Codium by Vector's helpers"])
 })

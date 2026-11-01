@@ -173,3 +173,34 @@ test("legacy task observations cannot restore raw Codium tokens over a filtered 
   const modern = mergeTaskBoard(legacy, [observation({ usage: { ...usage, total: 250, cost: 0.12, codiumSteps: 1 } })])
   expect(modern[0]?.agents[0]).toMatchObject({ tokens: 250, codiumSteps: 1 })
 })
+
+test("desktop task observations preserve unknown own spend beside Codium without invented usage", () => {
+  const cards = mergeTaskBoard([], [observation({ billing: "codium", costKind: "unknown", measuredCost: 0.12 })])
+  expect(cards[0]?.agents[0]).toMatchObject({ codiumSteps: 1, unpricedSteps: 2, cost: 0.12 })
+  expect(cards[0]?.agents[0]?.tokens).toBeUndefined()
+  expect(taskCost(cards[0]!.agents)).toBe("$0.12 + unpriced usage + Codium")
+})
+
+test("guard unknown status survives legacy and modern task usage projections", () => {
+  for (const codiumSteps of [undefined, 1]) {
+    const cards = mergeTaskBoard(
+      [],
+      [
+        observation({
+          billing: "codium",
+          costKind: "unknown",
+          usage: {
+            cost: 0.12,
+            total: 100,
+            steps: 1,
+            toolUses: 0,
+            unpricedSteps: 1,
+            codiumSteps,
+            tokens: { input: 100, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+          },
+        }),
+      ],
+    )
+    expect(taskCost(cards[0]!.agents)).toBe("$0.12 + unpriced usage + Codium")
+  }
+})

@@ -403,4 +403,7 @@ test("Codium agent cards replace zero-dollar estimates and retain mixed own-key 
   expect(agentCostLabel(input)).toBe("Codium")
   expect(agentCostLabel({ ...input, actualCost: "$0.00" })).toBe("Codium")
   expect(agentCostLabel({ ...input, actualCost: "$0.12" })).toBe("$0.12 + Codium")
+  expect(agentCostLabel({ ...input, costKind: "unknown" })).toBe("Cost unknown + Codium")
+  expect(agentCostLabel({ ...input, actualCost: "$0.12", costKind: "unknown" })).toBe("$0.12 + unpriced + Codium")
+  expect(agentCostLabel({ ...input, actualCost: "$0.00", costKind: "free" })).toBe("free model + Codium")
 })

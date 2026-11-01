@@ -1,3 +1,6 @@
+import { Billing } from "@vectordevai/schema/billing"
+import { CodiumUsage } from "@vectordevai/core/codium-usage"
+import type { Session } from "@vectordevai/sdk/v2"
 export function titlecase(str: string) {
   return str.replace(/\b\w/g, (c) => c.toUpperCase())
 }
@@ -82,19 +85,73 @@ const usd = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" 
 
 // A session's recorded cost, said honestly. A step on a model that lists no price adds nothing to the cost, so a total
 // with such steps is only a lower bound, and one made of nothing else is unknown rather than $0.00.
-export function spend(cost: number | undefined, unpricedSteps: number | undefined) {
-  if (!unpricedSteps) return usd.format(cost ?? 0)
-  if (!cost) return "cost unknown"
-  return `${usd.format(cost)} + unpriced`
+export function spend(cost: number | undefined, unpricedSteps: number | undefined, codiumSteps = 0) {
+  const unknown = CodiumUsage.ownUnpricedSteps(unpricedSteps, codiumSteps)
+  const own = unknown
+    ? cost
+      ? `${usd.format(cost)} + unpriced`
+      : "cost unknown"
+    : codiumSteps && !cost
+      ? undefined
+      : usd.format(cost ?? 0)
+  return CodiumUsage.withCodium(own, codiumSteps)
+}
+
+type Spend = Pick<
+  Session,
+  "cost" | "unpricedSteps" | "codiumSteps" | "subagentCost" | "subagentUnpricedSteps" | "subagentCodiumSteps" | "model"
+>
+type BillingMessage = {
+  role?: string
+  billing?: string
+  unpriced?: boolean
+  providerID?: string
+  model?: { providerID?: string }
+}
+
+// Old engines cannot partition mixed totals. Keep their own dollars, but never expose inseparable Codium tokens.
+export function legacyCodium(
+  session: Spend | undefined,
+  messages: readonly BillingMessage[] = [],
+  children: readonly Spend[] = [],
+): boolean {
+  return (
+    children.some((child) => legacyCodium(child)) ||
+    (session?.codiumSteps === undefined &&
+      session?.subagentCodiumSteps === undefined &&
+      (Boolean(session && Billing.of(session)) ||
+        messages.some((message) => message.role === "assistant" && Billing.of(message))))
+  )
 }
 
 // What a session's work cost: its own steps plus everything its subagents spent, which the backend keeps apart.
 export function sessionSpend(
-  session: { cost?: number; unpricedSteps?: number; subagentCost?: number; subagentUnpricedSteps?: number } | undefined,
-) {
+  session: Spend | undefined,
+  messages: readonly BillingMessage[] = [],
+  children: readonly Spend[] = [],
+): { cost: number; unpriced: number; codium: number } {
+  const legacy = legacyCodium(session, messages, children)
+  const knownOwn = legacy
+    ? Math.max(
+        messages.filter((message) => message.role === "assistant" && message.unpriced && !Billing.of(message)).length,
+        session?.codiumSteps === undefined
+          ? 0
+          : CodiumUsage.ownUnpricedSteps(session.unpricedSteps, session.codiumSteps),
+      ) +
+      Math.max(
+        session?.subagentCodiumSteps === undefined
+          ? 0
+          : CodiumUsage.ownUnpricedSteps(session.subagentUnpricedSteps, session.subagentCodiumSteps),
+        children.reduce((sum, child) => {
+          const spend = sessionSpend(child)
+          return sum + CodiumUsage.ownUnpricedSteps(spend.unpriced, spend.codium)
+        }, 0),
+      )
+    : 0
   return {
     cost: (session?.cost ?? 0) + (session?.subagentCost ?? 0),
-    unpriced: (session?.unpricedSteps ?? 0) + (session?.subagentUnpricedSteps ?? 0),
+    unpriced: legacy ? 1 + knownOwn : (session?.unpricedSteps ?? 0) + (session?.subagentUnpricedSteps ?? 0),
+    codium: legacy ? 1 : (session?.codiumSteps ?? 0) + (session?.subagentCodiumSteps ?? 0),
   }
 }
 

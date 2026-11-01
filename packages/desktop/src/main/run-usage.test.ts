@@ -4,6 +4,7 @@ import {
   combineSpend,
   formatUsd,
   measuredCost,
+  measuredRun,
   newSpend,
   readSpend,
   sessionCost,
@@ -152,4 +153,88 @@ test("Codium drains combine without counting unknown or dollar spend", () => {
   const mixed = combineSpend(first, snapshot({ spentUsd: 0.3 }))
   expect(mixed).toMatchObject({ spentUsd: 0.3, codiumSteps: 2, unpricedSteps: 0 })
   expect(combineSpend(mixed, first)).toMatchObject({ spentUsd: 0.3, codiumSteps: 4, unpricedSteps: 0 })
+})
+
+describe("measuredRun", () => {
+  const zero = { cost: 0, tokens: { input: 0, output: 0 }, model: { providerID: "vector-plan" } }
+  test("counts Codium presence and own usage without historical session activity", () => {
+    expect(
+      measuredRun(snapshot({ spentUsd: 0, costKind: "codium", codiumSteps: 2 }), zero, { ...zero, codiumSteps: 2 }),
+    ).toEqual({ totalCostUsd: 0, totalTokens: 0, billing: "codium", costKind: "codium" })
+    expect(
+      measuredRun(
+        undefined,
+        { ...zero, codiumSteps: 5 },
+        { ...zero, codiumSteps: 5, cost: 0.12, tokens: { input: 80 }, model: { providerID: "own" } },
+      ),
+    ).toEqual({ totalCostUsd: 0.12, totalTokens: 80, costKind: "priced" })
+    expect(measuredRun(undefined, zero, { ...zero, subagentCodiumSteps: 2 })).toEqual({
+      totalCostUsd: 0,
+      totalTokens: 0,
+      billing: "codium",
+      costKind: "codium",
+    })
+  })
+  test("a fresh mixed run retains only its own tokens and dollars", () => {
+    expect(
+      measuredRun(snapshot({ spentUsd: 0.12, costKind: "codium", codiumSteps: 2 }), zero, {
+        ...zero,
+        cost: 0.12,
+        tokens: { input: 80 },
+        codiumSteps: 2,
+      }),
+    ).toEqual({ totalCostUsd: 0.12, totalTokens: 80, billing: "codium", costKind: "priced" })
+    // The guard still knows what was spent after a revert lowers the session reading.
+    expect(
+      measuredRun(snapshot({ spentUsd: 0.12, costKind: "codium", codiumSteps: 2 }), zero, { ...zero, codiumSteps: 2 })
+        .totalCostUsd,
+    ).toBe(0.12)
+  })
+  test("Codium does not turn own unknown work into measured zero, or consume its unknown count", () => {
+    expect(
+      measuredRun(snapshot({ spentUsd: 0, costKind: "codium", codiumSteps: 3, unpricedSteps: 1 }), zero, {
+        ...zero,
+        tokens: { input: 25 },
+        codiumSteps: 3,
+      }),
+    ).toEqual({ totalCostUsd: undefined, totalTokens: 25, billing: "codium", costKind: "unknown" })
+    expect(measuredRun(snapshot({ spentUsd: 0, costKind: "codium", codiumSteps: 3 }), undefined, undefined)).toEqual({
+      totalCostUsd: 0,
+      totalTokens: undefined,
+      billing: "codium",
+      costKind: "codium",
+    })
+  })
+  test("unknown mixed work retains the guard's own subtotal after a revert or missing session read", () => {
+    const guard = snapshot({ spentUsd: 0.12, costKind: "codium", codiumSteps: 3, unpricedSteps: 1 })
+    for (const after of [undefined, { ...zero, cost: 0, codiumSteps: 3 }, { ...zero, cost: 0.04, codiumSteps: 3 }]) {
+      expect(measuredRun(guard, zero, after)).toMatchObject({
+        totalCostUsd: 0.12,
+        billing: "codium",
+        costKind: "unknown",
+      })
+    }
+    expect(measuredRun(guard, zero, { ...zero, cost: 0.25, codiumSteps: 3 }).totalCostUsd).toBe(0.25)
+  })
+  test("legacy Codium totals hide inseparable tokens while retaining own dollars", () => {
+    expect(measuredRun(undefined, zero, { ...zero, cost: 0.12, tokens: { input: 100_000 } })).toEqual({
+      totalCostUsd: 0.12,
+      totalTokens: undefined,
+      billing: "codium",
+      costKind: "priced",
+    })
+  })
+  test("a later Codium drain retains the known own plan billing kind", () => {
+    const plan = { ...snapshot({ spentUsd: 0 }), costKind: "plan" as const }
+    const mixed = combineSpend(plan, snapshot({ spentUsd: 0, costKind: "codium", codiumSteps: 2 }))
+    expect(measuredRun(mixed, zero, { ...zero, tokens: { input: 25 }, codiumSteps: 2 }).costKind).toBe("plan")
+  })
+})
+
+test("a missing guard falls back to own unknown deltas after removing inclusive Codium counts", () => {
+  const before = { cost: 0, tokens: { input: 0 }, codiumSteps: 2, unpricedSteps: 3 }
+  const only = measuredRun(undefined, before, { ...before, codiumSteps: 5, unpricedSteps: 6 })
+  expect(only).toEqual({ totalCostUsd: 0, totalTokens: 0, billing: "codium", costKind: "codium" })
+  const mixed = measuredRun(undefined, before, { ...before, codiumSteps: 5, unpricedSteps: 7, tokens: { input: 25 } })
+  expect(mixed).toEqual({ totalCostUsd: undefined, totalTokens: 25, billing: "codium", costKind: "unknown" })
 })

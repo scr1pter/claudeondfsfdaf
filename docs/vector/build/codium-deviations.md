@@ -466,3 +466,11 @@ Intent-preserving corrections to label plan §7 C2 and C3, recorded with the A22
 - A small C5 follow-up corrects average own tokens per chat to divide by chats with own tokens, excluding Codium-only chats from that denominator.
 - Optional per-pass `ReviewPass.costKind` is populated from actual catalog identity so mixed Codium/own review passes preserve own prices without inventing subscription charges. A26 must preserve the field in durable review state where passes are stored.
 - See [A24 notes](codium-a24-app-usage-notes.md) for reviewed leak fixes, tests, interrupted-check disclosure and remaining benchmark/CI gates.
+
+
+## A25: output boundaries and historical aggregate provenance
+
+- Desktop mixed runs need independent `billing: codium` and own `costKind`; optional `Task.Info.billing` carries that distinction without fabricating `Task.Usage`. Known positive own guard subtotals survive unknown work and missing/reverted session totals.
+- Distill estimate/result numeric fields become optional in the public contracts so Codium omits them. Legacy History is projected safely on read as well as new writes; stored receipts are unchanged.
+- CLI task JSON is included in C10 because the package's no-printed-Codium-token acceptance applies to legacy task results even though the file list only names its human formatter.
+- A25 remains open for an accounting-provenance amendment: positive modern Codium counters do not prove that historical aggregate tokens were partitioned. Default-unknown durable provenance and conservative read/output projections must cover resumed old records, missing/deleted history, forks/imports/replay and ancestor rollups. No historical billing rewrite or financial admission change is authorized for that repair. See [A25 notes](codium-a25-output-notes.md).

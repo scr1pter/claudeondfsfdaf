@@ -1,3 +1,4 @@
+import { Billing } from "@vectordevai/schema/billing"
 import type { Task } from "@vectordevai/schema/task"
 import type { ParallelWorkspaceRecord } from "./parallel-workspaces"
 import type { SwarmRunRecord } from "./swarm-orchestrator"
@@ -58,7 +59,14 @@ export function workspaceTask(
     reason: task?.stopReason ?? record.stopReason ?? task?.error ?? record.error,
     attempt: Math.max(1, record.turns?.filter((turn) => turn.role === "user").length ?? 1),
     measuredCost: cost !== undefined && Number.isFinite(cost) && cost >= 0 ? cost : undefined,
-    costKind: cost !== undefined ? "priced" : "unknown",
+    ...(record.billing ? { billing: record.billing } : {}),
+    costKind:
+      record.costKind ??
+      ((record.billing === "codium" || (record.runtime === "vector" && Billing.isCodium(record.provider))) && !cost
+        ? "codium"
+        : cost !== undefined
+          ? "priced"
+          : "unknown"),
     controls: {
       inspect: true,
       message: input.canMessage === true && !settled && !task?.cancelRequested,

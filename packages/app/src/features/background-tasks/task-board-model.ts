@@ -114,8 +114,9 @@ export function mergeTaskBoard(cards: readonly TaskCard[], observed: readonly Ta
 
 function boardAgent(task: Task.Info, previous?: TaskAgent): TaskAgent {
   const agent = task.agent ?? "general"
-  const codiumSteps = task.usage?.codiumSteps ?? previous?.codiumSteps
-  const legacy = task.usage?.codiumSteps === undefined && Boolean(codiumSteps)
+  const codiumSteps =
+    task.usage?.codiumSteps ?? (task.billing === "codium" || task.costKind === "codium" ? 1 : previous?.codiumSteps)
+  const legacy = Boolean(task.usage) && task.usage?.codiumSteps === undefined && Boolean(codiumSteps)
   return {
     key: previous?.key ?? `task:${task.id}`,
     agent,
@@ -132,7 +133,12 @@ function boardAgent(task: Task.Info, previous?: TaskAgent): TaskAgent {
     endedAt: task.completedAt,
     tokens: legacy ? (previous?.tokens ?? 0) : (task.usage?.total ?? previous?.tokens),
     cost: task.usage?.cost ?? task.measuredCost ?? previous?.cost,
-    unpricedSteps: task.usage?.unpricedSteps ?? previous?.unpricedSteps,
+    unpricedSteps: codiumSteps
+      ? Math.max(
+          task.usage?.unpricedSteps ?? previous?.unpricedSteps ?? 0,
+          codiumSteps + (task.costKind === "unknown" ? 1 : 0),
+        )
+      : (task.usage?.unpricedSteps ?? previous?.unpricedSteps),
     codiumSteps,
     toolUses: task.usage?.toolUses ?? previous?.toolUses,
     currentStep:

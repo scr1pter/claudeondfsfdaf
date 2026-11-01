@@ -726,6 +726,7 @@ export const DISTILL =
 export function distillEstimateLabel(estimate: MemoryDistillEstimate) {
   if (estimate.refused) return estimate.refused.message
   if (estimate.costKind === "codium") return `Runs on ${estimate.model ?? "the model"} (Codium).`
+  if (estimate.input === undefined || estimate.output === undefined) return `Runs on ${estimate.model ?? "the model"}. The usage estimate is unavailable. ${distillCostLabel(estimate)}`
   return `Vector would send ${count(estimate.sections, "section")} (about ${tokens(estimate.input)} tokens) to ${estimate.model ?? "the model"}, with up to ${tokens(estimate.output)} tokens back. ${distillCostLabel(estimate)}`
 }
 

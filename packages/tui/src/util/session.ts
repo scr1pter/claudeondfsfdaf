@@ -44,8 +44,11 @@ type Spend = Pick<
   | "title"
   | "cost"
   | "unpricedSteps"
+  | "codiumSteps"
   | "subagentCost"
   | "subagentUnpricedSteps"
+  | "subagentCodiumSteps"
+  | "model"
   | "tokens"
   | "subagentTokens"
 >
@@ -54,12 +57,35 @@ type Spend = Pick<
 // included, so it is split by the session's children: the helpers among them and the subagents (the rest). Until the
 // children are read the line cannot say which of the two spent it.
 export function delegatedSpendLines(session: Spend | undefined, children: readonly Spend[] | undefined) {
-  if (!session || !(session.subagentCost || session.subagentUnpricedSteps || tokenCount(session.subagentTokens)))
+  if (
+    !session ||
+    !(
+      session.subagentCost ||
+      session.subagentUnpricedSteps ||
+      session.subagentCodiumSteps ||
+      tokenCount(session.subagentTokens)
+    )
+  )
     return []
+  const legacy = Locale.legacyCodium(session, [], children ?? [])
+  const known = (children ?? []).map((child) => Locale.sessionSpend(child))
+  const codium = legacy
+    ? Math.max(
+        1,
+        known.reduce((sum, child) => sum + child.codium, 0),
+      )
+    : (session.subagentCodiumSteps ?? 0)
+  const ownUnknown = Math.max(
+    session.subagentCodiumSteps === undefined
+      ? 0
+      : Math.max(0, (session.subagentUnpricedSteps ?? 0) - session.subagentCodiumSteps),
+    known.reduce((sum, child) => sum + Math.max(0, child.unpriced - child.codium), 0),
+  )
   const total = {
     cost: session.subagentCost ?? 0,
-    unpriced: session.subagentUnpricedSteps ?? 0,
-    tokens: tokenCount(session.subagentTokens),
+    unpriced: legacy ? codium + ownUnknown : (session.subagentUnpricedSteps ?? 0),
+    codium,
+    tokens: legacy ? 0 : tokenCount(session.subagentTokens),
   }
   if (!children) return [spendLine(total, "by subagents or Vector's helpers")]
   const helpers = children.filter(isInternalSession).reduce(
@@ -68,27 +94,34 @@ export function delegatedSpendLines(session: Spend | undefined, children: readon
       return {
         cost: sum.cost + spend.cost,
         unpriced: sum.unpriced + spend.unpriced,
-        tokens: sum.tokens + tokenCount(child.tokens) + tokenCount(child.subagentTokens),
+        codium: sum.codium + spend.codium,
+        tokens:
+          sum.tokens + (Locale.legacyCodium(child) ? 0 : tokenCount(child.tokens) + tokenCount(child.subagentTokens)),
       }
     },
-    { cost: 0, unpriced: 0, tokens: 0 },
+    { cost: 0, unpriced: 0, codium: 0, tokens: 0 },
   )
   const rest = Math.max(0, total.cost - helpers.cost)
   const subagents = {
     // Float sums of the same steps can differ in the last bits; a remainder below a millionth of a cent is nothing.
     cost: rest < 1e-8 ? 0 : rest,
     unpriced: Math.max(0, total.unpriced - helpers.unpriced),
+    codium: Math.max(0, total.codium - helpers.codium),
     tokens: Math.max(0, total.tokens - helpers.tokens),
   }
   return [
-    ...(subagents.cost || subagents.unpriced || subagents.tokens ? [spendLine(subagents, "by subagents")] : []),
-    ...(helpers.cost || helpers.unpriced || helpers.tokens ? [spendLine(helpers, "by Vector's helpers")] : []),
+    ...(subagents.cost || subagents.unpriced || subagents.tokens || subagents.codium
+      ? [spendLine(subagents, "by subagents")]
+      : []),
+    ...(helpers.cost || helpers.unpriced || helpers.tokens || helpers.codium
+      ? [spendLine(helpers, "by Vector's helpers")]
+      : []),
   ]
 }
 
-function spendLine(spend: { cost: number; unpriced: number; tokens: number }, by: string) {
+function spendLine(spend: { cost: number; unpriced: number; tokens: number; codium: number }, by: string) {
   const tokens = spend.tokens ? ` · ${Locale.number(spend.tokens)} tokens` : ""
-  return `${Locale.spend(spend.cost, spend.unpriced)}${tokens} ${by}`
+  return `${Locale.spend(spend.cost, spend.unpriced, spend.codium)}${tokens} ${by}`
 }
 
 function tokenCount(tokens: Session["tokens"]) {

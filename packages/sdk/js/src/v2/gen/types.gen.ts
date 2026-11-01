@@ -4033,8 +4033,8 @@ export type MemoryDistillEstimate = {
     message: string
   }
   sections: number
-  input: number
-  output: number
+  input?: number
+  output?: number
   costKind?: CostKind
   lowUsd?: number
   highUsd?: number
@@ -4050,14 +4050,14 @@ export type MemoryDistillResult = {
     quote: number
     scan: number
   }
-  tokens: {
+  tokens?: {
     input: number
     output: number
     reasoning: number
     cacheRead: number
     cacheWrite: number
   }
-  cost: number
+  cost?: number
   costKind: CostKind
   error?: string
 }
@@ -6749,6 +6749,7 @@ export type TaskInfo = {
   usage?: TaskUsage
   measuredCost?: number
   costKind?: CostKind
+  billing?: BillingKind
   ownedPaths: Array<string>
   dependsOn: Array<string>
   resultAvailable: boolean

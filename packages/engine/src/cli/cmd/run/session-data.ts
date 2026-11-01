@@ -1,3 +1,5 @@
+import { Billing } from "@vectordevai/schema/billing"
+import { CodiumUsage } from "@vectordevai/core/codium-usage"
 // Core reducer for direct interactive mode.
 //
 // Takes raw SDK events and produces two outputs:
@@ -87,7 +89,7 @@ export type SessionData = {
   end: Set<string>
   echo: Map<string, Set<string>>
   // Each provider step is its own assistant message, so the run's spend is the sum over them.
-  spent: Map<string, { cost: number; unpriced: boolean }>
+  spent: Map<string, { cost: number; unpriced: boolean; billing?: "codium" }>
   // The last context reading; a step that has not reported usage yet keeps showing it.
   context?: string
 }
@@ -141,12 +143,20 @@ function modelKey(provider: string, model: string): string {
 // A step on a model with no listed price adds nothing to the cost, so a total with such steps is only a lower bound.
 function formatSpend(spent: SessionData["spent"]): string | undefined {
   const steps = [...spent.values()]
-  const cost = steps.reduce((sum, step) => sum + step.cost, 0)
-  if (!steps.some((step) => step.unpriced)) return cost > 0 ? money.format(cost) : undefined
-  return cost > 0 ? `${money.format(cost)} + unpriced` : "cost unknown"
+  const own = steps.filter((step) => !step.billing)
+  const cost = own.reduce((sum, step) => sum + step.cost, 0)
+  const unknown = own.some((step) => step.unpriced)
+  const text = unknown
+    ? cost > 0
+      ? `${money.format(cost)} + unpriced`
+      : "cost unknown"
+    : cost > 0
+      ? money.format(cost)
+      : undefined
+  return CodiumUsage.withCodium(text, steps.length - own.length) || undefined
 }
 
-function formatContext(tokens: Tokens | undefined, limit: number | undefined): string | undefined {
+function formatContext(tokens: Tokens | undefined, limit: number | undefined, codium = false): string | undefined {
   const total =
     (tokens?.input ?? 0) +
     (tokens?.output ?? 0) +
@@ -154,6 +164,7 @@ function formatContext(tokens: Tokens | undefined, limit: number | undefined): s
     (tokens?.cache?.read ?? 0) +
     (tokens?.cache?.write ?? 0)
   if (total <= 0) return undefined
+  if (codium) return limit && limit > 0 ? `${Math.round((total / limit) * 100)}% of context` : undefined
   return limit && limit > 0 ? `${Locale.number(total)} (${Math.round((total / limit) * 100)}%)` : Locale.number(total)
 }
 
@@ -827,7 +838,7 @@ export function reduceSessionData(input: SessionDataInput): SessionDataOutput {
     if (event.properties.sessionID !== input.sessionID) {
       const info = event.properties.info
       if (info.role !== "assistant" || !input.subagent?.(event.properties.sessionID)) return out(data, commits)
-      data.spent.set(info.id, { cost: info.cost, unpriced: info.unpriced === true })
+      data.spent.set(info.id, { cost: info.cost, unpriced: info.unpriced === true, billing: Billing.of(info) })
       const usage = [data.context, formatSpend(data.spent)].filter(Boolean).join(" · ")
       return out(data, commits, usage ? patch({ usage }) : undefined)
     }
@@ -849,8 +860,13 @@ export function reduceSessionData(input: SessionDataInput): SessionDataOutput {
     }
 
     if (typeof info.id === "string" && typeof info.cost === "number")
-      data.spent.set(info.id, { cost: info.cost, unpriced: info.unpriced === true })
-    data.context = formatContext(info.tokens, input.limits[modelKey(info.providerID, info.modelID)]) ?? data.context
+      data.spent.set(info.id, { cost: info.cost, unpriced: info.unpriced === true, billing: Billing.of(info) })
+    const context = formatContext(
+      info.tokens,
+      input.limits[modelKey(info.providerID, info.modelID)],
+      Boolean(Billing.of(info)),
+    )
+    data.context = Billing.of(info) ? context : (context ?? data.context)
     const usage = [data.context, formatSpend(data.spent)].filter(Boolean).join(" · ")
     if (usage) {
       next = {

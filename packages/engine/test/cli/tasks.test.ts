@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test"
 import { createVectorClient } from "@vectordevai/sdk/v2"
 import type { Task } from "@vectordevai/schema/task"
-import { executeTaskCommand, formatTasks } from "@/cli/cmd/tasks"
+import { executeTaskCommand, formatTasks, tasksForOutput } from "@/cli/cmd/tasks"
 
 test("task CLI uses the owning server and preserves control payloads", async () => {
   const requests: Request[] = []
@@ -78,7 +78,36 @@ test("task CLI never renders missing usage as zero spend", () => {
     attempt: 1,
     controls: { inspect: true, message: true, stop: true },
   }
+  const usage = {
+    cost: 0.12,
+    total: 987654,
+    steps: 2,
+    toolUses: 0,
+    unpricedSteps: 1,
+    tokens: { input: 987654, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+  }
+  const legacy = { ...task, billing: "codium" as const, costKind: "unknown" as const, usage }
+  for (const result of [
+    { tasks: [legacy], truncated: false },
+    { task: legacy, steps: [], truncated: false },
+    { tasks: [legacy], timedOut: false },
+  ]) {
+    const printed = JSON.stringify(tasksForOutput(result))
+    expect(printed).not.toContain("987654")
+    expect(printed).toContain('"cost":0.12')
+    expect(printed).toContain('"costKind":"unknown"')
+  }
+  const modern = { ...legacy, usage: { ...usage, codiumSteps: 1, total: 123, tokens: { ...usage.tokens, input: 123 } } }
+  expect(tasksForOutput({ tasks: [modern, task], truncated: false })).toEqual({
+    tasks: [modern, task],
+    truncated: false,
+  })
+  expect(legacy.usage.total).toBe(987654)
   expect(formatTasks([task])).toContain("usage unavailable")
+  expect(formatTasks([{ ...task, billing: "codium", costKind: "codium" }])).toContain("Codium")
+  const mixed = formatTasks([{ ...task, billing: "codium", costKind: "unknown", measuredCost: 0.12 }])
+  expect(mixed).toContain("$0.1200 reported + unpriced + Codium")
+  expect(mixed).not.toContain("tokens")
   expect(formatTasks([{ ...task, connection: "disconnected" }])).toContain("disconnected (last known: running)")
   expect(formatTasks([{ ...task, source: "external", measuredCost: 0.125, costKind: "priced" }])).toContain(
     "$0.1250 reported · tokens unavailable",

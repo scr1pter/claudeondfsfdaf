@@ -1,7 +1,7 @@
 // The `vector models` line for Vector Codium, from the listing the engine provider builds (A20). Pure: no process.
 import { expect, test } from "bun:test"
 import { ModelPlans } from "@vectordevai/core/model-plans"
-import { codiumLines } from "../../src/cli/cmd/models"
+import { codiumLines, modelForOutput } from "../../src/cli/cmd/models"
 import { fromModelPlans } from "../../src/provider/provider"
 
 test("vector models names Codium Auto and the models a higher plan includes, never a price or credits", () => {
@@ -64,4 +64,10 @@ test("vector models names Codium Auto and the models a higher plan includes, nev
   expect(codiumLines([{ id: "deepseek/deepseek-v4.1-flash", name: "DeepSeek V4.1 Flash" }])).toEqual([
     'Vector Codium: 1 model included in your plan (vector-plan/…). Run "vector codium" for your plan and usage.',
   ])
+})
+test("verbose Codium model JSON marks billing instead of advertising zero prices", () => {
+  const model = { id: "test", cost: { input: 0, output: 0, cache: { read: 0, write: 0 } }, limit: { context: 100000 } }
+  expect(modelForOutput("vector-plan", model)).toEqual({ id: "test", billing: "codium", limit: { context: 100000 } })
+  expect(modelForOutput("own-provider", model)).toBe(model)
+  expect(model).toHaveProperty("cost")
 })

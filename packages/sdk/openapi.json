@@ -37839,7 +37839,7 @@
             "type": "number"
           }
         },
-        "required": ["enabled", "sections", "input", "output"],
+        "required": ["enabled", "sections"],
         "additionalProperties": false
       },
       "MemoryDistillResult": {
@@ -37908,7 +37908,7 @@
             "type": "string"
           }
         },
-        "required": ["model", "sessionID", "records", "duplicate", "dropped", "tokens", "cost", "costKind"],
+        "required": ["model", "sessionID", "records", "duplicate", "dropped", "costKind"],
         "additionalProperties": false
       },
       "MemoryPassage": {
@@ -46212,6 +46212,9 @@
           },
           "costKind": {
             "$ref": "#/components/schemas/CostKind"
+          },
+          "billing": {
+            "$ref": "#/components/schemas/BillingKind"
           },
           "ownedPaths": {
             "type": "array",

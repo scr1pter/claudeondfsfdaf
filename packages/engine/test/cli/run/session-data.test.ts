@@ -111,6 +111,35 @@ function tool(input: { id: string; messageID: string; tool: string; state: Recor
 }
 
 describe("run session data", () => {
+  test("Codium context stays a percentage and mixed own spend remains visible", () => {
+    const data = createSessionData()
+    const codium = assistant("codium", {
+      providerID: "vector-plan",
+      cost: 0,
+      unpriced: true,
+      tokens: { input: 24000, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+    })
+    const first = reduceSessionData({
+      data,
+      event: codium as Event,
+      sessionID: "session-1",
+      thinking: false,
+      limits: { "vector-plan/gpt-5": 100000 },
+    })
+    expect(first.footer?.patch?.usage).toBe("24% of context · Codium")
+    expect(reduce(data, assistant("own", { cost: 0.12 })).footer?.patch?.usage).toBe("2 · $0.12 + Codium")
+    const child = assistant("child", { billing: "codium", cost: 999, unpriced: true })
+    const delegated = reduceSessionData({
+      data,
+      event: { ...child, properties: { ...child.properties, sessionID: "child" } } as Event,
+      sessionID: "session-1",
+      thinking: false,
+      limits: {},
+      subagent: (id) => id === "child",
+    })
+    expect(delegated.footer?.patch?.usage).toBe("2 · $0.12 + Codium")
+    expect(reduce(data, codium).footer?.patch?.usage).toBe("$0.12 + Codium")
+  })
   test("the footer shows what the run has spent across its steps, not just the latest step", () => {
     const usage = (data: ReturnType<typeof createSessionData>, event: unknown) => {
       const out = reduce(data, event)

@@ -23,7 +23,7 @@ Final focused runs: **527 passing cases across 23 files**, one file at a time, w
 
 One engine test attempt failed before tests because the filesystem sandbox disallowed the existing strict network guard's localhost proxy. Re-running that single file with network permission allowed the local proxy and all 16 tests passed; no provider request was made. During preparation an accidental repo-root typecheck started Turbo's parallel checks despite holding the global lock; its identified process tree was stopped after approximately 12 seconds. Its partial results are not validation. All reported package checks used explicit package working directories afterwards.
 
-The normal pre-push hook, scoped browser checks and production benchmark comparison have passed as recorded below. The scoped test/exerciser/generated-client job is still running. A25–A26 still own desktop/CLI/TUI/ACP and remaining review-state/export surfaces.
+The normal pre-push hook, scoped browser checks and production benchmark comparison have passed as recorded below. The stable scoped test/exerciser/generated-client job and isolated clock-fixture workflow subsequently passed, as recorded below. A25–A26 still own desktop/CLI/TUI/ACP and remaining review-state/export surfaces.
 
 ### First GitHub validation
 
@@ -36,3 +36,12 @@ Source `b4c05481fcd493e602b49d4b07f78688f2d4650f` passed all 23 normal pre-push 
 Native CI found two test expectations left behind by A23/A24. Four exact HttpApi spend snapshots now include `codiumSteps: 0`, preserving all own dollar, state, reason and stopping assertions. The Host locally policy test still forbids account, credits, pricing and plan access throughout the agents feature; it permits only the dashboard's exact usage-label import, optional marker declarations and existing formatter references. The dashboard does not read an account or gate launching. Independent review approved these narrow test-only repairs. Focused reruns passed 17 Host locally cases and all 26 session HttpApi cases, each in its owning package under the serial lock.
 
 The Windows native Local API case also returned 400 instead of its expected 409 when probing a local fixture server. That case passes on Linux and none of its production or fixture inputs changed in A24; separate diagnosis is tracking it without weakening the assertion.
+
+
+### Stable final scoped acceptance
+
+At `4bc40a876e2262cf2aa7097e290f07d01d776168`, workflow `41260343992` completed the full Codium tests, HttpApi exerciser and generated-client job (`124712174890`) successfully, with all eight typechecks green. Its only failure was the Settings clock fixture: the installed clock continued advancing before `fastForward(14_999)`, so wall time could cross the 15-second boundary early. The fixture now pauses the clock at a safely future instant before scheduling either turn-ended event; the 14,999 + 1 ms and request-count assertions remain unchanged.
+
+That two-line test-only repair was independently reviewed and committed as `975b523bca1b9c38007493e79619b8463178d983` on `codium-fixtures`, forked from exact `4bc40a87`. Its owning app E2E typecheck and normal 23-package hook passed (54.476 seconds). Workflow [41261226062](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/41261226062) then passed **all 10 jobs** at that exact revision: browser (`124714733282`), complete Codium tests/HttpApi exerciser/generated-client (`124714733465`), and eight package typechecks. The repair is cherry-picked onto canonical `codium` as `d505d566`; A25 source work was preserved separately. These test-only revisions do not change the production app or benchmark harness/fixtures measured at `b4c05481`.
+
+The previous `44c35f1c` workflow's long test job was cancelled by the subsequent push; only its browser/type jobs were accepted then. It is superseded by the complete stable acceptance above. The separate native Local API probe diagnosis remains tracked by the integration owner; a passing shard that did not contain that test is not evidence for it.

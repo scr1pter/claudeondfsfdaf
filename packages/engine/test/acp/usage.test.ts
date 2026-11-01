@@ -127,6 +127,51 @@ const connection = (updates: SessionNotification[]) => ({
 })
 
 describe("acp usage", () => {
+  test("Codium has no ACP usage, including legacy provider identities and mixed turns", () => {
+    const codium = {
+      cost: 0,
+      billing: "codium" as const,
+      providerID: "vector-plan",
+      tokens: { input: 987654, output: 4321, reasoning: 20, cache: { read: 10, write: 10 } },
+    }
+    expect(UsageService.buildUsage(codium)).toBeUndefined()
+    expect(UsageService.buildUsage({ ...codium, billing: undefined })).toBeUndefined()
+    const messages = [
+      { info: { role: "user" as const, id: "u" }, parts: [{ type: "text" }] },
+      assistant({ ...codium, id: "c" }),
+      assistant({ id: "own", cost: 0.12 }),
+    ]
+    expect(UsageService.turnUsage(messages, "c")).toBeUndefined()
+    expect(UsageService.turnUsage(messages, "own")).toEqual({ inputTokens: 10, outputTokens: 20, totalTokens: 30 })
+    expect(UsageService.totalSessionCost(messages)).toBeUndefined()
+  })
+  it.effect("a Codium latest step sends no editor usage_update and performs no context lookup", () => {
+    const updates: SessionNotification[] = []
+    return Effect.gen(function* () {
+      const usage = yield* UsageService.Service
+      const messages = yield* usage.sendUpdate({
+        connection: connection(updates),
+        sessionID: "ses_1",
+        directory: "/workspace",
+      })
+      expect(messages).toHaveLength(2)
+      expect(updates).toEqual([])
+    }).pipe(
+      Effect.provide(
+        fakeLayer({
+          messages: Effect.succeed([
+            assistant({ cost: 0.12 }),
+            assistant({
+              cost: 0,
+              providerID: "vector-plan",
+              tokens: { input: 24000, output: 0, reasoning: 10, cache: { read: 0, write: 0 } },
+            }),
+          ]),
+          providers: () => Effect.die("Codium must not request context size"),
+        }),
+      ),
+    )
+  })
   test("builds ACP Usage from assistant token shape", () => {
     expect(
       UsageService.buildUsage({

@@ -62,3 +62,27 @@ test("unpriced steps cannot be presented as a complete zero-dollar bill", () => 
     }),
   ).toContain("cost partly unknown")
 })
+test("Codium task summaries retain mixed own figures and mask legacy totals", () => {
+  expect(taskDescription({ ...task, costKind: "codium", measuredCost: 0 })).toContain(" · Codium")
+  expect(taskDescription({ ...task, billing: "codium", costKind: "unknown", measuredCost: 0.12 })).toContain(
+    "$0.1200 reported + unpriced + Codium",
+  )
+  const usage = {
+    cost: 0.12,
+    total: 987654,
+    toolUses: 1,
+    steps: 2,
+    unpricedSteps: 1,
+    tokens: { input: 987654, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+  }
+  expect(taskDescription({ ...task, costKind: "codium", usage })).not.toContain("987")
+  expect(taskDescription({ ...task, billing: "codium", costKind: "unknown", usage })).toContain(
+    "$0.1200 + unpriced + Codium",
+  )
+  expect(taskDescription({ ...task, billing: "codium", costKind: "unknown", usage: { ...usage, cost: 0 } })).toContain(
+    "cost unknown + Codium",
+  )
+  expect(taskDescription({ ...task, costKind: "codium", usage: { ...usage, total: 125, codiumSteps: 1 } })).toContain(
+    "125 tokens + Codium · $0.1200 + Codium",
+  )
+})

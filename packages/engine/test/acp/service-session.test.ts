@@ -148,6 +148,7 @@ describe("ACP service sessions", () => {
       noProviders?: boolean
       providers?: Provider.Info[]
       model?: string
+      realUsage?: boolean
       abort?: (input: { sessionID: string }) => Promise<{ data: boolean }>
       prompt?: (input: unknown) => Promise<{ data: { info: ReturnType<typeof assistantInfo> } }>
     },
@@ -274,7 +275,7 @@ describe("ACP service sessions", () => {
     })
 
     return {
-      service: ACPService.make({ sdk, connection, usage }),
+      service: ACPService.make({ sdk, connection, ...(options?.realUsage ? {} : { usage }) }),
       updates,
       mcpAdds,
       aborts,
@@ -1109,6 +1110,50 @@ describe("ACP service sessions", () => {
       _meta: {},
     })
     expect(usageUpdates).toEqual([session.sessionId])
+  })
+
+  it("Codium normal and aborted prompt responses omit raw usage even without an update", async () => {
+    for (const aborted of [false, true]) {
+      const { service } = makeService([], {
+        prompt: () =>
+          Promise.resolve({
+            data: {
+              info: {
+                ...assistantInfo(
+                  { input: 24000, output: 100, reasoning: 7, cache: { read: 10, write: 20 } },
+                  aborted ? { name: "MessageAbortedError", data: { message: "Aborted" } } : undefined,
+                ),
+                providerID: "vector-plan",
+                billing: "codium",
+              },
+            },
+          }),
+      })
+      const session = await Effect.runPromise(service.newSession({ cwd: "/workspace", mcpServers: [] }))
+      const result = await Effect.runPromise(
+        service.prompt({ sessionId: session.sessionId, prompt: [{ type: "text", text: "hello" }] }),
+      )
+      expect(result.stopReason).toBe(aborted ? "cancelled" : "end_turn")
+      expect(result).not.toHaveProperty("usage")
+    }
+  })
+
+  it("real prompt usage suppresses updates when the newest Codium assistant has no output", async () => {
+    const codium = {
+      ...assistantInfo({ input: 24000, output: 0, reasoning: 10, cache: { read: 0, write: 0 } }),
+      providerID: "vector-plan",
+      billing: "codium" as const,
+    }
+    const { service, updates } = makeService(
+      [
+        { info: assistantInfo({ input: 100, output: 20, reasoning: 0, cache: { read: 0, write: 0 } }), parts: [] },
+        { info: codium, parts: [] },
+      ],
+      { realUsage: true, prompt: () => Promise.resolve({ data: { info: codium } }) },
+    )
+    const session = await Effect.runPromise(service.newSession({ cwd: "/workspace", mcpServers: [] }))
+    await Effect.runPromise(service.prompt({ sessionId: session.sessionId, prompt: [{ type: "text", text: "hello" }] }))
+    expect(updates.filter((item) => item.update.sessionUpdate === "usage_update")).toEqual([])
   })
 
   it("maps assistant prompt errors to request errors instead of end turn", async () => {

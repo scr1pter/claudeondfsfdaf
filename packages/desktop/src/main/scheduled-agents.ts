@@ -4,15 +4,7 @@ import { randomUUID } from "node:crypto"
 import { getStore } from "./store"
 import { nextRun, type Recurrence } from "@vectordevai/app/schedule"
 import type { SpendLedger } from "./spend-limits"
-import {
-  measuredCost,
-  newSpend,
-  readSpend,
-  sessionCost,
-  sessionTokens,
-  usageDelta,
-  type EngineSessionResponse,
-} from "./run-usage"
+import { measuredRun, newSpend, readSpend, type EngineSessionResponse } from "./run-usage"
 
 const STORE_NAME = "scheduled-agents"
 const STORE_KEY = "records"
@@ -527,8 +519,7 @@ export function createScheduledAgents(
         provider: after?.data?.model?.providerID ?? before?.data?.model?.providerID ?? "Current Vector provider",
         model: after?.data?.model?.id ?? before?.data?.model?.id ?? "Current selected model",
         source: "scheduled",
-        totalCostUsd: measuredCost(snapshot, sessionCost(before?.data), sessionCost(after?.data)),
-        totalTokens: usageDelta(sessionTokens(before?.data), sessionTokens(after?.data)),
+        ...measuredRun(snapshot, before?.data, after?.data),
       })
       .catch(() => undefined)
     if ("status" in execution && execution.status === "canceled") return execution.status

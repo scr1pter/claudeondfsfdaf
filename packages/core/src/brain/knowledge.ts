@@ -1,5 +1,6 @@
 export * as BrainKnowledge from "./knowledge"
 
+import { Billing } from "@vectordevai/schema/billing"
 import { createHash, randomBytes } from "node:crypto"
 import { constants as fsConstants } from "node:fs"
 import fs from "node:fs/promises"
@@ -202,14 +203,14 @@ export type DistillRun = {
   readonly model: string
   /** The hidden helper session the request ran in. */
   readonly session: string
-  readonly tokens: {
+  readonly tokens?: {
     readonly input: number
     readonly output: number
     readonly reasoning: number
     readonly cacheRead: number
     readonly cacheWrite: number
   }
-  readonly cost: number
+  readonly cost?: number
   readonly costKind: CostKind
   readonly dropped: BrainDistill.Dropped
   readonly error?: string
@@ -1924,7 +1925,7 @@ function make(input: {
           action: event.action,
           actor: event.actor,
           ...(lineage.includes(event.entry_id) ? {} : { record: event.entry_id }),
-          ...(event.detail ? { detail: event.detail } : {}),
+          ...(event.detail ? { detail: historyDetail(event.action, event.detail) } : {}),
         }),
       ),
       ...arrivals,
@@ -3922,8 +3923,7 @@ function make(input: {
           kept: items.length,
           duplicate: input.records.length - items.length,
           dropped: input.run.dropped,
-          tokens: input.run.tokens,
-          cost: input.run.cost,
+          ...(input.run.costKind === "codium" ? {} : { tokens: input.run.tokens, cost: input.run.cost }),
           costKind: input.run.costKind,
           ...(input.run.error ? { error: input.run.error } : {}),
         },
@@ -4037,7 +4037,7 @@ function make(input: {
           at: event.at,
           action: event.action,
           actor: event.actor,
-          ...(event.detail ? { detail: event.detail } : {}),
+          ...(event.detail ? { detail: historyDetail(event.action, event.detail) } : {}),
         }),
       ),
     }
@@ -7104,4 +7104,22 @@ async function workingFiles(root: string) {
       (await UntrustedGit.run(root, ["ls-files", "-z", "--cached", "--others", "--exclude-standard"])).split("\0").filter(Boolean),
     ),
   ]
+}
+
+
+// Old distillation receipts keep internal measurements; public history projects only the Codium attribution.
+function historyDetail(action: string, detail: Record<string, unknown>) {
+  if (
+    action !== "distilled" ||
+    !(
+      detail.costKind === "codium" ||
+      detail.billing === "codium" ||
+      (typeof detail.model === "string" && Billing.isCodium(detail.model.split("/")[0]))
+    )
+  )
+    return detail
+  const projected: Record<string, unknown> = { ...detail, costKind: "codium" }
+  delete projected.tokens
+  delete projected.cost
+  return projected
 }

@@ -232,6 +232,7 @@ function harness(options: {
   // so a reading can differ before and after the run.
   spend?: (sessionId: string, prompted: boolean) => unknown
   sessionModel?: { providerID: string; id: string }
+  sessionUsage?: (completed: boolean) => Record<string, unknown>
   promptFailure?: string
   // How the turn's last assistant message finished, "stop" unless set.
   finish?: string
@@ -256,6 +257,7 @@ function harness(options: {
     source: string
     totalCostUsd?: number
     totalTokens?: number
+    billing?: "codium"
   }> = []
   let contextPolls = 0
 
@@ -330,6 +332,7 @@ function harness(options: {
               cache: { read: 0, write: 0 },
             },
             model: options.sessionModel ?? { providerID: "provider-test", id: "model-test" },
+            ...options.sessionUsage?.(completed),
           },
         }
       }
@@ -1089,4 +1092,38 @@ test("a continued Codium session uses its actual model despite an older own-key 
   expect(harnessed.spendChecks[0]?.billing).toBe("codium")
   expect(harnessed.prompts).toHaveLength(1)
   expect(harnessed.reserved.size).toBe(0)
+})
+
+for (const mixed of [false, true]) {
+  test(`${mixed ? "mixed" : "Codium-only"} scheduled usage passes separated own totals and Codium to the ledger`, async () => {
+    const harnessed = harness({
+      at: new Date(2026, 7, 19, 10),
+      records: [scheduledRecord({ model: { providerID: "vector-plan", id: "coding" } })],
+      sessionModel: { providerID: "vector-plan", id: "coding" },
+      sessionUsage: (completed) => ({
+        cost: completed && mixed ? 0.12 : 0,
+        tokens: { input: completed && mixed ? 80 : 0 },
+        codiumSteps: completed ? 3 : 0,
+      }),
+    })
+    await harnessed.runtime.tick()
+    expect(harnessed.spendChecks[0]?.billing).toBe("codium")
+    expect(harnessed.spendRecords[0]).toMatchObject({
+      totalCostUsd: mixed ? 0.12 : 0,
+      totalTokens: mixed ? 80 : 0,
+      billing: "codium",
+    })
+    expect(harnessed.reserved.size).toBe(0)
+  })
+}
+
+test("an own scheduled recurrence does not inherit Codium billing from earlier turns", async () => {
+  const harnessed = harness({
+    at: new Date(2026, 7, 19, 10),
+    records: [scheduledRecord({ targets: [{ directory: "/repos/alpha", sessionId: "ses_established" }] })],
+    sessionUsage: () => ({ codiumSteps: 5 }),
+  })
+  await harnessed.runtime.tick()
+  expect(harnessed.spendRecords[0]).toMatchObject({ totalCostUsd: 0.25, totalTokens: 15 })
+  expect(harnessed.spendRecords[0]?.billing).toBeUndefined()
 })

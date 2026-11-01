@@ -1,3 +1,4 @@
+import { Billing } from "@vectordevai/schema/billing"
 import {
   type AgentSideConnection,
   type AuthenticateRequest,
@@ -635,8 +636,12 @@ function makeUsageService(sdk: VectorClient) {
     )
     if (!messages) return
 
+    const latest = messages.findLast(
+      (message): message is { readonly info: UsageService.AssistantMessage } => message.info.role === "assistant",
+    )
+    if (latest && Billing.of(latest.info)) return messages
     const message = UsageService.latestAssistantMessage(messages)
-    if (!message?.providerID || !message.modelID) return messages
+    if (!message?.providerID || !message.modelID || Billing.of(message)) return messages
 
     const size = yield* contextLimit({
       directory: params.directory,
@@ -856,7 +861,7 @@ const promptResponse = Effect.fn("ACP.promptResponse")(function* (
   }
 
   const base = {
-    usage: usage ?? UsageService.buildUsage(info),
+    ...(usage ? { usage } : {}),
     ...(messageId ? { userMessageId: messageId } : {}),
     _meta: {},
   }

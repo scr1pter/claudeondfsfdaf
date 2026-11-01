@@ -1,3 +1,5 @@
+import { Billing } from "@vectordevai/schema/billing"
+import { stepForOutput } from "./run/usage-output"
 import type { PermissionV1 } from "@vectordevai/core/v1/permission"
 import { FSUtil } from "@vectordevai/core/fs-util"
 import { nextBackgroundEvent } from "./run/background-wait"
@@ -318,8 +320,7 @@ export const RunCommand = effectCmd({
       })
       .option("max-cost", {
         type: "number",
-        describe:
-          "stop this run within one step per running agent of spending this many US dollars, counted at the charge the provider reported or else at catalog list price",
+        describe: "Dollar cap for this run. Vector Codium steps are not counted; step limits still apply.",
       })
       .option("max-steps", {
         type: "number",
@@ -972,6 +973,7 @@ export const RunCommand = effectCmd({
           const toggles = new Map<string, boolean>()
           // A step-finish part is written again once its snapshot lands; its usage was already in the first write.
           const finishedSteps = new Set<string>()
+          const billingByMessage = new Map<string, "codium" | undefined>()
           // Subagents run in child sessions, and a request left unanswered there blocks the whole run, so the run
           // answers requests from any session that descends from its own.
           const tree = new Set([sessionID])
@@ -1049,6 +1051,8 @@ export const RunCommand = effectCmd({
             }
             if (next.event.done) break
             const event: Event = next.event.value
+            if (event.type === "message.updated" && event.properties.info.role === "assistant")
+              billingByMessage.set(event.properties.info.id, Billing.of(event.properties.info))
             const properties: unknown = "properties" in event ? event.properties : undefined
             const owner = isRecord(properties)
               ? isRecord(properties.info) && typeof properties.info.sessionID === "string"
@@ -1137,7 +1141,10 @@ export const RunCommand = effectCmd({
                   (await inRun(part.sessionID))
                 ) {
                   finishedSteps.add(part.id)
-                  emit("step_finish", { part, subagent: true })
+                  emit("step_finish", {
+                    part: stepForOutput(part, billingByMessage.get(part.messageID)),
+                    subagent: true,
+                  })
                 }
                 // A researcher's steps show as they happen, under the lead's.
                 const progress = args.research && args.format !== "json" ? researchProgress(part) : undefined
@@ -1184,7 +1191,7 @@ export const RunCommand = effectCmd({
               if (part.type === "step-finish") {
                 if (finishedSteps.has(part.id)) continue
                 finishedSteps.add(part.id)
-                if (emit("step_finish", { part })) continue
+                if (emit("step_finish", { part: stepForOutput(part, billingByMessage.get(part.messageID)) })) continue
               }
 
               if (part.type === "text" && part.time?.end) {

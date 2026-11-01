@@ -385,17 +385,21 @@ export const MemoryDocDistillCommand = effectCmd({
     if (!args.yes) {
       const estimate = yield* distill.estimate(memory.place, input)
       if (estimate.refused) return yield* fail(estimate.refused.message)
-      if (args.json) return print(estimate)
+      if (args.json) return print(estimate.costKind === "codium" ? { ...estimate, billing: "codium" } : estimate)
       UI.println(
-        `Vector would send ${estimate.sections} section${estimate.sections === 1 ? "" : "s"} (about ${estimate.input.toLocaleString("en-US")} tokens) to ${estimate.model}, with up to ${estimate.output.toLocaleString("en-US")} tokens back.`,
+        estimate.costKind === "codium"
+          ? `Runs on ${estimate.model} (Codium).`
+          : estimate.input === undefined || estimate.output === undefined
+            ? `Runs on ${estimate.model}. The usage estimate is unavailable.`
+            : `Vector would send ${estimate.sections} section${estimate.sections === 1 ? "" : "s"} (about ${estimate.input.toLocaleString("en-US")} tokens) to ${estimate.model}, with up to ${estimate.output.toLocaleString("en-US")} tokens back.`,
       )
-      UI.println(costLine(estimate))
+      if (estimate.costKind !== "codium") UI.println(costLine(estimate))
       UI.println(UI.Style.TEXT_DIM + "Nothing was sent. Run again with --yes to send it." + UI.Style.TEXT_NORMAL)
       return
     }
     const result = yield* distill.run(memory.place, input)
     if (result.type === "refused") return yield* fail(result.message)
-    if (args.json) return print(result)
+    if (args.json) return print(result.costKind === "codium" ? { ...result, billing: "codium" } : result)
     const dropped = result.dropped.quote + result.dropped.scan + result.dropped.invalid
     UI.println(
       `${UI.Style.TEXT_SUCCESS_BOLD}${result.records.length} suggestion${result.records.length === 1 ? "" : "s"} from ${result.model}${UI.Style.TEXT_NORMAL}, waiting for your review.`,
@@ -407,7 +411,11 @@ export const MemoryDocDistillCommand = effectCmd({
     if (result.error) UI.println(`${UI.Style.TEXT_WARNING}${result.error}${UI.Style.TEXT_NORMAL}`)
     UI.println(
       UI.Style.TEXT_DIM +
-        `Spent ${(result.tokens.input + result.tokens.output).toLocaleString("en-US")} tokens${result.costKind === "priced" ? `, $${result.cost.toFixed(4)} at catalog rates` : ""}.` +
+        (result.costKind === "codium"
+          ? "Spent: Codium"
+          : result.tokens
+            ? `Spent ${(result.tokens.input + result.tokens.output).toLocaleString("en-US")} tokens${result.costKind === "priced" && result.cost !== undefined ? `, $${result.cost.toFixed(4)} at catalog rates` : ""}.`
+            : "Usage unavailable.") +
         UI.Style.TEXT_NORMAL,
     )
     if (result.records.length === 0) return
