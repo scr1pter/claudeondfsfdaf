@@ -106,3 +106,21 @@ describe("getSessionContext", () => {
     expect(ctx).toBeUndefined()
   })
 })
+
+test("Codium keeps the internal context percentage with an explicit display classification", () => {
+  const message = assistant(
+    "codium",
+    { input: 90000, output: 10000, reasoning: 0, read: 0, write: 0 },
+    0,
+    "vector-plan",
+    "vector-flash",
+  )
+  const providers = [
+    {
+      id: "vector-plan",
+      name: "Vector Codium",
+      models: { "vector-flash": { name: "Flash", limit: { context: 200000 } } },
+    },
+  ]
+  expect(getSessionContext([message], providers)).toMatchObject({ codium: true, usage: 50, tokens: 100000 })
+})

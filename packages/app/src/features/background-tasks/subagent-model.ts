@@ -70,6 +70,7 @@ export type TaskAgent = {
   task?: Task.Info
   cost?: number
   unpricedSteps?: number
+  codiumSteps?: number
   currentStep?: string
   ownedPaths?: readonly string[]
   dependsOn?: readonly string[]
@@ -255,7 +256,7 @@ export function modelShortName(name: string) {
 // ---------------------------------------------------------------------------
 // Lifecycle fields, read defensively from either surface
 
-type Usage = { total?: number; toolUses?: number; cost?: number; unpricedSteps?: number }
+type Usage = { total?: number; toolUses?: number; cost?: number; unpricedSteps?: number; codiumSteps?: number }
 
 type Lifecycle = {
   kind?: SubagentKind
@@ -314,8 +315,16 @@ function readUsage(value: unknown): Usage | undefined {
     : undefined
   const total = finite(item.total) ?? summed
   const toolUses = finite(item.toolUses)
-  if (total === undefined && toolUses === undefined) return undefined
-  return { total, toolUses, ...definedFields({ cost: finite(item.cost), unpricedSteps: finite(item.unpricedSteps) }) }
+  if (total === undefined && toolUses === undefined && item.codiumSteps === undefined) return undefined
+  return {
+    total,
+    toolUses,
+    ...definedFields({
+      cost: finite(item.cost),
+      unpricedSteps: finite(item.unpricedSteps),
+      codiumSteps: finite(item.codiumSteps),
+    }),
+  }
 }
 
 /** Reads lifecycle fields from a task part's metadata (parentMessageId, sessionId) or a child record (parentMessageID). */
@@ -460,6 +469,7 @@ type ChildFacts = {
   currentStep?: string
   cost?: number
   unpricedSteps?: number
+  codiumSteps?: number
 }
 
 function tokenSum(tokens: unknown) {
@@ -482,6 +492,8 @@ export function childFacts(source: TaskSource, sessionID: string | undefined): C
   const messages = source.messages(sessionID) ?? []
   let steps = 0
   let stepTokens = 0
+  let stepCodium = 0
+  let messageCodium = 0
   let toolUses: number | undefined
   let messageTokens: number | undefined
   let last: ChildFacts["last"]
@@ -489,7 +501,9 @@ export function childFacts(source: TaskSource, sessionID: string | undefined): C
   let currentStep: string | undefined
   for (const message of messages) {
     if (message.role !== "assistant") continue
-    messageTokens = (messageTokens ?? 0) + tokenSum(message.tokens)
+    const codium = Boolean(Billing.of(message))
+    messageCodium += Number(codium)
+    messageTokens = (messageTokens ?? 0) + (codium ? 0 : tokenSum(message.tokens))
     last = {
       created: finite(message.time?.created),
       completed: finite(message.time?.completed),
@@ -508,12 +522,17 @@ export function childFacts(source: TaskSource, sessionID: string | undefined): C
       }
       if (part.type === "step-finish") {
         steps += 1
-        stepTokens += tokenSum(part.tokens)
+        const billed = codium || Boolean(Billing.of(part))
+        stepCodium += Number(billed)
+        stepTokens += billed ? 0 : tokenSum(part.tokens)
       }
     }
   }
-  const row = tokenSum(source.session(sessionID)?.tokens)
-  const tokens = steps > 0 ? stepTokens : row > 0 ? row : messageTokens
+  const session = source.session(sessionID)
+  const legacy = session?.codiumSteps === undefined && Boolean(session && Billing.of(session))
+  const row = tokenSum(session?.tokens)
+  const tokens = steps > 0 ? stepTokens : messageCodium ? messageTokens : legacy ? 0 : row > 0 ? row : messageTokens
+  const codiumSteps = Math.max(session?.codiumSteps ?? 0, steps ? stepCodium : messageCodium, legacy ? 1 : 0)
   return {
     tokens,
     toolUses,
@@ -522,6 +541,7 @@ export function childFacts(source: TaskSource, sessionID: string | undefined): C
     currentStep,
     cost: finite(source.session(sessionID)?.cost),
     unpricedSteps: finite(source.session(sessionID)?.unpricedSteps),
+    ...(codiumSteps ? { codiumSteps } : {}),
   }
 }
 
@@ -606,6 +626,8 @@ function buildAgent(source: TaskSource, seed: AgentSeed): TaskAgent {
   const title =
     run.title || subagentTitle(input.description, input.prompt) || stripSubagentSuffix(child?.title) || "Subagent task"
   const model = modelRef(source, run.model ?? stored?.model ?? facts.lastModel ?? sessionModel(child))
+  const codiumSteps =
+    run.usage?.codiumSteps ?? facts.codiumSteps ?? (Billing.isCodium(model?.providerID) ? 1 : undefined)
   const error =
     run.error ?? partError ?? (facts.last?.error && facts.last.error !== ABORTED ? facts.last.error : undefined)
   return {
@@ -625,12 +647,14 @@ function buildAgent(source: TaskSource, seed: AgentSeed): TaskAgent {
     background,
     startedAt,
     endedAt: endedAt !== undefined && startedAt !== undefined ? Math.max(endedAt, startedAt) : endedAt,
-    tokens: run.usage?.total ?? facts.tokens,
+    tokens:
+      run.usage?.codiumSteps !== undefined || !codiumSteps ? (run.usage?.total ?? facts.tokens) : (facts.tokens ?? 0),
     toolUses: run.usage?.toolUses ?? facts.toolUses,
     model,
     error: status === "failed" ? error : undefined,
     cost: facts.cost ?? run.usage?.cost,
     unpricedSteps: facts.unpricedSteps ?? run.usage?.unpricedSteps,
+    codiumSteps,
     currentStep: facts.currentStep,
     ownedPaths:
       run.ownedPaths ??
@@ -1015,3 +1039,4 @@ export function isDismissed(card: Pick<TaskCard, "live" | "endedAt">, dismissedA
   if (card.live || dismissedAt === undefined) return false
   return card.endedAt === undefined || card.endedAt <= dismissedAt
 }
+import { Billing } from "@vectordevai/schema/billing"

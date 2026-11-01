@@ -51,8 +51,12 @@ export function budgetStopCopy(error: BudgetStopError["data"], options: { subage
 
 function spentLine(error: BudgetStopError["data"]) {
   if (error.spentUsd === undefined) return undefined
-  if (error.capUsd === undefined) return `${formatUsd(error.spentUsd)} spent`
-  return `${formatUsd(error.spentUsd)} of ${formatUsd(error.capUsd)} spent`
+  if (error.codiumSteps && !error.spentUsd) return undefined
+  const own =
+    error.capUsd === undefined
+      ? `${formatUsd(error.spentUsd)} spent`
+      : `${formatUsd(error.spentUsd)} of ${formatUsd(error.capUsd)} spent`
+  return `${own}${error.codiumSteps ? " · Codium steps not counted" : ""}`
 }
 
 // A loop is not about money, so it continues as is. A money stop continues only
@@ -60,6 +64,7 @@ function spentLine(error: BudgetStopError["data"]) {
 // limit, since every new run starts with the configured one.
 function continueLabel(error: BudgetStopError["data"]) {
   if (error.reason === "loop") return "Continue anyway"
+  if (error.reason === "steps" && error.codiumSteps && !error.spentUsd) return "Continue with a new step limit"
   if (error.capUsd !== undefined) return `Continue with a new ${formatUsd(error.capUsd)} cap`
   if (error.reason === "steps") return "Continue with a new step limit"
   return undefined

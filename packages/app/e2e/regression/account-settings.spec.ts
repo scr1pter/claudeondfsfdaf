@@ -6,6 +6,8 @@ type Fixture = {
   billing: unknown[]
   codiumReads: number
   modelReads: number
+  turnEnded: () => void
+  notifications: { title: string; description: string }[]
   confirm: () => void
   finish: () => void
   answer: () => void
@@ -19,6 +21,7 @@ const read = (page: Page) =>
       billing: state.billing,
       codiumReads: state.codiumReads,
       modelReads: state.modelReads,
+      notifications: state.notifications,
     }
   })
 const opened = async (page: Page) => (await read(page)).opened
@@ -547,4 +550,45 @@ test("Signed out, Account offers Sign in to Vector and nothing else", async ({ p
   await expect(settings.getByText("Finish signing in in your browser, then return to Vector.")).toBeVisible()
   await settings.getByRole("button", { name: "Cancel sign-in" }).click()
   await expect(settings.getByRole("button", { name: "Sign in to Vector" })).toBeVisible()
+})
+
+test("Usage shows a left-facing percentage meter and refreshes once after Codium settles", async ({ page }) => {
+  await page.clock.install()
+  await page.goto("/e2e/fixtures/account-settings.html?account=signed-in&codium=plan&view=codium-usage")
+  const card = page.locator("[data-component='vector-codium']")
+  await expect(card.getByRole("meter", { name: "This month usage left" })).toHaveAttribute("aria-valuenow", "64")
+  await expect(card.getByText("36% used · 64% left", { exact: true })).toBeVisible()
+  await expect(card.locator("[data-slot='codium-freshness']")).toHaveText("Updated just now")
+  await expect(card).not.toContainText(/purchased|top-?up|\$|Codium \d/i)
+  const alert = card.getByRole("checkbox", { name: "Notify me when 80% of this month's usage is used" })
+  await expect(alert).not.toBeChecked()
+  await page.evaluate(() => {
+    const fixture = (window as unknown as { accountFixture: Fixture }).accountFixture
+    fixture.turnEnded()
+    fixture.turnEnded()
+  })
+  const initial = (await read(page)).codiumReads
+  await page.clock.fastForward(14_999)
+  expect((await read(page)).codiumReads).toBe(initial)
+  await page.clock.fastForward(1)
+  await expect.poll(async () => (await read(page)).codiumReads).toBe(initial + 1)
+  await card.getByRole("button", { name: "Refresh", exact: true }).click()
+  await expect.poll(async () => (await read(page)).codiumReads).toBe(initial + 2)
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")))
+  expect((await read(page)).codiumReads).toBe(initial + 2)
+  await page.clock.fastForward(60_000)
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")))
+  await expect.poll(async () => (await read(page)).codiumReads).toBe(initial + 3)
+})
+
+test("Usage notifications require opt-in and do not repeat on refresh", async ({ page }) => {
+  await page.goto("/e2e/fixtures/account-settings.html?account=signed-in&codium=low&view=codium-usage")
+  const card = page.locator("[data-component='vector-codium']")
+  await expect(card.getByRole("meter", { name: "This month usage left" })).toHaveAttribute("aria-valuenow", "6")
+  expect((await read(page)).notifications).toEqual([])
+  await card.getByRole("checkbox", { name: "Notify me when 80% of this month's usage is used" }).check()
+  await expect.poll(async () => (await read(page)).notifications.length).toBe(1)
+  await card.getByRole("button", { name: "Refresh", exact: true }).click()
+  await expect(card).toHaveAttribute("aria-busy", "false")
+  expect((await read(page)).notifications).toHaveLength(1)
 })

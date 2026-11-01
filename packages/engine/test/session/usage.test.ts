@@ -90,7 +90,7 @@ describe("session usage", () => {
       peakTokens: 100,
       longestTaskMs: 20_000,
       longestTaskTokens: 0,
-      averageTokensPerChat: 50,
+      averageTokensPerChat: 100,
       completedChats: 2,
       modelResponses: 2,
       conversations: 1,

@@ -86,6 +86,20 @@ export function accountChip(status: VectorAccountStatus, codium?: ModelPlanStatu
 }
 
 const codiumChanges = new Set<() => void>()
+const codiumTurns = new Set<() => void>()
+
+/** Notifies open usage views after a Codium assistant turn ends. */
+export function codiumTurnEnded() {
+  codiumTurns.forEach((listener) => listener())
+}
+
+export function onCodiumTurnEnd(listener: () => void) {
+  codiumTurns.add(listener)
+  return () => {
+    codiumTurns.delete(listener)
+  }
+}
+
 // The one read codiumSubscribed shares: of the account signed in as `email` (none while signed out), started at `at`.
 const subscription: { email?: string; at: number; read?: Promise<boolean> } = { at: 0 }
 

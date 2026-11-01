@@ -1,4 +1,5 @@
 import { Match, Show, Switch, createMemo, type ComponentProps, type JSX } from "solid-js"
+import { Billing } from "@vectordevai/schema/billing"
 import { ProgressCircle } from "@vectordevai/ui/progress-circle"
 import { ProgressCircleV2 } from "@vectordevai/ui/v2/progress-circle-v2"
 import { Button } from "@vectordevai/ui/button"
@@ -73,13 +74,14 @@ export function SessionContextUsage(props: SessionContextUsageProps) {
   const context = createMemo(() => getSessionContext(messages(), [...providers.all().values()]))
   // The same task totals as the cost beside it: the session's own tokens plus what its subagents and Vector's helpers
   // used for it.
-  const tokens = createMemo(() => sessionTokens(info()))
+  const children = () =>
+    sync().data.session.filter((child) => child.parentID !== undefined && child.parentID === info()?.id)
+  const tokens = createMemo(() => sessionTokens(info(), messages(), children()))
   const cost = createMemo(() => {
     const model = lastAssistantModel(messages())
-    const spend = sessionSpend(info())
+    const spend = sessionSpend(info(), messages(), children())
     return sessionReading({
-      cost: spend.cost,
-      unpricedSteps: spend.unpricedSteps,
+      ...spend,
       tokens: tokens(),
       kind: spendKind(providers.all(), model?.providerID, model?.modelID),
       format: (value) => usd().format(value),
@@ -138,7 +140,10 @@ export function SessionContextUsage(props: SessionContextUsageProps) {
     <div class="flex w-[120px] flex-col gap-2">
       <ContextTooltipRow name={language.t("context.usage.cost")} value={cost()} />
       <ContextTooltipRow name={language.t("context.usage.usage")} value={`${context()?.usage ?? 0}%`} />
-      <ContextTooltipRow name={language.t("context.usage.tokens")} value={tokens().toLocaleString(language.intl())} />
+      <ContextTooltipRow
+        name={language.t("context.usage.tokens")}
+        value={context()?.codium ? Billing.LABEL : (context()?.tokens ?? 0).toLocaleString(language.intl())}
+      />
     </div>
   )
 

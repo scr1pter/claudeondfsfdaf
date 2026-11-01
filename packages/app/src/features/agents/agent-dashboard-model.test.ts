@@ -397,3 +397,10 @@ describe("agentCostLabel", () => {
     expect(agentCostLabel({ runtime: "vector", estimatedCost: "", actualCost: "$0.42", running: false })).toBe("$0.42")
   })
 })
+
+test("Codium agent cards replace zero-dollar estimates and retain mixed own-key spend", () => {
+  const input = { runtime: "vector", estimatedCost: "$9.00", running: false, billing: "codium" as const }
+  expect(agentCostLabel(input)).toBe("Codium")
+  expect(agentCostLabel({ ...input, actualCost: "$0.00" })).toBe("Codium")
+  expect(agentCostLabel({ ...input, actualCost: "$0.12" })).toBe("$0.12 + Codium")
+})

@@ -140,7 +140,14 @@ export function createSessionComposerRegionController(input: {
     return undefined
   }
 
+  const codium = () => {
+    const id = input.sessionID()
+    const message = id ? (sync().data.message[id] ?? []).findLast((message) => message.role === "assistant") : undefined
+    return Boolean(message && Billing.of(message))
+  }
+
   const tokens = () => {
+    if (codium()) return 0
     const id = input.sessionID()
     if (!id) return 0
     const data = sync().data
@@ -231,9 +238,11 @@ export function createSessionComposerRegionController(input: {
     working,
     startedAt,
     tokens,
+    codium,
     runningTasks,
     phrase,
   }
 }
 
 export type SessionComposerRegionController = ReturnType<typeof createSessionComposerRegionController>
+import { Billing } from "@vectordevai/schema/billing"

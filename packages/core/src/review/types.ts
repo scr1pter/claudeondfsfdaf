@@ -200,6 +200,7 @@ export interface ReviewOutcome {
 }
 
 export interface ReviewPass {
+  costKind?: CostKind
   name: "review" | "security" | "verify"
   model: string // "provider/model"
   costUsd?: number // absent when the pass's usage carried no price

@@ -3,6 +3,7 @@
 // here estimates from character counts, so a run whose provider reported no
 // usage yields undefined rather than a zero that would read as "free".
 import { addUsage, emptyUsage, totalTokens, type TokenUsage, type VariantEvidence } from "./economics-types"
+import { Billing } from "@vectordevai/schema/billing"
 
 // Structural subset of the SDK's AssistantMessage. Declared locally so this
 // module does not depend on generated SDK types that change shape on
@@ -10,6 +11,7 @@ import { addUsage, emptyUsage, totalTokens, type TokenUsage, type VariantEvidenc
 export type UsageBearingMessage = {
   role?: string
   providerID?: string
+  billing?: string
   modelID?: string
   variant?: string
   cost?: number
@@ -30,6 +32,7 @@ export type UsageBearingMessage = {
 }
 
 export type MeasuredUsage = {
+  codium?: true
   usage: TokenUsage
   // Absent when any measured message ran unpriced or lacks its charge: what the rest cost is not what the run cost.
   costUsd?: number
@@ -43,6 +46,8 @@ export type MeasuredUsage = {
 }
 
 export type SessionSpend = {
+  codiumSteps?: number
+  subagentCodiumSteps?: number
   cost?: number
   unpricedSteps?: number
   subagentCost?: number
@@ -126,6 +131,7 @@ export function measureUsage(messages: readonly UsageBearingMessage[]): Measured
         : undefined
   return {
     usage: measured.map(usageOf).reduce(addUsage, emptyUsage),
+    ...(assistant.some((message) => Billing.of(message)) ? { codium: true as const } : {}),
     costUsd: Number.isFinite(costUsd) ? costUsd : undefined,
     ...(unmeasured ? { partial: true as const } : {}),
     provider: attributable ? first.providerID : undefined,

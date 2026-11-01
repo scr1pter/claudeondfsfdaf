@@ -53,6 +53,7 @@ export function SessionComposerRegion(props: {
           working={controller.working}
           startedAt={controller.startedAt}
           tokens={controller.tokens}
+          codium={controller.codium}
           runningTasks={runningTasks}
           phrase={controller.phrase}
         />

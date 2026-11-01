@@ -5,6 +5,8 @@ import {
   SUBSCRIBED_FOR_MS,
   accountChip,
   codiumChanged,
+  codiumTurnEnded,
+  onCodiumTurnEnd,
   codiumSubscribed,
   newestRead,
   onCodiumChange,
@@ -323,4 +325,16 @@ test("the chip never loads a URL or a non-raster image, whatever the status carr
     "",
   ])
     expect(accountChip({ authenticated: true, pending: false, name: "Ada", avatar }).photo).toBeUndefined()
+})
+
+test("turn completion notifies open usage views without reading balances before settlement", () => {
+  const events: string[] = []
+  const end = onCodiumTurnEnd(() => events.push("turn"))
+  const change = onCodiumChange(() => events.push("balance"))
+  codiumTurnEnded()
+  expect(events).toEqual(["turn"])
+  end()
+  codiumTurnEnded()
+  expect(events).toEqual(["turn"])
+  change()
 })

@@ -69,7 +69,7 @@ import { type ServerHealth } from "@/utils/server-health"
 import { Persist, persisted } from "@/utils/persist"
 import { useMarked } from "@vectordevai/ui/context/marked"
 import { preloadMarkdown } from "@vectordevai/session-ui/markdown-cache"
-import { normalizeUsageSummary, usageStreakCalendar } from "@/utils/usage-summary"
+import { normalizeUsageSummary, usageStreakCalendar, usageTokens } from "@/utils/usage-summary"
 import { VectorAsciiField } from "@/components/vector-ascii-field"
 import { HomeUpdate } from "@/components/home-update"
 import { useUpdateAction } from "@/components/updater-action"
@@ -1068,7 +1068,8 @@ function HomeUsagePulse(props: {
           {(day) => (
             <span
               classList={{ active: day.active, today: day.today }}
-              title={`${day.date}: ${day.tokens.toLocaleString()} tokens`}
+              title={`${day.date}: ${usageTokens(day.tokens, day.codium, undefined, day.tokensUnknown)}`}
+              data-codium={day.codium ? "true" : undefined}
             >
               <i />
               <small>{day.label.slice(0, 1)}</small>
@@ -1078,8 +1079,10 @@ function HomeUsagePulse(props: {
       </div>
 
       <div class="vector-home-usage__metric">
-        <strong>{homeUsageNumber.format(usage().lifetimeTokens)}</strong>
-        <span>tokens used</span>
+        <strong>
+          {usageTokens(usage().lifetimeTokens, usage().codiumResponses, (value) => homeUsageNumber.format(value))}
+        </strong>
+        <span>model activity</span>
       </div>
       <div class="vector-home-usage__metric">
         <strong>{homeUsageNumber.format(usage().completedChats)}</strong>
@@ -1090,7 +1093,7 @@ function HomeUsagePulse(props: {
           when={favoriteModel()}
           fallback={
             <>
-              <strong>No model yet</strong>
+              <strong>{usage().codiumResponses ? "Vector Codium" : "No model yet"}</strong>
               <span>favorite model</span>
             </>
           }
@@ -1098,7 +1101,9 @@ function HomeUsagePulse(props: {
           {(model) => (
             <>
               <strong>{homeModelLabel(model().modelID)}</strong>
-              <span>{model().percentage.toFixed(0)}% of model use</span>
+              <span>
+                {usage().legacyCodium ? "own model activity" : `${model().percentage.toFixed(0)}% of own model use`}
+              </span>
             </>
           )}
         </Show>
@@ -1279,10 +1284,7 @@ function HomeProjectColumn(props: {
   )
 
   return (
-    <aside
-      class="mt-6 flex min-h-0 min-w-0 flex-col gap-4 overflow-hidden lg:mt-14 lg:pt-[52px]"
-      aria-label="Agents"
-    >
+    <aside class="mt-6 flex min-h-0 min-w-0 flex-col gap-4 overflow-hidden lg:mt-14 lg:pt-[52px]" aria-label="Agents">
       <div class="flex h-7 min-w-0 shrink-0 items-center justify-between pl-1.5 pr-3">
         <div class={HOME_SECTION_LABEL}>Agents</div>
         <Show when={global.servers.list().length === 1}>

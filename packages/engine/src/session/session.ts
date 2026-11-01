@@ -1347,6 +1347,12 @@ export function summarizeUsage(
       )
       .map((message) => `${message.sessionID}:${message.parentID}`),
   )
+  const ownChats = new Set(
+    own
+      .filter((message) => usageTokens(message) > 0)
+      .map((message) => `${message.sessionID}:${message.parentID}`)
+      .filter((id) => completed.has(id)),
+  )
   const modelGroups = metered.reduce((result, message) => {
     const modelID = message.modelID.endsWith("-fast") ? message.modelID.slice(0, -5) : message.modelID
     const key = `${message.providerID}\n${modelID}`
@@ -1463,7 +1469,7 @@ export function summarizeUsage(
     completedChats: completed.size,
     conversations: new Set(own.map((message) => message.sessionID)).size,
     activeDays: active.size,
-    averageTokensPerChat: completed.size > 0 ? Math.round(lifetimeTokens / completed.size) : 0,
+    averageTokensPerChat: ownChats.size > 0 ? Math.round(lifetimeTokens / ownChats.size) : 0,
     modelResponses: assistant.length,
     favoriteModels: [...modelGroups.values()]
       .map((model): UsageModel => ({ ...model, percentage: percentage(model.tokens, model.responses) }))

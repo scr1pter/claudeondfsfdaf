@@ -1,4 +1,5 @@
 import { For, Show, createMemo, createSignal } from "solid-js"
+import { CodiumUsage } from "@vectordevai/core/codium-usage"
 import { TooltipV2 } from "@vectordevai/ui/v2/tooltip-v2"
 import { useBackgroundTasks } from "@/features/background-tasks/use-background-tasks"
 import { desktopSpendAgents, taskCost } from "@/features/background-tasks/task-board-model"
@@ -34,12 +35,19 @@ export function SessionCostReadout() {
   const { params } = useSessionLayout()
 
   const info = createMemo(() => (params.id ? sync().session.get(params.id) : undefined))
-  // The task's spend, so a session that delegated most of its work does not read as cheap.
-  const cost = createMemo(() => sessionSpend(info()).cost)
-  const unpriced = createMemo(() => sessionSpend(info()).unpricedSteps)
-  const tokens = createMemo(() => sessionTokens(info()))
+  const messages = createMemo(() => (params.id ? (sync().data.message[params.id] ?? []) : []))
   const [hovered, setHovered] = createSignal(false)
-  const delegated = createDelegatedSpend(info, hovered)
+  const delegated = createDelegatedSpend(info, hovered, messages)
+  const children = () => [
+    ...delegated().sessions,
+    ...sync().data.session.filter((child) => child.parentID !== undefined && child.parentID === info()?.id),
+  ]
+  // The task's spend, so a session that delegated most of its work does not read as cheap.
+  const spend = createMemo(() => sessionSpend(info(), messages(), children()))
+  const cost = () => spend().cost
+  const unpriced = () => CodiumUsage.ownUnpricedSteps(spend().unpricedSteps, spend().codiumSteps)
+  const codium = () => spend().codiumSteps
+  const tokens = createMemo(() => sessionTokens(info(), messages(), children()))
   const tasks = useBackgroundTasks()
   const desktop = createMemo(() =>
     tasks?.rootID() === info()?.id ? desktopSpendAgents(tasks?.cards().flatMap((card) => card.agents) ?? []) : [],
@@ -64,12 +72,11 @@ export function SessionCostReadout() {
     return undefined
   })
   const pill = createMemo(() => {
-    const model = lastAssistantModel(params.id ? (sync().data.message[params.id] ?? []) : [])
+    const model = lastAssistantModel(messages())
     const id = runID()
     return spendPill({
       session: sessionReading({
-        cost: cost(),
-        unpricedSteps: unpriced(),
+        ...spend(),
         tokens: tokens(),
         kind: spendKind(providers.all(), model?.providerID, model?.modelID),
         format: (value) => usd().format(value),
@@ -87,17 +94,18 @@ export function SessionCostReadout() {
       ? [{ label: delegated().split ? "Subagents" : "Subagents and helpers", ...delegated().subagents! }]
       : []),
   ])
-  const partText = (part: { cost: number; unpricedSteps: number; tokens: number }) =>
+  const partText = (part: { cost: number; unpricedSteps: number; codiumSteps: number; tokens: number }) =>
     `${formatSessionCost({
       cost: part.cost,
       unpricedSteps: part.unpricedSteps,
+      codiumSteps: part.codiumSteps,
       format: (value) => usd().format(value),
       t: language.t,
-    })} · ${compactTokens(part.tokens)}`
+    })}${part.tokens ? ` · ${CodiumUsage.withCodium(compactTokens(part.tokens), part.codiumSteps)}` : ""}`
 
   // Only appears once the session has actually spent something.
   return (
-    <Show when={params.id && (cost() > 0 || tokens() > 0 || desktop().length > 0)}>
+    <Show when={params.id && (cost() > 0 || tokens() > 0 || codium() > 0 || desktop().length > 0)}>
       <TooltipV2
         placement="bottom"
         value={
@@ -116,7 +124,12 @@ export function SessionCostReadout() {
             </Show>
             <div class="flex items-center justify-between gap-4">
               <span class="text-v2-text-text-muted">Tokens</span>
-              <span class="text-v2-text-text-base">{tokens().toLocaleString(language.intl())}</span>
+              <span class="text-v2-text-text-base">
+                {CodiumUsage.withCodium(
+                  tokens() || !codium() ? tokens().toLocaleString(language.intl()) : undefined,
+                  codium(),
+                )}
+              </span>
             </div>
             <Show when={parts().length > 0}>
               <div class="pt-1 text-[11px] leading-4 text-v2-text-text-faint">Of which</div>
@@ -161,6 +174,11 @@ export function SessionCostReadout() {
                 {language.t("session.cost.unpricedNote")}
               </div>
             </Show>
+            <Show when={codium() > 0}>
+              <div class="pt-1 text-[11px] leading-4 text-v2-text-text-faint">
+                {language.t("session.cost.codiumNote")}
+              </div>
+            </Show>
             <div class="pt-1 text-[11px] leading-4 text-v2-text-text-faint">{SPEND_TOOLTIP[pill().kind]}</div>
             <Show when={pill().capUsd} keyed>
               {(capUsd) => <div class="text-[11px] leading-4 text-v2-text-text-faint">{capTooltip(capUsd)}</div>}
@@ -179,11 +197,11 @@ export function SessionCostReadout() {
           class="flex h-6 shrink-0 items-center gap-1.5 rounded-full border border-[color:var(--vx-line)] bg-[color:color-mix(in_srgb,var(--vx-text)_3%,transparent)] px-2.5 text-[11px] font-medium tabular-nums text-[color:color-mix(in_srgb,var(--vx-text)_62%,transparent)] transition-colors duration-150 hover:border-[color:var(--vx-line)] hover:text-[color:color-mix(in_srgb,var(--vx-text)_80%,transparent)]"
         >
           <span classList={{ "text-[#a78bfa]": !pill().warn, "text-[color:var(--vx-amber)]": pill().warn }}>
-            {cost() > 0 || tokens() > 0 ? pill().label : `Desktop ${taskCost(desktop())}`}
+            {cost() > 0 || tokens() > 0 || codium() > 0 ? pill().label : `Desktop ${taskCost(desktop())}`}
           </span>
           <Show when={tokens() > 0}>
             <span class="text-[color:color-mix(in_srgb,var(--vx-text)_25%,transparent)]">·</span>
-            <span>{compactTokens(tokens())}</span>
+            <span>{CodiumUsage.withCodium(compactTokens(tokens()), codium())}</span>
           </Show>
         </div>
       </TooltipV2>

@@ -671,6 +671,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     capLabel({
       depth: researchDepth(),
       local: hosted()?.local === true,
+      codium: Billing.isCodium(props.controls.model.selection.current()?.provider?.id),
       own: sync().data.config.budget?.run,
       limits: sync().data.config.research?.limits,
     }),
@@ -3036,3 +3037,4 @@ function ModelControlContent(props: { state: ComposerModelControlState; v2?: boo
     </>
   )
 }
+import { Billing } from "@vectordevai/schema/billing"

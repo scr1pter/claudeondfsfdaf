@@ -6,6 +6,7 @@ import {
   aggregateStatus,
   buildTaskCards,
   childRecord,
+  childFacts,
   countAgents,
   elapsedMs,
   formatAgentCount,
@@ -1444,4 +1445,37 @@ describe("cards the event stream left behind", () => {
     expect(idleLiveSessions(agents, (id) => status[id])).toEqual(["ses_cached", "ses_idle"])
     expect(idleLiveSessions([], () => undefined)).toEqual([])
   })
+})
+
+test("child usage retains own-key step tokens and suppresses Codium raw usage", () => {
+  const data = fixture()
+  const tokens = { input: 90000, output: 10000, reasoning: 0, cache: { read: 0, write: 0 } }
+  addAssistant(
+    data,
+    "codium",
+    "user",
+    [{ id: "codium-step", type: "step-finish", reason: "stop", cost: 9, tokens } as Part],
+    { providerID: "vector-plan", tokens },
+    "ses_child",
+  )
+  addAssistant(
+    data,
+    "own",
+    "user",
+    [
+      {
+        id: "own-step",
+        type: "step-finish",
+        reason: "stop",
+        cost: 0.12,
+        tokens: { ...tokens, input: 50, output: 10 },
+      } as Part,
+    ],
+    {},
+    "ses_child",
+  )
+  expect(childFacts(source(data), "ses_child")).toMatchObject({ tokens: 60, codiumSteps: 1 })
+  delete data.parts.codium
+  delete data.parts.own
+  expect(childFacts(source(data), "ses_child")).toMatchObject({ tokens: 0, codiumSteps: 1 })
 })

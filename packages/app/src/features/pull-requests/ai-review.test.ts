@@ -1577,9 +1577,7 @@ describe("cheaper first pass", () => {
         "The double-check did not finish, so the first pass's 2 findings were left out: with a triage model, only findings the review model confirmed are shown.",
     })
     expect(unchecked.selection.dropped).toContainEqual({ reason: "unconfirmed", count: 2 })
-    expect(unchecked.notes).toContain(
-      noteTriageUnchecked(2, "openrouter/cheap-coder", "anthropic/claude-sonnet-4-5"),
-    )
+    expect(unchecked.notes).toContain(noteTriageUnchecked(2, "openrouter/cheap-coder", "anthropic/claude-sonnet-4-5"))
   })
 
   test("Review again runs the double-check again when it did not finish, instead of reusing the review", async () => {
@@ -1598,7 +1596,9 @@ describe("cheaper first pass", () => {
     const outcome = (await run(again.client, { catalog: [sonnet, cheap], previous }))!
     expect(outcome.unchanged).toBeUndefined()
     expect(again.calls.prompt.filter(isVerify)).toHaveLength(1)
-    expect(outcome.selection.inline.map((finding) => [finding.title, finding.verified])).toEqual([[offByOne.title, true]])
+    expect(outcome.selection.inline.map((finding) => [finding.title, finding.verified])).toEqual([
+      [offByOne.title, true],
+    ])
   })
 
   test("says so when the triage model is not connected, and runs everything on the review model", async () => {
@@ -1769,7 +1769,9 @@ describe("applying a fix", () => {
   }
 
   test("never moves a fix onto the same text somewhere else once the reviewed lines changed", () => {
-    expect(applyFix(twoFunctions, nullFix)).toBe(twoFunctions.replace("  return null\n}\n\nexport", "  return undefined\n}\n\nexport"))
+    expect(applyFix(twoFunctions, nullFix)).toBe(
+      twoFunctions.replace("  return null\n}\n\nexport", "  return undefined\n}\n\nexport"),
+    )
     const edited = twoFunctions.replace("  return null\n}\n\nexport", "  return fallback(x)\n}\n\nexport")
     expect(applyFix(edited, nullFix)).toBeUndefined()
     // Without the lines around it, a fix applies only exactly where it was reviewed.
@@ -1802,7 +1804,9 @@ describe("applying a fix", () => {
     expect(afterFixes(twelve, [])).toEqual(twelve)
     // The lines a fix replaces must still be the reviewed ones: another fix that rewrote them stops it.
     expect(afterFixes(at(10, ["const v10 = 0"]), [ten])).toBeUndefined()
-    expect(afterFixes(at(11, ["const v11 = 0"]), [{ ...ten, endLine: 11, before: [code(10), code(11)] }])).toBeUndefined()
+    expect(
+      afterFixes(at(11, ["const v11 = 0"]), [{ ...ten, endLine: 11, before: [code(10), code(11)] }]),
+    ).toBeUndefined()
   })
 
   test("refuses a moved fix when the reviewed lines now appear more than once nearby", () => {
@@ -1967,4 +1971,143 @@ describe("the findings list", () => {
       "Double-check · b/strong · 1.0k tokens",
     ])
   })
+})
+
+test("live Codium review figures are hidden while own-key reviewer totals remain visible", () => {
+  const seen: ReviewSpend[] = []
+  const spend = trackReviewSpend((value) => seen.push(value))
+  spend.add("codium", "codium")
+  const event = (sessionID: string, cost: number, input: number, providerID: string) => ({
+    type: "message.updated",
+    properties: {
+      info: {
+        id: sessionID,
+        sessionID,
+        role: "assistant",
+        providerID,
+        cost,
+        tokens: { input, output: 20, reasoning: 0, cache: { read: 0, write: 0 } },
+      },
+    },
+  })
+  spend.observe(event("codium", 9, 90000, "vector-plan"))
+  expect(reviewSpendText(seen.at(-1)!)).toBe("Codium")
+  spend.add("own", "priced")
+  spend.observe(event("own", 0.12, 100, "anthropic"))
+  expect(reviewSpendText(seen.at(-1)!)).toBe("$0.12 + Codium · 120 tokens + Codium")
+  expect(
+    passLines({
+      cost: {
+        kind: "codium",
+        costUsd: 9,
+        input: 90000,
+        output: 10000,
+        reasoning: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        model: "vector-plan/vector-flash",
+      },
+      passes: [
+        { name: "review", model: "vector-plan/vector-flash", input: 90000, output: 10000, cacheRead: 0, costUsd: 9 },
+      ],
+    }),
+  ).toEqual(["Review · Vector Codium · vector-flash · Codium"])
+})
+
+test("failed Codium reviewers cannot overwrite live progress with raw usage", async () => {
+  const progress: Parameters<NonNullable<ReviewRunInput["onProgress"]>>[0][] = []
+  const { client } = fakeClient({
+    files: { "src/list.ts": HEAD, ...NO_VERIFY },
+    reply: () => {
+      const message = answer(undefined, 9)
+      return {
+        ...message,
+        info: {
+          ...message.info,
+          providerID: "vector-plan",
+          billing: "codium",
+          tokens: { input: 90000, output: 10000, reasoning: 0, cache: { read: 0, write: 0 } },
+        },
+      }
+    },
+  })
+  const model: ReviewModel = { providerID: "vector-plan", modelID: "vector-flash", context: 200000, costKind: "codium" }
+  await expect(
+    run(client, {
+      catalog: [model],
+      preferredModels: ["vector-plan/vector-flash"],
+      onProgress: (event) => progress.push(event),
+    }),
+  ).rejects.toThrow("No review came back. Codium.")
+  expect(progress.findLast((event) => event.type === "spend")).toEqual({
+    type: "spend",
+    costUsd: 0,
+    tokens: 0,
+    codium: true,
+  })
+})
+
+test("failed mixed reviews keep own-key charges when other messages use Codium", async () => {
+  const progress: Parameters<NonNullable<ReviewRunInput["onProgress"]>>[0][] = []
+  const { client } = fakeClient({
+    files: { "src/list.ts": HEAD, ...NO_VERIFY },
+    reply: (input) => {
+      const message = answer(undefined, input.sessionID === "ses_1" ? 9 : 0.12)
+      return input.sessionID === "ses_1"
+        ? { ...message, info: { ...message.info, providerID: "vector-plan", billing: "codium" } }
+        : message
+    },
+  })
+  await expect(
+    run(client, { diff: join(listDiff, authDiff), onProgress: (event) => progress.push(event) }),
+  ).rejects.toThrow("$0.24 + Codium and 2.4k tokens + Codium so far.")
+  expect(progress.findLast((event) => event.type === "spend")).toEqual({
+    type: "spend",
+    costUsd: 0.24,
+    tokens: 2400,
+    codium: true,
+  })
+})
+
+test("per-pass cost kinds preserve own priced and free figures beside Codium", () => {
+  const passes = [
+    {
+      name: "review" as const,
+      model: "vector-plan/vector-flash",
+      costKind: "codium" as const,
+      input: 90000,
+      output: 10000,
+      cacheRead: 0,
+      costUsd: 9,
+    },
+    {
+      name: "verify" as const,
+      model: "anthropic/sonnet",
+      costKind: "priced" as const,
+      input: 100,
+      output: 20,
+      cacheRead: 0,
+      costUsd: 0.12,
+    },
+  ]
+  const cost = {
+    kind: "unknown" as const,
+    costUsd: 9.12,
+    input: 0,
+    output: 0,
+    reasoning: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    model: "multiple",
+  }
+  expect(passLines({ cost, passes })).toEqual([
+    "Review · Vector Codium · vector-flash · Codium",
+    "Double-check · anthropic/sonnet · $0.12 · 120 tokens",
+  ])
+  expect(
+    passLines({ cost: { ...cost, kind: "codium" }, passes: [{ ...passes[1]!, costKind: "free", costUsd: 0 }] }),
+  ).toEqual(["Double-check · anthropic/sonnet · $0.00 · 120 tokens"])
+  expect(passLines({ cost, passes: [{ ...passes[1]!, costKind: "plan" }] })).toEqual([
+    "Double-check · anthropic/sonnet · 120 tokens",
+  ])
 })

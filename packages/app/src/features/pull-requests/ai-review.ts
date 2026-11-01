@@ -1,4 +1,6 @@
 import { ModelPlanStatus } from "@vectordevai/core/model-plan-status"
+import { Billing } from "@vectordevai/schema/billing"
+import { CodiumUsage } from "@vectordevai/core/codium-usage"
 import { isFreeModel } from "@vectordevai/schema/free-model"
 import { providerUsable } from "@vectordevai/schema/provider-policy"
 import { totalTokens } from "../economics/economics-types"
@@ -184,7 +186,7 @@ export type ReviewEstimate = {
   high?: number
 }
 
-export type ReviewSpend = { costUsd?: number; tokens: number; partial?: true }
+export type ReviewSpend = { costUsd?: number; tokens: number; partial?: true; codium?: true }
 
 export type ReviewProgress =
   | { type: "status"; text: string }
@@ -291,6 +293,7 @@ export type ReviewMessage = {
   info: {
     role: string
     providerID?: string
+    billing?: string
     modelID?: string
     cost?: number
     unpriced?: boolean
@@ -360,6 +363,7 @@ export function costKindOf(
   cost?: { input: number; output: number },
   modelID = "",
 ) {
+  if (Billing.isCodium(provider.id)) return "codium" satisfies CostKind
   if (isFreeModel({ providerID: provider.id, id: modelID, cost })) return "free" satisfies CostKind
   const listed = !!cost && (cost.input > 0 || cost.output > 0)
   if (listed) return "priced" satisfies CostKind
@@ -539,7 +543,7 @@ function promptHeadFiles(files: readonly HeadFile[], inlined: ReadonlySet<string
 // and tokens while the review runs. The finished review's figure still comes from the sessions' recorded messages.
 export function trackReviewSpend(onSpend: (spend: ReviewSpend) => void) {
   const sessions = new Map<string, CostKind>()
-  const messages = new Map<string, { cost: number; tokens: number; partial: boolean }>()
+  const messages = new Map<string, { cost: number; tokens: number; partial: boolean; codium: boolean }>()
   return {
     add(sessionID: string, costKind: CostKind = "priced") {
       sessions.set(sessionID, costKind)
@@ -548,17 +552,21 @@ export function trackReviewSpend(onSpend: (spend: ReviewSpend) => void) {
       if (event.type !== "message.updated") return
       const info = (event.properties as { info?: ReviewMessage["info"] & { id?: string; sessionID?: string } })?.info
       if (!info?.id || info.role !== "assistant" || !info.sessionID || !sessions.has(info.sessionID)) return
+      const codium = Boolean(Billing.of(info)) || (sessions.get(info.sessionID) === "codium" && !info.providerID)
       const tokens = info.tokens
       const count = tokens
         ? tokens.input + tokens.output + tokens.reasoning + tokens.cache.read + tokens.cache.write
         : 0
       const priced =
-        ["priced", "free"].includes(sessions.get(info.sessionID)!) && Number.isFinite(info.cost) && info.cost! >= 0
+        ["priced", "free", "codium"].includes(sessions.get(info.sessionID)!) &&
+        Number.isFinite(info.cost) &&
+        info.cost! >= 0
       messages.set(info.id, {
-        cost: priced ? info.cost! : 0,
-        tokens: count,
+        cost: priced && !codium ? info.cost! : 0,
+        tokens: codium ? 0 : count,
+        codium,
         // A running or stopped attempt without counters cannot establish zero spend.
-        partial: !priced || !!info.unpriced || (count === 0 && !info.cost),
+        partial: !codium && (!priced || !!info.unpriced || (count === 0 && !info.cost)),
       })
       const values = [...messages.values()]
       const cost = values.reduce((total, message) => total + message.cost, 0)
@@ -567,15 +575,18 @@ export function trackReviewSpend(onSpend: (spend: ReviewSpend) => void) {
         costUsd: cost > 0 || !partial ? cost : undefined,
         tokens: values.reduce((total, message) => total + message.tokens, 0),
         ...(partial ? { partial: true } : {}),
+        ...(values.some((message) => message.codium) ? { codium: true as const } : {}),
       })
     },
   }
 }
 
 export function reviewSpendText(spend: ReviewSpend) {
+  if (spend.codium && !spend.costUsd && !spend.tokens && !spend.partial) return Billing.LABEL
   const tokens = `${formatTokens(spend.tokens)} tokens`
-  if (spend.costUsd === undefined) return `Cost unknown · ${tokens}`
-  return `${spend.partial ? "At least " : ""}${formatUsd(spend.costUsd)} · ${tokens}`
+  const own =
+    spend.costUsd === undefined ? "Cost unknown" : `${spend.partial ? "At least " : ""}${formatUsd(spend.costUsd)}`
+  return `${CodiumUsage.withCodium(own, Number(spend.codium))} · ${CodiumUsage.withCodium(tokens, Number(spend.codium))}`
 }
 
 type StopReason = "user" | "timeout"
@@ -823,24 +834,8 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
   const reports = runs.flatMap((run) => (run.report ? [{ source: run.name, report: run.report }] : []))
   if (!reports.length) {
     stop.dispose()
-    const usage = measureUsage(runs.flatMap((run) => run.usage.messages))
-    if (usage) {
-      const known = runs
-        .flatMap((run) => run.usage.messages)
-        .reduce((total, message) => total + (Number.isFinite(message.cost) && message.cost! > 0 ? message.cost! : 0), 0)
-      const costUsd = ["priced", "free"].includes(first.costKind) ? (usage.costUsd ?? (known || undefined)) : undefined
-      input.onProgress?.({
-        type: "spend",
-        costUsd,
-        tokens: totalTokens(usage.usage),
-        ...(usage.partial ||
-        usage.costUsd === undefined ||
-        costUsd === undefined ||
-        runs.some((run) => !run.usage.complete)
-          ? { partial: true }
-          : {}),
-      })
-    }
+    const spend = reviewProgressSpend(runs, first)
+    if (spend) input.onProgress?.({ type: "spend", ...spend })
     throw new Error(
       `Vector could not finish this review: ${(runs.find((run) => run.detail)?.detail ?? "no reviewer answered").replace(/[.\s]+$/, "")}.${spentSoFar(runs, first)}`,
     )
@@ -986,9 +981,12 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
   const passes = [...runs, ...(verify ? [{ ...verify, name: "verify" as const }] : [])].flatMap((run) => {
     const spent = measureUsage(run.usage.messages)
     if (!spent) return []
+    const identity = spent.provider && spent.model ? `${spent.provider}/${spent.model}` : undefined
+    const costKind = identity ? catalog.find((entry) => modelName(entry) === identity)?.costKind : undefined
     return [
       {
         name: run.name,
+        ...(costKind ? { costKind } : {}),
         model:
           spent.provider && spent.model
             ? `${spent.provider}/${spent.model}`
@@ -1471,13 +1469,39 @@ function estimateReview(input: {
 // listed price makes a cost: a subscription or an unlisted model reports tokens alone. A reviewer whose history could
 // not be read spent an unknown amount, so the known totals are then floors, as the spend event says.
 function spentSoFar(runs: readonly { usage: Usage }[], model: ReviewModel) {
-  const usage = measureUsage(runs.flatMap((run) => run.usage.messages))
-  if (!usage) return ""
-  const unread = runs.some((run) => !run.usage.complete)
-  const tokens = `${formatTokens(totalTokens(usage.usage))} tokens`
-  if (model.costKind !== "priced" || usage.costUsd === undefined || usage.mixedModels)
-    return ` ${unread ? "At least " : ""}${tokens} so far.`
-  return ` ${usage.partial || unread ? "At least " : ""}${formatUsd(usage.costUsd)} and ${tokens} so far.`
+  const spend = reviewProgressSpend(runs, model)
+  if (!spend) return ""
+  if (spend.codium && !spend.tokens && !spend.costUsd && !spend.partial) return " Codium."
+  const tokens = CodiumUsage.withCodium(`${formatTokens(spend.tokens)} tokens`, Number(spend.codium))
+  const prefix = (spend.costUsd === undefined ? runs.some((run) => !run.usage.complete) : spend.partial)
+    ? "At least "
+    : ""
+  if (spend.costUsd === undefined) return ` ${prefix}${tokens} so far.`
+  return ` ${prefix}${CodiumUsage.withCodium(formatUsd(spend.costUsd), Number(spend.codium))} and ${tokens} so far.`
+}
+
+// Session assignment is a fallback for older replies; explicit per-message billing wins after a model switch.
+function reviewProgressSpend(runs: readonly { usage: Usage }[], model: ReviewModel): ReviewSpend | undefined {
+  const messages = runs.flatMap((run) => run.usage.messages)
+  const codium = model.costKind === "codium" || messages.some((message) => Billing.of(message))
+  const own = messages.filter((message) => !Billing.of(message) && (model.costKind !== "codium" || message.providerID))
+  const usage = measureUsage(own)
+  if (!usage) return codium ? { costUsd: 0, tokens: 0, codium: true } : undefined
+  const known = own.reduce(
+    (total, message) => total + (Number.isFinite(message.cost) && message.cost! > 0 ? message.cost! : 0),
+    0,
+  )
+  const costUsd = ["priced", "free", "codium"].includes(model.costKind)
+    ? (usage.costUsd ?? (known || undefined))
+    : undefined
+  return {
+    costUsd,
+    tokens: totalTokens(usage.usage),
+    ...(usage.partial || usage.costUsd === undefined || costUsd === undefined || runs.some((run) => !run.usage.complete)
+      ? { partial: true }
+      : {}),
+    ...(codium ? { codium: true } : {}),
+  }
 }
 
 // Every assistant step of the session, so the cost includes the finalize step.
@@ -1720,17 +1744,24 @@ export function verificationChip(verification: NonNullable<ReviewOutcomeLite["ve
 }
 
 // What each pass of a finished review spent, one line each. Dollars show only when the review as a whole has a price;
-// otherwise, as for a subscription or Vector Codium, only tokens.
+// otherwise subscription passes show tokens, while Codium passes show only their plan label.
 export function passLines(outcome: Pick<ReviewOutcomeLite, "passes" | "cost">) {
-  const priced = outcome.cost?.kind === "priced"
-  return (outcome.passes ?? []).map((pass) =>
-    [
+  return (outcome.passes ?? []).map((pass) => {
+    const codium =
+      pass.model.startsWith(`${Billing.CODIUM_PROVIDER_ID}/`) ||
+      (!pass.model.includes("/") && (pass.costKind ?? outcome.cost?.kind) === "codium")
+    const priced = pass.costKind
+      ? pass.costKind === "priced" || pass.costKind === "free"
+      : outcome.cost?.kind === "priced"
+    return [
       PASS_LABEL[pass.name],
-      pass.model,
-      ...(priced && pass.costUsd !== undefined ? [formatUsd(pass.costUsd)] : []),
-      `${formatTokens(pass.input + pass.output)} tokens`,
-    ].join(" · "),
-  )
+      pass.model.startsWith(`${Billing.CODIUM_PROVIDER_ID}/`)
+        ? `Vector Codium · ${pass.model.slice(Billing.CODIUM_PROVIDER_ID.length + 1)}`
+        : pass.model,
+      ...(priced && pass.costUsd !== undefined && !codium ? [formatUsd(pass.costUsd)] : []),
+      codium ? Billing.LABEL : `${formatTokens(pass.input + pass.output)} tokens`,
+    ].join(" · ")
+  })
 }
 
 export function countBySeverity(groups: readonly { severity: Severity; findings: readonly unknown[] }[]) {
@@ -2072,6 +2103,7 @@ export function estimateText(estimate: ReviewEstimate) {
     ? `Your uncommitted changes touch ${count} files.`
     : `This pull request changes ${count} files.`
   const model = estimate.model ?? "your default model"
+  if (estimate.costKind === "codium") return `${size} Runs on your Vector Codium plan.`
   if (estimate.low !== undefined && estimate.high !== undefined)
     return `${size} With ${model} a review costs about ${formatUsd(estimate.low)}–${formatUsd(estimate.high)}.`
   if (estimate.costKind === "free") return `${size} It runs on ${model.replace(/:free$/, "")} at no charge.`
