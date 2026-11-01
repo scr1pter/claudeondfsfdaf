@@ -242,9 +242,9 @@ jobs:
           set -euo pipefail
           mkdir -m 700 "$RUNNER_TEMP/vector-probe-tools"
           bun packages/engine/src/index.ts github sandbox --help > "$RUNNER_TEMP/vector-probe-tools/cli-help.txt" 2>&1
-          rg -q 'prepare' "$RUNNER_TEMP/vector-probe-tools/cli-help.txt"
-          rg -q 'run' "$RUNNER_TEMP/vector-probe-tools/cli-help.txt"
-          rg -q 'finish' "$RUNNER_TEMP/vector-probe-tools/cli-help.txt"
+          grep -q 'prepare' "$RUNNER_TEMP/vector-probe-tools/cli-help.txt"
+          grep -q 'run' "$RUNNER_TEMP/vector-probe-tools/cli-help.txt"
+          grep -q 'finish' "$RUNNER_TEMP/vector-probe-tools/cli-help.txt"
           bun build --target=node packages/engine/test/fixture/sandbox-runner.ts --outfile "$RUNNER_TEMP/vector-probe-tools/runner.mjs"
           bun build --target=node packages/engine/test/fixture/sandbox-probe.ts --outfile "$RUNNER_TEMP/vector-probe-tools/probe.mjs"
           sudo -n install -m 0555 "$RUNNER_TEMP/vector-probe-tools/probe.mjs" /opt/vector-sandbox-probe.mjs
