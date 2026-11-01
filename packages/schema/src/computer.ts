@@ -379,6 +379,9 @@ export const AppAskMetadata = Schema.Struct({
     teamId: optional(TeamId),
     verified: Schema.Boolean,
     category: AppCategory,
+    /** Observed process/path; unsigned task consent cannot bind two missing identity fields. */
+    pid: optional(PositiveInt),
+    path: optional(Path),
     icon: optional(Icon),
     ownBuild: optional(Schema.Struct({ repo: Safe(256) })),
   }),
@@ -414,11 +417,21 @@ export interface SensitiveAskMetadata extends Schema.Schema.Type<typeof Sensitiv
 export const SensitiveAskMetadata = Schema.Struct({
   action: Schema.Literals(["click", "type", "key", "drag", "open"]),
   why: SensitiveWhy,
-  target: Schema.Struct({ appName: Safe(256), appKey: AppKey }),
+  target: Schema.Struct({
+    appName: Safe(256),
+    appKey: AppKey,
+    /** Observed target identity for the desktop's live, once-only proof check. */
+    windowId: optional(Id),
+    pid: optional(PositiveInt),
+    ref: optional(UiRef),
+    elementId: optional(Id),
+  }),
   /** A verified accessibility label, shown quoted. */
   targetName: optional(Safe(LIMITS.labelChars)),
   /** The exact text to be typed, or the first characters of a paste. */
   text: optional(Bounded(LIMITS.typeTextChars)),
+  /** Binds a Paste approval to the complete observed clipboard without retaining its text in main's proof store. */
+  clipboardHash: optional(Schema.String.check(Schema.isPattern(/^[0-9a-f]{64}$/))),
   /** `run_program`: the full path. */
   path: optional(Path),
   /** `new_destination`: shown in full. */
@@ -730,6 +743,8 @@ export const InspectResult = Schema.Struct({
   element: optional(
     Schema.Struct({
       role: Bounded(64),
+      ref: optional(UiRef),
+      elementId: optional(Id),
       label: optional(Bounded(1024)),
       secure: Schema.Boolean,
       enabled: Schema.Boolean,
@@ -1024,8 +1039,9 @@ export const BridgeCommands = {
       allowedApps: optional(Schema.Array(AppKey).check(Schema.isMaxLength(LIMITS.batchSteps))),
       approvals: optional(
         // One live step can require both an app approval and a separate sensitive-action approval.
+        // Each reason has its own proof; provider_check can carry three independent provider flags.
         Schema.Array(Schema.Struct({ index: NonNegativeInt, requestID: RequestID })).check(
-          Schema.isMaxLength(2 * LIMITS.batchSteps),
+          Schema.isMaxLength((SensitiveWhy.literals.length + 3) * LIMITS.batchSteps),
         ),
       ),
       settleMs: Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 5000 })),
@@ -1268,18 +1284,30 @@ export const TreeResult = Schema.Struct({
 export interface HitResult extends Schema.Schema.Type<typeof HitResult> {}
 export const HitResult = Schema.Struct({
   ref: optional(Id),
+  /** Stable native element identity within this helper session, even when a fresh ref has a newer generation. */
+  elementId: optional(Id),
   role: Bounded(64),
   name: optional(Bounded(1024)),
   secure: Schema.Boolean,
+  enabled: optional(Schema.Boolean),
+  editable: optional(Schema.Boolean),
   owner: AppIdentity,
   windowId: WindowId,
+  signals: optional(Schema.Struct({ childShell: optional(Schema.Boolean), windowClass: optional(Bounded(256)) })),
+  windowTitle: optional(Bounded(1024)),
   elevated: optional(Schema.Boolean),
+  /** Helper-observed context, never model assertions. Missing observations do not waive live gates. */
+  document: optional(Path),
+  programPath: optional(Path),
+  layout: InspectResult.fields.layout,
+  focusedMenuShortcuts: InspectResult.fields.focusedMenuShortcuts,
 }).annotate({ identifier: "Computer.HitResult" })
 
 /**
  * Input ops. Each is atomic in the helper: the ownership check and the posting happen in one call, and held keys and
  * buttons are released in the same call. Pointer ops carry frame pixels of the named capture; keyboard ops carry the
- * pid the focused app must belong to.
+ * pid the focused app must belong to. When provided, windowId and ref bind the live focused window and native
+ * element reference too; the helper checks all three immediately before posting.
  */
 export const InputOp = Schema.Union([
   Schema.Struct({
@@ -1311,17 +1339,23 @@ export const InputOp = Schema.Union([
   Schema.Struct({
     op: Schema.Literal("input.key"),
     pid: PositiveInt,
+    windowId: optional(WindowId),
+    ref: optional(Id),
     combo: Schema.Array(KeyName).check(Schema.isLengthBetween(1, 8)),
     repeat: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: LIMITS.repeatMax })),
   }),
   Schema.Struct({
     op: Schema.Literal("input.type"),
     pid: PositiveInt,
+    windowId: optional(WindowId),
+    ref: optional(Id),
     text: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(LIMITS.typeTextChars)),
   }),
   Schema.Struct({
     op: Schema.Literal("input.hold"),
     pid: PositiveInt,
+    windowId: optional(WindowId),
+    ref: optional(Id),
     combo: Schema.Array(KeyName).check(Schema.isLengthBetween(1, 8)),
     ms: Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: LIMITS.holdSecondsMax * 1000 })),
   }),

@@ -245,6 +245,30 @@ export function createFakeHelper(options: FakeOptions, io: FakeIo) {
   const clock = io.clock ?? systemClock
   const platform = options.platform ?? "macos"
   const desktop = createDesktop({ platform, scenario: options.scenario })
+  // The virtual desktop has a fixed US layout and no app menu shortcuts; it never reads the owner's keyboard.
+  const layout = {
+    platform,
+    keys: Object.fromEntries([
+      ...Array.from("abcdefghijklmnopqrstuvwxyz", (key) => [
+        `Key${key.toUpperCase()}`,
+        { key, shift: key.toUpperCase() },
+      ]),
+      ...Array.from("0123456789", (key, index) => [`Digit${key}`, { key, shift: ")!@#$%^&*("[index] }]),
+      ...Object.entries({
+        Backquote: "`~",
+        Minus: "-_",
+        Equal: "=+",
+        BracketLeft: "[{",
+        BracketRight: "]}",
+        Backslash: "\\|",
+        Semicolon: ";:",
+        Quote: "'\"",
+        Comma: ",<",
+        Period: ".>",
+        Slash: "/?",
+      }).map(([code, values]) => [code, { key: values[0], shift: values[1] }]),
+    ]),
+  }
   const range = options.protocol ?? identity.protocol
   const deny = new Set(options.deny ?? [])
   const disabled = new Set(options.disabled ?? [])
@@ -268,8 +292,9 @@ export function createFakeHelper(options: FakeOptions, io: FakeIo) {
     current?: { request: Request; keys: readonly string[]; timer: unknown }
     received: number
     captures: number
+    sessions: number
     closed: boolean
-  } = { locked: false, secureInput: false, received: 0, captures: 0, closed: false }
+  } = { locked: false, secureInput: false, received: 0, captures: 0, sessions: 0, closed: false }
 
   // Details never overwrite the entry's own time and kind.
   const record = (kind: string, detail: Record<string, unknown> = {}) =>
@@ -593,10 +618,20 @@ export function createFakeHelper(options: FakeOptions, io: FakeIo) {
     return { ok: true, window: now, node: desktop.nodeAt(now, point) }
   }
 
-  function keyboard(pid: number): Target | Refusal {
+  function keyboard(expected: { pid: number; windowId?: string; ref?: string }): Target | Refusal {
     const gate = inputGate()
     if (gate) return gate
-    if (background()) return directed(pid)
+    const target = background() ? directed(expected.pid) : focused(expected.pid)
+    if (!target.ok) return target
+    if (
+      (expected.windowId !== undefined && expected.windowId !== target.window.windowId) ||
+      (expected.ref !== undefined && expected.ref !== refOf(target.window, target.node))
+    )
+      return refuse("changed", "The focused target changed before input")
+    return target
+  }
+
+  function focused(pid: number): Target | Refusal {
     const app = desktop.frontmost()
     const window = desktop.windowsOf(app.slot).find((item) => !item.minimized)
     if (!window) return refuse("not_foreground", "No window has keyboard focus")
@@ -632,15 +667,27 @@ export function createFakeHelper(options: FakeOptions, io: FakeIo) {
   }
 
   // What a hit-test may reveal: the owner and window always, so the desktop can ask for or refuse the app; the
-  // element's name and ref only for an approved app that is not protected.
+  // element's identity, name, window title and menu context only for an approved app that is not protected.
   function hit(window: FakeWindow, item?: FakeNode) {
     const visible = !isProtected(window) && isApproved(window)
     return {
-      ...(visible ? { ref: refOf(window, item), name: item?.name ?? window.title } : {}),
+      ...(visible
+        ? {
+            ref: refOf(window, item),
+            elementId: `${state.sessions}:${window.windowId}:${item?.id ?? "window"}`,
+            name: item?.name ?? window.title,
+            windowTitle: window.title,
+            layout,
+            focusedMenuShortcuts: [],
+          }
+        : {}),
       role: item?.role ?? "AXWindow",
       secure: secure(item),
+      enabled: true,
+      editable: item?.editable ?? false,
       owner: desktop.appOf(window).identity,
       windowId: window.windowId,
+      signals: signals(window),
     }
   }
 
@@ -736,6 +783,7 @@ export function createFakeHelper(options: FakeOptions, io: FakeIo) {
       case "session.begin":
         if (args.mode === "background" && !features.background)
           return refuse("unsupported_action", "This helper cannot work in the background")
+        state.sessions++
         state.session = {
           mode: args.mode,
           approved: new Set(args.approved.map(Computer.appKey)),
@@ -976,7 +1024,7 @@ export function createFakeHelper(options: FakeOptions, io: FakeIo) {
         return ok()
       }
       case "input.key": {
-        const target = keyboard(args.pid)
+        const target = keyboard(args)
         if (!target.ok) return target
         const typed = typedKeys(args.combo, platform)
         const refused = typed ? textRefusal(target.window, target.node) : undefined
@@ -992,7 +1040,7 @@ export function createFakeHelper(options: FakeOptions, io: FakeIo) {
         return ok()
       }
       case "input.type": {
-        const target = keyboard(args.pid)
+        const target = keyboard(args)
         if (!target.ok) return target
         const item = target.node
         const refused = textRefusal(target.window, item)
@@ -1003,7 +1051,7 @@ export function createFakeHelper(options: FakeOptions, io: FakeIo) {
         return ok()
       }
       case "input.hold": {
-        const target = keyboard(args.pid)
+        const target = keyboard(args)
         if (!target.ok) return target
         const typed = typedKeys(args.combo, platform) > 0
         const refused = typed ? textRefusal(target.window, target.node) : undefined

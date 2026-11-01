@@ -431,6 +431,27 @@ describe("computer bridge protocol", () => {
     })
   })
 
+  test("a full batch retains independent app, destination, action and three provider proofs within a bounded body", () => {
+    const request = {
+      ...envelope,
+      command: "act",
+      lease,
+      settleMs: 0,
+      steps: Array.from({ length: 10 }, () => ({ kind: "wait", ms: 0 })),
+      approvals: Array.from({ length: 10 }, (_, index) =>
+        ["app", "destination", "send", "provider1", "provider2", "provider3"].map((reason) => ({
+          index,
+          requestID: `per_${index}_${reason}`,
+        })),
+      ).flat(),
+    }
+    accepts(Computer.BridgeCommands.act.request, request)
+    rejects(Computer.BridgeCommands.act.request, {
+      ...request,
+      approvals: Array.from({ length: 161 }, (_, index) => ({ index: 0, requestID: `per_${index}` })),
+    })
+  })
+
   test("steps are bounded", () => {
     const act = (steps: unknown[]) => ({ ...envelope, command: "act", lease, steps, settleMs: 0 })
     const wait = { kind: "wait", ms: 1 }

@@ -933,9 +933,13 @@ describe("approval and the refusals", () => {
     })
     expect(terminal).not.toHaveProperty("name")
     expect(terminal).not.toHaveProperty("ref")
+    expect(terminal).not.toHaveProperty("elementId")
+    expect(terminal).not.toHaveProperty("windowTitle")
     const notes = hit(400, 200)
     expect(notes).toMatchObject({ windowId: "notes-1", owner: fake.identity("notes") })
     expect(notes).not.toHaveProperty("name")
+    expect(notes).not.toHaveProperty("elementId")
+    expect(notes).not.toHaveProperty("windowTitle")
     expect(hit(70, 170)).toMatchObject({ windowId: "calc-1", role: "AXButton", name: "7", ref: expect.any(String) })
   })
 
@@ -972,6 +976,97 @@ describe("approval and the refusals", () => {
     expect(fake.call("input.type", { pid: fake.helper.desktop.app("terminal")!.pid, text: "rm -rf ~" })).toMatchObject({
       code: "protected",
     })
+  })
+
+  test("focused observations retain field identity across value changes and scope it to the helper session", () => {
+    const fake = start({ scenario: "notes" })
+    fake.begin(["notes"])
+    fake.control({ type: "focus", windowId: "notes-1", node: "notes.body" })
+    const before = fake.call("ui.focused")
+    expect(before).toMatchObject({
+      enabled: true,
+      editable: true,
+      windowTitle: "Groceries",
+      layout: { platform: "macos", keys: { KeyQ: { key: "q", shift: "Q" } } },
+      focusedMenuShortcuts: [],
+    })
+    expect(typeof before.elementId).toBe("string")
+    expect(
+      fake.call("input.type", {
+        pid: fake.helper.desktop.app("notes")!.pid,
+        windowId: before.windowId,
+        ref: before.ref,
+        text: "z",
+      }),
+    ).toMatchObject({ ok: true })
+    const after = fake.call("ui.focused")
+    expect(after.ref).not.toBe(before.ref)
+    expect(after.elementId).toBe(before.elementId)
+    fake.control({ type: "focus", windowId: "notes-1", node: "notes.title" })
+    const title = fake.call("ui.focused")
+    expect(title.elementId).not.toBe(before.elementId)
+    fake.begin(["notes"])
+    expect(fake.call("ui.focused").elementId).not.toBe(title.elementId)
+  })
+
+  for (const target of [
+    { platform: "macos", mode: "foreground" },
+    { platform: "windows", mode: "foreground" },
+    { platform: "macos", mode: "background" },
+  ] as const)
+    test(`${target.platform} ${target.mode} keyboard input binds the focused window and element`, () => {
+      const fake = start({ scenario: "notes", platform: target.platform })
+      fake.begin(["notes", "calculator"], { mode: target.mode })
+      fake.control({ type: "focus", windowId: "notes-1", node: "notes.body" })
+      const pid = fake.helper.desktop.app("notes")!.pid
+      const before = fake.call("ui.focused")
+      const inputs = [
+        { op: "input.type", text: "z" },
+        { op: "input.key", combo: ["ArrowLeft"], repeat: 1 },
+        { op: "input.hold", combo: ["ArrowLeft"], ms: 0 },
+      ]
+      for (const input of inputs)
+        expect(fake.call(input.op, { ...input, pid, windowId: "calc-1" })).toMatchObject({ code: "changed" })
+      fake.control({ type: "focus", windowId: "notes-1", node: "notes.title" })
+      expect(fake.call("ui.focused")).toMatchObject({ owner: { pid }, windowId: before.windowId, name: "Title" })
+      for (const input of inputs)
+        expect(fake.call(input.op, { ...input, pid, windowId: before.windowId, ref: before.ref })).toMatchObject({
+          code: "changed",
+        })
+      expect(fake.helper.log.filter((entry) => entry.kind === "input")).toEqual([])
+      for (const input of inputs) {
+        const live = fake.call("ui.focused")
+        const id = fake.send(input.op, { ...input, pid, windowId: live.windowId, ref: live.ref })
+        fake.advance(0)
+        expect(fake.reply(id)).toMatchObject({ ok: true })
+      }
+      expect(fake.helper.desktop.window("notes-1")!.nodes.find((node) => node.id === "notes.title")!.value).toBe(
+        "Groceriesz",
+      )
+      expect(fake.helper.log.filter((entry) => entry.kind === "input")).toHaveLength(3)
+    })
+
+  test("the focused reference is checked after a queued typing request reaches the helper", () => {
+    const fake = start({ scenario: "notes", latencyMs: 100 })
+    fake.begin(["notes"])
+    fake.advance(100)
+    fake.control({ type: "focus", windowId: "notes-1", node: "notes.body" })
+    const focused = fake.send("ui.focused")
+    fake.advance(100)
+    const before = fake.reply(focused)!
+    const typing = fake.send("input.type", {
+      pid: fake.helper.desktop.app("notes")!.pid,
+      windowId: before.windowId,
+      ref: before.ref,
+      text: "z",
+    })
+    fake.control({ type: "focus", windowId: "notes-1", node: "notes.title" })
+    fake.advance(100)
+    expect(fake.reply(typing)).toMatchObject({ code: "changed" })
+    expect(fake.helper.log.filter((entry) => entry.kind === "input")).toEqual([])
+    expect(fake.helper.desktop.window("notes-1")!.nodes.find((node) => node.id === "notes.title")!.value).toBe(
+      "Groceries",
+    )
   })
 
   test("activation and launch follow the approved set", () => {
