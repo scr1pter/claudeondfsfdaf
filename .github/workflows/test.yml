@@ -517,9 +517,10 @@ jobs:
     defaults:
       run:
         shell: bash
-    env:
-      EVIDENCE_ROOT: ${{ runner.temp }}/vector-release-evidence
     steps:
+      - name: Initialize study directory
+        run: echo "EVIDENCE_ROOT=$RUNNER_TEMP/vector-release-evidence" >> "$GITHUB_ENV"
+
       - name: Checkout study instrumentation
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
