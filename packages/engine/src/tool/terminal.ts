@@ -90,14 +90,14 @@ export const Parameters = Schema.Struct({
     description: "read: without a cursor, how many of the last lines to show (200 by default, at most 2000)",
   }),
   pattern: Schema.optional(Schema.String).annotate({
-    description: "wait: a regular expression to wait for in the output",
+    description: "open, wait: a regular expression to wait for in the output; open waits for readiness when supplied",
   }),
   exit: Schema.optional(Schema.Boolean).annotate({ description: "wait: wait for the process to exit" }),
   quiet: Schema.optional(PositiveInt).annotate({
     description: "wait: wait until there is no new output for this many milliseconds",
   }),
   timeout: Schema.optional(PositiveInt).annotate({
-    description: "wait: give up after this many milliseconds (30000 by default, at most 60000)",
+    description: "open with pattern, wait: give up after this many milliseconds (30000 by default, at most 60000)",
   }),
   cols: Schema.optional(PositiveInt).annotate({ description: "open, resize: columns" }),
   rows: Schema.optional(PositiveInt).annotate({ description: "open, resize: rows" }),
@@ -278,6 +278,8 @@ export const TerminalTool = Tool.define<
       if (params.cols !== undefined || params.rows !== undefined)
         yield* pty.update(created.id, { size: size(params.cols ?? 80, params.rows ?? 24) })
       if (params.reveal) yield* pty.reveal(created.id, { focus: false })
+      if (params.pattern !== undefined)
+        return yield* wait({ action: "open", pattern: params.pattern, timeout: params.timeout }, ctx, created)
       // Up to 500 ms for the first output, so the result shows a prompt, an error or a banner.
       for (let tries = 0; tries < 10; tries++) {
         const read = yield* pty.read(created.id, { limit: 0 })
