@@ -1,5 +1,6 @@
 import { Option, Schema } from "effect"
 import { GithubAgents } from "../../packages/core/src/github-agents.js"
+import { bindingKey, generationKey } from "./cloud-agents-binding.js"
 import type { CloudAgentAllowance, RunSource } from "./cloud-agents-entitlement.js"
 import { ApiError } from "./http.js"
 import { persistentStore } from "./persistent-store.js"
@@ -162,6 +163,11 @@ export function usedKey(account: string, epoch: string) {
   return `${PREFIX}used:${account}:${epoch}`
 }
 
+/** Shared with run history and settlement verification; no account identity is encoded in this key. */
+export function runRecordKey(rid: string) {
+  return `${PREFIX}run:${rid}`
+}
+
 /**
  * Settles the account's idle runs, then renews the rid's live reservation in place (same generation, before its
  * deadline: new jti, same start and deadline, no checks, no charge) or checks the ticket, runs at once, scheduled runs
@@ -169,15 +175,26 @@ export function usedKey(account: string, epoch: string) {
  * record's, or a deadline already passed, leaves that record alone and answers `at-once`.
  */
 export async function reserveRun(input: ReserveInput, store = persistentStore): Promise<ReserveResult> {
+  return reserve(input, store, false)
+}
+
+/** HTTP admission always checks the stored binding in the reservation's atomic write. */
+export async function reserveBoundRun(input: ReserveInput, store = persistentStore): Promise<ReserveResult> {
+  return reserve(input, store, true)
+}
+
+async function reserve(input: ReserveInput, store: typeof persistentStore, bound: boolean): Promise<ReserveResult> {
   const allowance = input.allowance
   if (!validReserve(input)) throw invalidRequest()
   const reply = await store([
     "EVAL",
     RESERVE,
-    input.consumeKey === undefined ? "3" : "4",
+    String(4 + (bound ? 2 : 0) + (input.consumeKey === undefined ? 0 : 1)),
     liveKey(input.account),
     usedKey(input.account, allowance.meterEpoch),
     scheduledKey(input.account, input.now),
+    `vector:cli-revoked:${input.account}`,
+    ...(bound ? [bindingKey(input.repositoryId), generationKey(input.repositoryId)] : []),
     ...(input.consumeKey === undefined ? [] : [input.consumeKey]),
     String(input.now),
     input.rid,
@@ -193,7 +210,11 @@ export async function reserveRun(input: ReserveInput, store = persistentStore): 
     String(allowance.limits.scheduledPerDay),
     String(allowance.allowanceSeconds),
     String(Math.max(allowance.periodEnd - input.now, 0) + USED_KEPT_MS),
+    input.account,
+    bound ? "1" : "0",
   ])
+  if (reply === "revoked") throw new ApiError(404, "REPO_NOT_BOUND", "This repository is not connected.")
+  if (reply === "binding") throw new ApiError(409, "BINDING_SUSPENDED", "Connect this repository again.")
   if (reply === "hours" || reply === "at-once" || reply === "scheduled") return { ok: false, limit: reply }
   if (reply === "ticket") return { ok: false, refusal: "ticket" }
   const reserved = Option.getOrUndefined(decodeReserved(reply))
@@ -220,9 +241,9 @@ export async function reportRun(
   if (!Schema.is(Uuid)(account) || !Schema.is(RunId)(rid) || !Schema.is(Jti)(token.jti) || !Schema.is(Time)(now))
     throw invalidRequest()
   const reply = await store(["EVAL", REPORT, "1", liveKey(account), rid, token.jti, String(now)])
-  if (Array.isArray(reply) && reply.length === 1 && reply[0] === "0") return { live: false }
+  if (Array.isArray(reply) && reply.length === 1 && reply[0] === "0") return { live: false as const }
   if (Array.isArray(reply) && reply.length === 2 && reply[0] === "1" && Schema.is(Decimal)(reply[1]))
-    return { live: true, deadline: Number(reply[1]) }
+    return { live: true as const, deadline: Number(reply[1]) }
   throw storeUnavailable()
 }
 
@@ -266,6 +287,50 @@ export async function settleRun(
   const charged = Array.isArray(reply) && reply.length === 2 && reply[0] === "1" ? seconds(reply[1]) : undefined
   if (charged === undefined) throw storeUnavailable()
   return { settled: true, seconds: charged }
+}
+
+/** HTTP settlement commits the first outcome and the charge together; retries keep that exact outcome. */
+export async function settleRecordedRun(
+  account: string,
+  rid: string,
+  token: { jti: string; epoch: string; repo: string; gen: number },
+  input: { outcome: GithubAgents.Outcome; now: number },
+  store = persistentStore,
+): Promise<{ outcome: GithubAgents.Outcome }> {
+  if (
+    !Schema.is(Uuid)(account) ||
+    !Schema.is(RunId)(rid) ||
+    !Schema.is(Jti)(token.jti) ||
+    !Schema.is(Epoch)(token.epoch) ||
+    !Schema.is(Decimal)(token.repo) ||
+    !Schema.is(Generation)(token.gen) ||
+    !Schema.is(Time)(input.now) ||
+    !GithubAgents.OUTCOME.includes(input.outcome)
+  )
+    throw invalidRequest()
+  const reply = await store([
+    "EVAL",
+    SETTLE_RECORDED,
+    "6",
+    liveKey(account),
+    usedKey(account, token.epoch),
+    runRecordKey(rid),
+    `vector:cli-revoked:${account}`,
+    bindingKey(token.repo),
+    generationKey(token.repo),
+    rid,
+    token.jti,
+    token.epoch,
+    account,
+    String(token.gen),
+    String(input.now),
+    input.outcome,
+    input.outcome === "changes" ? "pass" : input.outcome === "draft" || input.outcome === "failed" ? "fail" : "none",
+  ])
+  if (reply === "stale") throw new ApiError(401, "MODEL_PLAN_RUN_EXPIRED", "This run is no longer authorized.")
+  if (typeof reply !== "string" || !GithubAgents.OUTCOME.includes(reply as GithubAgents.Outcome))
+    throw storeUnavailable()
+  return { outcome: reply as GithubAgents.Outcome }
 }
 
 /**
@@ -500,10 +565,21 @@ local function keep(key, ms)
 end
 `
 
-// KEYS: live, used(epoch), today's scheduled count, and the ticket when given. ARGV: now, rid, epoch, repository id,
-// thread, source, purpose, generation, jti, at once, longest run (s), scheduled a day, allowance (s), used's expiry (ms).
+// KEYS: live, used(epoch), today's scheduled count, revocation, optionally binding/generation, then optional ticket.
+// ARGV: now, rid, epoch, repository id, thread, source, purpose, generation, jti, at once, longest run (s),
+// scheduled a day, allowance (s), used's expiry (ms), account, bound-admission flag.
 const RESERVE = `${RULES}
-if not (kind(KEYS[1], 'hash') and kind(KEYS[2], 'string') and kind(KEYS[3], 'string')) then return 'corrupt' end
+if not (kind(KEYS[1], 'hash') and kind(KEYS[2], 'string') and kind(KEYS[3], 'string') and kind(KEYS[4], 'string')) then return 'corrupt' end
+if redis.call('EXISTS', KEYS[4]) == 1 then return 'revoked' end
+local ticket = KEYS[5]
+if ARGV[16] == '1' then
+  if not kind(KEYS[5], 'hash') or not kind(KEYS[6], 'string') then return 'corrupt' end
+  if redis.call('HGET', KEYS[5], 'account') ~= ARGV[15]
+    or redis.call('HGET', KEYS[5], 'generation') ~= ARGV[8]
+    or redis.call('GET', KEYS[6]) ~= ARGV[8]
+    or redis.call('HEXISTS', KEYS[5], 'suspended') == 1 then return 'binding' end
+  ticket = KEYS[7]
+end
 local used = count(redis.call('GET', KEYS[2]))
 local scheduled = count(redis.call('GET', KEYS[3]))
 local runs = read(KEYS[1])
@@ -542,7 +618,7 @@ else
   local left = tonumber(ARGV[13]) - (used - returned) - others
   -- The mint only peeked the ticket, so this is where it is single-use: another check run's reservation may have
   -- consumed it since, or it expired. Checked before the slots, which a retry could find free.
-  if KEYS[4] and redis.call('EXISTS', KEYS[4]) == 0 then answer = 'ticket'
+  if ticket and redis.call('EXISTS', ticket) == 0 then answer = 'ticket'
   elseif live >= tonumber(ARGV[10]) then answer = 'at-once'
   elseif counts and scheduled >= tonumber(ARGV[12]) then answer = 'scheduled'
   elseif left < ${GithubAgents.MIN_LEFT_SECONDS} then answer = 'hours'
@@ -554,7 +630,7 @@ if returned > 0 then redis.call('DECRBY', KEYS[2], int(returned)) end
 if answer == 'renew' then
   current.jti = ARGV[9]
   redis.call('HSET', KEYS[1], rid, encode(current))
-  if KEYS[4] then redis.call('DEL', KEYS[4]) end
+  if ticket then redis.call('DEL', ticket) end
   return { 'ok', int(current.startedAt), int(current.deadline), '1', current.epoch, current.thr, current.src, current.pur }
 end
 if type(answer) == 'string' then return answer end
@@ -567,7 +643,7 @@ if counts then
   redis.call('INCR', KEYS[3])
   redis.call('PEXPIRE', KEYS[3], ${SCHEDULED_KEPT_MS})
 end
-if KEYS[4] then redis.call('DEL', KEYS[4]) end
+if ticket then redis.call('DEL', ticket) end
 keep(KEYS[1], math.max(tonumber(ARGV[14]), answer * 1000 + KEPT_MS))
 return { 'ok', int(run.startedAt), int(run.deadline), '0', epoch, run.thr, run.src, run.pur }
 `
@@ -618,6 +694,41 @@ if returned > used then return 'corrupt' end
 redis.call('HDEL', KEYS[1], ARGV[1])
 if returned > 0 then redis.call('DECRBY', KEYS[2], int(returned)) end
 return { '1', int(charged) }
+`
+
+// The run record and ledger are checked before any write. A lost response is safe to retry: the ended record is
+// the durable receipt, and never takes the retry's new outcome. Shared RULES supplies the sole charge formula.
+const SETTLE_RECORDED = `${RULES}
+for i, expected in ipairs({'hash', 'string', 'hash', 'string', 'hash', 'string'}) do
+  if not kind(KEYS[i], expected) then return 'corrupt' end
+end
+if redis.call('EXISTS', KEYS[4]) == 1 or redis.call('HGET', KEYS[5], 'account') ~= ARGV[4]
+  or redis.call('HGET', KEYS[5], 'generation') ~= ARGV[5] or redis.call('GET', KEYS[6]) ~= ARGV[5]
+  or redis.call('HEXISTS', KEYS[5], 'suspended') == 1 then return 'stale' end
+local record = redis.call('HMGET', KEYS[3], 'account', 'generation', 'jti', 'startedAt', 'endedAt', 'outcome', 'verdict')
+if record[1] ~= ARGV[4] or record[2] ~= ARGV[5] or record[3] ~= ARGV[2] then return 'stale' end
+local raw = redis.call('HGET', KEYS[1], ARGV[1])
+local run = raw and decode(raw) or nil
+if raw and not run then return 'corrupt' end
+if run and (run.jti ~= ARGV[2] or run.gen ~= tonumber(ARGV[5])) then return 'stale' end
+if record[5] then
+  local outcomes = {changes = 'pass', ['no-changes'] = 'none', draft = 'fail', failed = 'fail', refused = 'none', cancelled = 'none'}
+  if run or not outcomes[record[6]] or outcomes[record[6]] ~= record[7]
+    or not tonumber(record[5]) or not tonumber(record[4]) or tonumber(record[5]) < tonumber(record[4]) then return 'corrupt' end
+  return record[6]
+end
+if not run then return 'stale' end
+if record[6] or record[7] or tonumber(record[4]) ~= run.startedAt or tonumber(ARGV[6]) < run.startedAt then return 'corrupt' end
+local used = count(redis.call('GET', KEYS[2]))
+if not used then return 'corrupt' end
+local charged = run.epoch == ARGV[3] and charge(run) or reservation(run)
+local returned = reservation(run) - charged
+if returned > used then return 'corrupt' end
+redis.call('HDEL', KEYS[1], ARGV[1])
+if returned > 0 then redis.call('DECRBY', KEYS[2], int(returned)) end
+redis.call('HSET', KEYS[3], 'endedAt', ARGV[6], 'outcome', ARGV[7], 'verdict', ARGV[8])
+redis.call('EXPIRE', KEYS[3], ${90 * 86_400})
+return ARGV[7]
 `
 
 // KEYS: live, used(epoch), the scheduled count of the start's UTC day. ARGV: rid, jti, epoch, startedAt.

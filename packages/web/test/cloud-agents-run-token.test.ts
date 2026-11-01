@@ -550,11 +550,13 @@ function integrationTests() {
         keys.add(key)
       // Recognize the verifier by its binding/generation/live/revocation key layout: other writers also fence
       // revocation. EVAL_RO still proves that verification never writes on any path.
-      const check = command[0] === "EVAL" && ["4", "5"].includes(command[2] ?? "")
-        && command[3]?.startsWith("vector:cloud-agents:binding:")
-        && command[4]?.startsWith("vector:cloud-agents:gen:")
-        && command[5]?.startsWith("vector:cloud-agents:live:")
-        && command[6]?.startsWith("vector:cli-revoked:")
+      const check =
+        command[0] === "EVAL" &&
+        ["4", "5"].includes(command[2] ?? "") &&
+        command[3]?.startsWith("vector:cloud-agents:binding:") &&
+        command[4]?.startsWith("vector:cloud-agents:gen:") &&
+        command[5]?.startsWith("vector:cloud-agents:live:") &&
+        command[6]?.startsWith("vector:cli-revoked:")
       return redis.send(check ? "EVAL_RO" : (command[0] ?? ""), command.slice(1)).then(
         (result) => Response.json({ result }),
         (error: unknown) => Response.json({ error: String(error) }, { status: 400 }),

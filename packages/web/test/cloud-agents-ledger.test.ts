@@ -297,11 +297,12 @@ function integrationTests() {
       })
       expect(commands).toHaveLength(1)
       expect(commands[0]?.[0]).toBe("EVAL")
-      expect(commands[0]?.slice(2, 6)).toEqual([
-        "3",
+      expect(commands[0]?.slice(2, 7)).toEqual([
+        "4",
         liveKey(account),
         usedKey(account, EPOCH),
         scheduledKey(account, "2026-10-26"),
+        `vector:cli-revoked:${account}`,
       ])
       const record: LiveRun = {
         startedAt: T,
@@ -521,11 +522,12 @@ function integrationTests() {
       const fresh = mint(randomUUID(), granted, T, { consumeKey })
       commands.length = 0
       await reserve(fresh)
-      expect(commands[0]?.slice(2, 7)).toEqual([
-        "4",
+      expect(commands[0]?.slice(2, 8)).toEqual([
+        "5",
         liveKey(fresh.account),
         usedKey(fresh.account, EPOCH),
         scheduledKey(fresh.account, "2026-10-26"),
+        `vector:cli-revoked:${fresh.account}`,
         consumeKey,
       ])
       expect(await exists(consumeKey)).toBe(0)

@@ -775,12 +775,15 @@ type ReserveInput = { account; rid; repositoryId; thread; generation; jti; sourc
 type Reserved = { startedAt; deadline; epoch; thread; source: LedgerSource; purpose: LedgerPurpose }   // the record's values
 reserveRun(input: ReserveInput): Promise<({ ok: true; renewed: false } & Reserved) | ({ ok: true; renewed: true } & Reserved)
   | { ok: false; limit: "hours" | "at-once" | "scheduled" } | { ok: false; refusal: "ticket" }>
+reserveBoundRun(input: ReserveInput): ReturnType<typeof reserveRun>                                  // HTTP mint: atomic binding + revocation fence
 reportRun(account, rid, token: { jti }, now): Promise<{ live: boolean; deadline?: number }>            // heartbeat
 recordCodiumRequest(account, rid, at): Promise<void>                                                  // the gateway hook calls this
 settleRun(account, rid, token: { jti; epoch }): Promise<{ settled: boolean; seconds: number }>          // idempotent
+settleRecordedRun(account, rid, token: { jti; epoch; repo; gen }, input: { outcome: GithubAgents.Outcome; now }): Promise<{ outcome: GithubAgents.Outcome }> // atomic HTTP ledger + outcome
 releaseRun(account, rid, reservation: { renewed: false; jti; epoch; startedAt }): Promise<void>        // mint failed after a fresh reserve: charges 0
 cloudAgentSecondsUsed(accountId: string, meterEpoch: string, now = Date.now()): Promise<number>       // settles the epoch's idle runs first
 liveRun(account, rid): Promise<LiveRun | undefined>
+runRecordKey(rid: string): string                                                                     // shared history/settlement key
 liveKey(account: string): string; usedKey(account: string, epoch: string): string                     // key builders for V07
 ```
 
@@ -912,7 +915,7 @@ The public default-branch cache uses `default-branch:<repositoryId>` and JSON `{
     - The purpose is `scheduled` for schedules, the ticket mapping (2.5) for ticket runs, otherwise `body.purpose`.
 11. `entitlement(binding.account, {source})`; refusals map as in 2.9.1. A `github-schedule` mint with `scheduledPerDay === 0` → 403 `CODIUM_PERK_REQUIRED {perk: "scheduled"}`.
 12. Mint rate limits, then `consumeGithubOidc` (replay → 409 `OIDC_REPLAYED`).
-13. `reserveRun` with the thread, generation, a fresh `jti` and, for a ticket run only (the one step 8 accepted), the ticket key as `consumeKey`. A `limit` refusal → 429 `MODEL_PLAN_RUN_LIMIT {limit}`; the `ticket` refusal (another check run's mint consumed the ticket after step 8, or it expired) → 403 `ACTOR_NOT_ALLOWED`.
+13. `reserveBoundRun` with the thread, generation, a fresh `jti` and, for a ticket run only (the one step 8 accepted), the ticket key as `consumeKey`. A `limit` refusal → 429 `MODEL_PLAN_RUN_LIMIT {limit}`; the `ticket` refusal (another check run's mint consumed the ticket after step 8, or it expired) → 403 `ACTOR_NOT_ALLOWED`.
 14. `mintRunToken` with the answer's `deadline`, `epoch`, `thread` (`thr`), `source` (`src`) and `purpose` (`pur`), which on a renewal are the live record's, not the body's; then `touchBinding`, `recordRunStart`. A failure here → `releaseRun(account, rid, {...answer, jti})` only when `answer.renewed` is false (a renewal does not compile there), then the error.
 15. Log `{repositoryId, runId, runAttempt, checkRunId, source, purpose}` only.
 

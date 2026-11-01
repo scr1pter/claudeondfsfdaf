@@ -3,7 +3,13 @@ import { Option, Schema } from "effect"
 import { GithubAgents } from "../../packages/core/src/github-agents.js"
 import { bindingKey, generationKey } from "./cloud-agents-binding.js"
 import { cloudAgentRevokedBefore, type RunSource } from "./cloud-agents-entitlement.js"
-import { liveKey, METER_EPOCH_PATTERN, type LedgerPurpose, type LedgerSource } from "./cloud-agents-ledger.js"
+import {
+  liveKey,
+  runRecordKey,
+  METER_EPOCH_PATTERN,
+  type LedgerPurpose,
+  type LedgerSource,
+} from "./cloud-agents-ledger.js"
 import { ApiError, type ApiRequest } from "./http.js"
 import { persistentStore } from "./persistent-store.js"
 
@@ -177,6 +183,15 @@ export async function requireRunToken(
   return claims
 }
 
+/** Only the settlement handler uses this path; an ended receipt never grants model, heartbeat or artifact access. */
+export async function requireSettlementToken(request: Pick<ApiRequest, "headers">, deps: RunTokenDeps = {}) {
+  const authorization = request.headers.authorization
+  if (typeof authorization !== "string" || !authorization.startsWith("Bearer ")) throw invalidToken()
+  const claims = readRunToken(authorization.slice("Bearer ".length), deps.now ?? Date.now())
+  await requireLive(claims, deps, true)
+  return claims
+}
+
 /** For Codium's static `registerRunVerifier(cloudAgentsRunVerifier.prefix, cloudAgentsRunVerifier.verify)` (A59). */
 export const cloudAgentsRunVerifier = {
   prefix: "vrt_" as const,
@@ -184,7 +199,7 @@ export const cloudAgentsRunVerifier = {
 }
 
 // The EVAL and the seam start together. When both refuse or fail, the EVAL's answer is the one reported.
-async function requireLive(claims: RunTokenClaims, deps: RunTokenDeps) {
+async function requireLive(claims: RunTokenClaims, deps: RunTokenDeps, settlement = false) {
   const store = deps.store ?? persistentStore
   const revokedBefore = deps.revokedBefore ?? cloudAgentRevokedBefore
   // Each through a promise, so a store or a seam that throws instead of rejecting fails closed too.
@@ -193,11 +208,12 @@ async function requireLive(claims: RunTokenClaims, deps: RunTokenDeps) {
       store([
         "EVAL",
         CHECK,
-        "4",
+        settlement ? "5" : "4",
         bindingKey(claims.repo),
         generationKey(claims.repo),
         liveKey(claims.sub),
         revokedKey(claims.sub),
+        ...(settlement ? [runRecordKey(claims.rid)] : []),
         claims.sub,
         String(claims.gen),
         claims.rid,
@@ -254,7 +270,17 @@ if type(account) ~= 'string' or not string.match(account, uuid) or not decimal(g
 if redis.call('GET', KEYS[2]) ~= generation then return 'corrupt' end
 if account ~= ARGV[1] or generation ~= ARGV[2] then return 'moved' end
 local raw = redis.call('HGET', KEYS[3], ARGV[3])
-if not raw then return 'settled' end
+if not raw then
+  if not KEYS[5] then return 'settled' end
+  local found = redis.call('TYPE', KEYS[5]).ok
+  if found ~= 'hash' and found ~= 'none' then return 'corrupt' end
+  local record = redis.call('HMGET', KEYS[5], 'account', 'generation', 'jti', 'startedAt', 'endedAt', 'outcome', 'verdict')
+  if record[1] ~= ARGV[1] or record[2] ~= ARGV[2] or record[3] ~= ARGV[4] or not record[5] then return 'settled' end
+  local outcomes = {changes = 'pass', ['no-changes'] = 'none', draft = 'fail', failed = 'fail', refused = 'none', cancelled = 'none'}
+  if not decimal(record[4]) or not decimal(record[5]) or tonumber(record[5]) < tonumber(record[4])
+    or not outcomes[record[6]] or outcomes[record[6]] ~= record[7] then return 'corrupt' end
+  return 'ok'
+end
 local decoded, run = pcall(cjson.decode, raw)
 if not decoded or type(run) ~= 'table' or type(run.jti) ~= 'string' then return 'corrupt' end
 if run.jti ~= ARGV[4] then return 'replaced' end

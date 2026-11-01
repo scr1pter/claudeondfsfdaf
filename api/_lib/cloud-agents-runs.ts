@@ -2,7 +2,7 @@ import { Option, Schema } from "effect"
 import { GithubAgents } from "../../packages/core/src/github-agents.js"
 import { bindingKey, bindingsForAccount, generationKey, revokeBinding } from "./cloud-agents-binding.js"
 import { RUN_SOURCES, type RunSource, type RunTrigger } from "./cloud-agents-entitlement.js"
-import { liveKey, type LedgerPurpose, type LedgerSource } from "./cloud-agents-ledger.js"
+import { liveKey, runRecordKey, type LedgerPurpose, type LedgerSource } from "./cloud-agents-ledger.js"
 import { ApiError } from "./http.js"
 import { persistentStore } from "./persistent-store.js"
 
@@ -132,7 +132,7 @@ export async function recordRunStart(input: RunStart, store = persistentStore): 
       "EVAL",
       START,
       "7",
-      runKey(input.rid),
+      runRecordKey(input.rid),
       actorKey(input.rid),
       runsKey(input.account),
       liveKey(input.account),
@@ -170,7 +170,7 @@ export async function recordRunEnd(
       "EVAL",
       END,
       "2",
-      runKey(rid),
+      runRecordKey(rid),
       `vector:cli-revoked:${identity.account}`,
       identity.account,
       identity.generation,
@@ -203,7 +203,7 @@ export async function listCloudRuns(
       READ,
       1 + ids.length * 2,
       `${PREFIX}binder-left:${account}`,
-      ...ids.flatMap((id) => [runKey(id), actorKey(id)]),
+      ...ids.flatMap((id) => [runRecordKey(id), actorKey(id)]),
     ],
     store,
   )
@@ -331,11 +331,8 @@ function validIdentity(input: RunRecordIdentity) {
 function verdict(outcome: GithubAgents.Outcome) {
   return outcome === "changes" ? "pass" : outcome === "draft" || outcome === "failed" ? "fail" : "none"
 }
-function runKey(rid: string) {
-  return `${PREFIX}run:${rid}`
-}
 function actorKey(rid: string) {
-  return `${runKey(rid)}:actor`
+  return `${runRecordKey(rid)}:actor`
 }
 function runsKey(account: string) {
   return `${PREFIX}runs:${account}`

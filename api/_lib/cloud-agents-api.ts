@@ -1,4 +1,5 @@
 import { Option, Schema } from "effect"
+import { randomBytes } from "node:crypto"
 import { GithubAgents } from "../../packages/core/src/github-agents.js"
 import { enforceRateLimit, requireTrustedJsonRequest } from "./abuse.js"
 import { requireAccountUser, type AccountUser } from "./account.js"
@@ -11,9 +12,13 @@ import {
   redeemAndBind,
   revokeBinding,
   takeoverAllowed,
+  suspendBinding,
+  touchBinding,
 } from "./cloud-agents-binding.js"
-import { cloudAgentEntitlement } from "./cloud-agents-entitlement.js"
-import { listCloudRuns } from "./cloud-agents-runs.js"
+import { cloudAgentEntitlement, cloudAgentRevokedBefore } from "./cloud-agents-entitlement.js"
+import { releaseRun, reportRun, reserveBoundRun, settleRecordedRun } from "./cloud-agents-ledger.js"
+import { mintRunToken, requireRunToken, requireSettlementToken } from "./cloud-agents-run-token.js"
+import { listCloudRuns, recordRunStart } from "./cloud-agents-runs.js"
 import { githubProof } from "./github-api.js"
 import { githubApp, type createGithubApp } from "./github-app.js"
 import { githubApiVersion, githubId, githubRecord, githubResponseBytes, githubUnavailable } from "./github-http.js"
@@ -50,6 +55,7 @@ export function createCloudAgentsApi(
     verify?: typeof verifyGithubOidc
     store?: typeof persistentStore
     entitlement?: typeof cloudAgentEntitlement
+    revokedBefore?: typeof cloudAgentRevokedBefore
     app?: ReturnType<typeof createGithubApp>
     now?: () => number
     fetcher?: typeof fetch
@@ -58,6 +64,7 @@ export function createCloudAgentsApi(
   const verify = input.verify ?? verifyGithubOidc
   const store = input.store ?? persistentStore
   const entitlement = input.entitlement ?? cloudAgentEntitlement
+  const revokedBefore = input.revokedBefore ?? cloudAgentRevokedBefore
   const app = input.app ?? githubApp
   const now = input.now ?? Date.now
   const fetcher = input.fetcher ?? fetch
@@ -203,6 +210,229 @@ export function createCloudAgentsApi(
     json(response, 200, { runs: await listCloudRuns(user.id, {}, store) })
   }
 
+  async function mint(request: ApiRequest, response: ApiResponse) {
+    cleanUrl(request)
+    requireMethod(request, "POST")
+    const { body, identity } = await githubProof(request, response, "mint", verify)
+    if (
+      Object.keys(body).some(
+        (key) => !["purpose", "thread", "workflowVersion", "commentId", "pullRequest", "ticket"].includes(key),
+      ) ||
+      (body.purpose !== "task" && body.purpose !== "review") ||
+      typeof body.thread !== "string" ||
+      !GithubAgents.THREAD_PATTERN.test(body.thread) ||
+      typeof body.workflowVersion !== "string" ||
+      !/^[1-9]\d{0,3}$/.test(body.workflowVersion) ||
+      [body.commentId, body.pullRequest].some(
+        (id) => id !== undefined && (typeof id !== "number" || !Number.isSafeInteger(id) || id < 1),
+      ) ||
+      (body.ticket !== undefined && (typeof body.ticket !== "string" || body.ticket.length > 256))
+    )
+      throw invalidRequest()
+    if (Number(body.workflowVersion) < 3)
+      throw new ApiError(426, "WORKFLOW_UPDATE_REQUIRED", "Update this repository's Vector workflow.")
+    if (identity.runnerEnvironment !== "github-hosted")
+      throw new ApiError(403, "RUNNER_NOT_SUPPORTED", "Use a GitHub-hosted runner.")
+    const binding = await bindingFor(identity.repositoryId, store)
+    if (!binding) throw new ApiError(404, "REPO_NOT_BOUND", "This repository is not connected.")
+    await requireUnrevokedAccount(binding.account, fetcher).catch((error: unknown) => {
+      if (error instanceof ApiError && error.code === "CLI_TOKEN_INVALID")
+        throw new ApiError(404, "REPO_NOT_BOUND", "This repository is not connected.")
+      throw error
+    })
+    if (binding.ownerId !== identity.ownerId) await suspendBinding(binding, "transferred", store)
+    if (binding.suspended || binding.ownerId !== identity.ownerId)
+      throw new ApiError(409, "BINDING_SUSPENDED", "Connect this repository again.")
+    if (
+      !["issue_comment", "issues", "pull_request_review_comment", "workflow_dispatch", "schedule"].includes(
+        identity.event,
+      )
+    )
+      throw new ApiError(403, "EVENT_NOT_ALLOWED", "This event cannot start a run.")
+    if (identity.event !== "pull_request_review_comment" && identity.ref !== binding.defaultRef)
+      throw new ApiError(403, "WORKFLOW_NOT_TRUSTED", "Use the repository's default workflow.")
+    // V13 replaces this gate only after the ticket producer and atomic consumer are available.
+    if (identity.actorIsBot || body.ticket !== undefined)
+      throw new ApiError(403, "ACTOR_NOT_ALLOWED", "This actor cannot start a run.")
+    const checked = app.configuration().available
+      ? await app.verifyRun(identity, {
+          job: body.purpose === "review" ? "review" : "agent",
+          thread: body.thread,
+          ...(typeof body.commentId === "number" ? { commentId: body.commentId } : {}),
+          ...(typeof body.pullRequest === "number" ? { pullRequest: body.pullRequest } : {}),
+          binder: binding.binder,
+          account: binding.account,
+          defaultRef: binding.defaultRef,
+          generation: binding.generation,
+        })
+      : { installed: false as const }
+    if (checked.installed && checked.binder === "binder-left") {
+      await suspendBinding(binding, "binder-left", store)
+      throw new ApiError(409, "BINDING_SUSPENDED", "Connect this repository again.")
+    }
+    if (!checked.installed && identity.event === "pull_request_review_comment")
+      throw new ApiError(403, "EVENT_NEEDS_APP", "Use a PR conversation comment.")
+    const source =
+      identity.event === "schedule"
+        ? "github-schedule"
+        : identity.event === "workflow_dispatch"
+          ? "github-dispatch"
+          : "github-comment"
+    const purpose = source === "github-schedule" ? "scheduled" : body.purpose
+    const at = now()
+    const allowance = await entitlement(binding.account, { source, now: at }, fetcher)
+    if (!allowance.active) {
+      if (allowance.reason === "service-off")
+        throw new ApiError(503, "MODEL_PLANS_DISABLED", "Cloud agents are unavailable.")
+      if (allowance.reason === "source-unavailable")
+        throw new ApiError(403, "CLOUD_AGENTS_SOURCE_UNAVAILABLE", "This source is unavailable.")
+      throw new ApiError(403, "BINDING_UNAVAILABLE", "Codium is unavailable for this repository.")
+    }
+    if (source === "github-schedule" && allowance.limits.scheduledPerDay === 0)
+      throw new RunRefusal(403, "CODIUM_PERK_REQUIRED", { perk: "scheduled" })
+    const rid = GithubAgents.runId(identity.repositoryId, identity.runId, identity.runAttempt, identity.checkRunId)
+    await ipLimit(request, response)
+    await enforceRateLimit(request, response, {
+      scope: "cloud-agents-mint-job",
+      identifier: rid,
+      limit: 30,
+      windowSeconds: 3600,
+      requirePersistent: true,
+    })
+    await enforceRateLimit(request, response, {
+      scope: "cloud-agents-mint-repo",
+      identifier: identity.repositoryId,
+      limit: 120,
+      windowSeconds: 3600,
+      requirePersistent: true,
+    })
+    await consumeGithubOidc(identity, store)
+    const jti = randomBytes(16).toString("base64url")
+    const reserved = await reserveBoundRun(
+      {
+        account: binding.account,
+        rid,
+        repositoryId: identity.repositoryId,
+        thread: body.thread,
+        generation: binding.generation,
+        jti,
+        source,
+        purpose,
+        allowance,
+        now: at,
+      },
+      store,
+    )
+    if (!reserved.ok) {
+      if ("refusal" in reserved) throw new ApiError(403, "ACTOR_NOT_ALLOWED", "This actor cannot start a run.")
+      throw new RunRefusal(429, "MODEL_PLAN_RUN_LIMIT", { limit: reserved.limit })
+    }
+    const token = await (async () => {
+      const signed = mintRunToken({
+        sub: binding.account,
+        rid,
+        repo: identity.repositoryId,
+        thr: reserved.thread,
+        gen: binding.generation,
+        src: reserved.source,
+        pur: reserved.purpose,
+        epoch: reserved.epoch,
+        dl: reserved.deadline,
+        iat: at,
+        jti,
+        cs: allowance.limits.runCeilingShare,
+      })
+      await touchBinding(identity.repositoryId, at, store)
+      await recordRunStart(
+        {
+          account: binding.account,
+          generation: binding.generation,
+          jti,
+          rid,
+          repository: identity.repository,
+          repositoryId: identity.repositoryId,
+          runId: identity.runId,
+          event: identity.event,
+          source: reserved.source,
+          purpose: reserved.purpose,
+          startedAt: reserved.startedAt,
+          actor: { login: identity.actor, id: identity.actorId },
+        },
+        store,
+      )
+      return signed
+    })().catch(async (error: unknown) => {
+      if (!reserved.renewed) await releaseRun(binding.account, rid, { ...reserved, jti }, store)
+      throw error
+    })
+    console.info("Vector cloud-agents mint", {
+      repositoryId: identity.repositoryId,
+      runId: identity.runId,
+      runAttempt: identity.runAttempt,
+      checkRunId: identity.checkRunId,
+      source: reserved.source,
+      purpose: reserved.purpose,
+    })
+    json(response, 200, {
+      token: token.token,
+      runId: rid,
+      deadline: token.deadline,
+      heartbeatSeconds: GithubAgents.HEARTBEAT_SECONDS,
+      idleSeconds: GithubAgents.IDLE_SECONDS,
+    })
+  }
+
+  async function heartbeat(request: ApiRequest, response: ApiResponse) {
+    cleanUrl(request)
+    requireMethod(request, "POST")
+    requireTrustedJsonRequest(request, 2_000)
+    await enforceRateLimit(request, response, {
+      scope: "cloud-agents-heartbeat-ip",
+      limit: 300,
+      windowSeconds: 300,
+      requirePersistent: true,
+    })
+    const body = await objectBody(request)
+    if (Object.keys(body).some((key) => key !== "state") || (body.state !== "starting" && body.state !== "running"))
+      throw invalidRequest()
+    const at = now()
+    const claims = await requireRunToken(request, { allowAfterDeadline: true }, { now: at, store, revokedBefore })
+    await enforceRateLimit(request, response, {
+      scope: "cloud-agents-heartbeat-run",
+      identifier: claims.rid,
+      limit: 90,
+      windowSeconds: 3600,
+      requirePersistent: true,
+    })
+    const reported = await reportRun(claims.sub, claims.rid, claims, at, store)
+    if (!reported.live) throw new ApiError(401, "MODEL_PLAN_RUN_EXPIRED", "This run is no longer authorized.")
+    json(response, 200, { ok: true, stop: at >= reported.deadline - GithubAgents.STOP_MARGIN_SECONDS * 1000 })
+  }
+
+  async function settle(request: ApiRequest, response: ApiResponse) {
+    cleanUrl(request)
+    requireMethod(request, "POST")
+    requireTrustedJsonRequest(request, 2_000)
+    await ipLimit(request, response)
+    const body = await objectBody(request)
+    if (
+      Object.keys(body).some((key) => key !== "outcome") ||
+      !Schema.is(Schema.Literals(GithubAgents.OUTCOME))(body.outcome)
+    )
+      throw invalidRequest()
+    const at = now()
+    const claims = await requireSettlementToken(request, { now: at, store, revokedBefore })
+    await enforceRateLimit(request, response, {
+      scope: "cloud-agents-settle-run",
+      identifier: claims.rid,
+      limit: 10,
+      windowSeconds: 3600,
+      requirePersistent: true,
+    })
+    await settleRecordedRun(claims.sub, claims.rid, claims, { outcome: body.outcome, now: at }, store)
+    json(response, 200, { ok: true })
+  }
+
   async function publicDefaultBranch(identity: GithubIdentity) {
     if (identity.repositoryVisibility !== "public") throw needsDefaultBranch()
     const key = `vector:cloud-agents:default-branch:${identity.repositoryId}`
@@ -271,6 +501,9 @@ export function createCloudAgentsApi(
     bindings: safe(bindings),
     unbind: safe(unbind),
     runs: safe(runs),
+    mint: safe(mint),
+    heartbeat: safe(heartbeat),
+    settle: safe(settle),
   }
 }
 
@@ -315,6 +548,16 @@ function storeUnavailable() {
   return new ApiError(503, "PERSISTENT_STORE_UNAVAILABLE", "Repository connections are temporarily unavailable.")
 }
 
+class RunRefusal extends ApiError {
+  constructor(
+    status: number,
+    code: "MODEL_PLAN_RUN_LIMIT" | "CODIUM_PERK_REQUIRED",
+    readonly fields: { limit: "hours" | "at-once" | "scheduled" } | { perk: "scheduled" },
+  ) {
+    super(status, code, "This request could not be completed.")
+  }
+}
+
 function safe(handler: (request: ApiRequest, response: ApiResponse) => Promise<void>) {
   return async (request: ApiRequest, response: ApiResponse) => {
     response.setHeader("x-content-type-options", "nosniff")
@@ -326,7 +569,11 @@ function safe(handler: (request: ApiRequest, response: ApiResponse) => Promise<v
       const code = known?.code === "ABUSE_PROTECTION_UNAVAILABLE" ? "PERSISTENT_STORE_UNAVAILABLE" : known?.code
       // Authentication and entitlement helpers can mention billing; only neutral wording crosses this boundary.
       json(response, known?.statusCode ?? 503, {
-        error: { code: code ?? "CLOUD_AGENTS_UNAVAILABLE", message: "This request could not be completed." },
+        error: {
+          code: code ?? "CLOUD_AGENTS_UNAVAILABLE",
+          message: "This request could not be completed.",
+          ...(known instanceof RunRefusal ? known.fields : {}),
+        },
       })
     })
   }
