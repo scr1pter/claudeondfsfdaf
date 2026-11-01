@@ -625,3 +625,9 @@ None yet (contract section 4).
 - Hosted API types passed on the reviewed source. Web types found only Bun's test-table overload rejecting the readonly outcome tuple; passing a mutable copy preserves the same six cases. The subsequent web typecheck passed: 189 files, 0 errors, 0 warnings and 166 hints. No production source changed for this test typing correction, so the runtime checks were not repeated.
 - Remaining gates are the mandatory 23-package pre-push hook and the scoped lane at the pushed commit, including confirmation that V10's policy failure is fixed. No workflow changed. Live owner acceptance and production enablement remain outside this validation.
 - Explicit later obligations: V12 must fence ledger reservation with current account revocation/binding generation and pass the token identity to run recording; V13 must fence ticket creation. V11's inventory covers the available modules and the cache formats tested by V09/V10. Ticket creation through its real module is deferred to V13 and repeated in V30; no ticket-creation coverage is claimed here.
+
+### V11 exact-head CI and fixture correction
+
+- V11 pushed as `5b638f0e4ad23f526b753792312d6eae20881312`; the mandatory pre-push hook passed all 23 packages (20 cached, 77 seconds).
+- Run `41260087750` passed engine/core, the Node bundle, hosted API types, module loading and lane policy. Its API runtime step passed 262 cases and failed one older run-token fixture: it mistook V11's four-key suspension writer for the read-only verifier because both now declare a revocation key.
+- The fixture now recognizes the verifier's binding/generation/live/revocation key layout before using `EVAL_RO`; read-only verification enforcement is retained. The affected run-token file passed 22 tests / 241 assertions against disposable Valkey, with zero keys remaining. A new exact-head CI result is still pending the next push.

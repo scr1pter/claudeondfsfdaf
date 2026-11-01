@@ -548,9 +548,13 @@ function integrationTests() {
       if (state.corrupt) return Response.json({ result: { unexpected: true } })
       for (const key of command[0] === "EVAL" ? command.slice(3, 3 + Number(command[2])) : [command[1] ?? ""])
         keys.add(key)
-      // The run-token check is the only script that declares a revocation mark. It goes to the store as EVAL_RO, so a
-      // write on any of its paths would fail every test that reaches it.
-      const check = command[0] === "EVAL" && command[2] === "4" && command[6]?.startsWith("vector:cli-revoked:")
+      // Recognize the verifier by its binding/generation/live/revocation key layout: other writers also fence
+      // revocation. EVAL_RO still proves that verification never writes on any path.
+      const check = command[0] === "EVAL" && ["4", "5"].includes(command[2] ?? "")
+        && command[3]?.startsWith("vector:cloud-agents:binding:")
+        && command[4]?.startsWith("vector:cloud-agents:gen:")
+        && command[5]?.startsWith("vector:cloud-agents:live:")
+        && command[6]?.startsWith("vector:cli-revoked:")
       return redis.send(check ? "EVAL_RO" : (command[0] ?? ""), command.slice(1)).then(
         (result) => Response.json({ result }),
         (error: unknown) => Response.json({ error: String(error) }, { status: 400 }),
