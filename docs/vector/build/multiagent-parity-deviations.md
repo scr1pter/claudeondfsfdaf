@@ -1196,8 +1196,13 @@ checks. No assertion, deadline, engine source or measured release bytes change.
 The old run completed with 19 successful jobs and two failures: Linux shard 1
 above and Windows shard 1 job `124713783005`, whose sole failed case was the
 same IPC check (647 passes, four skips). The other three optional jobs skipped.
-Fresh general run `41263580768` tests the correction at `6b88dcb2`; its desktop
-Node bundle job has passed, with the other jobs still running at this entry.
-A successful complete result is still required. Shard numbers alone do not prove
+Fresh general run [41263580768](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/41263580768)
+at `6b88dcb2c0e09eeba23b2c6737b010e0f10bd971` completed successfully: all 21
+required jobs passed and the three optional jobs skipped. This covers Linux and
+Windows units, all four Linux and twelve Windows engine shards, both browser
+jobs, and the desktop Node bundle with the explicit instrumentation/provenance
+checks. It validates the shared integration baseline through WP29 and CI9;
+WP30/WP31, later Codium work and @vector have separate source and validation
+records. No release or main merge follows from this result. Shard numbers alone do not prove
 a particular file ran, because adding or removing a discovered file changes
 Bun's shard assignments.
