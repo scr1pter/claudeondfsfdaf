@@ -254,6 +254,8 @@ const layer = Layer.effect(
             cost: row.cost,
             unpricedSteps: row.unpriced_steps || undefined,
             codiumSteps: row.codium_steps || undefined,
+            tokensOwnOnly: row.tokens_own_only,
+            subagentTokensOwnOnly: row.subagent_tokens_own_only,
             subagentCost: row.subagent_cost || undefined,
             subagentUnpricedSteps: row.subagent_unpriced_steps || undefined,
             subagentCodiumSteps: row.subagent_codium_steps || undefined,
@@ -354,6 +356,9 @@ const layer = Layer.effect(
         directory: input.location.directory,
         ...(input.location.workspaceID ? { workspaceID: input.location.workspaceID } : {}),
         title: source.title,
+        // Local read provenance never crosses an archive boundary, including an empty or tampered archive.
+        tokensOwnOnly: false,
+        subagentTokensOwnOnly: false,
         version: InstallationVersion,
         time: { created: Date.now(), updated: Date.now() },
       })

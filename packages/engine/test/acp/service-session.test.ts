@@ -1156,6 +1156,25 @@ describe("ACP service sessions", () => {
     expect(updates.filter((item) => item.update.sessionUpdate === "usage_update")).toEqual([])
   })
 
+  it("unknown raw provider identity suppresses prompt usage and current-context updates", async () => {
+    for (const providerID of ["", "  ", " vector-plan "]) {
+      const unknown = {
+        ...assistantInfo({ input: 987654, output: 0, reasoning: 10, cache: { read: 0, write: 0 } }),
+        providerID,
+      }
+      const { service, updates } = makeService([], {
+        realUsage: true,
+        prompt: () => Promise.resolve({ data: { info: unknown } }),
+      })
+      const session = await Effect.runPromise(service.newSession({ cwd: "/workspace", mcpServers: [] }))
+      const result = await Effect.runPromise(
+        service.prompt({ sessionId: session.sessionId, prompt: [{ type: "text", text: "hello" }] }),
+      )
+      expect(result).not.toHaveProperty("usage")
+      expect(updates.filter((item) => item.update.sessionUpdate === "usage_update")).toEqual([])
+    }
+  })
+
   it("maps assistant prompt errors to request errors instead of end turn", async () => {
     const { service } = makeService([], {
       prompt: () =>

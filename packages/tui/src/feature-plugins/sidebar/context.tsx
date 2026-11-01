@@ -70,6 +70,7 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
         tokens: 0,
         percent: null,
         codium: false,
+        own: false,
       }
     }
 
@@ -79,6 +80,7 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
     return {
       tokens,
       codium: Boolean(Billing.of(last)),
+      own: Billing.hasOwnIdentity(last),
       percent: model?.limit.context ? Math.round((tokens / model.limit.context) * 100) : null,
     }
   })
@@ -90,7 +92,7 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
       </text>
       <text fg={theme().textMuted}>
         {CodiumUsage.withCodium(
-          state().codium ? undefined : `${state().tokens.toLocaleString()} tokens`,
+          state().own ? `${state().tokens.toLocaleString()} tokens` : state().codium ? undefined : "Tokens unavailable",
           state().codium ? 1 : total().codium,
         )}
       </text>

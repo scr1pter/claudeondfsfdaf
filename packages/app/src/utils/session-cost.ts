@@ -26,13 +26,30 @@ export function sessionSpend(
   info: Spend | undefined,
   messages: readonly BillingMessage[] = [],
   children: readonly Spend[] = [],
-) {
+): { cost: number; unpricedSteps: number; codiumSteps: number } {
   const legacy = legacyCodium(info, messages, children)
-  const codiumSteps = legacy ? 1 : (info?.codiumSteps ?? 0) + (info?.subagentCodiumSteps ?? 0)
+  const codiumSteps = legacy
+    ? Math.max(1, (info?.codiumSteps ?? 0) + (info?.subagentCodiumSteps ?? 0))
+    : (info?.codiumSteps ?? 0) + (info?.subagentCodiumSteps ?? 0)
+  const knownOwn = legacy
+    ? Math.max(
+        messages.filter((message) => message.role === "assistant" && message.unpriced && !Billing.of(message)).length,
+        info?.tokensOwnOnly === true ? CodiumUsage.ownUnpricedSteps(info.unpricedSteps, info.codiumSteps) : 0,
+      ) +
+      Math.max(
+        info?.subagentTokensOwnOnly === true
+          ? CodiumUsage.ownUnpricedSteps(info.subagentUnpricedSteps, info.subagentCodiumSteps)
+          : 0,
+        children.reduce((sum, child) => {
+          const spend = sessionSpend(child)
+          return sum + CodiumUsage.ownUnpricedSteps(spend.unpricedSteps, spend.codiumSteps)
+        }, 0),
+      )
+    : 0
   return {
     cost: (info?.cost ?? 0) + (info?.subagentCost ?? 0),
     // Old engines cannot distinguish Codium from own unpriced work. Preserve their dollars, hiding mixed tokens.
-    unpricedSteps: legacy ? codiumSteps : (info?.unpricedSteps ?? 0) + (info?.subagentUnpricedSteps ?? 0),
+    unpricedSteps: legacy ? codiumSteps + knownOwn : (info?.unpricedSteps ?? 0) + (info?.subagentUnpricedSteps ?? 0),
     codiumSteps,
   }
 }
@@ -44,6 +61,8 @@ type Spend = {
   cost?: number
   unpricedSteps?: number
   codiumSteps?: number
+  tokensOwnOnly?: boolean
+  subagentTokensOwnOnly?: boolean
   subagentCost?: number
   subagentUnpricedSteps?: number
   subagentCodiumSteps?: number
@@ -52,7 +71,14 @@ type Spend = {
   subagentTokens?: Tokens
 }
 
-type BillingMessage = { role?: string; billing?: string; providerID?: string; model?: { providerID?: string } }
+type BillingMessage = {
+  role?: string
+  billing?: string
+  unpriced?: boolean
+  tokens?: Tokens
+  providerID?: string
+  model?: { providerID?: string }
+}
 
 /** An older engine's totals cannot separate Codium tokens, so never display those totals. */
 export function legacyCodium(
@@ -60,12 +86,9 @@ export function legacyCodium(
   messages: readonly BillingMessage[] = [],
   children: readonly Spend[] = [],
 ) {
-  if (children.some((child) => legacyCodium(child))) return true
   return (
-    info?.codiumSteps === undefined &&
-    info?.subagentCodiumSteps === undefined &&
-    (Boolean(info && Billing.of(info)) ||
-      messages.some((message) => message.role === "assistant" && Billing.of(message)))
+    CodiumUsage.hasCodium(info, messages, children) &&
+    (info?.tokensOwnOnly !== true || info?.subagentTokensOwnOnly !== true)
   )
 }
 
@@ -79,9 +102,20 @@ export function sessionTokens(
   info: Spend | undefined,
   messages: readonly BillingMessage[] = [],
   children: readonly Spend[] = [],
-) {
-  if (legacyCodium(info, messages, children)) return 0
-  return tokenCount(info?.tokens) + tokenCount(info?.subagentTokens)
+): number | undefined {
+  const ownMessages = messages.filter(
+    (message) => message.role === "assistant" && Billing.hasOwnIdentity(message) && message.tokens,
+  )
+  const own =
+    info?.tokensOwnOnly === true
+      ? tokenCount(info.tokens)
+      : ownMessages.reduce((sum, message) => sum + tokenCount(message.tokens), 0)
+  const delegated =
+    info?.subagentTokensOwnOnly === true
+      ? tokenCount(info.subagentTokens)
+      : children.reduce((sum, child) => sum + (sessionTokens(child) ?? 0), 0)
+  const total = own + delegated
+  return total > 0 || (info?.tokensOwnOnly === true && info?.subagentTokensOwnOnly === true) ? total : undefined
 }
 
 export function compactTokens(value: number) {
@@ -97,7 +131,9 @@ export function delegatedSpend(
   children: readonly Spend[],
   messages: readonly BillingMessage[] = [],
 ) {
-  const legacy = legacyCodium(info, messages) || children.some((child) => legacyCodium(child))
+  const legacy =
+    CodiumUsage.hasCodium({ subagentCodiumSteps: info?.subagentCodiumSteps }, [], children) &&
+    info?.subagentTokensOwnOnly !== true
   const helpers = [
     ...children
       .reduce((groups, child) => {
@@ -110,7 +146,7 @@ export function delegatedSpend(
           cost: current.cost + spend.cost,
           unpricedSteps: current.unpricedSteps + spend.unpricedSteps,
           codiumSteps: current.codiumSteps + spend.codiumSteps,
-          tokens: current.tokens + sessionTokens(child),
+          tokens: current.tokens + (sessionTokens(child) ?? 0),
         })
       }, new Map<string, { label: string; cost: number; unpricedSteps: number; codiumSteps: number; tokens: number }>())
       .values(),
@@ -126,13 +162,30 @@ export function delegatedSpend(
       0,
       (info?.subagentCodiumSteps ?? 0) - helpers.reduce((total, helper) => total + helper.codiumSteps, 0),
     ),
-    tokens: Math.max(0, tokenCount(info?.subagentTokens) - helpers.reduce((total, helper) => total + helper.tokens, 0)),
+    tokens:
+      info?.subagentTokensOwnOnly === true
+        ? Math.max(0, tokenCount(info.subagentTokens) - helpers.reduce((total, helper) => total + helper.tokens, 0))
+        : children.filter((child) => !child.internal).reduce((sum, child) => sum + (sessionTokens(child) ?? 0), 0),
   }
+  const remainingCodium = Math.max(
+    rest.codiumSteps,
+    children.filter((child) => !child.internal).reduce((sum, child) => sum + sessionSpend(child).codiumSteps, 0),
+  )
   const subagents = {
     ...rest,
     cost: rest.cost < 1e-8 ? 0 : rest.cost,
     ...(legacy && (rest.tokens || rest.unpricedSteps || rest.cost)
-      ? { tokens: 0, unpricedSteps: 1, codiumSteps: 1 }
+      ? {
+          unpricedSteps:
+            remainingCodium +
+            children
+              .filter((child) => !child.internal)
+              .reduce((sum, child) => {
+                const spend = sessionSpend(child)
+                return sum + CodiumUsage.ownUnpricedSteps(spend.unpricedSteps, spend.codiumSteps)
+              }, 0),
+          codiumSteps: remainingCodium,
+        }
       : {}),
   }
   return {

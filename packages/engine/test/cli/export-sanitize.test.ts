@@ -46,7 +46,7 @@ function message(id: string, providerID: string, billing?: "codium") {
   }
 }
 
-function archive(input: { codiumSteps?: number; messages?: unknown[] } = {}) {
+function archive(input: { tokensOwnOnly?: boolean; codiumSteps?: number; messages?: unknown[] } = {}) {
   return Schema.decodeUnknownSync(SessionArchive.Legacy)({
     info: {
       id: "ses_export",
@@ -56,6 +56,9 @@ function archive(input: { codiumSteps?: number; messages?: unknown[] } = {}) {
       title: "Private session title",
       version: "test",
       time: { created: 1, updated: 2 },
+      ...(input.tokensOwnOnly === undefined
+        ? {}
+        : { tokensOwnOnly: input.tokensOwnOnly, subagentTokensOwnOnly: input.tokensOwnOnly }),
       tokens: tokens(123),
       subagentTokens: tokens(45),
       cost: 0.12,
@@ -68,11 +71,13 @@ function archive(input: { codiumSteps?: number; messages?: unknown[] } = {}) {
 
 describe("sanitizeLegacy Codium usage", () => {
   test("current mixed archives keep partitioned own totals and omit Codium message and step tokens", () => {
-    const source = archive({ codiumSteps: 1 })
+    const source = archive({ codiumSteps: 1, tokensOwnOnly: true })
     const sanitized = sanitizeLegacy(source)
     expect(sanitized.info).toMatchObject({
       cost: 0.12,
       subagentCost: 0.04,
+      tokensOwnOnly: true,
+      subagentTokensOwnOnly: true,
       tokens: tokens(123),
       subagentTokens: tokens(45),
       codiumSteps: 1,
@@ -133,7 +138,7 @@ describe("sanitizeLegacy Codium usage", () => {
   })
 
   test("own-only archives keep their measurements without inventing a Codium marker", () => {
-    const sanitized = sanitizeLegacy(archive({ messages: [message("msg_own", "lmstudio")] }))
+    const sanitized = sanitizeLegacy(archive({ tokensOwnOnly: true, messages: [message("msg_own", "lmstudio")] }))
     expect(sanitized.info).toMatchObject({ cost: 0.12, tokens: tokens(123), subagentTokens: tokens(45) })
     expect(sanitized.messages[0]?.info).toMatchObject({ cost: 0.12, tokens: tokens(123) })
     expect(sanitized.messages[0]?.info).not.toHaveProperty("billing")
@@ -153,4 +158,18 @@ describe("sanitizeLegacy Codium usage", () => {
     expect(JSON.stringify(sanitized)).not.toContain("Private source text")
     expect(JSON.stringify(sanitized)).not.toContain("/private/repo")
   })
+})
+
+test("unknown proof and missing message identity omit figures without inventing Codium", () => {
+  const raw = archive({ messages: [message("msg_missing", "  "), message("msg_own", "own")] })
+  const before = JSON.stringify(raw)
+  const output = sanitizeLegacy(raw)
+  expect(output.info).not.toHaveProperty("tokens")
+  expect(output.info).not.toHaveProperty("subagentTokens")
+  expect(output.info.cost).toBe(0.12)
+  expect(output.messages[0]?.info).not.toHaveProperty("tokens")
+  expect(output.messages[0]?.info).not.toHaveProperty("billing")
+  expect(output.messages[0]?.parts[0]).not.toHaveProperty("tokens")
+  expect(output.messages[1]?.info).toHaveProperty("tokens")
+  expect(JSON.stringify(raw)).toBe(before)
 })

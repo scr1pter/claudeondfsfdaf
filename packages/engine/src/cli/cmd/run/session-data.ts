@@ -862,11 +862,11 @@ export function reduceSessionData(input: SessionDataInput): SessionDataOutput {
     if (typeof info.id === "string" && typeof info.cost === "number")
       data.spent.set(info.id, { cost: info.cost, unpriced: info.unpriced === true, billing: Billing.of(info) })
     const context = formatContext(
-      info.tokens,
+      Billing.of(info) || Billing.hasOwnIdentity(info) ? info.tokens : undefined,
       input.limits[modelKey(info.providerID, info.modelID)],
       Boolean(Billing.of(info)),
     )
-    data.context = Billing.of(info) ? context : (context ?? data.context)
+    data.context = !Billing.hasOwnIdentity(info) ? context : (context ?? data.context)
     const usage = [data.context, formatSpend(data.spent)].filter(Boolean).join(" · ")
     if (usage) {
       next = {

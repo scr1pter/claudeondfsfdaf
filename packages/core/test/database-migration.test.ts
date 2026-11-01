@@ -27,6 +27,7 @@ import sessionMetadataMigration from "@vectordevai/core/database/migration/20260
 import sessionInternalHelpersMigration from "@vectordevai/core/database/migration/20261011044552_session_internal_helpers"
 import classifyEarlyReviewHelpersMigration from "@vectordevai/core/database/migration/20261015171500_classify_early_review_helpers"
 import sessionCodiumStepsMigration from "@vectordevai/core/database/migration/20261031070337_session_codium_steps"
+import sessionTokenProvenanceMigration from "@vectordevai/core/database/migration/20261101020803_session_token_provenance"
 import type { SqlClient as SqlClientService } from "effect/unstable/sql/SqlClient"
 import { Database } from "@vectordevai/core/database/database"
 import { SessionProjector } from "@vectordevai/core/session/projector"
@@ -41,6 +42,37 @@ const run = <A, E>(effect: Effect.Effect<A, E, SqlClientService>) =>
 const makeDb = EffectDrizzleSqlite.makeWithDefaults()
 
 describe("DatabaseMigration", () => {
+  test("token provenance starts unknown for old rows with missing history and for generic later inserts", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        yield* db.run(
+          sql`CREATE TABLE session (id text PRIMARY KEY, tokens_input integer NOT NULL DEFAULT 0, cost real NOT NULL DEFAULT 0, codium_steps integer NOT NULL DEFAULT 0, metadata text)`,
+        )
+        yield* db.run(
+          sql`INSERT INTO session (id, tokens_input, cost, codium_steps, metadata) VALUES ('old', 900, 0.12, 1, '{"tokensOwnOnly":true,"subagentTokensOwnOnly":true}'), ('empty', 0, 0, 0, NULL)`,
+        )
+        // No messages remain to inspect, and even a positive modern Codium count says nothing about older totals.
+        yield* DatabaseMigration.applyOnly(db, [sessionTokenProvenanceMigration])
+        expect(
+          yield* db.all(sql`SELECT id, tokens_own_only, subagent_tokens_own_only FROM session ORDER BY id`),
+        ).toEqual([
+          { id: "empty", tokens_own_only: 0, subagent_tokens_own_only: 0 },
+          { id: "old", tokens_own_only: 0, subagent_tokens_own_only: 0 },
+        ])
+        expect(yield* db.get(sql`SELECT tokens_input, cost, codium_steps FROM session WHERE id = 'old'`)).toEqual({
+          tokens_input: 900,
+          cost: 0.12,
+          codium_steps: 1,
+        })
+        yield* db.run(sql`INSERT INTO session (id) VALUES ('later')`)
+        expect(
+          yield* db.get(sql`SELECT tokens_own_only, subagent_tokens_own_only FROM session WHERE id = 'later'`),
+        ).toEqual({ tokens_own_only: 0, subagent_tokens_own_only: 0 })
+      }),
+    )
+  })
+
   test("serializes concurrent embedded initialization for one database path", async () => {
     await using tmp = await tmpdir()
     const filename = path.join(tmp.path, "embedded.sqlite")

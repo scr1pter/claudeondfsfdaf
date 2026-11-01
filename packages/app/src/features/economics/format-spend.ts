@@ -57,7 +57,7 @@ export function sessionReading(input: {
   cost: number
   unpricedSteps: number
   codiumSteps?: number
-  tokens: number
+  tokens: number | undefined
   kind: SpendKind
   format: (value: number) => string
   t: (key: "session.cost.unknown" | "session.cost.partial", params: { cost: string }) => string
@@ -74,11 +74,11 @@ export function sessionReading(input: {
           ? input.kind
           : "unpriced"
   const own =
-    kind === "free" && !input.cost && input.tokens > 0
+    kind === "free" && !input.cost && (input.tokens ?? 0) > 0
       ? "free"
-      : kind === "plan" && !input.cost && input.tokens > 0
+      : kind === "plan" && !input.cost && (input.tokens ?? 0) > 0
         ? "ChatGPT plan"
-        : kind === "unpriced" && !input.cost && input.tokens > 0
+        : kind === "unpriced" && !input.cost && (input.tokens ?? 0) > 0
           ? input.t("session.cost.unknown", { cost: input.format(0) })
           : undefined
   return {

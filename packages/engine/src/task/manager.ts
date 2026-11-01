@@ -184,6 +184,7 @@ const layer = Layer.effect(
           steps: Number(counts?.steps ?? 0),
           unpricedSteps: session.unpricedSteps,
           codiumSteps: session.codiumSteps,
+          tokensOwnOnly: session.tokensOwnOnly === true,
         },
         ownedPaths: current.ownedPaths ?? [],
         dependsOn: current.dependsOn ?? [],

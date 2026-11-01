@@ -1,3 +1,4 @@
+import { SessionAccounting } from "@vectordevai/core/session/accounting"
 import { ShareNext } from "@/share/share-next"
 import { PublicShareRemovalError, publicShareWarning } from "@vectordevai/schema/public-share"
 import { PublicSession } from "@vectordevai/schema/public-session"
@@ -107,6 +108,8 @@ export function fromRow(row: SessionRow): Info {
     cost: row.cost,
     unpricedSteps: row.unpriced_steps || undefined,
     codiumSteps: row.codium_steps || undefined,
+    tokensOwnOnly: row.tokens_own_only,
+    subagentTokensOwnOnly: row.subagent_tokens_own_only,
     subagentCost: row.subagent_cost || undefined,
     subagentUnpricedSteps: row.subagent_unpriced_steps || undefined,
     subagentCodiumSteps: row.subagent_codium_steps || undefined,
@@ -266,6 +269,9 @@ export const Info = Schema.Struct({
   unpricedSteps: optional(NonNegativeInt),
   // How many of those unpriced steps ran on Vector Codium; own unpriced steps are unpricedSteps − codiumSteps.
   codiumSteps: optional(NonNegativeInt),
+  // True only when the accounting boundary proves the aggregate contains own-model tokens only.
+  tokensOwnOnly: optional(Schema.Boolean),
+  subagentTokensOwnOnly: optional(Schema.Boolean),
   // What the subagent sessions below this one spent, which cost leaves out, and how many of their steps were unpriced.
   subagentCost: optional(Schema.Finite),
   subagentUnpricedSteps: optional(NonNegativeInt),
@@ -690,9 +696,15 @@ const layer: Layer.Layer<
       }
       yield* Effect.logInfo("created", result)
 
-      yield* events.publish(SessionV1.Event.Created, { sessionID: result.id, info: result })
+      yield* events.publish(
+        SessionV1.Event.Created,
+        { sessionID: result.id, info: result },
+        {
+          commit: (seq) => SessionAccounting.initializeEmpty(db, result.id, seq),
+        },
+      )
 
-      return result
+      return yield* get(result.id).pipe(Effect.orDie)
     })
 
     const get = Effect.fn("Session.get")(function* (id: SessionID) {
@@ -941,6 +953,7 @@ const layer: Layer.Layer<
         title,
         metadata: structuredClone(original.metadata),
       })
+      yield* SessionAccounting.invalidate(db, session.id)
       const msgs = yield* messages({ sessionID: input.sessionID })
       const idMap = new Map<string, MessageID>()
 
@@ -981,7 +994,7 @@ const layer: Layer.Layer<
           yield* updatePart(p)
         }
       }
-      return session
+      return yield* get(session.id)
     })
 
     const patch = (sessionID: SessionID, info: Patch) =>

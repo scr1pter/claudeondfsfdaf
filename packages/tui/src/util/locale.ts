@@ -99,7 +99,15 @@ export function spend(cost: number | undefined, unpricedSteps: number | undefine
 
 type Spend = Pick<
   Session,
-  "cost" | "unpricedSteps" | "codiumSteps" | "subagentCost" | "subagentUnpricedSteps" | "subagentCodiumSteps" | "model"
+  | "cost"
+  | "unpricedSteps"
+  | "codiumSteps"
+  | "subagentCost"
+  | "subagentUnpricedSteps"
+  | "subagentCodiumSteps"
+  | "model"
+  | "tokensOwnOnly"
+  | "subagentTokensOwnOnly"
 >
 type BillingMessage = {
   role?: string
@@ -116,11 +124,8 @@ export function legacyCodium(
   children: readonly Spend[] = [],
 ): boolean {
   return (
-    children.some((child) => legacyCodium(child)) ||
-    (session?.codiumSteps === undefined &&
-      session?.subagentCodiumSteps === undefined &&
-      (Boolean(session && Billing.of(session)) ||
-        messages.some((message) => message.role === "assistant" && Billing.of(message))))
+    CodiumUsage.hasCodium(session, messages, children) &&
+    (session?.tokensOwnOnly !== true || session?.subagentTokensOwnOnly !== true)
   )
 }
 
@@ -134,12 +139,10 @@ export function sessionSpend(
   const knownOwn = legacy
     ? Math.max(
         messages.filter((message) => message.role === "assistant" && message.unpriced && !Billing.of(message)).length,
-        session?.codiumSteps === undefined
-          ? 0
-          : CodiumUsage.ownUnpricedSteps(session.unpricedSteps, session.codiumSteps),
+        session?.tokensOwnOnly !== true ? 0 : CodiumUsage.ownUnpricedSteps(session.unpricedSteps, session.codiumSteps),
       ) +
       Math.max(
-        session?.subagentCodiumSteps === undefined
+        session?.subagentTokensOwnOnly !== true
           ? 0
           : CodiumUsage.ownUnpricedSteps(session.subagentUnpricedSteps, session.subagentCodiumSteps),
         children.reduce((sum, child) => {
@@ -150,8 +153,12 @@ export function sessionSpend(
     : 0
   return {
     cost: (session?.cost ?? 0) + (session?.subagentCost ?? 0),
-    unpriced: legacy ? 1 + knownOwn : (session?.unpricedSteps ?? 0) + (session?.subagentUnpricedSteps ?? 0),
-    codium: legacy ? 1 : (session?.codiumSteps ?? 0) + (session?.subagentCodiumSteps ?? 0),
+    unpriced: legacy
+      ? Math.max(1, (session?.codiumSteps ?? 0) + (session?.subagentCodiumSteps ?? 0)) + knownOwn
+      : (session?.unpricedSteps ?? 0) + (session?.subagentUnpricedSteps ?? 0),
+    codium: legacy
+      ? Math.max(1, (session?.codiumSteps ?? 0) + (session?.subagentCodiumSteps ?? 0))
+      : (session?.codiumSteps ?? 0) + (session?.subagentCodiumSteps ?? 0),
   }
 }
 
@@ -161,3 +168,10 @@ export function pluralize(count: number, singular: string, plural: string): stri
 }
 
 export * as Locale from "./locale"
+
+/** Raw context quantities require an identified own provider; Codium shows only its percentage. */
+export function context(tokens: number, limit: number | undefined, message: Parameters<typeof Billing.of>[0]) {
+  const percent = limit ? `${Math.round((tokens / limit) * 100)}%` : undefined
+  if (!Billing.hasOwnIdentity(message)) return Billing.of(message) && percent ? `${percent} of context` : undefined
+  return percent ? `${number(tokens)} (${percent})` : number(tokens)
+}

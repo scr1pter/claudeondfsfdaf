@@ -973,7 +973,7 @@ export const RunCommand = effectCmd({
           const toggles = new Map<string, boolean>()
           // A step-finish part is written again once its snapshot lands; its usage was already in the first write.
           const finishedSteps = new Set<string>()
-          const billingByMessage = new Map<string, "codium" | undefined>()
+          const billingByMessage = new Map<string, "codium" | "own" | undefined>()
           // Subagents run in child sessions, and a request left unanswered there blocks the whole run, so the run
           // answers requests from any session that descends from its own.
           const tree = new Set([sessionID])
@@ -1052,7 +1052,11 @@ export const RunCommand = effectCmd({
             if (next.event.done) break
             const event: Event = next.event.value
             if (event.type === "message.updated" && event.properties.info.role === "assistant")
-              billingByMessage.set(event.properties.info.id, Billing.of(event.properties.info))
+              billingByMessage.set(
+                event.properties.info.id,
+                Billing.of(event.properties.info) ??
+                  (Billing.hasOwnIdentity(event.properties.info) ? "own" : undefined),
+              )
             const properties: unknown = "properties" in event ? event.properties : undefined
             const owner = isRecord(properties)
               ? isRecord(properties.info) && typeof properties.info.sessionID === "string"

@@ -1,3 +1,4 @@
+import { SessionAccountingOutput } from "@vectordevai/core/session/accounting-output"
 import { PublicSession } from "@vectordevai/schema/public-session"
 import { PublicShareRemovalError, publicShareWarning } from "@vectordevai/schema/public-share"
 import { ShareNext } from "@/share/share-next"
@@ -427,7 +428,7 @@ const layer = Layer.effect(
                   directory: event.directory,
                   project: event.project,
                   workspace: space.id,
-                  payload: event.payload,
+                  payload: SessionAccountingOutput.untrusted(payload),
                 })
               } catch (error) {
                 yield* Effect.logWarning("failed to emit global event", {

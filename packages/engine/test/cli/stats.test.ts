@@ -1,7 +1,8 @@
+import { eq } from "drizzle-orm"
 import { describe, expect, spyOn } from "bun:test"
 import { SessionV1 } from "@vectordevai/core/v1/session"
 import { Database } from "@vectordevai/core/database/database"
-import { SessionMessageTable } from "@vectordevai/core/session/sql"
+import { SessionTable, SessionMessageTable } from "@vectordevai/core/session/sql"
 import { SessionMessage } from "@vectordevai/schema/session-message"
 import { SessionProjector } from "@vectordevai/core/session/projector"
 import { CrossSpawnSpawner } from "@vectordevai/core/cross-spawn-spawner"
@@ -225,4 +226,65 @@ it.instance("V2 stored billing and Codium compaction are omitted from printed ow
     }
     yield* session.remove(info.id)
   }),
+)
+
+it.instance(
+  "unknown historical totals retain own dollars without exposing flagless compaction or empty-provider tokens",
+  () =>
+    Effect.gen(function* () {
+      const session = yield* Session.Service
+      const { db } = yield* Database.Service
+      const before = yield* aggregateSessionStats()
+      const info = yield* session.create({ title: "history missing" })
+      yield* db
+        .update(SessionTable)
+        .set({
+          tokens_own_only: false,
+          tokens_input: 987654,
+          cost: 0.12,
+          codium_steps: 1,
+          model: { id: "own", providerID: "own" },
+        })
+        .where(eq(SessionTable.id, info.id))
+        .run()
+        .pipe(Effect.orDie)
+      const message = Schema.encodeSync(SessionMessage.Message)(
+        Schema.decodeUnknownSync(SessionMessage.Message)({
+          id: "msg_missing_compaction",
+          type: "compaction",
+          time: { created: Date.now() },
+          reason: "auto",
+          summary: "summary",
+          recent: "recent",
+          cost: 0,
+          tokens: { input: 876543, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+        }),
+      )
+      const { id, type, ...data } = message
+      yield* db
+        .insert(SessionMessageTable)
+        .values({
+          id: SessionMessage.ID.make(id),
+          session_id: info.id,
+          type,
+          seq: 0,
+          time_created: Date.now(),
+          time_updated: Date.now(),
+          data,
+        })
+        .run()
+        .pipe(Effect.orDie)
+      const after = yield* aggregateSessionStats()
+      expect(after.totalCost - before.totalCost).toBeCloseTo(0.12)
+      expect(after.totalTokens.input - before.totalTokens.input).toBe(0)
+      expect(after.codiumResponses - before.codiumResponses).toBe(1)
+      yield* session.remove(info.id)
+      const empty = yield* session.create({ title: "blank provider" })
+      yield* step(empty.id, Date.now(), 0.12, "  ")
+      const stats = yield* aggregateSessionStats()
+      expect(stats.modelUsage["  /test"]).toBeUndefined()
+      expect(stats.totalTokens.input - before.totalTokens.input).toBe(0)
+      expect(stats.totalCost - before.totalCost).toBeCloseTo(0.12)
+      yield* session.remove(empty.id)
+    }),
 )

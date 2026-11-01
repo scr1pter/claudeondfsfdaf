@@ -97,11 +97,20 @@ test("task CLI never renders missing usage as zero spend", () => {
     expect(printed).toContain('"cost":0.12')
     expect(printed).toContain('"costKind":"unknown"')
   }
-  const modern = { ...legacy, usage: { ...usage, codiumSteps: 1, total: 123, tokens: { ...usage.tokens, input: 123 } } }
+  const modern = {
+    ...legacy,
+    usage: { ...usage, tokensOwnOnly: true, codiumSteps: 1, total: 123, tokens: { ...usage.tokens, input: 123 } },
+  }
   expect(tasksForOutput({ tasks: [modern, task], truncated: false })).toEqual({
     tasks: [modern, task],
     truncated: false,
   })
+  for (const codiumSteps of [0, 1]) {
+    const ambiguous = { ...task, usage: { ...usage, codiumSteps } }
+    expect(JSON.stringify(tasksForOutput({ task: ambiguous }))).not.toContain("987654")
+    expect(formatTasks([ambiguous])).not.toContain("987,654")
+    expect(formatTasks([ambiguous])).toContain("$0.1200")
+  }
   expect(legacy.usage.total).toBe(987654)
   expect(formatTasks([task])).toContain("usage unavailable")
   expect(formatTasks([{ ...task, billing: "codium", costKind: "codium" }])).toContain("Codium")

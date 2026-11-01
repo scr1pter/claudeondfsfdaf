@@ -48,5 +48,6 @@ export const migrations = (
     import("./migration/20261011044552_session_internal_helpers"),
     import("./migration/20261015171500_classify_early_review_helpers"),
     import("./migration/20261031070337_session_codium_steps"),
+    import("./migration/20261101020803_session_token_provenance"),
   ])
 ).map((module) => module.default) satisfies DatabaseMigration.Migration[]

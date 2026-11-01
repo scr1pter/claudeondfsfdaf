@@ -639,9 +639,9 @@ function makeUsageService(sdk: VectorClient) {
     const latest = messages.findLast(
       (message): message is { readonly info: UsageService.AssistantMessage } => message.info.role === "assistant",
     )
-    if (latest && Billing.of(latest.info)) return messages
+    if (latest && !Billing.hasOwnIdentity(latest.info)) return messages
     const message = UsageService.latestAssistantMessage(messages)
-    if (!message?.providerID || !message.modelID || Billing.of(message)) return messages
+    if (!message?.providerID || !Billing.hasOwnIdentity(message) || !message.modelID) return messages
 
     const size = yield* contextLimit({
       directory: params.directory,
@@ -849,7 +849,8 @@ const promptResponse = Effect.fn("ACP.promptResponse")(function* (
 ) {
   // The turn's usage covers every provider step it ran, not just the last one.
   const usage = info
-    ? ((messages ? UsageService.turnUsage(messages, info.id) : undefined) ?? UsageService.buildUsage(info))
+    ? ((messages ? UsageService.turnUsage(messages, info.id) : undefined) ??
+      (Billing.hasOwnIdentity(info) ? UsageService.buildUsage(info) : undefined))
     : undefined
   if (!info?.error) {
     return {

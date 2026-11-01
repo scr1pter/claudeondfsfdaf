@@ -53,6 +53,8 @@ describe("sessionCost and sessionTokens", () => {
   test("add what the subagents and helpers below the session spent", () => {
     const data = {
       cost: 0.4,
+      tokensOwnOnly: true,
+      subagentTokensOwnOnly: true,
       tokens: { input: 100, output: 20 },
       subagentCost: 0.25,
       subagentTokens: { input: 50, cache: { read: 10 } },
@@ -69,7 +71,7 @@ describe("sessionCost and sessionTokens", () => {
 
   test("a session with no subagents reads its own spend", () => {
     expect(sessionCost({ cost: 0.3 })).toBe(0.3)
-    expect(sessionTokens({ tokens: { output: 7 } })).toBe(7)
+    expect(sessionTokens({ tokensOwnOnly: true, tokens: { output: 7 } })).toBe(7)
   })
 })
 
@@ -156,7 +158,13 @@ test("Codium drains combine without counting unknown or dollar spend", () => {
 })
 
 describe("measuredRun", () => {
-  const zero = { cost: 0, tokens: { input: 0, output: 0 }, model: { providerID: "vector-plan" } }
+  const zero = {
+    tokensOwnOnly: true,
+    subagentTokensOwnOnly: true,
+    cost: 0,
+    tokens: { input: 0, output: 0 },
+    model: { providerID: "vector-plan" },
+  }
   test("counts Codium presence and own usage without historical session activity", () => {
     expect(
       measuredRun(snapshot({ spentUsd: 0, costKind: "codium", codiumSteps: 2 }), zero, { ...zero, codiumSteps: 2 }),
@@ -217,7 +225,9 @@ describe("measuredRun", () => {
     expect(measuredRun(guard, zero, { ...zero, cost: 0.25, codiumSteps: 3 }).totalCostUsd).toBe(0.25)
   })
   test("legacy Codium totals hide inseparable tokens while retaining own dollars", () => {
-    expect(measuredRun(undefined, zero, { ...zero, cost: 0.12, tokens: { input: 100_000 } })).toEqual({
+    expect(
+      measuredRun(undefined, zero, { ...zero, tokensOwnOnly: false, cost: 0.12, tokens: { input: 100_000 } }),
+    ).toEqual({
       totalCostUsd: 0.12,
       totalTokens: undefined,
       billing: "codium",
@@ -232,9 +242,34 @@ describe("measuredRun", () => {
 })
 
 test("a missing guard falls back to own unknown deltas after removing inclusive Codium counts", () => {
-  const before = { cost: 0, tokens: { input: 0 }, codiumSteps: 2, unpricedSteps: 3 }
+  const before = {
+    tokensOwnOnly: true,
+    subagentTokensOwnOnly: true,
+    cost: 0,
+    tokens: { input: 0 },
+    codiumSteps: 2,
+    unpricedSteps: 3,
+  }
   const only = measuredRun(undefined, before, { ...before, codiumSteps: 5, unpricedSteps: 6 })
   expect(only).toEqual({ totalCostUsd: 0, totalTokens: 0, billing: "codium", costKind: "codium" })
   const mixed = measuredRun(undefined, before, { ...before, codiumSteps: 5, unpricedSteps: 7, tokens: { input: 25 } })
   expect(mixed).toEqual({ totalCostUsd: undefined, totalTokens: 25, billing: "codium", costKind: "unknown" })
+})
+
+test("unknown aggregate provenance cannot leak deleted history through a current own model", () => {
+  for (const codiumSteps of [0, 1]) {
+    const old = {
+      tokensOwnOnly: false,
+      subagentTokensOwnOnly: false,
+      model: { providerID: "own" },
+      codiumSteps,
+      tokens: { input: 987654 },
+      subagentTokens: { input: 876543 },
+      cost: 0.12,
+    }
+    expect(sessionTokens(old)).toBeUndefined()
+    expect(sessionCost(old)).toBe(0.12)
+    expect(sessionTokens({ ...old, tokensOwnOnly: true })).toBeUndefined()
+    expect(sessionTokens({ ...old, tokensOwnOnly: true, subagentTokensOwnOnly: true })).toBe(1864197)
+  }
 })

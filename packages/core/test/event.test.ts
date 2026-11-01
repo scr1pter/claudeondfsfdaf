@@ -84,6 +84,157 @@ const it = testEffect(
 const itWithoutLocation = testEffect(AppNodeBuilder.build(LayerNode.group([Database.node, EventV2.node])))
 
 describe("EventV2", () => {
+  it.effect("rejects nested Session identity mismatches before any live or replay projection", () =>
+    Effect.gen(function* () {
+      const events = yield* EventV2.Service
+      const { db } = yield* Database.Service
+      const sessionID = Session.ID.create()
+      const otherID = Session.ID.create()
+      const info = Schema.decodeUnknownSync(SessionV1.SessionInfo)({
+        id: otherID,
+        projectID: "global",
+        slug: "identity",
+        title: "Identity",
+        directory: "/project",
+        version: "test",
+        time: { created: 0, updated: 0 },
+      })
+      const user = Schema.decodeUnknownSync(SessionV1.User)({
+        id: "msg_identity",
+        sessionID: otherID,
+        role: "user",
+        time: { created: 0 },
+        agent: "build",
+        model: { providerID: "own", modelID: "own" },
+      })
+      const part = Schema.decodeUnknownSync(SessionV1.TextPart)({
+        id: "prt_identity",
+        sessionID: otherID,
+        messageID: user.id,
+        type: "text",
+        text: "private",
+      })
+      const cases = [
+        {
+          definition: SessionV1.Event.Created,
+          data: { sessionID, info },
+          publish: () => events.publish(SessionV1.Event.Created, { sessionID, info }),
+        },
+        {
+          definition: SessionV1.Event.Updated,
+          data: { sessionID, info },
+          publish: () => events.publish(SessionV1.Event.Updated, { sessionID, info }),
+        },
+        {
+          definition: SessionV1.Event.MessageUpdated,
+          data: { sessionID, info: user },
+          publish: () => events.publish(SessionV1.Event.MessageUpdated, { sessionID, info: user }),
+        },
+        {
+          definition: SessionV1.Event.PartUpdated,
+          data: { sessionID, part, time: 0 },
+          publish: () => events.publish(SessionV1.Event.PartUpdated, { sessionID, part, time: 0 }),
+        },
+      ]
+      const projected: unknown[] = []
+      const notified: unknown[] = []
+      yield* events.listen((event) =>
+        Effect.sync(() => {
+          notified.push(event)
+        }),
+      )
+      for (const item of cases) {
+        yield* events.project(item.definition, (event) =>
+          Effect.sync(() => {
+            projected.push(event)
+          }),
+        )
+        const published: Effect.Effect<unknown> = item.publish()
+        const live = yield* published.pipe(Effect.exit)
+        expect(live._tag).toBe("Failure")
+        expect(String(live)).toContain("Session event identity does not match its envelope")
+        const replay = yield* events
+          .replay(
+            {
+              id: EventV2.ID.create(),
+              type: EventV2.versionedType(item.definition.type, 1),
+              aggregateID: sessionID,
+              seq: 0,
+              data: item.data,
+            },
+            { publish: true },
+          )
+          .pipe(Effect.exit)
+        expect(replay._tag).toBe("Failure")
+      }
+      expect(projected).toEqual([])
+      expect(notified).toEqual([])
+      expect(yield* db.select().from(EventTable).all().pipe(Effect.orDie)).toEqual([])
+      expect(yield* db.select().from(EventSequenceTable).all().pipe(Effect.orDie)).toEqual([])
+    }),
+  )
+
+  it.effect("replayAll preflights a mismatched second Session event before projecting or notifying the first", () =>
+    Effect.gen(function* () {
+      const events = yield* EventV2.Service
+      const { db } = yield* Database.Service
+      const sessionID = Session.ID.create()
+      const info = Schema.decodeUnknownSync(SessionV1.SessionInfo)({
+        id: sessionID,
+        projectID: "global",
+        slug: "identity",
+        title: "Identity",
+        directory: "/project",
+        version: "test",
+        time: { created: 0, updated: 0 },
+      })
+      const projected: unknown[] = []
+      const notified: unknown[] = []
+      yield* events.project(SessionV1.Event.Created, (event) =>
+        Effect.sync(() => {
+          projected.push(event)
+        }),
+      )
+      yield* events.project(SessionV1.Event.Updated, (event) =>
+        Effect.sync(() => {
+          projected.push(event)
+        }),
+      )
+      yield* events.listen((event) =>
+        Effect.sync(() => {
+          notified.push(event)
+        }),
+      )
+      const exit = yield* events
+        .replayAll(
+          [
+            {
+              id: EventV2.ID.create(),
+              type: EventV2.versionedType(SessionV1.Event.Created.type, 1),
+              seq: 0,
+              aggregateID: sessionID,
+              data: { sessionID, info },
+            },
+            {
+              id: EventV2.ID.create(),
+              type: EventV2.versionedType(SessionV1.Event.Updated.type, 1),
+              seq: 1,
+              aggregateID: sessionID,
+              data: { sessionID, info: { ...info, id: Session.ID.create() } },
+            },
+          ],
+          { publish: true },
+        )
+        .pipe(Effect.exit)
+      expect(exit._tag).toBe("Failure")
+      expect(String(exit)).toContain("Session event identity does not match its envelope")
+      expect(projected).toEqual([])
+      expect(notified).toEqual([])
+      expect(yield* db.select().from(EventTable).all().pipe(Effect.orDie)).toEqual([])
+      expect(yield* db.select().from(EventSequenceTable).all().pipe(Effect.orDie)).toEqual([])
+    }),
+  )
+
   it.effect("publishes events with the current location", () =>
     Effect.gen(function* () {
       const events = yield* EventV2.Service

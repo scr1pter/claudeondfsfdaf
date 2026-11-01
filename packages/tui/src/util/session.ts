@@ -1,3 +1,4 @@
+import { CodiumUsage } from "@vectordevai/core/codium-usage"
 import type { Session } from "@vectordevai/sdk/v2"
 import { Locale } from "./locale"
 
@@ -45,6 +46,8 @@ type Spend = Pick<
   | "cost"
   | "unpricedSteps"
   | "codiumSteps"
+  | "tokensOwnOnly"
+  | "subagentTokensOwnOnly"
   | "subagentCost"
   | "subagentUnpricedSteps"
   | "subagentCodiumSteps"
@@ -67,7 +70,9 @@ export function delegatedSpendLines(session: Spend | undefined, children: readon
     )
   )
     return []
-  const legacy = Locale.legacyCodium(session, [], children ?? [])
+  const legacy =
+    CodiumUsage.hasCodium({ subagentCodiumSteps: session.subagentCodiumSteps }, [], children ?? []) &&
+    session.subagentTokensOwnOnly !== true
   const known = (children ?? []).map((child) => Locale.sessionSpend(child))
   const codium = legacy
     ? Math.max(
@@ -76,16 +81,16 @@ export function delegatedSpendLines(session: Spend | undefined, children: readon
       )
     : (session.subagentCodiumSteps ?? 0)
   const ownUnknown = Math.max(
-    session.subagentCodiumSteps === undefined
+    session.subagentTokensOwnOnly !== true
       ? 0
-      : Math.max(0, (session.subagentUnpricedSteps ?? 0) - session.subagentCodiumSteps),
+      : Math.max(0, (session.subagentUnpricedSteps ?? 0) - (session.subagentCodiumSteps ?? 0)),
     known.reduce((sum, child) => sum + Math.max(0, child.unpriced - child.codium), 0),
   )
   const total = {
     cost: session.subagentCost ?? 0,
     unpriced: legacy ? codium + ownUnknown : (session.subagentUnpricedSteps ?? 0),
     codium,
-    tokens: legacy ? 0 : tokenCount(session.subagentTokens),
+    tokens: session.subagentTokensOwnOnly === true ? tokenCount(session.subagentTokens) : 0,
   }
   if (!children) return [spendLine(total, "by subagents or Vector's helpers")]
   const helpers = children.filter(isInternalSession).reduce(
@@ -96,7 +101,9 @@ export function delegatedSpendLines(session: Spend | undefined, children: readon
         unpriced: sum.unpriced + spend.unpriced,
         codium: sum.codium + spend.codium,
         tokens:
-          sum.tokens + (Locale.legacyCodium(child) ? 0 : tokenCount(child.tokens) + tokenCount(child.subagentTokens)),
+          sum.tokens +
+          (child.tokensOwnOnly === true ? tokenCount(child.tokens) : 0) +
+          (child.subagentTokensOwnOnly === true ? tokenCount(child.subagentTokens) : 0),
       }
     },
     { cost: 0, unpriced: 0, codium: 0, tokens: 0 },

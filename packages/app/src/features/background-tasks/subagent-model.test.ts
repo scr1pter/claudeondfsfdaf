@@ -156,6 +156,10 @@ function child(id: string, extra: Partial<Session> = {}): Session {
   }
 }
 
+function ownUsage(input: number) {
+  return { tokensOwnOnly: true, tokens: { input, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } }
+}
+
 function usage(total: number, toolUses = 3) {
   return {
     cost: 0.1,
@@ -451,6 +455,8 @@ describe("buildTaskCards", () => {
         }),
       }),
     ])
+    data.sessions.ses_c1 = child("ses_c1", ownUsage(12_000))
+    data.sessions.ses_c2 = child("ses_c2", ownUsage(216_600))
     const cards = buildTaskCards(source(data))
     expect(cards).toHaveLength(1)
     const card = cards[0]!
@@ -651,6 +657,7 @@ describe("buildTaskCards", () => {
   test("children with no part in the loaded history still appear, grouped by their launching message", () => {
     const data = fixture()
     data.sessions.ses_c1 = child("ses_c1", {
+      ...ownUsage(900),
       metadata: {
         subagent: {
           kind: "subagent",
@@ -722,7 +729,7 @@ describe("buildTaskCards", () => {
     expect(newer.agents[0]!.startedAt).toBe(5_000)
   })
 
-  test("lifecycle usage beats live sums; assistant tokens stand in when no step parts are loaded", () => {
+  test("editable lifecycle totals are ignored; identified assistant tokens stand in when no step parts are loaded", () => {
     const data = fixture()
     addUser(data, "msg_u1", "go")
     addAssistant(data, "msg_a1", "msg_u1", [
@@ -735,6 +742,7 @@ describe("buildTaskCards", () => {
     data.messages.ses_c2 = [
       {
         id: "m2",
+        providerID: "own",
         sessionID: "ses_c2",
         role: "assistant",
         parentID: "u",
@@ -743,7 +751,7 @@ describe("buildTaskCards", () => {
       } as unknown as Message,
     ]
     const agents = buildTaskCards(source(data))[0]!.agents
-    expect(agents[0]!.tokens).toBe(5)
+    expect(agents[0]!.tokens).toBeUndefined()
     expect(agents[1]!.tokens).toBe(42)
     expect(agents[2]!.tokens).toBeUndefined()
   })
@@ -901,6 +909,7 @@ describe("buildTaskCards", () => {
       ])
       // An extend leaves the child's record on the launching call.
       data.sessions.ses_c1 = child("ses_c1", {
+        ...(settled ? ownUsage(40_000) : {}),
         metadata: { subagent: { agent: "explore", callID: "call_1", startedAt: 1_000, background: true, ...outcome } },
       })
       if (!settled) data.status.ses_c1 = { type: "busy" }
@@ -950,6 +959,7 @@ describe("buildTaskCards", () => {
     ])
     // The resume rewrote the child's record; its usage includes the first run's 12k.
     data.sessions.ses_c1 = child("ses_c1", {
+      ...ownUsage(25_000),
       metadata: {
         subagent: { agent: "explore", callID: "call_2", status: "completed", startedAt: 20_000, usage: usage(25_000) },
       },
@@ -957,7 +967,7 @@ describe("buildTaskCards", () => {
     const card = buildTaskCards(source(data))[0]!
     expect(card.agents.map((agent) => agent.partID)).toEqual(["prt_first", "prt_resume"])
     expect(card.phases).toHaveLength(2)
-    expect(card.agents.map((agent) => agent.tokens)).toEqual([12_000, 25_000])
+    expect(card.agents.map((agent) => agent.tokens)).toEqual([25_000, 25_000])
     expect(card.tokens).toBe(25_000)
     expect(countAgents(card.agents)).toBe(1)
     expect(card.kindLabel).toBe("Specialist · Explore")
@@ -987,6 +997,8 @@ describe("indexed task batches", () => {
         },
       }),
     ])
+    data.sessions.csv = child("csv", ownUsage(100))
+    data.sessions.json = child("json", ownUsage(200))
     const cards = buildTaskCards(source(data))
     expect(cards).toHaveLength(1)
     expect(cards[0]!.phases).toHaveLength(1)
@@ -1078,6 +1090,7 @@ describe("indexed task batches", () => {
       }),
     ])
     data.sessions.csv = child("csv", {
+      ...ownUsage(100),
       metadata: {
         subagent: lifecycle({
           parentMessageID: "a",
@@ -1089,6 +1102,7 @@ describe("indexed task batches", () => {
       },
     })
     data.sessions.json = child("json", {
+      ...ownUsage(200),
       metadata: {
         subagent: lifecycle({
           parentMessageID: "a",
@@ -1223,6 +1237,7 @@ describe("indexed task batches", () => {
       }),
     ])
     data.sessions.csv = child("csv", {
+      ...ownUsage(100),
       metadata: {
         subagent: lifecycle({
           callID: "call_first",
@@ -1268,6 +1283,7 @@ describe("indexed task batches", () => {
         usage: usage(250),
       }),
     }
+    Object.assign(data.sessions.csv, ownUsage(250))
     const resumed = buildTaskCards(source(data))[0]!
     expect(resumed.agents.map((agent) => agent.partID)).toEqual(["first", "resume"])
     expect(resumed.tokens).toBe(250)
@@ -1356,6 +1372,7 @@ describe("cards the event stream left behind", () => {
       taskPart({ id: "prt_1", callID: "call_1", metadata: running("ses_c1", "call_1") }),
     ])
     data.sessions.ses_c1 = child("ses_c1", {
+      ...ownUsage(12_000),
       metadata: {
         subagent: {
           agent: "explore",
@@ -1478,4 +1495,52 @@ test("child usage retains own-key step tokens and suppresses Codium raw usage", 
   delete data.parts.codium
   delete data.parts.own
   expect(childFacts(source(data), "ses_child")).toMatchObject({ tokens: 0, codiumSteps: 1 })
+})
+
+test("unknown child aggregate and identity cannot be relabeled as proven own usage", () => {
+  const data = fixture()
+  data.sessions.ses_old = child("ses_old", {
+    tokens: { input: 987654, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+  })
+  expect(childFacts(source(data), "ses_old").tokens).toBeUndefined()
+  expect(childFacts(source(data), "ses_old").tokensOwnOnly).toBeFalse()
+  addAssistant(
+    data,
+    "missing",
+    "user",
+    [],
+    { providerID: "  ", tokens: { input: 987654, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } },
+    "ses_old",
+  )
+  expect(childFacts(source(data), "ses_old").tokens).toBeUndefined()
+  addAssistant(
+    data,
+    "own",
+    "user",
+    [],
+    { tokens: { input: 123, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } },
+    "ses_old",
+  )
+  expect(childFacts(source(data), "ses_old")).toMatchObject({ tokens: 123, tokensOwnOnly: true })
+})
+
+test("a forged lifecycle proof cannot certify raw metadata totals", () => {
+  const data = fixture()
+  addUser(data, "user", "go")
+  addAssistant(data, "assistant", "user", [
+    taskPart({
+      id: "task",
+      metadata: lifecycle({ sessionId: "ses_forged", usage: { ...usage(987654), tokensOwnOnly: true } }),
+    }),
+  ])
+  data.sessions.ses_forged = child("ses_forged", {
+    metadata: { subagent: { usage: { ...usage(987654), tokensOwnOnly: true } } },
+  })
+  expect(buildTaskCards(source(data))[0]?.agents[0]?.tokens).toBeUndefined()
+  data.sessions.ses_forged = {
+    ...data.sessions.ses_forged!,
+    tokensOwnOnly: true,
+    tokens: { input: 123, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+  }
+  expect(buildTaskCards(source(data))[0]?.agents[0]?.tokens).toBe(123)
 })

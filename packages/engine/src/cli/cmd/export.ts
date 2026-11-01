@@ -175,14 +175,9 @@ export function sanitizeLegacy(data: SessionArchive.Legacy) {
       )
       .map((message) => message.info.id),
   )
-  const legacy =
-    codiumMessages.size > (data.info.codiumSteps ?? 0) ||
-    (data.info.codiumSteps === undefined && data.info.subagentCodiumSteps === undefined && Billing.of(data.info))
   const info = { ...data.info }
-  if (legacy) {
-    delete info.tokens
-    delete info.subagentTokens
-  }
+  if (data.info.tokensOwnOnly !== true) delete info.tokens
+  if (data.info.subagentTokensOwnOnly !== true) delete info.subagentTokens
   return {
     info: {
       ...info,
@@ -230,7 +225,7 @@ export function sanitizeLegacy(data: SessionArchive.Legacy) {
                   },
             }
           : {
-              ...withoutTokens(msg.info, codiumMessages.has(msg.info.id)),
+              ...withoutTokens(msg.info, codiumMessages.has(msg.info.id), Billing.hasOwnIdentity(msg.info)),
               path: {
                 cwd: redact("cwd", msg.info.id, msg.info.path.cwd),
                 root: redact("root", msg.info.id, msg.info.path.root),
@@ -242,6 +237,7 @@ export function sanitizeLegacy(data: SessionArchive.Legacy) {
           ? withoutTokens(
               redacted,
               Boolean(Billing.of(part) || (msg.info.role === "assistant" && Billing.of(msg.info))),
+              msg.info.role === "assistant" && Billing.hasOwnIdentity(msg.info),
             )
           : redacted
       }),
@@ -249,9 +245,12 @@ export function sanitizeLegacy(data: SessionArchive.Legacy) {
   }
 }
 
-function withoutTokens<T extends object>(value: T, codium: boolean) {
-  if (!codium) return value
-  const result: Partial<T> & { tokens?: unknown; billing?: "codium" } = { ...value, billing: "codium" }
+function withoutTokens<T extends object>(value: T, codium: boolean, own = false) {
+  if (!codium && own) return value
+  const result: Partial<T> & { tokens?: unknown; billing?: "codium" } = {
+    ...value,
+    ...(codium ? { billing: "codium" as const } : {}),
+  }
   delete result.tokens
   return result
 }

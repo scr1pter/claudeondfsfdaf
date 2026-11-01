@@ -12,7 +12,10 @@ test("JSON step_finish masks Codium root and delegated parts without changing in
     cost: 99,
     tokens: { input: 987654, output: 1234, reasoning: 12, cache: { read: 5, write: 3 } },
   }
-  expect(stepForOutput(part)).toBe(part)
+  expect(stepForOutput(part, "own")).toBe(part)
+  expect(stepForOutput(part)).not.toHaveProperty("tokens")
+  expect(stepForOutput(part)).not.toHaveProperty("billing")
+  expect(stepForOutput(part).cost).toBe(99)
   for (const record of [stepForOutput({ ...part, billing: "codium" }), stepForOutput(part, "codium")]) {
     expect(record).toMatchObject({ billing: "codium", cost: 0, unpriced: true })
     expect(record).not.toHaveProperty("tokens")

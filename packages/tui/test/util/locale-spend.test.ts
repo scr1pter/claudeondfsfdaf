@@ -60,3 +60,10 @@ test("legacy mixed sessions retain explicitly observed own unknown work", () => 
   )
   expect(Locale.spend(children.cost, children.unpriced, children.codium)).toBe("$0.12 + unpriced + Codium")
 })
+
+test("context readouts require canonical own identity and keep Codium percentage only", () => {
+  expect(Locale.context(1000, 10000, { providerID: "own" })).toBe("1.0K (10%)")
+  expect(Locale.context(1000, 10000, { providerID: "vector-plan" })).toBe("10% of context")
+  for (const providerID of [undefined, "", "  ", " vector-plan ", " own "])
+    expect(Locale.context(987654, 1000000, { providerID })).toBeUndefined()
+})

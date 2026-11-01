@@ -132,7 +132,7 @@ export function turnUsage(messages: readonly SessionMessage[], finalID: string):
   const steps = messages
     .slice(start + 1, end + 1)
     .filter((message): message is { readonly info: AssistantMessage } => message.info.role === "assistant")
-    .filter((message) => !Billing.of(message.info))
+    .filter((message) => Billing.hasOwnIdentity(message.info))
   if (!steps.length) return undefined
   return buildUsage({
     cost: steps.reduce((sum, step) => sum + step.info.cost, 0),
@@ -253,9 +253,9 @@ const layer = Layer.effect(
       const latest = messages.findLast(
         (message): message is { readonly info: AssistantMessage } => message.info.role === "assistant",
       )
-      if (latest && Billing.of(latest.info)) return messages
+      if (latest && !Billing.hasOwnIdentity(latest.info)) return messages
       const message = latestAssistantMessage(messages)
-      if (!message?.providerID || !message.modelID || Billing.of(message)) return messages
+      if (!message?.providerID || !Billing.hasOwnIdentity(message) || !message.modelID) return messages
 
       const size = yield* contextLimit({
         directory: input.directory,

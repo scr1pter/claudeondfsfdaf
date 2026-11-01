@@ -227,6 +227,7 @@ export const aggregateSessionStats = Effect.fn("Cli.stats.aggregate")(function* 
                 return [
                   {
                     cost: data.cost ?? 0,
+                    storedBilling: data.billing === "codium",
                     tokens: data.tokens,
                     billing,
                     model: data.model ? `${data.model.providerID}/${data.model.id}` : undefined,
@@ -235,12 +236,31 @@ export const aggregateSessionStats = Effect.fn("Cli.stats.aggregate")(function* 
               })
             : []
         const steps = [...v1Steps, ...v2Steps]
-        const own = steps.filter((step) => !step.billing)
-        const codiumResponses =
-          cutoffTime > 0 ? steps.length - own.length : Math.max(steps.length - own.length, session.codiumSteps ?? 0)
-        const legacy = steps.length - own.length > (session.codiumSteps ?? 0)
+        const own = steps.filter(
+          (step) => !step.billing && Billing.hasOwnIdentity({ providerID: step.model?.split("/")[0] }),
+        )
+        const observedCodium = steps.filter((step) => Boolean(step.billing)).length
+        const codiumResponses = cutoffTime > 0 ? observedCodium : Math.max(observedCodium, session.codiumSteps ?? 0)
+        const legacy = session.tokensOwnOnly !== true || observedCodium > (session.codiumSteps ?? 0)
+        const legacyCodiumCost =
+          messages.reduce(
+            (sum, message) =>
+              sum +
+              (message.info.role === "assistant" && Billing.of(message.info)
+                ? message.parts.reduce(
+                    (total, part) => total + (part.type === "step-finish" && part.billing !== "codium" ? part.cost : 0),
+                    0,
+                  )
+                : 0),
+            0,
+          ) + v2Steps.reduce((sum, step) => sum + (step.billing && !step.storedBilling ? step.cost : 0), 0)
         const sessionCost =
-          cutoffTime > 0 || legacy ? own.reduce((sum, step) => sum + (step.cost || 0), 0) : (session.cost ?? 0)
+          cutoffTime > 0
+            ? own.reduce((sum, step) => sum + (step.cost || 0), 0)
+            : Math.max(
+                (session.cost ?? 0) - legacyCodiumCost,
+                own.reduce((sum, step) => sum + (step.cost || 0), 0),
+              )
         const sessionTokens =
           cutoffTime > 0 || legacy
             ? {
@@ -256,7 +276,8 @@ export const aggregateSessionStats = Effect.fn("Cli.stats.aggregate")(function* 
         const sessionToolUsage: Record<string, number> = {}
         const sessionModelUsage: SessionStats["modelUsage"] = {}
         for (const step of steps) {
-          if (!step.model) continue
+          if (!step.model || (!step.billing && !Billing.hasOwnIdentity({ providerID: step.model.split("/")[0] })))
+            continue
           const usage = (sessionModelUsage[step.model] ??= {
             messages: 0,
             tokens: { input: 0, output: 0, cache: { read: 0, write: 0 } },
@@ -264,7 +285,7 @@ export const aggregateSessionStats = Effect.fn("Cli.stats.aggregate")(function* 
             ...(step.billing ? { billing: step.billing } : {}),
           })
           usage.messages++
-          if (step.billing) continue
+          if (step.billing || !Billing.hasOwnIdentity({ providerID: step.model.split("/")[0] })) continue
           usage.cost += step.cost || 0
           usage.tokens.input += step.tokens.input || 0
           usage.tokens.output += (step.tokens.output || 0) + (step.tokens.reasoning || 0)

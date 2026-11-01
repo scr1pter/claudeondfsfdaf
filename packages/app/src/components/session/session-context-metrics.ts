@@ -51,7 +51,7 @@ const lastAssistantWithTokens = (messages: Message[]) => {
 
 const build = (messages: Message[] = [], providers: Provider[] = []): Context | undefined => {
   const message = lastAssistantWithTokens(messages)
-  if (!message) return undefined
+  if (!message || (!Billing.of(message) && !Billing.hasOwnIdentity(message))) return undefined
 
   const provider = providers.find((item) => item.id === message.providerID)
   const model = provider?.models[message.modelID]

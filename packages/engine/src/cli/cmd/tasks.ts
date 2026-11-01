@@ -143,8 +143,7 @@ export function tasksForOutput<T extends { tasks: readonly Task.Info[] } | { tas
 }
 
 function taskForOutput(task: Task.Info) {
-  if (!task.usage || task.usage.codiumSteps !== undefined || !(task.billing === "codium" || task.costKind === "codium"))
-    return task
+  if (!task.usage || task.usage.tokensOwnOnly === true) return task
   const usage: { -readonly [K in keyof Task.Usage]?: Task.Usage[K] } = { ...task.usage }
   delete usage.tokens
   delete usage.total

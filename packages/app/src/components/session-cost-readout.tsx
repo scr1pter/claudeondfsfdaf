@@ -105,7 +105,7 @@ export function SessionCostReadout() {
 
   // Only appears once the session has actually spent something.
   return (
-    <Show when={params.id && (cost() > 0 || tokens() > 0 || codium() > 0 || desktop().length > 0)}>
+    <Show when={params.id && (cost() > 0 || (tokens() ?? 0) > 0 || codium() > 0 || desktop().length > 0)}>
       <TooltipV2
         placement="bottom"
         value={
@@ -126,7 +126,13 @@ export function SessionCostReadout() {
               <span class="text-v2-text-text-muted">Tokens</span>
               <span class="text-v2-text-text-base">
                 {CodiumUsage.withCodium(
-                  tokens() || !codium() ? tokens().toLocaleString(language.intl()) : undefined,
+                  tokens() === undefined
+                    ? codium()
+                      ? undefined
+                      : "Unavailable"
+                    : tokens() || !codium()
+                      ? tokens()?.toLocaleString(language.intl())
+                      : undefined,
                   codium(),
                 )}
               </span>
@@ -197,11 +203,11 @@ export function SessionCostReadout() {
           class="flex h-6 shrink-0 items-center gap-1.5 rounded-full border border-[color:var(--vx-line)] bg-[color:color-mix(in_srgb,var(--vx-text)_3%,transparent)] px-2.5 text-[11px] font-medium tabular-nums text-[color:color-mix(in_srgb,var(--vx-text)_62%,transparent)] transition-colors duration-150 hover:border-[color:var(--vx-line)] hover:text-[color:color-mix(in_srgb,var(--vx-text)_80%,transparent)]"
         >
           <span classList={{ "text-[#a78bfa]": !pill().warn, "text-[color:var(--vx-amber)]": pill().warn }}>
-            {cost() > 0 || tokens() > 0 || codium() > 0 ? pill().label : `Desktop ${taskCost(desktop())}`}
+            {cost() > 0 || (tokens() ?? 0) > 0 || codium() > 0 ? pill().label : `Desktop ${taskCost(desktop())}`}
           </span>
-          <Show when={tokens() > 0}>
+          <Show when={(tokens() ?? 0) > 0}>
             <span class="text-[color:color-mix(in_srgb,var(--vx-text)_25%,transparent)]">·</span>
-            <span>{CodiumUsage.withCodium(compactTokens(tokens()), codium())}</span>
+            <span>{CodiumUsage.withCodium(compactTokens(tokens() ?? 0), codium())}</span>
           </Show>
         </div>
       </TooltipV2>

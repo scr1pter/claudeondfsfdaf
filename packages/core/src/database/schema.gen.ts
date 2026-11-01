@@ -229,6 +229,8 @@ export default {
           \`subagent_unpriced_steps\` integer DEFAULT 0 NOT NULL,
           \`codium_steps\` integer DEFAULT 0 NOT NULL,
           \`subagent_codium_steps\` integer DEFAULT 0 NOT NULL,
+          \`tokens_own_only\` integer DEFAULT false NOT NULL,
+          \`subagent_tokens_own_only\` integer DEFAULT false NOT NULL,
           \`subagent_tokens_input\` integer DEFAULT 0 NOT NULL,
           \`subagent_tokens_output\` integer DEFAULT 0 NOT NULL,
           \`subagent_tokens_reasoning\` integer DEFAULT 0 NOT NULL,

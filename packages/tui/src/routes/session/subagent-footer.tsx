@@ -1,4 +1,3 @@
-import { Billing } from "@vectordevai/schema/billing"
 import { createMemo, createSignal, Show } from "solid-js"
 import { useRouteData } from "../../context/route"
 import { useSync } from "../../context/sync"
@@ -41,7 +40,6 @@ export function SubagentFooter() {
     if (tokens <= 0) return
 
     const model = sync.data.provider.find((item) => item.id === last.providerID)?.models[last.modelID]
-    const pct = model?.limit.context ? `${Math.round((tokens / model.limit.context) * 100)}%` : undefined
     const spend = Locale.sessionSpend(
       session(),
       msg,
@@ -49,13 +47,7 @@ export function SubagentFooter() {
     )
 
     return {
-      context: Billing.of(last)
-        ? pct
-          ? `${pct} of context`
-          : undefined
-        : pct
-          ? `${Locale.number(tokens)} (${pct})`
-          : Locale.number(tokens),
+      context: Locale.context(tokens, model?.limit.context, last),
       cost:
         spend.cost > 0 || spend.unpriced > 0 || spend.codium > 0
           ? Locale.spend(spend.cost, spend.unpriced, spend.codium)

@@ -27,7 +27,11 @@ export function createDelegatedSpend(
       session.subagentCost ?? 0,
       session.subagentUnpricedSteps ?? 0,
       session.subagentCodiumSteps ?? 0,
-      sessionTokens({ tokens: session.subagentTokens }),
+      sessionTokens({
+        tokens: session.subagentTokens,
+        tokensOwnOnly: session.subagentTokensOwnOnly,
+        subagentTokensOwnOnly: true,
+      }),
     ].join(" ")
   })
   const [children] = createResource(revision, (key) => {
@@ -52,7 +56,7 @@ export function createDelegatedSpend(
           id: session.id,
           label: session.title.replace(/\s*\(@[^)]+ subagent\)\s*$/, ""),
           ...sessionSpend(session),
-          tokens: sessionTokens(session),
+          tokens: sessionTokens(session) ?? 0,
         }))
         .sort((a, b) => b.cost - a.cost || b.tokens - a.tokens),
     }

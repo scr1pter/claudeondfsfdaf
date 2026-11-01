@@ -61,7 +61,7 @@ export function SessionContextTab() {
     ...sync().data.session.filter((child) => child.parentID !== undefined && child.parentID === info()?.id),
   ]
   const legacy = createMemo(() => legacyCodium(info(), messages(), children()))
-  const tokens = createMemo(() => (legacy() ? undefined : info()?.tokens))
+  const tokens = createMemo(() => (info()?.tokensOwnOnly === true ? info()?.tokens : undefined))
   const spend = createMemo(() => sessionSpend(info(), messages(), children()))
   const codium = () => spend().codiumSteps
   const lastModel = createMemo(() => lastAssistantModel(messages()))
@@ -108,12 +108,18 @@ export function SessionContextTab() {
     {
       label: codium() && !totalTokens() ? "Tokens" : "Total tokens",
       value: CodiumUsage.withCodium(
-        totalTokens() || !codium() ? formatter().number(totalTokens()) : undefined,
+        totalTokens() === undefined
+          ? codium()
+            ? undefined
+            : "Unavailable"
+          : totalTokens() || !codium()
+            ? formatter().number(totalTokens())
+            : undefined,
         codium(),
       ),
     },
     { label: "Usage", value: formatter().percent(ctx()?.usage) },
-    ...(codium() && !totalTokens()
+    ...(!tokens() || (codium() && !totalTokens())
       ? []
       : [
           { label: "Input tokens", value: CodiumUsage.withCodium(formatter().number(tokens()?.input), codium()) },
@@ -176,7 +182,7 @@ export function SessionContextTab() {
 
   const breakdown = createMemo(() => {
     // Raw Codium context stays local to percentage calculation; its token quantities never enter titles.
-    const contextTokens = ctx()?.codium ? ctx()?.message.tokens : tokens()
+    const contextTokens = tokens() ?? ctx()?.message.tokens
     const values = [
       { label: "Input", value: contextTokens?.input ?? 0, color: "#72e2a5" },
       { label: "Output", value: contextTokens?.output ?? 0, color: "#ffb49d" },
@@ -291,7 +297,7 @@ export function SessionContextTab() {
                     class="h-full transition-[width] duration-200"
                     style={{ width: `${segment.percentage}%`, "background-color": segment.color }}
                     title={
-                      ctx()?.codium || legacy()
+                      ctx()?.codium || info()?.tokensOwnOnly !== true
                         ? `${segment.label}: ${segment.percentage.toFixed(1)}%`
                         : `${segment.label}: ${formatter().number(segment.value)} tokens`
                     }

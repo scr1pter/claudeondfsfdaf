@@ -683,3 +683,19 @@ describe("run session data", () => {
     expect(message.commits).toEqual([expect.objectContaining({ ...stopped, messageID: "msg-1" })])
   })
 })
+
+test("unknown raw message identity clears context quantities without inventing Codium", () => {
+  for (const providerID of ["", "  ", " vector-plan "]) {
+    const data = createSessionData()
+    reduce(data, assistant("own", { cost: 0.12 }))
+    const output = reduce(
+      data,
+      assistant("missing", {
+        providerID,
+        cost: 0,
+        tokens: { input: 987654, output: 10, reasoning: 0, cache: { read: 0, write: 0 } },
+      }),
+    )
+    expect(output.footer?.patch?.usage).toBe("$0.12")
+  }
+})

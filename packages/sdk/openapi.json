@@ -25992,6 +25992,12 @@
             "type": "integer",
             "minimum": 0
           },
+          "tokensOwnOnly": {
+            "type": "boolean"
+          },
+          "subagentTokensOwnOnly": {
+            "type": "boolean"
+          },
           "subagentCost": {
             "type": "number"
           },
@@ -34041,6 +34047,12 @@
             "type": "integer",
             "minimum": 0
           },
+          "tokensOwnOnly": {
+            "type": "boolean"
+          },
+          "subagentTokensOwnOnly": {
+            "type": "boolean"
+          },
           "subagentCost": {
             "type": "number"
           },
@@ -39056,6 +39068,12 @@
             "type": "integer",
             "minimum": 0
           },
+          "tokensOwnOnly": {
+            "type": "boolean"
+          },
+          "subagentTokensOwnOnly": {
+            "type": "boolean"
+          },
           "subagentCost": {
             "type": "number"
           },
@@ -39275,6 +39293,12 @@
           "codiumSteps": {
             "type": "integer",
             "minimum": 0
+          },
+          "tokensOwnOnly": {
+            "type": "boolean"
+          },
+          "subagentTokensOwnOnly": {
+            "type": "boolean"
           },
           "subagentCost": {
             "type": "number"
@@ -39531,6 +39555,12 @@
           "codiumSteps": {
             "type": "integer",
             "minimum": 0
+          },
+          "tokensOwnOnly": {
+            "type": "boolean"
+          },
+          "subagentTokensOwnOnly": {
+            "type": "boolean"
           },
           "subagentCost": {
             "type": "number"
@@ -39798,6 +39828,12 @@
             "type": "integer",
             "minimum": 0
           },
+          "tokensOwnOnly": {
+            "type": "boolean"
+          },
+          "subagentTokensOwnOnly": {
+            "type": "boolean"
+          },
           "subagentCost": {
             "type": "number"
           },
@@ -40017,6 +40053,12 @@
           "codiumSteps": {
             "type": "integer",
             "minimum": 0
+          },
+          "tokensOwnOnly": {
+            "type": "boolean"
+          },
+          "subagentTokensOwnOnly": {
+            "type": "boolean"
           },
           "subagentCost": {
             "type": "number"
@@ -40248,6 +40290,12 @@
           "codiumSteps": {
             "type": "integer",
             "minimum": 0
+          },
+          "tokensOwnOnly": {
+            "type": "boolean"
+          },
+          "subagentTokensOwnOnly": {
+            "type": "boolean"
           },
           "subagentCost": {
             "type": "number"
@@ -40614,6 +40662,12 @@
             "type": "integer",
             "minimum": 0
           },
+          "tokensOwnOnly": {
+            "type": "boolean"
+          },
+          "subagentTokensOwnOnly": {
+            "type": "boolean"
+          },
           "subagentCost": {
             "type": "number"
           },
@@ -40833,6 +40887,12 @@
           "codiumSteps": {
             "type": "integer",
             "minimum": 0
+          },
+          "tokensOwnOnly": {
+            "type": "boolean"
+          },
+          "subagentTokensOwnOnly": {
+            "type": "boolean"
           },
           "subagentCost": {
             "type": "number"
@@ -46104,6 +46164,9 @@
           },
           "codiumSteps": {
             "type": "number"
+          },
+          "tokensOwnOnly": {
+            "type": "boolean"
           }
         },
         "required": ["cost", "tokens", "total", "toolUses", "steps"],
@@ -46903,6 +46966,12 @@
           },
           "codiumSteps": {
             "type": "number"
+          },
+          "tokensOwnOnly": {
+            "type": "boolean"
+          },
+          "subagentTokensOwnOnly": {
+            "type": "boolean"
           },
           "subagentCost": {
             "type": "number"

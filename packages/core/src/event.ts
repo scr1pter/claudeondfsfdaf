@@ -18,6 +18,9 @@ export type { Data, Definition, Payload } from "@vectordevai/schema/event"
 export type Subscriber<D extends Definition = Definition> = (event: Payload<D>) => Effect.Effect<void>
 export type Unsubscribe = Effect.Effect<void>
 
+/** Local provenance of an accepted replay projection; never encoded in an event or supplied by its metadata. */
+export const Replaying = Context.Reference<boolean>("@vector/Event/Replaying", { defaultValue: () => false })
+
 const DeferredNotifications = Context.Reference<Effect.Effect<void>[] | undefined>(
   "@vector/Event/DeferredNotifications",
   {
@@ -189,6 +192,32 @@ export const layerWith = (options?: LayerOptions) =>
       // TODO: Bind durable projectors to exact type+version before supporting incompatible historical payloads.
       const listeners = new Array<Subscriber>()
       const { db } = yield* Database.Service
+      const eventType = (type: string) => Durable.get(type)?.type ?? type.replace(/\.\d+$/, "")
+      const validateSessionIdentity = (event: { type: string; data: unknown }) => {
+        if (!event.data || typeof event.data !== "object" || !("sessionID" in event.data)) return Effect.void
+        const type = eventType(event.type)
+        const field = type === "session.created" || type === "session.updated" ? "id" : "sessionID"
+        const nested =
+          (type === "session.created" || type === "session.updated" || type === "message.updated") &&
+          "info" in event.data
+            ? event.data.info
+            : type === "message.part.updated" && "part" in event.data
+              ? event.data.part
+              : undefined
+        if (
+          nested &&
+          typeof nested === "object" &&
+          ((field === "id" && "id" in nested && nested.id !== event.data.sessionID) ||
+            (field === "sessionID" && "sessionID" in nested && nested.sessionID !== event.data.sessionID))
+        )
+          return Effect.die(
+            new InvalidDurableEventError({
+              type: event.type,
+              message: "Session event identity does not match its envelope.",
+            }),
+          )
+        return Effect.void
+      }
 
       const getOrCreate = (definition: Definition) =>
         Effect.gen(function* () {
@@ -327,7 +356,7 @@ export const layerWith = (options?: LayerOptions) =>
                             durable: { aggregateID, seq, version: durable.version },
                           } as Payload
                           for (const projector of list) {
-                            yield* projector(committed)
+                            yield* projector(committed).pipe(Effect.provideService(Replaying, input !== undefined))
                           }
                           if (commit) yield* commit(seq)
                           yield* db
@@ -379,6 +408,7 @@ export const layerWith = (options?: LayerOptions) =>
 
       function publishEvent<D extends Definition>(definition: D, event: Payload<D>, commit?: PublishOptions["commit"]) {
         return Effect.gen(function* () {
+          yield* validateSessionIdentity(event)
           if (!definition?.durable && commit)
             return yield* Effect.die(
               new InvalidDurableEventError({
@@ -467,6 +497,7 @@ export const layerWith = (options?: LayerOptions) =>
         options?: { readonly publish?: boolean; readonly ownerID?: string; readonly strictOwner?: boolean },
       ) {
         return Effect.gen(function* () {
+          yield* validateSessionIdentity(event)
           const definition = Durable.get(event.type)
           if (!definition?.durable) {
             yield* Effect.die(
@@ -528,6 +559,7 @@ export const layerWith = (options?: LayerOptions) =>
               )
             }
           }
+          for (const event of events) yield* validateSessionIdentity(event)
           for (const event of events) {
             yield* replay(event, options)
           }

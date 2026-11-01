@@ -64,6 +64,7 @@ export type TaskAgent = {
   startedAt?: number
   endedAt?: number
   tokens?: number
+  tokensOwnOnly?: boolean
   toolUses?: number
   model?: TaskModel
   error?: string
@@ -104,6 +105,7 @@ export type TaskCard = {
   startedAt?: number
   endedAt?: number
   tokens?: number
+  tokensOwnOnly?: boolean
   agents: TaskAgent[]
   phases: TaskPhase[]
 }
@@ -463,6 +465,7 @@ export function aggregateStatus(statuses: readonly TaskStatus[]): TaskStatus {
 
 type ChildFacts = {
   tokens?: number
+  tokensOwnOnly?: boolean
   toolUses?: number
   last?: StatusInput["last"]
   lastModel?: { providerID: string; modelID: string; variant?: string }
@@ -491,7 +494,7 @@ export function childFacts(source: TaskSource, sessionID: string | undefined): C
   if (!sessionID) return {}
   const messages = source.messages(sessionID) ?? []
   let steps = 0
-  let stepTokens = 0
+  let stepTokens: number | undefined
   let stepCodium = 0
   let messageCodium = 0
   let toolUses: number | undefined
@@ -503,7 +506,8 @@ export function childFacts(source: TaskSource, sessionID: string | undefined): C
     if (message.role !== "assistant") continue
     const codium = Boolean(Billing.of(message))
     messageCodium += Number(codium)
-    messageTokens = (messageTokens ?? 0) + (codium ? 0 : tokenSum(message.tokens))
+    const own = Billing.hasOwnIdentity(message)
+    if (own) messageTokens = (messageTokens ?? 0) + tokenSum(message.tokens)
     last = {
       created: finite(message.time?.created),
       completed: finite(message.time?.completed),
@@ -524,17 +528,29 @@ export function childFacts(source: TaskSource, sessionID: string | undefined): C
         steps += 1
         const billed = codium || Boolean(Billing.of(part))
         stepCodium += Number(billed)
-        stepTokens += billed ? 0 : tokenSum(part.tokens)
+        if (!billed && own) stepTokens = (stepTokens ?? 0) + tokenSum(part.tokens)
       }
     }
   }
   const session = source.session(sessionID)
-  const legacy = session?.codiumSteps === undefined && Boolean(session && Billing.of(session))
+  const legacy =
+    session?.tokensOwnOnly !== true &&
+    Boolean(messageCodium || (session?.codiumSteps ?? 0) > 0 || (session && Billing.of(session)))
   const row = tokenSum(session?.tokens)
-  const tokens = steps > 0 ? stepTokens : messageCodium ? messageTokens : legacy ? 0 : row > 0 ? row : messageTokens
+  const tokens =
+    steps > 0
+      ? stepTokens
+      : messageCodium
+        ? messageTokens
+        : legacy
+          ? messageTokens
+          : session?.tokensOwnOnly === true && row > 0
+            ? row
+            : messageTokens
   const codiumSteps = Math.max(session?.codiumSteps ?? 0, steps ? stepCodium : messageCodium, legacy ? 1 : 0)
   return {
     tokens,
+    tokensOwnOnly: tokens !== undefined,
     toolUses,
     last,
     lastModel,
@@ -647,8 +663,9 @@ function buildAgent(source: TaskSource, seed: AgentSeed): TaskAgent {
     background,
     startedAt,
     endedAt: endedAt !== undefined && startedAt !== undefined ? Math.max(endedAt, startedAt) : endedAt,
-    tokens:
-      run.usage?.codiumSteps !== undefined || !codiumSteps ? (run.usage?.total ?? facts.tokens) : (facts.tokens ?? 0),
+    // Lifecycle metadata is editable and may carry copied historical totals. Only loaded accounting facts certify tokens.
+    tokens: facts.tokens,
+    tokensOwnOnly: facts.tokensOwnOnly === true,
     toolUses: run.usage?.toolUses ?? facts.toolUses,
     model,
     error: status === "failed" ? error : undefined,

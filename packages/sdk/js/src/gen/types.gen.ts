@@ -217,6 +217,8 @@ export type Session = {
   cost?: number
   unpricedSteps?: number
   codiumSteps?: number
+  tokensOwnOnly?: boolean
+  subagentTokensOwnOnly?: boolean
   subagentCost?: number
   subagentUnpricedSteps?: number
   subagentCodiumSteps?: number
@@ -2798,6 +2800,8 @@ export type GlobalSession = {
   cost?: number
   unpricedSteps?: number
   codiumSteps?: number
+  tokensOwnOnly?: boolean
+  subagentTokensOwnOnly?: boolean
   subagentCost?: number
   subagentUnpricedSteps?: number
   subagentCodiumSteps?: number
@@ -4440,6 +4444,8 @@ export type Session1 = {
   cost?: number
   unpricedSteps?: number
   codiumSteps?: number
+  tokensOwnOnly?: boolean
+  subagentTokensOwnOnly?: boolean
   subagentCost?: number
   subagentUnpricedSteps?: number
   subagentCodiumSteps?: number
@@ -4508,6 +4514,8 @@ export type Session2 = {
   cost?: number
   unpricedSteps?: number
   codiumSteps?: number
+  tokensOwnOnly?: boolean
+  subagentTokensOwnOnly?: boolean
   subagentCost?: number
   subagentUnpricedSteps?: number
   subagentCodiumSteps?: number
@@ -4589,6 +4597,8 @@ export type Session3 = {
   cost?: number
   unpricedSteps?: number
   codiumSteps?: number
+  tokensOwnOnly?: boolean
+  subagentTokensOwnOnly?: boolean
   subagentCost?: number
   subagentUnpricedSteps?: number
   subagentCodiumSteps?: number
@@ -4669,6 +4679,8 @@ export type Session4 = {
   cost?: number
   unpricedSteps?: number
   codiumSteps?: number
+  tokensOwnOnly?: boolean
+  subagentTokensOwnOnly?: boolean
   subagentCost?: number
   subagentUnpricedSteps?: number
   subagentCodiumSteps?: number
@@ -4737,6 +4749,8 @@ export type Session5 = {
   cost?: number
   unpricedSteps?: number
   codiumSteps?: number
+  tokensOwnOnly?: boolean
+  subagentTokensOwnOnly?: boolean
   subagentCost?: number
   subagentUnpricedSteps?: number
   subagentCodiumSteps?: number
@@ -4809,6 +4823,8 @@ export type Session6 = {
   cost?: number
   unpricedSteps?: number
   codiumSteps?: number
+  tokensOwnOnly?: boolean
+  subagentTokensOwnOnly?: boolean
   subagentCost?: number
   subagentUnpricedSteps?: number
   subagentCodiumSteps?: number
@@ -4925,6 +4941,8 @@ export type Session7 = {
   cost?: number
   unpricedSteps?: number
   codiumSteps?: number
+  tokensOwnOnly?: boolean
+  subagentTokensOwnOnly?: boolean
   subagentCost?: number
   subagentUnpricedSteps?: number
   subagentCodiumSteps?: number
@@ -4993,6 +5011,8 @@ export type Session8 = {
   cost?: number
   unpricedSteps?: number
   codiumSteps?: number
+  tokensOwnOnly?: boolean
+  subagentTokensOwnOnly?: boolean
   subagentCost?: number
   subagentUnpricedSteps?: number
   subagentCodiumSteps?: number
@@ -6713,6 +6733,7 @@ export type TaskUsage = {
   steps: number
   unpricedSteps?: number
   codiumSteps?: number
+  tokensOwnOnly?: boolean
 }
 
 export type TaskBudgetScope = {
@@ -6959,6 +6980,8 @@ export type SessionV2Info = {
   cost: number
   unpricedSteps?: number
   codiumSteps?: number
+  tokensOwnOnly?: boolean
+  subagentTokensOwnOnly?: boolean
   subagentCost?: number
   subagentUnpricedSteps?: number
   subagentCodiumSteps?: number

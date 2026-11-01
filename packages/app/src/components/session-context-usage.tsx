@@ -142,7 +142,7 @@ export function SessionContextUsage(props: SessionContextUsageProps) {
       <ContextTooltipRow name={language.t("context.usage.usage")} value={`${context()?.usage ?? 0}%`} />
       <ContextTooltipRow
         name={language.t("context.usage.tokens")}
-        value={context()?.codium ? Billing.LABEL : (context()?.tokens ?? 0).toLocaleString(language.intl())}
+        value={context()?.codium ? Billing.LABEL : (context()?.tokens.toLocaleString(language.intl()) ?? "Unavailable")}
       />
     </div>
   )

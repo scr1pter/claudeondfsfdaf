@@ -29,6 +29,8 @@ export const Usage = Schema.Struct({
   unpricedSteps: optional(Schema.Finite),
   // How many of those unpriced steps ran on Vector Codium, as in the session totals.
   codiumSteps: optional(Schema.Finite),
+  // Proof for the token aggregate this task exposes, including any descendants in that aggregate.
+  tokensOwnOnly: optional(Schema.Boolean),
 }).annotate({ identifier: "Task.Usage" })
 export interface Usage extends Schema.Schema.Type<typeof Usage> {}
 

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import type { Message } from "@vectordevai/sdk/v2/client"
+import type { Message, AssistantMessage } from "@vectordevai/sdk/v2/client"
 import { getSessionContext } from "./session-context-metrics"
 
 const assistant = (
@@ -123,4 +123,16 @@ test("Codium keeps the internal context percentage with an explicit display clas
     },
   ]
   expect(getSessionContext([message], providers)).toMatchObject({ codium: true, usage: 50, tokens: 100000 })
+})
+
+test("missing or noncanonical provider identity cannot expose raw context figures", () => {
+  for (const providerID of ["", "  ", " vector-plan "]) {
+    const message = {
+      role: "assistant",
+      providerID,
+      modelID: "test",
+      tokens: { input: 987654, output: 1, reasoning: 0, cache: { read: 0, write: 0 } },
+    } as AssistantMessage
+    expect(getSessionContext([message], [])).toBeUndefined()
+  }
 })

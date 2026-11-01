@@ -165,12 +165,17 @@ test("Codium task usage stays separate from priced and unknown own-key work", ()
 
 test("legacy task observations cannot restore raw Codium tokens over a filtered card", () => {
   const usage = { tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, steps: 1, toolUses: 0 }
-  const cards = mergeTaskBoard([], [observation({ usage: { ...usage, total: 0, codiumSteps: 1, cost: 0.12 } })])
+  const cards = mergeTaskBoard(
+    [],
+    [observation({ usage: { ...usage, tokensOwnOnly: true, total: 0, codiumSteps: 1, cost: 0.12 } })],
+  )
   expect(cards[0]?.agents[0]).toMatchObject({ tokens: 0, codiumSteps: 1 })
   const legacy = mergeTaskBoard(cards, [observation({ usage: { ...usage, total: 100000, cost: 0.12 } })])
   expect(legacy[0]?.agents[0]).toMatchObject({ tokens: 0, codiumSteps: 1, cost: 0.12 })
   expect(taskCost(legacy[0]!.agents)).toBe("$0.12 + Codium")
-  const modern = mergeTaskBoard(legacy, [observation({ usage: { ...usage, total: 250, cost: 0.12, codiumSteps: 1 } })])
+  const modern = mergeTaskBoard(legacy, [
+    observation({ usage: { ...usage, tokensOwnOnly: true, total: 250, cost: 0.12, codiumSteps: 1 } }),
+  ])
   expect(modern[0]?.agents[0]).toMatchObject({ tokens: 250, codiumSteps: 1 })
 })
 
@@ -202,5 +207,23 @@ test("guard unknown status survives legacy and modern task usage projections", (
       ],
     )
     expect(taskCost(cards[0]!.agents)).toBe("$0.12 + unpriced usage + Codium")
+  }
+})
+
+test("task aggregate requires proof even with no surviving Codium identity or with a later counter", () => {
+  for (const codiumSteps of [0, 1]) {
+    const usage = {
+      tokens: { input: 987654, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+      total: 987654,
+      steps: 1,
+      toolUses: 0,
+      cost: 0.12,
+      codiumSteps,
+    }
+    const cards = mergeTaskBoard([], [observation({ usage })])
+    expect(cards[0]?.agents[0]?.tokens).toBeUndefined()
+    expect(cards[0]?.agents[0]?.cost).toBe(0.12)
+    const next = mergeTaskBoard(cards, [observation({ usage: { ...usage, tokensOwnOnly: true, total: 123 } })])
+    expect(next[0]?.agents[0]?.tokens).toBe(123)
   }
 })

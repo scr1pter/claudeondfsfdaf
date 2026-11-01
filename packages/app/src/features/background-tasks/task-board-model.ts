@@ -116,7 +116,6 @@ function boardAgent(task: Task.Info, previous?: TaskAgent): TaskAgent {
   const agent = task.agent ?? "general"
   const codiumSteps =
     task.usage?.codiumSteps ?? (task.billing === "codium" || task.costKind === "codium" ? 1 : previous?.codiumSteps)
-  const legacy = Boolean(task.usage) && task.usage?.codiumSteps === undefined && Boolean(codiumSteps)
   return {
     key: previous?.key ?? `task:${task.id}`,
     agent,
@@ -131,7 +130,13 @@ function boardAgent(task: Task.Info, previous?: TaskAgent): TaskAgent {
     background: true,
     startedAt: task.startedAt,
     endedAt: task.completedAt,
-    tokens: legacy ? (previous?.tokens ?? 0) : (task.usage?.total ?? previous?.tokens),
+    tokens:
+      task.usage?.tokensOwnOnly === true
+        ? task.usage.total
+        : previous?.tokensOwnOnly === true
+          ? previous.tokens
+          : undefined,
+    tokensOwnOnly: task.usage?.tokensOwnOnly === true || previous?.tokensOwnOnly === true,
     cost: task.usage?.cost ?? task.measuredCost ?? previous?.cost,
     unpricedSteps: codiumSteps
       ? Math.max(

@@ -1,3 +1,5 @@
+import { Database } from "@vectordevai/core/database/database"
+import { SessionAccountingOutput } from "@vectordevai/core/session/accounting-output"
 import { EventV2 } from "@vectordevai/core/event"
 import { VectorEvent } from "@vectordevai/protocol/groups/event"
 import { Effect, Schema, Stream } from "effect"
@@ -25,6 +27,7 @@ function eventData(data: unknown): Sse.Event {
 export const EventHandler = HttpApiBuilder.group(Api, "server.event", (handlers) =>
   Effect.gen(function* () {
     const events = yield* EventV2.Service
+    const database = yield* Database.Service
     return handlers.handleRaw("event.subscribe", () =>
       Effect.gen(function* () {
         const principal = yield* RequestPrincipal
@@ -46,6 +49,7 @@ export const EventHandler = HttpApiBuilder.group(Api, "server.event", (handlers)
                     const directory = guestWorkspaceDirectory(principal, event.location?.workspaceID)
                     return directory !== undefined && directory === event.location?.directory
                   }),
+                  Stream.mapEffect((event) => SessionAccountingOutput.project(database.db, event)),
                 ),
               ),
             )

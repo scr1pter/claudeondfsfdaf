@@ -19,6 +19,8 @@ export type EngineSessionResponse = {
     unpricedSteps?: number
     subagentUnpricedSteps?: number
     codiumSteps?: number
+    tokensOwnOnly?: boolean
+    subagentTokensOwnOnly?: boolean
     subagentCodiumSteps?: number
     subagentCost?: number
     subagentTokens?: Tokens
@@ -39,10 +41,8 @@ export function sessionTokens(data: EngineSessionResponse["data"]) {
   const own = tokenTotal(data?.tokens)
   // An older engine cannot separate positive Codium token totals. Zero before a fresh run is still a safe baseline.
   if (
-    data?.codiumSteps === undefined &&
-    data?.subagentCodiumSteps === undefined &&
-    Billing.of(data ?? {}) &&
-    ((own ?? 0) > 0 || (tokenTotal(data?.subagentTokens) ?? 0) > 0)
+    (data?.tokensOwnOnly !== true && (own ?? 0) > 0) ||
+    (data?.subagentTokensOwnOnly !== true && (tokenTotal(data?.subagentTokens) ?? 0) > 0)
   )
     return undefined
   if (own === undefined) return undefined
