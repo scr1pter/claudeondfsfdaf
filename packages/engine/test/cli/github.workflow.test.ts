@@ -1,7 +1,16 @@
+import { untrustedChildEnvironment } from "@vectordevai/core/child-environment"
+import { GithubAgents } from "@vectordevai/core/github-agents"
 import release from "../../../desktop/package.json"
 import { githubShareConsent, prepareGithubEnvironment } from "../../src/cli/cmd/github.environment"
 import { describe, expect, test } from "bun:test"
-import { buildRouteScript, buildWorkflowYaml, cliVersionSpec } from "@vectordevai/core/review/workflow"
+import {
+  buildAgentsWorkflow,
+  readWorkflowOptions,
+  type AgentsWorkflowOptions,
+  buildRouteScript,
+  buildWorkflowYaml,
+  cliVersionSpec,
+} from "@vectordevai/core/review/workflow"
 
 // The route script is the embedded parser and is covered by github.route-script.test.ts.
 function withoutScript(yaml: string) {
@@ -563,4 +572,332 @@ test("App task mode excludes repository plugins and configuration before Instanc
   prepareGithubEnvironment(env, false)
   expect(env.VECTOR_PURE).toBe("1")
   expect(env.VECTOR_DISABLE_PROJECT_CONFIG).toBe("1")
+})
+
+const CODIUM: AgentsWorkflowOptions = {
+  mode: "codium",
+  provider: "vector",
+  model: "vector-plan",
+  keys: [],
+  autoReview: false,
+  version: GithubAgents.MIN_AGENTS_CLI,
+}
+const OWN_KEY: AgentsWorkflowOptions = {
+  ...CODIUM,
+  mode: "own-key",
+  provider: "openai",
+  model: "gpt-4.1",
+  keys: ["OPENAI_API_KEY"],
+  autoReview: true,
+}
+const SCHEDULED: AgentsWorkflowOptions = {
+  ...OWN_KEY,
+  autoReview: false,
+  publishAuth: "app",
+  handle: "vector-dev",
+  schedules: [
+    {
+      id: "daily",
+      cron: "17 9 * * 1-5",
+      prompt: 'Fix "bugs": ${' + "{ secrets.GITHUB_TOKEN }}\n$HOME\nquote' and \\u0024",
+    },
+  ],
+}
+type AgentsStep = Step & {
+  id?: string
+  if?: string
+  shell?: string
+  "working-directory"?: string
+  "continue-on-error"?: boolean
+}
+type AgentsJob = Omit<Job, "steps"> & {
+  name?: string
+  "runs-on": string
+  "timeout-minutes": number
+  env: Record<string, string>
+  outputs?: Record<string, string>
+  steps: AgentsStep[]
+}
+function agents(options = CODIUM) {
+  return Bun.YAML.parse(buildAgentsWorkflow(options)) as {
+    permissions: Record<string, string>
+    on: Record<string, unknown>
+    jobs: Record<string, AgentsJob>
+  }
+}
+
+describe("workflow v3", () => {
+  for (const [name, options] of [
+    ["Codium", CODIUM],
+    ["own key auto-review", OWN_KEY],
+    ["scheduled App publishing", SCHEDULED],
+  ] as const) {
+    test(`${name} golden, header, and explicit permissions`, () => {
+      const workflow = agents(options)
+      expect(workflow.permissions).toEqual({})
+      expect(readWorkflowOptions(buildAgentsWorkflow(options))).toEqual({
+        ...options,
+        publishAuth: options.publishAuth ?? "github",
+      })
+      expect(Object.keys(workflow.jobs)).toEqual(["route", "agent", "publish", "bind", "review"])
+      for (const job of Object.values(workflow.jobs)) {
+        expect(job.env.VECTOR_WORKFLOW_VERSION).toBe("3")
+        expect(job["runs-on"]).toBe("ubuntu-latest")
+        expect(job.permissions).toBeDefined()
+        for (const step of job.steps) {
+          expect(step.env?.VECTOR_RUN_TOKEN).toBeUndefined()
+          if (step.uses?.startsWith("actions/checkout")) expect(step.with?.["persist-credentials"]).toBe(false)
+          if (step.run?.startsWith("npm install"))
+            expect(step.run).toBe(
+              `npm install -g @vectordevai/cli@${GithubAgents.MIN_AGENTS_CLI} --prefer-offline --no-audit --no-fund`,
+            )
+        }
+      }
+      workflow.jobs.route.steps[0]!.with!.script = "<route script: exercised separately>"
+      expect(workflow).toMatchSnapshot()
+    })
+  }
+
+  test("agent credentials, sandbox, cache, and upload order are fixed", () => {
+    for (const options of [CODIUM, OWN_KEY]) {
+      const job = agents(options).jobs.agent
+      const steps = job.steps
+      const codium = options.mode === "codium"
+      expect(job.permissions).toEqual({
+        contents: "read",
+        issues: "read",
+        "pull-requests": "read",
+        actions: "read",
+        ...(codium ? { "id-token": "write" } : {}),
+      })
+      expect(job["timeout-minutes"]).toBe(codium ? 135 : 60)
+      expect(steps.slice(0, 3).map((step) => step.uses ?? step.name)).toEqual([
+        "actions/setup-node@v4",
+        "actions/cache/restore@v4",
+        "Install Vector",
+      ])
+      expect(steps.some((step) => step.uses === "actions/cache@v4" || step.uses === "actions/cache/save@v4")).toBe(
+        false,
+      )
+      const checkout = steps.findIndex((step) => step.uses === "actions/checkout@v4")
+      if (codium) expect(steps.findIndex((step) => step.id === "mint")).toBeLessThan(checkout)
+      else expect(steps.find((step) => step.id === "mint")).toBeUndefined()
+      const sandbox = steps.findIndex((step) => step.id === "sandbox")
+      const agent = steps.findIndex((step) => step.id === "agent")
+      const finish = steps.findIndex((step) => step.run === "vector github sandbox finish")
+      expect(checkout).toBeLessThan(sandbox)
+      expect(sandbox).toBeLessThan(agent)
+      expect(agent).toBeLessThan(finish)
+      expect(steps[sandbox]!.if).toContain("runner.environment == 'github-hosted'")
+      expect(steps[agent]!.shell).toBe(
+        "env -u ACTIONS_ID_TOKEN_REQUEST_URL -u ACTIONS_ID_TOKEN_REQUEST_TOKEN bash --noprofile --norc -eo pipefail {0}",
+      )
+      expect(steps[agent]!.run).toBe("vector github sandbox run -- vector github run --phase agent")
+      expect(steps[finish]!.if).toBe("always()")
+      for (const [index, step] of steps.entries())
+        if (step.uses === "actions/upload-artifact@v4") {
+          expect(index).toBeGreaterThan(finish)
+          expect(step.with!.path).toMatch(/^\$\{\{ runner.temp \}\}\/vector-(out|session)\/$/)
+          expect(step.if).toBe("always() && steps.agent.outcome != 'skipped'")
+        }
+      expect(steps.filter((step) => step.uses === "actions/upload-artifact@v4")).toHaveLength(codium ? 2 : 1)
+      expect(steps[agent]!.env!.VECTOR_PROMPT).toBe("${{ inputs.prompt }}")
+      if (codium) expect(steps[agent]!.env!.VECTOR_CLI_TOKEN).toBeUndefined()
+      if (!codium) expect(steps[agent]!.env!.VECTOR_CLI_TOKEN).toBe("${{ secrets.VECTOR_CLI_TOKEN }}")
+      expect(steps[agent]!.env!.VECTOR_AGENT_SUDO).toBeUndefined()
+      if (codium) {
+        expect(steps[agent]!.env!.SHARE).toBe("false")
+        expect(steps[agent]!.env!.VECTOR_SHARE_CONSENT).toBeUndefined()
+        expect(steps[sandbox]!.env!.VECTOR_AGENT_SUDO).toBeUndefined()
+        expect(steps[checkout]!.if).toBe("steps.mint.outputs.status == 'ok'")
+      }
+    }
+  })
+
+  test("own-key review lists every credential for untrusted child filtering", () => {
+    const keys = ["AWS_ACCESS_KEY_ID", "AWS_BEARER_TOKEN_BEDROCK"]
+    const workflow = agents({ ...OWN_KEY, keys })
+    for (const job of [workflow.jobs.review, workflow.jobs.agent]) {
+      const env = job.steps.find((step) => step.env?.VECTOR_SECRET_ENV_NAMES)?.env
+      expect(env?.VECTOR_SECRET_ENV_NAMES).toBe(keys.join(","))
+      const child = untrustedChildEnvironment({
+        ...env,
+        GITHUB_ACTIONS: "true",
+        AWS_ACCESS_KEY_ID: "fixture-id",
+        AWS_BEARER_TOKEN_BEDROCK: "fixture-token",
+      })
+      for (const key of [...keys, "GITHUB_TOKEN", "VECTOR_CLI_TOKEN"]) expect(child[key]).toBeUndefined()
+    }
+  })
+
+  test("Codium review authenticates before checkout without account or provider secrets", () => {
+    const job = agents().jobs.review
+    expect(job.permissions).toEqual({
+      contents: "read",
+      "pull-requests": "write",
+      issues: "write",
+      "id-token": "write",
+    })
+    expect(job.steps.map((step) => step.uses ?? step.run)).toEqual([
+      "actions/setup-node@v4",
+      "actions/cache/restore@v4",
+      `npm install -g @vectordevai/cli@${GithubAgents.MIN_AGENTS_CLI} --prefer-offline --no-audit --no-fund`,
+      "vector github mint --purpose review",
+      "actions/checkout@v4",
+      "vector github review",
+    ])
+    const review = job.steps.at(-1)!
+    expect(review.shell).toBe(agents().jobs.agent.steps.find((step) => step.id === "agent")!.shell)
+    expect(review.env!.VECTOR_CONFIG_CONTENT).toBe('{"lsp":false,"formatter":false,"snapshot":false}')
+    expect(review.env!.VECTOR_CLI_TOKEN).toBeUndefined()
+    expect(review.env!.OPENAI_API_KEY).toBeUndefined()
+    expect(review.env!.REVIEW_MAX_COST_USD_PER_MONTH).toBeUndefined()
+    expect(agents().on.pull_request).toBeUndefined()
+  })
+
+  test("publish takes trusted routing and a runner-owned bundle with isolated authority", () => {
+    for (const options of [CODIUM, OWN_KEY, SCHEDULED]) {
+      const job = agents(options).jobs.publish
+      if (options.publishAuth === "app") expect(job.permissions["id-token"]).toBe("write")
+      if (options.publishAuth !== "app") expect(job.permissions["id-token"]).toBeUndefined()
+      if (options.autoReview) expect(job.permissions.actions).toBe("write")
+      if (!options.autoReview) expect(job.permissions.actions).toBeUndefined()
+      expect(job.steps.some((step) => step.uses?.includes("cache"))).toBe(false)
+      const download = job.steps.find((step) => step.uses === "actions/download-artifact@v4")!
+      expect(download.with!.path).toBe("${{ runner.temp }}/vector-bundle")
+      expect(download["continue-on-error"]).toBe(true)
+      const publish = job.steps.at(-1)!
+      expect(publish["working-directory"]).toBe("${{ runner.temp }}")
+      for (const name of ["KIND", "PR", "REF"])
+        expect(publish.env![`VECTOR_ROUTE_${name}`]).toBe(`\${{ needs.route.outputs.${name.toLowerCase()} }}`)
+      expect(publish.env!.VECTOR_GITHUB_AUTH).toBe(options.publishAuth ?? "github")
+      expect(publish.env!.VECTOR_AGENT_STATUS).toBe(
+        options.mode === "codium" ? "${{ needs.agent.outputs.status }}" : "ok",
+      )
+      expect(publish.env!.VECTOR_CLI_TOKEN).toBeUndefined()
+      expect(publish.env!.OPENAI_API_KEY).toBeUndefined()
+    }
+    const bind = agents().jobs.bind
+    expect(bind.permissions).toEqual({ "id-token": "write" })
+    expect(bind.steps.some((step) => step.uses?.includes("checkout"))).toBe(false)
+    expect(bind.steps.at(-1)!.env!.VECTOR_BIND_CODE).toBe("${{ inputs.code }}")
+    expect(agents().jobs.route.steps.some((step) => step.uses?.includes("checkout"))).toBe(false)
+  })
+
+  test("hostile schedule prompts survive JSON and YAML without becoming expressions", () => {
+    const workflow = agents(SCHEDULED)
+    const value = workflow.jobs.agent.steps.find((step) => step.id === "agent")!.env!.VECTOR_SCHEDULE_PROMPTS
+    expect(value).not.toContain("${{")
+    expect(value).toContain("\\u0024")
+    expect(JSON.parse(value)).toEqual({
+      [SCHEDULED.schedules![0]!.cron]: { id: "daily", prompt: SCHEDULED.schedules![0]!.prompt },
+    })
+    expect(workflow.jobs.publish.steps.at(-1)!.env!.VECTOR_SCHEDULE_PROMPTS).toBe(value)
+    expect(buildAgentsWorkflow(SCHEDULED).split("\n")[0]).not.toContain("${{")
+  })
+
+  test("every emitted Actions expression is explicitly allowlisted", () => {
+    const allowed = new Set([
+      "runner.os",
+      "needs.route.outputs.kind",
+      "needs.route.outputs.pr",
+      "needs.route.outputs.ref",
+      "needs.route.outputs.thread",
+      "needs.route.outputs.app",
+      "inputs.ticket",
+      "inputs.prompt",
+      "inputs.code",
+      "github.event.comment.id",
+      "secrets.GITHUB_TOKEN",
+      "secrets.VECTOR_CLI_TOKEN",
+      "secrets.OPENAI_API_KEY",
+      "vars.VECTOR_MODEL || 'vector-plan'",
+      "vars.VECTOR_AGENT_SUDO",
+      "runner.temp",
+      "github.run_id",
+      "github.run_attempt",
+      "github.workspace",
+      "steps.route.outputs.kind",
+      "steps.route.outputs.pr",
+      "steps.route.outputs.ref",
+      "steps.route.outputs.thread",
+      "steps.route.outputs.app",
+      "steps.mint.outputs.status",
+      "steps.mint.outputs.rid",
+      "needs.agent.outputs.status",
+      "needs.agent.outputs.rid",
+      "github.event.pull_request.number || needs.route.outputs.pr",
+      "needs.route.outputs.ref || github.event.pull_request.head.sha",
+      `contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association || github.event.issue.author_association) && github.run_id || (github.event.comment.user.id || github.event.issue.user.id || github.run_id)`,
+      "github.event_name == 'schedule' && format('vector-schedule-{0}', needs.route.outputs.thread) || format('vector-{0}-{1}', needs.route.outputs.thread, github.event.comment.id || github.run_id)",
+    ])
+    // Inspect decoded YAML too: escaping must not merely hide an expression from a raw-file scan.
+    for (const options of [CODIUM, OWN_KEY, SCHEDULED])
+      for (const match of buildAgentsWorkflow(options).matchAll(/\$\{\{(.*?)\}\}/gs))
+        expect(allowed.has(match[1]!.trim().replace(/''/g, "'"))).toBe(true)
+    const check = (value: unknown): void => {
+      if (typeof value === "string")
+        for (const match of value.matchAll(/\$\{\{(.*?)\}\}/gs)) expect(allowed.has(match[1]!.trim())).toBe(true)
+      if (Array.isArray(value)) value.forEach(check)
+      else if (value && typeof value === "object") Object.values(value).forEach(check)
+    }
+    for (const options of [CODIUM, OWN_KEY, SCHEDULED]) check(agents(options))
+  })
+
+  test("options reject executable names, secret/control collisions and unsupported Codium modes", () => {
+    for (const key of [
+      "BAD-KEY",
+      "x",
+      "A\nB",
+      "OPENAI_API_KEY\n",
+      "GITHUB_TOKEN",
+      "VECTOR_MODE",
+      "ACTIONS_ID_TOKEN_REQUEST_TOKEN",
+      "BASH_ENV",
+      "NODE_OPTIONS",
+      "BUN_OPTIONS",
+      "SHELLOPTS",
+      "PS4",
+      "GIT_CONFIG_COUNT",
+      "REVIEW_AUTO_MODEL",
+      "REVIEW_VERIFY",
+      "PATH",
+    ])
+      expect(() => buildAgentsWorkflow({ ...OWN_KEY, keys: [key] })).toThrow()
+    for (const name of ["", "a b", "openai\n", "x\nrun: danger", "${{secrets.X}}", "x'", "x;echo"])
+      for (const field of ["provider", "model"] as const)
+        expect(() => buildAgentsWorkflow({ ...OWN_KEY, [field]: name })).toThrow()
+    for (const change of [{ share: true }, { autoReview: true }, { keys: ["OPENAI_API_KEY"] }])
+      expect(() => buildAgentsWorkflow({ ...CODIUM, ...change })).toThrow()
+    for (const version of ["1.99.112", "1.99.113-beta.1", "local", "$(echo bad)"])
+      expect(() => buildAgentsWorkflow({ ...CODIUM, version })).toThrow()
+    expect(() => buildAgentsWorkflow({ ...CODIUM, version: "10.0.0" })).not.toThrow()
+    expect(() => buildAgentsWorkflow({ ...OWN_KEY, share: true })).not.toThrow()
+    expect(readWorkflowOptions("# vector-workflow: {broken}")).toBeUndefined()
+    expect(
+      readWorkflowOptions("# vector-workflow: " + JSON.stringify({ ...OWN_KEY, password: "secret" })),
+    ).toBeUndefined()
+    expect(readWorkflowOptions(buildWorkflowYaml(OPENAI))).toBeUndefined()
+    // Old headers remain readable so the setup flow can offer an update.
+    expect(
+      readWorkflowOptions("# vector-workflow: " + JSON.stringify({ ...CODIUM, version: "1.99.112" }))?.version,
+    ).toBe("1.99.112")
+  })
+
+  test("future workflow versions do not trigger a false downgrade warning", () => {
+    for (const version of ["3", "10"])
+      expect(
+        prepareGithubEnvironment(
+          { GITHUB_ACTIONS: "true", VECTOR_WORKFLOW_VERSION: version, VECTOR_CONFIG_CONTENT: "{}" },
+          true,
+        ),
+      ).toBeUndefined()
+    for (const version of ["1", "", "NaN", "2oops"])
+      expect(
+        prepareGithubEnvironment(
+          { GITHUB_ACTIONS: "true", VECTOR_WORKFLOW_VERSION: version, VECTOR_CONFIG_CONTENT: "{}" },
+          true,
+        ),
+      ).toContain("vector github install")
+  })
 })

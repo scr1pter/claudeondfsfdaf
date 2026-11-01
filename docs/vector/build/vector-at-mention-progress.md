@@ -659,3 +659,11 @@ None yet (contract section 4).
 
 - V13 committed as `c39381fa51c57fea1b9180b4dd05d4d82a0c51d0` and pushed normally. The mandatory hook passed all 23 package typechecks (21 cached). Exact-head CI `41262667128` completed successfully in all three jobs: hosted API, engine/core, and desktop engine bundle under Node.
 - V14 reserves provisional `MIN_AGENTS_CLI = "1.99.113"` for unpublished source and clarifies JSON dollar escaping before implementation. Existing v2 callers, desktop pin, publication and live owner acceptance remain gated as documented.
+
+
+### V14 workflow generator (final validation)
+
+- Added the separate v3 builder/header reader and route script. V2 callers and byte output stay unchanged; v3 reserves the unpublished CLI `1.99.113`, with no desktop pin or setup-surface change. The jobs split read-only agent execution, trusted publishing, binding and Codium review; user inputs remain data and every emitted Actions expression is allowlisted in tests.
+- Independent review found and closed missing own-key review secret-name declarations, an unverifiable own-key bot-ticket exception, unreserved review-control environment names, and future invalid-version fallback. Tests cover the real child-environment filter for nonsuffix credentials, own-key bot refusal, canonical version validation and final-newline rejection. The reviewer’s final source reread is clear.
+- Final runtime tests passed separately: workflow 35 tests / 713 assertions with three parsed goldens, and route 17 / 529. The initial preload without network permission failed before any test; the loopback-enabled runs above passed. Core and engine types passed. Three test matcher overloads were corrected without changing their assertions; the final workflow rerun confirms the same result. Commit/hook/exact-head CI remain pending.
+- V15 may use a loader-held, starting-heartbeat-authorized run token only at the fixed Codium models/chat boundary. Root and the Codium lead confirmed this existing section 2.13 contract; no CLI/account grant, persistence, redirect or free-provider/sharing fallback is authorized. Its shared account/provider files are coordinated and available after V14 gates; A59 must retain the integrated run-domain tests.

@@ -1073,7 +1073,7 @@ interface AgentsWorkflowOptions {
   provider: string; model: string                 // own-key; Codium uses MODEL = vars.VECTOR_MODEL || "vector-plan"
   keys: readonly string[]                          // own-key secrets; each matches ^[A-Z_][A-Z0-9_]{0,99}$
   autoReview: boolean                              // own-key only in v3 (O4)
-  publishAuth: "github" | "app"                    // publish job's write credential; default "github" (O14, INV-S18)
+  publishAuth?: "github" | "app"                    // publish job's write credential; default "github" (O14, INV-S18)
   share?: boolean                                  // own-key only; refused with mode "codium" (INV-S6)
   monthlyUsd?: number; version: string
   handle?: string                                  // App slug; adds "@<slug>" to mentions
@@ -1084,7 +1084,8 @@ readWorkflowOptions(yaml: string): AgentsWorkflowOptions | undefined   // parses
 ```
 
 - V14 provisionally reserves `MIN_AGENTS_CLI = "1.99.113"` for the unpublished CLI carrying V15–V22. This is changeable before release; it does not assert npm availability or raise the desktop pin.
-- `provider` and `model` match `^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,199}$`; anything else throws.
+- `provider` and `model` match `^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,199}$`; anything else throws. Provider secret names also refuse generated-control and runner/shell/runtime environment names, so they cannot overwrite the workflow authority boundary. Unknown option fields are refused; the header contains secret names only, never secret values. Codium refuses own-key secret lines and automatic review, as well as public sharing.
+- Schedules have unique cron strings and ids. This generator bounds ids to 64 alphanumeric, underscore or hyphen characters, accepts five numeric/wildcard/list/range/step cron fields, and bounds prompts to 100,000 characters and the list to 20 entries. V22 owns recurrence/time-zone conversion; the generator does not turn invalid calendar semantics into a valid cron.
 - Every user string written into the file (schedule prompts, the header) is JSON with each `$` written as the literal JSON escape `\u0024`, so Actions never evaluates `${{` inside it and `JSON.parse` restores it (INV-S15).
 - Line 1 of every generated file is `# vector-workflow: <JSON of the options, minus secrets>`. The desktop and CLI read it to re-render, add the handle, update the version or edit schedules (amendment 15).
 
@@ -1124,13 +1125,13 @@ on:
 
   ```
   github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' ||
-  (github.event_name == 'issues' && github.event.issue.user.type != 'Bot' && (<contains issue.body for each mention>)) ||
+  (github.event_name == 'issues' && github.event.issue.user.type != 'Bot' && (<contains issue.body or issue.title for each mention>)) ||
   ((github.event_name == 'issue_comment' || github.event_name == 'pull_request_review_comment') &&
     github.event.comment.user.type != 'Bot' && (<contains comment.body for each mention>))
   ```
 
 - Concurrency, so one stranger cannot fill the repository's runners (GitHub keeps one running and one pending run per group and cancels the rest): `group: vector-route-${{ contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association || github.event.issue.author_association) && github.run_id || (github.event.comment.user.id || github.event.issue.user.id || github.run_id) }}`, `cancel-in-progress: false`. The association only throttles; it never authorizes.
-- The script handles `issues` (title plus body; the issue's `user.id` must equal `sender.id`, and that user must be a writer), `schedule` (kind `task`, `thread = "schedule-" + sha256(cron)[0..8]`), dispatch `mode` (`task` with the prompt, `review` with `pr`, `bind`), and dispatches by `<slug>[bot]` (allowed only with a non-empty `ticket`; the server verifies it).
+- The script handles `issues` (title plus body; the issue's `user.id` must equal `sender.id`, and that user must be a writer), `schedule` (kind `task`, `thread = "schedule-" + sha256(cron)[0..8]`), dispatch `mode` (`task` with the prompt, `review` with `pr`, `bind`), and dispatches by `<slug>[bot]` (Codium mode only, with a non-empty `ticket`; the server verifies it). Own-key mode refuses all bots because it makes no mint request and cannot validate a one-time ticket.
 - It runs the writer check for issue, comment and review-comment events, and refuses fork PR tasks.
 - It reacts 👀 on accepted runs. It reacts 😕 on a refusal only when the author's association is `OWNER`, `MEMBER` or `COLLABORATOR`; everyone else is refused silently.
 - `ref` is the PR head SHA for same-repository PR tasks (resolved through the API), today's `resolveRef` result for reviews, and `github.sha` otherwise.
@@ -1194,7 +1195,7 @@ Plan limits are never enforced through Actions concurrency.
 - **Bind** answers `workflowUpdate`.
 - **Desktop.** Its status reads the header and offers an update PR when the version is old or the handle is missing.
 - **CLI.** `prepareGithubEnvironment` warns when the workflow's version is numerically *below* `GITHUB_WORKFLOW_VERSION` (V14). V24, which moves the last caller to v3, sets `GITHUB_WORKFLOW_VERSION` to `GithubAgents.WORKFLOW_VERSION` and updates the engine tests and scripts that hard-code `"2"` (`github.workflow.test.ts`, `github.review.test.ts`, `github.run-routing.test.ts`, `script/verify-sharing.ts`, `script/verify-github-app.ts`). When the CLI gets 426 `CODIUM_UPDATE_REQUIRED` from the gateway, it says: "Update Vector: merge the workflow update from the Vector app, or run `vector github install` again." When id-token is added to more Codium jobs later, the version is bumped again.
-- **Pinned CLI.** A v3 file pins a CLI that has the v3 commands. `buildAgentsWorkflow` throws when the pinned version is below `GithubAgents.MIN_AGENTS_CLI`, and the desktop status says "Update Vector" instead of offering setup. The desktop's `vectorRequiredCliVersion` (`packages/desktop/package.json`) must be raised to that release before a desktop release offers @vector setup (section 4 step 7).
+- **Pinned CLI.** V3 requires the supplied version to be canonical semver; the v2 development fallback does not apply. A v3 file pins a CLI that has the v3 commands. `buildAgentsWorkflow` throws when the pinned version is below `GithubAgents.MIN_AGENTS_CLI`, and the desktop status says "Update Vector" instead of offering setup. The desktop's `vectorRequiredCliVersion` (`packages/desktop/package.json`) must be raised to that release before a desktop release offers @vector setup (section 4 step 7).
 
 ### 2.11.5 Own-key compatibility
 
