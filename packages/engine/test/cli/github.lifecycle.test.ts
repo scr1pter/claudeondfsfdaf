@@ -90,3 +90,60 @@ for (const signal of ["SIGTERM", "SIGINT"] as const) {
     expect(await child.exited, await new Response(child.stderr).text()).toBe(signal === "SIGTERM" ? 143 : 130)
   }, 10000)
 }
+
+// CI-only subprocess cases: cancellation must win over a same-turn result and must not wait for arbitrary cleanup.
+for (const slowCleanup of [false, true]) {
+  test(`Codium SIGTERM settles cancelled before ${slowCleanup ? "blocked cleanup" : "same-turn success"}`, async () => {
+    const script = `
+      import { Effect } from "effect";
+      import { withRunHeartbeat } from ${JSON.stringify(new URL("../../src/cli/cmd/github.lifecycle.ts", import.meta.url).href)};
+      const clean = Promise.withResolvers();
+      const calls = [];
+      let started = 0;
+      const services = {
+        oidc: async () => {throw new Error("unexpected OIDC")}, mask: () => {}, now:Date.now, monotonic:()=>performance.now(),
+        wait:async()=>{}, notice:()=>{}, request:async(url,init)=>{
+          if (!url.endsWith("/settle")) throw new Error("unexpected cloud call");
+          if (performance.now()-started >= 5000) throw new Error("late cancellation settlement");
+          calls.push(JSON.parse(init.body).outcome);
+          clean.resolve();
+          return Response.json({ok:true});
+        },
+      };
+      const effect = ${
+        slowCleanup
+          ? `Effect.sync(() => { started=performance.now(); process.emit("SIGTERM"); }).pipe(
+        Effect.andThen(Effect.never), Effect.ensuring(Effect.promise(() => clean.promise)))`
+          : `Effect.sync(() => {
+        started=performance.now();process.emit("SIGTERM");return "completed";
+      })`
+      };
+      await Effect.runPromise(withRunHeartbeat(effect,{
+        credentials:{runToken:()=>"vrt_e30.c2ln"},services,onStop:()=>{},outcome:()=>"changes",
+      })).catch(()=>{});
+      if (JSON.stringify(calls)!=='["cancelled"]') throw new Error("wrong settlement: "+JSON.stringify(calls));
+      if (process.listenerCount("SIGTERM") || process.listenerCount("SIGINT")) throw new Error("listener leaked");
+      console.log("settled-cancelled");
+    `
+    const child = Bun.spawn([process.execPath, "--eval", script], {
+      cwd: path.resolve(import.meta.dir, "../.."),
+      stdout: "pipe",
+      stderr: "pipe",
+      stdin: "ignore",
+    })
+    const timer = setTimeout(() => child.kill("SIGKILL"), 8000)
+    try {
+      const [code, stdout, stderr] = await Promise.all([
+        child.exited,
+        new Response(child.stdout).text(),
+        new Response(child.stderr).text(),
+      ])
+      expect(code, stderr).toBe(143)
+      expect(stdout).toContain("settled-cancelled")
+    } finally {
+      clearTimeout(timer)
+      child.kill("SIGKILL")
+      await child.exited
+    }
+  }, 10000)
+}

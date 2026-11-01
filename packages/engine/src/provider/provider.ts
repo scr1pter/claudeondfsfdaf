@@ -1,3 +1,4 @@
+import { GithubSecrets } from "@/cli/cmd/github.secrets"
 import {
   activeOAuthApproval,
   pluginCredentialAllowed,
@@ -610,6 +611,7 @@ function custom(dep: CustomDep): Record<string, CustomLoader> {
       // TODO: Using process.env directly because Env.set only updates a process.env shallow copy,
       // until the scope of the Env API is clarified (test only or runtime?)
       const awsBearerToken = iife(() => {
+        if (GithubSecrets.credentials.loaded()) return env["AWS_BEARER_TOKEN_BEDROCK"]
         const envToken = process.env.AWS_BEARER_TOKEN_BEDROCK
         if (envToken) return envToken
         if (auth?.type === "api") {
@@ -641,13 +643,25 @@ function custom(dep: CustomDep): Record<string, CustomLoader> {
         region: defaultRegion,
       }
 
+      // Channel credentials stay in memory: the SDK must not fall back to the runner's environment/profile.
+      if (GithubSecrets.credentials.loaded() && awsBearerToken) providerOptions.apiKey = awsBearerToken
+
       // Only use credential chain if no bearer token exists
       // Bearer token takes precedence over credential chain (profiles, access keys, IAM roles, web identity tokens)
       if (!awsBearerToken && !configApiKey) {
         // Build credential provider options (only pass profile if specified)
         const credentialProviderOptions = profile ? { profile } : {}
 
-        providerOptions.credentialProvider = fromNodeProviderChain(credentialProviderOptions)
+        if (GithubSecrets.credentials.loaded()) {
+          const secretAccessKey = env["AWS_SECRET_ACCESS_KEY"]
+          if (!awsAccessKeyId || !secretAccessKey)
+            throw new Error("The GitHub secret channel requires complete Bedrock credentials.")
+          providerOptions.credentialProvider = async () => ({
+            accessKeyId: awsAccessKeyId,
+            secretAccessKey,
+            ...(env["AWS_SESSION_TOKEN"] ? { sessionToken: env["AWS_SESSION_TOKEN"] } : {}),
+          })
+        } else providerOptions.credentialProvider = fromNodeProviderChain(credentialProviderOptions)
       }
 
       // Add custom endpoint if specified (endpoint takes precedence over baseURL)
@@ -1841,7 +1855,9 @@ const layer = Layer.effect(
         const modelCatalog = Object.fromEntries(Object.entries(loaded).filter(([id]) => providerAllowed(id)))
         const catalogIDs = Object.fromEntries(Object.keys(modelCatalog).map((id) => [id, true as const]))
         const catalog = new Map<string, Info>()
-        const freeCatalog = yield* freeModels.catalog()
+        const freeCatalog = GithubSecrets.credentials.pendingRunToken()
+          ? { enabled: false, updatedAt: 0, models: [] }
+          : yield* freeModels.catalog()
         const vectorToken = yield* freeCredentials.get("vector")
         const planCatalog = yield* modelPlans.catalog(vectorToken)
         // Codium is a catalog provider like the free models, so the env loop and custom loaders walk it too.

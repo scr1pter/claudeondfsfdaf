@@ -18,6 +18,8 @@ on:
       - package.json
       - packages/core/src/review/**
       - packages/core/src/github-agents.ts
+      - packages/core/src/free-models.ts
+      - packages/core/src/share/transport.ts
       - packages/engine/src/cli/cmd/github*.ts
       - packages/desktop/src/main/github-*.ts
       - packages/web/test/github-*.ts
@@ -27,6 +29,8 @@ on:
       - packages/core/test/github-agents.test.ts
       - packages/core/test/review/**
       - packages/core/test/child-environment.test.ts
+      - packages/core/test/free-model-route.test.ts
+      - packages/core/test/public-session-share.test.ts
       - test/api-module-loading.test.ts
       - test/cli-token.test.ts
       - packages/cloud/src/workflow-compliance.test.ts
@@ -148,7 +152,7 @@ jobs:
       - name: Run core GitHub tests
         if: ${{ !cancelled() }}
         working-directory: packages/core
-        run: GITHUB_ACTIONS=false bun test --timeout 30000 test/github-agents.test.ts test/review/*.test.ts test/child-environment.test.ts
+        run: GITHUB_ACTIONS=false bun test --timeout 30000 test/github-agents.test.ts test/review/*.test.ts test/child-environment.test.ts test/free-model-route.test.ts test/public-session-share.test.ts
 
   # The desktop runs the engine's Node bundle in Electron's utility process, while every engine test runs on Bun, so a
   # stray Bun API passes them all and still fails every desktop message. This boots the bundle under Node and sends

@@ -1,3 +1,4 @@
+import { GithubSecrets } from "./cmd/github.secrets"
 import { createHash } from "node:crypto"
 import fs from "fs/promises"
 import path from "path"
@@ -230,7 +231,18 @@ export async function login(provided?: string): Promise<CliUser | undefined> {
  * impossible (declined, invalid, or non-interactive without a token).
  */
 export async function ensureVectorAccount(): Promise<void> {
-  const envToken = process.env.VECTOR_CLI_TOKEN
+  if (GithubSecrets.credentials.pendingRunToken()) {
+    const { verifyGithubRun } = await import("./cmd/github.cloud")
+    const accepted = process.env.GITHUB_ACTIONS === "true" && (await verifyGithubRun())
+    if (accepted) return
+    UI.error("This Codium run is not authorized.")
+    process.exit(1)
+  }
+  if (GithubSecrets.credentials.loaded() && !GithubSecrets.credentials.cliToken()) {
+    UI.error("This GitHub run requires its repository VECTOR_CLI_TOKEN secret.")
+    process.exit(1)
+  }
+  const envToken = GithubSecrets.credentials.cliToken() ?? process.env.VECTOR_CLI_TOKEN
   if (envToken) {
     const verified = await verifyToken(envToken)
     if (verified.status === "ok" || verified.status === "invalid") await recordCheck(envToken, verified.status === "ok")

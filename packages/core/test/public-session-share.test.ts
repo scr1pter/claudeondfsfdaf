@@ -216,10 +216,18 @@ it.effect("native import is passive, remapped, complete, and notifications see t
     ).toHaveLength(2)
     // The transcript's "user" is whoever published it, so its text is marked as outside content: memory never takes
     // it as the words of the user who continues the session.
-    const parts = (
-      yield* db.select().from(PartTable).where(eq(PartTable.session_id, converted.sessionID)).all().pipe(Effect.orDie)
-    ).map((row) =>
-      Schema.decodeUnknownSync(SessionV1.Part)({ ...row.data, id: row.id, sessionID: row.session_id, messageID: row.message_id }),
+    const parts = (yield* db
+      .select()
+      .from(PartTable)
+      .where(eq(PartTable.session_id, converted.sessionID))
+      .all()
+      .pipe(Effect.orDie)).map((row) =>
+      Schema.decodeUnknownSync(SessionV1.Part)({
+        ...row.data,
+        id: row.id,
+        sessionID: row.session_id,
+        messageID: row.message_id,
+      }),
     )
     expect(parts.length).toBeGreaterThan(0)
     expect(parts.every((part) => part.type === "text" && part.metadata?.[BrainSchema.OUTSIDE] === "import")).toBe(true)
@@ -763,3 +771,19 @@ for (const engine of ["v1", "v2"] as const) {
     }),
   )
 }
+
+test("run credentials are refused before an authenticated sharing request", async () => {
+  let sent = 0
+  const client = makeShareTransport({
+    token: async () => "vrt_e30.c2ln",
+    fetch: Object.assign(
+      async () => {
+        sent++
+        throw new Error("A run token must never reach sharing")
+      },
+      { preconnect: fetch.preconnect },
+    ),
+  })
+  await expect(client.remove("a".repeat(32), "b".repeat(64))).rejects.toThrow("Sign in to your Vector account")
+  expect(sent).toBe(0)
+})

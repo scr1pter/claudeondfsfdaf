@@ -297,3 +297,46 @@ test("native route sends nothing to a may-train model before acceptance, then al
   if (prepared.request.body._tag !== "Uint8Array") throw new Error("Expected JSON bytes")
   expect(JSON.parse(new TextDecoder().decode(prepared.request.body.body)).provider.data_collection).toBe("allow")
 })
+
+test("run credentials cannot authorize explicit free selections or configured aliases", async () => {
+  for (const provider of ["vector", "openrouter"] as const) {
+    await expect(
+      FreeModels.resolveRoute({
+        provider,
+        modelID: catalog.models[0].id,
+        catalog: async () => catalog,
+        forKey: async () => [],
+        credential: async (name) => (name === "vector" ? "vrt_e30.c2ln" : undefined),
+        trainingConsent: async () => false,
+        guest: async () => false,
+      }),
+    ).rejects.toThrow("cannot authorize shared free models")
+  }
+  const alias = ModelV2.Info.make({ ...info, providerID: ProviderV2.ID.make("configured-alias") })
+  const model = freeModelRoute(
+    alias,
+    client,
+    FreeModels.CredentialsService.of({ get: () => Effect.succeed("vrt_e30.c2ln") }),
+    ownerSession,
+  )
+  let sent = 0
+  const result = await Effect.runPromise(
+    LLMClient.stream(LLM.request({ model, prompt: "private fixture" })).pipe(
+      Stream.runCollect,
+      Effect.result,
+      Effect.provide(LLMClient.layer.pipe(Layer.provide(RequestExecutor.fetchLayer))),
+      Effect.provideService(
+        FetchHttpClient.Fetch,
+        Object.assign(
+          async () => {
+            sent++
+            throw new Error("A run token must never reach free inference")
+          },
+          { preconnect: fetch.preconnect },
+        ),
+      ),
+    ),
+  )
+  expect(result._tag).toBe("Failure")
+  expect(sent).toBe(0)
+})

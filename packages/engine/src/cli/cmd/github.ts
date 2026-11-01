@@ -17,6 +17,29 @@ export const GithubInstallCommand = effectCmd({
     }),
 })
 
+export const GithubMintCommand = effectCmd({
+  command: "mint",
+  describe: "authorize a Codium GitHub Actions run",
+  builder: (yargs) => yargs.option("purpose", { choices: ["task", "review"] as const, demandOption: true }),
+  instance: false,
+  handler: (args) =>
+    Effect.gen(function* () {
+      const { mintRunToken } = yield* Effect.promise(() => import("./github.cloud"))
+      return yield* Effect.promise(() => mintRunToken({ purpose: args.purpose }))
+    }),
+})
+
+export const GithubBindCommand = effectCmd({
+  command: "bind",
+  describe: "bind this GitHub Actions repository to Vector",
+  instance: false,
+  handler: () =>
+    Effect.gen(function* () {
+      const { bindRepository } = yield* Effect.promise(() => import("./github.cloud"))
+      process.exitCode = yield* Effect.promise(() => bindRepository())
+    }),
+})
+
 // Capture workflow consent before project configuration and plugins are loaded.
 const sharing = new WeakMap<object, PublicSession.Consent | undefined>()
 
@@ -84,6 +107,12 @@ export const GithubCommand = cmd({
   command: "github",
   describe: "manage GitHub agent",
   builder: (yargs) =>
-    yargs.command(GithubInstallCommand).command(GithubRunCommand).command(GithubReviewCommand).demandCommand(),
+    yargs
+      .command(GithubInstallCommand)
+      .command(GithubRunCommand)
+      .command(GithubReviewCommand)
+      .command(GithubMintCommand)
+      .command(GithubBindCommand)
+      .demandCommand(),
   async handler() {},
 })

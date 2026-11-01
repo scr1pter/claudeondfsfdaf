@@ -16,6 +16,7 @@ import { ServeCommand } from "./cli/cmd/serve"
 import { DebugCommand } from "./cli/cmd/debug"
 import { StatsCommand } from "./cli/cmd/stats"
 import { McpCommand } from "./cli/cmd/mcp"
+import { GithubSecrets } from "./cli/cmd/github.secrets"
 import { GithubCommand } from "./cli/cmd/github"
 import { ExportCommand } from "./cli/cmd/export"
 import { ImportCommand } from "./cli/cmd/import"
@@ -114,9 +115,27 @@ const cli = yargs(args)
     if (opts.local === true && String(opts._?.[0] ?? "") === "run")
       await runLocal(typeof opts.attach === "string" ? opts.attach : undefined)
 
-    if (isVectorCli && !opts.help && !opts.version) {
-      const command = String(opts._?.[0] ?? "")
-      if (!openCommands.has(command)) {
+    const command = String(opts._?.[0] ?? "")
+    const subcommand = String(opts._?.[1] ?? "")
+    const github = process.env.GITHUB_ACTIONS === "true" && command === "github"
+    const control = github && ["mint", "bind", "sandbox", "publish"].includes(subcommand)
+    if (control) {
+      process.env.VECTOR_PURE = "1"
+      process.env.VECTOR_DISABLE_PROJECT_CONFIG = "1"
+    }
+    if (
+      !opts.help &&
+      !opts.version &&
+      github &&
+      ["run", "review"].includes(subcommand) &&
+      (process.env.VECTOR_SECRET_CHANNEL !== undefined || process.env.VECTOR_MODE === "codium")
+    ) {
+      process.env.VECTOR_PURE = "1"
+      if (process.env.VECTOR_MODE === "codium") process.env.VECTOR_DISABLE_PROJECT_CONFIG = "1"
+      await GithubSecrets.credentials.load()
+    }
+    if ((isVectorCli || GithubSecrets.credentials.loaded()) && !opts.help && !opts.version) {
+      if (!openCommands.has(command) && !control) {
         const { ensureVectorAccount } = await import("./cli/vector-account")
         await ensureVectorAccount()
       }
