@@ -2,7 +2,7 @@
 
 Updated November 1, 2026. The large coding study is complete. The latest Vector submission passes the same functional gate as Codex, receives the same blinded code-quality score, and costs essentially the same: **$1.5751466 versus $1.5790564**. This does not demonstrate a significant general price advantage.
 
-The data supports a combined terminal-start/readiness operation and several accounting and context-display corrections. It does not support making raw-text patch format the default. Product fixes are committed locally on `tokenomics-efficiency`, final head `bd537fd2ccd35984bf705264daa1331bb4f39feb`; they have not been pushed, merged or released.
+The data supports a combined terminal-start/readiness operation and several accounting and context-display corrections. It does not support making raw-text patch format the default. Product fixes are published on GitHub branch [tokenomics-efficiency](https://github.com/scr1pter/claudeondfsfdaf/tree/tokenomics-efficiency), source head `bd537fd2ccd35984bf705264daa1331bb4f39feb`. The [tokenomics-complete](https://github.com/scr1pter/claudeondfsfdaf/tree/tokenomics-complete) branch combines code, tests, reports and portable benchmark evidence. These branches have not been merged into `main` or released.
 
 The [sanitized results](../../benchmarks/tokenomics-2026-11-01/live-results.json) contain costs, revisions, evaluation hashes and limitations. The [earlier offline audit](tokenomics-gaps-offline-2026-10-30.md) remains a historical snapshot; its pending work and approval requests describe that earlier stage.
 
@@ -100,4 +100,8 @@ Commit `bd537fd` omits invalid totals while preserving known input/output counte
 
 The recheck's latest results across 12 focused suites are 104 passing tests and zero failures, with 26 existing real-PTY cases skipped on Windows. Cache eligibility, cache breakpoints, title caps, usage, CLI budget stops, stats, readiness, TUI context and app cost/context checks are covered. Engine typecheck and formatting checks pass. One initial cache-suite hook timeout remains recorded; all six assertions passed then, and the unchanged test's retry completed with no hook failure. These totals replace overlapping rerun counts rather than adding them.
 
-This followup used no provider calls, no further cloud actions and no additional API spend. It did not rerun the large paid application benchmark or change its results. The source changes remain committed locally and unreleased.
+This followup used no provider calls, no further cloud actions and no additional API spend. It did not rerun the large paid application benchmark or change its results. The source changes are published on the GitHub branches linked above and remain unreleased.
+
+## GitHub publication
+
+The [portable evidence bundle](../../benchmarks/tokenomics-2026-11-01/README.md) contains the exact selected synthetic app sources, free evaluator and empty scaffold, per-check outcomes, snapshot hashes, and an allowlisted projection of all 449 usage receipts. Completed code and evidence belong on GitHub so work can continue from another computer. Private credentials and raw runtime data are excluded. GitHub publication does not merge or release these changes.

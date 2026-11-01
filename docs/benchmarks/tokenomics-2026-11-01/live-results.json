@@ -112,7 +112,7 @@
     "Additional unused worker-tool definitions were removed for the readiness trial; total effect is not attributable solely to readiness",
     "Corrected evaluator exposed false failures; all original failed checks and repair charges retained",
     "More expensive output can offset reductions in cached input and requests",
-    "Local fixes are committed but not merged, released or pushed",
+    "Fixes are published on named GitHub branches; they have not been merged into main or released",
     "Cloud work stopped by owner; no paid cloud-agent task ran"
   ],
   "followupRegression": {
@@ -139,5 +139,15 @@
     "cloudActions": 0,
     "newDefectObservedInPaidReceipts": false,
     "paidBenchmarkRerun": false
+  },
+  "publication": {
+    "repository": "https://github.com/scr1pter/claudeondfsfdaf",
+    "sourceBranch": "tokenomics-efficiency",
+    "reportBranch": "tokenomics-gaps",
+    "combinedBranch": "tokenomics-complete",
+    "mergedToMain": false,
+    "released": false,
+    "portableEvidence": "README.md",
+    "sanitizedLedger": "usage-receipts.json"
   }
 }
