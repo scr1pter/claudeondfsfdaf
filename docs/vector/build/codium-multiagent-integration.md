@@ -87,3 +87,23 @@ not replace the final branch CI. The twelve Windows engine shards are retained;
 manual production-navigation and offline-footprint jobs remain off by default.
 PR 18's timing fixture was already patch-equivalent in this branch, so its older
 branch did not need a separate merge. No main merge or release is implied.
+
+## Native regression fixtures
+
+Codium's reviewed `9c5bc861` test repair is also included: four HttpApi spend
+snapshots now retain the separate zero-valued `codiumSteps` counter, and the
+Host locally policy test permits only the four exact Codium presentation
+references. Its broader account, credits, pricing and plan-gating prohibitions
+remain intact. The integrated HttpApi file passes 26 tests and Host locally
+passes 17 tests.
+
+An unrelated Windows Local API case in run `41259171922` returned 400 where the
+test requires 409. The same revision passed that case on Linux. The previous
+assertion discarded the response body, so a probe timeout remains a hypothesis.
+The test now retains its exact 409 and change assertions while reporting the
+fake response, bounded fake-server paths and limited local policy state on
+failure. No production probe deadline changes. This local run passed 28 of 30
+cases, including that case; the two company-policy cases refused the managed
+fixture because this sandbox maps `/` and `/tmp` ownership to UID 65534, outside
+the trusted root/current-user owners. Native CI must supply their acceptance;
+the production ownership check remains unchanged.

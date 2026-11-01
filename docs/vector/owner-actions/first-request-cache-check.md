@@ -1,5 +1,15 @@
 # Proposed two-session first-request cache check
 
+> Update, 1 November 2026: the [offline release-engine study](release-engine-evidence.md)
+> now supplies a reviewed driver, durable request-grant checks and report format.
+> Exact-artifact execution is being verified in CI. It has no live mode. The
+> packaged-sidecar-only and provider-enforced $0.25 conditions below were planning
+> assumptions; the original audit does not require them for offline preparation.
+> A live adapter, credential route and explicit spending authorization remain
+> separate prerequisites. The older statements that no driver exists refer to
+> the proposed live driver, not this new offline rehearsal.
+
+
 Planning only, prepared on 29 October 2026. No live request, account setting,
 credential setup, or paid workflow was performed. The offline footprint reports
 do not establish real cache reuse. This proposal addresses the smallest live

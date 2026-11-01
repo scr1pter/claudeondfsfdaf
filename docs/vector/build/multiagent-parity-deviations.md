@@ -1174,3 +1174,43 @@ Technical bounds and recovery semantics are now explicit in §5.G:
 Validation (Linux, 2026-11-01): **115 engine cases passed** across sources 11, library 6, launch 10, ledger 12, runner 6, resume 9, state 14, bounds 5, scheduling 8 and runtime 34. The core plan file passed all 11 cases, including inherited verifier-model permissions. Core and final engine typechecks passed. The final runtime pass includes same-ID waiting with an available slot, crash/clock recovery, removed and renamed groups, real file/Git fanout and full-prefix prompt bounds; launch was rerun after its final notification change. A test-only optional-prompt narrowing fixed the final engine type errors without changing its assertion. Formatting and diff checks passed.
 
 Independent review by `integration_review` closed the removed-group and resumed-waiting findings after reading their cold/causal regressions and the final source. `workflow_core` contributed the source/library/ledger/state modules and real persistence fixtures; the root agent separately checked the final waiting regression and approved the conservative clock semantics. Local checks used package cwd, one test file per command, `--timeout 30000`, and the global `/workspace/.tools/vector-serial` wrapper. Fixtures used real session, event, file, Git and guard services with injected local execution and no provider request. This records focused local evidence, not a new full-suite CI result or release. General CI and release-evidence integration remain coordinated separately by the root agent, followed by the required complete pre-push hook.
+
+## 2026-11-01 CI8 — bounded Linux dependency installation
+
+Run [41255692359](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/41255692359)
+on `6d34acd7` passed all twelve Windows engine shards, the other three Linux
+engine shards, both browser jobs, Windows units and the desktop Node bundle
+(19 jobs). This supplies the native Windows evidence requested by CI7. Linux
+units failed one billing fixture whose three sequential two-second waits exceeded
+its five-second timeout; `4a0234b3` includes the tested repair from `67e3161e`.
+Production billing deadlines did not change.
+
+The remaining Linux engine shard never reached its tests: its unbounded
+`Install ripgrep` step started at 00:12:53 UTC and was still running after
+00:43 UTC. The job-log artifact was not available while it ran. Cancellation
+was requested after preserving the completed-job evidence; this run is not a
+successful full-suite result and supplies no coverage for that Linux shard.
+
+All three Linux ripgrep setup sites in the general test workflow now reuse an
+already installed executable, otherwise use bounded package-manager connection,
+retry and lock waits, with a five-minute step deadline. Test deadlines, shard
+counts and assertions are unchanged. A new complete run is still required on
+the repaired integrated source.
+
+
+## 2026-11-01 WP30 integration checkpoint
+
+Merged the reviewed WP30 checkpoint `e2b36f39` with `release-evidence` at
+`bbd727e3`. The sole conflict was the two independently appended entries above;
+both are retained. Runtime source, generated contracts and fixture repairs merged
+without conflict. This includes CI8, the reviewed Codium snapshot/presentation
+policy fixtures, and bounded diagnostic output for the native Local API probe.
+
+The published-engine study passed run `41260729498` on instrumentation `c7335646`.
+Independent review verified all 24 saved record hashes, all 47 memory samples,
+request controls and scripted usage projection. Its scope remains the unchanged
+1.99.112 sidecar hosted under Node; it is not full Electron or live cache evidence.
+The normal 21-job general suite `41260900526` is running on `c7335646`, before
+WP30. Its Linux unit/exerciser and desktop Node jobs have passed so far; its
+remaining results and later workflow feature validation are tracked separately.
+No main merge or release is part of this checkpoint.

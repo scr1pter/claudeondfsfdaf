@@ -1,0 +1,543 @@
+[
+  {
+    "id": "evt_194b36f44001hdnw7Dly0UwM4y",
+    "type": "session.updated",
+    "properties": {
+      "sessionID": "ses_e6b4c9506ffeDF8FhAM3tK5Pt7",
+      "info": {
+        "id": "ses_e6b4c9506ffeDF8FhAM3tK5Pt7",
+        "slug": "calm-wizard",
+        "projectID": "4bebcdecf70ae1f2ee19d9c4bd259cf61f444c78",
+        "directory": "/home/runner/work/_temp/vector-release-evidence/study/project",
+        "path": "",
+        "title": "Release cache instrumentation",
+        "agent": "build",
+        "model": {
+          "id": "gpt-6.1-sol",
+          "providerID": "openai",
+          "variant": "medium"
+        },
+        "version": "1.99.112",
+        "cost": 0,
+        "tokens": {
+          "input": 0,
+          "output": 0,
+          "reasoning": 0,
+          "cache": {
+            "read": 0,
+            "write": 0
+          }
+        },
+        "time": {
+          "created": 1793496148729,
+          "updated": 1793496149827
+        }
+      }
+    }
+  },
+  {
+    "id": "evt_194b36f4c001yOKajA75iNd7l0",
+    "type": "message.updated",
+    "properties": {
+      "sessionID": "ses_e6b4c9506ffeDF8FhAM3tK5Pt7",
+      "info": {
+        "id": "msg_194b36f42001ES7soDwyHl1sJc",
+        "role": "user",
+        "sessionID": "ses_e6b4c9506ffeDF8FhAM3tK5Pt7",
+        "time": {
+          "created": 1793496149827
+        },
+        "agent": "build",
+        "model": {
+          "providerID": "openai",
+          "modelID": "gpt-6.1-sol",
+          "variant": "medium"
+        },
+        "executionMode": "normal",
+        "size": "standard",
+        "judge": "off"
+      }
+    }
+  },
+  {
+    "id": "evt_194b36f4d001YJJIpigKWQk0oR",
+    "type": "message.part.updated",
+    "properties": {
+      "sessionID": "ses_e6b4c9506ffeDF8FhAM3tK5Pt7",
+      "part": {
+        "type": "text",
+        "text": "This is a request-cache instrumentation check. Reply only with CACHE_CHECK_DONE. Do not call tools, edit files, delegate, or research.",
+        "messageID": "msg_194b36f42001ES7soDwyHl1sJc",
+        "sessionID": "ses_e6b4c9506ffeDF8FhAM3tK5Pt7",
+        "id": "prt_194b36f4b001SMan8rROLXtNFb"
+      },
+      "time": 1793496149837
+    }
+  },
+  {
+    "id": "evt_194b36f520019n5npRg8ztFIum",
+    "type": "session.updated",
+    "properties": {
+      "sessionID": "ses_e6b4c9506ffeDF8FhAM3tK5Pt7",
+      "info": {
+        "id": "ses_e6b4c9506ffeDF8FhAM3tK5Pt7",
+        "slug": "calm-wizard",
+        "projectID": "4bebcdecf70ae1f2ee19d9c4bd259cf61f444c78",
+        "directory": "/home/runner/work/_temp/vector-release-evidence/study/project",
+        "path": "",
+        "title": "Release cache instrumentation",
+        "agent": "build",
+        "model": {
+          "id": "gpt-6.1-sol",
+          "providerID": "openai",
+          "variant": "medium"
+        },
+        "version": "1.99.112",
+        "cost": 0,
+        "tokens": {
+          "input": 0,
+          "output": 0,
+          "reasoning": 0,
+          "cache": {
+            "read": 0,
+            "write": 0
+          }
+        },
+        "time": {
+          "created": 1793496148729,
+          "updated": 1793496149840
+        }
+      }
+    }
+  },
+  {
+    "id": "evt_194b36f590015mqL7pNNgqwSKs",
+    "type": "session.status",
+    "properties": {
+      "sessionID": "ses_e6b4c9506ffeDF8FhAM3tK5Pt7",
+      "status": {
+        "type": "busy"
+      }
+    }
+  },
+  {
+    "id": "evt_194b36f7b001cw7chMQjSB5G1v",
+    "type": "message.part.updated",
+    "properties": {
+      "sessionID": "ses_e6b4c9506ffeDF8FhAM3tK5Pt7",
+      "part": {
+        "id": "prt_194b36f7b001bkUqyO2tLvkdGl",
+        "messageID": "msg_194b36f42001ES7soDwyHl1sJc",
+        "sessionID": "ses_e6b4c9506ffeDF8FhAM3tK5Pt7",
+        "type": "text",
+        "text": "<vector_memory_recall>\nMemory that may bear on this request. Rules bind; the rest is advisory, so check it against the code:\n- [mkej59] preference: Do not call tools, edit files, delegate, or research\n</vector_memory_recall>",
+        "synthetic": true,
+        "metadata": {
+          "vector.memory.recall": {
+            "ids": [
+              "mkej59"
+            ],
+            "tokens": 56,
+            "personal": []
+          }
+        }
+      },
+      "time": 1793496149883
+    }
+  },
+  {
+    "id": "evt_194b36f7d001NmwM2X5ZWguQkV",
+    "type": "message.updated",
+    "properties": {
+      "sessionID": "ses_e6b4c9506ffeDF8FhAM3tK5Pt7",
+      "info": {
+        "id": "msg_194b36f7d002C0znUUeFim48D2",
+        "parentID": "msg_194b36f42001ES7soDwyHl1sJc",
+        "role": "assistant",
+        "mode": "build",
+        "agent": "build",
+        "variant": "medium",
+        "size": "standard",
+        "path": {
+          "cwd": "/home/runner/work/_temp/vector-release-evidence/study/project",
+          "root": "/home/runner/work/_temp/vector-release-evidence/study/project"
+        },
+        "cost": 0,
+        "tokens": {
+          "input": 0,
+          "output": 0,
+          "reasoning": 0,
+          "cache": {
+            "read": 0,
+            "write": 0
+          }
+        },
+        "modelID": "gpt-6.1-sol",
+        "providerID": "openai",
+        "time": {
+          "created": 1793496149885
+        },
+        "sessionID": "ses_e6b4c9506ffeDF8FhAM3tK5Pt7"
+      }
+    }
+  },
+  {
+    "id": "evt_194b36f82001gvG0t9Gpf8zMxZ",
+    "type": "session.updated",
+    "properties": {
+      "sessionID": "ses_e6b4c9506ffeDF8FhAM3tK5Pt7",
+      "info": {
+        "id": "ses_e6b4c9506ffeDF8FhAM3tK5Pt7",
+        "slug": "calm-wizard",
+        "projectID": "4bebcdecf70ae1f2ee19d9c4bd259cf61f444c78",
+        "directory": "/home/runner/work/_temp/vector-release-evidence/study/project",
+        "path": "",
+        "title": "Release cache instrumentation",
+        "agent": "build",
+        "model": {
+          "id": "gpt-6.1-sol",
+          "providerID": "openai",
+          "variant": "medium"
+        },
+        "version": "1.99.112",
+        "summary": {
+          "additions": 0,
+          "deletions": 0,
+          "files": 0
+        },
+        "cost": 0,
+        "tokens": {
+          "input": 0,
+          "output": 0,
+          "reasoning": 0,
+          "cache": {
+            "read": 0,
+            "write": 0
+          }
+        },
+        "time": {
+          "created": 1793496148729,
+          "updated": 1793496149890
+        }
+      }
+    }
+  },
+  {
+    "id": "evt_194b36f8400174dgc7sfrfXSNh",
+    "type": "session.diff",
+    "properties": {
+      "sessionID": "ses_e6b4c9506ffeDF8FhAM3tK5Pt7",
+      "diff": []
+    }
+  },
+  {
+    "id": "evt_194b36f840020pLpK0JoozYHCQ",
+    "type": "message.updated",
+    "properties": {
+      "sessionID": "ses_e6b4c9506ffeDF8FhAM3tK5Pt7",
+      "info": {
+        "role": "user",
+        "time": {
+          "created": 1793496149827
+        },
+        "agent": "build",
+        "model": {
+          "providerID": "openai",
+          "modelID": "gpt-6.1-sol",
+          "variant": "medium"
+        },
+        "executionMode": "normal",
+        "size": "standard",
+        "judge": "off",
+        "id": "msg_194b36f42001ES7soDwyHl1sJc",
+        "sessionID": "ses_e6b4c9506ffeDF8FhAM3tK5Pt7",
+        "summary": {
+          "diffs": []
+        }
+      }
+    }
+  },
+  {
+    "id": "evt_194b36f89001KQEFYvTBxOTEX8",
+    "type": "session.status",
+    "properties": {
+      "sessionID": "ses_e6b4c9506ffeDF8FhAM3tK5Pt7",
+      "status": {
+        "type": "busy"
+      }
+    }
+  },
+  {
+    "id": "evt_194b36faa001PgEBN7nNCmB3W3",
+    "type": "message.part.updated",
+    "properties": {
+      "sessionID": "ses_e6b4c9506ffeDF8FhAM3tK5Pt7",
+      "part": {
+        "id": "prt_194b36faa001qsqtDk6djOUpo7",
+        "messageID": "msg_194b36f7d002C0znUUeFim48D2",
+        "sessionID": "ses_e6b4c9506ffeDF8FhAM3tK5Pt7",
+        "snapshot": "ddb2b1326c9bdfaf847319cb842524643f945e5d",
+        "type": "step-start"
+      },
+      "time": 1793496149930
+    }
+  },
+  {
+    "id": "evt_194b36fad001tTiNUWq0vh8gva",
+    "type": "message.part.updated",
+    "properties": {
+      "sessionID": "ses_e6b4c9506ffeDF8FhAM3tK5Pt7",
+      "part": {
+        "id": "prt_194b36fad0016xM6Qsg00iJP58",
+        "messageID": "msg_194b36f7d002C0znUUeFim48D2",
+        "sessionID": "ses_e6b4c9506ffeDF8FhAM3tK5Pt7",
+        "type": "text",
+        "text": "",
+        "time": {
+          "start": 1793496149933
+        },
+        "metadata": {
+          "openai": {
+            "itemId": "msg_offline_2"
+          }
+        }
+      },
+      "time": 1793496149933
+    }
+  },
+  {
+    "id": "evt_194b36faf001Vfqi5yqJMbTvh8",
+    "type": "message.part.delta",
+    "properties": {
+      "sessionID": "ses_e6b4c9506ffeDF8FhAM3tK5Pt7",
+      "messageID": "msg_194b36f7d002C0znUUeFim48D2",
+      "partID": "prt_194b36fad0016xM6Qsg00iJP58",
+      "field": "text",
+      "delta": "CACHE_CHECK_DONE"
+    }
+  },
+  {
+    "id": "evt_194b36fb10019L2dDs0mbQnaR7",
+    "type": "message.part.updated",
+    "properties": {
+      "sessionID": "ses_e6b4c9506ffeDF8FhAM3tK5Pt7",
+      "part": {
+        "id": "prt_194b36fad0016xM6Qsg00iJP58",
+        "messageID": "msg_194b36f7d002C0znUUeFim48D2",
+        "sessionID": "ses_e6b4c9506ffeDF8FhAM3tK5Pt7",
+        "type": "text",
+        "text": "CACHE_CHECK_DONE",
+        "time": {
+          "start": 1793496149933,
+          "end": 1793496149937
+        },
+        "metadata": {
+          "openai": {
+            "itemId": "msg_offline_2"
+          }
+        }
+      },
+      "time": 1793496149937
+    }
+  },
+  {
+    "id": "evt_194b36fb30017ForPI36Jamith",
+    "type": "message.part.updated",
+    "properties": {
+      "sessionID": "ses_e6b4c9506ffeDF8FhAM3tK5Pt7",
+      "part": {
+        "id": "prt_194b36fb3001QfhHulrg75i2O9",
+        "reason": "stop",
+        "messageID": "msg_194b36f7d002C0znUUeFim48D2",
+        "sessionID": "ses_e6b4c9506ffeDF8FhAM3tK5Pt7",
+        "type": "step-finish",
+        "tokens": {
+          "total": 2056,
+          "input": 1024,
+          "output": 6,
+          "reasoning": 2,
+          "cache": {
+            "write": 0,
+            "read": 1024
+          }
+        },
+        "cost": 0.0022304
+      },
+      "time": 1793496149939
+    }
+  },
+  {
+    "id": "evt_194b36fb6001rxK15xVR5ZB6yp",
+    "type": "message.updated",
+    "properties": {
+      "sessionID": "ses_e6b4c9506ffeDF8FhAM3tK5Pt7",
+      "info": {
+        "id": "msg_194b36f7d002C0znUUeFim48D2",
+        "parentID": "msg_194b36f42001ES7soDwyHl1sJc",
+        "role": "assistant",
+        "mode": "build",
+        "agent": "build",
+        "variant": "medium",
+        "size": "standard",
+        "path": {
+          "cwd": "/home/runner/work/_temp/vector-release-evidence/study/project",
+          "root": "/home/runner/work/_temp/vector-release-evidence/study/project"
+        },
+        "cost": 0.0022304,
+        "tokens": {
+          "total": 2056,
+          "input": 1024,
+          "output": 6,
+          "reasoning": 2,
+          "cache": {
+            "write": 0,
+            "read": 1024
+          }
+        },
+        "modelID": "gpt-6.1-sol",
+        "providerID": "openai",
+        "time": {
+          "created": 1793496149885,
+          "completed": 1793496149945
+        },
+        "sessionID": "ses_e6b4c9506ffeDF8FhAM3tK5Pt7",
+        "finish": "stop"
+      }
+    }
+  },
+  {
+    "id": "evt_194b36fb90019DWEI0VxcvRp3y",
+    "type": "message.updated",
+    "properties": {
+      "sessionID": "ses_e6b4c9506ffeDF8FhAM3tK5Pt7",
+      "info": {
+        "id": "msg_194b36f7d002C0znUUeFim48D2",
+        "parentID": "msg_194b36f42001ES7soDwyHl1sJc",
+        "role": "assistant",
+        "mode": "build",
+        "agent": "build",
+        "variant": "medium",
+        "size": "standard",
+        "path": {
+          "cwd": "/home/runner/work/_temp/vector-release-evidence/study/project",
+          "root": "/home/runner/work/_temp/vector-release-evidence/study/project"
+        },
+        "cost": 0.0022304,
+        "tokens": {
+          "total": 2056,
+          "input": 1024,
+          "output": 6,
+          "reasoning": 2,
+          "cache": {
+            "write": 0,
+            "read": 1024
+          }
+        },
+        "modelID": "gpt-6.1-sol",
+        "providerID": "openai",
+        "time": {
+          "created": 1793496149885,
+          "completed": 1793496149945
+        },
+        "sessionID": "ses_e6b4c9506ffeDF8FhAM3tK5Pt7",
+        "finish": "stop"
+      }
+    }
+  },
+  {
+    "id": "evt_194b36fbb001kbqfcdcijSqrh8",
+    "type": "session.status",
+    "properties": {
+      "sessionID": "ses_e6b4c9506ffeDF8FhAM3tK5Pt7",
+      "status": {
+        "type": "busy"
+      }
+    }
+  },
+  {
+    "id": "evt_194b36fd2001Y1Ju9rAQCRnuWq",
+    "type": "message.part.updated",
+    "properties": {
+      "sessionID": "ses_e6b4c9506ffeDF8FhAM3tK5Pt7",
+      "part": {
+        "id": "prt_194b36fb3001QfhHulrg75i2O9",
+        "reason": "stop",
+        "messageID": "msg_194b36f7d002C0znUUeFim48D2",
+        "sessionID": "ses_e6b4c9506ffeDF8FhAM3tK5Pt7",
+        "type": "step-finish",
+        "tokens": {
+          "total": 2056,
+          "input": 1024,
+          "output": 6,
+          "reasoning": 2,
+          "cache": {
+            "write": 0,
+            "read": 1024
+          }
+        },
+        "cost": 0.0022304,
+        "snapshot": "ddb2b1326c9bdfaf847319cb842524643f945e5d"
+      },
+      "time": 1793496149970
+    }
+  },
+  {
+    "id": "evt_194b36fe8001VZwtQMJAL6xJTA",
+    "type": "session.updated",
+    "properties": {
+      "sessionID": "ses_e6b4c9506ffeDF8FhAM3tK5Pt7",
+      "info": {
+        "id": "ses_e6b4c9506ffeDF8FhAM3tK5Pt7",
+        "slug": "calm-wizard",
+        "projectID": "4bebcdecf70ae1f2ee19d9c4bd259cf61f444c78",
+        "directory": "/home/runner/work/_temp/vector-release-evidence/study/project",
+        "path": "",
+        "title": "Release cache instrumentation",
+        "agent": "build",
+        "model": {
+          "id": "gpt-6.1-sol",
+          "providerID": "openai",
+          "variant": "medium"
+        },
+        "version": "1.99.112",
+        "summary": {
+          "additions": 0,
+          "deletions": 0,
+          "files": 0
+        },
+        "cost": 0.0022304,
+        "tokens": {
+          "input": 1024,
+          "output": 6,
+          "reasoning": 2,
+          "cache": {
+            "read": 1024,
+            "write": 0
+          }
+        },
+        "time": {
+          "created": 1793496148729,
+          "updated": 1793496149992
+        }
+      }
+    }
+  },
+  {
+    "id": "evt_194b36fea001SyW0TKqG0gY1Bm",
+    "type": "session.diff",
+    "properties": {
+      "sessionID": "ses_e6b4c9506ffeDF8FhAM3tK5Pt7",
+      "diff": []
+    }
+  },
+  {
+    "id": "evt_194b36ff7001485Awoj1sdg1Jn",
+    "type": "session.status",
+    "properties": {
+      "sessionID": "ses_e6b4c9506ffeDF8FhAM3tK5Pt7",
+      "status": {
+        "type": "idle"
+      }
+    }
+  }
+]
