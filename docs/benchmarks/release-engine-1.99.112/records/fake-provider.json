@@ -1,0 +1,20 @@
+{
+  "synthetic": true,
+  "requests": [
+    {
+      "ordinal": 1,
+      "sessionID": "ses_e6b4c951effeTo8XnAKkb5WpFw",
+      "at": "2026-11-01T01:22:29.594Z",
+      "requestSha256": "8c4a86f9410261b9f3f3f6b8ab1fd76bdf492996899758fd2eab3fa850d720d6",
+      "bytes": 39339
+    },
+    {
+      "ordinal": 2,
+      "sessionID": "ses_e6b4c9506ffeDF8FhAM3tK5Pt7",
+      "at": "2026-11-01T01:22:29.925Z",
+      "requestSha256": "ca46ce770eed85f6a543dc382566e50b9323371f3be2178715005dff23d72646",
+      "bytes": 39832
+    }
+  ],
+  "failures": []
+}

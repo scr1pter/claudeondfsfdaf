@@ -1,6 +1,6 @@
 # Published release engine study
 
-This study prepares two pieces of evidence using the published Linux x64 desktop
+This study records two pieces of evidence using the published Linux x64 desktop
 1.99.112 artifact: sampled memory of its engine process tree, and an offline
 rehearsal of the two-session first-request cache instrumentation. The model server
 is a loopback fake. Its token counts are scripted, including the second request's
@@ -63,8 +63,8 @@ pages can be counted more than once in the tree total.
 The optional `release_evidence` input of the existing `test` workflow runs only
 this study. It defaults off; normal push, PR and default-dispatch coverage is
 unchanged. Large release archives and extraction run in CI, not on the local
-workspace. The final workflow result and report belong here after execution;
-preparing the driver is not baseline evidence.
+workspace. The completed run and raw report are recorded below; preparing the
+driver alone was not baseline evidence.
 
 ## Remaining live check
 
@@ -106,5 +106,49 @@ samples are not a completed baseline.
 The preserved artifact is `13064721537`, 57,952 bytes, SHA-256
 `24bb117e8d26713945a3c567710fcbe91cc25b16e97ba7c618f99cfdc9c094c9`.
 The correction uses the supported plugin hook described above and retains the
-same wire refusal. All 19 focused Node tests pass after this correction; an
-artifact rerun is still required.
+same wire refusal. All 19 focused Node tests pass after this correction.
+
+## Completed artifact study
+
+Run [41260729498](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/41260729498),
+job `124713274950`, passed on instrumentation commit
+`c7335646bed8b3ca6c95998e1f430a3d96222c78`. The artifact is `13065630149`,
+100,530 bytes, SHA-256
+`bb84312cc8bca10c52e25b9430b6f2c2cc673ea0241a6657fd19af452d513a44`.
+Its downloaded bytes were independently checked before extraction.
+
+Both sessions completed in the same engine process, with exactly two forwarded
+HTTP requests, no tool execution, no study errors and no missing memory phases.
+The fixture stayed unchanged and the engine exited with code 0. Optional startup
+attempts to reach the npm registry and GitHub were blocked by the offline guard.
+The process tree was sampled 47 times. These are the sampled RSS peaks in this
+one run on a four-vCPU Linux runner with Node 24.15.0:
+
+| Phase | Samples | Process-tree RSS peak (MiB) |
+| --- | ---: | ---: |
+| Startup | 14 | 464.23 |
+| Idle before requests | 8 | 466.80 |
+| First session | 13 | 586.15 |
+| Second session | 5 | 632.57 |
+| Settled tail | 7 | 627.73 |
+
+The highest sample was 647,752 KiB (632.57 MiB). This supplies a baseline for
+this instrumented Node-hosted release engine, not a full desktop figure or a
+memory improvement against earlier studies. Node heap/external/ArrayBuffer
+samples and every process-tree sample remain in [report.json](records/report.json).
+
+The wire carried the expected model, medium effort, 512-token output cap and
+14 tools. Request sizes were 39,339 and 39,832 bytes. Tool hashes matched;
+system hashes differed because the second session included an advisory memory
+note created after the first. The system strings shared their first 9,958 UTF-8
+bytes, then diverged. The normal per-session cache keys also differed. These
+observations describe request construction, not cache reuse. The scripted
+provider counts of 0 then 1,024 cached input tokens reached the corresponding
+assistant steps; actual provider cost remains null.
+
+[manifest.json](manifest.json) pins the bytes and SHA-256 of 24 unchanged raw
+records: provenance and run metadata, requests/responses, grants, provider
+receipts, events/messages, logs and the report. Synthetic profile databases and
+Git snapshot internals remain only in the original artifact. Neither the old
+failed attempt nor this fake-provider run establishes live cache, speed, cost or
+quality results.
