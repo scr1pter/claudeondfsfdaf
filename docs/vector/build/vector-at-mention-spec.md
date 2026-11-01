@@ -745,11 +745,14 @@ bindingKey(repositoryId: string): string; generationKey(repositoryId: string): s
 **Binder-left outlives the binding.** The script that records `binder-left` also adds the repository id to the binding account's `binder-left:<account>` set (2.7). An unbind or a takeover deletes the binding, while the account's run records stay (2.18), so the set, not the binding, is what keeps them hidden (2.16). The member is the account's fact, so a `binder-left` decided against a binding that has since gone (the counter passed its generation) or been replaced by another account's later binding still adds it, and the set ends the same whichever script lands first; only a later binding of the same account skips it. A later bind of the repository by the same account removes its member, because that binding's binder has write access again; nothing else does, except the account's erasure.
 
 **Tickets** (`startCloudRun`):
+- `startCloudRun(trigger, deps = {})` accepts injectable `store`, `entitlement`, `app`, `now` and `fetcher`. It is an internal library, never a public route. `peekRunTicket(ticket, identity, binding, deps = {})` returns a validated ticket plus its hashed key, or `undefined` for missing/expired/mismatched credentials; store corruption and outages fail closed. Its deps are `store`, `app` and `now`.
+- Issuing a ticket checks account revocation and the current unsuspended binding account/generation in the same EVAL as `SET NX EX 900`. Neither prompts nor requester identity are stored in the ticket. Dispatch failure deletes an unconsumed ticket; a lost dispatch response cannot prove that GitHub did not start a job, so `dispatch-failed` is not a no-side-effect guarantee. Any already-started job must still pass mint admission.
 - Format: `vtk_` plus 32 random bytes.
 - The server stores `sha256(ticket)` with `{repositoryId, account, generation, source, purpose, exp}`, for 900 s.
 - `peekRunTicket(ticket, identity, binding)` is a GET at mint step 8. It requires `identity.repositoryId` to match, the event `workflow_dispatch`, the actor the App bot, `ticket.account === binding.account` and `ticket.generation === binding.generation`.
 - The ticket is deleted inside the `reserveRun` EVAL, only when the reservation succeeds. A refused attempt (at once, replay, rate limit) leaves it usable for the job's retries until it expires.
 - That EVAL is also where the ticket is single-use, since step 8 only peeks it: a fresh reservation is refused with `{ok: false, refusal: "ticket"}` when the ticket no longer exists, so of parallel mints from different check runs that peeked one ticket exactly one reserves, and the mint answers the others 403 `ACTOR_NOT_ALLOWED`. A renewal of the check run that consumed it needs no ticket.
+- **Atomic provenance and renewal (V13).** The reservation that consumes a ticket also stores its `triggerSource` and `triggerPurpose` in the live record. The API projects that server-owned provenance into run history. A bot renewal whose ticket is gone may use only the same live check run with matching account, repository, binding generation and previously observed JTI, plus stored trigger provenance; App identity/permission checks still run. `reserveBoundRun` compares the observed JTI and provenance atomically before any write. Settlement, idle removal, rebind, erasure or a concurrent renewal makes a stale renewal refuse rather than reserve fresh. Ordinary live records without trigger provenance cannot authorize a bot.
 - **Claims mapping.** A ticket run signs `src = "github-dispatch"`. Its purpose maps `review` → `review`, and `task`, `incident` and `changes` → `task`. A `scheduled` trigger is refused by `startCloudRun` with `purpose-unavailable`. The trigger's own source and purpose are kept in the run record (`trigger`, 2.16).
 
 ```ts
@@ -768,11 +771,13 @@ Every function is one EVAL through `persistentStore`, so it fails closed, and it
 type LedgerSource = Extract<RunSource, "github-comment" | "github-dispatch" | "github-schedule">
 type LedgerPurpose = "task" | "review" | "scheduled"
 type LiveRun = { startedAt: number; deadline: number; lastReport: number; lastRequest?: number
-  epoch: string; repo: string; thr: string; src: LedgerSource; pur: LedgerPurpose; counted?: true; gen: number; jti: string }
+  epoch: string; repo: string; thr: string; src: LedgerSource; pur: LedgerPurpose; counted?: true; gen: number; jti: string
+  triggerSource?: RunSource; triggerPurpose?: Exclude<RunTrigger["purpose"], "scheduled"> } // paired, ticket runs only
 const METER_EPOCH_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_:.-]{0,127}$/   // "p<ms>", Codium's "<subscription>:<periodStart>", "none"
 type ReserveInput = { account; rid; repositoryId; thread; generation; jti; source: LedgerSource; purpose: LedgerPurpose
-  allowance: Extract<CloudAgentAllowance, {active: true}>; consumeKey?: string; now }
-type Reserved = { startedAt; deadline; epoch; thread; source: LedgerSource; purpose: LedgerPurpose }   // the record's values
+  allowance: Extract<CloudAgentAllowance, {active: true}>; consumeKey?: string; now
+  trigger?: { source: RunSource; purpose: Exclude<RunTrigger["purpose"], "scheduled"> }; renewalJti?: string }
+type Reserved = { startedAt; deadline; epoch; thread; source: LedgerSource; purpose: LedgerPurpose; trigger?: ReserveInput["trigger"] }   // the record's values
 reserveRun(input: ReserveInput): Promise<({ ok: true; renewed: false } & Reserved) | ({ ok: true; renewed: true } & Reserved)
   | { ok: false; limit: "hours" | "at-once" | "scheduled" } | { ok: false; refusal: "ticket" }>
 reserveBoundRun(input: ReserveInput): ReturnType<typeof reserveRun>                                  // HTTP mint: atomic binding + revocation fence
@@ -1381,7 +1386,7 @@ This list is exactly what we store (INV-P3). V11's test compares the store's key
 | Run record: run id, owning Vector account, binding generation and token id (internal only), repository id and name, run URL, event, source, purpose, start and stop times, outcome, verdict, and for server-started runs the trigger's source and purpose | `run:<rid>`, `runs:<account>` | 90 days |
 | The triggering GitHub login and user id | `run:<rid>:actor` | 90 days |
 | Agent time per meter epoch (seconds: settled runs plus live runs' reservations) and scheduled runs per UTC day (a count) | `used:…`, `sched:…` | 40 days past the period's end (or past the last reservation, when later); 2 days |
-| Live run state: start, deadline, last heartbeat, last Codium request, meter epoch, repository id, thread, source, purpose, whether it counted a scheduled run, binding generation, token id | `live:<account>` | until settled (by its token, or once idle by the account's next reserve or agent-time read), at most as long as the account's agent time (40 days past the period's end) or a run's deadline plus 1 day, when later |
+| Live run state: start, deadline, last heartbeat, last Codium request, meter epoch, repository id, thread, source, purpose, whether it counted a scheduled run, binding generation, token id, and paired ticket trigger source/purpose when present | `live:<account>` | until settled (by its token, or once idle by the account's next reserve or agent-time read), at most as long as the account's agent time (40 days past the period's end) or a run's deadline plus 1 day, when later |
 | One-time bind codes, stored under the code's hash with the account, the repository name and, when given, its id, the requesting GitHub user id and the default branch, and the expiry; run tickets (hashed) | `bind-code:…`, `ticket:…` | 10 and 15 minutes |
 | Short-lived caches: the owning account, binder GitHub id and generation for verified access; a public repository name, owner id and default branch | `binder-ok:…`, `default-branch:…` | 1 hour |
 | Session artifacts | the repository's own GitHub Actions artifacts, encrypted per conversation | 7 days (GitHub's storage) |

@@ -639,3 +639,8 @@ None yet (contract section 4).
 - Root approved the lifecycle clarifications in contract commit `6a3a99c2`. Independent read-only review found no blocking issue in admission, atomic settlement, receipt verification or the documented V13 bot/ticket deferral.
 - Focused loopback validation: mint HTTP 19 tests / 5,434 assertions; ledger 38 / 467; run-token 22 / 241. Disposable Valkey held zero remaining keys after each file. Hosted API types and module-loading test (1 / 3) passed. Final web typecheck passed 190 files with 0 errors and 0 warnings (167 hints); the affected run-history regression passed 19 tests / 2,221 assertions.
 - The first web check found five test-only typing errors (captured server address, an inferred answer array and an optional outcome assertion); these were corrected without changing the exercised runtime paths. No provider inference, real GitHub repository action or account-setting change occurred. V13 ticket inventory, producer and bot acceptance remain unfinished.
+
+### V12 push evidence and V13 preparation
+
+- V12 pushed as `df5a8aafaf2d3a201ae8f2ad308539ed40b3cc79`, including the V11 fixture correction. The mandatory pre-push hook passed all 23 packages (22 cached, 27 seconds). Exact-head CI is `41260931699`; its result is not yet known.
+- V13's contract now requires ticket-trigger provenance to be persisted atomically with ticket consumption and reservation. Bot renewal must compare the prior live JTI and provenance atomically, retaining the current binding and App checks; normal human runs cannot supply bot provenance. Root explicitly approved this lifecycle boundary. Ticket creation also fences erasure/rebind before writing, and the V11 deferred inventory assertion remains a V13 requirement.
