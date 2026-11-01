@@ -1,5 +1,5 @@
 import { Billing } from "@vectordevai/schema/billing"
-import type { StepFinishPart } from "@vectordevai/sdk/v2"
+import type { StepFinishPart, ToolPart } from "@vectordevai/sdk/v2"
 
 /** JSON is a public usage report; the original part still carries context tokens inside the engine. */
 export function stepForOutput(part: StepFinishPart, billing?: "codium" | "own") {
@@ -11,4 +11,32 @@ export function stepForOutput(part: StepFinishPart, billing?: "codium" | "own") 
   }
   delete result.tokens
   return result
+}
+
+/** Editable lifecycle metadata cannot certify aggregate figures in machine output. Step events report own usage. */
+export function toolForOutput(part: ToolPart) {
+  if (part.tool !== "task" || (part.state.status !== "completed" && part.state.status !== "error")) return part
+  return { ...part, state: { ...part.state, metadata: taskMetadata(part.state.metadata) } }
+}
+
+function taskMetadata(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(taskMetadata)
+  if (!value || typeof value !== "object") return value
+  const item = value as Record<string, unknown>
+  const next = { ...item }
+  if (item.usage && typeof item.usage === "object" && !Array.isArray(item.usage)) {
+    const usage = { ...item.usage } as Record<string, unknown>
+    delete usage.tokens
+    delete usage.total
+    delete usage.tokensOwnOnly
+    next.usage = usage
+  }
+  if (item.tasks && typeof item.tasks === "object")
+    next.tasks = Array.isArray(item.tasks)
+      ? item.tasks.map(taskMetadata)
+      : "usage" in item.tasks
+        ? taskMetadata(item.tasks)
+        : Object.fromEntries(Object.entries(item.tasks).map(([key, child]) => [key, taskMetadata(child)]))
+  if (item.subagent && typeof item.subagent === "object") next.subagent = taskMetadata(item.subagent)
+  return next
 }

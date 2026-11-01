@@ -3553,9 +3553,9 @@ describe("tool.task", () => {
     }),
   )
 
-  for (const mix of ["codium", "mixed", "unpriced"] as const)
+  for (const mix of ["codium", "mixed", "unpriced", "legacy", "missing-identity"] as const)
     background.instance(
-      `a background note for a ${mix === "codium" ? "Codium-only" : mix === "mixed" ? "mixed" : "mixed, partly unpriced"} child labels its Codium work`,
+      `a background note for a ${mix} child reports only proven token totals`,
       () =>
         Effect.gen(function* () {
           const sessions = yield* Session.Service
@@ -3579,7 +3579,7 @@ describe("tool.task", () => {
                 path: { cwd: "/tmp", root: "/tmp" },
                 tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
                 modelID: ModelV2.ID.make("deepseek"),
-                providerID: ProviderV2.ID.make("vector-plan"),
+                providerID: ProviderV2.ID.make(mix === "missing-identity" ? "" : "vector-plan"),
                 time: { created: Date.now() },
                 finish: "stop",
               } satisfies SessionV1.Assistant)
@@ -3591,14 +3591,38 @@ describe("tool.task", () => {
                 reason: "tool-calls",
                 cost: 0,
                 unpriced: true,
-                billing: "codium",
-                tokens: { input: 900, output: 40, reasoning: 0, cache: { read: 0, write: 0 } },
+                ...(mix === "missing-identity" ? {} : { billing: "codium" as const }),
+                tokens: {
+                  input: mix === "missing-identity" ? 987654 : 900,
+                  output: 40,
+                  reasoning: 0,
+                  cache: { read: 0, write: 0 },
+                },
               } satisfies SessionV1.StepFinishPart)
               if (mix !== "codium") yield* spend(sessions, sessionID)
-              if (mix === "unpriced")
+              const own = (yield* sessions.messages({ sessionID }).pipe(Effect.orDie)).find(
+                (entry) => entry.info.role === "assistant" && entry.info.providerID === ref.providerID,
+              )
+              if (mix === "legacy") {
                 yield* sessions.updatePart({
                   id: PartID.ascending(),
                   messageID: message.id,
+                  sessionID,
+                  type: "step-finish",
+                  reason: "stop",
+                  cost: 0,
+                  unpriced: true,
+                  tokens: { input: 987654, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+                })
+              }
+              if (mix === "legacy" || mix === "missing-identity")
+                yield* SubagentLifecycle.update(sessions, sessionID, {
+                  usage: { ...childUsage, total: 987654, tokensOwnOnly: true },
+                })
+              if (mix === "unpriced" && own)
+                yield* sessions.updatePart({
+                  id: PartID.ascending(),
+                  messageID: own.info.id,
                   sessionID,
                   type: "step-finish",
                   reason: "stop",
@@ -3639,16 +3663,20 @@ describe("tool.task", () => {
             expect(text).toContain("Its steps ran on Vector Codium, which shows no token or cost figures.")
             expect(text).not.toContain("Some of its steps")
           }
-          if (mix !== "codium") {
+          if (mix === "mixed" || mix === "unpriced") {
             expect(text).toContain(`tokens="${childUsage.total}" tool_calls="${childUsage.toolUses}" duration="`)
             expect(text).toContain("Some of its steps ran on Vector Codium.")
             expect(text).not.toContain("Its steps ran on Vector Codium")
           }
           if (mix === "unpriced")
-            expect(text).toContain(
-              "Pricing is unknown for 1 provider steps; recorded cost is only a measured subtotal.",
-            )
-          if (mix !== "unpriced") expect(text).not.toContain("Pricing is unknown")
+            expect(text).toContain("Pricing is unknown for 1 provider steps; recorded cost is only a measured subtotal.")
+          if (mix === "codium" || mix === "mixed") expect(text).not.toContain("Pricing is unknown")
+          if (mix === "legacy" || mix === "missing-identity") {
+            expect(text).not.toContain("tokens=")
+            expect(text).not.toContain("987654")
+            expect(text).toContain(`tool_calls="${childUsage.toolUses}"`)
+            if (mix === "missing-identity") expect(text).not.toContain("Vector Codium")
+          }
         }),
     )
 

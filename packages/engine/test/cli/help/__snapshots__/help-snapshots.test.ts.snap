@@ -107,9 +107,8 @@ Options:
                                                                                             [string]
       --thinking     show thinking blocks                                                  [boolean]
   -i, --interactive  run in direct interactive split-footer mode          [boolean] [default: false]
-      --max-cost     stop this run within one step per running agent of spending this many US
-                     dollars, counted at the charge the provider reported or else at catalog list
-                     price                                                                  [number]
+      --max-cost     Dollar cap for this run. Vector Codium steps are not counted; step limits still
+                     apply.                                                                 [number]
       --max-steps    stop this run after this many model steps                              [number]
       --size         how much harness each prompt gets: auto (default) sizes it from what it says;
                      only thorough offers subagents

@@ -69,6 +69,8 @@ const engineState = {
   // What a prompted session has cost.
   cost: 0.42,
   tokens: { input: 100, output: 20 },
+  // Modern engine fixtures certify that aggregate tokens exclude Codium. Legacy tests omit this explicitly.
+  tokensOwnOnly: true as boolean | undefined,
   codiumSteps: undefined as number | undefined,
   provider: "provider-test",
 }
@@ -98,6 +100,8 @@ const server = Bun.serve({
         data: {
           cost: prompted ? engineState.cost : 0,
           tokens: { input: prompted ? engineState.tokens.input : 0, output: prompted ? engineState.tokens.output : 0 },
+          ...(engineState.tokensOwnOnly === undefined ? {} : { tokensOwnOnly: engineState.tokensOwnOnly }),
+          subagentTokensOwnOnly: true,
           ...(engineState.codiumSteps === undefined ? {} : { codiumSteps: prompted ? engineState.codiumSteps : 0 }),
           model: { providerID: engineState.provider, id: "model-test" },
         },
@@ -149,6 +153,7 @@ beforeEach(() => {
   engineState.busy = undefined
   engineState.cost = 0.42
   engineState.tokens = { input: 100, output: 20 }
+  engineState.tokensOwnOnly = true
   engineState.codiumSteps = undefined
   engineState.provider = "provider-test"
 })
@@ -338,6 +343,7 @@ describe("a Vector-runtime parallel agent's spend", () => {
 test("legacy zero-price Codium cards use pinned provider provenance without rewriting usage", async () => {
   engineState.provider = "vector-plan"
   engineState.cost = 0
+  engineState.tokensOwnOnly = undefined
   const created = await launch("legacy-codium-card")
   await settle(created.id)
   const bucket = store.get("parallel-workspaces-state")!
@@ -361,6 +367,28 @@ test("legacy zero-price Codium cards use pinned provider provenance without rewr
     (bucket.get("records") as Array<Record<string, unknown>>).find((record) => record.id === created.id)?.billing,
   ).toBeUndefined()
 })
+
+for (const proof of [undefined, false]) {
+  test(`legacy parallel totals with ${proof === undefined ? "missing" : "unknown"} provenance keep dollars but hide tokens`, async () => {
+    engineState.tokensOwnOnly = proof
+    engineState.cost = 0.12
+    engineState.tokens = { input: 9_080, output: 0 }
+    // A current own model and positive Codium counters cannot certify older aggregate tokens.
+    engineState.codiumSteps = 3
+    const headroom = await headroomSeenByAnotherRun()
+    const created = await launch(proof === undefined ? "legacy-missing-proof" : "legacy-unknown-proof")
+    const record = await settle(created.id)
+    expect(record.actualCost).toBe("$0.12")
+    expect(record.measuredCost).toBe(0.12)
+    expect(record.billing).toBe("codium")
+    expect(record.costKind).toBe("priced")
+    const events = await ledgerEventsFor(created.id)
+    expect(events).toHaveLength(1)
+    expect(events[0]).toMatchObject({ costUsd: 0.12, billing: "codium", provider: "provider-test" })
+    expect(events[0]?.tokens).toBeUndefined()
+    expect(await headroomSeenByAnotherRun()).toBeCloseTo(headroom - 0.12)
+  })
+}
 
 for (const mixed of [false, true]) {
   test(`${mixed ? "mixed" : "Codium-only"} parallel usage reaches the persisted card without a fake zero charge`, async () => {

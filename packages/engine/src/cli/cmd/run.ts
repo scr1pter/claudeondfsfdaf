@@ -1,5 +1,5 @@
 import { Billing } from "@vectordevai/schema/billing"
-import { stepForOutput } from "./run/usage-output"
+import { stepForOutput, toolForOutput } from "./run/usage-output"
 import type { PermissionV1 } from "@vectordevai/core/v1/permission"
 import { FSUtil } from "@vectordevai/core/fs-util"
 import { nextBackgroundEvent } from "./run/background-wait"
@@ -1160,7 +1160,7 @@ export const RunCommand = effectCmd({
               }
 
               if (part.type === "tool" && (part.state.status === "completed" || part.state.status === "error")) {
-                if (emit("tool_use", { part })) continue
+                if (emit("tool_use", { part: toolForOutput(part) })) continue
                 const progress = researchProgress(part)
                 if (progress) {
                   if (toggles.get(part.id) === true) continue

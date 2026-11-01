@@ -164,6 +164,7 @@ export function observe(sessions: Session.Interface, sessionID: SessionID) {
       cache: { read: info.tokens?.cache.read ?? 0, write: info.tokens?.cache.write ?? 0 },
     }
     const usage: SubagentUsage = {
+      tokensOwnOnly: info.tokensOwnOnly === true,
       cost: info.cost ?? 0,
       tokens,
       total: tokens.input + tokens.output + tokens.reasoning + tokens.cache.read + tokens.cache.write,

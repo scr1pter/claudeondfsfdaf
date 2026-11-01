@@ -325,6 +325,9 @@ function harness(options: {
         return {
           data: {
             cost: completed ? 0.25 : 0,
+            // The default transport represents a modern engine with separated own-token aggregates.
+            tokensOwnOnly: true,
+            subagentTokensOwnOnly: true,
             tokens: {
               input: completed ? 10 : 0,
               output: completed ? 5 : 0,
@@ -1127,3 +1130,28 @@ test("an own scheduled recurrence does not inherit Codium billing from earlier t
   expect(harnessed.spendRecords[0]).toMatchObject({ totalCostUsd: 0.25, totalTokens: 15 })
   expect(harnessed.spendRecords[0]?.billing).toBeUndefined()
 })
+
+for (const proof of [undefined, false]) {
+  test(`legacy scheduled totals with ${proof === undefined ? "missing" : "unknown"} provenance keep own dollars but hide tokens`, async () => {
+    const harnessed = harness({
+      at: new Date(2026, 7, 19, 10),
+      records: [scheduledRecord({ targets: [{ directory: "/repos/alpha", sessionId: "ses_established" }] })],
+      sessionUsage: (completed) => ({
+        cost: completed ? 0.12 : 0,
+        tokens: { input: completed ? 9_080 : 9_000 },
+        tokensOwnOnly: proof,
+        // Existing modern counts plus a new Codium turn still cannot prove the old aggregate is separated.
+        codiumSteps: completed ? 8 : 5,
+      }),
+    })
+    await harnessed.runtime.tick()
+    expect(harnessed.record()?.status).toBe("completed")
+    expect(harnessed.spendRecords).toHaveLength(1)
+    expect(harnessed.spendRecords[0]).toMatchObject({
+      totalCostUsd: 0.12,
+      billing: "codium",
+      provider: "provider-test",
+    })
+    expect(harnessed.spendRecords[0]?.totalTokens).toBeUndefined()
+  })
+}
