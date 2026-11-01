@@ -490,7 +490,8 @@ export const getUsage = (input: {
   // tokens to get the non-cached input count for separate cost calculation.
   const adjustedInputTokens = safe(inputTokens - cacheReadInputTokens - cacheWriteInputTokens)
 
-  const total = input.usage.totalTokens
+  // Omit malformed reported totals so known usage can still pass durable receipt validation.
+  const total = valid(input.usage.totalTokens) ? input.usage.totalTokens : undefined
 
   const tokens = {
     total,
@@ -1401,18 +1402,9 @@ export function summarizeUsage(
     lifetimeTokens,
     lifetimeCost: activity.reduce((total, day) => total + day.cost, 0),
     ...(unpricedResponses ? { unpricedResponses } : {}),
-    inputTokens: tokens.reduce(
-      (total, tokens) => total + Math.max(0, Math.round(tokens.input)),
-      0,
-    ),
-    outputTokens: tokens.reduce(
-      (total, tokens) => total + Math.max(0, Math.round(tokens.output)),
-      0,
-    ),
-    reasoningTokens: tokens.reduce(
-      (total, tokens) => total + Math.max(0, Math.round(tokens.reasoning)),
-      0,
-    ),
+    inputTokens: tokens.reduce((total, tokens) => total + Math.max(0, Math.round(tokens.input)), 0),
+    outputTokens: tokens.reduce((total, tokens) => total + Math.max(0, Math.round(tokens.output)), 0),
+    reasoningTokens: tokens.reduce((total, tokens) => total + Math.max(0, Math.round(tokens.reasoning)), 0),
     cachedTokens: tokens.reduce(
       (total, tokens) => total + Math.max(0, Math.round(tokens.cache.read + tokens.cache.write)),
       0,

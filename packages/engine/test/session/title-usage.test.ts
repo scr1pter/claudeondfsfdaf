@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { Effect, Exit, Stream } from "effect"
+import { Effect, Exit, Schema, Stream } from "effect"
 import { eq } from "drizzle-orm"
 import { Database } from "@vectordevai/core/database/database"
 import { AppNodeBuilder } from "@vectordevai/core/effect/app-node-builder"
@@ -13,9 +13,10 @@ import { ProviderV2 } from "@vectordevai/core/provider"
 import { ModelV2 } from "@vectordevai/core/model"
 import { SessionProjector } from "@vectordevai/core/session/projector"
 import { SessionTable, SessionMessageTable } from "@vectordevai/core/session/sql"
+import { SessionV1 } from "@vectordevai/core/v1/session"
 import { LLMEvent, Usage } from "@vectordevai/llm"
 import type { Provider } from "@/provider/provider"
-import { SessionID } from "@/session/schema"
+import { MessageID, PartID, SessionID } from "@/session/schema"
 import { TitleUsage } from "@/session/title-usage"
 import { Session } from "@/session/session"
 import { SpendGuard } from "@vectordevai/core/spend-guard"
@@ -149,6 +150,41 @@ describe("usage uncertainty", () => {
         Session.getUsage({ model, usage: new Usage({ inputTokens: 1_000, outputTokens: 100, ...invalid }) }).unpriced,
       ).toBe(true)
     }
+  })
+
+  test.each([Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, -1])(
+    "invalid total %s cannot prevent a known cost receipt from being encoded",
+    (totalTokens) => {
+      const usage = Session.getUsage({
+        model,
+        usage: new Usage({ inputTokens: 1_000, outputTokens: 100, totalTokens }),
+      })
+      const receipt = Schema.encodeSync(SessionV1.StepFinishPart)({
+        id: PartID.make("prt_invalid_total"),
+        sessionID,
+        messageID: MessageID.make("msg_invalid_total"),
+        type: "step-finish",
+        reason: "stop",
+        cost: usage.cost,
+        unpriced: usage.unpriced,
+        tokens: usage.tokens,
+      })
+      expect(receipt.tokens.total).toBeUndefined()
+      expect(receipt.tokens.input).toBe(1_000)
+      expect(receipt.tokens.output).toBe(100)
+      expect(receipt.cost).toBeCloseTo(0.012)
+      expect(receipt.unpriced).toBe(true)
+    },
+  )
+
+  test.each([undefined, 1_100])("preserves valid reported total %s without inventing one", (totalTokens) => {
+    const usage = Session.getUsage({
+      model,
+      usage: new Usage({ inputTokens: 1_000, outputTokens: 100, totalTokens }),
+    })
+    expect(usage.tokens.total).toBe(totalTokens)
+    expect(usage.cost).toBeCloseTo(0.012)
+    expect(usage.unpriced).toBe(false)
   })
 })
 
