@@ -1,6 +1,6 @@
 import { describe, expect } from "bun:test"
 import path from "path"
-import { Effect, Fiber, Layer, Stream } from "effect"
+import { Deferred, Effect, Fiber, Layer, Stream } from "effect"
 import { LLMEvent, Usage } from "@vectordevai/llm"
 import { Database } from "@vectordevai/core/database/database"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
@@ -303,62 +303,71 @@ for (const reason of ["error", "abort", "reduced"] as const) {
       ...replacements,
       [
         LLM.node,
-        Layer.succeed(
+        Layer.effect(
           LLM.Service,
-          LLM.Service.of({
-            stream: (input) =>
-              Stream.suspend(() => {
-                const text = JSON.stringify(input.messages.at(-1) ?? {})
-                if (input.agent.name === "security" && !text.includes("Stop investigating")) {
-                  input.started?.(
-                    reason === "reduced"
-                      ? { inputTokens: 40_000, outputTokens: 100, totalTokens: 40_100 }
-                      : { inputTokens: 1_000, outputTokens: 1, totalTokens: 1_001 },
-                  )
-                  return Stream.make(
-                    LLMEvent.stepStart({ index: 0 }),
-                    LLMEvent.textStart({ id: "partial" }),
-                    LLMEvent.textDelta({ id: "partial", text: "Investigating" }),
-                  ).pipe(
-                    Stream.concat(
+          Effect.gen(function* () {
+            const securityStarted = yield* Deferred.make<void>()
+            return LLM.Service.of({
+              stream: (input) =>
+                Stream.suspend(() => {
+                  const text = JSON.stringify(input.messages.at(-1) ?? {})
+                  if (input.agent.name === "security" && !text.includes("Stop investigating")) {
+                    input.started?.(
                       reason === "reduced"
-                        ? Stream.make(
-                            LLMEvent.stepFinish({
-                              index: 0,
-                              reason: "error",
-                              usage: new Usage({ inputTokens: 1_000, outputTokens: 100, totalTokens: 1_100 }),
-                            }),
-                            LLMEvent.finish({ reason: "error" }),
-                          )
-                        : reason === "error"
-                          ? Stream.fail(new Error("stream failed"))
-                          : Stream.fromEffect(Effect.interrupt),
-                    ),
+                        ? { inputTokens: 40_000, outputTokens: 100, totalTokens: 40_100 }
+                        : { inputTokens: 1_000, outputTokens: 1, totalTokens: 1_001 },
+                    )
+                    Deferred.doneUnsafe(securityStarted, Effect.void)
+                    return Stream.make(
+                      LLMEvent.stepStart({ index: 0 }),
+                      LLMEvent.textStart({ id: "partial" }),
+                      LLMEvent.textDelta({ id: "partial", text: "Investigating" }),
+                    ).pipe(
+                      Stream.concat(
+                        reason === "reduced"
+                          ? Stream.make(
+                              LLMEvent.stepFinish({
+                                index: 0,
+                                reason: "error",
+                                usage: new Usage({ inputTokens: 1_000, outputTokens: 100, totalTokens: 1_100 }),
+                              }),
+                              LLMEvent.finish({ reason: "error" }),
+                            )
+                          : reason === "error"
+                            ? Stream.fail(new Error("stream failed"))
+                            : Stream.fromEffect(Effect.interrupt),
+                      ),
+                    )
+                  }
+                  const verify = text.includes("You are checking candidate findings")
+                  const answer = Stream.make(
+                    LLMEvent.stepStart({ index: 0 }),
+                    LLMEvent.textStart({ id: "answer" }),
+                    LLMEvent.textDelta({
+                      id: "answer",
+                      text: JSON.stringify(
+                        verify ? { results: [] } : report(input.agent.name === "review" ? [finding()] : []),
+                      ),
+                    }),
+                    LLMEvent.textEnd({ id: "answer" }),
+                    LLMEvent.stepFinish({
+                      index: 0,
+                      reason: "stop",
+                      usage: new Usage(
+                        input.agent.name === "review"
+                          ? { inputTokens: 30_000, outputTokens: 100, totalTokens: 30_100 }
+                          : { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+                      ),
+                    }),
+                    LLMEvent.finish({ reason: "stop" }),
                   )
-                }
-                const verify = text.includes("You are checking candidate findings")
-                return Stream.make(
-                  LLMEvent.stepStart({ index: 0 }),
-                  LLMEvent.textStart({ id: "answer" }),
-                  LLMEvent.textDelta({
-                    id: "answer",
-                    text: JSON.stringify(
-                      verify ? { results: [] } : report(input.agent.name === "review" ? [finding()] : []),
-                    ),
-                  }),
-                  LLMEvent.textEnd({ id: "answer" }),
-                  LLMEvent.stepFinish({
-                    index: 0,
-                    reason: "stop",
-                    usage: new Usage(
-                      input.agent.name === "review"
-                        ? { inputTokens: 30_000, outputTokens: 100, totalTokens: 30_100 }
-                        : { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
-                    ),
-                  }),
-                  LLMEvent.finish({ reason: "stop" }),
-                )
-              }),
+                  // The expensive review must not settle before security is admitted: its finalizer reservation can
+                  // otherwise prevent the partial invocation this fixture is meant to exercise from ever starting.
+                  return input.agent.name === "review" && text.includes("You are Vector's code reviewer")
+                    ? Stream.fromEffect(Deferred.await(securityStarted)).pipe(Stream.flatMap(() => answer))
+                    : answer
+                }),
+            })
           }),
         ),
       ],
