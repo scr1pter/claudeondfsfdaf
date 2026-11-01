@@ -874,6 +874,12 @@ Every response is JSON with `no-store`, `nosniff` and `no-referrer`. Unknown err
 
 Either way it is followed by `requireUnrevokedAccount`.
 
+**Binding API details (V10).** `requireCloudAgentsUser(request, fetcher = fetch, now = Date.now())` returns the authenticated account user and performs the revocation check. `createCloudAgentsApi` takes the injectable dependencies named above; `now` is a `() => number`. `workflowVersion` is a decimal string matching `^[1-9]\d{0,3}$`, and the unbind body's `repositoryId` is a positive safe decimal string, matching the binding response. Bind-code optional ids remain JSON numbers and are converted to decimal strings before storage. Unknown body keys are refused.
+
+The bind code's account is checked for revocation again when redeemed. The App's current admin decision is obtained before evaluating O6, so that O6's admin exception is reachable; all these checks still precede consuming the OIDC proof or code. An inactive allowance permits takeover only for account-specific refusals, never `service-off` or `source-unavailable`. Shared `githubProof` retains its existing 60-request/5-minute IP and verified-repository proof limits; the cloud-agent limits in 2.7 also apply, so the inherited proof limit may be stricter.
+
+The public default-branch cache uses `default-branch:<repositoryId>` and JSON `{repository, ownerId, defaultRef}`, checked against the signed identity on every read, with `EX 3600`. Only a successful unauthenticated GitHub response whose numeric repository and owner ids, full name, public visibility and branch match the identity may populate it. A malformed cache or store outage is 503; a valid cache for a different repository name or owner is refreshed. No private repository request is made for the fallback. A missing repository, non-public response or different ref gives `BIND_NEEDS_DEFAULT_BRANCH` without consuming the code. A non-binder's unbind gives 403 `ACTOR_NOT_ALLOWED`.
+
 | Route | Auth | Request body | 200 response |
 |---|---|---|---|
 | `POST /api/cloud-agents/bind-code` | account | `{repository: "owner/name", repositoryId?: number, githubUserId?: number, defaultRef?: string}` | `{code, expiresAt}` |
