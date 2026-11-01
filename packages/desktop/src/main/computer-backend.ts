@@ -70,7 +70,7 @@ export class NativeHelperBackend implements Computer.ComputerBackend {
     const supported: Record<Computer.ToolAction, boolean> = {
       screenshot: capture,
       zoom: capture && features["capture.zoom"],
-      cursor_position: false,
+      cursor_position: capture && features["cursor.position"],
       click: pointer,
       double_click: pointer,
       triple_click: pointer,
@@ -78,7 +78,7 @@ export class NativeHelperBackend implements Computer.ComputerBackend {
       middle_click: pointer,
       mouse_move: pointer,
       drag: pointer,
-      // The helper wire is atomic; it has no persistent button-down/up or pointer-position operation.
+      // The helper wire is atomic; it has no persistent button-down/up operation.
       mouse_down: false,
       mouse_up: false,
       scroll: pointer,
@@ -130,9 +130,24 @@ export class NativeHelperBackend implements Computer.ComputerBackend {
     return (await this.client.request<{ displays: Computer.DisplayInfo[] }>("displays.list")).displays
   }
 
+  async cursorPosition() {
+    await this.requireFeatures("cursor.position")
+    return this.client.request<Computer.NativeCursor>("cursor.position")
+  }
+
   async apps(query?: { installed?: boolean }) {
     await this.requireFeatures("apps.list")
     return (await this.client.request<{ apps: Computer.HelperApp[] }>("apps.list", query)).apps
+  }
+
+  async resolveLaunch(path: string): Promise<Computer.LaunchResolution> {
+    await this.requireFeatures("apps.resolve")
+    return this.client.request<Computer.LaunchResolution>("apps.resolve", { path })
+  }
+
+  async launchProgram(program: Computer.NativeProgramLaunch, phase?: Computer.NativePhase): Promise<void> {
+    await this.requireFeatures("program.launch")
+    await this.client.request("program.launch", { token: program.token, binding: program.binding, ...phase })
   }
 
   async activate(app: Computer.AppIdentity, phase?: Computer.NativePhase): Promise<void> {
@@ -186,14 +201,18 @@ export class NativeHelperBackend implements Computer.ComputerBackend {
     return this.client.request<Computer.HitResult>("ui.focused")
   }
 
-  async perform(ref: string, action: string, phase?: Computer.NativePhase) {
-    await this.requireFeatures("ui.actions")
-    return this.client.request<{ took?: boolean }>("ui.perform", { ref, action, ...phase })
+  resolveRef(ref: string) {
+    return this.client.request<Computer.HitResult>("ui.resolve", { ref })
   }
 
-  async setValue(ref: string, value: string, phase?: Computer.NativePhase) {
+  async perform(ref: string, action: string, phase?: Computer.NativePhase, expected?: Computer.NativeElementTarget) {
+    await this.requireFeatures("ui.actions")
+    return this.client.request<{ took?: boolean }>("ui.perform", { ref, action, ...phase, ...expected })
+  }
+
+  async setValue(ref: string, value: string, phase?: Computer.NativePhase, expected?: Computer.NativeElementTarget) {
     await this.requireFeatures("ui.actions", "ui.secureFieldDetect")
-    return this.client.request<{ took?: boolean }>("ui.setValue", { ref, value, ...phase })
+    return this.client.request<{ took?: boolean }>("ui.setValue", { ref, value, ...phase, ...expected })
   }
 
   async input(input: Computer.InputOp, deadlineMs: number): Promise<void> {

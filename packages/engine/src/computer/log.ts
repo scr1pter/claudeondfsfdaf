@@ -38,6 +38,8 @@ export const Record = Schema.Struct({
   call: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(256)),
   step: optional(Schema.Struct({ index: NonNegativeInt, action: Computer.ToolAction })),
   app: optional(Computer.AppKey),
+  /** An artifact launch is a separate identity and never masquerades as app access. */
+  program: optional(Computer.ProgramKey),
   target: optional(Label),
   decision: Schema.Literals(DECISIONS),
   permission: optional(Schema.Literals(["computer_app", "computer_sensitive", "handoff", "check_in"])),
@@ -206,6 +208,7 @@ function project(input: Input, t: number): Record {
     call,
     ...(input.step ? { step: { index: input.step.index, action: input.step.action } } : {}),
     ...(app ? { app } : {}),
+    ...(input.program ? { program: input.program } : {}),
     ...(safeTarget ? { target: safeTarget } : {}),
     decision: input.decision,
     ...(input.permission ? { permission: input.permission } : {}),

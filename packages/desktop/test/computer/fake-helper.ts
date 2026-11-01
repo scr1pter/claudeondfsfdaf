@@ -1,4 +1,5 @@
 import net from "node:net"
+import { createHash, randomUUID } from "node:crypto"
 import path from "node:path"
 import { createInterface } from "node:readline"
 import { fileURLToPath } from "node:url"
@@ -6,14 +7,18 @@ import { parseArgs } from "node:util"
 
 import { Exit, Schema } from "effect"
 import { Computer } from "@vectordevai/schema/computer"
+import { ComputerApps } from "@vectordevai/schema/computer-apps"
+import { ComputerProgram } from "@vectordevai/core/computer/program"
 import { Hands } from "@vectordevai/schema/hands"
 import { optional } from "@vectordevai/schema/schema"
 import identity from "../../native/computer-helper/identity.json" with { type: "json" }
 import {
   blocklist,
   createDesktop,
+  OVERLAY,
   render,
   SCENARIOS,
+  type FakeApp,
   type FakeNode,
   type FakeWindow,
   type Paint,
@@ -66,6 +71,20 @@ export interface FakeOptions {
   readonly deny?: readonly ("screen" | "accessibility")[]
   /** Each queued op answers after this long, so `cancel` can reach it. */
   readonly latencyMs?: number
+  /** Virtual artifact metadata only; no host filesystem, association lookup or process is used. */
+  readonly programs?: readonly FakeProgramArtifact[]
+}
+
+export type FakeProgramArtifact = {
+  path: string
+  name: string
+  content: string
+  /** Explicit verified virtual handler/direct-launch binding. Missing means unresolved, never an OS fallback. */
+  handler?: string
+  /** Optional actual virtual desktop app identity; arbitrary invented handler identities are refused. */
+  handlerIdentity?: Computer.AppIdentity
+  protected?: ComputerApps.BlockReason
+  aliases?: readonly string[]
 }
 
 export interface Clock {
@@ -125,13 +144,16 @@ type Refusal = { readonly ok: false; readonly code: Computer.ComputerErrorCode; 
 type Outcome =
   | { readonly ok: true; readonly result: object; readonly image?: Uint8Array; readonly held?: readonly string[] }
   | Refusal
+type ResolvedLaunch =
+  | Exclude<Computer.LaunchResolution, { kind: "program" }>
+  | { kind: "program"; program: Omit<Computer.NativeProgramLaunch, "token"> }
 type Target = { readonly ok: true; readonly window: FakeWindow; readonly node?: FakeNode }
 type Session = {
   readonly sessionId: string
   readonly phaseRevision?: number
   readonly mode: Computer.Mode
   readonly paused: boolean
-  readonly approved: ReadonlySet<string>
+  readonly approved: ReadonlyMap<string, Computer.AppIdentity>
   readonly vectorPids: ReadonlySet<number>
   readonly vectorWindowIds: ReadonlySet<string>
   readonly overlayWindowIds: ReadonlySet<string>
@@ -285,6 +307,34 @@ export function createFakeHelper(options: FakeOptions, io: FakeIo) {
   const log: LogEntry[] = []
   const held = new Set<string>()
   const captures = new Map<string, Capture>()
+  const programs: readonly FakeProgramArtifact[] = [
+    ...(options.programs ?? [
+      {
+        path: platform === "macos" ? "/virtual/example.script" : "C:\\virtual\\example.script",
+        name: "Example script",
+        content: "virtual version 1",
+        handler: "verified:virtual-test-runner",
+      },
+    ]),
+    // These are virtual file facts, independent of whether the seeded app has a running process or trusted signer.
+    ...desktop.apps().flatMap((app) => {
+      const file = pathOf(app.identity)
+      return app.regular && file
+        ? [
+            {
+              path: file,
+              name: app.identity.name,
+              content: `virtual-app:${app.slot}:v1`,
+              handler: `verified:direct-native:${platform}`,
+            },
+          ]
+        : []
+    }),
+  ]
+  const launchTokens = new Map<
+    string,
+    { program: Omit<Computer.NativeProgramLaunch, "token">; sessionId: string; expires: number }
+  >()
   const queue: Request[] = []
   const state: {
     session?: Session
@@ -452,6 +502,7 @@ export function createFakeHelper(options: FakeOptions, io: FakeIo) {
   }
 
   function endSession(reason: string) {
+    launchTokens.clear()
     if (!state.session) return
     releaseAll(reason)
     if (state.watchdog !== undefined) clock.clearTimeout(state.watchdog)
@@ -462,7 +513,7 @@ export function createFakeHelper(options: FakeOptions, io: FakeIo) {
   }
 
   // ------------------------------------------------------------------------------------------------------------
-  // Ownership: the never floor from blocklist.json, Vector's own windows, and the session's approved app keys
+  // Ownership: the never floor, Vector's own windows, and the full observed identities approved for the task.
 
   const signals = (window: FakeWindow) => (window.windowClass ? { windowClass: window.windowClass } : {})
   const excluded = () => state.session?.overlayWindowIds ?? new Set<string>()
@@ -483,8 +534,59 @@ export function createFakeHelper(options: FakeOptions, io: FakeIo) {
     if (blocklist.isClickOnly(desktop.appOf(window).identity, signals(window)))
       return refuse("blocked", `${desktop.appOf(window).identity.name} is click-only: typing text into it is refused`)
   }
-  const isApproved = (window: FakeWindow) =>
-    Boolean(state.session?.approved.has(Computer.appKey(desktop.appOf(window).identity)))
+  const validIdentity = Schema.is(Computer.AppIdentity)
+  function approvedIdentity(identity: Computer.AppIdentity, pid: number) {
+    const expected = state.session?.approved.get(Computer.appKey(identity))
+    if (
+      !validIdentity(identity) ||
+      !Number.isSafeInteger(pid) ||
+      pid <= 0 ||
+      !expected ||
+      identity.platform === "remote" ||
+      expected.platform === "remote" ||
+      identity.platform !== expected.platform ||
+      identity.verified !== expected.verified
+    )
+      return false
+    if (identity.platform === "macos" && expected.platform === "macos") {
+      if (identity.apple !== expected.apple || identity.teamId?.toLowerCase() !== expected.teamId?.toLowerCase())
+        return false
+      if (identity.verified)
+        return identity.apple || Boolean(identity.teamId && /^[A-Z0-9]{10}$/i.test(identity.teamId))
+    }
+    if (identity.platform === "windows" && expected.platform === "windows") {
+      if (identity.kind !== expected.kind || identity.publisher?.toLowerCase() !== expected.publisher?.toLowerCase())
+        return false
+      if (identity.verified)
+        return (
+          identity.kind === "aumid" ||
+          Boolean(identity.publisher.trim() && identity.publisher.trim().toLowerCase() !== "unsigned")
+        )
+    }
+    const file = pathOf(identity)
+    const fs = identity.platform === "macos" ? path.posix : path.win32
+    return Boolean(
+      file &&
+        !file.includes("\0") &&
+        fs.isAbsolute(file) &&
+        fs.normalize(file) === file &&
+        file === pathOf(expected) &&
+        typeof identity.pid === "number" &&
+        Number.isSafeInteger(identity.pid) &&
+        identity.pid > 0 &&
+        identity.pid === pid &&
+        identity.pid === expected.pid,
+    )
+  }
+  const isApproved = (window: FakeWindow) => {
+    const app = desktop.appOf(window)
+    return approvedIdentity(app.identity, app.pid)
+  }
+  const hiddenOwner = (window: FakeWindow) => {
+    if (window.windowId === OVERLAY || excluded().has(window.windowId)) return
+    const app = desktop.appOf(window)
+    return app.regular ? Computer.appKey(app.identity) : undefined
+  }
   // Without `capture.exclude` the overlay is drawn like any other Vector window; it still takes no clicks.
   const paint = (window: FakeWindow): Paint => {
     if (features["capture.exclude"] && excluded().has(window.windowId)) return "exclude"
@@ -525,14 +627,21 @@ export function createFakeHelper(options: FakeOptions, io: FakeIo) {
   const needsForeground = (what: string) => refuse("needs_foreground", `${what} needs the foreground`)
 
   // Secure event input is a macOS state (M6), on while a password field has focus; Windows has no such signal.
-  function checkSecureInput() {
+  function checkSecureInput(force = false) {
     const on = Boolean(platform === "macos" && state.session?.mode === "foreground" && desktop.focusedNode()?.secure)
-    if (on === state.secureInput) return
+    if (on === state.secureInput && !force) return
     state.secureInput = on
     emit(
-      on
-        ? { event: "input_detection", alive: false, reason: "secure_input", holder: desktop.frontmost().identity.name }
-        : { event: "input_detection", alive: true },
+      state.session?.phaseRevision !== undefined && features["userInput.detect"] !== true
+        ? { event: "input_detection", alive: false, reason: "probe_missing" }
+        : on
+          ? {
+              event: "input_detection",
+              alive: false,
+              reason: "secure_input",
+              holder: desktop.frontmost().identity.name,
+            }
+          : { event: "input_detection", alive: true },
     )
   }
 
@@ -568,6 +677,7 @@ export function createFakeHelper(options: FakeOptions, io: FakeIo) {
         displayId: capture.displayId,
         capturedAtMs: clock.now(),
         masked: frame.masked,
+        hiddenCount: frame.hiddenCount,
         hash: frame.hash,
         imageBytes: frame.png.length,
       },
@@ -590,6 +700,10 @@ export function createFakeHelper(options: FakeOptions, io: FakeIo) {
       return refuse("stale_frame", "The window moved or resized since the capture")
   }
 
+  function capturePoint(capture: Capture, x: number, y: number) {
+    return { x: capture.origin.x + (x + 0.5) / capture.scale, y: capture.origin.y + (y + 0.5) / capture.scale }
+  }
+
   /** Map a pixel of a full capture to the window under it now, after the coordinate and owner checks. */
   function locate(captureId: string, x: number, y: number, ownership: boolean): Target | Refusal {
     const capture = captures.get(captureId)
@@ -599,7 +713,7 @@ export function createFakeHelper(options: FakeOptions, io: FakeIo) {
     if (changed) return changed
     if (x < 0 || y < 0 || x >= capture.width || y >= capture.height)
       return refuse("out_of_bounds", "The point is outside the capture")
-    const point = { x: capture.origin.x + (x + 0.5) / capture.scale, y: capture.origin.y + (y + 0.5) / capture.scale }
+    const point = capturePoint(capture, x, y)
     const thenId =
       capture.kind === "window"
         ? capture.windowId
@@ -622,17 +736,39 @@ export function createFakeHelper(options: FakeOptions, io: FakeIo) {
     return { ok: true, window: now, node: desktop.nodeAt(now, point) }
   }
 
-  function keyboard(expected: { pid: number; windowId?: string; ref?: string }): Target | Refusal {
+  function expectedTarget(
+    target: Target,
+    expected: { pid?: number; windowId?: string; ref?: string; elementId?: string },
+  ) {
+    if (
+      (expected.pid !== undefined && expected.pid !== desktop.appOf(target.window).pid) ||
+      (expected.windowId !== undefined && expected.windowId !== target.window.windowId) ||
+      (expected.ref !== undefined && expected.ref !== refOf(target.window, target.node)) ||
+      (expected.elementId !== undefined && expected.elementId !== elementIdOf(target.window, target.node))
+    )
+      return refuse("changed", "The target changed before input")
+  }
+
+  function pointer(expected: {
+    captureId: string
+    x: number
+    y: number
+    pid?: number
+    windowId?: string
+    ref?: string
+    elementId?: string
+  }): Target | Refusal {
+    const target = inputGate() ?? locate(expected.captureId, expected.x, expected.y, true)
+    if (!target.ok) return target
+    return expectedTarget(target, expected) ?? target
+  }
+
+  function keyboard(expected: { pid: number; windowId?: string; ref?: string; elementId?: string }): Target | Refusal {
     const gate = inputGate()
     if (gate) return gate
     const target = background() ? directed(expected.pid) : focused(expected.pid)
     if (!target.ok) return target
-    if (
-      (expected.windowId !== undefined && expected.windowId !== target.window.windowId) ||
-      (expected.ref !== undefined && expected.ref !== refOf(target.window, target.node))
-    )
-      return refuse("changed", "The focused target changed before input")
-    return target
+    return expectedTarget(target, expected) ?? target
   }
 
   function focused(pid: number): Target | Refusal {
@@ -660,6 +796,8 @@ export function createFakeHelper(options: FakeOptions, io: FakeIo) {
 
   const refOf = (window: FakeWindow, item?: FakeNode) =>
     `${desktop.generation}:${window.windowId}${item ? `:${item.id}` : ""}`
+  const elementIdOf = (window: FakeWindow, item?: FakeNode) =>
+    `${state.sessions}:${window.windowId}:${item?.id ?? "window"}`
 
   function resolve(ref: string): Target | Refusal {
     const [generation, windowId, ...rest] = ref.split(":")
@@ -678,7 +816,7 @@ export function createFakeHelper(options: FakeOptions, io: FakeIo) {
       ...(visible
         ? {
             ref: refOf(window, item),
-            elementId: `${state.sessions}:${window.windowId}:${item?.id ?? "window"}`,
+            elementId: elementIdOf(window, item),
             name: item?.name ?? window.title,
             windowTitle: window.title,
             layout,
@@ -692,6 +830,8 @@ export function createFakeHelper(options: FakeOptions, io: FakeIo) {
       owner: desktop.appOf(window).identity,
       windowId: window.windowId,
       signals: signals(window),
+      // The virtual desktop's notes/fields are memory-only; it does not fabricate filesystem documents.
+      documentStatus: "none" as const,
     }
   }
 
@@ -701,7 +841,7 @@ export function createFakeHelper(options: FakeOptions, io: FakeIo) {
     const app = desktop.app(slot)!
     if (blocklist.isProtected(app.identity) || blocklist.category(app.identity) === "vector")
       return refuse("protected", `${app.identity.name} is protected`)
-    if (!state.session?.approved.has(Computer.appKey(app.identity)))
+    if (!approvedIdentity(app.identity, app.pid))
       return refuse("not_granted", `${app.identity.name} is not approved for this task`)
   }
 
@@ -729,6 +869,8 @@ export function createFakeHelper(options: FakeOptions, io: FakeIo) {
         return "display" in args.target ? "capture.display" : "capture.window"
       case "ui.tree":
         return "ui.tree"
+      case "cursor.position":
+        return "cursor.position"
       case "ui.perform":
       case "ui.setValue":
         return "ui.actions"
@@ -744,6 +886,10 @@ export function createFakeHelper(options: FakeOptions, io: FakeIo) {
         return "input.unicode"
       case "apps.list":
         return "apps.list"
+      case "apps.resolve":
+        return "apps.resolve"
+      case "program.launch":
+        return "program.launch"
       case "app.activate":
       case "app.launch":
       case "window.focus":
@@ -761,7 +907,15 @@ export function createFakeHelper(options: FakeOptions, io: FakeIo) {
     if (!SESSIONLESS.has(args.op) && !state.session) return refuse("unavailable", "No session is active")
     if (
       (args.op.startsWith("input.") && args.op !== "input.releaseAll") ||
-      ["app.activate", "app.launch", "window.focus", "ui.perform", "ui.setValue", "clipboard.write"].includes(args.op)
+      [
+        "app.activate",
+        "app.launch",
+        "program.launch",
+        "window.focus",
+        "ui.perform",
+        "ui.setValue",
+        "clipboard.write",
+      ].includes(args.op)
     ) {
       const gate = actGate()
       if (gate) return gate
@@ -803,13 +957,14 @@ export function createFakeHelper(options: FakeOptions, io: FakeIo) {
       case "session.begin":
         if (args.mode === "background" && !features.background)
           return refuse("unsupported_action", "This helper cannot work in the background")
+        launchTokens.clear()
         state.sessions++
         state.session = {
           sessionId: args.sessionId,
           ...(args.phaseRevision === undefined ? {} : { phaseRevision: args.phaseRevision }),
           mode: args.mode,
           paused: args.paused === true,
-          approved: new Set(args.approved.map(Computer.appKey)),
+          approved: new Map(args.approved.map((app) => [Computer.appKey(app), structuredClone(app)])),
           vectorPids: new Set(args.vectorPids),
           vectorWindowIds: new Set(args.vectorWindowIds),
           overlayWindowIds: new Set(args.overlayWindowIds),
@@ -819,7 +974,7 @@ export function createFakeHelper(options: FakeOptions, io: FakeIo) {
         state.halted = undefined
         record("session", { action: "begin", sessionId: args.sessionId, mode: args.mode })
         armWatchdog()
-        checkSecureInput()
+        checkSecureInput(args.phaseRevision !== undefined)
         return ok()
       case "session.update": {
         if (args.mode === "background" && !features.background)
@@ -839,7 +994,9 @@ export function createFakeHelper(options: FakeOptions, io: FakeIo) {
           ...(args.mode ? { mode: args.mode } : {}),
           ...(args.escStops === undefined ? {} : { escStops: args.escStops }),
           ...(args.paused === undefined ? {} : { paused: args.paused }),
-          ...(args.approved ? { approved: new Set(args.approved.map(Computer.appKey)) } : {}),
+          ...(args.approved
+            ? { approved: new Map(args.approved.map((app) => [Computer.appKey(app), structuredClone(app)])) }
+            : {}),
           ...(args.overlayWindowIds ? { overlayWindowIds: new Set(args.overlayWindowIds) } : {}),
         }
         record("session", { action: "update" })
@@ -863,13 +1020,20 @@ export function createFakeHelper(options: FakeOptions, io: FakeIo) {
             primary: display.primary,
           })),
         })
+      case "cursor.position": {
+        if (state.locked) return refuse("locked", "The screen is locked")
+        const point = desktop.cursor
+        const display = desktop.displays.find((display) => contains(display.bounds, point))
+        if (!display) return refuse("out_of_bounds", "The pointer is not on an available display")
+        return ok({ ...point, displayId: display.id })
+      }
       case "apps.list":
         return ok({
           apps: desktop
             .apps()
             .filter((app) => app.regular && (app.running || args.installed))
             .map((app) => ({
-              identity: app.identity,
+              identity: wireIdentity(app),
               active: app.running && desktop.frontmost().slot === app.slot,
               windows: app.running
                 ? desktop.windowsOf(app.slot).map((window) => ({
@@ -882,6 +1046,45 @@ export function createFakeHelper(options: FakeOptions, io: FakeIo) {
                 : [],
             })),
         })
+      case "apps.resolve": {
+        const resolved = resolveLaunch(args.path)
+        if ("ok" in resolved) return resolved
+        if (resolved.kind !== "program") return ok(resolved)
+        const program = resolved.program
+        const token = randomUUID()
+        for (const [key, entry] of launchTokens) if (entry.expires <= clock.now()) launchTokens.delete(key)
+        if (launchTokens.size >= 1000) return refuse("busy", "Too many launch resolutions are pending")
+        launchTokens.set(token, { program, sessionId: state.session!.sessionId, expires: clock.now() + 30_000 })
+        return ok({ kind: "program", program: { ...program, token } })
+      }
+      case "program.launch": {
+        const prepared = launchTokens.get(args.token)
+        launchTokens.delete(args.token)
+        if (
+          !prepared ||
+          prepared.sessionId !== state.session!.sessionId ||
+          prepared.expires <= clock.now() ||
+          args.binding !== prepared.program.binding
+        )
+          return refuse("changed", "The program launch resolution changed")
+        const current = resolveLaunch(prepared.program.path)
+        if ("ok" in current) return current
+        if (current.kind === "protected") return refuse("protected", "The launch handler is protected")
+        if (
+          current.kind !== "program" ||
+          !ComputerProgram.same(
+            ComputerProgram.publicLaunch(prepared.program),
+            ComputerProgram.publicLaunch(current.program),
+          )
+        )
+          return refuse("changed", "The program or its launch handler changed")
+        if (background()) return needsForeground("Launching this program")
+        const app = desktop.apps().find((item) => pathOf(item.identity) === prepared.program.path)
+        if (app) desktop.activate(app.slot)
+        record("program", { action: "launch", key: prepared.program.key })
+        checkSecureInput()
+        return ok({ launched: true })
+      }
       case "app.activate": {
         const gate = actGate()
         if (gate) return gate
@@ -909,6 +1112,8 @@ export function createFakeHelper(options: FakeOptions, io: FakeIo) {
         if (!app || !app.regular) return refuse("app_not_found", "No such app is installed")
         const blocked = ownerOfApp(app.slot)
         if (blocked) return blocked
+        if (!app.running && !app.identity.verified)
+          return refuse("not_granted", "An unsigned program needs a fresh program launch token")
         // The fake's launch always activates, so in the background it waits for the user too.
         if (background()) return needsForeground(`Opening ${app.identity.name}`)
         desktop.activate(app.slot)
@@ -992,9 +1197,17 @@ export function createFakeHelper(options: FakeOptions, io: FakeIo) {
         if (!window) return refuse("not_foreground", "No window has keyboard focus")
         return ok(hit(window, desktop.focusedNode()))
       }
+      case "ui.resolve": {
+        if (state.locked) return refuse("locked", "The screen is locked")
+        const target = accessibility() ?? resolve(args.ref)
+        if (!target.ok) return target
+        return ok(hit(target.window, target.node))
+      }
       case "ui.perform": {
         const target = inputGate() ?? resolve(args.ref)
         if (!target.ok) return target
+        const changed = expectedTarget(target, args)
+        if (changed) return changed
         const item = target.node
         const raise = args.action === "AXRaise" && !item
         if (raise && background()) return needsForeground("Raising a window")
@@ -1008,6 +1221,8 @@ export function createFakeHelper(options: FakeOptions, io: FakeIo) {
       case "ui.setValue": {
         const target = inputGate() ?? resolve(args.ref)
         if (!target.ok) return target
+        const changed = expectedTarget(target, args)
+        if (changed) return changed
         const item = target.node
         const refused = textRefusal(target.window, item)
         if (refused) return refused
@@ -1017,10 +1232,11 @@ export function createFakeHelper(options: FakeOptions, io: FakeIo) {
         return ok({ took: true })
       }
       case "input.click": {
-        const target = inputGate() ?? locate(args.captureId, args.x, args.y, true)
+        const target = pointer(args)
         if (!target.ok) return target
         const item = target.node
         if (background()) return elementClick(target, args)
+        desktop.cursor = capturePoint(captures.get(args.captureId)!, args.x, args.y)
         desktop.focus(target.window.windowId, item?.editable ? item.id : undefined)
         if (item?.press) desktop.press(item)
         record("input", {
@@ -1035,10 +1251,11 @@ export function createFakeHelper(options: FakeOptions, io: FakeIo) {
       }
       case "input.move":
       case "input.scroll": {
-        const target = inputGate() ?? locate(args.captureId, args.x, args.y, true)
+        const target = pointer(args)
         if (!target.ok) return target
         // The fake's elements have no scroll action, so in the background both need the real pointer.
         if (background()) return needsForeground(args.op === "input.move" ? "Moving the pointer" : "Scrolling there")
+        desktop.cursor = capturePoint(captures.get(args.captureId)!, args.x, args.y)
         record("input", {
           op: args.op === "input.move" ? "move" : "scroll",
           windowId: target.window.windowId,
@@ -1049,10 +1266,27 @@ export function createFakeHelper(options: FakeOptions, io: FakeIo) {
       case "input.drag": {
         const gate = inputGate()
         if (gate) return gate
+        if (args.targets && args.targets.length !== args.path.length)
+          return refuse("changed", "The drag target count changed")
         const targets = args.path.map((point) => locate(args.captureId, point.x, point.y, true))
         const blocked = targets.find((target): target is Refusal => !target.ok)
         if (blocked) return blocked
+        for (let index = 0; index < targets.length; index++) {
+          const target = targets[index]!
+          if (!target.ok) return target
+          const expected = args.targets?.[index]
+          const changed = expected && expectedTarget(target, expected)
+          if (changed) return changed
+        }
         if (background()) return needsForeground("Dragging")
+        // The virtual drag has no asynchronous intermediate movement; re-resolve its final release target anyway.
+        const end = args.path.at(-1)!
+        const release = locate(args.captureId, end.x, end.y, true)
+        if (!release.ok) return release
+        const expected = args.targets?.at(-1)
+        const changed = expected && expectedTarget(release, expected)
+        if (changed) return changed
+        desktop.cursor = capturePoint(captures.get(args.captureId)!, end.x, end.y)
         record("input", { op: "drag", points: args.path.length, button: args.button })
         return ok()
       }
@@ -1166,6 +1400,7 @@ export function createFakeHelper(options: FakeOptions, io: FakeIo) {
       const frame = render({
         windows: window ? [window] : desktop.stack(),
         paint: window ? () => "show" : paint,
+        hiddenOwner,
         origin,
         scale,
         width: size.width,
@@ -1181,7 +1416,15 @@ export function createFakeHelper(options: FakeOptions, io: FakeIo) {
       const size = fit(display.bounds.w * display.scale, display.bounds.h * display.scale, args.budget)
       const scale = size.scale * display.scale
       const origin = { x: display.bounds.x, y: display.bounds.y }
-      const frame = render({ windows: desktop.stack(), paint, origin, scale, width: size.width, height: size.height })
+      const frame = render({
+        windows: desktop.stack(),
+        paint,
+        hiddenOwner,
+        origin,
+        scale,
+        width: size.width,
+        height: size.height,
+      })
       return image(
         {
           kind: "display",
@@ -1209,6 +1452,7 @@ export function createFakeHelper(options: FakeOptions, io: FakeIo) {
     const frame = render({
       windows: [window],
       paint: () => "show",
+      hiddenOwner,
       origin,
       scale,
       width: size.width,
@@ -1227,6 +1471,59 @@ export function createFakeHelper(options: FakeOptions, io: FakeIo) {
       },
       frame,
     )
+  }
+
+  function wireIdentity(app: FakeApp): Computer.AppIdentity {
+    if (app.running || !("pid" in app.identity)) return app.identity
+    const { pid, ...identity } = app.identity
+    return identity
+  }
+
+  function resolveLaunch(file: string): ResolvedLaunch | Refusal {
+    const fs = platform === "macos" ? path.posix : path.win32
+    if (!fs.isAbsolute(file) || file.includes("\0")) return refuse("app_not_found", "The program path is not absolute")
+    const samePath = (candidate: string) =>
+      platform === "windows"
+        ? fs.normalize(candidate).toLowerCase() === fs.normalize(file).toLowerCase()
+        : fs.normalize(candidate) === fs.normalize(file)
+    const app = desktop.apps().find((item) => {
+      const file = pathOf(item.identity)
+      return file !== undefined && samePath(file)
+    })
+    if (app) {
+      const category = blocklist.category(app.identity)
+      if (blocklist.isProtected(app.identity) || category === "system-ui")
+        return { kind: "protected", reason: ComputerApps.builtinRule(app.identity)?.reason ?? "security" }
+      if (app.running || app.identity.verified) return { kind: "app", identity: wireIdentity(app) }
+    }
+    const artifact = programs.find((item) => samePath(item.path) || item.aliases?.some(samePath))
+    if (artifact?.protected) return { kind: "protected", reason: artifact.protected }
+    if (!artifact || !artifact.handler)
+      return refuse("app_not_found", "The program or verified launch handler could not be resolved")
+    const handler = artifact.handlerIdentity && desktop.apps().find((app) => app.identity === artifact.handlerIdentity)
+    if (artifact.handlerIdentity && !handler)
+      return refuse("app_not_found", "The launch handler identity is not native")
+    if (handler && (blocklist.isProtected(handler.identity) || blocklist.category(handler.identity) === "system-ui"))
+      return { kind: "protected", reason: ComputerApps.builtinRule(handler.identity)?.reason ?? "security" }
+    const handlerIdentity = handler && wireIdentity(handler)
+    const binding = createHash("sha256")
+      .update(
+        JSON.stringify([
+          platform,
+          artifact.path,
+          artifact.content,
+          artifact.handler,
+          ...(handlerIdentity ? [handlerIdentity] : []),
+        ]),
+      )
+      .digest("hex")
+    const program = { platform, path: artifact.path, name: Computer.clean(artifact.name, 256), binding }
+    const resolved = { ...program, key: ComputerProgram.key(program) }
+    if (!ComputerProgram.valid(resolved)) return refuse("app_not_found", "The program identity is invalid")
+    return {
+      kind: "program",
+      program: { ...resolved, ...(handlerIdentity ? { handler: structuredClone(handlerIdentity) } : {}) },
+    }
   }
 
   return {
@@ -1264,6 +1561,10 @@ export function createFakeHelper(options: FakeOptions, io: FakeIo) {
         pump()
       }
       if (value.type !== "user_input") return true
+      if (value.kind === "pointer") {
+        const point = desktop.cursor
+        desktop.cursor = { x: point.x + (value.dx ?? 0), y: point.y + (value.dy ?? 0) }
+      }
       const session = state.session
       if (!session) return true
       if (value.kind === "key" && value.key === Hands.STOP_KEY && session.escStops && features["stop.esc"]) {

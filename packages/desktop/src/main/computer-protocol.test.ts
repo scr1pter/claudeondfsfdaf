@@ -16,6 +16,7 @@ const HEADER = {
   displayId: "display_1",
   capturedAtMs: 1_000,
   masked: [],
+  hiddenCount: 0,
   hash: "0123456789abcdef",
   imageBytes: 4,
 } as const
@@ -126,6 +127,9 @@ describe("helper protocol framing", () => {
       { ok: false },
       { imageBytes: 0 },
       { imageBytes: 1.5 },
+      { hiddenCount: -1 },
+      { hiddenCount: 1.5 },
+      { hiddenCount: undefined },
       { width: 0 },
       { captureId: undefined },
     ]) {

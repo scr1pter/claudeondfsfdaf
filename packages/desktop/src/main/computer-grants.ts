@@ -2,6 +2,7 @@ import path from "node:path"
 import { createHash } from "node:crypto"
 import { Option, Schema } from "effect"
 import { ComputerSensitive } from "@vectordevai/core/computer/sensitive"
+import { ComputerProgram } from "@vectordevai/core/computer/program"
 import { Computer } from "@vectordevai/schema/computer"
 import { PermissionPolicy } from "@vectordevai/schema/permission-policy"
 import { PermissionV1 } from "@vectordevai/schema/v1/permission"
@@ -425,6 +426,33 @@ export function createComputerGrants(input: {
     return true
   }
 
+  function consumeProgram(id: string, scope: GrantScope, program: Computer.ProgramLaunch, consume = true) {
+    const metadata = peekSensitive(id, scope)
+    if (
+      !ComputerProgram.valid(program) ||
+      !metadata ||
+      metadata.action !== "open" ||
+      metadata.why !== "run_program" ||
+      metadata.target.appKey !== program.key ||
+      metadata.target.appName !== program.name ||
+      metadata.path !== program.path ||
+      !metadata.program ||
+      !ComputerProgram.same(metadata.program, program) ||
+      metadata.stepDigest !== ComputerProgram.digest(program) ||
+      metadata.frame !== undefined ||
+      metadata.target.pid !== undefined ||
+      metadata.target.windowId !== undefined ||
+      metadata.target.ref !== undefined ||
+      metadata.target.elementId !== undefined
+    )
+      return false
+    if (consume) {
+      proofs.get(id)!.actUsed = true
+      proofs.delete(id)
+    }
+    return true
+  }
+
   return {
     synchronize,
     isActive: (scope: GrantScope) => current(scope) !== undefined,
@@ -449,6 +477,7 @@ export function createComputerGrants(input: {
     grants,
     peekSensitive,
     consumeSensitive,
+    consumeProgram,
     consumeApp,
   }
 }

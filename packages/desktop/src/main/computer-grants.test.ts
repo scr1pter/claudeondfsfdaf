@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { createHash } from "node:crypto"
 import { ComputerSensitive } from "@vectordevai/core/computer/sensitive"
+import { ComputerProgram } from "@vectordevai/core/computer/program"
 import { Computer } from "@vectordevai/schema/computer"
 import { ComputerApps } from "@vectordevai/schema/computer-apps"
 import { createComputerGrants, type GrantScope } from "./computer-grants"
@@ -148,6 +149,47 @@ function fixture(
   }
   return { manager, state, settings, answerApp, answerSensitive }
 }
+
+test("program launch consent is bound to a canonical artifact and handler, consumed once, and grants no app access", async () => {
+  const fake = fixture()
+  const descriptor = {
+    platform: "macos" as const,
+    path: "/virtual/run.script",
+    name: "Run script",
+    binding: "a".repeat(64),
+  }
+  const program = { ...descriptor, key: ComputerProgram.key(descriptor) }
+  const metadata: Computer.SensitiveAskMetadata = {
+    action: "open",
+    why: "run_program",
+    path: program.path,
+    program,
+    target: { appKey: program.key, appName: program.name },
+    stepDigest: ComputerProgram.digest(program),
+    stepIndex: 0,
+  }
+  await fake.answerSensitive("per_program", metadata)
+  expect(fake.manager.consumeProgram("per_program", SCOPE, program, false)).toBe(true)
+  expect(fake.manager.consumeProgram("per_program", { ...SCOPE, lease: 2 }, program)).toBe(false)
+  for (const changed of [
+    { ...program, name: "Different" },
+    { ...program, path: "/virtual/other.script" },
+    { ...program, binding: "b".repeat(64) },
+  ])
+    expect(fake.manager.consumeProgram("per_program", SCOPE, changed)).toBe(false)
+  expect(fake.manager.grants(SCOPE).task.size).toBe(0)
+  expect(fake.state.always).toEqual([])
+  expect(fake.manager.consumeProgram("per_program", SCOPE, program)).toBe(true)
+  expect(fake.manager.consumeProgram("per_program", SCOPE, program)).toBe(false)
+  expect(fake.manager.grants(SCOPE).task.size).toBe(0)
+  await fake.answerSensitive("always_program", metadata, "always")
+  expect(fake.manager.consumeProgram("always_program", SCOPE, program)).toBe(false)
+  await fake.answerSensitive("wrong_digest_program", { ...metadata, stepDigest: "0".repeat(64) })
+  expect(fake.manager.consumeProgram("wrong_digest_program", SCOPE, program)).toBe(false)
+  await fake.answerSensitive("previous_lease_program", metadata)
+  fake.manager.beginTask({ ...SCOPE, lease: 2 })
+  expect(fake.manager.consumeProgram("previous_lease_program", { ...SCOPE, lease: 2 }, program)).toBe(false)
+})
 
 describe("desktop-observed app consent", () => {
   test("an asserted request ID or an ask alone never grants an app", async () => {

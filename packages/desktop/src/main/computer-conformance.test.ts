@@ -204,6 +204,82 @@ describe("NativeHelperBackend on the actual codec and client", () => {
     }
   })
 
+  test("cursor reads require their negotiated feature and expose native units without moving the pointer", async () => {
+    for (const platform of ["macos", "windows"] as const) {
+      const fake = connect({ platform, scenario: "multi-display" })
+      try {
+        await fake.backend.hello()
+        expect(fake.backend.capabilities().actions).toContain("cursor_position")
+        await fake.backend.beginSession({
+          sessionId: "cursor-observation",
+          mode: "foreground",
+          approved: [],
+          vectorPids: [],
+          vectorWindowIds: [],
+          overlayWindowIds: [],
+          escStops: false,
+          stopChord: "Control+Shift+Escape",
+          heartbeatMs: Computer.LIMITS.heartbeatMs,
+          paused: true,
+        })
+        fake.helper.desktop.cursor = { x: -700, y: -125 }
+        expect(await fake.backend.cursorPosition()).toEqual({
+          x: -700,
+          y: -125,
+          displayId: fake.helper.desktop.displays[1]!.id,
+        })
+        expect(fake.helper.log.filter((entry) => entry.kind === "input")).toEqual([])
+      } finally {
+        await fake.backend.close()
+      }
+    }
+    for (const disabled of ["cursor.position", "capture.exclude", "capture.display"] as const) {
+      const fake = connect({
+        disabled: disabled === "capture.display" ? ["capture.display", "capture.window"] : [disabled],
+      })
+      try {
+        await fake.backend.hello()
+        expect(fake.backend.capabilities().actions).not.toContain("cursor_position")
+        if (disabled === "cursor.position")
+          expect(await fake.backend.cursorPosition().catch((error) => error)).toMatchObject({
+            code: "unsupported_action",
+          })
+      } finally {
+        await fake.backend.close()
+      }
+    }
+  })
+
+  test("native backend forwards owner and element witnesses for reference actions", async () => {
+    const fake = connect({ scenario: "notes" })
+    try {
+      await fake.backend.hello()
+      const app = fake.helper.desktop.app("notes")!
+      await fake.backend.beginSession({
+        sessionId: "reference-observation",
+        mode: "foreground",
+        approved: [app.identity],
+        vectorPids: [],
+        vectorWindowIds: [],
+        overlayWindowIds: [],
+        escStops: false,
+        stopChord: "Control+Shift+Escape",
+        heartbeatMs: Computer.LIMITS.heartbeatMs,
+      })
+      const hit = await fake.backend.focused()
+      const expected = { pid: app.pid + 1000, elementId: hit.elementId }
+      expect(
+        await fake.backend.perform(hit.ref!, "AXPress", undefined, expected).catch((error) => error),
+      ).toMatchObject({ code: "changed" })
+      expect(
+        await fake.backend.setValue(hit.ref!, "must not be inserted", undefined, expected).catch((error) => error),
+      ).toMatchObject({ code: "changed" })
+      expect(fake.helper.log.filter((entry) => entry.kind === "ui")).toEqual([])
+    } finally {
+      await fake.backend.close()
+    }
+  })
+
   test("an exit clears negotiated capabilities and listeners may be unsubscribed", async () => {
     const fake = connect()
     await fake.backend.hello()

@@ -284,6 +284,13 @@ function fixture(
 }
 
 describe("the visible helper-session barrier", () => {
+  test("an enabled preference without recorded onboarding consent cannot acquire a program/input lease", async () => {
+    const fake = fixture()
+    fake.prefs.consentedAt = undefined
+    expect(await fake.acquire().catch((error) => error)).toMatchObject({ code: "unavailable" })
+    expect(fake.kinds()).not.toContain("hello")
+    expect(fake.state.activeGrants.size).toBe(0)
+  })
   for (const permissions of [
     { screen: "n/a", accessibility: "granted" },
     { screen: "granted", accessibility: "n/a" },

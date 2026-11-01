@@ -9,6 +9,7 @@ import { filesystem } from "@vectordevai/core/effect/app-node-platform"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { EventV2 } from "@vectordevai/core/event"
 import { Global } from "@vectordevai/core/global"
+import { ComputerProgram } from "@vectordevai/core/computer/program"
 import { CrossSpawnSpawner } from "@vectordevai/core/cross-spawn-spawner"
 import { SessionProjector } from "@vectordevai/core/session/projector"
 import { ComputerLog } from "@/computer/log"
@@ -134,6 +135,41 @@ it.live("typed text is logged only as length and hash", () =>
     expect(saved.raw).not.toContain("PRIVATE_SCREEN_BYTES")
     for (const key of ["rootSessionID", "image", "screenshot", "intent", "reason", "error", "request"])
       expect(saved.rows[0]).not.toHaveProperty(key)
+  }),
+)
+
+it.live("program execution records a distinct artifact key without retaining its native token or path", () =>
+  Effect.gen(function* () {
+    const log = yield* ComputerLog.Service
+    const rootSessionID = SessionID.make("ses_log_program")
+    const descriptor = {
+      platform: "macos" as const,
+      path: "/private/workspace/run.script",
+      name: "Run script",
+      binding: "1".repeat(64),
+    }
+    const program = ComputerProgram.key(descriptor)
+    yield* log.append({
+      ...record(rootSessionID),
+      app: undefined,
+      program,
+      step: { index: 1, action: "open_app" },
+      permission: "computer_sensitive",
+      decision: "ask",
+      nativeToken: "private_native_token",
+      path: descriptor.path,
+    } as ComputerLog.Input)
+    const saved = yield* read(rootSessionID)
+    expect(saved.rows[0]).toMatchObject({
+      program,
+      step: { index: 1, action: "open_app" },
+      permission: "computer_sensitive",
+      decision: "ask",
+    })
+    expect(saved.rows[0]).not.toHaveProperty("app")
+    expect(saved.raw).not.toContain(descriptor.path)
+    expect(saved.raw).not.toContain("private_native_token")
+    expect(saved.rows[0]).not.toHaveProperty("nativeToken")
   }),
 )
 

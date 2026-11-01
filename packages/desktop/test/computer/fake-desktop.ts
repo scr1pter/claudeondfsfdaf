@@ -320,6 +320,7 @@ const SEEDS: Seed[] = [
     color: COLORS.ide,
     mac: {
       bundleId: "com.microsoft.VSCode",
+      teamId: "TESTIDE001",
       apple: false,
       system: false,
       path: "/Applications/Visual Studio Code.app",
@@ -608,7 +609,13 @@ export function createDesktop(input: { platform?: Platform; scenario?: Scenario 
               ]
             : []),
         ]
-  const state = { frontmost: FRONT[scenario], generation: 0, displayGeneration: 0, clipboard: "" }
+  const state = {
+    frontmost: FRONT[scenario],
+    generation: 0,
+    displayGeneration: 0,
+    clipboard: "",
+    cursor: { x: 0, y: 0 },
+  }
   apps.get("notes")!.focused = "notes.title"
   const contains = (rect: Rect, point: { x: number; y: number }) =>
     point.x >= rect.x && point.x < rect.x + rect.w && point.y >= rect.y && point.y < rect.y + rect.h
@@ -617,6 +624,14 @@ export function createDesktop(input: { platform?: Platform; scenario?: Scenario 
     platform,
     scenario,
     displays,
+    /** The virtual OS pointer; querying it never moves it or takes focus. */
+    get cursor() {
+      return { ...state.cursor }
+    },
+    set cursor(point: { x: number; y: number }) {
+      if (!Number.isFinite(point.x) || !Number.isFinite(point.y)) throw new Error("The virtual cursor must be finite")
+      state.cursor = { x: point.x, y: point.y }
+    },
     get generation() {
       return state.generation
     },
@@ -764,11 +779,13 @@ type PixelRect = { x0: number; y0: number; x1: number; y1: number }
  * global `origin`, with `scale` image pixels per helper unit. A pixel takes the colour of the window under its
  * centre. `mask` windows are opaque black and `vector` windows one opaque Vector block; `exclude` windows are not
  * drawn, so the frame shows what is under them. `masked` lists, in image pixels, the visible part of every painted
- * block.
+ * block. hiddenCount counts distinct regular app owners contributing visible blocks, independently of the number
+ * of windows or mask pieces; the caller identifies owners and excludes decorative/system hosts.
  */
 export function render(input: {
   windows: readonly FakeWindow[]
   paint: (window: FakeWindow) => Paint
+  hiddenOwner: (window: FakeWindow) => string | undefined
   origin: { x: number; y: number }
   scale: number
   width: number
@@ -799,15 +816,21 @@ export function render(input: {
         rgba[offset + 3] = 255
       }
   }
+  const hidden = new Set<string>()
   const masked = drawn.flatMap((item, index) => {
     if (item.paint !== "mask" && item.paint !== "vector") return []
-    return drawn
+    const pieces = drawn
       .slice(0, index)
       .reduce((pieces, above) => pieces.flatMap((piece) => subtract(piece, above.rect)), [item.rect])
-      .map((piece) => ({ x: piece.x0, y: piece.y0, w: piece.x1 - piece.x0, h: piece.y1 - piece.y0 }))
+      .filter((piece) => piece.x0 < piece.x1 && piece.y0 < piece.y1)
+    if (pieces.length) {
+      const owner = input.hiddenOwner(item.window)
+      if (owner !== undefined) hidden.add(owner)
+    }
+    return pieces.map((piece) => ({ x: piece.x0, y: piece.y0, w: piece.x1 - piece.x0, h: piece.y1 - piece.y0 }))
   })
   const image = { width: input.width, height: input.height, rgba }
-  return { image, masked, png: encodePng(image), hash: averageHash(image) }
+  return { image, masked, hiddenCount: hidden.size, png: encodePng(image), hash: averageHash(image) }
 }
 
 function subtract(a: PixelRect, b: PixelRect): PixelRect[] {

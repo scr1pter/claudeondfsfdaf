@@ -8,6 +8,7 @@ import { Computer } from "@vectordevai/schema/computer"
 import { ComputerTransport } from "@/computer/transport"
 import { Brain } from "@vectordevai/core/brain/brain"
 import { ComputerSensitive } from "@vectordevai/core/computer/sensitive"
+import { ComputerProgram } from "@vectordevai/core/computer/program"
 import { FreeModelGuests } from "@vectordevai/core/free-model-guests"
 import { Global } from "@vectordevai/core/global"
 import { ModelV2 } from "@vectordevai/core/model"
@@ -590,16 +591,20 @@ const toolCase = Effect.fn("test.computerToolCase")(function* <A, E, R>(
       }
     }
     if (body.command === "focusWindow") return { ok: true }
+    if (body.command === "prepareOpen") return { kind: "app", identity: desktop.identity }
     if (body.command === "openApp") {
-      if ("path" in body.app) {
+      if ("program" in body.app) {
         const request = desktop.requests.find((item) => item.id === body.requestID)
         if (
           !request ||
           request.permission !== "computer_sensitive" ||
           desktop.replies.get(request.id) !== "once" ||
-          request.metadata.stepDigest !== ComputerSensitive.digest({ kind: "open", path: body.app.path })
+          request.metadata.stepDigest !== ComputerProgram.digest(body.app.program) ||
+          !request.metadata.program ||
+          !ComputerProgram.same(request.metadata.program as Computer.ProgramLaunch, body.app.program)
         )
           return { ok: false, code: "not_granted", error: "No matching observed program approval." }
+        return { program: body.app.program, launched: true }
       }
       return { identity: desktop.identity, launched: true }
     }
@@ -1544,41 +1549,212 @@ for (const [name, input, scrolls] of [
   )
 }
 
-toolTests.instance("a program path is resolved and approved before launch with its sensitive request ID", () =>
+toolTests.instance("a verified app path resolves before launch and uses only its genuine app approval", () =>
   toolCase(({ desktop, execute, bridge }) =>
     Effect.gen(function* () {
       desktop.identity = { ...desktop.identity, path: "/Applications/Resolved Notes.app" }
       const result = yield* execute({ action: "open_app", app: "/Applications/Notes Alias.app" })
       expect(result.metadata.code).toBeUndefined()
-      expect(desktop.requests.map((request) => request.permission)).toEqual(["computer_app", "computer_sensitive"])
-      const sensitive = desktop.requests[1]
-      expect(sensitive).toMatchObject({
-        always: [],
-        metadata: { action: "open", why: "run_program", path: "/Applications/Resolved Notes.app" },
-      })
+      expect(desktop.requests.map((request) => request.permission)).toEqual(["computer_app"])
+      expect(bridge.commands().indexOf("prepareOpen")).toBeLessThan(bridge.commands().indexOf("access"))
       expect(bridge.calls().find((call) => call.body.command === "access")?.body).toMatchObject({
         app: { path: "/Applications/Notes Alias.app" },
       })
       expect(bridge.calls().find((call) => call.body.command === "openApp")?.body).toMatchObject({
-        app: { path: "/Applications/Resolved Notes.app" },
-        requestID: sensitive.id,
+        app: { key: Computer.appKey(desktop.identity) },
       })
+      expect(bridge.calls().find((call) => call.body.command === "openApp")?.body).not.toHaveProperty("requestID")
       expect(bridge.commands().indexOf("grant")).toBeLessThan(bridge.commands().indexOf("openApp"))
     }),
   ),
 )
 
-toolTests.instance("denying the program ask prevents launch after app access was approved", () =>
+toolTests.instance("denying a genuine app's access ask prevents its path launch", () =>
   toolCase(({ desktop, execute, bridge }) =>
     Effect.gen(function* () {
-      desktop.answers.push("once", "reject")
+      desktop.answers.push("reject")
       const result = yield* execute({ action: "open_app", app: "/Applications/Notes.app" })
       expect(result.metadata.code).toBe("denied")
-      expect(desktop.requests.map((request) => request.permission)).toEqual(["computer_app", "computer_sensitive"])
+      expect(desktop.requests.map((request) => request.permission)).toEqual(["computer_app"])
       expect(bridge.commands()).not.toContain("openApp")
     }),
   ),
 )
+
+toolTests.instance("an unsigned program launches with artifact consent and no fabricated app access", () =>
+  toolCase(({ desktop, execute, bridge, sessionID }) =>
+    Effect.gen(function* () {
+      const descriptor = {
+        platform: "macos" as const,
+        path: "/virtual/run.script",
+        name: "Run script",
+        binding: "1".repeat(64),
+      }
+      const program = { ...descriptor, key: ComputerProgram.key(descriptor) }
+      desktop.handle = ({ body }) => (body.command === "prepareOpen" ? { kind: "program", program } : undefined)
+      const result = yield* execute({ action: "open_app", app: program.path })
+      expect(result.metadata.code).toBeUndefined()
+      expect(desktop.requests.map((request) => request.permission)).toEqual(["computer_sensitive"])
+      expect(desktop.requests[0]).toMatchObject({
+        always: [],
+        patterns: [`${program.key}:run_program`],
+        metadata: {
+          action: "open",
+          why: "run_program",
+          path: program.path,
+          program,
+          target: { appKey: program.key, appName: program.name },
+        },
+      })
+      expect(JSON.stringify(desktop.requests)).not.toContain("token")
+      expect(bridge.commands()).not.toContain("access")
+      expect(bridge.commands()).not.toContain("grant")
+      expect(bridge.commands()).not.toContain("remember")
+      expect(bridge.calls().find((call) => call.body.command === "openApp")?.body).toMatchObject({
+        app: { program },
+        requestID: desktop.requests[0].id,
+      })
+      expect(desktop.grants.size).toBe(0)
+      const log = yield* readComputerLog(sessionID)
+      const approval = log.records.filter((record) => record.permission === "computer_sensitive")
+      expect(approval.map((record) => record.decision)).toEqual(["ask", "answer"])
+      for (const record of approval) {
+        expect(record.program).toBe(program.key)
+        expect(record.app).toBeUndefined()
+      }
+      expect(log.records).toContainEqual(expect.objectContaining({ decision: "executed", program: program.key }))
+    }),
+  ),
+)
+
+for (const lookup of ["name", "key"] as const) {
+  toolTests.instance(`a ${lookup} lookup prepares an unsigned closed app as a program before any app consent`, () =>
+    toolCase(({ desktop, execute, bridge }) =>
+      Effect.gen(function* () {
+        const descriptor = {
+          platform: "macos" as const,
+          path: "/Applications/Unsigned Notes.app",
+          name: "Unsigned Notes",
+          binding: "3".repeat(64),
+        }
+        const program = { ...descriptor, key: ComputerProgram.key(descriptor) }
+        desktop.identity = {
+          ...desktop.identity,
+          name: program.name,
+          verified: false,
+          path: program.path,
+          pid: undefined,
+        }
+        desktop.handle = ({ body }) => (body.command === "prepareOpen" ? { kind: "program", program } : undefined)
+        const app = lookup === "name" ? program.name : Computer.appKey(desktop.identity)
+        const result = yield* execute({ action: "open_app", app })
+        expect(result.metadata.code).toBeUndefined()
+        expect(bridge.calls().find((call) => call.body.command === "prepareOpen")?.body).toMatchObject({
+          app: lookup === "name" ? { name: app } : { key: app },
+        })
+        expect(desktop.requests.map((request) => request.permission)).toEqual(["computer_sensitive"])
+        expect(desktop.requests[0]).toMatchObject({
+          patterns: [`${program.key}:run_program`],
+          metadata: { program, path: program.path },
+        })
+        expect(bridge.commands()).not.toContain("access")
+        expect(bridge.commands()).not.toContain("grant")
+        expect(bridge.calls().find((call) => call.body.command === "openApp")?.body).toMatchObject({ app: { program } })
+      }),
+    ),
+  )
+}
+
+toolTests.instance("a changed program pending result asks again for the fresh binding before retrying", () =>
+  toolCase(({ desktop, execute, bridge }) =>
+    Effect.gen(function* () {
+      const descriptor = {
+        platform: "macos" as const,
+        path: "/virtual/run.script",
+        name: "Run script",
+        binding: "1".repeat(64),
+      }
+      const first = { ...descriptor, key: ComputerProgram.key(descriptor) }
+      const changed = { ...descriptor, binding: "2".repeat(64) }
+      const second = { ...changed, key: ComputerProgram.key(changed) }
+      let attempts = 0
+      desktop.handle = ({ body }) => {
+        if (body.command === "prepareOpen") return { kind: "program", program: first }
+        if (body.command === "openApp" && attempts++ === 0)
+          return { pending: { kind: "sensitive", why: "run_program", program: second } }
+      }
+      const result = yield* execute({ action: "open_app", app: first.path })
+      expect(result.metadata.code).toBeUndefined()
+      expect(desktop.requests.map((request) => request.patterns)).toEqual([
+        [`${first.key}:run_program`],
+        [`${second.key}:run_program`],
+      ])
+      expect(desktop.requests[0].metadata.stepDigest).toBe(desktop.requests[1].metadata.stepDigest)
+      expect(desktop.requests[0].id).not.toBe(desktop.requests[1].id)
+      expect(
+        bridge
+          .calls()
+          .filter((call) => call.body.command === "openApp")
+          .map((call) => call.body),
+      ).toEqual([
+        expect.objectContaining({ app: { program: first }, requestID: desktop.requests[0].id }),
+        expect.objectContaining({ app: { program: second }, requestID: desktop.requests[1].id }),
+      ])
+      expect(bridge.commands()).not.toContain("grant")
+    }),
+  ),
+)
+
+toolTests.instance("program launch retries are bounded and a rejected artifact ask never launches", () =>
+  toolCase(({ desktop, execute, bridge, nextUser }) =>
+    Effect.gen(function* () {
+      const descriptor = {
+        platform: "macos" as const,
+        path: "/virtual/run.script",
+        name: "Run script",
+        binding: "1".repeat(64),
+      }
+      const program = { ...descriptor, key: ComputerProgram.key(descriptor) }
+      desktop.handle = ({ body }) => {
+        if (body.command === "prepareOpen") return { kind: "program", program }
+        if (body.command === "openApp") return { pending: { kind: "sensitive", why: "run_program", program } }
+      }
+      const result = yield* execute({ action: "open_app", app: program.path })
+      expect(result.metadata.code).toBe("changed")
+      expect(desktop.requests).toHaveLength(3)
+      expect(bridge.commands().filter((command) => command === "openApp")).toHaveLength(3)
+      nextUser()
+      desktop.answers.push("reject")
+      const declined = yield* execute({ action: "open_app", app: program.path })
+      expect(declined.metadata.code).toBe("denied")
+      expect(desktop.requests).toHaveLength(4)
+      expect(bridge.commands().filter((command) => command === "openApp")).toHaveLength(3)
+    }),
+  ),
+)
+
+for (const action of ["open_app", "focus_window"] as const) {
+  toolTests.instance(`${action} needing foreground waits for control and observes before another action`, () =>
+    toolCase(({ desktop, execute, bridge }) =>
+      Effect.gen(function* () {
+        const command = action === "open_app" ? "openApp" : "focusWindow"
+        desktop.handle = ({ body }) => {
+          if (body.command === command) return { ok: false, code: "needs_foreground", error: "The pointer is needed." }
+          if (body.command === "awaitControl") {
+            desktop.frame = { ...desktop.frame, id: "frame-after-pointer" }
+            return { result: "resumed" }
+          }
+        }
+        const result = yield* execute({ action, app: "Notes" })
+        expect(result.output).toContain("The user may have changed things; look at the screen before continuing.")
+        expect(result.metadata.frame).toMatchObject({ id: "frame-after-pointer" })
+        expect(result.metadata.paused).toMatchObject({ by: "pointer" })
+        expect(bridge.commands().filter((item) => item === command)).toHaveLength(1)
+        expect(bridge.commands()).toContain("awaitControl")
+      }),
+    ),
+  )
+}
 
 toolTests.instance("a secure field hands off to the user before any typed input reaches the bridge", () =>
   toolCase(({ desktop, execute, bridge }) =>
@@ -2923,7 +3099,14 @@ toolTests.instance("the action log associates a program approval with its mixed 
   toolCase(({ desktop, execute, sessionID }) =>
     Effect.gen(function* () {
       const text = "Private draft for the next planning meeting"
-      desktop.identity = { ...desktop.identity, path: "/Applications/Resolved Notes.app" }
+      const descriptor = {
+        platform: "macos" as const,
+        path: "/virtual/notes.script",
+        name: "Notes script",
+        binding: "4".repeat(64),
+      }
+      const program = { ...descriptor, key: ComputerProgram.key(descriptor) }
+      desktop.handle = ({ body }) => (body.command === "prepareOpen" ? { kind: "program", program } : undefined)
       desktop.inspect = {
         ...desktop.inspect,
         element: { role: "text", label: "Document", secure: false, enabled: true, editable: true },
@@ -2944,6 +3127,8 @@ toolTests.instance("the action log associates a program approval with its mixed 
       expect(approval.map((record) => record.decision)).toEqual(["ask", "answer"])
       for (const record of approval) {
         expect(record.step).toEqual({ index: 1, action: "open_app" })
+        expect(record.program).toBe(program.key)
+        expect(record.app).toBeUndefined()
         expect(record.text).toBeUndefined()
       }
       expect(log.source).not.toContain(text)

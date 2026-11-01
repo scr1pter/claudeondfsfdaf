@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto"
 import { Option, Schema } from "effect"
 import { Computer } from "@vectordevai/schema/computer"
+import { Hands } from "@vectordevai/schema/hands"
 import { PermissionPolicy } from "@vectordevai/schema/permission-policy"
 import { PermissionV1 } from "@vectordevai/schema/v1/permission"
 import { ComputerMainCopy } from "@vectordevai/app/computer/main-copy"
@@ -136,11 +137,12 @@ export function createComputerSession(input: {
     helperEpoch: 0,
   }
   let nativeWork: Promise<void> = Promise.resolve()
+  const subscribers = new Set<(value: Computer.ComputerState) => void>()
 
   function base(): Computer.ComputerState {
     const settings = input.settings.get()
     return {
-      phase: settings.prefs.enabled && settings.policy.enabled ? "ready" : "off",
+      phase: enabled(settings) ? "ready" : "off",
       backend:
         input.backend.kind === "local-windows"
           ? "local-windows"
@@ -174,20 +176,16 @@ export function createComputerSession(input: {
     }
     input.keepAwake.update({
       phase: state.current.phase,
-      allowed:
-        !!state.run &&
-        settings.prefs.enabled &&
-        settings.policy.enabled &&
-        settings.prefs.keepAwake &&
-        settings.policy.keepAwake,
+      allowed: !!state.run && enabled(settings) && settings.prefs.keepAwake && settings.policy.keepAwake,
       ...(state.current.pause ? { pause: state.current.pause } : {}),
       away: state.current.pause === "away",
     })
-    try {
-      input.onState?.(snapshot())
-    } catch {
-      console.warn("Computer session state listener failed.")
-    }
+    for (const callback of [...(input.onState ? [input.onState] : []), ...subscribers])
+      try {
+        callback(snapshot())
+      } catch {
+        console.warn("Computer session state listener failed.")
+      }
   }
 
   function show(run: Run, first = false) {
@@ -315,11 +313,11 @@ export function createComputerSession(input: {
   function check(run: Run, revision = run.revision) {
     if (state.run !== run) throw new ComputerError("stopped", "This computer lease has ended.")
     if (run.revision !== revision || state.current.phase !== "working")
-      throw new ComputerError("paused", "Vector Hands is waiting for you.")
+      throw new ComputerError("paused", `${Hands.NAME} is waiting for you.`)
     const settings = input.settings.get()
-    if (!settings.prefs.enabled || !settings.policy.enabled) {
+    if (!enabled(settings)) {
       retire(run, "stopped", false)
-      throw new ComputerError("blocked", "Vector Hands is turned off.")
+      throw new ComputerError("blocked", `${Hands.NAME} is turned off.`)
     }
     const mode = desiredMode(run, settings)
     if (mode.changed) {
@@ -402,7 +400,7 @@ export function createComputerSession(input: {
 
   function rejectQueue() {
     for (const entry of [...queue.values()])
-      settle(entry, undefined, new ComputerError("stopped", "The user stopped Vector Hands."))
+      settle(entry, undefined, new ComputerError("stopped", `The user stopped ${Hands.NAME}.`))
     publish()
   }
 
@@ -469,8 +467,8 @@ export function createComputerSession(input: {
         state.candidate = entry
         try {
           const settings = input.settings.get()
-          if (!settings.prefs.enabled || !settings.policy.enabled || input.backend.kind === "remote")
-            throw new ComputerError("unavailable", "Vector Hands is unavailable.")
+          if (!enabled(settings) || input.backend.kind === "remote")
+            throw new ComputerError("unavailable", `${Hands.NAME} is unavailable.`)
           // A fresh explicit acquire may recover a crashed, ended run. An active paused run never does this.
           if (state.needsResume) {
             await recoverHelper()
@@ -495,8 +493,7 @@ export function createComputerSession(input: {
             settle(entry, { code: "permissions", missing })
             continue
           }
-          if (!input.settings.get().prefs.enabled || !input.settings.get().policy.enabled)
-            throw new ComputerError("blocked", "Vector Hands is turned off.")
+          if (!enabled(input.settings.get())) throw new ComputerError("blocked", `${Hands.NAME} is turned off.`)
           clearEndTimers()
           const scope = Object.freeze({
             rootSessionID: entry.request.rootSessionID,
@@ -545,7 +542,7 @@ export function createComputerSession(input: {
           settle(
             entry,
             undefined,
-            error instanceof ComputerError ? error : new ComputerError("unavailable", "Vector Hands is unavailable."),
+            error instanceof ComputerError ? error : new ComputerError("unavailable", `${Hands.NAME} is unavailable.`),
           )
         }
       }
@@ -684,7 +681,7 @@ export function createComputerSession(input: {
     const awayMs = Math.min(Computer.LIMITS.awayMinutes, maximum ?? Computer.LIMITS.awayMinutes) * 60_000
     if (clock.now() - run.lastInput >= awayMs) {
       void pause("away")
-      throw new ComputerError("paused", "Vector Hands paused so your computer can lock.")
+      throw new ComputerError("paused", `${Hands.NAME} paused so your computer can lock.`)
     }
     if (metadata) {
       const action = Computer.ToolAction.literals.find((action) => action === metadata.action)
@@ -756,7 +753,7 @@ export function createComputerSession(input: {
     check(run, revision)
   }
 
-  function pause(reason: Computer.PauseReason, holder?: string) {
+  function pause(reason: Computer.PauseReason, holder?: string, ask?: Computer.ComputerState["ask"]) {
     const run = state.run
     if (!run) return Promise.resolve()
     if (state.current.phase === "paused" && state.current.pause === reason) return Promise.resolve()
@@ -765,7 +762,7 @@ export function createComputerSession(input: {
       ...state.current,
       phase: "paused",
       pause: reason,
-      ask: undefined,
+      ask: ask ? structuredClone(ask) : undefined,
       secureInputHolder: reason === "secure_input" && holder ? Computer.clean(holder, 256) : undefined,
     }
     const stopped = halt()
@@ -891,6 +888,10 @@ export function createComputerSession(input: {
 
   return {
     state: snapshot,
+    subscribe(callback: (value: Computer.ComputerState) => void) {
+      subscribers.add(callback)
+      return () => void subscribers.delete(callback)
+    },
     scope,
     isActive: (value: SessionScope) => same(value) && state.current.phase === "working" && !state.locked,
     nativePhase(value: SessionScope) {
@@ -918,6 +919,17 @@ export function createComputerSession(input: {
       publish()
       void pump()
     },
+    cancelQueued(value: Pick<SessionScope, "rootSessionID" | "sessionID" | "directory">) {
+      for (const entry of [...queue.values()])
+        if (
+          entry.request.rootSessionID === value.rootSessionID &&
+          entry.request.sessionID === value.sessionID &&
+          entry.request.directory === value.directory
+        )
+          settle(entry, undefined, new ComputerError("stopped", "This queued computer request was cancelled."))
+      publish()
+      void pump()
+    },
     release(value: SessionScope) {
       const run = requireRun(value)
       retire(run, "done", true)
@@ -937,7 +949,7 @@ export function createComputerSession(input: {
     stopSession(sessionID: string) {
       for (const entry of [...queue.values()])
         if (entry.request.rootSessionID === sessionID || entry.request.sessionID === sessionID)
-          settle(entry, undefined, new ComputerError("stopped", "The user stopped Vector Hands."))
+          settle(entry, undefined, new ComputerError("stopped", `The user stopped ${Hands.NAME}.`))
       publish()
       void pump()
       return Promise.resolve()
@@ -946,7 +958,7 @@ export function createComputerSession(input: {
       const run = state.run
       if (!run) return Promise.reject(new ComputerError("stopped", "This computer lease has ended."))
       if (state.current.phase === "paused")
-        return Promise.reject(new ComputerError("paused", "Use Resume to continue Vector Hands."))
+        return Promise.reject(new ComputerError("paused", `Use Resume to continue ${Hands.NAME}.`))
       run.revision++
       state.current = { ...state.current, phase, ask: ask ? structuredClone(ask) : undefined }
       show(run)
@@ -1125,6 +1137,7 @@ export function createComputerSession(input: {
       state.closed = true
       disconnect()
       unlisten()
+      subscribers.clear()
       input.keepAwake.close()
     },
   }
@@ -1160,4 +1173,14 @@ function handsAsk(value: unknown) {
     request.patterns[0] === `${metadata.value.target.appKey}:${metadata.value.why}`
   )
     return { id: request.id, sessionID: request.sessionID }
+}
+
+function enabled(settings: Computer.ResolvedComputerSettings) {
+  return (
+    settings.prefs.enabled &&
+    settings.policy.enabled &&
+    typeof settings.prefs.consentedAt === "number" &&
+    Number.isFinite(settings.prefs.consentedAt) &&
+    settings.prefs.consentedAt > 0
+  )
 }

@@ -148,6 +148,10 @@ const bridge: Record<Computer.BridgeCommandName, { request: Record<string, unkno
     request: { lease, app: { path: "/Applications/Numbers.app" }, background: true },
     responses: [{ identity: mac, launched: true }],
   },
+  prepareOpen: {
+    request: { lease, app: { path: "/Applications/Numbers.app" } },
+    responses: [{ kind: "app", identity: mac }],
+  },
   focusWindow: {
     request: { lease, app: { key: "app:macos:com.apple.iwork.numbers" }, window: "42" },
     responses: [{ ok: true }],
@@ -245,6 +249,7 @@ const helper: Record<Computer.HelperOpName, { args: Record<string, unknown>[]; r
     args: [{}],
     results: [{ displays: [{ id: "1", bounds: rect, pixelSize: { w: 2880, h: 1800 }, scale: 2, primary: true }] }],
   },
+  "cursor.position": { args: [{}], results: [{ x: -700.5, y: -125, displayId: "2" }] },
   "apps.list": {
     args: [{ installed: false }],
     results: [
@@ -260,6 +265,17 @@ const helper: Record<Computer.HelperOpName, { args: Record<string, unknown>[]; r
     ],
   },
   "app.activate": { args: [{ identity: mac }], results: [{ foreground: true }] },
+  "apps.resolve": {
+    args: [{ path: "/Applications/Numbers.app" }],
+    results: [
+      { kind: "app", identity: mac },
+      { kind: "protected", reason: "security" },
+    ],
+  },
+  "program.launch": {
+    args: [{ token: "resolve_1", binding: "0".repeat(64) }],
+    results: [{ launched: true }],
+  },
   "app.launch": {
     args: [{ identity: mac }, { path: "/Applications/Numbers.app" }],
     results: [{}, { foreground: false }],
@@ -285,6 +301,7 @@ const helper: Record<Computer.HelperOpName, { args: Record<string, unknown>[]; r
         displayId: "1",
         capturedAtMs: 1_700_000_000_000,
         masked: [{ x: 10, y: 10, w: 100, h: 50 }],
+        hiddenCount: 1,
         hash: "0123456789abcdef",
         imageBytes: 20_000,
       },
@@ -311,6 +328,10 @@ const helper: Record<Computer.HelperOpName, { args: Record<string, unknown>[]; r
     results: [{ role: "AXButton", name: "Save", secure: false, owner: mac, windowId: "42" }],
   },
   "ui.focused": { args: [{}], results: [{ ref: "e2", role: "AXTextField", secure: true, owner: mac, windowId: "42" }] },
+  "ui.resolve": {
+    args: [{ ref: "e2" }],
+    results: [{ ref: "e2", role: "AXTextField", secure: true, owner: mac, windowId: "42" }],
+  },
   "ui.perform": { args: [{ ref: "e1", action: "AXPress" }], results: [{ took: true }] },
   "ui.setValue": { args: [{ ref: "e2", value: "October" }], results: [{}] },
   "input.click": {

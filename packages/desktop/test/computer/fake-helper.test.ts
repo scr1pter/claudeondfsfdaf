@@ -1,9 +1,11 @@
 import { describe, expect, test } from "bun:test"
 import { readdirSync } from "node:fs"
 import path from "node:path"
+import { Schema } from "effect"
 
 import { Computer } from "@vectordevai/schema/computer"
 import { ComputerApps } from "@vectordevai/schema/computer-apps"
+import { ComputerProgram } from "@vectordevai/core/computer/program"
 import { blocklist, COLORS, OVERLAY, type Rgb } from "./fake-desktop"
 import { connect, main, manualClock, parseCli, type FakeOptions } from "./fake-helper"
 import { decodePng, fit, type Image } from "./png"
@@ -16,9 +18,149 @@ const FIXTURES = path.join(import.meta.dir, "../fixtures/computer-protocol")
 const FULL_DISPLAY = { maxWidth: 4096, maxHeight: 4096, maxPixels: 4096 * 4096 }
 
 for (const platform of ["macos", "windows"] as const) {
+  test(`${platform}: installed app facts expose a PID only after a real virtual launch`, () => {
+    const fake = start({ platform })
+    const app = fake.helper.desktop.app("ide")!
+    const file =
+      app.identity.platform === "macos"
+        ? app.identity.path
+        : app.identity.platform === "windows" && app.identity.kind === "exe"
+          ? app.identity.exe
+          : undefined
+    expect(file).toBeDefined()
+    const installed = fake
+      .call("apps.list", { installed: true })
+      .apps.find((item: Message) => item.identity.name === app.identity.name)
+    expect(installed.identity).not.toHaveProperty("pid")
+    expect(installed).toMatchObject({ active: false, windows: [] })
+    expect(app.identity).toHaveProperty("pid", app.pid)
+    fake.begin([])
+    const signed = fake.call("apps.resolve", { path: file })
+    expect(signed).toMatchObject({ ok: true, kind: "app", identity: { verified: true } })
+    expect(signed.identity).not.toHaveProperty("pid")
+    Object.assign(app.identity, { verified: false })
+    fake.begin(["ide"])
+    expect(fake.call("app.launch", { identity: app.identity })).toMatchObject({ code: "not_granted" })
+    fake.begin([])
+    const unsigned = fake.call("apps.resolve", { path: file })
+    expect(unsigned).toMatchObject({ ok: true, kind: "program", program: { path: file } })
+    expect(unsigned).not.toHaveProperty("identity")
+    expect(unsigned.program).not.toHaveProperty("pid")
+    expect(
+      fake.call("program.launch", { token: unsigned.program.token, binding: unsigned.program.binding }),
+    ).toMatchObject({ ok: true, launched: true })
+    expect(app.running).toBe(true)
+    const running = fake.call("apps.list").apps.find((item: Message) => item.identity.name === app.identity.name)
+    expect(running.identity).toMatchObject({ verified: false, pid: app.pid })
+    expect(fake.call("apps.resolve", { path: file })).toMatchObject({
+      ok: true,
+      kind: "app",
+      identity: { verified: false, pid: app.pid },
+    })
+    expect(fake.call("ui.tree", { windowId: "ide-1", maxNodes: 50, maxDepth: 4 })).toMatchObject({
+      code: "not_granted",
+    })
+    fake.call("shutdown")
+  })
+
+  test(`${platform}: program resolution and launch bind virtual artifacts and never fabricate an app or input grant`, () => {
+    const program = {
+      path: platform === "macos" ? "/virtual/run.script" : "C:\\virtual\\run.script",
+      name: "Run script",
+      content: "version 1",
+      handler: "verified:runner",
+    }
+    const fake = start({ platform, programs: [program] })
+    expect(fake.call("apps.resolve", { path: program.path })).toMatchObject({ ok: false, code: "unavailable" })
+    fake.begin([])
+    const resolution = fake.call("apps.resolve", { path: program.path })
+    expect(resolution).toMatchObject({ ok: true, kind: "program", program: { path: program.path, platform } })
+    expect(resolution.program).not.toHaveProperty("pid")
+    expect(resolution.program).not.toHaveProperty("bundleId")
+    const descriptor = ComputerProgram.publicLaunch(resolution.program)
+    expect(ComputerProgram.valid(descriptor)).toBe(true)
+    expect(descriptor).not.toHaveProperty("token")
+    expect(fake.call("program.launch", { token: resolution.program.token, binding: descriptor.binding })).toMatchObject(
+      { ok: true, launched: true },
+    )
+    expect(fake.call("program.launch", { token: resolution.program.token, binding: descriptor.binding })).toMatchObject(
+      { ok: false, code: "changed" },
+    )
+    expect(fake.call("input.type", { pid: fake.identity("notes").pid, text: "no grant" })).toMatchObject({
+      ok: false,
+      code: "not_granted",
+    })
+    const changed = fake.call("apps.resolve", { path: program.path }).program
+    program.content = "version 2"
+    expect(fake.call("program.launch", { token: changed.token, binding: changed.binding })).toMatchObject({
+      ok: false,
+      code: "changed",
+    })
+    const handler = fake.call("apps.resolve", { path: program.path }).program
+    program.handler = "verified:different-runner"
+    expect(fake.call("program.launch", { token: handler.token, binding: handler.binding })).toMatchObject({
+      ok: false,
+      code: "changed",
+    })
+    const old = fake.call("apps.resolve", { path: program.path }).program
+    fake.begin([], { sessionId: "replacement" })
+    expect(fake.call("program.launch", { token: old.token, binding: old.binding })).toMatchObject({
+      ok: false,
+      code: "changed",
+    })
+    const expiring = fake.call("apps.resolve", { path: program.path }).program
+    // Keep the helper alive while advancing the virtual token deadline.
+    for (let index = 0; index < 16; index++) {
+      fake.advance(2000)
+      fake.call("heartbeat")
+    }
+    expect(fake.call("program.launch", { token: expiring.token, binding: expiring.binding })).toMatchObject({
+      ok: false,
+      code: "changed",
+    })
+    expect(fake.helper.log.filter((entry) => entry.kind === "program")).toHaveLength(1)
+    fake.call("shutdown")
+  })
+
+  test(`${platform}: unresolved, unknown-handler and protected program targets fail truthfully`, () => {
+    const base = platform === "macos" ? "/virtual/" : "C:\\virtual\\"
+    const fake = start({
+      platform,
+      programs: [
+        { path: `${base}unknown.script`, name: "Unknown", content: "v1" },
+        {
+          path: `${base}protected.script`,
+          name: "Protected",
+          content: "v1",
+          handler: "verified:runner",
+          protected: "security",
+        },
+      ],
+    })
+    fake.begin([])
+    expect(fake.call("apps.resolve", { path: `${base}missing.script` })).toMatchObject({
+      ok: false,
+      code: "app_not_found",
+    })
+    expect(fake.call("apps.resolve", { path: `${base}unknown.script` })).toMatchObject({
+      ok: false,
+      code: "app_not_found",
+    })
+    expect(fake.call("apps.resolve", { path: `${base}protected.script` })).toMatchObject({
+      ok: true,
+      kind: "protected",
+      reason: "security",
+    })
+    expect(fake.helper.log.filter((entry) => entry.kind === "program")).toHaveLength(0)
+    fake.call("shutdown")
+  })
+
   test(`${platform}: a paused phase observes without posting input and stale unpause cannot reopen it`, () => {
     const fake = start({ platform })
     fake.begin(["notes", "calculator"], { phaseRevision: 0, paused: true })
+    const program = fake.call("apps.resolve", {
+      path: platform === "macos" ? "/virtual/example.script" : "C:\\virtual\\example.script",
+    }).program
     fake.helper.desktop.activate("notes")
     fake.helper.desktop.select("notes-1", "notes.body")
     const focused = fake.call("ui.focused")
@@ -32,6 +174,7 @@ for (const platform of ["macos", "windows"] as const) {
       ["input.hold", { pid, combo: ["a"], ms: 10 }],
       ["input.click", { captureId: capture.captureId, x: 0, y: 0, button: "left", count: 1, modifiers: [] }],
       ["app.activate", { identity: fake.identity("calculator") }],
+      ["program.launch", { token: program.token, binding: program.binding, sessionId: "test", phaseRevision: 0 }],
       ["window.focus", { windowId: "calc-1" }],
       ["ui.perform", { ref: focused.ref, action: "AXPress" }],
       ["ui.setValue", { ref: focused.ref, value: "blocked" }],
@@ -54,6 +197,14 @@ for (const platform of ["macos", "windows"] as const) {
     expect(fake.call("input.type", { pid, text: "old phase", sessionId: "test", phaseRevision: 1 })).toMatchObject({
       code: "changed",
     })
+    expect(
+      fake.call("program.launch", {
+        token: program.token,
+        binding: program.binding,
+        sessionId: "test",
+        phaseRevision: 1,
+      }),
+    ).toMatchObject({ code: "changed" })
     expect(fake.call("input.type", { pid, text: "missing phase" })).toMatchObject({ code: "changed" })
     expect(fake.call("input.type", { pid, text: "allowed", sessionId: "test", phaseRevision: 2 })).toMatchObject({
       ok: true,
@@ -167,6 +318,510 @@ function at(header: Message, x: number, y: number) {
 
 const same = (a: Rgb, b: Rgb) => a[0] === b[0] && a[1] === b[1] && a[2] === b[2]
 
+describe("atomic native target binding", () => {
+  for (const platform of ["macos", "windows"] as const) {
+    test(`${platform} pointer operations match the observed window, reference and stable element`, () => {
+      const fake = start({ platform })
+      fake.begin(["calculator"])
+      const header = fake.capture({ display: fake.helper.desktop.displays[0]!.id }).header
+      const [x, y] = at(header, 70, 170)
+      for (const input of [
+        { op: "input.move" },
+        { op: "input.scroll", dx: 0, dy: 1 },
+        { op: "input.click", button: "left", count: 1, modifiers: [] },
+      ]) {
+        const hit = fake.call("ui.hittest", { captureId: header.captureId, x, y })
+        const expected = { windowId: hit.windowId, ref: hit.ref, elementId: hit.elementId }
+        for (const wrong of [{ windowId: "other-window" }, { ref: "other-ref" }, { elementId: "other-element" }])
+          expect(
+            fake.call(input.op, { ...input, captureId: header.captureId, x, y, ...expected, ...wrong }),
+          ).toMatchObject({ code: "changed" })
+        expect(fake.call(input.op, { ...input, captureId: header.captureId, x, y, ...expected })).toMatchObject({
+          ok: true,
+        })
+      }
+      expect(fake.helper.log.filter((entry) => entry.kind === "input")).toHaveLength(3)
+      fake.call("shutdown")
+    })
+
+    test(`${platform} a same-window control substitution is refused after a queued pointer request`, () => {
+      for (const input of [
+        { op: "input.click", button: "left", count: 1, modifiers: [] },
+        { op: "input.move" },
+        { op: "input.scroll", dx: 0, dy: 1 },
+      ]) {
+        const fake = start({ platform, latencyMs: 100 })
+        fake.begin(["calculator"])
+        fake.advance(100)
+        const captured = fake.send("capture", {
+          target: { display: fake.helper.desktop.displays[0]!.id },
+          budget: FULL_DISPLAY,
+          format: "jpeg",
+        })
+        fake.advance(100)
+        const header = fake.reply(captured)!
+        const [x, y] = at(header, 70, 170)
+        const inspected = fake.send("ui.hittest", { captureId: header.captureId, x, y })
+        fake.advance(100)
+        const hit = fake.reply(inspected)!
+        const pending = fake.send(input.op, {
+          ...input,
+          captureId: header.captureId,
+          x,
+          y,
+          windowId: hit.windowId,
+          ref: hit.ref,
+          elementId: hit.elementId,
+        })
+        const nodes = fake.helper.desktop.window("calc-1")!.nodes
+        const first = nodes.find((node) => node.id === "calculator.7")!
+        const second = nodes.find((node) => node.id === "calculator.8")!
+        const previous = { ...first.rect }
+        Object.assign(first.rect, second.rect)
+        Object.assign(second.rect, previous)
+        fake.advance(100)
+        expect(fake.reply(pending)).toMatchObject({ code: "changed" })
+        expect(fake.helper.log.filter((entry) => entry.kind === "input")).toEqual([])
+        fake.call("shutdown")
+      }
+    })
+
+    test(`${platform} keyboard operations also bind a stable element identity`, () => {
+      const fake = start({ platform, scenario: "notes" })
+      fake.begin(["notes"])
+      fake.control({ type: "focus", windowId: "notes-1", node: "notes.body" })
+      const before = fake.call("ui.focused")
+      const pid = fake.identity("notes").pid
+      for (const input of [
+        { op: "input.key", combo: ["a"], repeat: 1 },
+        { op: "input.type", text: "z" },
+        { op: "input.hold", combo: ["a"], ms: 1 },
+      ])
+        expect(
+          fake.call(input.op, {
+            ...input,
+            pid,
+            windowId: before.windowId,
+            ref: before.ref,
+            elementId: "different-field",
+          }),
+        ).toMatchObject({ code: "changed" })
+      expect(fake.helper.log.filter((entry) => entry.kind === "input")).toEqual([])
+      expect(fake.call("input.type", { pid, elementId: before.elementId, text: "z" })).toMatchObject({ ok: true })
+      expect(fake.call("ui.focused").ref).not.toBe(before.ref)
+      expect(fake.call("input.type", { pid, elementId: before.elementId, text: "z" })).toMatchObject({ ok: true })
+      fake.call("shutdown")
+    })
+
+    test(`${platform} a drag rechecks every point and its final release target`, () => {
+      const fake = start({ platform })
+      fake.begin(["calculator"])
+      const header = fake.capture({ display: fake.helper.desktop.displays[0]!.id }).header
+      const path = [70, 130, 190].map((globalX) => {
+        const [x, y] = at(header, globalX, 170)
+        return { x, y }
+      })
+      const targets = path.map((point) => {
+        const hit = fake.call("ui.hittest", { captureId: header.captureId, ...point })
+        return { windowId: hit.windowId, ref: hit.ref, elementId: hit.elementId }
+      })
+      const input = { captureId: header.captureId, path, targets, button: "left", modifiers: [] }
+      expect(
+        fake.call("input.drag", {
+          ...input,
+          targets: targets.map((target, index) =>
+            index === 1 ? { ...target, elementId: "substituted-middle-element" } : target,
+          ),
+        }),
+      ).toMatchObject({ code: "changed" })
+      expect(fake.call("input.drag", input)).toMatchObject({ ok: true })
+      const before = fake.helper.log.filter((entry) => entry.kind === "input").length
+      const nodeAt = fake.helper.desktop.nodeAt
+      let inspected = 0
+      fake.helper.desktop.nodeAt = (window, point) => {
+        const found = nodeAt(window, point)
+        if (++inspected === path.length) {
+          const final = window.nodes.find((node) => node.id === "calculator.9")!
+          const replacement = window.nodes.find((node) => node.id === "calculator.8")!
+          const previous = { ...final.rect }
+          Object.assign(final.rect, replacement.rect)
+          Object.assign(replacement.rect, previous)
+        }
+        return found
+      }
+      try {
+        expect(fake.call("input.drag", input)).toMatchObject({ code: "changed" })
+      } finally {
+        fake.helper.desktop.nodeAt = nodeAt
+      }
+      expect(fake.helper.log.filter((entry) => entry.kind === "input")).toHaveLength(before)
+      fake.call("shutdown")
+    })
+  }
+
+  test("raw helper drag envelopes retain the one-target-per-point schema refinement", () => {
+    const points = [
+      { x: 1, y: 1 },
+      { x: 2, y: 2 },
+    ]
+    const request = {
+      id: 1,
+      op: "input.drag",
+      captureId: "capture",
+      path: points,
+      targets: [{ windowId: "window" }, { windowId: "window" }],
+      button: "left",
+      modifiers: [],
+    }
+    const decode = Schema.decodeUnknownSync(Computer.helperRequest("input.drag"))
+    expect(decode(request)).toEqual(request)
+    expect(() => decode({ ...request, targets: request.targets.slice(0, 1) })).toThrow()
+    expect(() =>
+      decode({ ...request, targets: Array(Computer.LIMITS.dragPointsMax + 1).fill(request.targets[0]) }),
+    ).toThrow()
+    expect(
+      decode({
+        ...request,
+        path: Array(Computer.LIMITS.dragPointsMax).fill(points[0]),
+        targets: Array(Computer.LIMITS.dragPointsMax).fill(request.targets[0]),
+      }).targets,
+    ).toHaveLength(Computer.LIMITS.dragPointsMax)
+    const fake = start()
+    fake.begin(["calculator"])
+    const { id, op, ...args } = request
+    expect(fake.call(op, { ...args, targets: request.targets.slice(0, 1) })).toMatchObject({ code: "failed" })
+    expect(fake.helper.log.filter((entry) => entry.kind === "input")).toEqual([])
+  })
+})
+
+describe("fresh native observations for desktop main", () => {
+  for (const platform of ["macos", "windows"] as const) {
+    test(`${platform}: resolving a ref observes its exact generation and approved owner without writes`, () => {
+      const fake = start({ platform, scenario: "notes" })
+      fake.begin(["notes"], { paused: true, phaseRevision: 0 })
+      const tree = fake.call("ui.tree", { windowId: "notes-1", maxNodes: 100, maxDepth: 8 })
+      const title = tree.nodes.find((node: Message) => node.name === "Title")!
+      const desktop = fake.helper.desktop
+      const before = {
+        generation: desktop.generation,
+        frontmost: desktop.frontmost().pid,
+        cursor: { ...desktop.cursor },
+        value: desktop.window("notes-1")!.nodes.find((node) => node.id === "notes.title")!.value,
+      }
+      const resolved = fake.call("ui.resolve", { ref: title.ref })
+      expect(resolved).toMatchObject({
+        ok: true,
+        ref: title.ref,
+        owner: fake.identity("notes"),
+        windowId: "notes-1",
+        role: "AXTextField",
+        name: "Title",
+        enabled: true,
+        editable: true,
+        secure: false,
+      })
+      expect(typeof resolved.elementId).toBe("string")
+      expect(desktop.generation).toBe(before.generation)
+      expect(desktop.frontmost().pid).toBe(before.frontmost)
+      expect(desktop.cursor).toEqual(before.cursor)
+      expect(desktop.window("notes-1")!.nodes.find((node) => node.id === "notes.title")!.value).toBe(before.value)
+      expect(fake.helper.log.filter((entry) => ["input", "ui", "app", "program"].includes(entry.kind))).toEqual([])
+      desktop.setValue(desktop.window("notes-1")!.nodes.find((node) => node.id === "notes.title")!, "Changed title")
+      expect(fake.call("ui.resolve", { ref: title.ref })).toMatchObject({ code: "stale_ref" })
+      const fresh = fake
+        .call("ui.tree", { windowId: "notes-1", maxNodes: 100, maxDepth: 8 })
+        .nodes.find((node: Message) => node.name === "Title")!
+      const current = fake.call("ui.resolve", { ref: fresh.ref })
+      expect(current.elementId).toBe(resolved.elementId)
+      expect(current.ref).not.toBe(resolved.ref)
+      fake.call("session.update", { sessionId: "test", phaseRevision: 1, paused: true, approved: [] })
+      expect(fake.call("ui.resolve", { ref: fresh.ref })).toMatchObject({ code: "not_granted" })
+      fake.begin(["terminal"], { sessionId: "protected-owner", phaseRevision: 0, paused: true })
+      expect(fake.call("ui.resolve", { ref: `${desktop.generation}:terminal-1` })).toMatchObject({ code: "protected" })
+      expect(fake.helper.log.filter((entry) => ["input", "ui", "app", "program"].includes(entry.kind))).toEqual([])
+      fake.call("shutdown")
+    })
+
+    for (const enabled of [true, false])
+      test(`${platform}: each phased begin reports fresh ${enabled ? "live" : "missing"} detection before its acknowledgement`, () => {
+        const fake = start({ platform, scenario: "notes", ...(enabled ? {} : { disabled: ["userInput.detect"] }) })
+        for (const sessionId of ["first-run", "second-run"]) {
+          const start = fake.seen.length
+          const reply = fake.begin(["notes"], { sessionId, phaseRevision: 0, paused: true })
+          const messages = fake.seen.slice(start)
+          const detection = messages.filter((message) => message.event === "input_detection")
+          expect(detection).toEqual([
+            enabled
+              ? { event: "input_detection", alive: true }
+              : { event: "input_detection", alive: false, reason: "probe_missing" },
+          ])
+          expect(messages.indexOf(detection[0])).toBeLessThan(messages.indexOf(reply))
+          expect(reply.ok).toBe(true)
+        }
+        fake.call("shutdown")
+      })
+  }
+
+  test("macOS repeats the current secure-input refusal for a new phased session", () => {
+    const fake = start({ scenario: "notes" })
+    fake.control({ type: "focus", windowId: "notes-1", node: "notes.password" })
+    for (const sessionId of ["first-secure-run", "second-secure-run"]) {
+      const start = fake.seen.length
+      const reply = fake.begin(["notes"], { sessionId, phaseRevision: 0, paused: true })
+      const messages = fake.seen.slice(start)
+      const detection = messages.filter((message) => message.event === "input_detection")
+      expect(detection).toEqual([{ event: "input_detection", alive: false, reason: "secure_input", holder: "Notes" }])
+      expect(messages.indexOf(detection[0])).toBeLessThan(messages.indexOf(reply))
+    }
+    expect(fake.helper.log.filter((entry) => entry.kind === "input")).toEqual([])
+    fake.call("shutdown")
+  })
+})
+
+describe("observing the virtual OS pointer", () => {
+  for (const platform of ["macos", "windows"] as const) {
+    test(`${platform} reports actual native coordinates and display without input, focus or frame changes`, () => {
+      const fake = start({ platform, scenario: "multi-display" })
+      fake.begin(["notes"], { paused: true, phaseRevision: 0 })
+      fake.helper.desktop.cursor = { x: -700, y: -125 }
+      const frontmost = fake.helper.desktop.frontmost().pid
+      const generation = fake.helper.desktop.generation
+      const displayId = fake.helper.desktop.displays[1]!.id
+      expect(fake.call("cursor.position")).toMatchObject({ ok: true, x: -700, y: -125, displayId })
+      expect(fake.helper.desktop.cursor).toEqual({ x: -700, y: -125 })
+      expect(fake.helper.desktop.frontmost().pid).toBe(frontmost)
+      expect(fake.helper.desktop.generation).toBe(generation)
+      expect(fake.helper.log.filter((entry) => entry.kind === "input")).toEqual([])
+      fake.control({ type: "user_input", kind: "pointer", dx: 25, dy: 10 })
+      expect(fake.call("cursor.position")).toMatchObject({ ok: true, x: -675, y: -115, displayId })
+      fake.control({ type: "lock", locked: true })
+      expect(fake.call("cursor.position")).toMatchObject({ code: "locked" })
+      fake.call("shutdown")
+    })
+
+    test(`${platform} a real virtual move updates the observed pointer using capture scale and origin`, () => {
+      const fake = start({ platform, scenario: "multi-display" })
+      fake.begin(["notes"])
+      const displayId = fake.helper.desktop.displays[1]!.id
+      const header = fake.capture({ display: displayId }).header
+      const [x, y] = at(header, -650, -50)
+      expect(fake.call("input.move", { captureId: header.captureId, x, y })).toMatchObject({ ok: true })
+      expect(fake.call("cursor.position")).toMatchObject({
+        ok: true,
+        x: header.origin.x + (x + 0.5) / header.imageScale,
+        y: header.origin.y + (y + 0.5) / header.imageScale,
+        displayId,
+      })
+      fake.call("shutdown")
+    })
+  }
+
+  test("cursor observation is feature-gated and an off-display pointer is never replaced by a center", () => {
+    const absent = start({ disabled: ["cursor.position"] })
+    absent.begin(["calculator"])
+    expect(absent.call("cursor.position")).toMatchObject({ code: "unsupported_action" })
+    absent.call("shutdown")
+    const fake = start()
+    expect(fake.call("cursor.position")).toMatchObject({ code: "unavailable" })
+    fake.begin(["calculator"])
+    fake.helper.desktop.cursor = { x: 2000, y: 2000 }
+    expect(fake.call("cursor.position")).toMatchObject({ code: "out_of_bounds" })
+    expect(fake.helper.desktop.cursor).toEqual({ x: 2000, y: 2000 })
+    fake.call("shutdown")
+  })
+})
+
+describe("native approved identities retain their signer and unsigned process binding", () => {
+  for (const platform of ["macos", "windows"] as const) {
+    test(`${platform} an approved stable key cannot lose verification or change its signer`, () => {
+      for (const change of ["signer", "verification"] as const) {
+        const fake = start({ platform })
+        const slot = platform === "macos" ? "bank" : "calculator"
+        const windowId = platform === "macos" ? "bank-1" : "calc-1"
+        fake.begin([slot])
+        fake.control({ type: "focus", windowId })
+        const header = fake.capture({ windowId }).header
+        const input = { captureId: header.captureId, x: 10, y: 10 }
+        expect(fake.call("input.move", input)).toMatchObject({ ok: true })
+        const identity = fake.identity(slot)
+        const key = Computer.appKey(identity)
+        Object.assign(
+          identity,
+          change === "verification"
+            ? { verified: false }
+            : platform === "macos"
+              ? { teamId: "OTHERTEAM1" }
+              : { publisher: "Different publisher" },
+        )
+        expect(Computer.appKey(identity)).toBe(key)
+        expect(fake.call("input.move", input)).toMatchObject({ code: "not_granted" })
+        expect(fake.helper.log.filter((entry) => entry.kind === "input")).toHaveLength(1)
+        fake.call("shutdown")
+      }
+    })
+
+    test(`${platform} unsigned task consent requires its exact canonical path and live process`, () => {
+      for (const change of ["path", "pid", "missing-pid", "uncanonical-path"] as const) {
+        const fake = start({ platform, scenario: "notes" })
+        const app = fake.helper.desktop.app("notes")!
+        Object.assign(app.identity, {
+          verified: false,
+          system: false,
+          ...(platform === "macos" ? { apple: false } : { publisher: "" }),
+        })
+        if (change === "missing-pid") Object.assign(app.identity, { pid: undefined })
+        if (change === "uncanonical-path")
+          Object.assign(
+            app.identity,
+            platform === "macos" ? { path: "/Applications/../Unsigned.app" } : { exe: "C:\\virtual\\..\\Unsigned.exe" },
+          )
+        fake.begin(["notes"])
+        const header = fake.capture({ display: fake.helper.desktop.displays[0]!.id }).header
+        const [x, y] = at(header, 400, 200)
+        const input = { captureId: header.captureId, x, y }
+        if (change === "missing-pid" || change === "uncanonical-path") {
+          expect(fake.call("input.move", input)).toMatchObject({ code: "not_granted" })
+          expect(fake.helper.log.filter((entry) => entry.kind === "input")).toEqual([])
+          fake.call("shutdown")
+          continue
+        }
+        expect(fake.call("input.move", input)).toMatchObject({ ok: true })
+        if (change === "path")
+          Object.assign(
+            app.identity,
+            platform === "macos" ? { path: "/Applications/Different.app" } : { exe: "C:\\virtual\\Different.exe" },
+          )
+        if (change === "pid") {
+          Object.assign(app, { pid: app.pid + 1000 })
+          Object.assign(app.identity, { pid: app.pid })
+        }
+        expect(fake.call("input.move", input)).toMatchObject({ code: "not_granted" })
+        expect(fake.helper.log.filter((entry) => entry.kind === "input")).toHaveLength(1)
+        fake.call("shutdown")
+      }
+    })
+
+    test(`${platform} a restarted signed process cannot reuse the previous pointer target witness`, () => {
+      const fake = start({ platform })
+      fake.begin(["calculator"])
+      const app = fake.helper.desktop.app("calculator")!
+      const header = fake.capture({ windowId: "calc-1" }).header
+      const hit = fake.call("ui.hittest", { captureId: header.captureId, x: 20, y: 100 })
+      const expected = { pid: app.pid, windowId: hit.windowId, ref: hit.ref, elementId: hit.elementId }
+      Object.assign(app, { pid: app.pid + 1000 })
+      Object.assign(app.identity, { pid: app.pid })
+      const input = { captureId: header.captureId, x: 20, y: 100, ...expected }
+      expect(fake.call("input.move", input)).toMatchObject({ code: "changed" })
+      expect(fake.call("input.click", { ...input, button: "left", count: 1, modifiers: [] })).toMatchObject({
+        code: "changed",
+      })
+      expect(fake.call("input.scroll", { ...input, dx: 0, dy: 1 })).toMatchObject({ code: "changed" })
+      expect(
+        fake.call("input.drag", {
+          captureId: header.captureId,
+          path: [
+            { x: 20, y: 100 },
+            { x: 21, y: 101 },
+          ],
+          targets: [expected, expected],
+          button: "left",
+          modifiers: [],
+        }),
+      ).toMatchObject({ code: "changed" })
+      expect(fake.helper.log.filter((entry) => entry.kind === "input")).toEqual([])
+      expect(fake.call("input.move", { ...input, pid: app.pid })).toMatchObject({ ok: true })
+      fake.call("shutdown")
+    })
+  }
+
+  test("unsigned identities with an absent executable path cannot share two missing path fields", () => {
+    for (const platform of ["macos", "windows"] as const) {
+      const fake = start({ platform })
+      const slot = platform === "macos" ? "notes" : "calculator"
+      const windowId = platform === "macos" ? "notes-1" : "calc-1"
+      const identity = fake.identity(slot)
+      Object.assign(identity, {
+        verified: false,
+        system: false,
+        ...(platform === "macos" ? { apple: false, path: undefined } : { exe: undefined }),
+      })
+      fake.begin([slot])
+      expect(fake.call("ui.tree", { windowId, maxNodes: 10, maxDepth: 3 })).toMatchObject({ code: "not_granted" })
+      expect(fake.helper.log.filter((entry) => entry.kind === "input")).toEqual([])
+      fake.call("shutdown")
+    }
+  })
+
+  test("pointer PIDs are optional positive witnesses while keyboard PIDs remain required", () => {
+    const click = { id: 1, op: "input.click", captureId: "cap", x: 1, y: 1, button: "left", count: 1, modifiers: [] }
+    const decode = Schema.decodeUnknownSync(Computer.helperRequest("input.click"))
+    expect(decode(click)).not.toHaveProperty("pid")
+    expect(decode({ ...click, pid: 123 })).toHaveProperty("pid", 123)
+    expect(() => decode({ ...click, pid: 0 })).toThrow()
+    for (const [op, args] of [
+      ["input.key", { combo: ["a"], repeat: 1 }],
+      ["input.type", { text: "x" }],
+      ["input.hold", { combo: ["a"], ms: 1 }],
+    ] as const) {
+      const decode = Schema.decodeUnknownSync(Computer.helperRequest(op))
+      expect(() => decode({ id: 1, op, ...args })).toThrow()
+      expect(decode({ id: 1, op, ...args, pid: 123 })).toHaveProperty("pid", 123)
+    }
+  })
+})
+
+describe("native reference actions retain their observed process and element", () => {
+  for (const platform of ["macos", "windows"] as const) {
+    for (const action of ["perform", "setValue"] as const) {
+      test(`${platform} ui.${action} refuses a substituted signed process before changing its control`, () => {
+        const fake = start({ platform, scenario: action === "setValue" ? "notes" : "calculator" })
+        const slot = action === "setValue" ? "notes" : "calculator"
+        const windowId = action === "setValue" ? "notes-1" : "calc-1"
+        fake.begin([slot])
+        const app = fake.helper.desktop.app(slot)!
+        const node = fake.helper.desktop
+          .window(windowId)!
+          .nodes.find((node) => node.id === (action === "setValue" ? "notes.body" : "calculator.7"))!
+        const before = node.value
+        const tree = fake.call("ui.tree", { windowId, maxNodes: 50, maxDepth: 4 })
+        const ref = tree.nodes.find((item: Message) => item.name === node.name).ref
+        const hit = fake.call("ui.resolve", { ref })
+        const expected = { pid: app.pid, elementId: hit.elementId }
+        const args = action === "perform" ? { ref, action: "AXPress" } : { ref, value: "replacement" }
+        expect(fake.call(`ui.${action}`, { ...args, ...expected, elementId: "different-element" })).toMatchObject({
+          code: "changed",
+        })
+        Object.assign(app, { pid: app.pid + 1000 })
+        Object.assign(app.identity, { pid: app.pid })
+        expect(fake.call(`ui.${action}`, { ...args, ...expected })).toMatchObject({ code: "changed" })
+        expect(node.value).toBe(before)
+        expect(fake.helper.log.filter((entry) => entry.kind === "ui")).toEqual([])
+        expect(fake.call(`ui.${action}`, { ...args, ...expected, pid: app.pid })).toMatchObject({
+          ok: true,
+          took: true,
+        })
+        fake.call("shutdown")
+      })
+    }
+  }
+
+  test("reference-action owner witnesses must be positive when supplied", () => {
+    for (const [op, args] of [
+      ["ui.perform", { ref: "node", action: "AXPress" }],
+      ["ui.setValue", { ref: "node", value: "text" }],
+    ] as const) {
+      const decode = Schema.decodeUnknownSync(Computer.helperRequest(op))
+      expect(decode({ id: 1, op, ...args, pid: 123, elementId: "element" })).toMatchObject({
+        pid: 123,
+        elementId: "element",
+      })
+      expect(() => decode({ id: 1, op, ...args, pid: 0 })).toThrow()
+      expect(() => decode({ id: 1, op, ...args, pid: -1 })).toThrow()
+      expect(() => decode({ id: 1, op, ...args, elementId: "" })).toThrow()
+    }
+  })
+})
+
 /** `masked` must be exactly the painted blocks: every pixel in a rect is a block, every block pixel is in a rect. */
 function expectMaskedIsPainted(header: Message, image: Image) {
   const rects = header.masked as { x: number; y: number; w: number; h: number }[]
@@ -273,6 +928,40 @@ describe("conformance transcripts", () => {
 })
 
 describe("capture privacy", () => {
+  for (const platform of ["macos", "windows"] as const) {
+    test(`${platform}: hiddenCount counts visible app owners once and excludes furniture and occluded apps`, () => {
+      const fake = start({ platform })
+      fake.begin(["calculator"])
+      const desktop = fake.helper.desktop
+      const window = (id: string, bounds: Computer.Rect, windowId = id) => ({
+        ...desktop.window(id)!,
+        windowId,
+        bounds,
+        nodes: [],
+      })
+      // One approved window splits Notes into two painted pieces. A second Notes window still contributes
+      // one app, while Bank is fully covered or offscreen. The notification host stays masked but uncounted.
+      desktop.stack = () => [
+        desktop.window(OVERLAY)!,
+        window("calc-1", { x: 100, y: 0, w: 100, h: 200 }),
+        window("toast-1", { x: 0, y: 220, w: 50, h: 50 }),
+        window("vector-1", { x: 200, y: 220, w: 50, h: 50 }),
+        window("notes-1", { x: 300, y: 220, w: 50, h: 50 }, "notes-second"),
+        window("notes-1", { x: 0, y: 0, w: 300, h: 200 }),
+        window("bank-1", { x: 100, y: 0, w: 100, h: 200 }),
+        window("bank-1", { x: 1100, y: 0, w: 100, h: 200 }, "bank-offscreen"),
+        window("calc-1", desktop.displays[0]!.bounds, "approved-background"),
+      ]
+      const { header, image } = fake.capture({ display: desktop.displays[0]!.id })
+      expect(header).toMatchObject({ ok: true, hiddenCount: 2 })
+      expect(header.masked).toHaveLength(5)
+      expect(pixel(image!, ...at(header, 10, 230))).toEqual(COLORS.mask)
+      expect(pixel(image!, ...at(header, 210, 230))).toEqual(COLORS.vector)
+      expectMaskedIsPainted(header, image!)
+      fake.call("shutdown")
+    })
+  }
+
   test("a display capture shows approved apps and the desktop furniture, and paints everything else", () => {
     const fake = start()
     expect(fake.begin(["calculator"]).ok).toBe(true)
@@ -1324,6 +2013,7 @@ describe("options", () => {
     // The overlay is one of Vector's windows, so it is painted as a Vector block over the whole display.
     expect(pixel(image!, ...at(header, 60, 200))).toEqual(COLORS.vector)
     expect(header.masked).toContainEqual({ x: 0, y: 0, w: 1000, h: 640 })
+    expect(header.hiddenCount).toBe(0) // The overlay host hides every regular app but is not itself an app count.
     expectMaskedIsPainted(header, image!)
     // It still takes no clicks, so a click goes to the window under it.
     const [x, y] = at(header, 70, 170)
@@ -1460,16 +2150,31 @@ describe("options", () => {
       expect(run(...argv).code).toBe(2)
   })
 
-  test("the fake's sources stay Node-only: no Bun APIs, and only node:, effect and the shared schemas", async () => {
-    for (const file of ["fake-helper.ts", "fake-desktop.ts", "png.ts", "transcript.ts"]) {
-      const source = await Bun.file(path.join(import.meta.dir, file)).text()
+  test("the fake's import graph stays Node-only, including the exact shared program identity module", async () => {
+    const program = path.resolve(import.meta.dir, "../../../core/src/computer/program.ts")
+    const pending = ["fake-helper.ts", "fake-desktop.ts", "png.ts", "transcript.ts"].map((file) =>
+      path.join(import.meta.dir, file),
+    )
+    const seen = new Set<string>()
+    while (pending.length) {
+      const file = pending.shift()!
+      if (seen.has(file)) continue
+      seen.add(file)
+      const source = await Bun.file(file).text()
       expect(source).not.toMatch(/\bBun\.|["']bun(?::[\w-]+)?["']/)
       const specifiers = [...source.matchAll(/^import[^"']*["']([^"']+)["']/gm)].map((match) => match[1]!)
       expect(specifiers.length).toBeGreaterThan(0)
-      for (const specifier of specifiers)
+      for (const specifier of specifiers) {
+        if (specifier === "@vectordevai/core/computer/program") {
+          pending.push(program)
+          continue
+        }
         expect(specifier).toMatch(
           /^(?:node:[\w/]+|effect|@vectordevai\/schema\/[\w-]+|\.\/[\w-]+|\.\.\/\.\.\/native\/computer-helper\/[\w-]+\.json)$/,
         )
+        if (specifier.startsWith("./")) pending.push(path.resolve(path.dirname(file), `${specifier}.ts`))
+      }
     }
+    expect(seen.has(program)).toBe(true)
   })
 })

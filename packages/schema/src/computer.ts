@@ -294,6 +294,37 @@ export const AppKey = Schema.String.check(
   Schema.makeFilter((value: string) => parseAppKey(value) !== undefined, { expected: "an app key" }),
 ).annotate({ identifier: "Computer.AppKey" })
 
+/** A resolved artifact is not an app, and its launch approval never grants screen or input access. */
+export const ProgramKey = Schema.String.check(Schema.isPattern(/^program:(?:macos|windows):[0-9a-f]{64}$/)).annotate({
+  identifier: "Computer.ProgramKey",
+})
+export type ProgramKey = typeof ProgramKey.Type
+export interface ProgramLaunch extends Schema.Schema.Type<typeof ProgramLaunch> {}
+export const ProgramLaunch = Schema.Struct({
+  key: ProgramKey,
+  platform: Schema.Literals(["macos", "windows"]),
+  path: Path,
+  name: Safe(256).check(Schema.isMinLength(1)),
+  /** Native hash of the canonical artifact contents and its verified launch-handler binding. */
+  binding: Schema.String.check(Schema.isPattern(/^[0-9a-f]{64}$/)),
+}).annotate({ identifier: "Computer.ProgramLaunch" })
+/** Ephemeral helper authority stays on the desktop; it is never sent to the engine or saved in an ask. */
+export interface NativeProgramLaunch extends Schema.Schema.Type<typeof NativeProgramLaunch> {}
+export const NativeProgramLaunch = Schema.Struct({
+  ...ProgramLaunch.fields,
+  token: Id,
+  /** Native-observed handler identity for desktop policy checks; never sent to the engine or stored in an ask. */
+  handler: optional(AppIdentity),
+}).annotate({
+  identifier: "Computer.NativeProgramLaunch",
+})
+export const LaunchResolution = Schema.Union([
+  Schema.Struct({ kind: Schema.Literal("app"), identity: AppIdentity }),
+  Schema.Struct({ kind: Schema.Literal("program"), program: NativeProgramLaunch }),
+  Schema.Struct({ kind: Schema.Literal("protected"), reason: BlockReason }),
+]).annotate({ identifier: "Computer.LaunchResolution" })
+export type LaunchResolution = typeof LaunchResolution.Type
+
 // ---------------------------------------------------------------------------------------------------------------
 // Error codes and availability (section 2.8)
 
@@ -419,7 +450,7 @@ export const SensitiveAskMetadata = Schema.Struct({
   why: SensitiveWhy,
   target: Schema.Struct({
     appName: Safe(256),
-    appKey: AppKey,
+    appKey: Schema.Union([AppKey, ProgramKey]),
     /** Observed target identity for the desktop's live, once-only proof check. */
     windowId: optional(Id),
     pid: optional(PositiveInt),
@@ -434,6 +465,7 @@ export const SensitiveAskMetadata = Schema.Struct({
   clipboardHash: optional(Schema.String.check(Schema.isPattern(/^[0-9a-f]{64}$/))),
   /** `run_program`: the full path. */
   path: optional(Path),
+  program: optional(ProgramLaunch),
   /** `new_destination`: shown in full. */
   destination: optional(Bounded(2048)),
   providerCheck: optional(
@@ -448,7 +480,21 @@ export const SensitiveAskMetadata = Schema.Struct({
   stepIndex: optional(NonNegativeInt),
   /** SHA-256 of the canonical proposed step. Desktop matches it before consuming the once-only approval. */
   stepDigest: optional(Schema.String.check(Schema.isPattern(/^[0-9a-f]{64}$/))),
-}).annotate({ identifier: "Computer.SensitiveAskMetadata" })
+})
+  .check(
+    Schema.makeFilter(
+      (value) =>
+        !value.target.appKey.startsWith("program:")
+          ? value.program === undefined
+          : value.action === "open" &&
+            value.why === "run_program" &&
+            value.program !== undefined &&
+            value.program.key === value.target.appKey &&
+            value.path === value.program.path,
+      { expected: "a program identity only for its explicit run-program approval" },
+    ),
+  )
+  .annotate({ identifier: "Computer.SensitiveAskMetadata" })
 
 export const HandoffReason = Schema.Literals([
   "credential",
@@ -752,6 +798,8 @@ export const InspectResult = Schema.Struct({
     }),
   ),
   document: optional(Path),
+  /** `none` is a positive native observation of a non-file editor, not a missing document lookup. */
+  documentStatus: optional(Schema.Literals(["none", "known", "unknown"])),
   clipboard: Schema.Struct({
     agentOwned: Schema.Boolean,
     /** Complete text only, never a truncated preview. Desktop still checks the live clipboard before input. */
@@ -928,7 +976,7 @@ export const ScreenshotResponse = Schema.Struct({
   image: ImageData,
   /** Approved apps visible in the frame. */
   visible: Schema.Array(AppIdentity),
-  /** Windows painted out of the frame. */
+  /** Distinct regular app owners with visible masked pixels, excluding overlays and system furniture. */
   hiddenCount: NonNegativeInt,
   pointer: optional(Point),
 }).annotate({ identifier: "Computer.ScreenshotResponse" })
@@ -974,6 +1022,13 @@ export const BridgeCommands = {
     request: command("remember", { identity: AppIdentity, requestID: RequestID }),
     response: Schema.Struct({ saved: Schema.Boolean }),
   },
+  prepareOpen: {
+    request: command("prepareOpen", { lease: Lease, app: OpenTarget }),
+    response: Schema.Union([
+      Schema.Struct({ kind: Schema.Literal("app"), identity: AppIdentity }),
+      Schema.Struct({ kind: Schema.Literal("program"), program: ProgramLaunch }),
+    ]),
+  },
   listApps: {
     request: command("listApps", { lease: Lease, query: optional(Bounded(256)), installed: optional(Schema.Boolean) }),
     response: ListAppsResponse,
@@ -981,12 +1036,22 @@ export const BridgeCommands = {
   openApp: {
     request: command("openApp", {
       lease: Lease,
-      app: OpenTarget,
+      app: Schema.Union([...OpenTarget.members, Schema.Struct({ program: ProgramLaunch })]),
       background: optional(Schema.Boolean),
       /** A path launch requires the desktop's observed, once-approved run_program request. */
       requestID: optional(RequestID),
     }),
-    response: Schema.Struct({ identity: AppIdentity, launched: Schema.Boolean }),
+    response: Schema.Union([
+      Schema.Struct({ identity: AppIdentity, launched: Schema.Boolean }),
+      Schema.Struct({ program: ProgramLaunch, launched: Schema.Literal(true) }),
+      Schema.Struct({
+        pending: Schema.Struct({
+          kind: Schema.Literal("sensitive"),
+          why: Schema.Literal("run_program"),
+          program: ProgramLaunch,
+        }),
+      }),
+    ]),
   },
   focusWindow: {
     request: command("focusWindow", { lease: Lease, app: AppQuery, window: optional(Id) }),
@@ -1078,6 +1143,7 @@ export const BridgeRequest = Schema.Union([
   BridgeCommands.access.request,
   BridgeCommands.grant.request,
   BridgeCommands.remember.request,
+  BridgeCommands.prepareOpen.request,
   BridgeCommands.listApps.request,
   BridgeCommands.openApp.request,
   BridgeCommands.focusWindow.request,
@@ -1137,6 +1203,7 @@ export const HelperFeature = Schema.Literals([
   "capture.window",
   "capture.exclude",
   "capture.zoom",
+  "cursor.position",
   "input.pointer",
   "input.keyboard",
   "input.unicode",
@@ -1145,6 +1212,8 @@ export const HelperFeature = Schema.Literals([
   "ui.secureFieldDetect",
   "apps.list",
   "apps.open",
+  "apps.resolve",
+  "program.launch",
   "clipboard",
   "stop.esc",
   "stop.chord",
@@ -1217,6 +1286,14 @@ export const DisplayInfo = Schema.Struct({
   primary: Schema.Boolean,
 }).annotate({ identifier: "Computer.DisplayInfo" })
 
+export interface NativeCursor extends Schema.Schema.Type<typeof NativeCursor> {}
+export const NativeCursor = Schema.Struct({
+  /** Global helper units: macOS points or Windows physical pixels, never frame pixels or Electron DIP. */
+  x: Schema.Finite,
+  y: Schema.Finite,
+  displayId: Id,
+}).annotate({ identifier: "Computer.NativeCursor" })
+
 export interface HelperApp extends Schema.Schema.Type<typeof HelperApp> {}
 export const HelperApp = Schema.Struct({
   identity: AppIdentity,
@@ -1252,12 +1329,16 @@ export const CaptureHeader = Schema.Struct({
   height: PositiveInt,
   /** Global origin of the capture in helper units. */
   origin: Schema.Struct({ x: Schema.Finite, y: Schema.Finite }),
+  /** Image pixels per native helper unit (macOS points / Windows physical pixels). */
   imageScale: Scale,
   dpiScale: optional(Scale),
   displayId: Id,
   capturedAtMs: Millis,
   /** Painted blocks, in image pixels. */
   masked: Schema.Array(Rect),
+  /** Distinct regular app owners with visible masked pixels, including Vector's main app but excluding overlays,
+   * desktop furniture and system notification hosts. Required native fact, never a mask-rectangle estimate. */
+  hiddenCount: NonNegativeInt,
   hash: Hash,
   imageBytes: PositiveInt.check(Schema.isLessThanOrEqualTo(LIMITS.helperFrameBytes)),
 }).annotate({ identifier: "Computer.CaptureHeader" })
@@ -1304,6 +1385,7 @@ export const HitResult = Schema.Struct({
   elevated: optional(Schema.Boolean),
   /** Helper-observed context, never model assertions. Missing observations do not waive live gates. */
   document: optional(Path),
+  documentStatus: InspectResult.fields.documentStatus,
   programPath: optional(Path),
   layout: InspectResult.fields.layout,
   focusedMenuShortcuts: InspectResult.fields.focusedMenuShortcuts,
@@ -1312,13 +1394,24 @@ export const HitResult = Schema.Struct({
 /**
  * Input ops. Each is atomic in the helper: the ownership check and the posting happen in one call, and held keys and
  * buttons are released in the same call. Pointer ops carry frame pixels of the named capture; keyboard ops carry the
- * pid the focused app must belong to. When provided, windowId and ref bind the live focused window and native
- * element reference too; the helper checks all three immediately before posting.
+ * pid the focused app must belong to. Expected windowId/ref/elementId bind the helper's actual live target, and a
+ * drag can bind every point separately. The helper checks these immediately before posting or releasing a drag.
  */
+const ExpectedInputTarget = {
+  windowId: optional(WindowId),
+  ref: optional(Id),
+  elementId: optional(Id),
+}
+const ExpectedPointerTarget = { ...ExpectedInputTarget, pid: optional(PositiveInt) }
+
+/** An independently observed owner/element for an action addressed by a native reference. */
+export type NativeElementTarget = { readonly pid?: number; readonly elementId?: string }
+
 export const InputOp = Schema.Union([
   Schema.Struct({
     op: Schema.Literal("input.click"),
     ...ExpectedPhase,
+    ...ExpectedPointerTarget,
     captureId: Id,
     x: Schema.Int,
     y: Schema.Int,
@@ -1326,18 +1419,33 @@ export const InputOp = Schema.Union([
     count: Schema.Literals([1, 2, 3]),
     modifiers: Modifiers,
   }),
-  Schema.Struct({ op: Schema.Literal("input.move"), ...ExpectedPhase, captureId: Id, x: Schema.Int, y: Schema.Int }),
+  Schema.Struct({
+    op: Schema.Literal("input.move"),
+    ...ExpectedPhase,
+    ...ExpectedPointerTarget,
+    captureId: Id,
+    x: Schema.Int,
+    y: Schema.Int,
+  }),
   Schema.Struct({
     op: Schema.Literal("input.drag"),
     ...ExpectedPhase,
     captureId: Id,
     path: Schema.Array(Point).check(Schema.isLengthBetween(LIMITS.dragPointsMin, LIMITS.dragPointsMax)),
+    targets: optional(
+      Schema.Array(Schema.Struct(ExpectedPointerTarget)).check(Schema.isMaxLength(LIMITS.dragPointsMax)),
+    ),
     button: Button,
     modifiers: Modifiers,
-  }),
+  }).check(
+    Schema.makeFilter((request) => request.targets === undefined || request.targets.length === request.path.length, {
+      expected: "one expected target for each drag point",
+    }),
+  ),
   Schema.Struct({
     op: Schema.Literal("input.scroll"),
     ...ExpectedPhase,
+    ...ExpectedPointerTarget,
     captureId: Id,
     unit: optional(Schema.Literal("pixel")),
     x: Schema.Int,
@@ -1349,8 +1457,7 @@ export const InputOp = Schema.Union([
     op: Schema.Literal("input.key"),
     ...ExpectedPhase,
     pid: PositiveInt,
-    windowId: optional(WindowId),
-    ref: optional(Id),
+    ...ExpectedInputTarget,
     combo: Schema.Array(KeyName).check(Schema.isLengthBetween(1, 8)),
     repeat: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: LIMITS.repeatMax })),
   }),
@@ -1358,16 +1465,14 @@ export const InputOp = Schema.Union([
     op: Schema.Literal("input.type"),
     ...ExpectedPhase,
     pid: PositiveInt,
-    windowId: optional(WindowId),
-    ref: optional(Id),
+    ...ExpectedInputTarget,
     text: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(LIMITS.typeTextChars)),
   }),
   Schema.Struct({
     op: Schema.Literal("input.hold"),
     ...ExpectedPhase,
     pid: PositiveInt,
-    windowId: optional(WindowId),
-    ref: optional(Id),
+    ...ExpectedInputTarget,
     combo: Schema.Array(KeyName).check(Schema.isLengthBetween(1, 8)),
     ms: Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: LIMITS.holdSecondsMax * 1000 })),
   }),
@@ -1410,9 +1515,15 @@ export const HelperOps = {
   "session.end": { args: op("session.end", {}), result: Schema.Struct({}) },
   heartbeat: { args: op("heartbeat", {}), result: Schema.Struct({}) },
   "displays.list": { args: op("displays.list", {}), result: Schema.Struct({ displays: Schema.Array(DisplayInfo) }) },
+  "cursor.position": { args: op("cursor.position", {}), result: NativeCursor },
   "apps.list": {
     args: op("apps.list", { installed: optional(Schema.Boolean) }),
     result: Schema.Struct({ apps: Schema.Array(HelperApp) }),
+  },
+  "apps.resolve": { args: op("apps.resolve", { path: Path }), result: LaunchResolution },
+  "program.launch": {
+    args: op("program.launch", { token: Id, binding: ProgramLaunch.fields.binding, ...ExpectedPhase }),
+    result: Schema.Struct({ launched: Schema.Literal(true) }),
   },
   "app.activate": {
     args: op("app.activate", { identity: AppIdentity, ...ExpectedPhase }),
@@ -1430,12 +1541,26 @@ export const HelperOps = {
   "ui.tree": { args: TreeRequest, result: TreeResult },
   "ui.hittest": { args: op("ui.hittest", { captureId: Id, x: Schema.Int, y: Schema.Int }), result: HitResult },
   "ui.focused": { args: op("ui.focused", {}), result: HitResult },
+  /** Re-resolves a generation-bound native element without changing focus or requiring a screenshot. */
+  "ui.resolve": { args: op("ui.resolve", { ref: Id }), result: HitResult },
   "ui.perform": {
-    args: op("ui.perform", { ref: Id, action: Bounded(64), ...ExpectedPhase }),
+    args: op("ui.perform", {
+      ref: Id,
+      action: Bounded(64),
+      pid: optional(PositiveInt),
+      elementId: optional(Id),
+      ...ExpectedPhase,
+    }),
     result: Schema.Struct({ took: optional(Schema.Boolean) }),
   },
   "ui.setValue": {
-    args: op("ui.setValue", { ref: Id, value: Bounded(LIMITS.typeTextChars), ...ExpectedPhase }),
+    args: op("ui.setValue", {
+      ref: Id,
+      value: Bounded(LIMITS.typeTextChars),
+      pid: optional(PositiveInt),
+      elementId: optional(Id),
+      ...ExpectedPhase,
+    }),
     result: Schema.Struct({ took: optional(Schema.Boolean) }),
   },
   "input.click": { args: InputOp.members[0], result: Schema.Struct({}) },
@@ -1465,8 +1590,18 @@ export const HelperOpName = Schema.Literals(Object.keys(HelperOps) as HelperOpNa
 /** A request frame `{id, op, ...args}` for one op. */
 export function helperRequest<O extends HelperOpName>(name: O) {
   const args = HelperOps[name].args as Schema.Top
-  const withId = (member: Schema.Top) =>
-    Schema.Struct({ id: HelperRequestId, ...(member as Schema.Struct<Schema.Struct.Fields>).fields })
+  const withId = (member: Schema.Top) => {
+    const matches = Schema.is(member)
+    return Schema.Struct({ id: HelperRequestId, ...(member as Schema.Struct<Schema.Struct.Fields>).fields }).check(
+      Schema.makeFilter(
+        (value) => {
+          const { id, ...body } = value
+          return matches(body)
+        },
+        { expected: `valid ${name} request` },
+      ),
+    )
+  }
   if (args.ast._tag === "Union") {
     const members = (args as unknown as { readonly members: readonly Schema.Top[] }).members
     return Schema.Union(members.map(withId))
@@ -1477,12 +1612,22 @@ export function helperRequest<O extends HelperOpName>(name: O) {
 /** A success frame `{id, ok: true, ...result}` for one op. */
 export function helperResponse<O extends HelperOpName>(name: O) {
   const result = HelperOps[name].result as Schema.Top
-  const withOk = (member: Schema.Top) =>
-    Schema.Struct({
+  const withOk = (member: Schema.Top) => {
+    const matches = Schema.is(member)
+    return Schema.Struct({
       id: HelperRequestId,
       ok: Schema.Literal(true),
       ...(member as Schema.Struct<Schema.Struct.Fields>).fields,
-    })
+    }).check(
+      Schema.makeFilter(
+        (value) => {
+          const { id, ok, ...body } = value
+          return matches(body)
+        },
+        { expected: `valid ${name} response` },
+      ),
+    )
+  }
   if (result.ast._tag === "Union") {
     const members = (result as unknown as { readonly members: readonly Schema.Top[] }).members
     return Schema.Union(members.map(withOk))
@@ -1548,7 +1693,10 @@ export interface ComputerBackend {
   endSession(): Promise<void>
   heartbeat(): Promise<void>
   displays(): Promise<DisplayInfo[]>
+  cursorPosition(): Promise<NativeCursor>
   apps(q?: { installed?: boolean }): Promise<HelperApp[]>
+  resolveLaunch(path: string): Promise<LaunchResolution>
+  launchProgram(program: NativeProgramLaunch, phase?: NativePhase): Promise<void>
   activate(app: AppIdentity, phase?: NativePhase): Promise<void>
   launch(target: AppIdentity | { path: string }, phase?: NativePhase): Promise<void>
   focusWindow(id: string, phase?: NativePhase): Promise<void>
@@ -1557,8 +1705,9 @@ export interface ComputerBackend {
   tree(req: TreeRequest, deadlineMs: number): Promise<TreeResult>
   hitTest(captureId: string, x: number, y: number): Promise<HitResult>
   focused(): Promise<HitResult>
-  perform(ref: string, action: string, phase?: NativePhase): Promise<{ took?: boolean }>
-  setValue(ref: string, value: string, phase?: NativePhase): Promise<{ took?: boolean }>
+  resolveRef(ref: string): Promise<HitResult>
+  perform(ref: string, action: string, phase?: NativePhase, expected?: NativeElementTarget): Promise<{ took?: boolean }>
+  setValue(ref: string, value: string, phase?: NativePhase, expected?: NativeElementTarget): Promise<{ took?: boolean }>
   input(op: InputOp, deadlineMs: number): Promise<void>
   releaseAll(): Promise<number>
   cancel(id?: string): Promise<void>

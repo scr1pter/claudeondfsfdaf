@@ -30,7 +30,13 @@ export type GateContext = {
 }
 
 export type GateResult =
-  | { verdict: "ok"; inspect: Computer.InspectResult; hit: Computer.HitResult; point?: Computer.Point }
+  | {
+      verdict: "ok"
+      inspect: Computer.InspectResult
+      hit: Computer.HitResult
+      hits: Computer.HitResult[]
+      point?: Computer.Point
+    }
   | { verdict: "refuse"; code: Computer.ComputerErrorCode }
   | { verdict: "pending"; kind: "app" | "sensitive"; why?: Computer.SensitiveWhy; inspect: Computer.InspectResult }
 
@@ -83,6 +89,7 @@ export async function checkStep(step: Computer.Step, ctx: GateContext): Promise<
       },
       clipboard: { agentOwned: false },
       ...(hit.document ? { document: hit.document } : {}),
+      ...(hit.documentStatus ? { documentStatus: hit.documentStatus } : {}),
       ...(hit.programPath ? { programPath: hit.programPath } : {}),
       ...(hit.layout ? { layout: hit.layout } : {}),
       ...(hit.focusedMenuShortcuts ? { focusedMenuShortcuts: hit.focusedMenuShortcuts } : {}),
@@ -121,7 +128,12 @@ export async function checkStep(step: Computer.Step, ctx: GateContext): Promise<
       inspect = { ...inspect, programPath: canonical }
     }
     // File editors without a resolvable document cannot establish that an edit avoids protected instructions.
-    if ((category === "office" || category === "files") && editsText(step, inspect) && !inspect.document)
+    if (
+      (category === "office" || category === "files") &&
+      editsText(step, inspect) &&
+      !inspect.document &&
+      hit.documentStatus !== "none"
+    )
       return refuse("blocked")
     inspections.push(inspect)
   }
@@ -193,6 +205,7 @@ export async function checkStep(step: Computer.Step, ctx: GateContext): Promise<
     final.windowTitle !== previous.windowTitle ||
     JSON.stringify(final.signals) !== JSON.stringify(previous.signals) ||
     final.document !== previous.document ||
+    final.documentStatus !== previous.documentStatus ||
     final.programPath !== previous.programPath ||
     JSON.stringify(final.layout) !== JSON.stringify(previous.layout) ||
     JSON.stringify(final.focusedMenuShortcuts) !== JSON.stringify(previous.focusedMenuShortcuts)
@@ -225,7 +238,13 @@ export async function checkStep(step: Computer.Step, ctx: GateContext): Promise<
     if (!ctx.grants.consumeSensitive(proof.requestID, ctx.scope, step, inspect, ctx.frame?.id, proof.why))
       return refuse("not_granted")
   for (const id of app) if (!ctx.grants.consumeApp(id, ctx.scope, inspect.app)) return refuse("not_granted")
-  return { verdict: "ok", inspect, hit: final, ...(points.length === 1 ? { point: points[0]! } : {}) }
+  return {
+    verdict: "ok",
+    inspect,
+    hit: final,
+    hits: [...hits.slice(0, -1), final],
+    ...(points.length === 1 ? { point: points[0]! } : {}),
+  }
 }
 
 /** The whole text was classified/approved once; each native chunk still rechecks the live owner, policy and field. */
@@ -261,6 +280,7 @@ export async function typeChecked(
       hit.name !== checked.hit.name ||
       hit.editable !== checked.hit.editable ||
       hit.enabled !== true ||
+      hit.documentStatus !== checked.hit.documentStatus ||
       hit.windowTitle !== checked.hit.windowTitle
     )
       return refuse("changed")
