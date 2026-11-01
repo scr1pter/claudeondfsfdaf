@@ -359,7 +359,9 @@ jobs:
           CI: true
           # Five browser workers stalled asset loading on both hosted platforms; keep test deadlines intact.
           PLAYWRIGHT_WORKERS: "1"
-        timeout-minutes: 30
+        # On Windows the 304-test, one-worker suite reached test 303 before the 30-minute step cap (run 41263948181).
+        # This step also builds and tests the public viewer after that suite; individual test deadlines stay intact.
+        timeout-minutes: ${{ runner.os == 'Windows' && 45 || 30 }}
 
       - name: Upload Playwright artifacts
         if: always()
