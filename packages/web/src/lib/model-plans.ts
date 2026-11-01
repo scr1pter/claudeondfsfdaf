@@ -1,5 +1,14 @@
 import { CodiumPlan } from "@vectordevai/schema/codium-plan"
-import { PERK_IDS, publicEntitlements, type Entitlements, type PerkId } from "@vectordevai/schema/codium-entitlements"
+import {
+  PERK_IDS,
+  PLAN_STATES,
+  PLAN_REASONS,
+  publicEntitlements,
+  type Entitlements,
+  type PerkId,
+  type PlanState,
+  type PlanReason,
+} from "@vectordevai/schema/codium-entitlements"
 import type { Model } from "@vectordevai/schema/codium-copy"
 
 /**
@@ -35,9 +44,35 @@ export type PurchasedState = "available" | "low" | "used"
  */
 export type ModelPlanStatus = {
   active: boolean
+  enabled?: boolean
   customer?: boolean
   access?: boolean
-  plan?: { id: string; name: string; left?: number; renewsAt: number; cancelAtPeriodEnd: boolean }
+  plan?: {
+    id: string
+    name: string
+    left?: number
+    renewsAt: number
+    cancelAtPeriodEnd: boolean
+    state?: PlanState | "unknown"
+    reason?: PlanReason
+    action?: "update-card" | "confirm-payment" | "change-plan"
+    /** A malformed future control field cannot turn a plan change into a new charge. */
+    changeBlocked?: true
+    scheduled?: { id: string; name: string; at: number }
+    today?: { used: number; resetsAt: number; reached: boolean }
+    forecastDate?: string
+    ramp?: { until: number }
+  }
+  listed?: PerkId[]
+  entitlements?: Partial<Entitlements>
+  meters?: {
+    cloudAgents?: { used: number; exhausted: boolean }
+    hosted?: { used: number }
+    vault?: { usedBytes: number; quotaBytes: number }
+    brain?: { used: number; cap: number }
+    remote?: { computers: number; limit: number }
+  }
+  velocity?: "coming"
   purchased?: { bought: boolean; state?: PurchasedState }
   empty?: boolean
   low?: boolean
@@ -137,16 +172,31 @@ export function readModelPlanStatus(value: unknown): ModelPlanStatus {
     throw statusError()
   const plan = value.plan === undefined ? undefined : readStatusPlan(value.plan)
   const purchased = value.purchased === undefined ? undefined : readPurchased(value.purchased)
+  const requested = value.listed
+  const listed = Array.isArray(requested) ? PERK_IDS.filter((id) => requested.includes(id)) : undefined
+  const expected = plan && CodiumPlan.isPlanId(plan.id) ? publicEntitlements(plan.id, new Set(listed)) : {}
+  const rawCaps = value.entitlements
+  const entitlements = record(rawCaps)
+    ? (Object.fromEntries(
+        Object.entries(expected).filter(([key, cap]) => sameCap(rawCaps[key], cap)),
+      ) as Partial<Entitlements>)
+    : undefined
+  const meters = readStatusMeters(value.meters, new Set(listed))
   // A plan is reported exactly when a paid subscription period is active.
   if (value.active !== (plan !== undefined)) throw statusError()
   return {
     active: value.active,
+    ...(typeof value.enabled === "boolean" ? { enabled: value.enabled } : {}),
     ...(typeof value.customer === "boolean" ? { customer: value.customer } : {}),
     ...(typeof value.access === "boolean" ? { access: value.access } : {}),
     ...(plan ? { plan } : {}),
     ...(purchased ? { purchased } : {}),
     ...(typeof value.empty === "boolean" ? { empty: value.empty } : {}),
     ...(typeof value.low === "boolean" ? { low: value.low } : {}),
+    ...(listed === undefined ? {} : { listed }),
+    ...(entitlements === undefined ? {} : { entitlements }),
+    ...(meters === undefined ? {} : { meters }),
+    ...(value.velocity === "coming" && plan && CodiumPlan.rank(plan.id) >= 3 ? { velocity: "coming" as const } : {}),
   }
 }
 
@@ -223,7 +273,7 @@ function readPlan(plan: unknown): ModelPlan {
   }
 }
 
-function readStatusPlan(plan: unknown) {
+function readStatusPlan(plan: unknown): NonNullable<ModelPlanStatus["plan"]> {
   if (
     !record(plan) ||
     typeof plan.id !== "string" ||
@@ -236,13 +286,76 @@ function readStatusPlan(plan: unknown) {
     typeof plan.cancelAtPeriodEnd !== "boolean"
   )
     throw statusError()
+  const state = plan.state === undefined ? undefined : (PLAN_STATES.find((state) => state === plan.state) ?? "unknown")
+  const reason = PLAN_REASONS.find((reason) => reason === plan.reason)
+  const action = (["update-card", "confirm-payment", "change-plan"] as const).find((action) => action === plan.action)
+  const scheduled =
+    record(plan.scheduled) && CodiumPlan.isPlanId(plan.scheduled.id) && validTime(plan.scheduled.at)
+      ? { id: plan.scheduled.id, name: CodiumPlan.name(plan.scheduled.id)!, at: plan.scheduled.at }
+      : undefined
+  const today =
+    record(plan.today) &&
+    fraction(plan.today.used) &&
+    validTime(plan.today.resetsAt) &&
+    typeof plan.today.reached === "boolean"
+      ? { used: plan.today.used, resetsAt: plan.today.resetsAt, reached: plan.today.reached }
+      : undefined
+  const ramp = record(plan.ramp) && validTime(plan.ramp.until) ? { until: plan.ramp.until } : undefined
+  const forecast =
+    typeof plan.forecastDate === "string" &&
+    /^\d{4}-\d{2}-\d{2}$/.test(plan.forecastDate) &&
+    !Number.isNaN(Date.parse(plan.forecastDate))
+      ? plan.forecastDate
+      : undefined
   return {
     id: plan.id,
-    name: plan.name,
+    name: CodiumPlan.name(plan.id) ?? plan.name,
     ...(fraction(plan.left) ? { left: plan.left } : {}),
     renewsAt: plan.renewsAt,
     cancelAtPeriodEnd: plan.cancelAtPeriodEnd,
+    ...(state === undefined ? {} : { state }),
+    ...(reason === undefined ? {} : { reason }),
+    ...(action === undefined ? {} : { action }),
+    ...(state === "unknown" || (plan.scheduled !== undefined && !scheduled) || (plan.action !== undefined && !action)
+      ? { changeBlocked: true as const }
+      : {}),
+    ...(scheduled ? { scheduled } : {}),
+    ...(today ? { today } : {}),
+    ...(ramp ? { ramp } : {}),
+    ...(forecast ? { forecastDate: forecast } : {}),
   }
+}
+
+function validTime(value: unknown): value is number {
+  return positiveInteger(value) && Number.isFinite(new Date(value).getTime())
+}
+
+/** New status fields fail independently; a missing meter stays unknown rather than becoming zero usage. */
+function readStatusMeters(value: unknown, listed: ReadonlySet<PerkId>): ModelPlanStatus["meters"] {
+  if (!record(value)) return undefined
+  const cloud = record(value.cloudAgents) ? value.cloudAgents : undefined
+  const hosted = record(value.hosted) ? value.hosted : undefined
+  const vault = record(value.vault) ? value.vault : undefined
+  const brain = record(value.brain) ? value.brain : undefined
+  const remote = record(value.remote) ? value.remote : undefined
+  const count = (value: unknown): value is number =>
+    typeof value === "number" && Number.isSafeInteger(value) && value >= 0
+  const meters = {
+    ...(listed.has("github-agents") && cloud && fraction(cloud.used) && typeof cloud.exhausted === "boolean"
+      ? { cloudAgents: { used: cloud.used, exhausted: cloud.exhausted } }
+      : {}),
+    ...(listed.has("computer") && hosted && fraction(hosted.used) ? { hosted: { used: hosted.used } } : {}),
+    ...(listed.has("vault") && vault && count(vault.usedBytes) && count(vault.quotaBytes)
+      ? { vault: { usedBytes: vault.usedBytes, quotaBytes: vault.quotaBytes } }
+      : {}),
+    ...(listed.has("brain") && brain && fraction(brain.used) && fraction(brain.cap)
+      ? { brain: { used: brain.used, cap: brain.cap } }
+      : {}),
+    ...(listed.has("remote") && remote && count(remote.computers) && count(remote.limit)
+      ? { remote: { computers: remote.computers, limit: remote.limit } }
+      : {}),
+  }
+  return Object.keys(meters).length ? meters : undefined
 }
 
 function readPurchased(purchased: unknown) {

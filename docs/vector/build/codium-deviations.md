@@ -489,3 +489,9 @@ The public config now advertises only accepted gateway models and qualified effe
 Service readiness is separate from `CODIUM_LISTED_PERKS`: future service WPs must register real configured checks after their gates, while the current production readiness table permits only implemented priority. The status cache also matches the current listing before serving cached caps/meters. Prerenders contain no runtime perk or founder availability; the island reads the current public config and removes stale claims on failure.
 
 The owner's approved planned 550B+ Velocity wording is the narrow override to H2's parameter-count ban. It stays Coming, without a date or inclusion in today's purchase. The explicit no-Labs scope takes precedence over the older plan's Labs Coming row. Existing schema compatibility fields remain; no new Labs UI or service is added. Review panels stay free functionality with model-tier access, including Plus and Pro when the Codium panel is listed; only Max and Ultra show the trust-ramp note.
+
+## A28 account billing presentation
+
+Paused payment recovery retains A20's distinction: payment failures use the payment-method update portal flow, while action-required invoices use the ordinary portal for confirmation. This refines A28's generic “Update payment method” wording so changing a card is not presented as invoice confirmation. No new billing operation is introduced.
+
+The shared browser action module validates explicit request/response shapes and the pricing island reads signed-in status after mounting to show paused recovery without another purchase button. Unknown or explicitly disabled status does not permit checkout. Legacy optional status fields remain readable, while malformed future financial controls block plan changes. See [A28 notes](codium-a28-account-notes.md) for the state, display and verification boundaries.

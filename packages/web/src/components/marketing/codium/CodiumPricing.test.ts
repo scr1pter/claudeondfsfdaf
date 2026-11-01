@@ -5,7 +5,7 @@ import { CodiumCopy } from "@vectordevai/schema/codium-copy"
 import { CodiumPlan } from "@vectordevai/schema/codium-plan"
 import { ENTITLEMENTS, PERK_IDS, publicEntitlements } from "@vectordevai/schema/codium-entitlements"
 import { codiumPricing, refreshCodiumPricing } from "../../../lib/codium-pricing"
-import { readModelPlanConfig, type ModelPlanConfig } from "../../../lib/model-plans"
+import { readModelPlanConfig, type ModelPlanConfig, type ModelPlanStatus } from "../../../lib/model-plans"
 import { CodiumPricing, codiumPlansUrl } from "./CodiumPricing"
 
 const models: NonNullable<ModelPlanConfig["models"]> = [
@@ -52,8 +52,8 @@ const empty: ModelPlanConfig = {
   enabled: false,
   plans: full.plans.map((plan) => ({ ...plan, available: false })),
 }
-const render = (config: ModelPlanConfig) =>
-  renderToStaticMarkup(createElement(CodiumPricing, { pricing: codiumPricing(config) }))
+const render = (config: ModelPlanConfig, account: ModelPlanStatus | null = null) =>
+  renderToStaticMarkup(createElement(CodiumPricing, { pricing: codiumPricing(config), accountPreview: account }))
 const text = (html: string) =>
   html
     .replace(/<[^>]+>/g, " ")
@@ -71,6 +71,49 @@ function reply(body: unknown, ok = true) {
 }
 
 describe("Codium pricing", () => {
+  test("signed-in paused pricing offers only payment recovery instead of another purchase", () => {
+    const status: ModelPlanStatus = {
+      active: true,
+      plan: {
+        id: "vector-50",
+        name: "Pro",
+        state: "paused",
+        reason: "payment_failed",
+        left: 0.4,
+        renewsAt: 2_000_000,
+        cancelAtPeriodEnd: false,
+      },
+    }
+    const html = render(full, status)
+    expect(html).toContain("Update card")
+    expect(html).toContain("paused until payment is resolved")
+    for (const card of cards(html)) expect(card).not.toContain("<button")
+    expect(html).not.toMatch(/Get Plus|Get Pro|Get Max|Get Ultra|Change plan/)
+    const confirmation = render(full, {
+      ...status,
+      plan: { ...status.plan!, reason: "action_required", action: "confirm-payment" },
+    })
+    expect(confirmation).toContain("Confirm payment")
+    expect(confirmation).not.toContain("Update card")
+    expect(confirmation).not.toMatch(/Get Plus|Get Pro|Get Max|Get Ultra|Change plan/)
+  })
+
+  test("active subscribers use account plan changes and unknown identity cannot buy", () => {
+    const html = render(full, {
+      active: true,
+      plan: { id: "vector-50", name: "Pro", state: "active", left: 0.4, renewsAt: 2_000_000, cancelAtPeriodEnd: false },
+    })
+    expect(cards(html)[1]).toContain("Current plan")
+    expect(cards(html)[2]).toContain("Change plan")
+    expect(html).not.toMatch(/Get Plus|Get Pro|Get Max|Get Ultra/)
+    const unknown = renderToStaticMarkup(createElement(CodiumPricing, { pricing: codiumPricing(full) }))
+    for (const card of cards(unknown)) {
+      expect(card).toContain("Reading your plan")
+      expect(card).toContain('disabled=""')
+    }
+    for (const card of cards(render(full))) expect(card).toContain('disabled=""')
+  })
+
   test("renders the four monthly prices, premium styles and a single Recommended badge", () => {
     const html = render(full)
     const plans = cards(html)

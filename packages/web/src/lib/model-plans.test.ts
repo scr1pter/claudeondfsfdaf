@@ -21,6 +21,85 @@ const status = {
 }
 
 describe("model plan API boundaries", () => {
+  test("reads modern payment, renewal and listed meter fields without private amounts", () => {
+    const listed = ["github-agents", "computer", "vault", "brain", "remote"] as const
+    const current = {
+      ...status,
+      enabled: true,
+      listed: [...listed],
+      velocity: "coming",
+      plan: {
+        ...status.plan,
+        id: "vector-100",
+        name: "Max",
+        state: "paused",
+        reason: "action_required",
+        action: "confirm-payment",
+        today: { used: 0.4, resetsAt: 9_000, reached: false },
+        scheduled: { id: "vector-50", name: "Old name", at: 10_000 },
+        forecastDate: "2026-11-12",
+        ramp: { until: 12_000 },
+      },
+      entitlements: { ...publicEntitlements("vector-100", new Set(listed)), dollars: 987654 },
+      meters: {
+        cloudAgents: { used: 0.25, exhausted: false, tokens: 987654 },
+        hosted: { used: 0.4 },
+        vault: { usedBytes: 10, quotaBytes: 100 },
+        brain: { used: 0.02, cap: 0.1 },
+        remote: { computers: 2, limit: 5 },
+        secretCost: 987654,
+      },
+      secretAllowance: 987654,
+    }
+    const read = readModelPlanStatus(current)
+    expect(read.plan).toMatchObject({
+      state: "paused",
+      reason: "action_required",
+      action: "confirm-payment",
+      scheduled: { id: "vector-50", name: "Pro", at: 10_000 },
+      today: { used: 0.4, resetsAt: 9_000, reached: false },
+      forecastDate: "2026-11-12",
+      ramp: { until: 12_000 },
+    })
+    expect(new Set(read.listed)).toEqual(new Set(listed))
+    expect(read.meters).toEqual({
+      cloudAgents: { used: 0.25, exhausted: false },
+      hosted: { used: 0.4 },
+      vault: { usedBytes: 10, quotaBytes: 100 },
+      brain: { used: 0.02, cap: 0.1 },
+      remote: { computers: 2, limit: 5 },
+    })
+    expect(read.velocity).toBe("coming")
+    expect(JSON.stringify(read)).not.toMatch(/987654|secret|dollars|tokens/)
+  })
+
+  test("drops unlisted or malformed optional meters while preserving the old status", () => {
+    const read = readModelPlanStatus({
+      ...status,
+      listed: ["remote", "remote", "future-perk"],
+      entitlements: { remote: { computers: 999 }, hosted: { computers: 999 } },
+      meters: { hosted: { used: 0.2 }, remote: { computers: -1, limit: 1 } },
+      velocity: "coming",
+      labs: "coming",
+    })
+    expect(read.plan).toEqual(status.plan)
+    expect(read.listed).toEqual(["remote"])
+    expect(read.entitlements).toEqual({})
+    expect(read.meters).toBeUndefined()
+    expect(read.velocity).toBeUndefined()
+    expect(read).not.toHaveProperty("labs")
+    expect(
+      readModelPlanStatus({
+        ...status,
+        plan: {
+          ...status.plan,
+          today: { used: 2, resetsAt: 10, reached: false },
+          ramp: { until: -1 },
+          forecastDate: "not-a-date",
+        },
+      }),
+    ).toEqual(status)
+  })
   test("reads listed perks, canonical caps and effective model plan membership", () => {
     const caps = publicEntitlements("vector-10", new Set(["remote"]))
     const model: ModelPlanModel = {

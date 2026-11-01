@@ -8,7 +8,7 @@ import {
   type CodiumOffer,
   type CodiumPricingView,
 } from "../../../lib/codium-pricing"
-import { modelPlanRedirect } from "../../../lib/model-plans"
+import { modelPlanRedirect, type ModelPlanStatus } from "../../../lib/model-plans"
 import "./codium-pricing.css"
 
 const INTENT_KEY = "vector-codium-intent"
@@ -18,23 +18,42 @@ const range = (tasks: readonly [number, number]) => `${count.format(tasks[0])}�
 const FOOTNOTE = "Renews monthly until you cancel. Coming items are not part of today's purchase and have no date."
 
 /** The runtime listing replaces the prerendered view before a saved purchase can resume. */
-export function CodiumPricing(props: { pricing: CodiumPricingView }) {
+export function CodiumPricing(props: { pricing: CodiumPricingView; accountPreview?: ModelPlanStatus | null }) {
   const [pricing, setPricing] = React.useState(props.pricing)
+  const [account, setAccount] = React.useState<ModelPlanStatus | null | undefined>(props.accountPreview)
+  const [accessToken, setAccessToken] = React.useState("")
+  const [accountFailed, setAccountFailed] = React.useState(false)
+  const [refreshIndex, setRefreshIndex] = React.useState(0)
   const [pending, setPending] = React.useState<{ id: string; signIn?: boolean }>()
+  const pendingAction = React.useRef(false)
   const [failure, setFailure] = React.useState<{ id: string; message: string }>()
   const plans = pricing.monthly
 
-  const buy = (offer: CodiumOffer, resumed = false) => {
-    if (!offer.available || pending) return
+  const buy = (offer: CodiumOffer, resumed = false, known = account) => {
+    if (
+      props.accountPreview !== undefined ||
+      !offer.available ||
+      pendingAction.current ||
+      known === undefined ||
+      known?.active ||
+      known?.enabled === false ||
+      known?.plan?.state === "paused"
+    )
+      return
+    pendingAction.current = true
     setPending({ id: offer.id })
     setFailure(undefined)
     void checkoutDestination(offer.id, resumed)
       .then((destination) => {
-        if (!destination) return setPending(undefined)
+        if (!destination) {
+          pendingAction.current = false
+          return setPending(undefined)
+        }
         setPending({ id: offer.id, signIn: destination.startsWith("/login") })
         location.assign(destination)
       })
       .catch((cause) => {
+        pendingAction.current = false
         setPending(undefined)
         setFailure({
           id: offer.id,
@@ -44,51 +63,104 @@ export function CodiumPricing(props: { pricing: CodiumPricingView }) {
   }
 
   React.useEffect(() => {
+    if (props.accountPreview !== undefined) return
     let active = true
+    let generation = 0
     const intent = takeIntent()
-    const refresh = () => {
+    const refresh = (resume = false) => {
+      const current = ++generation
       setPricing(unavailablePricing(props.pricing))
-      void refreshCodiumPricing(props.pricing).then((next) => {
-        if (!active) return
-        setPricing(next)
-        const offer = intent && next.monthly.find((item) => item.id === intent.id)
-        if (offer?.available) buy(offer, true)
-      })
+      setAccount(undefined)
+      setAccessToken("")
+      setAccountFailed(false)
+      void Promise.all([refreshCodiumPricing(props.pricing), currentAccount().catch(() => undefined)]).then(
+        ([next, identity]) => {
+          if (!active || current !== generation) return
+          setPricing(next)
+          if (!identity) {
+            setAccountFailed(true)
+            return
+          }
+          setAccount(identity.status)
+          setAccessToken(identity.accessToken ?? "")
+          const offer = intent && next.monthly.find((item) => item.id === intent.id)
+          if (resume && offer?.available && identity.status && !identity.status.active)
+            buy(offer, true, identity.status)
+        },
+      )
     }
-    refresh()
+    refresh(true)
     const restore = (event: PageTransitionEvent) => {
       if (!event.persisted) return
+      pendingAction.current = false
       setPending(undefined)
       takeIntent()
       // Back-forward cache can outlive the server's listing and sales switches.
-      setPricing(unavailablePricing(props.pricing))
-      void refreshCodiumPricing(props.pricing).then((next) => {
-        if (active) setPricing(next)
-      })
+      refresh()
     }
     addEventListener("pageshow", restore)
     return () => {
       active = false
       removeEventListener("pageshow", restore)
     }
-  }, [])
+  }, [refreshIndex])
 
-  const button = (offer: CodiumOffer, small = false) => (
-    <button
-      className={`cx-btn${offer.id === "vector-50" ? "" : " cx-btn--secondary"}${small ? " cx-btn--sm" : ""}`}
-      type="button"
-      disabled={!offer.available || pending !== undefined}
-      onClick={() => buy(offer)}
-    >
-      {!offer.available
-        ? "Coming soon"
-        : pending?.id === offer.id
-          ? pending.signIn
-            ? "Signing in…"
-            : "Opening checkout…"
-          : `Get ${offer.name}`}
-    </button>
-  )
+  const paused = account?.plan?.state === "paused"
+  const confirm = account?.plan?.action === "confirm-payment" || account?.plan?.reason === "action_required"
+  const recover = () => {
+    if (props.accountPreview !== undefined || pendingAction.current || !accessToken || !paused) return
+    pendingAction.current = true
+    setPending({ id: "payment" })
+    setFailure(undefined)
+    void import("../../../lib/model-plan-actions")
+      .then(({ executeModelPlanAction, modelPlanRecovery }) => {
+        const request = modelPlanRecovery(account)?.request
+        return request ? executeModelPlanAction(request, accessToken) : undefined
+      })
+      .then((result) => {
+        if (result && "url" in result) location.assign(result.url)
+      })
+      .catch((cause) =>
+        setFailure({
+          id: "payment",
+          message: cause instanceof Error ? cause.message : "Vector could not open billing. Try again.",
+        }),
+      )
+      .finally(() => {
+        pendingAction.current = false
+        setPending(undefined)
+      })
+  }
+
+  const button = (offer: CodiumOffer, small = false) =>
+    paused ? null : (
+      <button
+        className={`cx-btn${offer.id === "vector-50" ? "" : " cx-btn--secondary"}${small ? " cx-btn--sm" : ""}`}
+        type="button"
+        disabled={
+          props.accountPreview !== undefined ||
+          pending !== undefined ||
+          (account?.active
+            ? account.plan?.id === offer.id
+            : !offer.available || account === undefined || account?.enabled === false)
+        }
+        onClick={() => (account?.active ? location.assign("/account") : buy(offer))}
+      >
+        {account?.active
+          ? account.plan?.id === offer.id
+            ? "Current plan"
+            : "Change plan"
+          : !offer.available || account?.enabled === false
+            ? "Coming soon"
+            : account === undefined
+              ? "Reading your plan…"
+              : pending?.id === offer.id
+                ? pending.signIn
+                  ? "Signing in…"
+                  : "Opening checkout…"
+                : `Get ${offer.name}`}
+      </button>
+    )
   const groups: { label: string; rows: { label: string; values: (string | boolean)[] }[] }[] = [
     { label: "Usage", rows: [{ label: "Monthly usage", values: plans.map((plan) => plan.usage) }] },
     {
@@ -151,6 +223,33 @@ export function CodiumPricing(props: { pricing: CodiumPricingView }) {
       <section className="cx-section cx-pricing">
         <div className="cx-container">
           <h1 className="cx-type-xl">Pricing</h1>
+          {accountFailed && (
+            <p className="cx-error cx-type-sm" role="alert">
+              Vector could not read your plan.{" "}
+              <button type="button" className="cx-btn cx-btn--sm" onClick={() => setRefreshIndex((value) => value + 1)}>
+                Try again
+              </button>{" "}
+              <a href="/account">Open your account</a>.
+            </p>
+          )}
+          {paused && (
+            <div className="cx-note cx-type-sm" role="status">
+              <p>
+                {confirm
+                  ? "Confirm your payment to resume Codium."
+                  : "Your Codium plan is paused until payment is resolved."}
+              </p>
+              <button
+                type="button"
+                className="cx-btn"
+                disabled={pending !== undefined || props.accountPreview !== undefined}
+                onClick={() => void recover()}
+              >
+                {pending?.id === "payment" ? "Opening billing…" : confirm ? "Confirm payment" : "Update card"}
+              </button>
+              {failure?.id === "payment" && <p role="alert">{failure.message}</p>}
+            </div>
+          )}
           <div className="cx-plans">
             <h2 className="cx-visually-hidden">Codium monthly plans</h2>
             <div className="cx-cards">
@@ -564,6 +663,20 @@ export function codiumPlansUrl(href: string) {
   return url
 }
 
+/** Authentication is read only after mounting; no account token is part of prerendered pricing props. */
+async function currentAccount(): Promise<{ status: ModelPlanStatus | null; accessToken?: string }> {
+  const { vectorAccountClient } = await import("../../../lib/account-client")
+  const client = await vectorAccountClient()
+  const result = await client.auth.getSession()
+  if (result.error) throw result.error
+  if (!result.data.session) return { status: null }
+  const { fetchModelPlanAccount } = await import("../../../lib/model-plan-actions")
+  return {
+    status: await fetchModelPlanAccount(result.data.session.access_token),
+    accessToken: result.data.session.access_token,
+  }
+}
+
 async function checkoutDestination(id: string, resumed: boolean) {
   const { readAccountApiResponse, vectorAccountClient } = await import("../../../lib/account-client")
   const client = await vectorAccountClient()
@@ -581,6 +694,7 @@ async function checkoutDestination(id: string, resumed: boolean) {
   }
   const response = await fetch("/api/model-plans/checkout", {
     method: "POST",
+    redirect: "error",
     headers: {
       accept: "application/json",
       "content-type": "application/json",
