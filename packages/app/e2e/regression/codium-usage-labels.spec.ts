@@ -29,7 +29,7 @@ for (const mixed of [false, true]) {
         id,
         role: "assistant",
         sessionID,
-        parentID: "msg_u",
+        parentID: "msg_001_user",
         agent: "build",
         mode: "build",
         ...provider,
@@ -55,7 +55,7 @@ for (const mixed of [false, true]) {
                 id: "coding",
                 name: "Codium coding",
                 limit: { context: 200_000 },
-                cost: { input: 0, output: 0 },
+                cost: { input: 0, output: 0, cache: { read: 0, write: 0 } },
               },
             },
           },
@@ -67,7 +67,7 @@ for (const mixed of [false, true]) {
                 id: "own-coding",
                 name: "Own coding",
                 limit: { context: 200_000 },
-                cost: { input: 1, output: 3 },
+                cost: { input: 1, output: 3, cache: { read: 0, write: 0 } },
               },
             },
           },
@@ -91,12 +91,12 @@ for (const mixed of [false, true]) {
       pageMessages: () => ({
         items: [
           {
-            info: { id: "msg_u", role: "user", sessionID, agent: "build", model, time: { created: 1 } },
-            parts: [{ id: "p_u", messageID: "msg_u", sessionID, type: "text", text: "Fix the total" }],
+            info: { id: "msg_001_user", role: "user", sessionID, agent: "build", model, time: { created: 1 } },
+            parts: [{ id: "p_u", messageID: "msg_001_user", sessionID, type: "text", text: "Fix the total" }],
           },
-          ...(mixed ? [assistant("msg_own", own, 2, tokens, cost)] : []),
+          ...(mixed ? [assistant("msg_002_own", own, 2, tokens, cost)] : []),
           // Raw context counts remain in the message for the occupancy calculation, never in visible usage labels.
-          assistant("msg_codium", model, 4, rawCodiumTokens, 0, "codium"),
+          assistant("msg_003_codium", model, 4, rawCodiumTokens, 0, "codium"),
         ],
       }),
     })
