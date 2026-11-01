@@ -562,6 +562,8 @@ test("Usage shows a left-facing percentage meter and refreshes once after Codium
   await expect(card).not.toContainText(/purchased|top-?up|\$|Codium \d/i)
   const alert = card.getByRole("checkbox", { name: "Notify me when 80% of this month's usage is used" })
   await expect(alert).not.toBeChecked()
+  // Freeze time before scheduling the refresh so browser round trips cannot cross the 15-second boundary.
+  await page.clock.pauseAt(await page.evaluate(() => Date.now() + 5_000))
   await page.evaluate(() => {
     const fixture = (window as unknown as { accountFixture: Fixture }).accountFixture
     fixture.turnEnded()
