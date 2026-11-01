@@ -309,6 +309,7 @@ export async function run(settings) {
       "Cached tokens and provider usage are scripted; no live cache, quality, speed or cost result.",
       "RSS is sampled process-tree resident memory; shared pages may be counted more than once.",
       "Capture buffers each response before replay; instrumentation affects memory and timing.",
+      "The evidence plugin applies the requested 512-token cap after built-in chat.params hooks.",
     ],
     machine: {
       platform: process.platform,
@@ -326,6 +327,7 @@ export async function run(settings) {
       executionMode: "normal",
       steps: 1,
       outputTokenMax: 512,
+      outputTokenMaxMechanism: "Evidence plugin chat.params hook; exact value independently required on the wire",
       transportOverride: "HTTP forced for offline instrumentation",
       cacheWarmup: false,
       cacheRetentionOverride: false,

@@ -46,7 +46,10 @@ warmup or retention experiment is added. The serialized request is checked;
 missing output bounds, a wrong model/session/endpoint, retries and extra sends
 fail rather than being silently accepted. A send consumes its durable grant
 before forwarding, including failures and cancellation. Tools remain visible in
-the request while a plugin veto prevents execution.
+the request while a plugin veto prevents execution. That plugin also applies the
+study's explicit 512-token cap through `chat.params`, after the release's built-in
+OpenAI hook clears the environment-derived cap. The actual wire value is checked
+independently; neither the packaged bundle nor catalog is patched.
 
 Reports retain request, system/tool and response hashes, observed request
 controls, first-request provider and projected usage, engine events, errors,
@@ -89,3 +92,19 @@ retain the invocation phase, and missing phases produce null peaks plus failure.
 The aborted event observer is awaited before the final report is written. The
 review found no remaining dispatch blocker. None of those local checks executes
 the release artifact or establishes its memory baseline.
+
+## First artifact attempt
+
+Run [41259921640](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/41259921640)
+on `d12a33c9bbbf639306875ddcb825d94e4eb38a2b` passed provenance, extraction and
+component checks. The engine started successfully as version 1.99.112. Its first
+request was blocked before forwarding with `REQUEST_OUTPUT_LIMIT_MISSING`:
+the built-in OpenAI hook cleared the requested output cap. Later memory phases
+were correctly recorded as missing, and the study failed. Its partial memory
+samples are not a completed baseline.
+
+The preserved artifact is `13064721537`, 57,952 bytes, SHA-256
+`24bb117e8d26713945a3c567710fcbe91cc25b16e97ba7c618f99cfdc9c094c9`.
+The correction uses the supported plugin hook described above and retains the
+same wire refusal. All 19 focused Node tests pass after this correction; an
+artifact rerun is still required.

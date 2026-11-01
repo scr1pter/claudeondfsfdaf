@@ -319,6 +319,39 @@ test("tool veto throws before execution and records no tool arguments", async (t
   assert.equal((await readFile(join(dir, "vetoed-tools.jsonl"), "utf8")).includes("secret"), false)
 })
 
+test("evidence params hook restores the exact output cap without changing model options or accepting another model", async (t) => {
+  const dir = await directory(t)
+  const previous = process.env.VECTOR_EVIDENCE_DIRECTORY
+  process.env.VECTOR_EVIDENCE_DIRECTORY = dir
+  t.after(() => {
+    if (previous === undefined) delete process.env.VECTOR_EVIDENCE_DIRECTORY
+    else process.env.VECTOR_EVIDENCE_DIRECTORY = previous
+  })
+  const hooks = await veto()
+  for (const cap of [undefined, 8192]) {
+    const options = { reasoningEffort: "medium", store: false }
+    const params = { maxOutputTokens: cap, temperature: undefined, topP: undefined, topK: undefined, options }
+    await hooks["chat.params"]({ model: { providerID: "openai", id: MODEL } }, params)
+    assert.deepEqual(params, {
+      maxOutputTokens: 512,
+      temperature: undefined,
+      topP: undefined,
+      topK: undefined,
+      options,
+    })
+    assert.equal(params.options, options)
+    assert.equal(requestShape(body({ max_output_tokens: params.maxOutputTokens })).maxOutputTokens, 512)
+  }
+  for (const model of [
+    { providerID: "other", id: MODEL },
+    { providerID: "openai", id: "other" },
+  ]) {
+    const params = { maxOutputTokens: undefined, options: {} }
+    await assert.rejects(hooks["chat.params"]({ model }, params), /OFFLINE_EVIDENCE_MODEL_MISMATCH/)
+    assert.equal(params.maxOutputTokens, undefined)
+  }
+})
+
 test("RSS selection follows descendants, retains orphans and excludes reused PIDs", () => {
   const tracked = new Map()
   assert.equal(

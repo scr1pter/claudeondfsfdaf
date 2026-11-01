@@ -54,6 +54,12 @@ are synthetic, formatter/LSP services are off, and a local plugin vetoes every
 tool execution while retaining the normal tool definitions. These settings are
 recorded, not represented as the user's default profile.
 
+The release's built-in OpenAI `chat.params` hook clears the environment-derived
+output limit. The evidence plugin runs afterward and applies the study's explicit
+512-token cap through that supported hook, after checking the exact provider and
+model. Capture independently requires the same value in the serialized request.
+The packaged bundle and catalog remain unchanged.
+
 The actual `prompt_async`, event, health and message APIs are exercised. Global
 capture is installed before importing the release bundle; normal runtime provider
 and auth adapters still construct requests. Every inference send must have one
