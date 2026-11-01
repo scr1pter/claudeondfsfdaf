@@ -32,7 +32,8 @@ import { TaskSquares } from "./task-squares"
 import type { BackgroundTasks } from "./background-tasks"
 import { useBackgroundTasks } from "./use-background-tasks"
 import type { Task } from "@vectordevai/schema/task"
-import { taskCost } from "./task-board-model"
+import { taskCost, taskSpend } from "./task-board-model"
+import { CodiumUsage } from "@vectordevai/core/codium-usage"
 
 const MAX_ROWS = 12
 
@@ -531,9 +532,16 @@ function CardView(props: {
         <span>
           <span class="vector-bg-tasks-num">{agentCount()}</span> {agentCount() === 1 ? "agent" : "agents"}
         </span>
-        <Show when={props.card.tokens !== undefined}>
+        <Show when={props.card.tokens !== undefined || taskSpend(props.card.agents).codiumSteps}>
           <span>
-            <span class="vector-bg-tasks-num">{formatTokens(props.card.tokens)}</span> tokens
+            <span class="vector-bg-tasks-num">
+              {CodiumUsage.withCodium(
+                props.card.tokens || !taskSpend(props.card.agents).codiumSteps
+                  ? `${formatTokens(props.card.tokens)} tokens`
+                  : undefined,
+                taskSpend(props.card.agents).codiumSteps,
+              )}
+            </span>
           </span>
         </Show>
         <span>{taskCost(props.card.agents)}</span>
@@ -713,7 +721,12 @@ function PhaseTable(props: { phase: TaskPhase; tasks: BackgroundTasks }) {
                       </button>
                     </td>
                     <td title={modelTooltip(agent)}>{agent.model?.short ?? "—"}</td>
-                    <td>{formatTokens(agent.tokens)}</td>
+                    <td>
+                      {CodiumUsage.withCodium(
+                        agent.tokens || !agent.codiumSteps ? formatTokens(agent.tokens) : undefined,
+                        agent.codiumSteps,
+                      )}
+                    </td>
                     <td>
                       <time>{formatDuration(elapsedMs(agent, props.tasks.now()))}</time>
                     </td>

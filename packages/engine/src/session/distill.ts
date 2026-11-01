@@ -48,8 +48,8 @@ export type Estimate = {
   readonly refused?: { readonly reason: Reason; readonly message: string }
   /** Sections and tokens that would be sent, and the output cap. */
   readonly sections: number
-  readonly input: number
-  readonly output: number
+  readonly input?: number
+  readonly output?: number
   readonly costKind?: SpendGuard.CostKind
   /** At catalog rates, for a priced model. */
   readonly lowUsd?: number
@@ -64,8 +64,8 @@ export type Distilled = {
   readonly records: readonly BrainSchema.Record[]
   readonly duplicate: number
   readonly dropped: BrainDistill.Dropped
-  readonly tokens: BrainKnowledge.DistillRun["tokens"]
-  readonly cost: number
+  readonly tokens?: BrainKnowledge.DistillRun["tokens"]
+  readonly cost?: number
   readonly costKind: SpendGuard.CostKind
   /** Why the model gave nothing usable, when it did not. */
   readonly error?: string
@@ -187,7 +187,7 @@ const layer = Layer.effect(
         model: planned.name,
         sections: planned.picked.sections.length,
         costKind: planned.costKind,
-        ...planned.estimate,
+        ...(planned.costKind === "codium" ? {} : planned.estimate),
       } satisfies Estimate
     })
 
@@ -256,14 +256,14 @@ const layer = Layer.effect(
         cacheWrite: spent?.cacheWrite ?? 0,
       }
       const cost = spent && Number.isFinite(spent.costUsd) ? spent.costUsd : 0
+      const usage = planned.costKind === "codium" ? {} : { tokens, cost }
       const dropped = { invalid: assistant?.structured === undefined ? 0 : decoded.invalid, ...locked.dropped }
       const stored = yield* knowledge.distilled(place, input.document, {
         records: locked.kept,
         run: {
           model: planned.name,
           session: kept,
-          tokens,
-          cost,
+          ...usage,
           costKind: planned.costKind,
           dropped,
           ...(error ? { error } : {}),
@@ -276,8 +276,7 @@ const layer = Layer.effect(
         records: stored?.records ?? [],
         duplicate: stored?.duplicate ?? 0,
         dropped,
-        tokens,
-        cost,
+        ...usage,
         costKind: planned.costKind,
         ...(error ? { error } : {}),
       } satisfies Distilled

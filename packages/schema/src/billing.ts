@@ -20,3 +20,9 @@ export const isCodium = (providerID?: string) => providerID === CODIUM_PROVIDER_
 // that was never added.
 export const of = (x: { billing?: string; providerID?: string; model?: { providerID?: string } }) =>
   x.billing === "codium" || isCodium(x.providerID ?? x.model?.providerID) ? ("codium" as const) : undefined
+
+/** Positive attribution for public per-message usage; absence of Codium is not proof of own usage. */
+export const hasOwnIdentity = (x: Parameters<typeof of>[0]) => {
+  const providerID = x.providerID ?? x.model?.providerID
+  return !of(x) && Boolean(providerID?.trim()) && providerID === providerID?.trim()
+}

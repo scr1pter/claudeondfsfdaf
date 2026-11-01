@@ -33,7 +33,8 @@ import { samePolledRecords, sameWorkspaceRevisions } from "@/utils/workspace-rev
 import { Persist, persisted } from "@/utils/persist"
 import { modelDisplayName } from "@/utils/provider-brand"
 import { ModelPlanStatus } from "@vectordevai/core/model-plan-status"
-import { onCodiumChange } from "@/vector-account"
+import { onCodiumChange, codiumTurnEnded } from "@/vector-account"
+import { observeCodiumTurns } from "@/utils/codium-turn"
 import { decodeRouteSegment, projectPathFromWorkspaceRoute, sessionIDFromRouteValue } from "@/utils/project-route"
 import { taskScopeId, taskScopeSearch, type TaskScope } from "@/utils/task-scope"
 import { WORKSPACE_FILE_SAVED_EVENT, workspaceFileSavedDetail } from "@/utils/workspace-file-saved"
@@ -3159,7 +3160,11 @@ export default function NewLayout(props: ParentProps) {
         .filter((info): info is NonNullable<typeof info> => Boolean(info)),
     )
   })
-  const stopSessionOutcomes = serverSDK().event.listen((event) => sessionEconomics.handle(event))
+  const observeCodium = observeCodiumTurns(codiumTurnEnded)
+  const stopSessionOutcomes = serverSDK().event.listen((event) => {
+    sessionEconomics.handle(event)
+    observeCodium(event.details)
+  })
   onCleanup(() => {
     stopSessionOutcomes()
     sessionEconomics.dispose()

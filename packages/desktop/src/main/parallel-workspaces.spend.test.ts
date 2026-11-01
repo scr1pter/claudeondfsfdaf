@@ -49,6 +49,7 @@ const {
   sweepTeamOutboxes,
 } = await import("./parallel-workspaces")
 const { addTeamMember, createAgentTeam, postTeamMessage } = await import("./agent-teams")
+const { listBackgroundTasks } = await import("./background-tasks")
 const { spendLedger } = await import("./spend-limits")
 
 // A stand-in for the engine's HTTP API: a session costs $0.42 once prompted,
@@ -67,6 +68,11 @@ const engineState = {
   busy: undefined as (() => boolean) | undefined,
   // What a prompted session has cost.
   cost: 0.42,
+  tokens: { input: 100, output: 20 },
+  // Modern engine fixtures certify that aggregate tokens exclude Codium. Legacy tests omit this explicitly.
+  tokensOwnOnly: true as boolean | undefined,
+  codiumSteps: undefined as number | undefined,
+  provider: "provider-test",
 }
 let sessionCount = 0
 const server = Bun.serve({
@@ -93,8 +99,11 @@ const server = Bun.serve({
       return Response.json({
         data: {
           cost: prompted ? engineState.cost : 0,
-          tokens: { input: prompted ? 100 : 0, output: prompted ? 20 : 0 },
-          model: { providerID: "provider-test", id: "model-test" },
+          tokens: { input: prompted ? engineState.tokens.input : 0, output: prompted ? engineState.tokens.output : 0 },
+          ...(engineState.tokensOwnOnly === undefined ? {} : { tokensOwnOnly: engineState.tokensOwnOnly }),
+          subagentTokensOwnOnly: true,
+          ...(engineState.codiumSteps === undefined ? {} : { codiumSteps: prompted ? engineState.codiumSteps : 0 }),
+          model: { providerID: engineState.provider, id: "model-test" },
         },
       })
     }
@@ -143,6 +152,10 @@ beforeEach(() => {
   engineState.messages = () => []
   engineState.busy = undefined
   engineState.cost = 0.42
+  engineState.tokens = { input: 100, output: 20 }
+  engineState.tokensOwnOnly = true
+  engineState.codiumSteps = undefined
+  engineState.provider = "provider-test"
 })
 
 async function launch(name: string) {
@@ -154,6 +167,8 @@ async function launch(name: string) {
     taskPrompt: "Read README.md and report its title.",
     runtime: "vector",
     parentSessionId: "session-spend",
+    provider: engineState.provider,
+    model: "model-test",
     sourcePath,
   })
   await runParallelWorkspace(created.id, engine)
@@ -164,7 +179,11 @@ async function settle(id: string) {
   for (let attempt = 0; attempt < 200; attempt += 1) {
     await new Promise((resolve) => setTimeout(resolve, 25))
     const record = listParallelWorkspaces().find((item) => item.id === id)
-    if (record && ["needs review", "complete", "failed", "stopped"].includes(record.status) && record.actualCost)
+    if (
+      record &&
+      ["needs review", "complete", "failed", "stopped"].includes(record.status) &&
+      (record.actualCost || record.costKind !== undefined)
+    )
       return record
   }
   throw new Error("the Vector-runtime run never settled")
@@ -320,3 +339,94 @@ describe("a Vector-runtime parallel agent's spend", () => {
     expect(await headroomSeenByAnotherRun()).toBeCloseTo(headroom - 0.42)
   })
 })
+
+test("legacy zero-price Codium cards use pinned provider provenance without rewriting usage", async () => {
+  engineState.provider = "vector-plan"
+  engineState.cost = 0
+  engineState.tokensOwnOnly = undefined
+  const created = await launch("legacy-codium-card")
+  await settle(created.id)
+  const bucket = store.get("parallel-workspaces-state")!
+  const records = bucket.get("records") as Array<Record<string, unknown>>
+  const legacy = {
+    ...records.find((record) => record.id === created.id)!,
+    billing: undefined,
+    costKind: undefined,
+    measuredCost: 0,
+    actualCost: "$0.00",
+  }
+  bucket.set("records", [
+    ...records.filter((record) => record.id !== created.id),
+    legacy,
+    { ...legacy, id: `${created.id}-own`, provider: "provider-test" },
+  ])
+  expect(getParallelWorkspace(created.id)?.billing).toBe("codium")
+  expect(listParallelWorkspaces().find((record) => record.id === created.id)?.billing).toBe("codium")
+  expect(getParallelWorkspace(`${created.id}-own`)?.billing).toBeUndefined()
+  expect(
+    (bucket.get("records") as Array<Record<string, unknown>>).find((record) => record.id === created.id)?.billing,
+  ).toBeUndefined()
+})
+
+for (const proof of [undefined, false]) {
+  test(`legacy parallel totals with ${proof === undefined ? "missing" : "unknown"} provenance keep dollars but hide tokens`, async () => {
+    engineState.tokensOwnOnly = proof
+    engineState.cost = 0.12
+    engineState.tokens = { input: 9_080, output: 0 }
+    // A current own model and positive Codium counters cannot certify older aggregate tokens.
+    engineState.codiumSteps = 3
+    const headroom = await headroomSeenByAnotherRun()
+    const created = await launch(proof === undefined ? "legacy-missing-proof" : "legacy-unknown-proof")
+    const record = await settle(created.id)
+    expect(record.actualCost).toBe("$0.12")
+    expect(record.measuredCost).toBe(0.12)
+    expect(record.billing).toBe("codium")
+    expect(record.costKind).toBe("priced")
+    const events = await ledgerEventsFor(created.id)
+    expect(events).toHaveLength(1)
+    expect(events[0]).toMatchObject({ costUsd: 0.12, billing: "codium", provider: "provider-test" })
+    expect(events[0]?.tokens).toBeUndefined()
+    expect(await headroomSeenByAnotherRun()).toBeCloseTo(headroom - 0.12)
+  })
+}
+
+for (const mixed of [false, true]) {
+  test(`${mixed ? "mixed" : "Codium-only"} parallel usage reaches the persisted card without a fake zero charge`, async () => {
+    engineState.provider = "vector-plan"
+    engineState.cost = mixed ? 0.12 : 0
+    engineState.tokens = { input: mixed ? 80 : 0, output: 0 }
+    engineState.codiumSteps = 3
+    engineState.spend = (sessionId) =>
+      engineState.prompted.has(sessionId)
+        ? {
+            data: {
+              sessionID: sessionId,
+              state: "ok",
+              budget: {},
+              spentUsd: engineState.cost,
+              steps: mixed ? 4 : 3,
+              unpricedSteps: 0,
+              codiumSteps: 3,
+              costKind: "codium",
+            },
+          }
+        : {}
+    const headroom = await headroomSeenByAnotherRun()
+    const created = await launch(mixed ? "mixed-codium" : "only-codium")
+    expect(created.billing).toBe("codium")
+    expect(created.measuredCost).toBeUndefined()
+    const record = await settle(created.id)
+    expect(engineState.prompts[0]?.body.budget).toBeUndefined()
+    expect(record.billing).toBe("codium")
+    expect(record.measuredCost).toBe(engineState.cost)
+    expect(record.actualCost).toBe(mixed ? "$0.12" : undefined)
+    expect(record.costKind).toBe(mixed ? "priced" : "codium")
+    const background = listBackgroundTasks({ taskId: "session-spend" }).find((task) => task.workspaceId === created.id)
+    expect(background?.billing).toBe("codium")
+    expect(background?.actualUsage).toBe(mixed ? "$0.12" : undefined)
+    const events = await ledgerEventsFor(created.id)
+    expect(events).toHaveLength(mixed ? 1 : 0)
+    if (mixed) expect(events[0]).toMatchObject({ costUsd: 0.12, tokens: 80, billing: "codium" })
+    expect(await headroomSeenByAnotherRun()).toBeCloseTo(headroom - engineState.cost)
+  })
+}

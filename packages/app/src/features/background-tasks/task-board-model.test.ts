@@ -94,7 +94,7 @@ describe("task board observations", () => {
 describe("task costs", () => {
   test("counts the newest cumulative child usage only once", () => {
     const agents = [agent({ startedAt: 10, cost: 0.5, tokens: 100 }), agent({ startedAt: 20, cost: 0.75, tokens: 150 })]
-    expect(taskSpend(agents)).toEqual({ cost: 0.75, tokens: 150, unknown: false })
+    expect(taskSpend(agents)).toEqual({ cost: 0.75, tokens: 150, unknown: false, codiumSteps: 0 })
     expect(taskCost(agents)).toBe("$0.75")
   })
 
@@ -154,5 +154,76 @@ test("desktop spend excludes native ledger mirrors and keeps measured dollars se
   )
   const selected = desktopSpendAgents(cards.flatMap((card) => card.agents))
   expect(selected.map((agent) => agent.task!.id)).toEqual(["workspace:one", "swarm:coordinator"])
-  expect(taskSpend(selected)).toEqual({ cost: 0.2, tokens: undefined, unknown: true })
+  expect(taskSpend(selected)).toEqual({ cost: 0.2, tokens: undefined, unknown: true, codiumSteps: 0 })
+})
+
+test("Codium task usage stays separate from priced and unknown own-key work", () => {
+  expect(taskCost([agent({ codiumSteps: 3, unpricedSteps: 3, tokens: 0 })])).toBe("Codium")
+  expect(taskCost([agent({ codiumSteps: 3, unpricedSteps: 3, tokens: 100, cost: 0.12 })])).toBe("$0.12 + Codium")
+  expect(taskCost([agent({ codiumSteps: 3, unpricedSteps: 4, tokens: 100 })])).toBe("Cost unknown + Codium")
+})
+
+test("legacy task observations cannot restore raw Codium tokens over a filtered card", () => {
+  const usage = { tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, steps: 1, toolUses: 0 }
+  const cards = mergeTaskBoard(
+    [],
+    [observation({ usage: { ...usage, tokensOwnOnly: true, total: 0, codiumSteps: 1, cost: 0.12 } })],
+  )
+  expect(cards[0]?.agents[0]).toMatchObject({ tokens: 0, codiumSteps: 1 })
+  const legacy = mergeTaskBoard(cards, [observation({ usage: { ...usage, total: 100000, cost: 0.12 } })])
+  expect(legacy[0]?.agents[0]).toMatchObject({ tokens: 0, codiumSteps: 1, cost: 0.12 })
+  expect(taskCost(legacy[0]!.agents)).toBe("$0.12 + Codium")
+  const modern = mergeTaskBoard(legacy, [
+    observation({ usage: { ...usage, tokensOwnOnly: true, total: 250, cost: 0.12, codiumSteps: 1 } }),
+  ])
+  expect(modern[0]?.agents[0]).toMatchObject({ tokens: 250, codiumSteps: 1 })
+})
+
+test("desktop task observations preserve unknown own spend beside Codium without invented usage", () => {
+  const cards = mergeTaskBoard([], [observation({ billing: "codium", costKind: "unknown", measuredCost: 0.12 })])
+  expect(cards[0]?.agents[0]).toMatchObject({ codiumSteps: 1, unpricedSteps: 2, cost: 0.12 })
+  expect(cards[0]?.agents[0]?.tokens).toBeUndefined()
+  expect(taskCost(cards[0]!.agents)).toBe("$0.12 + unpriced usage + Codium")
+})
+
+test("guard unknown status survives legacy and modern task usage projections", () => {
+  for (const codiumSteps of [undefined, 1]) {
+    const cards = mergeTaskBoard(
+      [],
+      [
+        observation({
+          billing: "codium",
+          costKind: "unknown",
+          usage: {
+            cost: 0.12,
+            total: 100,
+            steps: 1,
+            toolUses: 0,
+            unpricedSteps: 1,
+            codiumSteps,
+            tokens: { input: 100, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+          },
+        }),
+      ],
+    )
+    expect(taskCost(cards[0]!.agents)).toBe("$0.12 + unpriced usage + Codium")
+  }
+})
+
+test("task aggregate requires proof even with no surviving Codium identity or with a later counter", () => {
+  for (const codiumSteps of [0, 1]) {
+    const usage = {
+      tokens: { input: 987654, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+      total: 987654,
+      steps: 1,
+      toolUses: 0,
+      cost: 0.12,
+      codiumSteps,
+    }
+    const cards = mergeTaskBoard([], [observation({ usage })])
+    expect(cards[0]?.agents[0]?.tokens).toBeUndefined()
+    expect(cards[0]?.agents[0]?.cost).toBe(0.12)
+    const next = mergeTaskBoard(cards, [observation({ usage: { ...usage, tokensOwnOnly: true, total: 123 } })])
+    expect(next[0]?.agents[0]?.tokens).toBe(123)
+  }
 })

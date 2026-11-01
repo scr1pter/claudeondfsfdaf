@@ -19,3 +19,9 @@ test("Restore default settings leaves Vector Tab at its default, on, otherwise",
   restoredSettings({ editor: { ...defaults.editor, aiAutocomplete: false } })
   expect(restoredSettings({} as Parameters<typeof restoredSettings>[0]).editor.aiAutocomplete).toBe(true)
 })
+
+test("Codium 80% notifications require opting in and reset to off", () => {
+  expect(defaults.codium.alert80).toBe(false)
+  const saved = { editor: defaults.editor, codium: { alert80: true } }
+  expect(restoredSettings(saved).codium.alert80).toBe(false)
+})

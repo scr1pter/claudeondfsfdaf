@@ -40,12 +40,18 @@ export function SubagentFooter() {
     if (tokens <= 0) return
 
     const model = sync.data.provider.find((item) => item.id === last.providerID)?.models[last.modelID]
-    const pct = model?.limit.context ? `${Math.round((tokens / model.limit.context) * 100)}%` : undefined
-    const spend = Locale.sessionSpend(session())
+    const spend = Locale.sessionSpend(
+      session(),
+      msg,
+      sync.data.session.filter((child) => child.parentID !== undefined && child.parentID === session()?.id),
+    )
 
     return {
-      context: pct ? `${Locale.number(tokens)} (${pct})` : Locale.number(tokens),
-      cost: spend.cost > 0 || spend.unpriced > 0 ? Locale.spend(spend.cost, spend.unpriced) : undefined,
+      context: Locale.context(tokens, model?.limit.context, last),
+      cost:
+        spend.cost > 0 || spend.unpriced > 0 || spend.codium > 0
+          ? Locale.spend(spend.cost, spend.unpriced, spend.codium)
+          : undefined,
     }
   })
 

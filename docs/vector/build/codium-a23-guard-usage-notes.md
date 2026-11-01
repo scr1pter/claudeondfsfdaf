@@ -45,3 +45,7 @@ The first processor regression run failed because the fixture did not expose the
 Core, Server, Engine and Desktop package typechecks passed. The mandatory pre-push check is pending. The added HTTP exerciser scenarios use the actual session and guard services with seeded Codium results, without provider requests; they run only in CI. GitHub CI has not yet run on this source.
 
 No provider/Stripe/customer GitHub API call, account setting, deployment, sales activation, catalog acceptance or main merge is part of A23. Larger fixed reservations, context windows, staged Sol and the empty route acceptance registry remain unchanged.
+
+## Completed CI evidence
+
+The A23/preparation push at `ad1878309645adb5409e02bab678b145b73b7d3b` passed the normal 23-package pre-push hook. [Scoped workflow 41256437634](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/41256437634) completed successfully: eight package typechecks, Codium test files, browser specs, HttpApi exerciser scenarios and generated-client check. This supersedes the pending CI status above. The later native billing-fixture timeout correction is isolated in `67e3161e`: raw independent snapshot reads are handled by `Promise.allSettled`, preserving all assertions and fitting the native five-second timeout (2.048 seconds locally).

@@ -1,3 +1,4 @@
+import { CodiumUsage } from "@vectordevai/core/codium-usage"
 import { createVectorClient } from "@vectordevai/sdk/v2"
 import type { Task } from "@vectordevai/schema/task"
 import { ServerAuth } from "@/server/auth"
@@ -59,7 +60,7 @@ export const TasksCommand = cmd({
       return undefined
     })
     if (!result) return
-    if (args.json) return console.log(JSON.stringify(result, null, 2))
+    if (args.json) return console.log(JSON.stringify(tasksForOutput(result), null, 2))
     if ("tasks" in result) {
       console.log(formatTasks(result.tasks))
       if ("truncated" in result && result.truncated) console.log("More tasks are available; narrow the selection.")
@@ -132,6 +133,45 @@ export async function executeTaskCommand(
     .data!
 }
 
+/** Old servers cannot partition task tokens; redact only the printed projection, preserving the API result. */
+export function tasksForOutput<
+  T extends
+    | { tasks: readonly Task.Info[] }
+    | { runs: readonly Task.Info[] }
+    | { task: Task.Info }
+    | { messageID: string },
+>(result: T) {
+  if ("tasks" in result) return { ...result, tasks: result.tasks.map(taskForOutput) }
+  if ("runs" in result) return { ...result, runs: result.runs.map(taskForOutput) }
+  if ("task" in result) return { ...result, task: taskForOutput(result.task) }
+  return result
+}
+
+function taskForOutput(task: Task.Info) {
+  const usage: { -readonly [K in keyof Task.Usage]?: Task.Usage[K] } | undefined = task.usage
+    ? { ...task.usage }
+    : undefined
+  if (usage && usage.tokensOwnOnly !== true) {
+    delete usage.tokens
+    delete usage.total
+  }
+  return {
+    ...task,
+    ...(usage ? { usage } : {}),
+    ...(task.workflow?.role === "run"
+      ? {
+          workflow: {
+            ...task.workflow,
+            tokens:
+              task.usage?.tokensOwnOnly === true && !((task.usage.codiumSteps ?? 0) > 0 && task.usage.total === 0)
+                ? { used: task.usage.total, max: task.workflow.tokens?.max }
+                : undefined,
+          },
+        }
+      : {}),
+  }
+}
+
 export function formatTasks(tasks: readonly Task.Info[]) {
   if (!tasks.length) return "No subagent tasks."
   return tasks
@@ -141,24 +181,25 @@ export function formatTasks(tasks: readonly Task.Info[]) {
         "  " +
           [
             `${Math.round(task.elapsedMs / 1000)}s`,
-            ...(task.usage
-              ? [
-                  `${task.usage.total} tokens`,
-                  task.usage.unpricedSteps
-                    ? "cost partly unknown"
-                    : task.costKind === "plan"
-                      ? "covered by plan"
-                      : task.costKind === "free"
-                        ? "free model"
-                        : `$${task.usage.cost.toFixed(4)}`,
-                ]
-              : task.measuredCost !== undefined
-                ? [`$${task.measuredCost.toFixed(4)} reported`, "tokens unavailable"]
-                : task.costKind === "plan"
-                  ? ["covered by plan", "tokens unavailable"]
-                  : task.costKind === "free"
-                    ? ["free model", "tokens unavailable"]
-                    : ["usage unavailable"]),
+            ...(CodiumUsage.taskText(task) ??
+              (task.usage
+                ? [
+                    `${task.usage.total} tokens`,
+                    task.usage.unpricedSteps
+                      ? "cost partly unknown"
+                      : task.costKind === "plan"
+                        ? "covered by plan"
+                        : task.costKind === "free"
+                          ? "free model"
+                          : `$${task.usage.cost.toFixed(4)}`,
+                  ]
+                : task.measuredCost !== undefined
+                  ? [`$${task.measuredCost.toFixed(4)} reported`, "tokens unavailable"]
+                  : task.costKind === "plan"
+                    ? ["covered by plan", "tokens unavailable"]
+                    : task.costKind === "free"
+                      ? ["free model", "tokens unavailable"]
+                      : ["usage unavailable"])),
             ...(task.currentStep ? [task.currentStep] : []),
           ].join(" · "),
         ...(task.dependsOn.length ? [`  Depends on: ${task.dependsOn.join(", ")}`] : []),

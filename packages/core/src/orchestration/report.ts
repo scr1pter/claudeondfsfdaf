@@ -23,12 +23,12 @@ const line = (text: string, max = 500) =>
 
 export function render(input: Input): string {
   const codium = Math.max(0, input.codiumSteps ?? 0)
-  const unknown = input.unpricedSteps > codium || (input.costUsd === undefined && codium === 0)
-  const cost = unknown
-    ? "unknown"
-    : codium > 0 && !input.costUsd
-      ? "Codium"
-      : `$${(input.costUsd ?? 0).toFixed(2)}${codium ? " + Codium" : ""}`
+  const unknown = input.unpricedSteps > codium || input.costUsd === undefined
+  const cost = [
+    ...(input.costUsd || (!unknown && !codium) ? [`$${(input.costUsd ?? 0).toFixed(2)}`] : []),
+    ...(unknown ? [input.costUsd ? "unpriced" : "unknown"] : []),
+    ...(codium ? ["Codium"] : []),
+  ].join(" + ")
   const lines = [
     `Workflow ${line(input.title, 80)}: ${input.outcome} · ${input.progress.agents.launched} agents · ${Math.ceil(Math.max(0, input.durationMs) / 1000)}s · ${cost}`,
     `Full results: ${input.resultsPath}`,

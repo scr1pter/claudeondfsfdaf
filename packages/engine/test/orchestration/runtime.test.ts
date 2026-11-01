@@ -420,6 +420,34 @@ describe("workflow runtime persistence and accounting", () => {
     }),
   )
 
+  it.instance("runtime preserves canonical token proof but cannot certify a larger forged saved subtotal", () =>
+    Effect.gen(function* () {
+      const f = yield* fixture({ cost: 1 })
+      const first = yield* f.execute()
+      const id = f.calls[0].child
+      expect(first.state.sessions[id]).toMatchObject({ total: 15, tokensOwnOnly: true })
+      const owner = SubagentLifecycle.read(yield* f.sessions.get(f.run.id))!
+      if (owner.workflow?.role !== "run") throw new Error("Missing workflow")
+      expect((yield* WorkflowState.decode(owner.workflow.progress.runtime)).sessions[id].tokensOwnOnly).toBe(true)
+      yield* f.save({
+        ...first.state,
+        sessions: {
+          ...first.state.sessions,
+          [id]: {
+            ...first.state.sessions[id],
+            total: 1000005,
+            tokensOwnOnly: true,
+            tokens: { ...first.state.sessions[id].tokens, input: 1000000 },
+          },
+        },
+      })
+      const resumed = yield* f.execute()
+      expect(f.calls).toHaveLength(1)
+      expect(resumed.state.sessions[id]).toMatchObject({ total: 1000005, tokensOwnOnly: false })
+      expect(resumed.state.usage.tokens).toBe(1000005)
+    }),
+  )
+
   it.instance("Codium accounting stays distinct from unknown pricing and does not reintroduce token totals", () =>
     Effect.gen(function* () {
       const f = yield* fixture({ codium: true, steps: 2 })

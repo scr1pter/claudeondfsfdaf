@@ -728,24 +728,26 @@ describe("vector review: --post", () => {
     }),
   )
 
-  it.live("a posted review goes through the posting check with the review's sessions, as a review it cannot trust", () =>
-    Effect.gen(function* () {
-      const repo = yield* pullRequest
-      const github = fakeGitHub({ token: TOKEN })
-      const checked: Parameters<LocalReviewDeps["posting"]>[0][] = []
-      const run = fake({
-        github: github.access,
-        findings: two,
-        posting: async (input) => (checked.push(input), input.parts.map((part) => part.replace("one past", "past"))),
-      })
-      expect((yield* review({ directory: repo.dir, pr: 7, post: true, yes: true }, run.deps)).exitCode).toBe(0)
-      // The client GitHub writes go through is given the check, which calls the posting dependency.
-      const check = github.created[0]!.check
-      expect(yield* Effect.promise(() => check(["items[items.length] is one past the end."], { untrusted: false }))).toEqual([
-        "items[items.length] is past the end.",
-      ])
-      expect(checked.at(-1)).toMatchObject({ sessionIDs: ["ses_test"], untrusted: true })
-    }),
+  it.live(
+    "a posted review goes through the posting check with the review's sessions, as a review it cannot trust",
+    () =>
+      Effect.gen(function* () {
+        const repo = yield* pullRequest
+        const github = fakeGitHub({ token: TOKEN })
+        const checked: Parameters<LocalReviewDeps["posting"]>[0][] = []
+        const run = fake({
+          github: github.access,
+          findings: two,
+          posting: async (input) => (checked.push(input), input.parts.map((part) => part.replace("one past", "past"))),
+        })
+        expect((yield* review({ directory: repo.dir, pr: 7, post: true, yes: true }, run.deps)).exitCode).toBe(0)
+        // The client GitHub writes go through is given the check, which calls the posting dependency.
+        const check = github.created[0]!.check
+        expect(
+          yield* Effect.promise(() => check(["items[items.length] is one past the end."], { untrusted: false })),
+        ).toEqual(["items[items.length] is past the end."])
+        expect(checked.at(-1)).toMatchObject({ sessionIDs: ["ses_test"], untrusted: true })
+      }),
   )
 
   it.live("a review posted to the pull request asks only for what shared documents require", () =>
@@ -941,5 +943,98 @@ describe("vector review: the command", () => {
         )
       }),
     120_000,
+  )
+})
+
+describe("vector review: Codium JSON boundary", () => {
+  it.live("new, cached and failed Codium outcomes omit raw figures", () =>
+    Effect.gen(function* () {
+      const repo = yield* branched
+      const cost = {
+        costUsd: 999,
+        input: 24000,
+        output: 100,
+        reasoning: 7,
+        cacheRead: 8,
+        cacheWrite: 9,
+        kind: "unknown" as const,
+        model: "vector-plan/sol",
+      }
+      const first = fake({
+        outcome: {
+          cost,
+          passes: [{ name: "review", model: "vector-plan/sol", input: 24000, output: 100, cacheRead: 0, costUsd: 999 }],
+        },
+      })
+      expect((yield* review({ directory: repo.dir, json: true }, first.deps)).exitCode).toBe(0)
+      const printed = JSON.parse(first.out()).outcome
+      expect(printed.cost).toEqual({ kind: "codium", model: "vector-plan/sol" })
+      expect(printed.passes).toEqual([{ name: "review", model: "vector-plan/sol", costKind: "codium" }])
+      const cached = fake()
+      yield* review({ directory: repo.dir, json: true }, cached.deps)
+      expect(cached.calls).toHaveLength(0)
+      expect(JSON.parse(cached.out()).outcome.cost).toEqual({ kind: "codium", model: "vector-plan/sol" })
+      const failed = fake({
+        outcome: {
+          cost,
+          partial: "model-error",
+          specialists: [{ name: "review", status: "failed", steps: 1, detail: "stopped" }],
+        },
+      })
+      expect((yield* review({ directory: repo.dir, full: true, json: true }, failed.deps)).exitCode).toBe(2)
+      expect(JSON.parse(failed.out()).outcome.cost).toEqual({ kind: "codium", model: "vector-plan/sol" })
+      expect(failed.err()).not.toContain("24000")
+      expect(cost.input).toBe(24000)
+    }),
+  )
+
+  it.live("mixed JSON retains explicit own pass figures and own dollars", () =>
+    Effect.gen(function* () {
+      const repo = yield* branched
+      const own = {
+        name: "security" as const,
+        model: "lmstudio/test-model",
+        costKind: "priced" as const,
+        input: 1000,
+        output: 100,
+        cacheRead: 0,
+        costUsd: 0.12,
+      }
+      const run = fake({
+        outcome: {
+          cost: {
+            costUsd: 0.12,
+            input: 25000,
+            output: 200,
+            reasoning: 7,
+            cacheRead: 8,
+            cacheWrite: 9,
+            kind: "unknown",
+            model: "vector-plan/sol + lmstudio/test-model",
+          },
+          passes: [
+            {
+              name: "review",
+              model: "vector-plan/sol",
+              costKind: "codium",
+              input: 24000,
+              output: 100,
+              cacheRead: 0,
+              costUsd: 0,
+            },
+            own,
+          ],
+        },
+      })
+      yield* review({ directory: repo.dir, json: true }, run.deps)
+      const printed = JSON.parse(run.out()).outcome
+      expect(printed.cost).toEqual({
+        kind: "unknown",
+        model: "vector-plan/sol + lmstudio/test-model",
+        costUsd: 0.12,
+        billing: "codium",
+      })
+      expect(printed.passes).toEqual([{ name: "review", model: "vector-plan/sol", costKind: "codium" }, own])
+    }),
   )
 })

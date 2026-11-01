@@ -555,6 +555,8 @@ export function historyLine(event: MemoryDocumentDetail["history"][number]) {
 function distilledLine(detail: Record<string, unknown>) {
   const model = typeof detail.model === "string" ? detail.model : "a model"
   const kept = typeof detail.kept === "number" ? detail.kept : 0
+  if (detail.costKind === "codium" || detail.billing === "codium")
+    return `You asked ${model} to find more: ${kept === 0 ? "no suggestions" : count(kept, "suggestion")} kept (Codium)`
   const used = detail.tokens && typeof detail.tokens === "object" ? (detail.tokens as Record<string, unknown>) : {}
   const spent = [used.input, used.output].reduce<number>((sum, value) => sum + (typeof value === "number" ? value : 0), 0)
   const cost = typeof detail.cost === "number" && detail.costKind === "priced" ? `, ${usd(detail.cost)}` : ""
@@ -723,11 +725,14 @@ export const DISTILL =
 /** The estimate, before anything is sent: what would go, to which model, and what it may cost. */
 export function distillEstimateLabel(estimate: MemoryDistillEstimate) {
   if (estimate.refused) return estimate.refused.message
+  if (estimate.costKind === "codium") return `Runs on ${estimate.model ?? "the model"} (Codium).`
+  if (estimate.input === undefined || estimate.output === undefined) return `Runs on ${estimate.model ?? "the model"}. The usage estimate is unavailable. ${distillCostLabel(estimate)}`
   return `Vector would send ${count(estimate.sections, "section")} (about ${tokens(estimate.input)} tokens) to ${estimate.model ?? "the model"}, with up to ${tokens(estimate.output)} tokens back. ${distillCostLabel(estimate)}`
 }
 
 /** What a request may cost: at catalog rates for a priced model, and said plainly when there is no price. */
 export function distillCostLabel(estimate: Pick<MemoryDistillEstimate, "costKind" | "lowUsd" | "highUsd">) {
+  if (estimate.costKind === "codium") return "Codium"
   if (estimate.costKind === "free") return "The model is free."
   if (estimate.costKind === "plan") return "Your plan covers the model."
   if (estimate.lowUsd === undefined || estimate.highUsd === undefined)

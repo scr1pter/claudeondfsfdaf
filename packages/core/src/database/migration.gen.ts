@@ -50,5 +50,6 @@ export const migrations = (
     import("./migration/20261028021005_background_job"),
     import("./migration/20261029032955_session_audience"),
     import("./migration/20261031070337_session_codium_steps"),
+    import("./migration/20261101020803_session_token_provenance"),
   ])
 ).map((module) => module.default) satisfies DatabaseMigration.Migration[]

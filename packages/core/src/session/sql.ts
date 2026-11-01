@@ -56,6 +56,9 @@ export const SessionTable = sqliteTable(
     // A Codium step adds no tokens to these totals.
     codium_steps: integer().notNull().default(0),
     subagent_codium_steps: integer().notNull().default(0),
+    // Local accounting provenance, never restored from a serialized Session. Old rows remain unknown.
+    tokens_own_only: integer({ mode: "boolean" }).notNull().default(false),
+    subagent_tokens_own_only: integer({ mode: "boolean" }).notNull().default(false),
     // The tokens those subagent sessions used, kept beside subagent_cost.
     subagent_tokens_input: integer().notNull().default(0),
     subagent_tokens_output: integer().notNull().default(0),

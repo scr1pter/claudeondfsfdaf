@@ -173,7 +173,10 @@ export function render(input: {
     `id="${input.taskID}"`,
     `state="${input.state}"`,
     ...(input.usage
-      ? [...(codiumOnly ? [] : [`tokens="${input.usage.total}"`]), `tool_calls="${input.usage.toolUses}"`]
+      ? [
+          ...(input.usage.tokensOwnOnly === true && !codiumOnly ? [`tokens="${input.usage.total}"`] : []),
+          `tool_calls="${input.usage.toolUses}"`,
+        ]
       : []),
     ...(input.duration === undefined ? [] : [`duration="${Locale.duration(Math.max(0, input.duration))}"`]),
   ]

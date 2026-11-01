@@ -1,3 +1,4 @@
+import { Billing } from "@vectordevai/schema/billing"
 import { Option, Schema } from "effect"
 import { RunBudget } from "@vectordevai/schema/run-budget"
 
@@ -15,7 +16,11 @@ export type EngineSessionResponse = {
     cost?: number
     tokens?: Tokens
     // What the subagents and Vector's helpers below the session spent, which cost and tokens leave out.
+    unpricedSteps?: number
+    subagentUnpricedSteps?: number
     codiumSteps?: number
+    tokensOwnOnly?: boolean
+    subagentTokensOwnOnly?: boolean
     subagentCodiumSteps?: number
     subagentCost?: number
     subagentTokens?: Tokens
@@ -34,6 +39,12 @@ export function sessionCost(data: EngineSessionResponse["data"]) {
 
 export function sessionTokens(data: EngineSessionResponse["data"]) {
   const own = tokenTotal(data?.tokens)
+  // An older engine cannot separate positive Codium token totals. Zero before a fresh run is still a safe baseline.
+  if (
+    (data?.tokensOwnOnly !== true && (own ?? 0) > 0) ||
+    (data?.subagentTokensOwnOnly !== true && (tokenTotal(data?.subagentTokens) ?? 0) > 0)
+  )
+    return undefined
   if (own === undefined) return undefined
   return own + (tokenTotal(data?.subagentTokens) ?? 0)
 }
@@ -73,22 +84,72 @@ export function newSpend(seen: RunBudget.Snapshot | undefined, next: RunBudget.S
 // is spent, subagents included, and a revert never lowers it, so a fully
 // priced run trusts it. It is still floored at the session delta, because a run
 // that drained more than once leaves only its last drain in the snapshot. A
-// run with unpriced steps falls back to the session delta, and when that shows
-// nothing the cost is unknown rather than zero.
+// run with unpriced steps still preserves any positive known subtotal. When
+// neither reading proves money was spent, its cost stays unknown rather than zero.
 export function measuredCost(
   snapshot: RunBudget.Snapshot | undefined,
   before: number | undefined,
   after: number | undefined,
 ) {
   const delta = usageDelta(before, after)
-  if (snapshot?.costKind === "priced" && snapshot.unpricedSteps === 0) return Math.max(snapshot.spentUsd, delta ?? 0)
+  if (snapshot && snapshot.spentUsd > 0) return Math.max(snapshot.spentUsd, delta ?? 0)
+  if (snapshot && snapshot.unpricedSteps === 0 && (snapshot.costKind === "priced" || (snapshot.codiumSteps ?? 0) > 0))
+    return Math.max(snapshot.spentUsd, delta ?? 0)
   if (snapshot && snapshot.unpricedSteps > 0 && !delta) return undefined
   return delta
 }
 
+/** One launch's own usage and Codium presence, excluding earlier recurrences in the same session. */
+export function measuredRun(
+  snapshot: RunBudget.Snapshot | undefined,
+  before: EngineSessionResponse["data"],
+  after: EngineSessionResponse["data"],
+) {
+  const count = (data: EngineSessionResponse["data"]) =>
+    data
+      ? [data.codiumSteps, data.subagentCodiumSteps].reduce<number>(
+          (total, value) => total + (Number.isFinite(value) && (value ?? 0) > 0 ? value! : 0),
+          0,
+        )
+      : undefined
+  const legacy =
+    after?.codiumSteps === undefined &&
+    after?.subagentCodiumSteps === undefined &&
+    Billing.of(after ?? {}) &&
+    (usageDelta(tokenTotal(before?.tokens), tokenTotal(after?.tokens)) ?? 0) > 0
+  const codium = (snapshot?.codiumSteps ?? 0) > 0 || (usageDelta(count(before), count(after)) ?? 0) > 0 || legacy
+  // Session unknown counts include Codium; guard unknown counts already exclude it. Never subtract Codium twice.
+  const ownUnknown = (data: EngineSessionResponse["data"]) =>
+    data
+      ? Math.max(
+          0,
+          [data.unpricedSteps, data.subagentUnpricedSteps].reduce<number>(
+            (total, value) => total + (Number.isFinite(value) && (value ?? 0) > 0 ? value! : 0),
+            0,
+          ) - (count(data) ?? 0),
+        )
+      : undefined
+  const unknown = (snapshot?.unpricedSteps ?? 0) > 0 || (usageDelta(ownUnknown(before), ownUnknown(after)) ?? 0) > 0
+  const measured = measuredCost(snapshot, sessionCost(before), sessionCost(after))
+  const totalCostUsd = unknown && !measured ? undefined : measured
+  const totalTokens = usageDelta(sessionTokens(before), sessionTokens(after))
+  const costKind: RunBudget.CostKind = unknown
+    ? "unknown"
+    : (totalCostUsd ?? 0) > 0
+      ? "priced"
+      : codium && !totalTokens
+        ? "codium"
+        : snapshot?.costKind && snapshot.costKind !== "codium"
+          ? snapshot.costKind
+          : totalCostUsd === 0
+            ? "free"
+            : "unknown"
+  return { totalCostUsd, totalTokens, costKind, ...(codium ? { billing: "codium" as const } : {}) }
+}
+
 // Folds one drain's guard reading into a run's total. Every drain of a session
 // is its own guard run, so spend and step counts add up, and the latest drain's
-// state and cost kind stand for the run.
+// state stands for the run. A later Codium drain retains the preceding own billing kind.
 export function combineSpend(total: RunBudget.Snapshot | undefined, drain: RunBudget.Snapshot | undefined) {
   if (!drain) return total
   if (!total) return drain
@@ -98,6 +159,7 @@ export function combineSpend(total: RunBudget.Snapshot | undefined, drain: RunBu
     steps: total.steps + drain.steps,
     unpricedSteps: total.unpricedSteps + drain.unpricedSteps,
     codiumSteps: (total.codiumSteps ?? 0) + (drain.codiumSteps ?? 0),
+    costKind: drain.costKind === "codium" && total.costKind !== "codium" ? total.costKind : drain.costKind,
   }
 }
 

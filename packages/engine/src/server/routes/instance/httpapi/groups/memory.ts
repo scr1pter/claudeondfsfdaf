@@ -511,8 +511,8 @@ export const MemoryDistillEstimate = Schema.Struct({
   refused: Schema.optional(Schema.Struct({ reason: DistillReason, message: Schema.String })),
   /** Sections that would be sent, the tokens sent, and the output cap. */
   sections: Schema.Finite,
-  input: Schema.Finite,
-  output: Schema.Finite,
+  input: Schema.optional(Schema.Finite),
+  output: Schema.optional(Schema.Finite),
   costKind: Schema.optional(RunBudget.CostKind),
   /** At catalog rates, for a priced model. */
   lowUsd: Schema.optional(Schema.Finite),
@@ -536,14 +536,16 @@ export const MemoryDistillResult = Schema.Struct({
   duplicate: Schema.Finite,
   /** Suggestions dropped: not readable, a quote not in the document, or text a scan failed. */
   dropped: Schema.Struct({ invalid: Schema.Finite, quote: Schema.Finite, scan: Schema.Finite }),
-  tokens: Schema.Struct({
-    input: Schema.Finite,
-    output: Schema.Finite,
-    reasoning: Schema.Finite,
-    cacheRead: Schema.Finite,
-    cacheWrite: Schema.Finite,
-  }),
-  cost: Schema.Finite,
+  tokens: Schema.optional(
+    Schema.Struct({
+      input: Schema.Finite,
+      output: Schema.Finite,
+      reasoning: Schema.Finite,
+      cacheRead: Schema.Finite,
+      cacheWrite: Schema.Finite,
+    }),
+  ),
+  cost: Schema.optional(Schema.Finite),
   costKind: RunBudget.CostKind,
   /** Why the model gave nothing usable, when it did not. */
   error: Schema.optional(Schema.String),

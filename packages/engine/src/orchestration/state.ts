@@ -39,6 +39,7 @@ const Counters = Schema.Struct({
   elapsedMs: amount,
 })
 const Usage = Schema.Struct({
+  tokensOwnOnly: optional(Schema.Boolean),
   cost: amount,
   steps: integer,
   toolUses: integer,

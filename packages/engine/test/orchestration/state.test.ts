@@ -64,6 +64,23 @@ const refused = Effect.fnUntraced(function* <A>(effect: Effect.Effect<A, Workflo
 const noRead: WorkflowState.Read = () => Effect.die(new Error("No referenced answer should be read"))
 
 describe("durable workflow checkpoints", () => {
+  it.effect("preserves known token provenance without certifying legacy checkpoint usage", () =>
+    Effect.gen(function* () {
+      for (const proof of [undefined, false, true]) {
+        const input = state()
+        const stored = yield* WorkflowState.encode({
+          ...input,
+          sessions: Object.fromEntries(
+            Object.entries(input.sessions).map(([id, value]) => [id, { ...value, tokensOwnOnly: proof }]),
+          ),
+        })
+        const restored = yield* WorkflowState.hydrate(stored, { read: noRead })
+        expect(restored.sessions[producer].tokensOwnOnly).toBe(proof)
+        expect(restored.sessions[producer].total).toBe(123)
+      }
+    }),
+  )
+
   it.effect("round-trips optional active clocks without changing cumulative elapsed counters", () =>
     Effect.gen(function* () {
       for (const active of [false, true]) {

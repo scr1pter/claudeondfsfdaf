@@ -36,6 +36,7 @@ import { SessionInput } from "./session/input"
 import { SessionAudience } from "./session/audience"
 import { Snapshot } from "./snapshot"
 import { SessionRevert } from "./session/revert"
+import { SessionAccounting } from "./session/accounting"
 import { Revert } from "@vectordevai/schema/revert"
 import { FSUtil } from "./fs-util"
 import { SessionDurable } from "@vectordevai/schema/durable-event-manifest"
@@ -302,7 +303,14 @@ const layer = Layer.effect(
           time: { created: now, updated: now },
         })
         const projected = yield* events
-          .publish(SessionV1.Event.Created, { sessionID, info }, { location: input.location })
+          .publish(
+            SessionV1.Event.Created,
+            { sessionID, info },
+            {
+              location: input.location,
+              commit: (seq) => SessionAccounting.initializeEmpty(db, sessionID, seq),
+            },
+          )
           .pipe(
             Effect.as({ type: "created" } as const),
             Effect.catchDefect((defect) => {

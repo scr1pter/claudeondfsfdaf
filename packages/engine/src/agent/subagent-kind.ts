@@ -70,6 +70,8 @@ export type SubagentWorkflow =
     }
 
 export type SubagentUsage = {
+  /** Local accounting proof for these own-only session totals; serialized metadata never grants it to readers. */
+  tokensOwnOnly?: boolean
   /** Cost billed across all of the subagent's steps. */
   cost: number
   tokens: {

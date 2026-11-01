@@ -96,6 +96,7 @@ export interface Settings {
   permissions: {
     autoApprove: boolean
   }
+  codium: { alert80: boolean }
   notifications: NotificationSettings
   sounds: SoundSettings
   accessibility: {
@@ -225,6 +226,7 @@ const defaultSettings: Settings = {
   permissions: {
     autoApprove: false,
   },
+  codium: { alert80: false },
   notifications: {
     agent: true,
     permissions: true,
@@ -566,6 +568,12 @@ export const { use: useSettings, provider: SettingsProvider } = createSimpleCont
         autoApprove: withFallback(() => store.permissions?.autoApprove, defaultSettings.permissions.autoApprove),
         setAutoApprove(value: boolean) {
           setStore("permissions", "autoApprove", value)
+        },
+      },
+      codium: {
+        alert80: withFallback(() => store.codium?.alert80, defaultSettings.codium.alert80),
+        setAlert80(value: boolean) {
+          setStore("codium", "alert80", value)
         },
       },
       notifications: {

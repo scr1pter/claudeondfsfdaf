@@ -619,6 +619,9 @@ export type ParallelWorkspaceRecord = {
   riskLevel: "low" | "medium" | "high"
   estimatedCost: string
   actualCost?: string
+  measuredCost?: number
+  billing?: "codium"
+  costKind?: "free" | "priced" | "plan" | "local" | "unknown" | "codium"
   finalSummary: string
   mergeState: "none" | "merged" | "discarded"
   logs: string[]
@@ -792,6 +795,8 @@ export type BackgroundTaskRecord = {
   browserActive: boolean
   costEstimate: string
   actualUsage?: string
+  billing?: "codium"
+  costKind?: "free" | "priced" | "plan" | "local" | "unknown" | "codium"
   errorSummary?: string
   logs: string[]
   actions: {

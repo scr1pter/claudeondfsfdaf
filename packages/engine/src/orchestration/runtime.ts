@@ -42,7 +42,21 @@ const zero = (): SubagentUsage => ({
 })
 const tokens = (value?: SubagentUsage["tokens"]) =>
   value ? value.input + value.output + value.reasoning + value.cache.read + value.cache.write : 0
+const coversTokens = (proven: SubagentUsage, other: SubagentUsage) =>
+  proven.tokensOwnOnly === true &&
+  proven.total >= other.total &&
+  proven.tokens.input >= other.tokens.input &&
+  proven.tokens.output >= other.tokens.output &&
+  proven.tokens.reasoning >= other.tokens.reasoning &&
+  proven.tokens.cache.read >= other.tokens.cache.read &&
+  proven.tokens.cache.write >= other.tokens.cache.write
 const mergeUsage = (left: SubagentUsage, right: SubagentUsage): SubagentUsage => ({
+  // A known subtotal cannot certify a larger retained legacy quantity. A proven
+  // observation may cover all retained token buckets, independently of cost.
+  tokensOwnOnly:
+    (left.tokensOwnOnly === true && right.tokensOwnOnly === true) ||
+    coversTokens(left, right) ||
+    coversTokens(right, left),
   cost: Math.max(left.cost, right.cost),
   steps: Math.max(left.steps, right.steps),
   total: Math.max(left.total, right.total),
@@ -98,7 +112,30 @@ export const run = Effect.fn("WorkflowRuntime.run")(function* (input: Input) {
   const seed: WorkflowRunner.State =
     saved === undefined
       ? ({ nodes: [], usage: counters(), groups: {}, sessions: {}, sessionGroups: {} } satisfies WorkflowRunner.State)
-      : yield* WorkflowState.hydrate(saved, { read })
+      : yield* WorkflowState.hydrate(saved, { read }).pipe(
+          Effect.map((snapshot) => ({
+            ...snapshot,
+            // Serialized proof is historical display data. Current Session observations
+            // must independently cover these quantities before runtime certifies them.
+            sessions: Object.fromEntries(
+              Object.entries(snapshot.sessions).map(([id, usage]) => [id, { ...usage, tokensOwnOnly: false }]),
+            ),
+            nodes: snapshot.nodes.map((node) =>
+              !node.pendingResult?.result.usage
+                ? node
+                : {
+                    ...node,
+                    pendingResult: {
+                      ...node.pendingResult,
+                      result: {
+                        ...node.pendingResult.result,
+                        usage: { ...node.pendingResult.result.usage, tokensOwnOnly: false },
+                      },
+                    },
+                  },
+            ),
+          })),
+        )
   const children = yield* input.sessions.children(input.runID)
   const books = new Map<SessionID, { usage: SubagentUsage; parts: Map<string, SessionV1.StepFinishPart> }>()
   const active = new Set<SessionID>()
@@ -116,6 +153,9 @@ export const run = Effect.fn("WorkflowRuntime.run")(function* (input: Input) {
     const previous = prior?.billing === "codium" ? zero().tokens : prior?.tokens
     book.usage = {
       ...book.usage,
+      // Step parts carry context figures but no positive provider identity. The
+      // authoritative terminal/session observation can certify them afterward.
+      tokensOwnOnly: false,
       steps: book.usage.steps + (prior ? 0 : 1),
       cost: Math.max(
         book.usage.cost,
@@ -161,6 +201,7 @@ export const run = Effect.fn("WorkflowRuntime.run")(function* (input: Input) {
     const book = books.get(child.id)!
     book.usage = mergeUsage(mergeUsage(book.usage, seed.sessions[child.id] ?? zero()), {
       ...zero(),
+      tokensOwnOnly: child.tokensOwnOnly === true,
       cost: child.cost ?? 0,
       tokens: child.tokens ?? zero().tokens,
       total: tokens(child.tokens),

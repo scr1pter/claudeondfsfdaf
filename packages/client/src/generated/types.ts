@@ -233,6 +233,8 @@ export type SessionsImportArchiveOutput = {
     readonly cost: number
     readonly unpricedSteps?: number
     readonly codiumSteps?: number
+    readonly tokensOwnOnly?: boolean
+    readonly subagentTokensOwnOnly?: boolean
     readonly subagentCost?: number
     readonly subagentUnpricedSteps?: number
     readonly subagentCodiumSteps?: number
@@ -454,6 +456,8 @@ export type SessionsListOutput = {
     readonly cost: number
     readonly unpricedSteps?: number
     readonly codiumSteps?: number
+    readonly tokensOwnOnly?: boolean
+    readonly subagentTokensOwnOnly?: boolean
     readonly subagentCost?: number
     readonly subagentUnpricedSteps?: number
     readonly subagentCodiumSteps?: number
@@ -575,6 +579,8 @@ export type SessionsCreateOutput = {
     readonly cost: number
     readonly unpricedSteps?: number
     readonly codiumSteps?: number
+    readonly tokensOwnOnly?: boolean
+    readonly subagentTokensOwnOnly?: boolean
     readonly subagentCost?: number
     readonly subagentUnpricedSteps?: number
     readonly subagentCodiumSteps?: number
@@ -633,6 +639,8 @@ export type SessionsGetOutput = {
     readonly cost: number
     readonly unpricedSteps?: number
     readonly codiumSteps?: number
+    readonly tokensOwnOnly?: boolean
+    readonly subagentTokensOwnOnly?: boolean
     readonly subagentCost?: number
     readonly subagentUnpricedSteps?: number
     readonly subagentCodiumSteps?: number

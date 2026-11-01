@@ -1,3 +1,5 @@
+import { Database } from "@vectordevai/core/database/database"
+import { SessionAccountingOutput } from "@vectordevai/core/session/accounting-output"
 import { EventV2 } from "@vectordevai/core/event"
 import { VectorEvent } from "@vectordevai/protocol/groups/event"
 import { Effect, Schema, Stream } from "effect"
@@ -30,6 +32,7 @@ export const EventHandler = HttpApiBuilder.group(Api, "server.event", (handlers)
     const events = yield* EventV2.Service
     // Read when the routes are built, so a host serving them has nothing more to provide per request.
     const audience = yield* SessionAudience.Service
+    const database = yield* Database.Service
     return handlers.handleRaw("event.subscribe", () =>
       Effect.gen(function* () {
         const principal = yield* RequestPrincipal
@@ -58,6 +61,7 @@ export const EventHandler = HttpApiBuilder.group(Api, "server.event", (handlers)
                       }),
                     ),
                   ),
+                  Stream.mapEffect((event) => SessionAccountingOutput.project(database.db, event)),
                 ),
               ),
             )

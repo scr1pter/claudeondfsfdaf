@@ -1,3 +1,4 @@
+import { Billing } from "@vectordevai/schema/billing"
 import {
   FREE_MODEL_TRAINING_LABEL,
   FREE_MODEL_TRAINING_REFUSED_TERMINAL,
@@ -111,7 +112,7 @@ export const ModelsCommand = effectCmd({
         process.stdout.write(`${providerID}/${modelID}`)
         process.stdout.write(EOL)
         if (verbose) {
-          process.stdout.write(JSON.stringify(model, null, 2))
+          process.stdout.write(JSON.stringify(modelForOutput(providerID, model), null, 2))
           process.stdout.write(EOL)
         }
       }
@@ -148,4 +149,12 @@ export function codiumLines(models: readonly { id: string; name: string; codium?
       ? [`  Locked: ${locked.join(", ")}. Change plan to use them: ${ModelPlanStatus.MANAGE_URL}`]
       : []),
   ]
+}
+
+/** Model selectors and capabilities stay public; Codium's zero internal rates are not a price. */
+export function modelForOutput<T extends { cost: unknown }>(providerID: string, model: T) {
+  if (!Billing.isCodium(providerID)) return model
+  const result: Partial<T> & { billing?: "codium" } = { ...model, billing: "codium" }
+  delete result.cost
+  return result
 }

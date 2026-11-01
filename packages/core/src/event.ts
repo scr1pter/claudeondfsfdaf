@@ -19,6 +19,9 @@ export type { Data, Definition, Payload } from "@vectordevai/schema/event"
 export type Subscriber<D extends Definition = Definition> = (event: Payload<D>) => Effect.Effect<void>
 export type Unsubscribe = Effect.Effect<void>
 
+/** Local provenance of an accepted replay projection; never encoded in an event or supplied by its metadata. */
+export const Replaying = Context.Reference<boolean>("@vector/Event/Replaying", { defaultValue: () => false })
+
 const DeferredNotifications = Context.Reference<Effect.Effect<void>[] | undefined>(
   "@vector/Event/DeferredNotifications",
   {
@@ -380,7 +383,7 @@ export const layerWith = (options?: LayerOptions) =>
                             durable: { aggregateID, seq, version: durable.version },
                           } as Payload
                           for (const projector of list) {
-                            yield* projector(committed)
+                            yield* projector(committed).pipe(Effect.provideService(Replaying, input !== undefined))
                           }
                           if (commit) yield* commit(seq)
                           yield* db
@@ -587,9 +590,7 @@ export const layerWith = (options?: LayerOptions) =>
               )
             }
           }
-          for (const event of events) {
-            yield* validateSessionIdentity(event)
-          }
+          for (const event of events) yield* validateSessionIdentity(event)
           for (const event of events) {
             yield* registerCreation(event)
           }

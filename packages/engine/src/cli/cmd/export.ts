@@ -1,3 +1,4 @@
+import { Billing } from "@vectordevai/schema/billing"
 import { Session } from "@/session/session"
 import { SessionID } from "../../session/schema"
 import { effectCmd, fail } from "../effect-cmd"
@@ -70,7 +71,7 @@ function filepart(part: ArchiveFile): ArchiveFile {
   }
 }
 
-function part(part: ArchivePart): ArchivePart {
+function part(part: ArchivePart) {
   switch (part.type) {
     case "text":
       return {
@@ -164,12 +165,24 @@ function part(part: ArchivePart): ArchivePart {
 
 const partFn = part
 
-function sanitize(data: SessionArchive.Legacy) {
+export function sanitizeLegacy(data: SessionArchive.Legacy) {
+  const codiumMessages = new Set(
+    data.messages
+      .filter(
+        (message) =>
+          message.info.role === "assistant" &&
+          (Billing.of(message.info) || message.parts.some((part) => part.type === "step-finish" && Billing.of(part))),
+      )
+      .map((message) => message.info.id),
+  )
+  const info = { ...data.info }
+  if (data.info.tokensOwnOnly !== true) delete info.tokens
+  if (data.info.subagentTokensOwnOnly !== true) delete info.subagentTokens
   return {
     // The privacy, guest-input and usage markers travel with the archive: an import may only tighten them.
     ...data,
     info: {
-      ...data.info,
+      ...info,
       title: redact("session-title", data.info.id, data.info.title),
       directory: redact("session-directory", data.info.id, data.info.directory),
       summary: !data.info.summary
@@ -214,15 +227,34 @@ function sanitize(data: SessionArchive.Legacy) {
                   },
             }
           : {
-              ...msg.info,
+              ...withoutTokens(msg.info, codiumMessages.has(msg.info.id), Billing.hasOwnIdentity(msg.info)),
               path: {
                 cwd: redact("cwd", msg.info.id, msg.info.path.cwd),
                 root: redact("root", msg.info.id, msg.info.path.root),
               },
             },
-      parts: msg.parts.map(partFn),
+      parts: msg.parts.map((part) => {
+        const redacted = partFn(part)
+        return part.type === "step-finish"
+          ? withoutTokens(
+              redacted,
+              Boolean(Billing.of(part) || (msg.info.role === "assistant" && Billing.of(msg.info))),
+              msg.info.role === "assistant" && Billing.hasOwnIdentity(msg.info),
+            )
+          : redacted
+      }),
     })),
   }
+}
+
+function withoutTokens<T extends object>(value: T, codium: boolean, own = false) {
+  if (!codium && own) return value
+  const result: Partial<T> & { tokens?: unknown; billing?: "codium" } = {
+    ...value,
+    ...(codium ? { billing: "codium" as const } : {}),
+  }
+  delete result.tokens
+  return result
 }
 
 export const ExportCommand = effectCmd({
@@ -309,7 +341,7 @@ const run = Effect.fn("Cli.export.body")(function* (args: {
       : "engine" in local
         ? Schema.encodeSync(SessionArchive.Native)(local)
         : args.sanitize
-          ? sanitize(local)
+          ? sanitizeLegacy(local)
           : local
     process.stdout.write(JSON.stringify(output, null, 2))
     process.stdout.write(EOL)

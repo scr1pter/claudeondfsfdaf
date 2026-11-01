@@ -376,8 +376,27 @@ const layer = Layer.effect(
           : current.workflow?.role === "agent"
             ? { ...current.workflow }
             : undefined
-      const workflowUsage =
-        current.workflow?.role === "run" ? (yield* SubagentLifecycle.observe(sessions, session.id))?.usage : undefined
+      const usage =
+        current.workflow?.role === "run"
+          ? (yield* SubagentLifecycle.observe(sessions, session.id))?.usage
+          : {
+              cost: session.cost ?? 0,
+              tokens,
+              total: tokens.input + tokens.output + tokens.reasoning + tokens.cache.read + tokens.cache.write,
+              toolUses: Number(counts?.tools ?? 0),
+              steps: Number(counts?.steps ?? 0),
+              unpricedSteps: session.unpricedSteps,
+              codiumSteps: session.codiumSteps,
+              tokensOwnOnly: session.tokensOwnOnly === true,
+            }
+      // Pricing evidence is independent of token provenance. Even when a checkpoint
+      // cannot supply step counts, these canonical session counters remain known.
+      const codium =
+        usage?.codiumSteps ??
+        (session.codiumSteps ?? 0) + (current.workflow?.role === "run" ? (session.subagentCodiumSteps ?? 0) : 0)
+      const unpriced =
+        usage?.unpricedSteps ??
+        (session.unpricedSteps ?? 0) + (current.workflow?.role === "run" ? (session.subagentUnpricedSteps ?? 0) : 0)
       // A registry that cannot be read leaves this task's isolation unreported rather than failing every list.
       const privateWork = yield* isolation
         .find(session.id)
@@ -410,19 +429,27 @@ const layer = Layer.effect(
               : tool.tool.slice(0, 240)
             : undefined,
         lastTool: tool?.type === "tool" ? tool.tool : undefined,
-        usage:
-          current.workflow?.role === "run"
-            ? workflowUsage
-            : {
-                cost: session.cost ?? 0,
-                tokens,
-                total: tokens.input + tokens.output + tokens.reasoning + tokens.cache.read + tokens.cache.write,
-                toolUses: Number(counts?.tools ?? 0),
-                steps: Number(counts?.steps ?? 0),
-                unpricedSteps: session.unpricedSteps,
-                codiumSteps: session.codiumSteps,
-              },
-        ...(workflow ? { workflow } : {}),
+        usage,
+        ...(!usage
+          ? { measuredCost: (session.cost ?? 0) + (current.workflow?.role === "run" ? (session.subagentCost ?? 0) : 0) }
+          : {}),
+        ...(codium > 0 ? { billing: "codium" as const } : {}),
+        ...(unpriced > codium ? { costKind: "unknown" as const } : {}),
+        ...(workflow
+          ? {
+              workflow:
+                workflow.role === "run"
+                  ? {
+                      ...workflow,
+                      // Editable progress cannot borrow a canonical proof to certify its own number.
+                      tokens:
+                        usage?.tokensOwnOnly === true && !(codium > 0 && usage.total === 0)
+                          ? { used: usage.total, max: workflow.tokens?.max }
+                          : undefined,
+                    }
+                  : workflow,
+            }
+          : {}),
         ...(current.workflow?.role === "agent" ? { groupID: `workflow:${current.workflow.runID}` } : {}),
         ownedPaths: current.ownedPaths ?? [],
         dependsOn: current.dependsOn ?? [],

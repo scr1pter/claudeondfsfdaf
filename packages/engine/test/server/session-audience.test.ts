@@ -8,6 +8,7 @@ import { AppNodeBuilder } from "@vectordevai/core/effect/app-node-builder"
 import { Flag } from "@vectordevai/core/flag/flag"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { CrossSpawnSpawner } from "@vectordevai/core/cross-spawn-spawner"
+import { Database } from "@vectordevai/core/database/database"
 import { SessionAudience } from "@vectordevai/core/session/audience"
 import { SessionV1 } from "@vectordevai/core/v1/session"
 import { SessionAudienceHttp } from "@vectordevai/server/session-audience"
@@ -24,7 +25,7 @@ import { pollWithTimeout, testEffect } from "../lib/effect"
 import { httpApiLayer, requestInDirectory } from "./httpapi-layer"
 
 const services = AppNodeBuilder.build(
-  LayerNode.group([Session.node, SessionAudience.node, EventV2Bridge.node, CrossSpawnSpawner.node]),
+  LayerNode.group([Session.node, SessionAudience.node, EventV2Bridge.node, CrossSpawnSpawner.node, Database.node]),
 )
 const it = testEffect(Layer.mergeAll(services, httpApiLayer))
 const relay = { "x-vector-guest-request": "1", "content-type": "application/json" }

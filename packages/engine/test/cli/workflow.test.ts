@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, test } from "bun:test"
 import path from "node:path"
 import yargs from "yargs"
-import { createVectorClient } from "@vectordevai/sdk/v2"
+import { createVectorClient, type TaskInfo } from "@vectordevai/sdk/v2"
 import { ChildEnvironment } from "@vectordevai/core/child-environment"
 import type { Workflow } from "@vectordevai/schema/workflow"
 import {
@@ -13,6 +13,7 @@ import {
   readWorkflowSource,
   validateWorkflowOffline,
   WorkflowCommand,
+  workflowForOutput,
 } from "@/cli/cmd/workflow"
 import { tmpdir } from "../fixture/fixture"
 
@@ -53,6 +54,60 @@ const plan: Workflow.Plan = {
   usd: 0.25,
   tokens: 1000,
 }
+
+test("workflow machine output gates token totals and never certifies editable progress with a remote proof", () => {
+  for (const proof of [undefined, false, true]) {
+    const task: TaskInfo = {
+      id: "run",
+      parentSessionID: "parent",
+      source: "subagent",
+      title: "Review",
+      status: "completed",
+      startedAt: 1,
+      elapsedMs: 1,
+      ownedPaths: [],
+      dependsOn: [],
+      resultAvailable: true,
+      attempt: 1,
+      controls: { inspect: true, message: false, stop: true },
+      usage: {
+        cost: 0.12,
+        total: 321,
+        steps: 1,
+        toolUses: 0,
+        tokensOwnOnly: proof,
+        tokens: { input: 321, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+      },
+      workflow: { role: "run", runID: "run", tokens: { used: 987654, max: 1000 } },
+    }
+    for (const response of [
+      { runs: [task] },
+      { task, nodes: [], report: "Report", truncated: false },
+      { tasks: [task] },
+    ]) {
+      const printed = JSON.stringify(workflowForOutput(response))
+      expect(printed).not.toContain("987654")
+      expect(printed.includes('"used":321')).toBe(proof === true)
+      expect(printed.includes('"total":321')).toBe(proof === true)
+      expect(printed).toContain('"cost":0.12')
+    }
+    expect(task.workflow?.tokens?.used).toBe(987654)
+    expect(task.usage?.total).toBe(321)
+    if (proof === true) {
+      const pure = {
+        ...task,
+        usage: {
+          ...task.usage!,
+          cost: 0,
+          total: 0,
+          codiumSteps: 1,
+          tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+        },
+      }
+      expect(JSON.stringify(workflowForOutput({ runs: [pure] }))).not.toContain('"used"')
+    }
+  }
+})
 
 test("file validation works offline and defers engine authority without inventing a plan", async () => {
   await using tmp = await tmpdir()

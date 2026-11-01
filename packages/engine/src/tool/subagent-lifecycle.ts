@@ -632,6 +632,7 @@ export function observe(
       },
     }
     const usage: SubagentUsage = {
+      tokensOwnOnly: info.tokensOwnOnly === true && (!workflow || info.subagentTokensOwnOnly === true),
       cost: (info.cost ?? 0) + (workflow ? (info.subagentCost ?? 0) : 0),
       tokens,
       total: tokens.input + tokens.output + tokens.reasoning + tokens.cache.read + tokens.cache.write,

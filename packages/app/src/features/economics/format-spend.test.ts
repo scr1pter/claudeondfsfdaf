@@ -57,7 +57,7 @@ describe("spendKind", () => {
     expect(spendKind(catalog, "openai", "gpt-5.5")).toBe("plan")
   })
 
-  test("a Vector Codium model is billed in Codium credits", () => {
+  test("a Vector Codium model belongs to the plan", () => {
     expect(spendKind(catalog, "vector-plan", "codium-coder")).toBe("codium")
     // Codium's catalog carries no prices, and its models are still Codium, not unpriced.
     expect(spendKind(catalog, "vector-plan", "unlisted-coder")).toBe("codium")
@@ -67,7 +67,7 @@ describe("spendKind", () => {
 const usd = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" })
 const t = (key: "session.cost.unknown" | "session.cost.partial", params: { cost: string }) =>
   key === "session.cost.unknown" ? "Cost unknown" : `${params.cost} + unpriced`
-const read = (input: { cost: number; unpricedSteps?: number; tokens: number; kind: SpendKind }) =>
+const read = (input: { cost: number; unpricedSteps?: number; codiumSteps?: number; tokens: number; kind: SpendKind }) =>
   sessionReading({ unpricedSteps: 0, ...input, format: (value) => usd.format(value), t })
 
 describe("sessionReading", () => {
@@ -115,17 +115,28 @@ describe("sessionReading", () => {
     )
   })
 
-  test("Codium spend reads as Codium credits, never in dollars, even though every Codium step is unpriced", () => {
-    const reading = read({ cost: 0, unpricedSteps: 4, tokens: 45_000, kind: "codium" })
-    expect(reading).toEqual({ label: "Codium credits", kind: "codium" })
-    expect(SPEND_TOOLTIP[reading.kind]).toBe(
-      "Billed in Vector Codium credits, shown as the share left in Settings, never in dollars. A dollar cap counts Codium steps as unpriced.",
-    )
-    // Dollars the session spent on other models still show.
-    expect(read({ cost: 1.25, unpricedSteps: 4, tokens: 45_000, kind: "codium" })).toEqual({
-      label: "$1.25 + unpriced",
-      kind: "priced",
+  test("Codium is retained with zero displayed totals and after model switches", () => {
+    expect(read({ cost: 0, unpricedSteps: 4, codiumSteps: 4, tokens: 0, kind: "priced" })).toEqual({
+      label: "Codium",
+      kind: "codium",
+      codiumSteps: 4,
     })
+    expect(read({ cost: 1.25, unpricedSteps: 4, codiumSteps: 4, tokens: 100, kind: "codium" }).label).toBe(
+      "$1.25 + Codium",
+    )
+    expect(read({ cost: 1.25, unpricedSteps: 5, codiumSteps: 4, tokens: 100, kind: "codium" }).label).toBe(
+      "$1.25 + unpriced + Codium",
+    )
+    expect(read({ cost: 0, unpricedSteps: 5, codiumSteps: 4, tokens: 100, kind: "codium" }).label).toBe(
+      "Cost unknown + Codium",
+    )
+    expect(read({ cost: 0, unpricedSteps: 4, codiumSteps: 4, tokens: 100, kind: "free" }).label).toBe("free + Codium")
+    expect(read({ cost: 0, unpricedSteps: 4, codiumSteps: 4, tokens: 100, kind: "plan" }).label).toBe(
+      "ChatGPT plan + Codium",
+    )
+    expect(SPEND_TOOLTIP.codium).toBe(
+      "Billed to your Vector Codium plan. Vector shows its usage as a percentage in Settings → Usage, never as tokens or dollars.",
+    )
   })
 
   test("the priced tooltip names reported charges before catalog prices and never claims list price alone", () => {
@@ -160,10 +171,10 @@ describe("spendPill", () => {
   })
 
   test("a capped Codium run keeps its Codium label, since the cap counts no Codium dollars", () => {
-    const codium = { label: "Codium credits", kind: "codium" as const }
-    expect(spendPill({ session: codium, run: run(0), running: true }).label).toBe("Codium credits")
+    const codium = { label: "Codium", kind: "codium" as const, codiumSteps: 2 }
+    expect(spendPill({ session: codium, run: run(0), running: true }).label).toBe("Codium")
     // Dollars spent on other models in the same run still pair with the cap.
-    expect(spendPill({ session: codium, run: run(0.8), running: true }).label).toBe("$0.80 of $5.00")
+    expect(spendPill({ session: codium, run: run(0.8), running: true }).label).toBe("$0.80 of $5.00 + Codium")
   })
 
   test("no cap follows free, a plan or cost unknown when the run spent nothing", () => {
@@ -209,5 +220,11 @@ describe("lastAssistantModel", () => {
       ]),
     ).toEqual({ providerID: "openrouter", modelID: "b" })
     expect(lastAssistantModel([{ role: "user" }])).toBeUndefined()
+    expect(
+      lastAssistantModel([
+        { role: "assistant", providerID: "openai", modelID: "own" },
+        { role: "assistant", providerID: "vector-plan", modelID: "managed" },
+      ]),
+    ).toEqual({ providerID: "openai", modelID: "own" })
   })
 })

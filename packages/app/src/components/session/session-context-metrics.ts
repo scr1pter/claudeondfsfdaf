@@ -1,5 +1,6 @@
 import type { AssistantMessage, Message } from "@vectordevai/sdk/v2/client"
 import { brandProviderName } from "@/utils/provider-brand"
+import { Billing } from "@vectordevai/schema/billing"
 
 type Provider = {
   id: string
@@ -24,6 +25,7 @@ type Context = {
   input: number
   tokens: number
   usage: number | null
+  codium: boolean
 }
 
 const tokenTotal = (msg: AssistantMessage) => {
@@ -49,7 +51,7 @@ const lastAssistantWithTokens = (messages: Message[]) => {
 
 const build = (messages: Message[] = [], providers: Provider[] = []): Context | undefined => {
   const message = lastAssistantWithTokens(messages)
-  if (!message) return undefined
+  if (!message || (!Billing.of(message) && !Billing.hasOwnIdentity(message))) return undefined
 
   const provider = providers.find((item) => item.id === message.providerID)
   const model = provider?.models[message.modelID]
@@ -66,6 +68,7 @@ const build = (messages: Message[] = [], providers: Provider[] = []): Context | 
     input: message.tokens.input,
     tokens: total,
     usage: limit ? Math.round((total / limit) * 100) : null,
+    codium: Boolean(Billing.of(message)),
   }
 }
 

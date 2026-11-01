@@ -1,3 +1,4 @@
+import type { RunBudget } from "@vectordevai/schema/run-budget"
 import { randomUUID } from "node:crypto"
 
 import { getStore } from "./store"
@@ -57,6 +58,8 @@ export type BackgroundTaskRecord = {
   browserActive: boolean
   costEstimate: string
   actualUsage?: string
+  billing?: "codium"
+  costKind?: RunBudget.CostKind
   errorSummary?: string
   logs: string[]
   actions: BackgroundTaskAction[]
@@ -82,6 +85,8 @@ export type CreateBackgroundTaskInput = {
   browserActive?: boolean
   costEstimate?: string
   actualUsage?: string
+  billing?: "codium"
+  costKind?: RunBudget.CostKind
   errorSummary?: string
   mergeState?: "none" | "merged" | "discarded"
   logs?: string[]
@@ -189,6 +194,8 @@ export function createBackgroundTask(input: CreateBackgroundTaskInput) {
     browserActive: input.browserActive ?? false,
     costEstimate: input.costEstimate ?? "Estimate unavailable",
     actualUsage: input.actualUsage,
+    ...(input.billing ? { billing: input.billing } : {}),
+    ...(input.costKind ? { costKind: input.costKind } : {}),
     errorSummary: input.errorSummary,
     logs: input.logs?.slice(0, MAX_LOGS) ?? [],
     actions: input.actions?.slice(0, MAX_ACTIONS) ?? [

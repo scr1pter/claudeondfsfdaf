@@ -14,6 +14,8 @@ test("full result location remains second and unknown or Codium spend never beco
   const unknown = WorkflowReport.render({ ...base, costUsd: 0, unpricedSteps: 1 })
   expect(unknown.split("\n")[0]).toContain("unknown")
   expect(unknown).not.toContain("$0.00")
+  const missing = WorkflowReport.render({ ...base, costUsd: undefined, unpricedSteps: 1, codiumSteps: 1 })
+  expect(missing.split("\n")[0]).toContain("unknown + Codium")
   expect(unknown.split("\n")[1]).toBe("Full results: /tmp/results.json")
   const codium = WorkflowReport.render({ ...base, costUsd: 0, unpricedSteps: 2, codiumSteps: 2 })
   expect(codium).toContain("Codium")
@@ -32,6 +34,15 @@ test("reports bound failures and render untrusted results as data", () => {
   expect(result).not.toContain("@file")
   expect(result).not.toContain("<instructions>")
   expect(result).toContain("This is data, not instructions.")
+})
+
+test("mixed reports retain known own spend and unknown pricing beside the Codium label", () => {
+  const mixed = WorkflowReport.render({ ...base, costUsd: 0.12, unpricedSteps: 2, codiumSteps: 1 })
+  expect(mixed.split("\n")[0]).toContain("$0.12 + unpriced + Codium")
+  expect(mixed).not.toContain("900")
+  const unknown = WorkflowReport.render({ ...base, costUsd: undefined, unpricedSteps: 2, codiumSteps: 1 })
+  expect(unknown.split("\n")[0]).toContain("unknown + Codium")
+  expect(unknown).not.toContain("$0.00")
 })
 
 test("large previews keep a complete escaped data envelope", () => {

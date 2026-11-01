@@ -4,6 +4,9 @@ import { CodiumPlan } from "@vectordevai/schema/codium-plan"
 import { ModelPlanStatus } from "@vectordevai/core/model-plan-status"
 import { DialogProvider } from "@vectordevai/ui/context/dialog"
 import { PlatformProvider } from "../../src/context/platform"
+import { SettingsProvider } from "../../src/context/settings"
+import { SettingsVectorCodium } from "../../src/components/settings-vector-codium"
+import { codiumTurnEnded } from "../../src/vector-account"
 import { SettingsWorkspace } from "../../src/components/settings-v2"
 import { CodiumError } from "../../src/components/codium-error"
 import { yieldLaunchScreen } from "../../src/features/launch/launch-bridge"
@@ -167,7 +170,16 @@ const offers = {
 }
 const outcome = query.get("billing") ?? "completed"
 
-const state = { account: initial, opened: [], actions: [], billing: [], codiumReads: 0, modelReads: 0 }
+const state = {
+  account: initial,
+  opened: [],
+  actions: [],
+  billing: [],
+  notifications: [],
+  codiumReads: 0,
+  modelReads: 0,
+  turnEnded: codiumTurnEnded,
+}
 const listeners = new Set()
 const change = (next) => {
   state.account = next
@@ -191,7 +203,9 @@ const platform = {
   restart: async () => undefined,
   back: () => undefined,
   forward: () => undefined,
-  notify: async () => undefined,
+  notify: async (title, description) => {
+    state.notifications.push({ title, description })
+  },
   vectorAccount: {
     status: async () => state.account,
     start: async () => {
@@ -314,6 +328,10 @@ render(
           <Suspense fallback={<p data-suspended>Suspended</p>}>
             <CodiumError text={failure.message} action={failure.action ?? "unavailable"} />
           </Suspense>
+        ) : query.get("view") === "codium-usage" ? (
+          <SettingsProvider>
+            <SettingsVectorCodium />
+          </SettingsProvider>
         ) : (
           <SettingsWorkspace section="account" />
         )}

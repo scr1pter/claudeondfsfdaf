@@ -50,11 +50,10 @@ import { spendLedger } from "./spend-limits"
 import {
   combineSpend,
   formatUsd,
-  measuredCost,
+  measuredRun,
   newSpend,
   readSpend,
   sessionCost,
-  sessionTokens,
   usageDelta,
   type EngineSessionResponse,
 } from "./run-usage"
@@ -166,6 +165,8 @@ export type ParallelWorkspaceRecord = {
   estimatedCost: string
   actualCost?: string
   measuredCost?: number
+  billing?: "codium"
+  costKind?: RunBudget.CostKind
   runOwnerID?: string
   stopReason?: string
   finalSummary: string
@@ -408,6 +409,13 @@ function backgroundStatus(status: ParallelWorkspaceStatus): BackgroundTaskStatus
   return "waiting"
 }
 
+// The pinned Vector model supplies a missing card label, including records written before billing was persisted.
+// This is display provenance only: it never annotates the persisted workspace or ledger as consumed usage.
+function workspaceBilling(record: ParallelWorkspaceRecord): ParallelWorkspaceRecord {
+  if (record.billing || record.runtime !== "vector" || !Billing.isCodium(record.provider)) return record
+  return { ...record, billing: "codium" }
+}
+
 function syncBackgroundTask(record: ParallelWorkspaceRecord, log?: string) {
   if (!record.backgroundTaskId) return
   try {
@@ -427,6 +435,8 @@ function syncBackgroundTask(record: ParallelWorkspaceRecord, log?: string) {
       browserActive: record.status === "testing",
       costEstimate: record.estimatedCost,
       actualUsage: record.actualCost,
+      billing: workspaceBilling(record).billing,
+      costKind: record.costKind,
       errorSummary: record.error,
       mergeState: record.mergeState,
       log,
@@ -1479,12 +1489,14 @@ export function listParallelWorkspaces(scope?: { sourcePath?: string; parentSess
   next
     .filter((record) => record.cleanupPending && !finishingMerges.has(record.id))
     .forEach((record) => void finishInterruptedMerge(record))
-  if (!scope) return next
-  return next.filter((record) => {
-    if (scope.sourcePath && record.sourcePath !== scope.sourcePath) return false
-    if ("parentSessionId" in scope && record.parentSessionId !== scope.parentSessionId) return false
-    return true
-  })
+  if (!scope) return next.map(workspaceBilling)
+  return next
+    .filter((record) => {
+      if (scope.sourcePath && record.sourcePath !== scope.sourcePath) return false
+      if ("parentSessionId" in scope && record.parentSessionId !== scope.parentSessionId) return false
+      return true
+    })
+    .map(workspaceBilling)
 }
 
 // Cloud actions an agent takes from its isolated workspace belong to the
@@ -1511,7 +1523,8 @@ export function recordParallelWorkspacePreview(id: string, url: string) {
 }
 
 export function getParallelWorkspace(id: string) {
-  return readRecords().find((record) => record.id === id)
+  const record = readRecords().find((record) => record.id === id)
+  return record && workspaceBilling(record)
 }
 
 export async function createParallelWorkspace(input: CreateParallelWorkspaceInput) {
@@ -1675,6 +1688,7 @@ export async function createParallelWorkspace(input: CreateParallelWorkspaceInpu
           terminalActive: false,
           browserActive: false,
           costEstimate: estimatedCost,
+          ...(runtime === "vector" && Billing.isCodium(provider) ? { billing: "codium" as const } : {}),
           mergeState: "none",
           logs: [`Created isolated workspace at ${isolatedPath}.`, ...logs],
         })
@@ -1727,7 +1741,7 @@ export async function createParallelWorkspace(input: CreateParallelWorkspaceInpu
     ...(runtime !== "vector" ? { excludedFromLearning: true } : {}),
   }
   writeRecords([record, ...readRecords()])
-  return record
+  return workspaceBilling(record)
 }
 
 async function ensureParallelWorkspaceIsolation(record: ParallelWorkspaceRecord) {
@@ -2529,7 +2543,8 @@ async function recordVectorRunSpend(
         ),
       )
     : undefined
-  const cost = measuredCost(combineSpend(spend.measured, last), sessionCost(spend.before), sessionCost(after?.data))
+  const usage = measuredRun(combineSpend(spend.measured, last), spend.before, after?.data)
+  const cost = usage.totalCostUsd
   const record = readRecords().find((item) => item.id === id)
   const ledger = await spendLedger()
   await ledger.recordRunCost({
@@ -2538,8 +2553,7 @@ async function recordVectorRunSpend(
     provider: after?.data?.model?.providerID ?? record?.provider ?? "Current Vector provider",
     model: after?.data?.model?.id ?? record?.model ?? "Current selected model",
     source: "parallel",
-    totalCostUsd: cost,
-    totalTokens: usageDelta(sessionTokens(spend.before), sessionTokens(after?.data)),
+    ...usage,
   })
   if (!record) return
   const stop =
@@ -2548,8 +2562,11 @@ async function recordVectorRunSpend(
       : undefined
   const measured = updateRecord(id, (current) => ({
     ...current,
-    actualCost: cost === undefined ? current.actualCost : formatUsd(cost),
+    actualCost:
+      usage.billing === "codium" && cost === 0 ? undefined : cost === undefined ? current.actualCost : formatUsd(cost),
     measuredCost: cost ?? current.measuredCost,
+    billing: usage.billing,
+    costKind: usage.costKind,
     logs: stop ? [stop, ...current.logs].slice(0, 120) : current.logs,
   }))
   syncBackgroundTask(measured)

@@ -3,6 +3,7 @@ export * as Task from "./task"
 import { Schema } from "effect"
 import { optional } from "./schema"
 import { RunBudget } from "./run-budget"
+import { Billing } from "./billing"
 
 export const Status = Schema.Literals([
   "queued",
@@ -28,6 +29,8 @@ export const Usage = Schema.Struct({
   unpricedSteps: optional(Schema.Finite),
   // How many of those unpriced steps ran on Vector Codium, as in the session totals.
   codiumSteps: optional(Schema.Finite),
+  // Proof for the token aggregate this task exposes, including any descendants in that aggregate.
+  tokensOwnOnly: optional(Schema.Boolean),
 }).annotate({ identifier: "Task.Usage" })
 export interface Usage extends Schema.Schema.Type<typeof Usage> {}
 
@@ -195,6 +198,8 @@ export const Info = Schema.Struct({
   // usage stays unknown; a measured cost must not synthesize zero token counts.
   measuredCost: optional(Schema.Finite),
   costKind: optional(RunBudget.CostKind),
+  // Codium participated even when a desktop runner has no token breakdown. costKind still describes own spend.
+  billing: optional(Billing.Kind),
   ownedPaths: Schema.Array(Schema.String),
   dependsOn: Schema.Array(Schema.String),
   resultAvailable: Schema.Boolean,

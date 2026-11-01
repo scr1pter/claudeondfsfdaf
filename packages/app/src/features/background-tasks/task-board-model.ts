@@ -1,3 +1,4 @@
+import { CodiumUsage } from "@vectordevai/core/codium-usage"
 import type { Task } from "@vectordevai/schema/task"
 import type { Prompt } from "@/context/prompt"
 import { formatUsd } from "@/features/economics/format-spend"
@@ -113,6 +114,8 @@ export function mergeTaskBoard(cards: readonly TaskCard[], observed: readonly Ta
 
 function boardAgent(task: Task.Info, previous?: TaskAgent): TaskAgent {
   const agent = task.agent ?? "general"
+  const codiumSteps =
+    task.usage?.codiumSteps ?? (task.billing === "codium" || task.costKind === "codium" ? 1 : previous?.codiumSteps)
   return {
     key: previous?.key ?? `task:${task.id}`,
     agent,
@@ -127,9 +130,21 @@ function boardAgent(task: Task.Info, previous?: TaskAgent): TaskAgent {
     background: true,
     startedAt: task.startedAt,
     endedAt: task.completedAt,
-    tokens: task.usage?.total ?? previous?.tokens,
+    tokens:
+      task.usage?.tokensOwnOnly === true
+        ? task.usage.total
+        : previous?.tokensOwnOnly === true
+          ? previous.tokens
+          : undefined,
+    tokensOwnOnly: task.usage?.tokensOwnOnly === true || previous?.tokensOwnOnly === true,
     cost: task.usage?.cost ?? task.measuredCost ?? previous?.cost,
-    unpricedSteps: task.usage?.unpricedSteps ?? previous?.unpricedSteps,
+    unpricedSteps: codiumSteps
+      ? Math.max(
+          task.usage?.unpricedSteps ?? previous?.unpricedSteps ?? 0,
+          codiumSteps + (task.costKind === "unknown" ? 1 : 0),
+        )
+      : (task.usage?.unpricedSteps ?? previous?.unpricedSteps),
+    codiumSteps,
     toolUses: task.usage?.toolUses ?? previous?.toolUses,
     currentStep:
       task.connection === "disconnected"
@@ -157,10 +172,17 @@ export function taskSpend(agents: readonly TaskAgent[]) {
     if (!previous || (agent.startedAt ?? 0) >= (previous.startedAt ?? 0)) latest.set(key, agent)
   })
   const values = [...latest.values()]
-  const measured = values.filter((agent) => agent.cost !== undefined && Number.isFinite(agent.cost) && agent.cost >= 0)
+  const measured = values.filter(
+    (agent) =>
+      (agent.codiumSteps && !agent.tokens) ||
+      (agent.cost !== undefined && Number.isFinite(agent.cost) && agent.cost >= 0),
+  )
   return {
-    cost: measured.length ? measured.reduce((sum, agent) => sum + agent.cost!, 0) : undefined,
-    unknown: measured.length !== values.length || values.some((agent) => (agent.unpricedSteps ?? 0) > 0),
+    cost: measured.length ? measured.reduce((sum, agent) => sum + (agent.cost ?? 0), 0) : undefined,
+    unknown:
+      measured.length !== values.length ||
+      values.some((agent) => CodiumUsage.ownUnpricedSteps(agent.unpricedSteps, agent.codiumSteps) > 0),
+    codiumSteps: values.reduce((sum, agent) => sum + (agent.codiumSteps ?? 0), 0),
     tokens: values.some((agent) => agent.tokens !== undefined)
       ? values.reduce((sum, agent) => sum + (agent.tokens ?? 0), 0)
       : undefined,
@@ -169,8 +191,13 @@ export function taskSpend(agents: readonly TaskAgent[]) {
 
 export function taskCost(agents: readonly TaskAgent[]) {
   const spend = taskSpend(agents)
-  if (spend.cost === undefined || (spend.cost === 0 && spend.unknown)) return "Cost unknown"
-  return `${formatUsd(spend.cost)}${spend.unknown ? " + unpriced usage" : ""}`
+  const own =
+    spend.cost === undefined || (spend.cost === 0 && spend.unknown)
+      ? "Cost unknown"
+      : spend.cost === 0 && spend.codiumSteps
+        ? undefined
+        : `${formatUsd(spend.cost)}${spend.unknown ? " + unpriced usage" : ""}`
+  return CodiumUsage.withCodium(own, spend.codiumSteps)
 }
 
 export function appendTaskQuestion(prompt: Prompt, agent: Pick<TaskAgent, "title" | "task" | "sessionID">): Prompt {

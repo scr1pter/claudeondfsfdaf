@@ -250,13 +250,33 @@ export function make(input: Input) {
               time: { start: started, end: yield* Clock.currentTimeMillis },
             },
     } satisfies SessionV1.ToolPart)
+    const canonical = info.tokens ?? { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }
     return {
       sessionID: child,
       messageID,
       status,
       output,
       error: failure ?? record.error,
-      usage: record.usage,
+      usage: record.usage
+        ? {
+            ...record.usage,
+            // Lifecycle metadata cannot grant provenance. Certify only quantities
+            // that exactly match this authoritative Session observation.
+            tokensOwnOnly:
+              info.tokensOwnOnly === true &&
+              record.usage.total ===
+                canonical.input +
+                  canonical.output +
+                  canonical.reasoning +
+                  canonical.cache.read +
+                  canonical.cache.write &&
+              record.usage.tokens.input === canonical.input &&
+              record.usage.tokens.output === canonical.output &&
+              record.usage.tokens.reasoning === canonical.reasoning &&
+              record.usage.tokens.cache.read === canonical.cache.read &&
+              record.usage.tokens.cache.write === canonical.cache.write,
+          }
+        : undefined,
     } satisfies Result
   })
   const finish = Effect.fn("WorkflowLaunch.finish")(function* (text: string) {

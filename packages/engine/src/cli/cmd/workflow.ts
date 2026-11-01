@@ -12,7 +12,7 @@ import { ServerAuth } from "@/server/auth"
 import { CliOwnerGate } from "../owner-gate"
 import { UI } from "../ui"
 import { cmd } from "./cmd"
-import { formatTasks } from "./tasks"
+import { formatTasks, tasksForOutput } from "./tasks"
 
 export const WorkflowCommand = cmd({
   command: "workflow <action> [target]",
@@ -63,9 +63,14 @@ export const WorkflowCommand = cmd({
     })
     if (!result) return
     if ("ok" in result && !result.ok) process.exitCode = 1
-    console.log(args.json ? JSON.stringify(result, null, 2) : formatWorkflowResult(result))
+    console.log(args.json ? JSON.stringify(workflowForOutput(result), null, 2) : formatWorkflowResult(result))
   },
 })
+
+/** Workflow task views use the same public usage projection as ordinary task commands. */
+export function workflowForOutput(result: Awaited<ReturnType<typeof executeWorkflowCommand>>) {
+  return "runs" in result || "tasks" in result || "task" in result ? tasksForOutput(result) : result
+}
 
 type Arguments = {
   action: string

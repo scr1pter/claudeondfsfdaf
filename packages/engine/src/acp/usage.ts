@@ -1,3 +1,4 @@
+import { Billing } from "@vectordevai/schema/billing"
 import type { AgentSideConnection, Usage } from "@agentclientprotocol/sdk"
 import type { AssistantMessage as VectorAssistantMessage, Message } from "@vectordevai/sdk/v2"
 import { InstanceRef } from "@/effect/instance-ref"
@@ -10,7 +11,8 @@ import { ModelV2 } from "@vectordevai/core/model"
 import { Provider } from "@/provider/provider"
 import { Context, Effect, Layer, SynchronizedRef } from "effect"
 
-export type AssistantTokenCost = Pick<VectorAssistantMessage, "cost" | "tokens" | "unpriced">
+export type AssistantTokenCost = Pick<VectorAssistantMessage, "cost" | "tokens" | "unpriced" | "billing"> &
+  Partial<Pick<VectorAssistantMessage, "providerID">>
 
 export type AssistantMessage = AssistantTokenCost &
   Pick<VectorAssistantMessage, "role"> &
@@ -46,7 +48,7 @@ export interface ContextLimitLoaderInterface {
 export type UsageConnection = Pick<AgentSideConnection, "sessionUpdate">
 
 export interface Interface {
-  readonly buildUsage: (message: AssistantTokenCost) => Usage
+  readonly buildUsage: (message: AssistantTokenCost) => Usage | undefined
   readonly latestAssistantMessage: (messages: readonly SessionMessage[]) => AssistantMessage | undefined
   readonly totalSessionCost: (messages: readonly SessionMessage[]) => number | undefined
   readonly contextLimit: (input: {
@@ -85,7 +87,8 @@ export function messageLoaderFromSDK(sdk: SDK): MessageLoaderInterface {
 
 export const messageLoaderLayer = (sdk: SDK) => Layer.succeed(MessageLoader, messageLoaderFromSDK(sdk))
 
-export function buildUsage(message: AssistantTokenCost): Usage {
+export function buildUsage(message: AssistantTokenCost): Usage | undefined {
+  if (Billing.of(message)) return
   const cachedReadTokens = message.tokens.cache.read
   const cachedWriteTokens = message.tokens.cache.write
   const thoughtTokens = message.tokens.reasoning
@@ -129,6 +132,7 @@ export function turnUsage(messages: readonly SessionMessage[], finalID: string):
   const steps = messages
     .slice(start + 1, end + 1)
     .filter((message): message is { readonly info: AssistantMessage } => message.info.role === "assistant")
+    .filter((message) => Billing.hasOwnIdentity(message.info))
   if (!steps.length) return undefined
   return buildUsage({
     cost: steps.reduce((sum, step) => sum + step.info.cost, 0),
@@ -148,12 +152,21 @@ export function turnUsage(messages: readonly SessionMessage[], finalID: string):
 // Subagents keep their messages in their own sessions, so what they spent comes from the session's rollup.
 export function totalSessionCost(
   messages: readonly SessionMessage[],
-  subagents?: { readonly subagentCost?: number; readonly subagentUnpricedSteps?: number },
+  subagents?: {
+    readonly subagentCost?: number
+    readonly subagentUnpricedSteps?: number
+    readonly subagentCodiumSteps?: number
+  },
 ): number | undefined {
   const assistant = messages.filter(
     (message): message is { readonly info: AssistantMessage } => message.info.role === "assistant",
   )
-  if (assistant.some((message) => message.info.unpriced) || subagents?.subagentUnpricedSteps) return undefined
+  if (
+    assistant.some((message) => message.info.unpriced || Billing.of(message.info)) ||
+    subagents?.subagentUnpricedSteps ||
+    subagents?.subagentCodiumSteps
+  )
+    return undefined
   return assistant.reduce((sum, message) => sum + message.info.cost, 0) + (subagents?.subagentCost ?? 0)
 }
 
@@ -237,8 +250,12 @@ const layer = Layer.effect(
         )
       if (!messages) return
 
+      const latest = messages.findLast(
+        (message): message is { readonly info: AssistantMessage } => message.info.role === "assistant",
+      )
+      if (latest && !Billing.hasOwnIdentity(latest.info)) return messages
       const message = latestAssistantMessage(messages)
-      if (!message?.providerID || !message.modelID) return messages
+      if (!message?.providerID || !Billing.hasOwnIdentity(message) || !message.modelID) return messages
 
       const size = yield* contextLimit({
         directory: input.directory,

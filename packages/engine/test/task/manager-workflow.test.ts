@@ -6,6 +6,8 @@ import type { SubagentRecord } from "@/agent/subagent-kind"
 import { MessageID, SessionID } from "@/session/schema"
 import { Session } from "@/session/session"
 import { TaskManager } from "@/task/manager"
+import { formatTasks } from "@/cli/cmd/tasks"
+import { TaskNotify } from "@/task/notify"
 import { SubagentLifecycle } from "@/tool/subagent-lifecycle"
 import type { TaskPromptOps } from "@/tool/task"
 import { disposeAllInstances } from "../fixture/fixture"
@@ -221,6 +223,55 @@ it.instance("an unreadable workflow checkpoint leaves usage unknown instead of s
   }),
 )
 
+it.instance("workflow display pairs both canonical token proofs with their own values and retains mixed pricing", () =>
+  Effect.gen(function* () {
+    const f = yield* fixture()
+    const database = yield* Database.Service
+    const manager = yield* TaskManager.Service
+    for (const own of [false, true])
+      for (const delegated of [false, true])
+        for (const ownCodium of [false, true]) {
+          const coordinator = yield* run(f.parent.id, {
+            workflow: {
+              role: "run",
+              title: "Accounting",
+              revision: 1,
+              progress: {
+                tokens: { used: 987654, max: 1000000 },
+                stages: [],
+                agents: { launched: 0, max: 100, running: 0 },
+              },
+            },
+          })
+          yield* database.db.run(sql`UPDATE session SET tokens_input = 111, subagent_tokens_input = 222,
+        cost = 0.12, subagent_cost = 0.03, unpriced_steps = 1, subagent_unpriced_steps = 1,
+        codium_steps = ${ownCodium ? 1 : 0}, subagent_codium_steps = ${ownCodium ? 0 : 1},
+        tokens_own_only = ${own ? 1 : 0}, subagent_tokens_own_only = ${delegated ? 1 : 0}
+        WHERE id = ${coordinator.id}`)
+          const result = yield* manager.inspect({ sessionID: f.parent.id, taskID: coordinator.id })
+          expect(result.task).toMatchObject({
+            billing: "codium",
+            costKind: "unknown",
+            usage: { cost: 0.15, tokensOwnOnly: own && delegated },
+          })
+          expect(result.task.workflow?.tokens).toEqual(own && delegated ? { used: 333, max: 1000000 } : undefined)
+          const display = formatTasks([result.task])
+          expect(display).toContain("$0.1500 + unpriced + Codium")
+          expect(display.includes("333 tokens")).toBe(own && delegated)
+          const note = TaskNotify.render({
+            taskID: coordinator.id,
+            title: "Accounting",
+            state: "completed",
+            usage: result.task.usage,
+            text: "Report",
+            workflow: true,
+          })
+          expect(note.includes('tokens="333"')).toBe(own && delegated)
+          expect(note).not.toContain("987654")
+        }
+  }),
+)
+
 it.instance("inspect keeps an ordinary task's final answer and a workflow report's header", () =>
   Effect.gen(function* () {
     const f = yield* fixture()
@@ -249,5 +300,23 @@ it.instance("inspect keeps an ordinary task's final answer and a workflow report
     expect(workflow.output).toContain("WORKFLOW_HEADER_AND_RESULTS")
     expect(workflow.output).not.toContain("WORKFLOW_END")
     expect(workflow.truncated).toBe(true)
+  }),
+)
+
+it.instance("a proven pure Codium workflow has no token gauge", () =>
+  Effect.gen(function* () {
+    const f = yield* fixture()
+    const database = yield* Database.Service
+    const manager = yield* TaskManager.Service
+    const coordinator = yield* run(f.parent.id, {
+      workflow: { role: "run", title: "Codium", revision: 1, progress: { tokens: { used: 987654, max: 1000 } } },
+    })
+    yield* database.db.run(sql`UPDATE session SET codium_steps = 1, unpriced_steps = 1,
+      tokens_own_only = 1, subagent_tokens_own_only = 1 WHERE id = ${coordinator.id}`)
+    const result = yield* manager.inspect({ sessionID: f.parent.id, taskID: coordinator.id })
+    expect(result.task.usage).toMatchObject({ total: 0, codiumSteps: 1, tokensOwnOnly: true })
+    expect(result.task.workflow?.tokens).toBeUndefined()
+    expect(formatTasks([result.task])).toContain("Codium")
+    expect(formatTasks([result.task])).not.toContain(" tokens")
   }),
 )

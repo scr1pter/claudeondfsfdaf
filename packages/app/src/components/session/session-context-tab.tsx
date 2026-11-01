@@ -1,4 +1,6 @@
 import { createEffect, createMemo, on, onCleanup, For, Show } from "solid-js"
+import { Billing } from "@vectordevai/schema/billing"
+import { CodiumUsage } from "@vectordevai/core/codium-usage"
 import type { Message } from "@vectordevai/sdk/v2/client"
 import { ScrollView } from "@vectordevai/ui/scroll-view"
 import { useLanguage } from "@/context/language"
@@ -13,7 +15,7 @@ import { categorizeTask } from "@/features/economics/task-categorizer"
 import { getSessionContext } from "./session-context-metrics"
 import { rankModelsForCategory } from "./session-model-economics"
 import { createSessionContextFormatter } from "./session-context-format"
-import { formatSessionCost, sessionSpend, sessionTokens } from "@/utils/session-cost"
+import { formatSessionCost, legacyCodium, sessionSpend, sessionTokens } from "@/utils/session-cost"
 import { createDelegatedSpend } from "@/components/session-delegated-spend"
 
 const emptyMessages: Message[] = []
@@ -53,12 +55,19 @@ export function SessionContextTab() {
       maximumFractionDigits: value > 0 && value < 0.01 ? 4 : 2,
     }).format(value)
   const ctx = createMemo(() => getSessionContext(messages(), [...providers.all().values()]))
-  const tokens = createMemo(() => info()?.tokens)
+  const delegated = createDelegatedSpend(info, undefined, messages)
+  const children = () => [
+    ...delegated().sessions,
+    ...sync().data.session.filter((child) => child.parentID !== undefined && child.parentID === info()?.id),
+  ]
+  const legacy = createMemo(() => legacyCodium(info(), messages(), children()))
+  const tokens = createMemo(() => (info()?.tokensOwnOnly === true ? info()?.tokens : undefined))
+  const spend = createMemo(() => sessionSpend(info(), messages(), children()))
+  const codium = () => spend().codiumSteps
   const lastModel = createMemo(() => lastAssistantModel(messages()))
   const formatter = createMemo(() => createSessionContextFormatter(language.intl()))
   const usage = createMemo(() => Math.max(0, Math.min(100, ctx()?.usage ?? 0)))
-  const totalTokens = createMemo(() => sessionTokens(info()))
-  const delegated = createDelegatedSpend(info)
+  const totalTokens = createMemo(() => sessionTokens(info(), messages(), children()))
 
   const counts = createMemo(() => {
     const all = messages()
@@ -95,34 +104,38 @@ export function SessionContextTab() {
       label: "Model",
       value: ctx()?.modelLabel ?? "No model selected",
     },
+    ...(ctx()?.codium ? [] : [{ label: "Context limit", value: formatter().number(ctx()?.limit) }]),
     {
-      label: "Context limit",
-      value: formatter().number(ctx()?.limit),
+      label: codium() && !totalTokens() ? "Tokens" : "Total tokens",
+      value: CodiumUsage.withCodium(
+        totalTokens() === undefined
+          ? codium()
+            ? undefined
+            : "Unavailable"
+          : totalTokens() || !codium()
+            ? formatter().number(totalTokens())
+            : undefined,
+        codium(),
+      ),
     },
-    {
-      label: "Total tokens",
-      value: formatter().number(totalTokens()),
-    },
-    {
-      label: "Usage",
-      value: formatter().percent(ctx()?.usage),
-    },
-    {
-      label: "Input tokens",
-      value: formatter().number(tokens()?.input),
-    },
-    {
-      label: "Output tokens",
-      value: formatter().number(tokens()?.output),
-    },
-    {
-      label: "Reasoning tokens",
-      value: formatter().number(tokens()?.reasoning),
-    },
-    {
-      label: "Cache tokens (read/write)",
-      value: `${formatter().number(tokens()?.cache.read)} / ${formatter().number(tokens()?.cache.write)}`,
-    },
+    { label: "Usage", value: formatter().percent(ctx()?.usage) },
+    ...(!tokens() || (codium() && !totalTokens())
+      ? []
+      : [
+          { label: "Input tokens", value: CodiumUsage.withCodium(formatter().number(tokens()?.input), codium()) },
+          { label: "Output tokens", value: CodiumUsage.withCodium(formatter().number(tokens()?.output), codium()) },
+          {
+            label: "Reasoning tokens",
+            value: CodiumUsage.withCodium(formatter().number(tokens()?.reasoning), codium()),
+          },
+          {
+            label: "Cache tokens (read/write)",
+            value: CodiumUsage.withCodium(
+              `${formatter().number(tokens()?.cache.read)} / ${formatter().number(tokens()?.cache.write)}`,
+              codium(),
+            ),
+          },
+        ]),
     {
       label: "User messages",
       value: formatter().number(counts().user),
@@ -134,7 +147,7 @@ export function SessionContextTab() {
     {
       label: "Total cost",
       value: sessionReading({
-        ...sessionSpend(info()),
+        ...spend(),
         tokens: totalTokens(),
         kind: spendKind(providers.all(), lastModel()?.providerID, lastModel()?.modelID),
         format: (value) => usd().format(value),
@@ -152,9 +165,10 @@ export function SessionContextTab() {
       value: `${formatSessionCost({
         cost: part.cost,
         unpricedSteps: part.unpricedSteps,
+        codiumSteps: part.codiumSteps,
         format: (value) => usd().format(value),
         t: language.t,
-      })} · ${formatter().number(part.tokens)} tokens`,
+      })}${part.tokens ? ` · ${CodiumUsage.withCodium(`${formatter().number(part.tokens)} tokens`, part.codiumSteps)}` : ""}`,
     })),
     {
       label: "Session created",
@@ -167,13 +181,15 @@ export function SessionContextTab() {
   ])
 
   const breakdown = createMemo(() => {
+    // Raw Codium context stays local to percentage calculation; its token quantities never enter titles.
+    const contextTokens = tokens() ?? ctx()?.message.tokens
     const values = [
-      { label: "Input", value: tokens()?.input ?? 0, color: "#72e2a5" },
-      { label: "Output", value: tokens()?.output ?? 0, color: "#ffb49d" },
-      { label: "Reasoning", value: tokens()?.reasoning ?? 0, color: "#ffd27d" },
+      { label: "Input", value: contextTokens?.input ?? 0, color: "#72e2a5" },
+      { label: "Output", value: contextTokens?.output ?? 0, color: "#ffb49d" },
+      { label: "Reasoning", value: contextTokens?.reasoning ?? 0, color: "#ffd27d" },
       {
         label: "Cache",
-        value: (tokens()?.cache.read ?? 0) + (tokens()?.cache.write ?? 0),
+        value: (contextTokens?.cache.read ?? 0) + (contextTokens?.cache.write ?? 0),
         color: "#bfa9ff",
       },
     ]
@@ -280,7 +296,11 @@ export function SessionContextTab() {
                   <span
                     class="h-full transition-[width] duration-200"
                     style={{ width: `${segment.percentage}%`, "background-color": segment.color }}
-                    title={`${segment.label}: ${formatter().number(segment.value)} tokens`}
+                    title={
+                      ctx()?.codium || info()?.tokensOwnOnly !== true
+                        ? `${segment.label}: ${segment.percentage.toFixed(1)}%`
+                        : `${segment.label}: ${formatter().number(segment.value)} tokens`
+                    }
                   />
                 )}
               </For>
@@ -327,31 +347,38 @@ export function SessionContextTab() {
                             ? "mixed effort"
                             : "effort unknown"}
                       </div>
-                      <div class="shrink-0 text-xs text-white/42">{row.provider}</div>
+                      <div class="shrink-0 text-xs text-white/42">
+                        {Billing.isCodium(row.provider) ? "Vector Codium" : row.provider}
+                      </div>
                     </div>
-                    <div class="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-white/55">
-                      <span>
-                        {row.sampleSize} run{row.sampleSize === 1 ? "" : "s"}
-                      </span>
-                      <span>{row.completedSamples} completed or positively validated</span>
-                      <span>{row.unsuccessfulSamples} failed, aborted or incomplete</span>
-                      <span>checks {formatPercent(row.checkPassRate)}</span>
-                      <span title="Sum of recorded assistant wall-clock intervals, including tools and waits within them; excludes gaps and startup. Not total task wall time or provider-only latency.">
-                        median summed reply time {formatLatency(row.medianLatencyMs)} · {row.timedSamples}/
-                        {row.sampleSize} timed
-                      </span>
-                      <Show when={row.medianCostUsd !== undefined}>
-                        <span>median {price(row.medianCostUsd ?? 0)}/priced run</span>
-                      </Show>
-                      <span>
-                        {row.pricedSamples}/{row.sampleSize} priced
-                      </span>
-                      <span>
-                        {row.projectedCostUsd !== undefined
-                          ? `~${price(row.projectedCostUsd)} next turn`
-                          : "rate unknown"}
-                      </span>
-                    </div>
+                    <Show
+                      when={!Billing.isCodium(row.provider)}
+                      fallback={<div class="mt-2 text-xs text-white/55">Codium</div>}
+                    >
+                      <div class="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-white/55">
+                        <span>
+                          {row.sampleSize} run{row.sampleSize === 1 ? "" : "s"}
+                        </span>
+                        <span>{row.completedSamples} completed or positively validated</span>
+                        <span>{row.unsuccessfulSamples} failed, aborted or incomplete</span>
+                        <span>checks {formatPercent(row.checkPassRate)}</span>
+                        <span title="Sum of recorded assistant wall-clock intervals, including tools and waits within them; excludes gaps and startup. Not total task wall time or provider-only latency.">
+                          median summed reply time {formatLatency(row.medianLatencyMs)} · {row.timedSamples}/
+                          {row.sampleSize} timed
+                        </span>
+                        <Show when={row.medianCostUsd !== undefined}>
+                          <span>median {price(row.medianCostUsd ?? 0)}/priced run</span>
+                        </Show>
+                        <span>
+                          {row.pricedSamples}/{row.sampleSize} priced
+                        </span>
+                        <span>
+                          {row.projectedCostUsd !== undefined
+                            ? `~${price(row.projectedCostUsd)} next turn`
+                            : "rate unknown"}
+                        </span>
+                      </div>
+                    </Show>
                   </div>
                 )}
               </For>

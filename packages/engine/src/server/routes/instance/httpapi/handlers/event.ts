@@ -1,3 +1,5 @@
+import { Database } from "@vectordevai/core/database/database"
+import { SessionAccountingOutput } from "@vectordevai/core/session/accounting-output"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { InstanceState } from "@/effect/instance-state"
 import { GlobalBus } from "@/bus/global"
@@ -64,6 +66,7 @@ function isOwnJoin(event: EventV2.Payload, clientID: string) {
 
 export function eventResponse(events: EventV2.Interface, request: HttpServerRequest.HttpServerRequest, self: Presence) {
   return Effect.gen(function* () {
+    const database = yield* Database.Service
     const instance = yield* InstanceState.context
     const workspaceID = yield* InstanceState.workspaceID
     const owner = yield* RequestOwner.owner
@@ -105,6 +108,7 @@ export function eventResponse(events: EventV2.Interface, request: HttpServerRequ
       Stream.filterEffect((event) =>
         SessionAudienceHttp.envelope(event, owner).pipe(Effect.provideService(SessionAudience.Service, audience)),
       ),
+      Stream.mapEffect((event) => SessionAccountingOutput.project(database.db, event)),
       Stream.map((event) => ({ id: event.id, type: event.type, properties: event.data })),
     )
     const disposed = Stream.callback<{ id: string; type: string; properties: unknown }>((queue) => {

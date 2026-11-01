@@ -41,6 +41,9 @@ export const Info = Schema.Struct({
   unpricedSteps: Schema.Finite.pipe(optional),
   // How many of those unpriced steps ran on Vector Codium; own unpriced steps are unpricedSteps − codiumSteps.
   codiumSteps: Schema.Finite.pipe(optional),
+  // True only when the accounting boundary proves the aggregate contains own-model tokens only.
+  tokensOwnOnly: Schema.Boolean.pipe(optional),
+  subagentTokensOwnOnly: Schema.Boolean.pipe(optional),
   // What the subagent sessions below this one spent, which cost leaves out, and how many of their steps were unpriced.
   subagentCost: Schema.Finite.pipe(optional),
   subagentUnpricedSteps: Schema.Finite.pipe(optional),

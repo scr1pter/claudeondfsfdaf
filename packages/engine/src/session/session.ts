@@ -1,3 +1,4 @@
+import { SessionAccounting } from "@vectordevai/core/session/accounting"
 import { ShareNext } from "@/share/share-next"
 import { PublicShareRemovalError, publicShareWarning } from "@vectordevai/schema/public-share"
 import { PublicSession } from "@vectordevai/schema/public-session"
@@ -112,6 +113,8 @@ export function fromRow(row: SessionRow): Info {
     cost: row.cost,
     unpricedSteps: row.unpriced_steps || undefined,
     codiumSteps: row.codium_steps || undefined,
+    tokensOwnOnly: row.tokens_own_only,
+    subagentTokensOwnOnly: row.subagent_tokens_own_only,
     subagentCost: row.subagent_cost || undefined,
     subagentUnpricedSteps: row.subagent_unpriced_steps || undefined,
     subagentCodiumSteps: row.subagent_codium_steps || undefined,
@@ -271,6 +274,9 @@ export const Info = Schema.Struct({
   unpricedSteps: optional(NonNegativeInt),
   // How many of those unpriced steps ran on Vector Codium; own unpriced steps are unpricedSteps − codiumSteps.
   codiumSteps: optional(NonNegativeInt),
+  // True only when the accounting boundary proves the aggregate contains own-model tokens only.
+  tokensOwnOnly: optional(Schema.Boolean),
+  subagentTokensOwnOnly: optional(Schema.Boolean),
   // What the subagent sessions below this one spent, which cost leaves out, and how many of their steps were unpriced.
   subagentCost: optional(Schema.Finite),
   subagentUnpricedSteps: optional(NonNegativeInt),
@@ -708,10 +714,16 @@ const layer: Layer.Layer<
       yield* Effect.logInfo("created", result)
 
       yield* events
-        .publish(SessionV1.Event.Created, { sessionID: result.id, info: result })
+        .publish(
+          SessionV1.Event.Created,
+          { sessionID: result.id, info: result },
+          {
+            commit: (seq) => SessionAccounting.initializeEmpty(db, result.id, seq),
+          },
+        )
         .pipe(Effect.onError(() => Effect.sync(() => TaskPlace.drop(result.id))))
 
-      return result
+      return yield* get(result.id).pipe(Effect.orDie)
     })
 
     const get = Effect.fn("Session.get")(function* (id: SessionID) {
@@ -996,6 +1008,7 @@ const layer: Layer.Layer<
         title,
         metadata,
       })
+      yield* SessionAccounting.invalidate(db, session.id)
       const msgs = yield* messages({ sessionID: input.sessionID })
       const idMap = new Map<string, MessageID>()
 
@@ -1036,7 +1049,7 @@ const layer: Layer.Layer<
           yield* updatePart(p)
         }
       }
-      return session
+      return yield* get(session.id)
     })
 
     const patch = (sessionID: SessionID, info: Patch) =>
@@ -1403,6 +1416,12 @@ export function summarizeUsage(
       )
       .map((message) => `${message.sessionID}:${message.parentID}`),
   )
+  const ownChats = new Set(
+    own
+      .filter((message) => usageTokens(message) > 0)
+      .map((message) => `${message.sessionID}:${message.parentID}`)
+      .filter((id) => completed.has(id)),
+  )
   const modelGroups = metered.reduce((result, message) => {
     const modelID = message.modelID.endsWith("-fast") ? message.modelID.slice(0, -5) : message.modelID
     const key = `${message.providerID}\n${modelID}`
@@ -1519,7 +1538,7 @@ export function summarizeUsage(
     completedChats: completed.size,
     conversations: new Set(own.map((message) => message.sessionID)).size,
     activeDays: active.size,
-    averageTokensPerChat: completed.size > 0 ? Math.round(lifetimeTokens / completed.size) : 0,
+    averageTokensPerChat: ownChats.size > 0 ? Math.round(lifetimeTokens / ownChats.size) : 0,
     modelResponses: assistant.length,
     favoriteModels: [...modelGroups.values()]
       .map((model): UsageModel => ({ ...model, percentage: percentage(model.tokens, model.responses) }))

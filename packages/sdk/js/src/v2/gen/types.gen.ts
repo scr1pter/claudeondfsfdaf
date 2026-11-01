@@ -217,6 +217,8 @@ export type Session = {
   cost?: number
   unpricedSteps?: number
   codiumSteps?: number
+  tokensOwnOnly?: boolean
+  subagentTokensOwnOnly?: boolean
   subagentCost?: number
   subagentUnpricedSteps?: number
   subagentCodiumSteps?: number
@@ -2900,6 +2902,8 @@ export type GlobalSession = {
   cost?: number
   unpricedSteps?: number
   codiumSteps?: number
+  tokensOwnOnly?: boolean
+  subagentTokensOwnOnly?: boolean
   subagentCost?: number
   subagentUnpricedSteps?: number
   subagentCodiumSteps?: number
@@ -4277,8 +4281,8 @@ export type MemoryDistillEstimate = {
     message: string
   }
   sections: number
-  input: number
-  output: number
+  input?: number
+  output?: number
   costKind?: CostKind
   lowUsd?: number
   highUsd?: number
@@ -4294,14 +4298,14 @@ export type MemoryDistillResult = {
     quote: number
     scan: number
   }
-  tokens: {
+  tokens?: {
     input: number
     output: number
     reasoning: number
     cacheRead: number
     cacheWrite: number
   }
-  cost: number
+  cost?: number
   costKind: CostKind
   error?: string
 }
@@ -4684,6 +4688,8 @@ export type Session1 = {
   cost?: number
   unpricedSteps?: number
   codiumSteps?: number
+  tokensOwnOnly?: boolean
+  subagentTokensOwnOnly?: boolean
   subagentCost?: number
   subagentUnpricedSteps?: number
   subagentCodiumSteps?: number
@@ -4752,6 +4758,8 @@ export type Session2 = {
   cost?: number
   unpricedSteps?: number
   codiumSteps?: number
+  tokensOwnOnly?: boolean
+  subagentTokensOwnOnly?: boolean
   subagentCost?: number
   subagentUnpricedSteps?: number
   subagentCodiumSteps?: number
@@ -4833,6 +4841,8 @@ export type Session3 = {
   cost?: number
   unpricedSteps?: number
   codiumSteps?: number
+  tokensOwnOnly?: boolean
+  subagentTokensOwnOnly?: boolean
   subagentCost?: number
   subagentUnpricedSteps?: number
   subagentCodiumSteps?: number
@@ -4913,6 +4923,8 @@ export type Session4 = {
   cost?: number
   unpricedSteps?: number
   codiumSteps?: number
+  tokensOwnOnly?: boolean
+  subagentTokensOwnOnly?: boolean
   subagentCost?: number
   subagentUnpricedSteps?: number
   subagentCodiumSteps?: number
@@ -4981,6 +4993,8 @@ export type Session5 = {
   cost?: number
   unpricedSteps?: number
   codiumSteps?: number
+  tokensOwnOnly?: boolean
+  subagentTokensOwnOnly?: boolean
   subagentCost?: number
   subagentUnpricedSteps?: number
   subagentCodiumSteps?: number
@@ -5053,6 +5067,8 @@ export type Session6 = {
   cost?: number
   unpricedSteps?: number
   codiumSteps?: number
+  tokensOwnOnly?: boolean
+  subagentTokensOwnOnly?: boolean
   subagentCost?: number
   subagentUnpricedSteps?: number
   subagentCodiumSteps?: number
@@ -5169,6 +5185,8 @@ export type Session7 = {
   cost?: number
   unpricedSteps?: number
   codiumSteps?: number
+  tokensOwnOnly?: boolean
+  subagentTokensOwnOnly?: boolean
   subagentCost?: number
   subagentUnpricedSteps?: number
   subagentCodiumSteps?: number
@@ -5237,6 +5255,8 @@ export type Session8 = {
   cost?: number
   unpricedSteps?: number
   codiumSteps?: number
+  tokensOwnOnly?: boolean
+  subagentTokensOwnOnly?: boolean
   subagentCost?: number
   subagentUnpricedSteps?: number
   subagentCodiumSteps?: number
@@ -6953,6 +6973,7 @@ export type TaskUsage = {
   steps: number
   unpricedSteps?: number
   codiumSteps?: number
+  tokensOwnOnly?: boolean
 }
 
 export type TaskBudgetScope = {
@@ -7068,6 +7089,7 @@ export type TaskInfo = {
   usage?: TaskUsage
   measuredCost?: number
   costKind?: CostKind
+  billing?: BillingKind
   ownedPaths: Array<string>
   dependsOn: Array<string>
   resultAvailable: boolean
@@ -7507,6 +7529,8 @@ export type SessionV2Info = {
   cost: number
   unpricedSteps?: number
   codiumSteps?: number
+  tokensOwnOnly?: boolean
+  subagentTokensOwnOnly?: boolean
   subagentCost?: number
   subagentUnpricedSteps?: number
   subagentCodiumSteps?: number

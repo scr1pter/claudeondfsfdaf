@@ -458,3 +458,19 @@ Intent-preserving corrections to label plan §7 C2 and C3, recorded with the A22
 - Recurring automation exemptions use the current existing session's model, with unavailable identity falling back to ordinary dollar checks. A fresh parallel session uses its pinned provider. Concurrent owner model changes between the desktop read and engine admission remain the existing mutable-session limitation.
 - The integration into self-evolving must preserve Codium counts in its additional delegated-scope decoder and task-limit restart seed; see `codium-a23-guard-usage-notes.md`. Current Codium lacks these newer paths.
 - A23 leaves the model route acceptance registry empty and all live provider and release gates in place. Its implementation and final validation are recorded in `codium-a23-guard-usage-notes.md`.
+
+## A24: app display decisions
+
+- Older summary payloads do not identify the most-used Codium model; show generic `Vector Codium` rather than guess. Known legacy session/child totals hide inseparable tokens and keep own dollars. Day/helper attribution is not invented, and no backfill or eager discovery of private children is added.
+- The opt-in 80% alert observes successful reads while Usage is open; account/plan/renewal dedupe lasts for the app lifetime. The specified page-open refresh lifecycle and no-closed-page-polling rule remain intact.
+- A small C5 follow-up corrects average own tokens per chat to divide by chats with own tokens, excluding Codium-only chats from that denominator.
+- Optional per-pass `ReviewPass.costKind` is populated from actual catalog identity so mixed Codium/own review passes preserve own prices without inventing subscription charges. A26 must preserve the field in durable review state where passes are stored.
+- See [A24 notes](codium-a24-app-usage-notes.md) for reviewed leak fixes, tests, interrupted-check disclosure and remaining benchmark/CI gates.
+
+## A25: output boundaries and historical aggregate provenance
+
+- Desktop mixed runs need independent `billing: codium` and own `costKind`; optional `Task.Info.billing` carries that distinction without fabricating `Task.Usage`. Known positive own guard subtotals survive unknown work and missing/reverted session totals.
+- Distill estimate/result numeric fields become optional in the public contracts so Codium omits them. Legacy History is projected safely on read as well as new writes; stored receipts are unchanged.
+- CLI task JSON is included in C10 because the package's no-printed-Codium-token acceptance applies to legacy task results even though the file list only names its human formatter.
+- Automated completion notes and run JSON task/batch metadata also carry usage outside the primary readers. Notes require freshly observed row proof; editable lifecycle metadata never authorizes printed aggregate tokens, even when it serializes a true proof bit. Nested task metadata loses only its inseparable token figures and proof, retaining dollar subtotals and unrelated data. The shared WP31 `TaskNotify.render` must receive the same guard at integration.
+- A25 adds default-unknown own/delegated token provenance because modern counters cannot certify historical totals. Only trusted empty native creation can promote it; unproven contributions, forks/imports/replay invalidate it and ancestor delegated proof. Aggregate output requires true proof even with no surviving Codium identity. Raw-message output requires canonical positive own identity; editable lifecycle metadata cannot grant proof. Raw accounting/history and financial admission stay unchanged. Canonical UI event snapshots are separate from replay-exact sync payloads. Existing own-only histories may show unavailable aggregate tokens rather than infer purity from missing history. Exact-head CI and the final production benchmark remain package closure gates; [A25 notes](codium-a25-output-notes.md) record the contract, tests and WP28/WP31 merge obligations.
