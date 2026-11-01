@@ -691,3 +691,8 @@ None yet (contract section 4).
 
 - Exact V15 run `41267212889`: hosted API `124732405641` and desktop Node bundle `124732405680` passed. Engine/core `124732405520` failed one stale V03 source-policy assertion that only `github.auth.ts` may contain `getIDToken`; V15 adds the intentionally isolated mint/bind command module. The fixture now explicitly allows both authenticated modules while retaining its task-process OIDC cleanup assertion; its focused local case passed (1 test / 3 assertions).
 - All four new isolated provider cases passed in that CI run, including real AppNodeBuilder pending/authorized Codium behavior, as did both new cancellation subprocess cases. The engine step reported 300 passed / 1 failed; the Core step passed all 412 tests / 1,947 assertions. This is not an all-green completion claim until the policy repair's exact-head CI passes.
+
+### V15 complete; V16 early review corrections
+
+- Repair head `176740639cdbe5df5875432da18bfe89d7f29b14` passed all three exact-head jobs in `41267798596`: engine/core `124734146003`, hosted API `124734146211`, Node bundle `124734146292`. The normal push hook also passed 23/23 (21 cached, 1m00s); the local V16 draft was frozen but present during that hook, so the exact-head CI is the committed-source completion evidence.
+- Independent early V16 review identified exceptional-cleanup and crash-dump gaps before package completion. Root approved the narrow generator upload gate, mandatory private quarantine/removal, and hosted hard-zero core limit plus disabled handler. Contract corrections precede the fixes; V16 probe/tests and final review are still pending.
