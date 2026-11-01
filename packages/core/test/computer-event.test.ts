@@ -131,7 +131,14 @@ test("act app restrictions carry only bounded canonical identities", () => {
     { index: 0, requestID: "per_sensitive" },
   ]
   expect(decode({ ...request, approvals }).approvals).toEqual(approvals)
+  // Each step can carry one app proof, twelve non-provider reasons and three provider checks.
+  const full = Array.from({ length: 16 * Computer.LIMITS.batchSteps }, (_, index) => ({
+    index: Math.floor(index / 16),
+    requestID: `per_proof_${index}`,
+  }))
+  const batch = { ...request, steps: Array.from({ length: Computer.LIMITS.batchSteps }, () => ({ kind: "wait", ms: 1 })) }
+  expect(decode({ ...batch, approvals: full }).approvals).toEqual(full)
   expect(() =>
-    decode({ ...request, approvals: Array(2 * Computer.LIMITS.batchSteps + 1).fill(approvals[0]) }),
+    decode({ ...batch, approvals: [...full, { index: 0, requestID: "per_overflow" }] }),
   ).toThrow()
 })
