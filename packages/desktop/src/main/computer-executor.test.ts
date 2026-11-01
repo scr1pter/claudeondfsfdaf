@@ -20,6 +20,7 @@ import { createHelperClient, type HelperChannel } from "./computer-helper"
 import { defaultPolicy } from "./computer-policy"
 import { createComputerSession } from "./computer-session"
 import { access, defaultPrefs, resolve, type AppGrants } from "./computer-settings"
+import { createComputerTakeover } from "./computer-takeover"
 import { createComputerKeepAwake, type KeepAwakeEvent } from "./keep-awake"
 
 // End-to-end desktop-main boundary over the real codec/client/backend and a wholly virtual C1 desktop.
@@ -98,6 +99,8 @@ function fixture(options: FakeOptions & { mode?: Computer.Mode; pointer?: "ask" 
     scope: undefined as GrantScope | undefined,
     approvedWait: undefined as Promise<void> | undefined,
     onRequest: undefined as ((request: Wire) => void) | undefined,
+    beforeInput: undefined as ((scope: GrantScope, hit: Computer.HitResult) => void) | undefined,
+    escDisposer: undefined as (() => void) | undefined,
     clipboard: "User clipboard",
     clipboardRead: undefined as Promise<string> | undefined,
     clipboardReads: 0,
@@ -207,8 +210,10 @@ function fixture(options: FakeOptions & { mode?: Computer.Mode; pointer?: "ask" 
         state.clipboardWrites.push({ text, phase })
       },
     },
+    beforeInput: (scope, hit) => state.beforeInput?.(scope, hit),
     suspendEsc: () => {
       state.esc.push("suspend")
+      return state.escDisposer
     },
     resumeEsc: () => {
       state.esc.push("resume")
@@ -426,10 +431,38 @@ function fixture(options: FakeOptions & { mode?: Computer.Mode; pointer?: "ask" 
     sensitive,
     programProof,
     advance,
+    unlistenHelper: unlisten,
     deliverBlocked() {
       for (const bytes of blocked.splice(0)) helper.receive(bytes)
     },
   }
+}
+
+function installTakeover(fake: ReturnType<typeof fixture>) {
+  const shortcuts = new Map<string, () => void>()
+  fake.unlistenHelper()
+  const takeover = createComputerTakeover({
+    platform: fake.backend.kind === "local-windows" ? "win32" : "darwin",
+    controller: fake.controller,
+    backend: fake.backend,
+    clock: fake.clock,
+    shortcuts: {
+      register(accelerator, callback) {
+        if (shortcuts.has(accelerator)) return false
+        shortcuts.set(accelerator, callback)
+        return true
+      },
+      isRegistered: (accelerator) => shortcuts.has(accelerator),
+      unregister: (accelerator) => void shortcuts.delete(accelerator),
+    },
+  })
+  fake.state.beforeInput = (scope, hit) => {
+    if (hit.owner.platform === "remote" || hit.owner.pid === undefined)
+      throw new Error("The virtual input target must have a native process")
+    takeover.target(scope, { pid: hit.owner.pid, name: hit.owner.name })
+  }
+  cleanups.unshift(async () => takeover.close())
+  return takeover
 }
 
 test("the act deadline reserves each input, exact waits, settling, capture and cancellation slack", () => {
@@ -1203,6 +1236,70 @@ test("a missing live reason does not spend an already-approved provider proof", 
   expect(fake.sent.filter((request) => request.op === "ui.perform")).toHaveLength(1)
 })
 
+test("background physical typing waits for two quiet seconds before spending a sensitive proof", async () => {
+  const fake = fixture({ mode: "background" })
+  const scope = await fake.acquire()
+  const notes = await fake.grant("notes")
+  const inspect = await fake.run("inspect", { focus: true })
+  const step: Computer.Step = { kind: "type", text: "outside@example.net" }
+  const requestID = await fake.sensitive(step, inspect, "new_destination")
+  const request = {
+    steps: [step],
+    allowedApps: [notes.key],
+    approvals: [{ index: 0, requestID }],
+    settleMs: 0,
+  }
+  installTakeover(fake)
+
+  // The native event carries the frontmost process. It arrives before the executor chooses its target.
+  fake.helper.control({ type: "user_input", kind: "key", key: "n" })
+  expect(fake.controller.state().phase).toBe("working")
+  expect(await fake.run("act", request).catch((error) => error)).toMatchObject({ code: "paused" })
+  expect(fake.controller.state().phase).toBe("waiting")
+  expect(fake.grants.peekSensitive(requestID, scope)).toBeDefined()
+  expect(fake.helper.log.filter((entry) => entry.kind === "input")).toEqual([])
+
+  await fake.advance(1999)
+  expect(fake.controller.state().phase).toBe("waiting")
+  fake.helper.control({ type: "user_input", kind: "key", key: "m" })
+  await fake.advance(1999)
+  expect(fake.controller.state().phase).toBe("waiting")
+  expect(fake.grants.peekSensitive(requestID, scope)).toBeDefined()
+  expect(fake.helper.log.filter((entry) => entry.kind === "input")).toEqual([])
+  await fake.advance(1)
+  await until(() => fake.controller.state().phase === "working")
+
+  const fresh = await fake.run("inspect", { focus: true })
+  expect(fresh.element?.elementId).toBe(inspect.element?.elementId)
+  expect(fake.grants.peekSensitive(requestID, scope)).toBeDefined()
+  expect((await fake.run("act", request)).done).toBe(1)
+  expect(fake.helper.log.filter((entry) => entry.kind === "input" && entry.op === "type")).toHaveLength(1)
+  expect(fake.grants.peekSensitive(requestID, scope)).toBeUndefined()
+})
+
+test("physical typing between chunks stops a background type without replaying its remaining text", async () => {
+  const fake = fixture({ mode: "background" })
+  await fake.acquire()
+  const notes = await fake.grant("notes")
+  installTakeover(fake)
+  fake.state.onRequest = (request) => {
+    if (request.op !== "input.type") return
+    fake.state.onRequest = undefined
+    fake.helper.control({ type: "user_input", kind: "key", key: "n" })
+  }
+  const result = await fake
+    .run("act", { steps: [{ kind: "type", text: "A".repeat(129) }], allowedApps: [notes.key], settleMs: 0 })
+    .catch((error) => error)
+  expect(result).toMatchObject({ code: "paused" })
+  expect(fake.controller.state().phase).toBe("waiting")
+  const chunks = fake.helper.log.filter((entry) => entry.kind === "input" && entry.op === "type")
+  expect(chunks).toHaveLength(1)
+  expect(chunks[0].length).toBe(64)
+  await fake.advance(2000)
+  await until(() => fake.controller.state().phase === "working")
+  expect(fake.helper.log.filter((entry) => entry.kind === "input" && entry.op === "type")).toHaveLength(1)
+})
+
 for (const platform of ["macos", "windows"] as const)
   test(`${platform}: every native input family carries the active phase and preserves pixel scrolling`, async () => {
     const fake = fixture({ platform })
@@ -1369,3 +1466,34 @@ test("a timed key hold releases and an injected Escape suspends only its own sho
   expect(fake.state.esc).toEqual(["suspend", "resume"])
   expect(fake.controller.state().holder?.sessionID).toBe(ROOT.rootSessionID)
 })
+
+for (const outcome of ["success", "changed"] as const)
+  test(`synthetic Escape invokes its exact suspension disposer after native ${outcome}`, async () => {
+    const fake = fixture({ platform: "windows" })
+    await fake.acquire()
+    const notes = await fake.grant("notes")
+    fake.state.escDisposer = () => fake.state.esc.push("original-disposer")
+    fake.blockOps.add("input.key")
+    const result = fake
+      .run("act", {
+        steps: [{ kind: "key", combo: ["Escape"], repeat: 1 }],
+        allowedApps: [notes.key],
+        settleMs: 0,
+      })
+      .catch((error) => error)
+    await until(() => fake.blocked.length === 1)
+    expect(fake.state.esc).toEqual(["suspend"])
+    // A later registration must not replace the closure captured for this injected key.
+    fake.state.escDisposer = () => fake.state.esc.push("later-disposer")
+    if (outcome === "changed") fake.helper.control({ type: "focus", windowId: "notes-1", node: "notes.body" })
+    fake.blockOps.delete("input.key")
+    fake.deliverBlocked()
+    const completed = await result
+    if (outcome === "success") expect(completed.done).toBe(1)
+    if (outcome === "changed") expect(completed).toMatchObject({ code: "changed" })
+    expect(fake.state.esc).toEqual(["suspend", "original-disposer"])
+    expect(fake.helper.log.filter((entry) => entry.kind === "input" && entry.op === "key")).toHaveLength(
+      outcome === "success" ? 1 : 0,
+    )
+    expect(fake.controller.state().holder?.sessionID).toBe(ROOT.rootSessionID)
+  })

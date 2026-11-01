@@ -27,6 +27,8 @@ export type GateContext = {
   protectedDirectories: readonly string[]
   documentProtected?: (file: string) => boolean
   signals?: (hit: Computer.HitResult) => ComputerApps.Signals | undefined
+  /** Synchronous physical-input quiet barrier, before consuming any once-only proof. */
+  beforeInput?: (hit: Computer.HitResult) => void
 }
 
 export type GateResult =
@@ -234,6 +236,8 @@ export async function checkStep(step: Computer.Step, ctx: GateContext): Promise<
   }
   if (!ctx.grants.isActive(ctx.scope)) return refuse("stopped")
   // Validate all proofs first: a second missing ask must not burn a still-needed first approval.
+  if (step.kind !== "wait") ctx.beforeInput?.(final)
+  if (!ctx.grants.isActive(ctx.scope)) return refuse("stopped")
   for (const proof of sensitive)
     if (!ctx.grants.consumeSensitive(proof.requestID, ctx.scope, step, inspect, ctx.frame?.id, proof.why))
       return refuse("not_granted")
@@ -298,6 +302,8 @@ export async function typeChecked(
       signals: { ...ctx.signals?.(hit), ...hit.signals },
     })
     if (currentAccess.verdict !== "granted" || currentAccess.level !== "interact") return refuse("changed")
+    ctx.beforeInput?.(hit)
+    if (!ctx.grants.isActive(ctx.scope)) return refuse("changed")
     await send(characters.slice(offset, offset + chunkSize).join(""), checked.inspect, hit)
   }
   return checked

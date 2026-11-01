@@ -114,6 +114,7 @@ export function createComputerExecutor(input: {
   protectedDirectories: readonly string[]
   documentProtected?: (file: string) => boolean
   signals?: (hit: Computer.HitResult) => ComputerApps.Signals | undefined
+  beforeInput?: (scope: SessionScope, hit: Computer.HitResult) => void
   clipboard: {
     readText(): string | Promise<string>
     writeText?(text: string, phase: Computer.NativePhase): void | Promise<void>
@@ -130,7 +131,7 @@ export function createComputerExecutor(input: {
     windowIds(): string[]
   }
   clock?: SessionClock
-  suspendEsc?(): void
+  suspendEsc?(): void | (() => void)
   resumeEsc?(): void
 }) {
   const time = input.clock ?? clock
@@ -587,6 +588,11 @@ export function createComputerExecutor(input: {
       protectedDirectories: input.protectedDirectories,
       documentProtected: input.documentProtected,
       signals: input.signals,
+      beforeInput: (hit) => {
+        live(flight)
+        input.beforeInput?.(scope, hit)
+        live(flight)
+      },
     }
   }
 
@@ -714,7 +720,7 @@ export function createComputerExecutor(input: {
           ((step.kind === "click" && "x" in step.at) || ["move", "drag", "scroll"].includes(step.kind))
         if (realPointer) input.overlay.realPointer(true)
         const escape = step.kind === "key" && step.combo.some((key) => /^(esc|escape)$/i.test(key))
-        if (escape) input.suspendEsc?.()
+        const resumeEsc = escape ? input.suspendEsc?.() : undefined
         try {
           await native(flight, async () => {
             if (step.kind === "type") {
@@ -809,7 +815,8 @@ export function createComputerExecutor(input: {
           return true
         } finally {
           if (realPointer) input.overlay.realPointer(false)
-          if (escape) input.resumeEsc?.()
+          if (typeof resumeEsc === "function") resumeEsc()
+          else if (escape) input.resumeEsc?.()
         }
       }
       let checked: GateResult

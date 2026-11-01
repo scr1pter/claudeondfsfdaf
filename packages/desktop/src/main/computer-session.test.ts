@@ -990,3 +990,82 @@ test("an old native begin and delayed abort cannot close a successor's overlays 
   ).toMatchObject({ code: "stopped" })
   expect(fake.session.state().holder?.sessionID).toBe(NEXT.rootSessionID)
 })
+
+// D20's two-second timer owns only this exact background typing wait, never a user pause or another lease.
+test("a background typing wait inhibits immediately and only its newest token can continue", async () => {
+  const fake = fixture({ prefs: { mode: "background" } })
+  const scope = await fake.acquire()
+  await fake.session.beforeStep(scope, { action: "type", app: { key: Computer.appKey(APP), name: APP.name } })
+  const step = fake.session.state().step
+  const offset = fake.log.length
+  const first = fake.session.waitForInput(APP.name)!
+  expect(first.scope).toEqual(scope)
+  expect(fake.session.state()).toMatchObject({
+    phase: "waiting",
+    step: "Waiting while you type in Notes",
+    escStops: false,
+  })
+  expect(fake.log.slice(offset).map((entry) => entry.kind)).toContain("cancel")
+  expect(fake.log.slice(offset).map((entry) => entry.kind)).toContain("release")
+  expect(fake.state.updates.at(-1)).toMatchObject({ paused: true, escStops: false })
+  const second = fake.session.waitForInput(APP.name)!
+  expect(await fake.session.continueAfterInput(first)).toBe(false)
+  expect(fake.session.state().phase).toBe("waiting")
+  expect(await fake.session.continueAfterInput(second)).toBe(true)
+  expect(fake.session.state()).toMatchObject({ phase: "working", step })
+  expect(fake.state.updates.at(-1)).toMatchObject({ paused: false })
+  expect(await fake.session.continueAfterInput(second)).toBe(false)
+})
+
+for (const phase of ["paused", "asking", "handoff", "successor"] as const)
+  test(`a background quiet token cannot resume ${phase}`, async () => {
+    const fake = fixture({ prefs: { mode: "background" } })
+    await fake.acquire()
+    const token = fake.session.waitForInput(APP.name)!
+    if (phase === "paused") await fake.session.pause("input")
+    if (phase === "asking") await fake.session.transition("asking")
+    if (phase === "handoff") await fake.session.transition("handoff")
+    if (phase === "successor") {
+      await fake.session.stop()
+      await fake.acquire(NEXT)
+    }
+    const current = fake.session.state()
+    expect(await fake.session.continueAfterInput(token)).toBe(false)
+    expect(fake.session.state()).toEqual(current)
+    if (phase !== "successor") expect(fake.session.waitForInput(APP.name)).toBeUndefined()
+  })
+
+test("foreground and unrelated waiting phases cannot become automatic typing waits", async () => {
+  const foreground = fixture()
+  await foreground.acquire()
+  expect(foreground.session.waitForInput(APP.name)).toBeUndefined()
+  const background = fixture({ prefs: { mode: "background" } })
+  await background.acquire()
+  await background.session.transition("waiting")
+  expect(background.session.waitForInput(APP.name)).toBeUndefined()
+})
+
+test("a grant or same-mode refresh preserves the owned quiet-wait token while fencing native input", async () => {
+  const fake = fixture({ prefs: { mode: "background" } })
+  const scope = await fake.acquire()
+  await fake.session.beforeStep(scope)
+  const token = fake.session.waitForInput(APP.name)!
+  const revision = fake.state.updates.at(-1)!.phaseRevision!
+  await fake.session.updateGrants()
+  await fake.session.setMode("background")
+  expect(fake.state.updates.at(-1)!.phaseRevision).toBeGreaterThan(revision)
+  expect(fake.session.state().phase).toBe("waiting")
+  expect(await fake.session.continueAfterInput(token)).toBe(true)
+  expect(fake.session.state().phase).toBe("working")
+})
+
+test("a mode change during typing wait offers explicit Resume instead of stranding a stale timer", async () => {
+  const fake = fixture({ prefs: { mode: "background" } })
+  await fake.acquire()
+  const token = fake.session.waitForInput(APP.name)!
+  await fake.session.setMode("foreground")
+  expect(fake.session.state()).toMatchObject({ phase: "paused", pause: "button", mode: "foreground" })
+  expect(await fake.session.continueAfterInput(token)).toBe(false)
+  await fake.session.resume()
+  expect(fake.session.state()).toMatchObject({ phase: "working", mode: "foreground" })
+})

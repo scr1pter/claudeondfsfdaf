@@ -593,7 +593,12 @@ describe("observing the virtual OS pointer", () => {
       expect(fake.helper.desktop.generation).toBe(generation)
       expect(fake.helper.log.filter((entry) => entry.kind === "input")).toEqual([])
       fake.control({ type: "user_input", kind: "pointer", dx: 25, dy: 10 })
-      expect(fake.call("cursor.position")).toMatchObject({ ok: true, x: -675, y: -115, displayId })
+      expect(fake.call("cursor.position")).toMatchObject({
+        ok: true,
+        x: platform === "windows" ? -662.5 : -675,
+        y: platform === "windows" ? -110 : -115,
+        displayId,
+      })
       fake.control({ type: "lock", locked: true })
       expect(fake.call("cursor.position")).toMatchObject({ code: "locked" })
       fake.call("shutdown")
@@ -1063,9 +1068,10 @@ describe("capture privacy", () => {
 })
 
 describe("stop and held input (INV-R3)", () => {
-  function holding(options: FakeOptions = {}) {
+  function holding(options: FakeOptions = {}, session: Message = {}) {
     const fake = start(options)
-    fake.begin(["calculator"])
+    fake.helper.desktop.focus("calc-1")
+    fake.begin(["calculator"], session)
     const hold = fake.send("input.hold", {
       pid: fake.helper.desktop.app("calculator")!.pid,
       combo: ["shift"],
@@ -1078,6 +1084,148 @@ describe("stop and held input (INV-R3)", () => {
     fake.index((entry) => entry.kind === "release" && entry.reason === reason && entry.keys.includes("key:shift"))
   const answered = (fake: ReturnType<typeof start>, id: number) =>
     fake.index((entry) => entry.kind === "response" && entry.id === id)
+
+  for (const platform of ["macos", "windows"] as const) {
+    test(`${platform}: own-tagged stop keys and pointer events have no observable effect`, () => {
+      const chord = platform === "macos" ? "Command+Shift+Escape" : "Control+Alt+Shift+Escape"
+      const { fake, hold } = holding({ platform }, { stopChord: chord })
+      fake.helper.desktop.cursor = { x: 100, y: 200 }
+      const before = { log: fake.helper.log.length, seen: fake.seen.length, cursor: fake.helper.desktop.cursor }
+      for (const event of [
+        { kind: "key", key: "Escape" },
+        { kind: "key", key: chord },
+        { kind: "pointer", dx: 100, dy: 200 },
+        { kind: "click" },
+        { kind: "scroll", dx: 0, dy: 100 },
+      ])
+        fake.control({ type: "user_input", tagged: true, ...event })
+      expect(fake.helper.log).toHaveLength(before.log)
+      expect(fake.seen).toHaveLength(before.seen)
+      expect(fake.helper.desktop.cursor).toEqual(before.cursor)
+      expect(fake.reply(hold)).toBeUndefined()
+      fake.control({ type: "user_input", kind: "key", key: "x" })
+      expect(fake.reply(hold)).toMatchObject({ ok: false, code: "paused" })
+      expect(released(fake, "user_input")).toBeGreaterThan(-1)
+      expect(fake.seen.some((message) => message.event === "stop")).toBe(false)
+    })
+
+    test(`${platform}: a 7 DIP pointer packet keeps held input, while 8 DIP releases before notification`, () => {
+      const { fake, hold } = holding({ platform, scenario: "multi-display" })
+      // The second Windows monitor uses 150% DPI: 7 DIP advances 10.5 physical pixels without taking over.
+      const scale = platform === "windows" ? 1.5 : 1
+      fake.helper.desktop.cursor = { x: -650, y: -100 }
+      fake.control({ type: "user_input", kind: "pointer", dx: 7, dy: 0 })
+      expect(fake.helper.desktop.cursor).toEqual({ x: -650 + 7 * scale, y: -100 })
+      expect(fake.seen.at(-1)).toEqual({
+        event: "user_input",
+        kind: "pointer",
+        pid: fake.identity("notes").pid,
+        dx: 7,
+        dy: 0,
+      })
+      expect(fake.reply(hold)).toBeUndefined()
+      expect(released(fake, "user_input")).toBe(-1)
+      const before = fake.helper.log.length
+      fake.control({ type: "user_input", kind: "pointer", dx: 8, dy: 0 })
+      expect(fake.helper.desktop.cursor).toEqual({ x: -650 + 15 * scale, y: -100 })
+      expect(fake.reply(hold)).toMatchObject({ ok: false, code: "paused" })
+      const changes = fake.helper.log.slice(before)
+      const release = changes.findIndex((entry) => entry.kind === "release" && entry.reason === "user_input")
+      const event = changes.findIndex((entry) => entry.kind === "event" && entry.event === "user_input")
+      expect(release).toBeGreaterThan(-1)
+      expect(event).toBeGreaterThan(release)
+    })
+  }
+
+  test("a pointer packet with missing deltas conservatively releases held input", () => {
+    const { fake, hold } = holding()
+    fake.control({ type: "user_input", kind: "pointer", dx: 0 })
+    expect(fake.reply(hold)).toMatchObject({ ok: false, code: "paused" })
+    expect(released(fake, "user_input")).toBeGreaterThan(-1)
+  })
+
+  for (const platform of ["macos", "windows"] as const)
+    test(`${platform}: physical take-over fences queued input and all unpause updates until a fresh session`, () => {
+      const fake = start({ platform })
+      const pid = fake.identity("calculator").pid
+      const phase = { sessionId: "native-takeover", phaseRevision: 7 }
+      fake.begin(["calculator"], phase)
+      const hold = fake.send("input.hold", { ...phase, pid, combo: ["Shift"], ms: 10_000 })
+      const queued = fake.send("input.key", { ...phase, pid, combo: ["ArrowLeft"], repeat: 1 })
+      // A newer revision may already be in transit before the physical event; it is not proof of Resume.
+      const stale = fake.send("session.update", { ...phase, phaseRevision: 8, paused: false, escStops: true })
+      expect(fake.reply(hold)).toBeUndefined()
+      expect(fake.reply(queued)).toBeUndefined()
+      fake.control({ type: "user_input", kind: "key", key: "x" })
+      expect(fake.reply(hold)).toMatchObject({ ok: false, code: "paused" })
+      expect(fake.reply(queued)).toMatchObject({ ok: false, code: "paused" })
+      expect(fake.reply(stale)).toMatchObject({ ok: false, code: "changed" })
+      expect(fake.helper.log.filter((entry) => entry.kind === "input" && entry.op === "key")).toEqual([])
+      expect(
+        fake.call("session.update", { sessionId: "another-task", phaseRevision: 99, paused: false }),
+      ).toMatchObject({
+        code: "changed",
+      })
+      expect(fake.call("input.key", { ...phase, pid, combo: ["ArrowLeft"], repeat: 1 })).toMatchObject({
+        code: "paused",
+      })
+      expect(fake.call("session.update", { ...phase, paused: false, escStops: true })).toMatchObject({
+        code: "changed",
+      })
+      expect(fake.call("session.update", { ...phase, phaseRevision: 8, paused: false, escStops: true })).toMatchObject({
+        code: "changed",
+      })
+      const resumed = { sessionId: "native-resumed", phaseRevision: 0 }
+      expect(fake.begin(["calculator"], resumed)).toMatchObject({ ok: true })
+      expect(fake.call("input.key", { ...resumed, pid, combo: ["ArrowLeft"], repeat: 1 })).toMatchObject({ ok: true })
+      expect(fake.helper.log.filter((entry) => entry.kind === "input" && entry.op === "key")).toHaveLength(1)
+    })
+
+  test("legacy unphased physical take-over requires a fresh session rather than an unbound unpause", () => {
+    const { fake, hold } = holding()
+    const pid = fake.identity("calculator").pid
+    const queued = fake.send("input.key", { pid, combo: ["ArrowLeft"], repeat: 1 })
+    fake.control({ type: "user_input", kind: "pointer", dx: 8, dy: 0 })
+    expect(fake.reply(hold)).toMatchObject({ code: "paused" })
+    expect(fake.reply(queued)).toMatchObject({ code: "paused" })
+    expect(fake.call("session.update", { paused: false })).toMatchObject({ code: "changed" })
+    expect(fake.call("session.update", { sessionId: "test", phaseRevision: 1, paused: false })).toMatchObject({
+      code: "changed",
+    })
+    fake.begin(["calculator"])
+    expect(fake.call("input.key", { pid, combo: ["ArrowLeft"], repeat: 1 })).toMatchObject({ ok: true })
+  })
+
+  test("background events report actual key and pointer owners independently of app approval and omit key text", () => {
+    const fake = start({ scenario: "notes" })
+    fake.begin(["calculator"], { mode: "background", escStops: false })
+    fake.control({ type: "user_input", kind: "key", key: "private physical key" })
+    expect(fake.seen.at(-1)).toEqual({ event: "user_input", kind: "key", pid: fake.identity("notes").pid })
+    fake.helper.desktop.cursor = { x: 60, y: 200 }
+    for (const kind of ["pointer", "click", "scroll"]) fake.control({ type: "user_input", kind, dx: 0, dy: 0 })
+    expect(fake.seen.slice(-3)).toEqual(
+      ["pointer", "click", "scroll"].map((kind) => ({
+        event: "user_input",
+        kind,
+        pid: fake.identity("calculator").pid,
+        dx: 0,
+        dy: 0,
+      })),
+    )
+    expect(fake.helper.log.some((entry) => entry.kind === "release" && entry.reason === "user_input")).toBe(false)
+    expect(JSON.stringify(fake.helper.log)).not.toContain("private physical key")
+    fake.helper.desktop.cursor = { x: 2000, y: 2000 }
+    fake.control({ type: "user_input", kind: "click" })
+    expect(fake.seen.at(-1)).toEqual({ event: "user_input", kind: "click" })
+  })
+
+  test("user-input event owners are optional positive native PIDs", () => {
+    const valid = Schema.is(Computer.HelperEvent)
+    expect(valid({ event: "user_input", kind: "key" })).toBe(true)
+    expect(valid({ event: "user_input", kind: "key", pid: 123 })).toBe(true)
+    for (const pid of [0, -1, 1.5, Number.NaN, "123"])
+      expect(valid({ event: "user_input", kind: "key", pid })).toBe(false)
+  })
 
   test("Escape releases held input, then sends stop, and input stays stopped until the next session", () => {
     const { fake, hold } = holding()
@@ -1098,7 +1246,9 @@ describe("stop and held input (INV-R3)", () => {
     const fake = start()
     fake.begin(["calculator"], { escStops: false })
     fake.control({ type: "user_input", kind: "key", key: "Escape" })
-    expect(fake.seen.filter((message) => "event" in message)).toEqual([{ event: "user_input", kind: "key" }])
+    expect(fake.seen.filter((message) => "event" in message)).toEqual([
+      { event: "user_input", kind: "key", pid: fake.helper.desktop.frontmost().pid },
+    ])
     expect(released(fake, "user_input")).toBe(-1)
     const userRelease = fake.index((entry) => entry.kind === "release" && entry.reason === "user_input")
     const userEvent = fake.index((entry) => entry.kind === "event" && entry.event === "user_input")

@@ -1652,6 +1652,9 @@ export const HelperEvent = Schema.Union([
   Schema.Struct({
     event: Schema.Literal("user_input"),
     kind: Schema.Literals(["pointer", "key", "click", "scroll"]),
+    /** Actual native event owner, never an approved-app or model assertion. Omitted when no owner is known. */
+    pid: optional(PositiveInt),
+    /** Logical displacement in DIP, normalized by the helper for the event's display (never raw HID counts). */
     dx: optional(Schema.Finite),
     dy: optional(Schema.Finite),
   }),

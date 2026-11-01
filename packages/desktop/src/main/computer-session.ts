@@ -10,6 +10,7 @@ import type { GrantScope } from "./computer-grants"
 import type { KeepAwakeEvent } from "./keep-awake"
 
 export type SessionScope = GrantScope
+export type TypingWait = { readonly scope: SessionScope; readonly generation: number }
 export type SessionBackend = Pick<
   Computer.ComputerBackend,
   "kind" | "hello" | "permissions" | "beginSession" | "updateSession" | "endSession" | "cancel" | "releaseAll"
@@ -46,6 +47,7 @@ type Run = {
   watchdog?: unknown
   pausedTimer?: unknown
   pausedAt?: number
+  typing?: { generation: number; revision: number; step?: string }
   view: Promise<void>
 }
 type Entry = {
@@ -758,6 +760,7 @@ export function createComputerSession(input: {
     if (!run) return Promise.resolve()
     if (state.current.phase === "paused" && state.current.pause === reason) return Promise.resolve()
     run.revision++
+    run.typing = undefined
     state.current = {
       ...state.current,
       phase: "paused",
@@ -875,7 +878,9 @@ export function createComputerSession(input: {
   async function updateGrants() {
     const run = state.run
     if (!run) return
+    const typing = state.current.phase === "waiting" && run.typing?.revision === run.revision ? run.typing : undefined
     run.revision++
+    if (typing) typing.revision = run.revision
     void halt()
     const inhibited = inhibit(run)
     if (state.current.phase === "working") await beforeStep(run.scope)
@@ -943,6 +948,51 @@ export function createComputerSession(input: {
     },
     beforeStep,
     updateGrants,
+    waitForInput(app?: string): TypingWait | undefined {
+      const run = state.run
+      if (!run || state.current.mode !== "background" || state.locked) return
+      const owned = state.current.phase === "waiting" && run.typing?.revision === run.revision
+      if (state.current.phase !== "working" && !owned) return
+      const step = owned ? run.typing?.step : state.current.step
+      const revision = ++run.revision
+      run.typing = { generation: revision, revision, step }
+      state.current = {
+        ...state.current,
+        phase: "waiting",
+        ask: undefined,
+        step: app
+          ? Computer.clean(ComputerMainCopy.waitingForTyping({ app: Computer.clean(app, 256) }), 256)
+              .slice(0, 256)
+              .replace(/[\ud800-\udbff]$/, "")
+          : ComputerMainCopy.labels.waiting,
+      }
+      // The caller gets a token synchronously, after authority has already been inhibited.
+      const stopped = halt()
+      const inhibited = inhibit(run)
+      show(run)
+      void Promise.allSettled([stopped, inhibited])
+      return { scope: { ...run.scope }, generation: revision }
+    },
+    async continueAfterInput(token: TypingWait): Promise<boolean> {
+      const run = state.run
+      if (
+        !run ||
+        !same(token.scope) ||
+        run.typing?.generation !== token.generation ||
+        run.typing?.revision !== run.revision ||
+        state.current.phase !== "waiting" ||
+        state.current.mode !== "background" ||
+        state.locked
+      )
+        return false
+      const step = run.typing.step
+      run.typing = undefined
+      run.revision++
+      state.current = { ...state.current, phase: "working", step }
+      show(run)
+      await beforeStep(run.scope)
+      return state.run === run && state.current.phase === "working"
+    },
     pause,
     resume,
     stop,
@@ -960,6 +1010,7 @@ export function createComputerSession(input: {
       if (state.current.phase === "paused")
         return Promise.reject(new ComputerError("paused", `Use Resume to continue ${Hands.NAME}.`))
       run.revision++
+      run.typing = undefined
       state.current = { ...state.current, phase, ask: ask ? structuredClone(ask) : undefined }
       show(run)
       if (phase === "working") return beforeStep(run.scope)
@@ -982,7 +1033,14 @@ export function createComputerSession(input: {
       }
       const previous = state.current.mode
       run.preferenceMode = settings.prefs.mode
+      const typing = state.current.phase === "waiting" && run.typing?.revision === run.revision ? run.typing : undefined
+      if (typing && mode !== previous) {
+        state.current = { ...state.current, mode }
+        await pause("button")
+        return
+      }
       run.revision++
+      if (typing) typing.revision = run.revision
       void halt()
       void inhibit(run)
       state.current = { ...state.current, mode }

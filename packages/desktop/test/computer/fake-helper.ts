@@ -153,6 +153,8 @@ type Session = {
   readonly phaseRevision?: number
   readonly mode: Computer.Mode
   readonly paused: boolean
+  /** A native take-over stays inhibited until a fresh session.begin, never an asynchronous phase update. */
+  readonly physicalPause?: boolean
   readonly approved: ReadonlyMap<string, Computer.AppIdentity>
   readonly vectorPids: ReadonlySet<number>
   readonly vectorWindowIds: ReadonlySet<string>
@@ -198,6 +200,9 @@ const Control = Schema.Union([
     kind: Schema.Literals(["pointer", "key", "click", "scroll"]),
     /** The physical key, for `kind: "key"`; never forwarded except as a stop. */
     key: optional(Schema.String),
+    /** Test-only equivalent of the helper's private native event marker; ignored before all side effects. */
+    tagged: optional(Schema.Boolean),
+    /** Logical DIP on both virtual platforms; the Windows cursor itself remains in physical pixels. */
     dx: optional(Schema.Finite),
     dy: optional(Schema.Finite),
   }),
@@ -988,6 +993,8 @@ export function createFakeHelper(options: FakeOptions, io: FakeIo) {
               args.phaseRevision < session.phaseRevision))
         )
           return refuse("changed", "The computer session phase changed")
+        if (session.physicalPause && args.paused === false)
+          return refuse("changed", "Physical take-over needs a fresh session")
         state.session = {
           ...session,
           ...(args.phaseRevision === undefined ? {} : { phaseRevision: args.phaseRevision }),
@@ -1539,6 +1546,7 @@ export function createFakeHelper(options: FakeOptions, io: FakeIo) {
       const decoded = Schema.decodeUnknownOption(Control)(message)
       if (decoded._tag === "None" || state.closed) return false
       const value = decoded.value
+      if (value.type === "user_input" && value.tagged) return true
       // The user's own key stays out of the log, as it stays out of `user_input` events (2.10).
       record("control", {
         message: value.type === "user_input" && value.key !== undefined ? { ...value, key: "redacted" } : value,
@@ -1563,7 +1571,8 @@ export function createFakeHelper(options: FakeOptions, io: FakeIo) {
       if (value.type !== "user_input") return true
       if (value.kind === "pointer") {
         const point = desktop.cursor
-        desktop.cursor = { x: point.x + (value.dx ?? 0), y: point.y + (value.dy ?? 0) }
+        const scale = platform === "windows" ? (desktop.displayAt(point).dpiScale ?? 1) : 1
+        desktop.cursor = { x: point.x + (value.dx ?? 0) * scale, y: point.y + (value.dy ?? 0) * scale }
       }
       const session = state.session
       if (!session) return true
@@ -1576,14 +1585,31 @@ export function createFakeHelper(options: FakeOptions, io: FakeIo) {
         return true
       }
       if (!features["userInput.detect"]) return true
-      // In the foreground the user's own input stops injection, after releasing held input.
-      if (session.mode === "foreground") {
+      // The threshold uses one logical displacement, independently of native cursor coordinates. Missing deltas
+      // cannot prove that a pointer packet was harmless. Native M8/W9 must halt before emitting the same event.
+      const takeover =
+        value.kind !== "pointer" ||
+        value.dx === undefined ||
+        value.dy === undefined ||
+        Math.hypot(value.dx, value.dy) >= 8
+      if (session.mode === "foreground" && takeover) {
+        // Inhibit queued writes before returning from the native callback. Even a newer phase update can have
+        // been queued before this event, so only a fresh session.begin can clear physical take-over.
+        state.session = {
+          ...session,
+          paused: true,
+          escStops: false,
+          physicalPause: true,
+        }
         releaseAll("user_input")
         abortCurrent("paused", "Paused for the user's own input", "user_input", true)
       }
+      const window = value.kind === "key" ? undefined : desktop.topAt(desktop.cursor, excluded())
+      const app = value.kind === "key" ? desktop.frontmost() : window ? desktop.appOf(window) : undefined
       emit({
         event: "user_input",
         kind: value.kind,
+        ...(app && Number.isSafeInteger(app.pid) && app.pid > 0 ? { pid: app.pid } : {}),
         ...(value.dx === undefined ? {} : { dx: value.dx }),
         ...(value.dy === undefined ? {} : { dy: value.dy }),
       })

@@ -715,3 +715,21 @@ describe("text chunk live ownership", () => {
     ])
   })
 })
+
+test("a background quiet barrier runs before consuming a sensitive approval", async () => {
+  const fake = await fixture()
+  fake.state.hit = { ...fake.state.hit, name: "Delete" }
+  await fake.sensitive("per_quiet", CLICK, "delete")
+  fake.ctx.approvals = [{ index: 0, requestID: "per_quiet" }]
+  const busy = new Error("The physical target is still receiving user keys")
+  fake.ctx.beforeInput = (hit) => {
+    expect(hit.owner.pid).toBe(APP.pid)
+    throw busy
+  }
+  await expect(checkStep(CLICK, fake.ctx)).rejects.toBe(busy)
+  expect(fake.grants.peekSensitive("per_quiet", SCOPE)).toBeDefined()
+  expect(fake.state.inputs).toEqual([])
+  fake.ctx.beforeInput = undefined
+  expect(await checkStep(CLICK, fake.ctx)).toMatchObject({ verdict: "ok" })
+  expect(fake.grants.peekSensitive("per_quiet", SCOPE)).toBeUndefined()
+})
