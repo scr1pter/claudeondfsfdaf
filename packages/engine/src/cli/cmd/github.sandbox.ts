@@ -68,11 +68,11 @@ async function checkout(env: Env) {
   return workspace
 }
 
-async function command(file: string, args: readonly string[], allowed = [0]) {
+async function command(file: string, args: readonly string[], allowed = [0], timeout = 30_000) {
   const result = await execute(file, [...args], {
     env: { PATH: SYSTEM_PATH, LANG: "C", LC_ALL: "C" },
     encoding: "utf8",
-    timeout: 30_000,
+    timeout,
     maxBuffer: 65_536,
   }).then(
     (value) => ({ code: 0, stdout: value.stdout }),
@@ -89,7 +89,8 @@ async function command(file: string, args: readonly string[], allowed = [0]) {
   return result
 }
 
-const sudo = (args: readonly string[], allowed?: number[]) => command("/usr/bin/sudo", ["-n", ...args], allowed)
+const sudo = (args: readonly string[], allowed?: number[], timeout?: number) =>
+  command("/usr/bin/sudo", ["-n", ...args], allowed, timeout)
 
 async function privateDirectory(directory: string, create = false) {
   if (create)
@@ -393,17 +394,21 @@ export async function prepare(env: Env = process.env) {
   await sudo(["/usr/bin/chown", "-h", "0:0", "--", container])
   await sudo(["/usr/bin/chmod", "0755", "--", container])
   await verifyContainer(container, true)
-  await sudo([
-    "/usr/sbin/useradd",
-    "--user-group",
-    "--create-home",
-    "--home-dir",
-    AGENT_HOME,
-    "--shell",
-    "/bin/bash",
-    "--no-log-init",
-    USER,
-  ])
+  await sudo(
+    [
+      "/usr/sbin/useradd",
+      "--user-group",
+      "--create-home",
+      "--home-dir",
+      AGENT_HOME,
+      "--shell",
+      "/bin/bash",
+      "--no-log-init",
+      USER,
+    ],
+    undefined,
+    120_000,
+  )
   state.uid = Number((await command("/usr/bin/id", ["-u", USER])).stdout.trim())
   state.gid = Number((await command("/usr/bin/id", ["-g", USER])).stdout.trim())
   State.parse(state)
