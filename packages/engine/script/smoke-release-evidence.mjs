@@ -1,4 +1,5 @@
 import test from "node:test"
+// Native Node checks: keep this smoke filename outside Bun's automatic test discovery.
 import assert from "node:assert/strict"
 import { mkdtemp, mkdir, readFile, rm, writeFile, readdir } from "node:fs/promises"
 import { tmpdir } from "node:os"

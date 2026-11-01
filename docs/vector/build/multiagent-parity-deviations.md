@@ -1198,6 +1198,7 @@ counts and assertions are unchanged. A new complete run is still required on
 the repaired integrated source.
 
 
+
 ## 2026-11-01 WP30 integration checkpoint
 
 Merged the reviewed WP30 checkpoint `e2b36f39` with `release-evidence` at
@@ -1234,3 +1235,43 @@ The next Codium provenance integration must combine both own and included-descen
 Validation (Linux, 2026-11-01): **147 distinct focused cases passed**: workflow tool 10 (and two snapshots), Runs 14, TaskTool workflow integration 5, workflow limits 7, workflow notifications 2, Manager workflow 7, session workflow guards 5, saved-workflow config/trust 7, existing prompt guards 43, offline provider wire 5, existing task limits 26 and existing task notifications 16. The unchanged 300-agent stop fixture passed in 16.98 seconds under its 30-second timeout. The final causal queued-worker case was rerun after adding actual job-registration and non-promotion assertions; default automatic retry remained enabled and still produced zero provider prompts until explicit resume. The final quiet-note pass includes exact aggregate token/tool attributes. An initial provider-fixture typecheck failure was corrected by supplying the offline fetch's required `preconnect` method and handling the SDK's `PromiseLike` result without `.catch`; its five tests and the final engine typecheck passed afterward. No Core, Schema or Protocol source changed in WP31. Formatting and `git diff --check` passed.
 
 All commands used the owning package, one test file per invocation with the unchanged 30,000 ms timeout, and `/workspace/.tools/vector-serial`; fixtures used local execution and no provider request. Independent `integration_review_v14` reread and cleared the source fixes, including the approved-policy retry case, durable quiet-note claims and documented bounded unknown accounting. `workflow_core` supplied the tool/session/config/Manager protections and quiet-note regressions. These are focused local results, not a full phase-6 CI claim. Root integration retains the required 23-package pre-push hook; owner routes/CLI and the complete phase-6 CI gate remain WP32.
+
+## 2026-11-01 CI9 — keep release evidence checks in native Node
+
+General run `41260900526`, Linux engine shard 1 job `124713782992`, reached all
+1,732 selected cases and failed only the new packaged-sidecar IPC check. Its
+`.test.mjs` filename caused Bun's automatic discovery to include a native Node
+test. The test's `process.execPath` correctly followed its runner, so its child
+was Bun, which does not export Node 24's `node:module.registerHooks`. The timeout
+reported that exact startup error. The same 19 checks had passed under Node in
+the completed release study.
+
+The file is now `script/smoke-release-evidence.mjs`, matching the existing native
+Node smoke convention. Both the ordinary desktop Node job and the optional
+release study explicitly run it under Node 24, alongside the three provenance
+checks. No assertion, deadline, engine source or measured release bytes change.
+The old run completed with 19 successful jobs and two failures: Linux shard 1
+above and Windows shard 1 job `124713783005`, whose sole failed case was the
+same IPC check (647 passes, four skips). The other three optional jobs skipped.
+Fresh general run [41263580768](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/41263580768)
+at `6b88dcb2c0e09eeba23b2c6737b010e0f10bd971` completed successfully: all 21
+required jobs passed and the three optional jobs skipped. This covers Linux and
+Windows units, all four Linux and twelve Windows engine shards, both browser
+jobs, and the desktop Node bundle with the explicit instrumentation/provenance
+checks. It validates the shared integration baseline through WP29 and CI9;
+WP30/WP31, later Codium work and @vector have separate source and validation
+records. No release or main merge follows from this result. Shard numbers alone do not prove
+a particular file ran, because adding or removing a discovered file changes
+Bun's shard assignments.
+
+
+## 2026-11-01 WP31 integration checkpoint
+
+Merged the reviewed WP31 checkpoint `35a66514` with `release-evidence` at
+`4bc6b945`. The sole conflict was independently appended deviation entries;
+both were retained. CI9's Node-only test placement, the passing shared-baseline
+CI record and the completed release-study documentation merge without runtime
+source or generated-contract conflicts. WP31's 147 focused cases and final
+engine typecheck are recorded above. The full 21-job baseline run at `6b88dcb2`
+precedes WP30/WP31; complete phase-6 CI remains due after WP32. This checkpoint
+uses the mandatory package hook and grants no main merge or release.

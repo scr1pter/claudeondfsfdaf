@@ -105,5 +105,14 @@ fake response, bounded fake-server paths and limited local policy state on
 failure. No production probe deadline changes. This local run passed 28 of 30
 cases, including that case; the two company-policy cases refused the managed
 fixture because this sandbox maps `/` and `/tmp` ownership to UID 65534, outside
-the trusted root/current-user owners. Native CI must supply their acceptance;
-the production ownership check remains unchanged.
+the trusted root/current-user owners. The production ownership check remains
+unchanged.
+
+Native acceptance is now recorded on `c7335646` in general run `41260900526`:
+Linux shard 2 job `124713782988` and Windows shard 10 job `124713783056` each
+ran all 30 cases in `test/server/local.test.ts` successfully, including Add
+server's exact 409 assertion and both company-lock cases. The individual file
+headers and passing case lines were checked in both job logs. This does not
+establish the cause of the older intermittent 400, and the full run was not
+green: its two unrelated release-instrumentation discovery failures are recorded
+as CI9 in the parity deviations.

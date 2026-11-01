@@ -156,6 +156,11 @@ jobs:
         working-directory: packages/engine
         run: node --experimental-strip-types --test script/smoke-response-stall.mjs
 
+      - name: Check release evidence instrumentation under Node
+        run: |
+          node --test-timeout=30000 script/agent-eval/verify-release-evidence.test.mjs
+          node --test-timeout=30000 packages/engine/script/smoke-release-evidence.mjs
+
       - name: Build the desktop engine bundle
         working-directory: packages/engine
         run: |
@@ -539,7 +544,7 @@ jobs:
       - name: Verify instrumentation boundaries
         run: |
           node --test-timeout=30000 script/agent-eval/verify-release-evidence.test.mjs
-          node --test-timeout=30000 packages/engine/script/release-evidence.test.mjs
+          node --test-timeout=30000 packages/engine/script/smoke-release-evidence.mjs
 
       - name: Download immutable published release artifacts
         env:

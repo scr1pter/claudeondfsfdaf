@@ -111,7 +111,7 @@ Run the light offline component tests directly (the host's Node runner wrapper
 can hide named tests when invoked with `--test`):
 
 ```sh
-/workspace/.tools/vector-serial node --test-timeout=30000 packages/engine/script/release-evidence.test.mjs
+/workspace/.tools/vector-serial node --test-timeout=30000 packages/engine/script/smoke-release-evidence.mjs
 ```
 
 The tests cover durable/racing/restarted grants, endpoint/model/effort/output

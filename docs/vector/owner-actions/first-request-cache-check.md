@@ -2,12 +2,60 @@
 
 > Update, 1 November 2026: the [offline release-engine study](release-engine-evidence.md)
 > now supplies a reviewed driver, durable request-grant checks and report format.
-> Exact-artifact execution is being verified in CI. It has no live mode. The
+> Exact-artifact execution passed in [run 41260729498](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/41260729498).
+> The [raw evidence](../../benchmarks/release-engine-1.99.112/README.md) records two completed sessions,
+> two forwarded requests and all five memory phases. It has no live mode. The
 > packaged-sidecar-only and provider-enforced $0.25 conditions below were planning
 > assumptions; the original audit does not require them for offline preparation.
 > A live adapter, credential route and explicit spending authorization remain
-> separate prerequisites. The older statements that no driver exists refer to
-> the proposed live driver, not this new offline rehearsal.
+> separate prerequisites. The older statements below that no driver exists refer to
+> the proposed live driver, not this completed offline rehearsal. The older
+> packaged-Electron-only and provider-account-hard-cap requirements below are
+> superseded by the current preparation boundary that follows.
+
+## Current preparation boundary
+
+The completed rehearsal used the exact published 1.99.112 sidecar bytes under
+Node, with the release catalog verified independently. It did not run inside
+Electron. A live check may use that same explicitly described runtime boundary;
+running inside the full desktop is needed only for a claim about the full
+desktop runtime. Neither execution mode establishes provider caching by itself.
+
+The release's built-in OpenAI hook clears the environment-derived output limit.
+The reviewed evidence plugin therefore sets 512 through the supported
+`chat.params` hook after the built-ins. The wire capture independently requires
+that value. A future live adapter must disclose that intervention and verify
+the selected endpoint's output/reasoning semantics; setting the environment
+variable alone is insufficient.
+
+The rehearsal also found that the second request contains an advisory memory
+note after the shared first 9,958 UTF-8 bytes of the system prefix. Tool
+definitions match, while the normal per-session cache keys differ. Keep those
+observations in a live report rather than claiming that the entire requests are
+identical. The scripted 0/1,024 cached-token values only verify usage projection.
+
+Remaining implementation is a separately reviewed live transport and credential
+adapter. The offline driver's loopback-only network namespace and synthetic
+credentials must remain its default. Before any budget request, prepare an
+explicit live invocation, preserve the durable two-send limit and tool veto,
+test its unknown-outcome behavior against a fake endpoint, and establish the
+credential's intended destination without reading or copying stored secrets.
+
+The earlier $0.25 figure is a proposed budget, not an owner-approved amount or a
+measured charge. A provider-account hard cap is one possible control, not a
+requirement imposed by the original audit. A conservative request-cost bound
+may instead be reviewable if current route-specific prices, a trustworthy input
+bound and an enforced output/reasoning bound are all available. Record which
+limits are enforced, which figures are estimates, and any remaining exposure;
+never describe a soft software threshold as a hard dollar cap. If a reliable
+bound cannot be established, prepare the uncertainty for the owner's decision
+instead of manufacturing an account-setting prerequisite.
+
+No ready live adapter or authorized model credential is present. Spending and
+the concrete credential route still need the owner's approval after preparation.
+No account setting, provider call or budget approval follows from this document.
+
+## Original proposal (29 October; historical assumptions noted above)
 
 
 Planning only, prepared on 29 October 2026. No live request, account setting,
