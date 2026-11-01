@@ -292,7 +292,8 @@ describe("githubRun", () => {
     expect(text).toMatch(
       /resources\.auth = await resources\.acquisition\.finally\(\(\) => \{\s*delete process\.env\.ACTIONS_ID_TOKEN_REQUEST_URL\s*delete process\.env\.ACTIONS_ID_TOKEN_REQUEST_TOKEN\s*\}\)/,
     )
-    // The exchange is the engine's only in-process OIDC use, so nothing needs the pair after it.
+    // The task/review exchange is the only OIDC use in the model process. V15's isolated mint/bind commands also
+    // request proof, before checkout/model work; the generated agent shell and sandbox remove their request pair.
     const glob = new Bun.Glob("**/*.ts")
     const root = path.join(import.meta.dir, "../../src")
     const users = await Array.fromAsync(glob.scan({ cwd: root })).then((files) =>
@@ -302,6 +303,6 @@ describe("githubRun", () => {
         ),
       ),
     )
-    expect(users.flat()).toEqual(["cli/cmd/github.auth.ts"])
+    expect(users.flat().sort()).toEqual(["cli/cmd/github.auth.ts", "cli/cmd/github.cloud.ts"])
   })
 })

@@ -686,3 +686,8 @@ None yet (contract section 4).
 
 - V15 is `aefa340c321563bf41ed8791e2e029de82b5d31b`, pushed normally with preceding contract `fddc325a`. All 23 mandatory package typechecks passed (19 cached, 1m18s). Exact-head lane `41267212889` is in progress; its subprocess test results are not yet claimed.
 - V16's narrow sharing-control allowlist correction and trusted cleanup state are recorded before implementation. The hosted probe is CI-only and will use the repository-pinned `ubuntu-24.04` runner. No sudo, UID changes, Docker changes or process cleanup run locally.
+
+### V15 first CI result and policy fixture repair
+
+- Exact V15 run `41267212889`: hosted API `124732405641` and desktop Node bundle `124732405680` passed. Engine/core `124732405520` failed one stale V03 source-policy assertion that only `github.auth.ts` may contain `getIDToken`; V15 adds the intentionally isolated mint/bind command module. The fixture now explicitly allows both authenticated modules while retaining its task-process OIDC cleanup assertion; its focused local case passed (1 test / 3 assertions).
+- All four new isolated provider cases passed in that CI run, including real AppNodeBuilder pending/authorized Codium behavior, as did both new cancellation subprocess cases. The engine step reported 300 passed / 1 failed; the Core step passed all 412 tests / 1,947 assertions. This is not an all-green completion claim until the policy repair's exact-head CI passes.
