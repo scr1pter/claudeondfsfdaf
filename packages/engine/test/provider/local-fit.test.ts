@@ -1,4 +1,4 @@
-import { afterEach, expect, jest } from "bun:test"
+import { afterEach, expect } from "bun:test"
 import { mkdirSync, rmSync, writeFileSync } from "node:fs"
 import path from "node:path"
 import type { LanguageModelV3CallOptions, LanguageModelV3StreamPart } from "@ai-sdk/provider"
@@ -9,7 +9,7 @@ import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { CrossSpawnSpawner } from "@vectordevai/core/cross-spawn-spawner"
 import { ModelSlots } from "@vectordevai/core/local-mode/model-slots"
 import { LocalPolicy } from "@vectordevai/core/local-mode/policy"
-import { Effect } from "effect"
+import { Context, Effect, Layer } from "effect"
 import { ProviderV2 } from "@vectordevai/core/provider"
 import { ModelV2 } from "@vectordevai/core/model"
 import { disposeAllInstances, provideTmpdirInstance } from "../fixture/fixture"
@@ -19,6 +19,7 @@ import { Env } from "@/env"
 import { Plugin } from "@/plugin"
 import { Provider } from "@/provider/provider"
 import { ProviderError } from "@/provider/error"
+import { ProviderDeadlines } from "@/provider/deadlines"
 import { Config } from "@/config/config"
 import { Global } from "@vectordevai/core/global"
 import { ProviderTransform } from "@/provider/transform"
@@ -33,12 +34,36 @@ const managedFixture: { restore?: () => void } = {}
 afterEach(async () => {
   managedFixture.restore?.()
   managedFixture.restore = undefined
-  jest.useRealTimers()
   await disposeAllInstances()
 })
 
 const it = testEffect(
   LayerNode.compile(LayerNode.group([Provider.node, ModelSlots.node, Env.node, Plugin.node, CrossSpawnSpawner.node])),
+)
+
+class DeadlineClock extends Context.Service<DeadlineClock, ReturnType<typeof manualDeadlines>>()(
+  "@vector/test/ProviderDeadlineClock",
+) {}
+
+const deadlineClockNode = LayerNode.make({
+  service: DeadlineClock,
+  layer: Layer.sync(DeadlineClock, manualDeadlines),
+  deps: [],
+})
+const timed = testEffect(
+  LayerNode.compile(
+    LayerNode.group([Provider.node, ModelSlots.node, Env.node, Plugin.node, CrossSpawnSpawner.node, deadlineClockNode]),
+    [
+      [
+        ProviderDeadlines.node,
+        LayerNode.make({
+          service: ProviderDeadlines.Service,
+          layer: Layer.effect(ProviderDeadlines.Service, DeadlineClock),
+          deps: [deadlineClockNode],
+        }),
+      ],
+    ],
+  ),
 )
 
 const LOCAL = ProviderV2.ID.make("local")
@@ -429,31 +454,32 @@ it.live("a cloud API is left as it is: no line, so no permits and no reply limit
   ),
 )
 
-// On Linux, once Bun's fake clock moves on by minutes its event loop stops delivering I/O: a message port, a child's
-// exit and the readiness timer never arrive, so this test would hang and its late cleanup would break the tests after
-// it. It runs on macOS and in the Windows shards, where the same timeouts are checked.
-;(process.platform === "linux" ? it.live.skip : it.live)(
+// Only provider deadlines move. Real HTTP, readiness timers and the SDK keep their normal clocks.
+timed.live(
   "a server someone hosts waits 10 minutes for headers and 2 between chunks, and a cloud API keeps the SDK's",
   () =>
     withStall((server) =>
       provideTmpdirInstance(
         () =>
           Effect.gen(function* () {
+            const clock = yield* DeadlineClock
+            expect(Provider.LOCAL_HEADER_TIMEOUT).toBe(600_000)
+            expect(Provider.LOCAL_CHUNK_TIMEOUT).toBe(120_000)
             const provider = yield* Provider.Service
             const hosted = yield* provider.getLanguage(
               Provider.withPriority(yield* provider.getModel(LOCAL, MODEL), "user"),
             )
             const cloud = yield* provider.getLanguage(yield* provider.getModel(CLOUD, MODEL))
-            // The timers run on a fake clock, so ten minutes pass at once; the requests themselves are real.
+            // The injected scheduler advances these exact deadlines while requests use real I/O.
             yield* Effect.promise(async () => {
-              jest.useFakeTimers()
               try {
                 // No headers: a server someone hosts is given up on after ten minutes, and not before.
                 const first = watch(hosted.doStream(call("first")))
                 await ready(server.arrived(1), "first request arrival")
-                jest.advanceTimersByTime(Provider.LOCAL_HEADER_TIMEOUT - 1)
+                expect(clock.pending()).toContain(600_000)
+                clock.advance(Provider.LOCAL_HEADER_TIMEOUT - 1)
                 expect(await first.state()).toBe("pending")
-                jest.advanceTimersByTime(1)
+                clock.advance(1)
                 await ready(
                   first.done().catch(() => undefined),
                   "header timeout propagation",
@@ -474,9 +500,10 @@ it.live("a cloud API is left as it is: no line, so no permits and no reply limit
                 // The decoder consumed the first text chunk and drain requested the next before time moves.
                 await ready(streaming.promise, "first hosted text chunk")
                 expect(await quiet.state()).toBe("pending")
-                jest.advanceTimersByTime(Provider.LOCAL_CHUNK_TIMEOUT - 1)
+                expect(clock.pending()).toContain(120_000)
+                clock.advance(Provider.LOCAL_CHUNK_TIMEOUT - 1)
                 expect(await quiet.state()).toBe("pending")
-                jest.advanceTimersByTime(1)
+                clock.advance(1)
                 await ready(
                   quiet.done().catch(() => undefined),
                   "chunk timeout propagation",
@@ -487,7 +514,8 @@ it.live("a cloud API is left as it is: no line, so no permits and no reply limit
                 // The cloud API has neither: it waits as long as the reply takes.
                 const third = watch(cloud.doStream(call("third")))
                 await ready(server.arrived(3), "cloud request arrival")
-                jest.advanceTimersByTime(Provider.LOCAL_HEADER_TIMEOUT * 2)
+                expect(clock.pending()).toEqual([])
+                clock.advance(Provider.LOCAL_HEADER_TIMEOUT * 2)
                 expect(await third.state()).toBe("pending")
                 server.headers(2)
                 const cloudStreaming = Promise.withResolvers<void>()
@@ -496,12 +524,13 @@ it.live("a cloud API is left as it is: no line, so no permits and no reply limit
                 )
                 await ready(cloudStreaming.promise, "first cloud text chunk")
                 expect(await waited.state()).toBe("pending")
-                jest.advanceTimersByTime(Provider.LOCAL_CHUNK_TIMEOUT * 2)
+                expect(clock.pending()).toEqual([])
+                clock.advance(Provider.LOCAL_CHUNK_TIMEOUT * 2)
                 expect(await waited.state()).toBe("pending")
                 server.end(2)
                 expect(await ready(waited.done(), "cloud response completion")).toBe("done")
               } finally {
-                jest.useRealTimers()
+                clock.clear()
               }
             })
             expect(server.seen).toEqual(["first", "second", "third"])
@@ -869,8 +898,37 @@ async function drain(stream: ReadableStream<LanguageModelV3StreamPart>, streamin
   }
 }
 
-// Follows a promise while the timers run on a fake clock: `state` gives real I/O a few turns of the event loop to land,
-// with setImmediate, which the fake clock leaves alone.
+// Only this provider instance's deadlines advance; all sockets and event-loop turns remain on the real clock.
+function manualDeadlines() {
+  const state = { now: 0, next: 0 }
+  const pending = new Map<number, { at: number; run: () => void }>()
+  return {
+    schedule: (ms: number, run: () => void) => {
+      const id = ++state.next
+      pending.set(id, { at: state.now + ms, run })
+      return () => {
+        pending.delete(id)
+      }
+    },
+    advance: (ms: number) => {
+      const until = state.now + ms
+      while (true) {
+        const due = [...pending]
+          .filter(([, timer]) => timer.at <= until)
+          .sort(([a, x], [b, y]) => x.at - y.at || a - b)[0]
+        if (!due) break
+        pending.delete(due[0])
+        state.now = due[1].at
+        due[1].run()
+      }
+      state.now = until
+    },
+    pending: () => [...pending.values()].map((timer) => timer.at - state.now),
+    clear: () => pending.clear(),
+  }
+}
+
+// Gives real I/O a few event-loop turns to deliver an already-triggered timeout or response.
 function watch<T>(promise: PromiseLike<T>) {
   const seen: { state: "pending" | "done" | "failed"; error?: unknown } = { state: "pending" }
   Promise.resolve(promise).then(
@@ -890,27 +948,21 @@ function watch<T>(promise: PromiseLike<T>) {
   }
 }
 
-// Bun also freezes hrtime and worker-thread clocks. A timer-only Node process bounds real readiness so a failed
-// phase reaches finally and restores timers; Bun's test watchdog cannot cancel the promise that owns that finally.
-async function ready<T>(promise: PromiseLike<T>, phase: string): Promise<T> {
-  const timer = Bun.spawn(["node", "--eval", "setTimeout(() => {}, 5000)"], {
-    env: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot },
-    stdin: "ignore",
-    stdout: "ignore",
-    stderr: "ignore",
+// Real readiness is bounded independently of the injected provider clock and needs no child process.
+function ready<T>(promise: PromiseLike<T>, phase: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`Timed out waiting for ${phase} on the real clock`)), 5000)
+    Promise.resolve(promise).then(
+      (value) => {
+        clearTimeout(timer)
+        resolve(value)
+      },
+      (error) => {
+        clearTimeout(timer)
+        reject(error)
+      },
+    )
   })
-  try {
-    return await Promise.race([
-      promise,
-      timer.exited.then((code) => {
-        if (code !== 0) throw new Error(`Readiness timer exited with ${code} while waiting for ${phase}`)
-        throw new Error(`Timed out waiting for ${phase} on the real clock`)
-      }),
-    ])
-  } finally {
-    timer.kill()
-    await timer.exited
-  }
 }
 
 type Stall = {
