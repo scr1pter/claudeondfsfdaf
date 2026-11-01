@@ -3,6 +3,7 @@ import { RedisClient } from "bun"
 import { createServer } from "node:http"
 import { createGithubApi } from "../../../api/_lib/github-api"
 import { consumeGithubOidc } from "../../../api/_lib/github-oidc"
+import { persistentStore } from "../../../api/_lib/persistent-store"
 import { githubTokenPermissions } from "../../../api/_lib/github-app"
 import { githubAppFixture } from "./github-app-fixture"
 
@@ -62,7 +63,7 @@ function integrationTests() {
   })
 
   async function apiFixture() {
-    const fixture = await githubAppFixture()
+    const fixture = await githubAppFixture({ store: persistentStore })
     const api = createGithubApi({ app: fixture.app, verify: fixture.verify })
     const server = createServer((request, response) => {
       void (request.url?.startsWith("/api/github/installation") ? api.installation : api.token)(request, response)
@@ -329,5 +330,50 @@ function integrationTests() {
     expect(fixture.state.requests).toEqual([])
     expect(fixture.state.minted).toEqual([])
     expect(commands).toHaveLength(61)
+  })
+  test("publish exchanges return no actions permission and agent/bind jobs cannot obtain tokens", async () => {
+    await using fixture = await apiFixture()
+    fixture.state.job.name = "Vector publish"
+    const response = await fixture.send({ token: await fixture.makeToken(), body: { purpose: "publish" } })
+    expect(response.status).toBe(200)
+    const body = await response.json()
+    expect(body.permissions).toEqual(githubTokenPermissions.publish)
+    expect(body.permissions).not.toHaveProperty("actions")
+    for (const job of ["Vector agent", "Vector bind"]) {
+      fixture.state.job.name = job
+      const denied = await fixture.send({ token: await fixture.makeToken(), body: { purpose: "publish" } })
+      expect(denied.status).toBe(403)
+      expect((await denied.json()).error.code).toBe("WORKFLOW_NOT_TRUSTED")
+    }
+    expect(fixture.state.minted.filter((item) => item.purpose !== "validation")).toHaveLength(1)
+  })
+
+  test("mint verification caches binder write access for one hour in the real store, bound to generation", async () => {
+    await using fixture = await apiFixture()
+    fixture.state.job.name = "Vector agent"
+    const identity = await fixture.verify(await fixture.makeToken("mint"), "mint")
+    const options = {
+      job: "agent" as const,
+      thread: "17",
+      commentId: 123,
+      binder: { githubId: "790", login: "fixture-binder" },
+      defaultRef: "refs/heads/main",
+      generation: 1,
+    }
+    expect(await fixture.app.verifyRun(identity, options)).toEqual({ installed: true, binder: "ok" })
+    const key = `vector:cloud-agents:binder-ok:${fixture.repositoryId}`
+    expect(await redis.send("GET", [key])).toBe(JSON.stringify({ githubId: "790", generation: 1 }))
+    expect(Number(await redis.send("TTL", [key]))).toBeGreaterThan(3590)
+    expect(Number(await redis.send("TTL", [key]))).toBeLessThanOrEqual(3600)
+    fixture.state.binderPermission = "read"
+    expect(await fixture.app.verifyRun(identity, options)).toEqual({ installed: true, binder: "ok" })
+    expect(await fixture.app.verifyRun(identity, { ...options, generation: 2 })).toEqual({
+      installed: true,
+      binder: "binder-left",
+    })
+    await redis.send("DEL", [key])
+    expect(await fixture.app.verifyRun(identity, options)).toEqual({ installed: true, binder: "binder-left" })
+    expect(await redis.send("GET", [key])).toBeNull()
+    expect(fixture.tokens.size).toBe(0)
   })
 }

@@ -9,7 +9,10 @@ import {
   githubUnavailable,
   type GithubRequest,
 } from "./github-http.js"
-import type { GithubIdentity } from "./github-oidc.js"
+import { githubOidcAudiences, type GithubIdentity } from "./github-oidc.js"
+import { GithubAgents } from "../../packages/core/src/github-agents.js"
+import { parseReviewCommand } from "../../packages/core/src/review/command.js"
+import { persistentStore } from "./persistent-store.js"
 
 export const githubTokenPermissions = {
   task: {
@@ -20,6 +23,7 @@ export const githubTokenPermissions = {
     checks: "read",
     metadata: "read",
   },
+  publish: { contents: "write", pull_requests: "write", issues: "write", checks: "read", metadata: "read" },
   review: { contents: "read", pull_requests: "write", issues: "write", checks: "read", metadata: "read" },
 } as const
 export type GithubTokenPurpose = keyof typeof githubTokenPermissions
@@ -32,7 +36,18 @@ export type GithubTokenResult = {
   bot: { login: string; id: number }
 }
 export type GithubAppConfiguration = { id: string; clientId: string; slug: string; privateKey: string }
+export type GithubRunVerification = {
+  job: "agent" | "review"
+  commentId?: number
+  pullRequest?: number
+  thread: string
+  bot?: boolean
+  binder: { githubId: string; login: string }
+  defaultRef: string
+  generation: number
+}
 const validationPermissions = {
+  issues: "read",
   contents: "read",
   actions: "read",
   pull_requests: "read",
@@ -64,11 +79,13 @@ export function githubAppConfiguration(
 export function createGithubApp(
   input: {
     configuration?: () => GithubAppConfiguration | undefined
+    store?: typeof persistentStore
     request?: GithubRequest
   } = {},
 ) {
   const configuration = input.configuration ?? githubAppConfiguration
   const request = input.request ?? fetch
+  const store = input.store ?? persistentStore
 
   async function api(
     pathname: string,
@@ -186,7 +203,12 @@ export function createGithubApp(
     }
   }
 
-  async function authorize(identity: GithubIdentity, purpose?: GithubTokenPurpose, pullRequest?: number) {
+  async function authorize(
+    identity: GithubIdentity,
+    purpose?: GithubTokenPurpose,
+    pullRequest?: number,
+    verification?: GithubRunVerification | { job: "bind" },
+  ) {
     const config = configuration()
     if (!config) throw notConfigured()
     const jwt = await appJwt(config)
@@ -204,6 +226,7 @@ export function createGithubApp(
       throw denied("REPOSITORY_MISMATCH", "This repository's App installation is unavailable.")
     const installationId = githubId(installation.id)
     const validation = await mint(jwt, installationId, identity, validationPermissions)
+    let verified: { defaultRef: string; adminVerified: boolean; binder: "ok" | "binder-left" } | undefined
     try {
       const repository = await api(root, validation.token)
       if (
@@ -214,15 +237,57 @@ export function createGithubApp(
         repository.disabled === true
       )
         throw denied("REPOSITORY_MISMATCH", "The repository identity no longer matches this workflow.")
-      if (typeof repository.default_branch !== "string" || identity.ref !== `refs/heads/${repository.default_branch}`)
+      const review = verification && "binder" in verification && identity.event === "pull_request_review_comment"
+      const defaultRef = `refs/heads/${repository.default_branch}`
+      if (
+        typeof repository.default_branch !== "string" ||
+        (verification && "binder" in verification && verification.defaultRef !== defaultRef) ||
+        (!review && identity.ref !== defaultRef)
+      )
         throw denied("WORKFLOW_NOT_TRUSTED", "Use the Vector workflow on the repository's current default branch.")
+      const pr = review ? await api(`${root}/pulls/${githubId(verification.pullRequest)}`, validation.token) : undefined
+      if (
+        review &&
+        (githubId(pr?.number) !== String(verification.pullRequest) ||
+          identity.pullRequest !== verification.pullRequest ||
+          pr?.state !== "open" ||
+          githubId(githubRecord(githubRecord(pr?.base).repo).id) !== identity.repositoryId ||
+          githubId(githubRecord(githubRecord(pr?.head).repo).id) !== identity.repositoryId)
+      )
+        throw denied("EVENT_NOT_ALLOWED", "This pull request cannot start a Vector run.")
+      const head = pr ? githubRecord(pr.head) : undefined
+      const base = pr ? githubRecord(pr.base) : undefined
+      if (
+        review &&
+        (pr?.merge_commit_sha !== identity.sha ||
+          head?.ref !== identity.headRef ||
+          base?.ref !== identity.baseRef ||
+          typeof head?.sha !== "string" ||
+          !/^[a-f0-9]{40}$/.test(head.sha))
+      )
+        throw denied("WORKFLOW_NOT_TRUSTED", "The pull request no longer matches this workflow.")
+      const expectedSha = head?.sha ?? identity.sha
+      const expectedBranch = head?.ref ?? repository.default_branch
+      if (review) {
+        const file = `${root}/contents/${GithubAgents.WORKFLOW_FILE}?ref=`
+        const source = await api(file + encodeURIComponent(identity.workflowSha), validation.token)
+        const trusted = await api(file + encodeURIComponent(defaultRef), validation.token)
+        if (
+          source?.type !== "file" ||
+          trusted?.type !== "file" ||
+          typeof source.sha !== "string" ||
+          !/^[a-f0-9]{40}$/.test(source.sha) ||
+          source.sha !== trusted.sha
+        )
+          throw denied("WORKFLOW_NOT_TRUSTED", "The pull request changed the Vector workflow.")
+      }
       const run = await api(`${root}/actions/runs/${identity.runId}/attempts/${identity.runAttempt}`, validation.token)
       if (
         githubId(run?.id) !== identity.runId ||
         githubId(run?.run_attempt) !== identity.runAttempt ||
         run?.event !== identity.event ||
-        run?.head_sha !== identity.sha ||
-        run?.head_branch !== repository.default_branch ||
+        run?.head_sha !== expectedSha ||
+        run?.head_branch !== expectedBranch ||
         run?.status !== "in_progress" ||
         githubId(githubRecord(run.repository).id) !== identity.repositoryId ||
         githubId(githubRecord(run.head_repository).id) !== identity.repositoryId ||
@@ -237,9 +302,27 @@ export function createGithubApp(
       )
         throw denied("WORKFLOW_NOT_TRUSTED", "The default-branch Vector workflow is not active.")
       const actor = githubRecord(run.actor)
-      if (githubId(actor.id) !== identity.actorId || actor.login !== identity.actor || actor.type !== "User")
+      const bot =
+        verification && "bot" in verification && verification.bot === true
+          ? await api(`/users/${config.slug}%5Bbot%5D`)
+          : undefined
+      if (
+        githubId(actor.id) !== identity.actorId ||
+        actor.login !== identity.actor ||
+        (bot
+          ? identity.event !== "workflow_dispatch" ||
+            !identity.actorIsBot ||
+            actor.type !== "Bot" ||
+            bot.type !== "Bot" ||
+            bot.login !== `${config.slug}[bot]` ||
+            actor.login !== bot.login ||
+            githubId(bot.id) !== identity.actorId
+          : actor.type !== "User")
+      )
         throw denied("ACTOR_NOT_ALLOWED", "The workflow actor is not authorized for App credentials.")
+      let adminVerified = false
       for (const user of [actor, githubRecord(run.triggering_actor)]) {
+        if (bot && user.type === "Bot" && user.login === bot.login && githubId(user.id) === identity.actorId) continue
         if (
           user.type !== "User" ||
           typeof user.login !== "string" ||
@@ -254,6 +337,7 @@ export function createGithubApp(
           !["admin", "maintain", "write"].includes(String(permission?.permission))
         )
           throw denied("ACTOR_NOT_ALLOWED", "The workflow actor no longer has repository write permission.")
+        if (githubId(user.id) === identity.actorId && permission?.permission === "admin") adminVerified = true
       }
       const jobs: Record<string, unknown>[] = []
       for (let page = 1; page <= 5; page++) {
@@ -275,15 +359,16 @@ export function createGithubApp(
         (job) => job.check_run_url === `${githubApi}${root}/check-runs/${identity.checkRunId}`,
       )
       const job = matching[0]
-      const profile = job?.name === "Vector task" ? "task" : job?.name === "Vector review" ? "review" : undefined
+      const profile = Object.entries(GithubAgents.JOB).find(([, name]) => name === job?.name)?.[0]
+      const expected = verification?.job ?? (purpose === "task" ? "legacyTask" : purpose)
       if (
         matching.length !== 1 ||
         !profile ||
-        (purpose && profile !== purpose) ||
+        (expected ? profile !== expected : !["legacyTask", "review", "publish"].includes(profile)) ||
         job?.status !== "in_progress" ||
         githubId(job.run_id) !== identity.runId ||
-        job.head_sha !== identity.sha ||
-        job.head_branch !== repository.default_branch
+        job.head_sha !== expectedSha ||
+        job.head_branch !== expectedBranch
       )
         throw denied("WORKFLOW_NOT_TRUSTED", "The identity token does not belong to the expected active Vector job.")
       if (!Array.isArray(run.pull_requests) || run.pull_requests.length > 20) throw githubUnavailable()
@@ -298,6 +383,15 @@ export function createGithubApp(
         )
           throw denied("EVENT_NOT_ALLOWED", "Fork pull requests use the existing GitHub-token review path.")
       }
+      if (verification && "binder" in verification) {
+        await verifyThread(identity, verification, root, validation.token, config.slug)
+        verified = {
+          defaultRef,
+          adminVerified,
+          binder: await verifyBinder(identity, verification, root, validation.token),
+        }
+      }
+      if (verification?.job === "bind") verified = { defaultRef, adminVerified, binder: "ok" }
     } finally {
       // Never retain the private-repository validation credential in the server.
       // Failure to revoke stops issuance of the final write credential.
@@ -307,6 +401,7 @@ export function createGithubApp(
     if (bot?.login !== `${config.slug}[bot]` || bot?.type !== "Bot") throw notConfigured()
     return {
       installed: true as const,
+      verified,
       repositoryId: identity.repositoryId,
       repository: identity.repository,
       installUrl: installUrl(config),
@@ -316,10 +411,145 @@ export function createGithubApp(
     }
   }
 
+  async function verifyThread(
+    identity: GithubIdentity,
+    options: GithubRunVerification,
+    root: string,
+    token: string,
+    slug: string,
+  ) {
+    const review = identity.event === "pull_request_review_comment"
+    const comment = identity.event === "issue_comment" || review
+    if (!comment && identity.event !== "issues") return
+    if (!/^[1-9]\d{0,9}$/.test(options.thread))
+      throw denied("EVENT_NOT_ALLOWED", "The conversation does not match this run.")
+    const item = await api(
+      comment
+        ? `${root}/${review ? "pulls" : "issues"}/comments/${githubId(options.commentId)}`
+        : `${root}/issues/${options.thread}`,
+      token,
+    )
+    if (!item) throw githubUnavailable()
+    const author = githubRecord(item.user)
+    if (author.type !== "User" || githubId(author.id) !== identity.actorId || author.login !== identity.actor)
+      throw denied("ACTOR_NOT_ALLOWED", "The conversation author is not the workflow actor.")
+    if (
+      comment
+        ? githubId(item.id) !== String(options.commentId) ||
+          item[review ? "pull_request_url" : "issue_url"] !==
+            `${githubApi}${root}/${review ? "pulls" : "issues"}/${options.thread}` ||
+          (review && options.thread !== String(options.pullRequest))
+        : githubId(item.number) !== options.thread
+    )
+      throw denied("EVENT_NOT_ALLOWED", "The conversation does not match this run.")
+    // issue_comment OIDC does not say whether the thread is a PR; discover it from GitHub, never from the body.
+    const issue = comment && !review ? await api(`${root}/issues/${options.thread}`, token) : item
+    if (!review && issue?.pull_request) {
+      const pr = await api(`${root}/pulls/${options.thread}`, token)
+      if (
+        githubId(pr?.number) !== options.thread ||
+        githubId(githubRecord(githubRecord(pr?.base).repo).id) !== identity.repositoryId ||
+        githubId(githubRecord(githubRecord(pr?.head).repo).id) !== identity.repositoryId
+      )
+        throw denied("EVENT_NOT_ALLOWED", "This pull request cannot start a Vector run.")
+    }
+    const texts = comment ? [item.body] : [item.title, item.body]
+    const kinds = texts
+      .filter((text): text is string => typeof text === "string")
+      .map((text) => parseReviewCommand(text, GithubAgents.mentions(slug)).kind)
+    if (comment ? !kinds.some((kind) => kind !== "none") : !kinds.includes("task"))
+      throw denied("COMMENT_CHANGED", "The conversation no longer requests Vector work.")
+  }
+
+  async function verifyBinder(
+    identity: GithubIdentity,
+    options: GithubRunVerification,
+    root: string,
+    token: string,
+  ): Promise<"ok" | "binder-left"> {
+    const key = `vector:cloud-agents:binder-ok:${identity.repositoryId}`
+    const value = JSON.stringify({ githubId: githubId(options.binder.githubId), generation: options.generation })
+    const read = await Promise.resolve()
+      .then(() => store(["GET", key]))
+      .catch(() => {
+        throw storeUnavailable()
+      })
+    if (read !== null && typeof read !== "string") throw storeUnavailable()
+    if (read === value) return "ok"
+    if (read !== null) {
+      const cached: unknown = (() => {
+        try {
+          return JSON.parse(read)
+        } catch {
+          throw storeUnavailable()
+        }
+      })()
+      if (
+        !cached ||
+        typeof cached !== "object" ||
+        Array.isArray(cached) ||
+        Object.keys(cached).length !== 2 ||
+        !("githubId" in cached) ||
+        !("generation" in cached) ||
+        typeof cached.githubId !== "string" ||
+        !/^[1-9]\d{0,15}$/.test(cached.githubId) ||
+        typeof cached.generation !== "number" ||
+        !Number.isSafeInteger(cached.generation) ||
+        cached.generation < 1
+      )
+        throw storeUnavailable()
+    }
+    const user = await api(`/user/${options.binder.githubId}`, token, { missing: true })
+    if (!user) return "binder-left"
+    if (
+      githubId(user.id) !== options.binder.githubId ||
+      user.type !== "User" ||
+      typeof user.login !== "string" ||
+      !/^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/.test(user.login)
+    )
+      throw githubUnavailable()
+    const permission = await api(`${root}/collaborators/${user.login}/permission`, token, { missing: true })
+    if (!permission) return "binder-left"
+    const checked = githubRecord(permission.user)
+    if (githubId(checked.id) !== options.binder.githubId || checked.login !== user.login) throw githubUnavailable()
+    if (!["write", "maintain", "admin"].includes(String(permission.permission))) return "binder-left"
+    const saved = await Promise.resolve()
+      .then(() => store(["SET", key, value, "EX", 3600]))
+      .catch(() => {
+        throw storeUnavailable()
+      })
+    if (saved !== "OK") throw storeUnavailable()
+    return "ok"
+  }
+
   return {
     configuration() {
       const config = configuration()
       return config ? { available: true, installUrl: installUrl(config) } : { available: false }
+    },
+    async verifyRun(identity: GithubIdentity, options: GithubRunVerification) {
+      if (
+        identity.audience !== githubOidcAudiences.mint ||
+        !["agent", "review"].includes(options.job) ||
+        !GithubAgents.THREAD_PATTERN.test(options.thread) ||
+        !Number.isSafeInteger(options.generation) ||
+        options.generation < 1
+      )
+        throw denied("WORKFLOW_NOT_TRUSTED", "A verified Vector run identity is required.")
+      const authorized = await authorize(identity, undefined, options.pullRequest, options)
+      if (!authorized.installed) return { installed: false as const }
+      return { installed: true as const, binder: authorized.verified!.binder }
+    },
+    async verifyBind(identity: GithubIdentity) {
+      if (identity.audience !== githubOidcAudiences.bind || identity.event !== "workflow_dispatch")
+        throw denied("EVENT_NOT_ALLOWED", "A verified binding dispatch is required.")
+      const authorized = await authorize(identity, undefined, undefined, { job: "bind" })
+      if (!authorized.installed) return { installed: false as const }
+      return {
+        installed: true as const,
+        defaultRef: authorized.verified!.defaultRef,
+        adminVerified: authorized.verified!.adminVerified,
+      }
     },
     async installation(identity: GithubIdentity) {
       const authorized = await authorize(identity)
@@ -350,6 +580,10 @@ export function createGithubApp(
       }
     },
   }
+}
+
+function storeUnavailable() {
+  return new ApiError(503, "PERSISTENT_STORE_UNAVAILABLE", "Protected GitHub services are temporarily unavailable.")
 }
 
 function installUrl(config: GithubAppConfiguration) {

@@ -25,7 +25,7 @@ export function parseReviewCommand(body: string, mentions: string[]): { kind: Re
   // Counted from the end, because a regex anchored only at the end backtracks quadratically on a long hostile run.
   const trimTrailing = (text: string, trailing: RegExp) => {
     let end = text.length
-    while (end > 0 && trailing.test(text[end - 1])) end--
+    while (end > 0 && trailing.test(text[end - 1]!)) end--
     return text.slice(0, end)
   }
 
@@ -64,9 +64,9 @@ export function parseReviewCommand(body: string, mentions: string[]): { kind: Re
       const marker = /^(`{3,}|~{3,})/.exec(line)
       const closes =
         !!marker &&
-        marker[1][0] === fence[0] &&
-        marker[1].length >= fence.length &&
-        line.slice(marker[1].length).trim() === ""
+        marker[1]![0] === fence[0] &&
+        marker[1]!.length >= fence.length &&
+        line.slice(marker[1]!.length).trim() === ""
       if (closes) fence = ""
       continue
     }
@@ -84,7 +84,7 @@ export function parseReviewCommand(body: string, mentions: string[]): { kind: Re
     const item = listed ? raw.slice(listed[0].length) : line
     const marker = /^(`{3,}|~{3,})/.exec(item)
     if (marker || /^[ \t]*$/.test(raw)) {
-      fence = marker ? marker[1] : ""
+      fence = marker ? marker[1]! : ""
       indent = listed ? listed[0].replace(/\t/g, "    ").length : 0
       quoted = false
       paragraphs.push([])
@@ -93,7 +93,7 @@ export function parseReviewCommand(body: string, mentions: string[]): { kind: Re
     const quote = item.startsWith(">")
     if (quote && !quoted && /^ {0,3}>/.test(raw)) paragraphs.push([])
     quoted = quoted || line.includes(">")
-    paragraphs[paragraphs.length - 1].push(quote ? line.replace(/[^`\\<!>-]/g, "#") : line)
+    paragraphs[paragraphs.length - 1]!.push(quote ? line.replace(/[^`\\<!>-]/g, "#") : line)
   }
 
   // Inline code and comments, read as Markdown reads them: whichever of a backtick run and a "<!--" comes first takes
@@ -125,11 +125,11 @@ export function parseReviewCommand(body: string, mentions: string[]): { kind: Re
     // A span ends after its partner, found from the end, and its reading goes on at the token after the partner.
     const nextOfLength = new Map<number, number>()
     for (let i = tokens.length - 1; i >= 0; i--) {
-      const token = tokens[i]
+      const token = tokens[i]!
       if (token.comment) continue
       const partner = token.opens > 0 ? (nextOfLength.get(token.opens) ?? -1) : -1
       if (partner >= 0) {
-        token.end = tokens[partner].index + tokens[partner].length
+        token.end = tokens[partner]!.index + tokens[partner]!.length
         token.next = partner + 1
       }
       nextOfLength.set(token.length, i)
@@ -143,7 +143,7 @@ export function parseReviewCommand(body: string, mentions: string[]): { kind: Re
       if (close < token.index + 4) close = paragraph.indexOf("-->", token.index + 4)
       if (close < 0) break
       next = Math.max(next, i + 1)
-      while (next < tokens.length && tokens[next].index < close) next++
+      while (next < tokens.length && tokens[next]!.index < close) next++
       token.end = close + 3
       token.next = next
     }
@@ -152,7 +152,7 @@ export function parseReviewCommand(body: string, mentions: string[]): { kind: Re
     let offset = 0
     let lead = 0
     for (const row of rows) {
-      while (lead < tokens.length && tokens[lead].index < offset) lead++
+      while (lead < tokens.length && tokens[lead]!.index < offset) lead++
       reached[lead] = true
       offset += row.length + 1
     }
