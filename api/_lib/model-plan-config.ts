@@ -412,7 +412,7 @@ export function publicModelPlans() {
 
 // Coarse illustrative ranges reviewed for the launch catalog. They are deliberately independent of private credit
 // amounts and provider prices. Actual task size, cache warmth and reasoning vary; these are not guarantees.
-const CODIUM_TASK_RANGES: Record<string, readonly [number, number] | undefined> = {
+export const CODIUM_TASK_RANGES: Record<string, readonly [number, number] | undefined> = {
   "deepseek/deepseek-v4.1-flash-1017": [50, 500],
   "anthropic/claude-haiku-5.5": [30, 300],
   "openai/gpt-6-luna": [60, 600],

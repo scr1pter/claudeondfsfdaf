@@ -1,3 +1,7 @@
+import { CodiumPlan } from "@vectordevai/schema/codium-plan"
+import { PERK_IDS, publicEntitlements, type Entitlements, type PerkId } from "@vectordevai/schema/codium-entitlements"
+import type { Model } from "@vectordevai/schema/codium-copy"
+
 /**
  * A purchase as the public configuration describes it. It never carries credit amounts: `multiple` is its credits as a
  * multiple of the smallest purchase, and `tasks` its typical tasks for each catalog model, in catalog order.
@@ -9,8 +13,9 @@ export type ModelPlan = {
   available: boolean
   multiple?: number
   tasks?: (readonly [number, number] | null)[]
+  caps?: Partial<Entitlements>
 }
-export type ModelPlanModel = { id: string; name: string; category?: "everyday" | "advanced"; description?: string }
+export type ModelPlanModel = Model
 export type ModelPlanConfig = {
   enabled: boolean
   currency: "usd"
@@ -19,6 +24,7 @@ export type ModelPlanConfig = {
   topups?: ModelPlan[]
   product?: string
   models?: ModelPlanModel[]
+  listed?: PerkId[]
 }
 /** Purchased credits pool every top-up ever bought, so the server answers their state rather than a share of them. */
 export type PurchasedState = "available" | "low" | "used"
@@ -46,11 +52,26 @@ export function readModelPlanConfig(value: unknown): ModelPlanConfig {
     !Array.isArray(value.plans) ||
     (value.topups !== undefined && !Array.isArray(value.topups)) ||
     (value.product !== undefined && (typeof value.product !== "string" || !value.product.trim())) ||
-    (value.models !== undefined && !Array.isArray(value.models))
+    (value.models !== undefined && !Array.isArray(value.models)) ||
+    (value.listed !== undefined && (!Array.isArray(value.listed) || value.listed.some((id) => !PERK_IDS.includes(id))))
   ) {
     throw new Error("Vector could not load model plans. Try again.")
   }
-  const plans = value.plans.map(readPlan)
+  const listed: PerkId[] = Array.isArray(value.listed) ? [...new Set(value.listed)] : []
+  const plans = value.plans.map((plan) => {
+    const read = readPlan(plan)
+    if (!record(plan) || plan.caps === undefined) return read
+    if (!record(plan.caps) || !CodiumPlan.isPlanId(read.id))
+      throw new Error("Vector could not load model plans. Try again.")
+    const expected = publicEntitlements(read.id, new Set(listed))
+    const caps: Partial<Entitlements> = {}
+    for (const key of Object.keys(expected) as (keyof Entitlements)[]) {
+      if (plan.caps[key] === undefined) continue
+      if (!sameCap(plan.caps[key], expected[key])) throw new Error("Vector could not load model plans. Try again.")
+      Object.assign(caps, { [key]: expected[key] })
+    }
+    return { ...read, caps }
+  })
   const topups = Array.isArray(value.topups) ? value.topups.map(readPlan) : undefined
   const ids = [...plans, ...(topups ?? [])].map((plan) => plan.id)
   if (new Set(ids).size !== ids.length) throw new Error("Vector could not load model plans. Try again.")
@@ -63,7 +84,19 @@ export function readModelPlanConfig(value: unknown): ModelPlanConfig {
           typeof model.name !== "string" ||
           !model.name.trim() ||
           (model.category !== undefined && model.category !== "everyday" && model.category !== "advanced") ||
-          (model.description !== undefined && (typeof model.description !== "string" || !model.description.trim()))
+          (model.description !== undefined && (typeof model.description !== "string" || !model.description.trim())) ||
+          (model.minPlan !== undefined && !CodiumPlan.isPlanId(model.minPlan)) ||
+          (model.contextLength !== undefined && !positiveInteger(model.contextLength)) ||
+          (model.previewUntil !== undefined && !positiveInteger(model.previewUntil)) ||
+          (model.plans !== undefined &&
+            (!Array.isArray(model.plans) ||
+              model.plans.some((plan) => !CodiumPlan.isPlanId(plan)) ||
+              new Set(model.plans).size !== model.plans.length)) ||
+          (model.contextByPlan !== undefined &&
+            (!record(model.contextByPlan) ||
+              Object.entries(model.contextByPlan).some(
+                ([plan, context]) => !CodiumPlan.isPlanId(plan) || !positiveInteger(context),
+              )))
         )
           throw new Error("Vector could not load model plans. Try again.")
         return {
@@ -71,6 +104,13 @@ export function readModelPlanConfig(value: unknown): ModelPlanConfig {
           name: model.name,
           ...(model.category === undefined ? {} : { category: model.category }),
           ...(model.description === undefined ? {} : { description: model.description }),
+          ...(CodiumPlan.isPlanId(model.minPlan) ? { minPlan: model.minPlan } : {}),
+          ...(model.contextLength === undefined ? {} : { contextLength: model.contextLength as number }),
+          ...(model.previewUntil === undefined ? {} : { previewUntil: model.previewUntil as number }),
+          ...(Array.isArray(model.plans) ? { plans: [...model.plans] as CodiumPlan.PlanId[] } : {}),
+          ...(record(model.contextByPlan)
+            ? { contextByPlan: { ...model.contextByPlan } as Partial<Record<CodiumPlan.PlanId, number>> }
+            : {}),
         }
       })
     : undefined
@@ -84,6 +124,7 @@ export function readModelPlanConfig(value: unknown): ModelPlanConfig {
     ...(topups === undefined ? {} : { topups }),
     ...(typeof value.product === "string" ? { product: value.product } : {}),
     ...(models === undefined ? {} : { models }),
+    ...(value.listed === undefined ? {} : { listed }),
   }
 }
 
@@ -107,6 +148,23 @@ export function readModelPlanStatus(value: unknown): ModelPlanStatus {
     ...(typeof value.empty === "boolean" ? { empty: value.empty } : {}),
     ...(typeof value.low === "boolean" ? { low: value.low } : {}),
   }
+}
+
+function positiveInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0
+}
+
+// Copy only canonical public caps. Unknown server fields never become serialized island props.
+function sameCap(value: unknown, expected: unknown): boolean {
+  if (Array.isArray(expected))
+    return (
+      Array.isArray(value) &&
+      value.length === expected.length &&
+      expected.every((item, index) => sameCap(value[index], item))
+    )
+  if (record(expected))
+    return record(value) && Object.entries(expected).every(([key, item]) => sameCap(value[key], item))
+  return value === expected
 }
 
 export function modelPlanPurchasable(config: ModelPlanConfig, plan: ModelPlan, status: ModelPlanStatus | undefined) {
@@ -138,7 +196,7 @@ function readPlan(plan: unknown): ModelPlan {
     !amount(plan.price) ||
     plan.price === 0 ||
     typeof plan.available !== "boolean" ||
-    (plan.multiple !== undefined && (!amount(plan.multiple) || plan.multiple <= 1)) ||
+    (plan.multiple !== undefined && (!amount(plan.multiple) || plan.multiple < 1)) ||
     (plan.tasks !== undefined &&
       (!Array.isArray(plan.tasks) ||
         plan.tasks.some(

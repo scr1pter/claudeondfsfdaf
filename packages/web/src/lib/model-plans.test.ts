@@ -1,10 +1,12 @@
 import { describe, expect, test } from "bun:test"
+import { publicEntitlements } from "@vectordevai/schema/codium-entitlements"
 import {
   modelPlanPurchasable,
   modelPlanRedirect,
   modelTopupPurchasable,
   readModelPlanConfig,
   readModelPlanStatus,
+  type ModelPlanModel,
 } from "./model-plans"
 
 const plan = { id: "vector-10", name: "Plus", price: 10, available: true }
@@ -19,6 +21,43 @@ const status = {
 }
 
 describe("model plan API boundaries", () => {
+  test("reads listed perks, canonical caps and effective model plan membership", () => {
+    const caps = publicEntitlements("vector-10", new Set(["remote"]))
+    const model: ModelPlanModel = {
+      id: "vendor/coder",
+      name: "Coder",
+      minPlan: "vector-10",
+      contextLength: 128_000,
+      plans: ["vector-10", "vector-50"],
+      contextByPlan: { "vector-10": 128_000, "vector-50": 128_000 },
+    }
+    expect(
+      readModelPlanConfig({
+        ...config,
+        listed: ["remote"],
+        plans: [{ ...plan, multiple: 1, caps: { ...caps, privateAllowance: 123 } }],
+        models: [model],
+      }),
+    ).toEqual({
+      ...config,
+      listed: ["remote"],
+      plans: [{ ...plan, multiple: 1, caps }],
+      models: [model],
+    })
+  })
+
+  test("rejects fabricated public caps, invalid listing IDs and malformed model availability", () => {
+    for (const value of [
+      { ...config, listed: ["not-a-perk"] },
+      { ...config, plans: [{ ...plan, caps: { inFlight: 999 } }] },
+      { ...config, models: [{ id: "vendor/coder", name: "Coder", minPlan: "not-a-plan" }] },
+      { ...config, models: [{ id: "vendor/coder", name: "Coder", plans: ["vector-10", "vector-10"] }] },
+      { ...config, models: [{ id: "vendor/coder", name: "Coder", contextByPlan: { "vector-10": -1 } }] },
+      { ...config, models: [{ id: "vendor/coder", name: "Coder", contextLength: Infinity }] },
+    ])
+      expect(() => readModelPlanConfig(value)).toThrow("could not load model plans")
+  })
+
   test("reads the public catalog while preserving disabled plans", () => {
     expect(readModelPlanConfig(config)).toEqual(config)
     expect(readModelPlanConfig({ ...config, enabled: false, plans: [{ ...plan, available: false }] })).toMatchObject({
@@ -34,7 +73,7 @@ describe("model plan API boundaries", () => {
       models: [{ id: "vendor/coder", name: "Coder", inputPrice: 0.1, outputPrice: 0.4, contextLength: 128_000 }],
     })
     expect(read.plans).toEqual([{ ...plan, multiple: 5, tasks: [[60, 550], null] }])
-    expect(read.models).toEqual([{ id: "vendor/coder", name: "Coder" }])
+    expect(read.models).toEqual([{ id: "vendor/coder", name: "Coder", contextLength: 128_000 }])
   })
 
   test("rejects malformed prices, multiples, ranges, currencies and duplicate plan IDs", () => {
@@ -44,7 +83,7 @@ describe("model plan API boundaries", () => {
       { ...config, plans: [plan, plan] },
       { ...config, plans: [{ ...plan, price: NaN }] },
       { ...config, plans: [{ ...plan, available: "true" }] },
-      { ...config, plans: [{ ...plan, multiple: 1 }] },
+      { ...config, plans: [{ ...plan, multiple: 0.5 }] },
       { ...config, plans: [{ ...plan, tasks: [[550, 60]] }] },
       { ...config, plans: [{ ...plan, tasks: [[0, 60]] }] },
       { ...config, plans: [{ ...plan, tasks: [[60]] }] },
