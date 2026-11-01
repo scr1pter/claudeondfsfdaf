@@ -1193,7 +1193,11 @@ The file is now `script/smoke-release-evidence.mjs`, matching the existing nativ
 Node smoke convention. Both the ordinary desktop Node job and the optional
 release study explicitly run it under Node 24, alongside the three provenance
 checks. No assertion, deadline, engine source or measured release bytes change.
-Remaining jobs in the old general run continue so their evidence is retained;
-a repaired native CI result is still required. Shard numbers alone do not prove
+The old run completed with 19 successful jobs and two failures: Linux shard 1
+above and Windows shard 1 job `124713783005`, whose sole failed case was the
+same IPC check (647 passes, four skips). The other three optional jobs skipped.
+Fresh general run `41263580768` tests the correction at `6b88dcb2`; its desktop
+Node bundle job has passed, with the other jobs still running at this entry.
+A successful complete result is still required. Shard numbers alone do not prove
 a particular file ran, because adding or removing a discovered file changes
 Bun's shard assignments.
