@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { EventEmitter } from "node:events"
+import path from "node:path"
 import type { BrowserWindow, BrowserWindowConstructorOptions, Display, Session } from "electron"
 import { Computer } from "@vectordevai/schema/computer"
 import { ComputerOverlayPage } from "@vectordevai/app/computer/overlay-page"
@@ -368,7 +369,9 @@ describe("computer overlay windows", () => {
     const overlay = createComputerOverlay({ platform: "darwin", electron: f.electron, clock: f.clock.clock })
     const pending = overlay.show(state())
     await f.finish(pending)
-    expect(f.banner().config.webPreferences?.preload).toBe("/packaged/vector/out/preload/computer-overlay.js")
+    expect(f.banner().config.webPreferences?.preload).toBe(
+      path.join("/packaged/vector", "out", "preload", "computer-overlay.js"),
+    )
     overlay.close()
   })
 
