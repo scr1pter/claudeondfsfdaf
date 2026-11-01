@@ -1,4 +1,6 @@
 import { initializeVectorAccount, vectorAccount } from "./vector-account-runtime"
+import { isComputerOverlay } from "./computer-overlay-registry"
+import { registerComputerOverlayIpc } from "./computer-overlay-ipc"
 import { execFile } from "node:child_process"
 import { realpath, stat } from "node:fs/promises"
 import { basename, join } from "node:path"
@@ -253,6 +255,10 @@ function on<T extends unknown[]>(channel: string, listener: (event: IpcMainEvent
 }
 
 export function registerIpcHandlers(deps: Deps) {
+  registerComputerOverlayIpc({
+    handle: (channel, callback) => ipcMain.handle(channel, callback),
+    on: (channel, callback) => ipcMain.on(channel, callback),
+  })
   initializeVectorAccount(deps.awaitInitialization)
   // Pull requests, reviews and commits Vector makes are checked against the owner's memory by the engine first.
   usePostingEngine(deps.awaitInitialization)
@@ -567,7 +573,7 @@ export function registerIpcHandlers(deps: Deps) {
   // Cloud screen, the preview panel or the agent changed it.
   watchCloudChanges(() =>
     BrowserWindow.getAllWindows().forEach((window) => {
-      if (!window.isDestroyed()) window.webContents.send("cloud-changed")
+      if (!window.isDestroyed() && !isComputerOverlay(window)) window.webContents.send("cloud-changed")
     }),
   )
   handle("cloud-overview", (_event: IpcMainInvokeEvent, directory: string) =>

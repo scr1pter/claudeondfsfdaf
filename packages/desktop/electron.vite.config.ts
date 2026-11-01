@@ -71,7 +71,7 @@ export default defineConfig({
   preload: {
     build: {
       rollupOptions: {
-        input: { index: "src/preload/index.ts" },
+        input: { index: "src/preload/index.ts", "computer-overlay": "src/preload/computer-overlay.ts" },
         output: {
           format: "cjs",
           entryFileNames: "[name].js",

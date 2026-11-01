@@ -4,6 +4,8 @@
   "description": "",
   "type": "module",
   "exports": {
+    "./computer/overlay-page": "./src/features/computer/overlay-page.ts",
+    "./computer/overlay-layout": "./src/features/computer/overlay-layout.ts",
     ".": "./src/index.ts",
     "./desktop-menu": "./src/desktop-menu.ts",
     "./updater": "./src/updater.ts",
