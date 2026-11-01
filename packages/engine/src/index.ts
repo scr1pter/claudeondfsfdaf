@@ -1,4 +1,5 @@
 import "@vectordevai/core/local-mode/backstop"
+import { commandGate } from "./cli/command-gate"
 import yargs from "yargs"
 import { hideBin } from "yargs/helpers"
 import { RunCommand, runLocal } from "./cli/cmd/run"
@@ -29,6 +30,7 @@ import { PrCommand } from "./cli/cmd/pr"
 import { ReviewCommand } from "./cli/cmd/review"
 import { SessionCommand } from "./cli/cmd/session"
 import { TasksCommand } from "./cli/cmd/tasks"
+import { WorkflowCommand } from "./cli/cmd/workflow"
 import { DbCommand } from "./cli/cmd/db"
 import { errorMessage } from "./util/error"
 import { PluginCommand } from "./cli/cmd/plug"
@@ -109,18 +111,16 @@ const cli = yargs(args)
     process.env.VECTOR = "1"
     process.env.VECTOR_PID = String(process.pid)
 
-    // `vector run --local` is on Vector Local from here, before the account check below could reach vectordev.ai, with
-    // the server it attaches to, if any, on the model server list for the run.
-    if (opts.local === true && String(opts._?.[0] ?? "") === "run")
-      await runLocal(typeof opts.attach === "string" ? opts.attach : undefined)
-
-    if (isVectorCli && !opts.help && !opts.version) {
-      const command = String(opts._?.[0] ?? "")
-      if (!openCommands.has(command)) {
+    await commandGate({
+      options: opts,
+      vector: isVectorCli,
+      accountRequired: !openCommands.has(String(opts._?.[0] ?? "")),
+      local: runLocal,
+      account: async () => {
         const { ensureVectorAccount } = await import("./cli/vector-account")
         await ensureVectorAccount()
-      }
-    }
+      },
+    })
   })
   .usage("")
   .completion("completion", "generate shell completion script")
@@ -149,6 +149,7 @@ const cli = yargs(args)
   .command(ReviewCommand)
   .command(SessionCommand)
   .command(TasksCommand)
+  .command(WorkflowCommand)
   .command(PluginCommand)
   .command(DbCommand)
   .command(TrustCommand)

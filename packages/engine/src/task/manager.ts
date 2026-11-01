@@ -59,6 +59,8 @@ export class Error extends Schema.TaggedErrorClass<Error>()("TaskManager.Error",
 }) {}
 
 export type ListInput = {
+  /** Engine-only workflow directory; native run coordinators only, without ordinary or desktop task rows. */
+  workflows?: boolean
   sessionID: SessionID
   descendants?: boolean
   limit?: number
@@ -572,7 +574,12 @@ const layer = Layer.effect(
       // child, finished or not, until its own budget of sessions runs out: finished children never crowd it out.
       while (queue.length && (input.active ? seen.size <= MAX_VISITED : found.length <= MAX_TASKS)) {
         const children = (yield* sessions.children(queue.shift()!))
-          .filter((item) => !item.internal && SubagentLifecycle.read(item))
+          .filter(
+            (item) =>
+              !item.internal &&
+              SubagentLifecycle.read(item) &&
+              (!input.workflows || SubagentLifecycle.read(item)?.workflow?.role === "run"),
+          )
           .sort((left, right) => recentActiveFirst(SubagentLifecycle.read(left)!, SubagentLifecycle.read(right)!))
         for (const child of children) {
           if (seen.has(child.id)) continue
@@ -589,7 +596,7 @@ const layer = Layer.effect(
         observe,
         { concurrency: 4 },
       )
-      const external = yield* bridge(desktop.list(input))
+      const external = input.workflows ? { tasks: [], truncated: false } : yield* bridge(desktop.list(input))
       // A desktop workspace can expose the same native child session; retain its
       // richer source identity and controls, counting cumulative usage only once.
       const mirrored = new Set(external.tasks.flatMap((task) => (task.sessionID ? [task.sessionID] : [])))

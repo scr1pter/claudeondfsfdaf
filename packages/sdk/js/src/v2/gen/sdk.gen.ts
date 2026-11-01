@@ -95,6 +95,18 @@ import type {
   ExperimentalTaskStopResponses,
   ExperimentalTaskWaitErrors,
   ExperimentalTaskWaitResponses,
+  ExperimentalWorkflowGetErrors,
+  ExperimentalWorkflowGetResponses,
+  ExperimentalWorkflowListErrors,
+  ExperimentalWorkflowListResponses,
+  ExperimentalWorkflowResumeErrors,
+  ExperimentalWorkflowResumeResponses,
+  ExperimentalWorkflowSavedErrors,
+  ExperimentalWorkflowSavedResponses,
+  ExperimentalWorkflowStartErrors,
+  ExperimentalWorkflowStartResponses,
+  ExperimentalWorkflowValidateErrors,
+  ExperimentalWorkflowValidateResponses,
   ExperimentalWorkspaceAdapterListErrors,
   ExperimentalWorkspaceAdapterListResponses,
   ExperimentalWorkspaceCreateErrors,
@@ -641,6 +653,9 @@ import type {
   VcsStatusResponses,
   VcsSwitchErrors,
   VcsSwitchResponses,
+  WorkflowResumeInput,
+  WorkflowStartInput,
+  WorkflowValidateInput,
   WorktreeCreateErrors,
   WorktreeCreateInput,
   WorktreeCreateResponses,
@@ -1819,6 +1834,233 @@ export class Task extends HeyApiClient {
   }
 }
 
+export class Workflow extends HeyApiClient {
+  /**
+   * List trusted saved workflows
+   */
+  public saved<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<
+      ExperimentalWorkflowSavedResponses,
+      ExperimentalWorkflowSavedErrors,
+      ThrowOnError
+    >({
+      url: "/experimental/workflow/saved",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Validate a workflow without starting it
+   */
+  public validate<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      workflowValidateInput?: WorkflowValidateInput
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { key: "workflowValidateInput", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      ExperimentalWorkflowValidateResponses,
+      ExperimentalWorkflowValidateErrors,
+      ThrowOnError
+    >({
+      url: "/experimental/workflow/validate",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * List workflow runs
+   */
+  public list<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<
+      ExperimentalWorkflowListResponses,
+      ExperimentalWorkflowListErrors,
+      ThrowOnError
+    >({
+      url: "/experimental/session/{sessionID}/workflow",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Start an owner-approved workflow
+   */
+  public start<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      directory?: string
+      workspace?: string
+      workflowStartInput?: WorkflowStartInput
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { key: "workflowStartInput", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      ExperimentalWorkflowStartResponses,
+      ExperimentalWorkflowStartErrors,
+      ThrowOnError
+    >({
+      url: "/experimental/session/{sessionID}/workflow",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Get workflow progress and results
+   */
+  public get<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      runID: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "path", key: "runID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<
+      ExperimentalWorkflowGetResponses,
+      ExperimentalWorkflowGetErrors,
+      ThrowOnError
+    >({
+      url: "/experimental/session/{sessionID}/workflow/{runID}",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Resume an owner-approved workflow
+   */
+  public resume<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      runID: string
+      directory?: string
+      workspace?: string
+      workflowResumeInput?: WorkflowResumeInput
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "path", key: "runID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { key: "workflowResumeInput", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      ExperimentalWorkflowResumeResponses,
+      ExperimentalWorkflowResumeErrors,
+      ThrowOnError
+    >({
+      url: "/experimental/session/{sessionID}/workflow/{runID}/resume",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+}
+
 export class Resource extends HeyApiClient {
   /**
    * Get MCP resources
@@ -2197,6 +2439,11 @@ export class Experimental extends HeyApiClient {
   private _task?: Task
   get task(): Task {
     return (this._task ??= new Task({ client: this.client }))
+  }
+
+  private _workflow?: Workflow
+  get workflow(): Workflow {
+    return (this._workflow ??= new Workflow({ client: this.client }))
   }
 
   private _resource?: Resource
@@ -4900,7 +5147,7 @@ export class Skills extends HeyApiClient {
   }
 }
 
-export class Workflow extends HeyApiClient {
+export class Workflow2 extends HeyApiClient {
   /**
    * Reset workflow insights
    *
@@ -6499,9 +6746,9 @@ export class Memory extends HeyApiClient {
     return (this._skills ??= new Skills({ client: this.client }))
   }
 
-  private _workflow?: Workflow
-  get workflow(): Workflow {
-    return (this._workflow ??= new Workflow({ client: this.client }))
+  private _workflow?: Workflow2
+  get workflow(): Workflow2 {
+    return (this._workflow ??= new Workflow2({ client: this.client }))
   }
 
   private _model?: Model

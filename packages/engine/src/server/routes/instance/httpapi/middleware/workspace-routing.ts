@@ -420,6 +420,21 @@ function routeHttpApiWorkspace<E>(
         { _tag: "ForbiddenError", message: "This session's raw content is available only to the owner." },
         { status: 403 },
       )
+    // Workflow planning and execution are owner actions even when an adapter would forward with owner credentials.
+    if (
+      !owner &&
+      [
+        "/experimental/workflow/saved",
+        "/experimental/workflow/validate",
+        "/experimental/session/:sessionID/workflow",
+        "/experimental/session/:sessionID/workflow/:runID/resume",
+      ].includes(route.route.path) &&
+      (request.method === "POST" || route.route.path === "/experimental/workflow/saved")
+    )
+      return HttpServerResponse.jsonUnsafe(
+        { _tag: "ForbiddenError", message: "Only the server owner can validate or start workflows." },
+        { status: 403 },
+      )
     // Remote targets authenticate with the adapter's owner credentials. Apply task-control ownership before
     // forwarding, while the original guest principal is still available, as well as in the local handler.
     // Merging and discarding need the authenticated owner: a guest in control, or owner credentials relaying a
@@ -440,6 +455,8 @@ function routeHttpApiWorkspace<E>(
       request.method === "POST" &&
       ((route.route.path.startsWith("/experimental/session/:sessionID/tasks/bridge/") && !owner) ||
         ([
+          "/experimental/session/:sessionID/workflow",
+          "/experimental/session/:sessionID/workflow/:runID/resume",
           "/experimental/session/:sessionID/stop",
           "/experimental/session/:sessionID/background",
           "/experimental/session/:sessionID/tasks/background",

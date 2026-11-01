@@ -12,6 +12,7 @@ import { Agent } from "@/agent/agent"
 import { Auth } from "@/auth"
 import { BackgroundJob } from "@/background/job"
 import { TaskManager } from "@/task/manager"
+import { WorkflowOwner } from "@/orchestration/owner"
 import { TaskNotify } from "@/task/notify"
 import { TaskLimits } from "@/task/limits"
 import { TaskRecovery } from "@/task/recovery"
@@ -285,6 +286,7 @@ const app = LayerNode.group([
   SessionStatus.node,
   BackgroundJob.node,
   TaskManager.node,
+  WorkflowOwner.node,
   TaskNotify.node,
   TaskLimits.node,
   TaskRecovery.node,

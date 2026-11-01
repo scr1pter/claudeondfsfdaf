@@ -19,6 +19,7 @@ import { ProviderV2 } from "@vectordevai/core/provider"
 import { ModelV2 } from "@vectordevai/core/model"
 import { Task } from "@vectordevai/schema/task"
 import { TaskBridge } from "@vectordevai/schema/task-bridge"
+import { Workflow } from "@vectordevai/schema/workflow"
 
 export class TaskApiError extends Schema.ErrorClass<TaskApiError>("TaskApiError")(
   {
@@ -34,6 +35,11 @@ export class TaskApiError extends Schema.ErrorClass<TaskApiError>("TaskApiError"
     ]),
     message: Schema.String,
   },
+  { httpApiStatus: 400 },
+) {}
+
+export class WorkflowApiError extends Schema.ErrorClass<WorkflowApiError>("WorkflowApiError")(
+  { code: Schema.Literals(["invalid", "forbidden", "busy", "running", "limit", "not_found"]), message: Schema.String },
   { httpApiStatus: 400 },
 ) {}
 
@@ -148,6 +154,12 @@ export const SessionListQuery = Schema.Struct({
 })
 
 export const ExperimentalPaths = {
+  workflowSaved: "/experimental/workflow/saved",
+  workflowValidate: "/experimental/workflow/validate",
+  workflowStart: "/experimental/session/:sessionID/workflow",
+  workflowList: "/experimental/session/:sessionID/workflow",
+  workflowGet: "/experimental/session/:sessionID/workflow/:runID",
+  workflowResume: "/experimental/session/:sessionID/workflow/:runID/resume",
   capabilities: "/experimental/capabilities",
   console: "/experimental/console",
   consoleOrgs: "/experimental/console/orgs",
@@ -483,6 +495,67 @@ export const ExperimentalApi = HttpApi.make("experimental")
             identifier: "experimental.task.bridge.receipt",
             summary: "Confirm a desktop task command",
             description: "Owner-authenticated desktop relay with an expiring lease. No callback URLs are accepted.",
+          }),
+        ),
+        HttpApiEndpoint.get("workflowSaved", ExperimentalPaths.workflowSaved, {
+          query: WorkspaceRoutingQuery,
+          success: Workflow.SavedList,
+          error: WorkflowApiError,
+        }).annotateMerge(
+          OpenApi.annotations({ identifier: "experimental.workflow.saved", summary: "List trusted saved workflows" }),
+        ),
+        HttpApiEndpoint.post("workflowValidate", ExperimentalPaths.workflowValidate, {
+          query: WorkspaceRoutingQuery,
+          success: Workflow.Validation,
+          error: WorkflowApiError,
+          payload: Workflow.ValidateInput,
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "experimental.workflow.validate",
+            summary: "Validate a workflow without starting it",
+          }),
+        ),
+        HttpApiEndpoint.post("workflowStart", ExperimentalPaths.workflowStart, {
+          params: { sessionID: SessionID },
+          query: WorkspaceRoutingQuery,
+          success: Workflow.Started,
+          error: WorkflowApiError,
+          payload: Workflow.StartInput,
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "experimental.workflow.start",
+            summary: "Start an owner-approved workflow",
+          }),
+        ),
+        HttpApiEndpoint.get("workflowList", ExperimentalPaths.workflowList, {
+          params: { sessionID: SessionID },
+          query: WorkspaceRoutingQuery,
+          success: Workflow.RunList,
+          error: WorkflowApiError,
+        }).annotateMerge(
+          OpenApi.annotations({ identifier: "experimental.workflow.list", summary: "List workflow runs" }),
+        ),
+        HttpApiEndpoint.get("workflowGet", ExperimentalPaths.workflowGet, {
+          params: { sessionID: SessionID, runID: SessionID },
+          query: WorkspaceRoutingQuery,
+          success: Workflow.RunDetail,
+          error: WorkflowApiError,
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "experimental.workflow.get",
+            summary: "Get workflow progress and results",
+          }),
+        ),
+        HttpApiEndpoint.post("workflowResume", ExperimentalPaths.workflowResume, {
+          params: { sessionID: SessionID, runID: SessionID },
+          query: WorkspaceRoutingQuery,
+          success: Workflow.Started,
+          error: WorkflowApiError,
+          payload: [HttpApiSchema.NoContent, Workflow.ResumeInput],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "experimental.workflow.resume",
+            summary: "Resume an owner-approved workflow",
           }),
         ),
         HttpApiEndpoint.get("resource", ExperimentalPaths.resource, {

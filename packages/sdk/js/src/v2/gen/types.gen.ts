@@ -3015,6 +3015,11 @@ export type TaskApiError = {
   message: string
 }
 
+export type WorkflowApiError = {
+  code: "invalid" | "forbidden" | "busy" | "running" | "limit" | "not_found"
+  message: string
+}
+
 export type McpResource = {
   name: string
   uri: string
@@ -7260,6 +7265,128 @@ export type TaskBridgeReceiptInput = {
 
 export type TaskBridgeReceiptResult = {
   accepted: boolean
+}
+
+export type WorkflowIssue = {
+  path: string
+  message: string
+}
+
+export type WorkflowSaved = {
+  name: string
+  title: string
+  description?: string
+  source: "repository" | "user"
+  inputs: Array<{
+    name: string
+    description?: string
+    required: boolean
+    default?: unknown
+  }>
+  issues?: Array<WorkflowIssue>
+}
+
+export type WorkflowSavedList = {
+  workflows: Array<WorkflowSaved>
+}
+
+export type WorkflowValidateInput = {
+  spec?: string
+  name?: string
+  inputs?: {
+    [key: string]: unknown
+  }
+}
+
+export type WorkflowPlanStage = {
+  id: string
+  title: string
+  phase: string
+  agent: string
+  model?: string
+  effort?: string
+  isolation?: string
+  items: number | "dynamic"
+  serial: boolean
+  writes: string
+  asks: Array<string>
+  verify?: {
+    agent: string
+    maxRounds: number
+  }
+}
+
+export type WorkflowPlan = {
+  title: string
+  stages: Array<WorkflowPlanStage>
+  maxAgents: number
+  concurrency: number
+  usd?: number
+  tokens?: number
+  steps: number
+  perAgentSteps: number
+  minutes: number
+  saved?: {
+    name: string
+    source: "repository" | "user"
+  }
+}
+
+export type WorkflowValidation = {
+  ok: boolean
+  issues: Array<WorkflowIssue>
+  warnings: Array<WorkflowIssue>
+  plan?: WorkflowPlan
+}
+
+export type WorkflowStartInput = {
+  spec?: string
+  name?: string
+  inputs?: {
+    [key: string]: unknown
+  }
+  title?: string
+  quiet?: boolean
+}
+
+export type WorkflowStarted = {
+  runID: string
+  title: string
+  plan: WorkflowPlan
+}
+
+export type WorkflowRunList = {
+  runs: Array<TaskInfo>
+}
+
+export type WorkflowNode = {
+  key: string
+  stage: string
+  phase: string
+  item: string
+  status: string
+  sessionID?: string
+  round?: number
+  verified?: boolean
+  error?: string
+  preview?: string
+}
+
+export type WorkflowRunDetail = {
+  task: TaskInfo
+  spec?: string
+  nodes: Array<WorkflowNode>
+  truncated: boolean
+  report?: string
+  results?: unknown
+}
+
+export type WorkflowResumeInput = {
+  spec?: string
+  inputs?: {
+    [key: string]: unknown
+  }
+  retryFailed?: boolean
 }
 
 export type ProjectDirectories = Array<{
@@ -12430,6 +12557,214 @@ export type ExperimentalTaskBridgeReceiptResponses = {
 
 export type ExperimentalTaskBridgeReceiptResponse =
   ExperimentalTaskBridgeReceiptResponses[keyof ExperimentalTaskBridgeReceiptResponses]
+
+export type ExperimentalWorkflowSavedData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/experimental/workflow/saved"
+}
+
+export type ExperimentalWorkflowSavedErrors = {
+  /**
+   * WorkflowApiError | InvalidRequestError
+   */
+  400: WorkflowApiError | InvalidRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type ExperimentalWorkflowSavedError = ExperimentalWorkflowSavedErrors[keyof ExperimentalWorkflowSavedErrors]
+
+export type ExperimentalWorkflowSavedResponses = {
+  /**
+   * Workflow.SavedList
+   */
+  200: WorkflowSavedList
+}
+
+export type ExperimentalWorkflowSavedResponse =
+  ExperimentalWorkflowSavedResponses[keyof ExperimentalWorkflowSavedResponses]
+
+export type ExperimentalWorkflowValidateData = {
+  body?: WorkflowValidateInput
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/experimental/workflow/validate"
+}
+
+export type ExperimentalWorkflowValidateErrors = {
+  /**
+   * WorkflowApiError | InvalidRequestError
+   */
+  400: WorkflowApiError | InvalidRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type ExperimentalWorkflowValidateError =
+  ExperimentalWorkflowValidateErrors[keyof ExperimentalWorkflowValidateErrors]
+
+export type ExperimentalWorkflowValidateResponses = {
+  /**
+   * Workflow.Validation
+   */
+  200: WorkflowValidation
+}
+
+export type ExperimentalWorkflowValidateResponse =
+  ExperimentalWorkflowValidateResponses[keyof ExperimentalWorkflowValidateResponses]
+
+export type ExperimentalWorkflowListData = {
+  body?: never
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/experimental/session/{sessionID}/workflow"
+}
+
+export type ExperimentalWorkflowListErrors = {
+  /**
+   * WorkflowApiError | InvalidRequestError
+   */
+  400: WorkflowApiError | InvalidRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type ExperimentalWorkflowListError = ExperimentalWorkflowListErrors[keyof ExperimentalWorkflowListErrors]
+
+export type ExperimentalWorkflowListResponses = {
+  /**
+   * Workflow.RunList
+   */
+  200: WorkflowRunList
+}
+
+export type ExperimentalWorkflowListResponse =
+  ExperimentalWorkflowListResponses[keyof ExperimentalWorkflowListResponses]
+
+export type ExperimentalWorkflowStartData = {
+  body?: WorkflowStartInput
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/experimental/session/{sessionID}/workflow"
+}
+
+export type ExperimentalWorkflowStartErrors = {
+  /**
+   * WorkflowApiError | InvalidRequestError
+   */
+  400: WorkflowApiError | InvalidRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type ExperimentalWorkflowStartError = ExperimentalWorkflowStartErrors[keyof ExperimentalWorkflowStartErrors]
+
+export type ExperimentalWorkflowStartResponses = {
+  /**
+   * Workflow.Started
+   */
+  200: WorkflowStarted
+}
+
+export type ExperimentalWorkflowStartResponse =
+  ExperimentalWorkflowStartResponses[keyof ExperimentalWorkflowStartResponses]
+
+export type ExperimentalWorkflowGetData = {
+  body?: never
+  path: {
+    sessionID: string
+    runID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/experimental/session/{sessionID}/workflow/{runID}"
+}
+
+export type ExperimentalWorkflowGetErrors = {
+  /**
+   * WorkflowApiError | InvalidRequestError
+   */
+  400: WorkflowApiError | InvalidRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type ExperimentalWorkflowGetError = ExperimentalWorkflowGetErrors[keyof ExperimentalWorkflowGetErrors]
+
+export type ExperimentalWorkflowGetResponses = {
+  /**
+   * Workflow.RunDetail
+   */
+  200: WorkflowRunDetail
+}
+
+export type ExperimentalWorkflowGetResponse = ExperimentalWorkflowGetResponses[keyof ExperimentalWorkflowGetResponses]
+
+export type ExperimentalWorkflowResumeData = {
+  body?: WorkflowResumeInput
+  path: {
+    sessionID: string
+    runID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/experimental/session/{sessionID}/workflow/{runID}/resume"
+}
+
+export type ExperimentalWorkflowResumeErrors = {
+  /**
+   * WorkflowApiError | InvalidRequestError
+   */
+  400: WorkflowApiError | InvalidRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type ExperimentalWorkflowResumeError = ExperimentalWorkflowResumeErrors[keyof ExperimentalWorkflowResumeErrors]
+
+export type ExperimentalWorkflowResumeResponses = {
+  /**
+   * Workflow.Started
+   */
+  200: WorkflowStarted
+}
+
+export type ExperimentalWorkflowResumeResponse =
+  ExperimentalWorkflowResumeResponses[keyof ExperimentalWorkflowResumeResponses]
 
 export type ExperimentalResourceListData = {
   body?: never

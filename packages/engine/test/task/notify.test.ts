@@ -185,8 +185,8 @@ describe("TaskNotify", () => {
       expect(prompts).toHaveLength(1)
       expect(prompts[0]?.noReply).toBeUndefined()
       expect(notifications(prompts[0])).toEqual([
-        { taskID: a, state: "completed" },
-        { taskID: b, state: "completed" },
+        { taskID: a, state: "completed", attempt: 1 },
+        { taskID: b, state: "completed", attempt: 1 },
       ])
       expect(quietParts(prompts[0])).toEqual([undefined, undefined])
     }),
@@ -204,7 +204,7 @@ describe("TaskNotify", () => {
       yield* notify.enqueue({ parentID: id, note: result(a, launch), ops, agent: "build" })
       yield* arrived(prompts, 1, "3 seconds")
       expect(prompts[0]?.noReply).toBeUndefined()
-      expect(notifications(prompts[0])).toEqual([{ taskID: a, state: "completed" }])
+      expect(notifications(prompts[0])).toEqual([{ taskID: a, state: "completed", attempt: 1 }])
       yield* statuses.set(id, { type: "idle" })
     }),
   )
@@ -237,8 +237,8 @@ describe("TaskNotify", () => {
       yield* Effect.sleep(`${QUIET * 2} millis`)
       expect(prompts).toHaveLength(1)
       expect(notifications(prompts[0])).toEqual([
-        { taskID: a, state: "completed" },
-        { taskID: b, state: "completed" },
+        { taskID: a, state: "completed", attempt: 1 },
+        { taskID: b, state: "completed", attempt: 1 },
       ])
     }),
   )
@@ -259,7 +259,7 @@ describe("TaskNotify", () => {
       const waited = Date.now() - start
       expect(waited).toBeGreaterThanOrEqual(HOLD - 50)
       expect(waited).toBeLessThan(HOLD + 1_500)
-      expect(notifications(prompts[0])).toEqual([{ taskID: a, state: "completed" }])
+      expect(notifications(prompts[0])).toEqual([{ taskID: a, state: "completed", attempt: 1 }])
       yield* jobs.cancel(b)
     }),
   )
@@ -281,8 +281,8 @@ describe("TaskNotify", () => {
       yield* sessions.clearRevert(id)
 
       yield* arrived(prompts, 2)
-      expect(notifications(prompts[0])).toEqual([{ taskID: a, state: "completed" }])
-      expect(notifications(prompts[1])).toEqual([{ taskID: b, state: "completed" }])
+      expect(notifications(prompts[0])).toEqual([{ taskID: a, state: "completed", attempt: 1 }])
+      expect(notifications(prompts[1])).toEqual([{ taskID: b, state: "completed", attempt: 1 }])
       expect(prompts[0].messageID! < prompts[1].messageID!).toBe(true)
     }),
   )
@@ -301,7 +301,7 @@ describe("TaskNotify", () => {
       // The user's prompt starts a turn: the held note goes out now, long before the quiet time ends.
       yield* statuses.set(id, { type: "busy" })
       yield* arrived(prompts, 1, "3 seconds")
-      expect(notifications(prompts[0])).toEqual([{ taskID: a, state: "completed" }])
+      expect(notifications(prompts[0])).toEqual([{ taskID: a, state: "completed", attempt: 1 }])
       yield* statuses.set(id, { type: "idle" })
     }),
   )
@@ -321,7 +321,7 @@ describe("TaskNotify", () => {
 
       yield* sessions.clearRevert(id)
       yield* arrived(prompts)
-      expect(notifications(prompts[0])).toEqual([{ taskID: a, state: "completed" }])
+      expect(notifications(prompts[0])).toEqual([{ taskID: a, state: "completed", attempt: 1 }])
     }),
   )
 
@@ -338,12 +338,14 @@ describe("TaskNotify", () => {
       yield* arrived(prompts)
       expect(prompts[0]?.noReply).toBe(true)
       expect(quietParts(prompts[0])).toEqual([true])
+      expect(notifications(prompts[0])[0]).toMatchObject({ quiet: true, attempt: 1 })
 
       yield* notify.unfence(id)
       yield* notify.enqueue({ parentID: id, note: result(b, launch), ops, agent: "build" })
       yield* arrived(prompts, 2)
       expect(prompts[1]?.noReply).toBeUndefined()
       expect(quietParts(prompts[1])).toEqual([undefined])
+      expect(notifications(prompts[1])[0]?.quiet).toBeUndefined()
     }),
   )
 
@@ -371,6 +373,7 @@ describe("TaskNotify", () => {
       yield* arrived(prompts)
       expect(prompts[0]?.noReply).toBe(true)
       expect(quietParts(prompts[0])).toEqual([true])
+      expect(notifications(prompts[0])[0]).toMatchObject({ quiet: true, attempt: 1 })
     }),
   )
 
@@ -398,7 +401,7 @@ describe("TaskNotify", () => {
       yield* arrived(prompts)
       expect(prompts[0]?.noReply).toBe(true)
       expect(quietParts(prompts[0])).toEqual([true, true, true])
-      expect(notifications(prompts[0])[1]).toEqual({ taskID: s2, state: "completed", quiet: true })
+      expect(notifications(prompts[0])[1]).toEqual({ taskID: s2, state: "completed", attempt: 1, quiet: true })
 
       const waking = yield* parent()
       const w1 = yield* child(waking.id, waking.launch)
@@ -409,6 +412,8 @@ describe("TaskNotify", () => {
       expect(prompts[1]?.sessionID).toBe(waking.id)
       expect(prompts[1]?.noReply).toBeUndefined()
       expect(quietParts(prompts[1])).toEqual([undefined, undefined])
+      expect(notifications(prompts[1]).map((note) => note?.quiet)).toEqual([undefined, undefined])
+      expect(notifications(prompts[1]).map((note) => note?.attempt)).toEqual([1, 1])
     }),
   )
 
@@ -431,7 +436,7 @@ describe("TaskNotify", () => {
       yield* arrived(prompts)
       yield* Effect.sleep(`${QUIET * 2} millis`)
       expect(prompts).toHaveLength(1)
-      expect(notifications(prompts[0])).toEqual([{ taskID: kept, state: "completed" }])
+      expect(notifications(prompts[0])).toEqual([{ taskID: kept, state: "completed", attempt: 1 }])
     }),
   )
 
@@ -528,7 +533,7 @@ describe("TaskNotify", () => {
       yield* arrived(prompts)
       yield* Effect.sleep(`${QUIET * 2} millis`)
       expect(prompts).toHaveLength(1)
-      expect(notifications(prompts[0])).toEqual([{ taskID: kept, state: "completed" }])
+      expect(notifications(prompts[0])).toEqual([{ taskID: kept, state: "completed", attempt: 1 }])
       expect(SubagentLifecycle.read(yield* sessions.get(taken))?.notification?.messageID).toBe(human)
     }),
   )
@@ -619,10 +624,10 @@ describe("TaskNotify", () => {
         "expected the held note after the instance was disposed",
         "5 seconds",
       )
-      expect(delivered).toEqual([{ taskID: held, state: "completed" }])
+      expect(delivered).toEqual([{ taskID: held, state: "completed", attempt: 1 }])
       // The interrupted child is left for restart recovery: no note, no settlement, its record still running.
       yield* Effect.sleep("300 millis")
-      expect(prompts.flatMap(notifications)).toEqual([{ taskID: held, state: "completed" }])
+      expect(prompts.flatMap(notifications)).toEqual([{ taskID: held, state: "completed", attempt: 1 }])
       expect(settled).toEqual([])
       const record = SubagentLifecycle.read(yield* sessions.get(running))
       expect(record?.status).toBe("running")

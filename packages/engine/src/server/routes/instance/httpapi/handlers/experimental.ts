@@ -1,4 +1,6 @@
 import { Agent } from "@/agent/agent"
+import { Permission } from "@/permission"
+import { WorkflowOwner } from "@/orchestration/owner"
 import { InstanceState } from "@/effect/instance-state"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { MCP } from "@/mcp"
@@ -33,6 +35,7 @@ import {
   ToolListQuery,
   WorktreeApiError,
   TaskApiError,
+  WorkflowApiError,
   TaskListQuery,
   TaskMessageInput,
   TaskResumeInput,
@@ -80,6 +83,7 @@ export const experimentalHandlers = HttpApiBuilder.group(InstanceHttpApi, "exper
     const sessions = yield* Session.Service
     const flags = yield* RuntimeFlags.Service
     const tasks = yield* TaskManager.Service
+    const workflow = yield* Effect.serviceOption(WorkflowOwner.Service)
     const desktop = yield* DesktopTasks.Service
     const prompts = yield* SessionPrompt.Service
     // The server provides it to every handler; a test that builds these handlers alone may leave it out.
@@ -298,8 +302,23 @@ export const experimentalHandlers = HttpApiBuilder.group(InstanceHttpApi, "exper
         .pipe(Effect.mapError((error) => new TaskApiError({ code: error.code, message: error.message })))
     })
 
+    const workflowService = Effect.gen(function* () {
+      if (Option.isNone(workflow))
+        return yield* new WorkflowApiError({ code: "invalid", message: "Workflow service is unavailable." })
+      return workflow.value
+    })
+    const workflowOwner = Effect.gen(function* () {
+      if (!(yield* RequestOwner.owner))
+        return yield* new ForbiddenError({ message: "Only the server owner can validate or start workflows." })
+    })
+    const workflowError = <A, R>(effect: Effect.Effect<A, WorkflowOwner.Error, R>) =>
+      effect.pipe(Effect.mapError((error) => new WorkflowApiError({ code: error.code, message: error.message })))
+
     const capabilities = Effect.fn("ExperimentalHttpApi.capabilities")(function* () {
+      const agent = yield* agents.defaultInfo()
+      const disabled = Permission.disabled(["task", "workflow"], agent.permission)
       return {
+        workflows: flags.backgroundSubagents && !disabled.has("task") && !disabled.has("workflow"),
         backgroundSubagents: flags.backgroundSubagents,
         subagentLimits: true,
         workDelegation: true,
@@ -402,6 +421,50 @@ export const experimentalHandlers = HttpApiBuilder.group(InstanceHttpApi, "exper
     })
 
     return handlers
+      .handle("workflowSaved", () =>
+        Effect.gen(function* () {
+          yield* workflowOwner
+          const service = yield* workflowService
+          return yield* workflowError(service.saved())
+        }),
+      )
+      .handle("workflowValidate", ({ payload }) =>
+        Effect.gen(function* () {
+          yield* workflowOwner
+          const service = yield* workflowService
+          return yield* workflowError(service.validate(payload))
+        }),
+      )
+      .handle("workflowStart", ({ params, payload }) =>
+        Effect.gen(function* () {
+          yield* workflowOwner
+          yield* access(params.sessionID, true)
+          const service = yield* workflowService
+          return yield* workflowError(service.start(params.sessionID, payload))
+        }),
+      )
+      .handle("workflowList", ({ params }) =>
+        Effect.gen(function* () {
+          yield* access(params.sessionID)
+          const service = yield* workflowService
+          return yield* workflowError(service.list(params.sessionID))
+        }),
+      )
+      .handle("workflowGet", ({ params }) =>
+        Effect.gen(function* () {
+          yield* access(params.sessionID)
+          const service = yield* workflowService
+          return yield* workflowError(service.get(params.sessionID, params.runID, yield* RequestOwner.owner))
+        }),
+      )
+      .handle("workflowResume", ({ params, payload }) =>
+        Effect.gen(function* () {
+          yield* workflowOwner
+          yield* access(params.sessionID, true)
+          const service = yield* workflowService
+          return yield* workflowError(service.start(params.sessionID, { ...(payload ?? {}), runID: params.runID }))
+        }),
+      )
       .handle("capabilities", capabilities)
       .handle("tool", tool)
       .handle("toolIDs", toolIDs)

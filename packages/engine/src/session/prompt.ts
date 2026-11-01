@@ -1,3 +1,5 @@
+import { WorkflowOwnerHandoffFailure } from "@/orchestration/owner-failure"
+import { WorkflowMarkers } from "@/orchestration/constants"
 import { SubagentLifecycle } from "@/tool/subagent-lifecycle"
 import { FreeModels } from "@vectordevai/core/free-models"
 import { ModelPlanStatus } from "@vectordevai/core/model-plan-status"
@@ -240,6 +242,15 @@ export class FreeModelsResumeError extends Schema.TaggedErrorClass<FreeModelsRes
 }) {}
 
 export interface Interface {
+  /** Reuse prompt model selection for owner actions without admitting a prompt or changing a free selection. */
+  readonly currentModel: (
+    sessionID: SessionID,
+    configured?: PromptInput["model"],
+  ) => Effect.Effect<{
+    providerID: ProviderV2.ID
+    modelID: ModelV2.ID
+    variant?: string
+  }>
   readonly awaitTitles: () => Effect.Effect<void>
   readonly cancel: (sessionID: SessionID) => Effect.Effect<void>
   readonly prompt: (input: PromptInput, options?: PromptOptions) => Effect.Effect<SessionV1.WithParts, Image.Error>
@@ -2159,12 +2170,69 @@ const layer = Layer.effect(
       }
 
       if (input.noReply === true) return message
-      const result = yield* loop({ sessionID: input.sessionID })
+      let quieted = false
+      const replyLoop = () =>
+        executing(
+          input.sessionID,
+          state.ensureRunning(
+            input.sessionID,
+            lastAssistant(input.sessionID),
+            Effect.gen(function* () {
+              // Stop before admission revokes this specific trusted delivery; after admission it cancels this runner.
+              // A later human unfence does not authorize an older note to wake the model.
+              if (!human && !(yield* taskNotes.canReply(input.sessionID, message.info.id))) {
+                quieted = true
+                const parts = yield* Effect.forEach(
+                  message.parts,
+                  (part): Effect.Effect<SessionV1.Part> =>
+                    part.type !== "text"
+                      ? Effect.succeed(part)
+                      : sessions.updatePart({
+                          ...part,
+                          metadata: {
+                            ...part.metadata,
+                            [SessionTaskSize.QUIET]: true,
+                            ...(isRecord(part.metadata?.taskNotification)
+                              ? { taskNotification: { ...part.metadata.taskNotification, quiet: true } }
+                              : {}),
+                          },
+                        }),
+                )
+                return { info: message.info, parts }
+              }
+              return yield* runLoop(input.sessionID)
+            }),
+          ),
+        )
+      const result = yield* replyLoop().pipe(
+        Effect.catchCause((cause) => {
+          if (Cause.hasInterrupts(cause) || !(Cause.squash(cause) instanceof WorkflowOwnerHandoffFailure))
+            return Effect.failCause(cause)
+          // The rejected owner command did not answer this saved human input. It gets an ordinary turn, while
+          // the owner route still receives its original error. A cancelled handoff never reaches this recovery.
+          return Effect.gen(function* () {
+            if (input.budget) yield* arm(input.budget)
+            return yield* replyLoop()
+          })
+        }),
+      )
       // A prompt sent while the session is busy joins the run already going, and that run can end without reading it:
       // a rejected permission, a content filter or a provider error ends the loop where it is. It is answered now,
       // unless the run was stopped, by the user or by the spend guard: a budget-stopped run goes on only through
       // Continue, under a new cap.
-      if (!joined || result.info.id > message.info.id) return result
+      // An owner workflow handoff answers only its own command. Another human input may have arrived before
+      // the synthetic assistant was written, or in the gap before the runner published busy status.
+      if (quieted) return result
+      const ownerHandoff = result.parts.some(
+        (part) =>
+          part.type === "tool" &&
+          part.state.status !== "pending" &&
+          part.state.metadata?.[WorkflowMarkers.OWNER_START] === true,
+      )
+      const answered = ownerHandoff
+        ? result.info.role === "assistant" && result.info.parentID === message.info.id
+        : !joined || result.info.id > message.info.id
+      if (answered) return result
       if (
         result.info.role === "assistant" &&
         (SessionV1.AbortedError.isInstance(result.info.error) ||
@@ -2173,7 +2241,7 @@ const layer = Layer.effect(
         return result
       // The prompt's budget went to the run it joined, which has ended, so the run that answers it gets it again.
       if (input.budget) yield* arm(input.budget)
-      return yield* loop({ sessionID: input.sessionID })
+      return yield* replyLoop()
     })
 
     const lastAssistant = Effect.fnUntraced(function* (sessionID: SessionID) {
@@ -4328,6 +4396,7 @@ const layer = Layer.effect(
     })
 
     return Service.of({
+      currentModel,
       awaitTitles,
       cancel,
       prompt,

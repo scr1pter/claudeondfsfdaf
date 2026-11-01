@@ -1367,6 +1367,64 @@ const scenarios: Scenario[] = [
         "an idle session should have no commands or workspaces to count",
       )
     }),
+  http.protected.get("/experimental/workflow/saved", "experimental.workflow.saved").json(200, (body) => {
+    object(body)
+    array(body.workflows)
+  }),
+  http.protected
+    .post("/experimental/workflow/validate", "experimental.workflow.validate.invalid")
+    .withLlm()
+    .at((ctx) => ({ path: "/experimental/workflow/validate", headers: ctx.headers(), body: { spec: "{}" } }))
+    .json(200, (body) => {
+      object(body)
+      check(body.ok === false, "invalid workflow must not validate")
+      array(body.issues)
+    }),
+  http.protected
+    .post("/experimental/session/{sessionID}/workflow", "experimental.workflow.start.invalid")
+    .withLlm()
+    .seeded((ctx) => ctx.session({ title: "Invalid workflow owner" }))
+    .at((ctx) => ({
+      path: route("/experimental/session/{sessionID}/workflow", { sessionID: ctx.state.id }),
+      headers: ctx.headers(),
+      body: { spec: "{}" },
+    }))
+    .status(400),
+  http.protected
+    .get("/experimental/session/{sessionID}/workflow", "experimental.workflow.list")
+    .seeded((ctx) => ctx.session({ title: "Workflow board owner" }))
+    .at((ctx) => ({
+      path: route("/experimental/session/{sessionID}/workflow", { sessionID: ctx.state.id }),
+      headers: ctx.headers(),
+    }))
+    .json(200, (body) => {
+      object(body)
+      array(body.runs)
+      check(body.runs.length === 0, "fresh workflow board must be empty")
+    }),
+  http.protected
+    .get("/experimental/session/{sessionID}/workflow/{runID}", "experimental.workflow.get.missing")
+    .seeded((ctx) => ctx.session({ title: "Workflow detail owner" }))
+    .at((ctx) => ({
+      path: route("/experimental/session/{sessionID}/workflow/{runID}", {
+        sessionID: ctx.state.id,
+        runID: "ses_missing",
+      }),
+      headers: ctx.headers(),
+    }))
+    .status(400),
+  http.protected
+    .post("/experimental/session/{sessionID}/workflow/{runID}/resume", "experimental.workflow.resume.missing")
+    .seeded((ctx) => ctx.session({ title: "Workflow resume owner" }))
+    .at((ctx) => ({
+      path: route("/experimental/session/{sessionID}/workflow/{runID}/resume", {
+        sessionID: ctx.state.id,
+        runID: "ses_missing",
+      }),
+      headers: ctx.headers(),
+      body: {},
+    }))
+    .status(400),
   http.protected.get("/experimental/resource", "experimental.resource.list").json(),
   http.protected
     .get("/experimental/session/{sessionID}/tasks", "experimental.task.list")

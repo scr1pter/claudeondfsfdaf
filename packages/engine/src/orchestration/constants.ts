@@ -11,6 +11,8 @@ export const MAX_READY = 64
 export const MAX_BUFFERED_ITEMS = 32_000
 export const GUARD_PARENT = "vector.workflow.guard-parent"
 export const TASK_OFFERED = "vector.workflow.task-offered"
+export const OWNER_START = "vector.workflow.owner-start"
+export const SPEC = "vector.workflow.spec"
 
 export type Run = {
   readonly title: string

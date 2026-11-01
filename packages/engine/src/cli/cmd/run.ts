@@ -1,6 +1,8 @@
 import type { PermissionV1 } from "@vectordevai/core/v1/permission"
 import { FSUtil } from "@vectordevai/core/fs-util"
-import { nextBackgroundEvent } from "./run/background-wait"
+import { backgroundTracker, nextBackgroundEvent } from "./run/background-wait"
+import { runWorkflow } from "./run/workflow"
+import { assertWorkflowOwner, parseWorkflowInputs, readWorkflowSource, requireWorkflowCapability } from "./workflow"
 // CLI entry point for `vector run` and `vector --mini`.
 //
 // Handles three modes:
@@ -43,6 +45,36 @@ import { FREE_MODELS_SIGN_IN_TERMINAL } from "@vectordevai/core/free-model-choic
 import { freeModelRunNotice } from "./run/free-model-notice"
 
 type ModelInput = Parameters<VectorClient["session"]["prompt"]>[0]["model"]
+
+export function validateWorkflowRunOptions(args: Record<string, unknown>, message = "") {
+  if (!args.workflow) {
+    if (args.input !== undefined || args.summarize !== undefined)
+      throw new Error("--input and --summarize require --workflow")
+    return
+  }
+  const incompatible = [
+    "command",
+    "mini",
+    "interactive",
+    "research",
+    "file",
+    "model",
+    "agent",
+    "variant",
+    "size",
+    "judge",
+    "max-cost",
+    "max-steps",
+    "thinking",
+    "demo",
+  ].filter(
+    (key) => args[key] !== undefined && args[key] !== false && (!Array.isArray(args[key]) || args[key].length > 0),
+  )
+  if (message.trim() || incompatible.length || args.format === "json")
+    throw new Error(
+      "--workflow runs a workflow without a prompt, attached files or prompt-only options. Set agent/model and limits in the workflow or conversation; use vector workflow show --json for structured results.",
+    )
+}
 
 /** @internal Exported for focused permission-policy tests. */
 export function runPermissionReply(
@@ -220,6 +252,20 @@ export const RunCommand = effectCmd({
         describe: "the command to run, use message for args",
         type: "string",
       })
+      .option("workflow", {
+        type: "string",
+        describe:
+          "run a saved workflow name or local JSON file; prints its plan and progress to stderr and report to stdout",
+      })
+      .option("input", {
+        type: "string",
+        array: true,
+        describe: "with --workflow: input key=value (JSON values or literal strings)",
+      })
+      .option("summarize", {
+        type: "boolean",
+        describe: "with --workflow: ask the conversation's agent to summarize the final report",
+      })
       .option("continue", {
         alias: ["c"],
         describe: "continue the last session",
@@ -396,6 +442,7 @@ export const RunCommand = effectCmd({
         describe: "enable direct interactive demo slash commands; pass one as the message to run it immediately",
       }),
   handler: Effect.fn("Cli.run")(function* (args) {
+    if (args.workflow) yield* Effect.promise(() => assertWorkflowOwner("start workflows"))
     const { Agent } = yield* Effect.promise(() => import("@/agent/agent"))
     const { RuntimeFlags } = yield* Effect.promise(() => import("@/effect/runtime-flags"))
     const { InstanceRef } = yield* Effect.promise(() => import("@/effect/instance-ref"))
@@ -407,6 +454,7 @@ export const RunCommand = effectCmd({
     const localInstance = yield* InstanceRef
     yield* Effect.promise(async () => {
       const rawMessage = [...args.message, ...(args["--"] || [])].join(" ")
+      validateWorkflowRunOptions(args, rawMessage)
       const interactive = args.mini
       const auto = args.auto || args.yolo || args["dangerously-skip-permissions"]
       const thinking = interactive ? (args.thinking ?? true) : (args.thinking ?? false)
@@ -510,6 +558,13 @@ export const RunCommand = effectCmd({
           process.exit(1)
         }
       })()
+      const workflow = args.workflow
+        ? {
+            ...(await readWorkflowSource(args.workflow)),
+            inputs: parseWorkflowInputs(args.input),
+            ...(args.title ? { title: args.title } : {}),
+          }
+        : undefined
       if (args.attach)
         ServerAuth.assertSecurePasswordTransport(args.attach, args.password ?? process.env.VECTOR_SERVER_PASSWORD)
       const attachHeaders = args.attach
@@ -607,13 +662,13 @@ export const RunCommand = effectCmd({
         }
       }
 
-      const piped = process.stdin.isTTY ? undefined : await Bun.stdin.text()
+      const piped = workflow || process.stdin.isTTY ? undefined : await Bun.stdin.text()
       // A prompt sends what was piped in as a part of its own (see `promptParts`), and a command as a message before it
       // (see `commandInput`).
       const input = resolveRunInput(message, piped) ?? ""
       const initialInput = resolveRunInput(rawMessage, piped)
 
-      if (input.trim().length === 0 && !args.command && !interactive) {
+      if (input.trim().length === 0 && !args.command && !interactive && !workflow) {
         UI.error("You must provide a message or a command")
         process.exit(1)
       }
@@ -645,6 +700,7 @@ export const RunCommand = effectCmd({
 
       function title() {
         if (args.title) return args.title
+        if (args.workflow) return `Workflow: ${args.workflow}`
         // A headless run has no one to show a title to, so it names its session after the prompt instead of sending a
         // model request for a title.
         if (args.title === undefined && interactive) return undefined
@@ -902,6 +958,7 @@ export const RunCommand = effectCmd({
       }
 
       async function execute(sdk: VectorClient) {
+        if (workflow) await requireWorkflowCapability(sdk, "start")
         const available = await sdk.config.providers({}, { throwOnError: true })
         if (!available.data.providers.some((provider) => Object.keys(provider.models).length > 0)) {
           // With Vector Local on, models whose servers are not on the list are off; say which, not how to sign in.
@@ -988,24 +1045,10 @@ export const RunCommand = effectCmd({
           // it, so the run waits for each one it launched and for the turn that answers it. A stopped one starts no
           // turn. A note is answered once an assistant message created after it finishes: one that lands while a turn
           // is ending is read by the next turn, which starts after the session has briefly gone idle.
-          const background = {
-            running: new Set<string>(),
-            unanswered: new Set<string>(),
-            // Task → the message that carried its note.
-            noted: new Map<string, string>(),
-            // The latest assistant message in this session that has finished. Message IDs sort by creation.
-            answered: "",
-          }
+          const background = backgroundTracker()
           let idle = false
           let activeAt = Date.now()
-          const waited = () => background.running.size === 0 && background.unanswered.size === 0
-          const settleNotes = () => {
-            for (const [task, messageID] of background.noted) {
-              if (messageID >= background.answered) continue
-              background.unanswered.delete(task)
-              background.noted.delete(task)
-            }
-          }
+          const waited = background.settled
 
           const iterator = events.stream[Symbol.asyncIterator]()
           while (true) {
@@ -1069,18 +1112,13 @@ export const RunCommand = effectCmd({
               const id = event.properties.info.id
               tree.add(id)
               activeAt = Date.now()
-              if (status === "running" || status === "queued") {
-                background.running.add(id)
-                background.unanswered.delete(id)
-              }
-              if (status === "completed" || status === "error") {
-                background.running.delete(id)
-                background.unanswered.add(id)
-              }
-              if (status === "cancelled") {
-                background.running.delete(id)
-                background.unanswered.delete(id)
-              }
+              const record = event.properties.info.metadata?.subagent
+              if (status)
+                background.status(
+                  id,
+                  status,
+                  isRecord(record) && typeof record.attempt === "number" ? record.attempt : undefined,
+                )
               if (status && idle && waited()) break
             }
 
@@ -1088,11 +1126,9 @@ export const RunCommand = effectCmd({
               event.type === "message.updated" &&
               event.properties.sessionID === sessionID &&
               event.properties.info.role === "assistant" &&
-              event.properties.info.time.completed !== undefined &&
-              event.properties.info.id > background.answered
+              event.properties.info.time.completed !== undefined
             ) {
-              background.answered = event.properties.info.id
-              settleNotes()
+              background.answer(event.properties.info.id)
               if (idle && waited()) break
             }
 
@@ -1126,7 +1162,15 @@ export const RunCommand = effectCmd({
               const part = event.properties.part
               const note =
                 part.sessionID === sessionID && part.type === "text" ? part.metadata?.taskNotification : undefined
-              if (isRecord(note) && typeof note.taskID === "string") background.noted.set(note.taskID, part.messageID)
+              if (isRecord(note) && typeof note.taskID === "string") {
+                background.note(
+                  note.taskID,
+                  part.messageID,
+                  note.quiet === true,
+                  typeof note.attempt === "number" ? note.attempt : undefined,
+                )
+                if (idle && waited()) break
+              }
               if (part.sessionID !== sessionID) {
                 // A subagent's steps bill this run too. JSON output reports them, marked as a subagent's, so a
                 // consumer that totals step_finish records gets what the run spent.
@@ -1234,7 +1278,6 @@ export const RunCommand = effectCmd({
             if (event.type === "session.status" && event.properties.sessionID === sessionID) {
               idle = event.properties.status.type === "idle"
               if (idle) {
-                settleNotes()
                 if (waited()) break
               }
             }
@@ -1274,6 +1317,19 @@ export const RunCommand = effectCmd({
         }
         const cwd = args.attach ? (directory ?? sess.directory ?? (await current(sdk))) : (directory ?? root)
         const client = args.attach ? attachSDK(cwd) : sdk
+
+        if (workflow) {
+          const result = await runWorkflow(
+            client,
+            { sessionID, source: workflow, summarize: args.summarize, auto, timeout: backgroundWait },
+            {
+              stdout: (text) => process.stdout.write(text),
+              stderr: (text) => process.stderr.write(text),
+            },
+          )
+          if (result.exitCode) process.exitCode = result.exitCode
+          return
+        }
 
         // Validate agent if specified
         const agent = await pickAgent(client)
@@ -1641,6 +1697,9 @@ export async function runMini(input: MiniCommandInput) {
     message: input.prompt ? [input.prompt] : [],
     share: undefined,
     command: undefined,
+    workflow: undefined,
+    input: undefined,
+    summarize: undefined,
     continue: input.continue,
     session: input.session,
     fork: input.fork,

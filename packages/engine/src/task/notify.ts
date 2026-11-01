@@ -117,6 +117,8 @@ export interface Interface {
   /** Every note to this parent is recorded with noReply until the next human message. */
   readonly fence: (parentID: SessionID) => Effect.Effect<void>
   readonly unfence: (parentID: SessionID) => Effect.Effect<void>
+  /** Engine-only admission check for a currently delivering note; public part metadata cannot register one. */
+  readonly canReply: (parentID: SessionID, messageID: MessageID) => Effect.Effect<boolean>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@vector/TaskNotify") {}
@@ -220,8 +222,9 @@ function metadata(note: Note, quiet: boolean): Record<string, unknown> {
           taskNotification: {
             taskID: note.taskID,
             state: note.state,
+            ...(note.attempt === undefined ? {} : { attempt: note.attempt }),
             ...(note.recovered ? { recovered: true } : {}),
-            ...(note.quiet ? { quiet: true } : {}),
+            ...(note.quiet || quiet ? { quiet: true } : {}),
           },
         }
       : note.kind === "message"
@@ -273,6 +276,8 @@ const layer = Layer.effect(
     // Parents whose helpers the user stopped with them: nothing they report starts a turn until the user writes again.
     // Session IDs are unique across instances, so one set serves them all.
     const fenced = new Set<SessionID>()
+    // Revoking a delivery is permanent even if a later human message unfences the conversation.
+    const delivering = new Map<MessageID, { parentID: SessionID; revoked: boolean }>()
     // Delegated ceilings a note has already reported as nearly spent (5.B.6), by ledger and ceiling, so a raised
     // ceiling is reported again at its own warning level. The oldest are dropped past 256.
     const warned = new Set<string>()
@@ -488,7 +493,16 @@ const layer = Layer.effect(
               )
               return { info, parts }
             })
-          : lead.ops.prompt(prompt)
+          : Effect.acquireUseRelease(
+              Effect.sync(() => {
+                delivering.set(messageID, { parentID, revoked: silent || fenced.has(parentID) })
+              }),
+              () => lead.ops.prompt(prompt),
+              () =>
+                Effect.sync(() => {
+                  delivering.delete(messageID)
+                }),
+            )
       ).pipe(
         Effect.onError(() => SubagentLifecycle.releaseNotifications(sessions, database, parentID, messageID, claimed)),
         Effect.catchCause((cause) =>
@@ -720,10 +734,21 @@ const layer = Layer.effect(
       )
     })
 
-    const fence = (parentID: SessionID) => Effect.sync(() => void fenced.add(parentID))
+    const fence = (parentID: SessionID) =>
+      Effect.sync(() => {
+        fenced.add(parentID)
+        for (const pending of delivering.values()) if (pending.parentID === parentID) pending.revoked = true
+      })
+    const canReply: Interface["canReply"] = (parentID, messageID) =>
+      Effect.gen(function* () {
+        const pending = delivering.get(messageID)
+        if (!pending) return true
+        const halted = (yield* guard.snapshot(parentID))?.stopped !== undefined
+        return pending.parentID === parentID && !pending.revoked && !fenced.has(parentID) && !halted
+      })
     const unfence = (parentID: SessionID) => Effect.sync(() => void fenced.delete(parentID))
 
-    return Service.of({ enqueue, post, result, watch, fence, unfence })
+    return Service.of({ enqueue, post, result, watch, fence, unfence, canReply })
   }),
 )
 

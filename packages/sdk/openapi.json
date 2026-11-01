@@ -3885,6 +3885,505 @@
         ]
       }
     },
+    "/experimental/workflow/saved": {
+      "get": {
+        "tags": ["experimental"],
+        "operationId": "experimental.workflow.saved",
+        "parameters": [
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Workflow.SavedList",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowSavedList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "WorkflowApiError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/WorkflowApiError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ForbiddenError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "List trusted saved workflows",
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createVectorClient } from \"@vectordevai/sdk\"\n\nconst client = createVectorClient()\nawait client.experimental.workflow.saved({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/experimental/workflow/validate": {
+      "post": {
+        "tags": ["experimental"],
+        "operationId": "experimental.workflow.validate",
+        "parameters": [
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Workflow.Validation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowValidation"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "WorkflowApiError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/WorkflowApiError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ForbiddenError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Validate a workflow without starting it",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkflowValidateInput"
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createVectorClient } from \"@vectordevai/sdk\"\n\nconst client = createVectorClient()\nawait client.experimental.workflow.validate({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/experimental/session/{sessionID}/workflow": {
+      "post": {
+        "tags": ["experimental"],
+        "operationId": "experimental.workflow.start",
+        "parameters": [
+          {
+            "name": "sessionID",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "pattern": "^ses"
+            },
+            "required": true
+          },
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Workflow.Started",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowStarted"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "WorkflowApiError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/WorkflowApiError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ForbiddenError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Start an owner-approved workflow",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkflowStartInput"
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createVectorClient } from \"@vectordevai/sdk\"\n\nconst client = createVectorClient()\nawait client.experimental.workflow.start({\n  ...\n})"
+          }
+        ]
+      },
+      "get": {
+        "tags": ["experimental"],
+        "operationId": "experimental.workflow.list",
+        "parameters": [
+          {
+            "name": "sessionID",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "pattern": "^ses"
+            },
+            "required": true
+          },
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Workflow.RunList",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowRunList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "WorkflowApiError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/WorkflowApiError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ForbiddenError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "List workflow runs",
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createVectorClient } from \"@vectordevai/sdk\"\n\nconst client = createVectorClient()\nawait client.experimental.workflow.list({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/experimental/session/{sessionID}/workflow/{runID}": {
+      "get": {
+        "tags": ["experimental"],
+        "operationId": "experimental.workflow.get",
+        "parameters": [
+          {
+            "name": "sessionID",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "pattern": "^ses"
+            },
+            "required": true
+          },
+          {
+            "name": "runID",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "pattern": "^ses"
+            },
+            "required": true
+          },
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Workflow.RunDetail",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowRunDetail"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "WorkflowApiError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/WorkflowApiError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ForbiddenError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Get workflow progress and results",
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createVectorClient } from \"@vectordevai/sdk\"\n\nconst client = createVectorClient()\nawait client.experimental.workflow.get({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/experimental/session/{sessionID}/workflow/{runID}/resume": {
+      "post": {
+        "tags": ["experimental"],
+        "operationId": "experimental.workflow.resume",
+        "parameters": [
+          {
+            "name": "sessionID",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "pattern": "^ses"
+            },
+            "required": true
+          },
+          {
+            "name": "runID",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "pattern": "^ses"
+            },
+            "required": true
+          },
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Workflow.Started",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowStarted"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "WorkflowApiError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/WorkflowApiError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ForbiddenError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Resume an owner-approved workflow",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkflowResumeInput"
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createVectorClient } from \"@vectordevai/sdk\"\n\nconst client = createVectorClient()\nawait client.experimental.workflow.resume({\n  ...\n})"
+          }
+        ]
+      }
+    },
     "/experimental/resource": {
       "get": {
         "tags": ["experimental"],
@@ -36308,6 +36807,20 @@
         "required": ["code", "message"],
         "additionalProperties": false
       },
+      "WorkflowApiError": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "enum": ["invalid", "forbidden", "busy", "running", "limit", "not_found"]
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": ["code", "message"],
+        "additionalProperties": false
+      },
       "McpResource": {
         "type": "object",
         "properties": {
@@ -49414,6 +49927,374 @@
           }
         },
         "required": ["accepted"],
+        "additionalProperties": false
+      },
+      "WorkflowIssue": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": ["path", "message"],
+        "additionalProperties": false
+      },
+      "WorkflowSaved": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string",
+            "enum": ["repository", "user"]
+          },
+          "inputs": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "description": {
+                  "type": "string"
+                },
+                "required": {
+                  "type": "boolean"
+                },
+                "default": {}
+              },
+              "required": ["name", "required"],
+              "additionalProperties": false
+            }
+          },
+          "issues": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkflowIssue"
+            }
+          }
+        },
+        "required": ["name", "title", "source", "inputs"],
+        "additionalProperties": false
+      },
+      "WorkflowSavedList": {
+        "type": "object",
+        "properties": {
+          "workflows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkflowSaved"
+            }
+          }
+        },
+        "required": ["workflows"],
+        "additionalProperties": false
+      },
+      "WorkflowValidateInput": {
+        "type": "object",
+        "properties": {
+          "spec": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "inputs": {
+            "type": "object"
+          }
+        },
+        "additionalProperties": false
+      },
+      "WorkflowPlanStage": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "phase": {
+            "type": "string"
+          },
+          "agent": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "effort": {
+            "type": "string"
+          },
+          "isolation": {
+            "type": "string"
+          },
+          "items": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0
+              },
+              {
+                "type": "string",
+                "enum": ["dynamic"]
+              }
+            ]
+          },
+          "serial": {
+            "type": "boolean"
+          },
+          "writes": {
+            "type": "string"
+          },
+          "asks": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "verify": {
+            "type": "object",
+            "properties": {
+              "agent": {
+                "type": "string"
+              },
+              "maxRounds": {
+                "type": "integer",
+                "exclusiveMinimum": 0
+              }
+            },
+            "required": ["agent", "maxRounds"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["id", "title", "phase", "agent", "items", "serial", "writes", "asks"],
+        "additionalProperties": false
+      },
+      "WorkflowPlan": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "stages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkflowPlanStage"
+            }
+          },
+          "maxAgents": {
+            "type": "integer",
+            "exclusiveMinimum": 0
+          },
+          "concurrency": {
+            "type": "integer",
+            "exclusiveMinimum": 0
+          },
+          "usd": {
+            "type": "number"
+          },
+          "tokens": {
+            "type": "integer",
+            "exclusiveMinimum": 0
+          },
+          "steps": {
+            "type": "integer",
+            "exclusiveMinimum": 0
+          },
+          "perAgentSteps": {
+            "type": "integer",
+            "exclusiveMinimum": 0
+          },
+          "minutes": {
+            "type": "integer",
+            "exclusiveMinimum": 0
+          },
+          "saved": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "source": {
+                "type": "string",
+                "enum": ["repository", "user"]
+              }
+            },
+            "required": ["name", "source"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["title", "stages", "maxAgents", "concurrency", "steps", "perAgentSteps", "minutes"],
+        "additionalProperties": false
+      },
+      "WorkflowValidation": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "issues": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkflowIssue"
+            }
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkflowIssue"
+            }
+          },
+          "plan": {
+            "$ref": "#/components/schemas/WorkflowPlan"
+          }
+        },
+        "required": ["ok", "issues", "warnings"],
+        "additionalProperties": false
+      },
+      "WorkflowStartInput": {
+        "type": "object",
+        "properties": {
+          "spec": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "inputs": {
+            "type": "object"
+          },
+          "title": {
+            "type": "string"
+          },
+          "quiet": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "WorkflowStarted": {
+        "type": "object",
+        "properties": {
+          "runID": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "plan": {
+            "$ref": "#/components/schemas/WorkflowPlan"
+          }
+        },
+        "required": ["runID", "title", "plan"],
+        "additionalProperties": false
+      },
+      "WorkflowRunList": {
+        "type": "object",
+        "properties": {
+          "runs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TaskInfo"
+            }
+          }
+        },
+        "required": ["runs"],
+        "additionalProperties": false
+      },
+      "WorkflowNode": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "stage": {
+            "type": "string"
+          },
+          "phase": {
+            "type": "string"
+          },
+          "item": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "sessionID": {
+            "type": "string"
+          },
+          "round": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "verified": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "string",
+            "maxLength": 1024
+          },
+          "preview": {
+            "type": "string",
+            "maxLength": 2048
+          }
+        },
+        "required": ["key", "stage", "phase", "item", "status"],
+        "additionalProperties": false
+      },
+      "WorkflowRunDetail": {
+        "type": "object",
+        "properties": {
+          "task": {
+            "$ref": "#/components/schemas/TaskInfo"
+          },
+          "spec": {
+            "type": "string"
+          },
+          "nodes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkflowNode"
+            },
+            "maxItems": 500
+          },
+          "truncated": {
+            "type": "boolean"
+          },
+          "report": {
+            "type": "string",
+            "maxLength": 65536
+          },
+          "results": {}
+        },
+        "required": ["task", "nodes", "truncated"],
+        "additionalProperties": false
+      },
+      "WorkflowResumeInput": {
+        "type": "object",
+        "properties": {
+          "spec": {
+            "type": "string"
+          },
+          "inputs": {
+            "type": "object"
+          },
+          "retryFailed": {
+            "type": "boolean"
+          }
+        },
         "additionalProperties": false
       },
       "ProjectDirectories": {

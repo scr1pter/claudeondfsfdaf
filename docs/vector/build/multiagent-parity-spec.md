@@ -395,7 +395,8 @@ Info += { model?: Model, effort?: String, background?: Boolean, fork?: Boolean, 
 Info.controls += { resume?: Boolean, background?: Boolean, merge?: Boolean, discard?: Boolean }
 ListResult += { limits?: Limits, shells?: Array(Shell) }
 InspectResult += { messages?: Array(Message) /* ≤50 */, structured?: Struct({ json: String /* ≤8 KiB pretty */, valid: Boolean, truncated: Boolean }) }
-WaitResult += { attention?: Array(String) }
+WaitResult += { attention?: Array(String), shells?: Array(Shell) /* WP33, explicit shell-ID requests only */ }
+StopResult += { shells?: Array(Shell) /* WP33, explicit shell-ID requests only */ }
 export const SessionStopResult = Struct({ aborted: Boolean, tasks: Array(Info), shells: Finite, excluded: Finite, skipped: Finite })
 export const ResumeResult = Struct({ tasks: Array(Info) })
 export const PromoteResult = Struct({ tasks: Array(Info) })
@@ -462,7 +463,7 @@ workflow?: { role: "run"; title: string; revision: number; quiet?: boolean; prog
 
 | Metadata | Written for | Wakes? |
 |---|---|---|
-| `taskNotification: {taskID, state, recovered?, quiet?}` | a child's result. The shape is unchanged, plus optional keys. The CLI run loop and taint read it. | yes, unless the state is cancelled, the note is quiet, or the parent is fenced or halted |
+| `taskNotification: {taskID, state, attempt?, recovered?, quiet?}` | a child's result. The shape is unchanged, plus optional keys. The CLI run loop and taint read it. | yes, unless the state is cancelled, the note is quiet, or the parent is fenced or halted |
 | `taskMessage: {taskID}` | `task_manage report` | only with `wake` |
 | `taskAttention: {taskID, kind, state}` | waiting, answered or expired | never |
 | `taskInterrupted: {taskIDs}` | the recovery note | never |
@@ -518,6 +519,7 @@ export interface Interface {
     onSettled?: (o: SubagentLifecycle.Outcome, hold?: BrainSchema.Hold) => Effect<void> }): Effect<void>
   fence(parentID: SessionID): Effect<void>      // every note is noReply until the next human message
   unfence(parentID: SessionID): Effect<void>    // SessionPrompt.prompt on a non-synthetic user part
+  canReply(parentID: SessionID, messageID: MessageID): Effect<boolean> // engine-only in-flight delivery admission
 }
 // note-window.ts (pure)
 export const QUIET = 1_500, HOLD = 5_000      // RuntimeFlags.noteQuietMs / noteHoldMs override them (tests use ms)
@@ -879,7 +881,7 @@ A multi-entry foreground batch that would need to wait is refused: "This batch w
 - the parent is halted (`guard.snapshot(parent)?.stopped`, today's rule);
 - no note in the batch wakes (table 4.6).
 
-Every `noReply` part carries `taskQuiet: true`. A workflow run started with `quiet` sends its result note quiet. A batch is `noReply` only when **every** note in it is quiet, cancelled or non-waking.
+Every `noReply` part carries `taskQuiet: true`. A workflow run started with `quiet` sends its result note quiet. A batch is `noReply` only when **every** note in it is quiet, cancelled or non-waking. Result metadata also carries the trusted attempt and effective quiet flag. A note already persisted but not yet admitted to the model runner rechecks its trusted delivery registration inside that runner. Stop permanently revokes that particular pending delivery, even if a later human message unfences the conversation; a late suppression persists both quiet markers. No public metadata can create delivery authority, and completed deliveries release their registration.
 
 **C.3 Note text.**
 - **Result notes** keep the 3 KB / 60-line cap, with the full text saved at `resultRef`.
@@ -1363,9 +1365,13 @@ The run ends `error` with partial results when a limit stopped it. `subagent-lif
 - **Prompt guard.** `session/prompt-source.ts` adds `"{workflow,workflows}/*.json"` to `CONFIG.ask` and `CONFIG.load`, so edits ask `prompt_source` and outside changes are held.
 
 **G.8 Owner start** (route 9, `vector run --workflow`).
-- The parent must be idle and not reverted. The check runs **inside** the run lock that `SessionPrompt.prompt` uses, and refuses `busy` from inside it.
+
+- The parent must be idle and not reverted. The check runs **inside** the run lock that `SessionPrompt.prompt` uses, and refuses `busy` from inside it. The shared runner still completes with an actual transcript `WithParts`, not the HTTP response. A concurrent human prompt gets its own ordinary model turn after either a successful handoff or a rejected owner start; cancellation still stops joiners. Internal owner-handoff metadata stays in tool state metadata so it cannot become provider options.
 - It writes a synthetic owner user message ("Run workflow <title> with <inputs>", marked as typed by the owner, as commands do) **before** the assistant message and the `workflow` tool part, so the history stays well-formed.
 - The desktop and TUI start forms call `validate` first and show the plan above Run. `vector run --workflow` prints the plan to stderr before starting.
+- Global validation has no session ID in its approved wire shape. It uses a read-only default-agent/default-model context and creates no session or message. Start revalidates under the default caller and actual conversation model/permissions inside the lock. A saved free choice stays free. Codium Auto stays a dynamic selection in preview, with an explicit warning; each actual child resolves Auto from its own request before inference. Owner start does not change the conversation's selected agent/model.
+- Resume preview and execution use the same merged saved inputs and replacement rules; unchanged stored source retains saved-file bounds. A missing HTTP resume body is equivalent to `{}` because the generated SDK omits an empty payload. The optional owner-only detail spec may be absent while a queued coordinator has not written it yet; resume still requires valid saved source.
+- `vector run --workflow` accepts the existing session/continue/fork/title/local/share options. Prompt-only message/file/command/research/interactive, model/agent/variant/size/judge and command-line budget overrides are refused rather than ignored: model selection belongs to the conversation, and workflow limits belong to the spec. `--input` values are bounded JSON-or-string entries; `--summarize` opts into the final summary turn. Offline file validation skips account and engine transport; saved-name validation needs an attached engine to resolve trust/configuration.
 - The run is quiet by default. Its note is `noReply`, unless `--summarize` or `quiet: false`.
 
 **G.9 Config and permission.**

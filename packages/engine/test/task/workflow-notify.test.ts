@@ -140,7 +140,7 @@ it.instance(
           synthetic: true,
           metadata: expect.objectContaining({
             [SessionTaskSize.QUIET]: true,
-            taskNotification: { taskID: worker.id, state: "completed", quiet: true },
+            taskNotification: { taskID: worker.id, state: "completed", attempt: 1, quiet: true },
           }),
         }),
       )

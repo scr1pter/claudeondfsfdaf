@@ -10,6 +10,7 @@ import { WorkflowSpec } from "@vectordevai/core/orchestration/spec"
 import { SpendGuard } from "@vectordevai/core/spend-guard"
 import { PermissionPolicy } from "@vectordevai/schema/permission-policy"
 import { Workflow } from "@vectordevai/schema/workflow"
+import type { SessionV1 } from "@vectordevai/core/v1/session"
 import { Agent } from "@/agent/agent"
 import { SubagentModel } from "@/agent/subagent-model"
 import { Config } from "@/config/config"
@@ -18,6 +19,7 @@ import { RuntimeFlags } from "@/effect/runtime-flags"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { Permission } from "@/permission"
 import { Provider } from "@/provider/provider"
+import { SessionCodiumAuto } from "@/session/codium-auto"
 import { SessionMemory } from "@/session/memory"
 import { Session } from "@/session/session"
 import { MessageID, PartID, SessionID } from "@/session/schema"
@@ -45,7 +47,18 @@ export type Input = {
   readonly quiet?: boolean
 }
 export type Call = { readonly ctx: Tool.Context; readonly input: Input }
+/** Trusted engine planning context; global owner validation never creates a Session or transcript. */
+export type PlanContext = {
+  readonly agent: string
+  readonly permission?: Session.Info["permission"]
+  readonly model: Pick<SessionV1.Assistant, "providerID" | "modelID" | "variant">
+  readonly guest?: boolean
+  readonly effort?: unknown
+  readonly passdown?: unknown
+}
 export interface Interface {
+  readonly preview: (input: Input, context: PlanContext, stored?: boolean) => Effect.Effect<Workflow.Validation, Error>
+  readonly resolve: (sessionID: SessionID, input: Input) => Effect.Effect<{ input: Input; stored: boolean }, Error>
   readonly validate: (call: Call) => Effect.Effect<Workflow.Validation, Error>
   readonly launch: (
     call: Call & { readonly task: () => Effect.Effect<Tool.InferDef<typeof TaskTool>> },
@@ -56,8 +69,6 @@ export class Error extends Schema.TaggedErrorClass<Error>()("WorkflowRuns.Error"
   code: Schema.Literals(["invalid", "forbidden", "running", "limit", "not_found"]),
   message: Schema.String,
 }) {}
-
-const SPEC = "vector.workflow.spec"
 
 const layer = Layer.effect(
   Service,
@@ -77,28 +88,25 @@ const layer = Layer.effect(
     const fs = yield* FileSystem.FileSystem
     const locks = yield* InstanceState.make(() => Effect.succeed(new Map<SessionID, Semaphore.Semaphore>()))
 
-    const prepare = Effect.fn("WorkflowRuns.prepare")(
-      function* (call: Call, stored = false) {
-        const parent = yield* sessions.get(call.ctx.sessionID)
+    const plan = Effect.fn("WorkflowRuns.plan")(
+      function* (input: Input, context: PlanContext, sourceKind: "model" | "owner", stored = false) {
         const cfg = yield* config.get()
-        const caller = yield* agents.get(call.ctx.agent)
+        const caller = yield* agents.get(context.agent)
         const catalog = yield* agents.list()
         const entries = yield* library.list()
         const saved = Object.fromEntries(entries.filter((entry) => entry.spec).map((entry) => [entry.name, entry.spec]))
-        const named =
-          call.input.name === undefined ? undefined : yield* WorkflowLibrary.select(entries, call.input.name)
-        if (call.input.name !== undefined && (!named?.spec || call.input.spec !== undefined))
+        const named = input.name === undefined ? undefined : yield* WorkflowLibrary.select(entries, input.name)
+        if (input.name !== undefined && (!named?.spec || input.spec !== undefined))
           return yield* new Error({
             code: "invalid",
             message:
               named?.issues?.map((issue) => issue.message).join(" ") || "Use one valid saved workflow name or spec.",
           })
-        const source =
-          named || stored ? "saved" : call.ctx.extra?.[WorkflowMarkers.USER_START] === true ? "owner" : "model"
-        const value = named?.spec ?? call.input.spec
+        const source = named || stored ? "saved" : sourceKind
+        const value = named?.spec ?? input.spec
         const parsed = WorkflowSpec.parse(value, { source })
         const planAgents: WorkflowPlan.Agent[] = catalog.map((item) => {
-          const permission = Permission.merge(item.permission, parent.permission ?? [])
+          const permission = Permission.merge(item.permission, context.permission ?? [])
           const actions = (tool: string) =>
             ["*", ...permission.filter((rule) => rule.permission === tool).map((rule) => rule.pattern)].map(
               (pattern) => Permission.evaluate(tool, pattern, permission).action,
@@ -107,7 +115,7 @@ const layer = Layer.effect(
             name: item.name,
             allowed:
               Permission.evaluate("task", item.name, caller?.permission ?? []).action !== "deny" &&
-              Permission.evaluate("task", item.name, caller?.permission ?? [], parent.permission ?? []).action !==
+              Permission.evaluate("task", item.name, caller?.permission ?? [], context.permission ?? []).action !==
                 "deny",
             primary: item.mode === "primary",
             hidden: item.native === true && item.hidden === true,
@@ -122,7 +130,7 @@ const layer = Layer.effect(
         })
         const built = WorkflowPlan.build(value, {
           agents: planAgents,
-          inputs: call.input.inputs,
+          inputs: input.inputs,
           saved,
           limits: cfg.budget?.workflow,
           cpus: os.availableParallelism(),
@@ -130,15 +138,9 @@ const layer = Layer.effect(
           // Structural planning is pure; selected models/effort are checked with the real provider below.
           modelAllowed: () => true,
         })
-        if (!built.ok || !parsed.ok) return { built, agents: planAgents, spec: undefined, parent }
-        const message = yield* sessions.findMessage(parent.id, (message) => message.info.id === call.ctx.messageID)
-        if (Option.isNone(message) || message.value.info.role !== "assistant")
-          return yield* new Error({
-            code: "invalid",
-            message: "Workflow validation requires the calling assistant's model.",
-          })
-        const model = message.value.info
-        const guest = yield* guests.marked(parent.id)
+        if (!built.ok || !parsed.ok) return { built, agents: planAgents, spec: undefined }
+        const model = context.model
+        const guest = context.guest === true
         const issues = [...built.issues]
         const models: Record<
           string,
@@ -175,15 +177,11 @@ const layer = Layer.effect(
                 free: isFreeModelRef({ providerID: model.providerID, modelID: model.modelID }),
                 learnedSmall: false,
                 guest,
-                ...(call.ctx.extra?.effort === "off" ||
-                call.ctx.extra?.effort === "default" ||
-                call.ctx.extra?.effort === "high"
-                  ? { sized: call.ctx.extra.effort }
+                ...(context.effort === "off" || context.effort === "default" || context.effort === "high"
+                  ? { sized: context.effort }
                   : {}),
-                ...(call.ctx.extra?.passdown === "off" ||
-                call.ctx.extra?.passdown === "default" ||
-                call.ctx.extra?.passdown === "high"
-                  ? { passdown: call.ctx.extra.passdown }
+                ...(context.passdown === "off" || context.passdown === "default" || context.passdown === "high"
+                  ? { passdown: context.passdown }
                   : {}),
               },
               next,
@@ -211,11 +209,26 @@ const layer = Layer.effect(
           ...(named ? { saved: { name: named.name, source: named.source } } : {}),
         }
         return {
-          built: { ...built, ok: issues.length === 0, issues, plan },
+          built: {
+            ...built,
+            ok: issues.length === 0,
+            issues,
+            plan,
+            warnings: [
+              ...built.warnings,
+              ...(SessionCodiumAuto.isAuto(context.model)
+                ? [
+                    {
+                      path: "/defaults/model",
+                      message:
+                        "Codium Auto stays selected. Children that inherit Auto resolve their concrete Codium model from their own request size and context before inference; this preview shows the dynamic selection.",
+                    },
+                  ]
+                : []),
+            ],
+          },
           agents: planAgents,
           spec: parsed.spec,
-          parent,
-          model,
           models,
         }
       },
@@ -223,6 +236,91 @@ const layer = Layer.effect(
         cause instanceof Error ? cause : new Error({ code: "invalid", message: cause.message }),
       ),
     )
+
+    const prepare = Effect.fn("WorkflowRuns.prepare")(
+      function* (call: Call, stored = false) {
+        const parent = yield* sessions.get(call.ctx.sessionID)
+        const message = yield* sessions.findMessage(parent.id, (message) => message.info.id === call.ctx.messageID)
+        if (Option.isNone(message) || message.value.info.role !== "assistant")
+          return yield* new Error({
+            code: "invalid",
+            message: "Workflow validation requires the calling assistant's model.",
+          })
+        const model = message.value.info
+        const prepared = yield* plan(
+          call.input,
+          {
+            agent: call.ctx.agent,
+            permission: parent.permission,
+            model,
+            guest: yield* guests.marked(parent.id),
+            effort: call.ctx.extra?.effort,
+            passdown: call.ctx.extra?.passdown,
+          },
+          call.ctx.extra?.[WorkflowMarkers.USER_START] === true ? "owner" : "model",
+          stored,
+        )
+        return { ...prepared, parent, model }
+      },
+      Effect.mapError((cause) =>
+        cause instanceof Error ? cause : new Error({ code: "invalid", message: cause.message }),
+      ),
+    )
+
+    const resolve: Interface["resolve"] = Effect.fn("WorkflowRuns.resolve")(
+      function* (sessionID, original) {
+        if (original.runID) {
+          const prior = yield* sessions.get(SessionID.make(original.runID))
+          if (prior.parentID !== sessionID || SubagentLifecycle.read(prior)?.workflow?.role !== "run")
+            return yield* new Error({
+              code: "not_found",
+              message: "That workflow does not belong to this conversation.",
+            })
+        }
+        const saved = original.runID
+          ? yield* sessions.findMessage(
+              SessionID.make(original.runID!),
+              (message) =>
+                message.info.role === "user" &&
+                message.parts.some((part) => part.type === "text" && part.metadata?.[WorkflowMarkers.SPEC] === true),
+            )
+          : Option.none()
+        const text = Option.isSome(saved)
+          ? saved.value.parts.find((part) => part.type === "text" && part.metadata?.[WorkflowMarkers.SPEC] === true)
+          : undefined
+        const old =
+          text?.type === "text" ? Schema.decodeUnknownOption(Schema.UnknownFromJsonString)(text.text) : Option.none()
+        const oldInput = Option.isSome(old)
+          ? Schema.decodeUnknownOption(
+              Schema.Struct({
+                spec: Schema.String,
+                inputs: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
+              }),
+            )(old.value)
+          : Option.none()
+        if (original.runID && original.spec === undefined && original.name === undefined && Option.isNone(oldInput))
+          return yield* new Error({ code: "invalid", message: "The saved workflow spec is missing or invalid." })
+        const input = { ...(Option.isSome(oldInput) ? oldInput.value : {}), ...original }
+        if (original.name !== undefined) delete input.spec
+        return {
+          input,
+          stored: original.runID !== undefined && original.spec === undefined && original.name === undefined,
+        }
+      },
+      Effect.mapError((cause) =>
+        cause instanceof Error ? cause : new Error({ code: "invalid", message: cause.message }),
+      ),
+    )
+
+    const preview: Interface["preview"] = Effect.fn("WorkflowRuns.preview")(function* (input, context, stored = false) {
+      const result = yield* plan(input, context, "owner", stored)
+      return {
+        ok: result.built.ok,
+        issues: result.built.issues,
+        warnings: result.built.warnings,
+        ...(result.built.plan ? { plan: result.built.plan } : {}),
+      }
+    })
 
     const validate: Interface["validate"] = Effect.fn("WorkflowRuns.validate")(function* (call) {
       const result = yield* prepare(call)
@@ -277,35 +375,8 @@ const layer = Layer.effect(
             )
           )
             return yield* new Error({ code: "running", message: "This workflow is already running." })
-          const stored = prior
-            ? yield* sessions.findMessage(
-                prior.id,
-                (message) =>
-                  message.info.role === "user" &&
-                  message.parts.some((part) => part.type === "text" && part.metadata?.[SPEC] === true),
-              )
-            : Option.none()
-          const text = Option.isSome(stored)
-            ? stored.value.parts.find((part) => part.type === "text" && part.metadata?.[SPEC] === true)
-            : undefined
-          const old =
-            text?.type === "text" ? Schema.decodeUnknownOption(Schema.UnknownFromJsonString)(text.text) : Option.none()
-          const oldInput = Option.isSome(old)
-            ? Schema.decodeUnknownOption(
-                Schema.Struct({
-                  spec: Schema.String,
-                  inputs: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
-                }),
-              )(old.value)
-            : Option.none()
-          if (prior && call.input.spec === undefined && call.input.name === undefined && Option.isNone(oldInput))
-            return yield* new Error({ code: "invalid", message: "The saved workflow spec is missing or invalid." })
-          const input = { ...(Option.isSome(oldInput) ? oldInput.value : {}), ...call.input }
-          if (call.input.name !== undefined) delete input.spec
-          const prepared = yield* prepare(
-            { ...call, input },
-            prior !== undefined && call.input.spec === undefined && call.input.name === undefined,
-          )
+          const { input, stored } = yield* resolve(parent.id, call.input)
+          const prepared = yield* prepare({ ...call, input }, stored)
           if (!prepared.built.ok || !prepared.built.plan || !prepared.built.limits || !prepared.spec || !prepared.model)
             return yield* new Error({
               code: "invalid",
@@ -352,10 +423,7 @@ const layer = Layer.effect(
               message:
                 "A guest joined while the workflow was being approved. Workflows are unavailable in guest conversations.",
             })
-          const current = yield* prepare(
-            { ...call, input },
-            prior !== undefined && call.input.spec === undefined && call.input.name === undefined,
-          )
+          const current = yield* prepare({ ...call, input }, stored)
           if (
             !current.built.ok ||
             WorkflowPlan.canonical(current.parent.permission ?? []) !==
@@ -416,7 +484,7 @@ const layer = Layer.effect(
                   type: "text",
                   synthetic: true,
                   text: JSON.stringify({ spec: JSON.stringify(spec), inputs: input.inputs ?? {} }),
-                  metadata: { [SPEC]: true },
+                  metadata: { [WorkflowMarkers.SPEC]: true },
                 })
                 const result = yield* WorkflowRunner.run({
                   runID: prompt.sessionID,
@@ -504,7 +572,7 @@ const layer = Layer.effect(
         cause instanceof Error ? cause : new Error({ code: "invalid", message: cause.message }),
       ),
     )
-    return Service.of({ validate, launch })
+    return Service.of({ preview, resolve, validate, launch })
   }),
 )
 
