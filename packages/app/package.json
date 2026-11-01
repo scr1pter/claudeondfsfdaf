@@ -24,7 +24,7 @@
     "build": "vite build",
     "serve": "vite preview",
     "test": "bun run test:unit && bun run test:browser",
-    "test:unit": "bun test --isolate --only-failures --preload ./happydom.ts ./src",
+    "test:unit": "node --test ./scripts/test-unit.test.mjs && node ./scripts/test-unit.mjs",
     "test:browser": "bun test --isolate --conditions=browser --preload ./happydom.ts ./test-browser",
     "test:unit:watch": "bun test --isolate --watch --preload ./happydom.ts ./src",
     "test:e2e": "playwright test",
