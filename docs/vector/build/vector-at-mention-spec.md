@@ -1083,8 +1083,9 @@ buildAgentsWorkflow(opts: AgentsWorkflowOptions): string       // throws on an i
 readWorkflowOptions(yaml: string): AgentsWorkflowOptions | undefined   // parses the header line
 ```
 
+- V14 provisionally reserves `MIN_AGENTS_CLI = "1.99.113"` for the unpublished CLI carrying V15–V22. This is changeable before release; it does not assert npm availability or raise the desktop pin.
 - `provider` and `model` match `^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,199}$`; anything else throws.
-- Every user string written into the file (schedule prompts, the header) is JSON with each `$` written as `$`, so Actions never evaluates `${{` inside it and `JSON.parse` restores it (INV-S15).
+- Every user string written into the file (schedule prompts, the header) is JSON with each `$` written as the literal JSON escape `\u0024`, so Actions never evaluates `${{` inside it and `JSON.parse` restores it (INV-S15).
 - Line 1 of every generated file is `# vector-workflow: <JSON of the options, minus secrets>`. The desktop and CLI read it to re-render, add the handle, update the version or edit schedules (amendment 15).
 
 ### 2.11.2 Triggers and inputs
