@@ -698,7 +698,7 @@ type SuspendReason = "transferred" | "deleted" | "binder-left"
 type RepoBinding = { repositoryId: string; ownerId: string; repository: string; account: string
   visibility: "public" | "private" | "internal"   // from the bind token's repository_visibility; "private" when absent
   defaultRef: string                              // "refs/heads/<default branch>", verified at bind (INV-S11)
-  generation: number; binder: { githubId: string; login: string }
+  generation: number; binder: { githubId: string; login: string }; installationId?: string // verified App installation at bind
   workflowVersion: string; boundAt: number; lastUsedAt?: number   // times in ms
   suspended?: SuspendReason }
 type BindIdentity = Pick<GithubIdentity, "repository" | "repositoryId" | "ownerId" | "actor" | "actorId" | "ref">
@@ -706,7 +706,7 @@ type BindIdentity = Pick<GithubIdentity, "repository" | "repositoryId" | "ownerI
 type RedeemInput = { code: string
   account: string                                 // the code's account, as peekBindCode returned it
   current?: string                                // the account bound when the caller applied O6; absent when unbound
-  identity: BindIdentity; workflowVersion: string
+  identity: BindIdentity; workflowVersion: string; installationId?: string // only verifyBind may supply this
   takeover: { adminVerified: boolean; allowanceInactive: boolean }; now: number }
 // Every function below except takeoverAllowed and the key builders takes a trailing `store = persistentStore`.
 createBindCode(input: { account: string; repository: string; repositoryId?: string; githubUserId?: string
@@ -745,7 +745,7 @@ bindingKey(repositoryId: string): string; generationKey(repositoryId: string): s
 **Binder-left outlives the binding.** The script that records `binder-left` also adds the repository id to the binding account's `binder-left:<account>` set (2.7). An unbind or a takeover deletes the binding, while the account's run records stay (2.18), so the set, not the binding, is what keeps them hidden (2.16). The member is the account's fact, so a `binder-left` decided against a binding that has since gone (the counter passed its generation) or been replaced by another account's later binding still adds it, and the set ends the same whichever script lands first; only a later binding of the same account skips it. A later bind of the repository by the same account removes its member, because that binding's binder has write access again; nothing else does, except the account's erasure.
 
 **Tickets** (`startCloudRun`):
-- `startCloudRun(trigger, deps = {})` accepts injectable `store`, `entitlement`, `app`, `now` and `fetcher`. It is an internal library, never a public route. `peekRunTicket(ticket, identity, binding, deps = {})` returns a validated ticket plus its hashed key, or `undefined` for missing/expired/mismatched credentials; store corruption and outages fail closed. Its deps are `store`, `app` and `now`.
+- `startCloudRun(trigger, deps = {})` accepts injectable `store`, `entitlement`, `app`, `now` and `fetcher`. It is an internal library, never a public route. `peekRunTicket(ticket, identity, binding, deps = {})` returns a validated ticket plus its hashed key, or `undefined` for missing/expired/mismatched credentials; store corruption and outages fail closed. Its deps are `store`, `app` and `now`. Bindings without a stored verified `installationId` require an App-backed rebind before server dispatch; no installation enumeration or inferred by-id lookup is permitted.
 - Issuing a ticket checks account revocation and the current unsuspended binding account/generation in the same EVAL as `SET NX EX 900`. Neither prompts nor requester identity are stored in the ticket. Dispatch failure deletes an unconsumed ticket; a lost dispatch response cannot prove that GitHub did not start a job, so `dispatch-failed` is not a no-side-effect guarantee. Any already-started job must still pass mint admission.
 - Format: `vtk_` plus 32 random bytes.
 - The server stores `sha256(ticket)` with `{repositoryId, account, generation, source, purpose, exp}`, for 900 s.
@@ -761,7 +761,7 @@ startCloudRun(trigger: RunTrigger, deps?): Promise<{ ok: true; dispatchedAt: num
     | CloudAgentAllowance["reason"] | "dispatch-failed" }>
 ```
 
-`startCloudRun` dispatches through an App installation token requested with exactly `{actions: "write", metadata: "read"}` (GitHub always adds `metadata: read`, and the existing `mint()` helper compares the full set) and revoked after use. The repository identity it needs comes from `GET /repositories/{id}` with the App JWT, so a rename before A47's webhook still resolves. The dispatch targets `.github/workflows/vector.yml` on the binding's default ref, with inputs `{mode: "task", prompt, ticket}`. Runs it starts always publish with `GITHUB_TOKEN` (INV-S18): their prompts carry third-party data.
+`startCloudRun` dispatches through an App installation token requested with exactly `{actions: "write", metadata: "read"}` (GitHub always adds `metadata: read`, and the existing `mint()` helper compares the full set) and revoked after use. The binding supplies an optional server-verified `installationId`, saved only from an installed `verifyBind` result. Dispatch uses the documented JWT `GET /app/installations/{installationId}`, checking the configured App and stored owner, then mints a token restricted to `repository_ids: [binding.repositoryId]`. `GET /installation/repositories` with that token must show exactly one repository with the bound id and owner and a valid current full name before constructing the dispatch URL. Thus a rename resolves without broad enumeration, while a transfer cannot receive the previous binder's prompt. Missing legacy installation identity refuses with `app-required` until App-backed rebind; a no-App rebind clears it. The public binding/run projections never return this internal id. The dispatch targets `.github/workflows/vector.yml` on the binding's default ref, with inputs `{mode: "task", prompt, ticket}`. Runs it starts always publish with `GITHUB_TOKEN` (INV-S18): their prompts carry third-party data.
 
 ## 2.6 Hours, slots and the ledger: `api/_lib/cloud-agents-ledger.ts` (amendments 5, 10)
 
@@ -855,7 +855,7 @@ It is typed locally and structurally against Codium's `GatewayHook` (`api/_lib/m
 | `runs:<account>` | ZSET | `rid` by start time, trimmed to 200 | 90 days, refreshed |
 
 The binding keys hold strings only; ids are decimal and times are milliseconds.
-- `binding:<repositoryId>` fields: `repositoryId`, `ownerId`, `repository`, `account`, `visibility`, `defaultRef`, `generation`, `binderGithubId`, `binderLogin`, `workflowVersion`, `boundAt`, and optionally `lastUsedAt` and `suspended`. No other field is ever written; a reader answers 503 for an unknown, missing or malformed one.
+- `binding:<repositoryId>` fields: `repositoryId`, `ownerId`, `repository`, `account`, `visibility`, `defaultRef`, `generation`, `binderGithubId`, `binderLogin`, `workflowVersion`, `boundAt`, and optionally `lastUsedAt`, `suspended` and server-verified `installationId`. No other field is ever written; a reader answers 503 for an unknown, missing or malformed one.
 - `bind-code:<sha256>` JSON: `{account, repository, repositoryId?, githubUserId?, defaultRef?, exp}`, with ids as strings and `exp` in ms. The code itself is never stored.
 - While a binding exists, its `generation` field equals `GET gen:<repositoryId>`.
 
@@ -1646,7 +1646,7 @@ Each package lists its files, changes, tests, done-criteria and the checks that 
 
 ### V13. `startCloudRun` and one-time tickets
 - **Files:** `api/_lib/cloud-agents-start.ts` (new); `api/_lib/github-app.ts` (`dispatch(repositoryId, inputs)`); `api/_lib/cloud-agents-api.ts` (the mint peeks tickets and passes their key to `reserveRun`); `packages/web/test/cloud-agents-start.test.ts` (new); `github-app-fixture.ts` (installation tokens answer GitHub's real permission set, `metadata: read` included).
-- **Changes:** 2.5 tickets, the claims mapping and `startCloudRun`. This is a library only, with no public route; Codium's ops (A48, A50) call it on a user tap. `dispatch` requests exactly `{actions: "write", metadata: "read"}`, builds the identity from `GET /repositories/{id}` with the App JWT, and revokes the token in `finally`.
+- **Changes:** 2.5 tickets, the claims mapping and `startCloudRun`. This is a library only, with no public route; Codium's ops (A48, A50) call it on a user tap. `dispatch` requests exactly `{actions: "write", metadata: "read"}`, verifies the persisted installation with the App JWT and resolves current repository identity through the repository-scoped installation token, and revokes the token in `finally`.
 - **Tests:**
   - not bound, not the binder, no App, reserved source, `scheduled` purpose (`purpose-unavailable`), each allowance reason;
   - the dispatch body holds exactly `{ref, inputs: {mode, prompt, ticket}}`;
