@@ -3,6 +3,8 @@ interface ImportMetaEnv {
   readonly VECTOR_REQUIRED_CLI_VERSION: string
 }
 
+declare const VECTOR_COMPUTER_RESET_VERIFIED: boolean
+
 interface ImportMeta {
   readonly env: ImportMetaEnv
 }

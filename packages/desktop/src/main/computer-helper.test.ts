@@ -124,6 +124,8 @@ function supervisor(
     fake?: FakeOptions
     changeHello?: (value: Record<string, unknown>) => unknown
     check?: (executable: string) => Promise<void>
+    signingIdentity?: () => Promise<{ code: number | null; stdout: string }>
+    configure?: (connection: ReturnType<typeof fakeChannel>, index: number) => void
   } = {},
 ) {
   const time = manualClock(1000)
@@ -136,6 +138,7 @@ function supervisor(
     packaged: true,
     appPath: path.join(path.sep, "Applications", "Vector Beta.app"),
     clock: time,
+    signingIdentity: input.signingIdentity,
     check: async (executable) => {
       checked.push(executable)
       await input.check?.(executable)
@@ -143,6 +146,7 @@ function supervisor(
     spawn(executable, args, platform) {
       spawns.push({ executable, args, platform })
       const connection = fakeChannel(input.fake, time, input.changeHello)
+      input.configure?.(connection, connections.length)
       connections.push(connection)
       return connection.channel
     },
@@ -421,6 +425,282 @@ describe("helper supervisor", () => {
     await expect(fixture.helper.start()).rejects.toMatchObject({ code: "unavailable", reason: "helper_missing" })
     await fixture.helper.resume()
     expect(fixture.spawns).toHaveLength(2)
+  })
+
+  test("permission refresh shares one restart and one exit, reruns preflight and leaves a sessionless helper", async () => {
+    const fixture = supervisor()
+    await fixture.helper.start()
+    const events: Computer.HelperEvent[] = []
+    fixture.helper.onEvent((event) => events.push(event))
+    const first = fixture.helper.refreshPermissions()
+    expect(fixture.helper.refreshPermissions()).toBe(first)
+    expect(events).toEqual([{ event: "exit" }])
+    await expect(first).resolves.toMatchObject({ responsible: true })
+    expect(fixture.spawns).toHaveLength(2)
+    expect(fixture.checked).toHaveLength(2)
+    expect(fixture.connections[0]!.state).toMatchObject({ ends: 1, kills: 1 })
+    expect(events).toEqual([{ event: "exit" }])
+    expect(fixture.connections[1]!.requests.map((request) => request.op)).toEqual(["hello"])
+    await expect(fixture.helper.request("permissions.status")).resolves.toMatchObject({ screen: "granted" })
+  })
+
+  test("an active permission refresh keeps the Resume latch while permitting only permission operations", async () => {
+    const fixture = supervisor()
+    await fixture.helper.start()
+    fixture.helper.setRunActive(true)
+    await fixture.helper.refreshPermissions()
+    for (const op of ["hello", "session.begin", "input.key", "capture"] as const)
+      await expect(fixture.helper.request(op)).rejects.toMatchObject({ reason: "helper_missing" })
+    await expect(fixture.helper.start()).rejects.toMatchObject({ reason: "helper_missing" })
+    for (const op of ["permissions.status", "permissions.request", "permissions.reset"] as const)
+      await expect(
+        fixture.helper.request(op, op === "permissions.status" ? {} : { service: "screen" }),
+      ).resolves.toMatchObject({
+        screen: "granted",
+      })
+    fixture.helper.setRunActive(false)
+    await expect(fixture.helper.start()).rejects.toMatchObject({ reason: "helper_missing" })
+    expect(fixture.connections[1]!.requests.map((request) => request.op)).toEqual([
+      "hello",
+      "permissions.status",
+      "permissions.request",
+      "permissions.reset",
+    ])
+    await fixture.helper.resume()
+    await expect(fixture.helper.start()).resolves.toMatchObject({ responsible: true })
+    expect(fixture.spawns).toHaveLength(2)
+  })
+
+  test("a permission helper exit cannot clear an earlier active Resume latch after the holder ends", async () => {
+    const fixture = supervisor()
+    await fixture.helper.start()
+    fixture.helper.setRunActive(true)
+    await fixture.helper.refreshPermissions()
+    fixture.helper.setRunActive(false)
+    fixture.connections[1]!.crash(17)
+    fixture.time.advance(1000)
+    await flush()
+    await expect(fixture.helper.start()).rejects.toMatchObject({ reason: "helper_missing" })
+    expect(fixture.spawns).toHaveLength(2)
+    await fixture.helper.resume()
+    expect(fixture.spawns).toHaveLength(3)
+  })
+
+  test("a request admitted before refresh cannot send through the replacement channel", async () => {
+    const fixture = supervisor()
+    await fixture.helper.start()
+    const old = fixture.helper
+      .request("input.key", { pid: 100, combo: ["ArrowLeft"], repeat: 1 })
+      .catch((error) => error)
+    const refreshed = fixture.helper.refreshPermissions()
+    expect(await old).toMatchObject({ code: "stopped" })
+    await refreshed
+    expect(
+      fixture.connections.flatMap((connection) => connection.requests).some((request) => request.op === "input.key"),
+    ).toBe(false)
+  })
+
+  test("a delayed old preflight cannot replace permission startup or clear its shared promise", async () => {
+    const check = Promise.withResolvers<void>()
+    const state = { checks: 0 }
+    const fixture = supervisor({
+      check: async () => {
+        if (++state.checks === 1) await check.promise
+      },
+      configure: (connection) => {
+        connection.state.hold = true
+      },
+    })
+    const old = fixture.helper.start().catch((error) => error)
+    const refreshed = fixture.helper.refreshPermissions()
+    await flush()
+    expect(fixture.spawns).toHaveLength(1)
+    check.resolve()
+    expect(await old).toMatchObject({ code: "stopped" })
+    expect(fixture.helper.start()).toBe(refreshed)
+    expect(fixture.spawns).toHaveLength(1)
+    fixture.connections[0]!.state.hold = false
+    fixture.connections[0]!.deliver(0)
+    await refreshed
+    await expect(fixture.helper.start()).resolves.toMatchObject({ responsible: true })
+  })
+
+  test("permission refresh bounds old cleanup before starting its successor", async () => {
+    const fixture = supervisor()
+    await fixture.helper.start()
+    const old = fixture.connections[0]!
+    old.ignore.add("input.releaseAll")
+    old.ignore.add("shutdown")
+    const refreshed = fixture.helper.refreshPermissions()
+    await flush()
+    fixture.time.advance(299)
+    await flush()
+    expect(fixture.spawns).toHaveLength(1)
+    fixture.time.advance(1)
+    await flush()
+    expect(old.requests.at(-1)?.op).toBe("shutdown")
+    fixture.time.advance(300)
+    await refreshed
+    expect(old.state.kills).toBe(1)
+    expect(fixture.spawns).toHaveLength(2)
+    old.crash(19)
+    fixture.time.advance(100)
+    await flush()
+    expect(fixture.spawns).toHaveLength(2)
+  })
+
+  test("close during permission preflight prevents a delayed successor and its heartbeat", async () => {
+    const gate = Promise.withResolvers<void>()
+    const state = { checks: 0 }
+    const fixture = supervisor({
+      check: async () => {
+        if (++state.checks === 2) await gate.promise
+      },
+    })
+    await fixture.helper.start()
+    const refreshed = fixture.helper.refreshPermissions().catch((error) => error)
+    await flush()
+    expect(state.checks).toBe(2)
+    await fixture.helper.close()
+    gate.resolve()
+    expect(await refreshed).toMatchObject({ code: "stopped" })
+    fixture.time.advance(10_000)
+    await flush()
+    expect(fixture.spawns).toHaveLength(1)
+    expect(fixture.connections[0]!.state.kills).toBe(1)
+  })
+
+  test("close during permission hello kills that captured channel and cannot publish a greeting", async () => {
+    const fixture = supervisor({
+      configure: (connection, index) => {
+        if (index === 1) connection.ignore.add("hello")
+      },
+    })
+    await fixture.helper.start()
+    const refreshed = fixture.helper.refreshPermissions().catch((error) => error)
+    await flush()
+    expect(fixture.spawns).toHaveLength(2)
+    await fixture.helper.close()
+    expect(await refreshed).toMatchObject({ code: "stopped" })
+    expect(fixture.connections.map((connection) => connection.state.kills)).toEqual([1, 1])
+    fixture.time.advance(10_000)
+    await flush()
+    expect(fixture.spawns).toHaveLength(2)
+    await expect(fixture.helper.start()).rejects.toMatchObject({ reason: "helper_missing" })
+  })
+
+  test("an explicit Resume joins an in-flight permission refresh without launching twice", async () => {
+    const fixture = supervisor({
+      configure: (connection, index) => {
+        if (index === 1) connection.state.hold = true
+      },
+    })
+    await fixture.helper.start()
+    fixture.helper.setRunActive(true)
+    const refreshed = fixture.helper.refreshPermissions()
+    await flush()
+    const resumed = fixture.helper.resume()
+    fixture.connections[1]!.state.hold = false
+    fixture.connections[1]!.deliver(0)
+    await Promise.all([refreshed, resumed])
+    expect(fixture.spawns).toHaveLength(2)
+    await expect(fixture.helper.start()).resolves.toMatchObject({ responsible: true })
+  })
+
+  test("permission restarts use the same three-per-minute launch budget", async () => {
+    const fixture = supervisor()
+    await fixture.helper.start()
+    for (let count = 0; count < 3; count++) await fixture.helper.refreshPermissions()
+    await expect(fixture.helper.refreshPermissions()).rejects.toMatchObject({ reason: "helper_missing" })
+    expect(fixture.spawns).toHaveLength(4)
+    fixture.time.advance(60_000)
+    await fixture.helper.refreshPermissions()
+    expect(fixture.spawns).toHaveLength(5)
+  })
+
+  test("a permission hello timeout kills the failed successor without bypassing the active Resume latch", async () => {
+    const fixture = supervisor({
+      configure: (connection, index) => {
+        if (index === 1) connection.ignore.add("hello")
+      },
+    })
+    await fixture.helper.start()
+    fixture.helper.setRunActive(true)
+    const refreshed = fixture.helper.refreshPermissions().catch((error) => error)
+    await flush()
+    fixture.time.advance(4999)
+    await flush()
+    expect(fixture.connections[1]!.state.kills).toBe(0)
+    fixture.time.advance(1)
+    expect(await refreshed).toMatchObject({ code: "timeout" })
+    expect(fixture.connections.map((connection) => connection.state.kills)).toEqual([1, 1])
+    fixture.time.advance(10_000)
+    await flush()
+    expect(fixture.spawns).toHaveLength(2)
+    await expect(fixture.helper.start()).rejects.toMatchObject({ reason: "helper_missing" })
+    await fixture.helper.resume()
+    expect(fixture.spawns).toHaveLength(3)
+  })
+
+  test("runtime signing shares one cached native identity and recognizes only explicit ad-hoc or valid teams", async () => {
+    for (const [metadata, expected] of [
+      [{ code: 0, stdout: "TeamIdentifier=TEAM123456\n" }, "signed"],
+      [{ code: 0, stdout: "TeamIdentifier=not set\nSignature=adhoc\n" }, "adhoc"],
+      [{ code: 0, stdout: "Signature=adhoc\r\n" }, "adhoc"],
+      [{ code: 1, stdout: "TeamIdentifier=TEAM123456\n" }, "unknown"],
+      [{ code: 0, stdout: "TeamIdentifier=invalid\nSignature=adhoc\n" }, "unknown"],
+      [{ code: 0, stdout: "TeamIdentifier=TEAM123456\nSignature=adhoc\n" }, "unknown"],
+      [{ code: 0, stdout: "not signing metadata" }, "unknown"],
+    ] as const) {
+      const seen: string[] = []
+      const fixture = supervisor({
+        signingIdentity: async () => {
+          seen.push("identity")
+          return metadata
+        },
+      })
+      expect(await fixture.helper.runtimeSigningKind()).toBe(expected)
+      expect(await fixture.helper.runtimeSigningKind()).toBe(expected)
+      expect(seen).toEqual(["identity"])
+      expect(fixture.spawns).toHaveLength(0)
+    }
+    const failed = supervisor({
+      signingIdentity: async () => {
+        throw new Error("Native identity unavailable")
+      },
+    })
+    expect(await failed.helper.runtimeSigningKind()).toBe("unknown")
+  })
+
+  test("Windows runtime trust requires the current executable to match its verified build hash", async () => {
+    const bytes = Buffer.from("verified virtual Windows helper")
+    const state = { bytes }
+    const time = manualClock()
+    const helper = new ComputerHelper({
+      platform: "win32",
+      channel: "prod",
+      packaged: true,
+      clock: time,
+      check: (executable) =>
+        preflight({
+          platform: "win32",
+          os: "10.0.22631",
+          executable,
+          arch: "x64",
+          hashes: { x64: createHash("sha256").update(bytes).digest("hex") },
+          read: async () => state.bytes,
+          run: async () => {
+            throw new Error("Windows identity must not invoke codesign")
+          },
+        }),
+      spawn: () => {
+        throw new Error("Signing observation must not start a helper")
+      },
+    })
+    stops.push({ time, close: () => helper.close() })
+    expect(await helper.runtimeSigningKind()).toBe("signed")
+    state.bytes = Buffer.from("modified virtual executable")
+    expect(await helper.runtimeSigningKind()).toBe("unknown")
   })
 
   test("preflight rejection prevents spawn entirely", async () => {

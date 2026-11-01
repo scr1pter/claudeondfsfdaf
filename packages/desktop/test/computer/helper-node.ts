@@ -9,7 +9,7 @@ import { setTimeout } from "node:timers/promises"
 type Runtime = typeof import("../../src/main/computer-helper")
 const [runtimeFile, fakeFile] = process.argv.slice(2)
 if (!runtimeFile || !fakeFile) throw new Error("Expected the supervisor and fake-helper bundles.")
-const { createHelperClient, spawnHelper }: Runtime = await import(pathToFileURL(runtimeFile).href)
+const { createHelperClient, spawnHelper, ComputerHelper }: Runtime = await import(pathToFileURL(runtimeFile).href)
 
 async function bounded<T>(promise: Promise<T>, ms = 5000): Promise<T> {
   const controller = new AbortController()
@@ -49,6 +49,43 @@ for (const platform of ["win32", "darwin"] as const) {
     await client.close()
     channel.kill()
   }
+}
+
+// D21: a real process replacement preserves the task latch; these remain virtual OS observations only.
+const nativePlatform = process.platform === "win32" ? "win32" : "darwin"
+const supervisor = new ComputerHelper({
+  platform: nativePlatform,
+  channel: "dev",
+  packaged: false,
+  check: async () => {},
+  spawn: (_executable, args, platform) => spawnHelper(process.execPath, [fakeFile, ...args], platform),
+})
+let refreshExits = 0
+supervisor.onEvent((event) => {
+  if (event.event === "exit") refreshExits++
+})
+try {
+  await bounded(supervisor.start())
+  await bounded(supervisor.refreshPermissions())
+  assert.equal(refreshExits, 1)
+  assert.deepEqual(await bounded(supervisor.request("permissions.status")), {
+    screen: "granted",
+    accessibility: "granted",
+  })
+  supervisor.setRunActive(true)
+  await bounded(supervisor.refreshPermissions())
+  assert.equal(refreshExits, 2)
+  await assert.rejects(supervisor.request("displays.list"), { code: "unavailable" })
+  assert.deepEqual(await bounded(supervisor.request("permissions.status")), {
+    screen: "granted",
+    accessibility: "granted",
+  })
+  await bounded(supervisor.resume())
+  const displays = await bounded(supervisor.request<{ displays: unknown[] }>("displays.list"))
+  assert.ok(displays.displays.length > 0)
+  console.log("PASS helper: permission refresh replaces the Node process and preserves explicit Resume")
+} finally {
+  await bounded(supervisor.close())
 }
 
 // Keep the fake's parent as a separate process. It owns the only channel, so killing it must leave no helper.

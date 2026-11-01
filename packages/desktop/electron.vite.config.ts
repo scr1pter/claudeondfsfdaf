@@ -36,6 +36,8 @@ export default defineConfig({
   main: {
     define: {
       "import.meta.env.VECTOR_CHANNEL": JSON.stringify(channel),
+      // Enabled only by the verified C9 release build, never by a running desktop's environment.
+      VECTOR_COMPUTER_RESET_VERIFIED: JSON.stringify(process.env.VECTOR_COMPUTER_RESET_VERIFIED === "1"),
       "import.meta.env.VECTOR_REQUIRED_CLI_VERSION": JSON.stringify(
         requiredCliVersion(manifest.vectorRequiredCliVersion, process.env.VECTOR_REQUIRED_CLI_VERSION),
       ),

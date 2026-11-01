@@ -384,8 +384,11 @@ export class ComputerHelper implements HelperClient {
   private readonly restarts: number[] = []
   private client?: HelperClient
   private starting?: Promise<Computer.HelperHello>
+  private refreshing?: Promise<Computer.HelperHello>
+  private retiring?: Promise<void>
   private greeting?: Computer.HelperHello
   private heartbeatTimer?: unknown
+  private restartTimer?: unknown
   private stopped = false
   private active = false
   private needsResume = false
@@ -404,6 +407,8 @@ export class ComputerHelper implements HelperClient {
       hashes?: Readonly<Record<string, string>>
       clock?: HelperClock
       check?: (executable: string) => Promise<void>
+      /** Injected native signing metadata only; production shares the cached codesign identity with preflight. */
+      signingIdentity?: () => Promise<CommandResult>
       spawn?: (executable: string, args: readonly string[], platform: Platform) => HelperChannel
       probeCommand?: (argv: readonly string[]) => Promise<CommandResult>
     },
@@ -424,28 +429,65 @@ export class ComputerHelper implements HelperClient {
       appPath: this.options.appPath,
       arch: this.options.arch ?? process.arch,
       hashes: this.options.hashes,
-      run: (argv) => (argv[1] === "-dv" ? (this.identity ??= command(argv)) : command(argv)),
+      run: (argv) => (argv[1] === "-dv" ? this.signingIdentity() : command(argv)),
     })
   }
 
+  private signingIdentity() {
+    const app = this.options.appPath ?? path.resolve(path.dirname(process.execPath), "../..")
+    return (this.identity ??=
+      this.options.signingIdentity?.() ?? command(["/usr/bin/codesign", "-dv", "--verbose=4", app]))
+  }
+
+  /** Runtime trust observation, independent of release channel and packaging flags. Unknown fails closed. */
+  async runtimeSigningKind(): Promise<"adhoc" | "signed" | "unknown"> {
+    try {
+      if (this.options.platform === "win32") {
+        await this.check(helperPath(this.options.platform, this.options.channel, this.options.packaged, this.options))
+        return "signed"
+      }
+      if (this.options.platform !== "darwin") return "unknown"
+      const identity = await this.signingIdentity()
+      if (identity.code !== 0) return "unknown"
+      const team = identity.stdout.match(/^TeamIdentifier=(.*)$/m)?.[1]?.trim()
+      const adhoc = /^Signature=adhoc\r?$/m.test(identity.stdout)
+      if (team && /^[A-Z0-9]{10}$/.test(team)) return adhoc ? "unknown" : "signed"
+      if (team !== undefined && team !== "not set") return "unknown"
+      return adhoc ? "adhoc" : "unknown"
+    } catch {
+      return "unknown"
+    }
+  }
+
   start(): Promise<Computer.HelperHello> {
-    if (this.greeting) return Promise.resolve(this.greeting)
-    if (this.starting) return this.starting
     if (this.stopped || this.needsResume)
       return Promise.reject(
         new HelperUnavailableError("helper_missing", "Resume is required to start the computer helper."),
       )
-    this.starting = this.launch().finally(() => {
-      this.starting = undefined
+    if (this.refreshing) return this.refreshing
+    if (this.greeting) return Promise.resolve(this.greeting)
+    if (this.starting) return this.starting
+    this.time.clearTimeout(this.restartTimer)
+    this.restartTimer = undefined
+    const generation = ++this.generation
+    const starting = this.launch(generation).finally(() => {
+      if (this.starting === starting) this.starting = undefined
     })
-    return this.starting
+    this.starting = starting
+    return starting
   }
 
-  private async launch() {
+  private current(generation: number) {
+    if (this.stopped || generation !== this.generation)
+      throw new ComputerError("stopped", "The computer helper startup was superseded.")
+  }
+
+  private async launch(generation: number) {
+    this.current(generation)
     const executable = helperPath(this.options.platform, this.options.channel, this.options.packaged, this.options)
     const override = developmentHelperCommand(this.options.channel)
     if (!override) await this.check(executable)
-    if (this.stopped) throw new ComputerError("stopped", "The computer helper was stopped.")
+    this.current(generation)
     // All post-initial launches share one budget, including demand-driven starts after a crash or bad hello.
     const now = this.time.now()
     while (this.restarts.length && this.restarts[0]! <= now - 60_000) this.restarts.shift()
@@ -458,7 +500,6 @@ export class ComputerHelper implements HelperClient {
       this.restarts.push(now)
     }
     this.launches++
-    const generation = ++this.generation
     const channel = (this.options.spawn ?? spawnHelper)(
       override?.[0] ?? executable,
       [...(override?.slice(1) ?? []), "--stdio", "--parent-pid", String(process.pid)],
@@ -467,15 +508,18 @@ export class ComputerHelper implements HelperClient {
     const client = createHelperClient(channel, { clock: this.time })
     this.client = client
     client.onEvent((event) => {
-      if (generation !== this.generation || this.stopped) return
+      if (generation !== this.generation || this.client !== client || this.stopped) return
       if (event.event === "exit") {
         this.time.clearTimeout(this.heartbeatTimer)
+        this.heartbeatTimer = undefined
         this.client = undefined
         this.greeting = undefined
-        this.needsResume = this.active
+        this.needsResume ||= this.active
         for (const listener of this.listeners) listener(event)
-        if (!this.active)
-          this.time.setTimeout(() => {
+        if (!this.active && !this.needsResume)
+          this.restartTimer = this.time.setTimeout(() => {
+            if (generation !== this.generation || this.stopped) return
+            this.restartTimer = undefined
             void this.restart().catch(() => {})
           }, 100)
         return
@@ -486,6 +530,7 @@ export class ComputerHelper implements HelperClient {
       .request<Computer.HelperHello>("hello", { protocol: { min: Computer.PROTOCOL, max: Computer.PROTOCOL } }, 5000)
       .catch(async (error) => {
         await client.close()
+        this.current(generation)
         throw error
       })
     if (
@@ -501,7 +546,7 @@ export class ComputerHelper implements HelperClient {
       await client.close()
       throw new ComputerError("responsible_missing", "The computer helper does not hold its own OS permissions.")
     }
-    if (this.stopped || this.client !== client)
+    if (this.stopped || generation !== this.generation || this.client !== client)
       throw new ComputerError("stopped", "The computer helper stopped during startup.")
     this.greeting = hello
     const beat = () => {
@@ -524,11 +569,53 @@ export class ComputerHelper implements HelperClient {
     return this.start()
   }
 
+  /** Refresh process-cached grants without resuming a task. D18 receives one exit and requires explicit Resume. */
+  refreshPermissions(): Promise<Computer.HelperHello> {
+    if (this.stopped) return Promise.reject(new ComputerError("stopped", "The computer helper was stopped."))
+    if (this.refreshing) return this.refreshing
+    const generation = ++this.generation
+    const client = this.client
+    this.client = undefined
+    this.greeting = undefined
+    this.starting = undefined
+    this.needsResume ||= this.active
+    this.time.clearTimeout(this.heartbeatTimer)
+    this.time.clearTimeout(this.restartTimer)
+    this.heartbeatTimer = this.restartTimer = undefined
+    // Delay cleanup by one microtask so reentrant listeners see the shared refresh operation first.
+    const retiring = Promise.resolve().then(() => client?.close())
+    const refreshing = retiring
+      .then(() => this.launch(generation))
+      .finally(() => {
+        if (this.refreshing === refreshing) this.refreshing = undefined
+        if (this.retiring === retiring) this.retiring = undefined
+      })
+    this.retiring = retiring
+    this.refreshing = refreshing
+    for (const listener of this.listeners)
+      try {
+        listener({ event: "exit" })
+      } catch {
+        /* A failed listener cannot prevent the other owners from invalidating the retired channel. */
+      }
+    return refreshing
+  }
+
   async request<T>(op: Computer.HelperOpName, args?: Record<string, unknown>, timeoutMs?: number): Promise<T> {
-    const hello = await this.start()
+    const permission = ["permissions.status", "permissions.request", "permissions.reset"].includes(op)
+    const starting =
+      this.needsResume && permission
+        ? (this.refreshing ?? (this.greeting ? Promise.resolve(this.greeting) : this.refreshPermissions()))
+        : this.start()
+    const generation = this.generation
+    const hello = await starting
+    this.current(generation)
+    if (this.needsResume && !permission)
+      throw new HelperUnavailableError("helper_missing", "Resume is required to use the computer helper.")
     if (op === "hello") return hello as T
-    if (!this.client) throw new HelperUnavailableError("helper_missing", "The computer helper stopped.")
-    return this.client.request(op, args, timeoutMs)
+    const client = this.client
+    if (!client) throw new HelperUnavailableError("helper_missing", "The computer helper stopped.")
+    return client.request(op, args, timeoutMs)
   }
 
   onEvent(cb: (event: Computer.HelperEvent) => void) {
@@ -555,11 +642,14 @@ export class ComputerHelper implements HelperClient {
 
   async close() {
     this.stopped = true
+    this.generation++
     this.time.clearTimeout(this.heartbeatTimer)
+    this.time.clearTimeout(this.restartTimer)
+    this.heartbeatTimer = this.restartTimer = undefined
     const client = this.client
     this.client = undefined
     this.greeting = undefined
-    await client?.close()
+    await Promise.all([client?.close(), this.retiring])
     this.listeners.clear()
   }
 }
