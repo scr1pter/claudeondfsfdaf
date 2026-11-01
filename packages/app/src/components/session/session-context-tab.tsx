@@ -100,27 +100,27 @@ export function SessionContextTab() {
       value: formatter().number(ctx()?.limit),
     },
     {
-      label: "Total tokens",
+      label: language.t("context.stats.totalTokens"),
       value: formatter().number(totalTokens()),
     },
     {
-      label: "Usage",
+      label: language.t("context.scope.latestTurnContext"),
       value: formatter().percent(ctx()?.usage),
     },
     {
-      label: "Input tokens",
+      label: language.t("context.scope.chatInputTokens"),
       value: formatter().number(tokens()?.input),
     },
     {
-      label: "Output tokens",
+      label: language.t("context.scope.chatOutputTokens"),
       value: formatter().number(tokens()?.output),
     },
     {
-      label: "Reasoning tokens",
+      label: language.t("context.scope.chatReasoningTokens"),
       value: formatter().number(tokens()?.reasoning),
     },
     {
-      label: "Cache tokens (read/write)",
+      label: language.t("context.scope.chatCacheTokens"),
       value: `${formatter().number(tokens()?.cache.read)} / ${formatter().number(tokens()?.cache.write)}`,
     },
     {
@@ -132,7 +132,7 @@ export function SessionContextTab() {
       value: formatter().number(counts().assistant),
     },
     {
-      label: "Total cost",
+      label: language.t("context.stats.totalCost"),
       value: sessionReading({
         ...sessionSpend(info()),
         tokens: totalTokens(),
@@ -243,13 +243,13 @@ export function SessionContextTab() {
               <h3 class="mt-1.5 text-base font-semibold" style={{ color: "#fff" }}>
                 Live task ledger
               </h3>
-              <p class="mt-1 max-w-[430px] text-xs leading-5 text-white/45">
-                Model, message, token, and cost totals for this task only.
-              </p>
+              <p class="mt-1 max-w-[430px] text-xs leading-5 text-white/45">{language.t("context.scope.summary")}</p>
             </div>
             <div class="flex min-w-[72px] flex-col items-end">
               <strong class="text-sm font-semibold text-[#d6c5ff]">{formatter().percent(ctx()?.usage)}</strong>
-              <span class="mt-0.5 text-[10px] uppercase tracking-[0.12em] text-white/32">in context</span>
+              <span class="mt-0.5 text-[10px] uppercase tracking-[0.12em] text-white/32">
+                {language.t("context.scope.latestTurn")}
+              </span>
             </div>
           </div>
           <div class="h-1 bg-white/[0.06]">
@@ -273,7 +273,8 @@ export function SessionContextTab() {
           </div>
 
           <div class="px-5 py-4">
-            <div class="text-xs text-white/35">Context breakdown</div>
+            <div class="text-xs text-white/35">{language.t("context.scope.breakdownTitle")}</div>
+            <p class="mt-1.5 text-xs leading-5 text-white/35">{language.t("context.scope.breakdownNote")}</p>
             <div class="mt-3 flex h-2 overflow-hidden rounded-full bg-white/[0.06]">
               <For each={breakdown()}>
                 {(segment) => (
