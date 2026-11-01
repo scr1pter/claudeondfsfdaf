@@ -258,6 +258,7 @@ describe("trackReviewSpend", () => {
           id,
           sessionID,
           role: "assistant",
+          providerID: "own-provider",
           cost,
           tokens: { input, output: 10, reasoning: 0, cache: { read: 5, write: 0 } },
         },
@@ -291,6 +292,7 @@ describe("review spend presentation", () => {
           id: "message",
           sessionID: "review",
           role: "assistant",
+          providerID: "own-provider",
           cost: 0,
           unpriced: true,
           tokens: { input: 100, output: 20, reasoning: 0, cache: { read: 0, write: 0 } },
@@ -307,6 +309,7 @@ describe("review spend presentation", () => {
     spend.add("review")
     const info = {
       role: "assistant",
+      providerID: "own-provider",
       sessionID: "review",
       tokens: { input: 100, output: 20, reasoning: 0, cache: { read: 0, write: 0 } },
     }
@@ -329,6 +332,7 @@ describe("review spend presentation", () => {
           id: "message",
           sessionID: "review",
           role: "assistant",
+          providerID: "own-provider",
           cost: 0,
           tokens: { input: 100, output: 20, reasoning: 0, cache: { read: 0, write: 0 } },
         },
@@ -348,6 +352,7 @@ describe("review spend presentation", () => {
           id: "message",
           sessionID: "review",
           role: "assistant",
+          providerID: "own-provider",
           cost: 0.02,
           tokens: { input: 100, output: 20, reasoning: 0, cache: { read: 0, write: 0 } },
         },
@@ -2110,4 +2115,126 @@ test("per-pass cost kinds preserve own priced and free figures beside Codium", (
   expect(passLines({ cost, passes: [{ ...passes[1]!, costKind: "plan" }] })).toEqual([
     "Double-check · anthropic/sonnet · 120 tokens",
   ])
+})
+
+for (const mixed of [false, true]) {
+  test(`completed ${mixed ? "mixed" : "Codium-only"} review filters final cost and per-pass quantities`, async () => {
+    const { client } = fakeClient({
+      files: { "src/list.ts": HEAD, ...NO_VERIFY },
+      reply: (input) => {
+        const message = answer(report([]), 0.12)
+        if (mixed && input.sessionID !== "ses_1") return message
+        return {
+          ...message,
+          info: {
+            ...message.info,
+            providerID: "vector-plan",
+            modelID: "vector-flash",
+            billing: "codium",
+            cost: 99,
+            tokens: { input: 987654, output: 1234, reasoning: 0, cache: { read: 0, write: 0 } },
+          },
+        }
+      },
+    })
+    const outcome = await run(client, { diff: mixed ? join(listDiff, authDiff) : join(listDiff) })
+    if (!outcome) throw new Error("review produced no outcome")
+    expect(outcome.cost).toMatchObject({ codium: true, tokensOwnOnly: true })
+    const visible = [reviewFooter(outcome), ...passLines(outcome)].join("\n")
+    expect(visible).toContain("Codium")
+    expect(visible).not.toContain("987")
+    expect(visible).not.toContain("$99")
+    expect(visible).not.toContain("$0.00")
+    if (mixed) {
+      expect(outcome.cost?.costUsd).toBeGreaterThan(0)
+      expect(visible).toContain("$0.12")
+      expect(passLines(outcome).some((line) => line.includes("1.2k tokens"))).toBe(true)
+    } else {
+      expect(outcome.cost).toMatchObject({ kind: "codium", costUsd: 0, input: 0, output: 0 })
+      expect(visible).toContain("Vector Codium · vector-flash · Codium")
+    }
+  })
+}
+
+test("live mixed reviews require positive own identity before displaying usage", () => {
+  const seen: ReviewSpend[] = []
+  const tracker = trackReviewSpend((value) => seen.push(value))
+  tracker.add("session", "priced")
+  tracker.observe({
+    type: "message.updated",
+    properties: {
+      info: {
+        id: "codium",
+        sessionID: "session",
+        role: "assistant",
+        providerID: "vector-plan",
+        tokens: { input: 987654, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+        cost: 99,
+      },
+    },
+  })
+  for (const providerID of ["", " ", "vector-plan "])
+    tracker.observe({
+      type: "message.updated",
+      properties: {
+        info: {
+          id: "unknown",
+          sessionID: "session",
+          role: "assistant",
+          providerID,
+          tokens: { input: 987654, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+          cost: 99,
+        },
+      },
+    })
+  expect(seen.at(-1)).toMatchObject({ codium: true, partial: true, tokens: 0 })
+  expect(seen.at(-1)?.costUsd).toBeUndefined()
+  expect(reviewSpendText(seen.at(-1)!)).not.toContain("987")
+})
+
+test("final review uses stamped parts and retains an own receipt without token counters", async () => {
+  const { client } = fakeClient({
+    files: { "src/list.ts": HEAD, ...NO_VERIFY },
+    reply: (input) => {
+      const message = answer(report([]), input.sessionID === "ses_1" ? 99 : 0.12)
+      return input.sessionID === "ses_1"
+        ? {
+            ...message,
+            parts: [{ type: "step-finish", billing: "codium" }],
+            info: { ...message.info, tokens: { input: 987654, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } },
+          }
+        : { ...message, info: { ...message.info, tokens: undefined } }
+    },
+  })
+  const outcome = await run(client, { diff: join(listDiff, authDiff) })
+  if (!outcome) throw new Error("review produced no outcome")
+  expect(outcome.cost).toMatchObject({ codium: true, kind: "unknown", costUsd: 0.12, usageMissing: true })
+  const visible = [reviewFooter(outcome), ...passLines(outcome)].join("\n")
+  expect(visible).toContain("$0.12")
+  expect(visible).toContain("Codium")
+  expect(visible).not.toContain("987")
+  expect(visible).not.toContain("$99")
+  expect(visible).toContain("Token usage unavailable")
+})
+
+test("failed mixed review retains own receipts when no own token counters arrived", async () => {
+  const progress: Parameters<NonNullable<ReviewRunInput["onProgress"]>>[0][] = []
+  const { client } = fakeClient({
+    files: { "src/list.ts": HEAD, ...NO_VERIFY },
+    reply: (input) => {
+      const message = answer(undefined, input.sessionID === "ses_1" ? 99 : 0.12)
+      return input.sessionID === "ses_1"
+        ? { ...message, info: { ...message.info, billing: "codium", providerID: "vector-plan" } }
+        : { ...message, info: { ...message.info, tokens: undefined } }
+    },
+  })
+  await expect(
+    run(client, { diff: join(listDiff, authDiff), onProgress: (event) => progress.push(event) }),
+  ).rejects.toThrow("At least $0.24 + Codium · token usage unavailable")
+  expect(progress.findLast((event) => event.type === "spend")).toMatchObject({
+    costUsd: 0.24,
+    tokens: 0,
+    codium: true,
+    partial: true,
+  })
 })

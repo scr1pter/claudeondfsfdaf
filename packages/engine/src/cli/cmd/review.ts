@@ -1,5 +1,5 @@
 import { Billing } from "@vectordevai/schema/billing"
-import { reviewForOutput } from "./review-output"
+import { codiumPass, reviewForOutput } from "./review-output"
 // `vector review` (section 3.13): the review CI runs, on your own branch, your uncommitted or staged changes, or a
 // pull request, printed here rather than posted. Your own changes are reviewed in place with the settings in your
 // working tree. A pull request is reviewed untrusted: its commit is fetched into FETCH_HEAD only, its files go in the
@@ -49,6 +49,8 @@ import {
   encodeState,
   nextState,
   priorFromState,
+  reviewCostHasCodium,
+  reviewCostIsCodium,
   SUMMARY_MARKER,
 } from "@vectordevai/core/review/state"
 import type {
@@ -1091,7 +1093,46 @@ function readLocalState(file: string) {
     if (!data || data.version !== 1 || typeof data.state !== "string") return undefined
     const state = decodeState(data.state)
     if (!state) return undefined
-    return isOutcome(data.outcome) ? { state, outcome: data.outcome } : { state }
+    if (!isOutcome(data.outcome)) return { state }
+    // Serialized caches are useful history, but cannot certify that old mixed token aggregates were partitioned.
+    const outcome = data.outcome
+    const mixed =
+      (outcome.cost && reviewCostHasCodium(outcome.cost)) || outcome.passes?.some((pass) => codiumPass(pass))
+    const pure =
+      outcome.cost &&
+      (reviewCostIsCodium(outcome.cost) ||
+        (outcome.cost.codium !== true &&
+          !!outcome.passes?.length &&
+          outcome.passes.every((pass) => codiumPass(pass)) &&
+          !outcome.cost.model
+            .split(" + ")
+            .some((model) => model.includes("/") && Billing.hasOwnIdentity({ providerID: model.split("/")[0] }))))
+    return {
+      state,
+      outcome: {
+        ...outcome,
+        ...(outcome.cost
+          ? {
+              cost: {
+                ...outcome.cost,
+                tokensOwnOnly: false,
+                ...(mixed ? { codium: true, kind: pure ? ("codium" as const) : outcome.cost.kind } : {}),
+              },
+            }
+          : {}),
+        ...(mixed && outcome.passes
+          ? {
+              passes: outcome.passes.map((pass) => ({
+                ...pass,
+                usageMissing: true,
+                input: 0,
+                output: 0,
+                cacheRead: 0,
+              })),
+            }
+          : {}),
+      },
+    }
   })
 }
 

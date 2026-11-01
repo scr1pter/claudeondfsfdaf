@@ -958,7 +958,7 @@ describe("vector review: Codium JSON boundary", () => {
         cacheRead: 8,
         cacheWrite: 9,
         kind: "unknown" as const,
-        model: "vector-plan/sol",
+        model: "Multiple models",
       }
       const first = fake({
         outcome: {
@@ -968,21 +968,27 @@ describe("vector review: Codium JSON boundary", () => {
       })
       expect((yield* review({ directory: repo.dir, json: true }, first.deps)).exitCode).toBe(0)
       const printed = JSON.parse(first.out()).outcome
-      expect(printed.cost).toEqual({ kind: "codium", model: "vector-plan/sol" })
+      expect(printed.cost).toEqual({ kind: "codium", model: "Multiple models" })
       expect(printed.passes).toEqual([{ name: "review", model: "vector-plan/sol", costKind: "codium" }])
       const cached = fake()
       yield* review({ directory: repo.dir, json: true }, cached.deps)
       expect(cached.calls).toHaveLength(0)
-      expect(JSON.parse(cached.out()).outcome.cost).toEqual({ kind: "codium", model: "vector-plan/sol" })
+      expect(JSON.parse(cached.out()).outcome.cost).toEqual({ kind: "codium", model: "Multiple models" })
+      const cachedHuman = fake()
+      yield* review({ directory: repo.dir }, cachedHuman.deps)
+      expect(cachedHuman.out()).toContain("Codium")
+      expect(cachedHuman.out()).not.toContain("24.0k")
+      expect(cachedHuman.out()).not.toContain("$999")
       const failed = fake({
         outcome: {
           cost,
+          passes: [{ name: "review", model: "vector-plan/sol", input: 24000, output: 100, cacheRead: 0, costUsd: 999 }],
           partial: "model-error",
           specialists: [{ name: "review", status: "failed", steps: 1, detail: "stopped" }],
         },
       })
       expect((yield* review({ directory: repo.dir, full: true, json: true }, failed.deps)).exitCode).toBe(2)
-      expect(JSON.parse(failed.out()).outcome.cost).toEqual({ kind: "codium", model: "vector-plan/sol" })
+      expect(JSON.parse(failed.out()).outcome.cost).toEqual({ kind: "codium", model: "Multiple models" })
       expect(failed.err()).not.toContain("24000")
       expect(cost.input).toBe(24000)
     }),
@@ -1010,7 +1016,8 @@ describe("vector review: Codium JSON boundary", () => {
             cacheRead: 8,
             cacheWrite: 9,
             kind: "unknown",
-            model: "vector-plan/sol + lmstudio/test-model",
+            tokensOwnOnly: true,
+            model: "Multiple models",
           },
           passes: [
             {
@@ -1023,6 +1030,7 @@ describe("vector review: Codium JSON boundary", () => {
               costUsd: 0,
             },
             own,
+            { ...own, costKind: undefined, input: 987654 },
           ],
         },
       })
@@ -1030,11 +1038,22 @@ describe("vector review: Codium JSON boundary", () => {
       const printed = JSON.parse(run.out()).outcome
       expect(printed.cost).toEqual({
         kind: "unknown",
-        model: "vector-plan/sol + lmstudio/test-model",
+        model: "Multiple models",
         costUsd: 0.12,
         billing: "codium",
       })
-      expect(printed.passes).toEqual([{ name: "review", model: "vector-plan/sol", costKind: "codium" }, own])
+      expect(printed.passes).toEqual([{ name: "review", model: "vector-plan/sol", costKind: "codium" }, own, { ...own, input: 987654, costKind: undefined }])
+      const cached = fake()
+      yield* review({ directory: repo.dir }, cached.deps)
+      expect(cached.calls).toHaveLength(0)
+      expect(cached.out()).not.toContain("25.0k")
+      expect(cached.out()).not.toContain("987")
+      const cachedJson = fake()
+      yield* review({ directory: repo.dir, json: true }, cachedJson.deps)
+      expect(cachedJson.out()).not.toContain("987654")
+      expect(JSON.parse(cachedJson.out()).outcome.passes[1]).not.toHaveProperty("input")
+      expect(cached.out()).toContain("$0.12")
+      expect(cached.out()).toContain("Codium")
     }),
   )
 })
