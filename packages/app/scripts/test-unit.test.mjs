@@ -1,9 +1,59 @@
 import assert from "node:assert/strict"
+import { EventEmitter } from "node:events"
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { test } from "node:test"
-import { runUnitTests, unitFiles } from "./test-unit.mjs"
+import { runProcess, runUnitTests, unitFiles } from "./test-unit.mjs"
+
+function processes() {
+  const children = []
+  const timers = new Map()
+  const state = { now: 0 }
+  const runtime = {
+    spawn(command, args, options) {
+      assert.ok(
+        children.every((child) => child.closed),
+        "the previous child must close before another starts",
+      )
+      const child = new EventEmitter()
+      child.closed = false
+      child.kills = []
+      child.command = command
+      child.args = args
+      child.options = options
+      child.kill = (signal) => {
+        child.kills.push(signal)
+        return true
+      }
+      child.once("close", () => {
+        child.closed = true
+      })
+      child.once("error", () => {
+        child.closed = true
+      })
+      children.push(child)
+      return child
+    },
+    setTimeout(callback, ms) {
+      const timer = { at: state.now + ms, callback }
+      timers.set(timer, timer)
+      return timer
+    },
+    clearTimeout(timer) {
+      timers.delete(timer)
+    },
+  }
+  function advance(ms) {
+    state.now += ms
+    for (const timer of [...timers.values()]) {
+      if (timer.at > state.now) continue
+      timers.delete(timer)
+      timer.callback()
+    }
+  }
+  return { runtime, children, timers, advance }
+}
 
 async function fixture(t, files) {
   const root = await mkdtemp(path.join(os.tmpdir(), "vector-app-unit-launcher-"))
@@ -73,7 +123,7 @@ test("Windows runs each file once and serially, retains argv and continues after
   for (const call of calls) {
     assert.equal(call.command, "bun")
     assert.deepEqual(call.args.slice(0, -1), ["test", "--isolate", "--only-failures", "--preload", "./happydom.ts"])
-    assert.deepEqual(call.options, { cwd: root })
+    assert.deepEqual(call.options, { cwd: root, timeout: 120_000 })
     assert.ok(output.includes(`App unit test: ${call.args.at(-1)}`))
   }
   assert.ok(output.includes("App unit tests: 1/5 files passed"))
@@ -131,4 +181,93 @@ test("Linux preserves the one whole-source invocation and reports its failure", 
   ])
   assert.equal(result.code, 1)
   assert.deepEqual(result.failed, ["./src"])
+})
+
+test("the child deadline waits for close and cannot turn a raced zero exit into success", async () => {
+  const fake = processes()
+  const result = runProcess(
+    "bun",
+    ["test", "./src/example.test.ts"],
+    { cwd: "/virtual", timeout: 120_000 },
+    fake.runtime,
+  )
+  let settled = false
+  void result.then(() => {
+    settled = true
+  })
+  fake.advance(119_999)
+  assert.deepEqual(fake.children[0].kills, [])
+  fake.advance(1)
+  assert.deepEqual(fake.children[0].kills, ["SIGKILL"])
+  await Promise.resolve()
+  assert.equal(settled, false)
+  fake.children[0].emit("close", 0, null)
+  assert.deepEqual(await result, { code: 1, signal: null, error: "Timed out after 120000 ms" })
+  assert.equal(fake.timers.size, 0)
+})
+
+test("normal completion cancels the watchdog and its stale callback cannot kill a later process", async () => {
+  const fake = processes()
+  const result = runProcess("bun", ["test"], { cwd: "/virtual", timeout: 120_000 }, fake.runtime)
+  const timer = [...fake.timers.values()][0]
+  fake.children[0].emit("close", 0, null)
+  assert.deepEqual(await result, { code: 0, signal: null })
+  assert.equal(fake.timers.size, 0)
+  timer.callback()
+  fake.advance(120_000)
+  assert.deepEqual(fake.children[0].kills, [])
+})
+
+test("a spawn error clears the child deadline", async () => {
+  const fake = processes()
+  const result = runProcess("bun", ["test"], { cwd: "/virtual", timeout: 120_000 }, fake.runtime)
+  fake.children[0].emit("error", new Error("Synthetic spawn failure"))
+  assert.deepEqual(await result, { code: 1, error: "Synthetic spawn failure" })
+  fake.advance(120_000)
+  assert.equal(fake.timers.size, 0)
+  assert.deepEqual(fake.children[0].kills, [])
+})
+
+test("Windows reports a timed-out file as failed then runs the next file once", async (t) => {
+  const root = await fixture(t, ["src/a.test.ts", "src/z.test.ts"])
+  const fake = processes()
+  const output = []
+  const result = await runUnitTests({
+    platform: "win32",
+    root,
+    log: (line) => output.push(line),
+    run(command, args, options) {
+      const pending = runProcess(command, args, options, fake.runtime)
+      const child = fake.children.at(-1)
+      queueMicrotask(() => {
+        if (args.at(-1) === "./src/a.test.ts") {
+          fake.advance(120_000)
+          assert.equal(fake.children.length, 1)
+          assert.deepEqual(child.kills, ["SIGKILL"])
+          child.emit("close", null, "SIGKILL")
+          return
+        }
+        child.emit("close", 0, null)
+      })
+      return pending
+    },
+  })
+  assert.equal(result.code, 1)
+  assert.deepEqual(result.failed, ["./src/a.test.ts"])
+  assert.deepEqual(
+    fake.children.map((child) => child.args.at(-1)),
+    ["./src/a.test.ts", "./src/z.test.ts"],
+  )
+  assert.ok(output.includes("App unit test failed: ./src/a.test.ts (Timed out after 120000 ms)"))
+  assert.ok(output.includes("App unit tests: 1/2 files passed"))
+})
+
+test("an unbounded aggregate process receives no child watchdog", async () => {
+  const fake = processes()
+  const result = runProcess("bun", ["test", "./src"], { cwd: "/virtual" }, fake.runtime)
+  assert.equal(fake.timers.size, 0)
+  fake.advance(120_000)
+  assert.deepEqual(fake.children[0].kills, [])
+  fake.children[0].emit("close", 0, null)
+  assert.deepEqual(await result, { code: 0, signal: null })
 })

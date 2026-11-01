@@ -31,11 +31,30 @@ export async function unitFiles(root = directory) {
   return files.sort()
 }
 
-function runProcess(command, args, options) {
+export function runProcess(command, args, options, runtime = { spawn, setTimeout, clearTimeout }) {
   return new Promise((resolve) => {
-    const child = spawn(command, args, { ...options, stdio: "inherit" })
-    child.once("error", (error) => resolve({ code: 1, error: error.message }))
-    child.once("close", (code, signal) => resolve({ code, signal }))
+    const { timeout, ...spawnOptions } = options
+    const child = runtime.spawn(command, args, { ...spawnOptions, stdio: "inherit" })
+    const state = { settled: false, timedOut: false }
+    const finish = (result) => {
+      if (state.settled) return
+      state.settled = true
+      if (timer !== undefined) runtime.clearTimeout(timer)
+      resolve(result)
+    }
+    const timer =
+      timeout === undefined
+        ? undefined
+        : runtime.setTimeout(() => {
+            if (state.settled) return
+            state.timedOut = true
+            child.kill("SIGKILL")
+            // Await close before the launcher admits the next child; a timed-out file can never report success.
+          }, timeout)
+    child.once("error", (error) => finish({ code: 1, error: error.message }))
+    child.once("close", (code, signal) =>
+      finish(state.timedOut ? { code: 1, signal, error: `Timed out after ${timeout} ms` } : { code, signal }),
+    )
   })
 }
 
@@ -52,7 +71,14 @@ export async function runUnitTests({
   for (const file of files) {
     log(`App unit test: ${file}`)
     const result = await Promise.resolve()
-      .then(() => run("bun", [...argumentsBeforePath, file], { cwd: root }))
+      // A passing Vite fixture retained its Windows Bun process for 49 minutes. Bound the child lifecycle,
+      // without changing Bun's per-test deadlines, retrying files or truncating the Linux aggregate suite.
+      .then(() =>
+        run("bun", [...argumentsBeforePath, file], {
+          cwd: root,
+          ...(platform === "win32" ? { timeout: 120_000 } : {}),
+        }),
+      )
       .catch((error) => ({
         code: 1,
         error: error instanceof Error ? error.message : "The test process could not start.",
