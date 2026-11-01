@@ -3,7 +3,7 @@ import { RedisClient } from "bun"
 import { createServer } from "node:http"
 import { createCloudAgentsApi } from "../../../api/_lib/cloud-agents-api"
 import { bindingFor, createBindCode, suspendBinding, touchBinding } from "../../../api/_lib/cloud-agents-binding"
-import { CLOUD_AGENT_LIMITS, type CloudAgentAllowance } from "../../../api/_lib/cloud-agents-entitlement"
+import type { CloudAgentAllowance } from "../../../api/_lib/cloud-agents-entitlement"
 import { mintCliToken } from "../../../api/_lib/cli-token"
 import { consumeGithubOidc } from "../../../api/_lib/github-oidc"
 import { persistentStore } from "../../../api/_lib/persistent-store"
@@ -104,7 +104,7 @@ function integrationTests() {
     const allowance: CloudAgentAllowance = {
       active: true,
       plan: "vector-10",
-      limits: CLOUD_AGENT_LIMITS["vector-10"],
+      limits: { atOnce: 1, hours: 5, longestRunMin: 30, scheduledPerDay: 0, runCeilingShare: 0.1 },
       allowanceSeconds: 18_000,
       meterEpoch: "p1793491200000",
       periodEnd: Date.now() + 86_400_000,
