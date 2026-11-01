@@ -1,5 +1,6 @@
 export * as ResearchPlanTool from "./research-plan"
 
+import { Billing } from "@vectordevai/schema/billing"
 import { Effect, Layer, Schema } from "effect"
 import { Research } from "@vectordevai/schema/research"
 import { makeLocationNode } from "../effect/app-node"
@@ -109,6 +110,7 @@ const layer = Layer.effectDiscard(
       const kind = !resolved
         ? "unknown"
         : SpendGuard.costKindOf({
+            codium: Billing.isCodium(resolved.provider),
             free: SessionRunnerModel.isFree(resolved),
             listed: price !== undefined,
             oauthPlan: false,

@@ -619,6 +619,9 @@ describe("TaskLimits seed and status", () => {
           cost?: number
           subagent?: number
           unpriced?: number
+          subagentUnpriced?: number
+          codium?: number
+          subagentCodium?: number
         } = {},
       ) =>
         db
@@ -634,6 +637,9 @@ describe("TaskLimits seed and status", () => {
             cost: values.cost ?? 0,
             subagent_cost: values.subagent ?? 0,
             unpriced_steps: values.unpriced ?? 0,
+            subagent_unpriced_steps: values.subagentUnpriced ?? 0,
+            codium_steps: values.codium ?? 0,
+            subagent_codium_steps: values.subagentCodium ?? 0,
             metadata:
               values.metadata ??
               (values.request
@@ -650,17 +656,33 @@ describe("TaskLimits seed and status", () => {
       const request = "msg_seeded"
       yield* insert("conversation")
       yield* insert("swarm", { metadata: { vector: { kind: "parallel-agent", parentSessionId: id("conversation") } } })
-      yield* insert("c1", { parent: "conversation", request, cost: 1, subagent: 0.5, unpriced: 1 })
-      // Its child's spend is in c1's subagent_cost already.
-      yield* insert("g1", { parent: "c1", request, cost: 0.5 })
+      yield* insert("c1", {
+        parent: "conversation",
+        request,
+        cost: 1,
+        subagent: 0.5,
+        unpriced: 101,
+        codium: 100,
+        subagentUnpriced: 80,
+        subagentCodium: 80,
+      })
+      // Its child's spend and Codium steps are in c1's subagent rollups already.
+      yield* insert("g1", { parent: "c1", request, cost: 0.5, unpriced: 80, codium: 80 })
       yield* insert("c2", { parent: "conversation", request, cost: 2 })
       yield* insert("c3", { parent: "conversation", request: "msg_other", cost: 4 })
-      yield* insert("g2", { parent: "c3", request, cost: 0.3 })
-      yield* insert("w1", { parent: "swarm", request, cost: 0.25 })
+      yield* insert("g2", { parent: "c3", request, cost: 0.3, unpriced: 55, codium: 55 })
+      yield* insert("w1", { parent: "swarm", request, cost: 0.25, unpriced: 70, codium: 70 })
       // A workflow run counts once; its agents count against the run.
-      yield* insert("run", { parent: "conversation", request, role: "run", subagent: 0.2 })
-      yield* insert("agent1", { parent: "run", request, role: "agent", cost: 0.1 })
-      yield* insert("agent2", { parent: "run", request, role: "agent", cost: 0.1 })
+      yield* insert("run", {
+        parent: "conversation",
+        request,
+        role: "run",
+        subagent: 0.2,
+        subagentUnpriced: 140,
+        subagentCodium: 140,
+      })
+      yield* insert("agent1", { parent: "run", request, role: "agent", cost: 0.1, unpriced: 70, codium: 70 })
+      yield* insert("agent2", { parent: "run", request, role: "agent", cost: 0.1, unpriced: 70, codium: 70 })
       yield* insert("helper", { parent: "conversation", cost: 9 })
       yield* insert("stranger")
       yield* insert("stranger_child", { parent: "stranger", request, cost: 7 })
@@ -670,8 +692,9 @@ describe("TaskLimits seed and status", () => {
       const seed = yield* service.seed(conversation, request)
       expect(seed.steps).toBe(0)
       expect(seed.unpricedSteps).toBe(1)
+      expect(seed.codiumSteps).toBe(445)
       expect(seed.spentUsd).toBeCloseTo(4.25, 10)
-      const seven = limits(8, 7)
+      const seven = { ...limits(8, 7), budget: { usd: 25, unpricedSteps: 40 } }
       const counted = yield* service.status(conversation, request, seven)
       expect(counted.launched).toBe(6)
       expect(counted.spend).toMatchObject({ limitUsd: 25, unknownSteps: 1, warned: false, stopped: false })
@@ -687,10 +710,75 @@ describe("TaskLimits seed and status", () => {
       const guard = yield* SpendGuard.Service
       const ledger = yield* guard.delegated(TaskLimits.ledger(conversation, request))
       expect(ledger?.spentUsd).toBeCloseTo(4.25, 10)
+      expect(ledger).toMatchObject({ steps: 0, unpricedSteps: 1, codiumSteps: 445 })
       const over = yield* Effect.scoped(
         service.admit({ conversationID: conversation, requestID: request, limits: seven, origin: "nested", count: 1 }),
       ).pipe(Effect.flip)
       expect(over.message).toContain("already started 7 of the 7")
+    }),
+  )
+
+  it.effect("restarted requests exclude Codium from the unknown-step cap while mixed unknown usage stays bounded", () =>
+    Effect.gen(function* () {
+      const { db } = yield* Database.Service
+      const service = yield* TaskLimits.Service
+      const guard = yield* SpendGuard.Service
+      yield* db
+        .insert(ProjectTable)
+        .values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] })
+        .run()
+        .pipe(Effect.orDie)
+      const conversationID = id("codium_restart")
+      const row = { project_id: Project.ID.global, directory: "/project", version: "test" }
+      yield* db
+        .insert(SessionTable)
+        .values({ ...row, id: conversationID, slug: "restart", title: "Restart" })
+        .run()
+        .pipe(Effect.orDie)
+      for (const unknown of [0, 39, 40]) {
+        const requestID = `msg_codium_restart_${unknown}`
+        const childID = id(`codium_restart_${unknown}`)
+        // These durable rows exist before this process first seeds the request.
+        yield* db
+          .insert(SessionTable)
+          .values({
+            ...row,
+            id: childID,
+            parent_id: conversationID,
+            slug: requestID,
+            title: requestID,
+            cost: 1,
+            unpriced_steps: 80 + unknown,
+            codium_steps: 80,
+            metadata: { subagent: { requestID } },
+          })
+          .run()
+          .pipe(Effect.orDie)
+        expect(yield* service.seed(conversationID, requestID)).toEqual({
+          spentUsd: 1,
+          steps: 0,
+          unpricedSteps: unknown,
+          codiumSteps: 80,
+        })
+        const admission = Effect.scoped(
+          service.admit({
+            conversationID,
+            requestID,
+            limits: { ...limits(), budget: { usd: 25, unpricedSteps: 40 } },
+            origin: "root",
+            count: 1,
+          }),
+        )
+        if (unknown < 40) expect((yield* admission).launched).toBe(2)
+        else expect((yield* admission.pipe(Effect.flip)).reason).toBe("spend")
+        const ledger = yield* guard.delegated(TaskLimits.ledger(conversationID, requestID))
+        expect(ledger).toMatchObject({ spentUsd: 1, steps: 0, unpricedSteps: unknown, codiumSteps: 80 })
+        expect(ledger?.stopped?.reason).toBe(unknown === 40 ? "unpriced" : undefined)
+        expect((yield* service.status(conversationID, requestID)).spend).toMatchObject({
+          unknownSteps: unknown,
+          stopped: unknown === 40,
+        })
+      }
     }),
   )
 

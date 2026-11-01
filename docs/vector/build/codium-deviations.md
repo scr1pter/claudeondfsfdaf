@@ -451,3 +451,10 @@ Intent-preserving corrections to label plan §7 C2 and C3, recorded with the A22
   step-finish case `:653`, its writers `:672-682` and `:824-834`; `projector.ts` strip list `:348-370`, Step.Ended
   `:532`, ancillary `:562`, compaction `:597` and `:615`; `message-updater.ts` `:213` and `:392`; `llm.ts` Step.Ended
   `:412`; `compaction.ts` `spent` `:248`.
+
+## A23: guard and usage decisions
+
+- Codium guard counts are separate from unknown steps; local dollar caps ignore Codium while step/loop limits continue. Desktop known-Codium admission returns no dollar budget and places no reservation. `usd: 0` would violate the existing strictly-positive budget schema and trigger preflight headroom refusals, so it is not sent.
+- Recurring automation exemptions use the current existing session's model, with unavailable identity falling back to ordinary dollar checks. A fresh parallel session uses its pinned provider. Concurrent owner model changes between the desktop read and engine admission remain the existing mutable-session limitation.
+- The integration into self-evolving must preserve Codium counts in its additional delegated-scope decoder and task-limit restart seed; see `codium-a23-guard-usage-notes.md`. Current Codium lacks these newer paths.
+- A23 leaves the model route acceptance registry empty and all live provider and release gates in place. Its implementation and final validation are recorded in `codium-a23-guard-usage-notes.md`.

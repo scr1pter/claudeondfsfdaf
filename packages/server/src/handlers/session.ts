@@ -400,6 +400,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
               spentUsd: run.spentUsd,
               steps: run.steps,
               unpricedSteps: run.unpricedSteps,
+              codiumSteps: run.codiumSteps,
               costKind: run.costKind,
             },
           }

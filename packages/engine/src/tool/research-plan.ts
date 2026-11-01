@@ -1,3 +1,4 @@
+import { Billing } from "@vectordevai/schema/billing"
 import { Brain } from "@vectordevai/core/brain/brain"
 import { Database } from "@vectordevai/core/database/database"
 import { ResearchEstimate } from "@vectordevai/core/research/estimate"
@@ -511,6 +512,7 @@ export const ResearchPlanTool = Tool.define<
         const kind = !model
           ? "unknown"
           : SpendGuard.costKindOf({
+              codium: Billing.isCodium(model.providerID),
               free: isFreeModel(model) || model.freeModel !== undefined,
               listed: price !== undefined,
               oauthPlan: false,

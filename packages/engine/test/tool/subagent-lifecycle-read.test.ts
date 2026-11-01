@@ -36,7 +36,7 @@ const fields = {
     spentUsd: 3.1,
     steps: 12,
     unpricedSteps: 0,
-    stopped: { reason: "cap", message: "Subagent spend ceiling reached." },
+    stopped: { reason: "cap" as const, message: "Subagent spend ceiling reached." },
   },
   owner: { pid: 4242, boot: 1_700_000_000 },
   interruption: { at: 5, cause: "shutdown", reportedAt: 6, resumedAt: 7, dismissedAt: 8 },
@@ -61,6 +61,13 @@ describe("SubagentLifecycle.read", () => {
     const record = read({ ...base, ...fields })
     for (const [key, value] of Object.entries(fields))
       expect(record?.[key as keyof typeof record]).toEqual(value as never)
+  })
+
+  test("saved delegated scopes retain Codium counts without changing legacy scopes", () => {
+    const saved = SubagentLifecycle.scopeFields([{ ...fields.delegatedScope, kind: "delegated", codiumSteps: 50 }])
+    expect(saved.budgetScopes).toEqual([])
+    expect(read({ ...base, ...saved })?.delegatedScope).toEqual({ ...fields.delegatedScope, codiumSteps: 50 })
+    expect(read({ ...base, delegatedScope: fields.delegatedScope })?.delegatedScope).toEqual(fields.delegatedScope)
   })
 
   test("a workflow agent's record parses", () => {

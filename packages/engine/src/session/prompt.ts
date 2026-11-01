@@ -2288,6 +2288,7 @@ const layer = Layer.effect(
         spentUsd: run?.spentUsd,
         capUsd: run?.budget.usd,
         unpricedSteps: run?.unpricedSteps,
+        codiumSteps: run?.codiumSteps,
       }).toObject()
       if (current && !current.summary) {
         yield* sessions.updateMessage({ ...current, error })

@@ -834,6 +834,7 @@ const layer: Layer.Layer<
           model: sql<string | null>`json_extract(${SessionMessageTable.data}, '$.model')`,
           cost: sql<number | null>`json_extract(${SessionMessageTable.data}, '$.cost')`,
           unpriced: sql<number | null>`json_extract(${SessionMessageTable.data}, '$.unpriced')`,
+          billing: sql<string | null>`json_extract(${SessionMessageTable.data}, '$.billing')`,
           tokens: sql<string | null>`json_extract(${SessionMessageTable.data}, '$.tokens')`,
           finish: sql<string | null>`json_extract(${SessionMessageTable.data}, '$.finish')`,
           error: sql<string | null>`json_extract(${SessionMessageTable.data}, '$.error')`,
@@ -1278,6 +1279,7 @@ export function stepUsage(
     model: string | null
     cost: number | null
     unpriced: number | null
+    billing?: string | null
     tokens: string | null
     finish: string | null
     error: string | null
@@ -1310,6 +1312,7 @@ export function stepUsage(
         cost: row.cost,
         tokens,
         ...(row.unpriced ? { unpriced: true } : {}),
+        ...(row.billing === "codium" ? { billing: "codium" as const } : {}),
         ...(row.type === "compaction" ? { summary: true } : {}),
         ...(row.finish ? { finish: row.finish } : {}),
         // Only whether the step failed matters to usage; the error itself stays in the session.
@@ -1328,19 +1331,21 @@ export function summarizeUsage(
 ): UsageSummary {
   const assistant = messages.filter((message) => message.role === "assistant").filter((message) => !message.forked)
   const own = assistant.filter((message) => !helpers.has(message.sessionID))
+  const metered = assistant.filter((message) => !Billing.of(message))
   const days = assistant.reduce((result, message) => {
     const tokens = usageTokens(message)
     const date = localDateKey(message.time.created)
-    const current = result.get(date) ?? { date, tokens: 0, cost: 0, tasks: new Set<string>() }
+    const current = result.get(date) ?? { date, tokens: 0, cost: 0, codium: 0, tasks: new Set<string>() }
     if (!helpers.has(message.sessionID)) current.tasks.add(`${message.sessionID}:${message.parentID}`)
     result.set(date, {
       date,
       tokens: current.tokens + tokens,
-      cost: current.cost + Math.max(0, message.cost),
+      cost: current.cost + (Billing.of(message) ? 0 : Math.max(0, message.cost)),
+      codium: current.codium + (Billing.of(message) ? 1 : 0),
       tasks: current.tasks,
     })
     return result
-  }, new Map<string, { date: string; tokens: number; cost: number; tasks: Set<string> }>())
+  }, new Map<string, { date: string; tokens: number; cost: number; codium: number; tasks: Set<string> }>())
   // Archive imports remap sessions and event IDs, but preserve the identity of the paid attempt.
   const attempts = new Map<string, typeof SessionEvent.AncillaryUsage.data.Type | undefined>()
   const same = Schema.toEquivalence(SessionEvent.AncillaryUsage.data)
@@ -1356,15 +1361,24 @@ export function summarizeUsage(
     // Conflicting copies have no trustworthy amount or date; count one unknown attempt below.
     if (!usage) return
     const date = localDateKey(DateTime.toEpochMillis(usage.timestamp))
-    const current = days.get(date) ?? { date, tokens: 0, cost: 0, tasks: new Set<string>() }
+    const current = days.get(date) ?? { date, tokens: 0, cost: 0, codium: 0, tasks: new Set<string>() }
     days.set(date, {
       ...current,
-      cost: current.cost + Math.max(0, usage.cost ?? 0),
-      tokens: current.tokens + usageTokens({ tokens: usage.tokens ?? EmptyTokens }),
+      cost: current.cost + (Billing.of(usage) ? 0 : Math.max(0, usage.cost ?? 0)),
+      tokens: current.tokens + usageTokens({ ...usage, tokens: usage.tokens ?? EmptyTokens }),
+      codium: current.codium + (Billing.of(usage) ? 1 : 0),
     })
   })
   const activity = [...days.values()]
-    .map((day): UsageDay => ({ date: day.date, tokens: day.tokens, cost: day.cost, tasks: day.tasks.size }))
+    .map(
+      (day): UsageDay => ({
+        date: day.date,
+        tokens: day.tokens,
+        cost: day.cost,
+        tasks: day.tasks.size,
+        ...(day.codium ? { codium: day.codium } : {}),
+      }),
+    )
     .sort((a, b) => a.date.localeCompare(b.date))
   const active = new Set(activity.filter((day) => day.tasks > 0).map((day) => day.date))
   const currentStreak = streakEndingAt(
@@ -1389,7 +1403,7 @@ export function summarizeUsage(
       )
       .map((message) => `${message.sessionID}:${message.parentID}`),
   )
-  const modelGroups = assistant.reduce((result, message) => {
+  const modelGroups = metered.reduce((result, message) => {
     const modelID = message.modelID.endsWith("-fast") ? message.modelID.slice(0, -5) : message.modelID
     const key = `${message.providerID}\n${modelID}`
     const current = result.get(key) ?? { providerID: message.providerID, modelID, tokens: 0, responses: 0 }
@@ -1400,7 +1414,7 @@ export function summarizeUsage(
     })
     return result
   }, new Map<string, Omit<UsageModel, "percentage">>())
-  const effortGroups = assistant.reduce((result, message) => {
+  const effortGroups = metered.reduce((result, message) => {
     const effort = usageEffort(message.variant)
     const current = result.get(effort.id) ?? { ...effort, tokens: 0, responses: 0 }
     result.set(effort.id, {
@@ -1410,9 +1424,9 @@ export function summarizeUsage(
     })
     return result
   }, new Map<string, Omit<UsageEffort, "percentage">>())
-  const transcriptTokens = assistant.reduce((total, message) => total + usageTokens(message), 0)
+  const transcriptTokens = metered.reduce((total, message) => total + usageTokens(message), 0)
   const percentage = (tokens: number, responses: number) => {
-    const totalResponses = assistant.length
+    const totalResponses = metered.length
     const share = transcriptTokens > 0 ? tokens / transcriptTokens : totalResponses > 0 ? responses / totalResponses : 0
     return Math.round(share * 1_000) / 10
   }
@@ -1425,16 +1439,25 @@ export function summarizeUsage(
     }))
   const longest = durations.reduce((a, b) => (b.ms > a.ms ? b : a), { ms: 0, tokens: 0 })
   const unpricedResponses =
-    assistant.filter((message) => message.unpriced).length +
+    assistant.filter((message) => message.unpriced || Billing.of(message)).length +
     [...attempts.values()].filter(
-      (usage) => !usage || usage.unpriced || usage.incomplete || usage.cost === undefined || usage.tokens === undefined,
+      (usage) =>
+        !usage ||
+        Billing.of(usage) ||
+        usage.unpriced ||
+        usage.incomplete ||
+        usage.cost === undefined ||
+        usage.tokens === undefined,
     ).length
+  const codiumResponses =
+    assistant.length - metered.length + [...attempts.values()].filter((usage) => usage && Billing.of(usage)).length
   const helperGroups = [
     ...assistant.map((message) => ({
       sessionID: message.sessionID,
       responses: 1,
       tokens: usageTokens(message),
-      cost: Math.max(0, message.cost),
+      cost: Billing.of(message) ? 0 : Math.max(0, message.cost),
+      codiumSteps: Billing.of(message) ? 1 : 0,
     })),
     ...[...attempts.values()].flatMap((usage) =>
       usage
@@ -1442,8 +1465,9 @@ export function summarizeUsage(
             {
               sessionID: usage.sessionID,
               responses: 0,
-              tokens: usageTokens({ tokens: usage.tokens ?? EmptyTokens }),
-              cost: Math.max(0, usage.cost ?? 0),
+              tokens: usageTokens({ ...usage, tokens: usage.tokens ?? EmptyTokens }),
+              cost: Billing.of(usage) ? 0 : Math.max(0, usage.cost ?? 0),
+              codiumSteps: Billing.of(usage) ? 1 : 0,
             },
           ]
         : [],
@@ -1458,6 +1482,9 @@ export function summarizeUsage(
       responses: current.responses + item.responses,
       tokens: current.tokens + item.tokens,
       cost: current.cost + item.cost,
+      ...((current.codiumSteps ?? 0) + item.codiumSteps
+        ? { codiumSteps: (current.codiumSteps ?? 0) + item.codiumSteps }
+        : {}),
     })
     return result
   }, new Map<string, Omit<UsageHelper, "sessions"> & { sessions: Set<string> }>())
@@ -1466,13 +1493,14 @@ export function summarizeUsage(
     .sort((a, b) => b.cost - a.cost || b.tokens - a.tokens || a.id.localeCompare(b.id))
 
   const tokens = [
-    ...assistant.map((message) => message.tokens),
-    ...[...attempts.values()].flatMap((usage) => (usage?.tokens ? [usage.tokens] : [])),
+    ...metered.map((message) => message.tokens),
+    ...[...attempts.values()].flatMap((usage) => (usage?.tokens && !Billing.of(usage) ? [usage.tokens] : [])),
   ]
   return {
     lifetimeTokens,
     lifetimeCost: activity.reduce((total, day) => total + day.cost, 0),
     ...(unpricedResponses ? { unpricedResponses } : {}),
+    ...(codiumResponses ? { codiumResponses } : {}),
     inputTokens: tokens.reduce((total, tokens) => total + Math.max(0, Math.round(tokens.input)), 0),
     outputTokens: tokens.reduce((total, tokens) => total + Math.max(0, Math.round(tokens.output)), 0),
     reasoningTokens: tokens.reduce((total, tokens) => total + Math.max(0, Math.round(tokens.reasoning)), 0),
@@ -1505,7 +1533,14 @@ export function summarizeUsage(
   }
 }
 
-function usageTokens(message: Pick<typeof SessionV1.Assistant.Type, "tokens">) {
+function usageTokens(
+  message: Pick<typeof SessionV1.Assistant.Type, "tokens"> & {
+    billing?: string
+    providerID?: string
+    model?: { providerID?: string }
+  },
+) {
+  if (Billing.of(message)) return 0
   const components =
     message.tokens.input +
     message.tokens.output +

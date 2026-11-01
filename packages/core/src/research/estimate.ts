@@ -125,9 +125,12 @@ export function copy(input: {
   const scale = `About ${counted(input.pages, "page", "pages")} and ${counted(input.searches, "search", "searches")}`
   if (input.kind === "priced" && input.estimate.usd)
     return `${scale}. Estimated $${money(input.estimate.usd.low)}–$${money(input.estimate.usd.high)} at list prices.${input.capUsd === undefined ? ` Step cap ${input.capSteps}.` : ` Cap $${money(input.capUsd)}.`}`
+  if (input.kind === "codium")
+    return `${scale}. Uses your Vector Codium plan; Vector shows no cost estimate for Codium. Step cap ${input.capSteps}.`
   if (input.kind === "local")
     return `${scale}, about ${input.estimate.calls} calls to your local model. No per-token charge. Step cap ${input.capSteps}.${input.estimate.minutes === undefined ? "" : ` On this server that is about ${Math.max(1, Math.round(input.estimate.minutes))} minutes.`}`
-  if (input.kind === "free") return `${scale}. No per-token charge on this free model, within its daily limits. Step cap ${input.capSteps}.`
+  if (input.kind === "free")
+    return `${scale}. No per-token charge on this free model, within its daily limits. Step cap ${input.capSteps}.`
   if (input.kind === "plan") return `${scale}. Counts toward your plan's usage limits. Step cap ${input.capSteps}.`
   return `${scale}. This model has no listed price, so Vector cannot estimate the cost. Step cap ${input.capSteps}.`
 }

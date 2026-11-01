@@ -36,7 +36,14 @@ export const LAST_RUNS = 200
 // The order matters: a free model with a catalog price is still free, an OAuth plan with a catalog price is billed by
 // the plan, not per token, and a local server with a configured price is priced at it. `local` is a model server on
 // this computer or a listed private address; a company endpoint on the internet without a price stays unknown.
-export function costKindOf(input: { free: boolean; listed: boolean; oauthPlan: boolean; local?: boolean }): CostKind {
+export function costKindOf(input: {
+  free: boolean
+  listed: boolean
+  oauthPlan: boolean
+  local?: boolean
+  codium?: boolean
+}): CostKind {
+  if (input.codium) return "codium"
   if (input.free) return "free"
   if (input.oauthPlan) return "plan"
   if (input.listed) return "priced"
@@ -78,6 +85,7 @@ export type Run = {
   readonly spentUsd: number
   readonly steps: number
   readonly unpricedSteps: number
+  readonly codiumSteps: number
   // The cost kind of the latest step, for the spend snapshot.
   readonly costKind?: CostKind
   // Steps counted by cost kind, so a run's cost is known only when every step was priced. No limit reads it.
@@ -140,6 +148,7 @@ export function start(rootID: SessionID, budget: RunBudget.Info, loopRules = tru
     steps: 0,
     unpricedSteps: 0,
     kinds: {},
+    codiumSteps: 0,
     warned: false,
     loops: new Map(),
     loopRules,
@@ -186,6 +195,7 @@ export function afterStep(
     steps: run.steps + 1,
     spentUsd: run.spentUsd + (step.costKind === "priced" ? Math.max(step.costUsd ?? 0, 0) : 0),
     unpricedSteps: run.unpricedSteps + (step.costKind === "unknown" ? 1 : 0),
+    codiumSteps: run.codiumSteps + (step.costKind === "codium" ? 1 : 0),
     costKind: step.costKind,
     kinds: { ...run.kinds, [step.costKind]: (run.kinds[step.costKind] ?? 0) + 1 },
   }
@@ -370,7 +380,12 @@ export type LinkOptions = {
   readonly delegated?: {
     readonly id: string
     readonly budget: RunBudget.Info
-    readonly seed?: { readonly spentUsd: number; readonly steps: number; readonly unpricedSteps: number }
+    readonly seed?: {
+      readonly spentUsd: number
+      readonly steps: number
+      readonly unpricedSteps: number
+      readonly codiumSteps?: number
+    }
   }
 }
 
@@ -381,6 +396,7 @@ export type ScopeSnapshot = {
   readonly spentUsd: number
   readonly steps: number
   readonly unpricedSteps: number
+  readonly codiumSteps: number
   readonly costKind?: CostKind
   readonly stopped?: Stop
 }
@@ -544,6 +560,7 @@ function delegate(current: State, rootID: SessionID, input: NonNullable<LinkOpti
     spentUsd: input.seed?.spentUsd ?? 0,
     steps: input.seed?.steps ?? 0,
     unpricedSteps: input.seed?.unpricedSteps ?? 0,
+    codiumSteps: input.seed?.codiumSteps ?? 0,
   }
   const armed: Ledger = {
     kind: "delegated",
@@ -568,6 +585,7 @@ function snapshotOf(ledger: Ledger): ScopeSnapshot {
     spentUsd: ledger.run.spentUsd,
     steps: ledger.run.steps,
     unpricedSteps: ledger.run.unpricedSteps,
+    codiumSteps: ledger.run.codiumSteps,
     costKind: ledger.run.costKind,
     stopped: ledger.run.stopped,
   }
@@ -865,6 +883,7 @@ const layer = Layer.effect(
           capUsd: published.next.run.budget.usd,
           steps: published.next.run.steps,
           unpricedSteps: published.next.run.unpricedSteps,
+          codiumSteps: published.next.run.codiumSteps,
           costKind: step.costKind,
           estimate: published.next.verdict.estimate,
         })
@@ -878,6 +897,7 @@ const layer = Layer.effect(
             capUsd: selected.next.run.budget.usd,
             steps: selected.next.run.steps,
             unpricedSteps: selected.next.run.unpricedSteps,
+            codiumSteps: selected.next.run.codiumSteps,
             costKind: step.costKind,
             estimate: selected.next.verdict.estimate,
           })

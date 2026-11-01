@@ -48,6 +48,7 @@ export type SubagentDelegatedScope = {
   spentUsd: number
   steps: number
   unpricedSteps: number
+  codiumSteps?: number
   stopped?: { reason: string; message: string }
 }
 

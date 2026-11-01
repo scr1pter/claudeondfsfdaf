@@ -1,3 +1,4 @@
+import { Billing } from "@vectordevai/schema/billing"
 import { execFile } from "node:child_process"
 import { createHash, randomUUID } from "node:crypto"
 import { cp, lstat, mkdir, readFile, readdir, rename, rm, stat, statfs, writeFile } from "node:fs/promises"
@@ -2141,7 +2142,12 @@ async function executeParallelWorkspace(id: string, engine: ParallelWorkspaceEng
     const ledger = await spendLedger()
     // The headroom is held inside the check, so agents launched beside this
     // one cannot be handed the same dollars.
-    const allowance = await ledger.checkAllowance({ runId, source: "parallel", reserve: true })
+    const allowance = await ledger.checkAllowance({
+      runId,
+      source: "parallel",
+      reserve: true,
+      billing: persisted.runtime === "vector" && Billing.isCodium(persisted.provider) ? "codium" : undefined,
+    })
     // Blocked means the money is already spent, so the agent must never start.
     // Throwing lands in the catch below, which is the same failed-record shape
     // every other pre-flight failure uses, so the reason reaches the UI.
@@ -3262,7 +3268,8 @@ export async function mergeParallelWorkspace(id: string, force = false, commit?:
         commitNote = "Main working tree was already clean after the merge; nothing to commit."
       } else {
         // The user typed the message, so the posting check only asks when it repeats what Vector knows about them.
-        const [message] = (await checkPost({ cwd: record.sourcePath, parts: [commit.message.trim()], typed: true })) ?? []
+        const [message] =
+          (await checkPost({ cwd: record.sourcePath, parts: [commit.message.trim()], typed: true })) ?? []
         if (!message) commitError = "Changes were merged, but nothing was committed."
         if (message) {
           await runGit(["add", "-A"], record.sourcePath)

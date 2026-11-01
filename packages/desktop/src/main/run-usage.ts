@@ -15,6 +15,8 @@ export type EngineSessionResponse = {
     cost?: number
     tokens?: Tokens
     // What the subagents and Vector's helpers below the session spent, which cost and tokens leave out.
+    codiumSteps?: number
+    subagentCodiumSteps?: number
     subagentCost?: number
     subagentTokens?: Tokens
     model?: { id?: string; providerID?: string }
@@ -95,6 +97,7 @@ export function combineSpend(total: RunBudget.Snapshot | undefined, drain: RunBu
     spentUsd: total.spentUsd + drain.spentUsd,
     steps: total.steps + drain.steps,
     unpricedSteps: total.unpricedSteps + drain.unpricedSteps,
+    codiumSteps: (total.codiumSteps ?? 0) + (drain.codiumSteps ?? 0),
   }
 }
 

@@ -1,3 +1,4 @@
+import { Billing } from "@vectordevai/schema/billing"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { createHash } from "node:crypto"
 import { PermissionV1 } from "@vectordevai/core/v1/permission"
@@ -201,6 +202,7 @@ const layer = Layer.effect(
         Effect.catch(() => Effect.succeed(undefined)),
         Effect.map((signIn) =>
           SpendGuard.costKindOf({
+            codium: Billing.isCodium(input.model.providerID),
             free: isFreeModel(input.model) || input.model.freeModel !== undefined,
             oauthPlan:
               signIn?.type === "oauth" &&
@@ -418,6 +420,7 @@ const layer = Layer.effect(
           spentUsd: run?.spentUsd,
           capUsd: run?.budget.usd,
           unpricedSteps: run?.unpricedSteps,
+          codiumSteps: run?.codiumSteps,
           estimate: stop.estimate,
         }).toObject()
         ctx.blocked = true

@@ -179,6 +179,7 @@ const DelegatedScope = Schema.Struct({
   spentUsd: Schema.Finite,
   steps: Schema.Finite,
   unpricedSteps: Schema.Finite,
+  codiumSteps: Schema.optional(Schema.Finite),
   stopped: Schema.optional(Schema.Struct({ reason: Schema.String, message: Schema.String })),
 })
 const Owner = Schema.Struct({ pid: Schema.Int, boot: Schema.Finite })
@@ -587,7 +588,7 @@ export function scopeFields(
 ): Pick<SubagentRecord, "budgetScopes" | "delegatedScope"> {
   const delegated = scopes.find((scope) => scope.kind === "delegated")
   return {
-    budgetScopes: scopes.filter((scope): scope is Task.BudgetScope => scope.kind !== "delegated"),
+    budgetScopes: scopes.filter((scope): scope is SpendGuard.ScopeSnapshot & Task.BudgetScope => scope.kind !== "delegated"),
     ...(delegated && {
       delegatedScope: {
         id: delegated.id,
@@ -595,6 +596,7 @@ export function scopeFields(
         spentUsd: delegated.spentUsd,
         steps: delegated.steps,
         unpricedSteps: delegated.unpricedSteps,
+        codiumSteps: delegated.codiumSteps,
         ...(delegated.stopped && { stopped: delegated.stopped }),
       },
     }),

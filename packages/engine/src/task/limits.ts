@@ -81,7 +81,12 @@ export type Status = {
   spend?: Task.Limits["spend"]
 }
 /** What a request's children spent before this process, for the delegated ledger it creates. */
-export type Seed = { readonly spentUsd: number; readonly steps: number; readonly unpricedSteps: number }
+export type Seed = {
+  readonly spentUsd: number
+  readonly steps: number
+  readonly unpricedSteps: number
+  readonly codiumSteps: number
+}
 
 export class Refused extends Schema.TaggedErrorClass<Refused>()("TaskLimits.Refused", {
   reason: Schema.Literals(["per_request", "batch", "slots", "spend", "workflow_runs", "unavailable"]),
@@ -341,7 +346,7 @@ const EMPTY: Pool = {
   reserves: new Map(),
   requests: new Map(),
 }
-const NONE: Seed = { spentUsd: 0, steps: 0, unpricedSteps: 0 }
+const NONE: Seed = { spentUsd: 0, steps: 0, unpricedSteps: 0, codiumSteps: 0 }
 
 const counts = (origin: Origin) => origin === "root" || origin === "nested"
 const limitOf = (pool: Pool) => pool.limits?.running ?? DEFAULTS.running
@@ -688,10 +693,11 @@ const layer = Layer.effect(
 
     // The request's children at depth 1 and 2 below the conversation's roots, by the request id in their record
     // (SubagentLifecycle.METADATA_KEY is "subagent"). A child's subagent_cost already holds its own children's spend,
-    // and workflow agents count against their run, not the request.
+    // and workflow agents count against their run, not the request. Stored unpriced counts include Codium; the
+    // delegated guard keeps Codium separate so only unknown own-key work consumes its unpriced-step allowance.
     const query = (conversationID: string, requestID: string) =>
       db
-        .all<{ launched: number | null; spent: number | null; unpriced: number | null }>(
+        .all<{ launched: number | null; spent: number | null; unpriced: number | null; codium: number | null }>(
           sql`WITH roots(id) AS (
             SELECT id FROM session WHERE id = ${conversationID}
             UNION
@@ -702,13 +708,16 @@ const layer = Layer.effect(
               AND json_extract(metadata, '$.vector.parentSessionId') = ${conversationID}
           ),
           depth1 AS (
-            SELECT id, cost + subagent_cost AS spent, unpriced_steps + subagent_unpriced_steps AS unpriced,
+            SELECT id, cost + subagent_cost AS spent,
+              unpriced_steps + subagent_unpriced_steps - codium_steps - subagent_codium_steps AS unpriced,
+              codium_steps + subagent_codium_steps AS codium,
               json_extract(metadata, '$.subagent.requestID') AS request
             FROM session WHERE parent_id IN (SELECT id FROM roots)
           ),
           depth2 AS (
             SELECT child.cost + child.subagent_cost AS spent,
-              child.unpriced_steps + child.subagent_unpriced_steps AS unpriced,
+              child.unpriced_steps + child.subagent_unpriced_steps - child.codium_steps - child.subagent_codium_steps AS unpriced,
+              child.codium_steps + child.subagent_codium_steps AS codium,
               json_extract(child.metadata, '$.subagent.requestID') AS request,
               json_extract(child.metadata, '$.subagent.workflow.role') AS role,
               depth1.request AS parent
@@ -720,7 +729,9 @@ const layer = Layer.effect(
             (SELECT coalesce(sum(spent), 0) FROM depth1 WHERE request = ${requestID})
               + (SELECT coalesce(sum(spent), 0) FROM depth2 WHERE request = ${requestID} AND parent IS NOT ${requestID}) AS spent,
             (SELECT coalesce(sum(unpriced), 0) FROM depth1 WHERE request = ${requestID})
-              + (SELECT coalesce(sum(unpriced), 0) FROM depth2 WHERE request = ${requestID} AND parent IS NOT ${requestID}) AS unpriced`,
+              + (SELECT coalesce(sum(unpriced), 0) FROM depth2 WHERE request = ${requestID} AND parent IS NOT ${requestID}) AS unpriced,
+            (SELECT coalesce(sum(codium), 0) FROM depth1 WHERE request = ${requestID})
+              + (SELECT coalesce(sum(codium), 0) FROM depth2 WHERE request = ${requestID} AND parent IS NOT ${requestID}) AS codium`,
         )
         .pipe(
           Effect.map((rows) => {
@@ -728,7 +739,12 @@ const layer = Layer.effect(
             return {
               launched: Number(row?.launched ?? 0),
               // The database keeps no step counts, so a restart starts the step count again at 0.
-              seed: { spentUsd: Number(row?.spent ?? 0), steps: 0, unpricedSteps: Number(row?.unpriced ?? 0) },
+              seed: {
+                spentUsd: Number(row?.spent ?? 0),
+                steps: 0,
+                unpricedSteps: Number(row?.unpriced ?? 0),
+                codiumSteps: Number(row?.codium ?? 0),
+              },
             }
           }),
           // Undefined when the count could not be read: nothing is kept, so the next call reads it again.

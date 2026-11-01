@@ -79,6 +79,7 @@ export type SpendPolicy = {
 }
 
 export type SpendAllowanceInput = {
+  billing?: "codium"
   runId: string
   source: SpendSource
   at?: Date
@@ -272,6 +273,10 @@ export function createSpendLedger(input: { userDataPath: string }) {
   const checkAllowance = (allowance: SpendAllowanceInput) => serial(() => evaluate(allowance))
 
   const evaluate = async (allowance: SpendAllowanceInput): Promise<SpendAllowance> => {
+    if (allowance.billing === "codium") {
+      // The account gateway caps Codium. It spends no dollars from this local ledger.
+      return { allowed: true, state: "ok", unmeasuredRuns: 0 }
+    }
     const state = await load()
     const at = allowance.at ?? new Date()
     // A scheduled run is the unattended case; a session or parallel agent was
