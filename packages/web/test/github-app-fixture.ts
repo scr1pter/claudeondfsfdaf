@@ -66,6 +66,7 @@ export async function githubAppFixture(input: { store?: typeof persistentStore }
     repository,
     run,
     job,
+    extraJobs: [] as Array<typeof job>,
     workflow: { id: 500, path: ".github/workflows/vector.yml", state: "active" },
     permission: "write",
     binder: { id: 790, login: "fixture-binder", type: "User" },
@@ -106,8 +107,11 @@ export async function githubAppFixture(input: { store?: typeof persistentStore }
     revokeFailure: false,
     redirectPath: "",
     failPath: "",
+    failStatus: 503,
     events: [] as string[],
     requests: [] as string[],
+    dispatchStatus: 204,
+    dispatches: [] as Array<{ ref: string; inputs: { mode: string; prompt: string; ticket: string } }>,
     minted: [] as Array<{
       token: string
       purpose: string
@@ -126,7 +130,7 @@ export async function githubAppFixture(input: { store?: typeof persistentStore }
       if (route === state.failPath)
         return Response.json(
           { error: "fixture upstream failure", authorization: request.headers.get("authorization") },
-          { status: 503 },
+          { status: state.failStatus },
         )
       expect(request.headers.get("x-github-api-version")).toBe("2026-03-10")
       const authorization = request.headers.get("authorization")?.replace(/^Bearer /, "")
@@ -134,7 +138,12 @@ export async function githubAppFixture(input: { store?: typeof persistentStore }
         expect(authorization).toBeUndefined()
         return Response.json({ id: state.botId, login: `${config.slug}[bot]`, type: "Bot" })
       }
-      if (route === "/app" || route.endsWith("/installation") || route.endsWith("/access_tokens")) {
+      if (
+        route === "/app" ||
+        /^\/app\/installations\/\d+$/.test(route) ||
+        route.endsWith("/installation") ||
+        route.endsWith("/access_tokens")
+      ) {
         const signed = await jwtVerify(authorization!, appKey.publicKey, {
           issuer: config.clientId,
           algorithms: ["RS256"],
@@ -142,7 +151,7 @@ export async function githubAppFixture(input: { store?: typeof persistentStore }
         expect(signed.payload.exp! - signed.payload.iat!).toBe(360)
         expect(signed.payload.iat).toBeLessThanOrEqual(Math.floor(Date.now() / 1000) - 59)
         if (route === "/app") return Response.json({ id: state.appId, slug: state.appSlug })
-        if (route.endsWith("/installation"))
+        if (route.endsWith("/installation") || /^\/app\/installations\/\d+$/.test(route))
           return state.installed
             ? Response.json({
                 id: 600,
@@ -157,13 +166,18 @@ export async function githubAppFixture(input: { store?: typeof persistentStore }
           body.permissions.actions === "read"
             ? "validation"
             : body.permissions.actions === "write"
-              ? "task"
+              ? body.permissions.contents
+                ? "task"
+                : "dispatch"
               : body.permissions.contents === "write"
                 ? "publish"
                 : "review"
         state.events.push(`mint:${purpose}`)
         if (state.failFinalMint && purpose !== "validation") return new Response(null, { status: 503 })
-        const token = `ghs_fixture_${crypto.randomUUID().replaceAll("-", "")}`
+        const token =
+          state.mintMode === "stateless"
+            ? `ghs_42_${crypto.randomUUID().replaceAll("-", "_")}.fixture-payload.fixture_signature`
+            : `ghs_fixture_${crypto.randomUUID().replaceAll("-", "")}`
         tokens.set(token, { purpose, permissions: body.permissions })
         state.minted.push({ token, purpose, body })
         const permissions =
@@ -194,11 +208,19 @@ export async function githubAppFixture(input: { store?: typeof persistentStore }
           repositories: [state.repository],
         })
       }
+      if (route.endsWith("/actions/workflows/vector.yml/dispatches")) {
+        expect(token.purpose).toBe("dispatch")
+        expect(request.method).toBe("POST")
+        expect(route).toBe(`/repos/${state.repository.full_name}/actions/workflows/vector.yml/dispatches`)
+        state.dispatches.push(await request.json())
+        return new Response(null, { status: state.dispatchStatus })
+      }
       expect(token.purpose).toBe("validation")
       if (route === "/repos/fixture-owner/project") return Response.json(state.repository)
       if (route.endsWith("/attempts/1")) return Response.json(state.run)
       if (route.endsWith("/workflows/500")) return Response.json(state.workflow)
-      if (route.endsWith("/jobs")) return Response.json({ total_count: 1, jobs: [state.job] })
+      if (route.endsWith("/jobs"))
+        return Response.json({ total_count: 1 + state.extraJobs.length, jobs: [state.job, ...state.extraJobs] })
       if (route.startsWith("/user/"))
         return state.binderMissing ? new Response(null, { status: 404 }) : Response.json(state.binder)
       if (route.endsWith("/issues/comments/123") || route.endsWith("/pulls/comments/123"))

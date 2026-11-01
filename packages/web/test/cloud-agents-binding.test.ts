@@ -1368,6 +1368,7 @@ function integrationTests() {
       boundAt: number
       lastUsedAt?: number
       suspended?: "transferred" | "deleted" | "binder-left"
+      installationId?: string
     }
     const shape: Equal<RepoBinding, Section25> = true
     const identity: GithubIdentity extends BindIdentity ? true : false = true

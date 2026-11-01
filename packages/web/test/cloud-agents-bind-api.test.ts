@@ -234,6 +234,47 @@ function integrationTests() {
     expect(await bindingFor(f.github.repositoryId)).toBeUndefined()
   })
 
+  test("only verified App-backed bind stores installation identity; public projections hide it and no-App rebind clears it", async () => {
+    await using f = await fixture()
+    const code = await f.code()
+    expect((await f.code({ body: { installationId: "999" } })).status).toBe(400)
+    expect(
+      (
+        await f.send("bind", {
+          token: await f.github.makeToken("bind", { event_name: "workflow_dispatch" }),
+          body: { code: code.body.code, workflowVersion: "3", installationId: "999" },
+        })
+      ).status,
+    ).toBe(400)
+    expect((await f.bind(code.body.code)).status).toBe(200)
+    const binding = await bindingFor(f.github.repositoryId)
+    expect(binding?.installationId).toBe("600")
+    expect(
+      ((await persistentStore(["HKEYS", `vector:cloud-agents:binding:${f.github.repositoryId}`])) as string[]).sort(),
+    ).toEqual(
+      [
+        "repositoryId",
+        "ownerId",
+        "repository",
+        "account",
+        "visibility",
+        "defaultRef",
+        "generation",
+        "binderGithubId",
+        "binderLogin",
+        "workflowVersion",
+        "boundAt",
+        "installationId",
+      ].sort(),
+    )
+    expect(JSON.stringify((await f.send("bindings")).body)).not.toContain("installationId")
+    f.github.state.enabled = false
+    expect((await f.bind((await f.code()).body.code)).status).toBe(200)
+    const rebound = await bindingFor(f.github.repositoryId)
+    expect(rebound?.generation).toBe((binding?.generation ?? 0) + 1)
+    expect(rebound?.installationId).toBeUndefined()
+  })
+
   test("unmarked desktop credentials and revoked accounts cannot create or redeem bind codes", async () => {
     await using f = await fixture()
     const unmarked = mintCliToken(f.user).token

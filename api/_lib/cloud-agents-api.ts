@@ -16,9 +16,10 @@ import {
   touchBinding,
 } from "./cloud-agents-binding.js"
 import { cloudAgentEntitlement, cloudAgentRevokedBefore } from "./cloud-agents-entitlement.js"
-import { releaseRun, reportRun, reserveBoundRun, settleRecordedRun } from "./cloud-agents-ledger.js"
+import { liveRun, releaseRun, reportRun, reserveBoundRun, settleRecordedRun } from "./cloud-agents-ledger.js"
 import { mintRunToken, requireRunToken, requireSettlementToken } from "./cloud-agents-run-token.js"
 import { listCloudRuns, recordRunStart } from "./cloud-agents-runs.js"
+import { peekRunTicket } from "./cloud-agents-start.js"
 import { githubProof } from "./github-api.js"
 import { githubApp, type createGithubApp } from "./github-app.js"
 import { githubApiVersion, githubId, githubRecord, githubResponseBytes, githubUnavailable } from "./github-http.js"
@@ -159,6 +160,7 @@ export function createCloudAgentsApi(
         current: current?.account,
         identity,
         workflowVersion: body.workflowVersion,
+        ...(checked.installed ? { installationId: checked.installationId } : {}),
         takeover,
         now: now(),
       },
@@ -251,9 +253,26 @@ export function createCloudAgentsApi(
       throw new ApiError(403, "EVENT_NOT_ALLOWED", "This event cannot start a run.")
     if (identity.event !== "pull_request_review_comment" && identity.ref !== binding.defaultRef)
       throw new ApiError(403, "WORKFLOW_NOT_TRUSTED", "Use the repository's default workflow.")
-    // V13 replaces this gate only after the ticket producer and atomic consumer are available.
-    if (identity.actorIsBot || body.ticket !== undefined)
+    const rid = GithubAgents.runId(identity.repositoryId, identity.runId, identity.runAttempt, identity.checkRunId)
+    const config = app.configuration()
+    const slug = config.available ? GithubAgents.slugFromInstallUrl(config.installUrl) : undefined
+    const bot =
+      identity.actorIsBot && !!slug && identity.actor === `${slug}[bot]` && identity.event === "workflow_dispatch"
+    if ((identity.actorIsBot && !bot) || (!bot && body.ticket !== undefined))
       throw new ApiError(403, "ACTOR_NOT_ALLOWED", "This actor cannot start a run.")
+    const ticket = bot ? await peekRunTicket(body.ticket, identity, binding, { app, store, now }) : undefined
+    const previous = bot && !ticket ? await liveRun(binding.account, rid, store) : undefined
+    const renewal =
+      previous &&
+      previous.gen === binding.generation &&
+      previous.repo === identity.repositoryId &&
+      previous.src === "github-dispatch" &&
+      previous.triggerSource !== undefined &&
+      previous.triggerPurpose !== undefined
+        ? { jti: previous.jti, trigger: { source: previous.triggerSource, purpose: previous.triggerPurpose } }
+        : undefined
+    if (bot && !ticket && !renewal) throw new ApiError(403, "ACTOR_NOT_ALLOWED", "This actor cannot start a run.")
+    const trigger = ticket ? { source: ticket.source, purpose: ticket.purpose } : renewal?.trigger
     const checked = app.configuration().available
       ? await app.verifyRun(identity, {
           job: body.purpose === "review" ? "review" : "agent",
@@ -264,8 +283,10 @@ export function createCloudAgentsApi(
           account: binding.account,
           defaultRef: binding.defaultRef,
           generation: binding.generation,
+          ...(bot ? { bot: true } : {}),
         })
       : { installed: false as const }
+    if (bot && !checked.installed) throw new ApiError(403, "ACTOR_NOT_ALLOWED", "This actor cannot start a run.")
     if (checked.installed && checked.binder === "binder-left") {
       await suspendBinding(binding, "binder-left", store)
       throw new ApiError(409, "BINDING_SUSPENDED", "Connect this repository again.")
@@ -278,7 +299,14 @@ export function createCloudAgentsApi(
         : identity.event === "workflow_dispatch"
           ? "github-dispatch"
           : "github-comment"
-    const purpose = source === "github-schedule" ? "scheduled" : body.purpose
+    const purpose =
+      source === "github-schedule"
+        ? "scheduled"
+        : trigger
+          ? trigger.purpose === "review"
+            ? "review"
+            : "task"
+          : body.purpose
     const at = now()
     const allowance = await entitlement(binding.account, { source, now: at }, fetcher)
     if (!allowance.active) {
@@ -290,7 +318,6 @@ export function createCloudAgentsApi(
     }
     if (source === "github-schedule" && allowance.limits.scheduledPerDay === 0)
       throw new RunRefusal(403, "CODIUM_PERK_REQUIRED", { perk: "scheduled" })
-    const rid = GithubAgents.runId(identity.repositoryId, identity.runId, identity.runAttempt, identity.checkRunId)
     await ipLimit(request, response)
     await enforceRateLimit(request, response, {
       scope: "cloud-agents-mint-job",
@@ -308,6 +335,7 @@ export function createCloudAgentsApi(
     })
     await consumeGithubOidc(identity, store)
     const jti = randomBytes(16).toString("base64url")
+    const reservedAt = now()
     const reserved = await reserveBoundRun(
       {
         account: binding.account,
@@ -319,7 +347,10 @@ export function createCloudAgentsApi(
         source,
         purpose,
         allowance,
-        now: at,
+        now: reservedAt,
+        ...(trigger ? { trigger } : {}),
+        ...(ticket ? { consumeKey: ticket.key } : {}),
+        ...(renewal ? { renewalJti: renewal.jti } : {}),
       },
       store,
     )
@@ -338,11 +369,11 @@ export function createCloudAgentsApi(
         pur: reserved.purpose,
         epoch: reserved.epoch,
         dl: reserved.deadline,
-        iat: at,
+        iat: reservedAt,
         jti,
         cs: allowance.limits.runCeilingShare,
       })
-      await touchBinding(identity.repositoryId, at, store)
+      await touchBinding(identity.repositoryId, reservedAt, store)
       await recordRunStart(
         {
           account: binding.account,
@@ -357,6 +388,7 @@ export function createCloudAgentsApi(
           purpose: reserved.purpose,
           startedAt: reserved.startedAt,
           actor: { login: identity.actor, id: identity.actorId },
+          ...(reserved.trigger ? { trigger: reserved.trigger } : {}),
         },
         store,
       )

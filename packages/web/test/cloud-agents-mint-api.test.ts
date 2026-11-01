@@ -366,7 +366,7 @@ function integrationTests() {
     }
   })
 
-  test("bots and tickets fail closed with or without an installed App until V13", async () => {
+  test("bots without valid tickets fail closed with or without an installed App", async () => {
     const f = await fixture()
     try {
       for (const installed of [true, false]) {

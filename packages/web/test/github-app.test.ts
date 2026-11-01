@@ -406,12 +406,14 @@ test("bind checks the dedicated job and current permission before granting admin
   expect(await fixture.app.verifyBind(identity)).toEqual({
     installed: true,
     defaultRef: "refs/heads/main",
+    installationId: "600",
     adminVerified: false,
   })
   fixture.state.permission = "admin"
   expect(await fixture.app.verifyBind(identity)).toEqual({
     installed: true,
     defaultRef: "refs/heads/main",
+    installationId: "600",
     adminVerified: true,
   })
   fixture.state.permission = "read"

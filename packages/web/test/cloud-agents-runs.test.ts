@@ -140,6 +140,9 @@ function integrationTests() {
         jti: record.jti,
         source: record.source,
         purpose: record.purpose,
+        ...(record.trigger && record.trigger.purpose !== "scheduled"
+          ? { trigger: { source: record.trigger.source, purpose: record.trigger.purpose } }
+          : {}),
         allowance,
         now: record.startedAt,
       })

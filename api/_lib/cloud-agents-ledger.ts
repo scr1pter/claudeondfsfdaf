@@ -1,7 +1,7 @@
 import { Option, Schema } from "effect"
 import { GithubAgents } from "../../packages/core/src/github-agents.js"
 import { bindingKey, generationKey } from "./cloud-agents-binding.js"
-import type { CloudAgentAllowance, RunSource } from "./cloud-agents-entitlement.js"
+import { RUN_SOURCES, type CloudAgentAllowance, type RunSource, type RunTrigger } from "./cloud-agents-entitlement.js"
 import { ApiError } from "./http.js"
 import { persistentStore } from "./persistent-store.js"
 
@@ -53,6 +53,8 @@ const Epoch = Schema.String.check(Schema.isPattern(METER_EPOCH_PATTERN))
 const Jti = Schema.String.check(Schema.isPattern(/^[A-Za-z0-9_-]{22}$/))
 const Source = Schema.Literals(["github-comment", "github-dispatch", "github-schedule"])
 const Purpose = Schema.Literals(["task", "review", "scheduled"])
+const TriggerSource = Schema.Literals(RUN_SOURCES)
+const TriggerPurpose = Schema.Literals(["task", "review", "incident", "changes"])
 const Time = Schema.Number.check(
   Schema.makeFilter((value: number) => Number.isSafeInteger(value) && value > 0 && value <= LATEST_TIME),
 )
@@ -77,6 +79,8 @@ const StoredRun = Schema.Struct({
   counted: Schema.optionalKey(Schema.Literal(true)),
   gen: Generation,
   jti: Jti,
+  triggerSource: Schema.optionalKey(TriggerSource),
+  triggerPurpose: Schema.optionalKey(TriggerPurpose),
 }).check(
   Schema.makeFilter(
     (run: {
@@ -86,12 +90,20 @@ const StoredRun = Schema.Struct({
       lastRequest?: number
       src: string
       counted?: true
+      pur: string
+      triggerSource?: string
+      triggerPurpose?: string
     }) =>
       run.deadline > run.startedAt &&
       (run.deadline - run.startedAt) % 1000 === 0 &&
       run.lastReport >= run.startedAt &&
       (run.lastRequest === undefined || run.lastRequest >= run.startedAt) &&
-      (run.counted === undefined || run.src === "github-schedule"),
+      (run.counted === undefined || run.src === "github-schedule") &&
+      ((run.triggerSource === undefined && run.triggerPurpose === undefined) ||
+        (run.triggerSource !== undefined &&
+          run.triggerPurpose !== undefined &&
+          run.src === "github-dispatch" &&
+          run.pur === (run.triggerPurpose === "review" ? "review" : "task"))),
   ),
 )
 const decodeRun = Schema.decodeUnknownOption(Schema.fromJsonString(StoredRun), { onExcessProperty: "error" })
@@ -100,7 +112,18 @@ const Whole = Schema.String.check(
   Schema.makeFilter((value: string) => /^(?:0|[1-9]\d{0,15})$/.test(value) && Number.isSafeInteger(Number(value))),
 )
 const decodeReserved = Schema.decodeUnknownOption(
-  Schema.Tuple([Schema.Literal("ok"), Decimal, Decimal, Schema.Literals(["0", "1"]), Epoch, Thread, Source, Purpose]),
+  Schema.Tuple([
+    Schema.Literal("ok"),
+    Decimal,
+    Decimal,
+    Schema.Literals(["0", "1"]),
+    Epoch,
+    Thread,
+    Source,
+    Purpose,
+    Schema.Literals(["", ...RUN_SOURCES]),
+    Schema.Literals(["", "task", "review", "incident", "changes"]),
+  ]),
 )
 
 export type LedgerSource = Extract<RunSource, "github-comment" | "github-dispatch" | "github-schedule">
@@ -120,6 +143,8 @@ export type LiveRun = {
   counted?: true
   gen: number
   jti: string
+  triggerSource?: RunSource
+  triggerPurpose?: Exclude<RunTrigger["purpose"], "scheduled">
 }
 export type ReserveInput = {
   account: string
@@ -137,6 +162,9 @@ export type ReserveInput = {
    * exist, so of the mints that peeked one ticket only one reserves; a renewal of that check run needs no ticket.
    */
   consumeKey?: string
+  trigger?: { source: RunSource; purpose: Exclude<RunTrigger["purpose"], "scheduled"> }
+  /** An exact, previously observed ticket-authorized live run; never grants a fresh reservation. */
+  renewalJti?: string
   now: number
 }
 /** What the token must sign: the live record's values, which a renewal keeps whatever the new mint asked for. */
@@ -147,6 +175,7 @@ type Reserved = {
   thread: string
   source: LedgerSource
   purpose: LedgerPurpose
+  trigger?: ReserveInput["trigger"]
 }
 export type ReserveResult =
   | ({ ok: true; renewed: false } & Reserved)
@@ -186,6 +215,11 @@ export async function reserveBoundRun(input: ReserveInput, store = persistentSto
 async function reserve(input: ReserveInput, store: typeof persistentStore, bound: boolean): Promise<ReserveResult> {
   const allowance = input.allowance
   if (!validReserve(input)) throw invalidRequest()
+  if (
+    bound &&
+    ((input.consumeKey !== undefined && !input.trigger) || (input.trigger && !input.consumeKey && !input.renewalJti))
+  )
+    throw invalidRequest()
   const reply = await store([
     "EVAL",
     RESERVE,
@@ -212,6 +246,9 @@ async function reserve(input: ReserveInput, store: typeof persistentStore, bound
     String(Math.max(allowance.periodEnd - input.now, 0) + USED_KEPT_MS),
     input.account,
     bound ? "1" : "0",
+    input.trigger?.source ?? "",
+    input.trigger?.purpose ?? "",
+    input.renewalJti ?? "",
   ])
   if (reply === "revoked") throw new ApiError(404, "REPO_NOT_BOUND", "This repository is not connected.")
   if (reply === "binding") throw new ApiError(409, "BINDING_SUSPENDED", "Connect this repository again.")
@@ -219,6 +256,12 @@ async function reserve(input: ReserveInput, store: typeof persistentStore, bound
   if (reply === "ticket") return { ok: false, refusal: "ticket" }
   const reserved = Option.getOrUndefined(decodeReserved(reply))
   if (!reserved) throw storeUnavailable()
+  if (
+    (reserved[8] === "") !== (reserved[9] === "") ||
+    (reserved[8] !== "" &&
+      (reserved[6] !== "github-dispatch" || reserved[7] !== (reserved[9] === "review" ? "review" : "task")))
+  )
+    throw storeUnavailable()
   const result = {
     startedAt: Number(reserved[1]),
     deadline: Number(reserved[2]),
@@ -226,6 +269,7 @@ async function reserve(input: ReserveInput, store: typeof persistentStore, bound
     thread: reserved[5],
     source: reserved[6],
     purpose: reserved[7],
+    ...(reserved[8] !== "" && reserved[9] !== "" ? { trigger: { source: reserved[8], purpose: reserved[9] } } : {}),
   }
   return reserved[3] === "1" ? { ok: true, renewed: true, ...result } : { ok: true, renewed: false, ...result }
 }
@@ -412,6 +456,9 @@ export async function liveRun(account: string, rid: string, store = persistentSt
     ...(run.counted ? { counted: true as const } : {}),
     gen: run.gen,
     jti: run.jti,
+    ...(run.triggerSource !== undefined && run.triggerPurpose !== undefined
+      ? { triggerSource: run.triggerSource, triggerPurpose: run.triggerPurpose }
+      : {}),
   }
 }
 
@@ -458,6 +505,13 @@ function validReserve(input: ReserveInput) {
     whole(limits?.longestRunMin, 1) &&
     whole(limits?.scheduledPerDay, 0) &&
     (input.consumeKey === undefined || (typeof input.consumeKey === "string" && TICKET_KEY.test(input.consumeKey))) &&
+    (input.trigger === undefined ||
+      (Schema.is(TriggerSource)(input.trigger.source) &&
+        Schema.is(TriggerPurpose)(input.trigger.purpose) &&
+        input.source === "github-dispatch" &&
+        input.purpose === (input.trigger.purpose === "review" ? "review" : "task"))) &&
+    (input.renewalJti === undefined ||
+      (Schema.is(Jti)(input.renewalJti) && input.trigger !== undefined && input.consumeKey === undefined)) &&
     Schema.is(Time)(input.now)
   )
 }
@@ -482,8 +536,10 @@ local IDLE_MS = ${GithubAgents.IDLE_SECONDS * 1000}
 local KEPT_MS = ${LIVE_KEPT_MS}
 local sources = { ['github-comment'] = true, ['github-dispatch'] = true, ['github-schedule'] = true }
 local purposes = { task = true, review = true, scheduled = true }
+local triggerSources = { ${RUN_SOURCES.map((source) => `[${JSON.stringify(source)}] = true`).join(", ")} }
+local triggerPurposes = { task = true, review = true, incident = true, changes = true }
 local fields = { startedAt = true, deadline = true, lastReport = true, lastRequest = true, epoch = true, repo = true,
-  thr = true, src = true, pur = true, counted = true, gen = true, jti = true }
+  thr = true, src = true, pur = true, counted = true, gen = true, jti = true, triggerSource = true, triggerPurpose = true }
 local function whole(value, least)
   return type(value) == 'number' and value >= least and value <= 9007199254740991 and math.floor(value) == value
 end
@@ -508,6 +564,10 @@ local function decode(raw)
     and text(run.repo, '^[1-9]%d*$', 16) and tonumber(run.repo) <= 9007199254740991
     and text(run.jti, '^[%w_%-]+$', 22) and #run.jti == 22) then return nil end
   if run.counted ~= nil and not (run.counted == true and run.src == 'github-schedule') then return nil end
+  if run.triggerSource ~= nil or run.triggerPurpose ~= nil then
+    if not triggerSources[run.triggerSource] or not triggerPurposes[run.triggerPurpose] or run.src ~= 'github-dispatch'
+      or run.pur ~= (run.triggerPurpose == 'review' and 'review' or 'task') then return nil end
+  end
   return run
 end
 local function count(raw)
@@ -528,6 +588,10 @@ local function encode(run)
   if run.counted then parts[#parts + 1] = '"counted":true' end
   parts[#parts + 1] = '"gen":' .. int(run.gen)
   parts[#parts + 1] = '"jti":' .. cjson.encode(run.jti)
+  if run.triggerSource then
+    parts[#parts + 1] = '"triggerSource":' .. cjson.encode(run.triggerSource)
+    parts[#parts + 1] = '"triggerPurpose":' .. cjson.encode(run.triggerPurpose)
+  end
   return '{' .. table.concat(parts, ',') .. '}'
 end
 local function active(run)
@@ -567,7 +631,7 @@ end
 
 // KEYS: live, used(epoch), today's scheduled count, revocation, optionally binding/generation, then optional ticket.
 // ARGV: now, rid, epoch, repository id, thread, source, purpose, generation, jti, at once, longest run (s),
-// scheduled a day, allowance (s), used's expiry (ms), account, bound-admission flag.
+// scheduled a day, allowance (s), used's expiry (ms), account, bound-admission flag, trigger source/purpose, renewal JTI.
 const RESERVE = `${RULES}
 if not (kind(KEYS[1], 'hash') and kind(KEYS[2], 'string') and kind(KEYS[3], 'string') and kind(KEYS[4], 'string')) then return 'corrupt' end
 if redis.call('EXISTS', KEYS[4]) == 1 then return 'revoked' end
@@ -585,6 +649,29 @@ local scheduled = count(redis.call('GET', KEYS[3]))
 local runs = read(KEYS[1])
 if not (used and scheduled and runs) then return 'corrupt' end
 local now, rid, epoch, generation = tonumber(ARGV[1]), ARGV[2], ARGV[3], tonumber(ARGV[8])
+local validTicket = ticket and redis.call('EXISTS', ticket) == 1
+if ticket and ARGV[16] == '1' then
+  if not kind(ticket, 'string') then return 'corrupt' end
+  local raw = redis.call('GET', ticket)
+  if raw then
+    local decoded, proof = pcall(cjson.decode, raw)
+    if not decoded or type(proof) ~= 'table' or not whole(proof.exp, 1) or not whole(proof.generation, 1)
+      or type(proof.account) ~= 'string' or type(proof.repositoryId) ~= 'string'
+      or not triggerSources[proof.source] or not triggerPurposes[proof.purpose] then return 'corrupt' end
+    local fields = 0; for _ in pairs(proof) do fields = fields + 1 end
+    if fields ~= 6 then return 'corrupt' end
+    validTicket = proof.account == ARGV[15] and proof.repositoryId == ARGV[4] and proof.generation == generation
+      and proof.source == ARGV[17] and proof.purpose == ARGV[18] and now < proof.exp
+  end
+end
+local previous = runs[rid]
+-- A bot without a fresh ticket may only rotate the exact live authority already observed. Stale peeks never
+-- become a fresh admission after settlement, an idle sweep, rebind, erasure, or another successful renewal.
+if ARGV[19] ~= '' and (not previous or previous.gen ~= generation or previous.jti ~= ARGV[19]
+  or previous.triggerSource ~= ARGV[17] or previous.triggerPurpose ~= ARGV[18]
+  or idle(previous, now) or now >= previous.deadline) then return 'ticket' end
+if previous and previous.gen == generation and ARGV[16] == '1'
+  and ((previous.triggerSource or '') ~= ARGV[17] or (previous.triggerPurpose or '') ~= ARGV[18]) then return 'ticket' end
 -- One check run is one schedule event, counted when it first reserved: a reserve that replaces its own earlier record
 -- (after a generation change, or once that record went idle) is not counted again, at the cap or otherwise.
 local counts = ARGV[6] == 'github-schedule' and not (runs[rid] and runs[rid].src == 'github-schedule')
@@ -618,7 +705,7 @@ else
   local left = tonumber(ARGV[13]) - (used - returned) - others
   -- The mint only peeked the ticket, so this is where it is single-use: another check run's reservation may have
   -- consumed it since, or it expired. Checked before the slots, which a retry could find free.
-  if ticket and redis.call('EXISTS', ticket) == 0 then answer = 'ticket'
+  if ticket and not validTicket then answer = 'ticket'
   elseif live >= tonumber(ARGV[10]) then answer = 'at-once'
   elseif counts and scheduled >= tonumber(ARGV[12]) then answer = 'scheduled'
   elseif left < ${GithubAgents.MIN_LEFT_SECONDS} then answer = 'hours'
@@ -631,11 +718,13 @@ if answer == 'renew' then
   current.jti = ARGV[9]
   redis.call('HSET', KEYS[1], rid, encode(current))
   if ticket then redis.call('DEL', ticket) end
-  return { 'ok', int(current.startedAt), int(current.deadline), '1', current.epoch, current.thr, current.src, current.pur }
+  return { 'ok', int(current.startedAt), int(current.deadline), '1', current.epoch, current.thr, current.src, current.pur,
+    current.triggerSource or '', current.triggerPurpose or '' }
 end
 if type(answer) == 'string' then return answer end
 local run = { startedAt = now, deadline = now + answer * 1000, lastReport = now, epoch = epoch, repo = ARGV[4],
-  thr = ARGV[5], src = ARGV[6], pur = ARGV[7], counted = counts or nil, gen = generation, jti = ARGV[9] }
+  thr = ARGV[5], src = ARGV[6], pur = ARGV[7], counted = counts or nil, gen = generation, jti = ARGV[9],
+  triggerSource = ARGV[17] ~= '' and ARGV[17] or nil, triggerPurpose = ARGV[18] ~= '' and ARGV[18] or nil }
 redis.call('HSET', KEYS[1], rid, encode(run))
 redis.call('INCRBY', KEYS[2], int(answer))
 redis.call('PEXPIRE', KEYS[2], ARGV[14])
@@ -645,7 +734,8 @@ if counts then
 end
 if ticket then redis.call('DEL', ticket) end
 keep(KEYS[1], math.max(tonumber(ARGV[14]), answer * 1000 + KEPT_MS))
-return { 'ok', int(run.startedAt), int(run.deadline), '0', epoch, run.thr, run.src, run.pur }
+return { 'ok', int(run.startedAt), int(run.deadline), '0', epoch, run.thr, run.src, run.pur,
+  run.triggerSource or '', run.triggerPurpose or '' }
 `
 
 // KEYS: live. ARGV: rid, jti, now. Touches only its own run: idle runs are judged by the calls that need slots or a sum.

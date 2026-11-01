@@ -162,7 +162,7 @@ export function createGithubApp(
   async function mint(
     jwt: string,
     installationId: string,
-    identity: GithubIdentity,
+    identity: Pick<GithubIdentity, "repositoryId" | "ownerId"> & { repository?: string },
     permissions: Record<string, string>,
   ) {
     const result = await api(`/app/installations/${installationId}/access_tokens`, jwt, {
@@ -170,7 +170,8 @@ export function createGithubApp(
       body: { repository_ids: [Number(identity.repositoryId)], permissions },
     })
     const token = result?.token
-    if (typeof token !== "string" || !/^[A-Za-z0-9_]{20,2048}$/.test(token)) throw githubUnavailable()
+    // GitHub's 2026 stateless installation tokens contain base64url/JWT separators. Never admit whitespace/headers.
+    if (typeof token !== "string" || !/^[A-Za-z0-9_.-]{20,2048}$/.test(token)) throw githubUnavailable()
     try {
       const expiresAt = result!.expires_at
       if (
@@ -195,11 +196,13 @@ export function createGithubApp(
       const repository = githubRecord(scope.repositories[0])
       if (
         githubId(repository.id) !== identity.repositoryId ||
-        repository.full_name !== identity.repository ||
+        (identity.repository !== undefined && repository.full_name !== identity.repository) ||
+        typeof repository.full_name !== "string" ||
+        !/^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9_.-]{1,100}$/.test(repository.full_name) ||
         githubId(githubRecord(repository.owner).id) !== identity.ownerId
       )
         throw githubUnavailable()
-      return { token, expiresAt }
+      return { token, expiresAt, repository: repository.full_name }
     } catch (error) {
       await revoke(token)
       throw error
@@ -538,6 +541,54 @@ export function createGithubApp(
       const config = configuration()
       return config ? { available: true, installUrl: installUrl(config) } : { available: false }
     },
+    async dispatch(
+      repositoryId: string,
+      input: { ref: string; prompt: string; ticket: string; ownerId: string; installationId: string },
+    ) {
+      if (
+        !/^[1-9]\d{0,15}$/.test(repositoryId) ||
+        !Number.isSafeInteger(Number(repositoryId)) ||
+        !/^refs\/heads\/[^\s:~^?*\[\\]{1,240}$/.test(input.ref) ||
+        typeof input.prompt !== "string" ||
+        !input.prompt.trim() ||
+        !/^vtk_[A-Za-z0-9_-]{43}$/.test(input.ticket)
+      )
+        throw new ApiError(400, "INVALID_REQUEST", "Send only a supported workflow dispatch.")
+      const config = configuration()
+      if (!config) throw notConfigured()
+      const jwt = await appJwt(config)
+      const metadata = await api("/app", jwt)
+      if (githubId(metadata?.id) !== config.id || metadata?.slug !== config.slug) throw notConfigured()
+      // The installation id came from App-backed bind, never a caller body or broad installation enumeration.
+      if (!/^[1-9]\d{0,15}$/.test(input.installationId) || !Number.isSafeInteger(Number(input.installationId)))
+        throw new ApiError(400, "INVALID_REQUEST", "A verified installation is required.")
+      const installation = await api(`/app/installations/${input.installationId}`, jwt, { missing: true })
+      if (!installation)
+        throw new ApiError(404, "APP_NOT_INSTALLED", "Reconnect this repository with the Vector GitHub App.")
+      if (
+        githubId(installation.id) !== input.installationId ||
+        githubId(installation.app_id) !== config.id ||
+        githubId(githubRecord(installation.account).id) !== input.ownerId ||
+        installation.suspended_at !== null
+      )
+        throw denied("REPOSITORY_MISMATCH", "This repository's App installation is unavailable.")
+      // The restricted token's repository list supplies the current name after a rename and proves id + owner.
+      const credential = await mint(
+        jwt,
+        input.installationId,
+        { repositoryId, ownerId: input.ownerId },
+        { actions: "write", metadata: "read" },
+      )
+      const root = `/repos/${credential.repository}`
+      try {
+        await api(`${root}/actions/workflows/vector.yml/dispatches`, credential.token, {
+          method: "POST",
+          body: { ref: input.ref, inputs: { mode: "task", prompt: input.prompt, ticket: input.ticket } },
+        })
+      } finally {
+        await revoke(credential.token)
+      }
+    },
     async verifyRun(identity: GithubIdentity, options: GithubRunVerification) {
       if (
         identity.audience !== githubOidcAudiences.mint ||
@@ -561,6 +612,7 @@ export function createGithubApp(
         installed: true as const,
         defaultRef: authorized.verified!.defaultRef,
         adminVerified: authorized.verified!.adminVerified,
+        installationId: authorized.installationId,
       }
     },
     async installation(identity: GithubIdentity) {

@@ -1578,6 +1578,8 @@ function integrationTests() {
       counted?: true
       gen: number
       jti: string
+      triggerSource?: RunSource
+      triggerPurpose?: "task" | "review" | "incident" | "changes"
     }
     const shape: Equal<LiveRun, Section26> = true
     const hook: GatewayHook = cloudAgentsGatewayHook

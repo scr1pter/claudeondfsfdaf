@@ -58,6 +58,7 @@ const StoredBinding = Schema.Struct({
   boundAt: Decimal,
   lastUsedAt: Schema.optionalKey(Decimal),
   suspended: Schema.optionalKey(Reason),
+  installationId: Schema.optionalKey(Decimal),
 })
 const decodeCode = Schema.decodeUnknownOption(Schema.fromJsonString(StoredCode), { onExcessProperty: "error" })
 const decodeBinding = Schema.decodeUnknownOption(StoredBinding, { onExcessProperty: "error" })
@@ -79,6 +80,8 @@ export type RepoBinding = {
   boundAt: number
   lastUsedAt?: number
   suspended?: SuspendReason
+  /** Verified by the App during bind, never supplied by a client. Absent on legacy or no-App bindings. */
+  installationId?: string
 }
 /** The verified bind-token fields a binding is made from. V08 adds repositoryVisibility to GithubIdentity. */
 export type BindIdentity = Pick<
@@ -95,6 +98,7 @@ export type RedeemInput = {
   current?: string
   identity: BindIdentity
   workflowVersion: string
+  installationId?: string
   takeover: { adminVerified: boolean; allowanceInactive: boolean }
   now: number
 }
@@ -213,6 +217,7 @@ export async function recordRepoBinding(input: RedeemInput, store = persistentSt
     !Schema.is(Ref)(identity.ref) ||
     !Schema.is(Visibility)(visibility) ||
     !Schema.is(WorkflowVersion)(input.workflowVersion) ||
+    (input.installationId !== undefined && !Schema.is(Decimal)(input.installationId)) ||
     typeof input.takeover.adminVerified !== "boolean" ||
     typeof input.takeover.allowanceInactive !== "boolean" ||
     !time(input.now)
@@ -244,6 +249,7 @@ export async function recordRepoBinding(input: RedeemInput, store = persistentSt
     input.takeover.adminVerified ? "1" : "0",
     input.takeover.allowanceInactive ? "1" : "0",
     String(TAKEOVER_AFTER_MS),
+    input.installationId ?? "",
   ])
   if (reply === "code" || reply === "elsewhere" || reply === "changed") return { ok: false as const, refusal: reply }
   if (!Array.isArray(reply) || reply.length !== 2 || reply[0] !== "ok" || !Schema.is(Decimal)(reply[1]))
@@ -259,6 +265,7 @@ export async function recordRepoBinding(input: RedeemInput, store = persistentSt
     binder: { githubId: identity.actorId, login: identity.actor },
     workflowVersion: input.workflowVersion,
     boundAt: input.now,
+    ...(input.installationId === undefined ? {} : { installationId: input.installationId }),
   }
   return { ok: true as const, binding }
 }
@@ -428,6 +435,7 @@ if previous and previous ~= ARGV[2] then redis.call('SREM', KEYS[5], ARGV[5]) en
 redis.call('HSET', KEYS[2], 'repositoryId', ARGV[5], 'ownerId', ARGV[6], 'repository', ARGV[4], 'account', ARGV[2],
   'visibility', ARGV[10], 'defaultRef', ARGV[9], 'generation', tostring(generation), 'binderGithubId', ARGV[8],
   'binderLogin', ARGV[7], 'workflowVersion', ARGV[11], 'boundAt', ARGV[1])
+if ARGV[15] ~= '' then redis.call('HSET', KEYS[2], 'installationId', ARGV[15]) end
 redis.call('SADD', KEYS[4], ARGV[5])
 -- The account's own new binding has a binder with write access again.
 redis.call('SREM', KEYS[6], ARGV[5])
@@ -537,6 +545,7 @@ function storedBinding(reply: unknown, repositoryId: string): RepoBinding | unde
     binder: { githubId: stored.binderGithubId, login: stored.binderLogin },
     workflowVersion: stored.workflowVersion,
     boundAt: Number(stored.boundAt),
+    ...(stored.installationId === undefined ? {} : { installationId: stored.installationId }),
     ...(stored.lastUsedAt === undefined ? {} : { lastUsedAt: Number(stored.lastUsedAt) }),
     ...(stored.suspended === undefined ? {} : { suspended: stored.suspended }),
   }

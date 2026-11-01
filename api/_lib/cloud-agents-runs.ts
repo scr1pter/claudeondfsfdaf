@@ -59,7 +59,8 @@ const Record = Schema.Struct({
       ((record.triggerSource === undefined && record.triggerPurpose === undefined) ||
         (record.source === "github-dispatch" &&
           record.triggerSource !== undefined &&
-          record.triggerPurpose !== undefined)) &&
+          record.triggerPurpose !== undefined &&
+          record.purpose === (record.triggerPurpose === "review" ? "review" : "task"))) &&
       ((record.endedAt === undefined && record.outcome === undefined && record.verdict === undefined) ||
         (record.endedAt !== undefined &&
           record.outcome !== undefined &&
@@ -361,7 +362,8 @@ if not raw then return 'stale' end
 local decoded, live = pcall(cjson.decode, raw)
 if not decoded or type(live) ~= 'table' then return 'corrupt' end
 if live.jti ~= record.jti or live.gen ~= tonumber(record.generation) or live.startedAt ~= tonumber(record.startedAt)
-  or live.repo ~= record.repositoryId or live.src ~= record.source or live.pur ~= record.purpose then return 'stale' end
+  or live.repo ~= record.repositoryId or live.src ~= record.source or live.pur ~= record.purpose
+  or live.triggerSource ~= record.triggerSource or live.triggerPurpose ~= record.triggerPurpose then return 'stale' end
 local same = redis.call('HGET', KEYS[1], 'account') == record.account
   and redis.call('HGET', KEYS[1], 'generation') == record.generation
   and redis.call('HGET', KEYS[1], 'startedAt') == record.startedAt
