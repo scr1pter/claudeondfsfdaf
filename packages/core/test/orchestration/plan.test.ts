@@ -214,3 +214,31 @@ test("nested result references are validated and selection is retained for group
     max_items: 2,
   })
 })
+
+test("an inherited model is also checked for the verifier agent", () => {
+  const result = build(
+    {
+      ...base,
+      stages: [
+        {
+          id: "a",
+          agent: "explore",
+          model: "paid/model",
+          prompt: "Read",
+          verify: {
+            agent: "general",
+            prompt: "Verify",
+            output: { schema: { type: "object" } },
+            until: { equals: true },
+          },
+        },
+      ],
+    },
+    { modelAllowed: (_model, agent) => agent === "explore" },
+  )
+  expect(result.ok).toBe(false)
+  expect(result.issues).toContainEqual({
+    path: "/stages/0/verify/model",
+    message: "Verifier model is not allowed: paid/model.",
+  })
+})

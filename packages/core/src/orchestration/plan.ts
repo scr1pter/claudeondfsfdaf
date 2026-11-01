@@ -249,8 +249,9 @@ export function build(value: unknown, options: Options): Built {
       const verifier = stage.verify.agent ?? name
       if (!permitted.includes(verifier))
         issues.push({ path: `${path}/verify/agent`, message: `Verifier is unavailable: ${verifier}.` })
-      if (stage.verify.model && (!options.modelAllowed || !options.modelAllowed(stage.verify.model, verifier)))
-        issues.push({ path: `${path}/verify/model`, message: `Verifier model is not allowed: ${stage.verify.model}.` })
+      const verifierModel = stage.verify.model ?? stage.model
+      if (verifierModel && (!options.modelAllowed || !options.modelAllowed(verifierModel, verifier)))
+        issues.push({ path: `${path}/verify/model`, message: `Verifier model is not allowed: ${verifierModel}.` })
     }
     const writes = agent?.writes ?? true
     const isolated = stage.isolation === "worktree"
