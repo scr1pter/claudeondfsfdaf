@@ -17,6 +17,11 @@ Codex's authored `.verification/REPORT.md`, `.verification/browser-check.cjs`, a
 `.verification/restart-check.cjs` remain included even when Git ignores them.
 No source bytes were edited, renamed, formatted, or normalized.
 
+The original snapshots include mixed line endings, trailing whitespace and blank
+end-of-file lines. Git's whitespace checker flags some retained source files.
+Those warnings are preserved with the original evidence; the byte verifier,
+rather than a whitespace-clean claim, establishes source fidelity.
+
 The eight Codex exclusions are generated verification artifacts: three SQLite
 database/shared-memory/write-ahead-log files, two browser log files, and three
 mobile observation/action/screenshot result files. Their exact relative paths,
