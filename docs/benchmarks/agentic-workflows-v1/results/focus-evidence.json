@@ -11,11 +11,8 @@
     "codex": {
       "providerRequests": 31,
       "usd": 0.7953841,
-      "agentWallMs": 489016,
       "completedModelDeliveries": 1,
-      "paidModelRepairs": 0,
       "abortedRepairLaunches": 1,
-      "abortedRepairProviderRequests": 0,
       "originalGate": {
         "apiPassed": 18,
         "browserPassed": 7,
@@ -29,7 +26,7 @@
         "sourceUnchanged": true,
         "modelCalls": 0
       },
-      "originalCoordinatorStop": "coordinator_review_required: read-only status transport timeout; scoped disarm acknowledged and settled",
+      "originalCoordinatorStop": "coordinator_review_required: read-only status transport timeout interrupted repair after two provider requests; scoped disarm acknowledged and settled",
       "codeScore": 47,
       "codeDimensions": [
         12,
@@ -39,14 +36,24 @@
         6,
         5
       ],
-      "sourcePublication": "../submissions/focus-evidence/codex-first/source"
+      "sourcePublication": "../submissions/focus-evidence/codex-first/source",
+      "firstSubmissionProviderRequests": 29,
+      "firstSubmissionUsd": 0.7455959,
+      "firstSubmissionAgentWallMs": 489016,
+      "completeEpisodeWallMs": null,
+      "interruptedRepairWallMs": null,
+      "wallTimeLimitation": "Only the completed first delivery wall time was returned; interrupted repair duration is unmeasured, not zero.",
+      "paidModelRepairAttempts": 1,
+      "completedModelRepairs": 0,
+      "interruptedRepairProviderRequests": 2,
+      "interruptedRepairUsd": 0.0497882,
+      "interruptedRepairSourceUnchanged": true
     },
     "vector": {
       "providerRequests": 53,
       "usd": 0.7697271,
       "agentWallMs": 498515,
       "completedModelDeliveries": 1,
-      "paidModelRepairs": 0,
       "gate": {
         "apiPassed": 18,
         "browserPassed": 8,
@@ -63,7 +70,11 @@
         5,
         6
       ],
-      "sourcePublication": "../submissions/focus-evidence/vector-first/source"
+      "sourcePublication": "../submissions/focus-evidence/vector-first/source",
+      "firstSubmissionProviderRequests": 53,
+      "firstSubmissionUsd": 0.7697271,
+      "completeEpisodeWallMs": 498515,
+      "paidModelRepairAttempts": 0
     }
   },
   "instrumentCorrection": {
@@ -72,20 +83,22 @@
     "correctedInstrumentRevision": "e7394e79cecee4ed8049fe18ee6ea56fc54a7068",
     "visibleMessage": "Batch import failed: Source must be a nonblank string.",
     "serverError": "HTTP 400 invalid_batch",
-    "classification": "Instrument false negative; useful message visible and entered text preserved. No app or model repair.",
+    "classification": "Instrument false negative; useful message visible and entered text preserved. An interrupted paid repair made two requests without source changes; corrected free evaluation passed the original first source.",
     "oldReportsFreeFailuresFreePassesAndChargesRetained": true,
     "codexCorrectionAppliedToUnchangedSource": true,
     "continuationPublicPromptSeedProductBinariesModelAndPolicyPinsMatched": true
   },
   "comparison": {
     "vectorCostSavingPercent": 3.225737099848991,
-    "vectorWallReductionPercent": -1.9424722299474784,
     "twentyPercentCostTargetMet": false,
     "noLowerCodeScoreMet": false,
     "criticalFindingsEstablished": {
       "codex": 0,
       "vector": 0
-    }
+    },
+    "firstSubmissionVectorCostSavingPercent": -3.2364984839643007,
+    "wallComparisonScope": "Completed first deliveries only; Codex complete-episode duration is unknown.",
+    "firstSubmissionVectorWallReductionPercent": -1.9424722299474784
   },
   "review": {
     "method": "Same reviewer and48-point rubric, blinded exact selected source+2independent end-state screenshots per delivery",
@@ -284,7 +297,8 @@
           "scope": "Observed bytes are not model tokens or cost. Missing input/output/diff fields have zero observations, not measured zero size. Errors count explicit tool errors or nonzero command exits in both runtimes; expected negative checks can legitimately exit nonzero, so these outcomes do not automatically indicate waste or product failure. Duplicate completion events are deduplicated by runtime and private transient ID."
         }
       }
-    }
+    },
+    "activityScope": "Completed first delivery CLI tools only; Codex provider usage includes two interrupted repair calls not in that first log."
   },
   "browserProvisioning": {
     "offeredCapabilitiesIdentical": true,
@@ -298,5 +312,19 @@
     "active": 0,
     "reservedUsd": 0,
     "checkpointNotCurrentFutureBill": true
+  },
+  "accountingCorrection": {
+    "all31CodexCallsAndEpisodeCostWereAlwaysIncluded": true,
+    "priorWrongInference": "Unchanged source and absent final agent result were incorrectly treated as proof no repair requests were admitted.",
+    "verifiedBreakdown": {
+      "firstDeliveryRequests": 29,
+      "firstDeliveryUsd": 0.7455959,
+      "interruptedRepairRequests": 2,
+      "interruptedRepairUsd": 0.0497882,
+      "episodeRequests": 31,
+      "episodeUsd": 0.7953841
+    },
+    "sourceChangedDuringInterruptedRepair": false,
+    "noPublicCliUsageGapEstablished": true
   }
 }

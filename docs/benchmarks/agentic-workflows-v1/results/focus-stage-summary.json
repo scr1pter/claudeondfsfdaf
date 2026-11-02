@@ -44,14 +44,27 @@
         "wallMs": 489016,
         "checksPassed": 26,
         "checksRequired": 26,
-        "codeScore": 47
+        "codeScore": 47,
+        "wallTimeScope": "Completed first delivery only",
+        "completeEpisodeWallMs": null
       },
-      "modelRepairs": 0,
       "originalCodexCheckerFalseNegativeRetained": true,
       "correctedUnchangedCodexFreeGatePassed": 26,
       "codexAbortedRepairLaunches": 1,
-      "providerRequestsAfterOriginalCodexDeliveryBeforeClosure": 0,
-      "missingVectorArmExecutedByValidatedManualContinuation": true
+      "providerRequestsAfterOriginalCodexDeliveryBeforeClosure": 2,
+      "missingVectorArmExecutedByValidatedManualContinuation": true,
+      "paidModelRepairAttempts": {
+        "vector": 0,
+        "codex": 1
+      },
+      "completedModelRepairs": {
+        "vector": 0,
+        "codex": 0
+      },
+      "codexFirstDeliveryRequests": 29,
+      "codexFirstDeliveryUsd": 0.7455959,
+      "codexInterruptedRepairRequests": 2,
+      "codexInterruptedRepairUsd": 0.0497882
     }
   ],
   "aggregate": {
@@ -62,7 +75,6 @@
     "codexRequests": 56,
     "vectorWallMs": 938155,
     "codexWallMs": 1037625,
-    "vectorWallReductionPercent": 9.58631490181906,
     "checksPassedPerRuntime": 50,
     "checksRequiredPerRuntime": 50,
     "vectorCodeScore": 90,
@@ -71,7 +83,12 @@
     "criticalFindingsEstablishedPerRuntime": {
       "vector": 0,
       "codex": 0
-    }
+    },
+    "wallTimeScope": "Sums of recorded completed first-delivery wall times; Codex interrupted repair time is unmeasured.",
+    "recordedFirstDeliveryVectorWallReductionPercent": 9.58631490181906,
+    "completeEpisodeCodexWallMs": null,
+    "firstSubmissionCodexUsd": 1.5519218,
+    "firstSubmissionVectorCostSavingPercent": 7.295412694118997
   },
   "decision": {
     "minimumCostSavingPercent": 20,

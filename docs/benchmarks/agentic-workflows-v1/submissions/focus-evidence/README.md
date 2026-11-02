@@ -9,12 +9,14 @@ protected fixtures, added tests and the original application code are preserved.
 
 Codex's original checker reported 25/26 because it rejected a useful visible
 validation message. The corrected checker passes all 26 checks on that unchanged
-source. The interrupted repair launch admitted no provider request and made no
-source change; its duplicate snapshot and original records remain in the private
-execution archive. Vector's missing arm ran by the validated manual continuation,
+source. The interrupted repair admitted two provider requests (0.0497882 USD) and made
+no source change; its duplicate snapshot and original records remain retained.
+The first completed Codex delivery used29 requests (0.7455959 USD); the full
+charged episode used31 (0.7953841 USD). Vector's missing arm ran by the validated manual continuation,
 on the identical public prompt/seed, model, High reasoning, one agent, frozen
 product source and runtime/browser pins. It passes all 26 checks on its first
-delivery. No paid model repair occurred. Original charges are retained.
+delivery. No model repair completed; the two interrupted repair calls remain
+charged. Original source bytes and full episode charges are retained.
 
 The manifest records both instrument revisions, every published/excluded byte
 hash and the corrected outcomes. Run `python verify.py` here without an API key

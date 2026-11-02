@@ -182,7 +182,6 @@
         ".verification/browser-check.cjs"
       ],
       "completedModelDeliveries": 1,
-      "paidModelRepairs": 0,
       "abortedRepairLaunches": 1,
       "abortedRepairSourceUnchanged": true,
       "independentGate": {
@@ -192,7 +191,14 @@
         "browserPassed": 8,
         "sourceUnchanged": true,
         "correctedFreeEvaluation": true
-      }
+      },
+      "paidModelRepairAttempts": 1,
+      "completedModelRepairs": 0,
+      "interruptedRepairProviderRequests": 2,
+      "interruptedRepairUsd": 0.0497882,
+      "firstSubmissionProviderRequests": 29,
+      "firstSubmissionUsd": 0.7455959,
+      "interruptedRepairSourceUnchanged": true
     },
     {
       "id": "vector-first",
@@ -282,5 +288,6 @@
         "correctedFreeEvaluation": false
       }
     }
-  ]
+  ],
+  "accountingCorrection": "The interrupted repair admitted two requests despite no final agent result/source change; all charges were already counted in the complete episode. CLI first-delivery usage matches its 29 requests."
 }
