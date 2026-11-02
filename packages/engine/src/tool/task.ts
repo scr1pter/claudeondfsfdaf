@@ -422,7 +422,12 @@ export const TaskTool = Tool.define(
         Effect.gen(function* () {
           if (!(yield* launched(note, parentID))) return []
           const task = yield* sessions.get(note.taskID)
-          return SubagentLifecycle.read(task)?.attempt === note.attempt ? [note] : []
+          const record = SubagentLifecycle.read(task)
+          if (record?.attempt !== note.attempt) return []
+          const launchStopped = record.budgetScopes?.some(
+            (scope) => scope.stopped !== undefined && !(scope.kind === "child" && scope.id === note.taskID),
+          ) ?? false
+          return [{ ...note, launchStopped }]
         }),
       )).flat()
       const first = batch[0]
@@ -467,9 +472,9 @@ export const TaskTool = Tool.define(
               ...(latest.format ? { format: latest.format } : {}),
             }
           : { variant: first.variant }),
-        // A stopped subagent is recorded for the parent's next turn without starting one, so stopping work never makes
-        // the agent carry on alone. A batch with a finished task in it starts one turn for all of them.
-        ...(halted || batch.every((note) => note.state === "cancelled") ? { noReply: true } : {}),
+        // A later user run may have cleared the parent's stop, but an old stopped launch cannot start work again.
+        // The task's own child-only ceiling leaves a healthy parent free to respond; mixed healthy batches still do.
+        ...(halted || batch.every((note) => note.state === "cancelled" || note.launchStopped) ? { noReply: true } : {}),
         parts: batch.map((note) => ({
           type: "text" as const,
           synthetic: true,
