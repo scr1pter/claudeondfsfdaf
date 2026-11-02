@@ -87,6 +87,9 @@ def common_helpers(root):
     spec = importlib.util.spec_from_file_location("team_common_runner", root / "runner.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    for name in ("owned_process", "browser_driver", "browser_audit"):
+        require(Path(sys.modules[name].__file__).resolve() == root / (name + ".py"),
+                "cached common helper came from another unfrozen instrument root")
     return module
 
 
@@ -129,6 +132,12 @@ def build_plan(options, common):
         root = options.task_root / name
         task = common.load_task(root)
         files = common.manifest(root)
+        for arg in task["evaluatorCommand"]:
+            if arg.startswith("{task}"):
+                target = Path(arg.replace("{task}", str(root))).resolve()
+                require(target == root.resolve() or target.is_relative_to(root.resolve())
+                        or target.is_relative_to(options.browser_driver_root),
+                        "an external evaluator dependency is outside the frozen common browser instrument")
         tasks.append({"name": name, "order": list(order), "taskSha256": digest(files), "files": files,
                       "contract": task})
     binaries = {name: common.file_hash(getattr(options, name)) for name in ("bun", "node", "codex_bin", "chrome")}
@@ -281,7 +290,7 @@ def coordinate_team_arm(*, supervisor, runtime, label, adapter, task, common, ch
             result.update(settlementComplete=closure.get("settlementComplete") is True,
                           measuredUsd=closure.get("measuredUsd"), providerRequests=closure.get("providerRequests"),
                           controllerUsageThroughClosure=closure.get("controllerUsageThroughClosure"),
-                          autonomousActorsAdmitted=1 + len(arm.slots), nativeHelperIdentities=len(arm.helper_slots))
+                          autonomousActorsAdmitted=len(arm.admitted_ids), nativeHelperIdentities=len(arm.helper_slots))
             result["receiptUsageByNativeRole"] = {role: {
                 "forwardedRequests": sum(row["role"] == role for row in arm.requests),
                 "reconciledReceipts": sum(row["role"] == role and row["receiptRegistered"] for row in arm.requests),
