@@ -1,0 +1,360 @@
+{
+  "schemaVersion": 1,
+  "study": "agentic-workflows-v1",
+  "task": "workflow-runner",
+  "stage": "focus_candidate_development_repeat",
+  "candidateRevision": "893b9629224dc4249f08c0e18712511437a35a22",
+  "taskInstrument": {
+    "revision": "postlaunch-keyboard-v2",
+    "commit": "c027c80637c993fb9e873407403f2c4f6a1333c3",
+    "taskSha256": "bc418928e76adaebed02f7de9339d23c881c0d10bca33adb7b4b5002b6de7547",
+    "sharedByBothArms": true
+  },
+  "costBasis": "Usage-derived provider receipt charges; not invoice-reconciled",
+  "allChargesRetained": true,
+  "historicalSpendingReset": false,
+  "arms": {
+    "vector": {
+      "providerRequests": 34,
+      "measuredUsd": 0.6689756,
+      "agentWallMs": 439640,
+      "attempts": 1,
+      "paidRepairs": 0,
+      "firstSubmissionEqualsCompleteEpisode": true,
+      "settlementComplete": true,
+      "allChargesRetained": true,
+      "functionalEvaluation": {
+        "verdict": "passed",
+        "apiPassed": 16,
+        "apiRequired": 16,
+        "browserPassed": 8,
+        "browserRequired": 8,
+        "sourceUnchanged": true,
+        "sourceIntegrityStatus": "unchanged",
+        "exitCode": 0,
+        "evaluationModelCalls": 0
+      },
+      "protectedInputViolations": 0,
+      "workerCalls": 0,
+      "sourcePublication": "../submissions/focus-workflow/vector-first/source"
+    },
+    "codex": {
+      "providerRequests": 25,
+      "measuredUsd": 0.8063259,
+      "agentWallMs": 548609,
+      "attempts": 1,
+      "paidRepairs": 0,
+      "firstSubmissionEqualsCompleteEpisode": true,
+      "settlementComplete": true,
+      "allChargesRetained": true,
+      "functionalEvaluation": {
+        "verdict": "passed",
+        "apiPassed": 16,
+        "apiRequired": 16,
+        "browserPassed": 8,
+        "browserRequired": 8,
+        "sourceUnchanged": true,
+        "sourceIntegrityStatus": "unchanged",
+        "exitCode": 0,
+        "evaluationModelCalls": 0
+      },
+      "protectedInputViolations": 0,
+      "workerCalls": 0,
+      "sourcePublication": "../submissions/focus-workflow/codex-first/source"
+    }
+  },
+  "providerProjection": {
+    "kind": "Sanitized focus-workflow provider usage and tool projections",
+    "reasoningTokensAreSubsetOfOutput": true,
+    "cacheReadsWritesAreSubsetOfInput": true,
+    "costBasis": "usage-derived, not invoice reconciled",
+    "cases": {
+      "vector": {
+        "providerRequests": 34,
+        "measuredUsd": 0.6689756,
+        "tokens": {
+          "inputTokens": 1427098,
+          "cachedInputTokens": 1365691,
+          "cacheWriteTokens": 61305,
+          "cacheWrite30mTokens": 61305,
+          "cacheWrite12hTokens": 0,
+          "uncachedNonWriteInputTokens": 102,
+          "outputTokens": 37894,
+          "reasoningTokens": 6131,
+          "totalTokens": 1464992
+        },
+        "model": "gpt-6.1-sol",
+        "allRequestedHigh": true,
+        "allHttp200": true,
+        "activity": {
+          "kind": "CLI tool activity counts; no raw commands, text, paths, IDs or hashes",
+          "observedToolCalls": 46,
+          "recognizedEventRecords": {
+            "vector": 46
+          },
+          "invalidRecords": 0,
+          "tools": {
+            "read": {
+              "calls": 14,
+              "errors": 0,
+              "knownInputBytes": 646,
+              "inputObservations": 14,
+              "knownTextOutputBytes": 27107,
+              "textOutputObservations": 14,
+              "knownPatchBytes": 0,
+              "patchObservations": 0
+            },
+            "glob": {
+              "calls": 2,
+              "errors": 0,
+              "knownInputBytes": 67,
+              "inputObservations": 2,
+              "knownTextOutputBytes": 51,
+              "textOutputObservations": 2,
+              "knownPatchBytes": 0,
+              "patchObservations": 0
+            },
+            "shell": {
+              "calls": 15,
+              "errors": 5,
+              "knownInputBytes": 3276,
+              "inputObservations": 15,
+              "knownTextOutputBytes": 20923,
+              "textOutputObservations": 15,
+              "knownPatchBytes": 0,
+              "patchObservations": 0
+            },
+            "todowrite": {
+              "calls": 3,
+              "errors": 0,
+              "knownInputBytes": 1362,
+              "inputObservations": 3,
+              "knownTextOutputBytes": 117,
+              "textOutputObservations": 3,
+              "knownPatchBytes": 0,
+              "patchObservations": 0
+            },
+            "apply_patch": {
+              "calls": 8,
+              "errors": 1,
+              "knownInputBytes": 103167,
+              "inputObservations": 8,
+              "knownTextOutputBytes": 1809,
+              "textOutputObservations": 7,
+              "knownPatchBytes": 99391,
+              "patchObservations": 8
+            },
+            "terminal": {
+              "calls": 4,
+              "errors": 0,
+              "knownInputBytes": 688,
+              "inputObservations": 4,
+              "knownTextOutputBytes": 557,
+              "textOutputObservations": 4,
+              "knownPatchBytes": 0,
+              "patchObservations": 0
+            }
+          },
+          "terminalActions": {
+            "open": 1,
+            "read": 1,
+            "keys": 1,
+            "close": 1
+          },
+          "repeatedIdenticalToolInputs": 2,
+          "scope": "Observed bytes are not model tokens or cost. Missing input/output/diff fields have zero observations, not measured zero size. Errors count explicit tool errors or nonzero command exits in both runtimes; expected negative checks can legitimately exit nonzero, so these outcomes do not automatically indicate waste or product failure. Duplicate completion events are deduplicated by runtime and private transient ID."
+        }
+      },
+      "codex": {
+        "providerRequests": 25,
+        "measuredUsd": 0.8063259,
+        "tokens": {
+          "inputTokens": 1429698,
+          "cachedInputTokens": 1337134,
+          "cacheWriteTokens": 92489,
+          "cacheWrite30mTokens": 92489,
+          "cacheWrite12hTokens": 0,
+          "uncachedNonWriteInputTokens": 75,
+          "outputTokens": 44124,
+          "reasoningTokens": 8264,
+          "totalTokens": 1473822
+        },
+        "model": "gpt-6.1-sol",
+        "allRequestedHigh": true,
+        "allHttp200": true,
+        "activity": {
+          "kind": "CLI tool activity counts; no raw commands, text, paths, IDs or hashes",
+          "observedToolCalls": 70,
+          "recognizedEventRecords": {
+            "codex": 70
+          },
+          "invalidRecords": 0,
+          "tools": {
+            "shell": {
+              "calls": 62,
+              "errors": 5,
+              "knownInputBytes": 61334,
+              "inputObservations": 62,
+              "knownTextOutputBytes": 278696,
+              "textOutputObservations": 62,
+              "knownPatchBytes": 0,
+              "patchObservations": 0
+            },
+            "file_change": {
+              "calls": 8,
+              "errors": 0,
+              "knownInputBytes": 0,
+              "inputObservations": 0,
+              "knownTextOutputBytes": 0,
+              "textOutputObservations": 0,
+              "knownPatchBytes": 0,
+              "patchObservations": 0
+            }
+          },
+          "terminalActions": {},
+          "repeatedIdenticalToolInputs": 17,
+          "scope": "Observed bytes are not model tokens or cost. Missing input/output/diff fields have zero observations, not measured zero size. Errors count explicit tool errors or nonzero command exits in both runtimes; expected negative checks can legitimately exit nonzero, so these outcomes do not automatically indicate waste or product failure. Duplicate completion events are deduplicated by runtime and private transient ID."
+        }
+      }
+    }
+  },
+  "comparison": {
+    "denominator": "Codex complete episode; both episodes consist of one first submission",
+    "vectorCostSavingsUsd": 0.1373503,
+    "vectorCostSavingsPercent": 17.03409254,
+    "vectorAgentWallReductionMs": 108969,
+    "vectorAgentWallReductionPercent": 19.86278023,
+    "pairTwentyPercentCostThresholdMet": false,
+    "noLowerBlindedQualityCriterionMet": false,
+    "studyObjectiveEstablished": false,
+    "conclusion": "Vector costs less and uses less agent wall time in this pair, but the saving is below 20% and its blinded code score is one point lower. This pair does not establish the study objective."
+  },
+  "blindedCodeReview": {
+    "method": "Blinded static exact-source review with two supplied independent screenshots per submission",
+    "independentExecution": false,
+    "mapping": {
+      "cypress": "Vector",
+      "alder": "Codex"
+    },
+    "maximumScore": 48,
+    "scores": {
+      "vector": 45,
+      "codex": 46
+    },
+    "criticalFindingsEstablished": {
+      "vector": 0,
+      "codex": 0
+    },
+    "dimensions": [
+      {
+        "name": "Contract and data integrity",
+        "maximum": 12,
+        "vector": 12,
+        "codex": 12
+      },
+      {
+        "name": "Durable state and recovery",
+        "maximum": 10,
+        "vector": 8,
+        "codex": 9
+      },
+      {
+        "name": "Structure and maintainability",
+        "maximum": 8,
+        "vector": 8,
+        "codex": 8
+      },
+      {
+        "name": "Errors and resource bounds",
+        "maximum": 6,
+        "vector": 5,
+        "codex": 6
+      },
+      {
+        "name": "Added verification",
+        "maximum": 6,
+        "vector": 6,
+        "codex": 6
+      },
+      {
+        "name": "User interface and accessibility",
+        "maximum": 6,
+        "vector": 6,
+        "codex": 5
+      }
+    ],
+    "materialFindings": {
+      "both": [
+        "Changed default data directories can leave retained v1 history undiscovered when upgrading without an explicit DATA_DIR; this is not deletion.",
+        "Full stream buffering and untested storage/pipe failures and immediate restart overlap limit reliability evidence."
+      ],
+      "vector": [
+        "A cancellation/crash window can leave the legacy job status running after workflow recovery marks it cancelled.",
+        "Persistence after spawn and stream/completion failures can escape child ownership or skip live-slot cleanup."
+      ],
+      "codex": [
+        "Small, muted metadata/history/output text limits readability.",
+        "The start-persistence guard does not explicitly await child reaping; logged completion failures can leave persisted running work awaiting restart."
+      ]
+    },
+    "limitation": "No critical finding was established within static source and screenshot coverage. The reviewer did not independently execute either app or its authored tests. This is not production security, reliability, or usability assurance."
+  },
+  "patchFormatObservation": {
+    "runtime": "Vector",
+    "observedApplyPatchErrors": 1,
+    "classification": "Patch-envelope formatting failure identified in controller metadata",
+    "retryAlsoChangedCode": true,
+    "isolatedFailureCostUsd": null,
+    "exactSavingsFromAvoidingFailureEstablished": false,
+    "prospectiveEnvelopeFixBenchmarkedInThisPair": false,
+    "note": "The retry is an observation, not a causal estimate of token or cost savings from an envelope-only change."
+  },
+  "accountingCheckpoint": {
+    "scope": "Historical checkpoint at settlement of this development-task pair",
+    "beforePair": {
+      "providerRequests": 531,
+      "measuredUsd": 13.1149153
+    },
+    "pair": {
+      "providerRequests": 59,
+      "measuredUsd": 1.4753015
+    },
+    "studyThroughPairSettlement": {
+      "providerRequests": 590,
+      "measuredUsd": 14.5902168
+    },
+    "isCurrentBill": false,
+    "laterHoldoutActivityExcluded": true,
+    "note": "The holdout was active after this checkpoint. These figures do not report the current study bill."
+  },
+  "interpretationLimits": [
+    "One adaptive development-task pair before and after is not independent causal evidence.",
+    "The candidate bundles optional browser-focus metadata and changed verification guidance; their individual effects are not isolated.",
+    "The corrected browser instrument is shared by both candidate arms and the free baseline reevaluations, while the original baseline paid repair was induced by the earlier checker.",
+    "No conclusion about held-out task quality or cost is established here."
+  ],
+  "publication": {
+    "sourceIndex": "../submissions/focus-workflow/README.md",
+    "sourceManifest": "../submissions/focus-workflow/manifest.json",
+    "originalSourceBytesPreserved": true,
+    "note": "Both original first-submission source archives are published byte-for-byte; no normalized review copy replaces them."
+  },
+  "sanitization": {
+    "sources": [
+      "candidate pair summary and run aggregates",
+      "sanitized numeric provider-receipt and tool-activity projection",
+      "two blinded review records",
+      "public source publication and candidate validation"
+    ],
+    "privatePathsIdentifiersCredentialsRawLogsAndRuntimeConfigurationExcluded": true,
+    "activityLimitations": "Observed CLI bytes are not model tokens or cost. Missing fields have no observations, not measured zero size. Error and repeated-input counts do not alone establish waste or product failure."
+  },
+  "browserProvisioningDeviation": {
+    "observation": "Vector authored scripts/browser-check.mjs importing the provided Playwright module and launching Chrome directly; three execution references were verified in the completed command records.",
+    "sameHostCapabilitiesOfferedToBothRuntimes": true,
+    "commonDriverExclusivityEnforced": false,
+    "interpretation": "The agent-owned checks did not all stay within the common browser client despite the task wording. Costs and delivery checks remain recorded, but these observations are exploratory and do not establish strict shared-client protocol adherence.",
+    "independentAcceptanceBrowserFencedSeparately": true,
+    "noUnobservedExternalInteractionOrCheatingAssumed": true
+  }
+}

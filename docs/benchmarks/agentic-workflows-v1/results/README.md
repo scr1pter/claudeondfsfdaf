@@ -1,5 +1,10 @@
 # Workflow Runner baseline results
 
+> Follow-up: [the fixed candidate development run](focus-workflow.md) passed all
+> 24 checks for both runtimes. Vector cost 17.03% less; blinded scores were
+> Vector 45 and Codex 46. The independent holdout is still being completed.
+> The broader equal-quality 20% target remains unproven.
+
 The baseline does **not** establish the preregistered 20% cost reduction at equal
 quality. Vector's first submission was cheaper and passes the corrected functional
 gate, but every charged repair remains in the primary episode: Vector cost
@@ -92,3 +97,19 @@ inventory is unpopulated, while this separate projection supplies observed count
 
 Private paths, session identifiers, credentials, raw logs, and runtime configuration
 are excluded from this evidence package.
+
+## Browser provisioning limitation
+
+Both CLI environments exposed the same Playwright module and Chrome executable
+in addition to the common browser client. In the baseline, Codex authored and ran
+`scripts/verify-browser.mjs` directly; in the focus run, Vector authored and ran
+`scripts/browser-check.mjs` directly. Three execution references were verified for
+each of those scripts. Their sources import Playwright and launch Chrome.
+
+The task requested the common client, so shared-client exclusivity was not
+enforced. The runtimes received identical host capabilities, but their own
+browser checks did not all use the same interface. These are exploratory results,
+not clean evidence of strict shared-client protocol adherence. Model, reasoning,
+agent-count, cost and authored-source records remain intact. The independent
+acceptance browser used its separate exact-origin fence. This observation does
+not establish unobserved external interaction or cheating; no such claim is made.
