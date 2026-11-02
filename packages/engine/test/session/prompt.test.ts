@@ -5645,3 +5645,169 @@ withBackground.instance(
     }),
   120_000,
 )
+
+withBackground.instance(
+  "legacy accounting keeps a late background batch charge on its launch run after a new root run",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig((url) => {
+        const base = providerCfg(url)
+        return {
+          ...base,
+          provider: {
+            lmstudio: {
+              ...base.provider.lmstudio,
+              models: {
+                "accounting-background": {
+                  ...base.provider.lmstudio.models["test-model"],
+                  id: "accounting-background",
+                  cost: { input: 100, output: 1 },
+                },
+              },
+            },
+          },
+        }
+      })
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const guard = yield* SpendGuard.Service
+      const database = yield* Database.Service
+      const events = yield* EventV2Bridge.Service
+      const selected = { providerID: ProviderV2.ID.make("lmstudio"), modelID: ModelV2.ID.make("accounting-background") }
+      const chat = yield* sessions.create({
+        title: "Pinned",
+        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+      })
+      yield* prompt.prompt({
+        sessionID: chat.id,
+        agent: "build",
+        model: selected,
+        noReply: true,
+        size: "thorough",
+        judge: "off",
+        budget: { usd: 1 },
+        parts: [{ type: "text", text: "Start the accounting assignment" }],
+      })
+      const releaseChild = Promise.withResolvers<void>()
+      const releaseRoot = Promise.withResolvers<void>()
+      const child = asksFor("Inspect the bounded accounting fixture")
+      const next = asksFor("new independent accounting request")
+      const root = (hit: { body: Record<string, unknown> }) => !child(hit) && !next(hit)
+      yield* llm.pushMatch(
+        root,
+        reply()
+          .tool("task", {
+            tasks: [
+              {
+                description: "Inspect accounting",
+                prompt: "Inspect the bounded accounting fixture",
+                subagent_type: "general",
+                budget: { usd: 0.01 },
+              },
+            ],
+            budget: { usd: 0.02 },
+            background: true,
+          })
+          .usage({ input: 1_000, output: 100 }),
+        reply().wait(releaseRoot.promise).tool("first", { value: 1 }).usage({ input: 20_000, output: 100 }),
+      )
+      yield* llm.pushMatch(
+        child,
+        reply().wait(releaseChild.promise).tool("lookup", { value: 1 }).usage({ input: 10, output: 10 }),
+        reply().text("must not be requested").stop(),
+      )
+      yield* llm.pushMatch(next, reply().text("Independent request complete.").usage({ input: 30, output: 10 }).stop())
+      const unlock = Effect.sync(() => {
+        releaseChild.resolve()
+        releaseRoot.resolve()
+      })
+      yield* Effect.gen(function* () {
+        const running = yield* prompt.loop({ sessionID: chat.id }).pipe(Effect.forkChild)
+        yield* llm.wait(3)
+        releaseRoot.resolve()
+        expect(budgetStop((yield* Fiber.join(running)).info)?.reason).toBe("cap")
+        const [kid] = yield* sessions.children(chat.id)
+        expect(kid).toBeDefined()
+        if (!kid) return yield* Effect.die("The real task call did not create its child")
+        yield* prompt.prompt({
+          sessionID: chat.id,
+          agent: "build",
+          model: selected,
+          judge: "off",
+          budget: { usd: 1 },
+          parts: [{ type: "text", text: "new independent accounting request" }],
+        })
+        expect((yield* guard.snapshot(chat.id))?.spentUsd).toBeCloseTo(0.00301, 9)
+        releaseChild.resolve()
+        yield* pollWithTimeout(
+          MessageV2.filterCompactedEffect(kid.id).pipe(
+            Effect.map((messages) =>
+              messages.map((message) => budgetStop(message.info)).find((stop) => stop !== undefined),
+            ),
+          ),
+          "the old child never observed its launch run's stop",
+        )
+        yield* pollWithTimeout(
+          MessageV2.filterCompactedEffect(chat.id).pipe(
+            Effect.map((messages) =>
+              messages.findLast((message) =>
+                message.parts.some((part) => part.type === "text" && part.text.includes("Background task")),
+              ),
+            ),
+          ),
+          "the settled child never notified its root",
+        )
+        // As in the existing control, allow an unintended reply to the background notice to become observable.
+        yield* Effect.sleep("300 millis")
+        const settled = yield* sessions.get(kid.id)
+        const parent = yield* sessions.get(chat.id)
+        expect(settled.cost).toBeCloseTo(0.00101, 9)
+        expect(settled.tokens).toMatchObject({ input: 10, output: 10 })
+        expect(parent.cost).toBeCloseTo(2.10321, 9)
+        expect(parent.subagentCost).toBeCloseTo(0.00101, 9)
+        expect(parent.tokens).toMatchObject({ input: 21_030, output: 210 })
+        expect(parent.subagentTokens).toEqual({ input: 10, output: 10, reasoning: 0, cache: { read: 0, write: 0 } })
+        // Completed tasks persist their launch scopes before releasing the in-memory binding. The newer root run
+        // may have replaced the old last-run pointer, so the durable lifecycle record owns this settled receipt.
+        const scopes: readonly SpendGuard.ScopeSnapshot[] = settled.metadata?.subagent?.budgetScopes ?? []
+        expect(scopes.find((scope) => scope.kind === "run")?.spentUsd).toBeCloseTo(2.10121, 9)
+        expect(scopes.find((scope) => scope.kind === "run")?.steps).toBe(3)
+        expect(yield* llm.calls).toBe(4)
+        expect((yield* guard.snapshot(chat.id))?.spentUsd).toBeCloseTo(0.00301, 9)
+        expect((yield* guard.snapshot(chat.id))?.steps).toBe(1)
+        expect(scopes.find((scope) => scope.kind === "batch")?.spentUsd).toBeCloseTo(0.00101, 9)
+        expect(scopes.find((scope) => scope.kind === "child")?.spentUsd).toBeCloseTo(0.00101, 9)
+        const recorded = yield* database.db.select().from(EventTable).where(eq(EventTable.aggregate_id, kid.id)).all()
+        const settlement = recorded.find(
+          (event) =>
+            event.type.startsWith(`${SessionV1.Event.PartUpdated.type}.`) &&
+            (event.data as { part?: { type?: string } }).part?.type === "step-finish",
+        )
+        if (!settlement) return yield* Effect.die("Missing real background child settlement")
+        yield* events.replay({
+          id: settlement.id,
+          aggregateID: settlement.aggregate_id,
+          seq: settlement.seq,
+          type: settlement.type,
+          data: settlement.data,
+        })
+        expect((yield* sessions.get(chat.id)).subagentCost).toBeCloseTo(0.00101, 9)
+        expect((yield* sessions.get(kid.id)).metadata?.subagent?.budgetScopes).toEqual(scopes)
+        expect((yield* guard.snapshot(chat.id))?.spentUsd).toBeCloseTo(0.00301, 9)
+        expect(yield* llm.calls).toBe(4)
+        expect(yield* llm.pending).toBe(1)
+        yield* llm.pushMatch(next, reply().text("Continued by the user.").usage({ input: 20, output: 5 }).stop())
+        yield* prompt.prompt({
+          sessionID: chat.id,
+          agent: "build",
+          model: selected,
+          judge: "off",
+          budget: { usd: 1 },
+          parts: [{ type: "text", text: "Continue after the recorded stopped task" }],
+        })
+        expect(yield* llm.calls).toBe(5)
+        expect((yield* guard.snapshot(chat.id))?.spentUsd).toBeCloseTo(0.002005, 9)
+      }).pipe(Effect.ensuring(unlock))
+    }),
+  120_000,
+)

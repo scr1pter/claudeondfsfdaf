@@ -39,8 +39,10 @@ classified as an explicitly free route. Those setup failures are excluded from
 product-defect evidence; the corrected before/after cases establish the findings.
 No paid API calls were required.
 
-The separate background-notification experiment has passing focused controls but
-six unresolved startup/readiness failures in its broader TaskTool run. That
-experiment is excluded from these two fixes and remains unmerged pending
-baseline comparison. These results do not establish invoice reconciliation,
-full-workflow quality or billion-token inference performance.
+The separate background-notification fix has passing real workflow and scope
+controls. The broader TaskTool run retained six readiness failures; controlled
+baseline and patched runs reproduced the same five failures, and a later clean
+run passed all six unchanged cases. The exact startup variance remains unexplained.
+The [integration report](tokenomics-scale-accounting.md) preserves those outcomes
+without claiming a fully green broad suite. These results do not establish invoice
+reconciliation, full-workflow quality or billion-token inference performance.
