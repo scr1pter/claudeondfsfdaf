@@ -1,0 +1,174 @@
+{
+  "schemaVersion": 1,
+  "study": "agentic-workflows-v1",
+  "task": "workflow-runner",
+  "stage": "baseline",
+  "costBasis": "Usage-derived provider receipt charges; not invoice-reconciled",
+  "allChargesRetained": true,
+  "historicalSpendingReset": false,
+  "tokenUsage": {
+    "available": false,
+    "inputTokens": null,
+    "outputTokens": null,
+    "cacheReadTokens": null,
+    "cacheWriteTokens": null,
+    "reasoningTokens": null,
+    "note": "The permitted summary and run aggregates expose request counts and measured cost, but no numeric token-category totals. Missing categories are not zero. Reasoning, when available, is a subset of output."
+  },
+  "submissions": [
+    {
+      "id": "codex-first",
+      "runtime": "Codex",
+      "phase": "first_submission",
+      "incrementalProviderRequests": 28,
+      "incrementalMeasuredUsd": 0.9333972,
+      "agentWallMs": 681078,
+      "originalEvaluation": {
+        "recordedVerdict": "passed",
+        "apiPassed": 16,
+        "apiRequired": 16,
+        "browserPassed": 8,
+        "browserRequired": 8,
+        "failedChecks": []
+      },
+      "correctedEvaluation": {
+        "verdict": "passed",
+        "apiPassed": 16,
+        "apiRequired": 16,
+        "browserPassed": 8,
+        "browserRequired": 8,
+        "sourceUnchanged": true
+      },
+      "protectedInputViolations": 0,
+      "workerCalls": 0,
+      "toolInventory": null
+    },
+    {
+      "id": "vector-first",
+      "runtime": "Vector",
+      "phase": "first_submission",
+      "incrementalProviderRequests": 37,
+      "incrementalMeasuredUsd": 0.6540243,
+      "agentWallMs": 440922,
+      "originalEvaluation": {
+        "recordedVerdict": "product_failure",
+        "retrospectiveClassification": "instrument_failure",
+        "apiPassed": 16,
+        "apiRequired": 16,
+        "browserPassed": 7,
+        "browserRequired": 8,
+        "failedChecks": ["mobile_layout_and_keyboard"]
+      },
+      "correctedEvaluation": {
+        "verdict": "passed",
+        "apiPassed": 16,
+        "apiRequired": 16,
+        "browserPassed": 8,
+        "browserRequired": 8,
+        "sourceUnchanged": true
+      },
+      "protectedInputViolations": 0,
+      "workerCalls": 0,
+      "toolInventory": ["apply_patch", "bash", "glob", "read", "terminal", "todowrite"]
+    },
+    {
+      "id": "vector-repair",
+      "runtime": "Vector",
+      "phase": "same_session_repair",
+      "incrementalProviderRequests": 17,
+      "incrementalMeasuredUsd": 0.2955530,
+      "agentWallMs": 227641,
+      "originalEvaluation": {
+        "recordedVerdict": "product_failure",
+        "retrospectiveClassification": "instrument_failure",
+        "apiPassed": 16,
+        "apiRequired": 16,
+        "browserPassed": 7,
+        "browserRequired": 8,
+        "failedChecks": ["mobile_layout_and_keyboard"]
+      },
+      "correctedEvaluation": {
+        "verdict": "passed",
+        "apiPassed": 16,
+        "apiRequired": 16,
+        "browserPassed": 8,
+        "browserRequired": 8,
+        "sourceUnchanged": true
+      },
+      "protectedInputViolations": 0,
+      "workerCalls": 0,
+      "toolInventory": ["apply_patch", "bash", "read", "terminal"]
+    }
+  ],
+  "completeEpisodes": {
+    "codex": {
+      "providerRequests": 28,
+      "measuredUsd": 0.9333972,
+      "agentWallMs": 681078,
+      "paidRepairs": 0,
+      "settlementComplete": true,
+      "correctedFunctionalVerdict": "passed"
+    },
+    "vector": {
+      "providerRequests": 54,
+      "measuredUsd": 0.9495773,
+      "agentWallMs": 668563,
+      "paidRepairs": 1,
+      "settlementComplete": true,
+      "correctedFunctionalVerdict": "passed"
+    }
+  },
+  "instrumentCorrection": {
+    "revision": "postlaunch-keyboard-v2",
+    "originalTaskCommit": "44f93362a683d39198ead037beb639abc828fb63",
+    "originalTaskSha256": "722a00ba024522e2e88aee585f778dad206b115a30a8d1caded38681cf7cd761",
+    "originalFailureMessage": "No keyboard-focusable dashboard control",
+    "cause": "One Tab from the prior Events control could move focus into browser chrome, leaving document.activeElement as body. The original check treated that normal transition as absence of a keyboard-focusable control.",
+    "correctedContract": "Native Tab navigation must reach all four required form controls after a visible-heading pointer click; body/browser-chrome transitions are allowed within a bounded traversal.",
+    "appliedAfterPaidRepairSettled": true,
+    "reevaluatedUnchangedSubmissions": ["codex-first", "vector-first", "vector-repair"],
+    "reevaluationModelCalls": 0,
+    "additionalProviderChargeUsd": 0,
+    "originalResultsRetained": true
+  },
+  "toolActivity": {
+    "artifact": "baseline-tool-activity.json",
+    "attemptMapping": {"codex[0]": "codex-first", "vector[0]": "vector-first", "vector[1]": "vector-repair"},
+    "observedToolCalls": {"codexFirst": 35, "vectorFirst": 57, "vectorRepair": 24},
+    "limitation": "Deduplicated observed CLI events and byte observations are not model tokens or cost. Missing fields have no observations, not measured zero size. Explicit tool errors or nonzero exits can include expected negative checks and do not alone establish waste or product failure."
+  },
+  "blindedCodeReview": {
+    "method": "Blinded static source review with two supplied independent screenshots per submission",
+    "independentExecution": false,
+    "mapping": {"larch": "Codex", "rowan": "Vector"},
+    "maximumScore": 48,
+    "scores": {"codex": 45, "vector": 44},
+    "criticalFindingsEstablished": {"codex": 0, "vector": 0},
+    "dimensions": [
+      {"name": "Contract and data integrity", "maximum": 12, "codex": 12, "vector": 12},
+      {"name": "Durable state and recovery", "maximum": 10, "codex": 9, "vector": 9},
+      {"name": "Structure and maintainability", "maximum": 8, "codex": 8, "vector": 8},
+      {"name": "Errors and resource bounds", "maximum": 6, "codex": 5, "vector": 5},
+      {"name": "Added verification", "maximum": 6, "codex": 6, "vector": 5},
+      {"name": "User interface and accessibility", "maximum": 6, "codex": 5, "vector": 5}
+    ],
+    "limitation": "Static source and screenshot coverage does not establish production security, reliability, or usability."
+  },
+  "accounting": {
+    "beforeBaseline": {"providerRequests": 449, "measuredUsd": 11.2319408},
+    "baselinePairIncludingRepair": {"providerRequests": 82, "measuredUsd": 1.8829745},
+    "studyThroughBaseline": {"providerRequests": 531, "measuredUsd": 13.1149153}
+  },
+  "interpretation": {
+    "firstSubmissionVectorSavingsPercent": 29.9308,
+    "completeEpisodeVectorSavingsPercent": -1.7335,
+    "primaryTwentyPercentTargetMet": false,
+    "noLowerBlindedQualityCriterionMet": false,
+    "conclusion": "No primary 20% savings claim. Vector's first submission was cheaper and passes the corrected gate, but the complete charged episode costs more than Codex and its blinded code score is one point lower. The repair charge remains included despite the instrument defect."
+  },
+  "sanitization": {
+    "sources": ["baseline summary and runtime run aggregates", "corrected evaluation summary", "two blinded review records", "sanitized tool-activity projection", "public task and rubric documentation"],
+    "privatePathsIdentifiersCredentialsAndRawLogsExcluded": true,
+    "toolInventoryNote": "Inventories list names, not call counts. The Codex aggregate contains no populated inventory; this is missing evidence, not evidence of zero tool activity."
+  }
+}
