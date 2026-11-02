@@ -12,6 +12,7 @@ from datetime import datetime
 import hashlib
 import importlib.util
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -119,6 +120,57 @@ def checked_path(path, roots):
     return path
 
 
+def validate_task_commands(task, root, options, common, browser_files):
+    """Bind task executables/code operands to the reviewed public manifests.
+
+    This validates the explicit command contract, not arbitrary Python imports
+    or the trusted host standard library. The three qualified evaluators run
+    their own frozen scripts; runtime app/out paths are data operands only.
+    """
+    binaries = {str(Path(sys.executable).resolve()), *(str(getattr(options, name).resolve()) for name in ("bun", "node"))}
+    code_suffixes = {".py", ".pyc", ".js", ".cjs", ".mjs", ".ts", ".tsx", ".node", ".exe", ".dll", ".so", ".sh", ".ps1", ".cmd", ".bat"}
+    for field in ("evaluatorCommand", "setupCommand"):
+        if field not in task:
+            continue
+        command = task[field]
+        require(command[0] in ("{python}", "{bun}", "{node}") or command[0] in binaries,
+                "task executable is outside the frozen runtime tool contract")
+        if field == "setupCommand" and command == ["{bun}", "--no-env-file", "install", "--frozen-lockfile", "--ignore-scripts"]:
+            continue
+        require(len(command) > 1 and command[1].startswith("{task}/"),
+                "task must invoke a frozen script directly; interpreter modules/inline code are unbound")
+        for index, arg in enumerate(command[1:], 1):
+            require(arg not in {"-m", "-c", "-e", "--eval", "-p", "--print", "-r", "--require", "--import", "--loader", "--experimental-loader"},
+                    "task attempted an unbound interpreter module or code loader")
+            if arg.startswith("{task}"):
+                target = Path(arg.replace("{task}", str(root))).resolve()
+                if target == root.resolve():
+                    require(index > 1, "task script operand is a directory")
+                elif target.is_relative_to(root.resolve()):
+                    relative = target.relative_to(root.resolve()).as_posix()
+                    require(common.inside(root, relative).is_file(), "task code/file operand is not frozen")
+                else:
+                    require(target.is_relative_to(options.browser_driver_root)
+                            and target.relative_to(options.browser_driver_root).as_posix() in browser_files,
+                            "external task code/file operand is outside the designated frozen browser dependencies")
+            elif arg in ("{python}", "{bun}", "{node}") or arg in binaries:
+                require(index > 1, "task script must come from its frozen manifest")
+            elif arg.startswith(("{app}", "{out}")):
+                require(index > 1 and Path(arg).suffix.lower() not in code_suffixes,
+                        "runtime app/out placeholders are data paths, not evaluator code")
+            elif "{" in arg or "}" in arg:
+                require(False, "unbound task command placeholder")
+            elif Path(arg).is_absolute() and Path(arg).resolve().is_relative_to(options.browser_driver_root):
+                require(Path(arg).resolve().relative_to(options.browser_driver_root).as_posix() in browser_files,
+                        "designated browser dependency is not in its frozen manifest")
+            elif Path(arg).is_absolute() or re.match(r"^[A-Za-z]:[\\/]", arg) or arg.startswith(("\\\\", "//")):
+                require(False, "unbound absolute task code/file operand")
+            elif arg.startswith("-"):
+                require(re.fullmatch(r"--?[A-Za-z][A-Za-z0-9-]*", arg), "unbound compound task flag/file operand")
+            elif Path(arg).suffix or "/" in arg or "\\" in arg:
+                require(False, "unbound relative task code/file operand")
+
+
 def build_plan(options, common):
     require(1 <= options.task_index <= len(TASKS), "unknown fixed development task index")
     require(re.fullmatch(r"[a-z0-9][a-z0-9-]{0,45}", options.label), "invalid synthetic label")
@@ -128,16 +180,12 @@ def build_plan(options, common):
     base = common.validate_base(options.provider_base)
     source, dirty = common.source_revision(options.vector_root)
     tasks = []
+    browser_files = common.manifest(options.browser_driver_root)
     for name, order in TASKS:
         root = options.task_root / name
         task = common.load_task(root)
         files = common.manifest(root)
-        for arg in task["evaluatorCommand"]:
-            if arg.startswith("{task}"):
-                target = Path(arg.replace("{task}", str(root))).resolve()
-                require(target == root.resolve() or target.is_relative_to(root.resolve())
-                        or target.is_relative_to(options.browser_driver_root),
-                        "an external evaluator dependency is outside the frozen common browser instrument")
+        validate_task_commands(task, root, options, common, browser_files)
         tasks.append({"name": name, "order": list(order), "taskSha256": digest(files), "files": files,
                       "contract": task})
     binaries = {name: common.file_hash(getattr(options, name)) for name in ("bun", "node", "codex_bin", "chrome")}
@@ -145,7 +193,6 @@ def build_plan(options, common):
     binaries["playwright_package"] = common.file_hash(options.playwright_module / "package.json")
     team_files = common.manifest(Path(__file__).resolve().parent)
     common_files = common.manifest(options.common_runner_root)
-    browser_files = common.manifest(options.browser_driver_root)
     paths = {name: str(getattr(options, name)) for name in (
         "vector_root", "task_root", "common_runner_root", "browser_driver_root", "bun", "node", "codex_bin", "chrome", "playwright_module")}
     study_freeze = digest({"sourceRevision": source, "tasks": [row["taskSha256"] for row in tasks],
@@ -427,16 +474,50 @@ def native_command(common, runtime, options, app, home, binding, prompt, session
 
 
 def timestamp(value):
-    if isinstance(value, (int, float)):
+    if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and value >= 0:
         return float(value) / (1000 if value > 100000000000 else 1)
     if isinstance(value, str):
         return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
     return None
 
 
+def native_turn_chronology(observations):
+    """Retain turn outcomes; an old completion cannot hide a later open/error turn."""
+    turns, current, unknown = [], None, 0
+    priority = {"started": 0, "assistant_started": 1, "completed": 2, "fatal": 3, "cancelled": 3}
+    for item in sorted(observations, key=lambda row: (row["at"] is None, row["at"] or 0, priority[row["outcome"]])):
+        at, outcome = item["at"], item["outcome"]
+        if at is None:
+            unknown += 1
+            continue
+        if outcome == "started":
+            current = {"started": at, "inferenceStarted": None, "completed": None, "outcome": "pending",
+                       "lastOutcomeAt": at, "errorObservations": 0}
+            turns.append(current)
+        elif outcome == "assistant_started":
+            if current is None or current["outcome"] == "completed" and at > current["lastOutcomeAt"]:
+                current = {"started": at, "inferenceStarted": at, "completed": None, "outcome": "pending",
+                           "lastOutcomeAt": at, "errorObservations": 0}
+                turns.append(current)
+            else:
+                current["inferenceStarted"] = min(current["inferenceStarted"] or at, at)
+                if current["outcome"] in ("fatal", "cancelled") and at > current["lastOutcomeAt"]:
+                    current.update(outcome="pending", completed=None, lastOutcomeAt=at)
+        else:
+            if current is None or current["outcome"] == "completed" and at > current["lastOutcomeAt"]:
+                current = {"started": None, "inferenceStarted": None, "completed": None,
+                           "outcome": "pending", "lastOutcomeAt": at, "errorObservations": 0}
+                turns.append(current)
+            current.update(outcome=outcome, completed=at if outcome == "completed" else None, lastOutcomeAt=at)
+            current["errorObservations"] += int(outcome in ("fatal", "cancelled"))
+    return {"turns": turns, "unknownOutcomeObservations": unknown,
+            "nativeErrorObservations": sum(row["errorObservations"] for row in turns),
+            "latestOutcome": turns[-1]["outcome"] if turns else "unknown"}
+
+
 def normalize_transcript(path, runtime):
     """Normalize native descendants, never CLI root stdout, for browser auditing."""
-    events, commands, executions, start, complete, unknown = [], {}, [], None, None, 0
+    events, commands, executions, observations, start, unknown = [], {}, [], [], None, 0
     with path.open("r", encoding="utf-8") as stream:
         for count, line in enumerate(stream, 1):
             require(count <= 200000 and len(line) <= 8000000, "native transcript audit bound exceeded")
@@ -446,10 +527,18 @@ def normalize_transcript(path, runtime):
                 data = json.loads(item.get("data", "{}"))
                 if row.get("table") == "session":
                     start = timestamp(item.get("time_created"))
+                elif row.get("table") == "message" and data.get("role") == "user":
+                    observations.append({"outcome": "started", "at": timestamp(data.get("time", {}).get("created", item.get("time_created")))})
                 elif row.get("table") == "message" and data.get("role") == "assistant":
+                    created = timestamp(data.get("time", {}).get("created", item.get("time_created")))
+                    observations.append({"outcome": "assistant_started", "at": created})
                     final = timestamp(data.get("time", {}).get("completed"))
-                    if final is not None and data.get("finish") not in (None, "tool-calls") and not data.get("error"):
-                        complete = max(complete or 0, final)
+                    if data.get("error"):
+                        error = str(data["error"]).lower()
+                        observations.append({"outcome": "cancelled" if re.search(r"abort|cancel", error) else "fatal",
+                            "at": final or timestamp(item.get("time_updated")) or created})
+                    elif final is not None and data.get("finish") not in (None, "tool-calls"):
+                        observations.append({"outcome": "completed", "at": final})
                 elif row.get("table") == "part" and data.get("type") == "tool":
                     events.append({"type": "tool_use", "part": data})
                     state = data.get("state", {})
@@ -462,9 +551,17 @@ def normalize_transcript(path, runtime):
             payload = row.get("payload", {})
             at = timestamp(row.get("timestamp"))
             if row.get("type") == "session_meta":
-                start = at
-            if row.get("type") == "event_msg" and payload.get("type") in ("task_complete", "turn_complete"):
-                complete = at
+                start = min(start, at) if start is not None and at is not None else start or at
+            if row.get("type") == "event_msg":
+                kind = payload.get("type")
+                if kind in ("task_started", "turn_started"):
+                    observations.append({"outcome": "started", "at": at})
+                elif kind in ("task_complete", "turn_complete"):
+                    observations.append({"outcome": "completed", "at": at})
+                elif kind in ("turn_aborted", "task_aborted", "turn_cancelled", "task_cancelled"):
+                    observations.append({"outcome": "cancelled", "at": at})
+                elif kind in ("error", "fatal_error", "turn_failed", "task_failed") or payload.get("error"):
+                    observations.append({"outcome": "fatal", "at": at})
             if row.get("type") != "response_item":
                 continue
             name = payload.get("name", "").split(".")[-1]
@@ -478,11 +575,16 @@ def normalize_transcript(path, runtime):
                 key = payload.get("call_id")
                 commands[key] = command
                 executions.append({"at": at, "command": command})
+                observations.append({"outcome": "assistant_started", "at": at})
                 events.append({"type": "item.started", "item": {"id": key, "type": "command_execution", "command": command}})
             elif payload.get("type") == "function_call_output" and payload.get("call_id") in commands:
                 key = payload["call_id"]
                 events.append({"type": "item.completed", "item": {"id": key, "type": "command_execution", "command": commands[key]}})
-    return {"events": events, "executions": executions, "started": start, "completed": complete, "unknownInteractiveInputs": unknown}
+    chronology = native_turn_chronology(observations)
+    completions = sorted(row["completed"] for row in chronology["turns"] if row["outcome"] == "completed")
+    return {"events": events, "executions": executions, "started": start,
+            "completed": completions[-1] if completions else None,
+            "completions": completions, "unknownInteractiveInputs": unknown, **chronology}
 
 
 def audit_descendants(common, runtime, directory, app, support, trusted_client, slots, root_id):
@@ -503,24 +605,46 @@ def audit_descendants(common, runtime, directory, app, support, trusted_client, 
         # reads or a judge review. Keep the common audit's uncertainty visible.
         review = review or audit.get("requiresManualReview", True) or normalized["unknownInteractiveInputs"] > 0
         coverage.append({"identitySha256": item["identitySha256"], "audit": audit,
-                         "unknownInteractiveInputs": normalized["unknownInteractiveInputs"]})
+                         "unknownInteractiveInputs": normalized["unknownInteractiveInputs"],
+                         "latestNativeOutcome": normalized["latestOutcome"],
+                         "nativeErrorObservations": normalized["nativeErrorObservations"],
+                         "unknownNativeOutcomeObservations": normalized["unknownOutcomeObservations"]})
     keys = {role: hashlib.sha256(identity.encode()).hexdigest() for role, identity in slots.items()}
-    worker_done = [timeline.get(keys.get(role), {}).get("completed") for role in ROLES[:2]]
+    workers = [timeline.get(keys.get(role), {}) for role in ROLES[:2]]
+    worker_done = [worker.get("completions", [None])[0] if worker.get("completions") else None for worker in workers]
     judge = timeline.get(keys.get("team_judge"), {})
     ordered = all(value is not None for value in worker_done) and judge.get("started") is not None and max(worker_done) <= judge["started"]
     root_key = hashlib.sha256(root_id.encode()).hexdigest()
     require(len(keys) == 3 and root_key in timeline, "native team transcript join incomplete")
     root = timeline[root_key]
+    required = [root, judge, *workers]
+    native_outcomes_settled = all(row.get("latestOutcome") == "completed" and row.get("unknownOutcomeObservations") == 0 for row in required)
+    judge_completions = [row for row in judge.get("turns", []) if row["outcome"] == "completed"]
+    judge_phases = [(judge.get("started") if index == 0 else
+                     row.get("inferenceStarted") if runtime == "vector" else row.get("started"), row["completed"])
+                    for index, row in enumerate(judge_completions)]
+    worker_completions = [value for worker in workers for value in worker.get("completions", [])]
+    followups_reviewed = bool(judge_phases) and all(any(began is not None and ended is not None and began >= completed and ended >= began
+                                  for began, ended in judge_phases) for completed in worker_completions)
     final_commands = [row["command"] for row in root["executions"] if row["at"] is not None
                       and judge.get("completed") is not None and row["at"] >= judge["completed"]]
     browser_after_judge = any("browser_driver_client" in command.lower() or str(trusted_client).lower() in command.lower()
                               for command in final_commands)
     api_after_judge = any(re.search(r"\b(?:curl|invoke-restmethod|invoke-webrequest)\b|\bfetch\s*\(|urllib\.request|https?\.request", command, re.I)
                           for command in final_commands)
+    tied_ordering = any(value == judge.get("started") for value in worker_done if value is not None) or any(
+        began == completed for completed in worker_completions for began, _ in judge_phases if began is not None)
     support_files = common.manifest(support) if support.is_dir() else {}
-    return {"requiresManualReview": bool(review or not ordered or not browser_after_judge or not api_after_judge), "descendantCoverageComplete": True,
+    return {"requiresManualReview": bool(review or not ordered or not followups_reviewed or not native_outcomes_settled
+                                          or not browser_after_judge or not api_after_judge), "descendantCoverageComplete": True,
             "observedNativeSessions": len(coverage), "autonomousActorsAdmitted": 1 + len(slots),
             "judgeStartedAfterBothWorkersCompleted": bool(ordered), "sessions": coverage,
+            "allWorkerCompletionPhasesReviewedBySameJudge": bool(followups_reviewed),
+            "requiredNativeLatestOutcomesSettled": native_outcomes_settled,
+            "workerFollowupCompletions": sum(max(0, len(worker.get("completions", [])) - 1) for worker in workers),
+            "judgeFollowupCompletions": max(0, len(judge_completions) - 1),
+            "orderingTimestampEqualityObserved": tied_ordering,
+            "orderingEvidence": "nondecreasing native timestamps normalized to seconds; ordering is not strict causal proof",
             "rootPostJudgeCommonBrowserCommandObserved": browser_after_judge,
             "rootPostJudgeApiVerificationCommandObserved": api_after_judge,
             "ownedSupportDataFiles": len(support_files), "ownedSupportScriptPolicy":
