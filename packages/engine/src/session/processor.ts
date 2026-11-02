@@ -1027,6 +1027,11 @@ const layer = Layer.effect(
                       tools: lease?.tools
                         ? Object.fromEntries(Object.entries(tools).filter(([name]) => lease.tools?.includes(name)))
                         : tools,
+                      accepted: () => {
+                        // Successful HTTP acceptance can precede the SDK's first step-start chunk.
+                        ctx.started ??= new Usage({})
+                        streamInput.accepted?.()
+                      },
                       started: (usage) => {
                         ctx.started = Usage.from(usage)
                         if (attempt)

@@ -73,11 +73,13 @@ export const createLLMEventPublisher = (events: EventV2.Interface, input: Input)
   let assistantActive = false
   let assistantFailed = false
   let providerFailed = false
+  let stepStarted = false
   let stepSettlement:
     | {
         readonly finish: string
         readonly tokens: ReturnType<typeof tokens>
         readonly providerMetadata?: ProviderMetadata
+        readonly incomplete?: boolean
       }
     | undefined
 
@@ -252,6 +254,7 @@ export const createLLMEventPublisher = (events: EventV2.Interface, input: Input)
   ) {
     switch (event.type) {
       case "step-start":
+        stepStarted = true
         return
       case "text-start":
         yield* text.start(event.id)
@@ -430,7 +433,15 @@ export const createLLMEventPublisher = (events: EventV2.Interface, input: Input)
     hasActiveAssistant: () => assistantActive,
     hasAssistantStarted: () => assistantMessageID !== undefined,
     hasProviderError: () => providerFailed,
-    stepSettlement: () => stepSettlement,
+    stepSettlement: () =>
+      stepSettlement ??
+      (stepStarted
+        ? {
+            finish: "error",
+            tokens: tokens(undefined),
+            incomplete: true,
+          }
+        : undefined),
     startAssistant,
     assistantMessageID: assistantMessageIDForTool,
   }
