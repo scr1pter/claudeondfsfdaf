@@ -143,11 +143,13 @@ def known_length_incomplete(response):
 
 
 class OwnedArm:
-    def __init__(self, runtime, registry, roles, token, before, controller, audit, max_calls=300, seconds=7200, soft_usd=3):
+    def __init__(self, runtime, registry, roles, token, before, controller, audit, max_calls=300, seconds=7200, soft_usd=3, label=None):
         require(runtime in ACTORS and registry.runtime == runtime and len(roles) == 3 and len(set(roles)) == 3 and all(isinstance(value, str) and value for value in roles), "invalid fixed team")
+        require(isinstance(label, str) and re.fullmatch(r"[a-z0-9][a-z0-9-]{0,69}", label) is not None, "owned synthetic label required")
         require(1 <= max_calls <= 300 and 0 < seconds <= 7200 and 0 < soft_usd <= 3, "study bounds expanded")
         self.runtime, self.registry, self.roles = runtime, registry, set(roles)
         self.actor, self.before, self.controller, self.audit = ACTORS[runtime], copy.deepcopy(before), controller, audit
+        self._label = label
         self._funded_token, self._alias, self._owner = token, "owned-alias-" + secrets.token_hex(32), "owned-control-" + secrets.token_hex(32)
         self.batch_digest, self.max_calls, self.soft_usd = digest(token), max_calls, soft_usd
         self.deadline, self.condition = time.monotonic() + seconds, threading.Condition(threading.RLock())
@@ -159,7 +161,7 @@ class OwnedArm:
         self.nonfatal_reviews = []
         self.repairs = 0
         self.disarm_attempted, self.disarm_acknowledged = False, False
-        self.record({"type": "arm_bound", "runtime": runtime, "actor": self.actor, "batchSha256": self.batch_digest, "model": MODEL, "reasoning": "high", "reasoningSummary": "auto", "verbosity": "low", "contextLimit": CONTEXT_LIMIT, "outputCeiling": OUTPUT_CEILING, "roles": sorted(roles), "studyCapUsd": 48, "actorCapUsd": 20, "softStopUsd": soft_usd, "maxCalls": max_calls, "maxSeconds": seconds, "inflightLimit": 1})
+        self.record({"type": "arm_bound", "runtime": runtime, "actor": self.actor, "label": label, "batchSha256": self.batch_digest, "model": MODEL, "reasoning": "high", "reasoningSummary": "auto", "verbosity": "low", "contextLimit": CONTEXT_LIMIT, "outputCeiling": OUTPUT_CEILING, "roles": sorted(roles), "studyCapUsd": 48, "actorCapUsd": 20, "softStopUsd": soft_usd, "maxCalls": max_calls, "maxSeconds": seconds, "inflightLimit": 1})
 
     def record(self, event):
         try:
@@ -169,6 +171,10 @@ class OwnedArm:
                 self.audit_failed, self.failure = True, "audit_unavailable"
                 self.condition.notify_all()
             raise PolicyError("audit unavailable") from None
+
+    @property
+    def label(self):
+        return self._label
 
     def latch(self, reason):
         with self.condition:
@@ -469,6 +475,7 @@ class OwnedSupervisor:
         require(not self.failed and self.active is None and runtime in ACTORS and runtime not in self.used, "arm already owned, failed or used")
         require(isinstance(label, str) and re.fullmatch(r"[a-z0-9][a-z0-9-]{0,69}", label) is not None, "synthetic label required")
         require(registry.runtime == runtime and len(roles) == 3 and len(set(roles)) == 3 and all(isinstance(value, str) and value for value in roles), "invalid fixed team")
+        require(set(limits) <= {"max_calls", "seconds", "soft_usd"}, "unreviewed arm limit")
         before = healthy(self.controller("/status"), idle=True)
         require(before.get("batchCallsRemaining") == 0, "another paid scope is open")
         require(before["actors"][ACTORS[runtime]]["measuredUsd"] + limits.get("soft_usd", 3) <= 20, "cumulative actor capacity insufficient")
@@ -481,7 +488,7 @@ class OwnedSupervisor:
         require(isinstance(token, str) and token, "ambiguous arm admission; never retry")
         self.used.add(runtime)
         try:
-            self.active = OwnedArm(runtime, registry, roles, token, before, self.controller, audit, **limits)
+            self.active = OwnedArm(runtime, registry, roles, token, before, self.controller, audit, label=label, **limits)
         except Exception:
             self.orphaned_token = token
             try:
@@ -547,7 +554,7 @@ class OwnedSupervisor:
             receipts = [row for row in self.receipts() if row.get("batchSha256") == arm.batch_digest]
             sequences = set()
             for row in receipts:
-                require(row.get("actor") == arm.actor and isinstance(row.get("seq"), int) and row["seq"] > arm.before["attempts"] and row["seq"] not in sequences and pending[row.get("requestSha256")], "receipt scope or request join invalid")
+                require(row.get("actor") == arm.actor and row.get("label") == arm.label and isinstance(row.get("seq"), int) and row["seq"] > arm.before["attempts"] and row["seq"] not in sequences and pending[row.get("requestSha256")], "receipt scope or request join invalid")
                 request = pending[row["requestSha256"]].popleft()
                 require(known(row.get("measuredUsd")), "unknown receipt price")
                 sequences.add(row["seq"])
@@ -556,7 +563,7 @@ class OwnedSupervisor:
                     continue
                 request["receiptRegistered"] = True
                 request.update(receiptSequence=row["seq"], measuredUsd=row["measuredUsd"])
-                arm.record({"type": "receipt_registered", "ordinal": request["ordinal"], "meterReceiptSequence": row["seq"], "requestSha256": request["requestSha256"], "measuredUsd": row["measuredUsd"], "role": request["role"], "helper": request["helper"], "purpose": request["purpose"]})
+                arm.record({"type": "receipt_registered", "ordinal": request["ordinal"], "label": arm.label, "meterReceiptSequence": row["seq"], "requestSha256": request["requestSha256"], "measuredUsd": row["measuredUsd"], "role": request["role"], "helper": request["helper"], "purpose": request["purpose"]})
             require(all(request["receiptRegistered"] for request in arm.requests), "forwarded request lacks authoritative receipt")
             cost = state["actors"][arm.actor]["measuredUsd"] - arm.before["actors"][arm.actor]["measuredUsd"]
             require(abs(cost - math.fsum(row["measuredUsd"] for row in receipts)) <= 1e-7 and state["attempts"] - arm.before["attempts"] == len(receipts), "authoritative usage reconciliation mismatch")

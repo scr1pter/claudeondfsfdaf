@@ -65,8 +65,8 @@ def vector_generation_fixture(home):
     registry = NativeRegistry("vector", home, database, "ses-root", "openai", helper_producers={"synthetic-summary": "summary"})
     meter = FakeMeter()
     before = meter.control("/status")
-    token = meter.control("/control", {"actor": "foundry-vector", "calls": 300})["requestToken"]
-    arm = OwnedArm("vector", registry, ROLES, token, before, meter.control, Audit(home / "audit.jsonl"))
+    token = meter.control("/control", {"actor": "foundry-vector", "label": "synthetic-generation-fixture", "calls": 300})["requestToken"]
+    arm = OwnedArm("vector", registry, ROLES, token, before, meter.control, Audit(home / "audit.jsonl"), label="synthetic-generation-fixture")
     _, entry = arm.enter(body(), {"X-Session-Id": "ses-root"}, lambda: False)
     arm.finish(entry, {"object": "response", "status": "completed"}, False, False)
     return arm, meter
@@ -96,6 +96,7 @@ class FakeMeter(ThreadingHTTPServer):
             self.controls.append(route)
             if route == "/control":
                 self.actor, self.left, self.open = value["actor"], value["calls"], True
+                self.label = value["label"]
                 return {"requestToken": self.token}
             if route == "/disarm":
                 if value["requestToken"] != self.token:
@@ -133,7 +134,7 @@ class FakeHandler(BaseHTTPRequestHandler):
         with meter.lock:
             meter.active -= 1
             meter.spent[meter.actor] += 0.01
-            meter.receipts.append({"seq": sequence, "actor": meter.actor, "batchSha256": digest(meter.token), "requestSha256": hashlib.sha256(raw).hexdigest(), "measuredUsd": 0.01, "usage": response["usage"]})
+            meter.receipts.append({"seq": sequence, "actor": meter.actor, "label": meter.label, "batchSha256": digest(meter.token), "requestSha256": hashlib.sha256(raw).hexdigest(), "measuredUsd": 0.01, "usage": response["usage"]})
         if meter.mode == "sse":
             raw_response = ("event: " + (meter.sse_event_label or meter.terminal_event) + "\ndata: " + json.dumps({"type": meter.terminal_event, "response": response}) + "\n\n").encode()
             for kind, status in meter.extra_terminals:
@@ -562,6 +563,14 @@ class OwnedWitnessTests(unittest.TestCase):
         with self.assertRaises(PolicyError):
             self.supervisor.begin("vector", "forbidden-next", self.registry, ROLES)
 
+    def test_receipt_wrong_owned_label_requires_review_with_known_totals(self):
+        self.assertEqual(self.request()[0], 200)
+        self.meter.receipts[0]["label"] = "wrong-owned-label"
+        result = self.supervisor.close(timeout=2)
+        self.assertTrue(result["reviewRequired"])
+        self.assertFalse(result["settlementComplete"])
+        self.assertAlmostEqual(result["controllerUsageThroughClosure"]["measuredUsd"], 0.01)
+
     def test_unconfirmed_descendant_quiescence_keeps_charges_but_requires_review(self):
         self.assertEqual(self.request()[0], 200)
         self.supervisor.quiesced = lambda: False
@@ -714,8 +723,8 @@ class RegistryAndStartupTests(unittest.TestCase):
             meter = FakeMeter()
             try:
                 before = meter.control("/status")
-                token = meter.control("/control", {"actor": "foundry-vector", "calls": 300})["requestToken"]
-                arm = OwnedArm("vector", registry, ROLES, token, before, meter.control, Audit(home / "audit.jsonl"))
+                token = meter.control("/control", {"actor": "foundry-vector", "label": "synthetic-vector-review", "calls": 300})["requestToken"]
+                arm = OwnedArm("vector", registry, ROLES, token, before, meter.control, Audit(home / "audit.jsonl"), label="synthetic-vector-review")
                 with self.assertRaises(PolicyError):
                     arm.enter(body(), {"X-Session-Id": "ses-review", "x-parent-session-id": "ses-root"}, lambda: False)
             finally:
@@ -860,6 +869,7 @@ class ActualMeterSourceTests(unittest.TestCase):
                 self.assertEqual(rows[0]["requestSha256"], hashlib.sha256(wire).hexdigest())
                 self.assertEqual(rows[0]["batchSha256"], digest(armed["requestToken"]))
                 self.assertEqual(rows[0]["seq"], 1)
+                self.assertEqual(rows[0]["label"], "synthetic-offline-handler-proof")
                 self.assertAlmostEqual(rows[0]["reservedUsd"], reservation_bound(normalized, wire))
                 self.assertAlmostEqual(rows[0]["measuredUsd"], 0.00004)
             finally:

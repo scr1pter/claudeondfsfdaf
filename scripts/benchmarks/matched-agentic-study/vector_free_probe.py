@@ -34,6 +34,7 @@ class Capture(ThreadingHTTPServer):
         with self.lock:
             if route == "/control":
                 self.funded_token, self.open, self.remaining = "fake-vector-funded-" + secrets.token_hex(24), True, value["calls"]
+                self.label = value["label"]
                 return {"requestToken": self.funded_token}
             if route == "/disarm":
                 if value["requestToken"] != self.funded_token:
@@ -107,7 +108,7 @@ class Handler(BaseHTTPRequestHandler):
             tools = body.get("tools", []) + [tool for value in body.get("input", []) if isinstance(value, dict) and value.get("type") == "additional_tools" for tool in value.get("tools", [])]
             row = {"index": index, "unixNs": time.time_ns(), "model": body.get("model"), "reasoning": body.get("reasoning"), "headerNames": sorted(self.headers), "wireIdentity": identity, "parentHeader": self.headers.get("x-parent-session-id"), "tools": tools_projection(tools), "nativeBeforeResponse": native, "registryJoin": joined, "registryError": registry_error}
             self.server.rows.append(row)
-            self.server.receipts.append({"seq": 600 + index, "actor": "foundry-vector", "batchSha256": digest(self.server.funded_token), "requestSha256": hashlib.sha256(raw).hexdigest(), "measuredUsd": 0.000012})
+            self.server.receipts.append({"seq": 600 + index, "actor": "foundry-vector", "label": getattr(self.server, "label", "synthetic-unscoped-probe"), "batchSha256": digest(self.server.funded_token), "requestSha256": hashlib.sha256(raw).hexdigest(), "measuredUsd": 0.000012})
             self.server.remaining -= 1
             save(self.server.out / "private-raw" / ("request-" + str(index).zfill(3) + ".json"), body)
             save(self.server.out / "capture.json", self.server.rows)

@@ -168,7 +168,7 @@ turn cannot clear a failed terminal; the stream is drained and all charges retai
 Scoped closure disarms only the captured owned token. An uncertain disarm is
 not automatically repeated. Unknown closure keeps the token in memory and
 blocks the next arm. Authoritative receipts join by the actual shared batch
-hash, meter sequence and request fingerprint, including repeated identical
+hash, immutable owned label, actor, meter sequence and request fingerprint, including repeated identical
 requests as separate receipts. Known controller totals remain available under
 `controllerUsageThroughClosure` when receipt joining is incomplete; this is a
 cumulative observation and must not be added to the reconciled total again.
