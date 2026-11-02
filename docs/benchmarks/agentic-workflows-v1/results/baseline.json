@@ -7,13 +7,15 @@
   "allChargesRetained": true,
   "historicalSpendingReset": false,
   "tokenUsage": {
-    "available": false,
-    "inputTokens": null,
-    "outputTokens": null,
-    "cacheReadTokens": null,
-    "cacheWriteTokens": null,
-    "reasoningTokens": null,
-    "note": "The permitted summary and run aggregates expose request counts and measured cost, but no numeric token-category totals. Missing categories are not zero. Reasoning, when available, is a subset of output."
+    "available": true,
+    "artifact": "baseline-token-usage.json",
+    "source": "Sanitized numeric projection of the original paid provider receipts, matched to all three attempts",
+    "reasoningTokensAreSubsetOfOutput": true,
+    "cacheWritesAndReadsAreSubsetsOfInput": true,
+    "allRequestedModel": "gpt-6.1-sol",
+    "allRequestedHigh": true,
+    "allHttp200": true,
+    "note": "Input includes cache reads and writes; output includes reasoning. Total tokens equal input plus output. Cost comparisons use the recorded usage-derived charges, not unweighted token counts or invoices."
   },
   "submissions": [
     {
@@ -23,6 +25,17 @@
       "incrementalProviderRequests": 28,
       "incrementalMeasuredUsd": 0.9333972,
       "agentWallMs": 681078,
+      "tokens": {
+        "inputTokens": 1659392,
+        "cachedInputTokens": 1567067,
+        "cacheWriteTokens": 92241,
+        "cacheWrite30mTokens": 92241,
+        "cacheWrite12hTokens": 0,
+        "uncachedNonWriteInputTokens": 84,
+        "outputTokens": 54592,
+        "reasoningTokens": 12919,
+        "totalTokens": 1713984
+      },
       "originalEvaluation": {
         "recordedVerdict": "passed",
         "apiPassed": 16,
@@ -50,6 +63,17 @@
       "incrementalProviderRequests": 37,
       "incrementalMeasuredUsd": 0.6540243,
       "agentWallMs": 440922,
+      "tokens": {
+        "inputTokens": 1520842,
+        "cachedInputTokens": 1453448,
+        "cacheWriteTokens": 67283,
+        "cacheWrite30mTokens": 67283,
+        "cacheWrite12hTokens": 0,
+        "uncachedNonWriteInputTokens": 111,
+        "outputTokens": 34025,
+        "reasoningTokens": 7445,
+        "totalTokens": 1554867
+      },
       "originalEvaluation": {
         "recordedVerdict": "product_failure",
         "retrospectiveClassification": "instrument_failure",
@@ -78,6 +102,17 @@
       "incrementalProviderRequests": 17,
       "incrementalMeasuredUsd": 0.2955530,
       "agentWallMs": 227641,
+      "tokens": {
+        "inputTokens": 1387917,
+        "cachedInputTokens": 1364085,
+        "cacheWriteTokens": 23781,
+        "cacheWrite30mTokens": 23781,
+        "cacheWrite12hTokens": 0,
+        "uncachedNonWriteInputTokens": 51,
+        "outputTokens": 9959,
+        "reasoningTokens": 4404,
+        "totalTokens": 1397876
+      },
       "originalEvaluation": {
         "recordedVerdict": "product_failure",
         "retrospectiveClassification": "instrument_failure",
@@ -105,6 +140,17 @@
       "providerRequests": 28,
       "measuredUsd": 0.9333972,
       "agentWallMs": 681078,
+      "tokens": {
+        "inputTokens": 1659392,
+        "cachedInputTokens": 1567067,
+        "cacheWriteTokens": 92241,
+        "cacheWrite30mTokens": 92241,
+        "cacheWrite12hTokens": 0,
+        "uncachedNonWriteInputTokens": 84,
+        "outputTokens": 54592,
+        "reasoningTokens": 12919,
+        "totalTokens": 1713984
+      },
       "paidRepairs": 0,
       "settlementComplete": true,
       "correctedFunctionalVerdict": "passed"
@@ -113,6 +159,17 @@
       "providerRequests": 54,
       "measuredUsd": 0.9495773,
       "agentWallMs": 668563,
+      "tokens": {
+        "inputTokens": 2908759,
+        "cachedInputTokens": 2817533,
+        "cacheWriteTokens": 91064,
+        "cacheWrite30mTokens": 91064,
+        "cacheWrite12hTokens": 0,
+        "uncachedNonWriteInputTokens": 162,
+        "outputTokens": 43984,
+        "reasoningTokens": 11849,
+        "totalTokens": 2952743
+      },
       "paidRepairs": 1,
       "settlementComplete": true,
       "correctedFunctionalVerdict": "passed"
@@ -167,7 +224,7 @@
     "conclusion": "No primary 20% savings claim. Vector's first submission was cheaper and passes the corrected gate, but the complete charged episode costs more than Codex and its blinded code score is one point lower. The repair charge remains included despite the instrument defect."
   },
   "sanitization": {
-    "sources": ["baseline summary and runtime run aggregates", "corrected evaluation summary", "two blinded review records", "sanitized tool-activity projection", "public task and rubric documentation"],
+    "sources": ["baseline summary and runtime run aggregates", "corrected evaluation summary", "two blinded review records", "sanitized tool-activity projection", "sanitized numeric provider-receipt usage projection", "public task and rubric documentation"],
     "privatePathsIdentifiersCredentialsAndRawLogsExcluded": true,
     "toolInventoryNote": "Inventories list names, not call counts. The Codex aggregate contains no populated inventory; this is missing evidence, not evidence of zero tool activity."
   }

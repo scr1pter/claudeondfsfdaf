@@ -41,8 +41,8 @@ and in the revision's public provenance.
 After both paid arms and the Vector repair had settled, the revised evaluator
 was applied without model calls to all three unchanged submissions. Each passed
 16 API and 8 browser checks; each source-integrity comparison was unchanged.
-The public [corrected candidate results](../workflow-runner/instrument-revisions/postlaunch-keyboard-v2/corrected-candidate-results.json)
-retain the free reevaluation provenance.
+The public [unchanged-candidate reevaluation record](../workflow-runner/instrument-revisions/postlaunch-keyboard-v2/unchanged-candidate-reevaluations.json)
+retains the free reevaluation provenance.
 The two original Vector failures are therefore classified retrospectively as
 instrument failures. Original verdicts, the repair itself, and every charge remain
 historical evidence. The correction adds no provider charge and does not remove
@@ -61,9 +61,24 @@ The baseline pair adds 82 provider requests and $1.8829745, including repair.
 The study therefore moves from 449 requests / $11.2319408 to **531 requests /
 $13.1149153**. Historical spending was not reset.
 
-The permitted aggregate evidence supplies request counts and cost but no numeric
-input/output/cache/reasoning token totals. Those categories are explicitly missing
-in the JSON, not zero; reasoning tokens must not be charged again on top of output.
+[baseline-token-usage.json](baseline-token-usage.json) supplies numeric token totals
+from the original provider receipts. Its request counts and usage-derived charges
+match the three delivery records above. All receipts requested `gpt-6.1-sol` with
+High reasoning and returned HTTP 200.
+
+| Delivery record | Input tokens | Cached input | Cache writes | Output tokens | Reasoning tokens |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Codex first submission and complete episode | 1,659,392 | 1,567,067 | 92,241 | 54,592 | 12,919 |
+| Vector first submission | 1,520,842 | 1,453,448 | 67,283 | 34,025 | 7,445 |
+| Vector paid repair, incremental | 1,387,917 | 1,364,085 | 23,781 | 9,959 | 4,404 |
+| Vector complete episode, including repair | 2,908,759 | 2,817,533 | 91,064 | 43,984 | 11,849 |
+
+Cache reads and writes are subsets of input; reasoning is a subset of output.
+They must not be added again to those totals. All recorded cache writes use the
+30-minute category; the projection also retains the uncached non-write input and
+total-token counts. Token categories have different cost treatment, so the study's
+cost comparison uses recorded usage-derived charges, not unweighted token totals.
+No invoice reconciliation is claimed.
 
 [baseline-tool-activity.json](baseline-tool-activity.json) separately records
 deduplicated observed CLI events: 35 tool calls for Codex, 57 for Vector's first
