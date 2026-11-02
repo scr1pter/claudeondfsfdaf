@@ -1,5 +1,7 @@
 """Bounded loopback-only supervision. This module never writes application source."""
 import json
+import hashlib
+import http.client
 import os
 from pathlib import Path
 import signal
@@ -9,6 +11,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from urllib.parse import urlsplit
 
 from oracle import InstrumentFailure, ProductFailure, equal, loopback_origin, message, require
 from owned_process import OwnedJob
@@ -19,16 +22,7 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-def request(origin, path, method="GET", body=None, raw=None, timeout=15, headers=None):
-    require(path.startswith("/") and not path.startswith("//"), "HTTP path stays on its validated local origin", path)
-    payload = raw if raw is not None else json.dumps(body).encode() if body is not None else None
-    req = urllib.request.Request(loopback_origin(origin) + path, data=payload, method=method,
-                                 headers={"Content-Type": "application/json", **(headers or {})})
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
-    try:
-        response = opener.open(req, timeout=timeout)
-    except urllib.error.HTTPError as failure:
-        response = failure
+def json_response(response):
     with response:
         data = response.read(1_048_577)
         require(len(data) <= 1_048_576, "HTTP JSON response remains bounded", len(data))
@@ -38,6 +32,29 @@ def request(origin, path, method="GET", body=None, raw=None, timeout=15, headers
         except (ValueError, UnicodeError):
             raise ProductFailure("API response is valid JSON", data[:200].decode(errors="replace")) from None
         return response.status, value
+
+
+def request(origin, path, method="GET", body=None, raw=None, timeout=15, headers=None, sent_event=None):
+    require(path.startswith("/") and not path.startswith("//"), "HTTP path stays on its validated local origin", path)
+    base = loopback_origin(origin)
+    payload = raw if raw is not None else json.dumps(body).encode() if body is not None else None
+    request_headers = {"Content-Type": "application/json", **(headers or {})}
+    if sent_event is not None:
+        parsed = urlsplit(base)
+        connection = http.client.HTTPConnection(parsed.hostname, parsed.port, timeout=timeout)
+        try:
+            connection.request(method, path, body=payload, headers=request_headers)
+            sent_event.set()  # Bytes are written before the first held request is released.
+            return json_response(connection.getresponse())
+        finally:
+            connection.close()
+    req = urllib.request.Request(base + path, data=payload, method=method, headers=request_headers)
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
+    try:
+        response = opener.open(req, timeout=timeout)
+    except urllib.error.HTTPError as failure:
+        response = failure
+    return json_response(response)
 
 
 def poll(operation, predicate, expected, timeout=8):
@@ -117,6 +134,8 @@ class App:
                 except (OSError, urllib.error.URLError):
                     time.sleep(0.04)
                     continue
+                except http.client.HTTPException as failure:
+                    raise ProductFailure("Submitted app health endpoint completes a valid HTTP response", str(failure)) from failure
                 equal(status, 200, "Health endpoint returns 200")
                 require(isinstance(health, dict) and health.get("ok") is True, "Health confirms application readiness", health)
                 self.provider = loopback_origin(health.get("providerOrigin"))
@@ -158,10 +177,15 @@ class App:
         self.stop()
         self.start()
 
-    def api(self, path, method="GET", body=None, expected=200, raw=None):
-        status, value = request(self.origin, path, method, body, raw)
+    def api(self, path, method="GET", body=None, expected=200, raw=None, sent_event=None):
+        try:
+            status, value = request(self.origin, path, method, body, raw, sent_event=sent_event)
+        except (OSError, urllib.error.URLError, http.client.HTTPException) as failure:
+            raise ProductFailure("Submitted application remains available for its valid API workflow", str(failure)) from failure
         equal(status, expected, method + " " + path + " returns " + str(expected))
         require(isinstance(value, dict), "API JSON response is an object", value)
+        if expected >= 400:
+            require(isinstance(value.get("error"), str) and value["error"].strip(), "API error includes nonempty human-readable error text", value)
         if expected in (200, 201, 202) and path.startswith("/api/messages/"):
             message(value.get("message"))
         if expected == 201 and path.startswith("/api/tickets/"):
@@ -184,7 +208,9 @@ class App:
             if status != 200 or not isinstance(value, dict):
                 raise InstrumentFailure("Protected provider control rejected the evaluator's valid request")
             return value
-        except (OSError, urllib.error.URLError, ProductFailure) as failure:
+        except (OSError, urllib.error.URLError, http.client.HTTPException, ProductFailure) as failure:
+            if self.process is not None and self.process.poll() is not None:
+                raise ProductFailure("Submitted app remains running while its same-process provider is controlled", self.process.returncode) from failure
             raise InstrumentFailure("Protected provider control unavailable: " + str(failure)) from failure
 
     def state(self):
@@ -203,15 +229,16 @@ class App:
         return message(self.api("/api/messages/" + identifier).get("message"))
 
     def send(self, identifier, request_id=None, expected=202):
-        result = self.api("/api/messages/" + identifier + "/send", "POST", {"requestId": request_id or "request-" + identifier}, expected)
+        admission_id = "request-" + hashlib.sha256(identifier.encode()).hexdigest() if request_id is None else request_id
+        result = self.api("/api/messages/" + identifier + "/send", "POST", {"requestId": admission_id}, expected)
         return message(result.get("message")) if expected == 202 else result
 
     def action(self, identifier, name, expected=200):
         result = self.api("/api/messages/" + identifier + "/" + name, "POST", {}, expected)
         return message(result.get("message")) if expected == 200 else result
 
-    def drain(self):
-        result = self.api("/api/outbox/drain", "POST", {})
+    def drain(self, sent_event=None):
+        result = self.api("/api/outbox/drain", "POST", {}, sent_event=sent_event)
         require(isinstance(result.get("processed"), list) and all(isinstance(item, str) for item in result["processed"]), "Drain reports processed message IDs", result)
         equal(len(set(result["processed"])), len(result["processed"]), "A drain reports each logical message at most once")
         return result

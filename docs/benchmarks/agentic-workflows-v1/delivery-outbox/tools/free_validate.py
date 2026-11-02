@@ -15,7 +15,7 @@ def main():
     output = io.StringIO()
     suite = unittest.defaultTestLoader.loadTestsFromModule(test_controls)
     result = unittest.TextTestRunner(stream=output, verbosity=2).run(suite)
-    print(json.dumps({"status": "passed" if result.wasSuccessful() else "failed", "draftOnly": True,
+    print(json.dumps({"status": "passed" if result.wasSuccessful() else "failed", "readOnlyControls": True, "taskFrozen": (ROOT / "FREEZE-v1.json").exists(),
                       "controls": result.testsRun, "failures": len(result.failures), "errors": len(result.errors),
                       "bunExecuted": False, "serversStarted": False, "browsersStarted": False, "modelCalls": 0,
                       "details": output.getvalue()}, indent=2))

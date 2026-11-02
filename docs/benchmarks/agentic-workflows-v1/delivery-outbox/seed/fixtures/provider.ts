@@ -96,7 +96,7 @@ export function startProvider(dataDirectory: string) {
         return result
       }
       if (url.pathname !== "/deliver") return json({ error: "not_found" }, 404)
-      if (!validID(body.idempotencyKey) || !validID(body.messageId) || !validID(body.ticketId) || typeof body.body !== "string" || !body.body.trim() || body.body.length > 2000) return json({ error: "invalid_envelope" }, 400)
+      if (!validID(body.idempotencyKey) || !validID(body.messageId) || !validID(body.ticketId) || typeof body.body !== "string" || !body.body.trim() || Array.from(body.body).length > 2000) return json({ error: "invalid_envelope" }, 400)
       const envelope: Envelope = { idempotencyKey: body.idempotencyKey, messageId: body.messageId, ticketId: body.ticketId, body: body.body }
       db.query("INSERT INTO attempts (key, message_id, envelope) VALUES (?, ?, ?)").run(envelope.idempotencyKey, envelope.messageId, JSON.stringify(envelope))
       const prior = getReceipt(envelope.idempotencyKey)

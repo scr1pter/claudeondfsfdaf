@@ -9,7 +9,7 @@ import urllib.error
 
 import api_checks
 import browser_checks
-from oracle import InstrumentFailure, ProductFailure, manifest, verdict
+from oracle import InstrumentFailure, ProductFailure, canonical_digest, manifest, runtime_projection, verdict
 from runtime import App
 
 
@@ -32,6 +32,8 @@ def run(options):
     inventory = json.loads((options.task / "inventory.json").read_text(encoding="utf-8"))["checks"]
     rows = [{"name": item["name"], "status": "not_run", "expected": item["expected"]} for item in inventory]
     before = None
+    instrument_before = None
+    runtime_before = None
     error = None
     owned_output = False
     started = time.monotonic()
@@ -48,6 +50,8 @@ def run(options):
             if not os.environ.get(key) or not Path(os.environ[key]).exists():
                 raise InstrumentFailure("Independent browser prerequisite is missing: " + key)
         before = manifest(options.app)
+        instrument_before = manifest(options.task, generated=("FREEZE-v1.json",))
+        runtime_before = runtime_projection(options.task)
         checks = [*api_checks.CHECKS, *browser_checks.CHECKS]
         for index, check in enumerate(checks):
             if time.monotonic() - started > 740:
@@ -64,7 +68,7 @@ def run(options):
             except ProductFailure as failure:
                 row.update(status="failed", expected=failure.expected, actual=bounded(failure.actual))
             except (OSError, urllib.error.URLError) as failure:
-                row.update(status="failed", expected="Submitted application remains available for its valid API workflow", actual=bounded(str(failure)))
+                raise InstrumentFailure("Evaluator-owned process or evidence I/O failed: " + str(failure)) from failure
             except InstrumentFailure:
                 raise
             except Exception as failure:
@@ -80,11 +84,18 @@ def run(options):
         error = type(failure).__name__ + ": " + str(failure)
     try:
         unchanged = before is not None and before == manifest(options.app)
+        instrument_unchanged = instrument_before is not None and instrument_before == manifest(options.task, generated=("FREEZE-v1.json",))
+        if not instrument_unchanged and instrument_before is not None:
+            error = "Independent task instrument changed during evaluation"
     except Exception as failure:
         unchanged = False
+        instrument_unchanged = False
         error = "Source integrity could not be verified: " + str(failure)
-    report = {"version": "delivery-outbox-evaluation-v1-draft", "taskStatus": "draft-not-frozen",
+    report = {"version": "delivery-outbox-evaluation-v1", "taskStatus": "frozen" if (options.task / "FREEZE-v1.json").is_file() else "draft-not-frozen",
               "verdict": verdict(rows, inventory, unchanged, error), "sourceUnchanged": unchanged,
+              "instrumentUnchanged": instrument_unchanged,
+              "instrumentProjectionSha256": canonical_digest(instrument_before) if instrument_before is not None else None,
+              "runtimeProjectionSha256": canonical_digest(runtime_before) if runtime_before is not None else None,
               "sourceIntegrityStatus": "unchanged" if unchanged else "unverified_or_changed",
               "checks": rows, "instrumentError": error, "elapsedSeconds": round(time.monotonic() - started, 3),
               "providerCalls": "Only benchmark-local synthetic HTTP fixture; no model/cloud calls"}

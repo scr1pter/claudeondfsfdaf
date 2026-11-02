@@ -1,6 +1,6 @@
 {
-  "version": "delivery-outbox-draft-v1",
-  "status": "draft-not-approved-for-paid-use",
+  "version": "delivery-outbox-v1",
+  "status": "pending-independent-freeze",
   "promptFile": "TASK.md",
   "seedDirectory": "seed",
   "protectedFiles": ["package.json", "bun.lock", ".bun-version", ".node-version", "fixtures/provider.ts", "fixtures/tickets.json"],

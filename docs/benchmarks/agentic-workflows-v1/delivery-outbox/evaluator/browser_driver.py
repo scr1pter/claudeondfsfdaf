@@ -1,5 +1,7 @@
 """Supervise a fresh benchmark-owned common browser; no provider credentials."""
 import json
+import ctypes
+from ctypes import wintypes
 import os
 from pathlib import Path
 import queue
@@ -12,7 +14,31 @@ from owned_process import OwnedJob
 
 
 def browser_environment(source=None):
-    # Chrome needs native Windows path variables, but no model/controller capabilities.
+    # The coding/evaluation home can be virtual. Query native path metadata only;
+    # never read a user profile or pass model/controller capabilities to Chrome.
+    if source is None and os.name == "nt":
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        security = ctypes.WinDLL("advapi32", use_last_error=True)
+        user = ctypes.WinDLL("userenv", use_last_error=True)
+        kernel.GetCurrentProcess.restype = wintypes.HANDLE
+        kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+        security.OpenProcessToken.argtypes = [wintypes.HANDLE, wintypes.DWORD, ctypes.POINTER(wintypes.HANDLE)]
+        security.OpenProcessToken.restype = wintypes.BOOL
+        user.ExpandEnvironmentStringsForUserW.argtypes = [wintypes.HANDLE, wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.DWORD]
+        user.ExpandEnvironmentStringsForUserW.restype = wintypes.BOOL
+        token = wintypes.HANDLE()
+        if not security.OpenProcessToken(kernel.GetCurrentProcess(), 8, ctypes.byref(token)):
+            raise OSError("Could not query native browser path metadata")
+        try:
+            result = {}
+            for name in ("SystemRoot", "WINDIR", "USERPROFILE", "LOCALAPPDATA", "APPDATA", "TEMP", "TMP"):
+                value = ctypes.create_unicode_buffer(32768)
+                if not user.ExpandEnvironmentStringsForUserW(token, "%" + name + "%", value, len(value)) or not value.value or "%" in value.value or not Path(value.value).is_absolute() or value.value.startswith("\\\\"):
+                    raise OSError("Could not resolve a local native browser path: " + name)
+                result[name] = value.value
+            return result
+        finally:
+            kernel.CloseHandle(token)
     source = os.environ if source is None else source
     allowed = ("SystemRoot", "WINDIR", "COMSPEC", "PATHEXT", "PATH", "USERPROFILE", "LOCALAPPDATA", "APPDATA", "TEMP", "TMP", "HOME", "LANG", "LC_ALL")
     return {name: source[name] for name in allowed if name in source}

@@ -153,9 +153,15 @@ def qualify(host):
     host.plan(seven, "accept")
     host.call("/deliver", seven)
     passed("preaccept-restart-and-explicit-release")
+    eight = {**envelope(8), "body": " \n" + "🙂" * 1996 + "\n "}
+    unicode_receipt = host.call("/deliver", eight)[1]["receipt"]
+    equal(unicode_receipt["body"], eight["body"], "The provider preserves 2000 Unicode code points and surrounding whitespace verbatim")
+    equal(host.call("/deliver", eight)[1]["receipt"], unicode_receipt, "Unicode envelope replay is idempotent")
+    passed("unicode-codepoint-boundary-and-verbatim-body")
     state = host.state()
     host.call("/deliver", expected=400, raw=b"{")
     host.call("/deliver", {**envelope(8), "body": " "}, expected=400)
+    host.call("/deliver", {**envelope(9), "body": "🙂" * 2001}, expected=400)
     equal(host.state(), state, "Malformed envelopes never mutate provider state")
     passed("invalid-envelope-no-effect")
     return checks

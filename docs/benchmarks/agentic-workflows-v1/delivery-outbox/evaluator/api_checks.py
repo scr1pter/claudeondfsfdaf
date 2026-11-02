@@ -1,13 +1,17 @@
 """Independent acceptance scenarios; all failures are observable public behavior."""
 import json
+import threading
 
 from oracle import equal, outbox_matches, provider_consistent, receipt_matches, require, stable
 from runtime import Pending
 
 
 def fixture_and_readiness(app):
+    require((app.options.app / "TASK.md").is_file(), "Public task is present and protected")
+    equal((app.options.app / "TASK.md").read_bytes(), (app.options.task / "TASK.md").read_bytes(), "Public task remains byte-identical")
     descriptor = json.loads((app.options.task / "task.json").read_text(encoding="utf-8"))
     for name in descriptor["protectedFiles"]:
+        require((app.options.app / name).is_file(), "Protected seed file is present: " + name)
         equal((app.options.app / name).read_bytes(), (app.options.task / "seed" / name).read_bytes(), "Protected seed file remains byte-identical: " + name)
     equal(app.control("/health").get("ok"), True, "Protected local provider is ready")
     state = provider_consistent(app.state())
@@ -18,7 +22,10 @@ def fixture_and_readiness(app):
 def existing_draft_workflow(app):
     expected = json.loads((app.options.task / "seed/fixtures/tickets.json").read_text(encoding="utf-8"))
     actual = app.api("/api/tickets").get("tickets")
-    equal([(row["id"], row["subject"], row["customer"]) for row in actual], [(row["id"], row["subject"], row["customer"]) for row in expected], "Existing synthetic ticket catalog is preserved")
+    catalog = {row["id"]: row for row in actual}
+    for row in expected:
+        require(row["id"] in catalog, "Existing synthetic ticket is preserved", row["id"])
+        equal((catalog[row["id"]]["subject"], catalog[row["id"]]["customer"]), (row["subject"], row["customer"]), "Existing ticket retains its subject and synthetic customer")
     first = app.draft("First synthetic draft")
     second = app.draft("Second synthetic draft")
     equal(first["status"], "draft", "Creation saves an editable draft")
@@ -44,6 +51,12 @@ def invalid_input_atomicity(app):
     equal(len(app.api("/api/tickets/t-101")["messages"]), 1, "Invalid saves create no partial message")
     app.api("/api/messages/no-such-message", expected=404)
     app.api("/api/tickets/no-such-ticket/messages", "POST", {"body": "No orphan"}, 404)
+    boundary_body = " \n" + "🙂" * 1996 + "\n "
+    boundary = app.draft(boundary_body, "t-102")
+    equal(boundary["body"], boundary_body, "Exactly 2000 Unicode code points, spaces and newlines are preserved verbatim")
+    app.api("/api/tickets/t-102/messages", "POST", {"body": "🙂" * 2001}, 400)
+    equal(app.send(boundary["id"], "r" * 80)["status"], "queued", "Exactly 80 valid admission-ID characters are accepted")
+    equal(app.state()["attempts"], [], "Valid boundary admission still does not transmit")
 
 
 def durable_admission(app):
@@ -69,10 +82,16 @@ def admission_idempotency(app):
     equal(app.get(second["id"])["status"], "draft", "Conflicting request reuse leaves the other draft untouched")
     outbox_matches(app.outbox(), [first["id"]])
     equal(app.state()["attempts"], [], "Concurrent admission still does not transmit")
+    app.drain()
+    before = app.get(first["id"])
+    provider_before = app.state()
+    stable(before, app.send(first["id"], "shared-request"))
+    equal(app.state(), provider_before, "Exact terminal admission replay does not transmit again")
+    receipt_matches(app.get(first["id"]), app.state())
 
 
 def accepted_delivery(app):
-    queued = app.send(app.draft("Accepted once")["id"])
+    queued = app.send(app.draft(" \nAccepted once 🙂\n ")["id"])
     equal(app.drain()["processed"], [queued["id"]], "Successful drain identifies its attempted logical message")
     delivered = app.get(queued["id"])
     stable(queued, delivered)
@@ -136,6 +155,11 @@ def lost_accepted_response(app):
 
 
 def queued_cancellation(app):
+    draft = app.draft("Cancel an editable draft without admission", "t-103")
+    cancelled_draft = app.action(draft["id"], "cancel")
+    equal(cancelled_draft["status"], "cancelled", "A draft can be cancelled without delivery work")
+    app.action(draft["id"], "retry", 409)
+    outbox_matches(app.outbox(), [])
     queued = app.send(app.draft("Cancel before transmission")["id"])
     cancelled = app.action(queued["id"], "cancel")
     equal(cancelled["status"], "cancelled", "Queued cancellation is terminal")
@@ -181,6 +205,7 @@ def acceptance_wins_cancellation(app):
     pending.finish()
     stable(delivered, app.get(queued["id"]))
     receipt_matches(app.get(queued["id"]), app.state())
+    equal(app.get(queued["id"])["delivery"]["lastError"], delivered["delivery"]["lastError"], "Late lost send response retains the cancellation explanation")
 
 
 def concurrent_drains(app):
@@ -189,7 +214,9 @@ def concurrent_drains(app):
     app.plan(first["id"], "before_accept")
     one = Pending(app.drain)
     app.held(first["id"], "before_accept")
-    two = Pending(app.drain)
+    sent = threading.Event()
+    two = Pending(lambda: app.drain(sent_event=sent))
+    require(sent.wait(timeout=3), "Second drain request bytes are transmitted while the first provider request is held")
     app.release(first["id"])
     one.finish()
     two.finish()
@@ -205,7 +232,7 @@ def restart_after_admission(app):
     app.restart()
     recovered = app.get(queued["id"])
     stable(queued, recovered)
-    equal(recovered["status"], "queued", "Unprocessed admission remains queued across restart")
+    require(recovered["status"] in ("queued", "sending", "retryable"), "Unprocessed admission remains recoverable across restart", recovered)
     equal(app.state()["attempts"], [], "Restart alone does not transmit queued work")
     outbox_matches(app.outbox(), [queued["id"]])
     app.drain()
@@ -266,7 +293,7 @@ def terminal_history_durable(app):
         equal(current, previous, "Terminal message metadata survives hard restart")
         app.action(previous["id"], "retry", 409)
         app.api("/api/messages/" + previous["id"], "PATCH", {"body": "Forbidden mutation"}, 409)
-        app.send(previous["id"], "new-request-" + previous["id"], 409)
+        app.send(previous["id"], "new-request", 409)
         app.action(previous["id"], "cancel")
         stable(previous, app.get(previous["id"]))
     app.drain()

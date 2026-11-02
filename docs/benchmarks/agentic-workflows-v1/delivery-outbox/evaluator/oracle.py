@@ -29,6 +29,7 @@ def message(value):
     require(isinstance(value, dict), "Message is a JSON object", value)
     require({"id", "ticketId", "body", "status", "delivery"} <= value.keys(), "Message exposes every required field", value)
     require(all(isinstance(value.get(key), str) and value[key] for key in ("id", "ticketId", "body")), "Message has nonempty ID, ticket ID and body", value)
+    require(len(value["body"]) <= 2000, "Message body is at most 2000 Unicode code points", len(value["body"]))
     require(all(re.fullmatch(r"[A-Za-z0-9_-]{1,80}", value[key]) for key in ("id", "ticketId")), "Message identifiers can be safely addressed by the public API", value)
     require(value.get("status") in {"draft", "queued", "sending", "retryable", "delivered", "cancelled"}, "Message status uses the contract vocabulary", value)
     delivery = value.get("delivery")
@@ -46,6 +47,8 @@ def message(value):
     require(type(delivery.get("cancelRequested")) is bool, "Cancellation intent is a boolean", value)
     if value["status"] == "delivered":
         require(bool(delivery["receiptId"]), "Delivered requires a provider receipt", value)
+        if delivery["cancelRequested"]:
+            require(bool(delivery["lastError"]), "Too-late cancellation retains its human-readable explanation", value)
     if value["status"] == "retryable":
         require(bool(delivery["lastError"]), "Retryable requires an explanatory error", value)
     if value["status"] == "cancelled":
@@ -100,6 +103,12 @@ def outbox_matches(items, expected_ids):
         message(row)
 
 
+def page_request_denials(snapshot):
+    # The transport fence also sees Chrome's own update/autofill traffic. Its
+    # proxy-only records have no page attribution and cannot fail an app check.
+    return [row for row in snapshot.get("blockedRequests", []) if row.get("kind") not in ("proxy", "proxy-connect")]
+
+
 def loopback_origin(value):
     from urllib.parse import urlsplit
     try:
@@ -152,3 +161,8 @@ def portable_bytes(path):
 
 def canonical_digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()).hexdigest()
+
+
+def runtime_projection(root):
+    return {name: digest for name, digest in manifest(root, generated=("FREEZE-v1.json",)).items()
+            if name in (".gitattributes", "TASK.md", "task.json", "inventory.json") or name.startswith(("seed/", "evaluator/"))}

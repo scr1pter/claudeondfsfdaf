@@ -19,7 +19,7 @@ const provider = startProvider(dataDirectory)
 const message = (row: Row) => ({ id: row.id, ticketId: row.ticket_id, body: row.body, status: row.status, delivery: row.delivery ? JSON.parse(row.delivery) as Record<string, unknown> : null })
 const get = (id: string) => db.query<Row, [string]>("SELECT * FROM messages WHERE id = ?").get(id)
 const json = (value: unknown, status = 200) => Response.json(value, { status })
-const validBody = (value: unknown): value is string => typeof value === "string" && value.trim().length > 0 && value.length <= 2000
+const validBody = (value: unknown): value is string => typeof value === "string" && value.trim().length > 0 && Array.from(value).length <= 2000
 
 const server = Bun.serve({
   hostname: "127.0.0.1",

@@ -1,12 +1,16 @@
 """Visible workflow checks using only the common frozen browser-driver protocol."""
 import json
+import http.client
 import os
 from pathlib import Path
 import re
+import shutil
+import tempfile
+import time
 import urllib.error
 
-from browser_driver import BrowserDriver
-from oracle import InstrumentFailure, ProductFailure, equal, receipt_matches, require, stable
+from browser_driver import BrowserDriver, browser_environment
+from oracle import InstrumentFailure, ProductFailure, equal, page_request_denials, receipt_matches, require, stable
 from runtime import poll, request
 
 
@@ -18,13 +22,18 @@ class Browser:
         chrome = os.environ.get("VECTOR_BENCH_CHROME")
         if not all((proxy, playwright, chrome)):
             raise InstrumentFailure("Browser prerequisites are absent; no browser check may be silently counted as passed")
+        self.temp_root = Path(browser_environment().get("TEMP", tempfile.gettempdir())).resolve()
+        self.profile_parent = Path(tempfile.mkdtemp(prefix="outbox-browser-", dir=self.temp_root)).resolve()
+        self.owned_profile = True
+        self.profile_output = self.profile_parent / "run"
         self.driver = BrowserDriver(node=app.options.node, root=Path(proxy).parent, playwright=playwright,
-                                    chrome=chrome, output=app.work / "browser", origin=app.origin)
+                                    chrome=chrome, output=self.profile_output, origin=app.origin)
 
     def __enter__(self):
         try:
             self.driver.__enter__()
         except Exception as failure:
+            self.cleanup_profile()
             raise InstrumentFailure("Common browser startup failed: " + str(failure)) from failure
         try:
             self.action({"action": "open", "url": self.app.origin})
@@ -32,23 +41,52 @@ class Browser:
             return self
         except BaseException:
             self.driver.__exit__(None, None, None)
+            self.cleanup_profile()
             raise
 
     def __exit__(self, *args):
-        self.driver.__exit__(*args)
+        try:
+            self.driver.__exit__(*args)
+        finally:
+            self.cleanup_profile()
+
+    def cleanup_profile(self):
+        if not self.owned_profile:
+            return
+        if self.profile_parent.resolve().parent != self.temp_root or not self.profile_parent.name.startswith("outbox-browser-") or self.profile_parent.is_symlink() or getattr(self.profile_parent, "is_junction", lambda: False)() or self.profile_output != self.profile_parent / "run":
+            raise InstrumentFailure("Refusing cleanup outside the atomically created owned browser directory")
+        stderr = self.profile_output.with_suffix(".stderr.log")
+        if stderr.exists():
+            shutil.copyfile(stderr, self.app.work / "browser-driver.stderr.log")
+        screenshots = self.profile_output / "screenshots"
+        if screenshots.exists():
+            shutil.copytree(screenshots, self.app.work / "browser-screenshots")
+        deadline = time.monotonic() + 5
+        while self.profile_parent.exists():
+            try:
+                shutil.rmtree(self.profile_parent)
+            except OSError as failure:
+                if time.monotonic() >= deadline:
+                    raise InstrumentFailure("Owned browser directory remained locked after process cleanup: " + str(failure)) from failure
+                time.sleep(0.05)
+        self.owned_profile = False
+        (self.app.work / "browser-cleanup.json").write_text(json.dumps({"ownedParent": str(self.profile_parent), "removed": True, "processTreeStoppedBeforeRemoval": True}) + "\n", encoding="utf-8", newline="\n")
 
     def action(self, value):
         try:
             status, result = request(self.driver.metadata["endpoint"], "/action", "POST", value,
                                      headers={"Authorization": "Bearer " + self.driver.token}, timeout=28)
-        except (OSError, urllib.error.URLError) as failure:
+        except (OSError, urllib.error.URLError, http.client.HTTPException, ProductFailure) as failure:
             raise InstrumentFailure("Common browser transport stopped responding") from failure
         with (self.app.work / "browser-actions.ndjson").open("a", encoding="utf-8", newline="\n") as stream:
             stream.write(json.dumps({"request": value, "response": result}, ensure_ascii=False) + "\n")
-        require(status == 200 and result.get("ok") is True, "Visible browser action succeeds", result)
+        if status != 200 or result.get("ok") is not True:
+            if result.get("snapshot", {}).get("untrustedPageData") is True:
+                raise ProductFailure("Visible browser action succeeds", result)
+            raise InstrumentFailure("Common browser action failed without a current page observation: " + str(result))
         self.snapshot = result.get("snapshot", {})
         require(self.snapshot.get("untrustedPageData") is True, "Driver returns a current semantic observation", result)
-        equal(self.snapshot.get("blockedRequests"), [], "Application browser requests stay on the app origin")
+        equal(page_request_denials(self.snapshot), [], "Observed page-route requests stay on the app origin; proxy-only background denials are unattributed")
         return result
 
     def observe(self):
@@ -125,9 +163,10 @@ def browse_compose_edit(app, browser):
 def validation_preserves_input(app, browser):
     browser.click("Replacement cable")
     body = "  \n "
+    expected_error = app.api("/api/tickets/t-101/messages", "POST", {"body": body}, 400)["error"]
     browser.type_reply(body)
     browser.click("Save draft")
-    snapshot = poll(browser.observe, lambda value: bool(re.search(r"\b(must|invalid|required|empty|cannot|characters|enter|error)\b", value.get("text", ""), re.I)), "Invalid save shows a useful visible error")
+    snapshot = browser.wait_text(expected_error)
     reply = next((row for row in snapshot["controls"] if row.get("role") == "textbox" and row.get("name") == "Reply"), None)
     require(reply is not None, "Reply field remains visible after validation failure", snapshot)
     equal(reply.get("value"), body, "Failed save retains the user's entered text")
@@ -156,7 +195,7 @@ def delivery_details(app, browser):
     receipt_matches(delivered, app.state())
     browser.details(draft["id"])
     snapshot = browser.wait_text(delivered["delivery"]["receiptId"])
-    require(draft["id"] in snapshot["text"] and re.search(r"attempt", snapshot["text"], re.I), "Details expose identity, real receipt and attempts", snapshot["text"])
+    require(draft["id"] in snapshot["text"] and str(delivered["delivery"]["attempts"]) in snapshot["text"], "Details expose identity, real receipt and attempt count without requiring a label language", snapshot["text"])
     browser.refresh()
     browser.wait_text("delivered")
     browser.no_page_errors()
@@ -212,7 +251,8 @@ def too_late_cancel_workflow(app, browser):
     browser.refresh()
     browser.details(draft["id"])
     snapshot = browser.wait_text(delivered["delivery"]["receiptId"])
-    require(bool(re.search(r"too late|already (accepted|delivered|sent)|cannot cancel|could not cancel|accepted before|cancell?ation.*(late|accept|deliver)", snapshot["text"], re.I | re.S)), "UI explains why cancellation was too late", snapshot["text"])
+    require(bool(delivered["delivery"]["lastError"]), "Too-late cancellation retains a human-readable explanation", delivered)
+    browser.wait_text(delivered["delivery"]["lastError"])
     receipt_matches(app.get(draft["id"]), app.state())
     browser.no_page_errors()
 
