@@ -278,18 +278,10 @@ def coordinate_arm(*, runtime, label, prompt, task, controller, run_agent, evalu
             if attempt["snapshot"].get("protectedViolations"):
                 result["stopReason"] = "protected_file_violation"
                 break
-            audit = agent.get("browserAccessAudit")
-            if browser_access_mode == "shared-client" and (not isinstance(audit, dict) or audit.get("requiresManualReview") is not False):
-                result["stopReason"] = "coordinator_review_required"
-                result["reviewReason"] = "browser_access_audit"
-                break
             gate = evaluate(index)
             attempt["evaluation"] = gate
             verdict, feedback = gate_feedback(gate.get("report"), task)
             attempt["gateVerdict"] = verdict
-            if verdict == "instrument_failure":
-                result["stopReason"] = verdict
-                break
             if agent.get("workerCalls", 0) or agent.get("observedSessionCount") != 1 or not agent.get("sessionID"):
                 result["stopReason"] = "single_agent_or_session_violation"
                 break
@@ -299,6 +291,14 @@ def coordinate_arm(*, runtime, label, prompt, task, controller, run_agent, evalu
             session = agent["sessionID"]
             if agent.get("exitCode") != 0 or agent.get("timedOut") or agent.get("stopReason"):
                 result["stopReason"] = agent.get("stopReason") or "agent_fatal_or_timeout"
+                break
+            if verdict == "instrument_failure":
+                result["stopReason"] = verdict
+                break
+            audit = agent.get("browserAccessAudit")
+            if browser_access_mode == "shared-client" and (not isinstance(audit, dict) or audit.get("requiresManualReview") is not False):
+                result["stopReason"] = "coordinator_review_required"
+                result["reviewReason"] = "browser_access_audit"
                 break
             if verdict == "passed" or index == 1:
                 result["stopReason"] = verdict if verdict == "passed" else "repair_limit"

@@ -129,7 +129,8 @@ class BrowserPolicyTests(unittest.TestCase):
         self.assertEqual(result["reviewReason"], "browser_access_audit")
         self.assertEqual(len(episode.agent_calls), 1)
         self.assertEqual(episode.snapshots, [0])
-        self.assertEqual(episode.gate_calls, [])
+        self.assertEqual(episode.gate_calls, [0])
+        self.assertEqual(result["attempts"][0]["gateVerdict"], "product_failure")
         self.assertTrue(result["settlementComplete"])
         self.assertAlmostEqual(result["measuredUsd"], 0.1)
         self.assertEqual(sum(route == "/control" for route, _ in episode.controller.calls), 1)
@@ -139,12 +140,41 @@ class BrowserPolicyTests(unittest.TestCase):
         episode, result = self.audited_episode(None)
         self.assertEqual(result["stopReason"], "coordinator_review_required")
         self.assertEqual(len(episode.agent_calls), 1)
+        self.assertEqual(episode.gate_calls, [0])
+
+    def test_audit_review_preserves_a_passing_free_gate_without_another_model_attempt(self):
+        episode = test_runner.Episode([test_runner.gate()])
+        original = episode.agent
+        def agent(*args):
+            return {**original(*args), "browserAccessAudit": {"requiresManualReview": True}}
+        result = episode.run(run_agent=agent, browser_access_mode="shared-client")
+        self.assertEqual(result["stopReason"], "coordinator_review_required")
+        self.assertEqual(result["attempts"][0]["gateVerdict"], "passed")
+        self.assertEqual(episode.gate_calls, [0])
+        self.assertEqual(len(episode.agent_calls), 1)
+
+    def test_core_worker_checks_take_precedence_after_free_gate_even_when_audit_needs_review(self):
+        episode = test_runner.Episode()
+        episode.worker_calls = 1
+        original = episode.agent
+        def agent(*args):
+            return {**original(*args), "browserAccessAudit": {"requiresManualReview": True}}
+        result = episode.run(run_agent=agent, browser_access_mode="shared-client")
+        self.assertEqual(result["stopReason"], "single_agent_or_session_violation")
+        self.assertEqual(episode.gate_calls, [0])
+        self.assertEqual(len(episode.agent_calls), 1)
 
     def test_clear_shared_client_metadata_allows_the_original_same_session_policy(self):
         episode, result = self.audited_episode({"status": "no_clear_bypass_observed", "requiresManualReview": False})
         self.assertEqual(result["stopReason"], "passed")
         self.assertEqual(len(episode.agent_calls), 2)
         self.assertEqual(episode.agent_calls[1]["session"], "ses_synthetic")
+
+    def test_informational_coverage_unknowns_do_not_automatically_block_a_normal_repair(self):
+        episode, result = self.audited_episode({"status": "no_clear_bypass_observed", "requiresManualReview": False,
+                                               "counts": {"unknownObservations": 3, "informationalUnknownObservations": 3}})
+        self.assertEqual(result["stopReason"], "passed")
+        self.assertEqual(len(episode.agent_calls), 2)
 
     def test_legacy_observations_do_not_retroactively_change_old_execution_policy(self):
         episode, result = self.audited_episode({"status": "direct_browser_reference_observed", "requiresManualReview": True}, "legacy-library-env")

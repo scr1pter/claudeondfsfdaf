@@ -28,6 +28,12 @@ def _library(value):
     return bool(SCOPED_LIBRARIES & set(parts)) or any(name in parts[-2:] or normalized.startswith(name + "-") for name in LIBRARIES)
 
 
+def _browser_marker(value):
+    return bool(re.search(r"(?i)(?:PLAYWRIGHT_MODULE|CHROME_PATH|VECTOR_BENCH_CHROME|BROWSER_DRIVER_CLIENT|BROWSER_DRIVER_ENDPOINT|@wdio/|"
+                          r"(?<![\w-])(?:playwright|puppeteer|selenium|webdriver)(?:-(?:core|extra|webdriver))?(?![\w-])|"
+                          r"\b(?:chrome|chromium|msedge)(?:\.exe)?\b|connect_over_cdp)", value))
+
+
 def _script_signal(source, python=False):
     """Read source lexically; quoted source examples alone are not execution."""
     if python:
@@ -122,12 +128,14 @@ def audit_tool_events(path, runtime, app, mode, trusted_client=None):
     pending = set()
     counts = {"lines": 0, "toolExecutions": 0, "commandsInspected": 0, "scriptsInspected": 0,
               "directBrowserReferences": 0, "commonClientInvocations": 0, "unknownObservations": 0,
+              "informationalUnknownObservations": 0, "reviewRequiredUnknownObservations": 0,
               "terminalObservationActions": 0, "terminalControlActions": 0, "terminalInteractiveInputs": 0}
 
-    def note(name, unknown=False):
+    def note(name, unknown=False, review=True):
         observations.add(name)
         if unknown:
             counts["unknownObservations"] += 1
+            counts["reviewRequiredUnknownObservations" if review else "informationalUnknownObservations"] += 1
 
     def signal(value):
         if value in {"library", "process"}:
@@ -182,7 +190,10 @@ def audit_tool_events(path, runtime, app, mode, trusted_client=None):
         try:
             parts = [argv] if argv is not None else _command_parts(command)
         except ValueError:
-            note("shell_execution_unparseable", True)
+            browser_related = _browser_marker(command)
+            note("shell_execution_unparseable", True, review=browser_related)
+            if browser_related:
+                note("browser_related_shell_ambiguity")
             return
         aliases = {}
         for words in parts:
@@ -338,10 +349,14 @@ def audit_tool_events(path, runtime, app, mode, trusted_client=None):
     if runtime not in {"vector", "codex"} or mode not in {"shared-client", "legacy-library-env"}:
         note("audit_profile_unrecognized", True)
     mode = mode if mode in {"shared-client", "legacy-library-env"} else "unknown"
-    review = mode != "legacy-library-env" and (counts["directBrowserReferences"] > 0 or counts["unknownObservations"] > 0)
+    review = mode != "legacy-library-env" and (counts["directBrowserReferences"] > 0 or counts["reviewRequiredUnknownObservations"] > 0)
     return {"kind": "bounded-posthoc-browser-observations-v1", "mode": mode,
             "status": "review_required" if review else "legacy_observation_only" if mode == "legacy-library-env" else "no_clear_bypass_observed",
             "requiresManualReview": bool(review), "counts": counts, "observations": sorted(observations),
+            "coverage": {"observedToolExecutions": counts["toolExecutions"], "uniqueCommandsInspected": counts["commandsInspected"],
+                         "unknownObservations": counts["unknownObservations"],
+                         "informationalOnlyUnknownObservations": counts["informationalUnknownObservations"],
+                         "unresolvedBrowserOrTelemetryObservations": counts["reviewRequiredUnknownObservations"], "adherenceProven": False},
             "limits": {"logBytes": MAX_LOG_BYTES, "lines": MAX_LINES, "lineBytes": MAX_LINE_BYTES, "commands": MAX_COMMANDS,
                        "commandChars": MAX_COMMAND_CHARS, "scripts": MAX_SCRIPTS, "scriptBytes": MAX_SCRIPT_BYTES},
             "hardFenceOrSandboxClaim": False, "transitiveImportsInspected": False, "rawExecutionDetailsPublished": False,

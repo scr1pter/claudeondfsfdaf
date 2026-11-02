@@ -240,6 +240,30 @@ class BrowserAuditTests(unittest.TestCase):
         self.assertEqual(result["counts"]["directBrowserReferences"], 1)
         self.assertTrue(result["requiresManualReview"])
 
+    def test_malformed_ordinary_powershell_quoting_retains_informational_unknown_without_blocking(self):
+        result = self.audit(['powershell.exe -Command "Get-Content \'ordinary unclosed'])
+        self.assertEqual(result["status"], "no_clear_bypass_observed")
+        self.assertFalse(result["requiresManualReview"])
+        self.assertEqual(result["counts"]["unknownObservations"], 1)
+        self.assertEqual(result["counts"]["informationalUnknownObservations"], 1)
+        self.assertEqual(result["counts"]["reviewRequiredUnknownObservations"], 0)
+        self.assertIn("shell_execution_unparseable", result["observations"])
+        self.assertFalse(result["coverage"]["adherenceProven"])
+
+    def test_unparseable_obfuscated_browser_marker_requires_review_without_claiming_direct_execution(self):
+        result = self.audit(['powershell.exe -Command "node -e eval($env:PLAYWRIGHT_MODULE)'])
+        self.assertTrue(result["requiresManualReview"])
+        self.assertEqual(result["counts"]["directBrowserReferences"], 0)
+        self.assertEqual(result["counts"]["unknownObservations"], 1)
+        self.assertEqual(result["counts"]["reviewRequiredUnknownObservations"], 1)
+        self.assertIn("browser_related_shell_ambiguity", result["observations"])
+
+    def test_unparseable_common_client_wrapper_is_retained_for_review_instead_of_whitelisted(self):
+        result = self.audit(['powershell.exe -Command "& $env:NODE_EXE $env:BROWSER_DRIVER_CLIENT'])
+        self.assertTrue(result["requiresManualReview"])
+        self.assertEqual(result["counts"]["unknownObservations"], 1)
+        self.assertIn("browser_related_shell_ambiguity", result["observations"])
+
 
 if __name__ == "__main__":
     unittest.main()

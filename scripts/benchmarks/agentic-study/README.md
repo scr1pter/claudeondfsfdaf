@@ -128,7 +128,9 @@ observations and counts. It can inspect a directly invoked authored script only
 inside that attempt's application workspace. It does not crawl source trees,
 read arbitrary referenced files, or publish commands, paths, identifiers, or
 tokens. Clear direct-browser execution references, browser-related ambiguity,
-and incomplete telemetry require manual review in shared mode. Ordinary source
+and missing/incomplete/oversized telemetry require review in shared mode. General
+shell-quoting ambiguity without a browser marker remains an informational
+coverage limitation; it does not automatically block the arm. Ordinary source
 writes/reads or merely unexecuted browser code are not automatically classified
 as a direct launch. Legacy mode retains observations without changing its
 historical execution policy.
@@ -142,10 +144,12 @@ interactive input, Enter/history/editing keys, and unknown actions retain a
 manual-review marker when execution cannot be reconstructed safely. Browser
 code typed interactively is never silently classified as a harmless read.
 
-An audit review marker stops the arm as `coordinator_review_required` after
-preserving source and counting the completed agent's usage, before evaluation or
-another paid attempt. The owned token is still disarmed and settled; every
-charge remains retained. It is not a regex-based product failure and never
+Every known, unchanged submission still receives the free independent functional
+gate and core worker/session/exit checks before an audit decision. An unresolved
+browser-related review marker then stops the arm as `coordinator_review_required`
+before any further paid attempt, retaining the free gate's result, source
+snapshot, and completed agent's usage. The owned token is still disarmed and
+settled; every charge remains retained. It is not a regex-based product failure and never
 produces automatic repair feedback. A clean audit means only that this bounded
 projection found no clear bypass; dynamic execution, indirect processes, and
 incomplete telemetry remain limits of this method. Manual review is required to
@@ -154,9 +158,13 @@ interpret suspicious or unknown evidence.
 The shell lexer is deliberately incomplete. In free diagnostics on completed
 historical traces, PowerShell wrapper escaping and here-string commands produced
 `shell_execution_unparseable` markers even where recognized browser calls used
-the common client. Such a marker requires review; it is not proof of a raw
-browser launch, agent misconduct, or a failed product. The audit does not clear
-an entire trace merely because some common-client invocations were recognized.
+the common client. These remain in the total unknown and coverage counts. Only
+ones with browser/library/process/common-client markers require review; other
+quoting ambiguity is informational. Neither category proves a raw browser
+launch, agent misconduct, or a failed product. `no_clear_bypass_observed` means
+only that the bounded projection found no review-triggering evidence; its
+coverage explicitly does not prove adherence. The audit does not clear an
+entire trace merely because some common-client invocations were recognized.
 Direct `createRequire(...)(...)` browser-module references and known scoped
 browser packages are included in its bounded recognition.
 
