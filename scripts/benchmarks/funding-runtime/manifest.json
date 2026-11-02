@@ -1,0 +1,299 @@
+{
+  "schemaVersion": 1,
+  "kind": "funding-runtime-source-only-archive",
+  "preparedAtUtc": "2026-11-02T05:23:49.394922+00:00",
+  "repositoryBaseRevision": "e7f550cfc3cf5bbafeb4311630cc4f69421dc69e",
+  "scope": "Current source snapshot identified by the study owner as the running funding gateway/policy witness, its static Python module closure, and corresponding synthetic test source. No live process, credentials or history inspected.",
+  "runtimeEntryPoints": [
+    "archive/budget_gateway_v4.py",
+    "archive/foundry_policy_witness.py"
+  ],
+  "runtimeModuleCount": 5,
+  "testSourceModuleCount": 5,
+  "files": {
+    "archive/budget_gateway.py": {
+      "sha256": "d54569bba65e82921fd77298810bb9263db14720ff1e68f03e383eadba74773d",
+      "bytes": 15102,
+      "role": "runtime",
+      "localImports": [],
+      "standardLibraryImports": [
+        "argparse",
+        "getpass",
+        "hashlib",
+        "http.client",
+        "http.server",
+        "json",
+        "math",
+        "os",
+        "pathlib",
+        "threading",
+        "time"
+      ],
+      "sourceTransformed": false
+    },
+    "archive/budget_gateway_v2.py": {
+      "sha256": "bb548294383132f5a7c6cddc39b636f5018caf88f3e6b79995717389f7fbe0c7",
+      "bytes": 20756,
+      "role": "runtime",
+      "localImports": [
+        "budget_gateway.py"
+      ],
+      "standardLibraryImports": [
+        "argparse",
+        "getpass",
+        "hashlib",
+        "http.client",
+        "http.server",
+        "json",
+        "math",
+        "msvcrt",
+        "os",
+        "pathlib",
+        "secrets",
+        "threading",
+        "time",
+        "warnings"
+      ],
+      "sourceTransformed": false
+    },
+    "archive/budget_gateway_v3.py": {
+      "sha256": "e3aaacee4d172139e070689d44362f2f58db104cef8153389ca328f5cb2f5a55",
+      "bytes": 17668,
+      "role": "runtime",
+      "localImports": [
+        "budget_gateway_v2.py"
+      ],
+      "standardLibraryImports": [
+        "argparse",
+        "getpass",
+        "hashlib",
+        "http.server",
+        "json",
+        "math",
+        "msvcrt",
+        "os",
+        "pathlib",
+        "secrets",
+        "socket",
+        "sys",
+        "threading",
+        "time",
+        "warnings"
+      ],
+      "sourceTransformed": false
+    },
+    "archive/budget_gateway_v4.py": {
+      "sha256": "f24d6590340f7356b92f923c34377b7bd9b15bdf141a6d77e04dec03142b13d1",
+      "bytes": 12087,
+      "role": "runtime",
+      "localImports": [
+        "budget_gateway_v2.py",
+        "budget_gateway_v3.py"
+      ],
+      "standardLibraryImports": [
+        "argparse",
+        "contextlib",
+        "getpass",
+        "json",
+        "math",
+        "msvcrt",
+        "os",
+        "pathlib",
+        "threading",
+        "time",
+        "warnings"
+      ],
+      "sourceTransformed": false
+    },
+    "archive/foundry_policy_witness.py": {
+      "sha256": "fecbb04ff8c7fae7ea5452cf2f3e60c67a3c9bc9aed5cbff6d95fd3976cdabfb",
+      "bytes": 12005,
+      "role": "runtime",
+      "localImports": [],
+      "standardLibraryImports": [
+        "argparse",
+        "hashlib",
+        "http.client",
+        "http.server",
+        "json",
+        "os",
+        "pathlib",
+        "re",
+        "socket",
+        "threading"
+      ],
+      "sourceTransformed": false
+    },
+    "archive/test_budget_gateway.py": {
+      "sha256": "c4b4422802a084b467e9f7f92fb762103ce282721c8ec9dd6b8e35ef1b5103fa",
+      "bytes": 5171,
+      "role": "synthetic_control_tests",
+      "localImports": [
+        "budget_gateway.py"
+      ],
+      "standardLibraryImports": [
+        "json",
+        "pathlib",
+        "tempfile",
+        "unittest"
+      ],
+      "sourceTransformed": false
+    },
+    "archive/test_budget_gateway_v2.py": {
+      "sha256": "4afdb8f0cc599b65eea2f435c684eef60d8206683fe023f5a89d01c4e86dd059",
+      "bytes": 13136,
+      "role": "synthetic_control_tests",
+      "localImports": [
+        "budget_gateway_v2.py"
+      ],
+      "standardLibraryImports": [
+        "http.client",
+        "http.server",
+        "json",
+        "pathlib",
+        "tempfile",
+        "threading",
+        "unittest",
+        "unittest.mock"
+      ],
+      "sourceTransformed": false
+    },
+    "archive/test_budget_gateway_v3.py": {
+      "sha256": "1739c3957f380c8ac8cfd89d6bc07210e5f9407e2ac4d592dee9cbe05113d3f4",
+      "bytes": 14506,
+      "role": "synthetic_control_tests",
+      "localImports": [
+        "budget_gateway_v2.py",
+        "budget_gateway_v3.py"
+      ],
+      "standardLibraryImports": [
+        "ctypes",
+        "hashlib",
+        "json",
+        "os",
+        "pathlib",
+        "socket",
+        "tempfile",
+        "unittest",
+        "unittest.mock",
+        "warnings"
+      ],
+      "sourceTransformed": false
+    },
+    "archive/test_budget_gateway_v4.py": {
+      "sha256": "824334839144087451696ee7971d1d5f80b49407dceacdcb21ccf70d68bb456d",
+      "bytes": 17957,
+      "role": "synthetic_control_tests",
+      "localImports": [
+        "budget_gateway_v2.py",
+        "budget_gateway_v3.py",
+        "budget_gateway_v4.py"
+      ],
+      "standardLibraryImports": [
+        "http.server",
+        "json",
+        "math",
+        "os",
+        "pathlib",
+        "socket",
+        "tempfile",
+        "threading",
+        "unittest",
+        "unittest.mock"
+      ],
+      "sourceTransformed": false
+    },
+    "archive/test_foundry_policy_witness.py": {
+      "sha256": "b3d2b6e8c6c9f416945e6d20904999d8e118a727e0b44ad280a7bf715ad99021",
+      "bytes": 11129,
+      "role": "synthetic_control_tests",
+      "localImports": [
+        "foundry_policy_witness.py"
+      ],
+      "standardLibraryImports": [
+        "copy",
+        "http.client",
+        "http.server",
+        "json",
+        "pathlib",
+        "tempfile",
+        "threading",
+        "unittest",
+        "unittest.mock"
+      ],
+      "sourceTransformed": false
+    }
+  },
+  "byteIdentity": {
+    "exactSourceBytes": true,
+    "redactions": [],
+    "runtimeLoadedBytesIndependentlyAuthenticated": false,
+    "meaning": "Current disk-source bytes are copied exactly; this does not attest bytes already loaded by a live process."
+  },
+  "staticDiscovery": {
+    "method": "AST import closure and dynamic-loader check; source-only credential/private-user-path scan before copying",
+    "dynamicLoaderCallSitesObserved": 0,
+    "localSourceClosureComplete": true,
+    "nonStandardExternalDependenciesObserved": [],
+    "platformLimit": "Gateway startup/recovery uses Windows msvcrt locking; no portability rewrite included."
+  },
+  "scan": {
+    "filesScanned": 10,
+    "credentialShapedTestFixtureMatches": 2,
+    "reviewedSyntheticFixtureExceptions": [
+      {
+        "file": "archive/test_budget_gateway_v3.py",
+        "line": 55,
+        "category": "credentialLiteral",
+        "classification": "Explicit synthetic controller fixture, not a live credential",
+        "context": "TemporaryDirectory plus patched credential input and synthetic/local request handler",
+        "testFunction": "test_prompt_failure_closes_prebound_socket_and_retains_placeholder_handler"
+      },
+      {
+        "file": "archive/test_budget_gateway_v4.py",
+        "line": 284,
+        "category": "credentialLiteral",
+        "classification": "Explicit synthetic controller fixture, not a live credential",
+        "context": "TemporaryDirectory plus patched credential input and synthetic/local request handler",
+        "testFunction": "test_main_keeps_phase_policy_until_active_handler_settles_and_joins"
+      }
+    ],
+    "blockedActualSecretOrPrivatePathFindings": 0,
+    "patterns": [
+      "absoluteWindowsUserPath",
+      "absolutePosixUserPath",
+      "providerKey",
+      "privateKey",
+      "nativeWindowsSid",
+      "credentialLiteral"
+    ],
+    "limits": "Bounded static scan, not formal secret assurance. Only Python source files were read from the private directory."
+  },
+  "testExecution": {
+    "runtimeModulesImportedByPublication": false,
+    "archivedTestsRun": 0,
+    "applicationOrGatewayStarts": 0,
+    "apiCalls": 0,
+    "networkUse": 0,
+    "reason": "Several archived tests contain loopback socket/HTTP fixtures. No archived runtime or test module was imported or executed."
+  },
+  "historicalStudy": {
+    "globalCumulativeLimitUsd": 48,
+    "foundryActorAllocationUsdEach": 20,
+    "historyMustNotReset": true,
+    "allocationAndPrefixBound": true,
+    "approvedPlanDigestRemainsAnOriginalSourceConstant": true,
+    "privateRuntimeStatePublished": false,
+    "freshReplacementMeterInitialized": false
+  },
+  "excludedPrivateArtifacts": [
+    "provider/API credentials",
+    "gateway/controller tokens and runtime configuration",
+    "owner authorization and actual approved phase documents",
+    "actual phase-allocation state",
+    "admission/receipt journals and derived status/recovery history",
+    "raw prompts/request or response body logs",
+    "company documents and native machine/account identifiers"
+  ],
+  "startupPolicy": "Starts nothing. Existing-study continuation requires appropriately supplied private authorization, exact pinned plan, complete original history and credential handling; Git source alone is not a funded continuation. New studies must be explicit and separately reviewed, never a reset of old spending."
+}
