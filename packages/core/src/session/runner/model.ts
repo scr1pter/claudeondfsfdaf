@@ -244,6 +244,15 @@ function reportedUsd(model: Model, metadata?: ProviderMetadata) {
   if (typeof totalNanoAiu === "number" && Number.isFinite(totalNanoAiu) && totalNanoAiu >= 0)
     // Copilot bills in nano AI units: 1 AI credit is 1e9 nano-AIU and costs $0.01, so USD = nano-AIU / 1e11.
     return totalNanoAiu / 100_000_000_000
+  if (sendsToOpenRouter({ providerID: model.provider, destinations: [model.route.endpoint.baseURL] })) {
+    const usage = metadata?.openrouter?.usage
+    const legacy = typeof usage === "object" && usage !== null && "cost" in usage ? usage.cost : undefined
+    // The native compatible protocol preserves the wire usage under openai; legacy adapters use openrouter.usage.
+    // Only an OpenRouter route may turn either field into a bill, including an explicitly reported zero charge.
+    for (const reported of [legacy, metadata?.openai?.cost]) {
+      if (typeof reported === "number" && Number.isFinite(reported) && reported >= 0) return reported
+    }
+  }
   // Vector Codium is not here: its gateway keeps the provider's charge on vectordev.ai, so a Codium step is unpriced.
   return undefined
 }
