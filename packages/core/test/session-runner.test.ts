@@ -316,6 +316,7 @@ const insertSession = (id: SessionV2.ID) =>
 
 const setup = Effect.gen(function* () {
   const { db } = yield* Database.Service
+  requests.length = 0
   response = []
   systemBaseline = "Initial context"
   systemRemoved = false
@@ -577,6 +578,287 @@ const verifyPartialFlushOnInterruption = (kind: FragmentKind) =>
   })
 
 describe("SessionRunnerLLM", () => {
+  it.effect("unsettled accounting: V2 partial response without terminal usage remains unknown through replay", () =>
+    Effect.gen(function* () {
+      yield* setup
+      requests.length = 0
+      currentModel = SessionRunnerModel.withPricing(
+        Model.make({ id: "unsettled-priced", provider: "fake", route: OpenAIChat.route }),
+        [{ input: 2, output: 10, cache: { read: 0.1, write: 2.5 } }],
+      )
+      const session = yield* SessionV2.Service
+      const guard = yield* SpendGuard.Service
+      yield* guard.arm(sessionID, { usd: 1, unpricedSteps: 1 })
+      yield* session.prompt({
+        sessionID,
+        prompt: Prompt.make({ text: "Interrupt a received partial response" }),
+        resume: false,
+      })
+      const ready = yield* Deferred.make<void>()
+      responseStream = Stream.concat(
+        Stream.make(
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.textStart({ id: "unsettled-partial" }),
+          LLMEvent.textDelta({ id: "unsettled-partial", text: "Partial response" }),
+        ),
+        Stream.fromEffect(Deferred.succeed(ready, undefined)).pipe(Stream.flatMap(() => Stream.never)),
+      )
+      const runner = yield* SessionRunner.Service
+      const fiber = yield* runner.run({ sessionID, force: true }).pipe(Effect.forkChild)
+      yield* Deferred.await(ready)
+      yield* Fiber.interrupt(fiber)
+      yield* Fiber.await(fiber)
+      expect(requests).toHaveLength(1)
+      expect(yield* session.context(sessionID)).toMatchObject([
+        { type: "user" },
+        { type: "assistant", cost: 0, unpriced: true },
+      ])
+      expect(yield* session.get(sessionID)).toMatchObject({ cost: 0, unpricedSteps: 1 })
+      expect(yield* guard.snapshot(sessionID)).toMatchObject({ spentUsd: 0, steps: 1, unpricedSteps: 1 })
+      expect((yield* guard.snapshot(sessionID))?.stopped?.reason).toBe("unpriced")
+      yield* replaySessionProjection(sessionID)
+      yield* replaySessionProjection(sessionID)
+      expect(yield* session.get(sessionID)).toMatchObject({ cost: 0, unpricedSteps: 1 })
+      expect(requests).toHaveLength(1)
+    }),
+  )
+
+  it.effect("unsettled accounting: V2 cancellation before transport creates no billed or unknown attempt", () =>
+    Effect.gen(function* () {
+      yield* setup
+      requests.length = 0
+      currentModel = SessionRunnerModel.withPricing(
+        Model.make({ id: "unsettled-priced", provider: "fake", route: OpenAIChat.route }),
+        [{ input: 2, output: 10, cache: { read: 0.1, write: 2.5 } }],
+      )
+      const session = yield* SessionV2.Service
+      const guard = yield* SpendGuard.Service
+      yield* guard.arm(sessionID, { usd: 1, unpricedSteps: 1 })
+      yield* session.prompt({
+        sessionID,
+        prompt: Prompt.make({ text: "Stop before model resolution finishes" }),
+        resume: false,
+      })
+      const ready = yield* Deferred.make<void>()
+      const release = yield* Deferred.make<void>()
+      modelResolveHook = Deferred.succeed(ready, undefined).pipe(Effect.andThen(Deferred.await(release)))
+      const runner = yield* SessionRunner.Service
+      const fiber = yield* runner.run({ sessionID, force: true }).pipe(Effect.forkChild)
+      yield* Deferred.await(ready)
+      yield* Fiber.interrupt(fiber)
+      yield* Fiber.await(fiber)
+      expect(requests).toHaveLength(0)
+      const stored = yield* session.get(sessionID)
+      expect(stored.cost).toBe(0)
+      expect(stored.unpricedSteps ?? 0).toBe(0)
+      expect((yield* guard.snapshot(sessionID))?.steps).toBe(0)
+      expect(yield* session.context(sessionID)).toMatchObject([{ type: "user" }])
+    }),
+  )
+
+  it.effect("unsettled accounting: V2 guaranteed-free interruption preserves the unknown-cost allowance", () =>
+    Effect.gen(function* () {
+      yield* setup
+      requests.length = 0
+      currentModel = SessionRunnerModel.withFreeRoute(
+        Model.make({ id: "guaranteed-free", provider: "fake", route: OpenAIChat.route }),
+      )
+      const session = yield* SessionV2.Service
+      const guard = yield* SpendGuard.Service
+      yield* guard.arm(sessionID, { usd: 1, unpricedSteps: 1 })
+      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "A guaranteed-free response" }), resume: false })
+      const ready = yield* Deferred.make<void>()
+      responseStream = Stream.concat(
+        Stream.make(
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.textStart({ id: "unsettled-free" }),
+          LLMEvent.textDelta({ id: "unsettled-free", text: "Partial free response" }),
+        ),
+        Stream.fromEffect(Deferred.succeed(ready, undefined)).pipe(Stream.flatMap(() => Stream.never)),
+      )
+      const runner = yield* SessionRunner.Service
+      const fiber = yield* runner.run({ sessionID, force: true }).pipe(Effect.forkChild)
+      yield* Deferred.await(ready)
+      yield* Fiber.interrupt(fiber)
+      yield* Fiber.await(fiber)
+      expect(requests).toHaveLength(1)
+      // Incomplete token usage stays visible, but a guaranteed-free route cannot consume a dollar allowance.
+      expect(yield* session.get(sessionID)).toMatchObject({ cost: 0, unpricedSteps: 1 })
+      expect(yield* guard.snapshot(sessionID)).toMatchObject({
+        costKind: "free",
+        spentUsd: 0,
+        steps: 1,
+        unpricedSteps: 0,
+      })
+      expect((yield* guard.snapshot(sessionID))?.stopped).toBeUndefined()
+    }),
+  )
+
+  for (const usage of [
+    { inputTokens: 0, outputTokens: 0 },
+    { inputTokens: 1_000, outputTokens: 100 },
+  ]) {
+    it.effect(
+      `unsettled accounting: V2 terminal usage ${usage.inputTokens} survives cancellation and replay once`,
+      () =>
+        Effect.gen(function* () {
+          yield* setup
+          requests.length = 0
+          currentModel = SessionRunnerModel.withPricing(
+            Model.make({ id: "unsettled-priced", provider: "fake", route: OpenAIChat.route }),
+            [{ input: 2, output: 10, cache: { read: 0.1, write: 2.5 } }],
+          )
+          const expected = (usage.inputTokens * 2 + usage.outputTokens * 10) / 1_000_000
+          const session = yield* SessionV2.Service
+          const guard = yield* SpendGuard.Service
+          yield* guard.arm(sessionID, { usd: 1, unpricedSteps: 1 })
+          yield* session.prompt({
+            sessionID,
+            prompt: Prompt.make({ text: "Keep an explicit terminal usage report" }),
+            resume: false,
+          })
+          const ready = yield* Deferred.make<void>()
+          responseStream = Stream.concat(
+            Stream.make(
+              LLMEvent.stepStart({ index: 0 }),
+              LLMEvent.textStart({ id: "unsettled-known" }),
+              LLMEvent.textDelta({ id: "unsettled-known", text: "Reported usage" }),
+              LLMEvent.textEnd({ id: "unsettled-known" }),
+              LLMEvent.stepFinish({ index: 0, reason: "stop", usage }),
+            ),
+            Stream.fromEffect(Deferred.succeed(ready, undefined)).pipe(Stream.flatMap(() => Stream.never)),
+          )
+          const runner = yield* SessionRunner.Service
+          const fiber = yield* runner.run({ sessionID, force: true }).pipe(Effect.forkChild)
+          yield* Deferred.await(ready)
+          yield* Fiber.interrupt(fiber)
+          yield* Fiber.await(fiber)
+          expect(requests).toHaveLength(1)
+          expect((yield* session.get(sessionID)).cost).toBeCloseTo(expected)
+          expect((yield* session.get(sessionID)).unpricedSteps ?? 0).toBe(0)
+          expect(yield* guard.snapshot(sessionID)).toMatchObject({ spentUsd: expected, steps: 1, unpricedSteps: 0 })
+          yield* replaySessionProjection(sessionID)
+          yield* replaySessionProjection(sessionID)
+          expect((yield* session.get(sessionID)).cost).toBeCloseTo(expected)
+          expect((yield* session.get(sessionID)).unpricedSteps ?? 0).toBe(0)
+          const { db } = yield* Database.Service
+          const recorded = yield* db
+            .select()
+            .from(EventTable)
+            .where(eq(EventTable.aggregate_id, sessionID))
+            .all()
+            .pipe(Effect.orDie)
+          expect(
+            recorded.filter(
+              (event) =>
+                event.type ===
+                EventV2.versionedType(SessionEvent.Step.Ended.type, SessionEvent.Step.Ended.durable!.version),
+            ),
+          ).toHaveLength(1)
+          expect(requests).toHaveLength(1)
+        }),
+    )
+  }
+
+  for (const scenario of [
+    { name: "absent usage", usage: undefined, cost: 0, unpriced: true, free: false },
+    {
+      name: "explicit zero usage",
+      usage: { inputTokens: 0, outputTokens: 0 },
+      cost: 0,
+      unpriced: false,
+      free: false,
+    },
+    {
+      name: "known terminal usage",
+      usage: { inputTokens: 1_000, outputTokens: 100 },
+      cost: 0.003,
+      unpriced: false,
+      free: false,
+    },
+    {
+      name: "authoritative billed cost without token counters",
+      usage: { providerMetadata: { copilot: { totalNanoAiu: 3_000_000_000 } } },
+      cost: 0.03,
+      unpriced: false,
+      free: false,
+    },
+    {
+      name: "authoritative billed zero without token counters",
+      usage: { providerMetadata: { copilot: { totalNanoAiu: 0 } } },
+      cost: 0,
+      unpriced: false,
+      free: false,
+    },
+    { name: "guaranteed-free absent usage", usage: undefined, cost: 0, unpriced: true, free: true },
+  ]) {
+    it.effect(`terminal usage accounting: V2 ${scenario.name} remains distinct through replay`, () =>
+      Effect.gen(function* () {
+        yield* setup
+        const selected = Model.make({ id: "terminal-usage", provider: "fake", route: OpenAIChat.route })
+        currentModel = scenario.free
+          ? SessionRunnerModel.withFreeRoute(selected)
+          : SessionRunnerModel.withPricing(selected, [{ input: 2, output: 10, cache: { read: 0.1, write: 2.5 } }])
+        const session = yield* SessionV2.Service
+        const guard = yield* SpendGuard.Service
+        yield* guard.arm(sessionID, { usd: 1, unpricedSteps: 1 })
+        yield* session.prompt({ sessionID, prompt: Prompt.make({ text: scenario.name }), resume: false })
+        response = [
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.textStart({ id: "terminal-usage-text" }),
+          LLMEvent.textDelta({ id: "terminal-usage-text", text: "A finished response" }),
+          LLMEvent.textEnd({ id: "terminal-usage-text" }),
+          LLMEvent.stepFinish({
+            index: 0,
+            reason: "stop",
+            ...(scenario.usage === undefined ? {} : { usage: scenario.usage }),
+          }),
+          LLMEvent.finish({ reason: "stop" }),
+        ]
+
+        yield* session.resume(sessionID)
+
+        expect(requests).toHaveLength(1)
+        const context = yield* session.context(sessionID)
+        expect(context).toMatchObject([{ type: "user" }, { type: "assistant", cost: scenario.cost }])
+        const assistant = context[1]
+        expect(assistant?.type === "assistant" && Boolean(assistant.unpriced)).toBe(scenario.unpriced)
+        expect((yield* session.get(sessionID)).cost).toBeCloseTo(scenario.cost)
+        expect((yield* session.get(sessionID)).unpricedSteps ?? 0).toBe(scenario.unpriced ? 1 : 0)
+        const run = yield* guard.snapshot(sessionID)
+        expect(run).toMatchObject({
+          costKind: scenario.free ? "free" : "priced",
+          spentUsd: scenario.cost,
+          steps: 1,
+          unpricedSteps: scenario.unpriced && !scenario.free ? 1 : 0,
+        })
+        expect(run?.stopped?.reason).toBe(scenario.unpriced && !scenario.free ? "unpriced" : undefined)
+
+        yield* replaySessionProjection(sessionID)
+        yield* replaySessionProjection(sessionID)
+
+        expect((yield* session.get(sessionID)).cost).toBeCloseTo(scenario.cost)
+        expect((yield* session.get(sessionID)).unpricedSteps ?? 0).toBe(scenario.unpriced ? 1 : 0)
+        expect(yield* guard.snapshot(sessionID)).toEqual(run)
+        const { db } = yield* Database.Service
+        const recorded = yield* db
+          .select()
+          .from(EventTable)
+          .where(eq(EventTable.aggregate_id, sessionID))
+          .all()
+          .pipe(Effect.orDie)
+        expect(
+          recorded.filter(
+            (event) =>
+              event.type ===
+              EventV2.versionedType(SessionEvent.Step.Ended.type, SessionEvent.Step.Ended.durable!.version),
+          ),
+        ).toHaveLength(1)
+        expect(requests).toHaveLength(1)
+      }),
+    )
+  }
+
   it.effect("advertises and executes a globally attached application tool", () =>
     Effect.gen(function* () {
       yield* setup

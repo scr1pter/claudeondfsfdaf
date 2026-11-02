@@ -417,7 +417,9 @@ function modelFrom(body: unknown) {
 }
 
 function send(item: Sse) {
-  const head = bytes(item.head)
+  // Flush an accepted hanging response even when it has no SDK event to send yet.
+  const head =
+    item.hang && !item.head.length ? Stream.make(": connected\n\n").pipe(Stream.encodeText) : bytes(item.head)
   const tail = bytes([...item.tail, ...(item.hang || item.error ? [] : [done])])
   const empty = Stream.fromIterable<Uint8Array>([])
   const wait = item.wait

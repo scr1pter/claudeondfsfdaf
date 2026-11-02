@@ -159,7 +159,9 @@ const layer = Layer.effect(
       named: string | undefined,
     ) {
       const selected = yield* agents.select(named, session.internal !== undefined)
-      return selected.info || named === session.agent ? selected : yield* agents.select(session.agent, session.internal !== undefined)
+      return selected.info || named === session.agent
+        ? selected
+        : yield* agents.select(session.agent, session.internal !== undefined)
     })
     const failInterruptedTools = Effect.fn("SessionRunner.failInterruptedTools")(function* (
       sessionID: SessionSchema.ID,
@@ -386,7 +388,7 @@ const layer = Layer.effect(
           const settleStep = Effect.gen(function* () {
             const stepSettlement = publisher.stepSettlement()
             if (!stepSettlement) return undefined
-            if (llmFailure || publisher.hasProviderError()) {
+            if ((llmFailure || publisher.hasProviderError()) && !stepSettlement.incomplete) {
               yield* guard.record(
                 session.id,
                 SessionRunnerModel.spendStep(model, stepSettlement, { continues: false, patched: false }),
@@ -402,10 +404,10 @@ const layer = Layer.effect(
                 : undefined
             const tokens = stepSettlement.tokens
             const spend = SessionRunnerModel.spendStep(model, stepSettlement, {
-              continues: needsContinuation,
+              continues: stepSettlement.incomplete ? false : needsContinuation,
               patched: Boolean(files?.length),
             })
-            // A step that used no tokens owes nothing whatever the model charges.
+            // Missing terminal usage is uncertain, unlike explicitly reported zero usage.
             const used = tokens.input + tokens.output + tokens.reasoning + tokens.cache.read + tokens.cache.write
             yield* withPublication(
               events.publish(SessionEvent.Step.Ended, {
@@ -416,7 +418,7 @@ const layer = Layer.effect(
                 // The durable event keeps a finite cost, so an unknown price is recorded as 0 and marked unpriced:
                 // readers then tell it apart from a free model instead of counting it as measured free spend.
                 cost: spend.costUsd ?? 0,
-                ...(spend.costUsd === undefined && used > 0 ? { unpriced: true } : {}),
+                ...(stepSettlement.incomplete || (spend.costUsd === undefined && used > 0) ? { unpriced: true } : {}),
                 tokens,
                 snapshot: endSnapshot,
                 files,

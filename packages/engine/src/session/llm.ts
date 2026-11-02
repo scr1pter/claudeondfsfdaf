@@ -65,9 +65,11 @@ export type StreamInput = {
   // false for a request whose prefix is never sent again, such as a compaction summary: cache breakpoints would only
   // make the provider bill its whole input at the cache-write premium.
   cache?: boolean
-  // Called with the usage a provider reports as it starts a response, before the step finishes. A step that is
-  // stopped or fails mid-stream reports nothing more, so this is what it was billed.
+  // Called with usage the provider reports as it starts a response, before the step finishes. Interrupted streams
+  // may report nothing more, so these counters remain a known subtotal with incomplete final usage.
   started?: (usage: UsageInput) => void
+  // The SDK accepted a streaming response, even when no usage or content chunk has arrived yet.
+  accepted?: () => void
   // Called at the first event of the response, once the provider has the request and is answering it.
   answering?: () => void
   // What the request carries out of the brain (personal memory, private document passages, repository excerpts), for
@@ -451,6 +453,11 @@ const live: Layer.Layer<
                     )
                   }
                   return args.params
+                },
+                async wrapStream({ doStream }) {
+                  const response = await doStream()
+                  input.accepted?.()
+                  return response
                 },
               },
               NativePatch.middleware({
