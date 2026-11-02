@@ -125,6 +125,7 @@ class OwnedArm:
         self.deadline, self.condition = time.monotonic() + seconds, threading.Condition(threading.RLock())
         self.queue, self.forwarding, self.closing = deque(), False, False
         self.retired = False
+        self.handlers = 0
         self.failure, self.audit_failed, self.slots, self.requests = None, False, {}, []
         self.admitted_ids, self.helper_slots = set(), {}
         self.repairs = 0
@@ -153,7 +154,19 @@ class OwnedArm:
 
     def status(self):
         with self.condition:
-            return {"runtime": self.runtime, "actor": self.actor, "reviewRequired": self.failure is not None, "stopReason": self.failure, "auditFailed": self.audit_failed, "forwardedRequests": len(self.requests), "activeForward": self.forwarding, "queuedRequests": len(self.queue), "autonomousSessions": 1 + len(self.slots), "inflightLimit": 1, "closing": self.closing}
+            return {"runtime": self.runtime, "actor": self.actor, "reviewRequired": self.failure is not None, "stopReason": self.failure, "auditFailed": self.audit_failed, "forwardedRequests": len(self.requests), "activeForward": self.forwarding, "queuedRequests": len(self.queue), "acceptedHandlers": self.handlers, "autonomousSessions": 1 + len(self.slots), "inflightLimit": 1, "closing": self.closing, "retired": self.retired}
+
+    def begin_handler(self):
+        with self.condition:
+            if self.retired:
+                return False
+            self.handlers += 1
+            return True
+
+    def end_handler(self):
+        with self.condition:
+            self.handlers -= 1
+            self.condition.notify_all()
 
     def enter(self, body, headers, cancelled):
         ticket = object()
@@ -302,10 +315,23 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/owner/stop":
             if not self.authorized(arm._owner):
                 return self.reply(403, {"error": "owner authorization required"})
-            arm.latch("owner_requested_stop")
-            return self.reply(200, arm.status())
+            if not arm.begin_handler():
+                return self.reply(409, {"error": "owned scope retired"})
+            try:
+                arm.latch("owner_requested_stop")
+                return self.reply(200, arm.status())
+            finally:
+                arm.end_handler()
         if self.path != "/v1/responses" or arm.retired or not self.authorized(arm._alias):
             return self.reply(403, {"error": "owned alias required"})
+        if not arm.begin_handler():
+            return self.reply(403, {"error": "owned alias retired"})
+        try:
+            self.forward_model(arm)
+        finally:
+            arm.end_handler()
+
+    def forward_model(self, arm):
         try:
             require(not self.headers.get("Transfer-Encoding") and self.headers.get("Content-Encoding", "identity") == "identity", "unsupported transfer schema")
             length = int(self.headers.get("Content-Length", "0"))
@@ -400,8 +426,13 @@ class OwnedSupervisor:
         self.used, self.active = set(), None
         self.failed = False
         self.orphaned_token = None
+        self.lock = threading.RLock()
 
     def begin(self, runtime, label, registry, roles, **limits):
+        with self.lock:
+            return self._begin(runtime, label, registry, roles, **limits)
+
+    def _begin(self, runtime, label, registry, roles, **limits):
         require(not self.failed and self.active is None and runtime in ACTORS and runtime not in self.used, "arm already owned, failed or used")
         require(isinstance(label, str) and re.fullmatch(r"[a-z0-9][a-z0-9-]{0,69}", label) is not None, "synthetic label required")
         require(registry.runtime == runtime and len(roles) == 3 and len(set(roles)) == 3 and all(isinstance(value, str) and value for value in roles), "invalid fixed team")
@@ -430,11 +461,28 @@ class OwnedSupervisor:
         return self.active
 
     def repair(self):
-        require(self.active is not None and not self.active.failure and self.active.repairs == 0, "repair limit or arm failure")
-        self.active.repairs = 1
-        self.active.record({"type": "same_lead_session_repair", "index": 1})
+        with self.lock:
+            require(self.active is not None and not self.active.failure and self.active.repairs == 0, "repair limit or arm failure")
+            self.active.repairs = 1
+            self.active.record({"type": "same_lead_session_repair", "index": 1})
+
+    def retire_disposition(self, arm, result):
+        with arm.condition:
+            if arm.forwarding or arm.queue or arm.handlers:
+                arm.latch("closure_handlers_pending")
+            result["reviewRequired"] = result["reviewRequired"] or arm.failure is not None
+            result["stopReason"] = arm.failure
+            self.failed = self.failed or result["reviewRequired"]
+            if result["settlementComplete"]:
+                arm._funded_token = None
+                arm.retired = True
+                self.active = None
 
     def close(self, timeout=700):
+        with self.lock:
+            return self._close(timeout)
+
+    def _close(self, timeout):
         arm = self.active
         require(arm is not None, "no owned arm")
         with arm.condition:
@@ -450,8 +498,9 @@ class OwnedSupervisor:
             deadline = time.monotonic() + timeout
             while True:
                 state = healthy(self.controller("/status"), arm.before)
-                if state["active"] == 0 and state["reservedUsd"] == 0 and not arm.forwarding:
-                    break
+                with arm.condition:
+                    if state["active"] == 0 and state["reservedUsd"] == 0 and not arm.forwarding and not arm.queue and arm.handlers == 0:
+                        break
                 require(time.monotonic() < deadline, "owned closure remains unknown")
                 time.sleep(0.05)
             require(state.get("batchCallsRemaining") == 0, "owned scope did not close")
@@ -479,17 +528,20 @@ class OwnedSupervisor:
             require(self.quiesced() is True, "owned runtime and descendants not confirmed quiescent")
             result["runtimeQuiesced"] = True
             transcripts = arm.registry.collect(self.output / arm.runtime / "private-transcripts")
+            require(transcripts.get("complete") is True, "descendant transcript coverage incomplete")
             result["transcripts"] = transcripts
-            arm.record({"type": "owned_scope_closed", "providerRequests": len(receipts), "measuredUsd": cost, "reviewRequired": result["reviewRequired"], "transcriptCoverageComplete": transcripts["complete"]})
+            with arm.condition:
+                while arm.forwarding or arm.queue or arm.handlers:
+                    require(time.monotonic() < deadline, "accepted handlers remain during closure")
+                    arm.condition.wait(timeout=0.05)
+                result.update(reviewRequired=arm.failure is not None, stopReason=arm.failure)
+                arm.record({"type": "owned_scope_closed", "providerRequests": len(receipts), "measuredUsd": cost, "reviewRequired": result["reviewRequired"], "transcriptCoverageComplete": transcripts["complete"]})
+                self.retire_disposition(arm, result)
         except Exception as error:
             arm.latch("closure_or_accounting_unknown")
             result.update(reviewRequired=True, stopReason=arm.failure, closureFailureType=type(error).__name__)
         finally:
-            self.failed = result["reviewRequired"]
-            if result["settlementComplete"]:
-                arm._funded_token = None
-                arm.retired = True
-                self.active = None
+            self.retire_disposition(arm, result)
         try:
             (self.output / arm.runtime / "closure.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
         except OSError:

@@ -157,6 +157,11 @@ cumulative observation and must not be added to the reconciled total again.
 Audit/telemetry problems cannot turn into product passes. The supervisor also
 requires a positive owned-runtime-and-descendants quiescence callback before
 collecting private native transcripts; its default callback is false.
+Closure also drains accepted HTTP handlers and queued waiters. It rechecks the
+latched failure under the same condition lock that retires the alias and updates
+the supervisor's final disposition. A failure during transcript collection
+therefore requires review and blocks the next arm. Once retired, a late owner
+stop is rejected rather than mutating an already-final result.
 
 `native_registry.py` reads only an explicitly configured database inside the
 owned runtime home. The Codex backend joined all 47 retained actual requests

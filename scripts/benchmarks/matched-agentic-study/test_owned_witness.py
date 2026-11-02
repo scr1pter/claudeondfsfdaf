@@ -480,6 +480,91 @@ class OwnedWitnessTests(unittest.TestCase):
         self.assertEqual(self.request()[0], 403)
         self.assertTrue(self.supervisor.failed)
 
+    def test_failure_during_transcript_collection_cannot_finalize_clean(self):
+        self.assertEqual(self.request()[0], 200)
+        started, release = threading.Event(), threading.Event()
+        original = self.registry.collect
+        def blocked(destination):
+            started.set()
+            self.assertTrue(release.wait(3))
+            return original(destination)
+        self.registry.collect = blocked
+        results = []
+        closer = threading.Thread(target=lambda: results.append(self.supervisor.close(timeout=2)))
+        closer.start()
+        self.assertTrue(started.wait(3))
+        try:
+            self.assertEqual(self.request(path="/owner/stop", token=self.arm._owner)[0], 200)
+        finally:
+            release.set()
+        closer.join(5)
+        self.assertFalse(closer.is_alive())
+        self.assertTrue(results[0]["settlementComplete"])
+        self.assertTrue(results[0]["reviewRequired"])
+        self.assertEqual(results[0]["stopReason"], "owner_requested_stop")
+        self.assertTrue(self.supervisor.failed)
+        next_registry = NativeRegistry("vector", self.directory, self.directory / "future-vector.db", "ses-future", "openai")
+        with self.assertRaises(PolicyError):
+            self.supervisor.begin("vector", "forbidden-next", next_registry, ROLES)
+
+    def test_close_waits_for_accepted_handler_barrier(self):
+        self.assertTrue(self.arm.begin_handler())
+        results = []
+        closer = threading.Thread(target=lambda: results.append(self.supervisor.close(timeout=2)))
+        closer.start()
+        deadline = time.monotonic() + 2
+        while not self.arm.closing and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.assertTrue(self.arm.closing)
+        self.assertTrue(closer.is_alive())
+        self.assertEqual(self.arm.status()["acceptedHandlers"], 1)
+        self.arm.end_handler()
+        closer.join(5)
+        self.assertFalse(closer.is_alive())
+        self.assertFalse(results[0]["reviewRequired"])
+        self.assertEqual(self.arm.status()["acceptedHandlers"], 0)
+
+    def test_close_drains_queued_handlers_and_retains_active_charge(self):
+        add_thread(self.registry.database, "worker-a", "implementation")
+        self.meter.release.clear()
+        responses, closures = [], []
+        active = threading.Thread(target=lambda: responses.append(self.request()[0])); active.start()
+        self.assertTrue(self.meter.started.wait(3))
+        queued = threading.Thread(target=lambda: responses.append(self.request(identity="worker-a")[0])); queued.start()
+        deadline = time.monotonic() + 3
+        while not self.arm.queue and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.assertEqual(len(self.arm.queue), 1)
+        closer = threading.Thread(target=lambda: closures.append(self.supervisor.close(timeout=3))); closer.start()
+        deadline = time.monotonic() + 3
+        while not self.arm.closing and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.meter.release.set()
+        active.join(5); queued.join(5); closer.join(5)
+        self.assertFalse(closer.is_alive())
+        self.assertEqual(sorted(responses), [200, 400])
+        self.assertEqual(self.meter.calls, 1)
+        self.assertTrue(closures[0]["reviewRequired"])
+        self.assertEqual(closures[0]["providerRequests"], 1)
+        self.assertEqual(self.arm.status()["acceptedHandlers"], 0)
+        self.assertEqual(self.arm.status()["queuedRequests"], 0)
+
+    def test_retired_owner_stop_cannot_latch_after_clean_final_state(self):
+        self.assertEqual(self.request()[0], 200)
+        result = self.supervisor.close(timeout=2)
+        self.assertFalse(result["reviewRequired"])
+        self.assertEqual(self.request(path="/owner/stop", token=self.arm._owner)[0], 409)
+        self.assertIsNone(self.arm.failure)
+        self.assertFalse(self.supervisor.failed)
+
+    def test_incomplete_transcript_coverage_requires_review_with_known_charges(self):
+        self.assertEqual(self.request()[0], 200)
+        self.registry.collect = lambda _destination: {"complete": False}
+        result = self.supervisor.close(timeout=2)
+        self.assertTrue(result["settlementComplete"])
+        self.assertTrue(result["reviewRequired"])
+        self.assertAlmostEqual(result["measuredUsd"], 0.01)
+
     def test_single_call_reservation_headroom_not_output_reduction(self):
         self.meter.spent["foundry-codex"] = 17
         payload = body()
