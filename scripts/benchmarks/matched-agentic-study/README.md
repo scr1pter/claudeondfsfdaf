@@ -115,6 +115,14 @@ and helper worker definitions are removed in the explicit tool containers;
 retained custom grammar and message content stay unchanged. These controls use
 the trusted owned runtime and host profile, not an operating-system sandbox or
 a claim of protection against every malicious local program.
+Native identity kind is independent of request purpose. Every distinct Codex
+thread must satisfy its lead/role/depth/lifetime slot rules even when the request
+is a summary or compaction. Helper-purpose calls are accepted only on an already
+admitted root or child identity and remain fully billed. Distinct Vector helpers
+require an explicit native producer-to-generation-agent mapping, a previously
+admitted parent, one lifetime identity per producer, and no offered tools.
+Tool-using review/judge/specialist agents cannot escape the three child slots
+by declaring themselves helpers. Unobserved producers remain unavailable.
 
 All forwarded requests, including retries, helpers and judges, share one
 300-request limit, a two-hour admission deadline, a $3 soft threshold, and at

@@ -15,7 +15,7 @@ import unittest
 
 from native_registry import NativeRegistry
 from native_team_policy import MODEL, PolicyError
-from owned_team_witness import Audit, FUNDING_PHASE, MAX_BODY, OwnedSupervisor, WitnessServer, digest, profile_body, reservation_bound
+from owned_team_witness import Audit, FUNDING_PHASE, MAX_BODY, OwnedArm, OwnedSupervisor, WitnessServer, digest, profile_body, reservation_bound
 from vector_free_probe import OwnedFreshVectorRegistry
 
 ROLES = ("implementation", "verification", "judge")
@@ -52,6 +52,24 @@ def add_thread(path, identity, role=None, parent=ROOT, depth=1):
         if identity != ROOT:
             connection.execute("INSERT INTO thread_spawn_edges VALUES(?,?,?)", (parent, identity, "open"))
     connection.close()
+
+
+def vector_generation_fixture(home):
+    database = home / "vector.db"
+    connection = sqlite3.connect(database)
+    connection.execute("CREATE TABLE session(id TEXT,parent_id TEXT,internal TEXT,agent TEXT,model TEXT,metadata TEXT)")
+    model = json.dumps({"id": MODEL, "providerID": "openai", "variant": "high"})
+    for identity, parent, internal, agent in (("ses-root", None, None, "build"), ("ses-helper-a", "ses-root", "synthetic-summary", "summary"), ("ses-helper-b", "ses-root", "synthetic-summary", "summary")):
+        connection.execute("INSERT INTO session VALUES(?,?,?,?,?,?)", (identity, parent, internal, agent, model, None))
+    connection.commit(); connection.close()
+    registry = NativeRegistry("vector", home, database, "ses-root", "openai", helper_producers={"synthetic-summary": "summary"})
+    meter = FakeMeter()
+    before = meter.control("/status")
+    token = meter.control("/control", {"actor": "foundry-vector", "calls": 300})["requestToken"]
+    arm = OwnedArm("vector", registry, ROLES, token, before, meter.control, Audit(home / "audit.jsonl"))
+    _, entry = arm.enter(body(), {"X-Session-Id": "ses-root"}, lambda: False)
+    arm.finish(entry, {"object": "response", "status": "completed"}, False, False)
+    return arm, meter
 
 
 class FakeMeter(ThreadingHTTPServer):
@@ -289,6 +307,47 @@ class OwnedWitnessTests(unittest.TestCase):
         response = connection.getresponse(); self.assertEqual(response.status, 400); response.read(); connection.close()
         self.assertEqual(self.meter.calls, 0)
 
+    def test_summary_first_unapproved_child_refused_before_upstream(self):
+        add_thread(self.registry.database, "unapproved", "unapproved-role")
+        self.assertEqual(self.request(identity="unapproved", purpose="summary")[0], 400)
+        self.assertEqual(self.meter.calls, 0)
+
+    def test_summary_first_approved_child_requires_prior_identity_admission(self):
+        add_thread(self.registry.database, "worker-a", "implementation")
+        self.assertEqual(self.request(identity="worker-a", purpose="summary")[0], 400)
+        self.assertEqual(self.meter.calls, 0)
+        self.assertFalse(self.arm.slots)
+
+    def test_summary_first_root_requires_prior_identity_admission(self):
+        self.assertEqual(self.request(purpose="summary")[0], 400)
+        self.assertEqual(self.meter.calls, 0)
+
+    def test_summary_first_replacement_child_cannot_bypass_lifetime_slot(self):
+        add_thread(self.registry.database, "worker-a", "implementation")
+        add_thread(self.registry.database, "replacement", "implementation")
+        self.assertEqual(self.request(identity="worker-a")[0], 200)
+        self.assertEqual(self.request(identity="replacement", purpose="summary")[0], 400)
+        self.assertEqual(self.meter.calls, 1)
+
+    def test_summary_first_nested_child_cannot_bypass_depth(self):
+        add_thread(self.registry.database, "worker-a", "implementation")
+        add_thread(self.registry.database, "nested", "verification", parent="worker-a", depth=2)
+        self.assertEqual(self.request(identity="worker-a")[0], 200)
+        connection = http.client.HTTPConnection("127.0.0.1", self.witness.server_port, timeout=5)
+        connection.request("POST", "/v1/responses", body=json.dumps(body()), headers={"Authorization": "Bearer " + self.arm._alias, **headers("nested", parent="worker-a", purpose="summary")})
+        response = connection.getresponse(); self.assertEqual(response.status, 400); response.read(); connection.close()
+        self.assertEqual(self.meter.calls, 1)
+
+    def test_summary_for_already_admitted_child_keeps_its_slot_and_counts_charge(self):
+        add_thread(self.registry.database, "worker-a", "implementation")
+        self.assertEqual(self.request(identity="worker-a")[0], 200)
+        self.assertEqual(self.request(identity="worker-a", purpose="summary")[0], 200)
+        self.assertEqual(self.arm.slots, {"implementation": "worker-a"})
+        result = self.supervisor.close(timeout=2)
+        self.assertFalse(result["reviewRequired"])
+        self.assertEqual(result["providerRequests"], 2)
+        self.assertAlmostEqual(result["measuredUsd"], 0.02)
+
     def test_oversized_body_and_audit_failure_latch(self):
         self.assertEqual(self.request(extra={"Content-Length": str(MAX_BODY + 1)})[0], 400)
         self.assertEqual(self.meter.calls, 0)
@@ -437,6 +496,54 @@ class OwnedWitnessTests(unittest.TestCase):
 
 
 class RegistryAndStartupTests(unittest.TestCase):
+    def test_known_vector_generation_helper_has_a_fixed_lifetime_identity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            arm, meter = vector_generation_fixture(Path(directory))
+            try:
+                payload = {"model": MODEL, "reasoning": {"effort": "high"}, "input": []}
+                for _ in range(2):
+                    _, entry = arm.enter(payload, {"X-Session-Id": "ses-helper-a"}, lambda: False)
+                    self.assertEqual(entry["identityKind"], "helper")
+                    arm.finish(entry, {"object": "response", "status": "completed"}, False, False)
+                self.assertEqual(arm.slots, {})
+                self.assertEqual(arm.admitted_ids, {"ses-root"})
+                self.assertEqual(arm.helper_slots, {"synthetic-summary": "ses-helper-a"})
+                with self.assertRaisesRegex(PolicyError, "lifetime helper"):
+                    arm.enter(payload, {"X-Session-Id": "ses-helper-b"}, lambda: False)
+            finally:
+                meter.server_close()
+
+    def test_known_vector_generation_helper_cannot_acquire_tools(self):
+        with tempfile.TemporaryDirectory() as directory:
+            arm, meter = vector_generation_fixture(Path(directory))
+            try:
+                with self.assertRaisesRegex(PolicyError, "may not have tools"):
+                    arm.enter(body(), {"X-Session-Id": "ses-helper-a"}, lambda: False)
+                self.assertEqual(arm.helper_slots, {})
+            finally:
+                meter.server_close()
+
+    def test_vector_tool_using_internal_review_is_not_extra_helper_agent(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            database = home / "vector.db"
+            connection = sqlite3.connect(database)
+            connection.execute("CREATE TABLE session(id TEXT,parent_id TEXT,internal TEXT,agent TEXT,model TEXT,metadata TEXT)")
+            model = json.dumps({"id": MODEL, "providerID": "openai", "variant": "high"})
+            connection.execute("INSERT INTO session VALUES(?,?,?,?,?,?)", ("ses-root", None, None, "build", model, None))
+            connection.execute("INSERT INTO session VALUES(?,?,?,?,?,?)", ("ses-review", "ses-root", "review", "review", model, None))
+            connection.commit(); connection.close()
+            registry = NativeRegistry("vector", home, database, "ses-root", "openai", helper_names=("review",))
+            meter = FakeMeter()
+            try:
+                before = meter.control("/status")
+                token = meter.control("/control", {"actor": "foundry-vector", "calls": 300})["requestToken"]
+                arm = OwnedArm("vector", registry, ROLES, token, before, meter.control, Audit(home / "audit.jsonl"))
+                with self.assertRaises(PolicyError):
+                    arm.enter(body(), {"X-Session-Id": "ses-review", "x-parent-session-id": "ses-root"}, lambda: False)
+            finally:
+                meter.server_close()
+
     def test_free_vector_bootstrap_requires_unique_owned_native_root(self):
         with tempfile.TemporaryDirectory() as directory:
             home = Path(directory)

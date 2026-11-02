@@ -126,6 +126,7 @@ class OwnedArm:
         self.queue, self.forwarding, self.closing = deque(), False, False
         self.retired = False
         self.failure, self.audit_failed, self.slots, self.requests = None, False, {}, []
+        self.admitted_ids, self.helper_slots = set(), {}
         self.repairs = 0
         self.disarm_attempted, self.disarm_acknowledged = False, False
         self.record({"type": "arm_bound", "runtime": runtime, "actor": self.actor, "batchSha256": self.batch_digest, "model": MODEL, "reasoning": "high", "roles": sorted(roles), "studyCapUsd": 48, "actorCapUsd": 20, "softStopUsd": soft_usd, "maxCalls": max_calls, "maxSeconds": seconds, "inflightLimit": 1})
@@ -175,23 +176,36 @@ class OwnedArm:
                 require(state["actors"][self.actor]["measuredUsd"] - self.before["actors"][self.actor]["measuredUsd"] < self.soft_usd and len(self.requests) < self.max_calls and time.monotonic() < self.deadline, "arm stopping threshold")
                 native = self.registry.resolve(headers)
                 require(native["root"] == self.registry.root_id, "wrong arm root")
-                if native["helper"]:
-                    require(native["id"] == self.registry.root_id or native["parent"] == self.registry.root_id or native["parent"] in self.slots.values(), "helper outside owned team")
-                elif native["id"] == self.registry.root_id:
-                    require(native["role"] == "lead" and native["parent"] is None, "invalid lead")
+                identity_kind = native.get("identityKind")
+                require(identity_kind in ("autonomous", "helper"), "unknown native identity kind")
+                if identity_kind == "helper":
+                    producer = native.get("producer")
+                    require(producer in self.registry.helper_producers and native["helper"] and native["role"] == "helper", "unknown native helper identity")
+                    require(native["parent"] in self.admitted_ids and (native["parent"] == self.registry.root_id or native["parent"] in self.slots.values()), "helper outside admitted team")
+                    require(producer not in self.helper_slots or self.helper_slots[producer] == native["id"], "duplicate lifetime helper producer")
                 else:
-                    role = native["role"]
-                    require(native["parent"] == self.registry.root_id and native["depth"] == 1 and role in self.roles, "nested or unapproved child")
-                    require(role not in self.slots or self.slots[role] == native["id"], "duplicate lifetime slot")
+                    if native["id"] == self.registry.root_id:
+                        require(native["role"] == "lead" and native["parent"] is None, "invalid lead")
+                    else:
+                        role = native["role"]
+                        require(native["parent"] == self.registry.root_id and native["depth"] == 1 and role in self.roles, "nested or unapproved child")
+                        require(role not in self.slots or self.slots[role] == native["id"], "duplicate lifetime slot")
+                    require(not native["helper"] or native["id"] in self.admitted_ids, "helper purpose before autonomous identity admission")
                 normalized = profile_body(body, native["id"] != self.registry.root_id or native["helper"])
+                if identity_kind == "helper":
+                    require(not body.get("tools") and not any(isinstance(item, dict) and item.get("type") == "additional_tools" and item.get("tools") for item in body["input"]), "native helper may not have tools")
                 wire = json.dumps(normalized, ensure_ascii=False, separators=(",", ":")).encode()
                 require(len(wire) <= MAX_BODY, "normalized request oversized")
                 reserve = reservation_bound(normalized, wire)
                 require(state["measuredUsd"] + reserve <= 48 and state["actors"][self.actor]["measuredUsd"] + reserve <= 20, "single-call reservation headroom insufficient")
-                entry = {"ordinal": len(self.requests) + 1, "requestSha256": hashlib.sha256(wire).hexdigest(), "identitySha256": hashlib.sha256(native["id"].encode()).hexdigest(), "role": native["role"], "helper": native["helper"], "purpose": native["purpose"], "upstreamTerminal": False, "receiptRegistered": False}
+                entry = {"ordinal": len(self.requests) + 1, "requestSha256": hashlib.sha256(wire).hexdigest(), "identitySha256": hashlib.sha256(native["id"].encode()).hexdigest(), "identityKind": identity_kind, "role": native["role"], "helper": native["helper"], "purpose": native["purpose"], "upstreamTerminal": False, "receiptRegistered": False}
                 self.record({"type": "before_upstream", **entry, "requiredReservationUsd": reserve})
-                if not native["helper"] and native["id"] != self.registry.root_id:
-                    self.slots[native["role"]] = native["id"]
+                if identity_kind == "autonomous":
+                    self.admitted_ids.add(native["id"])
+                    if native["id"] != self.registry.root_id:
+                        self.slots[native["role"]] = native["id"]
+                else:
+                    self.helper_slots[native["producer"]] = native["id"]
                 self.requests.append(entry)
                 self.forwarding = True
                 return wire, entry

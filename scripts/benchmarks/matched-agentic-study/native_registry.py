@@ -20,11 +20,13 @@ def parsed(value):
 
 
 class NativeRegistry:
-    def __init__(self, runtime, home, database, root_id, provider, helper_names=()):
+    def __init__(self, runtime, home, database, root_id, provider, helper_names=(), helper_producers=None):
         require(runtime in ("codex", "vector"), "unknown registry runtime")
         self.runtime, self.home = runtime, Path(home).resolve()
         self.database, self.root_id, self.provider = Path(database).resolve(), root_id, provider
         self.helper_names = frozenset(helper_names)
+        self.helper_producers = dict(helper_producers or {})
+        require(len(self.helper_producers) <= 3 and all(isinstance(name, str) and name and agent in {"title", "summary", "compaction", "name"} for name, agent in self.helper_producers.items()), "unapproved native helper producer profile")
         require(self.database.is_relative_to(self.home), "registry database outside owned home")
 
     def connect(self):
@@ -64,7 +66,7 @@ class NativeRegistry:
             require(edge == 1 and row["thread_source"] == "subagent", "native child edge missing")
         purpose = metadata.get("request_kind")
         require(purpose in ("turn", *self.helper_names), "unknown native request purpose")
-        return {"id": identity, "root": self.root_id, "parent": parent, "depth": depth, "role": role, "helper": purpose != "turn", "purpose": purpose}
+        return {"id": identity, "root": self.root_id, "parent": parent, "depth": depth, "role": role, "identityKind": "autonomous", "helper": purpose != "turn", "purpose": purpose}
 
     def vector(self, connection, headers):
         identity = headers.get("x-session-id")
@@ -77,7 +79,7 @@ class NativeRegistry:
             require(row["parent_id"] is None and not helper, "native root mismatch")
             role, parent, depth = "lead", None, 0
         elif helper:
-            require(row["internal"] in self.helper_names, "unknown native helper")
+            require(self.helper_producers.get(row["internal"]) == row["agent"] and row["agent"] is not None and not metadata.get("subagent"), "unknown native helper producer")
             role, parent, depth = "helper", row["parent_id"], 1
         else:
             record = metadata.get("subagent", {})
@@ -86,9 +88,9 @@ class NativeRegistry:
             selected = record.get("model", {})
             require(selected.get("providerID") == self.provider and selected.get("modelID") == MODEL and selected.get("variant") == "high", "native child model mismatch")
             model = {"id": selected["modelID"], "providerID": selected["providerID"], "variant": selected["variant"]}
-        require(parent in (None, self.root_id) and (not headers.get("x-parent-session-id") or headers["x-parent-session-id"] == parent), "nested or cross-arm session")
+        require((parent is not None if helper else parent in (None, self.root_id)) and (not headers.get("x-parent-session-id") or headers["x-parent-session-id"] == parent), "nested or cross-arm session")
         require(model.get("id") == MODEL and model.get("providerID") == self.provider and model.get("variant") == "high", "native model/provider mismatch")
-        return {"id": identity, "root": self.root_id, "parent": parent, "depth": depth, "role": role, "helper": helper, "purpose": row["internal"] if helper else "root_or_helper" if role == "lead" else "turn"}
+        return {"id": identity, "root": self.root_id, "parent": parent, "depth": depth, "role": role, "identityKind": "helper" if helper else "autonomous", "producer": row["internal"] if helper else None, "helper": helper, "purpose": row["internal"] if helper else "root_or_helper" if role == "lead" else "turn"}
 
     def collect(self, destination):
         """Retain raw descendant transcripts privately, including refused children."""
