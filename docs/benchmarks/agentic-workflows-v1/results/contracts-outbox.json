@@ -1,0 +1,607 @@
+{
+  "schemaVersion": 1,
+  "status": "complete_pair_original_flags_and_manual_dispositions_preserved",
+  "study": "agentic-workflows-v1",
+  "task": "delivery-outbox",
+  "stage": "contracts_candidate_task_3",
+  "vectorCandidateRevision": "a35c03d6a9bb16f16ec0187ad69c6c6420d10f19",
+  "codexExecution": "Separately pinned CLI; completed only the previously missing arm under the immutable pre-Vector plan and unchanged execution/task pins. This was not a rerun of an earlier original Codex arm.",
+  "taskInstrument": {
+    "runtimeTaskSha256": "a20b22b9e3f8c7d4768b5db5d19fb09e8f3b33efff64ccf49b7b895ee74d2ce7",
+    "sourceOnlyFreezeSha256": "1cf4a6d349f4b458a249266b82cb150139779ec7e45aa629bca275625562be17",
+    "instrumentGitRevision": "770dbe484ab2479f8ff41edc9b22a9f98c2a911f",
+    "agentVisibleTaskSha256": "34fb7d00f6cbdf0d42bb3ed489b78f7091e5378f833580dd20a67bf051161509",
+    "browserAccessMode": "shared-client"
+  },
+  "costBasis": "Usage-derived actual funded-meter receipts; not invoice-reconciled",
+  "allChargesRetained": true,
+  "historicalSpendingReset": false,
+  "arms": {
+    "vector": {
+      "providerRequests": 36,
+      "measuredUsd": 0.5419832,
+      "agentWallMs": 427813,
+      "settlementComplete": true,
+      "attempts": 1,
+      "paidRepairs": 0,
+      "originalCoordinatorStopReason": "coordinator_review_required",
+      "originalAutomaticBrowserAuditStatus": "review_required",
+      "originalAutomaticFlagPreserved": true,
+      "functionalEvaluation": {
+        "verdict": "passed",
+        "requiredChecksPassed": 26,
+        "requiredChecksTotal": 26,
+        "apiPassed": 18,
+        "apiRequired": 18,
+        "browserPassed": 8,
+        "browserRequired": 8,
+        "allRecordedChecksPassed": true,
+        "sourceUnchanged": true,
+        "instrumentUnchanged": true,
+        "sourceIntegrityStatus": "unchanged",
+        "instrumentError": null,
+        "exitCode": 0
+      },
+      "protectedInputViolations": 0,
+      "workerCalls": 0,
+      "originalAppSourceFiles": 16,
+      "separateSupplementalAuthoredFiles": 1
+    },
+    "codex": {
+      "providerRequests": 23,
+      "measuredUsd": 0.5126617,
+      "agentWallMs": 427360,
+      "settlementComplete": true,
+      "attempts": 1,
+      "paidRepairs": 0,
+      "originalCoordinatorStopReason": "coordinator_review_required",
+      "originalAutomaticBrowserAuditStatus": "review_required",
+      "originalAutomaticFlagPreserved": true,
+      "functionalEvaluation": {
+        "verdict": "passed",
+        "requiredChecksPassed": 26,
+        "requiredChecksTotal": 26,
+        "apiPassed": 18,
+        "apiRequired": 18,
+        "browserPassed": 8,
+        "browserRequired": 8,
+        "allRecordedChecksPassed": true,
+        "sourceUnchanged": true,
+        "instrumentUnchanged": true,
+        "sourceIntegrityStatus": "unchanged",
+        "instrumentError": null,
+        "exitCode": 0
+      },
+      "protectedInputViolations": 0,
+      "workerCalls": 0,
+      "originalAppSourceFiles": 17,
+      "separateSupplementalAuthoredFiles": 3
+    }
+  },
+  "providerUsage": {
+    "kind": "Sanitized numeric receipt projections for both settled original arms",
+    "reasoningTokensAreSubsetOfOutput": true,
+    "cacheReadsWritesAreSubsetOfInput": true,
+    "fundedRatesUsdPerMillion": {
+      "uncachedInput": 2,
+      "cacheRead": 0.1,
+      "cacheWrite30m": 2.5,
+      "cacheWrite12h": 5,
+      "output": 10
+    },
+    "note": "Recorded study rates, not a public pricing claim. Reasoning partitions output; cache reads and writes partition input. Generic writes without TTL detail use the funded meter 30-minute default.",
+    "cases": {
+      "vector": {
+        "allRequestedModel": "gpt-6.1-sol",
+        "allRequestedHigh": true,
+        "allHttp200": true,
+        "tokens": {
+          "inputTokens": 1398460,
+          "cachedInputTokens": 1341547,
+          "cacheWriteTokens": 56805,
+          "cacheWrite30mTokens": 56805,
+          "cacheWrite12hTokens": 0,
+          "uncachedNonWriteInputTokens": 108,
+          "outputTokens": 26560,
+          "reasoningTokens": 6576,
+          "totalTokens": 1425020
+        },
+        "cacheWriteTtlDetailedReceipts": 36,
+        "cacheWriteTtlDefaultedReceipts": 0,
+        "recomputedFundedCostUsd": 0.5419832,
+        "usageCostReconciled": true
+      },
+      "codex": {
+        "allRequestedModel": "gpt-6.1-sol",
+        "allRequestedHigh": true,
+        "allHttp200": true,
+        "tokens": {
+          "inputTokens": 834634,
+          "cachedInputTokens": 778762,
+          "cacheWriteTokens": 55803,
+          "cacheWrite30mTokens": 55803,
+          "cacheWrite12hTokens": 0,
+          "uncachedNonWriteInputTokens": 69,
+          "outputTokens": 29514,
+          "reasoningTokens": 6603,
+          "totalTokens": 864148
+        },
+        "cacheWriteTtlDetailedReceipts": 0,
+        "cacheWriteTtlDefaultedReceipts": 23,
+        "recomputedFundedCostUsd": 0.5126617,
+        "usageCostReconciled": true
+      }
+    }
+  },
+  "supplementalAuthoredCode": [
+    {
+      "publishedPath": "vector-first/supplemental-authored/support-data/browser-check.mjs",
+      "logicalOrigin": "support-data/browser-check.mjs",
+      "bytes": 7826,
+      "sha256": "caeaf11ca69caaf8d4538c1b8ff16a07b352874fe82759d678f711b97fedcd0f",
+      "originalArchiveMembership": false,
+      "declaredMutableDataDirectoryOutsideApp": true,
+      "provenance": {
+        "manualAuditDisposition": "bounded_manual_review_no_clear_bypass_observed",
+        "currentPosthocFile": true,
+        "loggedAddFileCreationRecords": 1,
+        "currentHashMatchesLoggedCreationContent": true,
+        "subsequentLoggedScriptPatches": 0,
+        "executionBytesAuthenticated": false,
+        "historicalExecutionOrPassingChecksEstablishedBySourcePublication": false
+      }
+    },
+    {
+      "publishedPath": "codex-first/supplemental-authored/support-data/browser-races.mjs",
+      "logicalOrigin": "support-data/browser-races.mjs",
+      "bytes": 4266,
+      "sha256": "6b76c2eff5ea8e61c492e4ab81217498e87124a112d551fdd52422f53c371774",
+      "originalArchiveMembership": false,
+      "declaredMutableDataDirectoryOutsideApp": true,
+      "provenance": {
+        "manualAuditDisposition": "bounded_manual_review_no_clear_bypass_observed",
+        "currentPosthocFile": true,
+        "loggedCreationCandidates": 1,
+        "currentHashMatchesLoggedCreationContent": null,
+        "creationContentEquivalenceEstablished": false,
+        "creationExtractionLimit": "Simple here-string extraction did not reproduce current bytes; nested shell escaping was not decoded. This does not establish an unlogged mutation.",
+        "executionBytesAuthenticated": false,
+        "historicalExecutionOrPassingChecksEstablishedBySourcePublication": false
+      }
+    },
+    {
+      "publishedPath": "codex-first/supplemental-authored/support-data/browser-restart.mjs",
+      "logicalOrigin": "support-data/browser-restart.mjs",
+      "bytes": 2076,
+      "sha256": "0febeda18d31c7d21a5316e2cd2b4a4ab0bdd079db4efe473bd96c529098698d",
+      "originalArchiveMembership": false,
+      "declaredMutableDataDirectoryOutsideApp": true,
+      "provenance": {
+        "manualAuditDisposition": "bounded_manual_review_no_clear_bypass_observed",
+        "currentPosthocFile": true,
+        "loggedCreationCandidates": 1,
+        "currentHashMatchesLoggedCreationContent": null,
+        "creationContentEquivalenceEstablished": false,
+        "creationExtractionLimit": "Simple here-string extraction did not reproduce current bytes; nested shell escaping was not decoded. This does not establish an unlogged mutation.",
+        "executionBytesAuthenticated": false,
+        "historicalExecutionOrPassingChecksEstablishedBySourcePublication": false
+      }
+    },
+    {
+      "publishedPath": "codex-first/supplemental-authored/support-data/browser-verify.mjs",
+      "logicalOrigin": "support-data/browser-verify.mjs",
+      "bytes": 3369,
+      "sha256": "190e6b5562a1672089f0515ab66003ee7b2e85544984ba3bc322b38d33f700f9",
+      "originalArchiveMembership": false,
+      "declaredMutableDataDirectoryOutsideApp": true,
+      "provenance": {
+        "manualAuditDisposition": "bounded_manual_review_no_clear_bypass_observed",
+        "currentPosthocFile": true,
+        "loggedCreationCandidates": 1,
+        "currentHashMatchesLoggedCreationContent": null,
+        "creationContentEquivalenceEstablished": false,
+        "creationExtractionLimit": "Simple here-string extraction did not reproduce current bytes; nested shell escaping was not decoded. This does not establish an unlogged mutation.",
+        "executionBytesAuthenticated": false,
+        "historicalExecutionOrPassingChecksEstablishedBySourcePublication": false
+      }
+    }
+  ],
+  "blindedCodeReview": {
+    "status": "both_reviews_fixed",
+    "mapping": {
+      "maple": "Vector",
+      "birch": "Codex"
+    },
+    "method": "Blinded static original source comparison against the neutral seed, with separate current posthoc support source and two independent 390px queued/delivered end-state images per runtime",
+    "independentExecution": false,
+    "maximumScore": 48,
+    "scores": {
+      "vector": 47,
+      "codex": 46
+    },
+    "dimensions": [
+      {
+        "name": "Contract and data integrity",
+        "maximum": 12,
+        "vector": 12,
+        "codex": 12
+      },
+      {
+        "name": "Durable state and recovery",
+        "maximum": 10,
+        "vector": 10,
+        "codex": 9
+      },
+      {
+        "name": "Structure and maintainability",
+        "maximum": 8,
+        "vector": 8,
+        "codex": 8
+      },
+      {
+        "name": "Errors and resource bounds",
+        "maximum": 6,
+        "vector": 5,
+        "codex": 6
+      },
+      {
+        "name": "Added verification",
+        "maximum": 6,
+        "vector": 6,
+        "codex": 6
+      },
+      {
+        "name": "User interface and accessibility",
+        "maximum": 6,
+        "vector": 6,
+        "codex": 5
+      }
+    ],
+    "criticalFindingsEstablished": {
+      "vector": 0,
+      "codex": 0
+    },
+    "materialFindings": [
+      {
+        "runtime": "Vector",
+        "classification": "Static resource risk; no observed overload or data loss",
+        "description": "A drain snapshots all queued IDs and launches Promise.all over the backlog. Coalescing duplicate attempts does not cap distinct-message concurrency.",
+        "impact": "Large backlogs can amplify HTTP, promise, memory and socket pressure; no overload was executed or observed."
+      },
+      {
+        "runtime": "Codex",
+        "classification": "Static legacy compatibility gap, conditional on a legitimate pre-upgrade failed row; not independently reproduced",
+        "description": "Legacy failed direct-send rows are not migrated into retryable and are omitted from retry/drain paths.",
+        "impact": "Retained failed/unknown deliveries cannot use the intended retry flow. Data and keys remain; cancellation can still ask the provider for its authoritative outcome, so irreversible receipt or data loss was not established."
+      },
+      {
+        "runtime": "Codex",
+        "classification": "Static editor state-transition gap; not independently exercised",
+        "description": "Queue or Cancel leaves an open editor attached to the now-immutable message, so later Save draft requests target that message and receive 409.",
+        "impact": "Reloading or editing another available draft can recover the page. There is no direct exit-edit/new-draft control in that state; saved message data is not lost."
+      }
+    ],
+    "independentImageScopePerRuntime": [
+      {
+        "viewportWidth": 390,
+        "state": "queued"
+      },
+      {
+        "viewportWidth": 390,
+        "state": "delivered"
+      }
+    ],
+    "independentDesktopImageProvided": false,
+    "manualAuthoredDesktopPngSubstitutedForIndependentImage": false,
+    "limits": {
+      "vector": [
+        "Desktop rendering and complete below-fold mobile details/composer reachability",
+        "Keyboard navigation, focus continuity after dynamic list replacement and screen-reader behavior",
+        "Interactive invalid-save, retry, successful cancellation and too-late cancellation UI states beyond source and authored assertion design",
+        "Actual process crashes, SQLite recovery, transaction rollback, HTTP races and fixture effects",
+        "Large-backlog resource behavior and malformed provider responses"
+      ],
+      "codex": [
+        "Desktop rendering and complete below-fold mobile metadata/composer reachability",
+        "Keyboard/screen-reader operation and focus after dynamic message-list replacement",
+        "Interactive invalid save, retry, cancellation and open-editor queue/cancel states beyond static source and authored assertions",
+        "Actual legacy database upgrade behavior, SQLite faults, HTTP races, hard stops, recovery, provider effects and timeout behavior",
+        "Large-backlog behavior and exceptional cleanup paths"
+      ]
+    },
+    "supplementalProvenanceLimits": {
+      "vector": "Current posthoc bytes from the declared mutable data folder. The hash authenticates this review copy, not the bytes of any earlier execution. No passing-check or report claim is credited as independent execution.",
+      "codex": "All three supplied scripts are current posthoc bytes from the declared mutable data folder, separate from immutable application source. Their matching hashes authenticate these copies, not historical execution. Their assertions are credited as verification design, not independently executed checks."
+    },
+    "assurance": "Neither reviewer independently executed apps, tests, builds, browser automation or network requests. Static source and two narrow end states do not establish production reliability, security, usability, load behavior or exact quality equivalence."
+  },
+  "continuationLineage": {
+    "originalVectorRunRetained": true,
+    "originalVectorModelChargesRetained": true,
+    "manualReviewsSeparateFromOriginalRuns": true,
+    "originalRunsRewrittenOrRerun": false,
+    "codexContinuationIsRerunOfPriorOriginalCodexArm": false,
+    "continuation": "Only the previously missing Codex arm, under the immutable pre-Vector plan and unchanged execution/task pins",
+    "appSourceAndInstrumentUnchangedInBothIndependentEvaluations": true,
+    "paidRepairs": 0,
+    "refundsOrExcludedCharges": false
+  },
+  "qualityPriority": {
+    "rule": "No lower quality on any task; a stronger task cannot offset a weaker task. Cost is secondary.",
+    "taskComparisonAvailable": true,
+    "perTaskRecordedQualityCriterionMet": true,
+    "scope": "Passing functional gates, no established critical finding, and no lower fixed total static score in this measured task; not a general quality guarantee.",
+    "overallStageDecisionReference": "contracts-stage-summary.md"
+  },
+  "accountingCheckpoint": {
+    "scope": "Historical checkpoint at settlement of the complete outbox pair",
+    "beforePair": {
+      "providerRequests": 830,
+      "measuredUsd": 19.2491842
+    },
+    "afterVectorBeforeCodex": {
+      "providerRequests": 866,
+      "measuredUsd": 19.7911674
+    },
+    "pair": {
+      "providerRequests": 59,
+      "measuredUsd": 1.0546449
+    },
+    "studyThroughPairSettlement": {
+      "providerRequests": 889,
+      "measuredUsd": 20.3038291
+    },
+    "isCurrentBill": false,
+    "futureActivityExcluded": true
+  },
+  "publication": {
+    "status": "complete_pair",
+    "sourceIndex": "../submissions/contracts-outbox/README.md",
+    "sourceManifest": "../submissions/contracts-outbox/manifest.json",
+    "sourceVerifier": "../submissions/contracts-outbox/verify.py",
+    "originalAppArchiveFiles": {
+      "vector": 16,
+      "codex": 17
+    },
+    "excludedOriginalArchiveFiles": 0,
+    "separateSupplementalAuthoredFiles": {
+      "vector": 1,
+      "codex": 3
+    },
+    "originalSourceBytesPreserved": true,
+    "gitBlobVerification": "Available after repository-owner staging; not asserted complete in preparation."
+  },
+  "sanitization": {
+    "rawCredentialsPrivatePathsProviderIdentifiersCodexPromptsAndRawExecutionLogsExcluded": true,
+    "onlySettledOriginalArmSourcesInspected": true
+  },
+  "originalAutomaticBrowserAudits": {
+    "vector": {
+      "mode": "shared-client",
+      "status": "review_required",
+      "requiresManualReview": true,
+      "counts": {
+        "lines": 136,
+        "toolExecutions": 25,
+        "commandsInspected": 19,
+        "scriptsInspected": 2,
+        "directBrowserReferences": 0,
+        "commonClientInvocations": 4,
+        "unknownObservations": 1,
+        "informationalUnknownObservations": 0,
+        "reviewRequiredUnknownObservations": 1,
+        "terminalObservationActions": 3,
+        "terminalControlActions": 0,
+        "terminalInteractiveInputs": 0
+      },
+      "coverage": {
+        "observedToolExecutions": 25,
+        "uniqueCommandsInspected": 19,
+        "unknownObservations": 1,
+        "informationalOnlyUnknownObservations": 0,
+        "unresolvedBrowserOrTelemetryObservations": 1,
+        "adherenceProven": false
+      },
+      "limits": {
+        "logBytes": 33554432,
+        "lines": 50000,
+        "lineBytes": 1048576,
+        "commands": 1000,
+        "commandChars": 65536,
+        "scripts": 32,
+        "scriptBytes": 262144
+      },
+      "hardFenceOrSandboxClaim": false,
+      "transitiveImportsInspected": false,
+      "rawExecutionDetailsPublished": false,
+      "scriptBytesArePosthocSnapshots": true,
+      "executionSuccessInferred": false
+    },
+    "codex": {
+      "mode": "shared-client",
+      "status": "review_required",
+      "requiresManualReview": true,
+      "counts": {
+        "lines": 92,
+        "toolExecutions": 27,
+        "commandsInspected": 25,
+        "scriptsInspected": 1,
+        "directBrowserReferences": 0,
+        "commonClientInvocations": 0,
+        "unknownObservations": 10,
+        "informationalUnknownObservations": 7,
+        "reviewRequiredUnknownObservations": 3,
+        "terminalObservationActions": 0,
+        "terminalControlActions": 0,
+        "terminalInteractiveInputs": 0
+      },
+      "coverage": {
+        "observedToolExecutions": 27,
+        "uniqueCommandsInspected": 25,
+        "unknownObservations": 10,
+        "informationalOnlyUnknownObservations": 7,
+        "unresolvedBrowserOrTelemetryObservations": 3,
+        "adherenceProven": false
+      },
+      "limits": {
+        "logBytes": 33554432,
+        "lines": 50000,
+        "lineBytes": 1048576,
+        "commands": 1000,
+        "commandChars": 65536,
+        "scripts": 32,
+        "scriptBytes": 262144
+      },
+      "hardFenceOrSandboxClaim": false,
+      "transitiveImportsInspected": false,
+      "rawExecutionDetailsPublished": false,
+      "scriptBytesArePosthocSnapshots": true,
+      "executionSuccessInferred": false
+    }
+  },
+  "separateManualBrowserReviews": {
+    "vector": {
+      "disposition": "bounded_manual_review_no_clear_bypass_observed",
+      "automaticGatePreserved": {
+        "auditStatus": "review_required",
+        "requiresManualReview": true,
+        "runJsonModified": false,
+        "stopReason": "coordinator_review_required"
+      },
+      "reason": "The logged script invocation uses an environment-variable path outside the app source tree. The current authored script exists under the designated mutable data directory. Its browser operations call the supplied common client through one subprocess site; no clear direct browser automation bypass was observed in the bounded static and transcript review. This supplements the unresolved automatic script-path observation and does not rewrite the original gate.",
+      "limits": [
+        "This is bounded manual static and posthoc log/artifact review, not a hard operating-system sandbox or proof of complete adherence.",
+        "Current script bytes match the logged creation patch, but bytes read by each historical process were not authenticated at execution time.",
+        "Logged exit codes and authored browser records corroborate the reported sequence; they are not an independent guarantee of successful browser execution or application correctness.",
+        "No browser/app/provider process was started, no network request was made, and no paid model call was made during this review.",
+        "Task evaluators, private gold/qualification material, Codex quality, pending candidates, and new candidate features were not inspected.",
+        "Original coordinator_review_required status remains unchanged; this supplemental file does not infer a pass or alter settlement/accounting."
+      ],
+      "staticScriptReview": {
+        "arbitraryPageJavascriptObserved": false,
+        "browserActions": [
+          "open",
+          "observe",
+          "click",
+          "type",
+          "viewport",
+          "screenshot",
+          "console"
+        ],
+        "builtinImports": [
+          "node:child_process",
+          "node:fs",
+          "node:path",
+          "node:assert/strict"
+        ],
+        "directBrowserLibrariesObserved": false,
+        "directBrowserProtocolReferencesObserved": false,
+        "directHttpUsage": "Application API plus synthetic delivery-fixture control API whose origin comes from application health; these are separate from browser automation. Actual network destinations were not independently traced.",
+        "externalOrDynamicImportsObserved": false,
+        "subprocessCallSites": 1,
+        "subprocessTarget": "supplied NODE_EXE with supplied BROWSER_DRIVER_CLIENT as script argument"
+      },
+      "numericTranscriptCoverage": {
+        "executionToolRecordsReviewed": 28,
+        "firstTopLevelToolResultsInspected": 25,
+        "firstTopLevelToolTypes": {
+          "apply_patch": 3,
+          "bash": 7,
+          "read": 13,
+          "terminal": 1,
+          "todowrite": 1
+        },
+        "nonemptyTopLevelCommandExecutionsReviewed": 25,
+        "totalToolResultRecords": 57,
+        "uniqueNonemptyTopLevelCommands": 19,
+        "browserClientEnvironmentAssignmentsObserved": 0,
+        "commonClientContainingCommandExecutionsExcludingEnvironmentDisplay": 7
+      },
+      "authoredMutableBrowserArtifact": {
+        "records": 54,
+        "recordsOkTrue": 54,
+        "snapshotRecords": 54,
+        "actionCounts": {
+          "click": 22,
+          "console": 1,
+          "observe": 20,
+          "open": 2,
+          "screenshot": 2,
+          "type": 5,
+          "viewport": 2
+        },
+        "checkSummaryCount": 5,
+        "authoredMutableArtifactNotIndependentExecutionAttestation": true,
+        "independentDriverActionLogAvailable": false
+      },
+      "manualDispositionDoesNotRewriteOriginalFlag": true,
+      "hardFenceOrCompleteAdherenceEstablished": false
+    },
+    "codex": {
+      "disposition": "bounded_manual_review_no_clear_bypass_observed",
+      "automaticGatePreserved": {
+        "auditStatus": "review_required",
+        "requiresManualReview": true,
+        "runJsonModified": false,
+        "stopReason": "coordinator_review_required"
+      },
+      "reason": "The automatic auditor did not resolve three environment-relative script paths in the declared mutable data directory. Current authored scripts use the supplied common client for browser operations. The bounded transcript/source review found no clear direct browser automation bypass. Original automatic results and all charges remain retained.",
+      "limits": [
+        "Static current script bytes and retained command text are not authenticated historical execution bytes.",
+        "No independent driver action log was available; authored records do not prove execution success.",
+        "Shell parser ambiguities remain in the original audit; this separate manual classification is bounded, not an OS sandbox or universal adherence claim.",
+        "Direct fetches in the inspected scripts target the application API and the synthetic provider control origin obtained from application health; actual network destinations were not independently traced.",
+        "No application, browser, provider, Bun, or model process was started and no network request was made for this review.",
+        "Simple here-string extraction did not reproduce current bytes; nested shell escaping was not decoded. This is not evidence that an unlogged mutation occurred, and no creation-to-execution byte equivalence is claimed."
+      ],
+      "numericTranscriptCoverage": {
+        "completedCommandExecutions": 27,
+        "directBrowserLibraryOrProcessReferenceObserved": false,
+        "observedCommonClientCommandsAndScriptCallsites": true
+      },
+      "scripts": [
+        {
+          "logicalOrigin": "support-data/browser-races.mjs",
+          "bytes": 4266,
+          "currentSha256": "6b76c2eff5ea8e61c492e4ab81217498e87124a112d551fdd52422f53c371774",
+          "currentPosthocFile": true,
+          "executedBytesAuthenticated": false,
+          "originalAppSourceManifestCoveredFile": false,
+          "loggedCreationCandidateCount": 1
+        },
+        {
+          "logicalOrigin": "support-data/browser-restart.mjs",
+          "bytes": 2076,
+          "currentSha256": "0febeda18d31c7d21a5316e2cd2b4a4ab0bdd079db4efe473bd96c529098698d",
+          "currentPosthocFile": true,
+          "executedBytesAuthenticated": false,
+          "originalAppSourceManifestCoveredFile": false,
+          "loggedCreationCandidateCount": 1
+        },
+        {
+          "logicalOrigin": "support-data/browser-verify.mjs",
+          "bytes": 3369,
+          "currentSha256": "190e6b5562a1672089f0515ab66003ee7b2e85544984ba3bc322b38d33f700f9",
+          "currentPosthocFile": true,
+          "executedBytesAuthenticated": false,
+          "originalAppSourceManifestCoveredFile": false,
+          "loggedCreationCandidateCount": 1
+        }
+      ],
+      "manualDispositionDoesNotRewriteOriginalFlag": true,
+      "hardFenceOrCompleteAdherenceEstablished": false
+    }
+  },
+  "comparison": {
+    "denominator": "Codex complete original episode; both settled without paid repair",
+    "vectorAdditionalCostUsd": 0.0293215,
+    "vectorAdditionalCostPercent": 5.71946373,
+    "vectorAdditionalAgentWallMs": 453,
+    "vectorAdditionalAgentWallPercent": 0.10599963,
+    "allRequiredIndependentChecksPass": true,
+    "vectorRecordedTaskScoreNoLower": true,
+    "pairTwentyPercentCostThresholdMet": false,
+    "conclusion": "Both functional gates pass 26/26; fixed static scores are Vector 47 and Codex 46. Vector costs 5.71946373% more. Original automatic flags and separate bounded manual dispositions remain unchanged."
+  },
+  "stageSummary": "contracts-stage-summary.md"
+}
