@@ -19,13 +19,14 @@ class Meter:
     def __init__(self):
         self.calls, self.receipts, self.controls = 0, [], []
         self.spent = {"foundry-vector": 10.0, "foundry-codex": 8.0}
-        self.token, self.actor, self.remaining = None, None, 0
+        self.token, self.actor, self.label, self.remaining = None, None, None, 0
         self.fail_disarm = False
 
     def __call__(self, route, body=None):
         self.controls.append((route, copy.deepcopy(body)))
         if route == "/control":
             self.actor, self.remaining = body["actor"], body["calls"]
+            self.label = body["label"]
             self.token = "synthetic-in-memory-token-" + str(len(self.controls))
             return {"requestToken": self.token}
         if route == "/disarm":
@@ -44,6 +45,7 @@ class Meter:
         self.remaining -= 1
         self.spent[self.actor] += 0.01
         self.receipts.append({"actor": self.actor, "seq": runner.HISTORICAL_REQUESTS + self.calls,
+                              "label": self.label,
                               "batchSha256": digest(self.token), "requestSha256": hashlib.sha256(wire).hexdigest(),
                               "measuredUsd": 0.01})
 
@@ -201,6 +203,7 @@ class PairedRunnerTests(unittest.TestCase):
     def test_audit_failure_forwards_zero_and_requires_review(self):
         result = self.coordinate(Adapter("vector", self.meter, audit_failure=True))
         self.assertEqual(self.meter.calls, 0)
+        self.assertEqual(result["autonomousActorsAdmitted"], 0)
         self.assertTrue(result["reviewRequired"])
         self.assertNotEqual(result["stopReason"], "passed")
         self.assertEqual(result["closure"]["controllerUsageThroughClosure"]["providerRequests"], 0)
