@@ -99,6 +99,21 @@ def reservation_bound(body, wire):
     return (inputs * 5 + body["max_output_tokens"] * 15) / 1000000
 
 
+def terminal_problem(response, event=None, event_label=None):
+    if not isinstance(response, dict) or response.get("object") != "response":
+        return "upstream_terminal_schema_unknown"
+    status = response.get("status")
+    if event is not None and (event_label not in (None, event) or {"response.completed": "completed", "response.done": "completed", "response.failed": "failed", "response.incomplete": "incomplete"}.get(event) != status):
+        return "upstream_terminal_event_status_mismatch"
+    if status == "failed":
+        return "upstream_response_failed"
+    if status == "incomplete":
+        return "upstream_response_incomplete"
+    if status != "completed" or response.get("error") is not None:
+        return "upstream_terminal_not_completed"
+    return None
+
+
 class OwnedArm:
     def __init__(self, runtime, registry, roles, token, before, controller, audit, max_calls=300, seconds=7200, soft_usd=3):
         require(runtime in ACTORS and registry.runtime == runtime and len(roles) == 3 and len(set(roles)) == 3 and all(isinstance(value, str) and value for value in roles), "invalid fixed team")
@@ -192,14 +207,17 @@ class OwnedArm:
                 self.queue.remove(ticket)
                 self.condition.notify_all()
 
-    def finish(self, entry, terminal, disconnected, transport_failed):
+    def finish(self, entry, terminal, disconnected, transport_failed, issue=None, event=None):
         with self.condition:
-            entry.update(upstreamTerminal=terminal is not None, clientDisconnected=disconnected, transportFailed=transport_failed)
+            outcome = issue or terminal_problem(terminal, event)
+            entry.update(upstreamTerminal=terminal is not None, upstreamOutcome=outcome or "completed", clientDisconnected=disconnected, transportFailed=transport_failed)
             try:
                 usage = terminal.get("usage") if terminal and isinstance(terminal.get("usage"), dict) else {}
-                self.record({"type": "after_upstream", "ordinal": entry["ordinal"], "requestSha256": entry["requestSha256"], "terminalObserved": terminal is not None, "clientDisconnected": disconnected, "transportFailed": transport_failed, "usage": {key: usage[key] for key in ("input_tokens", "output_tokens", "total_tokens") if known(usage.get(key))}})
+                self.record({"type": "after_upstream", "ordinal": entry["ordinal"], "requestSha256": entry["requestSha256"], "terminalObserved": terminal is not None, "outcome": outcome or "completed", "terminalEvent": event, "clientDisconnected": disconnected, "transportFailed": transport_failed, "usage": {key: usage[key] for key in ("input_tokens", "output_tokens", "total_tokens") if known(usage.get(key))}})
                 if terminal is None or transport_failed:
                     self.latch("upstream_or_terminal_unknown")
+                elif outcome:
+                    self.latch(outcome)
                 if disconnected:
                     self.latch("forwarded_client_cancelled")
             finally:
@@ -292,6 +310,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(400, {"error": "owned arm stopped for review"})
         connection = http.client.HTTPConnection(*self.server.upstream, timeout=650)
         sent, disconnected, transport_failed, terminal, buffer = False, False, False, None, b""
+        terminal_event, event_label, issue, terminal_count = None, None, None, 0
         try:
             connection.request("POST", "/v1/responses", body=wire, headers={**{key: value for key, value in self.headers.items() if key.lower() not in HOP | {"content-type"}}, "Authorization": "Bearer " + arm._funded_token, "Content-Type": "application/json"})
             response = connection.getresponse()
@@ -311,11 +330,25 @@ class Handler(BaseHTTPRequestHandler):
                 if "text/event-stream" in content_type:
                     while b"\n" in buffer:
                         line, buffer = buffer.split(b"\n", 1)
+                        line = line.rstrip(b"\r")
+                        if not line:
+                            event_label = None
+                        if line.startswith(b"event:"):
+                            event_label = line[6:].strip().decode("utf-8", errors="replace")
                         if line.startswith(b"data:"):
                             try:
                                 event = json.loads(line[5:])
-                                if event.get("type") in ("response.completed", "response.incomplete", "response.failed") and isinstance(event.get("response"), dict):
-                                    terminal = event["response"]
+                                kind = event.get("type") if isinstance(event, dict) else None
+                                kinds = ("response.completed", "response.done", "response.incomplete", "response.failed")
+                                if kind in kinds:
+                                    terminal_count += 1
+                                    terminal_event = kind
+                                    terminal = event.get("response") if isinstance(event.get("response"), dict) else None
+                                    issue = issue or terminal_problem(terminal, kind, event_label)
+                                    if terminal_count != 1:
+                                        issue = issue or "multiple_upstream_terminals"
+                                elif event_label in kinds or kind == "error":
+                                    issue = issue or "upstream_terminal_event_status_mismatch"
                             except ValueError:
                                 pass
                 if not disconnected:
@@ -339,7 +372,7 @@ class Handler(BaseHTTPRequestHandler):
         finally:
             connection.close()
             try:
-                arm.finish(entry, terminal, disconnected, transport_failed)
+                arm.finish(entry, terminal, disconnected, transport_failed, issue, terminal_event)
             except PolicyError:
                 pass
             self.close_connection = True

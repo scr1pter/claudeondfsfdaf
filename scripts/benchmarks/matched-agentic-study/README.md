@@ -132,6 +132,12 @@ Requests are never retried by the witness. A cancelled queued request is not
 forwarded, while a cancellation after forwarding drains the existing upstream
 request and retains its receipt. A missing terminal or uncertain transport
 requires review even when later ledger charges are known.
+Only a completed raw response, or one matching SSE completed/done event and completed
+response status, clears the terminal gate. Failed and incomplete responses,
+event/status contradictions, malformed or repeated terminals, and upstream
+error events require review. Valid usage and reconciled charges do not establish
+completion. A later completed event cannot clear an earlier failure; the stream
+is still drained and every charge retained.
 
 Scoped closure disarms only the captured owned token. An uncertain disarm is
 not automatically repeated. Unknown closure keeps the token in memory and

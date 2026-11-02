@@ -62,6 +62,8 @@ class FakeMeter(ThreadingHTTPServer):
         self.token, self.actor, self.open, self.left = "fake-funded-memory-only-token", None, False, 0
         self.active, self.maximum_active, self.calls, self.controls = 0, 0, 0, []
         self.mode, self.release, self.started = "json", threading.Event(), threading.Event()
+        self.response_status, self.terminal_event, self.sse_event_label = "completed", "response.completed", None
+        self.extra_terminals = []
         self.release.set()
         self.spent = {"foundry-vector": 10.9, "foundry-codex": 5.9}
         super().__init__(("127.0.0.1", 0), FakeHandler)
@@ -101,7 +103,7 @@ class FakeHandler(BaseHTTPRequestHandler):
             meter.maximum_active = max(meter.maximum_active, meter.active)
             meter.bodies.append(json.loads(raw))
         meter.started.set()
-        response = {"id": "synthetic-response", "object": "response", "status": "completed", "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2}}
+        response = {"id": "synthetic-response", "object": "response", "status": meter.response_status, "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2}}
         if meter.mode == "sse":
             self.send_response(200); self.send_header("Content-Type", "text/event-stream"); self.send_header("Connection", "close"); self.end_headers()
             self.wfile.write(b'event: response.created\ndata: {"type":"response.created"}\n\n'); self.wfile.flush()
@@ -111,7 +113,9 @@ class FakeHandler(BaseHTTPRequestHandler):
             meter.spent[meter.actor] += 0.01
             meter.receipts.append({"seq": sequence, "actor": meter.actor, "batchSha256": digest(meter.token), "requestSha256": hashlib.sha256(raw).hexdigest(), "measuredUsd": 0.01, "usage": response["usage"]})
         if meter.mode == "sse":
-            raw_response = ("event: response.completed\ndata: " + json.dumps({"type": "response.completed", "response": response}) + "\n\n").encode()
+            raw_response = ("event: " + (meter.sse_event_label or meter.terminal_event) + "\ndata: " + json.dumps({"type": meter.terminal_event, "response": response}) + "\n\n").encode()
+            for kind, status in meter.extra_terminals:
+                raw_response += ("event: " + kind + "\ndata: " + json.dumps({"type": kind, "response": {**response, "status": status}}) + "\n\n").encode()
         elif meter.mode == "drop":
             raw_response = b"incomplete"
             self.send_response(200); self.send_header("Content-Type", "application/json"); self.send_header("Content-Length", str(len(raw_response))); self.end_headers()
@@ -330,6 +334,69 @@ class OwnedWitnessTests(unittest.TestCase):
         self.assertTrue(result["settlementComplete"])
         self.assertTrue(result["reviewRequired"])
         self.assertAlmostEqual(result["measuredUsd"], 0.01)
+
+    def terminal_case(self, mode, status, event="response.completed", review=True):
+        self.meter.mode, self.meter.response_status, self.meter.terminal_event = mode, status, event
+        self.assertEqual(self.request()[0], 200)
+        result = self.supervisor.close(timeout=2)
+        self.assertEqual(self.meter.calls, 1)
+        self.assertTrue(result["settlementComplete"])
+        self.assertEqual(result["providerRequests"], 1)
+        self.assertAlmostEqual(result["measuredUsd"], 0.01)
+        self.assertTrue(self.arm.requests[0]["upstreamTerminal"])
+        self.assertEqual(result["reviewRequired"], review)
+        self.assertEqual(self.supervisor.failed, review)
+        return result
+
+    def test_raw_completed_terminal_is_accepted(self):
+        self.terminal_case("json", "completed", review=False)
+
+    def test_sse_completed_terminal_is_accepted(self):
+        self.terminal_case("sse", "completed", review=False)
+
+    def test_sse_done_terminal_is_accepted(self):
+        self.terminal_case("sse", "completed", "response.done", review=False)
+
+    def test_sse_done_event_with_failed_status_requires_review(self):
+        self.terminal_case("sse", "failed", "response.done")
+
+    def test_sse_done_event_with_incomplete_status_requires_review(self):
+        self.terminal_case("sse", "incomplete", "response.done")
+
+    def test_raw_failed_terminal_retains_charge_and_requires_review(self):
+        self.terminal_case("json", "failed")
+
+    def test_raw_incomplete_terminal_retains_charge_and_requires_review(self):
+        self.terminal_case("json", "incomplete")
+
+    def test_raw_nonterminal_status_is_not_completion(self):
+        self.terminal_case("json", "in_progress")
+
+    def test_sse_failed_terminal_retains_charge_and_requires_review(self):
+        self.terminal_case("sse", "failed", "response.failed")
+
+    def test_sse_incomplete_terminal_retains_charge_and_requires_review(self):
+        self.terminal_case("sse", "incomplete", "response.incomplete")
+
+    def test_sse_completed_event_with_failed_status_requires_review(self):
+        self.terminal_case("sse", "failed", "response.completed")
+
+    def test_sse_completed_event_with_incomplete_status_requires_review(self):
+        self.terminal_case("sse", "incomplete", "response.completed")
+
+    def test_sse_failed_event_with_completed_status_requires_review(self):
+        self.terminal_case("sse", "completed", "response.failed")
+
+    def test_sse_incomplete_event_with_completed_status_requires_review(self):
+        self.terminal_case("sse", "completed", "response.incomplete")
+
+    def test_sse_event_label_and_data_type_must_agree(self):
+        self.meter.sse_event_label = "response.failed"
+        self.terminal_case("sse", "completed", "response.completed")
+
+    def test_later_completed_terminal_cannot_clear_failed_terminal(self):
+        self.meter.extra_terminals = [("response.completed", "completed")]
+        self.terminal_case("sse", "failed", "response.failed")
 
     def test_missing_receipt_preserves_unknown_closure_and_memory_token(self):
         self.assertEqual(self.request()[0], 200)
