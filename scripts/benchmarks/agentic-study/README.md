@@ -120,3 +120,60 @@ the CLI runs and between attempts. A call already admitted can finish above it;
 the unchanged gateway enforces the hard global and actor caps. The runner does
 not reconfigure live funding policy. Uncertain admission, launch, transport,
 closure or evaluator failures stop for review, with no automatic batch retry.
+
+## Manual continuation of an absent arm
+
+A transport interruption can leave a paired output with one recorded, settled
+arm and the other runtime never started. An audited manual continuation may run
+only that absent runtime in a new output directory:
+
+```sh
+python runner.py <the same source/tool/browser/profile arguments> --order vector --continue-from <original-paired-output> --out <new-private-output> --label <new-synthetic-case-name>
+```
+
+The default command still plans both arms. A single `--order vector` or
+`--order codex` is rejected without `--continue-from`; paired orders cannot use
+that flag. Continuations cannot be chained, and an existing runtime cannot be
+rerun through this path. A partial directory for the requested runtime also
+blocks continuation, even if the old summary omitted it.
+
+The free plan validates the original `plan.json`, `summary.json`, and recorded
+arm's `run.json`. The original pair must have exactly one recorded arm, matching
+summary/run records, acknowledged scoped disarm, zero active/reserved/open-batch
+state, and internally consistent settled usage. The same clean product source,
+model, High reasoning, one-agent policy, context/output limits, executable hashes,
+browser driver, task descriptor, provider route, and stopping/cap settings remain
+pinned. The current reviewed runner may include the transport/continuation fix;
+both old and new runner inventories remain recorded.
+
+If an independently reviewed evaluator correction changes the task digest,
+explicitly add `--previous-task-sha <exact-original-task-sha>`. A wrong or missing
+old hash is rejected. The public agent prompt and seed must remain unchanged.
+This flag records instrument lineage; it does not authorize new requirements or
+conceal the prior arm's outcome.
+
+Review the free plan, then supply its exact `--expected-source` and
+`--expected-task-sha` with `--run` as usual. Output must be new and outside the
+source, task, and original output trees. Original records are read-only and
+hash-pinned before funding and throughout execution. The live ledger must also
+remain at or above the prior settled request, total-cost, and per-actor totals;
+all existing healthy-state and hard-budget checks still apply.
+
+The new plan and summary identify the previous case, both task hashes, the
+already-recorded runtime and outcome, retained prior charges, and the requested
+missing runtime. Only the missing arm appears in the new `arms` object. Exit
+zero means that new arm passed; it is not a verdict on the combined pair. Reports
+must combine the original outcome and every charge with the continuation,
+including any explicit unchanged-source reevaluation after an instrument fix.
+This is manual recovery of an absent observation, never omission or rerunning of
+a losing result. No continuation or paid retry is automatic.
+
+## Read-only controller transport retry
+
+Only `GET /status` may retry once after an `OSError`/timeout transport failure.
+Each attempt uses a ten-second I/O timeout, with at most two attempts and no
+backoff. Mutation routes, including `/control` and token-scoped `/disarm`, are
+attempted once. HTTP errors, non-200 responses, oversized/malformed JSON, and
+healthy-state/policy failures are never retried. Diagnostics identify only the
+route and exception class, without echoing authorization or response payloads.
+The retry neither admits nor repeats a model request.
