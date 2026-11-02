@@ -29,9 +29,14 @@ def _library(value):
 
 
 def _browser_marker(value):
-    return bool(re.search(r"(?i)(?:PLAYWRIGHT_MODULE|CHROME_PATH|VECTOR_BENCH_CHROME|BROWSER_DRIVER_CLIENT|BROWSER_DRIVER_ENDPOINT|@wdio/|"
+    return bool(re.search(r"(?i)(?:PLAYWRIGHT_MODULE|CHROME_PATH|VECTOR_BENCH_CHROME|BROWSER_DRIVER_CLIENT|BROWSER_DRIVER_ENDPOINT|BENCH_BROWSER_TOKEN|@wdio/|"
                           r"(?<![\w-])(?:playwright|puppeteer|selenium|webdriver)(?:-(?:core|extra|webdriver))?(?![\w-])|"
-                          r"\b(?:chrome|chromium|msedge)(?:\.exe)?\b|connect_over_cdp)", value))
+                          r"\b(?:chrome|chromium|msedge)(?:\.exe)?\b|connect_over_cdp|\bbrowser\s*\.\s*(?:launch|connect|newContext|newPage)\b)", value))
+
+
+def _trusted_client_wrapper_only(value):
+    remaining, matches = re.subn(r"(?i)(?<![\w-])(?:BROWSER_DRIVER_CLIENT|BROWSER_DRIVER_ENDPOINT|BENCH_BROWSER_TOKEN)(?![\w-])", "", value)
+    return matches > 0 and not _browser_marker(remaining)
 
 
 def _script_signal(source, python=False):
@@ -191,8 +196,11 @@ def audit_tool_events(path, runtime, app, mode, trusted_client=None):
             parts = [argv] if argv is not None else _command_parts(command)
         except ValueError:
             browser_related = _browser_marker(command)
-            note("shell_execution_unparseable", True, review=browser_related)
-            if browser_related:
+            trusted_client_only = _trusted_client_wrapper_only(command)
+            note("shell_execution_unparseable", True, review=browser_related and not trusted_client_only)
+            if trusted_client_only:
+                note("informational_trusted_client_wrapper_parse_limit")
+            elif browser_related:
                 note("browser_related_shell_ambiguity")
             return
         aliases = {}

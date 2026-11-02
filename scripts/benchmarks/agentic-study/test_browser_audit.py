@@ -258,11 +258,38 @@ class BrowserAuditTests(unittest.TestCase):
         self.assertEqual(result["counts"]["reviewRequiredUnknownObservations"], 1)
         self.assertIn("browser_related_shell_ambiguity", result["observations"])
 
-    def test_unparseable_common_client_wrapper_is_retained_for_review_instead_of_whitelisted(self):
+    def test_unparseable_exact_common_client_wrapper_retains_informational_coverage_limit(self):
         result = self.audit(['powershell.exe -Command "& $env:NODE_EXE $env:BROWSER_DRIVER_CLIENT'])
-        self.assertTrue(result["requiresManualReview"])
+        self.assertFalse(result["requiresManualReview"])
         self.assertEqual(result["counts"]["unknownObservations"], 1)
-        self.assertIn("browser_related_shell_ambiguity", result["observations"])
+        self.assertEqual(result["counts"]["informationalUnknownObservations"], 1)
+        self.assertIn("informational_trusted_client_wrapper_parse_limit", result["observations"])
+        self.assertFalse(result["coverage"]["adherenceProven"])
+
+    def test_true_common_powershell_wrapper_names_remain_informational_without_raw_markers(self):
+        command = 'powershell.exe -Command "& $env:NODE_EXE $env:BROWSER_DRIVER_CLIENT --endpoint $env:BROWSER_DRIVER_ENDPOINT $env:BENCH_BROWSER_TOKEN'
+        result = self.audit([command])
+        self.assertFalse(result["requiresManualReview"])
+        self.assertEqual(result["counts"]["directBrowserReferences"], 0)
+        self.assertEqual(result["counts"]["unknownObservations"], 1)
+        self.assertEqual(result["coverage"]["informationalOnlyUnknownObservations"], 1)
+
+    def test_counterfeit_common_client_env_prefixes_and_suffixes_are_not_informational_exceptions(self):
+        for variable in ("FAKE_BROWSER_DRIVER_CLIENT", "BROWSER_DRIVER_CLIENT_FAKE", "XBROWSER_DRIVER_ENDPOINT", "BENCH_BROWSER_TOKEN_EXTRA", "FAKE-BROWSER_DRIVER_CLIENT"):
+            with self.subTest(variable=variable):
+                result = self.audit(['powershell.exe -Command "& $env:NODE_EXE $env:' + variable])
+                self.assertTrue(result["requiresManualReview"])
+                self.assertNotIn("informational_trusted_client_wrapper_parse_limit", result["observations"])
+        result = self.audit(['powershell.exe -Command "& $env:NODE_EXE $env:BROWSER_DRIVER_CLIENT $env:BROWSER_DRIVER_CLIENT_FAKE'])
+        self.assertTrue(result["requiresManualReview"])
+
+    def test_common_client_marker_does_not_hide_raw_library_process_or_suspicious_browser_suffix(self):
+        for suffix in (" --module=playwright", " --module=@playwright/test", " --exe=$env:CHROME_PATH", " ; node -e browser.launch()"):
+            with self.subTest(suffix=suffix):
+                result = self.audit(['powershell.exe -Command "& $env:NODE_EXE $env:BROWSER_DRIVER_CLIENT' + suffix])
+                self.assertTrue(result["requiresManualReview"])
+                self.assertEqual(result["counts"]["reviewRequiredUnknownObservations"], 1)
+                self.assertNotIn("informational_trusted_client_wrapper_parse_limit", result["observations"])
 
 
 if __name__ == "__main__":

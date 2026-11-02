@@ -152,15 +152,20 @@ snapshot, and completed agent's usage. The owned token is still disarmed and
 settled; every charge remains retained. It is not a regex-based product failure and never
 produces automatic repair feedback. A clean audit means only that this bounded
 projection found no clear bypass; dynamic execution, indirect processes, and
-incomplete telemetry remain limits of this method. Manual review is required to
-interpret suspicious or unknown evidence.
+incomplete telemetry remain limits of this method. Review applies to flagged
+browser/telemetry observations; informational parsing limits remain visible.
 
 The shell lexer is deliberately incomplete. In free diagnostics on completed
 historical traces, PowerShell wrapper escaping and here-string commands produced
 `shell_execution_unparseable` markers even where recognized browser calls used
-the common client. These remain in the total unknown and coverage counts. Only
-ones with browser/library/process/common-client markers require review; other
-quoting ambiguity is informational. Neither category proves a raw browser
+the common client. These remain in the total unknown and coverage counts. A
+wrapper whose only browser markers are the exact trusted names
+`BROWSER_DRIVER_CLIENT`, `BROWSER_DRIVER_ENDPOINT`, and `BENCH_BROWSER_TOKEN`
+receives `informational_trusted_client_wrapper_parse_limit`. Token boundaries
+exclude counterfeit prefixes/suffixes, and a raw library/module/process marker
+or other suspicious browser execution marker keeps the review flag. Ordinary
+quoting ambiguity without browser markers is also informational. This narrow
+marker rule does not prove what an unparsed shell command did. Neither category proves a raw browser
 launch, agent misconduct, or a failed product. `no_clear_bypass_observed` means
 only that the bounded projection found no review-triggering evidence; its
 coverage explicitly does not prove adherence. The audit does not clear an
