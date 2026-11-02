@@ -64,8 +64,8 @@ spending limits. It makes no claim that the broader objective has been achieved.
 ## Completed contracts stage
 
 The [three-task quality-first summary](results/contracts-stage-summary.md) records
-all76 checks per runtime, fixed per-task Vector scores45/47/47 versus45/47/46,
-and5.0122% lower aggregate Vector cost. The20% cost target remains unmet; no
+all 76 checks per runtime, fixed per-task Vector scores 45/47/47 versus 45/47/46,
+and 5.0122% lower aggregate Vector cost. The20% cost target remains unmet; no
 universal quality or cost claim is established. Exact submissions, separate
 posthoc support code and the [constructed outbox calibration reference](references/outbox-gold/README.md)
 are published with byte verifiers. The reference was released after both outbox
