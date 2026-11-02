@@ -98,6 +98,15 @@ browser-driver files, exact runtime paths, executable hashes, the Playwright
 package hash, study limits and order. It can be written using `--write-plan`.
 No credential/config or receipt file is read while planning.
 
+Task command contracts must invoke an explicit frozen Python/Bun/Node tool and
+a directly named script inside the task manifest. External code/file operands
+are accepted only for the designated frozen common-browser dependencies.
+Unbound absolute/relative helpers, interpreter `-m`/`-c` or inline JavaScript,
+module loaders and compound flag/file escapes are rejected before an arm can
+open. Runtime app/out placeholders are data operands, not evaluator code.
+This binds the three qualified public commands without claiming a universal
+analysis of arbitrary imports or hashing the trusted host standard library.
+
 An eventual, separately reviewed invocation adds `--run --reviewed-plan FILE
 --expected-plan-sha SHA256 --expected-source COMMIT`, plus explicit private
 `--controller-config FILE --receipt-jsonl FILE`. The plan file contains the
@@ -134,8 +143,21 @@ the unchanged common browser audit for each. Unknown or unfinished commands,
 unrecognized schemas, absent execution telemetry and policy ambiguities remain
 manual review, even when the independent functional evaluator passes.
 
-The quality gate separately checks native worker completion before judge
-creation and post-judge lead browser/API command evidence. Static command
+The quality gate retains each native turn's chronology and outcome. The first
+successful completion from each worker must precede the original judge
+creation. Later completions from those same worker identities require a
+subsequent review turn from that same judge identity; final lead browser/API
+commands must follow the latest successful judge completion. This allows a
+formal same-lead repair with worker and judge follow-ups without creating any
+additional autonomous identities. Ordering uses nondecreasing native timestamps
+normalized to seconds, reports equal timestamps, and is not strict causal
+proof. A later fatal, cancelled, pending or unknown native phase cannot be
+hidden by an earlier completion. A recoverable historical native error followed
+by a valid completion can clear that phase while its error observation, raw
+transcript and all charges remain retained. An ordinary failed verification
+command is not itself a native session fatal outcome.
+
+The gate separately checks post-judge lead browser/API command evidence. Static command
 recognition is deliberately bounded. A legitimate verification hidden inside
 an unrecognized helper script needs review rather than a false pass. Explicit
 owned DATA_DIR support data and scripts are retained and counted; an executed

@@ -307,8 +307,9 @@ class PairedRunnerTests(unittest.TestCase):
             task = roots["task-root"] / name
             (task / "seed").mkdir(parents=True)
             (task / "TASK.md").write_text("Synthetic fixture only.", encoding="utf-8")
+            (task / "synthetic-evaluator.py").write_text("# synthetic fixture only", encoding="utf-8")
             (task / "task.json").write_text(json.dumps({"promptFile": "TASK.md", "seedDirectory": "seed",
-                "evaluatorCommand": ["{python}", "synthetic-evaluator.py"]}), encoding="utf-8")
+                "evaluatorCommand": ["{python}", "{task}/synthetic-evaluator.py"]}), encoding="utf-8")
         argv = ["--label", "synthetic-plan", "--out", str(self.directory / "new-private-output")]
         for name, path in roots.items():
             argv.extend(["--" + name, str(path)])
@@ -375,7 +376,7 @@ class PairedRunnerTests(unittest.TestCase):
             for identity in ("synthetic-root", *runner.ROLES):
                 judge = identity == "team_judge"
                 rows = [{"table": "session", "row": {"time_created": 1700000003000 if judge else 1700000000000}},
-                        {"table": "message", "row": {"data": json.dumps({"role": "assistant", "finish": "stop",
+                        {"table": "message", "row": {"time_created": 1700000003100 if judge else 1700000000100, "data": json.dumps({"role": "assistant", "finish": "stop",
                             "time": {"completed": 1700000004000 if judge else 1700000010000 if identity == "synthetic-root" else 1700000002000}})}}]
                 commands = [("echo synthetic-fixture", 1700000001000)]
                 if identity == "synthetic-root":
@@ -411,6 +412,197 @@ class PairedRunnerTests(unittest.TestCase):
         self.assertEqual(result["stopReason"], "runner_or_native_protocol_failure")
         self.assertFalse(any(route == "/control" for route, _ in self.meter.controls))
         self.assertEqual(self.saved[-1]["failureType"], "OSError")
+
+    def native_phase_fixture(self, runtime, *, worker_followup="completed", rejudge=True, lead_verifies=True,
+                             judge_followup="completed", command_exit=0):
+        """Synthetic native schemas only; never an application/benchmark result."""
+        base = self.directory / (runtime + "-phases")
+        if base.exists():
+            self.fail("each phase fixture requires a fresh private directory")
+        directory, app, support = base / "transcripts", base / "app", base / "support-data"
+        for path in (directory, app, support):
+            path.mkdir(parents=True)
+        client = base / "common-browser-client.cjs"
+        client.write_text("// synthetic trusted client fixture", encoding="utf-8")
+        slots = {role: role for role in runner.ROLES}
+        phases = {
+            "synthetic-root": [(0, 14, "completed")],
+            "backend_worker": [(0, 2, "completed"), (5, 7, worker_followup)],
+            "frontend_worker": [(0, 2, "completed")],
+            "team_judge": [(3, 4, "completed"), *([(10, 11, judge_followup)] if rejudge else [])],
+        }
+        files = []
+        for identity, turns in phases.items():
+            rows = []
+            if runtime == "vector":
+                ms = lambda value: int((1700000000 + value) * 1000)
+                rows.append({"table": "session", "row": {"time_created": ms(turns[0][0])}})
+                for index, (start, end, outcome) in enumerate(turns):
+                    rows.append({"table": "message", "row": {"id": "user-" + str(index), "time_created": None if outcome == "unknown" else ms(start),
+                        "data": json.dumps({"role": "user", "time": {"created": None if outcome == "unknown" else ms(start)}})}})
+                    if outcome == "recovered":
+                        rows.append({"table": "message", "row": {"time_created": ms(start + .1), "time_updated": ms(start + .4),
+                            "data": json.dumps({"role": "assistant", "time": {"created": ms(start + .1), "completed": ms(start + .4)},
+                                                "error": {"name": "SyntheticRecoverableError"}})}})
+                    data = {"role": "assistant", "time": {"created": None if outcome == "unknown" else ms(start + (.5 if outcome == "recovered" else .1))}}
+                    if outcome not in ("pending", "unknown"):
+                        data["time"]["completed"] = ms(end)
+                    if outcome in ("completed", "recovered"):
+                        data["finish"] = "stop"
+                    elif outcome in ("fatal", "cancelled"):
+                        data["error"] = {"name": "MessageAbortedError" if outcome == "cancelled" else "SyntheticFatalError"}
+                    rows.append({"table": "message", "row": {"id": "assistant-" + str(index),
+                        "time_created": data["time"]["created"], "time_updated": None if outcome == "unknown" else ms(end), "data": json.dumps(data)}})
+                commands = [("echo synthetic-fixture", turns[0][0] + .2)]
+                if identity == "synthetic-root":
+                    at = 12 if lead_verifies else 1
+                    commands = [("node $env:BROWSER_DRIVER_CLIENT --action observe", at),
+                                ("curl http://127.0.0.1:4123/api/synthetic", at + .1)]
+                for index, (command, at) in enumerate(commands):
+                    rows.append({"table": "part", "row": {"time_created": ms(at), "data": json.dumps({"id": str(index),
+                        "type": "tool", "tool": "bash", "state": {"status": "completed", "input": {"command": command},
+                        "output": "Process exited with code " + str(command_exit), "time": {"start": ms(at), "end": ms(at + .01)}}})}})
+            else:
+                iso = lambda value: "2026-11-01T00:00:" + format(value, "06.3f") + "Z"
+                rows.append({"type": "session_meta", "timestamp": iso(turns[0][0]), "payload": {}})
+                for start, end, outcome in turns:
+                    rows.append({"type": "event_msg", "timestamp": None if outcome == "unknown" else iso(start), "payload": {"type": "task_started"}})
+                    if outcome == "recovered":
+                        rows.append({"type": "event_msg", "timestamp": iso(start + .4),
+                            "payload": {"type": "error", "message": "synthetic recoverable native error"}})
+                    if outcome not in ("pending", "unknown"):
+                        kind = "task_complete" if outcome in ("completed", "recovered") else "turn_aborted" if outcome == "cancelled" else "error"
+                        rows.append({"type": "event_msg", "timestamp": iso(end), "payload": {"type": kind}})
+                commands = [("echo synthetic-fixture", turns[0][0] + .2)]
+                if identity == "synthetic-root":
+                    at = 12 if lead_verifies else 1
+                    commands = [("node $env:BROWSER_DRIVER_CLIENT --action observe", at),
+                                ("curl http://127.0.0.1:4123/api/synthetic", at + .1)]
+                for index, (command, at) in enumerate(commands):
+                    call = "synthetic-call-" + str(index)
+                    rows.extend([
+                        {"type": "response_item", "timestamp": iso(at), "payload": {"type": "function_call",
+                            "name": "functions.exec_command", "call_id": call, "arguments": json.dumps({"cmd": command})}},
+                        {"type": "response_item", "timestamp": iso(at + .01), "payload": {"type": "function_call_output",
+                            "call_id": call, "output": "Process exited with code " + str(command_exit)}},
+                    ])
+            name = hashlib.sha256(identity.encode()).hexdigest() + ".jsonl"
+            path = directory / name
+            path.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+            files.append({"file": name, "identitySha256": name[:-6], "sha256": self.common.file_hash(path)})
+        (directory / "manifest.json").write_text(json.dumps({"complete": True, "runtime": runtime, "files": files}), encoding="utf-8")
+        return runner.audit_descendants(self.common, runtime, directory, app, support, client, slots, "synthetic-root")
+
+    def test_same_identity_worker_and_judge_repair_followups_preserve_phase_order(self):
+        for runtime in ("vector", "codex"):
+            with self.subTest(runtime=runtime):
+                quality = self.native_phase_fixture(runtime)
+                self.assertFalse(quality["requiresManualReview"])
+                self.assertTrue(quality["judgeStartedAfterBothWorkersCompleted"])
+                self.assertTrue(quality["allWorkerCompletionPhasesReviewedBySameJudge"])
+                self.assertEqual(quality["workerFollowupCompletions"], 1)
+                self.assertEqual(quality["judgeFollowupCompletions"], 1)
+                self.assertEqual(quality["autonomousActorsAdmitted"], 4)
+
+    def test_same_identity_worker_followup_requires_rejudge(self):
+        for runtime in ("vector", "codex"):
+            with self.subTest(runtime=runtime):
+                quality = self.native_phase_fixture(runtime, rejudge=False)
+                self.assertTrue(quality["requiresManualReview"])
+                self.assertTrue(quality["judgeStartedAfterBothWorkersCompleted"])
+                self.assertFalse(quality["allWorkerCompletionPhasesReviewedBySameJudge"])
+
+    def test_lead_verification_must_follow_latest_judge_completion(self):
+        for runtime in ("vector", "codex"):
+            with self.subTest(runtime=runtime):
+                quality = self.native_phase_fixture(runtime, lead_verifies=False)
+                self.assertTrue(quality["requiresManualReview"])
+                self.assertFalse(quality["rootPostJudgeCommonBrowserCommandObserved"])
+                self.assertFalse(quality["rootPostJudgeApiVerificationCommandObserved"])
+
+    def test_old_completion_cannot_hide_later_native_fatal_worker_followup(self):
+        for runtime in ("vector", "codex"):
+            with self.subTest(runtime=runtime):
+                quality = self.native_phase_fixture(runtime, worker_followup="fatal")
+                self.assertTrue(quality["requiresManualReview"])
+                self.assertFalse(quality["requiredNativeLatestOutcomesSettled"])
+                self.assertTrue(any(row["latestNativeOutcome"] == "fatal" and row["nativeErrorObservations"] == 1 for row in quality["sessions"]))
+
+    def test_old_completion_cannot_hide_pending_native_worker_followup(self):
+        for runtime in ("vector", "codex"):
+            with self.subTest(runtime=runtime):
+                quality = self.native_phase_fixture(runtime, worker_followup="pending")
+                self.assertTrue(quality["requiresManualReview"])
+                self.assertFalse(quality["requiredNativeLatestOutcomesSettled"])
+                self.assertTrue(any(row["latestNativeOutcome"] == "pending" for row in quality["sessions"]))
+
+    def test_unknown_followup_chronology_cannot_keep_earlier_native_completion_pass(self):
+        for runtime in ("vector", "codex"):
+            with self.subTest(runtime=runtime):
+                quality = self.native_phase_fixture(runtime, worker_followup="unknown")
+                self.assertTrue(quality["requiresManualReview"])
+                self.assertFalse(quality["requiredNativeLatestOutcomesSettled"])
+                self.assertGreater(sum(row["unknownNativeOutcomeObservations"] for row in quality["sessions"]), 0)
+
+    def test_old_judge_completion_cannot_hide_fatal_or_cancelled_followup(self):
+        for runtime, outcome in (("vector", "fatal"), ("codex", "cancelled")):
+            with self.subTest(runtime=runtime, outcome=outcome):
+                quality = self.native_phase_fixture(runtime, judge_followup=outcome)
+                self.assertTrue(quality["requiresManualReview"])
+                self.assertFalse(quality["requiredNativeLatestOutcomesSettled"])
+                self.assertTrue(any(row["latestNativeOutcome"] == outcome for row in quality["sessions"]))
+
+    def test_recovered_native_error_keeps_observation_and_accepts_same_identity_completion(self):
+        for runtime in ("vector", "codex"):
+            with self.subTest(runtime=runtime):
+                quality = self.native_phase_fixture(runtime, worker_followup="recovered")
+                self.assertFalse(quality["requiresManualReview"])
+                self.assertTrue(quality["requiredNativeLatestOutcomesSettled"])
+                self.assertEqual(sum(row["nativeErrorObservations"] for row in quality["sessions"]), 1)
+
+    def test_failed_verification_command_is_not_a_native_session_fatal(self):
+        for runtime in ("vector", "codex"):
+            with self.subTest(runtime=runtime):
+                quality = self.native_phase_fixture(runtime, command_exit=1)
+                self.assertFalse(quality["requiresManualReview"])
+                self.assertEqual(sum(row["nativeErrorObservations"] for row in quality["sessions"]), 0)
+
+    def test_task_command_freeze_rejects_unbound_external_code_and_file_operands(self):
+        root, browser = self.directory / "task", self.directory / "browser"
+        root.mkdir(); browser.mkdir()
+        (root / "evaluate.py").write_text("# synthetic public evaluator", encoding="utf-8")
+        external = self.directory / "external.py"
+        external.write_text("# unbound external fixture", encoding="utf-8")
+        options = SimpleNamespace(bun=self.directory / "bun", node=self.directory / "node", browser_driver_root=browser)
+        browser_files = self.common.manifest(browser)
+        commands = [
+            ["{python}", str(external)], ["{python}", "-m", "external"], ["{python}", "-c", "import external"],
+            ["{node}", "--eval", "require('external')"],
+            ["{python}", "{task}/evaluate.py", "--helper", str(external)],
+            ["{python}", "{task}/evaluate.py", "--helper=" + str(external)],
+            ["{python}", "{task}/evaluate.py", "--helper", "../external.py"],
+            ["{python}", "{task}/evaluate.py", "--config", "unbound.json"],
+            ["{python}", "{task}/evaluate.py", "--helper", "{out}/external.py"],
+            ["{python}", "{task}/evaluate.py", "--import", "external"],
+        ]
+        for command in commands:
+            with self.subTest(command=command), self.assertRaises(PolicyError):
+                runner.validate_task_commands({"evaluatorCommand": command}, root, options, self.common, browser_files)
+
+    def test_declared_common_browser_dependency_is_hashed_and_mutation_changes_freeze(self):
+        root, browser = self.directory / "task", self.directory / "browser"
+        root.mkdir(); browser.mkdir()
+        (root / "evaluate.py").write_text("# synthetic public evaluator", encoding="utf-8")
+        helper = browser / "proxy.cjs"
+        helper.write_text("// initial synthetic helper", encoding="utf-8")
+        options = SimpleNamespace(bun=self.directory / "bun", node=self.directory / "node", browser_driver_root=browser)
+        task = {"evaluatorCommand": ["{python}", "{task}/evaluate.py", "--app", "{app}", "--out", "{out}/evaluation.json",
+                                     "--proxy-module", "{task}/../browser/proxy.cjs"]}
+        before = self.common.manifest(browser)
+        runner.validate_task_commands(task, root, options, self.common, before)
+        helper.write_text("// mutated synthetic helper", encoding="utf-8")
+        after = self.common.manifest(browser)
+        self.assertNotEqual(digest(before), digest(after))
 
 
 if __name__ == "__main__":
