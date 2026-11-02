@@ -81,11 +81,120 @@ the extra local session creation. That attempted native session stays recorded.
 
 ## Remaining work before any funded profile
 
-This is a first free spike. It is not a funded witness or paid runner. Funding
-still needs independently bound owned arm capabilities, durable audit failure
-handling, complete helper classification/accounting, descendants' tool/browser
-telemetry, interruption/settlement controls, and the analogous Vector proof.
+The first free spike is not a paid runner. The Phase 2 components below add the
+owned alias, audit and settlement controls plus a harmless native Vector proof.
+Funding still needs the reviewed paired-runner integration, broader helper
+coverage, descendants' browser audits, and a frozen development task/profile.
 The registry gate controls inference; it does not prevent every attempted local
 session creation. A policy rejection must stop and retain the whole arm even if
 the native CLI subsequently exits zero. Nothing here changes existing funding,
 the live single-agent witness, historical outputs, or frozen product code.
+
+## Phase 2 owned witness and supervisor components
+
+`owned_team_witness.py` adds importable components with **no command-line entry
+point, automatic startup, credential loading, or default funded connection**.
+All HTTP controls executed so far use temporary Python loopback fake meters.
+No service has been started on a funded port, and no funded profile is enabled.
+
+`OwnedSupervisor` accepts an explicitly supplied existing meter client and
+read-only receipt reader. Its preflight preserves the existing funding phase,
+$48 cumulative study cap, both $20 cumulative actor caps, historical floors,
+and the current authoritative balance. It requests one owned scoped batch and
+keeps that returned batch token in supervisor/witness memory. `cli_binding()`
+exports a separate random local alias. An alias cannot authenticate directly to
+the meter. A third distinct local owner capability permits status or stopping
+the arm; HTTP callers cannot arm batches, reset counters, or expand caps.
+
+The fixed profile allows one lead and exactly three named lifetime child slots:
+two workers and a judge. A slot can resume the same native identity. Replacing
+its identity, adding a role, nesting a child, crossing arm ancestry, changing
+model/effort/provider, or failing a native join stops the arm before forwarding.
+Every body requires Sol/High, including helpers and configuration updates. Child
+and helper worker definitions are removed in the explicit tool containers;
+retained custom grammar and message content stay unchanged. These controls use
+the trusted owned runtime and host profile, not an operating-system sandbox or
+a claim of protection against every malicious local program.
+
+All forwarded requests, including retries, helpers and judges, share one
+300-request limit, a two-hour admission deadline, a $3 soft threshold, and at
+most one formal same-lead-session repair. Forwarding uses a finite FIFO with
+one request in flight. Before each forward it checks current settled funding
+and the unchanged meter's conservative reservation formula. Insufficient
+headroom stops for review; context/output limits and quality gates are not
+reduced. The owning runner must still enforce the runtime execution deadline
+and stop its owned processes; settlement draining can finish afterward.
+
+Audit rows are appended and fsynced before forwarding, with a separate witness
+sequence and hash chain. Audit failure and policy failure latch for the arm.
+Existing or partial audit files cannot be reused to reconstruct a funded run.
+Requests are never retried by the witness. A cancelled queued request is not
+forwarded, while a cancellation after forwarding drains the existing upstream
+request and retains its receipt. A missing terminal or uncertain transport
+requires review even when later ledger charges are known.
+
+Scoped closure disarms only the captured owned token. An uncertain disarm is
+not automatically repeated. Unknown closure keeps the token in memory and
+blocks the next arm. Authoritative receipts join by the actual shared batch
+hash, meter sequence and request fingerprint, including repeated identical
+requests as separate receipts. Known controller totals remain available under
+`controllerUsageThroughClosure` when receipt joining is incomplete; this is a
+cumulative observation and must not be added to the reconciled total again.
+Audit/telemetry problems cannot turn into product passes. The supervisor also
+requires a positive owned-runtime-and-descendants quiescence callback before
+collecting private native transcripts; its default callback is false.
+
+`native_registry.py` reads only an explicitly configured database inside the
+owned runtime home. The Codex backend joined all 47 retained actual requests
+against their native SQLite state in offline replay. The Vector backend uses
+the public source schema (`core/session/sql.ts`, TaskTool's `metadata.subagent`,
+and the session identity headers). The separately authorized native Vector proof
+used the frozen `a35c03d` source and exact Bun/Node binaries in fresh owned homes.
+The lead, two distinct fixed workers and judge produced six fake requests, all
+Sol/High, with every native session/model/parent join available before inference.
+The same team through the actual alias witness reconciled all six fake receipts
+and collected four private session transcripts. A duplicate-slot native control
+forwarded only four requests, refused the replacement child's first inference,
+retained its attempted native session, and ended with CLI exit 1 and mandatory
+review. This proves that harmless path, not the six broader startup-readiness
+tests on a separate branch or real task quality. Unobserved helper kinds and
+their ancestry still need coverage before a funded profile. An
+ambiguous root/helper purpose stays `root_or_helper`; its calls and dollars
+remain counted, and the report exposes the unresolved purpose count. Request
+counts never establish autonomous-agent counts.
+
+Run all component controls, including the independent unchanged-handler check,
+only with an explicitly reviewed meter **source directory**:
+
+```sh
+VECTOR_BENCH_METER_SOURCE=<reviewed-source-directory> python -m unittest discover -p "test_*.py" -v
+```
+
+On PowerShell set `$env:VECTOR_BENCH_METER_SOURCE` before invoking Python.
+The optional control imports `budget_gateway_v2.py` and its source dependency,
+creates a new temporary synthetic ledger, and supplies a literal dummy provider
+key plus an owned loopback provider stub. It reads no live controller config or
+key, and contacts no funded port. The actual unchanged handler's receipt
+fingerprint, shared batch hash, sequence and reservation matched the component,
+including UTF-8 content. Offline replay also matched the actual meter wire bytes
+and reservation for all 47 retained native request bodies. This independently
+checks encoding/key-order/normalization semantics rather than relying only on
+the fake meter in the component tests.
+
+`vector_free_probe.py --mode team --owned-witness` is the owned native Vector
+mechanics control. It accepts only the frozen source revision and a clean tree,
+requires explicit Bun/Node paths, and emits only fixed harmless TaskTool calls
+and text completions. `--mode duplicate --owned-witness` is its negative lifetime
+slot control. It has no real provider upstream; its controller and receipts are
+synthetic. The CLI receives an alias, while the fake scoped token remains in
+supervisor/witness/fake-meter memory. Its free-only bootstrap binds the first
+wire identity only when the newly created owned database contains exactly one
+native root. A second root is refused. Paid root registration remains subject
+to the separately reviewed runner/profile design. Running this script requires
+an exclusive Bun lease; ordinary Python controls do not start Bun.
+
+The remaining paid-runner integration must bind a supervisor-verified root
+before admitting its first request, confirm process quiescence, freeze both
+runtime profiles and helper coverage, apply descendant browser audits, and
+include the separately reviewed runtime accounting fixes. These components do
+not authorize or start a paid pair.
