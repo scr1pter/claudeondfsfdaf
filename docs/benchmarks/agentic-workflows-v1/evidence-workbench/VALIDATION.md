@@ -1,9 +1,12 @@
 # Unpaid validation record
 
-This file records local instrument validation only. It contains no model output,
-paid result, provider data, or product-candidate assessment.
+This chronological record includes local instrument validation and an explicitly
+marked postlaunch investigation. It contains no private logs, credentials, or
+product-candidate assessment. The postlaunch section cites only sanitized facts
+needed to explain the instrument false negative; original paid artifacts remain
+retained separately.
 
-**Freeze status:** the final local checks and unchanged-v1 negative gate completed
+**Initial prelaunch freeze status:** the final local checks and unchanged-v1 negative gate completed
 after production candidate `893b9629224dc4249f08c0e18712511437a35a22` was frozen.
 External task hashes are now frozen. No paid holdout run was admitted or performed
 at this freeze. The earlier draft publication had correctly marked runtime and
@@ -76,6 +79,40 @@ browser validation pending.
   gate and initial freeze remain intact; `FREEZE_HISTORY.json` preserves that
   freeze's commit, task SHA, and complete source manifest. A new source freeze
   supersedes it before any paid holdout run.
+* **POSTLAUNCH correction:** case `aw3` exposed a second browser matcher false
+  negative under task SHA
+  `0090ff679a4989b34b59ea51c5910794c322dc7805fffadc203e0da083523920`.
+  The unchanged Codex app returned HTTP 400 `invalid_batch`, displayed
+  “Batch import failed: Source must be a nonblank string.” in a visible status
+  region, and preserved the entered text. The frozen keyword matcher returned
+  false despite this useful validation error. The original paid gate's 25 passed
+  and 1 failed row are retained, with its 31 receipts and $0.7953841 charge. The
+  measurement is assessed as an instrument failure; no product repair was needed.
+* Free reproduction with the old matcher returned the same 25/1 result. A direct
+  owned-browser diagnostic captured the exact visible text and HTTP response.
+  The revised matcher accepts ordinary failure and constraint phrasing, requires
+  a newly reported visible message, and rejects stale success, preexisting error,
+  hidden, negated-error, and empty statuses. Pure controls pass **27 Python and
+  9 Node tests**. The corrected full free gate passes **26/26**, exit 0, with
+  unchanged application source and no instrument errors. No model repair,
+  provider call, app edit, shared dependency write, or user browser was involved.
+* One separate diagnostic setup command accidentally used a placeholder app
+  path. It was rejected before any Bun/build with an `instrument_failure` and
+  26 `not_run` rows. That output is retained separately and is not experimental
+  product evidence. Both valid free gate reports and the original paid artifacts
+  remain unchanged.
+* `POSTLAUNCH.md` and `postlaunch-validation.json` contain the sanitized diagnosis.
+  `FREEZE_HISTORY.json` preserves the superseded `0090…` freeze as a postlaunch
+  revision alongside the earlier `2636376` prelaunch history. This correction is
+  explicitly not presented as preregistered evaluation of the original paid case.
+* A final artifact addition captures the same end state at 1200×850 and 390×844,
+  restoring the viewport and leaving app focus unchanged. Safe relative names
+  `browser-final.png` and `browser-mobile.png` are emitted in the reports. This
+  adds **2 image artifacts, no app assertions**, and leaves the inventory at
+  **26 checks**. One final free gate on the same unchanged Codex source passed
+  **26/26** with source unchanged and no instrument errors; both PNG signatures
+  and dimensions were verified. The earlier corrected 26/26 report remains
+  retained separately. No further artifact-only gate is required.
 * All raw gate artifacts, logs, databases, and browser profiles remain outside
   the published task tree. Ignore rules also guard against accidentally staging
   such outputs or Python caches here.

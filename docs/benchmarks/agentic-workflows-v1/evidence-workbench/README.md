@@ -1,19 +1,26 @@
 # Evidence Workbench holdout
 
-**Status: source frozen after production candidate
-`893b9629224dc4249f08c0e18712511437a35a22`.** Local typecheck, both public smoke
-tests, build, pure controls, and the full unchanged-v1 negative gate completed.
-The negative gate executed all 26 inventory rows with 3 passed, 23 failed, no
-instrument errors, and unchanged source. No paid holdout run was admitted or
-performed at this freeze. `free-validation.json` and `VALIDATION.md` record the
-evidence and limitations; `SOURCE_MANIFEST.json` freezes the external sources.
+**Status: POSTLAUNCH instrument revision; not admitted to another paid case.**
+Production candidate `893b9629224dc4249f08c0e18712511437a35a22` was frozen before
+the original paid holdout exposure. In case `aw3`, the original matcher rejected
+a useful, visible validation message because it omitted the word “failed” and
+ordinary constraint phrasing. That is an instrument false negative, not a product
+defect. The original paid report, 31 receipts, and $0.7953841 charge are retained.
 
-A subsequent prelaunch review corrected an evaluator assumption that the entire
-page had exactly one status region. Batch observations now match across visible
-status regions. Pure controls cover that correction; no Bun or browser rerun was
-performed for it while the separate paid pair was active. `FREEZE_HISTORY.json`
-preserves the previous unpaid freeze and its exact source manifest. The current
-freeze supersedes that prelaunch version before any paid holdout run.
+The corrected evaluator passes all 26 checks on the same unchanged Codex source
+in a free local rerun, without model repair or app changes. Pure controls pass
+27 Python and 9 Node tests. This is a postlaunch correction after inspecting a
+paid artifact; it does not retroactively turn the original frozen study into a
+preregistered pass. `POSTLAUNCH.md` and `postlaunch-validation.json` record the
+diagnosis and limits. `FREEZE_HISTORY.json` preserves both superseded freezes and
+their exact source manifests. `SOURCE_MANIFEST.json` records the current sources.
+
+Historical prelaunch evidence remains in `free-validation.json` and the
+chronological `VALIDATION.md`: v1 typecheck, 2 smoke tests, build, and the full
+unchanged-v1 negative gate completed, with 3 passed, 23 failed, no instrument
+errors, and unchanged source. The first post-candidate review also corrected a
+strict single-status assumption before any paid holdout exposure. None of those
+historical records or raw artifacts was silently rewritten.
 
 This independent maintenance benchmark is a neutral, entirely local document
 research application. The seed is a working **v1** with JSON/NDJSON import,
@@ -74,8 +81,11 @@ Each browser check uses exact public accessible names/test IDs. There are no
 modals or existing user profiles.
 
 The evaluator writes its complete report, before/after authored-source manifests,
-separate build/server/browser logs, and a final browser screenshot to its private
-output directory. Every instrument fault is retained in `instrument-errors.ndjson`
+separate build/server/browser logs, and two end-state browser images to its private
+output directory: `browser-final.png` at 1200×850 and `browser-mobile.png` at
+390×844. Both show the same application state, with no extra app assertions or
+focus changes; the prior viewport is restored afterward. Reports expose only
+those safe relative image names. Every instrument fault is retained in `instrument-errors.ndjson`
 and the report. If a harness bug is fixed during unpaid validation, retain its
 original failing output and record the correction in `VALIDATION.md`; never
 silently relabel a harness failure as a product failure. No paid evidence may be

@@ -39,9 +39,17 @@ function batchStatusMatches(statuses, batchId, replay) {
     && (replay ? /replay/i.test(row.text) : /new|not replay|replayed:?\s*false|committed|imported/i.test(row.text)))
 }
 
-function invalidBatchStatusMatches(statuses) {
-  return statuses.some((row) => row.visible === true && typeof row.text === "string"
-    && /invalid|error|required|missing/i.test(row.text))
+function invalidBatchStatusMatches(statuses, previousStatuses = []) {
+  const previous = new Set(previousStatuses.filter((row) => row.visible === true && typeof row.text === "string").map((row) => row.text.trim()))
+  return statuses.some((row) => {
+    if (row.visible !== true || typeof row.text !== "string") return false
+    const text = row.text.trim()
+    if (!text || previous.has(text)) return false
+    if (/\b(?:no|without|zero)\s+(?:validation\s+)?(?:errors?|failures?|issues?|problems?)\b|\b(?:did\s+not|didn't|not)\s+fail(?:ed)?\b/i.test(text)) return false
+    const failure = /\b(?:failed|failure|rejected|cannot|unable)\b|\bcould\s+not\b/i.test(text)
+    if (!failure && /\b(?:imported|committed|replayed|succeeded|success(?:ful|fully)?)\b/i.test(text)) return false
+    return failure || /\b(?:invalid|errors?|required|missing|must|expected|nonblank|blank|empty|unsupported|unknown|should|please|provide|enter)\b|\bno\s+(?:source|title|body|operations?|batch)\b/i.test(text)
+  })
 }
 
 module.exports = { ProductFailure, requireProduct, reportExit, validOrigin, apiObject, importedDocument, batchStatusMatches, invalidBatchStatusMatches }

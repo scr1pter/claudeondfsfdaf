@@ -48,3 +48,26 @@ test("unrelated or hidden statuses cannot supply the required batch evidence", (
   assert.equal(batchStatusMatches([{ visible: true, text: "Batch multi-01 at revision 4." }], "multi-01", true), false)
   assert.equal(invalidBatchStatusMatches([unrelated, { visible: false, text: "Invalid batch." }]), false)
 })
+
+test("useful validation failures accept ordinary failure and constraint phrasing", () => {
+  for (const text of [
+    "Batch import failed: Source must be a nonblank string.",
+    "Source must be a nonblank string.",
+    "Cannot import this batch: title cannot be blank.",
+    "Please provide a document source.",
+    "Operation 2: expected a string for title.",
+    "No source provided.",
+  ]) assert.equal(invalidBatchStatusMatches([{ visible: true, text }]), true, text)
+})
+
+test("stale success, old errors, hidden text, negated errors, and empty statuses fail", () => {
+  const oldError = { visible: true, text: "Missing title." }
+  assert.equal(invalidBatchStatusMatches([oldError], [oldError]), false)
+  assert.equal(invalidBatchStatusMatches([{ visible: false, text: "Batch import failed: Source must be nonblank." }]), false)
+  for (const text of [
+    "Batch ui-invalid imported at revision 4.",
+    "Batch ui-invalid replayed at revision 4.",
+    "Import succeeded.", "No errors found.", "No validation errors.",
+    "Import did not fail.", "No", "", "   ", "Importing batch…",
+  ]) assert.equal(invalidBatchStatusMatches([{ visible: true, text }]), false, text)
+})

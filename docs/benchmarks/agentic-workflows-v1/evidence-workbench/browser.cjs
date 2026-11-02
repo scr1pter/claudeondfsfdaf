@@ -12,6 +12,7 @@ async function main() {
   const out = path.resolve(args["--out"])
   const checks = inventory.browser.map((name) => ({ name, status: "not_run" }))
   const blocked = []
+  const screenshots = []
   let instrumentError = null
   let context
   let proxy
@@ -129,13 +130,14 @@ async function main() {
       const rows = [{ type: "upsert", source: "browser/batch", title: "Browser batch", body: "uibatchtoken Café 🧭" }]
       await uiBatch("ui-batch-01", rows)
       await uiBatch("ui-batch-01", rows, true)
+      const beforeInvalid = await statuses()
       const invalid = '{"type":"batch","batchId":"ui-invalid"}\n{"type":"upsert"}\n'
       await page.getByRole("textbox", { name: "Batch NDJSON", exact: true }).fill(invalid)
       const response = page.waitForResponse((item) => new URL(item.url()).pathname === "/api/batches")
       await page.getByRole("button", { name: "Import batch", exact: true }).click()
       requireProduct((await response).status() === 400, "Invalid browser batch was accepted.")
       requireProduct(await page.getByRole("textbox", { name: "Batch NDJSON", exact: true }).inputValue() === invalid, "Failed batch erased the entered text.")
-      await poll(statuses, invalidBatchStatusMatches, "Validation error was not visible.")
+      await poll(statuses, (rows) => invalidBatchStatusMatches(rows, beforeInvalid), "Validation error was not visible.")
       await page.getByRole("textbox", { name: "Document source", exact: true }).fill("browser/legacy-ui")
       await page.getByRole("textbox", { name: "Document title", exact: true }).fill("Legacy UI remains")
       await page.getByRole("textbox", { name: "Document text", exact: true }).fill("legacyuibrowser")
@@ -254,7 +256,14 @@ async function main() {
       requireProduct(await page.getByRole("combobox", { name: "Results per page", exact: true }).inputValue() === "2", "Restart lost selected page size.")
       requireProduct(await page.getByRole("textbox", { name: "Search documents", exact: true }).inputValue() === "uipaginationtoken", "Restart lost the query.")
     })
+    const previousViewport = page.viewportSize()
+    await page.setViewportSize({ width: 1200, height: 850 })
     await page.screenshot({ path: path.join(out, "browser-final.png") })
+    screenshots.push("browser-final.png")
+    await page.setViewportSize({ width: 390, height: 844 })
+    await page.screenshot({ path: path.join(out, "browser-mobile.png") })
+    screenshots.push("browser-mobile.png")
+    await page.setViewportSize(previousViewport || { width: 1200, height: 850 })
   } catch (error) {
     instrumentError = "Owned browser harness failure: " + String(error.stack || error).slice(0, 1600)
   } finally {
@@ -268,7 +277,7 @@ async function main() {
         fs.rmSync(target, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 })
       else instrumentError ||= "Owned profile cleanup path failed boundary validation."
     }
-    fs.writeFileSync(path.join(out, "browser.json"), JSON.stringify({ checks, instrumentError, blockedRequests: blocked }, null, 2) + "\n")
+    fs.writeFileSync(path.join(out, "browser.json"), JSON.stringify({ checks, instrumentError, blockedRequests: blocked, screenshots }, null, 2) + "\n")
   }
   process.exitCode = reportExit(checks, instrumentError)
 }

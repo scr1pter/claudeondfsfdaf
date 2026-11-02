@@ -59,6 +59,7 @@ class Evaluator:
         self.checks = blank_checks()
         self.rows = {row["name"]: row for row in self.checks}
         self.instrument_errors = []
+        self.screenshots = []
         self.process = None
         self.process_log = None
         self.launch_count = 0
@@ -187,6 +188,9 @@ class Evaluator:
                 raise ValueError("Malformed browser check inventory")
             for row in rows:
                 self.rows[row["name"]].update(row)
+            artifacts = report.get("screenshots", [])
+            if isinstance(artifacts, list):
+                self.screenshots = [name for name in artifacts if name in {"browser-final.png", "browser-mobile.png"}]
             if report.get("instrumentError"):
                 self.instrument(str(report["instrumentError"])[:1000])
             expected = 2 if report.get("instrumentError") else (1 if any(row["status"] == "failed" for row in rows) else 0)
@@ -245,6 +249,7 @@ def main(argv=None):
         "apiGroups": 18, "browserChecks": 8,
         "sourceBeforeSha256": digest(before), "sourceAfterSha256": digest(after),
         "instrumentErrors": evaluator.instrument_errors,
+        "screenshots": evaluator.screenshots,
     }
     (args.out / "source-before.json").write_text(json.dumps(before, indent=2) + "\n", encoding="utf-8")
     (args.out / "source-after.json").write_text(json.dumps(after, indent=2) + "\n", encoding="utf-8")

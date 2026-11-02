@@ -3,19 +3,21 @@
   "algorithm": "sha256",
   "files": {
     ".gitattributes": "a79691a93b46e49ce460c26ef22afcc03d6eca1e63bf2edbc20e96159510f6c9",
-    ".gitignore": "32e8b823530055a61d53958cc2f4f9012e412458541b4269b21485bab1de73a2",
+    ".gitignore": "abfc2d274a179d03c02c658468f1d9e70ff52edb025837732de49bb164ffd33a",
     "api_checks.py": "4ec3943d7fc7d073134c99fe0a201c93f3b5ace7286f340c58904d4f7bb73d08",
-    "browser.cjs": "61bd5c06189c758fe0f50447acf2ffdbfa57beee0c6d1d1a380d385c629e8bc0",
-    "browser_support.cjs": "016694853bda368b6fd5ce17bb1e6cce9bae186064fbabde6b7a9e3cd9f71a37",
+    "browser.cjs": "03b61c2170fc90ae9d73bd0f8bcddcef2e59c4230c008845375307490afd647a",
+    "browser_support.cjs": "f3a911d645a623dd59bc4986bda4ea311f9d7bdc10d96a774fc59ad3d9ebe4dc",
     "corpus.py": "9af212d8634e93a9786362d5e7ac2800df00b4e8f4c86d9c0dafd9bb30a967b9",
-    "evaluate.py": "0af37e31282e950728bb7cb0e975233330ebafb5782ef2ffc59c462410a2c698",
+    "evaluate.py": "be1a3a7a2b7abdb83c2024d52249fb52ce6b28fc1ba4649b72c89a63a4eda3ed",
     "free-validation.json": "570a08022877f92ac95a0ad05d799de9be1ae79d9b353e12001707a7ebd26d53",
-    "FREEZE_HISTORY.json": "423c9dc764a74e6ed058e224a38919fc31dd36d6b30202d3f46da596adaa1479",
+    "FREEZE_HISTORY.json": "cd40ff7b47825e2310447c49708c564f69324ec586914d0125f2b1b648b15683",
     "freeze_manifest.py": "6086891149431cfefb0bfb306e781b99a3dbbe96335e9f11d8db8564f8237067",
     "integrity.py": "ae912fc3036d405045a69dcd270ffca37cec66cd29aabf9ff7749365f628b2bd",
     "inventory.json": "ddf604f016b8ba801ccfaf3b00a8fa89c4bb3a17144273710192a8e156850e2b",
     "inventory.py": "5f75b66d79f35e7082632176ce3bdde59956ebcddac2ede340a4142e5cdfdeb6",
-    "README.md": "b1c7f67702c034ec306a53273fa3242a45174004e20b7d4037f7c4fdac57f46d",
+    "postlaunch-validation.json": "550e08f317042d70865c04fb1e7bd8465d3df99959c09767898152c8b139ad0f",
+    "POSTLAUNCH.md": "96e488b73d7292d9278111359e48873a1d785145e0b10722221d1a196022e515",
+    "README.md": "dd610907f0fe8c37791fb6aa2799924ddeec8d708e9b28fad3d494f2f4e6e565",
     "seed/.gitignore": "f75c55e5761ee1bb55c74a7c0a5cb38b166ec465023bf5299922b3414ba884b4",
     "seed/bun.lock": "eda955f696bb697e9a9affc709ad224f1a14d3a5815943f69e4b0213eb5cce7d",
     "seed/index.html": "12ab49bacf8e2993eb737ace5d070253908c5ab7f8b3f998a200f302ab38321c",
@@ -30,9 +32,9 @@
     "seed/tsconfig.json": "159bf60f223e8a69c456543734194119c569732152744ac8d393bfb92804e37d",
     "task.json": "17496d15f21a51ec66386d79f5532ff5cc133a4f405e9140551d413bc8e16999",
     "TASK.md": "4db48d696f3647e89e37bdc2cbbb8ba42d7fac9f2be7d7539a0958209773ed9a",
-    "tests/browser_support.test.cjs": "0e0821b446a17e3a15a909cf0a121ea72f12a4464fc87124c7a24e68b730bc24",
+    "tests/browser_support.test.cjs": "b09fa439b7d48f061150b6f47ae3596ee8e52ed798ff57420385d8a4d1440298",
     "tests/test_controls.py": "8aa484d66cc7963c34fd7fc5409afcf80e587ecf36e8d45734ab7ef51021fb70",
-    "VALIDATION.md": "b9c7b45934854851e6f0c98035675104dab8e6e0b3c682cac87bb9717e199fd2"
+    "VALIDATION.md": "bf5adf67cedf0ea6052280d55a3eebc3ad4ddccb04b45800f6b7caa2c7044929"
   },
-  "aggregateSha256": "b57486e42ca2b5e178daf74a6f4dbdf8e528c9f401793229f256c53eea4a7d7c"
+  "aggregateSha256": "6c4c1c12e8334380a4fff9f1a42e334c76375ff6fa101ffcc38e563e8d52505c"
 }
