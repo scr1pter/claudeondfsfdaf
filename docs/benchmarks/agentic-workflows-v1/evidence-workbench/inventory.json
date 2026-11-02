@@ -1,0 +1,4 @@
+{
+  "api": ["api.startup", "api.legacy_import", "api.batch_create", "api.atomic_validation", "api.batch_replay", "api.batch_conflict", "api.replacement", "api.deletion", "api.history", "api.revival", "api.lexical_order", "api.unicode_citations", "api.citation_validation", "api.pagination", "api.cursor_binding", "api.stale_cursor", "api.restart_persistence", "api.legacy_migration"],
+  "browser": ["browser.import", "browser.search", "browser.detail", "browser.citation", "browser.replacement", "browser.history", "browser.untrusted", "browser.pagination"]
+}
