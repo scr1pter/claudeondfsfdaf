@@ -157,6 +157,13 @@ class ReportControls(unittest.TestCase):
         self.assertEqual([row["name"] for row in blank_checks()], CHECKS)
         self.assertEqual(descriptor["generatedDirectories"], ["dist"])
 
+    def test_portable_protected_files_are_seed_relative(self):
+        descriptor = json.loads((ROOT / "task.json").read_text())
+        self.assertTrue((ROOT / descriptor["promptFile"]).is_file())
+        self.assertNotIn("TASK.md", descriptor["protectedFiles"])
+        for name in descriptor["protectedFiles"]:
+            self.assertTrue((ROOT / descriptor["seedDirectory"] / name).is_file())
+
     def test_positive_all_pass_is_zero(self):
         checks = [{"name": name, "status": "passed"} for name in CHECKS]
         self.assertEqual(verdict(checks), ("passed", 0))
@@ -214,8 +221,28 @@ class ReportControls(unittest.TestCase):
             startup.assert_not_called()
             self.assertFalse(json.loads((out / "evaluation.json").read_text())["sourceUnchanged"])
 
+    def test_public_prompt_is_protected_independently_of_seed_list(self):
+        with tempfile.TemporaryDirectory(prefix="ew-control-") as directory:
+            app, out = self.fixture(directory)
+            (app / "TASK.md").write_text("changed public prompt")
+            with patch("evaluate.Evaluator.startup") as startup, redirect_stdout(io.StringIO()):
+                result = main(["--app", str(app), "--out", str(out), "--task", str(ROOT), "--bun", "unused", "--node", "unused"])
+            self.assertEqual(result, 2)
+            startup.assert_not_called()
+            self.assertFalse(json.loads((out / "evaluation.json").read_text())["sourceUnchanged"])
+
 
 class ManifestAndCorpusControls(unittest.TestCase):
+    def test_freeze_cli_writes_lf_and_verifies_its_snapshot(self):
+        import subprocess
+        with tempfile.TemporaryDirectory(prefix="ew-freeze-") as directory:
+            root = Path(directory)
+            for name in ["freeze_manifest.py", "integrity.py"]:
+                shutil.copyfile(ROOT / name, root / name)
+            subprocess.run([sys.executable, str(root / "freeze_manifest.py")], check=True, capture_output=True)
+            self.assertNotIn(b"\r\n", (root / "SOURCE_MANIFEST.json").read_bytes())
+            subprocess.run([sys.executable, str(root / "freeze_manifest.py"), "--check"], check=True, capture_output=True)
+
     def test_exact_root_generated_exclusion_only(self):
         with tempfile.TemporaryDirectory(prefix="ew-manifest-") as directory:
             root = Path(directory)

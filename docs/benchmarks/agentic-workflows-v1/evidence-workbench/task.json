@@ -1,7 +1,7 @@
 {
   "promptFile": "TASK.md",
   "seedDirectory": "seed",
-  "protectedFiles": ["TASK.md", "tests/smoke.test.ts", "schema/legacy.sql", "bun.lock"],
+  "protectedFiles": ["tests/smoke.test.ts", "schema/legacy.sql", "bun.lock"],
   "generatedDirectories": ["dist"],
   "environment": {"PORT": "4123"},
   "expectedApiGroups": 18,

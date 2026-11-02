@@ -1,9 +1,12 @@
-# Evidence Workbench holdout draft
+# Evidence Workbench holdout
 
-**Status: completed source draft; not admitted to the study.** The latest seed's
-typecheck, public smoke, build, and full browser gate remain pending after the
-final source edits. Publishing this draft does not freeze it or authorize a paid
-run. No task-source hash manifest has been frozen.
+**Status: source frozen after production candidate
+`893b9629224dc4249f08c0e18712511437a35a22`.** Local typecheck, both public smoke
+tests, build, pure controls, and the full unchanged-v1 negative gate completed.
+The negative gate executed all 26 inventory rows with 3 passed, 23 failed, no
+instrument errors, and unchanged source. No paid holdout run was admitted or
+performed at this freeze. `free-validation.json` and `VALIDATION.md` record the
+evidence and limitations; `SOURCE_MANIFEST.json` freezes the external sources.
 
 This independent maintenance benchmark is a neutral, entirely local document
 research application. The seed is a working **v1** with JSON/NDJSON import,
@@ -42,7 +45,9 @@ Chrome, a model, or an application reference implementation.
 
 For the real baseline gate, copy `seed` to a fresh app directory **outside this
 task tree**, copy `TASK.md` into that app, and use already-installed pinned
-dependencies. Do not write shared dependencies. Set absolute
+dependencies copied into the isolated app. Do not junction an entire shared
+dependency directory: build-tool cache writes can escape through that junction.
+Do not write shared dependencies. Set absolute
 `VECTOR_BENCH_CHROME`, `VECTOR_BENCH_PLAYWRIGHT_MODULE`, and
 `VECTOR_BENCH_BROWSER_PROXY` paths. The latter must be the runner-frozen common
 `scripts/benchmarks/browser-driver/proxy.cjs`, with its sibling `policy.cjs`.
@@ -74,6 +79,8 @@ production change, then freeze this task's external evaluator hashes with
 `freeze_manifest.py`. The task SHA and common browser-driver tree are additionally
 frozen by the portable runner. Any subsequent authored task change invalidates
 that freeze. The parent production agent must not inspect hidden acceptance
-details before its candidate change is frozen. This directory is a draft until
-those gates and the source freeze have been recorded. No paid run is authorized
-by this README.
+details before its candidate change is frozen. Those local gates and the ordered
+source freeze are now recorded. There is no full positive v2 reference
+implementation; the passing pure positive controls and the unchanged-v1 negative
+gate do not establish that every correct v2 implementation passes the suite.
+No paid run is authorized by this README.

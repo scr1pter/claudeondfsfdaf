@@ -24,7 +24,7 @@ def main():
             raise SystemExit("Task source manifest differs from the frozen task.")
         print(f"Task source manifest verified: {len(value['files'])} files.")
         return
-    target.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
+    target.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8", newline="\n")
     print(f"Task source manifest written: {len(value['files'])} files.")
 
 

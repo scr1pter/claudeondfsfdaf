@@ -220,7 +220,7 @@ def main(argv=None):
     try:
         descriptor = json.loads((args.task / "task.json").read_text(encoding="utf-8"))
         require(descriptor["generatedDirectories"] == ["dist"], "Generated-root contract changed.")
-        for name in descriptor["protectedFiles"]:
+        for name in ["TASK.md", *descriptor["protectedFiles"]]:
             source = args.task / "TASK.md" if name == "TASK.md" else args.task / "seed" / name
             target = args.app / name
             if not target.is_file() or target.read_bytes() != source.read_bytes():
