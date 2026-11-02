@@ -1,0 +1,31 @@
+{
+  "name": "workflow-runner",
+  "promptFile": "TASK.md",
+  "seedDirectory": "seed",
+  "evaluatorCommand": [
+    "{python}",
+    "{task}/evaluate.py",
+    "--app",
+    "{app}",
+    "--out",
+    "{out}",
+    "--bun",
+    "{bun}",
+    "--node",
+    "{node}",
+    "--task",
+    "{task}",
+    "--proxy-module",
+    "{task}/../../../../scripts/benchmarks/browser-driver/proxy.cjs"
+  ],
+  "evaluatorReport": "evaluation.json",
+  "expectedApiGroups": 16,
+  "expectedBrowserChecks": 8,
+  "generatedDirectories": ["dist"],
+  "protectedFiles": [
+    "sql/v1.sql",
+    "server/worker.ts",
+    "tests/smoke.test.ts",
+    "bun.lock"
+  ]
+}

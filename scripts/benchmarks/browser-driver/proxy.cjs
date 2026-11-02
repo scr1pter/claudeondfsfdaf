@@ -6,6 +6,8 @@ const { allowedURL } = require("./policy.cjs")
 async function startProxy(origins, blocked) {
   const sockets = new Set()
   const server = http.createServer((request, response) => {
+    request.on("error", () => request.destroy())
+    response.on("error", () => response.destroy())
     if (!allowedURL(request.url, origins)) {
       blocked(request.url, "proxy")
       response.writeHead(403, { "Content-Type": "text/plain", Connection: "close" })
@@ -31,20 +33,38 @@ async function startProxy(origins, blocked) {
         timeout: 15_000,
       },
       (result) => {
+        result.on("error", unavailable)
+        if (response.destroyed) {
+          result.destroy()
+          return
+        }
         response.writeHead(result.statusCode, result.headers)
         result.pipe(response)
       },
     )
-    upstream.on("timeout", () => upstream.destroy(new Error("Allowed local target timed out.")))
-    upstream.on("error", () => {
-      if (!response.headersSent) response.writeHead(502, { Connection: "close" })
+    function unavailable() {
+      if (response.destroyed || response.writableEnded) return
+      if (response.headersSent) {
+        response.destroy()
+        return
+      }
+      response.writeHead(502, { Connection: "close" })
       response.end("Allowed local target was unavailable.")
+    }
+    upstream.on("timeout", () => upstream.destroy(new Error("Allowed local target timed out.")))
+    upstream.on("error", unavailable)
+    request.on("error", () => upstream.destroy())
+    response.on("error", () => upstream.destroy())
+    response.on("close", () => {
+      if (!response.writableFinished) upstream.destroy()
     })
     request.on("aborted", () => upstream.destroy())
     request.pipe(upstream)
   })
   server.on("connection", (socket) => {
     sockets.add(socket)
+    // Chrome may reset a keep-alive connection while another request is in flight.
+    socket.on("error", () => socket.destroy())
     socket.once("close", () => sockets.delete(socket))
   })
   server.on("connect", (request, socket) => {

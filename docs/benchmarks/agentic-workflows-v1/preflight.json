@@ -1,6 +1,6 @@
 {
   "kind": "Free development controls before new paid maintenance-task arms",
-  "atUtc": "2026-11-02T00:24:14.354901+00:00",
+  "atUtc": "2026-11-02T00:50:52.666072+00:00",
   "paidProviderCallsAtThisStage": 0,
   "historicalProviderReceiptsRetained": 449,
   "historicalUsageDerivedUsdRetained": 11.2319408,
@@ -14,13 +14,22 @@
     "failed": 0
   },
   "commonBrowserDriver": {
-    "nodeUnitPassed": 6,
+    "nodeUnitPassed": 10,
     "headlessSmokePassed": 12,
     "headlessSmokeFailed": 0,
     "deniedOriginRequests": 0,
-    "redirectFenceCorrectionBeforeFreeze": true
+    "redirectFenceCorrectionBeforeFreeze": true,
+    "socketResetRegressionReproducedOldCrash": true
   },
-  "workflowTaskInstrumentStatus": "Draft; lifecycle and seed-negative controls still required before freeze",
+  "workflowTaskInstrumentStatus": "Root-reviewed; exact source manifest written before first paid arm",
   "sourceProductRevision": "bd537fd2ccd35984bf705264daa1331bb4f39feb",
-  "noNewDeployment": true
+  "noNewDeployment": true,
+  "portableRunnerPythonControls": {
+    "passed": 44,
+    "failed": 0
+  },
+  "realOwnedRuntimeSmoke": {
+    "passed": 5,
+    "failed": 0
+  }
 }
