@@ -760,6 +760,105 @@ describe("SessionRunnerLLM", () => {
     )
   }
 
+  for (const scenario of [
+    { name: "absent usage", usage: undefined, cost: 0, unpriced: true, free: false },
+    {
+      name: "explicit zero usage",
+      usage: { inputTokens: 0, outputTokens: 0 },
+      cost: 0,
+      unpriced: false,
+      free: false,
+    },
+    {
+      name: "known terminal usage",
+      usage: { inputTokens: 1_000, outputTokens: 100 },
+      cost: 0.003,
+      unpriced: false,
+      free: false,
+    },
+    {
+      name: "authoritative billed cost without token counters",
+      usage: { providerMetadata: { copilot: { totalNanoAiu: 3_000_000_000 } } },
+      cost: 0.03,
+      unpriced: false,
+      free: false,
+    },
+    {
+      name: "authoritative billed zero without token counters",
+      usage: { providerMetadata: { copilot: { totalNanoAiu: 0 } } },
+      cost: 0,
+      unpriced: false,
+      free: false,
+    },
+    { name: "guaranteed-free absent usage", usage: undefined, cost: 0, unpriced: true, free: true },
+  ]) {
+    it.effect(`terminal usage accounting: V2 ${scenario.name} remains distinct through replay`, () =>
+      Effect.gen(function* () {
+        yield* setup
+        const selected = Model.make({ id: "terminal-usage", provider: "fake", route: OpenAIChat.route })
+        currentModel = scenario.free
+          ? SessionRunnerModel.withFreeRoute(selected)
+          : SessionRunnerModel.withPricing(selected, [{ input: 2, output: 10, cache: { read: 0.1, write: 2.5 } }])
+        const session = yield* SessionV2.Service
+        const guard = yield* SpendGuard.Service
+        yield* guard.arm(sessionID, { usd: 1, unpricedSteps: 1 })
+        yield* session.prompt({ sessionID, prompt: Prompt.make({ text: scenario.name }), resume: false })
+        response = [
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.textStart({ id: "terminal-usage-text" }),
+          LLMEvent.textDelta({ id: "terminal-usage-text", text: "A finished response" }),
+          LLMEvent.textEnd({ id: "terminal-usage-text" }),
+          LLMEvent.stepFinish({
+            index: 0,
+            reason: "stop",
+            ...(scenario.usage === undefined ? {} : { usage: scenario.usage }),
+          }),
+          LLMEvent.finish({ reason: "stop" }),
+        ]
+
+        yield* session.resume(sessionID)
+
+        expect(requests).toHaveLength(1)
+        const context = yield* session.context(sessionID)
+        expect(context).toMatchObject([{ type: "user" }, { type: "assistant", cost: scenario.cost }])
+        const assistant = context[1]
+        expect(assistant?.type === "assistant" && Boolean(assistant.unpriced)).toBe(scenario.unpriced)
+        expect((yield* session.get(sessionID)).cost).toBeCloseTo(scenario.cost)
+        expect((yield* session.get(sessionID)).unpricedSteps ?? 0).toBe(scenario.unpriced ? 1 : 0)
+        const run = yield* guard.snapshot(sessionID)
+        expect(run).toMatchObject({
+          costKind: scenario.free ? "free" : "priced",
+          spentUsd: scenario.cost,
+          steps: 1,
+          unpricedSteps: scenario.unpriced && !scenario.free ? 1 : 0,
+        })
+        expect(run?.stopped?.reason).toBe(scenario.unpriced && !scenario.free ? "unpriced" : undefined)
+
+        yield* replaySessionProjection(sessionID)
+        yield* replaySessionProjection(sessionID)
+
+        expect((yield* session.get(sessionID)).cost).toBeCloseTo(scenario.cost)
+        expect((yield* session.get(sessionID)).unpricedSteps ?? 0).toBe(scenario.unpriced ? 1 : 0)
+        expect(yield* guard.snapshot(sessionID)).toEqual(run)
+        const { db } = yield* Database.Service
+        const recorded = yield* db
+          .select()
+          .from(EventTable)
+          .where(eq(EventTable.aggregate_id, sessionID))
+          .all()
+          .pipe(Effect.orDie)
+        expect(
+          recorded.filter(
+            (event) =>
+              event.type ===
+              EventV2.versionedType(SessionEvent.Step.Ended.type, SessionEvent.Step.Ended.durable!.version),
+          ),
+        ).toHaveLength(1)
+        expect(requests).toHaveLength(1)
+      }),
+    )
+  }
+
   it.effect("advertises and executes a globally attached application tool", () =>
     Effect.gen(function* () {
       yield* setup
