@@ -14,13 +14,18 @@ MAX_COMMAND_CHARS = 65_536
 MAX_SCRIPTS = 32
 MAX_SCRIPT_BYTES = 262_144
 LIBRARIES = ("playwright", "puppeteer", "selenium", "webdriver")
+SCOPED_LIBRARIES = {"@playwright", "@puppeteer", "@wdio"}
 TERMINAL_TOOLS = {"terminal", "bash", "shell", "exec", "exec_command", "execute", "run_command", "run_terminal_command"}
+TERMINAL_OBSERVATION_ACTIONS = {"list", "read", "wait", "resize", "close", "reveal"}
+TERMINAL_CONTROL_KEYS = {"ctrl-c", "ctrl-g", "ctrl-l", "ctrl-z"}
 READ_WRITE_COMMANDS = {"get-content", "gc", "cat", "type", "rg", "grep", "select-string", "echo", "write-output", "set-content", "out-file", "new-item", "apply_patch"}
 JS_TOKENS = re.compile(r"//[^\n]*|/\*[\s\S]*?\*/|'(?:\\.|[^'\\])*'|\"(?:\\.|[^\"\\])*\"|`(?:\\.|[^`\\])*`|[A-Za-z_$][\w$]*|[^\s]", re.MULTILINE)
 
 
 def _library(value):
-    return any(name in value.lower().replace("\\", "/").split("/")[-2:] or value.lower().startswith(name + "-") for name in LIBRARIES)
+    normalized = value.lower().replace("\\", "/")
+    parts = normalized.split("/")
+    return bool(SCOPED_LIBRARIES & set(parts)) or any(name in parts[-2:] or normalized.startswith(name + "-") for name in LIBRARIES)
 
 
 def _script_signal(source, python=False):
@@ -61,6 +66,19 @@ def _script_signal(source, python=False):
                 return "library"
         if value == "import" and i + 1 < len(tokens) and tokens[i + 1][0] == "string" and _library(values[i + 1]):
             return "library"
+        if value == "createRequire" and i + 1 < len(tokens) and values[i + 1] == "(":
+            balance = 0
+            end = None
+            for position in range(i + 1, min(len(tokens), i + 32)):
+                balance += values[position] == "("
+                balance -= values[position] == ")"
+                if balance == 0:
+                    end = position
+                    break
+            if end is not None and end + 2 < len(tokens) and values[end + 1] == "(":
+                argument = values[end + 2:end + 14]
+                if any(name in argument for name in env_names) or tokens[end + 2][0] == "string" and _library(values[end + 2]):
+                    return "library"
         if value in {"spawn", "spawnSync", "execFile", "execFileSync"} and i + 2 < len(tokens) and values[i + 1] == "(":
             argument = values[i + 2:i + 12]
             if values[i + 2] in chrome_variables or any(name in argument for name in ("CHROME_PATH", "VECTOR_BENCH_CHROME")):
@@ -103,7 +121,8 @@ def audit_tool_events(path, runtime, app, mode, trusted_client=None):
     scripts = set()
     pending = set()
     counts = {"lines": 0, "toolExecutions": 0, "commandsInspected": 0, "scriptsInspected": 0,
-              "directBrowserReferences": 0, "commonClientInvocations": 0, "unknownObservations": 0}
+              "directBrowserReferences": 0, "commonClientInvocations": 0, "unknownObservations": 0,
+              "terminalObservationActions": 0, "terminalControlActions": 0, "terminalInteractiveInputs": 0}
 
     def note(name, unknown=False):
         observations.add(name)
@@ -156,12 +175,12 @@ def audit_tool_events(path, runtime, app, mode, trusted_client=None):
         counts["scriptsInspected"] += 1
         signal(_script_signal(source, python))
 
-    def inspect(command, depth=0):
+    def inspect(command, depth=0, argv=None):
         if len(command) > MAX_COMMAND_CHARS or depth > 2:
             note("audit_limit_reached", True)
             return
         try:
-            parts = _command_parts(command)
+            parts = [argv] if argv is not None else _command_parts(command)
         except ValueError:
             note("shell_execution_unparseable", True)
             return
@@ -232,6 +251,7 @@ def audit_tool_events(path, runtime, app, mode, trusted_client=None):
             note("tool_telemetry_unparseable", True)
             continue
         command = None
+        command_argv = None
         if not isinstance(event, dict):
             note("tool_telemetry_unparseable", True)
             continue
@@ -255,6 +275,34 @@ def audit_tool_events(path, runtime, app, mode, trusted_client=None):
                 pending.discard(identity)
             if state.get("status") in {"pending", "running"} and not value:
                 continue
+            if part["tool"].split(".")[-1] == "terminal" and isinstance(value, dict):
+                action = value.get("action")
+                if action in TERMINAL_OBSERVATION_ACTIONS:
+                    counts["terminalObservationActions"] += 1
+                    continue
+                if action == "keys":
+                    keys = value.get("keys")
+                    if isinstance(keys, list) and keys and all(isinstance(key, str) and key in TERMINAL_CONTROL_KEYS for key in keys):
+                        counts["terminalControlActions"] += 1
+                    else:
+                        counts["terminalInteractiveInputs"] += 1
+                        note("terminal_interactive_input_unknown", True)
+                    continue
+                if action == "type":
+                    counts["terminalInteractiveInputs"] += 1
+                    note("terminal_interactive_input_unknown", True)
+                    if isinstance(value.get("text"), str) and value["text"].strip():
+                        inspect(value["text"])
+                    continue
+                if action not in {None, "open"}:
+                    note("terminal_action_unrecognized", True)
+                    continue
+                if action == "open" and "args" in value:
+                    args = value["args"]
+                    if not isinstance(args, list) or any(not isinstance(arg, str) for arg in args):
+                        note("terminal_open_arguments_unknown", True)
+                        continue
+                    command_argv = [value.get("command", value.get("cmd")), *args]
             command = value.get("command", value.get("cmd")) if isinstance(value, dict) else None
         elif runtime == "codex" and event.get("type") == "item.completed":
             item = event.get("item")
@@ -271,7 +319,10 @@ def audit_tool_events(path, runtime, app, mode, trusted_client=None):
             note("tool_execution_command_unavailable", True)
             continue
         counts["toolExecutions"] += 1
-        identity = hashlib.sha256(command.encode()).digest()
+        if command_argv is not None and sum(len(arg) for arg in command_argv) > MAX_COMMAND_CHARS:
+            note("audit_limit_reached", True)
+            continue
+        identity = hashlib.sha256(json.dumps(command_argv).encode() if command_argv is not None else command.encode()).digest()
         if identity in commands:
             continue
         if len(commands) >= MAX_COMMANDS:
@@ -279,8 +330,8 @@ def audit_tool_events(path, runtime, app, mode, trusted_client=None):
             break
         commands.add(identity)
         counts["commandsInspected"] += 1
-        inspect(command)
-    if not counts["toolExecutions"]:
+        inspect(command, argv=command_argv)
+    if not counts["toolExecutions"] and not counts["terminalObservationActions"] and not counts["terminalControlActions"] and not counts["terminalInteractiveInputs"]:
         note("completed_execution_telemetry_absent", True)
     if pending:
         note("unfinished_execution_telemetry", True)

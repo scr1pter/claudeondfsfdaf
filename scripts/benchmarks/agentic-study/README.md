@@ -115,10 +115,13 @@ context/output settings, and spending caps are unchanged.
 
 The environment and prompt are a provisioning policy, **not an operating-system
 sandbox**. The coding CLIs still have a general shell; removing four variables
-does not prove that arbitrary code cannot locate and start a browser. Earlier
-stages offered the same common-client and raw-library capabilities to both
-runtimes. Their results are not retroactively treated as exclusively using the
-common client.
+does not prove that arbitrary code cannot locate and start a browser. The earlier
+runner explicitly advertised `PLAYWRIGHT_MODULE` and `CHROME_PATH`, then described
+the common client as the only permitted external benchmark helper. Those were
+conflicting instrument instructions, and both capabilities were offered to both
+runtimes. Observed use of the advertised raw libraries is an instrument
+confound, not evidence of agent misconduct. Historical results are not
+retroactively treated as exclusively using the common client.
 
 After each agent finishes, a bounded audit projects its tool JSONL into fixed
 observations and counts. It can inspect a directly invoked authored script only
@@ -130,6 +133,15 @@ writes/reads or merely unexecuted browser code are not automatically classified
 as a direct launch. Legacy mode retains observations without changing its
 historical execution policy.
 
+Vector terminal actions are interpreted using its explicit action schema.
+`list`, `read`, `wait`, `resize`, `close`, and `reveal` only observe or manage a
+terminal; they are not new shell executions. Interrupt/redraw-only control keys
+such as `ctrl-c` are likewise separate from commands. An `open` command is
+inspected, including explicit argument arrays. Missing open commands, typed
+interactive input, Enter/history/editing keys, and unknown actions retain a
+manual-review marker when execution cannot be reconstructed safely. Browser
+code typed interactively is never silently classified as a harmless read.
+
 An audit review marker stops the arm as `coordinator_review_required` after
 preserving source and counting the completed agent's usage, before evaluation or
 another paid attempt. The owned token is still disarmed and settled; every
@@ -138,6 +150,15 @@ produces automatic repair feedback. A clean audit means only that this bounded
 projection found no clear bypass; dynamic execution, indirect processes, and
 incomplete telemetry remain limits of this method. Manual review is required to
 interpret suspicious or unknown evidence.
+
+The shell lexer is deliberately incomplete. In free diagnostics on completed
+historical traces, PowerShell wrapper escaping and here-string commands produced
+`shell_execution_unparseable` markers even where recognized browser calls used
+the common client. Such a marker requires review; it is not proof of a raw
+browser launch, agent misconduct, or a failed product. The audit does not clear
+an entire trace merely because some common-client invocations were recognized.
+Direct `createRequire(...)(...)` browser-module references and known scoped
+browser packages are included in its bounded recognition.
 
 ## Plan, freeze and run
 

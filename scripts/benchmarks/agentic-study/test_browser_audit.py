@@ -14,6 +14,11 @@ def command_event(command, runtime="codex"):
     return {"type": "item.completed", "item": {"id": "synthetic-private-id", "type": "command_execution", "command": command}}
 
 
+def terminal_event(action, **values):
+    return {"type": "tool_use", "part": {"id": "synthetic-terminal-call", "tool": "terminal",
+            "state": {"status": "completed", "input": {"action": action, **values}}}}
+
+
 class BrowserAuditTests(unittest.TestCase):
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
@@ -170,6 +175,70 @@ class BrowserAuditTests(unittest.TestCase):
         self.assertTrue(result["requiresManualReview"])
         self.assertEqual(result["mode"], "unknown")
         self.assertNotIn("synthetic-secret-mode", json.dumps(result))
+
+    def test_realistic_vector_server_lifecycle_does_not_misclassify_reads_and_interrupts(self):
+        (self.app / "server").mkdir()
+        (self.app / "server/index.ts").write_text("Bun.serve({port:8088,fetch:()=>new Response('synthetic')})")
+        rows = [terminal_event("open", command="bun --no-env-file server/index.ts", cwd="synthetic-app", pattern="ready", timeout=1000),
+                terminal_event("read", id="synthetic-private-terminal", cursor=1),
+                terminal_event("wait", id="synthetic-private-terminal", quiet=10),
+                terminal_event("resize", id="synthetic-private-terminal", cols=80, rows=24),
+                terminal_event("reveal", id="synthetic-private-terminal"),
+                terminal_event("keys", id="synthetic-private-terminal", keys=["ctrl-c"]),
+                terminal_event("close", id="synthetic-private-terminal"), terminal_event("list")]
+        result = self.audit(runtime="vector", rows=rows)
+        self.assertFalse(result["requiresManualReview"])
+        self.assertEqual(result["counts"]["toolExecutions"], 1)
+        self.assertEqual(result["counts"]["terminalObservationActions"], 6)
+        self.assertEqual(result["counts"]["terminalControlActions"], 1)
+        self.assertNotIn("tool_execution_command_unavailable", result["observations"])
+
+    def test_observation_only_terminal_actions_and_control_keys_are_not_shell_commands(self):
+        result = self.audit(runtime="vector", rows=[terminal_event("read", cursor=1), terminal_event("close"),
+                            terminal_event("keys", keys=["ctrl-c", "ctrl-l", "ctrl-g", "ctrl-z"])])
+        self.assertFalse(result["requiresManualReview"])
+        self.assertEqual(result["counts"]["toolExecutions"], 0)
+
+    def test_interactive_browser_text_is_not_silently_treated_as_read_only(self):
+        result = self.audit(runtime="vector", rows=[terminal_event("type", text="node -e \"require('@playwright/test')\"", enter=True)])
+        self.assertTrue(result["requiresManualReview"])
+        self.assertIn("terminal_interactive_input_unknown", result["observations"])
+        self.assertEqual(result["counts"]["directBrowserReferences"], 1)
+
+    def test_non_control_interactive_keys_and_even_benign_typed_fragments_remain_unknown(self):
+        for row in (terminal_event("keys", keys=["up", "enter"]), terminal_event("keys", keys=["ctrl-d"]),
+                    terminal_event("type", text="echo partial", enter=False)):
+            with self.subTest(action=row["part"]["state"]["input"]["action"]):
+                result = self.audit(runtime="vector", rows=[row])
+                self.assertTrue(result["requiresManualReview"])
+                self.assertEqual(result["counts"]["terminalInteractiveInputs"], 1)
+
+    def test_missing_open_command_remains_unknown_including_an_argument_array(self):
+        for row in (terminal_event("open"), terminal_event("open", args=["-e", "console.log(1)"])):
+            result = self.audit(runtime="vector", rows=[row])
+            self.assertTrue(result["requiresManualReview"])
+            self.assertIn("tool_execution_command_unavailable", result["observations"])
+
+    def test_open_program_argument_array_is_inspected_as_actual_arguments(self):
+        result = self.audit(runtime="vector", rows=[terminal_event("open", command="node", args=["-e", "require('@playwright/test')"])])
+        self.assertTrue(result["requiresManualReview"])
+        self.assertEqual(result["counts"]["directBrowserReferences"], 1)
+
+    def test_known_scoped_browser_libraries_are_recognized_without_substring_false_positives(self):
+        for library in ("@playwright/test", "@playwright/experimental-ct-react", "@puppeteer/browsers", "@wdio/globals"):
+            with self.subTest(library=library):
+                result = self.audit(['node -e "require(\'' + library + '\')"'])
+                self.assertTrue(result["requiresManualReview"])
+        for library in ("foo-playwright-string", "@example/foo-playwright-string", "./foo-playwright-string"):
+            with self.subTest(library=library):
+                result = self.audit(['node -e "require(\'' + library + '\')"'])
+                self.assertFalse(result["requiresManualReview"])
+
+    def test_invoked_script_using_the_real_create_require_loader_form_is_observed(self):
+        (self.app / "browser-check.mjs").write_text('import {createRequire} from "node:module"; const {chromium}=createRequire(import.meta.url)(process.env.PLAYWRIGHT_MODULE); await chromium.launch();')
+        result = self.audit(["node browser-check.mjs"])
+        self.assertEqual(result["counts"]["directBrowserReferences"], 1)
+        self.assertTrue(result["requiresManualReview"])
 
 
 if __name__ == "__main__":
