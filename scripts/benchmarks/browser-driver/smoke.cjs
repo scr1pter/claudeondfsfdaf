@@ -51,6 +51,12 @@ async function main() {
       return
     }
     response.setHeader("Content-Type", "text/html")
+    if (request.url === "/focus") {
+      response.end(
+        '<!doctype html><html><head><title>Owned focus fixture</title></head><body><main><label>Focus text <input type="text"></label><label>Password <input type="password" value="private-focus-fixture"></label><button>Last control</button></main></body></html>',
+      )
+      return
+    }
     response.end(`<!doctype html><html><head><title>Owned browser fixture</title></head><body><main>
       <h1>Workflow fixture</h1><form id="form"><label>Researcher <input name="researcher" required></label>
       <label>Status <select name="status"><option value="draft">Draft</option><option value="done">Done</option></select></label>
@@ -173,6 +179,39 @@ async function main() {
     assert.ok(many.snapshot.controlsTruncated)
     assert.ok(many.snapshot.controls.length <= 80)
     checks.push("large control inventory is bounded")
+    state = await call({ action: "open", url: appOrigin + "/focus" })
+    state = await call({ action: "click", role: "textbox", name: "Focus text" })
+    const focused = (snapshot, name) => {
+      assert.equal(snapshot.focus.documentHasFocus, true)
+      assert.equal(snapshot.focus.activeKind, "control")
+      assert.equal(snapshot.focus.tag, "input")
+      assert.equal(snapshot.focus.tabIndex, 0)
+      assert.equal(snapshot.controls.find((item) => item.ref === snapshot.focus.focusedRef)?.name, name)
+    }
+    focused(state.snapshot, "Focus text")
+    state = await call({ action: "observe" })
+    focused(state.snapshot, "Focus text")
+    checks.push("focused input metadata uses a current ref and observe preserves focus")
+    state = await call({ action: "click", role: "textbox", name: "Password" })
+    focused(state.snapshot, "Password")
+    assert.equal(state.snapshot.focus.type, "password")
+    assert.ok(!JSON.stringify(state.snapshot).includes("private-focus-fixture"))
+    state = await call({ action: "observe" })
+    focused(state.snapshot, "Password")
+    assert.ok(!JSON.stringify(state.snapshot).includes("private-focus-fixture"))
+    checks.push("focused password metadata and observations never expose its value")
+    await call({ action: "click", role: "button", name: "Last control" })
+    await call({ action: "viewport", width: 390, height: 844 })
+    state = await call({ action: "press", key: "Tab" })
+    assert.equal(state.snapshot.focus.documentHasFocus, false)
+    assert.equal(state.snapshot.focus.activeKind, "body")
+    assert.equal(state.snapshot.focus.focusedRef, undefined)
+    state = await call({ action: "observe" })
+    assert.equal(state.snapshot.focus.documentHasFocus, false)
+    assert.equal(state.snapshot.focus.activeKind, "body")
+    state = await call({ action: "press", key: "Tab" })
+    focused(state.snapshot, "Focus text")
+    checks.push("Tab leaving and re-entering the document is observed without changing focus")
     const unauthorized = await new Promise((resolve, reject) => {
       http
         .get(ready.endpoint + "/health", { headers: { Authorization: "Bearer invalid" } }, (response) => {
