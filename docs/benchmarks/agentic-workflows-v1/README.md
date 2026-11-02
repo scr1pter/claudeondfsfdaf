@@ -55,3 +55,7 @@ retained. This establishes corrected functional acceptance on this development
 task; it does not establish the aggregate 20% accepted-delivery savings target
 or equal blinded code quality. Paid cost/quality reporting and subsequent
 candidate/holdout results are reported separately.
+
+The [follow-up candidate plan](followup-stage.md) preregisters the next fixed
+candidate, repeat tasks, new holdout, browser-provisioning correction and unchanged
+spending limits. It makes no claim that the broader objective has been achieved.
