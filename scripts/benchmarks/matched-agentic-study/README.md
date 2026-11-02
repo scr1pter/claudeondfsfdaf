@@ -127,8 +127,10 @@ configuration/catalog and the meter's usage/reservation limits; it is not a
 fabricated API request field.
 Native identity kind is independent of request purpose. Every distinct Codex
 thread must satisfy its lead/role/depth/lifetime slot rules even when the request
-is a summary or compaction. Helper-purpose calls are accepted only on an already
-admitted root or child identity and remain fully billed. Distinct Vector helpers
+is a summary or compaction. A validated autonomous root/child may register its
+identity on its first summary-purpose call, then reuse that same slot normally;
+purpose alone never bypasses its admission rules or changes its role's tools.
+Every call remains fully billed. Distinct Vector helpers
 require an explicit native producer-to-generation-agent mapping, a previously
 admitted parent, one lifetime identity per producer, and no offered tools.
 Tool-using review/judge/specialist agents cannot escape the three child slots

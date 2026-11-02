@@ -232,8 +232,7 @@ class OwnedArm:
                         role = native["role"]
                         require(native["parent"] == self.registry.root_id and native["depth"] == 1 and role in self.roles, "nested or unapproved child")
                         require(role not in self.slots or self.slots[role] == native["id"], "duplicate lifetime slot")
-                    require(not native["helper"] or native["id"] in self.admitted_ids, "helper purpose before autonomous identity admission")
-                normalized = profile_body(body, native["id"] != self.registry.root_id or native["helper"])
+                normalized = profile_body(body, native["id"] != self.registry.root_id or identity_kind == "helper")
                 if identity_kind == "helper":
                     require(not body.get("tools") and not any(isinstance(item, dict) and item.get("type") == "additional_tools" and item.get("tools") for item in body["input"]), "native helper may not have tools")
                 wire = json.dumps(normalized, ensure_ascii=False, separators=(",", ":")).encode()

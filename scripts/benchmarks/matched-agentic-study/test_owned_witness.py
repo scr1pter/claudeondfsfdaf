@@ -330,15 +330,25 @@ class OwnedWitnessTests(unittest.TestCase):
         self.assertEqual(self.request(identity="unapproved", purpose="summary")[0], 400)
         self.assertEqual(self.meter.calls, 0)
 
-    def test_summary_first_approved_child_requires_prior_identity_admission(self):
+    def test_summary_first_approved_child_registers_and_reuses_same_slot(self):
         add_thread(self.registry.database, "worker-a", "implementation")
-        self.assertEqual(self.request(identity="worker-a", purpose="summary")[0], 400)
-        self.assertEqual(self.meter.calls, 0)
-        self.assertFalse(self.arm.slots)
+        self.assertEqual(self.request(identity="worker-a", purpose="summary")[0], 200)
+        self.assertEqual(self.arm.slots, {"implementation": "worker-a"})
+        self.assertIn("worker-a", self.arm.admitted_ids)
+        self.assertEqual(self.request(identity="worker-a")[0], 200)
+        result = self.supervisor.close(timeout=2)
+        self.assertFalse(result["reviewRequired"])
+        self.assertEqual(result["providerRequests"], 2)
+        self.assertAlmostEqual(result["measuredUsd"], 0.02)
 
-    def test_summary_first_root_requires_prior_identity_admission(self):
-        self.assertEqual(self.request(purpose="summary")[0], 400)
-        self.assertEqual(self.meter.calls, 0)
+    def test_summary_first_root_registers_and_preserves_lead_tools(self):
+        self.assertEqual(self.request(purpose="summary")[0], 200)
+        self.assertEqual(self.arm.admitted_ids, {ROOT})
+        self.assertEqual(self.meter.bodies[0]["input"][0]["tools"], body()["input"][0]["tools"])
+        self.assertEqual(self.request()[0], 200)
+        result = self.supervisor.close(timeout=2)
+        self.assertFalse(result["reviewRequired"])
+        self.assertEqual(result["providerRequests"], 2)
 
     def test_summary_first_replacement_child_cannot_bypass_lifetime_slot(self):
         add_thread(self.registry.database, "worker-a", "implementation")
