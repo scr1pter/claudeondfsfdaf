@@ -205,7 +205,7 @@ def gate_feedback(report, task):
         return ("passed", None) if all(row["status"] == "passed" for row in rows) else ("instrument_failure", None)
     if not failed:
         return "instrument_failure", None
-    observations = [{key: redact(row[key]) for key in ("name", "expected", "actual", "error") if key in row}
+    observations = [{key: redact(row[key]) for key in ("name", "expected", "actual", "error", "detail", "message") if key in row}
                     for row in failed[:16]]
     return "product_failure", ("Continue the SAME task in this SAME session using one agent. Preserve TASK.md, public protected files, "
                                "and every requirement. The frozen independent gate found the following failed checks. "
@@ -230,6 +230,16 @@ def redact(value):
     text = re.sub(r"(?i)\b(?:sk-[a-z0-9_-]+|local-run-[a-z0-9_-]+|Bearer\s+\S+)", "<redacted>", text)
     text = re.sub(r"(?i)[a-z]:[\\/][^\s\"']+|/(?:Users|home|tmp)/[^\s\"']+", "<path>", text)
     return text[:500]
+
+
+def record_attempt_usage(attempt, cumulative, through_closure=False):
+    start = attempt["usageAtStart"]
+    calls = cumulative["providerRequests"] - start["providerRequests"]
+    amount = cumulative["measuredUsd"] - start["measuredUsd"]
+    require(calls >= 0 and amount >= -1e-8, "attempt usage decreased below its observed invocation baseline")
+    attempt["usageThroughClosure" if through_closure else "usage"] = dict(cumulative)
+    attempt["incrementalUsage"] = {"providerRequests": calls, "measuredUsd": max(0, amount)}
+    attempt["usageAccountingStatus"] = "settled_through_owned_scope_closure" if through_closure else "settled_after_invocation"
 
 
 def coordinate_arm(*, runtime, label, prompt, task, controller, run_agent, evaluate, preserve,
@@ -262,18 +272,34 @@ def coordinate_arm(*, runtime, label, prompt, task, controller, run_agent, evalu
             if delta["measuredUsd"] >= soft_cap or delta["providerRequests"] >= max_calls or result["agentWallMs"] >= max_seconds * 1000:
                 result["stopReason"] = "case_stop_threshold"
                 break
-            attempt = {"index": index}
+            attempt = {"index": index, "usageAtStart": dict(delta), "incrementalUsage": None,
+                       "usageAccountingStatus": "unknown_pending_invocation", "invocationStatus": "not_observed_started",
+                       "agentTelemetryStatus": "unavailable"}
             result["attempts"].append(attempt)
             persist(result)
+            invocation_started = time.monotonic()
+            attempt["invocationStartedAtUnixMs"] = int(time.time() * 1000)
+            attempt["invocationStatus"] = "started"
             try:
                 agent = run_agent(current_prompt, session, (max_seconds * 1000 - result["agentWallMs"]) / 1000,
                                   max_calls - delta["providerRequests"], index, token, soft_cap, before)
+                attempt["invocationStatus"] = "returned"
+                attempt["agentTelemetryStatus"] = "incomplete" if agent.get("timedOut") or agent.get("stopReason") else "returned_runtime_result"
+            except Exception as error:
+                attempt["invocationStatus"] = "interrupted"
+                attempt["agentTelemetryStatus"] = "incomplete"
+                attempt["invocationFailureType"] = type(error).__name__
+                raise
             finally:
-                attempt["snapshot"] = preserve(index)
+                try:
+                    attempt["snapshot"] = preserve(index)
+                finally:
+                    attempt["observedInvocationWallMs"] = max(0, int((time.monotonic() - invocation_started) * 1000))
+                    attempt["observedInvocationWallScope"] = "run_agent_and_finally_source_snapshot_including_cleanup; excludes_final_controller_closure"
             attempt["agent"] = agent
             result["agentWallMs"] += agent["wallMs"]
             state = healthy(settled(), idle=True)
-            attempt["usage"] = usage_delta(before, state, actor)
+            record_attempt_usage(attempt, usage_delta(before, state, actor))
             check_frozen()
             if attempt["snapshot"].get("protectedViolations"):
                 result["stopReason"] = "protected_file_violation"
@@ -311,17 +337,29 @@ def coordinate_arm(*, runtime, label, prompt, task, controller, run_agent, evalu
         result["failureMessage"] = redact(error)
     finally:
         result["settlementComplete"] = False
+        unfinished = [attempt for attempt in result["attempts"] if "usage" not in attempt]
+        for attempt in unfinished:
+            attempt["usageThroughClosure"] = None
+            attempt["incrementalUsage"] = None
+            attempt["usageAccountingStatus"] = "unknown_until_owned_scope_closure"
+            if "agent" not in attempt:
+                attempt["agentTelemetryStatus"] = "incomplete"
         if token is not None:
             try:
                 controller("/disarm", {"requestToken": token})
                 final = healthy(settled(), idle=True)
                 result["finalStatus"] = final
-                result.update(usage_delta(before, final, actor))
+                cumulative = usage_delta(before, final, actor)
+                result.update(cumulative)
+                for attempt in unfinished:
+                    record_attempt_usage(attempt, cumulative, through_closure=True)
                 result["settlementComplete"] = True
                 result["tokenClosure"] = "scoped_disarm_acknowledged_and_settled"
             except Exception as error:
                 result["closureFailureType"] = type(error).__name__
                 result["stopReason"] = "closure_review_required"
+                for attempt in unfinished:
+                    attempt["usageAccountingStatus"] = "unknown_owned_scope_closure_unconfirmed"
         persist(result)
     return result
 
