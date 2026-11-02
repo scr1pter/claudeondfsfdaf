@@ -14,6 +14,49 @@ const report = (input: Partial<BrowserReport> = {}): BrowserReport => ({
 })
 
 describe("browser report", () => {
+  test("reports current keyboard focus as fenced metadata, without treating older backends as unfocused", () => {
+    const observed = { title: "Form", url: "https://shop.example.com/", text: "", elements: [] }
+    const focused = FenceMatch.plain(
+      formatReport(
+        report({
+          observed: {
+            ...observed,
+            focus: {
+              documentHasFocus: true,
+              activeKind: "control",
+              focusedRef: "ref_1",
+              tag: "input",
+              type: "password",
+              tabIndex: 0,
+            },
+          },
+        }),
+      ),
+    )
+    expect(focused).toContain(
+      "Keyboard focus: document=focused; active=control; ref=ref_1; tag=input; type=password; tabIndex=0",
+    )
+    expect(focused.indexOf("Keyboard focus:")).toBeLessThan(focused.indexOf("</untrusted_web_page"))
+    expect(FenceMatch.plain(formatReport(report({ observed })))).toContain("Keyboard focus: not reported (unknown).")
+    expect(
+      FenceMatch.plain(
+        formatReport(
+          report({
+            observed: {
+              ...observed,
+              focus: {
+                documentHasFocus: false,
+                activeKind: "body",
+                tag: "body",
+                tabIndex: -1,
+              },
+            },
+          }),
+        ),
+      ),
+    ).toContain("document=not focused; active=body")
+  })
+
   test("fences everything the page supplied, with the redacted address", () => {
     const text = formatReport(
       report({

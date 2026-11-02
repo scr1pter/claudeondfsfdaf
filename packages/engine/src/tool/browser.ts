@@ -148,6 +148,15 @@ export type BrowserReport = {
       href?: string
       disabled?: boolean
     }[]
+    /** Missing on older browser backends; absence is unknown, not an unfocused page. */
+    focus?: {
+      documentHasFocus: boolean
+      activeKind: "body" | "root" | "control" | "other"
+      focusedRef?: string
+      tag?: string
+      type?: string
+      tabIndex?: number
+    }
   }
   tabs?: { id: string; url: string; title: string; active: boolean; loading: boolean }[]
   activeTab?: string
@@ -277,6 +286,7 @@ export function formatReport(
       ? `Page settled after ${report.settled.waitedMs} ms${report.settled.navigated ? ", on a new page" : ""}${report.settled.idle ? "" : ", with requests still running"}`
       : undefined,
     report.description ? `Description: ${report.description}` : undefined,
+    report.observed ? focusReport(report.observed.focus) : undefined,
     report.domSummary?.textSample ? `Visible page text:\n${report.domSummary.textSample.slice(0, 2_400)}` : undefined,
     report.domSummary?.interactives.length
       ? `Interactive elements:\n${report.domSummary.interactives
@@ -329,6 +339,19 @@ export function formatReport(
     .filter((line): line is string => Boolean(line))
     .join("\n\n")
   return WebFence.fenceWebPage({ url: safeReportUrl(report.finalUrl) || undefined, tool: "browser" }, text)
+}
+
+function focusReport(focus: NonNullable<BrowserReport["observed"]>["focus"]) {
+  if (!focus) return "Keyboard focus: not reported (unknown)."
+  return [
+    `Keyboard focus: document=${focus.documentHasFocus ? "focused" : "not focused"}; active=${focus.activeKind}`,
+    focus.focusedRef ? `ref=${focus.focusedRef.slice(0, 32)}` : undefined,
+    focus.tag ? `tag=${focus.tag.slice(0, 32)}` : undefined,
+    focus.type ? `type=${focus.type.slice(0, 32)}` : undefined,
+    focus.tabIndex !== undefined ? `tabIndex=${focus.tabIndex}` : undefined,
+  ]
+    .filter(Boolean)
+    .join("; ")
 }
 
 // The dialogs the page opened and Vector answered, which the desktop reports once, in the first report after them.
@@ -763,6 +786,7 @@ export const BrowserTool = Tool.define<typeof Parameters, Metadata, never>(
             output: fence(
               [
                 `Page text:\n${report.observed?.text ?? ""}`,
+                focusReport(report.observed?.focus),
                 controls.length ? `Controls (click takes the ref):\n${controls.join("\n")}` : "No controls.",
                 ...(fields.length && !lead ? [`Fields (type takes the selector):\n${fields.join("\n")}`] : []),
               ].join("\n\n"),

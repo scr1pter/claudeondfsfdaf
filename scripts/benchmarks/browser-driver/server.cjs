@@ -261,10 +261,48 @@ async function main() {
       controlsTruncated: examined < handles.length,
       blockedRequests: blocked.slice(-5),
     }
+    result.focus = await page.evaluate(
+      ({ nodes, names }) => {
+        let active = document.activeElement
+        for (let depth = 0; active && depth < 20; depth++) {
+          const inner =
+            active.shadowRoot?.activeElement ??
+            (["iframe", "frame"].includes(active.localName) ? active.contentDocument?.activeElement : null)
+          if (!inner || inner === active) break
+          active = inner
+        }
+        const owner = active?.ownerDocument ?? document
+        const index = nodes.indexOf(active)
+        const control = active?.matches(
+          "button,a[href],input:not([type=hidden]),select,textarea,summary,[contenteditable=''],[contenteditable=true],[role=button],[role=link],[role=textbox],[role=combobox],[role=checkbox],[role=radio],[role=tab],[role=menuitem],[role=switch]",
+        )
+        return {
+          documentHasFocus: document.hasFocus(),
+          activeKind:
+            active && active === owner.body
+              ? "body"
+              : active && active === owner.documentElement
+                ? "root"
+                : control
+                  ? "control"
+                  : "other",
+          ...(index >= 0 ? { focusedRef: names[index] } : {}),
+          ...(active
+            ? {
+                tag: active.localName.slice(0, 32),
+                type: (active.getAttribute("type") ?? "").toLowerCase().slice(0, 32),
+                tabIndex: active.tabIndex,
+              }
+            : {}),
+        }
+      },
+      { nodes: [...refs.values()], names: [...refs.keys()] },
+    )
     while (JSON.stringify(result).length > 24_000 && controls.length > 1) {
       const removed = controls.pop()
       await refs.get(removed.ref)?.dispose()
       refs.delete(removed.ref)
+      if (result.focus.focusedRef === removed.ref) delete result.focus.focusedRef
       result.controlsTruncated = true
     }
     return result
