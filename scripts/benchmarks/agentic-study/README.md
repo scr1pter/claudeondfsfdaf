@@ -63,6 +63,12 @@ to pass. Repair feedback requires a genuine failed check; missing or ambiguous
 instrument results never trigger another paid attempt. The runner constructs
 bounded observations rather than forwarding evaluator source or arbitrary raw
 feedback. An evaluator crash or authored-source mutation stops the case.
+Failed-row `name`, `expected`, `actual`, `error`, `detail`, and `message` fields
+are preserved as observation data, with the same redaction and size bounds.
+This retains useful constraint descriptions from evaluators that report errors
+under `detail` or `message`. Fields remain bounded to 500 characters, the first
+16 failed rows, and the existing 10,000-character feedback envelope; they are
+explicitly data rather than new instructions.
 Exit codes must agree with the report: zero for `passed`, one for
 `product_failure`. A contradictory exit/verdict is an instrument failure.
 
@@ -263,3 +269,35 @@ attempted once. HTTP errors, non-200 responses, oversized/malformed JSON, and
 healthy-state/policy failures are never retried. Diagnostics identify only the
 route and exception class, without echoing authorization or response payloads.
 The retry neither admits nor repeats a model request.
+
+## Interrupted-attempt usage records
+
+Every new attempt records `usageAtStart`, the episode's cumulative observed
+request/cost delta before invocation. The existing `usage` field retains its
+cumulative meaning after a normal settled invocation. `incrementalUsage`
+subtracts the attempt's start baseline, so a repair's cost is distinct from
+earlier attempts.
+
+When an invocation throws before returning its runtime result, the source
+snapshot remains preserved and `invocationStatus`, `invocationFailureType`, and
+`agentTelemetryStatus` identify the interrupted/incomplete observation. After
+the captured token is disarmed and the gateway is authoritatively settled,
+`usageThroughClosure` records the cumulative closure delta for the unfinished
+attempt and `incrementalUsage` records its interval. This does not add charges a
+second time: the episode total already contains them. If closure is unknown,
+these values remain null with an explicit unknown accounting status; zero is
+never substituted for missing telemetry. Earlier complete-attempt observations
+remain known independently.
+
+`invocationStartedAtUnixMs` and monotonic `observedInvocationWallMs` describe the
+newly observed invocation window, including `run_agent` cleanup and the final
+source snapshot. Its scope excludes final controller disarm/settlement. This
+separate observation is not reconstructed for historical runs, and should not
+be added to a complete attempt's already returned runtime wall time. The
+existing episode `agentWallMs` remains the sum of returned runtime telemetry.
+
+Historical records are not rewritten. An old attempt containing only a source
+snapshot does not establish that it admitted no requests or cost nothing; use
+the authoritative episode totals and receipts. The new fields improve
+attribution without resetting spending, changing caps, or retrying an
+interrupted attempt.
