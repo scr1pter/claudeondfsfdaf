@@ -317,6 +317,7 @@
     "commonDriverExclusivityEnforced": false,
     "interpretation": "The agent-owned checks did not all stay within the common browser client despite the task wording. Costs and delivery checks remain recorded, but these observations are exploratory and do not establish strict shared-client protocol adherence.",
     "independentAcceptanceBrowserFencedSeparately": true,
-    "noUnobservedExternalInteractionOrCheatingAssumed": true
+    "noUnobservedExternalInteractionOrCheatingAssumed": true,
+    "instrumentInstructionConflict": "The old runner explicitly advertised PLAYWRIGHT_MODULE and CHROME_PATH alongside a common-client-only helper instruction. This is conflicting instrumentation, not assumed agent misconduct."
   }
 }

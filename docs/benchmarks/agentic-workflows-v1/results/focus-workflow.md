@@ -102,8 +102,10 @@ in addition to the common browser client. In the baseline, Codex authored and ra
 `scripts/browser-check.mjs` directly. Three execution references were verified for
 each of those scripts. Their sources import Playwright and launch Chrome.
 
-The task requested the common client, so shared-client exclusivity was not
-enforced. The runtimes received identical host capabilities, but their own
+The task requested the common client, while the runner preamble explicitly
+advertised PLAYWRIGHT_MODULE and CHROME_PATH. Those instructions conflicted;
+shared-client exclusivity was not enforced. This is an instrument limitation,
+not assumed agent misconduct. The runtimes received identical host capabilities, but their own
 browser checks did not all use the same interface. These are exploratory results,
 not clean evidence of strict shared-client protocol adherence. Model, reasoning,
 agent-count, cost and authored-source records remain intact. The independent

@@ -105,3 +105,20 @@ This followup used no provider calls, no further cloud actions and no additional
 ## GitHub publication
 
 The [portable evidence bundle](../../benchmarks/tokenomics-2026-11-01/README.md) contains the exact selected synthetic app sources, free evaluator and empty scaffold, per-check outcomes, snapshot hashes, and an allowlisted projection of all 449 usage receipts. Completed code and evidence belong on GitHub so work can continue from another computer. Private credentials and raw runtime data are excluded. GitHub publication does not merge or release these changes.
+
+
+## Follow-up study checkpoint: fixed candidate on two maintenance tasks
+
+The [fixed candidate stage summary](../../benchmarks/agentic-workflows-v1/results/focus-stage-summary.json)
+retains two completed matched pairs on gpt-6.1-sol, High, one agent. Both runtimes
+pass all 50 required API/browser checks. Vector costs 1.4387027 USD versus
+1.6017100 USD (10.18% less); blinded source/screenshot scores are
+90/96 versus 93/96. The broader 20% equal-quality objective remains unmet.
+This is a small adaptive study, with explicit checker corrections and conflicting
+browser-provisioning instructions; every original result and charge is retained.
+
+At the historical settlement checkpoint, the complete study totals 674 receipts
+and 16.1553280 usage-derived USD. This is not invoice reconciliation or a current
+future bill. The [next-stage plan](../../benchmarks/agentic-workflows-v1/followup-stage.md)
+freezes candidate a35c03d with validated patch-envelope recovery and compatibility
+guidance. Its future cost and quality effects remain unproven.

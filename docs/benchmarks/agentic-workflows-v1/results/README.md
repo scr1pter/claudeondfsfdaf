@@ -2,7 +2,7 @@
 
 > Follow-up: [the fixed candidate development run](focus-workflow.md) passed all
 > 24 checks for both runtimes. Vector cost 17.03% less; blinded scores were
-> Vector 45 and Codex 46. The independent holdout is still being completed.
+> Vector 45 and Codex 46. The independent holdout is now complete; see the aggregate below.
 > The broader equal-quality 20% target remains unproven.
 
 The baseline does **not** establish the preregistered 20% cost reduction at equal
@@ -106,10 +106,23 @@ in addition to the common browser client. In the baseline, Codex authored and ra
 `scripts/browser-check.mjs` directly. Three execution references were verified for
 each of those scripts. Their sources import Playwright and launch Chrome.
 
-The task requested the common client, so shared-client exclusivity was not
-enforced. The runtimes received identical host capabilities, but their own
+The task requested the common client, while the runner preamble explicitly
+advertised PLAYWRIGHT_MODULE and CHROME_PATH. Those instructions conflicted;
+shared-client exclusivity was not enforced. This is an instrument limitation,
+not assumed agent misconduct. The runtimes received identical host capabilities, but their own
 browser checks did not all use the same interface. These are exploratory results,
 not clean evidence of strict shared-client protocol adherence. Model, reasoning,
 agent-count, cost and authored-source records remain intact. The independent
 acceptance browser used its separate exact-origin fence. This observation does
 not establish unobserved external interaction or cheating; no such claim is made.
+
+## Fixed candidate, both tasks
+
+[focus-stage-summary.json](focus-stage-summary.json) records both matched tasks.
+All 50 required checks pass for each runtime. Vector costs 1.4387027 USD
+versus 1.6017100 USD (10.18% less), but scores 90/96 versus
+93/96 in the bounded blinded review. The 20% equal-quality target is not met.
+All charged episodes and instrument-correction history remain retained.
+
+The detailed [Evidence Workbench result](focus-evidence.md) retains the false
+checker failure, validated missing-arm continuation, exact sources and review risks.

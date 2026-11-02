@@ -23,7 +23,9 @@ an ending marker. The subsequent model retry changed three functional lines as
 well; this observation cannot establish equivalent retry semantics or an exact
 cost saving.
 
-Both old CLI environments exposed raw browser-library paths. Baseline Codex and
+Both old CLI environments exposed raw browser-library paths. The runner
+preamble explicitly advertised those libraries while requesting the common
+client elsewhere: these were conflicting instrument instructions. Baseline Codex and
 first-candidate Vector executed authored Playwright scripts instead of staying
 entirely in the common client. Those descriptive results, all charges and the
 provisioning limitation remain published. The next matched stage will advertise
