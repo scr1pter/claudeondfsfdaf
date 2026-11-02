@@ -413,6 +413,7 @@ export const createLLMEventPublisher = (events: EventV2.Interface, input: Input)
         stepSettlement = {
           finish: event.reason,
           tokens: tokens(event.usage),
+          ...(event.usage === undefined ? { incomplete: true } : {}),
           ...(event.usage?.providerMetadata === undefined ? {} : { providerMetadata: event.usage.providerMetadata }),
         }
         return
