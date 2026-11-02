@@ -150,12 +150,18 @@ Requests are never retried by the witness. A cancelled queued request is not
 forwarded, while a cancellation after forwarding drains the existing upstream
 request and retains its receipt. A missing terminal or uncertain transport
 requires review even when later ledger charges are known.
-Only a completed raw response, or one matching SSE completed/done event and completed
-response status, clears the terminal gate. Failed and incomplete responses,
-event/status contradictions, malformed or repeated terminals, and upstream
-error events require review. Valid usage and reconciled charges do not establish
-completion. A later completed event cannot clear an earlier failure; the stream
-is still drained and every charge retained.
+Only a completed raw response, or one matching SSE completed/done event and
+completed response status, clears the terminal gate. Failed responses,
+event/status contradictions, malformed or repeated terminals, unknown usage and
+upstream error events require fatal review. An incomplete response with explicit
+`max_output_tokens` reason and valid known usage is a nonfatal review observation:
+the current arm may continue under all existing limits, so the witness does not
+block a necessary native length continuation. The initial shared policy keeps
+mandatory manual review at closure even if a later turn completes; it blocks
+the next arm until owner review. It does not automatically resolve an unknown
+root/helper purpose. Other incomplete responses remain fatal. Valid usage and
+reconciled charges do not establish task completion. A later completed event or
+turn cannot clear a failed terminal; the stream is drained and all charges retained.
 
 Scoped closure disarms only the captured owned token. An uncertain disarm is
 not automatically repeated. Unknown closure keeps the token in memory and

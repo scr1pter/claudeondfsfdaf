@@ -121,9 +121,25 @@ def terminal_problem(response, event=None, event_label=None):
         return "upstream_response_failed"
     if status == "incomplete":
         return "upstream_response_incomplete"
-    if status != "completed" or response.get("error") is not None:
+    if status != "completed" or response.get("error") is not None or response.get("incomplete_details") is not None:
         return "upstream_terminal_not_completed"
     return None
+
+
+def known_length_incomplete(response):
+    if not isinstance(response, dict) or not isinstance(response.get("incomplete_details"), dict) or response["incomplete_details"].get("reason") != "max_output_tokens" or response.get("error") is not None:
+        return False
+    usage = response.get("usage")
+    if not isinstance(usage, dict) or not isinstance(usage.get("input_tokens_details"), dict):
+        return False
+    counts = [usage.get("input_tokens"), usage.get("output_tokens"), usage["input_tokens_details"].get("cached_tokens"), usage["input_tokens_details"].get("cache_write_tokens")]
+    if any(not isinstance(value, int) or isinstance(value, bool) or value < 0 for value in counts):
+        return False
+    inputs, outputs, reads, writes = counts
+    if inputs > CONTEXT_LIMIT or outputs > OUTPUT_CEILING or reads + writes > inputs:
+        return False
+    split = usage["input_tokens_details"].get("cache_write_tokens_details", {})
+    return isinstance(split, dict) and split.get("ttl_12h_tokens", 0) == 0 and split.get("ttl_30m_tokens", writes) == writes
 
 
 class OwnedArm:
@@ -140,6 +156,7 @@ class OwnedArm:
         self.handlers = 0
         self.failure, self.audit_failed, self.slots, self.requests = None, False, {}, []
         self.admitted_ids, self.helper_slots = set(), {}
+        self.nonfatal_reviews = []
         self.repairs = 0
         self.disarm_attempted, self.disarm_acknowledged = False, False
         self.record({"type": "arm_bound", "runtime": runtime, "actor": self.actor, "batchSha256": self.batch_digest, "model": MODEL, "reasoning": "high", "reasoningSummary": "auto", "verbosity": "low", "contextLimit": CONTEXT_LIMIT, "outputCeiling": OUTPUT_CEILING, "roles": sorted(roles), "studyCapUsd": 48, "actorCapUsd": 20, "softStopUsd": soft_usd, "maxCalls": max_calls, "maxSeconds": seconds, "inflightLimit": 1})
@@ -166,7 +183,7 @@ class OwnedArm:
 
     def status(self):
         with self.condition:
-            return {"runtime": self.runtime, "actor": self.actor, "reviewRequired": self.failure is not None, "stopReason": self.failure, "auditFailed": self.audit_failed, "forwardedRequests": len(self.requests), "activeForward": self.forwarding, "queuedRequests": len(self.queue), "acceptedHandlers": self.handlers, "autonomousSessions": 1 + len(self.slots), "inflightLimit": 1, "closing": self.closing, "retired": self.retired}
+            return {"runtime": self.runtime, "actor": self.actor, "reviewRequired": self.failure is not None or self.retired and bool(self.nonfatal_reviews), "fatalReviewRequired": self.failure is not None, "nonfatalReviewObservationCount": len(self.nonfatal_reviews), "stopReason": self.failure, "auditFailed": self.audit_failed, "forwardedRequests": len(self.requests), "activeForward": self.forwarding, "queuedRequests": len(self.queue), "acceptedHandlers": self.handlers, "autonomousSessions": 1 + len(self.slots), "inflightLimit": 1, "closing": self.closing, "retired": self.retired}
 
     def begin_handler(self):
         with self.condition:
@@ -249,12 +266,17 @@ class OwnedArm:
     def finish(self, entry, terminal, disconnected, transport_failed, issue=None, event=None):
         with self.condition:
             outcome = issue or terminal_problem(terminal, event)
-            entry.update(upstreamTerminal=terminal is not None, upstreamOutcome=outcome or "completed", clientDisconnected=disconnected, transportFailed=transport_failed)
+            continuation = outcome == "upstream_response_incomplete" and known_length_incomplete(terminal) and not disconnected and not transport_failed
+            entry.update(upstreamTerminal=terminal is not None, upstreamOutcome="length_continuation_review" if continuation else outcome or "completed", clientDisconnected=disconnected, transportFailed=transport_failed)
             try:
                 usage = terminal.get("usage") if terminal and isinstance(terminal.get("usage"), dict) else {}
-                self.record({"type": "after_upstream", "ordinal": entry["ordinal"], "requestSha256": entry["requestSha256"], "terminalObserved": terminal is not None, "outcome": outcome or "completed", "terminalEvent": event, "clientDisconnected": disconnected, "transportFailed": transport_failed, "usage": {key: usage[key] for key in ("input_tokens", "output_tokens", "total_tokens") if known(usage.get(key))}})
+                self.record({"type": "after_upstream", "ordinal": entry["ordinal"], "requestSha256": entry["requestSha256"], "terminalObserved": terminal is not None, "outcome": entry["upstreamOutcome"], "terminalEvent": event, "clientDisconnected": disconnected, "transportFailed": transport_failed, "usage": {key: usage[key] for key in ("input_tokens", "output_tokens", "total_tokens") if known(usage.get(key))}})
                 if terminal is None or transport_failed:
                     self.latch("upstream_or_terminal_unknown")
+                elif continuation:
+                    observation = {"ordinal": entry["ordinal"], "identitySha256": entry["identitySha256"], "reason": "known_max_output_incomplete"}
+                    self.record({"type": "nonfatal_review_observation", **observation})
+                    self.nonfatal_reviews.append(observation)
                 elif outcome:
                     self.latch(outcome)
                 if disconnected:
@@ -398,7 +420,7 @@ class Handler(BaseHTTPRequestHandler):
                                     terminal = event.get("response") if isinstance(event.get("response"), dict) else None
                                     issue = issue or terminal_problem(terminal, kind, event_label)
                                     if terminal_count != 1:
-                                        issue = issue or "multiple_upstream_terminals"
+                                        issue = "multiple_upstream_terminals"
                                 elif event_label in kinds or kind == "error":
                                     issue = issue or "upstream_terminal_event_status_mismatch"
                             except ValueError:
@@ -483,6 +505,9 @@ class OwnedSupervisor:
             if arm.forwarding or arm.queue or arm.handlers:
                 arm.latch("closure_handlers_pending")
             result["reviewRequired"] = result["reviewRequired"] or arm.failure is not None
+            result["nonfatalReviewObservationCount"] = len(arm.nonfatal_reviews)
+            result["nonfatalReviewObservations"] = list(arm.nonfatal_reviews)
+            result["reviewRequired"] = result["reviewRequired"] or bool(arm.nonfatal_reviews)
             result["stopReason"] = arm.failure
             self.failed = self.failed or result["reviewRequired"]
             if result["settlementComplete"]:
@@ -546,7 +571,7 @@ class OwnedSupervisor:
                 while arm.forwarding or arm.queue or arm.handlers:
                     require(time.monotonic() < deadline, "accepted handlers remain during closure")
                     arm.condition.wait(timeout=0.05)
-                result.update(reviewRequired=arm.failure is not None, stopReason=arm.failure)
+                result.update(reviewRequired=arm.failure is not None or bool(arm.nonfatal_reviews), stopReason=arm.failure)
                 arm.record({"type": "owned_scope_closed", "providerRequests": len(receipts), "measuredUsd": cost, "reviewRequired": result["reviewRequired"], "transcriptCoverageComplete": transcripts["complete"]})
                 self.retire_disposition(arm, result)
         except Exception as error:
