@@ -428,14 +428,18 @@ class Handler(BaseHTTPRequestHandler):
                                         issue = "multiple_upstream_terminals"
                                 elif event_label in kinds or kind == "error":
                                     issue = issue or "upstream_terminal_event_status_mismatch"
-                            except ValueError:
-                                pass
+                            except (ValueError, RecursionError):
+                                if event_label in ("response.completed", "response.done", "response.failed", "response.incomplete", "error"):
+                                    terminal_count += 1
+                                    issue = "malformed_upstream_terminal"
                 if not disconnected:
                     try:
                         self.wfile.write(chunk)
                         self.wfile.flush()
                     except OSError:
                         disconnected = True
+            if "text/event-stream" in content_type and buffer.strip() and event_label in ("response.completed", "response.done", "response.failed", "response.incomplete", "error"):
+                issue = "malformed_upstream_terminal"
             if "text/event-stream" not in content_type:
                 try:
                     value = json.loads(buffer)

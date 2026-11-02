@@ -164,6 +164,11 @@ the next arm until owner review. It does not automatically resolve an unknown
 root/helper purpose. Other incomplete responses remain fatal. Valid usage and
 reconciled charges do not establish task completion. A later completed event or
 turn cannot clear a failed terminal; the stream is drained and all charges retained.
+Malformed JSON on a terminal/error-labelled SSE frame is fatal even after a
+valid completed frame; it cannot be silently ignored. Malformed nonterminal
+heartbeat data remains informational. Billing certainty for completed responses
+is delegated to the unchanged meter's usage validation and authoritative receipt
+join; a terminal status alone does not establish known cost.
 
 Scoped closure disarms only the captured owned token. An uncertain disarm is
 not automatically repeated. Unknown closure keeps the token in memory and

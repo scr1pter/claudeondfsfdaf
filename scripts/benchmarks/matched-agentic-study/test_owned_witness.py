@@ -84,6 +84,7 @@ class FakeMeter(ThreadingHTTPServer):
         self.incomplete_reason = None
         self.response_usage = {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
         self.extra_terminals = []
+        self.malformed_tail_label = None
         self.release.set()
         self.spent = {"foundry-vector": 10.9, "foundry-codex": 5.9}
         super().__init__(("127.0.0.1", 0), FakeHandler)
@@ -139,6 +140,8 @@ class FakeHandler(BaseHTTPRequestHandler):
             raw_response = ("event: " + (meter.sse_event_label or meter.terminal_event) + "\ndata: " + json.dumps({"type": meter.terminal_event, "response": response}) + "\n\n").encode()
             for kind, status in meter.extra_terminals:
                 raw_response += ("event: " + kind + "\ndata: " + json.dumps({"type": kind, "response": {**response, "status": status}}) + "\n\n").encode()
+            if meter.malformed_tail_label:
+                raw_response += ("event: " + meter.malformed_tail_label + '\ndata: {"type":\n\n').encode()
         elif meter.mode == "drop":
             raw_response = b"incomplete"
             self.send_response(200); self.send_header("Content-Type", "application/json"); self.send_header("Content-Length", str(len(raw_response))); self.end_headers()
@@ -486,6 +489,30 @@ class OwnedWitnessTests(unittest.TestCase):
         self.meter.extra_terminals = [("response.completed", "completed")]
         self.terminal_case("sse", "failed", "response.failed")
 
+    def test_completed_then_malformed_failed_terminal_requires_review(self):
+        self.meter.malformed_tail_label = "response.failed"
+        self.terminal_case("sse", "completed")
+
+    def test_completed_then_malformed_completed_terminal_requires_review(self):
+        self.meter.malformed_tail_label = "response.completed"
+        self.terminal_case("sse", "completed")
+
+    def test_completed_then_malformed_done_terminal_requires_review(self):
+        self.meter.malformed_tail_label = "response.done"
+        self.terminal_case("sse", "completed")
+
+    def test_completed_then_malformed_incomplete_terminal_requires_review(self):
+        self.meter.malformed_tail_label = "response.incomplete"
+        self.terminal_case("sse", "completed")
+
+    def test_completed_then_malformed_error_signal_requires_review(self):
+        self.meter.malformed_tail_label = "error"
+        self.terminal_case("sse", "completed")
+
+    def test_malformed_nonterminal_heartbeat_does_not_undo_completion(self):
+        self.meter.malformed_tail_label = "heartbeat"
+        self.terminal_case("sse", "completed", review=False)
+
     def configure_known_length_incomplete(self, mode="sse"):
         self.meter.mode, self.meter.response_status, self.meter.terminal_event = mode, "incomplete", "response.incomplete"
         self.meter.incomplete_reason = "max_output_tokens"
@@ -826,7 +853,7 @@ class GenerationPinTests(unittest.TestCase):
 
 @unittest.skipUnless(os.environ.get("VECTOR_BENCH_METER_SOURCE"), "explicit reviewed source directory required; no live configuration is read")
 class ActualMeterSourceTests(unittest.TestCase):
-    def test_actual_handler_receipt_fingerprint_and_reserve_against_loopback_stub(self):
+    def reviewed_module(self):
         source = Path(os.environ["VECTOR_BENCH_METER_SOURCE"]).resolve()
         spec = importlib.util.spec_from_file_location("isolated_free_meter_v2", source / "budget_gateway_v2.py")
         module = importlib.util.module_from_spec(spec)
@@ -835,6 +862,10 @@ class ActualMeterSourceTests(unittest.TestCase):
             spec.loader.exec_module(module)
         finally:
             sys.path.pop(0)
+        return module
+
+    def test_actual_handler_receipt_fingerprint_and_reserve_against_loopback_stub(self):
+        module = self.reviewed_module()
         class ProviderStub(BaseHTTPRequestHandler):
             def log_message(self, *_args):
                 pass
@@ -875,6 +906,70 @@ class ActualMeterSourceTests(unittest.TestCase):
             finally:
                 meter.shutdown(); meter.server_close(); meter_thread.join(5)
                 provider.shutdown(); provider.server_close(); provider_thread.join(5)
+
+    def assert_actual_unknown_usage_stops_closure(self, supplied_usage):
+        module = self.reviewed_module()
+        class ProviderStub(BaseHTTPRequestHandler):
+            def log_message(self, *_args):
+                pass
+            def do_POST(self):
+                self.rfile.read(int(self.headers["Content-Length"]))
+                value = {"id": "synthetic-unknown-usage", "object": "response", "status": "completed"}
+                if supplied_usage is not None:
+                    value["usage"] = supplied_usage
+                raw = json.dumps(value).encode()
+                self.send_response(200); self.send_header("Content-Type", "application/json"); self.send_header("Content-Length", str(len(raw))); self.end_headers(); self.wfile.write(raw)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            registry = native_fixture(root / "native")
+            budget = module.Budget(root / "synthetic-meter-ledger")
+            provider = ThreadingHTTPServer(("127.0.0.1", 0), ProviderStub)
+            provider_thread = threading.Thread(target=provider.serve_forever, daemon=True); provider_thread.start()
+            actual = ThreadingHTTPServer(("127.0.0.1", 0), module.handler(budget, "literal-fake-provider-key", "literal-fake-controller", upstream_factory=lambda: http.client.HTTPConnection(*provider.server_address, timeout=5)))
+            actual_thread = threading.Thread(target=actual.serve_forever, daemon=True); actual_thread.start()
+            def mapped_status():
+                state = budget.status()
+                actor = state["actors"]["saas-codex"]
+                # Synthetic historical prefix/actor names only. The actual
+                # handler, admission, usage validation and settlement are intact.
+                return {"limitUsd": state["limitUsd"], "phaseID": FUNDING_PHASE, "halted": state["halted"], "measuredUsd": 19.8 + state["measuredUsd"], "reservedUsd": state["reservedUsd"], "active": state["active"], "attempts": 449 + state["attempts"], "batchCallsRemaining": state["batchCallsRemaining"], "actors": {"foundry-vector": {"limitUsd": 20, "measuredUsd": 10.9, "reservedUsd": 0}, "foundry-codex": {"limitUsd": 20, "measuredUsd": 5.9 + actor["measuredUsd"], "reservedUsd": actor["reservedUsd"]}}}
+            def controller(route, value=None):
+                if route == "/control":
+                    return budget.arm("saas-codex", value["label"], value["calls"])
+                if route == "/disarm":
+                    budget.disarm(value["requestToken"])
+                return mapped_status()
+            def receipts():
+                path = root / "synthetic-meter-ledger" / "receipts.jsonl"
+                return [{**row, "actor": "foundry-codex", "seq": 449 + row["seq"]} for row in map(json.loads, path.read_text().splitlines())] if path.exists() else []
+            supervisor = OwnedSupervisor(controller, receipts, root / "private-output", quiesced=lambda: True)
+            arm = supervisor.begin("codex", "synthetic-unknown-usage", registry, ROLES)
+            witness = WitnessServer(("127.0.0.1", 0), actual.server_address, arm)
+            witness_thread = threading.Thread(target=witness.serve_forever, daemon=True); witness_thread.start()
+            try:
+                connection = http.client.HTTPConnection(*witness.server_address, timeout=5)
+                connection.request("POST", "/v1/responses", body=json.dumps(body()), headers={"Authorization": "Bearer " + arm._alias, **headers()})
+                response = connection.getresponse(); self.assertEqual(response.status, 200); response.read(); connection.close()
+                result = supervisor.close(timeout=1)
+                rows = receipts()
+                self.assertEqual(len(rows), 1)
+                self.assertIsNone(rows[0]["measuredUsd"])
+                self.assertIsNotNone(budget.halted)
+                self.assertGreater(budget.reserved, 0)
+                self.assertFalse(result["settlementComplete"])
+                self.assertTrue(result["reviewRequired"])
+                self.assertIsNone(result["measuredUsd"])
+                self.assertTrue(supervisor.failed)
+            finally:
+                witness.shutdown(); witness.server_close(); witness_thread.join(5)
+                actual.shutdown(); actual.server_close(); actual_thread.join(5)
+                provider.shutdown(); provider.server_close(); provider_thread.join(5)
+
+    def test_actual_handler_missing_usage_halts_and_closes_for_review(self):
+        self.assert_actual_unknown_usage_stops_closure(None)
+
+    def test_actual_handler_invalid_usage_halts_and_closes_for_review(self):
+        self.assert_actual_unknown_usage_stops_closure({"input_tokens": 10, "output_tokens": 2, "input_tokens_details": {"cached_tokens": "invalid", "cache_write_tokens": 0}})
 
 
 if __name__ == "__main__":
