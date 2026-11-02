@@ -64,6 +64,18 @@ browser validation pending.
   freeze and the local validation above. The manifest excludes only itself and
   standard dependency/cache/version-control directories. The portable runner
   additionally hashes the complete task, including the manifest.
+* Root's independent post-candidate, pre-paid-holdout review found an evaluator
+  ambiguity after initial freeze commit `263637693a1bed28fe52b116580471502f47065d`:
+  the browser read required exactly one status region on the whole page, while
+  the public contract permits separate search and batch statuses. The evaluator
+  now checks all visible status regions for the batch outcome or validation
+  error. Positive and negative controls accept matching visible statuses and
+  reject hidden or unrelated statuses. Final pure totals are **27 Python controls
+  and 7 Node controls**, all passing. No Bun or browser rerun followed this
+  evaluator-only correction during the separate paid pair. The original negative
+  gate and initial freeze remain intact; `FREEZE_HISTORY.json` preserves that
+  freeze's commit, task SHA, and complete source manifest. A new source freeze
+  supersedes it before any paid holdout run.
 * All raw gate artifacts, logs, databases, and browser profiles remain outside
   the published task tree. Ignore rules also guard against accidentally staging
   such outputs or Python caches here.

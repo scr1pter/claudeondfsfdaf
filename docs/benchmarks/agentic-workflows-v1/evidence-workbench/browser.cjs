@@ -3,7 +3,7 @@
 const fs = require("node:fs")
 const path = require("node:path")
 const os = require("node:os")
-const { ProductFailure, requireProduct, reportExit, validOrigin, apiObject, importedDocument } = require("./browser_support.cjs")
+const { ProductFailure, requireProduct, reportExit, validOrigin, apiObject, importedDocument, batchStatusMatches, invalidBatchStatusMatches } = require("./browser_support.cjs")
 const inventory = require("./inventory.json")
 
 async function main() {
@@ -69,12 +69,22 @@ async function main() {
     await poll(() => page.getByTestId("document-body").textContent().catch(() => null), (value) => value === expected, "Document viewer did not display the exact original text.")
   }
 
+  async function statuses() {
+    return page.getByRole("status").evaluateAll((elements) => elements.map((element) => {
+      const style = getComputedStyle(element)
+      return {
+        text: element.innerText ?? element.textContent ?? "",
+        visible: element.getClientRects().length > 0 && style.visibility !== "hidden" && style.visibility !== "collapse",
+      }
+    }))
+  }
+
   async function uiBatch(batchId, rows, replay = false) {
     await page.getByRole("textbox", { name: "Batch NDJSON", exact: true }).fill(payload(batchId, rows))
     const response = page.waitForResponse((item) => new URL(item.url()).origin === origin && new URL(item.url()).pathname === "/api/batches")
     await page.getByRole("button", { name: "Import batch", exact: true }).click()
     requireProduct((await response).status() === (replay ? 200 : 201), "Browser batch submission failed.")
-    await poll(() => page.getByRole("status").innerText(), (text) => text.includes(batchId) && /revision/i.test(text) && (replay ? /replay/i.test(text) : /new|not replay|replayed:?\s*false|committed|imported/i.test(text)), "Batch status omitted its ID, revision, or replay outcome.")
+    await poll(statuses, (rows) => batchStatusMatches(rows, batchId, replay), "Batch status omitted its ID, revision, or replay outcome.")
   }
 
   async function run(name, action) {
@@ -125,7 +135,7 @@ async function main() {
       await page.getByRole("button", { name: "Import batch", exact: true }).click()
       requireProduct((await response).status() === 400, "Invalid browser batch was accepted.")
       requireProduct(await page.getByRole("textbox", { name: "Batch NDJSON", exact: true }).inputValue() === invalid, "Failed batch erased the entered text.")
-      await poll(() => page.getByRole("status").innerText(), (text) => /invalid|error|required|missing/i.test(text), "Validation error was not visible.")
+      await poll(statuses, invalidBatchStatusMatches, "Validation error was not visible.")
       await page.getByRole("textbox", { name: "Document source", exact: true }).fill("browser/legacy-ui")
       await page.getByRole("textbox", { name: "Document title", exact: true }).fill("Legacy UI remains")
       await page.getByRole("textbox", { name: "Document text", exact: true }).fill("legacyuibrowser")

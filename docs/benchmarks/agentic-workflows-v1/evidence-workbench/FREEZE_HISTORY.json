@@ -1,0 +1,50 @@
+{
+  "format": "evidence-workbench-prelaunch-freeze-history-v1",
+  "paidHoldoutCallsBeforeRefreeze": 0,
+  "supersededFreezes": [
+    {
+      "commit": "263637693a1bed28fe52b116580471502f47065d",
+      "portableTaskSha256": "566419f88fd2e5a57dbb7b0a5a2aad0ff56a43c7525e583ab3526d98267e34c8",
+      "productionCandidateRevision": "893b9629224dc4249f08c0e18712511437a35a22",
+      "sourceManifestSha256": "f77626d2ce31644d326f628ce1fc7d3c7ae2d0407322dd5b41001aca4b03ebce",
+      "reason": "Independent pre-paid review found a strict single-status browser assumption not required by the public contract. Corrected to match all visible status regions; pure positive/negative controls added.",
+      "sourceManifest": {
+        "format": 1,
+        "algorithm": "sha256",
+        "files": {
+          ".gitattributes": "a79691a93b46e49ce460c26ef22afcc03d6eca1e63bf2edbc20e96159510f6c9",
+          ".gitignore": "32e8b823530055a61d53958cc2f4f9012e412458541b4269b21485bab1de73a2",
+          "api_checks.py": "4ec3943d7fc7d073134c99fe0a201c93f3b5ace7286f340c58904d4f7bb73d08",
+          "browser.cjs": "d27abb47f656d999e9a1c86cf5c82f7f50d6af015fd6739eda563b93b585ae79",
+          "browser_support.cjs": "9b319d9baee84047f16f961e88679fd6ff3d13a0493cc7cf104674d561eaf329",
+          "corpus.py": "9af212d8634e93a9786362d5e7ac2800df00b4e8f4c86d9c0dafd9bb30a967b9",
+          "evaluate.py": "0af37e31282e950728bb7cb0e975233330ebafb5782ef2ffc59c462410a2c698",
+          "free-validation.json": "21ee3a05313672eaec22623a20a8dc4c66180fa680ad2a8fd46c842ca4ca41ba",
+          "freeze_manifest.py": "6086891149431cfefb0bfb306e781b99a3dbbe96335e9f11d8db8564f8237067",
+          "integrity.py": "ae912fc3036d405045a69dcd270ffca37cec66cd29aabf9ff7749365f628b2bd",
+          "inventory.json": "ddf604f016b8ba801ccfaf3b00a8fa89c4bb3a17144273710192a8e156850e2b",
+          "inventory.py": "5f75b66d79f35e7082632176ce3bdde59956ebcddac2ede340a4142e5cdfdeb6",
+          "README.md": "5500ac5e2779190aa840fa8d37f1eb8f761a2613dc02840e74a03850b9c6e4a6",
+          "seed/.gitignore": "f75c55e5761ee1bb55c74a7c0a5cb38b166ec465023bf5299922b3414ba884b4",
+          "seed/bun.lock": "eda955f696bb697e9a9affc709ad224f1a14d3a5815943f69e4b0213eb5cce7d",
+          "seed/index.html": "12ab49bacf8e2993eb737ace5d070253908c5ab7f8b3f998a200f302ab38321c",
+          "seed/package.json": "3ac71d1b4be64dbdc195d15f19dc4b496704744cf8506d2e06f61e9fda467d4d",
+          "seed/schema/legacy.sql": "880607e4c8227a150511eb5b22e17a613691aaa9906b3c7635ecd635563ca558",
+          "seed/server/index.ts": "ba5ca1be23931f0a46eeed16d200c5c358c81341d099a42902324ef2dc9068d0",
+          "seed/server/storage.ts": "41814b4e1868641b85daf65c3157432a60aa47a4f1f7e1abd84bb7b9f94b949c",
+          "seed/server/types.ts": "78cb1a33a5428b9554c491a67eebe479b9dc561ed209d40ce03846f6ac2e0e37",
+          "seed/src/main.tsx": "77815aab15233d07d3f5df7f46d7f092983366e6d1ff15a02a657f111341e98c",
+          "seed/src/style.css": "bcb63070651f061843b002caef98a7ae53234d297bf02372083ac559b9bbc456",
+          "seed/tests/smoke.test.ts": "cc6c16a94dfaa2a305a54d482dd7cba9e83d75a307a93bcb47ae823c3b1487f1",
+          "seed/tsconfig.json": "159bf60f223e8a69c456543734194119c569732152744ac8d393bfb92804e37d",
+          "task.json": "17496d15f21a51ec66386d79f5532ff5cc133a4f405e9140551d413bc8e16999",
+          "TASK.md": "4db48d696f3647e89e37bdc2cbbb8ba42d7fac9f2be7d7539a0958209773ed9a",
+          "tests/browser_support.test.cjs": "822ef37cdfa7defd50eed2fa62080e47e69a478169768ce07e79ec7eec9dcb99",
+          "tests/test_controls.py": "8aa484d66cc7963c34fd7fc5409afcf80e587ecf36e8d45734ab7ef51021fb70",
+          "VALIDATION.md": "18a305b50cb7afc9f92017d8ad94e5a69ac1ed1add0e1944a67218c4cf563db5"
+        },
+        "aggregateSha256": "fc87b79bd56e310ee6c84bd73cb7bde8d5bcb4ab3652659e818784cf857fbe21"
+      }
+    }
+  ]
+}

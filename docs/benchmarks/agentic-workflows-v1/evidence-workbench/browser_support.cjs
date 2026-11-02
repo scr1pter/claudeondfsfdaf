@@ -33,4 +33,15 @@ function importedDocument(value) {
   return row
 }
 
-module.exports = { ProductFailure, requireProduct, reportExit, validOrigin, apiObject, importedDocument }
+function batchStatusMatches(statuses, batchId, replay) {
+  return statuses.some((row) => row.visible === true && typeof row.text === "string"
+    && row.text.includes(batchId) && /revision/i.test(row.text)
+    && (replay ? /replay/i.test(row.text) : /new|not replay|replayed:?\s*false|committed|imported/i.test(row.text)))
+}
+
+function invalidBatchStatusMatches(statuses) {
+  return statuses.some((row) => row.visible === true && typeof row.text === "string"
+    && /invalid|error|required|missing/i.test(row.text))
+}
+
+module.exports = { ProductFailure, requireProduct, reportExit, validOrigin, apiObject, importedDocument, batchStatusMatches, invalidBatchStatusMatches }

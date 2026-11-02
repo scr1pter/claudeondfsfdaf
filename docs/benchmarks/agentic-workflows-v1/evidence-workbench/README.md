@@ -8,6 +8,13 @@ instrument errors, and unchanged source. No paid holdout run was admitted or
 performed at this freeze. `free-validation.json` and `VALIDATION.md` record the
 evidence and limitations; `SOURCE_MANIFEST.json` freezes the external sources.
 
+A subsequent prelaunch review corrected an evaluator assumption that the entire
+page had exactly one status region. Batch observations now match across visible
+status regions. Pure controls cover that correction; no Bun or browser rerun was
+performed for it while the separate paid pair was active. `FREEZE_HISTORY.json`
+preserves the previous unpaid freeze and its exact source manifest. The current
+freeze supersedes that prelaunch version before any paid holdout run.
+
 This independent maintenance benchmark is a neutral, entirely local document
 research application. The seed is a working **v1** with JSON/NDJSON import,
 SQLite-backed lexical lookup, and safe original-text viewing. The public task asks

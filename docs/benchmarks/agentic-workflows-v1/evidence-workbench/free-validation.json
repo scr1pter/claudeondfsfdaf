@@ -6,7 +6,7 @@
   "admittedToPaidStudyAtFreeze": false,
   "pureControls": {
     "pythonPassed": 27,
-    "nodePassed": 5,
+    "nodePassed": 7,
     "failed": 0
   },
   "seedChecks": {
@@ -47,7 +47,7 @@
     "serviceWorkersDownloadsAndWebSocketsBlocked": true
   },
   "portableTaskLoader": "passed",
-  "postGateCorrection": "Removed redundant seed-relative TASK.md protectedFiles entry; public prompt remains explicitly protected by the evaluator and runner. No acceptance-check or effective-protection change; covered by two pure controls. No runtime rerun after this metadata correction. The copied lock working-tree CRLF newlines were normalized to its already-published LF Git bytes, with no dependency content/version change and no runtime rerun.",
+  "postGateCorrection": "Removed redundant seed-relative TASK.md protectedFiles entry; public prompt remains explicitly protected by the evaluator and runner. No acceptance-check or effective-protection change; covered by two pure controls. No runtime rerun after this metadata correction. The copied lock working-tree CRLF newlines were normalized to its already-published LF Git bytes, with no dependency content/version change and no runtime rerun. A later independent pre-paid review corrected strict single-status browser reads to match all visible status regions; pure positive/negative controls passed, with no Bun/browser rerun during the separate paid pair.",
   "retainedInstrumentHistory": [
     {
       "attempt": "01",
@@ -65,10 +65,12 @@
     "Classify server response-body resets/timeouts as product unavailability.",
     "Reject empty ranges inside multibyte scalars and excerpts cutting original tokens.",
     "Initial whole-directory dependency junction allowed transient .vite-temp metadata writes; no package content changed. Removed unnecessary Vite config and used a private full dependency copy for the final gate.",
-    "Freeze metadata uses explicit LF newlines so Git normalization cannot alter frozen task bytes; CLI freeze/verify control passed."
+    "Freeze metadata uses explicit LF newlines so Git normalization cannot alter frozen task bytes; CLI freeze/verify control passed.",
+    "Match batch outcomes and validation errors across all visible status regions, rather than requiring exactly one status region in the entire page."
   ],
   "limitations": [
     "No full positive v2 reference implementation was built.",
     "Pure positive controls and an unchanged-v1 negative gate do not establish that every correct v2 implementation passes all acceptance checks."
-  ]
+  ],
+  "freezeHistoryFile": "FREEZE_HISTORY.json"
 }

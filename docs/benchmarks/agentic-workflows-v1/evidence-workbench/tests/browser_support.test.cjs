@@ -2,7 +2,7 @@
 
 const test = require("node:test")
 const assert = require("node:assert/strict")
-const { ProductFailure, requireProduct, reportExit, validOrigin, apiObject, importedDocument } = require("../browser_support.cjs")
+const { ProductFailure, requireProduct, reportExit, validOrigin, apiObject, importedDocument, batchStatusMatches, invalidBatchStatusMatches } = require("../browser_support.cjs")
 const inventory = require("../inventory.json")
 
 test("positive browser report and explicit product assertion", () => {
@@ -31,4 +31,20 @@ test("malformed product JSON stays a product failure", () => {
   for (const value of [{}, { documents: [null] }, { documents: [1] }, { documents: [{ id: 1 }] }])
     assert.throws(() => importedDocument(value), ProductFailure)
   assert.equal(importedDocument({ documents: [{ id: 2, source: "local/a" }] }).id, 2)
+})
+
+test("multiple visible statuses can include the batch outcome or validation error", () => {
+  const search = { visible: true, text: "Found 2 documents." }
+  assert.equal(batchStatusMatches([search, { visible: true, text: "Imported batch multi-01 at revision 4." }], "multi-01", false), true)
+  assert.equal(batchStatusMatches([search, { visible: true, text: "Replayed batch multi-01 at revision 4." }], "multi-01", true), true)
+  assert.equal(invalidBatchStatusMatches([search, { visible: true, text: "Invalid batch: title is required." }]), true)
+})
+
+test("unrelated or hidden statuses cannot supply the required batch evidence", () => {
+  const unrelated = { visible: true, text: "Found 2 documents." }
+  assert.equal(batchStatusMatches([unrelated, { visible: false, text: "Imported batch multi-01 at revision 4." }], "multi-01", false), false)
+  assert.equal(batchStatusMatches([unrelated, { visible: true, text: "Imported batch other-01 at revision 4." }], "multi-01", false), false)
+  assert.equal(batchStatusMatches([{ visible: true, text: "Imported batch multi-01." }], "multi-01", false), false)
+  assert.equal(batchStatusMatches([{ visible: true, text: "Batch multi-01 at revision 4." }], "multi-01", true), false)
+  assert.equal(invalidBatchStatusMatches([unrelated, { visible: false, text: "Invalid batch." }]), false)
 })
