@@ -13,6 +13,15 @@ document.getElementById('form').onsubmit=async e=>{e.preventDefault();await fetc
 function controlDocument(mode) {
   if (mode === "negative")
     return html.replace("Workflow name", "Wrong field name");
+  if (mode === "inaccessible")
+    return html.replace(/<form id="form">[\s\S]*?<\/form>/, (form) =>
+      form.replace(/<(input|select|textarea|button)(?=[\s>])/g, '<$1 tabindex="-1"'),
+    );
+  if (mode === "wrap")
+    return html.replace(
+      "}}\ndocument.getElementById('form')",
+      "}const created=document.querySelector('[aria-label=\"Workflow UI created\"]');const list=document.getElementById('list');if(created&&list.lastElementChild!==created)list.append(created);}\ndocument.getElementById('form')",
+    );
   if (mode !== "delayed") return html;
   const form = html.match(/<form id="form">[\s\S]*?<\/form>/)[0];
   return html
@@ -30,7 +39,8 @@ function controlDocument(mode) {
 }
 
 async function run(args, mode) {
-  const negative = mode === "negative";
+  const negative = mode === "negative" || mode === "inaccessible";
+  const rejectedCheck = mode === "inaccessible" ? "mobile_layout_and_keyboard" : "browser_create_workflow";
   const workflows = [];
   const observations = {};
   const server = http.createServer(async (request, response) => {
@@ -151,7 +161,7 @@ async function run(args, mode) {
           result.verdict !== "product_failure" ||
           !result.checks.some(
             (check) =>
-              check.name === "browser_create_workflow" &&
+              check.name === rejectedCheck &&
               check.status === "failed",
           )))
     )
@@ -165,9 +175,18 @@ async function run(args, mode) {
         !(observations.mountedAt - observations.early.at >= 1000))
     )
       throw new Error("Delayed control did not preserve early legacy content before mounting its form");
+    const keyboard = result.checks.find((check) => check.name === "mobile_layout_and_keyboard")?.keyboard;
+    if (mode === "wrap" && keyboard?.startingControl.text !== "View events UI created")
+      throw new Error("Healthy wrap control did not start on the last workflow Events button");
+    if (mode === "inaccessible" && (result.checks.filter((check) => check.status === "failed").length !== 1 || keyboard?.missingControls.length !== 4))
+      throw new Error("Inaccessible form control must fail only the four-control native keyboard contract");
     return {
       control:
-        mode === "delayed"
+        mode === "wrap"
+          ? "positive_healthy_wrap_from_last_events_button"
+          : mode === "inaccessible"
+            ? "negative_form_excluded_from_native_tab_order"
+            : mode === "delayed"
           ? "positive_delayed_form_with_early_legacy_content"
           : negative
             ? "negative_missing_exact_label"
@@ -175,6 +194,7 @@ async function run(args, mode) {
       verdict: result.verdict,
       passed: result.checks.filter((check) => check.status === "passed").length,
       failed: result.checks.filter((check) => check.status === "failed").length,
+      ...(mode === "wrap" || mode === "inaccessible" ? { keyboard } : {}),
       ...(mode === "delayed"
         ? { earlyLegacyVisible: true, formInitiallyAbsent: true, formDelayMs: observations.mountedAt - observations.early.at }
         : {}),
@@ -190,7 +210,7 @@ async function main() {
   const args = options(process.argv.slice(2));
   console.log(
     JSON.stringify({
-      controls: [await run(args, "positive"), await run(args, "delayed"), await run(args, "negative")],
+      controls: [await run(args, "positive"), await run(args, "delayed"), await run(args, "wrap"), await run(args, "inaccessible"), await run(args, "negative")],
       modelCalls: 0,
       productPassClaim: false,
     }),

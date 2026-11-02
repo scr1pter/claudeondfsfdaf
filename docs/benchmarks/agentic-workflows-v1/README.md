@@ -37,3 +37,21 @@ Primary cost is the complete accepted-delivery episode, including repairs. Recor
 The functional gate must distinguish `passed`, `product_failure` and `instrument_failure`. Failed or skipped checks remain failed or not run. Source integrity covers protected task inputs and authored application files; model-produced tests cannot replace the independent evaluator. Static review is bounded evidence, not a production-readiness guarantee. Repeated adaptive runs on one task are not independent proof of generalization.
 
 The reusable runner and browser driver live in `scripts/benchmarks/agentic-study` and `scripts/benchmarks/browser-driver`. Neither should make a paid call by default. Runtime paths and the private study directory are explicit command-line inputs; no provider key belongs in source or GitHub.
+
+## Development-task baseline and instrument correction
+
+The first Workflow Runner pair and Vector's repair have completed. A postlaunch
+investigation found that the original single-Tab mobile check could mistake an
+ordinary transition from the last page control into browser chrome for missing
+keyboard access. The [explicit keyboard-v2 revision](workflow-runner/instrument-revisions/postlaunch-keyboard-v2/README.md)
+preserves the original instrument bytes, original task digest, provenance, and
+positive/negative controls.
+
+Under the same corrected instrument, free reevaluation of Codex's first
+submission, Vector's first submission, and Vector's repair passed all sixteen
+API groups and eight browser groups. All three authored source inventories
+remained unchanged. Original charged results and all repair spending are
+retained. This establishes corrected functional acceptance on this development
+task; it does not establish the aggregate 20% accepted-delivery savings target
+or equal blinded code quality. Paid cost/quality reporting and subsequent
+candidate/holdout results are reported separately.

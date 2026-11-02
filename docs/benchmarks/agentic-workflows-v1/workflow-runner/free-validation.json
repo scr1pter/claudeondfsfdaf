@@ -1,6 +1,6 @@
 {
-  "status": "root_reviewed_prelaunch_controls_passed",
-  "atUtc": "2026-11-02T00:37:18.810531+00:00",
+  "status": "reviewed_postlaunch_keyboard_v2_controls_and_unchanged_candidate_reevaluations_passed",
+  "atUtc": "2026-11-02T01:45:57.815925+00:00",
   "modelCalls": 0,
   "paidUsd": 0,
   "seed": {
@@ -8,11 +8,13 @@
     "buildExitCode": 0,
     "protectedSmokePassed": 1,
     "protectedSmokeFailed": 0,
-    "finalFormatting": "Applied before final typecheck/build/smoke; only formatting after seed negative gate"
+    "finalFormatting": "Applied before final typecheck/build/smoke; only formatting after seed negative gate",
+    "evidenceStage": "Original prelaunch v1; not rerun for keyboard-only revision"
   },
   "instrumentPureControls": {
-    "passed": 14,
-    "failed": 0
+    "passed": 18,
+    "failed": 0,
+    "instrumentRevision": "postlaunch-keyboard-v2"
   },
   "realWorkerLifecycleControls": {
     "passed": 5,
@@ -23,19 +25,8 @@
       "block_release_barrier",
       "parent_death_exits_fixture",
       "invalid_identity_rejected"
-    ]
-  },
-  "browserContractPositiveControl": {
-    "passed": 8,
-    "failed": 0,
-    "verdict": "passed",
-    "productPassClaim": false
-  },
-  "browserContractNegativeControl": {
-    "passed": 6,
-    "failed": 2,
-    "verdict": "product_failure",
-    "expectedRejection": "Missing required exact workflow-name label"
+    ],
+    "evidenceStage": "Original prelaunch v1; protected worker and API evaluator unchanged"
   },
   "unchangedSeedGate": {
     "verdict": "product_failure",
@@ -53,7 +44,8 @@
       "dashboard_boot",
       "legacy_jobs_visible",
       "mobile_layout_and_keyboard"
-    ]
+    ],
+    "instrumentRevision": "Original v1 historical negative gate; not rerun under keyboard-v2"
   },
   "prelaunchInstrumentIssuesRetained": [
     {
@@ -87,16 +79,125 @@
   },
   "fullGoldSchedulerBuilt": false,
   "limitations": [
-    "A complete positive v2 product has not been built by the instrument author",
-    "Browser positive control is a finite-state UI stand-in, not scheduler validation",
-    "Root review and source freeze are still required before paid runs",
-    "Original prelaunch logs remain in a private execution archive; only this numerical/status projection is public"
+    "A complete positive v2 scheduler was not built by the instrument author; the study owner independently reran all three actual unchanged delivered applications and each passed the full gate.",
+    "Synthetic browser controls validate instrument behavior, not production readiness.",
+    "Original prelaunch and charged outcomes are retained; corrected functional acceptance does not erase repair spend or establish the aggregate 20% cost/quality objective.",
+    "Raw transcripts, screenshots and machine runtime logs remain in the private execution archive; public files contain sanitized source and numerical/status evidence."
   ],
-  "browserContractDelayedFormControl": {
-    "passed": 8,
-    "failed": 0,
-    "earlyLegacyVisible": true,
-    "formInitiallyAbsent": true,
-    "formMountDelayMs": 1499
+  "evidenceStages": "Unchanged prelaunch build/lifecycle/seed-negative evidence is historical v1; keyboard-v2 controls and all three unchanged-candidate full reevaluations are explicit below.",
+  "browserContractPositiveControls": [
+    {
+      "control": "positive_accessible_live_contract",
+      "verdict": "passed",
+      "passed": 8,
+      "failed": 0
+    },
+    {
+      "control": "positive_delayed_form_with_early_legacy_content",
+      "verdict": "passed",
+      "passed": 8,
+      "failed": 0,
+      "earlyLegacyVisible": true,
+      "formInitiallyAbsent": true,
+      "formDelayMs": 1508
+    },
+    {
+      "control": "positive_healthy_wrap_from_last_events_button",
+      "verdict": "passed",
+      "passed": 8,
+      "failed": 0,
+      "keyboard": {
+        "startingControl": {
+          "tag": "button",
+          "text": "View events UI created"
+        },
+        "visibleCandidates": 8,
+        "tabLimit": 10,
+        "tabPresses": 4,
+        "bodyTransitions": 0,
+        "reachedControls": [
+          "Workflow name",
+          "Concurrency",
+          "Workflow definition",
+          "Create workflow"
+        ],
+        "missingControls": []
+      }
+    }
+  ],
+  "browserContractNegativeControls": [
+    {
+      "control": "negative_form_excluded_from_native_tab_order",
+      "verdict": "product_failure",
+      "passed": 7,
+      "failed": 1,
+      "keyboard": {
+        "startingControl": {
+          "tag": "button",
+          "text": "View events UI created"
+        },
+        "visibleCandidates": 8,
+        "tabLimit": 10,
+        "tabPresses": 10,
+        "bodyTransitions": 2,
+        "reachedControls": [],
+        "missingControls": [
+          "Workflow name",
+          "Concurrency",
+          "Workflow definition",
+          "Create workflow"
+        ]
+      }
+    },
+    {
+      "control": "negative_missing_exact_label",
+      "verdict": "product_failure",
+      "passed": 5,
+      "failed": 3
+    }
+  ],
+  "postlaunchKeyboardRevision": {
+    "directory": "instrument-revisions/postlaunch-keyboard-v2",
+    "originalTaskDigest": "722a00ba024522e2e88aee585f778dad206b115a30a8d1caded38681cf7cd761",
+    "originalGitRevision": "44f93362a683d39198ead037beb639abc828fb63",
+    "originalSnapshotsPreservedVerbatim": true,
+    "originalChargedResultsAndRepairChargesRetained": true,
+    "apiAssertionsUnchanged": 16,
+    "otherBrowserChecksUnchanged": 7,
+    "cause": "A single Tab from the last page control can move focus into browser chrome and leave activeElement as body; the next Tab reaches a real native form field.",
+    "correction": "Ordinary heading click, then bounded native Tab traversal requiring all four exact workflow form controls; body transitions allowed; no forced DOM focus or tabindex mutation.",
+    "focusProof": "instrument-revisions/postlaunch-keyboard-v2/focus-proof.json",
+    "authorControlModelCalls": 0,
+    "authorControlPaidUsd": 0,
+    "ownerReevaluationModelCalls": 0,
+    "unchangedCandidateReevaluations": {
+      "codex-first": {
+        "exitCode": 0,
+        "verdict": "passed",
+        "apiPassed": 16,
+        "browserPassed": 8,
+        "sourceUnchanged": true,
+        "sourceFiles": 235,
+        "failedChecks": []
+      },
+      "vector-first": {
+        "exitCode": 0,
+        "verdict": "passed",
+        "apiPassed": 16,
+        "browserPassed": 8,
+        "sourceUnchanged": true,
+        "sourceFiles": 14,
+        "failedChecks": []
+      },
+      "vector-repair": {
+        "exitCode": 0,
+        "verdict": "passed",
+        "apiPassed": 16,
+        "browserPassed": 8,
+        "sourceUnchanged": true,
+        "sourceFiles": 15,
+        "failedChecks": []
+      }
+    }
   }
 }

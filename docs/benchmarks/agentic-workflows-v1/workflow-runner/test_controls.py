@@ -1,5 +1,6 @@
 """Pure positive/negative controls for the independent workflow instrument."""
 import ast
+import hashlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
@@ -172,6 +173,42 @@ class Controls(unittest.TestCase):
             evaluate.validation(fixture)
         self.assertEqual(fixture.workflows, [{"id": "legacy-workflow"}])
         self.assertEqual(fixture.valid_retries, [])
+
+    def test_postlaunch_original_snapshots_are_verbatim(self):
+        archive = ROOT / "instrument-revisions/postlaunch-keyboard-v2"
+        provenance = json.loads((archive / "provenance.json").read_text())
+        self.assertEqual(provenance["originalTaskDigest"], "722a00ba024522e2e88aee585f778dad206b115a30a8d1caded38681cf7cd761")
+        for snapshot in provenance["snapshots"].values():
+            content = (archive / snapshot["path"]).read_bytes()
+            self.assertEqual(hashlib.sha256(content).hexdigest(), snapshot["sha256"])
+            self.assertEqual(len(content), snapshot["bytes"])
+
+    def test_postlaunch_api_instrument_is_unchanged(self):
+        archive = ROOT / "instrument-revisions/postlaunch-keyboard-v2/original"
+        original_manifest = json.loads((archive / "original-manifest.json").read_text())
+        self.assertEqual(hashlib.sha256((ROOT / "evaluate.py").read_bytes()).hexdigest(), original_manifest["files"]["evaluate.py"])
+
+    def test_postlaunch_other_seven_browser_contracts_are_unchanged(self):
+        archive = ROOT / "instrument-revisions/postlaunch-keyboard-v2/original"
+        original = (archive / "browser-check.cjs").read_text()
+        current = (ROOT / "browser-check.cjs").read_text()
+        def contract(source, name):
+            start = source.index('await check("' + name + '"')
+            end = source.find('await check("', start + 1)
+            return source[start:end]
+        for name in evaluate.BROWSER_NAMES[:-1]:
+            self.assertEqual(contract(current, name), contract(original, name), name)
+
+    def test_postlaunch_keyboard_observes_without_forcing_dom_focus(self):
+        source = (ROOT / "browser-check.cjs").read_text()
+        helper = source[source.index("async function keyboardFormReachability"):source.index("function node(")]
+        self.assertIn('page.keyboard.press("Tab")', helper)
+        self.assertIn('name: "Workflow Runner"', helper)
+        self.assertIn("visibleCandidates + 2", helper)
+        self.assertIn("Math.min(200", helper)
+        self.assertNotIn(".focus(", helper)
+        self.assertNotIn("setAttribute(", helper)
+        self.assertNotIn("tabIndex =", helper)
 
 
 if __name__ == "__main__":

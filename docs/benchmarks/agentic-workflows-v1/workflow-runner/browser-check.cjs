@@ -32,6 +32,48 @@ async function until(action, message, timeout = 8000) {
   }
   throw new Error("Timed out waiting for " + message);
 }
+
+async function keyboardFormReachability(page) {
+  const targets = [
+    ["Workflow name", page.getByLabel("Workflow name", { exact: true })],
+    ["Concurrency", page.getByRole("combobox", { name: "Concurrency", exact: true })],
+    ["Workflow definition", page.getByLabel("Workflow definition", { exact: true })],
+    ["Create workflow", page.getByRole("button", { name: "Create workflow", exact: true })],
+  ];
+  const startingControl = await page.evaluate(() => ({
+    tag: document.activeElement.tagName.toLowerCase(),
+    text: (document.activeElement.getAttribute("aria-label") || document.activeElement.textContent || "").trim().slice(0, 100),
+  }));
+  // An ordinary pointer action establishes a user starting point; no DOM focus is forced.
+  await page.getByRole("heading", { name: "Workflow Runner", exact: true }).click();
+  const visibleCandidates = await page
+    .locator('a[href],button,input,select,textarea,[tabindex],summary,iframe,[contenteditable="true"]')
+    .evaluateAll((elements) => elements.filter((element) => {
+      const style = getComputedStyle(element);
+      return !element.disabled && element.getClientRects().length > 0 && style.visibility !== "hidden" && style.visibility !== "collapse";
+    }).length);
+  const tabLimit = Math.min(200, visibleCandidates + 2);
+  const reached = new Set();
+  let bodyTransitions = 0;
+  let tabPresses = 0;
+  for (; tabPresses < tabLimit && reached.size < targets.length;) {
+    await page.keyboard.press("Tab");
+    tabPresses += 1;
+    if (await page.evaluate(() => document.activeElement === document.body)) bodyTransitions += 1;
+    for (const [name, locator] of targets) {
+      if (!reached.has(name) && await locator.count() === 1 && await locator.evaluate((element) => element === document.activeElement)) reached.add(name);
+    }
+  }
+  return {
+    startingControl,
+    visibleCandidates,
+    tabLimit,
+    tabPresses,
+    bodyTransitions,
+    reachedControls: [...reached],
+    missingControls: targets.map(([name]) => name).filter((name) => !reached.has(name)),
+  };
+}
 function node(key, kind = "succeed", maxAttempts = 1) {
   return { key, name: "Job " + key, kind, dependsOn: [], maxAttempts };
 }
@@ -313,10 +355,11 @@ async function main(argv) {
         ),
         "Page has horizontal mobile overflow",
       );
-      await page.keyboard.press("Tab");
+      const keyboard = await keyboardFormReachability(page);
+      checks.find((item) => item.name === "mobile_layout_and_keyboard").keyboard = keyboard;
       requireValue(
-        await page.evaluate(() => document.activeElement !== document.body),
-        "No keyboard-focusable dashboard control",
+        keyboard.missingControls.length === 0,
+        "Required workflow controls are not reachable by native Tab: " + keyboard.missingControls.join(", "),
       );
       await page.screenshot({
         path: path.join(output, "mobile.png"),
@@ -381,4 +424,4 @@ if (require.main === module)
       console.error(error.message);
       process.exitCode = 2;
     });
-module.exports = { main, names, options, until };
+module.exports = { main, names, options, until, keyboardFormReachability };

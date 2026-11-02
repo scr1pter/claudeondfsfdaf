@@ -48,3 +48,11 @@ python freeze.py --check
 ```
 
 The first command only inventories source. Write the first manifest only after review and free controls pass. Never overwrite a freeze silently or change business assertions after seeing paid results. Record amendments and repeat both unchanged arms under the same corrected instrument. `artifacts`, dependency directories and Python caches are excluded from Git and freezing. Source uses LF checkouts so hashes remain portable.
+
+The current reviewed instrument includes the [postlaunch keyboard-v2 correction](instrument-revisions/postlaunch-keyboard-v2/README.md).
+Its original freeze and changed files are preserved verbatim in that revision's
+archive. The corrected check uses ordinary user interactions and native Tab
+traversal to reach all four required workflow form controls. The other seven
+browser checks and all sixteen API assertions are unchanged. Free reevaluation
+of all three unchanged baseline submissions passed the complete corrected gate;
+original outcomes and repair charges remain retained.
