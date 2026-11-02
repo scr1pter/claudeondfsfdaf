@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta name="color-scheme" content="light" />
+  <title>Workflow Runner</title>
+  <style>
+    :root{font-family:Inter,"Segoe UI",system-ui,sans-serif;color:#24302d;background:#f5f7f6;font-synthesis:none;--green:#23694d;--line:#dfe5e1;--muted:#66756e;--ink:#203a2e}
+    *{box-sizing:border-box}body{margin:0}button,input,select,textarea{font:inherit}button,a,input,select,textarea{touch-action:manipulation}button,a{ -webkit-tap-highlight-color:transparent}button{cursor:pointer;max-width:100%;overflow-wrap:anywhere}button:disabled{cursor:wait;opacity:.6}a{color:inherit}button:focus-visible,a:focus-visible,summary:focus-visible{outline:3px solid #559c79;outline-offset:4px}input:focus,select:focus,textarea:focus{outline:2px solid #559c79;outline-offset:2px}button{border:1px solid transparent;border-radius:7px;padding:10px 15px;font-weight:600;font-size:13px;min-height:40px;background:var(--green);color:white}button:hover{filter:brightness(.94)}button.secondary{background:white;border-color:var(--line);color:#394c42}button.danger{color:#9d4034;background:#fff;border-color:#ead9d5}h1,h2,h3,h4,p{margin:0}h1{font-size:32px;letter-spacing:-1.1px;font-weight:650;line-height:1.25}h2{font-size:17px;letter-spacing:-.3px;font-weight:650}h3{font-size:17px;letter-spacing:-.25px}h4{font-size:13px}p{line-height:1.6}.muted{color:var(--muted)}.eyebrow{text-transform:uppercase;font-size:10px;letter-spacing:1.7px;font-weight:700;color:var(--muted)}.shell{display:grid;grid-template-columns:210px minmax(0,1fr);min-height:100vh}.sidebar{background:#193c2c;color:#e7f1eb;padding:30px 19px;display:flex;flex-direction:column;gap:44px}.brand{display:flex;align-items:center;gap:10px;padding:0 9px;font-size:19px;letter-spacing:-.6px;font-weight:650}.brand-icon{width:29px;height:29px;background:#d4edb6;color:#22452c;border-radius:8px;display:grid;place-items:center;font-size:22px;line-height:1}.sidebar .eyebrow{color:#a3bbab;padding:0 12px;font-size:9px}.nav{display:grid;gap:6px;margin-top:15px}.nav a{display:flex;align-items:center;gap:11px;text-decoration:none;padding:12px;border-radius:7px;font-size:13px;color:#c5d7cb}.nav a:first-child{background:#31523f;color:#fff}.nav svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.5}.side-note{margin-top:auto;border-top:1px solid #3a5845;padding:20px 10px 0;font-size:11px;line-height:1.7;color:#b4c9bc}.side-note strong{color:#e0ebdf;display:block;font-size:12px;margin-bottom:4px;font-weight:500}.main-shell{min-width:0}.topbar{height:71px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:0 36px;background:#fff;font-size:12px;color:var(--muted)}.breadcrumb{display:flex;align-items:center;gap:12px}.breadcrumb strong{font-weight:500;color:#364d40}.workspace-tag{border:1px solid var(--line);padding:5px 9px;border-radius:5px;font-size:10px;color:#56695b;letter-spacing:.3px}main{max-width:1500px;padding:35px 36px 40px;margin:auto}.page-heading{display:flex;justify-content:space-between;align-items:center;gap:16px;margin-bottom:27px}.page-heading p{font-size:13px;margin-top:9px;color:var(--muted)}.sync{display:flex;align-items:center;gap:7px;font-size:11px;color:var(--muted);white-space:nowrap}.sync-dot{width:6px;height:6px;border-radius:50%;background:#85938c}.sync[data-ok="true"] .sync-dot{background:#33835a}.stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;margin-bottom:29px}.stat{border:1px solid var(--line);background:#fff;border-radius:9px;padding:17px 20px}.stat-label{display:flex;align-items:center;gap:7px;color:var(--muted);font-size:11px}.stat-value{display:block;font-size:27px;letter-spacing:-1px;margin-top:8px;font-weight:600}.small-dot{width:7px;height:7px;border-radius:50%;background:#94a09a}.small-dot.running{background:#d69e3b}.small-dot.succeeded{background:#428763}.small-dot.failed{background:#c06a5e}.content-grid{display:grid;grid-template-columns:minmax(290px,365px) minmax(0,1fr);gap:25px;align-items:start}.panel{background:#fff;border:1px solid var(--line);border-radius:10px;min-width:0;overflow:hidden}.panel-head{padding:21px 22px 17px;border-bottom:1px solid #e9eeeb}.panel-head p{font-size:12px;color:var(--muted);margin-top:6px}.form-body{padding:20px 22px 22px}.form-row{display:grid;grid-template-columns:minmax(0,1fr) 86px;gap:14px}label{display:block;font-size:12px;font-weight:600;color:#3c4c44;margin-bottom:8px}input,select,textarea{width:100%;min-width:0;border:1px solid #d7dfd9;border-radius:6px;background:#fff;color:#2e4035;padding:10px 11px;font-size:12px}input,select{height:40px}input::placeholder{color:#94a198}select{padding-right:5px}textarea{display:block;resize:vertical;min-height:290px;font-family:"Cascadia Code",Consolas,monospace;font-size:11px;line-height:1.7;background:#f8faf8;tab-size:2;white-space:pre;overflow:auto}#definition-label{margin-top:22px;display:flex;justify-content:space-between;align-items:center}.code-label{color:#839087;font-size:9px;letter-spacing:1px;font-weight:500}.help{font-size:11px;color:var(--muted);line-height:1.7;margin-top:10px}.create-button{width:100%;margin-top:20px;display:flex;align-items:center;justify-content:center;gap:9px}.form-footer{border-top:1px solid #e8ede9;padding:14px 22px;font-size:10px;color:#748179;background:#fcfdfc;display:flex;align-items:center;gap:7px}.list-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:2px 0 15px;min-height:28px}.list-heading h2{font-size:16px}.count{display:inline-grid;place-items:center;min-width:22px;height:21px;background:#e8eee9;color:#617066;border-radius:5px;font-size:10px;margin-left:8px;vertical-align:middle}.order{font-size:10px;color:#839087}.workflow-cards{display:grid;gap:16px}.workflow-card{border:1px solid var(--line);border-radius:10px;background:white;min-width:0;overflow:hidden}.card-top{display:flex;align-items:start;justify-content:space-between;gap:13px;padding:20px 21px 14px}.workflow-title{overflow-wrap:anywhere}.workflow-meta{font-size:10px;color:#7b8981;margin-top:6px;line-height:1.6}.badge{display:inline-block;flex-shrink:0;font-size:10px;font-weight:600;padding:4px 8px;border-radius:5px;background:#edf1ee;color:#66736b;line-height:1.4}.badge[data-status="succeeded"]{background:#e9f3e9;color:#32714d}.badge[data-status="running"]{background:#fff2d9;color:#8b621e}.badge[data-status="failed"],.badge[data-status="blocked"]{background:#faeae7;color:#a14c40}.badge[data-status="cancelled"],.badge[data-status="interrupted"]{background:#eeeeef;color:#6c6874}.job-list{padding:0 21px}.job{padding:13px 0;border-top:1px solid #edf0ed;min-width:0}.job-line{display:flex;align-items:center;justify-content:space-between;gap:10px}.job-name{overflow-wrap:anywhere;min-width:0}.job-name span{color:#94a096;margin-right:8px;font-size:11px;font-weight:400}.job-detail{font-size:10px;color:#819087;margin-top:5px;overflow-wrap:anywhere}.history{margin-top:11px;width:100%;overflow:auto;border:1px solid #e8ede8;border-radius:5px}.history table{width:100%;border-collapse:collapse;text-align:left;font-size:10px;white-space:nowrap}.history th{background:#f6f8f6;color:#718075;font-weight:500}.history th,.history td{padding:7px 9px}.history td{border-top:1px solid #eef1ee;color:#68766d}.history caption{text-align:left;padding:7px 9px;font-size:10px;color:#718075}.result{font-family:Consolas,monospace;font-size:10px;line-height:1.7;max-height:100px;overflow:auto;white-space:pre;margin:9px 0 0;color:#728076;background:#f8faf8;padding:7px 9px;border-radius:4px}details.output{font-size:10px;color:#748179;margin-top:8px}summary{cursor:pointer;width:fit-content;max-width:100%}.card-actions{display:flex;gap:8px;justify-content:space-between;flex-wrap:wrap;padding:13px 21px;background:#fcfdfc;border-top:1px solid #edf0ed}.card-actions button{font-size:10px;min-height:32px;padding:6px 10px}.events{border-top:1px solid var(--line);background:#f7faf7;padding:15px 21px;max-height:290px;overflow:auto}.events h4{margin-bottom:12px}.events ol{list-style:none;padding:0;margin:0}.events li{display:flex;gap:10px;border-left:1px solid #d9e3da;padding:5px 0 5px 13px;font-family:Consolas,monospace;font-size:10px;color:#4c6555;white-space:nowrap}.event-seq{color:#9aa59c;min-width:16px}.empty{border:1px dashed #cfd9d1;border-radius:10px;text-align:center;padding:52px 22px;color:var(--muted);font-size:12px;background:#f9fbf9}.empty-icon{width:40px;height:40px;border:1px solid #d7e2d8;background:#edf3ec;border-radius:10px;margin:0 auto 16px;display:grid;place-items:center;color:#65846c;font-size:22px}.empty h3{color:#405448;font-size:14px;margin-bottom:8px}.legacy{margin-top:35px;padding-top:26px;border-top:1px solid var(--line)}.legacy-heading{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px}.legacy-heading p{font-size:11px;margin-top:5px;color:var(--muted)}.legacy-form{display:grid;grid-template-columns:minmax(0,1fr) 170px auto;gap:14px;align-items:end;padding:18px 21px}.legacy-form button{font-size:12px}.legacy-form .form-error{grid-column:1/-1}.legacy-cards{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;margin-top:16px}.legacy-card{padding:17px 19px;background:#fff;border:1px solid var(--line);border-radius:8px;min-width:0}.legacy-card h3{font-size:13px;overflow-wrap:anywhere;margin-bottom:10px}.legacy-card .legacy-meta{font-size:10px;margin-top:8px;color:var(--muted)}[role="alert"]{font-size:12px;color:#a04639;overflow-wrap:anywhere;line-height:1.6;background:#fff2ef;border-radius:5px;padding:9px 11px;margin-top:12px}[hidden]{display:none!important}.page-footer{margin-top:30px;display:flex;justify-content:space-between;gap:12px;color:#8b978f;font-size:10px;line-height:1.6}.footer-mark{color:#657d6b}
+    @media(min-width:1550px){.content-grid{grid-template-columns:385px minmax(0,1fr)}}
+    @media(max-width:1150px){.shell{grid-template-columns:170px minmax(0,1fr)}.sidebar{padding:28px 12px}.brand{font-size:17px;gap:8px}.topbar{padding:0 25px}main{padding:28px 25px}.content-grid{grid-template-columns:300px minmax(0,1fr);gap:18px}.form-body,.panel-head{padding-left:18px;padding-right:18px}.card-top{padding:17px 16px 13px}.job-list{padding:0 16px}.card-actions{padding:12px 16px}.sync{display:none}.stats{gap:10px}.stat{padding:15px}.legacy-cards{grid-template-columns:repeat(2,minmax(0,1fr))}}
+    @media(max-width:930px){.shell{grid-template-columns:150px minmax(0,1fr)}.brand{font-size:15px}.content-grid{grid-template-columns:minmax(0,1fr)}textarea{min-height:230px}.composer{max-width:none}.page-heading{margin-bottom:22px}.stats{grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}.stat{padding:13px 10px}.stat-label{font-size:10px;gap:5px}.stat-value{font-size:24px}.legacy-form{grid-template-columns:minmax(0,1fr) 140px}.legacy-form button{grid-column:1/-1}.legacy-cards{grid-template-columns:minmax(0,1fr)}}
+    @media(max-width:620px){.shell{display:block}.sidebar{padding:15px 18px;gap:0;display:flex;flex-direction:row;align-items:center;justify-content:space-between}.brand{font-size:17px;padding:0}.brand-icon{width:25px;height:25px;font-size:18px}.nav{display:flex;margin:0;gap:4px}.nav a{padding:8px;font-size:11px}.nav a:first-child{background:transparent}.nav svg{display:none}.nav a[href="#compose"]{display:none}.sidebar .eyebrow,.side-note{display:none}.topbar{height:46px;padding:0 19px;font-size:10px}.workspace-tag{font-size:8px;padding:4px 6px}main{padding:25px 18px}.page-heading h1{font-size:28px}.page-heading p{font-size:12px;max-width:280px}.stats{grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;margin-bottom:24px}.stat{padding:13px 16px}.stat-value{font-size:25px;margin-top:4px}.stat-label{font-size:11px}.content-grid{gap:26px}.form-body{padding:19px}.panel-head{padding:19px}.form-footer{padding:13px 19px}textarea{font-size:10px;min-height:270px}.card-top{padding:18px 16px 14px}.workflow-title h3{font-size:16px}.job-list{padding:0 16px}.card-actions{padding:12px 16px}.legacy-form{grid-template-columns:minmax(0,1fr);padding:18px}.legacy-form button{grid-column:auto}.page-footer{flex-direction:column;gap:4px}.events{padding:14px 16px}.order{font-size:9px}}
+  </style>
+</head>
+<body>
+<div class="shell">
+  <aside class="sidebar" aria-label="Navigation">
+    <a class="brand" href="#" style="text-decoration:none"><span class="brand-icon" aria-hidden="true">⌘</span> Foundry<span style="color:#8eb29a">.</span></a>
+    <div><p class="eyebrow">Workspace</p><nav class="nav"><a href="#workflows"><svg viewBox="0 0 20 20" aria-hidden="true"><rect x="2" y="2" width="6" height="6" rx="1"/><rect x="12" y="2" width="6" height="6" rx="1"/><rect x="2" y="12" width="6" height="6" rx="1"/><rect x="12" y="12" width="6" height="6" rx="1"/></svg>Workflows</a><a href="#compose"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3v14M3 10h14"/></svg>Create workflow</a><a href="#legacy"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 6h14v11H3zM6 3h8M7 10h6"/></svg>Legacy jobs</a></nav></div>
+    <div class="side-note"><strong>Built to keep going.</strong>Durable history. Local execution.<br>Every attempt accounted for.</div>
+  </aside>
+  <div class="main-shell">
+    <header class="topbar"><div class="breadcrumb"><span>Workspace</span><span aria-hidden="true">/</span><strong>Workflows</strong></div><span class="workspace-tag">LOCAL ENVIRONMENT</span></header>
+    <main>
+      <div class="page-heading"><div><h1>Workflow Runner</h1><p>Small jobs. Connected steps. Everything in one place.</p></div><div id="sync" class="sync"><span class="sync-dot"></span><span id="sync-text">Connecting to local runner…</span></div></div>
+      <div class="stats" aria-label="Workflow overview">
+        <div class="stat"><span class="stat-label"><span class="small-dot"></span>Total workflows</span><strong class="stat-value" id="stat-total">—</strong></div>
+        <div class="stat"><span class="stat-label"><span class="small-dot running"></span>In progress</span><strong class="stat-value" id="stat-active">—</strong></div>
+        <div class="stat"><span class="stat-label"><span class="small-dot succeeded"></span>Succeeded</span><strong class="stat-value" id="stat-success">—</strong></div>
+        <div class="stat"><span class="stat-label"><span class="small-dot failed"></span>Failed</span><strong class="stat-value" id="stat-failed">—</strong></div>
+      </div>
+      <p id="connection-error" role="alert" hidden></p>
+      <div class="content-grid">
+        <section id="compose" class="panel composer" aria-labelledby="compose-heading">
+          <div class="panel-head"><h2 id="compose-heading">Create a workflow</h2><p>Define your jobs. We’ll handle the order.</p></div>
+          <form id="workflow-form" novalidate>
+            <div class="form-body">
+              <div class="form-row"><div><label for="workflow-name">Workflow name</label><input id="workflow-name" name="name" placeholder="e.g. Publish checks" maxlength="120" required /></div><div><label for="concurrency">Concurrency</label><select id="concurrency" name="concurrency"><option value="1">1</option><option value="2" selected>2</option><option value="3">3</option></select></div></div>
+              <label id="definition-label" for="definition">Workflow definition <span class="code-label">JSON ARRAY</span></label>
+              <textarea id="definition" name="definition" aria-label="Workflow definition" spellcheck="false" aria-describedby="definition-help" required></textarea>
+              <p class="help" id="definition-help">Connect jobs with <code>dependsOn</code>. Set <code>maxAttempts</code> to retry failures. Up to 40 jobs per workflow.</p>
+              <p id="workflow-error" role="alert" hidden></p>
+              <button class="create-button" type="submit" aria-label="Create workflow"><span aria-hidden="true">＋</span> Create workflow</button>
+            </div>
+          </form>
+          <div class="form-footer"><span aria-hidden="true">↳</span> Jobs run locally with durable attempt history.</div>
+        </section>
+        <section id="workflows" aria-label="Workflow list">
+          <div class="list-heading"><h2>Workflows <span id="workflow-count" class="count">0</span></h2><span class="order">NEWEST FIRST</span></div>
+          <div id="workflow-cards" class="workflow-cards"></div>
+          <div id="workflow-empty" class="empty"><div class="empty-icon" aria-hidden="true">⇢</div><h3>Your next workflow starts here</h3><p>Create a workflow to see its jobs,<br>attempts and event history.</p></div>
+        </section>
+      </div>
+      <section id="legacy" class="legacy" aria-label="Legacy jobs">
+        <div class="legacy-heading"><div><h2>Legacy jobs <span id="legacy-count" class="count">0</span></h2><p>Your original queue, with its history intact.</p></div><span class="eyebrow">Single jobs</span></div>
+        <form id="job-form" class="panel legacy-form" novalidate><div><label for="job-name">Job name</label><input id="job-name" name="name" placeholder="Name a single job" required maxlength="120" /></div><div><label for="job-kind">Job behavior</label><select id="job-kind" name="kind"><option value="succeed">Succeed</option><option value="fail">Fail</option><option value="fail_once">Fail once</option><option value="block">Wait for release</option></select></div><button class="secondary" type="submit">Create job</button><p class="form-error" role="alert" id="job-error" hidden></p></form>
+        <div id="legacy-cards" class="legacy-cards"></div>
+        <p id="legacy-empty" class="help">No legacy jobs yet. Create a single job above to get started.</p>
+      </section>
+      <footer class="page-footer"><span><span class="footer-mark">Foundry</span> / Workflow Runner</span><span>Local execution · Durable history · Automatic recovery</span></footer>
+    </main>
+  </div>
+</div>
+<script>
+  const $ = id => document.getElementById(id);
+  const example = [
+    { key: 'lint', name: 'Lint', kind: 'succeed' },
+    { key: 'test', name: 'Tests', kind: 'fail_once', dependsOn: ['lint'], maxAttempts: 2 },
+    { key: 'publish', name: 'Publish', kind: 'succeed', dependsOn: ['test'] }
+  ];
+  $('definition').value = JSON.stringify(example, null, 2);
+  const cards = new Map(), legacyCards = new Map(), expanded = new Set();
+  let refreshing = false;
+  function el(tag, className, text) {
+    const element = document.createElement(tag);
+    if (className) element.className = className;
+    if (text !== undefined) element.textContent = text;
+    return element;
+  }
+  function alertAt(id, message = '') { $(id).textContent = message; $(id).hidden = !message; }
+  function badge(status) { const element = el('span', 'badge', status); element.dataset.status = status; return element; }
+  function timestamp(time) { return time ? new Date(time).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit', second: '2-digit'}) : '—'; }
+  async function api(path, options) {
+    const response = await fetch(path, options), result = await response.json();
+    if (!response.ok) throw new Error(result.error?.message || 'Request failed.');
+    return result;
+  }
+  const post = body => ({ method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body) });
+  function drawJobs(jobs) {
+    return jobs.map((job, index) => {
+      const item = el('div', 'job'), line = el('div', 'job-line'), title = el('h4', 'job-name');
+      title.append(el('span', '', String(index + 1).padStart(2, '0')), document.createTextNode(job.name));
+      line.append(title, badge(job.status));
+      item.append(line, el('p', 'job-detail', `${job.key} · ${job.kind} · ${job.dependsOn.length ? 'after ' + job.dependsOn.join(', ') : 'no dependencies'} · max ${job.maxAttempts} attempt${job.maxAttempts === 1 ? '' : 's'}`));
+      if (job.error) { const error = el('p', '', job.error); if (job.status === 'failed') error.setAttribute('role', 'alert'); else error.className = 'job-detail'; item.append(error); }
+      if (job.attempts.length) {
+        const history = el('div', 'history'), table = el('table');
+        table.append(el('caption', '', 'Attempt history'));
+        const head = el('thead'), header = el('tr');
+        ['Attempt', 'Status', 'PID', 'Started', 'Finished'].forEach(text => { const th = el('th', '', text); th.scope = 'col'; header.append(th); });
+        head.append(header); table.append(head);
+        const body = el('tbody');
+        job.attempts.forEach(attempt => { const row = el('tr'); [String(attempt.number), attempt.status, String(attempt.pid ?? '—'), timestamp(attempt.startedAt), timestamp(attempt.finishedAt)].forEach(text => row.append(el('td', '', text))); body.append(row); });
+        table.append(body); history.append(table); item.append(history);
+      }
+      if (job.result) { const output = el('details', 'output'); output.append(el('summary', '', 'Worker output'), el('pre', 'result', job.result)); item.append(output); }
+      return item;
+    });
+  }
+  function makeCard(workflow) {
+    const card = el('article', 'workflow-card');
+    card.dataset.workflowId = workflow.id; card.setAttribute('aria-label', 'Workflow ' + workflow.name);
+    const top = el('div', 'card-top'), title = el('div', 'workflow-title');
+    title.append(el('h3', '', workflow.name), el('p', 'workflow-meta', `${workflow.jobs.length} jobs · Concurrency ${workflow.concurrency} · ${new Date(workflow.createdAt).toLocaleString()}`));
+    const status = badge(workflow.status); status.dataset.testid = 'workflow-status'; top.append(title, status);
+    const jobs = el('div', 'job-list'), actions = el('div', 'card-actions');
+    const eventsButton = el('button', 'secondary', 'View events ' + workflow.name); eventsButton.type = 'button'; eventsButton.setAttribute('aria-expanded', 'false');
+    const events = el('section', 'events'); events.hidden = true; events.setAttribute('aria-label', 'Events for ' + workflow.name); events.id = 'events-' + workflow.id; eventsButton.setAttribute('aria-controls', events.id);
+    events.append(el('h4', '', 'Event history'), el('ol'));
+    const actionError = el('p'); actionError.setAttribute('role', 'alert'); actionError.hidden = true;
+    eventsButton.addEventListener('click', async () => {
+      const isOpen = !expanded.has(workflow.id);
+      if (isOpen) expanded.add(workflow.id); else expanded.delete(workflow.id);
+      events.hidden = !isOpen; eventsButton.setAttribute('aria-expanded', String(isOpen));
+      if (isOpen) await refreshEvents(workflow.id);
+    });
+    const cancel = el('button', 'danger', 'Cancel workflow ' + workflow.name); cancel.type = 'button';
+    cancel.addEventListener('click', async () => {
+      if (cancel.disabled) return;
+      cancel.disabled = true; actionError.hidden = true;
+      try { const data = await api('/api/workflows/' + workflow.id + '/cancel', { method: 'POST' }); updateCard(data.workflow); await refresh(); }
+      catch (failure) { actionError.textContent = failure.message; actionError.hidden = false; }
+      finally { cancel.disabled = false; }
+    });
+    actions.append(eventsButton, cancel); card.append(top, jobs, actions, actionError, events);
+    return { card, status, jobs, cancel, events, actionError, signature: '', eventSignature: '' };
+  }
+  function updateCard(workflow) {
+    let entry = cards.get(workflow.id);
+    if (!entry) { entry = makeCard(workflow); cards.set(workflow.id, entry); }
+    const signature = JSON.stringify(workflow);
+    if (entry.signature !== signature) {
+      entry.status.textContent = workflow.status; entry.status.dataset.status = workflow.status;
+      const openOutputs = Array.from(entry.jobs.querySelectorAll('details')).map(detail => detail.open);
+      entry.jobs.replaceChildren(...drawJobs(workflow.jobs));
+      entry.jobs.querySelectorAll('details').forEach((detail, index) => detail.open = !!openOutputs[index]);
+      entry.cancel.hidden = !['queued', 'running'].includes(workflow.status);
+      entry.signature = signature;
+    }
+    return entry.card;
+  }
+  async function refreshEvents(id) {
+    const entry = cards.get(id); if (!entry) return;
+    try {
+      const data = await api('/api/workflows/' + id + '/events?after=0'), signature = JSON.stringify(data.events);
+      if (signature === entry.eventSignature) return;
+      entry.events.querySelector('ol').replaceChildren(...data.events.map(event => {
+        const row = el('li'); row.append(el('span', 'event-seq', String(event.seq)), el('span', '', event.type + (event.jobKey ? ' · ' + event.jobKey : '') + (event.attempt ? ' · attempt ' + event.attempt : ''))); return row;
+      }));
+      entry.eventSignature = signature;
+    } catch (failure) { entry.actionError.textContent = failure.message; entry.actionError.hidden = false; }
+  }
+  function updateLegacy(job) {
+    let entry = legacyCards.get(job.id), signature = JSON.stringify(job);
+    if (!entry) { const card = el('article', 'legacy-card'); card.setAttribute('aria-label', 'Legacy job ' + job.name); entry = {card, signature: ''}; legacyCards.set(job.id, entry); }
+    if (entry.signature !== signature) {
+      entry.card.replaceChildren(el('h3', '', job.name), badge(job.status), el('p', 'legacy-meta', `${job.kind} · ${job.attempt} attempt${job.attempt === 1 ? '' : 's'}`));
+      if (job.result) entry.card.append(el('pre', 'result', job.result));
+      if (job.error) { const error = el('p', '', job.error); error.setAttribute('role', 'alert'); entry.card.append(error); }
+      entry.signature = signature;
+    }
+    return entry.card;
+  }
+  async function refresh() {
+    if (refreshing) return; refreshing = true;
+    try {
+      const [data, legacy] = await Promise.all([api('/api/workflows'), api('/api/jobs')]);
+      const workflows = data.workflows;
+      const container = $('workflow-cards');
+      workflows.forEach((workflow, index) => { const card = updateCard(workflow); if (container.children[index] !== card) container.insertBefore(card, container.children[index] || null); });
+      $('workflow-empty').hidden = !!workflows.length;
+      $('workflow-count').textContent = workflows.length;
+      $('stat-total').textContent = workflows.length;
+      $('stat-active').textContent = workflows.filter(workflow => ['queued', 'running'].includes(workflow.status)).length;
+      $('stat-success').textContent = workflows.filter(workflow => workflow.status === 'succeeded').length;
+      $('stat-failed').textContent = workflows.filter(workflow => workflow.status === 'failed').length;
+      const legacyContainer = $('legacy-cards');
+      legacy.jobs.forEach((job, index) => { const card = updateLegacy(job); if (legacyContainer.children[index] !== card) legacyContainer.insertBefore(card, legacyContainer.children[index] || null); });
+      $('legacy-count').textContent = legacy.jobs.length; $('legacy-empty').hidden = !!legacy.jobs.length;
+      await Promise.all([...expanded].map(refreshEvents));
+      $('sync').dataset.ok = 'true'; $('sync-text').textContent = 'Synced at ' + timestamp(Date.now()); alertAt('connection-error');
+    } catch { $('sync').dataset.ok = 'false'; $('sync-text').textContent = 'Connection interrupted'; alertAt('connection-error', 'Could not reach the local runner. Retrying automatically…'); }
+    finally { refreshing = false; }
+  }
+  $('workflow-form').addEventListener('submit', async event => {
+    event.preventDefault(); const button = event.currentTarget.querySelector('button[type="submit"]'); if (button.disabled) return;
+    alertAt('workflow-error');
+    try {
+      const workflowName = $('workflow-name').value.trim();
+      if (!workflowName) throw new Error('Enter a workflow name.');
+      let jobs; try { jobs = JSON.parse($('definition').value); } catch { throw new Error('Workflow definition must be a valid JSON job array.'); }
+      if (!Array.isArray(jobs)) throw new Error('Workflow definition must be a JSON job array.');
+      button.disabled = true;
+      const options = post({ name: workflowName, concurrency: Number($('concurrency').value), jobs }); options.headers['Idempotency-Key'] = crypto.randomUUID();
+      await api('/api/workflows', options); $('workflow-name').value = ''; await refresh();
+    } catch (failure) { alertAt('workflow-error', failure.message); }
+    finally { button.disabled = false; }
+  });
+  $('job-form').addEventListener('submit', async event => {
+    event.preventDefault(); const button = event.currentTarget.querySelector('button[type="submit"]'); if (button.disabled) return;
+    alertAt('job-error');
+    try {
+      const jobName = $('job-name').value.trim(); if (!jobName) throw new Error('Enter a job name.');
+      button.disabled = true; await api('/api/jobs', post({name: jobName, kind: $('job-kind').value})); $('job-name').value = ''; await refresh();
+    } catch (failure) { alertAt('job-error', failure.message); }
+    finally { button.disabled = false; }
+  });
+  refresh(); setInterval(refresh, 800);
+</script>
+</body>
+</html>
+
+
