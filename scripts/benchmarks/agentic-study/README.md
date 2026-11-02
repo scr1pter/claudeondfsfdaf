@@ -73,9 +73,10 @@ paths remains in integrity checks and snapshots. Only declared generated paths
 and normal dependency/version-control/Python-cache directories are excluded.
 
 Optional task `environment` permits `PORT`, `DATA_DIR` and `WORKFLOW_DATA_DIR`;
-values can contain `{arm}` and `{app}`. Browser tooling is supplied explicitly
-with `--chrome` and `--playwright-module`, through the scoped runtime variables
-and `VECTOR_BENCH_CHROME` / `VECTOR_BENCH_PLAYWRIGHT_MODULE` evaluator variables.
+values can contain `{arm}` and `{app}`. Owned browser tooling is supplied explicitly
+with `--chrome` and `--playwright-module`. The independent evaluator retains
+`VECTOR_BENCH_CHROME` / `VECTOR_BENCH_PLAYWRIGHT_MODULE`; the coding CLI receives
+these library/browser variables only in the explicit legacy mode described below.
 When a browser driver root is supplied, the independent evaluator also receives
 `VECTOR_BENCH_BROWSER_PROXY` pointing to its frozen `proxy.cjs` exact-origin
 transport fence. It receives neither the runtime browser capability nor a model
@@ -90,6 +91,87 @@ permitted benchmark helper outside the app. `PORT` from the task, or `--app-port
 must identify the sole allowed loopback application origin. Existing user
 browsers and profiles are never selected. The browser driver tree is frozen
 alongside the task and runtime binaries.
+
+## Browser access modes
+
+New paired plans default to `--browser-access-mode shared-client`. Both coding
+CLIs receive `NODE_EXE` and the common client's path, endpoint, and scoped token.
+They do **not** receive `PLAYWRIGHT_MODULE`, `CHROME_PATH`,
+`VECTOR_BENCH_PLAYWRIGHT_MODULE`, or `VECTOR_BENCH_CHROME`, even if those values
+were present in a base environment. The prompt requires the common client and
+prohibits importing browser libraries, directly launching or connecting to a
+browser, and attaching existing profiles. Paid shared-mode execution requires
+the owned driver and explicit frozen Chrome/Playwright paths. The supervisor and
+independent evaluator still receive their required paths outside the CLI's
+environment.
+
+`--browser-access-mode legacy-library-env` preserves the previous four library
+variables and the exact previous prompt for reproducing earlier stages. Older
+plans without a browser-mode field normalize to this legacy mode. A missing-arm
+continuation must match that normalized mode explicitly; it cannot silently
+switch the other runtime to shared-only provisioning. Plans, summaries, and arm
+records identify the selected mode. Model, High reasoning, one-agent policy,
+context/output settings, and spending caps are unchanged.
+
+The environment and prompt are a provisioning policy, **not an operating-system
+sandbox**. The coding CLIs still have a general shell; removing four variables
+does not prove that arbitrary code cannot locate and start a browser. The earlier
+runner explicitly advertised `PLAYWRIGHT_MODULE` and `CHROME_PATH`, then described
+the common client as the only permitted external benchmark helper. Those were
+conflicting instrument instructions, and both capabilities were offered to both
+runtimes. Observed use of the advertised raw libraries is an instrument
+confound, not evidence of agent misconduct. Historical results are not
+retroactively treated as exclusively using the common client.
+
+After each agent finishes, a bounded audit projects its tool JSONL into fixed
+observations and counts. It can inspect a directly invoked authored script only
+inside that attempt's application workspace. It does not crawl source trees,
+read arbitrary referenced files, or publish commands, paths, identifiers, or
+tokens. Clear direct-browser execution references, browser-related ambiguity,
+and missing/incomplete/oversized telemetry require review in shared mode. General
+shell-quoting ambiguity without a browser marker remains an informational
+coverage limitation; it does not automatically block the arm. Ordinary source
+writes/reads or merely unexecuted browser code are not automatically classified
+as a direct launch. Legacy mode retains observations without changing its
+historical execution policy.
+
+Vector terminal actions are interpreted using its explicit action schema.
+`list`, `read`, `wait`, `resize`, `close`, and `reveal` only observe or manage a
+terminal; they are not new shell executions. Interrupt/redraw-only control keys
+such as `ctrl-c` are likewise separate from commands. An `open` command is
+inspected, including explicit argument arrays. Missing open commands, typed
+interactive input, Enter/history/editing keys, and unknown actions retain a
+manual-review marker when execution cannot be reconstructed safely. Browser
+code typed interactively is never silently classified as a harmless read.
+
+Every known, unchanged submission still receives the free independent functional
+gate and core worker/session/exit checks before an audit decision. An unresolved
+browser-related review marker then stops the arm as `coordinator_review_required`
+before any further paid attempt, retaining the free gate's result, source
+snapshot, and completed agent's usage. The owned token is still disarmed and
+settled; every charge remains retained. It is not a regex-based product failure and never
+produces automatic repair feedback. A clean audit means only that this bounded
+projection found no clear bypass; dynamic execution, indirect processes, and
+incomplete telemetry remain limits of this method. Review applies to flagged
+browser/telemetry observations; informational parsing limits remain visible.
+
+The shell lexer is deliberately incomplete. In free diagnostics on completed
+historical traces, PowerShell wrapper escaping and here-string commands produced
+`shell_execution_unparseable` markers even where recognized browser calls used
+the common client. These remain in the total unknown and coverage counts. A
+wrapper whose only browser markers are the exact trusted names
+`BROWSER_DRIVER_CLIENT`, `BROWSER_DRIVER_ENDPOINT`, and `BENCH_BROWSER_TOKEN`
+receives `informational_trusted_client_wrapper_parse_limit`. Token boundaries
+exclude counterfeit prefixes/suffixes, and a raw library/module/process marker
+or other suspicious browser execution marker keeps the review flag. Ordinary
+quoting ambiguity without browser markers is also informational. This narrow
+marker rule does not prove what an unparsed shell command did. Neither category proves a raw browser
+launch, agent misconduct, or a failed product. `no_clear_bypass_observed` means
+only that the bounded projection found no review-triggering evidence; its
+coverage explicitly does not prove adherence. The audit does not clear an
+entire trace merely because some common-client invocations were recognized.
+Direct `createRequire(...)(...)` browser-module references and known scoped
+browser packages are included in its bounded recognition.
 
 ## Plan, freeze and run
 
@@ -151,6 +233,10 @@ explicitly add `--previous-task-sha <exact-original-task-sha>`. A wrong or missi
 old hash is rejected. The public agent prompt and seed must remain unchanged.
 This flag records instrument lineage; it does not authorize new requirements or
 conceal the prior arm's outcome.
+
+For a previous plan that has no `browserAccessMode` field, also specify
+`--browser-access-mode legacy-library-env`. A mode mismatch blocks continuation
+during the free plan, before credentials are read or a paid batch is opened.
 
 Review the free plan, then supply its exact `--expected-source` and
 `--expected-task-sha` with `--run` as usual. Output must be new and outside the
