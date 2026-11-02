@@ -22,8 +22,9 @@ reconciled to an invoice. Every charge is retained.
 | Codex | 30 | 0.8919725 | 664,828 | 16/16 + 8/8 | 45/48 |
 | Vector | 47 | 0.7512629 | 514,140 | 16/16 + 8/8 | 45/48 |
 
-Both arms used the clean candidate revision
-`a35c03d6a9bb16f16ec0187ad69c6c6420d10f19`, the same keyboard-v2 task digest
+Vector used the clean candidate revision
+`a35c03d6a9bb16f16ec0187ad69c6c6420d10f19`; Codex used its separately pinned CLI.
+Both arms used the same keyboard-v2 task digest
 `bc418928e76adaebed02f7de9339d23c881c0d10bca33adb7b4b5002b6de7547`, and one
 autonomous `gpt-6.1-sol` agent with High reasoning. Each completed one attempt,
 with authored source unchanged through independent evaluation, no protected-input
