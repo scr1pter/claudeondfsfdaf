@@ -1,0 +1,86 @@
+{
+  "kind": "envelope-candidate-validation-v1",
+  "parentRevision": "893b9629224dc4249f08c0e18712511437a35a22",
+  "observedCase": {
+    "rejectedPatchBytes": 24000,
+    "missing": "opening Begin marker",
+    "retryAlsoChangedFunctionalLines": 3,
+    "interpretation": "The retry was not text-identical. This is an observed format-rejection compatibility fix; exact cost savings, task-quality effects and speed gains are unproven."
+  },
+  "behavior": [
+    "Only a beginless input starting with a valid file operation and containing one explicit final End marker is eligible after existing outer-whitespace/heredoc handling.",
+    "The existing strict core parser validates the complete recovered body; the only inserted text is the opening marker.",
+    "Missing or truncated End markers are never invented. Stray prose, beginless code fences, duplicate End markers and malformed recovered bodies are rejected.",
+    "Already marked input is forwarded unchanged, preserving existing marked-patch behavior.",
+    "The active legacy engine tool retains path, ownership, permission, context and write validation. Successful recovery adds only recoveredMissingBegin=true metadata."
+  ],
+  "scope": "Pure shared core helper plus the active legacy engine parser/tool. The core V2 apply-patch tool is unchanged.",
+  "validationExecutedBy": "coordinator; no Bun rerun during evidence publication",
+  "validation": [
+    {
+      "check": "Core patch suite",
+      "passed": 10,
+      "failed": 0,
+      "assertions": 45,
+      "exitCode": 0
+    },
+    {
+      "check": "Engine patch parser and tool suites after fixture correction",
+      "passed": 53,
+      "failed": 0,
+      "assertions": 183,
+      "exitCode": 0
+    },
+    {
+      "check": "Core package typecheck",
+      "exitCode": 0
+    },
+    {
+      "check": "Engine package typecheck",
+      "exitCode": 0
+    }
+  ],
+  "initialValidation": {
+    "enginePassed": 51,
+    "engineFailed": 2,
+    "cause": "Two new tests assumed a Git worktree, while the default non-Git fixture resolves the worktree at the filesystem root. This invalidated relative-path and external-directory assertions.",
+    "correction": "Enabled git:true only for those two new fixtures; assertions and production behavior were not weakened. Final rerun passed all 53 tests."
+  },
+  "regressionCoverage": [
+    "Real 24KB add plus update and delete with unchanged supplied arguments and a bounded recovery flag",
+    "Unchanged target directory and file content after malformed, truncated, fenced, duplicate-marker or stray-prose rejection",
+    "No earlier add is written when a later context check fails",
+    "Edit and external-directory permission denial prevent target writes",
+    "CRLF, literal marker text inside added content, existing heredocs and unchanged already-marked behavior"
+  ],
+  "hashEncoding": "SHA-256 of UTF-8 repository files with CRLF normalized to LF",
+  "sourceHashes": [
+    {
+      "file": "packages/core/src/patch.ts",
+      "sha256": "6f40adf58082a4dd7a1235f6a9679db40f950f536e8910bb257666607c3e41a4"
+    },
+    {
+      "file": "packages/core/test/patch.test.ts",
+      "sha256": "f05b13c9e31d53c87d2888fce5c858e8f22d23bbe2aefe23bb21c3f558883e0d"
+    },
+    {
+      "file": "packages/engine/src/patch/index.ts",
+      "sha256": "10f94573cda41810f8e82c9af98a9353b8f772774c47c65e71e3c51ab55d7c93"
+    },
+    {
+      "file": "packages/engine/src/tool/apply_patch.ts",
+      "sha256": "f97aa2e73af8cdab2131e104dbd8e1bff137b79b3f7b7e9cc52c5e4edd4a5949"
+    },
+    {
+      "file": "packages/engine/test/patch/patch.test.ts",
+      "sha256": "b2d06df4e8ebf3c177e36ba68fcea9b57561136841c98d08e75887051b1961ae"
+    },
+    {
+      "file": "packages/engine/test/tool/apply_patch.test.ts",
+      "sha256": "b0679a7267a2957f77e3697096077e2865c164ce1a1d3522fc15b0164632b4cc"
+    }
+  ],
+  "providerCalls": 0,
+  "cloudActions": 0,
+  "dependencyInstalls": 0
+}
