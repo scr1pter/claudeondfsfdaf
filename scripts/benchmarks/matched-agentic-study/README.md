@@ -115,6 +115,16 @@ and helper worker definitions are removed in the explicit tool containers;
 retained custom grammar and message content stay unchanged. These controls use
 the trusted owned runtime and host profile, not an operating-system sandbox or
 a claim of protection against every malicious local program.
+Missing reasoning summaries and text verbosity normalize to `auto` and `low`;
+explicit different values are refused for every role and helper. The transform
+preserves `text.format`, tool grammar and message content. Request fingerprints
+are computed after this normalization and match the unchanged meter's wire
+encoding. Output remains the common 32,000 ceiling: absent values use 32,000,
+larger values clamp as the meter does, and an explicitly smaller helper quota
+remains smaller. All 64 retained native requests observed `auto`/`low` and absent
+or 32,000 output values. The 1,050,000 context pin belongs to frozen runtime
+configuration/catalog and the meter's usage/reservation limits; it is not a
+fabricated API request field.
 Native identity kind is independent of request purpose. Every distinct Codex
 thread must satisfy its lead/role/depth/lifetime slot rules even when the request
 is a summary or compaction. Helper-purpose calls are accepted only on an already

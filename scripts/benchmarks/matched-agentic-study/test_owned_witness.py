@@ -263,6 +263,20 @@ class OwnedWitnessTests(unittest.TestCase):
         self.assertEqual(self.meter.calls, 0)
         self.assertTrue(self.arm.failure)
 
+    def test_explicit_different_child_verbosity_refuses_before_upstream(self):
+        add_thread(self.registry.database, "worker-a", "implementation")
+        payload = body()
+        payload["text"] = {"verbosity": "high"}
+        self.assertEqual(self.request(payload, identity="worker-a")[0], 400)
+        self.assertEqual(self.meter.calls, 0)
+
+    def test_explicit_different_helper_summary_refuses_before_upstream(self):
+        self.assertEqual(self.request()[0], 200)
+        payload = body()
+        payload["reasoning"]["summary"] = "concise"
+        self.assertEqual(self.request(payload, purpose="summary")[0], 400)
+        self.assertEqual(self.meter.calls, 1)
+
     def test_queued_client_cancel_stops_queue_without_forwarding_it(self):
         add_thread(self.registry.database, "worker-a", "implementation")
         self.meter.release.clear()
@@ -672,6 +686,55 @@ class RegistryAndStartupTests(unittest.TestCase):
             path.write_text('{"partial":', encoding="utf-8")
             with self.assertRaises(FileExistsError):
                 Audit(path)
+
+
+class GenerationPinTests(unittest.TestCase):
+    def test_output_is_the_unchanged_common_ceiling(self):
+        for requested, expected in ((None, 32000), (64000, 32000), (32000, 32000), (512, 512)):
+            with self.subTest(requested=requested):
+                payload = body()
+                if requested is not None:
+                    payload["max_output_tokens"] = requested
+                self.assertEqual(profile_body(payload, False)["max_output_tokens"], expected)
+    def test_root_child_missing_generation_pins_get_reviewed_defaults(self):
+        for child in (False, True):
+            with self.subTest(child=child):
+                payload = body()
+                original = copy.deepcopy(payload)
+                normalized = profile_body(payload, child)
+                self.assertEqual(normalized["reasoning"]["summary"], "auto")
+                self.assertEqual(normalized["text"]["verbosity"], "low")
+                self.assertEqual(payload, original)
+
+    def test_explicit_different_generation_pins_rejected_for_root_child(self):
+        for child in (False, True):
+            for field, value in (("summary", "concise"), ("summary", None), ("verbosity", "medium"), ("verbosity", "high"), ("verbosity", None)):
+                with self.subTest(child=child, field=field, value=value):
+                    payload = body()
+                    if field == "summary":
+                        payload["reasoning"]["summary"] = value
+                    else:
+                        payload["text"] = {"verbosity": value}
+                    with self.assertRaises(PolicyError):
+                        profile_body(payload, child)
+
+    def test_pins_preserve_structured_output_format_and_custom_grammar(self):
+        payload = body()
+        payload["text"] = {"format": {"type": "json_schema", "name": "synthetic", "schema": {"type": "object", "properties": {"description": {"type": "string"}}, "required": ["description"]}}}
+        normalized = profile_body(payload, True)
+        self.assertEqual(normalized["text"]["format"], payload["text"]["format"])
+        self.assertEqual(normalized["input"][0]["tools"][0], payload["input"][0]["tools"][0])
+
+    def test_configuration_updates_receive_and_preserve_same_pins(self):
+        payload = body()
+        update = {"type": "configuration_update", "reasoning": {"effort": "high"}, "text": {"format": {"type": "json_object"}}}
+        payload["input"].append(update)
+        normalized = profile_body(payload, False)["input"][-1]
+        self.assertEqual(normalized["reasoning"]["summary"], "auto")
+        self.assertEqual(normalized["text"], {"format": {"type": "json_object"}, "verbosity": "low"})
+        update["reasoning"]["summary"] = "concise"
+        with self.assertRaises(PolicyError):
+            profile_body(payload, False)
 
 
 @unittest.skipUnless(os.environ.get("VECTOR_BENCH_METER_SOURCE"), "explicit reviewed source directory required; no live configuration is read")

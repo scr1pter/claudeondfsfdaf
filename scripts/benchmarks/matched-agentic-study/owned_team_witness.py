@@ -23,6 +23,7 @@ import time
 from native_team_policy import MODEL, PolicyError, filter_tools, require
 
 MAX_BODY = 8_000_000
+CONTEXT_LIMIT, OUTPUT_CEILING = 1_050_000, 32_000
 ACTORS = {"vector": "foundry-vector", "codex": "foundry-codex"}
 FUNDING_PHASE = "foundry-large-single-agent-high-v1"
 HOP = {"host", "authorization", "content-length", "connection", "transfer-encoding", "proxy-connection", "keep-alive", "upgrade"}
@@ -71,12 +72,22 @@ class Audit:
             self.previous = digest(row)
 
 
+def generation_pins(value):
+    reasoning = value["reasoning"]
+    require(reasoning.get("summary", "auto") == "auto", "reasoning summary changed")
+    reasoning["summary"] = "auto"
+    text = value.get("text", {})
+    require(isinstance(text, dict) and text.get("verbosity", "low") == "low", "text verbosity changed")
+    value["text"] = {**text, "verbosity": "low"}
+
+
 def profile_body(body, child):
     require(isinstance(body, dict) and body.get("model") == MODEL and isinstance(body.get("reasoning"), dict) and body["reasoning"].get("effort") == "high", "model or effort changed")
     for value in (body, body["reasoning"]):
         require(value.get("pro") in (None, False) and all(str(value.get(key, "")).lower() != "pro" for key in ("mode", "model_mode", "modelMode", "service_tier")), "unreviewed processing mode")
     require(body.get("service_tier", "default") in ("default", "standard"), "unreviewed processing tier")
     result = copy.deepcopy(body)
+    generation_pins(result)
     if "tools" in result:
         result["tools"] = filter_tools(result["tools"], child)
     require(isinstance(result.get("input"), list), "structured input required")
@@ -85,9 +96,10 @@ def profile_body(body, child):
             item["tools"] = filter_tools(item.get("tools"), child)
         if isinstance(item, dict) and item.get("type") == "configuration_update":
             require(set(item) <= {"type", "model", "reasoning", "text"} and item.get("model", MODEL) == MODEL and isinstance(item.get("reasoning"), dict) and item["reasoning"].get("effort") == "high" and item["reasoning"].get("pro") in (None, False) and str(item["reasoning"].get("mode", "")).lower() != "pro", "configuration update changes profile")
-    output = result.get("max_output_tokens", 32000)
+            generation_pins(item)
+    output = result.get("max_output_tokens", OUTPUT_CEILING)
     require(isinstance(output, int) and not isinstance(output, bool) and output > 0, "invalid output ceiling")
-    result.update(max_output_tokens=min(output, 32000), service_tier="default", store=False)
+    result.update(max_output_tokens=min(output, OUTPUT_CEILING), service_tier="default", store=False)
     return result
 
 
@@ -95,7 +107,7 @@ def reservation_bound(body, wire):
     """The unchanged meter's conservative single-call bound, without admission."""
     def image(value):
         return any(image(item) for item in value) if isinstance(value, list) else value.get("type") == "input_image" or any(image(item) for item in value.values()) if isinstance(value, dict) else False
-    inputs = 1050000 if image(body) else min(1050000, len(wire) + 32768 + len(body.get("tools", [])) * 256)
+    inputs = CONTEXT_LIMIT if image(body) else min(CONTEXT_LIMIT, len(wire) + 32768 + len(body.get("tools", [])) * 256)
     return (inputs * 5 + body["max_output_tokens"] * 15) / 1000000
 
 
@@ -130,7 +142,7 @@ class OwnedArm:
         self.admitted_ids, self.helper_slots = set(), {}
         self.repairs = 0
         self.disarm_attempted, self.disarm_acknowledged = False, False
-        self.record({"type": "arm_bound", "runtime": runtime, "actor": self.actor, "batchSha256": self.batch_digest, "model": MODEL, "reasoning": "high", "roles": sorted(roles), "studyCapUsd": 48, "actorCapUsd": 20, "softStopUsd": soft_usd, "maxCalls": max_calls, "maxSeconds": seconds, "inflightLimit": 1})
+        self.record({"type": "arm_bound", "runtime": runtime, "actor": self.actor, "batchSha256": self.batch_digest, "model": MODEL, "reasoning": "high", "reasoningSummary": "auto", "verbosity": "low", "contextLimit": CONTEXT_LIMIT, "outputCeiling": OUTPUT_CEILING, "roles": sorted(roles), "studyCapUsd": 48, "actorCapUsd": 20, "softStopUsd": soft_usd, "maxCalls": max_calls, "maxSeconds": seconds, "inflightLimit": 1})
 
     def record(self, event):
         try:
@@ -274,7 +286,7 @@ class WitnessServer(ThreadingHTTPServer):
 
     def cli_binding(self):
         require(not self.arm.retired and not self.arm.closing, "owned alias retired")
-        return {"providerBase": "http://127.0.0.1:" + str(self.server_port), "requestToken": self.arm._alias, "model": MODEL, "reasoning": "high"}
+        return {"providerBase": "http://127.0.0.1:" + str(self.server_port), "requestToken": self.arm._alias, "model": MODEL, "reasoning": "high", "reasoningSummary": "auto", "verbosity": "low", "contextLimit": CONTEXT_LIMIT, "outputCeiling": OUTPUT_CEILING}
 
 
 def unique_object(pairs):
