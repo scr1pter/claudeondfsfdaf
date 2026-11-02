@@ -73,9 +73,10 @@ paths remains in integrity checks and snapshots. Only declared generated paths
 and normal dependency/version-control/Python-cache directories are excluded.
 
 Optional task `environment` permits `PORT`, `DATA_DIR` and `WORKFLOW_DATA_DIR`;
-values can contain `{arm}` and `{app}`. Browser tooling is supplied explicitly
-with `--chrome` and `--playwright-module`, through the scoped runtime variables
-and `VECTOR_BENCH_CHROME` / `VECTOR_BENCH_PLAYWRIGHT_MODULE` evaluator variables.
+values can contain `{arm}` and `{app}`. Owned browser tooling is supplied explicitly
+with `--chrome` and `--playwright-module`. The independent evaluator retains
+`VECTOR_BENCH_CHROME` / `VECTOR_BENCH_PLAYWRIGHT_MODULE`; the coding CLI receives
+these library/browser variables only in the explicit legacy mode described below.
 When a browser driver root is supplied, the independent evaluator also receives
 `VECTOR_BENCH_BROWSER_PROXY` pointing to its frozen `proxy.cjs` exact-origin
 transport fence. It receives neither the runtime browser capability nor a model
@@ -90,6 +91,53 @@ permitted benchmark helper outside the app. `PORT` from the task, or `--app-port
 must identify the sole allowed loopback application origin. Existing user
 browsers and profiles are never selected. The browser driver tree is frozen
 alongside the task and runtime binaries.
+
+## Browser access modes
+
+New paired plans default to `--browser-access-mode shared-client`. Both coding
+CLIs receive `NODE_EXE` and the common client's path, endpoint, and scoped token.
+They do **not** receive `PLAYWRIGHT_MODULE`, `CHROME_PATH`,
+`VECTOR_BENCH_PLAYWRIGHT_MODULE`, or `VECTOR_BENCH_CHROME`, even if those values
+were present in a base environment. The prompt requires the common client and
+prohibits importing browser libraries, directly launching or connecting to a
+browser, and attaching existing profiles. Paid shared-mode execution requires
+the owned driver and explicit frozen Chrome/Playwright paths. The supervisor and
+independent evaluator still receive their required paths outside the CLI's
+environment.
+
+`--browser-access-mode legacy-library-env` preserves the previous four library
+variables and the exact previous prompt for reproducing earlier stages. Older
+plans without a browser-mode field normalize to this legacy mode. A missing-arm
+continuation must match that normalized mode explicitly; it cannot silently
+switch the other runtime to shared-only provisioning. Plans, summaries, and arm
+records identify the selected mode. Model, High reasoning, one-agent policy,
+context/output settings, and spending caps are unchanged.
+
+The environment and prompt are a provisioning policy, **not an operating-system
+sandbox**. The coding CLIs still have a general shell; removing four variables
+does not prove that arbitrary code cannot locate and start a browser. Earlier
+stages offered the same common-client and raw-library capabilities to both
+runtimes. Their results are not retroactively treated as exclusively using the
+common client.
+
+After each agent finishes, a bounded audit projects its tool JSONL into fixed
+observations and counts. It can inspect a directly invoked authored script only
+inside that attempt's application workspace. It does not crawl source trees,
+read arbitrary referenced files, or publish commands, paths, identifiers, or
+tokens. Clear direct-browser execution references, browser-related ambiguity,
+and incomplete telemetry require manual review in shared mode. Ordinary source
+writes/reads or merely unexecuted browser code are not automatically classified
+as a direct launch. Legacy mode retains observations without changing its
+historical execution policy.
+
+An audit review marker stops the arm as `coordinator_review_required` after
+preserving source and counting the completed agent's usage, before evaluation or
+another paid attempt. The owned token is still disarmed and settled; every
+charge remains retained. It is not a regex-based product failure and never
+produces automatic repair feedback. A clean audit means only that this bounded
+projection found no clear bypass; dynamic execution, indirect processes, and
+incomplete telemetry remain limits of this method. Manual review is required to
+interpret suspicious or unknown evidence.
 
 ## Plan, freeze and run
 
@@ -151,6 +199,10 @@ explicitly add `--previous-task-sha <exact-original-task-sha>`. A wrong or missi
 old hash is rejected. The public agent prompt and seed must remain unchanged.
 This flag records instrument lineage; it does not authorize new requirements or
 conceal the prior arm's outcome.
+
+For a previous plan that has no `browserAccessMode` field, also specify
+`--browser-access-mode legacy-library-env`. A mode mismatch blocks continuation
+during the free plan, before credentials are read or a paid batch is opened.
 
 Review the free plan, then supply its exact `--expected-source` and
 `--expected-task-sha` with `--run` as usual. Output must be new and outside the
