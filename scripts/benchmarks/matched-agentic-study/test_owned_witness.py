@@ -81,6 +81,8 @@ class FakeMeter(ThreadingHTTPServer):
         self.active, self.maximum_active, self.calls, self.controls = 0, 0, 0, []
         self.mode, self.release, self.started = "json", threading.Event(), threading.Event()
         self.response_status, self.terminal_event, self.sse_event_label = "completed", "response.completed", None
+        self.incomplete_reason = None
+        self.response_usage = {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
         self.extra_terminals = []
         self.release.set()
         self.spent = {"foundry-vector": 10.9, "foundry-codex": 5.9}
@@ -121,7 +123,9 @@ class FakeHandler(BaseHTTPRequestHandler):
             meter.maximum_active = max(meter.maximum_active, meter.active)
             meter.bodies.append(json.loads(raw))
         meter.started.set()
-        response = {"id": "synthetic-response", "object": "response", "status": meter.response_status, "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2}}
+        response = {"id": "synthetic-response", "object": "response", "status": meter.response_status, "usage": copy.deepcopy(meter.response_usage)}
+        if meter.incomplete_reason is not None:
+            response["incomplete_details"] = {"reason": meter.incomplete_reason}
         if meter.mode == "sse":
             self.send_response(200); self.send_header("Content-Type", "text/event-stream"); self.send_header("Connection", "close"); self.end_headers()
             self.wfile.write(b'event: response.created\ndata: {"type":"response.created"}\n\n'); self.wfile.flush()
@@ -470,6 +474,70 @@ class OwnedWitnessTests(unittest.TestCase):
     def test_later_completed_terminal_cannot_clear_failed_terminal(self):
         self.meter.extra_terminals = [("response.completed", "completed")]
         self.terminal_case("sse", "failed", "response.failed")
+
+    def configure_known_length_incomplete(self, mode="sse"):
+        self.meter.mode, self.meter.response_status, self.meter.terminal_event = mode, "incomplete", "response.incomplete"
+        self.meter.incomplete_reason = "max_output_tokens"
+        self.meter.response_usage = {"input_tokens": 11, "output_tokens": 32000, "total_tokens": 32011, "input_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0}, "output_tokens_details": {"reasoning_tokens": 100}}
+
+    def test_known_length_incomplete_allows_same_identity_continuation_and_bills_both(self):
+        self.configure_known_length_incomplete()
+        self.assertEqual(self.request()[0], 200)
+        self.meter.response_status, self.meter.terminal_event, self.meter.incomplete_reason = "completed", "response.completed", None
+        self.assertEqual(self.request()[0], 200)
+        result = self.supervisor.close(timeout=2)
+        self.assertIsNone(self.arm.failure)
+        self.assertTrue(result["settlementComplete"])
+        self.assertEqual(result["providerRequests"], 2)
+        self.assertAlmostEqual(result["measuredUsd"], 0.02)
+        self.assertTrue(result["reviewRequired"])
+        self.assertEqual(result["nonfatalReviewObservationCount"], 1)
+
+    def test_unresolved_known_length_raw_incomplete_is_nonfatal_but_closure_review(self):
+        self.configure_known_length_incomplete("json")
+        self.assertEqual(self.request()[0], 200)
+        result = self.supervisor.close(timeout=2)
+        self.assertIsNone(self.arm.failure)
+        self.assertTrue(result["reviewRequired"])
+        self.assertTrue(self.supervisor.failed)
+        self.assertEqual(result["providerRequests"], 1)
+        self.assertAlmostEqual(result["measuredUsd"], 0.01)
+
+    def test_unknown_length_usage_remains_fatal(self):
+        self.configure_known_length_incomplete()
+        self.meter.response_usage.pop("input_tokens_details")
+        self.assertEqual(self.request()[0], 200)
+        self.meter.response_status, self.meter.terminal_event, self.meter.incomplete_reason = "completed", "response.completed", None
+        self.assertEqual(self.request()[0], 400)
+        self.assertEqual(self.meter.calls, 1)
+
+    def test_known_length_continuation_never_clears_a_failed_terminal(self):
+        self.configure_known_length_incomplete()
+        self.assertEqual(self.request()[0], 200)
+        self.meter.response_status, self.meter.terminal_event, self.meter.incomplete_reason = "failed", "response.failed", None
+        self.assertEqual(self.request()[0], 200)
+        self.meter.response_status, self.meter.terminal_event = "completed", "response.completed"
+        self.assertEqual(self.request()[0], 400)
+        result = self.supervisor.close(timeout=2)
+        self.assertEqual(result["providerRequests"], 2)
+        self.assertTrue(result["reviewRequired"])
+        self.assertIsNotNone(self.arm.failure)
+
+    def test_known_length_reason_does_not_excuse_status_event_contradiction(self):
+        self.configure_known_length_incomplete()
+        self.meter.terminal_event = "response.completed"
+        self.assertEqual(self.request()[0], 200)
+        self.meter.response_status, self.meter.incomplete_reason = "completed", None
+        self.assertEqual(self.request()[0], 400)
+        self.assertEqual(self.meter.calls, 1)
+
+    def test_known_length_continuation_keeps_total_call_bound(self):
+        self.arm.max_calls = 1
+        self.configure_known_length_incomplete()
+        self.assertEqual(self.request()[0], 200)
+        self.meter.response_status, self.meter.terminal_event, self.meter.incomplete_reason = "completed", "response.completed", None
+        self.assertEqual(self.request()[0], 400)
+        self.assertEqual(self.meter.calls, 1)
 
     def test_missing_receipt_preserves_unknown_closure_and_memory_token(self):
         self.assertEqual(self.request()[0], 200)
