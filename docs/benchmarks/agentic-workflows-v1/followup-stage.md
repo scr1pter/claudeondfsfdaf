@@ -81,3 +81,27 @@ and sanitized outcomes on GitHub. Never publish provider/controller credentials,
 raw private logs or machine configuration. Report each candidate stage separately
 and the complete financial history together. If the target is unmet, say so and
 continue only when observations support another useful change.
+
+## User quality-priority update
+
+During the running document-workbench pair, before its deliveries were evaluated,
+the user explicitly made equal-or-better quality priority one. The stricter
+acceptance rule is now no lower blinded score on **any task**, all required
+functional checks passing, and no established critical regression. Aggregate
+scores remain diagnostic; a stronger result on one task cannot offset a weaker
+result elsewhere. The already completed new-candidate Workflow Runner pair scored
+45/48 for both runtimes and passed24/24, but its15.78% cost saving alone does not
+establish the broader objective.
+
+Retain the20% aggregate complete-episode cost target only after those per-task
+quality gates pass. Do not reduce model effort, required verification or workflow
+completeness just to lower the bill. Experimental code remains isolated from
+release until its applicable tests and quality gates pass. These bounded checks
+cannot guarantee absence of every production defect.
+
+The single-agent comparisons do not establish full specialist/judge economics or
+quality at billion-token scale. A separate free accounting stress study may use
+billions of logical tokens in bounded synthetic usage records; it must not be
+reported as real inference or full-workflow quality validation. Any additional
+paid multiagent mode must be labeled separately and reconciled with the user's
+earlier one-agent fairness restriction before enabling it.
