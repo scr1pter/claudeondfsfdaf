@@ -59,3 +59,18 @@ candidate/holdout results are reported separately.
 The [follow-up candidate plan](followup-stage.md) preregisters the next fixed
 candidate, repeat tasks, new holdout, browser-provisioning correction and unchanged
 spending limits. It makes no claim that the broader objective has been achieved.
+
+
+## Completed contracts stage
+
+The [three-task quality-first summary](results/contracts-stage-summary.md) records
+all76 checks per runtime, fixed per-task Vector scores45/47/47 versus45/47/46,
+and5.0122% lower aggregate Vector cost. The20% cost target remains unmet; no
+universal quality or cost claim is established. Exact submissions, separate
+posthoc support code and the [constructed outbox calibration reference](references/outbox-gold/README.md)
+are published with byte verifiers. The reference was released after both outbox
+paid arms settled, outside the frozen task tree.
+
+The owner subsequently authorized a separately labeled matched multiagent study
+within the existing cumulative caps. Free native registry, metering and closure
+controls are being validated; no paid multiagent result is included here.
