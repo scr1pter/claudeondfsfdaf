@@ -1,0 +1,5 @@
+[
+  {"id":"t-101","subject":"Replacement cable","customer":"Customer Cedar","summary":"A synthetic customer asks which replacement cable fits their demo device."},
+  {"id":"t-102","subject":"Invoice copy","customer":"Customer Harbor","summary":"A synthetic customer requests a copy of a sample invoice."},
+  {"id":"t-103","subject":"Delivery window","customer":"Customer Maple","summary":"A synthetic customer asks about a fictional delivery window."}
+]

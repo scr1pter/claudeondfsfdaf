@@ -1,0 +1,14 @@
+{
+  "version": "delivery-outbox-draft-v1",
+  "status": "draft-not-approved-for-paid-use",
+  "promptFile": "TASK.md",
+  "seedDirectory": "seed",
+  "protectedFiles": ["package.json", "bun.lock", ".bun-version", ".node-version", "fixtures/provider.ts", "fixtures/tickets.json"],
+  "generatedDirectories": ["dist"],
+  "environment": {"PORT": "4123", "DATA_DIR": "{arm}/support-data"},
+  "expectedApiGroups": 18,
+  "expectedBrowserChecks": 8,
+  "evaluatorCommand": ["{python}", "{task}/evaluator/evaluate.py", "--app", "{app}", "--out", "{out}", "--bun", "{bun}", "--node", "{node}", "--task", "{task}"],
+  "evaluatorReport": "evaluation.json",
+  "additionalPrompt": "All people, tickets and deliveries are synthetic. Keep all runtime data under DATA_DIR outside application source. The public local provider fixture is protected. Do not read or alter the independent evaluator."
+}
