@@ -50,14 +50,29 @@ are not provided to them. This is an owned runtime/profile policy and bounded
 posthoc audit, not an operating-system sandbox. Do not claim protection against
 arbitrary malicious local code. Images, verification and quality are preserved.
 
+Vector uses `--size thorough` because the frozen native source withholds TaskTool
+in Standard without native named-agent parts, and this CLI prompt path emits
+text parts. This enables the required collaboration capability, analogous to
+Codex `--enable multi_agent`. Vector's automatic judge stays explicitly off;
+the only permitted team is the same fixed lead/two-worker/judge profile. All
+model/effort pins and lifetime/depth gates remain enforced by the witness. No
+product change is made merely to expose subagents in Standard.
+
 ## Funding and closure
 
 The existing $48 study total and cumulative $20 `foundry-vector`/$20
 `foundry-codex` caps remain unchanged. The historical minimum is 889 requests /
 $20.3038291. All earlier charges stay in the original ledger and actors. There
 is no reset, reclassification, cap expansion, new actor, force-unseal or blanket
-disarm operation. Each arm has a $3 soft stop, 300 provider requests, two-hour
-execution bound and at most one formal repair in the same lead session.
+disarm operation. Each arm has a $3 repair-admission threshold, 300 provider
+requests, two-hour execution bound and at most one formal repair in the same
+lead session. The $3 threshold is checked after a settled invocation before a
+repair; it does not stop either runtime mid-invocation. Both native commands
+omit a built-in dollar cap, and the owned Vector config contains no run budget.
+In the frozen CLI, `--max-steps` alone creates no dollar budget. The actual
+cumulative $20/$48 meter caps, reservation admission, all-team request count
+and execution deadline remain hard constraints. Any dollar overshoot beyond
+the repair threshold is fully charged and reported.
 
 Before each arm, read settled global and actor reservation headroom. The
 preregistered conservative admission requires $5.73: the unchanged meter's
@@ -131,7 +146,7 @@ Never commit them. Public reports should contain only counts, enum/flag
 metadata, hashes, relationships and reviewed aggregate costs. The runner
 prints no raw prompt or credential on errors.
 
-## Native telemetry and quality gates
+## Native telemetry, execution audit and external code review
 
 The runner positively queries its owned Windows Job Object for zero active
 processes before descendant collection. It reuses the existing owned-process
@@ -143,7 +158,7 @@ the unchanged common browser audit for each. Unknown or unfinished commands,
 unrecognized schemas, absent execution telemetry and policy ambiguities remain
 manual review, even when the independent functional evaluator passes.
 
-The quality gate retains each native turn's chronology and outcome. The first
+The native execution audit retains each native turn's chronology and outcome. The first
 successful completion from each worker must precede the original judge
 creation. Later completions from those same worker identities require a
 subsequent review turn from that same judge identity; final lead browser/API
@@ -169,7 +184,15 @@ with every original API/browser group, expected check count, exit-code rule and
 protected-source check. Its one-agent repair prelude alone is replaced with the
 fixed native-team continuation prelude; failed-check observations are unchanged.
 No fake provider completion or unchanged real task seed establishes a product
-pass. Efficiency/success conclusions require review of the whole fixed set.
+pass. A successful `nativeAuditVerdict` verifies this bounded execution policy;
+it is not a semantic code-quality score. Every arm retains
+`blindedCodeReviewVerdict=pending_external_review` and
+`qualityComparisonMet=false`. After real outputs are frozen, an independent
+blinded review must apply the existing 48-point rubric to both implementations
+on every task, preserving all functional checks and rejecting any established
+critical regression. Vector must score at least as high on each task. No lower
+score can be averaged away. Efficiency/success conclusions require that review
+and the whole fixed set; the runner never marks an efficiency claim met.
 
 ## Free controls already safe to run
 
@@ -201,6 +224,8 @@ qualification gate before any funded controller read or model call.
    address is not the owned fake endpoint or any normal funded port is used.
 2. Run **both actual pinned native CLIs through the actual alias witness**,
    sequentially, using the same PROFILE and common browser client capabilities.
+   Use the actual `NativeAdapter` commands/environment, including ordinary
+   shell/tool capabilities, rather than the stripped free-probe command builder.
    Use a dedicated tiny local fixture with an explicitly known negative then
    repaired positive gate, or retain the expected negative result if using an
    unchanged real task seed. Never label an unchanged real seed a fake benchmark
