@@ -86,7 +86,11 @@ uses the actual NativeAdapter commands/profile, ephemeral Python fake meter,
 dummy capabilities, labelled local fixture API/page and unchanged real Foundry
 scaffold. The real 76-check scaffold gate must remain negative twice. The
 script exercises nested leaves, actual shell/common-browser actions, same-QA
-and judge continuations, and a Vector background worker plus completion
-notification. No provider/controller credential is loaded, no funded port is
+and judge continuations, a Vector background worker plus completion
+notification, and actual native screenshot image preview in both runtimes.
+Vector grants only its own browser-driver/screenshots directory through an
+otherwise-denied external-directory permission. Unrelated external paths stay
+denied. The fake meter must observe a subsequent image-bearing model request;
+a saved PNG or a command string alone does not establish image access. No provider/controller credential is loaded, no funded port is
 used, and fake capability success is not app-quality evidence. Outputs and
 native IDs/prompts remain private; publish only reviewed counts and hashes.

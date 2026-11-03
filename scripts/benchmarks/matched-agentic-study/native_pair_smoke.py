@@ -19,6 +19,14 @@ from owned_team_witness import ACTORS, FUNDING_PHASE, OwnedSupervisor, digest
 import paired_runner as runner
 
 
+def image_inputs(value):
+    if isinstance(value, list):
+        return sum(image_inputs(item) for item in value)
+    if isinstance(value, dict):
+        return int(value.get("type") == "input_image") + sum(image_inputs(item) for item in value.values())
+    return 0
+
+
 def custom_events(index, call):
     events = response_events(index, {"name": call["name"], "namespace": call["namespace"], "arguments": call["input"]})
     def item(value):
@@ -181,7 +189,7 @@ class Handler(BaseHTTPRequestHandler):
             index = len(server.rows) + 1
             row = {"runtime": adapter.runtime, "native": native, "model": body.get("model"),
                    "reasoning": body.get("reasoning"), "verbosity": body.get("text", {}).get("verbosity"),
-                   "outputCeiling": body.get("max_output_tokens"), "offeredToolNames": [tool.get("name") for tool in tools]}
+                   "outputCeiling": body.get("max_output_tokens"), "inputImageCount": image_inputs(body), "offeredToolNames": [tool.get("name") for tool in tools]}
             server.rows.append(row)
             server.receipts.append({"seq": runner.HISTORICAL_REQUESTS + index, "actor": server.actor,
                 "label": server.label, "batchSha256": digest(server.token), "requestSha256": hashlib.sha256(raw).hexdigest(),

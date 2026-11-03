@@ -463,7 +463,7 @@ class FreshOwnedRegistry(NativeRegistry):
         return super().resolve(headers)
 
 
-def team_environment(common, runtime, env, home, binding, profile=None):
+def team_environment(common, runtime, env, home, binding, profile=None, screenshot_directory=None):
     """Both renderers use the exact same frozen role prose."""
     profile = PROFILE if profile is None else profile
     roles, instructions = tuple(profile["childLifetimeSlots"]), profile["instructions"]
@@ -473,6 +473,11 @@ def team_environment(common, runtime, env, home, binding, profile=None):
     config = json.loads(result["VECTOR_CONFIG_CONTENT"])
     config["permission"] = {"*": "allow", "task": {"*": "deny", **{role: "allow" for role in roles}},
                             "research": "deny", "escalate": "deny", "browser": "deny", "external_directory": "deny"}
+    if screenshot_directory is not None:
+        screenshot_directory = Path(screenshot_directory).resolve()
+        require(screenshot_directory == (Path(home).resolve().parent / "browser-driver/screenshots").resolve(),
+                "image permission must name only the owned browser screenshot directory")
+        config["permission"]["external_directory"] = {"*": "deny", str(screenshot_directory / "*"): "allow"}
     config["agent"] = {name: {"disable": True} for name in (
         "general", "explore", "review", "judge", "debug", "security", "research", "researcher",
         "research-judge", "test", "document", "plan")}
@@ -878,7 +883,8 @@ class NativeAdapter:
         self.witness_thread = threading.Thread(target=self.witness.serve_forever, daemon=True)
         self.witness_thread.start()
         self.binding = self.witness.cli_binding()
-        self.env = team_environment(self.common, self.runtime, self.env, self.home, self.binding, profile=self.profile)
+        self.env = team_environment(self.common, self.runtime, self.env, self.home, self.binding, profile=self.profile,
+                                    screenshot_directory=self.directory / "browser-driver/screenshots")
         self.browser = self.common.BrowserDriver(node=self.options.node, root=self.options.browser_driver_root,
             playwright=self.options.playwright_module, chrome=self.options.chrome, output=self.directory / "browser-driver",
             origin="http://127.0.0.1:" + str(self.options.app_port))

@@ -3,6 +3,7 @@ import copy
 from datetime import datetime, timezone
 import hashlib
 import json
+import sqlite3
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace
@@ -91,9 +92,23 @@ class HeavyRunnerTests(unittest.TestCase):
         meter.role_row = lambda adapter, role: {"id": "synthetic-" + role, "agent_path": "/root/" + role}
         meter.completions = lambda adapter, role: round_index
         adapter = SimpleNamespace(runtime=runtime, smoke_invocation=round_index, options=SimpleNamespace(app_port=4123))
-        tools = [{"type": "function", "name": name} for name in ("task", "task_manage", "bash", "spawn_agent", "wait_agent", "followup_task")]
+        tools = [{"type": "function", "name": name} for name in ("task", "task_manage", "bash", "read", "spawn_agent", "wait_agent", "followup_task")]
         tools.append({"type": "namespace", "name": "functions", "tools": [{"type": "custom", "name": "exec"}]})
         return meter, adapter, tools
+
+    def test_background_evidence_recognizes_attributed_owned_notification_tag(self):
+        path = self.directory / "synthetic-vector.db"
+        connection = sqlite3.connect(path)
+        connection.execute("CREATE TABLE part(session_id TEXT,data TEXT)")
+        rows = [{"type": "tool", "tool": "task", "state": {"input": {"background": True}}},
+                {"type": "text", "text": '<task-notification task_id="synthetic">fixture</task-notification>'},
+                {"type": "text", "text": '<\\task-notification task_id="untrusted">escaped</task-notification>'}]
+        connection.executemany("INSERT INTO part VALUES(?,?)", [("synthetic-root", json.dumps(row)) for row in rows])
+        connection.commit(); connection.close()
+        adapter = SimpleNamespace(runtime="vector", registry=SimpleNamespace(root_id="synthetic-root", connect=lambda: sqlite3.connect(path)))
+        evidence = smoke.vector_background_evidence(adapter)
+        self.assertEqual(evidence["backgroundTaskLaunches"], 1)
+        self.assertEqual(evidence["ownedCompletionNotifications"], 1)
 
     def test_actual_vector_fake_script_exercises_background_and_same_child_repair(self):
         meter, adapter, tools = self.fake_script("vector")
@@ -160,9 +175,13 @@ class HeavyRunnerTests(unittest.TestCase):
         options = SimpleNamespace(bun=self.directory / "bun", codex_bin=self.directory / "codex", vector_root=self.directory)
         binding = {"providerBase": "http://127.0.0.1:43210", "requestToken": "synthetic-alias"}
         home = self.directory / "home"
-        env = runner.team_environment(self.common, "vector", {}, home, binding, profile=heavy.PROFILE)
+        screenshots = home.parent / "browser-driver/screenshots"
+        env = runner.team_environment(self.common, "vector", {}, home, binding, profile=heavy.PROFILE, screenshot_directory=screenshots)
         config = json.loads(env["VECTOR_CONFIG_CONTENT"])
         self.assertNotIn("budget", config)
+        self.assertEqual(config["permission"]["external_directory"], {"*": "deny", str(screenshots.resolve() / "*"): "allow"})
+        with self.assertRaises(PolicyError):
+            runner.team_environment(self.common, "vector", {}, home, binding, profile=heavy.PROFILE, screenshot_directory=home.parent)
         coordinator = config["agent"]["backend_coordinator"]["permission"]["task"]
         self.assertEqual(coordinator, {"*": "deny", "backend_api": "allow", "backend_data": "allow"})
         self.assertEqual(config["agent"]["backend_api"]["permission"]["task"], "deny")
