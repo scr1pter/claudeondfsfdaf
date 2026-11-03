@@ -7,6 +7,7 @@ No discovery of user homes, credentials, model servers or running apps occurs.
 """
 import hashlib
 import json
+import re
 from contextlib import closing
 from pathlib import Path
 import shutil
@@ -17,6 +18,18 @@ from native_team_policy import MODEL, PolicyError, require
 
 def parsed(value):
     return json.loads(value) if isinstance(value, str) else value
+
+
+def owned_transcript_path(value, home):
+    """Accept Codex's normal or extended DOS spelling of the same owned file."""
+    require(isinstance(value, str) and value, "native transcript path unavailable")
+    if value.startswith("\\\\?\\"):
+        value = value[4:]
+        require(re.match(r"^[A-Za-z]:\\", value) is not None, "unsupported extended transcript path")
+    require(not value.startswith("\\"), "device or network transcript path refused")
+    source = Path(value).resolve()
+    require(source.is_relative_to(Path(home).resolve()) and source.is_file(), "native transcript outside owned home")
+    return source
 
 
 class NativeRegistry:
@@ -107,8 +120,7 @@ class NativeRegistry:
                 name = hashlib.sha256(row["id"].encode()).hexdigest()
                 target = destination / (name + ".jsonl")
                 if self.runtime == "codex":
-                    source = Path(row["rollout_path"]).resolve()
-                    require(source.is_relative_to(self.home) and source.is_file(), "native transcript outside owned home")
+                    source = owned_transcript_path(row["rollout_path"], self.home)
                     shutil.copyfile(source, target)
                 else:
                     with target.open("w", encoding="utf-8") as stream:
