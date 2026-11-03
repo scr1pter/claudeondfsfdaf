@@ -1,0 +1,15 @@
+# Private Foundry benchmark instruments
+
+This is a new substantial business-operations product benchmark. Relay remains unchanged. Each model receives only BUILD_SPEC.md and the empty pinned dependency scaffold; all application code must be built during the measured arm. No prior delivered application implementation is seeded.
+
+`prepare.py --destination <new-fixture> --manifest <new-outside-manifest>` copies exactly five public files. `evaluate.py --app <delivery> --out <new-output> --bun <absolute-bun> --node <absolute-node> --playwright-module <absolute-module> --chrome <absolute-chrome>` performs real typecheck/build,32 API groups,40 independent browser checks, offline password verification and source-integrity checks. It uses synthetic identities, isolated Windows HOME/AppData, owned fresh browser profiles and local services only. App startup is one Bun workload; password verification runs after that server stops. Failed prerequisites are not_run, never passed.
+
+The browser process has a480second outer deadline; incomplete progress is preserved separately. Exit0 requires every API/browser gate, builds, startup and unchanged application source. Screenshot quality and static architecture/security are scored separately using the blinded rubrics. A complete feature prototype is not a production security, scalability or deployment guarantee.
+
+Before paid execution, freeze all public/instrument source hashes in frozen-manifest.json. Preserve every original result and failed harness control. Instrument repairs after freeze require recorded before/after hashes and identical re-evaluation of both arms; never silently loosen an app requirement. Empty scaffold controls must fail typecheck/build/start meaningfully, with no app implementation in the seed.
+
+Runtime budget/token handling belongs to the separately reviewed root driver and gateway. These instruments do not load API credentials, call models, publish anything or reset a budget ledger.
+
+Prelaunch-v2 repairs preserve the original freeze under `instrument-revisions/prelaunch-v1`. Owner-role invitations must be rejected with structured400 or409 errors. Native-select helpers wait for asynchronously loaded options and still require exactly one matching option.
+
+Source integrity records a raw file/hash inventory before executing even Vite configuration. A local Node probe resolves the delivered Vite configuration and common build-script CLI overrides. Only a distinct canonical app-contained generated output directory and `*.tsbuildinfo` are omitted from the authored-source comparison; actual public assets, configuration, declared inputs, frontend/backend source and unrelated new files remain protected. Raw inventories retain build artifacts. Unknown build commands, output/public/input overlap or an outside-app source produce `sourceIntegrityStatus=not_assessed` and leave the full gate unpassed pending free instrument/manual review; they do not assert that the application modified its source. The original reproduction was a pure manifest control that added generated-looking files, not an executed Vite build.
