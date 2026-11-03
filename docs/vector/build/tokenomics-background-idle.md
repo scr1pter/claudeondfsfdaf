@@ -1,9 +1,10 @@
 # Background idle candidate
 
 Prepared November 2, 2026 (Pacific), from product revision
-`479303cf229badc0fa2c770f27d7d845dfa4fa68`. This is a separate, unverified
-candidate. The running heavy benchmark's product, instrument and app files were
-not edited. No Bun test, provider call or paid retest has run for this candidate.
+`479303cf229badc0fa2c770f27d7d845dfa4fa68`. This separate candidate passed the
+controlled regressions and typecheck recorded below; cost savings remain
+unproven. The heavy benchmark's product, instrument and app files were not edited.
+No real provider call or paid retest has run for this candidate.
 
 ## Trace observation and limits
 
