@@ -1,5 +1,6 @@
 import { PERK_IDS, type PerkId } from "../../packages/schema/src/codium-entitlements.js"
 import { CodiumCopy } from "../../packages/schema/src/codium-copy.js"
+import { foundingWindowOpen } from "./codium-founding.js"
 import { githubAppConfiguration } from "./github-app.js"
 import { modelPlansEnabled } from "./model-plan-config.js"
 import { readDisabledSet, readSwitch, type SwitchName } from "./codium-switches.js"
@@ -25,6 +26,9 @@ export const perkServices: PerkServices = {
       reserve < 1
     )
   },
+  // WP A31: founding is listed only while its window is open (the limit and the days after sales opened), read at
+  // runtime; a prerender never sees it, and a closed window takes it off every page on the next config read.
+  founding: (fetcher) => foundingWindowOpen(fetcher),
 }
 
 const switches: Readonly<Partial<Record<PerkId, SwitchName>>> = {

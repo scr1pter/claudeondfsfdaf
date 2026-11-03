@@ -4,7 +4,7 @@ import { Match, Show, Switch, createMemo, createSignal, onCleanup, onMount } fro
 import { CodiumBillingStatus, CodiumPurchase, createCodiumBilling } from "@/components/codium-purchase"
 import { usePlatform } from "@/context/platform"
 import { accountChip, codiumChanged, newestRead, onCodiumChange, type VectorAccountStatus } from "@/vector-account"
-import { accountIdentity, codiumSummary, deletionStep, sameEmail } from "./account-model"
+import { accountIdentity, codiumSummary, deletionStep, FOUNDING_LOCK, sameEmail } from "./account-model"
 import "./settings-v2.css"
 import "./settings-account.css"
 
@@ -325,7 +325,20 @@ export function SettingsAccountV2(props: { onUsage: () => void }) {
                         </div>
                       )}
                     </Show>
+                    <Show when={current().founding}>
+                      {(founding) => (
+                        <div data-component="settings-account-founding">
+                          <dt>Founding member</dt>
+                          <dd>#{founding().number}</dd>
+                        </div>
+                      )}
+                    </Show>
                   </dl>
+                  <Show when={current().founding}>
+                    <p class="settings-account-muted">
+                      {FOUNDING_LOCK} Choose whether you appear on the founders page from your account on vectordev.ai.
+                    </p>
+                  </Show>
                   <Show when={current().scheduled}>
                     {(scheduled) => (
                       <div class="settings-account-scheduled" data-component="settings-account-scheduled">

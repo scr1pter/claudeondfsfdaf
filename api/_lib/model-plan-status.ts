@@ -247,6 +247,8 @@ export function modelPlanBalance(
     listed,
     entitlements: publicEntitlements(plan, new Set(listed)),
     ...(input.meters ? { meters: input.meters } : {}),
+    // The founding mark (WP A31): the number only, never whether the boost applies (that is part of the private pool).
+    ...(snapshot.founding ? { founding: { number: snapshot.founding.number } } : {}),
     ...(caps.velocity ? { velocity: caps.velocity } : {}),
     ...(caps.labs ? { labs: caps.labs } : {}),
     purchased,

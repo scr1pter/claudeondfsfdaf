@@ -4,7 +4,7 @@ import { readCodiumFunding } from "./codium-funding.js"
 import { codiumKey } from "./codium-keys.js"
 import { ApiError, handleApiError, json, queryValue, requireMethod, type ApiRequest, type ApiResponse } from "./http.js"
 import { openRouterManagement, readModelPlanAccount, withCodiumLease } from "./model-plan-account.js"
-import { modelPlans, subscriptionPlanCredits } from "./model-plan-config.js"
+import { modelPlanForPrice, subscriptionPlanCredits } from "./model-plan-config.js"
 import { modelPlanStripe, stripeRecord } from "./model-plan-stripe.js"
 import { persistentStore } from "./persistent-store.js"
 
@@ -161,7 +161,8 @@ function subscriptionSale(charge: Record<string, unknown>, id: string) {
   if (metadata?.vector_account_id !== id || typeof subscription?.id !== "string") return
   const priced = lines.filter(stripeRecord).flatMap((value) => {
     const price = stripeRecord(value.price) ? value.price : undefined
-    const plan = modelPlans().find((item) => item.priceID && item.priceID === price?.id)
+    // A legacy price (the founding lock, WP A31) is the same plan sold at its old amount.
+    const plan = modelPlanForPrice(price?.id)
     return plan ? [{ line: value, plan }] : []
   })
   const line = priced[0]?.line

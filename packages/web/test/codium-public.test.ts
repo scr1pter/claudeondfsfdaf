@@ -15,6 +15,7 @@ beforeEach(() => {
     CODIUM_TRACK_B_LIVE: undefined,
     MODEL_PLAN_GLOBAL_INFLIGHT: undefined,
     MODEL_PLAN_PRIORITY_RESERVE: undefined,
+    CODIUM_FOUNDING_LIMIT: undefined,
     STRIPE_MODEL_PLAN_WEBHOOK_SECRET: "fixture-webhook",
     STRIPE_MODEL_PLAN_PORTAL_CONFIG_ID: "fixture-portal",
     VECTOR_GITHUB_APP_ENABLED: undefined,
@@ -31,6 +32,10 @@ describe("A27 public perk listing", () => {
     const fakes = codiumFakes()
     expect(await listedPerks(fakes.fetcher)).toEqual(new Set())
     process.env.CODIUM_LISTED_PERKS = `unknown, ${PERK_IDS.join(",")}, priority`
+    // WP A31 made founding a real readiness check (its window, read at runtime): open, it is listed too.
+    expect(await listedPerks(fakes.fetcher)).toEqual(new Set(["founding"]))
+    // Closed, it is not, so the rest of this case measures priority's readiness alone.
+    process.env.CODIUM_FOUNDING_LIMIT = "0"
     process.env.MODEL_PLAN_GLOBAL_INFLIGHT = "20"
     expect(await listedPerks(fakes.fetcher)).toEqual(new Set(["priority"]))
     delete process.env.MODEL_PLAN_GLOBAL_INFLIGHT

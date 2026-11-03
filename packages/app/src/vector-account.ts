@@ -67,15 +67,19 @@ export type VectorAccountPlatform = {
 /**
  * What the sidebar's account chip shows, as Claude and Codex show it: the photo, else the first letter, beside the
  * first name from Google or the account, else the email, and then the Codium plan: Free without a subscription, else
- * the plan's name. The plan is left out until Vector has read it, and when it could not.
+ * the plan's name. The plan is left out until Vector has read it, and when it could not. A founding member's number
+ * (WP A31) comes with the plan, from vectordev.ai's status, never from anything the app decides.
  */
 export function accountChip(status: VectorAccountStatus, codium?: ModelPlanStatus.Status) {
   const name = status.name?.trim() || status.email || ""
   const label = name.split(/\s+/)[0] ?? ""
+  const shown = codium?.signedIn && !codium.error
+  const founding = shown && codium.plan ? codium.founding?.number : undefined
   return {
     label,
     name,
-    plan: codium?.signedIn && !codium.error ? (codium.plan?.name ?? CodiumPlan.FREE) : undefined,
+    plan: shown ? (codium.plan?.name ?? CodiumPlan.FREE) : undefined,
+    ...(founding ? { founding } : {}),
     initial: label.charAt(0),
     // Only an inline raster image, so the chip never loads a URL whatever the status carries.
     photo:

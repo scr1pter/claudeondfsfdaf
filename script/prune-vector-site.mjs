@@ -23,6 +23,8 @@ const keep = new Set([
   "usage",
   // Private owner shells contain no data; the owner API authorizes every read and mutation.
   "owner",
+  // The opt-in Codium founders page (WP A31): an empty shell; api/founders decides what anyone sees.
+  "founders",
   "install",
   "install.ps1",
   "index.html",

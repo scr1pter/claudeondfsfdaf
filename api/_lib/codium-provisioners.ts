@@ -1,4 +1,5 @@
 import { codiumKey } from "./codium-keys.js"
+import { eraseFounding, foundingOffered, syncFoundersListing } from "./codium-founding.js"
 import { notifyOwner, ownerAlertsConfigured } from "./codium-owner.js"
 import { OUTBOX_SCRIPTS, registerProvisioner, type PerkProvisioner, type Transition } from "./codium-provision.js"
 import { ApiError } from "./http.js"
@@ -9,9 +10,9 @@ import { persistentStore } from "./persistent-store.js"
  * snapshot reconcile wrote (§4.4's per-service table). Every configured one gets an outbox item, in the same EVAL as
  * each new snapshot version, and the outbox runs it (codium-provision.ts).
  *
- * WP A06 builds `github-runs` and `owner-notify`. The others are stubs, not configured, so they get no items: each
- * service's work package replaces its stub here (remote A40, founding, vault, hosted, ops, push) and the daily sweep
- * then catches every account up to its snapshot.
+ * WP A06 builds `github-runs` and `owner-notify`; WP A31 builds `founding`. The others are stubs, not configured, so
+ * they get no items: each service's work package replaces its stub here (remote A40, vault, hosted, ops, push) and the
+ * daily sweep then catches every account up to its snapshot.
  */
 
 const DAY_MS = 86_400_000
@@ -142,6 +143,25 @@ export const ownerNotify: PerkProvisioner = {
   },
 }
 
+// ── founding ───────────────────────────────────────────────────────────────────────────────────────────────────────
+
+/**
+ * `founding` (WP A31, §4.4's Founding row): keeps the opt-in founders page in line with the plan state. A founder who
+ * chose to be listed is shown while the plan is active, renewing, paused or ended-but-not-deleted, hidden while it is
+ * frozen, and taken off once the membership ended (reconcile marks that when its subscription is deleted). Account
+ * deletion (`closing`) erases the record, the entry and the display name (P5). Configured while the owner lists
+ * `founding`; keep it in `CODIUM_LISTED_PERKS` after the window closes, since the window's own runtime check already
+ * takes it off every page.
+ */
+export const founding: PerkProvisioner = {
+  id: "founding",
+  configured: foundingOffered,
+  async apply(t, fetcher = fetch) {
+    if (t.to.reason === "closing") return eraseFounding(t.account, fetcher)
+    await syncFoundersListing(t.account, t.to.state === "frozen", fetcher)
+  },
+}
+
 // ── Stubs ──────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 /** A service not built yet: never configured, so it gets no items and does nothing. */
@@ -157,7 +177,7 @@ export const PROVISIONERS: readonly PerkProvisioner[] = [
   stub("vault"),
   stub("hosted"),
   stub("ops"),
-  stub("founding"),
+  founding,
   ownerNotify,
 ]
 

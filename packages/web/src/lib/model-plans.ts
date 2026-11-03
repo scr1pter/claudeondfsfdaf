@@ -73,6 +73,8 @@ export type ModelPlanStatus = {
     remote?: { computers: number; limit: number }
   }
   velocity?: "coming"
+  /** A founding member's number (WP A31); dropped when malformed. */
+  founding?: { number: number }
   purchased?: { bought: boolean; state?: PurchasedState }
   empty?: boolean
   low?: boolean
@@ -197,6 +199,9 @@ export function readModelPlanStatus(value: unknown): ModelPlanStatus {
     ...(entitlements === undefined ? {} : { entitlements }),
     ...(meters === undefined ? {} : { meters }),
     ...(value.velocity === "coming" && plan && CodiumPlan.rank(plan.id) >= 3 ? { velocity: "coming" as const } : {}),
+    ...(plan && record(value.founding) && positiveInteger(value.founding.number)
+      ? { founding: { number: value.founding.number } }
+      : {}),
   }
 }
 
