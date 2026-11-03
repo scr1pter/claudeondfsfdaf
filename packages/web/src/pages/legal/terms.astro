@@ -7,7 +7,7 @@ export const prerender = true
   eyebrow="Terms"
   title="Terms of Service"
   description="The agreement for Vector accounts, software, and connected services."
-  updated="October 28, 2026"
+  updated="November 2, 2026"
 >
   <section>
     <h2>1. This agreement</h2>
@@ -37,43 +37,131 @@ export const prerender = true
   </section>
 
   <section id="codium">
-    <h2>3. Cost</h2>
+    <h2>3. Cost and Vector Codium plans</h2>
     <p>
-      Vector is free to download and use. Optional Vector Codium purchases provide credits for the coding
-      models offered through Codium. Services you connect through your own accounts, including model
-      providers, external agents and hosting, may charge you separately under their own terms. Free models
-      are subject to quotas, rate limits and availability; continued free access is not guaranteed.
+      Vector is free to download and use. Vector Codium is an optional monthly plan that gives you coding models
+      through Vector without provider keys of your own, with the plan features listed for each plan at
+      <a href="/codium">vectordev.ai/codium</a>. Services you connect through your own accounts, including model
+      providers, external agents and hosting, may charge you separately under their own terms. Free models are subject
+      to quotas, rate limits and availability; continued free access is not guaranteed.
     </p>
     <p>
-      When Codium purchases are available, the purchase screen shows the price, the usage it includes as Codium
-      credits or usage estimates, and whether the purchase is a monthly subscription or a one-time top-up. Any applicable
-      taxes and the total payable are shown before payment. Monthly subscriptions renew automatically at the
-      disclosed price until canceled. You can cancel through account billing before renewal; cancellation
-      stops future renewals and leaves access to the remainder of the paid period. Monthly credits expire at
-      the end of that period and do not roll over. One-time top-ups do not renew, and unused purchased credits
-      carry forward separately from your subscription. There are no automatic top-ups or overage charges.
+      Before you pay, the checkout page shows the plan, its monthly price, any applicable taxes and the total payable.
+      Stripe processes payments for Vector.
+    </p>
+
+    <h3 id="codium-plans">Monthly plans</h3>
+    <p>
+      Vector Codium is sold as monthly plans only. There are no top-ups and no overage charges: Vector never charges
+      you for usage beyond your plan's price. Your plan renews automatically each month at the price shown at checkout
+      until you cancel. You can cancel at any time in your account; cancelling stops future renewals, and you keep your
+      plan until the end of the period you have paid for.
     </p>
     <p>
-      Codium credits measure usage of Codium's models; they are not a promise of a fixed number of tokens,
-      requests, completed tasks or successful results. Usage figures, such as estimated tokens or typical tasks, are
-      estimates, not commitments.
-      Actual consumption varies with the selected model, input and output, reasoning, conversation history,
-      repeated repository context, tool use and the number of agents or model calls. Large tasks and parallel agents
-      can consume credits quickly. Your displayed balance may lag requests still being processed. Review usage
-      and model selection in your account and supervise automated work. Access pauses when the available
-      allowance cannot cover a request; additional use requires available credits or a new purchase you authorize.
+      An upgrade to a higher plan starts a new monthly period on the day you upgrade and is charged in full at the
+      higher plan's price. The unused usage of your current month carries into that new period only, and ends at its
+      renewal. A downgrade starts at your next renewal; until then you keep your current plan.
     </p>
     <p>
-      To the extent permitted by law, accurately metered usage is not refundable solely because credits ran out
-      sooner than expected, an estimate differed from actual usage, or AI output did not complete your task.
-      This does not excuse incorrect charges, duplicate billing or a failure to provide purchased credits.
-      Contact us about suspected errors so we can investigate and correct confirmed billing errors. Any refund,
-      cancellation, service guarantee or other consumer right required by applicable law continues to apply.
-      Credits have no cash value and are not transferable, except where applicable law requires otherwise.
+      If a payment fails, Vector Codium and your plan's features pause until the payment succeeds. A failed payment
+      does not extend the month: the period still ends on its original date. If payment is still not made after
+      Stripe's retries, your plan ends. A full refund of a payment, or a dispute of it, ends what that payment bought.
+      If a payment is reported as possibly fraudulent, Vector may refund it and end the plan. Access is suspended while
+      a payment is disputed or flagged as possibly fraudulent.
     </p>
     <p>
-      Changes to subscription prices or renewal allowances will be communicated before they apply, with an
-      opportunity to cancel and any consent required by law. Records of purchases are retained as required by law.
+      New Max and Ultra subscriptions, including upgrades to them from Plus or Pro, start with reduced limits for a
+      short period, such as fewer cloud computer hours or, if the first payment was not confirmed through your bank's
+      authentication, less of the month's usage in the first days. The plan page describes these starting limits.
+      Records of purchases are retained as required by law.
+    </p>
+
+    <h3 id="codium-models">Models and limits</h3>
+    <p>
+      Models, usage and limits differ by plan and are listed at <a href="/codium">vectordev.ai/codium</a>. A model may
+      be temporarily unavailable, and Vector may replace a model with a comparable one. Vector does not
+      reduce the usage, models or limits included in a month you have paid for. Changes to plan prices, or to the usage,
+      models or limits a plan includes, will be communicated before they apply, with an opportunity to cancel and any
+      consent required by law, and apply from your next renewal after the notice.
+    </p>
+
+    <h3 id="codium-usage">Usage</h3>
+    <p>
+      Your plan's usage is shown only as a whole-number percentage of the month, and Codium work is labelled
+      “Codium” instead of with token counts or prices. The percentage may lag requests still being processed. Usage
+      does not roll over: what is left when a period ends expires with it, and only an upgrade carries unused usage, as
+      described above. Some plans also have a daily limit, a share of the month that can be used in one day (UTC).
+      Usage is not a promise of a number of tokens, requests, completed tasks or successful results.
+    </p>
+    <p>
+      How fast usage goes depends on the selected model, input and output, reasoning, conversation history, repeated
+      repository context, tool use and the number of agents or model calls. Large tasks and parallel agents can use it
+      quickly. Review usage and model selection in your account and supervise automated work. When the month's usage is
+      used up, Vector Codium stops until your plan renews; when a day's share is used up on a plan with a daily limit,
+      it stops until the next UTC day. Your own keys and free models keep working.
+    </p>
+    <p>
+      To the extent permitted by law, accurately metered usage is not refundable solely because your usage ran out
+      sooner than expected, an estimate differed from actual usage, or AI output did not complete your task. This does
+      not excuse incorrect charges, duplicate billing or a failure to provide the plan you paid for. Contact us about
+      suspected errors so we can investigate and correct confirmed billing errors. Any refund, cancellation, service
+      guarantee or other consumer right required by applicable law continues to apply. Usage has no cash value and is
+      not transferable, except where applicable law requires otherwise.
+    </p>
+
+    <h3 id="codium-coming">Items tagged “Coming”</h3>
+    <p>
+      Vector Velocity is in development and is not part of what any subscription buys today. If it launches, we intend
+      to offer it only on Max and Ultra. We don't promise that it will launch, or when. The same applies to every item
+      tagged “Coming” on Vector's pages: it is not part of what any subscription buys today, and we don't promise that
+      it will launch, or when.
+    </p>
+
+    <h3 id="codium-github">GitHub agents on Codium</h3>
+    <p>
+      For runs of Vector's GitHub agent on your plan, Vector sells only Codium model access inside runs in your own
+      repository, on your own Actions minutes. Runs execute under your GitHub account and GitHub's terms, and GitHub
+      bills the Actions minutes they use. Runs may do only that repository's software work, such as fixing, reviewing,
+      testing or maintaining its code. Anyone with write, maintain or admin access to a repository you connect to your
+      plan can start runs that use your plan. Agent time is measured by Vector from Codium requests, not from GitHub's
+      minutes. Vector's GitHub agent also works without a plan, with your own model key stored as a repository secret.
+    </p>
+
+    <div id="codium-hosted" data-where-available="computer overnight">
+      <h3>Cloud computer (where available)</h3>
+      <p>
+        Where your plan includes a cloud computer that Vector runs for you, the time it runs counts toward your month's
+        usage and toward your plan's cloud computer hours, including jobs you queue to run overnight. Vector may stop or
+        pause a session, for example when it reaches its time limit, sits idle, or is used against these Terms. Do not
+        use it for cryptocurrency mining, spam, scraping a website against that site's terms, solving CAPTCHAs or
+        bypassing bot checks; Vector hands sign-in fields and CAPTCHAs to you. The browser profile is wiped after each
+        job. The computer's disk is kept between jobs for the period your plan lists. After your plan ends, Vector tells
+        you, keeps the disk for 14 days so you can download your files, and then deletes it.
+      </p>
+    </div>
+
+    <div id="codium-ops" data-where-available="on-call release-guard ship-desk">
+      <h3>Production checks (where available)</h3>
+      <p>
+        Where your plan includes On Call, Release Guard or Ship Desk, Vector checks only domains you have verified.
+        Vector's GitHub App writes to a repository only where that repository opts in with a
+        <code>.vector/ops.json</code> file, and then only to open pull requests automatically, such as one that reverts a
+        release. Vector never merges a pull request; you decide whether to merge. On Call is Vector's agent, not a person.
+        Vector makes no uptime, availability or response-time promise for your sites or for these checks, and a check or
+        alert can be late or missed.
+      </p>
+    </div>
+
+    <h3 id="codium-consent">Starting your plan, withdrawal and founding members</h3>
+    <p>
+      When you subscribe, you ask Vector to start your plan immediately. Where the law gives you a right to withdraw
+      from the contract within 14 days, as in the European Union, you can still withdraw within 14 days of subscribing
+      by contacting us, but you pay for what you used before you withdrew, and we refund the rest of that payment.
+    </p>
+    <p>
+      If you subscribed as a founding member, your price won't go up while you stay subscribed. If you change plans, you
+      pay the new plan's current price. Founding members on Plus and Pro also get 10% more usage; this does not apply to
+      Max or Ultra. Founding membership ends when your subscription ends.
     </p>
   </section>
 
@@ -180,8 +268,11 @@ export const prerender = true
       evade security or usage controls; or disrupt our services or connected providers. Model services, including
       OpenRouter, screen requests for child sexual abuse material and may report it to the authorities as the law
       requires. Do not share CLI tokens
-      or account credentials, or misrepresent another person's identity or your authority. Software restrictions remain
-      subject to applicable law and the rights granted by third-party open-source licenses.
+      or account credentials, or misrepresent another person's identity or your authority. Do not use Vector's services,
+      or a computer Vector runs for you, for cryptocurrency mining, spam, scraping a website against that site's terms,
+      solving CAPTCHAs or bypassing bot checks. Do not use GitHub agents for work unrelated to the repository they run
+      in. Software restrictions remain subject to applicable law and the rights granted by third-party open-source
+      licenses.
     </p>
     <p>
       Notwithstanding general software or control restrictions, LGPL-covered components and combined works

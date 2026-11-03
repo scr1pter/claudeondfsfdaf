@@ -1,8 +1,11 @@
 import { ApiError } from "./http.js"
 import { modelPlanStripe } from "./model-plan-stripe.js"
 
-/** Checkout is the consent boundary; a return URL never counts as proof of agreement. */
-export const CODIUM_TERMS_DATE = "2026-10-28"
+/**
+ * Checkout is the consent boundary; a return URL never counts as proof of agreement. The terms date is the terms page's
+ * effective date (test/codium-legal.test.ts), so the billing record names the terms a subscriber accepted.
+ */
+export const CODIUM_TERMS_DATE = "2026-11-02"
 export const CODIUM_CHECKOUT_CONSENT =
   "I agree to the [Codium terms](https://vectordev.ai/legal/terms#codium) and ask Vector to start my plan now. If I withdraw within 14 days I pay for what I used."
 

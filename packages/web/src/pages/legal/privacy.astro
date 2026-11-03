@@ -7,7 +7,7 @@ export const prerender = true
   eyebrow="Privacy"
   title="Privacy Policy"
   description="How Vector handles account information, local work, AI requests, connected services, diagnostics, and usage counts."
-  updated="October 28, 2026"
+  updated="November 2, 2026"
 >
   <section>
     <h2>1. Scope and contact</h2>
@@ -114,9 +114,9 @@ export const prerender = true
     </p>
     <p id="codium">
       <strong>Vector Codium.</strong> When you choose a Vector Codium model, your request content goes from Vector
-      to Vector's gateway on vectordev.ai, which Vercel hosts. The gateway checks your sign-in, your Codium plan or
-      purchased credits and the credits held for your requests still running, then forwards the request to
-      OpenRouter on a key Vector holds for your account, not a key of your own. Each request asks OpenRouter to route
+      to Vector's gateway on vectordev.ai, which Vercel hosts. The gateway checks your sign-in, your Codium plan and its
+      limits, and the usage held for your requests still running, then forwards the request to OpenRouter on a key
+      Vector holds for your account, not a key of your own. Each request asks OpenRouter to route
       it only to endpoints OpenRouter records as zero data retention, meaning the provider does not store prompts or
       outputs, and to deny data collection; this relies on OpenRouter's records and the providers' published
       policies, not an independent audit. If no such endpoint is available for the model, the request fails; it is
@@ -144,8 +144,8 @@ export const prerender = true
       <li>
         <strong>Metadata.</strong> OpenRouter keeps metadata about every request, such as the model, token counts
         and latency, but not its content. The key Vector holds for your account is named with your Vector account
-        identifier and, for a monthly plan, your Stripe subscription identifier and billing-period start, so
-        OpenRouter can link that metadata to your Vector account. With each request the gateway also sends OpenRouter
+        identifier, your Stripe subscription identifier and the start of your billing period, so OpenRouter can link
+        that metadata to your Vector account. With each request the gateway also sends OpenRouter
         a one-way hash of your Vector account identifier, not your email address or name.
       </li>
       <li>
@@ -154,14 +154,97 @@ export const prerender = true
         that Vector runs itself, so no other OpenRouter service receives the request.
       </li>
     </ul>
-    <p>
-      For Codium, Vector keeps a billing record in its server-side data store: your Stripe customer, subscription
-      and billing-period identifiers, your top-up purchases, and the encrypted OpenRouter key for your account with
-      its credit limit. The credits held for a request in progress are kept for about eleven minutes at most. To
-      buy, Vector creates a Stripe customer with your email address and your Vector account identifier; Stripe
-      processes your payment details, which Vector never receives, and keeps the payment records. Deleting your
-      Vector account closes open Codium checkouts, cancels active Codium subscriptions and disables your Codium
-      keys; the billing record is kept, marked closed, as section 12 describes.
+    <p id="codium-billing">
+      <strong>Codium billing record.</strong> Vector Codium is sold as monthly plans only. For each subscriber, Vector
+      keeps a billing record in its server-side data store, which Upstash hosts: your Stripe customer, subscription,
+      invoice and charge identifiers; your plan and billing period; your consent to the Codium terms, with the date of
+      the terms you accepted; a summary of your plan's current state, such as its status, limits, renewal date and any
+      scheduled change; payment-risk flags, such as open disputes and fraud warnings; and the encrypted OpenRouter key
+      for your account with its spending limit. To buy, Vector creates a Stripe customer with your email address and
+      your Vector account identifier; Stripe processes your payment details, which Vector never receives, and keeps the
+      payment records.
+    </p>
+    <p id="codium-counters">
+      To apply your plan's limits, Vector also keeps short-lived counters in the same data store, keyed by your account
+      identifier or a one-way hash of it: the usage held for requests in progress, for about eleven minutes at most;
+      your requests in progress and per-minute counts; each agent run's usage, for three days; and daily and per-period
+      totals, including counts of plan features such as agent time, until 40 days after the billing period ends. The
+      daily totals also produce your usage history and forecast. These counters hold usage figures and counts, never
+      request content.
+    </p>
+    <p id="codium-github">
+      <strong>GitHub agents on Codium.</strong> When you connect a repository so that Vector's GitHub agent can use your
+      plan, Vector records that the repository's numeric identifier is bound to your Vector account, until the binding
+      is removed. For each run, Vector records its run identifier, the GitHub event that started it, the GitHub login or
+      numeric user identifier of the person who started it, kept for 90 days, and when the run started and stopped. The
+      run itself executes in GitHub Actions under the repository owner's GitHub account. Its logs are GitHub's records,
+      under GitHub's terms and privacy statement, and on a public repository anyone can read them. Files a run keeps
+      between sessions are stored as Actions artifacts of that repository, which GitHub keeps under the repository's
+      retention settings and which people with access to the repository's Actions can download.
+    </p>
+    <p id="roadmap-votes">
+      <strong>Roadmap votes.</strong> If your plan includes roadmap voting, Vector stores your ballot for each quarter,
+      and any nomination you make, with your account identifier and the plan you had when you voted. Results are
+      published only as totals, after the vote closes and once at least 20 ballots are counted. Ballots and nominations
+      are deleted with your account.
+    </p>
+    <div id="vault" data-where-available="vault">
+      <p>
+        <strong>Brain Vault (where available).</strong> Brain Vault backs up your Vector memory and learned skills. The
+        desktop application encrypts each backup on your computer, with a key protected by your recovery code, before
+        uploading it to storage Vector runs on Cloudflare. Vector never receives your recovery code, the key in a form
+        it can use, or the unencrypted content, so it cannot read your backups or restore them if you lose your recovery
+        code. Vector stores the encrypted pieces, their sizes, the dates of your backup versions and how much of your
+        quota you use. Versions older than 30 days are removed, except the newest. If your plan ends, your vault becomes
+        read-only for 30 days, with a notice in the application and by email, and is then deleted; deleting your
+        account deletes it. If you back up to your own GitHub repository instead, encrypted backups go to that private
+        repository and nothing goes to Vector.
+      </p>
+    </div>
+    <div id="remote" data-where-available="remote alerts">
+      <p>
+        <strong>Vector Remote and phone alerts (where available).</strong> Vector Remote connects your phone to the
+        Vector desktop application through a relay that Vector runs on Cloudflare. The phone and the computer encrypt
+        what they exchange end to end, so the relay passes only data it cannot read. Vector stores the devices you pair,
+        with an identifier, a public key, the name shown in Settings and when each was paired and last connected, and
+        counts connection time to apply fair-use limits. Approvals sent from your phone are confirmed with a passkey that
+        your desktop checks. If you turn on phone alerts, Vector stores up to ten push subscriptions from your browsers
+        and sends alerts through the push service of your browser's maker, such as Apple, Google or Mozilla. Alerts
+        Vector's server sends carry only a title, never your prompts, code or output; alerts your desktop sends are
+        encrypted end to end, so neither Vector nor the push service can read them. You can revoke a device or turn
+        alerts off at any time, and deleting your account deletes these records.
+      </p>
+    </div>
+    <div id="hosted-computer" data-where-available="computer overnight">
+      <p>
+        <strong>Cloud computer (where available).</strong> A cloud computer Vector runs for you holds on its disk the
+        files, repositories, downloads and output of your jobs, and its browser holds sign-ins and site data during a
+        job. Vercel runs the computer, and Cloudflare stores its recordings. Vector records the screen while a job runs so
+        you can see what happened; recordings are visible only to you and kept for 30 days. Nothing is recorded while you
+        have taken over control. The browser profile is wiped after each job. The disk is kept between jobs for the
+        period your plan lists and, after your plan ends, for 14 days so you can download your files, then deleted; while
+        a payment dispute is open it is kept until the dispute closes, and it is deleted 30 days after a dispute is lost.
+        Vector also keeps session records: when each session started and stopped, its size, the time it used, and job
+        reports with their links and results. Zero data retention covers the model requests your jobs make, not the
+        computer's disk, its recordings or the websites it visits.
+      </p>
+    </div>
+    <div id="production-checks" data-where-available="on-call release-guard ship-desk">
+      <p>
+        <strong>Production checks (where available).</strong> If you use On Call, Release Guard or Ship Desk, Vector
+        stores the production URLs and domains you add and how each domain was verified; check results, kept as changes
+        of state and hourly totals; the deployment and pull request events GitHub sends for repositories where you
+        installed Vector's GitHub App, such as the repository, environment, commit and status; incidents; and Ship Desk
+        cards with their checks, the reviewing model's verdict and before-and-after screenshots. Checks run on
+        Cloudflare and request only the URLs you add, on domains you verified. Screenshots are stored on Cloudflare,
+        visible only to you, for 30 or 90 days depending on your plan.
+      </p>
+    </div>
+    <p id="codium-deletion">
+      Deleting your Vector account cancels active Codium subscriptions, closes open Codium checkouts and disables your
+      Codium keys, then erases your Codium records and the records of the plan features described above. Only
+      pseudonymous ledger lines, which record charges against an identifier rather than your name or email address,
+      are kept, as section 12 describes; Stripe keeps its own payment records.
     </p>
     <p id="training">
       <strong>Training.</strong> Vector does not use your prompts, code, or model output to train any model, including
@@ -297,6 +380,13 @@ export const prerender = true
       Resend delivers the report to our support mailbox. Email you send directly also becomes support
       correspondence. Avoid including credentials or unnecessary confidential information.
     </p>
+    <p id="report-tracking">
+      To tell you when a problem you reported is fixed, Vector keeps a record of each bug report for 180 days: a random
+      report identifier, when the report arrived, its status and, if you sent it while signed in, a one-way hash of your
+      account identifier and your plan's tag. The record never contains the text of your report. The desktop
+      application keeps the identifiers and short titles of your reports on your computer, and release notes list fixed
+      reports only by a hash of their identifiers.
+    </p>
   </section>
 
   <section>
@@ -347,6 +437,11 @@ export const prerender = true
       and share; the number of chats completed and conversations; your active days and current and longest
       streaks; and your average and longest task time. The command-line tool sends these with a random install
       identifier that Vector does not store, because its counts are kept against your account.
+    </p>
+    <p id="codium-usage-counts">
+      Vector Codium use is left out of these model-use totals. From the first desktop and command-line releases that
+      sell Vector Codium plans, Codium token totals, cost and Codium model identifiers are not sent, while activity
+      counts, such as chats completed, active days and streaks, still include Codium work.
     </p>
     <p>
       Usage counts never include prompts, code, file names or paths, model output, provider keys or
@@ -429,14 +524,41 @@ export const prerender = true
     <p>
       Local data remains until removed through application controls or from the relevant files, subject to
       local cleanup and backups. Account records are retained while needed to provide access
-      and resolve account issues. Records of earlier purchases, and the Codium billing records described in
-      section 4, are retained as required by law, including for tax, accounting, fraud, and dispute obligations. Payment records of those purchases are held by our
+      and resolve account issues. Records of earlier purchases are retained as required by law, including for tax,
+      accounting, fraud, and dispute obligations. Payment records of purchases are held by our
       payment processor, Stripe, and kept only as the law requires. Support records and diagnostic or operational logs are retained according to
-      their troubleshooting and security purpose and applicable provider settings. Usage counts and download
-      records are kept for about 13 months. We consider the type of
+      their troubleshooting and security purpose and applicable provider settings. We consider the type of
       record, whether the account or issue is active, legal retention requirements, and unresolved disputes
-      when deciding retention. No single deletion period applies to every category.
+      when deciding retention. No single deletion period applies to every category. These periods apply:
     </p>
+    <ul id="retention">
+      <li>
+        Codium billing records: while your account exists; deleting it erases them, except pseudonymous ledger lines,
+        which are kept as the law requires for tax, accounting, fraud, and dispute obligations.
+      </li>
+      <li>
+        Codium usage held for a request in progress: about eleven minutes at most. Each agent run's usage: three days.
+        Daily and per-period Codium counters: until 40 days after the billing period ends.
+      </li>
+      <li>
+        GitHub agents on Codium: repository bindings until removed; the GitHub login or identifier that started a run:
+        90 days.
+      </li>
+      <li>Bug report records: 180 days.</li>
+      <li>Roadmap ballots and nominations: until your account is deleted.</li>
+      <li>Usage counts and download records: about 13 months.</li>
+      <li data-where-available="vault">
+        Brain Vault (where available): backup versions for 30 days, keeping the newest; after a plan ends, 30 days
+        read-only, then deleted.
+      </li>
+      <li data-where-available="computer overnight">
+        Cloud computer (where available): recordings for 30 days; disks for the period your plan lists, and for 14 days
+        after a plan ends.
+      </li>
+      <li data-where-available="on-call release-guard ship-desk">
+        Production checks (where available): screenshots for 30 or 90 days, depending on your plan.
+      </li>
+    </ul>
     <p>
       Providers may process information outside your country, with different privacy laws. Locations and
       transfer arrangements depend on the provider and service configuration. Contact us for information

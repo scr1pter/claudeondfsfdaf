@@ -81,14 +81,6 @@ const FILES: { file: string | RegExp; reason: string }[] = [
     reason: "Shipped release notes keep the words they shipped with.",
   },
   { file: "packages/web/public/changelog.json", reason: "Shipped release notes keep the words they shipped with." },
-  {
-    file: "packages/web/src/pages/legal/terms.astro",
-    reason: "Legal pages change only in A60's release commit (H8); A30 drafts the replacement on codium-legal.",
-  },
-  {
-    file: "packages/web/src/pages/legal/privacy.astro",
-    reason: "Legal pages change only in A60's release commit (H8); A30 drafts the replacement on codium-legal.",
-  },
 ]
 
 /** Phrases allowed anywhere. A line passes when nothing matching the search is left once these are taken out. */
