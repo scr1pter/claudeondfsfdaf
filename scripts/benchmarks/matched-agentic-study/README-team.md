@@ -255,3 +255,26 @@ qualification gate before any funded controller read or model call.
    reviewer. Record exact smoke hashes, expected negatives and limitations.
    Freeze a clean instrument commit and a reviewed plan separately. Stop here:
    a successful fake pair does not authorize a paid pair or reset any funding.
+
+## Actual-adapter fake-only smoke entry point
+
+`native_pair_smoke.py` imports the actual `NativeAdapter` and inherits its
+native command, environment, registry, browser binding, owned process execution,
+preservation, evaluator and descendant audit. Its subclass only records the
+initial seed manifest and wraps each native invocation with a labelled local
+Python page/API for capability checking. That fixture is explicitly not the
+product; successful fixture requests are not evidence that the real app works.
+The fake response script creates the same fixed workers/judge, uses the actual
+shell and common browser client, and leaves the qualified real seed unchanged.
+Both actual evaluator invocations must remain negative. All fake receipts are
+reconciled, including the same-lead continuation after the first negative gate.
+
+The entry point requires the normal explicit binary/source/instrument/task paths
+plus `--runtime vector` or `--runtime codex`. It cannot accept `--run`, a real
+controller config or a receipt ledger. It creates only an owned ephemeral
+loopback upstream and rejects normal funded ports. Each run needs a new private
+`--out`; run the arms sequentially. A zero exit additionally requires exact four
+native identities, all generation pins, complete receipt settlement, a clean
+native execution audit, and the expected unchanged-seed product failure after
+one same-session repair. Failed qualifications stay in private outputs and are
+never converted into benchmark passes. This is not a funded experiment.

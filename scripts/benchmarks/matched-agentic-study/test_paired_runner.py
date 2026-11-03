@@ -13,6 +13,7 @@ from unittest.mock import patch
 from native_team_policy import MODEL, PolicyError
 from owned_team_witness import FUNDING_PHASE, OwnedSupervisor, digest
 import paired_runner as runner
+import native_pair_smoke as smoke
 
 
 class Meter:
@@ -311,6 +312,21 @@ class PairedRunnerTests(unittest.TestCase):
         self.assertEqual(vector[vector.index("--size") + 1], "thorough")
         self.assertEqual(vector[vector.index("--judge") + 1], "off")
         self.assertEqual(vector[vector.index("--max-steps") + 1], "300")
+
+    def test_fake_smoke_script_uses_same_fixed_roles_and_common_client_only(self):
+        tools = [{"type": "function", "name": name} for name in ("task", "spawn_agent", "wait_agent", "shell", "exec_command")]
+        vector = smoke.scripted_calls("vector", 0, tools, 4123)
+        self.assertEqual([row["subagent_type"] for row in json.loads(vector[0]["arguments"])["tasks"]], list(runner.ROLES[:2]))
+        codex = smoke.scripted_calls("codex", 2, tools, 4123)
+        self.assertEqual(json.loads(codex[0]["arguments"])["agent_type"], runner.ROLES[2])
+        for runtime, stage in (("vector", 2), ("codex", 4)):
+            command = json.loads(smoke.scripted_calls(runtime, stage, tools, 4123)[0]["arguments"])
+            text = command.get("cmd", command.get("command"))
+            self.assertIn("$env:BROWSER_DRIVER_CLIENT", text)
+            self.assertIn("Invoke-RestMethod", text)
+            self.assertNotIn("23128", text)
+            self.assertNotIn("23130", text)
+        self.assertEqual(smoke.scripted_calls("vector", 4, tools, 4123), [])
 
     def test_default_plan_never_reads_supplied_missing_private_files(self):
         roots = {name: self.directory / name for name in (
