@@ -5,12 +5,14 @@ name: Vector Codium
 # no secrets: the Stripe test-mode checks run only in vector-codium-e2e.yml, behind the codium-test environment.
 #
 # Git cannot hold a branch named codium next to branches under codium/, so both the integration branches and their
-# per-package branches are listed.
+# per-package branches are listed. The legal drafts (WP A30) wait on codium-legal for the release commit, for the same
+# reason.
 on:
   push:
     branches:
       - codium
       - codium/**
+      - codium-legal
       - codium-113
       - codium-113/**
   workflow_dispatch:
