@@ -39,8 +39,8 @@ def multi_events(index, calls):
 def shell_command(port):
     # Capabilities only: this page/API are a labelled smoke fixture, not the app.
     action = json.dumps({"action": "open", "url": "http://127.0.0.1:" + str(port)}, separators=(",", ":"))
-    return ("Invoke-RestMethod 'http://127.0.0.1:" + str(port) + "/api/health'; "
-            "& $env:NODE_EXE $env:BROWSER_DRIVER_CLIENT --endpoint $env:BROWSER_DRIVER_ENDPOINT '" + action + "'")
+    return ("Invoke-RestMethod 'http://127.0.0.1:" + str(port) + "/api/health' | ConvertTo-Json -Compress; "
+            "'" + action + "' | & $env:NODE_EXE $env:BROWSER_DRIVER_CLIENT --endpoint $env:BROWSER_DRIVER_ENDPOINT")
 
 
 def scripted_calls(runtime, stage, tools, port):
@@ -74,6 +74,7 @@ class FixtureHandler(BaseHTTPRequestHandler):
         pass
 
     def do_GET(self):
+        self.server.hits.append({"api": self.path == "/api/health", "browser": "Chrome/" in self.headers.get("User-Agent", "")})
         wire = (b'{"ok":true,"fixture":"adapter-smoke-only"}' if self.path == "/api/health" else
                 b'<!doctype html><html><title>Adapter smoke fixture</title><body>Fake protocol qualification only. This is not a benchmark app.</body></html>')
         self.send_response(200)
@@ -88,7 +89,7 @@ class FakeMeter(ThreadingHTTPServer):
 
     def __init__(self, out):
         self.out, self.lock = out, threading.RLock()
-        self.rows, self.receipts, self.root_stages = [], [], {}
+        self.rows, self.receipts, self.root_stages, self.child_stages = [], [], {}, {}
         self.token, self.actor, self.label, self.remaining = None, None, None, 0
         self.adapter = None
         super().__init__(("127.0.0.1", 0), Handler)
@@ -149,6 +150,22 @@ class Handler(BaseHTTPRequestHandler):
                 stage = server.root_stages.get(adapter.runtime, 0)
                 server.root_stages[adapter.runtime] = stage + 1
                 calls = scripted_calls(adapter.runtime, stage, tools, adapter.options.app_port)
+            else:
+                identity = native["id"]
+                stage = server.child_stages.get(identity, 0)
+                server.child_stages[identity] = stage + 1
+                if stage == 0:
+                    name = "bash" if adapter.runtime == "vector" else "exec_command"
+                    found = named_tool(tools, name)
+                    require(found is not None, "native child shell capability absent")
+                    tool, namespace = found
+                    args = {"command" if adapter.runtime == "vector" else "cmd": "Write-Output 'smoke-child-shell-complete'"}
+                    if adapter.runtime == "vector":
+                        args["description"] = "Harmless owned fake-protocol shell telemetry"
+                    child_call = {"name": tool["name"], "arguments": json.dumps(args)}
+                    if namespace:
+                        child_call["namespace"] = namespace
+                    calls = [child_call]
             adapter.common.save(server.out / "private-raw" / (str(index).zfill(3) + ".json"), body)
             adapter.common.save(server.out / "private-capture.json", server.rows)
         self.send_response(200)
@@ -166,6 +183,7 @@ class SmokeAdapter(runner.NativeAdapter):
     """Commands/run/environment are inherited unchanged; only fixture lifecycle wraps them."""
     def prepare(self):
         super().prepare()
+        self.fixture_hits = []
         self.seed_manifest = self.common.manifest(self.app, self.task.get("generatedDirectories", []))
 
     def preserve(self, index):
@@ -179,6 +197,7 @@ class SmokeAdapter(runner.NativeAdapter):
 
     def run(self, prompt, session, timeout, index):
         fixture = ThreadingHTTPServer(("127.0.0.1", self.options.app_port), FixtureHandler)
+        fixture.hits = []
         thread = threading.Thread(target=fixture.serve_forever, daemon=True)
         thread.start()
         try:
@@ -187,6 +206,34 @@ class SmokeAdapter(runner.NativeAdapter):
             fixture.shutdown()
             fixture.server_close()
             thread.join(timeout=10)
+            self.fixture_hits.extend(fixture.hits)
+
+
+def capabilities(adapter):
+    calls = []
+    for path in (adapter.directory / "attempts").glob("*/agent.stdout.log"):
+        for line in path.read_text(encoding="utf-8").splitlines():
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue
+            if adapter.runtime == "vector":
+                part = row.get("part", {})
+                if part.get("type") != "tool" or part.get("tool") != "bash":
+                    continue
+                state = part.get("state", {})
+                code, output = state.get("metadata", {}).get("exit"), state.get("output", "")
+            else:
+                item = row.get("item", {})
+                if row.get("type") != "item.completed" or item.get("type") != "command_execution":
+                    continue
+                code, output = item.get("exit_code"), item.get("aggregated_output", "")
+            calls.append({"exitZero": code == 0, "apiMarker": '"fixture":"adapter-smoke-only"' in output,
+                          "browserTitle": "Adapter smoke fixture" in output,
+                          "browserAction": '"action":"open"' in output and '"ok":true' in output})
+    return {"successfulActualShellApiAndCommonBrowser": any(all(row.values()) for row in calls),
+            "rootShellCallsObserved": len(calls), "fixtureApiRequests": sum(row["api"] for row in adapter.fixture_hits),
+            "fixtureBrowserPageRequests": sum(row["browser"] and not row["api"] for row in adapter.fixture_hits)}
 
 
 def main(argv=None):
@@ -209,6 +256,8 @@ def main(argv=None):
     meter = FakeMeter(options.out)
     options.provider_base = "http://127.0.0.1:" + str(meter.server_port)
     plan = runner.build_plan(options, common)
+    require(not plan["sourceDirty"] and options.expected_source == plan["sourceRevision"],
+            "smoke requires the explicitly reviewed clean product revision")
     common.save(options.out / "smoke-plan.json", plan)
     holder = {"fakeMeter": meter}
     supervisor = OwnedSupervisor(meter.controller, lambda: list(meter.receipts), options.out,
@@ -233,12 +282,16 @@ def main(argv=None):
                 and row["verbosity"] == "low" and row["outputCeiling"] == 32000 for row in meter.rows),
             **{key: result.get(key) for key in ("functionalVerdict", "nativeAuditVerdict", "stopReason",
                 "reviewRequired", "settlementComplete", "providerRequests", "autonomousActorsAdmitted", "nativeAudit")}}
+        summary["capabilityEvidence"] = capabilities(adapter)
         summary["qualificationPassed"] = (summary["allSolHighAutoLow"] is True and summary["unchangedRealSeed"] is True
             and result.get("functionalVerdict") == "product_failure"
             and result.get("stopReason") == "product_failure_after_one_same_session_repair"
             and result.get("settlementComplete") is True and result.get("reviewRequired") is False
             and result.get("nativeAuditVerdict") == "passed" and result.get("autonomousActorsAdmitted") == 4
-            and result.get("providerRequests") == len(meter.receipts))
+            and result.get("providerRequests") == len(meter.receipts)
+            and summary["capabilityEvidence"]["successfulActualShellApiAndCommonBrowser"] is True
+            and summary["capabilityEvidence"]["fixtureApiRequests"] > 0
+            and summary["capabilityEvidence"]["fixtureBrowserPageRequests"] > 0)
         common.save(options.out / "smoke-summary.json", summary)
         print(json.dumps({key: value for key, value in summary.items() if key not in ("instrumentFreeze", "binarySha256", "nativeAudit")}, indent=2))
         return 0 if summary["qualificationPassed"] else 2
