@@ -122,6 +122,12 @@ make parsing easier.
    routing or additional worker is introduced. Model usage remains charged once
    per provider turn; nested operation signatures still feed the existing loop
    and error detectors rather than incrementing fake inference steps.
+   Today those signatures are observed at provider-step settlement. Extract a
+   tool-observation path that updates the same loop state after each operation
+   without recording another model step or charge; otherwise a single flow can
+   execute its entire call allowance before an existing loop rule notices it.
+   After a web-reading operation, persist its hold on the composition before a
+   later operation can request a memory-source write in the same flow.
 
 5. **Bound results without weakening verification.**
    Existing leaves and registry keep their current bounds and managed retention.
