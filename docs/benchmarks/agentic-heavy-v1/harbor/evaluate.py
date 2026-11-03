@@ -661,13 +661,15 @@ def main(argv=None):
         before = source_manifest(options.app)
         report["sourceBefore"] = before
         home = options.out / "isolated-home"; home.mkdir()
+        for directory in (home / "AppData/Roaming", home / "AppData/Local", home / "tmp"):
+            directory.mkdir(parents=True)
         data = options.out / "data"; data.mkdir()
         with socket.socket() as listener:
             listener.bind(("127.0.0.1", 0)); port = listener.getsockname()[1]
         base = f"http://127.0.0.1:{port}"
         env = {key: value for key, value in os.environ.items() if key.upper() in {"SYSTEMROOT", "WINDIR", "COMSPEC", "PATHEXT", "PATH", "TEMP", "TMP"}}
         env.update({"HOME": str(home), "USERPROFILE": str(home), "APPDATA": str(home / "AppData/Roaming"),
-                    "LOCALAPPDATA": str(home / "AppData/Local"), "DATA_DIR": str(data), "PORT": str(port),
+                    "LOCALAPPDATA": str(home / "AppData/Local"), "TEMP": str(home / "tmp"), "TMP": str(home / "tmp"), "DATA_DIR": str(data), "PORT": str(port),
                     "WORKER_LIMIT": "2", "CI": "1", "DO_NOT_TRACK": "1", "BUN_CONFIG_NO_CLEAR_TERMINAL": "1"})
         layout_process = execute([str(options.node.resolve()), str(ROOT / "layout-probe.cjs"), str(options.app)],
                                  options.app, env, options.out / "layout-probe", 30)
@@ -711,7 +713,7 @@ def main(argv=None):
                     browser = json.loads((browser_out / "browser.json").read_text(encoding="utf-8"))
                     for row in validate_browser(browser, process):
                         by_name["browser:" + row["name"]].update({key: value for key, value in row.items() if key != "name"})
-                    report["browserEvidence"] = {key: browser.get(key) for key in ("screenshots", "consoleErrors", "blockedRequests")}
+                    report["browserEvidence"] = {key: browser.get(key) for key in ("screenshots", "consoleErrors", "blockedRequests", "proxyBlocks")}
                 except Exception as error:
                     report["instrumentError"] = "Browser evidence invalid: " + str(error)[:1000]
         else:

@@ -1,25 +1,985 @@
 {
   "kind": "harbor-qualification-v1",
-  "status": "pending_runtime_qualification",
-  "runtimeQualified": false,
+  "status": "runtime_qualified",
+  "runtimeQualified": true,
   "paidExecutionAuthorizedByThisRecord": false,
   "modelCalls": 0,
+  "executedPlatform": "Windows",
+  "expectedChecks": {
+    "api": 28,
+    "browser": 32,
+    "prerequisite": 4,
+    "total": 64
+  },
   "staticChecks": {
-    "pureTestsPassed": 17,
-    "browserEvaluatorSyntax": "passed",
-    "layoutProbeSyntax": "passed",
+    "pythonControlTestsPassed": 19,
+    "loopbackProxyControlsPassed": 6,
+    "evaluatorSyntax": "passed",
     "seedFileCount": 6,
     "applicationImplementationSeeded": false
   },
-  "expectedChecks": {"api": 28, "browser": 32, "prerequisite": 4, "total": 64},
-  "runtimeControls": {
-    "emptySeed": "not_run",
-    "positiveReference": "not_run"
+  "positiveReference": {
+    "verdict": "passed",
+    "wallMs": 43078.0,
+    "summary": {
+      "prerequisite": {
+        "failed": 0,
+        "not_run": 0,
+        "passed": 4
+      },
+      "api": {
+        "failed": 0,
+        "not_run": 0,
+        "passed": 28
+      },
+      "browser": {
+        "failed": 0,
+        "not_run": 0,
+        "passed": 32
+      }
+    },
+    "sourceIntegrityStatus": "unchanged",
+    "rawReportSha256": "064222bc265fb91b26ffc0657d8287208d3dea5f03ef90d6a9a09bbf581c20ae",
+    "authoredFileCount": 11,
+    "sourceManifestAggregateSha256": "8808edb00940e1875867f734e1402971b7558fd26984c18bb97e03dfb4b1b17d",
+    "checks": [
+      {
+        "name": "prerequisite:typecheck",
+        "category": "prerequisite",
+        "status": "passed"
+      },
+      {
+        "name": "prerequisite:build",
+        "category": "prerequisite",
+        "status": "passed"
+      },
+      {
+        "name": "prerequisite:startup",
+        "category": "prerequisite",
+        "status": "passed"
+      },
+      {
+        "name": "prerequisite:source_integrity",
+        "category": "prerequisite",
+        "status": "passed"
+      },
+      {
+        "name": "api:health_json_errors",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "api:actors_sessions",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "api:viewer_permissions",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "api:projects_crud_search",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "api:environments_uniqueness_scope",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "api:dag_validation_atomicity",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "api:runbook_optimistic_versions",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "api:release_snapshot_immutability",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "api:release_draft_revision",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "api:approval_separation_roles",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "api:approval_rejection_history",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "api:run_idempotent_concurrency",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "api:dag_order_worker_bound",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "api:failure_blocking_retry",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "api:cancellation_terminal",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "api:artifact_bytes_metadata",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "api:job_logs_append_only",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "api:rollback_active_history",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "api:incident_release_boundaries",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "api:incident_versions_transitions",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "api:incident_notes_timeline",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "api:audit_cursor_filters",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "api:dashboard_export",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "api:restart_persistence",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "api:restart_running_recovery",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "api:restart_idempotency_receipt",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "api:cross_project_boundaries",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "api:invalid_inputs_no_partial_writes",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "browser:navigation_actor",
+        "category": "browser",
+        "status": "passed"
+      },
+      {
+        "name": "browser:project_create",
+        "category": "browser",
+        "status": "passed"
+      },
+      {
+        "name": "browser:project_edit_search",
+        "category": "browser",
+        "status": "passed"
+      },
+      {
+        "name": "browser:environment_create_edit",
+        "category": "browser",
+        "status": "passed"
+      },
+      {
+        "name": "browser:runbook_create_steps",
+        "category": "browser",
+        "status": "passed"
+      },
+      {
+        "name": "browser:runbook_cycle_validation",
+        "category": "browser",
+        "status": "passed"
+      },
+      {
+        "name": "browser:runbook_version_edit",
+        "category": "browser",
+        "status": "passed"
+      },
+      {
+        "name": "browser:release_create_snapshot",
+        "category": "browser",
+        "status": "passed"
+      },
+      {
+        "name": "browser:release_draft_edit",
+        "category": "browser",
+        "status": "passed"
+      },
+      {
+        "name": "browser:release_submit",
+        "category": "browser",
+        "status": "passed"
+      },
+      {
+        "name": "browser:approval_role_switch",
+        "category": "browser",
+        "status": "passed"
+      },
+      {
+        "name": "browser:release_approve",
+        "category": "browser",
+        "status": "passed"
+      },
+      {
+        "name": "browser:release_run_live_jobs",
+        "category": "browser",
+        "status": "passed"
+      },
+      {
+        "name": "browser:release_artifact_download",
+        "category": "browser",
+        "status": "passed"
+      },
+      {
+        "name": "browser:job_log_detail",
+        "category": "browser",
+        "status": "passed"
+      },
+      {
+        "name": "browser:release_deep_link_reload",
+        "category": "browser",
+        "status": "passed"
+      },
+      {
+        "name": "browser:failure_runbook_create",
+        "category": "browser",
+        "status": "passed"
+      },
+      {
+        "name": "browser:failure_release_run",
+        "category": "browser",
+        "status": "passed"
+      },
+      {
+        "name": "browser:failure_retry",
+        "category": "browser",
+        "status": "passed"
+      },
+      {
+        "name": "browser:second_release_success",
+        "category": "browser",
+        "status": "passed"
+      },
+      {
+        "name": "browser:rollback_restore_active",
+        "category": "browser",
+        "status": "passed"
+      },
+      {
+        "name": "browser:incident_create_link",
+        "category": "browser",
+        "status": "passed"
+      },
+      {
+        "name": "browser:incident_note_timeline",
+        "category": "browser",
+        "status": "passed"
+      },
+      {
+        "name": "browser:incident_resolve",
+        "category": "browser",
+        "status": "passed"
+      },
+      {
+        "name": "browser:incident_reopen_filter",
+        "category": "browser",
+        "status": "passed"
+      },
+      {
+        "name": "browser:audit_filter",
+        "category": "browser",
+        "status": "passed"
+      },
+      {
+        "name": "browser:viewer_restrictions",
+        "category": "browser",
+        "status": "passed"
+      },
+      {
+        "name": "browser:escaped_user_text",
+        "category": "browser",
+        "status": "passed"
+      },
+      {
+        "name": "browser:inline_error_preserves_form",
+        "category": "browser",
+        "status": "passed"
+      },
+      {
+        "name": "browser:keyboard_focus",
+        "category": "browser",
+        "status": "passed"
+      },
+      {
+        "name": "browser:mobile_layout",
+        "category": "browser",
+        "status": "passed"
+      },
+      {
+        "name": "browser:console_local_assets",
+        "category": "browser",
+        "status": "passed"
+      }
+    ]
   },
+  "emptySeed": {
+    "verdict": "product_failure",
+    "wallMs": 1641.0,
+    "summary": {
+      "prerequisite": {
+        "failed": 3,
+        "not_run": 0,
+        "passed": 1
+      },
+      "api": {
+        "failed": 0,
+        "not_run": 28,
+        "passed": 0
+      },
+      "browser": {
+        "failed": 0,
+        "not_run": 32,
+        "passed": 0
+      }
+    },
+    "sourceIntegrityStatus": "unchanged",
+    "rawReportSha256": "bee595b1e1905e8b3faf5e60d38301d89b5cdaa4aa9b9066d157359776d64c43",
+    "authoredFileCount": 6,
+    "sourceManifestAggregateSha256": "29bf90cf9f6e72edec30f0d7261981f78ee98f7b0012a1dc04e746e92a8153b8",
+    "checks": [
+      {
+        "name": "prerequisite:typecheck",
+        "category": "prerequisite",
+        "status": "failed"
+      },
+      {
+        "name": "prerequisite:build",
+        "category": "prerequisite",
+        "status": "failed"
+      },
+      {
+        "name": "prerequisite:startup",
+        "category": "prerequisite",
+        "status": "failed"
+      },
+      {
+        "name": "prerequisite:source_integrity",
+        "category": "prerequisite",
+        "status": "passed"
+      },
+      {
+        "name": "api:health_json_errors",
+        "category": "api",
+        "status": "not_run"
+      },
+      {
+        "name": "api:actors_sessions",
+        "category": "api",
+        "status": "not_run"
+      },
+      {
+        "name": "api:viewer_permissions",
+        "category": "api",
+        "status": "not_run"
+      },
+      {
+        "name": "api:projects_crud_search",
+        "category": "api",
+        "status": "not_run"
+      },
+      {
+        "name": "api:environments_uniqueness_scope",
+        "category": "api",
+        "status": "not_run"
+      },
+      {
+        "name": "api:dag_validation_atomicity",
+        "category": "api",
+        "status": "not_run"
+      },
+      {
+        "name": "api:runbook_optimistic_versions",
+        "category": "api",
+        "status": "not_run"
+      },
+      {
+        "name": "api:release_snapshot_immutability",
+        "category": "api",
+        "status": "not_run"
+      },
+      {
+        "name": "api:release_draft_revision",
+        "category": "api",
+        "status": "not_run"
+      },
+      {
+        "name": "api:approval_separation_roles",
+        "category": "api",
+        "status": "not_run"
+      },
+      {
+        "name": "api:approval_rejection_history",
+        "category": "api",
+        "status": "not_run"
+      },
+      {
+        "name": "api:run_idempotent_concurrency",
+        "category": "api",
+        "status": "not_run"
+      },
+      {
+        "name": "api:dag_order_worker_bound",
+        "category": "api",
+        "status": "not_run"
+      },
+      {
+        "name": "api:failure_blocking_retry",
+        "category": "api",
+        "status": "not_run"
+      },
+      {
+        "name": "api:cancellation_terminal",
+        "category": "api",
+        "status": "not_run"
+      },
+      {
+        "name": "api:artifact_bytes_metadata",
+        "category": "api",
+        "status": "not_run"
+      },
+      {
+        "name": "api:job_logs_append_only",
+        "category": "api",
+        "status": "not_run"
+      },
+      {
+        "name": "api:rollback_active_history",
+        "category": "api",
+        "status": "not_run"
+      },
+      {
+        "name": "api:incident_release_boundaries",
+        "category": "api",
+        "status": "not_run"
+      },
+      {
+        "name": "api:incident_versions_transitions",
+        "category": "api",
+        "status": "not_run"
+      },
+      {
+        "name": "api:incident_notes_timeline",
+        "category": "api",
+        "status": "not_run"
+      },
+      {
+        "name": "api:audit_cursor_filters",
+        "category": "api",
+        "status": "not_run"
+      },
+      {
+        "name": "api:dashboard_export",
+        "category": "api",
+        "status": "not_run"
+      },
+      {
+        "name": "api:restart_persistence",
+        "category": "api",
+        "status": "not_run"
+      },
+      {
+        "name": "api:restart_running_recovery",
+        "category": "api",
+        "status": "not_run"
+      },
+      {
+        "name": "api:restart_idempotency_receipt",
+        "category": "api",
+        "status": "not_run"
+      },
+      {
+        "name": "api:cross_project_boundaries",
+        "category": "api",
+        "status": "not_run"
+      },
+      {
+        "name": "api:invalid_inputs_no_partial_writes",
+        "category": "api",
+        "status": "not_run"
+      },
+      {
+        "name": "browser:navigation_actor",
+        "category": "browser",
+        "status": "not_run"
+      },
+      {
+        "name": "browser:project_create",
+        "category": "browser",
+        "status": "not_run"
+      },
+      {
+        "name": "browser:project_edit_search",
+        "category": "browser",
+        "status": "not_run"
+      },
+      {
+        "name": "browser:environment_create_edit",
+        "category": "browser",
+        "status": "not_run"
+      },
+      {
+        "name": "browser:runbook_create_steps",
+        "category": "browser",
+        "status": "not_run"
+      },
+      {
+        "name": "browser:runbook_cycle_validation",
+        "category": "browser",
+        "status": "not_run"
+      },
+      {
+        "name": "browser:runbook_version_edit",
+        "category": "browser",
+        "status": "not_run"
+      },
+      {
+        "name": "browser:release_create_snapshot",
+        "category": "browser",
+        "status": "not_run"
+      },
+      {
+        "name": "browser:release_draft_edit",
+        "category": "browser",
+        "status": "not_run"
+      },
+      {
+        "name": "browser:release_submit",
+        "category": "browser",
+        "status": "not_run"
+      },
+      {
+        "name": "browser:approval_role_switch",
+        "category": "browser",
+        "status": "not_run"
+      },
+      {
+        "name": "browser:release_approve",
+        "category": "browser",
+        "status": "not_run"
+      },
+      {
+        "name": "browser:release_run_live_jobs",
+        "category": "browser",
+        "status": "not_run"
+      },
+      {
+        "name": "browser:release_artifact_download",
+        "category": "browser",
+        "status": "not_run"
+      },
+      {
+        "name": "browser:job_log_detail",
+        "category": "browser",
+        "status": "not_run"
+      },
+      {
+        "name": "browser:release_deep_link_reload",
+        "category": "browser",
+        "status": "not_run"
+      },
+      {
+        "name": "browser:failure_runbook_create",
+        "category": "browser",
+        "status": "not_run"
+      },
+      {
+        "name": "browser:failure_release_run",
+        "category": "browser",
+        "status": "not_run"
+      },
+      {
+        "name": "browser:failure_retry",
+        "category": "browser",
+        "status": "not_run"
+      },
+      {
+        "name": "browser:second_release_success",
+        "category": "browser",
+        "status": "not_run"
+      },
+      {
+        "name": "browser:rollback_restore_active",
+        "category": "browser",
+        "status": "not_run"
+      },
+      {
+        "name": "browser:incident_create_link",
+        "category": "browser",
+        "status": "not_run"
+      },
+      {
+        "name": "browser:incident_note_timeline",
+        "category": "browser",
+        "status": "not_run"
+      },
+      {
+        "name": "browser:incident_resolve",
+        "category": "browser",
+        "status": "not_run"
+      },
+      {
+        "name": "browser:incident_reopen_filter",
+        "category": "browser",
+        "status": "not_run"
+      },
+      {
+        "name": "browser:audit_filter",
+        "category": "browser",
+        "status": "not_run"
+      },
+      {
+        "name": "browser:viewer_restrictions",
+        "category": "browser",
+        "status": "not_run"
+      },
+      {
+        "name": "browser:escaped_user_text",
+        "category": "browser",
+        "status": "not_run"
+      },
+      {
+        "name": "browser:inline_error_preserves_form",
+        "category": "browser",
+        "status": "not_run"
+      },
+      {
+        "name": "browser:keyboard_focus",
+        "category": "browser",
+        "status": "not_run"
+      },
+      {
+        "name": "browser:mobile_layout",
+        "category": "browser",
+        "status": "not_run"
+      },
+      {
+        "name": "browser:console_local_assets",
+        "category": "browser",
+        "status": "not_run"
+      }
+    ]
+  },
+  "damagedReferenceControls": [
+    {
+      "name": "artifact-corruption",
+      "expectedFailure": "api:artifact_bytes_metadata",
+      "observedFailures": [
+        "api:artifact_bytes_metadata",
+        "browser:release_artifact_download"
+      ],
+      "summary": {
+        "prerequisite": {
+          "failed": 0,
+          "not_run": 0,
+          "passed": 4
+        },
+        "api": {
+          "failed": 1,
+          "not_run": 0,
+          "passed": 27
+        },
+        "browser": {
+          "failed": 1,
+          "not_run": 0,
+          "passed": 31
+        }
+      },
+      "instrumentErrors": 0,
+      "reportSha256": "f7f77025355cbbd8931fe54f8cd71303e7b36b2832805ab0dbcbc0ed6241b6a0"
+    },
+    {
+      "name": "outside-origin-asset",
+      "expectedFailure": "browser:console_local_assets",
+      "observedFailures": [
+        "browser:console_local_assets"
+      ],
+      "summary": {
+        "prerequisite": {
+          "failed": 0,
+          "not_run": 0,
+          "passed": 4
+        },
+        "api": {
+          "failed": 0,
+          "not_run": 0,
+          "passed": 28
+        },
+        "browser": {
+          "failed": 1,
+          "not_run": 0,
+          "passed": 31
+        }
+      },
+      "instrumentErrors": 0,
+      "reportSha256": "39dc62d061de09f510b21d0b1cb531415397e92c772382a90e1b770e8981857b",
+      "deniedOriginRequests": 0
+    }
+  ],
+  "preservedPreflightAttempts": [
+    {
+      "ordinal": 1,
+      "verdict": "instrument_failure",
+      "summary": {
+        "prerequisite": {
+          "failed": 2,
+          "not_run": 1,
+          "passed": 1
+        },
+        "api": {
+          "failed": 0,
+          "not_run": 28,
+          "passed": 0
+        },
+        "browser": {
+          "failed": 0,
+          "not_run": 32,
+          "passed": 0
+        }
+      },
+      "diagnosis": "Windows module-loader defect and reference TypeScript errors; no app checks ran",
+      "rawReportSha256": "5917bf15793e5be1964523cee83debc06e443e53e3b53d34fef946f065b46f5e",
+      "failedChecks": [
+        "prerequisite:typecheck",
+        "prerequisite:startup"
+      ],
+      "referenceSourceAggregateSha256": "df54ade468bf451b0b5ba35b073588c7d11a394df2590605c49d31a33a91fe24",
+      "rawEvidenceRewritten": false
+    },
+    {
+      "ordinal": 2,
+      "verdict": "instrument_failure",
+      "summary": {
+        "prerequisite": {
+          "failed": 0,
+          "not_run": 0,
+          "passed": 4
+        },
+        "api": {
+          "failed": 0,
+          "not_run": 0,
+          "passed": 28
+        },
+        "browser": {
+          "failed": 0,
+          "not_run": 32,
+          "passed": 0
+        }
+      },
+      "diagnosis": "Owned browser environment directories absent; API passed, browser did not start",
+      "rawReportSha256": "344d22d4f6450bdf69c10e99fc19ec3bb55fed4d1114f68feef80d2920872c28",
+      "failedChecks": [],
+      "referenceSourceAggregateSha256": "3ca62fa1091670007aaa7fa8c2df59fcd4f98ff51153c8e2da146e3321bb7c89",
+      "rawEvidenceRewritten": false
+    },
+    {
+      "ordinal": 3,
+      "verdict": "product_failure",
+      "summary": {
+        "prerequisite": {
+          "failed": 0,
+          "not_run": 0,
+          "passed": 4
+        },
+        "api": {
+          "failed": 0,
+          "not_run": 0,
+          "passed": 28
+        },
+        "browser": {
+          "failed": 1,
+          "not_run": 31,
+          "passed": 0
+        }
+      },
+      "diagnosis": "Independent assertion client used a refused proxy CONNECT transport",
+      "rawReportSha256": "18cdb9282c176cd7818f42d27f48ab52945299927bc5c6acd9e94dbc2c7d34a2",
+      "failedChecks": [
+        "browser:navigation_actor"
+      ],
+      "referenceSourceAggregateSha256": "3ca62fa1091670007aaa7fa8c2df59fcd4f98ff51153c8e2da146e3321bb7c89",
+      "rawEvidenceRewritten": false
+    },
+    {
+      "ordinal": 4,
+      "verdict": "product_failure",
+      "summary": {
+        "prerequisite": {
+          "failed": 0,
+          "not_run": 0,
+          "passed": 4
+        },
+        "api": {
+          "failed": 0,
+          "not_run": 0,
+          "passed": 28
+        },
+        "browser": {
+          "failed": 4,
+          "not_run": 22,
+          "passed": 6
+        }
+      },
+      "diagnosis": "Reference entity link names and custom proxy transport defects",
+      "rawReportSha256": "1de5f9f91e162825abc668ad1eb0cd21f77b0a7620603de081b1f4e24ffd697f",
+      "failedChecks": [
+        "browser:project_edit_search",
+        "browser:environment_create_edit",
+        "browser:escaped_user_text",
+        "browser:console_local_assets"
+      ],
+      "referenceSourceAggregateSha256": "3ca62fa1091670007aaa7fa8c2df59fcd4f98ff51153c8e2da146e3321bb7c89",
+      "rawEvidenceRewritten": false
+    },
+    {
+      "ordinal": 5,
+      "verdict": "product_failure",
+      "summary": {
+        "prerequisite": {
+          "failed": 0,
+          "not_run": 0,
+          "passed": 4
+        },
+        "api": {
+          "failed": 0,
+          "not_run": 0,
+          "passed": 28
+        },
+        "browser": {
+          "failed": 3,
+          "not_run": 17,
+          "passed": 12
+        }
+      },
+      "diagnosis": "Asynchronous UI version wait, rendered status case and custom proxy defects",
+      "rawReportSha256": "c85ef9c254d7a3a8474dfb7242131ffdaa48515fd5a8c084a6c8e6bd836ace75",
+      "failedChecks": [
+        "browser:runbook_version_edit",
+        "browser:failure_release_run",
+        "browser:console_local_assets"
+      ],
+      "referenceSourceAggregateSha256": "dee9d00bffe4853ab2889a5081b34ffed035361f188559335ad57efcbe1510e4",
+      "rawEvidenceRewritten": false
+    },
+    {
+      "ordinal": 6,
+      "verdict": "product_failure",
+      "summary": {
+        "prerequisite": {
+          "failed": 0,
+          "not_run": 0,
+          "passed": 4
+        },
+        "api": {
+          "failed": 0,
+          "not_run": 0,
+          "passed": 28
+        },
+        "browser": {
+          "failed": 3,
+          "not_run": 11,
+          "passed": 18
+        }
+      },
+      "diagnosis": "Rendered status case and attribution of browser-service proxy denials",
+      "rawReportSha256": "8b52b9c401455c240ec78ab98cb3188e0df64d52c95999040ef7b771a3350363",
+      "failedChecks": [
+        "browser:release_run_live_jobs",
+        "browser:failure_release_run",
+        "browser:console_local_assets"
+      ],
+      "referenceSourceAggregateSha256": "dee9d00bffe4853ab2889a5081b34ffed035361f188559335ad57efcbe1510e4",
+      "rawEvidenceRewritten": false
+    },
+    {
+      "ordinal": 7,
+      "verdict": "product_failure",
+      "summary": {
+        "prerequisite": {
+          "failed": 0,
+          "not_run": 0,
+          "passed": 4
+        },
+        "api": {
+          "failed": 0,
+          "not_run": 0,
+          "passed": 28
+        },
+        "browser": {
+          "failed": 2,
+          "not_run": 3,
+          "passed": 27
+        }
+      },
+      "diagnosis": "Reference navigation accessible name included its incident count",
+      "rawReportSha256": "253b38c8743f226536ce3812e3742ad7d5f7bf29c67779dbe1bfbbff9f04493f",
+      "failedChecks": [
+        "browser:incident_create_link",
+        "browser:mobile_layout"
+      ],
+      "referenceSourceAggregateSha256": "dee9d00bffe4853ab2889a5081b34ffed035361f188559335ad57efcbe1510e4",
+      "rawEvidenceRewritten": false
+    }
+  ],
   "limits": [
-    "Pure report controls do not establish application correctness.",
-    "Actual typecheck/build/start, HTTP, restart and browser qualification requires the shared Bun lease.",
-    "No paid execution may rely on this benchmark until every required positive row passes and the empty seed has zero application-check passes.",
-    "The reference implementation is outside the task root and has not been published or seeded."
-  ]
+    "These are reference and negative controls, not paid model outcomes.",
+    "Raw paths, profiles, synthetic entity identifiers and private reference source are omitted.",
+    "The reference source remains outside the task and seed until the study ends.",
+    "Dependencies were reused from an existing exact-version installation; no network install was used.",
+    "Windows was runtime qualified; other platforms and production readiness are not established.",
+    "Functional passes do not establish equal blinded source or screenshot quality."
+  ],
+  "sourceFreezeAggregateSha256": "e4c04a7e174fc9d2980551c36cadfa5c2d295263db0a66a05e045c8902bf6663"
 }
