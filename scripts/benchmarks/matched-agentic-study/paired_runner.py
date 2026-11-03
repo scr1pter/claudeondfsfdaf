@@ -607,6 +607,9 @@ def normalize_transcript(path, runtime):
                         events.extend([{ "type": "item.started", "item": {"id": key, "type": "command_execution", "command": command}},
                                        {"type": "item.completed", "item": {"id": key, "type": "command_execution", "command": command,
                                                                             "exit_code": item["exit_code"]}}])
+                    elif item.get("type") == "CollabAgentToolCall":
+                        if item.get("tool") != "wait" or item.get("status") != "completed":
+                            unknown += 1
                     elif item.get("type") not in {"UserMessage", "AgentMessage", "Reasoning", "FileChange", "ImageView", "SubAgentActivity"}:
                         unknown += 1
                 if kind in ("task_started", "turn_started"):

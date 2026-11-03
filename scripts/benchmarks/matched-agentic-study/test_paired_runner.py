@@ -383,6 +383,12 @@ class PairedRunnerTests(unittest.TestCase):
         actual = runner.normalize_transcript(path, "codex")
         self.assertEqual(actual["unknownInteractiveInputs"], 1)
         self.assertEqual(actual["executions"], [])
+        rows[2]["payload"]["item"] = {"type": "CollabAgentToolCall", "tool": "wait", "status": "completed"}
+        path.write_text("".join(json.dumps(row) + "\n" for row in rows))
+        self.assertEqual(runner.normalize_transcript(path, "codex")["unknownInteractiveInputs"], 0)
+        rows[2]["payload"]["item"]["tool"] = "unrecognized_collaboration_tool"
+        path.write_text("".join(json.dumps(row) + "\n" for row in rows))
+        self.assertEqual(runner.normalize_transcript(path, "codex")["unknownInteractiveInputs"], 1)
         rows[2]["payload"]["item"]["type"] = "UnrecognizedToolExecution"
         path.write_text("".join(json.dumps(row) + "\n" for row in rows))
         self.assertEqual(runner.normalize_transcript(path, "codex")["unknownInteractiveInputs"], 1)
