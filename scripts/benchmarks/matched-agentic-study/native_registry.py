@@ -20,10 +20,12 @@ def parsed(value):
 
 
 class NativeRegistry:
-    def __init__(self, runtime, home, database, root_id, provider, helper_names=(), helper_producers=None):
+    def __init__(self, runtime, home, database, root_id, provider, helper_names=(), helper_producers=None, max_depth=1):
         require(runtime in ("codex", "vector"), "unknown registry runtime")
         self.runtime, self.home = runtime, Path(home).resolve()
         self.database, self.root_id, self.provider = Path(database).resolve(), root_id, provider
+        require(isinstance(max_depth, int) and not isinstance(max_depth, bool) and 1 <= max_depth <= 2, "native ancestry depth expanded")
+        self.max_depth = max_depth
         self.helper_names = frozenset(helper_names)
         self.helper_producers = dict(helper_producers or {})
         require(len(self.helper_producers) <= 3 and all(isinstance(name, str) and name and agent in {"title", "summary", "compaction", "name"} for name, agent in self.helper_producers.items()), "unapproved native helper producer profile")
@@ -64,9 +66,29 @@ class NativeRegistry:
             require(metadata.get("parent_thread_id") == parent and ancestry.get("agent_role") == role and ancestry.get("agent_path") == row["agent_path"] == metadata.get("agent_name"), "native child ancestry mismatch")
             edge = connection.execute("SELECT COUNT(*) FROM thread_spawn_edges WHERE parent_thread_id=? AND child_thread_id=?", (parent, identity)).fetchone()[0]
             require(edge == 1 and row["thread_source"] == "subagent", "native child edge missing")
+        ancestors, parent_role = [], None
+        current, expected_depth = parent, depth - 1
+        require(isinstance(depth, int) and not isinstance(depth, bool) and 0 <= depth <= self.max_depth, "native ancestry depth expanded")
+        while current is not None:
+            require(current != identity and current not in ancestors and len(ancestors) <= self.max_depth, "native ancestry cycle")
+            ancestor = connection.execute("SELECT id,source,thread_source,agent_role,model,reasoning_effort,model_provider FROM threads WHERE id=?", (current,)).fetchone()
+            require(ancestor is not None and ancestor["model"] == MODEL and ancestor["reasoning_effort"] == "high" and ancestor["model_provider"] == self.provider, "native ancestor unavailable or model changed")
+            ancestors.append(current)
+            if current == self.root_id:
+                require(expected_depth == 0 and ancestor["source"] == "exec" and ancestor["thread_source"] == "user" and ancestor["agent_role"] is None, "native ancestor root mismatch")
+                parent_role = parent_role or "lead"
+                break
+            ancestry = parsed(ancestor["source"])["subagent"]["thread_spawn"]
+            require(expected_depth > 0 and ancestry["depth"] == expected_depth and ancestor["thread_source"] == "subagent" and ancestry["agent_role"] == ancestor["agent_role"], "native ancestor depth or role mismatch")
+            parent_role = parent_role or ancestor["agent_role"]
+            previous, current = current, ancestry["parent_thread_id"]
+            edge = connection.execute("SELECT COUNT(*) FROM thread_spawn_edges WHERE parent_thread_id=? AND child_thread_id=?", (current, previous)).fetchone()[0]
+            require(edge == 1, "native ancestor edge missing")
+            expected_depth -= 1
+        require(identity == self.root_id or ancestors and ancestors[-1] == self.root_id, "native ancestry outside owned root")
         purpose = metadata.get("request_kind")
         require(purpose in ("turn", *self.helper_names), "unknown native request purpose")
-        return {"id": identity, "root": self.root_id, "parent": parent, "depth": depth, "role": role, "identityKind": "autonomous", "helper": purpose != "turn", "purpose": purpose}
+        return {"id": identity, "root": self.root_id, "parent": parent, "parentRole": parent_role, "depth": depth, "role": role, "identityKind": "autonomous", "helper": purpose != "turn", "purpose": purpose}
 
     def vector(self, connection, headers):
         identity = headers.get("x-session-id")
@@ -88,9 +110,27 @@ class NativeRegistry:
             selected = record.get("model", {})
             require(selected.get("providerID") == self.provider and selected.get("modelID") == MODEL and selected.get("variant") == "high", "native child model mismatch")
             model = {"id": selected["modelID"], "providerID": selected["providerID"], "variant": selected["variant"]}
-        require((parent is not None if helper else parent in (None, self.root_id)) and (not headers.get("x-parent-session-id") or headers["x-parent-session-id"] == parent), "nested or cross-arm session")
+        require((parent is not None if helper else True) and (not headers.get("x-parent-session-id") or headers["x-parent-session-id"] == parent), "nested or cross-arm session")
+        ancestors, parent_role, current = [], None, parent
+        while current is not None:
+            require(current != identity and current not in ancestors and len(ancestors) < self.max_depth + int(helper), "native ancestry depth expanded or cycle")
+            ancestor = connection.execute("SELECT id,parent_id,internal,agent,model,metadata FROM session WHERE id=?", (current,)).fetchone()
+            require(ancestor is not None and ancestor["internal"] is None, "native ancestor unavailable")
+            ancestors.append(current)
+            if current == self.root_id:
+                selected = parsed(ancestor["model"]) or {}
+                require(ancestor["parent_id"] is None and selected.get("id") == MODEL and selected.get("providerID") == self.provider and selected.get("variant") == "high", "native ancestor root mismatch")
+                parent_role = parent_role or "lead"
+                break
+            record = (parsed(ancestor["metadata"]) or {}).get("subagent", {})
+            selected = record.get("model", {})
+            require(record.get("parentSessionID") == ancestor["parent_id"] and record.get("agent") == ancestor["agent"] and selected.get("providerID") == self.provider and selected.get("modelID") == MODEL and selected.get("variant") == "high", "native ancestor role or model mismatch")
+            parent_role = parent_role or ancestor["agent"]
+            current = ancestor["parent_id"]
+        require(identity == self.root_id or ancestors and ancestors[-1] == self.root_id, "native ancestry outside owned root")
+        depth = len(ancestors)
         require(model.get("id") == MODEL and model.get("providerID") == self.provider and model.get("variant") == "high", "native model/provider mismatch")
-        return {"id": identity, "root": self.root_id, "parent": parent, "depth": depth, "role": role, "identityKind": "helper" if helper else "autonomous", "producer": row["internal"] if helper else None, "helper": helper, "purpose": row["internal"] if helper else "root_or_helper" if role == "lead" else "turn"}
+        return {"id": identity, "root": self.root_id, "parent": parent, "parentRole": parent_role, "depth": depth, "role": role, "identityKind": "helper" if helper else "autonomous", "producer": row["internal"] if helper else None, "helper": helper, "purpose": row["internal"] if helper else "root_or_helper" if role == "lead" else "turn"}
 
     def collect(self, destination):
         """Retain raw descendant transcripts privately, including refused children."""
