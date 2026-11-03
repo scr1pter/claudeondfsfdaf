@@ -521,3 +521,23 @@ The shared browser action module validates explicit request/response shapes and 
 - **The founders page** is `/founders`, with the random slug in the address's fragment (made in the store at first use, sent as a header). "Public after 30 opt-ins" counts founders currently listed. The badge is an SVG from `GET /api/founders?badge=<n>`, behind the same slug while private. The opt-in lives on the website account page; Settings shows the number and the lock and points there.
 - **Status sends `founding: {number}` in every shown plan state**, frozen included; §4.4 hides frozen founders from the founders page only. The boost is never sent.
 - **Files outside A31's list:** `codium-snapshot.ts` (the founding fact), `model-plan-status.ts`, `codium-perks.ts` (readiness), `webhook.ts` (slot release), `codium-ledger.ts` (legacy price), two new routes, the website account block, decoder and `/founders` page, the prune keep list, `.env.example`, docs, the store fake's script copies, and `packages/web/test/codium-public.test.ts`, whose "only priority is ready" case now closes the founding window first, because A31 gives founding a real readiness check (and the case asserts founding is listed while open). Account deletion erases founding records now, in `cancelModelPlanAccount`; A57 owns the rest of P5.
+
+## A32 usage forecast and history (2 Nov 2026)
+
+- **History lists every date of the period so far, from its first, including dates with nothing spent.** §4.11's
+  `history: {day, used}[]` with whole-percent fractions cannot tell "nothing" from "a little" on one date, and the strip
+  needs to know where the period starts. So status sends each UTC date from the period's first through today
+  (`used: 0` included), and the strip and CLI read any share that rounds to 0 as "<1%", which is true either way. The
+  first entry is the period's first date, which the strip uses to mark earlier dates and the renewal card to count from;
+  no new status field was added.
+- **History also counts pool debits**, by the UTC date each was recorded (hosted blocks and other non-model charges),
+  because the month's share already includes them. Model spend comes from the `day:` buckets as the contract says.
+- **A history that cannot be read is left out, not an error.** Status still answers, and the forecast then uses the
+  period average.
+- **"Straight-line forecast over the last 7 days"** is read as the pace of a straight line from the window's start to
+  now, where the window is the last 7 UTC dates including today and never starts before the period. "Fewer than 3
+  points" counts dates in that window with settled spend. The share left comes from the month's figure, as before.
+- **The renewal card** covers the period the coming renewal closes ("Before your plan renews", or "ends"): this
+  computer's Codium responses and days with Codium work since the period's first date, from the local usage summary.
+  The app does not know the previous period's start, so it does not recap the last one. Local dates are compared with
+  the period's first UTC date, so the first day can be off by the hours between UTC and local time.

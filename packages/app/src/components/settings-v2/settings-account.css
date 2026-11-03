@@ -183,6 +183,90 @@
   background: var(--vx-red);
 }
 
+/* Settings → Usage: one bar per UTC date for the last 31 days, each its share of this month (WP A32). */
+.settings-codium-history {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.settings-codium-strip {
+  display: grid;
+  grid-template-columns: repeat(31, minmax(0, 1fr));
+  align-items: end;
+  gap: 2px;
+  height: 36px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.settings-codium-strip > li {
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  height: 100%;
+  border-radius: 2px;
+  background: rgba(226, 213, 237, 0.06);
+}
+
+.settings-codium-strip > li[data-period="before"] {
+  background: transparent;
+  box-shadow: inset 0 -1px 0 var(--settings-line, var(--vx-line));
+}
+
+.settings-codium-strip > li > span {
+  display: block;
+  width: 100%;
+  min-height: 0;
+  border-radius: inherit;
+  background: var(--vx-gradient, linear-gradient(135deg, #7659d0 0%, #a287ef 100%));
+}
+
+.settings-codium-strip > li[data-period="current"] > span {
+  min-height: 2px;
+}
+
+.settings-codium-strip > li[data-today] {
+  box-shadow: inset 0 0 0 1px var(--settings-line-strong, var(--vx-line));
+}
+
+/* Counts only: what this computer did on Codium this period. */
+.settings-codium-renewal {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 14px;
+  border: 1px solid var(--settings-line-strong, var(--vx-line));
+  border-radius: 10px;
+  background: var(--settings-control, var(--vx-control));
+}
+
+.settings-codium-renewal h4,
+.settings-codium-renewal p {
+  margin: 0;
+}
+
+.settings-codium-renewal dl {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 20px;
+  margin: 0;
+}
+
+.settings-codium-renewal dt {
+  color: var(--settings-muted);
+  font-size: 11px;
+}
+
+.settings-codium-renewal dd {
+  margin: 2px 0 0;
+  color: var(--settings-text);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
 .settings-account-notice {
   margin: 0;
   color: var(--settings-muted);

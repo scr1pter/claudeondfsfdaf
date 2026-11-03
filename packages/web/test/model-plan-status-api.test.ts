@@ -21,6 +21,7 @@ import {
   type ModelPlanStatusOptions,
 } from "../../../api/_lib/model-plan-status"
 import { codiumBillingConfigProblems, type ModelPlanModel } from "../../../api/_lib/model-plan-config"
+import { historyDays } from "../../../api/_lib/codium-usage-history"
 import { publicEntitlements } from "../../../packages/schema/src/codium-entitlements"
 import type { CodiumPlan } from "../../../packages/schema/src/codium-plan"
 import { handlePublicCodiumConfig } from "../../../api/model-plans/config"
@@ -264,6 +265,8 @@ describe("a plan's status, from the snapshot", () => {
       },
       listed: [],
       entitlements: publicEntitlements("vector-10", new Set()),
+      // A32: every date of the period so far, from its first; nothing was spent.
+      history: historyDays(fixture.expect.periodStart * 1000, now).map((day) => ({ day, used: 0 })),
       purchased: { bought: false },
       empty: false,
       low: false,
@@ -413,6 +416,46 @@ describe("a plan's status, from the snapshot", () => {
     const body = (await read(later.token)).body
     expect(body.plan).toMatchObject({ left: 0.5, forecastDate: new Date(start + 20 * DAY).toISOString().slice(0, 10) })
     noAmounts(body, "vector-10")
+  })
+
+  test("history counts the period's day buckets; the forecast follows the last 7 days, and a bad bucket only drops history (A32)", async () => {
+    const fixture = loadStripeFixture("active-paid")
+    const start = fixture.expect.periodStart * 1000
+    const periodEnd = fixture.expect.periodEnd * 1000
+    const at = start + 10 * DAY
+    const seeded = await seed("active-paid", { at })
+    const pool = seeded.pool!
+    // 60% of the month used, 15% on each of the last three dates: whoever spent it (the desktop, the CLI or a run
+    // token), every settled charge is in its pool's day bucket.
+    seeded.fakes.openRouter.keys.get(pool)!.usage = 2.4
+    const date = (offset: number) => new Date(at - offset * DAY).toISOString().slice(0, 10)
+    const recent = [1, 2, 3].map(date)
+    for (const day of recent) seeded.fakes.store.hash(codiumKey("day", pool, day)).set("total", "600000")
+    seeded.fakes.store.remove(statusCacheKey(seeded.id))
+    const body = (await read(seeded.token)).body
+    const days = historyDays(start, at).map((day) => ({ day, micro: recent.includes(day) ? 600_000 : 0 }))
+    expect(body.history).toEqual(days.map(({ day }) => ({ day, used: recent.includes(day) ? 0.15 : 0 })))
+    expect(body.history[0].day).toBe(new Date(start).toISOString().slice(0, 10))
+    const line = forecastDate({ used: 0.6, periodStart: start, periodEnd, now: at, days, totalMicro: 4_000_000 })
+    const average = forecastDate({ used: 0.6, periodStart: start, periodEnd, now: at })
+    expect(line).toBeDefined()
+    expect(line).not.toBe(average)
+    expect(body.plan).toMatchObject({ left: 0.4, forecastDate: line })
+    noAmounts(body, "vector-10")
+    // The core client keeps the history and prints the forecast line, as `vector codium` does.
+    const decoded = await ModelPlanStatus.fetchStatus(seeded.token, (_url, init) =>
+      fetch(`${origin.url}/api/model-plans/status`, init),
+    )
+    expect(decoded.history).toEqual(body.history)
+    expect(ModelPlanStatus.describe(decoded)).toContain(ModelPlanStatus.forecastText(line)!)
+    for (const status of await released(seeded.token)) expect(status.error).toBeUndefined()
+
+    // A bucket its writer never leaves: the status still answers, without a history and with the period average.
+    seeded.fakes.store.set(codiumKey("day", pool, date(1)), "not a hash")
+    seeded.fakes.store.remove(statusCacheKey(seeded.id))
+    const broken = (await read(seeded.token)).body
+    expect(broken).not.toHaveProperty("history")
+    expect(broken.plan).toMatchObject({ left: 0.4, forecastDate: average })
   })
 
   test("a missing snapshot that another request is still reconciling answers 503 RENEWING, never a guess", async () => {

@@ -25,6 +25,7 @@ import { readSwitch } from "./codium-switches.js"
 import { usdToMicro } from "./codium-pool.js"
 import { renewalGraceMinutes } from "./codium-limits.js"
 import { listedPerks, type ListedPerksOptions } from "./codium-perks.js"
+import { forecastDate, readUsageHistory, usageHistory, type UsageDay } from "./codium-usage-history.js"
 import { persistentStore } from "./persistent-store.js"
 import { handleApiError, json, requireMethod, type ApiRequest, type ApiResponse } from "./http.js"
 
@@ -98,12 +99,26 @@ async function accountStatus(
   if (cached) return cached
   const status = await modelPlanStatus(id, fetcher, now, snapshot)
   const usable = status.active && (snapshot.state === "active" || snapshot.state === "renewing")
+  // The period's day buckets (A32), only once its pool has figures: the key that pool belongs to is this snapshot's.
+  const key = record.key
+  const pool =
+    status.active &&
+    status.credits !== undefined &&
+    key &&
+    !key.revoked &&
+    key.subscription === snapshot.subscription &&
+    key.start * 1000 === snapshot.periodStart
+      ? key.hash
+      : undefined
   const body = modelPlanBalance(status, {
     listed,
     now,
     cheapestMicro:
       usable && snapshot.plan ? await cheapestReservation(snapshot.plan, options, fetcher, now) : undefined,
     meters: status.active ? await (options.meters ?? statusMeters).read(snapshot, listed, fetcher) : undefined,
+    history: pool
+      ? await readUsageHistory({ account: id, pool, periodStart: snapshot.periodStart, now }, fetcher)
+      : undefined,
   })
   const ttl = Math.min(
     STATUS_CACHE_MS,
@@ -162,7 +177,14 @@ async function cheapestReservation(
  */
 export function modelPlanBalance(
   status: ModelPlanStatusRead,
-  input: { listed?: readonly PerkId[]; cheapestMicro?: number; meters?: StatusMeters; now?: number } = {},
+  input: {
+    listed?: readonly PerkId[]
+    cheapestMicro?: number
+    meters?: StatusMeters
+    /** This period's settled spend by UTC date (A32), when it could be read. */
+    history?: readonly UsageDay[]
+    now?: number
+  } = {},
 ) {
   const listed = [...(input.listed ?? [])]
   const now = input.now ?? Date.now()
@@ -194,6 +216,10 @@ export function modelPlanBalance(
     idleMicro !== undefined &&
     (idleMicro <= 0 || (input.cheapestMicro !== undefined && idleMicro < input.cheapestMicro))
   const day = status.day && status.access ? status.day : undefined
+  const totalMicro = status.credits === undefined ? undefined : usdToMicro(status.credits)
+  // Each date of the period so far as a whole-percent share of the month (A32); the pace of its last 7 days drives
+  // the forecast.
+  const history = input.history && totalMicro ? usageHistory(input.history, totalMicro) : undefined
   const forecast =
     status.used === undefined || !status.credits
       ? undefined
@@ -202,6 +228,8 @@ export function modelPlanBalance(
           periodStart: status.periodStart,
           periodEnd: status.periodEnd,
           now,
+          days: input.history,
+          totalMicro,
         })
   return {
     active: true,
@@ -247,6 +275,7 @@ export function modelPlanBalance(
     listed,
     entitlements: publicEntitlements(plan, new Set(listed)),
     ...(input.meters ? { meters: input.meters } : {}),
+    ...(history ? { history } : {}),
     // The founding mark (WP A31): the number only, never whether the boost applies (that is part of the private pool).
     ...(snapshot.founding ? { founding: { number: snapshot.founding.number } } : {}),
     ...(caps.velocity ? { velocity: caps.velocity } : {}),
@@ -263,16 +292,8 @@ export function modelPlanBalance(
   }
 }
 
-/**
- * The day the month runs out at its average pace so far, as an ISO date (A32 adds the 7-day line and history). Hidden
- * in the first 3 days, under 5% used, and when the month lasts to its end (§4.11, A32).
- */
-export function forecastDate(input: { used: number; periodStart: number; periodEnd: number; now: number }) {
-  const elapsed = input.now - input.periodStart
-  if (elapsed < 3 * DAY_MS || !(input.used >= 0.05) || input.used >= 1) return undefined
-  const runsOut = input.periodStart + elapsed / input.used
-  return runsOut < input.periodEnd ? new Date(runsOut).toISOString().slice(0, 10) : undefined
-}
+// The forecast moved to codium-usage-history.ts with the 7-day line (A32); it is exported here as before.
+export { forecastDate }
 
 function share(left: number, total: number) {
   return total > 0 ? Math.round(Math.min(1, Math.max(0, left / total)) * 100) / 100 : 0
