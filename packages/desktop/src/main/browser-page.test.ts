@@ -115,6 +115,11 @@ describe("readPage", () => {
 })
 
 describe("observePage", () => {
+  test("leaves geometry unknown when the DOM has no layout engine", () => {
+    page('<body><div style="width:548px">Wide content</div></body>')
+    expect(inPage(observePage)(window, { maxText: 100, maxElements: 10 }).layout).toBeUndefined()
+  })
+
   test("reports focused password metadata without values or moving focus", () => {
     page(
       '<body><label>Password <input id="secret" type="password" value="private-focus-fixture"></label><button>Next</button></body>',
