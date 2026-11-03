@@ -59,6 +59,10 @@ const api: ElectronAPI = {
     install: () => ipcRenderer.invoke("updater-install"),
   },
   reportBug: (input) => ipcRenderer.invoke("report-bug", input),
+  reports: {
+    list: () => ipcRenderer.invoke("reports-list"),
+    status: () => ipcRenderer.invoke("reports-status"),
+  },
   askHelpAssistant: (input) => ipcRenderer.invoke("help-assistant-ask", input),
   agentTeams: {
     list: (scope) => ipcRenderer.invoke("agent-teams-list", scope),

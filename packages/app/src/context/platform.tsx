@@ -6,6 +6,7 @@ import type { ServerConnection } from "./server"
 import type { WslServersPlatform } from "../wsl/types"
 import type { UpdaterPlatform } from "../updater"
 import type { VectorAccountPlatform } from "../vector-account"
+import type { ReportsPlatform } from "../support-reports"
 
 type PickerPaths = string | string[] | null
 type OpenDirectoryPickerOptions = { title?: string; multiple?: boolean }
@@ -73,6 +74,9 @@ type PlatformBase = {
 
   /** Desktop account status and sign-in; credentials stay in the main process. */
   vectorAccount?: VectorAccountPlatform
+
+  /** Bug reports this computer sent and what became of each (desktop only); the report ids stay in the main process. */
+  reports?: ReportsPlatform
 
   /** Saved remote-server passwords in the OS keychain (desktop only); set resolves false when none is available. */
   serverCredentials?: {

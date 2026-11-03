@@ -19,6 +19,7 @@ import type {
 import type { Observed, PageRead } from "../main/browser-page"
 import type { Chip as ResearchBrowserChip } from "../main/research-browser"
 import type { CloudOverview } from "../main/cloud-overview"
+import type { LocalReport, ReportStatuses } from "../main/bug-report"
 import type { SupabaseCommand, SupabaseProgressEvent } from "../main/cloud-supabase"
 import type { VercelCloudApi } from "../main/cloud-vercel-ipc"
 import type { GithubOauthPushInput, GithubPublishInput, GithubPublishResult, GithubStatus } from "../main/github"
@@ -93,6 +94,12 @@ export type {
 import type { FailureMemory } from "../main/failure-memory"
 export type { FailureMemory, FailureRepair, FailureSignatureRecord } from "../main/failure-memory"
 import type { AgentTeam, TeamCollaborationGraph, TeamMessage, TeamTopology } from "../main/agent-team-model"
+
+export type ReportsPlatform = {
+  list: () => Promise<LocalReport[]>
+  status: () => Promise<ReportStatuses>
+}
+
 export type { AgentTeam, TeamCollaborationGraph, TeamLink, TeamMessage, TeamTopology } from "../main/agent-team-model"
 export type { LocalMemoryState } from "../main/local-memory"
 export type { DesktopLocalStatus } from "../main/local-mode"
@@ -821,7 +828,12 @@ export type ElectronAPI = {
     set: (url: string, credential: { username?: string; password: string }) => Promise<boolean>
     delete: (url: string) => Promise<void>
   }
-  reportBug: (input: { message: string; email?: string }) => Promise<{ delivered: boolean; error?: string }>
+  reportBug: (input: {
+    message: string
+    email?: string
+  }) => Promise<{ delivered: boolean; tracked?: boolean; error?: string }>
+  /** Bug reports this computer sent and what became of each (WP A33); the report ids stay in the main process. */
+  reports: ReportsPlatform
   askHelpAssistant: (input: {
     messages: { role: "user" | "assistant"; content: string }[]
     context: string

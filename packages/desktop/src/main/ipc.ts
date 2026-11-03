@@ -13,7 +13,7 @@ import { assertAttachmentBudget, createPickedFileAuthorizations } from "./attach
 import { getStore, removeStoreFileIfEmpty } from "./store"
 import { isRendererStoreName } from "./store-keys"
 import { write } from "./logging"
-import { sendBugReport } from "./bug-report"
+import { listReports, reportStatuses, sendBugReport } from "./bug-report"
 import { askHelpAssistant, type HelpInput } from "./help-assistant"
 import { clearLocalMemory, readLocalMemory, writeLocalMemory } from "./local-memory"
 import { desktopLocalStatus } from "./local-mode"
@@ -359,7 +359,12 @@ export function registerIpcHandlers(deps: Deps) {
     )
     event.sender.once("destroyed", () => updaterSubscriptions.delete(id))
   })
-  handle("report-bug", (_event, input: { message: string; email?: string }) => sendBugReport(input))
+  // A signed-in report carries the account token from the main process, never the renderer (WP A33).
+  handle("report-bug", (_event, input: { message: string; email?: string }) =>
+    sendBugReport(input, { token: () => vectorAccount.token() }),
+  )
+  handle("reports-list", () => listReports())
+  handle("reports-status", () => reportStatuses())
   handle("help-assistant-ask", (_event, input: HelpInput) => askHelpAssistant(input))
   handle("agent-teams-list", (_event, scope?: { sourcePath?: string; parentSessionId?: string }) =>
     listAgentTeams(scope),

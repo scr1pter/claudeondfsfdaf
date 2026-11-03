@@ -371,6 +371,16 @@ export const SOURCES: readonly Source[] = [
     callSites: ["packages/desktop/src/main/bug-report.ts"],
   },
   {
+    id: "report-status",
+    purpose: "support",
+    hosts: VECTOR,
+    sends: "The ids of the bug reports you sent from this computer",
+    why: "Shows what happened to each report in Settings > Account",
+    local: "blocked",
+    where: ["desktop"],
+    callSites: ["packages/desktop/src/main/bug-report.ts"],
+  },
+  {
     id: "release-notes",
     purpose: "release-notes",
     hosts: VECTOR,

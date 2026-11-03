@@ -4,6 +4,7 @@ import { foundingWindowOpen } from "./codium-founding.js"
 import { githubAppConfiguration } from "./github-app.js"
 import { modelPlansEnabled } from "./model-plan-config.js"
 import { readDisabledSet, readSwitch, type SwitchName } from "./codium-switches.js"
+import { reportEmailConfigured } from "./support-reports.js"
 
 export type PerkServices = Readonly<Partial<Record<PerkId, (fetcher: typeof fetch) => boolean | Promise<boolean>>>>
 export type ListedPerksOptions = { services?: PerkServices; runtime?: boolean }
@@ -29,6 +30,8 @@ export const perkServices: PerkServices = {
   // WP A31: founding is listed only while its window is open (the limit and the days after sales opened), read at
   // runtime; a prerender never sees it, and a closed window takes it off every page on the next config read.
   founding: (fetcher) => foundingWindowOpen(fetcher),
+  // WP A33: reports are read first only where they reach the owner, so the report email must be configured.
+  "reports-first": () => reportEmailConfigured(),
 }
 
 const switches: Readonly<Partial<Record<PerkId, SwitchName>>> = {

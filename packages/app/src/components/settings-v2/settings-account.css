@@ -273,6 +273,34 @@
   font-size: 12px;
 }
 
+/* Your reports (WP A33): one row per bug report this computer sent, its title above when it was sent and its status. */
+.settings-account-reports {
+  display: grid;
+  gap: 8px;
+  max-width: 680px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.settings-account-reports li {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.settings-account-reports .settings-account-muted {
+  margin: 0;
+}
+
+.settings-account-report-title {
+  overflow: hidden;
+  color: var(--settings-text);
+  font-size: 12.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* A smaller plan scheduled for renewal, beside Keep my plan. */
 .settings-account-scheduled {
   display: flex;

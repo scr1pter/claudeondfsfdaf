@@ -104,6 +104,7 @@ const NAMES: Record<string, string> = {
   "crash-reports": "Crash reports",
   telemetry: "Your OpenTelemetry tracing",
   "support-report": "Support reports",
+  "report-status": "Report status",
   "release-notes": "Release notes",
   "site-assets": "Release note pictures",
   updates: "Updates",

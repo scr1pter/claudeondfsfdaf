@@ -1,9 +1,10 @@
 import { ModelPlanStatus } from "@vectordevai/core/model-plan-status"
 import { ButtonV2 } from "@vectordevai/ui/v2/button-v2"
-import { Match, Show, Switch, createMemo, createSignal, onCleanup, onMount } from "solid-js"
+import { For, Match, Show, Switch, createMemo, createSignal, onCleanup, onMount } from "solid-js"
 import { CodiumBillingStatus, CodiumPurchase, createCodiumBilling } from "@/components/codium-purchase"
 import { usePlatform } from "@/context/platform"
 import { accountChip, codiumChanged, newestRead, onCodiumChange, type VectorAccountStatus } from "@/vector-account"
+import { reportCheckNote, reportStatusLabel, shortCommit, type ReportStatuses } from "@/support-reports"
 import { accountIdentity, codiumSummary, deletionStep, FOUNDING_LOCK, sameEmail } from "./account-model"
 import "./settings-v2.css"
 import "./settings-account.css"
@@ -37,6 +38,13 @@ export function SettingsAccountV2(props: { onUsage: () => void }) {
     return current.kind === "error" ? current.text : undefined
   })
 
+  // Your reports (WP A33): the bug reports this computer sent, signed in or not, with what became of each.
+  const [reports, setReports] = createSignal<ReportStatuses>()
+  const reportNote = createMemo(() => {
+    const current = reports()
+    return current ? reportCheckNote(current.checked) : undefined
+  })
+
   const step = createMemo(() => deletionStep(deleting(), account().deletion))
   const typedMatches = createMemo(() => sameEmail(typed(), account().email))
 
@@ -57,6 +65,13 @@ export function SettingsAccountV2(props: { onUsage: () => void }) {
     }))
     if (newest()) setCodium(next)
   }
+
+  onMount(() => {
+    void platform.reports
+      ?.status()
+      .then(setReports)
+      .catch(() => undefined)
+  })
 
   onMount(() => {
     const vectorAccount = platform.vectorAccount
@@ -435,6 +450,39 @@ export function SettingsAccountV2(props: { onUsage: () => void }) {
             <CodiumPurchase status={codium()} billing={billing} />
           </Show>
           <CodiumBillingStatus billing={billing} plan={codium()?.plan?.id} />
+        </div>
+      </Show>
+
+      <Show when={reports()?.reports.length}>
+        <div class="settings-account-section" data-component="settings-account-reports">
+          <div class="settings-account-section-head">
+            <div>
+              <h3>Your reports</h3>
+              <p>Bug reports you sent from this computer in the last 180 days, and what became of each.</p>
+            </div>
+          </div>
+          <ul class="settings-account-reports">
+            <For each={reports()?.reports ?? []}>
+              {(report) => (
+                <li>
+                  <span class="settings-account-report-title">{report.title || "Bug report"}</span>
+                  <span class="settings-account-muted">
+                    Sent {ModelPlanStatus.formatDate(report.sentAt)} · {reportStatusLabel(report)}
+                    <Show when={report.status === "fixed" && shortCommit(report.commit)}>
+                      {(commit) => <> · commit {commit()}</>}
+                    </Show>
+                  </span>
+                </li>
+              )}
+            </For>
+          </ul>
+          <Show when={reportNote()}>
+            {(note) => (
+              <p role="status" class="settings-account-muted">
+                {note()}
+              </p>
+            )}
+          </Show>
         </div>
       </Show>
 

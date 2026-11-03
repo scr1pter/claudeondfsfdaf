@@ -541,3 +541,41 @@ The shared browser action module validates explicit request/response shapes and 
   computer's Codium responses and days with Codium work since the period's first date, from the local usage summary.
   The app does not know the previous period's start, so it does not recap the last one. Local dates are compared with
   the period's first UTC date, so the first day can be off by the hours between UTC and local time.
+
+## A33 report tracker (2 Nov 2026)
+
+- **What a record holds.** The contract says "metadata only". A record holds when the report arrived, its status (and,
+  for a fix, the release and commit) and the plan tag. The app version and channel are left out so the record matches
+  the A30 privacy draft (`#report-tracking`). The account link is not in the record: it is a set,
+  `reports:acct:<sha256 of the account id>`, kept as long as the reports and used only for deletion.
+- **Ids** are `r_` and 26 letters of lower-case RFC 4648 base32 (`a-z2-7`).
+- **The optional account token.** With an `Authorization` header, it must be a valid, unrevoked `vct_` account token,
+  else 401, as other account routes answer run tokens (S3). The desktop sends the report again without the token after
+  a 401, so a report is never lost to an expired token. The tag and limit come from the stored snapshot alone (no
+  on-demand reconcile, so no Stripe call), and only while it is active or renewing (§4.4's "Report tag" row).
+- **Limits.** Without a sign-in: 5 an hour per address, unchanged. Signed in: per account, 5 without an active plan,
+  else the plan's `reports.perHour`. Signed-in requests also count against 60 an hour per address, above every plan's
+  limit, so many free accounts behind one address cannot flood the inbox. The reply-address limit (3 a day) still
+  applies to everyone.
+- **Read first** is the subject tag from the snapshot's caps, not gated by the perk listing (listing is display only,
+  as `codium-perks.ts` says). `reports-first` had no readiness check, so it could never be listed. It now has one: the
+  report email is configured. This is an edit to `api/_lib/codium-perks.ts`, outside A33's file list.
+- **Statuses and the status route.** The statuses are `received`, `read`, `fixing`, `fixed` and `closed`; `fixed` needs
+  the release. The route is `POST /api/support/reports {ids}`: ids go in the body, never the address. It needs no
+  sign-in, because the id is the credential and the tracker is free. It takes at most 100 ids, 60 requests an hour per
+  address, and leaves out ids without a record.
+- **Mode prefix.** Records use `codiumKey()` (§4.6). Production without a live Stripe key runs in test mode, so reports
+  sent before the owner configures the live key sit under the `test` prefix, and a live server no longer reads them.
+  The server stays strict. The owner's script looks in both prefixes unless `--mode` is given.
+- **A new Vector Local source.** Reading statuses is a new automatic connection, so it is registered first, as the
+  registry requires: `report-status` (purpose `support`, blocked under Vector Local and allowable). It is added to
+  `packages/core/src/local-mode/sources.ts` and the app's label list. The send itself keeps its existing main-process
+  fetch.
+- **Files outside A33's list:**
+  - API: `api/_lib/support-reports.ts` (new).
+  - Shared: `codium-perks.ts`, the Vector Local source and its label.
+  - App: `context/highlights-model.ts` (the changelog parsing moved out of `highlights.tsx`, unchanged, so it can be
+    tested), `support-reports.ts` (types and words), `context/platform.tsx`, `dialog-report-bug.tsx` (one line pointing
+    to Settings when tracked), `settings-account.css`.
+  - Desktop: `renderer/index.tsx`, preload types.
+  - Tests: the root test fixture and a desktop test.
