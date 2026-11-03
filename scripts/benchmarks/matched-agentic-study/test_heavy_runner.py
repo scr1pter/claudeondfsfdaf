@@ -92,7 +92,7 @@ class HeavyRunnerTests(unittest.TestCase):
         meter.role_row = lambda adapter, role: {"id": "synthetic-" + role, "agent_path": "/root/" + role}
         meter.completions = lambda adapter, role: round_index
         adapter = SimpleNamespace(runtime=runtime, smoke_invocation=round_index, options=SimpleNamespace(app_port=4123))
-        tools = [{"type": "function", "name": name} for name in ("task", "task_manage", "bash", "spawn_agent", "wait_agent", "followup_task")]
+        tools = [{"type": "function", "name": name} for name in ("task", "task_manage", "bash", "read", "spawn_agent", "wait_agent", "followup_task")]
         tools.append({"type": "namespace", "name": "functions", "tools": [{"type": "custom", "name": "exec"}]})
         return meter, adapter, tools
 
@@ -175,9 +175,13 @@ class HeavyRunnerTests(unittest.TestCase):
         options = SimpleNamespace(bun=self.directory / "bun", codex_bin=self.directory / "codex", vector_root=self.directory)
         binding = {"providerBase": "http://127.0.0.1:43210", "requestToken": "synthetic-alias"}
         home = self.directory / "home"
-        env = runner.team_environment(self.common, "vector", {}, home, binding, profile=heavy.PROFILE)
+        screenshots = home.parent / "browser-driver/screenshots"
+        env = runner.team_environment(self.common, "vector", {}, home, binding, profile=heavy.PROFILE, screenshot_directory=screenshots)
         config = json.loads(env["VECTOR_CONFIG_CONTENT"])
         self.assertNotIn("budget", config)
+        self.assertEqual(config["permission"]["external_directory"], {"*": "deny", str(screenshots.resolve() / "*"): "allow"})
+        with self.assertRaises(PolicyError):
+            runner.team_environment(self.common, "vector", {}, home, binding, profile=heavy.PROFILE, screenshot_directory=home.parent)
         coordinator = config["agent"]["backend_coordinator"]["permission"]["task"]
         self.assertEqual(coordinator, {"*": "deny", "backend_api": "allow", "backend_data": "allow"})
         self.assertEqual(config["agent"]["backend_api"]["permission"]["task"], "deny")

@@ -106,6 +106,18 @@ class FakeMeter(smoke.FakeMeter):
         if role != "lead":
             self.child_stages[key] = stage + 1
             return [smoke.execution_call(adapter.runtime, tools, "Write-Output 'smoke-specialist-complete'")] if stage == 0 else []
+        def screenshot():
+            action = json.dumps({"action": "screenshot", "filename": "proof-round" + str(round_index) + ".png"}, separators=(",", ":"))
+            command = "'" + action + "' | & $env:NODE_EXE $env:BROWSER_DRIVER_CLIENT --endpoint $env:BROWSER_DRIVER_ENDPOINT"
+            return [smoke.execution_call(adapter.runtime, tools, command)]
+        def preview():
+            path = adapter.directory / "browser-driver/screenshots" / ("proof-round" + str(round_index) + ".png")
+            if adapter.runtime == "vector":
+                return [call("read", {"filePath": str(path)})]
+            found = named_tool(tools, "exec")
+            require(found is not None and found[0].get("type") == "custom", "native image preview capability absent")
+            return [{"type": "custom_tool_call", "name": found[0]["name"], "namespace": found[1],
+                     "input": "const result = await tools.view_image(" + json.dumps({"path": str(path)}) + "); image(result.image_url);"}]
         if adapter.runtime == "vector":
             self.child_stages[key] = stage + 1
             if round_index == 1:
@@ -115,10 +127,14 @@ class FakeMeter(smoke.FakeMeter):
                 if stage == 3: return tasks(("qa_specialist",))
                 if stage == 4: return tasks(("team_judge",))
                 if stage == 5: return [smoke.execution_call("vector", tools, smoke.shell_command(adapter.options.app_port))]
+                if stage == 6: return screenshot()
+                if stage == 7: return preview()
                 return []
             if stage == 0: return tasks(("qa_specialist",), resume=True)
             if stage == 1: return tasks(("team_judge",), resume=True)
             if stage == 2: return [smoke.execution_call("vector", tools, smoke.shell_command(adapter.options.app_port))]
+            if stage == 3: return screenshot()
+            if stage == 4: return preview()
             return []
         if round_index == 1:
             if stage in (1, 3, 5):
@@ -132,6 +148,8 @@ class FakeMeter(smoke.FakeMeter):
             if stage == 2: return tasks(("qa_specialist",))
             if stage == 4: return tasks(("team_judge",))
             if stage == 6: return [smoke.execution_call("codex", tools, smoke.shell_command(adapter.options.app_port))]
+            if stage == 7: return screenshot()
+            if stage == 8: return preview()
             return []
         if stage in (1, 3):
             waiting = wait(("qa_specialist",) if stage == 1 else ("team_judge",), wanted=2)
@@ -142,6 +160,8 @@ class FakeMeter(smoke.FakeMeter):
         if stage == 0: return tasks(("qa_specialist",), resume=True)
         if stage == 2: return tasks(("team_judge",), resume=True)
         if stage == 4: return [smoke.execution_call("codex", tools, smoke.shell_command(adapter.options.app_port))]
+        if stage == 5: return screenshot()
+        if stage == 6: return preview()
         return []
 
 
@@ -206,13 +226,14 @@ def main(argv=None):
             "allSolHighAutoLow": all(row["model"] == MODEL and row["reasoning"].get("effort") == "high"
                 and row["reasoning"].get("summary") == "auto" and row["verbosity"] == "low" and row["outputCeiling"] == 32000 for row in meter.rows),
             "capabilityEvidence": capabilities, "backgroundEvidence": background,
+            "nativeImagePreviewRequests": sum(row.get("inputImageCount", 0) > 0 for row in meter.rows),
             **{key: result.get(key) for key in ("functionalVerdict", "nativeAuditVerdict", "stopReason", "reviewRequired",
                 "settlementComplete", "providerRequests", "autonomousActorsAdmitted", "nativeAudit")}}
         summary["qualificationPassed"] = (summary["allSolHighAutoLow"] and summary["unchangedRealSeed"]
             and result.get("functionalVerdict") == "product_failure" and result.get("stopReason") == "product_failure_after_one_same_session_repair"
             and result.get("settlementComplete") is True and result.get("reviewRequired") is False
             and result.get("nativeAuditVerdict") == "passed" and result.get("autonomousActorsAdmitted") == 7
-            and result.get("providerRequests") == len(meter.receipts) and capabilities["successfulActualShellApiAndCommonBrowser"]
+            and result.get("providerRequests") == len(meter.receipts) and summary["nativeImagePreviewRequests"] > 0 and capabilities["successfulActualShellApiAndCommonBrowser"]
             and capabilities["fixtureApiRequests"] > 0 and capabilities["fixtureBrowserPageRequests"] > 0
             and (options.runtime != "vector" or background["backgroundTaskLaunches"] > 0 and background["ownedCompletionNotifications"] > 0))
         common.save(options.out / "smoke-summary.json", summary)
