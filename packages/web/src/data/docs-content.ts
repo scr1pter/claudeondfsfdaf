@@ -47,7 +47,7 @@ export const runGuardRows = [
   ],
   [
     "Unpriced is not free",
-    "With a dollar cap set, a model with no catalog price stops after 40 unpriced steps, because its spend cannot be counted. A step whose provider reported what it charged, as OpenRouter does, counts at that amount. Vector Codium steps spend Codium credits, whose charge stays on vectordev.ai, so they count as unpriced steps. Free models are labelled free, and steps a plan pays for, such as a ChatGPT sign-in, are not counted in dollars; step and loop limits still hold both.",
+    "With a dollar cap set, a model with no catalog price stops after 40 unpriced steps, because its spend cannot be counted. A step whose provider reported what it charged, as OpenRouter does, counts at that amount. Vector Codium steps are not counted in dollars and do not count toward the 40 unpriced steps. Free models are labelled free, and steps a plan pays for, such as a ChatGPT sign-in, are not counted in dollars; step and loop limits still hold all of these.",
   ],
   [
     "Loops pause themselves",
@@ -492,5 +492,10 @@ export const faqs = [
     question: "Is Vector free?",
     answer:
       "Yes. Create a free Vector account with Google or email, then download the desktop app from your account page. The same account signs in the terminal agent. Connect your own model provider to start; that provider bills its own usage.",
+  },
+  {
+    question: "My Codium month is used up",
+    answer:
+      "Vector Codium pauses until your plan renews; Settings → Usage, Settings → Account and vector codium show the renewal date. Your own keys, Vector Local and free models keep working in the meantime. There are no top-ups or overage charges. To keep going on Codium now, upgrade on your account page: the bigger plan starts a new month today, charged in full, and keeps what was left of this one. If Codium stopped for the rest of the day instead, your plan's daily limit was reached; it resets at 00:00 UTC.",
   },
 ]

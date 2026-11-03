@@ -179,8 +179,8 @@ export function AccountPage(props: { preview?: AccountState }) {
               <>
                 <p className="acct-fine">
                   This cannot be undone. Vector deletes your account and sign-in and stops the CLI tokens this account
-                  has issued. Any Vector Codium plan ends at once, and the credits left, this month's or purchased, can
-                  no longer be used. Repositories on your own machine are not touched, and neither is anything you have
+                  has issued. Any Vector Codium plan ends at once, and what is left of this month can no longer be used.
+                  Repositories on your own machine are not touched, and neither is anything you have
                   already published to your own cloud accounts.
                 </p>
                 <label className="acct-danger-label" htmlFor="acct-delete-confirm">

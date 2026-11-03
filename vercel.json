@@ -205,6 +205,16 @@
       "permanent": true
     },
     {
+      "source": "/docs/plans",
+      "destination": "/docs/codium",
+      "permanent": false
+    },
+    {
+      "source": "/docs/pricing",
+      "destination": "/docs/codium",
+      "permanent": false
+    },
+    {
       "source": "/docs/cli-terminal",
       "destination": "/docs/terminal-agent",
       "permanent": true
