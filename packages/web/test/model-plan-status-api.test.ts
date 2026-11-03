@@ -3,7 +3,7 @@ import { createServer } from "node:http"
 import type { AddressInfo } from "node:net"
 import { mintCliToken } from "../../../api/_lib/cli-token"
 import { codiumKey } from "../../../api/_lib/codium-keys"
-import { SWITCH_CACHE_MS } from "../../../api/_lib/codium-switches"
+import { SWITCH_CACHE_MS, writeDisabledItem } from "../../../api/_lib/codium-switches"
 import { buildSnapshot, statusCacheKey } from "../../../api/_lib/codium-snapshot"
 import {
   holdPool,
@@ -23,7 +23,7 @@ import {
 import { codiumBillingConfigProblems, type ModelPlanModel } from "../../../api/_lib/model-plan-config"
 import { publicEntitlements } from "../../../packages/schema/src/codium-entitlements"
 import type { CodiumPlan } from "../../../packages/schema/src/codium-plan"
-import configHandler from "../../../api/model-plans/config"
+import { handlePublicCodiumConfig } from "../../../api/model-plans/config"
 import { readModelPlanStatus } from "../src/lib/model-plans"
 import { ModelPlanStatus } from "@vectordevai/core/model-plan-status"
 import { ModelPlanStatus1_99_111 } from "../../core/test/fixture/model-plan-status-1.99.111"
@@ -60,6 +60,7 @@ beforeAll(async () => {
 })
 beforeEach(() => {
   restore = codiumTestEnvironment({
+    CODIUM_LISTED_PERKS: undefined,
     VECTOR_CLI_TOKEN_SECRET: SECRET,
     SUPABASE_URL: "https://auth.fixture.invalid",
     SUPABASE_PUBLISHABLE_KEY: "fixture-publishable",
@@ -477,6 +478,32 @@ describe("the 30-second cache", () => {
     expect((await read(token)).body.plan.cancelAtPeriodEnd).toBe(true)
   })
 
+  test("a changed listing invalidates cached entitlement fields and meters without changing the snapshot", async () => {
+    const { token, fakes, id } = await seed("active-paid")
+    process.env.CODIUM_LISTED_PERKS = "remote"
+    const meters = createStatusMeterRegistry()
+    meters.register("remote", "remote", async () => ({ computers: 1, limit: 1 }))
+    current.options = { ...served, meters, perks: { services: { remote: () => true } } }
+    const first = (await read(token)).body
+    expect(first.listed).toEqual(["remote"])
+    expect(first.entitlements.remote).toEqual({ computers: 1 })
+    expect(first.meters.remote).toEqual({ computers: 1, limit: 1 })
+    const version = JSON.parse(fakes.store.get(statusCacheKey(id))!).version
+    process.env.CODIUM_LISTED_PERKS = ""
+    const hidden = (await read(token)).body
+    expect(hidden.listed).toEqual([])
+    expect(hidden.entitlements).not.toHaveProperty("remote")
+    expect(hidden.meters).toBeUndefined()
+    expect(JSON.parse(fakes.store.get(statusCacheKey(id))!).version).toBe(version)
+    process.env.CODIUM_LISTED_PERKS = "remote"
+    expect((await read(token)).body.entitlements.remote).toEqual({ computers: 1 })
+    await writeDisabledItem("perks-off", "remote", true, "owner", fakes.fetcher)
+    const killed = (await read(token)).body
+    expect(killed.listed).toEqual([])
+    expect(killed.entitlements).not.toHaveProperty("remote")
+    expect(JSON.parse(fakes.store.get(statusCacheKey(id))!).version).toBe(version)
+  })
+
   test("an answer computed before a reconcile and stored after it is never served for the new snapshot", async () => {
     const { fixture, fakes, token, id } = await seed("active-paid")
     // The status read stops just before it stores its answer; a reconcile then writes a new snapshot and clears the
@@ -565,7 +592,7 @@ describe("meters", () => {
     })
     expect(await registry.read(snapshot, ["ship-desk"], fetch)).toEqual({ shipDesk: { used: 0.5 } })
 
-    // Through the route: no perk is listed before A27, so no meter shows.
+    // Through the route: deployment intent is empty, so no meter shows.
     const { token } = await seed("active-paid")
     current.options = { ...served, meters: registry }
     const body = (await read(token)).body
@@ -634,7 +661,10 @@ describe("the forecast's hiding rules", () => {
 // /api/model-plans/config answer, so a later change to that answer cannot drop installed apps' plan offers unnoticed.
 describe("the public configuration, as released Vector reads it", () => {
   test("Vector 1.99.111 and 1.99.112 read the real configuration with sales open and closed", async () => {
-    const config = createServer((request, response) => void configHandler(request as never, response as never))
+    const fakes = codiumFakes()
+    const config = createServer(
+      (request, response) => void handlePublicCodiumConfig(request, response, fakes.fetcher, served),
+    )
     await new Promise<void>((resolve) => config.listen(0, "127.0.0.1", resolve))
     const url = `http://127.0.0.1:${(config.address() as AddressInfo).port}/api/model-plans/config`
     const send = (_url: string, init: RequestInit) => fetch(url, init)

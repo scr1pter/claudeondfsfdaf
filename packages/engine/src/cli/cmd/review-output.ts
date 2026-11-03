@@ -1,7 +1,7 @@
 import { Billing } from "@vectordevai/schema/billing"
 import type { ReviewOutcome, ReviewPass } from "@vectordevai/core/review/types"
 
-function codiumPass(pass: ReviewPass, fallback = false) {
+export function codiumPass(pass: ReviewPass, fallback = false) {
   return (
     pass.costKind === "codium" ||
     Billing.isCodium(pass.model.split("/")[0]) ||
@@ -15,10 +15,12 @@ export function reviewForOutput(outcome: ReviewOutcome) {
   const only = outcome.cost?.kind === "codium"
   const codium =
     only ||
+    outcome.cost?.codium ||
     models.some((model) => Billing.isCodium(model.split("/")[0])) ||
     outcome.passes?.some((pass) => codiumPass(pass, only))
   if (!codium) return outcome
   const own =
+    (outcome.cost?.codium === true && outcome.cost.kind !== "codium") ||
     outcome.passes?.some((pass) => !codiumPass(pass, only)) ||
     models.some((model) => model.includes("/") && !Billing.isCodium(model.split("/")[0]))
   return {
@@ -27,22 +29,27 @@ export function reviewForOutput(outcome: ReviewOutcome) {
       ? {
           // A legacy mixed aggregate cannot partition token categories. Its own dollars remain valid and each own
           // pass below retains its known tokens; do not invent a split for the aggregate.
-          cost: own
-            ? {
-                kind: outcome.cost.kind,
-                model: outcome.cost.model,
-                costUsd: outcome.cost.costUsd,
-                billing: "codium",
-                ...(outcome.cost.usageMissing ? { usageMissing: true } : {}),
-                ...(outcome.cost.partial ? { partial: true } : {}),
-              }
-            : { kind: "codium", model: outcome.cost.model },
+          cost:
+            own && !only
+              ? {
+                  kind: outcome.cost.kind,
+                  model: outcome.cost.model,
+                  costUsd: outcome.cost.costUsd,
+                  billing: "codium",
+                  ...(outcome.cost.usageMissing ? { usageMissing: true } : {}),
+                  ...(outcome.cost.partial ? { partial: true } : {}),
+                }
+              : { kind: "codium", model: outcome.cost.model },
         }
       : {}),
     ...(outcome.passes
       ? {
           passes: outcome.passes.map((pass) =>
-            codiumPass(pass, only) ? { name: pass.name, model: pass.model, costKind: "codium" } : pass,
+            codiumPass(pass, only)
+              ? { name: pass.name, model: pass.model, costKind: "codium" }
+              : pass.usageMissing
+                ? { ...pass, input: undefined, output: undefined, cacheRead: undefined }
+                : pass,
           ),
         }
       : {}),

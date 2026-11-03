@@ -1,10 +1,16 @@
 /** @jsxImportSource react */
 import React from "react"
+import { CodiumCopy } from "@vectordevai/schema/codium-copy"
+import { CodiumPlan } from "@vectordevai/schema/codium-plan"
+import { ENTITLEMENTS } from "@vectordevai/schema/codium-entitlements"
 import { readAccountApiResponse } from "../../../lib/account-client"
 import {
-  modelPlanPurchasable,
-  modelPlanRedirect,
-  modelTopupPurchasable,
+  executeModelPlanAction,
+  modelPlanOffer,
+  modelPlanRecovery,
+  type ModelPlanAction,
+} from "../../../lib/model-plan-actions"
+import {
   readModelPlanConfig,
   readModelPlanStatus,
   type ModelPlanConfig,
@@ -16,15 +22,8 @@ export type ModelPlansPreview = { config: ModelPlanConfig; status: ModelPlanStat
 
 const count = new Intl.NumberFormat("en-US", { maximumFractionDigits: 1 })
 const price = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 })
-// The monthly balance is the share of the month's credits left and purchased credits are a state, never amounts,
-// which with the purchase price would reveal the dollars of model credit in them.
-const percent = new Intl.NumberFormat("en-US", { style: "percent", maximumFractionDigits: 0 })
-// Purchased credits pool every top-up ever bought, so they show a state rather than a share of that pool.
-const PURCHASED = {
-  available: "Purchased Codium credits available",
-  low: "Your purchased Codium credits are running low",
-  used: "Your purchased Codium credits are used up",
-} as const
+const date = new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeZone: "UTC" })
+const time = new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeStyle: "short", timeZone: "UTC" })
 
 export function ModelPlans(props: { accessToken: string; preview?: ModelPlansPreview | true }) {
   const preview: ModelPlansPreview | undefined =
@@ -34,10 +33,13 @@ export function ModelPlans(props: { accessToken: string; preview?: ModelPlansPre
           status: { active: false },
         }
       : props.preview
-  const [data, setData] = React.useState<ModelPlansPreview | undefined>(preview)
+  const [loaded, setData] = React.useState<ModelPlansPreview | undefined>(preview)
+  const data = preview ?? (props.accessToken ? loaded : undefined)
   const [loading, setLoading] = React.useState(!preview && Boolean(props.accessToken))
   const [error, setError] = React.useState("")
+  const [notice, setNotice] = React.useState("")
   const [action, setAction] = React.useState("")
+  const pending = React.useRef(false)
   const [refresh, setRefresh] = React.useState(0)
 
   React.useEffect(() => {
@@ -47,11 +49,16 @@ export function ModelPlans(props: { accessToken: string; preview?: ModelPlansPre
     setError("")
     setData(undefined)
     void Promise.all([
-      fetch("/api/model-plans/config", { headers: { accept: "application/json" }, signal: controller.signal })
+      fetch("/api/model-plans/config", {
+        headers: { accept: "application/json" },
+        cache: "no-store",
+        signal: controller.signal,
+      })
         .then((response) => readAccountApiResponse(response, "Vector could not load model plans. Try again."))
         .then(readModelPlanConfig),
       fetch("/api/model-plans/status", {
         headers: { accept: "application/json", authorization: `Bearer ${props.accessToken}` },
+        cache: "no-store",
         signal: controller.signal,
       })
         .then((response) => readAccountApiResponse(response, "Vector could not load your model plan. Try again."))
@@ -70,50 +77,83 @@ export function ModelPlans(props: { accessToken: string; preview?: ModelPlansPre
     return () => controller.abort()
   }, [props.accessToken, props.preview, refresh])
 
-  const openBilling = (kind: "checkout" | "portal" | "topup", plan?: string) => {
-    if (props.preview || !props.accessToken || action || !data) return
-    if (
-      kind === "checkout" &&
-      !data.config.plans.some((item) => item.id === plan && modelPlanPurchasable(data.config, item, data.status))
-    )
-      return
-    if (
-      kind === "topup" &&
-      !data.config.topups?.some((item) => item.id === plan && modelTopupPurchasable(data.config, item, data.status))
-    )
-      return
-    if (kind === "portal" && !data.status.active && !data.status.customer) return
-    setAction(plan ?? "portal")
-    setError("")
-    void fetch(`/api/model-plans/${kind}`, {
-      method: "POST",
-      headers: {
-        accept: "application/json",
-        "content-type": "application/json",
-        authorization: `Bearer ${props.accessToken}`,
-      },
-      body: JSON.stringify(kind === "checkout" ? { plan } : kind === "topup" ? { pack: plan } : {}),
-    })
-      .then((response) => readAccountApiResponse(response, "Vector could not open billing. Try again."))
-      .then((payload) => location.assign(modelPlanRedirect(payload, kind)))
-      .catch((cause) => setError(cause instanceof Error ? cause.message : "Vector could not open billing. Try again."))
-      .finally(() => setAction(""))
-  }
-
   const status = data?.status
   const monthly = status?.plan
-  const purchased = status?.purchased?.bought ? status.purchased : undefined
   const customer = status?.active || status?.customer
-  const defaultModel = data?.config.models?.[0]
+  const recovery = modelPlanRecovery(status)
+  const paused = monthly?.state === "paused"
+  const confirmPayment = monthly?.action === "confirm-payment" || monthly?.reason === "action_required"
+  const keeps =
+    !!monthly?.scheduled &&
+    !monthly.changeBlocked &&
+    !monthly.cancelAtPeriodEnd &&
+    (monthly.state === undefined || monthly.state === "active")
+  const caps = monthly && CodiumPlan.isPlanId(monthly.id) ? ENTITLEMENTS[monthly.id] : undefined
+  const listed = new Set(status?.listed)
+  const meters = status?.meters
+
+  const openBilling = (request: ModelPlanAction) => {
+    if (props.preview || !props.accessToken || pending.current || !data) return
+    if (request.kind === "checkout" || request.kind === "change") {
+      const offer = data.config.plans.find((item) => item.id === request.plan)
+      const available = offer && modelPlanOffer(data.config, offer, data.status)?.request
+      if (!available || available.kind !== request.kind || !("plan" in available) || available.plan !== request.plan)
+        return
+    }
+    if (request.kind === "keep" && !keeps) return
+    if (request.kind === "portal" && !customer) return
+    pending.current = true
+    setAction("plan" in request ? request.plan : request.kind)
+    setError("")
+    setNotice("")
+    void executeModelPlanAction(request, props.accessToken)
+      .then((result) => {
+        if ("url" in result) return location.assign(result.url)
+        setNotice(
+          "scheduled" in result
+            ? `${result.scheduled.name} will start on ${date.format(result.scheduled.at)}. Your current plan continues until then.`
+            : "Your scheduled change was removed. You’re keeping your current plan.",
+        )
+        setRefresh((value) => value + 1)
+      })
+      .catch((cause) =>
+        setError(cause instanceof Error ? cause.message : "Vector could not update billing. Try again."),
+      )
+      .finally(() => {
+        pending.current = false
+        setAction("")
+      })
+  }
+
+  const badge = !monthly
+    ? undefined
+    : paused
+      ? confirmPayment
+        ? "Confirm payment"
+        : monthly.reason === "payment_pending"
+          ? "Payment pending"
+          : "Payment failed"
+      : monthly.state === "frozen"
+        ? "On hold"
+        : monthly.state === "unknown"
+          ? "Plan status unavailable"
+          : monthly.state === "ended" || monthly.state === "none"
+            ? "Ended"
+            : monthly.cancelAtPeriodEnd
+              ? "Ending this period"
+              : "Active"
+
   return (
     <section className="acct-section model-plans" aria-labelledby="model-plans-heading" aria-busy={loading}>
       <div className="model-plans-heading">
         <h2 id="model-plans-heading">{data?.config.product ?? "Vector Codium"}</h2>
-        {monthly && (
-          <span className="model-plans-badge">{monthly.cancelAtPeriodEnd ? "Ending this period" : "Active"}</span>
+        {badge && (
+          <span className="model-plans-badge" data-state={monthly?.state}>
+            {badge}
+          </span>
         )}
       </div>
-      <p>The same coding model catalog for every budget. Subscribe monthly for Codium access.</p>
+      <p>Monthly coding plans without provider keys. Models and limits differ by plan.</p>
       {!props.accessToken && !preview && <p>Sign in to view your model plan.</p>}
       {loading && <p role="status">Loading model plans…</p>}
       {error && (
@@ -130,121 +170,242 @@ export function ModelPlans(props: { accessToken: string; preview?: ModelPlansPre
           )}
         </div>
       )}
+      {notice && (
+        <p className="model-plans-notice" role="status">
+          {notice}
+        </p>
+      )}
       {monthly && (
         <div className="model-plans-usage">
-          <h3>Monthly allowance · {data?.config.plans.find((item) => item.id === monthly.id)?.name ?? monthly.name}</h3>
-          <p className="model-plans-balance">
-            {monthly.left === undefined ? (
-              "Usage temporarily unavailable"
-            ) : (
-              <span>
-                <strong>{percent.format(monthly.left)}</strong> of this month&apos;s Codium credits remaining
-              </span>
+          <h3>Plan · {CodiumPlan.name(monthly.id) ?? monthly.name}</h3>
+          <dl className="model-plans-rows">
+            <UsageRow label="This month" left={monthly.left} />
+            <div>
+              <dt>{monthly.cancelAtPeriodEnd ? "Access ends" : "Renews"}</dt>
+              <dd>{date.format(monthly.renewsAt)}</dd>
+            </div>
+            {monthly.today && caps?.dailyShare !== null && (
+              <UsageRow
+                label="Today"
+                left={1 - monthly.today.used}
+                detail={`${monthly.today.reached ? "Today's limit is reached. " : ""}Resets ${time.format(monthly.today.resetsAt)} UTC.`}
+              />
             )}
-          </p>
-          {monthly.left !== undefined && (
-            <progress value={Math.round(monthly.left * 100)} max={100} aria-label="Monthly Codium credits remaining" />
+            {listed.has("github-agents") && caps && (
+              <UsageRow
+                label="Codium agent time"
+                left={meters?.cloudAgents && 1 - meters.cloudAgents.used}
+                detail={`${meters?.cloudAgents?.exhausted ? "This month's agent time is used up. " : ""}Codium agents run in your own repo, on your own Actions minutes.`}
+              />
+            )}
+            {listed.has("computer") && caps?.hosted && (
+              <UsageRow
+                label="Cloud computer hours"
+                left={meters?.hosted && 1 - meters.hosted.used}
+                detail={`Time on ${CodiumCopy.COMPUTER_LABEL} counts toward your month.`}
+              />
+            )}
+            {listed.has("vault") && !!caps?.vault.gb && (
+              <UsageRow
+                label="Vault storage"
+                left={
+                  meters?.vault && meters.vault.quotaBytes > 0
+                    ? Math.max(0, 1 - meters.vault.usedBytes / meters.vault.quotaBytes)
+                    : undefined
+                }
+                detail={
+                  meters?.vault
+                    ? `${count.format(meters.vault.usedBytes / 1e9)} GB used of ${count.format(meters.vault.quotaBytes / 1e9)} GB.`
+                    : undefined
+                }
+              />
+            )}
+            {listed.has("brain") && caps && (
+              <UsageRow
+                label="Brain helpers"
+                left={
+                  meters?.brain && meters.brain.cap > 0
+                    ? Math.max(0, 1 - meters.brain.used / meters.brain.cap)
+                    : undefined
+                }
+              />
+            )}
+            {listed.has("remote") && caps && (
+              <div>
+                <dt>Vector Remote</dt>
+                <dd>
+                  {meters?.remote
+                    ? `${meters.remote.computers} of ${meters.remote.limit} computers paired`
+                    : "Usage temporarily unavailable"}
+                </dd>
+              </div>
+            )}
+            {monthly.forecastDate && (
+              <div>
+                <dt>Forecast</dt>
+                <dd>
+                  At this pace, this month’s usage may run out around{" "}
+                  {date.format(new Date(`${monthly.forecastDate}T12:00:00Z`))}.
+                </dd>
+              </div>
+            )}
+            {monthly.ramp && caps && caps.rank >= 3 && (
+              <div>
+                <dt>Starting limits</dt>
+                <dd>
+                  New Max and Ultra plans start with lower limits while trust builds, until{" "}
+                  {date.format(monthly.ramp.until)}.
+                </dd>
+              </div>
+            )}
+          </dl>
+          {status?.velocity === "coming" && caps?.velocity && (
+            <div className="model-plans-coming">
+              <p>
+                <strong>{CodiumCopy.COMING.velocity.name}</strong>{" "}
+                <span className="model-plans-badge">{CodiumCopy.COMING.velocity.label}</span>
+              </p>
+              <p>{CodiumCopy.COMING.velocity.text}</p>
+            </div>
           )}
-          <p>
-            {monthly.cancelAtPeriodEnd ? "Access ends" : "Renews"}{" "}
-            {new Intl.DateTimeFormat("en-US", { dateStyle: "medium" }).format(monthly.renewsAt)}
-          </p>
+          {keeps && monthly.scheduled && (
+            <p className="model-plans-scheduled">
+              {CodiumPlan.name(monthly.scheduled.id) ?? monthly.scheduled.name} starts{" "}
+              {date.format(monthly.scheduled.at)}. Your current plan continues until then.
+            </p>
+          )}
+          {keeps && (
+            <button
+              className="acct-button acct-button-secondary"
+              type="button"
+              disabled={Boolean(action) || Boolean(props.preview)}
+              onClick={() => openBilling({ kind: "keep" })}
+            >
+              {action === "keep" ? "Saving…" : "Keep my plan"}
+            </button>
+          )}
         </div>
       )}
-      {purchased && (
-        <div className="model-plans-usage">
-          <h3>Purchased credits</h3>
-          <p className="model-plans-balance">
-            {purchased.state === undefined ? "Usage temporarily unavailable" : PURCHASED[purchased.state]}
-          </p>
-          <p>
-            Purchased credits carry forward and work without a subscription. Your monthly allowance is used first when
-            it can cover the request.
-          </p>
-        </div>
+      {paused && (
+        <p className="model-plans-notice">
+          {confirmPayment
+            ? "Your Codium plan and its perks are paused until you confirm payment."
+            : "Your Codium plan and its perks are paused until payment goes through. Update your payment method to continue."}{" "}
+          Your billing period has not been extended.
+        </p>
       )}
+      {monthly?.state === "frozen" && (
+        <p className="model-plans-notice">Your Codium plan is on hold. Contact Vector support.</p>
+      )}
+      {monthly?.state === "unknown" && (
+        <p className="model-plans-notice">
+          Refresh to check your plan status, or open billing to manage your subscription.
+        </p>
+      )}
+      {!paused && monthly?.state !== "frozen" && monthly?.state !== "unknown" && monthly && status?.empty && (
+        <p className="model-plans-notice">
+          This month’s Codium usage is used up. {monthly.cancelAtPeriodEnd ? "Access ends" : "It renews"} on{" "}
+          {date.format(monthly.renewsAt)}. Your own keys and free models keep working.
+          {data?.config.plans.some(
+            (offer) =>
+              CodiumPlan.rank(offer.id) > CodiumPlan.rank(monthly.id) &&
+              modelPlanOffer(data.config, offer, status)?.request?.kind === "change",
+          ) && " Upgrade and keep what’s left of this month."}
+        </p>
+      )}
+      {!paused &&
+        monthly?.state !== "frozen" &&
+        monthly?.state !== "unknown" &&
+        monthly &&
+        !status?.empty &&
+        status?.low && <p className="model-plans-notice">Less than 10% of this month’s Codium usage is left.</p>}
       {customer && (
         <div className="model-plans-manage">
           <button
             className="acct-button acct-button-secondary"
             type="button"
             disabled={Boolean(action) || Boolean(props.preview)}
-            onClick={() => openBilling("portal")}
+            onClick={() => openBilling(recovery?.request ?? { kind: "portal" })}
           >
-            {action === "portal" ? "Opening billing…" : "Manage subscription"}
+            {action === "portal" ? "Opening billing…" : (recovery?.label ?? "Manage subscription")}
           </button>
-          <p>Update payment details, view invoices, or cancel in billing.</p>
+          {!paused && <p>Update payment details, view invoices, or cancel in billing.</p>}
         </div>
       )}
       {data && !data.config.enabled && (
-        <p className="model-plans-notice">Vector Codium is coming soon. Purchasing is not available yet.</p>
+        <p className="model-plans-notice">
+          {customer
+            ? "New Codium purchases are not available right now."
+            : "Vector Codium is coming soon. Purchasing is not available yet."}
+        </p>
       )}
-      {data &&
-        [
-          {
-            kind: "checkout" as const,
-            title: "Monthly subscriptions",
-            description:
-              "Billed monthly. Cancel any time; access continues through your billing period. Monthly credits do not roll over.",
-            plans: data.config.plans,
-          },
-          {
-            kind: "topup" as const,
-            title: "One-time credit packs",
-            description:
-              "A single purchase. Credits carry forward, with no subscription required and no automatic top-ups.",
-            plans: data.config.topups ?? [],
-          },
-        ]
-          .filter((group) => group.plans.length > 0)
-          .map((group) => (
-            <div className="model-plans-offer" key={group.kind}>
-              <h3>{group.title}</h3>
-              <p>{group.description}</p>
-              <div className="model-plans-grid">
-                {group.plans.map((plan) => {
-                  const current = group.kind === "checkout" && status?.plan?.id === plan.id
-                  const available =
-                    group.kind === "checkout"
-                      ? modelPlanPurchasable(data.config, plan, status)
-                      : modelTopupPurchasable(data.config, plan, status)
-                  const tasks = plan.tasks?.[0]
-                  return (
-                    <article className="model-plan" key={plan.id} data-current={current || undefined}>
-                      <h4>{plan.name}</h4>
-                      <p className="model-plan-price">
-                        <strong>{price.format(plan.price)}</strong>
-                        <span>{group.kind === "checkout" ? "/month" : "once"}</span>
+      {status?.enabled === false && monthly && (
+        <p className="model-plans-notice">
+          Codium is temporarily unavailable. Your own keys and free models keep working.
+        </p>
+      )}
+      {data && !paused && data.config.plans.length > 0 && (
+        <div className="model-plans-offer">
+          <h3>Monthly subscriptions</h3>
+          <p>
+            Billed monthly. Cancel any time; access continues through your paid billing period. Unused monthly usage
+            does not roll over, except when you upgrade.
+          </p>
+          <div className="model-plans-grid">
+            {data.config.plans
+              .filter((plan) => CodiumPlan.isPlanId(plan.id))
+              .map((plan) => {
+                const offer = modelPlanOffer(data.config, plan, status)
+                const canonical = CodiumPlan.PLANS.find((item) => item.id === plan.id)!
+                const models = (data.config.models ?? []).filter(
+                  (model) =>
+                    (model.plans !== undefined || model.minPlan !== undefined) &&
+                    CodiumCopy.modelAvailable(model, canonical.id),
+                )
+                const defaultModel = models[0]
+                const index = defaultModel ? data.config.models!.findIndex((model) => model.id === defaultModel.id) : -1
+                const tasks = index < 0 ? undefined : plan.tasks?.[index]
+                return (
+                  <article className="model-plan" key={plan.id} data-current={offer?.current || undefined}>
+                    <h4>{canonical.name}</h4>
+                    <p className="model-plan-price">
+                      <strong>{price.format(canonical.price)}</strong>
+                      <span>/month</span>
+                    </p>
+                    {tasks && defaultModel && (
+                      <p className="model-plan-estimate">
+                        About {count.format(tasks[0])}–{count.format(tasks[1])} typical tasks a month with{" "}
+                        {defaultModel.name}
                       </p>
-                      {tasks && defaultModel && (
-                        <p className="model-plan-estimate">
-                          About {count.format(tasks[0])}–{count.format(tasks[1])} typical tasks
-                          {group.kind === "checkout" ? " a month" : ""} with {defaultModel.name}
-                        </p>
-                      )}
-                      <p className="model-plan-access">All Codium models included</p>
+                    )}
+                    {models.length > 0 ? (
+                      <p className="model-plan-access">
+                        Models on {canonical.name}: {models.map((model) => model.name).join(", ")}.
+                      </p>
+                    ) : (
+                      <p className="model-plan-access">
+                        See current model availability on <a href="/codium">Codium plans</a>.
+                      </p>
+                    )}
+                    {offer?.detail && <p className="model-plan-detail">{offer.detail}</p>}
+                    {offer && (
                       <button
                         className="acct-button"
                         type="button"
-                        disabled={!available || Boolean(action) || Boolean(props.preview)}
-                        onClick={() => openBilling(group.kind, plan.id)}
+                        disabled={!offer.request || Boolean(action) || Boolean(props.preview)}
+                        onClick={() => {
+                          if (offer.request) openBilling(offer.request)
+                        }}
                       >
-                        {current
-                          ? "Current plan"
-                          : group.kind === "checkout" && status?.active
-                            ? "Manage in billing"
-                            : action === plan.id
-                              ? "Opening checkout…"
-                              : available
-                                ? `Choose ${plan.name}`
-                                : "Coming soon"}
+                        {action === plan.id ? "Updating plan…" : offer.label}
                       </button>
-                    </article>
-                  )
-                })}
-              </div>
-            </div>
-          ))}
+                    )}
+                  </article>
+                )
+              })}
+          </div>
+        </div>
+      )}
       {data && (
         <div className="model-plans-terms">
           <p>
@@ -252,29 +413,11 @@ export function ModelPlans(props: { accessToken: string; preview?: ModelPlansPre
             repeated context also counts toward usage.
           </p>
           <p>
-            Monthly credits reset each billing period. No automatic overage charges or top-ups: usage stops when your
-            available credits cannot cover a request. Your own provider keys remain available separately.{" "}
-            <a href="/legal/terms#codium">Codium terms</a> explain billing and credit usage.
+            When the month is used up, Codium pauses until renewal. Your own provider keys and free models keep working.
+            No overage charges. <a href="/legal/terms#codium">Codium terms</a> explain billing and usage.
           </p>
-        </div>
-      )}
-      {data?.config.models && data.config.models.length > 0 && (
-        <div className="model-plans-catalog">
-          <h3>{data.config.enabled ? "The Codium model catalog" : "Planned model catalog"}</h3>
-          <ul className="model-plans-model-list">
-            {data.config.models.map((model) => (
-              <li key={model.id}>
-                <span className="model-plans-model-name">{model.name}</span>
-                {model.category && (
-                  <span className="model-plans-model-category">
-                    {model.category === "advanced" ? "Advanced" : "Everyday"}
-                  </span>
-                )}
-              </li>
-            ))}
-          </ul>
-          <p className="model-plans-catalog-note">
-            Every budget includes the same catalog. Model availability can change.
+          <p>
+            <a href="/codium">Compare Codium plans, models, and limits</a>
           </p>
         </div>
       )}
@@ -289,5 +432,35 @@ export function ModelPlans(props: { accessToken: string; preview?: ModelPlansPre
         </button>
       )}
     </section>
+  )
+}
+
+function UsageRow(props: { label: string; left: number | undefined; detail?: string }) {
+  // Round only once: the displayed used and left shares must add up to 100.
+  const left =
+    props.left === undefined || !Number.isFinite(props.left) || props.left < 0 || props.left > 1
+      ? undefined
+      : Math.round(props.left * 100)
+  const text = left === undefined ? "Usage temporarily unavailable" : `${100 - left}% used · ${left}% left`
+  return (
+    <div className="model-plans-usage-row">
+      <dt>{props.label}</dt>
+      <dd>
+        <span>{text}</span>
+        {left !== undefined && (
+          <meter
+            min={0}
+            max={100}
+            value={left}
+            aria-label={`${props.label} left`}
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={left}
+            aria-valuetext={text}
+          />
+        )}
+        {props.detail && <p>{props.detail}</p>}
+      </dd>
+    </div>
   )
 }

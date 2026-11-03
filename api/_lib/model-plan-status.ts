@@ -24,6 +24,7 @@ import { modelSpendStale } from "./codium-spend-ledger.js"
 import { readSwitch } from "./codium-switches.js"
 import { usdToMicro } from "./codium-pool.js"
 import { renewalGraceMinutes } from "./codium-limits.js"
+import { listedPerks, type ListedPerksOptions } from "./codium-perks.js"
 import { persistentStore } from "./persistent-store.js"
 import { handleApiError, json, requireMethod, type ApiRequest, type ApiResponse } from "./http.js"
 
@@ -31,7 +32,10 @@ const DAY_MS = 86_400_000
 /** §4.11: a status answer is kept 30 s per account, and reconcile clears it (codium-snapshot.ts WRITE). */
 export const STATUS_CACHE_MS = 30_000
 
-export type ModelPlanStatusOptions = ModelPlanCatalogOptions & { meters?: StatusMeterRegistry }
+export type ModelPlanStatusOptions = ModelPlanCatalogOptions & {
+  meters?: StatusMeterRegistry
+  perks?: ListedPerksOptions
+}
 
 /**
  * `GET /api/model-plans/status` (§4.11): the signed-in account's plan as its own screens show it, in shares of the month,
@@ -50,8 +54,7 @@ export async function handleModelPlanStatus(
     // Codium serves models only while it is deployed on and the owner's `codium` switch is on; chat, estimate and
     // `/models` refuse otherwise. Both are read beside the cached body, never kept in it.
     const enabled = modelPlansEnabled() && (await readSwitch("codium", fetcher)) === "on"
-    // Perks are listed from A27 on (`listedPerks`, §4.14); until then no perk, entitlement row or meter is listed.
-    const listed: PerkId[] = []
+    const listed = [...(await listedPerks(fetcher, options.perks))]
     if (!process.env.STRIPE_SECRET_KEY) {
       json(response, 200, {
         enabled,
@@ -91,7 +94,7 @@ async function accountStatus(
   const snapshot = await readEntitlement(id, fetcher, now)
   // Only while another request is still writing this account's first snapshot: read again shortly.
   if (!snapshot) throw modelSpendStale()
-  const cached = cachedBody(await persistentStore(["GET", statusCacheKey(id)], fetcher), snapshot.version)
+  const cached = cachedBody(await persistentStore(["GET", statusCacheKey(id)], fetcher), snapshot.version, listed)
   if (cached) return cached
   const status = await modelPlanStatus(id, fetcher, now, snapshot)
   const usable = status.active && (snapshot.state === "active" || snapshot.state === "renewing")
@@ -121,10 +124,14 @@ async function accountStatus(
 }
 
 const StatusCache = Schema.Struct({ version: Schema.Number, body: Schema.Record(Schema.String, Schema.Unknown) })
-function cachedBody(raw: unknown, version: number) {
+function cachedBody(raw: unknown, version: number, listed: readonly PerkId[]) {
   if (typeof raw !== "string") return undefined
   const decoded = Option.getOrUndefined(Schema.decodeUnknownOption(Schema.fromJsonString(StatusCache))(raw))
-  return decoded?.version === version ? decoded.body : undefined
+  // A runtime listing change must also drop cached entitlement fields and meters, without waiting for billing to
+  // create a new snapshot. Old bodies without a listing are recomputed rather than assumed current.
+  return decoded?.version === version && JSON.stringify(decoded.body.listed) === JSON.stringify(listed)
+    ? decoded.body
+    : undefined
 }
 
 /**

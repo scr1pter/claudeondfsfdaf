@@ -1,6 +1,6 @@
 ---
-import { publicModelPlans } from "../../../../api/_lib/model-plan-config"
-import { CodiumPricing, CodiumQuestions } from "../components/marketing/codium/CodiumPricing"
+import { publicCodiumTiers } from "../../../../api/_lib/codium-public"
+import { CodiumPricing } from "../components/marketing/codium/CodiumPricing"
 import "../components/marketing/codium/codium-pricing.css"
 import MarketingLayout from "../components/marketing/MarketingLayout.astro"
 import LanderMaterials from "../components/marketing/LanderMaterials.astro"
@@ -11,18 +11,15 @@ import { readModelPlanConfig } from "../lib/model-plans"
 
 export const prerender = true
 
-// The public view carries only names, prices, relative tiers and precomputed coarse task ranges.
-const pricing = codiumPricing(readModelPlanConfig(publicModelPlans()))
+// Builds never capture runtime perks or founding status; the island reads the current configuration on mount.
+const pricing = codiumPricing(readModelPlanConfig(await publicCodiumTiers(fetch, { runtime: false })))
 const prices = pricing.monthly.map((plan) => plan.price)
 ---
 
 <MarketingLayout
   title="Pricing · Vector Codium"
-  description={`Vector is free. Codium offers DeepSeek, Claude Haiku, GPT-6 Luna, Kimi and Gemini with monthly plans${prices.length ? ` from $${Math.min(...prices)} to $${Math.max(...prices)}` : ""}, with no automatic overages.`}
+  description={`Vector is free. Codium is Vector's monthly plan, from $${Math.min(...prices)} to $${Math.max(...prices)}: coding models without provider keys, with more usage on Max and Ultra. No top-ups or overage charges.`}
 >
-<script is:inline define:vars={{ topupsAvailable: pricing.topups.length > 0 }}>
-  document.documentElement.dataset.codiumMode = topupsAvailable && new URLSearchParams(location.search).get("type") === "topups" ? "topup" : "monthly";
-</script>
   <div class="cx-page">
     {/* The landing page's top bar and footer retain the same materials. */}
     <div class="vector-marketing cx-bar">
@@ -30,14 +27,7 @@ const prices = pricing.monthly.map((plan) => plan.price)
     </div>
 
     <main class="cx-main">
-      <section class="cx-section cx-pricing">
-        <div class="cx-container">
-          <h1 class="cx-type-xl">Pricing</h1>
-          <CodiumPricing client:load pricing={pricing} />
-        </div>
-      </section>
-
-      <CodiumQuestions client:load models={pricing.models} />
+      <CodiumPricing client:load pricing={pricing} />
 
       <section class="cx-section cx-cta">
         <div class="cx-container">

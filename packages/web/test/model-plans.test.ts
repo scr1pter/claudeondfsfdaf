@@ -186,14 +186,20 @@ describe("subscription configuration", () => {
 })
 
 describe("the public configuration route", () => {
-  test("carries the perks every surface may list, none before A27, and every in-repo decoder still reads it", async () => {
+  test("carries only listed perks and accepted models, and every in-repo decoder still reads it", async () => {
     names.forEach((name) => delete process.env[name])
     const server = createServer((request, response) => void config(request, response))
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
     const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/model-plans/config`
     const send = (_url: string, init: RequestInit) => fetch(url, init)
-    const body = await (await fetch(url)).json()
-    expect(body).toEqual({ ...publicModelPlans(), listed: [] })
+    const response = await fetch(url)
+    const body = await response.json()
+    expect(response.headers.get("cache-control")).toBe("public, max-age=0, s-maxage=60, stale-while-revalidate=30")
+    expect(body).toMatchObject({ product: "Vector Codium", enabled: false, listed: [], models: [] })
+    expect(body.plans.map((plan: { price: number }) => plan.price)).toEqual([10, 50, 100, 200])
+    expect(
+      body.plans.every((plan: { available: boolean; tasks: unknown[] }) => !plan.available && !plan.tasks.length),
+    ).toBe(true)
     expect(readModelPlanConfig(body)).toMatchObject({ enabled: false, plans: expect.any(Array) })
     expect(await ModelPlanStatus.fetchOffers(send)).toMatchObject({ enabled: false })
     expect(await ModelPlanStatus.salesOpen(send)).toBe(false)
