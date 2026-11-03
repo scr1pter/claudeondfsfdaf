@@ -197,7 +197,8 @@ def evaluation_overlay(options, original):
             "reviewed evaluator overlay manifest digest changed")
     require(manifest(options.evaluation_overlay) == reviewed, "evaluator overlay files changed")
     base = original["taskFiles"]
-    additions = {"overlay-provenance.json", "helper.diff", "project-navigation-control.cjs", "test_overlay.py", "OVERLAY.md"}
+    additions = {"overlay-provenance.json", "helper.diff", "project-navigation-control.cjs", "test_overlay.py", "OVERLAY.md",
+                 "materialize.py", "qualify.py"}
     if ".gitattributes" not in base:
         additions.add(".gitattributes")
     require(set(reviewed) == set(base) | additions, "overlay file inventory changed")
@@ -290,7 +291,7 @@ def main(argv=None):
     plan, original, summary, runtime, heavy, team, witness, common = build_plan(options)
     if not options.run:
         if options.write_plan:
-            roots = [options.original_plan.parent, options.team_runner_root,
+            roots = [options.out, options.original_plan.parent, options.team_runner_root,
                 runtime.vector_root, runtime.task_dir, runtime.common_runner_root, runtime.browser_driver_root,
                 Path(__file__).resolve().parents[3]]
             if options.evaluation_overlay:
