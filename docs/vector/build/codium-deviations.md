@@ -579,3 +579,58 @@ The shared browser action module validates explicit request/response shapes and 
     to Settings when tracked), `settings-account.css`.
   - Desktop: `renderer/index.tsx`, preload types.
   - Tests: the root test fixture and a desktop test.
+
+## A34 roadmap vote (2 Nov 2026)
+
+- **A fourth key.** §4.6 names `roadmap:<yyyy-qn>:{ballot,ballots,nominations}`. Ballots and nominations are kept until
+  the account is deleted (the A30 privacy draft, `#roadmap-votes`), so no expiry bounds which quarters hold an
+  account's data. `roadmap:quarters` (a set) lists every quarter that holds any, so deletion can find them all. A
+  nomination adds its quarter too, because Ultra can nominate in a quarter without a ballot.
+- **Voters are hashed.** The `ballots` and `nominations` hashes are keyed by a SHA-256 of the account id under a fixed
+  label, never by the id itself. Each value keeps the plan the account had when it voted or nominated, as the privacy
+  draft says. The draft's "with your account identifier" is true of a derived identifier; the legal read may want the
+  wording to say so.
+- **"SET NX per quarter"** is HSETNX on the quarter's `nominations` hash, one field per account. It gives the same atomic
+  one-per-quarter guarantee and keeps §4.6's key names.
+- **Counting.** Results are counted when read, with HVALS on the closed quarter's hash, so the fields (voters) never
+  leave the store. A ballot counts when it was cast before the close, for a candidate on the ballot, with a plan whose
+  `ENTITLEMENTS[plan].vote` is true (the plan kept with it). That plan is the one it was cast with, so a later downgrade
+  does not drop it. A deleted account's ballot drops out of a closed vote's totals too. A quarter with many thousands of
+  ballots would make each view read them all. If that becomes slow, cache the totals once the vote closes.
+- **Ties.** The contract does not say how ties are broken. A tie shows the totals and no winner until the owner records
+  one of the tied candidates with `script/roadmap-ballot.ts decide`, which works only after the close and with at least
+  20 ballots counted.
+- **Quarters and nominations.** A ballot belongs to one UTC calendar quarter and must open and close inside it, so at
+  most one ballot is ever open. Nominations made in a quarter are for the next ballot. The owner reads them with the
+  script and decides which go on it; none is added on its own. Settings says a nomination "goes to the team for the next
+  ballot".
+- **Undated copy is enforced.** `openBallot` refuses candidate copy that names a year, a month, a quarter, "soon" or
+  "next/this … release/month", so no ballot can show a date for a feature.
+- **Callers.** The route takes only a Vector account token (`vct_`, from the desktop or the CLI), because the vote lives
+  in the desktop's Settings. It takes no website session and no run token (S3). GET answers any signed-in account,
+  because results are only totals and the account's own choice. POST votes and nominates only from the snapshot (S1):
+  402/403/503 as `requireEntitlement` answers. Like A33's report tag, voting is not gated on the perk listing, which
+  `codium-perks.ts` keeps for display. The owner controls voting by publishing and closing ballots. The tab itself shows
+  only when the status's `entitlements.vote` is set, so only when `vote` is listed (H1).
+- **Listing.** `vote` had no readiness check, so it could never be listed. It now has one: the store is configured, its
+  only service. `packages/web/test/codium-public.test.ts` now expects `vote` among the listed perks when every perk is
+  listed with default services. The rest of that case leaves `vote` out of the list, so it still measures priority's
+  readiness alone.
+- **The tab.** It is "Roadmap vote" in the Personal group, right after Account. It is not v3's "Settings → Labs", because
+  Labs is never built and its pricing row is a pending owner decision. Settings reads the Codium status when it opens
+  while signed in, and again after a sign-in change or `codiumChanged()`, to decide whether to show the tab. That is one
+  more status read per Settings opening on the desktop. The free-workspace sentence on the results ("If the winning
+  feature adds to the free workspace, that part ships free for everyone.") comes from v3 item X.
+- **No new Vector Local source.** The desktop reads and sends the roadmap from `main/vector-account.ts` with the
+  account's sign-in, the same file and connection as the Codium status read (the registered `vector-account` source).
+  It runs only when the person opens the tab or acts in it.
+- **Files outside A34's list:**
+  - API: `api/_lib/roadmap.ts` (new), and `api/_lib/codium-perks.ts` (readiness).
+  - Desktop: `main/vector-account.ts`, `main/ipc.ts` and the preload, because the account token stays in the main
+    process.
+  - App: `vector-account.ts` (types), `roadmap-model.ts` and its test, and `settings-roadmap.css`.
+  - Tests: `settings-registry.test.ts` (16 pages, roadmap after account), the desktop `vector-account.test.ts`,
+    `test/roadmap-fixture.ts` and the `codium-public` expectation above.
+  - Docs: `docs/vector/MODEL-PLANS.md`.
+- **Deletion is wired in A57.** `eraseAccountBallots(account)` is ready and tested. A57's erase step calls it, as it does
+  A33's `eraseAccountReports`.

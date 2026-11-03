@@ -42,6 +42,18 @@ export type VectorBillingResult =
 
 export type VectorDeletionResult = { deleted: true } | { deleted: false; message: string }
 
+/**
+ * What Settings > Roadmap vote asks vectordev.ai (WP A34): the roadmap as this account sees it, a vote on this quarter's
+ * ballot, or Ultra's one nomination of the quarter. vectordev.ai decides who may vote from the account's plan.
+ */
+export type VectorRoadmapRequest =
+  | { kind: "read" }
+  | { kind: "vote"; quarter: string; choice: string }
+  | { kind: "nominate"; quarter: string; title: string; detail?: string }
+
+/** vectordev.ai's answer, which the app decodes (settings-v2/roadmap-model.ts), or why there is none. */
+export type VectorRoadmapResult = { ok: true; roadmap: unknown } | { ok: false; code?: string; message: string }
+
 export type VectorAccountPlatform = {
   status(): Promise<VectorAccountStatus>
   start(): Promise<VectorAccountStatus>
@@ -61,6 +73,8 @@ export type VectorAccountPlatform = {
   cancelDeletion?(): Promise<VectorAccountStatus>
   /** Deletes the account with the confirmation the desktop holds; `email` is what the person typed. */
   deleteAccount?(email: string): Promise<VectorDeletionResult>
+  /** Reads the roadmap vote, votes or nominates, with the account token kept in the desktop main process. */
+  roadmap?(request: VectorRoadmapRequest): Promise<VectorRoadmapResult>
   onChange(listener: (status: VectorAccountStatus) => void): () => void
 }
 

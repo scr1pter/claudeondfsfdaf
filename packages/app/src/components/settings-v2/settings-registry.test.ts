@@ -3,9 +3,10 @@ import { filterSettingsGroups, isSettingsTab, settingsGroups, settingsItemCount 
 
 describe("settings registry", () => {
   test("keeps every settings page reachable", () => {
-    expect(settingsItemCount(settingsGroups)).toBe(15)
+    expect(settingsItemCount(settingsGroups)).toBe(16)
     expect(settingsGroups.flatMap((group) => group.items.map((item) => item.value))).toEqual([
       "account",
+      "roadmap",
       "general",
       "memory",
       "local",
@@ -94,6 +95,15 @@ describe("settings registry", () => {
     for (const query of ["trust", "vector.json", "repository settings", "project settings"])
       expect(filterSettingsGroups(query).flatMap((group) => group.items.map((item) => item.value))).toEqual(["trust"])
     expect(isSettingsTab("trust")).toBe(true)
+  })
+
+  test("finds the Roadmap vote by what people call it, right after Account (WP A34)", () => {
+    const personal = settingsGroups[0]!.items.map((item) => item.value)
+    expect(personal.indexOf("roadmap")).toBe(personal.indexOf("account") + 1)
+    expect(settingsGroups[0]!.items.find((item) => item.value === "roadmap")?.label).toBe("Roadmap vote")
+    for (const query of ["roadmap", "vote", "ballot", "nominate"])
+      expect(filterSettingsGroups(query).flatMap((group) => group.items.map((item) => item.value))).toEqual(["roadmap"])
+    expect(isSettingsTab("roadmap")).toBe(true)
   })
 
   test("returns the complete registry for whitespace", () => {

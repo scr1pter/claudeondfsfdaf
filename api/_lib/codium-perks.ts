@@ -4,6 +4,7 @@ import { foundingWindowOpen } from "./codium-founding.js"
 import { githubAppConfiguration } from "./github-app.js"
 import { modelPlansEnabled } from "./model-plan-config.js"
 import { readDisabledSet, readSwitch, type SwitchName } from "./codium-switches.js"
+import { roadmapConfigured } from "./roadmap.js"
 import { reportEmailConfigured } from "./support-reports.js"
 
 export type PerkServices = Readonly<Partial<Record<PerkId, (fetcher: typeof fetch) => boolean | Promise<boolean>>>>
@@ -32,6 +33,8 @@ export const perkServices: PerkServices = {
   founding: (fetcher) => foundingWindowOpen(fetcher),
   // WP A33: reports are read first only where they reach the owner, so the report email must be configured.
   "reports-first": () => reportEmailConfigured(),
+  // WP A34: the roadmap vote keeps its ballots in the store, its only service.
+  vote: () => roadmapConfigured(),
 }
 
 const switches: Readonly<Partial<Record<PerkId, SwitchName>>> = {

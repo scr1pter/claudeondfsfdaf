@@ -333,6 +333,7 @@ const api: ElectronAPI = {
     confirmDeletion: () => ipcRenderer.invoke("vector-account-confirm-deletion"),
     cancelDeletion: () => ipcRenderer.invoke("vector-account-cancel-deletion"),
     deleteAccount: (email) => ipcRenderer.invoke("vector-account-delete", email),
+    roadmap: (request) => ipcRenderer.invoke("vector-account-roadmap", request),
     onChange: (callback) => {
       const handler = (_event: unknown, status: Parameters<typeof callback>[0]) => callback(status)
       ipcRenderer.on("vector-account-changed", handler)

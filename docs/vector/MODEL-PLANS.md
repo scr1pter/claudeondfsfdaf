@@ -96,6 +96,16 @@ A won dispute returns to the Stripe-derived state with the same `meterEpoch`; a 
 - **The end.** Founding ends when the subscription carrying it is deleted (`customer.subscription.deleted`) and no other live subscription carries the token. A resumed scheduled cancellation, a failed payment, an unpaid plan and an upgrade's supersede keep it. An ended record is kept, so the account never gets a second number; account deletion erases it (P5).
 - **Founders page.** Founders may list themselves, with an optional display name (1–40 letters, digits, spaces, `.`, `'`, `_`, `-`), from the account page (`GET|POST /api/account/founding`). `/founders` shows them by number; `GET /api/founders` answers only with the page's random slug (in the address's fragment, sent as `x-vector-founders`) until 30 founders are listed, then to anyone. `?badge=<number>` serves that founder's SVG badge. The `founding` provisioner hides a frozen plan's entry and erases a closing account's; it runs while `founding` is in `CODIUM_LISTED_PERKS`, so keep it there after the window closes.
 
+### Roadmap vote
+
+`api/_lib/roadmap.ts` and `GET|POST /api/roadmap` (WP A34), shown in the desktop's Settings → Roadmap vote when the status lists the vote for the plan (`entitlements.vote`).
+
+- **Who.** Max and Ultra vote while the plan is active or renewing; Ultra also nominates. The route decides from the snapshot (`requireEntitlement(account, "vote" | "nominate")`), never from the client, and takes only a Vector account token (`vct_`), never a run token.
+- **Ballots.** Each UTC quarter's ballot (`roadmap:<yyyy-qn>:ballot`) opens and closes inside that quarter. One ballot per account (`roadmap:<yyyy-qn>:ballots`, a hash keyed by a SHA-256 of the account id), changeable until the close. One nomination per Ultra account a quarter (`roadmap:<yyyy-qn>:nominations`, written with HSETNX), for the owner to consider for the next ballot. `roadmap:quarters` lists every quarter holding any of these.
+- **Results.** After the close, as totals, once at least 20 ballots are counted. A ballot counts when it was cast before the close, for a candidate on the ballot, with a plan that included the vote when it was cast (the plan is kept with it). The winner reads "Planned for the next release cycle." with no date; a tie shows no winner until the owner records one of the tied candidates.
+- **Owner.** `bun script/roadmap-ballot.ts open <quarter> --candidates <file.json> --closes <date> --mode live|test` publishes a ballot of 2 to 10 candidates whose copy names no date, month, quarter or "soon". `close`, `results`, `decide <quarter> <id>` (ties only) and `nominations` do the rest; none prints who voted or nominated.
+- **Deletion.** `eraseAccountBallots(account)` removes the account's ballots and nominations from every quarter; account deletion calls it from A57. Ballots and nominations are otherwise kept until the account is deleted.
+
 The removed route `/api/model-plans/topup` answers every request with JSON 410 `MODEL_TOPUP_REMOVED`, so an older Vector shows a message instead of a bare 404. Status still sends `purchased: {bought: false}` because the 1.99.111 and 1.99.112 decoders require it (H7).
 
 ## Using Codium in Vector

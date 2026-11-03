@@ -4,6 +4,7 @@ import type { SettingsSection } from "./general"
 export type SettingsTab =
   | SettingsSection
   | "account"
+  | "roadmap"
   | "providers"
   | "models"
   | "servers"
@@ -48,6 +49,13 @@ export const settingsGroups: readonly SettingsGroup[] = [
           "subscription",
           "delete",
         ],
+      },
+      // WP A34: shown only when the account's Codium plan includes the vote (dialog-settings-v2.tsx).
+      {
+        value: "roadmap",
+        label: "Roadmap vote",
+        icon: "checklist",
+        keywords: ["roadmap", "vote", "ballot", "nominate", "nomination", "features", "what vector builds next"],
       },
       {
         value: "general",

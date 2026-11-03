@@ -268,6 +268,7 @@ export function registerIpcHandlers(deps: Deps) {
   handle("vector-account-confirm-deletion", () => vectorAccount.confirmDeletion())
   handle("vector-account-cancel-deletion", () => vectorAccount.cancelDeletion())
   handle("vector-account-delete", (_event, email: unknown) => vectorAccount.deleteAccount(email))
+  handle("vector-account-roadmap", (_event, input: unknown) => vectorAccount.roadmap(input))
 
   const voiceOwners = new Set<number>()
   const updaterSubscriptions = createUpdaterSubscriptions()

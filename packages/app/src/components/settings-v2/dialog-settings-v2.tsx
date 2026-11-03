@@ -5,9 +5,11 @@ import { TabsV2 } from "@vectordevai/ui/v2/tabs-v2"
 import { Icon } from "@vectordevai/ui/icon"
 import { useDialog } from "@vectordevai/ui/context/dialog"
 import { usePlatform } from "@/context/platform"
-import type { VectorAccountStatus } from "@/vector-account"
+import { newestRead, onCodiumChange, type VectorAccountStatus } from "@/vector-account"
 import { settingsIdentity } from "./account-model"
 import { SettingsAccountV2 } from "./account"
+import { SettingsRoadmapV2 } from "./roadmap"
+import { roadmapTab } from "./roadmap-model"
 import { SettingsGeneralV2 } from "./general"
 import { SettingsProvidersV2 } from "./providers"
 import { SettingsModelsV2 } from "./models"
@@ -51,11 +53,23 @@ export const SettingsWorkspace: Component<SettingsWorkspaceProps> = (props) => {
   let searchInput: HTMLInputElement | undefined
   const [query, setQuery] = createSignal("")
   const [section, setSection] = createSignal<SettingsTab>(props.section ?? "general")
+  // The Roadmap vote tab (WP A34) shows only when the signed-in account's Codium plan includes the listed vote, as
+  // vectordev.ai's status says; vectordev.ai still decides every vote.
+  const [voting, setVoting] = createSignal(false)
+  const votingRead = newestRead()
+  const readVoting = async (signedIn: boolean) => {
+    const account = platform.vectorAccount
+    const newest = votingRead()
+    if (!signedIn || !account?.roadmap || !account.codium) return setVoting(false)
+    const status = await account.codium().catch(() => undefined)
+    if (newest()) setVoting(roadmapTab(status))
+  }
   // Spend limits live in the desktop ledger and the account in the desktop main process, which the web build does
   // not have.
   const available = (item: SettingsTab) => {
     if (item === "spend") return !!spendLimitsApi()
     if (item === "account") return !!platform.vectorAccount
+    if (item === "roadmap") return voting()
     return true
   }
   const groups = createMemo(() =>
@@ -75,15 +89,27 @@ export const SettingsWorkspace: Component<SettingsWorkspaceProps> = (props) => {
   onMount(() => {
     const vectorAccount = platform.vectorAccount
     if (!vectorAccount) return
-    onCleanup(vectorAccount.onChange((next) => setHeader("account", reconcile(next))))
+    onCleanup(
+      vectorAccount.onChange((next) => {
+        // Signing in, out or as someone else reads whether the vote is included again.
+        if (next.email !== header.account.email || next.authenticated !== header.account.authenticated)
+          void readVoting(next.authenticated)
+        setHeader("account", reconcile(next))
+      }),
+    )
+    onCleanup(onCodiumChange(() => void readVoting(header.account.authenticated)))
     void vectorAccount
       .status()
-      .then((next) => setHeader("account", reconcile(next)))
+      .then((next) => {
+        setHeader("account", reconcile(next))
+        void readVoting(next.authenticated)
+      })
       .catch(() => undefined)
   })
 
   const panel = (item: SettingsTab) => {
     if (item === "account") return <SettingsAccountV2 onUsage={() => setSection("usage")} />
+    if (item === "roadmap") return <SettingsRoadmapV2 />
     if (item === "usage") return <SettingsUsageV2 />
     if (item === "spend") return <SettingsSpendLimitsV2 />
     if (item === "about") return <SettingsAboutV2 />
