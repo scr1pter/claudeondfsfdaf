@@ -3,6 +3,7 @@ import copy
 from datetime import datetime, timezone
 import hashlib
 import json
+import sqlite3
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace
@@ -94,6 +95,20 @@ class HeavyRunnerTests(unittest.TestCase):
         tools = [{"type": "function", "name": name} for name in ("task", "task_manage", "bash", "spawn_agent", "wait_agent", "followup_task")]
         tools.append({"type": "namespace", "name": "functions", "tools": [{"type": "custom", "name": "exec"}]})
         return meter, adapter, tools
+
+    def test_background_evidence_recognizes_attributed_owned_notification_tag(self):
+        path = self.directory / "synthetic-vector.db"
+        connection = sqlite3.connect(path)
+        connection.execute("CREATE TABLE part(session_id TEXT,data TEXT)")
+        rows = [{"type": "tool", "tool": "task", "state": {"input": {"background": True}}},
+                {"type": "text", "text": '<task-notification task_id="synthetic">fixture</task-notification>'},
+                {"type": "text", "text": '<\\task-notification task_id="untrusted">escaped</task-notification>'}]
+        connection.executemany("INSERT INTO part VALUES(?,?)", [("synthetic-root", json.dumps(row)) for row in rows])
+        connection.commit(); connection.close()
+        adapter = SimpleNamespace(runtime="vector", registry=SimpleNamespace(root_id="synthetic-root", connect=lambda: sqlite3.connect(path)))
+        evidence = smoke.vector_background_evidence(adapter)
+        self.assertEqual(evidence["backgroundTaskLaunches"], 1)
+        self.assertEqual(evidence["ownedCompletionNotifications"], 1)
 
     def test_actual_vector_fake_script_exercises_background_and_same_child_repair(self):
         meter, adapter, tools = self.fake_script("vector")

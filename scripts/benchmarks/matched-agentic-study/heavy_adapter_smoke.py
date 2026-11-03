@@ -7,6 +7,7 @@ negative. A labelled fixture page/API tests capabilities, not app correctness.
 from contextlib import closing
 import json
 from pathlib import Path
+import re
 import threading
 
 from codex_free_probe import named_tool
@@ -160,7 +161,7 @@ def vector_background_evidence(adapter):
             data = json.loads(row[0])
             if data.get("type") == "tool" and data.get("tool") == "task" and data.get("state", {}).get("input", {}).get("background") is True:
                 launches += 1
-            if data.get("type") == "text" and "<task-notification>" in data.get("text", ""):
+            if data.get("type") == "text" and re.search(r"<task-notification(?:\s|>)", data.get("text", "")):
                 notifications += 1
     return {"applicable": True, "backgroundTaskLaunches": launches, "ownedCompletionNotifications": notifications}
 
