@@ -24,6 +24,7 @@ import threading
 import time
 import urllib.parse
 
+from funding_profiles import funding_policy
 from native_registry import NativeRegistry
 from native_team_policy import MODEL, PolicyError, require
 from owned_team_witness import ACTORS, OwnedSupervisor, WitnessServer, digest, healthy
@@ -94,19 +95,19 @@ def common_helpers(root):
     return module
 
 
-def preserved_history(state, before=None, idle=True):
-    healthy(state, before, idle=idle)
+def preserved_history(state, before=None, idle=True, funding_profile=None):
+    healthy(state, before, idle=idle, funding_profile=funding_profile)
     require(state["attempts"] >= HISTORICAL_REQUESTS and state["measuredUsd"] >= HISTORICAL_USD - 1e-8,
             "historical paid charges cannot be reset or reclassified")
     return state
 
 
-def affordability(state, runtime):
-    state = preserved_history(state)
+def affordability(state, runtime, funding_profile=None):
+    state = preserved_history(state, funding_profile=funding_profile)
     require(state.get("batchCallsRemaining") == 0, "another scope is open")
     actor = state["actors"][ACTORS[runtime]]
     global_headroom = 48 - state["measuredUsd"] - state["reservedUsd"]
-    actor_headroom = 20 - actor["measuredUsd"] - actor["reservedUsd"]
+    actor_headroom = funding_policy(funding_profile).actor_cap(ACTORS[runtime]) - actor["measuredUsd"] - actor["reservedUsd"]
     return {"affordable": min(global_headroom, actor_headroom) + 1e-8 >= FULL_RESERVATION_USD,
             "requiredFullQualityReservationUsd": FULL_RESERVATION_USD,
             "globalHeadroomUsd": global_headroom, "actorHeadroomUsd": actor_headroom}
@@ -120,7 +121,7 @@ def checked_path(path, roots):
     return path
 
 
-def validate_task_commands(task, root, options, common, browser_files):
+def validate_task_commands(task, root, options, common, browser_files, extra_bindings=False):
     """Bind task executables/code operands to the reviewed public manifests.
 
     This validates the explicit command contract, not arbitrary Python imports
@@ -140,6 +141,8 @@ def validate_task_commands(task, root, options, common, browser_files):
         require(len(command) > 1 and command[1].startswith("{task}/"),
                 "task must invoke a frozen script directly; interpreter modules/inline code are unbound")
         flags = {"--app", "--out", "--bun", "--node", "--task", "--proxy-module"}
+        if extra_bindings:
+            flags.update(("--playwright-module", "--chrome"))
         require(len(command[2:]) % 2 == 0 and all(flag in flags for flag in command[2::2]),
                 "task code/file operands require the explicit qualified evaluator flag contract")
         for index, arg in enumerate(command[1:], 1):
@@ -156,6 +159,8 @@ def validate_task_commands(task, root, options, common, browser_files):
                     require(target.is_relative_to(options.browser_driver_root)
                             and target.relative_to(options.browser_driver_root).as_posix() in browser_files,
                             "external task code/file operand is outside the designated frozen browser dependencies")
+            elif extra_bindings and arg in ("{playwright_module}", "{chrome}"):
+                require(index > 1, "bound browser dependencies cannot replace the evaluator script")
             elif arg in ("{python}", "{bun}", "{node}") or arg in binaries:
                 require(index > 1, "task script must come from its frozen manifest")
             elif arg.startswith(("{app}", "{out}")):
@@ -253,15 +258,19 @@ def reviewed(plan, options):
             "reviewed source/task/profile/instrument/binary freeze changed")
 
 
-def gate_report(common, evaluation, task):
-    verdict, feedback = common.gate_feedback(evaluation.get("report"), task)
+def gate_report(common, evaluation, task, profile=None):
+    child_count = len((PROFILE if profile is None else profile)["childLifetimeSlots"])
+    identities = "three" if child_count == 3 else "six" if child_count == 6 else str(child_count)
+    expected = task.get("expectedPrerequisiteChecks", 0)
+    count_contract = {**task, "expectedApiGroups": task.get("expectedApiGroups", 0) + expected} if expected else task
+    verdict, feedback = common.gate_feedback(evaluation.get("report"), count_contract)
     if feedback:
         # Keep the existing independent check observations; replace only its
         # single-agent prelude for this separately frozen team profile.
         marker = "The frozen independent gate found the following failed checks. "
         require(marker in feedback, "unrecognized common feedback contract")
-        feedback = ("Continue the SAME task and SAME lead native session with the SAME three child identities. "
-                    "Do not create replacement children. Preserve TASK.md, protected files and every requirement. "
+        feedback = ("Continue the SAME task and SAME lead native session with the SAME " + identities + " child identities. "
+                    "Do not create replacement children. Preserve " + task.get("workspacePromptFile", "TASK.md") + ", protected files and every requirement. "
                     + marker + feedback.split(marker, 1)[1])
     return verdict, feedback
 
@@ -270,23 +279,25 @@ def settled_invocation_state(supervisor, arm, timeout=700, clock=time.monotonic,
     """Read-only drain observation before deciding whether one repair is affordable."""
     deadline = clock() + timeout
     while True:
-        state = preserved_history(supervisor.controller("/status"), arm.before, idle=False)
+        state = preserved_history(supervisor.controller("/status"), arm.before, idle=False, funding_profile=supervisor.funding_profile)
         with arm.condition:
             require(not arm.failure, "native invocation stopped for review")
             if state["active"] == 0 and state["reservedUsd"] == 0 and not arm.forwarding and not arm.queue and arm.handlers == 0:
-                return preserved_history(state, arm.before)
+                return preserved_history(state, arm.before, funding_profile=supervisor.funding_profile)
         require(clock() < deadline, "invocation settlement remains unknown before repair")
         sleep(.05)
 
 
 def coordinate_team_arm(*, supervisor, runtime, label, adapter, task, common, check_frozen, persist,
-                        max_calls=300, seconds=7200, soft_usd=3, clock=time.monotonic):
+                        max_calls=300, seconds=7200, soft_usd=3, clock=time.monotonic, profile=None):
     """One arm, callback-testable without a process, network or model call."""
+    profile = PROFILE if profile is None else profile
+    roles = tuple(profile["childLifetimeSlots"])
     result = {"runtime": runtime, "attempts": [], "allChargesRetained": True, "historicalAmountsReset": False,
               "functionalVerdict": "not_run", "nativeAuditVerdict": "not_run", "blindedCodeReviewVerdict": "pending_external_review", "qualityComparisonMet": False, "reviewRequired": False,
               "stopReason": None, "settlementComplete": False}
     check_frozen()
-    headroom = affordability(supervisor.controller("/status"), runtime)
+    headroom = affordability(supervisor.controller("/status"), runtime, funding_profile=supervisor.funding_profile)
     result["preflight"] = headroom
     if not headroom["affordable"]:
         result.update(stopReason="unaffordable_arm_not_run", reviewRequired=False)
@@ -297,10 +308,11 @@ def coordinate_team_arm(*, supervisor, runtime, label, adapter, task, common, ch
     try:
         adapter.prepare()
         check_frozen()
-        arm = supervisor.begin(runtime, label, adapter.registry, ROLES,
-                               max_calls=max_calls, seconds=seconds, soft_usd=soft_usd)
+        graph = {"role_parents": profile["roleParents"]} if "roleParents" in profile else {}
+        arm = supervisor.begin(runtime, label, adapter.registry, roles,
+                               max_calls=max_calls, seconds=seconds, soft_usd=soft_usd, **graph)
         adapter.bind(arm)
-        prompt = INSTRUCTIONS["lead"] + " " + str(task.get("additionalPrompt", ""))
+        prompt = profile["instructions"]["lead"] + " " + str(task.get("additionalPrompt", ""))
         lead = None
         for index in (1, 2):
             check_frozen()
@@ -321,11 +333,11 @@ def coordinate_team_arm(*, supervisor, runtime, label, adapter, task, common, ch
             require(isinstance(current_lead, str) and current_lead and (lead is None or current_lead == lead),
                     "lead native session continuity failed")
             lead = current_lead
-            require(set(arm.slots) == set(ROLES) and len(set(arm.slots.values())) == 3,
-                    "native four-identity team was not completed")
+            require(set(arm.slots) == set(roles) and len(set(arm.slots.values())) == len(roles),
+                    "fixed native team was not completed")
             evaluation = adapter.evaluate(index)
             attempt["evaluation"] = evaluation
-            verdict, feedback = gate_report(common, evaluation, task)
+            verdict, feedback = gate_report(common, evaluation, task, profile=profile)
             result["functionalVerdict"] = verdict
             if verdict == "passed":
                 result["stopReason"] = "functional_gate_passed_pending_native_audit"
@@ -343,6 +355,10 @@ def coordinate_team_arm(*, supervisor, runtime, label, adapter, task, common, ch
                 result["stopReason"] = "product_failure_at_arm_limit"
                 break
             supervisor.repair()
+            boundary = time.time()
+            arm.record({"type": "formal_repair_execution_boundary", "startedUnix": boundary})
+            adapter.formal_repair_started = boundary
+            result["formalRepairStartedUnix"] = boundary
             prompt = feedback
     except Exception as error:
         if arm is not None:
@@ -419,9 +435,9 @@ def run_pair(plan, *, supervisor, adapter_factory, common, check_frozen, persist
 
 class FreshOwnedRegistry(NativeRegistry):
     """Bind once from a fresh owned native database, before first inference."""
-    def __init__(self, runtime, home):
+    def __init__(self, runtime, home, max_depth=1):
         database = home / "codex/state_5.sqlite" if runtime == "codex" else home / "data/vector/vector.db"
-        super().__init__(runtime, home, database, None, "benchmark" if runtime == "codex" else "openai")
+        super().__init__(runtime, home, database, None, "benchmark" if runtime == "codex" else "openai", max_depth=max_depth)
         self.on_bind = None
 
     def resolve(self, headers):
@@ -447,26 +463,33 @@ class FreshOwnedRegistry(NativeRegistry):
         return super().resolve(headers)
 
 
-def team_environment(common, runtime, env, home, binding):
-    """Both renderers use the exact same role prose from PROFILE."""
+def team_environment(common, runtime, env, home, binding, profile=None):
+    """Both renderers use the exact same frozen role prose."""
+    profile = PROFILE if profile is None else profile
+    roles, instructions = tuple(profile["childLifetimeSlots"]), profile["instructions"]
     if runtime == "codex":
         return {**env, "BENCH_API_KEY": binding["requestToken"]}
     result = common.vector_environment(env, home, binding["providerBase"], binding["requestToken"])
     config = json.loads(result["VECTOR_CONFIG_CONTENT"])
-    config["permission"] = {"*": "allow", "task": {"*": "deny", **{role: "allow" for role in ROLES}},
+    config["permission"] = {"*": "allow", "task": {"*": "deny", **{role: "allow" for role in roles}},
                             "research": "deny", "escalate": "deny", "browser": "deny", "external_directory": "deny"}
     config["agent"] = {name: {"disable": True} for name in (
         "general", "explore", "review", "judge", "debug", "security", "research", "researcher",
         "research-judge", "test", "document", "plan")}
-    config["agent"]["build"] = {"mode": "primary", "model": "openai/" + MODEL, "variant": "high", "prompt": INSTRUCTIONS["lead"]}
+    config["agent"]["build"] = {"mode": "primary", "model": "openai/" + MODEL, "variant": "high", "prompt": instructions["lead"]}
     config["agent"].update({role: {"mode": "subagent", "model": "openai/" + MODEL, "variant": "high",
-        "description": "Fixed native team role " + role, "prompt": INSTRUCTIONS[role],
-        "permission": {"task": "deny", "task_manage": "deny", "research": "deny", "escalate": "deny"}} for role in ROLES})
+        "description": "Fixed native team role " + role, "prompt": instructions[role],
+        "permission": {"task": "deny", "task_manage": "deny", "research": "deny", "escalate": "deny"}} for role in roles})
+    for role in set(profile.get("roleParents", {}).values()) - {"lead"}:
+        children = [child for child, parent in profile["roleParents"].items() if parent == role]
+        config["agent"][role]["permission"]["task"] = {"*": "deny", **{child: "allow" for child in children}}
     result.update(VECTOR_CONFIG_CONTENT=json.dumps(config), VECTOR_PERMISSION=json.dumps(config["permission"]))
     return result
 
 
-def native_command(common, runtime, options, app, home, binding, prompt, session, calls):
+def native_command(common, runtime, options, app, home, binding, prompt, session, calls, profile=None):
+    profile = PROFILE if profile is None else profile
+    roles, instructions = tuple(profile["childLifetimeSlots"]), profile["instructions"]
     if runtime == "vector":
         return [str(options.bun), "--no-env-file", "run", "--conditions=browser",
                 str(options.vector_root / "packages/engine/src/index.ts"), "--pure", "run", "--dir", str(app),
@@ -477,13 +500,13 @@ def native_command(common, runtime, options, app, home, binding, prompt, session
                "--skip-git-repo-check", "--enable", "multi_agent", "--sandbox", "danger-full-access", "--model", MODEL]
     settings = ['approval_policy="never"', 'web_search="disabled"', 'model_provider="benchmark"',
                 'model_reasoning_effort="high"', 'model_context_window=1050000', 'model_verbosity="low"',
-                'model_reasoning_summary="auto"', 'agents.max_threads=3',
+                'model_reasoning_summary="auto"', 'agents.max_threads=' + str(len(roles)),
                 'model_providers.benchmark.name="benchmark"', 'model_providers.benchmark.wire_api="responses"',
                 'model_providers.benchmark.base_url=' + json.dumps(binding["providerBase"] + "/v1"),
                 'model_providers.benchmark.env_key="BENCH_API_KEY"', 'model_providers.benchmark.supports_websockets=false',
-                'developer_instructions=' + json.dumps(INSTRUCTIONS["lead"]), 'analytics.enabled=false',
+                'developer_instructions=' + json.dumps(instructions["lead"]), 'analytics.enabled=false',
                 'feedback.enabled=false', 'otel.exporter="none"']
-    for role in ROLES:
+    for role in roles:
         role_file = home / "codex" / (role + ".toml")
         settings.extend(['agents.' + role + '.description=' + json.dumps("Fixed native team role " + role),
                          'agents.' + role + '.config_file=' + json.dumps(str(role_file))])
@@ -645,8 +668,10 @@ def normalize_transcript(path, runtime):
             "completions": completions, "unknownInteractiveInputs": unknown, **chronology}
 
 
-def audit_descendants(common, runtime, directory, app, support, trusted_client, slots, root_id):
+def audit_descendants(common, runtime, directory, app, support, trusted_client, slots, root_id, profile=None, formal_repair_started=None):
     """Unknown native/interactive/support paths stay review-required, never pass."""
+    profile = PROFILE if profile is None else profile
+    roles = tuple(profile["childLifetimeSlots"])
     manifest = json.loads((directory / "manifest.json").read_text(encoding="utf-8"))
     require(manifest.get("complete") is True and manifest.get("runtime") == runtime, "native telemetry coverage missing")
     coverage, timeline = [], {}
@@ -668,12 +693,12 @@ def audit_descendants(common, runtime, directory, app, support, trusted_client, 
                          "nativeErrorObservations": normalized["nativeErrorObservations"],
                          "unknownNativeOutcomeObservations": normalized["unknownOutcomeObservations"]})
     keys = {role: hashlib.sha256(identity.encode()).hexdigest() for role, identity in slots.items()}
-    workers = [timeline.get(keys.get(role), {}) for role in ROLES[:2]]
+    workers = [timeline.get(keys.get(role), {}) for role in profile.get("reviewedRoles", roles[:2])]
     worker_done = [worker.get("completions", [None])[0] if worker.get("completions") else None for worker in workers]
     judge = timeline.get(keys.get("team_judge"), {})
     ordered = all(value is not None for value in worker_done) and judge.get("started") is not None and max(worker_done) <= judge["started"]
     root_key = hashlib.sha256(root_id.encode()).hexdigest()
-    require(len(keys) == 3 and root_key in timeline, "native team transcript join incomplete")
+    require(len(keys) == len(roles) and set(keys) == set(roles) and root_key in timeline, "native team transcript join incomplete")
     root = timeline[root_key]
     required = [root, judge, *workers]
     native_outcomes_settled = all(row.get("latestOutcome") == "completed" and row.get("unknownOutcomeObservations") == 0 for row in required)
@@ -692,12 +717,31 @@ def audit_descendants(common, runtime, directory, app, support, trusted_client, 
                           for command in final_commands)
     tied_ordering = any(value == judge.get("started") for value in worker_done if value is not None) or any(
         began == completed for completed in worker_completions for began, _ in judge_phases if began is not None)
+    role_rows = {role: timeline.get(key, {}) for role, key in keys.items()}
+    starts_after = all(role_rows.get(role, {}).get("started") is not None and all(
+        role_rows.get(dependency, {}).get("completions") and role_rows[role]["started"] >= role_rows[dependency]["completions"][0]
+        for dependency in dependencies) for role, dependencies in profile.get("creationAfter", {}).items())
+    completes_after = all(role_rows.get(role, {}).get("completed") is not None and all(
+        role_rows.get(dependency, {}).get("completed") is not None and role_rows[role]["completed"] >= role_rows[dependency]["completed"]
+        for dependency in dependencies) for role, dependencies in profile.get("completionAfter", {}).items())
+    specialist_covered = True
+    if profile.get("specialistInputs"):
+        specialist = role_rows.get("qa_specialist", {})
+        phases = [(row.get("inferenceStarted") if runtime == "vector" else row.get("started"), row.get("completed"))
+                  for row in specialist.get("turns", []) if row["outcome"] == "completed"]
+        specialist_covered = all(role_rows.get(role, {}).get("completed") is not None and any(
+            began is not None and ended is not None and began >= role_rows[role]["completed"] and ended >= began
+            for began, ended in phases) for role in profile["specialistInputs"])
+        if formal_repair_started is not None:
+            specialist_covered = specialist_covered and specialist.get("completed") is not None and specialist["completed"] >= formal_repair_started
     support_files = common.manifest(support) if support.is_dir() else {}
     return {"requiresManualReview": bool(review or not ordered or not followups_reviewed or not native_outcomes_settled
-                                          or not browser_after_judge or not api_after_judge), "descendantCoverageComplete": True,
+                                          or not browser_after_judge or not api_after_judge or not starts_after or not completes_after or not specialist_covered), "descendantCoverageComplete": True,
             "observedNativeSessions": len(coverage), "autonomousActorsAdmitted": 1 + len(slots),
             "judgeStartedAfterBothWorkersCompleted": bool(ordered), "sessions": coverage,
             "allWorkerCompletionPhasesReviewedBySameJudge": bool(followups_reviewed),
+            "roleCreationDependenciesSatisfied": bool(starts_after), "roleCompletionDependenciesSatisfied": bool(completes_after),
+            "specialistCoversLatestWorkerPhasesAndRepair": bool(specialist_covered),
             "requiredNativeLatestOutcomesSettled": native_outcomes_settled,
             "workerFollowupCompletions": sum(max(0, len(worker.get("completions", [])) - 1) for worker in workers),
             "judgeFollowupCompletions": max(0, len(judge_completions) - 1),
@@ -771,7 +815,10 @@ class NativeAdapter:
         self.runtime, self.options, self.common, self.task = runtime, options, common, task
         self.directory = options.out / runtime
         self.home, self.app, self.support = self.directory / "runtime-home", self.directory / "app", self.directory / "support-data"
-        self.registry = FreshOwnedRegistry(runtime, self.home)
+        self.profile = getattr(options, "team_profile", PROFILE)
+        self.roles = tuple(self.profile["childLifetimeSlots"])
+        self.formal_repair_started = None
+        self.registry = FreshOwnedRegistry(runtime, self.home, max_depth=self.profile["maxDepth"])
         self.supervisor_holder = supervisor_holder
         self.quiesced, self.witness, self.witness_thread, self.browser = False, None, None, None
 
@@ -779,13 +826,16 @@ class NativeAdapter:
         common, options, task = self.common, self.options, self.task
         self.directory.mkdir()
         self.support.mkdir()
-        task_dir = options.task_root / TASKS[options.task_index - 1][0]
+        task_dir = getattr(options, "selected_task_root", options.task_root / TASKS[options.task_index - 1][0])
+        self.task_dir = task_dir
         shutil.copytree(common.inside(task_dir, task["seedDirectory"]), self.app, ignore=shutil.ignore_patterns(*common.IGNORED))
         prompt = common.inside(task_dir, task["promptFile"])
-        public = self.app / "TASK.md"
+        workspace_prompt = task.get("workspacePromptFile", "TASK.md")
+        require(workspace_prompt in ("TASK.md", "BUILD_SPEC.md"), "unreviewed workspace prompt filename")
+        public = self.app / workspace_prompt
         require(not public.exists() or public.read_bytes() == prompt.read_bytes(), "seed TASK.md conflicts with public contract")
         shutil.copyfile(prompt, public)
-        self.protected = {name: common.file_hash(common.inside(self.app, name)) for name in [*task.get("protectedFiles", []), "TASK.md"]}
+        self.protected = {name: common.file_hash(common.inside(self.app, name)) for name in [*task.get("protectedFiles", []), workspace_prompt]}
         self.env = common.isolated_environment(self.home, self.app, options.bun, options.node)
         system = Path(os.environ.get("SystemRoot", "C:/Windows")) / "System32"
         self.env["PATH"] = os.pathsep.join([str(options.bun.parent), str(options.node.parent),
@@ -809,15 +859,16 @@ class NativeAdapter:
             common.save(self.directory / "setup.json", result)
             require(result.get("exitCode") == 0 and not result.get("timedOut") and before == common.manifest(self.app, task.get("generatedDirectories", [])),
                     "free setup failed or changed authored source; no paid arm")
-        for role in ROLES:
+        for role in self.roles:
             path = self.home / "codex" / (role + ".toml")
             path.write_text('\n'.join(['model=' + json.dumps(MODEL), 'model_provider="benchmark"', 'model_reasoning_effort="high"',
                 'model_reasoning_summary="auto"', 'model_verbosity="low"', 'model_context_window=1050000',
-                'developer_instructions=' + json.dumps(INSTRUCTIONS[role])]) + '\n', encoding="utf-8")
+                'developer_instructions=' + json.dumps(self.profile["instructions"][role])]) + '\n', encoding="utf-8")
 
     def values(self, output):
         return {"app": str(self.app), "out": str(output), "bun": str(self.options.bun), "node": str(self.options.node),
-                "task": str(self.options.task_root / TASKS[self.options.task_index - 1][0]), "python": sys.executable}
+                "task": str(self.task_dir), "python": sys.executable,
+                "playwright_module": str(self.options.playwright_module), "chrome": str(self.options.chrome)}
 
     def bind(self, arm):
         self.arm = arm
@@ -827,7 +878,7 @@ class NativeAdapter:
         self.witness_thread = threading.Thread(target=self.witness.serve_forever, daemon=True)
         self.witness_thread.start()
         self.binding = self.witness.cli_binding()
-        self.env = team_environment(self.common, self.runtime, self.env, self.home, self.binding)
+        self.env = team_environment(self.common, self.runtime, self.env, self.home, self.binding, profile=self.profile)
         self.browser = self.common.BrowserDriver(node=self.options.node, root=self.options.browser_driver_root,
             playwright=self.options.playwright_module, chrome=self.options.chrome, output=self.directory / "browser-driver",
             origin="http://127.0.0.1:" + str(self.options.app_port))
@@ -837,7 +888,7 @@ class NativeAdapter:
     def run(self, prompt, session, timeout, index):
         self.quiesced = False
         command = native_command(self.common, self.runtime, self.options, self.app, self.home, self.binding,
-                                 prompt, session, max(1, self.options.max_calls - len(self.arm.requests)))
+                                 prompt, session, max(1, self.options.max_calls - len(self.arm.requests)), profile=self.profile)
         result = execute_owned(self.common, command, self.app, self.env,
                                self.directory / "attempts" / str(index) / "agent", timeout,
                                monitor=lambda: self.arm.failure)
@@ -866,7 +917,7 @@ class NativeAdapter:
         env.update(PORT=str(self.options.app_port), DATA_DIR=str(self.support))
         before = self.common.manifest(self.app, self.task.get("generatedDirectories", []))
         process = self.common.execute([arg.format_map(values) for arg in self.task["evaluatorCommand"]], self.app, env,
-                                      output.parent / "evaluation-process", 900)
+                                      output.parent / "evaluation-process", self.task.get("evaluatorTimeoutSeconds", 900))
         path = self.common.inside(output, self.task.get("evaluatorReport", "evaluation.json"))
         report = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else None
         return {"process": process, "report": self.common.checked_evaluation(process, report,
@@ -882,7 +933,7 @@ class NativeAdapter:
             require(closure.get("runtimeQuiesced") is True and closure.get("transcripts", {}).get("complete") is True,
                     "quiescence or descendant native coverage unknown")
             return audit_descendants(self.common, self.runtime, self.directory / "private-transcripts", self.app,
-                self.support, self.options.browser_driver_root / "client.cjs", self.arm.slots, self.registry.root_id)
+                self.support, self.options.browser_driver_root / "client.cjs", self.arm.slots, self.registry.root_id, profile=self.profile, formal_repair_started=self.formal_repair_started)
         finally:
             if self.witness:
                 self.witness.shutdown()

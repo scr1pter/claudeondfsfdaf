@@ -54,12 +54,13 @@ class Meter:
 class Registry:
     def __init__(self, runtime):
         self.runtime, self.root_id, self.helper_producers = runtime, "synthetic-lead", {}
+        self.max_depth = 1
 
     def resolve(self, headers):
         identity = headers["identity"]
         root = identity == self.root_id
         return {"id": identity, "root": self.root_id, "role": "lead" if root else identity,
-                "parent": None if root else self.root_id, "depth": 0 if root else 1,
+                "parent": None if root else self.root_id, "parentRole": None if root else "lead", "depth": 0 if root else 1,
                 "identityKind": "autonomous", "helper": False, "purpose": "turn"}
 
     def collect(self, directory):
