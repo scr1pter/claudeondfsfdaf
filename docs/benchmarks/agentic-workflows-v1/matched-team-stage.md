@@ -1,5 +1,11 @@
 # Separate matched-team development study
 
+This four-role, three-maintenance-task plan was superseded **before any paid
+team call** by the owner's request for substantially heavier nested workflows.
+It remains as a historical preregistration. The replacement is the
+[heavy-team stage](../agentic-heavy-v1/STAGE.md); none of the free protocol
+proofs below is a funded product result.
+
 Recorded November 2, 2026, before any funded native-team call. The user explicitly
 authorized this study separately from the completed single-agent comparisons.
 The objective remains at least 20% lower complete-delivery API cost, conditional
