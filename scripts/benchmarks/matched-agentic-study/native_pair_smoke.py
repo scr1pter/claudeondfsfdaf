@@ -142,6 +142,21 @@ class FakeMeter(ThreadingHTTPServer):
                                for actor, initial in (("foundry-vector", 10.8884618), ("foundry-codex", 6.4715992))}}
 
 
+    def next_calls(self, adapter, native, tools):
+        calls = []
+        if native["role"] == "lead":
+            stage = self.root_stages.get(adapter.runtime, 0)
+            self.root_stages[adapter.runtime] = stage + 1
+            calls = scripted_calls(adapter.runtime, stage, tools, adapter.options.app_port)
+        else:
+            identity = native["id"]
+            stage = self.child_stages.get(identity, 0)
+            self.child_stages[identity] = stage + 1
+            if stage == 0:
+                calls = [execution_call(adapter.runtime, tools, "Write-Output 'smoke-child-shell-complete'")]
+        return calls
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *_args):
         pass
@@ -174,17 +189,7 @@ class Handler(BaseHTTPRequestHandler):
             server.remaining -= 1
             adapter.common.save(server.out / "private-raw" / (str(index).zfill(3) + ".json"), body)
             adapter.common.save(server.out / "private-capture.json", server.rows)
-            calls = []
-            if native["role"] == "lead":
-                stage = server.root_stages.get(adapter.runtime, 0)
-                server.root_stages[adapter.runtime] = stage + 1
-                calls = scripted_calls(adapter.runtime, stage, tools, adapter.options.app_port)
-            else:
-                identity = native["id"]
-                stage = server.child_stages.get(identity, 0)
-                server.child_stages[identity] = stage + 1
-                if stage == 0:
-                    calls = [execution_call(adapter.runtime, tools, "Write-Output 'smoke-child-shell-complete'")]
+            calls = server.next_calls(adapter, native, tools)
             adapter.common.save(server.out / "private-raw" / (str(index).zfill(3) + ".json"), body)
             adapter.common.save(server.out / "private-capture.json", server.rows)
         self.send_response(200)
