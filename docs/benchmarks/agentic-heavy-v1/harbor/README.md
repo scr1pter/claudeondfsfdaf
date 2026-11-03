@@ -46,6 +46,7 @@ Run from this directory:
 
 ```sh
 python -B -m unittest discover -p 'test_*.py' -v
+node --test local-proxy.test.cjs
 python -B prepare.py --destination <new-app> --manifest <new-outside-manifest>
 python -B evaluate.py --app <app> --out <new-output> --bun <absolute-bun> --node <absolute-node> --playwright-module <absolute-playwright-package> --chrome <absolute-chrome>
 ```
@@ -66,4 +67,33 @@ do not weaken requirements to make an application pass. The positive reference
 must stay outside the task root and participant workspace until the paid calls
 finish; publishing it later does not retroactively make it a seeded solution.
 
-No runtime qualification or paid outcome is asserted by this README alone.
+Runtime qualification on Windows passed all **64/64** positive reference rows:
+28 API groups, 32 browser checks and four prerequisites. The exact empty scaffold
+failed typecheck/build/startup meaningfully, with all 60 API/browser rows not_run,
+zero application passes, unchanged source and no instrument error. Dependencies
+were reused from an existing matching installation; no network install or model
+call was used. All 11 reference authored files were independently preserved and
+byte-unchanged during the passing evaluation.
+
+Two full evaluations of deliberately damaged reference copies confirmed rejection.
+Corrupting artifact hashes failed both the HTTP byte/metadata check and the real
+browser download check. Adding an asset on a different owned loopback origin
+failed the local-assets browser check, while that denied origin received zero
+requests. These are controls of the verifier, not model-generated deliveries.
+See `qualification.json` for sanitized per-check outcomes, raw-report hashes and
+preserved preflight failures. The reference source remains outside this task and
+is not published while study arms may still run.
+
+The initial static snapshot remains in `static-freeze.json` and commit `672f833`.
+Runtime qualification repaired instrument defects without changing either public
+product contract: Windows ESM path conversion, owned AppData/temp creation, an
+independent loopback assertion client compatible with proxy rules, guarded shared
+proxy transport, and asynchronous/case-insensitive display assertions. The proxy
+retains every denied transport separately; page-origin HTTP and WebSocket attempts
+drive the application-assets gate. Chromium's own updater/autofill denials do not
+become fabricated application requests. No denied transport is connected.
+
+The final source freeze is `runtime-freeze.json`; `provenance.json` records the
+infrastructure origins and revision limits. Passing these synthetic controls does
+not establish production readiness, equal source/visual quality or any paid-model
+outcome. Blinded source and screenshot review remain separate.

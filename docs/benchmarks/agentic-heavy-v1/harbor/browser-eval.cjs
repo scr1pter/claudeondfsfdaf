@@ -3,6 +3,7 @@ const fs = require("node:fs/promises")
 const path = require("node:path")
 const crypto = require("node:crypto")
 const http = require("node:http")
+const { startProxy } = require("./local-proxy.cjs")
 
 const args = Object.fromEntries(process.argv.slice(2).reduce((pairs, value, index, list) => index % 2 === 0 ? [...pairs, [value.replace(/^--/, ""), list[index + 1]]] : pairs, []))
 const base = new URL(args.base)
@@ -18,7 +19,7 @@ const names = [
   "incident_reopen_filter", "audit_filter", "viewer_restrictions", "escaped_user_text",
   "inline_error_preserves_form", "keyboard_focus", "mobile_layout", "console_local_assets",
 ]
-const report = { kind: "harbor-browser-v1", checks: names.map(name => ({ name, status: "not_run" })), screenshots: [], consoleErrors: [], blockedRequests: [] }
+const report = { kind: "harbor-browser-v1", checks: names.map(name => ({ name, status: "not_run" })), screenshots: [], consoleErrors: [], blockedRequests: [], proxyBlocks: [] }
 const byName = Object.fromEntries(report.checks.map(row => [row.name, row]))
 const state = {}
 let browser, context, page, proxy
@@ -49,9 +50,24 @@ async function check(name, dependencies, action) {
 }
 async function read(api) {
   assert(api.startsWith("/api/"), "read-only API assertion path")
-  const response = await context.request.get(base.origin + api)
-  assert(response.status() === 200, "GET " + api + " returned " + response.status())
-  return response.json()
+  const cookies = await context.cookies(base.origin)
+  // APIRequestContext may use CONNECT even for an HTTP proxy. Independent reads
+  // instead use one explicit loopback GET, without redirects or app-side fetch.
+  return new Promise((resolve, reject) => {
+    const request = http.get({ hostname: "127.0.0.1", port: base.port, path: api,
+      headers: { Cookie: cookies.map(cookie => cookie.name + "=" + cookie.value).join("; ") } }, response => {
+      let body = ""
+      response.setEncoding("utf8")
+      response.on("data", chunk => { body += chunk; if (body.length > 4_194_304) request.destroy(new Error("API assertion response too large")) })
+      response.on("end", () => {
+        try { assert(response.statusCode === 200, "GET " + api + " returned " + response.statusCode); resolve(JSON.parse(body)) }
+        catch (error) { reject(error) }
+      })
+      response.on("error", reject)
+    })
+    request.setTimeout(12000, () => request.destroy(new Error("Loopback API assertion timed out")))
+    request.on("error", reject)
+  })
 }
 async function eventually(action, predicate, message, milliseconds = 12000) {
   const end = Date.now() + milliseconds
@@ -123,22 +139,16 @@ async function submitApproveRun(release) {
     const playwright = require(path.resolve(args["playwright-module"]))
     // The forwarding proxy enforces the origin before a network connection. Browser
     // routing alone does not intercept every transport (notably WebSockets).
-    proxy = http.createServer((request, response) => {
-      let target
-      try { target = new URL(request.url) } catch { response.writeHead(400).end(); return }
-      if (target.origin !== base.origin || target.username || target.password) { response.writeHead(403).end(); return }
-      const forwarded = http.request({ hostname: "127.0.0.1", port: base.port, path: target.pathname + target.search,
-        method: request.method, headers: { ...request.headers, host: base.host, connection: "close" } }, upstream => {
-        response.writeHead(upstream.statusCode, upstream.headers); upstream.pipe(response)
-      })
-      forwarded.on("error", () => { if (!response.headersSent) response.writeHead(502); response.end() })
-      request.pipe(forwarded)
+    proxy = await startProxy(new Set([base.origin]), (target, transport) => {
+      let origin = "invalid"
+      try { origin = new URL(target).origin } catch {}
+      // Chromium's own updater/autofill requests also pass through this proxy.
+      // Retain every denial, but attribute application requests through the
+      // context route and page WebSocket events rather than browser services.
+      report.proxyBlocks.push({ origin, transport })
     })
-    proxy.on("connect", (_request, socket) => socket.end("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n"))
-    proxy.on("upgrade", (_request, socket) => socket.end("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n"))
-    await new Promise(resolve => proxy.listen(0, "127.0.0.1", resolve))
     browser = await playwright.chromium.launch({ executablePath: path.resolve(args.chrome), headless: true,
-      proxy: { server: "http://127.0.0.1:" + proxy.address().port },
+      proxy: { server: proxy.url },
       args: ["--proxy-bypass-list=<-loopback>", "--no-first-run", "--disable-background-networking", "--disable-component-update", "--disable-sync", "--disable-default-apps"] })
     context = await browser.newContext({ viewport: { width: 1365, height: 900 }, acceptDownloads: true, serviceWorkers: "block" })
     await context.route("**/*", route => {
@@ -156,6 +166,11 @@ async function submitApproveRun(release) {
       if (url.origin === base.origin && !url.pathname.startsWith("/api/") && response.status() >= 400) report.consoleErrors.push("Local asset HTTP " + response.status() + ": " + url.pathname)
     })
     page.on("popup", popup => popup.close().catch(() => {}))
+    page.on("websocket", socket => {
+      const url = new URL(socket.url())
+      url.protocol = url.protocol === "ws:" ? "http:" : "https:"
+      if (url.origin !== base.origin) report.blockedRequests.push({ origin: url.origin, resourceType: "websocket" })
+    })
     await page.goto(base.origin, { waitUntil: "networkidle" })
 
     await check("navigation_actor", [], async () => {
@@ -208,7 +223,7 @@ async function submitApproveRun(release) {
       await field("Runbook description", "Version two synthetic plan"); await button("Save runbook")
       state.runbook = (await eventually(() => read(p("runbooks", state.runbook.id)), body => body.runbook.version === 2, "runbook edit not persisted")).runbook
       assert(state.runbook.version === 2 && state.runbook.steps.length === 3, "runbook version/steps not preserved")
-      assert(/version\D{0,12}2\b/i.test(await page.locator("body").innerText()), "runbook version not visible")
+      await eventually(() => page.locator("body").innerText(), text => /version\D{0,12}2\b/i.test(text), "runbook version not visible")
     })
     await check("release_create_snapshot", ["runbook_version_edit"], async () => {
       state.release = await newRelease("UI Aurora Release", "ui-aurora-v1", state.runbook.id)
@@ -238,7 +253,7 @@ async function submitApproveRun(release) {
       await button("Run release")
       await eventually(() => read(p("releases", state.release.id) + "/jobs"), body => body.jobs.length === 3, "UI run admitted no jobs")
       state.release = await releaseStatus(state.release, "succeeded")
-      await eventually(() => page.locator("body").innerText(), text => text.includes("succeeded") && text.includes("verify"), "live release UI did not update")
+      await eventually(() => page.locator("body").innerText(), text => text.toLowerCase().includes("succeeded") && text.includes("verify"), "live release UI did not update")
       assert((await read(p("environments", state.prod.id))).environment.activeReleaseId === state.release.id, "successful release not active")
     })
     await check("release_artifact_download", ["release_run_live_jobs"], async () => {
@@ -273,13 +288,13 @@ async function submitApproveRun(release) {
     await check("failure_release_run", ["failure_runbook_create"], async () => {
       state.retry = await newRelease("UI Retry Release", "ui-retry-v1", state.retryBook.id, state.stage.id)
       await button("Submit for approval"); await releaseStatus(state.retry, "ready"); await button("Run release")
-      await releaseStatus(state.retry, "failed"); await eventually(() => page.locator("body").innerText(), text => text.includes("failed") && text.includes("blocked"), "failure/blocked state absent from UI")
+      await releaseStatus(state.retry, "failed"); await eventually(() => page.locator("body").innerText(), text => text.toLowerCase().includes("failed") && text.toLowerCase().includes("blocked"), "failure/blocked state absent from UI")
     })
     await check("failure_retry", ["failure_release_run"], async () => {
       await button("Retry release"); await releaseStatus(state.retry, "succeeded")
       const jobs = (await read(p("releases", state.retry.id) + "/jobs")).jobs
       assert(jobs.find(j => j.stepKey === "flaky").attempts === 2, "retry attempts did not increment")
-      await eventually(() => page.locator("body").innerText(), text => text.includes("succeeded"), "retry success not live")
+      await eventually(() => page.locator("body").innerText(), text => text.toLowerCase().includes("succeeded"), "retry success not live")
     })
     await check("second_release_success", ["release_run_live_jobs"], async () => {
       await actor("operator"); state.second = await newRelease("UI Aurora Followup", "ui-aurora-v2", state.runbook.id)
@@ -380,10 +395,11 @@ async function submitApproveRun(release) {
       await nav("Overview"); await screenshot("desktop-overview")
     })
   } catch (error) {
+    await fs.writeFile(path.join(out, "instrument-error.log"), String(error.stack || error) + "\n")
     report.instrumentError = String(error.stack || error).slice(0, 1800)
   } finally {
     await browser?.close().catch(() => {})
-    if (proxy) await new Promise(resolve => proxy.close(resolve))
+    if (proxy) await proxy.close()
     await write()
   }
   process.exitCode = report.instrumentError ? 2 : report.checks.every(row => row.status === "passed") ? 0 : 1
