@@ -1,0 +1,239 @@
+{
+  "kind": "native-cancellation-baseline-evidence-v1",
+  "unchangedWitnessRevision": "cdd1e3b",
+  "unchangedWitnessSha256": "10fb6412a9b79f1b9a2242665f7a67d73589fd1b68961fbc0018ba4cef227dbd",
+  "finalProbeSha256": "d1ae0e9ec0e033b9ce4b60c2d38e6e9e7ae5edddb4772045d694e435d98f1209",
+  "realProviderCalls": 0,
+  "fundedMeterCalls": 0,
+  "bunRuns": 0,
+  "browserRuns": 0,
+  "productEvaluationPerformed": false,
+  "qualityComparisonMet": false,
+  "exploratoryAttemptsPreserved": true,
+  "attempts": [
+    {
+      "label": "native-cancel-before-inflight-01",
+      "mode": "message-inflight",
+      "providerRequests": 6,
+      "syntheticMeasuredUsd": 7.200000000029405e-05,
+      "nativeExitCode": 0,
+      "stopReason": null,
+      "settlementComplete": true,
+      "runtimeQuiesced": true,
+      "transcriptCoverageComplete": true,
+      "nativeTranscriptCount": 2,
+      "terminalFramesWritten": 6,
+      "disconnectedCompletedRequests": [],
+      "summarySha256": "721be2aecfe6a3547e7277a556f3b0e0120e31370253bdfa654c14233183a95b"
+    },
+    {
+      "label": "native-cancel-before-inflight-02",
+      "mode": "message-inflight",
+      "providerRequests": 6,
+      "syntheticMeasuredUsd": 7.200000000029405e-05,
+      "nativeExitCode": 0,
+      "stopReason": null,
+      "settlementComplete": true,
+      "runtimeQuiesced": true,
+      "transcriptCoverageComplete": true,
+      "nativeTranscriptCount": 2,
+      "terminalFramesWritten": 6,
+      "disconnectedCompletedRequests": [],
+      "summarySha256": "5a5cd564d4fa22b5efb01d2139d9d817bc442195c6eda8850fe03810caf7d5f7"
+    },
+    {
+      "label": "native-cancel-before-inflight-03",
+      "mode": "message-inflight",
+      "providerRequests": 6,
+      "syntheticMeasuredUsd": 7.200000000029405e-05,
+      "nativeExitCode": 0,
+      "stopReason": null,
+      "settlementComplete": true,
+      "runtimeQuiesced": true,
+      "transcriptCoverageComplete": true,
+      "nativeTranscriptCount": 2,
+      "terminalFramesWritten": 6,
+      "disconnectedCompletedRequests": [],
+      "summarySha256": "43a539b8a6bd9eb8ffce844c8f7080ab326881f3c1af7c0844e9968a608016ad"
+    },
+    {
+      "label": "native-cancel-before-inflight-04",
+      "mode": "message-inflight",
+      "providerRequests": 6,
+      "syntheticMeasuredUsd": 7.200000000029405e-05,
+      "nativeExitCode": 0,
+      "stopReason": null,
+      "settlementComplete": true,
+      "runtimeQuiesced": true,
+      "transcriptCoverageComplete": true,
+      "nativeTranscriptCount": 2,
+      "terminalFramesWritten": 6,
+      "disconnectedCompletedRequests": [],
+      "summarySha256": "65e38f399c6e348db997530d9fb039c603282beae21333b4574fbd0bd9d25137"
+    },
+    {
+      "label": "native-cancel-before-inflight-05",
+      "mode": "message-inflight",
+      "providerRequests": 4,
+      "syntheticMeasuredUsd": 4.7999999999603915e-05,
+      "nativeExitCode": 1,
+      "stopReason": "forwarded_client_cancelled",
+      "settlementComplete": true,
+      "runtimeQuiesced": true,
+      "transcriptCoverageComplete": true,
+      "nativeTranscriptCount": 2,
+      "terminalFramesWritten": 3,
+      "disconnectedCompletedRequests": [
+        4
+      ],
+      "summarySha256": "b66946af03416bc3ee59aab608fab74e44a54d20ca0a1a11405a31020abc3f2e"
+    },
+    {
+      "label": "native-cancel-before-interrupt-queued-01",
+      "mode": "interrupt-queued",
+      "providerRequests": 5,
+      "syntheticMeasuredUsd": 6.000000000039307e-05,
+      "nativeExitCode": 0,
+      "stopReason": null,
+      "settlementComplete": true,
+      "runtimeQuiesced": true,
+      "transcriptCoverageComplete": true,
+      "nativeTranscriptCount": 3,
+      "terminalFramesWritten": 5,
+      "disconnectedCompletedRequests": [],
+      "summarySha256": "1c910494d5ab14d923a0e37f989079ca10166712b482ce90b2355dfe215a70b1"
+    },
+    {
+      "label": "native-cancel-before-interrupt-queued-02",
+      "mode": "interrupt-queued",
+      "providerRequests": 1,
+      "syntheticMeasuredUsd": 1.1999999999900979e-05,
+      "nativeExitCode": 1,
+      "stopReason": "queued_client_cancelled",
+      "settlementComplete": true,
+      "runtimeQuiesced": true,
+      "transcriptCoverageComplete": true,
+      "nativeTranscriptCount": 3,
+      "terminalFramesWritten": 0,
+      "disconnectedCompletedRequests": [
+        1
+      ],
+      "summarySha256": "dd7544bca61532f487cad4b8be27c9db4f0ea8d0b3f6f38de4ad135be7b9cc38"
+    },
+    {
+      "label": "native-cancel-before-queued-01",
+      "mode": "message-queued",
+      "providerRequests": 6,
+      "syntheticMeasuredUsd": 7.200000000029405e-05,
+      "nativeExitCode": 0,
+      "stopReason": null,
+      "settlementComplete": true,
+      "runtimeQuiesced": true,
+      "transcriptCoverageComplete": true,
+      "nativeTranscriptCount": 3,
+      "terminalFramesWritten": 6,
+      "disconnectedCompletedRequests": [],
+      "summarySha256": "bb098f73f7af588554c236ed9cfd2138cedd99647d81efea917861f9ff4591da"
+    },
+    {
+      "label": "native-cancel-before-queued-02",
+      "mode": "message-queued",
+      "providerRequests": 2,
+      "syntheticMeasuredUsd": 2.3999999999801958e-05,
+      "nativeExitCode": 1,
+      "stopReason": "forwarded_client_cancelled",
+      "settlementComplete": true,
+      "runtimeQuiesced": true,
+      "transcriptCoverageComplete": true,
+      "nativeTranscriptCount": 3,
+      "terminalFramesWritten": 2,
+      "disconnectedCompletedRequests": [
+        2
+      ],
+      "summarySha256": "10e511e748fe4c7ddc4ec354759a5ef1455d392d7ff15e0ef7a01acf372623db"
+    },
+    {
+      "label": "native-cancel-before-tail-01",
+      "mode": "final-tail",
+      "providerRequests": 0,
+      "syntheticMeasuredUsd": 0.0,
+      "nativeExitCode": 1,
+      "stopReason": "admission_policy_or_state_failure",
+      "settlementComplete": true,
+      "runtimeQuiesced": true,
+      "transcriptCoverageComplete": false,
+      "nativeTranscriptCount": null,
+      "terminalFramesWritten": 0,
+      "disconnectedCompletedRequests": [],
+      "summarySha256": "3f9531cfe24c8eba27324d8a9ae17a350f8605bb301036cca595776633c9bd3c"
+    },
+    {
+      "label": "native-cancel-before-tail-02",
+      "mode": "final-tail",
+      "providerRequests": 1,
+      "syntheticMeasuredUsd": 1.1999999999900979e-05,
+      "nativeExitCode": 0,
+      "stopReason": "forwarded_client_cancelled",
+      "settlementComplete": true,
+      "runtimeQuiesced": true,
+      "transcriptCoverageComplete": true,
+      "nativeTranscriptCount": 1,
+      "terminalFramesWritten": 1,
+      "disconnectedCompletedRequests": [
+        1
+      ],
+      "summarySha256": "ead98e76488a147a1f659de406573f0738002b4f3f11d3235d1075e78c90e16e"
+    },
+    {
+      "label": "native-cancel-frozen-before-inflight-01",
+      "mode": "message-inflight",
+      "providerRequests": 4,
+      "syntheticMeasuredUsd": 4.7999999999603915e-05,
+      "nativeExitCode": 1,
+      "stopReason": "forwarded_client_cancelled",
+      "settlementComplete": true,
+      "runtimeQuiesced": true,
+      "transcriptCoverageComplete": true,
+      "nativeTranscriptCount": 2,
+      "terminalFramesWritten": 3,
+      "disconnectedCompletedRequests": [
+        4
+      ],
+      "summarySha256": "c78f81efdb05eb0d2644493d309b41ddd3fc5ce5b7fe2f8be2a1262d3130ad4a"
+    },
+    {
+      "label": "native-cancel-frozen-before-queued-01",
+      "mode": "interrupt-queued",
+      "providerRequests": 1,
+      "syntheticMeasuredUsd": 1.1999999999900979e-05,
+      "nativeExitCode": 1,
+      "stopReason": "queued_client_cancelled",
+      "settlementComplete": true,
+      "runtimeQuiesced": true,
+      "transcriptCoverageComplete": true,
+      "nativeTranscriptCount": 3,
+      "terminalFramesWritten": 0,
+      "disconnectedCompletedRequests": [
+        1
+      ],
+      "summarySha256": "7fd71111a52adea4316eebb6768e84e4213a08e43223c8f39c1c490d85f7acca"
+    },
+    {
+      "label": "native-cancel-frozen-before-tail-01",
+      "mode": "final-tail",
+      "providerRequests": 1,
+      "syntheticMeasuredUsd": 1.1999999999900979e-05,
+      "nativeExitCode": 0,
+      "stopReason": "forwarded_client_cancelled",
+      "settlementComplete": true,
+      "runtimeQuiesced": true,
+      "transcriptCoverageComplete": true,
+      "nativeTranscriptCount": 1,
+      "terminalFramesWritten": 1,
+      "disconnectedCompletedRequests": [
+        1
+      ],
+      "summarySha256": "b792ce34cbddbfe3c7cfb24d4272f7d685ff70b403fcd0be2d6a989bb2633df1"
+    }
+  ]
+}
