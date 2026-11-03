@@ -321,6 +321,7 @@ export type UserMessage = {
   executionMode?: "normal" | "fast"
   size?: TaskSizeChoice
   judge?: TaskJudgeMode
+  secondOpinion?: boolean
 }
 
 export type ProviderAuthError = {
@@ -6713,6 +6714,8 @@ export type ModelCodium = {
     default: string
     ceiling: string
   }
+  judge?: string
+  review?: Array<"triage" | "confirm" | "panelJudge">
 }
 
 export type TaskStatus = "queued" | "running" | "waiting_on_user" | "completed" | "failed" | "stopped"
@@ -16469,6 +16472,7 @@ export type SessionPromptData = {
     budget?: RunBudget
     size?: TaskSizeChoice
     judge?: TaskJudgeMode
+    secondOpinion?: boolean
     parts: Array<TextPartInput | FilePartInput | AgentPartInput | SubtaskPartInput>
   }
   path: {
@@ -16981,6 +16985,7 @@ export type SessionPromptAsyncData = {
     budget?: RunBudget
     size?: TaskSizeChoice
     judge?: TaskJudgeMode
+    secondOpinion?: boolean
     parts: Array<TextPartInput | FilePartInput | AgentPartInput | SubtaskPartInput>
   }
   path: {
@@ -17032,6 +17037,7 @@ export type SessionCommandData = {
     budget?: RunBudget
     size?: TaskSizeChoice
     judge?: TaskJudgeMode
+    secondOpinion?: boolean
     parts?: Array<{
       id?: string
       type: "file"

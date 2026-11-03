@@ -39,6 +39,9 @@ import path from "path"
 import { isFreeModelRef } from "@vectordevai/schema/free-model"
 import { SessionMemory } from "../session/memory"
 import { ResearchRun } from "./research-run"
+import { SecondOpinion } from "../session/second-opinion"
+import { ProviderV2 } from "@vectordevai/core/provider"
+import { ModelV2 } from "@vectordevai/core/model"
 
 export interface TaskPromptOps {
   cancel(sessionID: SessionID): Effect.Effect<void>
@@ -914,7 +917,12 @@ export const TaskTool = Tool.define(
 
       // Keep the parent's free route even if its model became unavailable after the tool call.
       const freeRoute = isFreeModelRef(msg.info)
-      const inherit = !next.model || freeRoute
+      // Second opinion (WP A35): the judge Vector launches itself for Codium work runs on the plan's judge from another
+      // lab, which the judge gate chose. Only the gate's own launch carries it; a judge a model or a person launches
+      // keeps the usual choice.
+      const secondOpinion =
+        subagentType === "judge" && invoked && !next.model && !freeRoute ? SecondOpinion.fromExtra(ctx.extra) : undefined
+      const inherit = (!next.model || freeRoute) && !secondOpinion
       // Explore only searches and reads, so without a model of its own it runs on the provider's small model, as
       // Claude Code runs Explore on Haiku. getSmallModel keeps a free parent on its own model.
       const small =
@@ -939,14 +947,16 @@ export const TaskTool = Tool.define(
         small.cost.input + small.cost.output < parentModel.cost.input + parentModel.cost.output
           ? small
           : undefined
-      const model = cheap
-        ? { modelID: cheap.id, providerID: cheap.providerID }
-        : !inherit && next.model
-          ? next.model
-          : {
-              modelID: msg.info.modelID,
-              providerID: msg.info.providerID,
-            }
+      const model = secondOpinion
+        ? { providerID: ProviderV2.ID.make(secondOpinion.providerID), modelID: ModelV2.ID.make(secondOpinion.modelID) }
+        : cheap
+          ? { modelID: cheap.id, providerID: cheap.providerID }
+          : !inherit && next.model
+            ? next.model
+            : {
+                modelID: msg.info.modelID,
+                providerID: msg.info.providerID,
+              }
       // Resolve every selected model before a batch launches any sibling. Free
       // routes keep the existing no-paid-fallback policy even after disappearing.
       if (batch && !freeRoute) yield* provider.getModel(model.providerID, model.modelID)
@@ -967,8 +977,9 @@ export const TaskTool = Tool.define(
         : undefined
       const childVariant =
         !inherit && !cheap ? undefined : (configured ?? (cheap ? undefined : highEffort ? capped : variant))
-      // An agent with its own model runs with its own variant, so the record names that one.
-      const recordedVariant = childVariant ?? (!inherit ? next.variant : undefined)
+      // An agent with its own model runs with its own variant, so the record names that one. A Second opinion judge
+      // runs at its catalog entry's own effort, which is part of the entry.
+      const recordedVariant = childVariant ?? (!inherit && !secondOpinion ? next.variant : undefined)
       const modelRef = { ...model, ...(recordedVariant ? { variant: recordedVariant } : {}) }
       const { kind, custom } = subagentKind(next)
       const childPermission = deriveSubagentSessionPermission({

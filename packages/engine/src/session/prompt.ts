@@ -91,6 +91,7 @@ import { RunBudget } from "@vectordevai/schema/run-budget"
 import { TaskSize } from "@vectordevai/core/task-size"
 import { SessionTaskSize } from "./task-size"
 import { SessionCodiumAuto } from "./codium-auto"
+import { SecondOpinion } from "./second-opinion"
 import { parseJudgeVerdict } from "./judge-verdict"
 import { isRecord } from "@/util/record"
 import { ResearchRun } from "@/tool/research-run"
@@ -947,6 +948,19 @@ const layer = Layer.effect(
 
       const round = input.rounds + 1
       const sessionID = input.session.id
+      // Second opinion (WP A35): Codium work is judged on the plan's judge from another lab, when the person turned it
+      // on, no judge model is configured and the catalog lists a usable cross-lab judge for the worker's model.
+      const on = SecondOpinion.enabled(work.requests.flatMap((request) => request.users))
+      const codiumWorker = input.lastUser.model.providerID === ModelPlanStatus.PROVIDER_ID
+      const opinion =
+        on && codiumWorker && !judge.model
+          ? SecondOpinion.judgeModel({
+              worker: input.lastUser.model,
+              models: (yield* provider.list())[ProviderV2.ID.make(ModelPlanStatus.PROVIDER_ID)]?.models,
+              configured: false,
+              on,
+            })
+          : undefined
       const message = yield* judgeMessage({ lastUser: input.lastUser, agent: parent.name, size: work.tier })
       const result = yield* launchJudge({
         session: input.session,
@@ -967,6 +981,7 @@ const layer = Layer.effect(
           return { judge: { round, size: work.tier, ...(verdict ? { verdict } : {}) } }
         },
         failed: "The judge could not run",
+        ...(opinion ? { extra: { [SecondOpinion.EXTRA]: opinion } } : {}),
       }).pipe(
         Effect.onInterrupt(() =>
           Effect.gen(function* () {
@@ -993,6 +1008,8 @@ const layer = Layer.effect(
         model: input.lastUser.model,
         ...(input.lastUser.selected ? { selected: input.lastUser.selected } : {}),
         executionMode: input.lastUser.executionMode,
+        // The repair's verdict is judged as the work was: with Second opinion while it was on.
+        ...(on ? { secondOpinion: true } : {}),
       }
       yield* sessions.updateMessage(followup)
       yield* sessions.updatePart({
@@ -1541,6 +1558,7 @@ const layer = Layer.effect(
         executionMode: input.executionMode,
         ...(input.size ? { size: input.size } : {}),
         ...(input.judge ? { judge: input.judge } : {}),
+        ...(input.secondOpinion ? { secondOpinion: true } : {}),
       }
 
       if (
@@ -3730,6 +3748,7 @@ const layer = Layer.effect(
                 ? {}
                 : { size: commandSize(input.arguments) }),
           ...(input.judge ? { judge: input.judge } : {}),
+          ...(input.secondOpinion ? { secondOpinion: true } : {}),
         },
         // @file references in an MCP prompt or a skill are not the user's choice; the user's own attachments are.
         { userFile: (url) => attached.has(url) || cmd.source === "command" },
@@ -4060,6 +4079,10 @@ export const PromptInput = Schema.Struct({
     description:
       "When Vector runs LLM-as-a-judge after the run: off, thorough (after large tasks that changed files) or changes (after every task that changed files). Defaults to the config's sizing.judge.",
   }),
+  secondOpinion: Schema.optional(Schema.Boolean).annotate({
+    description:
+      "Second opinion: when the judge checks work done on a Vector Codium model, it runs on the plan's judge from another lab, unless a judge model is configured. Off unless set.",
+  }),
   parts: Schema.Array(
     Schema.Union([
       SessionV1.TextPartInput,
@@ -4126,6 +4149,7 @@ export const CommandInput = Schema.Struct({
   // As on PromptInput. Without a size from the sender or the command, Vector sizes the run from the template.
   size: Schema.optional(TaskSize.Choice),
   judge: Schema.optional(TaskSize.JudgeMode),
+  secondOpinion: Schema.optional(Schema.Boolean),
   // Inlined (no identifier annotation) to keep the original SDK output — the
   // PromptInput call site below references FilePartInput by ref via the
   // Schema export in message-v2.ts.

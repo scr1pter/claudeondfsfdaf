@@ -634,3 +634,58 @@ The shared browser action module validates explicit request/response shapes and 
   - Docs: `docs/vector/MODEL-PLANS.md`.
 - **Deletion is wired in A57.** `eraseAccountBallots(account)` is ready and tested. A57's erase step calls it, as it does
   A33's `eraseAccountReports`.
+
+## A35 Second opinion and second-lab reviews (2 Nov 2026)
+
+- **How the setting reaches the judge.** `general.secondOpinion` is an app setting, but the judge runs in the engine. Each
+  prompt (and command) carries `secondOpinion: true` while LLM-as-a-judge and the setting are on, stored on the user
+  message (`UserMessage.secondOpinion`, `PromptInput`, `CommandInput`; SDK and client regenerated). The judge gate reads
+  the newest message the person wrote in the judged work, so turning it off takes effect with the next message. The
+  gate hands the judge's model to the task tool as `ctx.extra.judgeModel` (the name B05 moves later); the task tool takes
+  it only for the gate's own judge launch (`invokedAgents` holds `judge`), never for a judge a model launches, and runs
+  it at the catalog entry's own effort rather than the worker's variant.
+- **Where the judges and pairs come from.** The catalog's `judges` and `review` were decoded by A19 but not exposed to
+  the engine's model list or the app. `ModelV2.Codium` gains `judge` (the entry's Second opinion judge) and `review`
+  (its parts in the plan's review pair), filled by `ModelPlans.listing(model, catalog)` and only naming listed
+  entries. Two existing expectations that pin the exact listing (`packages/engine/test/provider/model-plans.test.ts`,
+  `packages/core/test/model-plan-catalog.test.ts`) now include `review: ["triage"]`, which the shared catalog fixture
+  carries. The core plugin test helper (`packages/core/test/plugin/host.ts`) copies the new list like its other lists.
+- **Labs.** "Lab from the model's vendor" is `packages/core/src/model-lab.ts`: the Codium catalog's stated `lab` wins,
+  then a vendor path segment ("openrouter/anthropic/…"), then the model family in the name ("claude", "gpt", "gemini",
+  …), then a first-party provider id. Routers, clouds and local servers name no lab by themselves. Unknown means no
+  second-lab claim: Second opinion does not switch the judge, and the footer has no line.
+- **Review pairs.** Read as: on Codium without a `triageModel`, the first pass runs on the pair's triage model and the
+  check on the review model, which is the pair's confirm model when the settings named Codium Auto or the triage model
+  itself, and the named model otherwise. "Same-lab pair warns and runs a single pass" applies to the pair Vector picks
+  (for example DeepSeek Long checked against DeepSeek); a `triageModel` the user set keeps its documented behaviour
+  (a cheaper first pass double-checked on the review model), and only loses the second-lab line when both models share a
+  lab. A pair the catalog cannot complete (Pro before Sol is accepted) runs one pass without a note.
+- **The panel.** `panel` and `judgeModel` in review.json. The judge runs only after the check finished, sees each
+  candidate with the check's verdict inside the untrusted tag (`buildJudgePrompt`), answers in the verify schema, and
+  its verdict stands where it gave one; the check's stands for the rest and for earlier fixed claims. A panel the
+  models cannot form (no first pass, a judge from a lab already on it, or an unnamed lab) runs without the judge and
+  says why. The runner resolves `judgeModel` itself when the caller passes none, so GitHub reviews get the panel
+  without a change to Codex's `github.review.ts`.
+- **Footer data path.** `ReviewCost` gains `labs?: 2 | 3`, set by the runners (engine and desktop). The summary footer,
+  the CLI footer and the desktop footer read it. It travels in `cost` because that is the field Codex's
+  `github.review.ts` already passes to `buildSummaryBody`, so the GitHub summary shows the line with no edit to Codex's
+  files. Codium JSON output still reduces `cost` to its kind and model.
+- **Token stops.** The contract's "within the review token stops" names stops no code has: the per-review and per-PR
+  token stops of v2 item B were never built, and no work package owns them. The panel and the check add no budget: the
+  judge has the check's 10-step cap, is skipped with under 2 minutes left or past the dollar cap for priced models, and
+  every Codium request still passes the gateway's pool, daily limit and caps. Building the token stop is left to whoever
+  builds Codium GitHub reviews.
+- **Listing.** "Second opinion listable" needed a readiness check: `second-opinion` is ready once every plan that
+  includes it can reach at least one judge among the served models; `review-panel` gets one too (every plan's triage,
+  confirm and panel judge served, from three labs). Both read the served catalog through two new exported functions in
+  `api/_lib/model-plan-models.ts`. With no route accepted today, neither is ready until A60.
+- **Settings.** The toggle sits under LLM-as-a-judge and shows only when the status's `entitlements.secondOpinion` is
+  set (listed, H1). A setting turned on earlier stays on if the perk is later unlisted, and keeps working while the
+  server still serves the plan's judges; the gateway still decides each judge request from the plan (S1).
+- **Files outside A35's list:** `packages/core/src/model-lab.ts`, `review/second-lab.ts`, `review/prompt.ts` (judge
+  prompt), `review/types.ts`, `model-plans.ts`, `model-plan-status.ts`, `plugin/provider/vector-plan.ts`;
+  `packages/schema/src/model.ts`, `v1/session.ts`; `packages/engine/src/provider/provider.ts`, `cli/cmd/review.ts`,
+  `cli/cmd/review.render.ts`; `packages/app/src/components/prompt-input.tsx`, `settings-v2/second-opinion-model.ts`;
+  `api/_lib/codium-perks.ts`, `api/_lib/model-plan-models.ts`; the regenerated SDK and client; docs
+  (`docs/vectorscope.astro`, `docs/vector/MODEL-PLANS.md`); and the test edits above plus
+  `packages/web/test/codium-public.test.ts` and `packages/app/src/components/prompt-input/submit.test.ts` (new cases).

@@ -164,3 +164,30 @@ function planCatalog(
     review: Object.fromEntries(Object.entries(CODIUM_REVIEW_PAIRS[plan]).filter(([, id]) => usable(id))),
   }
 }
+
+/**
+ * WP A35: whether Second opinion can be listed. Every plan that includes it must have at least one judge pair it can
+ * use among the models the gateway serves now (catalog minus `models-off` minus routes without accepted evidence), so
+ * the listing never promises a judge nobody can reach. The store read failing throws, and the listing then shows
+ * nothing.
+ */
+export async function secondOpinionServed(fetcher: typeof fetch = fetch, options: ModelPlanCatalogOptions = {}) {
+  const served = await servedPlanModels(options, fetcher)
+  return CodiumPlan.PLANS.filter((plan) => ENTITLEMENTS[plan.id].secondOpinion).every(
+    (plan) => planCatalog(served, plan.id, options).judges !== undefined,
+  )
+}
+
+/**
+ * WP A35: whether the three-lab review panel can be listed. Every plan's review pair must be served whole: a first
+ * pass, a check and a panel judge, usable on that plan and from three different labs.
+ */
+export async function reviewPanelServed(fetcher: typeof fetch = fetch, options: ModelPlanCatalogOptions = {}) {
+  const served = await servedPlanModels(options, fetcher)
+  return CodiumPlan.PLANS.every((plan) => {
+    const catalog = planCatalog(served, plan.id, options)
+    const ids = [catalog.review.triage, catalog.review.confirm, catalog.review.panelJudge]
+    const labs = ids.map((id) => catalog.listed.find((model) => model.id === id)?.lab)
+    return labs.every(Boolean) && new Set(labs).size === 3
+  })
+}

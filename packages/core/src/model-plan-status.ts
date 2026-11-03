@@ -647,6 +647,10 @@ export type Listing = {
   locked?: { plan: string; name: string; previewUntil?: number }
   preview?: { until: number }
   auto?: unknown
+  /** WP A35: the Second opinion judge for this worker, from another lab. */
+  judge?: string
+  /** WP A35: the parts this entry plays in the plan's review pair. */
+  review?: readonly string[]
 }
 
 /** Whether an entry is Codium Auto, which picks a model for each message and is never a model itself. */

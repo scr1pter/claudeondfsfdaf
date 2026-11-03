@@ -5,6 +5,7 @@
 import { Billing } from "@vectordevai/schema/billing"
 import { reviewCostHasCodium, reviewCostIsCodium } from "@vectordevai/core/review/state"
 import { costWording, formatDuration, formatTokens, formatUsd } from "@vectordevai/core/review/format"
+import { checkedLine } from "@vectordevai/core/review/second-lab"
 import type {
   Finding,
   PlacedFinding,
@@ -158,7 +159,9 @@ function counts(outcome: ReviewOutcome): string {
 function partialLine(input: RenderInput): string | undefined {
   const { outcome, limits } = input
   if (!outcome.partial) return undefined
-  const failed = outcome.specialists.find((entry) => entry.status === "failed" && entry.name !== "verify")
+  const failed = outcome.specialists.find(
+    (entry) => entry.status === "failed" && entry.name !== "verify" && entry.name !== "judge",
+  )
   const stop =
     outcome.partial === "budget"
       ? `stopped at the ${formatUsd(limits.maxCostUsd)} budget`
@@ -222,6 +225,9 @@ function footer(outcome: ReviewOutcome): string {
   if (outcome.cost) {
     if (reviewCostHasCodium(outcome.cost)) parts.push(costWording(outcome.cost))
     else parts.push(outcome.cost.model, costText(outcome.cost), usage(outcome.cost))
+    // WP A35: as in the summary comment's footer, with your own keys too.
+    const checked = checkedLine(outcome.cost.labs)
+    if (checked) parts.push(checked)
   }
   parts.push(formatDuration(outcome.durationMs))
   if (outcome.sessions.length) parts.push(`sessions: ${outcome.sessions.join(", ")}`)
@@ -231,7 +237,7 @@ function footer(outcome: ReviewOutcome): string {
 // "By pass: review $0.0123 (40.1k in / 2.0k out) · double-check $0.0031 (9.2k in / 0.4k out)". Dollar amounts only
 // when the review as a whole is priced.
 function passesLine(passes: ReviewPass[], cost: ReviewCost | undefined): string {
-  const name = { review: "review", security: "security", verify: "double-check" } as const
+  const name = { review: "review", security: "security", verify: "double-check", judge: "panel judge" } as const
   return `By pass: ${passes
     .map((pass) => {
       const explicit = pass.model.includes("/")

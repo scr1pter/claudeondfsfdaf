@@ -49,6 +49,8 @@ export interface Settings {
     llmJudge: boolean
     // Which runs the judge checks while llmJudge is on: large (Thorough) tasks that changed files, or every task that did.
     judgeScope: "thorough" | "changes"
+    // Second opinion (WP A35): while the judge is on, Vector Codium work is judged on the plan's judge from another lab.
+    secondOpinion: boolean
     autoModelRouting: boolean
     shellToolPartsExpanded: boolean
     editToolPartsExpanded: boolean
@@ -178,6 +180,8 @@ const defaultSettings: Settings = {
     showReasoningSummaries: false,
     llmJudge: false,
     judgeScope: "thorough",
+    // Off by default: a judge from another lab spends more of the Codium month than the worker's own model would.
+    secondOpinion: false,
     // Off by default: this spends the user's own BYOK budget on a model they
     // did not choose, so it has to be something they opt into.
     autoModelRouting: false,
@@ -440,6 +444,10 @@ export const { use: useSettings, provider: SettingsProvider } = createSimpleCont
         judgeScope: withFallback(() => store.general?.judgeScope, defaultSettings.general.judgeScope),
         setJudgeScope(value: "thorough" | "changes") {
           setStore("general", "judgeScope", value)
+        },
+        secondOpinion: withFallback(() => store.general?.secondOpinion, defaultSettings.general.secondOpinion),
+        setSecondOpinion(value: boolean) {
+          setStore("general", "secondOpinion", value)
         },
         setAutoModelRouting(value: boolean) {
           setStore("general", "autoModelRouting", value)

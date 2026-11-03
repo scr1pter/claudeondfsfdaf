@@ -4,6 +4,7 @@
 
 import { normalizeTitle } from "./fingerprint"
 import { MAX_SUGGESTION_CHARS } from "./schema"
+import { checkedLine } from "./second-lab"
 import {
   SUMMARY_MARKER,
   escapeVectorMarkers,
@@ -883,6 +884,9 @@ function footer(input: SummaryInput): string[] {
   else if (input.mode === "carry" && input.since) parts.push(`carried over from \`${short(input.since)}\``)
   else parts.push("full review")
   if (input.cost) parts.push(costWording(input.cost))
+  // WP A35: a first pass checked by another lab's model, or the panel's three labs. Own keys included.
+  const checked = checkedLine(input.cost?.labs)
+  if (checked) parts.push(checked)
   if (input.durationMs !== undefined) parts.push(formatDuration(input.durationMs))
   if (input.prTotal && input.prTotal.reviews > 0) {
     const spent = [

@@ -1699,6 +1699,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
       researchScope,
       llmJudge: settings.general.llmJudge,
       judgeScope: settings.general.judgeScope,
+      secondOpinion: settings.general.secondOpinion,
       autoModelRouting: settings.general.autoModelRouting,
       connectProvider: () => setModelStartNudge((count) => count + 1),
       localMode: () => localMode.status()?.policy.enabled === true,

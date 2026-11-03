@@ -3,6 +3,7 @@ import { CodiumCopy } from "../../packages/schema/src/codium-copy.js"
 import { foundingWindowOpen } from "./codium-founding.js"
 import { githubAppConfiguration } from "./github-app.js"
 import { modelPlansEnabled } from "./model-plan-config.js"
+import { reviewPanelServed, secondOpinionServed } from "./model-plan-models.js"
 import { readDisabledSet, readSwitch, type SwitchName } from "./codium-switches.js"
 import { roadmapConfigured } from "./roadmap.js"
 import { reportEmailConfigured } from "./support-reports.js"
@@ -35,6 +36,12 @@ export const perkServices: PerkServices = {
   "reports-first": () => reportEmailConfigured(),
   // WP A34: the roadmap vote keeps its ballots in the store, its only service.
   vote: () => roadmapConfigured(),
+  // WP A35: Second opinion runs in Vector's engine on the plan's judges, so it is ready once every plan that includes
+  // it has a judge it can use among the models the gateway serves now.
+  "second-opinion": (fetcher) => secondOpinionServed(fetcher),
+  // WP A35: the panel runs in Vector's review on the plan's review pair and panel judge, so it is ready once every
+  // plan's three are served and come from three labs.
+  "review-panel": (fetcher) => reviewPanelServed(fetcher),
 }
 
 const switches: Readonly<Partial<Record<PerkId, SwitchName>>> = {

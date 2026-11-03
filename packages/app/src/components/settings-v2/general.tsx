@@ -10,6 +10,8 @@ import "./settings-v2.css"
 
 import { usePlatform } from "@/context/platform"
 import { observeTelemetryPreference, setTelemetryEnabled, telemetryEnabled } from "@/features/privacy/telemetry"
+import { onCodiumChange } from "@/vector-account"
+import { SECOND_OPINION_DESCRIPTION, SECOND_OPINION_TITLE, secondOpinionOffered } from "./second-opinion-model"
 
 export type SettingsSection = "general" | "notifications" | "accessibility"
 
@@ -192,6 +194,13 @@ export const SettingsGeneralV2: Component<{
     () => platform.getUsageSharing?.().catch(() => true) ?? true,
     { initialValue: true },
   )
+  // Second opinion (WP A35) is offered only while vectordev.ai says the signed-in account's plan includes it and lists
+  // it; Codium plan changes read it again.
+  const [codiumPlan, { refetch: refetchCodiumPlan }] = createResource(
+    () => (platform.vectorAccount?.codium ? true : false),
+    () => platform.vectorAccount?.codium?.().catch(() => undefined),
+  )
+  onCleanup(onCodiumChange(() => void refetchCodiumPlan()))
   let statusTimeout: ReturnType<typeof setTimeout> | undefined
 
   const section = () => props.section ?? "general"
@@ -302,6 +311,14 @@ export const SettingsGeneralV2: Component<{
               value={settings.general.judgeScope()}
               onChange={(value) => settings.general.setJudgeScope(value === "changes" ? "changes" : "thorough")}
             />
+            <Show when={secondOpinionOffered(codiumPlan())}>
+              <ToggleRow
+                title={SECOND_OPINION_TITLE}
+                description={SECOND_OPINION_DESCRIPTION}
+                checked={settings.general.secondOpinion()}
+                onChange={settings.general.setSecondOpinion}
+              />
+            </Show>
           </Show>
         </Card>
         <TerminalCard />

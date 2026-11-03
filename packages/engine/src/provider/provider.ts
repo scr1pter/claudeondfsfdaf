@@ -1776,7 +1776,10 @@ export function fromFreeModels(models: readonly FreeModelInfo[], providerID: "ve
  * entry is listed with its `codium` listing metadata, so the pickers, routing and swarms can tell Codium Auto, locked
  * and manual-only entries apart.
  */
-export function fromModelPlans(models: readonly ModelPlans.Model[]): Info {
+export function fromModelPlans(
+  models: readonly ModelPlans.Model[],
+  catalog?: Pick<ModelPlans.Catalog, "judges" | "review">,
+): Info {
   return {
     id: ProviderV2.ID.make(ModelPlans.PROVIDER_ID),
     name: ModelPlans.PROVIDER_NAME,
@@ -1802,7 +1805,7 @@ export function fromModelPlans(models: readonly ModelPlans.Model[]): Info {
           // No dollar price: a Codium step spends credits, so it is recorded unpriced and left out of dollar totals.
           cost: { ...UNPRICED },
           limit: { context: model.contextLength, output: model.maxOutputTokens },
-          codium: ModelPlans.listing(model),
+          codium: ModelPlans.listing(model, catalog),
           capabilities: {
             temperature: true,
             reasoning: false,
@@ -1879,7 +1882,7 @@ const layer = Layer.effect(
         // Codium is a catalog provider like the free models, so the env loop and custom loaders walk it too.
         if (planCatalog.enabled) {
           catalogIDs[planID] = true
-          catalog.set(planID, fromModelPlans(planCatalog.models))
+          catalog.set(planID, fromModelPlans(planCatalog.models, planCatalog))
         }
         if (freeCatalog.enabled && freeCatalog.models.length) {
           catalogIDs[ProviderV2.ID.vector] = true
@@ -2230,7 +2233,7 @@ const layer = Layer.effect(
         if (!freeCatalog.enabled) delete providers[ProviderV2.ID.vector]
         // Codium replaces every user or project override of its ID, so prices and destination stay Vector's.
         delete providers[planID]
-        if (planCatalog.enabled && isProviderAllowed(planID)) providers[planID] = fromModelPlans(planCatalog.models)
+        if (planCatalog.enabled && isProviderAllowed(planID)) providers[planID] = fromModelPlans(planCatalog.models, planCatalog)
         if (openRouterKey && isProviderAllowed(ProviderV2.ID.openrouter)) {
           providers[ProviderV2.ID.openrouter] ??= fromFreeModels([], "openrouter")
           Object.assign(providers[ProviderV2.ID.openrouter].models, fromFreeModels(ownedFree, "openrouter").models)
@@ -2398,7 +2401,7 @@ const layer = Layer.effect(
         !cfg.disabled_providers?.includes(planID) &&
         (!cfg.enabled_providers || cfg.enabled_providers.includes(planID))
       )
-        s.providers[planID] = fromModelPlans(current.models)
+        s.providers[planID] = fromModelPlans(current.models, current)
       return s.providers
     })
 
