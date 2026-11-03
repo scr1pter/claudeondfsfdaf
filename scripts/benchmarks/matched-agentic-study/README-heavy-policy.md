@@ -40,7 +40,7 @@ To select the heavy graph explicitly:
 registry = NativeRegistry(..., max_depth=2)
 supervisor = OwnedSupervisor(..., funding_profile="heavy-matched-teams-high-v1")
 arm = supervisor.begin(runtime, label, registry, HEAVY_ROLES,
-                       role_parents=HEAVY_ROLE_PARENTS)
+                       role_parents=HEAVY_ROLE_PARENTS, soft_usd=13.84808545)
 ```
 
 `HEAVY_ROLES` and `HEAVY_ROLE_PARENTS` are exported by `role_graph.py`. Native
@@ -66,11 +66,14 @@ refused. No prior charge is reset or reclassified.
 
 Every forwarded request, including native helpers, worker follow-ups and judge
 calls, remains charged to its runtime. The 300-request/two-hour bound and one
-formal same-lead repair remain. The $3 threshold gates a new formal repair only
-after the current attempt and HTTP handlers settle; it does not interrupt an
-attempt halfway through. Per-call reservation and approved actor/global caps
-still apply. Unknown usage, transport, ancestry or closure is review, never a
-free or passing task.
+formal same-lead repair remain. The heavy profile permits an explicit settled
+repair threshold up to its approved $13.84808545 additional allowance, so a
+completed heavier attempt is not denied one repair solely for crossing the old
+$3 threshold. The original profile remains capped at $3. Both thresholds are
+checked only after the current attempt and HTTP handlers settle; neither
+interrupts an attempt halfway through. Per-call reservation and approved
+actor/global caps still apply. Unknown usage, transport, ancestry or closure is
+review, never a free or passing task.
 
 ## Free verification
 
@@ -79,3 +82,33 @@ reviewed `VECTOR_BENCH_METER_SOURCE` setting described in the base README. The
 new heavy controls use synthetic native SQLite records and owned loopback fake
 meters only. They start no Bun, coding CLI, browser, live controller or provider
 connection. The original four-role controls remain in the same complete suite.
+The final complete suite passed 121 controls with the reviewed unchanged meter
+source enabled, including its missing/invalid-usage failure paths.
+
+The full graph control admits all seven identities in both synthetic native
+schemas, follows up on the same backend and judge identities, and reconciles
+every receipt and all descendant transcripts. Separate controls prove a heavy
+phase supervisor can admit, perform one settled repair after a $5.10 attempt
+and close its seven-role scope without losing or reclassifying charges; a
+changed allocation-plan hash mid-arm refuses the next forward. Repair limits
+above the explicit approved allowance are refused before arming. The old
+funding profile cannot inherit the larger heavy repair threshold.
+
+`heavy_codex_alias_probe.py --codex-bin <pinned-cli> --out <fresh-private-dir>`
+additionally exercises the real pinned Codex binary through the actual alias
+witness. The fake provider directs the lead to create its three initial direct
+roles; the coordinator actually creates its two native children. The lead waits
+for those roles, creates the fixed judge, waits and finishes. The observed run
+made 14 fake requests across all seven native identities, including depth two.
+Every request used Sol/High/auto/low/32000; leaf collaboration declarations were
+absent. Fourteen receipts and seven private native transcripts reconciled with
+exit zero and clean scoped closure. Native grandchild wire metadata joined the
+same owned root through actual persisted parent edges. Shell, browser and app
+actions are disabled in this harmless mechanics proof; the heavy coding adapter
+still needs its separate capability-preserving smoke. No provider/funded-meter
+call or Bun process was used. Raw instructions and native IDs remain private.
+
+The separate Windows transcript-path fix accepts only an extended DOS spelling
+of the same resolved owned regular file. Device, network, GLOBALROOT, cross-home,
+missing-file and directory paths remain refused. This addresses the real native
+Codex resume spelling without weakening the owned-home boundary.

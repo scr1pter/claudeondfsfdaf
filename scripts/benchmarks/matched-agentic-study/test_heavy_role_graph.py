@@ -13,6 +13,7 @@ from native_registry import NativeRegistry
 from native_team_policy import MODEL, PolicyError
 from owned_team_witness import OwnedSupervisor, WitnessServer
 from role_graph import HEAVY_ROLE_PARENTS, HEAVY_ROLES, RoleGraph
+from funding_profiles import HEAVY_PHASE, HEAVY_PLAN_SHA256, funding_policy
 from test_owned_witness import FakeMeter, ROOT, add_thread, body, headers, native_fixture
 
 
@@ -60,7 +61,7 @@ class HeavyOwnedWitnessTests(unittest.TestCase):
         self.meter.shutdown(); self.meter.server_close(); self.meter_thread.join(5)
         self.temp.cleanup()
 
-    def start(self, runtime):
+    def start(self, runtime, funding_profile=None, soft_usd=3):
         self.runtime = runtime
         home = self.root / "native"
         self.ids = {"lead": ROOT, **{role: "synthetic-" + role for role in HEAVY_ROLES}}
@@ -77,8 +78,23 @@ class HeavyOwnedWitnessTests(unittest.TestCase):
             self.registry = NativeRegistry(runtime, home, database, ROOT, "openai", helper_producers={"synthetic-summary": "summary"}, max_depth=2)
         for role in HEAVY_ROLES:
             self.add(role)
-        self.supervisor = OwnedSupervisor(self.meter.control, lambda: copy.deepcopy(self.meter.receipts), self.root / "private-output", quiesced=lambda: True)
-        self.arm = self.supervisor.begin(runtime, "synthetic-heavy-graph", self.registry, HEAVY_ROLES, role_parents=HEAVY_ROLE_PARENTS)
+        if funding_profile == HEAVY_PHASE:
+            self.meter.spent = {"foundry-vector": 10.8884618, "foundry-codex": 6.4715992}
+            original_status = self.meter.status
+            def approved_status():
+                value = original_status()
+                value.update(phaseID=HEAVY_PHASE, phasePlanSha256=HEAVY_PLAN_SHA256,
+                             measuredUsd=20.3038291 + sum(row["measuredUsd"] for row in self.meter.receipts), attempts=889 + self.meter.calls)
+                for actor in ("foundry-vector", "foundry-codex"):
+                    value["actors"][actor]["limitUsd"] = funding_policy(HEAVY_PHASE).actor_cap(actor)
+                value["actors"]["synthetic-sealed-history"] = {"limitUsd": 2.9437681, "measuredUsd": 2.9437681, "reservedUsd": 0}
+                return value
+            self.meter.status = approved_status
+        def receipt_rows():
+            rows = copy.deepcopy(self.meter.receipts)
+            return [{**row, "seq": row["seq"] + 289} for row in rows] if funding_profile == HEAVY_PHASE else rows
+        self.supervisor = OwnedSupervisor(self.meter.control, receipt_rows, self.root / "private-output", quiesced=lambda: True, funding_profile=funding_profile)
+        self.arm = self.supervisor.begin(runtime, "synthetic-heavy-graph", self.registry, HEAVY_ROLES, role_parents=HEAVY_ROLE_PARENTS, soft_usd=soft_usd)
         self.witness = WitnessServer(("127.0.0.1", 0), self.meter.server_address, self.arm)
         self.witness_thread = threading.Thread(target=self.witness.serve_forever, daemon=True)
         self.witness_thread.start()
@@ -112,6 +128,42 @@ class HeavyOwnedWitnessTests(unittest.TestCase):
 
     def test_vector_full_graph_and_same_identity_followups_reconcile_every_charge(self):
         self.full_graph("vector")
+
+    def test_heavy_funding_profile_reaches_admission_repair_and_settled_closure(self):
+        self.start("vector", funding_profile=HEAVY_PHASE, soft_usd=13.84808545)
+        self.meter.request_cost = 5.1
+        self.assertEqual(self.request(), 200)
+        self.meter.request_cost = 0.01
+        self.supervisor.repair()
+        for role in HEAVY_ROLES:
+            self.assertEqual(self.request(role), 200)
+        result = self.supervisor.close(timeout=2)
+        self.assertFalse(result["reviewRequired"])
+        self.assertTrue(result["settlementComplete"])
+        self.assertEqual(result["providerRequests"], 7)
+        self.assertAlmostEqual(result["measuredUsd"], 5.16)
+        self.assertEqual(self.arm.funding.phase, HEAVY_PHASE)
+        self.assertEqual(self.arm.funding.actor_cap(self.arm.actor), 24.73654725)
+        self.assertEqual(self.arm.repairs, 1)
+
+    def test_heavy_repair_threshold_cannot_expand_beyond_approved_allowance(self):
+        with self.assertRaises(PolicyError):
+            self.start("codex", funding_profile=HEAVY_PHASE, soft_usd=13.85)
+        self.assertNotIn("/control", self.meter.controls)
+
+    def test_old_funding_profile_cannot_inherit_heavy_repair_threshold(self):
+        with self.assertRaises(PolicyError):
+            self.start("codex", soft_usd=13.84808545)
+        self.assertNotIn("/control", self.meter.controls)
+
+    def test_changed_phase_plan_after_admission_stops_before_another_forward(self):
+        self.start("codex", funding_profile=HEAVY_PHASE)
+        self.assertEqual(self.request(), 200)
+        approved_status = self.meter.status
+        self.meter.status = lambda: {**approved_status(), "phasePlanSha256": "0" * 64}
+        self.assertEqual(self.request("backend_coordinator"), 400)
+        self.assertEqual(self.meter.calls, 1)
+        self.assertTrue(self.arm.failure)
 
     def full_graph(self, runtime):
         self.start(runtime)

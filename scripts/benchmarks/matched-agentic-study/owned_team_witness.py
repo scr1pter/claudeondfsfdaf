@@ -158,7 +158,7 @@ class OwnedArm:
         self.funding_profile, self.funding = funding_profile, funding_policy(funding_profile)
         require(registry.max_depth >= self.profile.max_depth, "registry depth below role graph")
         require(isinstance(label, str) and re.fullmatch(r"[a-z0-9][a-z0-9-]{0,69}", label) is not None, "owned synthetic label required")
-        require(1 <= max_calls <= 300 and 0 < seconds <= 7200 and 0 < soft_usd <= 3, "study bounds expanded")
+        require(1 <= max_calls <= 300 and 0 < seconds <= 7200 and 0 < soft_usd <= self.funding.repair_threshold_usd, "study bounds expanded")
         self.runtime, self.registry, self.roles = runtime, registry, set(roles)
         self.actor, self.before, self.controller, self.audit = ACTORS[runtime], copy.deepcopy(before), controller, audit
         self._label = label
@@ -492,7 +492,7 @@ class OwnedSupervisor:
         require(set(limits) <= {"max_calls", "seconds", "soft_usd"}, "unreviewed arm limit")
         before = healthy(self.controller("/status"), idle=True, funding_profile=self.funding_profile)
         require(before.get("batchCallsRemaining") == 0, "another paid scope is open")
-        require(1 <= limits.get("max_calls", 300) <= 300 and 0 < limits.get("seconds", 7200) <= 7200 and 0 < limits.get("soft_usd", 3) <= 3, "study bounds expanded")
+        require(1 <= limits.get("max_calls", 300) <= 300 and 0 < limits.get("seconds", 7200) <= 7200 and 0 < limits.get("soft_usd", 3) <= self.funding.repair_threshold_usd, "study bounds expanded")
         audit = Audit(self.output / runtime / "witness-audit.jsonl")
         audit.append({"type": "supervisor_preflight", "runtime": runtime, "actor": ACTORS[runtime], "studyCapUsd": 48, "actorCapUsd": self.funding.actor_cap(ACTORS[runtime]), "fundingPhase": self.funding.phase, "phasePlanSha256": self.funding.plan_sha256})
         self.failed = True
