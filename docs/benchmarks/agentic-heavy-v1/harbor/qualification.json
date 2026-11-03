@@ -1,0 +1,25 @@
+{
+  "kind": "harbor-qualification-v1",
+  "status": "pending_runtime_qualification",
+  "runtimeQualified": false,
+  "paidExecutionAuthorizedByThisRecord": false,
+  "modelCalls": 0,
+  "staticChecks": {
+    "pureTestsPassed": 17,
+    "browserEvaluatorSyntax": "passed",
+    "layoutProbeSyntax": "passed",
+    "seedFileCount": 6,
+    "applicationImplementationSeeded": false
+  },
+  "expectedChecks": {"api": 28, "browser": 32, "prerequisite": 4, "total": 64},
+  "runtimeControls": {
+    "emptySeed": "not_run",
+    "positiveReference": "not_run"
+  },
+  "limits": [
+    "Pure report controls do not establish application correctness.",
+    "Actual typecheck/build/start, HTTP, restart and browser qualification requires the shared Bun lease.",
+    "No paid execution may rely on this benchmark until every required positive row passes and the empty seed has zero application-check passes.",
+    "The reference implementation is outside the task root and has not been published or seeded."
+  ]
+}
