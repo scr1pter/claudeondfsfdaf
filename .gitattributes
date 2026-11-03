@@ -16,3 +16,12 @@ packages/core/src/database/migration.gen.ts linguist-generated
 # Prompts and tool descriptions go to the model as written, so a Windows checkout must not add carriage returns to them.
 /packages/engine/src/**/*.txt text eol=lf
 /packages/core/src/**/*.txt text eol=lf
+
+# Preserve portable navigation-overlay control/provenance bytes.
+/docs/benchmarks/agentic-heavy-v1/foundry-nav-v2/overlay-provenance.json -text
+/docs/benchmarks/agentic-heavy-v1/foundry-nav-v2/helper.diff -text whitespace=cr-at-eol
+/docs/benchmarks/agentic-heavy-v1/foundry-nav-v2/project-navigation-control.cjs -text
+/docs/benchmarks/agentic-heavy-v1/foundry-nav-v2/test_overlay.py -text
+/docs/benchmarks/agentic-heavy-v1/foundry-nav-v2/OVERLAY.md -text
+/docs/benchmarks/agentic-heavy-v1/foundry-nav-v2/materialize.py -text
+/docs/benchmarks/agentic-heavy-v1/foundry-nav-v2/qualify.py -text
