@@ -38,7 +38,8 @@ An optional navigation checker correction requires **all three** explicit flags:
 The manifest is a reviewed complete `relative/path -> SHA256` JSON map and its
 SHA is the canonical JSON digest. The overlay must contain exactly the base
 task files plus the explicitly whitelisted overlay provenance, helper diff,
-navigation control, pure controls and overlay documentation; the only changed original file is
+navigation control, pure controls, byte-restoration/qualification tools and overlay
+documentation; the only changed original file is
 `instrument/browser-eval.cjs`. Prompt, seed, task.json, wrapper and every other
 original byte (including original provenance and qualification) must remain unchanged. The immutable evaluator command's
 `{task}` is bound to that separately frozen overlay. The continuation plan and

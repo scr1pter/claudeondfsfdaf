@@ -219,7 +219,8 @@ class ContinuationTests(unittest.TestCase):
         (path / "overlay-provenance.json").write_text(json.dumps({"kind": "foundry-navigation-overlay-v2",
             "baseTaskRevision": "8ce4af881b98aaef2d73979073910f5a538c4f31",
             "originalTaskManifestSha256": continuation.digest(base)}))
-        for name in ("helper.diff", "project-navigation-control.cjs", "test_overlay.py", "OVERLAY.md", ".gitattributes"):
+        for name in ("helper.diff", "project-navigation-control.cjs", "test_overlay.py", "OVERLAY.md", ".gitattributes",
+                     "materialize.py", "qualify.py"):
             (path / name).write_text("labelled synthetic overlay metadata")
         files = continuation.manifest(path)
         reviewed = root / "reviewed-overlay.json"; reviewed.write_text(json.dumps(files))
