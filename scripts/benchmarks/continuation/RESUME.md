@@ -12,10 +12,23 @@ Required planning arguments are `--original-plan`, `--old-run`, `--witness-root`
 its matched-instrument manifest must have the supplied canonical SHA256. An
 optional `--qualification` names the independently reviewed free proof below.
 `--write-plan` writes the sanitized plan outside every source/evidence root.
+The closed correction manifest is `31357229ddb010df9eb764aa3b8dee5a001eff7122b2b1ed2a08c84beaa736dd`.
+Its proven code revision is `4cfa1db6c68c458d33afa954b2981e6259be43e5`.
+An explicitly reviewed clean descendant revision is accepted only with those
+exact same matched-instrument bytes; documentation-only descendant
+`b86c3fbf4824d46b2203de5a09de61359cdc285b` satisfies that gate.
+
+Before paid admission, `--archive-only --archive-out NEW_PRIVATE_DIRECTORY`
+creates and roundtrip-verifies the actual retained home/app/support archive.
+It requires the qualified native proof but reads no controller capability or
+receipt ledger, invokes no model, and does not mutate the original state.
+Use its printed manifest path as `--verified-archive FILE` when building the
+final plan. Planning reauthenticates both archive bytes and original state.
+`--run` reuses that exact checked archive without another copy.
 
 Execution additionally requires `--run --reviewed-plan FILE
 --expected-resume-sha SHA --qualification FILE --controller-config FILE
---receipt-jsonl FILE`. Exact plan equality and digest validation precede the
+--receipt-jsonl FILE --verified-archive FILE`. Exact plan equality and digest validation precede the
 sole capability-file read. A single guarded admission permits 291 new calls.
 Ambiguous admission is never retried. The old nine charges remain separate
 from the new batch receipt join, and the result reports their combined totals.
@@ -52,9 +65,13 @@ review is outstanding.
 - `kind`: `heavy-codex-partial-resume-qualification-v1`.
 - `binarySha256` and `witnessInstrumentSha256`: exact native binary and corrected
   matched-instrument manifest identities.
+- `witnessCodeRevision`: the proven correction code revision above. A plan
+  separately pins the reviewed invocation revision, including a documentation
+  descendant with identical matched bytes.
 - `realProviderCalls`, `fundedMeterCalls`, `BunRuns`, `ChromeRuns`: all zero.
 - `beforeRoles`: lead, backend coordinator, frontend worker; their
-  `beforeLatestOutcomes` must all be failed. `afterRoles` contains the exact
+  `beforeLatestOutcomes` must be exactly `{lead: failed,
+  backend_coordinator: interrupted, frontend_worker: failed}`. `afterRoles` contains the exact
   seven-role team, and `maximumNativeDepth` is two.
 - All of `qualificationPassed`, `oldWitnessClosed`, `newWitnessEndpoint`,
   `newAliasObserved`, `rootIdentityPreserved`, `existingChildIdentitiesPreserved`,
@@ -81,10 +98,16 @@ transcripts and native identifiers stay outside Git and printed output.
 original plan. It invokes the unchanged `native_command` with the actual role
 configuration and code-mode definitions. Its deterministic fake upstream emits
 only fixed collaboration calls and final/error responses. The first scope
-retains three failed latest turns and known fake receipts; the second closes
+retains the three actual stopped latest turns and known fake receipts; the second closes
 the first endpoint, verifies the archive, adopts the native root/children under
 a fresh alias/endpoint, and creates the four unused roles. No app, Bun, Chrome,
 browser driver, real provider, or funded controller is started.
+
+Native shutdown can project the child that received `response.failed` as
+`interrupted`. Qualification records that state literally; it never converts it
+to `failed`. The failed fixture scope remains separately review-required. This
+fixture allowance does not relax paid adoption: the actual retained original
+three-thread database must still contain exactly its three known failed turns.
 
 Pure controls run from this directory:
 

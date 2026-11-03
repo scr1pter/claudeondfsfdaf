@@ -259,15 +259,20 @@ def main(argv=None):
         rows = meter.metadata()
         identities = {row["agent_role"] or "lead": row["id"] for row in rows}
         before = latest_outcomes(home, rows)
+        save(options.out / "phase1-native-state.json", {"latestOutcomes": before,
+            "identitySha256ByRole": {role: codex_resume.digest_id(identity) for role, identity in identities.items()},
+            "settlementComplete": first["closure"].get("settlementComplete"),
+            "runtimeQuiesced": first["closure"].get("runtimeQuiesced"), "historicalReviewRequired": True})
         require(set(identities) == {"lead", "backend_coordinator", "frontend_worker"}
-                and before == {role: "failed" for role in identities}
+                and before == codex_resume.FIXTURE_OUTCOMES
                 and first["closure"].get("settlementComplete") is True and first["closure"].get("runtimeQuiesced") is True
                 and first["closure"].get("reviewRequired") is True and len(first["arm"].admitted_ids) == 3,
                 "initial labelled fixture did not leave the exact known failed partial tree")
         prior = {name: codex_resume.exact_tree(owned / name) for name in ("runtime-home", "app", "support-data")}
         archive = codex_resume.archive_state(owned, options.out, prior)
         registry = native.NativeRegistry("codex", home, home / "codex/state_5.sqlite", identities["lead"], "benchmark", max_depth=2)
-        verified_ids, _ = codex_resume.native_state(home, registry, {role: codex_resume.digest_id(identity) for role, identity in identities.items()})
+        verified_ids, _ = codex_resume.native_state(home, registry,
+            {role: codex_resume.digest_id(identity) for role, identity in identities.items()}, fixture_latest_outcomes=before)
         require(verified_ids == identities, "fixture archive/native adoption identity mismatch")
         second = run_phase(meter, options.out, home, app, env, runtime, registry, 2, identities)
         after_rows = meter.metadata()
@@ -302,6 +307,7 @@ def main(argv=None):
                           "phase1/codex/witness-audit.jsonl", "phase2/process.json", "phase2/closure-sanitized.json", "phase2/codex/witness-audit.jsonl"]
         artifact = {"kind": "heavy-codex-partial-resume-qualification-v1", **flags,
             "binarySha256": original["binarySha256"]["codex_bin"], "witnessInstrumentSha256": codex_resume.digest(files),
+            "witnessCodeRevision": codex_resume.WITNESS_CODE_REVISION,
             "realProviderCalls": 0, "fundedMeterCalls": 0, "BunRuns": 0, "ChromeRuns": 0,
             "beforeRoles": ["lead", "backend_coordinator", "frontend_worker"], "beforeLatestOutcomes": before,
             "afterRoles": ["lead", *codex_resume.ROLES], "maximumNativeDepth": max(row["depth"] for row in meter.rows),

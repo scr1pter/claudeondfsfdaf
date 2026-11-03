@@ -15,6 +15,7 @@ from pathlib import Path
 import re
 import shutil
 import sqlite3
+import subprocess
 import sys
 import time
 
@@ -43,6 +44,9 @@ SOFT_USD = 13.84808545
 BASELINE = {"attempts": 1198, "measuredUsd": 27.2338604,
             "foundry-vector": 17.6761006, "foundry-codex": 6.6139917}
 ROLES = ("backend_coordinator", "backend_api", "backend_data", "frontend_worker", "qa_specialist", "team_judge")
+FIXTURE_OUTCOMES = {"lead": "failed", "backend_coordinator": "interrupted", "frontend_worker": "failed"}
+WITNESS_CODE_REVISION = "4cfa1db6c68c458d33afa954b2981e6259be43e5"
+WITNESS_MANIFEST_SHA = "31357229ddb010df9eb764aa3b8dee5a001eff7122b2b1ed2a08c84beaa736dd"
 
 
 def exact_tree(root):
@@ -141,7 +145,7 @@ def old_inputs(options):
     return original, prior, summary, arm, audit, snapshot
 
 
-def native_state(home, registry, expected_identities=IDENTITIES):
+def native_state(home, registry, expected_identities=IDENTITIES, fixture_latest_outcomes=None):
     """Read native metadata only; never rewrite IDs, ancestry or rollout paths."""
     with closing(registry.connect()) as connection:
         rows = connection.execute("SELECT id,source,thread_source,agent_role,agent_path,rollout_path,archived FROM threads").fetchall()
@@ -174,8 +178,19 @@ def native_state(home, registry, expected_identities=IDENTITIES):
     codex = Path(home) / "codex"
     with closing(sqlite3.connect((codex / "thread_history_1.sqlite").as_uri() + "?mode=ro", uri=True)) as connection:
         turns = connection.execute("SELECT thread_id,status FROM thread_turns").fetchall()
-        require(len(turns) == 3 and {row[0] for row in turns} == set(identities.values())
-                and all(row[1] == "failed" for row in turns), "retained failed phase changed")
+        if fixture_latest_outcomes is None:
+            require(len(turns) == 3 and {row[0] for row in turns} == set(identities.values())
+                    and all(row[1] == "failed" for row in turns), "retained failed phase changed")
+        else:
+            # Only the explicitly labelled synthetic qualification uses this
+            # branch. Paid adoption above always requires the exact old phase.
+            require(fixture_latest_outcomes == FIXTURE_OUTCOMES and set(identities) == set(FIXTURE_OUTCOMES)
+                    and len(turns) >= 3 and {row[0] for row in turns} == set(identities.values())
+                    and all(row[1] in ("completed", "failed", "interrupted") for row in turns),
+                    "labelled stopped fixture history changed")
+            latest = {role: connection.execute("SELECT status FROM thread_turns WHERE thread_id=? ORDER BY rollout_ordinal DESC LIMIT 1",
+                      (identity,)).fetchone()[0] for role, identity in identities.items()}
+            require(latest == fixture_latest_outcomes, "labelled fixture latest outcomes changed")
         projections = dict(connection.execute("SELECT thread_id,next_rollout_byte_offset FROM thread_history_projection_state"))
         require(all(projections.get(row["id"]) == Path(row["rollout_path"]).stat().st_size for row in rows),
                 "native history projection is incomplete")
@@ -226,16 +241,17 @@ def qualification(path, binary_sha, witness_sha):
              "existingChildIdentitiesPreserved", "noReplacementChildren", "codeModePreserved", "allSolHighAutoLow",
              "aliasOnly", "receiptJoinComplete", "archiveBeforeAdoptionVerified", "initialFailureRetainedSeparately",
              "historicalReviewRequired")
-    expected = {"kind", "binarySha256", "witnessInstrumentSha256", "realProviderCalls", "fundedMeterCalls", "BunRuns", "ChromeRuns",
+    expected = {"kind", "binarySha256", "witnessInstrumentSha256", "witnessCodeRevision", "realProviderCalls", "fundedMeterCalls", "BunRuns", "ChromeRuns",
                 "beforeRoles", "beforeLatestOutcomes", "afterRoles", "maximumNativeDepth", "phases", "cumulativeCalls",
                 "formalRepairCount", "evidenceFiles", *flags}
     require(set(value) == expected and value["kind"] == "heavy-codex-partial-resume-qualification-v1"
             and all(value[key] is True for key in flags), "native adoption qualification is incomplete")
     require(value["binarySha256"] == binary_sha and value["witnessInstrumentSha256"] == witness_sha
+            and value["witnessCodeRevision"] == WITNESS_CODE_REVISION
             and all(value[key] == 0 for key in ("realProviderCalls", "fundedMeterCalls", "BunRuns", "ChromeRuns")),
             "qualification binary, witness or free-only boundary changed")
     require(value["beforeRoles"] == ["lead", "backend_coordinator", "frontend_worker"]
-            and value["beforeLatestOutcomes"] == {role: "failed" for role in value["beforeRoles"]}
+            and value["beforeLatestOutcomes"] == FIXTURE_OUTCOMES
             and set(value["afterRoles"]) == {"lead", *ROLES} and len(value["afterRoles"]) == 7
             and value["maximumNativeDepth"] == 2, "qualification did not adopt the partial failed tree")
     phases = value["phases"]
@@ -260,7 +276,8 @@ def qualification(path, binary_sha, witness_sha):
                 and all(not item.is_symlink() and not item.is_junction() for item in [unresolved, *unresolved.parents]
                         if item == path.parent or item.is_relative_to(path.parent)) and file_hash(target) == checksum,
                 "qualification evidence changed or escaped")
-    return {"path": str(path), "sha256": file_hash(path), "kind": value["kind"], "evidenceFilesSha256": digest(value["evidenceFiles"])}
+    return {"path": str(path), "sha256": file_hash(path), "kind": value["kind"], "evidenceFilesSha256": digest(value["evidenceFiles"]),
+            "witnessCodeRevision": value["witnessCodeRevision"]}
 
 
 def load_instrument(options, original):
@@ -268,7 +285,11 @@ def load_instrument(options, original):
     require(re.fullmatch(r"[0-9a-f]{40}", options.expected_witness_revision or "") is not None,
             "explicit clean corrected-witness revision required")
     current = manifest(root)
-    require(digest(current) == options.expected_witness_manifest_sha, "reviewed corrected-witness manifest changed")
+    require(digest(current) == options.expected_witness_manifest_sha == WITNESS_MANIFEST_SHA,
+            "reviewed corrected-witness manifest changed")
+    require(subprocess.run(["git", "merge-base", "--is-ancestor", WITNESS_CODE_REVISION, options.expected_witness_revision],
+            cwd=options.witness_root, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0,
+            "corrected witness is not the proven code or its reviewed unchanged-manifest descendant")
     common_root = Path(original["frozenPaths"]["common_runner_root"]).resolve()
     require(manifest(common_root) == original["commonInstrumentFiles"], "original common instrument changed")
     sys.path.insert(0, str(root))
@@ -298,6 +319,7 @@ def build_plan(options):
     team.checked_path(options.out, roots)
     require(re.fullmatch(r"[a-z0-9][a-z0-9-]{0,63}", options.label) is not None, "explicit synthetic continuation label required")
     proof = qualification(options.qualification, original["binarySha256"]["codex_bin"], digest(witness_files))
+    archive = validate_archive(options.verified_archive, options.old_run / "codex", owned) if getattr(options, "verified_archive", None) else None
     plan = {"kind": "heavy-stopped-codex-native-resume-plan-v1", "oldPlanSha256": OLD_PLAN_SHA,
         "originalPlanSha256": codex_arm.ORIGINAL_PLAN_SHA, "originalSourceRevision": codex_arm.SOURCE,
         "oldRun": str(options.old_run), "oldEvidenceSha256": OLD_FILES, "oldIdentitySha256ByRole": IDENTITIES,
@@ -312,6 +334,7 @@ def build_plan(options):
         "witnessInstrumentSha256": digest(witness_files), "helperInstrumentFiles": manifest(Path(__file__).resolve().parent),
         "profileSha256": original["profileSha256"], "taskFilesSha256": digest(original["taskFiles"]),
         "binarySha256": original["binarySha256"], "evaluationOverlay": overlay, "qualification": proof,
+        "verifiedArchive": archive,
         "requiredExactPreAdmissionBaseline": BASELINE, "fundingPhase": original["fundingPhase"],
         "fundingAuthorizationPlanSha256": original["fundingAuthorizationPlanSha256"],
         "studyHardCapUsd": 48, "cumulativeActorCapsUsd": original["cumulativeActorCapsUsd"],
@@ -345,6 +368,23 @@ def archive_state(old_directory, out, expected):
               "files": expected, "manifestSha256ByRoot": {name: digest(files) for name, files in expected.items()}}
     (destination / "manifest.json").write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
     return {"archiveBeforeAdoptionVerified": True, "manifestSha256": file_hash(destination / "manifest.json"),
+            "roots": {name: digest(files) for name, files in expected.items()}}
+
+
+def validate_archive(path, old_directory, expected, check_source=True):
+    require(path.name == "manifest.json" and not path.is_symlink() and not path.is_junction(), "explicit archive manifest required")
+    value = json.loads(path.read_text(encoding="utf-8"))
+    require(value.get("kind") == "quiescent-native-adoption-archive-v1" and value.get("archiveBeforeAdoptionVerified") is True
+            and value.get("sourceRoots") == {name: str(old_directory / name) for name in expected}
+            and value.get("files") == expected
+            and value.get("manifestSha256ByRoot") == {name: digest(files) for name, files in expected.items()},
+            "verified archive provenance or inventory changed")
+    for name, files in expected.items():
+        require(exact_tree(path.parent / name) == {key: checksum for key, checksum in files.items() if isinstance(checksum, str)},
+                "verified archive bytes changed")
+        if check_source:
+            require(exact_tree(old_directory / name) == files, "retained source changed since archive")
+    return {"manifest": str(path), "manifestSha256": file_hash(path), "archiveBeforeAdoptionVerified": True,
             "roots": {name: digest(files) for name, files in expected.items()}}
 
 
@@ -488,11 +528,14 @@ def run_adopted(plan, old_summary, old_arm, *, supervisor, adapter, common, team
 
 def parser():
     result = argparse.ArgumentParser(description=__doc__)
-    for name in ("original-plan", "old-run", "witness-root", "out", "write-plan", "reviewed-plan", "qualification", "controller-config", "receipt-jsonl"):
+    for name in ("original-plan", "old-run", "witness-root", "out", "write-plan", "reviewed-plan", "qualification", "verified-archive",
+                 "archive-out", "controller-config", "receipt-jsonl"):
         result.add_argument("--" + name, type=Path, required=name in {"original-plan", "old-run", "witness-root", "out"})
     for name in ("expected-witness-revision", "expected-witness-manifest-sha", "expected-resume-sha", "label"):
         result.add_argument("--" + name, required=name in {"expected-witness-revision", "expected-witness-manifest-sha", "label"})
-    result.add_argument("--run", action="store_true")
+    execution = result.add_mutually_exclusive_group()
+    execution.add_argument("--run", action="store_true")
+    execution.add_argument("--archive-only", action="store_true")
     return result
 
 
@@ -503,6 +546,17 @@ def main(argv=None):
             setattr(options, key, value.resolve())
     values = build_plan(options)
     plan, original, prior, summary, old_arm, runtime, heavy, team, witness, common, registry, identities, slots, owned = values
+    if options.archive_only:
+        require(options.archive_out is not None and options.verified_archive is None and plan["qualification"] is not None,
+                "archive-only requires a new explicit archive output and qualified native proof")
+        team.checked_path(options.archive_out, [options.out, options.old_run, options.original_plan.parent, options.witness_root,
+            Path(__file__).resolve().parents[3], runtime.vector_root, runtime.task_dir, runtime.common_runner_root,
+            runtime.browser_driver_root, Path(plan["evaluationOverlay"]["root"])])
+        options.archive_out.mkdir(parents=True, exist_ok=False)
+        archive_state(options.old_run / "codex", options.archive_out, owned)
+        archive = validate_archive(options.archive_out / "pre-adoption-archive/manifest.json", options.old_run / "codex", owned)
+        print(json.dumps({"archive": archive, "paidExecutionRequested": False, "controllerOrCredentialFilesRead": False}, indent=2))
+        return 0
     if not options.run:
         if options.write_plan:
             team.checked_path(options.write_plan, [options.out, options.old_run, options.original_plan.parent,
@@ -511,8 +565,9 @@ def main(argv=None):
             common.save(options.write_plan, plan)
         print(json.dumps({"plan": plan, "planSha256": digest(plan), "paidExecutionRequested": False}, indent=2))
         return 0
-    require(options.reviewed_plan is not None and options.expected_resume_sha is not None and plan["qualification"] is not None,
-            "run requires an exact reviewed plan/digest and qualified failed-tree new-binding proof")
+    require(options.reviewed_plan is not None and options.expected_resume_sha is not None
+            and plan["qualification"] is not None and plan["verifiedArchive"] is not None,
+            "run requires an exact reviewed plan/digest, native proof and verified pre-adoption archive")
     require(plan == json.loads(options.reviewed_plan.read_text(encoding="utf-8")) and digest(plan) == options.expected_resume_sha,
             "reviewed native adoption plan changed")
     require(options.controller_config is not None and options.receipt_jsonl is not None,
@@ -526,7 +581,8 @@ def main(argv=None):
             "full-quality cumulative reservation unavailable")
     options.out.mkdir(parents=True, exist_ok=False)
     common.save(options.out / "resume-plan.json", plan)
-    archive = archive_state(options.old_run / "codex", options.out, owned)
+    archive = validate_archive(options.verified_archive, options.old_run / "codex", owned)
+    require(archive == plan["verifiedArchive"], "reviewed archive changed")
     common.save(options.out / "archive-verification.json", archive)
     require({name: digest(exact_tree(options.old_run / "codex" / name)) for name in owned} == plan["ownedStateSha256"],
             "native state changed after verified archive")
@@ -549,6 +605,8 @@ def main(argv=None):
         original_again, vector_again = codex_arm.original_inputs(options)
         require(original_again == original and vector_again["arms"]["vector"] == summary["arms"]["vector"],
                 "immutable original Vector evidence changed")
+        require(validate_archive(options.verified_archive, options.old_run / "codex", owned, check_source=False) == plan["verifiedArchive"],
+                "immutable pre-adoption archive changed")
         for name, checksum in OLD_FILES.items():
             require(file_hash(options.old_run / name) == checksum, "immutable prior attempt evidence changed")
         require(heavy.build_plan(runtime, common) == {**original, "teamInstrumentFiles": plan["witnessInstrumentFiles"]}

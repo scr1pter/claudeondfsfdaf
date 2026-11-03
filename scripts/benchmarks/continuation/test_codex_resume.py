@@ -147,6 +147,24 @@ class ResumeTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     codex_resume.native_state(root, registry, {role: codex_resume.digest_id(identity) for role, identity in ids.items()})
 
+    def test_exact_stopped_fixture_map_is_explicit_and_never_relaxes_real_guard(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            registry, ids = native_fixture(root)
+            expected = {role: codex_resume.digest_id(identity) for role, identity in ids.items()}
+            with closing(sqlite3.connect(root / "codex/thread_history_1.sqlite")) as connection, connection:
+                connection.execute("ALTER TABLE thread_turns ADD COLUMN rollout_ordinal INTEGER DEFAULT 0")
+                connection.execute("UPDATE thread_turns SET status='completed' WHERE thread_id!=?", (ids["lead"],))
+                connection.execute("INSERT INTO thread_turns VALUES(?,?,?)", (ids["backend_coordinator"], "interrupted", 1))
+                connection.execute("INSERT INTO thread_turns VALUES(?,?,?)", (ids["frontend_worker"], "failed", 1))
+            with self.assertRaisesRegex(ValueError, "retained failed phase"):
+                codex_resume.native_state(root, registry, expected)
+            self.assertEqual(codex_resume.native_state(root, registry, expected,
+                fixture_latest_outcomes=codex_resume.FIXTURE_OUTCOMES)[0], ids)
+            changed = {**codex_resume.FIXTURE_OUTCOMES, "frontend_worker": "interrupted"}
+            with self.assertRaises(ValueError):
+                codex_resume.native_state(root, registry, expected, fixture_latest_outcomes=changed)
+
     def test_archive_includes_dependencies_and_sidecars_and_detects_source_drift(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -158,7 +176,15 @@ class ResumeTests(unittest.TestCase):
             record = codex_resume.archive_state(old, out, expected)
             self.assertTrue(record["archiveBeforeAdoptionVerified"])
             self.assertTrue((out / "pre-adoption-archive/app/node_modules/native.sqlite-wal").is_file())
+            verified = codex_resume.validate_archive(out / "pre-adoption-archive/manifest.json", old, expected)
+            self.assertTrue(verified["archiveBeforeAdoptionVerified"])
             (old / "app/node_modules/native.sqlite-wal").write_bytes(b"changed")
+            with self.assertRaisesRegex(ValueError, "source changed"):
+                codex_resume.validate_archive(out / "pre-adoption-archive/manifest.json", old, expected)
+            self.assertEqual(codex_resume.validate_archive(out / "pre-adoption-archive/manifest.json", old, expected, check_source=False), verified)
+            (out / "pre-adoption-archive/app/node_modules/native.sqlite-wal").write_bytes(b"changed archive")
+            with self.assertRaisesRegex(ValueError, "archive bytes changed"):
+                codex_resume.validate_archive(out / "pre-adoption-archive/manifest.json", old, expected, check_source=False)
             with self.assertRaisesRegex(ValueError, "changed before archive"):
                 codex_resume.archive_state(old, root / "another", expected)
 
@@ -244,9 +270,10 @@ class ResumeTests(unittest.TestCase):
             "aliasOnly", "receiptJoinComplete", "archiveBeforeAdoptionVerified", "initialFailureRetainedSeparately", "historicalReviewRequired")
         value = {"kind": "heavy-codex-partial-resume-qualification-v1", **{key: True for key in flags},
             "binarySha256": "synthetic-binary", "witnessInstrumentSha256": "synthetic-instrument",
+            "witnessCodeRevision": codex_resume.WITNESS_CODE_REVISION,
             "realProviderCalls": 0, "fundedMeterCalls": 0, "BunRuns": 0, "ChromeRuns": 0,
             "beforeRoles": ["lead", "backend_coordinator", "frontend_worker"],
-            "beforeLatestOutcomes": {role: "failed" for role in ("lead", "backend_coordinator", "frontend_worker")},
+            "beforeLatestOutcomes": copy.deepcopy(codex_resume.FIXTURE_OUTCOMES),
             "afterRoles": ["lead", *codex_resume.ROLES], "maximumNativeDepth": 2,
             "phases": [{"phase": "initial_failed_fixture", "forwardedCalls": 5, "knownReceiptCount": 5,
                         "measuredUsd": .05, "latestOutcome": "failed", "reviewRequired": True},
@@ -273,6 +300,7 @@ class ResumeTests(unittest.TestCase):
             for mutation in (lambda d: d["phases"][0].update(latestOutcome="completed"),
                     lambda d: d["phases"][1].update(knownReceiptCount=11),
                     lambda d: d.update(formalRepairCount=2), lambda d: d.update(formalRepairCount=True),
+                    lambda d: d["beforeLatestOutcomes"].update(backend_coordinator="failed"),
                     lambda d: d.update(cumulativeCalls=301), lambda d: d.update(unreviewedExtra=True)):
                 changed = copy.deepcopy(value)
                 mutation(changed)
