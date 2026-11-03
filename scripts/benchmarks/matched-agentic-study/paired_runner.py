@@ -539,6 +539,17 @@ def native_turn_chronology(observations):
             "latestOutcome": turns[-1]["outcome"] if turns else "unknown"}
 
 
+def native_command_text(value):
+    if isinstance(value, str):
+        return value if value.strip() else None
+    if not isinstance(value, list) or not value or any(not isinstance(arg, str) for arg in value):
+        return None
+    shell = Path(value[0]).name.lower().removesuffix(".exe")
+    if len(value) >= 3 and shell in {"pwsh", "powershell", "cmd", "bash", "sh"} and value[-2].lower() in {"-command", "-c", "-lc", "/c"}:
+        return value[-1] if value[-1].strip() else None
+    return subprocess.list2cmdline(value)
+
+
 def normalize_transcript(path, runtime):
     """Normalize native descendants, never CLI root stdout, for browser auditing."""
     events, commands, executions, observations, start, unknown = [], {}, [], [], None, 0
@@ -578,6 +589,26 @@ def normalize_transcript(path, runtime):
                 start = min(start, at) if start is not None and at is not None else start or at
             if row.get("type") == "event_msg":
                 kind = payload.get("type")
+                if kind == "item_completed":
+                    item = payload.get("item", {})
+                    if item.get("type") == "CommandExecution":
+                        command = native_command_text(item.get("command"))
+                        began = timestamp(payload.get("started_at_ms"))
+                        ended = timestamp(payload.get("completed_at_ms"))
+                        if not command or began is None or ended is None or began > ended or item.get("status") != "completed" or not isinstance(item.get("exit_code"), int):
+                            unknown += 1
+                            continue
+                        key = item.get("id")
+                        if not isinstance(key, str) or not key:
+                            unknown += 1
+                            continue
+                        executions.append({"at": began, "command": command})
+                        observations.append({"outcome": "assistant_started", "at": began})
+                        events.extend([{ "type": "item.started", "item": {"id": key, "type": "command_execution", "command": command}},
+                                       {"type": "item.completed", "item": {"id": key, "type": "command_execution", "command": command,
+                                                                            "exit_code": item["exit_code"]}}])
+                    elif item.get("type") not in {"UserMessage", "AgentMessage", "Reasoning", "FileChange", "ImageView", "SubAgentActivity"}:
+                        unknown += 1
                 if kind in ("task_started", "turn_started"):
                     observations.append({"outcome": "started", "at": at})
                 elif kind in ("task_complete", "turn_complete"):
