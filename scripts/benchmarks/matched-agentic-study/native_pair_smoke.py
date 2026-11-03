@@ -63,7 +63,7 @@ def scripted_calls(runtime, stage, tools, port):
     if runtime == "codex" and stage in (1, 3):
         return [call("wait_agent", {"timeout_ms": 10000})]
     if stage == (2 if runtime == "vector" else 4):
-        return [call("shell" if runtime == "vector" else "exec_command",
+        return [call("bash" if runtime == "vector" else "exec_command",
                      {"command" if runtime == "vector" else "cmd": shell_command(port),
                       **({"description": "Read the labelled local smoke API and common browser client"} if runtime == "vector" else {})})]
     return []
