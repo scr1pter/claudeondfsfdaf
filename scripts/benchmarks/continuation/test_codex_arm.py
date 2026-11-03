@@ -163,6 +163,16 @@ class ContinuationTests(unittest.TestCase):
         with self.assertRaises(continuation.ContinuationError): controller("/control", body)
         self.assertEqual(calls.count("/control"), 1)
 
+    def test_funding_drift_after_preflight_blocks_the_actual_admission(self):
+        meter = ContinuationMeter()
+        controller = continuation.CodexOnlyController(meter, healthy, heavy_runner.FUNDING.phase, "synthetic-codex")
+        controller("/status")
+        meter.calls = 1
+        with self.assertRaisesRegex(continuation.ContinuationError, "funding changed"):
+            controller("/control", {"actor": "foundry-codex", "calls": 300, "label": controller.label})
+        self.assertFalse(controller.admission_attempted)
+        self.assertFalse(any(route == "/control" for route, _body in meter.controls))
+
     def test_new_plan_tampering_fails_before_import_or_private_capability(self):
         with tempfile.TemporaryDirectory() as root:
             path = Path(root) / "plan.json"; path.write_text("{}")
