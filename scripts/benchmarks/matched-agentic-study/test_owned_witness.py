@@ -86,6 +86,7 @@ class FakeMeter(ThreadingHTTPServer):
         self.extra_terminals = []
         self.prefix_signal, self.tail_signal = None, None
         self.malformed_tail_label = None
+        self.raw_tail, self.strip_terminal_delimiter = None, False
         self.release.set()
         self.spent = {"foundry-vector": 10.9, "foundry-codex": 5.9}
         self.request_cost = 0.01
@@ -150,6 +151,10 @@ class FakeHandler(BaseHTTPRequestHandler):
             if meter.tail_signal:
                 label, value = meter.tail_signal
                 raw_response += ("event: " + label + "\ndata: " + json.dumps(value) + "\n\n").encode()
+            if meter.strip_terminal_delimiter:
+                raw_response = raw_response.rstrip(b"\n") + b"\n"
+            if meter.raw_tail:
+                raw_response += meter.raw_tail
         elif meter.mode == "drop":
             raw_response = b"incomplete"
             self.send_response(200); self.send_header("Content-Type", "application/json"); self.send_header("Content-Length", str(len(raw_response))); self.end_headers()
@@ -293,7 +298,7 @@ class OwnedWitnessTests(unittest.TestCase):
         self.assertEqual(self.request(payload, purpose="summary")[0], 400)
         self.assertEqual(self.meter.calls, 1)
 
-    def test_queued_client_cancel_stops_queue_without_forwarding_it(self):
+    def test_queued_client_cancel_keeps_identity_without_charge_and_requires_review(self):
         add_thread(self.registry.database, "worker-a", "implementation")
         self.meter.release.clear()
         results = []
@@ -307,12 +312,18 @@ class OwnedWitnessTests(unittest.TestCase):
         self.assertEqual(self.arm.status()["queuedRequests"], 1)
         queued.close()
         deadline = time.monotonic() + 3
-        while not self.arm.failure and time.monotonic() < deadline:
+        while not self.arm.nonfatal_reviews and time.monotonic() < deadline:
             time.sleep(0.01)
         self.meter.release.set(); active.join(5)
         self.assertEqual(self.meter.calls, 1)
-        self.assertEqual(self.arm.failure, "queued_client_cancelled")
+        self.assertIsNone(self.arm.failure)
+        self.assertEqual(self.arm.slots["implementation"], "worker-a")
         self.assertEqual(self.arm.status()["queuedRequests"], 0)
+        self.assertEqual(self.arm.nonfatal_reviews[0]["providerRequests"], 0)
+        result = self.supervisor.close(timeout=2)
+        self.assertTrue(result["settlementComplete"])
+        self.assertEqual(result["providerRequests"], 1)
+        self.assertTrue(result["reviewRequired"])
 
     def test_failed_disarm_retains_token_and_is_not_automatically_retried(self):
         calls = []
@@ -425,6 +436,91 @@ class OwnedWitnessTests(unittest.TestCase):
         self.assertEqual(result["providerRequests"], 1)
         self.assertTrue(result["reviewRequired"])
 
+    def disconnect_known_stream(self):
+        self.meter.mode = "sse"
+        self.meter.response_usage["input_tokens_details"] = {"cached_tokens": 0, "cache_write_tokens": 0}
+        self.meter.release.clear()
+        connection = http.client.HTTPConnection("127.0.0.1", self.witness.server_port, timeout=5)
+        connection.request("POST", "/v1/responses", body=json.dumps(body()), headers={"Authorization": "Bearer " + self.arm._alias, **headers()})
+        response = connection.getresponse()
+        self.assertTrue(response.fp.readline())
+        response.close(); connection.close()
+        time.sleep(.05)
+        self.meter.release.set()
+        deadline = time.monotonic() + 3
+        while self.arm.forwarding and time.monotonic() < deadline:
+            time.sleep(.01)
+        self.assertFalse(self.arm.forwarding)
+
+    def test_known_completed_client_cancel_keeps_current_arm_and_all_charges(self):
+        self.disconnect_known_stream()
+        self.assertIsNone(self.arm.failure)
+        self.assertEqual(self.meter.calls, 1)
+        self.assertEqual(self.arm.nonfatal_reviews[0]["reason"], "known_completed_client_cancellation")
+        self.assertEqual(self.request()[0], 200)
+        result = self.supervisor.close(timeout=2)
+        self.assertTrue(result["settlementComplete"])
+        self.assertTrue(result["reviewRequired"])
+        self.assertEqual(result["providerRequests"], 2)
+        self.assertAlmostEqual(result["measuredUsd"], .02)
+        self.assertTrue(self.supervisor.failed)
+
+    def test_known_completed_cancel_still_requires_exact_receipt_join(self):
+        self.disconnect_known_stream()
+        self.supervisor.receipts = lambda: []
+        result = self.supervisor.close(timeout=2)
+        self.assertFalse(result["settlementComplete"])
+        self.assertTrue(result["reviewRequired"])
+        self.assertIsNone(result["measuredUsd"])
+        self.assertAlmostEqual(result["controllerUsageThroughClosure"]["measuredUsd"], .01)
+
+    def assert_unknown_tail(self, tail, disconnected=False, incomplete_frame=False):
+        self.meter.mode, self.meter.raw_tail = "sse", tail
+        self.meter.strip_terminal_delimiter = incomplete_frame
+        if disconnected:
+            self.disconnect_known_stream()
+        else:
+            self.assertEqual(self.request()[0], 200)
+        self.assertIsNotNone(self.arm.failure)
+        result = self.supervisor.close(timeout=2)
+        self.assertTrue(result["settlementComplete"])
+        self.assertTrue(result["reviewRequired"])
+        self.assertEqual(result["providerRequests"], 1)
+
+    def test_completed_then_partial_data_requires_review(self):
+        self.assert_unknown_tail(b"data: {")
+
+    def test_cancelled_completed_then_partial_data_requires_review(self):
+        self.assert_unknown_tail(b"data: {", disconnected=True)
+
+    def test_completed_then_partial_error_requires_review(self):
+        self.assert_unknown_tail(b"event: error\ndata: {")
+
+    def test_cancelled_completed_then_partial_error_requires_review(self):
+        self.assert_unknown_tail(b"event: error\ndata: {", disconnected=True)
+
+    def test_completed_then_unknown_extra_event_requires_review(self):
+        self.assert_unknown_tail(b'event: response.synthetic\ndata: {"type":"response.synthetic"}\n\n')
+
+    def test_cancelled_completed_then_unknown_extra_event_requires_review(self):
+        self.assert_unknown_tail(b'event: response.synthetic\ndata: {"type":"response.synthetic"}\n\n', disconnected=True)
+
+    def test_terminal_without_complete_frame_requires_review(self):
+        self.assert_unknown_tail(None, incomplete_frame=True)
+
+    def test_cancelled_terminal_without_complete_frame_requires_review(self):
+        self.assert_unknown_tail(None, disconnected=True, incomplete_frame=True)
+
+    def test_completed_then_full_done_marker_is_accepted(self):
+        self.meter.mode, self.meter.raw_tail = "sse", b"data: [DONE]\n\n"
+        self.assertEqual(self.request()[0], 200)
+        self.assertIsNone(self.arm.failure)
+
+    def test_completed_then_eof_comment_is_accepted(self):
+        self.meter.mode, self.meter.raw_tail = "sse", b": labelled heartbeat"
+        self.assertEqual(self.request()[0], 200)
+        self.assertIsNone(self.arm.failure)
+
     def test_missing_terminal_is_not_retried_and_charges_still_retained(self):
         self.meter.mode = "drop"
         self.assertEqual(self.request()[0], 200)
@@ -525,9 +621,9 @@ class OwnedWitnessTests(unittest.TestCase):
         self.meter.prefix_signal = ("error", {"message": "synthetic provider failure"})
         self.terminal_case("sse", "completed")
 
-    def test_malformed_nonterminal_heartbeat_does_not_undo_completion(self):
+    def test_malformed_postterminal_heartbeat_requires_review(self):
         self.meter.malformed_tail_label = "heartbeat"
-        self.terminal_case("sse", "completed", review=False)
+        self.terminal_case("sse", "completed", review=True)
 
     def configure_known_length_incomplete(self, mode="sse"):
         self.meter.mode, self.meter.response_status, self.meter.terminal_event = mode, "incomplete", "response.incomplete"

@@ -41,3 +41,18 @@ Raw native IDs, prompts, provider bodies, runtime homes and transcripts remain
 private. Public evidence contains only labelled synthetic counts, flags and
 source hashes. Every exploratory attempt is retained; the three `frozen-before`
 cases reproduce the final probe source against the unchanged witness.
+
+The corrected witness distinguishes a successfully socket-written completed
+terminal followed by clean upstream EOF from an interrupted stream whose valid
+completed terminal was drained but not delivered. The former is normal closure;
+the latter may continue the current native arm while retaining mandatory manual
+closure review and every charge. A cancelled queued request is observed only
+after native identity, ancestry, fixed lifetime slot, model/body and funding
+state validation; it has zero provider calls, keeps its observed native identity
+slot and requires manual closure review. The witness never replays either kind.
+
+Cancellation cannot excuse unknown priced usage/cache lifetimes, incomplete
+terminal framing, malformed/duplicate/contradictory terminals, unknown trailing
+events, transport failure or unrelated admission errors. Exact receipt joining
+remains required at closure. Comments and a complete optional `[DONE]` frame are
+allowed; unknown partial tails fail closed even for a connected client.
