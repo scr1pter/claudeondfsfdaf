@@ -1,6 +1,20 @@
 {
   "releases": [
     {
+      "tag": "v1.99.112",
+      "highlights": [
+        {
+          "source": "desktop",
+          "items": [
+            {
+              "title": "Agent terminals and browser controls, research cleanup, and first-launch help",
+              "description": "The agent can manage its own terminals and browser tabs, with terminal activity visible in Vector. Asking Vector to save or keep completed research uses Keep in brain, and erasing memory also forgets Deep research runs. Vector Local explains which information it could not read and lets you try again. On macOS, Vector reads its stored credential from Keychain once per launch. A first-launch guide helps new users get started, Settings stays open when the shell list is unavailable, and keyboard shortcuts and the shell picker are available in Settings. Website privacy and account handling are updated. The required CLI remains 1.99.99, so terminal and older WSL engine features still require a separately published CLI. Deep research remains a preview. This release is not yet code-signed, so a new install may show an operating-system warning on first launch."
+            }
+          ]
+        }
+      ]
+    },
+    {
       "tag": "v1.99.111",
       "highlights": [
         {

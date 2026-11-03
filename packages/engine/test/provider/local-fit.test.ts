@@ -429,10 +429,9 @@ it.live("a cloud API is left as it is: no line, so no permits and no reply limit
   ),
 )
 
-// On Linux, once Bun's fake clock moves on by minutes its event loop stops delivering I/O: a message port, a child's
-// exit and the readiness timer never arrive, so this test would hang and its late cleanup would break the tests after
-// it. It runs on macOS and in the Windows shards, where the same timeouts are checked.
-;(process.platform === "linux" ? it.live.skip : it.live)(
+// The actual provider and SDK run against controlled in-memory fetch responses. Advancing Bun's global fake clock
+// by minutes while TCP or child-process events are outstanding can strand those events on Linux and Windows.
+it.live(
   "a server someone hosts waits 10 minutes for headers and 2 between chunks, and a cloud API keeps the SDK's",
   () =>
     withStall((server) =>
@@ -440,16 +439,25 @@ it.live("a cloud API is left as it is: no line, so no permits and no reply limit
         () =>
           Effect.gen(function* () {
             const provider = yield* Provider.Service
+            const localProvider = yield* provider.getProvider(LOCAL)
+            const cloudProvider = yield* provider.getProvider(CLOUD)
+            localProvider.options.fetch = server.fetch
+            cloudProvider.options.fetch = server.fetch
             const hosted = yield* provider.getLanguage(
               Provider.withPriority(yield* provider.getModel(LOCAL, MODEL), "user"),
             )
             const cloud = yield* provider.getLanguage(yield* provider.getModel(CLOUD, MODEL))
-            // The timers run on a fake clock, so ten minutes pass at once; the requests themselves are real.
+            // Only Promise/ReadableStream work remains once the fake clock starts; the provider and SDK are real.
             yield* Effect.promise(async () => {
+              const active: Promise<unknown>[] = []
+              const follow = <T>(promise: PromiseLike<T>) => {
+                active.push(Promise.resolve(promise).catch(() => undefined))
+                return watch(promise)
+              }
               jest.useFakeTimers()
               try {
                 // No headers: a server someone hosts is given up on after ten minutes, and not before.
-                const first = watch(hosted.doStream(call("first")))
+                const first = follow(hosted.doStream(call("first")))
                 await ready(server.arrived(1), "first request arrival")
                 jest.advanceTimersByTime(Provider.LOCAL_HEADER_TIMEOUT - 1)
                 expect(await first.state()).toBe("pending")
@@ -464,11 +472,11 @@ it.live("a cloud API is left as it is: no line, so no permits and no reply limit
                 })
 
                 // Headers and the first chunk, then nothing: it is given up on after two minutes without a chunk.
-                const second = watch(hosted.doStream(call("second")))
+                const second = follow(hosted.doStream(call("second")))
                 await ready(server.arrived(2), "second request arrival")
                 server.headers(1)
                 const streaming = Promise.withResolvers<void>()
-                const quiet = watch(
+                const quiet = follow(
                   drain((await ready(second.done(), "second response headers")).stream, streaming.resolve),
                 )
                 // The decoder consumed the first text chunk and drain requested the next before time moves.
@@ -485,13 +493,13 @@ it.live("a cloud API is left as it is: no line, so no permits and no reply limit
                 expect(ProviderError.unwrapTypedError(quiet.error())).toMatchObject({ message: "SSE read timed out" })
 
                 // The cloud API has neither: it waits as long as the reply takes.
-                const third = watch(cloud.doStream(call("third")))
+                const third = follow(cloud.doStream(call("third")))
                 await ready(server.arrived(3), "cloud request arrival")
                 jest.advanceTimersByTime(Provider.LOCAL_HEADER_TIMEOUT * 2)
                 expect(await third.state()).toBe("pending")
                 server.headers(2)
                 const cloudStreaming = Promise.withResolvers<void>()
-                const waited = watch(
+                const waited = follow(
                   drain((await ready(third.done(), "cloud response headers")).stream, cloudStreaming.resolve),
                 )
                 await ready(cloudStreaming.promise, "first cloud text chunk")
@@ -501,7 +509,12 @@ it.live("a cloud API is left as it is: no line, so no permits and no reply limit
                 server.end(2)
                 expect(await ready(waited.done(), "cloud response completion")).toBe("done")
               } finally {
-                jest.useRealTimers()
+                try {
+                  server.close()
+                  await ready(Promise.all(active), "controlled request cleanup")
+                } finally {
+                  jest.useRealTimers()
+                }
               }
             })
             expect(server.seen).toEqual(["first", "second", "third"])
@@ -869,8 +882,7 @@ async function drain(stream: ReadableStream<LanguageModelV3StreamPart>, streamin
   }
 }
 
-// Follows a promise while the timers run on a fake clock: `state` gives real I/O a few turns of the event loop to land,
-// with setImmediate, which the fake clock leaves alone.
+// The controlled fetch and SDK settle through microtasks, so observation does not depend on I/O under fake time.
 function watch<T>(promise: PromiseLike<T>) {
   const seen: { state: "pending" | "done" | "failed"; error?: unknown } = { state: "pending" }
   Promise.resolve(promise).then(
@@ -881,7 +893,7 @@ function watch<T>(promise: PromiseLike<T>) {
     state: async () => {
       for (const _ of Array.from({ length: 50 })) {
         if (seen.state !== "pending") break
-        await new Promise<void>((resolve) => setImmediate(resolve))
+        await Promise.resolve()
       }
       return seen.state
     },
@@ -890,31 +902,20 @@ function watch<T>(promise: PromiseLike<T>) {
   }
 }
 
-// Bun also freezes hrtime and worker-thread clocks. A timer-only Node process bounds real readiness so a failed
-// phase reaches finally and restores timers; Bun's test watchdog cannot cancel the promise that owns that finally.
+// Every phase here uses in-memory promises. Bound its microtask turns so a broken SDK/fixture phase fails inside
+// the test's finally, rather than leaving a coroutine alive after Bun's outer timeout restores real timers.
 async function ready<T>(promise: PromiseLike<T>, phase: string): Promise<T> {
-  const timer = Bun.spawn(["node", "--eval", "setTimeout(() => {}, 5000)"], {
-    env: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot },
-    stdin: "ignore",
-    stdout: "ignore",
-    stderr: "ignore",
-  })
-  try {
-    return await Promise.race([
-      promise,
-      timer.exited.then((code) => {
-        if (code !== 0) throw new Error(`Readiness timer exited with ${code} while waiting for ${phase}`)
-        throw new Error(`Timed out waiting for ${phase} on the real clock`)
-      }),
-    ])
-  } finally {
-    timer.kill()
-    await timer.exited
+  const observed = watch(promise)
+  for (const _ of Array.from({ length: 20 })) {
+    if ((await observed.state()) !== "pending") return observed.done()
   }
+  throw new Error(`In-memory response did not settle while waiting for ${phase}`)
 }
 
 type Stall = {
   readonly url: string
+  readonly fetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
+  readonly close: () => void
   /** The last message of each request, in the order they arrived. */
   readonly seen: string[]
   /** Resolves once `count` requests have arrived. */
@@ -925,31 +926,47 @@ type Stall = {
   readonly end: (index: number) => void
 }
 
-// A fake OpenAI-compatible server on 127.0.0.1 that answers nothing until told: first the headers, then the reply.
+// Controlled OpenAI-compatible responses: the real SDK still builds/parses them, while no TCP or child process has
+// to make progress after a large fake-clock jump. Unanswered fetches honor the provider's header AbortSignal.
 function withStall<A, E, R>(body: (server: Stall) => Effect.Effect<A, E, R>) {
   return Effect.acquireUseRelease(
     Effect.sync(() => {
-      const requests: { readonly respond: (response: Response) => void; readonly finish: Promise<void> }[] = []
-      const ends: (() => void)[] = []
+      const requests: {
+        readonly respond: (response: Response) => void
+        readonly reject: (error: unknown) => void
+        controller?: ReadableStreamDefaultController<Uint8Array>
+        closed: boolean
+      }[] = []
       const waits: { readonly count: number; readonly resolve: () => void }[] = []
       const seen: string[] = []
       const encoder = new TextEncoder()
-      const http = Bun.serve({
-        hostname: "127.0.0.1",
-        port: 0,
-        idleTimeout: 0,
-        async fetch(request) {
-          seen.push((await request.json()).messages.at(-1)?.content)
-          const finish = Promise.withResolvers<void>()
-          ends.push(finish.resolve)
-          const answer = Promise.withResolvers<Response>()
-          requests.push({ respond: answer.resolve, finish: finish.promise })
-          waits.filter((wait) => requests.length >= wait.count).forEach((wait) => wait.resolve())
-          return answer.promise
-        },
-      })
+      const lifecycle = { closed: false }
       const stall: Stall = {
-        url: `http://127.0.0.1:${http.port}/v1`,
+        url: "http://127.0.0.1:1/v1",
+        fetch: async (_input, init) => {
+          if (lifecycle.closed) throw new Error("controlled response disposed")
+          if (typeof init?.body !== "string") throw new Error("SDK did not send a JSON request body")
+          const response = Promise.withResolvers<Response>()
+          const payload = JSON.parse(init.body) as { messages: { content: string }[] }
+          const signal = init.signal
+          const aborted = () => response.reject(signal?.reason)
+          const waiting = { respond: response.resolve, reject: response.reject, closed: false }
+          seen.push(payload.messages.at(-1)?.content ?? "")
+          requests.push(waiting)
+          signal?.addEventListener("abort", aborted, { once: true })
+          if (signal?.aborted) aborted()
+          waits.filter((wait) => requests.length >= wait.count).forEach((wait) => wait.resolve())
+          return response.promise.finally(() => signal?.removeEventListener("abort", aborted))
+        },
+        close: () => {
+          lifecycle.closed = true
+          requests.forEach((request) => {
+            request.reject(new Error("controlled response disposed"))
+            if (request.closed) return
+            request.closed = true
+            request.controller?.close()
+          })
+        },
         seen,
         arrived: (count) =>
           requests.length >= count
@@ -961,38 +978,37 @@ function withStall<A, E, R>(body: (server: Stall) => Effect.Effect<A, E, R>) {
           const request = requests[index]
           request.respond(
             new Response(
-              new ReadableStream({
+              new ReadableStream<Uint8Array>({
                 start(controller) {
-                  // Bun sends a streamed reply's headers with its first chunk.
+                  request.controller = controller
                   controller.enqueue(
                     encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: "waiting" } }] })}\n\n`),
                   )
                 },
-                async pull(controller) {
-                  await request.finish
-                  controller.enqueue(
-                    encoder.encode(
-                      `data: ${JSON.stringify({ choices: [{ delta: { content: "done" }, finish_reason: "stop" }] })}\n\n` +
-                        "data: [DONE]\n\n",
-                    ),
-                  )
-                  controller.close()
+                cancel() {
+                  request.closed = true
                 },
               }),
               { headers: { "content-type": "text/event-stream" } },
             ),
           )
         },
-        end: (index) => ends[index]?.(),
+        end: (index) => {
+          const request = requests[index]
+          if (request.closed || !request.controller) return
+          request.closed = true
+          request.controller.enqueue(
+            encoder.encode(
+              `data: ${JSON.stringify({ choices: [{ delta: { content: "done" }, finish_reason: "stop" }] })}\n\n` +
+                "data: [DONE]\n\n",
+            ),
+          )
+          request.controller.close()
+        },
       }
-      return { stall, http, requests, ends }
+      return { stall, requests }
     }),
     (started) => body(started.stall),
-    (started) =>
-      Effect.sync(() => {
-        started.ends.forEach((end) => end())
-        started.requests.forEach((request) => request.respond(new Response("closed", { status: 503 })))
-        void started.http.stop(true)
-      }),
+    (started) => Effect.sync(() => started.stall.close()),
   )
 }

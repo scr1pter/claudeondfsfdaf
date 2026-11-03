@@ -1,10 +1,12 @@
 import { expect, test } from "bun:test"
+import { changelog } from "../src/data/docs-content"
 import { publishedDesktopVersion, release199, upcomingRelease } from "../src/data/vector-releases"
 
-// Desktop 1.99.110 was released from main on 2026-10-23, so no later edit may present it, or anything before it, as
-// upcoming. 1.99.109 was published on 2026-10-19 and 1.99.108 on 2026-10-17 by release run #88; 1.99.107 was skipped
-// and never published.
-const shipped = "1.99.111"
+// Desktop 1.99.112 was published from main dfc98974 by release run #96 on 2026-10-30 (UTC), so no later edit may
+// present it, or anything before it, as upcoming. 1.99.111 was published by release run #95 on 2026-10-25, 1.99.110 on
+// 2026-10-23, 1.99.109 on 2026-10-19 and 1.99.108 on 2026-10-17 by release run #88; 1.99.107 was skipped and never
+// published.
+const shipped = "1.99.112"
 const web = new URL("..", import.meta.url).pathname
 // The source repository is private, so its releases and files 404 for visitors. Installers come from the account
 // download page, which needs a free Vector account.
@@ -18,8 +20,8 @@ const stale = [
   /\b(upcoming|next release)\W+1\.99\.99\b/i,
   /\b1\.99\.99,? the next (desktop )?release\b/i,
   /\b1\.99\.99 installers are not published\b/i,
-  /\bnot published yet\b[^.]*\b1\.99\.(8|99|100|101|102|103|104|105|106|107|108|109|110)\b/i,
-  /\b1\.99\.(10[89]|110)\b[^.]*\b(prepared|not (yet )?published|installers are not released)\b/i,
+  /\bnot published yet\b[^.]*\b1\.99\.(8|99|100|101|102|103|104|105|106|107|108|109|110|111|112)\b/i,
+  /\b1\.99\.(10[89]|11[0-2])\b[^.]*\b(prepared|not (yet )?published|installers are not released)\b/i,
   /\b(remain|are still)( at)? (desktop )?\**1\.99\.(8|99)\b/i,
   /\bcurrently (published|downloadable)\b[^.]*\b1\.99\.[78]\b/i,
   /\bno standalone CLI release is published\b/i,
@@ -41,6 +43,16 @@ test("the site marks the latest shipped desktop release as published", () => {
   ).toEqual([])
   // The unversioned Upcoming entry leads the docs changelog; a version number there reads as upcoming.
   expect(upcomingRelease.summary).not.toMatch(/\b\d+\.\d+\.\d+\b/)
+})
+
+test("the docs changelog lists the current desktop download's notes word for word", () => {
+  // The docs front page names publishedDesktopVersion as the current download and links to the changelog, whose
+  // versioned entries are listed by hand, so advancing one without the other leaves the current release unlisted.
+  const notes = release199.find((release) => release.version === publishedDesktopVersion)
+  expect(notes).toBeDefined()
+  expect(changelog.filter(([label]) => label.endsWith(` · ${publishedDesktopVersion}`))).toEqual([
+    [expect.any(String), notes?.title, notes?.summary],
+  ])
 })
 
 test("website and README copy no longer call 1.99.99 unpublished or say Vector cannot update itself", () => {
