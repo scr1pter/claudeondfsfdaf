@@ -81,12 +81,12 @@ const clientFor = (directory: string) => {
       },
     },
     session: {
-      create: async () => {
+      create: async (input?: { title?: string }) => {
         createdSessions.push(directory)
         return {
           data: {
             id: `session-${createdSessions.length}`,
-            title: `New session ${createdSessions.length}`,
+            title: input?.title ?? `New session ${createdSessions.length}`,
           },
         }
       },
@@ -593,35 +593,67 @@ describe("prompt submit worktree selection", () => {
     expect(sentPrompts.at(-1)?.input.parts?.[0]?.metadata).toBeUndefined()
   })
 
-  test("seeds new sessions before optimistic prompts are added", async () => {
-    const submit = createPromptSubmit({
-      prompt,
-      info: () => undefined,
-      imageAttachments: () => [],
-      commentCount: () => 0,
-      autoAccept: () => false,
-      mode: () => "normal",
-      working: () => false,
-      editor: () => undefined,
-      queueScroll: () => undefined,
-      promptLength: (value) => value.reduce((sum, part) => sum + ("content" in part ? part.content.length : 0), 0),
-      addToHistory: () => undefined,
-      resetHistoryNavigation: () => undefined,
-      setMode: () => undefined,
-      setPopover: () => undefined,
-      newSessionWorktree: () => selected,
-      onNewSessionWorktreeReset: () => undefined,
-      onSubmit: () => undefined,
+  for (const item of [
+    {
+      name: "a typed request",
+      prompt: [{ type: "text", content: "ls", start: 0, end: 2 }],
+      title: "ls",
+    },
+    {
+      name: "the request after file and agent mentions",
+      prompt: [
+        { type: "agent", name: "planner", content: "@planner", start: 0, end: 8 },
+        { type: "file", path: "/private/project/login.ts", content: "@/private/project/login.ts", start: 8, end: 34 },
+        { type: "text", content: "\nFix the login redirect\nPrivate followup context", start: 34, end: 86 },
+      ],
+      title: "Fix the login redirect",
+    },
+    {
+      name: "a file basename when there is no typed request",
+      prompt: [
+        { type: "file", path: "/private/project/login.ts", content: "@/private/project/login.ts", start: 0, end: 26 },
+      ],
+      title: "login.ts",
+    },
+    {
+      name: "the engine's greeting title so its first work can retitle it",
+      prompt: [{ type: "text", content: "👋".repeat(30), start: 0, end: 60 }],
+      title: "New session 1",
+    },
+  ] satisfies Array<{ name: string; prompt: Prompt; title: string }>) {
+    test(`seeds ${item.name} before adding an optimistic prompt`, async () => {
+      const original = promptValue.splice(0, promptValue.length, ...item.prompt)
+      try {
+        const submit = createPromptSubmit({
+          prompt,
+          info: () => undefined,
+          imageAttachments: () => [],
+          commentCount: () => 0,
+          autoAccept: () => false,
+          mode: () => "normal",
+          working: () => false,
+          editor: () => undefined,
+          queueScroll: () => undefined,
+          promptLength: (value) => value.reduce((sum, part) => sum + ("content" in part ? part.content.length : 0), 0),
+          addToHistory: () => undefined,
+          resetHistoryNavigation: () => undefined,
+          setMode: () => undefined,
+          setPopover: () => undefined,
+          newSessionWorktree: () => selected,
+          onNewSessionWorktreeReset: () => undefined,
+          onSubmit: () => undefined,
+        })
+
+        await submit.handleSubmit({ preventDefault: () => undefined } as unknown as Event)
+
+        expect(storedSessions["/repo/worktree-a"]).toEqual([{ id: "session-1", title: item.title }])
+        await new Promise((resolve) => setTimeout(resolve, 0))
+        expect(optimisticSeeded).toEqual([true])
+      } finally {
+        promptValue.splice(0, promptValue.length, ...original)
+      }
     })
-
-    const event = { preventDefault: () => undefined } as unknown as Event
-
-    await submit.handleSubmit(event)
-
-    expect(storedSessions["/repo/worktree-a"]).toEqual([{ id: "session-1", title: "New session 1" }])
-    await new Promise((resolve) => setTimeout(resolve, 0))
-    expect(optimisticSeeded).toEqual([true])
-  })
+  }
 })
 
 describe("follow-up optimistic echo", () => {

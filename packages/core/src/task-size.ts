@@ -114,7 +114,7 @@ export function note(tier: Tier, options: { readonly escalate: boolean; readonly
   if (tier === "light")
     return `<task_size>Light request: do it directly, without a to-do list. Subagents are not offered.${escalate}</task_size>`
   if (tier === "standard")
-    return `<task_size>Standard request: do the work yourself and keep a short to-do list for multi-step work. Subagents are not offered.${escalate}</task_size>`
+    return `<task_size>Standard request: do the work yourself. Track only substantial milestones or a user-requested plan. Subagents are not offered.${escalate}</task_size>`
   if (tier === "thorough")
     return `<task_size>Thorough request: plan with the to-do list, split independent substantial parts across subagents when that is cheaper, and verify with the strongest checks available.${options.judge ? " Vector runs the judge after you finish, so do not launch it yourself." : ""}</task_size>`
   // A greeting goes out on the quick lane, which carries no note.
