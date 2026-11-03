@@ -84,6 +84,7 @@ class FakeMeter(ThreadingHTTPServer):
         self.incomplete_reason = None
         self.response_usage = {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
         self.extra_terminals = []
+        self.prefix_signal, self.tail_signal = None, None
         self.malformed_tail_label = None
         self.release.set()
         self.spent = {"foundry-vector": 10.9, "foundry-codex": 5.9}
@@ -132,6 +133,9 @@ class FakeHandler(BaseHTTPRequestHandler):
         if meter.mode == "sse":
             self.send_response(200); self.send_header("Content-Type", "text/event-stream"); self.send_header("Connection", "close"); self.end_headers()
             self.wfile.write(b'event: response.created\ndata: {"type":"response.created"}\n\n'); self.wfile.flush()
+            if meter.prefix_signal:
+                label, value = meter.prefix_signal
+                self.wfile.write(("event: " + label + "\ndata: " + json.dumps(value) + "\n\n").encode()); self.wfile.flush()
         meter.release.wait(timeout=10)
         with meter.lock:
             meter.active -= 1
@@ -143,6 +147,9 @@ class FakeHandler(BaseHTTPRequestHandler):
                 raw_response += ("event: " + kind + "\ndata: " + json.dumps({"type": kind, "response": {**response, "status": status}}) + "\n\n").encode()
             if meter.malformed_tail_label:
                 raw_response += ("event: " + meter.malformed_tail_label + '\ndata: {"type":\n\n').encode()
+            if meter.tail_signal:
+                label, value = meter.tail_signal
+                raw_response += ("event: " + label + "\ndata: " + json.dumps(value) + "\n\n").encode()
         elif meter.mode == "drop":
             raw_response = b"incomplete"
             self.send_response(200); self.send_header("Content-Type", "application/json"); self.send_header("Content-Length", str(len(raw_response))); self.end_headers()
@@ -508,6 +515,14 @@ class OwnedWitnessTests(unittest.TestCase):
 
     def test_completed_then_malformed_error_signal_requires_review(self):
         self.meter.malformed_tail_label = "error"
+        self.terminal_case("sse", "completed")
+
+    def test_completed_then_valid_error_signal_without_type_requires_review(self):
+        self.meter.tail_signal = ("error", {"message": "synthetic provider failure"})
+        self.terminal_case("sse", "completed")
+
+    def test_valid_error_signal_without_type_then_completed_requires_review(self):
+        self.meter.prefix_signal = ("error", {"message": "synthetic provider failure"})
         self.terminal_case("sse", "completed")
 
     def test_malformed_nonterminal_heartbeat_does_not_undo_completion(self):

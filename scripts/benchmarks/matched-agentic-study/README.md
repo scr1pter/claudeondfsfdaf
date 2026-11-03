@@ -173,6 +173,8 @@ valid completed frame; it cannot be silently ignored. Malformed nonterminal
 heartbeat data remains informational. Billing certainty for completed responses
 is delegated to the unchanged meter's usage validation and authoritative receipt
 join; a terminal status alone does not establish known cost.
+An `event: error` frame is also fatal when its data is valid JSON with no `type`
+field, whether it appears before or after a completed frame.
 
 Scoped closure disarms only the captured owned token. An uncertain disarm is
 not automatically repeated. Unknown closure keeps the token in memory and
@@ -268,7 +270,7 @@ Final source controls include the unchanged meter handler with a literal dummy
 key and loopback provider. Both missing usage and invalid usage on otherwise
 completed responses halt that real handler and require uncertain closure;
 neither a completed status nor missing receipts become a free or passing run.
-The final complete source-control invocation passed 88 tests with the explicit
+The final complete source-control invocation passed 90 tests with the explicit
 reviewed meter-source option enabled. An earlier run had one Windows socket
 abort in the fake probe's denied-request control: its handler replied before
 consuming the tiny request body. Bounded draining of denied fake requests fixed

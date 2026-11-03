@@ -426,7 +426,7 @@ class Handler(BaseHTTPRequestHandler):
                                     issue = issue or terminal_problem(terminal, kind, event_label)
                                     if terminal_count != 1:
                                         issue = "multiple_upstream_terminals"
-                                elif event_label in kinds or kind == "error":
+                                elif event_label in (*kinds, "error") or kind == "error":
                                     issue = issue or "upstream_terminal_event_status_mismatch"
                             except (ValueError, RecursionError):
                                 if event_label in ("response.completed", "response.done", "response.failed", "response.incomplete", "error"):
