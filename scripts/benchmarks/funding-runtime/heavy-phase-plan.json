@@ -1,0 +1,38 @@
+{
+  "actorLimitsUsd": {
+    "diagnostics": 0.3693985,
+    "foundry-codex": 20.31968465,
+    "foundry-vector": 24.73654725,
+    "saas-codex": 1.0112827,
+    "saas-vector": 1.5630869
+  },
+  "authorizedStudyMaximumUsd": 48,
+  "historicalActorMeasuredUsd": {
+    "diagnostics": 0.3693985,
+    "foundry-codex": 6.4715992,
+    "foundry-vector": 10.8884618,
+    "saas-codex": 1.0112827,
+    "saas-vector": 1.5630869
+  },
+  "historicalAmountsRetained": true,
+  "historicalMeasuredUsd": 20.3038291,
+  "historicalSequence": 889,
+  "kind": "heavy-matched-team-phase-allocation-v1",
+  "newActorsCreated": false,
+  "ownerAuthorization": "Owner approved equal division of the remaining allowance on November 2, 2026; total USD48 unchanged.",
+  "phaseID": "heavy-matched-teams-high-v1",
+  "prefix": {
+    "admissions-v2.jsonl": {
+      "count": 855,
+      "sha256": "2425aa0c1e5a341b3da7de73d4ebd166232179dc9510de7eabdac9e4ed88902a"
+    },
+    "receipts.jsonl": {
+      "count": 889,
+      "sha256": "089d68791cce702ae5e35ec6b35a3e1332de817c9dcf3cac07b4ff04416062aa"
+    }
+  },
+  "previousAllocationSha256": "4f46cbd1c40714a010c589f2fefc60040a67230b89f14faad33f199e31786b33",
+  "previousPhasePlanSha256": "8f4286ab15ccd622fead826330105be9ae256cae3904954b41cf8196ce38dcd6",
+  "remainingPerRuntimeUsd": 13.84808545,
+  "sealedOtherActors": true
+}
