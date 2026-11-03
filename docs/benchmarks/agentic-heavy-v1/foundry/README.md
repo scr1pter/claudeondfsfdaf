@@ -104,6 +104,28 @@ python -B -m unittest discover -s instrument -p test_instrument.py -v
 The adapter controls exercise the actual normalization function using labelled
 synthetic reports and negative mutations. They start no app, model, browser or
 Bun process; a synthetic complete report is not evidence that an application
-passes. A runtime positive/negative qualification of this new wrapper remains
-**not run** until separately recorded. The original browser/source check bodies
-have not been changed or weakened.
+passes. The original browser/source check bodies have not been changed or
+weakened.
+
+## Recorded free runtime qualification
+
+On November 2, 2026, the wrapper ran on a disposable exact copy of the known
+public readiness-first app, then the original empty scaffold, sequentially under
+the Bun lease. The positive passed **32/32 API + 40/40 browser + 4/4 explicit
+prerequisites**, including post-stop cryptographic password verification, in
+46.062 seconds. The empty scaffold returned product failure in 5.031 seconds:
+three failed build/startup prerequisites, one passed source-integrity prerequisite,
+and all **72 API/browser checks not run**, with zero application check passes.
+
+All 17 positive authored files and all five scaffold files were byte-unchanged
+before/after independently of the inherited evaluator. The runs reused matching
+locked dependencies from an earlier owned evaluation, with no network install,
+provider call or source edit. The initial preparation's overstrict whole-package
+equality assertion is retained: the reference app has additional test scripts,
+while dependency sets and the lockfile match the scaffold. It stopped before any
+application/Bun run; no reference implementation was modified to qualify.
+
+[qualification.json](qualification.json) records allowlisted counts, per-check
+statuses, tool/code hashes and limits. Raw paths, logs and configuration remain
+private. These are reference/negative controls, not fresh model-generated
+deliveries, paid outcomes, or proof of production readiness.
