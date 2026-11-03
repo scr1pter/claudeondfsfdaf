@@ -21,11 +21,13 @@ import threading
 import time
 
 from native_team_policy import MODEL, PolicyError, filter_tools, require
+from role_graph import RoleGraph
+from funding_profiles import BASELINE_PHASE, funding_policy
 
 MAX_BODY = 8_000_000
 CONTEXT_LIMIT, OUTPUT_CEILING = 1_050_000, 32_000
 ACTORS = {"vector": "foundry-vector", "codex": "foundry-codex"}
-FUNDING_PHASE = "foundry-large-single-agent-high-v1"
+FUNDING_PHASE = BASELINE_PHASE
 HOP = {"host", "authorization", "content-length", "connection", "transfer-encoding", "proxy-connection", "keep-alive", "upgrade"}
 
 
@@ -37,16 +39,23 @@ def known(value):
     return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and value >= 0
 
 
-def healthy(state, before=None, idle=False):
+def healthy(state, before=None, idle=False, funding_profile=None):
+    policy = funding_policy(funding_profile)
     require(isinstance(state, dict), "unknown funding state")
-    require(state.get("limitUsd") == 48 and state.get("phaseID") == FUNDING_PHASE and state.get("halted") is None, "funding policy changed or halted")
-    require(known(state.get("measuredUsd")) and state["measuredUsd"] >= 11.2319408 and known(state.get("reservedUsd")) and state["measuredUsd"] + state["reservedUsd"] <= 48 + 1e-8, "global funding state invalid")
-    require(isinstance(state.get("attempts"), int) and not isinstance(state["attempts"], bool) and state["attempts"] >= 449 and isinstance(state.get("active"), int) and state["active"] >= 0, "request history invalid")
+    require(state.get("limitUsd") == 48 and state.get("phaseID") == policy.phase and state.get("halted") is None, "funding policy changed or halted")
+    require(policy.plan_sha256 is None or state.get("phasePlanSha256") == policy.plan_sha256, "funding allocation plan changed")
+    require(known(state.get("measuredUsd")) and state["measuredUsd"] >= policy.minimum_usd and known(state.get("reservedUsd")) and state["measuredUsd"] + state["reservedUsd"] <= 48 + 1e-8, "global funding state invalid")
+    require(isinstance(state.get("attempts"), int) and not isinstance(state["attempts"], bool) and state["attempts"] >= policy.minimum_requests and isinstance(state.get("active"), int) and state["active"] >= 0, "request history invalid")
     for actor in ACTORS.values():
         row = state.get("actors", {}).get(actor, {})
-        require(row.get("limitUsd") == 20 and known(row.get("measuredUsd")) and known(row.get("reservedUsd")) and row["measuredUsd"] + row["reservedUsd"] <= 20 + 1e-8, "actor funding policy changed")
+        require(row.get("limitUsd") == policy.actor_cap(actor) and known(row.get("measuredUsd")) and known(row.get("reservedUsd")) and row["measuredUsd"] + row["reservedUsd"] <= policy.actor_cap(actor) + 1e-8, "actor funding policy changed")
         if before:
             require(row["measuredUsd"] >= before["actors"][actor]["measuredUsd"] - 1e-8, "actor spending rewound")
+    if policy.plan_sha256 is not None:
+        require(state["actors"]["foundry-vector"]["measuredUsd"] >= 10.8884618 and state["actors"]["foundry-codex"]["measuredUsd"] >= 6.4715992, "heavy actor history rewound")
+        others = [row for actor, row in state["actors"].items() if actor not in ACTORS.values()]
+        require(all(known(row.get("measuredUsd")) and row.get("limitUsd") == row["measuredUsd"] and row.get("reservedUsd") == 0 for row in others) and abs(math.fsum(row["measuredUsd"] for row in others) - 2.9437681) <= 1e-7, "historical actors unsealed or changed")
+        require(abs(math.fsum(row["measuredUsd"] for row in state["actors"].values()) - state["measuredUsd"]) <= 1e-7 and abs(math.fsum(row["reservedUsd"] for row in state["actors"].values()) - state["reservedUsd"]) <= 1e-7, "heavy funding totals do not reconcile")
     if before:
         require(state["attempts"] >= before["attempts"] and state["measuredUsd"] >= before["measuredUsd"] - 1e-8, "funding history rewound")
     if idle:
@@ -143,10 +152,13 @@ def known_length_incomplete(response):
 
 
 class OwnedArm:
-    def __init__(self, runtime, registry, roles, token, before, controller, audit, max_calls=300, seconds=7200, soft_usd=3, label=None):
-        require(runtime in ACTORS and registry.runtime == runtime and len(roles) == 3 and len(set(roles)) == 3 and all(isinstance(value, str) and value for value in roles), "invalid fixed team")
+    def __init__(self, runtime, registry, roles, token, before, controller, audit, max_calls=300, seconds=7200, soft_usd=3, label=None, role_parents=None, funding_profile=None):
+        require(runtime in ACTORS and registry.runtime == runtime, "invalid fixed team")
+        self.profile = RoleGraph(roles, role_parents)
+        self.funding_profile, self.funding = funding_profile, funding_policy(funding_profile)
+        require(registry.max_depth >= self.profile.max_depth, "registry depth below role graph")
         require(isinstance(label, str) and re.fullmatch(r"[a-z0-9][a-z0-9-]{0,69}", label) is not None, "owned synthetic label required")
-        require(1 <= max_calls <= 300 and 0 < seconds <= 7200 and 0 < soft_usd <= 3, "study bounds expanded")
+        require(1 <= max_calls <= 300 and 0 < seconds <= 7200 and 0 < soft_usd <= self.funding.repair_threshold_usd, "study bounds expanded")
         self.runtime, self.registry, self.roles = runtime, registry, set(roles)
         self.actor, self.before, self.controller, self.audit = ACTORS[runtime], copy.deepcopy(before), controller, audit
         self._label = label
@@ -161,7 +173,7 @@ class OwnedArm:
         self.nonfatal_reviews = []
         self.repairs = 0
         self.disarm_attempted, self.disarm_acknowledged = False, False
-        self.record({"type": "arm_bound", "runtime": runtime, "actor": self.actor, "label": label, "batchSha256": self.batch_digest, "model": MODEL, "reasoning": "high", "reasoningSummary": "auto", "verbosity": "low", "contextLimit": CONTEXT_LIMIT, "outputCeiling": OUTPUT_CEILING, "roles": sorted(roles), "studyCapUsd": 48, "actorCapUsd": 20, "repairThresholdUsd": soft_usd, "maxCalls": max_calls, "maxSeconds": seconds, "inflightLimit": 1})
+        self.record({"type": "arm_bound", "runtime": runtime, "actor": self.actor, "label": label, "batchSha256": self.batch_digest, "model": MODEL, "reasoning": "high", "reasoningSummary": "auto", "verbosity": "low", "contextLimit": CONTEXT_LIMIT, "outputCeiling": OUTPUT_CEILING, "roles": sorted(roles), "roleParents": self.profile.parents, "maxAutonomousDepth": self.profile.max_depth, "studyCapUsd": 48, "actorCapUsd": self.funding.actor_cap(self.actor), "fundingPhase": self.funding.phase, "phasePlanSha256": self.funding.plan_sha256, "repairThresholdUsd": soft_usd, "maxCalls": max_calls, "maxSeconds": seconds, "inflightLimit": 1})
 
     def record(self, event):
         try:
@@ -220,7 +232,7 @@ class OwnedArm:
                 if cancelled():
                     self.latch("queued_client_cancelled")
                     raise PolicyError("client cancelled")
-                state = healthy(self.controller("/status"), self.before, idle=True)
+                state = healthy(self.controller("/status"), self.before, idle=True, funding_profile=self.funding_profile)
                 require(len(self.requests) < self.max_calls and time.monotonic() < self.deadline, "arm stopping threshold")
                 native = self.registry.resolve(headers)
                 require(native["root"] == self.registry.root_id, "wrong arm root")
@@ -232,19 +244,14 @@ class OwnedArm:
                     require(native["parent"] in self.admitted_ids and (native["parent"] == self.registry.root_id or native["parent"] in self.slots.values()), "helper outside admitted team")
                     require(producer not in self.helper_slots or self.helper_slots[producer] == native["id"], "duplicate lifetime helper producer")
                 else:
-                    if native["id"] == self.registry.root_id:
-                        require(native["role"] == "lead" and native["parent"] is None, "invalid lead")
-                    else:
-                        role = native["role"]
-                        require(native["parent"] == self.registry.root_id and native["depth"] == 1 and role in self.roles, "nested or unapproved child")
-                        require(role not in self.slots or self.slots[role] == native["id"], "duplicate lifetime slot")
-                normalized = profile_body(body, native["id"] != self.registry.root_id or identity_kind == "helper")
+                    self.profile.admit(native, self.registry.root_id, self.slots)
+                normalized = profile_body(body, identity_kind == "helper" or not self.profile.delegates(native["role"]))
                 if identity_kind == "helper":
                     require(not body.get("tools") and not any(isinstance(item, dict) and item.get("type") == "additional_tools" and item.get("tools") for item in body["input"]), "native helper may not have tools")
                 wire = json.dumps(normalized, ensure_ascii=False, separators=(",", ":")).encode()
                 require(len(wire) <= MAX_BODY, "normalized request oversized")
                 reserve = reservation_bound(normalized, wire)
-                require(state["measuredUsd"] + reserve <= 48 and state["actors"][self.actor]["measuredUsd"] + reserve <= 20, "single-call reservation headroom insufficient")
+                require(state["measuredUsd"] + reserve <= 48 and state["actors"][self.actor]["measuredUsd"] + reserve <= self.funding.actor_cap(self.actor), "single-call reservation headroom insufficient")
                 entry = {"ordinal": len(self.requests) + 1, "requestSha256": hashlib.sha256(wire).hexdigest(), "identitySha256": hashlib.sha256(native["id"].encode()).hexdigest(), "identityKind": identity_kind, "role": native["role"], "helper": native["helper"], "purpose": native["purpose"], "upstreamTerminal": False, "receiptRegistered": False}
                 self.record({"type": "before_upstream", **entry, "requiredReservationUsd": reserve})
                 if identity_kind == "autonomous":
@@ -463,39 +470,42 @@ class Handler(BaseHTTPRequestHandler):
 
 class OwnedSupervisor:
     """One pair; injected controller and immutable receipt reader only."""
-    def __init__(self, controller, receipts, output, quiesced=None):
+    def __init__(self, controller, receipts, output, quiesced=None, funding_profile=None):
         self.controller, self.receipts, self.output = controller, receipts, Path(output)
         self.quiesced = quiesced or (lambda: False)
         self.used, self.active = set(), None
         self.failed = False
         self.orphaned_token = None
+        self.funding_profile, self.funding = funding_profile, funding_policy(funding_profile)
         self.lock = threading.RLock()
 
-    def begin(self, runtime, label, registry, roles, **limits):
+    def begin(self, runtime, label, registry, roles, role_parents=None, **limits):
         with self.lock:
-            return self._begin(runtime, label, registry, roles, **limits)
+            return self._begin(runtime, label, registry, roles, role_parents, **limits)
 
-    def _begin(self, runtime, label, registry, roles, **limits):
+    def _begin(self, runtime, label, registry, roles, role_parents, **limits):
         require(not self.failed and self.active is None and runtime in ACTORS and runtime not in self.used, "arm already owned, failed or used")
         require(isinstance(label, str) and re.fullmatch(r"[a-z0-9][a-z0-9-]{0,69}", label) is not None, "synthetic label required")
-        require(registry.runtime == runtime and len(roles) == 3 and len(set(roles)) == 3 and all(isinstance(value, str) and value for value in roles), "invalid fixed team")
+        require(registry.runtime == runtime, "invalid fixed team")
+        profile = RoleGraph(roles, role_parents)
+        require(registry.max_depth >= profile.max_depth, "registry depth below role graph")
         require(set(limits) <= {"max_calls", "seconds", "soft_usd"}, "unreviewed arm limit")
-        before = healthy(self.controller("/status"), idle=True)
+        before = healthy(self.controller("/status"), idle=True, funding_profile=self.funding_profile)
         require(before.get("batchCallsRemaining") == 0, "another paid scope is open")
-        require(1 <= limits.get("max_calls", 300) <= 300 and 0 < limits.get("seconds", 7200) <= 7200 and 0 < limits.get("soft_usd", 3) <= 3, "study bounds expanded")
+        require(1 <= limits.get("max_calls", 300) <= 300 and 0 < limits.get("seconds", 7200) <= 7200 and 0 < limits.get("soft_usd", 3) <= self.funding.repair_threshold_usd, "study bounds expanded")
         audit = Audit(self.output / runtime / "witness-audit.jsonl")
-        audit.append({"type": "supervisor_preflight", "runtime": runtime, "actor": ACTORS[runtime], "studyCapUsd": 48, "actorCapUsd": 20})
+        audit.append({"type": "supervisor_preflight", "runtime": runtime, "actor": ACTORS[runtime], "studyCapUsd": 48, "actorCapUsd": self.funding.actor_cap(ACTORS[runtime]), "fundingPhase": self.funding.phase, "phasePlanSha256": self.funding.plan_sha256})
         self.failed = True
         response = self.controller("/control", {"actor": ACTORS[runtime], "label": label, "calls": limits.get("max_calls", 300)})
         token = response.get("requestToken") if isinstance(response, dict) else None
         require(isinstance(token, str) and token, "ambiguous arm admission; never retry")
         self.used.add(runtime)
         try:
-            self.active = OwnedArm(runtime, registry, roles, token, before, self.controller, audit, label=label, **limits)
+            self.active = OwnedArm(runtime, registry, roles, token, before, self.controller, audit, label=label, role_parents=role_parents, funding_profile=self.funding_profile, **limits)
         except Exception:
             self.orphaned_token = token
             try:
-                healthy(self.controller("/disarm", {"requestToken": token}), before, idle=True)
+                healthy(self.controller("/disarm", {"requestToken": token}), before, idle=True, funding_profile=self.funding_profile)
                 self.orphaned_token = None
             except Exception:
                 pass
@@ -509,7 +519,7 @@ class OwnedSupervisor:
             arm = self.active
             with arm.condition:
                 require(not arm.forwarding and not arm.queue and arm.handlers == 0 and not arm.closing, "repair requires settled owned handlers")
-                state = healthy(self.controller("/status"), arm.before, idle=True)
+                state = healthy(self.controller("/status"), arm.before, idle=True, funding_profile=self.funding_profile)
                 cost = state["actors"][arm.actor]["measuredUsd"] - arm.before["actors"][arm.actor]["measuredUsd"]
                 require(cost < arm.soft_usd and time.monotonic() < arm.deadline, "settled repair threshold reached")
                 arm.repairs = 1
@@ -549,7 +559,7 @@ class OwnedSupervisor:
             require(arm.disarm_acknowledged, "prior disarm outcome unknown; do not retry mutation")
             deadline = time.monotonic() + timeout
             while True:
-                state = healthy(self.controller("/status"), arm.before)
+                state = healthy(self.controller("/status"), arm.before, funding_profile=self.funding_profile)
                 with arm.condition:
                     if state["active"] == 0 and state["reservedUsd"] == 0 and not arm.forwarding and not arm.queue and arm.handlers == 0:
                         break
