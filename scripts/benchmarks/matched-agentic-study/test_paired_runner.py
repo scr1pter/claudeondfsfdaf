@@ -314,7 +314,7 @@ class PairedRunnerTests(unittest.TestCase):
         self.assertEqual(vector[vector.index("--max-steps") + 1], "300")
 
     def test_fake_smoke_script_uses_same_fixed_roles_and_common_client_only(self):
-        tools = [{"type": "function", "name": name} for name in ("task", "spawn_agent", "wait_agent", "shell", "exec_command")]
+        tools = [{"type": "function", "name": name} for name in ("task", "spawn_agent", "wait_agent", "bash", "exec_command")]
         vector = smoke.scripted_calls("vector", 0, tools, 4123)
         self.assertEqual([row["subagent_type"] for row in json.loads(vector[0]["arguments"])["tasks"]], list(runner.ROLES[:2]))
         codex = smoke.scripted_calls("codex", 2, tools, 4123)
