@@ -12,6 +12,7 @@ import { disposeAllInstances } from "../fixture/fixture"
 import { testEffect, awaitWithTimeout, pollWithTimeout } from "../lib/effect"
 import { layer, fixture, spec } from "../tool/workflow-fixture"
 import { testProviderConfig } from "../lib/test-provider"
+import { examples } from "../../../core/test/orchestration/examples"
 
 afterEach(disposeAllInstances)
 const it = testEffect(layer())
@@ -297,6 +298,109 @@ it.instance(
         role: "run",
         revision: 1,
       })
+    }),
+  { trusted: true },
+)
+
+it.instance(
+  "read-only specialists plan as readers with the real agent catalog, and a general writer stays serial",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* fixture()
+      const runs = yield* WorkflowRuns.Service
+      // The guide's review-changes example: explore only allows Git reads and asks for test commands.
+      const review = yield* runs.validate({ ctx: f.ctx, input: { spec: JSON.stringify(examples[0].spec) } })
+      expect(review.ok).toBe(true)
+      for (const stage of review.plan!.stages) expect(stage).toMatchObject({ serial: false, writes: "read only" })
+      expect(review.warnings.some((warning) => warning.message.includes("one at a time"))).toBe(false)
+      for (const agent of ["review", "security"]) {
+        const checked = yield* runs.validate({
+          ctx: f.ctx,
+          input: { spec: JSON.stringify({ ...spec, defaults: { agent } }) },
+        })
+        expect(checked.plan?.stages[0]).toMatchObject({ serial: false, writes: "read only" })
+      }
+      const writer = yield* runs.validate({
+        ctx: f.ctx,
+        input: { spec: JSON.stringify({ ...spec, defaults: { agent: "general" } }) },
+      })
+      expect(writer.plan?.stages[0]).toMatchObject({ serial: true, writes: "in this checkout, one at a time" })
+    }),
+  { trusted: true },
+)
+
+it.instance(
+  "a read-only fan-out runs its agents together instead of through the exclusive writer gate",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* fixture()
+      const runs = yield* WorkflowRuns.Service
+      const jobs = yield* BackgroundJob.Service
+      const both = yield* Deferred.make<void>()
+      const inside = new Set<string>()
+      const value = { ...spec, stages: [{ id: "a", prompt: "Review {{item}}", for_each: { items: [1, 2] } }] }
+      const ctx = {
+        ...f.ctx,
+        extra: {
+          ...f.ctx.extra,
+          promptOps: {
+            ...f.ops,
+            prompt: (input: Parameters<typeof f.ops.prompt>[0]) =>
+              input.sessionID === f.parent.id
+                ? f.ops.prompt(input)
+                : Effect.gen(function* () {
+                    inside.add(input.sessionID)
+                    if (inside.size === 2) yield* Deferred.succeed(both, undefined)
+                    // Each child waits until the other is in flight too; a serial gate would never let that happen.
+                    yield* Deferred.await(both)
+                    return yield* f.ops.prompt(input)
+                  }),
+          },
+        },
+      }
+      const started = yield* runs.launch({ ctx, input: { spec: JSON.stringify(value) }, task: f.task })
+      // The in-flight cap follows the machine's CPUs; with room for two, both explore agents must run at once.
+      if (started.plan.concurrency < 2) return
+      expect(started.plan.stages[0]).toMatchObject({ serial: false, writes: "read only" })
+      yield* awaitWithTimeout(Deferred.await(both), "The read-only agents never ran together", "10 seconds")
+      const ended = yield* awaitWithTimeout(jobs.wait({ id: started.runID }), "Workflow did not finish", "10 seconds")
+      expect(ended.info?.status).toBe("completed")
+    }),
+  { trusted: true },
+)
+
+it.instance(
+  "a resumed run's tool part shows progress only, never its report or runtime state",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* fixture()
+      const runs = yield* WorkflowRuns.Service
+      const jobs = yield* BackgroundJob.Service
+      const parts: Record<string, unknown>[] = []
+      const ctx = {
+        ...f.ctx,
+        metadata: (value: { metadata?: Record<string, unknown> }) =>
+          Effect.sync(() => {
+            if (value.metadata) parts.push(value.metadata)
+          }),
+      }
+      const started = yield* runs.launch({ ctx, input: { spec: JSON.stringify(spec) }, task: f.task })
+      yield* awaitWithTimeout(jobs.wait({ id: started.runID }), "Workflow did not finish", "5 seconds")
+      const record = SubagentLifecycle.read(yield* f.sessions.get(SessionID.make(started.runID)))
+      expect(record?.workflow?.role === "run" && record.workflow.progress.report).toContain("Full results:")
+      parts.length = 0
+      yield* runs.launch({ ctx, input: { runID: started.runID }, task: f.task })
+      yield* awaitWithTimeout(jobs.wait({ id: started.runID }), "Resumed workflow did not finish", "5 seconds")
+      const shown = parts.flatMap((metadata) => {
+        const workflow = metadata.workflow as { role?: string; progress?: Record<string, unknown> } | undefined
+        return workflow?.role === "run" ? [workflow.progress ?? {}] : []
+      })
+      expect(shown.length).toBeGreaterThan(0)
+      for (const progress of shown) {
+        expect(progress.report).toBeUndefined()
+        expect(progress.runtime).toBeUndefined()
+        expect(progress.accounting).toBeUndefined()
+      }
     }),
   { trusted: true },
 )

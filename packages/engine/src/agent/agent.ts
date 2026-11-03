@@ -123,6 +123,43 @@ const READ_ONLY = new Set(["explore", "review", "judge", "security", RESEARCH, R
 export function readOnly(agent: string) {
   return READ_ONLY.has(agent)
 }
+// The shell commands a read-only specialist may run to verify work: allowed reads of Git and pull requests, and test or
+// build entrypoints behind an ask. Everything else in bash is denied for them.
+const READONLY_VERIFICATION_BASH = {
+  "*": "deny",
+  "git diff*": "allow",
+  "git status*": "allow",
+  "git show*": "allow",
+  "git log*": "allow",
+  "gh pr view*": "allow",
+  "gh pr diff*": "allow",
+  "gh pr review*": "ask",
+  // Test and build entrypoints execute repository-controlled code. A read-only specialist may run them only
+  // after an explicit approval; the shell sandbox remains a second boundary after approval.
+  "bun test*": "ask",
+  "bun typecheck*": "ask",
+  "bun run test*": "ask",
+  "bun run build*": "ask",
+  "npm test*": "ask",
+  "npm run test*": "ask",
+  "npm run build*": "ask",
+  "pnpm test*": "ask",
+  "pnpm run test*": "ask",
+  "pnpm run build*": "ask",
+  "pytest*": "ask",
+  "cargo test*": "ask",
+  "go test*": "ask",
+} as const
+const VERIFICATION_COMMANDS = Object.entries(READONLY_VERIFICATION_BASH)
+  .filter((entry) => entry[1] !== "deny")
+  .map((entry) => entry[0])
+/**
+ * Whether a bash rule pattern stays inside the read-only specialists' verification commands (`git diff*`, `bun test*`
+ * and the like). Workflow planning counts such a rule as reading, so a read-only specialist is never planned as a writer.
+ */
+export function verificationCommand(pattern: string) {
+  return VERIFICATION_COMMANDS.some((command) => Wildcard.match(pattern, command))
+}
 /** The tools a research agent may be offered at all, whatever any rule allows; nothing for any other agent. */
 export function researchTools(agent: string): readonly string[] | undefined {
   return RESEARCH_AGENTS[agent]?.tools
@@ -285,31 +322,7 @@ const layer = Layer.effect(
         })
 
         const user = Permission.fromConfig(cfg.permission ?? {})
-        const readonlyVerificationBash = {
-          "*": "deny",
-          "git diff*": "allow",
-          "git status*": "allow",
-          "git show*": "allow",
-          "git log*": "allow",
-          "gh pr view*": "allow",
-          "gh pr diff*": "allow",
-          "gh pr review*": "ask",
-          // Test and build entrypoints execute repository-controlled code. A read-only specialist may run them only
-          // after an explicit approval; the shell sandbox remains a second boundary after approval.
-          "bun test*": "ask",
-          "bun typecheck*": "ask",
-          "bun run test*": "ask",
-          "bun run build*": "ask",
-          "npm test*": "ask",
-          "npm run test*": "ask",
-          "npm run build*": "ask",
-          "pnpm test*": "ask",
-          "pnpm run test*": "ask",
-          "pnpm run build*": "ask",
-          "pytest*": "ask",
-          "cargo test*": "ask",
-          "go test*": "ask",
-        } as const
+        const readonlyVerificationBash = READONLY_VERIFICATION_BASH
         // Flags that make an allowed command write a chosen file, run another program, or read any file without the
         // read tool's asks (`git diff --no-index .env README.md`). They come after every other rule, so no ask or
         // allow can reopen them.

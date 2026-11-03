@@ -220,6 +220,7 @@ const Workflow = Schema.Union([
     phase: Schema.String,
     item: Schema.String,
     key: Schema.String,
+    node: Schema.optional(Schema.String),
     round: Schema.optional(Schema.Finite),
     verifier: Schema.optional(Schema.Boolean),
     final: Schema.optional(Schema.Boolean),
@@ -596,7 +597,16 @@ export function observe(
       }
     }
     if (record?.workflow?.role === "run") {
-      if (record.workflow.progress.runtime !== undefined) {
+      const summary = record.workflow.progress.accounting
+      if (summary !== undefined) {
+        // The checkpoint's own step/tool summary, written with each checkpoint save. Unreadable means unknown.
+        const { WorkflowCheckpoint } = yield* Effect.promise(() => import("@/orchestration/checkpoint"))
+        const decoded = Schema.decodeUnknownOption(WorkflowCheckpoint.Accounting)(summary)
+        if (Option.isNone(decoded)) return undefined
+        steps += decoded.value.steps
+        toolUses += decoded.value.toolUses
+      } else if (record.workflow.progress.runtime !== undefined) {
+        // A checkpoint an earlier build kept in lifecycle metadata.
         const { WorkflowState } = yield* Effect.promise(() => import("@/orchestration/state"))
         const runtime = yield* WorkflowState.decode(record.workflow.progress.runtime)
         const children = Object.values(runtime.sessions)

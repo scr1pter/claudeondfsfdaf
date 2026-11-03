@@ -209,7 +209,45 @@ test("marked agents are refused before any workflow or account transport", async
   expect(setup.requests).toEqual([])
 })
 
-test("an event disconnection stops the unfinished run and never reports success", async () => {
+test("updates while the run's record says it is running are inspected at most every few seconds", async () => {
+  const working = {
+    type: "session.updated",
+    properties: { info: { id: "run", parentID: "parent", metadata: { subagent: { status: "running" } } } },
+  }
+  const settled = {
+    type: "session.updated",
+    properties: { info: { id: "run", parentID: "parent", metadata: { subagent: { status: "completed" } } } },
+  }
+  const setup = fixture({ events: [working, working, working, working, working, settled, note()] })
+  const result = await runWorkflow(setup.client, { sessionID: "parent", source: { name: "review" } }, setup.output)
+  expect(result.exitCode).toBe(0)
+  // The start's own inspection, one for the settled update and the final report: none for the five running updates.
+  expect(
+    setup.requests.filter((request) => new URL(request.url).pathname === "/experimental/session/parent/workflow/run"),
+  ).toHaveLength(3)
+})
+
+test("a reconnected event stream recovers the missed note and finishes without stopping the run", async () => {
+  // The first stream ends before the run settles; the resubscription carries no replay, so the run and the parent's
+  // quiet note are read back after reconnecting.
+  const setup = fixture({
+    events: [],
+    reconnect: [],
+    messages: [
+      {
+        info: { id: "msg_2", sessionID: "parent", role: "user", time: { created: 2 }, agent: "build" },
+        parts: [note().properties.part],
+      },
+    ],
+  })
+  const result = await runWorkflow(setup.client, { sessionID: "parent", source: { name: "review" } }, setup.output)
+  expect(result.exitCode).toBe(0)
+  expect(setup.requests.filter((request) => new URL(request.url).pathname === "/event")).toHaveLength(2)
+  expect(setup.requests.some((request) => new URL(request.url).pathname.endsWith("/tasks/stop"))).toBe(false)
+  expect(setup.stdout).toEqual(["Verified workflow report\n"])
+})
+
+test("an event disconnection that cannot reconnect stops the unfinished run and never reports success", async () => {
   const setup = fixture({ events: [] })
   await expect(
     runWorkflow(setup.client, { sessionID: "parent", source: { name: "review" } }, setup.output),
@@ -446,12 +484,15 @@ function fixture(input: {
   invalid?: boolean
   stall?: string
   messages?: readonly unknown[]
+  /** Events a resubscription receives after the first stream ends. Absent, every resubscription ends at once. */
+  reconnect?: readonly unknown[]
 }) {
   const requests: Request[] = []
   const stdout: string[] = []
   const stderr: string[] = []
   let controller: ReadableStreamDefaultController<Uint8Array> | undefined
   let inspected = 0
+  let subscriptions = 0
   const encode = (event: unknown) => new TextEncoder().encode(`data: ${JSON.stringify(event)}\n\n`)
   const client = createVectorClient({
     baseUrl: "http://fixture.invalid",
@@ -469,7 +510,19 @@ function fixture(input: {
             ? { ok: false, issues: [{ path: "/stages", message: "missing stages" }], warnings: [] }
             : { ok: true, issues: [], warnings: [{ path: "", message: "Auto resolves for each child" }], plan },
         )
-      if (pathname === "/event")
+      if (pathname === "/event") {
+        subscriptions += 1
+        if (subscriptions > 1)
+          return new Response(
+            new ReadableStream<Uint8Array>({
+              start(stream) {
+                if (!input.reconnect) return stream.close()
+                stream.enqueue(encode({ type: "server.connected", properties: {} }))
+                input.reconnect.forEach((event) => stream.enqueue(encode(event)))
+              },
+            }),
+            { headers: { "content-type": "text/event-stream" } },
+          )
         return new Response(
           new ReadableStream<Uint8Array>({
             start(stream) {
@@ -479,6 +532,7 @@ function fixture(input: {
           }),
           { headers: { "content-type": "text/event-stream" } },
         )
+      }
       if (pathname === "/experimental/session/parent/workflow" && request.method === "POST") {
         if (!controller) throw new Error("start happened before the event stream was connected")
         input.events.forEach((event) => controller!.enqueue(encode(event)))
@@ -510,6 +564,7 @@ function fixture(input: {
       if (pathname === "/session/child") return Response.json({ id: "child", parentID: "run" })
       if (pathname === "/session/other") return Response.json({ id: "other", parentID: "parent" })
       if (pathname === "/session/parent/message") return Response.json(input.messages ?? [])
+      if (pathname === "/session/status") return Response.json({})
       if (pathname === "/experimental/session/parent/stop") return Response.json(true)
       if (pathname.startsWith("/permission/")) return Response.json(true)
       if (pathname.endsWith("/tasks/stop")) return Response.json({ tasks: [] })

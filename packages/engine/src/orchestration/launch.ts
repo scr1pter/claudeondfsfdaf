@@ -120,7 +120,9 @@ export function make(input: Input) {
         agent: WorkflowMarkers.WORKFLOW_AGENT,
         callID: live.part.callID,
         abort: abort.signal,
-        messages: yield* input.sessions.messages({ sessionID: input.runID }),
+        // TaskTool reads no caller history. Loading the run's whole transcript (every task part with its brief) for each
+        // launch would grow quadratically over a large fan-out.
+        messages: [],
         extra: {
           ...input.extra,
           promptOps: input.ops,

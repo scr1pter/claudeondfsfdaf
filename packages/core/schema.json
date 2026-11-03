@@ -1,9 +1,9 @@
 {
   "version": "7",
   "dialect": "sqlite",
-  "id": "f985c9de-b5cb-45b9-9ee2-cf84b2b1344c",
+  "id": "d3291447-ae22-4c11-ba89-94887ee18a08",
   "prevIds": [
-    "4a4ee77e-c401-4948-8f0f-93829a334ac3"
+    "f985c9de-b5cb-45b9-9ee2-cf84b2b1344c"
   ],
   "ddl": [
     {
@@ -36,6 +36,10 @@
     },
     {
       "name": "session_public_share",
+      "entityType": "tables"
+    },
+    {
+      "name": "workflow_checkpoint",
       "entityType": "tables"
     },
     {
@@ -655,6 +659,66 @@
       "name": "state",
       "entityType": "columns",
       "table": "session_public_share"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "session_id",
+      "entityType": "columns",
+      "table": "workflow_checkpoint"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "attempt",
+      "entityType": "columns",
+      "table": "workflow_checkpoint"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "digest",
+      "entityType": "columns",
+      "table": "workflow_checkpoint"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "data",
+      "entityType": "columns",
+      "table": "workflow_checkpoint"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_created",
+      "entityType": "columns",
+      "table": "workflow_checkpoint"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_updated",
+      "entityType": "columns",
+      "table": "workflow_checkpoint"
     },
     {
       "type": "integer",
@@ -2143,6 +2207,21 @@
     },
     {
       "columns": [
+        "session_id"
+      ],
+      "tableTo": "session",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_workflow_checkpoint_session_id_session_id_fk",
+      "entityType": "fks",
+      "table": "workflow_checkpoint"
+    },
+    {
+      "columns": [
         "active_account_id"
       ],
       "tableTo": "account",
@@ -2422,6 +2501,15 @@
       "nameExplicit": false,
       "name": "session_public_share_pk",
       "table": "session_public_share",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "session_id"
+      ],
+      "nameExplicit": false,
+      "name": "workflow_checkpoint_pk",
+      "table": "workflow_checkpoint",
       "entityType": "pks"
     },
     {

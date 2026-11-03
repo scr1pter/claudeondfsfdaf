@@ -158,3 +158,86 @@ it.instance(
     }),
   { trusted: true, config: { budget: { subagents: { running: 1 } } } },
 )
+
+it.instance(
+  "a rejected verification resumes the producer with feedback and resumes the verifier for its next round",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* fixture()
+      const runs = yield* WorkflowRuns.Service
+      const jobs = yield* BackgroundJob.Service
+      const verdicts = [false, true]
+      const seen: { sessionID: string; text: string; checking: boolean }[] = []
+      const ctx = {
+        ...f.ctx,
+        extra: {
+          ...f.ctx.extra,
+          promptOps: {
+            ...f.ops,
+            prompt: (input: Parameters<typeof f.ops.prompt>[0]) =>
+              Effect.gen(function* () {
+                const answered = yield* f.ops.prompt(input)
+                if (input.sessionID === f.parent.id || input.noReply) return answered
+                const checking = input.format?.type === "json_schema"
+                seen.push({
+                  sessionID: input.sessionID,
+                  text: input.parts.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n"),
+                  checking,
+                })
+                if (!checking || answered.info.role !== "assistant") return answered
+                // The verifier answers through structured output: reject once, then accept.
+                const info = yield* f.sessions.updateMessage({ ...answered.info, structured: { ok: verdicts.shift() } })
+                return { ...answered, info }
+              }),
+          },
+        },
+      }
+      const value = {
+        ...spec,
+        stages: [
+          {
+            id: "a",
+            prompt: "Write the change and describe it",
+            verify: {
+              prompt: "Check this answer: {{output}}",
+              output: {
+                schema: {
+                  type: "object",
+                  properties: { ok: { type: "boolean" } },
+                  required: ["ok"],
+                  additionalProperties: false,
+                },
+              },
+              until: { path: "ok", equals: true },
+              max_rounds: 2,
+            },
+          },
+        ],
+      }
+      const started = yield* runs.launch({ ctx, input: { spec: JSON.stringify(value) }, task: f.task })
+      const ended = yield* awaitWithTimeout(
+        jobs.wait({ id: started.runID }),
+        "The verify loop never settled",
+        "10 seconds",
+      )
+      expect(ended.info?.status).toBe("completed")
+      const runID = SessionID.make(started.runID)
+      // One producer and one verifier session, each resumed once instead of refused.
+      const children = yield* f.sessions.children(runID)
+      expect(children).toHaveLength(2)
+      const producer = seen.filter((entry) => !entry.checking)
+      const verifier = seen.filter((entry) => entry.checking)
+      expect(producer).toHaveLength(2)
+      expect(verifier).toHaveLength(2)
+      expect(new Set(producer.map((entry) => entry.sessionID)).size).toBe(1)
+      expect(new Set(verifier.map((entry) => entry.sessionID)).size).toBe(1)
+      // The repair sends the verifier's feedback without resending the whole brief.
+      expect(producer[0].text).toContain("Write the change and describe it")
+      expect(producer[1].text).toContain("Verifier feedback")
+      expect(producer[1].text).not.toContain("Write the change and describe it")
+      const markers = children.map((child) => SubagentLifecycle.read(child)?.workflow)
+      expect(markers.every((marker) => marker?.role === "agent" && typeof marker.node === "string")).toBe(true)
+      expect(new Set(markers.map((marker) => (marker?.role === "agent" ? marker.node : undefined))).size).toBe(1)
+    }),
+  { trusted: true },
+)

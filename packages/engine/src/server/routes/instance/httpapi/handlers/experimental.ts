@@ -312,7 +312,16 @@ export const experimentalHandlers = HttpApiBuilder.group(InstanceHttpApi, "exper
         return yield* new ForbiddenError({ message: "Only the server owner can validate or start workflows." })
     })
     const workflowError = <A, R>(effect: Effect.Effect<A, WorkflowOwner.Error, R>) =>
-      effect.pipe(Effect.mapError((error) => new WorkflowApiError({ code: error.code, message: error.message })))
+      effect.pipe(
+        Effect.mapError(
+          (error) =>
+            new WorkflowApiError({
+              code: error.code,
+              message: error.message,
+              ...(error.issues?.length ? { issues: error.issues } : {}),
+            }),
+        ),
+      )
 
     const capabilities = Effect.fn("ExperimentalHttpApi.capabilities")(function* () {
       const agent = yield* agents.defaultInfo()

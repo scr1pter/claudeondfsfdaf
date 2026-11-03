@@ -8,6 +8,7 @@ import { Provider } from "@/provider/provider"
 import { ProviderTransform } from "@/provider/transform"
 import { MCP } from "@/mcp"
 import { Permission } from "@/permission"
+import type { PermissionV1 } from "@vectordevai/core/v1/permission"
 import { Tool } from "@/tool/tool"
 import { ToolJsonSchema } from "@/tool/json-schema"
 import { ToolRegistry } from "@/tool/registry"
@@ -56,6 +57,21 @@ const SUPPORTED_MCP_RESOURCE_ATTACHMENT_MIMES = new Set([
   "image/png",
   "image/webp",
 ])
+
+/**
+ * Whether this step offers the task tool: it is in the step's tools and the agent's and session's rules do not disable
+ * it. A per-message `tools: {task: false}` becomes session permission, and the request drops disabled tools only after
+ * this record is built, so membership alone would still offer a workflow that cannot launch (G.3).
+ */
+export function taskOffered(
+  tools: Readonly<Record<string, unknown>>,
+  agent: PermissionV1.Ruleset,
+  session: PermissionV1.Ruleset | undefined,
+) {
+  return (
+    Object.hasOwn(tools, "task") && !Permission.disabled(["task"], Permission.merge(agent, session ?? [])).has("task")
+  )
+}
 
 export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
   agent: Agent.Info
@@ -157,7 +173,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
       outward: input.outward === true,
       invokedAgents: input.invokedAgents,
       promptOps: input.promptOps,
-      [WorkflowMarkers.TASK_OFFERED]: Object.hasOwn(tools, "task"),
+      [WorkflowMarkers.TASK_OFFERED]: taskOffered(tools, input.agent.permission, input.session.permission),
       ...(input.taskSize ? { taskSize: input.taskSize } : {}),
       ...(input.delegation ? { delegation: input.delegation } : {}),
       ...(input.effort ? { effort: input.effort } : {}),

@@ -52,8 +52,18 @@ export async function runWorkflow(
   for (const warning of validation.warnings) output.stderr(`Warning: ${sanitizeTerminalText(warning.message)}\n`)
   output.stderr(formatWorkflowPlan(validation.plan) + "\n")
 
-  const events = await client.event.subscribe(undefined, { signal: abort.signal, sseMaxRetryAttempts: 1 })
-  const iterator = events.stream[Symbol.asyncIterator]()
+  // A dropped connection retries inside the SDK with a short backoff; a stream the server ends is resubscribed below.
+  // Either way the run is re-read before waiting again, since events in the gap are not replayed.
+  const subscribe = async () =>
+    (
+      await client.event.subscribe(undefined, {
+        signal: abort.signal,
+        sseMaxRetryAttempts: 5,
+        sseDefaultRetryDelay: 500,
+        sseMaxRetryDelay: 5_000,
+      })
+    ).stream[Symbol.asyncIterator]()
+  let iterator = await subscribe()
   const tracker = backgroundTracker()
   const tree = new Set<string>()
   const summary = new Map<string, { messageID: string; text: string }>()
@@ -65,6 +75,8 @@ export async function runWorkflow(
   let idle = false
   let failed = false
   let lastProgress = ""
+  let lastInspect = 0
+  let connections = 0
   const settleSummary = () => {
     const note = runID && tracker.noted.get(runID)
     if (!note) return
@@ -76,6 +88,7 @@ export async function runWorkflow(
   }
   const terminal = () => detail && ["completed", "failed", "stopped"].includes(detail.task.status)
   const inspect = async () => {
+    lastInspect = Date.now()
     detail = (
       await request((signal) =>
         client.experimental.workflow.get({ sessionID: input.sessionID, runID: runID! }, { throwOnError: true, signal }),
@@ -95,6 +108,70 @@ export async function runWorkflow(
     if (progress !== lastProgress) output.stderr(progress + "\n")
     lastProgress = progress
   }
+  // Events missed while disconnected: the run's state, its completion note and the parent's answers.
+  const recover = async () => {
+    activeAt = Date.now()
+    if (!runID) return
+    await inspect()
+    const messages =
+      (
+        await request((signal) =>
+          client.session.messages({ sessionID: input.sessionID, limit: 20 }, { throwOnError: true, signal }),
+        )
+      ).data ?? []
+    for (const message of messages.toSorted((a, b) => a.info.id.localeCompare(b.info.id))) {
+      if (message.info.role === "assistant") {
+        assistants.set(message.info.id, {
+          parentID: message.info.parentID,
+          completed: message.info.time.completed,
+          failed: message.info.error !== undefined,
+        })
+        if (!latestAssistant || message.info.id >= latestAssistant.id)
+          latestAssistant = {
+            id: message.info.id,
+            parentID: message.info.parentID,
+            completed: message.info.time.completed,
+          }
+      }
+      for (const part of message.parts) {
+        if (part.type !== "text") continue
+        const note = part.metadata?.taskNotification
+        if (isRecord(note) && note.taskID === runID)
+          tracker.note(
+            runID,
+            part.messageID,
+            note.quiet === true,
+            typeof note.attempt === "number" ? note.attempt : undefined,
+          )
+        else if (input.summarize && part.time?.end) summary.set(part.id, { messageID: part.messageID, text: part.text })
+      }
+    }
+    if (input.summarize) {
+      const statuses = (await request((signal) => client.session.status(undefined, { throwOnError: true, signal })))
+        .data
+      idle = (statuses?.[input.sessionID]?.type ?? "idle") === "idle"
+    }
+    settleSummary()
+  }
+  // Resubscribes after the server ended the stream. Only when every attempt fails is the run treated as lost.
+  const reconnect = async () => {
+    for (const delay of [200, 800, 2_000]) {
+      await iterator.return?.().catch(() => undefined)
+      await new Promise((resolve) => setTimeout(resolve, delay))
+      abort.signal.throwIfAborted()
+      iterator = await subscribe()
+      const connected = await nextBackgroundEvent<Event>(
+        iterator,
+        Math.max(0, Math.min(10_000, timeout - (Date.now() - activeAt))),
+        true,
+      )
+      if (connected.timedOut || connected.disconnected || connected.event.done) continue
+      connections += 1
+      await recover()
+      return true
+    }
+    return false
+  }
   const inRun = async (sessionID: string, depth = 0): Promise<boolean> => {
     if (tree.has(sessionID)) return true
     if (sessionID === input.sessionID) return false
@@ -111,6 +188,7 @@ export async function runWorkflow(
     const connected = await nextBackgroundEvent(iterator, Math.min(timeout, 10_000), true)
     if (connected.timedOut || connected.disconnected || connected.event.done)
       throw new Error("Could not subscribe to workflow progress; the workflow was not started")
+    connections = 1
     uncertainStart = true
     const start = await request((signal) =>
       client.experimental.workflow.start(
@@ -134,19 +212,29 @@ export async function runWorkflow(
       // actual parent turn before an in-process engine may shut down.
       if (terminal() && tracker.settled() && (!input.summarize || idle)) break
       const next = await nextBackgroundEvent<Event>(iterator, timeout - (Date.now() - activeAt), true)
-      if (next.timedOut || next.disconnected || next.event.done)
-        throw new Error(
-          next.timedOut
-            ? "Workflow progress timed out before completion was confirmed"
-            : "The workflow event stream ended before completion was confirmed",
-        )
+      if (next.timedOut) throw new Error("Workflow progress timed out before completion was confirmed")
+      if (next.disconnected || next.event.done) {
+        if (await reconnect()) continue
+        throw new Error("The workflow event stream ended before completion was confirmed")
+      }
       const event = next.event.value
+      // The SDK reconnected after a dropped connection: re-read what the gap may have hidden.
+      if (event.type === "server.connected") {
+        connections += 1
+        if (connections > 1) await recover()
+        continue
+      }
       if (
         (event.type === "session.created" || event.type === "session.updated") &&
         event.properties.info.id === runID
       ) {
         activeAt = Date.now()
-        await inspect()
+        // Each inspection decodes the run's checkpoint on the server. While the run's own record says it is still
+        // working, read it at most every 5 s; a settled (or unreadable) status is read at once.
+        const record = event.properties.info.metadata?.subagent
+        const status = isRecord(record) && typeof record.status === "string" ? record.status : undefined
+        if (status === undefined || !["queued", "running"].includes(status) || Date.now() - lastInspect >= 5_000)
+          await inspect()
       }
       if (event.type === "session.status" && event.properties.sessionID === input.sessionID) {
         activeAt = Date.now()

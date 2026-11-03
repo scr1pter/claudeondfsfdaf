@@ -327,7 +327,8 @@ for (const denied of ["task", "workflow"] as const) {
       expect((yield* call(() => f.sdk.experimental.capabilities.get())).data?.workflows).toBe(false)
       const response = yield* f.raw(`/experimental/session/${allowedID}/workflow`, owner, { spec })
       expect(response.status).toBe(400)
-      expect(yield* call(() => response.json())).toMatchObject({ code: "forbidden" })
+      // 4.9 names a start the owner's settings turn off `disabled`, apart from an authorization refusal.
+      expect(yield* call(() => response.json())).toMatchObject({ code: "disabled" })
       expect((yield* call(() => f.sdk.session.messages({ sessionID: allowedID }))).data).toHaveLength(0)
       expect((yield* call(() => f.sdk.session.children({ sessionID: allowedID }))).data).toHaveLength(0)
       expect(yield* f.llm.inputs).toHaveLength(0)
@@ -424,3 +425,18 @@ for (const forwardedGuest of [false, true])
         expect(lookedUp).toEqual([])
       }),
   )
+
+it.live("an invalid owner start returns its structured validation issues", () =>
+  Effect.gen(function* () {
+    const f = yield* fixture()
+    const response = yield* f.raw(`/experimental/session/${allowedID}/workflow`, owner, {
+      spec: JSON.stringify({ version: 1, title: "Broken", stages: [{ id: "a", prompt: "Review", promt: "typo" }] }),
+    })
+    expect(response.status).toBe(400)
+    const body = (yield* call(() => response.json())) as { code: string; issues?: { path: string; message: string }[] }
+    expect(body.code).toBe("invalid")
+    expect(body.issues).toContainEqual(expect.objectContaining({ path: "/stages/0/promt" }))
+    expect((yield* call(() => f.sdk.session.children({ sessionID: allowedID }))).data).toHaveLength(0)
+    expect(yield* f.llm.inputs).toHaveLength(0)
+  }),
+)

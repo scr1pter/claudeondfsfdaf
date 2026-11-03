@@ -1,5 +1,6 @@
 import { Clock, Effect, FileSystem, Option, Schema, Stream } from "effect"
 import type { EventV2 } from "@vectordevai/core/event"
+import { WorkflowCheckpointStore } from "@vectordevai/core/workflow-checkpoint-store"
 import { JsonSchemaCheck } from "@vectordevai/core/json-schema-check"
 import { WorkflowPlan } from "@vectordevai/core/orchestration/plan"
 import type { SpendGuard } from "@vectordevai/core/spend-guard"
@@ -10,6 +11,7 @@ import { SessionID } from "@/session/schema"
 import { SubagentLifecycle } from "@/tool/subagent-lifecycle"
 import { TaskStructured } from "@/tool/task-structured"
 import type { Truncate } from "@/tool/truncate"
+import { WorkflowCheckpoint } from "./checkpoint"
 import { WorkflowLaunch } from "./launch"
 import { WorkflowLedger } from "./ledger"
 import { WorkflowRunner } from "./runner"
@@ -23,6 +25,8 @@ export type Input = Omit<WorkflowRunner.Input, "seed"> &
     readonly sources: WorkflowSources.Interface
     readonly truncate: Pick<Truncate.Interface, "write">
     readonly fs: Pick<FileSystem.FileSystem, "stat" | "readFileString">
+    /** The run's versioned checkpoint lives in its own row, never in the run Session's metadata or events. */
+    readonly checkpoints: Pick<WorkflowCheckpointStore.Interface, "read" | "write">
   }
 
 export class RuntimeError extends Schema.TaggedErrorClass<RuntimeError>()("WorkflowRuntime.RuntimeError", {
@@ -108,7 +112,9 @@ export const run = Effect.fn("WorkflowRuntime.run")(function* (input: Input) {
       if (Option.isNone(json)) return yield* new RuntimeError({ message: "A saved workflow JSON answer is invalid." })
       return json.value
     })
-  const saved = record.workflow.progress.runtime
+  const saved = yield* WorkflowCheckpoint.load(input.checkpoints, input.runID, record)
+  // A checkpoint an earlier build kept in lifecycle metadata moves to the checkpoint table on the first save.
+  let legacy = record.workflow.progress.runtime !== undefined
   const seed: WorkflowRunner.State =
     saved === undefined
       ? ({ nodes: [], usage: counters(), groups: {}, sessions: {}, sessionGroups: {} } satisfies WorkflowRunner.State)
@@ -371,12 +377,21 @@ export const run = Effect.fn("WorkflowRuntime.run")(function* (input: Input) {
     ),
   })
   const launcher = WorkflowLaunch.make(input)
+  // Once this attempt has saved its checkpoint row, the record keeps only small progress fields: a legacy runtime copy is
+  // dropped rather than rewritten into the Session and its durable update event on every progress save.
+  let stored = false
   const save = (patch: Record<string, unknown>) =>
     SubagentLifecycle.modify(input.sessions, input.runID, (current) => {
       if (current.attempt !== attempt || current.workflow?.role !== "run") return { value: false }
+      const { runtime: retained, ...progress } = current.workflow.progress
       return {
         value: true,
-        patch: { workflow: { ...current.workflow, progress: { ...current.workflow.progress, ...patch } } },
+        patch: {
+          workflow: {
+            ...current.workflow,
+            progress: { ...progress, ...(stored || retained === undefined ? {} : { runtime: retained }), ...patch },
+          },
+        },
       }
     }).pipe(
       Effect.flatMap((ok) =>
@@ -384,6 +399,8 @@ export const run = Effect.fn("WorkflowRuntime.run")(function* (input: Input) {
       ),
       Effect.orDie,
     )
+  let lastDigest: string | undefined
+  let lastAccounting: WorkflowCheckpoint.Accounting | undefined
   let lastPoll = -Infinity
   let rollup = {
     tokens: tokens(owner.subagentTokens),
@@ -475,7 +492,24 @@ export const run = Effect.fn("WorkflowRuntime.run")(function* (input: Input) {
             sessions: cumulative,
             sessionGroups: { ...sessionGroups, ...state.sessionGroups },
           }).pipe(Effect.orDie)
-          yield* save({ runtime: compact })
+          const data = JSON.stringify(compact)
+          const digest = WorkflowCheckpointStore.digest(data)
+          if (digest !== lastDigest) {
+            const current = SubagentLifecycle.read(yield* input.sessions.get(input.runID).pipe(Effect.orDie))
+            if (!current || current.attempt !== attempt || current.workflow?.role !== "run")
+              return yield* Effect.die(new Error("The workflow attempt lost ownership of its durable record."))
+            if (!(yield* input.checkpoints.write({ sessionID: input.runID, attempt: attempt ?? 0, data })))
+              return yield* Effect.die(new Error("A newer workflow attempt owns the durable checkpoint."))
+            lastDigest = digest
+            stored = true
+          }
+          // Lifecycle observation reads this small summary; it is rewritten only when the totals change.
+          const summary = WorkflowCheckpoint.accounting({ usage: state.usage, sessions: cumulative })
+          if (legacy || summary.steps !== lastAccounting?.steps || summary.toolUses !== lastAccounting.toolUses) {
+            yield* save({ accounting: summary })
+            lastAccounting = summary
+            legacy = false
+          }
         }),
       progress: (progress) => save(progress),
       write: (value: Json) => input.truncate.write(JSON.stringify(value)),

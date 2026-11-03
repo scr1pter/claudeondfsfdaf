@@ -27,7 +27,13 @@ export type Agent = {
   readonly stage: string
   readonly phase: string
   readonly item: string
+  /** This execution's content key; crash recovery matches a pending launch to its child by it. */
   readonly key: string
+  /**
+   * The runner's stable node key. Retries, repairs and later verifier rounds change the execution key, so resuming a
+   * workflow agent's own session is authorized by this node identity and the verifier role instead.
+   */
+  readonly node?: string
   readonly round?: number
   readonly verifier?: boolean
 }

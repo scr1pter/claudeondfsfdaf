@@ -11,6 +11,8 @@ import { Tool } from "@/tool/tool"
 import { ToolJsonSchema } from "@/tool/json-schema"
 import { Truncate } from "@/tool/truncate"
 import { WorkflowTool } from "@/tool/workflow"
+import { LLMRequestPrep } from "@/session/llm/request"
+import { SessionTools } from "@/session/tools"
 import DESCRIPTION from "@/tool/workflow.txt"
 import { examples } from "../../../core/test/orchestration/examples"
 import { testEffect } from "../lib/effect"
@@ -282,5 +284,23 @@ describe("workflow tool parameters and guide", () => {
       )
     expect(calls).toBe(0)
     expect(Schema.decodeUnknownSync(WorkflowTool.Parameters)({ action: "guide" })).toEqual({ action: "guide" })
+  })
+
+  test("is withheld when task is disabled, and task is then not offered to a direct launch", () => {
+    const tools = { task: {}, workflow: {}, read: {} } as never
+    const agent = { name: "build", mode: "primary", permission: [], options: {} } as never
+    const user = { tools: {} } as never
+    const offered = (input: { permission?: { permission: string; pattern: string; action: "deny" }[]; user?: never }) =>
+      Object.keys(LLMRequestPrep.resolveTools({ tools, agent, user: input.user ?? user, permission: input.permission }))
+    expect(offered({})).toEqual(["task", "workflow", "read"])
+    // Denied by permission (a per-message `tools: {task: false}` becomes this session permission) or by the message.
+    const denied = [{ permission: "task", pattern: "*", action: "deny" as const }]
+    expect(offered({ permission: denied })).toEqual(["read"])
+    expect(offered({ user: { tools: { task: false } } as never })).toEqual(["read"])
+    // The tool context's TASK_OFFERED follows the same rules, so WorkflowRuns.launch refuses "task is not offered".
+    expect(SessionTools.taskOffered({ task: {}, workflow: {} }, [], [])).toBe(true)
+    expect(SessionTools.taskOffered({ task: {}, workflow: {} }, [], denied)).toBe(false)
+    expect(SessionTools.taskOffered({ task: {}, workflow: {} }, denied, undefined)).toBe(false)
+    expect(SessionTools.taskOffered({ workflow: {} }, [], [])).toBe(false)
   })
 })

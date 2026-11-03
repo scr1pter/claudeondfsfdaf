@@ -1233,22 +1233,31 @@ const layer = Layer.effect(
                 const walked = new Set<string>(queue)
                 // The public board intentionally hides run agents. Rebuild their trusted parent graph here, before
                 // claiming or stopping anything, so missing runner fibers cannot leave durable children running.
-                while (queue.length) {
+                // Only open descendants count toward the cap: a large run's finished agents never block its Stop. Past
+                // the cap the run coordinator is still stopped, and its interruption cancels its running nodes, whose
+                // task calls cancel their own children.
+                let capped = false
+                while (queue.length && !capped) {
                   for (const child of yield* sessions.children(queue.shift()!)) {
-                    if (child.internal || !SubagentLifecycle.read(child) || walked.has(child.id)) continue
-                    if (!visited.has(child.id) && visited.size >= MAX_VISITED)
-                      return yield* new Error({
-                        code: "invalid",
-                        message: "Too many workflow descendants to stop atomically; select a narrower parent session.",
-                      })
-                    visited.add(child.id)
+                    const record = SubagentLifecycle.read(child)
+                    if (child.internal || !record || walked.has(child.id)) continue
                     walked.add(child.id)
                     queue.push(child.id)
-                    if (reachable.has(child.id) || !SubagentLifecycle.open(SubagentLifecycle.read(child))) continue
+                    if (reachable.has(child.id) || !SubagentLifecycle.open(record)) continue
+                    if (!visited.has(child.id) && visited.size >= MAX_VISITED) {
+                      capped = true
+                      break
+                    }
+                    visited.add(child.id)
                     reachable.set(child.id, yield* observe(child))
                     changed = true
                   }
                 }
+                if (capped)
+                  yield* Effect.logWarning(
+                    "workflow stop reached its open-descendant cap; the rest stop through the run's cancellation",
+                    { runID: run.id, open: visited.size },
+                  )
               }
             }
             const tasks = yield* select(input.sessionID, [...ids], false)

@@ -4,6 +4,9 @@ import { Cause, Clock, Deferred, Effect, Exit, Fiber, FileSystem, Stream } from 
 import { TestClock } from "effect/testing"
 import { CrossSpawnSpawner } from "@vectordevai/core/cross-spawn-spawner"
 import { Database } from "@vectordevai/core/database/database"
+import { WorkflowCheckpointStore } from "@vectordevai/core/workflow-checkpoint-store"
+import { WorkflowCheckpointTable } from "@vectordevai/core/workflow-checkpoint.sql"
+import { eq } from "drizzle-orm"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { LayerNodePlatform } from "@vectordevai/core/effect/app-node-platform"
 import { ModelV2 } from "@vectordevai/core/model"
@@ -17,6 +20,7 @@ import { SessionV1 } from "@vectordevai/core/v1/session"
 import type { SubagentRecord, SubagentUsage } from "@/agent/subagent-kind"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { Git } from "@/git"
+import { WorkflowCheckpoint } from "@/orchestration/checkpoint"
 import { WorkflowMarkers } from "@/orchestration/constants"
 import { WorkflowRuntime } from "@/orchestration/runtime"
 import type { WorkflowRunner } from "@/orchestration/runner"
@@ -29,7 +33,7 @@ import type { TaskPromptOps } from "@/tool/task"
 import type { Tool } from "@/tool/tool"
 import { Truncate } from "@/tool/truncate"
 import { disposeAllInstances, TestInstance } from "../fixture/fixture"
-import { awaitWithTimeout, testEffect } from "../lib/effect"
+import { awaitWithTimeout, pollWithTimeout, testEffect } from "../lib/effect"
 
 afterEach(disposeAllInstances)
 const it = testEffect(
@@ -45,6 +49,7 @@ const it = testEffect(
       WorkflowSources.node,
       Git.node,
       LayerNodePlatform.filesystem,
+      WorkflowCheckpointStore.node,
     ]),
   ),
 )
@@ -104,6 +109,8 @@ const fixture = Effect.fnUntraced(function* (options: Options = {}) {
   const truncate = yield* Truncate.Service
   const sources = yield* WorkflowSources.Service
   const fs = yield* FileSystem.FileSystem
+  const checkpoints = yield* WorkflowCheckpointStore.Service
+  const database = yield* Database.Service
   const instance = yield* TestInstance
   const parent = yield* sessions.create({ title: "Runtime parent" })
   const parentMessage = yield* sessions.updateMessage({
@@ -308,6 +315,7 @@ const fixture = Effect.fnUntraced(function* (options: Options = {}) {
         guard,
         sources,
         fs,
+        checkpoints,
         task,
         ops,
         truncate: {
@@ -322,16 +330,42 @@ const fixture = Effect.fnUntraced(function* (options: Options = {}) {
         ask: () => Effect.die(new Error("Fixture task cannot ask for provider or execution permissions")),
       })
     }).pipe(Effect.scoped)
+  // The checkpoint lives in its own row (G.6); undefined clears it.
   const saveRaw = (runtime: unknown) =>
-    SubagentLifecycle.modify(sessions, run.id, (record) => {
-      if (record.workflow?.role !== "run") throw new Error("Missing run record")
-      return {
-        value: true,
-        patch: { workflow: { ...record.workflow, progress: { ...record.workflow.progress, runtime } } },
-      }
+    Effect.gen(function* () {
+      if (runtime === undefined)
+        return yield* database.db
+          .delete(WorkflowCheckpointTable)
+          .where(eq(WorkflowCheckpointTable.session_id, run.id))
+          .run()
+          .pipe(Effect.orDie, Effect.asVoid)
+      const record = SubagentLifecycle.read(yield* sessions.get(run.id))
+      yield* checkpoints.write({ sessionID: run.id, attempt: record?.attempt ?? 0, data: JSON.stringify(runtime) })
     })
   const save = (state: WorkflowRunner.State) => WorkflowState.encode(state).pipe(Effect.flatMap(saveRaw))
-  return { sessions, events, guard, fs, instance, parent, run, calls, cancelled, written, execute, save, saveRaw, link }
+  const stored = () =>
+    Effect.gen(function* () {
+      const record = SubagentLifecycle.read(yield* sessions.get(run.id))
+      return yield* WorkflowState.decode(yield* WorkflowCheckpoint.load(checkpoints, run.id, record))
+    })
+  return {
+    sessions,
+    events,
+    guard,
+    fs,
+    instance,
+    parent,
+    run,
+    calls,
+    cancelled,
+    written,
+    execute,
+    save,
+    saveRaw,
+    stored,
+    checkpoints,
+    link,
+  }
 })
 
 describe("workflow runtime persistence and accounting", () => {
@@ -362,7 +396,7 @@ describe("workflow runtime persistence and accounting", () => {
       const record = SubagentLifecycle.read(owner)!
       if (record.workflow?.role !== "run") throw new Error("Missing workflow record")
       expect(record.workflow.progress.report).toBe(result.report)
-      const stored = yield* WorkflowState.decode(record.workflow.progress.runtime)
+      const stored = yield* f.stored()
       expect(stored.nodes[0].status).toBe("completed")
       expect(stored.nodes[0].outputMessageID).toBeDefined()
       const messages = yield* f.sessions.messages({ sessionID: f.run.id })
@@ -383,6 +417,65 @@ describe("workflow runtime persistence and accounting", () => {
           .filter((part) => part.type === "tool")
           .every((part) => part.state.status === "completed"),
       ).toBe(true)
+    }),
+  )
+
+  it.instance("keeps the checkpoint in its own row, out of the run Session and its durable update events", () =>
+    Effect.gen(function* () {
+      const f = yield* fixture()
+      const updates: SubagentRecord[] = []
+      yield* f.events.subscribe(SessionV1.Event.Updated).pipe(
+        Stream.runForEach((event) =>
+          Effect.sync(() => {
+            const record = event.data.sessionID === f.run.id ? SubagentLifecycle.read(event.data.info) : undefined
+            if (record) updates.push(record)
+          }),
+        ),
+        Effect.forkChild({ startImmediately: true }),
+      )
+      const result = yield* f.execute()
+      expect(result.outcome).toBe("completed")
+      yield* pollWithTimeout(
+        Effect.sync(() =>
+          updates.some((record) => record.workflow?.role === "run" && record.workflow.progress.report)
+            ? true
+            : undefined,
+        ),
+        "The run's report update was not observed",
+      )
+      // No update event carries the runtime state; the record keeps only progress, the report and the small summary.
+      for (const record of updates)
+        expect(record.workflow?.role === "run" ? record.workflow.progress.runtime : undefined).toBeUndefined()
+      const record = SubagentLifecycle.read(yield* f.sessions.get(f.run.id))!
+      if (record.workflow?.role !== "run") throw new Error("Missing workflow record")
+      expect(record.workflow.progress.runtime).toBeUndefined()
+      const stored = yield* f.stored()
+      expect(record.workflow.progress.accounting).toEqual(WorkflowCheckpoint.accounting(stored))
+      expect((yield* f.checkpoints.read(f.run.id))?.attempt).toBe(1)
+      expect(stored.nodes[0].status).toBe("completed")
+    }),
+  )
+
+  it.instance("a checkpoint an earlier build kept in lifecycle metadata resumes and moves to its own row", () =>
+    Effect.gen(function* () {
+      const f = yield* fixture()
+      const first = yield* f.execute()
+      const legacy = yield* WorkflowState.encode(first.state)
+      yield* f.saveRaw(undefined)
+      yield* SubagentLifecycle.modify(f.sessions, f.run.id, (record) => {
+        if (record.workflow?.role !== "run") throw new Error("Missing run record")
+        const { accounting: _, ...progress } = record.workflow.progress
+        return { value: true, patch: { workflow: { ...record.workflow, progress: { ...progress, runtime: legacy } } } }
+      })
+      const resumed = yield* f.execute()
+      // The completed node is reused from the legacy copy, so nothing launches again.
+      expect(f.calls).toHaveLength(1)
+      expect(resumed.results).toEqual(first.results)
+      const record = SubagentLifecycle.read(yield* f.sessions.get(f.run.id))!
+      if (record.workflow?.role !== "run") throw new Error("Missing workflow record")
+      expect(record.workflow.progress.runtime).toBeUndefined()
+      expect(record.workflow.progress.accounting).toBeDefined()
+      expect((yield* f.stored()).nodes[0].status).toBe("completed")
     }),
   )
 
@@ -428,7 +521,7 @@ describe("workflow runtime persistence and accounting", () => {
       expect(first.state.sessions[id]).toMatchObject({ total: 15, tokensOwnOnly: true })
       const owner = SubagentLifecycle.read(yield* f.sessions.get(f.run.id))!
       if (owner.workflow?.role !== "run") throw new Error("Missing workflow")
-      expect((yield* WorkflowState.decode(owner.workflow.progress.runtime)).sessions[id].tokensOwnOnly).toBe(true)
+      expect((yield* f.stored()).sessions[id].tokensOwnOnly).toBe(true)
       yield* f.save({
         ...first.state,
         sessions: {
@@ -478,7 +571,7 @@ describe("workflow runtime persistence and accounting", () => {
       expect(f.calls).toHaveLength(1)
       const owner = SubagentLifecycle.read(yield* f.sessions.get(f.run.id))!
       if (owner.workflow?.role !== "run") throw new Error("Missing workflow")
-      expect((yield* WorkflowState.decode(owner.workflow.progress.runtime)).usage.spentUsd).toBe(5)
+      expect((yield* f.stored()).usage.spentUsd).toBe(5)
     }),
   )
 
@@ -814,9 +907,7 @@ describe("workflow runtime persistence and accounting", () => {
           expect(f.calls).toHaveLength(1)
           const owner = SubagentLifecycle.read(yield* f.sessions.get(f.run.id))!
           if (owner.workflow?.role !== "run") throw new Error("Missing workflow record")
-          expect((yield* WorkflowState.decode(owner.workflow.progress.runtime)).usage.elapsedMs).toBe(
-            first.state.usage.elapsedMs,
-          )
+          expect((yield* f.stored()).usage.elapsedMs).toBe(first.state.usage.elapsedMs)
         }),
     )
 
@@ -885,7 +976,7 @@ describe("workflow runtime persistence and accounting", () => {
           else expect(resumed.state.groups.newgroup).toMatchObject({ launched: 1, steps: 2, tokens: 30, spentUsd: 2 })
           const owner = SubagentLifecycle.read(yield* f.sessions.get(f.run.id))!
           if (owner.workflow?.role !== "run") throw new Error("Missing workflow record")
-          const stored = yield* WorkflowState.decode(owner.workflow.progress.runtime)
+          const stored = yield* f.stored()
           expect(stored.sessions[original]).toEqual(first.state.sessions[original])
           expect(stored.usage).toMatchObject({ launched: 2, steps: 4, tokens: 60, spentUsd: 4 })
           expect(stored.sessionGroups?.[original]).toBeUndefined()
@@ -1104,14 +1195,11 @@ describe("workflow runtime persistence and accounting", () => {
       const secondFinished = yield* Deferred.make<void>()
       const freeSlotObserved = yield* Deferred.make<WorkflowState.Stored>()
       const allFinished = yield* Deferred.make<void>()
-      yield* f.events.subscribe(SessionV1.Event.Updated).pipe(
-        Stream.runForEach((event) =>
-          Effect.gen(function* () {
-            if (event.data.sessionID !== f.run.id) return
-            const record = SubagentLifecycle.read(event.data.info)
-            if (record?.workflow?.role !== "run") return
-            const stored = record.workflow.progress.runtime as WorkflowState.Stored | undefined
-            if (!stored?.nodes) return
+      // The checkpoint lives in its own row, not in the run Session's update events, so it is read back directly.
+      yield* Effect.gen(function* () {
+        while (true) {
+          const stored = yield* f.stored().pipe(Effect.orElseSucceed(() => undefined))
+          if (stored?.nodes) {
             if (
               (stored.clock?.at ?? 0) >= now + 60_000 &&
               stored.nodes.some((node) => node.sessionID === original && node.status === "waiting")
@@ -1123,15 +1211,16 @@ describe("workflow runtime persistence and accounting", () => {
             }
             if (stored.nodes.filter((node) => node.status === "completed" && node.final).length === 3)
               yield* Deferred.succeed(allFinished, undefined)
-          }),
-        ),
-        Effect.forkChild({ startImmediately: true }),
-      )
+          }
+          yield* Effect.sleep("10 millis")
+        }
+      }).pipe(Effect.forkChild({ startImmediately: true }))
       yield* clock.adjust("61 seconds")
       yield* awaitWithTimeout(Deferred.await(waitingSeen), "Resumed same-ID child was not observed waiting")
       yield* Deferred.succeed(releaseSecond, undefined)
       yield* awaitWithTimeout(Deferred.await(secondFinished), "Second child did not persist completion")
-      yield* clock.adjust("1 second")
+      // The elapsed clock is checkpointed on the 30 s heartbeat; admission must stay paused across all of it.
+      yield* clock.adjust("30 seconds")
       const paused = yield* awaitWithTimeout(
         Deferred.await(freeSlotObserved),
         "No checkpoint after the second child freed its slot",

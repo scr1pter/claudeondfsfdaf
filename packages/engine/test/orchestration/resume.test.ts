@@ -187,3 +187,21 @@ test("retained failures remain errors and cancelled children are not automatical
     expect(resumed.outcome).toBe("failed")
   }
 })
+
+test("default resume reruns a failed final node in its own session and carries its earlier usage", async () => {
+  const spec = { ...base, stages: [{ id: "a", prompt: "Work", retries: 0 }] }
+  const first = await Effect.runPromise(
+    harness(spec, { launch: () => Effect.succeed({ status: "failed", error: "Broken" }) }).run,
+  )
+  expect(first.outcome).toBe("failed")
+  const failed = first.state.nodes[0]
+  expect(failed).toMatchObject({ status: "failed", final: true })
+  // retry_failed defaults to true: exactly the failed node launches again, in the session it already has.
+  const second = harness(spec, { seed: first.state })
+  const resumed = await Effect.runPromise(second.run)
+  expect(second.calls).toHaveLength(1)
+  expect(second.calls[0].sessionID).toBe(failed.sessionID!)
+  expect(resumed.outcome).toBe("completed")
+  expect(resumed.state.nodes[0]).toMatchObject({ status: "completed", final: true })
+  expect(resumed.state.usage).toMatchObject({ launched: 1, steps: 2, tokens: 20, spentUsd: 0.02 })
+})

@@ -96,6 +96,17 @@ export default {
         );
       `)
       yield* tx.run(`
+        CREATE TABLE \`workflow_checkpoint\` (
+          \`session_id\` text PRIMARY KEY,
+          \`attempt\` integer NOT NULL,
+          \`digest\` text NOT NULL,
+          \`data\` text NOT NULL,
+          \`time_created\` integer NOT NULL,
+          \`time_updated\` integer NOT NULL,
+          CONSTRAINT \`fk_workflow_checkpoint_session_id_session_id_fk\` FOREIGN KEY (\`session_id\`) REFERENCES \`session\`(\`id\`) ON DELETE CASCADE
+        );
+      `)
+      yield* tx.run(`
         CREATE TABLE \`account_state\` (
           \`id\` integer PRIMARY KEY,
           \`active_account_id\` text,

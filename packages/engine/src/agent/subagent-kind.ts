@@ -62,6 +62,7 @@ export type SubagentWorkflow =
       phase: string
       item: string
       key: string
+      node?: string
       round?: number
       verifier?: boolean
       final?: boolean

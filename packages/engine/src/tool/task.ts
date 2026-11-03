@@ -102,6 +102,15 @@ const BATCH_WAITS =
 export const LAUNCHING_REASON = "Waiting for the launching response"
 
 // Past TaskLimits.BUSY running or waiting subagents a launch tells the agent, so it can tell the user (5.B.8).
+/**
+ * A run's part metadata shows its progress only. The record keeps the bulky runtime state and the full report for
+ * hydration and inspection; copying them into the conversation's tool part would keep them in its history for good.
+ */
+function workflowDisplay(workflow: SubagentRecord["workflow"]) {
+  if (workflow?.role !== "run") return workflow
+  const { runtime: _runtime, report: _report, accounting: _accounting, ...progress } = workflow.progress
+  return { ...workflow, progress }
+}
 function busyNote(active: number, limit: number) {
   return `${active} subagents are running or waiting in this conversation (it runs at most ${limit} at once). Each one spends on the user's provider keys, so tell the user how many are working.`
 }
@@ -554,6 +563,7 @@ export const TaskTool = Tool.define(
                 phase: Schema.String,
                 item: Schema.String,
                 key: Schema.String,
+                node: Schema.optional(Schema.String),
                 round: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
                 verifier: Schema.optional(Schema.Boolean),
               }),
@@ -619,9 +629,17 @@ export const TaskTool = Tool.define(
       const resumedWorkflow = session && SubagentLifecycle.read(session)?.workflow
       if ((params.subagent_type === WorkflowMarkers.WORKFLOW_AGENT || resumedWorkflow?.role === "run") && !workflowRun)
         return yield* Effect.fail(new Error("Workflow runs start and resume through workflow, not task."))
+      // A retry, a repair and a later verifier round each carry a new execution key (their prompt or round changed), so
+      // the resume is authorized by the stable node identity and role. A record written before node identities existed
+      // still needs its exact execution key.
       if (
         resumedWorkflow?.role === "agent" &&
-        (!workflowAgent || resumedWorkflow.runID !== workflowAgent.runID || resumedWorkflow.key !== workflowAgent.key)
+        (!workflowAgent ||
+          resumedWorkflow.runID !== workflowAgent.runID ||
+          (resumedWorkflow.verifier === true) !== (workflowAgent.verifier === true) ||
+          (resumedWorkflow.node === undefined
+            ? resumedWorkflow.key !== workflowAgent.key
+            : resumedWorkflow.node !== workflowAgent.node))
       )
         return yield* Effect.fail(new Error("Workflow agents resume only through their owning workflow node."))
       if (workflowRun && session && resumedWorkflow?.role !== "run")
@@ -1372,7 +1390,7 @@ export const TaskTool = Tool.define(
           ...(workflowAgent
             ? { groupID: `workflow:${workflowAgent.runID}`, workflow: record.workflow }
             : workflowRun
-              ? { workflow: record.workflow }
+              ? { workflow: workflowDisplay(record.workflow) }
               : {}),
         }
         // Lifecycle fields that change after launch. They are laid over `metadata`

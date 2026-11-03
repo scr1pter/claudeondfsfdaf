@@ -220,7 +220,7 @@ Code is named by file and function, not line number: CI-fix agents are editing `
 | `packages/engine/src/task/place.ts` (`TaskPlace`) | process-global | WP26 |
 | `packages/engine/src/task/isolation.ts` (`TaskIsolation`) | effectful | WP27 |
 | `packages/engine/src/session/cleanup.ts` (`SessionCleanup`) | module hooks | WP26 |
-| `packages/engine/src/orchestration/*` (`WorkflowSources`, `WorkflowLibrary`, `WorkflowLaunch`, `WorkflowRunner`, `WorkflowRuntime`, `WorkflowLedger`, `WorkflowState`, `WorkflowRuns`, constants) | engine runtime and instance services | WP30, WP31 |
+| `packages/engine/src/orchestration/*` (`WorkflowSources`, `WorkflowLibrary`, `WorkflowLaunch`, `WorkflowRunner`, `WorkflowRuns`, constants) | instance nodes | WP30, WP31 |
 | `packages/engine/src/task/shells.ts` (`ShellJobs`) | instance node | WP33 |
 | `packages/app/src/features/followup/*` | app | WP36 |
 
@@ -395,8 +395,7 @@ Info += { model?: Model, effort?: String, background?: Boolean, fork?: Boolean, 
 Info.controls += { resume?: Boolean, background?: Boolean, merge?: Boolean, discard?: Boolean }
 ListResult += { limits?: Limits, shells?: Array(Shell) }
 InspectResult += { messages?: Array(Message) /* ≤50 */, structured?: Struct({ json: String /* ≤8 KiB pretty */, valid: Boolean, truncated: Boolean }) }
-WaitResult += { attention?: Array(String), shells?: Array(Shell) /* WP33, explicit shell-ID requests only */ }
-StopResult += { shells?: Array(Shell) /* WP33, explicit shell-ID requests only */ }
+WaitResult += { attention?: Array(String) }
 export const SessionStopResult = Struct({ aborted: Boolean, tasks: Array(Info), shells: Finite, excluded: Finite, skipped: Finite })
 export const ResumeResult = Struct({ tasks: Array(Info) })
 export const PromoteResult = Struct({ tasks: Array(Info) })
@@ -463,7 +462,7 @@ workflow?: { role: "run"; title: string; revision: number; quiet?: boolean; prog
 
 | Metadata | Written for | Wakes? |
 |---|---|---|
-| `taskNotification: {taskID, state, attempt?, recovered?, quiet?}` | a child's result. The shape is unchanged, plus optional keys. The CLI run loop and taint read it. | yes, unless the state is cancelled, the note is quiet, or the parent is fenced or halted |
+| `taskNotification: {taskID, state, recovered?, quiet?}` | a child's result. The shape is unchanged, plus optional keys. The CLI run loop and taint read it. | yes, unless the state is cancelled, the note is quiet, or the parent is fenced or halted |
 | `taskMessage: {taskID}` | `task_manage report` | only with `wake` |
 | `taskAttention: {taskID, kind, state}` | waiting, answered or expired | never |
 | `taskInterrupted: {taskIDs}` | the recovery note | never |
@@ -519,7 +518,6 @@ export interface Interface {
     onSettled?: (o: SubagentLifecycle.Outcome, hold?: BrainSchema.Hold) => Effect<void> }): Effect<void>
   fence(parentID: SessionID): Effect<void>      // every note is noReply until the next human message
   unfence(parentID: SessionID): Effect<void>    // SessionPrompt.prompt on a non-synthetic user part
-  canReply(parentID: SessionID, messageID: MessageID): Effect<boolean> // engine-only in-flight delivery admission
 }
 // note-window.ts (pure)
 export const QUIET = 1_500, HOLD = 5_000      // RuntimeFlags.noteQuietMs / noteHoldMs override them (tests use ms)
@@ -881,7 +879,7 @@ A multi-entry foreground batch that would need to wait is refused: "This batch w
 - the parent is halted (`guard.snapshot(parent)?.stopped`, today's rule);
 - no note in the batch wakes (table 4.6).
 
-Every `noReply` part carries `taskQuiet: true`. A workflow run started with `quiet` sends its result note quiet. A batch is `noReply` only when **every** note in it is quiet, cancelled or non-waking. Result metadata also carries the trusted attempt and effective quiet flag. A note already persisted but not yet admitted to the model runner rechecks its trusted delivery registration inside that runner. Stop permanently revokes that particular pending delivery, even if a later human message unfences the conversation; a late suppression persists both quiet markers. No public metadata can create delivery authority, and completed deliveries release their registration.
+Every `noReply` part carries `taskQuiet: true`. A workflow run started with `quiet` sends its result note quiet. A batch is `noReply` only when **every** note in it is quiet, cancelled or non-waking.
 
 **C.3 Note text.**
 - **Result notes** keep the 3 KB / 60-line cap, with the full text saved at `resultRef`.
@@ -1272,20 +1270,18 @@ Template refs: item(.seg)*, index, inputs.<name>(.seg)*, stages.<id>.output(.seg
 
 - **Streaming.** `from` streams: each upstream node's output (at `path`; an array yields one item per element) becomes items as soon as that node settles. `wait: "all"` and `sort_by` buffer until every source stage settles, and `after` is a barrier. With `batch: n`, items arrive as arrays of n, keyed by their member keys.
 - **Stage `if`** gates a whole stage on aggregate state. **Item `when`** gates one item.
-- **Sources.** `changed_files` drops deleted paths unless `include_deleted` is set. `files` skips hidden files unless `hidden` is set, and the plan says so. File discovery refuses more than 10,000 candidates, and Git discovery refuses output above 2 MiB. More than 1,000 selected files without an explicit source limit is a visible refusal; an explicit limit intentionally selects the first sorted paths. Streaming projections pull only the candidates the runner can admit. Sorting and deduplication refuse more than 32,000 buffered items/keys instead of silently truncating them.
-- **Identifiers.** Stage and input identifiers additionally reserve `constructor` and `prototype`; template paths never traverse these properties.
+- **Sources.** `changed_files` drops deleted paths unless `include_deleted` is set. `files` skips hidden files unless `hidden` is set, and the plan says so.
 - **Templates and predicates.** Templates are path lookups only. Predicates are fixed comparisons with one level of all, any or not, and use no regex.
 - **Envelope.** An agent-derived value renders inside `[vector:workflow-data from="<stage>#<label>"]`, then a fixed data-not-instructions line, then `{"value":…}` with `<`, `>`, `@`, `[` and `]` escaped as `\u` sequences, then `[/vector:workflow-data]`. Escaping `@` keeps `resolvePromptParts` from attaching files named in agent output. Escaping the brackets keeps a value from printing a fake closing marker.
 
 **G.2 Validation.** `WorkflowPlan.build` (pure) and `WorkflowRuns.validate` (engine) run on **every** start, resume and nested expansion, from the tool, HTTP or the CLI.
 - **Agent types.** Refused when missing, primary, hidden native, research, or denied by `Permission.evaluate("task", type, caller.permission, session.permission)`. The caller is the tool caller's agent, or `agents.defaultInfo()` (build) for owner starts. The refusal lists the permitted types.
-- **Models.** Stage models go through `SubagentModel.allowed`. A verifier without its own model inherits the producer's model; that effective model must also be allowed for the verifier's agent.
+- **Models.** Stage models go through `SubagentModel.allowed`.
 - **Output schemas.** They go through `JsonSchemaCheck.accept` with an object root.
 - **owned_paths.** A template's agent-derived values must contain no `..` segment, absolute or drive path, backslash or control character. The normalized path must start with the template's literal prefix: the text before the first `{{`.
 - **Sizes.** A model-written spec is at most 32 KiB, with literal items at most 200; the guide says to use `files`, `changed_files` or `from` for large lists. Saved and owner specs are at most 256 KiB.
 - **Graph.** The stages must form a DAG (Kahn), every reference must resolve, and template scopes are checked.
-- **Writer stages.** A writer stage with no `owned_paths` and no worktree is marked `serial`, with a warning. A writable verifier participates in the same marking, permission disclosure and gate, using its effective isolation and the stage ownership.
-- **Nested limits.** Each expanded saved workflow retains its own resolved limits and counters. They apply to that nested group alongside the parent run limits, including across resume; they never replace or raise the parent limits, and do not restrict unrelated outer stages. WP30 must enforce both before launching a nested producer or verifier.
+- **Writer stages.** A writer stage with no `owned_paths` and no worktree is marked `serial`, with a warning.
 
 **G.3 Approval** (the `workflow` tool's ask; `permission: "workflow"`).
 - **Metadata** is the `Plan`:
@@ -1305,17 +1301,15 @@ Template refs: item(.seg)*, index, inputs.<name>(.seg)*, stages.<id>.output(.seg
   - `task` is not offered;
   - a run is already running past `budget.workflow.runs`;
   - resuming a running run.
-- After approval, revalidate the effective plan, models and root permissions and refuse if they changed. Recheck guest and task/workflow admission before coordinator or worker execution. A worker queued across a root permission change refuses before any provider call; explicit workflow resume validates the new policy and carries current inherited denies into the existing child.
 
 **G.4 Running.**
 - **The run.** A run is a child session with the hidden native agent `workflow`. Its permission is `merge(defaults, user, {"*": "deny"})` and it has no prompt. It is launched through the task tool with custom prompt ops by `WorkflowRuns.launch`: `subagent_type: WORKFLOW_AGENT`, the `RUN` marker, and `budget: {usd, steps}`.
   - Dispatch routes on `input.sessionID === runID && input.agent === WORKFLOW_AGENT` to `WorkflowRunner.run`. Everything else, including the completion note to the parent, goes to the session's ops.
   - The run reuses background start, notes, revert handling, `vector run` waiting, the stop cascade and task_id resume. The runner never calls a model.
-  - The trusted coordinator counts against the workflow-run and request launch caps and inherits delegated accounting, but holds zero execution slots. Its admission creates no held, prepaid, reserved, demand or queued slot, even while the admission scope stays open. Actual workflow agents keep ordinary workflow slot priority and reserve rules. This is an engine-only admission mode, not the exempt marker.
   - `task.ts` refuses `subagent_type: "workflow"` and resuming a run session without the `RUN` marker.
   - `SessionPrompt.prompt`, `command`, `shell` and `revert` refuse a session whose agent is `workflow`.
 - **Messages.** The spec is stored as a synthetic user message in the run session. Runner messages are assistant messages with agent `workflow`, the parent's model and cost 0, rolled over every 50 task parts.
-- **Scheduling.** FIFO by readiness, then stage order, then item index. The pending admission queue contains at most 64 nodes and is further bounded by the remaining agent allowance. Unadmitted source items remain available for later pulls or resume; the runner does not materialize a nested workflow's entire cross-product. A run stopped before exhausting its sources reports partial results and its stop reason.
+- **Scheduling.** FIFO by readiness, then stage order, then item index.
 - **In-flight cap** = min(spec, `budget.workflow.concurrency`, 16, max(1, `os.availableParallelism()` − 2)). On top of that, each agent takes a conversation slot with origin `workflow`, so `task` launches go first and the last 2 free slots stay for them.
 - **Writers.** One reader/writer gate per root session, shared by all runs:
   - a writer with no owned paths and no worktree takes it exclusively;
@@ -1334,8 +1328,8 @@ Template refs: item(.seg)*, index, inputs.<name>(.seg)*, stages.<id>.output(.seg
   - Missing or invalid structured output goes through `TaskStructured.settle`.
   - A child whose record says `cancelled`, because the user stopped that agent, is **never repaired**. The node is cancelled and `on_error` decides.
   - The first verify round launches the verifier fresh. Later rounds resume the verifier's session. A rejection with rounds left resumes the producer with the verifier output enveloped as feedback. `on_fail` decides keep, drop or fail.
-- **Ledgers.** The run session is linked with the request's delegated ledger and its own child ledger `{usd, steps}`. Agents inherit both, plus their own per-agent ledger. This works with no active root run (I4). Each nested group adds one private scoped guard binding, with no Session row or model call. Its identity comes only from the engine's ledger handle and must retain the real run and delegated scopes when TaskTool links a child. Every inherited scope receives a step exactly once; the private bindings close after child fibers are joined. Group USD, steps and unknown-price allowances subtract cumulative prior usage on every attempt. Codium steps remain separate from unknown-price guard counters and never reintroduce token/dollar values into Codium display accounting.
-- **Progress.** The run's record is written through the lifecycle metadata lock, throttled to once a second plus a 30 s heartbeat, which keeps `vector run`'s inactivity wait alive. Durable child identity/accounting checkpoints are separately serialized and unthrottled before admission and after outcomes; heartbeats refresh their elapsed clock. Event and durable cumulative usage reconcile by maxima, not by adding the same step twice.
+- **Ledgers.** The run session is linked with the request's delegated ledger and its own child ledger `{usd, steps}`. Agents inherit both, plus their own per-agent ledger. This works with no active root run (I4).
+- **Progress.** The run's record is written through `SubagentLifecycle.write`, throttled to once a second plus a 30 s heartbeat, which keeps `vector run`'s inactivity wait alive.
 - **Interruption** cancels node fibers, and each task call's release cancels its child.
 - **After a restart**, `observe` marks the run's agents (D.3), and resume continues them.
 
@@ -1344,17 +1338,13 @@ Template refs: item(.seg)*, index, inputs.<name>(.seg)*, stages.<id>.output(.seg
 - `WorkflowReport.render` writes the header: outcome, agents, duration, cost or "unknown", per-stage counts, and up to 5 failures;
 - line 2 is `Full results: <path>`, so it survives the 3 KB note;
 - the start of the results follows.
-- The complete report stays within 64 KiB of UTF-8. When many nested stages expand, omit excess stage summaries with an explicit count while preserving the header, full artifact path, failures and a complete bounded results envelope. The artifact path is engine-generated and retained exactly; untrusted summary text is escaped separately.
 
-The run ends `error` with partial results when a limit stopped it. `subagent-lifecycle observe` reports the run's usage as its own plus `subagentCost` and `subagentTokens`; step and tool totals use the validated durable checkpoint. Before a checkpoint exists, at most 64 verified workflow children may supply those counts. Missing or unreadable checkpoint accounting, or a larger fallback family, yields unknown usage, never a partial subtotal or zero. The runtime's own ledgers and admission checks do not use this presentation fallback. Agent completion and attention notes are durable quiet messages in the coordinator, with no model prompt. Owner-started runs default to quiet parent completion; their owner-only option may request a summary. Run completion notes retain workflow resume/inspect/stop guidance and aggregate usage when known.
+The run ends `error` with partial results when a limit stopped it. `subagent-lifecycle observe` reports the run's usage as its own plus `subagentCost` and `subagentTokens`.
 
 **G.6 Resume** (`workflow {action: "resume", run_id}`, route 12, `vector workflow resume`).
 - It reuses every completed, final node whose content key matches. The key is a sha256 over the stage hash, item key, round, rendered prompt, settings, schema and owned paths.
 - It continues interrupted agents in their own sessions, reruns failed nodes when `retry_failed` is set (the default), and accepts an edited spec, inputs and higher limits.
 - Agent counts, spend and tokens carry across attempts from the durable rollups, and the remaining budget is what is linked.
-- Protected versioned runtime state stores at most 32,000 logical nodes and 16 MiB of JSON. Each output/feedback value up to 2 KiB of JSON UTF-8 stays inline; larger values pin the exact child Session, assistant Message, output kind, SHA-256 and byte length. Referenced values are bounded to 16 MiB, depth 64 and 100,000 JSON values each, and hydration totals at most 128 MiB. Item values regenerate from sources. Missing, malformed, changed or foreign references refuse resume; they never become an empty successful run. A persistence bound stops admission with an explicit partial report and retains the last valid checkpoint. Expired or edited `outputs_file` artifacts regenerate from the pinned answers.
-- The launch content key is checkpointed before Session creation, then the child identity is checkpointed before model execution. Recovery resolves a missing identity only from one child with that exact trusted launch key; ambiguous matches refuse. A reservation with no child is released. Current child accounting is reconciled before scheduler offsets are derived. Removing or renaming a nested group drops only its obsolete group associations, while every historical child and root spend/token/agent counter stays charged.
-- Time budgets also carry across attempts. Checkpoints record their wall-clock time, whether the attempt was active and which groups had started but not completed. Cold recovery charges time since the last active checkpoint, capped by a relevant trusted interruption, stop or completion timestamp. When no earlier stop is known, unsettled downtime counts conservatively. Settled pauses do not count. Repeated resume charges only the interval after the last checkpoint; clock rollback cannot reduce counters, and a future checkpoint timestamp refuses resume.
 - A running run is refused.
 
 **G.7 Saved workflows** (`WorkflowLibrary`).
@@ -1365,13 +1355,9 @@ The run ends `error` with partial results when a limit stopped it. `subagent-lif
 - **Prompt guard.** `session/prompt-source.ts` adds `"{workflow,workflows}/*.json"` to `CONFIG.ask` and `CONFIG.load`, so edits ask `prompt_source` and outside changes are held.
 
 **G.8 Owner start** (route 9, `vector run --workflow`).
-
-- The parent must be idle and not reverted. The check runs **inside** the run lock that `SessionPrompt.prompt` uses, and refuses `busy` from inside it. The shared runner still completes with an actual transcript `WithParts`, not the HTTP response. A concurrent human prompt gets its own ordinary model turn after either a successful handoff or a rejected owner start; cancellation still stops joiners. Internal owner-handoff metadata stays in tool state metadata so it cannot become provider options.
+- The parent must be idle and not reverted. The check runs **inside** the run lock that `SessionPrompt.prompt` uses, and refuses `busy` from inside it.
 - It writes a synthetic owner user message ("Run workflow <title> with <inputs>", marked as typed by the owner, as commands do) **before** the assistant message and the `workflow` tool part, so the history stays well-formed.
 - The desktop and TUI start forms call `validate` first and show the plan above Run. `vector run --workflow` prints the plan to stderr before starting.
-- Global validation has no session ID in its approved wire shape. It uses a read-only default-agent/default-model context and creates no session or message. Start revalidates under the default caller and actual conversation model/permissions inside the lock. A saved free choice stays free. Codium Auto stays a dynamic selection in preview, with an explicit warning; each actual child resolves Auto from its own request before inference. Owner start does not change the conversation's selected agent/model.
-- Resume preview and execution use the same merged saved inputs and replacement rules; unchanged stored source retains saved-file bounds. A missing HTTP resume body is equivalent to `{}` because the generated SDK omits an empty payload. The optional owner-only detail spec may be absent while a queued coordinator has not written it yet; resume still requires valid saved source.
-- `vector run --workflow` accepts the existing session/continue/fork/title/local/share options. Prompt-only message/file/command/research/interactive, model/agent/variant/size/judge and command-line budget overrides are refused rather than ignored: model selection belongs to the conversation, and workflow limits belong to the spec. `--input` values are bounded JSON-or-string entries; `--summarize` opts into the final summary turn. Offline file validation skips account and engine transport; saved-name validation needs an attached engine to resolve trust/configuration.
 - The run is quiet by default. Its note is `noReply`, unless `--summarize` or `quiet: false`.
 
 **G.9 Config and permission.**
@@ -2193,7 +2179,7 @@ Terminal paragraphs say these arrive "with the next CLI release", and that WSL e
 
 **WP30. Workflow runtime**
 - **Files.**
-  - `packages/engine/src/orchestration/constants.ts`, `sources.ts` (`changed_files` drops deletions, `files.hidden`), `library.ts` (G.7), `launch.ts`, `runner.ts`, `runtime.ts`, `ledger.ts` and `state.ts` (new; G.4–G.6). The runner takes its task def and ops as inputs; the runtime adapter handles session persistence, live events and scoped ledgers, while the versioned state codec validates durable references and bounds.
+  - `packages/engine/src/orchestration/constants.ts`, `sources.ts` (`changed_files` drops deletions, `files.hidden`), `library.ts` (G.7), `launch.ts` and `runner.ts` (new; G.4–G.6). The runner takes its task def and ops as inputs.
 - **Tests.**
   - `packages/engine/test/orchestration/runner.test.ts` (new; fake ops writing structured or text answers; Deferreds):
     - fan-out over items, files and changed_files;
@@ -2216,7 +2202,6 @@ Terminal paragraphs say these arrive "with the next CLI release", and that WSL e
     - rollover at 50 parts.
   - `packages/engine/test/orchestration/resume.test.ts` (new): reuse by key; interrupted agents continue in their sessions; `retry_failed`; an edited spec reruns only the downstream stages; **spend and tokens carry across attempts**.
   - `sources.test.ts` and `library.test.ts` (new).
-  - `launch.test.ts`, `ledger.test.ts`, `state.test.ts`, `bounds.test.ts`, `scheduling.test.ts` and `runtime.test.ts` separate the real persistence/guard checks, safety bounds and deterministic clock/gate regressions without a provider call.
 - **Done.** The tests pass.
 
 **WP31. The workflow tool and engine integration**

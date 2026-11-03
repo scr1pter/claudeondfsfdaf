@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto"
 import { Cause, Clock, Context, Effect, Layer, Option, Schema } from "effect"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { FreeModelGuests } from "@vectordevai/core/free-model-guests"
+import { WorkflowCheckpointStore } from "@vectordevai/core/workflow-checkpoint-store"
 import { SessionV1 } from "@vectordevai/core/v1/session"
 import { Workflow } from "@vectordevai/schema/workflow"
 import { Agent } from "@/agent/agent"
@@ -19,6 +20,7 @@ import { TaskManager } from "@/task/manager"
 import { TaskNotify } from "@/task/notify"
 import { ToolRegistry } from "@/tool/registry"
 import { SubagentLifecycle } from "@/tool/subagent-lifecycle"
+import { WorkflowCheckpoint } from "./checkpoint"
 import { WorkflowOwnerHandoffFailure } from "./owner-failure"
 import { WorkflowMarkers } from "./constants"
 import { WorkflowLibrary } from "./library"
@@ -26,8 +28,9 @@ import { WorkflowRuns } from "./runs"
 import { WorkflowState } from "./state"
 
 export class Error extends Schema.TaggedErrorClass<Error>()("WorkflowOwner.Error", {
-  code: Schema.Literals(["invalid", "forbidden", "busy", "running", "limit", "not_found"]),
+  code: Schema.Literals(["invalid", "busy", "not_found", "running", "disabled", "forbidden", "limit"]),
   message: Schema.String,
+  issues: Schema.optional(Schema.Array(Workflow.Issue)),
 }) {}
 
 export interface Interface {
@@ -49,13 +52,22 @@ const bounded = (value: string, bytes: number) => {
   while (Buffer.byteLength(text) > bytes) text = text.slice(0, -1)
   return text
 }
-const mapped = (cause: { readonly message: string; readonly code?: string }) =>
+const mapped = (cause: {
+  readonly message: string
+  readonly code?: string
+  readonly issues?: ReadonlyArray<Workflow.Issue>
+}) =>
   new Error({
     code:
-      cause.code === "not_found" || cause.code === "forbidden" || cause.code === "running" || cause.code === "limit"
+      cause.code === "not_found" ||
+      cause.code === "forbidden" ||
+      cause.code === "running" ||
+      cause.code === "limit" ||
+      cause.code === "disabled"
         ? cause.code
         : "invalid",
     message: cause.message,
+    ...(cause.issues?.length ? { issues: cause.issues } : {}),
   })
 
 const layer = Layer.effect(
@@ -75,6 +87,7 @@ const layer = Layer.effect(
     const guests = yield* FreeModelGuests.Service
     const flags = yield* RuntimeFlags.Service
     const notes = yield* TaskNotify.Service
+    const checkpoints = yield* WorkflowCheckpointStore.Service
 
     const requireRun = Effect.fn("WorkflowOwner.requireRun")(function* (sessionID: SessionID, runID: SessionID) {
       const run = yield* sessions
@@ -136,7 +149,7 @@ const layer = Layer.effect(
           })
         if (!flags.backgroundSubagents)
           return yield* new Error({
-            code: "forbidden",
+            code: "disabled",
             message: "Background subagents are turned off; workflows cannot start.",
           })
         if (yield* guests.marked(sessionID))
@@ -148,7 +161,7 @@ const layer = Layer.effect(
         const disabled = Permission.disabled(["task", "workflow"], ruleset)
         if (disabled.has("task") || disabled.has("workflow"))
           return yield* new Error({
-            code: "forbidden",
+            code: "disabled",
             message: "Task and workflow permission must be available to start a workflow.",
           })
         const selected = yield* prompts.currentModel(sessionID, agent.model)
@@ -170,6 +183,7 @@ const layer = Layer.effect(
             code: "invalid",
             message:
               validation.issues.map((issue) => `${issue.path}: ${issue.message}`).join("\n") || "Invalid workflow.",
+            ...(validation.issues.length ? { issues: validation.issues } : {}),
           })
         const context = yield* InstanceState.context
         const title = input.title ?? validation.plan.title
@@ -379,10 +393,8 @@ const layer = Layer.effect(
       yield* requireRun(sessionID, runID)
       const inspected = yield* tasks.inspect({ sessionID, taskID: runID })
       const current = yield* requireRun(sessionID, runID)
-      const state =
-        current.workflow.progress.runtime === undefined
-          ? undefined
-          : yield* WorkflowState.decode(current.workflow.progress.runtime)
+      const value = yield* WorkflowCheckpoint.load(checkpoints, runID, current.record)
+      const state = value === undefined ? undefined : yield* WorkflowState.decode(value)
       const nodes = state?.nodes ?? []
       const report = current.workflow.progress.report
       // A queued coordinator may not have persisted its synthetic spec yet. The owner-only field is optional.
@@ -437,6 +449,7 @@ export const node = LayerNode.make({
     FreeModelGuests.node,
     RuntimeFlags.node,
     TaskNotify.node,
+    WorkflowCheckpointStore.node,
   ],
 })
 export * as WorkflowOwner from "./owner"

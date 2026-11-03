@@ -180,6 +180,7 @@ export const schedule = Effect.fn("WorkflowRunner.schedule")(function* (input: I
     ? { reason: "usage", message: "Prior workflow usage is unavailable; reconcile it before resuming.", abort: false }
     : undefined
   let lastProgress = -Infinity
+  let lastClockBeat = -Infinity
   let lastFingerprint = ""
   let clockAt = started
   let activeAttempt = true
@@ -247,6 +248,33 @@ export const schedule = Effect.fn("WorkflowRunner.schedule")(function* (input: I
       stage: id,
     }))
   }
+  // Every template sees the same stage outputs and artifact paths. They change only when an output settles or an
+  // artifact is written, so the view is rebuilt on those changes rather than for every item and launch.
+  let viewVersion = 0
+  let view: { version: number; stages: NonNullable<WorkflowTemplate.Context["stages"]> } | undefined
+  const changed = () => {
+    viewVersion += 1
+  }
+  const stagesView = () => {
+    if (view?.version === viewVersion) return view.stages
+    const stages = Object.fromEntries(
+      Object.keys(input.built.groups ?? {})
+        .map((id) => {
+          const own = groupOutput(id).map((item) => item.value)
+          return [id, { output: own.at(-1), outputs: own, outputs_file: files.get(id) }]
+        })
+        .concat(
+          expanded
+            .filter((entry) => !input.built.groups?.[entry.stage.id])
+            .map((entry) => {
+              const own = groupOutput(entry.stage.id).map((item) => item.value)
+              return [entry.stage.id, { output: own.at(-1), outputs: own, outputs_file: files.get(entry.stage.id) }]
+            }),
+        ),
+    )
+    view = { version: viewVersion, stages }
+    return stages
+  }
   const context = (
     entry: WorkflowPlan.Expanded,
     item: WorkflowSources.Item,
@@ -261,21 +289,7 @@ export const schedule = Effect.fn("WorkflowRunner.schedule")(function* (input: I
     index,
     output,
     round,
-    stages: Object.fromEntries(
-      Object.keys(input.built.groups ?? {})
-        .map((id) => {
-          const own = groupOutput(id).map((item) => item.value)
-          return [id, { output: own.at(-1), outputs: own, outputs_file: files.get(id) }]
-        })
-        .concat(
-          expanded
-            .filter((entry) => !input.built.groups?.[entry.stage.id])
-            .map((entry) => {
-              const own = groupOutput(entry.stage.id).map((item) => item.value)
-              return [entry.stage.id, { output: own.at(-1), outputs: own, outputs_file: files.get(entry.stage.id) }]
-            }),
-        ),
-    ),
+    stages: stagesView(),
   })
   const counts = (entry: WorkflowPlan.Expanded) => (entry.group ? [usage, groups[entry.group]] : [usage])
   const checks = (entry: WorkflowPlan.Expanded, fresh: boolean) => {
@@ -378,7 +392,19 @@ export const schedule = Effect.fn("WorkflowRunner.schedule")(function* (input: I
             /[<>@\[\]]/g,
             (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`,
           )
-          const prompt = `You are one agent in workflow ${safeTitle}, stage "${stage.id}". Complete only this stage's assignment.\n\n${rendered}${feedback === undefined ? "" : `\n\nVerifier feedback:\n${WorkflowTemplate.envelope(feedback, `${stage.id}#verifier`)}`}`
+          const feedbackText =
+            feedback === undefined
+              ? ""
+              : `\n\nVerifier feedback:\n${WorkflowTemplate.envelope(feedback, `${stage.id}#verifier`)}`
+          // The full logical prompt keys the execution and is bounded, so crash recovery and the 64 KiB rule are unchanged.
+          const prompt = `You are one agent in workflow ${safeTitle}, stage "${stage.id}". Complete only this stage's assignment.\n\n${rendered}${feedbackText}`
+          // A repair resumes a producer that already answered this brief in its own session, so only the feedback is new
+          // input; resending the whole brief would cost uncached tokens and repeat its instructions. A failed attempt is
+          // retried with the whole brief: it may have failed before its brief ever reached the child.
+          const sent =
+            !verify && feedback !== undefined && id !== undefined && output !== undefined
+              ? `The verifier did not accept your answer to the assignment above. Revise your work using this feedback, then answer again in the same format.${feedbackText}`
+              : prompt
           if (new TextEncoder().encode(prompt).byteLength > 64 * 1024)
             return {
               sessionID: id,
@@ -433,11 +459,12 @@ export const schedule = Effect.fn("WorkflowRunner.schedule")(function* (input: I
                   phase: stage.phase ?? "",
                   item: item.key,
                   key: executionKey,
+                  node: key,
                   round,
                   verifier: verify,
                 },
                 title: stage.title ? WorkflowTemplate.render(stage.title, ctx) : stage.id,
-                prompt,
+                prompt: sent,
                 agent,
                 model: setting.model,
                 effort: setting.effort,
@@ -567,6 +594,7 @@ export const schedule = Effect.fn("WorkflowRunner.schedule")(function* (input: I
       }
       nodes.set(key, { ...current, status: "completed", final: true, round, output, settledOrder: ++settlementOrder })
       outputs.push({ stage: stage.id, key, value: output as Json })
+      changed()
       outputs.sort(
         (left, right) => (nodes.get(left.key)?.settledOrder ?? 0) - (nodes.get(right.key)?.settledOrder ?? 0),
       )
@@ -599,12 +627,69 @@ export const schedule = Effect.fn("WorkflowRunner.schedule")(function* (input: I
         const path = kept?.digest === digest ? kept.path : yield* ops.write(values)
         artifacts[id] = { digest, path }
         files.set(id, path)
+        changed()
       }
     })
   const ready: { entry: WorkflowPlan.Expanded; item: WorkflowSources.Item; index: number; key: string }[] = []
+  const stageGroups = new Map(expanded.map((entry) => [entry.stage.id, entry.group]))
+  // Per stage, each source item's node key once it has one.
+  const admitted = new Map<string, Map<string, string>>()
+  // Settlement order of outputs, for streaming sources; rebuilt when outputs change.
+  let ordered: { version: number; keys: Map<string, number> } | undefined
+  const order = () => {
+    if (ordered?.version !== viewVersion)
+      ordered = { version: viewVersion, keys: new Map(outputs.map((output, index) => [output.key, index])) }
+    return ordered.keys
+  }
+  const aggregates = () => {
+    const counts = new Map<string, { done: number; failed: number; items: number }>()
+    for (const node of nodes.values()) {
+      const count = counts.get(node.stage) ?? { done: 0, failed: 0, items: 0 }
+      count.items += 1
+      if (node.status === "completed") count.done += 1
+      if (node.status === "failed") count.failed += 1
+      counts.set(node.stage, count)
+    }
+    const sum = (members: readonly string[]) =>
+      members.reduce(
+        (total, id) => {
+          const count = counts.get(id)
+          return count
+            ? { done: total.done + count.done, failed: total.failed + count.failed, items: total.items + count.items }
+            : total
+        },
+        { done: 0, failed: 0, items: 0 },
+      )
+    const tree: Record<string, unknown> = Object.create(null)
+    const entries = Object.keys(input.built.groups ?? {})
+      .map((id) => [id, sum(input.built.groups?.[id] ?? [id])] as const)
+      .concat(
+        expanded
+          .filter((entry) => !input.built.groups?.[entry.stage.id])
+          .map((entry) => [entry.stage.id, sum([entry.stage.id])] as const),
+      )
+    for (const [id, aggregate] of entries) {
+      let cursor = tree
+      for (const part of id.split(".")) {
+        const next = cursor[part]
+        if (!next || typeof next !== "object") cursor[part] = Object.create(null)
+        cursor = cursor[part] as Record<string, unknown>
+      }
+      Object.assign(cursor, aggregate)
+    }
+    return tree
+  }
   const publish = (force = false) =>
     Effect.gen(function* () {
       const now = yield* Clock.currentTimeMillis
+      // Durable checkpoints are already saved before each admission and after each outcome. Publication only refreshes
+      // their elapsed clock on the 30 s heartbeat, never on every once-a-second progress change (G.4).
+      if (force || now - lastClockBeat >= WorkflowMarkers.HEARTBEAT_INTERVAL) {
+        yield* persist()
+        lastClockBeat = now
+      }
+      // Checked before the progress projection, which walks every node.
+      if (!force && now - lastProgress < WorkflowMarkers.PROGRESS_INTERVAL) return
       const problem =
         stop ?? [...groupStops].map(([id, value]) => ({ reason: value.reason, message: `${id}: ${value.message}` }))[0]
       const progress = {
@@ -612,9 +697,7 @@ export const schedule = Effect.fn("WorkflowRunner.schedule")(function* (input: I
         ...(problem ? { stop: { reason: problem.reason, message: problem.message } } : {}),
       }
       const signature = WorkflowPlan.key(progress)
-      if (!force && now - lastProgress < WorkflowMarkers.PROGRESS_INTERVAL) return
       if (!force && signature === lastFingerprint && now - lastProgress < WorkflowMarkers.HEARTBEAT_INTERVAL) return
-      yield* persist()
       yield* ops.progress(progress)
       lastProgress = now
       lastFingerprint = signature
@@ -670,7 +753,7 @@ export const schedule = Effect.fn("WorkflowRunner.schedule")(function* (input: I
             .flatMap((entry) => (entry.fiber ? [entry.fiber] : [])),
         )
       for (const [key, node] of nodes)
-        if (node.status === "pending" && expanded.find((entry) => entry.stage.id === node.stage)?.group === id)
+        if (node.status === "pending" && stageGroups.get(node.stage) === id)
           nodes.set(key, { ...node, status: "skipped", skippedReason: "limit", final: false })
       if (![...running.values()].some((entry) => entry.group === id))
         for (const stage of input.built.groups?.[id] ?? []) complete.add(stage)
@@ -678,6 +761,11 @@ export const schedule = Effect.fn("WorkflowRunner.schedule")(function* (input: I
     for (let index = ready.length - 1; index >= 0; index--)
       if (ready[index].entry.group && groupStops.has(ready[index].entry.group!)) ready.splice(index, 1)
 
+    // Stage conditions read only completed stages (they are barriers), so one aggregate pass per tick is exact.
+    let aggregateTree: Record<string, unknown> | undefined
+    // Stages with a non-final node, kept current as this tick adds pending nodes.
+    const unsettled = new Set<string>()
+    for (const node of nodes.values()) if (!node.final) unsettled.add(node.stage)
     for (const entry of expanded) {
       if (stop || ready.length >= Math.max(1, Math.min(WorkflowMarkers.MAX_READY, limits.maxAgents - usage.launched)))
         break
@@ -685,48 +773,7 @@ export const schedule = Effect.fn("WorkflowRunner.schedule")(function* (input: I
       if (entry.group && groupStops.has(entry.group)) continue
       if (complete.has(stage.id) || !entry.barriers.every((id) => complete.has(id))) continue
       if (entry.group && !groupStarted.has(entry.group)) groupStarted.set(entry.group, now)
-      const aggregates = Object.fromEntries(
-        Object.keys(input.built.groups ?? {})
-          .map((id) => {
-            const members = new Set(input.built.groups?.[id] ?? [id])
-            const own = [...nodes.values()].filter((node) => members.has(node.stage))
-            return [
-              id,
-              {
-                done: own.filter((node) => node.status === "completed").length,
-                failed: own.filter((node) => node.status === "failed").length,
-                items: own.length,
-              },
-            ]
-          })
-          .concat(
-            expanded
-              .filter((entry) => !input.built.groups?.[entry.stage.id])
-              .map((entry) => {
-                const own = [...nodes.values()].filter((node) => node.stage === entry.stage.id)
-                return [
-                  entry.stage.id,
-                  {
-                    done: own.filter((node) => node.status === "completed").length,
-                    failed: own.filter((node) => node.status === "failed").length,
-                    items: own.length,
-                  },
-                ]
-              }),
-          ),
-      )
-      const aggregateTree: Record<string, unknown> = Object.create(null)
-      for (const [id, aggregate] of Object.entries(aggregates)) {
-        const parts = id.split(".")
-        let cursor = aggregateTree
-        for (const part of parts) {
-          const next = cursor[part]
-          if (!next || typeof next !== "object") cursor[part] = Object.create(null)
-          cursor = cursor[part] as Record<string, unknown>
-        }
-        Object.assign(cursor, aggregate)
-      }
-      if (stage.if && !WorkflowPredicate.evaluate(stage.if, { stages: aggregateTree })) {
+      if (stage.if && !WorkflowPredicate.evaluate(stage.if, { stages: (aggregateTree ??= aggregates()) })) {
         complete.add(stage.id)
         yield* publishArtifacts()
         continue
@@ -753,25 +800,27 @@ export const schedule = Effect.fn("WorkflowRunner.schedule")(function* (input: I
               source,
               upstream
                 .flatMap(groupOutput)
-                .toSorted(
-                  (left, right) =>
-                    outputs.findIndex((output) => output.key === left.key) -
-                    outputs.findIndex((output) => output.key === right.key),
-                ),
+                .toSorted((left, right) => (order().get(left.key) ?? 0) - (order().get(right.key) ?? 0)),
               { complete: exhausted },
             )
           : (initial.get(stage.id) ?? [])
       let scanned = true
       let index = -1
       try {
+        const seen = admitted.get(stage.id) ?? new Map<string, string>()
+        admitted.set(stage.id, seen)
         for (const item of items) {
           index += 1
+          // An item already turned into a node is never rendered or hashed again.
+          const known = seen.get(item.key)
+          if (known !== undefined && nodes.has(known)) continue
           if (ready.length >= Math.max(1, Math.min(WorkflowMarkers.MAX_READY, limits.maxAgents - usage.launched))) {
             scanned = false
             break
           }
           if (!WorkflowPredicate.evaluate(stage.when, item.value)) {
             const key = WorkflowPlan.key({ stage: fingerprint(stage.id), item: item.key, skipped: "when" })
+            seen.set(item.key, key)
             if (!nodes.has(key)) {
               if (nodes.size >= WorkflowMarkers.MAX_NODES)
                 throw new Error("Workflow state exceeded 32,000 nodes; narrow its inputs.")
@@ -806,6 +855,7 @@ export const schedule = Effect.fn("WorkflowRunner.schedule")(function* (input: I
             scanned = false
             break
           }
+          seen.set(item.key, key)
           if (nodes.has(key)) continue
           if (nodes.size >= WorkflowMarkers.MAX_NODES)
             throw new Error("Workflow state exceeded 32,000 nodes; narrow its inputs.")
@@ -832,8 +882,10 @@ export const schedule = Effect.fn("WorkflowRunner.schedule")(function* (input: I
                 final: false,
               }
           nodes.set(key, node)
+          if (!node.final) unsettled.add(stage.id)
           if (reused && stored.status === "completed" && stored.output !== undefined) {
             outputs.push({ stage: stage.id, key, value: stored.output })
+            changed()
             outputs.sort(
               (left, right) => (nodes.get(left.key)?.settledOrder ?? 0) - (nodes.get(right.key)?.settledOrder ?? 0),
             )
@@ -850,7 +902,7 @@ export const schedule = Effect.fn("WorkflowRunner.schedule")(function* (input: I
         scanned = false
         stop ??= { reason: "source", message: String(error), abort: false }
       }
-      if (scanned && exhausted && ![...nodes.values()].some((node) => node.stage === stage.id && !node.final)) {
+      if (scanned && exhausted && !unsettled.has(stage.id)) {
         complete.add(stage.id)
         yield* publishArtifacts()
       }

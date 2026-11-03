@@ -3020,8 +3020,9 @@ export type TaskApiError = {
 }
 
 export type WorkflowApiError = {
-  code: "invalid" | "forbidden" | "busy" | "running" | "limit" | "not_found"
+  code: "invalid" | "busy" | "not_found" | "running" | "disabled" | "forbidden" | "limit"
   message: string
+  issues?: Array<WorkflowIssue>
 }
 
 export type McpResource = {

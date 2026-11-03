@@ -85,6 +85,63 @@ test("limits, stage count, identifiers and supported output schemas are enforced
   )
 })
 
+test("every remaining bound refuses one past its limit at its exact path", () => {
+  const stage = base.stages[0]
+  const verify = {
+    prompt: "Check {{output}}",
+    output: { schema: { type: "object" } },
+    until: { path: "ok", equals: true },
+  }
+  const ids = (count: number) => Array.from({ length: count }, (_, index) => `s${index}`)
+  const cases: [unknown, string, string][] = [
+    [{ ...base, title: "x".repeat(81) }, "/title", "at most 80"],
+    [{ ...base, description: "x".repeat(501) }, "/description", "at most 500"],
+    [{ ...base, inputs: Object.fromEntries(ids(17).map((id) => [id, {}])) }, "/inputs", "at most 16"],
+    [{ ...base, stages: [{ ...stage, phase: "x".repeat(41) }] }, "/stages/0/phase", "at most 40"],
+    [{ ...base, stages: [{ ...stage, title: "x".repeat(61) }] }, "/stages/0/title", "at most 60"],
+    [
+      { ...base, stages: [{ ...stage, owned_paths: ids(17).map((id) => `src/${id}.ts`) }] },
+      "/stages/0/owned_paths",
+      "at most 16",
+    ],
+    [
+      { ...base, stages: [{ ...stage, success_criteria: Array(9).fill("done") }] },
+      "/stages/0/success_criteria",
+      "at most 8",
+    ],
+    [{ ...base, stages: [{ ...stage, retries: 3 }] }, "/stages/0/retries", "between 0 and 2"],
+    [{ ...base, stages: [{ ...stage, retries: -1 }] }, "/stages/0/retries", "between 0 and 2"],
+    [
+      { ...base, stages: [{ ...stage, verify: { ...verify, max_rounds: 6 } }] },
+      "/stages/0/verify/max_rounds",
+      "between 1 and 5",
+    ],
+    [
+      { ...base, stages: [{ ...stage, verify: { ...verify, max_rounds: 0 } }] },
+      "/stages/0/verify/max_rounds",
+      "between 1 and 5",
+    ],
+    [{ ...base, stages: [{ ...stage, after: ids(33) }] }, "/stages/0/after", "at most 32"],
+    [{ ...base, stages: [{ ...stage, for_each: { from: ids(33) } }] }, "/stages/0/for_each/from", "at most 32"],
+    [
+      { ...base, stages: [{ ...stage, for_each: { from: "review", limit: 1001 } }] },
+      "/stages/0/for_each/limit",
+      "between 1 and 1000",
+    ],
+    [{ ...base, result: { max_items: 1001 } }, "/result/max_items", "between 1 and 1000"],
+  ]
+  for (const [value, path, bound] of cases)
+    expect(
+      issues(value).some((issue) => issue.path === path && issue.message.includes(bound)),
+      path,
+    ).toBe(true)
+  // Each limit itself is accepted.
+  expect(WorkflowSpec.parse({ ...base, title: "x".repeat(80), description: "x".repeat(500) }).ok).toBe(true)
+  expect(
+    WorkflowSpec.parse({ ...base, stages: [{ ...stage, retries: 2, verify: { ...verify, max_rounds: 5 } }] }).ok,
+  ).toBe(true)
+})
+
 test("the guide embeds the same complete examples validated by the core", async () => {
   const guide = await readFile(new URL("../../../engine/src/orchestration/guide.txt", import.meta.url), "utf8")
   const specs = [...guide.matchAll(/```json\n([\s\S]*?)\n```/g)].map((match) => JSON.parse(match[1]))

@@ -305,6 +305,8 @@ describe("workflow node launch persistence", () => {
       expect(messages[1].info).toMatchObject({ finish: "stop" })
       expect(messages[1].parts.some((part) => part.type === "text" && part.text.includes("Full results:"))).toBe(true)
       expect((yield* f.parts()).every((part) => part.state.status === "completed")).toBe(true)
+      // The run's growing transcript is never loaded into a launch: TaskTool reads no caller history.
+      expect(f.observed.every((call) => call.context.messages.length === 0)).toBe(true)
     }),
   )
 

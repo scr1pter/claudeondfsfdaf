@@ -250,7 +250,10 @@ export function resolveTools(input: Pick<PrepareInput, "tools" | "agent" | "perm
     Object.keys(input.tools),
     Permission.merge(input.agent.permission, input.permission ?? []),
   )
-  return Record.filter(input.tools, (_, k) => input.user.tools?.[k] !== false && !disabled.has(k))
+  const offered = Record.filter(input.tools, (_, k) => input.user.tools?.[k] !== false && !disabled.has(k))
+  // A workflow launches its agents through the task tool, so it is withheld whenever task is (G.3, G.9).
+  if (!Object.hasOwn(offered, "task")) delete offered.workflow
+  return offered
 }
 
 /**

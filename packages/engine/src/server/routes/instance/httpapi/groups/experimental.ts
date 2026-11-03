@@ -38,8 +38,14 @@ export class TaskApiError extends Schema.ErrorClass<TaskApiError>("TaskApiError"
   { httpApiStatus: 400 },
 ) {}
 
+// 4.9: `disabled` names a start the owner's settings turn off (background subagents, or task/workflow denied for the
+// default agent); `issues` carries the structured validation failures of an invalid start or resume.
 export class WorkflowApiError extends Schema.ErrorClass<WorkflowApiError>("WorkflowApiError")(
-  { code: Schema.Literals(["invalid", "forbidden", "busy", "running", "limit", "not_found"]), message: Schema.String },
+  {
+    code: Schema.Literals(["invalid", "busy", "not_found", "running", "disabled", "forbidden", "limit"]),
+    message: Schema.String,
+    issues: Schema.optional(Schema.Array(Workflow.Issue)),
+  },
   { httpApiStatus: 400 },
 ) {}
 

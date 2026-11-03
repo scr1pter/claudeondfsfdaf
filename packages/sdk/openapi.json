@@ -36824,10 +36824,16 @@
         "properties": {
           "code": {
             "type": "string",
-            "enum": ["invalid", "forbidden", "busy", "running", "limit", "not_found"]
+            "enum": ["invalid", "busy", "not_found", "running", "disabled", "forbidden", "limit"]
           },
           "message": {
             "type": "string"
+          },
+          "issues": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkflowIssue"
+            }
           }
         },
         "required": ["code", "message"],

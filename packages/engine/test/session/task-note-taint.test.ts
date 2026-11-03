@@ -23,6 +23,8 @@ import { SubagentLifecycle } from "@/tool/subagent-lifecycle"
 import type { TaskPromptOps } from "@/tool/task"
 import { disposeAllInstances } from "../fixture/fixture"
 import { pollWithTimeout, testEffect } from "../lib/effect"
+import { WorkflowRuns } from "@/orchestration/runs"
+import { fixture as workflowFixture, layer as workflowLayer, spec as workflowSpec } from "../tool/workflow-fixture"
 
 // Taint between helpers (D.6): what a helper took in from the web or an MCP server follows its notes and messages, so
 // the agent that reads them is held for the same reason (I14).
@@ -430,3 +432,92 @@ describe("note taint", () => {
     }),
   )
 })
+
+// A workflow agent's web or MCP read rides on the coordinator's task part to the run's own note, which carries it to
+// the conversation that started the run (I14).
+const workflows = testEffect(workflowLayer())
+for (const [tool, hold] of [
+  ["webfetch", "web"],
+  ["mcp_fixture", "mcp"],
+] as const)
+  workflows.instance(
+    `a workflow agent's ${tool} read reaches the parent's run note as hold ${hold}`,
+    () =>
+      Effect.gen(function* () {
+        const f = yield* workflowFixture()
+        const runs = yield* WorkflowRuns.Service
+        const jobs = yield* BackgroundJob.Service
+        const ctx = {
+          ...f.ctx,
+          extra: {
+            ...f.ctx.extra,
+            promptOps: {
+              ...f.ops,
+              prompt: (input: Parameters<typeof f.ops.prompt>[0]) =>
+                Effect.gen(function* () {
+                  const child = yield* f.sessions.get(input.sessionID)
+                  if (SubagentLifecycle.read(child)?.workflow?.role === "agent") {
+                    // The agent reads outside content before it answers.
+                    const read = MessageID.ascending()
+                    yield* f.sessions.updateMessage({
+                      id: read,
+                      role: "assistant",
+                      parentID: MessageID.ascending(),
+                      sessionID: input.sessionID,
+                      agent: "explore",
+                      mode: "explore",
+                      cost: 0,
+                      path: { cwd: "/tmp", root: "/tmp" },
+                      modelID: model.modelID,
+                      providerID: model.providerID,
+                      tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+                      time: { created: Date.now(), completed: Date.now() },
+                    })
+                    yield* f.sessions.updatePart({
+                      id: PartID.ascending(),
+                      sessionID: input.sessionID,
+                      messageID: read,
+                      type: "tool",
+                      callID: `call_${tool}`,
+                      tool,
+                      state: {
+                        status: "completed",
+                        input: {},
+                        output: "Outside content",
+                        title: tool,
+                        metadata: {},
+                        time: { start: 0, end: 1 },
+                      },
+                    })
+                  }
+                  return yield* f.ops.prompt(input)
+                }),
+            },
+          },
+        }
+        const started = yield* runs.launch({ ctx, input: { spec: JSON.stringify(workflowSpec) }, task: f.task })
+        yield* jobs.wait({ id: started.runID })
+        const note = yield* pollWithTimeout(
+          f.sessions
+            .messages({ sessionID: f.parent.id })
+            .pipe(
+              Effect.map((messages) =>
+                messages
+                  .flatMap((message) => message.parts)
+                  .find(
+                    (part) =>
+                      part.type === "text" &&
+                      (part.metadata?.taskNotification as { taskID?: string } | undefined)?.taskID === started.runID,
+                  ),
+              ),
+            ),
+          "the run's completion note must reach the parent",
+        )
+        expect(note.type === "text" && note.metadata).toMatchObject({
+          [BrainSchema.OUTSIDE]: "subagent",
+          [SessionMemory.HOLD]: hold,
+        })
+        expect(SessionMemory.taint(yield* f.sessions.messages({ sessionID: f.parent.id }))).toBe(hold)
+      }),
+    { trusted: true },
+  )

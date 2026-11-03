@@ -8,6 +8,7 @@ import { isFreeModelRef } from "@vectordevai/schema/free-model"
 import { WorkflowPlan } from "@vectordevai/core/orchestration/plan"
 import { WorkflowSpec } from "@vectordevai/core/orchestration/spec"
 import { SpendGuard } from "@vectordevai/core/spend-guard"
+import { WorkflowCheckpointStore } from "@vectordevai/core/workflow-checkpoint-store"
 import { PermissionPolicy } from "@vectordevai/schema/permission-policy"
 import { Workflow } from "@vectordevai/schema/workflow"
 import type { SessionV1 } from "@vectordevai/core/v1/session"
@@ -30,6 +31,7 @@ import { SubagentLifecycle } from "@/tool/subagent-lifecycle"
 import type { TaskPromptOps, TaskTool } from "@/tool/task"
 import type { Tool } from "@/tool/tool"
 import { Truncate } from "@/tool/truncate"
+import { WorkflowCheckpoint } from "./checkpoint"
 import { WorkflowMarkers } from "./constants"
 import { WorkflowLibrary } from "./library"
 import { WorkflowRunner } from "./runner"
@@ -68,6 +70,8 @@ export class Service extends Context.Service<Service, Interface>()("@vector/Work
 export class Error extends Schema.TaggedErrorClass<Error>()("WorkflowRuns.Error", {
   code: Schema.Literals(["invalid", "forbidden", "running", "limit", "not_found"]),
   message: Schema.String,
+  /** Structured validation failures of an invalid start or resume, passed through to the owner API (4.9). */
+  issues: Schema.optional(Schema.Array(Workflow.Issue)),
 }) {}
 
 const layer = Layer.effect(
@@ -86,6 +90,7 @@ const layer = Layer.effect(
     const sources = yield* WorkflowSources.Service
     const truncate = yield* Truncate.Service
     const fs = yield* FileSystem.FileSystem
+    const checkpoints = yield* WorkflowCheckpointStore.Service
     const locks = yield* InstanceState.make(() => Effect.succeed(new Map<SessionID, Semaphore.Semaphore>()))
 
     const plan = Effect.fn("WorkflowRuns.plan")(
@@ -101,10 +106,15 @@ const layer = Layer.effect(
             code: "invalid",
             message:
               named?.issues?.map((issue) => issue.message).join(" ") || "Use one valid saved workflow name or spec.",
+            ...(named?.issues?.length ? { issues: named.issues } : {}),
           })
         const source = named || stored ? "saved" : sourceKind
         const value = named?.spec ?? input.spec
         const parsed = WorkflowSpec.parse(value, { source })
+        const bashPatterns = (permission: ReturnType<typeof Permission.merge>) => [
+          "*",
+          ...permission.filter((rule) => rule.permission === "bash").map((rule) => rule.pattern),
+        ]
         const planAgents: WorkflowPlan.Agent[] = catalog.map((item) => {
           const permission = Permission.merge(item.permission, context.permission ?? [])
           const actions = (tool: string) =>
@@ -120,9 +130,15 @@ const layer = Layer.effect(
             primary: item.mode === "primary",
             hidden: item.native === true && item.hidden === true,
             research: Agent.researchTools(item.name) !== undefined,
+            // A writer may edit, or may run a shell command beyond the read-only verification set. The read-only
+            // specialists allow `git diff*` and ask for `bun test*`; counting those as writes would serialize them.
             writes:
               actions("edit").some((action) => action !== "deny") ||
-              actions("bash").some((action) => action !== "deny"),
+              bashPatterns(permission).some(
+                (pattern) =>
+                  !Agent.verificationCommand(pattern) &&
+                  Permission.evaluate("bash", pattern, permission).action !== "deny",
+              ),
             asks: ["webfetch", "websearch", "bash", "edit", "external_directory"].filter((tool) =>
               actions(tool).includes("ask"),
             ),
@@ -383,6 +399,7 @@ const layer = Layer.effect(
               message:
                 prepared.built.issues.map((issue) => `${issue.path}: ${issue.message}`).join("\n") ||
                 "Invalid workflow.",
+              ...(prepared.built.issues.length ? { issues: prepared.built.issues } : {}),
             })
           const live = board.tasks.filter((task) => task.workflow?.role === "run")
           if (board.truncated || live.length >= prepared.built.limits.runs)
@@ -394,9 +411,18 @@ const layer = Layer.effect(
           const histories = call.ctx.history
             ? yield* call.ctx.history()
             : yield* sessions.messages({ sessionID: parent.id })
+          // A settled child's web or MCP hold already rides on the parent's task part or note (G.3). Only a child whose
+          // result has not reached the parent yet is read itself, and only its recent messages: loading every child's
+          // whole history (earlier runs hold hundreds of briefs) inside this lock would not scale.
           const taints = [SessionMemory.taint(histories)]
-          for (const child of yield* sessions.children(parent.id))
-            taints.push(SessionMemory.taint(yield* sessions.messages({ sessionID: child.id })))
+          let pending = 0
+          for (const child of yield* sessions.children(parent.id)) {
+            const record = SubagentLifecycle.read(child)
+            if (!record || record.workflow || pending >= WorkflowMarkers.MAX_READY) continue
+            if (!SubagentLifecycle.open(record) && (!record.notification || record.notification.messageID)) continue
+            pending += 1
+            taints.push(SessionMemory.taint(yield* sessions.messages({ sessionID: child.id, limit: 50 })))
+          }
           const reason = taints.includes("web")
             ? "web"
             : taints.includes("mcp")
@@ -514,6 +540,7 @@ const layer = Layer.effect(
                   sources,
                   truncate,
                   fs,
+                  checkpoints,
                 })
                 const last = yield* sessions.findMessage(
                   prompt.sessionID,
@@ -531,10 +558,11 @@ const layer = Layer.effect(
                 return last.value
               }).pipe(Effect.orDie),
           }
-          const savedState =
-            previous?.workflow?.role === "run" && previous.workflow.progress.runtime !== undefined
-              ? yield* WorkflowState.decode(previous.workflow.progress.runtime)
+          const savedValue =
+            prior && previous?.workflow?.role === "run"
+              ? yield* WorkflowCheckpoint.load(checkpoints, prior.id, previous)
               : undefined
+          const savedState = savedValue === undefined ? undefined : yield* WorkflowState.decode(savedValue)
           const used = savedState?.usage
           const steps = built.limits!.steps - (used?.steps ?? 0)
           const usd = built.limits!.usd === undefined ? undefined : built.limits!.usd - (used?.spentUsd ?? 0)
@@ -593,6 +621,7 @@ export const node = LayerNode.make({
     WorkflowSources.node,
     Truncate.node,
     LayerNodePlatform.filesystem,
+    WorkflowCheckpointStore.node,
   ],
 })
 export * as WorkflowRuns from "./runs"
