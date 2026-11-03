@@ -11,7 +11,8 @@ test("the research docs say asking Vector to keep research asks you every time, 
   expect(release112Version).toBe("1.99.112")
   expect(release112Copy("1.99.111")).toMatchObject({ since: "Coming in desktop 1.99.112:", shipped: false })
   expect(release112Copy("1.99.112")).toMatchObject({ since: "From desktop 1.99.112:", shipped: true })
-  expect(typeof release112.since).toBe("string")
+  // Desktop 1.99.112 is published and the release workflow refuses a stable downgrade, so the label never goes back.
+  expect(release112).toMatchObject({ since: "From desktop 1.99.112:", shipped: true })
 })
 
 test("the docs say every memory erase takes the research that goes with it", async () => {
