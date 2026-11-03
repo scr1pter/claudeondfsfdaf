@@ -154,6 +154,9 @@ class PairedRunnerTests(unittest.TestCase):
         adapter = Adapter("vector", self.meter, verdicts=("product_failure", "passed"))
         result = self.coordinate(adapter)
         self.assertEqual(result["stopReason"], "passed")
+        self.assertEqual(result["nativeAuditVerdict"], "passed")
+        self.assertEqual(result["blindedCodeReviewVerdict"], "pending_external_review")
+        self.assertFalse(result["qualityComparisonMet"])
         self.assertEqual(result["providerRequests"], 8)
         self.assertAlmostEqual(result["measuredUsd"], .08)
         self.assertEqual(result["autonomousActorsAdmitted"], 4)
@@ -184,7 +187,7 @@ class PairedRunnerTests(unittest.TestCase):
             common=self.common, check_frozen=lambda: None, persist=lambda row: None)
         self.assertEqual(created, ["vector"])
         self.assertEqual(result["arms"]["vector"]["functionalVerdict"], "passed")
-        self.assertEqual(result["arms"]["vector"]["stopReason"], "quality_review_required")
+        self.assertEqual(result["arms"]["vector"]["stopReason"], "native_audit_review_required")
         self.assertFalse(result["pairCompleted"])
         self.assertFalse(result["efficiencyClaimMet"])
 
@@ -292,8 +295,22 @@ class PairedRunnerTests(unittest.TestCase):
             self.assertEqual(config["agent"][role]["prompt"], runner.INSTRUCTIONS[role])
             self.assertEqual(config["agent"][role]["variant"], "high")
         self.assertEqual(config["provider"]["openai"]["options"]["apiKey"], "synthetic-alias")
+        self.assertNotIn("budget", config)
         self.assertEqual(runner.team_environment(self.common, "codex", {}, home, binding), {"BENCH_API_KEY": "synthetic-alias"})
         self.assertNotIn("synthetic-in-memory-token", json.dumps(config))
+
+    def test_paid_adapter_commands_have_no_asymmetric_native_soft_dollar_cap(self):
+        home = self.directory / "native-home"
+        options = SimpleNamespace(bun=self.directory / "bun", node=self.directory / "node", codex_bin=self.directory / "codex",
+                                  vector_root=self.directory / "product", soft_usd=3)
+        binding = {"providerBase": "http://127.0.0.1:43210", "requestToken": "synthetic-alias"}
+        commands = {runtime: runner.native_command(self.common, runtime, options, self.directory / "app", home, binding,
+                                                   "Synthetic native fixture only.", None, 300) for runtime in ("vector", "codex")}
+        self.assertTrue(all("--max-cost" not in command for command in commands.values()))
+        vector = commands["vector"]
+        self.assertEqual(vector[vector.index("--size") + 1], "thorough")
+        self.assertEqual(vector[vector.index("--judge") + 1], "off")
+        self.assertEqual(vector[vector.index("--max-steps") + 1], "300")
 
     def test_default_plan_never_reads_supplied_missing_private_files(self):
         roots = {name: self.directory / name for name in (
@@ -414,7 +431,7 @@ class PairedRunnerTests(unittest.TestCase):
         self.assertEqual(self.saved[-1]["failureType"], "OSError")
 
     def native_phase_fixture(self, runtime, *, worker_followup="completed", rejudge=True, lead_verifies=True,
-                             judge_followup="completed", command_exit=0):
+                             judge_followup="completed", initial_judge="completed", command_exit=0):
         """Synthetic native schemas only; never an application/benchmark result."""
         base = self.directory / (runtime + "-phases")
         if base.exists():
@@ -429,7 +446,7 @@ class PairedRunnerTests(unittest.TestCase):
             "synthetic-root": [(0, 14, "completed")],
             "backend_worker": [(0, 2, "completed"), (5, 7, worker_followup)],
             "frontend_worker": [(0, 2, "completed")],
-            "team_judge": [(3, 4, "completed"), *([(10, 11, judge_followup)] if rejudge else [])],
+            "team_judge": [(3, 4, initial_judge), *([(10, 11, judge_followup)] if rejudge else [])],
         }
         files = []
         for identity, turns in phases.items():
@@ -560,6 +577,15 @@ class PairedRunnerTests(unittest.TestCase):
                 self.assertTrue(quality["requiredNativeLatestOutcomesSettled"])
                 self.assertEqual(sum(row["nativeErrorObservations"] for row in quality["sessions"]), 1)
 
+    def test_same_judge_recovery_review_covers_worker_repair_after_initial_judge_error(self):
+        for runtime in ("vector", "codex"):
+            with self.subTest(runtime=runtime):
+                quality = self.native_phase_fixture(runtime, initial_judge="fatal")
+                self.assertFalse(quality["requiresManualReview"])
+                self.assertTrue(quality["allWorkerCompletionPhasesReviewedBySameJudge"])
+                self.assertTrue(quality["requiredNativeLatestOutcomesSettled"])
+                self.assertEqual(sum(row["nativeErrorObservations"] for row in quality["sessions"]), 1)
+
     def test_failed_verification_command_is_not_a_native_session_fatal(self):
         for runtime in ("vector", "codex"):
             with self.subTest(runtime=runtime):
@@ -583,6 +609,7 @@ class PairedRunnerTests(unittest.TestCase):
             ["{python}", "{task}/evaluate.py", "--helper", "../external.py"],
             ["{python}", "{task}/evaluate.py", "--config", "unbound.json"],
             ["{python}", "{task}/evaluate.py", "--helper", "{out}/external.py"],
+            ["{python}", "{task}/evaluate.py", "--module", "external_module"],
             ["{python}", "{task}/evaluate.py", "--import", "external"],
         ]
         for command in commands:

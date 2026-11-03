@@ -75,7 +75,7 @@ INSTRUCTIONS = {
 PROFILE = {"model": MODEL, "reasoning": "high", "reasoningSummary": "auto", "verbosity": "low",
            "contextLimit": 1050000, "outputCeiling": 32000, "nativeAutonomousIdentities": 4,
            "childLifetimeSlots": list(ROLES), "maxDepth": 1, "maxSameSessionRepairs": 1,
-           "maxProviderRequestsPerArm": 300, "maxAgentSecondsPerArm": 7200, "softStopUsdPerArm": 3,
+           "maxProviderRequestsPerArm": 300, "maxAgentSecondsPerArm": 7200, "repairAdmissionThresholdUsdPerArm": 3,
            "sameIdentityFollowupsAllowed": True, "judgeAfterBothWorkers": True,
            "allHelpersAndRepairsBilled": True, "instructions": INSTRUCTIONS}
 
@@ -139,6 +139,9 @@ def validate_task_commands(task, root, options, common, browser_files):
             continue
         require(len(command) > 1 and command[1].startswith("{task}/"),
                 "task must invoke a frozen script directly; interpreter modules/inline code are unbound")
+        flags = {"--app", "--out", "--bun", "--node", "--task", "--proxy-module"}
+        require(len(command[2:]) % 2 == 0 and all(flag in flags for flag in command[2::2]),
+                "task code/file operands require the explicit qualified evaluator flag contract")
         for index, arg in enumerate(command[1:], 1):
             require(arg not in {"-m", "-c", "-e", "--eval", "-p", "--print", "-r", "--require", "--import", "--loader", "--experimental-loader"},
                     "task attempted an unbound interpreter module or code loader")
@@ -217,17 +220,24 @@ def build_plan(options, common):
             "profile": PROFILE, "profileSha256": digest(PROFILE),
             "studyFreezeSha256": study_freeze, "frozenPaths": paths,
             "runtimeProfiles": {runtime: digest(PROFILE) for runtime in ACTORS},
+            "nativeHarnessModes": {"vector": {"size": "thorough", "judge": "off", "builtInDollarCap": None,
+                "rationale": "required native TaskTool capability enablement; automatic judge off; fixed roles and Sol/High remain witness-bound"},
+                "codex": {"multiAgent": True, "maxChildThreads": 3, "builtInDollarCap": None,
+                "rationale": "native collaboration capability enablement; fixed roles and Sol/High remain witness-bound"}},
             "studyHardCapUsd": 48, "actorHardCapUsd": 20,
             "historicalMinimumRequests": HISTORICAL_REQUESTS, "historicalMinimumUsd": HISTORICAL_USD,
             "historicalAmountsReset": False, "priorChargesRetained": True,
             "maxCalls": options.max_calls, "maxSeconds": options.max_seconds, "softUsd": options.soft_usd,
+            "softDollarPolicy": "repair admission threshold after a settled invocation; no intra-invocation dollar stop",
             "armAdmissionReservationUsd": FULL_RESERVATION_USD,
             "providerBase": base, "appPort": options.app_port,
             "teamInstrumentFiles": team_files, "commonInstrumentFiles": common_files,
             "browserDriverFiles": browser_files, "binarySha256": binaries,
             "predecessors": predecessors, "automaticNextPair": False,
             "browserAccessMode": "shared-client", "operatingSystemSandbox": False,
-            "qualityPolicy": "independent unchanged functional gate AND native identity/protocol/browser/closure gates",
+            "qualityPolicy": "unchanged functional gate and native execution audit; separate blinded per-task 48-point code review required for any quality/cost claim",
+            "blindedCodeReview": {"required": True, "maximumScore": 48, "perTaskVectorNonInferiority": True,
+                "criticalRegressionAllowed": False, "completedByRunner": False},
             "knownLengthIncompletePolicy": "continue under unchanged limits; mandatory closure manual review",
             "privateOutputsMustNotEnterGit": True,
             "controllerOrCredentialFilesReadByPlan": False}
@@ -256,11 +266,24 @@ def gate_report(common, evaluation, task):
     return verdict, feedback
 
 
+def settled_invocation_state(supervisor, arm, timeout=700, clock=time.monotonic, sleep=time.sleep):
+    """Read-only drain observation before deciding whether one repair is affordable."""
+    deadline = clock() + timeout
+    while True:
+        state = preserved_history(supervisor.controller("/status"), arm.before, idle=False)
+        with arm.condition:
+            require(not arm.failure, "native invocation stopped for review")
+            if state["active"] == 0 and state["reservedUsd"] == 0 and not arm.forwarding and not arm.queue and arm.handlers == 0:
+                return preserved_history(state, arm.before)
+        require(clock() < deadline, "invocation settlement remains unknown before repair")
+        sleep(.05)
+
+
 def coordinate_team_arm(*, supervisor, runtime, label, adapter, task, common, check_frozen, persist,
                         max_calls=300, seconds=7200, soft_usd=3, clock=time.monotonic):
     """One arm, callback-testable without a process, network or model call."""
     result = {"runtime": runtime, "attempts": [], "allChargesRetained": True, "historicalAmountsReset": False,
-              "functionalVerdict": "not_run", "qualityVerdict": "not_run", "reviewRequired": False,
+              "functionalVerdict": "not_run", "nativeAuditVerdict": "not_run", "blindedCodeReviewVerdict": "pending_external_review", "qualityComparisonMet": False, "reviewRequired": False,
               "stopReason": None, "settlementComplete": False}
     check_frozen()
     headroom = affordability(supervisor.controller("/status"), runtime)
@@ -305,7 +328,7 @@ def coordinate_team_arm(*, supervisor, runtime, label, adapter, task, common, ch
             verdict, feedback = gate_report(common, evaluation, task)
             result["functionalVerdict"] = verdict
             if verdict == "passed":
-                result["stopReason"] = "functional_gate_passed_pending_quality"
+                result["stopReason"] = "functional_gate_passed_pending_native_audit"
                 break
             if verdict == "instrument_failure":
                 arm.latch("independent_instrument_failure")
@@ -314,7 +337,7 @@ def coordinate_team_arm(*, supervisor, runtime, label, adapter, task, common, ch
             if index == 2:
                 result["stopReason"] = "product_failure_after_one_same_session_repair"
                 break
-            state = preserved_history(supervisor.controller("/status"), arm.before)
+            state = settled_invocation_state(supervisor, arm)
             spent = state["actors"][ACTORS[runtime]]["measuredUsd"] - arm.before["actors"][ACTORS[runtime]]["measuredUsd"]
             if len(arm.requests) >= max_calls or spent >= soft_usd or clock() - started >= seconds:
                 result["stopReason"] = "product_failure_at_arm_limit"
@@ -348,15 +371,15 @@ def coordinate_team_arm(*, supervisor, runtime, label, adapter, task, common, ch
                 result["stopReason"] = closure.get("stopReason") or "closure_review_required"
             try:
                 quality = adapter.audit(closure)
-                result["quality"] = quality
-                result["qualityVerdict"] = "review_required" if quality.get("requiresManualReview", True) else "passed"
+                result["nativeAudit"] = quality
+                result["nativeAuditVerdict"] = "review_required" if quality.get("requiresManualReview", True) else "passed"
                 result["reviewRequired"] = result["reviewRequired"] or quality.get("requiresManualReview", True)
             except Exception as error:
-                result.update(reviewRequired=True, qualityVerdict="review_required", qualityFailureType=type(error).__name__)
+                result.update(reviewRequired=True, nativeAuditVerdict="review_required", nativeAuditFailureType=type(error).__name__)
             if result["reviewRequired"]:
                 supervisor.failed = True
-                result["stopReason"] = result["stopReason"] if result["stopReason"] != "functional_gate_passed_pending_quality" else "quality_review_required"
-            elif result["functionalVerdict"] == "passed" and result["qualityVerdict"] == "passed":
+                result["stopReason"] = result["stopReason"] if result["stopReason"] != "functional_gate_passed_pending_native_audit" else "native_audit_review_required"
+            elif result["functionalVerdict"] == "passed" and result["nativeAuditVerdict"] == "passed":
                 result["stopReason"] = "passed"
         persist(result)
     return result
@@ -371,7 +394,8 @@ def run_pair(plan, *, supervisor, adapter_factory, common, check_frozen, persist
                "fixedTaskHashes": [row["taskSha256"] for row in plan["fixedTasks"]], "planSha256": digest(plan),
                "classification": plan["classification"], "arms": {}, "automaticNextPair": False,
                "historicalAmountsReset": False, "allChargesRetained": True, "nextPairPermitted": False,
-               "fixedSetComplete": False, "efficiencyClaimMet": False}
+               "fixedSetComplete": False, "efficiencyClaimMet": False,
+               "blindedCodeReviewVerdict": "pending_external_review", "qualityComparisonMet": False}
     for runtime in task["order"]:
         result = coordinate_team_arm(supervisor=supervisor, runtime=runtime, label=plan["label"] + "-" + runtime,
                                      adapter=adapter_factory(runtime), task=task["contract"], common=common,
@@ -447,7 +471,7 @@ def native_command(common, runtime, options, app, home, binding, prompt, session
         return [str(options.bun), "--no-env-file", "run", "--conditions=browser",
                 str(options.vector_root / "packages/engine/src/index.ts"), "--pure", "run", "--dir", str(app),
                 "--format", "json", "--model", "openai/" + MODEL, "--variant", "high", "--size", "thorough",
-                "--judge", "off", "--max-cost", str(options.soft_usd), "--max-steps", str(calls), "--auto",
+                "--judge", "off", "--max-steps", str(calls), "--auto",
                 *(["--session", session] if session else []), prompt]
     command = [str(options.codex_bin), "exec", "--json", "--ignore-user-config", "--ignore-rules",
                "--skip-git-repo-check", "--enable", "multi_agent", "--sandbox", "danger-full-access", "--model", MODEL]
@@ -620,8 +644,8 @@ def audit_descendants(common, runtime, directory, app, support, trusted_client, 
     required = [root, judge, *workers]
     native_outcomes_settled = all(row.get("latestOutcome") == "completed" and row.get("unknownOutcomeObservations") == 0 for row in required)
     judge_completions = [row for row in judge.get("turns", []) if row["outcome"] == "completed"]
-    judge_phases = [(judge.get("started") if index == 0 else
-                     row.get("inferenceStarted") if runtime == "vector" else row.get("started"), row["completed"])
+    judge_phases = [((row.get("inferenceStarted") if runtime == "vector" else row.get("started"))
+                     or (judge.get("started") if index == 0 else None), row["completed"])
                     for index, row in enumerate(judge_completions)]
     worker_completions = [value for worker in workers for value in worker.get("completions", [])]
     followups_reviewed = bool(judge_phases) and all(any(began is not None and ended is not None and began >= completed and ended >= began
