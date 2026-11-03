@@ -1,0 +1,80 @@
+{
+  "kind": "heavy-native-team-interim-observation-v1",
+  "recordedDate": "2026-11-02",
+  "classification": "development replication; incomplete comparison; no efficiency claim",
+  "sourceRevision": "479303cf229badc0fa2c770f27d7d845dfa4fa68",
+  "originalPlanSha256": "b84c72848d9fea3d33e7fce8f3e1121938be1e8d5e53cc8023497060935f8857",
+  "continuationPlanSha256": "b945e5a5d4dbd6b074b47b4099e1df2952047bb0e8ec93e2bd2bd86c5b994189",
+  "profile": {
+    "model": "gpt-6.1-sol",
+    "reasoning": "high",
+    "autonomousIdentities": 7,
+    "maximumDepth": 2,
+    "maximumRequestsPerRuntimeEpisode": 300,
+    "maximumAgentSecondsPerRuntimeEpisode": 7200,
+    "formalRepairsPerRuntimeEpisode": 1,
+    "allSpecialistJudgeRetryAndInterruptedUsageIncluded": true,
+    "inferenceForwardsSerializedEqually": true,
+    "productionParallelThroughputMeasured": false
+  },
+  "vector": {
+    "providerRequests": 300,
+    "measuredUsd": 6.7876388,
+    "invocations": [
+      {"kind": "implementation", "providerRequests": 294, "measuredUsd": 6.5005907, "wallMs": 3100469},
+      {"kind": "formalSameSessionRepair", "providerRequests": 6, "measuredUsd": 0.2870481, "wallMs": 74390}
+    ],
+    "roleRequests": {
+      "lead": 128,
+      "backend_coordinator": 12,
+      "frontend_worker": 17,
+      "backend_api": 25,
+      "backend_data": 17,
+      "qa_specialist": 64,
+      "team_judge": 37
+    },
+    "stopReason": "admission_policy_or_state_failure at request limit",
+    "originalFunctional": {"passed": 64, "failed": 4, "notRun": 8, "total": 76},
+    "correctedUnchangedSourceFunctional": {"passed": 74, "failed": 2, "notRun": 0, "total": 76},
+    "genuineFailures": ["Bodyless POST order cancellation returns invalid_json", "Whole-document mobile overflow on customer, inventory and order pages"],
+    "evaluatorCorrection": "Use the visible All projects navigation when a selected project remains open; still require the requested project opener and New task control",
+    "originalFalseFeedbackConfoundRetained": true,
+    "bothInvocationSourceManifestSha256": "4675be85beaa531ce3525bceca3a673659ed3c0f8e9e225aae634daa743f352e",
+    "bothInvocationFileCount": 39,
+    "sourceChangedDuringFormalRepair": false,
+    "originalNativeReviewRequired": true,
+    "allReceiptsReconciled": true,
+    "runtimeQuiesced": true
+  },
+  "codex": {
+    "providerRequests": 9,
+    "measuredUsd": 0.1423925,
+    "wallMs": 37656,
+    "stopReason": "forwarded_client_cancelled",
+    "functionalEvaluation": "not_run",
+    "productFailureEstablished": false,
+    "disposition": "instrument qualification mismatch under investigation; original failure retained",
+    "knownCompletedUpstreamDespiteDownstreamDisconnect": true,
+    "explicitNativeInterruptEstablished": false,
+    "allReceiptsReconciled": true,
+    "runtimeQuiesced": true
+  },
+  "financialCheckpoint": {
+    "providerRequests": 1198,
+    "measuredUsd": 27.2338604,
+    "active": 0,
+    "reservedUsd": 0,
+    "openBatchCalls": 0,
+    "studyCapUsd": 48,
+    "cumulativeActorCapsUsd": {"foundry-vector": 24.73654725, "foundry-codex": 20.31968465},
+    "allChargesRetained": true,
+    "historicalAmountsReset": false,
+    "invoiceReconciled": false,
+    "checkpointOnlyNotCurrentBill": true
+  },
+  "originalPairComplete": false,
+  "qualityComparisonMet": false,
+  "efficiencyClaimMet": false,
+  "nextPaidExecution": "Only after free cancellation reproduction, reviewed instrument correction and explicit retained-native continuation freeze",
+  "automaticNextPair": false
+}
