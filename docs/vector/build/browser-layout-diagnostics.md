@@ -1,6 +1,6 @@
 # Read-only browser layout diagnostics
 
-Status: source and tests prepared; syntax checks passed. Runtime tests and package typechecks are **not run** while the paid Codex heavy arm owns the Bun/browser lease. This branch is based on the validated `661d3b36c34c68181d3b9c9b551862f8f40517ff` candidate. Nothing in the frozen baseline, canonical live runner, original task or corrected navigation evaluation was changed.
+Status: native and common browser diagnostics validated locally on 2026-11-02. Runtime source is frozen at `968307223f40318673361f5d09602c607a1af919`, based on the validated `661d3b36c34c68181d3b9c9b551862f8f40517ff` candidate. The paid Codex heavy arm had closed before the exclusive Bun/browser validation lease was granted. Nothing in the frozen baseline, canonical live runner, original task or corrected navigation evaluation was changed.
 
 ## Why this change exists
 
@@ -26,20 +26,23 @@ Only this isolated branch's common driver is changed. Every future successful ac
 
 This common-driver improvement is a methodology change, not a demonstrated product cost saving. Native diagnostics may make a real defect easier to identify, but add observation bytes and do not force the model to fix it. No claim of cost reduction, completion or quality improvement is supported until a new frozen study measures those outcomes.
 
-## Validation ledger
+## Validation ledger, 2026-11-02
 
-Completed without starting services or browsers:
+Runtime source under test: `968307223f40318673361f5d09602c607a1af919`. Windows; Bun 1.3.14; Node 24.22.0; Chrome 156.0.8078.79; Playwright 1.59.1. Existing pinned dependencies were reused, with workspace junctions retargeted to this candidate; no package install or dependency version change was needed. No provider credentials were read, no paid model calls were made and no cloud action was performed. The engine tests use only their local scripted provider fixtures.
 
-- `git diff --check`: exit 0.
-- Node 24 `--check` on the modified native page observer, native report formatter, their test files, common server/client/smoke, fixed layout reader and two layout test scripts: exit 0. These are parsing checks only, not executed tests.
+All checks below passed with exit 0:
 
-Not run, pending the exclusive runtime lease:
+| Check | Command and working directory | Result |
+| --- | --- | --- |
+| Syntax and whitespace | Node `--check` on all 11 changed/new TS/CJS files; `git diff --check` | 11 parses passed; whitespace clean. Parsing alone was not treated as runtime validation. |
+| Engine browser behavior | From `packages/engine`: `bun test test/tool/browser-format.test.ts test/tool/browser-actions.test.ts --timeout 90000` | 20 pass, 0 fail, 146 assertions; 54.54 s. Covers actual model-visible observe output, geometry/fence/unknown guards, credential redaction, handoff, research provenance and image capability. |
+| Desktop page reader | From `packages/desktop`: `bun test src/main/browser-page.test.ts --timeout 30000` | 29 pass, 0 fail, 123 assertions; 0.842 s. Includes unknown geometry in happy-dom, credential guards, frame/shadow-root behavior and preserved focus. |
+| Fixed numeric reader | From repo root: `node --test scripts/benchmarks/browser-driver/layout.test.cjs` | 2 pass, 0 fail. Runs the actual serialized implementation on bounded/invalid numeric inputs; not substituted for real browser evidence. |
+| Real native/common geometry | `node scripts/benchmarks/browser-driver/layout-smoke.cjs --playwright-module <pinned package> --chrome <pinned binary>` | Both controls passed. At viewport 390x844, a 548-pixel uncontained table reports document width 548 and overflow 158; containing the same table reports document width 390 and overflow 0. Native/common readers agree; DOM, focus, scroll and viewport remain unchanged. |
+| Full common browser driver | `node scripts/benchmarks/browser-driver/smoke.cjs --playwright-module <pinned package> --chrome <pinned binary> --out <new owned directory>` | 17 controls passed, 0 failed, 0 requests reached the denied server. Includes both geometry outcomes through actual action snapshots, untrusted marker preservation, origin/proxy restrictions, password masking, keyboard focus, refs and PNG output. |
+| Engine types | From `packages/engine`: `bun run typecheck` | Exit 0. |
+| Desktop types | From `packages/desktop`: `bun run typecheck` | Exit 0, including referenced package checks. |
 
-1. From `packages/engine`, `bun test test/tool/browser-format.test.ts test/tool/browser-actions.test.ts`. Covers bounded layout, missing/invalid geometry, zero overflow, and page-fence injection rejection alongside existing fence checks. The actual BrowserTool observe execution test also asserts layout reaches its separately constructed fenced output (not only the generic report formatter).
-2. From `packages/desktop`, `bun test src/main/browser-page.test.ts`. Existing real DOM tests use happy-dom, which has no layout engine; the new control requires unknown geometry there.
-3. Node `--test scripts/benchmarks/browser-driver/layout.test.cjs`. Exercises the actual serialized fixed reader, finite bounds and unknown values using controlled numeric inputs, without pretending that this supplies browser layout evidence.
-4. Node `scripts/benchmarks/browser-driver/layout-smoke.cjs --playwright-module <pinned package> --chrome <pinned binary>`. Runs both actual native and common readers in real Chromium at viewport 390x844: an uncontained 548-pixel table must report 158 pixels of overflow; an independently contained table must keep document width 390. The readers must agree and leave DOM, focus, scroll position and viewport unchanged.
-5. Node `scripts/benchmarks/browser-driver/smoke.cjs --playwright-module <pinned package> --chrome <pinned binary> --out <new owned directory>`. Extends the existing transport-fenced smoke with both real fixture outcomes and verifies the untrusted snapshot marker remains true. Prior origin, keyboard, credential and screenshot controls remain present.
-6. Package `bun run typecheck` in engine and desktop, with package dependency prerequisites if needed. No direct `tsc` invocation.
+An independent static reviewer found the separate native observe-output path and a synthetic fixture margin-collapse assumption before source freeze. Both were fixed in `9683072`. The integration regression now asserts that the geometry reaches actual BrowserTool observe output, not only its generic formatter; the synthetic heading margin is reset. Review found no remaining actionable code issue. No runtime source fix was needed after source freeze.
 
-All fixtures are synthetic. None changes the paid task app. Runtime checks not run above must not be represented as passed.
+Sanitized machine-readable results are in `docs/benchmarks/browser-layout-v1/validation.json`. All fixtures are synthetic; none changes the paid task app. This validation establishes diagnostic behavior and preserved controls. It does not establish generated-app quality, lower bills, or a successful new paid study.
