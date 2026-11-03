@@ -87,6 +87,7 @@ class FakeMeter(ThreadingHTTPServer):
         self.malformed_tail_label = None
         self.release.set()
         self.spent = {"foundry-vector": 10.9, "foundry-codex": 5.9}
+        self.request_cost = 0.01
         super().__init__(("127.0.0.1", 0), FakeHandler)
 
     def status(self):
@@ -134,8 +135,8 @@ class FakeHandler(BaseHTTPRequestHandler):
         meter.release.wait(timeout=10)
         with meter.lock:
             meter.active -= 1
-            meter.spent[meter.actor] += 0.01
-            meter.receipts.append({"seq": sequence, "actor": meter.actor, "label": meter.label, "batchSha256": digest(meter.token), "requestSha256": hashlib.sha256(raw).hexdigest(), "measuredUsd": 0.01, "usage": response["usage"]})
+            meter.spent[meter.actor] += meter.request_cost
+            meter.receipts.append({"seq": sequence, "actor": meter.actor, "label": meter.label, "batchSha256": digest(meter.token), "requestSha256": hashlib.sha256(raw).hexdigest(), "measuredUsd": meter.request_cost, "usage": response["usage"]})
         if meter.mode == "sse":
             raw_response = ("event: " + (meter.sse_event_label or meter.terminal_event) + "\ndata: " + json.dumps({"type": meter.terminal_event, "response": response}) + "\n\n").encode()
             for kind, status in meter.extra_terminals:
@@ -706,6 +707,30 @@ class OwnedWitnessTests(unittest.TestCase):
         with self.assertRaises(PolicyError):
             self.supervisor.repair()
         self.assertEqual(self.request(path="/control", token=self.arm._owner)[0], 403)
+
+    def test_settled_cost_above_repair_threshold_does_not_stop_current_attempt(self):
+        self.meter.request_cost = 3.1
+        self.assertEqual(self.request()[0], 200)
+        self.assertIsNone(self.arm.failure)
+        with self.assertRaisesRegex(PolicyError, "repair threshold"):
+            self.supervisor.repair()
+        self.assertEqual(self.arm.repairs, 0)
+        self.meter.request_cost = 0.01
+        self.assertEqual(self.request()[0], 200)
+        result = self.supervisor.close(timeout=2)
+        self.assertEqual(result["providerRequests"], 2)
+        self.assertAlmostEqual(result["measuredUsd"], 3.11)
+
+    def test_formal_repair_requires_all_owned_handlers_to_settle(self):
+        self.assertTrue(self.arm.begin_handler())
+        try:
+            with self.assertRaisesRegex(PolicyError, "settled owned handlers"):
+                self.supervisor.repair()
+            self.assertEqual(self.arm.repairs, 0)
+        finally:
+            self.arm.end_handler()
+        self.supervisor.repair()
+        self.assertEqual(self.arm.repairs, 1)
 
 
 class RegistryAndStartupTests(unittest.TestCase):

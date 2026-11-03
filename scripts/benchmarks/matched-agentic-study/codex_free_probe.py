@@ -143,6 +143,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         if self.path != "/v1/responses" or self.headers.get("Authorization") != "Bearer " + DUMMY:
+            length = self.headers.get("Content-Length", "0")
+            if length.isdigit() and int(length) <= MAX_BODY:
+                self.rfile.read(int(length))
             self.send_error(403)
             return
         if self.headers.get("Transfer-Encoding") or self.headers.get("Content-Encoding", "identity") != "identity":

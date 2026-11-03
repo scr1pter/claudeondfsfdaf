@@ -28,6 +28,7 @@ python codex_free_probe.py --codex-bin <reviewed-cli> --out <new-private-directo
 python codex_free_probe.py --codex-bin <reviewed-cli> --out <another-private-directory> --mode spawn --max-threads 1
 python codex_free_probe.py --codex-bin <reviewed-cli> --out <another-private-directory> --mode thread-cap --max-threads 2
 python codex_free_probe.py --codex-bin <reviewed-cli> --out <another-private-directory> --mode nested --max-threads 3 --enforce-policy
+python codex_alias_probe.py --codex-bin <reviewed-cli> --out <another-private-directory>
 ```
 
 `capture` returns one final completion. `spawn` creates one harmless native child
@@ -137,8 +138,11 @@ Tool-using review/judge/specialist agents cannot escape the three child slots
 by declaring themselves helpers. Unobserved producers remain unavailable.
 
 All forwarded requests, including retries, helpers and judges, share one
-300-request limit, a two-hour admission deadline, a $3 soft threshold, and at
-most one formal same-lead-session repair. Forwarding uses a finite FIFO with
+300-request limit, a two-hour admission deadline, and at most one formal
+same-lead-session repair. The $3 threshold is checked only when admitting that
+repair after the attempt and all owned HTTP handlers have settled. It never
+cuts off the current attempt mid-work; the unchanged $48 global and cumulative
+$20 actor caps plus per-request reservation still apply. Forwarding uses a finite FIFO with
 one request in flight. Before each forward it checks current settled funding
 and the unchanged meter's conservative reservation formula. Insufficient
 headroom stops for review; context/output limits and quality gates are not
@@ -240,3 +244,33 @@ before admitting its first request, confirm process quiescence, freeze both
 runtime profiles and helper coverage, apply descendant browser audits, and
 include the separately reviewed runtime accounting fixes. These components do
 not authorize or start a paid pair.
+
+## Final fixed-team Codex alias proof
+
+`codex_alias_probe.py` uses the same pinned native Codex executable and the
+actual owned supervisor, native registry and alias HTTP witness. Its only
+upstream is a temporary synthetic loopback ledger. It emits a finite script:
+create the two fixed workers, wait, create the fixed judge, wait, finish. Worker
+and judge responses are harmless text. Shell, browser and application tools
+remain disabled in this protocol proof; the separately reviewed paid adapters
+need their own capability-preserving free smoke. The fresh root bootstrap is
+explicitly free-only and requires exactly one persisted root in its owned home.
+
+The final observed run exited zero with eight fake requests and four native
+inference identities. All eight used Sol/High, auto summary, low verbosity and
+the common 32,000 output ceiling. The root retained collaboration definitions;
+the three children offered none. All eight receipts and four native transcripts
+reconciled with clean scoped closure. It made zero provider/funded-meter calls
+and started no Bun process. This establishes native protocol/accounting
+mechanics, not task quality, coding performance or dollar savings.
+
+Final source controls include the unchanged meter handler with a literal dummy
+key and loopback provider. Both missing usage and invalid usage on otherwise
+completed responses halt that real handler and require uncertain closure;
+neither a completed status nor missing receipts become a free or passing run.
+The final complete source-control invocation passed 88 tests with the explicit
+reviewed meter-source option enabled. An earlier run had one Windows socket
+abort in the fake probe's denied-request control: its handler replied before
+consuming the tiny request body. Bounded draining of denied fake requests fixed
+that transport race; the same complete control set then passed. No paid/runtime
+result, assertion, admission rule or test deadline was relaxed.

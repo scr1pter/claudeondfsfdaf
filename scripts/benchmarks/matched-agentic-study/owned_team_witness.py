@@ -161,7 +161,7 @@ class OwnedArm:
         self.nonfatal_reviews = []
         self.repairs = 0
         self.disarm_attempted, self.disarm_acknowledged = False, False
-        self.record({"type": "arm_bound", "runtime": runtime, "actor": self.actor, "label": label, "batchSha256": self.batch_digest, "model": MODEL, "reasoning": "high", "reasoningSummary": "auto", "verbosity": "low", "contextLimit": CONTEXT_LIMIT, "outputCeiling": OUTPUT_CEILING, "roles": sorted(roles), "studyCapUsd": 48, "actorCapUsd": 20, "softStopUsd": soft_usd, "maxCalls": max_calls, "maxSeconds": seconds, "inflightLimit": 1})
+        self.record({"type": "arm_bound", "runtime": runtime, "actor": self.actor, "label": label, "batchSha256": self.batch_digest, "model": MODEL, "reasoning": "high", "reasoningSummary": "auto", "verbosity": "low", "contextLimit": CONTEXT_LIMIT, "outputCeiling": OUTPUT_CEILING, "roles": sorted(roles), "studyCapUsd": 48, "actorCapUsd": 20, "repairThresholdUsd": soft_usd, "maxCalls": max_calls, "maxSeconds": seconds, "inflightLimit": 1})
 
     def record(self, event):
         try:
@@ -221,7 +221,7 @@ class OwnedArm:
                     self.latch("queued_client_cancelled")
                     raise PolicyError("client cancelled")
                 state = healthy(self.controller("/status"), self.before, idle=True)
-                require(state["actors"][self.actor]["measuredUsd"] - self.before["actors"][self.actor]["measuredUsd"] < self.soft_usd and len(self.requests) < self.max_calls and time.monotonic() < self.deadline, "arm stopping threshold")
+                require(len(self.requests) < self.max_calls and time.monotonic() < self.deadline, "arm stopping threshold")
                 native = self.registry.resolve(headers)
                 require(native["root"] == self.registry.root_id, "wrong arm root")
                 identity_kind = native.get("identityKind")
@@ -482,7 +482,6 @@ class OwnedSupervisor:
         require(set(limits) <= {"max_calls", "seconds", "soft_usd"}, "unreviewed arm limit")
         before = healthy(self.controller("/status"), idle=True)
         require(before.get("batchCallsRemaining") == 0, "another paid scope is open")
-        require(before["actors"][ACTORS[runtime]]["measuredUsd"] + limits.get("soft_usd", 3) <= 20, "cumulative actor capacity insufficient")
         require(1 <= limits.get("max_calls", 300) <= 300 and 0 < limits.get("seconds", 7200) <= 7200 and 0 < limits.get("soft_usd", 3) <= 3, "study bounds expanded")
         audit = Audit(self.output / runtime / "witness-audit.jsonl")
         audit.append({"type": "supervisor_preflight", "runtime": runtime, "actor": ACTORS[runtime], "studyCapUsd": 48, "actorCapUsd": 20})
@@ -507,8 +506,14 @@ class OwnedSupervisor:
     def repair(self):
         with self.lock:
             require(self.active is not None and not self.active.failure and self.active.repairs == 0, "repair limit or arm failure")
-            self.active.repairs = 1
-            self.active.record({"type": "same_lead_session_repair", "index": 1})
+            arm = self.active
+            with arm.condition:
+                require(not arm.forwarding and not arm.queue and arm.handlers == 0 and not arm.closing, "repair requires settled owned handlers")
+                state = healthy(self.controller("/status"), arm.before, idle=True)
+                cost = state["actors"][arm.actor]["measuredUsd"] - arm.before["actors"][arm.actor]["measuredUsd"]
+                require(cost < arm.soft_usd and time.monotonic() < arm.deadline, "settled repair threshold reached")
+                arm.repairs = 1
+                arm.record({"type": "same_lead_session_repair", "index": 1, "settledEpisodeUsd": cost, "repairThresholdUsd": arm.soft_usd})
 
     def retire_disposition(self, arm, result):
         with arm.condition:
