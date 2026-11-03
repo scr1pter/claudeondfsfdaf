@@ -21,8 +21,18 @@
     "providerRequests": 300,
     "measuredUsd": 6.7876388,
     "invocations": [
-      {"kind": "implementation", "providerRequests": 294, "measuredUsd": 6.5005907, "wallMs": 3100469},
-      {"kind": "formalSameSessionRepair", "providerRequests": 6, "measuredUsd": 0.2870481, "wallMs": 74390}
+      {
+        "kind": "implementation",
+        "providerRequests": 294,
+        "measuredUsd": 6.5005907,
+        "wallMs": 3100469
+      },
+      {
+        "kind": "formalSameSessionRepair",
+        "providerRequests": 6,
+        "measuredUsd": 0.2870481,
+        "wallMs": 74390
+      }
     ],
     "roleRequests": {
       "lead": 128,
@@ -34,9 +44,22 @@
       "team_judge": 37
     },
     "stopReason": "admission_policy_or_state_failure at request limit",
-    "originalFunctional": {"passed": 64, "failed": 4, "notRun": 8, "total": 76},
-    "correctedUnchangedSourceFunctional": {"passed": 74, "failed": 2, "notRun": 0, "total": 76},
-    "genuineFailures": ["Bodyless POST order cancellation returns invalid_json", "Whole-document mobile overflow on customer, inventory and order pages"],
+    "originalFunctional": {
+      "passed": 64,
+      "failed": 4,
+      "notRun": 8,
+      "total": 76
+    },
+    "correctedUnchangedSourceFunctional": {
+      "passed": 74,
+      "failed": 2,
+      "notRun": 0,
+      "total": 76
+    },
+    "genuineFailures": [
+      "Bodyless POST order cancellation returns invalid_json",
+      "Whole-document mobile overflow on customer, inventory and order pages"
+    ],
     "evaluatorCorrection": "Use the visible All projects navigation when a selected project remains open; still require the requested project opener and New task control",
     "originalFalseFeedbackConfoundRetained": true,
     "bothInvocationSourceManifestSha256": "4675be85beaa531ce3525bceca3a673659ed3c0f8e9e225aae634daa743f352e",
@@ -44,7 +67,81 @@
     "sourceChangedDuringFormalRepair": false,
     "originalNativeReviewRequired": true,
     "allReceiptsReconciled": true,
-    "runtimeQuiesced": true
+    "runtimeQuiesced": true,
+    "receiptUsageByRole": {
+      "lead": {
+        "requests": 128,
+        "measuredUsd": 1.9251992,
+        "inputTokens": 10488404,
+        "outputTokens": 44013,
+        "cacheReadTokens": 10306562,
+        "reasoningTokens": 18923
+      },
+      "backend_coordinator": {
+        "requests": 12,
+        "measuredUsd": 0.2801839,
+        "inputTokens": 430487,
+        "outputTokens": 11447,
+        "cacheReadTokens": 379369,
+        "reasoningTokens": 2035
+      },
+      "frontend_worker": {
+        "requests": 17,
+        "measuredUsd": 0.7480924,
+        "inputTokens": 637103,
+        "outputTokens": 42077,
+        "cacheReadTokens": 527254,
+        "reasoningTokens": 3156
+      },
+      "backend_api": {
+        "requests": 25,
+        "measuredUsd": 0.6611075,
+        "inputTokens": 1063686,
+        "outputTokens": 40499,
+        "cacheReadTokens": 1001275,
+        "reasoningTokens": 5688
+      },
+      "backend_data": {
+        "requests": 17,
+        "measuredUsd": 0.3053056,
+        "inputTokens": 401483,
+        "outputTokens": 18371,
+        "cacheReadTokens": 367536,
+        "reasoningTokens": 4193
+      },
+      "qa_specialist": {
+        "requests": 64,
+        "measuredUsd": 1.8676269,
+        "inputTokens": 8865505,
+        "outputTokens": 38513,
+        "cacheReadTokens": 8617154,
+        "reasoningTokens": 7983
+      },
+      "team_judge": {
+        "requests": 37,
+        "measuredUsd": 1.0001233,
+        "inputTokens": 3974856,
+        "outputTokens": 17318,
+        "cacheReadTokens": 3793638,
+        "reasoningTokens": 4097
+      }
+    },
+    "usageMix": {
+      "ordinaryInputTokens": 11720,
+      "cacheReadTokens": 24992788,
+      "cacheWrite30mTokens": 857016,
+      "cacheWrite12hTokens": 0,
+      "outputTokens": 212238,
+      "reasoningTokens": 46075
+    },
+    "costMixUsd": {
+      "ordinaryInput": 0.02344,
+      "cacheRead": 2.4992788000000004,
+      "cacheWrite30m": 2.14254,
+      "cacheWrite12h": 0.0,
+      "outputIncludingReasoning": 2.12238
+    },
+    "costInterpretation": "QA and judge usage includes useful verification; their cost is not classified as waste. Reasoning is included in output and is not billed twice. Replay represents processed input, not distinct new content."
   },
   "codex": {
     "providerRequests": 9,
@@ -66,7 +163,10 @@
     "reservedUsd": 0,
     "openBatchCalls": 0,
     "studyCapUsd": 48,
-    "cumulativeActorCapsUsd": {"foundry-vector": 24.73654725, "foundry-codex": 20.31968465},
+    "cumulativeActorCapsUsd": {
+      "foundry-vector": 24.73654725,
+      "foundry-codex": 20.31968465
+    },
     "allChargesRetained": true,
     "historicalAmountsReset": false,
     "invoiceReconciled": false,
