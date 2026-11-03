@@ -19,12 +19,41 @@ from owned_team_witness import ACTORS, FUNDING_PHASE, OwnedSupervisor, digest
 import paired_runner as runner
 
 
+def custom_events(index, call):
+    events = response_events(index, {"name": call["name"], "namespace": call["namespace"], "arguments": call["input"]})
+    def item(value):
+        value["type"] = "custom_tool_call"
+        value["input"] = value.pop("arguments")
+    for event in events:
+        if event["type"].startswith("response.function_call_arguments."):
+            event["type"] = event["type"].replace("function_call_arguments", "custom_tool_call_input")
+            if "arguments" in event:
+                event["input"] = event.pop("arguments")
+        if "item" in event:
+            item(event["item"])
+        for value in event.get("response", {}).get("output", []):
+            if value["type"] != "custom_tool_call":
+                item(value)
+    return events
+
+
+def execution_call(runtime, tools, command):
+    if runtime == "vector":
+        found = named_tool(tools, "bash")
+        require(found is not None, "native shell capability absent")
+        return {"name": found[0]["name"], "arguments": json.dumps({"command": command, "description": "Owned fake-protocol capability verification"})}
+    found = named_tool(tools, "exec")
+    require(found is not None and found[0].get("type") == "custom", "native custom exec capability absent")
+    return {"type": "custom_tool_call", "name": found[0]["name"], "namespace": found[1],
+            "input": "const result = await tools.exec_command(" + json.dumps({"cmd": command, "yield_time_ms": 30000}) + "); text(result);"}
+
+
 def multi_events(index, calls):
     if not calls:
         return response_events(index)
     first, events, items, last = None, [], [], None
     for offset, call in enumerate(calls):
-        current = response_events(index * 10 + offset, call)
+        current = custom_events(index * 10 + offset, call) if call.get("type") == "custom_tool_call" else response_events(index * 10 + offset, call)
         first = first or current[0]
         for event in current[1:-1]:
             event["output_index"] = offset
@@ -63,9 +92,7 @@ def scripted_calls(runtime, stage, tools, port):
     if runtime == "codex" and stage in (1, 3):
         return [call("wait_agent", {"timeout_ms": 10000})]
     if stage == (2 if runtime == "vector" else 4):
-        return [call("bash" if runtime == "vector" else "exec_command",
-                     {"command" if runtime == "vector" else "cmd": shell_command(port),
-                      **({"description": "Read the labelled local smoke API and common browser client"} if runtime == "vector" else {})})]
+        return [execution_call(runtime, tools, shell_command(port))]
     return []
 
 
@@ -145,6 +172,8 @@ class Handler(BaseHTTPRequestHandler):
                 "label": server.label, "batchSha256": digest(server.token), "requestSha256": hashlib.sha256(raw).hexdigest(),
                 "measuredUsd": 0.000012})
             server.remaining -= 1
+            adapter.common.save(server.out / "private-raw" / (str(index).zfill(3) + ".json"), body)
+            adapter.common.save(server.out / "private-capture.json", server.rows)
             calls = []
             if native["role"] == "lead":
                 stage = server.root_stages.get(adapter.runtime, 0)
@@ -155,17 +184,7 @@ class Handler(BaseHTTPRequestHandler):
                 stage = server.child_stages.get(identity, 0)
                 server.child_stages[identity] = stage + 1
                 if stage == 0:
-                    name = "bash" if adapter.runtime == "vector" else "exec_command"
-                    found = named_tool(tools, name)
-                    require(found is not None, "native child shell capability absent")
-                    tool, namespace = found
-                    args = {"command" if adapter.runtime == "vector" else "cmd": "Write-Output 'smoke-child-shell-complete'"}
-                    if adapter.runtime == "vector":
-                        args["description"] = "Harmless owned fake-protocol shell telemetry"
-                    child_call = {"name": tool["name"], "arguments": json.dumps(args)}
-                    if namespace:
-                        child_call["namespace"] = namespace
-                    calls = [child_call]
+                    calls = [execution_call(adapter.runtime, tools, "Write-Output 'smoke-child-shell-complete'")]
             adapter.common.save(server.out / "private-raw" / (str(index).zfill(3) + ".json"), body)
             adapter.common.save(server.out / "private-capture.json", server.rows)
         self.send_response(200)

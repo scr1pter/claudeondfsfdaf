@@ -314,14 +314,14 @@ class PairedRunnerTests(unittest.TestCase):
         self.assertEqual(vector[vector.index("--max-steps") + 1], "300")
 
     def test_fake_smoke_script_uses_same_fixed_roles_and_common_client_only(self):
-        tools = [{"type": "function", "name": name} for name in ("task", "spawn_agent", "wait_agent", "bash", "exec_command")]
+        tools = [{"type": "function", "name": name} for name in ("task", "spawn_agent", "wait_agent", "bash")] + [{"type": "namespace", "name": "functions", "tools": [{"type": "custom", "name": "exec"}]}]
         vector = smoke.scripted_calls("vector", 0, tools, 4123)
         self.assertEqual([row["subagent_type"] for row in json.loads(vector[0]["arguments"])["tasks"]], list(runner.ROLES[:2]))
         codex = smoke.scripted_calls("codex", 2, tools, 4123)
         self.assertEqual(json.loads(codex[0]["arguments"])["agent_type"], runner.ROLES[2])
         for runtime, stage in (("vector", 2), ("codex", 4)):
-            command = json.loads(smoke.scripted_calls(runtime, stage, tools, 4123)[0]["arguments"])
-            text = command.get("cmd", command.get("command"))
+            call = smoke.scripted_calls(runtime, stage, tools, 4123)[0]
+            text = json.loads(call["arguments"])["command"] if runtime == "vector" else call["input"]
             self.assertIn("$env:BROWSER_DRIVER_CLIENT", text)
             self.assertIn("Invoke-RestMethod", text)
             self.assertNotIn("23128", text)
@@ -347,6 +347,51 @@ class PairedRunnerTests(unittest.TestCase):
                 "type": "item.completed", "item": {"type": "command_execution", "exit_code": 0, "aggregated_output": "API only"}}
             log.write_text(json.dumps(row) + "\n")
             self.assertFalse(smoke.capabilities(adapter)["successfulActualShellApiAndCommonBrowser"])
+
+    def test_custom_exec_fake_stream_preserves_native_custom_call_shape(self):
+        call = {"type": "custom_tool_call", "name": "exec", "namespace": "functions",
+                "input": 'text(await tools.exec_command({cmd:"Write-Output fixture"}));'}
+        events = smoke.multi_events(1, [call])
+        kinds = [event["type"] for event in events]
+        self.assertIn("response.custom_tool_call_input.delta", kinds)
+        self.assertIn("response.custom_tool_call_input.done", kinds)
+        self.assertNotIn("response.function_call_arguments.delta", kinds)
+        item = events[-1]["response"]["output"][0]
+        self.assertEqual(item["type"], "custom_tool_call")
+        self.assertEqual(item["input"], call["input"])
+        self.assertEqual(item["namespace"], "functions")
+
+    def test_codex_native_command_items_are_authoritative_without_evaluating_custom_javascript(self):
+        path = self.directory / "native-command-fixture.jsonl"
+        rows = [
+            {"timestamp": "2026-11-02T00:00:00Z", "type": "event_msg", "payload": {"type": "task_started"}},
+            {"timestamp": "2026-11-02T00:00:01Z", "type": "response_item", "payload": {"type": "custom_tool_call", "input": "arbitrary JavaScript is never evaluated by this audit"}},
+            {"timestamp": "2026-11-02T00:00:02Z", "type": "event_msg", "payload": {"type": "item_completed",
+                "started_at_ms": 1793577601000, "completed_at_ms": 1793577602000,
+                "item": {"type": "CommandExecution", "id": "synthetic-command", "command": ["pwsh.exe", "-Command", "Write-Output fixture"],
+                         "status": "completed", "source": "unified_exec_startup", "exit_code": 0}}},
+            {"timestamp": "2026-11-02T00:00:03Z", "type": "event_msg", "payload": {"type": "task_complete"}},
+        ]
+        path.write_text("".join(json.dumps(row) + "\n" for row in rows))
+        actual = runner.normalize_transcript(path, "codex")
+        self.assertEqual(len(actual["executions"]), 1)
+        self.assertEqual(actual["executions"][0]["command"], "Write-Output fixture")
+        self.assertEqual(actual["unknownInteractiveInputs"], 0)
+        self.assertEqual(actual["latestOutcome"], "completed")
+        rows[2]["payload"]["item"]["status"] = "in_progress"
+        path.write_text("".join(json.dumps(row) + "\n" for row in rows))
+        actual = runner.normalize_transcript(path, "codex")
+        self.assertEqual(actual["unknownInteractiveInputs"], 1)
+        self.assertEqual(actual["executions"], [])
+        rows[2]["payload"]["item"] = {"type": "CollabAgentToolCall", "tool": "wait", "status": "completed"}
+        path.write_text("".join(json.dumps(row) + "\n" for row in rows))
+        self.assertEqual(runner.normalize_transcript(path, "codex")["unknownInteractiveInputs"], 0)
+        rows[2]["payload"]["item"]["tool"] = "unrecognized_collaboration_tool"
+        path.write_text("".join(json.dumps(row) + "\n" for row in rows))
+        self.assertEqual(runner.normalize_transcript(path, "codex")["unknownInteractiveInputs"], 1)
+        rows[2]["payload"]["item"]["type"] = "UnrecognizedToolExecution"
+        path.write_text("".join(json.dumps(row) + "\n" for row in rows))
+        self.assertEqual(runner.normalize_transcript(path, "codex")["unknownInteractiveInputs"], 1)
 
     def test_default_plan_never_reads_supplied_missing_private_files(self):
         roots = {name: self.directory / name for name in (

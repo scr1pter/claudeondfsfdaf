@@ -278,3 +278,16 @@ native identities, all generation pins, complete receipt settlement, a clean
 native execution audit, and the expected unchanged-seed product failure after
 one same-session repair. Failed qualifications stay in private outputs and are
 never converted into benchmark passes. This is not a funded experiment.
+
+The pinned Codex runtime retains its default native code-mode host. Its offered
+`functions.exec` is a custom tool that can call `tools.exec_command`; the fake
+smoke emits native `custom_tool_call` SSE rather than disabling that capability.
+The audit reads persisted `event_msg/item_completed/CommandExecution` telemetry
+with actual command argv, start/end times, status and exit code. It never runs
+or evaluates the model's JavaScript to discover commands. Unrecognized native
+item schemas, running commands without a final native record, and absent
+execution telemetry remain manual review. Those are bounded telemetry limits,
+not a finding that the product or browser violated policy. The old direct
+function-call record format remains supported. Actual shell exit and common
+browser success in the smoke are independently checked from owned CLI output
+and labelled fixture HTTP observations; a command string alone is insufficient.
