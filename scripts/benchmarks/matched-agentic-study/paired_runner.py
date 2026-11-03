@@ -595,7 +595,7 @@ def normalize_transcript(path, runtime):
                         command = native_command_text(item.get("command"))
                         began = timestamp(payload.get("started_at_ms"))
                         ended = timestamp(payload.get("completed_at_ms"))
-                        if not command or began is None or ended is None or began > ended or item.get("status") != "completed" or not isinstance(item.get("exit_code"), int):
+                        if not command or began is None or ended is None or began > ended or item.get("status") != "completed" or type(item.get("exit_code")) is not int:
                             unknown += 1
                             continue
                         key = item.get("id")

@@ -45,7 +45,7 @@ def execution_call(runtime, tools, command):
     found = named_tool(tools, "exec")
     require(found is not None and found[0].get("type") == "custom", "native custom exec capability absent")
     return {"type": "custom_tool_call", "name": found[0]["name"], "namespace": found[1],
-            "input": "const result = await tools.exec_command(" + json.dumps({"cmd": command}) + "); text(result);"}
+            "input": "const result = await tools.exec_command(" + json.dumps({"cmd": command, "yield_time_ms": 30000}) + "); text(result);"}
 
 
 def multi_events(index, calls):
