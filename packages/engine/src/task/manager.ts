@@ -39,6 +39,7 @@ import { TaskClaims } from "./claims"
 import { TaskLimits } from "./limits"
 import { TaskNotify } from "./notify"
 import { TaskSignals } from "./signals"
+import { ShellJobs } from "./shells"
 import { SessionFork } from "@/session/fork"
 import { Provider } from "@/provider/provider"
 import { Agent } from "@/agent/agent"
@@ -68,6 +69,8 @@ export type ListInput = {
   active?: boolean
   /** A subagent's view of its parent's other children (D.5). */
   siblings?: boolean
+  /** The session's background commands too (5.H); older clients never ask, so they never see them. */
+  shells?: boolean
 }
 
 /** A sibling as another subagent sees it: nothing that would carry the sibling's progress or output (D.5). */
@@ -216,6 +219,8 @@ const layer = Layer.effect(
     const agents = yield* Agent.Service
     const isolation = yield* TaskIsolation.Service
     const audience = yield* SessionAudience.Service
+    // Background commands (5.H). A build that leaves them out (a test that makes the manager alone) has none.
+    const shellJobs = yield* Effect.serviceOption(ShellJobs.Service)
     const isolated = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
       effect.pipe(
         Effect.mapError((cause) => {
@@ -588,7 +593,37 @@ const layer = Layer.effect(
           ),
         ),
       )
-      return counted ? { ...result, limits: counted } : result
+      const shells =
+        input.shells && Option.isSome(shellJobs)
+          ? yield* shellJobs.value
+              .list(input.sessionID)
+              .pipe(
+                Effect.catchCause((cause) =>
+                  Effect.logWarning("TaskManager.list: reading the background commands failed", { cause }).pipe(
+                    Effect.as(undefined),
+                  ),
+                ),
+              )
+          : undefined
+      return { ...result, ...(counted ? { limits: counted } : {}), ...(shells ? { shells } : {}) }
+    })
+
+    // The caller's IDs split into subagents and background commands (`shl_…`, 5.H). Every command must be this
+    // session's own, checked before anything stops or waits.
+    const commands = Effect.fn("TaskManager.commands")(function* (sessionID: SessionID, ids: readonly string[]) {
+      const wanted = [...new Set(ids.filter(ShellJobs.isID))]
+      if (wanted.length === 0) return { taskIDs: ids, shells: [] as Task.Shell[], service: undefined }
+      if (Option.isNone(shellJobs))
+        return yield* new Error({ code: "invalid", message: "Background commands are not available here." })
+      const own = new Map((yield* shellJobs.value.list(sessionID)).map((shell) => [shell.id, shell]))
+      const unknown = wanted.find((id) => !own.has(id))
+      if (unknown !== undefined)
+        return yield* new Error({ code: "invalid", message: "Choose background commands this session started." })
+      return {
+        taskIDs: ids.filter((id) => !ShellJobs.isID(id)),
+        shells: wanted.map((id) => own.get(id)!),
+        service: shellJobs.value,
+      }
     })
 
     const collect = Effect.fn("TaskManager.collect")(function* (input: ListInput) {
@@ -1353,8 +1388,25 @@ const layer = Layer.effect(
         return yield* new Error({ code: "invalid", message: "Choose task IDs or all, not both." })
       if (input.reason && input.reason.length > 1000)
         return yield* new Error({ code: "invalid", message: "Stop reasons are limited to 1000 characters." })
-      const { tasks } = yield* halt({ ...input, origin: input.origin ?? "agent" }, ops)
-      return { tasks }
+      const chosen = yield* commands(input.sessionID, input.taskIDs ?? [])
+      if (!chosen.service) {
+        const { tasks } = yield* halt({ ...input, origin: input.origin ?? "agent" }, ops)
+        return { tasks }
+      }
+      if (input.taskIDs && input.taskIDs.length > MAX_TASKS)
+        return yield* new Error({ code: "invalid", message: "Choose 1–200 task IDs." })
+      // The subagents first: their IDs are all checked before any of them stops, and a refusal stops no command.
+      const tasks =
+        chosen.taskIDs.length > 0
+          ? (yield* halt({ ...input, taskIDs: chosen.taskIDs, origin: input.origin ?? "agent" }, ops)).tasks
+          : []
+      const service = chosen.service
+      const shells = yield* Effect.forEach(
+        chosen.shells,
+        (shell) => service.stop(shell.id).pipe(Effect.map((stopped) => stopped ?? shell)),
+        { concurrency: 4 },
+      )
+      return { tasks, shells }
     })
 
     const interrupt: Interface["interrupt"] = Effect.fn("TaskManager.interrupt")(function* (input, ops) {
@@ -1368,6 +1420,11 @@ const layer = Layer.effect(
       yield* ops.cancel(session.id)
       if (!input.helpers) return { aborted, tasks: [], shells: 0, excluded: 0, skipped: 0 }
       const stopped = new Map<string, Task.Info>()
+      // The session's background commands this stop ended (5.D.1 step 5).
+      const ended = new Set<string>()
+      // Each command is tried once: one another engine runs cannot be stopped from here and is left to it.
+      const tried = new Set<string>()
+      const service = Option.getOrUndefined(shellJobs)
       let board: readonly Task.Info[] = []
       for (let sweep = 0; sweep < SWEEPS; sweep++) {
         const result = yield* halt(
@@ -1377,8 +1434,20 @@ const layer = Layer.effect(
         board = result.board
         const fresh = result.tasks.filter((task) => !stopped.has(task.id))
         result.tasks.forEach((task) => stopped.set(task.id, task))
-        // Background commands stop here too once they exist (WP33).
-        if (fresh.length === 0) break
+        const shells = service
+          ? (yield* service.list(session.id)).filter((shell) => shell.status === "running" && !tried.has(shell.id))
+          : []
+        if (service)
+          yield* Effect.forEach(
+            shells,
+            (shell) =>
+              Effect.sync(() => tried.add(shell.id)).pipe(
+                Effect.andThen(service.stop(shell.id)),
+                Effect.tap((result) => Effect.sync(() => result?.status === "stopped" && ended.add(shell.id))),
+              ),
+            { concurrency: 4, discard: true },
+          )
+        if (fresh.length === 0 && shells.length === 0) break
       }
       // Desktop workspaces and swarms keep their own runners and are left running; the ones Vector cannot reach
       // right now are counted apart.
@@ -1386,7 +1455,7 @@ const layer = Layer.effect(
       return {
         aborted,
         tasks: [...stopped.values()],
-        shells: 0,
+        shells: ended.size,
         excluded: left.filter((task) => task.connection !== "disconnected").length,
         skipped: left.filter((task) => task.connection === "disconnected").length,
       }
@@ -1856,19 +1925,60 @@ const layer = Layer.effect(
         (input.timeout ?? 30_000) > 60_000
       )
         return yield* new Error({ code: "invalid", message: "Wait timeout must be between 0 and 60000 milliseconds." })
-      const before = yield* SubagentLifecycle.locked(lock)(select(input.sessionID, input.taskIDs))
-      const settled = (tasks: readonly Task.Info[]) =>
-        input.mode === "all"
-          ? tasks.every((task) => !ACTIVE.has(task.status))
-          : tasks.some((task) => !ACTIVE.has(task.status))
-      if (settled(before)) return { tasks: before, timedOut: false }
-      const waits = before
-        .filter((task) => ACTIVE.has(task.status))
-        .map((task) =>
-          DesktopTasks.owns(task.id)
-            ? bridge(desktop.wait({ sessionID: input.sessionID, taskID: task.id, timeout: input.timeout ?? 30_000 }))
-            : jobs.wait({ id: task.id }).pipe(Effect.asVoid),
-        )
+      const timeout = input.timeout ?? 30_000
+      // Background commands named by `shl_…` IDs wait beside the subagents, and come back in `shells` (5.H).
+      const chosen = yield* commands(input.sessionID, input.taskIDs)
+      if (chosen.service && input.taskIDs.length > MAX_TASKS)
+        return yield* new Error({ code: "invalid", message: "Choose 1–200 task IDs." })
+      const service = chosen.service
+      // Without commands this is the caller's whole selection, read as before.
+      const pick = () =>
+        service && chosen.taskIDs.length === 0
+          ? Effect.succeed<Task.Info[]>([])
+          : select(input.sessionID, chosen.taskIDs)
+      const commandsNow = () =>
+        service
+          ? service.list(input.sessionID).pipe(
+              Effect.map((all) => {
+                const found = new Map(all.map((shell) => [shell.id, shell]))
+                return chosen.shells.map((shell) => found.get(shell.id) ?? shell)
+              }),
+            )
+          : Effect.succeed<Task.Shell[]>([])
+      const before = yield* SubagentLifecycle.locked(lock)(pick())
+      const shellsBefore = chosen.shells
+      const ended = (tasks: readonly Task.Info[], shells: readonly Task.Shell[]) => [
+        ...tasks.map((task) => !ACTIVE.has(task.status)),
+        ...shells.map((shell) => shell.status !== "running"),
+      ]
+      const settled = (tasks: readonly Task.Info[], shells: readonly Task.Shell[]) =>
+        input.mode === "all" ? ended(tasks, shells).every(Boolean) : ended(tasks, shells).some(Boolean)
+      const result = (
+        tasks: readonly Task.Info[],
+        shells: readonly Task.Shell[],
+        timedOut: boolean,
+        attention: readonly string[],
+      ): Task.WaitResult => ({
+        tasks,
+        timedOut,
+        ...(attention.length > 0 ? { attention } : {}),
+        ...(service ? { shells } : {}),
+      })
+      if (settled(before, shellsBefore)) return result(before, shellsBefore, false, [])
+      const waits = [
+        ...before
+          .filter((task) => ACTIVE.has(task.status))
+          .map((task) =>
+            DesktopTasks.owns(task.id)
+              ? bridge(desktop.wait({ sessionID: input.sessionID, taskID: task.id, timeout }))
+              : jobs.wait({ id: task.id }).pipe(Effect.asVoid),
+          ),
+        ...(service
+          ? shellsBefore
+              .filter((shell) => shell.status === "running")
+              .map((shell) => service.wait([shell.id], timeout).pipe(Effect.asVoid))
+          : []),
+      ]
       const finished = (
         input.mode === "all" ? Effect.all(waits, { concurrency: "unbounded", discard: true }) : Effect.raceAll(waits)
       ).pipe(Effect.as<string[]>([]))
@@ -1877,14 +1987,16 @@ const layer = Layer.effect(
       const asking = signals.next(
         before.filter((task) => ACTIVE.has(task.status) && !DesktopTasks.owns(task.id)).map((task) => task.id),
       )
-      const done = yield* Effect.raceFirst(finished, asking).pipe(Effect.timeoutOption(input.timeout ?? 30_000))
-      const tasks = yield* select(input.sessionID, input.taskIDs)
+      const done = yield* Effect.raceFirst(finished, asking).pipe(Effect.timeoutOption(timeout))
+      const tasks = yield* pick()
+      const shells = yield* commandsNow()
       const attention = Option.getOrElse(done, () => [])
-      return {
+      return result(
         tasks,
-        timedOut: Option.isNone(done) || (attention.length === 0 && !settled(tasks)),
-        ...(attention.length > 0 ? { attention } : {}),
-      }
+        shells,
+        Option.isNone(done) || (attention.length === 0 && !settled(tasks, shells)),
+        attention,
+      )
     })
 
     return Service.of({
@@ -1929,6 +2041,7 @@ export const node = LayerNode.make({
     Agent.node,
     TaskIsolation.node,
     SessionAudience.node,
+    ShellJobs.node,
   ],
 })
 export * as TaskManager from "./manager"

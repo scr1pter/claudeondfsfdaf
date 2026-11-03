@@ -1336,6 +1336,10 @@ const scenarios: Scenario[] = [
       (body as { taskIsolation?: unknown }).taskIsolation === true,
       "capabilities should report the routes that review, merge and discard isolated tasks",
     )
+    check(
+      (body as { backgroundShells?: unknown }).backgroundShells === true,
+      "capabilities should report that task lists, stop and wait reach background commands",
+    )
   }),
   http.protected
     .post("/experimental/session/{sessionID}/background", "experimental.session.background")
@@ -1466,6 +1470,19 @@ const scenarios: Scenario[] = [
       object(body)
       array(body.tasks)
       check(body.tasks.length === 0 && body.truncated === false, "a fresh active task board should be empty")
+    }),
+  http.protected
+    .get("/experimental/session/{sessionID}/tasks", "experimental.task.list.shells")
+    .seeded((ctx) => ctx.session({ title: "Background command board owner" }))
+    .at((ctx) => ({
+      path: `${route("/experimental/session/{sessionID}/tasks", { sessionID: ctx.state.id })}?shells=true`,
+      headers: ctx.headers(),
+    }))
+    .json(200, (body) => {
+      object(body)
+      array(body.tasks)
+      array(body.shells)
+      check(body.shells.length === 0, "a fresh conversation should have no background commands")
     }),
   http.protected
     .get("/experimental/session/{sessionID}/tasks/{taskID}", "experimental.task.inspect.missing")

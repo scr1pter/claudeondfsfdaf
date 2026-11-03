@@ -2624,6 +2624,15 @@
               "enum": ["true", "false"]
             },
             "required": false
+          },
+          {
+            "name": "shells",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": ["true", "false"]
+            },
+            "required": false
           }
         ],
         "responses": {
@@ -49705,6 +49714,12 @@
             "items": {
               "$ref": "#/components/schemas/TaskInfo"
             }
+          },
+          "shells": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TaskShell"
+            }
           }
         },
         "required": ["tasks"],
@@ -49726,6 +49741,12 @@
             "type": "array",
             "items": {
               "type": "string"
+            }
+          },
+          "shells": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TaskShell"
             }
           }
         },

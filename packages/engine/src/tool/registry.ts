@@ -17,6 +17,7 @@ import { ReadTool } from "./read"
 import { TaskTool } from "./task"
 import { SessionFork } from "@/session/fork"
 import { TaskNotify } from "@/task/notify"
+import { ShellJobs } from "@/task/shells"
 import { TaskLimits } from "@/task/limits"
 import { TaskManageTool } from "./task-manage"
 import { TaskIsolation } from "@/task/isolation"
@@ -580,6 +581,8 @@ export const node = LayerNode.make({
     TaskManager.node,
     WorkflowRuns.node,
     TaskNotify.node,
+    // The shell tool starts background commands through it (Effect.serviceOption); without it they are refused.
+    ShellJobs.node,
     TaskLimits.node,
     Global.node,
     ResearchStore.node,

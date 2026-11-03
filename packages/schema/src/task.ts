@@ -260,13 +260,19 @@ export const MessageResult = Schema.Struct({
 }).annotate({ identifier: "Task.MessageResult" })
 export interface MessageResult extends Schema.Schema.Type<typeof MessageResult> {}
 
-export const StopResult = Schema.Struct({ tasks: Schema.Array(Info) }).annotate({ identifier: "Task.StopResult" })
+// `shells` only when the request named background commands (`shl_…`); they are never shown as tasks.
+export const StopResult = Schema.Struct({
+  tasks: Schema.Array(Info),
+  shells: optional(Schema.Array(Shell)),
+}).annotate({ identifier: "Task.StopResult" })
 export interface StopResult extends Schema.Schema.Type<typeof StopResult> {}
 
 export const WaitResult = Schema.Struct({
   tasks: Schema.Array(Info),
   timedOut: Schema.Boolean,
   attention: optional(Schema.Array(Schema.String)),
+  // Only when the request named background commands (`shl_…`).
+  shells: optional(Schema.Array(Shell)),
 }).annotate({ identifier: "Task.WaitResult" })
 export interface WaitResult extends Schema.Schema.Type<typeof WaitResult> {}
 

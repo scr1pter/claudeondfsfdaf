@@ -58,18 +58,27 @@ function mapWorktreeError<A, R>(self: Effect.Effect<A, Worktree.Error, R>) {
   )
 }
 
-type TaskResult = { readonly task?: Task.Info; readonly tasks?: readonly Task.Info[] }
+type TaskResult = {
+  readonly task?: Task.Info
+  readonly tasks?: readonly Task.Info[]
+  readonly shells?: readonly Task.Shell[] | number
+}
 
-// A task result without any helper's absolute isolation directory.
+// A task result without any helper's absolute isolation directory, or any background command's output path (I19).
 function withoutDirectories<T extends TaskResult>(result: T): T {
   const hide = (task: Task.Info): Task.Info =>
     task.isolation?.directory === undefined
       ? task
       : { ...task, isolation: SubagentLifecycle.withoutDirectory(task.isolation) }
+  const unpathed = (shell: Task.Shell): Task.Shell => {
+    const { outputPath: _, ...rest } = shell
+    return rest
+  }
   return {
     ...result,
     ...(result.task ? { task: hide(result.task) } : {}),
     ...(result.tasks ? { tasks: result.tasks.map(hide) } : {}),
+    ...(Array.isArray(result.shells) ? { shells: result.shells.map(unpathed) } : {}),
   }
 }
 
@@ -123,6 +132,7 @@ export const experimentalHandlers = HttpApiBuilder.group(InstanceHttpApi, "exper
           descendants: ctx.query.descendants,
           limit: ctx.query.limit,
           active: ctx.query.active,
+          shells: ctx.query.shells,
         }),
       )
       // The limits line carries the owner's configured limits, which only the owner sees (I19).
@@ -336,6 +346,7 @@ export const experimentalHandlers = HttpApiBuilder.group(InstanceHttpApi, "exper
         taskResume: true,
         taskAttention: true,
         taskIsolation: true,
+        backgroundShells: true,
       }
     })
 

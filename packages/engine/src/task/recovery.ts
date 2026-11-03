@@ -19,6 +19,7 @@ import type { TaskPromptOps } from "@/tool/task"
 import { TaskNotify } from "./notify"
 import { TaskIsolation } from "./isolation"
 import { TaskPlace } from "./place"
+import { ShellJobs } from "./shells"
 
 /*
  * Restart recovery (D.3). When an instance boots, and every 5 minutes after, the helpers whose engine stopped (an
@@ -242,25 +243,34 @@ const layer = Layer.effect(
         )
 
       // Rows whose work stopped: running under a dead owner, or interrupted. Each is claimed once across every engine
-      // on this database. Background commands keep their own rows (WP33).
+      // on this database. A background command's row is reported to the session that started it (5.H); Vector never
+      // stops its process, which it can no longer see.
+      const commands: BackgroundJobStore.Candidate[] = []
       yield* each(yield* store.candidates(ctx.directory), (row) =>
-        row.type !== "task"
-          ? Effect.succeed(undefined)
-          : store
-              .claim(row, now)
-              .pipe(
-                Effect.flatMap((claimed) =>
-                  claimed
-                    ? settle(
-                        SessionID.make(row.sessionID ?? row.id),
-                        row.attempt,
-                        row.cause,
-                        row.completedAt ?? now,
-                        now,
-                      )
-                    : Effect.succeed(undefined),
+        row.type === "shell"
+          ? store.claim(row, now).pipe(
+              Effect.map((claimed) => {
+                if (claimed) commands.push(row)
+                return undefined
+              }),
+            )
+          : row.type !== "task"
+            ? Effect.succeed(undefined)
+            : store
+                .claim(row, now)
+                .pipe(
+                  Effect.flatMap((claimed) =>
+                    claimed
+                      ? settle(
+                          SessionID.make(row.sessionID ?? row.id),
+                          row.attempt,
+                          row.cause,
+                          row.completedAt ?? now,
+                          now,
+                        )
+                      : Effect.succeed(undefined),
+                  ),
                 ),
-              ),
       )
 
       const records = yield* scan(ctx, now, boot)
@@ -309,6 +319,30 @@ const layer = Layer.effect(
         if (root && child.parentID)
           group(root).helpers.push({ id: child.id, title: record.title, parentID: child.parentID })
       }
+      // A background command's note goes to the conversation that started it: the main agent's own session.
+      yield* Effect.forEach(
+        commands,
+        (row) =>
+          Effect.gen(function* () {
+            const parent = yield* find(SessionID.make(row.parentSessionID))
+            const root = parent && (parent.parentID ? yield* rootOf(parent) : parent)
+            if (!root) return
+            group(root).notes.push({
+              kind: "shell",
+              shellID: row.id,
+              state: "interrupted",
+              text: ShellJobs.interrupted(row),
+              wake: false,
+              quiet: true,
+              recovered: true,
+            })
+          }).pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning("an interrupted background command was not reported", { cause }),
+            ),
+          ),
+        { discard: true },
+      )
       yield* Effect.forEach(
         records.filter(({ record }) => record.notification !== undefined),
         (item) =>

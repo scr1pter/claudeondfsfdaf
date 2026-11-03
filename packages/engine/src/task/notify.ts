@@ -36,6 +36,8 @@ export type Note = {
   taskID?: SessionID
   taskIDs?: SessionID[]
   shellID?: string
+  /** How a background command exited, when it exited on its own. */
+  exitCode?: number
   /** The parent's message whose call launched the work: the note is dropped once that message is gone. */
   launchID?: MessageID
   /** The child's attempt the note is about: the note is dropped once the child moved on to another. */
@@ -236,7 +238,13 @@ function metadata(note: Note, quiet: boolean): Record<string, unknown> {
           ? { taskAttention: { taskID: note.taskID, kind: note.attention, state: note.state } }
           : note.kind === "interrupted"
             ? { taskInterrupted: { taskIDs: note.taskIDs ?? [] } }
-            : { shellNotification: { shellID: note.shellID, state: note.state } }
+            : {
+                shellNotification: {
+                  shellID: note.shellID,
+                  state: note.state,
+                  ...(note.exitCode === undefined ? {} : { exitCode: note.exitCode }),
+                },
+              }
   const held = { ...own, ...SessionMemory.carried(note.hold) }
   return quiet ? { ...held, [SessionTaskSize.QUIET]: true } : held
 }

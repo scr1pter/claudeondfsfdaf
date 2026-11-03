@@ -7200,12 +7200,14 @@ export type TaskMessageResult = {
 
 export type TaskStopResult = {
   tasks: Array<TaskInfo>
+  shells?: Array<TaskShell>
 }
 
 export type TaskWaitResult = {
   tasks: Array<TaskInfo>
   timedOut: boolean
   attention?: Array<string>
+  shells?: Array<TaskShell>
 }
 
 export type TaskPromoteResult = {
@@ -12115,6 +12117,7 @@ export type ExperimentalTaskListData = {
     descendants?: "true" | "false"
     limit?: string
     active?: "true" | "false"
+    shells?: "true" | "false"
   }
   url: "/experimental/session/{sessionID}/tasks"
 }

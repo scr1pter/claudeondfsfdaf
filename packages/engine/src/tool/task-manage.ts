@@ -15,7 +15,10 @@ export const PublicParameters = Schema.Struct({
   task_id: Schema.optional(Schema.String).annotate({
     description: "Required for inspect, message, merge and discard",
   }),
-  task_ids: Schema.optional(ids).annotate({ description: "Required for wait and resume; selects tasks for stop" }),
+  task_ids: Schema.optional(ids).annotate({
+    description:
+      "Required for wait and resume; selects tasks for stop. stop and wait also take background command IDs (shl_…)",
+  }),
   text: Schema.optional(Schema.String).annotate({
     description: "Required for message and report; optional for resume",
   }),
@@ -123,7 +126,7 @@ export const TaskManageTool = Tool.define(
               case "list":
                 return input.siblings
                   ? tasks.list({ sessionID, siblings: true })
-                  : tasks.list({ sessionID, descendants: input.descendants })
+                  : tasks.list({ sessionID, descendants: input.descendants, shells: true })
               case "inspect":
                 if (input.diff)
                   return tasks.changes({ sessionID, taskID: input.task_id, diff: true, control: true }).pipe(

@@ -20,6 +20,10 @@ exports[`tool parameters JSON Schema (wire shape) bash 1`] = `
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "properties": {
+    "background": {
+      "description": "Run without waiting. Vector notifies you when the command exits; read its output file with read and stop it with task_manage stop. Main agent only.",
+      "type": "boolean",
+    },
     "command": {
       "description": "The command to execute",
       "type": "string",

@@ -54,6 +54,7 @@ export const TaskListQuery = Schema.Struct({
   descendants: Schema.optional(QueryBoolean),
   limit: Schema.optional(Schema.NumberFromString.check(Schema.isInt(), Schema.isBetween({ minimum: 1, maximum: 200 }))),
   active: Schema.optional(QueryBoolean),
+  shells: Schema.optional(QueryBoolean),
 })
 
 export const TaskMessageInput = Schema.Struct({

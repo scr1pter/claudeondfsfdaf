@@ -1398,6 +1398,7 @@ export class Task extends HeyApiClient {
       descendants?: "true" | "false"
       limit?: string
       active?: "true" | "false"
+      shells?: "true" | "false"
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -1412,6 +1413,7 @@ export class Task extends HeyApiClient {
             { in: "query", key: "descendants" },
             { in: "query", key: "limit" },
             { in: "query", key: "active" },
+            { in: "query", key: "shells" },
           ],
         },
       ],

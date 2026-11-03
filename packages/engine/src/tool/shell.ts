@@ -1,4 +1,4 @@
-import { Effect, Exit, Fiber, Stream } from "effect"
+import { Effect, Exit, Fiber, Option, Stream } from "effect"
 import os from "os"
 import { createWriteStream } from "node:fs"
 import * as Tool from "./tool"
@@ -19,6 +19,8 @@ import { Sandbox } from "./shell/sandbox"
 import { CloudCli } from "./shell/cloud-cli"
 import { GitMutation } from "./shell/git-mutation"
 import { TaskClaims } from "@/task/claims"
+import { ShellJobs } from "@/task/shells"
+import type { TaskPromptOps } from "./task"
 import { FileLock } from "./file-lock"
 import { UNREAD } from "./shell/unread"
 
@@ -1846,6 +1848,8 @@ export const ShellTool = Tool.define(
     const plugin = yield* Plugin.Service
     const flags = yield* RuntimeFlags.Service
     const permission = yield* ShellPermission
+    // Background commands (5.H). A build that leaves them out (a test that makes the tool alone) refuses them.
+    const jobs = yield* Effect.serviceOption(ShellJobs.Service)
     const defaultTimeoutMs = flags.bashDefaultTimeoutMs ?? 2 * 60 * 1000
 
     const shellEnv = Effect.fn("ShellTool.shellEnv")(function* (ctx: Tool.Context, cwd: string) {
@@ -2078,6 +2082,51 @@ export const ShellTool = Tool.define(
       }
     })
 
+    // A command started in the background (5.H): spawned as a foreground command would be, sandbox included, then
+    // handed to ShellJobs, which tells the session when it exits.
+    const background = Effect.fn("ShellTool.background")(function* (
+      input: {
+        shell: string
+        command: string
+        cwd: string
+        env: NodeJS.ProcessEnv
+        timeout?: number
+        workspaceRoot: string
+        ops: TaskPromptOps
+      },
+      ctx: Tool.Context,
+      shells: ShellJobs.Interface,
+    ) {
+      const offline = webNone() ? Sandbox.offline(input) : undefined
+      const notice = offline && offline.type !== "refused" ? offline.notice : undefined
+      const first = notice !== undefined && !told.has(ctx.sessionID)
+      if (first) told.add(ctx.sessionID)
+      const spawned = yield* cmd(input.shell, input.command, input.cwd, input.env, input.workspaceRoot, ctx, offline)
+      const shell = yield* shells.start({
+        sessionID: ctx.sessionID,
+        command: input.command,
+        process: spawned,
+        ...(input.timeout === undefined ? {} : { timeout: input.timeout }),
+        ops: input.ops,
+        agent: ctx.agent,
+        ...(ctx.assertOutput ? { output: ctx.assertOutput } : {}),
+      })
+      const output = ShellJobs.started(shell)
+      return {
+        title: input.command,
+        metadata: {
+          output: "",
+          exit: null,
+          truncated: false,
+          background: true,
+          shellID: shell.id,
+          ...(shell.outputPath ? { outputPath: shell.outputPath } : {}),
+          ...(notice ? { sandbox: notice } : {}),
+        },
+        output: first ? `${notice}\n\n${output}` : output,
+      }
+    })
+
     return () =>
       Effect.gen(function* () {
         const cfg = yield* config.get()
@@ -2099,6 +2148,17 @@ export const ShellTool = Tool.define(
               if (params.timeout !== undefined && params.timeout < 0) {
                 throw new Error(`Invalid timeout value: ${params.timeout}. Timeout must be a positive number.`)
               }
+              // A background command is refused before anything is asked when this session may not start one (5.H).
+              const ops = ctx.extra?.promptOps as TaskPromptOps | undefined
+              if (params.background) {
+                const refused =
+                  ShellJobs.refusal({ subagent: ctx.parentID !== undefined, enabled: flags.backgroundSubagents }) ??
+                  (Option.isNone(jobs) || !ops ? ShellJobs.UNAVAILABLE_REFUSAL : undefined) ??
+                  (params.timeout !== undefined && params.timeout > ShellJobs.MAX_TIMEOUT
+                    ? ShellJobs.TIMEOUT_REFUSAL
+                    : undefined)
+                if (refused) return yield* Effect.die(new Error(refused))
+              }
               const timeout = params.timeout ?? defaultTimeoutMs
               // Refused before anything is asked: with Web access None a command runs only in the sandbox, and this
               // computer has none to run it in.
@@ -2108,6 +2168,21 @@ export const ShellTool = Tool.define(
               // Reserve resolved shell targets before spawning: another unscoped writer must not pass while this
               // command is running.
               yield* permission.admit(ctx, [scan])
+
+              if (params.background && Option.isSome(jobs) && ops)
+                return yield* background(
+                  {
+                    shell,
+                    command: params.command,
+                    cwd,
+                    env: yield* shellEnv(ctx, cwd),
+                    ...(params.timeout === undefined ? {} : { timeout: params.timeout }),
+                    workspaceRoot: instanceCtx.worktree,
+                    ops,
+                  },
+                  ctx,
+                  jobs.value,
+                )
 
               return yield* run(
                 {

@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { sql } from "drizzle-orm"
 import { Deferred, Effect, Exit, Fiber, Layer } from "effect"
+import { ChildProcess } from "effect/unstable/process"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { SessionV1 } from "@vectordevai/core/v1/session"
 import { Database } from "@vectordevai/core/database/database"
@@ -19,6 +20,7 @@ import { SubagentLifecycle } from "@/tool/subagent-lifecycle"
 import type { TaskPromptOps } from "@/tool/task"
 import type { SessionPrompt } from "@/session/prompt"
 import { TaskNotify } from "@/task/notify"
+import { ShellJobs } from "@/task/shells"
 import { DesktopTasks } from "@/task/desktop"
 import { Storage } from "@/storage/storage"
 import { SpendGuard } from "@vectordevai/core/spend-guard"
@@ -43,7 +45,7 @@ import { disposeAllInstances } from "../fixture/fixture"
 import { pollWithTimeout, testEffect } from "../lib/effect"
 
 afterEach(disposeAllInstances)
-const it = testEffect(LayerNode.compile(LayerNode.group([TaskManager.node, TaskLimits.node, Session.node, Database.node, BackgroundJob.node, SessionStatus.node, TaskNotify.node, DesktopTasks.node, Storage.node, SpendGuard.node])))
+const it = testEffect(LayerNode.compile(LayerNode.group([TaskManager.node, TaskLimits.node, Session.node, Database.node, BackgroundJob.node, SessionStatus.node, TaskNotify.node, DesktopTasks.node, Storage.node, SpendGuard.node, ShellJobs.node])))
 const model = { providerID: ProviderV2.ID.make("local-test"), modelID: ModelV2.ID.make("fixture") }
 const child = Effect.fn("TaskManagerTest.child")(function* (parentID: SessionID, patch: object = {}) {
   const sessions = yield* Session.Service
@@ -75,6 +77,14 @@ const ops: TaskPromptOps = {
   resolvePromptParts: (text) => Effect.succeed([{ type: "text", text }]),
   prompt: (input) => Effect.succeed(reply(input)),
 }
+
+// Background commands (5.H): one that sleeps for five minutes unless it is stopped, and one that exits at once.
+const posix = process.platform !== "win32"
+const sleeper = () =>
+  posix
+    ? ChildProcess.make("sleep", ["300"], { detached: true, stdin: "ignore" })
+    : ChildProcess.make("ping", ["-n", "300", "127.0.0.1"], { stdin: "ignore" })
+const quick = () => ChildProcess.make(process.execPath, ["-e", ""], { detached: posix, stdin: "ignore" })
 
 describe("task management", () => {
   it.instance("lists only visible owned children, bounds descendants, and reconciles abandoned execution", () => Effect.gen(function* () {
@@ -653,6 +663,65 @@ describe("task management", () => {
       tasks: [{ ...row("workspace:gone", "team"), parentSessionID: other.id }],
     })
     expect(yield* manager.interrupt({ sessionID: other.id, helpers: true }, ops)).toEqual({ aborted: false, tasks: [], shells: 0, excluded: 0, skipped: 1 })
+  }))
+
+  it.instance("list shows the session's background commands only when asked, and stop and wait take their shl_ IDs", () => Effect.gen(function* () {
+    const sessions = yield* Session.Service
+    const manager = yield* TaskManager.Service
+    const jobs = yield* BackgroundJob.Service
+    const shells = yield* ShellJobs.Service
+    const root = yield* sessions.create()
+    const other = yield* sessions.create()
+    const a = yield* child(root.id)
+    yield* jobs.start({ id: a.id, type: "task", run: Effect.never })
+    const done = yield* shells.start({ sessionID: root.id, command: "exit at once", process: quick(), ops, agent: "build" })
+    const slow = yield* shells.start({ sessionID: root.id, command: "sleep", process: sleeper(), ops, agent: "build" })
+    const foreign = yield* shells.start({ sessionID: other.id, command: "sleep elsewhere", process: sleeper(), ops, agent: "build" })
+    // An older client never asks for them, so it never sees them.
+    const plain = yield* manager.list({ sessionID: root.id })
+    expect(plain.shells).toBeUndefined()
+    expect(plain.tasks.map((task) => task.id)).toEqual([a.id])
+    const listed = yield* manager.list({ sessionID: root.id, shells: true })
+    expect(listed.tasks.map((task) => task.id)).toEqual([a.id])
+    expect(listed.shells?.map((shell) => shell.id).sort()).toEqual([done.id, slow.id].sort())
+    expect(listed.shells?.find((shell) => shell.id === slow.id)).toMatchObject({ status: "running", command: "sleep", outputPath: ShellJobs.outputPath(slow.id) })
+
+    // wait by shl_ ID: the command comes back in shells, never as a task.
+    const waited = yield* manager.wait({ sessionID: root.id, taskIDs: [done.id], timeout: 20_000 })
+    expect(waited).toMatchObject({ tasks: [], timedOut: false, shells: [{ id: done.id, status: "completed", exitCode: 0 }] })
+    const mixed = yield* manager.wait({ sessionID: root.id, taskIDs: [a.id, slow.id], mode: "any", timeout: 0 })
+    expect(mixed.timedOut).toBe(true)
+    expect(mixed.tasks.map((task) => task.id)).toEqual([a.id])
+    expect(mixed.shells).toEqual([expect.objectContaining({ id: slow.id, status: "running" })])
+    // A wait on subagents alone keeps its shape.
+    expect(yield* manager.wait({ sessionID: root.id, taskIDs: [a.id], timeout: 0 })).not.toHaveProperty("shells")
+
+    // A command this session did not start is refused before anything stops.
+    const refused = yield* manager.stop({ sessionID: root.id, taskIDs: [slow.id, foreign.id] }, ops).pipe(Effect.flip)
+    expect(refused.code).toBe("invalid")
+    expect((yield* manager.wait({ sessionID: root.id, taskIDs: ["shl_unknown"], timeout: 0 }).pipe(Effect.flip)).code).toBe("invalid")
+    expect((yield* shells.list(root.id)).find((shell) => shell.id === slow.id)?.status).toBe("running")
+
+    const stopped = yield* manager.stop({ sessionID: root.id, taskIDs: [a.id, slow.id] }, ops)
+    expect(stopped.tasks.map((task) => [task.id, task.status])).toEqual([[a.id, "stopped"]])
+    expect(stopped.shells).toEqual([expect.objectContaining({ id: slow.id, status: "stopped" })])
+    expect((yield* jobs.get(a.id))?.status).toBe("cancelled")
+    // The other conversation's command still runs.
+    expect((yield* shells.list(other.id))[0]).toMatchObject({ id: foreign.id, status: "running" })
+    yield* shells.stop(foreign.id)
+  }))
+
+  it.instance("interrupt with helpers stops the session's background commands, and a main-only stop leaves them running", () => Effect.gen(function* () {
+    const sessions = yield* Session.Service
+    const manager = yield* TaskManager.Service
+    const shells = yield* ShellJobs.Service
+    const root = yield* sessions.create()
+    const shell = yield* shells.start({ sessionID: root.id, command: "sleep", process: sleeper(), ops, agent: "build" })
+    expect(yield* manager.interrupt({ sessionID: root.id, helpers: false }, ops)).toEqual({ aborted: false, tasks: [], shells: 0, excluded: 0, skipped: 0 })
+    expect((yield* shells.list(root.id))[0]).toMatchObject({ id: shell.id, status: "running" })
+    const result = yield* manager.interrupt({ sessionID: root.id, helpers: true }, ops)
+    expect(result).toEqual({ aborted: false, tasks: [], shells: 1, excluded: 0, skipped: 0 })
+    expect((yield* shells.list(root.id))[0]).toMatchObject({ id: shell.id, status: "stopped" })
   }))
 
   it.instance("recovery attaches reports once, preserves launch checks, and starts no job", () => Effect.gen(function* () {

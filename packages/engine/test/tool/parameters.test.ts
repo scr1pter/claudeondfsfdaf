@@ -117,6 +117,14 @@ describe("tool parameters", () => {
     test("rejects missing command", () => {
       expect(accepts(Shell, {})).toBe(false)
     })
+    // 5.H: always advertised, refused at execute where a session may not run one.
+    test("accepts optional background flag", () => {
+      expect(parse(Shell, { command: "bun run build", background: true })).toEqual({
+        command: "bun run build",
+        background: true,
+      })
+      expect(accepts(Shell, { command: "ls", background: "yes" })).toBe(false)
+    })
   })
 
   describe("terminal", () => {
