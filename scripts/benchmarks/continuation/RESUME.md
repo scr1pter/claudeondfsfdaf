@@ -31,6 +31,11 @@ The native command resumes the original root, while native collaboration
 followups target the existing children. No native ID, ancestry, rollout path,
 provider identity, or saved role instruction is rewritten.
 
+Owned Bun-cache directory junctions are recorded with their owned relative
+targets; their canonical target files are copied independently. The archive
+contains no live links back to the mutable runtime. Other junctions or symlinks
+are refused.
+
 The explicit deadline choice is 7,162.344 remaining seconds, excluding the
 disclosed instrument pause, with the old 37,656 process milliseconds retained.
 The new witness and coordinator use this remaining wall allowance conservatively.
@@ -69,6 +74,17 @@ review is outstanding.
 The artifact is review evidence, not a substitute for reviewing the actual free
 native run. Its entire file SHA is pinned in the continuation plan. Private raw
 transcripts and native identifiers stay outside Git and printed output.
+
+`qualify_resume.py --run-free` creates that evidence using a new private `--out`,
+`--original-plan`, `--witness-root`, `--expected-witness-revision`, and
+`--expected-witness-manifest-sha`. Use the Python executable frozen in the
+original plan. It invokes the unchanged `native_command` with the actual role
+configuration and code-mode definitions. Its deterministic fake upstream emits
+only fixed collaboration calls and final/error responses. The first scope
+retains three failed latest turns and known fake receipts; the second closes
+the first endpoint, verifies the archive, adopts the native root/children under
+a fresh alias/endpoint, and creates the four unused roles. No app, Bun, Chrome,
+browser driver, real provider, or funded controller is started.
 
 Pure controls run from this directory:
 

@@ -54,7 +54,17 @@ def exact_tree(root):
     for directory, names, leaves in os.walk(root, followlinks=False):
         for name in [*names, *leaves]:
             path = Path(directory) / name
-            require(not path.is_symlink() and not path.is_junction(), "owned archive contains a link")
+            require(not path.is_symlink(), "owned archive contains a symlink")
+            if path.is_junction():
+                relative = path.relative_to(root)
+                target = path.resolve()
+                cache = root / "cache/.bun/install/cache"
+                require(path.is_relative_to(cache) and target.is_relative_to(cache)
+                        and target != cache and target.is_dir() and not target.is_junction(),
+                        "owned archive junction escaped the owned Bun cache")
+                files[relative.as_posix()] = {"kind": "owned_bun_cache_junction", "targetRelative": target.relative_to(root).as_posix()}
+                require(name in names, "unsupported file junction")
+                names.remove(name)
         for name in leaves:
             path = Path(directory) / name
             files[path.relative_to(root).as_posix()] = file_hash(path)
@@ -323,8 +333,12 @@ def archive_state(old_directory, out, expected):
     for name, files in expected.items():
         source = old_directory / name
         require(exact_tree(source) == files, "owned state changed before archive")
-        shutil.copytree(source, destination / name)
-        require(exact_tree(destination / name) == files and exact_tree(source) == files,
+        # Cache junctions are metadata, not live links back to mutable source.
+        # Their canonical target data is independently copied within this root.
+        shutil.copytree(source, destination / name,
+            ignore=lambda directory, names: [entry for entry in names if (Path(directory) / entry).is_junction()])
+        require(exact_tree(destination / name) == {key: value for key, value in files.items() if isinstance(value, str)}
+                and exact_tree(source) == files,
                 "quiescent pre-adoption archive did not verify")
     record = {"kind": "quiescent-native-adoption-archive-v1", "archiveBeforeAdoptionVerified": True,
               "sourceRoots": {name: str(old_directory / name) for name in expected},

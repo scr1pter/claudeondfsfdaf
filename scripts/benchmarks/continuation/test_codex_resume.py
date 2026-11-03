@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import unittest
 
 import codex_resume
+import qualify_resume
 
 TEAM = Path(__file__).resolve().parents[1] / "matched-agentic-study"
 sys.path.insert(0, str(TEAM))
@@ -161,6 +162,31 @@ class ResumeTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "changed before archive"):
                 codex_resume.archive_state(old, root / "another", expected)
 
+    @unittest.skipUnless(sys.platform == "win32", "Windows Bun cache uses directory junctions")
+    def test_owned_cache_junction_metadata_is_archived_without_live_links(self):
+        import _winapi
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            old = root / "old"
+            home = old / "runtime-home"
+            target = home / "cache/.bun/install/cache/labelled-fixture@1"
+            target.mkdir(parents=True)
+            (target / "index.js").write_text("labelled synthetic package")
+            link = target.parent / "labelled-fixture" / "1"
+            link.parent.mkdir()
+            _winapi.CreateJunction(str(target), str(link))
+            files = codex_resume.exact_tree(home)
+            self.assertEqual(files[link.relative_to(home).as_posix()], {
+                "kind": "owned_bun_cache_junction", "targetRelative": target.relative_to(home).as_posix()})
+            codex_resume.archive_state(old, root / "out", {"runtime-home": files})
+            archived = root / "out/pre-adoption-archive/runtime-home"
+            self.assertFalse((archived / link.relative_to(home)).exists())
+            self.assertTrue((archived / target.relative_to(home) / "index.js").is_file())
+            escaped = home / "cache/.bun/install/cache/escaped"
+            _winapi.CreateJunction(str(root), str(escaped))
+            with self.assertRaisesRegex(ValueError, "escaped"):
+                codex_resume.exact_tree(home)
+
     def test_real_admission_policy_preserves_old_slots_and_rejects_replacements(self):
         with tempfile.TemporaryDirectory() as temporary:
             meter = ResumeMeter()
@@ -263,6 +289,29 @@ class ResumeTests(unittest.TestCase):
             (root / "sanitized-evidence.json").write_text("changed")
             with self.assertRaises(ValueError):
                 codex_resume.qualification(path, "synthetic-binary", "synthetic-instrument")
+
+    def test_free_script_follows_existing_children_and_only_coordinator_creates_leaves(self):
+        from codex_free_probe import named_tool
+        meter = qualify_resume.FreeMeter.__new__(qualify_resume.FreeMeter)
+        meter.stages = {}
+        meter.tools = SimpleNamespace(named_tool=named_tool)
+        meter.complete = lambda roles: True
+        tools = [{"type": "namespace", "name": "collaboration", "tools": [
+            {"type": "function", "name": name} for name in ("spawn_agent", "followup_task", "wait_agent")]}]
+        meter.phase = 1
+        first = meter.script({"role": "lead"}, tools)
+        self.assertEqual([json.loads(call["arguments"])["agent_type"] for call in first], ["backend_coordinator", "frontend_worker"])
+        self.assertEqual(meter.script({"role": "frontend_worker"}, tools), [])
+        self.assertIsNone(meter.script({"role": "frontend_worker"}, tools))
+        followup = meter.script({"role": "lead"}, tools)
+        self.assertTrue(all(call["name"] == "followup_task" for call in followup))
+        meter.phase = 2
+        followup = meter.script({"role": "lead"}, tools)
+        self.assertEqual([json.loads(call["arguments"])["target"] for call in followup], ["/root/backend_coordinator", "/root/frontend_worker"])
+        nested = meter.script({"role": "backend_coordinator"}, tools)
+        self.assertEqual([json.loads(call["arguments"])["agent_type"] for call in nested], ["backend_api", "backend_data"])
+        self.assertEqual(meter.script({"role": "backend_api"}, tools), [])
+        self.assertEqual(meter.script({"role": "backend_data"}, tools), [])
 
 
 if __name__ == "__main__":
