@@ -90,8 +90,11 @@ const it = testEffect(
           ),
         ),
         RuntimeFlags.layer({ backgroundSubagents: true }),
+        // Capabilities read the default agent's permissions for the `workflows` flag (WP32).
+        Layer.mock(Agent.Service)({
+          defaultInfo: () => Effect.succeed({ name: "build", mode: "primary", permission: [], options: {} }),
+        }),
         // These unrelated experimental endpoints are never called by this test.
-        Layer.mock(Agent.Service)({}),
         Layer.mock(MCP.Service)({}),
         Layer.mock(Project.Service)({}),
         Layer.mock(ToolRegistry.Service)({}),

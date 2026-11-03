@@ -3770,11 +3770,12 @@ describe("tool.task", () => {
       )
 
       expect((yield* jobs.get(next.metadata.sessionId))?.status).toBe("cancelled")
-      // Stopped together, they leave their notes together, and none of them starts a turn.
+      // Stopped together, they leave their notes together, and none of them starts a turn. Each note carries its
+      // trusted attempt and the effective quiet flag of a note that starts no turn (WP32, C.2).
       expect(notes.every((note) => note.noReply === true)).toBe(true)
       expect(parts().map((part) => (part.type === "text" ? part.metadata?.taskNotification : undefined))).toEqual([
-        { taskID: first.metadata.sessionId, state: "cancelled" },
-        { taskID: next.metadata.sessionId, state: "cancelled" },
+        { taskID: first.metadata.sessionId, state: "cancelled", attempt: 1, quiet: true },
+        { taskID: next.metadata.sessionId, state: "cancelled", attempt: 1, quiet: true },
       ])
     }),
   )

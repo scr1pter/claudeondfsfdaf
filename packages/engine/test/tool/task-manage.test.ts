@@ -510,6 +510,9 @@ describe("task management", () => {
     expect((yield* jobs.get(running.id))?.status).toBe("cancelled")
   }))
 
+  // Builds and stops 201 live helpers, each with its own durable lifecycle writes: 11.5 s on a Linux runner, and past
+  // the 30 s default on a Windows runner that ran this whole file about twice as slowly as before. Nothing it checks
+  // depends on time, so it gets a wider limit.
   it.instance("stop-all reaches a live helper the walk left off a full board", () => Effect.gen(function* () {
     const sessions = yield* Session.Service
     const manager = yield* TaskManager.Service
@@ -528,7 +531,7 @@ describe("task management", () => {
     expect(result.tasks).toHaveLength(201)
     expect(result.tasks.find((task) => task.id === oldest.id)?.status).toBe("stopped")
     expect((yield* jobs.get(oldest.id))?.status).toBe("cancelled")
-  }))
+  }), 120_000)
 
   it.instance("interrupt without helpers stops only the main turn", () => Effect.gen(function* () {
     const sessions = yield* Session.Service

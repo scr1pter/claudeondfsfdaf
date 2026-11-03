@@ -572,8 +572,9 @@ describe("task recovery", () => {
           "the undelivered report never reached its parent",
           "5 seconds",
         )
+        // The note also carries the helper's trusted attempt (WP32, 4.6).
         expect(delivered.map((item) => item.value)).toEqual([
-          { taskID: alone, state: "completed", recovered: true, quiet: true },
+          { taskID: alone, state: "completed", attempt: 1, recovered: true, quiet: true },
         ])
         expect(delivered[0].text).toBe("alone report")
         yield* recovery.reconcile()
