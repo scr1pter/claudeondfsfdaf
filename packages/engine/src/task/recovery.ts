@@ -243,8 +243,9 @@ const layer = Layer.effect(
         )
 
       // Rows whose work stopped: running under a dead owner, or interrupted. Each is claimed once across every engine
-      // on this database. A background command's row is reported to the session that started it (5.H); Vector never
-      // stops its process, which it can no longer see.
+      // on this database. A background command's row is reported to the session that started it (5.H), worded by its
+      // cause: a dead owner's command may still run, and Vector never stops a process it can no longer see; an engine
+      // that shut down or closed the folder killed its command first.
       const commands: BackgroundJobStore.Candidate[] = []
       yield* each(yield* store.candidates(ctx.directory), (row) =>
         row.type === "shell"
@@ -331,7 +332,7 @@ const layer = Layer.effect(
               kind: "shell",
               shellID: row.id,
               state: "interrupted",
-              text: ShellJobs.interrupted(row),
+              text: ShellJobs.interrupted({ id: row.id, title: row.title, metadata: row.metadata, cause: row.cause }),
               wake: false,
               quiet: true,
               recovered: true,

@@ -76,3 +76,49 @@ export function backgroundTracker() {
     },
   }
 }
+
+type Tracker = ReturnType<typeof backgroundTracker>
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value)
+
+/** Whether a tracked ID names a background command (5.H) rather than a subagent. */
+export function isShellID(id: string) {
+  return id.startsWith("shl_")
+}
+
+/**
+ * Background commands (5.H) the run waits for, beside its background subagents. The shell tool's finished part names
+ * a command it started in the background; the command is then running until its exit note (a `shellNotification` text
+ * part) arrives. That note is answered like a subagent's: a stopped command's note starts no turn, and any other is
+ * answered by the turn after it. Either may arrive first. Returns whether the part was about a background command.
+ */
+export function trackShell(tracker: Tracker, part: unknown) {
+  if (!isRecord(part)) return false
+  if (part.type === "tool" && isRecord(part.state) && part.state.status === "completed") {
+    const metadata = part.state.metadata
+    if (!isRecord(metadata) || metadata.background !== true) return false
+    const shellID = metadata.shellID
+    if (typeof shellID !== "string" || !isShellID(shellID)) return false
+    tracker.status(shellID, "running")
+    return true
+  }
+  if (part.type !== "text" || typeof part.messageID !== "string" || !isRecord(part.metadata)) return false
+  const note = part.metadata.shellNotification
+  if (!isRecord(note) || typeof note.shellID !== "string" || !isShellID(note.shellID)) return false
+  if (typeof note.state !== "string") return false
+  tracker.status(note.shellID, note.state)
+  tracker.note(note.shellID, part.messageID, part.metadata.taskQuiet === true)
+  return true
+}
+
+/** What the run says it stopped waiting for: its subagents and its commands, counted apart. */
+export function waitingFor(tracker: Tracker) {
+  const ids = [...new Set([...tracker.running, ...tracker.unanswered])]
+  const commands = ids.filter(isShellID).length
+  const subagents = ids.length - commands
+  return [
+    ...(subagents > 0 || commands === 0 ? [`${subagents} background subagent(s)`] : []),
+    ...(commands > 0 ? [`${commands} background command(s)`] : []),
+  ].join(" and ")
+}

@@ -1,6 +1,7 @@
 import { Effect, Option, Schema } from "effect"
 import { Tool } from "./tool"
 import { TaskManager } from "@/task/manager"
+import { ShellJobs } from "@/task/shells"
 import type { TaskPromptOps } from "./task"
 import { ToolJsonSchema } from "./json-schema"
 import { ResearchRun } from "./research-run"
@@ -124,9 +125,17 @@ export const TaskManageTool = Tool.define(
           const result = yield* ((): Effect.Effect<unknown, TaskManager.Error> => {
             switch (input.action) {
               case "list":
+                // The agent sees its running background commands and the few that ended last (5.H); the route lists
+                // them all.
                 return input.siblings
                   ? tasks.list({ sessionID, siblings: true })
-                  : tasks.list({ sessionID, descendants: input.descendants, shells: true })
+                  : tasks
+                      .list({ sessionID, descendants: input.descendants, shells: true })
+                      .pipe(
+                        Effect.map((result) =>
+                          result.shells ? { ...result, shells: ShellJobs.forAgent(result.shells) } : result,
+                        ),
+                      )
               case "inspect":
                 if (input.diff)
                   return tasks.changes({ sessionID, taskID: input.task_id, diff: true, control: true }).pipe(

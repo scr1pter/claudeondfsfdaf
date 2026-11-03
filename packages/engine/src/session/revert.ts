@@ -171,8 +171,9 @@ const layer = Layer.effect(
       const partID = session.revert.partID
       const idx = target && partID ? target.parts.findIndex((part) => part.id === partID) : -1
       const removeParts = target && idx >= 0 ? target.parts.slice(idx) : []
-      // A background task launched by a call the commit removes would keep spending and editing on top of the undo,
-      // and its result has nowhere to go. While the revert was pending it ran on, so a redo still got its result.
+      // A background task or command launched by a call the commit removes would keep spending and editing on top of
+      // the undo, and its result has nowhere to go. While the revert was pending it ran on, so a redo still got its
+      // result.
       const removed = new Set<string>(remove.map((msg) => msg.info.id))
       const calls = new Set(removeParts.flatMap((part) => (part.type === "tool" ? [part.callID] : [])))
       const launched = (job: BackgroundJob.Info) => {
@@ -187,7 +188,7 @@ const layer = Layer.effect(
       yield* Effect.forEach(
         jobs.filter(
           (job) =>
-            job.type === "task" &&
+            (job.type === "task" || job.type === "shell") &&
             job.status === "running" &&
             job.metadata?.parentSessionId === sessionID &&
             launched(job),

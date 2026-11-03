@@ -11,6 +11,8 @@ import { BackgroundJobStore } from "@vectordevai/core/background-job-store"
 import { ProviderV2 } from "@vectordevai/core/provider"
 import { ModelV2 } from "@vectordevai/core/model"
 import { TaskManager } from "@/task/manager"
+import { TaskManageTool } from "@/tool/task-manage"
+import { Truncate } from "@/tool/truncate"
 import { TaskLimits } from "@/task/limits"
 import { BackgroundJob } from "@/background/job"
 import { Session } from "@/session/session"
@@ -722,6 +724,49 @@ describe("task management", () => {
     const result = yield* manager.interrupt({ sessionID: root.id, helpers: true }, ops)
     expect(result).toEqual({ aborted: false, tasks: [], shells: 1, excluded: 0, skipped: 0 })
     expect((yield* shells.list(root.id))[0]).toMatchObject({ id: shell.id, status: "stopped" })
+  }))
+
+  it.instance("task_manage list shows the agent its running commands and the last few that ended, without titles", () => Effect.gen(function* () {
+    const sessions = yield* Session.Service
+    const manager = yield* TaskManager.Service
+    const shells = yield* ShellJobs.Service
+    const root = yield* sessions.create()
+    const ended: string[] = []
+    for (let index = 0; index < ShellJobs.AGENT_ENDED + 2; index++) {
+      const shell = yield* shells.start({ sessionID: root.id, command: `exit at once ${index}`, process: quick(), ops, agent: "build" })
+      yield* shells.wait([shell.id], 20_000)
+      ended.push(shell.id)
+    }
+    const running = yield* shells.start({ sessionID: root.id, command: "sleep", process: sleeper(), ops, agent: "build" })
+    // The tool as the model calls it; its output passes through unchanged.
+    const tool = yield* TaskManageTool.pipe(
+      Effect.flatMap((info) => info.init()),
+      Effect.provide([
+        Layer.mock(Truncate.Service)({ output: (text: string) => Effect.succeed({ content: text, truncated: false as const }) }),
+        Layer.mock(Agent.Service)({ get: () => Effect.succeed(undefined as unknown as Agent.Info) }),
+      ]),
+    )
+    const result = yield* tool.execute({ action: "list" }, {
+      sessionID: root.id,
+      messageID: MessageID.ascending(),
+      callID: "call_list",
+      agent: "build",
+      abort: new AbortController().signal,
+      messages: [],
+      extra: { promptOps: ops },
+      metadata: () => Effect.void,
+      ask: () => Effect.void,
+    })
+    const listed = JSON.parse(result.output) as { tasks: unknown[]; shells?: Array<Record<string, unknown>> }
+    expect(listed.tasks).toEqual([])
+    expect(listed.shells?.map((shell) => shell.id)).toEqual([running.id, ...ended.slice(-ShellJobs.AGENT_ENDED).reverse()])
+    expect(listed.shells?.[0]).toMatchObject({ id: running.id, status: "running", command: "sleep", outputPath: ShellJobs.outputPath(running.id) })
+    expect(listed.shells?.every((shell) => !("title" in shell))).toBe(true)
+    // The manager's listing, which the route returns, keeps every command and its title.
+    const all = (yield* manager.list({ sessionID: root.id, shells: true })).shells ?? []
+    expect(all).toHaveLength(ShellJobs.AGENT_ENDED + 3)
+    expect(all.every((shell) => typeof shell.title === "string")).toBe(true)
+    yield* shells.stop(running.id)
   }))
 
   it.instance("recovery attaches reports once, preserves launch checks, and starts no job", () => Effect.gen(function* () {

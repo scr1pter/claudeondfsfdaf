@@ -31,6 +31,7 @@ import { Session } from "@/session/session"
 import { SessionPrompt } from "@/session/prompt"
 import { SessionID } from "@/session/schema"
 import { TaskManager } from "@/task/manager"
+import type { Task } from "@vectordevai/schema/task"
 import { DesktopTasks } from "@/task/desktop"
 import { ToolRegistry } from "@/tool/registry"
 import { Worktree } from "@/worktree"
@@ -1697,7 +1698,7 @@ test("a guest's global config leaves out the owner's Vector Local block", async 
 
 // A guest's resume (D.3, I11): it runs under the guest limits, and never reaches a free model that may train through
 // the owner's acceptance. TaskManager.resume itself is tested in tool/task-manage.test.ts.
-describe("a guest's task resume", () => {
+describe("a guest's task resume and background command rows", () => {
   const rootID = SessionID.make("ses_guest_resume_root")
   const trains = SessionID.make("ses_guest_resume_trains")
   const keeps = SessionID.make("ses_guest_resume_keeps")
@@ -1710,6 +1711,17 @@ describe("a guest's task resume", () => {
   }
   const parentOf = (id: SessionID) => (id === foreign ? SessionID.make("ses_guest_resume_other") : rootID)
   const resumed: Array<{ guest: boolean; origin: string; refuses: boolean }> = []
+  // A background command of the root session, as the manager returns it: with its absolute output path (5.H).
+  const command: Task.Shell = {
+    id: "shl_0123456789abGuestCommand01",
+    title: "bun test",
+    command: "bun test",
+    status: "running",
+    startedAt: 1,
+    outputPath: "/owner/data/tool-output/shell-shl_0123456789abGuestCommand01.log",
+    outputBytes: 0,
+  }
+  const listedShells: boolean[] = []
   // A request with an `x-test-guest` header runs as a guest in control of the sessions it lists.
   const authorization = Authorization.of((effect) =>
     Effect.gen(function* () {
@@ -1801,6 +1813,13 @@ describe("a guest's task resume", () => {
               } as unknown as SessionV1.WithParts),
           }),
           Layer.mock(TaskManager.Service)({
+            list: (input) =>
+              Effect.sync(() => {
+                listedShells.push(input.shells === true)
+                return { tasks: [], truncated: false, ...(input.shells ? { shells: [command] } : {}) }
+              }),
+            stop: () => Effect.succeed({ tasks: [], shells: [command] }),
+            wait: () => Effect.succeed({ tasks: [], timedOut: false, shells: [command] }),
             resume: (input, ops) =>
               input.taskIDs.includes(foreign)
                 ? Effect.fail(
@@ -1863,6 +1882,41 @@ describe("a guest's task resume", () => {
       expect((yield* resume([trains], {})).status).toBe(200)
       expect(resumed[1]).toEqual({ guest: false, origin: "user", refuses: false })
       expect(resumed).toHaveLength(2)
+    }),
+  )
+
+  // I19: a background command's output path, an absolute path in the owner's data folder, goes only to the owner. The
+  // list, stop and wait routes all return command rows.
+  it.live("a guest's command rows leave out their output path, and the owner's keep it", () =>
+    Effect.gen(function* () {
+      listedShells.length = 0
+      const guest = { "x-test-guest": rootID }
+      const rows = (response: { json: Effect.Effect<unknown, unknown> }) =>
+        Effect.map(response.json, (body) => (body as { shells?: Array<Record<string, unknown>> }).shells)
+      const routes = [
+        () => HttpClientRequest.get(`/experimental/session/${rootID}/tasks?shells=true`),
+        () =>
+          HttpClientRequest.post(`/experimental/session/${rootID}/tasks/stop`).pipe(
+            HttpClientRequest.bodyJsonUnsafe({ taskIDs: [command.id] }),
+          ),
+        () =>
+          HttpClientRequest.post(`/experimental/session/${rootID}/tasks/wait`).pipe(
+            HttpClientRequest.bodyJsonUnsafe({ taskIDs: [command.id], timeout: 0 }),
+          ),
+      ]
+      for (const route of routes) {
+        const asGuest = yield* route().pipe(HttpClientRequest.setHeaders(guest), HttpClient.execute)
+        expect(asGuest.status).toBe(200)
+        const seen = yield* rows(asGuest)
+        expect(seen).toEqual([
+          { id: command.id, title: "bun test", command: "bun test", status: "running", startedAt: 1, outputBytes: 0 },
+        ])
+        const asOwner = yield* route().pipe(HttpClientRequest.setHeaders({}), HttpClient.execute)
+        expect(asOwner.status).toBe(200)
+        expect((yield* rows(asOwner))?.[0]?.outputPath).toBe(command.outputPath)
+      }
+      // The list route asked the manager for the session's commands both times.
+      expect(listedShells).toEqual([true, true])
     }),
   )
 })

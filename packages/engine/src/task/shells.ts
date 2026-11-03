@@ -14,7 +14,7 @@ import { InstanceState } from "@/effect/instance-state"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Identifier } from "@/id/id"
 import { Session } from "@/session/session"
-import type { SessionID } from "@/session/schema"
+import type { MessageID, SessionID } from "@/session/schema"
 import type { TaskPromptOps } from "@/tool/task"
 import { Truncate } from "@/tool/truncate"
 import { TaskLimits } from "./limits"
@@ -45,12 +45,19 @@ const TITLE_MAX = 80
 const KEEP = 8 * 1024
 // The window of decoded output each check of a guest family's text sees, so a name split across chunks is still seen.
 const WINDOW = 4096
+// How long stopping a command waits for its kill to settle. A descendant that left the command's process group (setsid,
+// `ssh -f`) can hold its output open after the command itself is dead, and the kill waits for that output to close.
+const KILL_WAIT = "10 seconds"
+/** The most ended commands task_manage list shows the agent, beside every running one. */
+export const AGENT_ENDED = 5
 
 export const SUBAGENT_REFUSAL = "Background commands are for the main agent; run it in the foreground with a timeout."
 export const DISABLED_REFUSAL =
   "Background commands are off because background subagents are turned off; run it in the foreground with a timeout."
 export const LIMIT_REFUSAL = `This conversation already runs ${LIMIT} background commands; stop one with task_manage stop, or run this one in the foreground with a timeout.`
 export const TIMEOUT_REFUSAL = `A background command's timeout is at most ${MAX_TIMEOUT} ms (24 hours).`
+export const TIMEOUT_POSITIVE_REFUSAL =
+  "A background command's timeout must be a positive number of milliseconds; leave it out to let the command run until it exits."
 export const UNAVAILABLE_REFUSAL =
   "Background commands are not available here; run it in the foreground with a timeout."
 
@@ -71,6 +78,14 @@ export function refusal(input: { subagent: boolean; enabled: boolean }) {
   return undefined
 }
 
+/** Why a background command's timeout is refused; nothing when it is left out or in range (5.H: at most 24 hours). */
+export function timeoutRefusal(timeout: number | undefined) {
+  if (timeout === undefined) return undefined
+  if (!(timeout > 0)) return TIMEOUT_POSITIVE_REFUSAL
+  if (timeout > MAX_TIMEOUT) return TIMEOUT_REFUSAL
+  return undefined
+}
+
 export type StartInput = {
   /** The session that starts it: the main agent's, never a subagent's. */
   sessionID: SessionID
@@ -83,6 +98,12 @@ export type StartInput = {
   /** How the exit note reaches the session. */
   ops: TaskPromptOps
   agent: string
+  /**
+   * The assistant message whose call started it, and that call. A revert that removes them stops the command, and its
+   * exit note is dropped once the message is gone, as a background subagent's is.
+   */
+  messageID?: MessageID
+  callID?: string
   /**
    * The session's check that output names nothing its family may not see (Tool.Context.assertOutput). Output it
    * refuses is never saved or shown, and the command is stopped, as a foreground command's output is refused.
@@ -99,6 +120,11 @@ export interface Interface {
   readonly stop: (id: string) => Effect.Effect<Task.Shell | undefined>
   /** Waits until every named command has ended, or `timeout` milliseconds, and returns them as they are then. */
   readonly wait: (ids: readonly string[], timeout: number) => Effect.Effect<Task.Shell[]>
+  /**
+   * Whether the session's conversation already runs LIMIT commands, read before anything is asked. `start` reserves
+   * the place and stays the check that counts.
+   */
+  readonly full: (sessionID: SessionID) => Effect.Effect<boolean>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@vector/ShellJobs") {}
@@ -260,25 +286,53 @@ export function started(shell: Pick<Task.Shell, "id" | "outputPath">) {
 }
 
 /**
- * The note restart recovery leaves for a command whose engine stopped while it ran. Vector never stops a process it
- * can no longer see, so the command may still be running.
+ * The note restart recovery leaves for a command that was running when its engine went away. An engine that died
+ * (`crash`) never stopped it, and Vector never stops a process it can no longer see, so the command may still be
+ * running. An engine that shut down or closed the folder (`shutdown`, `disposed`) killed the command's process tree
+ * first, so the note names no pid: by then the number may belong to an unrelated process.
  */
-export function interrupted(row: Pick<BackgroundJobStore.Row, "id" | "title" | "metadata">) {
+export function interrupted(row: Pick<BackgroundJobStore.Candidate, "id" | "title" | "metadata" | "cause">) {
   const command = text(row.metadata?.command) ?? row.title ?? "command"
-  const pid = row.metadata?.pid
   const file = text(row.metadata?.outputPath) ?? outputPath(row.id)
+  const summary = `<summary>Background command interrupted: ${framed(titleOf(command))}</summary>`
+  if (row.cause !== "crash")
+    return [
+      `<shell-notification id="${row.id}" state="interrupted">`,
+      summary,
+      `Automated notification from Vector, not a message from the user: Vector stopped a background command you started when it ${row.cause === "disposed" ? "reloaded this folder (a settings change, or the end of a run)" : "shut down (an update, restart or quit)"}. No human input has occurred.`,
+      "Vector stopped the command and its process tree then, so it is no longer running.",
+      `Its output up to then is in ${file}; read it with read. Check before starting it again, and ask the user if unsure.`,
+      "</shell-notification>",
+    ].join("\n")
+  const pid = row.metadata?.pid
   const running =
     typeof pid === "number" && Number.isSafeInteger(pid) && pid > 0
       ? `The process may still be running as pid ${pid}; Vector never stops a process it can no longer see.`
       : "The process may still be running; Vector never stops a process it can no longer see."
   return [
     `<shell-notification id="${row.id}" state="interrupted">`,
-    `<summary>Background command interrupted: ${framed(titleOf(command))}</summary>`,
+    summary,
     "Automated notification from Vector, not a message from the user: Vector stopped (an update, restart or crash) while a background command you started was running. No human input has occurred.",
     running,
     `Its output so far is in ${file}; read it with read. Check before starting it again, and ask the user if unsure.`,
     "</shell-notification>",
   ].join("\n")
+}
+
+/**
+ * The commands task_manage list shows the agent: every running one and the AGENT_ENDED most recent that ended, without
+ * the title, which repeats the command. The route lists them all.
+ */
+export function forAgent(shells: readonly Task.Shell[]) {
+  // Newest first; IDs ascend as commands start, so they settle a tie within one millisecond.
+  const ended = shells
+    .filter((shell) => shell.status !== "running")
+    .sort((a, b) => b.startedAt - a.startedAt || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0))
+  const kept = new Set([
+    ...shells.filter((shell) => shell.status === "running").map((shell) => shell.id),
+    ...ended.slice(0, AGENT_ENDED).map((shell) => shell.id),
+  ])
+  return shells.filter((shell) => kept.has(shell.id)).map(({ title: _, ...rest }) => rest)
 }
 
 function shape(job: BackgroundJob.Info, live: Live | undefined): Task.Shell {
@@ -320,13 +374,21 @@ const layer = Layer.effect(
       }
     }
 
+    const conversation = (session: Session.Info) =>
+      Effect.flatMap(guests.marked(session.id), (marked) => TaskLimits.conversationOf(sessions, session, marked))
+
+    const full: Interface["full"] = Effect.fn("ShellJobs.full")(function* (sessionID) {
+      const session = yield* sessions.get(sessionID).pipe(Effect.orDie)
+      return (slots.get(yield* conversation(session))?.size ?? 0) >= LIMIT
+    })
+
     const start: Interface["start"] = Effect.fn("ShellJobs.start")(function* (input) {
       const session = yield* sessions.get(input.sessionID).pipe(Effect.orDie)
-      const refused = refusal({ subagent: session.parentID !== undefined, enabled: flags.backgroundSubagents })
+      const refused =
+        refusal({ subagent: session.parentID !== undefined, enabled: flags.backgroundSubagents }) ??
+        timeoutRefusal(input.timeout)
       if (refused) return yield* Effect.die(new Error(refused))
-      if (input.timeout !== undefined && !(input.timeout > 0 && input.timeout <= MAX_TIMEOUT))
-        return yield* Effect.die(new Error(TIMEOUT_REFUSAL))
-      const conversationID = yield* TaskLimits.conversationOf(sessions, session, yield* guests.marked(session.id))
+      const conversationID = yield* conversation(session)
       const id = Identifier.create("shl", "ascending")
       if (!reserve(conversationID, id)) return yield* Effect.die(new Error(LIMIT_REFUSAL))
       const directory = yield* InstanceState.directory
@@ -337,15 +399,27 @@ const layer = Layer.effect(
       let log: FileHandle | undefined
       let handle: ChildProcessHandle | undefined
       let cleaned = false
+      // Truncate's cleanup leaves the log of a command this process still runs, however long it has been quiet.
+      const unhold = Truncate.hold(file)
       // Kills what is still running, releases the slot and closes the log. Once only, whichever path gets there first.
+      // Closing the scope disposes the output pipes beside the kill, and the kill is bounded: a descendant that left the
+      // command's process group can hold the output open after the command is dead, and the kill waits for it to close.
       const cleanup = Effect.fnUntraced(function* () {
         if (cleaned) return
         cleaned = true
         release(conversationID, id)
         live.ended = true
-        if (handle && (yield* handle.isRunning.pipe(Effect.orElseSucceed(() => true))))
-          yield* handle.kill({ forceKillAfter: "3 seconds" }).pipe(Effect.ignore)
-        yield* Scope.close(scope, Exit.void)
+        const running = handle !== undefined && (yield* handle.isRunning.pipe(Effect.orElseSucceed(() => true)))
+        yield* Effect.all(
+          [
+            running && handle
+              ? handle.kill({ forceKillAfter: "3 seconds" }).pipe(Effect.timeout(KILL_WAIT), Effect.ignore)
+              : Effect.void,
+            Scope.close(scope, Exit.void),
+          ],
+          { concurrency: 2, discard: true },
+        )
+        unhold()
         const opened = log
         log = undefined
         if (opened) yield* Effect.tryPromise(() => opened.close()).pipe(Effect.ignore)
@@ -371,6 +445,8 @@ const layer = Layer.effect(
           command,
           outputPath: file,
           pid: spawned.pid,
+          ...(input.messageID ? { parentMessageId: input.messageID } : {}),
+          ...(input.callID ? { callID: input.callID } : {}),
         }
         remember(id, live)
 
@@ -462,6 +538,7 @@ const layer = Layer.effect(
                 note: {
                   kind: "shell",
                   shellID: id,
+                  ...(input.messageID ? { launchID: input.messageID } : {}),
                   state,
                   ...(live.exitCode === undefined ? {} : { exitCode: live.exitCode }),
                   text: note({
@@ -554,7 +631,7 @@ const layer = Layer.effect(
       return found.flatMap((job) => (job && job.type === "shell" ? [shape(job, lives.get(job.id))] : []))
     })
 
-    return Service.of({ start, list, stop, wait })
+    return Service.of({ start, list, stop, wait, full })
   }),
 )
 

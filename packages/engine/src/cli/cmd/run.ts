@@ -2,7 +2,7 @@ import { Billing } from "@vectordevai/schema/billing"
 import { stepForOutput, toolForOutput } from "./run/usage-output"
 import type { PermissionV1 } from "@vectordevai/core/v1/permission"
 import { FSUtil } from "@vectordevai/core/fs-util"
-import { backgroundTracker, nextBackgroundEvent } from "./run/background-wait"
+import { backgroundTracker, nextBackgroundEvent, trackShell, waitingFor } from "./run/background-wait"
 import { runWorkflow } from "./run/workflow"
 import { assertWorkflowOwner, parseWorkflowInputs, readWorkflowSource, requireWorkflowCapability } from "./workflow"
 // CLI entry point for `vector run` and `vector --mini`.
@@ -1046,7 +1046,8 @@ export const RunCommand = effectCmd({
           // A background subagent reports back in a follow-up turn after this session goes idle, and exiting would stop
           // it, so the run waits for each one it launched and for the turn that answers it. A stopped one starts no
           // turn. A note is answered once an assistant message created after it finishes: one that lands while a turn
-          // is ending is read by the next turn, which starts after the session has briefly gone idle.
+          // is ending is read by the next turn, which starts after the session has briefly gone idle. A background
+          // command (5.H) is waited for the same way, from the shell call that started it to its exit note.
           const background = backgroundTracker()
           let idle = false
           let activeAt = Date.now()
@@ -1063,7 +1064,7 @@ export const RunCommand = effectCmd({
             if (failure.request) break
             if (next.timedOut || next.disconnected) {
               const message = next.timedOut
-                ? `Stopped waiting for ${background.running.size + background.unanswered.size} background subagent(s) after ${Math.round(backgroundWait / 1000)}s without activity`
+                ? `Stopped waiting for ${waitingFor(background)} after ${Math.round(backgroundWait / 1000)}s without activity`
                 : "The event stream ended before the parent and its background subagents finished. Completion could not be confirmed."
               error = error ? error + EOL + message : message
               if (
@@ -1179,6 +1180,7 @@ export const RunCommand = effectCmd({
                 )
                 if (idle && waited()) break
               }
+              if (part.sessionID === sessionID && trackShell(background, part) && idle && waited()) break
               if (part.sessionID !== sessionID) {
                 // A subagent's steps bill this run too. JSON output reports them, marked as a subagent's, so a
                 // consumer that totals step_finish records gets what the run spent.

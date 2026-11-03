@@ -2109,6 +2109,8 @@ export const ShellTool = Tool.define(
         ...(input.timeout === undefined ? {} : { timeout: input.timeout }),
         ops: input.ops,
         agent: ctx.agent,
+        messageID: ctx.messageID,
+        ...(ctx.callID ? { callID: ctx.callID } : {}),
         ...(ctx.assertOutput ? { output: ctx.assertOutput } : {}),
       })
       const output = ShellJobs.started(shell)
@@ -2148,15 +2150,16 @@ export const ShellTool = Tool.define(
               if (params.timeout !== undefined && params.timeout < 0) {
                 throw new Error(`Invalid timeout value: ${params.timeout}. Timeout must be a positive number.`)
               }
-              // A background command is refused before anything is asked when this session may not start one (5.H).
+              // A background command is refused before anything is asked when this session may not start one, its
+              // timeout is out of range, or its conversation already runs the most it may (5.H). Start reserves the
+              // place, so the limit is checked there again.
               const ops = ctx.extra?.promptOps as TaskPromptOps | undefined
               if (params.background) {
                 const refused =
                   ShellJobs.refusal({ subagent: ctx.parentID !== undefined, enabled: flags.backgroundSubagents }) ??
                   (Option.isNone(jobs) || !ops ? ShellJobs.UNAVAILABLE_REFUSAL : undefined) ??
-                  (params.timeout !== undefined && params.timeout > ShellJobs.MAX_TIMEOUT
-                    ? ShellJobs.TIMEOUT_REFUSAL
-                    : undefined)
+                  ShellJobs.timeoutRefusal(params.timeout) ??
+                  (Option.isSome(jobs) && (yield* jobs.value.full(ctx.sessionID)) ? ShellJobs.LIMIT_REFUSAL : undefined)
                 if (refused) return yield* Effect.die(new Error(refused))
               }
               const timeout = params.timeout ?? defaultTimeoutMs
