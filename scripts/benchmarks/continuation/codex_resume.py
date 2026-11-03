@@ -546,6 +546,9 @@ def main(argv=None):
     snapshot = json.loads((options.old_run / "codex/attempts/1/source-manifest.json").read_text(encoding="utf-8"))
     prepare_adopted_adapter(adapter, options.old_run / "codex", actual_runtime, original, snapshot, registry, plan["evaluationOverlay"])
     def check_frozen():
+        original_again, vector_again = codex_arm.original_inputs(options)
+        require(original_again == original and vector_again["arms"]["vector"] == summary["arms"]["vector"],
+                "immutable original Vector evidence changed")
         for name, checksum in OLD_FILES.items():
             require(file_hash(options.old_run / name) == checksum, "immutable prior attempt evidence changed")
         require(heavy.build_plan(runtime, common) == {**original, "teamInstrumentFiles": plan["witnessInstrumentFiles"]}
