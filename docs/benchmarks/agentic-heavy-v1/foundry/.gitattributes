@@ -1,2 +1,2 @@
-instrument/** -text
-owned_process.py -text
+instrument/** -text whitespace=cr-at-eol
+owned_process.py -text whitespace=cr-at-eol

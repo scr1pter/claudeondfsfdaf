@@ -32,6 +32,10 @@ executed sources are:
 | `instrument/evaluate.py` | `ebaa5108a5493b737a61f3f6f7edb013626f6af762a7415271e0fb9a00df68cc` |
 | `instrument/browser-eval.cjs` | `b6784542f7ac1d943e96f58029e1f890a92a0bb8ec039dd1ce345ab47bd8a262` |
 
+Copied archives retain their original line endings byte for byte. Their local
+Git attributes preserve those bytes and recognize CRLF line endings; newly
+authored adapter files retain the ordinary repository text/whitespace rules.
+
 The historical common evaluation retained all **32 API groups and 40 browser
 checks**, typecheck/build/startup, post-stop cryptographic password verification,
 restart persistence, concurrency, tenant boundaries, and authored-source
