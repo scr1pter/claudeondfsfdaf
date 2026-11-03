@@ -328,6 +328,26 @@ class PairedRunnerTests(unittest.TestCase):
             self.assertNotIn("23130", text)
         self.assertEqual(smoke.scripted_calls("vector", 4, tools, 4123), [])
 
+    def test_fake_smoke_requires_actual_shell_exit_and_browser_fixture_success(self):
+        output = '{"ok":true,"fixture":"adapter-smoke-only"}\n{"ok":true,"action":"open","snapshot":{"title":"Adapter smoke fixture"}}'
+        for runtime in ("vector", "codex"):
+            directory = self.directory / (runtime + "-smoke-capabilities")
+            log = directory / "attempts/1/agent.stdout.log"
+            log.parent.mkdir(parents=True)
+            adapter = SimpleNamespace(directory=directory, runtime=runtime,
+                fixture_hits=[{"api": True, "browser": False}, {"api": False, "browser": True}])
+            for code in (1, 0):
+                row = {"part": {"type": "tool", "tool": "bash", "state": {"metadata": {"exit": code}, "output": output}}} if runtime == "vector" else {
+                    "type": "item.completed", "item": {"type": "command_execution", "exit_code": code, "aggregated_output": output}}
+                log.write_text(json.dumps(row) + "\n")
+                actual = smoke.capabilities(adapter)
+                self.assertEqual(actual["successfulActualShellApiAndCommonBrowser"], code == 0)
+                self.assertEqual(actual["fixtureBrowserPageRequests"], 1)
+            row = {"part": {"type": "tool", "tool": "bash", "state": {"metadata": {"exit": 0}, "output": "API only"}}} if runtime == "vector" else {
+                "type": "item.completed", "item": {"type": "command_execution", "exit_code": 0, "aggregated_output": "API only"}}
+            log.write_text(json.dumps(row) + "\n")
+            self.assertFalse(smoke.capabilities(adapter)["successfulActualShellApiAndCommonBrowser"])
+
     def test_default_plan_never_reads_supplied_missing_private_files(self):
         roots = {name: self.directory / name for name in (
             "vector-root", "common-runner-root", "task-root", "browser-driver-root", "playwright-module")}
