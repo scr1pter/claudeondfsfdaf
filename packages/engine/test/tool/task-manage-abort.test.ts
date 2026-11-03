@@ -3,20 +3,23 @@ import { Cause, Deferred, Effect, Exit, Layer } from "effect"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { ProviderV2 } from "@vectordevai/core/provider"
 import { ModelV2 } from "@vectordevai/core/model"
+import { Database } from "@vectordevai/core/database/database"
 import { BackgroundJob } from "@/background/job"
+import { Agent } from "@/agent/agent"
 import { EffectBridge } from "@/effect/bridge"
 import { TaskManager } from "@/task/manager"
 import { Session } from "@/session/session"
+import { SessionStatus } from "@/session/status"
 import { MessageID } from "@/session/schema"
 import { SubagentLifecycle } from "@/tool/subagent-lifecycle"
 import { TaskManageTool } from "@/tool/task-manage"
-import { ToolRegistry } from "@/tool/registry"
 import { Tool } from "@/tool/tool"
+import { Truncate } from "@/tool/truncate"
 import { disposeAllInstances } from "../fixture/fixture"
 import { awaitWithTimeout, testEffect } from "../lib/effect"
 
 afterEach(disposeAllInstances)
-const it = testEffect(LayerNode.compile(ToolRegistry.node))
+const it = testEffect(LayerNode.compile(LayerNode.group([TaskManager.node, Session.node, Database.node, BackgroundJob.node, SessionStatus.node, Agent.node, Truncate.node])))
 
 const fixture = Effect.fn("TaskManageAbortTest.fixture")(function* () {
   const sessions = yield* Session.Service

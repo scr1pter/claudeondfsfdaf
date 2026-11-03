@@ -24,7 +24,7 @@ function hasTool(body: Record<string, unknown>) {
 }
 
 for (const format of ["default", "json"] as const)
-  cliIt(
+  cliIt.concurrent(
     `nested first-step activity keeps an idle background run alive in ${format} output without permission prompts`,
     ({ llm, vector }) =>
       Effect.gen(function* () {
