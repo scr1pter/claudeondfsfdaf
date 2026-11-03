@@ -507,7 +507,7 @@ def main(argv=None):
         if options.write_plan:
             team.checked_path(options.write_plan, [options.out, options.old_run, options.original_plan.parent,
                 options.witness_root, Path(__file__).resolve().parents[3], runtime.vector_root, runtime.task_dir,
-                runtime.common_runner_root, runtime.browser_driver_root])
+                runtime.common_runner_root, runtime.browser_driver_root, Path(plan["evaluationOverlay"]["root"])])
             common.save(options.write_plan, plan)
         print(json.dumps({"plan": plan, "planSha256": digest(plan), "paidExecutionRequested": False}, indent=2))
         return 0
