@@ -44,7 +44,7 @@ def healthy(state, before=None, idle=False, funding_profile=None):
     require(isinstance(state, dict), "unknown funding state")
     require(state.get("limitUsd") == 48 and state.get("phaseID") == policy.phase and state.get("halted") is None, "funding policy changed or halted")
     require(policy.plan_sha256 is None or state.get("phasePlanSha256") == policy.plan_sha256, "funding allocation plan changed")
-    require(known(state.get("measuredUsd")) and state["measuredUsd"] >= policy.minimum_usd and known(state.get("reservedUsd")) and state["measuredUsd"] + state["reservedUsd"] <= 48 + 1e-8, "global funding state invalid")
+    require(known(state.get("measuredUsd")) and state["measuredUsd"] >= policy.minimum_usd - 1e-8 and known(state.get("reservedUsd")) and state["measuredUsd"] + state["reservedUsd"] <= 48 + 1e-8, "global funding state invalid")
     require(isinstance(state.get("attempts"), int) and not isinstance(state["attempts"], bool) and state["attempts"] >= policy.minimum_requests and isinstance(state.get("active"), int) and state["active"] >= 0, "request history invalid")
     for actor in ACTORS.values():
         row = state.get("actors", {}).get(actor, {})
@@ -52,9 +52,9 @@ def healthy(state, before=None, idle=False, funding_profile=None):
         if before:
             require(row["measuredUsd"] >= before["actors"][actor]["measuredUsd"] - 1e-8, "actor spending rewound")
     if policy.plan_sha256 is not None:
-        require(state["actors"]["foundry-vector"]["measuredUsd"] >= 10.8884618 and state["actors"]["foundry-codex"]["measuredUsd"] >= 6.4715992, "heavy actor history rewound")
+        require(state["actors"]["foundry-vector"]["measuredUsd"] >= 10.8884618 - 1e-8 and state["actors"]["foundry-codex"]["measuredUsd"] >= 6.4715992 - 1e-8, "heavy actor history rewound")
         others = [row for actor, row in state["actors"].items() if actor not in ACTORS.values()]
-        require(all(known(row.get("measuredUsd")) and row.get("limitUsd") == row["measuredUsd"] and row.get("reservedUsd") == 0 for row in others) and abs(math.fsum(row["measuredUsd"] for row in others) - 2.9437681) <= 1e-7, "historical actors unsealed or changed")
+        require(all(known(row.get("measuredUsd")) and known(row.get("limitUsd")) and abs(row["limitUsd"] - row["measuredUsd"]) <= 1e-8 and row.get("reservedUsd") == 0 for row in others) and abs(math.fsum(row["measuredUsd"] for row in others) - 2.9437681) <= 1e-7, "historical actors unsealed or changed")
         require(abs(math.fsum(row["measuredUsd"] for row in state["actors"].values()) - state["measuredUsd"]) <= 1e-7 and abs(math.fsum(row["reservedUsd"] for row in state["actors"].values()) - state["reservedUsd"]) <= 1e-7, "heavy funding totals do not reconcile")
     if before:
         require(state["attempts"] >= before["attempts"] and state["measuredUsd"] >= before["measuredUsd"] - 1e-8, "funding history rewound")

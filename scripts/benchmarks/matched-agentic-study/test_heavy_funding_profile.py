@@ -16,6 +16,21 @@ def state():
 
 
 class HeavyFundingProfileTests(unittest.TestCase):
+    def test_accumulated_receipt_roundoff_preserves_floor_but_material_rewind_fails(self):
+        observed = state()
+        observed["measuredUsd"] = 20.303829099999998
+        observed["actors"]["foundry-vector"]["measuredUsd"] = 10.888461799999998
+        observed["actors"]["foundry-codex"]["measuredUsd"] = 6.471599199999997
+        observed["actors"]["synthetic-sealed-history"]["measuredUsd"] = 2.9437680999999995
+        self.assertIs(healthy(observed, idle=True, funding_profile=HEAVY_PHASE), observed)
+        for actor in (None, "foundry-vector", "foundry-codex"):
+            changed = copy.deepcopy(observed)
+            target = changed if actor is None else changed["actors"][actor]
+            target["measuredUsd"] -= 0.000001
+            reason = "global funding state invalid" if actor is None else "heavy actor history rewound"
+            with self.subTest(actor=actor), self.assertRaisesRegex(PolicyError, reason):
+                healthy(changed, idle=True, funding_profile=HEAVY_PHASE)
+
     def test_exact_approved_phase_retains_every_prior_charge_and_equal_remaining_allocations(self):
         approved = healthy(state(), idle=True, funding_profile=HEAVY_PHASE)
         remaining = [approved["actors"][actor]["limitUsd"] - approved["actors"][actor]["measuredUsd"] for actor in ("foundry-vector", "foundry-codex")]
