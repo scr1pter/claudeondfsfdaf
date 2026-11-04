@@ -126,6 +126,29 @@ describe("helperTargets", () => {
     expect(helperTargets([])).toBe(NO_HELPERS)
     expect(helperTargets([agent({ background: false })])).toBe(NO_HELPERS)
   })
+
+  test("a workflow run counts once: its agents the Tasks pane loaded stop with the run", () => {
+    const run = agent({
+      sessionID: "ses_run",
+      task: task({ id: "ses_run", sessionID: "ses_run", workflow: { role: "run", runID: "ses_run" } }),
+    })
+    const step = agent({
+      sessionID: "ses_w1",
+      task: task({
+        id: "ses_w1",
+        sessionID: "ses_w1",
+        parentSessionID: "ses_run",
+        groupID: "workflow:ses_run",
+        workflow: { role: "agent", runID: "ses_run", stage: "scan" },
+      }),
+    })
+    expect(helperTargets([run, step])).toEqual({
+      count: 1,
+      taskIDs: ["ses_run"],
+      sessionIDs: ["ses_run"],
+      untracked: [],
+    })
+  })
 })
 
 describe("stopSession fallback chain", () => {

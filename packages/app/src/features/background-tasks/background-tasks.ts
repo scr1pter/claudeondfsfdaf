@@ -1,19 +1,30 @@
 import { createComputed, createEffect, createMemo, createSignal, on, onCleanup, type Accessor } from "solid-js"
-import { createStore, reconcile } from "solid-js/store"
+import { createStore, produce, reconcile } from "solid-js/store"
 import type { Session } from "@vectordevai/sdk/v2"
 import type { VectorClient } from "@vectordevai/sdk/v2/client"
 import type { Task } from "@vectordevai/schema/task"
+import type { Prompt } from "@/context/prompt"
 import type { DirectorySync } from "@/context/sync"
 import { showToast } from "@/utils/toast"
 import { modelDisplayName } from "@/utils/provider-brand"
 import { isInternalSession } from "@/utils/internal-sessions"
 import { loadDismissed, saveDismissed } from "./background-tasks-state"
-import { mergeTaskBoard, stoppableAgents } from "./task-board-model"
+import { NO_CAPABILITIES, type EngineCapabilities } from "./engine-capabilities"
+import {
+  appendTaskConflicts,
+  appendTaskContinuation,
+  mergeTaskBoard,
+  promotableAgents,
+  promotesBatch,
+  stoppableAgents,
+} from "./task-board-model"
+import { english, readLimits, type TaskTranslate } from "./task-limits"
 import {
   buildTaskCards,
   freshestSession,
   idleLiveSessions,
   isDismissed,
+  isInterrupted,
   isLive,
   liveAgentCount,
   runningAgentCount,
@@ -24,6 +35,162 @@ import {
   type TaskLocation,
   type TaskSource,
 } from "./subagent-model"
+
+// ---------------------------------------------------------------------------
+// Requests (5.I.3). Pure over a client, so the pane, the chips and their tests share one behaviour.
+
+export type TaskActionsClient = {
+  experimental: {
+    session: Pick<VectorClient["experimental"]["session"], "background">
+    task: Pick<VectorClient["experimental"]["task"], "background" | "resume" | "merge" | "discard" | "changes">
+    workflow: Pick<VectorClient["experimental"]["workflow"], "resume">
+  }
+}
+
+/** Route 3 takes at most 32 task IDs per request. */
+export const RESUME_CHUNK = 32
+
+function chunks<T>(items: readonly T[], size: number) {
+  return Array.from({ length: Math.ceil(items.length / size) }, (_, index) =>
+    items.slice(index * size, (index + 1) * size),
+  )
+}
+
+/** The HTTP status and body the SDK keeps on an error thrown with `throwOnError`. */
+function errorCause(error: unknown) {
+  if (!(error instanceof Error)) return undefined
+  const cause = error.cause as { status?: unknown; body?: { code?: unknown } } | undefined
+  return {
+    status: typeof cause?.status === "number" ? cause.status : undefined,
+    code: typeof cause?.body?.code === "string" ? cause.body.code : undefined,
+  }
+}
+
+/** A refusal for a principal who is not the server owner: merge, discard and workflow resume are owner-only (I11). */
+export function ownerOnlyRefusal(error: unknown) {
+  return errorCause(error)?.status === 403
+}
+
+/**
+ * Move to background. With `taskPromote`, route 2 moves the named tasks, batch entries included, and answers which it
+ * moved. Without it, the old route moves a single blocking subagent and answers a boolean. Resolves false when nothing
+ * moved, so the caller can say so.
+ */
+export async function promoteRequest(input: {
+  client: TaskActionsClient
+  sessionID: string
+  taskIDs: readonly string[]
+  taskPromote: boolean
+}): Promise<boolean> {
+  if (input.taskPromote) {
+    const result = await input.client.experimental.task.background(
+      { sessionID: input.sessionID, taskIDs: [...input.taskIDs] },
+      { throwOnError: true },
+    )
+    return (result.data?.tasks.length ?? 0) > 0
+  }
+  const result = await input.client.experimental.session.background(
+    { sessionID: input.sessionID },
+    { throwOnError: true },
+  )
+  return result.data === true
+}
+
+export type ResumeOutcome = {
+  requested: number
+  /** The tasks the engine resumed, as it observed them after the start. */
+  resumed: readonly Task.Info[]
+  /** IDs asked for that came back in no result: refused, or in a request that failed. */
+  missing: readonly string[]
+  /** The first failed request's error; the requests before it stand. */
+  error?: unknown
+}
+
+/**
+ * Route 3 in chunks of 32. The engine resumes a request's IDs all or none, so a failed chunk leaves its IDs missing
+ * while earlier chunks stand; a later chunk is not sent after a failure. A result that lists fewer tasks than asked
+ * is a partial resume too.
+ */
+export async function resumeRequest(input: {
+  client: TaskActionsClient
+  sessionID: string
+  taskIDs: readonly string[]
+  text?: string
+}): Promise<ResumeOutcome> {
+  const ids = [...new Set(input.taskIDs)]
+  const resumed: Task.Info[] = []
+  let error: unknown
+  for (const taskIDs of chunks(ids, RESUME_CHUNK)) {
+    const result = await input.client.experimental.task
+      .resume(
+        { sessionID: input.sessionID, taskIDs: [...taskIDs], ...(input.text ? { text: input.text } : {}) },
+        { throwOnError: true },
+      )
+      .catch((cause: unknown) => {
+        error = cause
+        return undefined
+      })
+    if (error !== undefined) break
+    resumed.push(...(result?.data?.tasks ?? []))
+  }
+  const done = new Set(resumed.flatMap((task) => [task.id, task.sessionID ?? task.id]))
+  return {
+    requested: ids.length,
+    resumed,
+    missing: ids.filter((id) => !done.has(id)),
+    ...(error !== undefined ? { error } : {}),
+  }
+}
+
+/** Route 4: an isolated child's changed files, with the patch for the owner. */
+export async function changesRequest(input: { client: TaskActionsClient; sessionID: string; taskID: string }) {
+  const result = await input.client.experimental.task.changes(
+    { sessionID: input.sessionID, taskID: input.taskID, diff: "true" },
+    { throwOnError: true },
+  )
+  if (!result.data) throw new Error("The changes are unavailable.")
+  return result.data
+}
+
+/** Route 5 (owner only): brings the child's saved changes, or the named files, into the checkout. */
+export async function mergeRequest(input: {
+  client: TaskActionsClient
+  sessionID: string
+  taskID: string
+  files?: readonly string[]
+}) {
+  const result = await input.client.experimental.task.merge(
+    { sessionID: input.sessionID, taskID: input.taskID, ...(input.files?.length ? { files: [...input.files] } : {}) },
+    { throwOnError: true },
+  )
+  if (!result.data) throw new Error("The merge result is unavailable.")
+  return result.data
+}
+
+/** Route 6 (owner only): keeps a recovery copy, then removes the child's worktree and branch. */
+export async function discardRequest(input: { client: TaskActionsClient; sessionID: string; taskID: string }) {
+  const result = await input.client.experimental.task.discard(
+    { sessionID: input.sessionID, taskID: input.taskID, reason: "Discarded by the user" },
+    { throwOnError: true },
+  )
+  if (!result.data) throw new Error("The discard result is unavailable.")
+  return result.data
+}
+
+/** "Continue with this message": route 3 with text, which also continues a completed child (5.D.3 check 4). */
+export function continueRequest(input: { client: TaskActionsClient; sessionID: string; taskID: string; text: string }) {
+  return resumeRequest({ client: input.client, sessionID: input.sessionID, taskIDs: [input.taskID], text: input.text })
+}
+
+/** Route 12 (owner only): resumes a workflow run, reusing its finished agents and retrying failed ones. */
+export async function resumeRunRequest(input: { client: TaskActionsClient; sessionID: string; runID: string }) {
+  const result = await input.client.experimental.workflow.resume(
+    { sessionID: input.sessionID, runID: input.runID, workflowResumeInput: { retryFailed: true } },
+    { throwOnError: true },
+  )
+  if (!result.data) throw new Error("The workflow run did not resume.")
+  return result.data
+}
 
 export type BackgroundTasks = {
   /** The top of the open session's family: its own id, or its parent's when a subagent is open. */
@@ -61,6 +228,37 @@ export type BackgroundTasks = {
   error: Accessor<string | undefined>
   draft(agent: TaskAgent): string
   setDraft(agent: TaskAgent, text: string): void
+  /** The engine's capability flags for this server; all off when unknown. */
+  capabilities: Accessor<EngineCapabilities>
+  /** The conversation's limits line data, sent only to the owner by an engine with `subagentLimits`. */
+  limits: Accessor<Task.Limits | undefined>
+  /** Background commands of the root session, from an engine with `backgroundShells`. */
+  shells: Accessor<readonly Task.Shell[]>
+  /** Helpers a restart interrupted that are neither resumed nor dismissed, once each. */
+  interrupted: Accessor<readonly TaskAgent[]>
+  /** Of these agents, the ones Move to background can move. */
+  promotable(agents: readonly TaskAgent[]): TaskAgent[]
+  /** True when the engine can move only a single subagent and these are a batch. */
+  promoteBlocked(agents: readonly TaskAgent[]): boolean
+  /** Moves them to the background; false (after a toast) when nothing moved. */
+  promote(agents: readonly TaskAgent[]): Promise<boolean>
+  /** Resumes stopped or interrupted helpers (route 3); a toast reports a partial resume. */
+  resume(agents: readonly TaskAgent[], text?: string): Promise<ResumeOutcome>
+  /** Fills the root composer with "continue it", an agent part naming its subagent type, and the draft. */
+  askToContinue(agent: TaskAgent): void
+  changes(agent: TaskAgent): Promise<Task.ChangesResult>
+  merge(agent: TaskAgent): Promise<Task.MergeResult>
+  discard(agent: TaskAgent): Promise<Task.DiscardResult>
+  /** Fills the root composer with a request to resolve a merge's conflicts. */
+  resolveConflicts(agent: TaskAgent, conflicts: readonly string[]): void
+  stopShell(shell: Task.Shell): Promise<void>
+  canOpenOutput(shell: Task.Shell): boolean
+  openOutput(shell: Task.Shell): void
+  /** While the caller is mounted, load this workflow run's agents and keep them current with the board. */
+  watchRun(runID: Accessor<string | undefined>): void
+  runLoading(runID: string): boolean
+  canResumeRun(run: TaskAgent): boolean
+  resumeRun(run: TaskAgent): Promise<void>
 }
 
 export type BackgroundTasksInput = {
@@ -76,7 +274,14 @@ export type BackgroundTasksInput = {
   /** Opens a session's page. */
   open(sessionID: string): void
   ask?(agent: TaskAgent, rootID: string): void
+  /** Changes the root session's composer draft and focuses it, opening the root when a subagent is open. */
+  compose?(rootID: string, change: (prompt: Prompt) => Prompt): void
   openDesktop?(task: Task.Info): void
+  /** Opens a local file in its app (desktop only). */
+  openPath?(path: string): Promise<void>
+  capabilities?: Accessor<EngineCapabilities>
+  /** The language's translator; English when absent. */
+  t?: TaskTranslate
   desktop?: {
     api: NonNullable<NonNullable<Window["api"]>["agentTasks"]>
     sourcePath: Accessor<string>
@@ -129,29 +334,52 @@ export function createBackgroundTasks(input: BackgroundTasksInput): BackgroundTa
     }),
   )
   const fetchedByID = createMemo(() => new Map(fetched().map((session) => [session.id, session])))
+  const t = input.t ?? english
+  const capabilities = () => input.capabilities?.() ?? NO_CAPABILITIES
   const [board, setBoard] = createStore<{
     tasks: readonly Task.Info[]
     desktop: readonly Task.Info[]
+    /** Workflow runs' agents, loaded while a run's stages are shown (`task.list` on the run). */
+    runs: Record<string, readonly Task.Info[]>
+    limits?: Task.Limits
+    shells: readonly Task.Shell[]
     refreshing: boolean
     truncated: { engine: boolean; desktop: boolean }
     error?: string
   }>({
     tasks: [],
     desktop: [],
+    runs: {},
+    shells: [],
     refreshing: false,
     truncated: { engine: false, desktop: false },
   })
   const [drafts, setDrafts] = createStore<Record<string, string>>({})
+  // Runs whose stages are on screen, with how many views hold each, and the ones loading for the first time.
+  const watched = new Map<string, number>()
+  const [loadingRuns, setLoadingRuns] = createStore<Record<string, boolean>>({})
   let boardRequest = 0
+  const loadRun = async (sessionID: string, runID: string, request: number) => {
+    if (!board.runs[runID]) setLoadingRuns(runID, true)
+    const result = await input
+      .client()
+      .experimental.task.list({ sessionID: runID })
+      .catch(() => undefined)
+    setLoadingRuns(runID, false)
+    if (request !== boardRequest || rootID() !== sessionID || !watched.has(runID)) return
+    if (result?.data && Array.isArray(result.data.tasks)) setBoard("runs", runID, result.data.tasks)
+  }
   const refreshBoard = async () => {
     const sessionID = rootID()
     if (!sessionID) return
     const request = ++boardRequest
     setBoard("refreshing", true)
+    const shells = capabilities().backgroundShells
+    for (const runID of watched.keys()) void loadRun(sessionID, runID, request)
     const [result, desktop] = await Promise.all([
       input
         .client()
-        .experimental.task.list({ sessionID, descendants: "true" })
+        .experimental.task.list({ sessionID, descendants: "true", ...(shells ? { shells: "true" as const } : {}) })
         .catch(() => undefined),
       input.desktop?.api
         .list({ parentSessionID: sessionID, sourcePath: input.desktop.sourcePath() })
@@ -165,7 +393,12 @@ export function createBackgroundTasks(input: BackgroundTasksInput): BackgroundTa
       setBoard("desktop", local.tasks)
       setBoard("truncated", "desktop", local.truncated)
     }
-    if (observed) setBoard("truncated", "engine", observed.truncated)
+    if (observed) {
+      setBoard("truncated", "engine", observed.truncated)
+      // Each answer replaces both: a guest's or an older engine's has neither, and none may linger.
+      setBoard("limits", readLimits(observed.limits))
+      setBoard("shells", Array.isArray(observed.shells) ? observed.shells : [])
+    }
     if (input.desktop && !local && board.desktop.length) {
       setBoard("error", "Desktop task updates unavailable. Showing the last known state.")
       if (observed) setBoard("tasks", observed.tasks)
@@ -191,10 +424,13 @@ export function createBackgroundTasks(input: BackgroundTasksInput): BackgroundTa
       setBoard({
         tasks: [],
         desktop: [],
+        limits: undefined,
+        shells: [],
         refreshing: false,
         truncated: { engine: false, desktop: false },
         error: undefined,
       })
+      setBoard("runs", reconcile({}))
     }),
   )
 
@@ -268,7 +504,14 @@ export function createBackgroundTasks(input: BackgroundTasksInput): BackgroundTa
     const root = rootID()
     let next: TaskCard[] = []
     try {
-      next = root ? mergeTaskBoard(buildTaskCards(source(root)), [...board.tasks, ...board.desktop]) : []
+      const current = root ? source(root) : undefined
+      next = current
+        ? mergeTaskBoard(
+            buildTaskCards(current),
+            [...board.tasks, ...board.desktop, ...Object.values(board.runs).flat()],
+            { modelName: current.modelName },
+          )
+        : []
     } catch (error) {
       console.error("[background-tasks] could not read subagents", error)
       return
@@ -399,10 +642,9 @@ export function createBackgroundTasks(input: BackgroundTasksInput): BackgroundTa
   }
   const liveBackground = createMemo(() => [
     ...new Set(
-      state.cards
-        .flatMap((card) => card.agents)
-        .filter((agent) => agent.background && isLive(agent.status) && agent.task?.controls.stop !== false)
-        .flatMap((agent) => agent.task?.id ?? agent.sessionID ?? []),
+      stoppableAgents(
+        state.cards.flatMap((card) => card.agents).filter((agent) => agent.background && isLive(agent.status)),
+      ).flatMap((agent) => agent.task?.id ?? agent.sessionID ?? []),
     ),
   ])
   const stopAllBackground = async () => {
@@ -524,6 +766,167 @@ export function createBackgroundTasks(input: BackgroundTasksInput): BackgroundTa
     })
   }
 
+  // ---------------------------------------------------------------------------
+  // 1.99.113 controls (5.I.3)
+
+  const actions = (): TaskActionsClient => input.client()
+  const taskID = (agent: TaskAgent) => agent.task?.id ?? agent.sessionID
+  const reload = async () => {
+    const root = rootID()
+    await Promise.allSettled([refreshBoard(), ...(root ? [input.sync().session.sync(root, { force: true })] : [])])
+  }
+  const failure = (title: string, error: unknown) =>
+    showToast({
+      variant: "error",
+      title,
+      description: error instanceof Error ? error.message : undefined,
+    })
+
+  const interrupted = createMemo(() => {
+    const seen = new Set<string>()
+    return state.cards
+      .flatMap((card) => card.agents)
+      .filter((agent) => {
+        const id = taskID(agent)
+        if (!id || seen.has(id) || !isInterrupted(agent)) return false
+        seen.add(id)
+        return true
+      })
+  })
+
+  const promotable = (agents: readonly TaskAgent[]) => promotableAgents(agents, rootID())
+  const promoteBlocked = (agents: readonly TaskAgent[]) =>
+    !capabilities().taskPromote && promotesBatch(promotable(agents))
+  const promote = async (agents: readonly TaskAgent[]) => {
+    const sessionID = rootID()
+    const targets = promotable(agents)
+    if (!sessionID || !targets.length || promoteBlocked(agents)) return false
+    const moved = await promoteRequest({
+      client: actions(),
+      sessionID,
+      taskIDs: targets.map((agent) => agent.task!.id),
+      taskPromote: capabilities().taskPromote,
+    }).catch((error: unknown) => {
+      failure(t("backgroundTasks.promote.failed.title"), error)
+      return undefined
+    })
+    if (moved === false)
+      showToast({
+        variant: "error",
+        title: t("backgroundTasks.promote.none.title"),
+        description: t("backgroundTasks.promote.none.description"),
+      })
+    await reload()
+    return moved === true
+  }
+
+  const resume = async (agents: readonly TaskAgent[], text?: string) => {
+    const sessionID = rootID()
+    const ids = [...new Set(agents.flatMap((agent) => taskID(agent) ?? []))]
+    if (!sessionID || !ids.length) return { requested: 0, resumed: [], missing: [] }
+    const outcome = await resumeRequest({ client: actions(), sessionID, taskIDs: ids, text })
+    if (outcome.missing.length && outcome.resumed.length)
+      showToast({
+        variant: "error",
+        title: t("backgroundTasks.resume.partial.title", {
+          resumed: outcome.resumed.length,
+          requested: outcome.requested,
+        }),
+        description:
+          outcome.error instanceof Error ? outcome.error.message : t("backgroundTasks.resume.partial.description"),
+      })
+    else if (outcome.missing.length)
+      failure(
+        t("backgroundTasks.resume.failed.title"),
+        outcome.error ?? new Error(t("backgroundTasks.resume.partial.description")),
+      )
+    await reload()
+    return outcome
+  }
+
+  const compose = (change: (prompt: Prompt) => Prompt) => {
+    const root = rootID()
+    if (root) input.compose?.(root, change)
+  }
+  const askToContinue = (agent: TaskAgent) =>
+    compose((prompt) => appendTaskContinuation(prompt, agent, drafts[taskID(agent) ?? agent.key] ?? ""))
+  const resolveConflicts = (agent: TaskAgent, conflicts: readonly string[]) =>
+    compose((prompt) => appendTaskConflicts(prompt, agent, conflicts))
+
+  const isolated = async <T>(agent: TaskAgent, run: (sessionID: string, taskID: string) => Promise<T>) => {
+    const sessionID = rootID()
+    const id = agent.task?.id
+    if (!sessionID || !id) throw new Error("This task is not available yet.")
+    return run(sessionID, id)
+  }
+  const changes = (agent: TaskAgent) =>
+    isolated(agent, (sessionID, id) => changesRequest({ client: actions(), sessionID, taskID: id }))
+  const merge = (agent: TaskAgent) =>
+    isolated(agent, (sessionID, id) => mergeRequest({ client: actions(), sessionID, taskID: id })).finally(() =>
+      reload(),
+    )
+  const discard = (agent: TaskAgent) =>
+    isolated(agent, (sessionID, id) => discardRequest({ client: actions(), sessionID, taskID: id })).finally(() =>
+      reload(),
+    )
+
+  const stopShell = async (shell: Task.Shell) => {
+    const sessionID = rootID()
+    if (!sessionID) return
+    await input
+      .client()
+      .experimental.task.stop({ sessionID, taskIDs: [shell.id], reason: "Stopped by the user" }, { throwOnError: true })
+      .catch((error: unknown) => failure(t("backgroundTasks.shells.stopFailed"), error))
+    await refreshBoard()
+  }
+  const canOpenOutput = (shell: Task.Shell) => !!shell.outputPath && !!input.openPath
+  const openOutput = (shell: Task.Shell) => {
+    if (shell.outputPath) void input.openPath?.(shell.outputPath).catch(() => undefined)
+  }
+
+  const watchRun = (runID: Accessor<string | undefined>) => {
+    createEffect(
+      on(runID, (id) => {
+        const root = rootID()
+        if (!id || !root) return
+        watched.set(id, (watched.get(id) ?? 0) + 1)
+        void loadRun(root, id, boardRequest)
+        onCleanup(() => {
+          const left = (watched.get(id) ?? 1) - 1
+          if (left > 0) {
+            watched.set(id, left)
+            return
+          }
+          watched.delete(id)
+          setBoard(
+            "runs",
+            produce((runs) => {
+              delete runs[id]
+            }),
+          )
+        })
+      }),
+    )
+  }
+  // A run that did not finish can be resumed by the owner (route 12), reusing its finished agents.
+  const canResumeRun = (run: TaskAgent) =>
+    capabilities().workflows &&
+    run.task?.workflow?.role === "run" &&
+    (run.task.controls.resume === true || run.status === "stopped" || run.status === "failed")
+  const resumeRun = async (run: TaskAgent) => {
+    const sessionID = rootID()
+    const id = run.task?.id
+    if (!sessionID || !id) return
+    await resumeRunRequest({ client: actions(), sessionID, runID: id })
+      .then(() => showToast({ variant: "success", title: t("backgroundTasks.workflow.resumed") }))
+      .catch((error: unknown) =>
+        ownerOnlyRefusal(error)
+          ? showToast({ variant: "error", title: t("backgroundTasks.workflow.ownerOnly") })
+          : failure(t("backgroundTasks.resume.failed.title"), error),
+      )
+    await reload()
+  }
+
   return {
     rootID,
     cards: () => state.cards,
@@ -553,5 +956,25 @@ export function createBackgroundTasks(input: BackgroundTasksInput): BackgroundTa
     error: () => board.error,
     draft: (agent) => drafts[agent.task?.id ?? agent.sessionID ?? agent.key] ?? "",
     setDraft: (agent, text) => setDrafts(agent.task?.id ?? agent.sessionID ?? agent.key, text),
+    capabilities,
+    limits: () => board.limits,
+    shells: () => board.shells,
+    interrupted,
+    promotable,
+    promoteBlocked,
+    promote,
+    resume,
+    askToContinue,
+    changes,
+    merge,
+    discard,
+    resolveConflicts,
+    stopShell,
+    canOpenOutput,
+    openOutput,
+    watchRun,
+    runLoading: (runID) => loadingRuns[runID] === true,
+    canResumeRun,
+    resumeRun,
   }
 }

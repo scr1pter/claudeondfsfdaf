@@ -40,6 +40,8 @@ export function helperTargets(agents: readonly TaskAgent[]): HelperTargets {
     if (!agent.background || !isLive(agent.status)) continue
     const task = agent.task
     if (task && (WORKSPACE_TASK.test(task.id) || task.source !== "subagent" || task.controls.stop === false)) continue
+    // A workflow run's agents, loaded while its stages are open, stop with their run: the run row is the helper.
+    if (task?.workflow?.role === "agent") continue
     const key = task?.id ?? agent.sessionID
     if (!key || seen.has(key)) continue
     seen.add(key)

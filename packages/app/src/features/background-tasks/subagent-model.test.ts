@@ -15,13 +15,18 @@ import {
   freshestSession,
   idleLiveSessions,
   isDismissed,
+  isInterrupted,
+  isolationLabel,
   kindLabel,
   liveAgentCount,
   liveBackgroundSessions,
   locateTaskPart,
+  modelEffortLabel,
   modelShortName,
   phaseName,
+  queuedLabel,
   readLifecycle,
+  resultChip,
   resolveAgent,
   runningAgentCount,
   statusSummary,
@@ -31,6 +36,7 @@ import {
   subagentTitle,
   taskPartLocations,
   waitingAgentCount,
+  waitingLabel,
   type TaskSource,
 } from "./subagent-model"
 
@@ -1543,4 +1549,221 @@ test("a forged lifecycle proof cannot certify raw metadata totals", () => {
     tokens: { input: 123, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
   }
   expect(buildTaskCards(source(data))[0]?.agents[0]?.tokens).toBe(123)
+})
+
+describe("1.99.113 lifecycle fields", () => {
+  test("the part's mirror and the child's record read the same", () => {
+    const part = readLifecycle({
+      effort: "high",
+      fork: true,
+      modelSource: "fork",
+      inheritedTokens: 12_000,
+      queuedReason: "Waiting for a free subagent slot",
+      structured: { valid: true, attempts: 2 },
+      isolation: { mode: "worktree", state: "changed", branch: "vector/task-c1", files: 2, additions: 9, deletions: 1 },
+      groupID: "workflow:ses_run",
+      workflow: {
+        role: "agent",
+        runID: "ses_run",
+        stage: "scan",
+        phase: "find",
+        item: "a.ts",
+        key: "scan:0",
+        round: 1,
+      },
+    })
+    expect(part).toMatchObject({
+      effort: "high",
+      fork: true,
+      queuedReason: "Waiting for a free subagent slot",
+      result: { format: "json", valid: true, attempts: 2 },
+      isolation: { mode: "worktree", state: "changed", branch: "vector/task-c1", files: 2, additions: 9, deletions: 1 },
+      groupID: "workflow:ses_run",
+      workflow: { role: "agent", runID: "ses_run", stage: "scan", phase: "find", item: "a.ts", round: 1 },
+    })
+    const stored = readLifecycle({
+      effort: "low",
+      fork: { point: "msg_1", callID: "call_1", warm: true },
+      slotReason: "Waiting for the launching response",
+      structured: { schema: { type: "object" }, schemaHash: "abc", attempts: 1 },
+      interruption: { at: 5, cause: "crash", reportedAt: 6 },
+      waiting: { kind: "question", requestID: "que_1", since: 40, notedAt: 41, summary: "Which file?" },
+      workflow: {
+        role: "run",
+        title: "Audit",
+        revision: 1,
+        progress: {
+          stages: [{ id: "scan", title: "Scan", total: 3, done: 1, failed: 1, skipped: 0, running: 1, waiting: 0 }],
+          agents: { launched: 3, max: 100, running: 1 },
+        },
+      },
+    })
+    expect(stored).toMatchObject({
+      effort: "low",
+      fork: true,
+      queuedReason: "Waiting for the launching response",
+      result: { format: "json", attempts: 1 },
+      interrupted: { at: 5, cause: "crash" },
+      waiting: { kind: "question", since: 40, summary: "Which file?" },
+      workflow: {
+        role: "run",
+        title: "Audit",
+        stages: [
+          { id: "scan", title: "Scan", phase: "", total: 3, done: 1, failed: 1, skipped: 0, running: 1, waiting: 0 },
+        ],
+        agents: { launched: 3, max: 100, running: 1 },
+      },
+    })
+    expect(stored.result?.valid).toBeUndefined()
+  })
+
+  test("malformed new fields are dropped, never trusted or thrown on", () => {
+    const value = readLifecycle({
+      effort: "<script>",
+      fork: "yes",
+      structured: "valid",
+      result: { format: 7 },
+      queuedReason: 3,
+      isolation: { mode: "worktree", directory: "/secret" },
+      interruption: { cause: "crash" },
+      waiting: { kind: "permission", since: "now" },
+      workflow: { runID: "ses_run" },
+      groupID: ["workflow:x"],
+    })
+    expect(value.effort).toBeUndefined()
+    expect(value.fork).toBeUndefined()
+    expect(value.result).toBeUndefined()
+    expect(value.queuedReason).toBeUndefined()
+    expect(value.isolation).toBeUndefined()
+    expect(value.interrupted).toBeUndefined()
+    expect(value.waiting).toBeUndefined()
+    expect(value.workflow).toBeUndefined()
+    expect(value.groupID).toBeUndefined()
+    // A directory is never read into the display copy, and the conflict list is bounded.
+    const isolation = readLifecycle({
+      isolation: {
+        mode: "worktree",
+        state: "changed",
+        directory: "/secret",
+        files: -1,
+        conflicts: [...Array.from({ length: 60 }, (_, index) => `f${index}`), 5],
+      },
+    }).isolation!
+    expect("directory" in isolation).toBe(false)
+    expect(isolation.files).toBeUndefined()
+    expect(isolation.conflicts).toHaveLength(50)
+    // A cause a newer engine adds is still an interruption.
+    expect(readLifecycle({ interruption: { at: 1, cause: 42 } }).interrupted).toEqual({ at: 1, cause: "unknown" })
+  })
+
+  test("part metadata and the record reach the agent; a queued reason only while it waits", () => {
+    const data = fixture()
+    addUser(data, "msg_u1", "go")
+    addAssistant(data, "msg_a1", "msg_u1", [
+      taskPart({
+        id: "prt_1",
+        status: "running",
+        metadata: lifecycle({
+          sessionId: "ses_q",
+          callID: "call_prt_1",
+          status: "queued",
+          effort: "medium",
+          fork: true,
+          queuedReason: "Waiting for a free subagent slot",
+          structured: { attempts: 0 },
+        }),
+      }),
+      taskPart({
+        id: "prt_2",
+        metadata: lifecycle({
+          sessionId: "ses_i",
+          status: "cancelled",
+          queuedReason: "Waiting for a free subagent slot",
+          isolation: { mode: "worktree", state: "changed", files: 1 },
+        }),
+      }),
+    ])
+    data.sessions.ses_i = child("ses_i", {
+      metadata: { subagent: lifecycle({ status: "cancelled", interruption: { at: 9, cause: "shutdown" } }) },
+    })
+    const agents = buildTaskCards(source(data))[0]!.agents
+    const queued = agents.find((agent) => agent.sessionID === "ses_q")!
+    expect(queued).toMatchObject({
+      status: "pending",
+      effort: "medium",
+      fork: true,
+      queuedReason: "Waiting for a free subagent slot",
+      result: { format: "json", attempts: 0 },
+    })
+    const stopped = agents.find((agent) => agent.sessionID === "ses_i")!
+    expect(stopped.status).toBe("stopped")
+    expect(stopped.queuedReason).toBeUndefined()
+    expect(stopped.isolation).toMatchObject({ mode: "worktree", state: "changed", files: 1 })
+    expect(stopped.interrupted).toEqual({ at: 9, cause: "shutdown" })
+    expect(isInterrupted(stopped)).toBe(true)
+    expect(isInterrupted({ ...stopped, interrupted: { at: 9, cause: "shutdown", resumedAt: 10 } })).toBe(false)
+    expect(isInterrupted({ ...stopped, interrupted: { at: 9, cause: "shutdown", dismissedAt: 10 } })).toBe(false)
+    expect(isInterrupted({ ...stopped, status: "running" })).toBe(false)
+  })
+})
+
+describe("1.99.113 labels", () => {
+  const model = { providerID: "anthropic", modelID: "claude-opus-5", name: "Claude Opus 5", short: "Opus 5" }
+
+  test("model as short · effort, with default effort left out", () => {
+    expect(modelEffortLabel({ model, effort: "high" })).toBe("Opus 5 · high")
+    expect(modelEffortLabel({ model, effort: "default" })).toBe("Opus 5")
+    expect(modelEffortLabel({ model })).toBe("Opus 5")
+    expect(modelEffortLabel({ effort: "low" })).toBe("low")
+    expect(modelEffortLabel({})).toBeUndefined()
+  })
+
+  test("queued, waiting and worktree lines", () => {
+    expect(queuedLabel("Waiting for a free subagent slot")).toBe("Queued: waiting for a free subagent slot")
+    expect(queuedLabel("OAuth refresh pending")).toBe("Queued: OAuth refresh pending")
+    expect(waitingLabel({ kind: "permission", since: 0 }, 3 * 60_000 + 5_000)).toBe("Needs your permission · 3m")
+    expect(waitingLabel({ kind: "question", since: 1_000 }, 20_000)).toBe("Needs your answer · <1m")
+    expect(waitingLabel({ kind: "permission", since: 50_000 }, 0)).toBe("Needs your permission · <1m")
+    expect(isolationLabel({ mode: "worktree", state: "changed", branch: "vector/task-c1", files: 3 })).toBe(
+      "Worktree: vector/task-c1 · changed · 3 files changed",
+    )
+    expect(isolationLabel({ mode: "copy", state: "unchanged", files: 1 })).toBe("Copy: unchanged · 1 file changed")
+    expect(isolationLabel({ mode: "worktree", state: "preparing" })).toBe("Worktree: preparing")
+  })
+
+  test("the JSON chip is green when valid, red when it failed, and absent for text results", () => {
+    expect(resultChip({ format: "json", valid: true })).toMatchObject({ state: "valid", label: "JSON" })
+    expect(resultChip({ format: "json", valid: false, attempts: 3 })).toEqual({
+      state: "invalid",
+      label: "JSON",
+      title: "Its JSON answer did not match the schema after 3 attempts",
+    })
+    expect(resultChip({ format: "json" })?.state).toBe("pending")
+    expect(resultChip({ format: "text" })).toBeUndefined()
+    expect(resultChip(undefined)).toBeUndefined()
+  })
+
+  test("a workflow run's loaded agents leave the counts as they were with the run row alone", () => {
+    const task = (id: string, workflow: Record<string, unknown>) =>
+      ({ id, workflow }) as unknown as NonNullable<
+        Parameters<typeof liveAgentCount>[0][number]["agents"][number]["task"]
+      >
+    const run = {
+      key: "r",
+      sessionID: "ses_run",
+      status: "running" as const,
+      task: task("ses_run", { role: "run", runID: "ses_run" }),
+    }
+    const agents = ["w1", "w2"].map((id) => ({
+      key: id,
+      sessionID: id,
+      status: "waiting" as const,
+      task: task(id, { role: "agent", runID: "ses_run", stage: "scan" }),
+    }))
+    expect(liveAgentCount([{ agents: [run, ...agents] }])).toBe(1)
+    expect(runningAgentCount([{ agents: [run, ...agents] }])).toBe(1)
+    expect(waitingAgentCount([{ agents: [run, ...agents] }])).toBe(0)
+    // Without their run row they count as themselves.
+    expect(liveAgentCount([{ agents }])).toBe(2)
+  })
 })
