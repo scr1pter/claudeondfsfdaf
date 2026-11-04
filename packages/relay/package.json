@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json.schemastore.org/package.json",
+  "name": "@vectordevai/relay",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./protocol": "./src/protocol.ts",
+    "./ticket": "./src/ticket.ts",
+    "./internal": "./src/internal.ts",
+    "./limits": "./src/limits.ts"
+  },
+  "scripts": {
+    "typecheck": "tsgo --noEmit",
+    "dry-run": "wrangler deploy --dry-run --outdir dist",
+    "smoke": "bun e2e/relay-smoke.ts"
+  },
+  "devDependencies": {
+    "@tsconfig/bun": "catalog:",
+    "@types/bun": "catalog:",
+    "@typescript/native-preview": "catalog:",
+    "wrangler": "4.50.0"
+  }
+}

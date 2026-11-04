@@ -812,3 +812,89 @@ The shared browser action module validates explicit request/response shapes and 
   `packages/app/package.json`, `packages/app/script/browser-imports.ts`, `packages/web/scripts/phone-app.mjs`,
   `packages/web/astro.config.mjs`, `.gitignore`, `.github/workflows/vector-codium.yml`, `.env.example`,
   `docs/vector/MODEL-PLANS.md`.
+
+## A39 Remote relay Worker (3 Nov 2026)
+
+- **The ticket format is defined here,** since A40 (which mints tickets) is not built. A ticket is
+  `vt1.<base64url JSON>.<base64url Ed25519 signature>`, signed over `vector-relay-ticket-v1.` plus the payload. Every
+  character is a subprotocol token character.
+  - "Device and fair-use caps from the ticket": the claims carry the plan's `computers` (ENTITLEMENTS `remote.computers`)
+    and `viewerHours` (`REMOTE_LIMITS`). The relay keeps §4.2's fixed values itself (five phones, 1.5×, 30 minutes,
+    64 KiB, 20 a second); `test/remote-relay-contract.test.ts` keeps them equal to the API's.
+  - The meter `epoch` is a base64url hash of `meterEpoch`, so no Stripe subscription id reaches the relay.
+  - Each ticket opens one connection or one refresh (`jti` recorded until expiry).
+  - "aud" is `vector-relay`. "exp ≤5 min" is read as `exp − iat ≤ 300 s`, with `iat` at most 60 s ahead of the relay's
+    clock.
+  - The API's key is base64url PKCS#8 (`VECTOR_REMOTE_TICKET_SIGNING_KEY`, §4.16). The Worker holds raw public keys.
+- **Worker secrets the contract does not name:** `TICKET_PUBLIC_KEYS`, `INTERNAL_SECRET` (the value of
+  `VECTOR_HOSTED_INTERNAL_SECRET`, as A37 decided for `relay`) and `ACCOUNT_KEY`. `ACCOUNT_KEY` is the HMAC key behind
+  `idFromName(HMAC(account))`. It is a dedicated key because rotating the internal secret must not reset every
+  account's devices. The Worker computes the HMAC, so the object never stores the account id; the API sends the plain id
+  in tickets and internal calls.
+- **Devices are registered on first connection.** The relay counts pairings and refuses one over the cap. Pairing
+  itself (QR, keys, passkeys) is end to end in A41/A42.
+  - Caps count devices in pairing order, so after a downgrade the earliest devices keep their places, and the rest are
+    closed and refused until the user revokes one.
+  - A revoked device keeps only its id (name and key cleared) and that id is refused for good; a device pairs again
+    under a new id.
+  - The privacy draft (#remote) lists the same device fields.
+  - One connection per device: a newer one replaces the older.
+- **Refusals after a valid ticket are accept-then-close** with a 4000-4011 code named after §4.10's service codes
+  (`REMOTE_PAUSED`, `REMOTE_REVOKED`, `REMOTE_DEVICE_LIMIT`, `REMOTE_FAIR_USE`, …), because a browser cannot read the
+  HTTP status of a failed handshake. A missing or bad ticket gets HTTP 401 with no socket.
+- **Viewer time** runs while at least one phone is attached, not per phone.
+  - "Counted in memory and persisted at most once a minute": the running total is computed in memory from a stored start
+    (written when the first phone attaches, so it survives hibernation).
+  - The meter is written by the once-a-minute alarm, and once more when the last phone leaves, which is a state change.
+- **Awake-hours** (§4.2, "at most 1.5× viewer-hours") are read as the relay object's billed awake time, which is what the
+  cap protects.
+  - The estimate: each event adds the gap since the previous one, up to the runtime's 10 s idle tail. It is flushed on
+    the same schedule, so an object evicted before a flush loses at most that minute.
+  - It is checked by the alarm and from messages at most every 10 s, because a computer can keep the object awake with no
+    alarm running.
+  - Viewer-hours used up closes and refuses phones for the epoch (computers stay, so presence keeps working); awake time
+    used up closes and refuses everyone.
+- **Idle means no data frame for 30 minutes.** Heartbeats, ticket refreshes and presence queries are not activity: a phone
+  app refreshes on its own, and counting refreshes would mean an open phone never idles.
+- **"Tickets refreshed in-band"** works differently for each role:
+  - A phone must refresh before `exp + 60 s` or is closed by the alarm.
+  - An idle computer keeps its hibernated socket after its ticket lapses, but its frames are refused until it refreshes.
+    `peers` carries `refresh: true` when a phone arrives, and a computer more than 24 h past expiry is closed when the
+    object next wakes.
+  - Forcing idle computers to refresh every few minutes would wake each object hundreds of times a day, which is the
+    awake time §4.2 caps.
+  - Revocation does not wait on expiry: `kill` and `suspend` close sockets at once.
+- **The plan comes from the newest ticket by `iat`.** It is stored with that ticket's `iat`, written only when the plan
+  changes, so a ticket from before an upgrade or downgrade, presented late, never undoes it.
+- **"≤20 frames a second"** is a 20-a-second average with a burst of 40 (a computer batching four messages a second to
+  five phones sends 20). More than 100 refusals in 10 s close the connection.
+- **"Kill and suspend pushed through the internal API":**
+  - `kill {account, before?}` sets `revokedBefore` (never in the future) and closes older connections.
+  - `suspend {account, suspended, reason, at}` covers paused, frozen and owner holds, and ignores an update older than the
+    last applied `at`.
+  - Also added: `presence` (the relay half of `isComputerOnline`, §4.17), `devices`, `revoke-device`, `erase` (P5, for
+    A57) and `flags` (the Worker's kill flag, written through a `control` object so its nonce is recorded once).
+  - Nonces are recorded in the object that handles the call; KV is eventually consistent and cannot dedupe.
+- **The kill flag** is KV `REMOTE_FLAGS` key `kill` = `1`.
+  - It is read on every connection, every alarm and every in-band refresh; a flag that cannot be read counts as set.
+  - Phones close at their next alarm. A computer with no phone attached is not woken, but nothing can reach it while it
+    is off.
+- **"Reserved job.offer"**: frame kind `0x02` and control `{t:"job.offer"}` from a client get a `reserved` notice and are
+  never passed on; `POST /internal/v1/job-offer` answers 501 after the signature check.
+- **No `@cloudflare/workers-types` dependency.** `src/runtime.ts` declares the subset used and lets the tests inject a
+  runtime. It was checked here against workers-types 4.20251008.0 in a scratch config (not committed).
+- **"CI smoke under wrangler dev --local"** is `packages/relay/e2e/relay-smoke.ts`, run by a new `relay` job in
+  `vector-codium.yml` after `wrangler deploy --dry-run` ("deploy dry run green"). Running `wrangler dev` on the owner's
+  Mac is forbidden; the dry run itself was run here once.
+- **`wrangler.jsonc`** uses a zero KV id (the owner replaces it; a deploy carrying it fails rather than writing
+  elsewhere), `workers_dev` with no custom domain (the relay host is the owner's choice), and compatibility date
+  2025-04-01.
+- **`bun.lock` is committed this time.** The new workspace needs its entry for frozen installs, and bun re-hoisted
+  `@sindresorhus/is` (no new versions). The lock also picks up the desktop `1.99.112` version line, which was pending in
+  the worktree since before A29: the committed manifests say 1.99.112, so a frozen install needs it too.
+- **Files outside A39's list:**
+  - Relay package: `packages/relay/src/{protocol,limits,runtime,bytes}.ts`, `packages/relay/e2e/relay-smoke.ts`,
+    `packages/relay/tsconfig.json`, `packages/relay/.gitignore`.
+  - Root test: `test/remote-relay-contract.test.ts`.
+  - `.github/workflows/vector-codium.yml`, `bun.lock`.
+  - Docs: `docs/vector/MODEL-PLANS.md`, `docs/vector/owner-actions/remote.md` (new).

@@ -62,6 +62,10 @@ jobs:
           - name: cloud
             directory: packages/cloud
             command: bun typecheck
+          # WP A39: Vector Remote's relay Worker.
+          - name: relay
+            directory: packages/relay
+            command: bun typecheck
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
       - uses: ./.github/actions/setup-bun
@@ -163,6 +167,38 @@ jobs:
         if: ${{ !cancelled() }}
         working-directory: packages/client
         run: bun run check:generated
+
+  # WP A39: the relay Worker's done criterion is a green deploy dry run (wrangler bundles the Worker and checks its
+  # configuration without uploading anything or signing in), and its smoke test runs the Worker on Cloudflare's local
+  # runtime under `wrangler dev --local` with throwaway keys. Neither needs a Cloudflare account or a secret.
+  relay:
+    name: Remote relay (dry run and local smoke)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      WRANGLER_SEND_METRICS: "false"
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+
+      - uses: ./.github/actions/setup-bun
+        with:
+          install-flags: --frozen-lockfile
+
+      - name: Dry-run the relay deploy
+        working-directory: packages/relay
+        run: bun run dry-run
+
+      - name: Smoke-test the relay under wrangler dev --local
+        working-directory: packages/relay
+        run: bun run smoke
 
   browser:
     name: Codium browser specs

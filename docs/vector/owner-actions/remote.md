@@ -1,0 +1,81 @@
+# Vector Remote: the relay
+
+Vector Remote connects a phone to the Vector desktop app through a relay Vector runs on Cloudflare. This page covers the relay Worker (Codium build WP A39). The API that mints its tickets (A40), the desktop side (A41) and the phone screens (A42) add their own steps here when they land. How it works is in [MODEL-PLANS.md](../MODEL-PLANS.md#phone-alerts-and-shared-service-plumbing). Nothing on this page has been created, deployed or tried against Cloudflare yet.
+
+Remote is listed (`remote` in `CODIUM_LISTED_PERKS`) only after the outside security review (contract §1.2), and only once A40 to A42 have shipped.
+
+## What the relay holds
+
+- **The paired devices** of each account: a random device id, computer or phone, the name shown in Settings, the device's public key, and when it paired and was last seen. A revoked device keeps only its id, so it cannot come back under that id.
+- **Time meters** per billing period: how long a phone was watching, and how long the relay was awake. They apply the fair-use caps. They are kept 40 days past the period's end.
+- **Nothing a phone and a computer say to each other.** That is encrypted end to end; the relay passes it on and keeps none of it.
+
+Each account has its own Durable Object, named by an HMAC of the account id, so the relay never stores the account id itself. Account deletion calls `erase`, which deletes everything that account's object holds (A57 wires this in).
+
+## One-time setup (owner steps 11 and 12)
+
+Run these from `packages/relay`, signed in with `wrangler login` to the Cloudflare account that will run the Workers. Never put a key in this repository, a chat or a ticket.
+
+1. **Workers Paid** on that account, with a Budget Alert and billable-usage notifications (contract §6.1).
+2. **The kill-flag namespace:**
+
+   ```sh
+   bunx wrangler kv namespace create REMOTE_FLAGS
+   ```
+
+   Put the id it prints in `wrangler.jsonc` in place of the zeros, and commit that change. The id is not a secret.
+
+3. **The ticket key pair.** The API signs tickets with the private half and the relay checks them with the public half:
+
+   ```sh
+   node -e 'const k=require("node:crypto").generateKeyPairSync("ed25519");console.log("VECTOR_REMOTE_TICKET_SIGNING_KEY="+k.privateKey.export({format:"der",type:"pkcs8"}).toString("base64url"));console.log("TICKET_PUBLIC_KEYS="+k.publicKey.export({format:"jwk"}).x)'
+   ```
+
+   Set `VECTOR_REMOTE_TICKET_SIGNING_KEY` in Vercel, Production only (A40 reads it). Give the relay the public half:
+
+   ```sh
+   bunx wrangler secret put TICKET_PUBLIC_KEYS
+   ```
+
+4. **The internal secret.** The relay checks the API's calls with the same value as Vercel's `VECTOR_HOSTED_INTERNAL_SECRET` (at least 32 characters; make one with `node -e 'console.log(require("node:crypto").randomBytes(32).toString("base64url"))'` if it is not set yet):
+
+   ```sh
+   bunx wrangler secret put INTERNAL_SECRET
+   ```
+
+5. **The account key,** a new random value made the same way. Keep it for good: changing it starts every account's relay over, with no paired devices.
+
+   ```sh
+   bunx wrangler secret put ACCOUNT_KEY
+   ```
+
+6. **Deploy** with the hosted deploy workflow (WP A58, `target=relay`), from protected main, once it exists. The Codium CI lane already runs `wrangler deploy --dry-run` and a smoke test under `wrangler dev --local` on every push.
+7. **Tell the API where it is:** set `VECTOR_REMOTE_RELAY_URL` in Vercel to the Worker's `wss://` address (A40). The phone app's content security policy gets that host in A42.
+
+Without its three secrets the relay answers 503 and admits no one; with a malformed `TICKET_PUBLIC_KEYS` it admits no one either.
+
+## Turning it off
+
+- **Normally:** the `remote` switch on `/owner/codium`. The API then stops minting tickets and sets the relay's kill flag (A40).
+- **Directly, if the API cannot reach it:**
+
+  ```sh
+  bunx wrangler kv key put --binding REMOTE_FLAGS --remote kill 1
+  ```
+
+  The relay reads the flag on every new connection, every ticket refresh and every minute while a phone is attached, so phones are closed within about two minutes (the flag can take up to a minute to reach every Cloudflare location). If the flag cannot be read, the relay acts as if it were set. To turn the relay back on, delete the key:
+
+  ```sh
+  bunx wrangler kv key delete --binding REMOTE_FLAGS --remote kill
+  ```
+
+## Rotating the ticket key
+
+1. Make a new pair as in step 3.
+2. Set `TICKET_PUBLIC_KEYS` to the old and new public keys, comma-separated, and wait for the deploy.
+3. Change `VECTOR_REMOTE_TICKET_SIGNING_KEY` in Vercel to the new private key and redeploy.
+4. Ten minutes later, set `TICKET_PUBLIC_KEYS` to the new key alone. Tickets live at most five minutes.
+
+## Fair use
+
+Each account gets the plan's paired computers (1, 3, 5, 5) and up to five phones, counted in the order they paired; viewer time each period up to the plan's viewer-hours (60, 100, 200, 200); and relay awake time up to one and a half times that. When the viewer-hours are used up, phones are closed and refused until the next period while computers stay connected; when the awake time is used up, everything is. A phone that sends no data for 30 minutes is closed, and the app reconnects when its user comes back.
