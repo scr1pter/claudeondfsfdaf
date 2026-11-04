@@ -4,15 +4,16 @@ import { notifyOwner, ownerAlertsConfigured } from "./codium-owner.js"
 import { OUTBOX_SCRIPTS, registerProvisioner, type PerkProvisioner, type Transition } from "./codium-provision.js"
 import { ApiError } from "./http.js"
 import { persistentStore } from "./persistent-store.js"
+import { eraseAccountPushSubscriptions, pushConfigured } from "./web-push.js"
 
 /*
  * The provisioners (contract §4.8): one per service that follows the plan cache, each converging its service to the
  * snapshot reconcile wrote (§4.4's per-service table). Every configured one gets an outbox item, in the same EVAL as
  * each new snapshot version, and the outbox runs it (codium-provision.ts).
  *
- * WP A06 builds `github-runs` and `owner-notify`; WP A31 builds `founding`. The others are stubs, not configured, so
- * they get no items: each service's work package replaces its stub here (remote A40, vault, hosted, ops, push) and the
- * daily sweep then catches every account up to its snapshot.
+ * WP A06 builds `github-runs` and `owner-notify`; WP A31 builds `founding`; WP A37 builds `push`. The others are stubs,
+ * not configured, so they get no items: each service's work package replaces its stub here (remote A40, vault, hosted,
+ * ops) and the daily sweep then catches every account up to its snapshot.
  */
 
 const DAY_MS = 86_400_000
@@ -163,6 +164,21 @@ export const founding: PerkProvisioner = {
   },
 }
 
+// ── push ───────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+/**
+ * `push` (WP A37, §4.4's Phone alerts row): every send reads the snapshot itself (active and renewing send; paused,
+ * ended and frozen do not), so the only state to converge is deletion: an account being deleted (`closing`) loses its
+ * push subscriptions (P5). Configured while the VAPID keys are.
+ */
+export const push: PerkProvisioner = {
+  id: "push",
+  configured: () => pushConfigured(),
+  async apply(t, fetcher = fetch) {
+    if (t.to.reason === "closing") await eraseAccountPushSubscriptions(t.account, fetcher)
+  },
+}
+
 // ── Stubs ──────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 /** A service not built yet: never configured, so it gets no items and does nothing. */
@@ -174,7 +190,7 @@ function stub(id: string): PerkProvisioner {
 export const PROVISIONERS: readonly PerkProvisioner[] = [
   githubRuns,
   stub("remote"),
-  stub("push"),
+  push,
   stub("vault"),
   stub("hosted"),
   stub("ops"),

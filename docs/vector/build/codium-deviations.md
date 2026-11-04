@@ -714,3 +714,46 @@ The shared browser action module validates explicit request/response shapes and 
   the options stay documented in `#second-lab`.
 - **`codium-legal` is not on GitHub.** A30's drafts (`94a5004e`) were never pushed, because this Mac must not run the
   pre-push hook (turbo). The orchestrator pushes it.
+
+## A37 shared service plumbing and push (3 Nov 2026)
+
+- **"Ciphertext ≤3 KB" is the base64url text, at most 3,072 characters.** 3 KB of raw bytes is 4,096 characters of
+  base64url. Inside the JSON payload that does not fit one 4,096-byte push record, which holds at most 3,993 bytes of
+  plaintext. So the limit applies to the text as sent, about 2.25 KB of ciphertext bytes. The decoded ciphertext must
+  be at least 29 bytes (a 12-byte nonce and a 16-byte tag around one byte). The body may carry only `ciphertext`, an
+  optional `key` (which phone key opens it) and `urgency`. A title, message or any other field is refused, which is
+  how the route "accepts only end-to-end ciphertext".
+- **Who subscribes.** The contract names no credential for `/api/notify/subscribe`. A40 says phones sign in with a
+  website session on the phone origin, so subscribing takes a Supabase bearer session, sent from the site or from
+  `VECTOR_PHONE_APP_ORIGIN`. To let that origin through, `requireTrustedJsonRequest` gained an optional list of extra
+  origins. `GET` answers the VAPID public key, which a browser needs to subscribe. `DELETE {endpoint}` works whatever
+  the plan. Subscribing is limited to 30 an hour per account.
+- **Push endpoints are allow-listed** to the browsers' own push services (Google, Mozilla, Apple, Microsoft), on top
+  of `safeFetch`'s S8 checks. Otherwise the server would POST to any host a user names. The A30 privacy draft already
+  says alerts go "through the push service of your browser's maker".
+- **"≤10" replaces the oldest instead of refusing**, so a reinstalled phone app is never locked out. Eviction is HSET,
+  then HGETALL and HDEL (no script), and a send reads at most the ten newest. Parallel subscriptions can briefly leave
+  eleven, never more than ten reached. The hash expires 400 days after the last registration or successful delivery.
+- **"An active paid plan" is active or renewing within grace,** per §4.4's Phone alerts row, through
+  `requireUsableSnapshot`. Both routes also need the VAPID keys and the `push` switch on (503 `PUSH_UNAVAILABLE`).
+  `sendServerAlert` takes `allowPaused` for On Call, whose §4.4 row keeps alerts going while paused. It answers
+  `{skipped}` instead of throwing.
+- **Payload shapes** the phone app decodes: `{v:1, kind:"e2e", c, k?}` and `{v:1, kind:"title", title, tag?}`. A
+  title is at most 120 characters on one line; a tag is a lower-case category word, not content. The push TTL is
+  12 h, and the VAPID token lives 12 h (RFC 8292 allows 24).
+- **The `push` provisioner replaces its stub** (`codium-provisioners.ts`, outside A37's file list, as the stub's own
+  comment asks). It is configured while the VAPID keys are, and erases the subscriptions on `closing` (P5).
+  `eraseAccountPushSubscriptions` deletes under both prefixes, like A33's records. Subscriptions are written under the
+  current mode's prefix.
+- **Internal HMAC.** §4.16 names no relay secret, so `relay` shares `VECTOR_HOSTED_INTERNAL_SECRET` with `hosted`.
+  Each service signs under its own derived key, HMAC(secret, `vector-internal-v1/<service>`), so a request for one
+  never passes at another. `ops` uses `VECTOR_OPS_SHARED_SECRET`. Nonces are remembered for 600 s under
+  `internal:nonce:<service>:<nonce>` (Codium prefix), a store key §4.6 does not list. The timestamp is in seconds.
+  Plain http is allowed only to localhost outside production, for local Worker runs.
+- **R2 settings** are `VECTOR_R2_{VAULT,MEDIA}_{ACCESS_KEY_ID,SECRET_ACCESS_KEY,BUCKET}` (§4.16 writes
+  `VECTOR_R2_VAULT_*`). Buckets default to `vector-vault` and `vector-media`. Presigning also supports HEAD and DELETE
+  (A44's commit HEADs and deletes objects). Keys are limited to plain path characters. The default life is the 900 s
+  ceiling.
+- **`safeFetch` defaults:** https only, port 443, 10 s, 64 KiB answers. Any 3xx except 304 is an error.
+- **Files outside A37's list:** `api/_lib/abuse.ts`, `api/_lib/codium-provisioners.ts`, `.env.example`,
+  `docs/vector/MODEL-PLANS.md`.
