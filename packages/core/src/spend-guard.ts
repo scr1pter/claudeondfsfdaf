@@ -395,6 +395,8 @@ export interface Interface {
   readonly record: (sessionID: SessionID, step: Step, confirm?: Effect.Effect<boolean>) => Effect.Effect<Verdict>
   // Files changed in `sessionID` after its step was recorded, so the loop rules forget what ran before.
   readonly changed: (sessionID: SessionID) => Effect.Effect<void>
+  // Explicit user input was promoted: forget this Session's repeats and errors without renewing its budget.
+  readonly resetLoops: (sessionID: SessionID) => Effect.Effect<void>
   readonly stopped: (sessionID: SessionID) => Effect.Effect<Stop | undefined>
   // Moves the run into the finished runs, and drops a budget armed for a run that never began.
   readonly end: (rootID: SessionID) => Effect.Effect<void>
@@ -813,6 +815,21 @@ const layer = Layer.effect(
             }),
           }
         })
+      }),
+      resetLoops: Effect.fn("SpendGuard.resetLoops")(function* (sessionID) {
+        yield* Ref.update(state, (current) => ({
+          ...current,
+          ledgers: new Map([
+            ...current.ledgers,
+            ...keys(current, sessionID).flatMap((key) => {
+              const ledger = current.ledgers.get(key)
+              if (!ledger?.run.loops.has(sessionID)) return []
+              const loops = new Map(ledger.run.loops)
+              loops.delete(sessionID)
+              return [[key, { ...ledger, run: { ...ledger.run, loops } }] as const]
+            }),
+          ]),
+        }))
       }),
       stopped: Effect.fn("SpendGuard.stopped")(function* (sessionID) {
         const current = yield* Ref.get(state)

@@ -193,7 +193,12 @@ export const isFree = (model: Model) =>
 // a model unknown. A Vector Codium step carries neither, so it counts as unpriced.
 export const spendStep = (
   model: Model,
-  settlement: { readonly tokens: Tokens; readonly providerMetadata?: ProviderMetadata; readonly incomplete?: boolean },
+  settlement: {
+    readonly tokens: Tokens
+    readonly providerMetadata?: ProviderMetadata
+    readonly incomplete?: boolean
+    readonly tools?: readonly SpendGuard.Sig[]
+  },
   step: { readonly continues: boolean; readonly patched: boolean },
 ): SpendGuard.Step => {
   const costUsd = calculateCost(model, settlement.tokens, settlement.providerMetadata)
@@ -216,8 +221,7 @@ export const spendStep = (
     contextTokens,
     cachedTokens: settlement.tokens.cache.read,
     continues: step.continues,
-    // V2 does not collect loop signatures yet.
-    tools: [],
+    tools: settlement.tools ?? [],
     patched: step.patched,
   }
 }
