@@ -62,7 +62,7 @@ import { llmClient } from "../../effect/app-node-platform"
  *   - [ ] Honor interruption and reject stale work after runtime attachment replacement.
  *   - [x] Honor optional agent step limits.
  *   - [x] Stop a guarded run at its spend, step, or unpriced-step limit before the next provider turn.
- *   - [ ] Record compaction model calls with the spend guard; a compaction's cost is not counted against the cap.
+ *   - [x] Record compaction model calls with the spend guard.
  *   - [ ] Apply the user's budget.run config to runs; only a prompt's own budget arms a V2 run today.
  *   - [ ] Bound provider retries.
  *   - [x] Bound repeated identical tool calls through the spend guard.
@@ -123,7 +123,7 @@ const layer = Layer.effect(
     const snapshots = yield* Snapshot.Service
     const guard = yield* SpendGuard.Service
     const db = (yield* Database.Service).db
-    const compaction = SessionCompaction.make({ events, llm, config: yield* config.entries() })
+    const compaction = SessionCompaction.make({ events, llm, guard, config: yield* config.entries() })
     const getSession = Effect.fn("SessionRunner.getSession")(function* (sessionID: SessionSchema.ID) {
       const session = yield* store.get(sessionID)
       if (!session) return yield* Effect.die(`Session not found: ${sessionID}`)
@@ -220,6 +220,8 @@ const layer = Layer.effect(
       step: number,
       recoverOverflow?: typeof compaction.compactAfterOverflow,
     ) {
+      // Compaction rebuilds recurse here without returning to the outer drain's guard check.
+      if (yield* guard.stopped(sessionID)) return { needsContinuation: false, step }
       const session = yield* getSession(sessionID)
       if (session.location.directory !== location.directory || session.location.workspaceID !== location.workspaceID)
         return yield* Effect.interrupt
@@ -302,6 +304,8 @@ const layer = Layer.effect(
       })
       if (yield* compaction.compactIfNeeded({ sessionID: session.id, entries, model, request }))
         return yield* Effect.die(continueAfterCompaction(currentStep))
+      // A blank or failed summary still spent a provider step and may have stopped the root run.
+      if (yield* guard.stopped(session.id)) return { needsContinuation: false, step: currentStep }
       const startSnapshot = yield* snapshots.capture()
       const publisher = createLLMEventPublisher(events, {
         sessionID: session.id,

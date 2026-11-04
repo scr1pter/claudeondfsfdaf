@@ -37,6 +37,7 @@ import { SessionRunner } from "@vectordevai/core/session/runner"
 import * as SessionRunnerLLM from "@vectordevai/core/session/runner/llm"
 import { SessionRunnerModel } from "@vectordevai/core/session/runner/model"
 import { SpendGuard } from "@vectordevai/core/spend-guard"
+import { SessionStatusEvent } from "@vectordevai/schema/session-status-event"
 import { ToolRegistry } from "@vectordevai/core/tool/registry"
 import { ApplicationTools } from "@vectordevai/core/tool/application-tools"
 import { AgentV2 } from "@vectordevai/core/agent"
@@ -1872,7 +1873,7 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
-  it.effect("counts what the compaction summary cost in the session totals", () =>
+  it.effect("counts the compaction summary once in session totals and the spend guard through replay", () =>
     Effect.gen(function* () {
       yield* setup
       const session = yield* SessionV2.Service
@@ -1911,6 +1912,419 @@ describe("SessionRunnerLLM", () => {
       expect(context[0]).toMatchObject({ type: "compaction", cost: 0.21, tokens: { input: 100_000, output: 1_000 } })
       // 100K input and 1K output at $2 and $10 per million tokens; the follow-up turn reported no usage.
       expect((yield* session.get(sessionID)).cost).toBeCloseTo(0.21)
+      const guard = yield* SpendGuard.Service
+      const run = yield* guard.snapshot(sessionID)
+      expect(run).toMatchObject({ spentUsd: 0.21, steps: 2, unpricedSteps: 1 })
+      yield* replaySessionProjection(sessionID)
+      yield* replaySessionProjection(sessionID)
+      expect((yield* session.get(sessionID)).cost).toBeCloseTo(0.21)
+      expect(yield* guard.snapshot(sessionID)).toEqual(run)
+      expect(requests).toHaveLength(2)
+    }),
+  )
+
+  const compactionAccountingModel = () =>
+    Model.make({
+      id: "compaction-accounting",
+      provider: "fake",
+      route: OpenAIChat.route.with({ limits: { context: 4_000, output: 50 } }),
+    })
+  const setupCompactionAccounting = Effect.gen(function* () {
+    yield* setup
+    const session = yield* SessionV2.Service
+    response = fragmentFixture("text", "accounting-earlier", ["Earlier answer"]).completeEvents
+    yield* session.prompt({
+      sessionID,
+      prompt: Prompt.make({ text: "Earlier question ".repeat(180) }),
+      resume: false,
+    })
+    yield* session.resume(sessionID)
+    currentModel = SessionRunnerModel.withPricing(compactionAccountingModel(), [
+      { input: 2, output: 10, cache: { read: 0, write: 0 } },
+    ])
+    requests.length = 0
+    yield* session.prompt({
+      sessionID,
+      prompt: Prompt.make({ text: "Recent exact request ".repeat(180) }),
+      resume: false,
+    })
+    return session
+  })
+  const compactionAccountingSummary = (text: string, usage = { inputTokens: 100_000, outputTokens: 1_000 }) => [
+    LLMEvent.stepStart({ index: 0 }),
+    LLMEvent.textStart({ id: "accounting-summary" }),
+    LLMEvent.textDelta({ id: "accounting-summary", text }),
+    LLMEvent.textEnd({ id: "accounting-summary" }),
+    LLMEvent.stepFinish({ index: 0, reason: "stop", usage }),
+    LLMEvent.finish({ reason: "stop" }),
+  ]
+  const recordedCompactionEvents = Effect.gen(function* () {
+    const { db } = yield* Database.Service
+    const recorded = yield* db
+      .select()
+      .from(EventTable)
+      .where(eq(EventTable.aggregate_id, sessionID))
+      .orderBy(asc(EventTable.seq))
+      .all()
+      .pipe(Effect.orDie)
+    return recorded.filter((event) => event.type.startsWith("session.next.compaction."))
+  })
+
+  for (const summary of ["## Goal\n- Preserve the task", "  "]) {
+    for (const limit of ["cap", "steps"] as const) {
+      it.effect(
+        `stops before ordinary continuation after a ${summary.trim() ? "complete" : "blank"} summary hits the ${limit}`,
+        () =>
+          Effect.gen(function* () {
+            const session = yield* setupCompactionAccounting
+            const guard = yield* SpendGuard.Service
+            yield* guard.arm(sessionID, limit === "cap" ? { usd: 0.2 } : { steps: 1 })
+            responses = [
+              compactionAccountingSummary(summary),
+              fragmentFixture("text", "must-not-follow-summary", ["Must not run"]).completeEvents,
+            ]
+
+            yield* session.resume(sessionID)
+
+            expect(requests).toHaveLength(1)
+            expect(yield* guard.snapshot(sessionID)).toMatchObject({
+              spentUsd: 0.21,
+              steps: 1,
+              stopped: { reason: limit },
+            })
+            expect((yield* session.get(sessionID)).cost).toBeCloseTo(0.21)
+            const recorded = yield* recordedCompactionEvents
+            expect(recorded).toHaveLength(2)
+            expect(recorded[1]).toMatchObject({ data: { cost: 0.21 } })
+            expect(recorded[1]?.type).toBe(
+              EventV2.versionedType(
+                summary.trim() ? SessionEvent.Compaction.Ended.type : SessionEvent.Compaction.Failed.type,
+                SessionEvent.Compaction.Ended.durable!.version,
+              ),
+            )
+          }),
+      )
+    }
+  }
+
+  it.effect("stops the recursive overflow continuation when the recovery summary crosses the spend cap", () =>
+    Effect.gen(function* () {
+      const session = yield* setupOverflowRecovery
+      currentModel = SessionRunnerModel.withPricing(
+        Model.make({
+          id: "recovery-accounting",
+          provider: "fake",
+          route: OpenAIChat.route.with({ limits: { context: 20_000, output: 1_000 } }),
+        }),
+        [{ input: 2, output: 10, cache: { read: 0, write: 0 } }],
+      )
+      const guard = yield* SpendGuard.Service
+      yield* guard.arm(sessionID, { usd: 0.2 })
+      responses = [
+        [LLMEvent.providerError({ message: "prompt too long", classification: "context-overflow" })],
+        compactionAccountingSummary("## Goal\n- Recover within the budget"),
+        fragmentFixture("text", "must-not-follow-overflow", ["Must not run"]).completeEvents,
+      ]
+      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Continue" }), resume: false })
+
+      yield* session.resume(sessionID)
+
+      expect(requests).toHaveLength(2)
+      expect(yield* guard.snapshot(sessionID)).toMatchObject({
+        spentUsd: 0.21,
+        steps: 1,
+        stopped: { reason: "cap" },
+      })
+      expect(yield* session.context(sessionID)).toMatchObject([{ type: "compaction", cost: 0.21 }])
+    }),
+  )
+
+  for (const scenario of ["unknown", "unrated", "incomplete", "free"] as const) {
+    it.effect(`classifies a ${scenario} compaction call with the ordinary spend rules`, () =>
+      Effect.gen(function* () {
+        const session = yield* setupCompactionAccounting
+        if (scenario === "unknown") currentModel = compactionAccountingModel()
+        if (scenario === "unrated")
+          currentModel = SessionRunnerModel.withPricing(compactionAccountingModel(), [
+            { input: 0, output: 0, cache: { read: 0, write: 0 } },
+          ])
+        if (scenario === "free") currentModel = SessionRunnerModel.withFreeRoute(compactionAccountingModel())
+        const guard = yield* SpendGuard.Service
+        yield* guard.arm(sessionID, { usd: 1, unpricedSteps: 1, ...(scenario === "free" ? { steps: 1 } : {}) })
+        responses = [
+          scenario === "incomplete" || scenario === "free"
+            ? fragmentFixture("text", "unpriced-summary", ["## Goal\n- Continue"]).completeEvents
+            : compactionAccountingSummary("## Goal\n- Continue"),
+          fragmentFixture("text", "must-not-follow-unpriced", ["Must not run"]).completeEvents,
+        ]
+
+        yield* session.resume(sessionID)
+
+        expect(requests).toHaveLength(1)
+        expect(yield* guard.snapshot(sessionID)).toMatchObject({
+          spentUsd: 0,
+          steps: 1,
+          costKind: scenario === "free" ? "free" : scenario === "incomplete" ? "priced" : "unknown",
+          unpricedSteps: scenario === "free" ? 0 : 1,
+          stopped: { reason: scenario === "free" ? "steps" : "unpriced" },
+        })
+        const recorded = yield* recordedCompactionEvents
+        expect(recorded).toHaveLength(2)
+        expect(recorded[1]).toMatchObject({ data: { cost: 0 } })
+        expect(Boolean(recorded[1]?.data.unpriced)).toBe(scenario !== "unrated")
+      }),
+    )
+  }
+
+  for (const usage of [undefined, { inputTokens: 100_000, outputTokens: 1_000 }]) {
+    it.effect(
+      `settles ${usage ? "known" : "missing"} compaction usage and failure before propagating cancellation`,
+      () =>
+        Effect.gen(function* () {
+          const session = yield* setupCompactionAccounting
+          const guard = yield* SpendGuard.Service
+          const runner = yield* SessionRunner.Service
+          const ready = yield* Deferred.make<void>()
+          if (usage) {
+            const events = yield* EventV2.Service
+            yield* events.listen((event) =>
+              event.type === SessionStatusEvent.Spend.type ? Effect.die("spend listener failed") : Effect.void,
+            )
+          }
+          responseStream = Stream.concat(
+            Stream.fromIterable([
+              LLMEvent.stepStart({ index: 0 }),
+              LLMEvent.textDelta({ id: "interrupted-summary", text: "Partial summary" }),
+              ...(usage ? [LLMEvent.stepFinish({ index: 0, reason: "stop", usage })] : []),
+            ]),
+            Stream.fromEffect(Deferred.succeed(ready, undefined)).pipe(Stream.flatMap(() => Stream.never)),
+          )
+          const fiber = yield* runner.run({ sessionID, force: true }).pipe(Effect.forkChild)
+          yield* Deferred.await(ready)
+          yield* Fiber.interrupt(fiber)
+          const result = yield* Fiber.await(fiber)
+
+          expect(result._tag).toBe("Failure")
+          expect(result._tag === "Failure" && Cause.hasInterrupts(result.cause)).toBe(true)
+          expect(requests).toHaveLength(1)
+          const run = yield* guard.snapshot(sessionID)
+          expect(run).toMatchObject({ spentUsd: usage ? 0.21 : 0, steps: 1, unpricedSteps: usage ? 0 : 1 })
+          expect((yield* session.get(sessionID)).cost).toBeCloseTo(usage ? 0.21 : 0)
+          const recorded = yield* recordedCompactionEvents
+          expect(recorded).toHaveLength(2)
+          expect(recorded[1]).toMatchObject({
+            type: EventV2.versionedType(
+              SessionEvent.Compaction.Failed.type,
+              SessionEvent.Compaction.Failed.durable!.version,
+            ),
+            data: { cost: usage ? 0.21 : 0 },
+          })
+          expect(yield* session.context(sessionID)).not.toContainEqual(expect.objectContaining({ type: "compaction" }))
+          yield* replaySessionProjection(sessionID)
+          yield* replaySessionProjection(sessionID)
+          expect((yield* session.get(sessionID)).cost).toBeCloseTo(usage ? 0.21 : 0)
+          expect(yield* guard.snapshot(sessionID)).toEqual(run)
+          if (!usage) {
+            responses = [
+              compactionAccountingSummary("## Goal\n- Resume the interrupted request"),
+              fragmentFixture("text", "resumed-after-interruption", ["Continued"]).completeEvents,
+            ]
+            yield* session.resume(sessionID)
+            expect(requests).toHaveLength(3)
+            expect(requests[1]?.cache).toBe("none")
+          }
+        }),
+    )
+  }
+
+  it.effect("does not charge a compaction canceled before its model call", () =>
+    Effect.gen(function* () {
+      const session = yield* setupCompactionAccounting
+      const guard = yield* SpendGuard.Service
+      const runner = yield* SessionRunner.Service
+      const events = yield* EventV2.Service
+      const ready = yield* Deferred.make<void>()
+      const release = yield* Deferred.make<void>()
+      const before = yield* session.get(sessionID)
+      yield* events.listen((event) =>
+        event.type === SessionEvent.Compaction.Started.type
+          ? Deferred.succeed(ready, undefined).pipe(Effect.andThen(Deferred.await(release)), Effect.asVoid)
+          : Effect.void,
+      )
+      const fiber = yield* runner.run({ sessionID, force: true }).pipe(Effect.forkChild)
+      yield* Deferred.await(ready)
+      const cancellation = yield* Fiber.interrupt(fiber).pipe(Effect.forkChild({ startImmediately: true }))
+      yield* Deferred.succeed(release, undefined)
+      yield* Fiber.join(cancellation)
+
+      expect(Exit.hasInterrupts(yield* Fiber.await(fiber))).toBe(true)
+      expect(requests).toHaveLength(0)
+      expect(yield* guard.snapshot(sessionID)).toMatchObject({ steps: 0, spentUsd: 0, unpricedSteps: 0 })
+      const after = yield* session.get(sessionID)
+      expect(after.cost).toBe(before.cost)
+      expect(after.unpricedSteps ?? 0).toBe(before.unpricedSteps ?? 0)
+      const recorded = yield* recordedCompactionEvents
+      expect(recorded).toHaveLength(2)
+      expect(recorded[1]?.data.cost).toBeUndefined()
+      expect(recorded[1]?.data.tokens).toBeUndefined()
+      expect(recorded[1]?.data.unpriced).toBeUndefined()
+    }),
+  )
+
+  it.effect("does not launch a compaction when a linked root stops during its started notification", () =>
+    Effect.gen(function* () {
+      const session = yield* setupCompactionAccounting
+      const guard = yield* SpendGuard.Service
+      const events = yield* EventV2.Service
+      const ready = yield* Deferred.make<void>()
+      const release = yield* Deferred.make<void>()
+      yield* guard.begin(otherSessionID, { usd: 0.2 })
+      yield* guard.link(sessionID, otherSessionID)
+      yield* events.listen((event) =>
+        event.type === SessionEvent.Compaction.Started.type
+          ? Deferred.succeed(ready, undefined).pipe(Effect.andThen(Deferred.await(release)), Effect.asVoid)
+          : Effect.void,
+      )
+      const fiber = yield* session.resume(sessionID).pipe(Effect.forkChild)
+      yield* Deferred.await(ready)
+      yield* guard.record(otherSessionID, {
+        costUsd: 0.2,
+        costKind: "priced",
+        contextTokens: 0,
+        cachedTokens: 0,
+        continues: true,
+        tools: [],
+        patched: false,
+      })
+      const root = yield* guard.snapshot(otherSessionID)
+      yield* Deferred.succeed(release, undefined)
+      yield* Fiber.join(fiber)
+
+      expect(requests).toHaveLength(0)
+      expect(yield* guard.snapshot(otherSessionID)).toEqual(root)
+      const recorded = yield* recordedCompactionEvents
+      expect(recorded).toHaveLength(2)
+      expect(recorded[1]?.data.cost).toBeUndefined()
+      expect(recorded[1]?.data.tokens).toBeUndefined()
+    }),
+  )
+
+  it.effect("retains known compaction spend and the original defect when the stream fails after usage", () =>
+    Effect.gen(function* () {
+      const session = yield* setupCompactionAccounting
+      const guard = yield* SpendGuard.Service
+      const runner = yield* SessionRunner.Service
+      const defect = new Error("summary stream defect")
+      responseStream = Stream.concat(
+        Stream.fromIterable(compactionAccountingSummary("Partial summary")),
+        Stream.fromEffect(Effect.die(defect)),
+      )
+
+      const result = yield* runner.run({ sessionID, force: true }).pipe(Effect.exit)
+
+      expect(result._tag).toBe("Failure")
+      expect(result._tag === "Failure" && Cause.squash(result.cause)).toBe(defect)
+      expect(requests).toHaveLength(1)
+      expect(yield* guard.snapshot(sessionID)).toMatchObject({ spentUsd: 0.21, steps: 1, unpricedSteps: 0 })
+      expect((yield* session.get(sessionID)).cost).toBeCloseTo(0.21)
+      expect(yield* recordedCompactionEvents).toMatchObject([
+        {},
+        {
+          type: EventV2.versionedType(
+            SessionEvent.Compaction.Failed.type,
+            SessionEvent.Compaction.Failed.durable!.version,
+          ),
+          data: { cost: 0.21 },
+        },
+      ])
+    }),
+  )
+
+  it.effect("persists a successful compaction before a live spend listener fails", () =>
+    Effect.gen(function* () {
+      const session = yield* setupCompactionAccounting
+      const guard = yield* SpendGuard.Service
+      const runner = yield* SessionRunner.Service
+      const events = yield* EventV2.Service
+      const defect = new Error("live spend listener failed")
+      yield* events.listen((event) => (event.type === SessionStatusEvent.Spend.type ? Effect.die(defect) : Effect.void))
+      response = compactionAccountingSummary("## Goal\n- Preserve the task")
+
+      const result = yield* runner.run({ sessionID, force: true }).pipe(Effect.exit)
+
+      expect(result._tag === "Failure" && Cause.squash(result.cause)).toBe(defect)
+      expect(requests).toHaveLength(1)
+      const run = yield* guard.snapshot(sessionID)
+      expect(run).toMatchObject({ spentUsd: 0.21, steps: 1, unpricedSteps: 0 })
+      expect((yield* session.get(sessionID)).cost).toBeCloseTo(0.21)
+      expect(yield* recordedCompactionEvents).toMatchObject([
+        {},
+        {
+          type: EventV2.versionedType(
+            SessionEvent.Compaction.Ended.type,
+            SessionEvent.Compaction.Ended.durable!.version,
+          ),
+          data: { cost: 0.21 },
+        },
+      ])
+      yield* replaySessionProjection(sessionID)
+      expect((yield* session.get(sessionID)).cost).toBeCloseTo(0.21)
+      expect(yield* guard.snapshot(sessionID)).toEqual(run)
+    }),
+  )
+
+  it.effect("counts known usage from a failed compaction stream before honoring the cap", () =>
+    Effect.gen(function* () {
+      const session = yield* setupCompactionAccounting
+      const guard = yield* SpendGuard.Service
+      yield* guard.arm(sessionID, { usd: 0.2 })
+      responseStream = Stream.concat(
+        Stream.fromIterable(compactionAccountingSummary("Partial summary")),
+        Stream.fail(providerUnavailable()),
+      )
+
+      yield* session.resume(sessionID)
+
+      expect(requests).toHaveLength(1)
+      expect(yield* guard.snapshot(sessionID)).toMatchObject({
+        spentUsd: 0.21,
+        steps: 1,
+        unpricedSteps: 0,
+        stopped: { reason: "cap" },
+      })
+      expect((yield* session.get(sessionID)).cost).toBeCloseTo(0.21)
+      expect(yield* recordedCompactionEvents).toMatchObject([
+        {},
+        {
+          type: EventV2.versionedType(
+            SessionEvent.Compaction.Failed.type,
+            SessionEvent.Compaction.Failed.durable!.version,
+          ),
+          data: { cost: 0.21 },
+        },
+      ])
+    }),
+  )
+
+  it.effect("charges a linked compaction to its root and rejects another helper under the stopped root", () =>
+    Effect.gen(function* () {
+      const session = yield* setupCompactionAccounting
+      const guard = yield* SpendGuard.Service
+      yield* guard.begin(otherSessionID, { usd: 0.2 })
+      yield* guard.link(sessionID, otherSessionID)
+      responses = [compactionAccountingSummary("## Goal\n- Linked task")]
+
+      yield* session.resume(sessionID)
+
+      expect(requests).toHaveLength(1)
+      const root = yield* guard.snapshot(otherSessionID)
+      expect(root).toMatchObject({ rootID: otherSessionID, spentUsd: 0.21, steps: 1, stopped: { reason: "cap" } })
+      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Pending work" }), resume: false })
+      yield* session.resume(sessionID)
+      expect(requests).toHaveLength(1)
+      expect(yield* guard.snapshot(otherSessionID)).toEqual(root)
+      const { db } = yield* Database.Service
+      expect(yield* SessionInput.hasPending(db, sessionID, "steer")).toBe(true)
     }),
   )
 
