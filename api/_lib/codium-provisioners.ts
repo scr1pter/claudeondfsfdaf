@@ -4,16 +4,18 @@ import { notifyOwner, ownerAlertsConfigured } from "./codium-owner.js"
 import { OUTBOX_SCRIPTS, registerProvisioner, type PerkProvisioner, type Transition } from "./codium-provision.js"
 import { ApiError } from "./http.js"
 import { persistentStore } from "./persistent-store.js"
+import { relayConfigured, relayErase, relayKill, relaySuspend, type RelaySuspendReason } from "./remote-relay.js"
 import { eraseAccountPushSubscriptions, pushConfigured } from "./web-push.js"
+import type { EntitlementSnapshot } from "../../packages/schema/src/codium-entitlements.js"
 
 /*
  * The provisioners (contract §4.8): one per service that follows the plan cache, each converging its service to the
  * snapshot reconcile wrote (§4.4's per-service table). Every configured one gets an outbox item, in the same EVAL as
  * each new snapshot version, and the outbox runs it (codium-provision.ts).
  *
- * WP A06 builds `github-runs` and `owner-notify`; WP A31 builds `founding`; WP A37 builds `push`. The others are stubs,
- * not configured, so they get no items: each service's work package replaces its stub here (remote A40, vault, hosted,
- * ops) and the daily sweep then catches every account up to its snapshot.
+ * WP A06 builds `github-runs` and `owner-notify`; WP A31 builds `founding`; WP A37 builds `push`; WP A40 builds
+ * `remote`. The others are stubs, not configured, so they get no items: each service's work package replaces its stub
+ * here (vault, hosted, ops) and the daily sweep then catches every account up to its snapshot.
  */
 
 const DAY_MS = 86_400_000
@@ -179,6 +181,49 @@ export const push: PerkProvisioner = {
   },
 }
 
+// ── remote ─────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+/** What the relay should hold for a snapshot: a suspension while paused or frozen (§4.4's Remote relay row). */
+export function relaySuspension(snapshot: EntitlementSnapshot | undefined): RelaySuspendReason | undefined {
+  if (snapshot?.state === "paused") return "paused"
+  if (snapshot?.state === "frozen") return snapshot.reason === "owner" ? "owner" : "frozen"
+  return undefined
+}
+
+/**
+ * `remote` (WP A40, §4.4's Remote relay row), converging the account's relay object to the snapshot:
+ * - active and renewing: no suspension (tickets are minted only while the plan allows Remote);
+ * - paused: suspended, so paid sessions close and are refused until the payment is fixed;
+ * - frozen: suspended, and connections from tickets issued before `revokedBefore` closed for good;
+ * - ended (or no plan any more): every connection from a ticket issued before the change closed (no new ticket can be
+ *   minted), and any suspension lifted, so a returning subscriber connects again;
+ * - account deletion (`closing`): everything the relay holds for the account erased (P5).
+ * Each call is made only when the change needs it, or always when the previous snapshot is unknown (the sweep's
+ * catch-up), and every one is idempotent: a suspension is ordered by the snapshot's `updatedAt`, and a revocation time
+ * only moves forward at the relay. Configured while the relay can be called (its address and the internal secret).
+ */
+export const remote: PerkProvisioner = {
+  id: "remote",
+  configured: () => relayConfigured(),
+  async apply(t, fetcher = fetch) {
+    const { from, to } = t
+    if (to.state === "ended" && to.reason === "closing") return relayErase(t.account, fetcher)
+    if (to.state === "none" && (!from || from.state === "none")) return
+    if (to.revokedBefore !== undefined && (!from || from.revokedBefore !== to.revokedBefore))
+      await relayKill(t.account, to.revokedBefore, fetcher)
+    const ended = to.state === "ended" || to.state === "none"
+    if (ended && (!from || (from.state !== "ended" && from.state !== "none")))
+      await relayKill(t.account, to.updatedAt, fetcher)
+    const suspension = relaySuspension(to)
+    if (!from || relaySuspension(from) !== suspension)
+      await relaySuspend(
+        t.account,
+        { suspended: suspension !== undefined, ...(suspension ? { reason: suspension } : {}), at: to.updatedAt },
+        fetcher,
+      )
+  },
+}
+
 // ── Stubs ──────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 /** A service not built yet: never configured, so it gets no items and does nothing. */
@@ -189,7 +234,7 @@ function stub(id: string): PerkProvisioner {
 /** Every provisioner, in the order their items are written. */
 export const PROVISIONERS: readonly PerkProvisioner[] = [
   githubRuns,
-  stub("remote"),
+  remote,
   push,
   stub("vault"),
   stub("hosted"),

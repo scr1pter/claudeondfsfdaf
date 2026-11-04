@@ -1,6 +1,6 @@
 # Vector Remote: the relay
 
-Vector Remote connects a phone to the Vector desktop app through a relay Vector runs on Cloudflare. This page covers the relay Worker (Codium build WP A39). The API that mints its tickets (A40), the desktop side (A41) and the phone screens (A42) add their own steps here when they land. How it works is in [MODEL-PLANS.md](../MODEL-PLANS.md#phone-alerts-and-shared-service-plumbing). Nothing on this page has been created, deployed or tried against Cloudflare yet.
+Vector Remote connects a phone to the Vector desktop app through a relay Vector runs on Cloudflare. This page covers the relay Worker (Codium build WP A39) and the API that mints its tickets (A40). The desktop side (A41) and the phone screens (A42) add their own steps here when they land. How it works is in [MODEL-PLANS.md](../MODEL-PLANS.md#phone-alerts-and-shared-service-plumbing). Nothing on this page has been created, deployed or tried against Cloudflare yet.
 
 Remote is listed (`remote` in `CODIUM_LISTED_PERKS`) only after the outside security review (contract §1.2), and only once A40 to A42 have shipped.
 
@@ -50,13 +50,14 @@ Run these from `packages/relay`, signed in with `wrangler login` to the Cloudfla
    ```
 
 6. **Deploy** with the hosted deploy workflow (WP A58, `target=relay`), from protected main, once it exists. The Codium CI lane already runs `wrangler deploy --dry-run` and a smoke test under `wrangler dev --local` on every push.
-7. **Tell the API where it is:** set `VECTOR_REMOTE_RELAY_URL` in Vercel to the Worker's `wss://` address (A40). The phone app's content security policy gets that host in A42.
+7. **Tell the API where it is:** set `VECTOR_REMOTE_RELAY_URL` in Vercel to the Worker's `wss://` origin, with no path (for example `wss://vector-remote-relay.<your-subdomain>.workers.dev`). The API calls the relay's internal actions on the same host over https. The phone app's content security policy gets that host in A42.
+8. **Turn the API on:** set `VECTOR_REMOTE_ENABLED=true` in Vercel, Production only, and redeploy. Until then no ticket is minted, whatever the switch says. The `remote` switch on `/owner/codium` then turns Remote off and on without a redeploy.
 
 Without its three secrets the relay answers 503 and admits no one; with a malformed `TICKET_PUBLIC_KEYS` it admits no one either.
 
 ## Turning it off
 
-- **Normally:** the `remote` switch on `/owner/codium`. The API then stops minting tickets and sets the relay's kill flag (A40).
+- **Normally:** the `remote` switch on `/owner/codium`. The API then stops minting tickets and sets the relay's kill flag. The answer says `relay: "updated"`; `relay: "failed"` means the relay could not be reached: apply the switch again, or set the flag directly as below.
 - **Directly, if the API cannot reach it:**
 
   ```sh
@@ -79,3 +80,11 @@ Without its three secrets the relay answers 503 and admits no one; with a malfor
 ## Fair use
 
 Each account gets the plan's paired computers (1, 3, 5, 5) and up to five phones, counted in the order they paired; viewer time each period up to the plan's viewer-hours (60, 100, 200, 200); and relay awake time up to one and a half times that. When the viewer-hours are used up, phones are closed and refused until the next period while computers stay connected; when the awake time is used up, everything is. A phone that sends no data for 30 minutes is closed, and the app reconnects when its user comes back.
+
+## What the API does (A40)
+
+- **Tickets.** `POST /api/remote/ticket` signs a five-minute ticket for one connection. A computer needs the desktop app's own sign-in, a phone a website session from the phone app's origin (`VECTOR_PHONE_APP_ORIGIN`). The plan must be active or renewing within grace; the paired-computer count and viewer-hours come from the plan, never from the device.
+- **Plan changes.** The `remote` provisioner follows the plan cache through the outbox: a paused or frozen plan suspends the account at the relay (every connection closes and new ones are refused), a recovered plan lifts it, an ended plan closes connections from earlier tickets, and account deletion erases what the relay holds for the account. A call the relay does not answer is retried by the outbox, then dead-lettered with an owner alert.
+- **Revocation.** Revoking an account's tokens (account deletion does) also closes its relay connections. If the relay cannot be reached then, the account still cannot mint a ticket, and a phone is closed within a minute of its ticket's expiry.
+- **Devices.** `GET /api/remote/devices`, `POST /api/remote/devices/:id/revoke` and `POST /api/remote/kill` ("Disconnect all") work whatever the plan, so devices can always be removed.
+- **GitHub runs.** `GET /api/remote/cloud-runs` lists the account's runs of Vector's GitHub agent from the run records Codex's GitHub work keeps. It lists nothing until the integration commit (A59) registers that reader.

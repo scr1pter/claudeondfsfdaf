@@ -898,3 +898,52 @@ The shared browser action module validates explicit request/response shapes and 
   - Root test: `test/remote-relay-contract.test.ts`.
   - `.github/workflows/vector-codium.yml`, `bun.lock`.
   - Docs: `docs/vector/MODEL-PLANS.md`, `docs/vector/owner-actions/remote.md` (new).
+
+## A40 Remote API (4 Nov 2026)
+
+- **"Refused when not active"** is read as §4.4's Remote relay row: a ticket is minted while the plan is active, or
+  renewing within grace (`requireEntitlement(account, "remote")`). Paused, ended, frozen and no plan get the plan's own
+  refusal (402 `MODEL_PLAN_PAYMENT_REQUIRED`, 402 `MODEL_PLAN_REQUIRED`, 403 `MODEL_PLAN_BLOCKED`), which the clients
+  already map to "Update card", "See plans" and "contact"; `REMOTE_PAUSED` stays the relay's close code. Zero paired
+  computers is 403 `CODIUM_PERK_REQUIRED`. The switch off or Remote not configured is 503 `REMOTE_UNAVAILABLE`.
+- **"Phones need a Supabase session on the phone origin"**: a website session whose request `Origin` is exactly
+  `VECTOR_PHONE_APP_ORIGIN` (the phone app calls its API on its own origin, so the browser sets it). Without it, 403
+  `REMOTE_PHONE_APP_REQUIRED`; without the setting, 503. A desktop token cannot mint a phone ticket and a session
+  cannot mint a computer ticket. Both roles also need `requireUnrevokedAccount`.
+- **New codes** besides §4.10's: `REMOTE_UNAVAILABLE` (503), `REMOTE_PHONE_APP_REQUIRED` (403), `REMOTE_TICKET_INVALID`
+  and `REMOTE_DEVICE_INVALID` (400), `REMOTE_RUNS_LIMIT` (400), `REMOTE_RUNS_UNAVAILABLE` (503); and A37's
+  `DESKTOP_SIGN_IN_REQUIRED` (403) for a pasted CLI token.
+- **The API does not count devices before signing.** The relay enforces the paired-computer and phone caps on every
+  connection from the ticket's count, which comes from the snapshot (S1 on the server). Asking the relay at each mint
+  would double the relay calls of every refresh. `GET /api/remote/devices` marks the devices past the plan's limit.
+- **`kill` is "Disconnect all"**: every connection closes and tickets issued before now are refused; devices stay
+  paired. It accepts the desktop sign-in or a website session. So do `devices` and `devices/:id/revoke`, which work
+  whatever the plan (like A37's push `DELETE`) and are not stopped by the `remote` switch; an account that never had a
+  plan is answered without asking the relay.
+- **Ticket times.** `iat` is the current whole second and `exp` 300 s later (the relay's maximum). The relay compares
+  whole-second `iat` with a millisecond kill time, so a ticket minted in the same second as a kill is refused too; the
+  client asks again. The API no longer clamps a kill time to its own clock (the relay clamps to its own).
+- **"revokeAccountTokens also kills relay sockets"**: after the revocation mark is written, the relay's `kill` is
+  called for the account, best effort (the answer is unchanged). If the relay cannot be reached, the mark still stops
+  new tickets and a phone is closed within a minute of its ticket's expiry.
+- **The `remote` switch reaches the Worker.** Writing it on `/owner/codium` also calls the relay's `flags`, and the
+  answer carries `relay: "updated" | "failed" | "not-configured"`. Edit in `api/_lib/codium-owner-api.ts` (outside
+  A40's list); a failure never undoes the switch.
+- **Provisioner readings** (§4.4's row): paused suspends; frozen kills at `revokedBefore` and suspends (`owner` for an
+  owner hold); active and renewing lift; ended (and a plan gone back to none) kills at the snapshot's `updatedAt` and
+  lifts any suspension, since the relay's suspension reasons are paused, frozen and owner only and no ticket can be
+  minted while ended; `closing` erases (P5). Calls are made only when the change needs one, or always without a
+  previous snapshot. It is configured while the relay can be called, not only while `VECTOR_REMOTE_ENABLED` is true,
+  so suspensions and erasure keep working after Remote is turned off.
+- **"Cloud runs from Codex's records"**: Codex's `listCloudRuns` lives on `vector-at-mention`, which this build may not
+  import. The route reads a registered reader (`registerCloudRunReader`) that A59 wires to it, and answers
+  `{runs: [], available: false}` until then. Only `id, repository, url, event, source, purpose, startedAt, endedAt,
+outcome, verdict, actor.login` pass. Every paid plan includes it while the plan allows Remote, and it needs Remote
+  on.
+- **Not built here:** `remote`'s readiness check in `perkServices` (Remote is unusable before A41 and A42, so A42 adds
+  it) and the `remote` status meter, which would form an import cycle if registered beside the provisioner
+  (`model-plan-status.ts` imports `codium-provisioners.ts` through `model-plan-account.ts`).
+- **Files outside A40's list:** `api/_lib/remote-relay.ts` (new; the relay client, kept apart so `revocation.ts` can
+  import it without a cycle), `api/_lib/revocation.ts`, `api/_lib/codium-owner-api.ts`, `.env.example`,
+  `docs/vector/MODEL-PLANS.md`, `docs/vector/owner-actions/remote.md`, and the test file `test/remote-ticket-api.test.ts`
+  (the contract's `remote-ticket-api.test.ts`), which imports the relay package's test fakes.
