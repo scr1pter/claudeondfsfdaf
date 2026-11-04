@@ -5,20 +5,15 @@ import type { ProviderV2 } from "@vectordevai/core/provider"
 import { isContextOverflow } from "@vectordevai/llm"
 import { FreeModelsLimitError } from "@vectordevai/schema/free-model"
 import { ModelPlans } from "@vectordevai/core/model-plans"
+import { ResponseStreamError } from "./response-stall"
+
+export { ResponseStreamError } from "./response-stall"
 
 export class HeaderTimeoutError extends Error {
   public override readonly name = "ProviderHeaderTimeoutError"
 
   constructor(public readonly ms: number) {
     super(`Provider response headers timed out after ${ms}ms`)
-  }
-}
-
-export class ResponseStreamError extends Error {
-  public override readonly name = "ProviderResponseStreamError"
-
-  constructor(message: string, options?: ErrorOptions) {
-    super(message, options)
   }
 }
 

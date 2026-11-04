@@ -140,7 +140,7 @@ test("every technology carries its status, and only the shipped ones say Today",
     "Tokenomics engine": "Today",
     "Subagent system": "Today",
     Vectorscope: "Today",
-    "Vector Velocity": "In development",
+    "Vector Velocity": "Planned",
     "Vector Cloud": "Today · desktop",
     "Vector Codium": "Built in, not on sale",
   })
@@ -174,10 +174,10 @@ test("Vector Brain names desktop 1.99.110 and keeps the owner's description", as
   )
 })
 
-test("the investor page gives Vector Velocity one status, one size, 550B parameters, and no active size, base or provider", () => {
+test("the investor page describes planned Vector Velocity with 550B+ parameters and no performance promise", () => {
   const velocity = milestone("Vector Velocity")
-  expect(velocity).toContain("A 550B-parameter model built for Vector's own loop")
-  expect(velocity).toContain("designed to cost significantly less to run than other very large coding models")
+  expect(velocity).toContain("A planned model with 550B+ parameters for Vector's own coding loop")
+  expect(velocity).not.toMatch(/significantly less|cheaper|faster|launches? (?:in|on)|release date/i)
   expect(velocity).toContain("No weights or benchmarks yet")
   expect(velocity).not.toMatch(
     /\b(?:built on|based on|base model|fine-tun\w*|distill\w*)\b|\bGPUs?\b|\bcompute\b|credits|Nebius/i,
@@ -185,7 +185,7 @@ test("the investor page gives Vector Velocity one status, one size, 550B paramet
   expect(markup).not.toMatch(
     /\bactive (?:per token|param\w*)|parameters active|\bactivated\b|under \d+B|\d+B (?:active|per token|for every token)|parameters (?:per|for every) token|total parameters|\d+B total|billion parameters/i,
   )
-  expect(new Set(Array.from(markup.matchAll(/(\d+)B-parameter/g), (match) => match[1]))).toEqual(new Set(["550"]))
+  expect(new Set(Array.from(markup.matchAll(/(\d+B\+?)(?:-parameter| parameters)/g), (match) => match[1]))).toEqual(new Set(["550B+"]))
   expect(markup).not.toMatch(/Velocity (is|costs|runs) (significantly )?(cheaper|less)/i)
 })
 
@@ -195,11 +195,9 @@ test("the README gives Vector Velocity the investor page's status and size, and 
   const text = await Bun.file(path.join(root, "README.md")).text()
   const readme = text.match(/\*\*Vector Velocity\*\*[^\n]*/)?.[0]
   if (readme === undefined) return expect(text).not.toMatch(/Velocity|\d+B-parameter/)
-  expect(readme).toContain("**Vector Velocity** (In development): Vector's own 550B-parameter model")
+  expect(readme).toContain("**Vector Velocity** (Planned): Vector's own model with 550B+ parameters")
   expect(readme).toContain("there are no weights or benchmarks yet")
-  expect(readme).not.toMatch(
-    /Planned|No work on it has started|active|under \d+B|\d+B\+|\d+ billion|total parameters|\d+B total/i,
-  )
+  expect(readme).not.toMatch(/active|under \d+B|\d+ billion|total parameters|\d+B total/i)
 })
 
 test("the brain is labelled wherever the page opens with it", () => {

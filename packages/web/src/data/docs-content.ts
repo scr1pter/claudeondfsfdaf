@@ -310,7 +310,7 @@ export const subagentKinds = [
 export const changelog = [
   [upcomingRelease.label, upcomingRelease.title, `${upcomingRelease.summary} ${upcomingRelease.status}`],
   // The notes the desktop app shows as What's new for these releases, word for word.
-  ...["1.99.111", "1.99.110", "1.99.109"].flatMap((version) =>
+  ...["1.99.112", "1.99.111", "1.99.110", "1.99.109"].flatMap((version) =>
     release199
       .filter((release) => release.version === version)
       .map((release) => [`October 2026 · ${version}`, release.title, release.summary]),

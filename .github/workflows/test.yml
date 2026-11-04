@@ -6,6 +6,17 @@ on:
       - main
   pull_request:
   workflow_dispatch:
+    inputs:
+      production_benchmark:
+        description: "Record the provider-free production app navigation benchmark"
+        type: boolean
+        required: false
+        default: false
+      offline_footprint:
+        description: "Record offline Standard/Thorough request footprints against local fake providers"
+        type: boolean
+        required: false
+        default: false
 
 concurrency:
   # Keep every run on main so cancelled checks do not pollute the default branch
@@ -126,6 +137,10 @@ jobs:
 
       - name: Setup Bun
         uses: ./.github/actions/setup-bun
+
+      - name: Check SSE deadline cleanup under Node
+        working-directory: packages/engine
+        run: node --experimental-strip-types --test script/smoke-response-stall.mjs
 
       - name: Build the desktop engine bundle
         working-directory: packages/engine
@@ -314,3 +329,147 @@ jobs:
           path: |
             packages/app/e2e/test-results
             packages/app/e2e/playwright-report
+
+  offline-footprint:
+    name: offline request footprint (${{ matrix.runtime }}, ${{ matrix.task_size }})
+    if: github.event_name == 'workflow_dispatch' && inputs.offline_footprint
+    strategy:
+      fail-fast: false
+      matrix:
+        runtime: [vector, vector-openai]
+        task_size: [standard, thorough]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout footprint source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24.15"
+
+      - name: Setup Bun
+        uses: ./.github/actions/setup-bun
+        with:
+          install-flags: --frozen-lockfile --ignore-scripts
+
+      - name: Install ripgrep
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends ripgrep && rg --version
+
+      - name: Check optional execution controls
+        working-directory: packages/script
+        run: bun test --timeout 30000 ../../script/agent-eval/footprint-controls.test.ts
+
+      - name: Record offline request footprint
+        env:
+          FOOTPRINT_DIR: ${{ runner.temp }}/vector-request-footprint/${{ matrix.runtime }}-${{ matrix.task_size }}
+          FOOTPRINT_RUNTIME: ${{ matrix.runtime }}
+          FOOTPRINT_TASK_SIZE: ${{ matrix.task_size }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$FOOTPRINT_DIR"
+          # The harness gives each fixture an isolated home and clean environment with a synthetic key and loopback URL.
+          # Fixed tool scripts check request shape; they do not measure live model quality, caching or cost savings.
+          bun script/agent-eval/footprint.ts --engine-root "$GITHUB_WORKSPACE" --runtime "$FOOTPRINT_RUNTIME" --scenario solo-fix --sessions 2 --task-size "$FOOTPRINT_TASK_SIZE" --judge off --openai-model gpt-6.1-sol --out "$FOOTPRINT_DIR/report.json" --dump "$FOOTPRINT_DIR/requests" 2>&1 | tee "$FOOTPRINT_DIR/footprint.log"
+
+      - name: Preserve report in job logs
+        if: always()
+        env:
+          FOOTPRINT_DIR: ${{ runner.temp }}/vector-request-footprint/${{ matrix.runtime }}-${{ matrix.task_size }}
+        run: node -e 'const fs = require("node:fs"); const file = process.env.FOOTPRINT_DIR + "/report.json"; if (fs.existsSync(file)) console.log("FOOTPRINT_REPORT " + JSON.stringify(JSON.parse(fs.readFileSync(file, "utf8"))))'
+
+      - name: Preserve offline request reports and payloads
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: offline-request-footprint-${{ matrix.runtime }}-${{ matrix.task_size }}-${{ github.sha }}-${{ github.run_attempt }}
+          if-no-files-found: warn
+          retention-days: 14
+          path: ${{ runner.temp }}/vector-request-footprint/
+
+  production-benchmark:
+    name: production app benchmark (manual)
+    if: github.event_name == 'workflow_dispatch' && inputs.production_benchmark
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    env:
+      CI: true
+      PLAYWRIGHT_WORKERS: "1"
+      PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.playwright-browsers
+      VECTOR_PERFORMANCE: "1"
+      VECTOR_PERFORMANCE_RUN_ID: ${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout benchmark source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          # Match the existing e2e job's working Chromium extraction runtime.
+          node-version: "24.15"
+
+      - name: Setup Bun
+        uses: ./.github/actions/setup-bun
+        with:
+          install-flags: --frozen-lockfile --ignore-scripts
+
+      - name: Read Playwright version
+        id: playwright-version
+        run: |
+          version=$(node -e 'console.log(require("./package.json").workspaces.catalog["@playwright/test"])')
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ github.workspace }}/.playwright-browsers
+          key: ${{ runner.os }}-${{ runner.arch }}-playwright-${{ steps.playwright-version.outputs.version }}-chromium
+
+      - name: Install Playwright system dependencies
+        working-directory: packages/app
+        run: bunx playwright install-deps chromium
+
+      - name: Install Playwright browser
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        working-directory: packages/app
+        run: bunx playwright install chromium
+
+      - name: Record production navigation metrics and raw traces
+        working-directory: packages/app
+        env:
+          VECTOR_PERFORMANCE_TRACE_DIR: ${{ runner.temp }}/vector-production-benchmark
+        run: |
+          set -euo pipefail
+          mkdir -p "$VECTOR_PERFORMANCE_TRACE_DIR"
+          node -e 'require("node:fs").writeFileSync(process.env.VECTOR_PERFORMANCE_TRACE_DIR + "/source.json", JSON.stringify({commit: process.env.GITHUB_SHA, run: process.env.VECTOR_PERFORMANCE_RUN_ID, node: process.version, fixture: "mockStressTimeline", providerRequests: "none; navigation-only fixture"}, null, 2))'
+          # The config builds the production app, then serves it with Vite preview.
+          # The existing fixture mocks the engine and providers; no keys or live inference are used.
+          bunx playwright test --config e2e/performance/playwright.config.ts timeline/first-navigation-benchmark.spec.ts --project chromium --workers 1 --repeat-each 3 2>&1 | tee "$VECTOR_PERFORMANCE_TRACE_DIR/benchmark.log"
+
+      - name: Preserve benchmark metrics and raw traces
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: production-app-benchmark-${{ github.sha }}-${{ github.run_attempt }}
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            ${{ runner.temp }}/vector-production-benchmark/
+            packages/app/e2e/test-results/performance
+            packages/app/e2e/playwright-report/performance

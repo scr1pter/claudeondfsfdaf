@@ -21,7 +21,7 @@ export const upcomingRelease = {
 // The desktop release the download page offers today. Not every entry in release199 was published as a
 // desktop or npm release (1.99.9 has notes but no installers), so the releases page marks this one Latest.
 // Update it in the same change that publishes the next desktop installers.
-export const publishedDesktopVersion = "1.99.111"
+export const publishedDesktopVersion = "1.99.112"
 
 // Vector Brain arrives in desktop 1.99.110. The site deploys from main, so until the download page offers that release
 // the landing page and the investor page say it is coming in it, and from then on that it is new in it. The readme and
@@ -740,5 +740,11 @@ export const release199: VectorRelease[] = [
     title: "Deep research preview, Vector Local, and new model choices",
     summary:
       "Deep research arrives in preview with editable plans, Focused and Deep modes, isolated research browsers, and reports linked to source quotes. It makes no code changes. Research searches in each agent's own browser, with a fallback when search is blocked, and does not solve CAPTCHAs, disguise the browser or rotate addresses. Vector Local adds desktop controls for the model servers you choose, web access, and an origin-based request log. It is a policy inside Vector, not a firewall; programs the agent starts have separate network behavior, and Windows has no shell sandbox. Settings → Memory → About you makes learned preferences editable and undoable, and more Vector agents can use relevant preferences. Host locally keeps installed coding agents under the owner's control, with up to four running at once, explicit Try a fix actions, and exclusions from background work, learning, training and benchmark exports. The model picker separates free models provided by Vector from your own provider choices, with your own OpenRouter free copies under OpenRouter and labelled (free). Eligible new free models join the daily refresh, with training-policy consent and US only tags where applicable. The Codium catalog and pricing page now feature DeepSeek V4.1 Flash 1017, Claude Haiku 5.5, GPT-6 Luna, Kimi K3.1 Pro, and Gemini 4 Argon; DeepSeek is listed first and is the default, and Kimi and Gemini use credits faster. Model download notices clear when the model is ready. The required CLI remains 1.99.99; desktop connections to older engines explain which newer features are unavailable, and Vector Local prevents an older WSL engine from starting. This release is not yet code-signed, so a new install may show an operating-system warning on first launch.",
+  },
+  {
+    version: "1.99.112",
+    title: "Agent terminals and browser controls, research cleanup, and first-launch help",
+    summary:
+      "The agent can manage its own terminals and browser tabs, with terminal activity visible in Vector. Asking Vector to save or keep completed research uses Keep in brain, and erasing memory also forgets Deep research runs. Vector Local explains which information it could not read and lets you try again. On macOS, Vector reads its stored credential from Keychain once per launch. A first-launch guide helps new users get started, Settings stays open when the shell list is unavailable, and keyboard shortcuts and the shell picker are available in Settings. Website privacy and account handling are updated. The required CLI remains 1.99.99, so terminal and older WSL engine features still require a separately published CLI. Deep research remains a preview. This release is not yet code-signed, so a new install may show an operating-system warning on first launch.",
   },
 ]
