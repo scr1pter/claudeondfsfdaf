@@ -346,6 +346,9 @@ export async function buildComputerHelper(
     const result = await run(executable, args, settings)
     if (result.code !== 0) {
       // Compiler diagnostics contain repository source locations, never protocol payloads or environment values.
+      // MSBuild and MSVC report many errors on stdout rather than stderr.
+      if (["cmake", "cl", "xcrun"].includes(path.basename(executable)) && result.stdout)
+        console.error(result.stdout.slice(0, 32_768))
       if (result.stderr) console.error(result.stderr.slice(0, 32_768))
       throw new HelperBuildError(`The native helper command failed: ${path.basename(executable)}.`)
     }

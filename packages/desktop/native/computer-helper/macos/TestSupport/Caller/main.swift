@@ -25,9 +25,10 @@ private func process(_ pid: pid_t) -> CallerProcess? {
     var before = proc_bsdinfo()
     var after = proc_bsdinfo()
     let size = Int32(MemoryLayout<proc_bsdinfo>.size)
-    var path = [CChar](repeating: 0, count: Int(PROC_PIDPATHINFO_MAXSIZE))
+    let pathCapacity = Int(PROC_PIDPATHINFO_MAXSIZE)
+    var path = [CChar](repeating: 0, count: pathCapacity)
     guard proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &before, size) == size,
-          proc_pidpath(pid, &path, UInt32(path.count)) > 0,
+          proc_pidpath(pid, &path, UInt32(pathCapacity)) > 0,
           let executable = canonical(String(cString: path)),
           proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &after, size) == size,
           before.pbi_ppid == after.pbi_ppid,

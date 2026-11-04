@@ -7,6 +7,11 @@ on:
   pull_request:
   workflow_dispatch:
     inputs:
+      computer_helper:
+        description: Run only the native computer-helper build and self-tests
+        type: boolean
+        required: false
+        default: false
       hands_benchmark:
         description: Run only the production app baseline for the desktop app-control work
         type: boolean
@@ -23,9 +28,9 @@ concurrency:
   # commit history. PRs and other branches still share a group and cancel stale runs.
   # Expressions have no ternary, so this is the `&&`/`||` idiom; it is safe here only
   # because every format() result is a non-empty string and can never read as falsy.
-  # Manual UI checks and benchmarks have separate groups from normal checks and each other.
-  # Selecting both flags runs both focused jobs in a third group.
-  group: ${{ github.event_name == 'workflow_dispatch' && inputs.hands_ui && format('{0}-hands-ui{1}-{2}', github.workflow, inputs.hands_benchmark && '-benchmark' || '', github.ref) || (github.event_name == 'workflow_dispatch' && inputs.hands_benchmark && format('{0}-hands-benchmark-{1}', github.workflow, github.ref) || (github.ref == 'refs/heads/main' && format('{0}-{1}', github.workflow, github.run_id) || format('{0}-{1}', github.workflow, github.event.pull_request.number || github.ref))) }}
+  # Native-only checks, UI checks and benchmarks have separate groups from normal checks and each other.
+  # The native selector takes precedence; otherwise both Hands flags run their two focused jobs together.
+  group: ${{ github.event_name == 'workflow_dispatch' && inputs.computer_helper && format('{0}-computer-helper-{1}', github.workflow, github.ref) || github.event_name == 'workflow_dispatch' && inputs.hands_ui && format('{0}-hands-ui{1}-{2}', github.workflow, inputs.hands_benchmark && '-benchmark' || '', github.ref) || (github.event_name == 'workflow_dispatch' && inputs.hands_benchmark && format('{0}-hands-benchmark-{1}', github.workflow, github.ref) || (github.ref == 'refs/heads/main' && format('{0}-{1}', github.workflow, github.run_id) || format('{0}-{1}', github.workflow, github.event.pull_request.number || github.ref))) }}
   cancel-in-progress: true
 
 permissions:
@@ -36,8 +41,19 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
+  computer-helper:
+    if: github.event_name != 'workflow_dispatch' || inputs.computer_helper || (!inputs.hands_benchmark && !inputs.hands_ui)
+    uses: ./.github/workflows/computer-helper.yml
+    permissions:
+      contents: read
+    with:
+      artifact-suffix: pr-${{ github.sha }}
+      # Hosted native jobs use a disposable desktop and the driver's fixed isolated target only. Local and direct
+      # workflow callers retain the off default; missing native scenarios are reported as skipped, never passed.
+      isolated-desktop: true
+
   unit:
-    if: github.event_name != 'workflow_dispatch' || (!inputs.hands_benchmark && !inputs.hands_ui)
+    if: github.event_name != 'workflow_dispatch' || (!inputs.computer_helper && !inputs.hands_benchmark && !inputs.hands_ui)
     name: unit (${{ matrix.settings.name }})
     strategy:
       fail-fast: false
@@ -152,7 +168,7 @@ jobs:
   # stray Bun API passes them all and still fails every desktop message ("Bun is not defined", 1.99.99). This boots
   # the bundle under Node and sends one prompt through a Read tool call against a fake model.
   desktop-engine-node:
-    if: github.event_name != 'workflow_dispatch' || (!inputs.hands_benchmark && !inputs.hands_ui)
+    if: github.event_name != 'workflow_dispatch' || (!inputs.computer_helper && !inputs.hands_benchmark && !inputs.hands_ui)
     name: desktop engine bundle (node)
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -187,7 +203,7 @@ jobs:
         run: node script/smoke-node-bundle.ts
 
   engine-linux:
-    if: github.event_name != 'workflow_dispatch' || (!inputs.hands_benchmark && !inputs.hands_ui)
+    if: github.event_name != 'workflow_dispatch' || (!inputs.computer_helper && !inputs.hands_benchmark && !inputs.hands_ui)
     name: engine (linux, shard ${{ matrix.shard }}/4)
     strategy:
       fail-fast: false
@@ -238,7 +254,7 @@ jobs:
           VECTOR_EXPERIMENTAL_DISABLE_FILEWATCHER: "false"
 
   engine-windows:
-    if: github.event_name != 'workflow_dispatch' || (!inputs.hands_benchmark && !inputs.hands_ui)
+    if: github.event_name != 'workflow_dispatch' || (!inputs.computer_helper && !inputs.hands_benchmark && !inputs.hands_ui)
     name: engine (windows, shard ${{ matrix.shard }}/6)
     strategy:
       fail-fast: false
@@ -299,7 +315,7 @@ jobs:
           VECTOR_EXPERIMENTAL_DISABLE_FILEWATCHER: "true"
 
   e2e:
-    if: github.event_name != 'workflow_dispatch' || (!inputs.hands_benchmark && !inputs.hands_ui)
+    if: github.event_name != 'workflow_dispatch' || (!inputs.computer_helper && !inputs.hands_benchmark && !inputs.hands_ui)
     name: e2e (${{ matrix.settings.name }})
     strategy:
       fail-fast: false
@@ -376,7 +392,7 @@ jobs:
 
   hands-ui:
     name: Hands UI (${{ matrix.settings.name }})
-    if: github.event_name == 'workflow_dispatch' && inputs.hands_ui
+    if: github.event_name == 'workflow_dispatch' && !inputs.computer_helper && inputs.hands_ui
     strategy:
       fail-fast: false
       matrix:
@@ -454,7 +470,7 @@ jobs:
 
   hands-benchmark:
     name: production app benchmark
-    if: github.event_name == 'workflow_dispatch' && inputs.hands_benchmark
+    if: github.event_name == 'workflow_dispatch' && !inputs.computer_helper && inputs.hands_benchmark
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:

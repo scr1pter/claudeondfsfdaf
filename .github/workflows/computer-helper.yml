@@ -1,0 +1,607 @@
+name: Computer helper
+
+on:
+  workflow_call:
+    inputs:
+      artifact-suffix:
+        type: string
+        required: false
+        default: ""
+      privileged-required:
+        type: boolean
+        required: false
+        default: false
+      full-desktop-e2e:
+        type: boolean
+        required: false
+        default: true
+      isolated-desktop:
+        type: boolean
+        required: false
+        default: false
+    outputs:
+      darwin-digest:
+        description: Source digest of the verified macOS helper
+        value: ${{ jobs.mac-build.outputs.digest }}
+      win32-digest:
+        description: Source digest of the verified Windows helper
+        value: ${{ jobs.windows-build.outputs.digest }}
+  workflow_dispatch:
+    inputs:
+      artifact-suffix:
+        description: Artifact suffix (letters, digits, dot, underscore or hyphen)
+        type: string
+        required: false
+        default: ""
+      privileged-required:
+        description: Fail if isolated native scenarios fail or skip
+        type: boolean
+        required: false
+        default: false
+      full-desktop-e2e:
+        description: Request the desktop lanes supplied by C8
+        type: boolean
+        required: false
+        default: true
+      isolated-desktop:
+        description: Allow native scenarios only in this disposable CI desktop
+        type: boolean
+        required: false
+        default: false
+  push:
+    branches: ["ci/computer-**"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-computer-helper-${{ github.ref }}-${{ inputs['artifact-suffix'] || github.sha }}
+  cancel-in-progress: true
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      suffix: ${{ steps.plan.outputs.suffix }}
+      extended: ${{ steps.plan.outputs.extended }}
+      windows: ${{ steps.plan.outputs.windows }}
+      windows-protocol: ${{ steps.plan.outputs.windows-protocol }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Resolve native coverage and safe artifact names
+        id: plan
+        shell: bash
+        env:
+          ARTIFACT_SUFFIX: ${{ inputs['artifact-suffix'] || github.sha }}
+          PRIVILEGED_REQUIRED: ${{ inputs['privileged-required'] || false }}
+          ISOLATED_DESKTOP: ${{ inputs['isolated-desktop'] || false }}
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$ARTIFACT_SUFFIX" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]]; then
+            echo "::error::The artifact suffix has unsupported characters."
+            exit 1
+          fi
+          if [[ "$PRIVILEGED_REQUIRED" == true && "$ISOLATED_DESKTOP" != true ]]; then
+            echo "::error::Required native scenarios need explicit isolated-desktop input."
+            exit 1
+          fi
+          extended=true
+          if [[ "$EVENT_NAME" == pull_request ]]; then
+            extended=false
+            git diff --name-only "$BASE_SHA" "$HEAD_SHA" > "$RUNNER_TEMP/computer-changed-paths"
+            if rg -q '(^packages/desktop/native/|^packages/desktop/(scripts/.*computer|test/(computer/|fixtures/computer-protocol/)|src/(main|preload)/computer)|^packages/(schema|core|engine|app)/.*(computer|hands)|^\.github/workflows/(computer-helper|test)\.yml$|^bun\.lock$|^package\.json$)' "$RUNNER_TEMP/computer-changed-paths"; then
+              extended=true
+            fi
+          fi
+          windows=false
+          windows_protocol=false
+          if [[ -f packages/desktop/native/computer-helper/windows/CMakeLists.txt ]]; then windows=true; fi
+          if [[ "$windows" == true && -f packages/desktop/native/computer-helper/windows/src/protocol.cpp ]]; then windows_protocol=true; fi
+          echo "suffix=$ARTIFACT_SUFFIX" >> "$GITHUB_OUTPUT"
+          echo "extended=$extended" >> "$GITHUB_OUTPUT"
+          echo "windows=$windows" >> "$GITHUB_OUTPUT"
+          echo "windows-protocol=$windows_protocol" >> "$GITHUB_OUTPUT"
+          if [[ "$windows" != true ]]; then
+            echo "SKIPPED: Windows native jobs await W1's CMake target." >> "$GITHUB_STEP_SUMMARY"
+          elif [[ "$windows_protocol" != true ]]; then
+            echo "Windows unit/version/probe checks run; protocol, conformance and parent-death checks remain pending W2." >> "$GITHUB_STEP_SUMMARY"
+          fi
+          echo "C4 signing-path fixtures and C8 overlay/desktop end-to-end lanes remain pending their packages." >> "$GITHUB_STEP_SUMMARY"
+
+  mac-build:
+    needs: plan
+    runs-on: macos-15
+    timeout-minutes: 45
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+    outputs:
+      digest: ${{ steps.digest.outputs.value }}
+    defaults:
+      run:
+        shell: bash
+        working-directory: packages/desktop
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - name: Require the pinned Xcode
+        timeout-minutes: 2
+        run: |
+          set -euo pipefail
+          if [[ ! -x "$DEVELOPER_DIR/usr/bin/xcodebuild" ]]; then
+            echo "::error::Xcode 16.4 is required at /Applications/Xcode_16.4.app; another toolchain is not accepted."
+            exit 1
+          fi
+          xcodebuild -version
+          xcrun --sdk macosx swiftc --version
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: package.json
+      - name: Install frozen dependencies without lifecycle scripts
+        timeout-minutes: 10
+        working-directory: .
+        run: bun install --frozen-lockfile --ignore-scripts
+      - name: Build the production universal helper twice
+        id: build
+        timeout-minutes: 20
+        run: |
+          set -euo pipefail
+          bun --no-env-file ./scripts/build-computer-helper.ts --platform darwin --arch universal --channel prod --out native/out/darwin
+          bun --no-env-file ./scripts/build-computer-helper.ts --platform darwin --arch universal --channel prod --out native/out/darwin-repro
+      - name: Require identical shipping bytes
+        timeout-minutes: 2
+        run: |
+          set -euo pipefail
+          cmp native/out/darwin/computer-helper.json native/out/darwin-repro/computer-helper.json
+          node --input-type=module <<'NODE'
+          import { createHash } from "node:crypto"
+          import { readFileSync } from "node:fs"
+          import path from "node:path"
+          const first = "native/out/darwin"
+          const second = "native/out/darwin-repro"
+          const manifest = JSON.parse(readFileSync(path.join(first, "computer-helper.json"), "utf8"))
+          for (const [name, entry] of Object.entries(manifest.files)) {
+            const digests = [first, second].map(root => createHash("sha256").update(readFileSync(path.join(root, name))).digest("hex"))
+            if (digests[0] !== entry.sha256 || digests[1] !== entry.sha256) throw new Error("A repeated helper build changed shipping bytes.")
+          }
+          NODE
+      - name: Run required grant-free native checks
+        timeout-minutes: 8
+        run: bun --no-env-file ./scripts/computer-helper-selftest.ts --platform darwin --bin native/out/darwin/VectorComputer.app/Contents/MacOS/VectorComputer --tests native/out/darwin/tests --privileged off --report "$RUNNER_TEMP/computer-darwin-core.json"
+      - name: Run explicitly isolated privileged scenarios
+        if: ${{ inputs['isolated-desktop'] }}
+        timeout-minutes: 5
+        continue-on-error: ${{ !inputs['privileged-required'] }}
+        env:
+          PRIVILEGED_REQUIRED: ${{ inputs['privileged-required'] }}
+        run: |
+          set -euo pipefail
+          mode=auto
+          if [[ "$PRIVILEGED_REQUIRED" == true ]]; then mode=require; fi
+          bun --no-env-file ./scripts/computer-helper-selftest.ts --platform darwin --bin native/out/darwin/VectorComputer.app/Contents/MacOS/VectorComputer --tests native/out/darwin/tests --privileged "$mode" --report "$RUNNER_TEMP/computer-darwin-privileged.json"
+      - name: Summarize native checks without payloads
+        if: ${{ always() }}
+        timeout-minutes: 2
+        run: |
+          node --input-type=module <<'NODE'
+          import { existsSync, readFileSync, appendFileSync } from "node:fs"
+          import path from "node:path"
+          for (const name of ["computer-darwin-core.json", "computer-darwin-privileged.json"]) {
+            const file = path.join(process.env.RUNNER_TEMP, name)
+            if (!existsSync(file)) continue
+            const report = JSON.parse(readFileSync(file, "utf8"))
+            const counts = ["passed", "failed", "skipped"].map(status => status + "=" + report.checks.filter(check => check.status === status).length).join(", ")
+            appendFileSync(process.env.GITHUB_STEP_SUMMARY, "\n" + name + ": " + counts + "\n")
+            for (const check of report.checks.filter(check => check.status === "skipped"))
+              appendFileSync(process.env.GITHUB_STEP_SUMMARY, "- SKIPPED " + check.name + ": " + check.reason + "\n")
+          }
+          NODE
+      # Only reproducible builds with passing core checks may produce a baseline candidate. The enforced gate
+      # still fails until that measurement is reviewed and committed; prebuilt verification avoids a third build.
+      - name: Enforce the measured production identity lock
+        id: lock
+        if: ${{ success() }}
+        timeout-minutes: 3
+        env:
+          VECTOR_COMPUTER_HELPER_PREBUILT: "true"
+        run: bun --no-env-file ./scripts/build-computer-helper.ts --platform darwin --arch universal --channel prod --out native/out/darwin --check-lock
+      - name: Expose the verified source digest
+        id: digest
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFileSync, appendFileSync } from "node:fs"
+          const manifest = JSON.parse(readFileSync("native/out/darwin/computer-helper.json", "utf8"))
+          appendFileSync(process.env.GITHUB_OUTPUT, "value=" + manifest.sourceDigest + "\n")
+          NODE
+      - name: Archive shipping files and native test executables separately
+        run: |
+          set -euo pipefail
+          tar -cpf "$RUNNER_TEMP/computer-helper-darwin.tar" -C native/out/darwin VectorComputer.app computer-helper.json
+          tar -cpf "$RUNNER_TEMP/computer-helper-darwin-tests.tar" -C native/out/darwin tests
+      - name: Upload shipping helper
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: computer-helper-darwin-${{ needs.plan.outputs.suffix }}
+          path: ${{ runner.temp }}/computer-helper-darwin.tar
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 14
+      - name: Upload native tests
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: computer-helper-darwin-tests-${{ needs.plan.outputs.suffix }}
+          path: ${{ runner.temp }}/computer-helper-darwin-tests.tar
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 14
+      - name: Preserve measured lock candidate
+        if: ${{ always() && hashFiles('packages/desktop/native/out/darwin/identity.lock.computed.json') != '' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: computer-helper-darwin-lock-candidate-${{ needs.plan.outputs.suffix }}
+          path: packages/desktop/native/out/darwin/identity.lock.computed.json
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 14
+      - name: Preserve check reports
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: computer-helper-darwin-reports-${{ needs.plan.outputs.suffix }}
+          path: ${{ runner.temp }}/computer-darwin-*.json
+          if-no-files-found: ignore
+          overwrite: true
+          retention-days: 14
+
+  mac-test:
+    needs: [plan, mac-build]
+    if: ${{ needs.plan.outputs.extended == 'true' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        host: [macos-15-intel, macos-26]
+    runs-on: ${{ matrix.host }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+        working-directory: packages/desktop
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: package.json
+      - name: Install frozen dependencies without lifecycle scripts
+        timeout-minutes: 10
+        working-directory: .
+        run: bun install --frozen-lockfile --ignore-scripts
+      - name: Download shipping helper
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: computer-helper-darwin-${{ needs.plan.outputs.suffix }}
+          path: ${{ runner.temp }}/computer-artifacts
+      - name: Download native test executables
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: computer-helper-darwin-tests-${{ needs.plan.outputs.suffix }}
+          path: ${{ runner.temp }}/computer-artifacts
+      - name: Restore executable modes and verify the native artifact
+        timeout-minutes: 4
+        env:
+          VECTOR_COMPUTER_HELPER_PREBUILT: "true"
+        run: |
+          set -euo pipefail
+          mkdir -p native/out/darwin
+          tar -xpf "$RUNNER_TEMP/computer-artifacts/computer-helper-darwin.tar" -C native/out/darwin
+          tar -xpf "$RUNNER_TEMP/computer-artifacts/computer-helper-darwin-tests.tar" -C native/out/darwin
+          /usr/bin/codesign --verify --strict native/out/darwin/VectorComputer.app
+          bun --no-env-file ./scripts/build-computer-helper.ts --platform darwin --arch universal --channel prod --out native/out/darwin --check-lock
+      - name: Run required grant-free native checks
+        timeout-minutes: 8
+        run: bun --no-env-file ./scripts/computer-helper-selftest.ts --platform darwin --bin native/out/darwin/VectorComputer.app/Contents/MacOS/VectorComputer --tests native/out/darwin/tests --privileged off --report "$RUNNER_TEMP/computer-darwin-matrix.json"
+      - name: Run explicitly isolated matrix scenarios
+        if: ${{ inputs['isolated-desktop'] }}
+        timeout-minutes: 5
+        continue-on-error: ${{ !inputs['privileged-required'] }}
+        env:
+          PRIVILEGED_REQUIRED: ${{ inputs['privileged-required'] }}
+        run: |
+          set -euo pipefail
+          mode=auto
+          if [[ "$PRIVILEGED_REQUIRED" == true ]]; then mode=require; fi
+          bun --no-env-file ./scripts/computer-helper-selftest.ts --platform darwin --bin native/out/darwin/VectorComputer.app/Contents/MacOS/VectorComputer --tests native/out/darwin/tests --privileged "$mode" --report "$RUNNER_TEMP/computer-darwin-matrix-privileged.json"
+      - name: Summarize matrix checks without payloads
+        if: ${{ always() }}
+        timeout-minutes: 2
+        run: |
+          node --input-type=module <<'NODE'
+          import { existsSync, readFileSync, appendFileSync } from "node:fs"
+          import path from "node:path"
+          for (const name of ["computer-darwin-matrix.json", "computer-darwin-matrix-privileged.json"]) {
+            const file = path.join(process.env.RUNNER_TEMP, name)
+            if (!existsSync(file)) continue
+            const report = JSON.parse(readFileSync(file, "utf8"))
+            const counts = ["passed", "failed", "skipped"].map(status => status + "=" + report.checks.filter(check => check.status === status).length).join(", ")
+            appendFileSync(process.env.GITHUB_STEP_SUMMARY, "\n" + name + ": " + counts + "\n")
+            for (const check of report.checks.filter(check => check.status === "skipped"))
+              appendFileSync(process.env.GITHUB_STEP_SUMMARY, "- SKIPPED " + check.name + ": " + check.reason + "\n")
+          }
+          NODE
+      - name: Preserve check report
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: computer-helper-darwin-report-${{ matrix.host }}-${{ needs.plan.outputs.suffix }}
+          path: ${{ runner.temp }}/computer-darwin-matrix*.json
+          if-no-files-found: ignore
+          overwrite: true
+          retention-days: 14
+
+  windows-build:
+    needs: plan
+    if: ${{ needs.plan.outputs.windows == 'true' }}
+    runs-on: windows-2025
+    timeout-minutes: 45
+    outputs:
+      digest: ${{ steps.digest.outputs.value }}
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: packages/desktop
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: package.json
+      - name: Configure the MSVC environment
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
+        with:
+          arch: x64
+      - name: Install frozen dependencies without lifecycle scripts
+        timeout-minutes: 10
+        working-directory: .
+        run: |
+          bun install --frozen-lockfile --ignore-scripts
+          if ($LASTEXITCODE -ne 0) { throw "Frozen dependency installation failed." }
+      - name: Build both production helper architectures
+        timeout-minutes: 20
+        run: |
+          bun --no-env-file ./scripts/build-computer-helper.ts --platform win32 --arch x64,arm64 --channel prod --out native/out/win32
+          if ($LASTEXITCODE -ne 0) { throw "The Windows native build failed." }
+      - name: Run Windows unit and fresh version/probe checks
+        timeout-minutes: 5
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFileSync } from "node:fs"
+          import { spawnSync } from "node:child_process"
+          import path from "node:path"
+          const root = path.resolve("native/out/win32/x64")
+          const run = (file, args) => {
+            const result = spawnSync(file, args, { encoding: "utf8", timeout: 30000, maxBuffer: 65536, windowsHide: true })
+            if (result.error || result.status !== 0) throw new Error("A required Windows native check failed.")
+            return result.stdout
+          }
+          run(path.join(root, "tests/vector-computer-tests.exe"), [])
+          const executable = path.join(root, "vector-computer.exe")
+          const manifest = JSON.parse(readFileSync(path.join(root, "computer-helper.json"), "utf8"))
+          const version = JSON.parse(run(executable, ["--version", "--json"]))
+          if (version.sourceDigest !== manifest.sourceDigest || version.arch !== "x64") throw new Error("Windows native identity differs from its manifest.")
+          for (let attempt = 0; attempt < 2; attempt++) {
+            const probe = JSON.parse(run(executable, ["--probe", "--json"]))
+            if (probe.permissions?.screen !== "n/a" || probe.permissions?.accessibility !== "n/a" || typeof probe.captureBlocked !== "boolean" || typeof probe.elevated !== "boolean")
+              throw new Error("The Windows native probe is invalid.")
+          }
+          NODE
+      - name: Run required Windows protocol and lifecycle checks
+        if: ${{ needs.plan.outputs.windows-protocol == 'true' }}
+        timeout-minutes: 8
+        run: |
+          bun --no-env-file ./scripts/computer-helper-selftest.ts --platform win32 --bin native/out/win32/x64/vector-computer.exe --tests native/out/win32/x64/tests --privileged off --report "$env:RUNNER_TEMP/computer-win32-core.json"
+          if ($LASTEXITCODE -ne 0) { throw "Required Windows conformance failed." }
+      - name: Run explicitly isolated Windows scenarios
+        if: ${{ inputs['isolated-desktop'] && needs.plan.outputs.windows-protocol == 'true' }}
+        timeout-minutes: 5
+        continue-on-error: ${{ !inputs['privileged-required'] }}
+        env:
+          PRIVILEGED_REQUIRED: ${{ inputs['privileged-required'] }}
+        run: |
+          $mode = if ($env:PRIVILEGED_REQUIRED -eq "true") { "require" } else { "auto" }
+          bun --no-env-file ./scripts/computer-helper-selftest.ts --platform win32 --bin native/out/win32/x64/vector-computer.exe --tests native/out/win32/x64/tests --privileged $mode --report "$env:RUNNER_TEMP/computer-win32-privileged.json"
+          if ($LASTEXITCODE -ne 0) { throw "The isolated Windows scenarios failed or were required but skipped." }
+      - name: Summarize Windows protocol readiness
+        if: ${{ always() }}
+        timeout-minutes: 2
+        shell: bash
+        env:
+          WINDOWS_PROTOCOL: ${{ needs.plan.outputs.windows-protocol }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { readdirSync, readFileSync, appendFileSync } from "node:fs"
+          import path from "node:path"
+          if (process.env.WINDOWS_PROTOCOL !== "true")
+            appendFileSync(process.env.GITHUB_STEP_SUMMARY, "\nSKIPPED: W2 has not supplied Windows protocol/conformance/parent-death behavior.\n")
+          for (const name of readdirSync(process.env.RUNNER_TEMP).filter(name => /^computer-win32-.*\.json$/.test(name))) {
+            const report = JSON.parse(readFileSync(path.join(process.env.RUNNER_TEMP, name), "utf8"))
+            const counts = ["passed", "failed", "skipped"].map(status => status + "=" + report.checks.filter(check => check.status === status).length).join(", ")
+            appendFileSync(process.env.GITHUB_STEP_SUMMARY, "\n" + name + ": " + counts + "\n")
+            for (const check of report.checks.filter(check => check.status === "skipped"))
+              appendFileSync(process.env.GITHUB_STEP_SUMMARY, "- SKIPPED " + check.name + ": " + check.reason + "\n")
+          }
+          NODE
+      - name: Expose the verified source digest
+        id: digest
+        run: |
+          $first = Get-Content native/out/win32/x64/computer-helper.json -Raw | ConvertFrom-Json
+          $second = Get-Content native/out/win32/arm64/computer-helper.json -Raw | ConvertFrom-Json
+          if ($first.sourceDigest -ne $second.sourceDigest) { throw "Windows architecture source digests differ." }
+          "value=$($first.sourceDigest)" >> $env:GITHUB_OUTPUT
+      - name: Archive shipping files and tests separately
+        run: |
+          tar -cpf "$env:RUNNER_TEMP/computer-helper-win32.tar" -C native/out/win32 x64/vector-computer.exe x64/computer-helper.json arm64/vector-computer.exe arm64/computer-helper.json
+          if ($LASTEXITCODE -ne 0) { throw "Windows shipping archive failed." }
+          tar -cpf "$env:RUNNER_TEMP/computer-helper-win32-tests.tar" -C native/out/win32 x64/tests arm64/tests
+          if ($LASTEXITCODE -ne 0) { throw "Windows test archive failed." }
+      - name: Upload shipping helpers
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: computer-helper-win32-${{ needs.plan.outputs.suffix }}
+          path: ${{ runner.temp }}/computer-helper-win32.tar
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 14
+      - name: Upload native tests
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: computer-helper-win32-tests-${{ needs.plan.outputs.suffix }}
+          path: ${{ runner.temp }}/computer-helper-win32-tests.tar
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 14
+      - name: Preserve check reports
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: computer-helper-win32-reports-${{ needs.plan.outputs.suffix }}
+          path: ${{ runner.temp }}/computer-win32-*.json
+          if-no-files-found: ignore
+          overwrite: true
+          retention-days: 14
+
+  windows-arm64-test:
+    needs: [plan, windows-build]
+    if: ${{ needs.plan.outputs.extended == 'true' && needs.plan.outputs.windows == 'true' }}
+    runs-on: windows-11-arm
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: packages/desktop
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: package.json
+      - name: Install frozen dependencies without lifecycle scripts
+        timeout-minutes: 10
+        working-directory: .
+        run: |
+          bun install --frozen-lockfile --ignore-scripts
+          if ($LASTEXITCODE -ne 0) { throw "Frozen dependency installation failed." }
+      - name: Download shipping helpers
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: computer-helper-win32-${{ needs.plan.outputs.suffix }}
+          path: ${{ runner.temp }}/computer-artifacts
+      - name: Download native test executables
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: computer-helper-win32-tests-${{ needs.plan.outputs.suffix }}
+          path: ${{ runner.temp }}/computer-artifacts
+      - name: Restore and verify the ARM64 artifact
+        timeout-minutes: 3
+        env:
+          VECTOR_COMPUTER_HELPER_PREBUILT: "true"
+        run: |
+          New-Item -ItemType Directory -Force native/out/win32 | Out-Null
+          tar -xpf "$env:RUNNER_TEMP/computer-artifacts/computer-helper-win32.tar" -C native/out/win32
+          if ($LASTEXITCODE -ne 0) { throw "Windows helper extraction failed." }
+          tar -xpf "$env:RUNNER_TEMP/computer-artifacts/computer-helper-win32-tests.tar" -C native/out/win32
+          if ($LASTEXITCODE -ne 0) { throw "Windows native test extraction failed." }
+          bun --no-env-file ./scripts/build-computer-helper.ts --platform win32 --arch arm64 --channel prod --out native/out/win32
+          if ($LASTEXITCODE -ne 0) { throw "ARM64 native artifact verification failed." }
+      - name: Run ARM64 unit and fresh version/probe checks
+        timeout-minutes: 5
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFileSync } from "node:fs"
+          import { spawnSync } from "node:child_process"
+          import path from "node:path"
+          const root = path.resolve("native/out/win32/arm64")
+          const run = (file, args) => {
+            const result = spawnSync(file, args, { encoding: "utf8", timeout: 30000, maxBuffer: 65536, windowsHide: true })
+            if (result.error || result.status !== 0) throw new Error("A required ARM64 native check failed.")
+            return result.stdout
+          }
+          run(path.join(root, "tests/vector-computer-tests.exe"), [])
+          const executable = path.join(root, "vector-computer.exe")
+          const manifest = JSON.parse(readFileSync(path.join(root, "computer-helper.json"), "utf8"))
+          const version = JSON.parse(run(executable, ["--version", "--json"]))
+          if (version.sourceDigest !== manifest.sourceDigest || version.arch !== "arm64") throw new Error("ARM64 identity differs from its manifest.")
+          for (let attempt = 0; attempt < 2; attempt++) {
+            const probe = JSON.parse(run(executable, ["--probe", "--json"]))
+            if (probe.permissions?.screen !== "n/a" || probe.permissions?.accessibility !== "n/a" || typeof probe.captureBlocked !== "boolean" || typeof probe.elevated !== "boolean")
+              throw new Error("The ARM64 native probe is invalid.")
+          }
+          NODE
+      - name: Run required ARM64 protocol and lifecycle checks
+        if: ${{ needs.plan.outputs.windows-protocol == 'true' }}
+        timeout-minutes: 8
+        run: |
+          bun --no-env-file ./scripts/computer-helper-selftest.ts --platform win32 --bin native/out/win32/arm64/vector-computer.exe --tests native/out/win32/arm64/tests --privileged off --report "$env:RUNNER_TEMP/computer-win32-arm64.json"
+          if ($LASTEXITCODE -ne 0) { throw "Required ARM64 conformance failed." }
+      - name: Run explicitly isolated ARM64 scenarios
+        if: ${{ inputs['isolated-desktop'] && needs.plan.outputs.windows-protocol == 'true' }}
+        timeout-minutes: 5
+        continue-on-error: ${{ !inputs['privileged-required'] }}
+        env:
+          PRIVILEGED_REQUIRED: ${{ inputs['privileged-required'] }}
+        run: |
+          $mode = if ($env:PRIVILEGED_REQUIRED -eq "true") { "require" } else { "auto" }
+          bun --no-env-file ./scripts/computer-helper-selftest.ts --platform win32 --bin native/out/win32/arm64/vector-computer.exe --tests native/out/win32/arm64/tests --privileged $mode --report "$env:RUNNER_TEMP/computer-win32-arm64-privileged.json"
+          if ($LASTEXITCODE -ne 0) { throw "The isolated ARM64 scenarios failed or were required but skipped." }
+      - name: Summarize ARM64 protocol readiness
+        if: ${{ always() }}
+        timeout-minutes: 2
+        shell: bash
+        env:
+          WINDOWS_PROTOCOL: ${{ needs.plan.outputs.windows-protocol }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { readdirSync, readFileSync, appendFileSync } from "node:fs"
+          import path from "node:path"
+          if (process.env.WINDOWS_PROTOCOL !== "true")
+            appendFileSync(process.env.GITHUB_STEP_SUMMARY, "\nSKIPPED: W2 has not supplied ARM64 protocol/conformance/parent-death behavior.\n")
+          for (const name of readdirSync(process.env.RUNNER_TEMP).filter(name => /^computer-win32-arm64.*\.json$/.test(name))) {
+            const report = JSON.parse(readFileSync(path.join(process.env.RUNNER_TEMP, name), "utf8"))
+            const counts = ["passed", "failed", "skipped"].map(status => status + "=" + report.checks.filter(check => check.status === status).length).join(", ")
+            appendFileSync(process.env.GITHUB_STEP_SUMMARY, "\n" + name + ": " + counts + "\n")
+            for (const check of report.checks.filter(check => check.status === "skipped"))
+              appendFileSync(process.env.GITHUB_STEP_SUMMARY, "- SKIPPED " + check.name + ": " + check.reason + "\n")
+          }
+          NODE
+      - name: Preserve check report
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: computer-helper-win32-arm64-report-${{ needs.plan.outputs.suffix }}
+          path: ${{ runner.temp }}/computer-win32-arm64*.json
+          if-no-files-found: ignore
+          overwrite: true
+          retention-days: 14
