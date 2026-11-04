@@ -6,6 +6,7 @@ from pathlib import Path
 import unittest
 
 import evaluate
+import gate_bridge
 
 ROOT = Path(__file__).resolve().parent
 
@@ -46,6 +47,23 @@ class StaticControls(unittest.TestCase):
         ast.parse((ROOT / "evaluate.py").read_bytes())
         self.assertFalse((ROOT / "gold").exists())
         self.assertFalse((ROOT / "reference").exists())
+
+    def test_bridge_retains_working_seed_passes_without_inventing_zero(self):
+        inventory = json.loads((ROOT / "CHECK-INVENTORY.json").read_bytes())
+        rows = [{"name": name, "scope": "business", "passed": index < 12}
+                for index, name in enumerate(inventory["business"])]
+        rows += [{"name": name, "scope": "prerequisite", "passed": True} for name in inventory["prerequisite"]]
+        report = {"kind": "ledgerdesk-maintenance-gate-v1", "mode": "bun-qualification", "checks": rows,
+                  "checksTotal": 54, "checksPassed": 16, "businessTotal": 50, "businessPassed": 12,
+                  "prerequisitesTotal": 4, "prerequisitesPassed": 4, "passed": False}
+        normalized = gate_bridge.normalize(report, 2, True)
+        self.assertEqual(normalized["summary"]["api"]["passed"], 12)
+        self.assertEqual(normalized["summary"]["api"]["failed"], 38)
+        self.assertEqual([row["name"] for row in normalized["checks"]], [row["name"] for row in rows])
+        self.assertEqual(normalized["verdict"], "product_failure")
+        for exit_code, unchanged in ((0, True), (2, False), (1, True)):
+            with self.subTest(exit_code=exit_code, unchanged=unchanged), self.assertRaises(ValueError):
+                gate_bridge.normalize(report, exit_code, unchanged)
 
 
 if __name__ == "__main__":
