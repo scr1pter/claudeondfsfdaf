@@ -75,6 +75,7 @@
     "@kobalte/core": "catalog:",
     "@lezer/highlight": "1.2.3",
     "@vectordevai/core": "workspace:*",
+    "@vectordevai/relay": "workspace:*",
     "@vectordevai/schema": "workspace:*",
     "@vectordevai/sdk": "workspace:*",
     "@vectordevai/session-ui": "workspace:*",

@@ -10,6 +10,8 @@ import { settingsIdentity } from "./account-model"
 import { SettingsAccountV2 } from "./account"
 import { SettingsRoadmapV2 } from "./roadmap"
 import { roadmapTab } from "./roadmap-model"
+import { SettingsRemoteV2 } from "./remote"
+import { remoteTab } from "./remote-model"
 import { SettingsGeneralV2 } from "./general"
 import { SettingsNotificationsV2 } from "./notifications"
 import { SettingsProvidersV2 } from "./providers"
@@ -57,13 +59,22 @@ export const SettingsWorkspace: Component<SettingsWorkspaceProps> = (props) => {
   // The Roadmap vote tab (WP A34) shows only when the signed-in account's Codium plan includes the listed vote, as
   // vectordev.ai's status says; vectordev.ai still decides every vote.
   const [voting, setVoting] = createSignal(false)
+  // The Remote tab (WP A42) shows on the desktop when the plan includes the listed Remote, or when this computer
+  // already has Remote on or a phone paired.
+  const [remoting, setRemoting] = createSignal(false)
   const votingRead = newestRead()
   const readVoting = async (signedIn: boolean) => {
     const account = platform.vectorAccount
     const newest = votingRead()
-    if (!signedIn || !account?.roadmap || !account.codium) return setVoting(false)
+    const local = await platform.remote?.status().catch(() => undefined)
+    if (!signedIn || !account?.codium) {
+      setVoting(false)
+      return setRemoting(Boolean(platform.remote) && remoteTab(undefined, local))
+    }
     const status = await account.codium().catch(() => undefined)
-    if (newest()) setVoting(roadmapTab(status))
+    if (!newest()) return
+    setVoting(Boolean(account.roadmap) && roadmapTab(status))
+    setRemoting(Boolean(platform.remote) && remoteTab(status, local))
   }
   // Spend limits live in the desktop ledger and the account in the desktop main process, which the web build does
   // not have.
@@ -71,6 +82,7 @@ export const SettingsWorkspace: Component<SettingsWorkspaceProps> = (props) => {
     if (item === "spend") return !!spendLimitsApi()
     if (item === "account") return !!platform.vectorAccount
     if (item === "roadmap") return voting()
+    if (item === "remote") return remoting()
     return true
   }
   const groups = createMemo(() =>
@@ -89,6 +101,9 @@ export const SettingsWorkspace: Component<SettingsWorkspaceProps> = (props) => {
 
   onMount(() => {
     const vectorAccount = platform.vectorAccount
+    // Pairing or turning Remote on shows its tab even before the plan is read again.
+    if (platform.remote)
+      onCleanup(platform.remote.onChange((next) => setRemoting((shown) => shown || remoteTab(undefined, next))))
     if (!vectorAccount) return
     onCleanup(
       vectorAccount.onChange((next) => {
@@ -111,6 +126,7 @@ export const SettingsWorkspace: Component<SettingsWorkspaceProps> = (props) => {
   const panel = (item: SettingsTab) => {
     if (item === "account") return <SettingsAccountV2 onUsage={() => setSection("usage")} />
     if (item === "roadmap") return <SettingsRoadmapV2 />
+    if (item === "remote") return <SettingsRemoteV2 />
     if (item === "usage") return <SettingsUsageV2 />
     if (item === "spend") return <SettingsSpendLimitsV2 />
     if (item === "about") return <SettingsAboutV2 />

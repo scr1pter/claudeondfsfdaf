@@ -1,4 +1,3 @@
-import { hostname } from "node:os"
 import { WebAuthn } from "@vectordevai/core/webauthn/verify"
 import {
   checkCode,
@@ -29,7 +28,8 @@ import {
 //
 // The identity this computer pairs with (its relay device id, static key and alert key) and the phones paired with it
 // are kept sealed by the OS credential store (remote-runtime.ts). "Disconnect all phones" makes a new identity, so no
-// phone paired before can open a connection again.
+// phone paired before can open a connection again. The origin, the relay's name for this computer and its own name
+// come from remote-host.ts, so this module needs nothing from Node.
 
 /** The Remote protocol this desktop speaks, and the oldest phone protocol it still speaks (A38's `negotiate`). */
 export const REMOTE_PROTOCOL = 1
@@ -38,38 +38,6 @@ export const PAIRING_TTL_MS = 5 * 60_000
 /** Contract §4.2: five phones per account. A computer keeps at most as many. */
 export const MAX_PHONES = 5
 const MAX_FAILURES = 3
-
-/** The phone app's origin (contract §4.16 VECTOR_PHONE_APP_ORIGIN; A38's PHONE_APP_ADDRESS). */
-export const PHONE_APP_ORIGIN = "https://remote.vectordev.ai"
-
-/**
- * The phone app's origin passkeys and pairing links must use. A development build may name a local phone app with
- * VECTOR_PHONE_APP_ORIGIN (https, or http on localhost); a packaged app always uses Vector's own.
- */
-export function phoneAppOrigin(packaged: boolean, env: Record<string, string | undefined> = process.env) {
-  const override = env.VECTOR_PHONE_APP_ORIGIN?.trim()
-  if (packaged || !override) return PHONE_APP_ORIGIN
-  try {
-    const url = new URL(override)
-    const local = url.protocol === "http:" && ["localhost", "127.0.0.1"].includes(url.hostname)
-    if ((url.protocol === "https:" || local) && url.origin === override) return override
-  } catch {}
-  return PHONE_APP_ORIGIN
-}
-
-/** The plain kind of computer the relay lists this one as. Its own name never leaves it unencrypted. */
-export function relayName(platform = process.platform) {
-  return platform === "darwin" ? "Mac" : platform === "win32" ? "Windows PC" : "Linux computer"
-}
-
-/** This computer's name, as its paired phones show it. */
-export function computerName(name = hostname(), platform = process.platform) {
-  const plain = name
-    .replace(/\.(?:local|lan|home)$/i, "")
-    .replace(/[\u0000-\u001f\u007f]/g, "")
-    .trim()
-  return (plain || relayName(platform)).slice(0, 64)
-}
 
 export type PairedPhone = {
   device: string

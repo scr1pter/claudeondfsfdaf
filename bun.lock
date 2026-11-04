@@ -77,6 +77,7 @@
         "@tanstack/solid-virtual": "catalog:",
         "@thisbeyond/solid-dnd": "0.7.5",
         "@vectordevai/core": "workspace:*",
+        "@vectordevai/relay": "workspace:*",
         "@vectordevai/schema": "workspace:*",
         "@vectordevai/sdk": "workspace:*",
         "@vectordevai/session-ui": "workspace:*",

@@ -1,4 +1,4 @@
-import { createHash, createPrivateKey, randomBytes, sign, type KeyObject } from "node:crypto"
+import { createHash, randomBytes, sign, type KeyObject } from "node:crypto"
 import { CodiumRunTrigger } from "../../packages/schema/src/codium-run-trigger.js"
 import type { EntitlementSnapshot } from "../../packages/schema/src/codium-entitlements.js"
 import type { PlanId } from "../../packages/schema/src/codium-plan.js"
@@ -8,6 +8,7 @@ import { REMOTE_LIMITS } from "./codium-limits.js"
 import { readSwitch } from "./codium-switches.js"
 import { requireUnrevokedCliToken, requireUnrevokedAccount } from "./revocation.js"
 import { ApiError, type ApiRequest } from "./http.js"
+import { remoteConfigured, ticketSigningKey } from "./remote-config.js"
 import {
   RELAY_DEVICE_ID,
   RELAY_SUBPROTOCOL,
@@ -77,37 +78,9 @@ function unavailable() {
 
 // ── Configuration ──────────────────────────────────────────────────────────────────────────────────────────────────
 
-/** Whether the owner turned Remote on for this deployment (VECTOR_REMOTE_ENABLED=true). */
-export function remoteEnabled() {
-  return process.env.VECTOR_REMOTE_ENABLED?.trim() === "true"
-}
-
-let signingCache: { setting: string; key: KeyObject | undefined } | undefined
-
-/**
- * The Ed25519 private key tickets are signed with: VECTOR_REMOTE_TICKET_SIGNING_KEY, base64url PKCS#8 DER (the owner
- * makes it with the command in owner-actions/remote.md). Undefined when it is missing or is not an Ed25519 key.
- */
-export function ticketSigningKey(): KeyObject | undefined {
-  const setting = process.env.VECTOR_REMOTE_TICKET_SIGNING_KEY?.trim() ?? ""
-  if (signingCache?.setting === setting) return signingCache.key
-  let key: KeyObject | undefined
-  if (setting && /^[A-Za-z0-9_-]+$/.test(setting)) {
-    try {
-      const parsed = createPrivateKey({ key: Buffer.from(setting, "base64url"), format: "der", type: "pkcs8" })
-      key = parsed.asymmetricKeyType === "ed25519" ? parsed : undefined
-    } catch {
-      key = undefined
-    }
-  }
-  signingCache = { setting, key }
-  return key
-}
-
-/** Whether tickets can be minted here: Remote turned on, the relay's address, the signing key and the internal secret. */
-export function remoteConfigured() {
-  return remoteEnabled() && relayConfigured() && ticketSigningKey() !== undefined
-}
+// remoteEnabled, ticketSigningKey and remoteConfigured live in remote-config.ts (WP A42), which reads no plan, so the
+// perk listing (codium-perks.ts) can ask whether Remote is configured without importing this module.
+export { remoteConfigured, remoteEnabled, ticketSigningKey } from "./remote-config.js"
 
 /** Refuses with 503 while Remote is not configured or the owner's `remote` switch is off. */
 export async function requireRemoteService(fetcher: typeof fetch = fetch, now = Date.now()) {

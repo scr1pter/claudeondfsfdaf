@@ -43,6 +43,12 @@ export async function readAlertKey(id: string): Promise<CryptoKey | undefined> {
   return key instanceof CryptoKey ? key : undefined
 }
 
+/** Forgets one computer's alert key (that computer was removed from this phone, WP A42). */
+export async function forgetAlertKey(id: string) {
+  if (!globalThis.indexedDB) return
+  await run("readwrite", (store) => store.delete(id))
+}
+
 export async function forgetAlertKeys() {
   if (!globalThis.indexedDB) return
   await run("readwrite", (store) => store.clear())

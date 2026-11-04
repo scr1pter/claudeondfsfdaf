@@ -1016,3 +1016,76 @@ outcome, verdict, actor.login` pass. Every paid plan includes it while the plan 
   `docs/vector/MODEL-PLANS.md`, `docs/vector/owner-actions/remote.md`. Test files: `packages/core/test/webauthn/verify.test.ts`
   (the contract's `webauthn/verify.test.ts`), `remote-link.test.ts`, `remote-notify.test.ts`, `phone-alerts.test.ts`,
   and new cases in `keep-awake.test.ts` and `permission-auto-respond.test.ts` (the auto-approve suppression test).
+
+## A42 Remote phone UI and Settings → Remote (4 Nov 2026)
+
+- **Files outside A42's list** ("`packages/app/src/phone/` remote routes, `settings-v2/remote.tsx`"), each the smallest
+  change the package needed:
+  - `packages/core/src/remote/crypto.ts`: A41's `packages/desktop/src/main/remote-crypto.ts`, moved (git rename) so the
+    phone runs the same file; the desktop's old name re-exports it, so A41's modules and tests are unchanged. It also
+    takes a non-extractable X25519 `CryptoKey` wherever it took PKCS#8 bytes (`PrivateKeyInput`), and adds
+    `generateDeviceIdentity()` and `x25519Supported()`.
+  - `packages/desktop/src/main/remote-host.ts`: `PHONE_APP_ORIGIN`, `phoneAppOrigin`, `relayName` and `computerName`
+    moved out of `remote-pairing.ts` unchanged, so pairing, link and route modules import nothing from Node and run in a
+    browser (the CI browser spec drives the real desktop link). `remote-runtime.ts` and `remote-link.test.ts` import
+    them from the new module; no test expectation changed.
+  - `packages/app/src/utils/qr/` (new): a QR encoder for Settings and a decoder for the phone's scanner. No QR package
+    exists in the repository and adding one would add a dependency; ISO/IEC 18004 byte mode, versions 1 to 25, tested
+    against the standard's published Reed-Solomon example, format and version bits and block table.
+  - `api/_lib/remote-config.ts` (new): `remoteEnabled`, `ticketSigningKey` and `remoteConfigured` moved out of
+    `remote-ticket.ts` (which re-exports them) so `codium-perks.ts` can ask whether Remote is configured without
+    importing the ticket code and its plan reads. `api/_lib/remote-meter.ts` (new) and one import in
+    `api/model-plans/status.ts` register the `remote` status meter; `codium-perks.ts` gains `remote`'s readiness check.
+  - `vercel.json` (the relay host in `connect-src`), `test/phone-app.test.ts` (that CSP expectation), `packages/app/
+    package.json` and its one `bun.lock` line (`@vectordevai/relay`, for the wire protocol, as the desktop has it),
+    `settings-registry.ts` and its test (the new tab; the test pinned 16 pages, now 17 with Remote), `dialog-settings-v2.tsx`
+    (the tab's gate), `phone/status.ts` (a `pair` page), `phone/app.tsx`, `phone/routes/parts.tsx`, `phone/phone.css`,
+    the e2e fixture and spec, docs.
+- **The relay's host is fixed at `relay.vectordev.ai`.** A38 left "the relay's wss host" in the phone CSP to A42, and
+  A39 chose no custom domain. A static `vercel.json` header cannot read `VECTOR_REMOTE_RELAY_URL`, and a wildcard such
+  as `wss://*.workers.dev` would let a page script reach any Worker. The CSP and the phone app (`RELAY_HOST` in
+  `phone/remote/model.ts`) name one host, and the phone refuses a ticket naming another, with a clear message. The
+  owner adds that custom domain to the Worker (owner-actions/remote.md step 7, which needs the `vectordev.ai` zone on
+  Cloudflare) or changes both names together; `test/remote-phone-api.test.ts` fails when the CSP and the app disagree.
+- **Pairing inside the installed app needs an in-app scanner.** On iPhone, the system camera opens the QR's link in
+  Safari, whose storage is not the Home Screen app's (A38's rule). The Pair page scans with the camera (A38 allowed
+  `camera=(self)` on the phone origin for this), using the browser's BarcodeDetector where it exists and Vector's
+  decoder elsewhere (Safari), and also takes the link pasted. A Safari tab opened from the link offers to copy it for
+  the installed app.
+- **Passkeys need a tap in Safari,** so the phone prepares everything first (relay connection, transcript, challenge)
+  and makes the passkey from the "Make a passkey and pair" tap. Allowing once fetches the computer's challenge, then
+  asks for the passkey; when the browser refuses that outside a tap, the button turns into "Confirm with your passkey"
+  and the next tap uses the same challenge while it is valid. One passkey per computer, `residentKey: discouraged`,
+  `attestation: none`, user verification required, a random user handle that names no account or person.
+- **The phone's own keys.** Its static X25519 private key is a non-extractable `CryptoKey` in its own IndexedDB
+  database (`vector-phone-remote`, apart from A38's `vector-phone` so A38's alert-key store keeps its version), with the
+  paired computers' public keys and passkey ids. Signing out forgets all of it, as A38 forgets alert keys; pairing again
+  after sign-out is the cost. "Set up this phone again" (after the relay refused it twice) revokes the old device id
+  first, so it stops counting toward the account's five phones, then makes new keys.
+- **Data only on the person's actions** (A39's idle rule). Opening a Remote page connects and opens a channel per
+  online paired computer; lists are read once when a page opens and on Refresh; live changes (sessions, messages,
+  permission and question requests) arrive as watched events and are applied without asking the computer again. A
+  truncated event asks the person to load again instead. A phone closed after 30 idle minutes says so and reconnects
+  when the person comes back to a Remote page or taps "Connect again"; it never reconnects in a loop. The one automatic
+  reconnect is the single retry after `REMOTE_REVOKED`, 1.5 s later so it lands past the second a kill was made in.
+- **Close codes the phone acts on:** revoked (one retry, then "removed" with "Set up this phone again"), ticket expired
+  and stale (one retry), paused, relay off, device limit, fair use, replaced and idle (each says why; no retry). A
+  pairing that had sent its request fails if the connection drops, because the computer's answer would be lost; one
+  still waiting for the computer or the tap waits again after reconnecting.
+- **The allowlist is not widened.** The phone sends text turns and titles only, as A41 allows; it picks no model or
+  agent. New sessions from the phone are titled "From my phone".
+- **"The paired count 'N of limit' from status"**: `meters.remote {computers, limit}` (§4.11), the relay's computer
+  devices against `caps.remote.computers`, read from the relay's `devices` action within the registry's 1.5 s. It is
+  registered by the status route's own import, not beside the provisioner (A40's import-cycle note), so only that route
+  shows it; every reader of the status (desktop and phone) uses that route. A relay that does not answer leaves the
+  meter out, and both pages fall back to the plan's limit.
+- **Settings → Remote shows** when the status lists `remote` for a plan with paired computers (H1), or when this
+  computer already has Remote on or a phone paired, so it can always be turned off and its phones removed after a plan
+  or listing change. It sits in the Personal group beside Account and Roadmap vote.
+- **Devices on the phone**: the account's devices from `GET /api/remote/devices` with Remove (revoke for good) and
+  Disconnect all (`POST /api/remote/kill`), plus the computers paired with this phone, with Forget (this phone only).
+  Removing a computer from the phone also forgets it here; removing this phone starts it over.
+- **Tests**: the contract's "e2e in CI with a virtual WebAuthn authenticator" is `packages/app/e2e/regression/
+  remote-phone.spec.ts` (CI only: Playwright is not run on this Mac). Locally, `packages/desktop/src/main/
+  remote-phone-app.test.ts` runs the phone's real client against the desktop's real link through an in-memory relay
+  with a software passkey the desktop's verifier checks.

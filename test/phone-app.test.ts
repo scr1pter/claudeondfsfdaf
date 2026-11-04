@@ -6,6 +6,7 @@ import path from "node:path"
 import { listedPerks, perkServices } from "../api/_lib/codium-perks"
 import { switchKey } from "../api/_lib/codium-switches"
 import { PHONE_ORIGIN, PHONE_SW_SCOPE, PHONE_SW_URL } from "../packages/app/src/phone/config"
+import { RELAY_HOST } from "../packages/app/src/phone/remote/model"
 import { copyPhoneApp, PHONE_APP_FILES } from "../packages/web/scripts/phone-app.mjs"
 import { pruneVectorSite } from "../script/prune-vector-site.mjs"
 
@@ -179,8 +180,9 @@ describe("vercel.json: camera and CSP for the phone origin only", () => {
     for (const name of ["object-src", "frame-src", "base-uri", "form-action", "frame-ancestors"])
       expect(policy.get(name)).toEqual(["'none'"])
     expect(policy.has("upgrade-insecure-requests")).toBe(true)
-    // The API answers on the phone origin itself; the only other host is the account service the phone signs in with.
-    expect(policy.get("connect-src")).toEqual(["'self'", "https://*.supabase.co"])
+    // The API answers on the phone origin itself; the other hosts are the account service the phone signs in with and
+    // Vector Remote's relay (WP A42), the one host the phone app opens a socket to (remote/model.ts RELAY_HOST).
+    expect(policy.get("connect-src")).toEqual(["'self'", "https://*.supabase.co", `wss://${RELAY_HOST}`])
     for (const values of policy.values())
       for (const value of values) {
         expect(value).not.toMatch(/unsafe|^\*$|^https?:$|^http:\/\/|^wss?:$/)

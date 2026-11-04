@@ -5,6 +5,7 @@ export type SettingsTab =
   | SettingsSection
   | "account"
   | "roadmap"
+  | "remote"
   | "providers"
   | "models"
   | "servers"
@@ -56,6 +57,14 @@ export const settingsGroups: readonly SettingsGroup[] = [
         label: "Roadmap vote",
         icon: "checklist",
         keywords: ["roadmap", "vote", "ballot", "nominate", "nomination", "features", "what vector builds next"],
+      },
+      // WP A42: shown when the account's Codium plan includes the listed Remote, or this computer already has it on
+      // or a phone paired (dialog-settings-v2.tsx), so it can always be turned off.
+      {
+        value: "remote",
+        label: "Remote",
+        icon: "link",
+        keywords: ["remote", "phone", "mobile", "pair", "qr", "passkey", "approve from phone", "devices"],
       },
       {
         value: "general",

@@ -3,10 +3,11 @@ import { filterSettingsGroups, isSettingsTab, settingsGroups, settingsItemCount 
 
 describe("settings registry", () => {
   test("keeps every settings page reachable", () => {
-    expect(settingsItemCount(settingsGroups)).toBe(16)
+    expect(settingsItemCount(settingsGroups)).toBe(17)
     expect(settingsGroups.flatMap((group) => group.items.map((item) => item.value))).toEqual([
       "account",
       "roadmap",
+      "remote",
       "general",
       "memory",
       "local",

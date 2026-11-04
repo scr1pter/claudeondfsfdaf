@@ -162,7 +162,8 @@ body {
   color: var(--phone-muted);
 }
 
-.phone-form input {
+.phone-form input,
+.phone-form textarea {
   min-height: 44px;
   padding: 10px 12px;
   border: 1px solid var(--phone-line);
@@ -174,4 +175,107 @@ body {
 
 a {
   color: var(--phone-accent);
+}
+
+/* Vector Remote's pages (WP A42). */
+.phone-stack {
+  display: grid;
+  gap: 10px;
+}
+
+.phone-panel h3 {
+  margin: 6px 0 0;
+  font-size: 16px;
+}
+
+.phone-row,
+.phone-card {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--phone-line);
+  border-radius: 12px;
+}
+
+.phone-row {
+  grid-template-columns: 1fr auto;
+  align-items: center;
+}
+
+.phone-row-text {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.phone-row-actions,
+.phone-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.phone-button--danger {
+  background: #c2413a;
+}
+
+.phone-code {
+  margin: 4px 0;
+  font-size: 40px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.phone-scanner {
+  width: 100%;
+  aspect-ratio: 1;
+  object-fit: cover;
+  border-radius: 12px;
+  background: #000;
+}
+
+button.phone-feature {
+  text-align: left;
+  font: inherit;
+  width: 100%;
+}
+
+.phone-messages {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 10px;
+}
+
+.phone-message {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--phone-bg);
+  border: 1px solid var(--phone-line);
+}
+
+.phone-message--user {
+  border-color: var(--phone-accent);
+}
+
+.phone-message-text,
+.phone-detail {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.phone-detail {
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--phone-bg);
+  font: 13px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+  max-height: 200px;
+  overflow: auto;
 }

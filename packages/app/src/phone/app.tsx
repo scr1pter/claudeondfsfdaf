@@ -1,5 +1,6 @@
 import { createResource, createSignal, For, Match, onCleanup, onMount, Show, Switch, type JSX } from "solid-js"
-import { readPhoneStatus } from "./api"
+import { Dynamic } from "solid-js/web"
+import { phoneApi, readPhoneStatus } from "./api"
 import {
   browserStorage,
   currentSession,
@@ -11,17 +12,22 @@ import {
   type AuthConfig,
   type PhoneSession,
 } from "./auth"
-import { forgetAlertKeys } from "./alert-keys"
+import { forgetAlertKey, forgetAlertKeys, saveAlertKey } from "./alert-keys"
 import { MANAGE_URL, PHONE_VERSION_URL, PLANS_URL, phonePath } from "./config"
 import { readEnvironment } from "./environment"
 import { phoneFeatures, planNotice, routeFromPath, routeShown, type PhoneRoute, type PhoneStatus } from "./status"
 import { decodeVersion, phoneBuild, shouldReload } from "./version"
+import { createPhoneRemote, type RemoteSocket } from "./remote/client"
+import { phoneName, relayAllowed } from "./remote/model"
+import { browserPasskeys } from "./remote/passkey"
+import { browserRemoteStore } from "./remote/store"
 import { ApprovalsRoute } from "./routes/approvals"
 import { CloudRunsRoute } from "./routes/cloud-runs"
 import { ComputerRoute } from "./routes/computer"
 import { DevicesRoute } from "./routes/devices"
 import { NotificationsRoute } from "./routes/notifications"
 import { OpsRoute } from "./routes/ops"
+import { PairRoute } from "./routes/pair"
 import { InstallCard, Notice, type RouteProps } from "./routes/parts"
 import { SessionsRoute } from "./routes/sessions"
 
@@ -37,7 +43,10 @@ const ROUTES: Record<PhoneRoute, (props: RouteProps) => JSX.Element> = {
   computer: ComputerRoute,
   ops: OpsRoute,
   notifications: NotificationsRoute,
+  pair: PairRoute,
 }
+/** The pages that use Vector Remote's connection: coming back to one of them is the person's action to reconnect. */
+const REMOTE_PAGES = new Set<PhoneRoute>(["sessions", "approvals", "devices", "pair"])
 
 type Phase =
   | { kind: "loading" }
@@ -140,6 +149,7 @@ export function PhoneApp() {
           {(current) => (
             <Signed
               session={current().session}
+              freshSession={() => currentSession(current().config, storage, fetch).catch(() => undefined)}
               environment={environment}
               path={path()}
               navigate={navigate}
@@ -155,12 +165,30 @@ export function PhoneApp() {
 
 function Signed(props: {
   session: PhoneSession
+  /** The session, refreshed when it is close to expiring (Remote's tickets need a current one). */
+  freshSession: () => Promise<PhoneSession | undefined>
   environment: ReturnType<typeof readEnvironment>
   path: string
   navigate: (to: string) => void
   onSignOut: () => void
   onExpired: () => void
 }) {
+  // Vector Remote on this phone (WP A42): one client for this sign-in, shared by every route.
+  const remote = createPhoneRemote({
+    origin: location.origin,
+    api: async (path, init) => phoneApi(path, (await props.freshSession()) ?? props.session, init),
+    store: browserRemoteStore(),
+    socket: (url, protocols) => new WebSocket(url, protocols) as unknown as RemoteSocket,
+    relayAllowed: (url) => relayAllowed(url, location.origin),
+    passkeys: browserPasskeys(),
+    alertKeys: { save: saveAlertKey, remove: forgetAlertKey, forget: forgetAlertKeys },
+    phoneName: () => phoneName(navigator),
+  })
+  onCleanup(() => remote.disconnect())
+  const signOut = async () => {
+    await remote.signOut().catch(() => undefined)
+    props.onSignOut()
+  }
   const [status, { refetch }] = createResource(
     () => props.session,
     (session) =>
@@ -169,14 +197,17 @@ function Signed(props: {
         throw cause
       }),
   )
+  const route = () => routeFromPath(props.path)
   onMount(() => {
     const onVisible = () => {
-      if (document.visibilityState === "visible") void refetch()
+      if (document.visibilityState !== "visible") return
+      void refetch()
+      const open = route()
+      if (open && REMOTE_PAGES.has(open)) void remote.connect()
     }
     document.addEventListener("visibilitychange", onVisible)
     onCleanup(() => document.removeEventListener("visibilitychange", onVisible))
   })
-  const route = () => routeFromPath(props.path)
 
   return (
     <>
@@ -186,7 +217,7 @@ function Signed(props: {
             Back
           </button>
         </Show>
-        <button type="button" class="phone-link" onClick={props.onSignOut}>
+        <button type="button" class="phone-link" onClick={() => void signOut()}>
           Sign out
         </button>
       </header>
@@ -212,7 +243,16 @@ function Signed(props: {
                   when={routeShown(open(), current())}
                   fallback={<p class="phone-empty">This isn't part of what your plan shows on this phone.</p>}
                 >
-                  {ROUTES[open()]({ status: current(), session: props.session, environment: props.environment })}
+                  {/* A status read again updates the open page in place; only a new route mounts a new page. */}
+                  <Dynamic
+                    component={ROUTES[open()]}
+                    status={current()}
+                    session={props.session}
+                    environment={props.environment}
+                    remote={remote}
+                    navigate={props.navigate}
+                    refresh={() => void refetch()}
+                  />
                 </Show>
               )}
             </Show>

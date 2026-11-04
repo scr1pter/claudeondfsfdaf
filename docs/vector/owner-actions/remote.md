@@ -1,6 +1,6 @@
 # Vector Remote: the relay
 
-Vector Remote connects a phone to the Vector desktop app through a relay Vector runs on Cloudflare. This page covers the relay Worker (Codium build WP A39) and the API that mints its tickets (A40). The desktop side (A41) and the phone screens (A42) add their own steps here when they land. How it works is in [MODEL-PLANS.md](../MODEL-PLANS.md#phone-alerts-and-shared-service-plumbing). Nothing on this page has been created, deployed or tried against Cloudflare yet.
+Vector Remote connects a phone to the Vector desktop app through a relay Vector runs on Cloudflare. This page covers the relay Worker (Codium build WP A39), the API that mints its tickets (A40), the desktop side (A41) and the phone screens with Settings → Remote (A42). How it works is in [MODEL-PLANS.md](../MODEL-PLANS.md#phone-alerts-and-shared-service-plumbing). Nothing on this page has been created, deployed or tried against Cloudflare yet.
 
 Remote is listed (`remote` in `CODIUM_LISTED_PERKS`) only after the outside security review (contract §1.2), and only once A40 to A42 have shipped.
 
@@ -50,7 +50,7 @@ Run these from `packages/relay`, signed in with `wrangler login` to the Cloudfla
    ```
 
 6. **Deploy** with the hosted deploy workflow (WP A58, `target=relay`), from protected main, once it exists. The Codium CI lane already runs `wrangler deploy --dry-run` and a smoke test under `wrangler dev --local` on every push.
-7. **Tell the API where it is:** set `VECTOR_REMOTE_RELAY_URL` in Vercel to the Worker's `wss://` origin, with no path (for example `wss://vector-remote-relay.<your-subdomain>.workers.dev`). The API calls the relay's internal actions on the same host over https. The phone app's content security policy gets that host in A42.
+7. **Give the relay its address and tell the API:** the phone app connects only to `wss://relay.vectordev.ai` (A42: the phone origin's content security policy in `vercel.json` and `RELAY_HOST` in `packages/app/src/phone/remote/model.ts` both name it). Add `relay.vectordev.ai` to the Worker as a Workers custom domain (Workers → `vector-remote-relay` → Settings → Domains & Routes), which needs the `vectordev.ai` zone on this Cloudflare account. Then set `VECTOR_REMOTE_RELAY_URL=wss://relay.vectordev.ai` in Vercel, with no path. The API calls the relay's internal actions on the same host over https. If the zone is not on Cloudflare, use the Worker's own `wss://vector-remote-relay.<your-subdomain>.workers.dev` instead and change `RELAY_HOST` and the CSP's `connect-src` together in one commit; `test/remote-phone-api.test.ts` fails when they disagree. A phone app whose CSP does not name the relay's host cannot connect at all, and it says the relay is not one it may reach.
 8. **Turn the API on:** set `VECTOR_REMOTE_ENABLED=true` in Vercel, Production only, and redeploy. Until then no ticket is minted, whatever the switch says. The `remote` switch on `/owner/codium` then turns Remote off and on without a redeploy.
 
 Without its three secrets the relay answers 503 and admits no one; with a malformed `TICKET_PUBLIC_KEYS` it admits no one either.
@@ -95,3 +95,12 @@ Nothing to configure. Remote is off on each computer until its owner pairs a pho
 
 "Disconnect all phones" on a computer calls `POST /api/remote/kill` (every connection of the account closes, other computers reconnect by themselves) and revokes that computer's old device id, so its place under the plan's computer count is freed.
 
+## The phone and Settings → Remote (A42)
+
+Nothing to configure beyond step 7's relay address and the phone app's own steps (`remote.vectordev.ai` on Vercel, `VECTOR_PHONE_APP_ORIGIN`, the account service's redirect URL; see A38's notes). What people do:
+
+- **On the computer:** Settings → Remote turns Remote on, shows "N of limit computers paired" from the account's status (`meters.remote`), and pairs a phone: a QR code of the pairing link, good for five minutes, then the six digits the phone shows, which the person confirms with "They match". It lists the paired phones (Remove unpairs one from this computer) and has "Disconnect all phones". The tab shows when the plan includes Remote while it is listed, or when this computer already has Remote on or a phone paired, so Remote can always be turned off.
+- **On the phone (installed app on iPhone and iPad):** Devices → Pair a computer scans the QR code with the camera inside the app (or takes the link pasted), makes a passkey for that computer, and shows the six digits. Sessions lists each paired computer's sessions and opens one to read it live, send a text turn or stop it. Approvals lists what agents ask: Allow once (the phone's passkey, checked by the computer) or Deny; never "always". Devices lists every device on the account from the relay, removes one for good, and has "Disconnect all".
+- **Removing devices:** removing a computer or phone on the phone's Devices page revokes its relay id for good; it pairs again under a new id. Removing this phone starts it over with new keys. "Disconnect all" closes every connection on the account; paired devices reconnect the next time they are used.
+
+**Before listing `remote`** (`CODIUM_LISTED_PERKS`): the outside security review (contract §1.2 and §8.2 step 16). Remote becomes listable once step 7 and step 8 are done and `VECTOR_PHONE_APP_ORIGIN` is set; listing it is a separate, deliberate step.

@@ -5,6 +5,7 @@ import { githubAppConfiguration } from "./github-app.js"
 import { modelPlansEnabled } from "./model-plan-config.js"
 import { reviewPanelServed, secondOpinionServed } from "./model-plan-models.js"
 import { readDisabledSet, readSwitch, type SwitchName } from "./codium-switches.js"
+import { remoteConfigured } from "./remote-config.js"
 import { roadmapConfigured } from "./roadmap.js"
 import { reportEmailConfigured } from "./support-reports.js"
 import { phoneAppOrigin, pushConfigured } from "./web-push.js"
@@ -46,6 +47,11 @@ export const perkServices: PerkServices = {
   // WP A38: phone alerts reach a phone through the phone app at VECTOR_PHONE_APP_ORIGIN, which subscribes with the
   // server's VAPID key (A37). Both must be configured; the `push` switch is checked with the other switches below.
   alerts: () => pushConfigured() && phoneAppOrigin() !== undefined,
+  // WP A42: Remote needs both halves and the relay between them: tickets can be minted (VECTOR_REMOTE_ENABLED, the
+  // relay's address and internal secret, the signing key) and phones have their app's origin to sign in from. The
+  // `remote` switch is checked with the other switches below. Listing it stays the owner's call after the outside
+  // security review (contract §1.2).
+  remote: () => remoteConfigured() && phoneAppOrigin() !== undefined,
 }
 
 const switches: Readonly<Partial<Record<PerkId, SwitchName>>> = {

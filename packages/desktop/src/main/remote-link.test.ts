@@ -3,14 +3,8 @@ import { CLOSE, FRAME, decodeFrame, encodeFrame } from "@vectordevai/relay/proto
 import { deviceBytes, ENVELOPE, fromBase64url, toBase64url, type Channel } from "./remote-crypto"
 import { createRemoteLink, type EngineEvent, type RemoteSocket } from "./remote-link"
 import { PHONE_APP_ADDRESS } from "../../../app/src/components/settings-v2/notifications-model"
-import {
-  computerName,
-  decodeIdentity,
-  PHONE_APP_ORIGIN,
-  phoneAppOrigin,
-  relayName,
-  type RemoteIdentity,
-} from "./remote-pairing"
+import { computerName, PHONE_APP_ORIGIN, phoneAppOrigin, relayName } from "./remote-host"
+import { decodeIdentity, type RemoteIdentity } from "./remote-pairing"
 import { fakePhone, type FakePhone } from "./remote-phone.fixture"
 import type { EngineRequest } from "./remote-routes"
 

@@ -49,6 +49,7 @@ export function decodePhoneStatus(body: unknown): PhoneStatus {
   }
 }
 
+/** The routes the home page lists, in order. */
 export const PHONE_ROUTES = [
   "sessions",
   "approvals",
@@ -58,15 +59,18 @@ export const PHONE_ROUTES = [
   "ops",
   "notifications",
 ] as const
-export type PhoneRoute = (typeof PHONE_ROUTES)[number]
+/** Every page: the home list's routes, and pairing (WP A42), which Devices and the QR code's link open. */
+export const PHONE_PAGES = [...PHONE_ROUTES, "pair"] as const
+export type PhoneRoute = (typeof PHONE_PAGES)[number]
+type HomeRoute = (typeof PHONE_ROUTES)[number]
 
 export type PhoneFeature = {
-  route: PhoneRoute
+  route: HomeRoute
   label: string
   summary: string
 }
 
-const FEATURES: Record<PhoneRoute, Omit<PhoneFeature, "route">> = {
+const FEATURES: Record<HomeRoute, Omit<PhoneFeature, "route">> = {
   sessions: { label: "Sessions", summary: "Watch and answer the agents on your paired computers." },
   approvals: { label: "Approvals", summary: "Allow once or deny what an agent asks to do." },
   devices: { label: "Devices", summary: "The computers paired with this phone." },
@@ -90,6 +94,7 @@ export function routeShown(route: PhoneRoute, status: PhoneStatus): boolean {
     case "sessions":
     case "approvals":
     case "devices":
+    case "pair":
       return listed("remote") && remoteComputers(status) > 0
     case "cloud-runs":
       // Cloud runs are listed beside Remote's computers (§1.1), from the GitHub agent's run records (A40).
@@ -136,7 +141,7 @@ export function planNotice(status: PhoneStatus): string | undefined {
 
 export function routeFromPath(pathname: string): PhoneRoute | undefined {
   const match = /^\/phone\/([a-z-]+)\/?$/.exec(pathname)
-  return match && (PHONE_ROUTES as readonly string[]).includes(match[1]) ? (match[1] as PhoneRoute) : undefined
+  return match && (PHONE_PAGES as readonly string[]).includes(match[1]) ? (match[1] as PhoneRoute) : undefined
 }
 
 function remoteComputers(status: PhoneStatus) {

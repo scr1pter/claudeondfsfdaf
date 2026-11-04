@@ -1,6 +1,7 @@
 import { For, Show, type JSX } from "solid-js"
 import { installSteps, type PhoneEnvironment } from "../environment"
 import type { PhoneSession } from "../auth"
+import type { PhoneRemote } from "../remote/client"
 import type { PhoneStatus } from "../status"
 
 /** What every phone route receives. */
@@ -8,6 +9,11 @@ export type RouteProps = {
   status: PhoneStatus
   session: PhoneSession
   environment: PhoneEnvironment
+  /** Vector Remote on this phone (WP A42): one client for the signed-in session, shared by every route. */
+  remote: PhoneRemote
+  navigate: (to: string) => void
+  /** Reads the account's status again (Devices does after removing a device). */
+  refresh: () => void
 }
 
 export function Panel(props: { title: string; children: JSX.Element }) {
