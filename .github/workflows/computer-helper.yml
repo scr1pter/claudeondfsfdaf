@@ -400,7 +400,10 @@ jobs:
           const root = path.resolve("native/out/win32/x64")
           const run = (file, args) => {
             const result = spawnSync(file, args, { encoding: "utf8", timeout: 30000, maxBuffer: 65536, windowsHide: true })
-            if (result.error || result.status !== 0) throw new Error("A required Windows native check failed.")
+            if (result.error || result.status !== 0) {
+              if (result.stderr) process.stderr.write(result.stderr.slice(0, 8192))
+              throw new Error("A required Windows native check failed.")
+            }
             return result.stdout
           }
           run(path.join(root, "tests/vector-computer-tests.exe"), [])
@@ -546,7 +549,10 @@ jobs:
           const root = path.resolve("native/out/win32/arm64")
           const run = (file, args) => {
             const result = spawnSync(file, args, { encoding: "utf8", timeout: 30000, maxBuffer: 65536, windowsHide: true })
-            if (result.error || result.status !== 0) throw new Error("A required ARM64 native check failed.")
+            if (result.error || result.status !== 0) {
+              if (result.stderr) process.stderr.write(result.stderr.slice(0, 8192))
+              throw new Error("A required ARM64 native check failed.")
+            }
             return result.stdout
           }
           run(path.join(root, "tests/vector-computer-tests.exe"), [])
