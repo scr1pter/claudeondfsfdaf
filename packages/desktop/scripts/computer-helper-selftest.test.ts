@@ -6,6 +6,7 @@ import { frameReader, type Line, type Received } from "../test/computer/transcri
 import {
   CORE_TRANSCRIPTS,
   classifySelfTestExit,
+  lifecycleTopologyFailure,
   parseSelfTestArgs,
   runComputerHelperSelfTest,
   transcriptFailureReason,
@@ -121,7 +122,7 @@ test("transcript diagnostics identify a bounded line and failure class without r
     ['conformance.frame-too-large:1: expected {"id":0}, got nothing', "line-1-timeout"],
     ['conformance.frame-too-large:2: received a frame that does not decode (not JSON): "PRIVATE"', "line-2-decode"],
     ['conformance.frame-too-large:2: expected {"id":1}, got {"private":"PRIVATE"}', "line-2-mismatch"],
-    ['conformance.frame-too-large:1: expected {"id":0}, got exit 1', "line-1-unexpected-exit"],
+    ['conformance.frame-too-large:1: expected {"id":0}, got exit 1', "line-1-unexpected-exit-1"],
     ["conformance.frame-too-large:2: PRIVATE UNCLASSIFIED ERROR", "line-2-failed"],
   ] as const
   for (const [message, reason] of cases) {
@@ -135,6 +136,30 @@ test("transcript diagnostics identify a bounded line and failure class without r
   expect(transcriptFailureReason("hello", new Error("/PRIVATE/hello.jsonl:2: not a {send, expect} line"))).toBe(
     "fixture-format",
   )
+})
+
+test("native failure diagnostics retain bounded exit statuses and only missing versus extra topology", () => {
+  for (const code of [0, 1, 70, 137, 255]) {
+    expect(
+      transcriptFailureReason(
+        "frame-too-large",
+        new Error(`conformance.frame-too-large:1: expected PRIVATE, got exit ${code}`),
+      ),
+    ).toBe(`line-1-unexpected-exit-${code}`)
+  }
+  for (const code of ["-1", "256", "999999999999999999999", "null"]) {
+    expect(
+      transcriptFailureReason(
+        "frame-too-large",
+        new Error(`conformance.frame-too-large:1: expected PRIVATE, got exit ${code}`),
+      ),
+    ).toBe("line-1-unexpected-exit")
+  }
+  for (const role of ["supervisor", "worker"] as const) {
+    expect(lifecycleTopologyFailure(role, 0)).toBe(`${role}-missing`)
+    expect(lifecycleTopologyFailure(role, 1)).toBeUndefined()
+    for (const count of [2, 3, 1_000_000]) expect(lifecycleTopologyFailure(role, count)).toBe(`${role}-extra`)
+  }
 })
 
 test("transcript diagnostics discard unknown fixtures, arbitrary errors, and out-of-range lines", () => {

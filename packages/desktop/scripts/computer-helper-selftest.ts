@@ -61,10 +61,13 @@ export type PrivilegedMode = "auto" | "require" | "off"
 type Status = "passed" | "failed" | "skipped"
 type Check = { name: string; status: Status; reason?: string }
 type NativeFailureReason =
-  | "supervisor-count"
-  | "worker-count"
+  | "supervisor-missing"
+  | "supervisor-extra"
+  | "worker-missing"
+  | "worker-extra"
   | "caller-exit-deadline"
   | "caller-exit-status"
+  | `caller-exit-status-${number}`
   | "unexpected-lifecycle-frame"
   | "descendant-exit-deadline"
   | "channel-deadline"
@@ -81,6 +84,16 @@ class NativeCheckFailure extends Error {
   }
 }
 
+/** Report only a missing or extra process, never PIDs, paths or an unbounded count. */
+export function lifecycleTopologyFailure(role: "supervisor" | "worker", count: number) {
+  if (count === 1) return
+  return `${role}-${count === 0 ? "missing" : "extra"}` as const
+}
+
+function boundedExitCode(code: number | null) {
+  return code !== null && Number.isInteger(code) && code >= 0 && code <= 255 ? code : undefined
+}
+
 /** Keep only a classified fixture/line and a fixed category; replay errors may contain private response values. */
 export function transcriptFailureReason(name: string, error: unknown) {
   if (error instanceof NativeCheckFailure) return error.reason
@@ -92,12 +105,14 @@ export function transcriptFailureReason(name: string, error: unknown) {
   const line = Number(match[2])
   if (!Number.isSafeInteger(line) || line < 1 || line > 1000) return "transcript-failed"
   const text = match[3]!
+  const exit = /, got exit (-?\d+|null)$/.exec(text)
+  const code = exit ? boundedExitCode(exit[1] === "null" ? null : Number(exit[1])) : undefined
   const category = text.includes("received a frame that does not decode")
     ? "decode"
     : text.includes(", got nothing")
       ? "timeout"
-      : /, got exit -?\d+$/.test(text)
-        ? "unexpected-exit"
+      : exit
+        ? `unexpected-exit${code === undefined ? "" : `-${code}`}`
         : text.startsWith("expected ")
           ? "mismatch"
           : "failed"
@@ -622,16 +637,21 @@ async function createVerifiedFixture(options: SelfTestOptions): Promise<Verified
           },
         )
         const supervisors = await descendants(running.pid)
-        if (supervisors.length !== 1) throw new NativeCheckFailure("supervisor-count")
+        const supervisorFailure = lifecycleTopologyFailure("supervisor", supervisors.length)
+        if (supervisorFailure) throw new NativeCheckFailure(supervisorFailure)
         const workers = await descendants(supervisors[0]!)
-        if (workers.length !== 1) throw new NativeCheckFailure("worker-count")
+        const workerFailure = lifecycleTopologyFailure("worker", workers.length)
+        if (workerFailure) throw new NativeCheckFailure(workerFailure)
         const deadline = performance.now() + 1000
         if (parentDeath) running.killParent()
         else running.end()
         const result = await running.next(1000)
         if (!result) throw new NativeCheckFailure("caller-exit-deadline")
         if (result.kind !== "exit") throw new NativeCheckFailure("unexpected-lifecycle-frame")
-        if (!parentDeath && result.code !== 0) throw new NativeCheckFailure("caller-exit-status")
+        if (!parentDeath && result.code !== 0) {
+          const code = boundedExitCode(result.code)
+          throw new NativeCheckFailure(code === undefined ? "caller-exit-status" : `caller-exit-status-${code}`)
+        }
         while (performance.now() < deadline) {
           if (!(await alive(supervisors[0]!)) && !(await alive(workers[0]!))) {
             if (performance.now() > deadline) throw new NativeCheckFailure("descendant-exit-deadline")
