@@ -472,5 +472,9 @@
       "category": "browser",
       "elapsedMs": 0
     }
-  ]
+  ],
+  "failedCheckScreenshot": {
+    "path": "evidence/codex-customer-edit-timeout.png",
+    "sha256": "799057a419b4673f2f267c55aab995c8bbe2eee6dc8855019e76975579fc9c28"
+  }
 }
