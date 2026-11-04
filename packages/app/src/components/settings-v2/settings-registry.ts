@@ -53,8 +53,15 @@ export const settingsGroups: readonly SettingsGroup[] = [
         value: "general",
         label: "General",
         icon: "sliders",
-        // The Terminal shell picker lives here too.
+        // The Terminal shell picker and "While Vector works" (follow-ups and the Stop button) live here too.
         keywords: [
+          "follow-up",
+          "followup",
+          "steer",
+          "queue",
+          "stop button",
+          "stop helpers",
+          "while working",
           "data",
           "judge",
           "routing",

@@ -38,6 +38,11 @@ describe("settings registry", () => {
       expect(filterSettingsGroups(query).flatMap((group) => group.items.map((item) => item.value))).toEqual(["general"])
   })
 
+  test("finds what happens while Vector works, follow-ups and the Stop button, under General", () => {
+    for (const query of ["follow-up", "followup", "steer", "queue", "stop button", "stop helpers", "while working"])
+      expect(filterSettingsGroups(query).flatMap((group) => group.items.map((item) => item.value))).toEqual(["general"])
+  })
+
   test("has no Project rules, Appearance, Editor, Chat, Voice or Personalization page", () => {
     const items = settingsGroups.flatMap((group) => group.items)
     for (const removed of ["rules", "appearance", "editor", "chat", "voice", "personalization"]) {

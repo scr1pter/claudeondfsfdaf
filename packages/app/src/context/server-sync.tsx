@@ -50,6 +50,7 @@ import type { ServerScope } from "@/utils/server-scope"
 import { persisted } from "@/utils/persist"
 import { toggleMcp } from "./global-sync/mcp"
 import { createServerSession } from "./server-session"
+import { NO_CAPABILITIES, engineCapabilitiesQuery } from "@/features/background-tasks/engine-capabilities"
 
 type GlobalStore = {
   ready: boolean
@@ -158,6 +159,9 @@ export function createServerSyncContextInner(serverSDK: ServerSDK) {
   })
 
   const queryClient = useQueryClient()
+
+  // The engine's capability flags (I30), once per server; a reconnect may mean a different engine, so it reads them again.
+  const capabilitiesQuery = useQuery(() => engineCapabilitiesQuery(serverSDK.scope, serverSDK.client))
 
   let bootedAt = 0
   let bootingRoot = false
@@ -402,7 +406,10 @@ export function createServerSyncContextInner(serverSDK: ServerSDK) {
         setGlobalProject: setProjects,
       })
       if (event.type === "server.connected") {
-        if (connected) setReconnects((count) => count + 1)
+        if (connected) {
+          setReconnects((count) => count + 1)
+          void capabilitiesQuery.refetch()
+        }
         connected = true
       }
       if (event.type === "server.connected" || event.type === "global.disposed") {
@@ -528,6 +535,8 @@ export function createServerSyncContextInner(serverSDK: ServerSDK) {
     session,
     /** How many times the event stream has reconnected; nothing that happened while it was down was delivered. */
     reconnects,
+    /** What this server's engine supports; every flag is off until it answers, and for an engine without the route. */
+    capabilities: () => capabilitiesQuery.data ?? NO_CAPABILITIES,
     mcp: {
       add: async (
         directory: string,

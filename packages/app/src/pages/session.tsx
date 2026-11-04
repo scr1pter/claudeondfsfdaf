@@ -58,7 +58,9 @@ import { useSync } from "@/context/sync"
 import { useTabs } from "@/context/tabs"
 import { TerminalProvider, useTerminal } from "@/context/terminal"
 import { PromptInput } from "@/components/prompt-input"
-import { type FollowupDraft, sendFollowupDraft } from "@/components/prompt-input/submit"
+import { type FollowupDraft, queueEnabled as followupQueues, sendFollowupDraft } from "@/components/prompt-input/submit"
+import { useGlobal } from "@/context/global"
+import { firstSteerNotice, steerSupported } from "@/features/background-tasks/engine-capabilities"
 import {
   createPromptInputController,
   createSessionComposerController,
@@ -447,6 +449,7 @@ export default function Page() {
   const sdk = useSDK()
   const serverSDK = useServerSDK()
   const settings = useSettings()
+  const servers = useGlobal().servers
   const platform = usePlatform()
   const prompt = usePrompt()
   const comments = useComments()
@@ -1896,11 +1899,20 @@ export default function Page() {
     return followupMutation.variables?.id
   })
 
-  const queueEnabled = createMemo(() => {
+  // Engines before 1.99.100 cannot take a message mid-run, so on them Enter queues (5.I.1); an unknown version steers.
+  const steer = createMemo(() => steerSupported(servers.health[ServerConnection.key(serverSDK().server)]?.version))
+  const queueEnabled = (alternate: boolean) => {
     const id = params.id
     if (!id) return false
-    return busy(id) && !composer.blocked() && !isChildSession()
-  })
+    return followupQueues({
+      busy: busy(id),
+      blocked: composer.blocked(),
+      child: isChildSession(),
+      followup: settings.general.followup(),
+      steer: steer(),
+      alternate,
+    })
+  }
 
   const followupText = (item: FollowupDraft) => {
     const text = item.prompt
@@ -1936,6 +1948,11 @@ export default function Page() {
     setFollowup("items", draft.sessionID, next)
     setFollowup("failed", draft.sessionID, undefined)
     setFollowup("paused", draft.sessionID, undefined)
+    if (!steer() && firstSteerNotice(ServerConnection.key(serverSDK().server)))
+      showToast({
+        title: language.t("prompt.toast.steerUnsupported.title"),
+        description: language.t("prompt.toast.steerUnsupported.description"),
+      })
     return true
   }
 

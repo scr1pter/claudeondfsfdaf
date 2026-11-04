@@ -63,7 +63,17 @@ import {
   type PromptHistoryStoredEntry,
   promptLength,
 } from "./prompt-input/history"
-import { createPromptSubmit, pastedIn, rememberPaste, restorePastes, type FollowupDraft } from "./prompt-input/submit"
+import {
+  createPromptSubmit,
+  isCommand,
+  pastedIn,
+  queues,
+  rememberPaste,
+  restorePastes,
+  type FollowupDraft,
+} from "./prompt-input/submit"
+import { useBackgroundTasks } from "@/features/background-tasks/use-background-tasks"
+import { NO_HELPERS, helperTargets, type HelperTargets, type StopScope } from "@/features/background-tasks/stop-helpers"
 import { watchLearned } from "@/features/memory/learned"
 import { DialogFreeModelTraining } from "./dialog-free-model-training"
 import { acceptFreeModelTraining, freeModelTrainingGate } from "@/utils/free-model-policy-notice"
@@ -122,8 +132,10 @@ export type PromptInputHistory = {
 }
 
 export type PromptInputSubmission = {
-  abort: () => Promise<void> | void
-  handleSubmit: (event: Event) => Promise<void> | void
+  /** Without a scope, the Stop button setting decides. */
+  abort: (scope?: StopScope) => Promise<void> | void
+  /** `alternate`: Alt+Enter flips Steer and Queue for this one message. */
+  handleSubmit: (event: Event, options?: { alternate?: boolean }) => Promise<void> | void
 }
 
 export type PromptInputControls = {
@@ -204,7 +216,8 @@ export interface PromptInputProps {
   ref?: (el: HTMLDivElement) => void
   newSessionWorktree?: string
   onNewSessionWorktreeReset?: () => void
-  shouldQueue?: () => boolean
+  /** Whether a message sent now queues instead of steering; `alternate` is Alt+Enter, which flips the mode. */
+  shouldQueue?: (alternate: boolean) => boolean
   onQueue?: (draft: FollowupDraft) => boolean | void
   onAbort?: () => void
   onSubmit?: () => void
@@ -428,9 +441,25 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     return text.trim().length === 0 && imageAttachments().length === 0 && commentCount() === 0
   })
   const stopping = createMemo(() => working() && blank())
-  // While the agent is busy and queue mode is active, a non-empty submit enqueues
-  // the message instead of interrupting the turn — surface that as "Queue".
-  const queueing = createMemo(() => working() && !blank() && !!props.shouldQueue?.())
+  // While the agent is busy, Enter either steers the running turn or queues the message; slash commands and shell input
+  // always queue. Surface which one Enter does as "Send" or "Queue".
+  const queueing = createMemo(() => {
+    if (!working() || blank()) return false
+    const text = prompt
+      .current()
+      .map((part) => ("content" in part ? part.content : ""))
+      .join("")
+    const command = store.mode === "shell" || isCommand(text, sync().data.command)
+    return queues(props.shouldQueue, { alternate: false, command })
+  })
+  // The live background helpers under the root session: the Stop menu's "Stop including helpers (N)" and the toast after
+  // a main-only Stop. A subagent's own page shows none; workspace tasks are never counted.
+  const backgroundTasks = useBackgroundTasks()
+  const helpers = createMemo<HelperTargets>(() => {
+    const id = props.controls.session.id
+    if (!backgroundTasks || !id || backgroundTasks.rootID() !== id) return NO_HELPERS
+    return helperTargets(backgroundTasks.cards().flatMap((card) => card.agents))
+  })
   const tip = () => {
     if (stopping()) {
       return (
@@ -1694,6 +1723,8 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
       onQueue: props.onQueue,
       onAbort: props.onAbort,
       onSubmit: props.onSubmit,
+      stopScope: settings.general.stopScope,
+      helpers,
       executionMode,
       researchDepth,
       researchScope,
@@ -1912,7 +1943,8 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
       ) {
         return
       }
-      void handleSubmit(event)
+      // Alt+Enter (Option+Enter) queues a message that would steer, or steers one that would queue.
+      void handleSubmit(event, { alternate: event.altKey })
     }
   }
 
@@ -2439,6 +2471,13 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                     />
                   </svg>
                 </button>
+                <Show when={stopping() && helpers().count > 0}>
+                  <StopMenu
+                    class="size-9 self-end rounded-[8px] text-v2-icon-icon-muted hover:bg-white/[0.06] hover:text-v2-text-text-base"
+                    helpers={helpers().count}
+                    onStop={(scope) => void abort(scope)}
+                  />
+                </Show>
                 <TooltipV2 class="self-end" placement="top" inactive={!working() && blank()} value={tip()}>
                   <IconButton
                     data-action="prompt-submit"
@@ -2639,6 +2678,13 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                       />
                     </svg>
                   </button>
+                  <Show when={stopping() && helpers().count > 0}>
+                    <StopMenu
+                      class="size-9 rounded-[8px] text-text-muted hover:bg-white/[0.06] hover:text-text-strong"
+                      helpers={helpers().count}
+                      onStop={(scope) => void abort(scope)}
+                    />
+                  </Show>
                   <Tooltip placement="top" inactive={!working() && blank()} value={tip()}>
                     <IconButton
                       data-action="prompt-submit"
@@ -2816,6 +2862,41 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
         )}
       </Show>
     </div>
+  )
+}
+
+/**
+ * The chevron beside Stop while helpers run (5.I.2): stop only the main turn, or the main turn and every helper this
+ * conversation started. A type="button" control, so opening it never submits the composer form it sits in.
+ */
+const StopMenu: Component<{ helpers: number; onStop: (scope: StopScope) => void; class?: string }> = (props) => {
+  const language = useLanguage()
+  const [open, setOpen] = createSignal(false)
+  const pick = (scope: StopScope) => {
+    setOpen(false)
+    props.onStop(scope)
+  }
+  return (
+    <MenuV2 open={open()} onOpenChange={setOpen} gutter={6} modal={false} placement="top-end">
+      <MenuV2.Trigger
+        as="button"
+        type="button"
+        data-action="prompt-stop-menu"
+        class={`grid shrink-0 place-items-center transition ${props.class ?? ""}`}
+        title={language.t("prompt.stop.menu")}
+        aria-label={language.t("prompt.stop.menu")}
+      >
+        <Icon name="chevron-down" size="small" />
+      </MenuV2.Trigger>
+      <MenuV2.Portal>
+        <MenuV2.Content data-component="prompt-stop-menu">
+          <MenuV2.Item onSelect={() => pick("turn")}>{language.t("prompt.stop.turn")}</MenuV2.Item>
+          <MenuV2.Item onSelect={() => pick("all")}>
+            {language.t("prompt.stop.helpers", { count: props.helpers })}
+          </MenuV2.Item>
+        </MenuV2.Content>
+      </MenuV2.Portal>
+    </MenuV2>
   )
 }
 

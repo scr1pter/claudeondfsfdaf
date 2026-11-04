@@ -45,6 +45,10 @@ import { AGENT as RESEARCH, requireResearch, sizeOf, type Depth } from "@/featur
 import type { Research } from "@vectordevai/schema/research"
 import { requireLocalEngine } from "@/features/local/engine-compatibility"
 import { BrainSchema } from "@vectordevai/core/brain/schema"
+import type { FollowupPreference } from "@/context/settings"
+import { NO_CAPABILITIES, type EngineCapabilities } from "@/features/background-tasks/engine-capabilities"
+import { NO_HELPERS, stopSession, type HelperTargets, type StopScope } from "@/features/background-tasks/stop-helpers"
+import { backgroundTasksPane } from "@/features/background-tasks/background-tasks-state"
 
 type PendingPrompt = {
   abort: AbortController
@@ -109,6 +113,40 @@ export type FollowupDraft = {
   research?: { scope?: Research.Scope }
   // Where the prompt's text holds what the user pasted, as `[start, end]` offsets, so Vector never learns from it.
   pasted?: [number, number][]
+  // Shell-mode input queued while Vector worked: it runs as a shell command when sent, never as a prompt.
+  shell?: true
+}
+
+/**
+ * Whether a message sent while Vector works waits in the queue instead of steering the running turn (5.I.1). Enter
+ * steers unless the user picked Queue or the engine is too old to steer; Alt+Enter (`alternate`) does the other for
+ * that one message. Nothing queues while the session is idle, blocked on a permission or question, or a subagent's.
+ */
+export function queueEnabled(input: {
+  busy: boolean
+  blocked: boolean
+  child: boolean
+  followup: FollowupPreference
+  /** steerSupported(engine version) */
+  steer: boolean
+  alternate: boolean
+}) {
+  if (!input.busy || input.blocked || input.child) return false
+  return (input.followup === "queue" || !input.steer) !== input.alternate
+}
+
+/**
+ * Whether this submission queues. `shouldQueue(alternate)` is queueEnabled for the open session; slash commands and
+ * shell input always queue while it is open, whatever the mode, because the engine refuses them during a run. The queue
+ * is open exactly when one of the two answers is yes, since `alternate` only flips the mode.
+ */
+export function queues(
+  shouldQueue: ((alternate: boolean) => boolean) | undefined,
+  input: { alternate: boolean; command: boolean },
+) {
+  if (!shouldQueue) return false
+  if (input.command) return shouldQueue(false) || shouldQueue(true)
+  return shouldQueue(input.alternate)
 }
 
 type FollowupSendInput = {
@@ -122,6 +160,14 @@ type FollowupSendInput = {
 }
 
 const draftText = (prompt: Prompt) => prompt.map((part) => ("content" in part ? part.content : "")).join("")
+
+/** A slash command the engine knows, as sendFollowupDraft and the composer send it: `/name` followed by its arguments. */
+export function isCommand(text: string, commands: readonly { name: string }[]) {
+  const head = text.split(" ")[0]
+  if (!head?.startsWith("/")) return false
+  const name = head.slice(1)
+  return commands.some((item) => item.name === name)
+}
 
 const draftImages = (prompt: Prompt) => prompt.filter((part): part is ImageAttachmentPart => part.type === "image")
 
@@ -182,6 +228,26 @@ export async function sendFollowupDraft(input: FollowupSendInput) {
     requireResearch(input.draft.agent === RESEARCH, input.sync.data.agent)
     await requireLocalEngine(input.client)
     return true
+  }
+
+  if (input.draft.shell) {
+    setBusy()
+    try {
+      if (!(await wait())) {
+        setIdle()
+        return false
+      }
+      await input.client.session.shell({
+        sessionID: input.draft.sessionID,
+        agent: input.draft.agent,
+        model: input.draft.model,
+        command: text,
+      })
+      return true
+    } catch (err) {
+      setIdle()
+      throw err
+    }
   }
 
   const [head, ...tail] = text.split(" ")
@@ -584,9 +650,16 @@ type PromptSubmitInput = {
   setPopover: (popover: "at" | "slash" | null) => void
   newSessionWorktree?: Accessor<string | undefined>
   onNewSessionWorktreeReset?: () => void
-  shouldQueue?: Accessor<boolean>
+  /** queueEnabled for the open session, given whether Alt+Enter flipped the mode for this message. */
+  shouldQueue?: (alternate: boolean) => boolean
   onQueue?: (draft: FollowupDraft) => boolean | void
   onAbort?: () => void
+  /** What Stop, Esc and Ctrl+G stop when no scope is named (Settings → General → Stop button). */
+  stopScope?: Accessor<StopScope>
+  /** The live background helpers under the root session, for "Stop including helpers" and the toast after a Stop. */
+  helpers?: Accessor<HelperTargets>
+  /** The engine's capability flags, which pick how helpers are stopped; the server sync's copy by default. */
+  capabilities?: Accessor<EngineCapabilities>
   onSubmit?: () => void
   executionMode?: Accessor<"normal" | "quick" | "fast" | "research">
   /** Deep research's Depth and Sources chips. */
@@ -644,7 +717,42 @@ export function createPromptSubmit(input: PromptSubmitInput) {
       })
   }
 
-  const abort = async () => {
+  // "Stop including helpers": the main turn and every helper this conversation started (5.I.2).
+  const stopAll = async (sessionID: string) => {
+    const result = await stopSession({
+      client: sdk().client,
+      sessionID,
+      capabilities: input.capabilities?.() ?? serverSync().capabilities?.() ?? NO_CAPABILITIES,
+      targets: input.helpers?.() ?? NO_HELPERS,
+    }).catch((error: unknown) => {
+      showToast({
+        variant: "error",
+        title: language.t("prompt.toast.stopHelpersFailed.title"),
+        description: errorMessage(error),
+      })
+      return undefined
+    })
+    if (!result) return
+    if (result.failed > 0) {
+      showToast({
+        variant: "error",
+        title: language.t("prompt.toast.stopHelpersFailed.title"),
+        description: language.t("prompt.toast.stopHelpersFailed.description"),
+      })
+      return
+    }
+    if (result.excluded > 0)
+      showToast({
+        title: language.t("prompt.toast.workspacesKept.title"),
+        description: language.t("prompt.toast.workspacesKept.description"),
+      })
+  }
+
+  /**
+   * Stops the open session. Without a scope it uses the Stop button setting, so Esc, Ctrl+G and Stop agree. The main
+   * turn alone is the unchanged abort; after it, a toast says how many helpers still work and offers to stop them too.
+   */
+  const abort = async (scope: StopScope = input.stopScope?.() ?? "turn") => {
     const sessionID = params.id
     if (!sessionID) return Promise.resolve()
 
@@ -660,11 +768,23 @@ export function createPromptSubmit(input: PromptSubmitInput) {
       pending.delete(key)
       return Promise.resolve()
     }
-    return sdk()
+    if (scope === "all") return stopAll(sessionID)
+    await sdk()
       .client.session.abort({
         sessionID,
       })
       .catch(() => {})
+    const left = input.helpers?.().count ?? 0
+    if (left === 0) return
+    showToast({
+      title: language.t(left === 1 ? "prompt.toast.helpersLeft.title.one" : "prompt.toast.helpersLeft.title.other", {
+        count: left,
+      }),
+      actions: [
+        { label: language.t("prompt.toast.helpersLeft.stopAll"), onClick: () => void abort("all") },
+        { label: language.t("prompt.toast.helpersLeft.showTasks"), onClick: () => backgroundTasksPane.open() },
+      ],
+    })
   }
 
   const restoreCommentItems = (
@@ -705,8 +825,10 @@ export function createPromptSubmit(input: PromptSubmitInput) {
     })
   }
 
-  const handleSubmit = async (event: Event) => {
+  /** `alternate`: Alt+Enter, which flips Steer and Queue for this one message. */
+  const handleSubmit = async (event: Event, options?: { alternate?: boolean }) => {
     event.preventDefault()
+    const alternate = options?.alternate === true
 
     const target = prompt.capture()
     const submission = createPromptSubmissionState({
@@ -727,6 +849,8 @@ export function createPromptSubmit(input: PromptSubmitInput) {
       if (input.working()) void abort()
       return
     }
+    // Sent while the agent works: it steers the running turn, unless it queues below.
+    const busy = input.working()
 
     const destination = sdk()
     try {
@@ -1018,8 +1142,9 @@ export function createPromptSubmit(input: PromptSubmitInput) {
       return true
     }
 
-    if (!isPlanMode && !isNewSession && mode === "normal" && input.shouldQueue?.()) {
-      if (input.onQueue?.(draft) === false) {
+    const slash = mode === "normal" && isCommand(text, sync().data.command)
+    if (!isPlanMode && !isNewSession && queues(input.shouldQueue, { alternate, command: mode === "shell" || slash })) {
+      if (input.onQueue?.(mode === "shell" ? { ...draft, shell: true } : draft) === false) {
         restorePastes(target, text)
         return
       }
@@ -1027,6 +1152,8 @@ export function createPromptSubmit(input: PromptSubmitInput) {
       clearInput()
       return
     }
+    // A failed steer leaves the run it was joining as it was: still busy, never shown as idle.
+    const steering = busy && !isNewSession
 
     // Shell and slash commands bypass sendFollowupDraft, so recheck their destination after asynchronous setup too.
     if (mode === "shell" || text.startsWith("/")) {
@@ -1175,11 +1302,11 @@ export function createPromptSubmit(input: PromptSubmitInput) {
       serverSync: serverSync(),
       draft,
       messageID,
-      optimisticBusy: sessionDirectory === projectDirectory,
+      optimisticBusy: sessionDirectory === projectDirectory && !steering,
       before: waitForWorktree,
     }).catch((err) => {
       pending.delete(pendingKey(session.id))
-      if (sessionDirectory === projectDirectory) {
+      if (sessionDirectory === projectDirectory && !steering) {
         sync().set("session_status", session.id, { type: "idle" })
       }
       showToast({

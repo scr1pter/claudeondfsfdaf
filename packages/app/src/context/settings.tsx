@@ -30,6 +30,10 @@ export type VectorLandingPreference = "home" | "last-project" | "new-chat"
 export type VectorAnimationSpeedPreference = "off" | "calm" | "normal" | "fast"
 export type VectorChatWidthPreference = "focused" | "wide" | "full"
 export type VectorMessageSpacingPreference = "compact" | "comfortable" | "relaxed"
+/** What Enter does while Vector works: steer the running turn, or wait in the queue until it ends. */
+export type FollowupPreference = "steer" | "queue"
+/** What Stop, Esc and Ctrl+G stop: the main turn only, or the main turn and every helper it started. */
+export type StopScopePreference = "turn" | "all"
 
 export interface Settings {
   general: {
@@ -49,6 +53,9 @@ export interface Settings {
     llmJudge: boolean
     // Which runs the judge checks while llmJudge is on: large (Thorough) tasks that changed files, or every task that did.
     judgeScope: "thorough" | "changes"
+    // While Vector works (5.I.1, 5.I.2). Client settings, never engine config: saving that would dispose instances.
+    followup: FollowupPreference
+    stopScope: StopScopePreference
     autoModelRouting: boolean
     shellToolPartsExpanded: boolean
     editToolPartsExpanded: boolean
@@ -178,6 +185,8 @@ const defaultSettings: Settings = {
     showReasoningSummaries: false,
     llmJudge: false,
     judgeScope: "thorough",
+    followup: "steer",
+    stopScope: "turn",
     // Off by default: this spends the user's own BYOK budget on a model they
     // did not choose, so it has to be something they opt into.
     autoModelRouting: false,
@@ -255,6 +264,19 @@ export function restoredSettings(current: Pick<Settings, "editor">): Settings {
   const next = structuredClone(defaultSettings)
   if (current.editor?.aiAutocomplete === false) next.editor.aiAutocomplete = false
   return next
+}
+
+/**
+ * The follow-up mode a saved settings.v3 holds. An earlier version's migration wrote "steer" for everyone, and a value
+ * this version does not know reads as the default, so only an explicit "queue" queues.
+ */
+export function readFollowup(value: unknown): FollowupPreference {
+  return value === "queue" ? "queue" : "steer"
+}
+
+/** The Stop scope a saved settings.v3 holds; only an explicit "all" stops helpers by default. */
+export function readStopScope(value: unknown): StopScopePreference {
+  return value === "all" ? "all" : "turn"
 }
 
 function withFallback<T>(read: () => T | undefined, fallback: T) {
@@ -440,6 +462,14 @@ export const { use: useSettings, provider: SettingsProvider } = createSimpleCont
         judgeScope: withFallback(() => store.general?.judgeScope, defaultSettings.general.judgeScope),
         setJudgeScope(value: "thorough" | "changes") {
           setStore("general", "judgeScope", value)
+        },
+        followup: createMemo(() => readFollowup(store.general?.followup)),
+        setFollowup(value: FollowupPreference) {
+          setStore("general", "followup", value)
+        },
+        stopScope: createMemo(() => readStopScope(store.general?.stopScope)),
+        setStopScope(value: StopScopePreference) {
+          setStore("general", "stopScope", value)
         },
         setAutoModelRouting(value: boolean) {
           setStore("general", "autoModelRouting", value)
