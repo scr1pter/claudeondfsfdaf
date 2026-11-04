@@ -98,6 +98,8 @@ function fixture(options: FakeOptions & { mode?: Computer.Mode; pointer?: "ask" 
   const state = {
     scope: undefined as GrantScope | undefined,
     approvedWait: undefined as Promise<void> | undefined,
+    synchronizeWait: undefined as Promise<void> | undefined,
+    scheduled: [] as number[],
     onRequest: undefined as ((request: Wire) => void) | undefined,
     beforeInput: undefined as ((scope: GrantScope, hit: Computer.HitResult) => void) | undefined,
     escDisposer: undefined as (() => void) | undefined,
@@ -193,10 +195,22 @@ function fixture(options: FakeOptions & { mode?: Computer.Mode; pointer?: "ask" 
     backend,
     controller,
     settings,
-    grants,
+    grants: {
+      ...grants,
+      async synchronize() {
+        await state.synchronizeWait
+        await grants.synchronize()
+      },
+    },
     registry,
     overlay,
-    clock,
+    clock: {
+      ...clock,
+      setTimeout(callback, ms) {
+        state.scheduled.push(ms)
+        return clock.setTimeout(callback, ms)
+      },
+    },
     canonicalPath: async (file) => paths.get(file) ?? file,
     protectedPaths: ["/virtual/Vector/instructions.md"],
     protectedDirectories: ["/virtual/Vector/private"],
@@ -471,7 +485,7 @@ test("the act deadline reserves each input, exact waits, settling, capture and c
     { kind: "key", combo: ["ArrowLeft"], repeat: 20, holdMs: 10_000 },
     { kind: "type", text: "A".repeat(4000) },
   ]
-  expect(actDeadline({ steps, settleMs: 5000 })).toBe(80_000)
+  expect(actDeadline({ steps, settleMs: 5000 })).toBe(280_000)
 })
 
 test("the whole act times out while an observation is stalled and releases input immediately", async () => {
@@ -1497,3 +1511,111 @@ for (const outcome of ["success", "changed"] as const)
     )
     expect(fake.controller.state().holder?.sessionID).toBe(ROOT.rootSessionID)
   })
+
+test("a maximum ten-second hold and repeated holds finish within the full requested duration", async () => {
+  const fake = fixture({ platform: "windows" })
+  await fake.acquire()
+  const notes = await fake.grant("notes")
+  const hold = fake.call("act", {
+    steps: [{ kind: "key", combo: ["ArrowLeft"], repeat: 4, holdMs: 10_000 }],
+    allowedApps: [notes.key],
+    settleMs: 0,
+  })
+  await until(() => fake.sent.some((request) => request.op === "input.hold"))
+  for (let index = 0; index < 4; index++) await fake.advance(10_000)
+  expect((await hold.promise).done).toBe(1)
+  expect(fake.sent.filter((request) => request.op === "input.hold")).toHaveLength(4)
+  expect(fake.controller.state().phase).toBe("working")
+})
+
+test("background ref actions explain that work is happening behind the user's windows", async () => {
+  const fake = fixture({ mode: "background" })
+  await fake.acquire()
+  const calculator = await fake.grant("calculator")
+  const tree = await fake.run("readUi", { app: { key: calculator.key }, limit: 100 })
+  const seven = tree.nodes.find((node) => node.name === "7")!
+  const result = await fake.run("act", {
+    steps: [{ kind: "click", at: { ref: seven.ref }, button: "left", count: 1, modifiers: [] }],
+    allowedApps: [calculator.key],
+    settleMs: 0,
+  })
+  expect(result.done).toBe(1)
+  expect(fake.controller.state().step).toBe("Working in Calculator behind your windows")
+  expect(fake.controller.state().apps.at(-1)?.name).toBe("Calculator")
+  expect(fake.state.cursor.at(-1)).toEqual({ kind: "hide", visible: false })
+})
+
+test("a background pointer refusal explains the foreground request using the checked app", async () => {
+  const fake = fixture({ mode: "background" })
+  await fake.acquire()
+  const notes = await fake.grant("notes")
+  const shot = await fake.run("screenshot", { scope: { app: { key: notes.key } }, budget: BUDGET })
+  const result = await fake.run("act", {
+    frame: shot.frame.id,
+    steps: [{ kind: "move", at: { x: 80, y: 160 } }],
+    allowedApps: [notes.key],
+    settleMs: 0,
+  })
+  expect(result.waiting?.reason).toBe("pointer")
+  expect(fake.controller.state().step).toBe("Notes needs the screen; Vector Hands will ask before using your mouse.")
+})
+
+test("a background wait does not inspect or require approval for the app the user has in front", async () => {
+  const fake = fixture({ mode: "background" })
+  await fake.acquire()
+  fake.helper.desktop.activate("vector")
+  const start = fake.sent.length
+  const waiting = fake.call("act", {
+    steps: [{ kind: "wait", ms: 100 }],
+    allowedApps: [],
+    settleMs: 0,
+  })
+  const result = waiting.promise.catch((error) => error)
+  await until(() => fake.state.scheduled.includes(100))
+  await fake.advance(100)
+  expect(await result).toMatchObject({ done: 1 })
+  expect(fake.sent.slice(start).filter((request) => ["ui.focused", "ui.hittest"].includes(request.op))).toEqual([])
+  expect(fake.helper.log.filter((entry) => entry.kind === "input")).toEqual([])
+})
+
+test("a screenshot waits for received consent events and rejects an image captured before a Deny", async () => {
+  const fake = fixture()
+  await fake.acquire()
+  await fake.grant("notes")
+  const gate = Promise.withResolvers<void>()
+  fake.state.onRequest = (request) => {
+    if (request.op === "capture") fake.state.synchronizeWait = gate.promise
+  }
+  const screenshot = fake.call("screenshot", { scope: { display: "1" }, budget: BUDGET })
+  let settled = false
+  const result = screenshot.promise.then(
+    (value) => {
+      settled = true
+      return value
+    },
+    (error) => {
+      settled = true
+      return error
+    },
+  )
+  await until(() => fake.sent.some((request) => request.op === "capture"))
+  await flush()
+  expect(settled).toBe(false)
+  await fake.grant("notes", "reject")
+  gate.resolve()
+  expect(await result).toMatchObject({ code: "changed" })
+})
+
+test("an inspect cannot return old labels after consent is denied during its clipboard observation", async () => {
+  const fake = fixture()
+  await fake.acquire()
+  await fake.grant("notes")
+  const gate = Promise.withResolvers<string>()
+  fake.state.clipboardRead = gate.promise
+  const inspected = fake.call("inspect", { focus: true })
+  const result = inspected.promise.catch((error) => error)
+  await until(() => fake.state.clipboardReads > 0)
+  await fake.grant("notes", "reject")
+  gate.resolve("public clipboard")
+  expect(await result).toMatchObject({ code: "not_granted" })
+})

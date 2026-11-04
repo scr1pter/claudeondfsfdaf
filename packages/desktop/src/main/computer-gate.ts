@@ -32,8 +32,10 @@ export type GateContext = {
 }
 
 export type GateResult =
+  | { verdict: "ok"; waiting: true }
   | {
       verdict: "ok"
+      waiting?: false
       inspect: Computer.InspectResult
       hit: Computer.HitResult
       hits: Computer.HitResult[]
@@ -46,6 +48,14 @@ export type GateResult =
 export async function checkStep(step: Computer.Step, ctx: GateContext): Promise<GateResult> {
   await ctx.grants.synchronize()
   if (!ctx.grants.isActive(ctx.scope)) return refuse("stopped")
+  const approvals = ctx.approvals?.filter((item) => item.index === ctx.index) ?? []
+  if (new Set(approvals.map((item) => item.requestID)).size !== approvals.length) return refuse("not_granted")
+  // Waiting changes no app, so it neither needs an owner nor spends authority for a later input step.
+  if (step.kind === "wait") return approvals.length ? refuse("not_granted") : { verdict: "ok", waiting: true }
+  for (const approval of approvals) {
+    if (!(await ctx.grants.waitForReply(approval.requestID, ctx.scope))) return refuse("not_granted")
+    if (!ctx.grants.isActive(ctx.scope)) return refuse("stopped")
+  }
   if (step.kind === "down" || step.kind === "up") return refuse("unsupported_action")
   const ref = step.kind === "type" ? step.ref : step.kind === "click" && "ref" in step.at ? step.at.ref : undefined
   const points =
@@ -65,7 +75,6 @@ export async function checkStep(step: Computer.Step, ctx: GateContext): Promise<
       : [await ctx.backend.focused()]
   await ctx.grants.synchronize()
   if (!ctx.grants.isActive(ctx.scope)) return refuse("stopped")
-  if (ref && ctx.uiRef?.(hits[0]!) !== ref) return refuse("stale_ref")
   const inspections: Computer.InspectResult[] = []
   for (const hit of hits) {
     const signals = { ...ctx.signals?.(hit), ...hit.signals }
@@ -75,6 +84,24 @@ export async function checkStep(step: Computer.Step, ctx: GateContext): Promise<
     if (hit.elevated) return refuse("elevated")
     if (hit.owner.platform === "remote" || !hit.owner.pid || !Number.isSafeInteger(hit.owner.pid))
       return refuse("changed")
+    const access = ctx.settings.access(hit.owner, { ...ctx.grants.grants(ctx.scope), signals })
+    if (["never", "blocked", "company-deny"].includes(access.verdict)) return refuse("blocked")
+    if (access.verdict === "denied") return refuse("not_granted")
+    if (
+      !ctx.allowedApps?.includes(Computer.appKey(hit.owner)) ||
+      access.verdict !== "granted" ||
+      access.level !== "interact"
+    )
+      return pending("app", {
+        app: hit.owner,
+        category,
+        pid: hit.owner.pid,
+        window: { id: String(hit.windowId) },
+        element: { role: hit.role, secure: hit.secure, enabled: hit.enabled === true, editable: hit.editable === true },
+        clipboard: { agentOwned: false },
+      })
+    const uiRef = ctx.uiRef?.(hit)
+    if (ref && uiRef !== ref) return refuse("stale_ref")
     let inspect: Computer.InspectResult = {
       app: hit.owner,
       category,
@@ -85,7 +112,7 @@ export async function checkStep(step: Computer.Step, ctx: GateContext): Promise<
         secure: hit.secure,
         enabled: hit.enabled === true,
         editable: hit.editable === true,
-        ...(ctx.uiRef?.(hit) ? { ref: ctx.uiRef(hit) } : {}),
+        ...(uiRef ? { ref: uiRef } : {}),
         ...(hit.elementId ? { elementId: hit.elementId } : {}),
         ...(hit.name === undefined ? {} : { label: hit.name }),
       },
@@ -97,15 +124,6 @@ export async function checkStep(step: Computer.Step, ctx: GateContext): Promise<
       ...(hit.focusedMenuShortcuts ? { focusedMenuShortcuts: hit.focusedMenuShortcuts } : {}),
       ...(hit.elevated ? { elevated: true } : {}),
     }
-    const access = ctx.settings.access(hit.owner, { ...ctx.grants.grants(ctx.scope), signals })
-    if (["never", "blocked", "company-deny"].includes(access.verdict)) return refuse("blocked")
-    if (access.verdict === "denied") return refuse("not_granted")
-    if (
-      !ctx.allowedApps?.includes(Computer.appKey(hit.owner)) ||
-      access.verdict !== "granted" ||
-      (step.kind !== "wait" && access.level !== "interact")
-    )
-      return pending("app", inspect)
     if (ComputerCredential.field(inspect.element) || (step.kind === "type" && ComputerCredential.secret(step.text)))
       return refuse("secure_field")
     if (step.kind === "type" && (!hit.elementId || !hit.ref || hit.enabled !== true || hit.editable === undefined))
@@ -175,8 +193,6 @@ export async function checkStep(step: Computer.Step, ctx: GateContext): Promise<
     documentProtected: !!inspect.document && ctx.documentProtected?.(inspect.document),
   })
   if (local?.kind === "refuse") return refuse(local.code)
-  const approvals = ctx.approvals?.filter((item) => item.index === ctx.index) ?? []
-  if (new Set(approvals.map((item) => item.requestID)).size !== approvals.length) return refuse("not_granted")
   const sensitive: { requestID: string; why: Computer.SensitiveWhy }[] = []
   const app: string[] = []
   for (const approval of approvals) {
@@ -224,19 +240,17 @@ export async function checkStep(step: Computer.Step, ctx: GateContext): Promise<
     ...ctx.grants.grants(ctx.scope),
     signals: { ...ctx.signals?.(final), ...final.signals },
   })
-  if (access.verdict !== "granted" || (step.kind !== "wait" && access.level !== "interact"))
-    return refuse("not_granted")
+  if (access.verdict !== "granted" || access.level !== "interact") return refuse("not_granted")
   for (const hit of hits) {
     const access = ctx.settings.access(hit.owner, {
       ...ctx.grants.grants(ctx.scope),
       signals: { ...ctx.signals?.(hit), ...hit.signals },
     })
-    if (access.verdict !== "granted" || (step.kind !== "wait" && access.level !== "interact"))
-      return refuse("not_granted")
+    if (access.verdict !== "granted" || access.level !== "interact") return refuse("not_granted")
   }
   if (!ctx.grants.isActive(ctx.scope)) return refuse("stopped")
   // Validate all proofs first: a second missing ask must not burn a still-needed first approval.
-  if (step.kind !== "wait") ctx.beforeInput?.(final)
+  ctx.beforeInput?.(final)
   if (!ctx.grants.isActive(ctx.scope)) return refuse("stopped")
   for (const proof of sensitive)
     if (!ctx.grants.consumeSensitive(proof.requestID, ctx.scope, step, inspect, ctx.frame?.id, proof.why))
@@ -260,7 +274,7 @@ export async function typeChecked(
 ): Promise<GateResult> {
   if (!Number.isSafeInteger(chunkSize) || chunkSize < 1 || chunkSize > 1024) return refuse("blocked")
   const checked = await checkStep(step, ctx)
-  if (checked.verdict !== "ok") return checked
+  if (checked.verdict !== "ok" || checked.waiting) return checked
   const characters = [...step.text]
   for (let offset = 0; offset < characters.length; offset += chunkSize) {
     await ctx.grants.synchronize()

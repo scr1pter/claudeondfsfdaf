@@ -792,7 +792,10 @@ describe("native reference actions retain their observed process and element", (
         const ref = tree.nodes.find((item: Message) => item.name === node.name).ref
         const hit = fake.call("ui.resolve", { ref })
         const expected = { pid: app.pid, elementId: hit.elementId }
-        const args = action === "perform" ? { ref, action: "AXPress" } : { ref, value: "replacement" }
+        const args =
+          action === "perform"
+            ? { ref, action: platform === "windows" ? "Invoke" : "AXPress" }
+            : { ref, value: "replacement" }
         expect(fake.call(`ui.${action}`, { ...args, ...expected, elementId: "different-element" })).toMatchObject({
           code: "changed",
         })

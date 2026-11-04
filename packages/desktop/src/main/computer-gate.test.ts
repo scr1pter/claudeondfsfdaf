@@ -229,6 +229,59 @@ async function fixture() {
 }
 
 describe("live desktop step gate", () => {
+  test("a wait while a never-listed app has focus uses no helper target or input", async () => {
+    const fake = await fixture()
+    fake.state.hit.owner = { ...APP, bundleId: "com.apple.Terminal", name: "Terminal", pid: 99 }
+    fake.state.calls.length = 0
+    fake.ctx.uiRef = () => {
+      throw new Error("A wait must not mint a reference")
+    }
+    expect(await checkStep({ kind: "wait", ms: 500 }, fake.ctx)).toEqual({ verdict: "ok", waiting: true })
+    expect(fake.state.calls).toEqual([])
+    expect(fake.state.inputs).toEqual([])
+    expect(
+      await checkStep({ kind: "wait", ms: 500 }, { ...fake.ctx, approvals: [{ index: 0, requestID: "per_gate_app" }] }),
+    ).toEqual({ verdict: "refuse", code: "not_granted" })
+    expect(fake.grants.consumeApp("per_gate_app", SCOPE, APP, false)).toBe(true)
+    fake.grants.endTask(SCOPE.rootSessionID, SCOPE.directory)
+    expect(await checkStep({ kind: "wait", ms: 500 }, fake.ctx)).toEqual({ verdict: "refuse", code: "stopped" })
+    expect(fake.state.calls).toEqual([])
+  })
+
+  test("an ungranted app inspection exposes only identity and structural flags and mints no ref", async () => {
+    const fake = await fixture()
+    const other = { ...APP, bundleId: "com.example.Other", name: "Other", pid: 11 }
+    fake.state.hit = {
+      ...fake.state.hit,
+      owner: other,
+      name: "PRIVATE DOCUMENT CONTENT",
+      document: "/private/customer-draft.txt",
+      documentStatus: "known",
+      programPath: "/private/customer-script",
+      focusedMenuShortcuts: [{ combo: ["Command", "k"], label: "PRIVATE MENU ITEM" }],
+    }
+    fake.ctx.allowedApps = [Computer.appKey(other)]
+    fake.ctx.uiRef = () => {
+      throw new Error("An ungranted hit must not mint a reference")
+    }
+    const result = await checkStep(CLICK, fake.ctx)
+    expect(result).toEqual({
+      verdict: "pending",
+      kind: "app",
+      inspect: {
+        app: other,
+        category: "general",
+        pid: 11,
+        window: { id: "window-1" },
+        element: { role: "AXButton", secure: false, enabled: true, editable: false },
+        clipboard: { agentOwned: false },
+      },
+    })
+    expect(JSON.stringify(result)).not.toContain("PRIVATE")
+    expect(JSON.stringify(result)).not.toContain("/private")
+    expect(fake.state.inputs).toEqual([])
+  })
+
   test("a granted app uses the actual hit-test owner, never the requested app's approval", async () => {
     const fake = await fixture()
     expect(await checkStep(CLICK, fake.ctx)).toMatchObject({ verdict: "ok" })
@@ -579,6 +632,26 @@ describe("live desktop step gate", () => {
 })
 
 describe("text chunk live ownership", () => {
+  test("focus moves to another app between type chunks: the remaining chunks are not sent", async () => {
+    const fake = await fixture()
+    fake.state.hit = { ...fake.state.hit, role: "AXTextArea", name: "Body", editable: true }
+    const result = await typeChecked(
+      { kind: "type", text: "abcdefgh" },
+      fake.ctx,
+      async (text) => {
+        await fake.backend.input({ op: "input.type", pid: 10, text }, 10000)
+        fake.state.hit = {
+          ...fake.state.hit,
+          owner: { ...APP, bundleId: "com.example.Other", name: "Other", pid: 99 },
+          windowId: "other-window",
+        }
+      },
+      4,
+    )
+    expect(result).toEqual({ verdict: "refuse", code: "changed" })
+    expect(fake.state.inputs).toEqual([{ op: "input.type", pid: APP.pid, text: "abcd" }])
+  })
+
   test("the same app/PID/window with a different field stops before the next chunk", async () => {
     const fake = await fixture()
     fake.state.hit = { ...fake.state.hit, role: "AXTextArea", name: "Body", editable: true }

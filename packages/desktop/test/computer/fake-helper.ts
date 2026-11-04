@@ -1219,7 +1219,8 @@ export function createFakeHelper(options: FakeOptions, io: FakeIo) {
         const raise = args.action === "AXRaise" && !item
         if (raise && background()) return needsForeground("Raising a window")
         record("ui", { action: args.action, windowId: target.window.windowId, node: item?.id })
-        if (args.action === "AXPress" && item?.press) return ok({ took: desktop.press(item) })
+        if (args.action === (options.platform === "windows" ? "Invoke" : "AXPress") && item?.press)
+          return ok({ took: desktop.press(item) })
         if (!raise) return ok({ took: false })
         desktop.raise(target.window.windowId)
         checkSecureInput()

@@ -8,6 +8,7 @@ import { createComputerGrants, type GrantScope } from "./computer-grants"
 import { access, defaultPrefs, resolve, type AppGrants } from "./computer-settings"
 import { defaultPolicy } from "./computer-policy"
 import type { KeepAwakeEvent } from "./keep-awake"
+import { manualClock } from "../../test/computer/fake-helper"
 
 const APP: Computer.AppIdentity = {
   platform: "macos",
@@ -99,6 +100,7 @@ function replied(id: string, reply: "once" | "always" | "reject", scope = SCOPE)
 function fixture(
   rootOf: (sessionID: string, directory: string) => Promise<string | undefined> = async (sessionID) =>
     sessionID === SCOPE.sessionID ? SCOPE.rootSessionID : undefined,
+  options: Pick<Parameters<typeof createComputerGrants>[0], "replyTimeoutMs" | "timers"> = { replyTimeoutMs: 1 },
 ) {
   const state = {
     prefs: { ...defaultPrefs("darwin"), enabled: true, consentedAt: 1 },
@@ -127,7 +129,7 @@ function fixture(
       return true
     },
   }
-  const manager = createComputerGrants({ settings, rootOf })
+  const manager = createComputerGrants({ settings, rootOf, ...options })
   manager.beginTask(SCOPE)
   const answerApp = async (
     id: string,
@@ -192,6 +194,176 @@ test("program launch consent is bound to a canonical artifact and handler, consu
 })
 
 describe("desktop-observed app consent", () => {
+  test("a grant arriving on the bridge before its observed SSE Allow waits for that exact reply", async () => {
+    const clock = manualClock()
+    let waiting = false
+    const fake = fixture(undefined, {
+      timers: {
+        setTimeout(callback, ms) {
+          waiting = true
+          return clock.setTimeout(callback, ms)
+        },
+        clearTimeout: clock.clearTimeout,
+      },
+    })
+    await fake.manager.observe(asked("per_racing_reply", appMetadata()))
+    let settled = false
+    const pending = fake.manager.grant(SCOPE, APP, "interact", "per_racing_reply").then((result) => {
+      settled = true
+      return result
+    })
+    for (let count = 0; count < 100 && !waiting; count++) await Promise.resolve()
+    expect(waiting).toBe(true)
+    expect(settled).toBe(false)
+    clock.advance(1999)
+    expect(settled).toBe(false)
+    await fake.manager.observe(replied("per_racing_reply", "once"))
+    expect(await pending).toBe(true)
+    expect(fake.manager.consumeApp("per_racing_reply", SCOPE, APP)).toBe(true)
+  })
+
+  test("waiting for a live ask's reply times out after two seconds and never invents Allow", async () => {
+    const clock = manualClock()
+    let waiting = false
+    const fake = fixture(undefined, {
+      timers: {
+        setTimeout(callback, ms) {
+          waiting = true
+          return clock.setTimeout(callback, ms)
+        },
+        clearTimeout: clock.clearTimeout,
+      },
+    })
+    await fake.manager.observe(asked("per_no_reply", appMetadata()))
+    const pending = fake.manager.grant(SCOPE, APP, "interact", "per_no_reply")
+    for (let count = 0; count < 100 && !waiting; count++) await Promise.resolve()
+    expect(waiting).toBe(true)
+    clock.advance(2000)
+    expect(await pending).toBe(false)
+    expect(fake.manager.grants(SCOPE).task.size).toBe(0)
+  })
+
+  test("task end and disconnect cancel reply waits before their timeout and cannot grant a successor", async () => {
+    for (const close of ["task", "connection"]) {
+      const clock = manualClock()
+      let waiting = false
+      const fake = fixture(undefined, {
+        timers: {
+          setTimeout(callback, ms) {
+            waiting = true
+            return clock.setTimeout(callback, ms)
+          },
+          clearTimeout: clock.clearTimeout,
+        },
+      })
+      await fake.manager.observe(asked("per_cancel_wait", appMetadata()))
+      const pending = fake.manager.grant(SCOPE, APP, "interact", "per_cancel_wait")
+      for (let count = 0; count < 100 && !waiting; count++) await Promise.resolve()
+      expect(waiting).toBe(true)
+      if (close === "task") fake.manager.endTask(SCOPE.rootSessionID, SCOPE.directory)
+      else fake.manager.disconnect()
+      const successor = { ...SCOPE, lease: 2 }
+      fake.manager.beginTask(successor)
+      await fake.manager.observe(replied("per_cancel_wait", "once", successor))
+      expect(await pending).toBe(false)
+      expect(fake.manager.grants(successor).task.size).toBe(0)
+      expect(clock.now()).toBe(0)
+    }
+  })
+
+  test("crossing the seen-ID cap admits fresh ascending asks while old asks cannot be replayed", async () => {
+    const fake = fixture()
+    const id = (index: number) => `per_${index.toString(16).padStart(12, "0")}${"0".repeat(14)}`
+    await fake.answerApp(id(0))
+    expect(await fake.manager.grant(SCOPE, APP, "interact", id(0))).toBe(true)
+    expect(fake.manager.consumeApp(id(0), SCOPE, APP)).toBe(true)
+    // Malformed metadata is still remembered against replay but creates no proof. Fill the actual production
+    // cap through that cheaper path; grants and one-use consumption need testing only at the two boundaries.
+    for (let index = 1; index < 10002; index++)
+      await fake.manager.observe({
+        directory: SCOPE.directory,
+        payload: {
+          type: "permission.asked",
+          properties: {
+            id: id(index),
+            sessionID: SCOPE.sessionID,
+            permission: "computer_app",
+            patterns: [Computer.appKey(APP)],
+            always: [],
+            metadata: {},
+          },
+        },
+      })
+    expect(fake.manager.isActive(SCOPE)).toBe(true)
+    const successor = { ...SCOPE, lease: 2 }
+    fake.manager.beginTask(successor)
+    await fake.answerApp(id(0), "once", appMetadata(), successor)
+    expect(await fake.manager.grant(successor, APP, "interact", id(0))).toBe(false)
+    await fake.answerApp(id(10003), "once", appMetadata(), successor)
+    expect(await fake.manager.grant(successor, APP, "interact", id(10003))).toBe(true)
+  })
+
+  test("deny-only root eviction admits new tasks without resurrecting existing or later saved Always", async () => {
+    const fake = fixture(async (sessionID) => sessionID)
+    fake.manager.endTask(SCOPE.rootSessionID, SCOPE.directory)
+    fake.state.always.push({ key: Computer.appKey(APP), name: APP.name, teamId: "TEAM123456", addedAt: 1 })
+    for (let index = 0; index < 1001; index++) {
+      const scope = { ...SCOPE, rootSessionID: `ses_root_${index}`, sessionID: `ses_root_${index}`, lease: index + 1 }
+      fake.manager.beginTask(scope)
+      await fake.answerApp(`per_deny_${index}`, "reject", appMetadata(), scope)
+      fake.manager.endTask(scope.rootSessionID, scope.directory)
+    }
+    const forgotten = { ...SCOPE, rootSessionID: "ses_root_0", sessionID: "ses_root_0", lease: 1002 }
+    fake.manager.beginTask(forgotten)
+    expect(fake.settings.access(APP, fake.manager.grants(forgotten)).verdict).toBe("denied")
+    const later = { ...APP, bundleId: "com.example.Later", name: "Later", pid: 11 }
+    fake.state.always.push({ key: Computer.appKey(later), name: later.name, teamId: "TEAM123456", addedAt: 2 })
+    expect(fake.settings.access(later, fake.manager.grants(forgotten)).verdict).toBe("denied")
+    await fake.answerApp("per_mention_after_eviction", "once", appMetadata(APP, { mentioned: true }), forgotten)
+    expect(await fake.manager.grant(forgotten, APP, "interact", "per_mention_after_eviction")).toBe(true)
+    expect(fake.settings.access(APP, fake.manager.grants(forgotten)).verdict).toBe("granted")
+  })
+
+  test("an authenticated root deletion forgets its Deny only in the matching directory", async () => {
+    const fake = fixture()
+    await fake.answerApp("per_deleted_root", "reject")
+    fake.manager.endTask(SCOPE.rootSessionID, SCOPE.directory)
+    await fake.manager.observe({
+      directory: "/another",
+      payload: {
+        type: "session.deleted",
+        properties: { info: { id: SCOPE.rootSessionID, directory: SCOPE.directory } },
+      },
+    })
+    fake.manager.beginTask({ ...SCOPE, lease: 2 })
+    expect(fake.settings.access(APP, fake.manager.grants({ ...SCOPE, lease: 2 })).verdict).toBe("denied")
+    await fake.manager.observe({
+      directory: SCOPE.directory,
+      payload: {
+        type: "session.deleted",
+        properties: { info: { id: "ses_deleted_child", parentID: SCOPE.rootSessionID, directory: SCOPE.directory } },
+      },
+    })
+    expect(fake.settings.access(APP, fake.manager.grants({ ...SCOPE, lease: 2 })).verdict).toBe("denied")
+    await fake.manager.observe({
+      directory: SCOPE.directory,
+      payload: {
+        type: "session.deleted",
+        properties: { sessionID: "different", info: { id: SCOPE.rootSessionID, directory: SCOPE.directory } },
+      },
+    })
+    expect(fake.settings.access(APP, fake.manager.grants({ ...SCOPE, lease: 2 })).verdict).toBe("denied")
+    await fake.manager.observe({
+      directory: SCOPE.directory,
+      payload: {
+        type: "session.deleted",
+        properties: { info: { id: SCOPE.rootSessionID, directory: SCOPE.directory } },
+      },
+    })
+    fake.manager.beginTask({ ...SCOPE, lease: 3 })
+    expect(fake.settings.access(APP, fake.manager.grants({ ...SCOPE, lease: 3 })).verdict).toBe("ask")
+  })
+
   test("an asserted request ID or an ask alone never grants an app", async () => {
     const fake = fixture()
     expect(await fake.manager.grant(SCOPE, APP, "interact", "per_missing")).toBe(false)

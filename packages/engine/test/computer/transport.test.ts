@@ -77,7 +77,7 @@ function error<A>(exit: Exit.Exit<A, ComputerTransport.ComputerError>) {
 
 test("act deadline sums requested waits, input budgets, settle, capture and slack (INV-R4)", () => {
   expect(ComputerTransport.actDeadline([{ kind: "wait", ms: 30_000 }, { kind: "wait", ms: 20_000 }, key], 500)).toBe(
-    85_500,
+    95_500,
   )
 })
 
@@ -278,48 +278,50 @@ const localCleanup = fixture(() =>
     return { ok: true }
   }),
 )
-localCleanup.it.effect("Local None still permits labelled loopback cancel and release without logging their secrets", () =>
-  environment(
-    Effect.acquireUseRelease(
-      Effect.sync(() => {
-        const previous = Egress.policy()
-        const events: ReturnType<typeof Egress.events> = []
-        const unsubscribe = Egress.subscribe((event) => {
-          if (event.source === "computer-bridge") events.push(event)
-        })
-        Egress.configure(LocalPolicy.resolve({ global: { enabled: true, web: "none" } }))
-        return { previous, events, unsubscribe }
-      }),
-      ({ events }) =>
-        Effect.gen(function* () {
-          const transport = yield* ComputerTransport.Service
-          yield* transport.request({ ...envelope, command: "cancel", lease: 1 })
-          yield* transport.request({ ...envelope, command: "release", lease: 1 })
-          expect(localCleanup.calls.map((call) => call.input.command)).toEqual(["cancel", "release"])
-          expect(events).toHaveLength(2)
-          for (const event of events) {
-            expect(event).toMatchObject({
-              source: "computer-bridge",
-              purpose: "integration",
-              class: "this-computer",
-              origin: "http://127.0.0.1:45100",
-              method: "POST",
-              tool: "computer",
-              decision: "allow",
-            })
-            expect(event.bytes_out).toBeGreaterThan(0)
-          }
-          expect(JSON.stringify(events)).not.toContain("transport-clock-fixture")
-          expect(JSON.stringify(events)).not.toContain("/fixture")
-          expect(JSON.stringify(events)).not.toContain("/computer/command")
-        }),
-      ({ previous, unsubscribe }) =>
+localCleanup.it.effect(
+  "Local None still permits labelled loopback cancel and release without logging their secrets",
+  () =>
+    environment(
+      Effect.acquireUseRelease(
         Effect.sync(() => {
-          unsubscribe()
-          Egress.configure(previous)
+          const previous = Egress.policy()
+          const events: ReturnType<typeof Egress.events> = []
+          const unsubscribe = Egress.subscribe((event) => {
+            if (event.source === "computer-bridge") events.push(event)
+          })
+          Egress.configure(LocalPolicy.resolve({ global: { enabled: true, web: "none" } }))
+          return { previous, events, unsubscribe }
         }),
+        ({ events }) =>
+          Effect.gen(function* () {
+            const transport = yield* ComputerTransport.Service
+            yield* transport.request({ ...envelope, command: "cancel", lease: 1 })
+            yield* transport.request({ ...envelope, command: "release", lease: 1 })
+            expect(localCleanup.calls.map((call) => call.input.command)).toEqual(["cancel", "release"])
+            expect(events).toHaveLength(2)
+            for (const event of events) {
+              expect(event).toMatchObject({
+                source: "computer-bridge",
+                purpose: "integration",
+                class: "this-computer",
+                origin: "http://127.0.0.1:45100",
+                method: "POST",
+                tool: "computer",
+                decision: "allow",
+              })
+              expect(event.bytes_out).toBeGreaterThan(0)
+            }
+            expect(JSON.stringify(events)).not.toContain("transport-clock-fixture")
+            expect(JSON.stringify(events)).not.toContain("/fixture")
+            expect(JSON.stringify(events)).not.toContain("/computer/command")
+          }),
+        ({ previous, unsubscribe }) =>
+          Effect.sync(() => {
+            unsubscribe()
+            Egress.configure(previous)
+          }),
+      ),
     ),
-  ),
 )
 
 for (const [name, values] of [

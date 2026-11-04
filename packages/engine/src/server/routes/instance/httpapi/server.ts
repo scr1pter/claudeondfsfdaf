@@ -14,6 +14,7 @@ import { DesktopTasks } from "@/task/desktop"
 import { Command } from "@/command"
 import { ComputerAvailability } from "@/computer/availability"
 import { ComputerPrune } from "@/computer/prune"
+import { ComputerProtection } from "@/computer/protection"
 import { Config } from "@/config/config"
 import { Workspace } from "@/control-plane/workspace"
 import { Env } from "@/env"
@@ -239,6 +240,7 @@ const app = LayerNode.group([
   FSUtil.node,
   Database.node,
   ComputerPrune.node,
+  ComputerProtection.node,
   Auth.node,
   Teams.node,
   Config.node,

@@ -207,7 +207,13 @@ export class NativeHelperBackend implements Computer.ComputerBackend {
 
   async perform(ref: string, action: string, phase?: Computer.NativePhase, expected?: Computer.NativeElementTarget) {
     await this.requireFeatures("ui.actions")
-    return this.client.request<{ took?: boolean }>("ui.perform", { ref, action, ...phase, ...expected })
+    const platform = (await this.hello()).helper.platform
+    return this.client.request<{ took?: boolean }>("ui.perform", {
+      ref,
+      action: action === "press" ? (platform === "windows" ? "Invoke" : "AXPress") : action,
+      ...phase,
+      ...expected,
+    })
   }
 
   async setValue(ref: string, value: string, phase?: Computer.NativePhase, expected?: Computer.NativeElementTarget) {

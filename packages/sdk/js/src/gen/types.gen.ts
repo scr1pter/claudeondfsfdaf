@@ -6796,6 +6796,11 @@ export type ConfigV2ExperimentalPolicy = {
 
 export type TeamsId = string
 
+export type ComputerProtectionResult = {
+  paths: Array<string>
+  directories: Array<string>
+}
+
 export type ComputerPruneInput = {
   before?: number
   sessionID?: string
@@ -11025,6 +11030,42 @@ export type EventSubscribeResponses = {
 }
 
 export type EventSubscribeResponse = EventSubscribeResponses[keyof EventSubscribeResponses]
+
+export type ComputerProtectedPathsData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/computer/protected-paths"
+}
+
+export type ComputerProtectedPathsErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+  /**
+   * UnknownError
+   */
+  500: UnknownError1
+}
+
+export type ComputerProtectedPathsError = ComputerProtectedPathsErrors[keyof ComputerProtectedPathsErrors]
+
+export type ComputerProtectedPathsResponses = {
+  /**
+   * ComputerProtection.Result
+   */
+  200: ComputerProtectionResult
+}
+
+export type ComputerProtectedPathsResponse = ComputerProtectedPathsResponses[keyof ComputerProtectedPathsResponses]
 
 export type ComputerPruneScreenshotsData = {
   body?: ComputerPruneInput

@@ -27,7 +27,14 @@ export const use = serviceUse(Service)
 /** The helper's complete step budgets, including its final settle and capture, plus transport slack. */
 export function actDeadline(steps: readonly Computer.Step[], settleMs: number) {
   return (
-    steps.reduce((total, step) => total + (step.kind === "wait" ? step.ms : Computer.LIMITS.inputStepMs), 0) +
+    steps.reduce(
+      (total, step) =>
+        total +
+        (step.kind === "wait"
+          ? step.ms
+          : Computer.LIMITS.inputStepMs + (step.kind === "key" ? (step.holdMs ?? 0) * step.repeat : 0)),
+      0,
+    ) +
     settleMs +
     Computer.LIMITS.captureMs +
     Computer.LIMITS.actSlackMs

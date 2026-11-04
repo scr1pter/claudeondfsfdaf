@@ -7,7 +7,7 @@ const permission = (name: string) => ({ type: "permission.asked", properties: { 
 const question = (metadata?: unknown) => ({ type: "question.asked", properties: { metadata } })
 
 const handoff = question({ computer: { kind: "handoff", app: "Mail", reason: "password" } })
-const checkIn = question({ computer: { kind: "check_in", reason: "actions" } })
+const checkIn = question({ computer: { kind: "check_in", actions: 40, minutes: 5 } })
 
 test("the renderer skips computer_* asks and handoff questions when platform.computer exists", () => {
   expect(rendererNotifies(permission("computer_app"), true)).toBe(false)

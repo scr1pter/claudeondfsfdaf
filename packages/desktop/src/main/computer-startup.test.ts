@@ -1,6 +1,8 @@
 import { afterAll, afterEach, describe, expect, mock, test } from "bun:test"
 import { EventEmitter } from "node:events"
 import path from "node:path"
+import { mkdir, mkdtemp, rm, symlink } from "node:fs/promises"
+import { tmpdir } from "node:os"
 import { Schema } from "effect"
 import { Computer } from "@vectordevai/schema/computer"
 import { ComputerApps } from "@vectordevai/schema/computer-apps"
@@ -33,6 +35,8 @@ mock.module("./store", () => ({ getStore: () => ({ get() {}, set() {}, delete() 
 
 const {
   bannerReply,
+  canonicalComputerPath,
+  createComputerEventDrain,
   computerAvailability,
   computerEngine,
   computerEnvironment,
@@ -418,11 +422,23 @@ describe("availability", () => {
       available: false,
     })
     expect(computerAvailability({ ...on, platform: "linux", release: "6.8.0" })).toMatchObject({ available: false })
+    for (const release of ["23.bad", "23.0.0 extra", "23.", " 23.0", "9007199254740992.0", "10.0.19041.bad"]) {
+      expect(computerAvailability({ ...on, platform: "darwin", release })).toMatchObject({ available: false })
+      expect(computerAvailability({ ...on, platform: "win32", release })).toMatchObject({ available: false })
+    }
   })
 
   test("elevation: uid 0 on macOS, a high or system integrity label on Windows", async () => {
     expect(await processElevated("darwin", { uid: () => 0 })).toBe(true)
     expect(await processElevated("darwin", { uid: () => 501 })).toBe(false)
+    for (const uid of [undefined, NaN, -1, 0.5]) expect(await processElevated("darwin", { uid: () => uid })).toBe(true)
+    expect(
+      await processElevated("darwin", {
+        uid: () => {
+          throw new Error("No token")
+        },
+      }),
+    ).toBe(true)
     const label = (sid: string) => async () => `"Mandatory Label\\Some Level","Label","${sid}",""`
     expect(await processElevated("win32", { groups: label("S-1-16-12288") })).toBe(true)
     expect(await processElevated("win32", { groups: label("S-1-16-16384") })).toBe(true)
@@ -748,5 +764,172 @@ describe("asks mirrored in the banner (INV-T6)", () => {
     n.control.paused = false
     n.view.state({ ...working })
     expect(n.transitions).toEqual([])
+  })
+})
+
+describe("canonical desktop protection", () => {
+  test("linked configuration roots and not-yet-created leaves retain their real target", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "vector-computer-protected-"))
+    try {
+      const actual = path.join(directory, "dotfiles")
+      const alias = path.join(directory, "settings")
+      await mkdir(actual)
+      await symlink(actual, alias, process.platform === "win32" ? "junction" : "dir")
+      expect(await canonicalComputerPath(alias)).toBe(await canonicalComputerPath(actual))
+      expect(await canonicalComputerPath(path.join(alias, "agent", "reviewer.md"))).toBe(
+        path.join(await canonicalComputerPath(actual), "agent", "reviewer.md"),
+      )
+      const declared = protectedLocations({
+        userData: directory,
+        env: { VECTOR_AGENT_CONFIG_DIR: path.join(alias, "custom", "agents") },
+      })
+      const canonical = await Promise.all(declared.map(canonicalComputerPath))
+      expect(canonical).toContain(path.join(await canonicalComputerPath(actual), "custom", "agents"))
+    } finally {
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
+})
+
+describe("independent computer event drain", () => {
+  const event = (type: string) => ({ directory: "/virtual/a", payload: { type } })
+  test("a received Deny behind ancestry is drained before input can continue", async () => {
+    const gate = Promise.withResolvers<void>()
+    const entered = Promise.withResolvers<void>()
+    const consumed: string[] = []
+    const drain = createComputerEventDrain({
+      async consume(value) {
+        if (value.payload.type === "ancestry") {
+          entered.resolve()
+          await gate.promise
+        }
+        consumed.push(value.payload.type)
+      },
+      failed() {
+        throw new Error("Unexpected drain failure")
+      },
+    })
+    drain.push(event("ancestry"))
+    await entered.promise
+    drain.push(event("permission.replied"))
+    let released = false
+    const pending = drain.synchronize().then(() => {
+      released = true
+    })
+    await Promise.resolve()
+    expect(released).toBe(false)
+    gate.resolve()
+    await pending
+    expect(consumed).toEqual(["ancestry", "permission.replied"])
+    drain.close()
+  })
+
+  test("a drain snapshots received work without waiting forever for future events", async () => {
+    const first = Promise.withResolvers<void>()
+    const second = Promise.withResolvers<void>()
+    const drain = createComputerEventDrain({
+      consume: (value) => (value.payload.type === "first" ? first.promise : second.promise),
+      failed() {},
+    })
+    drain.push(event("first"))
+    const admitted = drain.synchronize()
+    drain.push(event("future"))
+    first.resolve()
+    await admitted
+    let done = false
+    const future = drain.synchronize().then(() => {
+      done = true
+    })
+    await Promise.resolve()
+    expect(done).toBe(false)
+    second.resolve()
+    await future
+    drain.close()
+  })
+
+  test("disconnect cancels input waiters immediately while old ancestry remains pending", async () => {
+    const gate = Promise.withResolvers<void>()
+    const drain = createComputerEventDrain({ consume: () => gate.promise, failed() {} })
+    drain.push(event("ancestry"))
+    const waiting = drain.synchronize()
+    drain.close()
+    await expect(waiting).rejects.toMatchObject({ code: "unavailable" })
+    await expect(drain.synchronize()).rejects.toMatchObject({ code: "unavailable" })
+    gate.resolve()
+  })
+
+  test("bounded read-ahead fails closed and stops the connection", async () => {
+    const gate = Promise.withResolvers<void>()
+    let failed = 0
+    const drain = createComputerEventDrain({
+      consume: () => gate.promise,
+      failed: () => {
+        failed++
+      },
+    })
+    for (let index = 0; index < 257; index++) drain.push(event("queued"))
+    expect(failed).toBe(1)
+    await expect(drain.synchronize()).rejects.toMatchObject({ code: "unavailable" })
+    gate.resolve()
+  })
+})
+
+describe("authenticated desktop protection data", () => {
+  test("reads configured external paths only from the embedded engine and aborts the actual child", async () => {
+    const sent: { url: string; authorization: string }[] = []
+    const engine = computerEngine({ url: "http://127.0.0.1:4096", password: "pw" }, async (url, init) => {
+      sent.push({ url: String(url), authorization: String((init.headers as Record<string, string>).authorization) })
+      return Response.json({ paths: ["/external/custom-prompt.txt"], directories: ["/private/config"] })
+    })
+    expect(await engine.protectedPaths("/virtual/a")).toEqual({
+      paths: ["/external/custom-prompt.txt"],
+      directories: ["/private/config"],
+    })
+    await engine.abort({ rootSessionID: "ses_root", sessionID: "ses_child", directory: "/virtual/a" })
+    expect(sent.map((item) => item.url)).toEqual([
+      "http://127.0.0.1:4096/computer/protected-paths?directory=%2Fvirtual%2Fa",
+      "http://127.0.0.1:4096/session/ses_child/abort?directory=%2Fvirtual%2Fa",
+    ])
+    expect(sent.every((item) => item.authorization === `Basic ${btoa("vector:pw")}`)).toBe(true)
+  })
+
+  test("chunked protection responses are cancelled at the UTF-8 byte bound before further reads", async () => {
+    const chunk = new TextEncoder().encode("é".repeat(256 * 1024))
+    let reads = 0
+    let cancelled = 0
+    const engine = computerEngine(
+      { url: "http://127.0.0.1:4096", password: "pw" },
+      async () =>
+        new Response(
+          new ReadableStream<Uint8Array>(
+            {
+              pull(controller) {
+                reads++
+                controller.enqueue(reads <= 2 ? chunk : new Uint8Array([32]))
+              },
+              cancel() {
+                cancelled++
+              },
+            },
+            { highWaterMark: 0 },
+          ),
+          { headers: { "content-length": "1" } },
+        ),
+    )
+    await expect(engine.protectedPaths("/virtual/a")).rejects.toMatchObject({ code: "blocked" })
+    expect(reads).toBe(3)
+    expect(cancelled).toBe(1)
+  })
+
+  test("malformed protection data cannot silently erase the document floor", async () => {
+    for (const value of [
+      { paths: ["relative"], directories: [] },
+      { paths: ["/bad\0name"], directories: [] },
+      { directories: [] },
+      { paths: [], directories: ["/x".repeat(9000)] },
+    ]) {
+      const engine = computerEngine({ url: "http://127.0.0.1:4096", password: "pw" }, async () => Response.json(value))
+      await expect(engine.protectedPaths("/virtual/a")).rejects.toMatchObject({ code: "blocked" })
+    }
   })
 })

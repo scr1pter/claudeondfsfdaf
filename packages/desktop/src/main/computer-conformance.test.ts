@@ -393,3 +393,46 @@ describe("NativeHelperBackend on the actual codec and client", () => {
     }
   })
 })
+
+for (const platform of ["macos", "windows"] as const)
+  test(`${platform}: overlay hit tests resolve to the granted app and neutral press uses its native action`, async () => {
+    const fake = connect({ platform, scenario: "notes" })
+    try {
+      const calculator = fake.helper.desktop.app("calculator")!
+      await fake.backend.beginSession({
+        sessionId: "overlay-press-conformance",
+        mode: "foreground",
+        approved: [calculator.identity],
+        vectorPids: [fake.helper.desktop.app("vector")!.pid],
+        vectorWindowIds: ["vector-1"],
+        overlayWindowIds: [OVERLAY],
+        escStops: false,
+        stopChord: "Control+Shift+Escape",
+        heartbeatMs: Computer.LIMITS.heartbeatMs,
+      })
+      const display = (await fake.backend.displays()).find((item) => item.primary)!
+      const capture = await fake.backend.capture(
+        {
+          op: "capture",
+          target: { display: display.id },
+          budget: { maxWidth: 1000, maxHeight: 800, maxPixels: 800_000 },
+          format: "png",
+        },
+        15_000,
+      )
+      const x = Math.floor((70 - capture.header.origin.x) * capture.header.imageScale)
+      const y = Math.floor((95 - capture.header.origin.y) * capture.header.imageScale)
+      const hit = await fake.backend.hitTest(capture.header.captureId, x, y)
+      expect(hit.owner).toEqual(calculator.identity)
+      expect(hit.windowId).toBe("calc-1")
+      const tree = await fake.backend.tree({ op: "ui.tree", pid: calculator.pid, maxNodes: 100, maxDepth: 8 }, 15_000)
+      const seven = tree.nodes.find((node) => node.name === "7")!
+      if (platform === "windows") expect(await fake.backend.perform(seven.ref!, "AXPress")).toEqual({ took: false })
+      expect(await fake.backend.perform(seven.ref!, "press")).toEqual({ took: true })
+      expect(fake.helper.log.findLast((entry) => entry.kind === "ui")).toMatchObject({
+        action: platform === "windows" ? "Invoke" : "AXPress",
+      })
+    } finally {
+      await fake.backend.close()
+    }
+  })

@@ -52,6 +52,10 @@ export function electronComputerDeps(input: {
     },
     // Windows helpers report physical pixels; Electron converts per monitor, negative virtual-screen origins included.
     toDip: (rect) => {
+      if (rect.w === 0 && rect.h === 0) {
+        const point = screen.screenToDipPoint({ x: rect.x, y: rect.y })
+        return { x: point.x, y: point.y, w: 0, h: 0 }
+      }
       const dip = screen.screenToDipRect(null, { x: rect.x, y: rect.y, width: rect.w, height: rect.h })
       return { x: dip.x, y: dip.y, w: dip.width, h: dip.height }
     },
@@ -65,18 +69,18 @@ export function electronComputerDeps(input: {
       removeListener: (event, callback) => powerMonitor.removeListener(event as "lock-screen", callback),
     },
     exclusions: () => ({
-      vectorPids: [...new Set([process.pid, ...app.getAppMetrics().map((metric) => metric.pid)])].filter(
-        (pid) => Number.isSafeInteger(pid) && pid > 0,
-      ),
+      vectorPids: [
+        ...new Set([
+          process.pid,
+          ...app.getAppMetrics().map((metric) => metric.pid),
+          ...BrowserWindow.getAllWindows()
+            .filter((window) => !window.isDestroyed() && !window.webContents.isDestroyed())
+            .map((window) => window.webContents.getOSProcessId()),
+        ]),
+      ].filter((pid) => Number.isSafeInteger(pid) && pid > 0),
       vectorWindowIds: BrowserWindow.getAllWindows()
         .filter((window) => !window.isDestroyed() && !isComputerOverlay(window))
-        .flatMap((window) => {
-          try {
-            return [nativeId(window, process.platform)]
-          } catch {
-            return []
-          }
-        }),
+        .map((window) => nativeId(window, process.platform)),
     }),
     windows: () => BrowserWindow.getAllWindows(),
     trustedUrl: isTrustedRendererUrl,
@@ -93,7 +97,14 @@ export function electronComputerDeps(input: {
     },
     focused: () => {
       const focused = BrowserWindow.getFocusedWindow()
-      return !!focused && !focused.isDestroyed() && !isComputerOverlay(focused)
+      return (
+        !!focused &&
+        !focused.isDestroyed() &&
+        !isComputerOverlay(focused) &&
+        !focused.webContents.isDestroyed() &&
+        isTrustedRendererUrl(focused.webContents.getURL()) &&
+        isTrustedRendererUrl(focused.webContents.mainFrame.url)
+      )
     },
     open: (target) => {
       const win = getMainWindow() ?? restoreMainWindows()[0]
@@ -101,7 +112,10 @@ export function electronComputerDeps(input: {
       if (win.isMinimized()) win.restore()
       win.show()
       win.focus()
-      win.webContents.send("computer-open-session", `/${base64Encode(target.directory)}/session/${target.sessionID}`)
+      win.webContents.send(
+        "computer-open-session",
+        `/${base64Encode(target.directory)}/session/${encodeURIComponent(target.sessionID)}`,
+      )
     },
     front: () => {
       const win = getMainWindow()

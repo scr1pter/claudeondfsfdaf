@@ -605,6 +605,85 @@ test("a dropped stream: the page re-reads the turn and its ask, and the ask is a
   expect(journey.replies).toHaveLength(1)
 })
 
+test("the real layout leaves Hands asks and handoffs to main, and notifies once for check-ins and ordinary asks", async ({
+  page,
+}) => {
+  // Record the browser platform's real notify() calls without opening owner OS notifications.
+  await page.addInitScript(() => {
+    const target = window as Window & { __computerNotifications?: { title: string; body: string }[] }
+    target.__computerNotifications = []
+    Object.defineProperty(document, "hasFocus", { value: () => false })
+    Object.defineProperty(window, "Notification", {
+      value: class {
+        static permission = "granted"
+        constructor(title: string, options?: NotificationOptions) {
+          target.__computerNotifications!.push({ title, body: options?.body ?? "" })
+        }
+        close() {}
+      },
+    })
+  })
+  const journey = await openJourney(page, { script: ready, messages: firstRun() })
+  const notifications = () =>
+    page.evaluate(
+      () =>
+        (window as Window & { __computerNotifications?: { title: string; body: string }[] }).__computerNotifications ??
+        [],
+    )
+  const app = appAsk("perm_notify_app", "msg_notify", "prt_notify")
+  await journey.asked(app)
+  await expect(page.locator('[data-component="dock-prompt"][data-kind="permission"]')).toBeVisible()
+  await journey.replied(app.id, "once")
+  await expect(page.locator('[data-component="dock-prompt"][data-kind="permission"]')).toHaveCount(0)
+
+  const handoff: QuestionRequest = {
+    id: "que_notify_handoff",
+    sessionID,
+    metadata: { computer: { kind: "handoff", app: "Numbers", reason: "other" } },
+    questions: [
+      {
+        header: Hands.NAME,
+        question: "Finish this step",
+        options: [{ label: "Continue", description: "Done" }],
+        custom: false,
+      },
+    ],
+  }
+  await journey.question(handoff)
+  await expect(page.locator('[data-component="session-question-dock"]')).toBeVisible()
+  await journey.answered(handoff.id, [["Continue"]])
+  await expect(page.locator('[data-component="session-question-dock"]')).toHaveCount(0)
+
+  const checkIn: QuestionRequest = {
+    ...handoff,
+    id: "que_notify_check_in",
+    metadata: { computer: { kind: "check_in", actions: 40, minutes: 5 } },
+    questions: [
+      {
+        header: Hands.NAME,
+        question: "Keep going?",
+        options: [{ label: "Keep going", description: "Continue" }],
+        custom: false,
+      },
+    ],
+  }
+  await journey.question(checkIn)
+  await expect.poll(notifications).toHaveLength(1)
+  await journey.answered(checkIn.id, [["Keep going"]])
+  await expect(page.locator('[data-component="session-question-dock"]')).toHaveCount(0)
+
+  await journey.asked({
+    ...app,
+    id: "perm_notify_bash",
+    permission: "bash",
+    patterns: ["echo review"],
+    always: ["echo review"],
+    metadata: { command: "echo review" },
+  })
+  await expect.poll(notifications).toHaveLength(2)
+  expect((await notifications()).map((item) => item.title)).toEqual(["Question", "Permission required"])
+})
+
 type Prompt = {
   messageID: string
   agent?: string

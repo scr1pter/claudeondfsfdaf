@@ -92,7 +92,14 @@ const OBSERVE = new Set<Computer.BridgeCommandName>([
 
 export function actDeadline(request: Pick<Act, "steps" | "settleMs">) {
   return (
-    request.steps.reduce((total, step) => total + (step.kind === "wait" ? step.ms : Computer.LIMITS.inputStepMs), 0) +
+    request.steps.reduce(
+      (total, step) =>
+        total +
+        (step.kind === "wait"
+          ? step.ms
+          : Computer.LIMITS.inputStepMs + (step.kind === "key" ? (step.holdMs ?? 0) * step.repeat : 0)),
+      0,
+    ) +
     request.settleMs +
     Computer.LIMITS.captureMs +
     Computer.LIMITS.actSlackMs
@@ -183,7 +190,9 @@ export function createComputerExecutor(input: {
   }
 
   function after<T>(flight: Flight, promise: Promise<T>, working?: boolean) {
-    return promise.then((value) => {
+    return promise.then(async (value) => {
+      live(flight, working)
+      await input.grants.synchronize()
       live(flight, working)
       return value
     })
@@ -206,6 +215,8 @@ export function createComputerExecutor(input: {
   }
 
   async function barrier(flight: Flight, metadata?: Computer.ComputerPartMetadata) {
+    live(flight)
+    await input.grants.synchronize()
     live(flight)
     if (["access", "prepareOpen", "listApps"].includes(flight.command) && input.controller.state().phase === "asking") {
       await input.overlay.ready()
@@ -238,6 +249,9 @@ export function createComputerExecutor(input: {
         throw error
       live(flight)
       const current = task(flight.scope!)
+      const identity = input.controller.state().apps.find((candidate) => candidate.key === app)
+      if (identity)
+        await input.controller.setStep(flight.scope!, ComputerMainCopy.foregroundFallback({ app: identity.name }))
       current.foreground.add(app)
       if (input.settings.get().prefs.pointer === "take") {
         await input.controller.setMode("foreground")
@@ -392,6 +406,7 @@ export function createComputerExecutor(input: {
     const clipboard = await after(flight, readClipboard(flight.scope!))
     const document = hit.document ? await after(flight, input.canonicalPath(hit.document)) : undefined
     const programPath = hit.programPath ? await after(flight, input.canonicalPath(hit.programPath)) : undefined
+    await access(flight, hit.owner)
     return {
       app: hit.owner,
       category,
@@ -432,6 +447,11 @@ export function createComputerExecutor(input: {
     const identities = await approved(flight)
     await barrier(flight)
     const phase = input.controller.nativePhase(flight.scope!)
+    const checkPhase = () => {
+      const current = input.controller.nativePhase(flight.scope!)
+      if (current.sessionId !== phase.sessionId || current.phaseRevision !== phase.phaseRevision)
+        throw new ComputerError("changed", "The computer changed during the screenshot.")
+    }
     const result = await native(flight, () =>
       input.backend.capture(
         {
@@ -445,11 +465,10 @@ export function createComputerExecutor(input: {
         Computer.LIMITS.captureMs,
       ),
     )
+    await input.grants.synchronize()
     live(flight)
+    checkPhase()
     if (zoom) {
-      const current = input.controller.nativePhase(flight.scope!)
-      if (current.sessionId !== phase.sessionId || current.phaseRevision !== phase.phaseRevision)
-        throw new ComputerError("changed", "The computer changed during the zoom.")
       if (result.bytes.byteLength !== result.header.imageBytes)
         throw new ComputerError("capture_unavailable", "The zoom image is incomplete.")
       const image = `data:${imageMime(result.bytes)};base64,${Buffer.from(result.bytes).toString("base64")}`
@@ -461,8 +480,10 @@ export function createComputerExecutor(input: {
       flight,
       input.registry.add(flight.scope!, { ...result, target, approved: identities, phase, budget }),
     )
+    checkPhase()
     if (input.backend.capabilities().actions.includes("cursor_position")) {
       const cursor = await after(flight, input.backend.cursorPosition())
+      checkPhase()
       try {
         return { ...shot, pointer: input.registry.pixel(flight.scope!, shot.frame, cursor) }
       } catch (error) {
@@ -529,6 +550,7 @@ export function createComputerExecutor(input: {
       return { pending: { kind: "sensitive" as const, why: "run_program" as const, program } }
     }
     await input.grants.synchronize()
+    if (requestID) await input.grants.waitForReply(requestID, flight.scope!)
     live(flight)
     if (!requestID || !input.grants.consumeProgram(requestID, flight.scope!, program, false))
       return { pending: { kind: "sensitive" as const, why: "run_program" as const, program } }
@@ -554,8 +576,8 @@ export function createComputerExecutor(input: {
 
   async function gate(flight: Flight, request: Act, index: number): Promise<GateContext> {
     const scope = flight.scope!
-    const frame = request.frame ? input.registry.frame(scope, request.frame) : undefined
     const step = request.steps[index]!
+    const frame = request.frame && step.kind !== "wait" ? input.registry.frame(scope, request.frame) : undefined
     const point =
       frame && step.kind === "scroll" && !step.at
         ? input.registry.pixel(scope, frame, await after(flight, input.backend.cursorPosition()))
@@ -609,7 +631,7 @@ export function createComputerExecutor(input: {
               : undefined
     if (!point || !frame) {
       await input.overlay.cursor({ kind: "hide", visible: false })
-      return
+      return false
     }
     const hit = await after(
       flight,
@@ -628,6 +650,7 @@ export function createComputerExecutor(input: {
     live(flight)
     await input.overlay.ready()
     await barrier(flight)
+    return granted
   }
 
   function pointerWait(flight: Flight, app: string) {
@@ -656,10 +679,11 @@ export function createComputerExecutor(input: {
       const step = request.steps[index]!
       await barrier(flight, { action: actionOf(step) })
       const ctx = await gate(flight, request, index)
-      await cursor(flight, step, ctx.frame, ctx.point)
+      const cursorDrawn = await cursor(flight, step, ctx.frame, ctx.point)
       live(flight)
       const current = task(flight.scope!)
       if (
+        step.kind !== "wait" &&
         current.borrowed &&
         current.initialMode === "background" &&
         input.settings.get().prefs.mode === "background" &&
@@ -692,7 +716,7 @@ export function createComputerExecutor(input: {
       }
       let targetApp: string | undefined
       const send = async (
-        checked: Extract<GateResult, { verdict: "ok" }>,
+        checked: Extract<GateResult, { verdict: "ok"; inspect: Computer.InspectResult }>,
         text?: string,
         fresh?: Computer.HitResult,
       ) => {
@@ -700,6 +724,13 @@ export function createComputerExecutor(input: {
         const hit = fresh ?? checked.hit
         const app = Computer.appKey(hit.owner)
         targetApp = app
+        await input.controller.target(flight.scope!, hit.owner)
+        live(flight)
+        if (input.controller.state().mode === "background" && !cursorDrawn)
+          await input.controller.setStep(
+            flight.scope!,
+            ComputerMainCopy.workingBehind({ app: Computer.clean(hit.owner.name, 256) }),
+          )
         if (input.controller.state().mode === "background" && current.foreground.has(app)) {
           if (input.settings.get().prefs.pointer !== "take")
             throw new ComputerError("needs_foreground", "This app needs the real pointer.")
@@ -736,7 +767,7 @@ export function createComputerExecutor(input: {
                   live(flight)
                   await input.backend.input(
                     { op: "input.hold", ...phase, ...binding, combo: step.combo, ms: step.holdMs },
-                    Computer.LIMITS.inputStepMs,
+                    step.holdMs + Computer.LIMITS.inputStepMs,
                   )
                 }
               } else
@@ -753,7 +784,7 @@ export function createComputerExecutor(input: {
             if (step.kind === "click" && "ref" in step.at) {
               if (!hit.ref || step.button !== "left" || step.count !== 1 || step.modifiers.length)
                 throw new ComputerError("unsupported_action", "This control does not support that click.")
-              const result = await input.backend.perform(hit.ref, "AXPress", phase, {
+              const result = await input.backend.perform(hit.ref, "press", phase, {
                 pid: checked.inspect.pid,
                 ...(hit.elementId ? { elementId: hit.elementId } : {}),
               })
@@ -827,7 +858,10 @@ export function createComputerExecutor(input: {
           })
         else {
           checked = await checkStep(step, ctx)
-          if (checked.verdict === "ok") await send(checked)
+          if (checked.verdict === "ok") {
+            if (checked.waiting) await wait(flight, step.kind === "wait" ? step.ms : 0)
+            else await send(checked)
+          }
         }
       } catch (error) {
         if (
@@ -837,6 +871,9 @@ export function createComputerExecutor(input: {
         ) {
           if (!targetApp) throw error
           const app = targetApp
+          const identity = input.controller.state().apps.find((candidate) => candidate.key === app)
+          if (identity)
+            await input.controller.setStep(flight.scope!, ComputerMainCopy.foregroundFallback({ app: identity.name }))
           current.foreground.add(app)
           if (input.settings.get().prefs.pointer === "take") {
             await input.controller.setMode("foreground")
@@ -1028,6 +1065,19 @@ export function createComputerExecutor(input: {
         }),
       }
     }
+    const pending = input.controller.state().ask
+    if (pending?.kind === "sensitive") {
+      const requestID =
+        request.command === "act"
+          ? request.approvals?.find((approval) => approval.requestID === pending.requestID)?.requestID
+          : request.command === "openApp"
+            ? request.requestID
+            : undefined
+      if (requestID === pending.requestID) {
+        await input.grants.waitForReply(requestID, flight.scope!)
+        live(flight, false)
+      }
+    }
     const view = input.controller.state()
     if (view.phase === "asking" && view.ask?.kind === "sensitive") {
       const answered =
@@ -1057,6 +1107,7 @@ export function createComputerExecutor(input: {
           const running = (await after(flight, input.backend.apps())).some((candidate) =>
             sameIdentity(candidate.identity, app.identity),
           )
+          await input.controller.target(flight.scope!, app.identity)
           const phase = input.controller.nativePhase(flight.scope!)
           await foreground(flight, Computer.appKey(app.identity), () =>
             running ? input.backend.activate(app.identity, phase) : input.backend.launch(app.identity, phase),
@@ -1076,6 +1127,7 @@ export function createComputerExecutor(input: {
             ? app.windows.find((window) => window.windowId === request.window)
             : app.windows.find((window) => !window.minimized)
           if (!window) throw new ComputerError("app_not_found", "That app window could not be found.")
+          await input.controller.target(flight.scope!, app.identity)
           await foreground(flight, Computer.appKey(app.identity), () =>
             input.backend.focusWindow(window.windowId, input.controller.nativePhase(flight.scope!)),
           )

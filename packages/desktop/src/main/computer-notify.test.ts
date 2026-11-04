@@ -99,6 +99,24 @@ describe("computer notifications (INV-T6)", () => {
     expect(f.opened).toEqual([A])
   })
 
+  test("check-ins leave the single needs-you notification to the renderer", () => {
+    const f = fixture()
+    f.notify.state(working(A))
+    const ask = {
+      requestID: "que_check_in",
+      directory: A.directory,
+      kind: "check_in" as const,
+      title: "Keep going?",
+      canAlways: false,
+      shownAt: 1,
+    }
+    for (const phase of ["asking", "handoff", "paused"] as const) f.notify.state(working(A, { phase, ask }))
+    expect(f.shown.map((item) => item.title)).toEqual([Hands.NAME])
+    // A later app ask is still desktop main's responsibility.
+    f.notify.state(working(A, { phase: "asking", ask: { ...ask, requestID: "per_app", kind: "app" } }))
+    expect(f.shown.map((item) => item.title)).toEqual([Hands.NAME, `${Hands.NAME} needs you`])
+  })
+
   test("the three end texts: finished with its count and apps, stopped, and couldn't finish", () => {
     const f = fixture()
     f.notify.state(working(A))

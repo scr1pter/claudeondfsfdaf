@@ -27,7 +27,7 @@ type Task = {
   waiting: Set<() => void>
   grants: Map<string, { identity: Computer.AppIdentity; level: Computer.AskLevel }>
 }
-type Root = { denied: Set<string>; denyAll: boolean; task?: Task }
+type Root = { denied: Set<string>; denyAll: boolean; freshConsent?: boolean; task?: Task }
 type Reply = "once" | "always" | "reject"
 type Proof = {
   task: Task
@@ -37,6 +37,7 @@ type Proof = {
   rememberUsed: boolean
   actUsed: boolean
   granted?: Computer.AppIdentity
+  waiting: Set<() => void>
 } & (
   | { permission: "computer_app"; metadata: Computer.AppAskMetadata }
   | { permission: "computer_sensitive"; metadata: Computer.SensitiveAskMetadata }
@@ -57,12 +58,22 @@ const decodeReply = Schema.decodeUnknownOption(Replied, { onExcessProperty: "err
 export function createComputerGrants(input: {
   settings: Settings
   rootOf: (sessionID: string, directory: string) => Promise<string | undefined>
+  replyTimeoutMs?: number
+  timers?: { setTimeout(callback: () => void, ms: number): unknown; clearTimeout(handle: unknown): void }
 }) {
   const roots = new Map<string, Root>()
   const proofs = new Map<string, Proof>()
-  // IDs are never reused, including after task end or a dropped connection. At the cap, new asks fail closed.
+  // Permission IDs ascend. Retire evicted IDs behind a watermark as well as keeping recent IDs, so a replay
+  // cannot become a fresh proof in a later lease. Explicit nonascending IDs fail closed behind that watermark.
   const seen = new Set<string>()
+  let retired: string | undefined
+  let retiredExplicit: string | undefined
+  let forgottenDenies = false
   const queuedAsks = new Set<string>()
+  const timers = input.timers ?? {
+    setTimeout: (callback: () => void, ms: number) => setTimeout(callback, ms),
+    clearTimeout: (handle: unknown) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+  }
   let observations: Promise<void> = Promise.resolve()
   const queued = { count: 0 }
 
@@ -76,10 +87,33 @@ export function createComputerGrants(input: {
     const proof = proofs.get(id)
     return proof && proof.task === current(scope) ? proof : undefined
   }
+  function removeProof(id: string) {
+    const proof = proofs.get(id)
+    proofs.delete(id)
+    if (proof) for (const wake of proof.waiting) wake()
+  }
   const clear = (task: Task) => {
     for (const cancel of task.waiting) cancel()
     task.grants.clear()
     for (const [id, proof] of proofs) if (proof.task === task) proofs.delete(id)
+  }
+  function rememberID(id: string) {
+    const canonical = /^per_[0-9a-f]{12}[0-9A-Za-z]{14}$/.test(id)
+    const floor = canonical ? retired : retiredExplicit
+    if (seen.has(id) || (floor !== undefined && id <= floor)) return false
+    if (seen.size >= MAX_SEEN) {
+      const oldest = seen.values().next().value!
+      seen.delete(oldest)
+      if (/^per_[0-9a-f]{12}[0-9A-Za-z]{14}$/.test(oldest)) {
+        retired = retired === undefined || oldest > retired ? oldest : retired
+        if (canonical && id <= retired) return false
+      } else {
+        retiredExplicit = retiredExplicit === undefined || oldest > retiredExplicit ? oldest : retiredExplicit
+        if (!canonical && id <= retiredExplicit) return false
+      }
+    }
+    seen.add(id)
+    return true
   }
 
   function endTask(rootSessionID: string, directory: string) {
@@ -102,9 +136,16 @@ export function createComputerGrants(input: {
       throw new ComputerError("failed", "The computer grant scope is invalid.")
     if (current(scope)) return
     const key = rootKey(scope.rootSessionID, scope.directory)
-    const root = roots.get(key) ?? { denied: new Set<string>(), denyAll: false }
-    if (!roots.has(key) && roots.size >= MAX_ROOTS)
-      throw new ComputerError("unavailable", "Too many computer grant scopes are retained.")
+    const root = roots.get(key) ?? { denied: new Set<string>(), denyAll: false, freshConsent: forgottenDenies }
+    if (!roots.has(key) && roots.size >= MAX_ROOTS) {
+      // Saved Always entries must not resurrect a forgotten conversation Deny. Future unknown roots ask afresh.
+      const oldest = [...roots].find(([, candidate]) => !candidate.task)
+      if (oldest) {
+        roots.delete(oldest[0])
+        forgottenDenies = true
+        root.freshConsent = true
+      } else throw new ComputerError("unavailable", "Too many computer grant scopes are active.")
+    }
     if (root.task) clear(root.task)
     const copied = Object.freeze({
       rootSessionID: scope.rootSessionID,
@@ -113,6 +154,7 @@ export function createComputerGrants(input: {
       lease: scope.lease,
     })
     root.task = { scope: copied, waiting: new Set(), grants: new Map() }
+    roots.delete(key)
     roots.set(key, root)
   }
 
@@ -123,7 +165,17 @@ export function createComputerGrants(input: {
       task: new Map(
         [...(task?.grants ?? [])].map(([key, value]) => [key, { ...value, identity: structuredClone(value.identity) }]),
       ),
-      denied: root?.denyAll ? new AllDenied(root.denied) : new Set(root?.denied),
+      denied: root?.denyAll
+        ? new AllDenied(root.denied)
+        : new Set([
+            ...(root?.denied ?? []),
+            ...(root?.freshConsent
+              ? input.settings
+                  .get()
+                  .always.filter((entry) => !task?.grants.has(entry.key))
+                  .map((entry) => entry.key)
+              : []),
+          ]),
     }
   }
 
@@ -143,6 +195,33 @@ export function createComputerGrants(input: {
   }
 
   function observe(event: KeepAwakeEvent): Promise<void> {
+    if (event.payload.type === "session.deleted" && event.directory) {
+      const deleted = Schema.decodeUnknownOption(
+        Schema.Struct({
+          sessionID: Schema.optional(Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(128))),
+          info: Schema.optional(
+            Schema.Struct({
+              id: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(128)),
+              directory: Schema.optional(Schema.String),
+            }),
+          ),
+        }),
+      )(event.payload.properties)
+      if (Option.isSome(deleted)) {
+        const value = deleted.value
+        const id = value.info
+          ? (value.sessionID === undefined || value.sessionID === value.info.id) &&
+            (value.info.directory === undefined || value.info.directory === event.directory)
+            ? value.info.id
+            : undefined
+          : value.sessionID
+        if (id) {
+          endTask(id, event.directory)
+          roots.delete(rootKey(id, event.directory))
+        }
+      }
+      return Promise.resolve()
+    }
     if (event.payload.type !== "permission.asked" && event.payload.type !== "permission.replied")
       return Promise.resolve()
     const asked =
@@ -216,12 +295,11 @@ export function createComputerGrants(input: {
         // A reply is already bound by its observed ask and exact active scope. A second ancestry lookup could
         // fail and discard a real Deny while leaving older grants alive, so only new asks resolve ancestry.
         if (envelope) {
-          if (seen.has(envelope.id)) return
-          if (seen.size >= MAX_SEEN || proofs.size >= MAX_PROOFS) {
+          if (!rememberID(envelope.id)) return
+          if (proofs.size >= MAX_PROOFS) {
             endTask(task.scope.rootSessionID, task.scope.directory)
             return
           }
-          seen.add(envelope.id)
           if (!metadata) return
           if (envelope.permission === "computer_app" && "canAlways" in metadata) {
             if (
@@ -237,6 +315,7 @@ export function createComputerGrants(input: {
               grantUsed: false,
               rememberUsed: false,
               actUsed: false,
+              waiting: new Set(),
             })
           }
           if (envelope.permission === "computer_sensitive" && "why" in metadata) {
@@ -254,6 +333,7 @@ export function createComputerGrants(input: {
               grantUsed: false,
               rememberUsed: false,
               actUsed: false,
+              waiting: new Set(),
             })
           }
           return
@@ -262,6 +342,7 @@ export function createComputerGrants(input: {
         const proof = record(reply.requestID, task.scope)
         if (!proof || proof.reply !== undefined) return
         proof.reply = reply.reply
+        for (const wake of proof.waiting) wake()
         if (reply.reply !== "reject" || proof.permission !== "computer_app") return
         const root = roots.get(rootKey(task.scope.rootSessionID, task.scope.directory))!
         if (root.denied.size >= MAX_DENIED && !root.denied.has(proof.pattern)) root.denyAll = true
@@ -270,8 +351,7 @@ export function createComputerGrants(input: {
         // A newer Deny revokes earlier unspent authority, including any sensitive input for that app. A subsequent
         // mention may ask again, but cannot resurrect an older Allow or a not-yet-claimed Always save.
         for (const [id, older] of proofs)
-          if (older !== proof && older.task === task && older.metadata.target.appKey === proof.pattern)
-            proofs.delete(id)
+          if (older !== proof && older.task === task && older.metadata.target.appKey === proof.pattern) removeProof(id)
       })
       .finally(() => {
         queued.count--
@@ -289,11 +369,38 @@ export function createComputerGrants(input: {
     }
   }
 
+  /** The bridge and SSE use separate connections; only an already observed, live ask may await its reply. */
+  async function waitForReply(id: string, scope: GrantScope) {
+    await synchronize()
+    const proof = record(id, scope)
+    if (!proof || proof.actUsed) return false
+    if (proof.reply !== undefined) return proof.reply !== "reject"
+    if (proof.waiting.size >= MAX_PROOFS || proof.task.waiting.size >= MAX_PROOFS) return false
+    await new Promise<void>((resolve) => {
+      let timer: unknown
+      const finish = () => {
+        timers.clearTimeout(timer)
+        proof.waiting.delete(finish)
+        proof.task.waiting.delete(finish)
+        resolve()
+      }
+      proof.waiting.add(finish)
+      proof.task.waiting.add(finish)
+      timer = timers.setTimeout(finish, Math.min(2000, Math.max(1, input.replyTimeoutMs ?? 2000)))
+    })
+    // A cancelled/expired wait must not join ancestry work from a successor lease.
+    if (record(id, scope) !== proof || proof.reply === undefined || proof.reply === "reject") return false
+    await synchronize()
+    return record(id, scope) === proof && proof.reply !== undefined && proof.reply !== "reject" && !proof.actUsed
+  }
+
   async function grant(scope: GrantScope, identity: Computer.AppIdentity, level: Computer.AskLevel, requestID: string) {
     await synchronize()
     const proof = record(requestID, scope)
     if (!proof || proof.permission !== "computer_app" || proof.grantUsed || !matchesApp(proof.metadata, identity))
       return false
+    if (!(await waitForReply(requestID, scope))) return false
+    if (record(requestID, scope) !== proof || proof.grantUsed) return false
     const reply = verify(requestID, "computer_app", Computer.appKey(identity), scope)
     if (
       !reply ||
@@ -455,6 +562,7 @@ export function createComputerGrants(input: {
 
   return {
     synchronize,
+    waitForReply,
     isActive: (scope: GrantScope) => current(scope) !== undefined,
     beginTask,
     endTask,

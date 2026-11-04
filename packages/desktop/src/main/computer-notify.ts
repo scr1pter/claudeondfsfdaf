@@ -86,7 +86,13 @@ export function createComputerNotify(input: {
         state.holder = holder
         if (!previous || key(previous) !== key(holder) || previous.startedAt !== holder.startedAt) start(holder)
         const ask = next.ask
-        if (ask && ["asking", "handoff", "paused"].includes(next.phase) && !asked.has(ask.requestID)) {
+        // Check-ins keep the renderer's ordinary question notification (D9); main owns only Hands asks and handoffs.
+        if (
+          ask &&
+          ask.kind !== "check_in" &&
+          ["asking", "handoff", "paused"].includes(next.phase) &&
+          !asked.has(ask.requestID)
+        ) {
           if (asked.size >= ASKED_MAX) asked.clear()
           asked.add(ask.requestID)
           if (!input.focused())

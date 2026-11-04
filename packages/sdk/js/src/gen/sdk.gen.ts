@@ -24,6 +24,9 @@ import type {
   CommandListData,
   CommandListErrors,
   CommandListResponses,
+  ComputerProtectedPathsData,
+  ComputerProtectedPathsErrors,
+  ComputerProtectedPathsResponses,
   ComputerPruneScreenshotsData,
   ComputerPruneScreenshotsErrors,
   ComputerPruneScreenshotsResponses,
@@ -1573,6 +1576,21 @@ export class Event extends HeyApiClient {
 }
 
 export class Computer extends HeyApiClient {
+  /**
+   * Read paths protected from computer input
+   *
+   * Return trusted instruction, memory and configuration paths for the owner's desktop input gate. File contents are never returned.
+   */
+  public protectedPaths<ThrowOnError extends boolean = false>(
+    options?: Options<ComputerProtectedPathsData, ThrowOnError>,
+  ) {
+    return (options?.client ?? this.client).get<
+      ComputerProtectedPathsResponses,
+      ComputerProtectedPathsErrors,
+      ThrowOnError
+    >({ url: "/computer/protected-paths", ...options })
+  }
+
   /**
    * Delete stored computer screenshots
    *

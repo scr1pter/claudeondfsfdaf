@@ -1091,6 +1091,80 @@
         ]
       }
     },
+    "/computer/protected-paths": {
+      "get": {
+        "tags": ["computer"],
+        "operationId": "computer.protectedPaths",
+        "parameters": [
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "ComputerProtection.Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ComputerProtectionResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BadRequestError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ForbiddenError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "UnknownError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnknownError1"
+                }
+              }
+            }
+          }
+        },
+        "description": "Return trusted instruction, memory and configuration paths for the owner's desktop input gate. File contents are never returned.",
+        "summary": "Read paths protected from computer input",
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createVectorClient } from \"@vectordevai/sdk\"\n\nconst client = createVectorClient()\nawait client.computer.protectedPaths({\n  ...\n})"
+          }
+        ]
+      }
+    },
     "/computer/screenshots/prune": {
       "post": {
         "tags": ["computer"],
@@ -46407,6 +46481,29 @@
       "TeamsID": {
         "type": "string",
         "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$"
+      },
+      "ComputerProtectionResult": {
+        "type": "object",
+        "properties": {
+          "paths": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 16384
+            },
+            "maxItems": 4096
+          },
+          "directories": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 16384
+            },
+            "maxItems": 4096
+          }
+        },
+        "required": ["paths", "directories"],
+        "additionalProperties": false
       },
       "ComputerPruneInput": {
         "type": "object",

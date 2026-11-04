@@ -176,7 +176,7 @@ describe("banner IPC authority", () => {
         listeners.set(name, fn)
       },
     })
-    setComputerOverlayControls(fake.control)
+    const detachOld = setComputerOverlayControls(fake.control)
     try {
       listeners.get("computer-overlay-hover")!({ ...fake.event, senderFrame: {} }, true)
       listeners.get("computer-overlay-hover")!(fake.event, "true")
@@ -184,6 +184,11 @@ describe("banner IPC authority", () => {
       listeners.get("computer-overlay-hover")!(fake.event, true)
       expect(fake.hovers).toEqual([true])
       expect(await invoke.get("computer-overlay-act")!(fake.event, "stop")).toBe(true)
+      const detachCurrent = setComputerOverlayControls({ ...fake.control })
+      detachOld()
+      expect(await invoke.get("computer-overlay-act")!(fake.event, "stop")).toBe(true)
+      detachCurrent()
+      expect(await invoke.get("computer-overlay-act")!(fake.event, "stop")).toBe(false)
       setComputerOverlayControls(undefined)
       expect(await invoke.get("computer-overlay-act")!(fake.event, "stop")).toBe(false)
     } finally {

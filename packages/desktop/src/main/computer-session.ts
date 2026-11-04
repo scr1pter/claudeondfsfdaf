@@ -48,6 +48,7 @@ type Run = {
   pausedTimer?: unknown
   pausedAt?: number
   typing?: { generation: number; revision: number; step?: string }
+  target?: string
   view: Promise<void>
 }
 type Entry = {
@@ -77,6 +78,17 @@ const decodeReply = Schema.decodeUnknownOption(
     reply: PermissionV1.Reply,
   }),
   { onExcessProperty: "error" },
+)
+const decodeDeleted = Schema.decodeUnknownOption(
+  Schema.Struct({
+    sessionID: Schema.optional(Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(128))),
+    info: Schema.optional(
+      Schema.Struct({
+        id: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(128)),
+        directory: Schema.optional(Schema.String),
+      }),
+    ),
+  }),
 )
 
 /** The sole local computer lease. Native lifecycle writes are ordered; HTTP waits never hold that queue. */
@@ -667,7 +679,10 @@ export function createComputerSession(input: {
     check(run, revision)
     state.current = {
       ...state.current,
-      apps: identities.map((identity) => ({
+      apps: [
+        ...identities.filter((identity) => Computer.appKey(identity) !== run.target),
+        ...identities.filter((identity) => Computer.appKey(identity) === run.target),
+      ].map((identity) => ({
         key: Computer.appKey(identity),
         name: Computer.clean(identity.name, 256),
       })),
@@ -904,6 +919,48 @@ export function createComputerSession(input: {
       check(run)
       return { sessionId: run.nativeID, phaseRevision: run.revision }
     },
+    assertNativePhase(phase: Computer.NativePhase) {
+      const run = state.run
+      if (!run || phase.sessionId !== run.nativeID)
+        throw new ComputerError("stopped", "This native computer session has ended.")
+      check(run, phase.phaseRevision)
+    },
+    async target(value: SessionScope, identity: Computer.AppIdentity) {
+      const run = requireRun(value)
+      check(run)
+      const key = Computer.appKey(identity)
+      if (run.target === key) return
+      run.target = key
+      state.current = {
+        ...state.current,
+        apps: [
+          ...state.current.apps.filter((app) => app.key !== key),
+          { key, name: Computer.clean(identity.name, 256) },
+        ],
+      }
+      show(run)
+      const revision = run.revision
+      await run.view
+      check(run, revision)
+      await input.overlay.ready()
+      check(run, revision)
+    },
+    async setStep(value: SessionScope, line: string) {
+      const run = requireRun(value)
+      check(run)
+      state.current = {
+        ...state.current,
+        step: Computer.clean(line, 256)
+          .slice(0, 256)
+          .replace(/[\ud800-\udbff]$/, ""),
+      }
+      show(run)
+      const revision = run.revision
+      await run.view
+      check(run, revision)
+      await input.overlay.ready()
+      check(run, revision)
+    },
     didStep(value: SessionScope, count = 1) {
       const run = requireRun(value)
       check(run)
@@ -948,6 +1005,28 @@ export function createComputerSession(input: {
     },
     beforeStep,
     updateGrants,
+    async refreshSettings() {
+      const run = state.run
+      if (!run) {
+        state.current = base()
+        publish()
+        return
+      }
+      const settings = input.settings.get()
+      if (!enabled(settings)) {
+        await stop()
+        return
+      }
+      const mode = desiredMode(run, settings)
+      if (mode.changed) {
+        run.preferenceMode = settings.prefs.mode
+        run.inputAlive = undefined
+        state.current = { ...state.current, mode: mode.mode }
+        await pause("button")
+        return
+      }
+      await updateGrants()
+    },
     waitForInput(app?: string): TypingWait | undefined {
       const run = state.run
       if (!run || state.current.mode !== "background" || state.locked) return
@@ -1077,6 +1156,30 @@ export function createComputerSession(input: {
       const run = state.run
       const properties = event.payload.properties
       const info = properties && typeof properties === "object" ? (properties as Record<string, unknown>) : undefined
+      const deleted = event.payload.type === "session.deleted" ? decodeDeleted(properties) : undefined
+      const deletion = deleted && Option.isSome(deleted) ? deleted.value : undefined
+      const deletedID = deletion?.info
+        ? (deletion.sessionID === undefined || deletion.sessionID === deletion.info.id) &&
+          (deletion.info.directory === undefined || deletion.info.directory === event.directory)
+          ? deletion.info.id
+          : undefined
+        : deletion?.sessionID
+      if (deletedID && event.directory) {
+        for (const entry of [...queue.values()])
+          if (
+            entry.request.directory === event.directory &&
+            (entry.request.rootSessionID === deletedID || entry.request.sessionID === deletedID)
+          )
+            settle(entry, undefined, new ComputerError("stopped", "This computer conversation was deleted."))
+        if (
+          run &&
+          event.directory === run.scope.directory &&
+          (deletedID === run.scope.rootSessionID || deletedID === run.scope.sessionID)
+        )
+          retire(run, "stopped", false)
+        publish()
+        void pump()
+      }
       const request = event.payload.type === "permission.asked" ? handsAsk(properties) : undefined
       if (
         run &&
@@ -1111,6 +1214,7 @@ export function createComputerSession(input: {
       }
       if (
         run &&
+        state.run === run &&
         event.directory === run.scope.directory &&
         (info?.sessionID === run.scope.rootSessionID || info?.sessionID === run.scope.sessionID)
       ) {
@@ -1121,11 +1225,7 @@ export function createComputerSession(input: {
             info.status && typeof info.status === "object" ? (info.status as Record<string, unknown>).type : undefined
           if (typeof status === "string" && status !== "busy" && status !== "retry") retire(run, "done", true)
         }
-        if (
-          event.payload.type === "session.error" ||
-          event.payload.type === "session.deleted" ||
-          event.payload.type === "session.aborted"
-        )
+        if (event.payload.type === "session.error" || event.payload.type === "session.aborted")
           retire(run, "stopped", false)
       }
       await input.grants.observe?.(event)

@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process"
 import { realpath } from "node:fs/promises"
 import { homedir } from "node:os"
+import { isDeepStrictEqual } from "node:util"
 import path from "node:path"
 import { Option, Schema } from "effect"
 import { Computer } from "@vectordevai/schema/computer"
@@ -56,7 +57,9 @@ export function computerAvailability(input: {
   elevated: boolean
   policy: Pick<Computer.ComputerPolicy, "enabled">
 }): ComputerAvailability {
+  if (!/^\d+(?:\.\d+)*$/.test(input.release)) return { available: false, reason: "unsupported_os" }
   const version = input.release.split(".").map(Number)
+  if (version.some((part) => !Number.isSafeInteger(part))) return { available: false, reason: "unsupported_os" }
   if (input.platform !== "darwin" && input.platform !== "win32") return { available: false, reason: "unsupported_os" }
   if (input.platform === "darwin" && !(Number.isInteger(version[0]) && version[0]! >= 23))
     return { available: false, reason: "unsupported_os" }
@@ -80,7 +83,14 @@ export async function processElevated(
   platform: NodeJS.Platform,
   options: { uid?: () => number | undefined; groups?: () => Promise<string> } = {},
 ): Promise<boolean> {
-  if (platform === "darwin") return (options.uid ?? (() => process.getuid?.()))() === 0
+  if (platform === "darwin") {
+    try {
+      const uid = (options.uid ?? (() => process.geteuid?.() ?? process.getuid?.()))()
+      return !Number.isSafeInteger(uid) || uid! <= 0
+    } catch {
+      return true
+    }
+  }
   if (platform !== "win32") return false
   try {
     const output = await (options.groups ?? whoamiGroups)()
@@ -93,7 +103,7 @@ export async function processElevated(
 function whoamiGroups() {
   return new Promise<string>((resolve, reject) => {
     execFile(
-      "whoami",
+      path.win32.join(process.env.SystemRoot || "C:\\Windows", "System32", "whoami.exe"),
       ["/groups", "/fo", "csv", "/nh"],
       { windowsHide: true, timeout: ENGINE_MS, maxBuffer: 256 * 1024 },
       (error, stdout) => (error ? reject(error) : resolve(String(stdout))),
@@ -116,6 +126,80 @@ export function protectedLocations(input: { userData: string; env: NodeJS.Proces
     path.join(home, ".vector"),
   ]
   return [...new Set(locations.filter((value): value is string => !!value && path.isAbsolute(value)))]
+}
+
+/** Preserve missing leaf names while resolving the nearest existing parent, including linked configuration roots. */
+export async function canonicalComputerPath(file: string): Promise<string> {
+  const absolute = path.resolve(file)
+  const suffix: string[] = []
+  let parent = absolute
+  while (true) {
+    try {
+      return path.join(await realpath(parent), ...suffix)
+    } catch (error) {
+      if (
+        !error ||
+        typeof error !== "object" ||
+        !("code" in error) ||
+        (error.code !== "ENOENT" && error.code !== "ENOTDIR")
+      )
+        throw error
+      const next = path.dirname(parent)
+      if (next === parent) throw error
+      suffix.unshift(path.basename(parent))
+      parent = next
+    }
+  }
+}
+
+/** Read ahead from SSE while ordered ancestry/proof work is pending; input drains only events already received. */
+export function createComputerEventDrain(input: { consume(event: KeepAwakeEvent): Promise<void>; failed(): void }) {
+  let received = 0
+  let completed = 0
+  let closed = false
+  let tail = Promise.resolve()
+  const waiting = new Set<{ ticket: number; resolve(): void; reject(error: unknown): void }>()
+  function close() {
+    if (closed) return
+    closed = true
+    for (const waiter of waiting)
+      waiter.reject(new ComputerError("unavailable", "The computer event connection changed."))
+    waiting.clear()
+  }
+  return {
+    push(event: KeepAwakeEvent) {
+      if (closed) return
+      if (received - completed >= 256) {
+        close()
+        input.failed()
+        return
+      }
+      const ticket = ++received
+      tail = tail
+        .then(async () => {
+          if (closed) return
+          await input.consume(event)
+          if (closed) return
+          completed = ticket
+          for (const waiter of waiting)
+            if (waiter.ticket <= completed) {
+              waiting.delete(waiter)
+              waiter.resolve()
+            }
+        })
+        .catch(() => {
+          close()
+          input.failed()
+        })
+    },
+    synchronize() {
+      if (closed) return Promise.reject(new ComputerError("unavailable", "The computer event connection changed."))
+      if (completed === received) return Promise.resolve()
+      const ticket = received
+      return new Promise<void>((resolve, reject) => waiting.add({ ticket, resolve, reject }))
+    },
+    close,
+  }
 }
 
 /** The local engine's HTTP API, as desktop main uses it for Hands: abort, session ancestry and the banner's replies. */
@@ -141,8 +225,8 @@ export function computerEngine(
   }
   const id = (value: string) => encodeURIComponent(value)
   return {
-    async abort(scope: { rootSessionID: string; directory: string }) {
-      await request("POST", `/session/${id(scope.rootSessionID)}/abort`, scope.directory)
+    async abort(scope: { rootSessionID: string; sessionID?: string; directory: string }) {
+      await request("POST", `/session/${id(scope.sessionID ?? scope.rootSessionID)}/abort`, scope.directory)
     },
     async rootOf(sessionID: string, directory: string): Promise<string | undefined> {
       let current = sessionID
@@ -153,6 +237,44 @@ export function computerEngine(
         current = session.value.parentID
       }
       return undefined
+    },
+    async protectedPaths(directory: string) {
+      const response = await request("GET", "/computer/protected-paths", directory)
+      const reader = response.body?.getReader()
+      if (!reader) throw new ComputerError("blocked", "The protected paths response is empty.")
+      const decoder = new TextDecoder("utf-8", { fatal: true })
+      const chunks: string[] = []
+      let bytes = 0
+      try {
+        while (true) {
+          const chunk = await reader.read()
+          if (chunk.done) break
+          bytes += chunk.value.byteLength
+          if (bytes > 1024 * 1024) throw new ComputerError("blocked", "The protected paths response is too large.")
+          chunks.push(decoder.decode(chunk.value, { stream: true }))
+        }
+        chunks.push(decoder.decode())
+      } catch (error) {
+        void reader.cancel().catch(() => {})
+        throw error
+      } finally {
+        reader.releaseLock()
+      }
+      const text = chunks.join("")
+      const decode = Schema.decodeUnknownOption(
+        Schema.Struct({ paths: Schema.Array(Schema.String), directories: Schema.Array(Schema.String) }),
+      )
+      const value = decode(JSON.parse(text))
+      if (
+        Option.isNone(value) ||
+        value.value.paths.length > 4096 ||
+        value.value.directories.length > 4096 ||
+        [...value.value.paths, ...value.value.directories].some(
+          (file) => !path.isAbsolute(file) || file.length > 16384 || file.includes("\0"),
+        )
+      )
+        throw new ComputerError("blocked", "The protected paths response is invalid.")
+      return value.value
     },
     async replyPermission(requestID: string, directory: string, reply: "once" | "reject") {
       await request("POST", `/permission/${id(requestID)}/reply`, directory, { reply })
@@ -466,7 +588,8 @@ function limited(
     setPrefs: async (patch) => {
       if (!settings) return off()
       const previous = settings.get()
-      const saved = await settings.setPrefs(checkedPatch(patch, previous, platform))
+      const checked = checkedPatch(patch, previous, platform)
+      const saved = await settings.setPrefs(checked)
       retention?.changed(previous)
       return saved
     },
@@ -534,7 +657,13 @@ export async function startComputer(deps: ComputerStartupDeps): Promise<Computer
       ...(deps.resourcesPath ? { resourcesPath: deps.resourcesPath } : {}),
       ...(deps.hashes ? { hashes: deps.hashes } : {}),
     })
-  const elevated = await (deps.elevated ? deps.elevated() : processElevated(platform)).catch(() => true)
+  const elevated = await (
+    deps.elevated
+      ? deps.elevated()
+      : platform === "win32"
+        ? helper.probe().then((view) => view.elevated !== false)
+        : processElevated(platform)
+  ).catch(() => true)
   const permissions = createComputerPermissions({
     platform,
     helperVersion: identity.helperVersion,
@@ -552,7 +681,14 @@ export async function startComputer(deps: ComputerStartupDeps): Promise<Computer
   const kind = platform === "win32" ? "local-windows" : "local-macos"
   const backend = new NativeHelperBackend(helper, kind)
   // `connected` admits leases only while the engine's event stream is open, so every ask and reply is observed (D16).
-  const connection: { engine?: Engine; abort?: AbortController; connected: boolean; closed: boolean } = {
+  const connection: {
+    engine?: Engine
+    abort?: AbortController
+    drain?: ReturnType<typeof createComputerEventDrain>
+    connected: boolean
+    closed: boolean
+    closing?: Promise<void>
+  } = {
     connected: false,
     closed: false,
   }
@@ -600,18 +736,38 @@ export async function startComputer(deps: ComputerStartupDeps): Promise<Computer
     ...(platform === "win32" && deps.toDip ? { toDip: (rect: Computer.Rect) => deps.toDip!(rect) } : {}),
   })
   const takeovers: { current?: ReturnType<typeof createComputerTakeover> } = {}
+  const protectedPaths: string[] = []
+  const protections = new Map<string, { paths: readonly string[]; directories: readonly string[] }>()
+  const rawDirectories = protectedLocations({ userData: deps.userData, env: deps.env })
+  const protectedDirectories = [
+    ...new Set([...rawDirectories, ...(await Promise.all(rawDirectories.map(canonicalComputerPath)))]),
+  ]
   const executor = createComputerExecutor({
     backend,
     controller,
     settings,
-    grants,
+    grants: {
+      ...grants,
+      async synchronize() {
+        const drain = connection.drain
+        if (!connection.connected || connection.closed || !drain)
+          throw new ComputerError("unavailable", "The computer event connection is unavailable.")
+        await drain.synchronize()
+        await grants.synchronize()
+        if (!connection.connected || connection.closed || connection.drain !== drain)
+          throw new ComputerError("unavailable", "The computer event connection changed.")
+      },
+    },
     registry: frames,
     canonicalPath: (file) => realpath(file).catch(() => undefined),
-    protectedPaths: [],
-    protectedDirectories: protectedLocations({ userData: deps.userData, env: deps.env }),
+    protectedPaths,
+    protectedDirectories,
     clipboard: {
       readText: () => deps.clipboard.readText(),
-      writeText: (text) => deps.clipboard.writeText(text),
+      writeText: (text, phase) => {
+        controller.assertNativePhase(phase)
+        deps.clipboard.writeText(text)
+      },
     },
     overlay,
     beforeInput(scope, hit) {
@@ -653,6 +809,7 @@ export async function startComputer(deps: ComputerStartupDeps): Promise<Computer
     }
   }
   function changed() {
+    if (connection.closed) return
     broadcastComputerState(view(), deps.windows, deps.trustedUrl)
     try {
       deps.trayChanged()
@@ -671,7 +828,7 @@ export async function startComputer(deps: ComputerStartupDeps): Promise<Computer
     deps.power.on(name, callback)
     return () => deps.power.removeListener(name, callback)
   })
-  setComputerOverlayControls({
+  const detachOverlayControls = setComputerOverlayControls({
     banner: () => overlay.banner(),
     state: () => controller.state(),
     armed: (requestID) => overlay.armed(requestID),
@@ -695,6 +852,7 @@ export async function startComputer(deps: ComputerStartupDeps): Promise<Computer
    */
   const probe: { healthy: boolean } = { healthy: true }
   function observed(view: Computer.PermissionsView) {
+    if (connection.closed) return view
     probe.healthy = view.helperStart === "ok"
     const granted =
       probe.healthy &&
@@ -706,14 +864,52 @@ export async function startComputer(deps: ComputerStartupDeps): Promise<Computer
   }
 
   async function availabilityNow(): Promise<{ reason?: Computer.UnavailableReason; hello?: Computer.HelperHello }> {
-    if (!policy.get().enabled) return { reason: "policy_disabled" }
+    if (connection.closed) return { reason: "helper_missing" }
+    if (!policy.get().enabled) {
+      void controller.refreshSettings().catch(() => {})
+      return { reason: "policy_disabled" }
+    }
     if (!probe.healthy) return { reason: "helper_missing" }
     // Before consent no helper starts (INV-C1); onboarding reads its own fresh probe.
-    if (!enabled(settings!.get())) return { reason: "permissions" }
+    if (!enabled(settings!.get())) {
+      void controller.refreshSettings().catch(() => {})
+      return { reason: "permissions" }
+    }
     const hello = await backend.hello().catch((error: unknown) => error)
-    if (!hello || hello instanceof Error || typeof hello !== "object") return { reason: reasonOf(hello) }
+    if (!hello || hello instanceof Error || typeof hello !== "object") {
+      if (controller.state().holder) void controller.pause("helper").catch(() => {})
+      return { reason: reasonOf(hello) }
+    }
+    const fresh = await permissions.list().then(observed, () => undefined)
+    if (connection.closed) return { reason: "helper_missing" }
+    if (!fresh || fresh.helperStart !== "ok") {
+      if (controller.state().holder) void controller.pause("helper").catch(() => {})
+      return { reason: "helper_missing", hello: hello as Computer.HelperHello }
+    }
+    if (
+      platform === "win32"
+        ? fresh.windows?.captureBlocked !== false || fresh.windows?.elevated !== false
+        : fresh.rows.length !== 2 ||
+          !["screen", "accessibility"].every(
+            (id) => fresh.rows.filter((row) => row.id === id && row.status === "granted").length === 1,
+          )
+    )
+      return {
+        reason:
+          platform === "win32" && fresh.windows?.elevated === true
+            ? "elevated"
+            : platform === "win32" && fresh.windows?.captureBlocked === true
+              ? "blocked_by_os"
+              : "permissions",
+        hello: hello as Computer.HelperHello,
+      }
     const status = await backend.permissions().catch(() => undefined)
-    if (!status) return { reason: "helper_missing", hello: hello as Computer.HelperHello }
+    if (connection.closed) return { reason: "helper_missing" }
+    if (!status) {
+      if (controller.state().holder) void controller.pause("helper").catch(() => {})
+      return { reason: "helper_missing", hello: hello as Computer.HelperHello }
+    }
+    if (missingGrants(kind, status) && controller.state().holder) void controller.pause("helper").catch(() => {})
     return missingGrants(kind, status)
       ? { reason: "permissions", hello: hello as Computer.HelperHello }
       : { hello: hello as Computer.HelperHello }
@@ -727,9 +923,42 @@ export async function startComputer(deps: ComputerStartupDeps): Promise<Computer
   }
 
   const tracked: ComputerExecutor = {
-    run(request, key) {
-      if (request.command === "acquire" && !connection.connected)
+    async run(request, key) {
+      if (!["release", "cancel"].includes(request.command) && (!connection.connected || connection.closed))
         return Promise.reject(new ComputerError("unavailable", "The engine's event stream is not connected."))
+      if (["acquire", "act", "openApp"].includes(request.command)) {
+        const engine = connection.engine
+        const drain = connection.drain
+        if (!engine || !drain) throw new ComputerError("unavailable", "The computer event connection is unavailable.")
+        await drain.synchronize()
+        const protection = await engine.protectedPaths(request.directory)
+        if (!connection.connected || connection.closed || connection.engine !== engine || connection.drain !== drain)
+          throw new ComputerError("unavailable", "The computer event connection changed.")
+        protections.delete(request.directory)
+        protections.set(request.directory, protection)
+        const holderDirectory = controller.state().holder?.directory
+        while (protections.size > 64) {
+          const retired = [...protections.keys()].find(
+            (directory) => directory !== holderDirectory && directory !== request.directory,
+          )
+          if (!retired) break
+          protections.delete(retired)
+        }
+        const paths = [...new Set([...protections.values()].flatMap((entry) => [...entry.paths]))]
+        const directories = [
+          ...new Set([
+            ...rawDirectories,
+            ...(await Promise.all(rawDirectories.map(canonicalComputerPath))),
+            ...[...protections.values()].flatMap((entry) => [...entry.directories]),
+          ]),
+        ]
+        if (paths.length + directories.length > 16384)
+          throw new ComputerError("blocked", "Too many protected paths are active.")
+        if (!connection.connected || connection.closed || connection.engine !== engine || connection.drain !== drain)
+          throw new ComputerError("unavailable", "The computer event connection changed.")
+        protectedPaths.splice(0, protectedPaths.length, ...paths)
+        protectedDirectories.splice(0, protectedDirectories.length, ...directories)
+      }
       const result = executor.run(request, key)
       if (request.command === "acquire")
         void result.then(
@@ -776,19 +1005,25 @@ export async function startComputer(deps: ComputerStartupDeps): Promise<Computer
     takeover.close()
     unsubscribe()
     for (const off of power) off()
-    setComputerOverlayControls(undefined)
+    detachOverlayControls()
     return limited("helper_missing", platform, settings, permissions, undefined, retention)
   }
 
+  function alive() {
+    if (connection.closed) throw new ComputerError("unavailable", "The computer runtime is closed.")
+  }
+
   function afterSettings(previous: Computer.ResolvedComputerSettings) {
+    if (connection.closed) return
     takeover.refresh()
     retention.changed(previous)
     changed()
     const next = settings!.get()
-    if (enabled(previous) && !enabled(next) && controller.state().holder) void controller.stop().catch(() => {})
+    void controller.refreshSettings().catch(() => {})
     if (!enabled(previous) && enabled(next)) void backend.hello().catch(() => {})
   }
   function regrant() {
+    if (connection.closed) return
     void controller.updateGrants().catch(() => {})
   }
 
@@ -806,6 +1041,7 @@ export async function startComputer(deps: ComputerStartupDeps): Promise<Computer
     },
     state: view,
     async command(command, arg) {
+      alive()
       if (command === "stop-session") {
         if (!arg?.sessionID) throw new Error("That conversation is not waiting for the computer.")
         await controller.stopSession(arg.sessionID)
@@ -821,18 +1057,36 @@ export async function startComputer(deps: ComputerStartupDeps): Promise<Computer
     },
     prefs: () => settings.get(),
     async setPrefs(patch) {
+      alive()
       const previous = settings.get()
-      const saved = await settings.setPrefs(checkedPatch(patch, previous, platform))
+      const checked = checkedPatch(patch, previous, platform)
+      if (checked.enabled === false) await controller.stop()
+      const saved = await settings.setPrefs(checked)
+      alive()
       afterSettings(previous)
       return saved
     },
-    permissions: () => permissions.list().then(observed),
-    recheck: () => permissions.recheck().then(observed),
-    openPane: (id) => permissions.openPane(id),
-    reset: (id) => permissions.reset(id).then(observed),
+    permissions: () => {
+      alive()
+      return permissions.list().then(observed)
+    },
+    recheck: () => {
+      alive()
+      return permissions.recheck().then(observed)
+    },
+    openPane: (id) => {
+      alive()
+      return permissions.openPane(id)
+    },
+    reset: (id) => {
+      alive()
+      return permissions.reset(id).then(observed)
+    },
     async apps(query) {
+      alive()
       if (!enabled(settings.get())) return []
       const [running, installed] = await Promise.all([backend.apps(), backend.apps({ installed: true })])
+      alive()
       const live = new Set(running.map((app) => Computer.appKey(app.identity)))
       const rows = new Map<string, Awaited<ReturnType<Computer.ComputerPlatform["apps"]>>[number]>()
       const needle = query?.toLocaleLowerCase()
@@ -849,25 +1103,32 @@ export async function startComputer(deps: ComputerStartupDeps): Promise<Computer
       return [...rows.values()]
     },
     async removeAlways(key) {
+      alive()
       await settings.removeAlways(key)
       regrant()
       changed()
     },
     async removeAllAlways() {
+      alive()
       await settings.removeAllAlways()
       regrant()
       changed()
     },
     async block(app) {
+      alive()
       await settings.block(app)
       regrant()
       changed()
     },
     async unblock(key) {
+      alive()
       await settings.unblock(key)
       changed()
     },
-    deleteScreenshots: () => retention.deleteAll(),
+    deleteScreenshots: () => {
+      alive()
+      return retention.deleteAll()
+    },
   }
 
   /**
@@ -885,10 +1146,11 @@ export async function startComputer(deps: ComputerStartupDeps): Promise<Computer
   async function events(engine: { source: KeepAwakeSource }, signal: AbortSignal) {
     let delay = 1_000
     while (!signal.aborted) {
-      try {
-        for await (const event of engine.source.events(signal)) {
-          delay = 1_000
-          connection.connected = true
+      const read = new AbortController()
+      const aborted = () => read.abort()
+      signal.addEventListener("abort", aborted, { once: true })
+      const drain = createComputerEventDrain({
+        async consume(event) {
           const state = controller.state()
           const info = event.payload.properties as Record<string, unknown> | undefined
           if (
@@ -899,21 +1161,58 @@ export async function startComputer(deps: ComputerStartupDeps): Promise<Computer
           )
             notify.fail(state.holder, "error")
           await controller.observe(event)
-          mirror.event(event)
+          if (!signal.aborted && connection.drain === drain) mirror.event(event)
+        },
+        failed() {
+          lost()
+          read.abort()
+        },
+      })
+      connection.drain = drain
+      try {
+        for await (const event of engine.source.events(read.signal)) {
+          if (signal.aborted || connection.closed) break
+          delay = 1_000
+          if (event.payload.type === "server.connected") connection.connected = true
+          drain.push(event)
         }
       } catch {
-        // The stream ended or failed; whatever held the computer is revoked below.
+        // Closing the reader revokes immediately, without waiting for queued ancestry/helper requests.
       }
+      read.abort()
+      signal.removeEventListener("abort", aborted)
+      drain.close()
+      if (connection.drain === drain) connection.drain = undefined
       if (signal.aborted) return
-      // The next connection's first event (server.connected) admits leases again.
       lost()
       await new Promise<void>((resolve) => {
-        const timer = setTimeout(resolve, delay)
-        signal.addEventListener("abort", () => (clearTimeout(timer), resolve()), { once: true })
+        const finish = () => {
+          clearTimeout(timer)
+          signal.removeEventListener("abort", finish)
+          resolve()
+        }
+        const timer = setTimeout(finish, delay)
+        signal.addEventListener("abort", finish, { once: true })
       })
       delay = Math.min(delay * 2, 30_000)
     }
   }
+
+  let previousPolicy = policy.get()
+  let previousResolved = settings.get()
+  const policyTimer = setInterval(() => {
+    if (connection.closed) return
+    const current = policy.get()
+    if (isDeepStrictEqual(previousPolicy, current)) return
+    previousPolicy = current
+    retention.changed(previousResolved)
+    previousResolved = settings.get()
+    void controller
+      .refreshSettings()
+      .then(changed, () => {})
+      .catch(() => {})
+  }, 30_000)
+  policyTimer.unref?.()
 
   const runtime: ComputerRuntime = {
     environment: computerEnvironment(bridge),
@@ -931,25 +1230,28 @@ export async function startComputer(deps: ComputerStartupDeps): Promise<Computer
       if (enabled(settings.get())) void backend.hello().catch(() => {})
     },
     engineExit() {
-      if (!connection.closed) lost()
-    },
-    async stop() {
       if (connection.closed) return
+      connection.abort?.abort()
+      connection.drain?.close()
+      lost()
+    },
+    stop() {
+      if (connection.closing) return connection.closing
       connection.closed = true
+      clearInterval(policyTimer)
+      connection.drain?.close()
       notify.close()
       retention.stop()
-      setComputerOverlayControls(undefined)
+      detachOverlayControls()
       connection.abort?.abort()
       unsubscribe()
       for (const off of power) off()
-      // A live run halts first: the controller cancels and releases input on the running helper, then closes every
-      // overlay. With no run, the helper closes first, so quitting never starts one just to halt it.
-      const live = !!controller.state().holder
-      if (!live) await backend.close().catch(() => {})
+      // Revocation is synchronous; helper and bridge teardown cannot leave a live lease while awaiting I/O.
       executor.close()
       takeover.close()
       overlay.close()
-      await Promise.allSettled([bridge.stop(), live ? backend.close() : Promise.resolve()])
+      connection.closing = Promise.allSettled([bridge.stop(), backend.close()]).then(() => {})
+      return connection.closing
     },
   }
   return runtime

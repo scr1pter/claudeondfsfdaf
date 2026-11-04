@@ -1069,3 +1069,106 @@ test("a mode change during typing wait offers explicit Resume instead of strandi
   await fake.session.resume()
   expect(fake.session.state()).toMatchObject({ phase: "working", mode: "foreground" })
 })
+
+test("idle settings changes publish truthful Off and Ready without starting the helper", async () => {
+  const fake = fixture()
+  fake.prefs.enabled = false
+  await fake.session.refreshSettings()
+  expect(fake.session.state().phase).toBe("off")
+  fake.prefs.enabled = true
+  await fake.session.refreshSettings()
+  expect(fake.session.state().phase).toBe("ready")
+  expect(fake.state.begins).toEqual([])
+  expect(fake.kinds()).not.toContain("hello")
+})
+
+test("turning Hands off revokes a physically paused holder without waiting for another step", async () => {
+  const fake = fixture()
+  const scope = await fake.acquire()
+  await fake.session.beforeStep(scope)
+  await fake.session.pause("input")
+  fake.prefs.enabled = false
+  await fake.session.refreshSettings()
+  expect(fake.session.state().phase).toBe("stopped")
+  expect(fake.state.activeGrants.size).toBe(0)
+  expect(() => fake.session.scope(scope)).toThrow()
+  expect(fake.state.aborts).toHaveLength(1)
+})
+
+test("synchronous native phase guards reject a pause and a successor before an OS write", async () => {
+  const fake = fixture()
+  const scope = await fake.acquire()
+  await fake.session.beforeStep(scope)
+  const phase = fake.session.nativePhase(scope)
+  expect(() => fake.session.assertNativePhase(phase)).not.toThrow()
+  await fake.session.pause("input")
+  expect(() => fake.session.assertNativePhase(phase)).toThrow()
+  await fake.session.stop()
+  const next = await fake.acquire(NEXT)
+  await fake.session.beforeStep(next)
+  expect(() => fake.session.assertNativePhase(phase)).toThrow()
+  expect(() => fake.session.assertNativePhase(fake.session.nativePhase(next))).not.toThrow()
+})
+
+test("the gate-checked current app stays last across native allowlist refreshes", async () => {
+  const fake = fixture()
+  const other = { ...APP, bundleId: "com.apple.TextEdit", name: "TextEdit", pid: 501 }
+  fake.state.approved = [APP, other]
+  const scope = await fake.acquire()
+  await fake.session.beforeStep(scope)
+  expect(fake.session.state().apps.at(-1)?.name).toBe("TextEdit")
+  await fake.session.target(scope, APP)
+  expect(fake.session.state().apps.at(-1)?.name).toBe("Notes")
+  await fake.session.beforeStep(scope)
+  expect(fake.session.state().apps.at(-1)?.name).toBe("Notes")
+  await fake.session.target(scope, other)
+  expect(fake.session.state().apps.at(-1)?.name).toBe("TextEdit")
+  await fake.session.pause("input")
+  expect(await fake.session.target(scope, APP).catch((error) => error)).toMatchObject({ code: "paused" })
+  expect(fake.session.state().apps.at(-1)?.name).toBe("TextEdit")
+})
+
+test("actual session.deleted info stops only matching directory holders and queued conversations", async () => {
+  const fake = fixture()
+  const scope = await fake.acquire()
+  const next = fake.request(NEXT, true)
+  const queued = fake.session.acquire(next.body, next.key).catch((error) => error)
+  await flush()
+  await fake.session.observe({
+    directory: NEXT.directory,
+    payload: {
+      type: "session.deleted",
+      properties: { info: { id: ROOT.rootSessionID, directory: ROOT.directory } },
+    },
+  })
+  expect(fake.session.state().holder?.sessionID).toBe(ROOT.rootSessionID)
+  expect(fake.session.state().queue).toHaveLength(1)
+  await fake.session.observe({
+    directory: NEXT.directory,
+    payload: {
+      type: "session.deleted",
+      properties: { info: { id: NEXT.rootSessionID, directory: NEXT.directory } },
+    },
+  })
+  expect(await queued).toMatchObject({ code: "stopped" })
+  expect(fake.session.state().queue).toEqual([])
+  expect(fake.session.state().holder?.sessionID).toBe(ROOT.rootSessionID)
+  await fake.session.observe({
+    directory: ROOT.directory,
+    payload: {
+      type: "session.deleted",
+      properties: { sessionID: NEXT.rootSessionID, info: { id: ROOT.rootSessionID, directory: ROOT.directory } },
+    },
+  })
+  expect(fake.session.state().holder?.sessionID).toBe(ROOT.rootSessionID)
+  await fake.session.observe({
+    directory: ROOT.directory,
+    payload: {
+      type: "session.deleted",
+      properties: { info: { id: ROOT.sessionID, parentID: ROOT.rootSessionID, directory: ROOT.directory } },
+    },
+  })
+  expect(fake.session.state().holder).toBeUndefined()
+  expect(() => fake.session.scope(scope)).toThrow()
+  expect(fake.state.activeGrants.size).toBe(0)
+})

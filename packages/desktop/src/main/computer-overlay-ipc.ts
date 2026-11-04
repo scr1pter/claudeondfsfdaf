@@ -17,6 +17,9 @@ let controls: ComputerOverlayControls | undefined
 /** D22 attaches the active controller; shutdown detaches it before disposing the windows. */
 export function setComputerOverlayControls(next: ComputerOverlayControls | undefined) {
   controls = next
+  return () => {
+    if (controls === next) controls = undefined
+  }
 }
 
 function trusted(event: Sender, control: ComputerOverlayControls) {
