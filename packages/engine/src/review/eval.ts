@@ -657,13 +657,15 @@ function modelRecord(model: ResolvedModel): ModelRecord {
 }
 
 // A tool call's scalar arguments, with paths in this checkout made relative so artifacts compare across machines.
+// Relative paths use "/" on every platform, like the case's file paths, so a Windows artifact matches a Linux one.
 function relativeInput(input: Record<string, unknown>, directory: string) {
   return Object.fromEntries(
     Object.entries(input).flatMap(([key, value]): [string, string | number | boolean][] => {
       if (typeof value === "number" || typeof value === "boolean") return [[key, value]]
       if (typeof value !== "string") return []
       if (value === directory) return [[key, "."]]
-      return [[key, value.startsWith(directory + path.sep) ? path.relative(directory, value) : value]]
+      if (!value.startsWith(directory + path.sep)) return [[key, value]]
+      return [[key, path.relative(directory, value).split(path.sep).join("/")]]
     }),
   )
 }
