@@ -36,6 +36,7 @@ import { VectorLoginCommand, VectorLogoutCommand, VectorWhoamiCommand } from "./
 import { OrgCommand } from "./cli/cmd/org"
 import { TrustCommand } from "./cli/cmd/trust"
 import { MemoryCommand } from "./cli/cmd/memory"
+import { VaultCommand } from "./cli/cmd/vault"
 import { LocalCommand } from "./cli/cmd/local"
 import { Heap } from "./cli/heap"
 import { disposeRuntimes } from "./effect/runtime-cleanup"
@@ -153,6 +154,7 @@ const cli = yargs(args)
   .command(DbCommand)
   .command(TrustCommand)
   .command(MemoryCommand)
+  .command(VaultCommand)
   .command(LocalCommand)
   .fail((msg, err) => {
     if (msg) UI.error(msg)

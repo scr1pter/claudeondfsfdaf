@@ -269,6 +269,125 @@ export const importText = Effect.fn("BrainExport.importText")(function* (input: 
   } satisfies Imported
 })
 
+// --- Brain Vault restore (contract A43) -------------------------------------------------------------------------------
+//
+// A vault backup is the person's own memory, sealed on their computer with their vault key and opened with it, so its
+// restore is trusted where a file import is not: what was in use comes back in use, what waited for review waits
+// again, and pins stay. It still goes entry by entry through the brain's own writes, never by copying brain.db (whose
+// migrations have no forward guard), so the brain's checks for secrets, forgotten entries and its per-scope limits
+// apply, and an entry already in memory is left as this computer has it. A file of more than LIMIT.entries or
+// LIMIT.text is restored in batches of that size instead of being cut short.
+
+/** The export versions a vault restore reads. A newer one is refused (`minReader` normally refuses it first). */
+export const RESTORE_VERSIONS: readonly number[] = [1]
+
+/** A memory file from a vault backup, when it is JSON of a version this build restores. */
+export function decodeBackup(text: string): File | undefined {
+  const parsed = (() => {
+    try {
+      return JSON.parse(text) as unknown
+    } catch {
+      return undefined
+    }
+  })()
+  const version = (parsed as { version?: unknown } | undefined)?.version
+  if (typeof version !== "number" || !RESTORE_VERSIONS.includes(version)) return undefined
+  return Option.getOrUndefined(Schema.decodeUnknownOption(File)(parsed))
+}
+
+/** The entries of `file` a restore brings back: learned kinds, not mirrored from a file, in use or waiting. */
+function restorable(file: File) {
+  return file.entries.filter(
+    (entry) =>
+      IMPORTED.has(entry.kind) &&
+      !entry.file &&
+      (entry.status === "active" || entry.status === "proposed" || entry.status === "quarantined"),
+  )
+}
+
+/** `items` in order, cut into batches of at most LIMIT.entries entries and LIMIT.text characters of JSON each. */
+export function batches<T>(items: readonly T[], size: (item: T) => number = (item) => JSON.stringify(item).length) {
+  const out: T[][] = []
+  let current: T[] = []
+  let length = 0
+  for (const item of items) {
+    const next = size(item)
+    if (current.length > 0 && (current.length >= LIMIT.entries || length + next > LIMIT.text)) {
+      out.push(current)
+      current = []
+      length = 0
+    }
+    current.push(item)
+    length += next
+  }
+  if (current.length) out.push(current)
+  return out
+}
+
+/** What a vault restore did with one memory file. */
+export type Restored = {
+  /** Entries brought back, and of them those in use, pinned, and waiting for review as they were. */
+  readonly restored: number
+  readonly active: number
+  readonly pinned: number
+  readonly waiting: number
+  /** Entries already in memory here, left as they are. */
+  readonly known: number
+  /** Entries the brain refused: forgotten here, a secret, or past what may wait for review. */
+  readonly refused: number
+  readonly batches: number
+}
+
+/**
+ * Restores a memory file from the person's own vault into `place`'s repository (or their personal memory). `trust`
+ * names the one source that may restore approval and pins: a vault backup that opened with the vault key.
+ */
+export const restore = Effect.fn("BrainExport.restore")(function* (input: {
+  readonly brain: Brain.Interface
+  readonly place: Brain.Place
+  readonly file: File
+  readonly trust: "vault"
+}) {
+  const counts = { restored: 0, active: 0, pinned: 0, waiting: 0, known: 0, refused: 0 }
+  const parts = batches(restorable(input.file))
+  for (const part of parts) {
+    for (const item of part) {
+      const result = yield* input.brain.propose(input.place, {
+        kind: item.kind as BrainSchema.LearnedKind,
+        text: item.text,
+        scope: item.scope,
+        ...(item.facet ? { facet: item.facet } : {}),
+        ...(item.paths.length ? { paths: item.paths } : {}),
+        ...(item.private ? { private: true } : {}),
+        origin: "import",
+        evidence: { type: "user" },
+      })
+      if (result.type === "refused") {
+        counts.refused++
+        continue
+      }
+      if (result.type !== "added" && result.type !== "held") {
+        counts.known++
+        continue
+      }
+      counts.restored++
+      // Approved at once, entry by entry, so what was in use never fills the review queue's import limit.
+      const approve = item.status === "active"
+      const change: Brain.Change = {
+        ...(item.pinned ? { pinned: true } : {}),
+        ...(approve ? { action: "approve" as const } : {}),
+      }
+      const updated =
+        item.pinned || approve ? yield* input.brain.update(input.place, result.entry.id, change, "user") : undefined
+      const entry = updated && updated.type !== "refused" ? updated.entry : result.entry
+      if (entry.status === "active") counts.active++
+      else counts.waiting++
+      if (entry.pinned) counts.pinned++
+    }
+  }
+  return { ...counts, batches: parts.length } satisfies Restored
+})
+
 const KINDS: readonly BrainSchema.Kind[] = [
   "rule",
   "preference",

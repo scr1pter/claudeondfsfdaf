@@ -134,6 +134,15 @@ WP A37 builds the server pieces the phone app (A38), Remote (A39–A42), Vault (
 
 The removed route `/api/model-plans/topup` answers every request with JSON 410 `MODEL_TOPUP_REMOVED`, so an older Vector shows a message instead of a bare 404. Status still sends `purchased: {bought: false}` because the 1.99.111 and 1.99.112 decoders require it (H7).
 
+### Brain Vault
+
+WP A43 builds the vault's core and `vector vault`; the Vault API is A44 and the desktop's backup and Settings → Memory → Backup are A45. `vault` is listed only after the legal read; until A44 ships and it is listed, only the free GitHub backend works.
+
+- **Encryption (P3).** A random vault key stays on the computer (`<data>/vault/vault.json` for the CLI, `safeStorage` on the desktop) and gives, by HKDF, the chunk, manifest, object-id and chunker keys (`packages/core/src/vault/crypto.ts`). Each file is cut into content-defined chunks before compression (`chunker.ts`, 16/64/256 KiB, cut points keyed by the vault), each chunk is brotli-compressed and sealed with AES-256-GCM, with the header, the vault id and the chunk's id as associated data, and named by an HMAC of its plaintext, so a chunk an earlier version holds is never sent again (`format.ts`). A version's manifest lists its files, their chunks and `minReader`; a reader below `minReader` says "update Vector" before it opens anything. Formats are in `@vectordevai/schema/vault`.
+- **Recovery code.** 26 base32 symbols and a checksum, shown once; scrypt (N = 2^17) of it wraps the vault key, and the store keeps only the wrapped key (`recovery.ts`). A typo is caught by the checksum; another code opens nothing. Once the code is lost, only a computer that still holds the vault key can restore; Vector cannot.
+- **Restore.** Through the brain's own writes (`BrainExport.restore`, trusted only for a vault backup), never a copy of brain.db: what was in use comes back in use, what waited for review waits again, pins stay, in batches of 500 entries or 2 MB; an entry already in memory is left alone.
+- **`vector vault backup|status|restore|versions|forget`.** `--github owner/repo` backs up to a private repository the person owns, over their own git, free on every plan (`github.ts`): the repository is checked private before every push, holds only the vault, and keeps the newest 7 versions. Without `--github`, the CLI uses Brain Vault on Vector when the status lists `vault` for the plan (`remote.ts`). Vector Local blocks the `brain-vault` source.
+
 ## Using Codium in Vector
 
 - **Tokens.** Chat accepts the desktop's sign-in token, a `cli` token minted by the new CLI's code exchange, and run tokens (`vrt_` for GitHub runs, `vht_` for hosted runs). A token pasted from `vectordev.ai/auth/cli` gets 401 `CODIUM_SIGN_IN_REQUIRED` at chat and still works for free models and status (`MODEL_PLAN_REQUIRE_MARKED_TOKENS`, default true). Run tokens are refused everywhere except chat, `/models` and their own service.

@@ -1089,3 +1089,52 @@ outcome, verdict, actor.login` pass. Every paid plan includes it while the plan 
   remote-phone.spec.ts` (CI only: Playwright is not run on this Mac). Locally, `packages/desktop/src/main/
   remote-phone-app.test.ts` runs the phone's real client against the desktop's real link through an in-memory relay
   with a software passkey the desktop's verifier checks.
+
+## A43 Vault core and CLI (4 Nov 2026)
+
+- **New files outside A43's list.** `packages/core/src/vault/vault.ts` (backup, read, forget, create and unlock over
+  any store), `store.ts` (the store interface and a memory store), `github.ts` (the free GitHub backend over git),
+  `remote.ts` (the client of A44's Vault API) and `error.ts`. The contract names crypto, format, recovery and chunker
+  only; backup and restore need a home, and the CLI needs both backends. `packages/core/src/local-mode/sources.ts`
+  gains the `brain-vault` source, and `packages/engine/src/index.ts` registers `vector vault`.
+- **The Vault API's shapes are defined here**, in `packages/schema/src/vault.ts`, because the CLI's Vector backend
+  needs them before A44 exists: `GET|POST /api/vault/setup`, `POST /api/vault/uploads` (declares up to 1000 of a
+  version's objects with their stored sizes, present or not, so the server knows what each version references and
+  reserves quota before it signs; the manifest's size in the last request), `POST /api/vault/commit {version,
+  objects}`, `GET /api/vault/snapshots`, `GET|POST|DELETE /api/vault/snapshots/:id` and `DELETE /api/vault`. Commit
+  carries a count, not the object list, so a large vault does not make one large request. A44 implements these, or
+  changes both sides together.
+- **Test location.** P3's test is `packages/core/test/vault/vault.test.ts`, not `packages/core/src/vault/vault.test.ts`:
+  core's tests live under `test/`, as A41's `webauthn/verify.test.ts` did.
+- **Object ids** are HMAC-SHA-256 under a key derived from the vault key, as the contract says, and the chunker's gear
+  table comes from the vault key too, so chunk sizes tell the store nothing common to every vault. Each object starts
+  with a 12-byte header (`VVLT`, format, kind, `minReader`, compression) that is part of the associated data with the
+  vault id and the object's id ("AAD vaultId ‖ chunkId" plus the header), so `minReader` is refused before anything
+  is opened and cannot be lowered without failing the tag. Brotli, and a chunk is stored raw when brotli does not make
+  it smaller.
+- **Recovery code**: 26 Crockford base32 symbols (130 random bits) and 2 checksum symbols from SHA-256, shown as seven
+  groups of four; O, I and L read as 0, 1 and 1. scrypt N=2^17, r=8, p=1 by default; a reader accepts N from 2^14 to
+  2^20, so a store cannot make it allocate more, and the tests use 2^14 except one that runs 2^17.
+- **"Restore through a vault-trusted versioned import"** is `BrainExport.restore({trust: "vault"})` with
+  `decodeBackup`, which reads only `vector-memory` JSON of a version in `RESTORE_VERSIONS` (1). Each entry goes
+  through `brain.propose` as an import and, when the backup had it in use, `brain.update` approves it (and pins it)
+  at once, so what was in use never fills the 500-entry import queue. Batches of 500 entries or 2 MB of JSON replace
+  the import's cut-off. The brain's own refusals still apply (forgotten here, secrets, its 300-entry active cap per
+  scope), an entry already in memory is left as this computer has it, restored entries carry origin `import` and
+  evidence `user`, and documents are not restored (their records need the files).
+- **What a backup holds (main-built).** One `memory` file per scope: the person's own memory and each repository's
+  that has learned entries, the repositories coming from the engine's project list. Sessions are not in it: neither
+  A43's text nor A45's names them, and B10 adds skills and insights.
+- **The GitHub backend** keeps 7 versions on the person's computer, as A45 says for the desktop, and each push is a
+  single commit with no parent, sent with `--force-with-lease` on the commit it replaces, so a forgotten version leaves
+  the branch and two computers cannot overwrite each other. The privacy check is an unauthenticated read of GitHub's
+  API: 404 lets the push go, an answer that says private lets it go, anything else (public, a rate limit, an outage, a
+  redirect, Vector Local) refuses it. The repository must hold only the vault (a README alone is accepted). Commits
+  skip signing and the person's hooks.
+- **The CLI's vault key** lives in `<data>/vault/vault.json` (0600), sealed with `VECTOR_CREDENTIAL_KEY` when the
+  desktop started the engine, as `auth.json` is; A45's desktop keeps its own in `safeStorage`. The file also holds the
+  wrapped key, so switching backend needs no code.
+- **Vector's backend takes a backup only while the status lists `vault`** and the plan's `vault.gb` is above 0 (H1);
+  status, versions, restore and forget need only the sign-in, so a paused or ended plan can still restore during its
+  read-only days (§4.4). The API enforces the quota and states (S1). Until A44 ships and the owner lists `vault`,
+  `vector vault backup` works only with `--github`.

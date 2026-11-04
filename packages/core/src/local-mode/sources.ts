@@ -394,6 +394,19 @@ export const SOURCES: readonly Source[] = [
     note: "The relay's address comes with each ticket from vectordev.ai; it only ever sees encrypted messages",
   },
   {
+    id: "brain-vault",
+    purpose: "account",
+    hosts: ["api.github.com", ...VECTOR],
+    sends:
+      "Your Brain's memory, encrypted on this computer, to Vector's Brain Vault with your Vector sign-in, or the name of the private GitHub repository you back up to, to check it is private",
+    why: "Brain Vault: backs up and restores your memory when you ask",
+    local: "blocked",
+    where: ["engine"],
+    callSites: ["packages/engine/src/cli/cmd/vault.ts"],
+    planned: ["packages/desktop/src/main/vault-backup.ts", "packages/desktop/src/main/vault-github.ts"],
+    note: "Backups go to storage through links vectordev.ai signs; git's own pushes to GitHub are git-remote",
+  },
+  {
     id: "phone-alerts",
     purpose: "account",
     hosts: VECTOR,
