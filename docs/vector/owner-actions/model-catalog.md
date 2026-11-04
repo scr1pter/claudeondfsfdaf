@@ -1,5 +1,21 @@
 # Owner action: Vector model catalog and provider artwork
 
+## Codium restoration merged (4 November 2026)
+
+On 4 November the owner asked for the four restored Codium models to reach main. The Codium lineup is GPT-6.1 Sol,
+GPT-6 Luna, Claude Haiku 5.5, DeepSeek V4.1 Flash 1017, Gemini 4 Argon and Kimi K3.1 Pro. Before this merge,
+vectordev.ai/models and the immutable 1.99.111 and 1.99.112 release catalogs were byte-identical
+(SHA-256 `a96b465110dd2fcc38e0dcca1a4115e12ea43ddaafdb0ebf587e15026767bf14`). They held Luna and Sol but not the other
+four. The committed mirror is now the restored export below (`784309673addec67…`). Installed apps refresh from
+vectordev.ai/models, so they get the four models once the web deploy serves it. The immutable 1.99.111 and 1.99.112
+catalogs stay as published.
+
+One release step remains. The next desktop or CLI release checks that vectordev.ai/models matches the catalog it
+prepares from the fork pin, so set `VECTOR_CATALOG_FORK_REVISION=06e1cdd7b981c006291b938ad94f4dd6e40f61bd` before
+preparing it. On 4 November the variable still held `52edfd113616e57761c70fd5d01ac578d645211c`, the 2 October pin
+three commits behind. Keep the fork's `codium-112` branch, whose head is that revision, because the fork's default
+branch `dev` does not contain it.
+
 ## Prepared Codium restoration (28 October 2026)
 
 The `catalog-112` application branch restores the four OpenRouter entries missing

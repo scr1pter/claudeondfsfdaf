@@ -31,5 +31,10 @@
     }
   },
   "published": false,
-  "actionsVariablesVerified": false
+  "actionsVariablesVerified": false,
+  "mergedToMain": "2026-11-04",
+  "replacedMirrorSha256": "a96b465110dd2fcc38e0dcca1a4115e12ea43ddaafdb0ebf587e15026767bf14",
+  "releaseVariableRequired": {
+    "VECTOR_CATALOG_FORK_REVISION": "06e1cdd7b981c006291b938ad94f4dd6e40f61bd"
+  }
 }
