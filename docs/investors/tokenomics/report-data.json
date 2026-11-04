@@ -15,14 +15,76 @@
     "cost_basis": "Recorded provider usage multiplied by the study rate schedule; not invoice reconciliation.",
     "quality_scope": "Required functional checks plus a fixed blinded source-and-screenshot rubric, evaluated separately on every task.",
     "tasks": [
-      {"name": "Workflow Runner", "role": "Development replication", "checks": 24, "vector_usd": "0.7512629", "codex_usd": "0.8919725", "vector_score": 45, "codex_score": 45, "score_max": 48, "vector_requests": 47, "codex_requests": 30, "vector_wall_ms": 514140, "codex_wall_ms": 664828},
-      {"name": "Evidence Workbench", "role": "Development replication", "checks": 26, "vector_usd": "0.7276856", "codex_usd": "0.7229352", "vector_score": 47, "codex_score": 47, "score_max": 48, "vector_requests": 44, "codex_requests": 35, "vector_wall_ms": 526703, "codex_wall_ms": 518515},
-      {"name": "Delivery Outbox", "role": "Held-out task", "checks": 26, "vector_usd": "0.5419832", "codex_usd": "0.5126617", "vector_score": 47, "codex_score": 46, "score_max": 48, "vector_requests": 36, "codex_requests": 23, "vector_wall_ms": 427813, "codex_wall_ms": 427360}
+      {
+        "name": "Workflow Runner",
+        "role": "Development replication",
+        "checks": 24,
+        "vector_usd": "0.7512629",
+        "codex_usd": "0.8919725",
+        "vector_score": 45,
+        "codex_score": 45,
+        "score_max": 48,
+        "vector_requests": 47,
+        "codex_requests": 30,
+        "vector_wall_ms": 514140,
+        "codex_wall_ms": 664828
+      },
+      {
+        "name": "Evidence Workbench",
+        "role": "Development replication",
+        "checks": 26,
+        "vector_usd": "0.7276856",
+        "codex_usd": "0.7229352",
+        "vector_score": 47,
+        "codex_score": 47,
+        "score_max": 48,
+        "vector_requests": 44,
+        "codex_requests": 35,
+        "vector_wall_ms": 526703,
+        "codex_wall_ms": 518515
+      },
+      {
+        "name": "Delivery Outbox",
+        "role": "Held-out task",
+        "checks": 26,
+        "vector_usd": "0.5419832",
+        "codex_usd": "0.5126617",
+        "vector_score": 47,
+        "codex_score": 46,
+        "score_max": 48,
+        "vector_requests": 36,
+        "codex_requests": 23,
+        "vector_wall_ms": 427813,
+        "codex_wall_ms": 427360
+      }
     ],
-    "totals": {"vector_usd": "2.0209317", "codex_usd": "2.1275694", "checks_each": 76, "vector_score": 139, "codex_score": 138, "score_max": 144, "vector_requests": 127, "codex_requests": 88},
+    "totals": {
+      "vector_usd": "2.0209317",
+      "codex_usd": "2.1275694",
+      "checks_each": 76,
+      "vector_score": 139,
+      "codex_score": 138,
+      "score_max": 144,
+      "vector_requests": 127,
+      "codex_requests": 88
+    },
     "cost_mix": {
-      "vector": {"ordinary_input_usd": "0.0007620", "cache_read_usd": "0.5341722", "cache_write_usd": "0.5335475", "output_usd": "0.9524500", "input_tokens": 5555522, "output_tokens": 95245},
-      "codex": {"ordinary_input_usd": "0.0005280", "cache_read_usd": "0.4099814", "cache_write_usd": "0.5723600", "output_usd": "1.1447000", "input_tokens": 4329022, "output_tokens": 114470}
+      "vector": {
+        "ordinary_input_usd": "0.0007620",
+        "cache_read_usd": "0.5341722",
+        "cache_write_usd": "0.5335475",
+        "output_usd": "0.9524500",
+        "input_tokens": 5555522,
+        "output_tokens": 95245
+      },
+      "codex": {
+        "ordinary_input_usd": "0.0005280",
+        "cache_read_usd": "0.4099814",
+        "cache_write_usd": "0.5723600",
+        "output_usd": "1.1447000",
+        "input_tokens": 4329022,
+        "output_tokens": 114470
+      }
     },
     "scope_note": "Three single-trial task pairs in a small adaptive evaluation: two development replications and one held-out task. Costs varied by workload; Vector was cheaper on one of three tasks. Recorded quality gates cover the specified checks and rubric, not every future output or production behavior.",
     "source_id": "E1"
@@ -39,10 +101,35 @@
   },
   "additional_complete_study": null,
   "sources": [
-    {"id": "E1", "label": "Three-task matched benchmark and quality gate", "path": "docs/benchmarks/agentic-workflows-v1/results/contracts-stage-summary.json", "url": "https://github.com/scr1pter/claudeondfsfdaf/blob/tokenomics-complete/docs/benchmarks/agentic-workflows-v1/results/contracts-stage-summary.json"},
-    {"id": "E2", "label": "Receipt-based cost category projection", "path": "docs/benchmarks/agentic-workflows-v1/results/contracts-cost-drivers.json", "url": "https://github.com/scr1pter/claudeondfsfdaf/blob/tokenomics-complete/docs/benchmarks/agentic-workflows-v1/results/contracts-cost-drivers.json"},
-    {"id": "E3", "label": "Latest control-suite validation", "path": "docs/benchmarks/agentic-heavy-v1/checkpoint-2026-11-04/v2-integration-validation.json", "url": "https://github.com/scr1pter/claudeondfsfdaf/blob/tokenomics-complete/docs/benchmarks/agentic-heavy-v1/checkpoint-2026-11-04/v2-integration-validation.json"},
-    {"id": "E4", "label": "Prior large-application benchmark", "path": "docs/benchmarks/tokenomics-2026-11-01/live-results.json", "url": "https://github.com/scr1pter/claudeondfsfdaf/blob/tokenomics-complete/docs/benchmarks/tokenomics-2026-11-01/live-results.json"},
-    {"id": "E5", "label": "Earlier two-task candidate evaluation", "path": "docs/benchmarks/agentic-workflows-v1/results/focus-stage-summary.json", "url": "https://github.com/scr1pter/claudeondfsfdaf/blob/tokenomics-complete/docs/benchmarks/agentic-workflows-v1/results/focus-stage-summary.json"}
+    {
+      "id": "E1",
+      "label": "Three-task matched benchmark and quality gate",
+      "path": "docs/benchmarks/agentic-workflows-v1/results/contracts-stage-summary.json",
+      "url": "https://github.com/scr1pter/claudeondfsfdaf/blob/587be6478aff24e2cdf98192269bc2bd3ca755bd/docs/benchmarks/agentic-workflows-v1/results/contracts-stage-summary.json"
+    },
+    {
+      "id": "E2",
+      "label": "Receipt-based cost category projection",
+      "path": "docs/benchmarks/agentic-workflows-v1/results/contracts-cost-drivers.json",
+      "url": "https://github.com/scr1pter/claudeondfsfdaf/blob/587be6478aff24e2cdf98192269bc2bd3ca755bd/docs/benchmarks/agentic-workflows-v1/results/contracts-cost-drivers.json"
+    },
+    {
+      "id": "E3",
+      "label": "Latest control-suite validation",
+      "path": "docs/benchmarks/agentic-heavy-v1/checkpoint-2026-11-04/v2-integration-validation.json",
+      "url": "https://github.com/scr1pter/claudeondfsfdaf/blob/587be6478aff24e2cdf98192269bc2bd3ca755bd/docs/benchmarks/agentic-heavy-v1/checkpoint-2026-11-04/v2-integration-validation.json"
+    },
+    {
+      "id": "E4",
+      "label": "Prior large-application benchmark",
+      "path": "docs/benchmarks/tokenomics-2026-11-01/live-results.json",
+      "url": "https://github.com/scr1pter/claudeondfsfdaf/blob/587be6478aff24e2cdf98192269bc2bd3ca755bd/docs/benchmarks/tokenomics-2026-11-01/live-results.json"
+    },
+    {
+      "id": "E5",
+      "label": "Earlier two-task candidate evaluation",
+      "path": "docs/benchmarks/agentic-workflows-v1/results/focus-stage-summary.json",
+      "url": "https://github.com/scr1pter/claudeondfsfdaf/blob/587be6478aff24e2cdf98192269bc2bd3ca755bd/docs/benchmarks/agentic-workflows-v1/results/focus-stage-summary.json"
+    }
   ]
 }

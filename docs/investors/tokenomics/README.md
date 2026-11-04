@@ -49,6 +49,7 @@ can add a fifth page with this object:
   "settlement_complete": true,
   "all_charges_retained": true,
   "quality_gate_met": false,
+  "matched_native_audit_passed": true,
   "vector": {"cost_usd": "0.0000000", "requests": 1, "checks_passed": 1, "checks_total": 1},
   "codex": {"cost_usd": "0.0000000", "requests": 1, "checks_passed": 1, "checks_total": 1},
   "scope": "Readable scope and any material qualification.",
@@ -61,3 +62,10 @@ episodes are rejected. A completed study that misses the quality gate is reporte
 neutrally; it cannot produce a quality-preserving savings claim. If new results
 need more nuanced treatment, revise content and re-render instead of compressing
 material information into an unreadable footnote.
+
+A true `quality_gate_met` additionally requires observed native role counts on
+both arms, a passed matched native audit, and blinded review of the exact source
+and required artifacts by the same reviewer pool and rubric. Every named review
+category must score Vector no lower than Codex; functional passes alone are not
+enough. Keep those review observations with the study data. Run `python -m
+unittest test_brief.py` from this directory to verify the claim checks.

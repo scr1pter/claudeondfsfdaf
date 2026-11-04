@@ -60,6 +60,14 @@ def validate(data):
             assert extra[side]["requests"] > 0
         if extra["quality_gate_met"]:
             assert all(extra[s]["checks_passed"] == extra[s]["checks_total"] for s in ("vector", "codex"))
+            assert extra["vector"]["checks_total"] == extra["codex"]["checks_total"]
+            assert extra["matched_native_audit_passed"] is True
+            assert extra["blinded_review"]["same_rubric_and_reviewer_pool"] is True
+            assert extra["blinded_review"]["source_and_required_artifacts_reviewed"] is True
+            assert all(extra[s]["native_roles_observed"] == extra["team_size_each"] for s in ("vector", "codex"))
+            categories = extra["blinded_review"]["categories"]
+            assert categories and len({x["name"] for x in categories}) == len(categories)
+            assert all(0 <= x["codex_score"] <= x["vector_score"] <= x["maximum"] for x in categories)
     content = json.dumps(data)
     assert not re.search(r"(?<![A-Za-z0-9])sk-(?:proj-|svcacct-)?[A-Za-z0-9_-]{35,}", content)
     assert not re.search(r"(?<![A-Za-z0-9])gh[pousr]_[A-Za-z0-9]{25,}", content)
@@ -119,7 +127,7 @@ def cover(c, data, total):
     y = text(c, "Agentic work.<br/>Economic clarity.", M, 698, CW, 42, 46, NAVY, True)
     y = text(c, "Vector brings cost visibility and workflow controls to model-driven work, with verification kept in the loop.", M, y - 22, 478, 16.5, 23.5, INK)
     metric(c, M, y - 29, 255, cost_saving, "Lower recorded API cost", "Aggregate result across three controlled coding workflows.")
-    metric(c, M + 267, y - 29, 255, "76/76", "Specified checks passed", "Both runtimes passed every required functional check in the set.")
+    metric(c, M + 267, y - 29, 255, "76/76", "Specified checks passed", "Both runtimes passed every specified acceptance check in the set.")
     y = y - 190
     y = text(c, "Measured efficiency. Explicit quality gates.", M, y, CW, 20, 26, NAVY, True)
     y = text(c, f"The evaluation held the model and High reasoning constant. Vector's fixed static score was no lower on any of the three tasks. Recorded cost was {money(totals['vector_usd'])} for Vector and {money(totals['codex_usd'])} for Codex.", M, y - 13, CW, 12.3, 18)
