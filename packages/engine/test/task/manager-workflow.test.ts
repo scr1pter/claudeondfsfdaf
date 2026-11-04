@@ -143,6 +143,9 @@ it.instance("stopping one run cancels its 300 durable agents without relying on 
       (yield* manager.list({ sessionID: f.parent.id, active: true, descendants: true })).tasks.map((task) => task.id),
     ).toEqual([other.id])
   }),
+  // 302 durable sessions created, then 301 stopped one at a time under the settlement lock: 15-23 seconds on the CI
+  // runners before Phase 8, which leaves the default 30-second budget too thin on Windows.
+  60_000,
 )
 
 it.instance(
