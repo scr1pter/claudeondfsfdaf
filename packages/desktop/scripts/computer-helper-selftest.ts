@@ -60,6 +60,49 @@ export const CORE_TRANSCRIPTS = [
 export type PrivilegedMode = "auto" | "require" | "off"
 type Status = "passed" | "failed" | "skipped"
 type Check = { name: string; status: Status; reason?: string }
+type NativeFailureReason =
+  | "supervisor-count"
+  | "worker-count"
+  | "caller-exit-deadline"
+  | "caller-exit-status"
+  | "unexpected-lifecycle-frame"
+  | "descendant-exit-deadline"
+  | "channel-deadline"
+  | "channel-io"
+  | "channel-unexpected-stdout"
+  | "channel-start-failed"
+  | "channel-oversized-output"
+  | "channel-receive-limit"
+  | "channel-send-limit"
+  | "process-inspection-failed"
+class NativeCheckFailure extends Error {
+  constructor(readonly reason: NativeFailureReason) {
+    super(reason)
+  }
+}
+
+/** Keep only a classified fixture/line and a fixed category; replay errors may contain private response values. */
+export function transcriptFailureReason(name: string, error: unknown) {
+  if (error instanceof NativeCheckFailure) return error.reason
+  if (!(error instanceof Error) || !CORE_TRANSCRIPTS.some((item) => item === name)) return "transcript-failed"
+  if (error.message === "The conformance fixture contains a non-isolated operation.") return "fixture-policy"
+  if (/:\d+: not a \{send, expect\} line$/.test(error.message)) return "fixture-format"
+  const match = /^conformance\.([a-z-]+):(\d+): (.*)$/s.exec(error.message)
+  if (!match || match[1] !== name) return "transcript-failed"
+  const line = Number(match[2])
+  if (!Number.isSafeInteger(line) || line < 1 || line > 1000) return "transcript-failed"
+  const text = match[3]!
+  const category = text.includes("received a frame that does not decode")
+    ? "decode"
+    : text.includes(", got nothing")
+      ? "timeout"
+      : /, got exit -?\d+$/.test(text)
+        ? "unexpected-exit"
+        : text.startsWith("expected ")
+          ? "mismatch"
+          : "failed"
+  return `line-${line}-${category}`
+}
 export type SelfTestOptions = {
   platform: "darwin" | "win32"
   bin: string
@@ -354,8 +397,8 @@ export async function runComputerHelperSelfTest(options: SelfTestOptions, depend
         validateCoreTranscript(name, lines)
         await replay(channel, lines, { wait, name: `conformance.${name}` })
         set(`conformance.${name}`, "passed")
-      } catch {
-        set(`conformance.${name}`, "failed", "transcript-failed")
+      } catch (error) {
+        set(`conformance.${name}`, "failed", transcriptFailureReason(name, error))
       } finally {
         await channel.dispose()
       }
@@ -367,8 +410,8 @@ export async function runComputerHelperSelfTest(options: SelfTestOptions, depend
     ] as const) {
       try {
         set(name, (await run()) ? "passed" : "failed", undefined)
-      } catch {
-        set(name, "failed", "lifecycle-check-failed")
+      } catch (error) {
+        set(name, "failed", error instanceof NativeCheckFailure ? error.reason : "lifecycle-check-failed")
       }
     }
   } catch {
@@ -558,7 +601,7 @@ async function createVerifiedFixture(options: SelfTestOptions): Promise<Verified
       const result = await runNativeCommand({ executable: "/usr/bin/pgrep", args: ["-P", String(pid)], timeoutMs: 500 })
       if (result.code === 1) return []
       if (result.code !== 0 || !/^\s*(?:\d+\s*)*$/.test(result.stdout))
-        throw new Error("The fixture process tree is unavailable.")
+        throw new NativeCheckFailure("process-inspection-failed")
       return result.stdout.trim().split(/\s+/).filter(Boolean).map(Number)
     }
     const lifetime = async (parentDeath: boolean) => {
@@ -579,19 +622,24 @@ async function createVerifiedFixture(options: SelfTestOptions): Promise<Verified
           },
         )
         const supervisors = await descendants(running.pid)
-        if (supervisors.length !== 1) return false
+        if (supervisors.length !== 1) throw new NativeCheckFailure("supervisor-count")
         const workers = await descendants(supervisors[0]!)
-        if (workers.length !== 1) return false
+        if (workers.length !== 1) throw new NativeCheckFailure("worker-count")
         const deadline = performance.now() + 1000
         if (parentDeath) running.killParent()
         else running.end()
         const result = await running.next(1000)
-        if (result?.kind !== "exit" || (!parentDeath && result.code !== 0)) return false
+        if (!result) throw new NativeCheckFailure("caller-exit-deadline")
+        if (result.kind !== "exit") throw new NativeCheckFailure("unexpected-lifecycle-frame")
+        if (!parentDeath && result.code !== 0) throw new NativeCheckFailure("caller-exit-status")
         while (performance.now() < deadline) {
-          if (!(await alive(supervisors[0]!)) && !(await alive(workers[0]!))) return performance.now() <= deadline
+          if (!(await alive(supervisors[0]!)) && !(await alive(workers[0]!))) {
+            if (performance.now() > deadline) throw new NativeCheckFailure("descendant-exit-deadline")
+            return true
+          }
           await timers.setTimeout(10)
         }
-        return false
+        throw new NativeCheckFailure("descendant-exit-deadline")
       } finally {
         await running.dispose()
       }
@@ -645,27 +693,28 @@ function nativeChannel(executable: string, args: string[]) {
       if (child.pid) process.kill(-child.pid, "SIGKILL")
     } catch {}
   }
-  const fail = () => {
-    error = new Error("The native protocol channel failed.")
+  const fail = (reason: NativeFailureReason) => {
+    if (error) return
+    error = new NativeCheckFailure(reason)
     kill()
     wake()
   }
   const reader = frameReader({
     maxBytes: Computer.LIMITS.helperFrameBytes,
-    onOversize: fail,
+    onOversize: () => fail("channel-oversized-output"),
     onFrame(bytes) {
       buffered += bytes.byteLength
-      if (buffered > 32 * 1024 * 1024 || inbox.length >= 1000) return fail()
+      if (buffered > 32 * 1024 * 1024 || inbox.length >= 1000) return fail("channel-receive-limit")
       inbox.push({ kind: "frame", bytes })
       wake()
     },
   })
-  const deadline = setTimeout(fail, 30_000)
+  const deadline = setTimeout(() => fail("channel-deadline"), 30_000)
   pipe.on("data", (bytes: Buffer) => reader.push(bytes))
-  pipe.on("error", fail)
-  child.stdout?.on("data", fail)
+  pipe.on("error", () => fail("channel-io"))
+  child.stdout?.on("data", () => fail("channel-unexpected-stdout"))
   child.stderr?.on("data", () => {})
-  child.once("error", fail)
+  child.once("error", () => fail("channel-start-failed"))
   child.once("close", (code) => {
     clearTimeout(deadline)
     inbox.push({ kind: "exit", code })
@@ -678,7 +727,7 @@ function nativeChannel(executable: string, args: string[]) {
     },
     write(bytes: Uint8Array) {
       if (error) throw error
-      if (pipe.writableLength + bytes.byteLength > 32 * 1024 * 1024) throw new Error("The protocol send queue is full.")
+      if (pipe.writableLength + bytes.byteLength > 32 * 1024 * 1024) throw new NativeCheckFailure("channel-send-limit")
       pipe.write(bytes)
     },
     end: () => pipe.end(),

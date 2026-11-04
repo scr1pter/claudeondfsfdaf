@@ -8,6 +8,7 @@ import {
   classifySelfTestExit,
   parseSelfTestArgs,
   runComputerHelperSelfTest,
+  transcriptFailureReason,
   validateCoreTranscript,
   type Command,
   type NativeChannel,
@@ -113,6 +114,42 @@ test("77 is a visible skip unless privileged checks are required", () => {
   expect(classifySelfTestExit(0, "require")).toBe("passed")
   expect(classifySelfTestExit(1, "off")).toBe("failed")
   expect(classifySelfTestExit(null, "off")).toBe("failed")
+})
+
+test("transcript diagnostics identify a bounded line and failure class without response data", () => {
+  const cases = [
+    ['conformance.frame-too-large:1: expected {"id":0}, got nothing', "line-1-timeout"],
+    ['conformance.frame-too-large:2: received a frame that does not decode (not JSON): "PRIVATE"', "line-2-decode"],
+    ['conformance.frame-too-large:2: expected {"id":1}, got {"private":"PRIVATE"}', "line-2-mismatch"],
+    ['conformance.frame-too-large:1: expected {"id":0}, got exit 1', "line-1-unexpected-exit"],
+    ["conformance.frame-too-large:2: PRIVATE UNCLASSIFIED ERROR", "line-2-failed"],
+  ] as const
+  for (const [message, reason] of cases) {
+    const result = transcriptFailureReason("frame-too-large", new Error(message))
+    expect(result).toBe(reason)
+    expect(result).not.toContain("PRIVATE")
+  }
+  expect(
+    transcriptFailureReason("hello", new Error("The conformance fixture contains a non-isolated operation.")),
+  ).toBe("fixture-policy")
+  expect(transcriptFailureReason("hello", new Error("/PRIVATE/hello.jsonl:2: not a {send, expect} line"))).toBe(
+    "fixture-format",
+  )
+})
+
+test("transcript diagnostics discard unknown fixtures, arbitrary errors, and out-of-range lines", () => {
+  for (const message of [
+    "conformance.hello:1: expected PRIVATE, got nothing",
+    "conformance.frame-too-large:0: expected PRIVATE, got nothing",
+    "conformance.frame-too-large:1001: expected PRIVATE, got nothing",
+    "conformance.frame-too-large:999999999999999999: expected PRIVATE, got nothing",
+    "PRIVATE arbitrary child stderr",
+  ])
+    expect(transcriptFailureReason("frame-too-large", new Error(message))).toBe("transcript-failed")
+  expect(transcriptFailureReason("unknown", new Error("conformance.unknown:1: expected PRIVATE, got nothing"))).toBe(
+    "transcript-failed",
+  )
+  expect(transcriptFailureReason("hello", { message: "PRIVATE" })).toBe("transcript-failed")
 })
 
 test("M1 runs the nine applicable actual C1 transcripts and visibly skips keyboard heartbeat coverage", async () => {
