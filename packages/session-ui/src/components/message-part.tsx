@@ -70,6 +70,7 @@ import { memoryLearned } from "./memory-learned"
 import { ReplyFooter } from "./reply-footer"
 import { chipTitle, cites, decorateCitations, delivered, segments, type KnowledgeCard } from "./knowledge-citations"
 import { ButtonV2 } from "@vectordevai/ui/v2/button-v2"
+import { WorkflowPart, worktreeChip } from "./workflow-part"
 
 async function writeClipboard(text: string): Promise<boolean> {
   const body = typeof document === "undefined" ? undefined : document.body
@@ -492,6 +493,13 @@ export function getToolInfo(tool: string, input: any = {}): ToolInfo {
         subtitle: input.description,
       }
     }
+    case "workflow":
+      return {
+        icon: "task",
+        title: "Workflow",
+        subtitle:
+          typeof input.title === "string" ? input.title : typeof input.name === "string" ? input.name : undefined,
+      }
     case "bash":
       return {
         icon: "console",
@@ -2265,6 +2273,8 @@ function TaskItem(props: ToolProps & { indexed?: boolean }) {
     props.indexed ? props.status === "running" : props.status === "pending" || props.status === "running",
   )
   const stateLabel = createMemo(() => (props.indexed ? taskItemLabel(props.metadata.status, props.status) : undefined))
+  // An isolated child's worktree (5.I.4): "3 files changed · branch" while its changes wait for review, or its state.
+  const worktree = createMemo(() => worktreeChip(props.metadata.isolation))
 
   const href = createMemo(() => sessionLink(childSessionId(), location.pathname, data.sessionHref))
   const clickable = createMemo(() => !!(childSessionId() && (data.navigateToSession || href())))
@@ -2317,6 +2327,13 @@ function TaskItem(props: ToolProps & { indexed?: boolean }) {
           <Show when={stateLabel()}>
             <span data-slot="task-tool-state">{stateLabel()}</span>
           </Show>
+          <Show when={worktree()}>
+            {(label) => (
+              <span data-slot="basic-tool-tool-arg" data-component="task-tool-worktree">
+                {label()}
+              </span>
+            )}
+          </Show>
           <Show when={props.indexed && typeof props.metadata.error === "string" && props.metadata.error}>
             {(error) => <span data-slot="task-tool-error">{error()}</span>}
           </Show>
@@ -2344,6 +2361,11 @@ function TaskItem(props: ToolProps & { indexed?: boolean }) {
     />
   )
 }
+
+ToolRegistry.register({
+  name: "workflow",
+  render: WorkflowPart,
+})
 
 ToolRegistry.register({
   name: "bash",

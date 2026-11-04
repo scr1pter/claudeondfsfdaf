@@ -143,7 +143,19 @@ export const settingsGroups: readonly SettingsGroup[] = [
         value: "subagents",
         label: "Agents",
         icon: "task",
-        keywords: ["subagent", "parallel", "delegation", "runtime"],
+        // The subagent limits and the Workflows section (5.I.4) live here too.
+        keywords: [
+          "subagent",
+          "parallel",
+          "delegation",
+          "runtime",
+          "subagent limits",
+          "at once",
+          "per request",
+          "spend ceiling",
+          "workflows",
+          "saved workflows",
+        ],
       },
       {
         value: "providers",

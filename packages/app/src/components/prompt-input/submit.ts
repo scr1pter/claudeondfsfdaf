@@ -49,6 +49,7 @@ import type { FollowupPreference } from "@/context/settings"
 import { NO_CAPABILITIES, type EngineCapabilities } from "@/features/background-tasks/engine-capabilities"
 import { NO_HELPERS, stopSession, type HelperTargets, type StopScope } from "@/features/background-tasks/stop-helpers"
 import { backgroundTasksPane } from "@/features/background-tasks/background-tasks-state"
+import { WORKFLOW_EVENT, workflowOpen, type WorkflowOpenDetail } from "@/features/background-tasks/workflow-model"
 
 type PendingPrompt = {
   abort: AbortController
@@ -850,6 +851,22 @@ export function createPromptSubmit(input: PromptSubmitInput) {
 
     if (text.trim().length === 0 && images.length === 0 && input.commentCount() === 0) {
       if (input.working()) void abort()
+      return
+    }
+    // `/workflow` or `/workflow <name>` opens the saved-workflow form on the session page (5.I.4), unless the engine
+    // lists a command of that name. The form checks the plan before anything runs; nothing is sent from here.
+    const workflow = workflowOpen({
+      text,
+      mode,
+      sessionID: params.id,
+      commands: sync().data.command,
+      workflows: (input.capabilities?.() ?? serverSync().capabilities?.() ?? NO_CAPABILITIES).workflows,
+      attachments: images.length + input.commentCount(),
+    })
+    if (workflow) {
+      submission.clear()
+      input.setPopover(null)
+      window.dispatchEvent(new CustomEvent<WorkflowOpenDetail>(WORKFLOW_EVENT, { detail: workflow }))
       return
     }
     // Sent while the agent works: it steers the running turn, unless it queues below.

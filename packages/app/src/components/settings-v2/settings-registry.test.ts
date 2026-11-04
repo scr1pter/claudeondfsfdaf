@@ -70,8 +70,20 @@ describe("settings registry", () => {
   })
 
   test("finds learned skills and workflow insights under Memory", () => {
-    for (const query of ["skills", "learned skills", "workflow", "insights", "effort", "tokenomics"])
+    for (const query of ["skills", "learned skills", "insights", "effort", "tokenomics"])
       expect(filterSettingsGroups(query).flatMap((group) => group.items.map((item) => item.value))).toEqual(["memory"])
+    // Agents now has a Workflows section (5.I.4), so "workflow" finds both pages; Memory's insights come first.
+    expect(filterSettingsGroups("workflow").flatMap((group) => group.items.map((item) => item.value))).toEqual([
+      "memory",
+      "subagents",
+    ])
+  })
+
+  test("finds the subagent limits and the Workflows section under Agents", () => {
+    for (const query of ["subagent limits", "at once", "per request", "spend ceiling", "workflows", "saved workflows"])
+      expect(filterSettingsGroups(query).flatMap((group) => group.items.map((item) => item.value))).toEqual([
+        "subagents",
+      ])
   })
 
   test("finds the Memory page, which replaced the rules page and the Local memory card, by what people call them", () => {

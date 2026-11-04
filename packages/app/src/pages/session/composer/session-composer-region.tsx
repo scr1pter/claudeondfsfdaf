@@ -7,6 +7,7 @@ import { planCard, planPart } from "@/features/research/research-model"
 import { SessionPermissionDock } from "@/pages/session/composer/session-permission-dock"
 import { SessionQuestionDock } from "@/pages/session/composer/session-question-dock"
 import { SessionFollowupDock } from "@/pages/session/composer/session-followup-dock"
+import { SessionInterruptedDock } from "@/pages/session/composer/session-interrupted-dock"
 import { SessionRevertDock } from "@/pages/session/composer/session-revert-dock"
 import { SessionWorkingStatus } from "@/pages/session/composer/session-working-status"
 import { SessionTodoDock } from "@/pages/session/composer/session-todo-dock"
@@ -158,6 +159,17 @@ export function SessionComposerRegion(props: {
                 "margin-top": `${-controller.lift()}px`,
               }}
             >
+              <Show when={controller.interrupted()} keyed>
+                {(dock) => (
+                  <SessionInterruptedDock
+                    count={dock.count}
+                    resumable={dock.resumable}
+                    resuming={dock.resuming}
+                    onResumeAll={dock.onResumeAll}
+                    onDismiss={dock.onDismiss}
+                  />
+                )}
+              </Show>
               <Show when={controller.followup()?.items.length}>
                 <SessionFollowupDock
                   items={controller.followup()!.items}
@@ -174,9 +186,20 @@ export function SessionComposerRegion(props: {
               >
                 <div
                   ref={controller.setPromptRef}
+                  data-component="session-child-notice"
                   class="w-full rounded-[12px] border border-border-weak-base bg-background-base p-3 text-16-regular text-text-weak"
                 >
-                  <span>{language.t("session.child.promptDisabled")} </span>
+                  <span>{language.t("session.child.notice")} </span>
+                  <Show when={backgroundTasks}>
+                    <button
+                      type="button"
+                      class="text-text-base transition-colors hover:text-text-strong"
+                      onClick={controller.talkToChild}
+                    >
+                      {language.t("session.child.talk")}
+                    </button>
+                    <span aria-hidden="true"> · </span>
+                  </Show>
                   <Show when={controller.parentID()}>
                     <button
                       type="button"

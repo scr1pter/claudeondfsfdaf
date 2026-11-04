@@ -19,6 +19,9 @@ export type AtOption =
   | { type: "reference"; name: string; path: string; display: string; description: string }
   | { type: "file"; path: string; display: string; recent?: boolean }
 
+/** The palette command behind `/workflow`, registered by the session page (use-session-commands.tsx). */
+export const WORKFLOW_COMMAND = "workflow.open"
+
 export interface SlashCommand {
   id: string
   trigger: string
@@ -346,6 +349,19 @@ export const PromptPopover: Component<PromptPopoverProps> = (props) => {
                         </Show>
                       </div>
                       <div class="flex items-center gap-2 shrink-0">
+                        {/* /workflow opens the saved-workflow form (5.I.4); the badge tells it from a typed command. */}
+                        <Show when={cmd.type === "builtin" && cmd.id === WORKFLOW_COMMAND}>
+                          <Show
+                            when={props.newLayoutDesigns}
+                            fallback={
+                              <span class="text-11-regular px-1.5 py-0.5 rounded bg-surface-base text-text-subtle">
+                                {props.t("prompt.slash.badge.workflow")}
+                              </span>
+                            }
+                          >
+                            <Tag>{props.t("prompt.slash.badge.workflow")}</Tag>
+                          </Show>
+                        </Show>
                         <Show when={cmd.type === "custom" && cmd.source !== "command"}>
                           <Show
                             when={props.newLayoutDesigns}

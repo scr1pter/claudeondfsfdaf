@@ -257,7 +257,9 @@ export const dict = {
   "prompt.mode.normal": "Prompt",
   "prompt.mode.shell.exit": "esc to exit",
   "session.child.promptDisabled": "Subagent sessions cannot be prompted.",
-  "session.child.backToParent": "Back to main session.",
+  "session.child.backToParent": "Back to main session",
+  "session.child.notice": "This is a subagent. Talk to it from Background tasks.",
+  "session.child.talk": "Talk to this subagent",
 
   "prompt.example.1": "Fix a TODO in the codebase",
   "prompt.example.2": "What is the tech stack of this repository?",
@@ -290,6 +292,7 @@ export const dict = {
   "prompt.dropzone.label": "Drop images, PDFs, or text files here",
   "prompt.dropzone.file.label": "Drop to @mention file",
   "prompt.slash.badge.custom": "custom",
+  "prompt.slash.badge.workflow": "workflow",
   "prompt.slash.badge.skill": "skill",
   "prompt.slash.badge.mcp": "mcp",
   "prompt.context.active": "active",
@@ -733,6 +736,11 @@ export const dict = {
   "session.followupDock.retry": "Retry",
   "session.followupDock.paused": "Queue paused: {{reason}}",
   "session.followupDock.resume": "Resume",
+  "session.interruptedDock.summary.one": "1 subagent stopped when Vector restarted. Nothing resumes on its own.",
+  "session.interruptedDock.summary.other":
+    "{{count}} subagents stopped when Vector restarted. Nothing resumes on its own.",
+  "session.interruptedDock.resumeAll": "Resume all",
+  "session.interruptedDock.dismiss": "Dismiss",
   "followup.paused.budget": "the last run hit its spend limit",
   "followup.paused.aborted": "the last run was stopped",
   "followup.paused.error": "the last run ended with an error",
@@ -801,6 +809,17 @@ export const dict = {
   "backgroundTasks.resume.partial.title": "Resumed {{resumed}} of {{requested}} helpers",
   "backgroundTasks.resume.partial.description": "The others could not resume. Open each one to see why.",
   "backgroundTasks.resume.failed.title": "Could not resume",
+  "command.backgroundTasks.promote": "Move to background",
+  "command.backgroundTasks.promote.description":
+    "Free the main turn from the subagents it is waiting for. Each one reports on its own when it finishes.",
+  "command.session.stopAll": "Stop including helpers",
+  "command.session.stopAll.description":
+    "Stop the main turn and every helper this conversation started. Partial work is kept.",
+  "command.backgroundTasks.resumeInterrupted": "Resume interrupted helpers",
+  "command.backgroundTasks.resumeInterrupted.description":
+    "Continue the subagents a restart stopped, in the background and within the conversation's limit.",
+  "command.workflow.open": "Run a saved workflow",
+  "command.workflow.open.description": "Pick a saved workflow, check its plan and ceilings, then run it.",
   "backgroundTasks.promote": "Move to background",
   "backgroundTasks.promote.batchUnsupported": "This engine can move a single subagent, not a batch",
   "backgroundTasks.promote.none.title": "Nothing was moved to the background",
@@ -1237,6 +1256,8 @@ export const dict = {
   "settings.permissions.tool.bash.description": "Run shell commands",
   "settings.permissions.tool.task.title": "Task",
   "settings.permissions.tool.task.description": "Launch sub-agents",
+  "settings.permissions.tool.workflow.description":
+    "Run a declarative workflow: many subagents in stages, held to the ceilings below",
   "settings.permissions.tool.skill.title": "Skill",
   "settings.permissions.tool.skill.description": "Load a skill by name",
   "settings.permissions.tool.lsp.title": "LSP",

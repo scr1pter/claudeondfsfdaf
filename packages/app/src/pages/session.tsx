@@ -95,7 +95,7 @@ import { createReviewPanelV2State } from "@/pages/session/v2/review-panel-v2-sta
 import { TerminalPanel } from "@/pages/session/terminal-panel"
 import { useTerminalRequests } from "@/features/agents/terminal-requests"
 import { useComposerCommands } from "@/pages/session/use-composer-commands"
-import { useSessionCommands } from "@/pages/session/use-session-commands"
+import { SessionTaskCommands, useSessionCommands } from "@/pages/session/use-session-commands"
 import { useSessionHashScroll } from "@/pages/session/use-session-hash-scroll"
 import { diffs as list } from "@/utils/diffs"
 import { Persist, persisted } from "@/utils/persist"
@@ -2303,6 +2303,7 @@ export default function Page() {
 
   return (
     <BackgroundTasksProvider sessionID={() => params.id}>
+      <SessionTaskCommands />
       <SessionRouteFrame>
         <SessionHeader />
         <div data-vector-session-split class="flex-1 min-h-0 flex flex-col md:flex-row">
