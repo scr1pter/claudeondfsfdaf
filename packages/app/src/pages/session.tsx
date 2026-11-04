@@ -23,7 +23,7 @@ import { createResizeObserver } from "@solid-primitives/resize-observer"
 import { debounce } from "@solid-primitives/scheduled"
 import { useLocal } from "@/context/local"
 import { FileProvider, selectionFromLines, useFile, type FileSelection, type SelectedLineRange } from "@/context/file"
-import { createStore } from "solid-js/store"
+import { createStore, reconcile } from "solid-js/store"
 import type { SessionReviewLineComment } from "@vectordevai/session-ui/session-review"
 import { ResizeHandle } from "@vectordevai/ui/resize-handle"
 import { Select } from "@vectordevai/ui/select"
@@ -58,9 +58,11 @@ import { useSync } from "@/context/sync"
 import { useTabs } from "@/context/tabs"
 import { TerminalProvider, useTerminal } from "@/context/terminal"
 import { PromptInput } from "@/components/prompt-input"
-import { type FollowupDraft, queueEnabled as followupQueues, sendFollowupDraft } from "@/components/prompt-input/submit"
+import { type FollowupDraft, queueEnabled as followupQueues } from "@/components/prompt-input/submit"
 import { useGlobal } from "@/context/global"
 import { firstSteerNotice, steerSupported } from "@/features/background-tasks/engine-capabilities"
+import { lastRunEnded, previewText } from "@/features/followup/followup-model"
+import { pausedText, useFollowups } from "@/features/followup/followup-queue"
 import {
   createPromptInputController,
   createSessionComposerController,
@@ -95,7 +97,6 @@ import { useTerminalRequests } from "@/features/agents/terminal-requests"
 import { useComposerCommands } from "@/pages/session/use-composer-commands"
 import { useSessionCommands } from "@/pages/session/use-session-commands"
 import { useSessionHashScroll } from "@/pages/session/use-session-hash-scroll"
-import { Identifier } from "@/utils/id"
 import { diffs as list } from "@/utils/diffs"
 import { Persist, persisted } from "@/utils/persist"
 import { WORKSPACE_FILE_SAVED_EVENT, workspaceFileSavedMatchesDirectory } from "@/utils/workspace-file-saved"
@@ -105,11 +106,7 @@ import { legacySessionHref, requireServerKey, sessionHref } from "@/utils/sessio
 import { isInternalSession } from "@/utils/internal-sessions"
 import { createSessionOwnership } from "./session/session-ownership"
 import { createSessionLineage } from "./session/session-lineage"
-import { enqueueSessionFollowup, SESSION_FOLLOWUP_LIMIT } from "./session/followup-queue"
 import { composerTakes, onComposerPrompt } from "@/utils/composer-handoff"
-
-type FollowupItem = FollowupDraft & { id: string }
-const emptyFollowups: FollowupItem[] = []
 
 type ChangeMode = "git" | "branch" | "turn"
 type VcsMode = "git" | "branch"
@@ -686,10 +683,12 @@ export default function Page() {
     deferRender: false,
   })
 
-  const [followup, setFollowup] = persisted(
+  // Before the shared queue (features/followup), each page kept its queues under `followup.v1`. They move into the
+  // shared queue once, and this store stays only for that (5.I.1).
+  const [legacyFollowup, setLegacyFollowup, , legacyFollowupReady] = persisted(
     Persist.serverWorkspace(serverSDK().scope, sdk().directory, "followup", ["followup.v1"]),
     createStore<{
-      items: Record<string, FollowupItem[] | undefined>
+      items: Record<string, unknown[] | undefined>
       failed: Record<string, string | undefined>
       paused: Record<string, boolean | undefined>
     }>({
@@ -1856,47 +1855,28 @@ export default function Page() {
 
   const busy = (sessionID: string) => sync().data.session_working(sessionID)
 
-  const queuedFollowups = createMemo(() => {
-    const id = params.id
-    if (!id) return emptyFollowups
-    return followup.items[id] ?? emptyFollowups
+  // The queue lives in features/followup and drains from there, with this page open or not (5.I.1).
+  const followups = useFollowups()
+  const followupServer = createMemo(() => ServerConnection.key(serverSDK().server))
+  const followupQueue = createMemo(() => (params.id ? followups.queue(followupServer(), params.id) : undefined))
+  const lastRun = createMemo(() => (params.id ? lastRunEnded(sync().data.message[params.id]) : undefined))
+
+  createEffect(() => {
+    if (!legacyFollowupReady() || !followups.loaded()) return
+    const legacy = untrack(() => JSON.parse(JSON.stringify(legacyFollowup)) as { items?: Record<string, unknown> })
+    if (Object.keys(legacy.items ?? {}).length === 0) return
+    const server = untrack(followupServer)
+    void followups
+      .adoptLegacy(server, legacy)
+      .then(() => setLegacyFollowup(reconcile({ items: {}, failed: {}, paused: {} })))
+      .catch(() => undefined)
   })
 
-  const followupMutation = useMutation(() => ({
-    mutationFn: async (input: { sessionID: string; id: string; manual?: boolean }) => {
-      const owner = sessionOwnership.capture()
-      const item = (followup.items[input.sessionID] ?? []).find((entry) => entry.id === input.id)
-      if (!item) return
-
-      if (input.manual) setFollowup("paused", input.sessionID, undefined)
-      setFollowup("failed", input.sessionID, undefined)
-
-      const ok = await sendFollowupDraft({
-        client: sdk().client,
-        sync: sync(),
-        serverSync: serverSync(),
-        draft: item,
-        optimisticBusy: item.sessionDirectory === sdk().directory,
-      }).catch((err) => {
-        setFollowup("failed", input.sessionID, input.id)
-        fail(err)
-        return false
-      })
-      if (!ok) return
-
-      setFollowup("items", input.sessionID, (items) => (items ?? []).filter((entry) => entry.id !== input.id))
-      if (input.manual) owner.run(resumeScroll)
-    },
-  }))
-
-  const followupBusy = (sessionID: string) =>
-    followupMutation.isPending && followupMutation.variables?.sessionID === sessionID
-
-  const sendingFollowup = createMemo(() => {
+  // Without Web Locks, a queue drains only on the page showing its session.
+  createEffect(() => {
     const id = params.id
-    if (!id) return
-    if (!followupBusy(id)) return
-    return followupMutation.variables?.id
+    if (!id || isChildSession()) return
+    onCleanup(followups.showing(followupServer(), id))
   })
 
   // Engines before 1.99.100 cannot take a message mid-run, so on them Enter queues (5.I.1); an unknown version steers.
@@ -1914,40 +1894,20 @@ export default function Page() {
     })
   }
 
-  const followupText = (item: FollowupDraft) => {
-    const text = item.prompt
-      .map((part) => {
-        if (part.type === "image") return `[image:${part.filename}]`
-        if (part.type === "file") return `[file:${part.path}]`
-        if (part.type === "agent") return `@${part.name}`
-        return part.content
-      })
-      .join("")
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .find((line) => !!line)
-
-    if (text) return text
-    return `[${language.t("common.attachment")}]`
-  }
+  const followupText = (item: FollowupDraft) => previewText(item.prompt) ?? `[${language.t("common.attachment")}]`
 
   const queueFollowup = (draft: FollowupDraft) => {
-    const next = enqueueSessionFollowup(followup.items[draft.sessionID], {
-      id: Identifier.ascending("message"),
-      ...draft,
+    const server = followupServer()
+    // Refused from this window's copy first, so the composer keeps a message the queue cannot take.
+    if (followups.refusal(server, draft)) return false
+    void followups.enqueue(server, draft).then((refused) => {
+      if (!refused || params.id !== draft.sessionID || prompt.dirty()) return
+      // Another window filled the queue first, or the storage refused: the message goes back into the composer.
+      prompt.set(
+        draft.prompt,
+        draft.prompt.reduce((length, part) => length + ("content" in part ? part.content.length : 0), 0),
+      )
     })
-    if (!next) {
-      showToast({
-        variant: "error",
-        title: "Message queue is full",
-        description: `Each task can hold up to ${SESSION_FOLLOWUP_LIMIT} queued messages.`,
-      })
-      return false
-    }
-
-    setFollowup("items", draft.sessionID, next)
-    setFollowup("failed", draft.sessionID, undefined)
-    setFollowup("paused", draft.sessionID, undefined)
     if (!steer() && firstSteerNotice(ServerConnection.key(serverSDK().server)))
       showToast({
         title: language.t("prompt.toast.steerUnsupported.title"),
@@ -1956,24 +1916,30 @@ export default function Page() {
     return true
   }
 
-  const followupDock = createMemo(() => queuedFollowups().map((item) => ({ id: item.id, text: followupText(item) })))
+  const followupDock = createMemo(() => {
+    const queue = followupQueue()
+    return (queue?.items ?? []).map((item) => ({
+      id: item.id,
+      text: followupText(item),
+      failed: queue?.failed === item.id,
+    }))
+  })
 
-  const sendFollowup = (sessionID: string, id: string, opts?: { manual?: boolean }) => {
-    if (sync().session.get(sessionID)?.parentID) return Promise.resolve()
-    const item = (followup.items[sessionID] ?? []).find((entry) => entry.id === id)
-    if (!item) return Promise.resolve()
-    if (followupBusy(sessionID)) return Promise.resolve()
-
-    return followupMutation.mutateAsync({ sessionID, id, manual: opts?.manual })
+  // Send now and Retry: the item goes out at once (steering a running turn), and the queue resumes.
+  const sendFollowup = (id: string) => {
+    const sessionID = params.id
+    if (!sessionID) return
+    const owner = sessionOwnership.capture()
+    void followups.send(followupServer(), sessionID, id).then((sent) => {
+      if (sent) owner.run(resumeScroll)
+    })
   }
 
   const removeFollowup = (id: string) => {
     const sessionID = params.id
     if (!sessionID) return
-    if (followupBusy(sessionID)) return
-
-    setFollowup("items", sessionID, (items) => (items ?? []).filter((entry) => entry.id !== id))
-    setFollowup("failed", sessionID, (value) => (value === id ? undefined : value))
+    if (followups.sending(followupServer(), sessionID) === id) return
+    void followups.remove(followupServer(), sessionID, id)
   }
 
   const halt = (sessionID: string) =>
@@ -2061,22 +2027,6 @@ export default function Page() {
 
   const actions = { revert }
 
-  createEffect(() => {
-    const sessionID = params.id
-    if (!sessionID) return
-
-    const item = queuedFollowups()[0]
-    if (!item) return
-    if (followupBusy(sessionID)) return
-    if (followup.failed[sessionID] === item.id) return
-    if (followup.paused[sessionID]) return
-    if (isChildSession()) return
-    if (composer.blocked()) return
-    if (busy(sessionID)) return
-
-    void sendFollowup(sessionID, item.id)
-  })
-
   createResizeObserver(
     () => promptDock,
     ({ height }) => {
@@ -2160,15 +2110,19 @@ export default function Page() {
         collapsed: () => view().todoCollapsed.get(),
         onToggle: () => view().todoCollapsed.set(!view().todoCollapsed.get()),
       },
-      followup: () =>
-        params.id && !isChildSession()
-          ? {
-              items: followupDock(),
-              sending: sendingFollowup(),
-              onSend: (id) => void sendFollowup(params.id!, id, { manual: true }),
-              onDelete: removeFollowup,
-            }
-          : undefined,
+      followup: () => {
+        const sessionID = params.id
+        if (!sessionID || isChildSession()) return undefined
+        const paused = followupQueue()?.paused
+        return {
+          items: followupDock(),
+          sending: followups.sending(followupServer(), sessionID),
+          paused: paused ? pausedText(paused.reason, language.t) : undefined,
+          onSend: sendFollowup,
+          onDelete: removeFollowup,
+          onResume: () => void followups.resume(followupServer(), sessionID, lastRun()?.id),
+        }
+      },
       revert: () =>
         rolled().length > 0
           ? {
@@ -2217,7 +2171,8 @@ export default function Page() {
             onAbort={() => {
               const id = params.id
               if (!id) return
-              setFollowup("paused", id, true)
+              // Stop pauses the session's queue until Resume or a message sent from it (I7).
+              void followups.pause(followupServer(), id, "aborted")
             }}
           />
         }

@@ -10,6 +10,7 @@ import "./settings-v2.css"
 
 import { usePlatform } from "@/context/platform"
 import { observeTelemetryPreference, setTelemetryEnabled, telemetryEnabled } from "@/features/privacy/telemetry"
+import { navigatorLocks } from "@/features/followup/followup-store"
 
 export type SettingsSection = "general" | "notifications" | "accessibility"
 
@@ -227,7 +228,12 @@ export const SettingsGeneralV2: Component<{
         >
           <SelectRow
             title={language.t("settings.general.row.followup.title")}
-            description={language.t("settings.general.row.followup.description")}
+            description={
+              // Without Web Locks (plain-http `vector web`) a queue drains only on the page showing its session (5.I.1).
+              navigatorLocks()
+                ? language.t("settings.general.row.followup.description")
+                : `${language.t("settings.general.row.followup.description")} ${language.t("settings.general.row.followup.pageOnly")}`
+            }
             options={[
               { value: "steer", label: language.t("settings.general.row.followup.option.steer") },
               { value: "queue", label: language.t("settings.general.row.followup.option.queue") },

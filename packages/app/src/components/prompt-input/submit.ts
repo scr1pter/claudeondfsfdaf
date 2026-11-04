@@ -115,6 +115,9 @@ export type FollowupDraft = {
   pasted?: [number, number][]
   // Shell-mode input queued while Vector worked: it runs as a shell command when sent, never as a prompt.
   shell?: true
+  // Set when the draft is queued, always mid-session: it goes out without the desktop's repository file map, even when
+  // the page that sends it has not loaded the session's replies (5.I.1).
+  replied?: true
 }
 
 /**
@@ -353,7 +356,7 @@ export async function sendFollowupDraft(input: FollowupSendInput) {
     // The file map is a starting point for a session's real work. On a later message it would stay in the history and
     // be sent again on every request, while the agent already knows the code it has read; a greeting needs none.
     const history = input.sync.data.message?.[input.draft.sessionID] ?? []
-    const replied = history.some((message) => message.role === "assistant")
+    const replied = input.draft.replied === true || history.some((message) => message.role === "assistant")
     // Deep research reads the repository through its own tools when its scope takes the brain and files.
     const preparation =
       difficulty === "trivial" || replied || agent === RESEARCH

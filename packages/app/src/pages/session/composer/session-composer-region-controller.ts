@@ -8,10 +8,12 @@ import { getSessionHandoff, setSessionHandoff } from "@/pages/session/handoff"
 import type { SessionComposerController } from "./session-composer-state"
 
 export type SessionComposerFollowupDock = {
-  items: { id: string; text: string }[]
+  items: { id: string; text: string; failed?: boolean }[]
   sending?: string
+  paused?: string
   onSend: (id: string) => void
   onDelete: (id: string) => void
+  onResume?: () => void
 }
 
 export type SessionComposerRevertDock = {
