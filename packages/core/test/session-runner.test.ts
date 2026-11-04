@@ -4306,6 +4306,70 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
+  for (const delivery of ["steer", "queue"] as const) {
+    for (const failed of [false, true]) {
+      it.effect(
+        `resets V2 ${failed ? "errors" : "repeats"} for promoted ${delivery} without renewing the run cap`,
+        () =>
+          Effect.gen(function* () {
+            yield* setup
+            currentModel = pricedModel()
+            const session = yield* SessionV2.Service
+            const guard = yield* SpendGuard.Service
+            const registry = yield* ToolRegistry.Service
+            let calls = 0
+            yield* registry.register({
+              recheck: Tool.make({
+                description: "Recheck the work",
+                input: Schema.Struct({}),
+                output: Schema.Struct({ text: Schema.String }),
+                execute: () =>
+                  Effect.gen(function* () {
+                    calls++
+                    if (calls === 2)
+                      yield* session
+                        .prompt({
+                          sessionID,
+                          prompt: Prompt.make({ text: "Recheck the same work" }),
+                          delivery,
+                          resume: false,
+                        })
+                        .pipe(Effect.orDie)
+                    if (failed) return yield* Effect.fail(new Tool.Failure({ message: "same failure" }))
+                    return { text: "same result" }
+                  }),
+              }),
+            })
+            yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Check this work" }), resume: false })
+            const steps = delivery === "steer" ? 5 : 6
+            yield* guard.arm(sessionID, { usd: 1, steps })
+            responses = [
+              toolTurn("before-1", "recheck", {}),
+              toolTurn("before-2", "recheck", {}),
+              ...(delivery === "queue" ? [pricedTurn({ inputTokens: 1, outputTokens: 1 })] : []),
+              toolTurn("after-1", "recheck", {}),
+              toolTurn("after-2", "recheck", {}),
+              pricedTurn({ inputTokens: 1, outputTokens: 1 }),
+            ]
+
+            yield* session.resume(sessionID)
+
+            expect(calls).toBe(4)
+            expect(requests).toHaveLength(steps)
+            expect(userTexts(requests[delivery === "steer" ? 2 : 3]!)).toEqual([
+              "Check this work",
+              "Recheck the same work",
+            ])
+            const snapshot = yield* guard.snapshot(sessionID)
+            expect(snapshot).toMatchObject({ steps, budget: { usd: 1, steps }, stopped: { reason: "steps" } })
+            expect(snapshot?.spentUsd).toBeCloseTo(steps * 0.000012, 8)
+            expect(snapshot?.loops.get(sessionID)?.ring).toHaveLength(2)
+            expect(snapshot?.loops.get(sessionID)?.errorStreak.count).toBe(failed ? 2 : 0)
+          }),
+      )
+    }
+  }
+
   it.effect("stops a guarded run at its dollar cap without another provider request", () =>
     Effect.gen(function* () {
       yield* setup

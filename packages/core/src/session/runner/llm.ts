@@ -253,7 +253,10 @@ const layer = Layer.effect(
           promoted += Number(yield* SessionInput.promoteNextQueued(db, events, session.id))
           promoted += yield* SessionInput.promoteSteers(db, events, session.id, cutoff)
         }
-        if (promoted > 0) currentStep = 1
+        if (promoted > 0) {
+          currentStep = 1
+          yield* guard.resetLoops(session.id)
+        }
       }
       const system =
         initialized ?? (yield* SessionContextEpoch.prepare(db, events, loadSystemContext(agent), session.id))

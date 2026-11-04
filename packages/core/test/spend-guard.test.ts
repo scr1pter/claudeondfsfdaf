@@ -675,6 +675,71 @@ describe("SpendGuard service", () => {
     }),
   )
 
+  it.effect("resets only the prompted Session's loop memory without renewing accounting scopes", () =>
+    Effect.gen(function* () {
+      const guard = yield* SpendGuard.Service
+      yield* guard.begin(root, { usd: 10, steps: 20 })
+      yield* guard.link(child, root, { budget: { usd: 4 }, batch: { id: "reset-batch", budget: { usd: 5 } } })
+      for (const sessionID of [root, child])
+        for (const index of [1, 2])
+          yield* guard.record(sessionID, step({ costUsd: 0.1, tools: [bash(`attempt-${index}`, "same failure")] }))
+      const before = yield* guard.snapshot(root)
+      const scopes = yield* guard.scopes(child)
+
+      yield* guard.resetLoops(child)
+
+      const after = yield* guard.snapshot(root)
+      expect(after && { ...after, loops: before?.loops }).toEqual(before)
+      expect(after?.loops.get(root)).toEqual(before?.loops.get(root))
+      expect(after?.loops.has(child)).toBe(false)
+      expect(yield* guard.scopes(child)).toEqual(scopes)
+      expect((yield* guard.record(child, step({ tools: [bash("attempt-3", "same failure")] }))).state).toBe("ok")
+      expect((yield* guard.record(root, step({ tools: [bash("attempt-3", "same failure")] }))).reason).toBe("loop")
+    }),
+  )
+
+  it.effect("resetting loop memory preserves an existing stop and its counters", () =>
+    Effect.gen(function* () {
+      const guard = yield* SpendGuard.Service
+      yield* guard.arm(root, { usd: 1, steps: 2 })
+      yield* guard.begin(root)
+      yield* guard.record(root, step({ costUsd: 0.2, tools: [bash("attempt", "same failure")] }))
+      yield* guard.record(root, step({ costUsd: 0.2 }))
+      const before = yield* guard.snapshot(root)
+      expect(before?.loops.has(root)).toBe(true)
+
+      yield* guard.resetLoops(root)
+
+      const after = yield* guard.snapshot(root)
+      expect(after && { ...after, loops: before?.loops }).toEqual(before)
+      expect(after?.loops.size).toBe(0)
+      expect(yield* guard.stopped(root)).toEqual(before?.stopped)
+      expect((yield* guard.record(root, step())).reason).toBe("steps")
+    }),
+  )
+
+  it.effect("resets a late linked Session in its launch run without changing a new root run", () =>
+    Effect.gen(function* () {
+      const guard = yield* SpendGuard.Service
+      yield* guard.begin(root)
+      yield* guard.link(child, root)
+      yield* guard.record(child, step({ tools: [bash("recheck")] }))
+      yield* guard.record(child, step({ tools: [bash("recheck")] }))
+      yield* guard.end(root)
+      yield* guard.begin(root)
+      yield* guard.record(root, step({ tools: [bash("recheck")] }))
+      yield* guard.record(root, step({ tools: [bash("recheck")] }))
+      const current = yield* guard.snapshot(root)
+
+      yield* guard.resetLoops(child)
+
+      expect(yield* guard.snapshot(root)).toEqual(current)
+      expect((yield* guard.snapshot(child))?.loops.has(child)).toBe(false)
+      expect((yield* guard.record(child, step({ tools: [bash("recheck")] }))).state).toBe("ok")
+      expect((yield* guard.record(root, step({ tools: [bash("recheck")] }))).reason).toBe("loop")
+    }),
+  )
+
   it.effect("keeps a background child on its launch budget when the parent begins a new run", () =>
     Effect.gen(function* () {
       const guard = yield* SpendGuard.Service

@@ -19,12 +19,14 @@ The runner still awaits local tools and captures file changes before counting
 the step. Existing terminal hosted failures now settle before that accounting
 boundary too. Session ownership, tool validation, permissions, context selection,
 and the single explicit `llm.stream(request)` per provider turn remain in the
-existing runner. SpendGuard thresholds and reset rules are unchanged.
+existing runner. SpendGuard thresholds are unchanged.
 
-A guarded run currently spans a drain. A steer or queued prompt promoted during
-that drain resets the agent's provider-turn allowance but does not clear its
-loop history. The later-prompt control below covers a fresh drain; it does not
-assert a loop reset when input is promoted inside an active drain.
+A separate followup intentionally clears only this Session's loop and error
+history after explicit steer or queued input is durably promoted at a safe turn
+boundary. This lets a user ask for a recheck inside the same drain. The new
+`SpendGuard.resetLoops` operation preserves spend, step counts, armed budgets,
+existing stops, linked accounting scopes, and other Sessions' history. It uses
+the Session's launch-run binding, so a late child cannot reset a newer root run.
 
 ## Offline verification
 
@@ -32,7 +34,7 @@ Run from `packages/core` with Bun 1.3.14:
 
 ```text
 bun test --timeout 30000 test/session-runner.test.ts test/session-runner-tool-events.test.ts test/session-runner-model.test.ts test/session-runner-billed-cost.test.ts test/spend-guard.test.ts
-213 pass, 0 fail, 802 assertions, 5 files
+220 pass, 0 fail, 845 assertions, 5 files
 
 bun typecheck
 exit 0
@@ -58,10 +60,23 @@ Two added publisher controls verify that local display-only structured changes
 do not masquerade as progress, while retained hosted result changes remain
 observable.
 
+The forwarding commit first passed 213 tests with 802 assertions. The promotion
+followup adds four runner controls (steer/queue crossed with success/error) and
+three guard-service controls. After two identical calls, promoted input permits
+two explicit rechecks; all five or six provider turns, including the queued
+idle boundary, still count toward the original step cap and priced spend. The
+guard controls verify unchanged accounting scopes and other Session history,
+preserved stopped state, and late-child launch-run isolation.
+
 As a deliberate negative control, only the forwarding line was temporarily
 restored to `tools: []`. Both stop regressions failed: each observed five provider
 requests where three were required (0 pass, 2 fail, exit 1). Restoring the fixed
 bytes made both pass again (2 pass, 0 fail). The temporary mutation was reverted.
+
+A second negative control temporarily omitted only the promotion-time reset.
+All four promotion regressions failed: the prior loop memory allowed three tool
+executions where four were required (0 pass, 4 fail, exit 1). Restoring the reset
+produced the 220 passing tests reported above. No temporary mutation remains.
 
 These are local scripted tests. The billed-cost suite uses a loopback HTTP
 fixture. No paid API, external model, cloud application, or live benchmark was
