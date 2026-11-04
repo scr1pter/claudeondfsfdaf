@@ -476,11 +476,15 @@ describe("TaskSize helpers", () => {
       expect(TaskSize.asks(text), text).toBe(false)
   })
 
-  test("notes stay short, and only Light leaves out the to-do list", () => {
+  test("notes stay short and Standard tracks substantial milestones rather than routine steps", () => {
     for (const tier of ["light", "standard", "thorough"] as const)
       expect(TaskSize.note(tier, { escalate: true, judge: true })!.length).toBeLessThan(340)
     expect(TaskSize.note("light", { escalate: true, judge: false })).toContain("without a to-do list")
-    expect(TaskSize.note("standard", { escalate: true, judge: false })).toContain("to-do list for multi-step work")
+    expect(TaskSize.note("standard", { escalate: true, judge: false })).toContain(
+      "Track only substantial milestones or a user-requested plan",
+    )
+    expect(TaskSize.note("standard", { escalate: true, judge: false })).not.toContain("multi-step work")
+    expect(TaskSize.note("thorough", { escalate: false, judge: false })).toContain("plan with the to-do list")
     expect(TaskSize.note("chat", { escalate: true, judge: true })).toBeUndefined()
   })
 })

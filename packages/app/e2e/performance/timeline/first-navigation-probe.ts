@@ -11,6 +11,7 @@ export async function measureFirstNavigation(
   input: {
     href: string
     trigger: "click" | "route"
+    clickSelector?: string
     destinationPath: string
     sourceSelector: string
     destinationSelector: string
@@ -19,7 +20,7 @@ export async function measureFirstNavigation(
   },
 ) {
   await page.evaluate(
-    ({ href, trigger, destinationPath, sourceSelector, destinationSelector, contentSelector }) => {
+    ({ href, trigger, clickSelector, destinationPath, sourceSelector, destinationSelector, contentSelector }) => {
       const samples: FirstNavigationSample[] = []
       let started: number | undefined
       let running = true
@@ -52,8 +53,8 @@ export async function measureFirstNavigation(
         sample()
       }
       const onClick = (event: MouseEvent) => {
-        const link = event.target instanceof Element ? event.target.closest("a") : undefined
-        if (link?.getAttribute("href") === href) start()
+        const target = event.target instanceof Element ? event.target.closest(clickSelector ?? "a") : undefined
+        if (target && (clickSelector || target.getAttribute("href") === href)) start()
       }
       const onRoute = () => {
         if (`${location.pathname}${location.search}` === destinationPath) start()
@@ -72,6 +73,7 @@ export async function measureFirstNavigation(
     {
       href: input.href,
       trigger: input.trigger,
+      clickSelector: input.clickSelector,
       destinationPath: input.destinationPath,
       sourceSelector: input.sourceSelector,
       destinationSelector: input.destinationSelector,

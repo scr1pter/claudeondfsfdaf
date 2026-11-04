@@ -3,6 +3,7 @@ import type { Message, Session } from "@vectordevai/sdk/v2/client"
 import { showToast } from "@/utils/toast"
 import { base64Encode } from "@vectordevai/core/util/encode"
 import { Binary } from "@vectordevai/core/util/binary"
+import { getFilename } from "@vectordevai/core/util/path"
 import { ModelPlanStatus } from "@vectordevai/core/model-plan-status"
 import { useNavigate, useParams, useSearchParams } from "@solidjs/router"
 import { batch, type Accessor } from "solid-js"
@@ -24,6 +25,7 @@ import { setCursorPosition } from "./editor-dom"
 import { formatServerError } from "@/utils/server-errors"
 import { ScopedKey } from "@/utils/server-scope"
 import { createPromptSubmissionState } from "./submission-state"
+import { initialSessionTitle } from "./session-title"
 import {
   classifyTaskDifficulty,
   isFreeModelSelection,
@@ -912,7 +914,21 @@ export function createPromptSubmit(input: PromptSubmitInput) {
     let session = input.info()
     if (!session && isNewSession) {
       const created = await client.session
-        .create()
+        .create({
+          // The engine already titles greetings without a model request and may retitle them for the first real task.
+          title:
+            difficulty === "trivial"
+              ? undefined
+              : initialSessionTitle(
+                  currentPrompt.flatMap((part) => (part.type === "text" ? [part.content] : [])).join(""),
+                  [
+                    ...context.flatMap((item) => (item.comment ? [item.comment] : [])),
+                    ...images.map((item) => item.filename),
+                    ...currentPrompt.flatMap((part) => (part.type === "file" ? [getFilename(part.path)] : [])),
+                    ...context.map((item) => getFilename(item.path)),
+                  ],
+                ),
+        })
         .then((x) => x.data ?? undefined)
         .catch((err) => {
           showToast({

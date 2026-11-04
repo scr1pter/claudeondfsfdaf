@@ -913,6 +913,36 @@ it.instance("title generation sends only what the user typed", () =>
   }),
 )
 
+it.instance("a client-named session answers without a separate title request", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(providerCfg)
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const chat = yield* sessions.create({
+      title: "Fix the login redirect",
+      permission: [{ permission: "*", pattern: "*", action: "allow" }],
+    })
+    yield* llm.text("done")
+    yield* prompt.prompt({
+      sessionID: chat.id,
+      agent: "build",
+      model: ref,
+      parts: [
+        { type: "text", text: "Fix the login redirect\nafter the session expires" },
+        { type: "text", text: "ATTACHED FILE CONTENTS", synthetic: true },
+      ],
+    })
+    yield* prompt.awaitTitles()
+    expect((yield* sessions.get(chat.id)).title).toBe("Fix the login redirect")
+    const bodies = (yield* llm.hits).map((hit) => JSON.stringify(hit.body))
+    expect(bodies).toHaveLength(1)
+    expect(bodies[0]).not.toContain("Generate a title")
+    const database = yield* Database.Service
+    const recorded = yield* database.db.select().from(EventTable).where(eq(EventTable.aggregate_id, chat.id)).all()
+    expect(recorded.filter((event) => event.type === `${SessionEvent.AncillaryUsage.type}.2`)).toEqual([])
+  }),
+)
+
 it.instance("a title on a model server on this computer is brief, and one cut off while thinking is not used", () =>
   Effect.gen(function* () {
     const { llm } = yield* useServerConfig(providerCfg)
