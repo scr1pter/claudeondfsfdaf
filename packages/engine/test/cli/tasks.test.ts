@@ -1,9 +1,11 @@
 import { afterEach, expect, test } from "bun:test"
+import { PassThrough } from "node:stream"
 import yargs from "yargs"
 import { createVectorClient } from "@vectordevai/sdk/v2"
 import { ChildEnvironment } from "@vectordevai/core/child-environment"
 import type { Task } from "@vectordevai/schema/task"
 import {
+  confirmAtTerminal,
   executeTaskCommand,
   formatLimits,
   formatShells,
@@ -455,6 +457,23 @@ test("merge and discard refuse under the agent marker before any request, and ne
   ).rejects.toThrow("Nothing was discarded")
   expect(asked).toEqual(["Merge the changes of ses_a into this checkout?"])
   expect(operations(declined)).toEqual([])
+})
+
+test("the terminal confirmation takes y as yes, and Ctrl+C or a closed input as no rather than never answering", async () => {
+  const ask = async (answer: (input: PassThrough) => void) => {
+    const input = Object.assign(new PassThrough(), { isTTY: true })
+    const output = Object.assign(new PassThrough(), { isTTY: true })
+    output.resume()
+    const asked = confirmAtTerminal("Merge the changes of ses_a into this checkout?", { input, output })
+    setTimeout(() => answer(input), 5)
+    return asked
+  }
+  expect(await ask((input) => input.write("y\r"))).toBe(true)
+  expect(await ask((input) => input.write("n\r"))).toBe(false)
+  expect(await ask((input) => input.write("\x03"))).toBe(false)
+  expect(await ask((input) => input.end())).toBe(false)
+  // Without a terminal nothing is asked.
+  expect(await confirmAtTerminal("Merge?", { input: new PassThrough(), output: new PassThrough() })).toBe(false)
 })
 
 test("invalid new selections send no request", async () => {

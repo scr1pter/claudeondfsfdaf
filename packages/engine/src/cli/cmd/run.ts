@@ -460,6 +460,8 @@ export const RunCommand = effectCmd({
     const providerSvc = yield* Provider.Service
     const flags = yield* RuntimeFlags.Service
     const localInstance = yield* InstanceRef
+    const { InstanceStore } = yield* Effect.promise(() => import("@/project/instance-store"))
+    const instances = yield* InstanceStore.Service
     yield* Effect.promise(async () => {
       const rawMessage = [...args.message, ...(args["--"] || [])].join(" ")
       validateWorkflowRunOptions(args, rawMessage)
@@ -1374,9 +1376,25 @@ export const RunCommand = effectCmd({
         if (!interactive) {
           const streamAbort = new AbortController()
           const events = await client.event.subscribe(undefined, { signal: streamAbort.signal })
-          // Ctrl+C at a terminal (5.I.6): the first press stops the main turn, or everything with --stop-helpers, and
-          // says which helpers keep running; a second press within 5 s stops them too and exits 130. SIGTERM and runs
-          // without a terminal keep the default.
+          // Ctrl+C at a terminal (5.I.6): with --attach the first press stops the main turn, or everything with
+          // --stop-helpers, and says which helpers keep running; a second press within 5 s stops them too and exits
+          // 130. SIGTERM and runs without a terminal keep the default.
+          // Without --attach the engine runs here, and the terminal's interrupt reached the processes it started, so
+          // every press stops everything and exits (interrupt.ts). process.exit skips the command's own disposal: the
+          // in-process engine is disposed first, so the background commands and helpers it started end with it (5.H),
+          // bounded like the stop before it. A press while that runs exits at once.
+          let leaving = false
+          const leave = (code: number) => {
+            const local = args.attach ? undefined : localInstance
+            if (leaving || !local) return process.exit(code)
+            leaving = true
+            void Promise.race([
+              Effect.runPromise(instances.dispose(local)),
+              new Promise((resolve) => setTimeout(resolve, 5_000)),
+            ])
+              .catch(() => undefined)
+              .finally(() => process.exit(code))
+          }
           const interrupts = handlesInterrupt({
             interactive,
             workflow: false,
@@ -1386,8 +1404,9 @@ export const RunCommand = effectCmd({
                 client,
                 sessionID,
                 stopHelpers: args["stop-helpers"] === true,
+                inProcess: !args.attach,
                 write: (text) => process.stderr.write(text + EOL),
-                exit: (code) => process.exit(code),
+                exit: leave,
               })
             : undefined
           const completed = loop(client, events)

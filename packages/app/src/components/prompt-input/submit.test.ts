@@ -1759,6 +1759,7 @@ describe("follow-ups while Vector works", () => {
     shouldQueue: (alternate: boolean) => boolean
     mode?: "normal" | "shell"
     queued?: unknown[]
+    foreground?: () => { promote?: () => Promise<boolean> } | undefined
   }) =>
     createPromptSubmit({
       prompt,
@@ -1780,6 +1781,7 @@ describe("follow-ups while Vector works", () => {
         input.queued?.push(draft)
         return true
       },
+      foreground: input.foreground,
       onSubmit: () => undefined,
     })
 
@@ -1904,6 +1906,43 @@ describe("follow-ups while Vector works", () => {
     expect(prompted).toBe(false)
   })
 
+  test("a steer while a foreground subagent holds the turn says it waits for that step, and offers Move to background", async () => {
+    params = { id: "session-1" }
+    promptValue = typed("also update the changelog")
+    const moved: string[] = []
+    const waits = () => toasts.filter((toast) => toast.title === "prompt.toast.steerWaits.title")
+    await submitWhileWorking({
+      shouldQueue: working("steer"),
+      foreground: () => ({ promote: async () => (moved.push("moved"), true) }),
+    }).handleSubmit(event())
+    await settle()
+    expect(sentPrompts).toHaveLength(1)
+    expect(waits()).toHaveLength(1)
+    expect(waits()[0]?.actions?.map((action) => action.label)).toEqual(["prompt.toast.steerWaits.background"])
+    ;(waits()[0]!.actions![0]!.onClick as () => void)()
+    expect(moved).toEqual(["moved"])
+
+    // An engine that cannot move them still says why the message waits, without the button.
+    toasts.length = 0
+    await submitWhileWorking({ shouldQueue: working("steer"), foreground: () => ({}) }).handleSubmit(event())
+    await settle()
+    expect(waits()).toHaveLength(1)
+    expect(waits()[0]?.actions).toBeUndefined()
+
+    // No foreground subagent, or a steer that failed: nothing waits on one.
+    toasts.length = 0
+    await submitWhileWorking({ shouldQueue: working("steer"), foreground: () => undefined }).handleSubmit(event())
+    await settle()
+    promptError = new Error("The engine refused the message")
+    await submitWhileWorking({
+      shouldQueue: working("steer"),
+      foreground: () => ({ promote: async () => true }),
+    }).handleSubmit(event())
+    await settle()
+    expect(waits()).toEqual([])
+    expect(moved).toEqual(["moved"])
+  })
+
   test("a failed steer keeps the session busy, while a failed send from idle still shows it idle", async () => {
     params = { id: "session-1" }
     promptValue = typed("also update the changelog")
@@ -1956,7 +1995,7 @@ describe("the abort scope", () => {
   })
   const stopper = (input: {
     scope: "turn" | "all"
-    helpers?: typeof helpers
+    helpers?: typeof helpers | (() => typeof helpers)
     sessionStop?: boolean
     aborted?: string[]
   }) =>
@@ -1977,7 +2016,7 @@ describe("the abort scope", () => {
       setPopover: () => undefined,
       onAbort: () => input.aborted?.push("paused"),
       stopScope: () => input.scope,
-      helpers: () => input.helpers ?? none,
+      helpers: () => (typeof input.helpers === "function" ? input.helpers() : (input.helpers ?? none)),
       capabilities: () => capabilities(input.sessionStop ?? true),
     })
 
@@ -2008,6 +2047,45 @@ describe("the abort scope", () => {
         input: { sessionID: "session-1", helpers: true, reason: "Stopped with the main agent; partial work was kept." },
       },
     ])
+  })
+
+  test("Stop them too stops the conversation that was stopped, even after the user opened another one", async () => {
+    params = { id: "session-1" }
+    const aborted: string[] = []
+    await stopper({ scope: "turn", helpers, aborted }).abort()
+    const stopAll = toasts.at(-1)?.actions?.[0]?.onClick as () => void
+    stops.length = 0
+    params = { id: "session-2" }
+    stopAll()
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    expect(stops).toEqual([
+      {
+        route: "experimental.session.stop",
+        input: { sessionID: "session-1", helpers: true, reason: "Stopped with the main agent; partial work was kept." },
+      },
+    ])
+    // The open conversation's queue is not paused: only the Stop itself paused the stopped one's.
+    expect(aborted).toEqual(["paused"])
+
+    // An engine without route 1 stops the stopped conversation's helpers, not the ones of the conversation now open.
+    const other = { count: 1, taskIDs: ["ses_other"], sessionIDs: ["ses_other"], untracked: [] }
+    stops.length = 0
+    params = { id: "session-1" }
+    await stopper({
+      scope: "turn",
+      helpers: () => (params.id === "session-1" ? helpers : other),
+      sessionStop: false,
+    }).abort()
+    const older = toasts.at(-1)?.actions?.[0]?.onClick as () => void
+    stops.length = 0
+    params = { id: "session-2" }
+    older()
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    expect(stops.map((stop) => [stop.route, stop.input.sessionID])).toEqual([
+      ["session.abort", "session-1"],
+      ["experimental.task.stop", "session-1"],
+    ])
+    expect(stops[1]!.input.taskIDs).toEqual(["ses_a", "ses_b"])
   })
 
   test("with Stop set to include helpers, the default stop (Esc, Ctrl+G, Stop) never uses the plain abort", async () => {

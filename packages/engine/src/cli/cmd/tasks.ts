@@ -1,3 +1,4 @@
+import { EOL } from "os"
 import { Effect } from "effect"
 import { CodiumUsage } from "@vectordevai/core/codium-usage"
 import {
@@ -354,13 +355,32 @@ export async function assertTaskOwner(action: string) {
   await Effect.runPromise(CliOwnerGate.refuse(action))
 }
 
-async function confirmAtTerminal(question: string) {
-  if (!process.stdin.isTTY || !process.stderr.isTTY) return false
+type TerminalIO = {
+  input: NodeJS.ReadableStream & { isTTY?: boolean }
+  output: NodeJS.WritableStream & { isTTY?: boolean }
+}
+
+/**
+ * Asks "(y/N)" at a terminal. Ctrl+C or a closed input is a no, so the action is refused with its message and exit 1
+ * instead of the process ending with code 0 on a question nobody answered.
+ */
+export async function confirmAtTerminal(
+  question: string,
+  io: TerminalIO = { input: process.stdin, output: process.stderr },
+) {
+  if (!io.input.isTTY || !io.output.isTTY) return false
   const readline = await import("node:readline")
-  const rl = readline.createInterface({ input: process.stdin, output: process.stderr })
-  const answer = await new Promise<string>((resolve) => rl.question(`${question} (y/N) `, resolve))
+  const rl = readline.createInterface({ input: io.input, output: io.output, terminal: true })
+  const answer = await new Promise<string | undefined>((resolve) => {
+    rl.once("close", () => resolve(undefined))
+    rl.once("SIGINT", () => {
+      io.output.write(EOL)
+      resolve(undefined)
+    })
+    rl.question(`${question} (y/N) `, resolve)
+  })
   rl.close()
-  return /^y(es)?$/i.test(answer.trim())
+  return answer !== undefined && /^y(es)?$/i.test(answer.trim())
 }
 
 /** What an action prints when the attached engine is older than the feature it needs (5.I.6). */

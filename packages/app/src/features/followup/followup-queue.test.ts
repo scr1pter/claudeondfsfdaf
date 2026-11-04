@@ -101,15 +101,31 @@ function drainer(input: { store: FollowupStore; env: DrainEnv; locks?: FollowupL
   return { drain, held }
 }
 
-/** sendFollowupDraft against a fake engine, as the app's drainer calls it. */
-function engine(options: { commands?: { name: string }[] } = {}) {
+/**
+ * sendFollowupDraft against a fake engine, as the app's drainer calls it. `received` holds the message IDs the engine
+ * took; with `hang` set, a command or shell input is taken and answered only when its run ends, which is never.
+ */
+function engine(options: { commands?: { name: string }[]; fail?: Error } = {}) {
   const prompts: { messageID?: string; parts: { text?: string; synthetic?: boolean }[] }[] = []
-  const commands: { command: string; arguments: string }[] = []
+  const commands: { command: string; arguments: string; messageID?: string }[] = []
+  const shells: { command: string; messageID?: string }[] = []
+  const received = new Set<string>()
   const known = options.commands ?? []
+  const state = { hang: false }
+  const take = async (messageID: string | undefined) => {
+    if (messageID) received.add(messageID)
+    if (state.hang) await new Promise(() => {})
+    return { data: undefined }
+  }
   const client = {
     session: {
-      promptAsync: async (input: (typeof prompts)[number]) => (prompts.push(input), { data: undefined }),
-      command: async (input: (typeof commands)[number]) => (commands.push(input), { data: undefined }),
+      promptAsync: async (input: (typeof prompts)[number]) => {
+        if (options.fail) throw options.fail
+        prompts.push(input)
+        return take(input.messageID)
+      },
+      command: async (input: (typeof commands)[number]) => (commands.push(input), take(input.messageID)),
+      shell: async (input: (typeof shells)[number]) => (shells.push(input), take(input.messageID)),
     },
   }
   const sync = {
@@ -125,7 +141,19 @@ function engine(options: { commands?: { name: string }[] } = {}) {
     },
     session: { optimistic: { add: () => undefined, remove: () => undefined } },
   }
-  const serverSync = { session: { set: () => undefined } }
+  // session_status as the server sync holds it, and every write to it in order.
+  const statuses: Record<string, string> = {}
+  const writes: string[] = []
+  const serverSync = {
+    session: {
+      data: { session_working: (id: string) => (statuses[id] ?? "idle") !== "idle" },
+      set: (key: string, id: string, value: { type: string }) => {
+        if (key !== "session_status") return
+        statuses[id] = value.type
+        writes.push(value.type)
+      },
+    },
+  }
   type SendInput = Parameters<typeof sendFollowupDraft>[0]
   const send = (entry: FollowupDraft, messageID?: string) =>
     sendFollowupDraft({
@@ -136,7 +164,16 @@ function engine(options: { commands?: { name: string }[] } = {}) {
       messageID,
       optimisticBusy: true,
     })
-  return { prompts, commands, known, send }
+  // What the app's drainer sends with: `sendQueued`, which reads the session's status itself.
+  const sendQueued = (item: FollowupItem, messageID: string) =>
+    queue.sendQueued({
+      client: client as unknown as SendInput["client"],
+      sync: sync as unknown as SendInput["sync"],
+      serverSync: serverSync as unknown as SendInput["serverSync"],
+      item,
+      messageID,
+    })
+  return { prompts, commands, shells, received, known, state, statuses, writes, send, sendQueued }
 }
 
 describe("follow-up drainer", () => {
@@ -243,6 +280,68 @@ describe("follow-up drainer", () => {
     expect(await drain.attempt(SESSION)).toBe("sent")
     expect(fake.commands).toEqual([expect.objectContaining({ command: "review", arguments: "the diff" })])
     expect(fake.prompts).toEqual([])
+  })
+
+  test("a queued /review or shell command goes out under its claim's ID; after a reload, one the engine took is dropped, not run again", async () => {
+    for (const entry of [draft("/review the diff"), draft("git push origin main", { shell: true })]) {
+      const backend = memoryBackend()
+      const fake = engine({ commands: [{ name: "review" }] })
+      const sent = entry.shell ? fake.shells : fake.commands
+      const env = fakeEnv({
+        send: (item, id) => fake.send(item, id),
+        delivered: async (_item, id) => fake.received.has(id),
+      })
+      const first = drainer({ store: createFollowupStore({ backend }), showing: new Set([SESSION]), env })
+      await add(createFollowupStore({ backend }), queue.queuedItem(entry, "item_1"))
+
+      // The engine takes it and answers only when the command's run ends, so the claim stays while it runs.
+      fake.state.hang = true
+      void first.drain.attempt(SESSION)
+      await new Promise((resolve) => setTimeout(resolve, 5))
+      expect(sent).toHaveLength(1)
+      expect(sent[0]?.messageID).toBe("msg_fresh_1")
+      const store = createFollowupStore({ backend })
+      expect((await store.read(SERVER, SESSION))?.items[0]?.claim?.messageID).toBe("msg_fresh_1")
+
+      // The window reloads while it runs. The next drainer finds the message the claim names and sends nothing.
+      first.drain.dispose()
+      fake.state.hang = false
+      const second = drainer({ store, showing: new Set([SESSION]), env })
+      expect(await second.drain.attempt(SESSION)).toBe("delivered")
+      expect(sent).toHaveLength(1)
+      expect(await store.read(SERVER, SESSION)).toBeUndefined()
+      second.drain.dispose()
+    }
+  })
+
+  test("Send now on a working session steers: its failure leaves the session busy, while one from idle shows it idle again", async () => {
+    const fake = engine({ fail: new Error("The engine refused the message") })
+    fake.statuses[SESSION] = "busy"
+    const store = createFollowupStore({ backend: memoryBackend() })
+    const env = fakeEnv({
+      gate: () => ({
+        busy: fake.statuses[SESSION] !== "idle",
+        blocked: false,
+        child: false,
+        lastRun: { ended: "ok" },
+      }),
+      send: (item, id) => fake.sendQueued(item, id),
+    })
+    const { drain } = drainer({ store, showing: new Set([SESSION]), env })
+    await add(store, queue.queuedItem(draft("also update the changelog"), "item_1"))
+    expect(await drain.attempt(SESSION)).toBe("held")
+
+    // The run goes on, so nothing marks the session idle (or busy), and Stop stays on the composer.
+    expect(await drain.send(SESSION, "item_1")).toBe(false)
+    expect(fake.writes).toEqual([])
+    expect(fake.statuses[SESSION]).toBe("busy")
+    expect((await store.read(SERVER, SESSION))?.failed).toBe("item_1")
+
+    // Retry once the run has ended: the session reads busy until the engine answers, and idle after the failure.
+    fake.statuses[SESSION] = "idle"
+    expect(await drain.send(SESSION, "item_1")).toBe(false)
+    expect(fake.writes).toEqual(["busy", "idle"])
+    drain.dispose()
   })
 
   test("a session that no longer exists drops its queue", async () => {

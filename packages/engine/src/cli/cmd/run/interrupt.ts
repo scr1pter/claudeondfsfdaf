@@ -2,6 +2,9 @@
 //
 // `interruptPlan` is the pure rule for one Ctrl+C in a non-interactive run attached to a terminal: the first press stops
 // the main turn (everything with --stop-helpers), and a second press within 5 seconds stops everything and exits 130.
+// Without --attach the engine runs in this process, and the terminal sends its interrupt to the whole process group:
+// the engine's stdio MCP and LSP servers (and on Windows its background commands) get it too. Helpers left running
+// would work without them, so there every press stops everything and exits.
 // The split-footer mode (`--mini`) keeps its own two-press interrupt in footer.ts and only uses the SDK helpers below.
 //
 // Helper counts and stops go through the engine's routes, behind its capability flags. An engine without route 1
@@ -22,8 +25,17 @@ export type InterruptPlan = {
   exit: boolean
 }
 
-/** What one Ctrl+C does. `previous` is the time of the press before it, if any. */
-export function interruptPlan(input: { now: number; previous?: number; stopHelpers: boolean }): InterruptPlan {
+/**
+ * What one Ctrl+C does. `previous` is the time of the press before it, if any. `inProcess`: the engine runs in this
+ * process (no --attach), so the press also reached the processes it started.
+ */
+export function interruptPlan(input: {
+  now: number
+  previous?: number
+  stopHelpers: boolean
+  inProcess?: boolean
+}): InterruptPlan {
+  if (input.inProcess) return { stop: "all", exit: true }
   const again =
     input.previous !== undefined && input.now >= input.previous && input.now - input.previous <= INTERRUPT_WINDOW_MS
   if (again) return { stop: "all", exit: true }
@@ -143,7 +155,10 @@ export function watchInterrupts(input: {
   client: VectorClient
   sessionID: string
   stopHelpers: boolean
+  /** The engine runs in this process (no --attach): every press stops everything and exits. */
+  inProcess?: boolean
   write: (text: string) => void
+  /** Ends the process with `code`; called once the stop has been sent (or has timed out). */
   exit: (code: number) => void
   now?: () => number
   signals?: Signals
@@ -156,7 +171,7 @@ export function watchInterrupts(input: {
     stopSession(input.client, input.sessionID, { helpers, signal: AbortSignal.timeout(STOP_TIMEOUT_MS) })
   const handler = () => {
     const at = now()
-    const plan = interruptPlan({ now: at, previous, stopHelpers: input.stopHelpers })
+    const plan = interruptPlan({ now: at, previous, stopHelpers: input.stopHelpers, inProcess: input.inProcess })
     previous = at
     interrupted = true
     if (plan.exit) {

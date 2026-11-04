@@ -71,8 +71,10 @@ import {
   rememberPaste,
   restorePastes,
   type FollowupDraft,
+  type ForegroundHold,
 } from "./prompt-input/submit"
 import { useBackgroundTasks } from "@/features/background-tasks/use-background-tasks"
+import { isLive } from "@/features/background-tasks/subagent-model"
 import { NO_HELPERS, helperTargets, type HelperTargets, type StopScope } from "@/features/background-tasks/stop-helpers"
 import { watchLearned } from "@/features/memory/learned"
 import { DialogFreeModelTraining } from "./dialog-free-model-training"
@@ -459,6 +461,27 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     const id = props.controls.session.id
     if (!backgroundTasks || !id || backgroundTasks.rootID() !== id) return NO_HELPERS
     return helperTargets(backgroundTasks.cards().flatMap((card) => card.agents))
+  })
+  // The root's subagents running in the foreground hold its turn, so a steer waits for them (5.I.1). Move to background
+  // is offered for the ones this engine can move.
+  const foreground = createMemo<ForegroundHold | undefined>(() => {
+    const id = props.controls.session.id
+    const tasks = backgroundTasks
+    if (!tasks || !id || tasks.rootID() !== id) return undefined
+    const agents = tasks
+      .cards()
+      .flatMap((card) => card.agents)
+      .filter(
+        (agent) =>
+          !agent.background &&
+          isLive(agent.status) &&
+          (!agent.task || (agent.task.source === "subagent" && agent.task.parentSessionID === id)),
+      )
+    if (agents.length === 0) return undefined
+    const movable = tasks.promoteBlocked(agents) ? [] : tasks.promotable(agents)
+    if (movable.length === 0) return {}
+    // A toast clicked after the user opened another conversation moves nothing.
+    return { promote: () => (tasks.rootID() === id ? tasks.promote(movable) : Promise.resolve(false)) }
   })
   const tip = () => {
     if (stopping()) {
@@ -1725,6 +1748,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
       onSubmit: props.onSubmit,
       stopScope: settings.general.stopScope,
       helpers,
+      foreground,
       executionMode,
       researchDepth,
       researchScope,

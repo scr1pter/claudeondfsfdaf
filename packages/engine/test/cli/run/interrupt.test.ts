@@ -98,6 +98,16 @@ describe("interruptPlan", () => {
     expect(INTERRUPT_EXIT_CODE).toBe(130)
   })
 
+  test("without --attach every press stops everything and exits: the terminal's interrupt reached the engine's own processes", () => {
+    for (const stopHelpers of [false, true]) {
+      expect(interruptPlan({ now: 1_000, stopHelpers, inProcess: true })).toEqual({ stop: "all", exit: true })
+      expect(interruptPlan({ now: 2_000, previous: 1_000, stopHelpers, inProcess: true })).toEqual({
+        stop: "all",
+        exit: true,
+      })
+    }
+  })
+
   test("only a non-interactive run at a terminal handles Ctrl+C", () => {
     expect(handlesInterrupt({ interactive: false, workflow: false, tty: true })).toBe(true)
     expect(handlesInterrupt({ interactive: false, workflow: false, tty: false })).toBe(false)
@@ -261,6 +271,29 @@ describe("watchInterrupts", () => {
 
     watch.dispose()
     expect(signals.listenerCount("SIGINT")).toBe(0)
+  })
+
+  test("without --attach the first press stops the main turn and every helper, then exits 130", async () => {
+    const live = engine({ tasks: [info({ id: "ses_a", background: true })] })
+    const signals = new EventEmitter()
+    const written: string[] = []
+    const exits: number[] = []
+    const watch = watchInterrupts({
+      client: live.client,
+      sessionID: "parent",
+      stopHelpers: false,
+      inProcess: true,
+      write: (text) => written.push(text),
+      exit: (code) => exits.push(code),
+      signals,
+    })
+    signals.emit("SIGINT")
+    await settle()
+    expect(live.operations()).toEqual(["POST /experimental/session/parent/stop"])
+    expect(await live.requests[1].json()).toEqual({ helpers: true })
+    expect(exits).toEqual([130])
+    expect(written).toEqual([])
+    watch.dispose()
   })
 
   test("with --stop-helpers the first press stops everything without exiting, and no helpers means no message", async () => {

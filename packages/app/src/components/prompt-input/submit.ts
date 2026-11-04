@@ -243,6 +243,8 @@ export async function sendFollowupDraft(input: FollowupSendInput) {
       }
       await input.client.session.shell({
         sessionID: input.draft.sessionID,
+        // A queued item's claim names this ID, so a reload finds the command it already ran and never runs it again.
+        ...(input.messageID ? { messageID: input.messageID } : {}),
         agent: input.draft.agent,
         model: input.draft.model,
         command: text,
@@ -273,6 +275,8 @@ export async function sendFollowupDraft(input: FollowupSendInput) {
       const pasted = within(input.draft.pasted ?? [], text.length - args.length, args.length)
       await input.client.session.command({
         sessionID: input.draft.sessionID,
+        // As for shell input: the claim's ID, so a reload drops a command the engine already took.
+        ...(input.messageID ? { messageID: input.messageID } : {}),
         command: cmd,
         arguments: args,
         ...(pasted.length ? { pasted } : {}),
@@ -637,6 +641,12 @@ function merge(spans: readonly [number, number][]) {
     }, [])
 }
 
+/**
+ * Foreground subagents holding the open session's turn (5.I.1): a steer joins the run only when they finish their step,
+ * so the composer says so. `promote` is Move to background for them, when the engine can move them.
+ */
+export type ForegroundHold = { promote?: () => Promise<boolean> }
+
 type PromptSubmitInput = {
   prompt: ReturnType<typeof usePrompt>
   info: Accessor<{ id: string } | undefined>
@@ -662,6 +672,8 @@ type PromptSubmitInput = {
   stopScope?: Accessor<StopScope>
   /** The live background helpers under the root session, for "Stop including helpers" and the toast after a Stop. */
   helpers?: Accessor<HelperTargets>
+  /** The root's subagents running in the foreground, which hold the turn; undefined when none run. */
+  foreground?: Accessor<ForegroundHold | undefined>
   /** The engine's capability flags, which pick how helpers are stopped; the server sync's copy by default. */
   capabilities?: Accessor<EngineCapabilities>
   onSubmit?: () => void
@@ -721,14 +733,17 @@ export function createPromptSubmit(input: PromptSubmitInput) {
       })
   }
 
+  // The session a stop is for, read once: a toast's action may run after the user opened another conversation.
+  const stopTarget = (sessionID: string) => ({
+    sessionID,
+    client: sdk().client,
+    capabilities: input.capabilities?.() ?? serverSync().capabilities?.() ?? NO_CAPABILITIES,
+    targets: input.helpers?.() ?? NO_HELPERS,
+  })
+
   // "Stop including helpers": the main turn and every helper this conversation started (5.I.2).
-  const stopAll = async (sessionID: string) => {
-    const result = await stopSession({
-      client: sdk().client,
-      sessionID,
-      capabilities: input.capabilities?.() ?? serverSync().capabilities?.() ?? NO_CAPABILITIES,
-      targets: input.helpers?.() ?? NO_HELPERS,
-    }).catch((error: unknown) => {
+  const stopAll = async (target: ReturnType<typeof stopTarget>) => {
+    const result = await stopSession(target).catch((error: unknown) => {
       showToast({
         variant: "error",
         title: language.t("prompt.toast.stopHelpersFailed.title"),
@@ -759,6 +774,7 @@ export function createPromptSubmit(input: PromptSubmitInput) {
   const abort = async (scope: StopScope = input.stopScope?.() ?? "turn") => {
     const sessionID = params.id
     if (!sessionID) return Promise.resolve()
+    const target = stopTarget(sessionID)
 
     serverSync().session.set("todo", sessionID, [])
 
@@ -772,20 +788,22 @@ export function createPromptSubmit(input: PromptSubmitInput) {
       pending.delete(key)
       return Promise.resolve()
     }
-    if (scope === "all") return stopAll(sessionID)
-    await sdk()
-      .client.session.abort({
+    if (scope === "all") return stopAll(target)
+    await target.client.session
+      .abort({
         sessionID,
       })
       .catch(() => {})
-    const left = input.helpers?.().count ?? 0
+    const left = target.targets.count
     if (left === 0) return
     showToast({
       title: language.t(left === 1 ? "prompt.toast.helpersLeft.title.one" : "prompt.toast.helpersLeft.title.other", {
         count: left,
       }),
       actions: [
-        { label: language.t("prompt.toast.helpersLeft.stopAll"), onClick: () => void abort("all") },
+        // The session this Stop was for, never whichever one is open when the button is clicked. Its queue is already
+        // paused and its todos cleared by the Stop above.
+        { label: language.t("prompt.toast.helpersLeft.stopAll"), onClick: () => void stopAll(target) },
         { label: language.t("prompt.toast.helpersLeft.showTasks"), onClick: () => backgroundTasksPane.open() },
       ],
     })
@@ -1174,6 +1192,8 @@ export function createPromptSubmit(input: PromptSubmitInput) {
     }
     // A failed steer leaves the run it was joining as it was: still busy, never shown as idle.
     const steering = busy && !isNewSession
+    // Read now: the toast after the send is about the subagents that held this turn.
+    const hold = steering ? input.foreground?.() : undefined
 
     // Shell and slash commands bypass sendFollowupDraft, so recheck their destination after asynchronous setup too.
     if (mode === "shell" || text.startsWith("/")) {
@@ -1324,18 +1344,32 @@ export function createPromptSubmit(input: PromptSubmitInput) {
       messageID,
       optimisticBusy: sessionDirectory === projectDirectory && !steering,
       before: waitForWorktree,
-    }).catch((err) => {
-      pending.delete(pendingKey(session.id))
-      if (sessionDirectory === projectDirectory && !steering) {
-        sync().set("session_status", session.id, { type: "idle" })
-      }
-      showToast({
-        title: language.t("prompt.toast.promptSendFailed.title"),
-        description: errorMessage(err),
-      })
-      removeOptimisticMessage()
-      if (restoreInput()) restoreCommentItems(submission.target(), commentItems)
-    })
+    }).then(
+      (sent) => {
+        // A steer joins the run at its next step boundary, which a foreground subagent holds until it finishes its own
+        // step (5.I.1).
+        if (!sent || !hold) return
+        const promote = hold.promote
+        showToast({
+          title: language.t("prompt.toast.steerWaits.title"),
+          ...(promote
+            ? { actions: [{ label: language.t("prompt.toast.steerWaits.background"), onClick: () => void promote() }] }
+            : {}),
+        })
+      },
+      (err) => {
+        pending.delete(pendingKey(session.id))
+        if (sessionDirectory === projectDirectory && !steering) {
+          sync().set("session_status", session.id, { type: "idle" })
+        }
+        showToast({
+          title: language.t("prompt.toast.promptSendFailed.title"),
+          description: errorMessage(err),
+        })
+        removeOptimisticMessage()
+        if (restoreInput()) restoreCommentItems(submission.target(), commentItems)
+      },
+    )
   }
 
   return {

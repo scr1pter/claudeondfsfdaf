@@ -20,7 +20,7 @@ import { useLanguage } from "@/context/language"
 import { usePlatform } from "@/context/platform"
 import { ServerConnection, useServer } from "@/context/server"
 import { ServerSDKProvider, useServerSDK } from "@/context/server-sdk"
-import { ServerSyncProvider, useServerSync } from "@/context/server-sync"
+import { ServerSyncProvider, useServerSync, type ServerSync } from "@/context/server-sync"
 import type { DirectorySync } from "@/context/sync"
 import { sessionPermissionRequest, sessionQuestionRequest } from "@/pages/session/composer/session-request-tree"
 import { Identifier } from "@/utils/id"
@@ -274,6 +274,29 @@ export function createFollowupDrain(input: {
   }
 }
 
+/**
+ * sendFollowupDraft as the drainer sends an item. From an idle session the session reads busy until the engine says
+ * otherwise, so the next item waits for this turn to end. Send now and Retry while the session works steer the running
+ * turn instead: that send marks nothing busy, and when it fails it never shows the running session idle (5.I.1).
+ */
+export function sendQueued(input: {
+  client: Parameters<typeof sendFollowupDraft>[0]["client"]
+  sync: DirectorySync
+  serverSync: ServerSync
+  item: FollowupItem
+  messageID: string
+}) {
+  const steering = input.serverSync.session.data.session_working(input.item.sessionID)
+  return sendFollowupDraft({
+    client: input.client,
+    sync: input.sync,
+    serverSync: input.serverSync,
+    draft: input.item,
+    messageID: input.messageID,
+    optimisticBusy: !steering,
+  })
+}
+
 /** The item a draft becomes when it is queued: always mid-session, so it is marked replied (no repository file map). */
 export function queuedItem(draft: FollowupDraft, id = Identifier.ascending("message")): FollowupItem {
   return { ...draft, replied: true, id }
@@ -513,14 +536,12 @@ function ServerDrain() {
     send(item, messageID) {
       const sync = directoryOf(item.sessionDirectory)
       if (!sync) return Promise.reject(new Error("The session's folder is not loaded"))
-      return sendFollowupDraft({
+      return sendQueued({
         client: serverSDK().createClient({ directory: item.sessionDirectory, throwOnError: true }),
         sync,
         serverSync: serverSync(),
-        draft: item,
+        item,
         messageID,
-        // The session reads busy until the engine says otherwise, so the next item waits for this turn to end.
-        optimisticBusy: true,
       })
     },
     async delivered(item, messageID) {

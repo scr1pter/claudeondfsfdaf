@@ -6,6 +6,7 @@ import { useSync } from "@/context/sync"
 import { usePrompt, type Prompt } from "@/context/prompt"
 import { useLanguage } from "@/context/language"
 import { usePlatform } from "@/context/platform"
+import { useServer } from "@/context/server"
 import { legacySessionHref, requireServerKey, sessionHref } from "@/utils/session-route"
 import { createBackgroundTasks, type BackgroundTasks } from "./background-tasks"
 import { appendTaskQuestion } from "./task-board-model"
@@ -25,6 +26,7 @@ export function BackgroundTasksProvider(props: ParentProps<{ sessionID: Accessor
   const prompt = usePrompt()
   const language = useLanguage()
   const platform = usePlatform()
+  const server = useServer()
   const open = (sessionID: string) =>
     navigate(
       params.serverKey
@@ -58,6 +60,7 @@ export function BackgroundTasksProvider(props: ParentProps<{ sessionID: Accessor
         }),
       ),
     openPath: platform.platform === "desktop" && platform.openPath ? (path) => platform.openPath!(path) : undefined,
+    local: () => server.isLocal(),
     capabilities: () => serverSync().capabilities(),
     t: language.t,
     compose,

@@ -4,6 +4,7 @@ import {
   continueRequest,
   discardRequest,
   mergeRequest,
+  outputFolder,
   ownerOnlyRefusal,
   promoteRequest,
   RESUME_CHUNK,
@@ -120,6 +121,17 @@ function fakeClient(answers: Record<string, (parameters: Record<string, unknown>
   } as unknown as TaskActionsClient
   return { client, calls }
 }
+
+describe("background commands", () => {
+  test("Open output opens the folder that holds the log, since the desktop opens only folders", () => {
+    expect(outputFolder("/Users/me/.local/share/vector/tool-output/shell-shl_1.log")).toBe(
+      "/Users/me/.local/share/vector/tool-output",
+    )
+    expect(outputFolder("C:\\Users\\me\\vector\\tool-output\\shell-shl_1.log")).toBe(
+      "C:\\Users\\me\\vector\\tool-output",
+    )
+  })
+})
 
 describe("move to background", () => {
   test("with taskPromote, route 2 names the tasks and the answer says whether any moved", async () => {

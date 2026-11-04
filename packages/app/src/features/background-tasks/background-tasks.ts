@@ -192,6 +192,12 @@ export async function resumeRunRequest(input: { client: TaskActionsClient; sessi
   return result.data
 }
 
+/** The folder that holds a background command's log, with the server's own separators. */
+export function outputFolder(path: string) {
+  const cut = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"))
+  return cut > 0 ? path.slice(0, cut) : path
+}
+
 export type BackgroundTasks = {
   /** The top of the open session's family: its own id, or its parent's when a subagent is open. */
   rootID: Accessor<string | undefined>
@@ -277,8 +283,10 @@ export type BackgroundTasksInput = {
   /** Changes the root session's composer draft and focuses it, opening the root when a subagent is open. */
   compose?(rootID: string, change: (prompt: Prompt) => Prompt): void
   openDesktop?(task: Task.Info): void
-  /** Opens a local file in its app (desktop only). */
+  /** Opens a local folder in the file manager (desktop only; the app opens folders, never files). */
   openPath?(path: string): Promise<void>
+  /** Whether the server runs on this computer, so the paths it reports are local ones. Nothing is opened otherwise. */
+  local?: Accessor<boolean>
   capabilities?: Accessor<EngineCapabilities>
   /** The language's translator; English when absent. */
   t?: TaskTranslate
@@ -879,9 +887,13 @@ export function createBackgroundTasks(input: BackgroundTasksInput): BackgroundTa
       .catch((error: unknown) => failure(t("backgroundTasks.shells.stopFailed"), error))
     await refreshBoard()
   }
-  const canOpenOutput = (shell: Task.Shell) => !!shell.outputPath && !!input.openPath
+  // The log is a file and the desktop opens only folders, so Open output shows the folder that holds it.
+  const canOpenOutput = (shell: Task.Shell) => !!shell.outputPath && !!input.openPath && input.local?.() === true
   const openOutput = (shell: Task.Shell) => {
-    if (shell.outputPath) void input.openPath?.(shell.outputPath).catch(() => undefined)
+    if (!shell.outputPath || !canOpenOutput(shell)) return
+    void input
+      .openPath?.(outputFolder(shell.outputPath))
+      .catch((error: unknown) => failure(t("backgroundTasks.shells.openFailed"), error))
   }
 
   const watchRun = (runID: Accessor<string | undefined>) => {
