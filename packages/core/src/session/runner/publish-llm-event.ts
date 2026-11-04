@@ -5,6 +5,8 @@ import { ModelV2 } from "../../model"
 import { SessionEvent } from "../event"
 import { SessionMessage } from "../message"
 import { SessionSchema } from "../schema"
+import type { SpendGuard } from "../../spend-guard"
+import { Hash } from "../../util/hash"
 
 type Input = {
   readonly sessionID: SessionSchema.ID
@@ -66,8 +68,11 @@ export const createLLMEventPublisher = (events: EventV2.Interface, input: Input)
       settled: boolean
       providerExecuted: boolean
       providerMetadata?: ProviderMetadata
+      input?: string
+      signature?: SpendGuard.Sig
     }
   >()
+  const calls: string[] = []
   const timestamp = DateTime.now
   let assistantMessageID: SessionMessage.ID | undefined
   let assistantActive = false
@@ -240,6 +245,7 @@ export const createLLMEventPublisher = (events: EventV2.Interface, input: Input)
           ...(tool.providerMetadata === undefined ? {} : { metadata: tool.providerMetadata }),
         },
       })
+      if (tool.input !== undefined) tool.signature = { tool: tool.name, input: tool.input, error: message }
     }
   })
 
@@ -345,11 +351,13 @@ export const createLLMEventPublisher = (events: EventV2.Interface, input: Input)
             ...(event.providerMetadata === undefined ? {} : { metadata: event.providerMetadata }),
           },
         })
+        tool.input = JSON.stringify(record(event.input))
+        calls.push(event.id)
         return
       }
       case "tool-result": {
         const tool = tools.get(event.id)
-        if (!tool?.called) return yield* Effect.die(`Tool result before call: ${event.id}`)
+        if (!tool?.called || tool.input === undefined) return yield* Effect.die(`Tool result before call: ${event.id}`)
         if (tool.name !== event.name)
           return yield* Effect.die(`Tool result name changed for ${event.id}: ${tool.name} -> ${event.name}`)
         if (tool.settled) {
@@ -372,6 +380,7 @@ export const createLLMEventPublisher = (events: EventV2.Interface, input: Input)
             result: event.result,
             provider,
           })
+          tool.signature = { tool: tool.name, input: tool.input, error: result.error.message }
           return
         }
         yield* events.publish(SessionEvent.Tool.Success, {
@@ -384,11 +393,16 @@ export const createLLMEventPublisher = (events: EventV2.Interface, input: Input)
           ...(provider.executed ? { result: event.result } : {}),
           provider,
         })
+        tool.signature = {
+          tool: tool.name,
+          input: tool.input,
+          output: Hash.sha256(JSON.stringify(provider.executed ? event.result : ToolOutput.toResultValue(result))),
+        }
         return
       }
       case "tool-error": {
         const tool = tools.get(event.id)
-        if (!tool?.called) return yield* Effect.die(`Tool error before call: ${event.id}`)
+        if (!tool?.called || tool.input === undefined) return yield* Effect.die(`Tool error before call: ${event.id}`)
         if (tool.name !== event.name)
           return yield* Effect.die(`Tool error name changed for ${event.id}: ${tool.name} -> ${event.name}`)
         if (tool.settled) return yield* Effect.die(`Duplicate tool error: ${event.id}`)
@@ -404,6 +418,7 @@ export const createLLMEventPublisher = (events: EventV2.Interface, input: Input)
             ...(event.providerMetadata === undefined ? {} : { metadata: event.providerMetadata }),
           },
         })
+        tool.signature = { tool: tool.name, input: tool.input, error: event.message }
         return
       }
       case "step-finish":
@@ -434,15 +449,27 @@ export const createLLMEventPublisher = (events: EventV2.Interface, input: Input)
     hasActiveAssistant: () => assistantActive,
     hasAssistantStarted: () => assistantMessageID !== undefined,
     hasProviderError: () => providerFailed,
-    stepSettlement: () =>
-      stepSettlement ??
-      (stepStarted
+    stepSettlement: () => {
+      const settlement =
+        stepSettlement ??
+        (stepStarted
+          ? {
+              finish: "error",
+              tokens: tokens(undefined),
+              incomplete: true,
+            }
+          : undefined)
+      return settlement
         ? {
-            finish: "error",
-            tokens: tokens(undefined),
-            incomplete: true,
+            ...settlement,
+            // Keep provider call order even when eager local calls settle in another order.
+            tools: calls.flatMap((id) => {
+              const signature = tools.get(id)?.signature
+              return signature ? [signature] : []
+            }),
           }
-        : undefined),
+        : undefined
+    },
     startAssistant,
     assistantMessageID: assistantMessageIDForTool,
   }

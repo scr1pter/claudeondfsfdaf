@@ -22,7 +22,7 @@ import { EventTable } from "@vectordevai/core/event/sql"
 import { Project } from "@vectordevai/core/project"
 import { ProjectTable } from "@vectordevai/core/project/sql"
 import { QuestionV2 } from "@vectordevai/core/question"
-import { AbsolutePath } from "@vectordevai/core/schema"
+import { AbsolutePath, RelativePath } from "@vectordevai/core/schema"
 import { SessionV2 } from "@vectordevai/core/session"
 import { Snapshot } from "@vectordevai/core/snapshot"
 import { ContextSnapshotDecodeError } from "@vectordevai/core/session/error"
@@ -228,8 +228,21 @@ const config = Layer.succeed(
       ]),
   }),
 )
+let snapshotVersion: number | undefined
+const snapshots = Layer.succeed(
+  Snapshot.Service,
+  Snapshot.Service.of({
+    capture: () =>
+      Effect.sync(() => (snapshotVersion === undefined ? undefined : Snapshot.ID.make(String(snapshotVersion)))),
+    files: ({ from, to }) => Effect.succeed(from === to ? [] : [RelativePath.make("progress.txt")]),
+    diff: () => Effect.succeed([]),
+    preview: () => Effect.succeed([]),
+    restore: () => Effect.void,
+    checkout: () => Effect.void,
+  }),
+)
 const runnerLayer = AppNodeBuilder.build(SessionRunnerLLM.node, [
-  [Snapshot.node, Snapshot.noopLayer],
+  [Snapshot.node, snapshots],
   [LayerNodePlatform.llmClient, client],
   [SessionRunnerModel.node, models],
   [SystemContextRegistry.node, systemContext],
@@ -287,7 +300,7 @@ const it = testEffect(
       [Location.node, Location.boundNode({ directory: AbsolutePath.make("/project") })],
       [SkillGuidance.node, skillGuidance],
       [ReferenceGuidance.node, referenceGuidance],
-      [Snapshot.node, Snapshot.noopLayer],
+      [Snapshot.node, snapshots],
       [SessionExecution.node, execution],
       [Config.node, config],
     ],
@@ -324,6 +337,7 @@ const setup = Effect.gen(function* () {
   systemLoadHook = Effect.void
   modelResolveHook = Effect.void
   currentModel = model
+  snapshotVersion = undefined
   skillBaselines.clear()
   responses = undefined
   streamFailure = undefined
@@ -4040,6 +4054,257 @@ describe("SessionRunnerLLM", () => {
     }),
     LLMEvent.finish({ reason: input.call ? "tool-calls" : "stop" }),
   ]
+
+  const toolTurn = (id: string, name: string, input: Record<string, unknown>) => [
+    LLMEvent.stepStart({ index: 0 }),
+    LLMEvent.toolCall({ id, name, input }),
+    LLMEvent.stepFinish({ index: 0, reason: "tool-calls", usage: { inputTokens: 1, outputTokens: 1 } }),
+    LLMEvent.finish({ reason: "tool-calls" }),
+  ]
+
+  it.effect("pauses repeated errored V2 calls before another provider request", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const guard = yield* SpendGuard.Service
+      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Repeat this tool" }), resume: false })
+      executions.length = 0
+      responses = [
+        ...[1, 2, 3, 4].map((index) => toolTurn(`invalid-${index}`, "echo", { text: 17 })),
+        pricedTurn({ inputTokens: 1, outputTokens: 1 }),
+      ]
+
+      yield* session.resume(sessionID)
+
+      expect(requests).toHaveLength(3)
+      expect(executions).toEqual([])
+      const snapshot = yield* guard.snapshot(sessionID)
+      expect(snapshot).toMatchObject({ steps: 3, stopped: { reason: "loop" } })
+      expect(snapshot?.stopped?.message).toBe(
+        "Paused a repeating loop: `echo` failed with the same error 3 times in a row.",
+      )
+      expect((yield* session.context(sessionID)).at(-1)).toMatchObject({
+        type: "assistant",
+        finish: "error",
+        content: [{ type: "tool", state: { status: "error", input: { text: 17 } } }],
+      })
+    }),
+  )
+
+  it.effect("pauses identical successful V2 calls with unchanged results", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const guard = yield* SpendGuard.Service
+      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Repeat this tool" }), resume: false })
+      executions.length = 0
+      responses = [
+        ...[1, 2, 3, 4].map((index) => toolTurn(`same-${index}`, "echo", { text: "same" })),
+        pricedTurn({ inputTokens: 1, outputTokens: 1 }),
+      ]
+
+      yield* session.resume(sessionID)
+
+      expect(requests).toHaveLength(3)
+      expect(executions).toEqual(["same", "same", "same"])
+      expect(yield* guard.snapshot(sessionID)).toMatchObject({
+        steps: 3,
+        stopped: {
+          reason: "loop",
+          message:
+            "Paused a repeating loop: `echo` returned the same result for the same input 3 times, with no new results or file changes in between.",
+        },
+      })
+    }),
+  )
+
+  it.effect("keeps useful repeated V2 calls running when the same input returns new results", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const guard = yield* SpendGuard.Service
+      const registry = yield* ToolRegistry.Service
+      let progress = 0
+      yield* registry.register({
+        progress: Tool.make({
+          description: "Observe progress",
+          input: Schema.Struct({}),
+          output: Schema.Struct({ value: Schema.Number }),
+          execute: () => Effect.sync(() => ({ value: ++progress })),
+        }),
+      })
+      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Observe ongoing work" }), resume: false })
+      responses = [
+        toolTurn("repeat-1", "echo", { text: "same" }),
+        toolTurn("progress-1", "progress", {}),
+        toolTurn("repeat-2", "echo", { text: "same" }),
+        toolTurn("progress-2", "progress", {}),
+        toolTurn("repeat-3", "echo", { text: "same" }),
+        toolTurn("progress-3", "progress", {}),
+        pricedTurn({ inputTokens: 1, outputTokens: 1 }),
+      ]
+
+      yield* session.resume(sessionID)
+
+      expect(requests).toHaveLength(7)
+      expect(progress).toBe(3)
+      expect((yield* guard.snapshot(sessionID))?.stopped).toBeUndefined()
+    }),
+  )
+
+  it.effect("resets a V2 error streak after a successful call", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const guard = yield* SpendGuard.Service
+      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Recover from tool errors" }), resume: false })
+      responses = [
+        toolTurn("error-1", "missing", { attempt: 1 }),
+        toolTurn("error-2", "missing", { attempt: 2 }),
+        toolTurn("success", "echo", { text: "recovered" }),
+        toolTurn("error-3", "missing", { attempt: 3 }),
+        toolTurn("error-4", "missing", { attempt: 4 }),
+        pricedTurn({ inputTokens: 1, outputTokens: 1 }),
+      ]
+
+      yield* session.resume(sessionID)
+
+      expect(requests).toHaveLength(6)
+      const snapshot = yield* guard.snapshot(sessionID)
+      expect(snapshot?.stopped).toBeUndefined()
+      expect(snapshot?.loops.get(sessionID)?.errorStreak).toMatchObject({ tool: "missing", count: 2 })
+    }),
+  )
+
+  it.effect("clears V2 repeat memory when a successful tool changes files", () =>
+    Effect.gen(function* () {
+      yield* setup
+      snapshotVersion = 0
+      const session = yield* SessionV2.Service
+      const guard = yield* SpendGuard.Service
+      const registry = yield* ToolRegistry.Service
+      yield* registry.register({
+        write: Tool.make({
+          description: "Write progress",
+          input: Schema.Struct({}),
+          output: Schema.Struct({ text: Schema.String }),
+          execute: () =>
+            Effect.sync(() => {
+              snapshotVersion = (snapshotVersion ?? 0) + 1
+              return { text: "written" }
+            }),
+        }),
+      })
+      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Write progress three times" }), resume: false })
+      responses = [
+        ...[1, 2, 3].map((index) => toolTurn(`write-${index}`, "write", {})),
+        pricedTurn({ inputTokens: 1, outputTokens: 1 }),
+      ]
+
+      yield* session.resume(sessionID)
+
+      expect(requests).toHaveLength(4)
+      expect(snapshotVersion).toBe(3)
+      const snapshot = yield* guard.snapshot(sessionID)
+      expect(snapshot?.stopped).toBeUndefined()
+      expect(snapshot?.loops.get(sessionID)?.ring).toHaveLength(1)
+      expect((yield* session.context(sessionID)).filter((message) => message.type === "assistant")).toMatchObject([
+        { snapshot: { files: ["progress.txt"] } },
+        { snapshot: { files: ["progress.txt"] } },
+        { snapshot: { files: ["progress.txt"] } },
+        { snapshot: { files: [] } },
+      ])
+    }),
+  )
+
+  it.effect("starts fresh V2 loop memory for a later user prompt", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const guard = yield* SpendGuard.Service
+      for (const text of ["Check this work", "Check this work again"]) {
+        yield* session.prompt({ sessionID, prompt: Prompt.make({ text }), resume: false })
+        responses = [
+          toolTurn(`${text}-1`, "echo", { text: "same" }),
+          toolTurn(`${text}-2`, "echo", { text: "same" }),
+          pricedTurn({ inputTokens: 1, outputTokens: 1 }),
+        ]
+        yield* session.resume(sessionID)
+        const snapshot = yield* guard.snapshot(sessionID)
+        expect(snapshot).toMatchObject({ steps: 3 })
+        expect(snapshot?.stopped).toBeUndefined()
+        expect(snapshot?.loops.get(sessionID)?.ring).toHaveLength(2)
+      }
+      expect(requests).toHaveLength(6)
+    }),
+  )
+
+  it.effect("uses V2 call order when eager tools settle in another order", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const guard = yield* SpendGuard.Service
+      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Recover between failures" }), resume: false })
+      executions.length = 0
+      toolExecutionGate = yield* Deferred.make<void>()
+      const streamed = yield* Deferred.make<void>()
+      responseStream = Stream.fromIterable([
+        LLMEvent.stepStart({ index: 0 }),
+        LLMEvent.toolInputStart({ id: "success", name: "echo" }),
+        LLMEvent.toolCall({ id: "error-1", name: "missing", input: { attempt: 1 } }),
+        LLMEvent.toolCall({ id: "success", name: "echo", input: { text: "recovered" } }),
+        LLMEvent.toolCall({ id: "error-2", name: "missing", input: { attempt: 2 } }),
+        LLMEvent.toolCall({ id: "error-3", name: "missing", input: { attempt: 3 } }),
+        LLMEvent.stepFinish({ index: 0, reason: "tool-calls", usage: { inputTokens: 1, outputTokens: 1 } }),
+      ]).pipe(Stream.ensuring(Deferred.succeed(streamed, undefined)))
+      responses = [pricedTurn({ inputTokens: 1, outputTokens: 1 })]
+
+      const running = yield* session.resume(sessionID).pipe(Effect.forkChild)
+      yield* Deferred.await(streamed)
+      yield* Deferred.succeed(toolExecutionGate, undefined)
+      yield* Fiber.join(running)
+
+      expect(requests).toHaveLength(2)
+      expect(executions).toEqual(["recovered"])
+      const snapshot = yield* guard.snapshot(sessionID)
+      expect(snapshot?.stopped).toBeUndefined()
+      expect(snapshot?.loops.get(sessionID)?.ring.map((call) => call.tool)).toEqual([
+        "missing",
+        "echo",
+        "missing",
+        "missing",
+      ])
+      expect(snapshot?.loops.get(sessionID)?.errorStreak).toMatchObject({ tool: "missing", count: 2 })
+    }),
+  )
+
+  it.effect("counts a terminal hosted failure alongside settled local V2 calls", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const guard = yield* SpendGuard.Service
+      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Settle both tool calls" }), resume: false })
+      responses = [
+        [
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.toolCall({ id: "hosted", name: "web_search", input: { query: "effect" }, providerExecuted: true }),
+          LLMEvent.toolCall({ id: "local", name: "echo", input: { text: "settled" } }),
+          LLMEvent.stepFinish({ index: 0, reason: "tool-calls", usage: { inputTokens: 1, outputTokens: 1 } }),
+        ],
+        pricedTurn({ inputTokens: 1, outputTokens: 1 }),
+      ]
+
+      yield* session.resume(sessionID)
+
+      expect(requests).toHaveLength(2)
+      const snapshot = yield* guard.snapshot(sessionID)
+      expect(snapshot?.stopped).toBeUndefined()
+      expect(snapshot?.loops.get(sessionID)?.ring).toMatchObject([
+        { tool: "web_search", input: '{"query":"effect"}', error: "Provider did not return a tool result" },
+        { tool: "echo", input: '{"text":"settled"}', output: expect.any(String) },
+      ])
+    }),
+  )
 
   it.effect("stops a guarded run at its dollar cap without another provider request", () =>
     Effect.gen(function* () {

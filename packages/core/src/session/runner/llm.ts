@@ -64,7 +64,8 @@ import { llmClient } from "../../effect/app-node-platform"
  *   - [x] Stop a guarded run at its spend, step, or unpriced-step limit before the next provider turn.
  *   - [ ] Record compaction model calls with the spend guard; a compaction's cost is not counted against the cap.
  *   - [ ] Apply the user's budget.run config to runs; only a prompt's own budget arms a V2 run today.
- *   - [ ] Bound provider retries and repeated identical tool calls.
+ *   - [ ] Bound provider retries.
+ *   - [x] Bound repeated identical tool calls through the spend guard.
  *
  * - Runtime context assembly
  *   - Track V1 runtime-context parity canonically in `specs/v2/session.md`.
@@ -447,6 +448,10 @@ const layer = Layer.effect(
             const message = failure instanceof Error ? failure.message : String(failure)
             yield* withPublication(publisher.failUnsettledTools(`Tool execution failed: ${message}`))
           }
+          if (publisher.hasProviderError())
+            yield* withPublication(publisher.failUnsettledTools("Tool execution interrupted"))
+          if (stream._tag === "Success" && !publisher.hasProviderError())
+            yield* withPublication(publisher.failUnsettledTools("Provider did not return a tool result", true))
           const verdict = yield* settleStep
           if (verdict?.state === "stopped") {
             // The step's answer is final when nothing follows it; only a cut-short continuation says why on the
@@ -454,10 +459,6 @@ const layer = Layer.effect(
             if (needsContinuation) yield* withPublication(publisher.failAssistant(verdict.message))
             needsContinuation = false
           }
-          if (publisher.hasProviderError())
-            yield* withPublication(publisher.failUnsettledTools("Tool execution interrupted"))
-          if (stream._tag === "Success" && !publisher.hasProviderError())
-            yield* withPublication(publisher.failUnsettledTools("Provider did not return a tool result", true))
           if (stream._tag === "Failure") return yield* Effect.failCause(stream.cause)
           if (settled._tag === "Failure" && Cause.hasInterrupts(settled.cause))
             return yield* Effect.failCause(settled.cause)
