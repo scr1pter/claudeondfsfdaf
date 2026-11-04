@@ -99,7 +99,7 @@ final class Dispatcher {
     sendImage: ((Response, Data) -> Void)? = nil,
     features: @escaping () -> [String: Bool] = { [:] },
     permissions: @escaping () -> [String: JSONValue] = {
-      ["screen": .string("unknown"), "accessibility": .string("unknown"), "postEvent": .string("unknown")]
+      ["screen": .string("notDetermined"), "accessibility": .string("notDetermined"), "postEvent": .string("notDetermined")]
     },
     execute: ((@escaping () -> Void) -> Void)? = nil,
     deliver: ((@escaping () -> Void) -> Void)? = nil,

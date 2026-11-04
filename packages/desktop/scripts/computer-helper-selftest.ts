@@ -1,0 +1,737 @@
+import { spawn } from "node:child_process"
+import { createHash } from "node:crypto"
+import { createReadStream } from "node:fs"
+import {
+  chmod,
+  copyFile,
+  cp,
+  lstat,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readlink,
+  realpath,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises"
+import { tmpdir } from "node:os"
+import path from "node:path"
+import type { Duplex } from "node:stream"
+import { clearTimeout, setTimeout } from "node:timers"
+import timers from "node:timers/promises"
+import { fileURLToPath } from "node:url"
+import { parseArgs } from "node:util"
+import { Schema } from "effect"
+import { Computer } from "@vectordevai/schema/computer"
+import { Hands } from "@vectordevai/schema/hands"
+import {
+  frameReader,
+  readTranscript,
+  replay,
+  type Channel,
+  type Line,
+  type Received,
+} from "../test/computer/transcript"
+import { APP_IDS } from "./channel-ids"
+import { readIdentity } from "./computer-helper-identity"
+
+const packageDir = fileURLToPath(new URL("../", import.meta.url))
+const nativeChecks = new Set([
+  "strict-cli",
+  "partial-frame-round-trip",
+  "malformed-envelope-and-eof",
+  "oversized-frame-refusal",
+  "packaged-bundle-and-signature",
+  "privileged-native-checks",
+])
+export const CORE_TRANSCRIPTS = [
+  "cancel-idle",
+  "eof",
+  "frame-too-large",
+  "heartbeat-loss",
+  "hello",
+  "malformed-json",
+  "permissions",
+  "session",
+  "shutdown",
+  "unsupported-action",
+] as const
+export type PrivilegedMode = "auto" | "require" | "off"
+type Status = "passed" | "failed" | "skipped"
+type Check = { name: string; status: Status; reason?: string }
+export type SelfTestOptions = {
+  platform: "darwin" | "win32"
+  bin: string
+  tests: string
+  fixtures: string
+  privileged: PrivilegedMode
+  report?: string
+}
+export type Command = { executable: string; args: string[]; timeoutMs?: number }
+export type CommandResult = { code: number | null; stdout: string; timedOut?: boolean }
+export type NativeChannel = Channel & { dispose(): Promise<void> }
+export type VerifiedFixture = {
+  open(): Promise<NativeChannel>
+  probe(): Promise<unknown>
+  unverifiedParent(): Promise<boolean>
+  eof(): Promise<boolean>
+  parentDeath(): Promise<boolean>
+  close(): Promise<void>
+}
+export type SelfTestDependencies = {
+  platform?: NodeJS.Platform
+  command?: (command: Command) => Promise<CommandResult>
+  fixture?: (options: SelfTestOptions) => Promise<VerifiedFixture>
+  catalog?: (directory: string) => Promise<readonly string[]>
+  transcript?: (file: string) => Promise<Line[]>
+  files?: (options: SelfTestOptions) => Promise<{ unit: string; target?: string }>
+  wait?: (ms: number) => Promise<void>
+}
+
+export function parseSelfTestArgs(
+  argv: readonly string[],
+  platform: NodeJS.Platform = process.platform,
+  arch = process.arch,
+): SelfTestOptions {
+  const parsed = parseArgs({
+    args: [...argv],
+    strict: true,
+    allowPositionals: false,
+    options: {
+      platform: { type: "string" },
+      bin: { type: "string" },
+      tests: { type: "string" },
+      fixtures: { type: "string" },
+      privileged: { type: "string" },
+      report: { type: "string" },
+    },
+  })
+  if (
+    Object.values(parsed.values).some(
+      (value) => typeof value !== "string" || !value || value.length > 16384 || value.includes("\0"),
+    )
+  )
+    throw new Error("Self-test arguments must be non-empty paths or options.")
+  const target = parsed.values.platform ?? platform
+  if (target !== "darwin" && target !== "win32") throw new Error("Choose darwin or win32 on a matching native host.")
+  const privileged = parsed.values.privileged ?? "off"
+  if (privileged !== "auto" && privileged !== "require" && privileged !== "off")
+    throw new Error("Choose auto, require or off for privileged checks.")
+  const base = path.join(
+    packageDir,
+    "native/out",
+    target,
+    ...(target === "win32" ? [arch === "arm64" ? "arm64" : "x64"] : []),
+  )
+  const identity = readIdentity()
+  const bin =
+    target === "darwin"
+      ? path.join(base, identity.mac.bundle, "Contents/MacOS", identity.mac.executable)
+      : path.join(base, identity.windows.executable)
+  return {
+    platform: target,
+    bin: path.resolve(parsed.values.bin ?? bin),
+    tests: path.resolve(parsed.values.tests ?? path.join(base, "tests")),
+    fixtures: path.resolve(parsed.values.fixtures ?? path.join(packageDir, "test/fixtures/computer-protocol")),
+    privileged,
+    ...(parsed.values.report ? { report: path.resolve(parsed.values.report) } : {}),
+  }
+}
+
+export function classifySelfTestExit(code: number | null, privileged: PrivilegedMode): Status {
+  if (code === 0) return "passed"
+  if (code === 77 && privileged !== "require") return "skipped"
+  return "failed"
+}
+
+/** Even an override fixture directory may not turn grant-free conformance into OS prompts or real input. */
+export function validateCoreTranscript(name: string, lines: readonly Line[]) {
+  const allowed = new Set([
+    "hello",
+    "permissions.status",
+    "session.begin",
+    "session.update",
+    "session.end",
+    "heartbeat",
+    "cancel",
+    "shutdown",
+    "conformance.unknown",
+  ])
+  function safe(value: unknown): boolean {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return true
+    const body = value as Record<string, unknown>
+    if (typeof body.$raw === "string") {
+      try {
+        const parsed: unknown = JSON.parse(body.$raw)
+        // Different JSON parsers may choose different duplicate keys or accept extra syntax. Only forward
+        // a valid raw body when the exact bytes are the canonical representation that was checked here.
+        return JSON.stringify(parsed) === body.$raw && safe(parsed)
+      } catch {
+        return name === "malformed-json" && body.$raw === "{not json"
+      }
+    }
+    if ("$oversize" in body) return body.$oversize === Computer.LIMITS.helperFrameBytes + 1
+    if ("$wait" in body) return typeof body.$wait === "number" && body.$wait >= 0 && body.$wait <= 7000
+    if ("$eof" in body) return body.$eof === true
+    if (body.op === "input.key")
+      return (
+        name === "heartbeat-loss" && body.pid === 99999 && body.repeat === 1 && JSON.stringify(body.combo) === '["a"]'
+      )
+    if (typeof body.op !== "string" || !allowed.has(body.op)) return false
+    if (body.op === "session.begin" || body.op === "session.update") {
+      if (body.approved !== undefined && (!Array.isArray(body.approved) || body.approved.length !== 0)) return false
+    }
+    return true
+  }
+  if (!lines.every((line) => safe(line.send)))
+    throw new Error("The conformance fixture contains a non-isolated operation.")
+}
+
+export async function runComputerHelperSelfTest(options: SelfTestOptions, dependencies: SelfTestDependencies = {}) {
+  if ((dependencies.platform ?? process.platform) !== options.platform)
+    throw new Error("Run native self-tests on the matching platform.")
+  const command = dependencies.command ?? runNativeCommand
+  const wait =
+    dependencies.wait ??
+    (async (ms: number) => {
+      await timers.setTimeout(ms)
+    })
+  const checks: Check[] = [
+    "catalog",
+    "unit",
+    "unprivileged",
+    "packaged",
+    "probe.first",
+    "probe.fresh",
+    "responsible",
+    "unverified-parent",
+    "channel-eof",
+    "parent-death",
+    ...CORE_TRANSCRIPTS.map((name) => `conformance.${name}`),
+    "privileged",
+  ].map((name) => ({ name, status: "skipped", reason: "not-run" }))
+  const set = (name: string, status: Status, reason?: string) => {
+    const check = checks.find((item) => item.name === name)!
+    check.status = status
+    if (reason) check.reason = reason
+    else delete check.reason
+  }
+  const report = () => ({
+    schemaVersion: 1 as const,
+    platform: options.platform,
+    privileged: options.privileged,
+    checks,
+    code: checks.some((check) => check.status === "failed") ? 1 : 0,
+  })
+  try {
+    const catalog = await (dependencies.catalog ?? (async (directory) => readdir(directory, { recursive: true })))(
+      options.fixtures,
+    )
+    const actual = catalog.filter((name) => name.toLowerCase().endsWith(".jsonl")).toSorted()
+    const expected = CORE_TRANSCRIPTS.map((name) => `${name}.jsonl`).toSorted()
+    if (actual.length !== expected.length || actual.some((name, index) => name !== expected[index]))
+      throw new Error("The fixture catalog has unclassified or missing transcripts.")
+    set("catalog", "passed")
+  } catch {
+    set("catalog", "failed", "unclassified-fixture-catalog")
+    for (const check of checks) if (check.reason === "not-run") check.reason = "catalog-unavailable"
+    return report()
+  }
+  async function child(
+    name: string,
+    executable: string,
+    args: string[],
+    mode: PrivilegedMode = name === "privileged" ? options.privileged : "require",
+  ) {
+    try {
+      const result = await command({ executable, args, timeoutMs: name === "privileged" ? 60_000 : 30_000 })
+      const status = result.timedOut ? "failed" : classifySelfTestExit(result.code, mode)
+      set(
+        name,
+        status,
+        result.timedOut
+          ? "deadline"
+          : status === "skipped"
+            ? "native-skip"
+            : status === "failed"
+              ? "native-check-failed"
+              : undefined,
+      )
+      if (name !== "privileged" && result.code === 77) {
+        set(name, "failed", "unexpected-core-skip")
+        return
+      }
+      if (name === "unit") return
+      if (result.code !== 0 && result.code !== 77) return
+      const report: unknown = JSON.parse(result.stdout)
+      if (
+        !report ||
+        typeof report !== "object" ||
+        !("checks" in report) ||
+        !Array.isArray(report.checks) ||
+        report.checks.length === 0 ||
+        report.checks.length > 1000
+      )
+        throw new Error("Invalid native self-test report.")
+      for (const [index, entry] of report.checks.entries()) {
+        if (
+          !entry ||
+          typeof entry !== "object" ||
+          typeof entry.name !== "string" ||
+          !/^[a-z0-9.-]{1,128}$/.test(entry.name) ||
+          typeof entry.ok !== "boolean"
+        )
+          throw new Error("Invalid native self-test check.")
+        const skipped = entry.skipped === true
+        const state = skipped ? (mode === "require" ? "failed" : "skipped") : entry.ok ? "passed" : "failed"
+        checks.push({
+          name: `${name}.${nativeChecks.has(entry.name) ? entry.name : `check-${index + 1}`}`,
+          status: state,
+          ...(skipped ? { reason: "native-skip" } : {}),
+        })
+        if (state === "failed") set(name, "failed", "native-check-failed")
+      }
+    } catch {
+      set(name, "failed", "invalid-native-result")
+    }
+  }
+  let files: { unit: string; target?: string } | undefined
+  try {
+    files = await (dependencies.files ?? nativeTestFiles)(options)
+  } catch {
+    set("unit", "failed", "missing-unit-executable")
+  }
+  if (files) await child("unit", files.unit, [])
+  await child("unprivileged", options.bin, ["--self-test=unprivileged"])
+  await child("packaged", options.bin, ["--self-test=packaged"])
+  let fixture: VerifiedFixture | undefined
+  try {
+    fixture = await (dependencies.fixture ?? createVerifiedFixture)(options)
+    for (const name of ["probe.first", "probe.fresh"]) {
+      try {
+        // Each call starts a separate verified native caller and one-shot helper. Never reuse a prior process's
+        // permission cache, and never include observed grant values or raw probe output in the report.
+        Schema.decodeUnknownSync(
+          Schema.Struct({
+            permissions: Computer.PermissionsStatus,
+            responsible: Schema.Literal(true),
+            elevated: Schema.Literal(false),
+          }),
+        )(await fixture.probe())
+        set(name, "passed")
+      } catch {
+        set(name, "failed", "native-probe-failed")
+      }
+    }
+    const channel = await fixture.open()
+    let hello: Computer.HelperHello
+    try {
+      const result = await replay(
+        channel,
+        [
+          {
+            send: { id: 1, op: "hello", protocol: { min: Computer.PROTOCOL, max: Computer.PROTOCOL } },
+            expect: { id: 1, ok: true, responsible: true },
+          },
+        ],
+        { wait },
+      )
+      hello = Schema.decodeUnknownSync(Computer.HelperHello)(result.messages[0])
+      set("responsible", "passed")
+    } finally {
+      await channel.dispose()
+    }
+    for (const name of CORE_TRANSCRIPTS) {
+      if (name === "heartbeat-loss" && hello.features["input.keyboard"] !== true) {
+        set(`conformance.${name}`, "skipped", "requires-input.keyboard")
+        continue
+      }
+      const channel = await fixture.open()
+      try {
+        const file = path.join(options.fixtures, `${name}.jsonl`)
+        const lines = await (dependencies.transcript ?? (async (file) => readTranscript(file)))(file)
+        validateCoreTranscript(name, lines)
+        await replay(channel, lines, { wait, name: `conformance.${name}` })
+        set(`conformance.${name}`, "passed")
+      } catch {
+        set(`conformance.${name}`, "failed", "transcript-failed")
+      } finally {
+        await channel.dispose()
+      }
+    }
+    for (const [name, run] of [
+      ["unverified-parent", () => fixture!.unverifiedParent()],
+      ["channel-eof", () => fixture!.eof()],
+      ["parent-death", () => fixture!.parentDeath()],
+    ] as const) {
+      try {
+        set(name, (await run()) ? "passed" : "failed", undefined)
+      } catch {
+        set(name, "failed", "lifecycle-check-failed")
+      }
+    }
+  } catch {
+    if (checks.find((item) => item.name === "responsible")?.status !== "passed")
+      set("responsible", "failed", "verified-caller-unavailable")
+    for (const check of checks)
+      if (check.reason === "not-run" && check.name !== "privileged") {
+        check.status = "failed"
+        check.reason = "verified-caller-unavailable"
+      }
+  } finally {
+    try {
+      await fixture?.close()
+    } catch {
+      checks.push({ name: "fixture-cleanup", status: "failed", reason: "cleanup-failed" })
+    }
+  }
+  if (options.privileged === "off") set("privileged", "skipped", "disabled")
+  else if (!files?.target)
+    set("privileged", options.privileged === "require" ? "failed" : "skipped", "isolated-target-unavailable")
+  else await child("privileged", options.bin, ["--self-test=privileged", "--target", files.target])
+  return report()
+}
+
+/** All subprocesses are native executables, bounded, and have bounded captured output. Nothing shells out to Bun. */
+export async function runNativeCommand(command: Command): Promise<CommandResult> {
+  if (/^(?:bun|bun\.exe)$/i.test(path.basename(command.executable)))
+    throw new Error("Nested Bun processes are unavailable.")
+  return new Promise((resolve, reject) => {
+    const child = spawn(command.executable, command.args, {
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+      detached: process.platform !== "win32",
+    })
+    const chunks: Buffer[] = []
+    let bytes = 0
+    let timedOut = false
+    const kill = () => {
+      try {
+        if (process.platform !== "win32" && child.pid) process.kill(-child.pid, "SIGKILL")
+        else child.kill("SIGKILL")
+      } catch {}
+    }
+    const timer = setTimeout(() => {
+      timedOut = true
+      kill()
+    }, command.timeoutMs ?? 30_000)
+    const capture = (chunk: Buffer, keep: boolean) => {
+      bytes += chunk.byteLength
+      if (bytes > 1_048_576) {
+        timedOut = true
+        kill()
+        return
+      }
+      if (keep) chunks.push(chunk)
+    }
+    child.stdout.on("data", (chunk: Buffer) => capture(chunk, true))
+    child.stderr.on("data", (chunk: Buffer) => capture(chunk, false))
+    child.once("error", () => {
+      clearTimeout(timer)
+      reject(new Error("The native check could not start."))
+    })
+    child.once("close", (code) => {
+      clearTimeout(timer)
+      resolve({ code, stdout: Buffer.concat(chunks).toString("utf8"), ...(timedOut ? { timedOut: true } : {}) })
+    })
+  })
+}
+
+async function nativeTestFiles(options: SelfTestOptions) {
+  const supplied = await stat(options.tests)
+  const directory = supplied.isDirectory() ? options.tests : path.dirname(options.tests)
+  const unit = supplied.isDirectory()
+    ? path.join(directory, options.platform === "darwin" ? "VectorComputerTests" : "vector-computer-tests.exe")
+    : options.tests
+  if (!(await stat(unit)).isFile()) throw new Error("Missing native unit executable.")
+  const candidate = path.join(
+    directory,
+    options.platform === "darwin" ? "VectorComputerTestTarget.app" : "computer-test-target.exe",
+  )
+  const target = await realpath(candidate).catch(() => undefined)
+  if (!target || path.dirname(target) !== (await realpath(directory))) return { unit }
+  if (options.platform === "darwin") {
+    const result = await runNativeCommand({
+      executable: "/usr/bin/plutil",
+      args: ["-extract", "CFBundleIdentifier", "raw", "-o", "-", path.join(target, "Contents/Info.plist")],
+    })
+    if (result.code !== 0 || result.stdout.trim() !== "ai.vector.computer.test-target") return { unit }
+  }
+  return { unit, target }
+}
+
+async function bundleDigest(directory: string) {
+  const hash = createHash("sha256")
+  async function visit(relative: string): Promise<void> {
+    const file = path.join(directory, relative)
+    const info = await lstat(file)
+    hash.update(JSON.stringify([relative, info.mode & 0o777]))
+    if (info.isSymbolicLink()) {
+      hash.update(await readlink(file))
+      return
+    }
+    if (info.isDirectory()) {
+      for (const name of (await readdir(file)).sort()) await visit(path.join(relative, name))
+      return
+    }
+    if (!info.isFile()) throw new Error("Unexpected bundle entry.")
+    for await (const chunk of createReadStream(file)) hash.update(chunk)
+  }
+  await visit("")
+  return hash.digest("hex")
+}
+
+async function createVerifiedFixture(options: SelfTestOptions): Promise<VerifiedFixture> {
+  if (options.platform !== "darwin") throw new Error("The Windows verified caller arrives with W2.")
+  const identity = readIdentity()
+  const bundle = path.dirname(path.dirname(path.dirname(await realpath(options.bin))))
+  if (
+    path.basename(bundle) !== identity.mac.bundle ||
+    path.join(bundle, "Contents/MacOS", identity.mac.executable) !== (await realpath(options.bin))
+  )
+    throw new Error("The helper is not in its generated bundle location.")
+  const inspect = await runNativeCommand({
+    executable: "/usr/bin/plutil",
+    args: ["-extract", "CFBundleIdentifier", "raw", "-o", "-", path.join(bundle, "Contents/Info.plist")],
+  })
+  const channel = Hands.CHANNELS.find((channel) => Hands.helperBundleId(APP_IDS[channel]) === inspect.stdout.trim())
+  if (inspect.code !== 0 || !channel) throw new Error("The helper channel is unknown.")
+  const directory = (await stat(options.tests)).isDirectory() ? options.tests : path.dirname(options.tests)
+  const caller = path.join(directory, "VectorComputerCaller")
+  if (!(await stat(caller)).isFile()) throw new Error("The native verified caller is unavailable.")
+  const temporary = await mkdtemp(path.join(tmpdir(), "vector-computer-selftest-"))
+  const app = path.join(temporary, "Vector.app")
+  const destination = path.join(app, "Contents/Helpers", identity.mac.bundle)
+  const executable = path.join(app, "Contents/MacOS/VectorComputerCaller")
+  try {
+    await mkdir(path.dirname(executable), { recursive: true })
+    await mkdir(path.dirname(destination), { recursive: true })
+    await cp(bundle, destination, {
+      recursive: true,
+      preserveTimestamps: true,
+      dereference: false,
+      verbatimSymlinks: true,
+    })
+    await copyFile(caller, executable)
+    await chmod(executable, 0o755)
+    await writeFile(
+      path.join(app, "Contents/Info.plist"),
+      `<?xml version="1.0"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>${APP_IDS[channel]}</string><key>CFBundleExecutable</key><string>VectorComputerCaller</string><key>CFBundlePackageType</key><string>APPL</string></dict></plist>`,
+    )
+    for (const command of [
+      { executable: "/usr/bin/codesign", args: ["--verify", "--strict", "--all-architectures", destination] },
+      {
+        executable: "/usr/bin/codesign",
+        args: [
+          "--force",
+          "--sign",
+          "-",
+          "--options",
+          "runtime",
+          "--timestamp=none",
+          "--identifier",
+          APP_IDS[channel],
+          app,
+        ],
+      },
+      { executable: "/usr/bin/codesign", args: ["--verify", "--strict", app] },
+    ])
+      if ((await runNativeCommand(command)).code !== 0) throw new Error("The fixture signature did not verify.")
+    if ((await bundleDigest(bundle)) !== (await bundleDigest(destination)))
+      throw new Error("Copying or signing changed the shipped helper.")
+    const open = async () => nativeChannel(executable, ["--stdio"])
+    const alive = async (pid: number) => {
+      try {
+        process.kill(pid, 0)
+      } catch (error) {
+        return (error as NodeJS.ErrnoException).code !== "ESRCH"
+      }
+      const result = await runNativeCommand({
+        executable: "/bin/ps",
+        args: ["-p", String(pid), "-o", "stat="],
+        timeoutMs: 500,
+      })
+      return result.code === 0 && !/^\s*Z/.test(result.stdout)
+    }
+    const descendants = async (pid: number) => {
+      const result = await runNativeCommand({ executable: "/usr/bin/pgrep", args: ["-P", String(pid)], timeoutMs: 500 })
+      if (result.code === 1) return []
+      if (result.code !== 0 || !/^\s*(?:\d+\s*)*$/.test(result.stdout))
+        throw new Error("The fixture process tree is unavailable.")
+      return result.stdout.trim().split(/\s+/).filter(Boolean).map(Number)
+    }
+    const lifetime = async (parentDeath: boolean) => {
+      const running = nativeChannel(executable, ["--stdio"])
+      try {
+        await replay(
+          running,
+          [
+            {
+              send: { id: 1, op: "hello", protocol: { min: 1, max: 1 } },
+              expect: { id: 1, ok: true, responsible: true },
+            },
+          ],
+          {
+            wait: async (ms) => {
+              await timers.setTimeout(ms)
+            },
+          },
+        )
+        const supervisors = await descendants(running.pid)
+        if (supervisors.length !== 1) return false
+        const workers = await descendants(supervisors[0]!)
+        if (workers.length !== 1) return false
+        const deadline = performance.now() + 1000
+        if (parentDeath) running.killParent()
+        else running.end()
+        const result = await running.next(1000)
+        if (result?.kind !== "exit" || (!parentDeath && result.code !== 0)) return false
+        while (performance.now() < deadline) {
+          if (!(await alive(supervisors[0]!)) && !(await alive(workers[0]!))) return performance.now() <= deadline
+          await timers.setTimeout(10)
+        }
+        return false
+      } finally {
+        await running.dispose()
+      }
+    }
+    return {
+      open,
+      async probe() {
+        const result = await runNativeCommand({ executable, args: ["--probe", "--json"], timeoutMs: 5000 })
+        if (result.code !== 0 || result.timedOut) throw new Error("The verified native probe failed.")
+        return JSON.parse(result.stdout) as unknown
+      },
+      async unverifiedParent() {
+        const running = nativeChannel(path.join(destination, "Contents/MacOS", identity.mac.executable), [
+          "--stdio",
+          "--parent-pid",
+          String(process.pid),
+        ])
+        try {
+          const result = await running.next(5000)
+          return result?.kind === "exit" && typeof result.code === "number" && result.code > 0
+        } finally {
+          await running.dispose()
+        }
+      },
+      eof: () => lifetime(false),
+      parentDeath: () => lifetime(true),
+      close: () => rm(temporary, { recursive: true, force: true }),
+    }
+  } catch (error) {
+    await rm(temporary, { recursive: true, force: true })
+    throw error
+  }
+}
+
+function nativeChannel(executable: string, args: string[]) {
+  const child = spawn(executable, args, {
+    stdio: ["ignore", "pipe", "pipe", "pipe"],
+    detached: true,
+    windowsHide: true,
+  })
+  const pipe = child.stdio[3] as Duplex
+  const inbox: Received[] = []
+  const listeners = new Set<() => void>()
+  let buffered = 0
+  let error: Error | undefined
+  const wake = () => {
+    for (const notify of listeners) notify()
+  }
+  const kill = () => {
+    try {
+      if (child.pid) process.kill(-child.pid, "SIGKILL")
+    } catch {}
+  }
+  const fail = () => {
+    error = new Error("The native protocol channel failed.")
+    kill()
+    wake()
+  }
+  const reader = frameReader({
+    maxBytes: Computer.LIMITS.helperFrameBytes,
+    onOversize: fail,
+    onFrame(bytes) {
+      buffered += bytes.byteLength
+      if (buffered > 32 * 1024 * 1024 || inbox.length >= 1000) return fail()
+      inbox.push({ kind: "frame", bytes })
+      wake()
+    },
+  })
+  const deadline = setTimeout(fail, 30_000)
+  pipe.on("data", (bytes: Buffer) => reader.push(bytes))
+  pipe.on("error", fail)
+  child.stdout?.on("data", fail)
+  child.stderr?.on("data", () => {})
+  child.once("error", fail)
+  child.once("close", (code) => {
+    clearTimeout(deadline)
+    inbox.push({ kind: "exit", code })
+    wake()
+  })
+  return {
+    get pid() {
+      if (!child.pid) throw new Error("The native caller did not start.")
+      return child.pid
+    },
+    write(bytes: Uint8Array) {
+      if (error) throw error
+      if (pipe.writableLength + bytes.byteLength > 32 * 1024 * 1024) throw new Error("The protocol send queue is full.")
+      pipe.write(bytes)
+    },
+    end: () => pipe.end(),
+    killParent: () => child.kill("SIGKILL"),
+    async next(timeoutMs: number): Promise<Received | undefined> {
+      if (error) throw error
+      if (!inbox.length)
+        await new Promise<void>((resolve) => {
+          const done = () => {
+            clearTimeout(timer)
+            listeners.delete(done)
+            resolve()
+          }
+          const timer = setTimeout(done, timeoutMs)
+          listeners.add(done)
+        })
+      if (error) throw error
+      const item = inbox.shift()
+      if (item?.kind === "frame") buffered -= item.bytes.byteLength
+      return item
+    },
+    async dispose() {
+      clearTimeout(deadline)
+      kill()
+      pipe.destroy()
+      await new Promise<void>((resolve) => {
+        if (child.exitCode !== null || child.signalCode !== null) return resolve()
+        const done = () => {
+          clearTimeout(timer)
+          child.removeListener("close", done)
+          resolve()
+        }
+        const timer = setTimeout(done, 1000)
+        child.once("close", done)
+      })
+    },
+  }
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  try {
+    const options = parseSelfTestArgs(process.argv.slice(2))
+    const result = await runComputerHelperSelfTest(options)
+    const report =
+      options.report ?? path.join(await mkdtemp(path.join(tmpdir(), "vector-computer-report-")), "report.json")
+    await mkdir(path.dirname(report), { recursive: true })
+    await writeFile(report, `${JSON.stringify(result, null, 2)}\n`)
+    process.stdout.write(
+      `Computer helper checks: ${result.checks.filter((check) => check.status === "passed").length} passed, ${result.checks.filter((check) => check.status === "skipped").length} skipped, ${result.checks.filter((check) => check.status === "failed").length} failed. Report: ${report}\n`,
+    )
+    process.exitCode = result.code
+  } catch {
+    process.stderr.write("Computer helper self-test could not run. Check native host, build outputs and arguments.\n")
+    process.exitCode = 2
+  }
+}

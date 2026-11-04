@@ -87,7 +87,7 @@ func runServerTests() throws -> Int {
     try serverExpect(value?["responsible"]?.boolValue == false, "hello reports actual responsibility")
     try serverExpect(value?["helper"]?["version"]?.stringValue == Identity.helperVersion, "hello uses generated identity")
     try serverExpect(value?["features"]?.objectValue == [:], "M1 advertises no unimplemented capability")
-    try serverExpect(value?["permissions"]?["screen"]?.stringValue == "unknown", "M1 never invents an OS grant")
+    try serverExpect(value?["permissions"]?["screen"]?.stringValue == "notDetermined", "M1 leaves OS grants unobserved")
     let incompatible = try fake.request("hello", ["protocol": .object(["min": .integer(2), "max": .integer(2)])])
     try serverExpect(fake.result(incompatible)?["code"]?.stringValue == "helper_incompatible", "incompatible hello refuses")
   }
@@ -105,7 +105,7 @@ func runServerTests() throws -> Int {
     let begin = try fake.begin()
     try serverExpect(fake.result(begin)?["code"]?.stringValue == "responsible_missing", "nonresponsible session refused")
     let status = try fake.request("permissions.status")
-    try serverExpect(fake.result(status)?["accessibility"]?.stringValue == "unknown", "status remains a read without prompting")
+    try serverExpect(fake.result(status)?["accessibility"]?.stringValue == "notDetermined", "status remains a read without prompting")
   }
 
   try test {

@@ -23,7 +23,8 @@
     "package:mac": "bun --no-env-file ./scripts/package-desktop.ts --target=mac",
     "package:win": "bun --no-env-file ./scripts/package-desktop.ts --target=win",
     "package:linux": "bun --no-env-file ./scripts/package-desktop.ts --target=linux",
-    "native:build": "bun ./scripts/build-computer-use-helper.ts",
+    "native:build": "bun --no-env-file ./scripts/build-computer-helper.ts",
+    "native:test": "bun --no-env-file ./scripts/computer-helper-selftest.ts",
     "verify:package": "bun ./scripts/verify-package.ts",
     "verify:brain-worker": "bun ./scripts/verify-brain-worker.ts"
   },
@@ -42,6 +43,7 @@
   },
   "devDependencies": {
     "@actions/artifact": "4.0.0",
+    "@playwright/test": "catalog:",
     "@vectordevai/app": "workspace:*",
     "@vectordevai/core": "workspace:*",
     "@vectordevai/ui": "workspace:*",

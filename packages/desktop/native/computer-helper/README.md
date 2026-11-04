@@ -87,6 +87,14 @@ bun ./test/computer/fake-helper.ts --probe --json
 
 `macos/Sources` contains the M1 native transport, dispatcher, CLI and verified two-stage launcher. `macos/Tests/main.swift` is a separate unit entry and must never be linked with `Sources/main.swift`; C2 supplies the build assembly. Both targets consume `Identity.swift` rendered by `scripts/computer-helper-identity.ts --out <temporary directory>`. Build outputs belong under `native/out/darwin`, not `resources` or this source tree.
 
-Serving uses the inherited duplex fd 3; stdout is reserved for the explicit metadata/probe/self-test modes. The one-shot probe verifies its actual parent, launches the same independent worker and never requests a permission. A direct/unverified worker or absent serving descriptor fails closed. The current skeleton reports unknown grants and no native desktop features; M2–M9 supply those services.
+Serving uses the inherited duplex fd 3; stdout is reserved for the explicit metadata/probe/self-test modes. The one-shot probe verifies its actual parent, launches the same independent worker and never requests a permission. A direct/unverified worker or absent serving descriptor fails closed. The current skeleton reports unobserved `notDetermined` placeholders and no native desktop features; M2–M9 supply those services.
 
 The grant-free unit source covers framing, phase/cancellation deadlines, caller topology and isolated pipe/socket behavior. These are source tests until compiled and run on macOS. Linux syntax parsing does not prove native behavior. C2/C6 own the reproducible compile and actual lifecycle/conformance evidence, and M11 supplies the final native scenario target.
+
+## Build and safe checks
+
+From `packages/desktop` on macOS, `bun run native:build -- --arch arm64` (or `x64`) builds one requested slice; the default `universal` is used in CI. Builds run native compilers serially and write `native/out/darwin/VectorComputer.app`, `computer-helper.json` and the separate `tests/` executables. `bun run native:test -- --privileged off` runs only the grant-free layer through a temporary, verified caller app. It never substitutes an owner application for the dedicated privileged test target. Windows builds require Windows and the W1 project/MSVC environment; another host may verify an explicitly supplied prebuilt tree.
+
+`native:build -- --check-lock` is a native macOS check. The initial lock intentionally contains no measured baseline and fails enforcement. A real native run writes `identity.lock.computed.json`; review/commit that evidence rather than disabling enforcement or filling hashes by hand. Manifests hash final signed shipping bytes. No generated output or helper binary belongs in this source directory.
+
+The self-test report accounts for every classified transcript and distinguishes passed, failed and skipped checks. M1’s absent keyboard implementation leaves its heartbeat-input case explicitly skipped until M5. Required grant-free checks cannot skip, privileged checks default off, and every future/override fixture must satisfy the safe catalog and operation rules.

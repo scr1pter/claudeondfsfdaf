@@ -136,7 +136,7 @@ private func run() throws -> Int32 {
         _ = signal(SIGPIPE, SIG_IGN)
         if probe {
             try printJSON(.object([
-                "permissions": .object(["screen": .string("unknown"), "accessibility": .string("unknown")]),
+                "permissions": .object(["screen": .string("notDetermined"), "accessibility": .string("notDetermined")]),
                 "responsible": .bool(HelperLifecycle.isSelfResponsible()),
                 "elevated": .bool(geteuid() == 0),
             ]))

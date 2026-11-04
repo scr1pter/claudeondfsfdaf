@@ -23,6 +23,8 @@
     "package.json",
     "scripts/channel-ids.ts",
     "scripts/computer-helper-identity.ts",
+    "scripts/build-computer-helper.ts",
+    "scripts/computer-helper-selftest.ts",
     "test/computer/bridge-node.ts",
     "test/computer/helper-node.ts",
     "test/computer/fake-desktop.ts",
