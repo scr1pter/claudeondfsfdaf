@@ -287,7 +287,7 @@ export const SOURCES: readonly Source[] = [
     purpose: "catalog",
     hosts: VECTOR,
     sends: "Your Vector version and sign-in",
-    why: "Lists Vector Codium plans and credits",
+    why: "Lists Vector Codium plans and your plan's status",
     local: "blocked",
     where: ["engine"],
     callSites: ["packages/core/src/model-plans.ts"],
@@ -364,7 +364,8 @@ export const SOURCES: readonly Source[] = [
     id: "support-report",
     purpose: "support",
     hosts: VECTOR,
-    sends: "The report you write and the logs you attach",
+    sends:
+      "The report you write, the logs you attach and, when you are signed in, your Vector sign-in so your plan's tag applies",
     why: "Sends a support report you asked to send",
     local: "allow-with-reason",
     where: ["desktop"],

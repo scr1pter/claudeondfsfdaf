@@ -720,7 +720,7 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
   if (!chosen)
     throw new Error(
       catalog.some((item) => item.providerID === ModelPlanStatus.PROVIDER_ID)
-        ? "Vectorscope runs on Vector Codium only when you choose it, since it spends your credits. Choose a Codium model for your agent, or set model in .vector/review.json."
+        ? "Vectorscope runs on Vector Codium only when you choose it, since it uses your Codium month. Choose a Codium model for your agent, or set model in .vector/review.json."
         : "Connect a provider in Settings → Providers, or configure a local provider and set model in .vector/review.json.",
     )
   // WP A35: on Vector Codium without a triageModel the review runs the plan's review pair, a same-lab pair runs one

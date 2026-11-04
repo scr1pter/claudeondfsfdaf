@@ -150,8 +150,9 @@ export const ownerNotify: PerkProvisioner = {
  * chose to be listed is shown while the plan is active, renewing, paused or ended-but-not-deleted, hidden while it is
  * frozen, and taken off once the membership ended (reconcile marks that when its subscription is deleted). Account
  * deletion (`closing`) erases the record, the entry and the display name (P5). Configured while the owner lists
- * `founding`; keep it in `CODIUM_LISTED_PERKS` after the window closes, since the window's own runtime check already
- * takes it off every page.
+ * `founding`. It is the quick path, not the only one: reconcile (`settleFounding`) converges a founder's entry with the
+ * plan state on every pass and account deletion erases the record itself, so taking `founding` out of
+ * `CODIUM_LISTED_PERKS` after the window closes never leaves a frozen founder on the page.
  */
 export const founding: PerkProvisioner = {
   id: "founding",

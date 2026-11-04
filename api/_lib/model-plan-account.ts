@@ -37,6 +37,7 @@ import {
   FOUNDING,
   foundingCredits,
   foundingToken,
+  readFoundingMember,
   releaseFoundingSlot,
   reserveFoundingSlot,
   settleFounding,
@@ -108,13 +109,15 @@ import {
   MODEL_PLAN_ROOT,
   requireCodiumCheckoutUser,
   subscriptionPlanCredits,
+  subscriptionSoldCredits,
 } from "./model-plan-config.js"
 import { listStripe, modelPlanStripe, stripeMode, stripeRecord } from "./model-plan-stripe.js"
 import { ApiError } from "./http.js"
 import { persistentStore } from "./persistent-store.js"
 
 // `reservation` names the checkout's hold on Vector's OpenRouter balance (see reserveCodiumSale); `founding`, the
-// founding slot a first checkout reserved (WP A31), given back when the checkout expires or is replaced.
+// founding slot a first checkout reserved (WP A31), given back when the checkout expires or is replaced;
+// `foundingRefused`, that founding was offered but no slot was free, so the open session is reused as it is.
 const Checkout = Schema.Struct({
   id: Schema.String,
   plan: Schema.String,
@@ -123,6 +126,7 @@ const Checkout = Schema.Struct({
   reservation: Schema.optional(Schema.String),
   supersedes: Schema.optional(Schema.String),
   founding: Schema.optional(Schema.String),
+  foundingRefused: Schema.optional(Schema.Boolean),
 })
 const Micro = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))
 const CarryOrigin = Schema.Struct({ charge: Schema.String, micro: Micro })
@@ -601,7 +605,8 @@ export async function reconcileModelPlanAccount(
       const governing = standing.governing
       const planned = standing.state !== "none"
       // WP A31: the first paid month carrying a founding token gets its number; an upgrade carries the membership; a
-      // deleted subscription ends it. Accounts without a founding token make no store call here.
+      // deleted subscription ends it; a frozen plan hides a listed founder from the founders page. Accounts without a
+      // founding token make no store call here.
       const founding = planned
         ? await settleFounding(
             {
@@ -610,6 +615,7 @@ export async function reconcileModelPlanAccount(
                 ? { paid: { id: governing.paid.id, token: governing.paid.founding } }
                 : {}),
               ...(governing ? { governing: { id: governing.id, plan: governing.plan } } : {}),
+              frozen: standing.state === "frozen",
               subscriptions: current.flatMap((subscription) =>
                 typeof subscription.id === "string"
                   ? [
@@ -1508,9 +1514,17 @@ export function paidModelPlan(subscription: unknown, accountID: string, now = Da
   const price = stripeRecord(item.price) ? item.price : undefined
   const recurring = price && stripeRecord(price.recurring) ? price.recurring : undefined
   const matched = modelPlanForPrice(price?.id)
+  // The credits sold must fit the plan's price; the founding boost comes on top of them (it may pass the price).
+  const sold = matched ? subscriptionSoldCredits(metadata, matched) : undefined
   const credits = matched ? subscriptionPlanCredits(metadata, matched) : undefined
   const plan =
-    matched && credits !== undefined && Number.isFinite(credits) && credits > 0 && credits <= matched.price
+    matched &&
+    sold !== undefined &&
+    Number.isFinite(sold) &&
+    sold > 0 &&
+    sold <= matched.price &&
+    credits !== undefined &&
+    Number.isFinite(credits)
       ? { id: matched.id, name: matched.name, price: matched.price, credits, priceID: matched.priceID }
       : undefined
   const cents = matched?.cents
@@ -3240,8 +3254,14 @@ export async function modelPlanCheckout(
         throw new ApiError(409, "MODEL_PLAN_EXISTS", "You already have a subscription. Manage it from your account.")
       const riskFields = await checkoutRiskFields(user.id, customer, plan.price, fetcher)
       const requires3DS = "payment_method_options[card][request_three_d_secure]" in riskFields
-      // WP A31: founding is offered only while it is listed, which includes its window being open (codium-perks.ts).
-      const offerFounding = (await listedPerks(fetcher)).has("founding")
+      // WP A31: founding is offered only while it is listed, which includes its window being open (codium-perks.ts),
+      // and only to an account that never had a founding record, since the slot script refuses every other one.
+      const offerFounding =
+        (await listedPerks(fetcher)).has("founding") &&
+        (await readFoundingMember(user.id, fetcher).then(
+          (member) => member === undefined,
+          () => false,
+        ))
       const earlier = account.checkout && account.checkout.expires > now ? account.checkout : undefined
       const pending = earlier
         ? await modelPlanStripe(`checkout/sessions/${encodeURIComponent(earlier.id)}`, {}, fetcher)
@@ -3261,8 +3281,9 @@ export async function modelPlanCheckout(
         pending.metadata.vector_price_id === priceID &&
         pending.metadata.vector_terms_date === CODIUM_TERMS_DATE &&
         pending.metadata.vector_3ds_requested === String(requires3DS) &&
-        // A checkout opened before founding was offered is replaced by one that offers it; one holding a slot is kept.
-        (!offerFounding || validFoundingToken(pending.metadata.vector_founding))
+        // A checkout opened before founding was offered is replaced by one that offers it; one holding a slot is kept,
+        // and so is one whose slot request was refused, until it closes (no new session, and no slot churn, per click).
+        (!offerFounding || validFoundingToken(pending.metadata.vector_founding) || earlier.foundingRefused === true)
       )
         return { url: earlier.url }
       if (pending?.status === "open") await verify()
@@ -3362,6 +3383,7 @@ export async function modelPlanCheckout(
             expires: checkout.expires_at * 1000,
             reservation: idempotency,
             ...(founding ? { founding } : {}),
+            ...(offered && !founding ? { foundingRefused: true } : {}),
           },
         },
         fetcher,

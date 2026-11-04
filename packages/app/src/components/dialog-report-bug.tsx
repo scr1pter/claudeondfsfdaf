@@ -123,7 +123,8 @@ export function DialogReportBug(props: { open: boolean; onClose: () => void; ini
               <h2 class="text-[15px] font-semibold text-white">Report a bug</h2>
               <p class="text-[12.5px] text-white/55">
                 Review the report and remove private details before sending. The desktop app adds its version and
-                platform.
+                platform, and links the report to your Vector account when you are signed in, so your plan's tag
+                applies.
               </p>
               <textarea
                 autofocus

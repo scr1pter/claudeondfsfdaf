@@ -4,7 +4,7 @@ import { CodiumPlan } from "../../packages/schema/src/codium-plan.js"
 import { ApiError } from "./http.js"
 import { CODIUM_RUNTIME_CATALOG_UPDATED, CODIUM_MODELS, CODIUM_TIER_MODELS } from "./codium-catalog.js"
 import { capturedReservationMicro } from "./codium-reservations.js"
-import { foundingConfigProblems, foundingCredits } from "./codium-founding.js"
+import { foundingCredits } from "./codium-founding.js"
 import { codiumLimitProblems, testCreditCapUsd } from "./codium-limits.js"
 import { stripeMode, stripeModeProblems, requireStripeMode, type StripeMode } from "./model-plan-stripe.js"
 
@@ -143,12 +143,24 @@ export function subscriptionPlanCredits(
   metadata: Record<string, unknown> | undefined,
   plan: { id: string; credits: number } | undefined,
 ) {
+  const credits = subscriptionSoldCredits(metadata, plan)
+  return credits === undefined || !plan ? credits : foundingCredits(credits, plan.id, metadata?.vector_founding)
+}
+
+/**
+ * The credits a subscription on `plan` was sold, before any founding boost: what `subscriptionPlanCredits` builds on.
+ * Checks that the credits sold fit the plan's price (at most the price, as `modelPlans()` allows) read this figure, so
+ * a founding subscription's +10% never makes a correctly configured plan look oversold.
+ */
+export function subscriptionSoldCredits(
+  metadata: Record<string, unknown> | undefined,
+  plan: { id: string; credits: number } | undefined,
+) {
   const sold =
     metadata?.vector_plan === undefined || metadata.vector_plan === plan?.id
       ? metadata?.vector_model_credits_usd
       : undefined
-  const credits = sold === undefined ? plan?.credits : Number(sold)
-  return credits === undefined || !plan ? credits : foundingCredits(credits, plan.id, metadata?.vector_founding)
+  return sold === undefined ? plan?.credits : Number(sold)
 }
 
 /** A price a plan used to have, still accepted at exactly its old amount for the subscriptions already on it. */
@@ -423,7 +435,9 @@ export function codiumBillingConfigProblems(): string[] {
     }
   if (process.env.MODEL_PLANS_MIN_CLIENT?.trim() && !CLIENT_VERSION.test(process.env.MODEL_PLANS_MIN_CLIENT.trim()))
     problems.push("MODEL_PLANS_MIN_CLIENT is not a version like 1.99.113")
-  problems.push(...modelPlanLegacyPriceProblems(), ...foundingConfigProblems())
+  // The founding settings are not here: an invalid one closes only the founding window (codium-founding.ts) and is
+  // named on the owner page, so it never turns Codium off for the people already paying for it.
+  problems.push(...modelPlanLegacyPriceProblems())
   problems.push(...codiumLimitProblems())
   return problems
 }

@@ -4,7 +4,7 @@ import { readCodiumFunding } from "./codium-funding.js"
 import { codiumKey } from "./codium-keys.js"
 import { ApiError, handleApiError, json, queryValue, requireMethod, type ApiRequest, type ApiResponse } from "./http.js"
 import { openRouterManagement, readModelPlanAccount, withCodiumLease } from "./model-plan-account.js"
-import { modelPlanForPrice, subscriptionPlanCredits } from "./model-plan-config.js"
+import { modelPlanForPrice, subscriptionPlanCredits, subscriptionSoldCredits } from "./model-plan-config.js"
 import { modelPlanStripe, stripeRecord } from "./model-plan-stripe.js"
 import { persistentStore } from "./persistent-store.js"
 
@@ -168,8 +168,19 @@ function subscriptionSale(charge: Record<string, unknown>, id: string) {
   const line = priced[0]?.line
   const plan = priced[0]?.plan
   const period = line && stripeRecord(line.period) ? line.period : undefined
+  // The credits sold must fit the price; the founding boost (WP A31) comes on top and is what was granted.
+  const sold = subscriptionSoldCredits(metadata, plan)
   const credits = subscriptionPlanCredits(metadata, plan)
-  if (!plan || credits === undefined || !Number.isFinite(credits) || credits <= 0 || credits > plan.price) return
+  if (
+    !plan ||
+    sold === undefined ||
+    !Number.isFinite(sold) ||
+    sold <= 0 ||
+    sold > plan.price ||
+    credits === undefined ||
+    !Number.isFinite(credits)
+  )
+    return
   return {
     kind: "subscription" as const,
     product: plan.id,

@@ -3,10 +3,13 @@ import { RedisClient } from "bun"
 import { handleFoundingMembership } from "../api/account/founding"
 import { handleFoundersPage } from "../api/founders"
 import { codiumKey } from "../api/_lib/codium-keys"
+import { recordCodiumCharge } from "../api/_lib/codium-ledger"
 import {
   assignFoundingNumber,
   eraseFounding,
   FOUNDING,
+  foundingConfigProblems,
+  FOUNDING_SCRIPTS,
   foundersBadge,
   foundersPage,
   foundersSlug,
@@ -39,8 +42,10 @@ import {
   codiumBillingConfigProblems,
   modelPlanForPrice,
   modelPlanLegacyPrices,
+  requireModelPlans,
   subscriptionPlanCredits,
 } from "../api/_lib/model-plan-config"
+import { readOwnerCodiumDashboard } from "../api/_lib/codium-owner-dashboard"
 import { modelPlanBalance } from "../api/_lib/model-plan-status"
 import { handleModelPlanEvent, reconcileModelPlanEvent } from "../api/model-plans/webhook"
 import {
@@ -297,9 +302,52 @@ describe("the founding window", () => {
     expect((await foundingWindow(fakes.fetcher, now)).open).toBe(true)
     process.env.CODIUM_FOUNDING_LIMIT = "many"
     expect(await foundingWindow(fakes.fetcher, now)).toEqual({ open: false })
-    expect(codiumBillingConfigProblems()).toContain("CODIUM_FOUNDING_LIMIT is out of range")
+    expect(foundingConfigProblems()).toEqual(["CODIUM_FOUNDING_LIMIT is out of range"])
     process.env.CODIUM_FOUNDING_LIMIT = "0"
     expect((await foundingWindow(fakes.fetcher, now)).open).toBe(false)
+  })
+
+  test("an invalid founding setting closes only the window: Codium keeps serving the people paying for it", async () => {
+    const fakes = seedFounding()
+    // This file's environment leaves the webhook secret out; with it, Codium's configuration is complete.
+    process.env.STRIPE_MODEL_PLAN_WEBHOOK_SECRET = "whsec_fixture"
+    try {
+      expect(codiumBillingConfigProblems()).toEqual([])
+      for (const [name, value] of [
+        ["CODIUM_FOUNDING_LIMIT", "100001"],
+        ["CODIUM_FOUNDING_DAYS", "1.5"],
+        ["MODEL_PLANS_SALES_OPENED_AT", "15/11/2026"],
+      ] as const) {
+        process.env[name] = value
+        expect(foundingConfigProblems()).toEqual([`${name} is out of range`])
+        // Not a problem that turns Codium off (spec §2: never stop the service while anyone is subscribed).
+        expect(codiumBillingConfigProblems()).toEqual([])
+        expect(() => requireModelPlans()).not.toThrow()
+        expect((await foundingWindow(fakes.fetcher, now)).open).toBe(false)
+        expect(await reserveFoundingSlot(foundingToken(`bad-${name}`), now + DAY, "acct-new", fakes.fetcher, now)).toBe(
+          false,
+        )
+        // A founder already paying keeps the plan, the number and the boost.
+        expect(await reconcileModelPlanAccount(id, fakes.fetcher, now)).toMatchObject({
+          state: "active",
+          founding: { number: 1, boost: true },
+        })
+        // The owner page names the setting, by env name only.
+        const item = (await readOwnerCodiumDashboard(fakes.fetcher, now)).stripeChecklist.find(
+          (entry) => entry.id === "founding",
+        )
+        expect(item).toMatchObject({ status: "unconfigured" })
+        expect(item!.detail).toContain(`${name} is out of range`)
+        expect(item!.detail).not.toContain(value)
+        delete process.env[name]
+      }
+      expect(foundingConfigProblems()).toEqual([])
+      expect(
+        (await readOwnerCodiumDashboard(fakes.fetcher, now)).stripeChecklist.find((entry) => entry.id === "founding"),
+      ).toMatchObject({ status: "confirmed" })
+    } finally {
+      delete process.env.STRIPE_MODEL_PLAN_WEBHOOK_SECRET
+    }
   })
 
   test("founding is listed only while it is offered and its window is open", async () => {
@@ -364,6 +412,46 @@ describe("the founding window", () => {
     await assignFoundingNumber(id, token, "sub_old", fakes.fetcher, now)
     fakes.store.hash(memberKey(id)).set("ended", String(now))
     expect(await reserveFoundingSlot(foundingToken("again"), now + DAY, id, fakes.fetcher, now)).toBe(false)
+  })
+
+  test("a checkout whose founding slot was refused, or a former founder's, is reused rather than replaced per click", async () => {
+    process.env.CODIUM_LISTED_PERKS = "founding"
+    const sessions = (fakes: CodiumFakes) =>
+      fakes.stripe.calls.filter((entry) => entry.method === "POST" && entry.path === "checkout/sessions")
+    const expired = (fakes: CodiumFakes) => fakes.stripe.calls.filter((entry) => entry.path.endsWith("/expire"))
+
+    // The slot request loses a race while founding is still listed: the store refuses the reservation.
+    const raced = seedCustomer()
+    const lost = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const command = (() => {
+        try {
+          return JSON.parse(String(init?.body)) as unknown
+        } catch {
+          return undefined
+        }
+      })()
+      if (Array.isArray(command) && command[0] === "EVAL" && command[1] === FOUNDING_SCRIPTS.RESERVE)
+        return Response.json({ result: 0 })
+      return raced.fetcher(input, init)
+    }) as typeof fetch
+    const first = await modelPlanCheckout(user, "vector-10", lost, now)
+    expect(await modelPlanCheckout(user, "vector-10", lost, now)).toEqual(first)
+    expect(sessions(raced)).toHaveLength(1)
+    expect(sessions(raced)[0]!.form!.has("subscription_data[metadata][vector_founding]")).toBe(false)
+    expect(expired(raced)).toEqual([])
+    expect((await readModelPlanAccount(id, raced.fetcher))!.checkout).toMatchObject({ foundingRefused: true })
+
+    // A former founder is never offered founding, so the open checkout is kept and no slot is asked for.
+    const former = seedCustomer()
+    await assignFoundingNumber(id, token, "sub_old", former.fetcher, now)
+    former.store.hash(memberKey(id)).set("ended", String(now))
+    const again = await modelPlanCheckout(user, "vector-10", former.fetcher, now)
+    expect(await modelPlanCheckout(user, "vector-10", former.fetcher, now)).toEqual(again)
+    expect(sessions(former)).toHaveLength(1)
+    expect(sessions(former)[0]!.form!.has("subscription_data[metadata][vector_founding]")).toBe(false)
+    expect(expired(former)).toEqual([])
+    expect(former.store.zset(codiumKey("founding", "reserved")).size).toBe(0)
+    expect(former.store.commands.some((command) => command[1] === FOUNDING_SCRIPTS.RESERVE)).toBe(false)
   })
 })
 
@@ -464,6 +552,28 @@ describe("what a founding member keeps", () => {
     expect(codiumBillingConfigProblems()).toContain(
       "STRIPE_MODEL_PLAN_LEGACY_PRICES_10 repeats a price id that is already configured",
     )
+  })
+
+  test("credits sold up to the price stay paid and in the ledger once the founding boost passes the price", async () => {
+    const fakes = seedFounding()
+    // 9.50 of credits on the $10 plan is within the price; with +10% the key holds 10.45.
+    Object.assign(fakes.stripe.subscription("sub_active")!.metadata as Record<string, string>, {
+      vector_model_credits_usd: "9.5",
+    })
+    const snapshot = await reconcileModelPlanAccount(id, fakes.fetcher, now)
+    expect(snapshot).toMatchObject({ state: "active", plan: "vector-10", founding: { number: 1, boost: true } })
+    expect((await key(fakes)).creditsMicro).toBe(10_450_000)
+    expect(await recordCodiumCharge(id, "ch_active", fakes.fetcher)).toMatchObject({
+      kind: "subscription",
+      product: "vector-10",
+      granted: 1045,
+    })
+    // Credits sold above the price are still refused, boost or not.
+    Object.assign(fakes.stripe.subscription("sub_active")!.metadata as Record<string, string>, {
+      vector_model_credits_usd: "10.5",
+    })
+    expect((await reconcileModelPlanAccount(id, fakes.fetcher, now)).state).not.toBe("active")
+    expect(await recordCodiumCharge(id, "ch_active", fakes.fetcher)).toBeUndefined()
   })
 
   test("a subscription on its legacy price stays active after the plan's price id moves on", async () => {
@@ -648,6 +758,30 @@ describe("the founders page", () => {
     expect(listed()).toBe(false)
     expect(await readFoundingMember("acct-1", fakes.fetcher)).toBeUndefined()
     expect(fakes.store.hash(codiumKey("founding", "names")).has("acct-1")).toBe(false)
+  })
+
+  test("with founding no longer listed, reconcile still hides a frozen founder and shows them again after a won dispute", async () => {
+    // The window closed and the owner took `founding` out of CODIUM_LISTED_PERKS: the provisioner is not configured.
+    expect(foundingProvisioner.configured()).toBe(false)
+    const fakes = seedFounding()
+    await reconcileModelPlanAccount(id, fakes.fetcher, now)
+    await setFoundersListing(id, { listed: true, name: "Ada" }, false, fakes.fetcher)
+    const listed = () => fakes.store.zset(codiumKey("founding", "listed")).has(id)
+    expect(listed()).toBe(true)
+    fakes.stripe.charge("ch_active")!.disputed = true
+    fakes.stripe.load({ disputes: [{ id: "dp_ch_active", charge: "ch_active", status: "needs_response" }] })
+    const hint = { kind: "dispute" as const, charge: "ch_active" }
+    expect((await reconcileModelPlanAccount(id, fakes.fetcher, now, { hint })).state).toBe("frozen")
+    expect(listed()).toBe(false)
+    expect((await foundersPage(await foundersSlug(fakes.fetcher), fakes.fetcher)).founders).toEqual([])
+    // The choice is kept, so the entry comes back once the dispute is won.
+    expect(await readFoundingMember(id, fakes.fetcher)).toMatchObject({ number: 1, listed: true })
+    fakes.stripe.objects.disputes.get("dp_ch_active")!.status = "won"
+    expect((await reconcileModelPlanAccount(id, fakes.fetcher, now)).state).toBe("active")
+    expect(listed()).toBe(true)
+    expect((await foundersPage(await foundersSlug(fakes.fetcher), fakes.fetcher)).founders).toEqual([
+      { number: 1, name: "Ada" },
+    ])
   })
 
   test("account deletion erases the founding record, the page entry and the name (P5)", async () => {

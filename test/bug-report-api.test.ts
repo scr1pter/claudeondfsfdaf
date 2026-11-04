@@ -1,10 +1,12 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
+import { randomUUID } from "node:crypto"
 import { mintCliToken } from "../api/_lib/cli-token"
 import { buildSnapshot, snapshotKey, type SnapshotFacts } from "../api/_lib/codium-snapshot"
 import {
   accountReportsKey,
   REPORT_ID,
   REPORT_RETENTION_MS,
+  reportEmailConfigured,
   reportKey,
   reportSubjectTag,
 } from "../api/_lib/support-reports"
@@ -119,6 +121,17 @@ describe("report ids and the answer", () => {
     expect(fakes.mail.sent[0]!.text).not.toContain("Report:")
   })
 
+  test("the report goes to VECTOR_BUG_REPORT_TO, and without it answers 503 and stores nothing", async () => {
+    expect((await report()).status).toBe(200)
+    expect(fakes.mail.sent[0]!.to).toBe("owner@example.invalid")
+    delete process.env.VECTOR_BUG_REPORT_TO
+    expect(reportEmailConfigured()).toBe(false)
+    const result = await report({ ip: "192.0.2.12" })
+    expect(result).toMatchObject({ status: 503, body: { error: { code: "EMAIL_NOT_CONFIGURED" } } })
+    expect(fakes.mail.sent).toHaveLength(1)
+    expect(fakes.store.keys().filter((key) => key.includes(":reports:"))).toHaveLength(1)
+  })
+
   test("a failed email answers 502 and drops the record it had written", async () => {
     fakes.mail.fail = true
     const result = await report({ authorization: `Bearer ${token("desktop")}` })
@@ -215,6 +228,25 @@ describe("plan tags and limits", () => {
         )
       expect(statuses).toEqual([...Array(limit).fill(200), 429])
     }
+  })
+
+  test("free accounts on one address share its 5 reports an hour, so making accounts never raises it", async () => {
+    const free = () =>
+      `Bearer ${mintCliToken({ id: randomUUID(), email: "free@example.invalid" }, Date.now(), "desktop").token}`
+    const statuses: number[] = []
+    for (let index = 0; index < 6; index++)
+      statuses.push(
+        (await report({ ip: "192.0.2.40", authorization: free(), body: { message: `Report ${index}` } })).status,
+      )
+    expect(statuses).toEqual([...Array(5).fill(200), 429])
+    // Reports without a sign-in from that address count against the same 5.
+    expect((await report({ ip: "192.0.2.40", body: { message: "Signed out" } })).status).toBe(429)
+    // A paid account on that address has its own plan limit, under the address's signed-in ceiling.
+    seedPlan("vector-10")
+    expect(
+      (await report({ ip: "192.0.2.40", authorization: `Bearer ${token("desktop")}`, body: { message: "Paid" } }))
+        .status,
+    ).toBe(200)
   })
 
   test("a paused plan's account is held to the free limit", async () => {

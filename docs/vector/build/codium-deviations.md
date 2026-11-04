@@ -689,3 +689,28 @@ The shared browser action module validates explicit request/response shapes and 
   `api/_lib/codium-perks.ts`, `api/_lib/model-plan-models.ts`; the regenerated SDK and client; docs
   (`docs/vectorscope.astro`, `docs/vector/MODEL-PLANS.md`); and the test edits above plus
   `packages/web/test/codium-public.test.ts` and `packages/app/src/components/prompt-input/submit.test.ts` (new cases).
+
+## P5 review decisions (3 Nov 2026)
+
+- **Founding settings are not Codium configuration problems.** A31 had joined `foundingConfigProblems()` to
+  `codiumBillingConfigProblems()`, which §2 forbids in effect: one bad founding value stopped the service for every
+  subscriber. An invalid founding setting now closes only the founding window and is named on the owner page
+  ("Founding window settings" in the checklist), never among the problems that turn Codium off.
+- **Credits sold, not boosted credits, are checked against the price.** `paidModelPlan()` and the ledger compare the
+  credits a subscription was sold (`subscriptionSoldCredits`) with the price; the founding +10% may take the key past
+  the price, as the boost intends.
+- **The founders page follows the plan state in reconcile.** §4.4's "hidden from the founders page" while frozen holds
+  whether or not `founding` is still in `CODIUM_LISTED_PERKS`: `settleFounding` converges a listed founder's entry on
+  every reconcile, and the provisioner stays as the quicker path.
+- **Report records stay keyed under the Codium prefix (§4.6),** and a live server reads and erases under both the live
+  and the test prefix, because production writes under `test` until a live key is configured.
+- **The per-review token stop is built; the per-PR stop is not.** `CODIUM_REVIEW_TOKEN_STOP` (400K) in
+  `packages/engine/src/review/run.ts` applies when any pass runs on Vector Codium, before the check and the panel's
+  judge, and counts new input, output, reasoning and cache writes (not cache reads). The 2M-per-PR daily stop needs the
+  pull request's state, which Codex's GitHub workflow keeps. It still has no owner: the owner should assign it before
+  A60.
+- **For Codex at A59:** A35 added `panel` and `judgeModel` to the "Your rules" row of `/docs/vectorscope#pull-requests`.
+  §7.3 gives that section to Codex, so the row change was taken back. Codex may apply it with the GitHub review work;
+  the options stay documented in `#second-lab`.
+- **`codium-legal` is not on GitHub.** A30's drafts (`94a5004e`) were never pushed, because this Mac must not run the
+  pre-push hook (turbo). The orchestrator pushes it.

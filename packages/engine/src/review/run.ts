@@ -166,6 +166,15 @@ interface Asked<T> {
 type Sent = { timedOut: true } | { timedOut: false; message?: SessionV1.WithParts }
 
 const VERIFY_STEPS = 10
+/**
+ * The review token stop for Vector Codium (codium-tiers.md §3: 400K tokens per review, about five times a measured
+ * review). Codium steps have no price, so the dollar cap never stops them; the check and the panel's judge start only
+ * while the review's own passes so far, plus the next pass's prompt, stay under it. It counts new input, output,
+ * reasoning and cache writes (cache reads are left out), stays inside the runner and is never shown. It only protects
+ * the buyer's month: the gateway's pool, daily limit and caps are the real limits. The 2M-per-PR daily stop needs the
+ * pull request's state and is not here.
+ */
+export const CODIUM_REVIEW_TOKEN_STOP = 400_000
 const FINALIZE_MS = 90_000
 const VERIFY_MIN_MS = 2 * 60_000
 const DENY_ALL: PermissionV1.Rule = { permission: "*", pattern: "*", action: "deny" }
@@ -385,6 +394,31 @@ export const run: (
     )
     return measured.flat()
   })
+
+  // The review token stop (CODIUM_REVIEW_TOKEN_STOP), only when a pass runs on Vector Codium. History that cannot be
+  // read counts as over the stop.
+  const onCodium = [model, triage, ...(judgeModel ? [judgeModel] : [])].some((chosen) => chosen.costKind === "codium")
+  const tokensUsed = Effect.fnUntraced(function* () {
+    const children = (yield* Effect.forEach(sessionIDs, (id) => sessions.children(id))).flat().map((child) => child.id)
+    const read = yield* Effect.forEach([...sessionIDs, ...children], (id) =>
+      sessions.messages({ sessionID: id }).pipe(Effect.catch(() => Effect.succeed(undefined))),
+    )
+    if (read.some((messages) => messages === undefined)) return Number.POSITIVE_INFINITY
+    const count = (value: unknown) => (typeof value === "number" && Number.isFinite(value) ? Math.max(0, value) : 0)
+    return read
+      .flatMap((messages) => messages ?? [])
+      .reduce((sum, message) => {
+        if (message.info.role !== "assistant" || message.info.forked) return sum
+        const tokens = message.info.tokens
+        return (
+          sum + count(tokens?.input) + count(tokens?.output) + count(tokens?.reasoning) + count(tokens?.cache?.write)
+        )
+      }, 0)
+  })
+  const overTokenStop = (prompt: string) =>
+    onCodium && prompt
+      ? tokensUsed().pipe(Effect.map((used) => used + Math.ceil(prompt.length / 3.5) > CODIUM_REVIEW_TOKEN_STOP))
+      : Effect.succeed(false)
 
   const checkpoint = Effect.fnUntraced(function* () {
     const save = input.onCheckpoint
@@ -682,7 +716,8 @@ export const run: (
           price: verifyPrice,
         }).low
       : 0
-    const unaffordable = capped && state.spent + state.uncertain + estimate > config.maxCostUsd
+    const unaffordable =
+      (capped && state.spent + state.uncertain + estimate > config.maxCostUsd) || (yield* overTokenStop(verifyText))
     const late = deadline - Date.now() < VERIFY_MIN_MS
     const verify: Asked<ReturnType<typeof decodeVerify>> | undefined = !verifyText
       ? undefined
@@ -698,7 +733,7 @@ export const run: (
           })
     // 7b. The panel's judge (WP A35): a model from a third lab makes the final call on each candidate the check looked
     // at, with the first pass's claim and the check's verdict in front of it. It runs only once the check finished, with
-    // the check's step cap, time floor and dollar cap, so the panel adds no budget of its own.
+    // the check's step cap, time floor, dollar cap and Codium token stop, so the panel adds no budget of its own.
     const judgeText =
       judgeModel && verify?.status === "ok" && candidates.length
         ? buildJudgePrompt({
@@ -714,7 +749,8 @@ export const run: (
       ? estimateCostUsd({ promptTokens: Math.ceil(judgeText.length / 3.5), maxSteps: VERIFY_STEPS, price: judgePrice })
           .low
       : 0
-    const judgeUnaffordable = capped && state.spent + state.uncertain + judgeEstimate > config.maxCostUsd
+    const judgeUnaffordable =
+      (capped && state.spent + state.uncertain + judgeEstimate > config.maxCostUsd) || (yield* overTokenStop(judgeText))
     const judged: Asked<ReturnType<typeof decodeVerify>> | undefined =
       !judgeModel || !judgeText
         ? undefined

@@ -918,7 +918,7 @@ describe("runReview", () => {
     expect(unpriced).toContain("Double-checking 1 finding… 1.2k tokens so far.")
   })
 
-  test("runs on Vector Codium only when the person chose it, since it spends their credits", async () => {
+  test("runs on Vector Codium only when the person chose it, since it uses their Codium month", async () => {
     const codium: ReviewModel = {
       providerID: "vector-plan",
       modelID: "deepseek/deepseek-v4.1-flash",

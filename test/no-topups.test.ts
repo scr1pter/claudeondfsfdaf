@@ -45,16 +45,8 @@ const FILES: { file: string | RegExp; reason: string }[] = [
     reason: "The removed top-up route, which answers JSON 410 MODEL_TOPUP_REMOVED for older clients.",
   },
   {
-    file: "api/_lib/model-plan-status.ts",
-    reason: "Status always sends purchased: {bought: false} for the 1.99.111 and 1.99.112 decoders (H7).",
-  },
-  {
     file: "packages/core/src/model-plan-status.ts",
     reason: "The client decodes the legacy purchased field and ignores an older site's top-ups (H7).",
-  },
-  {
-    file: "packages/web/src/lib/model-plans.ts",
-    reason: "The website decodes the legacy topups and purchased fields of older servers; nothing offers them.",
   },
   {
     file: "api/_lib/codium-ledger.ts",
@@ -159,6 +151,21 @@ const LINES: { file: string; line: string; reason: string }[] = [
     line: "* monthly plans only, so nothing here speaks of credits or top-ups. While Codium is not on sale and the account has",
     reason: "Says the account model has no top-ups.",
   },
+  // The website decodes the legacy fields of older servers (H7) and offers nothing from them: each line is listed, so
+  // a new top-up offer or message in this file is still caught.
+  ...[
+    "topups?: ModelPlan[]",
+    "purchased?: { bought: boolean; state?: LegacyCreditState }",
+    "(value.topups !== undefined && !Array.isArray(value.topups)) ||",
+    "const packs = Array.isArray(value.topups) ? value.topups.map(readPlan) : undefined",
+    "...(packs === undefined ? {} : { topups: packs }),",
+    "const legacy = value.purchased === undefined ? undefined : readLegacyCredits(value.purchased)",
+    "...(legacy ? { purchased: legacy } : {}),",
+  ].map((line) => ({
+    file: "packages/web/src/lib/model-plans.ts",
+    line,
+    reason: "The website still decodes an older server's topups and purchased fields; nothing offers them.",
+  })),
 ]
 
 type Match = { file: string; line: number; text: string }
@@ -220,6 +227,53 @@ test("each named file and line still has a match, so the allowances stay as smal
     expect(SEARCH.test(remainder(entry.line))).toBe(true)
   }
   for (const entry of PHRASES) expect(entry.reason.length).toBeGreaterThan(0)
+})
+
+// Codium is monthly plans, its usage shown as a share of the month (codium-tiers-v3-changes.md): nothing the app or
+// the core says about it speaks of credits. Two phrases stay: free models need "no payment or credits", and older
+// servers' " Buy credits at …" suffix is still recognised so it can be replaced.
+const CREDIT_SOURCES = ["packages/app/src", "packages/core/src"]
+const CREDIT_COPY_ALLOWED = [/\bno payment or credits needed\b/gi, /^ Buy credits at \$\{PURCHASE_URL\}$/g]
+const LITERAL = /(["'`])((?:\\.|(?!\1)[^\\])*)\1/g
+
+/** Prose string literals (they hold a space) that say "credits", outside comments and tests. */
+function creditCopy(rows: readonly Match[]) {
+  return rows.flatMap((row) => {
+    const code = row.text.trim()
+    if (code.startsWith("//") || code.startsWith("*") || code.startsWith("/*")) return []
+    return [...row.text.matchAll(LITERAL)]
+      .map((literal) => literal[2]!)
+      .filter((literal) => /\s/.test(literal) && /\bcredits\b/i.test(literal))
+      .filter((literal) =>
+        /\bcredits\b/i.test(CREDIT_COPY_ALLOWED.reduce((rest, allowed) => rest.replace(allowed, " "), literal)),
+      )
+      .map((literal) => `${row.file}:${row.line}: ${literal}`)
+  })
+}
+
+test("app and core copy never speaks of Codium credits", () => {
+  const result = Bun.spawnSync(
+    ["git", "grep", "-n", "-I", "-i", "-z", "-e", "credits", "--", ...CREDIT_SOURCES, ":!*.test.ts", ":!*.test.tsx"],
+    { cwd: root },
+  )
+  if (result.exitCode > 1) throw new Error(result.stderr.toString())
+  const rows = result.stdout
+    .toString()
+    .split("\n")
+    .filter(Boolean)
+    .map((row) => {
+      const [file, line, ...text] = row.split("\0")
+      return { file: file!, line: Number(line), text: text.join("\0") }
+    })
+  expect(rows.length).toBeGreaterThan(0)
+  expect(creditCopy(rows)).toEqual([])
+  const caught = (text: string) => creditCopy([{ file: "packages/app/src/x.ts", line: 1, text }]).length > 0
+  expect(caught('  why: "Lists Vector Codium plans and credits",')).toBe(true)
+  expect(caught('? "Runs on Vector Codium, since it spends your credits."')).toBe(true)
+  expect(caught('body: "Use free models with no payment or credits needed."')).toBe(false)
+  expect(caught("const LEGACY_CREDITS = ` Buy credits at ${PURCHASE_URL}`")).toBe(false)
+  expect(caught('if (action !== "credits") return')).toBe(false)
+  expect(caught("// the share of this month's credits left")).toBe(false)
 })
 
 test("the check catches a top-up offer and leaves the allowed phrases alone", () => {

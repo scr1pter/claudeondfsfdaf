@@ -16,17 +16,20 @@ import { createReportRecord, discardReportRecord, newReportId, reportSubjectTag 
 
 // Bug reports come from the desktop app's in-workspace bug button. The report
 // body is user-authored text, so it is only ever rendered as escaped HTML and
-// the reply-to address is validated before it reaches Resend.
-const REPORT_TO = process.env.VECTOR_BUG_REPORT_TO || "krishnabharadwaj0521@gmail.com"
+// the reply-to address is validated before it reaches Resend. The owner's
+// inbox comes from VECTOR_BUG_REPORT_TO only; without it reports answer 503.
 const MAX_MESSAGE = 8_000
 const MAX_CONTEXT_FIELDS = 20
 const MAX_CONTEXT_KEY = 64
 const MAX_CONTEXT_VALUE = 500
-/** Reports an hour: without a sign-in, per address; signed in without an active plan, per account. */
+/**
+ * Reports an hour: without a sign-in, per address; signed in without an active plan, per account and also in the same
+ * per-address count as reports without a sign-in, since free accounts cost nothing to make.
+ */
 const FREE_PER_HOUR = 5
 /**
  * A ceiling per address for signed-in reports, above the largest plan's own limit, so many accounts on one address
- * cannot flood the inbox.
+ * cannot flood the inbox. Free accounts are held to the 5 an hour per address of reports without a sign-in.
  */
 const SIGNED_IN_PER_ADDRESS_HOUR = 60
 const HOUR_SECONDS = 60 * 60
@@ -69,19 +72,23 @@ function reportContext(value: unknown) {
  * Who sent the report. Without an Authorization header, nobody: the report is anonymous and limited per address. With
  * one, it must be a Vector account token (the desktop's or a CLI's) that is valid and not revoked, else 401; run tokens
  * never count here (S3). A signed-in account gets its plan's tag and limit only while the plan is active or renewing
- * (§4.4), read from the stored snapshot alone, so a report never waits on Stripe.
+ * (§4.4), read from the stored snapshot alone, so a report never waits on Stripe. Without such a plan it counts against
+ * the same 5 an hour per address as a report without a sign-in, so making accounts never raises an address's limit.
  */
 async function reportCaller(request: ApiRequest, response: ApiResponse, fetcher: typeof fetch) {
   const authorization = request.headers.authorization
-  if (authorization === undefined) {
-    await enforceRateLimit(
+  const perAddress = () =>
+    enforceRateLimit(
       request,
       response,
       { scope: "bug-report-ip", limit: FREE_PER_HOUR, windowSeconds: HOUR_SECONDS },
       fetcher,
     )
+  if (authorization === undefined) {
+    await perAddress()
     return undefined
   }
+  // Checked before the token, so a flood of made-up tokens is counted too.
   await enforceRateLimit(
     request,
     response,
@@ -92,6 +99,7 @@ async function reportCaller(request: ApiRequest, response: ApiResponse, fetcher:
   if (!token) throw new ApiError(401, "CLI_TOKEN_INVALID", "Sign in to Vector again to continue.")
   const account = await requireUnrevokedCliToken(token, fetcher)
   const reports = await planReports(account.id, fetcher)
+  if (!reports) await perAddress()
   await enforceRateLimit(
     request,
     response,
@@ -160,7 +168,8 @@ export async function handleBugReport(request: ApiRequest, response: ApiResponse
     const arch = optionalText(raw.arch, 80)
     const channel = optionalText(raw.channel, 80)
     const context = reportContext(raw.context)
-    if (!process.env.RESEND_API_KEY || !process.env.VECTOR_PURCHASE_EMAIL_FROM) {
+    const reportTo = process.env.VECTOR_BUG_REPORT_TO?.trim()
+    if (!process.env.RESEND_API_KEY || !process.env.VECTOR_PURCHASE_EMAIL_FROM || !reportTo) {
       throw new ApiError(503, "EMAIL_NOT_CONFIGURED", "Bug report email is not configured.")
     }
 
@@ -190,7 +199,7 @@ export async function handleBugReport(request: ApiRequest, response: ApiResponse
 
     const sent = new Resend(process.env.RESEND_API_KEY).emails.send({
       from: process.env.VECTOR_PURCHASE_EMAIL_FROM,
-      to: REPORT_TO,
+      to: reportTo,
       replyTo,
       subject: `${tag ? `${tag} ` : ""}Vector bug report${version ? ` · v${version}` : ""}`,
       text: [message, "", "---", ...environment.map(([key, value]) => `${key}: ${value}`)].join("\n"),

@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from "node:crypto"
 import type { Entitlements } from "../../packages/schema/src/codium-entitlements.js"
 import { codiumKey, codiumKeyIn } from "./codium-keys.js"
-import type { StripeMode } from "./model-plan-stripe.js"
+import { stripeMode, type StripeMode } from "./model-plan-stripe.js"
 import { persistentStore } from "./persistent-store.js"
 
 /*
@@ -14,6 +14,11 @@ import { persistentStore } from "./persistent-store.js"
  *
  * Keys (contract §4.6, under the Codium prefix): `reports:<id>` holds the record, and `reports:acct:<hash>` is the set
  * of ids an account sent while signed in, kept only so deleting the account can erase them (A57).
+ *
+ * The tracker is free and has nothing to do with Stripe, but the prefix follows the Stripe mode, and production writes
+ * under `test` until a live key is configured. So a live server reads and erases under both prefixes (`reportModes`),
+ * and a report sent before go-live keeps its status and is still erased with its account. A test server never reads
+ * the live prefix.
  */
 
 export const REPORT_RETENTION_MS = 180 * 24 * 60 * 60 * 1000
@@ -53,7 +58,11 @@ const RECORD_FIELDS = new Set(["v", "status", "createdAt", "updatedAt", "tag", "
 
 /** Whether bug reports can reach the owner from this deployment (the same settings `api/support/bug-report.ts` needs). */
 export function reportEmailConfigured() {
-  return Boolean(process.env.RESEND_API_KEY?.trim() && process.env.VECTOR_PURCHASE_EMAIL_FROM?.trim())
+  return Boolean(
+    process.env.RESEND_API_KEY?.trim() &&
+      process.env.VECTOR_PURCHASE_EMAIL_FROM?.trim() &&
+      process.env.VECTOR_BUG_REPORT_TO?.trim(),
+  )
 }
 
 /** A new report id: `r_` and 26 letters of lower-case base32, 130 random bits. */
@@ -99,8 +108,13 @@ export const reportKey = (id: string, mode?: StripeMode) =>
   mode ? codiumKeyIn(mode, "reports", id) : codiumKey("reports", id)
 
 /** The account's index of report ids. The account id is hashed, so the key names no one. */
-export const accountReportsKey = (account: string) =>
-  codiumKey("reports", "acct", createHash("sha256").update(`vector-report-account:${account}`).digest("hex"))
+export const accountReportsKey = (account: string, mode: StripeMode = stripeMode()) =>
+  codiumKeyIn(mode, "reports", "acct", createHash("sha256").update(`vector-report-account:${account}`).digest("hex"))
+
+/** The prefixes reports are read and erased under: the current mode first, and on a live server the test one too. */
+export function reportModes(mode: StripeMode = stripeMode()): StripeMode[] {
+  return mode === "live" ? ["live", "test"] : ["test"]
+}
 
 /** The subject tag on the owner's email: `[Plus]`, `[Pro]`, `[Max · read first]`, `[Ultra · read first]`. */
 export function reportSubjectTag(reports: Pick<Entitlements["reports"], "tag" | "readFirst">) {
@@ -176,14 +190,23 @@ export async function discardReportRecord(id: string, account: string | undefine
   if (account) await persistentStore(["SREM", accountReportsKey(account), id], fetcher).catch(() => undefined)
 }
 
-/** The public view of each id that has a record. Ids without one (never stored, or older than 180 days) are left out. */
+/**
+ * The public view of each id that has a record. Ids without one (never stored, or older than 180 days) are left out. A
+ * live server also looks under the test prefix, where reports sent before go-live are (`reportModes`).
+ */
 export async function readReportViews(ids: readonly string[], fetcher: typeof fetch = fetch): Promise<ReportView[]> {
   const unique = [...new Set(ids.filter(validReportId))]
   if (!unique.length) return []
-  const raw = await persistentStore(["MGET", ...unique.map((id) => reportKey(id))], fetcher)
-  if (!Array.isArray(raw) || raw.length !== unique.length) return []
+  const modes = reportModes()
+  const raw = await persistentStore(
+    ["MGET", ...modes.flatMap((mode) => unique.map((id) => reportKey(id, mode)))],
+    fetcher,
+  )
+  if (!Array.isArray(raw) || raw.length !== unique.length * modes.length) return []
   return unique.flatMap((id, index) => {
-    const record = decodeReportRecord(raw[index])
+    const record = modes
+      .map((_, at) => decodeReportRecord(raw[at * unique.length + index]))
+      .find((value) => value !== undefined)
     if (!record) return []
     return [
       {
@@ -232,16 +255,19 @@ export async function setReportStatus(
 }
 
 /**
- * Erases every report an account sent while signed in, and the index itself (for account deletion, A57). Reports sent
- * signed out were never linked to anyone. Returns how many records were erased.
+ * Erases every report an account sent while signed in, and the index itself (for account deletion, A57), under every
+ * prefix reports are read from (`reportModes`), so reports sent before go-live go too. Reports sent signed out were
+ * never linked to anyone. Returns how many records were erased.
  */
 export async function eraseAccountReports(account: string, fetcher: typeof fetch = fetch) {
-  const index = accountReportsKey(account)
-  const members = await persistentStore(["SMEMBERS", index], fetcher)
-  const ids = Array.isArray(members) ? members.filter(validReportId) : []
-  const erased = ids.length
-    ? Number(await persistentStore(["DEL", ...ids.map((id) => reportKey(id))], fetcher)) || 0
-    : 0
-  await persistentStore(["DEL", index], fetcher)
+  let erased = 0
+  for (const mode of reportModes()) {
+    const index = accountReportsKey(account, mode)
+    const members = await persistentStore(["SMEMBERS", index], fetcher)
+    const ids = Array.isArray(members) ? members.filter(validReportId) : []
+    if (ids.length)
+      erased += Number(await persistentStore(["DEL", ...ids.map((id) => reportKey(id, mode))], fetcher)) || 0
+    await persistentStore(["DEL", index], fetcher)
+  }
   return erased
 }

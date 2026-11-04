@@ -409,3 +409,63 @@ describe("Review.run: the panel", () => {
     TIMEOUT,
   )
 })
+
+describe("Review.run: the Codium review token stop", () => {
+  const codium = (model: ReturnType<typeof local>) => ({ ...model, costKind: "codium" as const })
+  const big = () =>
+    reply()
+      .tool("StructuredOutput", report([finding()]))
+      .usage({ input: Review.CODIUM_REVIEW_TOKEN_STOP, output: 100 })
+
+  it.instance(
+    "on Vector Codium the check and the judge do not start past the stop, and run under it",
+    () =>
+      Effect.gen(function* () {
+        const { llm, directory } = yield* useServer
+        const onCodium = { model: codium(CHECK), triage: codium(FIRST), judge: codium(JUDGE_MODEL) }
+        yield* llm.pushMatch(REVIEW, big())
+        const stopped = yield* Review.run(input(directory, { ...onCodium, config: config({ panel: true }) }))
+        expect((yield* llm.hits).filter((hit) => VERIFY(hit) || JUDGE(hit))).toEqual([])
+        expect(stopped.specialists.map((item) => [item.name, item.status, item.detail])).toEqual([
+          ["review", "ok", undefined],
+          ["verify", "skipped", "budget"],
+        ])
+        // After a triage pass only what the check confirmed is reported, so nothing unchecked goes out.
+        expect(stopped.selection.inline).toEqual([])
+        // The count stays inside the runner: no note names a token figure.
+        expect(stopped.notes.join(" ")).not.toMatch(/token/i)
+
+        yield* llm.pushMatch(
+          REVIEW,
+          reply().tool("StructuredOutput", report([finding()])).usage({ input: 2_000, output: 100 }),
+        )
+        yield* llm.pushMatch(VERIFY, verdict("confirmed", "Reproduced."))
+        yield* llm.pushMatch(JUDGE, verdict("confirmed", "Reproduced again."))
+        const under = yield* Review.run(input(directory, { ...onCodium, config: config({ panel: true }) }))
+        expect(under.specialists.map((item) => [item.name, item.status])).toEqual([
+          ["review", "ok"],
+          ["verify", "ok"],
+          ["judge", "ok"],
+        ])
+        expect(under.selection.inline.map((item) => item.id)).toEqual([ID])
+      }),
+    TIMEOUT,
+  )
+
+  it.instance(
+    "reviews that do not run on Vector Codium are not held to it",
+    () =>
+      Effect.gen(function* () {
+        const { llm, directory } = yield* useServer
+        yield* llm.pushMatch(REVIEW, big())
+        yield* llm.pushMatch(VERIFY, verdict("confirmed", "Reproduced."))
+        const own = yield* Review.run(input(directory))
+        expect(own.specialists.map((item) => [item.name, item.status])).toEqual([
+          ["review", "ok"],
+          ["verify", "ok"],
+        ])
+        expect(own.selection.inline.map((item) => item.id)).toEqual([ID])
+      }),
+    TIMEOUT,
+  )
+})

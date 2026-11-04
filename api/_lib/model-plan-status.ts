@@ -190,14 +190,14 @@ export function modelPlanBalance(
   const now = input.now ?? Date.now()
   // Codium sells monthly plans only (no top-ups). Decoders up to 1.99.112 require this field, so it is always sent,
   // and always says nothing was bought (H7).
-  const purchased = { bought: false as const }
+  const legacy = { purchased: { bought: false } } as const
   if (!status.active)
     return {
       active: false,
       ...(status.customer ? { customer: true } : {}),
       access: false,
       listed,
-      purchased,
+      ...legacy,
       empty: true,
       low: false,
     }
@@ -280,7 +280,7 @@ export function modelPlanBalance(
     ...(snapshot.founding ? { founding: { number: snapshot.founding.number } } : {}),
     ...(caps.velocity ? { velocity: caps.velocity } : {}),
     ...(caps.labs ? { labs: caps.labs } : {}),
-    purchased,
+    ...legacy,
     empty,
     // Running low is a tenth of this month's credits.
     low:

@@ -82,7 +82,11 @@ export function salesOpenedOverride() {
   return at
 }
 
-/** What is wrong with the founding settings, by env name only. Each turns Codium off, as every other limit does. */
+/**
+ * What is wrong with the founding settings, by env name only, for the owner page. An invalid setting closes only the
+ * founding window (`foundingWindow`, `reserveFoundingSlot`); it never turns Codium off, so the people already paying
+ * keep the Codium they paid for.
+ */
 export function foundingConfigProblems() {
   const checks: [string, () => unknown][] = [
     ["CODIUM_FOUNDING_LIMIT", foundingLimit],
@@ -267,7 +271,8 @@ export async function foundingWindowOpen(fetcher: typeof fetch = fetch, now = Da
 
 /**
  * Reserves the founding slot `token` for `account`'s checkout until `until` (ms). False when the window is closed or full,
- * or the account already has (or had) a founding membership; the checkout then sells no founding membership.
+ * its settings are invalid, or the account already has (or had) a founding membership; the checkout then sells no
+ * founding membership.
  */
 export async function reserveFoundingSlot(
   token: string,
@@ -277,7 +282,17 @@ export async function reserveFoundingSlot(
   now = Date.now(),
 ) {
   if (!validFoundingToken(token)) throw storeError()
-  const days = foundingDays()
+  let limit: number
+  let days: number
+  let override: number | undefined
+  try {
+    limit = foundingLimit()
+    days = foundingDays()
+    override = salesOpenedOverride()
+  } catch {
+    // Invalid settings close the window, as in foundingWindow: the checkout goes ahead without founding.
+    return false
+  }
   const result = await persistentStore(
     [
       "EVAL",
@@ -290,9 +305,9 @@ export async function reserveFoundingSlot(
       token,
       until,
       now,
-      foundingLimit(),
+      limit,
       days * DAY_MS,
-      salesOpenedOverride() ?? "",
+      override ?? "",
     ],
     fetcher,
   )
@@ -386,7 +401,9 @@ const FINISHED = new Set(["canceled", "incomplete_expired"])
  * - the governing paid month carrying a token assigns the number (once);
  * - when that month is an upgrade carrying the member's token, the membership moves to it;
  * - when the subscription carrying it is deleted and no other live subscription carries the token, it ends for good;
- * - `boost` holds while the governing subscription carries the token on a plan with a founding boost (Plus, Pro).
+ * - `boost` holds while the governing subscription carries the token on a plan with a founding boost (Plus, Pro);
+ * - a founder who chose the founders page is hidden from it while the plan is frozen and shown again after (§4.4). This
+ *   happens here, not only in the `founding` provisioner, so it holds whether or not `founding` is still listed.
  * Accounts whose subscriptions carry no token make no store call.
  */
 export async function settleFounding(
@@ -396,6 +413,8 @@ export async function settleFounding(
     paid?: { id: string; token?: string }
     governing?: { id: string; plan: PlanId }
     subscriptions: readonly FoundingSubscription[]
+    /** Whether the snapshot this reconcile writes is frozen (a dispute, a fraud warning or the owner's hold). */
+    frozen?: boolean
     now: number
   },
   fetcher: typeof fetch = fetch,
@@ -423,6 +442,7 @@ export async function settleFounding(
     )
     return undefined
   }
+  if (member.listed) await syncFoundersListing(input.account, input.frozen === true, fetcher)
   const governing = input.governing
   const token = governing && input.subscriptions.find((subscription) => subscription.id === governing.id)?.token
   return {

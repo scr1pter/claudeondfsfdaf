@@ -231,6 +231,44 @@ describe("the owner's status script", () => {
     expect(await readReportViews(mine, fakes.fetcher)).toEqual([])
     expect(await eraseAccountReports(ACCOUNT, fakes.fetcher)).toBe(0)
   })
+
+  test("a report sent before go-live keeps its status and is erased with its account once the server runs live", async () => {
+    // Production writes under the test prefix until a live Stripe key is configured.
+    const before = await stored({ account: ACCOUNT })
+    const anonymous = await stored()
+    expect(await setReportStatus(before, { status: "read" }, { mode: "test", fetcher: fakes.fetcher })).toMatchObject({
+      status: "read",
+    })
+    process.env.CODIUM_STRIPE_MODE = "live"
+    const after = await stored({ account: ACCOUNT })
+    expect(reportKey(after)).toStartWith("vector:codium:live:reports:")
+    expect(
+      (await readReportViews([before, after, anonymous], fakes.fetcher)).map((view) => [view.id, view.status]),
+    ).toEqual([
+      [before, "read"],
+      [after, "received"],
+      [anonymous, "received"],
+    ])
+    const answer = await statuses({ ids: [before] })
+    expect(answer.status).toBe(200)
+    expect(answer.body.reports).toEqual([{ id: before, status: "read", updatedAt: expect.any(Number) }])
+    // Deleting the account erases both prefixes' records and indexes; the anonymous report was never linked.
+    expect(await eraseAccountReports(ACCOUNT, fakes.fetcher)).toBe(2)
+    expect(fakes.store.get(reportKey(before, "test"))).toBeUndefined()
+    expect(fakes.store.get(reportKey(after, "live"))).toBeUndefined()
+    expect(fakes.store.members(accountReportsKey(ACCOUNT, "test"))).toEqual([])
+    expect(fakes.store.members(accountReportsKey(ACCOUNT, "live"))).toEqual([])
+    expect(fakes.store.get(reportKey(anonymous, "test"))).toBeDefined()
+    // A test server never reads the live prefix.
+    process.env.CODIUM_STRIPE_MODE = "test"
+    const live = newReportId()
+    fakes.store.command([
+      "SET",
+      reportKey(live, "live"),
+      JSON.stringify({ v: 1, status: "read", createdAt: 1, updatedAt: 1 }),
+    ])
+    expect(await readReportViews([live], fakes.fetcher)).toEqual([])
+  })
 })
 
 describe("the public fixed list and the changelog", () => {
