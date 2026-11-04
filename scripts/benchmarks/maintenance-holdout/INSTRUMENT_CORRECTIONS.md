@@ -5,6 +5,11 @@ Requirements and the 50-business/4-prerequisite inventory were committed at
 The evaluator and working legacy seed were committed at `0e6b5ea` before
 authoring the private reference. No runtime evaluation had been executed.
 
+Private-reference source was already being authored when the peer's coverage
+findings arrived. Thus the original evaluator predates private-reference
+authoring, while the final corrected evaluator does not. The final corrections
+predate all runtime evaluation and any generated benchmark-product data.
+
 An independent source-only reviewer then found coverage omissions against
 unchanged requirements. Before any runtime qualification or paid run, assertions
 were strengthened inside the same named groups:
