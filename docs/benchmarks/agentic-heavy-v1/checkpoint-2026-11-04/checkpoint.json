@@ -94,5 +94,44 @@
     ],
     "commonDriverMethodologyChange": "Both future arms must receive identical updated driver; not a product-only savings claim"
   },
-  "blindedReview": "Fresh static reviewer scoring both opaque packages; original independent 37/48 code +23/40 visuals retained as separate review, never pooled"
+  "blindedReview": {
+    "freshSameReviewer": {
+      "vector-delivery": {
+        "code": 36,
+        "codeMax": 48,
+        "visual": 23,
+        "visualMax": 40
+      },
+      "codex-interrupted": {
+        "code": 31,
+        "codeMax": 48,
+        "visual": 24,
+        "visualMax": 40
+      }
+    },
+    "sourceReportSha256": {
+      "elm": "9cc5f2252f2af8b6eb8c0dae8a85a54a9e257503feff41a564e3f3f6e50c65ed",
+      "willow": "af482e2f7f2f5892e2cca0e387f1feb23ddd9c9cbed2e8fdd3c4972cde14c583"
+    },
+    "originalOtherReviewerVectorScore": {
+      "code": 37,
+      "visual": 23,
+      "pooled": false
+    },
+    "completedHeadToHeadVerdict": false
+  },
+  "v2GuardIntegrated": {
+    "revision": "dae48615985f03e85c9dede9ba0b4556a3da39f2",
+    "focusedTestsPassed": 220,
+    "coreTypecheck": 0,
+    "integratedEngineTypecheck": 0,
+    "measuredPaidEffect": false
+  },
+  "posthocRevocationDiagnostic": {
+    "sourceChanged": false,
+    "originalGateOrScoresChanged": false,
+    "CodexHeldWriteAfterRevocationPersisted": true,
+    "VectorHeldWriteDeniedThisSchedule": true,
+    "generalSecurityRankingClaim": false
+  }
 }

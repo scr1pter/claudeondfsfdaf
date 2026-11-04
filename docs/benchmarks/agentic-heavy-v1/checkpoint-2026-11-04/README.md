@@ -26,3 +26,11 @@ Previously validated candidate `5a20e7f` is integrated after the old runtime sto
 The [closed Vector cost audit](../heavy-cost-audit.md) identifies eighteen timed-out lead waits costing $0.2666752. That is a target for controlled measurement, not guaranteed removable spend. QA and judge checks remain useful and are retained. The [Core V2 tool-loop guard repair](../../../vector/build/tokenomics-v2-loop-signatures.md) is integrated and passes all 220 focused checks plus Core and integrated Engine typechecks. It also preserves explicit steer/queued rechecks without resetting spend or step limits. The historical paid CLI uses the legacy path, so that repair cannot explain these measured bills.
 
 A second qualified Harbor workload is prepared but not paid-run. The owner's cap was not increased. Outstanding usage uncertainty and full-quality image reservation leave no justified new matched image-heavy run under the current guard and actor allocations. No lower-quality configuration or arbitrary credit-burning test was substituted.
+
+## Additional quality diagnostic
+
+A [posthoc held-body revocation test](posthoc-revocation/README.md) reproduced a stale-authority write in the Codex interrupted app; the matching Vector request was denied in that schedule. Both controls and unchanged source hashes are recorded. This source-informed diagnostic is excluded from the original gate and locked review scores, and establishes no general runtime or production security ranking.
+
+## Static review completed
+
+A fresh [same-reviewer blinded snapshot assessment](reviews/README.md) scores Vector36/48 for code and23/40 visually, versus31/48 and24/40 for the Codex interrupted source. The first score was locked before the second source was read; raw arithmetic, evidence and report hashes are retained. The earlier37/48+23/40 Vector review is a separate pool. Codex's incomplete workflow, the static nature of review and all functional failures remain explicit. No matched savings or universal quality claim follows.
