@@ -1,2 +1,3 @@
 *.py -text
 *.json -text
+* whitespace=cr-at-eol
