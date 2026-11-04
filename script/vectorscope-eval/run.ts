@@ -3,11 +3,10 @@ import { writeFile } from "node:fs/promises"
 import { isAbsolute, join, relative, resolve } from "node:path"
 import { parseArgs } from "node:util"
 import { DEFAULT_SLACK, scoreReview, totalScores, type ReviewScore } from "../../packages/core/src/review/eval"
-import { packChanges } from "../../packages/core/src/review/pack"
-import { buildReviewPrompt, type PromptInput } from "../../packages/core/src/review/prompt"
+import { buildReviewPrompt } from "../../packages/core/src/review/prompt"
 import { decodeReport, REVIEW_REPORT_JSON_SCHEMA } from "../../packages/core/src/review/schema"
 import type { ModelReport } from "../../packages/core/src/review/types"
-import { fixtureProblems, listFixtures, loadFixture, type Fixture } from "./fixture"
+import { fixtureProblems, fixtureView, listFixtures, loadFixture, promptInput, type Fixture } from "./fixture"
 
 // Sends Vectorscope's review prompt for each fixture to one model, once per repetition, and scores the findings
 // against the planted bugs. A run that could not be measured (an HTTP error, a timeout, an answer with no report in
@@ -16,9 +15,6 @@ import { fixtureProblems, listFixtures, loadFixture, type Fixture } from "./fixt
 const REPO_ROOT = join(import.meta.dir, "..", "..")
 const DEFAULT_BASE_URL = "https://openrouter.ai/api/v1/chat/completions"
 const DEFAULT_API_KEY_ENV = "OPENROUTER_API_KEY"
-const BASE_SHA = "5d1c9e04a7b3f2e8d6c4a1b9e7f5d3c2a0b8e6f4"
-const HEAD_SHA = "c8a2f71e93d4b6a05e1f8c3d7b9a2e4f6c0d8b1a"
-const MAX_COMMENTS = 25
 const ERROR_CHARS = 300
 
 // The review prompt is written for an agent with read-only tools and a StructuredOutput tool. This run has neither,
@@ -121,7 +117,7 @@ async function main() {
     process.stderr.write(`Invalid fixtures:\n${invalid.map((line) => `  ${line}`).join("\n")}\n`)
     return 1
   }
-  const prompts = fixtures.map((fixture) => ({ fixture, prompt: buildReviewPrompt(promptInput(fixture)) }))
+  const prompts = fixtures.map((fixture) => ({ fixture, prompt: buildReviewPrompt(promptInput(fixtureView(fixture))) }))
   if (flags.dryRun) {
     process.stdout.write(dryRunReport(prompts) + "\n")
     return 0
@@ -168,25 +164,6 @@ async function main() {
     process.stdout.write(`\nJSON report: ${flags.out}\n`)
   }
   return runs.some((run) => run.status === "error") ? 1 : 0
-}
-
-// The app and the engine pack an untrusted change the same way: each changed file once, annotated when that is no
-// larger than its diff and its text together.
-function promptInput(fixture: Fixture): PromptInput {
-  const packed = packChanges({
-    inline: fixture.files,
-    headFiles: fixture.headFiles.map((file) => ({ path: file.path, text: file.text, exact: true })),
-  })
-  return {
-    mode: "full",
-    trust: "untrusted",
-    base: BASE_SHA,
-    head: HEAD_SHA,
-    pr: fixture.pr,
-    diff: packed.diff,
-    headFiles: packed.headFiles,
-    maxComments: MAX_COMMENTS,
-  }
 }
 
 async function review(input: {

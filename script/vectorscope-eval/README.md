@@ -174,3 +174,47 @@ cd packages/core && bun test test/review/eval.test.ts
 Make the bug unambiguous to a careful reviewer, and make sure nothing else in
 the change is worth a finding, or every model will be charged a false alarm for
 it.
+
+## Real-change dataset
+
+The fixtures above are a prompt smoke test. The real-change dataset is what
+Phase 0 measures the product on: public bug-fix cases and clean controls,
+each pinned to immutable commits in an MIT, Apache-2.0 or BSD licensed
+repository and stored as a manifest with no copied code.
+
+```
+bun script/vectorscope-eval/dataset.ts                    # dry run of the seed manifest
+bun script/vectorscope-eval/dataset.ts --manifest <path>
+bun script/vectorscope-eval/dataset.ts --mirrors <dir>    # clones at <dir>/<owner>/<name>
+```
+
+- `dataset.ts` is the contract: the manifest types, `manifestProblems` (the
+  validator), `assignSplits` (the grouped 60/20/20 split), `heldOutDigest`
+  (the freeze), `objectProblems` (git checks against local mirrors) and
+  `caseView` (everything a reviewer may be shown for a case).
+- `dataset/seed.json` is the seed: eight bug-fix cases and two controls from
+  ten repositories, each checked read-only with the GitHub API (commits,
+  ancestry through the compare endpoint, licence through the licence
+  endpoint). Its labels are one draft pass, so it is not frozen and not ready
+  for a held-out run. Cases considered and left out are listed with reasons.
+- `annotation-guide.md` says how cases are found, checked, labelled, split and
+  frozen.
+
+The dry run never makes a network request. It validates the manifest,
+recomputes every case's split and compares it with the recorded one, checks
+the held-out freeze, and lists exclusions. With `--mirrors` it also checks with
+git that each commit exists, that the base is an ancestor of the head and the
+head an ancestor of the fix, that the candidate head does not already hold the
+fix (post-fix leakage), and that commit dates, change sizes and labelled
+locations match the repository. A case without a mirror keeps its recorded
+check.
+
+A bug case's fix and labels are hidden ground truth. A reviewer is given only
+`caseView(case)`: the repository and the candidate's base and head. Nothing in
+this directory runs the dataset through a reviewer yet; replaying the
+production pipeline, the budgeted manual CI run and causal judging are later
+work packages.
+
+`fixtures.test.ts` covers the dataset with local fixture repositories (missing
+objects, wrong ancestry, post-fix leakage, a reverse diff, split grouping and
+the freeze) and needs no network.

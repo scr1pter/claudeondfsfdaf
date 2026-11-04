@@ -2,11 +2,16 @@ import { readdir } from "node:fs/promises"
 import { join } from "node:path"
 import { applyPatch, parseUnifiedDiff, type DiffFile } from "../../packages/core/src/review/diff"
 import type { EvalExpectation } from "../../packages/core/src/review/eval"
+import { packChanges } from "../../packages/core/src/review/pack"
+import type { PromptInput } from "../../packages/core/src/review/prompt"
 
 // Loading and validation of the Vectorscope evaluation fixtures. The runner refuses to send a fixture that fails
 // fixtureProblems, and fixtures.test.ts keeps every checked-in fixture passing it.
 
 export const FIXTURES_DIR = join(import.meta.dir, "fixtures")
+const BASE_SHA = "5d1c9e04a7b3f2e8d6c4a1b9e7f5d3c2a0b8e6f4"
+const HEAD_SHA = "c8a2f71e93d4b6a05e1f8c3d7b9a2e4f6c0d8b1a"
+const MAX_COMMENTS = 25
 
 export interface Fixture {
   name: string
@@ -15,6 +20,32 @@ export interface Fixture {
   files: DiffFile[]
   headFiles: { path: string; text: string }[]
   expected: EvalExpectation[]
+}
+
+// What the reviewer is shown: the fixture without its planted-bug labels.
+export type FixtureView = Omit<Fixture, "expected" | "name">
+
+export function fixtureView(fixture: Fixture): FixtureView {
+  return { pr: fixture.pr, diff: fixture.diff, files: fixture.files, headFiles: fixture.headFiles }
+}
+
+// The app and the engine pack an untrusted change the same way: each changed file once, annotated when that is no
+// larger than its diff and its text together. Built from a view, so the labels cannot reach the prompt.
+export function promptInput(view: FixtureView): PromptInput {
+  const packed = packChanges({
+    inline: view.files,
+    headFiles: view.headFiles.map((file) => ({ path: file.path, text: file.text, exact: true })),
+  })
+  return {
+    mode: "full",
+    trust: "untrusted",
+    base: BASE_SHA,
+    head: HEAD_SHA,
+    pr: view.pr,
+    diff: packed.diff,
+    headFiles: packed.headFiles,
+    maxComments: MAX_COMMENTS,
+  }
 }
 
 export async function listFixtures() {
