@@ -15,6 +15,7 @@ import {
   sourceDigestFor,
   swiftArguments,
   verifyPrebuiltHelper,
+  windowsToolchainSelection,
 } from "./build-computer-helper"
 import type { HelperManifest, IdentityLock, NativeCommand } from "./build-computer-helper"
 import { generateIdentitySources, readIdentity } from "./computer-helper-identity"
@@ -22,6 +23,8 @@ import { generateIdentitySources, readIdentity } from "./computer-helper-identit
 const directory = fileURLToPath(new URL("../", import.meta.url))
 const hash = "a".repeat(64)
 const codeHash = "b".repeat(40)
+// Synthetic native-environment observations, not measured owner or CI toolchain evidence.
+const windowsEnvironment = { VCToolsVersion: "14.44.35207", WindowsSDKVersion: "10.0.26100.0\\" }
 const baseline: IdentityLock = {
   enforce: true,
   helperVersion: "1.0.0",
@@ -48,6 +51,21 @@ async function fixture<T>(run: (root: string) => Promise<T>) {
 }
 
 describe("computer helper build planning", () => {
+  test("Windows toolset and SDK selectors use the actual developer environment and reject unmeasured values", () => {
+    expect(windowsToolchainSelection(windowsEnvironment)).toEqual({ toolset: "14.44.35207", sdk: "10.0.26100.0" })
+    expect(windowsToolchainSelection({ ...windowsEnvironment, WindowsSDKVersion: "10.0.22621.0" }).sdk).toBe(
+      "10.0.22621.0",
+    )
+    for (const environment of [{}, { VCToolsVersion: "14.44.35207" }, { WindowsSDKVersion: "10.0.26100.0" }])
+      expect(() => windowsToolchainSelection(environment)).toThrow("requires VCToolsVersion and WindowsSDKVersion")
+    for (const environment of [
+      { ...windowsEnvironment, VCToolsVersion: "latest" },
+      { ...windowsEnvironment, VCToolsVersion: "14.44.35207,host=x86" },
+      { ...windowsEnvironment, WindowsSDKVersion: "10.0" },
+      { ...windowsEnvironment, WindowsSDKVersion: "10.0.26100.0,version=10.0" },
+    ])
+      expect(() => windowsToolchainSelection(environment)).toThrow("invalid VCToolsVersion or WindowsSDKVersion")
+  })
   test("Windows defaults to its supported native CPU while explicit cross-builds remain selectable", () => {
     expect(parseBuildOptions([], { host: "win32", hostArchitecture: "arm64" }).architectures).toEqual(["arm64"])
     expect(parseBuildOptions([], { host: "win32", hostArchitecture: "x64" }).architectures).toEqual(["x64"])
@@ -317,7 +335,61 @@ describe("native build boundaries", () => {
     })
   })
 
-  test("Windows refuses to emit a manifest when native inputs change during compilation", () =>
+  for (const changedInput of ["source", "identity.h", "blocklist.h"]) {
+    test(`Windows refuses to emit a manifest when ${changedInput} changes during compilation`, () =>
+      fixture(async (root) => {
+        for (const item of [
+          "native/computer-helper/identity.json",
+          "native/computer-helper/blocklist.json",
+          "icons/prod/icon.ico",
+          "scripts/build-computer-helper.ts",
+          "scripts/computer-helper-identity.ts",
+          "scripts/channel-ids.ts",
+        ]) {
+          await mkdir(path.dirname(path.join(root, item)), { recursive: true })
+          await cp(path.join(directory, item), path.join(root, item))
+        }
+        const native = path.join(root, "native/computer-helper/windows")
+        await mkdir(path.join(native, "src"), { recursive: true })
+        await writeFile(path.join(native, "CMakeLists.txt"), "# Injected CMake fixture; no native tool runs.\n")
+        const source = path.join(native, "src/main.cpp")
+        await writeFile(source, "// Original source fixture.\n")
+        const identity = readIdentity(path.join(root, "native/computer-helper/identity.json"))
+        const run: NativeCommand = async (command, args) => {
+          if (command === "cmake" && args[0] === "--version")
+            return { code: 0, stdout: "cmake version 3.31.6", stderr: "" }
+          if (command === "cl")
+            return { code: 0, stdout: "Microsoft C/C++ Compiler Version 19.99.99999 for x64", stderr: "" }
+          if (command === "cmake" && args[0] === "--build") {
+            const release = path.join(args[1]!, "Release")
+            await mkdir(release, { recursive: true })
+            for (const file of [identity.windows.executable, "vector-computer-tests.exe", "computer-test-target.exe"])
+              await writeFile(path.join(release, file), "virtual compiler output")
+            const changed =
+              changedInput === "source"
+                ? source
+                : path.join(root, "native/build/computer-helper-win32/generated", changedInput)
+            await writeFile(changed, "// Actual compiler input changed while the injected compiler ran.\n")
+          }
+          return { code: 0, stdout: "", stderr: "" }
+        }
+        const options = parseBuildOptions(["--platform", "win32", "--arch", "x64", "--out", "out"], { directory: root })
+        await expect(
+          buildComputerHelper(options, {
+            directory: root,
+            host: "win32",
+            hostArchitecture: "x64",
+            environment: windowsEnvironment,
+            run,
+          }),
+        ).rejects.toThrow("inputs changed during compilation")
+        await expect(readFile(path.join(root, "out/x64/computer-helper.json"))).rejects.toMatchObject({
+          code: "ENOENT",
+        })
+      }))
+  }
+
+  test("Windows pins both compiler slices to the observed toolset and exact SDK and records those observations", () =>
     fixture(async (root) => {
       for (const item of [
         "native/computer-helper/identity.json",
@@ -331,30 +403,90 @@ describe("native build boundaries", () => {
         await cp(path.join(directory, item), path.join(root, item))
       }
       const native = path.join(root, "native/computer-helper/windows")
-      await mkdir(path.join(native, "src"), { recursive: true })
-      await writeFile(path.join(native, "CMakeLists.txt"), "# Injected CMake fixture; no native tool runs.\n")
-      const source = path.join(native, "src/main.cpp")
-      await writeFile(source, "// Original source fixture.\n")
+      await mkdir(native, { recursive: true })
+      await writeFile(path.join(native, "CMakeLists.txt"), "# Injected native toolchain-selection fixture.\n")
       const identity = readIdentity(path.join(root, "native/computer-helper/identity.json"))
+      const calls: string[][] = []
+      const architectures = new Map<string, string>()
       const run: NativeCommand = async (command, args) => {
+        calls.push([command, ...args])
         if (command === "cmake" && args[0] === "--version")
-          return { code: 0, stdout: "cmake version fixture", stderr: "" }
+          return { code: 0, stdout: "cmake version 3.31.6", stderr: "" }
         if (command === "cl")
-          return { code: 0, stdout: "Microsoft C/C++ Compiler Version 19.99.99999 for x64", stderr: "" }
+          return { code: 0, stdout: "Microsoft C/C++ Compiler Version 19.44.35222 for x64", stderr: "" }
+        if (command === "cmake" && args[0] === "-S") {
+          architectures.set(args[args.indexOf("-B") + 1]!, args[args.indexOf("-A") + 1]!.split(",")[0]!)
+        }
         if (command === "cmake" && args[0] === "--build") {
           const release = path.join(args[1]!, "Release")
           await mkdir(release, { recursive: true })
+          const bytes = Buffer.alloc(128)
+          bytes.writeUInt16LE(0x5a4d)
+          bytes.writeUInt32LE(64, 0x3c)
+          bytes.writeUInt32LE(0x4550, 64)
+          bytes.writeUInt16LE(architectures.get(args[1]!) === "x64" ? 0x8664 : 0xaa64, 68)
           for (const file of [identity.windows.executable, "vector-computer-tests.exe", "computer-test-target.exe"])
-            await writeFile(path.join(release, file), "virtual compiler output")
-          await writeFile(source, "// Source changed while the injected compiler ran.\n")
+            await writeFile(path.join(release, file), bytes)
+        }
+        if (command.endsWith(identity.windows.executable)) {
+          const current = JSON.parse(
+            await readFile(path.join(path.dirname(command), "computer-helper.json"), "utf8"),
+          ) as HelperManifest
+          return {
+            code: 0,
+            stdout: JSON.stringify({
+              helperVersion: current.helperVersion,
+              protocol: current.protocol,
+              platform: "win32",
+              arch: "x64",
+              sourceDigest: current.sourceDigest,
+            }),
+            stderr: "",
+          }
         }
         return { code: 0, stdout: "", stderr: "" }
       }
-      const options = parseBuildOptions(["--platform", "win32", "--arch", "x64", "--out", "out"], { directory: root })
+      const options = parseBuildOptions(["--platform", "win32", "--arch", "x64,arm64", "--out", "out"], {
+        directory: root,
+      })
+      const outputs = await buildComputerHelper(options, {
+        directory: root,
+        host: "win32",
+        hostArchitecture: "x64",
+        environment: windowsEnvironment,
+        run,
+      })
+      expect(outputs).toHaveLength(2)
+      expect(outputs[0]!.sourceDigest).toBe(outputs[1]!.sourceDigest)
+      expect(outputs[0]!.toolchain).toBe(
+        "cmake version 3.31.6\nmsvc:19.44.35222\nvc-tools:14.44.35207\nwindows-sdk:10.0.26100.0",
+      )
+      const configure = calls.filter((call) => call[0] === "cmake" && call[1] === "-S")
+      expect(configure.map((call) => call[call.indexOf("-A") + 1])).toEqual([
+        "x64,version=10.0.26100.0",
+        "ARM64,version=10.0.26100.0",
+      ])
+      expect(configure.every((call) => call[call.indexOf("-T") + 1] === "version=14.44.35207")).toBe(true)
+      expect(configure.every((call) => call.includes("--fresh"))).toBe(true)
+      expect(calls.filter((call) => call[0]!.endsWith(identity.windows.executable))).toHaveLength(1)
+      calls.length = 0
       await expect(
-        buildComputerHelper(options, { directory: root, host: "win32", hostArchitecture: "x64", environment: {}, run }),
-      ).rejects.toThrow("inputs changed during compilation")
-      await expect(readFile(path.join(root, "out/x64/computer-helper.json"))).rejects.toMatchObject({ code: "ENOENT" })
+        buildComputerHelper(options, { directory: root, host: "win32", environment: {}, run }),
+      ).rejects.toMatchObject({ exitCode: 2 })
+      expect(calls).toEqual([])
+      const olderCMake: NativeCommand = async (command, args, settings) => {
+        if (command === "cmake" && args[0] === "--version")
+          return { code: 0, stdout: "cmake version 3.26.6", stderr: "" }
+        return run(command, args, settings)
+      }
+      await expect(
+        buildComputerHelper(options, {
+          directory: root,
+          host: "win32",
+          environment: windowsEnvironment,
+          run: olderCMake,
+        }),
+      ).rejects.toThrow("CMake 3.27 or newer")
     }))
 
   test("a serial injected universal build hashes final signed shipping bytes and emits a failing lock candidate", () =>

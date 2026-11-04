@@ -21,3 +21,17 @@ packages/core/src/database/migration.gen.ts linguist-generated
 # the native helpers' generated sources, and the native helpers read the conformance transcripts line by line.
 /packages/desktop/native/computer-helper/*.json text eol=lf
 /packages/desktop/test/fixtures/computer-protocol/*.jsonl text eol=lf
+
+# Native source digests bind actual input bytes across build and prebuilt-verification hosts.
+/packages/desktop/native/computer-helper/**/CMakeLists.txt text eol=lf
+/packages/desktop/native/computer-helper/**/*.cpp text eol=lf
+/packages/desktop/native/computer-helper/**/*.h text eol=lf
+/packages/desktop/native/computer-helper/**/*.in text eol=lf
+/packages/desktop/native/computer-helper/**/*.manifest text eol=lf
+/packages/desktop/native/computer-helper/**/*.swift text eol=lf
+/packages/desktop/native/computer-helper/**/*.plist text eol=lf
+/packages/desktop/native/computer-helper/**/*.template text eol=lf
+/packages/desktop/native/computer-helper/**/*.json text eol=lf
+/packages/desktop/scripts/build-computer-helper.ts text eol=lf
+/packages/desktop/scripts/computer-helper-identity.ts text eol=lf
+/packages/desktop/scripts/channel-ids.ts text eol=lf

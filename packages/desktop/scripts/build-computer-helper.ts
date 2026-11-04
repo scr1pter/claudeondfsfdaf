@@ -675,7 +675,11 @@ async function buildWindows(
   const native = path.join(directory, "native/computer-helper/windows")
   if (!(await lstat(path.join(native, "CMakeLists.txt")).catch(() => undefined))?.isFile())
     throw new HelperBuildError("The Windows helper target is not implemented yet.", 2)
+  const selected = windowsToolchainSelection(settings.env)
   const cmake = (await run("cmake", ["--version"], settings)).stdout.split(/\r?\n/)[0]?.trim()
+  const cmakeVersion = cmake?.match(/^cmake version (\d+)\.(\d+)\.\d+(?:[-+][^\s]+)?$/)
+  if (!cmakeVersion || Number(cmakeVersion[1]) < 3 || (Number(cmakeVersion[1]) === 3 && Number(cmakeVersion[2]) < 27))
+    throw new HelperBuildError("CMake 3.27 or newer is required to select the exact Windows SDK.", 2)
   const probe = path.join(directory, "native/build/computer-helper-win32/toolchain")
   await mkdir(probe, { recursive: true })
   await writeFile(path.join(probe, "version.cpp"), "int vector_computer_toolchain_probe() { return 0; }\n")
@@ -686,7 +690,7 @@ async function buildWindows(
   )
   const version = `${compiler.stdout}\n${compiler.stderr}`.match(/Compiler Version ([0-9.]+) /)?.[1]
   if (!cmake || !version) throw new HelperBuildError("The Windows native toolchain could not be measured.")
-  const toolchain = `${cmake}\nmsvc:${version}`
+  const toolchain = `${cmake}\nmsvc:${version}\nvc-tools:${selected.toolset}\nwindows-sdk:${selected.sdk}`
   const generated = path.join(directory, "native/build/computer-helper-win32/generated")
   generateIdentitySources(generated, {
     identity: path.join(directory, "native/computer-helper/identity.json"),
@@ -711,7 +715,10 @@ async function buildWindows(
         "-B",
         build,
         "-A",
-        arch === "x64" ? "x64" : "ARM64",
+        `${arch === "x64" ? "x64" : "ARM64"},version=${selected.sdk}`,
+        "-T",
+        `version=${selected.toolset}`,
+        "--fresh",
         `-DVECTOR_COMPUTER_GENERATED_DIR=${generated}`,
         `-DVECTOR_COMPUTER_SOURCE_DIGEST=${digest}`,
       ],
@@ -754,6 +761,23 @@ async function buildWindows(
   return manifests
 }
 
+/** The values come from the selected MSVC developer environment; neither CMake's latest SDK nor a guessed
+ * compiler-to-toolset mapping is a reproducible substitute. CMake documents these exact version selectors in
+ * Help/variable/CMAKE_GENERATOR_PLATFORM.rst (SDK, since 3.27) and CMAKE_GENERATOR_TOOLSET.rst (MSVC).
+ */
+export function windowsToolchainSelection(environment: NodeJS.ProcessEnv) {
+  const toolset = environment.VCToolsVersion?.trim()
+  const sdk = environment.WindowsSDKVersion?.trim().replace(/[\\/]$/, "")
+  if (!toolset || !sdk)
+    throw new HelperBuildError(
+      "The Windows helper build requires VCToolsVersion and WindowsSDKVersion from the MSVC developer environment.",
+      2,
+    )
+  if (!/^\d+\.\d+\.\d+$/.test(toolset) || !/^10\.0\.\d+\.\d+$/.test(sdk))
+    throw new HelperBuildError("The MSVC developer environment has an invalid VCToolsVersion or WindowsSDKVersion.", 2)
+  return { toolset, sdk }
+}
+
 export async function sourceDigestFor(
   directory: string,
   platform: HelperPlatform,
@@ -779,7 +803,18 @@ export async function sourceDigestFor(
       bytes: await readFile(file),
     })),
   )
-  entries.push({ path: "generated/Identity.swift", bytes: await readFile(generated) })
+  const generatedInputs =
+    platform === "darwin"
+      ? [generated]
+      : ["identity.h", "blocklist.h"].map((file) => path.join(path.dirname(generated), file))
+  entries.push(
+    ...(await Promise.all(
+      generatedInputs.map(async (file) => ({
+        path: `generated/${path.basename(file)}`,
+        bytes: await readFile(file),
+      })),
+    )),
+  )
   return computeSourceDigest(entries, toolchain)
 }
 

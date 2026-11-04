@@ -100,3 +100,9 @@ From `packages/desktop` on macOS, `bun run native:build -- --arch arm64` (or `x6
 The self-test report accounts for every classified transcript and distinguishes passed, failed and skipped checks. M1’s absent keyboard implementation leaves its heartbeat-input case explicitly skipped until M5. Required grant-free checks cannot skip, privileged checks default off, and every future/override fixture must satisfy the safe catalog and operation rules.
 
 CI uses `.github/workflows/computer-helper.yml`. To run only this lane from the authorized development branch, use `gh workflow run test.yml --ref hands -f computer_helper=true`. It builds twice on pinned Xcode 16.4, requires native core checks and the measured identity lock, and restores verified shipping/test tarballs on the secondary runners. Hosted CI opts into optional scenarios only against the isolated target. Windows protocol checks remain pending W2, and the summary keeps C4/C8 obligations explicit.
+
+## Windows target
+
+`windows/` contains the W1 MSVC/C++20 GUI-subsystem project and its separate unit/target executables. C2 supplies generated headers, the measured digest, the exact installed MSVC toolset and Windows SDK. The builder requires the two version variables from a developer environment and CMake 3.27+ for exact SDK selection. Windows builds and native suites run in C6 on `windows-2025` and `windows-11-arm`.
+
+The skeleton implements version JSON and a read-only token probe. It conservatively reports capture blocked, refuses protocol serving until W2 and returns 77 for unimplemented native self-test/target scenarios. The unit executable embeds its original JSON fixtures and inspects the shipping PE's real resources, architecture and GUI subsystem, so its artifact needs no repository source paths. Windows protocol/lifecycle checks remain pending W2; this source tree alone is not native execution evidence.
