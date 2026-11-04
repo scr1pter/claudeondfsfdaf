@@ -767,6 +767,32 @@ it.instance("ignores unknown keybind names without dropping valid overrides from
   ),
 )
 
+// 4.3: "Stop including helpers" (session.interrupt.all) defaults to <leader>k. A config written for another version that
+// names a keybind this one does not know still loads, and keeps its other overrides.
+it.instance("resolves session_interrupt_all and still loads an older config with an unknown keybind", () =>
+  withCleanState(
+    Effect.gen(function* () {
+      const fs = yield* FSUtil.Service
+      const test = yield* TestInstance
+
+      const defaults = yield* getTuiConfig(test.directory)
+      expect(defaults.keybinds.get("session.interrupt.all")?.[0]?.key).toBe("<leader>k")
+
+      yield* fs.writeJson(path.join(Global.Path.config, "tui.json"), {
+        keybinds: {
+          app_exit: "ctrl+q",
+          session_interrupt_all: "ctrl+alt+s",
+          session_retired_keybind: "ctrl+y",
+        },
+      })
+      const config = yield* getTuiConfig(test.directory)
+      expect(config.keybinds.get("app.exit")?.[0]?.key).toBe("ctrl+q")
+      expect(config.keybinds.get("session.interrupt.all")?.[0]?.key).toBe("ctrl+alt+s")
+      expect(config.keybinds.get("session_retired_keybind")).toEqual([])
+    }),
+  ),
+)
+
 it.instance("resolves keybind lookup from canonical keybinds", () =>
   withCleanState(
     Effect.gen(function* () {

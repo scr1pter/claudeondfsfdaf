@@ -50,6 +50,8 @@ import { DialogProvider as DialogProviderConnect } from "../dialog-provider"
 import { DialogAlert } from "../../ui/dialog-alert"
 import { useToast } from "../../ui/toast"
 import { useKV } from "../../context/kv"
+import { countHelpers } from "../../routes/session/task-actions"
+import { helpersLeftMessage } from "../../routes/session/task-presentation"
 import { createFadeIn } from "../../util/signal"
 import { DialogSkill } from "../dialog-skill"
 import { DialogWorkspaceUnavailable } from "../dialog-workspace-unavailable"
@@ -67,6 +69,11 @@ export type PromptProps = {
   visible?: boolean
   disabled?: boolean
   onSubmit?: () => void
+  /**
+   * "Stop including helpers" for this session. Esc Esc uses it when the kv `interrupt_scope` is "all"; without it Esc
+   * Esc stops only the main turn.
+   */
+  onStopAll?: () => void
   ref?: (ref: PromptRef | undefined) => void
   hint?: JSX.Element
   right?: JSX.Element
@@ -156,6 +163,11 @@ export function Prompt(props: PromptProps) {
   const kv = useKV()
   const vectorLocal = useVectorLocal()
   const animationsEnabled = createMemo(() => kv.get("animations_enabled", true))
+  // What Esc Esc stops (4.3): the main turn only (default), or the main turn and every helper it started.
+  const interruptScope = createMemo<"turn" | "all">(() =>
+    kv.get("interrupt_scope", "turn") === "all" ? "all" : "turn",
+  )
+  const stopAllShortcut = useCommandShortcut("session.interrupt.all")
   const list = createMemo(() => props.placeholders?.normal ?? [])
   const shell = createMemo(() => props.placeholders?.shell ?? [])
   const fileContextEnabled = createMemo(() => kv.get("file_context_enabled", true))
@@ -406,11 +418,47 @@ export function Prompt(props: PromptProps) {
           }, 5000)
 
           if (store.interrupt >= 2) {
-            void sdk.client.session.abort({
-              sessionID: props.sessionID,
-            })
             setStore("interrupt", 0)
+            if (interruptScope() === "all" && props.onStopAll) {
+              props.onStopAll()
+            } else {
+              const sessionID = props.sessionID
+              void sdk.client.session
+                .abort({
+                  sessionID,
+                })
+                // Plain Stop leaves helpers running, so say how many and how to stop them too.
+                .then(() =>
+                  countHelpers({
+                    client: sdk.client,
+                    sessionID,
+                    workspace: project.workspace.current(),
+                    capabilities: sync.data.capabilities,
+                  }),
+                )
+                .then((count) => {
+                  if (count > 0 && props.sessionID === sessionID)
+                    toast.show({ message: helpersLeftMessage(count, stopAllShortcut()), variant: "info" })
+                })
+                .catch(() => {})
+            }
           }
+          dialog.clear()
+        },
+      },
+      {
+        title: interruptScope() === "all" ? "Esc stops only the main turn" : "Esc also stops helpers",
+        name: "session.interrupt.scope",
+        category: "Session",
+        desc: `Esc Esc stops ${interruptScope() === "all" ? "the main turn and its helpers" : "only the main turn"} now`,
+        run: () => {
+          const next = interruptScope() === "all" ? "turn" : "all"
+          kv.set("interrupt_scope", next)
+          toast.show({
+            message: next === "all" ? "Esc Esc now also stops helpers." : "Esc Esc now stops only the main turn.",
+            variant: "info",
+            duration: 3000,
+          })
           dialog.clear()
         },
       },

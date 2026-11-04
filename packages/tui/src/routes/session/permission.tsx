@@ -5,7 +5,14 @@ import { Portal, useRenderer, useTerminalDimensions, type JSX } from "@opentui/s
 import type { TextareaRenderable } from "@opentui/core"
 import { useTheme, selectedForeground } from "../../context/theme"
 import type { PermissionRequest } from "@vectordevai/sdk/v2"
-import { canAlwaysAllowPermission, cloudPermissionDetails } from "../../util/permission"
+import {
+  canAlwaysAllowPermission,
+  cloudPermissionDetails,
+  workflowAsk,
+  workflowPlanLines,
+  type WorkflowAsk,
+} from "../../util/permission"
+import { sanitizeTerminalText } from "../../util/presentation"
 import { useSDK } from "../../context/sdk"
 import { SplitBorder } from "../../ui/border"
 import { useSync } from "../../context/sync"
@@ -149,6 +156,39 @@ function CloudBody(props: { request: PermissionRequest }) {
   )
 }
 
+// A workflow ask (5.I.5): the plan and every ceiling before anything runs, and why an elevated plan always asks.
+function WorkflowBody(props: { ask: WorkflowAsk; patterns: readonly string[] }) {
+  const themeState = useTheme()
+  const config = useTuiConfig()
+  return (
+    <scrollbox focused flexGrow={1} height="100%" scrollAcceleration={getScrollAcceleration(config)}>
+      <box flexDirection="column" paddingLeft={1} gap={1}>
+        <Show when={props.ask.reason}>
+          {(reason) => (
+            <text fg={themeState.theme.warning} wrapMode="word">
+              {reason()}
+            </text>
+          )}
+        </Show>
+        <Show
+          when={props.ask.plan}
+          fallback={
+            <text fg={themeState.theme.textMuted} wrapMode="word">
+              {"Patterns: " + props.patterns.map(sanitizeTerminalText).join(", ")}
+            </text>
+          }
+        >
+          {(plan) => (
+            <text fg={themeState.theme.text} wrapMode="word">
+              {workflowPlanLines(plan(), props.ask.delegated).join("\n")}
+            </text>
+          )}
+        </Show>
+      </box>
+    </scrollbox>
+  )
+}
+
 export function PermissionPrompt(props: { request: PermissionRequest; directory?: string }) {
   const sdk = useSDK()
   const project = useProject()
@@ -239,6 +279,15 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
 
             if (permission.startsWith("vector_cloud_")) {
               return { icon: "☁", title: "Review Cloud action", body: <CloudBody request={props.request} /> }
+            }
+
+            const workflow = workflowAsk(props.request)
+            if (workflow) {
+              return {
+                icon: "◇",
+                title: workflow.plan ? `Run workflow ${sanitizeTerminalText(workflow.plan.title)}` : "Run a workflow",
+                body: <WorkflowBody ask={workflow} patterns={props.request.patterns ?? []} />,
+              }
             }
 
             if (permission === "edit") {
@@ -449,7 +498,9 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
               body={current.body}
               options={{
                 once: "Allow once",
-                ...(canAlwaysAllowPermission(props.request.permission, props.request.always)
+                // A workflow plan past the defaults or after outside content is never saved as Always (I15).
+                ...(canAlwaysAllowPermission(props.request.permission, props.request.always, props.request.patterns) &&
+                (workflowAsk(props.request)?.canAlways ?? true)
                   ? { always: "Allow always" }
                   : {}),
                 reject: "Reject",
