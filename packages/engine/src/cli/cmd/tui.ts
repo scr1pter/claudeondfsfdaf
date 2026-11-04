@@ -123,7 +123,8 @@ export const TuiThreadCommand = cmd({
       })
       .option("mini", {
         type: "boolean",
-        describe: "start the minimal interactive interface",
+        describe:
+          "start the minimal interactive interface; without --attach, exiting it ends the subagents and background commands it started",
         default: false,
       })
       .option("replay", {

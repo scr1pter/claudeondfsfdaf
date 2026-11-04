@@ -423,6 +423,9 @@ const layer = Layer.effect(
         agent: current.agent,
         status,
         batchID: current.batchID,
+        // Always sent, so a client can tell foreground work apart (`vector tasks stop --background`, 5.I.6). A promoted
+        // entry's job is background before its record catches up.
+        background: current.background === true || job?.metadata?.background === true,
         startedAt: current.startedAt,
         completedAt,
         elapsedMs: Math.max(0, (completedAt ?? Date.now()) - current.startedAt),

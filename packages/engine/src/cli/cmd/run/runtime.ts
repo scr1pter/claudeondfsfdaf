@@ -19,6 +19,7 @@ import { createRunDemo } from "./demo"
 import { resolveModelInfo, resolveRunTuiConfig, resolveSessionInfo } from "./runtime.boot"
 import { createRuntimeLifecycle } from "./runtime.lifecycle"
 import { freeModelRunNotice } from "./free-model-notice"
+import { countHelpers, helpersNotice, resumeInterrupted, stopSession, stoppedNotice } from "./interrupt"
 import { trace } from "./trace"
 import { cycleVariant, formatModelLabel, resolveSavedVariant, resolveVariant, saveVariant } from "./variant.shared"
 import type { LocalReplayAnchor, LocalReplayRow, RunInput, RunPrompt, RunProvider, StreamCommit } from "./types"
@@ -341,20 +342,53 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
         variants: state.variants,
       }
     },
+    // The footer's own two-press interrupt stops only the main turn, as before. Helpers it leaves running are
+    // counted once the abort lands (5.I.6).
     onInterrupt: () => {
       if (!hasSession(input, state) || state.aborting) {
         return
       }
 
       state.aborting = true
+      const sessionID = state.sessionID
       void ctx.sdk.session
         .abort({
-          sessionID: state.sessionID,
+          sessionID,
         })
         .catch(() => {})
         .finally(() => {
           state.aborting = false
         })
+        .then(() => countHelpers(ctx.sdk, sessionID))
+        .then((count) => {
+          if (count > 0 && !footer.isClosed && state.sessionID === sessionID) system(helpersNotice(count))
+        })
+        .catch(() => {})
+    },
+    onInterruptAll: () => {
+      if (!hasSession(input, state)) {
+        return
+      }
+
+      const sessionID = state.sessionID
+      void stopSession(ctx.sdk, sessionID, { helpers: true })
+        .then((result) => system(stoppedNotice(result)))
+        .catch((error) => failure(`Could not stop the helpers: ${message(error)}`))
+    },
+    onResumeInterrupted: () => {
+      if (!hasSession(input, state)) {
+        return
+      }
+
+      void resumeInterrupted(ctx.sdk, state.sessionID)
+        .then((count) =>
+          system(
+            count > 0
+              ? `Resumed ${count === 1 ? "1 interrupted helper" : `${count} interrupted helpers`}; each reports when it finishes.`
+              : "No interrupted helpers to resume.",
+          ),
+        )
+        .catch((error) => failure(`Could not resume the helpers: ${message(error)}`))
     },
     onBackground: () => {
       if (!hasSession(input, state)) return
@@ -368,6 +402,16 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
     },
   })
   const footer = shell.footer
+  // Lines the helper commands write to scrollback.
+  const system = (text: string) => {
+    if (footer.isClosed) return
+    footer.append({ kind: "system", text, phase: "final", source: "system" })
+  }
+  const failure = (text: string) => {
+    if (footer.isClosed) return
+    footer.append({ kind: "error", text, phase: "start", source: "system", messageID: MessageID.ascending() })
+  }
+  const message = (error: unknown) => (error instanceof Error ? error.message : String(error))
   const rememberLocal = (commit: StreamCommit, after?: LocalReplayAnchor) => {
     state.localRows = [...state.localRows, { commit, after }].slice(-LOCAL_REPLAY_ROW_LIMIT)
   }

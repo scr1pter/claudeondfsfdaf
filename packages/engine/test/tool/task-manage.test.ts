@@ -1112,6 +1112,18 @@ describe("task management", () => {
     expect(SubagentLifecycle.read(yield* sessions.get(task.id))?.reports).toEqual({ at: [result.at], wakes: 1 })
   }))
 
+  // `vector tasks stop --background` (5.I.6) reads this; an engine that leaves it out is refused as too old.
+  it.instance("the board says whether each child runs in the background", () => Effect.gen(function* () {
+    const sessions = yield* Session.Service
+    const manager = yield* TaskManager.Service
+    const root = yield* sessions.create()
+    const background = yield* child(root.id)
+    const foreground = yield* child(root.id, { background: false })
+    const listed = (yield* manager.list({ sessionID: root.id })).tasks
+    expect(listed.find((task) => task.id === background.id)?.background).toBe(true)
+    expect(listed.find((task) => task.id === foreground.id)?.background).toBe(false)
+  }))
+
   it.instance("report from a foreground child, a research agent or a root is refused", () => Effect.gen(function* () {
     const sessions = yield* Session.Service
     const manager = yield* TaskManager.Service

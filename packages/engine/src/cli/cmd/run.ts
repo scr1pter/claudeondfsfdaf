@@ -4,6 +4,7 @@ import type { PermissionV1 } from "@vectordevai/core/v1/permission"
 import { FSUtil } from "@vectordevai/core/fs-util"
 import { backgroundTracker, nextBackgroundEvent, trackShell, waitingFor } from "./run/background-wait"
 import { runWorkflow } from "./run/workflow"
+import { INTERRUPT_EXIT_CODE, handlesInterrupt, watchInterrupts } from "./run/interrupt"
 import { assertWorkflowOwner, parseWorkflowInputs, readWorkflowSource, requireWorkflowCapability } from "./workflow"
 // CLI entry point for `vector run` and `vector --mini`.
 //
@@ -67,6 +68,7 @@ export function validateWorkflowRunOptions(args: Record<string, unknown>, messag
     "judge",
     "max-cost",
     "max-steps",
+    "stop-helpers",
     "thinking",
     "demo",
   ].filter(
@@ -372,11 +374,16 @@ export const RunCommand = effectCmd({
         type: "number",
         describe: "stop this run after this many model steps",
       })
+      .option("stop-helpers", {
+        type: "boolean",
+        describe:
+          "Ctrl+C at a terminal also stops the subagents and background commands this session started, not only the main turn. Without --attach, exiting ends them anyway",
+      })
       .option("size", {
         type: "string",
         choices: ["auto", "chat", "light", "standard", "thorough"],
         describe:
-          "how much harness each prompt gets: auto (default) sizes it from what it says; standard and thorough may hand work to subagents",
+          "how much harness each prompt gets: auto (default) sizes it from what it says; standard and thorough offer subagents; light only manages ones already running",
       })
       .option("judge", {
         type: "string",
@@ -1367,15 +1374,38 @@ export const RunCommand = effectCmd({
         if (!interactive) {
           const streamAbort = new AbortController()
           const events = await client.event.subscribe(undefined, { signal: streamAbort.signal })
+          // Ctrl+C at a terminal (5.I.6): the first press stops the main turn, or everything with --stop-helpers, and
+          // says which helpers keep running; a second press within 5 s stops them too and exits 130. SIGTERM and runs
+          // without a terminal keep the default.
+          const interrupts = handlesInterrupt({
+            interactive,
+            workflow: false,
+            tty: process.stdin.isTTY === true || process.stderr.isTTY === true,
+          })
+            ? watchInterrupts({
+                client,
+                sessionID,
+                stopHelpers: args["stop-helpers"] === true,
+                write: (text) => process.stderr.write(text + EOL),
+                exit: (code) => process.exit(code),
+              })
+            : undefined
           const completed = loop(client, events)
             .catch((e) => {
               console.error(e)
               process.exitCode = 1
             })
-            .finally(() => streamAbort.abort())
+            .finally(() => {
+              streamAbort.abort()
+              interrupts?.dispose()
+            })
           async function finish() {
             const error = await completed
             if (error) process.exitCode = 1
+          }
+          // A run the user stopped with Ctrl+C ends as an interrupted command does.
+          const interrupted = () => {
+            if (interrupts?.interrupted) process.exitCode = INTERRUPT_EXIT_CODE
           }
 
           if (args.command) {
@@ -1403,6 +1433,7 @@ export const RunCommand = effectCmd({
             }
             await finish()
             conclude(result.data?.info)
+            interrupted()
             return
           }
 
@@ -1431,6 +1462,7 @@ export const RunCommand = effectCmd({
           }
           await finish()
           conclude(result.data?.info)
+          interrupted()
           if (args.report) await writeReport(client, sessionID, args.report)
           return
         }
@@ -1741,6 +1773,8 @@ export async function runMini(input: MiniCommandInput) {
     "max-cost": undefined,
     maxCost: undefined,
     "max-steps": undefined,
+    "stop-helpers": undefined,
+    stopHelpers: undefined,
     size: undefined,
     judge: undefined,
     research: undefined,
