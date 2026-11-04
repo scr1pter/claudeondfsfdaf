@@ -148,3 +148,98 @@ dated, names its work package, and is committed with the work it explains.
 - **The new tests are not in CI yet.** `budget.test.ts`, `run.test.ts` and
   `ci.test.ts`, like the earlier eval tests, are not run by any workflow.
   Adding the step is left to the gate or the owner.
+
+## 2026-11-03 · VS-04 Causal judging and gate
+
+- **Where the modules are.** The causal scoring is in core `review/eval.ts`:
+  verdicts, settlement, per-run scoring, metrics and intervals. Two new core
+  modules hold the rest. `review/eval-judge.ts` has blinding, the `Matcher`
+  interface, judge orchestration and disputes. `review/eval-report.ts` has the
+  report, the gate and its rendering. All three are pure and run under Node.
+  The command-line tools are `script/vectorscope-eval/judge.ts` (worksheets)
+  and `report.ts` (offline re-scoring), with the rubric in `judging-rubric.md`.
+- **The gate config is one constant.** D2 is encoded as `DEFAULT_GATE` in
+  `eval-report.ts`, with its approval (owner, 2026-11-03). There is no separate
+  JSON file to drift from it. `report.ts --print-gate` writes it as JSON, and
+  `--gate <file>` takes an owner-edited copy, which `gateProblems` validates.
+- **The legacy scorer is unchanged.** `scoreReview` and `totalScores` keep
+  their line matching and their convention that an empty denominator is 1,
+  because `run.ts` still uses them as the smoke test's quick check. Their tests
+  pass unchanged, and `run.ts` output is unchanged. The causal metrics never
+  use them: an empty denominator is null and is shown with its counts.
+- **No reviewer behaviour changed, so D3's opt-in does not apply.** No engine
+  file changed. Core `review/eval.ts` is imported only by the eval scripts and
+  tests, never by the reviewer.
+- **Settlement rules the plan leaves open.**
+  - Two distinct judges agreeing settle a verdict, whether human or model. The
+    report counts how many agreements had a human pass.
+  - A human adjudication settles any verdict. A single pass settles nothing,
+    and a model never adjudicates.
+  - Agreement means the same verdict kind, and the same defect for a match.
+  - A model's pass on a run whose findings that model helped produce (the review
+    or triage model) is refused. `judgeRuns` refuses a model judge that reviewed
+    any run in the batch, since a blinded judge cannot tell whose findings it
+    sees.
+  - Passes under another `RUBRIC_VERSION` are stale.
+- **Scoring choices.**
+  - Duplicates are derived, not judged: within a run, the first finding on a
+    defect or extra issue counts and later ones are duplicates. Duplicates stay
+    in the precision denominator, which is stricter than leaving them out.
+  - An extra issue's name is prefixed with the judge it came from, so names
+    from different judges are never merged.
+  - Nits are left out of judging and precision unless the gate counts them.
+  - A finding is keyed by path, lines and title, not body, because selection
+    appends an "also at" sentence to a posted finding's body.
+- **Blinding.** A task is one run's findings beside its case's labels. Opaque
+  ids come from a seed kept only in the coordinator's judgement file, and tasks
+  and findings are ordered by those ids. Tasks are per run, so a judge call is
+  charged to the run's own ledger case, as VS-03 defined a case.
+- **Intervals.** Proportions use Wilson score intervals, per-PR rates exact
+  Poisson intervals, and the paired recall difference Newcombe's method 10.
+  Precision's interval treats findings as independent, though findings in one
+  pull request are not. The report says so, and a human decides any rule its
+  interval cannot settle.
+- **How the gate reads D2.** It counts posted findings, at 95% confidence,
+  without nits, for one named candidate against one named frozen pipeline.
+  - Trust, accounting and coverage are decided on the observed value. The
+    statistical rules pass or fail only when the whole interval is on one side,
+    and otherwise go to human review, as they do while their findings are
+    unjudged.
+  - "No trust/consent regressions" is read as no failed check in the
+    candidate's runs, which is stricter than comparing with the baseline.
+  - "No unaccounted paid attempts" counts runs that sent paid attempts the eval
+    ledger did not admit, unplanned runs included, plus paid judge calls it did
+    not admit and attempts left open in it.
+  - Paired recall pairs each labelled defect by case and repetition, end to
+    end.
+  - A release decision needs all of: a held-out run, a frozen manifest, results
+    collected on or after the gate's approval date, and no input or judging
+    problems.
+- **What saved outputs can show about trust.** A replay artifact is checked
+  for three things: it was reviewed untrusted, it reviewed the case's own
+  candidate commits, and the fix commit does not appear in what would be
+  posted. Adversarial trust and consent suites (MCP, fixes) belong to later
+  packages and are not inputs yet.
+- **How replay artifacts map to runs.**
+  - An artifact that reviewed nothing (every file skipped) is partial, as is
+    one whose verify pass failed or timed out.
+  - Posted findings are the line comments when the review write went through,
+    and the summary's lists when the summary went through.
+  - A replay's paid attempts count as accounted for only when a ledger journal
+    (`--ledger`) holds `admitReplay`'s admission.
+  - Artifacts record no start time, so a held-out replay is never a release
+    decision until the paid replay driver records when it ran.
+- **`budget.ts` now exports `readJournal`**, so the report can see which runs
+  the ledger admitted. Its behaviour is unchanged.
+- **No model judge is connected to a provider.** Worksheets record people only,
+  and `import` refuses a `model:` judge. A model judge runs only through
+  `judgeRuns` with `ledgerAdmission`, which admits each call as a `judge`
+  attempt. Tests use fakes and a real ledger, and nothing sends a request (D5,
+  D12). The plan names `task-structured.ts` from `self-evolving` for judge
+  helpers. It is not on this branch, so a model matcher built after that merge
+  should use it for schema-checked answers.
+- **Which new tests run in CI.** The three core test files (`eval.test.ts`,
+  `eval-judge.test.ts`, `eval-report.test.ts`) run with the core suite, since
+  `test.yml` runs `turbo test` for every package but the engine.
+  `judge.test.ts` and `report.test.ts`, like the earlier eval script tests, are
+  run by no workflow yet.

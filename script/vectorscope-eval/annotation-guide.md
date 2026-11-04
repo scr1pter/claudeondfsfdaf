@@ -160,7 +160,8 @@ Following D8, every label gets two independent model-assisted passes:
    passes) to `adjudicated`.
 
 A model that helps judge eval results never scores its own findings and is
-never the only authority on a label.
+never the only authority on a label. Judging a review's findings against these
+labels follows `judging-rubric.md`.
 
 ## Splits
 

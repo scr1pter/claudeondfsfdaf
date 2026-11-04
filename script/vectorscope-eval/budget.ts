@@ -605,7 +605,7 @@ function describeLimits(limits: Limits) {
 }
 
 // A journal line cut off by a killed process is the last one; anything else unreadable is an error.
-function readJournal(path: string): Entry[] {
+export function readJournal(path: string): Entry[] {
   const lines = readFileSync(path, "utf8").split("\n")
   const entries: Entry[] = []
   for (const [index, line] of lines.entries()) {

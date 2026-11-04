@@ -121,6 +121,12 @@ answer with no report in it) is reported as an error and left out of the
 totals. It is neither a clean review nor a missed bug, and the process exits 1
 so it is not overlooked.
 
+This line-matching score is the smoke test's quick check. What Phase 0 reports
+is the causal judging below: there a finding counts only when judges agree it
+names the defect's cause, failed runs stay in the denominators, and an empty
+denominator is n/a instead of 1. A saved `--out` report can be judged and
+re-scored that way with `judge.ts` and `report.ts`.
+
 ## What it costs
 
 The dry run prints the prompt size of every fixture, and with `--model`,
@@ -254,7 +260,8 @@ pipeline. In particular:
   models in the same session: provider routing and model versions change.
 - **Line matching only.** A finding at the right lines that describes a
   different problem still counts as a hit. The "misses, false alarms and
-  errors" list and the `--out` report show what was actually said.
+  errors" list and the `--out` report show what was actually said, and
+  "Causal judging and the release gate" below scores the same report by cause.
 - **Synthetic code.** The fixtures are small and self-contained, written to
   hold one unambiguous bug each. Real pull requests are bigger and messier.
 
@@ -318,8 +325,9 @@ check.
 
 A bug case's fix and labels are hidden ground truth. A reviewer is given only
 `caseView(case)`: the repository and the candidate's base and head. The
-production replay below plans runs from that view alone, and the budget ledger
-admits what a paid replay may spend; causal judging is a later work package.
+production replay below plans runs from that view alone, the budget ledger
+admits what a paid replay may spend, and the causal judging at the end scores
+the saved runs against the hidden labels.
 
 `fixtures.test.ts` covers the dataset with local fixture repositories (missing
 objects, wrong ancestry, post-fix leakage, a reverse diff, split grouping and
@@ -403,4 +411,82 @@ a fake fetch; and the workflow file and its entry point:
 cd script/vectorscope-eval && bun test budget.test.ts
 cd script/vectorscope-eval && bun test run.test.ts
 cd script/vectorscope-eval && bun test ci.test.ts
+```
+
+## Causal judging and the release gate
+
+The report Phase 0 decides on. A saved run (a `run.ts --out` report or a
+replay artifact) is judged against its case's hidden labels by cause, not by
+line, and then re-scored and gated offline, as often as needed.
+`judging-rubric.md` holds the rules.
+
+```
+bun script/vectorscope-eval/judge.ts tasks --outputs <dir> --judgements <file> --judge human:<name> --worksheet <sheet>
+bun script/vectorscope-eval/judge.ts import --outputs <dir> --judgements <file> --judge human:<name> --worksheet <sheet>
+bun script/vectorscope-eval/judge.ts disputes --outputs <dir> --judgements <file> --worksheet <sheet>
+bun script/vectorscope-eval/judge.ts adjudicate --outputs <dir> --judgements <file> --worksheet <sheet> --by human:owner --date <day>
+bun script/vectorscope-eval/report.ts --outputs <dir> --judgements <file> --candidate <variant>=<model> --baseline <variant>=<model>
+bun script/vectorscope-eval/report.ts --print-gate          # the approved D2 gate as JSON
+```
+
+How it works:
+
+- **Verdicts.** Each finding is a `match` with a labelled defect when it names
+  that defect's cause, wherever it points. It is an `extra` when it is a real
+  defect the labels lack, which counts toward precision and is never a false
+  alarm. Otherwise it is a `false-alarm`, including a different complaint at a
+  labelled line. Later findings on a defect a run already reported are counted
+  as duplicates.
+- **Blinding.** A judge gets a worksheet of tasks, one per run. Each holds the
+  case's labels and the run's findings under opaque ids. Nothing names the
+  pipeline, the model, the repetition, the case or whether a finding was
+  posted, and the order depends only on a seed kept in the coordinator's
+  judgement file.
+- **Settlement.** Two independent judges that agree settle a verdict. A
+  disagreement goes to the owner as a blinded disputes worksheet, and their
+  answers are recorded as adjudications. One pass alone settles nothing, and
+  such a finding stays unjudged. A model never adjudicates, and never judges
+  findings its own model produced.
+- **Model judges.** A model judge is a `Matcher` (`eval-judge.ts`), so tests use
+  a fake. Each of its calls is a paid attempt admitted by the budget ledger
+  (`ledgerAdmission` in `judge.ts`) and charged to the run it judges. No model
+  judge is connected to a provider in this build, and worksheets record people
+  only.
+- **The report.** For each pipeline variant and model, `report.ts` reports
+  proposed and posted findings with intervals:
+  - coverage
+  - end-to-end and conditional recall
+  - actionable precision and F1
+  - false alarms per clean pull request
+  - comments and duplicates per pull request
+  - severity agreement, location validity, anchoring and suggestion validity
+  - run statuses, spend and wall time
+  - breakdowns by language, trust mode, size and defect category
+
+  Failed, unsent and missing runs stay in the denominators: replay artifacts
+  plan every case of their split, so a lost artifact shows as missing. A rate
+  with nothing to count is n/a, never 1.
+- **The gate.** The default gate is D2 as the owner approved it:
+  - no trust or consent check failed
+  - no unaccounted paid attempt
+  - at least 95% coverage
+  - at least 80% actionable precision
+  - at most 0.2 false alarms per clean pull request
+  - recall at most five points below the frozen pipeline on paired cases
+
+  A statistical rule passes or fails only when its interval settles it, and
+  otherwise goes to human review. A result is a release decision only for a
+  held-out run on a frozen manifest, collected after the gate was approved.
+
+The judgement file, worksheets and `--out` reports must be outside the
+repository. Everything here reads saved files and sends nothing.
+
+The tests need no provider:
+
+```
+cd packages/core && bun test test/review/eval.test.ts
+cd packages/core && bun test test/review/eval-judge.test.ts
+cd packages/core && bun test test/review/eval-report.test.ts
+cd script/vectorscope-eval && bun test judge.test.ts
+cd script/vectorscope-eval && bun test report.test.ts
 ```

@@ -1,5 +1,28 @@
 import { describe, expect, test } from "bun:test"
-import { scoreReview, totalScores, type EvalExpectation } from "@vectordevai/core/review/eval"
+import {
+  findingKey,
+  pairedDifference,
+  pairedRecall,
+  poissonInterval,
+  RUBRIC_VERSION,
+  runKey,
+  scoreRun,
+  scoreReview,
+  settle,
+  summarize,
+  totalScores,
+  wilson,
+  type EvalCase,
+  type EvalExpectation,
+  type EvalFinding,
+  type EvalRun,
+  type JudgePass,
+  type Judgement,
+  type PlanEntry,
+  type Settled,
+  type Stage,
+  type Verdict,
+} from "@vectordevai/core/review/eval"
 
 function expectation(overrides: Partial<EvalExpectation> = {}): EvalExpectation {
   return {
@@ -173,5 +196,514 @@ describe("totalScores", () => {
       recall: 1,
       f1: 1,
     })
+  })
+})
+
+// Causal scoring (VS-04). Verdicts are given as settled judgements: two independent passes that agree, or a human
+// adjudication, exactly as settle() decides them.
+
+const BUG: EvalCase = {
+  id: "acme-ledger-1",
+  kind: "bug",
+  language: "typescript",
+  size: { files: 1, additions: 30, deletions: 4 },
+  defects: [
+    {
+      id: "missing-await",
+      category: "concurrency",
+      severity: "blocking",
+      summary: "The ledger post is not awaited.",
+      cause: "postLedger returns a promise that is never awaited, so its rejection escapes the try/catch.",
+      locations: [{ path: "src/billing/sync.ts", line: 40 }],
+      alternatives: [{ path: "src/billing/ledger.ts", line: 12, endLine: 14 }],
+    },
+  ],
+}
+
+const CONTROL: EvalCase = { id: "acme-refactor-1", kind: "control", language: "python", defects: [] }
+
+function evalFinding(overrides: Partial<Omit<EvalFinding, "key">> = {}): EvalFinding {
+  const base = {
+    path: "src/billing/sync.ts",
+    line: 40,
+    severity: "blocking",
+    category: "bug",
+    title: "Ledger post is not awaited",
+    body: "postLedger's promise is dropped, so a failure is never caught and the invoice is marked synced.",
+    ...overrides,
+  }
+  return { key: findingKey(base), ...base }
+}
+
+function evalRun(overrides: Partial<EvalRun> = {}): EvalRun {
+  return {
+    variant: "engine",
+    model: "test/reviewer",
+    case: BUG.id,
+    repetition: 1,
+    trust: "untrusted",
+    status: "completed",
+    proposed: [],
+    posted: [],
+    spend: { costUsd: 0.01, uncertainUsd: 0, usageMissing: false, admitted: true },
+    violations: [],
+    ...overrides,
+  }
+}
+
+function plan(run: EvalRun): PlanEntry {
+  return { variant: run.variant, model: run.model, case: run.case, repetition: run.repetition }
+}
+
+// Two judges that agree, a human and a model that reviewed nothing here.
+function agreed(verdict: Verdict, extra: Partial<JudgePass> = {}): Pick<Judgement, "passes"> {
+  return {
+    passes: [
+      { judge: "human:annotator", rubric: RUBRIC_VERSION, verdict, ...extra },
+      { judge: "model:judge/one", rubric: RUBRIC_VERSION, verdict, ...extra },
+    ],
+  }
+}
+
+function score(input: {
+  evalCase?: EvalCase
+  run?: EvalRun
+  planned?: PlanEntry
+  verdicts?: Record<string, Pick<Judgement, "passes" | "adjudication">>
+  stage?: Stage
+  countNits?: boolean
+}) {
+  const evalCase = input.evalCase ?? BUG
+  const run = input.run
+  return scoreRun({
+    evalCase,
+    planned: input.planned ?? plan(run ?? evalRun({ case: evalCase.id })),
+    ...(run ? { run } : {}),
+    verdict: (finding) => {
+      const judgement = input.verdicts?.[finding.key]
+      return judgement ? settle(judgement, { reviewed: run?.models ?? [run?.model ?? ""] }) : undefined
+    },
+    stage: input.stage ?? "posted",
+    ...(input.countNits ? { countNits: true } : {}),
+  })
+}
+
+describe("causal scoring", () => {
+  test("a finding at the defect's line that names a different problem is not a match", () => {
+    const wrong = evalFinding({
+      title: "Magic number in the retry delay",
+      body: "Use a named constant for the 40ms delay.",
+    })
+    const run = evalRun({ proposed: [wrong], posted: [wrong] })
+    const result = score({ run, verdicts: { [wrong.key]: agreed({ kind: "false-alarm" }) } })
+    expect(result).toMatchObject({ matched: 0, falseAlarms: 1, detected: [], defects: ["missing-await"] })
+    // The legacy smoke-test scorer counts the same finding as a hit because it is on the planted line.
+    expect(
+      scoreReview({
+        expected: [{ id: "missing-await", path: wrong.path, line: 40, severity: "blocking", description: "" }],
+        findings: [wrong],
+      }).truePositives,
+    ).toBe(1)
+    const metrics = summarize([{ score: result, evalCase: BUG, run }])
+    expect(metrics.recall).toMatchObject({ count: 0, total: 1, value: 0 })
+    expect(metrics.precision).toMatchObject({ count: 0, total: 1, value: 0 })
+  })
+
+  test("a finding that identifies the cause matches even away from the labelled lines", () => {
+    const elsewhere = evalFinding({ path: "src/billing/report.ts", line: 200 })
+    const run = evalRun({ proposed: [elsewhere], posted: [elsewhere] })
+    const result = score({ run, verdicts: { [elsewhere.key]: agreed({ kind: "match", defect: "missing-await" }) } })
+    expect(result).toMatchObject({ matched: 1, detected: ["missing-await"], located: 0, severityAgreed: 1 })
+  })
+
+  test("a real defect the labels lack counts toward precision, not as a false alarm", () => {
+    const real = evalFinding({ line: 52, title: "Retry count is never reset", severity: "concern" })
+    const labelled = evalFinding()
+    const run = evalRun({ proposed: [labelled, real], posted: [labelled, real] })
+    const result = score({
+      run,
+      verdicts: {
+        [labelled.key]: agreed({ kind: "match", defect: "missing-await" }),
+        [real.key]: agreed({ kind: "extra", issue: "retry-reset" }),
+      },
+    })
+    expect(result).toMatchObject({ matched: 1, extra: 1, falseAlarms: 0, duplicates: 0 })
+    const metrics = summarize([{ score: result, evalCase: BUG, run }])
+    expect(metrics.precision).toMatchObject({ count: 2, total: 2, value: 1 })
+    expect(metrics.recall.value).toBe(1)
+
+    // On a clean change, a real defect is not a false alarm either.
+    const control = evalRun({ case: CONTROL.id, proposed: [real], posted: [real] })
+    const clean = score({
+      evalCase: CONTROL,
+      run: control,
+      verdicts: { [real.key]: agreed({ kind: "extra", issue: "retry-reset" }) },
+    })
+    const cleanMetrics = summarize([{ score: clean, evalCase: CONTROL, run: control }])
+    expect(cleanMetrics.falseAlarmsPerCleanPr).toMatchObject({ count: 0, exposure: 1, value: 0 })
+    expect(cleanMetrics.recall.value).toBeNull()
+  })
+
+  test("further findings on a defect the run already reported are duplicates", () => {
+    const first = evalFinding()
+    const again = evalFinding({ line: 41, title: "Unawaited promise" })
+    const third = evalFinding({ path: "src/billing/ledger.ts", line: 13, title: "Caller drops the promise" })
+    const extraA = evalFinding({ line: 60, title: "Cache never expires", severity: "concern" })
+    const extraB = evalFinding({ line: 61, title: "Unbounded cache", severity: "concern" })
+    const run = evalRun({
+      proposed: [first, again, third, extraA, extraB],
+      posted: [first, again, third, extraA, extraB],
+    })
+    const result = score({
+      run,
+      verdicts: {
+        [first.key]: agreed({ kind: "match", defect: "missing-await" }),
+        [again.key]: agreed({ kind: "match", defect: "missing-await" }),
+        [third.key]: agreed({ kind: "match", defect: "missing-await" }),
+        [extraA.key]: agreed({ kind: "extra", issue: "cache" }),
+        [extraB.key]: agreed({ kind: "extra", issue: "cache" }),
+      },
+    })
+    expect(result).toMatchObject({ matched: 1, extra: 1, duplicates: 3, falseAlarms: 0, detected: ["missing-await"] })
+    const metrics = summarize([{ score: result, evalCase: BUG, run }])
+    // A duplicate comment reports nothing new, so it is judged but not counted as an actionable finding.
+    expect(metrics.precision).toMatchObject({ count: 2, total: 5 })
+    expect(metrics.duplicatesPerPr).toMatchObject({ count: 3, exposure: 1, value: 3 })
+
+    // Extra defects named differently are two defects.
+    const two = score({
+      run: evalRun({ proposed: [extraA, extraB], posted: [extraA, extraB] }),
+      verdicts: {
+        [extraA.key]: agreed({ kind: "extra", issue: "cache-expiry" }),
+        [extraB.key]: agreed({ kind: "extra", issue: "cache-size" }),
+      },
+    })
+    expect(two).toMatchObject({ extra: 2, duplicates: 0 })
+  })
+
+  test("rates with nothing to count are null, never 1", () => {
+    const control = evalRun({ case: CONTROL.id })
+    const clean = summarize([{ score: score({ evalCase: CONTROL, run: control }), evalCase: CONTROL, run: control }])
+    expect(clean.precision).toEqual({ count: 0, total: 0, value: null, interval: null })
+    expect(clean.recall).toEqual({ count: 0, total: 0, value: null, interval: null })
+    expect(clean.conditionalRecall.value).toBeNull()
+    expect(clean.f1).toBeNull()
+    expect(clean.macroPrecision).toBeNull()
+    expect(clean.macroRecall).toBeNull()
+    expect(clean.severityAgreement.value).toBeNull()
+    expect(clean.location.value).toBeNull()
+    expect(clean.suggestions.value).toBeNull()
+    expect(clean.falseAlarmsPerCleanPr).toMatchObject({ count: 0, exposure: 1, value: 0 })
+    expect(clean.falseAlarmsPerCleanPr.interval![1]).toBeGreaterThan(0.2)
+
+    const nothing = summarize([])
+    expect(nothing.planned).toBe(0)
+    expect(nothing.coverage.value).toBeNull()
+    expect(nothing.falseAlarmsPerCleanPr).toEqual({ count: 0, exposure: 0, value: null, interval: null })
+    expect(nothing.wallMs).toEqual({ total: 0, median: null, runs: 0 })
+
+    // A bug case reviewed with no findings: recall 0, precision undefined.
+    const silent = evalRun()
+    const missed = summarize([{ score: score({ run: silent }), evalCase: BUG, run: silent }])
+    expect(missed.recall).toMatchObject({ count: 0, total: 1, value: 0 })
+    expect(missed.precision.value).toBeNull()
+    expect(missed.f1).toBeNull()
+
+    // The legacy scorer keeps its convention, which the causal report never uses.
+    expect(totalScores([]).precision).toBe(1)
+  })
+
+  test("missing, failed and unsent runs stay in the denominators", () => {
+    const found = evalFinding()
+    const done = evalRun({ repetition: 1, proposed: [found], posted: [found] })
+    const failed = evalRun({ repetition: 2, status: "failed", detail: "the model returned no review" })
+    const unsent = evalRun({
+      repetition: 3,
+      status: "not-sent",
+      spend: { uncertainUsd: 0, usageMissing: false, admitted: false },
+    })
+    const missing: PlanEntry = { variant: "engine", model: "test/reviewer", case: BUG.id, repetition: 4 }
+    const verdicts = { [found.key]: agreed({ kind: "match", defect: "missing-await" }) as Judgement }
+    const entries = [
+      { score: score({ run: done, verdicts }), evalCase: BUG, run: done },
+      { score: score({ run: failed, verdicts }), evalCase: BUG, run: failed },
+      { score: score({ run: unsent, verdicts }), evalCase: BUG, run: unsent },
+      { score: score({ planned: missing, verdicts }), evalCase: BUG },
+    ]
+    expect(entries.map((entry) => entry.score.status)).toEqual(["completed", "failed", "not-sent", "missing"])
+    expect(entries[3].score.run).toBe(runKey(missing))
+    const metrics = summarize(entries)
+    expect(metrics.planned).toBe(4)
+    expect(metrics.status).toEqual({ completed: 1, partial: 0, failed: 1, "not-sent": 1, missing: 1 })
+    expect(metrics.coverage).toMatchObject({ count: 1, total: 4, value: 0.25 })
+    expect(metrics.recall).toMatchObject({ count: 1, total: 4, value: 0.25 })
+    expect(metrics.conditionalRecall).toMatchObject({ count: 1, total: 1, value: 1 })
+    expect(metrics.macroRecall).toBe(0.25)
+    // The unsent run spent nothing and was never admitted, which is not an unaccounted attempt.
+    expect(metrics.spend.unaccounted).toBe(0)
+  })
+
+  test("a partial run's findings count, but it is not complete coverage", () => {
+    const found = evalFinding()
+    const partial = evalRun({ status: "partial", detail: "timeout", proposed: [found], posted: [found] })
+    const result = score({
+      run: partial,
+      verdicts: { [found.key]: agreed({ kind: "match", defect: "missing-await" }) },
+    })
+    const metrics = summarize([{ score: result, evalCase: BUG, run: partial }])
+    expect(metrics.recall.value).toBe(1)
+    expect(metrics.conditionalRecall.total).toBe(0)
+    expect(metrics.coverage).toMatchObject({ count: 0, total: 1 })
+  })
+
+  test("a finding without a settled verdict is unjudged, neither right nor wrong", () => {
+    const found = evalFinding()
+    const run = evalRun({ proposed: [found], posted: [found] })
+    const single = score({
+      run,
+      verdicts: {
+        [found.key]: {
+          passes: [
+            { judge: "human:annotator", rubric: RUBRIC_VERSION, verdict: { kind: "match", defect: "missing-await" } },
+          ],
+        },
+      },
+    })
+    expect(single).toMatchObject({ unjudged: 1, matched: 0, falseAlarms: 0, detected: [] })
+    expect(summarize([{ score: single, evalCase: BUG, run }]).precision.total).toBe(0)
+
+    const unlabelled = score({ run, verdicts: { [found.key]: agreed({ kind: "match", defect: "not-a-label" }) } })
+    expect(unlabelled.unjudged).toBe(1)
+    expect(unlabelled.problems[0]).toContain("not-a-label")
+  })
+
+  test("the proposed and the posted findings are scored separately", () => {
+    const kept = evalFinding({ line: 70, title: "Wrong currency rounding", severity: "concern" })
+    const dropped = evalFinding()
+    const run = evalRun({ proposed: [dropped, kept], posted: [{ ...kept, anchored: true }] })
+    const verdicts = {
+      [dropped.key]: agreed({ kind: "match", defect: "missing-await" }),
+      [kept.key]: agreed({ kind: "false-alarm" }),
+    }
+    const proposed = score({ run, verdicts, stage: "proposed" })
+    const posted = score({ run, verdicts, stage: "posted" })
+    expect(proposed).toMatchObject({
+      comments: 2,
+      matched: 1,
+      falseAlarms: 1,
+      detected: ["missing-await"],
+      anchorKnown: 0,
+    })
+    expect(posted).toMatchObject({ comments: 1, matched: 0, falseAlarms: 1, detected: [], anchored: 1, anchorKnown: 1 })
+  })
+
+  test("nits are not claims of a defect unless counted, but are still comments", () => {
+    const nit = evalFinding({ severity: "nit", title: "Prefer const" })
+    const run = evalRun({ proposed: [nit], posted: [nit] })
+    const verdicts = { [nit.key]: agreed({ kind: "false-alarm" }) }
+    expect(score({ run, verdicts })).toMatchObject({ comments: 1, actionable: 0, falseAlarms: 0 })
+    expect(score({ run, verdicts, countNits: true })).toMatchObject({ comments: 1, actionable: 1, falseAlarms: 1 })
+  })
+
+  test("severity, location and suggestion validity are measured on settled findings", () => {
+    const concern = evalFinding({ severity: "concern", suggestion: "await postLedger(invoice)" })
+    const run = evalRun({ proposed: [concern], posted: [concern] })
+    const result = score({
+      run,
+      verdicts: { [concern.key]: agreed({ kind: "match", defect: "missing-await" }, { suggestion: "valid" }) },
+    })
+    expect(result).toMatchObject({ severityAgreed: 0, located: 1, suggestions: { valid: 1, invalid: 0, unjudged: 0 } })
+    const alternative = evalFinding({ path: "src/billing/ledger.ts", line: 16 })
+    expect(
+      score({
+        run: evalRun({ proposed: [alternative], posted: [alternative] }),
+        verdicts: { [alternative.key]: agreed({ kind: "match", defect: "missing-await" }) },
+      }).located,
+    ).toBe(1)
+  })
+
+  test("spend: missing usage is uncertain, never zero, and unadmitted paid runs are unaccounted", () => {
+    const counted = evalRun({
+      repetition: 1,
+      spend: { costUsd: 0.2, uncertainUsd: 0, usageMissing: false, admitted: true },
+    })
+    const unknown = evalRun({ repetition: 2, spend: { uncertainUsd: 0.75, usageMissing: true, admitted: true } })
+    const stray = evalRun({
+      repetition: 3,
+      spend: { costUsd: 0.1, uncertainUsd: 0, usageMissing: false, admitted: false },
+    })
+    const metrics = summarize([counted, unknown, stray].map((run) => ({ score: score({ run }), evalCase: BUG, run })))
+    expect(metrics.spend.costUsd).toBeCloseTo(0.3)
+    expect(metrics.spend.uncertainUsd).toBeCloseTo(0.75)
+    expect(metrics.spend.usageMissing).toBe(1)
+    expect(metrics.spend.unaccounted).toBe(1)
+  })
+
+  test("finding keys survive selection's rewording of the body and ignore a leading ./", () => {
+    expect(evalFinding({ body: "different words" }).key).toBe(evalFinding().key)
+    expect(evalFinding({ path: "./src/billing/sync.ts" }).key).toBe(evalFinding().key)
+    expect(evalFinding({ line: 41 }).key).not.toBe(evalFinding().key)
+  })
+})
+
+describe("settle", () => {
+  const match: Verdict = { kind: "match", defect: "missing-await" }
+  const pass = (judge: string, verdict: Verdict = match, rubric = RUBRIC_VERSION): JudgePass => ({
+    judge,
+    rubric,
+    verdict,
+  })
+  const reviewed = ["test/reviewer"]
+
+  test("one pass settles nothing, two that agree do, and a disagreement waits for a human", () => {
+    expect(settle({ passes: [] }, { reviewed }).status).toBe("none")
+    expect(settle({ passes: [pass("human:a")] }, { reviewed }).status).toBe("single")
+    const both: Settled = settle({ passes: [pass("human:a"), pass("model:judge/one")] }, { reviewed })
+    expect(both).toMatchObject({ status: "agreed", verdict: match, human: true })
+    expect(settle({ passes: [pass("model:judge/one"), pass("model:judge/two")] }, { reviewed })).toMatchObject({
+      status: "agreed",
+      human: false,
+    })
+    expect(
+      settle({ passes: [pass("human:a"), pass("model:judge/one", { kind: "false-alarm" })] }, { reviewed }).status,
+    ).toBe("disagreed")
+    expect(
+      settle({ passes: [pass("human:a"), pass("human:b", { kind: "match", defect: "other" })] }, { reviewed }).status,
+    ).toBe("disagreed")
+  })
+
+  test("a human adjudication settles a disagreement; a model cannot adjudicate", () => {
+    const passes = [pass("human:a"), pass("model:judge/one", { kind: "false-alarm" })]
+    const adjudication = { by: "human:owner", date: "2026-11-03", rubric: RUBRIC_VERSION, verdict: match }
+    expect(settle({ passes, adjudication }, { reviewed })).toMatchObject({
+      status: "adjudicated",
+      verdict: match,
+      human: true,
+    })
+    const byModel = settle({ passes, adjudication: { ...adjudication, by: "model:judge/two" } }, { reviewed })
+    expect(byModel.status).toBe("disagreed")
+    expect(byModel.problems.join("\n")).toContain("not a human's")
+  })
+
+  test("a model never judges findings its own model produced", () => {
+    const outcome = settle({ passes: [pass("human:a"), pass("model:test/reviewer")] }, { reviewed })
+    expect(outcome.status).toBe("single")
+    expect(outcome.problems[0]).toContain("its own model")
+  })
+
+  test("passes under another rubric are stale and do not count", () => {
+    const outcome = settle(
+      { passes: [pass("human:a"), pass("model:judge/one", match, RUBRIC_VERSION - 1)] },
+      { reviewed },
+    )
+    expect(outcome.status).toBe("single")
+    expect(outcome.problems[0]).toContain("stale")
+  })
+
+  test("a judge counts once, with its latest pass", () => {
+    const outcome = settle(
+      { passes: [pass("human:a", { kind: "false-alarm" }), pass("model:judge/one"), pass("human:a")] },
+      { reviewed },
+    )
+    expect(outcome).toMatchObject({ status: "agreed", verdict: match })
+    expect(settle({ passes: [pass("human:a"), pass("human:a")] }, { reviewed }).status).toBe("single")
+  })
+
+  test("extra defects agree whatever each judge called them, and are named under one judge", () => {
+    const outcome = settle(
+      {
+        passes: [
+          pass("model:judge/one", { kind: "extra", issue: "cache" }),
+          pass("human:a", { kind: "extra", issue: "E1" }),
+        ],
+      },
+      { reviewed },
+    )
+    expect(outcome).toMatchObject({ status: "agreed", verdict: { kind: "extra", issue: "human:a/E1" } })
+  })
+
+  test("a suggestion is rated only when every judge rates it the same", () => {
+    const rated = (one?: "valid" | "invalid", two?: "valid" | "invalid") =>
+      settle(
+        {
+          passes: [
+            { ...pass("human:a"), ...(one ? { suggestion: one } : {}) },
+            { ...pass("model:judge/one"), ...(two ? { suggestion: two } : {}) },
+          ],
+        },
+        { reviewed },
+      )
+    expect(rated("valid", "valid")).toMatchObject({ suggestion: "valid" })
+    expect(rated("valid", "invalid")).not.toHaveProperty("suggestion")
+    expect(rated("valid")).not.toHaveProperty("suggestion")
+  })
+
+  test("malformed passes are refused with a problem", () => {
+    const outcome = settle(
+      { passes: [pass("annotator"), pass("human:a", { kind: "extra", issue: " " }), pass("model:judge/one")] },
+      { reviewed },
+    )
+    expect(outcome.status).toBe("single")
+    expect(outcome.problems).toHaveLength(2)
+  })
+})
+
+describe("intervals", () => {
+  test("Wilson score interval", () => {
+    const [low, high] = wilson(8, 10)!
+    expect(low).toBeCloseTo(0.4901, 3)
+    expect(high).toBeCloseTo(0.9433, 3)
+    expect(wilson(0, 10)![0]).toBe(0)
+    expect(wilson(0, 10)![1]).toBeCloseTo(0.2775, 3)
+    expect(wilson(10, 10)![1]).toBe(1)
+    expect(wilson(0, 0)).toBeNull()
+    expect(wilson(8, 10, 0.99)![0]).toBeLessThan(low)
+  })
+
+  test("exact Poisson interval per unit of exposure", () => {
+    expect(poissonInterval(0, 1)![0]).toBe(0)
+    expect(poissonInterval(0, 1)![1]).toBeCloseTo(3.6889, 3)
+    expect(poissonInterval(1, 1)![0]).toBeCloseTo(0.0253, 3)
+    expect(poissonInterval(1, 1)![1]).toBeCloseTo(5.5716, 3)
+    expect(poissonInterval(1, 10)![1]).toBeCloseTo(0.55716, 4)
+    expect(poissonInterval(400, 100)![0]).toBeLessThan(4)
+    expect(poissonInterval(400, 100)![1]).toBeGreaterThan(4)
+    expect(poissonInterval(1, 0)).toBeNull()
+  })
+
+  test("Newcombe interval for paired proportions", () => {
+    expect(pairedDifference([])).toBeNull()
+    const same = pairedDifference(Array.from({ length: 20 }, () => ({ candidate: true, baseline: true })))!
+    expect(same.difference).toBe(0)
+    expect(same.interval[0]).toBeCloseTo(-0.1611, 3)
+    expect(same.interval[1]).toBeCloseTo(0.1611, 3)
+    const worse = pairedDifference([
+      ...Array.from({ length: 40 }, () => ({ candidate: true, baseline: true })),
+      ...Array.from({ length: 30 }, () => ({ candidate: false, baseline: true })),
+      ...Array.from({ length: 30 }, () => ({ candidate: false, baseline: false })),
+    ])!
+    expect(worse.difference).toBeCloseTo(-0.3)
+    expect(worse.interval[1]).toBeLessThan(-0.05)
+    expect(worse.interval[0]).toBeLessThan(-0.3)
+    expect(worse.interval[0]).toBeGreaterThan(-1)
+  })
+
+  test("paired recall pairs each defect by case and repetition, end to end", () => {
+    const found = evalFinding()
+    const verdicts = { [found.key]: agreed({ kind: "match", defect: "missing-await" }) as Judgement }
+    const candidateRuns = [
+      evalRun({ repetition: 1, proposed: [found], posted: [found] }),
+      evalRun({ repetition: 2, status: "failed" }),
+    ]
+    const baselineRuns = [
+      evalRun({ variant: "frozen", repetition: 1, proposed: [found], posted: [found] }),
+      evalRun({ variant: "frozen", repetition: 2, proposed: [found], posted: [found] }),
+      evalRun({ variant: "frozen", repetition: 3, proposed: [found], posted: [found] }),
+    ]
+    const scored = (runs: EvalRun[]) => runs.map((run) => ({ score: score({ run, verdicts }) }))
+    const paired = pairedRecall(scored(candidateRuns), scored(baselineRuns))
+    expect(paired).toMatchObject({ pairs: 2, candidate: 1, baseline: 2, difference: -0.5, unjudged: 0 })
+    expect(paired.interval![0]).toBeLessThan(-0.5)
+    expect(pairedRecall(scored(candidateRuns), [])).toMatchObject({ pairs: 0, difference: null, interval: null })
   })
 })
