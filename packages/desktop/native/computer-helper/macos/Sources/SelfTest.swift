@@ -2,6 +2,9 @@ import Foundation
 
 /** The grant-free shipped smoke uses the actual parser and codec. Native scenarios are added by M11. */
 func runHelperSelfTest(mode: String, target: String?, report: String?) throws -> Int32 {
+    guard ["unprivileged", "privileged", "packaged"].contains(mode) else {
+        throw HelperCommand.UsageError.invalidArguments
+    }
     var checks: [JSONValue] = []
     var failed = false
     func record(_ name: String, _ body: () throws -> Bool) {
@@ -9,10 +12,10 @@ func runHelperSelfTest(mode: String, target: String?, report: String?) throws ->
         if !passed { failed = true }
         checks.append(.object(["name": .string(name), "ok": .bool(passed)]))
     }
-    if mode != "unprivileged" {
-        // These modes never fall back to exercising the owner's desktop. M10/M11 replace this explicit skip.
+    if mode == "privileged" {
+        // M11 adds only isolated native targets; this mode never falls back to the owner's desktop.
         let result: JSONValue = .object(["checks": .array([.object([
-            "name": .string(mode == "packaged" ? "packaged-native-checks" : "privileged-native-checks"),
+            "name": .string("privileged-native-checks"),
             "ok": .bool(false), "skipped": .bool(true),
             "detail": .string("The native scenario is not included in this helper target yet."),
         ])])])
@@ -53,6 +56,9 @@ func runHelperSelfTest(mode: String, target: String?, report: String?) throws ->
         var failures: [Response] = []
         reader.consume(Data([1, 0, 0, 1]), onRequest: { _ in failed = true }, onFailure: { failures.append($0) })
         return failures.count == 1 && failures[0].value["code"]?.stringValue == "frame_too_large" && !reader.finish()
+    }
+    if mode == "packaged" {
+        record("packaged-bundle-and-signature") { PackagedHelperSelfTest.run() }
     }
     try writeHelperReport(.object(["checks": .array(checks)]), report: report)
     return failed ? 1 : 0
