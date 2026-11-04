@@ -201,6 +201,48 @@ export const prerender = true
             permission rules.
           </p>
 
+          <h2 id="subagents-and-workflows">Subagents and workflows</h2>
+          <p>
+            {release113.since} the <code>workflow</code> permission decides whether the agent may run a
+            <a href="/docs/workflows">workflow</a>: <code>ask</code> by default, <code>allow</code>, or
+            <code>deny</code>, which removes the workflow tool, as <code>{'"tools": { "workflow": false }'}</code> does.
+            Always allow, an allow rule and <code>--auto</code> cover only a plan within your configured defaults. A
+            plan past them, one that follows web or MCP content the conversation or its subagents read, and one that a
+            Vector process an agent started asks for, ask every time, and Always allow is not offered.
+          </p>
+          <pre><code>{`{
+  "permission": {
+    "workflow": "ask",
+    "task": { "fork": "deny" }
+  }
+}`}</code></pre>
+          <p>
+            {release113.since} the <code>task</code> permission's <code>fork</code> pattern governs forks, subagents that
+            start from the whole conversation: <code>deny</code> refuses them and <code>ask</code> asks before each one.
+            When an agent merges a subagent's worktree into your files, the merge asks <code>edit</code> with the diff,
+            like an edit, so your edit rules and the <code>prompt_source</code> and <code>memory_source</code> asks
+            apply. Over HTTP and the CLI only the server owner merges or discards a subagent's worktree.
+          </p>
+          <p>
+            {release113.since} refusing to edit a file the conversation has not read, or one that changed since, and
+            refusing to touch a file another running helper owns or has changed, are not permissions: no rule, Always
+            answer or <code>--auto</code> lifts them, and they come before any ask. Read the file again, or wait for the
+            helper, message it or stop it. See <a href="/docs/subagents#safe-edits">Safe edits in a shared folder</a>.
+          </p>
+          <p>
+            {release113.since} a repository's settings only narrow how subagents run. A trusted repository may lower
+            <code>budget.subagents.running</code> and <code>per_request</code> and every <code>budget.workflow</code>
+            limit, turn <code>sizing.subagents.fork</code> off, narrow <code>sizing.subagents.models</code> to entries
+            you also list, and shorten an <code>ask_timeout</code> you set. Its <code>budget.subagents.usd</code> and
+            <code>sizing.subagents.isolation</code> are ignored, and an untrusted repository's <code>budget</code> and
+            <code>sizing</code> are dropped, as before.
+          </p>
+          <p>
+            {release113.since} <code>sizing.subagents.ask_timeout</code> sets how many minutes a subagent's permission
+            request or question waits for you. When it runs out, Vector declines the request, never approves it, and
+            tells the subagent and the main agent.
+          </p>
+
           <h2 id="read-only-specialists">Read-only specialists</h2>
           <p>
             From desktop 1.99.108, the read-only specialists (explore, review and security) ask before they run a test

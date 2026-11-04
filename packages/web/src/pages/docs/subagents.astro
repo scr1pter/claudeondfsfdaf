@@ -1,6 +1,7 @@
 ---
 import DocsPage from "../../layouts/DocsPage.astro"
 import { crew, subagentKinds } from "../../data/docs-content"
+import { release113 } from "../../data/vector-releases"
 
 export const prerender = true
 ---
@@ -60,6 +61,308 @@ export const prerender = true
             <li><strong>In the terminal</strong><span>The terminal reads its own config file, so the desktop switch does not change it. From 1.99.99, add <code>{'"agent": { "general": { "disable": true } }'}</code> to <code>~/.config/vector/vector.json</code> (<code>%USERPROFILE%\.config\vector\vector.json</code> on Windows). It takes effect the next time you start Vector in the terminal.</span></li>
             <li><strong>For one repository</strong><span>From 1.99.99, put the same setting in the repository's <code>vector.json</code>. It turns subagents off for that repository in the terminal and the desktop app alike, whatever the switch says. Releases before 1.99.99, such as desktop 1.99.8 and npm CLI 1.99.7, do not read <code>vector.json</code>.</span></li>
           </ul>
+          <h2 id="when-vector-delegates">When Vector delegates</h2>
+          <p>
+            {release113.since} on ordinary (Work) and Thorough requests the agent decides on its own whether to hand
+            parts of the job to subagents. It does so for independent, substantial parts that can run at the same time
+            as each other or as its own work, such as a change across several files or a long check-and-repair loop;
+            for broad searches or research whose raw output would flood its context; and for new work you send while it
+            or its subagents are busy, when that work does not depend on what is running. Small work, a single file or a
+            known lookup, work tightly coupled to what it is editing, and anything that needs back-and-forth with you it
+            does itself, because a subagent reads everything again and costs more.
+          </p>
+          <p>
+            {release113.since} it puts every brief it already knows about in one call, in the background, says in a
+            line what it launched, and keeps working. It never polls: each subagent's report arrives on its own, and
+            reports that land close together arrive together. A report is data the agent checks, not proof, so the
+            main agent integrates the results, runs the final checks itself and tells you the outcome.
+          </p>
+          <p>
+            {release113.since} Light requests start no new subagents, though they can still check, steer or stop the
+            ones already running and continue one whose report just arrived. Chat replies use no tools. "No subagents"
+            in a message stops new launches for that request, and the agent can still list, steer and stop the helpers
+            already running. "Be thorough" adds high effort for the agent and for the subagents it starts, the judge
+            when you have it on, and a push to split independent work.
+          </p>
+
+          <h2 id="while-subagents-run">While subagents run</h2>
+          <p>
+            {release113.since} you keep writing while helpers work. In the desktop app a message you send while Vector
+            works steers the running turn by default: it joins at the next step, never in the middle of a tool call.
+            Alt+Enter (Option+Enter on a Mac) queues that one message instead, and Settings → General → While Vector
+            works can make Queue the default. Slash commands and shell input always queue. A queued message is sent when
+            the turn ends, even with its session's page closed, as long as one Vector window is open, and the queue
+            pauses after a run ends in a spend stop, a Stop or an error until you choose Resume. When you steer while a
+            foreground subagent holds the turn, a toast says Vector reads your message after the running subagents
+            finish this step, with Move to background.
+          </p>
+          <p>
+            {release113.since} "thanks" or "how's it going?" gets a short reply that names the helpers still working,
+            without a tool call, and a report that lands after it is handled by the full agent with its tools. A new
+            request sent while helpers run carries a snapshot of them for the agent, which checks them with
+            <code>task_manage</code> before it starts anything that would repeat their work, and may hand the new work
+            to a subagent too.
+          </p>
+          <p>
+            {release113.since} a finished subagent's report reaches the agent as a note in the conversation. A busy
+            agent reads it at its next step. An idle agent gets one turn after 1.5 seconds of quiet, held at most 5
+            seconds while its other subagents still run, so reports that finish together arrive together. The reports
+            of one foreground batch share the output budget fairly, and a short report is kept whole.
+          </p>
+
+          <h2 id="limits">Limits</h2>
+          <p>
+            {release113.since} at most 8 subagents run at once in a conversation, and further background launches from
+            the main agent wait with "Queued: waiting for a free subagent slot" and start on their own as others
+            finish. One request may start at most 32 new subagents, at any depth and over every turn of the request;
+            resuming a subagent does not count, and a workflow run counts as one. The subagents of one request share a
+            $25 spend ceiling at catalog prices, and only priced steps and steps of unknown cost count toward it, so
+            free, plan and local models are bounded by the counts alone. Subagents nest two levels at most.
+          </p>
+          <p>
+            {release113.since} when the main agent launches one subagent in the foreground and no slot is free, it moves
+            to the background at once and reports later; a foreground batch that would wait is refused, and so is a
+            subagent's own launch when no slot is free, because its parent already holds one. A batch that would pass
+            the per-request limit is refused whole, before any subagent starts. At 80% of the spend ceiling the agent
+            is told. At the ceiling each subagent stops after the step that crossed it and keeps its work, the main
+            agent carries on, and the request starts no new subagents; raising <code>budget.subagents.usd</code> lets it
+            launch again, and your next request starts a fresh ceiling.
+          </p>
+          <p>
+            {release113.since} guests in a shared workspace get at most 4 running, 8 per request and $5. Agent
+            workspaces and Swarm workers started from a conversation share that conversation's limits and its spend
+            ceiling. The limits are per conversation, not per computer: several conversations each run up to 8 at once,
+            so with many at work keep an eye on your computer's load and your provider's rate limits.
+          </p>
+          <p>
+            {release113.since} change them in Settings → Agents → Limits in the desktop app, which asks first when work
+            is running because saving reloads the engine, or with <code>budget.subagents</code> in your user config.
+            <code>running</code> takes 1 to 16 and <code>per_request</code> 1 to 1000. A repository's
+            <code>vector.json</code> may only lower <code>running</code> and <code>per_request</code>, and its
+            <code>usd</code> is ignored whether you trust the repository or not.
+          </p>
+          <pre><code>{`{
+  "budget": {
+    "subagents": { "running": 4, "per_request": 16, "usd": 10 }
+  }
+}`}</code></pre>
+          <p>
+            {release113.since} the Tasks pane, the TUI's <code>/tasks</code> and <code>vector tasks list</code> show a
+            line such as "5 of 8 running · 2 waiting · 12 of 32 started this request · $3.10 of $25.00 subagent spend".
+            Spend Vector could not price is shown as unknown, never as $0.
+          </p>
+
+          <h2 id="stopping-helpers">Stopping helpers</h2>
+          <p>
+            {release113.since} Esc, Ctrl+G and Stop still stop only the main turn. While helpers run, the chevron beside
+            Stop offers "Stop the main turn" and "Stop including helpers (N)". Stop including helpers stops the main
+            turn, every subagent this conversation started at any depth, the subagents queued behind them, its workflow
+            runs and its background commands. Partial work is kept, and no new turn starts until you write again. Agent
+            workspaces keep running; stop them from the Agent Dashboard.
+          </p>
+          <p>
+            {release113.since} after a main-only Stop with helpers still working, a toast says how many are still
+            working and offers Stop them too and Show tasks. Settings → General → While Vector works → Stop button makes
+            "Stop the main turn and its helpers" the default, and the command palette's Stop including helpers works
+            even when the main turn is idle. The TUI has <code>&lt;leader&gt;k</code> and <code>/stop-all</code>, and
+            <code>vector run</code> has <code>--stop-helpers</code>; see <a href="/docs/terminal-agent#cli-helpers">Subagents
+            and workflows in the terminal</a>.
+          </p>
+
+          <h2 id="background">Moving work to the background</h2>
+          <p>
+            {release113.since} a foreground subagent holds the main turn until it reports. Move to background frees the
+            turn from a blocking subagent or a whole blocking batch: each one keeps running and later reports on its
+            own. It is a button on the task card and beside the chat chip, Ctrl+Alt+B in the desktop app (AltGr never
+            triggers it), Ctrl+B in the TUI, and <code>vector tasks promote</code>. Only subagents the main agent
+            launched can move. An engine before 1.99.113 can move a single subagent but not a batch, and the card says
+            so.
+          </p>
+
+          <h2 id="after-a-restart">After a restart or update</h2>
+          <p>
+            {release113.since} an update, a restart or a crash never silently loses helpers, and never restarts them.
+            When the repository's sessions next open, the conversation gets one quiet note, which starts no model
+            request. It lists each interrupted helper and delivers any report that finished just before Vector stopped.
+          </p>
+          <p>
+            {release113.since} the session shows "2 subagents stopped when Vector restarted. Nothing resumes on its
+            own." with Resume all and Dismiss, and the Tasks pane lists them under "Interrupted when Vector restarted"
+            with Resume and "Resume all (N) · up to 8 at once". <code>task_manage resume</code>, the TUI's
+            <code>/tasks</code> and <code>vector tasks resume</code> do the same. A resumed helper continues in its own
+            session, with its conversation and the files it changed as it left them; a helper that never started is
+            relaunched instead. The agent may resume an interrupted helper, or one you stopped, only after you write
+            again.
+          </p>
+
+          <h2 id="when-a-helper-needs-you">When a helper needs you</h2>
+          <p>
+            {release113.since} a helper blocked on a permission request or a question shows "Needs your permission ·
+            3m" or "Needs your answer · 3m" with Answer, which opens that helper's own session. It keeps its slot while
+            it waits. The main agent gets one quiet note per helper at most every 10 minutes, and
+            <code>task_manage wait</code> returns early when a helper starts waiting.
+          </p>
+          <p>
+            {release113.since} <code>sizing.subagents.ask_timeout</code> sets how many minutes (1 to 1440) such a
+            request waits before Vector declines it. It declines, and never approves: the helper is told that no one
+            answered and carries on with its best judgement, stating what it assumed in its report, and the main agent
+            gets a note. It is off by default. A repository may set it only when you have, and only lower.
+          </p>
+          <pre><code>{`{
+  "sizing": {
+    "subagents": { "ask_timeout": 30 }
+  }
+}`}</code></pre>
+
+          <h2 id="notes-from-helpers">Notes from helpers</h2>
+          <p>
+            {release113.since} a background subagent can send its parent a short note with <code>task_manage
+            report</code>, up to 4,096 bytes and 12 a minute, without ending its work, for example to flag a blocker.
+            The note waits for the parent's next turn unless it asks to wake the parent, which it may do once per run.
+            A subagent can also list its siblings with <code>task_manage list</code> and <code>siblings: true</code>:
+            their IDs, titles, agents, status and owned paths, never their tool output.
+          </p>
+          <p>
+            {release113.since} whatever a subagent writes, its reports, notes, titles, JSON and file names, reaches
+            other prompts framed as data with control tags neutralized, and reaches the app and the terminal as plain
+            text. Web or MCP content a subagent read counts as outside content in the turn that receives its report,
+            note or output too, as if the parent had read it.
+          </p>
+
+          <h2 id="forks-models-effort">Forks, models and effort</h2>
+          <p>
+            {release113.since} a brief may name a <code>model</code>: a "provider/model", a model ID on the agent's
+            provider, or "small". It must cost no more than the agent's own model per input and per output token, on
+            the same provider, and never be one that may train on prompts; a pricier model or another provider needs an
+            exact entry in your <code>sizing.subagents.models</code>. A brief may also set <code>effort</code> to
+            default, low, medium or high, never above the agent's own. An agent that sets its own model keeps it, the
+            research agents take neither, the free route keeps its free model, a guest in the workspace allows only the
+            same or a cheaper model, and Vector Local allows only the agent's provider.
+          </p>
+          <p>
+            {release113.since} without a choice on the brief, a subagent runs on the agent's provider and model at its
+            effort, unless its own agent sets a model or effort. On Thorough requests the general subagents the agent
+            starts get high effort too. Explore runs on the provider's small model only when that model can call tools
+            and is known to cost less than yours, and otherwise on your model without high effort. A resume keeps a
+            subagent's effort while its prompt cache is warm.
+          </p>
+          <p>
+            {release113.since} <code>fork: true</code> starts a subagent from the whole conversation instead of a brief,
+            reading the parent's prompt cache, so its first request is mostly cache reads. A fork runs only in the
+            background, on the agent's model and effort, and cannot start subagents, save memory, raise the request's
+            size, research, ask you questions or plan. Vector refuses a fork on a paid model whose provider has no prompt
+            cache, when the conversation is over half the model's usable context, and from a step that must answer in
+            JSON. After a restart or once the cache has expired, a fork goes cold: it keeps the same instructions and
+            tools and pays full input price once. The Tasks pane shows a Fork badge and "model · effort".
+          </p>
+          <p>
+            {release113.since} set <code>sizing.subagents.fork</code> to <code>false</code>, or deny the
+            <code>task</code> permission's <code>fork</code> pattern, to turn forks off. A repository may only turn
+            forks off and narrow your <code>models</code> list.
+          </p>
+          <pre><code>{`{
+  "sizing": {
+    "subagents": { "fork": false, "models": ["anthropic/claude-sonnet-5"] }
+  }
+}`}</code></pre>
+
+          <h2 id="structured-results">Structured results</h2>
+          <p>
+            {release113.since} <code>output_schema</code> on a brief gives the subagent a JSON Schema its final answer
+            must match, and the agent receives checked JSON. A subagent whose answer does not match is asked again,
+            and fails with its last text when the attempts run out. Vector checks a subset of JSON Schema: types,
+            properties, required, additionalProperties, items and array bounds, string enums and const, length and
+            number bounds, anyOf, oneOf, allOf and not, and local <code>$ref</code>. The root must be an object, and
+            keywords such as <code>pattern</code>, <code>if</code> and remote references are refused by name. A value
+            over 8 KiB comes back as a reference to the saved file, never as partial JSON. The Tasks pane shows a JSON
+            chip, green when the answer matched and red when it did not, and Details shows the JSON as text.
+          </p>
+
+          <h2 id="worktrees">Helpers in their own worktree</h2>
+          <p>
+            {release113.since} <code>isolation: "worktree"</code> gives a subagent its own git worktree, on the branch
+            <code>vector/subagent/&lt;id&gt;</code> under Vector's data folder, made from your current files, uncommitted
+            changes included. If it changes nothing, the worktree is removed. If it changes files, they come back as "N
+            files changed · branch" with Review, Merge and Discard, and nothing reaches your files until you or the
+            agent merges them.
+          </p>
+          <p>
+            {release113.since} Merge and Discard each need a second click. A merge with a conflict is refused and lists
+            the paths, with Ask Vector to resolve, and every merge checkpoints your files first; Discard keeps a patch of
+            what it threw away (see <a href="/docs/checkpoints#subagent-merges">Checkpoints</a>). Over HTTP and the CLI
+            only the server owner merges or discards. The agent may merge or discard only the subagents it launched,
+            and its merge asks like an edit, with the diff.
+          </p>
+          <p>
+            {release113.since} the read-only agents (explore, review, judge, security and the research agents) are
+            never isolated, and neither is a subagent of an isolated one. Vector refuses a worktree when free disk is
+            under the larger of 1 GiB and one and a half times the size of the tracked files, with a sparse checkout, and while 20
+            changed worktrees already wait for review (<code>sizing.subagents.isolation.max_kept</code>, 1 to 200). A
+            folder that is not a git repository, or has no commit yet, gets a copy instead, up to 20,000 files or 1 GiB.
+            At most two worktrees are created at once per repository.
+          </p>
+          <p>
+            {release113.since} language servers and local MCP servers stay off in these worktrees unless
+            <code>isolation.lsp</code> or <code>isolation.mcp</code> is true. Git-ignored folders such as
+            <code>node_modules</code> are not there unless <code>isolation.link</code> names them, and they are then
+            linked (a junction on Windows). Untracked files over 50 MB are left out, Git LFS files are pointers, and
+            submodules are empty. These settings come from your user config only. On Windows a worktree another program
+            holds is removed later. Merge or discard kept worktrees before you go back to an older Vector, which would
+            resume their helpers in your main folder.
+          </p>
+          <pre><code>{`{
+  "sizing": {
+    "subagents": {
+      "isolation": { "link": ["node_modules"], "max_kept": 10 }
+    }
+  }
+}`}</code></pre>
+
+          <h2 id="safe-edits">Safe edits in a shared folder</h2>
+          <p>
+            {release113.since} every agent's edits take a per-file lock. <code>edit</code>, <code>write</code> and
+            <code>apply_patch</code> refuse to change a file the conversation has not read, a partial read or an
+            @-attachment included, and a file that changed since it was last read, naming the subagent that changed it
+            or saying it changed outside its edits (an editor, a formatter or a shell command). The agent reads it again
+            and retries. A new file is allowed, and apply_patch's Add File no longer overwrites an existing one. On
+            Windows, a file another program holds is retried for about a second and a half.
+          </p>
+          <p>
+            {release113.since} the files a running helper owns through <code>owned_paths</code>, or has changed, are off
+            limits to the main agent and to other helpers until it finishes, through edit, write, apply_patch, a merge
+            and the shell writes Vector can see. The refusal names the helper and says to wait for its report, send it
+            the change with <code>task_manage message</code>, or stop it. Owned paths may not overlap between the active
+            subagents of a conversation. Whole-tree git commands, such as switching branches, <code>reset --hard</code>,
+            <code>stash</code>, <code>merge</code>, <code>rebase</code> and <code>pull</code>, are refused while helpers
+            edit the folder. A helper sharing your folder may not stage, commit or switch branches at all, and no
+            subagent may change branches, tags, stashes or worktrees.
+          </p>
+          <p class="note is-caution">
+            {release113.since} the shell detection is best effort. Vector sees redirects and the common write and
+            delete commands (<code>cp</code>, <code>mv</code>, <code>rm</code>, <code>touch</code>,
+            <code>git checkout --</code> and their PowerShell and cmd equivalents), but not what interpreters, scripts,
+            <code>bash -c</code> strings, the V2 bash tool or MCP filesystem servers write. Give helpers that may collide
+            <code>owned_paths</code> or a worktree of their own. These refusals are not permissions, so no rule lifts
+            them.
+          </p>
+
+          <h2 id="background-commands">Background commands</h2>
+          <p>
+            {release113.since} the agent can start a long command, such as a dev server or a long build, with
+            <code>background: true</code>. Vector writes its output to a log file and tells the agent when it exits,
+            with the exit code and the last lines; the agent reads the log and can stop the command with
+            <code>task_manage stop</code>. Only the main agent starts them, at most 8 run at once in a conversation,
+            there is no time limit unless the agent sets one (at most 24 hours), and the log stops growing at 64 MiB. A
+            command that is stopped sends a quiet note. Logs are removed after 7 days.
+          </p>
+          <p>
+            {release113.since} the Tasks pane lists running commands under Background commands, with Stop and, in the
+            desktop app with a server on this computer, Open output. Stop including helpers stops them; plain Stop does not. Quitting Vector
+            or reloading the folder ends them. After a crash Vector reports a command that may still be running, with
+            its process ID, and never stops a process it can no longer see. <code>vector run</code> waits for them as it
+            waits for subagents.
+          </p>
+
           <h2 id="custom-agents">Custom agents</h2>
           <p>
             Explore, review, judge and security carry a read-only boundary that is re-applied after your repository's config is merged, so a checked-in file cannot turn a read-only reviewer into one that writes; they can still run verification commands from an allowlist such as <code>git diff</code>, <code>git log</code> and the repository's test and build scripts.
@@ -133,11 +436,18 @@ whether it can lose data, and whether it can be rolled back.`}</code></pre>
   }
 }`}</code></pre>
           <p class="note">
-            Past six running siblings Vector tells the model to mention the spend, because each subagent spends on your keys.
+            {release113.since} past six subagents running or waiting in a conversation, the entries of one batch
+            included, Vector tells the agent to say how many are working, because each one spends on your provider keys.
           </p>
           <p class="note">
             Subagents are not agent workspaces. A subagent works inside your session and your checkout and reports to the
             main agent. An agent workspace is a separate session in its own worktree or copy that you start, watch in the
             Agent Dashboard, and merge yourself. See <a href="/docs/parallel-agents">Parallel agents</a>.
+          </p>
+          <p class="note">
+            {release113.since} a subagent launched with <code>isolation: "worktree"</code> has a worktree of its own, but
+            it is still part of your session: the main agent starts it, it reports to that agent, it shares the
+            conversation's limits, and its changes come back to Background tasks for review, merge or discard. See
+            <a href="/docs/parallel-agents#isolated-subagents">Isolated subagents and agent workspaces</a>.
           </p>
 </DocsPage>

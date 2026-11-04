@@ -1,5 +1,6 @@
 ---
 import DocsPage from "../../layouts/DocsPage.astro"
+import { release113 } from "../../data/vector-releases"
 
 export const prerender = true
 ---
@@ -30,6 +31,13 @@ export const prerender = true
           <h2 id="composer">The composer</h2>
           <p>
             The box at the bottom of a session is where you type the task, and it carries every per-message control: which agent answers, which model, how hard that model thinks, how fast to run (see <a href="/docs/vector-agent#modes">modes</a>), dictation, and attachments. It takes pasted images and dragged files, keeps a history of your prompts you can walk back through, and offers a popover of slash commands. Shell mode sends a command instead of a prompt, and it is refused while Plan Mode is on.
+          </p>
+          <p>
+            {release113.since} while Vector works, Enter steers the running turn and Alt+Enter (Option+Enter on a Mac)
+            queues the message; queued messages wait in a dock above the composer with Send now, Edit and Delete, and
+            the queue pauses after a run ends in a spend stop, a Stop or an error until you choose Resume. While
+            helpers run, a chevron beside Stop offers <strong>Stop including helpers (N)</strong>, and
+            <code>/workflow</code> starts a saved workflow; see <a href="/docs/workflows">Workflows</a>.
           </p>
           <p>
             For models that expose reasoning effort, the model popover shows a slider across that model's variants: <strong>Default</strong> follows the provider's recommendation, <strong>Light</strong> favours speed and cost on small tasks, <strong>Balanced</strong> trades speed against careful reasoning, and <strong>Max</strong> sits at the top of the range. The choice shows on the control, with its description in the tooltip.
@@ -82,6 +90,18 @@ export const prerender = true
           </p>
           <p>
             <strong>General</strong> also has a <strong>Terminal</strong> card with the <strong>Terminal Shell</strong> picker, Auto by default: the shell the terminal and the composer's shell mode use. Agent tool calls use it too, unless the picker marks it terminal only, as it does fish.
+          </p>
+          <p>
+            {release113.since} <strong>General</strong> also has a <strong>While Vector works</strong> card, which
+            applies on this device only. <strong>Follow-up behavior</strong> chooses <strong>Steer</strong>, the
+            default, which joins a message you send while Vector works to the running turn at its next step, or
+            <strong>Queue</strong>, which holds it until the turn ends. Alt+Enter (Option+Enter on a Mac) does the other
+            for one message, and slash commands and shell input always queue. A queued message is sent while one Vector
+            window is open, even with its session closed; in a browser that cannot share the queue between pages, the
+            card says it is sent only while its session is open. <strong>Stop button</strong> chooses what Stop, Esc
+            and Ctrl+G stop: <strong>Stop the main turn</strong>, the default, or <strong>Stop the main turn and its
+            helpers</strong>, which also stops the subagents, workflow runs and background commands the conversation
+            started. See <a href="/docs/subagents#stopping-helpers">Stopping helpers</a>.
           </p>
 
           <h2 id="remote-servers">Connect to a Vector server on another machine</h2>

@@ -54,6 +54,39 @@ export const prerender = true
             clears the app's model recommendations for that repository; <code>vector memory erase</code> and
             <code>vector memory workflow reset</code> cannot reach them.
           </p>
+          <h3 id="subagent-spend">Subagent spend</h3>
+          <p>
+            {release113.since} the subagents of one request share a spend ceiling, $25 at catalog prices by default and
+            $5 for guests, counted across every subagent and workflow agent the request started, at any depth. Only
+            priced steps and steps of unknown cost count toward it; steps a plan pays for, and free and local models,
+            are bounded by the subagent counts instead. The main agent is never bound to it, so at the ceiling the
+            subagents stop after the step that crossed it and keep their work, while the main agent carries on. Set it
+            with <code>budget.subagents.usd</code> in your user config or in Settings → Agents → Limits; a repository's
+            value is ignored. The Tasks pane shows it as "$3.10 of $25.00 subagent spend", and unknown spend as unknown.
+          </p>
+          <p>
+            {release113.since} a fork starts from the whole conversation and reads the parent's prompt cache, so on a
+            provider that caches prompts its first request costs mostly cache reads. After a restart, once the cache has
+            expired, or when it works in a worktree of its own, a fork goes cold and pays full input price for the
+            inherited conversation once. Vector refuses forks on paid models whose provider has no prompt cache.
+          </p>
+          <p>
+            {release113.since} a main-only Stop stops only the main turn: the helpers still working keep spending until
+            they finish, and a toast says how many there are, with Stop them too. Their spend still counts toward the
+            ceiling. Stop including helpers stops them all at once and keeps what they did.
+          </p>
+          <p>
+            {release113.since} a workflow run has ceilings of its own, shown before you approve it: agents, steps, steps
+            per agent, minutes, and optionally dollars and tokens (<code>budget.workflow</code>). Its agents also share
+            the request's subagent spend ceiling, and spend, tokens and agents carry across resumes, so a resume never
+            starts the count again. See <a href="/docs/workflows#limits">Workflow limits</a>.
+          </p>
+          <p>
+            {release113.since} in learned defaults, runs where the agent handed work to subagents are their own split,
+            counted apart from runs it did alone, and a subagent model the agent picked on a brief never teaches the
+            learned subagent model. A run whose subagents were still working when the request ended, or that ran a
+            workflow, is kept out of the cost figures.
+          </p>
                   <h3>Usage and streaks</h3>
           <p>
             Settings → Usage reports what Vector recorded locally: lifetime tokens split into input, output, cache and

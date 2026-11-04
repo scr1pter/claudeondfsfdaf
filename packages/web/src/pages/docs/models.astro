@@ -123,6 +123,13 @@ vector models anthropic --verbose</code><button class="doc-cmd-copy" type="butto
           <p>
             {release113.since} when you leave effort on Default, the request's size sets it, and a learned default may drop Thorough's extra effort (Settings → Memory → Workflow insights). See <a href="/docs/tokenomics#learned-defaults">Learned defaults</a>.
           </p>
+          <p>
+            {release113.since} on Thorough requests the general subagents the agent starts get high effort too, unless
+            their agent or your settings set an effort of their own; your variant keeps its meaning, and a pick of yours
+            always wins. A brief may give a subagent a lower effort, or a model that costs no more than the agent's own,
+            but never more effort than the agent has. See
+            <a href="/docs/subagents#forks-models-effort">Forks, models and effort</a>.
+          </p>
 
           <h2 id="environment-variables">Keys from environment variables</h2>
           <p>

@@ -120,12 +120,15 @@ jobs:
         working-directory: test
         run: GITHUB_ACTIONS=false bun test --only-failures
 
-      # packages/web has no test script, so turbo skips its tests. This one keeps the site from calling a shipped
-      # desktop release unpublished or telling people Vector cannot update itself.
+      # packages/web has no test script, so turbo skips its tests. These keep the site from calling a shipped
+      # desktop release unpublished or telling people Vector cannot update itself, hold the 1.99.113 docs to their
+      # release label and the engine's numbers, and check the Settings copy and the published schemas.
       - name: Run website release copy tests
         if: runner.os == 'Linux'
         working-directory: packages/web
-        run: GITHUB_ACTIONS=false bun test test/release-copy.test.ts
+        run: >-
+          GITHUB_ACTIONS=false bun test test/release-copy.test.ts test/release-113-docs.test.ts
+          test/release-113-multiagent-docs.test.ts test/docs-settings.test.ts test/deployed-schemas.test.ts
 
   # The desktop runs the engine's Node bundle in Electron's utility process, while every engine test runs on Bun, so a
   # stray Bun API passes them all and still fails every desktop message ("Bun is not defined", 1.99.99). This boots

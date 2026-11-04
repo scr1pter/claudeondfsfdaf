@@ -38,7 +38,12 @@ export const docsNav: DocGroup[] = [
       {
         id: "subagents",
         title: "Subagents and subagent specialists",
-        blurb: "Vector's agent hands self-contained pieces of a task to other agents that run at the same time.",
+        blurb: `Vector's agent hands self-contained pieces of a task to other agents that run at the same time. ${release113.since} on ordinary requests too, within limits you set, with Stop including helpers, worktrees and background commands.`,
+      },
+      {
+        id: "workflows",
+        title: "Workflows",
+        blurb: `${release113.since} a declarative plan of stages that runs many subagents with ceilings you approve first, and reports once.`,
       },
       {
         id: "parallel-agents",

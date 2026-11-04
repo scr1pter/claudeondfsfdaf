@@ -48,9 +48,10 @@ import {
 
 // Vector hands work to two kinds of subagent, and this page explains both.
 // Subagents are the engine's general-purpose `general` agent, which the main
-// agent starts on its own for big tasks, one per independent part, in
-// parallel; small tasks it does itself. Subagent specialists are every other
-// agent, each with one focus; user-defined agents count as specialists too.
+// agent starts on its own for independent, substantial parts of a task, in
+// parallel; small or tightly coupled work it does itself. Subagent specialists
+// are every other agent, each with one focus; user-defined agents count as
+// specialists too.
 // The page has a switch for General subagents, one for each specialist that
 // ships with Vector and one for all of those specialists at once. Each writes
 // `agent.<id>.disable` to the connected engine's global config, saved
@@ -250,8 +251,8 @@ export function SettingsSubagentsV2() {
           <p class="settings-v2-page-kicker">Subagents</p>
           <h2 class="settings-v2-page-title">Subagents and subagent specialists</h2>
           <p class="settings-v2-page-subtitle">
-            Vector's agent can hand the parts of a big task to other agents and keep working. There are two kinds, and
-            you will see both in the chat and in Background tasks.
+            Vector's agent can hand independent parts of a task to other agents and keep working. There are two kinds,
+            and you will see both in the chat and in Background tasks.
           </p>
         </div>
       </div>
@@ -261,8 +262,8 @@ export function SettingsSubagentsV2() {
           <div class="settings-v2-card-copy">
             <h3 class="settings-v2-card-title">Subagents</h3>
             <p class="settings-v2-card-description">
-              General-purpose agents that Vector's agent starts on its own for big tasks, one for each independent part,
-              all running at the same time. Small tasks it does itself.
+              General-purpose agents that Vector's agent starts on its own for independent, substantial parts of a task,
+              all running at the same time. Small or tightly coupled work it does itself.
             </p>
           </div>
         </div>
@@ -271,10 +272,10 @@ export function SettingsSubagentsV2() {
             <div class="settings-v2-row-copy">
               <div class="settings-v2-row-title">General subagents</div>
               <div class="settings-v2-row-description">
-                Vector's agent hands big, multi-part tasks to general-purpose subagents that run in parallel. Turn this
-                off to keep that work in the main agent; subagent specialists still work. Changing it stops any work in
-                progress, so Vector asks first when something is running, and the new setting applies from your next
-                message.
+                Vector's agent hands independent, substantial parts of a task to general-purpose subagents that run in
+                parallel. Turn this off to keep that work in the main agent; subagent specialists still work. Changing
+                it stops any work in progress, so Vector asks first when something is running, and the new setting
+                applies from your next message.
               </div>
             </div>
             <div class="settings-v2-row-control settings-v2-row-control--compact">
