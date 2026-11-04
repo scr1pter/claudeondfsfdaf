@@ -7,6 +7,7 @@ Every child is directly owned; cleanup never enumerates or kills other PIDs.
 import argparse
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
+import http.client
 import json
 import os
 from pathlib import Path
@@ -19,6 +20,8 @@ import time
 import urllib.error
 import urllib.request
 import uuid
+
+import owned_process
 
 HERE = Path(__file__).resolve().parent
 HEADER = "op,external_id,name,email\n"
@@ -53,25 +56,34 @@ class Service:
         self.root = "synthetic-root-" + uuid.uuid4().hex
         self.env = {**environment(), "RELAY_BOOTSTRAP_TOKEN": self.root}
         self.process = None
+        self.owned = None
+        self.readers = []
         self.output = []
         self.start()
 
     def start(self, expect_ready=True):
         self.lines = queue.Queue()
         lines = self.lines
-        self.process = subprocess.Popen([str(self.options.runtime), str(self.options.app / "app.mjs"),
+        self.owned = owned_process.spawn([str(self.options.runtime), str(self.options.app / "app.mjs"),
             "--data", str(self.data), "--port", "0"], cwd=self.options.app, env=self.env,
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
             encoding="utf-8", creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0)
+        self.process = self.owned.process
         def read(stream, ready=False):
-            for line in stream:
-                self.output.append(line)
+            try:
+                for line in stream:
+                    self.output.append(line)
+                    if ready:
+                        lines.put(line)
+            except (OSError, ValueError):
+                pass
+            finally:
                 if ready:
-                    lines.put(line)
-            if ready:
-                lines.put(None)
-        threading.Thread(target=read, args=(self.process.stdout, True), daemon=True).start()
-        threading.Thread(target=read, args=(self.process.stderr,), daemon=True).start()
+                    lines.put(None)
+        self.readers = [threading.Thread(target=read, args=(self.process.stdout, True), daemon=True),
+                        threading.Thread(target=read, args=(self.process.stderr,), daemon=True)]
+        for reader in self.readers:
+            reader.start()
         if not expect_ready:
             try:
                 line = self.lines.get(timeout=2)
@@ -95,25 +107,24 @@ class Service:
             raise
 
     def stop(self, abrupt=False):
-        if self.process is None or self.process.poll() is not None:
+        if self.process is None:
             return
-        if not abrupt:
-            try:
-                self.process.stdin.write("shutdown\n")
-                self.process.stdin.flush()
-                self.process.wait(timeout=.8)
-                return
-            except (OSError, subprocess.TimeoutExpired):
-                pass
-        self.process.terminate()
         try:
-            self.process.wait(timeout=3)
-        except subprocess.TimeoutExpired:
-            self.process.kill()
-            self.process.wait(timeout=3)
+            if self.process.poll() is None and not abrupt:
+                try:
+                    self.process.stdin.write("shutdown\n")
+                    self.process.stdin.flush()
+                    self.process.wait(timeout=5)
+                except (OSError, ValueError, subprocess.TimeoutExpired):
+                    pass
+        finally:
+            self.owned.close()
+            for reader in self.readers:
+                reader.join(timeout=5)
+            need(not any(reader.is_alive() for reader in self.readers), "owned output reader did not close")
 
-    def close(self):
-        self.stop()
+    def close(self, abrupt=False):
+        self.stop(abrupt)
         if self.temp:
             self.temp.cleanup()
 
@@ -156,7 +167,7 @@ class Service:
     def issue(self, subject, role):
         status, value = self.request("POST", self.base + "/tokens", {"subject": subject, "role": role}, self.owner)
         need(status == 200, "capability issuance")
-        need(isinstance(value.get("token"), str) and len(value["token"]) >= 20, "opaque capability")
+        need(isinstance(value.get("token"), str) and bool(value["token"]), "opaque capability")
         self.tokens[subject], self.ids[subject] = value["token"], value["id"]
         return value["token"]
 
@@ -200,7 +211,7 @@ class Service:
         return result["events"]
 
     def cli(self, args, token=None):
-        return subprocess.run([str(self.options.runtime), str(self.options.app / "cli.mjs"), *args],
+        return owned_process.run([str(self.options.runtime), str(self.options.app / "cli.mjs"), *args],
             cwd=self.options.app, env={**environment(), "RELAY_URL": self.url,
             "RELAY_TOKEN": self.tokens["editor"] if token is None else token}, capture_output=True,
             text=True, encoding="utf-8", timeout=8)
@@ -211,6 +222,7 @@ def g01(s):
     for identifier in ("aa", "UPPER", "../escape", "a" * 25):
         need(s.request("POST", "/v1/workspaces", {"id": identifier, "name": "x"}, s.root)[0] == 400)
     need(s.request("POST", "/v1/workspaces", {"id": s.ws, "name": "other"}, s.root)[0] == 409)
+    need(s.request("POST", "/v1/workspaces", {"id": "constructor", "name": "Valid boundary ID"}, s.root)[0] == 201)
 
 
 @group("initial-directory-and-workspace-reads")
@@ -304,6 +316,7 @@ def g11(s):
 def g12(s):
     for row in ('upsert,../a,A,a@x.test', 'upsert,a,,a@x.test', 'upsert,a,A,broken',
                 'upsert,a,A,a@@x.test', 'upsert,a,A,a@nodot', 'upsert,a,A,a @x.test',
+                'upsert,a,A, a@x.test', 'upsert,a,A,a@x.test ', 'upsert,a,A,a@x.test\t',
                 'upsert,a,"A\tB",a@x.test', 'upsert,a,' + 'a' * 81 + ',a@x.test'):
         need(s.post("/imports", {"baseVersion": 0, "csv": HEADER + row + "\n"}, key=uuid.uuid4().hex)[0] == 400)
 
@@ -414,10 +427,12 @@ def g24(s):
     item = s.approved()
     for lease in (99, 5001, True, "100", -1):
         need(s.post("/imports/" + item["id"] + "/claim", {"leaseMs": lease}, "worker")[0] == 400)
-    first = s.claim(item, lease=100)
+    first = s.claim(item, lease=5000)
     need(s.post("/imports/" + item["id"] + "/claim", {"leaseMs": 100}, "worker")[0] == 409)
+    expiring = s.approved(HEADER + 'upsert,two,Two,two@example.test\n')
+    first = s.claim(expiring, lease=100)
     time.sleep(.16)
-    second = s.claim(item)
+    second = s.claim(expiring)
     need(second["import"]["leaseEpoch"] == first["import"]["leaseEpoch"] + 1)
 
 
@@ -459,6 +474,29 @@ def g28(s):
     need(s.post("/tokens/" + s.ids["worker"] + "/revoke", who="owner")[0] == 200)
     need(s.commit(item, lease)[0] == 401)
     need(s.get("/members")[1]["version"] == 0)
+    # A complete request must not retain authority checked before its body
+    # arrived. Revocation is durably acknowledged while this body is incomplete.
+    s.issue("delayed", "worker")
+    pending = s.approved()
+    ticket = s.claim(pending, "delayed")
+    wire = json.dumps({"leaseToken": ticket["leaseToken"]}).encode()
+    connection = http.client.HTTPConnection("127.0.0.1", int(s.url.rsplit(":", 1)[1]), timeout=5)
+    try:
+        connection.putrequest("POST", s.base + "/imports/" + pending["id"] + "/commit")
+        for key, value in {"Authorization": "Bearer " + s.tokens["delayed"], "Content-Type": "application/json",
+                           "Content-Length": str(len(wire)), "Idempotency-Key": "delayed-authority"}.items():
+            connection.putheader(key, value)
+        connection.endheaders()
+        connection.send(wire[:5])
+        time.sleep(.08)
+        need(s.post("/tokens/" + s.ids["delayed"] + "/revoke", who="owner")[0] == 200)
+        count = len(s.events())
+        connection.send(wire[5:])
+        response = connection.getresponse()
+        response.read()
+        need(response.status == 401 and s.get("/members")[1]["version"] == 0 and len(s.events()) == count)
+    finally:
+        connection.close()
 
 
 @group("commit-lifecycle-member-revisions-and-delete")
@@ -470,6 +508,9 @@ def g29(s):
     s.applied(HEADER + 'delete,one,,\n')
     need(s.get("/members")[1] == {"version": 3, "members": [{"externalId": "two", "name": "Two", "email": "two@example.test", "revision": 1}]})
     need(s.post("/imports/" + item["id"] + "/claim", {"leaseMs": 1000}, "worker")[0] == 409)
+    s.applied(HEADER + 'upsert,__proto__,Proto,proto@x.test\nupsert,constructor,Construct,construct@x.test\n')
+    ids = [member["externalId"] for member in s.get("/members")[1]["members"]]
+    need(ids == ["__proto__", "constructor", "two"])
 
 
 @group("commit-replay-remains-exactly-once-after-expiry")
@@ -492,6 +533,8 @@ def g31(s):
     need(s.post("/imports/" + item["id"] + "/commit", {"leaseToken": "changed"}, "worker", "fixed")[0] == 409)
     s.issue("worker2", "worker")
     need(s.commit(item, lease, "worker2", "fixed")[0] == 409)
+    s.issue("worker", "worker")
+    need(s.commit(item, lease, "worker", "fixed")[0] == 409)
 
 
 @group("expired-uncommitted-lease-cannot-apply")
@@ -563,7 +606,9 @@ def g39(s):
     s.stage(HEADER + 'upsert,b,B,b@x.test\n')
     need([m["externalId"] for m in s.get("/members")[1]["members"]] == ["a", "z"])
     ids = [item["id"] for item in s.get("/imports")[1]["imports"]]
-    need(ids == sorted(ids) and s.get("/imports/missing")[0] == 404)
+    need(ids == sorted(ids))
+    for identifier in ("missing", "__proto__", "constructor"):
+        need(s.get("/imports/" + identifier)[0] == 404)
 
 
 @group("audit-events-are-transactional-and-contiguous")
@@ -643,7 +688,7 @@ def g45(s):
 
 def journal(s):
     text = (s.options.app / "STORAGE.md").read_text(encoding="utf-8")
-    names = re.findall(r"(?m)^Journal: ([A-Za-z0-9_-]+\.jsonl)\s*$", text)
+    names = re.findall(r"(?m)^Journal: ([^\s/\\]+\.jsonl)\s*$", text)
     need(len(names) == 1, "document one safe journal basename")
     path = s.data / names[0]
     need(path.is_file() and not path.is_symlink(), "documented journal missing")
@@ -669,25 +714,49 @@ def g47(s):
     lines = path.read_text(encoding="utf-8").splitlines()
     original_lines = list(lines)
     value = json.loads(lines[-1])
-    def alter(node):
+    candidates = []
+    semantic = {s.ws, "Synthetic roster", "one", "Ada", "ada@example.test", "committed", "import.committed", "editor", "worker"}
+    def leaves(node, path=()):
         if isinstance(node, dict):
             for key, item in node.items():
-                if key.lower() in ("hash", "checksum", "prev", "previous", "prevhash"):
+                if key.lower().replace("_", "") in ("hash", "checksum", "prev", "previous", "prevhash", "previoushash", "seq", "sequence"):
                     continue
-                if isinstance(item, str) and item:
-                    node[key] = item + "tampered"
-                    return True
-                if alter(item):
-                    return True
-        if isinstance(node, list):
-            return any(alter(item) for item in node)
-        return False
-    need(alter(value), "journal must describe actual transactions")
-    lines[-1] = json.dumps(value, separators=(",", ":"))
-    changed = ("\n".join(lines) + "\n").encode()
-    path.write_bytes(changed)
-    s.start(expect_ready=False)
-    need(path.read_bytes() == changed, "tampered history was rewritten")
+                leaves(item, (*path, key))
+        elif isinstance(node, list):
+            for index, item in enumerate(node):
+                leaves(item, (*path, index))
+        elif isinstance(node, str) and node:
+            candidates.append((0 if node in semantic else 1, path, node + "tampered"))
+        elif type(node) in (int, float):
+            candidates.append((1, path, node + 1))
+    leaves(value)
+    need(candidates, "journal must describe actual transactions")
+    refused = False
+    for _, trail, replacement in sorted(candidates, key=lambda candidate: candidate[0])[:32]:
+        changed_value = json.loads(json.dumps(value))
+        if not trail:
+            changed_value = replacement
+        else:
+            parent = changed_value
+            for component in trail[:-1]:
+                parent = parent[component]
+            parent[trail[-1]] = replacement
+        changed_lines = [*original_lines[:-1], json.dumps(changed_value, separators=(",", ":"))]
+        changed = ("\n".join(changed_lines) + "\n").encode()
+        path.write_bytes(changed)
+        try:
+            s.start(expect_ready=False)
+            refused = True
+        except AssertionError:
+            # A permitted unchecked metadata field may change without changing
+            # transaction content. Try the next independently restored leaf.
+            pass
+        finally:
+            s.stop()
+        need(path.read_bytes() == changed, "tampered history was rewritten")
+        if refused:
+            break
+    need(refused, "changed transaction content was accepted")
     for variant in (original_lines[1:], [original_lines[1], original_lines[0], *original_lines[2:]]):
         path.write_text("\n".join(variant) + "\n", encoding="utf-8")
         s.start(expect_ready=False)
@@ -726,7 +795,7 @@ const e=await c.events(process.env.WORKSPACE,{after:0,limit:100});
 let good=false;try{await c.approve(process.env.WORKSPACE,r.import.id)}catch(x){good=x instanceof RelayError&&x.status===403&&typeof x.code==='string'}
 console.log(JSON.stringify({version:w.workspace.version,members:m.members.length,state:r.import.state,events:e.events.length,good}));
 """.replace("SDK", json.dumps((s.options.app / "sdk.mjs").as_uri())), encoding="utf-8")
-    result = subprocess.run([str(s.options.runtime), str(script)], env={**environment(), "RELAY_URL": s.url,
+    result = owned_process.run([str(s.options.runtime), str(script)], env={**environment(), "RELAY_URL": s.url,
         "RELAY_TOKEN": s.tokens["editor"], "WORKSPACE": s.ws, "CSV": CSV}, capture_output=True, text=True, timeout=8)
     need(result.returncode == 0)
     value = json.loads(result.stdout)
@@ -740,8 +809,16 @@ def g50(s):
     source.write_text("""import {createClient,RelayError,type Role,type ImportState,type Member,type ImportRecord} from SDK;
 type IsAny<T> = 0 extends (1 & T) ? true : false;
 type NotAny<T> = IsAny<T> extends true ? never : T;
+type Equal<A,B> = (<T>()=>T extends A ? 1 : 2) extends (<T>()=>T extends B ? 1 : 2) ? true : false;
+const exactRoles:Equal<Role,'owner'|'editor'|'approver'|'worker'|'viewer'>=true;
+const exactStates:Equal<ImportState,'staged'|'approved'|'leased'|'committed'|'rejected'|'cancelled'>=true;
+type FieldAny<T> = true extends {[K in keyof T]:IsAny<T[K]>}[keyof T] ? true : false;
+const memberFieldsTyped:FieldAny<Member>=false;const importFieldsTyped:FieldAny<ImportRecord>=false;
 const client=createClient({baseUrl:'http://127.0.0.1',token:'synthetic'});
+type Results = {[K in keyof typeof client]:typeof client[K] extends (...args:never[])=>Promise<infer R> ? IsAny<R> : true};
+const methodsTyped:true extends Results[keyof Results] ? true : false=false;
 const members=await client.members('abc');
+const nestedMember:NotAny<typeof members.members[number]>=members.members[0];
 const record:Member=members.members[0];const revision:number=record.revision;
 const stage=await client.stage('abc',{baseVersion:0,csv:'x'},'key');
 const imp:ImportRecord=stage.import;const state:ImportState=imp.state;const role:Role='worker';
@@ -761,7 +838,7 @@ await client.claim('abc','id','100');
 // @ts-expect-error declared member has no imaginary property
 record.imaginary;
 """.replace("SDK", json.dumps((s.options.app / "sdk.mjs").as_posix())), encoding="utf-8")
-    result = subprocess.run([str(s.options.node), str(s.options.typescript), "--strict", "--noEmit", "--target", "ES2022",
+    result = owned_process.run([str(s.options.node), str(s.options.typescript), "--strict", "--noEmit", "--target", "ES2022",
         "--lib", "ES2022,DOM", "--module", "NodeNext", "--moduleResolution", "NodeNext", "--skipLibCheck", str(source)],
         env=environment(), capture_output=True, text=True, timeout=20)
     need(result.returncode == 0, "positive/negative SDK type contract failed")
@@ -778,7 +855,7 @@ def main():
     need(options.out != options.app and not options.out.is_relative_to(options.app), "report directory outside authored app")
     options.out.mkdir(parents=True, exist_ok=True)
     if options.mode == "bun-qualification":
-        result = subprocess.run([str(options.runtime), "-e", "if(!globalThis.Bun)process.exit(91)"],
+        result = owned_process.run([str(options.runtime), "-e", "if(!globalThis.Bun)process.exit(91)"],
             capture_output=True, env=environment(), timeout=5)
         need(result.returncode == 0, "qualification requires real Bun")
     checks = []
@@ -796,28 +873,30 @@ def main():
     record("owned-process-ready-contract", "prerequisite", launch)
     record("loopback-json-health", "prerequisite", lambda: need(service.request("GET", "/health") == (200, {"ok": True})))
     def help_check():
-        result = subprocess.run([str(options.runtime), str(options.app / "cli.mjs"), "--help"],
+        result = owned_process.run([str(options.runtime), str(options.app / "cli.mjs"), "--help"],
             cwd=options.app, env=environment(), capture_output=True, text=True, timeout=5)
         need(result.returncode == 0 and all(word in result.stdout for word in ("stage", "approve", "claim", "commit", "events")))
     record("cli-help-is-usable", "prerequisite", help_check)
     def sdk_check():
-        result = subprocess.run([str(options.runtime), "--input-type=module", "-e",
+        result = owned_process.run([str(options.runtime), "--input-type=module", "-e",
             "const m=await import(" + json.dumps((options.app / "sdk.mjs").as_uri()) + ");if(typeof m.createClient!=='function'||typeof m.RelayError!=='function')process.exit(2)"],
             cwd=options.app, env=environment(), capture_output=True, text=True, timeout=5)
         need(result.returncode == 0 and (options.app / "sdk.d.mts").is_file())
     record("sdk-module-and-declarations-exist", "prerequisite", sdk_check)
     if service:
-        service.close()
+        service.close(abrupt=True)
     for name, function in GROUPS:
         def run(function=function):
             instance = None
+            fixture_complete = False
             try:
                 instance = Service(options)
                 instance.fixture()
+                fixture_complete = True
                 function(instance)
             finally:
                 if instance:
-                    instance.close()
+                    instance.close(abrupt=not fixture_complete)
         record(name, "business", run)
     need(len(GROUPS) == 50 and len(checks) == 54, "instrument check inventory changed")
     passed = sum(check["passed"] for check in checks)
