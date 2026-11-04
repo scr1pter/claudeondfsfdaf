@@ -16,3 +16,10 @@ packages/core/src/database/migration.gen.ts linguist-generated
 # Prompts and tool descriptions go to the model as written, so a Windows checkout must not add carriage returns to them.
 /packages/engine/src/**/*.txt text eol=lf
 /packages/core/src/**/*.txt text eol=lf
+
+# Exact qualified task and archived matched instrument bytes for the additional round.
+docs/benchmarks/agentic-heavy-v1/harbor/** -text whitespace=cr-at-eol
+scripts/benchmarks/matched-agentic-round-two/** -text whitespace=cr-at-eol
+scripts/benchmarks/heavy-round-two/** -text whitespace=cr-at-eol
+# Unified-diff blank context lines intentionally contain their leading space.
+docs/benchmarks/agentic-heavy-v1/additional-round-qualification/financial-only.diff -text whitespace=-blank-at-eol,cr-at-eol
