@@ -25,7 +25,8 @@ private func process(_ pid: pid_t) -> CallerProcess? {
     var before = proc_bsdinfo()
     var after = proc_bsdinfo()
     let size = Int32(MemoryLayout<proc_bsdinfo>.size)
-    let pathCapacity = Int(PROC_PIDPATHINFO_MAXSIZE)
+    // The SDK's compound PROC_PIDPATHINFO_MAXSIZE macro is unavailable to Swift.
+    let pathCapacity = 4 * Int(MAXPATHLEN)
     var path = [CChar](repeating: 0, count: pathCapacity)
     guard proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &before, size) == size,
           proc_pidpath(pid, &path, UInt32(pathCapacity)) > 0,

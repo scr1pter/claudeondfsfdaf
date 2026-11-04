@@ -91,7 +91,8 @@ enum HelperLifecycle {
         var info = proc_bsdinfo()
         let size = Int32(MemoryLayout<proc_bsdinfo>.size)
         guard proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size) == size else { return nil }
-        let pathCapacity = Int(PROC_PIDPATHINFO_MAXSIZE)
+        // proc_info.h defines PROC_PIDPATHINFO_MAXSIZE as (4 * MAXPATHLEN), which Swift cannot import.
+        let pathCapacity = 4 * Int(MAXPATHLEN)
         var path = [CChar](repeating: 0, count: pathCapacity)
         guard proc_pidpath(pid, &path, UInt32(pathCapacity)) > 0,
               let executable = canonicalPath(String(cString: path)) else { return nil }
