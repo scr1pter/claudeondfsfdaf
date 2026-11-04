@@ -64,6 +64,33 @@ const scenarios: Scenario[] = [
   ...workspaceScenarios,
   ...sessionScenarios,
   http.protected
+    .get("/computer/protected-paths", "computer.protectedPaths")
+    .seeded((ctx) => ctx.file("AGENTS.md", "Private computer protection instruction fixture."))
+    .json(200, (body, ctx) => {
+      object(body)
+      array(body.paths)
+      array(body.directories)
+      check(
+        [...body.paths, ...body.directories].every(
+          (file) => typeof file === "string" && path.isAbsolute(file) && !file.includes("\0"),
+        ),
+        "protected computer paths must be absolute file names",
+      )
+      check(
+        body.paths.includes(path.join(ctx.directory!, "AGENTS.md")),
+        "protected computer paths should include this project's instruction file",
+      )
+      check(
+        body.directories.includes(exerciseConfigDirectory),
+        "protected computer directories should include the isolated engine config",
+      )
+      check(Buffer.byteLength(JSON.stringify(body)) <= 1024 * 1024, "protected computer metadata must stay bounded")
+      check(
+        !JSON.stringify(body).includes("Private computer protection instruction fixture."),
+        "protected computer metadata must not disclose instruction contents",
+      )
+    }),
+  http.protected
     .post("/computer/screenshots/prune", "computer.screenshots.prune")
     .mutating()
     .probe({ path: "/computer/screenshots/prune", body: { before: 0 } })
@@ -786,7 +813,10 @@ const scenarios: Scenario[] = [
       200,
       (body) => {
         object(body)
-        check(body.text === "HTTP API memory: releases go out on Thursdays.", "memory create should return the saved text")
+        check(
+          body.text === "HTTP API memory: releases go out on Thursdays.",
+          "memory create should return the saved text",
+        )
         check(body.status === "active", "a memory the user adds is active")
       },
       "status",
@@ -834,10 +864,7 @@ const scenarios: Scenario[] = [
     .mutating()
     .at((ctx) => ({ path: route("/memory/{memoryID}", { memoryID: "m0none" }), headers: ctx.headers() }))
     .json(400, object, "status"),
-  http.protected
-    .post("/memory/tidy", "memory.tidy")
-    .mutating()
-    .json(200, object, "status"),
+  http.protected.post("/memory/tidy", "memory.tidy").mutating().json(200, object, "status"),
   http.protected
     .post("/memory/erase", "memory.erase")
     .mutating()
@@ -858,7 +885,11 @@ const scenarios: Scenario[] = [
   http.protected
     .post("/memory/import", "memory.import")
     .mutating()
-    .at((ctx) => ({ path: "/memory/import", headers: ctx.headers(), body: { text: "# Notes\n\nNothing to bring in." } }))
+    .at((ctx) => ({
+      path: "/memory/import",
+      headers: ctx.headers(),
+      body: { text: "# Notes\n\nNothing to bring in." },
+    }))
     .json(
       200,
       (body) => {
@@ -869,7 +900,10 @@ const scenarios: Scenario[] = [
     ),
   http.protected.get("/memory/settings", "memory.settings.get").json(200, (body) => {
     object(body)
-    check(typeof body.facets === "object" && body.modelLearner === "local-only", "learning settings should say each facet and the model learner")
+    check(
+      typeof body.facets === "object" && body.modelLearner === "local-only",
+      "learning settings should say each facet and the model learner",
+    )
   }),
   http.protected
     .patch("/memory/settings", "memory.settings.update")
@@ -885,7 +919,10 @@ const scenarios: Scenario[] = [
     object(body)
     check(body.state === "absent", "no search model is downloaded until the user asks")
     check(body.downloads === false, "tests turn search model downloads off")
-    check(Array.isArray(body.options) && body.options.length === 2, "the model status should list what can be downloaded")
+    check(
+      Array.isArray(body.options) && body.options.length === 2,
+      "the model status should list what can be downloaded",
+    )
   }),
   // Downloads are off in tests; installing from a folder is what an offline computer does instead.
   http.protected
@@ -900,7 +937,10 @@ const scenarios: Scenario[] = [
     object(body)
     check(Array.isArray(body.documents), "documents list should return documents")
     check(typeof body.indexing === "boolean", "documents list should say whether anything is being read")
-    check(isRecord(body.limits) && body.limits.upload === 64 * 1024 * 1024, "documents list should give the upload limit")
+    check(
+      isRecord(body.limits) && body.limits.upload === 64 * 1024 * 1024,
+      "documents list should give the upload limit",
+    )
   }),
   // The upload takes multipart form data only; memory-documents.test.ts sends real files.
   http.protected
@@ -964,12 +1004,18 @@ const scenarios: Scenario[] = [
     .json(400, object, "status"),
   http.protected
     .get("/memory/documents/{documentID}/file", "memory.documents.file")
-    .at((ctx) => ({ path: route("/memory/documents/{documentID}/file", { documentID: "dnone" }), headers: ctx.headers() }))
+    .at((ctx) => ({
+      path: route("/memory/documents/{documentID}/file", { documentID: "dnone" }),
+      headers: ctx.headers(),
+    }))
     .json(400, object, "status"),
   // Nothing is sent to a model here: the flag is off by default, and no document dnone exists either way.
   http.protected
     .get("/memory/documents/{documentID}/distill", "memory.distill.estimate")
-    .at((ctx) => ({ path: route("/memory/documents/{documentID}/distill", { documentID: "dnone" }), headers: ctx.headers() }))
+    .at((ctx) => ({
+      path: route("/memory/documents/{documentID}/distill", { documentID: "dnone" }),
+      headers: ctx.headers(),
+    }))
     .json(200, (body) => {
       object(body)
       check(typeof body.refused === "object", "an estimate for a document that is not there says why it would not run")
@@ -1002,7 +1048,11 @@ const scenarios: Scenario[] = [
     .json(400, object, "status"),
   http.protected
     .post("/memory/posting-check", "memory.posting.check")
-    .at((ctx) => ({ path: "/memory/posting-check", headers: ctx.headers(), body: { parts: ["Fixed the retry loop."], typed: false } }))
+    .at((ctx) => ({
+      path: "/memory/posting-check",
+      headers: ctx.headers(),
+      body: { parts: ["Fixed the retry loop."], typed: false },
+    }))
     .json(200, (body) => {
       object(body)
       check(body.status === "clean", "text that repeats nothing of the owner's memory posts as it is")
