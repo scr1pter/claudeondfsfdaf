@@ -11,6 +11,7 @@ import { SettingsAccountV2 } from "./account"
 import { SettingsRoadmapV2 } from "./roadmap"
 import { roadmapTab } from "./roadmap-model"
 import { SettingsGeneralV2 } from "./general"
+import { SettingsNotificationsV2 } from "./notifications"
 import { SettingsProvidersV2 } from "./providers"
 import { SettingsModelsV2 } from "./models"
 import { SettingsServersV2 } from "./servers"
@@ -119,6 +120,7 @@ export const SettingsWorkspace: Component<SettingsWorkspaceProps> = (props) => {
     if (item === "memory")
       return <SettingsMemoryV2 repositoryPath={props.repositoryPath} sessionDirectory={props.sessionDirectory} />
     if (item === "local") return <SettingsLocalV2 />
+    if (item === "notifications") return <SettingsNotificationsV2 />
     if (item === "providers") return <SettingsProvidersV2 />
     if (item === "models") return <SettingsModelsV2 />
     if (item === "servers") return <SettingsServersV2 />

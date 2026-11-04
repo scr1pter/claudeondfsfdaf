@@ -7,6 +7,7 @@ import { reviewPanelServed, secondOpinionServed } from "./model-plan-models.js"
 import { readDisabledSet, readSwitch, type SwitchName } from "./codium-switches.js"
 import { roadmapConfigured } from "./roadmap.js"
 import { reportEmailConfigured } from "./support-reports.js"
+import { phoneAppOrigin, pushConfigured } from "./web-push.js"
 
 export type PerkServices = Readonly<Partial<Record<PerkId, (fetcher: typeof fetch) => boolean | Promise<boolean>>>>
 export type ListedPerksOptions = { services?: PerkServices; runtime?: boolean }
@@ -42,6 +43,9 @@ export const perkServices: PerkServices = {
   // WP A35: the panel runs in Vector's review on the plan's review pair and panel judge, so it is ready once every
   // plan's three are served and come from three labs.
   "review-panel": (fetcher) => reviewPanelServed(fetcher),
+  // WP A38: phone alerts reach a phone through the phone app at VECTOR_PHONE_APP_ORIGIN, which subscribes with the
+  // server's VAPID key (A37). Both must be configured; the `push` switch is checked with the other switches below.
+  alerts: () => pushConfigured() && phoneAppOrigin() !== undefined,
 }
 
 const switches: Readonly<Partial<Record<PerkId, SwitchName>>> = {

@@ -25,6 +25,9 @@ const keep = new Set([
   "owner",
   // The opt-in Codium founders page (WP A31): an empty shell; api/founders decides what anyone sees.
   "founders",
+  // The phone app (WP A38), copied in from packages/app/dist-phone: a static shell served on remote.vectordev.ai only
+  // (vercel.json), whose API calls each check the account's own session and plan.
+  "phone",
   "install",
   "install.ps1",
   "index.html",

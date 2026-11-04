@@ -170,7 +170,12 @@ export const settingsGroups: readonly SettingsGroup[] = [
         icon: "keyboard",
         keywords: ["keybindings", "keybinds", "key bindings", "hotkeys", "command palette"],
       },
-      { value: "notifications", label: "Notifications", icon: "status", keywords: ["alerts", "sound", "completion"] },
+      {
+        value: "notifications",
+        label: "Notifications",
+        icon: "status",
+        keywords: ["alerts", "sound", "completion", "phone", "push", "quiet hours"],
+      },
       {
         value: "accessibility",
         label: "Accessibility",

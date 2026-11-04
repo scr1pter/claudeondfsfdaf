@@ -137,6 +137,12 @@ jobs:
           GITHUB_ACTIONS=false bun turbo run build --log-order=stream
           --filter='@vectordevai/engine^...' --filter='@vectordevai/core^...' --filter='@vectordevai/app^...'
 
+      # WP A38: test/phone-app.test.ts checks that the real phone build survives the website's prune.
+      - name: Build the phone app
+        timeout-minutes: 10
+        working-directory: packages/app
+        run: bun run build:phone
+
       # The hosted API suite in test/, every test whose path names Codium, and every test file this branch added or
       # changed since main, one Bun process per file (packages/cloud/src/codium-ci-tests.ts).
       - name: Run the Codium test files

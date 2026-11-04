@@ -20,6 +20,7 @@
     "start": "vite",
     "dev": "vite",
     "build": "vite build",
+    "build:phone": "vite build --mode phone",
     "serve": "vite preview",
     "test": "bun run test:unit && bun run test:browser",
     "test:unit": "bun test --isolate --only-failures --preload ./happydom.ts ./src",

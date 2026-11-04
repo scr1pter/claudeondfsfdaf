@@ -3,11 +3,20 @@ import { createEffect, createMemo } from "solid-js"
 import { createSimpleContext } from "@vectordevai/ui/context"
 import { persisted } from "@/utils/persist"
 
+/** The events a computer may alert the account's phones about (WP A38; A41 sends them, end to end encrypted). */
+export type PhoneAlertEvent = "finished" | "needsYou" | "runGuard" | "usage"
+/** Local times ("HH:MM") between which no phone alert is sent; `end` before `start` runs past midnight. */
+export type QuietHours = { start: string; end: string }
+
 export interface NotificationSettings {
   agent: boolean
   permissions: boolean
   errors: boolean
   soundEffects: boolean
+  /** Which events reach the account's phones (contract §4.15 `notifications.events`). */
+  events: Record<PhoneAlertEvent, boolean>
+  /** No phone alerts between these times; null when off (contract §4.15 `notifications.quietHours`). */
+  quietHours: QuietHours | null
 }
 
 export interface SoundSettings {
@@ -236,6 +245,9 @@ const defaultSettings: Settings = {
     permissions: true,
     errors: false,
     soundEffects: true,
+    // The usage alert stays off by default, like Codium's own 80% alert (codium.alert80).
+    events: { finished: true, needsYou: true, runGuard: true, usage: false },
+    quietHours: null,
   },
   sounds: {
     agentEnabled: true,
@@ -259,6 +271,14 @@ export function restoredSettings(current: Pick<Settings, "editor">): Settings {
   const next = structuredClone(defaultSettings)
   if (current.editor?.aiAutocomplete === false) next.editor.aiAutocomplete = false
   return next
+}
+
+/** Quiet hours as saved, or null when they are off or not valid. */
+export function validQuietHours(value: unknown): QuietHours | null {
+  if (!value || typeof value !== "object") return null
+  const { start, end } = value as Record<string, unknown>
+  const time = (text: unknown) => typeof text === "string" && /^([01]\d|2[0-3]):[0-5]\d$/.test(text)
+  return time(start) && time(end) && start !== end ? { start: start as string, end: end as string } : null
 }
 
 function withFallback<T>(read: () => T | undefined, fallback: T) {
@@ -600,6 +620,21 @@ export const { use: useSettings, provider: SettingsProvider } = createSimpleCont
         soundEffects: withFallback(() => store.notifications?.soundEffects, defaultSettings.notifications.soundEffects),
         setSoundEffects(value: boolean) {
           setStore("notifications", "soundEffects", value)
+        },
+        // Phone alerts (WP A38). Settings saved before these existed read as the defaults.
+        event(name: PhoneAlertEvent) {
+          return store.notifications?.events?.[name] ?? defaultSettings.notifications.events[name]
+        },
+        setEvent(name: PhoneAlertEvent, value: boolean) {
+          setStore("notifications", "events", (current) => ({
+            ...defaultSettings.notifications.events,
+            ...current,
+            [name]: value,
+          }))
+        },
+        quietHours: createMemo(() => validQuietHours(store.notifications?.quietHours)),
+        setQuietHours(value: QuietHours | null) {
+          setStore("notifications", "quietHours", value === null ? null : validQuietHours(value))
         },
       },
       sounds: {

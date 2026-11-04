@@ -757,3 +757,58 @@ The shared browser action module validates explicit request/response shapes and 
 - **`safeFetch` defaults:** https only, port 443, 10 s, 64 KiB answers. Any 3xx except 304 is an error.
 - **Files outside A37's list:** `api/_lib/abuse.ts`, `api/_lib/codium-provisioners.ts`, `.env.example`,
   `docs/vector/MODEL-PLANS.md`.
+
+## A38 phone app shell (3 Nov 2026)
+
+- **The phone app lives at `/phone/` on the phone origin, not at its root.** The contract asks for "a host rewrite for
+  remote.vectordev.ai". Vercel applies `vercel.json` rewrites only after real files, and the website's `/index.html`
+  exists in the same deployment, so no rewrite can put the phone page at `https://remote.vectordev.ai/`. Instead the
+  website build copies the phone build to `/phone`, the phone origin redirects every other path to `/phone/` except
+  `/api/` (the app calls the API on its own origin, so the CSP names no Vector API host), unknown `/phone/…` paths are
+  rewritten to the app's page, and `vectordev.ai/phone` redirects to the phone origin so the app never runs on a
+  second origin. The worker at `/phone/sw.js` takes the whole origin as its scope through `Service-Worker-Allowed: /`,
+  which is the header the contract lists. Manifest: `id` and `start_url` `/phone/`, `scope` `/`.
+- **`connect-src 'self' https://*.supabase.co`.** The account service's address is a deployment setting
+  (`SUPABASE_URL`), not in the repository, and a static header cannot read it. A custom domain for it would need the
+  header changed. The relay's `wss:` host is added by A42 with the relay URL.
+- **Sign-in on the phone uses a small fetch client of the account service** (Google through PKCE S256, email and
+  password, refresh, sign out) instead of the website's library: `packages/app` does not depend on it, and adding it
+  would change `bun.lock`. Google sign-in on the phone needs `https://remote.vectordev.ai/phone/` in the account
+  service's redirect allow-list (owner step).
+- **"Features shown by listed and entitlements"** reads: Remote's sessions, approvals and devices need `remote` listed
+  and `entitlements.remote.computers > 0`; GitHub runs (the contract's "cloud runs", which §1.1 lists under Remote)
+  also need `github-agents` and `entitlements.cloudAgents`, and are labelled "GitHub runs" with the H4 wording; the
+  cloud computer needs `computer` and `entitlements.hosted`; production needs any listed ops part and
+  `entitlements.ops`, and names only the listed parts; alerts need `alerts` and a plan (`entitlements.rank`). A
+  paused, frozen or ended plan keeps its routes with a notice.
+- **"Pairing must happen inside the installed Home Screen app on iOS"** is applied to pairing, sessions, approvals and
+  alerts: an iOS browser tab (including an iPad that reports itself as a Mac) shows how to install instead. Sign-in is
+  allowed in a tab but says to install first, since the installed app keeps separate storage.
+- **"Version handshake"** reads as two halves: with the server, each build writes `/phone/version.json` and an open app
+  reloads once onto a newer build (never twice for the same build); with the desktop, `negotiate()` picks the
+  protocol both speak from each side's `{protocol, minPeer}` hello or names the side that must update. A41/A42 send
+  and answer the hello.
+- **The desktop alert envelope is defined here**, as the phone's decoder: `c` = base64url(12-byte nonce ‖ AES-256-GCM
+  ciphertext and tag), additional data `vector-alert-v1`, a 32-byte key named by `k` (`default` when absent),
+  plaintext `{v:1, title, route?}` with A37's title rules. A41 must seal alerts this way. Keys live in IndexedDB as
+  non-extractable decrypt-only keys, and signing out forgets them. An alert the phone cannot open still shows a
+  notification without content, because iOS and Chrome revoke push for a page that shows nothing.
+- **The worker has no fetch handler**, so nothing an account sees is cached on the phone and every deploy reaches the
+  next load. It is built separately as one classic script, since module service workers are not on every phone the
+  app supports.
+- **Settings → Notifications.** `notifications.events` defaults to finished, needs-you and Run Guard on and usage off
+  (like `codium.alert80`); `notifications.quietHours` is `{start, end}` in local "HH:MM", or null. The Phone alerts
+  card shows when the status lists `alerts` and the plan includes them; the event switches and quiet hours show only
+  where the desktop can send alerts (`platform.phoneAlerts`, A41's bridge, typed here), so no switch is shown that does
+  nothing. The shared page pieces moved from `general.tsx` to `settings-v2/parts/page.tsx` unchanged.
+- **`alerts` readiness** is `pushConfigured() && phoneAppOrigin() !== undefined`, per "alerts can be listed once A37 and
+  this ship". Nothing sends alerts until A41 (desktop) or A50/A56 (server); the notes ask the owner to list `alerts`
+  only then.
+- **The Vercel build builds the phone app first** (`bun --cwd packages/app run build:phone && …`), and the website copy
+  fails a Vercel build when the phone build is missing, so the phone origin is never published without its app. The
+  Codium CI lane builds it before the tests.
+- **Files outside A38's list:** `api/_lib/codium-perks.ts`, `settings-v2/parts/page.tsx`, `general.tsx`,
+  `dialog-settings-v2.tsx`, `settings-registry.ts` (search words), `context/settings.tsx`, `context/platform.tsx`,
+  `packages/app/package.json`, `packages/app/script/browser-imports.ts`, `packages/web/scripts/phone-app.mjs`,
+  `packages/web/astro.config.mjs`, `.gitignore`, `.github/workflows/vector-codium.yml`, `.env.example`,
+  `docs/vector/MODEL-PLANS.md`.

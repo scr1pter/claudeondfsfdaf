@@ -7,6 +7,7 @@ import type { WslServersPlatform } from "../wsl/types"
 import type { UpdaterPlatform } from "../updater"
 import type { VectorAccountPlatform } from "../vector-account"
 import type { ReportsPlatform } from "../support-reports"
+import type { PhoneAlertEvent } from "./settings"
 
 type PickerPaths = string | string[] | null
 type OpenDirectoryPickerOptions = { title?: string; multiple?: boolean }
@@ -20,6 +21,11 @@ type OpenAttachmentPickerOptions = {
 type SaveFilePickerOptions = { title?: string; defaultPath?: string }
 type PlatformName = "web" | "desktop"
 type DesktopOS = "macos" | "windows" | "linux"
+
+/** What a computer sends its phones (WP A41 implements it; the phone app opens it, packages/app/src/phone/alerts.ts). */
+export type PhoneAlertsPlatform = {
+  send(alert: { event: PhoneAlertEvent; title: string; route?: "sessions" | "approvals" }): Promise<void>
+}
 
 export type FatalRendererErrorLog = {
   error: string
@@ -77,6 +83,13 @@ type PlatformBase = {
 
   /** Bug reports this computer sent and what became of each (desktop only); the report ids stay in the main process. */
   reports?: ReportsPlatform
+
+  /**
+   * Alerts from this computer to the account's phones (desktop only; Remote's desktop half, WP A41, provides it): each
+   * alert is encrypted end to end to the paired phones' alert keys before vectordev.ai relays it. Settings →
+   * Notifications offers the phone events and quiet hours only where it exists.
+   */
+  phoneAlerts?: PhoneAlertsPlatform
 
   /** Saved remote-server passwords in the OS keychain (desktop only); set resolves false when none is available. */
   serverCredentials?: {
