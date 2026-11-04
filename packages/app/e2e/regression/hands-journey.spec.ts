@@ -630,9 +630,17 @@ test("the real layout leaves Hands asks and handoffs to main, and notifies once 
         (window as Window & { __computerNotifications?: { title: string; body: string }[] }).__computerNotifications ??
         [],
     )
+  // Layout throttles every ask per conversation for five seconds, including those owned by desktop main.
+  // Keep the stream live while moving the controlled clock between separate asks, so a throttle cannot hide
+  // either a notification regression or the ordinary question/permission paths this case must observe.
+  const advancePastAlertCooldown = async () => {
+    await journey.beat()
+    await page.clock.fastForward(5_001)
+  }
   const app = appAsk("perm_notify_app", "msg_notify", "prt_notify")
   await journey.asked(app)
   await expect(page.locator('[data-component="dock-prompt"][data-kind="permission"]')).toBeVisible()
+  expect(await notifications()).toEqual([])
   await journey.replied(app.id, "once")
   await expect(page.locator('[data-component="dock-prompt"][data-kind="permission"]')).toHaveCount(0)
 
@@ -649,8 +657,10 @@ test("the real layout leaves Hands asks and handoffs to main, and notifies once 
       },
     ],
   }
+  await advancePastAlertCooldown()
   await journey.question(handoff)
   await expect(page.locator('[data-component="session-question-dock"]')).toBeVisible()
+  expect(await notifications()).toEqual([])
   await journey.answered(handoff.id, [["Continue"]])
   await expect(page.locator('[data-component="session-question-dock"]')).toHaveCount(0)
 
@@ -667,11 +677,14 @@ test("the real layout leaves Hands asks and handoffs to main, and notifies once 
       },
     ],
   }
+  await advancePastAlertCooldown()
   await journey.question(checkIn)
+  await expect(page.locator('[data-component="session-question-dock"]')).toContainText("Keep going?")
   await expect.poll(notifications).toHaveLength(1)
   await journey.answered(checkIn.id, [["Keep going"]])
   await expect(page.locator('[data-component="session-question-dock"]')).toHaveCount(0)
 
+  await advancePastAlertCooldown()
   await journey.asked({
     ...app,
     id: "perm_notify_bash",

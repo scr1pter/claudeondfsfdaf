@@ -550,8 +550,14 @@ test("Settings > Vector Local asks before Add server loosens it, and lists every
   expect(state.servers).toEqual([{ url: "http://gpu-box:8000" }, { url: "http://gpu-box:8000", confirm: true }])
 
   // Cancelling sends nothing more. The field empties once the server is added, before it is typed in again.
+  // The closing content disappears before its stack entry is popped; wait until Settings can take focus again.
+  await expect
+    .poll(() => pane.evaluate((element) => element.closest("[data-dialog-layer]")?.hasAttribute("inert")))
+    .toBe(false)
   await expect(servers.getByLabel("Server address")).toHaveValue("")
   await servers.getByLabel("Server address").fill("http://other-box:8000")
+  await expect(servers.getByLabel("Server address")).toHaveValue("http://other-box:8000")
+  await expect(servers.getByRole("button", { name: "Add server" })).toBeEnabled()
   await servers.getByRole("button", { name: "Add server" }).click()
   await page.locator(".vector-local-confirm-dialog").getByRole("button", { name: "Cancel" }).click()
   await expect(pane).toContainText("Nothing changed.")
