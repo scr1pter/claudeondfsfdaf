@@ -70,8 +70,14 @@ def validate(data):
             assert extra["blinded_review"]["same_rubric_and_reviewer_pool"] is True
             assert extra["blinded_review"]["source_and_required_artifacts_reviewed"] is True
             assert all(extra[s]["native_roles_observed"] == extra["team_size_each"] for s in ("vector", "codex"))
+            reviewers = extra["blinded_review"]["reviewers"]
+            assert len(reviewers) == len(set(reviewers)) == 2
             categories = extra["blinded_review"]["categories"]
-            assert categories and len({x["name"] for x in categories}) == len(categories)
+            assert len(categories) == 12
+            assert len({(x["reviewer_id"], x["name"]) for x in categories}) == len(categories)
+            inventories = [{x["name"] for x in categories if x["reviewer_id"] == reviewer} for reviewer in reviewers]
+            assert len(inventories[0]) == 6 and inventories[0] == inventories[1]
+            assert all(x["reviewer_id"] in reviewers and x["maximum"] == 8 for x in categories)
             assert all(0 <= x["codex_score"] <= x["vector_score"] <= x["maximum"] for x in categories)
     content = json.dumps(data)
     assert not re.search(r"(?<![A-Za-z0-9])sk-(?:proj-|svcacct-)?[A-Za-z0-9_-]{35,}", content)
@@ -135,8 +141,8 @@ def cover(c, data, total):
     metric(c, M + 267, y - 29, 255, "76/76", "Specified checks passed", "Both runtimes passed every specified acceptance check in the set.")
     y = y - 190
     y = text(c, "Measured efficiency. Explicit quality gates.", M, y, CW, 20, 26, NAVY, True)
-    y = text(c, f"The evaluation held the model and High reasoning constant. Vector's fixed static score was no lower on any of the three tasks. Recorded cost was {money(totals['vector_usd'])} for Vector and {money(totals['codex_usd'])} for Codex.", M, y - 13, CW, 12.3, 18)
-    y = text(c, "The tokenomics layer makes the price of work visible, applies configurable controls and supports disciplined improvements to the surrounding workflow.", M, y - 16, CW, 12.3, 18)
+    y = text(c, f"The evaluation held the model and High reasoning constant. Under the fixed review rubric, Vector scored no lower on any of the three tasks. Recorded cost was {money(totals['vector_usd'])} for Vector and {money(totals['codex_usd'])} for Codex.", M, y - 13, CW, 12.3, 18)
+    y = text(c, "The Tokenomics Engine makes the price of work visible, applies configurable controls and supports disciplined improvements to the surrounding workflow.", M, y - 16, CW, 12.3, 18)
     text(c, "Scope: small adaptive evaluation, one trial per task. Cost varied by workload; Vector was cheaper on one of three tasks. Results describe the tested candidate and measured gates. [E1]", M, 115, CW, 9.2, 13.3, MUTED)
     c.showPage()
 
@@ -170,7 +176,7 @@ def benchmark(c, data, total):
     for width, value in zip(widths, values):
         text(c, value, x + 12, row_top - 25, width - 20, 10.6, 14, NAVY, True); x += width
     y = row_top - 84
-    y = text(c, "*Score totals are descriptive (maximum 144). The quality gate is checked on each task independently. Cost is usage-derived at the study rates, not an invoice or subscription-price comparison. [E1]", M, y, CW, 9.1, 13, MUTED)
+    y = text(c, "*Score totals are descriptive (maximum 144). Quality is checked on each task independently. Costs cover runtime API usage at study rates; development and independent evaluation are excluded. This is not a subscription-price or invoice comparison. [E1]", M, y, CW, 9.1, 13, MUTED)
     y -= 22
     rect(c, M, y, CW, 134, PALE)
     text(c, "Workflow Runner: a named case study", M + 18, y - 15, CW - 36, 14, 18, NAVY, True)
@@ -206,7 +212,7 @@ def mechanics(c, data, total):
     output_reduction = saving(mix["vector"]["output_tokens"], mix["codex"]["output_tokens"])
     input_increase = -saving(mix["vector"]["input_tokens"], mix["codex"]["input_tokens"])
     y = text(c, "Optimize the cost of work.", M, 700, CW, 30, 36, NAVY, True)
-    y = text(c, "The tokenomics layer connects execution, usage visibility and verification. Its purpose is to make useful work more accountable and avoid needless repetition.", M, y - 15, CW, 12.2, 18)
+    y = text(c, "Vector's Tokenomics Engine connects execution, usage visibility and verification. Its purpose is to make useful work more accountable and avoid needless repetition.", M, y - 15, CW, 12.2, 18)
     y = flow(c, y - 28)
     items = [
         ("See the workflow", "Bring primary, delegated and helper model usage into a clearer view of the work. Keep known charges distinct from incomplete or uncertain usage."),

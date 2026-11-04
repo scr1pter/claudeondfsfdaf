@@ -66,6 +66,8 @@ material information into an unreadable footnote.
 A true `quality_gate_met` additionally requires observed native role counts on
 both arms, a passed matched native audit, and blinded review of the exact source
 and required artifacts by the same reviewer pool and rubric. Every named review
-category must score Vector no lower than Codex; functional passes alone are not
-enough. Keep those review observations with the study data. Run `python -m
+category must score Vector no lower than Codex for each of the two reviewers,
+across the same six 8-point dimensions. A higher total cannot offset a lower
+dimension. Functional passes alone are not enough. Keep those review observations
+with the study data. Run `python -m
 unittest test_brief.py` from this directory to verify the claim checks.

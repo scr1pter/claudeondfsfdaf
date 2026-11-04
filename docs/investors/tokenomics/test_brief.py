@@ -20,7 +20,10 @@ class ClaimValidation(unittest.TestCase):
                       "checks_total": 54, "native_roles_observed": 7},
             "blinded_review": {"same_rubric_and_reviewer_pool": True,
                 "source_and_required_artifacts_reviewed": True,
-                "categories": [{"name": "code", "vector_score": 45, "codex_score": 45, "maximum": 48}]},
+                "reviewers": ["R1", "R2"],
+                "categories": [{"name": "dimension-" + str(dimension), "reviewer_id": reviewer,
+                                "vector_score": 7, "codex_score": 7, "maximum": 8}
+                               for reviewer in ("R1", "R2") for dimension in range(6)]},
         }
         return self.data["additional_complete_study"]
 
@@ -46,7 +49,14 @@ class ClaimValidation(unittest.TestCase):
     def test_lower_code_or_visual_review_rejected(self):
         extra = self.extra()
         categories = extra["blinded_review"]["categories"]
-        categories.append({"name": "visual", "vector_score": 24, "codex_score": 25, "maximum": 40})
+        categories[0].update(vector_score=6, codex_score=7)
+        categories[1].update(vector_score=8, codex_score=6)
+        with self.assertRaises(AssertionError):
+            build_brief.validate(self.data)
+
+    def test_one_reviewer_cannot_stand_for_the_preregistered_pool(self):
+        extra = self.extra()
+        extra["blinded_review"]["reviewers"] = ["R1"]
         with self.assertRaises(AssertionError):
             build_brief.validate(self.data)
 

@@ -134,8 +134,8 @@
     {
       "id": "E6",
       "label": "Summary-cost regression and before/after validation",
-      "path": "docs/benchmarks/tokenomics-2026-11-04/compaction-accounting.md",
-      "url": "https://github.com/scr1pter/claudeondfsfdaf/blob/1a3d07c4a947674c3db68f6bbc7690a8c0288587/docs/benchmarks/tokenomics-2026-11-04/compaction-accounting.md"
+      "path": "docs/investors/tokenomics/engineering-validation.json",
+      "url": "https://github.com/scr1pter/claudeondfsfdaf/blob/e410bd72a291351e47fe627fd193f66b06f8e8d7/docs/investors/tokenomics/engineering-validation.json"
     }
   ],
   "compaction_validation": {
