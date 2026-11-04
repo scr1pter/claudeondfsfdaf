@@ -83,3 +83,13 @@ fixture. No paid API, external model, cloud application, or live benchmark was
 used. This evidence establishes the V2 guard boundary behavior; it makes no
 measured claim about provider savings or task quality and does not reinterpret
 historical legacy CLI results.
+
+## Integrated branch check
+
+On November 4, 2026, both commits were merged into `tokenomics-complete` at
+`b9bc0cbb942bd844bb6dac12b7a26380f3978eb4`, after preserving the original paid
+instrument bytes and confirming the historical runtime was absent. All package
+and common-driver Git contents match the tested `dae4861` branch exactly.
+The normal `bun run typecheck` from `packages/engine` passes with exit 0 on
+that integrated tree. Core's 220 tests and typecheck are the above branch
+validation, not an invented second execution. No paid run or release followed.
