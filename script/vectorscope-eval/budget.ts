@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto"
 import { appendFileSync, closeSync, existsSync, openSync, readFileSync, rmSync, truncateSync, writeSync } from "node:fs"
 
 // The eval's budget ledger (VectorScope plan, VS-03; Phase 0 "Budget, privacy and release gate"). One coordinator
@@ -66,7 +67,9 @@ export interface Usage {
 }
 
 export type Entry =
-  | { type: "open"; at: string; limits: Limits }
+  // `id` tells journals apart that were opened in the same millisecond with the same limits; a journal written before
+  // it existed has none.
+  | { type: "open"; at: string; limits: Limits; id?: string }
   | {
       type: "admit"
       at: string
@@ -257,7 +260,7 @@ export class Ledger {
     if (problems.length) throw new LedgerError(problems.join("; "))
     if (!input.journal) {
       const ledger = new Ledger(input)
-      ledger.#record({ type: "open", at: ledger.#at(), limits: ledger.limits })
+      ledger.#record({ type: "open", at: ledger.#at(), limits: ledger.limits, id: randomUUID() })
       return ledger
     }
     const lock = `${input.journal}.lock`
@@ -286,7 +289,7 @@ export class Ledger {
         for (const entry of prior) ledger.#apply(entry)
         // Whatever a stopped process admitted and never settled may have been sent and billed.
         for (const seq of [...ledger.#open.keys()]) ledger.#settleOpen(seq, "unsettled")
-      } else ledger.#record({ type: "open", at: ledger.#at(), limits: ledger.limits })
+      } else ledger.#record({ type: "open", at: ledger.#at(), limits: ledger.limits, id: randomUUID() })
       return ledger
     } catch (error) {
       rmSync(lock, { force: true })

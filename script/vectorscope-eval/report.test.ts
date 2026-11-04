@@ -321,6 +321,22 @@ describe("the eval ledger in a report", () => {
     expect(ledgerSummaries([...shared.reports, ...other.reports]).map((item) => item.spentUsd)).toHaveLength(2)
   })
 
+  test("keeps two journals apart that were opened in the same millisecond with the same limits", () => {
+    const limits = { totalUsd: 10, caseUsd: 1, reserveUsd: 1 }
+    const now = () => new Date("2026-11-04T00:00:00.000Z")
+    const charge = (journal: string, costUsd: number) => {
+      const ledger = Ledger.open({ limits, journal: join(root, journal), now })
+      const admission = ledger.admit({ case: "x#1", kind: "provider", model: "vendor/a", estimateUsd: 0.5 })
+      if (!admission.admitted) throw new Error(admission.detail)
+      admission.ticket.sent()
+      admission.ticket.settle({ costUsd, basis: "reported" })
+      ledger.close()
+      return { budget: ledger.summary(), ledger: [...ledger.entries] }
+    }
+    const summaries = ledgerSummaries([charge("same-ms-a.jsonl", 0.4), charge("same-ms-b.jsonl", 0.4)])
+    expect(summaries.map((item) => item.spentUsd)).toEqual([0.4, 0.4])
+  })
+
   test("report.ts shows a shared journal's spend once, and --ledger alone when it is given", async () => {
     const shared = sharedJournal()
     const dir = join(root, "shared-reports")

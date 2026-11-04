@@ -160,7 +160,7 @@ export async function loadOutputs(input: {
 // One summary per budget journal the reports were charged to. Runs that share a journal (every model of one CI run)
 // each embed the journal as it stood when they finished, earlier models' entries included, so adding their summaries
 // up would count the first model's spend once for every later model. Reports are grouped by the journal's opening
-// entry, and each group's entries are merged without repeats, shortest list first, which keeps the journal's order
+// entry (its id keeps journals opened in the same millisecond apart), and each group's entries are merged without repeats, shortest list first, which keeps the journal's order
 // since each later process appended to what the earlier ones wrote; the merged journal is summarised once. A report
 // with no entries keeps the summary it embeds.
 export function ledgerSummaries(reports: readonly Pick<RunReport, "budget" | "ledger">[]): Summary[] {
