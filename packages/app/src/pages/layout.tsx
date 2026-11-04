@@ -41,11 +41,8 @@ import { useServerSDK } from "@/context/server-sdk"
 import { clearWorkspaceTerminals } from "@/context/terminal"
 import { pickSessionCacheEvictions } from "@/context/global-sync/session-cache"
 import { useNotification } from "@/context/notification"
-import { usePermission } from "@/context/permission"
 import { Binary } from "@vectordevai/core/util/binary"
-import { playSoundById } from "@/utils/sound"
 import { createAim } from "@/utils/aim"
-import { isInternalSession } from "@/utils/internal-sessions"
 import { setNavigate } from "@/utils/notification-click"
 import { Worktree as WorktreeState } from "@/utils/worktree"
 import { setSessionHandoff } from "@/pages/session/handoff"
@@ -59,7 +56,7 @@ import { HelpButton } from "@/components/help-button"
 import { Titlebar } from "@/components/titlebar"
 import { useDirectoryPicker } from "@/components/directory-picker"
 import { ServerConnection, useServer } from "@/context/server"
-import { desktopOwns, rendererNotifies } from "./layout-computer-notify"
+import { useAskNotificationAlerts } from "./layout/ask-notifications"
 import { useLanguage } from "@/context/language"
 import { pathKey } from "@/utils/path-key"
 import {
@@ -116,7 +113,6 @@ export default function LegacyLayout(props: ParentProps) {
   const settings = useSettings()
   const server = useServer()
   const notification = useNotification()
-  const permission = usePermission()
   const navigate = useNavigate()
   setNavigate(navigate)
   const providers = useProviders()
@@ -317,136 +313,31 @@ export default function LegacyLayout(props: ParentProps) {
     layout.mobileSidebar.hide()
   }
 
-  const useSDKNotificationToasts = () =>
-    onMount(() => {
-      const toastBySession = new Map<string, number>()
-      const alertedAtBySession = new Map<string, number>()
-      const cooldownMs = 5000
+  // The current layout owns alerts while the legacy shell redirects an old conversation URL.
+  useAskNotificationAlerts({
+    directory: currentDir,
+    sessionID: () => params.id,
+    navigate: navigateWithSidebarReset,
+    enabled: () => !settings.general.newLayoutDesigns(),
+  })
 
-      const dismissSessionAlert = (sessionKey: string) => {
-        const toastId = toastBySession.get(sessionKey)
-        if (toastId === undefined) return
-        toaster.dismiss(toastId)
-        toastBySession.delete(sessionKey)
-        alertedAtBySession.delete(sessionKey)
+  onMount(() => {
+    const stop = serverSDK().event.listen((event) => {
+      if (event.details.type === "worktree.ready") {
+        setBusy(event.name, false)
+        WorktreeState.ready(serverSDK().scope, event.name)
       }
-
-      const unsub = serverSDK().event.listen(async (e) => {
-        if (e.details?.type === "worktree.ready") {
-          setBusy(e.name, false)
-          WorktreeState.ready(serverSDK().scope, e.name)
-          return
-        }
-
-        if (e.details?.type === "worktree.failed") {
-          setBusy(e.name, false)
-          WorktreeState.failed(
-            serverSDK().scope,
-            e.name,
-            e.details.properties?.message ?? language.t("common.requestFailed"),
-          )
-          return
-        }
-
-        if (
-          e.details?.type === "question.replied" ||
-          e.details?.type === "question.rejected" ||
-          e.details?.type === "permission.replied"
-        ) {
-          const props = e.details.properties as { sessionID: string }
-          const sessionKey = `${e.name}:${props.sessionID}`
-          dismissSessionAlert(sessionKey)
-          return
-        }
-
-        if (e.details?.type !== "permission.asked" && e.details?.type !== "question.asked") return
-        const title =
-          e.details.type === "permission.asked"
-            ? language.t("notification.permission.title")
-            : language.t("notification.question.title")
-        const icon = e.details.type === "permission.asked" ? ("checklist" as const) : ("bubble-5" as const)
-        const directory = e.name
-        const props = e.details.properties
-        if (e.details.type === "permission.asked" && permission.autoResponds(e.details.properties, directory)) return
-
-        // A helper's request belongs to the surface that launched it; never point the user at the helper session.
-        const session = await serverSync()
-          .session.resolve(props.sessionID)
-          .catch(() => undefined)
-        if (!session || isInternalSession(session)) return
-        const sessionKey = `${directory}:${props.sessionID}`
-
-        const sessionTitle = session?.title ?? language.t("command.session.new")
-        const projectName = getFilename(directory)
-        const description =
-          e.details.type === "permission.asked"
-            ? language.t("notification.permission.description", { sessionTitle, projectName })
-            : language.t("notification.question.description", { sessionTitle, projectName })
-        const href = `/${base64Encode(directory)}/session/${props.sessionID}`
-
-        const now = Date.now()
-        const lastAlerted = alertedAtBySession.get(sessionKey) ?? 0
-        if (now - lastAlerted < cooldownMs) return
-        alertedAtBySession.set(sessionKey, now)
-
-        // When the desktop owns a Hands run, it sends its own "needs you" notification for computer asks and handoffs.
-        const notifies = rendererNotifies(e.details, desktopOwns(platform.computer, serverSDK().scope))
-
-        if (e.details.type === "permission.asked") {
-          if (settings.sounds.permissionsEnabled()) {
-            void playSoundById(settings.sounds.permissions())
-          }
-          if (settings.notifications.permissions() && notifies) {
-            void platform.notify(title, description, href)
-          }
-        }
-
-        if (e.details.type === "question.asked") {
-          if (settings.notifications.agent() && notifies) {
-            void platform.notify(title, description, href)
-          }
-        }
-
-        const currentSession = params.id
-        if (pathKey(directory) === pathKey(currentDir()) && props.sessionID === currentSession) return
-        if (pathKey(directory) === pathKey(currentDir()) && session?.parentID === currentSession) return
-
-        dismissSessionAlert(sessionKey)
-
-        const toastId = showToast({
-          persistent: true,
-          icon,
-          title,
-          description,
-          actions: [
-            {
-              label: language.t("notification.action.goToSession"),
-              onClick: () => navigate(href),
-            },
-            {
-              label: language.t("common.dismiss"),
-              onClick: "dismiss",
-            },
-          ],
-        })
-        toastBySession.set(sessionKey, toastId)
-      })
-      onCleanup(unsub)
-
-      createEffect(() => {
-        const currentSession = params.id
-        if (!currentDir() || !currentSession) return
-        const sessionKey = `${currentDir()}:${currentSession}`
-        dismissSessionAlert(sessionKey)
-        const [store] = serverSync().child(currentDir(), { bootstrap: false })
-        const childSessions = store.session.filter((s) => s.parentID === currentSession)
-        for (const child of childSessions) {
-          dismissSessionAlert(`${currentDir()}:${child.id}`)
-        }
-      })
+      if (event.details.type === "worktree.failed") {
+        setBusy(event.name, false)
+        WorktreeState.failed(
+          serverSDK().scope,
+          event.name,
+          event.details.properties.message ?? language.t("common.requestFailed"),
+        )
+      }
     })
-
-  useSDKNotificationToasts()
+    onCleanup(stop)
+  })
 
   function scrollToSession(sessionId: string, sessionKey: string) {
     if (!scrollContainerRef) return
