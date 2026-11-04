@@ -1,0 +1,98 @@
+{
+  "kind": "heavy-study-interrupted-checkpoint-v1",
+  "recordedDate": "2026-11-04",
+  "comparisonComplete": false,
+  "qualityEquivalenceEstablished": false,
+  "costAdvantageEstablished": false,
+  "budget": {
+    "authorizedTotalUsd": 48,
+    "actorCapsChanged": false,
+    "settledReceiptCount": 1339,
+    "settledUsageDerivedUsd": 29.579095,
+    "unknownAdmittedSeq": 1340,
+    "unknownCostReservationUsd": 5.73,
+    "knownPlusReservationUpperBoundUsd": 35.309095,
+    "reservationIsNotMeasuredCharge": true,
+    "journalsReset": false,
+    "recoveryBypassed": false,
+    "newPaidRequestsThisContinuation": 0,
+    "paidGatewayRunning": false,
+    "furtherPaidWork": "Blocked by unsettled admission. Full image reservation and current actor caps also constrain another matched pair; no quality or effort reduction authorized."
+  },
+  "vector": {
+    "profile": "seven-role nested team, gpt-6.1-sol high",
+    "requests": 300,
+    "settledUsageDerivedUsd": 6.7876388,
+    "sourceFiles": 39,
+    "sourceManifestSha256": "4675be85beaa531ce3525bceca3a673659ed3c0f8e9e225aae634daa743f352e",
+    "functionalCorrected": {
+      "passed": 74,
+      "failed": 2,
+      "notRun": 0,
+      "total": 76
+    },
+    "formalRepairSourceChanged": false,
+    "originalFailureAndAllChargesRetained": true
+  },
+  "codex": {
+    "classification": "interrupted partial snapshot; not normal completed delivery",
+    "attemptedRequests": 151,
+    "settledRequests": 150,
+    "knownUsageDerivedUsd": 2.4876271,
+    "unknownReservationUsd": 5.73,
+    "continuationAttemptedRequests": 142,
+    "continuationSettledRequests": 141,
+    "continuationKnownUsageDerivedUsd": 2.3452346,
+    "terminalMissingSeq": 1340,
+    "witnessStop": "upstream_or_terminal_unknown",
+    "lastRequestOutcome": "upstream_terminal_schema_unknown; transportFailed true; no independent terminal usage",
+    "sourceFiles": 22,
+    "sourceManifestSha256": "e58f8c4110598636d830014f952d55add91754a8e67ceba2bb61032021921c16",
+    "freePartialFunctional": {
+      "passed": 75,
+      "failed": 1,
+      "notRun": 0,
+      "total": 76
+    },
+    "freePartialEvaluationIsCompletedNativeDelivery": false,
+    "processAbsenceObserved": true,
+    "originalSummaryRewritten": false,
+    "settlementComplete": false,
+    "receiptedCancellationObservationsAreNotProductFailures": true,
+    "configuredRoles": 7,
+    "actualNativeIdentitiesObserved": 6,
+    "teamJudgeCreated": false,
+    "allPlannedSpecialistWorkflowComplete": false
+  },
+  "checks": {
+    "v5HistoricalPrefixValidationPassed": true,
+    "all1339SettledReceiptsRepriced": true,
+    "authoritativeStartupRejection": "unmatched durable admission; its reservation cannot be released",
+    "protectedPrivateFilesUnchanged": true
+  },
+  "artifactHashes": {
+    "round-2026-10-30\\admissions-v2.jsonl": "8c5e564e270e2f42da67fc3a3266a75b797df946e6b2e82448650564db8e6605",
+    "round-2026-10-30\\receipts.jsonl": "5b23b213590b9bf6d256f8146e57b71c8a1c06e6992e997f85bc886e5495d9b0",
+    "round-2026-10-30\\status.json": "350794f9d170818a854fd850776e9b6391c5c2b150d7deb90dde087d7946f069",
+    "heavy-foundry-02-codex\\summary.json": "3efe452a46899c69194ab5e57bfff7f1fc77499dc966b27a3d52df8613900db6",
+    "heavy-foundry-02-codex-resume\\summary.json": "4b90c7e2def3d97454f830c3daf5be5f5324aaac818d6ba6b69545b1ff89e5c4"
+  },
+  "preIntegrationInstrumentArchive": {
+    "fileCount": 48,
+    "manifestSha256": "13e9de0b81a63256b1e97f46dfa60c1a661aaf29e8c99c98e42d30fdf0773028",
+    "exactOriginalGitRevisionsRetained": true
+  },
+  "newCandidate": {
+    "revision": "5a20e7faf764db2d6b4969a4fd028d091b986a90",
+    "integratedAfterHistoricalRuntimeAbsent": true,
+    "paidEffectMeasured": false,
+    "changes": [
+      "owned descendant activity discovery before first completed step",
+      "wait AbortSignal handling",
+      "existing zero-inference standby guidance",
+      "bounded read-only browser layout diagnostics"
+    ],
+    "commonDriverMethodologyChange": "Both future arms must receive identical updated driver; not a product-only savings claim"
+  },
+  "blindedReview": "Fresh static reviewer scoring both opaque packages; original independent 37/48 code +23/40 visuals retained as separate review, never pooled"
+}

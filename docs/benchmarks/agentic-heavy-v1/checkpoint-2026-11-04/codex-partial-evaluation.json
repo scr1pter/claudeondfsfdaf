@@ -1,0 +1,476 @@
+{
+  "kind": "interrupted-snapshot-free-evaluation",
+  "notCompletedNativeDelivery": true,
+  "comparisonVerdict": "incomplete",
+  "modelCalls": 0,
+  "fundedMeterCalls": 0,
+  "sourceFiles": 22,
+  "sourceManifestSha256": "e58f8c4110598636d830014f952d55add91754a8e67ceba2bb61032021921c16",
+  "sourceUnchangedOriginalAndCopy": true,
+  "passed": 75,
+  "failed": 1,
+  "notRun": 0,
+  "total": 76,
+  "apiPassed": 32,
+  "browserPassed": 39,
+  "prerequisitePassed": 4,
+  "processExitCode": 1,
+  "processWallMs": 52063,
+  "timedOut": false,
+  "rawReportSha256": "dfc936f8e08d7de6b692cbf795589a5ef865277e28d9bd9da8b1e0b52c76b5d3",
+  "checks": [
+    {
+      "name": "prerequisite:typecheck",
+      "status": "passed",
+      "category": "prerequisite"
+    },
+    {
+      "name": "prerequisite:build",
+      "status": "passed",
+      "category": "prerequisite"
+    },
+    {
+      "name": "prerequisite:startup",
+      "status": "passed",
+      "category": "prerequisite"
+    },
+    {
+      "name": "prerequisite:source_integrity",
+      "status": "passed",
+      "category": "prerequisite"
+    },
+    {
+      "name": "api:authentication_bootstrap",
+      "status": "passed",
+      "category": "api",
+      "elapsedMs": 359.0
+    },
+    {
+      "name": "api:sessions_password_storage",
+      "status": "passed",
+      "category": "api",
+      "elapsedMs": 266.0
+    },
+    {
+      "name": "api:workspaces_selection",
+      "status": "passed",
+      "category": "api",
+      "elapsedMs": 109.0
+    },
+    {
+      "name": "api:invites_email_single_use",
+      "status": "passed",
+      "category": "api",
+      "elapsedMs": 110.0
+    },
+    {
+      "name": "api:roles_owner_protection",
+      "status": "passed",
+      "category": "api",
+      "elapsedMs": 140.0
+    },
+    {
+      "name": "api:tenant_boundary",
+      "status": "passed",
+      "category": "api",
+      "elapsedMs": 250.0
+    },
+    {
+      "name": "api:customers_crud_search",
+      "status": "passed",
+      "category": "api",
+      "elapsedMs": 63.0
+    },
+    {
+      "name": "api:customers_uniqueness_validation",
+      "status": "passed",
+      "category": "api",
+      "elapsedMs": 94.0
+    },
+    {
+      "name": "api:products_crud_cents",
+      "status": "passed",
+      "category": "api",
+      "elapsedMs": 125.0
+    },
+    {
+      "name": "api:stock_ledger_validation",
+      "status": "passed",
+      "category": "api",
+      "elapsedMs": 171.0
+    },
+    {
+      "name": "api:stock_concurrency",
+      "status": "passed",
+      "category": "api",
+      "elapsedMs": 110.0
+    },
+    {
+      "name": "api:orders_price_snapshots",
+      "status": "passed",
+      "category": "api",
+      "elapsedMs": 47.0
+    },
+    {
+      "name": "api:draft_order_state_machine",
+      "status": "passed",
+      "category": "api",
+      "elapsedMs": 140.0
+    },
+    {
+      "name": "api:fulfillment_atomic_retry",
+      "status": "passed",
+      "category": "api",
+      "elapsedMs": 203.0
+    },
+    {
+      "name": "api:fulfillment_idempotency",
+      "status": "passed",
+      "category": "api",
+      "elapsedMs": 204.0
+    },
+    {
+      "name": "api:fulfillment_competing_orders",
+      "status": "passed",
+      "category": "api",
+      "elapsedMs": 125.0
+    },
+    {
+      "name": "api:fulfillment_same_key_concurrency",
+      "status": "passed",
+      "category": "api",
+      "elapsedMs": 62.0
+    },
+    {
+      "name": "api:invoices_snapshot_validation",
+      "status": "passed",
+      "category": "api",
+      "elapsedMs": 31.0
+    },
+    {
+      "name": "api:invoice_number_concurrency",
+      "status": "passed",
+      "category": "api",
+      "elapsedMs": 47.0
+    },
+    {
+      "name": "api:invoice_status_transitions",
+      "status": "passed",
+      "category": "api",
+      "elapsedMs": 63.0
+    },
+    {
+      "name": "api:projects_crud",
+      "status": "passed",
+      "category": "api",
+      "elapsedMs": 31.0
+    },
+    {
+      "name": "api:tasks_crud_filters_validation",
+      "status": "passed",
+      "category": "api",
+      "elapsedMs": 187.0
+    },
+    {
+      "name": "api:comments_permissions",
+      "status": "passed",
+      "category": "api",
+      "elapsedMs": 79.0
+    },
+    {
+      "name": "api:project_cascade",
+      "status": "passed",
+      "category": "api",
+      "elapsedMs": 46.0
+    },
+    {
+      "name": "api:csv_import_atomicity",
+      "status": "passed",
+      "category": "api",
+      "elapsedMs": 110.0
+    },
+    {
+      "name": "api:csv_exports_roundtrip",
+      "status": "passed",
+      "category": "api",
+      "elapsedMs": 78.0
+    },
+    {
+      "name": "api:attachments_bytes_auth",
+      "status": "passed",
+      "category": "api",
+      "elapsedMs": 172.0
+    },
+    {
+      "name": "api:attachment_validation_paths",
+      "status": "passed",
+      "category": "api",
+      "elapsedMs": 62.0
+    },
+    {
+      "name": "api:attachment_cascade",
+      "status": "passed",
+      "category": "api",
+      "elapsedMs": 63.0
+    },
+    {
+      "name": "api:activity_sync_analytics",
+      "status": "passed",
+      "category": "api",
+      "elapsedMs": 187.0
+    },
+    {
+      "name": "api:membership_revocation",
+      "status": "passed",
+      "category": "api",
+      "elapsedMs": 78.0
+    },
+    {
+      "name": "api:restart_persistence",
+      "status": "passed",
+      "category": "api",
+      "elapsedMs": 1204.0
+    },
+    {
+      "name": "browser:signup-and-workspace",
+      "status": "passed",
+      "category": "browser",
+      "elapsedMs": 476
+    },
+    {
+      "name": "browser:multiple-workspaces-and-isolated-selection",
+      "status": "passed",
+      "category": "browser",
+      "elapsedMs": 435
+    },
+    {
+      "name": "browser:customer-create-real-api",
+      "status": "passed",
+      "category": "browser",
+      "elapsedMs": 213
+    },
+    {
+      "name": "browser:customer-edit-keeps-real-data",
+      "status": "failed",
+      "category": "browser",
+      "elapsedMs": 10164,
+      "reason": "Customer-edit Notes locator timed out; visible form screenshot retained. This is an interrupted snapshot, not final native delivery."
+    },
+    {
+      "name": "browser:customer-search",
+      "status": "passed",
+      "category": "browser",
+      "elapsedMs": 66
+    },
+    {
+      "name": "browser:unused-customer-delete-confirmation",
+      "status": "passed",
+      "category": "browser",
+      "elapsedMs": 262
+    },
+    {
+      "name": "browser:quoted-customer-csv-import",
+      "status": "passed",
+      "category": "browser",
+      "elapsedMs": 202
+    },
+    {
+      "name": "browser:customer-export-escaping-and-formula-safety",
+      "status": "passed",
+      "category": "browser",
+      "elapsedMs": 165
+    },
+    {
+      "name": "browser:product-creation-and-exact-cents",
+      "status": "passed",
+      "category": "browser",
+      "elapsedMs": 247
+    },
+    {
+      "name": "browser:product-search-and-export",
+      "status": "passed",
+      "category": "browser",
+      "elapsedMs": 178
+    },
+    {
+      "name": "browser:stock-receipt-real-movements",
+      "status": "passed",
+      "category": "browser",
+      "elapsedMs": 232
+    },
+    {
+      "name": "browser:stock-history-visible-reason-delta-date",
+      "status": "passed",
+      "category": "browser",
+      "elapsedMs": 130
+    },
+    {
+      "name": "browser:negative-stock-visible-error-no-write",
+      "status": "passed",
+      "category": "browser",
+      "elapsedMs": 218
+    },
+    {
+      "name": "browser:multi-line-order-price-snapshots",
+      "status": "passed",
+      "category": "browser",
+      "elapsedMs": 287
+    },
+    {
+      "name": "browser:order-status-filter-and-export",
+      "status": "passed",
+      "category": "browser",
+      "elapsedMs": 223
+    },
+    {
+      "name": "browser:order-fulfillment-updates-stock-once",
+      "status": "passed",
+      "category": "browser",
+      "elapsedMs": 126
+    },
+    {
+      "name": "browser:invoice-issued-from-fulfilled-order",
+      "status": "passed",
+      "category": "browser",
+      "elapsedMs": 642
+    },
+    {
+      "name": "browser:invoice-sent-paid-workflow",
+      "status": "passed",
+      "category": "browser",
+      "elapsedMs": 434
+    },
+    {
+      "name": "browser:invoice-immutable-after-catalog-customer-edits",
+      "status": "passed",
+      "category": "browser",
+      "elapsedMs": 352
+    },
+    {
+      "name": "browser:project-create-and-board",
+      "status": "passed",
+      "category": "browser",
+      "elapsedMs": 230
+    },
+    {
+      "name": "browser:tasks-created-with-assignee-date-and-priority",
+      "status": "passed",
+      "category": "browser",
+      "elapsedMs": 398
+    },
+    {
+      "name": "browser:task-edit-moves-kanban-column",
+      "status": "passed",
+      "category": "browser",
+      "elapsedMs": 200
+    },
+    {
+      "name": "browser:task-search-and-composed-filters",
+      "status": "passed",
+      "category": "browser",
+      "elapsedMs": 238
+    },
+    {
+      "name": "browser:task-comment-safe-rendering",
+      "status": "passed",
+      "category": "browser",
+      "elapsedMs": 138
+    },
+    {
+      "name": "browser:task-attachment-upload-download-exact-bytes",
+      "status": "passed",
+      "category": "browser",
+      "elapsedMs": 362
+    },
+    {
+      "name": "browser:unsupported-attachment-visible-error-no-persistence",
+      "status": "passed",
+      "category": "browser",
+      "elapsedMs": 256
+    },
+    {
+      "name": "browser:attachment-delete-removes-download",
+      "status": "passed",
+      "category": "browser",
+      "elapsedMs": 213
+    },
+    {
+      "name": "browser:task-delete-confirmation-real-api",
+      "status": "passed",
+      "category": "browser",
+      "elapsedMs": 347
+    },
+    {
+      "name": "browser:overview-real-workspace-analytics",
+      "status": "passed",
+      "category": "browser",
+      "elapsedMs": 190
+    },
+    {
+      "name": "browser:activity-real-events-and-author",
+      "status": "passed",
+      "category": "browser",
+      "elapsedMs": 57
+    },
+    {
+      "name": "browser:owner-invite-and-read-only-join",
+      "status": "passed",
+      "category": "browser",
+      "elapsedMs": 629
+    },
+    {
+      "name": "browser:read-only-ui-permissions",
+      "status": "passed",
+      "category": "browser",
+      "elapsedMs": 147
+    },
+    {
+      "name": "browser:live-role-promotion",
+      "status": "passed",
+      "category": "browser",
+      "elapsedMs": 1193
+    },
+    {
+      "name": "browser:cross-client-live-product-update",
+      "status": "passed",
+      "category": "browser",
+      "elapsedMs": 727
+    },
+    {
+      "name": "browser:membership-revocation-reacts-live",
+      "status": "passed",
+      "category": "browser",
+      "elapsedMs": 554
+    },
+    {
+      "name": "browser:session-refresh-sign-out-sign-in",
+      "status": "passed",
+      "category": "browser",
+      "elapsedMs": 401
+    },
+    {
+      "name": "browser:keyboard-dialog-escape-and-focus-return",
+      "status": "passed",
+      "category": "browser",
+      "elapsedMs": 59
+    },
+    {
+      "name": "browser:accessible-controls-and-desktop-evidence",
+      "status": "passed",
+      "category": "browser",
+      "elapsedMs": 320
+    },
+    {
+      "name": "browser:mobile-responsive-pages-and-evidence",
+      "status": "passed",
+      "category": "browser",
+      "elapsedMs": 781
+    },
+    {
+      "name": "browser:browser-runtime-diagnostics",
+      "status": "passed",
+      "category": "browser",
+      "elapsedMs": 0
+    }
+  ]
+}
