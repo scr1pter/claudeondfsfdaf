@@ -1,21 +1,22 @@
 # VectorScope implementation plan
 
-Status: proposed build plan, not an implementation or a claim of measured quality.
+Status: approved build plan, not an implementation or a claim of measured quality.
 Baseline: `main` at `78526052` (desktop 1.99.112 published), merged into
 `vectorscope` on 2026-11-02; the code evidence below was first inspected at
 `b3669a6b` and nothing it cites changed in between. Branch overlaps were
 re-checked the same day against `origin/vector-at-mention` at `0b68e8f6` and
-`origin/self-evolving` at `7c26a834`. Implement on `vectorscope` after the owner
-answers the decisions below.
+`origin/self-evolving` at `7c26a834`. `main` at `1aec0b0e` was merged on
+2026-11-03, and VS-01–04, VS-06 and VS-07 start on `vectorscope` that day.
+VS-05 waits for the `vector-at-mention` merge, as D1 says.
 
-## Owner decisions to answer
+## Owner decisions
 
-Each can be answered with "yes" or a different value. Meanwhile engineering may
-build deterministic contracts, tests and dry-run tooling on the recommended
-answer, but nothing paid, published or user-facing ships on a recommendation
-alone.
+On 2026-11-03 the owner approved all fourteen decisions as recommended, so the
+answers below are now the decisions. Anything paid, published or user-facing
+still needs the steps those answers name, such as the D7 environment and key,
+which are owner setup.
 
-| # | Decision | Recommended answer |
+| # | Decision | Approved answer |
 | --- | --- | --- |
 | D1 | Approve this plan, including the @vector sequencing in "Branch overlaps". | Approve. VS-05 and VS-13 land after `vector-at-mention` merges; VS-16 and VS-20 build their local halves now and their GitHub halves after that merge. Nothing edits @vector's files before then. |
 | D2 | First release gate ("Budget, privacy and release gate"). | Adopt the proposed gate as written: no trust/consent regressions, no unaccounted paid attempts, at least 95% completed coverage, at least 80% actionable precision, at most 0.2 false alarms per clean PR, recall no more than five points below the frozen pipeline on paired cases. |
