@@ -51,6 +51,10 @@ async function main() {
       return
     }
     response.setHeader("Content-Type", "text/html")
+    if (["/layout-wide", "/layout-contained"].includes(request.url)) {
+      response.end(`<!doctype html><html><head><title>Owned layout fixture</title><style>html,body{margin:0;padding:0}body{min-height:1400px}h1{margin:0}.wrapper{width:100%;${request.url === "/layout-contained" ? "overflow-x:auto" : ""}}table{width:548px;min-width:548px}td{height:40px}</style></head><body><main><h1>Layout fixture</h1><div class="wrapper"><table><tr><td>Wide table</td></tr></table></div></main></body></html>`)
+      return
+    }
     if (request.url === "/focus") {
       response.end(
         '<!doctype html><html><head><title>Owned focus fixture</title></head><body><main><label>Focus text <input type="text"></label><label>Password <input type="password" value="private-focus-fixture"></label><button>Last control</button></main></body></html>',
@@ -212,6 +216,20 @@ async function main() {
     state = await call({ action: "press", key: "Tab" })
     focused(state.snapshot, "Focus text")
     checks.push("Tab leaving and re-entering the document is observed without changing focus")
+    for (const contained of [false, true]) {
+      state = await call({ action: "open", url: appOrigin + (contained ? "/layout-contained" : "/layout-wide") })
+      assert.equal(state.snapshot.untrustedPageData, true)
+      assert.equal(state.snapshot.layout.viewportWidth, 390)
+      assert.equal(state.snapshot.layout.viewportHeight, 844)
+      assert.equal(state.snapshot.layout.documentWidth, contained ? 390 : 548)
+      assert.equal(state.snapshot.layout.documentHeight, 1400)
+      assert.equal(Math.max(0, state.snapshot.layout.documentWidth - state.snapshot.layout.viewportWidth), contained ? 0 : 158)
+      const previous = state.snapshot.layout
+      state = await call({ action: "observe" })
+      assert.deepEqual(state.snapshot.layout, previous)
+      assert.equal(state.snapshot.untrustedPageData, true)
+      checks.push(contained ? "contained scrolling table does not report document overflow" : "uncontained table reports 158px document overflow at viewport390")
+    }
     const unauthorized = await new Promise((resolve, reject) => {
       http
         .get(ready.endpoint + "/health", { headers: { Authorization: "Bearer invalid" } }, (response) => {

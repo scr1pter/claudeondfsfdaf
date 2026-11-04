@@ -12,6 +12,7 @@ Examples: {"action":"observe"}
   {"action":"click","role":"button","name":"Save"}
   {"action":"type","ref":"r2_3","text":"Example"}
 Refs belong to the most recent snapshot. Role/name must resolve exactly once.
+Snapshots include read-only top-level CSS-pixel layout; null layout means unknown.
 `
 
 async function main() {

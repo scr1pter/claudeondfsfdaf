@@ -51,6 +51,16 @@ export type PageFocus = {
   readonly tabIndex?: number
 }
 
+/** Read-only top-level layout dimensions in CSS pixels; invalid or unavailable geometry stays unknown. */
+export type PageLayout = {
+  readonly viewportWidth: number
+  readonly viewportHeight: number
+  readonly documentWidth: number
+  readonly documentHeight: number
+  readonly scrollX: number
+  readonly scrollY: number
+}
+
 export type Observed = {
   readonly title: string
   readonly url: string
@@ -60,6 +70,8 @@ export type Observed = {
   readonly forms: readonly string[]
   /** Older browser backends may not report focus. Missing means unknown. */
   readonly focus?: PageFocus
+  /** Missing on older backends or when the DOM has no usable layout. */
+  readonly layout?: PageLayout
 }
 
 export type ClickPoint =
@@ -441,6 +453,22 @@ export function observePage(
   }
   const owner = active.element ? (property(active.element, "ownerDocument") as Document) : top
   const focusedRef = [...refs].find(([, element]) => element === active.element)?.[0]
+  // Read the top document only: a wide child inside its own scrolling container is not document overflow.
+  // Observation never scrolls, resizes, focuses or changes page styles. Out-of-range geometry stays unknown.
+  const layout = {
+    viewportWidth: Math.round(win.innerWidth),
+    viewportHeight: Math.round(win.innerHeight),
+    documentWidth: Math.max(top.documentElement.scrollWidth, top.body?.scrollWidth ?? 0),
+    documentHeight: Math.max(top.documentElement.scrollHeight, top.body?.scrollHeight ?? 0),
+    scrollX: Math.round(win.scrollX),
+    scrollY: Math.round(win.scrollY),
+  }
+  const measured =
+    Object.values(layout).every((value) => Number.isFinite(value) && Math.abs(value) <= 100_000_000) &&
+    layout.viewportWidth > 0 &&
+    layout.viewportHeight > 0 &&
+    layout.documentWidth > 0 &&
+    layout.documentHeight > 0
   return {
     title: line(top.title),
     url: win.location.href,
@@ -448,6 +476,7 @@ export function observePage(
     elements,
     links: links.filter((link, index) => links.findIndex((other) => other.url === link.url) === index),
     forms: [...new Set(forms)],
+    ...(measured ? { layout } : {}),
     focus: {
       documentHasFocus: invoke(top, "hasFocus") as boolean,
       activeKind:

@@ -6,6 +6,7 @@ const path = require("node:path")
 const crypto = require("node:crypto")
 const { origin, allowedURL, inside, authenticate, target, keys } = require("./policy.cjs")
 const { startProxy } = require("./proxy.cjs")
+const { observeLayout } = require("./layout.cjs")
 const owned = { browser: undefined, server: undefined, proxy: undefined }
 
 const HELP = `Local benchmark browser driver; no model or deployment calls.
@@ -257,6 +258,7 @@ async function main() {
       generation,
       url: page.url(),
       ...text,
+      layout: (await page.evaluate(observeLayout)) ?? null,
       controls,
       controlsTruncated: examined < handles.length,
       blockedRequests: blocked.slice(-5),
