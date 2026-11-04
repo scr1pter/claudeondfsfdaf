@@ -400,6 +400,9 @@ def check_25(o):
         lines = value.get("lines")
         need(isinstance(lines, list) and len(lines) == 2 and {x["kind"] for x in lines} == {"base", "overage"})
         need(sum(x["amountCents"] for x in lines) == 1100 and all(x["quantity"] * x["unitCents"] == x["amountCents"] for x in lines))
+        by_kind = {line["kind"]: line for line in lines}
+        need(by_kind["base"] == {"kind": "base", "quantity": 1, "unitCents": 1000, "amountCents": 1000})
+        need(by_kind["overage"] == {"kind": "overage", "quantity": 20, "unitCents": 5, "amountCents": 100})
 
 
 @group("invoice-exact-replay")
@@ -415,6 +418,11 @@ def check_27(o):
     with Service(o) as s:
         issue(s)
         need(s.request("POST", "/api/accounts/legacy-a/invoices", {"period": "2026-02", "requestId": "issue-one"})[0] == 409)
+        other = account(s)
+        need(issue(s, account_id=other["id"], request_id="issue-one")["accountId"] == other["id"])
+        # Same request ID under a different actor must not replay the first
+        # actor's successful result; the already-issued period is a conflict.
+        need(s.request("POST", "/api/accounts/legacy-a/invoices", {"period": PERIOD, "requestId": "issue-one"}, "billing-acme")[0] == 409)
 
 
 @group("invoice-concurrent-period-uniqueness")
@@ -442,6 +450,8 @@ def check_30(o):
         need(usage(s, event_id="scoped", key=key["apiKey"])[0] == 201)
         need(issue(s, key=key["apiKey"])["accountId"] == "legacy-a")
         need(s.request("GET", "/api/accounts/" + other["id"], key=key["apiKey"])[0] == 404)
+        listed = s.request("GET", "/api/accounts", key=key["apiKey"])
+        need(listed[0] == 200 and [row["id"] for row in listed[1]] == ["legacy-a"])
         need(s.request("POST", "/api/accounts", {"name": "Escalated", "plan": other["plan"]}, key["apiKey"])[0] == 403)
 
 
@@ -567,6 +577,7 @@ def check_41(o):
         need(credit(s, invoice["id"])[0] == 201)
         need(credit(s, invoice["id"], amount=101)[0] == 409)
         need(credit(s, invoice["id"], reason="Changed")[0] == 409)
+        need(credit(s, invoice["id"], request_id="issue-one", amount=50)[0] == 201)
 
 
 @group("overcredit-atomic-rejection")
@@ -645,6 +656,7 @@ const b:boolean=(await c.revokeKey(k.id)).revoked;const rows=await c.listCredits
 const accounts=await c.listAccounts();const name:string=accounts[0].name;
 const events=await c.listUsage(id);const event:string=events[0].eventId;
 const got=await c.getInvoice(i.id);const balance:number=got.balanceCents;
+const revoked=await c.revokeKey(k.id);
 if(x instanceof ApiError){const status:number=x.status;const code:string=x.code;}
 // @ts-expect-error invalid role
 c.createKey({role:'owner'});
@@ -656,6 +668,20 @@ c.issueInvoice(id,{period:'2026-01'});
 const wrong:string=q.totalCents;
 // @ts-expect-error invalid result field
 got.notARealField;
+// @ts-expect-error account result may not be any
+const badAccount:number=a.name;
+// @ts-expect-error key result may not be any
+const badKey:number=k.apiKey;
+// @ts-expect-error credit result may not be any
+const badCredit:string=x.amountCents;
+// @ts-expect-error accounts array result may not be any
+accounts[0].unlistedAccountField;
+// @ts-expect-error usage array result may not be any
+events[0].unlistedUsageField;
+// @ts-expect-error credits array result may not be any
+rows[0].unlistedCreditField;
+// @ts-expect-error revocation result may not be any
+revoked.unlistedRevocationField;
 '''.replace("MODULE", module), encoding="utf-8")
         result = owned_process.run([str(o.node), str(o.typescript), "--noEmit", "--strict", "--module", "NodeNext",
             "--moduleResolution", "NodeNext", "--target", "ES2022", str(path)], cwd=folder, env=environment(), capture_output=True, text=True, timeout=15)
@@ -684,9 +710,9 @@ def check_49(o):
         need(result.returncode == 0 and not result.stderr.strip())
         invoice = json.loads(result.stdout)
         result = cli(o, s, ["credit", "add", invoice["id"], "cli-credit", "10", "CLI credit"])
-        need(result.returncode == 0 and json.loads(result.stdout)["amountCents"] == 10)
+        need(result.returncode == 0 and not result.stderr.strip() and json.loads(result.stdout)["amountCents"] == 10)
         result = cli(o, s, ["invoice", "show", invoice["id"]])
-        need(result.returncode == 0 and json.loads(result.stdout)["balanceCents"] == invoice["totalCents"] - 10)
+        need(result.returncode == 0 and not result.stderr.strip() and json.loads(result.stdout)["balanceCents"] == invoice["totalCents"] - 10)
 
 
 @group("cli-error-and-secret-contract")
@@ -697,6 +723,7 @@ def check_50(o):
             need(result.returncode != 0 and not result.stdout.strip() and "reader-acme" not in result.stderr)
             value = json.loads(result.stderr)
             need(isinstance(value.get("error", {}).get("code"), str) and value["error"]["code"])
+            need(isinstance(value.get("error", {}).get("message"), str) and value["error"]["message"])
 
 
 def main(argv=None):
