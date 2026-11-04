@@ -88,3 +88,10 @@ Each account gets the plan's paired computers (1, 3, 5, 5) and up to five phones
 - **Revocation.** Revoking an account's tokens (account deletion does) also closes its relay connections. If the relay cannot be reached then, the account still cannot mint a ticket, and a phone is closed within a minute of its ticket's expiry.
 - **Devices.** `GET /api/remote/devices`, `POST /api/remote/devices/:id/revoke` and `POST /api/remote/kill` ("Disconnect all") work whatever the plan, so devices can always be removed.
 - **GitHub runs.** `GET /api/remote/cloud-runs` lists the account's runs of Vector's GitHub agent from the run records Codex's GitHub work keeps. It lists nothing until the integration commit (A59) registers that reader.
+
+## The desktop's side (A41)
+
+Nothing to configure. Remote is off on each computer until its owner pairs a phone (Settings → Remote, A42) or turns it on. The desktop asks `POST /api/remote/ticket` for a computer ticket with its own sign-in, connects to the `url` the answer names, and sends the relay only public keys and sealed bytes. The relay lists a computer as "Mac", "Windows PC" or "Linux computer"; the computer's own name travels only end-to-end encrypted, or in the QR code on its screen. A packaged desktop always uses `https://remote.vectordev.ai` as the phone app's origin for passkeys and pairing links; a development build may name another with `VECTOR_PHONE_APP_ORIGIN` in its environment.
+
+"Disconnect all phones" on a computer calls `POST /api/remote/kill` (every connection of the account closes, other computers reconnect by themselves) and revokes that computer's old device id, so its place under the plan's computer count is freed.
+

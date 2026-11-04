@@ -17,6 +17,7 @@ import {
   usageShare,
 } from "./settings-v2/codium-usage-model"
 import type { DisplayUsageSummary } from "@/utils/usage-summary"
+import { sendPhoneAlert } from "@/context/phone-alerts"
 
 // Reopening Settings does not repeat a notification for this account and billing period.
 import "./settings-v2/settings-account.css"
@@ -66,8 +67,11 @@ export function SettingsVectorCodium(props: { summary?: DisplayUsageSummary }) {
   createEffect(() => {
     const status = state.status
     const share = usageShare(status?.plan?.left)
+    const desktop = settings.codium.alert80()
+    // The paired phones' own switch (Settings → Notifications, WP A41), apart from this computer's.
+    const phone = settings.notifications.event("usage")
     if (
-      !settings.codium.alert80() ||
+      (!desktop && !phone) ||
       !state.identity ||
       !status?.signedIn ||
       status.error ||
@@ -79,6 +83,12 @@ export function SettingsVectorCodium(props: { summary?: DisplayUsageSummary }) {
     const key = `${state.identity}:${status.plan.id}:${status.plan.renewsAt}`
     if (alertedPeriods.has(key)) return
     alertedPeriods.add(key)
+    if (phone)
+      void sendPhoneAlert(platform, settings.notifications, {
+        event: "usage",
+        title: "You've used 80% of this month's Codium usage",
+      })
+    if (!desktop) return
     void platform
       .notify(
         "Vector Codium usage",

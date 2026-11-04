@@ -63,6 +63,24 @@ const api: ElectronAPI = {
     list: () => ipcRenderer.invoke("reports-list"),
     status: () => ipcRenderer.invoke("reports-status"),
   },
+  remote: {
+    status: () => ipcRenderer.invoke("remote-status"),
+    setEnabled: (enabled) => ipcRenderer.invoke("remote-set-enabled", enabled),
+    startPairing: () => ipcRenderer.invoke("remote-pair-start"),
+    confirmPairing: (code) => ipcRenderer.invoke("remote-pair-confirm", code),
+    cancelPairing: () => ipcRenderer.invoke("remote-pair-cancel"),
+    unpair: (device) => ipcRenderer.invoke("remote-unpair", device),
+    disconnectAll: () => ipcRenderer.invoke("remote-disconnect-all"),
+    isPhoneTurn: (sessionIDs) => ipcRenderer.invoke("remote-phone-turn", sessionIDs),
+    onChange: (callback) => {
+      const handler = (_event: unknown, status: Parameters<typeof callback>[0]) => callback(status)
+      ipcRenderer.on("remote-changed", handler)
+      return () => ipcRenderer.removeListener("remote-changed", handler)
+    },
+  },
+  phoneAlerts: {
+    send: (alert) => ipcRenderer.invoke("phone-alert-send", alert),
+  },
   askHelpAssistant: (input) => ipcRenderer.invoke("help-assistant-ask", input),
   agentTeams: {
     list: (scope) => ipcRenderer.invoke("agent-teams-list", scope),

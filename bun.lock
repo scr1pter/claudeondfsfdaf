@@ -313,6 +313,7 @@
         "@valibot/to-json-schema": "1.6.0",
         "@vectordevai/app": "workspace:*",
         "@vectordevai/core": "workspace:*",
+        "@vectordevai/relay": "workspace:*",
         "@vectordevai/schema": "workspace:*",
         "@vectordevai/ui": "workspace:*",
         "electron": "42.11.4",

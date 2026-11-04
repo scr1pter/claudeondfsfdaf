@@ -27,6 +27,51 @@ export type PhoneAlertsPlatform = {
   send(alert: { event: PhoneAlertEvent; title: string; route?: "sessions" | "approvals" }): Promise<void>
 }
 
+/** Vector Remote on this computer, as the desktop's main process reports it (WP A41; Settings → Remote is A42). */
+export type RemoteStatus = {
+  enabled: boolean
+  state:
+    | "off"
+    | "ready"
+    | "signed-out"
+    | "connecting"
+    | "online"
+    | "paused"
+    | "not-in-plan"
+    | "unavailable"
+    | "device-limit"
+    | "fair-use"
+    | "revoked"
+    | "replaced"
+    | "local-off"
+  message?: string
+  phones: { device: string; name: string; pairedAt: number; connected: boolean; watching: boolean }[]
+  limit: number
+  viewers: number
+  pairing:
+    | { state: "idle" }
+    | { state: "waiting"; link: string; expiresAt: number }
+    | { state: "confirm"; code: string; phone: string; expiresAt: number }
+    | { state: "paired"; phone: string }
+    | { state: "failed"; message: string }
+}
+
+export type RemotePlatform = {
+  status(): Promise<RemoteStatus>
+  setEnabled(enabled: boolean): Promise<RemoteStatus>
+  /** A pairing offer: `link` is what the QR code shows. */
+  startPairing(): Promise<{ link: string; expiresAt: number; status: RemoteStatus }>
+  /** The person saw the same six digits on the phone. */
+  confirmPairing(code?: string): Promise<RemoteStatus>
+  cancelPairing(): Promise<RemoteStatus>
+  unpair(device: string): Promise<RemoteStatus>
+  /** "Disconnect all phones": a new identity on this computer, and every relay connection closed. */
+  disconnectAll(): Promise<RemoteStatus & { killed: boolean }>
+  /** Whether a phone started the turn any of these sessions runs (auto-accept leaves those to a person, S6). */
+  isPhoneTurn(sessionIDs: string[]): Promise<boolean>
+  onChange(callback: (status: RemoteStatus) => void): () => void
+}
+
 export type FatalRendererErrorLog = {
   error: string
   url: string
@@ -90,6 +135,9 @@ type PlatformBase = {
    * Notifications offers the phone events and quiet hours only where it exists.
    */
   phoneAlerts?: PhoneAlertsPlatform
+
+  /** Vector Remote on this computer (desktop only; WP A41): pairing, the paired phones and "Disconnect all phones". */
+  remote?: RemotePlatform
 
   /** Saved remote-server passwords in the OS keychain (desktop only); set resolves false when none is available. */
   serverCredentials?: {

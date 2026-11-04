@@ -947,3 +947,72 @@ outcome, verdict, actor.login` pass. Every paid plan includes it while the plan 
   import it without a cycle), `api/_lib/revocation.ts`, `api/_lib/codium-owner-api.ts`, `.env.example`,
   `docs/vector/MODEL-PLANS.md`, `docs/vector/owner-actions/remote.md`, and the test file `test/remote-ticket-api.test.ts`
   (the contract's `remote-ticket-api.test.ts`), which imports the relay package's test fakes.
+
+## A41 desktop Remote (4 Nov 2026)
+
+- **"Keys in `safeStorage`"**: the identity (device id, static X25519 key, alert key) and the paired phones are sealed
+  in-process with `vault-secrets.ts`, whose key the OS credential store holds through Electron's `safeStorage` and opens
+  once a launch. That is how the app already keeps every sign-in; calling `safeStorage` per secret would ask the
+  Keychain again after each update on unsigned builds. Stored in the `vector-remote` store.
+- **Pairing design** (the contract names only "QR pairing with transcript HMAC and a 6-digit check code"): the QR is
+  `https://remote.vectordev.ai/phone/pair#<offer>`, the offer only in the fragment; the phone's request is sealed under
+  a key from the QR's secret and carries an HMAC of the transcript; the computer answers with its own HMAC; the code is
+  HKDF of the secret over the transcript and the passkey registration, so both screens match only when both saw the
+  same keys and passkey; the alert key comes back under a static-static Diffie-Hellman key. An offer lasts five
+  minutes; a second phone answering the same QR stops the pairing; three bad requests end it; a computer keeps at most
+  five phones (§4.2's five per account, which the relay enforces).
+- **The passkey is registered while pairing** and checked on the desktop only: user verification required at
+  registration and at each approval; the attestation statement is not checked (Vector asks for `none`; trust comes
+  from the transcript the challenge is bound to); a counter must go up unless both are 0. An approval challenge is
+  random, bound in the desktop's own table to the phone, the request, its session and its directory, used once, and
+  good for two minutes.
+- **"Per-connection X25519 + HKDF + AES-256-GCM with sequence numbers"**: an INIT/ACCEPT handshake over ephemeral and
+  static keys (all four Diffie-Hellman results), one key per direction, and a sequence number that must go up. Gaps are
+  allowed, because the relay drops frames over its rate limit. Module comment of `remote-crypto.ts`.
+- **"The route allowlist"**: the routes in `REMOTE_ROUTES`. Stricter than needed in two places, left for A42 to widen
+  deliberately: a phone's turn carries only text (no model, agent, tools, system prompt, files or permission rules),
+  and a session it creates only a title. Every request names a directory that must be one of the engine's projects
+  (a worktree or a sandbox, never the global `/`). The V2 runner's routes are not exposed. Questions are answered
+  without a passkey; they are not permissions.
+- **"Turns started from the phone never auto-approved"**: the phone's prompt marks its session before the engine starts
+  the turn, until the engine reports the session idle (the link reads the engine's events while any mark stands). The
+  app's auto-accept (the only one in the desktop; `vector run --auto` is another process) asks the desktop over IPC
+  before each answer, for the request's session and every session above it, and holds the request for a person when a
+  phone started it or the check fails. The computer's own permission rules still apply to a phone's turn: configured
+  allow rules and "always" answers given on the desktop are the computer's rules, which Remote does not widen.
+  Edits outside A41's list: `packages/app/src/context/permission-auto-respond.ts`, `permission.tsx`, `pages/layout.tsx`.
+- **"Origin checked as exactly `VECTOR_PHONE_APP_ORIGIN`"**: that is a server setting. The desktop compares with the
+  constant `https://remote.vectordev.ai` (A38's `PHONE_APP_ADDRESS`); a development build may name another origin with
+  `VECTOR_PHONE_APP_ORIGIN` in its environment, a packaged build never.
+- **"Stream only while viewers > 0, batched to 4 messages a second"**: the engine's events are read only while the relay
+  reports a phone attached and a phone asked to watch (and while a phone's turn runs, only to see it end). Each watching
+  phone gets one batch per 250 ms, or 500 ms once more than three watch, so five phones stay inside the relay's 20
+  frames a second per connection; a frame budget of 16 a second, burst 32, covers answers too. An event over 16 KB
+  goes as its ids with `truncated`; an answer over 40 KB goes in parts; one over 4 MB is refused.
+- **"Keep awake while a phone watches a busy session"**: keep-awake's `watching` input. While a phone watches, every busy
+  session holds the blocker, one waiting on a prompt included (the phone can answer it), and the stall rule is off. The
+  relay's 30-minute idle close ends the watch.
+- **"Disconnect all phones rotates identity"**: a new device id, static key and alert key, then `POST /api/remote/kill`
+  and `POST /api/remote/devices/<old id>/revoke`, which frees the old device's place (on Plus the one computer slot,
+  which the new id needs). The kill closes the account's other computers' connections too; they reconnect by
+  themselves. Unpairing one phone is local to this computer, because the same phone may be paired with others.
+- **"Encrypted alerts"**: the app decides which go (each event's switch, quiet hours, and only while the status lists
+  `alerts` for the plan, read at most every five minutes, H1); the main process seals and sends them, only while a phone
+  is paired, once per minute for the same alert across windows, at most 50 an hour. Triggers are new app code outside
+  A41's list: finished (`context/notification.tsx`, not while that session is on screen), needs you
+  (`pages/layout.tsx`), Run Guard (the first `session.spend` warning in a session) and usage
+  (`components/settings-vector-codium.tsx`, the card's existing 80% check, which runs while the card is shown).
+- **Names**: the ticket names the computer as "Mac", "Windows PC" or "Linux computer", because the relay stores and
+  lists device names; the computer's own name goes only to its phones, end-to-end encrypted or in the QR.
+- **`remote.enabled`** (§4.15) is kept in the main process's store, which decides whether to connect, not in the app's
+  settings; A42's Settings reads and sets it through `platform.remote`.
+- **Files outside A41's list:** `packages/desktop/src/main/remote-runtime.ts` (new; the Electron wiring, kept apart so
+  the other modules test without Electron), `remote-phone.fixture.ts` (new; a simulated phone for the tests),
+  `ipc.ts`, `index.ts`, `vector-account-runtime.ts` (sign-in listeners), `preload/index.ts`, `preload/types.ts`,
+  `renderer/index.tsx`, `packages/desktop/package.json` (`@vectordevai/relay` as a workspace dev dependency, so the
+  desktop imports the relay's protocol as A39 intended) and its one `bun.lock` line, `packages/core/src/local-mode/sources.ts`
+  (Vector Local sources `remote` and `phone-alerts`), `packages/app/src/context/platform.tsx` (`RemotePlatform`),
+  `packages/app/src/context/phone-alerts.ts` (new), `app/src/features/local/local-model.ts` (labels),
+  `docs/vector/MODEL-PLANS.md`, `docs/vector/owner-actions/remote.md`. Test files: `packages/core/test/webauthn/verify.test.ts`
+  (the contract's `webauthn/verify.test.ts`), `remote-link.test.ts`, `remote-notify.test.ts`, `phone-alerts.test.ts`,
+  and new cases in `keep-awake.test.ts` and `permission-auto-respond.test.ts` (the auto-approve suppression test).

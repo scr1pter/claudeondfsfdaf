@@ -14,6 +14,7 @@ import { getStore, removeStoreFileIfEmpty } from "./store"
 import { isRendererStoreName } from "./store-keys"
 import { write } from "./logging"
 import { listReports, reportStatuses, sendBugReport } from "./bug-report"
+import { REMOTE_STARTING, remoteLink, remoteNotify } from "./remote-runtime"
 import { askHelpAssistant, type HelpInput } from "./help-assistant"
 import { clearLocalMemory, readLocalMemory, writeLocalMemory } from "./local-memory"
 import { desktopLocalStatus } from "./local-mode"
@@ -366,6 +367,28 @@ export function registerIpcHandlers(deps: Deps) {
   )
   handle("reports-list", () => listReports())
   handle("reports-status", () => reportStatuses())
+  // Vector Remote (WP A41). Keys, tickets and the desktop sign-in stay in the main process; the renderer gets status.
+  const remote = () => {
+    const link = remoteLink()
+    if (!link) throw new Error("Vector is still starting. Try again in a moment.")
+    return link
+  }
+  handle("remote-status", () => remoteLink()?.status() ?? REMOTE_STARTING)
+  handle("remote-set-enabled", (_event, enabled: unknown) => remote().setEnabled(enabled === true))
+  handle("remote-pair-start", () => remote().startPairing())
+  handle("remote-pair-confirm", (_event, code: unknown) =>
+    remote().confirmPairing(typeof code === "string" ? code : undefined),
+  )
+  handle("remote-pair-cancel", () => remote().cancelPairing())
+  handle("remote-unpair", (_event, device: unknown) => remote().unpair(typeof device === "string" ? device : ""))
+  handle("remote-disconnect-all", () => remote().disconnectAll())
+  // Asked before the app's auto-accept answers a request: a turn a phone started is left to a person (S6). Until
+  // Remote has started no phone can have started one.
+  handle("remote-phone-turn", (_event, sessionIDs: unknown) => remoteLink()?.isPhoneTurn(sessionIDs) ?? false)
+  handle(
+    "phone-alert-send",
+    (_event, alert: unknown) => remoteNotify()?.send(alert) ?? { sent: false, reason: "not-paired" as const },
+  )
   handle("help-assistant-ask", (_event, input: HelpInput) => askHelpAssistant(input))
   handle("agent-teams-list", (_event, scope?: { sourcePath?: string; parentSessionId?: string }) =>
     listAgentTeams(scope),

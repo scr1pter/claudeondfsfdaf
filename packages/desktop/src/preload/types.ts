@@ -92,12 +92,34 @@ export type {
   SpendWindowTotal,
 } from "../main/spend-limits"
 import type { FailureMemory } from "../main/failure-memory"
+import type { RemoteStatus } from "../main/remote-link"
+import type { NotifyResult, PhoneAlertEvent } from "../main/remote-notify"
+export type { RemoteStatus } from "../main/remote-link"
 export type { FailureMemory, FailureRepair, FailureSignatureRecord } from "../main/failure-memory"
 import type { AgentTeam, TeamCollaborationGraph, TeamMessage, TeamTopology } from "../main/agent-team-model"
 
 export type ReportsPlatform = {
   list: () => Promise<LocalReport[]>
   status: () => Promise<ReportStatuses>
+}
+
+/** Vector Remote on this computer (WP A41). Keys, tickets and the sign-in stay in the main process. */
+export type RemoteAPI = {
+  status: () => Promise<RemoteStatus>
+  setEnabled: (enabled: boolean) => Promise<RemoteStatus>
+  startPairing: () => Promise<{ link: string; expiresAt: number; status: RemoteStatus }>
+  confirmPairing: (code?: string) => Promise<RemoteStatus>
+  cancelPairing: () => Promise<RemoteStatus>
+  unpair: (device: string) => Promise<RemoteStatus>
+  disconnectAll: () => Promise<RemoteStatus & { killed: boolean }>
+  /** Whether a phone started the turn any of these sessions runs; the app's auto-accept leaves those to a person. */
+  isPhoneTurn: (sessionIDs: string[]) => Promise<boolean>
+  onChange: (callback: (status: RemoteStatus) => void) => () => void
+}
+
+/** Alerts from this computer to its paired phones, encrypted end to end (WP A41). */
+export type PhoneAlertsAPI = {
+  send: (alert: { event: PhoneAlertEvent; title: string; route?: "sessions" | "approvals" }) => Promise<NotifyResult>
 }
 
 export type { AgentTeam, TeamCollaborationGraph, TeamLink, TeamMessage, TeamTopology } from "../main/agent-team-model"
@@ -834,6 +856,8 @@ export type ElectronAPI = {
   }) => Promise<{ delivered: boolean; tracked?: boolean; error?: string }>
   /** Bug reports this computer sent and what became of each (WP A33); the report ids stay in the main process. */
   reports: ReportsPlatform
+  remote: RemoteAPI
+  phoneAlerts: PhoneAlertsAPI
   askHelpAssistant: (input: {
     messages: { role: "user" | "assistant"; content: string }[]
     context: string

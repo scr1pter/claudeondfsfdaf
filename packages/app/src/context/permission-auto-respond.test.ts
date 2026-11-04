@@ -1,7 +1,12 @@
 import { describe, expect, test } from "bun:test"
 import type { PermissionRequest, Session } from "@vectordevai/sdk/v2/client"
 import { base64Encode } from "@vectordevai/core/util/encode"
-import { autoRespondsPermission, isDirectoryAutoAccepting } from "./permission-auto-respond"
+import {
+  autoRespondsPermission,
+  isDirectoryAutoAccepting,
+  phoneTurnAllows,
+  sessionLineage,
+} from "./permission-auto-respond"
 
 const session = (input: { id: string; parentID?: string }) =>
   ({
@@ -183,5 +188,43 @@ describe("isDirectoryAutoAccepting", () => {
     const directory = "/tmp/project"
     const autoAccept = { [`${base64Encode(directory)}/*`]: false }
     expect(isDirectoryAutoAccepting(autoAccept, directory)).toBe(false)
+  })
+})
+
+// Vector Remote (WP A41, S6): a turn a paired phone started is never auto-approved, even where auto-accept is on.
+describe("phone turns and auto-accept", () => {
+  const sessions = [session({ id: "root" }), session({ id: "child", parentID: "root" }), session({ id: "other" })]
+
+  test("asks the desktop about the request's session and every session above it", async () => {
+    expect(sessionLineage(sessions, "child")).toEqual(["child", "root"])
+    const asked: string[][] = []
+    const allowed = await phoneTurnAllows(
+      async (ids) => {
+        asked.push(ids)
+        return ids.includes("root")
+      },
+      sessionLineage(sessions, "child"),
+    )
+    expect(asked).toEqual([["child", "root"]])
+    expect(allowed).toBe(false)
+  })
+
+  test("leaves auto-accept as it was for turns started on this computer", async () => {
+    expect(await phoneTurnAllows(async () => false, ["other"])).toBe(true)
+    // Outside the desktop app no phone can start a turn.
+    expect(await phoneTurnAllows(undefined, ["other"])).toBe(true)
+  })
+
+  test("a check that fails or answers oddly counts as a phone's turn", async () => {
+    expect(await phoneTurnAllows(async () => Promise.reject(new Error("main process gone")), ["root"])).toBe(false)
+    expect(await phoneTurnAllows(async () => undefined as unknown as boolean, ["root"])).toBe(false)
+  })
+
+  test("the provider asks before every auto-accept answer, and holds the request when a phone started its turn", async () => {
+    const source = await Bun.file(new URL("./permission.tsx", import.meta.url)).text()
+    // Every path that answers by itself goes through autoRespond, which asks phoneTurnAllows first.
+    expect(source.match(/respondOnce\(/g)?.length).toBe(2)
+    expect(source).toContain("phoneTurnAllows(")
+    expect(source).toContain("if (held().has(permission.id)) return false")
   })
 })

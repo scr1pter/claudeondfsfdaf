@@ -76,6 +76,7 @@ import {
 } from "./scheduled-agents"
 import { createTray, destroyTray, notifyScheduledRunFinished, updateTray } from "./tray"
 import { engineEventSource, setDesktopWorkBlocker, startKeepAwake } from "./keep-awake"
+import { remoteLink, startRemote, stopRemote } from "./remote-runtime"
 import { getStore } from "./store"
 import { USAGE_STORE } from "./store-keys"
 import { createUsageCheckin, usageCheckinEndpoint } from "./usage-checkin"
@@ -221,6 +222,7 @@ const main = Effect.gen(function* () {
   )
   const stopSidecars = async () => {
     unregisterManagedAccount()
+    stopRemote()
     keepAwake?.stop()
     setDesktopWorkBlocker(undefined)
     await Promise.all([killSidecar(), stopBrowserBridge(), stopCloudBridge(), wslServers.stopAll()])
@@ -572,11 +574,24 @@ const main = Effect.gen(function* () {
     keepAwake = startKeepAwake({
       source: engineEventSource({ url, username: "vector", password }),
       blocker,
+      // While a paired phone watches, busy sessions keep the computer awake, those waiting on a person included.
+      watching: () => remoteLink()?.watching() ?? false,
       log: (message, meta) => logger.log(message, meta),
     })
     setDesktopWorkBlocker(blocker)
 
     yield* Effect.promise(() => vectorAccount.restore())
+    // Vector Remote (WP A41): connects only while Remote is on and a phone is paired or pairing.
+    startRemote({
+      engine: { url, password },
+      packaged: app.isPackaged,
+      watchingChanged: () => {
+        keepAwake?.refresh()
+        void updateTray()
+      },
+      log: (message, meta) => logger.log(message, meta),
+    })
+    app.once("will-quit", () => stopRemote())
     // The sidebar's name and photo; never holds up startup.
     void vectorAccount.refreshProfile()
     if (process.platform === "win32") {
@@ -648,6 +663,21 @@ const main = Effect.gen(function* () {
     quit: () => {
       requestQuit()
       app.quit()
+    },
+    remote: {
+      read: () => {
+        const status = remoteLink()?.status()
+        return {
+          phones: status?.phones.length ?? 0,
+          connected: status?.phones.filter((phone) => phone.connected).length ?? 0,
+          watching: status?.phones.some((phone) => phone.watching) ?? false,
+        }
+      },
+      disconnectAll: () =>
+        void remoteLink()
+          ?.disconnectAll()
+          .then(() => updateTray())
+          .catch((error) => logger.warn("could not disconnect Remote's phones", error)),
     },
   })
   onScheduledAgentsChanged(() => void updateTray())

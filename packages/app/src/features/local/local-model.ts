@@ -105,6 +105,8 @@ const NAMES: Record<string, string> = {
   telemetry: "Your OpenTelemetry tracing",
   "support-report": "Support reports",
   "report-status": "Report status",
+  remote: "Vector Remote",
+  "phone-alerts": "Phone alerts",
   "release-notes": "Release notes",
   "site-assets": "Release note pictures",
   updates: "Updates",

@@ -382,6 +382,28 @@ export const SOURCES: readonly Source[] = [
     callSites: ["packages/desktop/src/main/bug-report.ts"],
   },
   {
+    id: "remote",
+    purpose: "account",
+    hosts: VECTOR,
+    sends:
+      "Your Vector sign-in for a Remote ticket, then messages between this computer and your paired phones, end-to-end encrypted",
+    why: "Vector Remote: your paired phones watch and answer this computer's agents",
+    local: "blocked",
+    where: ["desktop"],
+    callSites: ["packages/desktop/src/main/remote-link.ts", "packages/desktop/src/main/remote-runtime.ts"],
+    note: "The relay's address comes with each ticket from vectordev.ai; it only ever sees encrypted messages",
+  },
+  {
+    id: "phone-alerts",
+    purpose: "account",
+    hosts: VECTOR,
+    sends: "Your Vector sign-in and each alert, encrypted so only your paired phones can read it",
+    why: "Sends the phone alerts you chose in Settings > Notifications",
+    local: "blocked",
+    where: ["desktop"],
+    callSites: ["packages/desktop/src/main/remote-notify.ts", "packages/desktop/src/main/remote-runtime.ts"],
+  },
+  {
     id: "release-notes",
     purpose: "release-notes",
     hosts: VECTOR,
