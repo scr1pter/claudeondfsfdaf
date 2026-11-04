@@ -12,4 +12,6 @@ The evaluator creates temporary data directories and directly owns every child i
 
 `node-prequalification.json` records the completed authoring controls: reference 54/54, empty seed 0/50 business groups, five targeted negative mutants rejected, and 12 source/process safety tests passed. This is preliminary Node evidence. The private proof contains full details and reference hashes; no solution is included here.
 
-Status: **Node prequalified; Bun runtime and native-adapter qualification pending.** Complete those gates before a paid launch.
+Status: **Bun runtime qualified: reference54/54, empty0/50business, five negative controls rejected.** Exact native-adapter qualification is recorded separately by the headless-stage integration before any paid launch.
+
+The headless-stage integration uses gate_bridge.py to preserve all 54 raw evaluator rows with the native runner's status/exit vocabulary. qualify_bridge.py composes the external private Bun controls with real positive and empty-seed bridge runs, then records immutable public instrument hashes. This does not distribute a reference implementation or weaken a check.

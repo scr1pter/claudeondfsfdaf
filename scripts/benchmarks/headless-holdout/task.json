@@ -10,9 +10,24 @@
   "evaluatorTimeoutSeconds": 180,
   "evaluatorReport": "evaluation.json",
   "setupCommand": [],
-  "evaluatorCommand": ["{python}", "{task}/evaluate.py", "--app", "{app}", "--out", "{out}", "--runtime", "{bun}", "--node", "{node}", "--typescript", "{typescript}", "--mode", "bun-qualification"],
+  "evaluatorCommand": [
+    "{python}",
+    "{task}/gate_bridge.py",
+    "--app",
+    "{app}",
+    "--out",
+    "{out}",
+    "--runtime",
+    "{bun}",
+    "--node",
+    "{node}",
+    "--typescript",
+    "{typescript}",
+    "--mode",
+    "bun-qualification"
+  ],
   "protectedFiles": [],
   "generatedDirectories": [],
-  "runtimeQualified": false,
+  "runtimeQualified": true,
   "methodology": "Separate headless holdout; instruction-only R1 profile variant; browser capability unchanged; no UI requested; never substitute for Harbor UI checks."
 }

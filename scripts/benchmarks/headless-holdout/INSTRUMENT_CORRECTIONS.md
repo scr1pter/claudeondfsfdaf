@@ -15,3 +15,5 @@ The original `BUILD_SPEC.md` bytes and all 50 group identities remain unchanged 
 Interpretation of the original global creation-status sentence: the explicit workspace uniqueness rule is tested as 409 for duplicate workspace ID. The 200 exact-creation replay status applies to the import creation endpoint, which alone specifies an idempotency-key replay protocol. No workspace replay protocol or key namespace is invented after the freeze.
 
 Independent source review identified these corrections after the initial Node-positive reference run. Reference behavior and frozen requirements did not change to satisfy them.
+
+10. A gate bridge retains every original boolean check and its raw report while translating status/exit-code spelling for the native-team runner. The independent evaluator and BUILD_SPEC bytes remain unchanged. The offline TypeScript compiler is explicitly bound and hashed. The headless native audit requires post-judge API, CLI and SDK verification; browser tools remain available, while the UI audit default still requires browser verification.

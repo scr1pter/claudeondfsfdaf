@@ -1,0 +1,749 @@
+{
+  "kind": "headless-runtime-qualification-v1",
+  "status": "runtime_qualified",
+  "runtimeQualified": true,
+  "modelCalls": 0,
+  "expectedChecks": {
+    "api": 50,
+    "browser": 0,
+    "prerequisite": 4,
+    "total": 54
+  },
+  "positiveReference": {
+    "kind": "headless-native-gate-bridge-v1",
+    "verdict": "passed",
+    "sourceIntegrityStatus": "unchanged",
+    "checks": [
+      {
+        "name": "owned-process-ready-contract",
+        "category": "prerequisite",
+        "status": "passed"
+      },
+      {
+        "name": "loopback-json-health",
+        "category": "prerequisite",
+        "status": "passed"
+      },
+      {
+        "name": "cli-help-is-usable",
+        "category": "prerequisite",
+        "status": "passed"
+      },
+      {
+        "name": "sdk-module-and-declarations-exist",
+        "category": "prerequisite",
+        "status": "passed"
+      },
+      {
+        "name": "workspace-validation-and-uniqueness",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "initial-directory-and-workspace-reads",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "authentication-and-body-transport-boundaries",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "tenant-isolation-on-reads-and-writes",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "capability-issuance-validation",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "roles-cannot-cross-mutation-boundaries",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "revocation-and-repeat-event-accounting",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "staging-metadata-digest-and-redaction",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "csv-bom-crlf-quotes-and-normalization",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "csv-malformed-shape-rejected-atomically",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "csv-duplicate-identities-and-operation-validation",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "csv-field-validation-and-control-characters",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "import-row-and-byte-bounds",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "stage-base-version-is-optimistic-concurrency-boundary",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "stage-replay-is-canonical-and-event-free",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "stage-key-conflict-and-subject-scope",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "staged-and-approved-data-remain-unapplied",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "separation-of-duty-including-owner",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "approval-repeat-and-other-approver-conflict",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "rejection-reason-and-terminal-state",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "cancel-authority-and-lease-invalidation",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "claims-require-worker-and-approved-state",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "simultaneous-claims-have-one-winner",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "lease-bounds-expiry-and-reclaim",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "lease-epoch-fences-old-token",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "lease-cannot-be-used-by-another-worker",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "lease-binds-precise-capability-not-just-subject",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "revoked-worker-cannot-use-admitted-lease",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "commit-lifecycle-member-revisions-and-delete",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "commit-replay-remains-exactly-once-after-expiry",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "commit-replay-conflicts-on-body-and-worker",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "expired-uncommitted-lease-cannot-apply",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "revocation-is-rechecked-before-successful-replay",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "missing-delete-fails-the-entire-batch",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "unique-email-conflict-cannot-partially-apply",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "atomic-email-swaps-evaluate-final-state",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "stale-approved-base-version-never-applies",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "simultaneous-commits-serialize-version-fence",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "stable-sorted-reads-and-missing-resource-errors",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "audit-events-are-transactional-and-contiguous",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "audit-pagination-and-query-validation",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "capabilities-and-leases-never-leak-to-storage-or-logs",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "graceful-restart-preserves-data-authority-and-replays",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "abrupt-restart-recovers-dead-lock-and-outstanding-lease",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "second-live-writer-is-refused",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "partial-trailing-transaction-fails-closed",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "valid-json-transaction-tampering-fails-closed",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "cli-connected-workflow-and-structured-failures",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "sdk-connected-workflow-and-error-contract",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "sdk-types-compile-positive-and-reject-invalid-uses",
+        "category": "api",
+        "status": "passed"
+      }
+    ],
+    "summary": {
+      "api": {
+        "passed": 50,
+        "failed": 0,
+        "not_run": 0
+      },
+      "browser": {
+        "passed": 0,
+        "failed": 0,
+        "not_run": 0
+      },
+      "prerequisite": {
+        "passed": 4,
+        "failed": 0,
+        "not_run": 0
+      }
+    },
+    "allIndependentRowsRetained": true,
+    "checksPassed": 54,
+    "checksTotal": 54
+  },
+  "emptySeed": {
+    "kind": "headless-native-gate-bridge-v1",
+    "verdict": "product_failure",
+    "sourceIntegrityStatus": "unchanged",
+    "checks": [
+      {
+        "name": "owned-process-ready-contract",
+        "category": "prerequisite",
+        "status": "passed"
+      },
+      {
+        "name": "loopback-json-health",
+        "category": "prerequisite",
+        "status": "passed"
+      },
+      {
+        "name": "cli-help-is-usable",
+        "category": "prerequisite",
+        "status": "failed",
+        "error": "AssertionError",
+        "detail": "acceptance assertion failed"
+      },
+      {
+        "name": "sdk-module-and-declarations-exist",
+        "category": "prerequisite",
+        "status": "passed"
+      },
+      {
+        "name": "workspace-validation-and-uniqueness",
+        "category": "api",
+        "status": "failed",
+        "error": "AssertionError",
+        "detail": "workspace creation"
+      },
+      {
+        "name": "initial-directory-and-workspace-reads",
+        "category": "api",
+        "status": "failed",
+        "error": "AssertionError",
+        "detail": "workspace creation"
+      },
+      {
+        "name": "authentication-and-body-transport-boundaries",
+        "category": "api",
+        "status": "failed",
+        "error": "AssertionError",
+        "detail": "workspace creation"
+      },
+      {
+        "name": "tenant-isolation-on-reads-and-writes",
+        "category": "api",
+        "status": "failed",
+        "error": "AssertionError",
+        "detail": "workspace creation"
+      },
+      {
+        "name": "capability-issuance-validation",
+        "category": "api",
+        "status": "failed",
+        "error": "AssertionError",
+        "detail": "workspace creation"
+      },
+      {
+        "name": "roles-cannot-cross-mutation-boundaries",
+        "category": "api",
+        "status": "failed",
+        "error": "AssertionError",
+        "detail": "workspace creation"
+      },
+      {
+        "name": "revocation-and-repeat-event-accounting",
+        "category": "api",
+        "status": "failed",
+        "error": "AssertionError",
+        "detail": "workspace creation"
+      },
+      {
+        "name": "staging-metadata-digest-and-redaction",
+        "category": "api",
+        "status": "failed",
+        "error": "AssertionError",
+        "detail": "workspace creation"
+      },
+      {
+        "name": "csv-bom-crlf-quotes-and-normalization",
+        "category": "api",
+        "status": "failed",
+        "error": "AssertionError",
+        "detail": "workspace creation"
+      },
+      {
+        "name": "csv-malformed-shape-rejected-atomically",
+        "category": "api",
+        "status": "failed",
+        "error": "AssertionError",
+        "detail": "workspace creation"
+      },
+      {
+        "name": "csv-duplicate-identities-and-operation-validation",
+        "category": "api",
+        "status": "failed",
+        "error": "AssertionError",
+        "detail": "workspace creation"
+      },
+      {
+        "name": "csv-field-validation-and-control-characters",
+        "category": "api",
+        "status": "failed",
+        "error": "AssertionError",
+        "detail": "workspace creation"
+      },
+      {
+        "name": "import-row-and-byte-bounds",
+        "category": "api",
+        "status": "failed",
+        "error": "AssertionError",
+        "detail": "workspace creation"
+      },
+      {
+        "name": "stage-base-version-is-optimistic-concurrency-boundary",
+        "category": "api",
+        "status": "failed",
+        "error": "AssertionError",
+        "detail": "workspace creation"
+      },
+      {
+        "name": "stage-replay-is-canonical-and-event-free",
+        "category": "api",
+        "status": "failed",
+        "error": "AssertionError",
+        "detail": "workspace creation"
+      },
+      {
+        "name": "stage-key-conflict-and-subject-scope",
+        "category": "api",
+        "status": "failed",
+        "error": "AssertionError",
+        "detail": "workspace creation"
+      },
+      {
+        "name": "staged-and-approved-data-remain-unapplied",
+        "category": "api",
+        "status": "failed",
+        "error": "AssertionError",
+        "detail": "workspace creation"
+      },
+      {
+        "name": "separation-of-duty-including-owner",
+        "category": "api",
+        "status": "failed",
+        "error": "AssertionError",
+        "detail": "workspace creation"
+      },
+      {
+        "name": "approval-repeat-and-other-approver-conflict",
+        "category": "api",
+        "status": "failed",
+        "error": "AssertionError",
+        "detail": "workspace creation"
+      },
+      {
+        "name": "rejection-reason-and-terminal-state",
+        "category": "api",
+        "status": "failed",
+        "error": "AssertionError",
+        "detail": "workspace creation"
+      },
+      {
+        "name": "cancel-authority-and-lease-invalidation",
+        "category": "api",
+        "status": "failed",
+        "error": "AssertionError",
+        "detail": "workspace creation"
+      },
+      {
+        "name": "claims-require-worker-and-approved-state",
+        "category": "api",
+        "status": "failed",
+        "error": "AssertionError",
+        "detail": "workspace creation"
+      },
+      {
+        "name": "simultaneous-claims-have-one-winner",
+        "category": "api",
+        "status": "failed",
+        "error": "AssertionError",
+        "detail": "workspace creation"
+      },
+      {
+        "name": "lease-bounds-expiry-and-reclaim",
+        "category": "api",
+        "status": "failed",
+        "error": "AssertionError",
+        "detail": "workspace creation"
+      },
+      {
+        "name": "lease-epoch-fences-old-token",
+        "category": "api",
+        "status": "failed",
+        "error": "AssertionError",
+        "detail": "workspace creation"
+      },
+      {
+        "name": "lease-cannot-be-used-by-another-worker",
+        "category": "api",
+        "status": "failed",
+        "error": "AssertionError",
+        "detail": "workspace creation"
+      },
+      {
+        "name": "lease-binds-precise-capability-not-just-subject",
+        "category": "api",
+        "status": "failed",
+        "error": "AssertionError",
+        "detail": "workspace creation"
+      },
+      {
+        "name": "revoked-worker-cannot-use-admitted-lease",
+        "category": "api",
+        "status": "failed",
+        "error": "AssertionError",
+        "detail": "workspace creation"
+      },
+      {
+        "name": "commit-lifecycle-member-revisions-and-delete",
+        "category": "api",
+        "status": "failed",
+        "error": "AssertionError",
+        "detail": "workspace creation"
+      },
+      {
+        "name": "commit-replay-remains-exactly-once-after-expiry",
+        "category": "api",
+        "status": "failed",
+        "error": "AssertionError",
+        "detail": "workspace creation"
+      },
+      {
+        "name": "commit-replay-conflicts-on-body-and-worker",
+        "category": "api",
+        "status": "failed",
+        "error": "AssertionError",
+        "detail": "workspace creation"
+      },
+      {
+        "name": "expired-uncommitted-lease-cannot-apply",
+        "category": "api",
+        "status": "failed",
+        "error": "AssertionError",
+        "detail": "workspace creation"
+      },
+      {
+        "name": "revocation-is-rechecked-before-successful-replay",
+        "category": "api",
+        "status": "failed",
+        "error": "AssertionError",
+        "detail": "workspace creation"
+      },
+      {
+        "name": "missing-delete-fails-the-entire-batch",
+        "category": "api",
+        "status": "failed",
+        "error": "AssertionError",
+        "detail": "workspace creation"
+      },
+      {
+        "name": "unique-email-conflict-cannot-partially-apply",
+        "category": "api",
+        "status": "failed",
+        "error": "AssertionError",
+        "detail": "workspace creation"
+      },
+      {
+        "name": "atomic-email-swaps-evaluate-final-state",
+        "category": "api",
+        "status": "failed",
+        "error": "AssertionError",
+        "detail": "workspace creation"
+      },
+      {
+        "name": "stale-approved-base-version-never-applies",
+        "category": "api",
+        "status": "failed",
+        "error": "AssertionError",
+        "detail": "workspace creation"
+      },
+      {
+        "name": "simultaneous-commits-serialize-version-fence",
+        "category": "api",
+        "status": "failed",
+        "error": "AssertionError",
+        "detail": "workspace creation"
+      },
+      {
+        "name": "stable-sorted-reads-and-missing-resource-errors",
+        "category": "api",
+        "status": "failed",
+        "error": "AssertionError",
+        "detail": "workspace creation"
+      },
+      {
+        "name": "audit-events-are-transactional-and-contiguous",
+        "category": "api",
+        "status": "failed",
+        "error": "AssertionError",
+        "detail": "workspace creation"
+      },
+      {
+        "name": "audit-pagination-and-query-validation",
+        "category": "api",
+        "status": "failed",
+        "error": "AssertionError",
+        "detail": "workspace creation"
+      },
+      {
+        "name": "capabilities-and-leases-never-leak-to-storage-or-logs",
+        "category": "api",
+        "status": "failed",
+        "error": "AssertionError",
+        "detail": "workspace creation"
+      },
+      {
+        "name": "graceful-restart-preserves-data-authority-and-replays",
+        "category": "api",
+        "status": "failed",
+        "error": "AssertionError",
+        "detail": "workspace creation"
+      },
+      {
+        "name": "abrupt-restart-recovers-dead-lock-and-outstanding-lease",
+        "category": "api",
+        "status": "failed",
+        "error": "AssertionError",
+        "detail": "workspace creation"
+      },
+      {
+        "name": "second-live-writer-is-refused",
+        "category": "api",
+        "status": "failed",
+        "error": "AssertionError",
+        "detail": "workspace creation"
+      },
+      {
+        "name": "partial-trailing-transaction-fails-closed",
+        "category": "api",
+        "status": "failed",
+        "error": "AssertionError",
+        "detail": "workspace creation"
+      },
+      {
+        "name": "valid-json-transaction-tampering-fails-closed",
+        "category": "api",
+        "status": "failed",
+        "error": "AssertionError",
+        "detail": "workspace creation"
+      },
+      {
+        "name": "cli-connected-workflow-and-structured-failures",
+        "category": "api",
+        "status": "failed",
+        "error": "AssertionError",
+        "detail": "workspace creation"
+      },
+      {
+        "name": "sdk-connected-workflow-and-error-contract",
+        "category": "api",
+        "status": "failed",
+        "error": "AssertionError",
+        "detail": "workspace creation"
+      },
+      {
+        "name": "sdk-types-compile-positive-and-reject-invalid-uses",
+        "category": "api",
+        "status": "failed",
+        "error": "AssertionError",
+        "detail": "workspace creation"
+      }
+    ],
+    "summary": {
+      "api": {
+        "passed": 0,
+        "failed": 50,
+        "not_run": 0
+      },
+      "browser": {
+        "passed": 0,
+        "failed": 0,
+        "not_run": 0
+      },
+      "prerequisite": {
+        "passed": 3,
+        "failed": 1,
+        "not_run": 0
+      }
+    },
+    "allIndependentRowsRetained": true,
+    "checksPassed": 3,
+    "checksTotal": 54
+  },
+  "damagedReferenceControls": [
+    {
+      "name": "lease-capability-binding",
+      "target": "lease-binds-precise-capability-not-just-subject",
+      "rejected": true,
+      "detail": "acceptance assertion failed",
+      "mutantSha256": "ad1d322ac15e01cade224878728cfab3579aca1f5561a02af25470b953a7f171"
+    },
+    {
+      "name": "pre-body-authority",
+      "target": "revoked-worker-cannot-use-admitted-lease",
+      "rejected": true,
+      "detail": "acceptance assertion failed",
+      "mutantSha256": "f8d58ea1c8e3746e8242b58244ce8b3268586d74a4edb07f42cdee1263028ebf"
+    },
+    {
+      "name": "revoked-authority",
+      "target": "revocation-is-rechecked-before-successful-replay",
+      "rejected": true,
+      "detail": "acceptance assertion failed",
+      "mutantSha256": "af5e12967a39c37576f2c110f93236db6447486bf09b4ac9d1f49e3047c8148c"
+    },
+    {
+      "name": "same-subject-replay",
+      "target": "commit-replay-conflicts-on-body-and-worker",
+      "rejected": true,
+      "detail": "acceptance assertion failed",
+      "mutantSha256": "c1ed9e8a3ddbd8b51b69c2ac20867aff0d05cb529570b4ce48e486e644ae023a"
+    },
+    {
+      "name": "unchecked-checksum",
+      "target": "valid-json-transaction-tampering-fails-closed",
+      "rejected": true,
+      "detail": "changed transaction content was accepted",
+      "mutantSha256": "e0f93a0cd3c07df32f71edc15ded77262edc74f95546aa367365960c135ad99a"
+    }
+  ],
+  "originalRequirementsUnchanged": true,
+  "privateReferenceOutsideTaskRoot": true,
+  "sourceFreezeAggregateSha256": "0daf984c6d6e3e93382aadf4e6955bc0e8f1f37e0b513064114203bc2e59ec5c",
+  "privateProofSha256": "6309dd21270cab8e608edbbe71c245a24f255907af1009561167d9731c52d4fa"
+}
