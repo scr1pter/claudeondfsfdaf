@@ -179,10 +179,9 @@ export function handoff(input: { reason: Computer.HandoffReason; app?: string })
 const BREAKS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g
 const INVISIBLE = /[\u061c\u200b-\u200f\u202a-\u202e\u2060-\u2069\ufeff]/g
 
-/** label is a verified accessibility label. Typed text, key payloads and model intent never enter the banner. */
-export function step(input: { action: Computer.ToolAction; app?: string; label?: string }) {
-  // Cut by UTF-16 units, as the schema bounds labels, without leaving half of a surrogate pair.
-  const label = input.label
+// Cut by UTF-16 units, as the schema bounds labels, without leaving half of a surrogate pair.
+function quoted(label: string | undefined) {
+  return label
     ?.replace(BREAKS, " ")
     .replace(INVISIBLE, "")
     .replace(/[“”]/g, '"')
@@ -191,6 +190,41 @@ export function step(input: { action: Computer.ToolAction; app?: string; label?:
     .slice(0, Computer.LIMITS.labelChars)
     .replace(/[\ud800-\udbff]$/, "")
     .trimEnd()
+}
+
+/** The banner's mirror of an app ask. app is the verified display name; the banner never offers Always allow. */
+export function askApp(input: { app: string }) {
+  return `Allow ${Hands.NAME} to use ${input.app}?`
+}
+
+/**
+ * The banner's mirror of a sensitive ask, built only from the verified app name, the fixed reason and the verified
+ * accessibility label. Typed text, key payloads, paths and model intent never enter it.
+ */
+export function askSensitive(input: {
+  action: Computer.SensitiveAskMetadata["action"]
+  why: Computer.SensitiveWhy
+  app: string
+  label?: string
+}) {
+  if (input.why === "run_program") return `${Hands.NAME} wants to run a program`
+  if (input.why === "paste") return `${Hands.NAME} wants to paste in ${input.app}`
+  const label = quoted(input.label)
+  if (input.action === "click" && label) return `${Hands.NAME} wants to click “${label}” in ${input.app}`
+  if (input.action === "type") return `${Hands.NAME} wants to type in ${input.app}`
+  if (input.action === "key") return `${Hands.NAME} wants to press a key in ${input.app}`
+  if (input.action === "drag") return `${Hands.NAME} wants to drag in ${input.app}`
+  return `${Hands.NAME} wants to use ${input.app}`
+}
+
+/** Fixed, Vector-built reasons for notificationFailed. Never an engine message or the model's explanation. */
+export function failure(input: { reason: "engine" | "error" }) {
+  return input.reason === "engine" ? "Vector's engine stopped" : "the conversation ended with an error"
+}
+
+/** label is a verified accessibility label. Typed text, key payloads and model intent never enter the banner. */
+export function step(input: { action: Computer.ToolAction; app?: string; label?: string }) {
+  const label = quoted(input.label)
   const target = label ? ` “${label}”` : ""
   const app = input.app ? ` in ${input.app}` : ""
   const copy = {

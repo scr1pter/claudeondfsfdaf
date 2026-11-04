@@ -1,6 +1,7 @@
 import { Menu, Notification, Tray, nativeImage } from "electron"
 
 import { backgroundModeStatus, type BackgroundWorkState } from "./background-mode"
+import { computerTrayItems, type ComputerTrayCommand, type ComputerTrayState } from "./computer-tray"
 import { write } from "./logging"
 import type { ScheduledAgentRecord } from "./scheduled-agents"
 
@@ -22,6 +23,9 @@ export type TrayDeps = {
   runNext: () => void
   setAllPaused: (paused: boolean) => void
   quit: () => void
+  // Hands: read live like the rest, so the menu shows the run as it is when opened.
+  computer?: () => ComputerTrayState | undefined
+  computerCommand?: (command: ComputerTrayCommand) => void
 }
 
 let tray: Tray | undefined
@@ -71,9 +75,20 @@ export async function updateTray() {
   if (!tray || !deps) return
   const paused = state.armedTasks === 0 && state.pausedTasks > 0
 
-  tray.setToolTip(`Vector — ${status.reason}`)
+  const computer = computerTrayItems(deps.computer?.())
+  tray.setToolTip(computer?.tooltip ?? `Vector — ${status.reason}`)
   tray.setContextMenu(
     Menu.buildFromTemplate([
+      ...(computer
+        ? [
+            ...computer.items.map((item) => ({
+              label: item.label,
+              enabled: item.enabled,
+              ...(item.command ? { click: () => deps?.computerCommand?.(item.command!) } : {}),
+            })),
+            { type: "separator" as const },
+          ]
+        : []),
       { label: status.reason, enabled: false },
       { type: "separator" },
       { label: "Open Vector", click: () => deps?.openVector() },

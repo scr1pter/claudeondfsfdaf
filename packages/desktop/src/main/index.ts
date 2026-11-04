@@ -75,6 +75,9 @@ import {
   setAllScheduledAgentsPaused,
 } from "./scheduled-agents"
 import { createTray, destroyTray, notifyScheduledRunFinished, updateTray } from "./tray"
+import { startComputer, type ComputerRuntime } from "./computer-startup"
+import { electronComputerDeps } from "./computer-electron"
+import { setComputerService } from "./computer-ipc"
 import { engineEventSource, setDesktopWorkBlocker, startKeepAwake } from "./keep-awake"
 import { getStore } from "./store"
 import { USAGE_STORE } from "./store-keys"
@@ -97,6 +100,7 @@ const jsCallStackFeature = "DocumentPolicyIncludeJSCallStacksInCrashReports"
 let logger: ReturnType<typeof initLogging>
 let server: SidecarListener | null = null
 let keepAwake: ReturnType<typeof startKeepAwake> | undefined
+let computer: ComputerRuntime | undefined
 let trayReady = false
 
 const pendingDeepLinks: string[] = []
@@ -223,7 +227,11 @@ const main = Effect.gen(function* () {
     unregisterManagedAccount()
     keepAwake?.stop()
     setDesktopWorkBlocker(undefined)
-    await Promise.all([killSidecar(), stopBrowserBridge(), stopCloudBridge(), wslServers.stopAll()])
+    // Hands first releases input and closes its overlays, then stops its helper and bridge (INV-R3, INV-T3).
+    const hands = computer
+    computer = undefined
+    setComputerService(undefined)
+    await Promise.all([hands?.stop(), killSidecar(), stopBrowserBridge(), stopCloudBridge(), wslServers.stopAll()])
   }
   const relaunch = () => {
     // A relaunch ends this process, so it counts as an explicit quit: without
@@ -502,6 +510,17 @@ const main = Effect.gen(function* () {
     ensureLoopbackNoProxy()
     useEnvProxy()
 
+    // The Hands bridge starts before the engine, because its pair travels only in the engine's start message.
+    computer = yield* Effect.promise(() =>
+      startComputer(electronComputerDeps({ warn: (message, ...fields) => logger.warn(message, ...fields) })).catch(
+        (error: unknown) => {
+          logger.error("Computer use could not start", error instanceof Error ? error.name : "Error")
+          return undefined
+        },
+      ),
+    )
+    setComputerService(computer?.service)
+
     logger.log("spawning sidecar", { url })
     const { listener, health } = yield* Effect.promise(() =>
       spawnLocalServer(hostname, port, password, {
@@ -510,9 +529,13 @@ const main = Effect.gen(function* () {
         startupHold: firstRun.held(),
         // The engine trusts the certificate authorities from the user's own config that desktop main does.
         authorities: trustedAuthorities(getStore(LOCAL_STORE)),
+        startEnvironment: computer?.environment,
         onStdout: (message) => writeLog("server", "stdout", { message }),
         onStderr: (message) => writeLog("server", "stderr", { message }, "warn"),
-        onExit: (code) => writeLog("utility", "sidecar exited", { code }, "warn"),
+        onExit: (code) => {
+          writeLog("utility", "sidecar exited", { code }, "warn")
+          computer?.engineExit()
+        },
       }),
     )
     server = listener
@@ -575,6 +598,8 @@ const main = Effect.gen(function* () {
       log: (message, meta) => logger.log(message, meta),
     })
     setDesktopWorkBlocker(blocker)
+    // Hands follows the engine's own event stream: asks, replies, session status and engine exit.
+    computer?.attach({ url, password, source: engineEventSource({ url, username: "vector", password }) })
 
     yield* Effect.promise(() => vectorAccount.restore())
     // The sidebar's name and photo; never holds up startup.
@@ -649,6 +674,8 @@ const main = Effect.gen(function* () {
       requestQuit()
       app.quit()
     },
+    computer: () => computer?.tray(),
+    computerCommand: (command) => computer?.trayCommand(command),
   })
   onScheduledAgentsChanged(() => void updateTray())
   onScheduledAgentRunFinished((record) => {

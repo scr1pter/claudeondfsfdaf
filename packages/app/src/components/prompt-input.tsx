@@ -58,6 +58,7 @@ import { ComputerMentionLookup } from "@/features/computer/mention-lookup"
 import { ComputerSendGate } from "@/features/computer/send-gate"
 import { Hands } from "@vectordevai/schema/hands"
 import { openComputerSetup } from "@/features/computer/open-setup"
+import { supportsImageInput } from "@/utils/task-intelligence"
 import { ACCEPTED_FILE_TYPES, pickAttachmentFiles } from "./prompt-input/files"
 import {
   canNavigateHistoryAtCursor,
@@ -1897,6 +1898,15 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     return current ? freeModelTrainingLabel(current) : undefined
   })
 
+  // Section 1.4: a draft with a computer pill, on a model that cannot see images, runs Hands in screen-reader mode.
+  const readerNote = createMemo(() => {
+    if (!computer || store.mode === "shell") return
+    if (!prompt.current().some((part) => part.type === "computer")) return
+    const current = props.controls.model.selection.current()
+    if (!current || supportsImageInput(current)) return
+    return language.t("computer.availability.reader", { model: currentModelName(), name: Hands.NAME })
+  })
+
   const modelControlState = createMemo<ComposerModelControlState>(() => ({
     loading: providersLoading(),
     shouldAnimate: providersShouldFadeIn(),
@@ -2759,6 +2769,13 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
         {(label) => (
           <div data-component="free-model-training-notice" class="px-3 pt-2 text-12-regular" role="note">
             {label()}
+          </div>
+        )}
+      </Show>
+      <Show when={readerNote()}>
+        {(note) => (
+          <div data-component="computer-reader-notice" class="px-3 pt-2 text-12-regular" role="note">
+            {note()}
           </div>
         )}
       </Show>

@@ -59,6 +59,13 @@ const samples = [
     () => ComputerMainCopy.step({ action: "click", app: "Numbers", label: "Save" }),
     "Clicking “Save” in Numbers",
   ],
+  ["askApp", () => ComputerMainCopy.askApp({ app: "Numbers" }), `Allow ${Hands.NAME} to use Numbers?`],
+  [
+    "askSensitive",
+    () => ComputerMainCopy.askSensitive({ action: "click", why: "send", app: "Mail", label: "Send" }),
+    `${Hands.NAME} wants to click “Send” in Mail`,
+  ],
+  ["failure", () => ComputerMainCopy.failure({ reason: "engine" }), "Vector's engine stopped"],
 ] as const
 
 const pauses = {
@@ -177,6 +184,34 @@ describe("desktop main copy", () => {
     expect(ComputerMainCopy.handoff({ reason: "other" })).toBe(
       "Your turn: finish this step yourself. Press Continue when you're done.",
     )
+  })
+
+  test("the banner's ask titles match the dock's and carry only verified facts", () => {
+    const fill = (text: string, params: Record<string, string>) =>
+      text.replace(/\{\{(\w+)\}\}/g, (_match, key: string) => params[key] ?? "")
+    const params = { name: Hands.NAME, app: "Mail", label: "Send" }
+    expect(ComputerMainCopy.askApp({ app: "Mail" })).toBe(fill(appDict["computer.ask.app.title"], params))
+    const cases = [
+      [{ action: "click", why: "send", label: "Send" }, "computer.ask.sensitive.click"],
+      [{ action: "click", why: "send" }, "computer.ask.sensitive.useApp"],
+      [{ action: "type", why: "new_destination" }, "computer.ask.sensitive.type"],
+      [{ action: "key", why: "disruptive" }, "computer.ask.sensitive.keyUnknown"],
+      [{ action: "drag", why: "delete" }, "computer.ask.sensitive.drag"],
+      [{ action: "open", why: "settings" }, "computer.ask.sensitive.useApp"],
+      [{ action: "open", why: "run_program" }, "computer.ask.sensitive.runProgram"],
+      [{ action: "key", why: "paste" }, "computer.ask.sensitive.paste"],
+    ] as const
+    for (const [input, key] of cases)
+      expect(ComputerMainCopy.askSensitive({ app: "Mail", ...input })).toBe(fill(appDict[key], params))
+    // A label is cleaned and cut like the step line's; no typed text or path field exists to pass.
+    const long = ComputerMainCopy.askSensitive({
+      action: "click",
+      why: "send",
+      app: "Mail",
+      label: `a‮${"x".repeat(80)}`,
+    })
+    expect(long).toBe(`${Hands.NAME} wants to click “a${"x".repeat(Computer.LIMITS.labelChars - 1)}” in Mail`)
+    expect(ComputerMainCopy.failure({ reason: "error" })).toBe("the conversation ended with an error")
   })
 
   test("the timeline's and the app's handoff sentences match the desktop's", () => {

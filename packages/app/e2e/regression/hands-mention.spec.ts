@@ -111,6 +111,35 @@ test("sending @Hands and @Numbers posts exactly the documented marker shapes", a
   ])
 })
 
+test("a model that cannot see images shows the screen-reader note under the composer while a pill is in the draft", async ({
+  page,
+}) => {
+  // The fixture's only model reads text alone (capabilities.input.image false).
+  const { composer } = await openComposer(page, ready)
+  const note = page.locator('[data-component="computer-reader-notice"]')
+  await composer.pressSequentially("put the receipts in a table ")
+  await expect(note).toHaveCount(0)
+  await composer.pressSequentially("@han")
+  await expect(page.locator('[data-computer-row="feature"]')).toContainText("Let Vector use apps on your computer")
+  await page.keyboard.press("Enter")
+  await expect(composer.locator('[data-type="computer"]')).toHaveCount(1)
+  await expect(note).toBeVisible()
+  await expect(note).toHaveAttribute("role", "note")
+  await expect(note).toHaveText(
+    new RegExp(
+      `^.+ can't see the screen, so ${Hands.NAME} will read app controls instead\\. That works in fewer apps\\. A model that can see images works best\\.$`,
+    ),
+  )
+  // It sits below the composer, not over the draft.
+  const [notice, input] = await Promise.all([note.boundingBox(), composer.boundingBox()])
+  expect(notice!.y).toBeGreaterThanOrEqual(input!.y + input!.height - 1)
+  // Without a pill, nothing runs Hands, so the note leaves.
+  await page.keyboard.press("ControlOrMeta+a")
+  await page.keyboard.press("Backspace")
+  await expect(composer.locator('[data-type="computer"]')).toHaveCount(0)
+  await expect(note).toHaveCount(0)
+})
+
 test("when Hands is not set up, the pill opens onboarding and sending shows Set up instead of posting", async ({
   page,
 }) => {

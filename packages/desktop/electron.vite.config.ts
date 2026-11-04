@@ -32,12 +32,31 @@ const sentry =
       })
     : false
 
+// The packaged Windows helper's SHA-256 per architecture ({"x64": "…", "arm64": "…"}), set by the release build (C3).
+// Without it the Windows helper never starts (D14 preflight refuses), so Hands stays unavailable.
+const computerHelperHashes = (() => {
+  const raw = process.env.VECTOR_COMPUTER_HELPER_SHA256
+  if (!raw) return {}
+  const value: unknown = JSON.parse(raw)
+  if (
+    !value ||
+    typeof value !== "object" ||
+    Array.isArray(value) ||
+    Object.entries(value).some(
+      ([arch, hash]) => !["x64", "arm64"].includes(arch) || typeof hash !== "string" || !/^[a-f0-9]{64}$/i.test(hash),
+    )
+  )
+    throw new Error("VECTOR_COMPUTER_HELPER_SHA256 must map x64 or arm64 to a SHA-256 hex digest.")
+  return value
+})()
+
 export default defineConfig({
   main: {
     define: {
       "import.meta.env.VECTOR_CHANNEL": JSON.stringify(channel),
       // Enabled only by the verified C9 release build, never by a running desktop's environment.
       VECTOR_COMPUTER_RESET_VERIFIED: JSON.stringify(process.env.VECTOR_COMPUTER_RESET_VERIFIED === "1"),
+      VECTOR_COMPUTER_HELPER_SHA256: JSON.stringify(computerHelperHashes),
       "import.meta.env.VECTOR_REQUIRED_CLI_VERSION": JSON.stringify(
         requiredCliVersion(manifest.vectorRequiredCliVersion, process.env.VECTOR_REQUIRED_CLI_VERSION),
       ),

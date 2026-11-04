@@ -560,7 +560,8 @@ export function createComputerOverlay(options: {
   }
 }
 
-function nativeId(window: BrowserWindow, platform: NodeJS.Platform) {
+/** A window's native id as the helper names it (macOS CGWindowID, Windows HWND); throws when none is known. */
+export function nativeId(window: BrowserWindow, platform: NodeJS.Platform) {
   if (platform === "darwin") {
     // getNativeWindowHandle() is an NSView*, not the CGWindowID ScreenCaptureKit excludes.
     const id = /^window:([1-9]\d*):/.exec(window.getMediaSourceId())?.[1]

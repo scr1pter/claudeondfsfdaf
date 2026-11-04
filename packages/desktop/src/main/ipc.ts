@@ -1,6 +1,7 @@
 import { initializeVectorAccount, vectorAccount } from "./vector-account-runtime"
 import { isComputerOverlay } from "./computer-overlay-registry"
 import { registerComputerOverlayIpc } from "./computer-overlay-ipc"
+import { registerComputerIpc } from "./computer-ipc"
 import { execFile } from "node:child_process"
 import { realpath, stat } from "node:fs/promises"
 import { basename, join } from "node:path"
@@ -259,6 +260,7 @@ export function registerIpcHandlers(deps: Deps) {
     handle: (channel, callback) => ipcMain.handle(channel, callback),
     on: (channel, callback) => ipcMain.on(channel, callback),
   })
+  registerComputerIpc(handle, on, { assert: assertTrustedRenderer })
   initializeVectorAccount(deps.awaitInitialization)
   // Pull requests, reviews and commits Vector makes are checked against the owner's memory by the engine first.
   usePostingEngine(deps.awaitInitialization)

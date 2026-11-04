@@ -4,6 +4,8 @@ interface ImportMetaEnv {
 }
 
 declare const VECTOR_COMPUTER_RESET_VERIFIED: boolean
+/** Per-architecture SHA-256 of the packaged Windows helper, compiled in by the release build (C3). */
+declare const VECTOR_COMPUTER_HELPER_SHA256: Readonly<Record<string, string>>
 
 interface ImportMeta {
   readonly env: ImportMetaEnv
