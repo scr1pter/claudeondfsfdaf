@@ -818,6 +818,8 @@ export type ElectronAPI = {
   computer: ComputerDesktopAPI
   /** A Hands notification was clicked: open this conversation (an app-relative path). */
   onComputerOpen: (cb: (href: string) => void) => () => void
+  /** The built-in engine deleted computer screenshots; the app decodes the selection and refreshes its history (D23). */
+  onComputerScreenshotsRemoved: (cb: (removal: unknown) => void) => () => void
 
   openDirectoryPicker: (opts?: {
     multiple?: boolean

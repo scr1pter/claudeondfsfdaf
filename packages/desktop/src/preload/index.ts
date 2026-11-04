@@ -180,6 +180,11 @@ const api: ElectronAPI = {
     ipcRenderer.on("computer-open-session", handler)
     return () => ipcRenderer.removeListener("computer-open-session", handler)
   },
+  onComputerScreenshotsRemoved: (cb) => {
+    const handler = (_: unknown, removal: unknown) => cb(removal)
+    ipcRenderer.on("computer-screenshots-removed", handler)
+    return () => ipcRenderer.removeListener("computer-screenshots-removed", handler)
+  },
 
   openDirectoryPicker: (opts) => ipcRenderer.invoke("open-directory-picker", opts),
   openFilePicker: (opts) => ipcRenderer.invoke("open-file-picker", opts),

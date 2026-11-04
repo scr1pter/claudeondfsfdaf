@@ -16,12 +16,13 @@ import { createComputerExecutor } from "./computer-executor"
 import { createComputerFrames } from "./computer-frames"
 import { createComputerGrants } from "./computer-grants"
 import { ComputerHelper, HelperUnavailableError } from "./computer-helper"
-import { broadcastComputerState, type ComputerIpcService } from "./computer-ipc"
+import { broadcastComputerState, broadcastScreenshotsRemoved, type ComputerIpcService } from "./computer-ipc"
 import { createComputerNotify, type ComputerNotification, type ComputerNotifyTarget } from "./computer-notify"
 import { createComputerOverlay } from "./computer-overlay"
 import { setComputerOverlayControls } from "./computer-overlay-ipc"
 import { createComputerPermissions } from "./computer-permissions"
 import { createComputerPolicy } from "./computer-policy"
+import { computerPrune, createComputerRetention, type ComputerRetentionTimers } from "./computer-retention"
 import { createComputerSession } from "./computer-session"
 import type { createComputerSettings } from "./computer-settings"
 import { createComputerTakeover, validateChord } from "./computer-takeover"
@@ -30,6 +31,7 @@ import { createComputerKeepAwake, type KeepAwakeEvent, type KeepAwakeSource, typ
 
 type Settings = Awaited<ReturnType<typeof createComputerSettings>>
 type Controller = ReturnType<typeof createComputerSession>
+type Retention = ReturnType<typeof createComputerRetention>
 type Ask = NonNullable<Computer.ComputerState["ask"]>
 type Platform = "darwin" | "win32"
 type Window = Parameters<typeof broadcastComputerState>[1] extends () => readonly (infer W)[] ? W : never
@@ -425,6 +427,8 @@ export type ComputerStartupDeps = {
   front(): void
   trayChanged(): void
   overlayPreload?: string
+  /** Tests replace the screenshot retention timers; the prune request uses the global fetch. */
+  retentionTimers?: ComputerRetentionTimers
   warn(message: string, ...fields: unknown[]): void
 }
 
@@ -447,6 +451,7 @@ function limited(
   settings: Settings | undefined,
   permissions: ReturnType<typeof createComputerPermissions> | undefined,
   helper: ComputerHelper | undefined,
+  retention?: Retention,
 ): ComputerRuntime {
   const backend = platform === "win32" ? "local-windows" : "local-macos"
   const off = () => Promise.reject(new Error(`${Hands.NAME} is not available on this computer.`))
@@ -460,7 +465,10 @@ function limited(
     },
     setPrefs: async (patch) => {
       if (!settings) return off()
-      return settings.setPrefs(checkedPatch(patch, settings.get(), platform))
+      const previous = settings.get()
+      const saved = await settings.setPrefs(checkedPatch(patch, previous, platform))
+      retention?.changed(previous)
+      return saved
     },
     permissions: () => (permissions ? permissions.list() : off()),
     recheck: () => (permissions ? permissions.recheck() : off()),
@@ -471,16 +479,20 @@ function limited(
     removeAllAlways: () => (settings ? settings.removeAllAlways() : off()),
     block: (app) => (settings ? settings.block(app) : off()),
     unblock: (key) => (settings ? settings.unblock(key) : off()),
-    deleteScreenshots: off,
+    // Screenshots taken before Hands became unavailable still follow the schedule, and Delete all still works.
+    deleteScreenshots: () => (retention ? retention.deleteAll() : off()),
   }
   return {
     environment: {},
     service,
     tray: () => undefined,
     trayCommand() {},
-    attach() {},
+    attach(engine) {
+      retention?.attach(computerPrune(engine))
+    },
     engineExit() {},
     stop: async () => {
+      retention?.stop()
       await helper?.close().catch(() => {})
     },
   }
@@ -503,6 +515,15 @@ export async function startComputer(deps: ComputerStartupDeps): Promise<Computer
       return undefined
     })
   if (!settings) return limited("helper_missing", platform, undefined, undefined, undefined)
+  // The child session that took each lease, from the bridge's acquire (the ask mirror and retention read it).
+  const leases = new Map<number, string>()
+  const retention = createComputerRetention({
+    settings,
+    holderSession: (lease) => leases.get(lease),
+    removed: (removal) => broadcastScreenshotsRemoved(removal, deps.windows, deps.trustedUrl),
+    warn: (message, ...fields) => deps.warn(message, ...fields),
+    ...(deps.retentionTimers ? { timers: deps.retentionTimers } : {}),
+  })
   const helper =
     deps.helper ??
     new ComputerHelper({
@@ -526,7 +547,7 @@ export async function startComputer(deps: ComputerStartupDeps): Promise<Computer
     elevated: () => elevated,
   })
   const availability = computerAvailability({ platform, release: deps.release, elevated, policy: policy.get() })
-  if (!availability.available) return limited(availability.reason, platform, settings, permissions, helper)
+  if (!availability.available) return limited(availability.reason, platform, settings, permissions, helper, retention)
 
   const kind = platform === "win32" ? "local-windows" : "local-macos"
   const backend = new NativeHelperBackend(helper, kind)
@@ -535,7 +556,6 @@ export async function startComputer(deps: ComputerStartupDeps): Promise<Computer
     connected: false,
     closed: false,
   }
-  const leases = new Map<number, string>()
   const grants = createComputerGrants({
     settings,
     rootOf: (sessionID, directory) =>
@@ -643,6 +663,7 @@ export async function startComputer(deps: ComputerStartupDeps): Promise<Computer
   const unsubscribe = controller.subscribe((state) => {
     notify.state(state)
     mirror.state(state)
+    retention.observe(state)
     changed()
   })
   const power = POWER_EVENTS.map((name) => {
@@ -756,11 +777,12 @@ export async function startComputer(deps: ComputerStartupDeps): Promise<Computer
     unsubscribe()
     for (const off of power) off()
     setComputerOverlayControls(undefined)
-    return limited("helper_missing", platform, settings, permissions, undefined)
+    return limited("helper_missing", platform, settings, permissions, undefined, retention)
   }
 
   function afterSettings(previous: Computer.ResolvedComputerSettings) {
     takeover.refresh()
+    retention.changed(previous)
     changed()
     const next = settings!.get()
     if (enabled(previous) && !enabled(next) && controller.state().holder) void controller.stop().catch(() => {})
@@ -845,8 +867,7 @@ export async function startComputer(deps: ComputerStartupDeps): Promise<Computer
       await settings.unblock(key)
       changed()
     },
-    // D23 owns retention and Delete all (computer-retention.ts); until it lands the request fails visibly.
-    deleteScreenshots: () => Promise.reject(new Error("Deleting screenshots is not available yet.")),
+    deleteScreenshots: () => retention.deleteAll(),
   }
 
   /**
@@ -906,6 +927,7 @@ export async function startComputer(deps: ComputerStartupDeps): Promise<Computer
       connection.engine = computerEngine(engine)
       connection.abort = new AbortController()
       void events(engine, connection.abort.signal)
+      retention.attach(computerPrune(engine))
       if (enabled(settings.get())) void backend.hello().catch(() => {})
     },
     engineExit() {
@@ -915,6 +937,7 @@ export async function startComputer(deps: ComputerStartupDeps): Promise<Computer
       if (connection.closed) return
       connection.closed = true
       notify.close()
+      retention.stop()
       setComputerOverlayControls(undefined)
       connection.abort?.abort()
       unsubscribe()

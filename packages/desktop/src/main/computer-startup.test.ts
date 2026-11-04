@@ -331,6 +331,82 @@ describe("settings while Hands cannot run", () => {
   })
 })
 
+describe("screenshot retention and Delete all (D23)", () => {
+  const TRUSTED = "vector://renderer/index.html"
+  const idle = {
+    setTimeout: () => 0 as never,
+    clearTimeout() {},
+    setInterval: () => 0 as never,
+    clearInterval() {},
+  }
+  // An engine whose event stream stays open and silent until the runtime stops.
+  const source = {
+    async *events(signal: AbortSignal) {
+      await new Promise((resolve) => signal.addEventListener("abort", resolve, { once: true }))
+    },
+    statuses: async () => ({}),
+    requests: async () => [],
+    drains: async () => [],
+    prompts: async () => [],
+  }
+  function window() {
+    const sent: unknown[][] = []
+    return {
+      sent,
+      isDestroyed: () => false,
+      webContents: { isDestroyed: () => false, getURL: () => TRUSTED, send: (...args: unknown[]) => sent.push(args) },
+    }
+  }
+  async function pruning(run: (requests: { url: string; body: unknown }[]) => Promise<void>) {
+    const requests: { url: string; body: unknown }[] = []
+    const realFetch = globalThis.fetch
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      requests.push({ url: String(input), body: JSON.parse(String(init?.body)) })
+      return Response.json({ removed: 5 })
+    }) as typeof fetch
+    try {
+      await run(requests)
+    } finally {
+      globalThis.fetch = realFetch
+    }
+  }
+
+  test("Delete all reaches the engine's prune route, and Vector's windows hear what went", async () => {
+    const main = window()
+    const f = fixture({ windows: () => [main as never], trustedUrl: (url) => url === TRUSTED, retentionTimers: idle })
+    const runtime = await f.start()
+    // Until the engine connects there is nothing to delete with.
+    await expect(runtime.service.deleteScreenshots()).rejects.toThrow()
+    await pruning(async (requests) => {
+      runtime.attach({ url: "http://127.0.0.1:4096", password: "fixture-password", source })
+      expect(await runtime.service.deleteScreenshots()).toEqual({ removed: 5 })
+      expect(requests).toEqual([{ url: "http://127.0.0.1:4096/computer/screenshots/prune", body: { all: true } }])
+      // A shorter retention saved in Settings applies at once.
+      await runtime.service.setPrefs({ retention: "1d" })
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      expect(requests).toHaveLength(2)
+      expect(Object.keys(requests[1]!.body as object)).toEqual(["before"])
+    })
+    expect(main.sent.filter(([channel]) => channel === "computer-screenshots-removed")).toEqual([
+      ["computer-screenshots-removed", { all: true }],
+      ["computer-screenshots-removed", expect.objectContaining({ before: expect.any(Number) })],
+    ])
+    expect(f.calls.spawns).toBe(0)
+  })
+
+  test("while Hands cannot run, screenshots taken earlier can still be deleted", async () => {
+    const f = fixture({ elevated: async () => true, retentionTimers: idle })
+    const runtime = await f.start()
+    expect(runtime.environment).toEqual({})
+    await pruning(async (requests) => {
+      runtime.attach({ url: "http://127.0.0.1:4096", password: "fixture-password", source })
+      expect(await runtime.service.deleteScreenshots()).toEqual({ removed: 5 })
+      expect(requests.map((request) => request.body)).toEqual([{ all: true }])
+    })
+    expect(f.calls.spawns).toBe(0)
+  })
+})
+
 describe("availability", () => {
   test("macOS 14 (Darwin 23) and Windows build 19041 are the floors", () => {
     const on = { elevated: false, policy: { enabled: true } }

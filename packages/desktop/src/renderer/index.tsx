@@ -199,6 +199,9 @@ const createPlatform = (windowState: DesktopWindowState): Platform => {
     os,
     // Older preloads do not expose this API.
     computer: "computer" in window.api && window.api.computer ? desktopComputer(window.api.computer) : undefined,
+    onComputerScreenshotsRemoved: window.api.onComputerScreenshotsRemoved
+      ? (cb) => window.api.onComputerScreenshotsRemoved(cb)
+      : undefined,
     version: pkg.version,
     windowID: windowState.id,
 

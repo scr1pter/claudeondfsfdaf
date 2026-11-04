@@ -1,6 +1,7 @@
 import { Option, Schema } from "effect"
 import { Computer } from "@vectordevai/schema/computer"
 import { Hands } from "@vectordevai/schema/hands"
+import { ComputerScreenshotHistory } from "@vectordevai/app/computer/screenshot-history"
 import { isComputerOverlay } from "./computer-overlay-registry"
 import { settingsToWire, type ComputerSettingsWire } from "./computer-wire"
 
@@ -116,9 +117,9 @@ type Window = {
   webContents: { isDestroyed(): boolean; getURL(): string; send(channel: string, value: unknown): void }
 }
 
-/** Sends Hands state to Vector's own trusted renderer windows only: never an overlay or any other page. */
-export function broadcastComputerState(
-  state: Computer.ComputerState,
+function broadcast(
+  channel: string,
+  value: unknown,
   windows: () => readonly Window[],
   trustedUrl: (url?: string) => boolean,
 ) {
@@ -126,9 +127,30 @@ export function broadcastComputerState(
     try {
       if (window.isDestroyed() || isComputerOverlay(window) || window.webContents.isDestroyed()) continue
       if (!trustedUrl(window.webContents.getURL())) continue
-      window.webContents.send(STATE_CHANNEL, state)
+      window.webContents.send(channel, value)
     } catch {
-      // A window closing mid-broadcast misses one state; it reads state() when it next opens.
+      // A window closing mid-broadcast misses one message; it reads current state when it next opens.
     }
   }
+}
+
+/** Sends Hands state to Vector's own trusted renderer windows only: never an overlay or any other page. */
+export function broadcastComputerState(
+  state: Computer.ComputerState,
+  windows: () => readonly Window[],
+  trustedUrl: (url?: string) => boolean,
+) {
+  broadcast(STATE_CHANNEL, state, windows, trustedUrl)
+}
+
+/**
+ * Tells Vector's own trusted renderer windows which screenshots the engine deleted, so each refreshes the history it
+ * holds (D23). It carries only the deletion's selection, never a screenshot, and never reaches an overlay.
+ */
+export function broadcastScreenshotsRemoved(
+  removal: ComputerScreenshotHistory.Removal,
+  windows: () => readonly Window[],
+  trustedUrl: (url?: string) => boolean,
+) {
+  broadcast(ComputerScreenshotHistory.CHANNEL, removal, windows, trustedUrl)
 }

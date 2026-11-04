@@ -1,5 +1,6 @@
 import { afterAll, expect, mock, test } from "bun:test"
 import { Computer } from "@vectordevai/schema/computer"
+import { ComputerScreenshotHistory } from "@vectordevai/app/computer/screenshot-history"
 import type { ElectronAPI } from "../preload/types"
 
 // The main window's preload, with Electron replaced: it must name exactly section 2.9's channels.
@@ -89,4 +90,15 @@ test("a notification click arrives as an app path on computer-open-session", () 
   stop()
   expect(seen).toEqual(["/abc/session/ses_a"])
   expect(listeners.get("computer-open-session")?.size).toBe(0)
+})
+
+test("a screenshot deletion arrives on its own channel, outside window.api.computer (D23)", () => {
+  const seen: unknown[] = []
+  const stop = state.api!.onComputerScreenshotsRemoved((value) => seen.push(value))
+  for (const listener of listeners.get(ComputerScreenshotHistory.CHANNEL) ?? []) listener({}, { all: true })
+  stop()
+  for (const listener of listeners.get(ComputerScreenshotHistory.CHANNEL) ?? []) listener({}, { before: 1 })
+  expect(seen).toEqual([{ all: true }])
+  expect(listeners.get(ComputerScreenshotHistory.CHANNEL)?.size).toBe(0)
+  expect(Object.keys(state.api!.computer)).not.toContain("onComputerScreenshotsRemoved")
 })

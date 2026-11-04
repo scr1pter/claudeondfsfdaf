@@ -3,6 +3,7 @@ import { Computer } from "@vectordevai/schema/computer"
 import { Hands } from "@vectordevai/schema/hands"
 import {
   broadcastComputerState,
+  broadcastScreenshotsRemoved,
   registerComputerIpc,
   setComputerService,
   type ComputerIpcService,
@@ -223,6 +224,14 @@ describe("computer state broadcast", () => {
       (url) => url === TRUSTED,
     )
     expect(main.sent).toEqual([["computer-state-changed", state]])
+    for (const item of [overlay, other, closed, gone]) expect(item.sent).toEqual([])
+    // D23: a deletion's selection takes the same path, so only Vector's own windows refresh their history.
+    broadcastScreenshotsRemoved(
+      { before: 5, sessionID: "ses_a" },
+      () => [main, overlay, other, closed, gone],
+      (url) => url === TRUSTED,
+    )
+    expect(main.sent.at(-1)).toEqual(["computer-screenshots-removed", { before: 5, sessionID: "ses_a" }])
     for (const item of [overlay, other, closed, gone]) expect(item.sent).toEqual([])
   })
 })

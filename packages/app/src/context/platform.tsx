@@ -78,6 +78,12 @@ type PlatformBase = {
   /** Desktop app control; absent in web builds. Linux reports supported: false. */
   computer?: Computer.ComputerPlatform
 
+  /**
+   * Desktop only: the built-in engine deleted computer screenshots (retention or Delete all). The value is unchecked
+   * here; the listener decodes it with ComputerScreenshotHistory.decode.
+   */
+  onComputerScreenshotsRemoved?(cb: (removal: unknown) => void): () => void
+
   /** Saved remote-server passwords in the OS keychain (desktop only); set resolves false when none is available. */
   serverCredentials?: {
     get: (url: string) => Promise<{ username?: string; password: string } | null>
