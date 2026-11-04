@@ -2,8 +2,9 @@ import { afterAll, describe, expect, test } from "bun:test"
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
+import { Ledger, type Limits } from "./budget"
 import { gitEnv, loadManifest, type Manifest } from "./dataset"
-import { ADAPTERS, main, prepareCheckout, replayPlan } from "./replay"
+import { ADAPTERS, admitReplay, main, prepareCheckout, replayBudget, replayCharge, replayPlan } from "./replay"
 
 // The replay driver without any model or network: the plan it builds from the seed manifest, and checkouts prepared
 // from a local repository whose later history holds the fix.
@@ -127,5 +128,76 @@ describe("replay checkouts", () => {
         directory: join(root, "b"),
       }),
     ).toEqual([`not full commit SHAs: ${mirror.head.slice(0, 7)}`])
+  })
+})
+
+describe("replay admission", () => {
+  // $10 total, $1 reserve, $3 per case: three cases fit.
+  const limits: Limits = { totalUsd: 10, caseUsd: 3, reserveUsd: 1 }
+  const priced = { id: "test/review", costKind: "priced" as const, price: { input: 3, output: 15 } }
+
+  test("reserves the case's whole bound and hands it to Review.run as the review's cap", () => {
+    const ledger = Ledger.open({ limits })
+    const first = admitReplay(ledger, { id: "case-a", models: [priced] })
+    if (!first.admitted) throw new Error(first.detail)
+    expect(first.config).toEqual({ maxCostUsd: 3 })
+    expect(first.ticket.reservedUsd).toBe(3)
+    expect(ledger.summary().outstandingUsd).toBe(3)
+    admitReplay(ledger, { id: "case-b", models: [priced] })
+    admitReplay(ledger, { id: "case-c", models: [priced] })
+    expect(admitReplay(ledger, { id: "case-d", models: [priced] })).toMatchObject({ admitted: false, reason: "budget" })
+  })
+
+  test("refuses a model without a price, and the ledger stops admitting", () => {
+    const ledger = Ledger.open({ limits })
+    const free = { id: "test/free", costKind: "free" as const }
+    expect(admitReplay(ledger, { id: "case-a", models: [priced, free] })).toMatchObject({
+      admitted: false,
+      reason: "unpriced",
+    })
+    expect(admitReplay(ledger, { id: "case-b", models: [priced] })).toMatchObject({ admitted: false, reason: "halted" })
+  })
+
+  test("settles at the attempts' reported cost and keeps unsettled or incomplete attempts as uncertain", () => {
+    const attempts = [
+      { admitted: true, estimateUsd: 0.4, settled: { costUsd: 0.3, complete: true } },
+      { admitted: true, estimateUsd: 0.5, settled: { costUsd: 0.1, complete: false } },
+      { admitted: true, estimateUsd: 0.2 },
+      { admitted: false, estimateUsd: 0.9 },
+    ]
+    const charge = replayCharge(attempts)
+    expect(charge.basis).toBe("replay")
+    expect(charge.costUsd).toBeCloseTo(0.4)
+    expect(charge.uncertainUsd).toBeCloseTo(0.6)
+
+    const ledger = Ledger.open({ limits })
+    const replay = admitReplay(ledger, { id: "case-a", models: [priced] })
+    if (!replay.admitted) throw new Error(replay.detail)
+    replay.settle({ attempts })
+    const summary = ledger.summary()
+    expect(summary.spentUsd).toBeCloseTo(0.4)
+    expect(summary.uncertainUsd).toBeCloseTo(0.6)
+    expect(summary.outstandingUsd).toBe(0)
+  })
+
+  test("a replay that produced no artifact keeps its whole bound, and a replay over its cap stops the ledger", () => {
+    const ledger = Ledger.open({ limits })
+    const failed = admitReplay(ledger, { id: "case-a", models: [priced] })
+    if (!failed.admitted) throw new Error(failed.detail)
+    expect(failed.settle()).toMatchObject({ uncertainUsd: 3, basis: "none" })
+    const over = admitReplay(ledger, { id: "case-b", models: [priced] })
+    if (!over.admitted) throw new Error(over.detail)
+    over.settle({ attempts: [{ admitted: true, estimateUsd: 2.5, settled: { costUsd: 3.4, complete: true } }] })
+    expect(ledger.summary().overshootUsd).toBeCloseTo(0.4)
+    expect(admitReplay(ledger, { id: "case-c", models: [priced] })).toMatchObject({ admitted: false, reason: "halted" })
+  })
+
+  test("the dry run says how many cases a budget could admit", async () => {
+    expect(replayBudget(4, limits)).toMatchObject({ worstUsd: 12, admissibleUsd: 9, fit: 3 })
+    const result = await main(["--budget-usd", "50", "--case-budget-usd", "0.75"])
+    expect(result.code).toBe(0)
+    expect(result.stdout).toContain("Each case reserves its $0.7500 bound before it starts")
+    expect((await main(["--budget-usd", "50"])).code).toBe(2)
+    expect((await main(["--budget-usd", "1", "--case-budget-usd", "5"])).code).toBe(2)
   })
 })

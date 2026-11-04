@@ -3,7 +3,18 @@ import { createHash } from "node:crypto"
 import { existsSync, statSync } from "node:fs"
 import { join, resolve } from "node:path"
 import { parseArgs } from "node:util"
-import type { ReplayCase } from "../../packages/engine/src/review/eval"
+import type { AttemptRecord, ModelRecord, ReplayCase } from "../../packages/engine/src/review/eval"
+import {
+  defaultLimits,
+  limitProblems,
+  money,
+  type Ledger,
+  type Limits,
+  type Refusal,
+  type Settlement,
+  type Ticket,
+  type Usage,
+} from "./budget"
 import {
   caseView,
   gitEnv,
@@ -21,8 +32,8 @@ import {
 // replay, ReviewEval.replay in packages/engine/src/review/eval.ts, from the label-free case view alone, and prepares
 // each case's checkout from a local mirror: the candidate head and its history only, so neither the fix nor anything
 // after the candidate is in the repository the reviewer reads, with the base checked out, as CI leaves an untrusted
-// change. It sends no model request. A replay that spends money waits for the eval budget ledger and the protected
-// vectorscope-eval environment (D5, D7); until then this driver is a dry run.
+// change. It sends no model request: a replay that spends money is admitted by the eval budget ledger (admitReplay
+// below, VS-03) and runs only in the protected vectorscope-eval environment (D5, D7), and nothing can start one yet.
 
 const REPO_ROOT = join(import.meta.dir, "..", "..")
 const FULL_SHA = /^[0-9a-f]{40}$/
@@ -76,6 +87,74 @@ function planned(item: Case, mirror: string | undefined): PlannedReplay {
   }
 }
 
+// A replay's admission. Review.run admits each of its provider attempts itself, retries and the finalizer included,
+// against the review's maxCostUsd, as long as its models are priced. So the eval ledger reserves the case's whole bound
+// before a replay starts and hands Review.run that bound as its cap: every attempt is admitted against money the
+// ledger has set aside. A model without a price cannot be bounded, so it is refused and the ledger stops admitting.
+export function admitReplay(
+  ledger: Ledger,
+  input: { id: string; repetition?: number; models: readonly Pick<ModelRecord, "id" | "costKind" | "price">[] },
+):
+  | {
+      admitted: true
+      config: { maxCostUsd: number } // the case's cap, applied over the base's review.json
+      ticket: Ticket
+      // Settles the case from its artifact's attempts; with no artifact (the replay failed), the whole bound is kept.
+      settle(artifact?: { attempts: readonly ReplayAttempt[] }): Settlement
+    }
+  | { admitted: false; reason: Refusal; detail: string } {
+  const priced =
+    input.models.length > 0 && input.models.every((model) => model.costKind === "priced" && model.price !== undefined)
+  const model = input.models.map((item) => item.id).join(" + ")
+  const admission = ledger.admit({
+    case: `${model} ${input.id}#${input.repetition ?? 1}`,
+    kind: "provider",
+    model,
+    note: "replay",
+    estimateUsd: priced ? ledger.limits.caseUsd : Number.NaN,
+  })
+  if (!admission.admitted) return admission
+  const ticket = admission.ticket
+  return {
+    admitted: true,
+    config: { maxCostUsd: ledger.limits.caseUsd },
+    ticket,
+    settle: (artifact) => (artifact ? ticket.settle(replayCharge(artifact.attempts)) : ticket.settle()),
+  }
+}
+
+type ReplayAttempt = Pick<AttemptRecord, "admitted" | "estimateUsd" | "settled">
+
+// What a replay cost, from the attempts its artifact lists: each settled attempt at its reported cost, and the estimate
+// of an admitted attempt that never settled, or settled without complete usage, as uncertain spend. A refused attempt
+// was never sent.
+export function replayCharge(attempts: readonly ReplayAttempt[]): Usage {
+  let costUsd = 0
+  let uncertainUsd = 0
+  for (const attempt of attempts) {
+    if (!attempt.admitted) continue
+    if (!attempt.settled) {
+      uncertainUsd += attempt.estimateUsd
+      continue
+    }
+    costUsd += attempt.settled.costUsd
+    if (!attempt.settled.complete) uncertainUsd += Math.max(0, attempt.estimateUsd - attempt.settled.costUsd)
+  }
+  return { costUsd, uncertainUsd, basis: "replay" }
+}
+
+// The most a split's replays could reserve: each case reserves its whole bound before it starts.
+export function replayBudget(cases: number, limits: Limits) {
+  const admissible = limits.totalUsd - limits.reserveUsd
+  const fit = Math.min(cases, Math.floor((admissible + 1e-9) / limits.caseUsd))
+  return {
+    worstUsd: cases * limits.caseUsd,
+    admissibleUsd: admissible,
+    fit,
+    text: `Budget $${money(limits.totalUsd, 2)} admits $${money(admissible)} after its $${money(limits.reserveUsd)} reserve. Each case reserves its $${money(limits.caseUsd)} bound before it starts, so ${fit} of ${cases} case(s) fit (at most $${money(cases * limits.caseUsd)} for all).`,
+  }
+}
+
 // A new repository at `directory` holding the candidate head and its history, fetched from a local mirror with git
 // alone, and the base checked out. Nothing after the head is fetched, so the fix stays out. Returns what went wrong;
 // empty when the checkout is ready.
@@ -110,6 +189,8 @@ Plans a replay of dataset cases through the production review pipeline. Sends no
   --mirrors <dir>     Local clones at <dir>/<owner>/<name>[.git]
   --adapter <name>    engine (default) or desktop
   --prepare <dir>     Also prepare each mirrored case's checkout at <dir>/<case id>, with local git only
+  --budget-usd <usd>  With --case-budget-usd, show how many cases the budget could admit
+  --case-budget-usd <usd>
   --help              Print this message
 `
 
@@ -119,6 +200,8 @@ const OPTIONS = {
   mirrors: { type: "string" },
   adapter: { type: "string" },
   prepare: { type: "string" },
+  "budget-usd": { type: "string" },
+  "case-budget-usd": { type: "string" },
   help: { type: "boolean" },
 } as const
 
@@ -140,6 +223,13 @@ export async function main(argv: string[]): Promise<{ code: number; stdout: stri
   if (!SPLITS.includes(split as Split)) return { code: 2, stdout: "", stderr: `Unknown split ${split}.\n\n${USAGE}` }
   if (!Object.hasOwn(ADAPTERS, adapter))
     return { code: 2, stdout: "", stderr: `Unknown adapter ${adapter}.\n\n${USAGE}` }
+  const budgetText = text("budget-usd")
+  const caseText = text("case-budget-usd")
+  if ((budgetText === undefined) !== (caseText === undefined))
+    return { code: 2, stdout: "", stderr: `--budget-usd and --case-budget-usd go together.\n\n${USAGE}` }
+  const limits = budgetText && caseText ? defaultLimits(Number(budgetText), Number(caseText)) : undefined
+  const limitIssues = limits ? limitProblems(limits) : []
+  if (limitIssues.length) return { code: 2, stdout: "", stderr: `Budget: ${limitIssues.join("; ")}.\n` }
   if (!ADAPTERS[adapter as Adapter].ready)
     return {
       code: 2,
@@ -187,7 +277,7 @@ export async function main(argv: string[]): Promise<{ code: number; stdout: stri
   const vector = Bun.spawnSync(["git", "-C", REPO_ROOT, "rev-parse", "HEAD"], { env: gitEnv(), stdout: "pipe" })
   const rows = prepared.map((item) => [
     item.entry.id,
-    item.entry.case.repository?.url.replace("https://github.com/", "") ?? "",
+    item.entry.case.repository?.url?.replace("https://github.com/", "") ?? "",
     item.entry.case.base.slice(0, 12),
     item.entry.case.head.slice(0, 12),
     !item.entry.mirror ? "no mirror" : !prepare ? "mirror" : item.problems.length ? "failed" : "prepared",
@@ -200,8 +290,9 @@ export async function main(argv: string[]): Promise<{ code: number; stdout: stri
     `Vector ${vector.exitCode === 0 ? vector.stdout.toString().trim() : "unknown"}`,
     `Adapter ${adapter}: ${ADAPTERS[adapter as Adapter].detail}`,
     "Each case replays untrusted on a writer's request, with its base checked out and its change in the prompt.",
+    ...(limits ? [replayBudget(plan.length, limits).text] : []),
     "",
-    "Dry run: no model request was sent. A replay that spends money needs the eval budget ledger and the protected vectorscope-eval environment (D5, D7).",
+    "Dry run: no model request was sent. A replay that spends money is admitted by the eval budget ledger and runs only in the protected vectorscope-eval environment (D5, D7).",
   ].join("\n")
   if (failures.length)
     return {

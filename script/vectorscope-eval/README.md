@@ -7,31 +7,40 @@ you change the review prompt or pick a default model, and compare models in one
 sitting.
 
 ```
-bun script/vectorscope-eval/run.ts --dry-run
+bun script/vectorscope-eval/run.ts                     # dry run: validate the fixtures, send nothing
 bun script/vectorscope-eval/run.ts --list
-bun script/vectorscope-eval/run.ts --model anthropic/claude-sonnet-4.5
-bun script/vectorscope-eval/run.ts --model openai/gpt-5 --fixture order-search-sql,webhook-editor-access --repeat 3
-bun script/vectorscope-eval/run.ts --model my-model --base-url http://localhost:8080/v1/chat/completions --api-key-env LOCAL_KEY
+bun script/vectorscope-eval/run.ts --model anthropic/claude-sonnet-4.5 --price 3:15 --max-tokens 16000
+bun script/vectorscope-eval/run.ts --model anthropic/claude-sonnet-4.5 --price 3:15 --max-tokens 16000 \
+  --budget-usd 5 --case-budget-usd 0.75 --out /tmp/sonnet.json
+bun script/vectorscope-eval/run.ts --model my-model --price 0:0 --max-tokens 4000 --budget-usd 1 --case-budget-usd 0.5 \
+  --base-url http://localhost:8080/v1/chat/completions --api-key-env LOCAL_KEY
 ```
 
-To run it without a local key, add the repository secret `OPENROUTER_API_KEY` and start the
-**vectorscope eval** workflow from the Actions tab with a comma-separated list of models. Each model's
-table lands in the run summary, and the JSON reports are kept as the run's artifact for 30 days.
+It is a dry run unless it is given a budget. The dry run validates the fixtures
+and prints prompt sizes, and with `--model`, `--price` and `--max-tokens` it
+also estimates the cost. Requests are sent only with `--budget-usd` and
+`--case-budget-usd`, and every one is admitted by the budget ledger first (see
+"Budget" below). The **vectorscope eval** workflow runs it from the Actions tab
+(see "Budgeted CI runs").
 
-| Flag                   | Meaning                                                                                |
-| ---------------------- | -------------------------------------------------------------------------------------- |
-| `--model <id>`         | Model id sent to the endpoint (required unless `--dry-run` or `--list`)                |
-| `--fixture <names>`    | Comma-separated fixture names (default: all)                                           |
-| `--repeat <n>`         | Run each fixture 1–20 times to expose run-to-run variance (default 1)                  |
-| `--base-url <url>`     | OpenAI-compatible chat completions URL (default OpenRouter's)                          |
-| `--api-key-env <name>` | Environment variable holding the API key (default `OPENROUTER_API_KEY`)                |
-| `--slack <lines>`      | How far a finding may be from a planted bug and still match (default 3)                |
-| `--count-nits`         | Score `nit` findings too; by default they are ignored                                  |
-| `--max-tokens <n>`     | `max_tokens` for each request (default: the provider's)                                |
-| `--timeout <sec>`      | Per-request timeout (default 300)                                                      |
-| `--out <path>`         | Also write a JSON report with every decoded report and score; must be outside the repo |
-| `--dry-run`            | Validate the fixtures and print prompt sizes. Sends nothing and needs no key           |
-| `--list`               | Print the fixtures and their planted bugs                                              |
+| Flag                      | Meaning                                                                                      |
+| ------------------------- | -------------------------------------------------------------------------------------------- |
+| `--model <id>`            | Model id sent to the endpoint (needed to send or estimate)                                   |
+| `--fixture <names>`       | Comma-separated fixture names (default: all)                                                 |
+| `--repeat <n>`            | Run each fixture 1–20 times to expose run-to-run variance (default 1)                        |
+| `--budget-usd <usd>`      | Total budget for the run. Sends requests; a tenth is held in reserve                         |
+| `--case-budget-usd <usd>` | Bound for one case (one fixture reviewed once, its retry included); needed with a budget     |
+| `--price <in>:<out>`      | USD per million input and output tokens, for estimates; needed with a budget                 |
+| `--max-tokens <n>`        | `max_tokens` for each request; needed with a budget (otherwise the provider's default)       |
+| `--ledger <path>`         | Budget journal, outside the repo; runs given the same journal and budget share it            |
+| `--base-url <url>`        | OpenAI-compatible chat completions URL (default OpenRouter's)                                |
+| `--api-key-env <name>`    | Environment variable holding the API key (default `OPENROUTER_API_KEY`; CI uses its own key) |
+| `--slack <lines>`         | How far a finding may be from a planted bug and still match (default 3)                      |
+| `--count-nits`            | Score `nit` findings too; by default they are ignored                                        |
+| `--timeout <sec>`         | Per-request timeout (default 300)                                                            |
+| `--out <path>`            | Also write a JSON report with every decoded report, score and ledger entry; outside the repo |
+| `--dry-run`               | Never send, even with a budget. Needs no key                                                 |
+| `--list`                  | Print the fixtures and their planted bugs                                                    |
 
 The API key is read from the environment and only ever sent as the
 `Authorization` header. It is never printed; provider errors that quote it are
@@ -49,7 +58,8 @@ marked, whenever that is no larger than its diff and its text together.
 It sends that prompt to an OpenAI-compatible chat completions endpoint, asking
 for `response_format: json_schema` with `REVIEW_REPORT_JSON_SCHEMA`. If the
 provider rejects the format with a 4xx that names it, the request is repeated
-once without it; any other error is not retried. The answer is decoded with the
+once without it, after its own admission by the budget ledger; any other error
+is not retried. The answer is decoded with the
 app's own `decodeReport` and scored with `scoreReview`
 (`packages/core/src/review/eval.ts`).
 
@@ -113,7 +123,8 @@ so it is not overlooked.
 
 ## What it costs
 
-`--dry-run` prints the prompt size of every fixture. The whole set is about
+The dry run prints the prompt size of every fixture, and with `--model`,
+`--price` and `--max-tokens` the most each request could cost (see "Budget"). The whole set is about
 26,000 input tokens per repetition (2,400–2,900 per fixture, estimated as
 characters / 4). Output is usually a few hundred to a few thousand tokens per
 fixture, and more for models that reason before answering. A full run is
@@ -125,7 +136,103 @@ reports the cost of each request (`usage.cost`, requested with `usage: {
 include: true }`). Other endpoints usually report tokens but not cost, and then
 the cost is shown as **unknown**, never as $0; the total is shown only when
 every run reported one. A provider that rejects `response_format` is asked
-twice per fixture; the rejected request is normally not billed.
+twice per fixture; the rejected request is normally not billed, but the ledger
+keeps its reservation because nothing proves that.
+
+## Budget
+
+`budget.ts` is the eval's budget ledger (Phase 0 "Budget, privacy and release
+gate"). One coordinator admits every paid attempt, a provider request or a
+judge call, retries included, before it is sent:
+
+- **Limits.** An owner-set total (`--budget-usd`) and a per-case bound
+  (`--case-budget-usd`), both finite and positive. A case is one fixture or
+  dataset case reviewed once by one model, with its retry and any judge calls.
+  A tenth of the total is held in reserve and never admitted, to absorb usage
+  above the estimates.
+- **Reservations.** Each attempt reserves its estimate: its whole request body
+  counted as input at two characters per token (code and English run at three
+  to four), plus every output token `max_tokens` allows, at the `--price` given.
+  An attempt is refused when its case or the run has no room for it. Admission
+  is synchronous, so parallel attempts never share one remainder.
+- **Settlement.** The provider's reported cost replaces the reservation; with
+  tokens but no cost, the tokens are priced at `--price`. An attempt with no
+  usable usage (an HTTP error, a timeout, a cancelled request in flight) keeps
+  its whole reservation as uncertain spend. Missing usage is never zero.
+- **Stopping.** New work stops when a model has no price that bounds an
+  estimate, when reported usage cannot be read, when a settled cost overshoots
+  its reservation, or when the run is cancelled (Ctrl-C, or the workflow being
+  cancelled). Requests the budget did not admit are reported as **not sent**
+  and stay in the coverage counts.
+- **Journal.** With `--ledger`, every admission is written to an append-only
+  journal before its request leaves, so runs that share one journal share one
+  budget, and an attempt admitted by a process that was killed still counts,
+  at its whole reservation. The journal is locked while a run holds it. A
+  journal whose run was cancelled or stopped stays that way: start a new one
+  for a new run.
+
+The summary shows what was spent as reported, what is uncertain, the
+overshoot above the reservations and anything over the total. Reservations
+are estimates, not a billing cap: reported usage can exceed them, so the
+provider-side spend limit on the eval's own key is the hard boundary.
+
+## Budgeted CI runs
+
+The **vectorscope eval** workflow (`.github/workflows/vectorscope-eval.yml`) is
+started by hand from the Actions tab and nothing else: no pull request, push or
+schedule triggers it. Its `mode` defaults to `dry-run`, which validates the
+inputs, the fixtures and the dataset manifest, estimates the worst case for
+each model and sends nothing. The budget inputs default to empty, so a paid run
+needs every amount typed in.
+
+| Input             | Meaning                                                                                  |
+| ----------------- | ---------------------------------------------------------------------------------------- |
+| `mode`            | `dry-run` (default) or `paid`                                                            |
+| `models`          | `model=input:output` entries, USD per million tokens: `anthropic/claude-sonnet-4.5=3:15` |
+| `budget_usd`      | Total for the whole run, every model and retry included (needed for `paid`)              |
+| `case_budget_usd` | Bound for one fixture reviewed once by one model (needed for `paid`)                     |
+| `max_tokens`      | Output token limit for each request (default 16000)                                      |
+| `repeat`          | Runs per fixture, 1–5                                                                    |
+| `fixtures`        | Comma-separated fixture names, or empty for all                                          |
+
+The inputs reach `ci.ts` as environment variables and are validated there; no
+input is written into a shell command, and `run.ts` is started with an argument
+array. A paid run's prices must be above zero, so its estimates bound spend. No
+input chooses the endpoint the key is sent to.
+
+A paid run waits for approval in the protected `vectorscope-eval` environment.
+Its step alone receives the environment's `VECTORSCOPE_EVAL_API_KEY`, and the
+models run one after another against one ledger journal, so the budget covers
+them all; once the ledger stops admitting, no further model starts. Model
+output is printed with workflow commands switched off around it. A final step
+summarises the ledger even when the run failed, timed out or was cancelled, and
+the reports and the journal are kept as the run's artifact for 30 days. A
+failed run is never retried automatically.
+
+The approved pilot (D5) is one paid run of $50 in total and at most $0.75 per
+case, one repetition, on the development split only, with the current default
+review model and one cheaper model from the catalog (D6). The held-out run gets
+its own budget after the owner has read the pilot's report.
+
+### Owner setup (D7)
+
+Only the owner can do this, and no paid run is possible until it is done:
+
+1. Create a provider key used for nothing else. Set its provider-side spend
+   limit to the approved budget ($50 for the pilot). This limit is the hard
+   boundary; the ledger's reservations are estimates.
+2. In the repository settings, create the environment `vectorscope-eval`. Add
+   the owner as its only required reviewer, and limit its deployment branches
+   to `main`. Leave "prevent self-review" off if the owner both starts and
+   approves the run.
+3. Add the key as the environment secret `VECTORSCOPE_EVAL_API_KEY`. Do not add
+   it as a repository or organization secret: a secret there would reach the
+   job even if the environment lost its protection. Do not use
+   `OPENROUTER_API_KEY` for this; that name is not permission to run the eval.
+
+If the environment does not exist, GitHub creates an unprotected one the first
+time a paid run asks for it; that environment has no secret, so the run fails
+before anything is sent. Check the environment before the first paid run.
 
 ## Limits
 
@@ -211,8 +318,8 @@ check.
 
 A bug case's fix and labels are hidden ground truth. A reviewer is given only
 `caseView(case)`: the repository and the candidate's base and head. The
-production replay below plans runs from that view alone; the budgeted manual CI
-run and causal judging are later work packages.
+production replay below plans runs from that view alone, and the budget ledger
+admits what a paid replay may spend; causal judging is a later work package.
 
 `fixtures.test.ts` covers the dataset with local fixture repositories (missing
 objects, wrong ancestry, post-fix leakage, a reverse diff, split grouping and
@@ -265,9 +372,17 @@ bun script/vectorscope-eval/replay.ts --mirrors <dir> --prepare <out>
   not there, with the base checked out. Held-out cases are planned only from a
   frozen manifest.
 
-Nothing here sends a model request. A replay that spends money needs the eval
-budget ledger and the protected `vectorscope-eval` environment (D5, D7), so the
-driver stops at the plan. The desktop runner
+Nothing here sends a model request. A replay that spends money is admitted by
+the eval budget ledger: `admitReplay` reserves the case's whole bound before
+the replay starts and passes it to `Review.run` as the review's cap, so each
+provider attempt the review admits, retries and the finalizer included, is
+covered by money the ledger set aside. Afterwards the case settles at its
+artifact's reported costs, with unsettled or incomplete attempts kept at their
+estimates, and a model without a price is refused. `replay.ts --budget-usd
+<usd> --case-budget-usd <usd>` shows how many cases a budget could admit. No
+engine entry point can start a paid replay yet, and it would run only in the
+protected `vectorscope-eval` environment (D5, D7), so the driver stops at the
+plan. The desktop runner
 (`packages/app/src/features/pull-requests/ai-review.ts`) reviews through an
 injected SDK client that needs a running engine server; it cannot be driven
 headlessly here yet, so `--adapter desktop` reports it unavailable. Its replay
@@ -278,4 +393,14 @@ The replay's tests use the engine's fake model server and real git checkouts:
 ```
 cd packages/engine && bun test test/review/eval.test.ts
 cd script/vectorscope-eval && bun test replay.test.ts
+```
+
+The budget's tests need no provider: the ledger with parallel reservations,
+retries, unknown cost, cancellation, overshoot and its journal; `run.ts` with
+a fake fetch; and the workflow file and its entry point:
+
+```
+cd script/vectorscope-eval && bun test budget.test.ts
+cd script/vectorscope-eval && bun test run.test.ts
+cd script/vectorscope-eval && bun test ci.test.ts
 ```

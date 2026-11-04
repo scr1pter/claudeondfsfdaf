@@ -86,3 +86,65 @@ dated, names its work package, and is committed with the work it explains.
   VS-03 with its admission, rather than shipping new CLI surface now (D14).
 - **`script/vectorscope-eval/replay.test.ts` is new and, like VS-01's tests,
   not run by any workflow yet.**
+
+## 2026-11-03 · VS-03 Budgeted manual CI
+
+- **A new entry point, `ci.ts`.** The row lists the eval driver, the workflow
+  and `budget.ts`. Validating the dispatch inputs without a shell needs a
+  script for the workflow to call, so `script/vectorscope-eval/ci.ts` (`plan`,
+  `paid`, `report`) reads the inputs from environment variables, validates
+  them and starts `run.ts` with an argument array. No input chooses the
+  endpoint the key goes to, and the child process gets only the eval key and a
+  path.
+- **`run.ts` is a dry run by default.** Phase 0 asks for a no-network dry run
+  by default, and `run.ts` used to send whenever `--model` was given. It now
+  sends only with `--budget-usd` and `--case-budget-usd`, which also need
+  `--price` and `--max-tokens`, and each request (the retry without a JSON
+  schema included) is admitted by the ledger first. `--dry-run` output with no
+  price is byte-identical to before, and a test pins the request bodies to the
+  ones sent before. No reviewer behaviour changed, so D3's opt-in does not
+  apply.
+- **Prices are owner input.** No price catalog is committed and a dry run
+  cannot fetch one, so each model is given with its price (`model=input:output`
+  in the workflow, `--price` locally), which is recorded in the report as the
+  pricing snapshot. A price set too low is caught at the first settlement above
+  its reservation, which stops the ledger. A paid workflow run refuses a price
+  of zero, since a zero estimate bounds nothing.
+- **Choices the plan leaves open.** Input is estimated at two characters per
+  token over the whole request body and output at `max_tokens`. A tenth of the
+  total is held in reserve. A case is one fixture or dataset case reviewed once
+  by one model, with its retry and its judge calls. Missing usage keeps the
+  whole reservation as uncertain spend. Unreadable usage, an overshoot, an
+  unpriced model or a cancellation stops new work, and a journal that was
+  stopped or cancelled stays that way for later processes.
+- **Replay admission is per case.** `Review.run` already admits each provider
+  attempt, retries and the finalizer included, against `maxCostUsd` when its
+  models are priced. Rather than add a second gate inside the engine runner,
+  `admitReplay` (`replay.ts`) reserves the case's whole bound in the eval
+  ledger and hands it to the review as its cap, then settles the case from the
+  artifact's attempts. Unpriced models are refused. No engine file changed.
+  There is still no engine entry point that runs a paid replay; VS-02's note on
+  that stays open.
+- **The judge is not built.** The ledger has a `judge` attempt kind charged to
+  the case it judges; VS-04's judge must admit its calls through it.
+- **The environment is referenced, not checked.** GitHub creates a missing
+  environment unprotected the first time a job names it. The key is documented
+  as an environment secret only, so such a run has no key and stops before it
+  sends anything. The workflow does not query the environment's protection
+  rules through the API.
+- **Additions the row does not name.** Model output printed by the paid step is
+  wrapped in `::stop-commands::`, and step summaries are HTML-escaped inside
+  `<pre>`, so model text cannot issue workflow commands or add links. A
+  `report` step summarises the journal after a failed, timed-out or cancelled
+  run.
+- **`replay.ts` type fix.** Type-checking the eval scripts found an existing
+  optional-chaining error (`repository?.url.replace`), fixed as
+  `repository?.url?.replace` with no change in behaviour.
+- **How the scripts were type-checked.** `script/` is outside every package's
+  tsconfig, so the eval scripts were checked with a temporary config that
+  extends the engine's and includes the engine's own declaration files. It
+  reports no errors. No package's code changed, so no package typecheck or
+  generator was needed.
+- **The new tests are not in CI yet.** `budget.test.ts`, `run.test.ts` and
+  `ci.test.ts`, like the earlier eval tests, are not run by any workflow.
+  Adding the step is left to the gate or the owner.

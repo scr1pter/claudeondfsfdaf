@@ -1,14 +1,42 @@
 name: vectorscope eval
 
 # Scores Vectorscope's review prompt on the fixture set in script/vectorscope-eval with the models you list.
-# Manual only: it spends OpenRouter credit. Add the repository secret OPENROUTER_API_KEY before running it.
+# Manual only, and a dry run unless you choose "paid": the dry run validates the inputs, the fixtures and the dataset
+# manifest and estimates the worst-case cost, and sends nothing. A paid run needs a total budget and a per-case bound,
+# waits for the owner's approval in the protected vectorscope-eval environment, and spends only from that
+# environment's own VECTORSCOPE_EVAL_API_KEY secret. Every request is admitted by the budget ledger before it is sent.
+# The inputs reach the scripts as environment variables and are validated in script/vectorscope-eval/ci.ts; none is
+# written into a shell command. Setup: script/vectorscope-eval/README.md, "Budgeted CI runs".
 
 on:
   workflow_dispatch:
     inputs:
-      models:
-        description: "Comma-separated OpenRouter model ids, e.g. anthropic/claude-sonnet-4.5,openai/gpt-5"
+      mode:
+        description: "dry-run sends nothing; paid spends from the vectorscope-eval key once the owner approves"
         required: true
+        default: dry-run
+        type: choice
+        options:
+          - dry-run
+          - paid
+      models:
+        description: "Comma-separated model=input:output, USD per million tokens, e.g. anthropic/claude-sonnet-4.5=3:15"
+        required: true
+        type: string
+      budget_usd:
+        description: "Total USD for the whole run, every model and retry included (needed for paid)"
+        required: false
+        default: ""
+        type: string
+      case_budget_usd:
+        description: "USD bound for one fixture reviewed once by one model, its retry included (needed for paid)"
+        required: false
+        default: ""
+        type: string
+      max_tokens:
+        description: "Output token limit for each request"
+        required: true
+        default: "16000"
         type: string
       repeat:
         description: "Runs per fixture, 1-5 (repeat to see run-to-run variance)"
@@ -29,9 +57,10 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  eval:
+  plan:
+    name: Dry run
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 15
     steps:
       - name: Checkout repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -41,41 +70,58 @@ jobs:
       - name: Setup Bun
         uses: ./.github/actions/setup-bun
 
-      - name: Score each model
+      - name: Validate the inputs and estimate the cost
         env:
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          MODELS: ${{ inputs.models }}
-          REPEAT: ${{ inputs.repeat }}
-          FIXTURES: ${{ inputs.fixtures }}
-        run: |
-          set -euo pipefail
-          if [ -z "$OPENROUTER_API_KEY" ]; then
-            echo "::error::Add the repository secret OPENROUTER_API_KEY (Settings → Secrets and variables → Actions) and run again."
-            exit 1
-          fi
-          [[ "$REPEAT" =~ ^[1-5]$ ]] || { echo "::error::repeat must be 1 to 5"; exit 1; }
-          [[ -z "$FIXTURES" || "$FIXTURES" =~ ^[a-z0-9,-]+$ ]] || { echo "::error::fixtures must be comma-separated fixture names"; exit 1; }
-          mkdir -p "$RUNNER_TEMP/vectorscope-eval"
-          status=0
-          IFS=, read -ra models <<< "$MODELS"
-          for model in "${models[@]}"; do
-            model="$(echo "$model" | xargs)"
-            [ -n "$model" ] || continue
-            [[ "$model" =~ ^[A-Za-z0-9._:/-]+$ ]] || { echo "::error::invalid model id: $model"; status=1; continue; }
-            out="$RUNNER_TEMP/vectorscope-eval/$(echo "$model" | tr '/:' '__').json"
-            args=(--model "$model" --repeat "$REPEAT" --out "$out")
-            [ -z "$FIXTURES" ] || args+=(--fixture "$FIXTURES")
-            {
-              echo "### $model"
-              echo
-              echo '```'
-            } >> "$GITHUB_STEP_SUMMARY"
-            bun script/vectorscope-eval/run.ts "${args[@]}" 2>&1 | tee -a "$GITHUB_STEP_SUMMARY" || status=1
-            printf '```\n\n' >> "$GITHUB_STEP_SUMMARY"
-          done
-          exit "$status"
+          EVAL_MODE: ${{ inputs.mode }}
+          EVAL_MODELS: ${{ inputs.models }}
+          EVAL_BUDGET_USD: ${{ inputs.budget_usd }}
+          EVAL_CASE_BUDGET_USD: ${{ inputs.case_budget_usd }}
+          EVAL_MAX_TOKENS: ${{ inputs.max_tokens }}
+          EVAL_REPEAT: ${{ inputs.repeat }}
+          EVAL_FIXTURES: ${{ inputs.fixtures }}
+        run: bun script/vectorscope-eval/ci.ts plan
 
-      - name: Keep the JSON reports
+      - name: Validate the dataset manifest
+        run: bun script/vectorscope-eval/dataset.ts
+
+  eval:
+    name: Paid run
+    needs: plan
+    if: inputs.mode == 'paid'
+    runs-on: ubuntu-24.04
+    # Protected: the owner is its only required reviewer, and the eval key is a secret of this environment alone.
+    environment: vectorscope-eval
+    timeout-minutes: 75
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Bun
+        uses: ./.github/actions/setup-bun
+
+      - name: Run each model within the budget
+        timeout-minutes: 60
+        env:
+          VECTORSCOPE_EVAL_API_KEY: ${{ secrets.VECTORSCOPE_EVAL_API_KEY }}
+          EVAL_MODE: ${{ inputs.mode }}
+          EVAL_MODELS: ${{ inputs.models }}
+          EVAL_BUDGET_USD: ${{ inputs.budget_usd }}
+          EVAL_CASE_BUDGET_USD: ${{ inputs.case_budget_usd }}
+          EVAL_MAX_TOKENS: ${{ inputs.max_tokens }}
+          EVAL_REPEAT: ${{ inputs.repeat }}
+          EVAL_FIXTURES: ${{ inputs.fixtures }}
+          EVAL_OUT_DIR: ${{ runner.temp }}/vectorscope-eval
+        run: bun script/vectorscope-eval/ci.ts paid
+
+      - name: Summarise the budget ledger
+        if: always()
+        env:
+          EVAL_OUT_DIR: ${{ runner.temp }}/vectorscope-eval
+        run: bun script/vectorscope-eval/ci.ts report
+
+      - name: Keep the reports and the ledger
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
