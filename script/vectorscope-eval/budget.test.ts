@@ -10,6 +10,7 @@ import {
   LedgerError,
   limitProblems,
   parsePrice,
+  readJournal,
   type Entry,
   type Limits,
   type Ticket,
@@ -348,5 +349,33 @@ describe("the journal", () => {
     expect(Ledger.inspect(journal).spentUsd).toBeCloseTo(0.25)
     writeFileSync(journal, readFileSync(journal, "utf8") + '\n{"type":"halt","at":"x","reason":"later"}\n')
     expect(() => Ledger.inspect(journal)).toThrow(/not a ledger entry/)
+  })
+
+  test("a journal cut off mid-line by a killed process can be reopened, resumed and read again", () => {
+    const journal = join(root, "resumed.jsonl")
+    const first = Ledger.open({ limits: LIMITS, journal })
+    admitted(first, { case: "a", estimateUsd: 1 }).settle({ costUsd: 0.25 })
+    const lost = admitted(first, { case: "b", estimateUsd: 1.5 })
+    lost.sent()
+    // Killed while writing the settlement: the line has no end, and the lock is left behind.
+    writeFileSync(
+      journal,
+      readFileSync(journal, "utf8") + `{"type":"settle","at":"2026-11-03T00:00:00.000Z","seq":${lost.seq},"co`,
+    )
+    rmSync(`${journal}.lock`)
+
+    const second = Ledger.open({ limits: LIMITS, journal })
+    // The cut-off settlement never happened, so the sent attempt is kept whole as uncertain spend.
+    expect(second.summary()).toMatchObject({ spentUsd: 0.25, uncertainUsd: 1.5, outstandingUsd: 0 })
+    admitted(second, { case: "c", estimateUsd: 1 }).settle({ costUsd: 0.5 })
+    second.close()
+    const text = readFileSync(journal, "utf8")
+    expect(text.endsWith("\n")).toBe(true)
+    expect(text).not.toContain('"co{')
+    expect(() => readJournal(journal)).not.toThrow()
+    expect(Ledger.inspect(journal)).toMatchObject({ spentUsd: 0.75, uncertainUsd: 1.5 })
+    const third = Ledger.open({ limits: LIMITS, journal })
+    expect(third.summary().spentUsd).toBeCloseTo(0.75)
+    third.close()
   })
 })

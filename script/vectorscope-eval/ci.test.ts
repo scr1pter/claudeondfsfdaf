@@ -1,9 +1,23 @@
 import { afterAll, describe, expect, test } from "bun:test"
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs"
+import { generateKeyPairSync } from "node:crypto"
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { Ledger, defaultLimits } from "./budget"
-import { JOURNAL, KEY_ENV, main, parseInputs, runArgs, type Child, type Inputs } from "./ci"
+import {
+  JOURNAL,
+  KEY_ENV,
+  main,
+  parseInputs,
+  PUBLIC_KEY_ENV,
+  runArgs,
+  SEALED,
+  seal,
+  unseal,
+  type Child,
+  type Inputs,
+} from "./ci"
+import { outsideRepository, REPO_ROOT } from "./paths"
 
 // The workflow's entry point and the workflow file itself. Nothing here sends a request or starts run.ts with a key:
 // the paid mode is exercised with a stand-in for the child process.
@@ -23,6 +37,22 @@ const DRY = {
   EVAL_FIXTURES: "",
 }
 const PAID = { ...DRY, EVAL_MODE: "paid", EVAL_BUDGET_USD: "50", EVAL_CASE_BUDGET_USD: "0.75" }
+
+// The owner's key pair; only the public half is ever given to the workflow.
+const OWNER = generateKeyPairSync("rsa", {
+  modulusLength: 3072,
+  publicKeyEncoding: { type: "spki", format: "pem" },
+  privateKeyEncoding: { type: "pkcs8", format: "pem" },
+})
+// What the paid job's step has: the Actions runner, its environment's name, and the owner's public key.
+const JOB = { GITHUB_ACTIONS: "true", EVAL_ENVIRONMENT: "vectorscope-eval", [PUBLIC_KEY_ENV]: OWNER.publicKey }
+// What run.ts prints and logs: scores, misses and false alarms, which a public log must never show (D12).
+const SCORES = [
+  "audit-log-pagination  1  2  1  1  0  0.50  1.00  0.67",
+  "Totals over 2 scored run(s): TP 1 · FP 1 · FN 0 · precision 0.50 · recall 1.00 · F1 0.67",
+  "missed off-by-one (src/pagination.ts:12)",
+  "false alarm src/app.ts:3 [blocking] Unused import",
+]
 
 function inputs(env: Record<string, string>): Inputs {
   const parsed = parseInputs(env)
@@ -162,6 +192,7 @@ describe("modes", () => {
 
   test("paid runs each model with only the eval key, one shared journal, and stops once the ledger stops", async () => {
     const dir = join(root, "paid")
+    const summaryFile = join(root, "paid-summary.md")
     const started: { argv: string[]; env: Record<string, string> }[] = []
     const spawn = (argv: string[], env: Record<string, string>): Child => {
       started.push({ argv, env })
@@ -171,18 +202,24 @@ describe("modes", () => {
       const admission = ledger.admit({ case: "x", kind: "provider", model: "m", estimateUsd: 0.2 })
       if (admission.admitted) admission.ticket.settle({ costUsd: 0.5 })
       ledger.close()
-      return { stdout: Promise.resolve("report\n::set-env name=X::y\n"), exited: Promise.resolve(1), kill: () => {} }
+      return {
+        stdout: Promise.resolve(`${SCORES.join("\n")}\n::set-env name=X::y\n`),
+        stderr: Promise.resolve(`  audit-log-pagination: TP 1 FP 1 FN 0\n`),
+        exited: Promise.resolve(1),
+        kill: () => {},
+      }
     }
     const out: string[] = []
     const err: string[] = []
     const code = await main("paid", {
       env: {
         ...PAID,
+        ...JOB,
         EVAL_OUT_DIR: dir,
+        GITHUB_STEP_SUMMARY: summaryFile,
         [KEY_ENV]: "test-key",
         OPENROUTER_API_KEY: "must-not-pass",
         GITHUB_TOKEN: "must-not-pass",
-        GITHUB_ACTIONS: "true",
         PATH: "/usr/bin",
       },
       spawn,
@@ -191,31 +228,121 @@ describe("modes", () => {
     })
     expect(code).toBe(1)
     expect(started).toHaveLength(1)
-    expect(started[0]!.env).toEqual({ PATH: "/usr/bin", [KEY_ENV]: "test-key" })
+    expect(started[0]!.env).toEqual({
+      PATH: "/usr/bin",
+      GITHUB_ACTIONS: "true",
+      VECTORSCOPE_EVAL_ENVIRONMENT: "vectorscope-eval",
+      [KEY_ENV]: "test-key",
+    })
     expect(started[0]!.argv.join(" ")).not.toContain("test-key")
     expect(err.join("")).toContain("Not starting openai/gpt-5-mini: the ledger stopped admitting")
-    // Model output is printed with workflow commands switched off around it.
+    // The public log and step summary get the ledger's spend and counts, and no score, finding or model text (D12).
     const text = out.join("")
-    const token = /::stop-commands::(\S+)/.exec(text)?.[1]
-    expect(token).toBeDefined()
-    expect(text.indexOf("::set-env")).toBeGreaterThan(text.indexOf(`::stop-commands::${token}`))
-    expect(text.indexOf(`::${token}::`)).toBeGreaterThan(text.indexOf("::set-env"))
+    const summary = readFileSync(summaryFile, "utf8")
+    expect(text).toContain("anthropic/claude-sonnet-4.5: run.ts exited with 1")
+    expect(text).toContain("Spent $0.5000 as reported")
+    expect(summary).toContain("Spent $0.5000 as reported")
+    for (const published of [text, summary, err.join("")]) {
+      for (const line of [...SCORES, "TP 1 FP 1 FN 0", "::set-env"]) expect(published).not.toContain(line)
+      expect(published).not.toMatch(/precision|recall|false alarm|missed /i)
+    }
+    // run.ts's output is kept beside its report, for the sealed artifact only.
+    const log = readFileSync(join(dir, "1-anthropic_claude-sonnet-4.5.log"), "utf8")
+    for (const line of SCORES) expect(log).toContain(line)
+    expect(log).toContain("TP 1 FP 1 FN 0")
   })
 
-  test("paid refuses without the eval key, in dry-run mode, or with reports inside the repository", async () => {
+  test("paid refuses outside the eval environment, without its key or the owner's public key, in dry-run mode, or with reports inside the repository", async () => {
     const spawn = () => {
       throw new Error("must not start")
     }
-    const quiet = { stdout: () => {}, stderr: () => {}, spawn }
-    expect(await main("paid", { ...quiet, env: { ...PAID, EVAL_OUT_DIR: join(root, "x") } })).toBe(1)
+    const err: string[] = []
+    const quiet = { stdout: () => {}, stderr: (text: string) => void err.push(text), spawn }
+    const out = join(root, "x")
+    const refused = async (env: Record<string, string>, reason: string) => {
+      err.length = 0
+      expect(await main("paid", { ...quiet, env })).toBe(1)
+      expect(err.join("")).toContain(reason)
+    }
+    await refused({ ...PAID, ...JOB, EVAL_OUT_DIR: out }, `${KEY_ENV} is not set`)
+    await refused(
+      { ...PAID, ...JOB, EVAL_OUT_DIR: out, OPENROUTER_API_KEY: "the old key is not the eval's" },
+      `${KEY_ENV} is not set`,
+    )
+    await refused({ ...PAID, EVAL_OUT_DIR: out, [KEY_ENV]: "k", [PUBLIC_KEY_ENV]: OWNER.publicKey }, "starts only in")
+    await refused(
+      { ...PAID, ...JOB, EVAL_ENVIRONMENT: "production", EVAL_OUT_DIR: out, [KEY_ENV]: "k" },
+      "starts only in",
+    )
+    await refused({ ...PAID, ...JOB, [PUBLIC_KEY_ENV]: "", EVAL_OUT_DIR: out, [KEY_ENV]: "k" }, PUBLIC_KEY_ENV)
+    await refused({ ...PAID, ...JOB, [PUBLIC_KEY_ENV]: "not a key", EVAL_OUT_DIR: out, [KEY_ENV]: "k" }, PUBLIC_KEY_ENV)
+    const small = generateKeyPairSync("rsa", { modulusLength: 1024 }).publicKey.export({ type: "spki", format: "pem" })
+    await refused({ ...PAID, ...JOB, [PUBLIC_KEY_ENV]: String(small), EVAL_OUT_DIR: out, [KEY_ENV]: "k" }, "3072")
+    expect(await main("paid", { ...quiet, env: { ...DRY, ...JOB, EVAL_OUT_DIR: out, [KEY_ENV]: "k" } })).toBe(1)
+    await refused({ ...PAID, ...JOB, EVAL_OUT_DIR: import.meta.dir, [KEY_ENV]: "k" }, "outside the repository")
+    await refused({ ...PAID, ...JOB, EVAL_OUT_DIR: join(REPO_ROOT, "..reports"), [KEY_ENV]: "k" }, "outside")
+    expect(existsSync(out)).toBe(false)
+  })
+
+  test("seal encrypts every output file to the owner's key, and only the private key opens it", async () => {
+    const dir = join(root, "to-seal")
+    const sealedDir = join(root, "sealed")
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, "1-model.json"), JSON.stringify({ totals: { precision: 0.5 } }))
+    writeFileSync(join(dir, "1-model.log"), SCORES.join("\n"))
+    writeFileSync(join(dir, JOURNAL), '{"type":"open"}\n')
+    const out: string[] = []
+    const env = { EVAL_OUT_DIR: dir, EVAL_SEALED_DIR: sealedDir, [PUBLIC_KEY_ENV]: OWNER.publicKey }
+    expect(await main("seal", { env, stdout: (text) => void out.push(text) })).toBe(0)
+    expect(out.join("")).toContain("Sealed 3 file(s)")
+    expect(readdirSync(sealedDir)).toEqual([SEALED])
+    const sealedText = readFileSync(join(sealedDir, SEALED), "utf8")
+    for (const line of [...SCORES, "precision", "1-model", JOURNAL]) expect(sealedText).not.toContain(line)
+
+    const keyFile = join(root, "owner.pem")
+    writeFileSync(keyFile, OWNER.privateKey)
+    const opened = join(root, "opened")
+    expect(await main("unseal", { stdout: () => {} }, [join(sealedDir, SEALED), keyFile, opened])).toBe(0)
+    expect(readFileSync(join(opened, "1-model.log"), "utf8")).toBe(SCORES.join("\n"))
+    expect(readdirSync(opened).toSorted()).toEqual(["1-model.json", "1-model.log", JOURNAL].toSorted())
+    expect(await main("unseal", { stderr: () => {} }, [join(sealedDir, SEALED), keyFile, REPO_ROOT])).toBe(2)
+
+    // Another key cannot open it, and a tampered file is refused.
+    const other = generateKeyPairSync("rsa", { modulusLength: 3072 }).privateKey.export({
+      type: "pkcs8",
+      format: "pem",
+    })
+    const sealed = JSON.parse(sealedText)
+    expect(() => unseal(sealed, String(other))).toThrow()
+    expect(() => unseal({ ...sealed, data: Buffer.from("x").toString("base64") }, OWNER.privateKey)).toThrow()
+    expect(unseal(seal({ a: Buffer.from("b") }, OWNER.publicKey), OWNER.privateKey).a!.toString()).toBe("b")
+  })
+
+  test("seal writes nothing without the owner's key, and has nothing to do without outputs", async () => {
+    const dir = join(root, "unsealed")
+    const sealedDir = join(root, "unsealed-out")
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, "1-model.json"), "{}")
+    const quiet = { stdout: () => {}, stderr: () => {} }
+    expect(await main("seal", { ...quiet, env: { EVAL_OUT_DIR: dir, EVAL_SEALED_DIR: sealedDir } })).toBe(1)
+    expect(existsSync(sealedDir)).toBe(false)
+    const out: string[] = []
     expect(
-      await main("paid", {
-        ...quiet,
-        env: { ...PAID, EVAL_OUT_DIR: join(root, "x"), OPENROUTER_API_KEY: "the old key is not the eval's" },
+      await main("seal", {
+        stdout: (text) => void out.push(text),
+        env: { EVAL_OUT_DIR: join(root, "none"), EVAL_SEALED_DIR: sealedDir },
       }),
-    ).toBe(1)
-    expect(await main("paid", { ...quiet, env: { ...DRY, EVAL_OUT_DIR: join(root, "x"), [KEY_ENV]: "k" } })).toBe(1)
-    expect(await main("paid", { ...quiet, env: { ...PAID, EVAL_OUT_DIR: import.meta.dir, [KEY_ENV]: "k" } })).toBe(1)
+    ).toBe(0)
+    expect(out.join("")).toContain("Nothing to seal")
+  })
+
+  test("a path is outside the repository only when it really leaves it", () => {
+    expect(outsideRepository(join(REPO_ROOT, "..reports", "x.json"))).toBe(false)
+    expect(outsideRepository(join(REPO_ROOT, "script", "x.json"))).toBe(false)
+    expect(outsideRepository(REPO_ROOT)).toBe(false)
+    expect(outsideRepository(join(REPO_ROOT, "..", "elsewhere", "x.json"))).toBe(true)
+    expect(outsideRepository(join(REPO_ROOT, ".."))).toBe(true)
+    expect(outsideRepository(root)).toBe(true)
   })
 
   test("report summarises the journal, counting an attempt left open at its reservation", async () => {
@@ -288,10 +415,30 @@ describe("the workflow", () => {
     expect(holders.map((step) => step.run)).toEqual(["bun script/vectorscope-eval/ci.ts paid"])
   })
 
-  test("summarises the ledger and keeps the reports even when the run fails or is cancelled", () => {
+  test("summarises the ledger and keeps the reports, sealed, even when the run fails or is cancelled", () => {
     const steps = workflow.jobs.eval!.steps
     const report = steps.find((step) => step.run === "bun script/vectorscope-eval/ci.ts report")
     expect(report).toMatchObject({ if: "always()" })
-    expect(steps.find((step) => step.name === "Keep the reports and the ledger")).toMatchObject({ if: "always()" })
+    const sealing = steps.find((step) => step.run === "bun script/vectorscope-eval/ci.ts seal")
+    expect(sealing).toMatchObject({ if: "always()" })
+    expect(sealing!.env).toMatchObject({
+      EVAL_OUT_DIR: "${{ runner.temp }}/vectorscope-eval",
+      EVAL_SEALED_DIR: "${{ runner.temp }}/vectorscope-eval-sealed",
+      [PUBLIC_KEY_ENV]: `\${{ vars.${PUBLIC_KEY_ENV} }}`,
+    })
+    const keep = steps.find((step) => step.name === "Keep the sealed reports and ledger") as
+      | { if?: string; with?: Record<string, unknown> }
+      | undefined
+    expect(keep).toMatchObject({ if: "always()" })
+    // This repository is public: only the sealed directory is uploaded, and not for long.
+    expect(keep!.with!.path).toBe("${{ runner.temp }}/vectorscope-eval-sealed/")
+    expect(Number(keep!.with!["retention-days"])).toBeLessThanOrEqual(7)
+    expect(steps.findIndex((step) => step === sealing)).toBeLessThan(steps.findIndex((step) => step === keep))
+    // The paid step names its own environment, which run.ts checks before it sends to a hosted endpoint.
+    const paid = steps.find((step) => step.run === "bun script/vectorscope-eval/ci.ts paid")
+    expect(paid!.env).toMatchObject({
+      EVAL_ENVIRONMENT: workflow.jobs.eval!.environment,
+      [PUBLIC_KEY_ENV]: `\${{ vars.${PUBLIC_KEY_ENV} }}`,
+    })
   })
 })

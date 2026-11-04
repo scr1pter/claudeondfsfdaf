@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test"
-import { mkdtempSync, readFileSync, rmSync } from "node:fs"
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { buildReviewPrompt } from "../../packages/core/src/review/prompt"
@@ -17,6 +17,8 @@ afterAll(() => rmSync(root, { recursive: true, force: true }))
 
 const FIXTURES = ["audit-log-pagination", "http-retry-refactor"]
 const KEY = "test-key-not-a-real-one"
+// What the paid job in the vectorscope-eval environment has: a hosted endpoint is sent to only there (D7).
+const EVAL_ENV = { GITHUB_ACTIONS: "true", VECTORSCOPE_EVAL_ENVIRONMENT: "vectorscope-eval" }
 const MODEL = "test/model"
 const PRICE = { input: 3, output: 15 }
 const MAX_TOKENS = 1000
@@ -156,9 +158,69 @@ describe("without a budget", () => {
       expect(await main(argv, { ...io.deps, fetch: fake.fetch, env: { OPENROUTER_API_KEY: KEY } })).toBe(2)
     }
     const io = capture()
-    expect(await main(budgetArgs(5, 1, paths()), { ...io.deps, fetch: fake.fetch, env: {} })).toBe(2)
+    expect(await main(budgetArgs(5, 1, paths()), { ...io.deps, fetch: fake.fetch, env: EVAL_ENV })).toBe(2)
     expect(io.err.join("")).toContain("Set EVAL_TEST_KEY")
     expect(fake.calls).toHaveLength(0)
+  })
+
+  test("a zero price is refused before anything is sent, since it would let every estimate through", async () => {
+    const fake = fakeFetch(undefined, [ok(0.01)])
+    for (const price of ["0:0", "0:15", "3:0"]) {
+      const io = capture()
+      const argv = budgetArgs(5, 1, paths()).map((arg) => (arg === `${PRICE.input}:${PRICE.output}` ? price : arg))
+      expect(await main(argv, { ...io.deps, fetch: fake.fetch, env: { ...EVAL_ENV, EVAL_TEST_KEY: KEY } })).toBe(2)
+      expect(io.err.join("")).toContain("prices above zero")
+    }
+    expect(fake.calls).toHaveLength(0)
+  })
+})
+
+describe("where requests may go", () => {
+  // Phase 0 and D7: the repository's OPENROUTER_API_KEY is not permission to run the paid eval.
+  test("the product's OPENROUTER_API_KEY alone sends nothing", async () => {
+    const fake = fakeFetch(undefined, [ok(0.01)])
+    const argv = budgetArgs(5, 1, paths()).slice(0, -2) // no --api-key-env: the default is the eval's own key
+    for (const env of [{ OPENROUTER_API_KEY: KEY }, { ...EVAL_ENV, OPENROUTER_API_KEY: KEY }]) {
+      const io = capture()
+      expect(await main(argv, { ...io.deps, fetch: fake.fetch, env })).toBe(2)
+    }
+    const io = capture()
+    await main(argv, { ...io.deps, fetch: fake.fetch, env: { ...EVAL_ENV, OPENROUTER_API_KEY: KEY } })
+    expect(io.err.join("")).toContain("Set VECTORSCOPE_EVAL_API_KEY")
+    expect(fake.calls).toHaveLength(0)
+  })
+
+  test("a hosted endpoint is refused outside the vectorscope-eval environment, whatever key is set", async () => {
+    const fake = fakeFetch(undefined, [ok(0.01)])
+    for (const env of [
+      { EVAL_TEST_KEY: KEY },
+      { EVAL_TEST_KEY: KEY, GITHUB_ACTIONS: "true" },
+      { EVAL_TEST_KEY: KEY, VECTORSCOPE_EVAL_ENVIRONMENT: "vectorscope-eval" },
+      { EVAL_TEST_KEY: KEY, GITHUB_ACTIONS: "true", VECTORSCOPE_EVAL_ENVIRONMENT: "other" },
+    ]) {
+      const io = capture()
+      const files = paths()
+      expect(await main(budgetArgs(5, 1, files), { ...io.deps, fetch: fake.fetch, env })).toBe(2)
+      expect(io.err.join("")).toContain("Nothing was sent")
+      expect(existsSync(files.ledger)).toBe(false)
+    }
+    expect(fake.calls).toHaveLength(0)
+  })
+
+  test("locally, a budgeted run sends only to a loopback server", async () => {
+    for (const url of ["http://127.0.0.1:1234/v1/chat/completions", "http://localhost:1234/v1/chat/completions"]) {
+      const files = paths()
+      const fake = fakeFetch(files.ledger, [ok(0.001)])
+      const code = await main([...budgetArgs(5, 1, files), "--base-url", url], {
+        ...capture().deps,
+        fetch: fake.fetch,
+        env: { EVAL_TEST_KEY: KEY },
+      })
+      expect(code).toBe(0)
+      expect(fake.calls.map((call) => call.url)).toEqual([url, url])
+      // Only OpenRouter is asked to report its cost in the body.
+      expect(fake.calls[0]!.body.usage).toBeUndefined()
+    }
   })
 })
 
@@ -167,7 +229,11 @@ describe("with a budget", () => {
     const files = paths()
     const fake = fakeFetch(files.ledger, [ok(0.012), ok(0.008)])
     const io = capture()
-    const code = await main(budgetArgs(5, 1, files), { ...io.deps, fetch: fake.fetch, env: { EVAL_TEST_KEY: KEY } })
+    const code = await main(budgetArgs(5, 1, files), {
+      ...io.deps,
+      fetch: fake.fetch,
+      env: { ...EVAL_ENV, EVAL_TEST_KEY: KEY },
+    })
     expect(code).toBe(0)
     expect(fake.calls).toHaveLength(2)
     for (const call of fake.calls) {
@@ -191,7 +257,11 @@ describe("with a budget", () => {
   test("the requests are the ones the harness sent before the budget existed", async () => {
     const files = paths()
     const fake = fakeFetch(files.ledger, [ok(0.01)])
-    await main(budgetArgs(5, 1, files), { ...capture().deps, fetch: fake.fetch, env: { EVAL_TEST_KEY: KEY } })
+    await main(budgetArgs(5, 1, files), {
+      ...capture().deps,
+      fetch: fake.fetch,
+      env: { ...EVAL_ENV, EVAL_TEST_KEY: KEY },
+    })
     for (const [index, name] of FIXTURES.entries()) {
       const prompt = buildReviewPrompt(promptInput(fixtureView(await loadFixture(name))))
       const body = fake.calls[index]!.body
@@ -224,7 +294,7 @@ describe("with a budget", () => {
     const code = await main(budgetArgs(5, 1, files), {
       ...capture().deps,
       fetch: fake.fetch,
-      env: { EVAL_TEST_KEY: KEY },
+      env: { ...EVAL_ENV, EVAL_TEST_KEY: KEY },
     })
     expect(code).toBe(0)
     expect(fake.calls).toHaveLength(3)
@@ -248,7 +318,7 @@ describe("with a budget", () => {
     const code = await main(budgetArgs(total, request * 1.2, files), {
       ...io.deps,
       fetch: fake.fetch,
-      env: { EVAL_TEST_KEY: KEY },
+      env: { ...EVAL_ENV, EVAL_TEST_KEY: KEY },
     })
     expect(code).toBe(1)
     expect(fake.calls).toHaveLength(1)
@@ -269,7 +339,7 @@ describe("with a budget", () => {
     const code = await main(budgetArgs(5, request * 1.5, files), {
       ...capture().deps,
       fetch: fake.fetch,
-      env: { EVAL_TEST_KEY: KEY },
+      env: { ...EVAL_ENV, EVAL_TEST_KEY: KEY },
     })
     expect(code).toBe(1)
     // Each fixture's schema request went out; neither retry did.
@@ -286,7 +356,11 @@ describe("with a budget", () => {
     const fake = fakeFetch(files.ledger, ["hang"])
     const io = capture()
     const listeners = process.listenerCount("SIGINT")
-    const running = main(budgetArgs(5, 1, files), { ...io.deps, fetch: fake.fetch, env: { EVAL_TEST_KEY: KEY } })
+    const running = main(budgetArgs(5, 1, files), {
+      ...io.deps,
+      fetch: fake.fetch,
+      env: { ...EVAL_ENV, EVAL_TEST_KEY: KEY },
+    })
     while (fake.calls.length === 0) await new Promise((resolve) => setTimeout(resolve, 5))
     process.emit("SIGINT", "SIGINT")
     expect(await running).toBe(1)
@@ -310,7 +384,7 @@ describe("with a budget", () => {
     await main(budgetArgs(total, request * 1.5, files), {
       ...capture().deps,
       fetch: first.fetch,
-      env: { EVAL_TEST_KEY: KEY },
+      env: { ...EVAL_ENV, EVAL_TEST_KEY: KEY },
     })
     const second = fakeFetch(files.ledger, [silent])
     const out = join(root, `second-${counter}.json`)
@@ -319,7 +393,7 @@ describe("with a budget", () => {
       {
         ...capture().deps,
         fetch: second.fetch,
-        env: { EVAL_TEST_KEY: KEY },
+        env: { ...EVAL_ENV, EVAL_TEST_KEY: KEY },
       },
     )
     expect(first.calls).toHaveLength(2)

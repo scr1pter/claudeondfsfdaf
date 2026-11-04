@@ -137,7 +137,9 @@ describe("judge.ts", () => {
     expect(adjudicated.stdout).toContain("Recorded 1 adjudication(s) by human:owner")
 
     const scored = await report(["--outputs", outputs, "--judgements", judgements])
-    expect(scored.stdout).toContain("Adjudicated 1, agreed 2 (2 with a human pass), disagreed 0, one pass 0, none 0.")
+    expect(scored.stdout).toContain(
+      "Adjudicated 1, agreed 2, agreed by models only (waiting for a human) 0, disagreed 0, one pass 0, none 0.",
+    )
     expect(scored.stdout).toContain("| Actionable precision | 66.7% (2/3) [")
     expect(scored.stdout).toContain(
       "| Findings: matched / extra / duplicate / false alarm / unjudged | 1 / 1 / 0 / 1 / 0 |",

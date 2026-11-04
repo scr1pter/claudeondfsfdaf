@@ -1,10 +1,23 @@
 import { afterAll, describe, expect, test } from "bun:test"
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { dirname, join } from "node:path"
+import { basename, dirname, join } from "node:path"
+import type { ReviewClient, ReviewMessage, ReviewModel } from "../../packages/app/src/features/pull-requests/ai-review"
+import { VERIFY_JSON_SCHEMA } from "../../packages/core/src/review/schema"
 import { Ledger, type Limits } from "./budget"
 import { gitEnv, loadManifest, type Manifest } from "./dataset"
-import { ADAPTERS, admitReplay, main, prepareCheckout, replayBudget, replayCharge, replayPlan } from "./replay"
+import { candidateDiff, desktopReplay } from "./desktop"
+import {
+  ADAPTERS,
+  admitReplay,
+  checkoutDirectory,
+  main,
+  prepareCheckout,
+  replayBudget,
+  replayCharge,
+  replayPlan,
+  type PlannedReplay,
+} from "./replay"
 
 // The replay driver without any model or network: the plan it builds from the seed manifest, and checkouts prepared
 // from a local repository whose later history holds the fix.
@@ -14,7 +27,7 @@ afterAll(() => rmSync(root, { recursive: true, force: true }))
 
 const mirror = buildMirror(join(root, "mirror"))
 
-function buildMirror(dir: string) {
+function buildMirror(dir: string, extra: Record<string, string> = {}) {
   mkdirSync(dir, { recursive: true })
   const env = {
     ...gitEnv(),
@@ -40,7 +53,7 @@ function buildMirror(dir: string) {
     return git("rev-parse", "HEAD")
   }
   git("init", "--quiet", "--initial-branch=main")
-  const base = commit("base", { "app.py": "def total(items):\n    return sum(items)\n" })
+  const base = commit("base", { "app.py": "def total(items):\n    return sum(items)\n", ...extra })
   const head = commit("candidate", { "app.py": "def total(items):\n    return sum(items[1:])\n" })
   const fix = commit("fix", { "app.py": "def total(items):\n    # every item counts\n    return sum(items)\n" })
   return { dir, base, head, fix }
@@ -83,14 +96,15 @@ describe("the replay plan", () => {
     }
   })
 
-  test("refuses held-out cases from a manifest that is not frozen, and names an unready adapter", async () => {
+  test("refuses held-out cases from a manifest that is not frozen, and plans the desktop adapter too", async () => {
     const heldOut = await main(["--split", "held-out"])
     expect(heldOut.code).toBe(1)
     expect(heldOut.stderr).toContain("frozen")
     const desktop = await main(["--adapter", "desktop"])
-    expect(desktop.code).toBe(2)
-    expect(desktop.stderr).toContain(ADAPTERS.desktop.detail)
-    expect(ADAPTERS.desktop.ready).toBe(false)
+    expect(desktop.code).toBe(0)
+    expect(desktop.stdout).toContain(`Adapter desktop: ${ADAPTERS.desktop.detail}`)
+    expect(desktop.stdout).toContain("Dry run: no model request was sent.")
+    expect(ADAPTERS.desktop.ready).toBe(true)
   })
 
   test("the dry run lists the development cases and says nothing was sent", async () => {
@@ -103,6 +117,44 @@ describe("the replay plan", () => {
 })
 
 describe("replay checkouts", () => {
+  test("are named by a digest of the case id, which the reviewer never sees", () => {
+    const directory = checkoutDirectory(join(root, "prepared"), "hono-jwt-time-truncation")
+    expect(dirname(directory)).toBe(join(root, "prepared"))
+    expect(basename(directory)).toMatch(/^case-[0-9a-f]{16}$/)
+    expect(directory).not.toContain("jwt")
+    expect(checkoutDirectory(root, "a")).not.toBe(checkoutDirectory(root, "b"))
+  })
+
+  test("run no smudge filter, hook or other setting from the user's git config on the dataset's content", () => {
+    // A dataset whose files ask for git-lfs, and a user whose global config would run a filter and hooks on them.
+    const lfs = buildMirror(join(root, "lfs-mirror"), { ".gitattributes": "*.py filter=lfs diff=lfs merge=lfs\n" })
+    const home = join(root, "home")
+    const hooks = join(home, "hooks")
+    const marker = join(root, "ran")
+    mkdirSync(hooks, { recursive: true })
+    writeFileSync(join(hooks, "post-checkout"), `#!/bin/sh\ntouch "${marker}-hook"\n`, { mode: 0o755 })
+    writeFileSync(
+      join(home, ".gitconfig"),
+      `[core]\n\thooksPath = ${hooks}\n[filter "lfs"]\n\tsmudge = sh -c 'touch "${marker}-smudge" && cat'\n\trequired = true\n`,
+    )
+    const saved = { HOME: process.env.HOME, XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME }
+    process.env.HOME = home
+    process.env.XDG_CONFIG_HOME = home
+    try {
+      const directory = join(root, "lfs-checkout")
+      expect(
+        prepareCheckout({ mirror: lfs.dir, view: { ...view, base: lfs.base, head: lfs.head }, directory }),
+      ).toEqual([])
+      expect(readFileSync(join(directory, "app.py"), "utf8")).toBe("def total(items):\n    return sum(items)\n")
+    } finally {
+      for (const [key, value] of Object.entries(saved))
+        if (value === undefined) delete process.env[key]
+        else process.env[key] = value
+    }
+    expect(existsSync(`${marker}-hook`)).toBe(false)
+    expect(existsSync(`${marker}-smudge`)).toBe(false)
+  })
+
   test("hold the candidate and its history but not the fix, with the base checked out", () => {
     const directory = join(root, "checkout")
     expect(prepareCheckout({ mirror: mirror.dir, view, directory })).toEqual([])
@@ -199,5 +251,164 @@ describe("replay admission", () => {
     expect(result.stdout).toContain("Each case reserves its $0.7500 bound before it starts")
     expect((await main(["--budget-usd", "50"])).code).toBe(2)
     expect((await main(["--budget-usd", "1", "--case-budget-usd", "5"])).code).toBe(2)
+  })
+})
+
+// The desktop runner on the same kind of case the engine replay test uses, through a fake client: no engine server,
+// no Electron and no model. A paid desktop replay is not wired.
+describe("the desktop replay", () => {
+  const LABEL = "example-fixture-label-91c2"
+  const planned: PlannedReplay = {
+    id: LABEL,
+    split: "development",
+    case: {
+      label: LABEL,
+      base: mirror.base,
+      head: mirror.head,
+      trust: "untrusted",
+      trigger: "command",
+      repository: { owner: "example", repo: "fixture", url: view.repository },
+    },
+  }
+  const model: ReviewModel = {
+    providerID: "test",
+    modelID: "reviewer",
+    context: 100_000,
+    price: { input: 3, output: 15 },
+    costKind: "priced",
+  }
+  const bug = {
+    path: "app.py",
+    line: 2,
+    severity: "blocking",
+    category: "bug",
+    title: "The first item is left out of the total",
+    body: "items[1:] skips the first item, so total() under-counts.",
+    confidence: 0.95,
+  }
+  const answer = (structured: unknown): ReviewMessage => ({
+    info: {
+      role: "assistant",
+      providerID: "test",
+      modelID: "reviewer",
+      cost: 0.004,
+      tokens: { input: 1_200, output: 80, reasoning: 0, cache: { read: 0, write: 0 } },
+      structured,
+    },
+    parts: [],
+  })
+
+  // A stand-in for the SDK client on an engine server whose instance is the prepared checkout, at the base.
+  function fakeClient(directory: string) {
+    const prompts: string[] = []
+    const replies = new Map<string, ReviewMessage[]>()
+    let sessions = 0
+    const client: ReviewClient = {
+      session: {
+        create: async () => ({ data: { id: `ses_${++sessions}` } }),
+        prompt: async (input) => {
+          const text = (input.parts ?? []).map((part) => part.text).join("\n")
+          prompts.push(text)
+          const message =
+            input.format?.schema === VERIFY_JSON_SCHEMA
+              ? answer({
+                  results: [...text.matchAll(/<untrusted_candidate id="([^"]+)"/g)].map((match) => ({
+                    id: match[1],
+                    verdict: "confirmed",
+                    reason: "Checked against the code.",
+                  })),
+                })
+              : answer({
+                  summary: "total() now skips the first item.",
+                  risk: "high",
+                  files: [{ path: "app.py", note: "slice" }],
+                  findings: [bug],
+                })
+          replies.set(input.sessionID, [...(replies.get(input.sessionID) ?? []), message])
+          return { data: message }
+        },
+        update: async () => ({ data: true }),
+        abort: async () => ({ data: true }),
+        messages: async (input) => ({ data: replies.get(input.sessionID) ?? [] }),
+      },
+      file: {
+        read: async ({ path }) => {
+          const file = join(directory, path)
+          return { data: { type: "text", content: existsSync(file) ? readFileSync(file, "utf8") : "" } }
+        },
+      },
+      vcs: { get: async () => ({ data: { branch: undefined } }) },
+    }
+    return { client, prompts }
+  }
+
+  test("runs the desktop runner through a recording client and keeps the engine replay's artifact shape", async () => {
+    const directory = checkoutDirectory(join(root, "desktop"), planned.id)
+    expect(prepareCheckout({ mirror: mirror.dir, view, directory })).toEqual([])
+    const diff = candidateDiff(directory, view)
+    expect(diff).toContain("+    return sum(items[1:])")
+    const fake = fakeClient(directory)
+
+    const artifact = await desktopReplay({
+      planned,
+      directory,
+      diff,
+      model,
+      client: fake.client,
+      source: { vector: "a".repeat(40), manifest: "b".repeat(64) },
+      now: () => Date.UTC(2026, 10, 4),
+    })
+
+    expect(artifact.error).toBeUndefined()
+    expect(artifact).toMatchObject({
+      version: 1,
+      label: LABEL,
+      adapter: "desktop",
+      repetition: 1,
+      source: { repository: view.repository, base: mirror.base, head: mirror.head, vector: "a".repeat(40) },
+      // The checkout is at the base, so the runner rebuilt the change from the diff and trusted neither.
+      trust: "untrusted",
+      authored: "untrusted",
+      models: { review: { id: "test/reviewer", costKind: "priced", price: { input: 3, output: 15 } } },
+    })
+    // The final placed findings, where the desktop would put them, as the engine replay records them.
+    expect(artifact.placed.map((item) => [item.path, item.line, item.side, item.source, item.verified])).toEqual([
+      ["app.py", 2, "RIGHT", "review", true],
+    ])
+    // Every prompt, by pass and digest, with what it reported spending.
+    expect(artifact.attempts.map((attempt) => [attempt.pass, attempt.format, attempt.answered])).toEqual([
+      ["vectorscope.review", "report", true],
+      ["vectorscope.verify", "verify", true],
+    ])
+    for (const attempt of artifact.attempts) {
+      expect(attempt.digest).toMatch(/^[0-9a-f]{64}$/)
+      expect(attempt.model).toBe("test/reviewer")
+      expect(attempt).toMatchObject({ costUsd: 0.004, tokens: { input: 1_200, output: 80 } })
+    }
+    expect(artifact.passes).toHaveLength(2)
+    expect(artifact.sessions.map((session) => session.pass)).toEqual(["vectorscope.review", "vectorscope.verify"])
+    // What Post would send, recorded and never sent.
+    expect(artifact.proposed?.untrusted).toBe(true)
+    expect(artifact.proposed?.comments.map((comment) => [comment.path, comment.line])).toEqual([["app.py", 2]])
+    // The case id names the artifact only: no prompt, session or directory the runner saw carries it.
+    for (const text of fake.prompts) expect(text).not.toContain(LABEL)
+    expect(JSON.stringify(artifact.sessions)).not.toContain(LABEL)
+    expect(directory).not.toContain(LABEL)
+    // And nothing of the fix is reachable from what the runner read.
+    for (const text of fake.prompts) expect(text).not.toContain("every item counts")
+  })
+
+  test("records a failed run instead of throwing", async () => {
+    const broken: ReviewClient = {
+      ...fakeClient(root).client,
+      session: {
+        ...fakeClient(root).client.session,
+        create: async () => Promise.reject(new Error("the engine server is gone")),
+      },
+    }
+    const artifact = await desktopReplay({ planned, directory: root, diff: "", model, client: broken })
+    expect(artifact.outcome).toBeUndefined()
+    expect(artifact.error).toContain("no changes to review")
+    expect(artifact.placed).toEqual([])
   })
 })

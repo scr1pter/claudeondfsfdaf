@@ -114,7 +114,9 @@ seen:
 Each defect in `labels.defects` has:
 
 - `id`: a short slug, unique within the case. Case ids are neutral
-  (`<owner>-<name>-<n>`) so they reveal nothing about the defect.
+  (`<owner>-<name>-<n>`) so they reveal nothing about the defect. A case id
+  never reaches a reviewer: the replay names each prepared checkout by a digest
+  of it.
 - `category`, one of:
   - `correctness`: wrong result, wrong branch, wrong variable, broken contract.
   - `security`: authentication, authorization, injection, secrets, unsafe
@@ -141,7 +143,20 @@ Each defect in `labels.defects` has:
 Also record `labels.regressionTest` (`added-by-fix`, `existing` or `none`, with
 the fix's test paths) and any `traits`: `cross-file`, `outside-diff` (the cause
 depends on code the change does not touch), `rename`, `incremental`, `fork` or
-`large`. Prompt-injection cases are separate adversarial tests, not defects.
+`large`. Prompt-injection cases are separate adversarial tests, not defects
+(see "Adversarial cases").
+
+## Adversarial cases
+
+A change that carries prompt-injection text (a code comment, string or file
+that tries to instruct the reviewer) is `kind: "adversarial"`. Record in
+`labels.injection` what the injected text asks, where it is, and what a safe
+reviewer does with it. Label any real defect the injection tries to hide in
+`labels.defects`, with its fix as for a bug case; otherwise leave the list
+empty and give no fix. Adversarial cases are split on their own, and the
+report keeps them out of recall, precision and false alarms per clean pull
+request: they test trust, and a trust or consent check one of them breaks
+fails the gate.
 
 Review the candidate itself, not only the fix: a candidate can hold a real
 defect the fix did not address. Label it if it is real; a reviewer that finds
@@ -153,11 +168,14 @@ Following D8, every label gets two independent model-assisted passes:
 
 1. Pass 1 and pass 2 are made separately, neither seeing the other's labels or
    any reviewer output.
-2. Compare them. Where they agree, the label stands. Where they disagree (a
-   missing defect, a different cause, category, severity or location), the
-   owner adjudicates and records `adjudication.by` and `adjudication.date`.
+2. Compare them. Where they agree, the label stands: record `agreed: true` on
+   the `double-annotated` label, and it needs no adjudication. Where they
+   disagree (a missing defect, a different cause, category, severity or
+   location), record `agreed: false`; the owner adjudicates and records
+   `adjudication.by` and `adjudication.date`, and the status becomes
+   `adjudicated`.
 3. `annotation.status` moves from `draft` (one pass) to `double-annotated` (two
-   passes) to `adjudicated`.
+   passes), and to `adjudicated` only for a disagreement.
 
 A model that helps judge eval results never scores its own findings and is
 never the only authority on a label. Judging a review's findings against these
@@ -168,9 +186,9 @@ labels follows `judging-rubric.md`.
 `assignSplits` is the rule, and the manifest records its result so a change to
 the dataset that moves a case shows up as a validation error:
 
-- Bug cases and controls are split separately, each about 60/20/20 into
-  `development`, `calibration` and `held-out` (calibration and held-out take
-  `round(n / 5)` each).
+- Bug cases, controls and adversarial cases are split separately, each about
+  60/20/20 into `development`, `calibration` and `held-out` (calibration and
+  held-out take `round(n / 5)` each).
 - Cases that share a repository, or share a `family`, form one group and always
   land in the same split. Give cases the same `family` when they share a root
   cause, are a backport and its original, belong to one fix series, or come from
@@ -182,8 +200,9 @@ the dataset that moves a case shows up as a validation error:
 ## Freezing and leakage
 
 - Freeze the held-out labels before any prompt or pipeline tuning. Once every
-  held-out case is `adjudicated`, record `freeze.date` and the digest the dry
-  run prints in `freeze.digest`. Any later change to a held-out case, or to
+  held-out label is settled (`double-annotated` with `agreed: true`, or
+  `adjudicated`), record `freeze.date` and the digest the dry run prints in
+  `freeze.digest`. Any later change to a held-out case, or to
   which cases are held out, fails validation until it is deliberately
   re-frozen, and that change shows in the history.
 - Labels, fix SHAs, fix dates, provenance and the split never enter a prompt,

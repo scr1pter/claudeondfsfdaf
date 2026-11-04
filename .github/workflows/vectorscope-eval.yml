@@ -7,6 +7,11 @@ name: vectorscope eval
 # environment's own VECTORSCOPE_EVAL_API_KEY secret. Every request is admitted by the budget ledger before it is sent.
 # The inputs reach the scripts as environment variables and are validated in script/vectorscope-eval/ci.ts; none is
 # written into a shell command. Setup: script/vectorscope-eval/README.md, "Budgeted CI runs".
+#
+# This repository is public: anyone can read its Actions logs and step summaries, and any signed-in user can download
+# its artifacts. Results stay internal until the owner reviews them (D12), so a paid run logs only the budget ledger's
+# spend and counts, and its reports are uploaded only after ci.ts seals them to the owner's public key
+# (the VECTORSCOPE_EVAL_PUBLIC_KEY variable of the vectorscope-eval environment).
 
 on:
   workflow_dispatch:
@@ -113,6 +118,9 @@ jobs:
           EVAL_REPEAT: ${{ inputs.repeat }}
           EVAL_FIXTURES: ${{ inputs.fixtures }}
           EVAL_OUT_DIR: ${{ runner.temp }}/vectorscope-eval
+          # This job's environment, which run.ts requires before it sends to a hosted endpoint.
+          EVAL_ENVIRONMENT: vectorscope-eval
+          VECTORSCOPE_EVAL_PUBLIC_KEY: ${{ vars.VECTORSCOPE_EVAL_PUBLIC_KEY }}
         run: bun script/vectorscope-eval/ci.ts paid
 
       - name: Summarise the budget ledger
@@ -121,11 +129,20 @@ jobs:
           EVAL_OUT_DIR: ${{ runner.temp }}/vectorscope-eval
         run: bun script/vectorscope-eval/ci.ts report
 
-      - name: Keep the reports and the ledger
+      - name: Seal the reports to the owner's key
+        if: always()
+        env:
+          EVAL_OUT_DIR: ${{ runner.temp }}/vectorscope-eval
+          EVAL_SEALED_DIR: ${{ runner.temp }}/vectorscope-eval-sealed
+          VECTORSCOPE_EVAL_PUBLIC_KEY: ${{ vars.VECTORSCOPE_EVAL_PUBLIC_KEY }}
+        run: bun script/vectorscope-eval/ci.ts seal
+
+      # Only the sealed file is uploaded: an artifact of this public repository can be downloaded by anyone signed in.
+      - name: Keep the sealed reports and ledger
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: vectorscope-eval
-          path: ${{ runner.temp }}/vectorscope-eval/
+          name: vectorscope-eval-sealed
+          path: ${{ runner.temp }}/vectorscope-eval-sealed/
           if-no-files-found: ignore
-          retention-days: 30
+          retention-days: 7

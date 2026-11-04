@@ -310,6 +310,71 @@ describe("the gate", () => {
   })
 })
 
+describe("what the gate will not accept", () => {
+  // Phase 0: a model may assist with matching but is never the sole authority.
+  test("verdicts that only models agreed on settle nothing, so the gate cannot pass on them", () => {
+    const built = scenario()
+    const modelsOnly = built.judgements.map((item) => ({
+      ...item,
+      passes: item.passes.map((pass) =>
+        pass.judge.startsWith("human:") ? { ...pass, judge: "model:vendor/second-judge" } : pass,
+      ),
+    }))
+    const result = buildReport({
+      title: "t",
+      split: "held-out",
+      frozen: true,
+      ...built,
+      judgements: modelsOnly,
+      candidate: CANDIDATE,
+      baseline: BASELINE,
+    })
+    expect(outcomes(result)).toMatchObject({
+      minPrecision: "review",
+      maxFalseAlarmsPerCleanPr: "pass",
+      maxRecallDrop: "review",
+    })
+    expect(result.decision!.outcome).not.toBe("pass")
+    expect(result.judging).toMatchObject({ agreed: 0, needsHuman: result.judging.findings })
+    expect(result.groups[0].stages.posted.findings.unjudged).toBe(200)
+    expect(renderReport(result)).toContain("agreed by models only (waiting for a human)")
+  })
+
+  // Small held-out samples may require more data, not weaker thresholds.
+  test("a gate weaker than the approved D2 is never a release decision", () => {
+    const looser: GateConfig = {
+      ...DEFAULT_GATE,
+      decision: "relaxed",
+      rules: { ...DEFAULT_GATE.rules, minPrecision: 0.5, maxFalseAlarmsPerCleanPr: 0.5 },
+    }
+    expect(gateProblems(looser)).toEqual([])
+    const weak = report({}, {}, looser)
+    expect(weak.decision!.outcome).toBe("pass")
+    expect(weak.decision!.release.eligible).toBe(false)
+    expect(weak.decision!.release.reasons).toEqual([
+      "the gate is weaker than the approved D2: minPrecision is 0.5, looser than D2's 0.8",
+      "the gate is weaker than the approved D2: maxFalseAlarmsPerCleanPr is 0.5, looser than D2's 0.2",
+    ])
+    const narrow = report({}, {}, { ...DEFAULT_GATE, decision: "narrow", confidence: 0.8 })
+    expect(narrow.decision!.release.reasons).toEqual([
+      "the gate is weaker than the approved D2: confidence is 0.8, below D2's 0.95",
+    ])
+    const elsewhere = report({}, { split: "development" }, { ...DEFAULT_GATE, decision: "dev", split: "development" })
+    expect(elsewhere.decision!.release.reasons).toEqual([
+      "the gate is weaker than the approved D2: a release decision is made on development, not D2's held-out",
+    ])
+    // A copy that still calls itself D2 cannot speak for D2 once it differs, even when it is stricter.
+    const renamed = report({}, {}, { ...DEFAULT_GATE, rules: { ...DEFAULT_GATE.rules, minPrecision: 0.5 } })
+    expect(renamed.decision!.release.reasons.join("\n")).toContain("is not the approved D2 config")
+    const stricter = report(
+      {},
+      {},
+      { ...DEFAULT_GATE, decision: "D2-strict", rules: { ...DEFAULT_GATE.rules, minCoverage: 0.97 } },
+    )
+    expect(stricter.decision!.release).toEqual({ eligible: true, reasons: [] })
+  })
+})
+
 describe("the report", () => {
   test("keeps missing runs in the plan and reports runs it cannot place", () => {
     const built = scenario({ bugs: 3, controls: 1, baseline: false })
@@ -359,7 +424,7 @@ describe("the report", () => {
       correctness: { count: 6, total: 6 },
       security: { count: 2, total: 2 },
     })
-    expect(built.judging).toMatchObject({ findings: 16, agreed: 16, agreedWithHuman: 16 })
+    expect(built.judging).toMatchObject({ findings: 16, agreed: 16, needsHuman: 0 })
   })
 
   test("without a candidate it reports and asks for one", () => {

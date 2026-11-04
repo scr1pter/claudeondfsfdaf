@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import { writeFile } from "node:fs/promises"
-import { isAbsolute, join, relative, resolve } from "node:path"
+import { resolve } from "node:path"
 import { parseArgs } from "node:util"
 import { DEFAULT_SLACK, scoreReview, totalScores, type ReviewScore } from "../../packages/core/src/review/eval"
 import { buildReviewPrompt } from "../../packages/core/src/review/prompt"
@@ -22,6 +22,7 @@ import {
   type Usage as Charge,
 } from "./budget"
 import { fixtureProblems, fixtureView, listFixtures, loadFixture, promptInput, type Fixture } from "./fixture"
+import { outsideRepository, REPO_ROOT } from "./paths"
 
 // Sends Vectorscope's review prompt for each fixture to one model, once per repetition, and scores the findings
 // against the planted bugs. A run that could not be measured (an HTTP error, a timeout, an answer with no report in
@@ -31,10 +32,16 @@ import { fixtureProblems, fixtureView, listFixtures, loadFixture, promptInput, t
 // a price, estimates the cost, and sends nothing. With --budget-usd and --case-budget-usd every request, the retry
 // without a JSON schema included, is admitted by the budget ledger in budget.ts before it is sent, and settles at the
 // cost the provider reported. A request the budget cannot cover is not sent, and its case is reported as not sent.
+//
+// The paid eval is manual CI only (Phase 0, D7): a hosted endpoint is sent to only from the vectorscope-eval
+// environment, which ci.ts marks, with that environment's own key. On any other machine a run sends only to a loopback
+// endpoint, such as a local model server. The product's OPENROUTER_API_KEY is never read by default.
 
-const REPO_ROOT = join(import.meta.dir, "..", "..")
 export const DEFAULT_BASE_URL = "https://openrouter.ai/api/v1/chat/completions"
-const DEFAULT_API_KEY_ENV = "OPENROUTER_API_KEY"
+export const EVAL_KEY_ENV = "VECTORSCOPE_EVAL_API_KEY"
+// Set by ci.ts in the paid job of .github/workflows/vectorscope-eval.yml, which runs in the protected environment.
+export const EVAL_ENVIRONMENT_ENV = "VECTORSCOPE_EVAL_ENVIRONMENT"
+export const EVAL_ENVIRONMENT = "vectorscope-eval"
 const ERROR_CHARS = 300
 
 // The review prompt is written for an agent with read-only tools and a StructuredOutput tool. This run has neither,
@@ -50,17 +57,19 @@ const USAGE = `Usage: bun script/vectorscope-eval/run.ts [options]
 
 A dry run unless --budget-usd is given: it validates the fixtures and prints prompt sizes, and with --model, --price
 and --max-tokens it estimates the cost. Requests are sent only with a budget, each admitted by the budget ledger.
+Outside the vectorscope-eval CI environment, requests go only to a loopback --base-url (a local model server); a
+hosted endpoint is the paid eval, which runs only from .github/workflows/vectorscope-eval.yml.
 
   --model <id>              Model id sent to the endpoint, such as anthropic/claude-sonnet-4.5 on OpenRouter
   --fixture <names>         Comma-separated fixture names (default: all)
   --repeat <n>              Run each fixture n times, 1-20 (default 1)
   --budget-usd <usd>        Total budget; sends requests. A tenth is held in reserve
   --case-budget-usd <usd>   Bound for one case: one fixture reviewed once, its retry included (needed with a budget)
-  --price <in>:<out>        USD per million input and output tokens, for estimates (needed with a budget)
+  --price <in>:<out>        USD per million input and output tokens, for estimates (needed with a budget, both above 0)
   --max-tokens <n>          max_tokens for each request (needed with a budget; otherwise the provider's default)
   --ledger <path>           Budget journal outside the repository, shared by runs with the same budget
   --base-url <url>          OpenAI-compatible chat completions URL (default ${DEFAULT_BASE_URL})
-  --api-key-env <name>      Environment variable that holds the API key (default ${DEFAULT_API_KEY_ENV})
+  --api-key-env <name>      Environment variable that holds the API key (default ${EVAL_KEY_ENV})
   --slack <lines>           Lines a finding may be away from a planted bug and still match (default ${DEFAULT_SLACK})
   --count-nits              Score nit findings too (default: ignored)
   --timeout <sec>           Per-request timeout (default 300)
@@ -201,6 +210,13 @@ export async function main(argv: string[], deps: Deps = {}): Promise<number> {
     price: flags.price,
     maxTokens: flags.maxTokens,
     limits: flags.limits,
+  }
+  // D7: hosted, paid endpoints only from the protected environment. A loopback server is the only local destination.
+  if (!isLoopback(run.baseUrl) && !(env.GITHUB_ACTIONS === "true" && env[EVAL_ENVIRONMENT_ENV] === EVAL_ENVIRONMENT)) {
+    err(
+      `Nothing was sent. ${new URL(run.baseUrl).host} is a hosted endpoint, and the paid eval runs only in the ${EVAL_ENVIRONMENT} GitHub environment (.github/workflows/vectorscope-eval.yml). Locally, send only to a loopback --base-url, such as a model server on 127.0.0.1.\n`,
+    )
+    return 2
   }
   const apiKey = env[run.apiKeyEnv]
   if (!apiKey) {
@@ -598,7 +614,7 @@ function parseFlags(argv: string[]) {
     fixture: text("fixture"),
     repeat: Number(text("repeat") ?? 1),
     baseUrl: text("base-url") ?? DEFAULT_BASE_URL,
-    apiKeyEnv: text("api-key-env") ?? DEFAULT_API_KEY_ENV,
+    apiKeyEnv: text("api-key-env") ?? EVAL_KEY_ENV,
     slack: Number(text("slack") ?? DEFAULT_SLACK),
     countNits: values["count-nits"] === true,
     maxTokens: text("max-tokens") === undefined ? undefined : Number(text("max-tokens")),
@@ -622,6 +638,14 @@ function parseFlags(argv: string[]) {
     return "--price must be USD per million input and output tokens, such as 3:15."
   if ((flags.budgetUsd === undefined) !== (flags.caseBudgetUsd === undefined))
     return "--budget-usd and --case-budget-usd go together."
+  // A zero price makes every estimate zero, so the ledger would admit every request and the budget would bound nothing.
+  if (
+    flags.budgetUsd !== undefined &&
+    !flags.dryRun &&
+    flags.price &&
+    !(flags.price.input > 0 && flags.price.output > 0)
+  )
+    return "Sending with a budget needs input and output prices above zero, so the estimates bound what it can spend."
   const limits =
     flags.budgetUsd === undefined || flags.caseBudgetUsd === undefined
       ? undefined
@@ -631,13 +655,17 @@ function parseFlags(argv: string[]) {
   if (!URL.canParse(flags.baseUrl)) return `--base-url is not a URL: ${flags.baseUrl}`
   if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(flags.apiKeyEnv)) return "--api-key-env must name an environment variable."
   // Results are kept out of the repository, like the agent eval's: numbers from one session are not a benchmark.
-  const inside = flags.out === undefined ? "" : relative(REPO_ROOT, flags.out)
-  if (flags.out !== undefined && !inside.startsWith("..") && !isAbsolute(inside))
+  if (flags.out !== undefined && !outsideRepository(flags.out))
     return `--out must be outside the repository (${REPO_ROOT}).`
-  const journal = flags.ledger === undefined ? "" : relative(REPO_ROOT, flags.ledger)
-  if (flags.ledger !== undefined && !journal.startsWith("..") && !isAbsolute(journal))
+  if (flags.ledger !== undefined && !outsideRepository(flags.ledger))
     return `--ledger must be outside the repository (${REPO_ROOT}).`
   return { ...flags, limits }
+}
+
+// A server on this machine: localhost, 127.0.0.0/8 or ::1.
+export function isLoopback(url: string) {
+  const host = new URL(url).hostname.toLowerCase()
+  return host === "localhost" || host.endsWith(".localhost") || /^127(\.\d{1,3}){3}$/.test(host) || host === "[::1]"
 }
 
 function scored(runs: Run[]) {

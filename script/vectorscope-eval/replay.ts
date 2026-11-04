@@ -26,6 +26,8 @@ import {
   type CaseView,
   type Manifest,
   type Split,
+  untrustedGitEnv,
+  UNTRUSTED_GIT,
 } from "./dataset"
 
 // The production replay's driver (VectorScope plan, VS-02). It turns dataset cases into the input of the engine's
@@ -44,9 +46,9 @@ export const ADAPTERS = {
     detail: "ReviewEval.replay: the engine review pipeline, with GitHub's writes recorded instead of sent.",
   },
   desktop: {
-    ready: false,
+    ready: true,
     detail:
-      "The desktop runner (packages/app/src/features/pull-requests/ai-review.ts) reviews through an injected SDK client, which needs a running engine server, so it cannot be driven headlessly here yet. Its replay comes with moving that runner into the engine (VS-10).",
+      "desktopReplay (desktop.ts): the desktop runner, runReview in packages/app/src/features/pull-requests/ai-review.ts, through a recording client, with what its Post button would send recorded instead of sent. A paid desktop replay needs an engine server and the eval ledger and is not wired.",
   },
 } as const
 export type Adapter = keyof typeof ADAPTERS
@@ -155,9 +157,16 @@ export function replayBudget(cases: number, limits: Limits) {
   }
 }
 
+// Where a case's checkout is prepared: a directory named by a digest of the case id, since the reviewer sees its
+// working directory in its tool paths and the id must never reach it.
+export function checkoutDirectory(root: string, id: string) {
+  return join(root, `case-${createHash("sha256").update(id).digest("hex").slice(0, 16)}`)
+}
+
 // A new repository at `directory` holding the candidate head and its history, fetched from a local mirror with git
-// alone, and the base checked out. Nothing after the head is fetched, so the fix stays out. Returns what went wrong;
-// empty when the checkout is ready.
+// alone, and the base checked out. Nothing after the head is fetched, so the fix stays out. Git runs without the user's
+// or the system's config, hooks or smudge filters, and with only the local file transport, so the dataset's content
+// cannot run git-lfs or reach the network. Returns what went wrong; empty when the checkout is ready.
 export function prepareCheckout(input: { mirror: string; view: CaseView; directory: string }): string[] {
   const shas = [input.view.base, input.view.head].filter((sha) => !FULL_SHA.test(sha))
   if (shas.length) return [`not full commit SHAs: ${shas.join(", ")}`]
@@ -170,8 +179,8 @@ export function prepareCheckout(input: { mirror: string; view: CaseView; directo
     ["-C", input.directory, "checkout", "--quiet", "--detach", input.view.base],
   ]
   for (const step of steps) {
-    const result = Bun.spawnSync(["git", ...step], {
-      env: { ...gitEnv(), GIT_TERMINAL_PROMPT: "0" },
+    const result = Bun.spawnSync(["git", ...UNTRUSTED_GIT, ...step], {
+      env: untrustedGitEnv(),
       stdout: "pipe",
       stderr: "pipe",
     })
@@ -188,7 +197,7 @@ Plans a replay of dataset cases through the production review pipeline. Sends no
   --split <name>      ${SPLITS.join(", ")} (default: development)
   --mirrors <dir>     Local clones at <dir>/<owner>/<name>[.git]
   --adapter <name>    engine (default) or desktop
-  --prepare <dir>     Also prepare each mirrored case's checkout at <dir>/<case id>, with local git only
+  --prepare <dir>     Also prepare each mirrored case's checkout under <dir>, with local git only
   --budget-usd <usd>  With --case-budget-usd, show how many cases the budget could admit
   --case-budget-usd <usd>
   --help              Print this message
@@ -268,7 +277,7 @@ export async function main(argv: string[]): Promise<{ code: number; stdout: stri
           problems: prepareCheckout({
             mirror: entry.mirror,
             view: { repository: entry.case.repository?.url ?? "", base: entry.case.base, head: entry.case.head },
-            directory: join(resolve(prepare), entry.id),
+            directory: checkoutDirectory(resolve(prepare), entry.id),
           }),
         }
       : { entry, problems: [] },

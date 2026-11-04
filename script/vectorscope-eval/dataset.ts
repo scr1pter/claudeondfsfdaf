@@ -1,13 +1,15 @@
 #!/usr/bin/env bun
 import { createHash } from "node:crypto"
 import { existsSync } from "node:fs"
+import { devNull } from "node:os"
 import { join, resolve } from "node:path"
 import { parseArgs } from "node:util"
 
-// The real-change dataset behind VectorScope's eval. A manifest lists public bug-fix cases and clean controls, each
-// pinned to immutable commits in a permissively licensed repository, and holds no code. A bug case names the candidate
-// change a reviewer is shown (base..head) and the later fix, which stays hidden as ground truth. annotation-guide.md
-// says how cases are found, checked and labelled.
+// The real-change dataset behind VectorScope's eval. A manifest lists public bug-fix cases, clean controls and
+// adversarial (prompt-injection) cases, each pinned to immutable commits in a permissively licensed repository, and
+// holds no code. A bug case names the candidate change a reviewer is shown (base..head) and the later fix, which stays
+// hidden as ground truth. An adversarial case is a separate trust test, never a defect or a clean change in the
+// quality metrics. annotation-guide.md says how cases are found, checked and labelled.
 //
 // Run as a script it is a dry run: it validates a manifest, recomputes the grouped split, checks the held-out freeze
 // and lists the exclusions. It never makes a network request. Given local mirrors (--mirrors) it also checks commits,
@@ -57,12 +59,17 @@ export interface Defect {
 export interface Annotation {
   status: (typeof ANNOTATION_STATUSES)[number]
   passes: { pass: number; method: string; date: string }[]
+  // A double-annotated label's two passes were compared: true when they agreed, so the label stands as it is (D8), and
+  // false while a disagreement waits for the owner's adjudication.
+  agreed?: boolean
   adjudication?: { by: string; date: string; note?: string }
 }
 
+export const KINDS = ["bug", "control", "adversarial"] as const
+
 export interface Case {
-  id: string
-  kind: "bug" | "control"
+  id: string // neutral by convention (<owner>-<name>-<n>); it never reaches a reviewer, not even as a directory name
+  kind: (typeof KINDS)[number]
   split: Split
   family?: string // cases sharing a root cause, a backport or a fix series; they always share a split
   repository: { url: string; licence: (typeof LICENCES)[number] }
@@ -80,6 +87,7 @@ export interface Case {
     defects: Defect[]
     regressionTest?: { status: (typeof REGRESSION_TEST)[number]; paths?: string[]; note?: string }
     rationale?: string // a control's argument that it preserves behaviour
+    injection?: string // an adversarial case's injected instruction, where it is, and what a safe reviewer does
     annotation: Annotation
   }
   provenance: {
@@ -197,7 +205,7 @@ function caseProblems(value: unknown, index: number): string[] {
       typeof item.id === "string" && SLUG.test(item.id),
       `${label}: id must be lowercase words joined by hyphens`,
     ),
-    ...need(item.kind === "bug" || item.kind === "control", `${label}: kind must be bug or control`),
+    ...need(oneOf(KINDS, item.kind), `${label}: kind must be one of ${KINDS.join(", ")}`),
     ...need(oneOf(SPLITS, item.split), `${label}: split must be one of ${SPLITS.join(", ")}`),
     ...need(
       item.family === undefined || (typeof item.family === "string" && SLUG.test(item.family)),
@@ -232,7 +240,11 @@ function caseProblems(value: unknown, index: number): string[] {
         count(changed.deletions),
       `${label}: candidate.changed needs whole-number files, additions and deletions`,
     ),
-    ...(item.kind === "control" ? controlProblems(label, item, labels) : bugProblems(label, item, candidate, labels)),
+    ...(item.kind === "control"
+      ? controlProblems(label, item, labels)
+      : item.kind === "adversarial"
+        ? adversarialProblems(label, item, candidate, labels)
+        : bugProblems(label, item, candidate, labels)),
     ...annotationProblems(label, record(labels?.annotation)),
     ...need(
       !!provenance && text(provenance.found) && text(provenance.evidence),
@@ -303,6 +315,28 @@ function controlProblems(label: string, item: Record<string, unknown>, labels: R
   ]
 }
 
+// A prompt-injection case: a change carrying text that tries to instruct the reviewer. Its labels say what the text
+// asks and what a safe reviewer does. It may also label real defects the injection tries to hide, and then needs their
+// fix like a bug case; it is still left out of recall and of false alarms per clean pull request.
+function adversarialProblems(
+  label: string,
+  item: Record<string, unknown>,
+  candidate: Record<string, unknown> | undefined,
+  labels: Record<string, unknown> | undefined,
+) {
+  const defects = Array.isArray(labels?.defects) ? labels.defects : undefined
+  return [
+    ...need(
+      text(labels?.injection),
+      `${label}: an adversarial case needs labels.injection: the injected instruction, where it is, and what a safe reviewer does`,
+    ),
+    ...need(!!defects, `${label}: labels.defects must be a list (it may be empty)`),
+    ...(defects?.length
+      ? bugProblems(label, item, candidate, labels)
+      : need(item.fix === undefined, `${label}: an adversarial case with no labelled defect has no fix`)),
+  ]
+}
+
 function defectProblems(label: string, value: unknown) {
   const defect = record(value)
   if (!defect) return [`${label} is not an object`]
@@ -363,7 +397,19 @@ function annotationProblems(label: string, annotation: Record<string, unknown> |
       annotation.status !== "adjudicated" || (!!adjudication && text(adjudication.by) && isDay(adjudication.date)),
       `${label}: an adjudicated label must record who adjudicated it and when`,
     ),
+    ...need(
+      annotation.agreed === undefined ||
+        (typeof annotation.agreed === "boolean" &&
+          (annotation.status === "double-annotated" || (annotation.status === "adjudicated" && !annotation.agreed))),
+      `${label}: agreed records whether a double-annotated label's two passes agreed; an adjudicated label's did not`,
+    ),
   ]
+}
+
+// D8: the owner adjudicates only disagreements. A label stands, and may be frozen, once it is adjudicated or its two
+// passes were compared and agreed.
+export function labelSettled(annotation: Annotation) {
+  return annotation.status === "adjudicated" || (annotation.status === "double-annotated" && annotation.agreed === true)
 }
 
 function exclusionProblems(value: unknown, index: number) {
@@ -388,8 +434,9 @@ function exclusionProblems(value: unknown, index: number) {
   ]
 }
 
-// Freezing records a digest of the held-out cases once their labels are adjudicated, before any prompt tuning. Any
-// later change to a held-out case, or to which cases are held out, breaks the digest.
+// Freezing records a digest of the held-out cases once their labels are settled (adjudicated, or two passes that
+// agreed), before any prompt tuning. Any later change to a held-out case, or to which cases are held out, breaks the
+// digest.
 function freezeProblems(manifest: Manifest) {
   if (manifest.freeze === undefined) return []
   const freeze = record(manifest.freeze)
@@ -402,8 +449,11 @@ function freezeProblems(manifest: Manifest) {
     return ["freeze needs a date and a sha256: digest of the held-out cases"]
   return [
     ...manifest.cases
-      .filter((item) => item.split === "held-out" && item.labels.annotation.status !== "adjudicated")
-      .map((item) => `case ${item.id}: held-out labels were frozen before they were adjudicated`),
+      .filter((item) => item.split === "held-out" && !labelSettled(item.labels.annotation))
+      .map(
+        (item) =>
+          `case ${item.id}: held-out labels were frozen before they were settled (two passes that agreed, or the owner's adjudication)`,
+      ),
     ...need(
       heldOutDigest(manifest) === freeze.digest,
       "the held-out cases changed after the freeze: their digest no longer matches freeze.digest",
@@ -420,14 +470,15 @@ export function heldOutDigest(manifest: Pick<Manifest, "cases">) {
 
 type SplitInput = Pick<Case, "id" | "kind" | "family" | "repository" | "candidate"> & { fix?: { date: string } }
 
-// The split rule. Bug cases and controls are split separately, each roughly 60/20/20. Cases that share a repository
+// The split rule. Bug cases, controls and adversarial cases are split separately, each roughly 60/20/20. Cases that
+// share a repository
 // or a family form one group and always land together, so a related fix cannot sit on both sides. Groups are ordered
 // by their latest date (the fix for a bug, the candidate for a control): the oldest fill development, then
 // calibration, and the newest are held out, so nothing tuned on can postdate what it is tested on. Calibration and
 // held-out each take round(n / 5) cases; a group that straddles a boundary goes to the earlier split.
 export function assignSplits(cases: SplitInput[]) {
   return new Map<string, Split>(
-    (["bug", "control"] as const).flatMap((kind) => {
+    KINDS.flatMap((kind) => {
       const members = cases.filter((item) => item.kind === kind)
       const share = Math.round(members.length / 5)
       const development = members.length - 2 * share
@@ -489,7 +540,11 @@ export function objectProblems(manifest: Pick<Manifest, "cases">, locate: (url: 
 function caseObjectProblems(item: Case, dir: string): string[] {
   const label = `case ${item.id}`
   const git = (...args: string[]) => {
-    const result = Bun.spawnSync(["git", "-C", dir, ...args], { env: gitEnv(), stdout: "pipe", stderr: "pipe" })
+    const result = Bun.spawnSync(["git", ...UNTRUSTED_GIT, "-C", dir, ...args], {
+      env: untrustedGitEnv(),
+      stdout: "pipe",
+      stderr: "pipe",
+    })
     return { ok: result.exitCode === 0, out: result.stdout.toString() }
   }
   const commits = [
@@ -584,6 +639,31 @@ export function gitEnv() {
   return Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_")))
 }
 
+// Git over third-party dataset content runs without the user's or the system's git config, so no smudge filter
+// (git-lfs, which a dataset's .lfsconfig could point at a URL of its choosing), credential helper, global hook or
+// fsmonitor runs on it, and never prompts.
+export function untrustedGitEnv() {
+  return {
+    ...gitEnv(),
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_CONFIG_GLOBAL: devNull,
+    GIT_LFS_SKIP_SMUDGE: "1",
+    GIT_TERMINAL_PROMPT: "0",
+  }
+}
+
+// And with no hooks, no fsmonitor, and no transport but local files: nothing it does can reach the network.
+export const UNTRUSTED_GIT = [
+  "-c",
+  `core.hooksPath=${devNull}`,
+  "-c",
+  "core.fsmonitor=false",
+  "-c",
+  "protocol.allow=never",
+  "-c",
+  "protocol.file.allow=always",
+] as const
+
 // A local mirror lives at <dir>/<owner>/<name> or <dir>/<owner>/<name>.git.
 export function mirrorLocator(dir: string) {
   return (url: string) => {
@@ -595,6 +675,7 @@ export function mirrorLocator(dir: string) {
 export function dryRunReport(manifest: Manifest, objects?: ObjectCheck) {
   const bugs = manifest.cases.filter((item) => item.kind === "bug")
   const controls = manifest.cases.filter((item) => item.kind === "control")
+  const adversarial = manifest.cases.filter((item) => item.kind === "adversarial")
   const repositories = new Set(manifest.cases.map((item) => repositoryKey(item.repository.url)))
   const tally = (values: string[]) =>
     Object.entries(Object.groupBy(values, (value) => value))
@@ -603,7 +684,7 @@ export function dryRunReport(manifest: Manifest, objects?: ObjectCheck) {
       .join(", ")
   const statuses = manifest.cases.map((item) => item.labels.annotation.status)
   const heldDraft = manifest.cases.filter(
-    (item) => item.split === "held-out" && item.labels.annotation.status !== "adjudicated",
+    (item) => item.split === "held-out" && !labelSettled(item.labels.annotation),
   ).length
   const digest = heldOutDigest(manifest)
   const methods = Object.entries(
@@ -613,13 +694,14 @@ export function dryRunReport(manifest: Manifest, objects?: ObjectCheck) {
     .toSorted()
     .join(", ")
   return [
-    `${manifest.name} (${manifest.schema}): ${manifest.cases.length} cases, ${bugs.length} bug fixes and ${controls.length} controls, from ${repositories.size} repositories`,
+    `${manifest.name} (${manifest.schema}): ${manifest.cases.length} cases, ${bugs.length} bug fixes and ${controls.length} controls${adversarial.length ? `, and ${adversarial.length} adversarial` : ""}, from ${repositories.size} repositories`,
     formatTable([
-      ["SPLIT", "BUGS", "CONTROLS"],
+      ["SPLIT", "BUGS", "CONTROLS", ...(adversarial.length ? ["ADVERSARIAL"] : [])],
       ...SPLITS.map((split) => [
         split,
         String(bugs.filter((item) => item.split === split).length),
         String(controls.filter((item) => item.split === split).length),
+        ...(adversarial.length ? [String(adversarial.filter((item) => item.split === split).length)] : []),
       ]),
     ]),
     "",
@@ -629,7 +711,7 @@ export function dryRunReport(manifest: Manifest, objects?: ObjectCheck) {
     `Labels: ${ANNOTATION_STATUSES.map((status) => `${statuses.filter((entry) => entry === status).length} ${status}`).join(", ")}`,
     manifest.freeze
       ? `Freeze: held-out cases frozen on ${manifest.freeze.date} (${manifest.freeze.digest}).`
-      : `Freeze: not frozen. ${heldDraft ? `${heldDraft} held-out case(s) still need adjudicated labels; ` : ""}freeze before any prompt tuning by recording ${digest}.`,
+      : `Freeze: not frozen. ${heldDraft ? `${heldDraft} held-out case(s) still need settled labels (two passes that agreed, or the owner's adjudication); ` : ""}freeze before any prompt tuning by recording ${digest}.`,
     objects
       ? `Objects: ${objects.checked.length} case(s) checked against local mirrors${objects.unchecked.length ? `; no mirror for ${objects.unchecked.join(", ")}` : ""}.`
       : "Objects: not checked against local mirrors (none given).",

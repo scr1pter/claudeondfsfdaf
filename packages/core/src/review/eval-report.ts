@@ -6,7 +6,7 @@
 //
 // The gate needs its intervals to settle each statistical rule: a rule whose interval straddles its threshold is sent
 // to human review, as is any rule whose findings are not all judged. Only a held-out run on a frozen manifest, collected
-// after the gate was approved, is a release decision.
+// after the gate was approved, under a gate no weaker than the approved D2, is a release decision.
 
 import {
   DEFAULT_SLACK,
@@ -191,6 +191,30 @@ export function gateProblems(value: unknown): string[] {
 
 export function gateDigest(gate: GateConfig) {
   return fnv1a64(canonical(gate))
+}
+
+// How a gate is weaker than the owner's approved D2: a rule with a looser threshold, a lower confidence level (which
+// narrows every interval), or a release decision on another split. Small samples call for more data, not weaker
+// thresholds (Phase 0), so such a gate can report but never make a release decision.
+export function gateLoosening(gate: GateConfig, approved: GateConfig = DEFAULT_GATE): string[] {
+  const rules = gate.rules
+  const base = approved.rules
+  const looser = (name: keyof GateRules, weaker: boolean) =>
+    weaker ? [`${name} is ${rules[name]}, looser than ${approved.decision}'s ${base[name]}`] : []
+  return [
+    ...looser("maxTrustViolations", rules.maxTrustViolations > base.maxTrustViolations),
+    ...looser("maxUnaccountedAttempts", rules.maxUnaccountedAttempts > base.maxUnaccountedAttempts),
+    ...looser("minCoverage", rules.minCoverage < base.minCoverage),
+    ...looser("minPrecision", rules.minPrecision < base.minPrecision),
+    ...looser("maxFalseAlarmsPerCleanPr", rules.maxFalseAlarmsPerCleanPr > base.maxFalseAlarmsPerCleanPr),
+    ...looser("maxRecallDrop", rules.maxRecallDrop > base.maxRecallDrop),
+    ...(gate.confidence < approved.confidence
+      ? [`confidence is ${gate.confidence}, below ${approved.decision}'s ${approved.confidence}`]
+      : []),
+    ...(gate.split !== approved.split
+      ? [`a release decision is made on ${gate.split}, not ${approved.decision}'s ${approved.split}`]
+      : []),
+  ]
 }
 
 export function buildReport(input: ReportInput, gate: GateConfig = DEFAULT_GATE): Report {
@@ -436,6 +460,13 @@ function evaluateGate(input: {
         ? [`the gate was approved on ${gate.approved.date}, after the results were collected on ${input.collected}`]
         : []),
     ...(input.problems.length ? [`${input.problems.length} input or judging problem(s) are listed in the report`] : []),
+    ...gateLoosening(gate).map((detail) => `the gate is weaker than the approved ${DEFAULT_GATE.decision}: ${detail}`),
+    // A gate that is not the approved config cannot speak for that decision, even when it is stricter.
+    ...(gate.decision === DEFAULT_GATE.decision && gateDigest(gate) !== gateDigest(DEFAULT_GATE)
+      ? [
+          `the gate is named ${DEFAULT_GATE.decision} but is not the approved ${DEFAULT_GATE.decision} config (digest ${gateDigest(gate)}, not ${gateDigest(DEFAULT_GATE)}); a changed gate needs its own decision`,
+        ]
+      : []),
   ]
   return {
     decision: gate.decision,
@@ -524,9 +555,9 @@ export function renderReport(report: Report): string {
     ].join(" · "),
     ...Object.entries(report.sources).map(([name, value]) => `- ${name}: ${value}`),
     "",
-    "Judging is blinded: a judge sees one run's findings at a time with opaque ids, and nothing names the pipeline, the model, the repetition or whether a finding was posted. A verdict counts when two judges agree or a human adjudicates; one pass alone counts for nothing, and no model judges its own findings.",
+    "Judging is blinded: a judge sees one run's findings at a time with opaque ids, and nothing names the pipeline, the model, the repetition or whether a finding was posted. A verdict counts when two judges with a human among them agree, or a human adjudicates; models agreeing alone, or one pass, count for nothing, and no model judges its own findings.",
     "",
-    `Findings to judge: ${judging.findings}. Adjudicated ${judging.adjudicated}, agreed ${judging.agreed} (${judging.agreedWithHuman} with a human pass), disagreed ${judging.disagreed}, one pass ${judging.single}, none ${judging.none}.`,
+    `Findings to judge: ${judging.findings}. Adjudicated ${judging.adjudicated}, agreed ${judging.agreed}, agreed by models only (waiting for a human) ${judging.needsHuman}, disagreed ${judging.disagreed}, one pass ${judging.single}, none ${judging.none}.`,
     `Judge calls: ${judging.calls} (${judging.paid} paid, $${judging.costUsd.toFixed(4)} reported, ${judging.unaccounted} not admitted by the ledger).`,
     ...(report.ledger
       ? [
@@ -590,6 +621,11 @@ function renderGroup(group: GroupReport, stage: Stage) {
     `Runs: ${describeStatus(metrics)}.`,
     `Spend: $${spend.costUsd.toFixed(4)} reported, $${spend.uncertainUsd.toFixed(4)} uncertain (kept in full because the cost is not known); ${spend.usageMissing} run(s) missing usage; ${spend.unaccounted} not admitted by the ledger. Tokens ${spend.tokens.input} in, ${spend.tokens.output} out${spend.tokensMissing ? ` (${spend.tokensMissing} reviewed run(s) reported none)` : ""}.`,
     `Wall time: ${(metrics.wallMs.total / 1000).toFixed(1)}s over ${metrics.wallMs.runs} run(s)${metrics.wallMs.median === null ? "" : `, median ${(metrics.wallMs.median / 1000).toFixed(1)}s`}.`,
+    ...(metrics.adversarial.planned
+      ? [
+          `Adversarial (prompt-injection) cases, left out of every rate above: ${metrics.adversarial.planned} planned, ${metrics.adversarial.reviewed} reviewed, ${metrics.adversarial.violated} with a failed trust or consent check.`,
+        ]
+      : []),
     ...(metrics.violations.length
       ? ["", "Trust or consent checks failed:", ...metrics.violations.map((violation) => `- ${violation}`)]
       : []),
@@ -656,12 +692,14 @@ function slices(entries: Entry[], key: (entry: Entry) => string, options: { conf
 }
 
 function categories(entries: Entry[], confidence: number) {
-  const labelled = entries.flatMap((entry) =>
-    entry.evalCase.defects.map((defect) => ({
-      category: defect.category,
-      found: entry.score.detected.includes(defect.id),
-    })),
-  )
+  const labelled = entries
+    .filter((entry) => entry.evalCase.kind !== "adversarial")
+    .flatMap((entry) =>
+      entry.evalCase.defects.map((defect) => ({
+        category: defect.category,
+        found: entry.score.detected.includes(defect.id),
+      })),
+    )
   return Object.fromEntries(
     [...new Set(labelled.map((item) => item.category))].toSorted().map((category) => {
       const items = labelled.filter((item) => item.category === category)

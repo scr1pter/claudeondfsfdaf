@@ -9,7 +9,19 @@ import type { ReplayArtifact } from "../../packages/engine/src/review/eval"
 import { Ledger } from "./budget"
 import { loadManifest, type Manifest } from "./dataset"
 import { listFixtures, loadFixture } from "./fixture"
-import { evalFinding, fixtureCase, fromArtifact, fromRunReport, JUDGEMENTS_SCHEMA, loadOutputs, main } from "./report"
+import {
+  EMPTY_CONTROL,
+  emptyControl,
+  evalFinding,
+  fixtureCase,
+  fromArtifact,
+  fromRunReport,
+  JUDGEMENTS_SCHEMA,
+  ledgerSummaries,
+  loadOutputs,
+  main,
+  manifestCase,
+} from "./report"
 
 // The offline report over saved outputs: a run.ts report built with a real ledger, and replay artifacts shaped as the
 // engine writes them. Nothing here sends a request.
@@ -259,6 +271,122 @@ describe("saved run.ts reports", () => {
       defects: [],
     })
   })
+
+  // A judge checks an unexpected finding against the code, so each case says where its code is.
+  test("cases say where a judge reads their code", () => {
+    const invoice = fixtures.find((fixture) => fixture.name === "invoice-ledger-sync")!
+    expect(fixtureCase(invoice).code).toEqual({ patch: invoice.diff })
+    expect(invoice.diff).not.toContain(invoice.name)
+    const code = manifestCase(bug).code
+    expect(code).toEqual({ repository: bug.repository.url, base: bug.candidate.base, head: bug.candidate.head })
+    expect(JSON.stringify(code)).not.toContain(bug.fix!.sha)
+  })
+})
+
+describe("the eval ledger in a report", () => {
+  // Every model of a CI run writes to one journal, and each report embeds the journal as it stood when it finished.
+  function sharedJournal() {
+    const journal = join(root, `shared-${Math.random().toString(16).slice(2)}.jsonl`)
+    const limits = { totalUsd: 10, caseUsd: 1, reserveUsd: 1 }
+    const charge = (model: string, costUsd: number, settle = true) => {
+      const ledger = Ledger.open({ limits, journal })
+      const admission = ledger.admit({ case: `${model} x#1`, kind: "provider", model, estimateUsd: 0.5 })
+      if (!admission.admitted) throw new Error(admission.detail)
+      admission.ticket.sent()
+      if (settle) admission.ticket.settle({ costUsd, basis: "reported" })
+      ledger.close()
+      return { budget: ledger.summary(), ledger: [...ledger.entries] }
+    }
+    // The first model spends $0.40 and overshoots nothing; the second spends $0.30 and leaves one attempt uncertain.
+    const first = charge("vendor/a", 0.4)
+    const second = charge("vendor/b", 0.3)
+    const third = charge("vendor/c", 0, false)
+    return { journal, reports: [first, second, third] }
+  }
+
+  test("counts a journal the reports share once, not once per report", () => {
+    const shared = sharedJournal()
+    // Each later report's own summary already includes the earlier models' spend.
+    const [one, two, three] = shared.reports.map((report) => report.budget.spentUsd)
+    expect(one).toBeCloseTo(0.4)
+    expect(two).toBeCloseTo(0.7)
+    expect(three).toBeCloseTo(0.7)
+    const summaries = ledgerSummaries(shared.reports)
+    expect(summaries).toHaveLength(1)
+    expect(summaries[0]).toMatchObject({ uncertainUsd: 0.5, attempts: { admitted: 3, settled: 2, uncertain: 1 } })
+    expect(summaries[0]!.spentUsd).toBeCloseTo(0.7)
+    expect(summaries[0]).toEqual(Ledger.inspect(shared.journal))
+    // Reports charged to separate journals are added up.
+    const other = sharedJournal()
+    expect(ledgerSummaries([...shared.reports, ...other.reports]).map((item) => item.spentUsd)).toHaveLength(2)
+  })
+
+  test("report.ts shows a shared journal's spend once, and --ledger alone when it is given", async () => {
+    const shared = sharedJournal()
+    const dir = join(root, "shared-reports")
+    mkdirSync(dir)
+    for (const [index, report] of shared.reports.entries())
+      writeFileSync(join(dir, `${index}.json`), JSON.stringify({ ...runReport(), ...report }))
+    const loaded = await loadOutputs({ paths: [dir] })
+    expect(loaded.ledger!.spentUsd).toBeCloseTo(0.7)
+    expect(loaded.ledger!.uncertainUsd).toBeCloseTo(0.5)
+    const given = await loadOutputs({ paths: [dir], ledger: shared.journal })
+    expect(given.ledger!.spentUsd).toBeCloseTo(0.7)
+    expect(given.ledger!.uncertainUsd).toBeCloseTo(0.5)
+    const result = await main(["--outputs", dir])
+    expect(result.stdout).toContain("Eval ledger: $0.7000 spent as reported, $0.5000 uncertain")
+  })
+})
+
+// Phase 0, "Runner and baselines": an empty-finding control exposes the precision denominator.
+describe("the empty-finding control", () => {
+  test("is a completed, admitted, free review of every planned case that reports nothing", () => {
+    const plan = [
+      { variant: "engine", model: "m", case: "a", repetition: 1 },
+      { variant: "engine", model: "m", case: "a", repetition: 2 },
+      { variant: "other", model: "n", case: "a", repetition: 1 },
+      { variant: "engine", model: "m", case: "b", repetition: 1 },
+    ]
+    const empty = emptyControl(plan)
+    expect(empty.plan).toEqual([
+      { ...EMPTY_CONTROL, case: "a", repetition: 1 },
+      { ...EMPTY_CONTROL, case: "a", repetition: 2 },
+      { ...EMPTY_CONTROL, case: "b", repetition: 1 },
+    ])
+    for (const run of empty.runs)
+      expect(run).toMatchObject({
+        status: "completed",
+        proposed: [],
+        posted: [],
+        spend: { costUsd: 0, uncertainUsd: 0, usageMissing: false, admitted: true },
+        violations: [],
+      })
+  })
+
+  test("report.ts --empty-control shows precision as n/a with its counts, recall 0 and no false alarm", async () => {
+    const out = join(root, "empty.json")
+    const result = await main([
+      "--outputs",
+      savedRun.dir,
+      "--empty-control",
+      "--candidate",
+      `single-prompt=${MODEL}`,
+      "--out",
+      out,
+    ])
+    expect(result.code).toBe(0)
+    expect(result.stdout).toContain("## empty · none")
+    const saved = await Bun.file(out).json()
+    const empty = saved.groups.find((group: { variant: string }) => group.variant === "empty").stages.posted
+    expect(empty.planned).toBe(3)
+    expect(empty.coverage).toMatchObject({ count: 3, total: 3, value: 1 })
+    expect(empty.precision).toEqual({ count: 0, total: 0, value: null, interval: null })
+    expect(empty.recall).toMatchObject({ count: 0, total: 2, value: 0 })
+    expect(empty.falseAlarmsPerCleanPr).toMatchObject({ count: 0, exposure: 1, value: 0 })
+    expect(empty.spend).toMatchObject({ costUsd: 0, uncertainUsd: 0, unaccounted: 0 })
+    // It is a baseline, not a candidate: the gate still decides on the named candidate.
+    expect(saved.decision.candidate).toEqual({ variant: "single-prompt", model: MODEL })
+  })
 })
 
 describe("saved replay artifacts", () => {
@@ -445,9 +573,9 @@ describe("report.ts", () => {
     expect(JSON.parse(printed.stdout)).toEqual(DEFAULT_GATE)
   })
 
-  test("a stricter gate file re-scores the same outputs without any new call", async () => {
+  test("an edited gate file re-scores the same outputs without any new call, and a weaker one decides no release", async () => {
     const dir = savedRun.dir
-    const gate = join(root, "strict.json")
+    const gate = join(root, "edited.json")
     writeFileSync(
       gate,
       JSON.stringify({
@@ -456,9 +584,14 @@ describe("report.ts", () => {
         rules: { ...DEFAULT_GATE.rules, minCoverage: 0.5 },
       }),
     )
-    const result = await main(["--outputs", dir, "--gate", gate])
+    const out = join(root, "edited-report.json")
+    const result = await main(["--outputs", dir, "--gate", gate, "--out", out])
     expect(result.stdout).toContain("| minCoverage | 0.5 | 0.6667 |")
     expect(result.stdout).toContain("gate D2 (approved by owner on 2026-11-05")
+    // A lower coverage threshold is weaker than D2, and a changed copy cannot speak for D2.
+    const reasons: string[] = (await Bun.file(out).json()).decision.release.reasons
+    expect(reasons).toContain("the gate is weaker than the approved D2: minCoverage is 0.5, looser than D2's 0.95")
+    expect(reasons.some((reason) => reason.includes("is not the approved D2 config"))).toBe(true)
   })
 })
 

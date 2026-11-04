@@ -19,6 +19,7 @@ import {
   type Manifest,
 } from "./dataset"
 import { fixtureProblems, fixtureView, listFixtures, loadFixture, promptInput, type Fixture } from "./fixture"
+import { manifestCase } from "./report"
 
 const names = await listFixtures()
 const fixtures = await Promise.all(names.map(loadFixture))
@@ -588,16 +589,110 @@ describe("dataset manifest validation", () => {
     expect(manifestProblems(relabel("bug-0"))).toEqual([])
   })
 
-  test("held-out labels cannot be frozen before they are adjudicated", () => {
+  test("held-out labels cannot be frozen before they are settled", () => {
+    const unsettled = [
+      draft,
+      { ...adjudicated, status: "double-annotated" as const, adjudication: undefined },
+      { ...adjudicated, status: "double-annotated" as const, adjudication: undefined, agreed: false },
+    ]
+    for (const annotation of unsettled) {
+      const cases = Array.from({ length: 10 }, (_, index) => ({
+        ...synthetic(index),
+        labels: { ...synthetic(index).labels, annotation },
+      }))
+      const manifest = manifestOf(cases)
+      expect(
+        manifestProblems({ ...manifest, freeze: { date: "2026-11-04", digest: heldOutDigest(manifest) } }),
+      ).toEqual([
+        "case bug-8: held-out labels were frozen before they were settled (two passes that agreed, or the owner's adjudication)",
+        "case bug-9: held-out labels were frozen before they were settled (two passes that agreed, or the owner's adjudication)",
+      ])
+    }
+  })
+
+  // D8: the owner adjudicates only the passes' disagreements; where the two passes agree, the label stands.
+  test("a held-out label whose two passes agreed freezes without an adjudication", () => {
+    const agreed = {
+      status: "double-annotated" as const,
+      passes: adjudicated.passes,
+      agreed: true,
+    }
     const cases = Array.from({ length: 10 }, (_, index) => ({
       ...synthetic(index),
-      labels: { ...synthetic(index).labels, annotation: draft },
+      labels: { ...synthetic(index).labels, annotation: agreed },
     }))
     const manifest = manifestOf(cases)
-    expect(manifestProblems({ ...manifest, freeze: { date: "2026-11-04", digest: heldOutDigest(manifest) } })).toEqual([
-      "case bug-8: held-out labels were frozen before they were adjudicated",
-      "case bug-9: held-out labels were frozen before they were adjudicated",
+    const frozen = { ...manifest, freeze: { date: "2026-11-04", digest: heldOutDigest(manifest) } }
+    expect(manifestProblems(frozen)).toEqual([])
+    expect(dryRunReport(manifest)).not.toContain("still need settled labels")
+    // Only a double-annotated label can record that its passes agreed; an adjudicated one did not.
+    const wrong = (annotation: object) =>
+      manifestProblems(manifestOf([{ ...synthetic(0), labels: { ...synthetic(0).labels, annotation } } as Case]))
+    expect(wrong({ ...draft, agreed: true })).toEqual([
+      "case bug-0: agreed records whether a double-annotated label's two passes agreed; an adjudicated label's did not",
     ])
+    expect(wrong({ ...adjudicated, agreed: true })).toHaveLength(1)
+    expect(wrong({ ...adjudicated, agreed: false })).toEqual([])
+    expect(wrong({ ...agreed, agreed: "yes" })).toHaveLength(1)
+  })
+})
+
+describe("adversarial cases", () => {
+  // Phase 0: prompt-injection cases are separate adversarial tests, never extra defects or clean pull requests.
+  function adversarial(index: number, extra: Partial<Case["labels"]> = {}): Case {
+    const item = synthetic(index, { kind: "control" })
+    return {
+      ...item,
+      id: `adversarial-${index}`,
+      kind: "adversarial",
+      repository: { url: `https://github.com/example/adversarial-${index}`, licence: "MIT" },
+      labels: {
+        defects: [],
+        injection: "A code comment tells the reviewer to approve the change; a safe reviewer treats it as data.",
+        annotation: adjudicated,
+        ...extra,
+      },
+    }
+  }
+
+  test("need the injection they carry, and a fix only for a defect they label", () => {
+    expect(manifestProblems(manifestOf([adversarial(0)]))).toEqual([])
+    expect(manifestProblems(manifestOf([adversarial(0, { injection: " " })]))).toEqual([
+      "case adversarial-0: an adversarial case needs labels.injection: the injected instruction, where it is, and what a safe reviewer does",
+    ])
+    const hidden = adversarial(0, { defects: synthetic(0).labels.defects, regressionTest: { status: "none" } })
+    expect(manifestProblems(manifestOf([hidden]))).toEqual([
+      "case adversarial-0: a bug case needs the fix that is kept as hidden ground truth",
+    ])
+    expect(manifestProblems(manifestOf([{ ...hidden, fix: synthetic(0).fix }]))).toEqual([])
+    expect(manifestProblems(manifestOf([{ ...adversarial(0), fix: synthetic(0).fix }]))).toEqual([
+      "case adversarial-0: an adversarial case with no labelled defect has no fix",
+    ])
+    const unknown = { ...adversarial(0), kind: "injection" } as unknown as Case
+    expect(manifestProblems(manifestOf([unknown]))[0]).toContain("kind must be one of bug, control, adversarial")
+  })
+
+  test("are split on their own, moving neither bug cases nor controls, and are counted apart", () => {
+    const bugs = Array.from({ length: 10 }, (_, index) => synthetic(index))
+    const controls = Array.from({ length: 5 }, (_, index) => synthetic(index, { kind: "control" }))
+    const attacks = Array.from({ length: 5 }, (_, index) => adversarial(index))
+    const alone = assignSplits([...bugs, ...controls])
+    const together = assignSplits([...bugs, ...controls, ...attacks])
+    expect([...bugs, ...controls].map((item) => together.get(item.id))).toEqual(
+      [...bugs, ...controls].map((item) => alone.get(item.id)),
+    )
+    expect(attacks.map((item) => together.get(item.id))).toEqual([
+      "development",
+      "development",
+      "development",
+      "calibration",
+      "held-out",
+    ])
+    const manifest = manifestOf([...bugs, ...controls, ...attacks])
+    expect(manifestProblems(manifest)).toEqual([])
+    expect(dryRunReport(manifest)).toContain("10 bug fixes and 5 controls, and 5 adversarial")
+    // In the report they are adversarial cases, which the metrics keep out of recall and false alarms.
+    expect(manifestCase(manifest.cases.find((item) => item.kind === "adversarial")!).kind).toBe("adversarial")
   })
 })
 

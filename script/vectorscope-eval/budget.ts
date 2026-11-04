@@ -1,4 +1,4 @@
-import { appendFileSync, closeSync, existsSync, openSync, readFileSync, rmSync, writeSync } from "node:fs"
+import { appendFileSync, closeSync, existsSync, openSync, readFileSync, rmSync, truncateSync, writeSync } from "node:fs"
 
 // The eval's budget ledger (VectorScope plan, VS-03; Phase 0 "Budget, privacy and release gate"). One coordinator
 // admits every paid provider or judge attempt, retries included, against an owner-set total budget and a per-case
@@ -274,6 +274,7 @@ export class Ledger {
     }
     try {
       const prior = existsSync(input.journal) ? readJournal(input.journal) : []
+      if (existsSync(input.journal)) dropCutOffLine(input.journal)
       const ledger = new Ledger({ ...input, lock })
       if (prior.length) {
         const header = prior[0]
@@ -295,9 +296,13 @@ export class Ledger {
 
   // A journal's summary without opening it for writing: an attempt still open counts as uncertain at its reservation.
   static inspect(journal: string): Summary {
-    const entries = readJournal(journal)
+    return Ledger.summarize(readJournal(journal), journal)
+  }
+
+  // The same summary from journal entries already read, such as the ones a run.ts report keeps.
+  static summarize(entries: readonly Entry[], name = "the journal"): Summary {
     const header = entries[0]
-    if (header?.type !== "open") throw new LedgerError(`${journal} does not start with its limits`)
+    if (header?.type !== "open") throw new LedgerError(`${name} does not start with its limits`)
     const ledger = new Ledger({ limits: header.limits })
     for (const entry of entries) ledger.#apply(entry)
     return ledger.#summary(true)
@@ -602,6 +607,17 @@ function sameLimits(a: Limits, b: Limits) {
 
 function describeLimits(limits: Limits) {
   return `total $${limits.totalUsd}, case $${limits.caseUsd}, reserve $${limits.reserveUsd}`
+}
+
+// A process killed while appending leaves its last line cut off, with no newline. readJournal skips that line, so the
+// entry it was writing never happened: an admission is written before its request is sent, so a cut-off admission sent
+// nothing, and an attempt whose sent or settle line was cut off stays open and is kept as uncertain spend. The fragment
+// is dropped before anything is appended, or the next entry would fuse with it into a line that is no longer last and
+// cannot be read, and the journal could not be opened again.
+function dropCutOffLine(path: string) {
+  const bytes = readFileSync(path)
+  if (!bytes.length || bytes[bytes.length - 1] === 0x0a) return
+  truncateSync(path, bytes.lastIndexOf(0x0a) + 1)
 }
 
 // A journal line cut off by a killed process is the last one; anything else unreadable is an error.

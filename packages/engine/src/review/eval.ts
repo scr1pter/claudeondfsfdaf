@@ -7,10 +7,14 @@
 // of sending it. The artifact names the source, settings, models and prompts by digest and lists every provider
 // attempt, admitted or refused, with what it settled at.
 //
-// Settings come from the case's base commit, as in CI, so the change under review cannot choose them, and nothing is
-// fetched: a missing commit is an error, never a network request. The case's label names the artifact only and never
-// reaches a prompt. The review's dollar reservations are its usual estimates; an eval's total budget and per-case
-// bound are a separate ledger in the eval driver.
+// Settings come from the case's base commit, as in CI, so the change under review cannot choose them, except its limits:
+// the dollar cap, steps and time come from the eval alone, and a replay without its own positive dollar cap is refused,
+// since a dataset's review.json could otherwise lift them. Nothing is fetched: a missing commit is an error, never a
+// network request. An untrusted case replays only under the GitHub review job's isolation (VECTOR_PURE and
+// VECTOR_DISABLE_PROJECT_CONFIG), so the case's repository cannot load its own config, plugins or tools, and the
+// artifact records that isolation. The case's label names the artifact only and never reaches a prompt. The review's
+// dollar reservations are its usual estimates; an eval's total budget and per-case bound are a separate ledger in the
+// eval driver.
 
 import { createHash } from "node:crypto"
 import path from "path"
@@ -43,9 +47,19 @@ import {
   parseGitAttributes,
 } from "@vectordevai/core/review/ignore"
 import type { ReviewPrice } from "@vectordevai/core/review/plan"
+import { Flag } from "@vectordevai/core/flag/flag"
 import { redactSecrets } from "@vectordevai/core/review/redact"
 import { nextState } from "@vectordevai/core/review/state"
-import type { CostKind, ReviewConfig, ReviewOutcome, SkippedFile, Trigger, Trust } from "@vectordevai/core/review/types"
+import {
+  DEFAULT_REVIEW_CONFIG,
+  type CostKind,
+  type ReviewConfig,
+  type ReviewOutcome,
+  type SkippedFile,
+  type Trigger,
+  type Trust,
+} from "@vectordevai/core/review/types"
+import { Config } from "@/config/config"
 import { InstanceRef } from "@/effect/instance-ref"
 import { Git } from "@/git"
 import { SessionID } from "@/session/schema"
@@ -86,7 +100,9 @@ export interface ReplayInput {
   case: ReplayCase
   model: ResolvedModel
   triage?: ResolvedModel
-  config?: Partial<ReviewConfig> // the eval variant's settings, applied over the base's review.json
+  // The eval variant's settings, applied over the base's review.json. Its maxCostUsd must be a positive cap, and it
+  // alone sets maxCostUsd, maxSteps and timeoutMinutes (the defaults where it leaves the last two out).
+  config?: Partial<ReviewConfig>
   posting: Posting
   check: PostingCheck
   secrets?: string[] // values redacted from everything posted
@@ -134,7 +150,7 @@ export interface ReplayArtifact {
   label: string
   adapter: "engine"
   repetition: number
-  runtime: { node: string; bun?: string; platform: string; arch: string }
+  runtime: { node: string; bun?: string; platform: string; arch: string; isolation: Isolation }
   source: { repository?: string; base: string; head: string; mergeBase: string; vector?: string; manifest?: string }
   trust: Trust
   trigger: Trigger
@@ -152,6 +168,17 @@ export interface ReplayArtifact {
   refused?: string // the posting check failed, so nothing after it was posted
 }
 
+// The isolation the engine instance ran the review under, as the GitHub review job sets it (core review/workflow.ts:
+// VECTOR_PURE, VECTOR_DISABLE_PROJECT_CONFIG and lsp, formatter and snapshot off).
+export interface Isolation {
+  pure: boolean // VECTOR_PURE: no project plugins or workspace trust
+  projectConfig: boolean // whether the checkout's own vector.json and .vector settings could load
+  trusted: boolean // the workspace was trusted, so its language servers and formatters could run
+  lsp: boolean // language servers could start
+  formatter: boolean // formatters could run
+  snapshot: boolean // file snapshots were on
+}
+
 export class ReviewEvalError extends Schema.TaggedErrorClass<ReviewEvalError>()("ReviewEvalError", {
   message: Schema.String,
 }) {}
@@ -167,6 +194,14 @@ export const replay = Effect.fn("ReviewEval.replay")(function* (input: ReplayInp
   const now = input.now ?? Date.now
   const repetition = input.repetition ?? 1
   const show = (rev: string, file: string) => ReviewSource.show({ directory, rev, path: file })
+
+  // 0. The eval's own dollar cap: Review.run admits every attempt against it, and the dataset never sets it.
+  const cap = input.config?.maxCostUsd
+  if (typeof cap !== "number" || !Number.isFinite(cap) || cap <= 0)
+    return yield* new ReviewEvalError({
+      message:
+        "A replay needs the eval's own positive config.maxCostUsd, such as the case bound admitReplay hands out; a dataset's review.json never sets it.",
+    })
 
   // 1. The checkout: the reviewer's tools read the engine instance's directory, so it must be this one, holding both
   // commits, with a trusted head checked out and an untrusted one not, as the GitHub job requires.
@@ -190,13 +225,35 @@ export const replay = Effect.fn("ReviewEval.replay")(function* (input: ReplayInp
     return yield* new ReviewEvalError({
       message: `An untrusted case's head ${short(item.head)} is never checked out: check out its base.`,
     })
+  if (item.trust === "untrusted" && !(Flag.VECTOR_PURE && Flag.VECTOR_DISABLE_PROJECT_CONFIG))
+    return yield* new ReviewEvalError({
+      message:
+        "An untrusted case replays only as the GitHub review job runs: set VECTOR_PURE=1 and VECTOR_DISABLE_PROJECT_CONFIG=1, so the case's repository cannot load its own config, plugins or tools.",
+    })
+  const settings = yield* Config.Service
+  const effective = yield* settings.get()
+  const trusted = (yield* settings.trust()).trusted
+  const isolation: Isolation = {
+    pure: Flag.VECTOR_PURE,
+    projectConfig: !Flag.VECTOR_DISABLE_PROJECT_CONFIG,
+    trusted,
+    lsp: !!effective.lsp && trusted,
+    formatter: !!effective.formatter && trusted,
+    snapshot: effective.snapshot !== false,
+  }
 
   // 2. Settings from the base commit, then the eval variant's.
   const json = yield* show(item.base, REVIEW_CONFIG_PATH)
   const rulesTexts = yield* Effect.forEach(REVIEW_RULES_PATHS, (file) => show(item.base, file))
   const attributesText = yield* show(item.base, ".gitattributes")
   const parsed = parseReviewConfig({ json, env: {}, trigger })
-  const config: ReviewConfig = { ...parsed.config, ...input.config }
+  const config: ReviewConfig = {
+    ...parsed.config,
+    ...input.config,
+    maxCostUsd: cap,
+    maxSteps: input.config?.maxSteps ?? DEFAULT_REVIEW_CONFIG.maxSteps,
+    timeoutMinutes: input.config?.timeoutMinutes ?? DEFAULT_REVIEW_CONFIG.timeoutMinutes,
+  }
   const rules = parseReviewRules(rulesTexts.find((text) => text !== undefined) ?? "")
   const attributes = attributesText === undefined ? undefined : parseGitAttributes(attributesText)
   const ignored = (file: string) => classifyPath(file, { config, attributes }) !== undefined
@@ -250,6 +307,7 @@ export const replay = Effect.fn("ReviewEval.replay")(function* (input: ReplayInp
       ...(process.versions.bun ? { bun: process.versions.bun } : {}),
       platform: process.platform,
       arch: process.arch,
+      isolation,
     },
     source: {
       ...(item.repository

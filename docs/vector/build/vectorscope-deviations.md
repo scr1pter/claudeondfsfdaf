@@ -243,3 +243,138 @@ dated, names its work package, and is committed with the work it explains.
   `test.yml` runs `turbo test` for every package but the engine.
   `judge.test.ts` and `report.test.ts`, like the earlier eval script tests, are
   run by no workflow yet.
+
+## 2026-11-04 · Phase 0 review
+
+The review's findings were each checked against the code; all were confirmed,
+three were duplicates of others, and all are fixed. Where a fix changes an
+earlier entry above, it says which. No reviewer behaviour changed: every edit
+is in the eval tooling (`script/vectorscope-eval`, core `review/eval*.ts`, the
+engine's eval adapter `review/eval.ts`) or CI, none of which the reviewer
+imports, so D3's opt-in does not apply. No generator input changed.
+
+- **A model is never the sole authority (VS-04; replaces "Two distinct judges
+  agreeing settle a verdict, whether human or model" above).** `settle()` now
+  settles an agreement only when at least one agreeing pass is `human:`;
+  agreeing models alone get the new status `needs-human`, which scores as
+  unjudged, so the gate sends the rules it touches to review. Settled verdicts
+  always carry `human: true`, and the report counts model-only agreements
+  instead of agreements with a human. The rubric version is unchanged: the
+  verdict rules are the same, only settlement is stricter, and it is computed
+  from the saved passes.
+- **Model identity (VS-04).** The "a model never judges its own findings"
+  check compares ids with `sameModel`: path segments, lower-cased, with a route
+  suffix (`:free`, `@preset`) and a trailing date dropped and dots read as
+  hyphens, matching when one id's segments end the other's. It errs towards
+  "same", which only ever refuses a judge.
+- **Judges see where the code is (VS-04; amends "Blinding" above).** A task
+  carries a code reference: the repository and candidate commits for a dataset
+  case, and for a synthetic fixture the change itself as a diff rather than its
+  path, since the fixture's directory name is its descriptive case id. Nothing
+  in it names the pipeline, model or repetition.
+- **Weakened gates (VS-04).** A `--gate` file with a looser threshold, a lower
+  confidence or another decision split gets a release reason, and so does a
+  changed copy that still calls itself D2. The existing "stricter gate" test
+  in `report.test.ts` in fact lowered `minCoverage`, so it now also checks that
+  the weaker gate makes no release decision.
+- **Empty-finding control (VS-02/VS-04).** `report.ts --empty-control` adds the
+  Phase 0 baseline as the variant `empty` with model `none`: a completed,
+  admitted, free review of every planned case and repetition with no finding.
+  It runs no model.
+- **Shared ledger journals (VS-04).** A report no longer adds up the budget
+  summaries the run.ts reports embed. Reports charged to one journal (every
+  model of a CI run) are merged entry by entry and summarised once; `--ledger`
+  replaces them with that journal's own summary. Separate journals still add.
+- **Paid sends only from the protected environment (VS-03; amends "`run.ts` is
+  a dry run by default" above).** `run.ts` reads its key from
+  `VECTORSCOPE_EVAL_API_KEY` unless `--api-key-env` names another variable, so
+  `OPENROUTER_API_KEY` alone sends nothing. A budgeted send to a hosted endpoint
+  needs `GITHUB_ACTIONS=true` and `VECTORSCOPE_EVAL_ENVIRONMENT=vectorscope-eval`,
+  which only `ci.ts paid` sets, and only when the workflow step names that
+  environment; locally a run sends only to a loopback endpoint. The review
+  suggested allowing zero-price endpoints too; with a budget both prices must
+  now be above zero everywhere, because a zero price lets every estimate
+  through, and a free local server can be given any small price.
+- **The repository is public, so paid results are sealed (VS-03; replaces the
+  printed model output and the 30-day artifact above).** Verified with
+  `gh repo view`: the repository is public, so its Actions logs, step
+  summaries and artifacts are world-readable. `ci.ts paid` no longer prints
+  run.ts's output; each model's stdout and stderr go to a log beside its
+  report, and the job log and step summary get only the ledger's spend and
+  counts. A new `ci.ts seal` step encrypts every output file to the owner's
+  RSA public key (a fresh AES-256-GCM key wrapped with RSA-OAEP over SHA-256),
+  and only the sealed file is uploaded, for 7 days. Paid mode refuses to start
+  without the public key, which is the environment variable (not a secret)
+  `VECTORSCOPE_EVAL_PUBLIC_KEY`; the owner creates it with the environment
+  (README, "Owner setup"). `ci.ts unseal` opens the file on the owner's machine.
+  `::stop-commands::` is no longer needed, since no model text reaches the log.
+- **Journal resume after a crash (VS-03).** `Ledger.open` drops a cut-off last
+  line before it appends, so the journal stays readable. A cut-off admission
+  sent nothing (admissions are written before sending), and a cut-off `sent` or
+  `settle` leaves the attempt open, which is then kept as uncertain spend.
+- **Outside the repository (VS-03/VS-04).** One helper, `paths.ts
+  outsideRepository`, now used by run.ts, ci.ts, report.ts and judge.ts, treats
+  `<repo>/..reports` as inside.
+- **Replay limits come from the eval (VS-02).** `ReviewEval.replay` refuses
+  without a positive `config.maxCostUsd` from its caller and takes
+  `maxCostUsd`, `maxSteps` and `timeoutMinutes` only from the caller's config
+  (the defaults where it leaves the last two out), never from the dataset's
+  base `review.json`. Every engine test now passes its cap.
+- **Replay isolation (VS-02).** An untrusted case replays only with
+  `VECTOR_PURE` and `VECTOR_DISABLE_PROJECT_CONFIG` set, as the GitHub review
+  job runs; the "or the workspace is untrusted" alternative was not taken,
+  since the flags are the job's own settings. `runtime.isolation` records the
+  flags, the workspace trust and whether language servers, formatters and
+  snapshots could run. The untrusted test supplies its fake provider through
+  `VECTOR_CONFIG_CONTENT`, as the CLI end-to-end test does. Under
+  `VECTOR_PURE`, `Config.trust()` still reports a stored trust; the isolation
+  record shows it as reported.
+- **Git on dataset content (VS-01/VS-02).** `prepareCheckout`, the mirror
+  checks in `dataset.ts` and the desktop driver's diff run git with
+  `GIT_CONFIG_NOSYSTEM`, `GIT_CONFIG_GLOBAL` set to the null device,
+  `GIT_LFS_SKIP_SMUDGE`, no prompt, `core.hooksPath` at the null device,
+  `core.fsmonitor` off and only the local file transport allowed. A test shows
+  a user's global hook and smudge filter no longer run on a dataset that asks
+  for git-lfs.
+- **Case ids never reach the reviewer (VS-01/VS-02).** Prepared checkouts are
+  named by a digest of the case id (`checkoutDirectory`). The review also
+  offered checking that ids are `<owner>-<name>-<n>`; that was not done,
+  because the directory was the only path by which an id reached a reviewer
+  and every synthetic manifest in the tests uses other ids. The annotation
+  guide keeps the convention.
+- **The desktop baseline is built (VS-02; replaces "The desktop replay is a
+  documented stub" above).** `script/vectorscope-eval/desktop.ts`
+  (`desktopReplay`) runs `runReview` from the app's `ai-review.ts` through a
+  recording client, as an untrusted fork pull request with a neutral title,
+  and writes an artifact with the engine replay's placed findings, attempts by
+  pass and prompt digest, sessions with permission digests, and what Post
+  would send. It needs neither Electron nor a server; its test uses a fake
+  client on a prepared checkout. A paid desktop replay is not wired: it needs
+  an engine server and the ledger's admission, like the engine's paid replay.
+  The app's file is imported, not edited.
+- **Agreed labels freeze (VS-01; amends "The seed is not frozen" above).** D8
+  has the owner adjudicate only disagreements, so a `double-annotated` label
+  records `agreed: true` when its passes agreed, and such a label may be frozen
+  without an adjudication. `agreed: false` waits for the owner.
+- **Adversarial cases (VS-01).** A case's `kind` may be `adversarial`, with
+  `labels.injection` describing the injected text and a safe reviewer's
+  response. It is split on its own. Core `summarize` keeps adversarial cases
+  out of every quality rate (recall, precision, false alarms per clean pull
+  request, paired recall, category recall) and reports them apart; their spend,
+  wall time and trust violations still count, so a broken check still fails
+  the gate.
+- **The full dataset is still open (VS-01).** VS-01 delivered the contract and
+  a ten-case seed of single draft labels. The Phase 0 set (about 100 sampled bug
+  cases, at least 25 controls, rename, cross-file, incremental, fork and
+  adversarial cases, two annotation passes and held-out controls) is owned by
+  no work package in the plan. Next action: sample candidates by the recorded
+  selection rule into the manifest, run the two model-assisted passes, have the
+  owner adjudicate the disagreements, and freeze the held-out split before any
+  prompt tuning.
+- **The eval tests and scripts run in CI (supersedes "not in CI yet" in each
+  entry above).** `test.yml` runs every `script/vectorscope-eval/*.test.ts`
+  file in its own Bun process from `packages/script`, as the footprint step
+  does, and `typecheck.yml` checks the scripts with the new
+  `script/vectorscope-eval/tsconfig.json`. It extends the engine's config; its
+  `@/` path tries the engine's source and then the app's, since the scripts
+  reach both through the replay adapters.

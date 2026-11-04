@@ -56,24 +56,33 @@ also reported as duplicates per pull request.
 
 ## Blinding and settlement
 
-- **Blinded tasks.** A judge gets one task per run, holding the case's labels
-  and the run's findings under opaque ids. Nothing names the pipeline, the
-  model, the repetition, the case or whether a finding was posted. Tasks and
-  findings are ordered by their ids, which come from a seed only the
-  coordinator's judgement file holds. The same finding in two runs gets
+- **Blinded tasks.** A judge gets one task per run, holding the case's labels,
+  the run's findings under opaque ids, and where to read the case's code: the
+  repository URL with the candidate's base and head commits for a dataset case,
+  or the change itself as a diff for a synthetic fixture. Read the code there
+  before calling an unexpected finding a false alarm. Nothing names the
+  pipeline, the model, the repetition, the case id or whether a finding was
+  posted. Tasks and findings are ordered by their ids, which come from a seed
+  only the coordinator's judgement file holds. The same finding in two runs gets
   unrelated ids.
-- **Two passes or an adjudication.** A verdict is settled when two independent
-  judges agree, or when a human adjudicates. Agreeing means the same verdict
-  kind, and the same defect for a match. A single pass settles nothing. A
-  finding without a settled verdict is **unjudged**: it is neither right nor
-  wrong, and the report and the gate show it.
+- **Two passes with a human, or an adjudication.** A verdict is settled when two
+  independent judges agree and at least one of them is a human, or when a human
+  adjudicates. A model may assist with matching but is never the sole
+  authority: models that agree with no human among them settle nothing, and the
+  finding waits for a human's pass. Agreeing means the same verdict kind, and
+  the same defect for a match. A single pass settles nothing. A finding without
+  a settled verdict is **unjudged**: it is neither right nor wrong, and the
+  report and the gate show it.
 - **Disagreements go to a human.** `judge.ts disputes` writes them as a blinded
   worksheet that lists the verdicts given, in no fixed order and without the
   judges' names. The owner's answers are recorded as adjudications. A model
   never adjudicates.
 - **No model judges itself.** A model judge's pass on a run whose findings
   came, wholly or partly, from that model does not count. A batch with such a
-  judge is refused before any call.
+  judge is refused before any call. Model ids are compared by what they name,
+  not how they are spelled: a router prefix (`openrouter/`), a route suffix
+  (`:free`, `@preset`), a trailing date and dots against hyphens do not make
+  another model.
 - **Model judges are paid attempts.** Each call is admitted by the eval budget
   ledger first, as a `judge` attempt charged to the run it judges, and settled
   at what it reports. A call that fails after it was sent keeps its reservation
@@ -161,6 +170,9 @@ A result is a **release decision** only when all of these hold:
 - It is a held-out run on a frozen manifest.
 - It was collected on or after the gate's approval date.
 - The report lists no input or judging problems.
+- The gate is no weaker than the approved D2: no looser threshold, no lower
+  confidence and no other decision split. A changed gate also needs its own
+  decision name; a copy that differs from D2 cannot call itself D2.
 
 Anything else is reported, but it is not a release decision.
 

@@ -1,20 +1,22 @@
 // Blinded judging for VectorScope's eval (VectorScope plan, VS-04; Phase 0 "Metrics and judging"). A judge, human or
-// model, sees one run's findings at a time beside its case's labelled defects, and nothing that names the pipeline, the
-// model, the repetition, the case or whether a finding was posted. Each task and finding has an opaque id derived from a
-// seed the coordinator keeps, and tasks and findings are ordered by those ids alone, so neither the order nor the ids
-// say which model wrote what. Answers are mapped back to run and finding keys and become passes for settle() in
-// eval.ts, where two agreeing passes or a human adjudication settle a verdict.
+// model, sees one run's findings at a time beside its case's labelled defects and where to read the case's code, and
+// nothing that names the pipeline, the model, the repetition, the case id or whether a finding was posted. Each task and
+// finding has an opaque id derived from a seed the coordinator keeps, and tasks and findings are ordered by those ids
+// alone, so neither the order nor the ids say which model wrote what. Answers are mapped back to run and finding keys
+// and become passes for settle() in eval.ts, where two agreeing passes with a human among them, or a human
+// adjudication, settle a verdict.
 //
 // A model judge is a Matcher like any other, so tests use a fake. Its calls are paid attempts: judgeRuns refuses to call
-// one without an admission (the eval budget ledger), and refuses a judge model that reviewed any run being judged,
-// because a blinded judge cannot tell which findings are its own.
+// one without an admission (the eval budget ledger), and refuses a judge model that reviewed any run being judged under
+// any spelling of its id (sameModel), because a blinded judge cannot tell which findings are its own.
 
 import {
   RUBRIC_VERSION,
-  isSettled,
   runKey,
+  sameModel,
   settle,
   type Adjudication,
+  type CodeReference,
   type EvalCase,
   type EvalFinding,
   type EvalRun,
@@ -41,6 +43,7 @@ export interface TaskFinding {
 export interface JudgeTask {
   task: string // opaque
   defects: LabelledDefect[] // the case's labels; empty for a control
+  code?: CodeReference // where to read the change, to tell a real extra defect from a false alarm
   findings: TaskFinding[]
 }
 
@@ -105,6 +108,7 @@ export function blind(input: {
           task: {
             task: fnv1a64(`${input.seed}\ntask\n${key}`),
             defects: evalCase.defects,
+            ...(evalCase.code ? { code: evalCase.code } : {}),
             findings: findings.map((entry) => shown(entry.id, entry.finding)),
           } satisfies JudgeTask,
           run,
@@ -136,7 +140,7 @@ export async function judgeRuns(input: {
   const judge = input.matcher.judge
   const model = judge.startsWith("model:") ? judge.slice("model:".length) : undefined
   if (!/^(human|model):\S/.test(judge)) throw new Error(`${judge} is not a human: or model: judge`)
-  if (model && input.runs.some((run) => (run.models ?? [run.model]).includes(model)))
+  if (model && input.runs.some((run) => (run.models ?? [run.model]).some((id) => sameModel(id, model))))
     throw new Error(`${judge} reviewed runs being judged, and a model never judges findings it produced`)
   if (model && !input.admit) throw new Error(`${judge} makes paid calls, so each needs the eval ledger's admission`)
   const blinded = blind(input)
@@ -315,8 +319,8 @@ export function judgingStatus(input: {
     findings: outcomes.length,
     adjudicated: outcomes.filter((outcome) => outcome.status === "adjudicated").length,
     agreed: outcomes.filter((outcome) => outcome.status === "agreed").length,
-    agreedWithHuman: outcomes.filter((outcome) => outcome.status === "agreed" && isSettled(outcome) && outcome.human)
-      .length,
+    // Judges agreed with no human among them, so the verdict does not count until a human judges or adjudicates it.
+    needsHuman: outcomes.filter((outcome) => outcome.status === "needs-human").length,
     disagreed: outcomes.filter((outcome) => outcome.status === "disagreed").length,
     single: outcomes.filter((outcome) => outcome.status === "single").length,
     none: outcomes.filter((outcome) => outcome.status === "none").length,

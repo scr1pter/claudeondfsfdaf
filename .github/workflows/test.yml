@@ -114,6 +114,17 @@ jobs:
         working-directory: packages/web
         run: GITHUB_ACTIONS=false bun test test/release-copy.test.ts
 
+      # script/ is not a workspace either, so turbo skips the VectorScope eval tooling's tests: the dataset contract,
+      # the budget ledger, the eval workflow's entry point, the replay drivers and the offline report. Each file runs
+      # in its own Bun process. None of them sends a request or uses a key.
+      - name: Run VectorScope eval script tests
+        if: runner.os == 'Linux'
+        working-directory: packages/script
+        run: |
+          for file in ../../script/vectorscope-eval/*.test.ts; do
+            GITHUB_ACTIONS=false bun test --timeout 30000 "$file" || exit 1
+          done
+
   # The desktop runs the engine's Node bundle in Electron's utility process, while every engine test runs on Bun, so a
   # stray Bun API passes them all and still fails every desktop message ("Bun is not defined", 1.99.99). This boots
   # the bundle under Node and sends one prompt through a Read tool call against a fake model.

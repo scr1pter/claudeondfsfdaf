@@ -9,19 +9,27 @@ sitting.
 ```
 bun script/vectorscope-eval/run.ts                     # dry run: validate the fixtures, send nothing
 bun script/vectorscope-eval/run.ts --list
-bun script/vectorscope-eval/run.ts --model anthropic/claude-sonnet-4.5 --price 3:15 --max-tokens 16000
-bun script/vectorscope-eval/run.ts --model anthropic/claude-sonnet-4.5 --price 3:15 --max-tokens 16000 \
-  --budget-usd 5 --case-budget-usd 0.75 --out /tmp/sonnet.json
-bun script/vectorscope-eval/run.ts --model my-model --price 0:0 --max-tokens 4000 --budget-usd 1 --case-budget-usd 0.5 \
-  --base-url http://localhost:8080/v1/chat/completions --api-key-env LOCAL_KEY
+bun script/vectorscope-eval/run.ts --model anthropic/claude-sonnet-4.5 --price 3:15 --max-tokens 16000   # estimate only
+bun script/vectorscope-eval/run.ts --model my-model --price 0.01:0.01 --max-tokens 4000 --budget-usd 1 --case-budget-usd 0.5 \
+  --base-url http://localhost:8080/v1/chat/completions --api-key-env LOCAL_KEY --out /tmp/local.json
 ```
 
 It is a dry run unless it is given a budget. The dry run validates the fixtures
 and prints prompt sizes, and with `--model`, `--price` and `--max-tokens` it
 also estimates the cost. Requests are sent only with `--budget-usd` and
 `--case-budget-usd`, and every one is admitted by the budget ledger first (see
-"Budget" below). The **vectorscope eval** workflow runs it from the Actions tab
-(see "Budgeted CI runs").
+"Budget" below).
+
+The paid eval is manual CI only. On your own machine a budgeted run sends only
+to a loopback endpoint (`localhost`, `127.0.0.1` or `::1`), such as a local
+model server, as in the last example. A hosted endpoint such as OpenRouter is
+sent to only by the **vectorscope eval** workflow's paid job in the protected
+`vectorscope-eval` environment (see "Budgeted CI runs"), which marks its
+environment for `run.ts`. The key is read from `VECTORSCOPE_EVAL_API_KEY`
+unless `--api-key-env` names another variable; the product's
+`OPENROUTER_API_KEY` is never read by default and is not permission to run the
+eval. With a budget, both prices must be above zero, since a zero price would
+let every estimate through.
 
 | Flag                      | Meaning                                                                                      |
 | ------------------------- | -------------------------------------------------------------------------------------------- |
@@ -30,11 +38,11 @@ also estimates the cost. Requests are sent only with `--budget-usd` and
 | `--repeat <n>`            | Run each fixture 1–20 times to expose run-to-run variance (default 1)                        |
 | `--budget-usd <usd>`      | Total budget for the run. Sends requests; a tenth is held in reserve                         |
 | `--case-budget-usd <usd>` | Bound for one case (one fixture reviewed once, its retry included); needed with a budget     |
-| `--price <in>:<out>`      | USD per million input and output tokens, for estimates; needed with a budget                 |
+| `--price <in>:<out>`      | USD per million input and output tokens, for estimates; needed with a budget, both above 0   |
 | `--max-tokens <n>`        | `max_tokens` for each request; needed with a budget (otherwise the provider's default)       |
 | `--ledger <path>`         | Budget journal, outside the repo; runs given the same journal and budget share it            |
-| `--base-url <url>`        | OpenAI-compatible chat completions URL (default OpenRouter's)                                |
-| `--api-key-env <name>`    | Environment variable holding the API key (default `OPENROUTER_API_KEY`; CI uses its own key) |
+| `--base-url <url>`        | OpenAI-compatible chat completions URL (default OpenRouter's; locally, loopback only)        |
+| `--api-key-env <name>`    | Environment variable holding the API key (default `VECTORSCOPE_EVAL_API_KEY`)                |
 | `--slack <lines>`         | How far a finding may be from a planted bug and still match (default 3)                      |
 | `--count-nits`            | Score `nit` findings too; by default they are ignored                                        |
 | `--timeout <sec>`         | Per-request timeout (default 300)                                                            |
@@ -209,11 +217,26 @@ input chooses the endpoint the key is sent to.
 A paid run waits for approval in the protected `vectorscope-eval` environment.
 Its step alone receives the environment's `VECTORSCOPE_EVAL_API_KEY`, and the
 models run one after another against one ledger journal, so the budget covers
-them all; once the ledger stops admitting, no further model starts. Model
-output is printed with workflow commands switched off around it. A final step
-summarises the ledger even when the run failed, timed out or was cancelled, and
-the reports and the journal are kept as the run's artifact for 30 days. A
-failed run is never retried automatically.
+them all; once the ledger stops admitting, no further model starts. A failed
+run is never retried automatically.
+
+**This repository is public.** Anyone can read its Actions logs and step
+summaries, and any signed-in GitHub user can download its artifacts. Results
+stay internal until a held-out run passes D2 and the owner has reviewed the
+aggregate (D12), so:
+
+- The job log and step summary show only the budget ledger's spend and counts
+  after each model, and a halt or cancel reason. `run.ts`'s own output, with
+  every score, missed bug, false alarm and model answer, goes to a log file
+  beside its report, never to the job log.
+- A final step summarises the ledger even when the run failed, timed out or
+  was cancelled. Then `ci.ts seal` encrypts every report, log and the journal
+  to the owner's public key (RSA-OAEP with a fresh AES-256-GCM key), and only
+  that sealed file is uploaded, kept for 7 days. A paid run refuses to start
+  without the public key.
+- The owner opens it on their own machine, outside the repository, with the
+  private key that never leaves it:
+  `bun script/vectorscope-eval/ci.ts unseal vectorscope-eval.sealed.json <private-key.pem> <directory>`.
 
 The approved pilot (D5) is one paid run of $50 in total and at most $0.75 per
 case, one repetition, on the development split only, with the current default
@@ -235,6 +258,12 @@ Only the owner can do this, and no paid run is possible until it is done:
    it as a repository or organization secret: a secret there would reach the
    job even if the environment lost its protection. Do not use
    `OPENROUTER_API_KEY` for this; that name is not permission to run the eval.
+4. Make an RSA key pair of at least 3072 bits on your own machine, for example
+   `openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:4096 -out vectorscope-eval.pem`
+   and `openssl pkey -in vectorscope-eval.pem -pubout -out vectorscope-eval.pub`.
+   Add the public key's PEM text as the environment **variable** (not a
+   secret) `VECTORSCOPE_EVAL_PUBLIC_KEY`. Keep the private key off GitHub and
+   out of the repository; without it the sealed reports cannot be opened.
 
 If the environment does not exist, GitHub creates an unprotected one the first
 time a paid run asks for it; that environment has no secret, so the run fails
@@ -281,7 +310,7 @@ refuses paths inside it.
 3. Run the checks:
 
 ```
-cd script/vectorscope-eval && bun test
+cd packages/script && bun test --timeout 30000 ../../script/vectorscope-eval/fixtures.test.ts
 cd packages/core && bun test test/review/eval.test.ts
 ```
 
@@ -311,6 +340,13 @@ bun script/vectorscope-eval/dataset.ts --mirrors <dir>    # clones at <dir>/<own
   ancestry through the compare endpoint, licence through the licence
   endpoint). Its labels are one draft pass, so it is not frozen and not ready
   for a held-out run. Cases considered and left out are listed with reasons.
+  It is a seed, not the Phase 0 set: the sampled ~100 bug cases and at least 25
+  controls, with rename, cross-file, incremental, fork and adversarial
+  (prompt-injection) cases, are still to be collected.
+- A case's `kind` is `bug`, `control` or `adversarial`. An adversarial case
+  carries prompt-injection text and records it in `labels.injection`; it is a
+  separate trust test, split on its own and never counted toward recall or
+  false alarms per clean pull request.
 - `annotation-guide.md` says how cases are found, checked, labelled, split and
   frozen.
 
@@ -372,13 +408,35 @@ bun script/vectorscope-eval/replay.ts --mirrors <dir> --prepare <out>
 - The attempt record comes from `Review.run`'s optional `observe` hook. It is
   off unless a caller sets it, and a test shows the same review sends the same
   requests and returns the same outcome with it off, on, or throwing.
+- The eval sets the review's limits, never the dataset: `replay()` refuses to
+  run without the eval's own positive `config.maxCostUsd`, and takes
+  `maxCostUsd`, `maxSteps` and `timeoutMinutes` only from the eval's config (the
+  defaults where it leaves the last two out), so a base `review.json` cannot
+  lift them.
+- An untrusted case replays only under the GitHub review job's isolation:
+  `VECTOR_PURE=1` and `VECTOR_DISABLE_PROJECT_CONFIG=1`, with the provider and
+  `lsp`, `formatter` and `snapshot` off in `VECTOR_CONFIG_CONTENT`, as the
+  generated workflow sets them. The artifact's `runtime.isolation` records the
+  flags, the workspace trust and whether language servers, formatters and
+  snapshots could run.
 - `replay.ts` is the driver. It turns each case of one split into the
   replay's input from `caseView` alone (untrusted, on a writer's request, the
   case id used only to name the artifact) and, with `--prepare`, builds each
   mirrored case's checkout with local git: a new repository holding the
   candidate head and its history only, so the fix and anything after it are
-  not there, with the base checked out. Held-out cases are planned only from a
-  frozen manifest.
+  not there, with the base checked out. The checkout's directory is named by a
+  digest of the case id, which the reviewer never sees. Git runs there without
+  the user's or the system's config, hooks, smudge filters (git-lfs) or any
+  transport but local files, so the dataset's content can run nothing and
+  reach no network. Held-out cases are planned only from a frozen manifest.
+- `desktop.ts` is the desktop baseline. `desktopReplay` runs the desktop runner
+  (`runReview` in `packages/app/src/features/pull-requests/ai-review.ts`) on a
+  prepared checkout through a recording client, as an untrusted pull request
+  from a fork, with the candidate's diff from local git. Its artifact has the
+  engine replay's shape where the runners overlap (the placed findings, every
+  prompt by pass and digest with what it reported spending, the sessions and
+  their permission digests) plus what the panel's Post button would send,
+  which is never sent.
 
 Nothing here sends a model request. A replay that spends money is admitted by
 the eval budget ledger: `admitReplay` reserves the case's whole bound before
@@ -390,11 +448,9 @@ estimates, and a model without a price is refused. `replay.ts --budget-usd
 <usd> --case-budget-usd <usd>` shows how many cases a budget could admit. No
 engine entry point can start a paid replay yet, and it would run only in the
 protected `vectorscope-eval` environment (D5, D7), so the driver stops at the
-plan. The desktop runner
-(`packages/app/src/features/pull-requests/ai-review.ts`) reviews through an
-injected SDK client that needs a running engine server; it cannot be driven
-headlessly here yet, so `--adapter desktop` reports it unavailable. Its replay
-comes with moving that runner into the engine (VS-10).
+plan. `--adapter desktop` plans the same cases for `desktopReplay`; a paid
+desktop replay needs an engine server and the ledger's admission as well, and
+is not wired either.
 
 The replay's tests use the engine's fake model server and real git checkouts:
 
@@ -412,6 +468,10 @@ cd script/vectorscope-eval && bun test budget.test.ts
 cd script/vectorscope-eval && bun test run.test.ts
 cd script/vectorscope-eval && bun test ci.test.ts
 ```
+
+In CI, `test.yml` runs every `script/vectorscope-eval/*.test.ts` file, each in
+its own Bun process, and `typecheck.yml` checks the scripts with
+`script/vectorscope-eval/tsconfig.json`, since `script/` is in no package.
 
 ## Causal judging and the release gate
 
@@ -438,15 +498,19 @@ How it works:
   labelled line. Later findings on a defect a run already reported are counted
   as duplicates.
 - **Blinding.** A judge gets a worksheet of tasks, one per run. Each holds the
-  case's labels and the run's findings under opaque ids. Nothing names the
-  pipeline, the model, the repetition, the case or whether a finding was
-  posted, and the order depends only on a seed kept in the coordinator's
-  judgement file.
-- **Settlement.** Two independent judges that agree settle a verdict. A
-  disagreement goes to the owner as a blinded disputes worksheet, and their
-  answers are recorded as adjudications. One pass alone settles nothing, and
-  such a finding stays unjudged. A model never adjudicates, and never judges
-  findings its own model produced.
+  case's labels, the run's findings under opaque ids, and where to read the
+  case's code: the repository and candidate commits for a dataset case, or the
+  fixture's diff itself. Nothing names the pipeline, the model, the
+  repetition, the case id or whether a finding was posted, and the order
+  depends only on a seed kept in the coordinator's judgement file.
+- **Settlement.** Two independent judges that agree settle a verdict when at
+  least one of them is a human: a model may assist but is never the sole
+  authority, so models agreeing alone leave the finding unjudged until a human
+  judges it. A disagreement goes to the owner as a blinded disputes worksheet,
+  and their answers are recorded as adjudications. One pass alone settles
+  nothing. A model never adjudicates, and never judges findings its own model
+  produced, under any spelling of its id (`openrouter/vendor/model`,
+  `vendor/model`, `vendor/model:free`).
 - **Model judges.** A model judge is a `Matcher` (`eval-judge.ts`), so tests use
   a fake. Each of its calls is a paid attempt admitted by the budget ledger
   (`ledgerAdmission` in `judge.ts`) and charged to the run it judges. No model
@@ -465,7 +529,13 @@ How it works:
 
   Failed, unsent and missing runs stay in the denominators: replay artifacts
   plan every case of their split, so a lost artifact shows as missing. A rate
-  with nothing to count is n/a, never 1.
+  with nothing to count is n/a, never 1. Adversarial (prompt-injection) cases
+  are reported on their own and left out of every rate; a trust check one of
+  them broke still fails the gate. `--empty-control` adds the empty-finding
+  baseline: a completed, free review of every planned case that reports
+  nothing, whose precision is n/a with its counts, end-to-end recall 0 and
+  false alarms 0. Runs that shared one ledger journal are counted once in the
+  report's ledger line, and `--ledger` gives that journal directly.
 - **The gate.** The default gate is D2 as the owner approved it:
   - no trust or consent check failed
   - no unaccounted paid attempt
@@ -476,7 +546,10 @@ How it works:
 
   A statistical rule passes or fails only when its interval settles it, and
   otherwise goes to human review. A result is a release decision only for a
-  held-out run on a frozen manifest, collected after the gate was approved.
+  held-out run on a frozen manifest, collected after the gate was approved,
+  under a gate no weaker than D2: a `--gate` file with a looser threshold, a
+  lower confidence or another decision split can report but never decides a
+  release, and a changed copy that still calls itself D2 cannot either.
 
 The judgement file, worksheets and `--out` reports must be outside the
 repository. Everything here reads saved files and sends nothing.

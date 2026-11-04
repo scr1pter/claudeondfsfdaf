@@ -1,0 +1,253 @@
+import { createHash } from "node:crypto"
+import {
+  buildDesktopReview,
+  modelName,
+  runReview,
+  type LineComment,
+  type ReviewClient,
+  type ReviewModel,
+  type ReviewOutcomeLite,
+} from "../../packages/app/src/features/pull-requests/ai-review"
+import type { ReviewPrice } from "../../packages/core/src/review/plan"
+import { REVIEW_REPORT_JSON_SCHEMA, VERIFY_JSON_SCHEMA } from "../../packages/core/src/review/schema"
+import type { CostKind, Trust } from "../../packages/core/src/review/types"
+import type { PlacedRecord } from "../../packages/engine/src/review/eval"
+import { untrustedGitEnv, UNTRUSTED_GIT } from "./dataset"
+import type { PlannedReplay } from "./replay"
+
+// The desktop baseline (VectorScope plan, VS-02; Phase 0 "Runner and baselines"): one dataset case through the desktop
+// runner, runReview in packages/app/src/features/pull-requests/ai-review.ts, which reviews through an injected client.
+// The client here records every session and prompt the runner makes and hands each to the client it wraps: a fake in
+// tests, and later an SDK client on an engine server whose instance is the case's prepared checkout. The artifact has
+// the engine replay's shape where the runners overlap (placed findings, attempts, prompt digests), so the two can be
+// compared case by case.
+//
+// Nothing is posted: the desktop posts only when its user presses Post, so the artifact keeps the review the panel would
+// send, before the desktop's posting check. A paid desktop replay is not wired: it needs an engine server and the eval
+// ledger's admission (VS-03), and runs only in the protected vectorscope-eval environment (D5, D7).
+
+export interface DesktopAttempt {
+  seq: number
+  pass: string // the session's internal name: vectorscope.review, vectorscope.security, vectorscope.verify
+  agent?: string
+  model?: string
+  format: "report" | "verify" | "other"
+  digest: string // SHA-256 of the prompt's text
+  chars: number
+  answered: boolean
+  costUsd?: number
+  unpriced?: boolean
+  tokens?: { input: number; output: number }
+  error?: string
+}
+
+export interface DesktopArtifact {
+  version: 1
+  label: string
+  adapter: "desktop"
+  repetition: number
+  runtime: { node: string; bun?: string; platform: string; arch: string }
+  source: { repository?: string; base: string; head: string; vector?: string; manifest?: string }
+  trust?: Trust // how the runner treated the checkout: untrusted when it rebuilt the change from the diff
+  authored?: Trust
+  models: { review: { id: string; context?: number; costKind: CostKind; price?: ReviewPrice } }
+  sessions: { pass: string; title: string; permission: string }[] // permission is a digest of the session's rules
+  passes: { pass: string; model?: string; digest: string; chars: number }[]
+  attempts: DesktopAttempt[]
+  aborted: string[] // passes the runner aborted (a timeout or a stop)
+  outcome?: ReviewOutcomeLite // absent when there was nothing to review or the runner failed
+  placed: PlacedRecord[]
+  // What the panel's Post button would send, which is never sent here.
+  proposed?: { body: string; comments: LineComment[]; untrusted: boolean }
+  error?: string // why runReview failed, when it threw
+}
+
+export interface DesktopReplayInput {
+  planned: PlannedReplay
+  directory: string // the case's prepared checkout, at its base: the engine instance the client reviews in
+  diff: string // the candidate's unified diff, base..head
+  model: ReviewModel
+  client: ReviewClient
+  repetition?: number
+  source?: { vector?: string; manifest?: string }
+  timeoutMs?: number
+  now?: () => number
+}
+
+// Replays one case through the desktop runner as a pull request from someone else's fork: untrusted, with no viewer,
+// so the runner rebuilds the change from the diff and never trusts the checkout. The pull request's number, title and
+// body are neutral; the case's id names the artifact only and never reaches the runner.
+export async function desktopReplay(input: DesktopReplayInput): Promise<DesktopArtifact> {
+  const item = input.planned.case
+  const recording = recordingClient(input.client)
+  const repository = item.repository?.url
+  const pr = {
+    number: 1,
+    title: "Proposed change",
+    body: "",
+    author: "contributor",
+    url: repository ? `${repository}/pull/1` : "https://github.com/replay/replay/pull/1",
+    baseRefName: item.baseRef ?? "base",
+    headRefName: "candidate",
+    headRefOid: item.head,
+    baseRefOid: item.base,
+    isCrossRepository: true,
+  }
+  const outcome = await runReview(
+    {
+      directory: input.directory,
+      pr,
+      diff: input.diff,
+      catalog: [input.model],
+      preferredModels: [modelName(input.model)],
+      ...(input.timeoutMs !== undefined ? { timeoutMs: input.timeoutMs } : {}),
+      ...(input.now ? { now: input.now } : {}),
+    },
+    recording.client,
+  ).catch((error: unknown) => (error instanceof Error ? error : new Error(String(error))))
+  const done = outcome instanceof Error ? undefined : outcome
+  const posting = done ? buildDesktopReview(done, pr.url) : undefined
+  return {
+    version: 1,
+    label: item.label,
+    adapter: "desktop",
+    repetition: input.repetition ?? 1,
+    runtime: {
+      node: process.version,
+      ...(process.versions.bun ? { bun: process.versions.bun } : {}),
+      platform: process.platform,
+      arch: process.arch,
+    },
+    source: {
+      ...(repository ? { repository } : {}),
+      base: item.base,
+      head: item.head,
+      ...input.source,
+    },
+    ...(done ? { trust: done.checkout.trust, ...(done.authored ? { authored: done.authored } : {}) } : {}),
+    models: {
+      review: {
+        id: modelName(input.model),
+        ...(input.model.context ? { context: input.model.context } : {}),
+        costKind: input.model.costKind,
+        ...(input.model.price ? { price: input.model.price } : {}),
+      },
+    },
+    sessions: recording.sessions,
+    passes: recording.attempts.map((attempt) => ({
+      pass: attempt.pass,
+      ...(attempt.model ? { model: attempt.model } : {}),
+      digest: attempt.digest,
+      chars: attempt.chars,
+    })),
+    attempts: recording.attempts,
+    aborted: recording.aborted,
+    ...(done ? { outcome: done } : {}),
+    placed: (done?.selection.inline ?? []).map((finding) => ({
+      id: finding.id,
+      path: finding.anchor.path,
+      line: finding.anchor.line,
+      ...(finding.anchor.startLine !== undefined ? { startLine: finding.anchor.startLine } : {}),
+      side: finding.anchor.side,
+      severity: finding.severity,
+      category: finding.category,
+      title: finding.title,
+      source: finding.source,
+      verified: finding.verified === true,
+    })),
+    ...(posting ? { proposed: { body: posting.body, comments: posting.comments, untrusted: posting.untrusted } } : {}),
+    ...(outcome instanceof Error ? { error: outcome.message } : {}),
+  }
+}
+
+// A client that passes every call through and keeps a record of the sessions, prompts and aborts.
+export function recordingClient(inner: ReviewClient) {
+  const sessions: DesktopArtifact["sessions"] = []
+  const attempts: DesktopAttempt[] = []
+  const aborted: string[] = []
+  const passOf = new Map<string, string>()
+  const client: ReviewClient = {
+    ...inner,
+    session: {
+      ...inner.session,
+      create: async (request) => {
+        const result = await inner.session.create(request)
+        const pass = request.internal ?? "session"
+        if (result.data?.id) passOf.set(result.data.id, pass)
+        sessions.push({ pass, title: request.title ?? "", permission: digest(request.permission ?? []) })
+        return result
+      },
+      prompt: async (request) => {
+        const text = (request.parts ?? []).map((part) => part.text).join("\n")
+        const attempt: DesktopAttempt = {
+          seq: attempts.length + 1,
+          pass: passOf.get(request.sessionID) ?? "unknown",
+          ...(request.agent ? { agent: request.agent } : {}),
+          ...(request.model ? { model: `${request.model.providerID}/${request.model.modelID}` } : {}),
+          format:
+            request.format?.schema === REVIEW_REPORT_JSON_SCHEMA
+              ? "report"
+              : request.format?.schema === VERIFY_JSON_SCHEMA
+                ? "verify"
+                : "other",
+          digest: digest(text),
+          chars: text.length,
+          answered: false,
+        }
+        attempts.push(attempt)
+        const result = await inner.session.prompt(request).catch((error: unknown) => {
+          attempt.error = error instanceof Error ? error.message : String(error)
+          throw error
+        })
+        const info = result.data?.info
+        attempt.answered = !!result.data
+        if (info?.cost !== undefined) attempt.costUsd = info.cost
+        if (info?.unpriced) attempt.unpriced = true
+        if (info?.tokens) attempt.tokens = { input: info.tokens.input, output: info.tokens.output }
+        if (info?.error) attempt.error = typeof info.error === "string" ? info.error : JSON.stringify(info.error)
+        return result
+      },
+      abort: async (request) => {
+        aborted.push(passOf.get(request.sessionID) ?? "unknown")
+        return inner.session.abort(request)
+      },
+    },
+  }
+  return { client, sessions, attempts, aborted }
+}
+
+// The candidate's diff from a prepared checkout, with local git only and none of the user's git config.
+export function candidateDiff(directory: string, view: { base: string; head: string }) {
+  const result = Bun.spawnSync(
+    [
+      "git",
+      ...UNTRUSTED_GIT,
+      "-C",
+      directory,
+      "diff",
+      "--no-color",
+      "--no-ext-diff",
+      "--no-textconv",
+      "-M",
+      view.base,
+      view.head,
+    ],
+    { env: untrustedGitEnv(), stdout: "pipe", stderr: "pipe" },
+  )
+  if (result.exitCode !== 0) throw new Error(`git diff failed: ${result.stderr.toString().trim()}`)
+  return result.stdout.toString()
+}
+
+function digest(value: unknown) {
+  const text =
+    typeof value === "string"
+      ? value
+      : JSON.stringify(value, (_key, entry: unknown) =>
+          entry && typeof entry === "object" && !Array.isArray(entry)
+            ? Object.fromEntries(Object.entries(entry).toSorted(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
+            : entry,
+        )
+  return createHash("sha256")
+    .update(text ?? "")
+    .digest("hex")
+}

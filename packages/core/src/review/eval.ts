@@ -102,10 +102,13 @@ function rates(truePositives: number, falsePositives: number, falseNegatives: nu
 // Causal judging (VectorScope plan, VS-04; Phase 0 "Metrics and judging").
 //
 // A run's findings are judged against its case's labelled defects in blinded passes (eval-judge.ts). A verdict is
-// settled by a human adjudication, or by two independent judges that agree; one pass alone settles nothing, a model
-// never judges findings it produced, and a pass made under an earlier rubric is stale. scoreRun turns one run's settled
-// verdicts into counts, and summarize turns runs into the reported metrics with their intervals. A run that failed, was
-// not sent or is missing stays in the denominators, and a rate with nothing to count is null, never 1.
+// settled by a human adjudication, or by two independent judges that agree when at least one of them is a human: a
+// model may assist but is never the sole authority, so an agreement of models alone waits for a human. One pass alone
+// settles nothing, a model never judges findings it produced, and a pass made under an earlier rubric is stale.
+// scoreRun turns one run's settled verdicts into counts, and summarize turns runs into the reported metrics with their
+// intervals. A run that failed, was not sent or is missing stays in the denominators, and a rate with nothing to count
+// is null, never 1. Adversarial (prompt-injection) cases are separate trust tests: they are left out of every quality
+// metric and reported on their own.
 
 // Raised whenever the verdict rules in judging-rubric.md change. Passes made under another version must be redone.
 export const RUBRIC_VERSION = 1
@@ -130,12 +133,21 @@ export interface LabelledDefect {
   alternatives: DefectLocation[]
 }
 
+// Where a judge can read the code a case changed, so an unexpected finding is checked against the code and not only
+// against the labels. It names the case's change, never the pipeline, model or repetition that reviewed it.
+export type CodeReference =
+  | { repository: string; base: string; head: string } // a dataset case: the candidate change in its public repository
+  | { patch: string } // a synthetic fixture: the change itself, as a unified diff with its context lines
+
 export interface EvalCase {
   id: string
-  kind: "bug" | "control"
+  // An adversarial case carries prompt-injection text. It tests trust, not review quality, so it never counts toward
+  // recall, precision or false alarms per clean pull request.
+  kind: "bug" | "control" | "adversarial"
   language: string
   size?: { files: number; additions: number; deletions: number }
   defects: LabelledDefect[] // empty for a control
+  code?: CodeReference
 }
 
 export interface EvalFinding {
@@ -208,9 +220,11 @@ export interface Judgement {
   adjudication?: Adjudication
 }
 
+// Every settled verdict has a human behind it: an adjudication, or an agreement with a human pass in it. Judges that
+// agree with no human among them are "needs-human" until a human judges or adjudicates the finding.
 export type Settled =
-  | { status: "adjudicated" | "agreed"; verdict: Verdict; suggestion?: Suggestion; human: boolean; problems: string[] }
-  | { status: "disagreed" | "single" | "none"; problems: string[] }
+  | { status: "adjudicated" | "agreed"; verdict: Verdict; suggestion?: Suggestion; human: true; problems: string[] }
+  | { status: "disagreed" | "needs-human" | "single" | "none"; problems: string[] }
 
 export function runKey(run: PlanEntry) {
   return `${run.variant} ${run.model} ${run.case}#${run.repetition}`
@@ -228,10 +242,11 @@ export function isSettled(value: Settled | undefined): value is Extract<Settled,
 }
 
 // A judgement's verdict, if it has one. A human adjudication settles it. Otherwise at least two judges, each counted
-// once at its latest pass, must agree; a disagreement waits for adjudication and a single pass waits for a second.
-// A pass under another rubric version, a malformed pass, and a model judging findings that model produced (`reviewed`
-// lists the run's models) do not count. An extra defect's issue is prefixed with its judge, so issues named by
-// different judges are never merged.
+// once at its latest pass, must agree, and at least one of them must be a human; a disagreement waits for
+// adjudication, an agreement of models alone waits for a human, and a single pass waits for a second. A pass under
+// another rubric version, a malformed pass, and a model judging findings that model produced (`reviewed` lists the
+// run's models, compared by sameModel) do not count. An extra defect's issue is prefixed with its judge, so issues named
+// by different judges are never merged.
 export function settle(
   judgement: Pick<Judgement, "passes" | "adjudication">,
   options: { reviewed: readonly string[]; rubric?: number },
@@ -257,14 +272,43 @@ export function settle(
   ].toSorted((a, b) => compare(a.judge, b.judge))
   if (passes.length < 2) return { status: passes.length ? "single" : "none", problems }
   if (!passes.every((pass) => sameVerdict(pass.verdict, passes[0].verdict))) return { status: "disagreed", problems }
+  // A model may assist with matching but is never the sole authority (Phase 0, "Metrics and judging").
+  if (!passes.some((pass) => pass.judge.startsWith("human:"))) return { status: "needs-human", problems }
   const suggestion = passes[0].suggestion
   return {
     status: "agreed",
     verdict: namespaced(passes[0].verdict, passes[0].judge),
     ...(suggestion && passes.every((pass) => pass.suggestion === suggestion) ? { suggestion } : {}),
-    human: passes.some((pass) => pass.judge.startsWith("human:")),
+    human: true,
     problems,
   }
+}
+
+// Whether two model ids name the same model, however a route or provider spells it. The engine records
+// "<provider>/<model>" (such as "openrouter/anthropic/claude-sonnet-4.5") and the prompt harness the router's own id
+// ("anthropic/claude-sonnet-4.5"). Each is reduced to its path segments, lower-cased, with a route suffix (":free",
+// "@preset") and a trailing date dropped from the last one and dots read as hyphens; the ids name the same model when
+// one's segments end the other's. It errs towards "same", which only ever refuses a judge.
+export function sameModel(a: string, b: string) {
+  const left = modelSegments(a)
+  const right = modelSegments(b)
+  if (!left.length || !right.length) return false
+  const [shorter, longer] = left.length <= right.length ? [left, right] : [right, left]
+  return shorter.every((segment, index) => segment === longer[longer.length - shorter.length + index])
+}
+
+function modelSegments(id: string) {
+  const segments = id
+    .trim()
+    .toLowerCase()
+    .split("/")
+    .filter((segment) => segment.length > 0)
+  if (!segments.length) return []
+  const last = segments
+    .at(-1)!
+    .replace(/[:@].*$/, "")
+    .replace(/-(\d{8}|\d{4}-\d{2}-\d{2})$/, "")
+  return [...segments.slice(0, -1), last].map((segment) => segment.replaceAll(".", "-")).filter(Boolean)
 }
 
 export interface RunScore {
@@ -417,7 +461,9 @@ export interface Metrics {
     tokensMissing: number // reviewed runs that reported no tokens
   }
   wallMs: { total: number; median: number | null; runs: number }
-  violations: string[]
+  violations: string[] // every run's, the adversarial cases' included
+  // Prompt-injection cases, kept out of every rate above. A trust or consent check one of them broke is in violations.
+  adversarial: { planned: number; reviewed: number; violated: number }
   problems: string[]
 }
 
@@ -425,11 +471,14 @@ export const DEFAULT_CONFIDENCE = 0.95
 
 // The reported metrics over scored runs, micro-averaged unless named macro. "Reviewed" means completed or partial: a
 // partial run's findings are real and count, but only a completed run counts toward coverage and conditional recall.
+// Adversarial cases count only toward spend, wall time and trust violations; their findings are not review quality.
 export function summarize(
-  entries: readonly { score: RunScore; evalCase: EvalCase; run?: EvalRun }[],
+  all: readonly { score: RunScore; evalCase: EvalCase; run?: EvalRun }[],
   options: { confidence?: number } = {},
 ): Metrics {
   const confidence = options.confidence ?? DEFAULT_CONFIDENCE
+  const adversarial = all.filter((entry) => entry.evalCase.kind === "adversarial")
+  const entries = all.filter((entry) => entry.evalCase.kind !== "adversarial")
   const scores = entries.map((entry) => entry.score)
   const reviewed = entries.filter((entry) => entry.score.status === "completed" || entry.score.status === "partial")
   const completed = scores.filter((score) => score.status === "completed")
@@ -451,7 +500,9 @@ export function summarize(
   const precise = scores
     .filter((score) => judgedOf(score) > 0)
     .map((score) => (score.matched + score.extra) / judgedOf(score))
-  const runs = entries.flatMap((entry) => (entry.run ? [entry.run] : []))
+  const runs = all.flatMap((entry) => (entry.run ? [entry.run] : []))
+  const isReviewed = (entry: { score: RunScore }) =>
+    entry.score.status === "completed" || entry.score.status === "partial"
   const timed = runs.flatMap((run) => (run.ms === undefined ? [] : [run.ms])).toSorted((a, b) => a - b)
   return {
     planned: scores.length,
@@ -520,7 +571,7 @@ export function summarize(
         input: sum(runs.map((run) => run.tokens?.input ?? 0)),
         output: sum(runs.map((run) => run.tokens?.output ?? 0)),
       },
-      tokensMissing: reviewed.filter((entry) => !entry.run?.tokens).length,
+      tokensMissing: all.filter((entry) => isReviewed(entry) && !entry.run?.tokens).length,
     },
     wallMs: {
       total: sum(timed),
@@ -532,7 +583,12 @@ export function summarize(
       runs: timed.length,
     },
     violations: runs.flatMap((run) => run.violations.map((violation) => `${runKey(run)}: ${violation}`)),
-    problems: scores.flatMap((score) => score.problems),
+    adversarial: {
+      planned: adversarial.length,
+      reviewed: adversarial.filter(isReviewed).length,
+      violated: adversarial.filter((entry) => (entry.run?.violations.length ?? 0) > 0).length,
+    },
+    problems: all.flatMap((entry) => entry.score.problems),
   }
 }
 
@@ -547,13 +603,17 @@ export interface PairedRecall {
 
 // Recall on paired cases: each labelled defect of a case and repetition both pipelines were planned on, detected end
 // to end (a run that reviewed nothing detects nothing), compared with Newcombe's interval for paired proportions.
+// Adversarial cases are left out, as they are of recall itself.
 export function pairedRecall(
-  candidate: readonly { score: RunScore }[],
-  baseline: readonly { score: RunScore }[],
+  candidate: readonly { score: RunScore; evalCase?: Pick<EvalCase, "kind"> }[],
+  baseline: readonly { score: RunScore; evalCase?: Pick<EvalCase, "kind"> }[],
   options: { confidence?: number } = {},
 ): PairedRecall {
-  const base = new Map(baseline.map((entry) => [`${entry.score.case}#${entry.score.repetition}`, entry.score]))
-  const paired = candidate.flatMap((entry) => {
+  const counted = (entry: { evalCase?: Pick<EvalCase, "kind"> }) => entry.evalCase?.kind !== "adversarial"
+  const base = new Map(
+    baseline.filter(counted).map((entry) => [`${entry.score.case}#${entry.score.repetition}`, entry.score]),
+  )
+  const paired = candidate.filter(counted).flatMap((entry) => {
     const other = base.get(`${entry.score.case}#${entry.score.repetition}`)
     return other ? [{ candidate: entry.score, baseline: other }] : []
   })
@@ -686,7 +746,7 @@ function passProblem(pass: JudgePass, rubric: number, reviewed: readonly string[
     return `${String(pass.judge)} is not a human: or model: judge`
   if (pass.rubric !== rubric)
     return `${pass.judge} judged under rubric ${pass.rubric}, not ${rubric}: the pass is stale`
-  if (pass.judge.startsWith("model:") && reviewed.includes(pass.judge.slice("model:".length)))
+  if (pass.judge.startsWith("model:") && reviewed.some((model) => sameModel(model, pass.judge.slice("model:".length))))
     return `${pass.judge} cannot judge findings its own model produced`
   return verdictProblem(pass.verdict, pass.judge)
 }

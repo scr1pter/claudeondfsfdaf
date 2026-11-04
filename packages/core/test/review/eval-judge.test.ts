@@ -131,6 +131,26 @@ describe("blind", () => {
     expect(large.findings.find((item) => item.title === CAUSE.title)!.body).toBe(CAUSE.body)
   })
 
+  test("a task says where to read the case's code, and that names nothing about the run", () => {
+    const code = {
+      repository: "https://github.com/acme/ledger",
+      base: "a".repeat(40),
+      head: "b".repeat(40),
+    }
+    const blinded = blind({ runs: RUNS, cases: [{ ...CASE, code }], seed: "seed-1" })
+    expect(blinded.tasks).toHaveLength(2)
+    for (const task of blinded.tasks) {
+      expect(Object.keys(task).toSorted()).toEqual(["code", "defects", "findings", "task"])
+      expect(task.code).toEqual(code)
+    }
+    const text = JSON.stringify(blinded.tasks)
+    for (const hidden of ["vendor/reviewer", "vendor/triage", "engine", CASE.id, "posted", "proposed", "#1", "#2"])
+      expect(text).not.toContain(hidden)
+    // A synthetic fixture is read from its files in this repository.
+    const fixture = { patch: "diff --git a/src/billing/sync.ts b/src/billing/sync.ts\n" }
+    expect(blind({ runs: RUNS, cases: [{ ...CASE, code: fixture }], seed: "seed-1" }).tasks[0].code).toEqual(fixture)
+  })
+
   test("leaves out failed runs and nits, unless nits are asked for", () => {
     const blinded = blind({ runs: RUNS, cases: [CASE], seed: "seed-1" })
     expect(
@@ -221,6 +241,33 @@ describe("judgeRuns", () => {
     )
   })
 
+  test("a model judge is recognised as a reviewer under another provider prefix or route suffix", async () => {
+    // A replay records <provider>/<model>; a judge named by the router's own id is the same model.
+    const replayed = [run({ model: "openrouter/vendor/reviewer-large", models: ["openrouter/vendor/reviewer-large"] })]
+    for (const judge of ["model:vendor/reviewer-large", "model:vendor/reviewer-large:free", "model:reviewer-large"])
+      await expect(
+        judgeRuns({ runs: replayed, cases: [CASE], seed: "s", matcher: reader(judge), admit: () => open([]) }),
+      ).rejects.toThrow("never judges findings it produced")
+    // And the other way round: a run.ts report records the router's id, the judge the engine's.
+    await expect(
+      judgeRuns({
+        runs: [run()],
+        cases: [CASE],
+        seed: "s",
+        matcher: reader("model:openrouter/vendor/reviewer-large"),
+        admit: () => open([]),
+      }),
+    ).rejects.toThrow("never judges findings it produced")
+    const other = await judgeRuns({
+      runs: replayed,
+      cases: [CASE],
+      seed: "s",
+      matcher: reader("model:vendor/judge"),
+      admit: () => open([]),
+    })
+    expect(other.passes.length).toBeGreaterThan(0)
+  })
+
   test("each model call is admitted for the run it judges, sent, then settled at what it reported", async () => {
     const events: string[] = []
     const asked: JudgeTask[] = []
@@ -304,7 +351,7 @@ describe("recording, disputes and status", () => {
     expect(recordPasses(judgements, human.passes)).toEqual(judgements)
 
     const status = judgingStatus({ runs: RUNS, judgements })
-    expect(status).toMatchObject({ findings: 3, agreed: 0, disagreed: 3, single: 0, none: 0 })
+    expect(status).toMatchObject({ findings: 3, agreed: 0, needsHuman: 0, disagreed: 3, single: 0, none: 0 })
 
     const disputes = disputeTasks({ runs: RUNS, cases: [CASE], judgements, seed: "seed-1" })
     expect(disputes.tasks.flatMap((task) => task.findings)).toHaveLength(3)

@@ -2,7 +2,7 @@
 import { randomBytes } from "node:crypto"
 import { existsSync } from "node:fs"
 import { writeFile } from "node:fs/promises"
-import { join, resolve } from "node:path"
+import { resolve } from "node:path"
 import { parseArgs } from "node:util"
 import { RUBRIC_VERSION, type EvalRun, type Verdict } from "../../packages/core/src/review/eval"
 import {
@@ -18,7 +18,8 @@ import {
   type TaskFinding,
 } from "../../packages/core/src/review/eval-judge"
 import { estimateUsd, type Ledger, type Price } from "./budget"
-import { JUDGEMENTS_SCHEMA, loadOutputs, outsideRepository, readJudgements, type JudgementFile } from "./report"
+import { outsideRepository, REPO_ROOT } from "./paths"
+import { JUDGEMENTS_SCHEMA, loadOutputs, readJudgements, type JudgementFile } from "./report"
 
 // Blinded judging of saved eval outputs (VectorScope plan, VS-04). A coordinator keeps the judgement file, which holds
 // the seed that blinds every worksheet and maps answers back to runs. A judge gets only a worksheet: one task per run,
@@ -29,7 +30,6 @@ import { JUDGEMENTS_SCHEMA, loadOutputs, outsideRepository, readJudgements, type
 // packages/core/src/review/eval-judge.ts with ledgerAdmission below, so each of its calls is admitted by the eval budget
 // ledger (VS-03) and charged to the run it judges; no paid judge is wired to a provider here (D5, D12).
 
-const REPO_ROOT = join(import.meta.dir, "..", "..")
 export const WORKSHEET_SCHEMA = "vectorscope-worksheet/1"
 
 export interface WorksheetFinding extends TaskFinding {

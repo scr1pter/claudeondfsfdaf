@@ -2,7 +2,7 @@
 import { createHash } from "node:crypto"
 import { readdirSync, statSync } from "node:fs"
 import { writeFile } from "node:fs/promises"
-import { isAbsolute, join, relative, resolve } from "node:path"
+import { join, relative, resolve } from "node:path"
 import { parseArgs } from "node:util"
 import {
   findingKey,
@@ -24,17 +24,22 @@ import {
 import type { Finding, ModelFinding } from "../../packages/core/src/review/types"
 import type { ReplayArtifact } from "../../packages/engine/src/review/eval"
 import { Ledger, readJournal, type Entry, type Summary } from "./budget"
-import { manifestProblems, SEED_MANIFEST, SPLITS, type Case, type Manifest } from "./dataset"
+import { caseView, manifestProblems, SEED_MANIFEST, SPLITS, type Case, type Manifest } from "./dataset"
 import { listFixtures, loadFixture, type Fixture } from "./fixture"
+import { outsideRepository, REPO_ROOT } from "./paths"
 import { replayCharge } from "./replay"
+
+export { outsideRepository }
 
 // The causal report (VectorScope plan, VS-04). It re-scores saved eval outputs (run.ts --out reports and the engine
 // replay's artifacts) against the settled verdicts in a judgement file from judge.ts, and evaluates the release gate,
 // by default the owner's approved D2 gate. It reads files and sends nothing, so a revised rubric or gate is applied to
-// the same outputs without another provider call.
+// the same outputs without another provider call. With --empty-control it adds Phase 0's empty-finding baseline: a
+// completed, admitted, free review of every planned case that reports nothing, which shows how each denominator
+// behaves when there is nothing to count.
 
-const REPO_ROOT = join(import.meta.dir, "..", "..")
 export const JUDGEMENTS_SCHEMA = "vectorscope-judgements/1"
+export const EMPTY_CONTROL = { variant: "empty", model: "none" } as const
 
 // The judge's record of every pass, adjudication and judge call, kept by the coordinator outside the repository. It
 // holds the seed that blinds the worksheets, so it is never given to a judge.
@@ -101,11 +106,9 @@ export async function loadOutputs(input: {
           ),
         )
     : []
-  const embedded = reports.flatMap((entry) =>
-    isSummary((entry.value as RunReport).budget) ? [(entry.value as RunReport).budget!] : [],
-  )
-  const inspected = input.ledger ? Ledger.inspect(resolve(input.ledger)) : undefined
-  const summaries = [...embedded, ...(inspected ? [inspected] : [])]
+  const summaries = input.ledger
+    ? [Ledger.inspect(resolve(input.ledger))]
+    : ledgerSummaries(reports.map((entry) => entry.value as RunReport))
   return {
     cases: [...fixtures.map(fixtureCase), ...(manifest ? manifest.cases.map(manifestCase) : [])],
     runs: [...fromReports.flatMap((entry) => entry.runs), ...replays],
@@ -151,6 +154,68 @@ export async function loadOutputs(input: {
       ...invalid.map((problem) => `manifest ${manifestPath}: ${problem}`),
       ...(artifacts.length && reports.length ? ["run.ts reports and replay artifacts are reported together"] : []),
     ],
+  }
+}
+
+// One summary per budget journal the reports were charged to. Runs that share a journal (every model of one CI run)
+// each embed the journal as it stood when they finished, earlier models' entries included, so adding their summaries
+// up would count the first model's spend once for every later model. Reports are grouped by the journal's opening
+// entry, and each group's entries are merged without repeats, shortest list first, which keeps the journal's order
+// since each later process appended to what the earlier ones wrote; the merged journal is summarised once. A report
+// with no entries keeps the summary it embeds.
+export function ledgerSummaries(reports: readonly Pick<RunReport, "budget" | "ledger">[]): Summary[] {
+  const journals = new Map<string, Entry[][]>()
+  const alone: Summary[] = []
+  for (const report of reports) {
+    const entries = report.ledger ?? []
+    if (entries[0]?.type === "open") {
+      const key = JSON.stringify(entries[0])
+      journals.set(key, [...(journals.get(key) ?? []), entries])
+    } else if (isSummary(report.budget)) alone.push(report.budget)
+  }
+  return [
+    ...[...journals.values()].map((lists) => {
+      const seen = new Set<string>()
+      const merged = lists
+        .toSorted((a, b) => a.length - b.length)
+        .flat()
+        .filter((entry) => {
+          const key = JSON.stringify(entry)
+          if (seen.has(key)) return false
+          seen.add(key)
+          return true
+        })
+      return Ledger.summarize(merged)
+    }),
+    ...alone,
+  ]
+}
+
+// The empty-finding control (Phase 0, "Runner and baselines"): for every case and repetition of the plan, a completed
+// review that was admitted, cost nothing and reported no finding. Its precision has nothing to count (null, with its
+// counts), its end-to-end recall is 0, and it raises no false alarm, so the report shows what each denominator does
+// when a reviewer says nothing. It runs no model.
+export function emptyControl(plan: readonly PlanEntry[], runs: readonly EvalRun[] = []) {
+  const cases = [...new Map(plan.map((entry) => [`${entry.case}#${entry.repetition}`, entry])).values()]
+  const started = runs.flatMap((run) => (run.startedAt ? [run.startedAt] : [])).toSorted()[0]
+  return {
+    plan: cases.map((entry): PlanEntry => ({ ...EMPTY_CONTROL, case: entry.case, repetition: entry.repetition })),
+    runs: cases.map(
+      (entry): EvalRun => ({
+        ...EMPTY_CONTROL,
+        case: entry.case,
+        repetition: entry.repetition,
+        trust: "untrusted",
+        status: "completed",
+        proposed: [],
+        posted: [],
+        ms: 0,
+        spend: { costUsd: 0, uncertainUsd: 0, usageMissing: false, admitted: true },
+        tokens: { input: 0, output: 0 },
+        violations: [],
+        ...(started ? { startedAt: started } : {}),
+      }),
+    ),
   }
 }
 
@@ -341,6 +406,8 @@ export function fixtureCase(fixture: Fixture): EvalCase {
     id: fixture.name,
     kind: fixture.expected.length ? "bug" : "control",
     language: LANGUAGES[extension] ?? (extension || "unknown"),
+    // The change itself: a path to the fixture would carry its descriptive name into the worksheet.
+    code: { patch: fixture.diff },
     size: {
       files: fixture.files.length,
       additions: fixture.files.reduce((total, file) => total + file.additions, 0),
@@ -365,11 +432,13 @@ export function fixtureCase(fixture: Fixture): EvalCase {
 }
 
 export function manifestCase(item: Case): EvalCase {
+  const view = caseView(item)
   return {
     id: item.id,
     kind: item.kind,
     language: item.language,
     size: item.candidate.changed,
+    code: { repository: view.repository, base: view.base, head: view.head },
     defects: item.labels.defects.map((defect) => ({
       id: defect.id,
       category: defect.category,
@@ -404,12 +473,6 @@ export async function readJudgements(path: string): Promise<JudgementFile> {
   return { ...value, calls: Array.isArray(value.calls) ? value.calls : [] }
 }
 
-// Raw judgements, worksheets and reports stay outside the repository, like run.ts's reports.
-export function outsideRepository(path: string) {
-  const inside = relative(REPO_ROOT, path)
-  return inside.startsWith("..") || isAbsolute(inside)
-}
-
 const USAGE = `Usage: bun script/vectorscope-eval/report.ts [options]
 
 Re-scores saved eval outputs against settled judgements and evaluates the release gate. Sends nothing.
@@ -421,7 +484,9 @@ Re-scores saved eval outputs against settled judgements and evaluates the releas
   --candidate <v>=<model>  Pipeline variant and model the gate decides on (default: the only one)
   --baseline <v>=<model>   The frozen pipeline to compare recall with on paired cases
   --gate <path>            Gate config JSON (default: the owner's approved D2 gate)
-  --ledger <path>          Eval ledger journal, which shows what each replay was admitted for
+  --ledger <path>          Eval ledger journal, which shows what each replay was admitted for; its summary is the
+                           report's ledger line, instead of the journals the run.ts reports carry
+  --empty-control          Add the empty-finding control: every planned case reviewed with no finding, for free
   --title <text>           Report title
   --out <path>             Also write the JSON report there; it must be outside the repository
   --print-gate             Print the default gate (the owner's approved D2) as JSON, to review or copy, and exit
@@ -439,6 +504,7 @@ const OPTIONS = {
   ledger: { type: "string" },
   title: { type: "string" },
   out: { type: "string" },
+  "empty-control": { type: "boolean" },
   "print-gate": { type: "boolean" },
   help: { type: "boolean" },
 } as const
@@ -446,7 +512,7 @@ const OPTIONS = {
 export async function main(argv: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
   const parsed = parseArgs({ args: argv, options: OPTIONS, strict: false, allowPositionals: true })
   const values = parsed.values
-  const text = (name: Exclude<keyof typeof OPTIONS, "outputs" | "help" | "print-gate">) =>
+  const text = (name: Exclude<keyof typeof OPTIONS, "outputs" | "help" | "print-gate" | "empty-control">) =>
     typeof values[name] === "string" ? values[name] : undefined
   const outputs = (Array.isArray(values.outputs) ? values.outputs : []).filter((value) => typeof value === "string")
   const unknown = Object.keys(values).filter((name) => !Object.hasOwn(OPTIONS, name))
@@ -478,6 +544,7 @@ export async function main(argv: string[]): Promise<{ code: number; stdout: stri
     ...(text("ledger") ? { ledger: text("ledger")! } : {}),
   })
   const judgements = text("judgements") ? await readJudgements(resolve(text("judgements")!)) : undefined
+  const empty = values["empty-control"] === true ? emptyControl(loaded.plan, loaded.runs) : undefined
   const report = buildReport(
     {
       title: text("title") ?? `VectorScope eval: ${loaded.split}`,
@@ -492,8 +559,8 @@ export async function main(argv: string[]): Promise<{ code: number; stdout: stri
           : {}),
       },
       cases: loaded.cases,
-      plan: loaded.plan,
-      runs: loaded.runs,
+      plan: [...loaded.plan, ...(empty?.plan ?? [])],
+      runs: [...loaded.runs, ...(empty?.runs ?? [])],
       judgements: judgements?.judgements ?? [],
       ...(candidate ? { candidate } : {}),
       ...(baseline ? { baseline } : {}),
