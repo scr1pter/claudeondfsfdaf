@@ -104,10 +104,38 @@ export interface RunInput {
   baseRef?: string // the base branch name, for the prompt
   rulesSource?: PromptInput["rulesSource"] // defaults to the working tree for local and desktop runs
   inlinePosted?: number // state.inlinePosted, for the per-PR inline cap
+  // The eval's view of the run (ReviewEval.replay): each pass's prompt and every provider attempt, admitted or
+  // refused, with what it settled at. Off unless set, and observing changes nothing the review does.
+  observe?: (event: Observation) => void
 }
 
 type Name = ReviewOutcome["specialists"][number]["name"]
 type Stop = "budget" | "steps" | "timeout"
+type Phase = "turn" | "finalize"
+
+export type Observation =
+  // A pass is about to run with this prompt, or was planned and skipped (verify with no budget or time left).
+  | { type: "pass"; pass: Name; model: string; text: string }
+  // One provider attempt the review's admission was asked for, retries included. A refused one was never sent.
+  | {
+      type: "attempt"
+      pass: Name
+      phase: Phase
+      admitted: boolean
+      stop?: Stop
+      estimateUsd: number
+      sessionID?: SessionID
+      model?: { providerID: string; modelID: string; api: string; npm: string }
+    }
+  // What an admitted attempt settled at; incomplete usage keeps its estimate as uncertain spend.
+  | {
+      type: "settle"
+      pass: Name
+      phase: Phase
+      costUsd: number
+      complete: boolean
+      tokens?: { input: number; output: number }
+    }
 type Progress = Parameters<NonNullable<RunInput["onProgress"]>>[0]
 
 interface Track {
@@ -196,6 +224,16 @@ export const run: (
 
   const progress = (event: Progress) =>
     Effect.sync(() => input.onProgress?.(event)).pipe(Effect.catchCause(() => Effect.void))
+  // Called from inside synchronous admission and settlement, so an observer that throws is dropped here rather than
+  // allowed to refuse or leak an attempt.
+  const observe = (event: Observation) => {
+    if (!input.observe) return
+    try {
+      input.observe(event)
+    } catch {
+      return
+    }
+  }
 
   // Reservations are estimates, not billed spend. Replace this specialist's old reservation in one synchronous
   // operation: parallel specialists must not each spend the same remainder, including a pending finalization.
@@ -322,8 +360,18 @@ export const run: (
       const context = Math.ceil((spec.text.length + JSON.stringify(spec.schema).length) / 3.5)
       const price = priceOf(spec.model)
       const firstCost = nextCost({ context, cached: 0, price })
-      if (!reserve(spec.name, firstCost, firstCost))
+      observe({ type: "pass", pass: spec.name, model: nameOf(spec.model), text: spec.text })
+      if (!reserve(spec.name, firstCost, firstCost)) {
+        observe({
+          type: "attempt",
+          pass: spec.name,
+          phase: "turn",
+          admitted: false,
+          stop: "budget",
+          estimateUsd: firstCost,
+        })
         return { name: spec.name, status: "stopped", stop: "budget", detail: "budget", steps: 0 } satisfies Asked<T>
+      }
       // A helper session: it stays out of session lists, and the review reports what it spent.
       const session = yield* sessions.create({
         title: `Vectorscope review · ${input.head.slice(0, 7)} · ${spec.name}`,
@@ -357,6 +405,8 @@ export const run: (
       const policy: SessionAdmission.Policy = {
         sessionID: session.id,
         admit: (request) => {
+          const phase: Phase = track.finalizing ? "finalize" : "turn"
+          const attempt = { type: "attempt", pass: track.name, phase, sessionID: session.id } as const
           const stop = track.finalizing
             ? track.finalizeAttempts >= 1 || !request.tools.includes("StructuredOutput")
               ? "steps"
@@ -369,16 +419,29 @@ export const run: (
           if (stop) {
             track.stop ??= stop
             track.denied = true
+            observe({ ...attempt, admitted: false, stop, estimateUsd: 0 })
             return
           }
           const estimate = nextCost(track)
           if (!reserve(track.name, estimate, track.finalizing ? 0 : estimate)) {
             track.stop = "budget"
             track.denied = true
+            observe({ ...attempt, admitted: false, stop: "budget", estimateUsd: estimate })
             return
           }
           if (track.finalizing) track.finalizeAttempts++
           else track.attempts++
+          observe({
+            ...attempt,
+            admitted: true,
+            estimateUsd: estimate,
+            model: {
+              providerID: request.model.providerID,
+              modelID: request.model.id,
+              api: request.model.api.id,
+              npm: request.model.api.npm,
+            },
+          })
           return {
             ...(track.finalizing ? { tools: ["StructuredOutput"] } : {}),
             observe: (cost) => {
@@ -386,6 +449,16 @@ export const run: (
               if (reservation) reservation.turn = Math.max(reservation.turn, cost)
             },
             settle: (result) => {
+              observe({
+                type: "settle",
+                pass: track.name,
+                phase,
+                costUsd: result.cost,
+                complete: result.complete,
+                ...(result.usage
+                  ? { tokens: { input: result.usage.inputTokens ?? 0, output: result.usage.outputTokens ?? 0 } }
+                  : {}),
+              })
               state.spent += result.cost
               if (track.price && !result.complete) {
                 // No usage, partial usage, and unpriced usage cannot turn an accepted attempt into free capacity.
@@ -453,7 +526,18 @@ export const run: (
 
       // The first prompt is now idle. Unknown exposure stays in the review's ledger; only unused future work is
       // released. The finalizer must still fit beside every other specialist's admitted work.
-      if (!reserve(track.name, nextCost(track), 0)) return done(undefined, "stopped", "budget", "budget")
+      if (!reserve(track.name, nextCost(track), 0)) {
+        observe({
+          type: "attempt",
+          pass: spec.name,
+          phase: "finalize",
+          admitted: false,
+          stop: "budget",
+          estimateUsd: nextCost(track),
+          sessionID: session.id,
+        })
+        return done(undefined, "stopped", "budget", "budget")
+      }
       track.finalizing = true
       track.denied = false
       yield* sessions.setPermission({ sessionID: session.id, permission: [...rules, DENY_ALL, ALLOW_OUTPUT] })
@@ -602,6 +686,17 @@ export const run: (
       : 0
     const unaffordable = capped && state.spent + state.uncertain + estimate > config.maxCostUsd
     const late = deadline - Date.now() < VERIFY_MIN_MS
+    if (verifyText && (unaffordable || late)) {
+      observe({ type: "pass", pass: "verify", model: nameOf(input.model), text: verifyText })
+      observe({
+        type: "attempt",
+        pass: "verify",
+        phase: "turn",
+        admitted: false,
+        stop: unaffordable ? "budget" : "timeout",
+        estimateUsd: estimate,
+      })
+    }
     const verify: Asked<ReturnType<typeof decodeVerify>> | undefined = !verifyText
       ? undefined
       : unaffordable || late

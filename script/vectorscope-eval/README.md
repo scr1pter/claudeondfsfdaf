@@ -210,11 +210,72 @@ locations match the repository. A case without a mirror keeps its recorded
 check.
 
 A bug case's fix and labels are hidden ground truth. A reviewer is given only
-`caseView(case)`: the repository and the candidate's base and head. Nothing in
-this directory runs the dataset through a reviewer yet; replaying the
-production pipeline, the budgeted manual CI run and causal judging are later
-work packages.
+`caseView(case)`: the repository and the candidate's base and head. The
+production replay below plans runs from that view alone; the budgeted manual CI
+run and causal judging are later work packages.
 
 `fixtures.test.ts` covers the dataset with local fixture repositories (missing
 objects, wrong ancestry, post-fix leakage, a reverse diff, split grouping and
 the freeze) and needs no network.
+
+## Production replay
+
+`run.ts` measures one prompt. The production replay measures the product: a
+case goes through the engine's own review pipeline, and only GitHub's writes
+are replaced.
+
+```
+bun script/vectorscope-eval/replay.ts                          # plan the development split, send nothing
+bun script/vectorscope-eval/replay.ts --mirrors <dir>          # which cases have a local clone
+bun script/vectorscope-eval/replay.ts --mirrors <dir> --prepare <out>
+```
+
+- `packages/engine/src/review/eval.ts` (`ReviewEval.replay`) is the adapter. It
+  reads the case's settings (`.vector/review.json`, review rules,
+  `.gitattributes`) from the base commit, as CI does, plans a first full review
+  with `ReviewSource`, classifies files and generated headers, gathers callers,
+  history and base instructions with `ReviewContext`, and runs `Review.run`
+  with its real read tools, security and verify passes, finalizer, selection,
+  anchoring and its step, dollar and time limits. It never fetches: a commit
+  the checkout lacks is an error. A trusted case is reviewed with its head
+  checked out; an untrusted one is refused if its head is checked out, and its
+  files go in the prompt.
+- What a first review would post (one review with the line comments, then the
+  summary in CI form, or only the failure note when every reviewer failed) is
+  built with the core builders the GitHub job uses, redacted, put through the
+  posting check the caller supplies, and handed to a posting adapter.
+  `ReviewEval.recordingPosting()` keeps every write and sends nothing.
+- The artifact names the source (repository, base, head, merge-base, the Vector
+  commit and the manifest digest when given), the runtime, the adapter, the
+  settings and rules by digest, each model with its pricing snapshot, each
+  pass's prompt by digest, and every provider attempt in order, admitted or
+  refused with its reason, with the model and API it went to and what it
+  settled at. An admitted attempt that never settled stays unsettled; it is
+  never counted as free. It also keeps the tool calls each session made (paths
+  made relative), the whole `ReviewOutcome` for re-scoring without new model
+  calls, the placed findings and every posted payload.
+- The attempt record comes from `Review.run`'s optional `observe` hook. It is
+  off unless a caller sets it, and a test shows the same review sends the same
+  requests and returns the same outcome with it off, on, or throwing.
+- `replay.ts` is the driver. It turns each case of one split into the
+  replay's input from `caseView` alone (untrusted, on a writer's request, the
+  case id used only to name the artifact) and, with `--prepare`, builds each
+  mirrored case's checkout with local git: a new repository holding the
+  candidate head and its history only, so the fix and anything after it are
+  not there, with the base checked out. Held-out cases are planned only from a
+  frozen manifest.
+
+Nothing here sends a model request. A replay that spends money needs the eval
+budget ledger and the protected `vectorscope-eval` environment (D5, D7), so the
+driver stops at the plan. The desktop runner
+(`packages/app/src/features/pull-requests/ai-review.ts`) reviews through an
+injected SDK client that needs a running engine server; it cannot be driven
+headlessly here yet, so `--adapter desktop` reports it unavailable. Its replay
+comes with moving that runner into the engine (VS-10).
+
+The replay's tests use the engine's fake model server and real git checkouts:
+
+```
+cd packages/engine && bun test test/review/eval.test.ts
+cd script/vectorscope-eval && bun test replay.test.ts
+```

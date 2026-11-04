@@ -110,6 +110,31 @@ export const ensureObjects = Effect.fn("ReviewSource.ensureObjects")(function* (
   }
 })
 
+// The commits of `revs` this repository does not have, without fetching anything. A replay (ReviewEval.replay)
+// reviews only what is already there, so it never reaches a remote.
+export const missingCommits = Effect.fn("ReviewSource.missingCommits")(function* (input: {
+  directory: string
+  revs: string[]
+}) {
+  const git = yield* Git.Service
+  const missing = yield* Effect.forEach(input.revs, (rev) =>
+    !rev || rev.startsWith("-")
+      ? Effect.succeed([rev])
+      : git
+          .run(["cat-file", "-e", `${rev}^{commit}`], { cwd: input.directory })
+          .pipe(Effect.map((result) => (result.exitCode === 0 ? [] : [rev]))),
+  )
+  return missing.flat()
+})
+
+// A file's text at a commit: undefined when it is not there, is binary, or the revision looks like an option.
+export const show = Effect.fn("ReviewSource.show")(function* (input: { directory: string; rev: string; path: string }) {
+  const git = yield* Git.Service
+  if (input.rev.startsWith("-")) return undefined
+  const result = yield* git.run(["cat-file", "blob", `${input.rev}:${input.path}`], { cwd: input.directory })
+  return result.exitCode === 0 && !result.stdout.includes(0) ? result.text() : undefined
+})
+
 // The pull request's own diff: merge-base → head.
 export const prDiff = Effect.fn("ReviewSource.prDiff")(function* (input: {
   directory: string

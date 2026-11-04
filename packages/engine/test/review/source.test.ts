@@ -413,3 +413,24 @@ describe("ReviewSource.knownPath", () => {
     }),
   )
 })
+
+describe("ReviewSource replay reads", () => {
+  it.live("names the commits a checkout lacks without fetching, and reads text files at a commit", () =>
+    Effect.gen(function* () {
+      const repo = yield* branched
+      const absent = "f".repeat(40)
+      expect(yield* ReviewSource.missingCommits({ directory: repo.dir, revs: [repo.first, absent, "--all"] })).toEqual([
+        absent,
+        "--all",
+      ])
+      expect(yield* ReviewSource.show({ directory: repo.dir, rev: repo.first, path: "a.ts" })).toBe(
+        edit(A, 10, "const a10 = 100"),
+      )
+      expect(yield* ReviewSource.show({ directory: repo.dir, rev: repo.first, path: "missing.ts" })).toBeUndefined()
+      expect(yield* ReviewSource.show({ directory: repo.dir, rev: "--output=x", path: "a.ts" })).toBeUndefined()
+      yield* write(repo.dir, { "blob.bin": "a\u0000b" })
+      const binary = yield* commit(repo.dir, "binary")
+      expect(yield* ReviewSource.show({ directory: repo.dir, rev: binary, path: "blob.bin" })).toBeUndefined()
+    }),
+  )
+})
