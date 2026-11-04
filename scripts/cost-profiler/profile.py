@@ -407,7 +407,8 @@ def profile_arm(arm, all_receipts, provisional=False, slack=5000):
     totals = money(receipts)
     closed_amount = number(closure.get("measuredUsd"))
     closure_checks = {"providerCountMatches": closure.get("providerRequests") == len(requests),
-                      "allProviderTerminalsObserved": all(request["after"] is not None for request in requests.values()),
+                      "allProviderTerminalsObserved": all(request["after"] is not None
+                          and request["after"].get("terminalObserved") is True for request in requests.values()),
                       "allReceiptsReconciled": len(receipt_links) == len(receipts) == len(requests),
                       "measuredUsdKnown": totals["measuredUsdComplete"],
                       "closureAmountMatchesWithinOneTrillionthUsd": closed_amount is not None and totals["measuredUsdComplete"]

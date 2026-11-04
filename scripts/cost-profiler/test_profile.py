@@ -30,7 +30,8 @@ class ProfileTests(unittest.TestCase):
                 {"type": "before_upstream", "ordinal": index + 1, "role": "lead", "requestSha256": sha,
                  "unixNs": start * 1000000, "identitySha256": hashlib.sha256(b"synthetic-thread").hexdigest()},
                 {"type": "after_upstream", "ordinal": index + 1, "requestSha256": sha,
-                 "unixNs": (start + 1000) * 1000000, "usage": usage, "clientDisconnected": disconnected},
+                 "unixNs": (start + 1000) * 1000000, "usage": usage, "clientDisconnected": disconnected,
+                 "terminalObserved": True},
                 {"type": "receipt_registered", "ordinal": index + 1, "requestSha256": sha, "meterReceiptSequence": index + 100},
             ])
             receipts.append({"seq": index + 100, "requestSha256": sha, "actor": "synthetic", "label": "fixture",
@@ -80,6 +81,23 @@ class ProfileTests(unittest.TestCase):
         self.assertEqual(result["accounting"]["unknownMeasuredUsdCount"], 1)
         self.assertFalse(result["accounting"]["measuredUsdComplete"])
         self.assertIsNone(result["charges"][0]["measuredUsd"])
+
+    def test_after_upstream_observation_is_not_proof_of_terminal(self):
+        audit, receipts = self.fixture()
+        audit[2].update(terminalObserved=False, outcome="upstream_terminal_schema_unknown")
+        self.write_audit(audit)
+        result = profile.profile_arm(self.arm, receipts)
+        self.assertFalse(result["closureReconciliation"]["allProviderTerminalsObserved"])
+        self.assertTrue(result["provisional"])
+        self.assertEqual(result["accounting"]["knownMeasuredUsd"], "0.123456789")
+
+    def test_missing_terminal_assertion_stays_provisional(self):
+        audit, receipts = self.fixture()
+        del audit[2]["terminalObserved"]
+        self.write_audit(audit)
+        result = profile.profile_arm(self.arm, receipts)
+        self.assertFalse(result["closureReconciliation"]["allProviderTerminalsObserved"])
+        self.assertTrue(result["provisional"])
 
     def test_native_dollars_do_not_control_join_or_accounting(self):
         _, receipts = self.fixture()
