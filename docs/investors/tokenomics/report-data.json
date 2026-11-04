@@ -130,6 +130,25 @@
       "label": "Earlier two-task candidate evaluation",
       "path": "docs/benchmarks/agentic-workflows-v1/results/focus-stage-summary.json",
       "url": "https://github.com/scr1pter/claudeondfsfdaf/blob/587be6478aff24e2cdf98192269bc2bd3ca755bd/docs/benchmarks/agentic-workflows-v1/results/focus-stage-summary.json"
+    },
+    {
+      "id": "E6",
+      "label": "Summary-cost regression and before/after validation",
+      "path": "docs/benchmarks/tokenomics-2026-11-04/compaction-accounting.md",
+      "url": "https://github.com/scr1pter/claudeondfsfdaf/blob/1a3d07c4a947674c3db68f6bbc7690a8c0288587/docs/benchmarks/tokenomics-2026-11-04/compaction-accounting.md"
     }
-  ]
+  ],
+  "compaction_validation": {
+    "source_revision": "1a3d07c4a947674c3db68f6bbc7690a8c0288587",
+    "tests_passed": 281,
+    "tests_failed": 0,
+    "assertions": 1042,
+    "baseline_regressions_failed": 8,
+    "fixed_regressions_passed": 8,
+    "core_typecheck_passed": true,
+    "engine_typecheck_passed": true,
+    "paid_savings_measured": false,
+    "scope": "V2 compaction-accounting and runner regression suite; overlaps the earlier control suite, not additive. The paid legacy CLI does not use this path.",
+    "source_id": "E6"
+  }
 }

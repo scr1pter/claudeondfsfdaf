@@ -50,6 +50,11 @@ def validate(data):
     controls = data["current_controls"]
     assert controls["focused_tests_passed"] == 220 and controls["focused_tests_failed"] == 0
     assert controls["paid_savings_measured"] is False
+    compaction = data["compaction_validation"]
+    assert compaction["tests_passed"] == 281 and compaction["tests_failed"] == 0
+    assert compaction["baseline_regressions_failed"] == compaction["fixed_regressions_passed"] == 8
+    assert compaction["core_typecheck_passed"] and compaction["engine_typecheck_passed"]
+    assert compaction["paid_savings_measured"] is False
     extra = data.get("additional_complete_study")
     if extra is not None:
         assert extra["status"] == "complete" and extra["settlement_complete"] is True
@@ -225,19 +230,20 @@ def evidence(c, data, total):
     y = text(c, "Progress that can be audited.", M, 700, CW, 30, 36, NAVY, True)
     y = text(c, "A disciplined cycle connects measured behavior to product changes and regression checks.", M, y - 15, CW, 12.2, 18)
     rect(c, M, y - 23, CW, 112, PALE)
-    text(c, str(data["current_controls"]["focused_tests_passed"]), M + 18, y - 38, 105, 38, 42, TEAL, True)
+    text(c, str(data["compaction_validation"]["tests_passed"]), M + 18, y - 38, 105, 38, 42, TEAL, True)
     text(c, "Targeted regression tests passed", M + 145, y - 40, CW - 164, 15, 20, NAVY, True)
-    text(c, "Latest V2 control suite, with Core and integrated Engine typechecks passing. Local scripted tests validate control behavior; paid savings from these later changes are not yet measured. [E3]", M + 145, y - 70, CW - 164, 10, 14, MUTED)
+    text(c, "Latest V2 summary-cost suite, with Core and Engine typechecks passing. Eight regressions failed before the fix and pass after it. Paid savings from this correction are not yet measured. [E6]", M + 145, y - 70, CW - 164, 10, 14, MUTED)
     y -= 162
     y = text(c, "What the current controls address", M, y, CW, 17, 23, NAVY, True)
-    y = text(c, "Repeated tool outcomes, explicit user rechecks, incomplete usage, cancelled waits and background work continuity. These are engineering controls, evaluated separately from the generated application's benchmark score.", M, y - 10, CW, 11.4, 16.5)
+    y = text(c, "The earlier 220-test suite covers repeated tool outcomes, user rechecks, incomplete usage and background continuity. The latest suite adds summary-cost and cancellation checks. Counts overlap and are not additive; these are engineering checks, separate from application quality. [E3, E6]", M, y - 10, CW, 11.4, 16.5)
     y -= 24
     y = text(c, "Benchmark scope", M, y, CW, 17, 23, NAVY, True)
     y = text(c, "Three single-trial pairs used the same gpt-6.1-sol model, High reasoning and one autonomous agent per runtime. Two tasks were development replications; one was held out. Results describe the tested candidate, required checks and fixed static rubric. The sample does not establish statistical significance or predict all workloads.", M, y - 10, CW, 10.6, 15.1)
     y = text(c, "Prices are derived from recorded provider usage at the study schedule. Reviews use exact source and selected screenshots; passing checks do not certify production reliability or security. Larger multi-agent evidence is included only after a complete, settled comparison.", M, y - 11, CW, 10.6, 15.1)
     y -= 21
     y = text(c, "Evidence register", M, y, CW, 14, 19, NAVY, True)
-    for source in data["sources"][:3]:
+    for source_id in ("E1", "E2", "E6", "E3"):
+        source = next(item for item in data["sources"] if item["id"] == source_id)
         label = f"<b>{escape(source['id'])}</b>   <link href='{escape(source['url'], quote=True)}' color='#008E88'>{escape(source['label'])}</link>"
         y = text(c, label, M, y - 8, CW, 9.4, 13.1, MUTED)
     c.showPage()
@@ -288,7 +294,7 @@ def main():
     reader = PdfReader(options.out)
     assert len(reader.pages) == total
     all_text = "\n".join(page.extract_text() for page in reader.pages)
-    for required in ["5.0%", "76/76", "Workflow Runner", "Evidence Workbench", "Delivery Outbox", "220", "Benchmark scope"]:
+    for required in ["5.0%", "76/76", "Workflow Runner", "Evidence Workbench", "Delivery Outbox", "281", "220", "Benchmark scope"]:
         assert required in all_text, required
     assert "\ufffd" not in all_text
     print(json.dumps({"pages": total, "output": str(options.out.resolve()), "arithmeticValidated": True, "textChecksPassed": True}))
