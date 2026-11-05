@@ -2,7 +2,7 @@
 import { spawn } from "node:child_process"
 import { existsSync, readFileSync } from "node:fs"
 import { randomBytes } from "node:crypto"
-import { cp, mkdir, mkdtemp, readFile, realpath, rm } from "node:fs/promises"
+import { cp, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises"
 import { createRequire } from "node:module"
 import { tmpdir } from "node:os"
 import path from "node:path"
@@ -12,6 +12,8 @@ import {
   COMPUTER_SMOKE_MARK,
   COMPUTER_SMOKE_PHASE_MARK,
   COMPUTER_SMOKE_FAILURE_MARK,
+  COMPUTER_SMOKE_LOADER_STARTED,
+  computerSmokeBootstrapSource,
   parseComputerSmokeReport,
   parseComputerSmokePhase,
   parseComputerSmokeFailure,
@@ -115,6 +117,8 @@ export async function runComputerOverlaySmoke(args = process.argv.slice(2)) {
           throw new Error("The computer overlay smoke emitted an unexpected bundle path.")
       }
     }
+    const genericEntry = path.join(directory, "smoke", "computer-overlay-smoke-bootstrap.cjs")
+    if (!stage) await writeFile(genericEntry, computerSmokeBootstrapSource(), { flag: "wx" })
     await mkdir(path.join(directory, "profile", "session"), { recursive: true })
     const environment: NodeJS.ProcessEnv = {
       PATH: process.env.PATH ?? "",
@@ -139,7 +143,7 @@ export async function runComputerOverlaySmoke(args = process.argv.slice(2)) {
     const childArgs = bootstrapStage
       ? ["--launch-electron", "--nonce", nonce]
       : [
-          stage?.main ?? path.join(directory, "smoke", "computer-overlay-smoke-electron.mjs"),
+          stage?.main ?? genericEntry,
           `--user-data-dir=${path.join(directory, "profile")}`,
           ...(flags.has("--no-sandbox") ? ["--no-sandbox"] : []),
         ]
@@ -157,18 +161,27 @@ export async function runComputerOverlaySmoke(args = process.argv.slice(2)) {
     let lastPhase: ComputerSmokeLastPhase = "none",
       hint: ComputerSmokeRuntimeHint = "none"
     let forcedCause: ComputerSmokeFailureCause | undefined
-    const streamState: { childFailure?: ComputerSmokeFailureDiagnostic } = {}
+    const streamState: { childFailure?: ComputerSmokeFailureDiagnostic; loaderStarted: boolean } = {
+      loaderStarted: false,
+    }
     const fail = (cause: ComputerSmokeFailureCause) => {
       forcedCause ??= cause
       child.kill("SIGKILL")
     }
-    const hintPriority: readonly ComputerSmokeRuntimeHint[] = [
-      "none",
-      "display_unavailable",
-      "loader_failed",
-      "sandbox_unavailable",
-      "display_auth",
-    ]
+    const hintPriority = (value: ComputerSmokeRuntimeHint) =>
+      value === "none"
+        ? 0
+        : value === "loader_pending"
+          ? 1
+          : value === "display_unavailable"
+            ? 2
+            : value === "loader_failed"
+              ? 3
+              : value === "sandbox_unavailable"
+                ? 5
+                : value === "display_auth"
+                  ? 6
+                  : 4
     child.stdout.on("data", (bytes: Buffer) => {
       if (outputBytes + bytes.length > 65_536) return fail("stdout_limit")
       output.push(bytes)
@@ -181,19 +194,39 @@ export async function runComputerOverlaySmoke(args = process.argv.slice(2)) {
         const line = pendingLine.slice(0, newline).replace(/\r$/, "")
         pendingLine = pendingLine.slice(newline + 1)
         try {
-          if (line.startsWith(COMPUTER_SMOKE_PHASE_MARK)) {
+          if (line.startsWith(COMPUTER_SMOKE_LOADER_STARTED)) {
+            if (
+              line !== COMPUTER_SMOKE_LOADER_STARTED ||
+              stage ||
+              streamState.loaderStarted ||
+              streamState.childFailure ||
+              lastPhase !== "none"
+            )
+              throw new Error("The generic loader receipt is invalid.")
+            streamState.loaderStarted = true
+            if (hint === "none") hint = "loader_pending"
+            process.stdout.write(COMPUTER_SMOKE_LOADER_STARTED + "\n")
+          } else if (line.startsWith(COMPUTER_SMOKE_PHASE_MARK)) {
             if (streamState.childFailure) throw new Error("A terminal computer smoke receipt cannot advance.")
             lastPhase = parseComputerSmokePhase(line, lastPhase)
+            if (hint === "loader_pending") hint = "none"
             process.stdout.write(COMPUTER_SMOKE_PHASE_MARK + JSON.stringify({ protocol: 1, phase: lastPhase }) + "\n")
           } else if (line.startsWith(COMPUTER_SMOKE_FAILURE_MARK)) {
             const received = parseComputerSmokeFailure(line)
-            if (
-              streamState.childFailure ||
-              received.phase !== lastPhase ||
-              received.hint !== "none" ||
-              !["deadline_exceeded", "runtime_failed"].includes(received.cause)
-            )
+            const bootstrapFailure =
+              !stage &&
+              streamState.loaderStarted &&
+              received.phase === "none" &&
+              received.cause === "runtime_failed" &&
+              received.hint.startsWith("loader_") &&
+              received.hint !== "loader_pending"
+            const entryFailure =
+              received.phase === lastPhase &&
+              received.hint === "none" &&
+              ["deadline_exceeded", "runtime_failed"].includes(received.cause)
+            if (streamState.childFailure || !(bootstrapFailure || entryFailure))
               throw new Error("The child failure receipt is invalid.")
+            if (hintPriority(received.hint) > hintPriority(hint)) hint = received.hint
             streamState.childFailure = received
           }
         } catch {
@@ -205,7 +238,7 @@ export async function runComputerOverlaySmoke(args = process.argv.slice(2)) {
       stderrBytes += bytes.length
       stderrTail = (stderrTail + bytes.toString("utf8")).slice(-8192)
       const observed = computerSmokeRuntimeHint(stderrTail)
-      if (hintPriority.indexOf(observed) > hintPriority.indexOf(hint)) hint = observed
+      if (hintPriority(observed) > hintPriority(hint)) hint = observed
       if (stderrBytes > 1024 * 1024) fail("stderr_limit")
     })
     child.stdout.on("error", () => fail("runtime_failed"))
@@ -221,7 +254,11 @@ export async function runComputerOverlaySmoke(args = process.argv.slice(2)) {
     if (forcedCause) throw new ComputerSmokeRunFailure(failureDiagnostic(forcedCause, lastPhase, hint))
     if (streamState.childFailure)
       throw new ComputerSmokeRunFailure(failureDiagnostic(streamState.childFailure.cause, lastPhase, hint))
-    if (pendingLine.startsWith(COMPUTER_SMOKE_PHASE_MARK) || pendingLine.startsWith(COMPUTER_SMOKE_FAILURE_MARK))
+    if (
+      pendingLine.startsWith(COMPUTER_SMOKE_PHASE_MARK) ||
+      pendingLine.startsWith(COMPUTER_SMOKE_FAILURE_MARK) ||
+      pendingLine.startsWith(COMPUTER_SMOKE_LOADER_STARTED)
+    )
       throw new ComputerSmokeRunFailure(failureDiagnostic("invalid_progress", lastPhase, hint))
     const unavailable = bootstrap ? parseComputerOverlayBootstrapUnavailable(Buffer.concat(output), exit) : undefined
     if (unavailable) {

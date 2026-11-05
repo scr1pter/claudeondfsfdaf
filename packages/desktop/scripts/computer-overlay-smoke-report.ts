@@ -178,7 +178,21 @@ export type ComputerSmokeRuntimeHint =
   | "display_auth"
   | "display_unavailable"
   | "sandbox_unavailable"
+  | "loader_pending"
   | "loader_failed"
+  | "loader_module_not_found"
+  | "loader_require_esm"
+  | "loader_require_async"
+  | "loader_bun_undefined"
+  | "loader_require_undefined"
+  | "loader_dirname_undefined"
+  | "loader_filename_undefined"
+  | "loader_named_export"
+  | "loader_app_not_ready"
+  | "loader_extension"
+  | "loader_reference_error"
+  | "loader_type_error"
+  | "loader_syntax_error"
 export type ComputerSmokeFailureDiagnostic = {
   protocol: 1
   cause: ComputerSmokeFailureCause
@@ -203,7 +217,21 @@ const RUNTIME_HINTS: readonly ComputerSmokeRuntimeHint[] = [
   "display_auth",
   "display_unavailable",
   "sandbox_unavailable",
+  "loader_pending",
   "loader_failed",
+  "loader_module_not_found",
+  "loader_require_esm",
+  "loader_require_async",
+  "loader_bun_undefined",
+  "loader_require_undefined",
+  "loader_dirname_undefined",
+  "loader_filename_undefined",
+  "loader_named_export",
+  "loader_app_not_ready",
+  "loader_extension",
+  "loader_reference_error",
+  "loader_type_error",
+  "loader_syntax_error",
 ]
 
 /** Receipts establish progress only. They can never replace the complete assertion catalog. */
@@ -254,6 +282,47 @@ export function parseComputerSmokeFailure(line: string): ComputerSmokeFailureDia
   }
 }
 
+const LOADER_CODES: Readonly<Record<string, ComputerSmokeRuntimeHint>> = Object.freeze({
+  ERR_MODULE_NOT_FOUND: "loader_module_not_found",
+  MODULE_NOT_FOUND: "loader_module_not_found",
+  ERR_REQUIRE_ESM: "loader_require_esm",
+  ERR_REQUIRE_ASYNC_MODULE: "loader_require_async",
+  ERR_UNKNOWN_FILE_EXTENSION: "loader_extension",
+})
+const LOADER_MESSAGES: readonly (readonly [string, ComputerSmokeRuntimeHint])[] = [
+  ["\\bBun is not defined\\b", "loader_bun_undefined"],
+  ["\\brequire is not defined\\b|Dynamic require of .* is not supported", "loader_require_undefined"],
+  ["\\b__dirname is not defined\\b", "loader_dirname_undefined"],
+  ["\\b__filename is not defined\\b", "loader_filename_undefined"],
+  ["does not provide an export named|Named export .* not found", "loader_named_export"],
+  [
+    "(?:screen|session|nativeTheme).*(?:before|until|after).*ready|(?:screen|session|nativeTheme).*can(?:not|'t).*ready",
+    "loader_app_not_ready",
+  ],
+]
+const LOADER_NAMES: Readonly<Record<string, ComputerSmokeRuntimeHint>> = Object.freeze({
+  ReferenceError: "loader_reference_error",
+  TypeError: "loader_type_error",
+  SyntaxError: "loader_syntax_error",
+})
+
+/** Fixed enums only: arbitrary error codes, names, messages and stack traces never leave this boundary. */
+export function computerSmokeLoaderHint(error: unknown): ComputerSmokeRuntimeHint {
+  try {
+    if (!error || typeof error !== "object") return "loader_failed"
+    const value = error as { code?: unknown; name?: unknown; message?: unknown }
+    const code = value.code,
+      rawMessage = value.message,
+      name = value.name
+    if (typeof code === "string" && Object.hasOwn(LOADER_CODES, code)) return LOADER_CODES[code]!
+    const message = typeof rawMessage === "string" ? rawMessage.slice(0, 8192) : ""
+    for (const [pattern, hint] of LOADER_MESSAGES) if (new RegExp(pattern, "i").test(message)) return hint
+    return typeof name === "string" && Object.hasOwn(LOADER_NAMES, name) ? LOADER_NAMES[name]! : "loader_failed"
+  } catch {
+    return "loader_failed"
+  }
+}
+
 /** Recognize only known runtime errors. No stderr text, path, nonce or arbitrary exception is returned. */
 export function computerSmokeRuntimeHint(text: string): ComputerSmokeRuntimeHint {
   const bounded = text.slice(-8192)
@@ -269,11 +338,10 @@ export function computerSmokeRuntimeHint(text: string): ComputerSmokeRuntimeHint
     )
   )
     return "sandbox_unavailable"
-  if (
-    /ERR_MODULE_NOT_FOUND|ERR_UNKNOWN_FILE_EXTENSION|Cannot find module|Unable to find Electron app|A JavaScript error occurred in the main process|Dynamic require of .* is not supported/i.test(
-      bounded,
-    )
-  )
+  for (const [code, hint] of Object.entries(LOADER_CODES)) if (bounded.includes(code)) return hint
+  const specific = computerSmokeLoaderHint({ message: bounded })
+  if (specific !== "loader_failed") return specific
+  if (/Cannot find module|Unable to find Electron app|A JavaScript error occurred in the main process/i.test(bounded))
     return "loader_failed"
   if (
     /Missing X server or \$DISPLAY|The platform failed to initialize|cannot open display|Unable to open X display|Failed to connect to (?:the )?X server/i.test(
@@ -282,4 +350,39 @@ export function computerSmokeRuntimeHint(text: string): ComputerSmokeRuntimeHint
   )
     return "display_unavailable"
   return "none"
+}
+
+export const COMPUTER_SMOKE_LOADER_STARTED = "computer-smoke-loader-started"
+/** Generic properties only. The native stage keeps its exact admitted main argv and immutable pins. */
+export function computerSmokeBootstrapSource(): string {
+  return `"use strict";
+const { app } = require("electron");
+const path = require("node:path");
+const { mkdirSync } = require("node:fs");
+const { pathToFileURL } = require("node:url");
+const codes = ${JSON.stringify(LOADER_CODES)};
+const messages = ${JSON.stringify(LOADER_MESSAGES)};
+const names = ${JSON.stringify(LOADER_NAMES)};
+function hint(error) {
+  try {
+    if (!error || typeof error !== "object") return "loader_failed";
+    const code = error.code, message = error.message, name = error.name;
+    if (typeof code === "string" && Object.hasOwn(codes, code)) return codes[code];
+    const text = typeof message === "string" ? message.slice(0, 8192) : "";
+    for (const [pattern, value] of messages) if (new RegExp(pattern, "i").test(text)) return value;
+    return typeof name === "string" && Object.hasOwn(names, name) ? names[name] : "loader_failed";
+  } catch { return "loader_failed"; }
+}
+function failed(error) {
+  const value = { protocol: 1, cause: "runtime_failed", phase: "none", hint: hint(error) };
+  process.stdout.write(${JSON.stringify(COMPUTER_SMOKE_FAILURE_MARK)} + JSON.stringify(value) + "\\n", () => app.exit(1));
+}
+process.stdout.write(${JSON.stringify(COMPUTER_SMOKE_LOADER_STARTED + "\n")});
+try {
+  const profile = path.resolve(__dirname, "..", "profile");
+  mkdirSync(path.join(profile, "session"), { recursive: true });
+  app.setPath("userData", profile); app.setPath("sessionData", path.join(profile, "session")); app.setPath("home", profile);
+  import(pathToFileURL(path.join(__dirname, "computer-overlay-smoke-electron.mjs")).href).catch(failed);
+} catch (error) { failed(error); }
+`
 }

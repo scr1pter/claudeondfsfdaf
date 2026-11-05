@@ -619,9 +619,12 @@ async function controllerChecks() {
 
 async function main() {
   mkdirSync(path.join(profile, "session"), { recursive: true })
-  app.setPath("userData", profile)
-  app.setPath("sessionData", path.join(profile, "session"))
-  app.setPath("home", profile)
+  // The generic CJS catch boundary prepares these same private paths before ESM loading.
+  // Native mode still enters this exact module directly and prepares them here.
+  if (app.getPath("userData") !== profile) app.setPath("userData", profile)
+  if (app.getPath("sessionData") !== path.join(profile, "session"))
+    app.setPath("sessionData", path.join(profile, "session"))
+  if (app.getPath("home") !== profile) app.setPath("home", profile)
   app.on("window-all-closed", () => {})
   registerComputerOverlayIpc(ipcMain)
   await app.whenReady()

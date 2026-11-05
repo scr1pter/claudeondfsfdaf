@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { Script } from "node:vm"
 import {
   COMPUTER_SMOKE_CHECKS,
   COMPUTER_SMOKE_MARK,
@@ -8,6 +9,9 @@ import {
   parseComputerSmokePhase,
   parseComputerSmokeFailure,
   computerSmokeRuntimeHint,
+  computerSmokeLoaderHint,
+  computerSmokeBootstrapSource,
+  COMPUTER_SMOKE_LOADER_STARTED,
   type ComputerSmokeLastPhase,
   parseComputerSmokeReport,
   type ComputerSmokeReport,
@@ -157,7 +161,7 @@ describe("bounded closed Electron smoke diagnostics", () => {
       ["Missing X server or $DISPLAY: private-display-value", "display_unavailable"],
       ["The platform failed to initialize. Exiting.", "display_unavailable"],
       ["No usable sandbox! private-runtime-path", "sandbox_unavailable"],
-      ["Error [ERR_MODULE_NOT_FOUND]: Cannot find module '/private/fixture/main.mjs'", "loader_failed"],
+      ["Error [ERR_MODULE_NOT_FOUND]: Cannot find module '/private/fixture/main.mjs'", "loader_module_not_found"],
       ["ordinary unrelated runtime message /private/path", "none"],
     ])
       expect(computerSmokeRuntimeHint(text!)).toBe(hint)
@@ -191,5 +195,55 @@ describe("bounded closed Electron smoke diagnostics", () => {
         exitCode: 0,
       }),
     ).toEqual(report())
+  })
+})
+
+describe("generic Electron ESM loader catch boundary", () => {
+  const cases: readonly (readonly [unknown, string])[] = [
+    [{ code: "ERR_MODULE_NOT_FOUND", message: "/private/module-path" }, "loader_module_not_found"],
+    [{ code: "ERR_REQUIRE_ESM", message: "/private/module-path" }, "loader_require_esm"],
+    [{ code: "ERR_REQUIRE_ASYNC_MODULE", message: "/private/module-path" }, "loader_require_async"],
+    [{ code: "ERR_UNKNOWN_FILE_EXTENSION", message: "/private/extension" }, "loader_extension"],
+    [new ReferenceError("Bun is not defined"), "loader_bun_undefined"],
+    [new ReferenceError("require is not defined in ES module scope"), "loader_require_undefined"],
+    [new ReferenceError("__dirname is not defined in ES module scope"), "loader_dirname_undefined"],
+    [new ReferenceError("__filename is not defined in ES module scope"), "loader_filename_undefined"],
+    [
+      new SyntaxError("The requested module '/private/module' does not provide an export named 'private'"),
+      "loader_named_export",
+    ],
+    [new Error("The screen module cannot be used before the app ready event"), "loader_app_not_ready"],
+    [new ReferenceError("a private identifier is absent"), "loader_reference_error"],
+    [new TypeError("private application text"), "loader_type_error"],
+    [new SyntaxError("private application text"), "loader_syntax_error"],
+    [{ code: "private-code", name: "private-name", message: "private application text" }, "loader_failed"],
+  ]
+  test("actual loader error codes and names project to closed hints without returning their text", () => {
+    for (const [value, hint] of cases) expect(computerSmokeLoaderHint(value)).toBe(hint)
+    expect(
+      computerSmokeLoaderHint({
+        get code() {
+          throw new Error("private getter")
+        },
+      }),
+    ).toBe("loader_failed")
+    expect(computerSmokeLoaderHint(null)).toBe("loader_failed")
+    expect(computerSmokeRuntimeHint("Error [ERR_REQUIRE_ASYNC_MODULE]: private source path")).toBe(
+      "loader_require_async",
+    )
+  })
+  test("the generated CJS catch boundary parses and targets only its fixed sibling bundle", () => {
+    const source = computerSmokeBootstrapSource()
+    expect(() => new Script(source)).not.toThrow()
+    expect(source).toContain(COMPUTER_SMOKE_LOADER_STARTED)
+    expect(source).toContain('path.join(__dirname, "computer-overlay-smoke-electron.mjs")')
+    expect(source).not.toMatch(/process\.argv|process\.env|console\.|error\.stack/)
+    expect(source.indexOf('app.setPath("sessionData"')).toBeLessThan(source.indexOf("import(pathToFileURL"))
+  })
+  test("the child CJS classifier matches the parent's pure classification without executing Electron or imports", () => {
+    const source = computerSmokeBootstrapSource()
+    const classifier = source.slice(source.indexOf("const codes ="), source.indexOf("function failed("))
+    const script = new Script(classifier + "\nhint(error)")
+    for (const [error, hint] of cases) expect(script.runInNewContext({ error }, { timeout: 100 })).toBe(hint)
   })
 })

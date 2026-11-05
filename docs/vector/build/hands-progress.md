@@ -791,3 +791,10 @@ Native run42033026567 atb0dea2d3 compiles both architectures with the original d
 ### C4 canonical macOS signing paths
 
 Matching Mac job127262202251 in42032469029 passes measured11/native checks, then signing tests expose the real /var→/private/var alias seam. The baseline admitted canonical helper paths, but osx-sign could walk the original app alias and bypass the lexical helper exclusion. The signer now walks the canonical admitted app while mapping paths back to the caller's spelling for existing ignore/optionsForFile rules. Helper exclusion and final verification use the actual canonical subtree; explicit dev skip retains its existing behavior. Fixtures canonicalize their normal temp root, and one separate symlink-root regression proves helper/subtree exclusion, no prefix collision, preserved PlugIns/Electron callbacks and linked-helper escape refusal. Local signing19 tests/282 assertions pass with one native-certificate skip; desktop typecheck passes. Actual unsigned/fuse/certificate fixtures remain CI gates. Measured native inputs and lock11 are unchanged.
+
+
+### C8 closed loader and tool-loop diagnosis
+
+The generic Electron fixture now starts through a fixed local CJS catch boundary, imports only its fixed sibling bundle and reports allowlisted loader code/name categories. This exposes module-load errors hidden by Electron's default error dialog without emitting arbitrary exception text, images, credentials or paths. Native-stage entrypoints/argv/pins remain unchanged. Report/diagnostic19 tests/107 assertions, actual source graph/compiler metadata12/38 and desktop typecheck pass.
+
+Focused Node run42034417496 after the production lifetime repair no longer reports a repeated acquire, but still fails the strict tool/image/approval/capture sequence. The unchanged assertions now include failure-only closed status/errorcode/command/count/presence facts so the next actual run can identify the remaining cause. Engine typecheck passes; no successful four-turn Node result is claimed yet.

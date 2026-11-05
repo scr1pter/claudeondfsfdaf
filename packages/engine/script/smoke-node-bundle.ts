@@ -850,6 +850,90 @@ async function runComputerTurn(
     console.log(
       "node computer smoke passed: bridge screenshots/click, HTTP app/sensitive approvals, exact image attachments and clean lease finish (fake bridge; no native OS evidence)",
     )
+  if (failures.length) {
+    // Only closed protocol tokens, counts and presence flags leave this synthetic fixture. Never emit tool output,
+    // image bytes, request/lease/frame IDs, app metadata, credentials or arbitrary errors from the worker.
+    const statuses = new Set(["pending", "running", "completed", "error"])
+    const codes = new Set([
+      "unavailable",
+      "permissions",
+      "busy",
+      "stopped",
+      "paused",
+      "locked",
+      "blocked",
+      "protected",
+      "denied",
+      "not_granted",
+      "stale_frame",
+      "stale_ref",
+      "changed",
+      "occluded",
+      "secure_field",
+      "elevated",
+      "secure_desktop",
+      "not_foreground",
+      "capture_unavailable",
+      "no_ui_tree",
+      "out_of_bounds",
+      "needs_foreground",
+      "timeout",
+      "app_not_found",
+      "unsupported_action",
+      "frame_too_large",
+      "helper_incompatible",
+      "unsupported_os",
+      "blocked_by_os",
+      "responsible_missing",
+      "failed",
+    ])
+    const commands = new Set([
+      "acquire",
+      "release",
+      "cancel",
+      "heartbeat",
+      "status",
+      "access",
+      "grant",
+      "inspect",
+      "screenshot",
+      "act",
+    ])
+    failures.push(
+      "closed fixture facts: " +
+        JSON.stringify({
+          tools: tools.slice(0, 4).map((part) => {
+            const action = part.state?.metadata?.action
+            const status = part.state?.status
+            const code = part.state?.metadata?.code
+            return {
+              action: action === "screenshot" || action === "click" ? action : "unknown",
+              status: status !== undefined && statuses.has(status) ? status : "unknown",
+              code: code === undefined ? "none" : typeof code === "string" && codes.has(code) ? code : "unknown",
+              imageBefore:
+                part.state?.attachments?.some(
+                  (file) => file.mime === "image/png" && file.url === bridge.images.before,
+                ) === true,
+              imageAfter:
+                part.state?.attachments?.some(
+                  (file) => file.mime === "image/png" && file.url === bridge.images.after,
+                ) === true,
+              framePresent: isRecord(part.state?.metadata?.frame),
+            }
+          }),
+          commands: bridge.calls
+            .slice(0, 64)
+            .map((body) => (typeof body.command === "string" && commands.has(body.command) ? body.command : "unknown")),
+          captures: bridge.state.frames,
+          clicks: bridge.state.clicked,
+          appApprovals: approvals.filter((item) => item.request.permission === "computer_app").length,
+          sensitiveApprovals: approvals.filter((item) => item.request.permission === "computer_sensitive").length,
+          consumedApprovals: bridge.consumed.size,
+          released: bridge.state.released,
+          holderPresent: bridge.state.holder !== undefined,
+        }),
+    )
+  }
   return failures
 }
 
