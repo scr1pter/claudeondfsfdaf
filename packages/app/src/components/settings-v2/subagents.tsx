@@ -226,16 +226,17 @@ export function SettingsSubagentsV2() {
     const apply = () => saver.pick(Object.fromEntries(ids.map((id) => [id, enable])))
     // Flipping back before the save goes out saves nothing, so nothing stops.
     if (ids.every((id) => saver.committed(id) === enable)) return apply()
+    // The question opens over Settings (push, not show): show would close Settings, and this page and its saver with it.
     void currentWork().then((work) => {
       if (nothingRunning(work)) return apply()
-      void dialog.show(() => <DialogStopRunningWork work={work} title={title} enable={enable} onConfirm={apply} />)
+      void dialog.push(() => <DialogStopRunningWork work={work} title={title} enable={enable} onConfirm={apply} />)
     })
   }
   // Every other save on this page (limits, workflows) also reloads the engine, so it asks the same way first (B.11).
   const confirmSave = (title: string, apply: () => void) => {
     void currentWork().then((work) => {
       if (nothingRunning(work)) return apply()
-      void dialog.show(() => (
+      void dialog.push(() => (
         <DialogStopRunningWork work={work} title={title} enable confirm="Save anyway" onConfirm={apply} />
       ))
     })
