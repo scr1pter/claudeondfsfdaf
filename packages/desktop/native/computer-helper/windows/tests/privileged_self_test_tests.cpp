@@ -1,10 +1,12 @@
 #include "privileged_self_test.h"
 #include "privileged_target.h"
 #include "protocol.h"
+#include "capture.h"
 #include <algorithm>
 #include <limits>
 #include <set>
 #include <stdexcept>
+#include <thread>
 
 namespace vector::computer {
 namespace {
@@ -133,6 +135,92 @@ size_t run_privileged_self_test_tests() {
       require(wire.find(L"PRIVATE") == std::wstring::npos && wire.find(L"nativeCode") == std::wstring::npos,
         "privileged.invalid-diagnostic-never-reaches-wire");
     }
+  });
+  test([] {
+    constexpr std::array<std::pair<std::wstring_view, std::wstring_view>, 4> origins{{
+      {L"The computer session changed during the operation.", L"authority-completion"},
+      {L"The native observation changed before delivery.", L"authority-delivery"},
+      {L"The native capture changed. Take a new screenshot.", L"capture-service"},
+      {L"The native capture is unavailable. Check Windows Privacy & security settings.", L"capture-native"}}};
+    for (const auto& [message, stage] : origins) {
+      const auto reply = response_failure(42, L"changed", std::wstring(message));
+      require(windows_privileged_origin_stage(reply.GetNamedString(L"error")) == stage,
+        "privileged.fixed-response-error-maps-only-to-closed-origin");
+      for (const auto& altered : {std::wstring(message) + L" PRIVATE", std::wstring(L"PRIVATE ") + std::wstring(message)})
+        require(windows_privileged_origin_stage(altered).empty(), "privileged.origin-mapping-never-matches-substrings");
+    }
+    require(windows_privileged_origin_stage(L"PRIVATE explanation", L"window-capture-reply") == L"window-capture-reply" &&
+      windows_privileged_origin_stage(L"PRIVATE explanation", L"PRIVATE fallback", L"PRIVATE trace").empty(),
+      "privileged.unknown-errors-preserve-only-closed-fallback");
+    require(windows_privileged_origin_stage(origins[0].first, L"window-capture-reply", L"capture-native-read") == L"authority-completion" &&
+      windows_privileged_origin_stage(origins[1].first, L"window-capture-reply", L"capture-native-read") == L"authority-delivery" &&
+      windows_privileged_origin_stage(origins[2].first, L"window-capture-reply", L"capture-commit-current") == L"capture-commit-current",
+      "privileged.authority-rejection-takes-precedence-over-provider-trace");
+  });
+  test([] {
+    CaptureBackend backend;
+    backend.inventory = [](const auto&, const auto&) -> CaptureInventory { throw Failure{L"changed", L"PRIVATE provider explanation"}; };
+    const auto initial = windows_privileged_capture_diagnostic(backend, [](auto& observed) {
+      try { observed.inventory(ServerSession{}, [] { return true; }); }
+      catch (const Failure& failure) {
+        require(failure.code == L"changed" && failure.message == L"PRIVATE provider explanation",
+          "privileged.inventory-observer-preserves-original-failure"); return;
+      }
+      require(false, "privileged.inventory-observer-does-not-invent-success");
+    });
+    require(initial == L"capture-inventory-initial", "privileged.initial-inventory-failure-is-distinguished");
+    unsigned inventories = 0;
+    backend.inventory = [&](const auto&, const auto&) -> CaptureInventory {
+      if (++inventories == 2) throw Failure{L"changed", L"PRIVATE refresh explanation"};
+      CaptureInventory result; result.displays.resize(2); return result;
+    };
+    const auto refresh = windows_privileged_capture_diagnostic(backend, [](auto& observed) {
+      require(observed.inventory(ServerSession{}, [] { return true; }).displays.size() == 2,
+        "privileged.inventory-observer-preserves-result");
+      try { observed.inventory(ServerSession{}, [] { return true; }); }
+      catch (const Failure& failure) { require(failure.code == L"changed", "privileged.refresh-failure-is-not-replaced"); return; }
+      require(false, "privileged.refresh-observer-does-not-invent-success");
+    });
+    require(refresh == L"capture-inventory-refresh", "privileged.refresh-inventory-failure-is-distinguished");
+  });
+  test([] {
+    CaptureBackend backend;
+    backend.read = [](const auto&, const auto&) -> CaptureBitmap { throw std::runtime_error("PRIVATE native explanation"); };
+    backend.current = [](const auto&, const auto&) { return false; };
+    const auto read = windows_privileged_capture_diagnostic(backend, [](auto& observed) {
+      try { observed.read(CaptureReadRequest{}, [] { return true; }); }
+      catch (const std::runtime_error& failure) {
+        require(std::string_view(failure.what()) == "PRIVATE native explanation", "privileged.native-read-observer-preserves-exception");
+      }
+      require(!observed.current(CaptureInventory{}, ServerSession{}), "privileged.commit-observer-preserves-false");
+    });
+    require(read == L"capture-native-read", "privileged.first-provider-failure-wins");
+    require(windows_privileged_capture_diagnostic(backend, [](auto& observed) {
+      require(!observed.current(CaptureInventory{}, ServerSession{}), "privileged.commit-observer-cannot-authorize-publication");
+    }) == L"capture-commit-current", "privileged.commit-current-false-is-distinguished");
+    backend.current = [](const auto&, const auto&) { return true; };
+    require(windows_privileged_capture_diagnostic(backend, [](auto& observed) {
+      require(observed.current(CaptureInventory{}, ServerSession{}), "privileged.commit-observer-preserves-true");
+    }).empty(), "privileged.successful-provider-has-no-failure-trace");
+  });
+  test([] {
+    CaptureBackend backend;
+    backend.current = [](const auto&, const auto&) { return false; };
+    require(windows_privileged_capture_diagnostic(backend, [](auto& observed) {
+      bool refused = false;
+      std::thread worker([&] { try { refused = !observed.current(CaptureInventory{}, ServerSession{}); } catch (...) {} });
+      worker.join();
+      require(refused, "privileged.unscoped-thread-preserves-currentness");
+    }).empty(), "privileged.provider-trace-does-not-cross-handler-threads");
+    const auto outer = windows_privileged_capture_diagnostic(backend, [&](auto& observed) {
+      require(windows_privileged_capture_diagnostic(backend, [](auto& nested) {
+        require(!nested.current(CaptureInventory{}, ServerSession{}), "privileged.nested-provider-preserves-false");
+      }) == L"capture-commit-current", "privileged.nested-scope-has-independent-trace");
+      try { windows_privileged_capture_diagnostic(backend, [](auto&) { throw std::runtime_error("PRIVATE operation"); }); }
+      catch (const std::runtime_error&) {}
+      require(!observed.current(CaptureInventory{}, ServerSession{}), "privileged.outer-scope-restored-after-unwind");
+    });
+    require(outer == L"capture-commit-current", "privileged.nesting-and-exceptions-restore-handler-scope");
   });
   test([] {
     for (const auto reason : {L"isolation_required", L"elevated_helper", L"noninteractive_desktop", L"capture_blocked", L"input_detection_unavailable", L"foreground_unavailable", L"affinity_unavailable", L"target_not_installed", L"hardware_input_required", L"physical_takeover"})

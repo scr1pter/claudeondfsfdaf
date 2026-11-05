@@ -80,7 +80,60 @@ struct PrivilegedRunCleanup {
     if (apartment) winrt::uninit_apartment();
   }
 };
-struct NativeReply { JsonObject document; std::vector<uint8_t> image; };
+enum class CaptureFailureStage { none, inventory_initial, inventory_refresh, native_read, commit_current };
+struct CaptureFailureTrace {
+  std::atomic_uint32_t inventories{0};
+  std::atomic<CaptureFailureStage> failure{CaptureFailureStage::none};
+  void record(CaptureFailureStage stage) noexcept {
+    auto expected = CaptureFailureStage::none; failure.compare_exchange_strong(expected, stage);
+  }
+  std::wstring recorded() const noexcept {
+    try {
+      switch (failure.load()) {
+        case CaptureFailureStage::inventory_initial: return L"capture-inventory-initial";
+        case CaptureFailureStage::inventory_refresh: return L"capture-inventory-refresh";
+        case CaptureFailureStage::native_read: return L"capture-native-read";
+        case CaptureFailureStage::commit_current: return L"capture-commit-current";
+        default: return {};
+      }
+    } catch (...) { return {}; }
+  }
+};
+// Native CaptureService providers are synchronous. The diagnostic scope belongs to its actual
+// handler thread, so receipt checks and unrelated later operations cannot rewrite this attempt.
+thread_local std::shared_ptr<CaptureFailureTrace> capture_trace;
+class CaptureTraceScope final {
+ public:
+  explicit CaptureTraceScope(std::shared_ptr<CaptureFailureTrace> trace) : previous_(capture_trace) { capture_trace = std::move(trace); }
+  ~CaptureTraceScope() { capture_trace = std::move(previous_); }
+  CaptureTraceScope(const CaptureTraceScope&) = delete;
+  CaptureTraceScope& operator=(const CaptureTraceScope&) = delete;
+ private:
+  std::shared_ptr<CaptureFailureTrace> previous_;
+};
+CaptureBackend diagnostic_capture_backend(CaptureBackend backend) {
+  const auto inventory = backend.inventory;
+  backend.inventory = [inventory](const auto& session, const auto& current) {
+    const auto trace = capture_trace;
+    const auto index = trace ? trace->inventories.fetch_add(1) : 0U;
+    try { return inventory(session, current); }
+    catch (...) { if (trace) trace->record(index == 0 ? CaptureFailureStage::inventory_initial : CaptureFailureStage::inventory_refresh); throw; }
+  };
+  const auto read = backend.read;
+  backend.read = [read](const auto& request, const auto& current) {
+    const auto trace = capture_trace;
+    try { return read(request, current); }
+    catch (...) { if (trace) trace->record(CaptureFailureStage::native_read); throw; }
+  };
+  const auto current = backend.current;
+  backend.current = [current](const auto& inventory, const auto& session) {
+    const auto trace = capture_trace;
+    try { const auto result = current(inventory, session); if (!result && trace) trace->record(CaptureFailureStage::commit_current); return result; }
+    catch (...) { if (trace) trace->record(CaptureFailureStage::commit_current); throw; }
+  };
+  return backend;
+}
+struct NativeReply { JsonObject document; std::vector<uint8_t> image; std::wstring capture_stage; };
 struct ScenarioState {
   std::weak_ptr<Dispatcher> dispatcher;
   std::shared_ptr<CaptureService> captures;
@@ -92,6 +145,7 @@ struct ScenarioState {
   std::mutex mutex;
   std::condition_variable changed;
   std::map<uint64_t, NativeReply> replies;
+  std::map<uint64_t, std::wstring> capture_failures;
   bool available() const noexcept { return live.load() && authority && authority->current(); }
   bool publish(const JsonObject& document, std::span<const uint8_t> image) {
     std::lock_guard lock(mutex);
@@ -99,7 +153,9 @@ struct ScenarioState {
     const auto id = number(document, L"id"); if (!id || *id == 0) return false;
     if (*id >= 1'000'000) return image.empty(); // Only the private heartbeat producer owns these ids.
     if (replies.size() >= 16 || image.size() > kMaxFrameBytes || replies.contains(*id)) return false;
-    replies.emplace(*id, NativeReply{JsonObject::Parse(document.Stringify()), {image.begin(), image.end()}}); changed.notify_all(); return true;
+    std::wstring stage;
+    if (const auto found = capture_failures.find(*id); found != capture_failures.end()) { stage = std::move(found->second); capture_failures.erase(found); }
+    replies.emplace(*id, NativeReply{JsonObject::Parse(document.Stringify()), {image.begin(), image.end()}, std::move(stage)}); changed.notify_all(); return true;
   }
 };
 class NativeScenario final {
@@ -111,7 +167,9 @@ class NativeScenario final {
     const std::weak_ptr<ScenarioState> weak = state;
     const auto native_windows = WindowsBackend::system(windows_child_shell);
     windows = std::make_shared<WindowService>(windows_window_policy(), native_windows);
-    state->captures = std::make_shared<CaptureService>();
+    auto capture_backend = CaptureBackend::system();
+    try { capture_backend = diagnostic_capture_backend(capture_backend); } catch (...) {}
+    state->captures = std::make_shared<CaptureService>(std::move(capture_backend));
     const auto uia = WindowsUiaBackend::system(); auto accessibility_backend = AccessibilityBackend::system(state->captures, uia);
     accessibility_backend.mutation_current = [weak](const auto& session) { const auto active = weak.lock(); return active && active->available() && active->detector && active->detector->foreground_ready(session); };
     state->accessibility = std::make_shared<AccessibilityService>(std::move(accessibility_backend));
@@ -157,7 +215,29 @@ class NativeScenario final {
     server->register_handler(L"apps.list", 15'000, false, false, [service = windows](const auto& request, const auto& context, auto done) { service->list(request.args, context, std::move(done)); });
     server->register_handler(L"window.focus", 5000, true, true, [service = windows](const auto& request, const auto& context, auto done) { service->focus(request.args, context, std::move(done)); });
     server->register_handler(L"displays.list", 4000, false, false, [service = state->captures](const auto& request, const auto& context, auto done) { service->displays(request.args, context, std::move(done)); });
-    server->register_handler(L"capture", 10'000, true, false, [service = state->captures](const auto& request, const auto& context, auto done) { service->capture(request.args, context, std::move(done)); });
+    server->register_handler(L"capture", 10'000, true, false, [service = state->captures, weak](const auto& request, const auto& context, auto done) {
+      std::shared_ptr<CaptureFailureTrace> trace;
+      try { trace = std::make_shared<CaptureFailureTrace>(); } catch (...) {}
+      CaptureTraceScope scope(trace);
+      if (!trace) { service->capture(request.args, context, std::move(done)); return; }
+      Dispatcher::Completion observed;
+      try {
+        observed = [weak, trace, id = request.id, done](Dispatcher::Result result) mutable {
+          try {
+            if (std::holds_alternative<Failure>(result)) {
+              const auto stage = trace->recorded();
+              if (!stage.empty()) if (const auto active = weak.lock()) {
+                std::lock_guard lock(active->mutex); if (active->capture_failures.size() < 16) active->capture_failures.insert_or_assign(id, stage);
+              }
+            }
+          } catch (...) {
+            // Observational metadata must not replace the original result, even on allocation failure.
+          }
+          done(std::move(result));
+        };
+      } catch (...) { service->capture(request.args, context, std::move(done)); return; }
+      service->capture(request.args, context, std::move(observed));
+    });
     server->register_handler(L"ui.tree", 15'000, true, false, [service = state->accessibility](const auto& request, const auto& context, auto done) { service->tree(request.args, context, std::move(done)); });
     server->register_handler(L"ui.focused", 5000, true, false, [service = state->accessibility](const auto& request, const auto& context, auto done) { service->focused(request.args, context, std::move(done)); });
     server->register_handler(L"ui.perform", 5000, true, true, [service = state->accessibility](const auto& request, const auto& context, auto done) { service->perform(request.args, context, std::move(done)); });
@@ -198,8 +278,11 @@ class NativeScenario final {
   }
   NativeReply request(std::wstring_view operation, const JsonObject& args = {}) { return wait(begin(operation, args)); }
   static void success(const NativeReply& reply, std::wstring_view stage = {}) {
-    if (!reply.document.GetNamedBoolean(L"ok", false)) throw ScenarioFailure{L"native_operation_failed", std::wstring(stage),
-      stage.empty() ? std::wstring{} : windows_privileged_native_code(reply.document.GetNamedString(L"code", L""))};
+    if (!reply.document.GetNamedBoolean(L"ok", false)) {
+      const auto origin = windows_privileged_origin_stage(reply.document.GetNamedString(L"error", L""), stage, reply.capture_stage);
+      throw ScenarioFailure{L"native_operation_failed", origin,
+        origin.empty() ? std::wstring{} : windows_privileged_native_code(reply.document.GetNamedString(L"code", L""))};
+    }
   }
   static bool failure(const NativeReply& reply, std::wstring_view code) { return windows_privileged_response_failure(reply.document, code); }
   ServerSession session() const { const auto current = server->session_snapshot(); if (!current) throw ScenarioFailure{L"native_operation_failed"}; return *current; }
@@ -300,6 +383,20 @@ bool running_target(const NativeReply& reply, DWORD pid, HWND window) {
 std::wstring windows_privileged_native_code(std::wstring_view code) {
   return std::find(windows_privileged_native_codes.begin(), windows_privileged_native_codes.end(), code) != windows_privileged_native_codes.end()
     ? std::wstring(code) : std::wstring(L"unknown");
+}
+std::wstring windows_privileged_origin_stage(std::wstring_view message, std::wstring_view fallback, std::wstring_view capture_stage) {
+  if (message == L"The computer session changed during the operation.") return L"authority-completion";
+  if (message == L"The native observation changed before delivery.") return L"authority-delivery";
+  static constexpr std::array<std::wstring_view, 4> trace_stages{L"capture-inventory-initial", L"capture-inventory-refresh", L"capture-native-read", L"capture-commit-current"};
+  if (std::find(trace_stages.begin(), trace_stages.end(), capture_stage) != trace_stages.end()) return std::wstring(capture_stage);
+  if (message == L"The native capture changed. Take a new screenshot.") return L"capture-service";
+  if (message == L"The native capture is unavailable. Check Windows Privacy & security settings.") return L"capture-native";
+  if (std::find(windows_privileged_stages.begin(), windows_privileged_stages.end(), fallback) != windows_privileged_stages.end()) return std::wstring(fallback);
+  return {};
+}
+std::wstring windows_privileged_capture_diagnostic(CaptureBackend backend, const std::function<void(CaptureBackend&)>& operation) {
+  const auto trace = std::make_shared<CaptureFailureTrace>(); CaptureTraceScope scope(trace);
+  auto observed = diagnostic_capture_backend(std::move(backend)); operation(observed); return trace->recorded();
 }
 bool windows_privileged_response_failure(const JsonObject& reply, std::wstring_view code) noexcept {
   try {

@@ -98,6 +98,14 @@ export const WINDOWS_NATIVE_STAGES = [
   "affinity-hide",
   "display-capture-reply",
   "display-capture-receipt",
+  "capture-service",
+  "capture-native",
+  "authority-completion",
+  "authority-delivery",
+  "capture-inventory-initial",
+  "capture-inventory-refresh",
+  "capture-native-read",
+  "capture-commit-current",
 ] as const
 export const WINDOWS_NATIVE_CODES = [...Computer.ComputerErrorCode.literals, "unknown"] as const
 export type WindowsNativeStage = (typeof WINDOWS_NATIVE_STAGES)[number]

@@ -265,6 +265,8 @@ test("Windows failed privileged rows accept only paired closed stage and native-
     { ...failed, detail: "" },
     { ...failed, ok: true },
     { ...failed, skipped: true, detail: "noninteractive_desktop" },
+    { ...failed, error: "PRIVATE native explanation" },
+    { ...failed, nativeOrigin: "PRIVATE native explanation" },
   ]) {
     const checks = passed.map((item, index) => (index === 2 ? entry : item))
     const code = entry.ok ? 0 : "skipped" in entry && entry.skipped ? 77 : 1
@@ -764,6 +766,50 @@ test("Windows driver preserves validated privileged diagnostics and the failed a
   })
   expect(result.checks.filter((item) => item.stage !== undefined || item.nativeCode !== undefined)).toHaveLength(1)
   expect(fake.state.closed).toBe(1)
+})
+
+test("Windows capture origins remain closed failed rows throughout aggregate reporting", async () => {
+  for (const stage of [
+    "capture-service",
+    "capture-native",
+    "authority-completion",
+    "authority-delivery",
+    "capture-inventory-initial",
+    "capture-inventory-refresh",
+    "capture-native-read",
+    "capture-commit-current",
+  ] as const) {
+    const fake = windowsDriverFixture()
+    fake.native.privileged = async () => ({
+      code: 1,
+      stdout: JSON.stringify({
+        checks: WINDOWS_NATIVE_CHECKS.privileged.map((name, index) =>
+          index === 3
+            ? { name, ok: false, detail: "native_operation_failed", stage, nativeCode: "changed" }
+            : { name, ok: true },
+        ),
+      }),
+    })
+    const result = await runComputerHelperSelfTest(
+      { ...options, platform: "win32", privileged: "auto" },
+      fake.dependencies,
+    )
+    expect(result.code).toBe(1)
+    expect(result.checks.find((item) => item.name === "privileged.capture-color-patch")).toEqual({
+      name: "privileged.capture-color-patch",
+      status: "failed",
+      reason: "native_operation_failed",
+      stage,
+      nativeCode: "changed",
+    })
+    expect(result.checks.find((item) => item.name === "privileged")).toEqual({
+      name: "privileged",
+      status: "failed",
+      reason: "native-check-failed",
+    })
+    expect(result.checks.filter((item) => item.stage !== undefined || item.nativeCode !== undefined)).toHaveLength(1)
+    expect(fake.state.closed).toBe(1)
+  }
 })
 
 test("Windows target-control and admission/assertion failures stay failures even when optional scenarios can skip", async () => {
