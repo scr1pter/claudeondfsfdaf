@@ -99,6 +99,16 @@ class ClaimValidation(unittest.TestCase):
         with self.assertRaises(AssertionError):
             build_brief.validate(self.data)
 
+    def test_offline_accounting_fix_cannot_claim_paid_savings(self):
+        self.data["legacy_cancellation_validation"]["paid_savings_measured"] = True
+        with self.assertRaises(AssertionError):
+            build_brief.validate(self.data)
+
+    def test_existing_skips_cannot_disappear_from_validation(self):
+        self.data["legacy_cancellation_validation"]["prompt_abort_existing_skips"] = 0
+        with self.assertRaises(AssertionError):
+            build_brief.validate(self.data)
+
 
 if __name__ == "__main__":
     unittest.main()

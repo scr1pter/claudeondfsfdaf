@@ -118,7 +118,8 @@
       "review_scores": [
         46,
         47
-      ]
+      ],
+      "checks_label": "final-source diagnostic"
     },
     "codex": {
       "cost_usd": "4.6033534",
@@ -129,9 +130,10 @@
       "review_scores": [
         43,
         42
-      ]
+      ],
+      "checks_label": "final-source diagnostic"
     },
-    "scope": "Final snapshots passed 53/54 checks each. The remaining assertion expects 401 rather than 403 for the bootstrap credential; both products denied access. Vector stopped at a conservative request-reservation limit; Codex reached 300 requests during repair. Both original native audits require review. Vector scored higher in both blinded review totals, with two lower dimension scores in one review. These descriptive costs and reviews do not establish equal-quality savings. The smaller three-task result remains separate.",
+    "scope": "Shown checks are separate free final-source diagnostics; Vector's original submission check was not run. The remaining assertion expects 401 rather than 403 for the bootstrap credential; both products denied access. Vector stopped at a conservative request-reservation limit; Codex reached 300 requests during repair. Both original native audits require review. Vector scored higher in both blinded review totals, with two lower dimension scores in one review. These descriptive costs and reviews do not establish equal-quality savings. The smaller three-task result remains separate.",
     "source_url": "https://github.com/scr1pter/claudeondfsfdaf/tree/adcea35db736548b4b23f6e4211bf75c89ee3ea7/docs/benchmarks/agentic-heavy-v2/relay-headless-2026-11-04",
     "blinded_review": {
       "same_rubric_and_reviewer_pool": true,
@@ -264,6 +266,18 @@
       "label": "Summary-cost regression and before/after validation",
       "path": "docs/investors/tokenomics/engineering-validation.json",
       "url": "https://github.com/scr1pter/claudeondfsfdaf/blob/e410bd72a291351e47fe627fd193f66b06f8e8d7/docs/investors/tokenomics/engineering-validation.json"
+    },
+    {
+      "id": "E7",
+      "label": "Completed-step cancellation validation",
+      "path": "docs/benchmarks/tokenomics-2026-11-04/legacy-cancellation-accounting.md",
+      "url": "https://github.com/scr1pter/claudeondfsfdaf/blob/94c27c67185bbce343e0fa0eac4ec60bb801e343/docs/benchmarks/tokenomics-2026-11-04/legacy-cancellation-accounting.md"
+    },
+    {
+      "id": "E8",
+      "label": "23-package post-push verification",
+      "path": "docs/investors/tokenomics/legacy-post-push-validation.json",
+      "url": "https://github.com/scr1pter/claudeondfsfdaf/blob/98f6f319243aecd561d05a0c4bb43f74fe8f68fd/docs/investors/tokenomics/legacy-post-push-validation.json"
     }
   ],
   "compaction_validation": {
@@ -278,5 +292,27 @@
     "paid_savings_measured": false,
     "scope": "V2 compaction-accounting and runner regression suite; overlaps the earlier control suite, not additive. The paid legacy CLI does not use this path.",
     "source_id": "E6"
+  },
+  "legacy_cancellation_validation": {
+    "kind": "legacy-cancellation-validation-projection-v1",
+    "source_revision": "94c27c67185bbce343e0fa0eac4ec60bb801e343",
+    "source_base": "1a3d07c4a947674c3db68f6bbc7690a8c0288587",
+    "negative_control_passed": 2,
+    "negative_control_failed": 6,
+    "fixed_new_controls_passed": 8,
+    "processor_usage_tests_passed": 85,
+    "processor_usage_assertions": 452,
+    "prompt_abort_tests_passed": 35,
+    "prompt_abort_existing_skips": 8,
+    "prompt_abort_assertions": 154,
+    "final_focused_background_tests_passed": 15,
+    "final_focused_background_assertions": 110,
+    "failed_tests": 0,
+    "package_typechecks_passed": 23,
+    "paid_savings_measured": false,
+    "provider_calls": 0,
+    "independent_source_review": "no blocking regression",
+    "scope": "Local deterministic provider fixtures through the actual Legacy processor. Focused cases overlap broader suites; counts are not additive. No inference quality or paid savings claim. Model, reasoning, context and verification settings unchanged.",
+    "limitation": "A pre-existing non-interruption publication defect can still exit before the guard records the completed call. This correction covers cancellation and snapshot-confirmation interruption, not every possible publication failure."
   }
 }

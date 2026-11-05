@@ -55,6 +55,11 @@ def validate(data):
     assert compaction["baseline_regressions_failed"] == compaction["fixed_regressions_passed"] == 8
     assert compaction["core_typecheck_passed"] and compaction["engine_typecheck_passed"]
     assert compaction["paid_savings_measured"] is False
+    legacy = data["legacy_cancellation_validation"]
+    assert legacy["negative_control_failed"] == 6 and legacy["negative_control_passed"] == 2
+    assert legacy["fixed_new_controls_passed"] == 8 and legacy["failed_tests"] == 0
+    assert legacy["package_typechecks_passed"] == 23 and legacy["prompt_abort_existing_skips"] == 8
+    assert legacy["paid_savings_measured"] is False and legacy["provider_calls"] == 0
     for extra in additional_studies(data):
         assert extra["status"] == "complete" and extra["settlement_complete"] is True
         assert extra["all_charges_retained"] is True
@@ -242,22 +247,29 @@ def evidence(c, data, total):
     top(c, 4, total, data)
     y = text(c, "Progress that can be audited.", M, 700, CW, 30, 36, NAVY, True)
     y = text(c, "A disciplined cycle connects measured behavior to product changes and regression checks.", M, y - 15, CW, 12.2, 18)
-    rect(c, M, y - 23, CW, 112, PALE)
-    text(c, str(data["compaction_validation"]["tests_passed"]), M + 18, y - 38, 105, 38, 42, TEAL, True)
-    text(c, "Targeted regression tests passed", M + 145, y - 40, CW - 164, 15, 20, NAVY, True)
-    text(c, "Latest V2 summary-cost suite, with Core and Engine typechecks passing. Eight regressions failed before the fix and pass after it. Paid savings from this correction are not yet measured. [E6]", M + 145, y - 70, CW - 164, 10, 14, MUTED)
+    for offset, value, label, detail in [
+        (0, str(data["compaction_validation"]["tests_passed"]), "V2 accounting tests passed", "Eight baseline failures resolved. [E6]"),
+        (270, str(data["legacy_cancellation_validation"]["package_typechecks_passed"]), "Package typechecks passed", "Latest Legacy accounting fix. [E8]"),
+    ]:
+        rect(c, M + offset, y - 23, 252, 112, PALE)
+        text(c, value, M + offset + 16, y - 36, 215, 34, 39, TEAL, True)
+        text(c, label, M + offset + 16, y - 81, 222, 11.3, 15, NAVY, True)
+        text(c, detail, M + offset + 16, y - 104, 222, 9.1, 12, MUTED)
     y -= 162
     y = text(c, "What the current controls address", M, y, CW, 17, 23, NAVY, True)
-    y = text(c, "The earlier 220-test suite covers repeated tool outcomes, user rechecks, incomplete usage and background continuity. The latest suite adds summary-cost and cancellation checks. Counts overlap and are not additive; these are engineering checks, separate from application quality. [E3, E6]", M, y - 10, CW, 11.4, 16.5)
+    y = text(c, "The earlier 220-test suite covers repeated outcomes, rechecks and continuity. V2 adds summary-cost checks. The separate Legacy fix passed 85 processor/usage and 35 budget/abort tests, with eight existing skips. Six failing controls now pass; two normal controls remain passing. Suites overlap and are not additive. Paid savings from these later fixes are not measured. [E3, E6, E7]", M, y - 10, CW, 10.8, 15.2)
     y -= 24
     y = text(c, "Benchmark scope", M, y, CW, 17, 23, NAVY, True)
     y = text(c, "Three single-trial pairs on Windows used the same gpt-6.1-sol model, High reasoning and one autonomous agent per runtime. Two tasks were development replications; one was held out. Results describe the tested candidate, required checks and fixed static rubric. The sample does not establish statistical significance or predict all workloads.", M, y - 10, CW, 10.6, 15.1)
     y = text(c, "Prices are derived from recorded provider usage at the study schedule. Reviews use exact source and selected screenshots; passing checks do not certify production reliability or security. Large-team episodes are reported separately with their stopping conditions and quality limits.", M, y - 11, CW, 10.6, 15.1)
     y -= 21
     y = text(c, "Evidence register", M, y, CW, 14, 19, NAVY, True)
-    for source_id in ("E1", "E2", "E6", "E3"):
+    for source_id in ("E1", "E2", "E6", "E7", "E3"):
         source = next(item for item in data["sources"] if item["id"] == source_id)
         label = f"<b>{escape(source['id'])}</b>   <link href='{escape(source['url'], quote=True)}' color='#008E88'>{escape(source['label'])}</link>"
+        if source_id == "E7":
+            extra = next(item for item in data["sources"] if item["id"] == "E8")
+            label += f"   <b>E8</b>   <link href='{escape(extra['url'], quote=True)}' color='#008E88'>23-package verification</link>"
         y = text(c, label, M, y - 8, CW, 9.4, 13.1, MUTED)
     c.showPage()
 
@@ -278,7 +290,7 @@ def additional(c, data, total, study, number):
         rect(c, M, y, CW, 94, PALE if side == "vector" else LIGHT)
         text(c, label, M + 18, y - 15, 130, 18, 23, NAVY, True)
         text(c, money(arm["cost_usd"]), M + 170, y - 15, 160, 25, 31, TEAL if side == "vector" else NAVY, True)
-        text(c, f"{arm['checks_passed']}/{arm['checks_total']} required checks; {arm['requests']} provider requests", M + 18, y - 52, CW - 36, 11, 16)
+        text(c, f"{arm['checks_passed']}/{arm['checks_total']} {arm.get('checks_label', 'required checks')}; {arm['requests']} provider requests", M + 18, y - 52, CW - 36, 11, 16)
         if arm.get("review_scores"):
             text(c, "Blinded static reviews: " + " and ".join(str(score) + "/48" for score in arm["review_scores"]), M + 18, y - 72, CW - 36, 10, 14, MUTED)
         y -= 111
