@@ -1,0 +1,69 @@
+{
+  "functionalVerdict": "not_run",
+  "nativeAuditVerdict": "review_required",
+  "nativeAuditFailureType": "StudyError",
+  "reviewRequired": true,
+  "stopReason": "admission_policy_or_state_failure",
+  "settlementComplete": true,
+  "measuredUsd": 6.63914900000001,
+  "providerRequests": 279,
+  "autonomousActorsAdmitted": 7,
+  "receiptUsageByNativeRole": {
+    "backend_api": {
+      "forwardedRequests": 22,
+      "reconciledReceipts": 22,
+      "knownMeasuredUsd": 0.537373
+    },
+    "backend_coordinator": {
+      "forwardedRequests": 36,
+      "reconciledReceipts": 36,
+      "knownMeasuredUsd": 0.6540018
+    },
+    "backend_data": {
+      "forwardedRequests": 49,
+      "reconciledReceipts": 49,
+      "knownMeasuredUsd": 1.5306678
+    },
+    "frontend_worker": {
+      "forwardedRequests": 14,
+      "reconciledReceipts": 14,
+      "knownMeasuredUsd": 0.2940423
+    },
+    "lead": {
+      "forwardedRequests": 96,
+      "reconciledReceipts": 96,
+      "knownMeasuredUsd": 1.7894634
+    },
+    "qa_specialist": {
+      "forwardedRequests": 45,
+      "reconciledReceipts": 45,
+      "knownMeasuredUsd": 1.4423294
+    },
+    "team_judge": {
+      "forwardedRequests": 17,
+      "reconciledReceipts": 17,
+      "knownMeasuredUsd": 0.3912713
+    }
+  },
+  "sourceRevision": "1a3d07c4a947674c3db68f6bbc7690a8c0288587",
+  "allChargesRetained": true,
+  "finalSourceManifestSha256": "277e35e15e0d888d6d69ab4e7afb777a3f2cd560ea694bb5ee9f77556d56f546",
+  "timingScope": "Serialized inference forwards; not unrestricted production throughput",
+  "attempts": [
+    {
+      "index": 1,
+      "process": {
+        "exitCode": 1,
+        "timedOut": false,
+        "stopReason": "admission_policy_or_state_failure",
+        "ownedTreeQuiesced": true,
+        "wallMs": 5459594.0
+      },
+      "gate": {
+        "verdict": null,
+        "checksPassed": null,
+        "checksTotal": null
+      }
+    }
+  ]
+}

@@ -1,0 +1,60 @@
+{
+  "functionalVerdict": "not_run",
+  "nativeAuditVerdict": "review_required",
+  "nativeAuditFailureType": "PolicyError",
+  "reviewRequired": true,
+  "stopReason": "admission_policy_or_state_failure",
+  "settlementComplete": true,
+  "measuredUsd": 1.4211115999999961,
+  "providerRequests": 58,
+  "autonomousActorsAdmitted": 5,
+  "receiptUsageByNativeRole": {
+    "backend_api": {
+      "forwardedRequests": 8,
+      "reconciledReceipts": 8,
+      "knownMeasuredUsd": 0.3245095
+    },
+    "backend_coordinator": {
+      "forwardedRequests": 3,
+      "reconciledReceipts": 3,
+      "knownMeasuredUsd": 0.076872
+    },
+    "backend_data": {
+      "forwardedRequests": 8,
+      "reconciledReceipts": 8,
+      "knownMeasuredUsd": 0.3169632
+    },
+    "frontend_worker": {
+      "forwardedRequests": 10,
+      "reconciledReceipts": 10,
+      "knownMeasuredUsd": 0.2953016
+    },
+    "lead": {
+      "forwardedRequests": 29,
+      "reconciledReceipts": 29,
+      "knownMeasuredUsd": 0.4074653
+    }
+  },
+  "sourceRevision": "94c27c67185bbce343e0fa0eac4ec60bb801e343",
+  "allChargesRetained": true,
+  "finalSourceManifestSha256": "756d1676e221cbfd72818df0c31a02f09da21cefc0661f78a5e3599e092ce303",
+  "attempts": [
+    {
+      "index": 1,
+      "process": {
+        "exitCode": 1,
+        "timedOut": false,
+        "stopReason": "admission_policy_or_state_failure",
+        "ownedTreeQuiesced": true,
+        "wallMs": 1021828.0
+      },
+      "artifact": {
+        "fileCount": 19,
+        "manifestSha256": "756d1676e221cbfd72818df0c31a02f09da21cefc0661f78a5e3599e092ce303",
+        "protectedViolations": []
+      },
+      "gate": null
+    }
+  ],
+  "nativeAuditTop": {}
+}

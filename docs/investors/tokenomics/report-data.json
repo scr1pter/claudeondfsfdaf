@@ -1,0 +1,318 @@
+{
+  "schema_version": 1,
+  "as_of": "2026-11-04",
+  "title": "Vector | Tokenomics and Benchmark Brief",
+  "primary_study": {
+    "label": "Controlled coding workflows",
+    "status": "complete",
+    "candidate_revision": "a35c03d6a9bb16f16ec0187ad69c6c6420d10f19",
+    "model": "gpt-6.1-sol",
+    "reasoning": "High",
+    "agents_each": 1,
+    "task_count": 3,
+    "paid_repairs": 0,
+    "all_charges_retained": true,
+    "cost_basis": "Recorded provider usage multiplied by the study rate schedule; not invoice reconciliation.",
+    "quality_scope": "Required functional checks plus a fixed blinded source-and-screenshot rubric, evaluated separately on every task.",
+    "tasks": [
+      {
+        "name": "Workflow Runner",
+        "role": "Development replication",
+        "checks": 24,
+        "vector_usd": "0.7512629",
+        "codex_usd": "0.8919725",
+        "vector_score": 45,
+        "codex_score": 45,
+        "score_max": 48,
+        "vector_requests": 47,
+        "codex_requests": 30,
+        "vector_wall_ms": 514140,
+        "codex_wall_ms": 664828
+      },
+      {
+        "name": "Evidence Workbench",
+        "role": "Development replication",
+        "checks": 26,
+        "vector_usd": "0.7276856",
+        "codex_usd": "0.7229352",
+        "vector_score": 47,
+        "codex_score": 47,
+        "score_max": 48,
+        "vector_requests": 44,
+        "codex_requests": 35,
+        "vector_wall_ms": 526703,
+        "codex_wall_ms": 518515
+      },
+      {
+        "name": "Delivery Outbox",
+        "role": "Held-out task",
+        "checks": 26,
+        "vector_usd": "0.5419832",
+        "codex_usd": "0.5126617",
+        "vector_score": 47,
+        "codex_score": 46,
+        "score_max": 48,
+        "vector_requests": 36,
+        "codex_requests": 23,
+        "vector_wall_ms": 427813,
+        "codex_wall_ms": 427360
+      }
+    ],
+    "totals": {
+      "vector_usd": "2.0209317",
+      "codex_usd": "2.1275694",
+      "checks_each": 76,
+      "vector_score": 139,
+      "codex_score": 138,
+      "score_max": 144,
+      "vector_requests": 127,
+      "codex_requests": 88
+    },
+    "cost_mix": {
+      "vector": {
+        "ordinary_input_usd": "0.0007620",
+        "cache_read_usd": "0.5341722",
+        "cache_write_usd": "0.5335475",
+        "output_usd": "0.9524500",
+        "input_tokens": 5555522,
+        "output_tokens": 95245
+      },
+      "codex": {
+        "ordinary_input_usd": "0.0005280",
+        "cache_read_usd": "0.4099814",
+        "cache_write_usd": "0.5723600",
+        "output_usd": "1.1447000",
+        "input_tokens": 4329022,
+        "output_tokens": 114470
+      }
+    },
+    "scope_note": "Three single-trial task pairs in a small adaptive evaluation: two development replications and one held-out task. Costs varied by workload; Vector was cheaper on one of three tasks. Recorded quality gates cover the specified checks and rubric, not every future output or production behavior.",
+    "source_id": "E1"
+  },
+  "current_controls": {
+    "source_revision": "dae48615985f03e85c9dede9ba0b4556a3da39f2",
+    "focused_tests_passed": 220,
+    "focused_tests_failed": 0,
+    "core_typecheck_passed": true,
+    "engine_typecheck_passed": true,
+    "paid_savings_measured": false,
+    "scope": "Local scripted regression checks for V2 tool-loop and accounting behavior. These later controls were not the source used for the paid three-task result.",
+    "source_id": "E3"
+  },
+  "additional_complete_study": {
+    "status": "complete",
+    "label": "Nested seven-role API, CLI and SDK build",
+    "model": "gpt-6.1-sol",
+    "reasoning": "High",
+    "team_size_each": 7,
+    "settlement_complete": true,
+    "all_charges_retained": true,
+    "quality_gate_met": false,
+    "matched_native_audit_passed": false,
+    "vector": {
+      "cost_usd": "6.6391490",
+      "requests": 279,
+      "checks_passed": 53,
+      "checks_total": 54,
+      "native_roles_observed": 7,
+      "review_scores": [
+        46,
+        47
+      ],
+      "checks_label": "final-source diagnostic"
+    },
+    "codex": {
+      "cost_usd": "4.6033534",
+      "requests": 300,
+      "checks_passed": 53,
+      "checks_total": 54,
+      "native_roles_observed": 7,
+      "review_scores": [
+        43,
+        42
+      ],
+      "checks_label": "final-source diagnostic"
+    },
+    "scope": "Shown checks are separate free final-source diagnostics; Vector's original submission check was not run. The remaining assertion expects 401 rather than 403 for the bootstrap credential; both products denied access. Vector stopped at a conservative request-reservation limit; Codex reached 300 requests during repair. Both original native audits require review. Vector scored higher in both blinded review totals, with two lower dimension scores in one review. These descriptive costs and reviews do not establish equal-quality savings. The smaller three-task result remains separate.",
+    "source_url": "https://github.com/scr1pter/claudeondfsfdaf/tree/adcea35db736548b4b23f6e4211bf75c89ee3ea7/docs/benchmarks/agentic-heavy-v2/relay-headless-2026-11-04",
+    "blinded_review": {
+      "same_rubric_and_reviewer_pool": true,
+      "source_and_required_artifacts_reviewed": true,
+      "reviewers": [
+        "R1",
+        "R2"
+      ],
+      "categories": [
+        {
+          "reviewer_id": "R1",
+          "name": "Functional completeness and coherent API semantics",
+          "vector_score": 7,
+          "codex_score": 8,
+          "maximum": 8
+        },
+        {
+          "reviewer_id": "R1",
+          "name": "Transactional integrity, recovery and corruption handling",
+          "vector_score": 8,
+          "codex_score": 4,
+          "maximum": 8
+        },
+        {
+          "reviewer_id": "R1",
+          "name": "Authorization boundaries and input/error validation",
+          "vector_score": 8,
+          "codex_score": 8,
+          "maximum": 8
+        },
+        {
+          "reviewer_id": "R1",
+          "name": "Concurrency, capability/lease fencing and lifecycle",
+          "vector_score": 8,
+          "codex_score": 8,
+          "maximum": 8
+        },
+        {
+          "reviewer_id": "R1",
+          "name": "CLI usability and typed SDK contract accuracy",
+          "vector_score": 8,
+          "codex_score": 7,
+          "maximum": 8
+        },
+        {
+          "reviewer_id": "R1",
+          "name": "Maintainability and meaningful independent verification",
+          "vector_score": 7,
+          "codex_score": 8,
+          "maximum": 8
+        },
+        {
+          "reviewer_id": "R2",
+          "name": "Functional completeness and coherent API semantics",
+          "vector_score": 8,
+          "codex_score": 6,
+          "maximum": 8
+        },
+        {
+          "reviewer_id": "R2",
+          "name": "Transactional integrity, recovery and corruption handling",
+          "vector_score": 8,
+          "codex_score": 6,
+          "maximum": 8
+        },
+        {
+          "reviewer_id": "R2",
+          "name": "Authorization boundaries and input/error validation",
+          "vector_score": 8,
+          "codex_score": 8,
+          "maximum": 8
+        },
+        {
+          "reviewer_id": "R2",
+          "name": "Concurrency, capability/lease fencing and lifecycle",
+          "vector_score": 8,
+          "codex_score": 8,
+          "maximum": 8
+        },
+        {
+          "reviewer_id": "R2",
+          "name": "CLI usability and typed SDK contract accuracy",
+          "vector_score": 8,
+          "codex_score": 7,
+          "maximum": 8
+        },
+        {
+          "reviewer_id": "R2",
+          "name": "Maintainability and meaningful independent verification",
+          "vector_score": 7,
+          "codex_score": 7,
+          "maximum": 8
+        }
+      ]
+    }
+  },
+  "sources": [
+    {
+      "id": "E1",
+      "label": "Three-task matched benchmark and quality gate",
+      "path": "docs/benchmarks/agentic-workflows-v1/results/contracts-stage-summary.json",
+      "url": "https://github.com/scr1pter/claudeondfsfdaf/blob/587be6478aff24e2cdf98192269bc2bd3ca755bd/docs/benchmarks/agentic-workflows-v1/results/contracts-stage-summary.json"
+    },
+    {
+      "id": "E2",
+      "label": "Receipt-based cost category projection",
+      "path": "docs/benchmarks/agentic-workflows-v1/results/contracts-cost-drivers.json",
+      "url": "https://github.com/scr1pter/claudeondfsfdaf/blob/587be6478aff24e2cdf98192269bc2bd3ca755bd/docs/benchmarks/agentic-workflows-v1/results/contracts-cost-drivers.json"
+    },
+    {
+      "id": "E3",
+      "label": "Latest control-suite validation",
+      "path": "docs/benchmarks/agentic-heavy-v1/checkpoint-2026-11-04/v2-integration-validation.json",
+      "url": "https://github.com/scr1pter/claudeondfsfdaf/blob/587be6478aff24e2cdf98192269bc2bd3ca755bd/docs/benchmarks/agentic-heavy-v1/checkpoint-2026-11-04/v2-integration-validation.json"
+    },
+    {
+      "id": "E4",
+      "label": "Prior large-application benchmark",
+      "path": "docs/benchmarks/tokenomics-2026-11-01/live-results.json",
+      "url": "https://github.com/scr1pter/claudeondfsfdaf/blob/587be6478aff24e2cdf98192269bc2bd3ca755bd/docs/benchmarks/tokenomics-2026-11-01/live-results.json"
+    },
+    {
+      "id": "E5",
+      "label": "Earlier two-task candidate evaluation",
+      "path": "docs/benchmarks/agentic-workflows-v1/results/focus-stage-summary.json",
+      "url": "https://github.com/scr1pter/claudeondfsfdaf/blob/587be6478aff24e2cdf98192269bc2bd3ca755bd/docs/benchmarks/agentic-workflows-v1/results/focus-stage-summary.json"
+    },
+    {
+      "id": "E6",
+      "label": "Summary-cost regression and before/after validation",
+      "path": "docs/investors/tokenomics/engineering-validation.json",
+      "url": "https://github.com/scr1pter/claudeondfsfdaf/blob/e410bd72a291351e47fe627fd193f66b06f8e8d7/docs/investors/tokenomics/engineering-validation.json"
+    },
+    {
+      "id": "E7",
+      "label": "Completed-step cancellation validation",
+      "path": "docs/benchmarks/tokenomics-2026-11-04/legacy-cancellation-accounting.md",
+      "url": "https://github.com/scr1pter/claudeondfsfdaf/blob/94c27c67185bbce343e0fa0eac4ec60bb801e343/docs/benchmarks/tokenomics-2026-11-04/legacy-cancellation-accounting.md"
+    },
+    {
+      "id": "E8",
+      "label": "23-package post-push verification",
+      "path": "docs/investors/tokenomics/legacy-post-push-validation.json",
+      "url": "https://github.com/scr1pter/claudeondfsfdaf/blob/98f6f319243aecd561d05a0c4bb43f74fe8f68fd/docs/investors/tokenomics/legacy-post-push-validation.json"
+    }
+  ],
+  "compaction_validation": {
+    "source_revision": "1a3d07c4a947674c3db68f6bbc7690a8c0288587",
+    "tests_passed": 281,
+    "tests_failed": 0,
+    "assertions": 1042,
+    "baseline_regressions_failed": 8,
+    "fixed_regressions_passed": 8,
+    "core_typecheck_passed": true,
+    "engine_typecheck_passed": true,
+    "paid_savings_measured": false,
+    "scope": "V2 compaction-accounting and runner regression suite; overlaps the earlier control suite, not additive. The paid legacy CLI does not use this path.",
+    "source_id": "E6"
+  },
+  "legacy_cancellation_validation": {
+    "kind": "legacy-cancellation-validation-projection-v1",
+    "source_revision": "94c27c67185bbce343e0fa0eac4ec60bb801e343",
+    "source_base": "1a3d07c4a947674c3db68f6bbc7690a8c0288587",
+    "negative_control_passed": 2,
+    "negative_control_failed": 6,
+    "fixed_new_controls_passed": 8,
+    "processor_usage_tests_passed": 85,
+    "processor_usage_assertions": 452,
+    "prompt_abort_tests_passed": 35,
+    "prompt_abort_existing_skips": 8,
+    "prompt_abort_assertions": 154,
+    "final_focused_background_tests_passed": 15,
+    "final_focused_background_assertions": 110,
+    "failed_tests": 0,
+    "package_typechecks_passed": 23,
+    "paid_savings_measured": false,
+    "provider_calls": 0,
+    "independent_source_review": "no blocking regression",
+    "scope": "Local deterministic provider fixtures through the actual Legacy processor. Focused cases overlap broader suites; counts are not additive. No inference quality or paid savings claim. Model, reasoning, context and verification settings unchanged.",
+    "limitation": "A pre-existing non-interruption publication defect can still exit before the guard records the completed call. This correction covers cancellation and snapshot-confirmation interruption, not every possible publication failure."
+  }
+}

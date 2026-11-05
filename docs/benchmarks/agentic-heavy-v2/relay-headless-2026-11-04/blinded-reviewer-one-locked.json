@@ -1,0 +1,240 @@
+{
+  "kind": "blinded-headless-static-review-v1",
+  "reviewer": "reviewer-one",
+  "lockedAtUtc": "2026-11-05T02:19:09.681382+00:00",
+  "lockedBeforeRuntimeMapping": true,
+  "runtimeMappingKnown": false,
+  "newArmCostsKnown": false,
+  "externalAcceptanceResultsKnown": false,
+  "otherReviewerScoresKnown": false,
+  "reviewMethod": "Bounded independent static source review; no application/native/Bun/Chrome/provider execution; no copies altered.",
+  "requirementsSha256": "a85c62de50f23145bfc3ee6db261db08c565889ff8df0a7808bae1143b968351",
+  "rubricSha256": "d5687aedbba30af2ef3baf8768cf1be0f270160305e73ec39f0cf6d3a9173760",
+  "sourceHashesFileSha256": "b0c50f76f469878d603e260f8baa2d3fe6dfcc7cc15d921c114672f0c5397f62",
+  "all45SourceFileHashesVerified": true,
+  "sides": {
+    "A": {
+      "dimensions": [
+        {
+          "name": "Functional completeness and coherent API semantics",
+          "score": 7,
+          "maximumScore": 8,
+          "rationale": "The connected service implements all requested major routes, projections, CSV staging, replay outcomes and audit events. One bounded semantics concern remains: unkeyed repeated workspace creation is automatically replayed as200 for an identical body. The workspace uniqueness statement favors409, while the global exact-creation-replay sentence introduces ambiguity; this is not treated as a decisive or critical defect by static review alone.",
+          "evidence": [
+            "A/backend/api.mjs:102-120",
+            "A/backend/api.mjs:123-235",
+            "A/backend/api.mjs:283-321"
+          ]
+        },
+        {
+          "name": "Transactional integrity, recovery and corruption handling",
+          "score": 8,
+          "maximumScore": 8,
+          "rationale": "Strong durable publication design: strict chained/schema-checked recovery, initialized/genesis metadata and an acknowledged tip distinguish an empty or shortened journal from fresh state. Serialized copy-on-write publishes state only after journal fsync and tip publication; persistence failures poison writes.",
+          "evidence": [
+            "A/backend/data.mjs:532-568",
+            "A/backend/data.mjs:579-625",
+            "A/backend/data.mjs:638-667",
+            "A/tests/qa.test.mjs:618-651"
+          ]
+        },
+        {
+          "name": "Authorization boundaries and input/error validation",
+          "score": 8,
+          "maximumScore": 8,
+          "rationale": "Current capability and role checks run again inside serialized mutation callbacks, including replays. Input byte/UTF-8/CSV boundaries, duplicate-header handling, safe public projections and generic errors are explicit. Owner capability recovery from the persisted derivation key is clearly disclosed as a data-directory trust limitation, not counted as a literal plaintext-token contract violation.",
+          "evidence": [
+            "A/backend/api.mjs:81-99",
+            "A/backend/api.mjs:123-155",
+            "A/backend/api.mjs:211-234",
+            "A/backend/validation.mjs:24-43",
+            "A/backend/validation.mjs:95-139",
+            "A/STORAGE.md:114-134"
+          ]
+        },
+        {
+          "name": "Concurrency, capability/lease fencing and lifecycle",
+          "score": 8,
+          "maximumScore": 8,
+          "rationale": "FIFO serialized transactions check version and precise capability/subject/epoch/expiry at commit. Immutable exclusive lock generations avoid stale-owner unlink races. Shutdown separately awaits admitted handlers, transactions and response/disconnection settlement before releasing storage. No material concurrency/lifecycle defect established in this static review.",
+          "evidence": [
+            "A/backend/api.mjs:198-234",
+            "A/backend/data.mjs:303-328",
+            "A/backend/data.mjs:465-509",
+            "A/backend/data.mjs:638-685",
+            "A/app.mjs:29-49",
+            "A/app.mjs:63-104"
+          ]
+        },
+        {
+          "name": "CLI usability and typed SDK contract accuracy",
+          "score": 8,
+          "maximumScore": 8,
+          "rationale": "The CLI covers every required command, supports opaque hyphen-prefixed flag values, bounds and validates CSV reads, and keeps untrusted upstream error strings out of stderr. SDK declarations are coherent and complete; runtime response validation, redirects disabled and request timeout strengthen the client boundary.",
+          "evidence": [
+            "A/cli.mjs:38-59",
+            "A/cli.mjs:69-95",
+            "A/cli.mjs:98-125",
+            "A/cli.mjs:128-157",
+            "A/sdk.mjs:70-104",
+            "A/sdk.d.mts:1-68"
+          ]
+        },
+        {
+          "name": "Maintainability and meaningful independent verification",
+          "score": 7,
+          "maximumScore": 8,
+          "rationale": "The API/storage/service/client separation is clear and tests meaningfully cover real HTTP, races, abort/drain, lock aliases and corruption, with focused persistence-fault controls. Maintenance burden is higher around the elaborate lock/tip protocol and long historical review notes; the submitted typed consumer is described as usable when a compiler is available, rather than furnishing the same explicit negative semantic type-test fixture as B. Submitted test-pass claims were not independently rerun here.",
+          "evidence": [
+            "A/backend/service.mjs:4-49",
+            "A/tests/qa.test.mjs:245-245",
+            "A/tests/qa.test.mjs:419-419",
+            "A/tests/qa.test.mjs:618-651",
+            "A/tests/qa.test.mjs:695-825",
+            "A/backend/tip-retry.verify.mjs:153-188",
+            "A/tests/sdk-usage.mts:16-23"
+          ]
+        }
+      ],
+      "totalScore": 46,
+      "maximumScore": 48
+    },
+    "B": {
+      "dimensions": [
+        {
+          "name": "Functional completeness and coherent API semantics",
+          "score": 8,
+          "maximumScore": 8,
+          "rationale": "The source presents the full required connected API workflow, clear domain dispatch, canonical subject-scoped staging replays, precise commit replay and projections, and correct workspace uniqueness for unkeyed creation. No additional major API omission was found; durability and CLI edge findings are scored in their dedicated dimensions.",
+          "evidence": [
+            "B/backend/api.mjs:55-76",
+            "B/backend/relay.mjs:91-125",
+            "B/backend/relay.mjs:128-144",
+            "B/backend/relay.mjs:147-284"
+          ]
+        },
+        {
+          "name": "Transactional integrity, recovery and corruption handling",
+          "score": 4,
+          "maximumScore": 8,
+          "rationale": "Copy-on-write serialization, fsync and checked sequence/hash-chain records are sound foundations, but a material rollback/reset hole remains. Recovery accepts an empty journal as fresh state and has no durable independent acknowledged-tip/initialization anchor. A deleted journal is recreated by a+; truncating to zero or to a complete valid prefix can silently lose acknowledged work instead of failing closed. This is a direct static consequence, not a runtime reproduction.",
+          "evidence": [
+            "B/backend/storage.mjs:227-260",
+            "B/backend/storage.mjs:272-280",
+            "B/backend/storage.mjs:290-325",
+            "B/STORAGE.md:1-18"
+          ]
+        },
+        {
+          "name": "Authorization boundaries and input/error validation",
+          "score": 8,
+          "maximumScore": 8,
+          "rationale": "Capabilities are random and hash-only with timing-safe comparison; bootstrap cannot access business routes. Authorization and role checks are repeated inside each serialized write, including replay paths. Request byte bounds, fatal UTF-8 decoding, CSV validation and structured error isolation are implemented. No material authorization/input defect established in this static review.",
+          "evidence": [
+            "B/backend/storage.mjs:14-51",
+            "B/backend/relay.mjs:72-88",
+            "B/backend/relay.mjs:147-169",
+            "B/backend/api.mjs:12-51",
+            "B/backend/api.mjs:101-119",
+            "B/backend/validation.mjs:49-130"
+          ]
+        },
+        {
+          "name": "Concurrency, capability/lease fencing and lifecycle",
+          "score": 8,
+          "maximumScore": 8,
+          "rationale": "The promise queue gives a single atomic write boundary. Commit revalidates exact capability ID, subject, epoch, expiry and base version; claims and stale versions serialize. Kernel-backed directory ownership, identity-checked lock cleanup and graceful listener/storage/stdio closure are thoughtfully implemented for the documented platforms. No additional concurrency/lifecycle defect was established statically.",
+          "evidence": [
+            "B/backend/storage.mjs:121-213",
+            "B/backend/storage.mjs:290-338",
+            "B/backend/relay.mjs:235-278",
+            "B/app.mjs:34-58"
+          ]
+        },
+        {
+          "name": "CLI usability and typed SDK contract accuracy",
+          "score": 7,
+          "maximumScore": 8,
+          "rationale": "All commands, JSON streams, error objects and SDK declarations are present and coherent. A concrete CLI edge remains: the generic flag parser refuses every value beginning--, although a legitimate opaque base64url lease token can start with that prefix. The service itself accepts such a token; the CLI cannot submit it. Reads of CSV files are also unbounded before the server rejects an oversized request.",
+          "evidence": [
+            "B/cli.mjs:40-62",
+            "B/cli.mjs:76-90",
+            "B/backend/storage.mjs:14-15",
+            "B/sdk.mjs:30-77",
+            "B/sdk.d.mts:1-78"
+          ]
+        },
+        {
+          "name": "Maintainability and meaningful independent verification",
+          "score": 8,
+          "maximumScore": 8,
+          "rationale": "Concise modules separate transport, domain policy, durable storage and clients. Submitted verification is meaningfully adversarial: connected CLI/SDK operations, competing commits, restart and corrupted journals, plus alias/replay regressions and a strict positive/negative typed SDK consumer. The critical recovery gap is still a real implementation issue; these tests and authored PASS notes are not proof of exhaustive correctness and were not rerun by this reviewer.",
+          "evidence": [
+            "B/verification/integration.mjs:301-327",
+            "B/verification/integration.mjs:329-375",
+            "B/verification/qa.mjs:95-123",
+            "B/verification/qa.mjs:191-242",
+            "B/verification/sdk-types.mts:4-7",
+            "B/verification/sdk-types.mts:37-49"
+          ]
+        }
+      ],
+      "totalScore": 43,
+      "maximumScore": 48
+    }
+  },
+  "findings": [
+    {
+      "id": "A-API-1",
+      "side": "A",
+      "severity": "bounded semantics concern; public-spec ambiguity",
+      "material": false,
+      "title": "Unkeyed duplicate workspace request returns a creation replay",
+      "evidence": [
+        "A/backend/api.mjs:102-108"
+      ],
+      "reasoning": "An identical request for an existing workspace returns200 and ownerToken, despite workspace IDs being declared unique. The global exact-creation-replay sentence is ambiguous, so this is not a decisive contract failure or critical regression without a separate interpretation/functional gate.",
+      "runtimeReproduced": false
+    },
+    {
+      "id": "B-DUR-1",
+      "side": "B",
+      "severity": "material",
+      "material": true,
+      "title": "Deleting or completely truncating an initialized journal silently creates empty state",
+      "evidence": [
+        "B/backend/storage.mjs:234-238",
+        "B/backend/storage.mjs:272-280"
+      ],
+      "reasoning": "recover returns the initial empty state for zero bytes, and open a+ creates a missing journal. No other durable initialized/acknowledged-state anchor is checked. After previously acknowledged work, truncation to zero or deletion therefore permits readiness with lost state. A complete valid journal prefix likewise passes its own sequence/hash chain.",
+      "suggestedFutureValidation": "Using an isolated synthetic service after a successful durable mutation and graceful stop, separately truncate its journal to zero, remove its journal, and remove its last complete line. Restart must refuse rather than announce ready. This review did not execute these scenarios.",
+      "runtimeReproduced": false
+    },
+    {
+      "id": "B-CLI-1",
+      "side": "B",
+      "severity": "bounded client correctness",
+      "material": false,
+      "title": "A valid opaque lease token beginning-- cannot be submitted by the CLI",
+      "evidence": [
+        "B/cli.mjs:49-53",
+        "B/cli.mjs:90-90",
+        "B/backend/storage.mjs:14-15"
+      ],
+      "reasoning": "Flag values starting-- are rejected as missing. Random base64url tokens may legitimately have this prefix; the literal token should remain opaque.",
+      "runtimeReproduced": false
+    }
+  ],
+  "blindingLimits": [
+    "Reviewer knew the general task and instrument design before seeing A/B, including earlier reference qualification work.",
+    "An agent-availability tool incidentally exposed aggregate tool counts without runtime identity, label mapping, cost, acceptance result or source; no paid output files were read before the bundle.",
+    "Submitted source includes authored QA/review/test claims. Those are source artifacts, not independently observed acceptance results."
+  ],
+  "reviewLimits": [
+    "Static findings describe this exact final source bundle. No runtime reproduction, external functional results, performance, security certification, power-loss or statistical significance claim.",
+    "Public creation-replay wording is ambiguous; A-API-1 is explicitly bounded and not considered a decisive critical defect.",
+    "Hashes/anchors detect accidental or unrehashed corruption, not an administrator able to rewrite all integrity metadata.",
+    "A discloses a durable owner-derivation secret: DATA_DIR and backups must remain credential-sensitive. This is not encryption at rest.",
+    "The frozen comparison gate applies to every named dimension for each reviewer. A higher total cannot override a lower dimension."
+  ]
+}
