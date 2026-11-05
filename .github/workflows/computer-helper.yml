@@ -424,7 +424,7 @@ jobs:
       - name: Build the source-bound never-shipped native overlay stage
         if: ${{ steps.overlay-restore.outputs.restored != 'true' && (needs.plan.outputs.desktop == 'true') }}
         timeout-minutes: 20
-        run: bun --no-env-file ./scripts/build-computer-overlay-smoke.ts --platform darwin --helper native/out/darwin --out native/out/overlay-darwin
+        run: bun --no-env-file ./scripts/diagnose-build-computer-overlay-smoke.ts --platform darwin --helper native/out/darwin --out native/out/overlay-darwin
       - name: Run actual isolated macOS overlay Stop and capture
         if: ${{ inputs['isolated-desktop'] && (needs.plan.outputs.desktop == 'true') }}
         timeout-minutes: 3
@@ -754,7 +754,7 @@ jobs:
         if: ${{ steps.overlay-restore.outputs.restored != 'true' && (needs.plan.outputs.desktop == 'true') }}
         timeout-minutes: 20
         run: |
-          bun --no-env-file ./scripts/build-computer-overlay-smoke.ts --platform win32 --helper native/out/win32/x64 --out native/out/overlay-win32
+          bun --no-env-file ./scripts/diagnose-build-computer-overlay-smoke.ts --platform win32 --helper native/out/win32/x64 --out native/out/overlay-win32
           if ($LASTEXITCODE -ne 0) { throw "The never-shipped Windows overlay stage build failed." }
       - name: Run actual isolated medium-token Windows overlay Stop
         if: ${{ inputs['isolated-desktop'] && (needs.plan.outputs.desktop == 'true') }}
