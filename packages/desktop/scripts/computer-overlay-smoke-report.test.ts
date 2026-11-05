@@ -50,19 +50,34 @@ const parse = (value: unknown, options: { platform?: string; exitCode?: number; 
     requireNative: options.requireNative,
   })
 
-test("geometry diagnostics retain only bounded owned-window rectangles and a fixed kind", () => {
+test("geometry diagnostics retain only bounded owned-window rectangles, native sizes and a fixed kind", () => {
   const value = {
     protocol: 1,
     window: 3,
     kind: "left",
     expected: { x: -1920, y: 12, width: 12, height: 1056 },
     actual: { x: -1920, y: 12, width: 64, height: 1056 },
+    minimum: [12, 1056],
+    maximum: [0, 0],
+    content: [64, 1056],
   }
   const line = (value: unknown) => COMPUTER_SMOKE_GEOMETRY_MARK + JSON.stringify(value)
   const parsed = parseComputerSmokeGeometry(line(value))
   expect(parsed).toEqual(value)
   expect(parsed).not.toBe(value)
   expect(parsed.expected).not.toBe(value.expected)
+  expect(parsed.minimum).not.toBe(value.minimum)
+  expect(parsed.maximum).not.toBe(value.maximum)
+  expect(parsed.content).not.toBe(value.content)
+  const failed = report("win32")
+  failed.checks[1] = { name: "overlay-bounds", ok: false, reason: "assertion_failed" }
+  const stdout = line(value) + "\n" + COMPUTER_SMOKE_MARK + JSON.stringify(failed)
+  expect(parseComputerSmokeReport(stdout, { electron: failed.electron, platform: "win32", exitCode: 1 })).toEqual(
+    failed,
+  )
+  expect(() =>
+    parseComputerSmokeReport(stdout, { electron: failed.electron, platform: "win32", exitCode: 0 }),
+  ).toThrow()
   for (const patch of [
     { protocol: 2 },
     { window: -1 },
@@ -77,6 +92,14 @@ test("geometry diagnostics retain only bounded owned-window rectangles and a fix
     { actual: { ...value.actual, x: 1_000_001 } },
     { actual: { ...value.actual, y: Number.POSITIVE_INFINITY } },
     { actual: { ...value.actual, width: "64" } },
+    { minimum: undefined },
+    { minimum: [12] },
+    { maximum: [0, 0, 1] },
+    { content: [64, "PRIVATE"] },
+    { minimum: [-1, 24] },
+    { maximum: [0, 1_000_001] },
+    { content: [1, Number.NaN] },
+    { content: { width: 64, height: 1056 } },
     { display: "PRIVATE" },
   ])
     expect(() => parseComputerSmokeGeometry(line({ ...value, ...patch }))).toThrow()

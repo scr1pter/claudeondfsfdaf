@@ -37,7 +37,7 @@ function expression(
   event = "workflow_dispatch",
   ref = "refs/heads/hands",
   needs: Record<string, unknown> = {},
-  status: { cancelled?: boolean } = {},
+  status: { cancelled?: boolean; success?: boolean; steps?: Record<string, unknown> } = {},
 ) {
   // GitHub permits hyphens in dotted property names; translate those accesses outside string literals.
   const code = value
@@ -52,6 +52,8 @@ function expression(
       needs,
       always: () => true,
       cancelled: () => status.cancelled ?? false,
+      success: () => status.success ?? true,
+      steps: status.steps ?? {},
       github: {
         workflow: "test",
         ref,
@@ -449,6 +451,7 @@ test("focused Node smoke keeps normal CI gates and uses its own cancellation gro
     computer_helper_windows_units_only: true,
     computer_helper_macos_signing_only: true,
     computer_helper_macos_overlay_only: true,
+    computer_helper_windows_overlay_only: true,
     hands_ui: true,
     hands_benchmark: true,
   }
@@ -462,6 +465,7 @@ test("focused Node smoke keeps normal CI gates and uses its own cancellation gro
         "computer-helper-windows-units",
         "computer-helper-macos-signing",
         "computer-helper-macos-overlay",
+        "computer-helper-windows-overlay",
       ].includes(name)
     ) {
       expect(expression(String(current.if), {}), name).toBe(true)
@@ -711,7 +715,7 @@ test("x64 unit diagnostics require explicit native dispatch and keep independent
   expect(new Set(modes.map((mode) => group(record(main.document.concurrency).group, mode))).size).toBe(modes.length)
 })
 
-test("x64 diagnostics reuse exact bounded native checks and publish no release evidence", () => {
+test("x64 diagnostics reuse bounded native checks and isolated scenarios without release evidence", () => {
   const diagnostic = record(record(main.document.jobs)["computer-helper-windows-units"])
   expect(diagnostic["runs-on"]).toBe("windows-2025")
   expect(diagnostic.permissions).toEqual({ contents: "read" })
@@ -734,7 +738,7 @@ test("x64 diagnostics reuse exact bounded native checks and publish no release e
     /--arch (?:arm64|x64,arm64)|--privileged (?:auto|require)|--native-stage|tar -|native-ready/,
   )
   const uploads = current.filter((step) => String(step.uses).includes("upload-artifact"))
-  expect(uploads).toHaveLength(2)
+  expect(uploads).toHaveLength(3)
   expect(uploads[0]!.if).toBe("${{ always() }}")
   expect(uploads[0]!.with).toEqual({
     name: "computer-helper-win32-x64-diagnostic-${{ github.sha }}-${{ github.run_attempt }}",
@@ -791,6 +795,37 @@ test("x64 diagnostics reuse exact bounded native checks and publish no release e
   expect(current.indexOf(compile)).toBeGreaterThan(current.indexOf(protocol))
   expect(current.indexOf(paired)).toBeGreaterThan(current.indexOf(compile))
   expect(current.indexOf(uploads[1]!)).toBeGreaterThan(current.indexOf(paired))
+  const isolated = current.find((step) => step.name === "Run explicitly isolated Windows scenarios")!
+  const originalIsolated = steps(job("windows-build")).find((step) => step.name === isolated.name)!
+  expect(isolated.run).toBe(originalIsolated.run)
+  expect(isolated["timeout-minutes"]).toBe(originalIsolated["timeout-minutes"])
+  expect(isolated["continue-on-error"]).toBe(true)
+  expect(isolated.env).toEqual({ PRIVILEGED_REQUIRED: "false", VECTOR_COMPUTER_TEST_ISOLATED: "1" })
+  expect(current.indexOf(isolated)).toBeGreaterThan(current.indexOf(protocol))
+  for (const successful of [false, true])
+    for (const outcome of ["success", "failure", "skipped", "cancelled"])
+      expect(
+        expression(
+          String(isolated.if),
+          {},
+          "workflow_dispatch",
+          "refs/heads/hands",
+          {},
+          {
+            success: successful,
+            steps: { required_protocol: { outcome } },
+          },
+        ),
+      ).toBe(successful && outcome === "success")
+  expect(uploads[2]!.if).toBe("${{ always() }}")
+  expect(uploads[2]!.with).toEqual({
+    name: "computer-helper-win32-x64-isolated-diagnostic-${{ github.sha }}-${{ github.run_attempt }}",
+    path: "${{ runner.temp }}/computer-win32-privileged.json",
+    "if-no-files-found": "ignore",
+    overwrite: false,
+    "retention-days": 7,
+  })
+  expect(current.indexOf(uploads[2]!)).toBeGreaterThan(current.indexOf(isolated))
   const release = record(workflow("vector-desktop-release.yml").document.jobs)
   for (const name of ["mac", "windows"]) expect(record(release[name]).needs).toContain("computer-helper")
   for (const value of Object.values(release))
@@ -1011,4 +1046,117 @@ test("the fast macOS overlay lane runs the real pinned Electron commands without
   const release = record(workflow("vector-desktop-release.yml").document.jobs)
   for (const value of Object.values(release))
     expect(JSON.stringify(value)).not.toContain("computer-helper-macos-overlay")
+})
+
+test("Windows overlay diagnostics isolate actual job routing and every incompatible selector before setup", () => {
+  const inputs = record(record(record(main.document.on).workflow_dispatch).inputs)
+  expect(inputs.computer_helper_windows_overlay_only).toMatchObject({ type: "boolean", default: false })
+  expect(Object.keys(inputs).length).toBeLessThanOrEqual(10)
+  const all = record(main.document.jobs)
+  const diagnostic = record(all["computer-helper-windows-overlay"])
+  const selected = { computer_helper: true, computer_helper_windows_overlay_only: true }
+  for (const event of ["workflow_dispatch", "pull_request", "push"])
+    for (const native of [false, true])
+      for (const overlay of [false, true])
+        expect(
+          expression(
+            String(diagnostic.if),
+            {
+              computer_helper: native,
+              computer_helper_windows_overlay_only: overlay,
+            },
+            event,
+          ),
+        ).toBe(event === "workflow_dispatch" && native && overlay)
+  const flags = [
+    "computer_helper_windows_only",
+    "computer_helper_linux_only",
+    "computer_helper_windows_units_only",
+    "computer_helper_macos_signing_only",
+    "computer_helper_macos_overlay_only",
+  ]
+  const current = steps(diagnostic)
+  const guard = current[0]!
+  expect(guard.name).toBe("Reject incompatible overlay selectors before setup")
+  expect(guard.shell).toBe("bash")
+  const names = ["WINDOWS_ONLY", "LINUX_ONLY", "WINDOWS_UNITS_ONLY", "MACOS_SIGNING_ONLY", "MACOS_OVERLAY_ONLY"]
+  const modes: Record<string, unknown>[] = []
+  for (let bits = 0; bits < 32; bits++) {
+    const mode: Record<string, unknown> = {
+      ...selected,
+      ...Object.fromEntries(flags.map((flag, index) => [flag, Boolean(bits & (1 << index))])),
+    }
+    modes.push(mode)
+    for (const [name, value] of Object.entries(all))
+      expect(expression(String(record(value).if), mode), name).toBe(name === "computer-helper-windows-overlay")
+    for (const [name, source] of Object.entries(record(guard.env)))
+      expect(expression(String(source), mode), name).toBe(mode[flags[names.indexOf(name)]!])
+    const rejected = spawnSync("bash", ["--noprofile", "--norc", "-c", String(guard.run)], {
+      env: {
+        ...process.env,
+        ...Object.fromEntries(names.map((name, index) => [name, String(Boolean(bits & (1 << index)))])),
+      },
+      encoding: "utf8",
+      timeout: 5000,
+    })
+    expect(rejected.status).toBe(bits === 0 ? 0 : 1)
+    if (bits !== 0) expect(rejected.stdout).toContain("require all other platform selectors to be off")
+  }
+  for (const [name, value] of Object.entries(all))
+    for (const event of ["workflow_dispatch", "pull_request", "push"])
+      expect(expression(String(record(value).if), { computer_helper_windows_overlay_only: true }, event), name).toBe(
+        expression(String(record(value).if), {}, event),
+      )
+  const concurrency = record(main.document.concurrency).group
+  expect(new Set(modes.map((mode) => group(concurrency, mode))).size).toBe(modes.length)
+  for (const mode of [
+    {},
+    { computer_helper: true },
+    { computer_helper: true, computer_helper_windows_only: true },
+    { computer_helper: true, computer_helper_linux_only: true },
+    { computer_helper: true, computer_helper_windows_units_only: true },
+    { computer_helper: true, computer_helper_macos_overlay_only: true },
+    { computer_helper: true, computer_helper_macos_signing_only: true },
+    { desktop_engine_node: true },
+  ])
+    expect(group(concurrency, selected)).not.toBe(group(concurrency, mode))
+})
+
+test("the fast Windows overlay lane preserves stock Electron assertions and bounded logs without native or release work", () => {
+  const diagnostic = record(record(main.document.jobs)["computer-helper-windows-overlay"])
+  expect(diagnostic["runs-on"]).toBe("windows-2025")
+  expect(diagnostic.permissions).toEqual({ contents: "read" })
+  expect(record(diagnostic.defaults).run).toEqual({ shell: "pwsh", "working-directory": "packages/desktop" })
+  for (const key of ["outputs", "needs", "continue-on-error", "environment"]) expect(diagnostic[key]).toBeUndefined()
+  const current = steps(diagnostic)
+  const original = steps(job("windows-build"))
+  const install = current.find((step) => step.name === "Install the exact pinned Electron runtime")!
+  expect(install.run).toBe(original.find((step) => step.name === "Install the exact pinned Electron runtime")?.run)
+  const smoke = current.find((step) => step.name === "Run real Electron overlay properties and controller lifecycle")!
+  expect(smoke.run).toContain("bun --no-env-file ./scripts/computer-overlay-smoke.ts 2>&1 | Tee-Object")
+  expect(smoke.run).toContain(
+    'if ($LASTEXITCODE -ne 0) { throw "The actual Electron overlay properties or controller lifecycle failed." }',
+  )
+  expect(smoke["timeout-minutes"]).toBe(3)
+  expect(smoke["continue-on-error"]).toBeUndefined()
+  const upload = current.at(-1)!
+  expect(upload.if).toBe("${{ always() }}")
+  expect(upload.with).toEqual({
+    name: "computer-overlay-win32-diagnostic-${{ github.sha }}-${{ github.run_attempt }}",
+    path: "${{ runner.temp }}/computer-win32-overlay-diagnostic.log",
+    "if-no-files-found": "ignore",
+    overwrite: false,
+    "retention-days": 7,
+  })
+  expect(commands(diagnostic)).toContain("bun install --frozen-lockfile --ignore-scripts")
+  expect(commands(diagnostic)).not.toMatch(
+    /build-computer-helper|computer-helper-selftest|--native-stage|--require-native|signing-fixture|tar -|native-ready/,
+  )
+  for (const step of current) {
+    if (typeof step.uses === "string") expect(step.uses).toMatch(/^[\w.-]+\/[\w./-]+@[a-f0-9]{40}$/)
+    expect(step.env === undefined || !JSON.stringify(step.env).includes("VECTOR_COMPUTER_TEST_ISOLATED")).toBe(true)
+  }
+  const release = record(workflow("vector-desktop-release.yml").document.jobs)
+  for (const value of Object.values(release))
+    expect(JSON.stringify(value)).not.toContain("computer-helper-windows-overlay")
 })

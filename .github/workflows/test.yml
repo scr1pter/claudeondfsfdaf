@@ -32,8 +32,13 @@ on:
         type: boolean
         required: false
         default: false
+      computer_helper_windows_overlay_only:
+        description: Diagnose only real Windows Electron overlay/controller behavior with computer_helper
+        type: boolean
+        required: false
+        default: false
       computer_helper_windows_units_only:
-        description: Diagnose x64 native units and protocol with computer_helper; no release evidence
+        description: Diagnose x64 native unit, protocol and isolated scenarios; no release evidence
         type: boolean
         required: false
         default: false
@@ -60,7 +65,7 @@ concurrency:
   # because every format() result is a non-empty string and can never read as falsy.
   # Native checks, Node bundle smoke, UI checks and benchmarks have separate cancellation groups.
   # The native selector takes precedence; otherwise both Hands flags run their two focused jobs together.
-  group: ${{ github.event_name == 'workflow_dispatch' && inputs.desktop_engine_node && format('{0}-desktop-engine-node-{1}', github.workflow, github.ref) || github.event_name == 'workflow_dispatch' && inputs.computer_helper && format('{0}-computer-helper{1}{2}{3}{4}{5}-{6}', github.workflow, inputs.computer_helper_windows_only && '-windows-only' || '', inputs.computer_helper_linux_only && '-linux-only' || '', inputs.computer_helper_windows_units_only && '-windows-units-only' || '', inputs.computer_helper_macos_signing_only && '-macos-signing-only' || '', inputs.computer_helper_macos_overlay_only && '-macos-overlay-only' || '', github.ref) || github.event_name == 'workflow_dispatch' && inputs.hands_ui && format('{0}-hands-ui{1}-{2}', github.workflow, inputs.hands_benchmark && '-benchmark' || '', github.ref) || (github.event_name == 'workflow_dispatch' && inputs.hands_benchmark && format('{0}-hands-benchmark-{1}', github.workflow, github.ref) || (github.ref == 'refs/heads/main' && format('{0}-{1}', github.workflow, github.run_id) || format('{0}-{1}', github.workflow, github.event.pull_request.number || github.ref))) }}
+  group: ${{ github.event_name == 'workflow_dispatch' && inputs.desktop_engine_node && format('{0}-desktop-engine-node-{1}', github.workflow, github.ref) || github.event_name == 'workflow_dispatch' && inputs.computer_helper && format('{0}-computer-helper{1}{2}{3}{4}{5}{6}-{7}', github.workflow, inputs.computer_helper_windows_only && '-windows-only' || '', inputs.computer_helper_linux_only && '-linux-only' || '', inputs.computer_helper_windows_units_only && '-windows-units-only' || '', inputs.computer_helper_macos_signing_only && '-macos-signing-only' || '', inputs.computer_helper_macos_overlay_only && '-macos-overlay-only' || '', inputs.computer_helper_windows_overlay_only && '-windows-overlay-only' || '', github.ref) || github.event_name == 'workflow_dispatch' && inputs.hands_ui && format('{0}-hands-ui{1}-{2}', github.workflow, inputs.hands_benchmark && '-benchmark' || '', github.ref) || (github.event_name == 'workflow_dispatch' && inputs.hands_benchmark && format('{0}-hands-benchmark-{1}', github.workflow, github.ref) || (github.ref == 'refs/heads/main' && format('{0}-{1}', github.workflow, github.run_id) || format('{0}-{1}', github.workflow, github.event.pull_request.number || github.ref))) }}
   cancel-in-progress: true
 
 permissions:
@@ -72,7 +77,7 @@ env:
 
 jobs:
   computer-helper:
-    if: github.event_name != 'workflow_dispatch' || (!inputs.desktop_engine_node && !(inputs.computer_helper && (inputs.computer_helper_windows_units_only || inputs.computer_helper_macos_signing_only || inputs.computer_helper_macos_overlay_only)) && (inputs.computer_helper || (!inputs.hands_benchmark && !inputs.hands_ui)))
+    if: github.event_name != 'workflow_dispatch' || (!inputs.desktop_engine_node && !(inputs.computer_helper && (inputs.computer_helper_windows_units_only || inputs.computer_helper_macos_signing_only || inputs.computer_helper_macos_overlay_only || inputs.computer_helper_windows_overlay_only)) && (inputs.computer_helper || (!inputs.hands_benchmark && !inputs.hands_ui)))
     uses: ./.github/workflows/computer-helper.yml
     permissions:
       contents: read
@@ -86,8 +91,8 @@ jobs:
       isolated-desktop: true
 
   computer-helper-windows-units:
-    name: Windows x64 native unit and protocol diagnostic (no release evidence)
-    if: github.event_name == 'workflow_dispatch' && !inputs.desktop_engine_node && inputs.computer_helper == true && inputs.computer_helper_windows_units_only == true && !inputs.computer_helper_macos_signing_only && !inputs.computer_helper_macos_overlay_only
+    name: Windows x64 native unit, protocol and isolated scenario diagnostic (no release evidence)
+    if: github.event_name == 'workflow_dispatch' && !inputs.desktop_engine_node && inputs.computer_helper == true && inputs.computer_helper_windows_units_only == true && !inputs.computer_helper_macos_signing_only && !inputs.computer_helper_macos_overlay_only && !inputs.computer_helper_windows_overlay_only
     runs-on: windows-2025
     timeout-minutes: 30
     permissions:
@@ -180,6 +185,17 @@ jobs:
         run: |
           bun --no-env-file ./scripts/computer-helper-selftest-node.ts --platform win32 --bin native/out/win32/x64/vector-computer.exe --tests native/out/win32/x64/tests --privileged off --report "$env:RUNNER_TEMP/computer-win32-core.json"
           if ($LASTEXITCODE -ne 0) { throw "Required Windows conformance failed." }
+      - name: Run explicitly isolated Windows scenarios
+        if: ${{ success() && steps.required_protocol.outcome == 'success' }}
+        timeout-minutes: 5
+        continue-on-error: true
+        env:
+          PRIVILEGED_REQUIRED: "false"
+          VECTOR_COMPUTER_TEST_ISOLATED: "1"
+        run: |
+          $mode = if ($env:PRIVILEGED_REQUIRED -eq "true") { "require" } else { "auto" }
+          bun --no-env-file ./scripts/computer-helper-selftest-node.ts --platform win32 --bin native/out/win32/x64/vector-computer.exe --tests native/out/win32/x64/tests --privileged $mode --report "$env:RUNNER_TEMP/computer-win32-privileged.json"
+          if ($LASTEXITCODE -ne 0) { throw "The isolated Windows scenarios failed or were required but skipped." }
       - name: Compile the direct Node Windows self-test diagnostic
         id: direct_node_compile
         if: ${{ failure() && steps.required_protocol.outcome == 'failure' }}
@@ -213,10 +229,84 @@ jobs:
           if-no-files-found: ignore
           overwrite: false
           retention-days: 7
+      - name: Preserve the optional isolated scenario diagnostic report
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: computer-helper-win32-x64-isolated-diagnostic-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/computer-win32-privileged.json
+          if-no-files-found: ignore
+          overwrite: false
+          retention-days: 7
+
+  computer-helper-windows-overlay:
+    name: Windows Electron overlay/controller diagnostic (no release evidence)
+    if: github.event_name == 'workflow_dispatch' && !inputs.desktop_engine_node && inputs.computer_helper == true && inputs.computer_helper_windows_overlay_only == true
+    runs-on: windows-2025
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: packages/desktop
+    steps:
+      - name: Reject incompatible overlay selectors before setup
+        shell: bash
+        working-directory: .
+        env:
+          WINDOWS_ONLY: ${{ inputs.computer_helper_windows_only || false }}
+          LINUX_ONLY: ${{ inputs.computer_helper_linux_only || false }}
+          WINDOWS_UNITS_ONLY: ${{ inputs.computer_helper_windows_units_only || false }}
+          MACOS_SIGNING_ONLY: ${{ inputs.computer_helper_macos_signing_only || false }}
+          MACOS_OVERLAY_ONLY: ${{ inputs.computer_helper_macos_overlay_only || false }}
+        run: |
+          set -euo pipefail
+          if [[ "$WINDOWS_ONLY" == true || "$LINUX_ONLY" == true || "$WINDOWS_UNITS_ONLY" == true || "$MACOS_SIGNING_ONLY" == true || "$MACOS_OVERLAY_ONLY" == true ]]; then
+            echo "::error::Windows overlay diagnostics require all other platform selectors to be off."
+            exit 1
+          fi
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: package.json
+      - name: Install frozen dependencies without lifecycle scripts
+        timeout-minutes: 10
+        working-directory: .
+        run: |
+          bun install --frozen-lockfile --ignore-scripts
+          if ($LASTEXITCODE -ne 0) { throw "Frozen dependency installation failed." }
+      - name: Install the exact pinned Electron runtime
+        timeout-minutes: 5
+        run: |
+          node node_modules/electron/install.js
+          if ($LASTEXITCODE -ne 0) { throw "The pinned Electron installation failed." }
+      - name: Run real Electron overlay properties and controller lifecycle
+        timeout-minutes: 3
+        run: |
+          bun --no-env-file ./scripts/computer-overlay-smoke.ts 2>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP/computer-win32-overlay-diagnostic.log"
+          if ($LASTEXITCODE -ne 0) { throw "The actual Electron overlay properties or controller lifecycle failed." }
+      - name: Preserve the bounded overlay diagnostic report
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: computer-overlay-win32-diagnostic-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/computer-win32-overlay-diagnostic.log
+          if-no-files-found: ignore
+          overwrite: false
+          retention-days: 7
 
   computer-helper-macos-signing:
     name: macOS temporary certificate diagnostic (no release evidence)
-    if: github.event_name == 'workflow_dispatch' && !inputs.desktop_engine_node && inputs.computer_helper == true && inputs.computer_helper_macos_signing_only == true && !inputs.computer_helper_macos_overlay_only
+    if: github.event_name == 'workflow_dispatch' && !inputs.desktop_engine_node && inputs.computer_helper == true && inputs.computer_helper_macos_signing_only == true && !inputs.computer_helper_macos_overlay_only && !inputs.computer_helper_windows_overlay_only
     runs-on: macos-15
     timeout-minutes: 20
     permissions:
@@ -275,7 +365,7 @@ jobs:
 
   computer-helper-macos-overlay:
     name: macOS Electron overlay/controller diagnostic (no release evidence)
-    if: github.event_name == 'workflow_dispatch' && !inputs.desktop_engine_node && inputs.computer_helper == true && inputs.computer_helper_macos_overlay_only == true
+    if: github.event_name == 'workflow_dispatch' && !inputs.desktop_engine_node && inputs.computer_helper == true && inputs.computer_helper_macos_overlay_only == true && !inputs.computer_helper_windows_overlay_only
     runs-on: macos-15
     timeout-minutes: 20
     permissions:

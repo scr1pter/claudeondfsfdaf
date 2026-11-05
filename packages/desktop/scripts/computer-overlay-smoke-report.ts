@@ -166,6 +166,9 @@ export type ComputerSmokeGeometry = {
   kind: "top" | "right" | "bottom" | "left" | "banner"
   expected: { x: number; y: number; width: number; height: number }
   actual: { x: number; y: number; width: number; height: number }
+  minimum: [number, number]
+  maximum: [number, number]
+  content: [number, number]
 }
 /** Failure-only owned-window coordinates; no display identifiers or window content. */
 export function parseComputerSmokeGeometry(line: string): ComputerSmokeGeometry {
@@ -181,10 +184,16 @@ export function parseComputerSmokeGeometry(line: string): ComputerSmokeGeometry 
     ) &&
     Number(value.width) > 0 &&
     Number(value.height) > 0
+  const size = (value: unknown): value is [number, number] =>
+    Array.isArray(value) &&
+    value.length === 2 &&
+    value.every(
+      (number) => typeof number === "number" && Number.isSafeInteger(number) && number >= 0 && number <= 1_000_000,
+    )
   if (
     !record(value) ||
-    !exact(value, ["protocol", "window", "kind", "expected", "actual"]) ||
-    Object.keys(value).length !== 5 ||
+    !exact(value, ["protocol", "window", "kind", "expected", "actual", "minimum", "maximum", "content"]) ||
+    Object.keys(value).length !== 8 ||
     value.protocol !== 1 ||
     typeof value.window !== "number" ||
     !Number.isSafeInteger(value.window) ||
@@ -193,7 +202,10 @@ export function parseComputerSmokeGeometry(line: string): ComputerSmokeGeometry 
     typeof value.kind !== "string" ||
     !["top", "right", "bottom", "left", "banner"].includes(value.kind) ||
     !rectangle(value.expected) ||
-    !rectangle(value.actual)
+    !rectangle(value.actual) ||
+    !size(value.minimum) ||
+    !size(value.maximum) ||
+    !size(value.content)
   )
     throw new Error("The computer smoke geometry receipt is invalid.")
   const copy = (value: Record<string, unknown>) => ({
@@ -208,6 +220,9 @@ export function parseComputerSmokeGeometry(line: string): ComputerSmokeGeometry 
     kind: value.kind as ComputerSmokeGeometry["kind"],
     expected: copy(value.expected as Record<string, unknown>),
     actual: copy(value.actual as Record<string, unknown>),
+    minimum: [value.minimum[0], value.minimum[1]],
+    maximum: [value.maximum[0], value.maximum[1]],
+    content: [value.content[0], value.content[1]],
   }
 }
 export const COMPUTER_SMOKE_CONTROLLER_STEPS = [

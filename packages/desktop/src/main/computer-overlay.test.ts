@@ -341,43 +341,6 @@ describe("computer overlay windows", () => {
     f.overlay.close()
   })
 
-  test("Windows restores thin requested bounds before loading or showing inflated constructor windows", async () => {
-    const f = fixture(1, "win32")
-    const create = f.electron.createWindow
-    const inflated: FakeWindow[] = []
-    const loaded: { expected: FakeWindow["bounds"]; actual: FakeWindow["bounds"]; visible: boolean }[] = []
-    f.electron.createWindow = (config) => {
-      const result = create(config)
-      const window = f.windows.at(-1)!
-      const expected = { ...window.bounds }
-      if (expected.height === 24 && expected.width > 24) {
-        window.bounds.height = 39
-        inflated.push(window)
-      }
-      const load = window.loadURL.bind(window)
-      window.loadURL = (url) => {
-        loaded.push({ expected, actual: { ...window.bounds }, visible: window.visible })
-        return load(url)
-      }
-      return result
-    }
-    await f.open(state({ backend: "local-windows" }))
-    expect(inflated).toHaveLength(2)
-    expect(loaded).toHaveLength(5)
-    for (const entry of loaded) {
-      expect(entry.actual).toEqual(entry.expected)
-      expect(entry.visible).toBe(false)
-    }
-    for (const window of inflated) {
-      const expected = { x: window.config.x!, y: window.config.y!, width: window.config.width!, height: 24 }
-      expect(window.bounds).toEqual(expected)
-      expect(window.calls[0]).toEqual({ method: "setBounds", args: [expected] })
-    }
-    f.overlay.close()
-    expect(f.clock.count()).toBe(0)
-    expect(f.live()).toHaveLength(0)
-  })
-
   test("Windows protects content before show and preserves 64-bit HWND identities", async () => {
     const f = fixture(1, "win32")
     await f.open(state({ backend: "local-windows" }))

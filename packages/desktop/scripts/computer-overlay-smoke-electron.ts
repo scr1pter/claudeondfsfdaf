@@ -253,8 +253,19 @@ async function properties() {
         if (rectangle(actual) === rectangle(bounds)) continue
         const kind =
           index === expected.length - 1 ? "banner" : (["top", "right", "bottom", "left"] as const)[index % 4]!
+        const content = record.window.getContentBounds()
         const line =
-          COMPUTER_SMOKE_GEOMETRY_MARK + JSON.stringify({ protocol: 1, window, kind, expected: bounds, actual })
+          COMPUTER_SMOKE_GEOMETRY_MARK +
+          JSON.stringify({
+            protocol: 1,
+            window,
+            kind,
+            expected: bounds,
+            actual,
+            minimum: record.window.getMinimumSize(),
+            maximum: record.window.getMaximumSize(),
+            content: [content.width, content.height],
+          })
         process.stdout.write(COMPUTER_SMOKE_GEOMETRY_MARK + JSON.stringify(parseComputerSmokeGeometry(line)) + "\n")
       } catch {
         // Missing windows or out-of-bound diagnostics cannot replace the exact assertion below.

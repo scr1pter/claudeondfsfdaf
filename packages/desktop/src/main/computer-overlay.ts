@@ -298,9 +298,6 @@ export function createComputerOverlay(options: {
     }
     const timeout = time.setTimeout(fail, 5000)
     windows.set(key, record)
-    // Restore thin Windows bounds after construction; Electron resets fixed-size constraints here.
-    // https://github.com/electron/electron/blob/v42.11.4/shell/browser/native_window_views.cc#L889-L898
-    if (options.platform === "win32") window.setBounds(bounds)
     configureComputerOverlayWindow(window, options.platform)
     window.webContents.setWindowOpenHandler(() => ({ action: "deny" }))
     const navigate = (event: { preventDefault(): void }) => event.preventDefault()
