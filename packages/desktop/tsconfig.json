@@ -26,6 +26,7 @@
     "scripts/build-computer-helper.ts",
     "scripts/computer-helper-selftest.ts",
     "scripts/computer-helper-selftest-node.ts",
+    "scripts/computer-helper-unit-diagnostics.ts",
     "test/computer/bridge-node.ts",
     "test/computer/helper-node.ts",
     "test/computer/fake-desktop.ts",
