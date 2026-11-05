@@ -36,6 +36,7 @@ import {
 } from "./computer-overlay-smoke-source"
 import { computerOverlayStagePaths, verifyComputerOverlayStage } from "./computer-overlay-smoke-stage"
 import { binaryArchitectures } from "./verify-native"
+import { prepareComputerOverlayElectronRuntime } from "./computer-overlay-electron-runtime"
 
 type OverlayCompilerPlugin = {
   name: string
@@ -316,6 +317,15 @@ export async function buildComputerOverlaySmoke(
       errorOnExist: true,
       force: false,
     })
+    if (options.platform === "darwin")
+      await prepareComputerOverlayElectronRuntime({
+        source: path.join(distribution, "Electron.app"),
+        copy: path.join(target, "electron/Electron.app"),
+        directory,
+        run: command,
+        environment,
+        write: (message) => process.stdout.write(message),
+      })
     await mkdir(path.join(target, "smoke"))
     for (const { entry, options: compile } of computerOverlayBundlePlan(
       directory,

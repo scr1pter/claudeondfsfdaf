@@ -57,6 +57,8 @@ export const COMPUTER_HELPER_BUILD_INPUTS = Object.freeze([
   "scripts/computer-helper-identity.ts",
   "scripts/channel-ids.ts",
   "scripts/build-computer-overlay-smoke.ts",
+  "scripts/computer-overlay-electron-runtime.ts",
+  "resources/entitlements.plist",
   "scripts/computer-overlay-smoke-source.ts",
   "scripts/computer-overlay-smoke-stage.ts",
   "scripts/computer-overlay-smoke-artifact.ts",

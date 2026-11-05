@@ -1,11 +1,12 @@
 import { createHash } from "node:crypto"
-import { cp, lstat, mkdtemp, readFile, readdir, readlink, realpath, rm, writeFile } from "node:fs/promises"
+import { cp, lstat, mkdtemp, readFile, readdir, readlink, realpath, rm } from "node:fs/promises"
 import { createRequire } from "node:module"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { runNativeCommand, type NativeCommand } from "./build-computer-helper"
 import { boundedDiagnostic } from "./diagnose-build-computer-overlay-smoke"
+import { prepareComputerOverlayElectronRuntime } from "./computer-overlay-electron-runtime"
 
 export function parseElectronSignatureProbeOptions(args: readonly string[]) {
   if (args.length === 0) return { sealOwnedCopy: false }
@@ -109,7 +110,6 @@ async function sealOwnedElectronCopy(
   settings: Parameters<NativeCommand>[2],
   write: (message: string) => void,
 ) {
-  const entitlementXML = new Map<string, string>()
   const command = async (step: string, binary: string, args: readonly string[], timeoutMs = 10_000) => {
     const result = await run(binary, args, { ...settings, timeoutMs })
     write(
@@ -151,7 +151,6 @@ async function sealOwnedElectronCopy(
     const runtime = [...result.stderr.matchAll(/^Runtime Version=([0-9]+(?:\.[0-9]+){0,3})\r?$/gm)]
     if (Buffer.byteLength(result.stdout) > 16_384)
       throw new Error("The owned Electron entitlement metadata exceeded its bound.")
-    entitlementXML.set(step, result.stdout.trim())
     if (
       identifier.length !== 1 ||
       !/^[A-Za-z0-9][A-Za-z0-9._-]{0,255}$/.test(identifier[0]![1] ?? "") ||
@@ -270,90 +269,14 @@ async function sealOwnedElectronCopy(
       force: false,
     })
     const deepCopy = path.join(second, "Electron.app")
-    const before = await electronTreeWitness(deepCopy, "copy", write)
-    if (before.all !== sourceBefore.all) throw new Error("The second owned Electron copy differs from the original.")
-    const profile = path.join(settings.cwd, "resources/entitlements.plist")
-    const profileInfo = await lstat(profile)
-    if (!profileInfo.isFile() || profileInfo.isSymbolicLink() || profileInfo.size > 16_384)
-      throw new Error("The fixed C4 Electron entitlement profile is invalid.")
-    const profileSha256 = hash(await readFile(profile))
-    write(`electron-signature-trial-profile mode=c4-deep-ad-hoc sha256=${profileSha256}\n`)
-    await command("c4-deep-sign", "/usr/bin/codesign", [
-      "--force",
-      "--deep",
-      "--sign",
-      "-",
-      "--options",
-      "runtime",
-      "--timestamp=none",
-      "--entitlements",
-      profile,
-      deepCopy,
-    ])
-    await command("c4-strict-all-architectures", "/usr/bin/codesign", [
-      "--verify",
-      "--strict",
-      "--all-architectures",
-      deepCopy,
-    ])
-    await command("c4-deep-strict", "/usr/bin/codesign", [
-      "--verify",
-      "--deep",
-      "--strict",
-      "--all-architectures",
-      deepCopy,
-    ])
-    const finalMetadata = await metadata("c4-metadata-after", deepCopy)
-    const exported = path.join(second, "observed-entitlements.plist")
-    await writeFile(exported, entitlementXML.get("c4-metadata-after") ?? "", { flag: "wx" })
-    const inputEntitlements = await command("c4-profile-json", "/usr/bin/plutil", [
-      "-convert",
-      "json",
-      "-o",
-      "-",
-      profile,
-    ])
-    const signedEntitlements = await command("c4-signed-entitlements-json", "/usr/bin/plutil", [
-      "-convert",
-      "json",
-      "-o",
-      "-",
-      exported,
-    ])
-    const profileApplied =
-      canonicalEntitlements(inputEntitlements.stdout) === canonicalEntitlements(signedEntitlements.stdout)
-    const after = await electronTreeWitness(deepCopy, "copy", write)
-    const sourceUnchanged = (await electronTreeWitness(source, "source", write)).all === sourceBefore.all
-    if (
-      !sourceUnchanged ||
-      !profileApplied ||
-      hash(await readFile(profile)) !== profileSha256 ||
-      finalMetadata.identifier !== "com.github.Electron" ||
-      finalMetadata.flags !== 0x10002 ||
-      finalMetadata.runtime === "none" ||
-      before.helpers < 1
-    )
-      throw new Error("The second owned-copy trial failed its source/profile/metadata proof.")
-    const version = await command(
-      "c4-owned-version",
-      path.join(deepCopy, "Contents/MacOS/Electron"),
-      ["--version"],
-      5000,
-    )
-    if (version.stdout.trim() !== "v42.11.4")
-      throw new Error("The second owned Electron version did not match 42.11.4.")
-    const proof = {
-      mode: "c4-deep-ad-hoc",
-      sourceBytesUnchanged: true,
-      nestedBytePolicy: "re-signed-not-preserved",
-      nestedBytesChanged: before.nested !== after.nested,
-      profileSha256,
-      profileApplied,
-      finalMetadata,
-      strictVerified: true,
-      deepVerified: true,
-      versionVerified: true,
-    }
+    const proof = await prepareComputerOverlayElectronRuntime({
+      source,
+      copy: deepCopy,
+      directory: settings.cwd,
+      run,
+      environment: settings.env,
+      write,
+    })
     write(
       `electron-signature-trial-second-owned-copy ${JSON.stringify(proof)} baseline-unchanged=true no-release-credit=true\n`,
     )
@@ -362,20 +285,6 @@ async function sealOwnedElectronCopy(
 }
 
 const hash = (value: Uint8Array | string) => createHash("sha256").update(value).digest("hex")
-
-function canonicalEntitlements(text: string) {
-  if (Buffer.byteLength(text) > 16_384) throw new Error("The fixed C4 entitlement JSON exceeded its bound.")
-  const value: unknown = JSON.parse(text)
-  if (!value || typeof value !== "object" || Array.isArray(value))
-    throw new Error("The fixed C4 entitlement dictionary is invalid.")
-  const entries = Object.entries(value)
-  if (
-    entries.length > 32 ||
-    entries.some(([key, field]) => !/^[A-Za-z0-9.-]{1,128}$/.test(key) || typeof field !== "boolean")
-  )
-    throw new Error("The fixed C4 entitlement dictionary is unsupported.")
-  return JSON.stringify(entries.sort(([left], [right]) => left.localeCompare(right)))
-}
 
 async function electronTreeWitness(root: string, role: "source" | "copy", write: (message: string) => void) {
   const entries: { file: string; digest: string }[] = []

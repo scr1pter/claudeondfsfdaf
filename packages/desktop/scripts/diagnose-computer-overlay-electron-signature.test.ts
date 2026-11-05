@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test"
 import { createHash } from "node:crypto"
+import { readFileSync } from "node:fs"
 import { lstat, mkdir, mkdtemp, readFile, readlink, realpath, rm, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
@@ -8,7 +9,7 @@ import {
   probeComputerOverlayElectronSignatures,
 } from "./diagnose-computer-overlay-electron-signature"
 
-const profile = "<plist><dict><key>com.apple.security.cs.allow-jit</key><true/></dict></plist>"
+const profile = readFileSync(new URL("../resources/entitlements.plist", import.meta.url), "utf8")
 
 async function fixture() {
   const root = await realpath(await mkdtemp(path.join(tmpdir(), "vector-electron-signature-test-")))
@@ -21,7 +22,7 @@ async function fixture() {
   await writeFile(path.join(app, "Contents/MacOS/Electron"), "controlled Electron bytes")
   await writeFile(
     path.join(app, "Contents/Info.plist"),
-    "<plist><dict><key>CFBundleIdentifier</key><string>com.github.Electron</string></dict></plist>",
+    "<plist><dict><key>CFBundleIdentifier</key><string>com.github.Electron</string><key>CFBundleShortVersionString</key><string>42.11.4</string></dict></plist>",
   )
   await mkdir(path.join(root, "resources"))
   await writeFile(path.join(root, "resources/entitlements.plist"), profile)
@@ -232,17 +233,19 @@ test("the owned root-only seal preserves invalid baselines and requires metadata
         run: async (binary, args) => {
           if (binary === "/usr/bin/plutil") {
             if (args.includes("-extract")) {
-              expect(args).toEqual([
-                "-extract",
-                "CFBundleIdentifier",
-                "raw",
-                "-o",
-                "-",
-                path.join(state.copy, "Contents/Info.plist"),
-              ])
+              expect(["CFBundleIdentifier", "CFBundleShortVersionString"]).toContain(args[1])
+              expect(args.slice(2, 5)).toEqual(["raw", "-o", "-"])
+              const app = path.dirname(path.dirname(args.at(-1)!))
+              if (app !== state.copy) state.deepCopy = app
+              expect(args.at(-1)).toBe(path.join(app, "Contents/Info.plist"))
               return {
                 code: 0,
-                stdout: mode === "wrong-bundle-id" ? "other.bundle\n" : "com.github.Electron\n",
+                stdout:
+                  args[1] === "CFBundleShortVersionString"
+                    ? "42.11.4\n"
+                    : mode === "wrong-bundle-id"
+                      ? "other.bundle\n"
+                      : "com.github.Electron\n",
                 stderr: "",
               }
             }
@@ -251,8 +254,12 @@ test("the owned root-only seal preserves invalid baselines and requires metadata
               code: 0,
               stdout: JSON.stringify({
                 "com.apple.security.cs.allow-jit": !(
-                  mode === "c4-profile-mismatch" && args.at(-1)?.endsWith("observed-entitlements.plist")
+                  mode === "c4-profile-mismatch" && args.at(-1) !== path.join(f.root, "resources/entitlements.plist")
                 ),
+                "com.apple.security.cs.allow-unsigned-executable-memory": true,
+                "com.apple.security.cs.disable-executable-page-protection": true,
+                "com.apple.security.cs.disable-library-validation": true,
+                "com.apple.security.device.audio-input": true,
               }),
               stderr: "",
             }
@@ -265,28 +272,34 @@ test("the owned root-only seal preserves invalid baselines and requires metadata
           }
           const bundle = args.at(-1)!
           if (args.includes("--display")) {
-            expect(bundle).toBe(state.deepSealed ? state.deepCopy : state.copy)
-            const flags = !state.sealed
-              ? template
-                ? "0x20002"
-                : "0x10000"
-              : template && !state.deepSealed
-                ? "0x2"
-                : mode === "metadata-change"
+            const freshDeep = bundle !== state.copy && !state.deepSealed
+            if (freshDeep) state.deepCopy = bundle
+            expect(bundle).toBe(freshDeep || state.deepSealed ? state.deepCopy : state.copy)
+            const flags = freshDeep
+              ? "0x20002"
+              : !state.sealed
+                ? template
+                  ? "0x20002"
+                  : "0x10000"
+                : template && !state.deepSealed
                   ? "0x2"
-                  : mode === "security-flag-add"
-                    ? "0x10102"
-                    : "0x10002"
+                  : mode === "metadata-change"
+                    ? "0x2"
+                    : mode === "security-flag-add"
+                      ? "0x10102"
+                      : "0x10002"
             return {
               code: 0,
-              stdout: state.deepSealed
-                ? profile
-                : template && mode !== "unknown-linker-template"
-                  ? ""
-                  : state.sealed && mode === "entitlements-change"
-                    ? "<plist><dict><key>changed</key><true/></dict></plist>"
-                    : "<plist><dict/></plist>",
-              stderr: `Identifier=${template && !state.sealed ? "Electron" : "com.github.Electron"}\nCodeDirectory v=20500 size=400 flags=${flags}(runtime) hashes=4+4 location=embedded\n${(Number.parseInt(flags, 16) & 0x10000) === 0 ? "" : `Runtime Version=${state.sealed && mode === "runtime-change" ? "16.0.0" : "15.5.0"}\n`}`,
+              stdout: freshDeep
+                ? ""
+                : state.deepSealed
+                  ? profile
+                  : template && mode !== "unknown-linker-template"
+                    ? ""
+                    : state.sealed && mode === "entitlements-change"
+                      ? "<plist><dict><key>changed</key><true/></dict></plist>"
+                      : "<plist><dict/></plist>",
+              stderr: `Identifier=${freshDeep || (template && !state.sealed) ? "Electron" : "com.github.Electron"}\nCodeDirectory v=20500 size=400 flags=${flags}(runtime) hashes=4+4 location=embedded\n${(Number.parseInt(flags, 16) & 0x10000) === 0 ? "" : `Runtime Version=${state.sealed && mode === "runtime-change" ? "16.0.0" : "15.5.0"}\n`}`,
             }
           }
           if (args.includes("--sign")) {

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { spawn } from "node:child_process"
-import { mkdtemp, rm, writeFile } from "node:fs/promises"
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
@@ -21,6 +21,20 @@ const inputs = {
   defaultApp: Buffer.from("actual default app"),
 }
 describe("finite never-shipped overlay build contracts", () => {
+  test("prepares the copied Mac runtime before hashing driver pins and retains its final signature check", async () => {
+    const source = await readFile(new URL("./build-computer-overlay-smoke.ts", import.meta.url), "utf8")
+    const copy = source.indexOf("await cp(distribution,")
+    const prepare = source.indexOf("await prepareComputerOverlayElectronRuntime({")
+    const pins = source.indexOf("const pins = computerOverlayPinValues({")
+    expect(copy).toBeGreaterThan(0)
+    expect(prepare).toBeGreaterThan(copy)
+    expect(pins).toBeGreaterThan(prepare)
+    expect(source.slice(copy, prepare)).toContain('if (options.platform === "darwin")')
+    expect(source.slice(prepare, pins)).toContain('copy: path.join(target, "electron/Electron.app")')
+    expect(source.slice(pins)).toContain(
+      '["--verify", "--strict", "--all-architectures", path.join(target, "electron/Electron.app")]',
+    )
+  })
   test("accepts only the actual native platform and fixed helper/output arguments", () => {
     expect(
       parseComputerOverlayBuildOptions(["--platform", "darwin", "--out", "/tmp/overlay", "--helper", "/tmp/helper"])
