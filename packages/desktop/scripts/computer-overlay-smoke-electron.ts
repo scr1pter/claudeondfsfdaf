@@ -37,8 +37,11 @@ import {
   COMPUTER_SMOKE_CONTROLLER_MARK,
   type ComputerSmokeControllerStep,
   COMPUTER_SMOKE_FAILURE_MARK,
+  COMPUTER_SMOKE_EXCEPTION_MARK,
+  installComputerSmokeExceptionHooks,
   computerSmokeBannerProbe,
   computerSmokeControllerReady,
+  computerSmokeHeartbeat,
   COMPUTER_SMOKE_TRANSPARENCY_PROBE,
   computerSmokeTransparentBackground,
   type ComputerSmokePhase,
@@ -528,20 +531,21 @@ async function controllerFixture() {
     directory: request.directory,
     lease: result.lease,
   }
+  const currentLease = () => {
+    const current = controller.state()
+    return (
+      current.lease === scope.lease &&
+      current.holder?.sessionID === scope.rootSessionID &&
+      current.holder.directory === scope.directory
+    )
+  }
   engineHeartbeat = setInterval(() => {
-    void controller.heartbeat(scope).catch(() => {})
+    // Unexpected failures remain unhandled here so the smoke's fail-fast hook records them.
+    void computerSmokeHeartbeat(() => controller.heartbeat(scope), currentLease)
   }, 1000)
   await computerSmokeControllerReady(
     overlay.ready(),
-    () => {
-      const current = controller.state()
-      return (
-        current.phase === "working" &&
-        current.lease === scope.lease &&
-        current.holder?.sessionID === scope.rootSessionID &&
-        current.holder.directory === scope.directory
-      )
-    },
+    () => controller.state().phase === "working" && currentLease(),
     () => records.slice(firstWindow).map((record) => record.window),
   )
   return { helper, backend, controller, overlay, scope, fault, children, acknowledged, close }
@@ -706,11 +710,29 @@ async function main() {
 }
 
 if (process.versions.electron) {
-  phase("boot")
   process.stdout.on("error", () => app.exit(1))
   const watchdog = globalThis.setTimeout(() => {
     process.stdout.write(childFailure("deadline_exceeded"), () => app.exit(1))
   }, COMPUTER_SMOKE_LIMIT_MS - 2000)
+  // Electron's default uncaught-exception handler opens a synchronous native error dialog.
+  // This never-shipped harness must record a closed failure and exit instead of blocking in that dialog.
+  installComputerSmokeExceptionHooks(process, import.meta.url, (exception) => {
+    clearTimeout(watchdog)
+    const terminate = globalThis.setTimeout(() => app.exit(1), 1000)
+    try {
+      process.stdout.write(
+        COMPUTER_SMOKE_EXCEPTION_MARK + JSON.stringify(exception) + "\n" + childFailure("runtime_failed"),
+        () => {
+          clearTimeout(terminate)
+          app.exit(1)
+        },
+      )
+    } catch {
+      clearTimeout(terminate)
+      app.exit(1)
+    }
+  })
+  phase("boot")
   void main()
     .catch(() => {
       process.stdout.write(childFailure("runtime_failed"), () => app.exit(1))

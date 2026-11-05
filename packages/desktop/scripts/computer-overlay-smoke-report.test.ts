@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { Script } from "node:vm"
+import { EventEmitter } from "node:events"
 import { Hands } from "@vectordevai/schema/hands"
 import { ComputerOverlayPage } from "@vectordevai/app/computer/overlay-page"
 import {
@@ -26,6 +27,11 @@ import {
   type ComputerSmokeLastPhase,
   parseComputerSmokeReport,
   type ComputerSmokeReport,
+  COMPUTER_SMOKE_EXCEPTION_MARK,
+  computerSmokeException,
+  parseComputerSmokeException,
+  installComputerSmokeExceptionHooks,
+  type ComputerSmokeException,
 } from "./computer-overlay-smoke-report"
 
 const report = (platform: ComputerSmokeReport["platform"] = "darwin"): ComputerSmokeReport => ({
@@ -455,5 +461,197 @@ describe("closed loader module categories", () => {
       expect(() =>
         parseComputerSmokeFailure(COMPUTER_SMOKE_FAILURE_MARK + JSON.stringify({ ...value, ...patch })),
       ).toThrow()
+  })
+})
+
+describe("closed fatal Electron exception diagnostics", () => {
+  const bundle = "file:///PRIVATE/fixture/computer-overlay-smoke-electron.mjs"
+  const receipt = (value: unknown) => COMPUTER_SMOKE_EXCEPTION_MARK + JSON.stringify(value)
+  test("classifies standard errors and only exact owned bundle locations without observed text", () => {
+    const error = Object.assign(new TypeError("PRIVATE user text"), {
+      code: "EPIPE",
+      stack: `TypeError: PRIVATE user text\n    at PRIVATE_FN (file:///PRIVATE/other.mjs:11:8)\n    at Object.close27 (${bundle}:123:45)\n    at lost (${bundle}:222:1)`,
+    })
+    const value = computerSmokeException("uncaughtException", error, bundle)
+    expect(value).toEqual({
+      protocol: 1,
+      origin: "uncaughtException",
+      name: "TypeError",
+      code: "EPIPE",
+      at: { fn: "close", line: 123, column: 45 },
+    })
+    expect(parseComputerSmokeException(receipt(value))).toEqual(value)
+    expect(JSON.stringify(value)).not.toMatch(/PRIVATE|user text|file:/)
+    expect(
+      computerSmokeException(
+        "unhandledRejection",
+        { name: "PRIVATE", code: "PRIVATE", stack: `PRIVATE\n at PRIVATE_FN (${bundle}:3:4)` },
+        bundle,
+      ),
+    ).toEqual({
+      protocol: 1,
+      origin: "unhandledRejection",
+      name: "other",
+      code: "none",
+      at: { fn: "other", line: 3, column: 4 },
+    })
+    expect(computerSmokeException("unhandledRejection", { stack: `PRIVATE\n at ${bundle}:3:4` }, bundle).at).toEqual({
+      fn: "anonymous",
+      line: 3,
+      column: 4,
+    })
+  })
+  test("never invokes custom error getters, formatting or string coercion", () => {
+    let reads = 0
+    const hostile = Object.defineProperties(
+      {},
+      Object.fromEntries(
+        ["name", "code", "stack", "message", "toString"].map((key) => [
+          key,
+          {
+            get() {
+              reads++
+              throw new Error("PRIVATE")
+            },
+          },
+        ]),
+      ),
+    )
+    expect(computerSmokeException("uncaughtException", hostile, bundle)).toEqual({
+      protocol: 1,
+      origin: "uncaughtException",
+      name: "other",
+      code: "none",
+    })
+    expect(reads).toBe(0)
+    const lazy = Object.defineProperty(new Error(), "message", {
+      get() {
+        reads++
+        throw new Error("PRIVATE")
+      },
+    })
+    expect(computerSmokeException("uncaughtException", lazy, bundle).at).toBeUndefined()
+    expect(reads).toBe(0)
+    const stopped = computerSmokeException(
+      "uncaughtException",
+      {
+        name: "ComputerError",
+        code: "stopped",
+        stack: `ComputerError: PRIVATE\n at requireRun (${bundle}:1000:2)\n at Timeout._onTimeout (${bundle}:1200:4)`,
+      },
+      bundle,
+    )
+    expect(stopped).toEqual({
+      protocol: 1,
+      origin: "uncaughtException",
+      name: "other",
+      code: "stopped",
+      at: { fn: "requireRun", line: 1000, column: 2 },
+    })
+    expect(parseComputerSmokeException(receipt(stopped))).toEqual(stopped)
+    for (const reason of [
+      undefined,
+      null,
+      "PRIVATE",
+      123,
+      Symbol("PRIVATE"),
+      {
+        toString() {
+          throw new Error("PRIVATE")
+        },
+      },
+      new Proxy(
+        {},
+        {
+          getOwnPropertyDescriptor() {
+            throw new Error("PRIVATE")
+          },
+        },
+      ),
+    ])
+      expect(() => computerSmokeException("unhandledRejection", reason, bundle)).not.toThrow()
+    const inherited = Object.create(
+      Object.defineProperty({}, "name", {
+        get() {
+          reads++
+          return "Error"
+        },
+      }),
+    )
+    expect(computerSmokeException("uncaughtException", inherited, bundle).name).toBe("other")
+    expect(reads).toBe(0)
+  })
+  test("foreign, truncated and out-of-bound stack frames cannot become an owned location", () => {
+    for (const stack of [
+      `PRIVATE ${bundle}:1:2`,
+      `Error\n at close (${bundle}.PRIVATE:1:2)`,
+      `Error\n at close (${bundle}?PRIVATE:1:2)`,
+      `Error\n at close (${bundle}:0:1)`,
+      `Error\n at close (${bundle}:1:10000001)`,
+      "PRIVATE".repeat(1400) + `\n at close (${bundle}:1:2)`,
+      "Error\n" + "    at PRIVATE (file:///PRIVATE/other.mjs:1:2)\n".repeat(32) + ` at close (${bundle}:1:2)`,
+    ])
+      expect(computerSmokeException("uncaughtException", { stack }, bundle).at).toBeUndefined()
+    expect(
+      computerSmokeException(
+        "uncaughtException",
+        { stack: `Error\n at close (${bundle}:1:2)` },
+        "https://PRIVATE/computer-overlay-smoke-electron.mjs",
+      ).at,
+    ).toBeUndefined()
+  })
+  test("strict receipts reject private fields, unknown categories and invalid locations", () => {
+    const fixed: ComputerSmokeException = {
+      protocol: 1,
+      origin: "uncaughtException",
+      name: "Error",
+      code: "none",
+      at: { fn: "close", line: 1, column: 1 },
+    }
+    expect(parseComputerSmokeException(receipt(fixed))).toEqual(fixed)
+    for (const value of [
+      { ...fixed, protocol: 2 },
+      { ...fixed, origin: "PRIVATE" },
+      { ...fixed, name: "PRIVATE" },
+      { ...fixed, code: "PRIVATE" },
+      { ...fixed, message: "PRIVATE" },
+      { ...fixed, stack: "PRIVATE" },
+      { ...fixed, at: null },
+      { ...fixed, at: { ...fixed.at, fn: "PRIVATE" } },
+      { ...fixed, at: { ...fixed.at, line: 0 } },
+      { ...fixed, at: { ...fixed.at, column: 1.5 } },
+      { ...fixed, at: { ...fixed.at, line: 10000001 } },
+      { ...fixed, at: { ...fixed.at, path: "PRIVATE" } },
+    ])
+      expect(() => parseComputerSmokeException(receipt(value))).toThrow()
+    expect(() => parseComputerSmokeException(receipt(fixed) + " ".repeat(513))).toThrow()
+    expect(() => parseComputerSmokeException(COMPUTER_SMOKE_EXCEPTION_MARK + "{")).toThrow()
+  })
+  test("actual EventEmitter listener count suppresses Electron's default dialog and reports only first failure", () => {
+    const events = new EventEmitter()
+    let dialogs = 0
+    const failures: ComputerSmokeException[] = []
+    // Exact condition from Electron42.11.4 browser/init.ts's existing first listener.
+    events.on("uncaughtException", () => {
+      if (events.listenerCount("uncaughtException") > 1) return
+      dialogs++
+    })
+    installComputerSmokeExceptionHooks(events, bundle, (value) => failures.push(value))
+    events.emit("uncaughtException", Object.assign(new Error("PRIVATE"), { code: "ERR_STREAM_DESTROYED" }))
+    events.emit("unhandledRejection", new RangeError("PRIVATE"))
+    events.emit("uncaughtException", new Error("PRIVATE"))
+    expect(dialogs).toBe(0)
+    expect(failures).toHaveLength(1)
+    expect(failures[0]).toMatchObject({ origin: "uncaughtException", name: "Error", code: "ERR_STREAM_DESTROYED" })
+    expect(events.listenerCount("uncaughtException")).toBe(2)
+    expect(events.listenerCount("unhandledRejection")).toBe(1)
+    const rejection = new EventEmitter()
+    const rejected: ComputerSmokeException[] = []
+    installComputerSmokeExceptionHooks(rejection, bundle, (value) => rejected.push(value))
+    rejection.emit("unhandledRejection", new RangeError("PRIVATE"))
+    rejection.emit("uncaughtException", new Error("PRIVATE"))
+    expect(rejected).toHaveLength(1)
+    expect(rejected[0]).toMatchObject({ origin: "unhandledRejection", name: "RangeError", code: "none" })
+    expect(JSON.stringify([...failures, ...rejected])).not.toContain("PRIVATE")
   })
 })

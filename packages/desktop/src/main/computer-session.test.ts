@@ -7,6 +7,7 @@ import { defaultPolicy } from "./computer-policy"
 import { createComputerSession, type SessionBackend, type SessionScope } from "./computer-session"
 import { defaultPrefs, resolve } from "./computer-settings"
 import { createComputerKeepAwake, type KeepAwakeEvent } from "./keep-awake"
+import { computerSmokeHeartbeat } from "../../scripts/computer-overlay-smoke-report"
 
 // Virtual helper, displays, event stream and power blocker only: these tests never touch the owner's OS.
 const APP: Computer.MacIdentity = {
@@ -691,6 +692,38 @@ describe("pause, physical presence and power", () => {
     expect(fake.session.state().phase).toBe("stopped")
     expect(fake.state.aborts).toEqual([{ scope, reason: "timeout" }])
     expect(fake.state.activeGrants.size).toBe(0)
+  })
+
+  test("smoke interval callbacks queued before helper loss handle the actual retired lease refusal", async () => {
+    const fake = fixture()
+    const scope = await fake.acquire()
+    const current = () => {
+      const state = fake.session.state()
+      return state.lease === scope.lease && state.holder?.sessionID === scope.rootSessionID
+    }
+    const pending = computerSmokeHeartbeat(() => fake.session.heartbeat(scope), current)
+    fake.session.helperEvent({ event: "exit" })
+    await pending
+    expect(fake.session.state().holder).toBeUndefined()
+    expect(fake.state.visible).toBe(false)
+    expect(fake.state.activeGrants.size).toBe(0)
+    // Another already-due interval after retirement follows the same actual controller boundary.
+    await computerSmokeHeartbeat(() => fake.session.heartbeat(scope), current)
+
+    const active = fixture()
+    const live = await active.acquire()
+    let failure: unknown
+    try {
+      await computerSmokeHeartbeat(
+        () => active.session.heartbeat({ ...live, lease: live.lease + 1 }),
+        () => active.session.state().lease === live.lease && !!active.session.state().holder,
+      )
+    } catch (error) {
+      failure = error
+    }
+    expect(failure).toBeInstanceOf(Error)
+    expect(failure).toMatchObject({ code: "stopped" })
+    expect(active.session.state().holder).toBeDefined()
   })
 
   test("helper dependency loss retires the exact lease, grants and overlays without restart", async () => {

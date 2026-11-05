@@ -581,3 +581,244 @@ export async function computerSmokeControllerReady(
   if (!owned.length || owned.some((window) => window.isDestroyed() || !window.isVisible()))
     throw new Error("The controlled smoke indicator is not visible.")
 }
+
+export const COMPUTER_SMOKE_EXCEPTION_MARK = "computer-smoke-exception "
+const EXCEPTION_NAMES = [
+  "Error",
+  "TypeError",
+  "RangeError",
+  "ReferenceError",
+  "SyntaxError",
+  "URIError",
+  "EvalError",
+  "AggregateError",
+  "other",
+] as const
+const EXCEPTION_CODES = [
+  "EPIPE",
+  "ECONNRESET",
+  "ERR_STREAM_DESTROYED",
+  "ERR_STREAM_WRITE_AFTER_END",
+  "ERR_INVALID_STATE",
+  "ERR_INVALID_ARG_TYPE",
+  "ERR_INVALID_ARG_VALUE",
+  "ERR_UNHANDLED_ERROR",
+  "ERR_ASSERTION",
+  "ABORT_ERR",
+  "ERR_IPC_CHANNEL_CLOSED",
+  "ERR_IPC_DISCONNECTED",
+  "stopped",
+  "none",
+] as const
+const EXCEPTION_FUNCTIONS = [
+  "main",
+  "controllerChecks",
+  "controllerFixture",
+  "until",
+  "window",
+  "close",
+  "lost",
+  "finish",
+  "fail",
+  "request",
+  "recover",
+  "answer",
+  "capture",
+  "helperEvent",
+  "retire",
+  "detach",
+  "halt",
+  "inhibit",
+  "pause",
+  "stop",
+  "endNative",
+  "publish",
+  "snapshot",
+  "paint",
+  "render",
+  "destroy",
+  "emit",
+  "abort",
+  "onExit",
+  "onData",
+  "requireRun",
+  "_onTimeout",
+  "other",
+  "anonymous",
+] as const
+export type ComputerSmokeException = {
+  protocol: 1
+  origin: "uncaughtException" | "unhandledRejection"
+  name: (typeof EXCEPTION_NAMES)[number]
+  code: (typeof EXCEPTION_CODES)[number]
+  at?: { fn: (typeof EXCEPTION_FUNCTIONS)[number]; line: number; column: number }
+}
+
+// V8 may expose its lazy stack as an accessor. Match only the actual built-in getter captured here.
+const nativeExceptionStackGetter = Object.getOwnPropertyDescriptor(new Error(), "stack")?.get
+type ExceptionData = { value: unknown }
+function exceptionData(value: unknown, key: string): ExceptionData | undefined {
+  if ((typeof value !== "object" || value === null) && typeof value !== "function") return { value: undefined }
+  let item: object | null = value as object
+  for (let depth = 0; item && depth < 8; depth++, item = Object.getPrototypeOf(item)) {
+    const descriptor = Object.getOwnPropertyDescriptor(item, key)
+    if (descriptor) return Object.hasOwn(descriptor, "value") ? { value: descriptor.value } : undefined
+  }
+  return item ? undefined : { value: undefined }
+}
+function exceptionStack(reason: unknown): string | undefined {
+  if ((typeof reason !== "object" || reason === null) && typeof reason !== "function") return
+  // Inspect formatting inputs first: some engines materialize a lazy stack during descriptor lookup.
+  const name = exceptionData(reason, "name"),
+    message = exceptionData(reason, "message")
+  if (
+    !name ||
+    !message ||
+    [name.value, message.value].some((value) => value !== undefined && typeof value !== "string")
+  )
+    return
+  const descriptor = Object.getOwnPropertyDescriptor(reason, "stack")
+  if (!descriptor) return
+  if (Object.hasOwn(descriptor, "value")) return typeof descriptor.value === "string" ? descriptor.value : undefined
+  if (!nativeExceptionStackGetter || descriptor.get !== nativeExceptionStackGetter) return
+  // Default formatting can consult name/message or Error.prepareStackTrace. Do not invoke custom accessors/formatters.
+  const formatter = Object.getOwnPropertyDescriptor(Error, "prepareStackTrace")
+  if (
+    !name ||
+    !message ||
+    (formatter && (!Object.hasOwn(formatter, "value") || formatter.value !== undefined)) ||
+    [name.value, message.value].some((value) => value !== undefined && typeof value !== "string")
+  )
+    return
+  const stack: unknown = nativeExceptionStackGetter.call(reason)
+  return typeof stack === "string" ? stack : undefined
+}
+const exceptionCoordinate = (value: unknown): value is number =>
+  Number.isSafeInteger(value) && Number(value) > 0 && Number(value) <= 10_000_000
+function exceptionLocation(stack: string | undefined, bundleURL: string): ComputerSmokeException["at"] {
+  if (!stack || bundleURL.length > 4096 || !bundleURL.endsWith("/computer-overlay-smoke-electron.mjs")) return
+  const url = new URL(bundleURL)
+  if (url.protocol !== "file:" || url.href !== bundleURL || url.search || url.hash) return
+  const bounded = Buffer.from(stack.slice(0, 8192), "utf8").subarray(0, 8192).toString("utf8")
+  for (const line of bounded.split(/\r?\n/).slice(0, 32)) {
+    const frame = /^\s*at\s+(.+?)\s*$/.exec(line)
+    if (!frame) continue
+    let location = frame[1]!,
+      functionName = "anonymous"
+    if (location.endsWith(")")) {
+      const opening = location.lastIndexOf(" (")
+      if (opening < 0) continue
+      functionName = location.slice(0, opening).replace(/^async\s+/, "")
+      location = location.slice(opening + 2, -1)
+    }
+    if (!location.startsWith(bundleURL + ":")) continue
+    const coordinates = /^([1-9]\d{0,7}):([1-9]\d{0,7})$/.exec(location.slice(bundleURL.length + 1))
+    if (!coordinates) continue
+    const lineNumber = Number(coordinates[1]),
+      column = Number(coordinates[2])
+    if (!exceptionCoordinate(lineNumber) || !exceptionCoordinate(column)) continue
+    const last = functionName
+      .split(".")
+      .at(-1)!
+      .replace(/[$_]?\d+$/, "")
+    const fn =
+      last === "<anonymous>"
+        ? "anonymous"
+        : (EXCEPTION_FUNCTIONS as readonly string[]).includes(last)
+          ? (last as NonNullable<ComputerSmokeException["at"]>["fn"])
+          : "other"
+    return { fn, line: lineNumber, column }
+  }
+}
+
+/** Exceptions may carry native/user text; return only a closed category and an exact owned-bundle location. */
+export function computerSmokeException(
+  origin: ComputerSmokeException["origin"],
+  reason: unknown,
+  bundleURL: string,
+): ComputerSmokeException {
+  const result: ComputerSmokeException = {
+    protocol: 1,
+    origin: origin === "unhandledRejection" ? origin : "uncaughtException",
+    name: "other",
+    code: "none",
+  }
+  try {
+    const name = exceptionData(reason, "name")?.value,
+      code = exceptionData(reason, "code")?.value
+    if (typeof name === "string" && (EXCEPTION_NAMES as readonly string[]).includes(name))
+      result.name = name as ComputerSmokeException["name"]
+    if (typeof code === "string" && (EXCEPTION_CODES as readonly string[]).includes(code))
+      result.code = code as ComputerSmokeException["code"]
+    const at = exceptionLocation(exceptionStack(reason), bundleURL)
+    if (at) result.at = at
+  } catch {
+    /* Unknown descriptors, proxies and stack failures contribute no arbitrary diagnostic data. */
+  }
+  return result
+}
+
+export function parseComputerSmokeException(line: string): ComputerSmokeException {
+  if (!line.startsWith(COMPUTER_SMOKE_EXCEPTION_MARK) || line.length > 512)
+    throw new Error("The computer smoke exception receipt is invalid.")
+  const value: unknown = JSON.parse(line.slice(COMPUTER_SMOKE_EXCEPTION_MARK.length))
+  if (
+    !record(value) ||
+    !exact(value, ["protocol", "origin", "name", "code", "at"]) ||
+    value.protocol !== 1 ||
+    (value.origin !== "uncaughtException" && value.origin !== "unhandledRejection") ||
+    !(EXCEPTION_NAMES as readonly unknown[]).includes(value.name) ||
+    !(EXCEPTION_CODES as readonly unknown[]).includes(value.code)
+  )
+    throw new Error("The computer smoke exception receipt is invalid.")
+  if (
+    value.at !== undefined &&
+    (!record(value.at) ||
+      !exact(value.at, ["fn", "line", "column"]) ||
+      !(EXCEPTION_FUNCTIONS as readonly unknown[]).includes(value.at.fn) ||
+      !exceptionCoordinate(value.at.line) ||
+      !exceptionCoordinate(value.at.column))
+  )
+    throw new Error("The computer smoke exception location is invalid.")
+  return {
+    protocol: 1,
+    origin: value.origin,
+    name: value.name as ComputerSmokeException["name"],
+    code: value.code as ComputerSmokeException["code"],
+    ...(value.at === undefined
+      ? {}
+      : {
+          at: {
+            fn: value.at.fn as NonNullable<ComputerSmokeException["at"]>["fn"],
+            line: value.at.line as number,
+            column: value.at.column as number,
+          },
+        }),
+  }
+}
+
+/** A second uncaughtException listener suppresses Electron's synchronous default native error dialog. */
+export function installComputerSmokeExceptionHooks(
+  events: { on(name: ComputerSmokeException["origin"], handler: (reason: unknown) => void): unknown },
+  bundleURL: string,
+  fail: (receipt: ComputerSmokeException) => void,
+) {
+  let failed = false
+  for (const origin of ["uncaughtException", "unhandledRejection"] as const)
+    events.on(origin, (reason) => {
+      if (failed) return
+      failed = true
+      fail(computerSmokeException(origin, reason, bundleURL))
+    })
+}
+
+/** Timer callbacks can outlive their lease; synchronous heartbeat refusals must become handled rejections too. */
+export async function computerSmokeHeartbeat(heartbeat: () => unknown, current: () => boolean): Promise<void> {
+  try {
+    await Promise.resolve().then(heartbeat)
+  } catch (error) {
+    const code = error && typeof error === "object" ? Object.getOwnPropertyDescriptor(error, "code")?.value : undefined
+    if (!current() && code === "stopped") return
+    throw error
+  }
+}

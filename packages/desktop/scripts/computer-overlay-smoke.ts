@@ -15,6 +15,8 @@ import {
   parseComputerSmokeController,
   type ComputerSmokeControllerStep,
   COMPUTER_SMOKE_FAILURE_MARK,
+  COMPUTER_SMOKE_EXCEPTION_MARK,
+  parseComputerSmokeException,
   COMPUTER_SMOKE_LOADER_STARTED,
   computerSmokeBootstrapSource,
   parseComputerSmokeReport,
@@ -168,8 +170,9 @@ export async function runComputerOverlaySmoke(args = process.argv.slice(2)) {
       hint: ComputerSmokeRuntimeHint = "none"
     let lastController: ComputerSmokeControllerStep | undefined
     let forcedCause: ComputerSmokeFailureCause | undefined
-    const streamState: { childFailure?: ComputerSmokeFailureDiagnostic; loaderStarted: boolean } = {
+    const streamState: { childFailure?: ComputerSmokeFailureDiagnostic; loaderStarted: boolean; exception: boolean } = {
       loaderStarted: false,
+      exception: false,
     }
     let childRunning = true
     let sampleTimer: ReturnType<typeof setTimeout> | undefined
@@ -260,13 +263,14 @@ export async function runComputerOverlaySmoke(args = process.argv.slice(2)) {
             if (hint === "none") hint = "loader_pending"
             process.stdout.write(COMPUTER_SMOKE_LOADER_STARTED + "\n")
           } else if (line.startsWith(COMPUTER_SMOKE_PHASE_MARK)) {
-            if (streamState.childFailure) throw new Error("A terminal computer smoke receipt cannot advance.")
+            if (streamState.childFailure || streamState.exception)
+              throw new Error("A terminal computer smoke receipt cannot advance.")
             lastPhase = parseComputerSmokePhase(line, lastPhase)
             if (lastPhase === "cleanup" || lastPhase === "report") cancelSample()
             if (hint === "loader_pending") hint = "none"
             process.stdout.write(COMPUTER_SMOKE_PHASE_MARK + JSON.stringify({ protocol: 1, phase: lastPhase }) + "\n")
           } else if (line.startsWith(COMPUTER_SMOKE_CONTROLLER_MARK)) {
-            if (lastPhase !== "controller" || streamState.childFailure)
+            if (lastPhase !== "controller" || streamState.childFailure || streamState.exception)
               throw new Error("The controller receipt is out of phase.")
             lastController = parseComputerSmokeController(line, lastController)
             if (lastController === "heartbeat-check") sampleHeartbeatStall()
@@ -274,6 +278,13 @@ export async function runComputerOverlaySmoke(args = process.argv.slice(2)) {
             process.stdout.write(
               COMPUTER_SMOKE_CONTROLLER_MARK + JSON.stringify({ protocol: 1, step: lastController }) + "\n",
             )
+          } else if (line.startsWith(COMPUTER_SMOKE_EXCEPTION_MARK)) {
+            if (lastPhase === "none" || streamState.childFailure || streamState.exception)
+              throw new Error("The computer smoke exception receipt is out of phase.")
+            const exception = parseComputerSmokeException(line)
+            streamState.exception = true
+            cancelSample()
+            process.stdout.write(COMPUTER_SMOKE_EXCEPTION_MARK + JSON.stringify(exception) + "\n")
           } else if (line.startsWith(COMPUTER_SMOKE_FAILURE_MARK)) {
             const received = parseComputerSmokeFailure(line)
             const bootstrapFailure =
@@ -288,7 +299,11 @@ export async function runComputerOverlaySmoke(args = process.argv.slice(2)) {
               received.hint === "none" &&
               received.module === undefined &&
               ["deadline_exceeded", "runtime_failed"].includes(received.cause)
-            if (streamState.childFailure || !(bootstrapFailure || entryFailure))
+            if (
+              streamState.childFailure ||
+              (streamState.exception && received.cause !== "runtime_failed") ||
+              !(bootstrapFailure || entryFailure)
+            )
               throw new Error("The child failure receipt is invalid.")
             if (hintPriority(received.hint) > hintPriority(hint)) hint = received.hint
             streamState.childFailure = received
@@ -324,10 +339,12 @@ export async function runComputerOverlaySmoke(args = process.argv.slice(2)) {
       throw new ComputerSmokeRunFailure(
         failureDiagnostic(streamState.childFailure.cause, lastPhase, hint, streamState.childFailure.module),
       )
+    if (streamState.exception) throw new ComputerSmokeRunFailure(failureDiagnostic("runtime_failed", lastPhase, hint))
     if (
       pendingLine.startsWith(COMPUTER_SMOKE_PHASE_MARK) ||
       pendingLine.startsWith(COMPUTER_SMOKE_CONTROLLER_MARK) ||
       pendingLine.startsWith(COMPUTER_SMOKE_FAILURE_MARK) ||
+      pendingLine.startsWith(COMPUTER_SMOKE_EXCEPTION_MARK) ||
       pendingLine.startsWith(COMPUTER_SMOKE_LOADER_STARTED)
     )
       throw new ComputerSmokeRunFailure(failureDiagnostic("invalid_progress", lastPhase, hint))
