@@ -806,18 +806,22 @@ test("successful direct Windows checks forward only deduplicated fixed Caller co
     .replace(/\nNODE\s*$/, "")
     .replace(/^import .*$/gm, "")
   const emitted: string[] = []
-  const receipt = "vector-caller-context initial r=linked d=parent o=u a=g"
-  const second = "vector-caller-context initial r=serving d=owned o=x a=d"
-  const unknown = "vector-caller-context initial r=restricted d=parent o=n a=n"
+  const receipt = "vector-caller-context initial r=linked d=parent o=u a=g c=s"
+  const second = "vector-caller-context initial r=serving d=owned o=x a=d c=s"
+  const unknown = "vector-caller-context initial r=restricted d=parent o=n a=n c=q"
+  const generic = "vector-caller-context initial r=restricted d=parent o=u a=n c=r"
   const stderr = [
     receipt,
     "PRIVATE",
     receipt,
     second,
     unknown,
-    "vector-caller-context initial r=PRIVATE d=parent o=u a=g",
-    "vector-caller-context initial r=linked d=parent o=PRIVATE a=g",
-    "vector-caller-context initial r=linked d=parent o=u a=PRIVATE",
+    generic,
+    "vector-caller-context initial r=PRIVATE d=parent o=u a=g c=s",
+    "vector-caller-context initial r=linked d=parent o=PRIVATE a=g c=s",
+    "vector-caller-context initial r=linked d=parent o=u a=PRIVATE c=s",
+    "vector-caller-context initial r=linked d=parent o=u a=g c=PRIVATE",
+    "vector-caller-context initial r=linked d=parent o=u a=g",
     "vector-caller-context initial r=linked d=parent",
     second + " PRIVATE",
   ].join("\n")
@@ -846,7 +850,7 @@ test("successful direct Windows checks forward only deduplicated fixed Caller co
     { timeout: 1000 },
   )
   expect(calls).toBe(4)
-  expect(emitted).toEqual([receipt + "\n", second + "\n", unknown + "\n"])
+  expect(emitted).toEqual([receipt + "\n", second + "\n", unknown + "\n", generic + "\n"])
   expect(emitted.join("")).not.toContain("PRIVATE")
 })
 

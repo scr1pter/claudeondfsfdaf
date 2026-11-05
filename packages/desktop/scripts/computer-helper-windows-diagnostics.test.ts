@@ -4,6 +4,7 @@ import {
   WINDOWS_CALLER_STAGES,
   WINDOWS_UNIT_FAILURE_LABELS,
   WINDOWS_UNIT_SUITES,
+  WINDOWS_DACL_REASONS,
   WindowsCheckFailure,
   WindowsDiagnosticReader,
   windowsCommandReason,
@@ -178,18 +179,19 @@ test("token and desktop receipts remain bound to the first exact failure line", 
 
 test("outer context receipts retain only token/default-DACL facts and preserve room for the first cause", () => {
   const reader = new WindowsDiagnosticReader("unit")
-  const context = "vector-caller-context initial r=restricted d=owned o=x a=d\n"
+  const context = "vector-caller-context initial r=restricted d=parent o=x a=d c=s\n"
   const helper = "The computer helper could not start safely.\n"
-  const failure = "vector-caller-failure medium.helper-child-exit-dll-initialization r=serving d=parent\n"
+  const failure = "vector-caller-failure medium.helper-child-exit-dll-initialization r=s d=parent\n"
   expect(Buffer.byteLength(context + helper + failure)).toBeLessThanOrEqual(192)
   expect(Buffer.byteLength(failure)).toBeLessThanOrEqual(96)
   reader.consume(bytes(context + helper + failure), "stderr")
   expect(reader.finish()).toEqual({
     context: {
       tokenRoute: "restricted-fallback",
-      desktop: "owned-proved",
+      desktop: "parent-proved",
       owner: "other",
       defaultDaclProcessAll: "denied",
+      defaultDaclReason: "complete",
     },
     helper: "safe-start",
     caller: "medium.helper-child-exit-dll-initialization",
@@ -200,11 +202,11 @@ test("outer context receipts retain only token/default-DACL facts and preserve r
   const outer = new WindowsDiagnosticReader("caller")
   outer.consume(bytes(context + "vector-caller-failure initial.bootstrap-child-exit-dll-initialization\n"), "stderr")
   expect(outer.finish().tokenRoute).toBe("restricted-fallback")
-  expect(outer.finish().desktop).toBe("owned-proved")
+  expect(outer.finish().desktop).toBe("parent-proved")
   for (const text of [
-    "vector-caller-context initial r=restricted d=owned o=secret a=d",
-    "vector-caller-context medium r=serving d=parent o=u a=g",
-    "vector-caller-context initial r=linked d=parent o=u a=g private",
+    "vector-caller-context initial r=restricted d=owned o=secret a=d c=s",
+    "vector-caller-context medium r=serving d=parent o=u a=g c=s",
+    "vector-caller-context initial r=linked d=parent o=u a=g c=s private",
   ]) {
     const bad = new WindowsDiagnosticReader("caller")
     bad.consume(bytes(text + "\n"), "stderr")
@@ -217,8 +219,32 @@ test("outer context receipts retain only token/default-DACL facts and preserve r
         desktop: "parent-proved",
         owner: "user",
         defaultDaclProcessAll: "granted",
+        defaultDaclReason: "complete",
         sid: "private",
       },
     }),
   ).toThrow()
+})
+
+test("unknown access observations preserve an exact closed cause without inventing denied access", async () => {
+  const caller = await readFile(new URL("../native/computer-helper/windows/tests/caller.cpp", import.meta.url), "utf8")
+  const native = [...new Set([...caller.matchAll(/cause = '([a-z])'/g)].map((match) => match[1]!))].toSorted()
+  expect(native).toEqual(Object.keys(WINDOWS_DACL_REASONS).toSorted())
+  for (const [code, reason] of Object.entries(WINDOWS_DACL_REASONS)) {
+    const text = `vector-caller-context initial r=restricted d=parent o=u a=${code === "s" ? "g" : "n"} c=${code}\n`
+    const reader = new WindowsDiagnosticReader("caller")
+    reader.consume(bytes(text), "stderr")
+    expect(reader.finish().context?.defaultDaclReason).toBe(reason)
+    expect(reader.finish().context?.defaultDaclProcessAll).toBe(code === "s" ? "granted" : "unknown")
+    expect(windowsContextReceipt(reader.finish().context!)).toBe(text)
+  }
+  for (const text of [
+    "vector-caller-context initial r=restricted d=parent o=u a=n c=secret",
+    "vector-caller-context initial r=restricted d=parent o=u a=g c=r",
+    "vector-caller-context initial r=restricted d=parent o=n a=n c=s",
+  ]) {
+    const reader = new WindowsDiagnosticReader("caller")
+    reader.consume(bytes(text + "\n"), "stderr")
+    expect(reader.finish()).toEqual({})
+  }
 })

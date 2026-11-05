@@ -280,47 +280,52 @@ TokenIdentity token_identity(HANDLE token) {
   return result;
 }
 
-struct CandidateAccess { char owner = 'n'; char process_dacl = 'n'; };
+struct CandidateAccess { char owner = 'n'; char process_dacl = 'n'; char cause = 'q'; };
 CandidateAccess candidate_access(HANDLE token) noexcept {
   CandidateAccess result;
   try {
     const auto user = information(token, TokenUser), owner = information(token, TokenOwner);
-    if (user.size() < sizeof(TOKEN_USER) || owner.size() < sizeof(TOKEN_OWNER)) return result;
+    if (user.size() < sizeof(TOKEN_USER) || owner.size() < sizeof(TOKEN_OWNER)) { result.cause = 'o'; return result; }
     const auto user_sid = reinterpret_cast<const TOKEN_USER*>(user.data())->User.Sid;
     const auto owner_sid = reinterpret_cast<const TOKEN_OWNER*>(owner.data())->Owner;
-    if (!IsValidSid(user_sid) || !IsValidSid(owner_sid)) return result;
+    if (!IsValidSid(user_sid) || !IsValidSid(owner_sid)) { result.cause = 'o'; return result; }
     result.owner = EqualSid(user_sid, owner_sid) ? 'u' : 'x';
     const auto group = information(token, TokenPrimaryGroup), defaults = information(token, TokenDefaultDacl);
-    if (group.size() < sizeof(TOKEN_PRIMARY_GROUP) || defaults.size() < sizeof(TOKEN_DEFAULT_DACL)) return result;
+    if (group.size() < sizeof(TOKEN_PRIMARY_GROUP)) { result.cause = 'g'; return result; }
+    if (defaults.size() < sizeof(TOKEN_DEFAULT_DACL)) { result.cause = 'm'; return result; }
     const auto group_sid = reinterpret_cast<const TOKEN_PRIMARY_GROUP*>(group.data())->PrimaryGroup;
     const auto source = reinterpret_cast<const TOKEN_DEFAULT_DACL*>(defaults.data())->DefaultDacl;
-    if (!IsValidSid(group_sid) || !source || !IsValidAcl(source)) return result;
+    if (!IsValidSid(group_sid)) { result.cause = 'g'; return result; }
+    if (!source) { result.cause = 'z'; return result; }
+    if (!IsValidAcl(source)) { result.cause = 'i'; return result; }
     // This private clone is only for a conservative DACL-only AccessCheck; no token changes.
+    result.cause = 'e';
     std::vector<unsigned char> acl(source->AclSize);
     std::memcpy(acl.data(), source, acl.size());
     const auto copied = reinterpret_cast<PACL>(acl.data());
     for (DWORD index = 0; index < static_cast<DWORD>(copied->AceCount); ++index) {
       void* raw = nullptr;
-      if (!GetAce(copied, index, &raw)) return result;
+      if (!GetAce(copied, index, &raw)) { result.cause = 'i'; return result; }
       const auto ace = static_cast<ACCESS_ALLOWED_ACE*>(raw);
-      if ((ace->Header.AceType != ACCESS_ALLOWED_ACE_TYPE && ace->Header.AceType != ACCESS_DENIED_ACE_TYPE) ||
-          static_cast<size_t>(ace->Header.AceSize) < sizeof(ACCESS_ALLOWED_ACE) ||
-          (ace->Mask & (GENERIC_READ | GENERIC_WRITE | GENERIC_EXECUTE))) return result;
+      if (static_cast<size_t>(ace->Header.AceSize) < sizeof(ACCESS_ALLOWED_ACE)) { result.cause = 'i'; return result; }
+      if (ace->Header.AceType != ACCESS_ALLOWED_ACE_TYPE && ace->Header.AceType != ACCESS_DENIED_ACE_TYPE) { result.cause = 't'; return result; }
+      if (ace->Mask & (GENERIC_READ | GENERIC_WRITE | GENERIC_EXECUTE)) { result.cause = 'r'; return result; }
       if (ace->Mask & GENERIC_ALL) ace->Mask = (ace->Mask & ~GENERIC_ALL) | PROCESS_ALL_ACCESS;
     }
     SECURITY_DESCRIPTOR descriptor{};
     if (!InitializeSecurityDescriptor(&descriptor, SECURITY_DESCRIPTOR_REVISION) ||
         !SetSecurityDescriptorOwner(&descriptor, owner_sid, FALSE) || !SetSecurityDescriptorGroup(&descriptor, group_sid, FALSE) ||
-        !SetSecurityDescriptorDacl(&descriptor, TRUE, copied, FALSE)) return result;
+        !SetSecurityDescriptorDacl(&descriptor, TRUE, copied, FALSE)) { result.cause = 'v'; return result; }
     HANDLE raw = nullptr;
-    if (!DuplicateTokenEx(token, TOKEN_QUERY | TOKEN_IMPERSONATE, nullptr, SecurityImpersonation, TokenImpersonation, &raw)) return result;
+    if (!DuplicateTokenEx(token, TOKEN_QUERY | TOKEN_IMPERSONATE, nullptr, SecurityImpersonation, TokenImpersonation, &raw)) { result.cause = 'p'; return result; }
     winrt::handle impersonation{raw};
     GENERIC_MAPPING mapping{0, 0, 0, PROCESS_ALL_ACCESS};
     alignas(PRIVILEGE_SET) std::array<unsigned char, 1024> privileges{};
     DWORD size = static_cast<DWORD>(privileges.size()), granted = 0; BOOL allowed = FALSE;
     if (!AccessCheck(&descriptor, impersonation.get(), PROCESS_ALL_ACCESS, &mapping,
-                     reinterpret_cast<PPRIVILEGE_SET>(privileges.data()), &size, &granted, &allowed)) return result;
+                     reinterpret_cast<PPRIVILEGE_SET>(privileges.data()), &size, &granted, &allowed)) { result.cause = 'a'; return result; }
     result.process_dacl = allowed && (granted & PROCESS_ALL_ACCESS) == PROCESS_ALL_ACCESS ? 'g' : 'd';
+    result.cause = 's';
   } catch (...) { /* Unknown observations never change a token or a launch decision. */ }
   return result;
 }
@@ -538,7 +543,7 @@ void report_line(HANDLE sink, std::string line) noexcept {
 void report_startup_failure(HANDLE sink, bool internal, const char* stage, const char* route, const char* desktop) noexcept {
   try {
     auto line = std::string("vector-caller-failure ") + (internal ? "medium." : "initial.") + stage;
-    if (route) line += std::string(" r=") + route;
+    if (route) line += std::string(" r=") + route[0];
     if (desktop) line += std::string(" d=") + desktop;
     report_line(sink, line + "\n");
   } catch (...) {}
@@ -546,7 +551,7 @@ void report_startup_failure(HANDLE sink, bool internal, const char* stage, const
 
 void report_context(HANDLE sink, const char* route, const char* desktop, CandidateAccess access) noexcept {
   if (!sink || !route || !desktop) return;
-  try { report_line(sink, std::string("vector-caller-context initial r=") + route + " d=" + desktop + " o=" + access.owner + " a=" + access.process_dacl + "\n"); } catch (...) {}
+  try { report_line(sink, std::string("vector-caller-context initial r=") + route + " d=" + desktop + " o=" + access.owner + " a=" + access.process_dacl + " c=" + access.cause + "\n"); } catch (...) {}
 }
 }
 

@@ -204,15 +204,15 @@ class Child {
       if (!diagnostic_overflow) {
         if (!diagnostic_line.empty() && diagnostic_line.back() == '\r') diagnostic_line.pop_back();
         if (!context_forwarded) for (const auto route : {"serving", "linked", "restricted"}) for (const auto desktop : {"parent", "owned"})
-          for (const auto owner : {'u', 'x', 'n'}) for (const auto access : {'g', 'd', 'n'}) {
-          const auto fixed = std::string("vector-caller-context initial r=") + route + " d=" + desktop + " o=" + owner + " a=" + access;
+          for (const auto owner : {'u', 'x', 'n'}) for (const auto access : {'g', 'd', 'n'}) for (const auto cause : {'s', 'q', 'o', 'g', 'm', 'z', 'i', 't', 'r', 'v', 'p', 'a', 'e'}) {
+          const auto fixed = std::string("vector-caller-context initial r=") + route + " d=" + desktop + " o=" + owner + " a=" + access + " c=" + cause;
           if (diagnostic_line == fixed) {
             context_forwarded = true;
             (void)write_utf8(GetStdHandle(STD_ERROR_HANDLE), fixed + "\n");
           }
         }
         for (const auto mode : {"initial.", "medium."}) for (const auto stage : stages)
-          for (const auto route : {"", " r=serving", " r=linked", " r=restricted"}) for (const auto desktop : {"", " d=parent", " d=owned"}) {
+          for (const auto route : {"", " r=s", " r=l", " r=r", " r=serving", " r=linked", " r=restricted"}) for (const auto desktop : {"", " d=parent", " d=owned"}) {
           if (!*route && *desktop) continue;
           const auto fixed = std::string("vector-caller-failure ") + mode + std::string(stage) + route + desktop;
           if (!diagnostic_forwarded && diagnostic_line == fixed) {

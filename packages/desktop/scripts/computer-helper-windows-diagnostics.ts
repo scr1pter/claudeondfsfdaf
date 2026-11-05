@@ -280,11 +280,27 @@ export const WINDOWS_CALLER_STAGES = [
   "desktop-private-default",
   "desktop-private-access",
 ] as const
+export const WINDOWS_DACL_REASONS = {
+  s: "complete",
+  q: "token-query-failed",
+  o: "user-or-owner-invalid",
+  g: "primary-group-invalid",
+  m: "default-record-missing",
+  z: "null-default-dacl",
+  i: "invalid-acl",
+  t: "unsupported-ace",
+  r: "unsupported-generic-mask",
+  v: "descriptor-failed",
+  p: "duplicate-token-failed",
+  a: "access-check-failed",
+  e: "observer-exception",
+} as const
 export type WindowsCallerContext = {
   tokenRoute: "already-serving" | "validated-linked" | "restricted-fallback"
   desktop: "parent-proved" | "owned-proved"
   owner: "user" | "other" | "unknown"
   defaultDaclProcessAll: "granted" | "denied" | "unknown"
+  defaultDaclReason: (typeof WINDOWS_DACL_REASONS)[keyof typeof WINDOWS_DACL_REASONS]
 }
 export type WindowsDiagnostic = {
   unitSuite?: (typeof WINDOWS_UNIT_SUITES)[number]
@@ -335,8 +351,10 @@ function windowsCallerContext(value: unknown): WindowsCallerContext {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid Windows caller context.")
   const body = value as Record<string, unknown>
   if (
-    Object.keys(body).length !== 4 ||
-    Object.keys(body).some((key) => !["tokenRoute", "desktop", "owner", "defaultDaclProcessAll"].includes(key)) ||
+    Object.keys(body).length !== 5 ||
+    Object.keys(body).some(
+      (key) => !["tokenRoute", "desktop", "owner", "defaultDaclProcessAll", "defaultDaclReason"].includes(key),
+    ) ||
     typeof body.tokenRoute !== "string" ||
     !["already-serving", "validated-linked", "restricted-fallback"].includes(body.tokenRoute) ||
     typeof body.desktop !== "string" ||
@@ -344,7 +362,12 @@ function windowsCallerContext(value: unknown): WindowsCallerContext {
     typeof body.owner !== "string" ||
     !["user", "other", "unknown"].includes(body.owner) ||
     typeof body.defaultDaclProcessAll !== "string" ||
-    !["granted", "denied", "unknown"].includes(body.defaultDaclProcessAll)
+    !["granted", "denied", "unknown"].includes(body.defaultDaclProcessAll) ||
+    typeof body.defaultDaclReason !== "string" ||
+    !(Object.values(WINDOWS_DACL_REASONS) as string[]).includes(body.defaultDaclReason) ||
+    (body.defaultDaclReason === "complete"
+      ? body.defaultDaclProcessAll === "unknown" || body.owner === "unknown"
+      : body.defaultDaclProcessAll !== "unknown")
   )
     throw new Error("Invalid Windows caller context.")
   return {
@@ -352,6 +375,7 @@ function windowsCallerContext(value: unknown): WindowsCallerContext {
     desktop: body.desktop,
     owner: body.owner,
     defaultDaclProcessAll: body.defaultDaclProcessAll,
+    defaultDaclReason: body.defaultDaclReason,
   } as WindowsCallerContext
 }
 
@@ -367,7 +391,8 @@ export function windowsContextReceipt(value: WindowsCallerContext) {
   const owner = context.owner === "user" ? "u" : context.owner === "other" ? "x" : "n"
   const access =
     context.defaultDaclProcessAll === "granted" ? "g" : context.defaultDaclProcessAll === "denied" ? "d" : "n"
-  return `vector-caller-context initial r=${route} d=${desktop} o=${owner} a=${access}\n`
+  const cause = Object.entries(WINDOWS_DACL_REASONS).find(([, reason]) => reason === context.defaultDaclReason)![0]
+  return `vector-caller-context initial r=${route} d=${desktop} o=${owner} a=${access} c=${cause}\n`
 }
 
 /** Lines are bounded independently of stream chunks; unknown text is discarded immediately. */
@@ -386,10 +411,10 @@ export class WindowsDiagnosticReader {
           const line = this.lines[stream].replace(/\r$/, "")
           if (!this.value.context && stream === "stderr") {
             const context =
-              /^vector-caller-context initial r=(serving|linked|restricted) d=(parent|owned) o=(u|x|n) a=(g|d|n)$/.exec(
+              /^vector-caller-context initial r=(serving|linked|restricted) d=(parent|owned) o=(u|x|n) a=(g|d|n) c=(s|q|o|g|m|z|i|t|r|v|p|a|e)$/.exec(
                 line,
               )
-            if (context)
+            if (context && (context[5] === "s" ? context[4] !== "n" && context[3] !== "n" : context[4] === "n"))
               this.value.context = {
                 tokenRoute:
                   context[1] === "serving"
@@ -400,6 +425,7 @@ export class WindowsDiagnosticReader {
                 desktop: context[2] === "parent" ? "parent-proved" : "owned-proved",
                 owner: context[3] === "u" ? "user" : context[3] === "x" ? "other" : "unknown",
                 defaultDaclProcessAll: context[4] === "g" ? "granted" : context[4] === "d" ? "denied" : "unknown",
+                defaultDaclReason: WINDOWS_DACL_REASONS[context[5] as keyof typeof WINDOWS_DACL_REASONS],
               }
             if (context && this.value.caller?.startsWith("initial.") && !this.value.tokenRoute && this.value.context) {
               this.value.tokenRoute = this.value.context.tokenRoute
@@ -419,16 +445,16 @@ export class WindowsDiagnosticReader {
             this.value.unitFailure = line.slice(5) as WindowsDiagnostic["unitFailure"]
           if (!this.value.caller && stream === "stderr") {
             const caller =
-              /^vector-caller-failure ((?:initial|medium)\.[a-z-]+)(?: r=(serving|linked|restricted))?(?: d=(parent|owned))?$/.exec(
+              /^vector-caller-failure ((?:initial|medium)\.[a-z-]+)(?: r=(s|l|r|serving|linked|restricted))?(?: d=(parent|owned))?$/.exec(
                 line,
               )
             if (caller && callerTokens.has(caller[1]!) && (!caller[3] || caller[2])) {
               this.value.caller = caller[1] as WindowsDiagnostic["caller"]
               if (caller[2])
                 this.value.tokenRoute =
-                  caller[2] === "serving"
+                  caller[2] === "serving" || caller[2] === "s"
                     ? "already-serving"
-                    : caller[2] === "linked"
+                    : caller[2] === "linked" || caller[2] === "l"
                       ? "validated-linked"
                       : "restricted-fallback"
               if (caller[3]) this.value.desktop = caller[3] === "parent" ? "parent-proved" : "owned-proved"

@@ -1,0 +1,381 @@
+{
+  "run": 42078422129,
+  "head": "67e74db4c1a765c63908bba3e51bed4fe25449af",
+  "helperVersion": "1.0.13",
+  "job": 127424743766,
+  "jobName": "Windows x64 native unit and protocol diagnostic (no release evidence)",
+  "jobConclusion": "failure",
+  "directNativeUnitVersionProbes": "passed",
+  "required": {
+    "artifact": 13439947952,
+    "artifactName": "computer-helper-win32-x64-diagnostic-67e74db4c1a765c63908bba3e51bed4fe25449af-1",
+    "zipBytes": 673,
+    "zipSha256": "06f82a26dbd67f0062e93cfdda13f4861a920cd0046bad2dba3ccd3523058bee",
+    "artifactCreatedAt": "2026-11-05T17:55:33Z",
+    "artifactExpiresAt": "2026-11-12T17:55:33Z",
+    "reportFile": "computer-win32-core.json",
+    "artifactDigest": "sha256:06f82a26dbd67f0062e93cfdda13f4861a920cd0046bad2dba3ccd3523058bee",
+    "artifactRun": 42078422129,
+    "artifactHead": "67e74db4c1a765c63908bba3e51bed4fe25449af",
+    "zipDigestMatchesApi": true,
+    "reportBytes": 3633,
+    "reportSha256": "b1fd14237329b088571f9d65a47298699e6a0ec93215f07bccddb224962a45b1",
+    "protocolReport": {
+      "schemaVersion": 1,
+      "platform": "win32",
+      "privileged": "off",
+      "checks": [
+        {
+          "name": "catalog",
+          "status": "passed"
+        },
+        {
+          "name": "unit",
+          "status": "failed",
+          "reason": "windows-unit-failure-integration.reply-pipe.caller-initial.bootstrap-child-exit-dll-initialization.route-restricted-fallback.desktop-parent-proved"
+        },
+        {
+          "name": "unprivileged",
+          "status": "passed"
+        },
+        {
+          "name": "packaged",
+          "status": "passed"
+        },
+        {
+          "name": "target-control",
+          "status": "passed"
+        },
+        {
+          "name": "probe.first",
+          "status": "failed",
+          "reason": "windows-caller-initial.bootstrap-child-exit-dll-initialization.route-restricted-fallback.desktop-parent-proved"
+        },
+        {
+          "name": "probe.fresh",
+          "status": "failed",
+          "reason": "windows-caller-initial.bootstrap-child-exit-dll-initialization.route-restricted-fallback.desktop-parent-proved"
+        },
+        {
+          "name": "responsible",
+          "status": "failed",
+          "reason": "windows-caller-initial.bootstrap-child-exit-dll-initialization.route-restricted-fallback.desktop-parent-proved"
+        },
+        {
+          "name": "unverified-parent",
+          "status": "failed",
+          "reason": "verified-caller-unavailable"
+        },
+        {
+          "name": "channel-eof",
+          "status": "failed",
+          "reason": "verified-caller-unavailable"
+        },
+        {
+          "name": "parent-death",
+          "status": "failed",
+          "reason": "verified-caller-unavailable"
+        },
+        {
+          "name": "conformance.cancel-idle",
+          "status": "failed",
+          "reason": "verified-caller-unavailable"
+        },
+        {
+          "name": "conformance.eof",
+          "status": "failed",
+          "reason": "verified-caller-unavailable"
+        },
+        {
+          "name": "conformance.frame-too-large",
+          "status": "failed",
+          "reason": "verified-caller-unavailable"
+        },
+        {
+          "name": "conformance.heartbeat-loss",
+          "status": "failed",
+          "reason": "verified-caller-unavailable"
+        },
+        {
+          "name": "conformance.hello",
+          "status": "failed",
+          "reason": "verified-caller-unavailable"
+        },
+        {
+          "name": "conformance.malformed-json",
+          "status": "failed",
+          "reason": "verified-caller-unavailable"
+        },
+        {
+          "name": "conformance.permissions",
+          "status": "failed",
+          "reason": "verified-caller-unavailable"
+        },
+        {
+          "name": "conformance.session",
+          "status": "failed",
+          "reason": "verified-caller-unavailable"
+        },
+        {
+          "name": "conformance.shutdown",
+          "status": "failed",
+          "reason": "verified-caller-unavailable"
+        },
+        {
+          "name": "conformance.unsupported-action",
+          "status": "failed",
+          "reason": "verified-caller-unavailable"
+        },
+        {
+          "name": "privileged",
+          "status": "skipped",
+          "reason": "disabled"
+        },
+        {
+          "name": "unprivileged.wire-codec",
+          "status": "passed"
+        },
+        {
+          "name": "unprivileged.packaged-pe",
+          "status": "passed"
+        },
+        {
+          "name": "unprivileged.packaged-manifest",
+          "status": "passed"
+        },
+        {
+          "name": "unprivileged.packaged-version",
+          "status": "passed"
+        },
+        {
+          "name": "packaged.wire-codec",
+          "status": "passed"
+        },
+        {
+          "name": "packaged.packaged-pe",
+          "status": "passed"
+        },
+        {
+          "name": "packaged.packaged-manifest",
+          "status": "passed"
+        },
+        {
+          "name": "packaged.packaged-version",
+          "status": "passed"
+        },
+        {
+          "name": "target-control.windows-test-target-control-schema",
+          "status": "passed"
+        }
+      ],
+      "code": 1
+    },
+    "counts": {
+      "passed": 13,
+      "failed": 17,
+      "skipped": 1
+    }
+  },
+  "pairedDirectNode": {
+    "artifact": 13440007838,
+    "artifactName": "computer-helper-win32-direct-node-diagnostic-67e74db4c1a765c63908bba3e51bed4fe25449af-1",
+    "zipBytes": 687,
+    "zipSha256": "a9f188233916044d83411f20f3983cf635ee021813d63d3f9566b54a8c4fb997",
+    "artifactCreatedAt": "2026-11-05T17:55:35Z",
+    "artifactExpiresAt": "2026-11-12T17:55:34Z",
+    "reportFile": "computer-win32-direct-node.json",
+    "artifactDigest": "sha256:a9f188233916044d83411f20f3983cf635ee021813d63d3f9566b54a8c4fb997",
+    "artifactRun": 42078422129,
+    "artifactHead": "67e74db4c1a765c63908bba3e51bed4fe25449af",
+    "zipDigestMatchesApi": true,
+    "reportBytes": 3633,
+    "reportSha256": "b1fd14237329b088571f9d65a47298699e6a0ec93215f07bccddb224962a45b1",
+    "protocolReport": {
+      "schemaVersion": 1,
+      "platform": "win32",
+      "privileged": "off",
+      "checks": [
+        {
+          "name": "catalog",
+          "status": "passed"
+        },
+        {
+          "name": "unit",
+          "status": "failed",
+          "reason": "windows-unit-failure-integration.reply-pipe.caller-initial.bootstrap-child-exit-dll-initialization.route-restricted-fallback.desktop-parent-proved"
+        },
+        {
+          "name": "unprivileged",
+          "status": "passed"
+        },
+        {
+          "name": "packaged",
+          "status": "passed"
+        },
+        {
+          "name": "target-control",
+          "status": "passed"
+        },
+        {
+          "name": "probe.first",
+          "status": "failed",
+          "reason": "windows-caller-initial.bootstrap-child-exit-dll-initialization.route-restricted-fallback.desktop-parent-proved"
+        },
+        {
+          "name": "probe.fresh",
+          "status": "failed",
+          "reason": "windows-caller-initial.bootstrap-child-exit-dll-initialization.route-restricted-fallback.desktop-parent-proved"
+        },
+        {
+          "name": "responsible",
+          "status": "failed",
+          "reason": "windows-caller-initial.bootstrap-child-exit-dll-initialization.route-restricted-fallback.desktop-parent-proved"
+        },
+        {
+          "name": "unverified-parent",
+          "status": "failed",
+          "reason": "verified-caller-unavailable"
+        },
+        {
+          "name": "channel-eof",
+          "status": "failed",
+          "reason": "verified-caller-unavailable"
+        },
+        {
+          "name": "parent-death",
+          "status": "failed",
+          "reason": "verified-caller-unavailable"
+        },
+        {
+          "name": "conformance.cancel-idle",
+          "status": "failed",
+          "reason": "verified-caller-unavailable"
+        },
+        {
+          "name": "conformance.eof",
+          "status": "failed",
+          "reason": "verified-caller-unavailable"
+        },
+        {
+          "name": "conformance.frame-too-large",
+          "status": "failed",
+          "reason": "verified-caller-unavailable"
+        },
+        {
+          "name": "conformance.heartbeat-loss",
+          "status": "failed",
+          "reason": "verified-caller-unavailable"
+        },
+        {
+          "name": "conformance.hello",
+          "status": "failed",
+          "reason": "verified-caller-unavailable"
+        },
+        {
+          "name": "conformance.malformed-json",
+          "status": "failed",
+          "reason": "verified-caller-unavailable"
+        },
+        {
+          "name": "conformance.permissions",
+          "status": "failed",
+          "reason": "verified-caller-unavailable"
+        },
+        {
+          "name": "conformance.session",
+          "status": "failed",
+          "reason": "verified-caller-unavailable"
+        },
+        {
+          "name": "conformance.shutdown",
+          "status": "failed",
+          "reason": "verified-caller-unavailable"
+        },
+        {
+          "name": "conformance.unsupported-action",
+          "status": "failed",
+          "reason": "verified-caller-unavailable"
+        },
+        {
+          "name": "privileged",
+          "status": "skipped",
+          "reason": "disabled"
+        },
+        {
+          "name": "unprivileged.wire-codec",
+          "status": "passed"
+        },
+        {
+          "name": "unprivileged.packaged-pe",
+          "status": "passed"
+        },
+        {
+          "name": "unprivileged.packaged-manifest",
+          "status": "passed"
+        },
+        {
+          "name": "unprivileged.packaged-version",
+          "status": "passed"
+        },
+        {
+          "name": "packaged.wire-codec",
+          "status": "passed"
+        },
+        {
+          "name": "packaged.packaged-pe",
+          "status": "passed"
+        },
+        {
+          "name": "packaged.packaged-manifest",
+          "status": "passed"
+        },
+        {
+          "name": "packaged.packaged-version",
+          "status": "passed"
+        },
+        {
+          "name": "target-control.windows-test-target-control-schema",
+          "status": "passed"
+        }
+      ],
+      "code": 1
+    },
+    "counts": {
+      "passed": 13,
+      "failed": 17,
+      "skipped": 1
+    }
+  },
+  "fixedReceipts": [
+    {
+      "phase": "bash-direct-unit-version-probes",
+      "time": "2026-11-05T17:55:28.5536307Z",
+      "receipt": "vector-caller-context initial r=restricted d=parent o=u a=g",
+      "tokenRoute": "restricted-fallback",
+      "desktop": "parent-proved",
+      "owner": "user",
+      "defaultDaclProcessAll": "granted"
+    },
+    {
+      "phase": "required-bun-to-node-harness",
+      "time": "2026-11-05T17:55:30.4774965Z",
+      "receipt": "vector-caller-context initial r=restricted d=parent o=u a=n",
+      "tokenRoute": "restricted-fallback",
+      "desktop": "parent-proved",
+      "owner": "user",
+      "defaultDaclProcessAll": "unknown"
+    },
+    {
+      "phase": "paired-direct-node-harness",
+      "time": "2026-11-05T17:55:32.7352184Z",
+      "receipt": "vector-caller-context initial r=restricted d=parent o=u a=n",
+      "tokenRoute": "restricted-fallback",
+      "desktop": "parent-proved",
+      "owner": "user",
+      "defaultDaclProcessAll": "unknown"
+    }
+  ],
+  "conclusion": "Direct Bash unit/version/probe checks pass; required and paired direct-Node harnesses both report13 passed,17 failed,1 skipped and medium-bootstrap DLL initialization failure before entry. Removing the Bun runtime parent alone does not remove this failure.",
+  "scope": "Fixed receipts observe candidate owner=user in all three phases. Default-DACL process access is granted in the Bash phase and unknown in both harness phases; unknown is not denied. No DACL repair, root-cause, protocol, privileged or release credit follows from this diagnostic.",
+  "releaseReady": false
+}

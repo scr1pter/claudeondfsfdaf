@@ -671,9 +671,9 @@ jobs:
               throw new Error("A required Windows native check failed.")
             }
             for (const line of (result.stderr || "").split(/\r?\n/)) {
-              const match = /^vector-caller-context initial r=(serving|linked|restricted) d=(parent|owned) o=(u|x|n) a=(g|d|n)$/.exec(line)
+              const match = /^vector-caller-context initial r=(serving|linked|restricted) d=(parent|owned) o=(u|x|n) a=(g|d|n) c=(s|q|o|g|m|z|i|t|r|v|p|a|e)$/.exec(line)
               if (!match) continue
-              const context = `vector-caller-context initial r=${match[1]} d=${match[2]} o=${match[3]} a=${match[4]}`
+              const context = `vector-caller-context initial r=${match[1]} d=${match[2]} o=${match[3]} a=${match[4]} c=${match[5]}`
               if (contexts.has(context)) continue
               contexts.add(context)
               process.stderr.write(context + "\n")
