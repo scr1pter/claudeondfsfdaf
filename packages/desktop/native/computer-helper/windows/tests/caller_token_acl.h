@@ -39,12 +39,30 @@ inline const char* query_stage(TOKEN_INFORMATION_CLASS kind) noexcept {
     default: return "restricted-acl-query-unknown";
   }
 }
-inline std::vector<unsigned char> query(HANDLE token, TOKEN_INFORMATION_CLASS kind, const char** stage = nullptr) {
+inline std::vector<unsigned char> query(HANDLE token, TOKEN_INFORMATION_CLASS kind, const char** stage = nullptr,
+                                       decltype(&GetTokenInformation) reader = &GetTokenInformation) {
   mark(stage, query_stage(kind));
   const auto capacity = query_capacity(kind);
-  std::vector<unsigned char> bytes(capacity); DWORD size = 0;
-  if (!GetTokenInformation(token, kind, bytes.data(), capacity, &size) || !size || size > bytes.size() ||
-      (capacity != 65'536 && size != capacity)) refused();
+  // Fixed reads match the serving reader's known-size in/out convention exactly.
+  std::vector<unsigned char> bytes(capacity); DWORD size = capacity == 65'536 ? 0 : capacity;
+  if (!reader(token, kind, bytes.data(), capacity, &size)) {
+    const auto error = GetLastError();
+    if (kind == TokenHasRestrictions) {
+      switch (error) {
+        case ERROR_INSUFFICIENT_BUFFER: mark(stage, "restricted-acl-restrictions-buffer"); break;
+        case ERROR_BAD_LENGTH: mark(stage, "restricted-acl-restrictions-length"); break;
+        case ERROR_INVALID_PARAMETER: mark(stage, "restricted-acl-restrictions-invalid"); break;
+        case ERROR_ACCESS_DENIED: mark(stage, "restricted-acl-restrictions-denied"); break;
+        case ERROR_NOT_SUPPORTED: mark(stage, "restricted-acl-restrictions-unsupported"); break;
+        default: mark(stage, "restricted-acl-restrictions-api"); break;
+      }
+    }
+    refused();
+  }
+  if (kind == TokenHasRestrictions && size != capacity) {
+    mark(stage, !size ? "restricted-acl-restrictions-zero" : size < capacity ? "restricted-acl-restrictions-short" : "restricted-acl-restrictions-large");
+  }
+  if (!size || size > bytes.size() || (capacity != 65'536 && size != capacity)) refused();
   bytes.resize(size); return bytes;
 }
 inline bool sid_fits(PSID sid, size_t extent) noexcept {

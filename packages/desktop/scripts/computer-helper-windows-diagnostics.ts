@@ -162,6 +162,8 @@ export const WINDOWS_UNIT_FAILURE_LABELS = [
   "integration.token-acl-malformed-ace-refusal",
   "integration.token-acl-malformed-groups-refusal",
   "integration.token-acl-preserves-existing-denies",
+  "integration.token-acl-query-explicit-failure-refused",
+  "integration.token-acl-query-known-size-contract",
   "integration.token-acl-rejects-assignment-flags",
   "integration.token-acl-rejects-creator-substitution",
   "integration.token-acl-rejects-multiple-appends",
@@ -248,7 +250,7 @@ export const WINDOWS_UNIT_FAILURE_LABELS = [
   "version.process-create",
   "version.process-wait",
   "version.source-digest",
-  "version.stdin-create",
+  "version.stdin-create"
 ] as const
 export const WINDOWS_CALLER_STAGES = [
   "layout-image",
@@ -331,6 +333,15 @@ export const WINDOWS_CALLER_STAGES = [
   "restricted-acl-shape-type",
   "restricted-acl-snapshot-identity",
   "restricted-acl-unchanged",
+  "restricted-acl-restrictions-api",
+  "restricted-acl-restrictions-buffer",
+  "restricted-acl-restrictions-denied",
+  "restricted-acl-restrictions-invalid",
+  "restricted-acl-restrictions-large",
+  "restricted-acl-restrictions-length",
+  "restricted-acl-restrictions-short",
+  "restricted-acl-restrictions-unsupported",
+  "restricted-acl-restrictions-zero"
 ] as const
 export const WINDOWS_DACL_REASONS = {
   s: "complete",

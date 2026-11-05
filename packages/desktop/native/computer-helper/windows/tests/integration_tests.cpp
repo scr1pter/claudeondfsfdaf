@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <limits>
 #include <stdexcept>
@@ -48,8 +49,28 @@ void desktop_security_boundaries() {
   require_integration(!valid(L"O:" + user + L"D:P" + dacl + L"S:(ML;;NW;;;HI)") && !valid(L"O:" + user + L"D:P" + dacl),
     "integration.desktop-medium-label-required");
 }
+BOOL WINAPI token_query_fixture(HANDLE token, TOKEN_INFORMATION_CLASS kind, LPVOID output, DWORD capacity, PDWORD returned) {
+  if (kind != TokenHasRestrictions || capacity != sizeof(DWORD) || *returned != capacity) { SetLastError(ERROR_BAD_LENGTH); return FALSE; }
+  const DWORD value = 1; std::memcpy(output, &value, sizeof(value));
+  switch (reinterpret_cast<std::uintptr_t>(token)) {
+    case 1: return TRUE;
+    case 2: *returned = 0; return TRUE;
+    case 3: *returned = 1; return TRUE;
+    case 4: *returned = capacity + 1; return TRUE;
+    default: SetLastError(ERROR_ACCESS_DENIED); return FALSE;
+  }
+}
 void token_acl_boundaries() {
   namespace fixture = caller_token_acl;
+  const auto fixed = fixture::query(reinterpret_cast<HANDLE>(std::uintptr_t{1}), TokenHasRestrictions, nullptr, token_query_fixture);
+  DWORD observed_value = 0; std::memcpy(&observed_value, fixed.data(), sizeof(observed_value));
+  require_integration(fixed.size() == sizeof(DWORD) && observed_value == 1, "integration.token-acl-query-known-size-contract");
+  const std::array<const char*, 4> expected{"restricted-acl-restrictions-zero", "restricted-acl-restrictions-short", "restricted-acl-restrictions-large", "restricted-acl-restrictions-denied"};
+  for (std::uintptr_t mode = 2; mode <= 5; ++mode) {
+    const char* stage = nullptr; bool refused = false;
+    try { (void)fixture::query(reinterpret_cast<HANDLE>(mode), TokenHasRestrictions, &stage, token_query_fixture); } catch (...) { refused = true; }
+    require_integration(refused && stage && std::string_view(stage) == expected[mode - 2], "integration.token-acl-query-explicit-failure-refused");
+  }
   require_integration(fixture::query_capacity(TokenStatistics) == sizeof(TOKEN_STATISTICS) &&
     fixture::query_capacity(TokenMandatoryPolicy) == sizeof(TOKEN_MANDATORY_POLICY) &&
     fixture::query_capacity(TokenHasRestrictions) == sizeof(DWORD) && fixture::query_capacity(TokenSandBoxInert) == sizeof(DWORD),
@@ -275,7 +296,7 @@ class Child {
     DWORD received = 0;
     if (!ReadFile(diagnostic.get(), bytes.data(), count, &received, nullptr) || !received || received > count) return;
     diagnostic_bytes += received;
-    constexpr std::array<std::string_view, 80> stages{"layout-image", "layout-name", "layout-self-ancestors",
+    constexpr std::array<std::string_view, 89> stages{"layout-image", "layout-name", "layout-self-ancestors",
       "layout-helper-ancestors", "layout-self-file", "layout-helper-file",
       "layout-install-root", "arguments", "parent-witness",
       "apartment", "token", "layout",
@@ -301,7 +322,10 @@ class Child {
       "restricted-acl-query-user", "restricted-acl-readback", "restricted-acl-set",
       "restricted-acl-shape-acl", "restricted-acl-shape-creator", "restricted-acl-shape-extent",
       "restricted-acl-shape-flags", "restricted-acl-shape-sid", "restricted-acl-shape-type",
-      "restricted-acl-snapshot-identity", "restricted-acl-unchanged"};
+      "restricted-acl-snapshot-identity", "restricted-acl-unchanged", "restricted-acl-restrictions-api",
+      "restricted-acl-restrictions-buffer", "restricted-acl-restrictions-denied", "restricted-acl-restrictions-invalid",
+      "restricted-acl-restrictions-large", "restricted-acl-restrictions-length", "restricted-acl-restrictions-short",
+      "restricted-acl-restrictions-unsupported", "restricted-acl-restrictions-zero"};
     for (DWORD index = 0; index < received; ++index) {
       const auto value = bytes[index];
       if (value != '\n') {
