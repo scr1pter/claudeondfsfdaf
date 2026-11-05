@@ -10,13 +10,24 @@ enum class WindowsInventoryDiagnostic {
   none, capture_identity, capture_bounds, capture_cloak, capture_class, capture_style,
   capture_cap, capture_deadline, capture_context, capture_enum, capture_structure,
   apps_folder, apps_bind, apps_next, apps_current, apps_count, apps_shape, apps_title, apps_icon,
+  capture_bounds_read, capture_bounds_empty, capture_bounds_negative, capture_bounds_range,
+  capture_empty_cloaked, capture_empty_visible, capture_empty_minimized, capture_empty_hidden, capture_empty_unknown,
+  apps_folder_start_uninitialized, apps_folder_start_cancellation, apps_folder_start_timer, apps_folder_start_expired,
+  apps_folder_after_uninitialized, apps_folder_after_cancellation, apps_folder_after_timer, apps_folder_after_expired,
+  apps_bind_after_uninitialized, apps_bind_after_cancellation, apps_bind_after_timer, apps_bind_after_expired,
+  apps_next_start_uninitialized, apps_next_start_cancellation, apps_next_start_timer, apps_next_start_expired,
+  apps_next_after_uninitialized, apps_next_after_cancellation, apps_next_after_timer, apps_next_after_expired,
   count
 };
 // Optional metadata-only observation; ordinary factories have no observer.
 using WindowsInventoryObserver = void (*)(WindowsInventoryDiagnostic);
+enum class WindowsComObservation;
+enum class WindowsComInventoryCall { folder_start, folder_after, bind_after, next_start, next_after, count };
+WindowsInventoryDiagnostic windows_com_inventory_diagnostic(WindowsComObservation, WindowsComInventoryCall) noexcept;
 void observe_windows_inventory_failure(WindowsInventoryObserver, WindowsInventoryDiagnostic) noexcept;
 std::wstring_view windows_inventory_diagnostic_stage(WindowsInventoryDiagnostic) noexcept;
 struct WindowsRect {
+  static constexpr int64_t bound = 100'000'000;
   int64_t x = 0, y = 0, width = 0, height = 0;
   bool operator==(const WindowsRect&) const = default;
   bool valid() const noexcept;
@@ -24,6 +35,8 @@ struct WindowsRect {
   bool contains(POINT point) const noexcept;
   JsonObject wire() const;
 };
+WindowsInventoryDiagnostic windows_capture_bounds_diagnostic(const WindowsRect&) noexcept;
+WindowsInventoryDiagnostic windows_capture_empty_diagnostic(bool cloak_known, bool cloaked, bool visible, bool minimized) noexcept;
 
 // Both endpoints are actual native observations. A hosted app never receives a fabricated HWND/PID.
 struct WindowsWindow {

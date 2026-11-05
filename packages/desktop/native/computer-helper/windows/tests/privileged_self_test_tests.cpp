@@ -2,6 +2,7 @@
 #include "privileged_target.h"
 #include "protocol.h"
 #include "capture.h"
+#include "windows_com.h"
 #include <algorithm>
 #include <limits>
 #include <set>
@@ -268,6 +269,39 @@ size_t run_privileged_self_test_tests() {
       require(completions == 1 && stage == (observer == 2 ? shape ? L"installed-apps-shape" : L"installed-apps-count" : L""),
         "privileged.null-or-throwing-observer-does-not-change-service-result");
     }
+  });
+  test([] {
+    require(windows_capture_bounds_diagnostic({-1920, -1080, 1024, 768}) == WindowsInventoryDiagnostic::none,
+      "privileged.negative-screen-origins-are-valid-bounds");
+    for (const auto& bounds : {WindowsRect{0, 0, 0, 20}, WindowsRect{0, 0, 20, 0}, WindowsRect{0, 0, 0, 0}})
+      require(windows_capture_bounds_diagnostic(bounds) == WindowsInventoryDiagnostic::capture_bounds_empty,
+        "privileged.empty-bounds-have-a-distinct-readonly-diagnostic");
+    require(windows_capture_bounds_diagnostic({0, 0, -1, 20}) == WindowsInventoryDiagnostic::capture_bounds_negative &&
+      windows_capture_bounds_diagnostic({0, 0, 20, -1}) == WindowsInventoryDiagnostic::capture_bounds_negative,
+      "privileged.negative-extents-are-not-empty-window-evidence");
+    require(windows_capture_bounds_diagnostic({WindowsRect::bound + 1, 0, 0, 20}) == WindowsInventoryDiagnostic::capture_bounds_range &&
+      windows_capture_bounds_diagnostic({WindowsRect::bound, 0, 1, 20}) == WindowsInventoryDiagnostic::capture_bounds_range &&
+      windows_capture_bounds_diagnostic({0, 0, std::numeric_limits<int64_t>::max(), 20}) == WindowsInventoryDiagnostic::capture_bounds_range &&
+      windows_capture_bounds_diagnostic({std::numeric_limits<int64_t>::min(), 0, 0, 20}) == WindowsInventoryDiagnostic::capture_bounds_range,
+      "privileged.range-failure-cannot-be-misclassified-as-an-ordinary-empty-window");
+    require(windows_capture_empty_diagnostic(false, false, true, false) == WindowsInventoryDiagnostic::capture_empty_unknown &&
+      windows_capture_empty_diagnostic(true, true, true, false) == WindowsInventoryDiagnostic::capture_empty_cloaked &&
+      windows_capture_empty_diagnostic(true, false, true, true) == WindowsInventoryDiagnostic::capture_empty_minimized &&
+      windows_capture_empty_diagnostic(true, false, true, false) == WindowsInventoryDiagnostic::capture_empty_visible &&
+      windows_capture_empty_diagnostic(true, false, false, false) == WindowsInventoryDiagnostic::capture_empty_hidden,
+      "privileged.empty-window-visibility-is-observed-without-inventing-cloak-proof");
+  });
+  test([] {
+    require(windows_com_inventory_diagnostic(WindowsComObservation::uninitialized, WindowsComInventoryCall::folder_start) == WindowsInventoryDiagnostic::apps_folder_start_uninitialized &&
+      windows_com_inventory_diagnostic(WindowsComObservation::expired, WindowsComInventoryCall::folder_after) == WindowsInventoryDiagnostic::apps_folder_after_expired &&
+      windows_com_inventory_diagnostic(WindowsComObservation::timer_unavailable, WindowsComInventoryCall::bind_after) == WindowsInventoryDiagnostic::apps_bind_after_timer &&
+      windows_com_inventory_diagnostic(WindowsComObservation::cancellation_unavailable, WindowsComInventoryCall::next_start) == WindowsInventoryDiagnostic::apps_next_start_cancellation &&
+      windows_com_inventory_diagnostic(WindowsComObservation::expired, WindowsComInventoryCall::next_after) == WindowsInventoryDiagnostic::apps_next_after_expired,
+      "privileged.com-failure-observations-bind-the-exact-call-position");
+    require(windows_com_inventory_diagnostic(WindowsComObservation::current, WindowsComInventoryCall::folder_start) == WindowsInventoryDiagnostic::apps_current &&
+      windows_com_inventory_diagnostic(static_cast<WindowsComObservation>(-1), WindowsComInventoryCall::folder_start) == WindowsInventoryDiagnostic::apps_current &&
+      windows_com_inventory_diagnostic(WindowsComObservation::expired, static_cast<WindowsComInventoryCall>(-1)) == WindowsInventoryDiagnostic::apps_current,
+      "privileged.unknown-com-metadata-cannot-invent-an-exact-reason");
   });
   test([] {
     for (const auto reason : {L"isolation_required", L"elevated_helper", L"noninteractive_desktop", L"capture_blocked", L"input_detection_unavailable", L"foreground_unavailable", L"affinity_unavailable", L"target_not_installed", L"hardware_input_required", L"physical_takeover"})

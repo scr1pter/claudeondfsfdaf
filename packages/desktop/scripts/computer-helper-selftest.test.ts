@@ -780,6 +780,8 @@ test("Windows private failure origins remain closed failed rows throughout aggre
     "capture-commit-current",
     "capture-structural-cloak",
     "installed-apps-bind",
+    "capture-empty-cloaked",
+    "installed-folder-start-timer",
   ] as const) {
     const fake = windowsDriverFixture()
     const index = stage.startsWith("installed-") ? 2 : 3

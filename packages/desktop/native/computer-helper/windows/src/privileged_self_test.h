@@ -15,7 +15,7 @@ inline constexpr std::array<std::wstring_view, 15> windows_privileged_checks{
   L"uia-value-set-and-readback", L"secure-field-refusal", L"tagged-click-increments",
   L"unicode-type-readback", L"stale-capture-refusal", L"owned-input-release",
   L"input-detection-probe", L"hardware-user-input-pauses", L"isolated-target-cleanup"};
-inline constexpr std::array<std::wstring_view, 36> windows_privileged_stages{
+inline constexpr std::array<std::wstring_view, 65> windows_privileged_stages{
   L"installed-list-reply", L"installed-list-native", L"installed-seal",
   L"window-capture-reply", L"window-capture-receipt", L"png-decode",
   L"affinity-show", L"affinity-hide", L"display-capture-reply", L"display-capture-receipt",
@@ -24,7 +24,15 @@ inline constexpr std::array<std::wstring_view, 36> windows_privileged_stages{
   L"capture-structural-identity", L"capture-structural-bounds", L"capture-structural-cloak", L"capture-structural-class", L"capture-structural-style",
   L"capture-enumeration-cap", L"capture-enumeration-deadline", L"capture-enumeration-context", L"capture-enumeration-api", L"capture-structural-exception",
   L"installed-apps-folder", L"installed-apps-bind", L"installed-apps-next", L"installed-apps-com-current",
-  L"installed-apps-count", L"installed-apps-shape", L"installed-apps-title", L"installed-apps-icon"};
+  L"installed-apps-count", L"installed-apps-shape", L"installed-apps-title", L"installed-apps-icon",
+  L"capture-bounds-read", L"capture-bounds-empty", L"capture-bounds-negative", L"capture-bounds-range",
+  L"capture-empty-cloaked", L"capture-empty-visible", L"capture-empty-minimized", L"capture-empty-hidden",
+  L"capture-empty-unknown", L"installed-folder-start-uninitialized", L"installed-folder-start-cancellation", L"installed-folder-start-timer",
+  L"installed-folder-start-expired", L"installed-folder-after-uninitialized", L"installed-folder-after-cancellation", L"installed-folder-after-timer",
+  L"installed-folder-after-expired", L"installed-bind-after-uninitialized", L"installed-bind-after-cancellation", L"installed-bind-after-timer",
+  L"installed-bind-after-expired", L"installed-next-start-uninitialized", L"installed-next-start-cancellation", L"installed-next-start-timer",
+  L"installed-next-start-expired", L"installed-next-after-uninitialized", L"installed-next-after-cancellation", L"installed-next-after-timer",
+  L"installed-next-after-expired"};
 inline constexpr std::array<std::wstring_view, 32> windows_privileged_native_codes{
   L"unavailable", L"permissions", L"busy", L"stopped", L"paused", L"locked", L"blocked", L"protected", L"denied",
   L"not_granted", L"stale_frame", L"stale_ref", L"changed", L"occluded", L"secure_field", L"elevated",

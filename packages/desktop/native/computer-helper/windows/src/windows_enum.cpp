@@ -14,6 +14,7 @@
 #include <shobjidl.h>
 #include <uiautomation.h>
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <limits>
 #include <map>
@@ -26,6 +27,9 @@ namespace vector::computer {
 namespace {
 using Clock = std::chrono::steady_clock;
 [[noreturn]] void refuse(std::wstring code = L"unavailable") { throw Failure{std::move(code), L"The native window operation is unavailable."}; }
+void observe_com_current(WindowsInventoryObserver observer, const WindowsComCall& call, WindowsComInventoryCall location) noexcept {
+  if (observer) observe_windows_inventory_failure(observer, windows_com_inventory_diagnostic(call.observation(), location));
+}
 bool equal_i(std::wstring_view left, std::wstring_view right) noexcept {
   if (left.size() != right.size() || left.size() > static_cast<size_t>(std::numeric_limits<int>::max())) return false;
   return CompareStringOrdinal(left.data(), static_cast<int>(left.size()), right.data(), static_cast<int>(right.size()), TRUE) == CSTR_EQUAL;
@@ -214,20 +218,20 @@ struct NativeWindows {
     winrt::com_ptr<IEnumShellItems> enumeration;
     {
       WindowsComCall call;
-      if (!call.current()) { observe_windows_inventory_failure(diagnostic, WindowsInventoryDiagnostic::apps_current); refuse(); }
+      if (!call.current()) { observe_com_current(diagnostic, call, WindowsComInventoryCall::folder_start); refuse(); }
       if (FAILED(SHGetKnownFolderItem(FOLDERID_AppsFolder, KF_FLAG_DEFAULT, nullptr, IID_PPV_ARGS(folder.put())))) { observe_windows_inventory_failure(diagnostic, WindowsInventoryDiagnostic::apps_folder); refuse(); }
-      if (!call.current()) { observe_windows_inventory_failure(diagnostic, WindowsInventoryDiagnostic::apps_current); refuse(); }
+      if (!call.current()) { observe_com_current(diagnostic, call, WindowsComInventoryCall::folder_after); refuse(); }
       if (FAILED(folder->BindToHandler(nullptr, BHID_EnumItems, IID_PPV_ARGS(enumeration.put())))) { observe_windows_inventory_failure(diagnostic, WindowsInventoryDiagnostic::apps_bind); refuse(); }
-      if (!call.current()) { observe_windows_inventory_failure(diagnostic, WindowsInventoryDiagnostic::apps_current); refuse(); }
+      if (!call.current()) { observe_com_current(diagnostic, call, WindowsComInventoryCall::bind_after); refuse(); }
     }
     for (size_t count = 0; count < 2048 && apps.size() < 1000 && Clock::now() < deadline; ++count) {
       if (!current()) refuse(L"changed");
       winrt::com_ptr<IShellItem> item; ULONG fetched = 0;
       HRESULT status = E_FAIL;
       { WindowsComCall call;
-        if (!call.current()) { observe_windows_inventory_failure(diagnostic, WindowsInventoryDiagnostic::apps_current); refuse(); }
+        if (!call.current()) { observe_com_current(diagnostic, call, WindowsComInventoryCall::next_start); refuse(); }
         status = enumeration->Next(1, item.put(), &fetched);
-        if (!call.current()) { observe_windows_inventory_failure(diagnostic, WindowsInventoryDiagnostic::apps_current); refuse(); } }
+        if (!call.current()) { observe_com_current(diagnostic, call, WindowsComInventoryCall::next_after); refuse(); } }
       if (status == S_FALSE) break;
       if (FAILED(status) || fetched != 1 || !item) { observe_windows_inventory_failure(diagnostic, WindowsInventoryDiagnostic::apps_next); refuse(); }
       try {
@@ -284,11 +288,63 @@ std::wstring_view windows_inventory_diagnostic_stage(WindowsInventoryDiagnostic 
     case WindowsInventoryDiagnostic::apps_shape: return L"installed-apps-shape";
     case WindowsInventoryDiagnostic::apps_title: return L"installed-apps-title";
     case WindowsInventoryDiagnostic::apps_icon: return L"installed-apps-icon";
+    case WindowsInventoryDiagnostic::capture_bounds_read: return L"capture-bounds-read";
+    case WindowsInventoryDiagnostic::capture_bounds_empty: return L"capture-bounds-empty";
+    case WindowsInventoryDiagnostic::capture_bounds_negative: return L"capture-bounds-negative";
+    case WindowsInventoryDiagnostic::capture_bounds_range: return L"capture-bounds-range";
+    case WindowsInventoryDiagnostic::capture_empty_cloaked: return L"capture-empty-cloaked";
+    case WindowsInventoryDiagnostic::capture_empty_visible: return L"capture-empty-visible";
+    case WindowsInventoryDiagnostic::capture_empty_minimized: return L"capture-empty-minimized";
+    case WindowsInventoryDiagnostic::capture_empty_hidden: return L"capture-empty-hidden";
+    case WindowsInventoryDiagnostic::capture_empty_unknown: return L"capture-empty-unknown";
+    case WindowsInventoryDiagnostic::apps_folder_start_uninitialized: return L"installed-folder-start-uninitialized";
+    case WindowsInventoryDiagnostic::apps_folder_start_cancellation: return L"installed-folder-start-cancellation";
+    case WindowsInventoryDiagnostic::apps_folder_start_timer: return L"installed-folder-start-timer";
+    case WindowsInventoryDiagnostic::apps_folder_start_expired: return L"installed-folder-start-expired";
+    case WindowsInventoryDiagnostic::apps_folder_after_uninitialized: return L"installed-folder-after-uninitialized";
+    case WindowsInventoryDiagnostic::apps_folder_after_cancellation: return L"installed-folder-after-cancellation";
+    case WindowsInventoryDiagnostic::apps_folder_after_timer: return L"installed-folder-after-timer";
+    case WindowsInventoryDiagnostic::apps_folder_after_expired: return L"installed-folder-after-expired";
+    case WindowsInventoryDiagnostic::apps_bind_after_uninitialized: return L"installed-bind-after-uninitialized";
+    case WindowsInventoryDiagnostic::apps_bind_after_cancellation: return L"installed-bind-after-cancellation";
+    case WindowsInventoryDiagnostic::apps_bind_after_timer: return L"installed-bind-after-timer";
+    case WindowsInventoryDiagnostic::apps_bind_after_expired: return L"installed-bind-after-expired";
+    case WindowsInventoryDiagnostic::apps_next_start_uninitialized: return L"installed-next-start-uninitialized";
+    case WindowsInventoryDiagnostic::apps_next_start_cancellation: return L"installed-next-start-cancellation";
+    case WindowsInventoryDiagnostic::apps_next_start_timer: return L"installed-next-start-timer";
+    case WindowsInventoryDiagnostic::apps_next_start_expired: return L"installed-next-start-expired";
+    case WindowsInventoryDiagnostic::apps_next_after_uninitialized: return L"installed-next-after-uninitialized";
+    case WindowsInventoryDiagnostic::apps_next_after_cancellation: return L"installed-next-after-cancellation";
+    case WindowsInventoryDiagnostic::apps_next_after_timer: return L"installed-next-after-timer";
+    case WindowsInventoryDiagnostic::apps_next_after_expired: return L"installed-next-after-expired";
     default: return {};
   }
 }
+WindowsInventoryDiagnostic windows_com_inventory_diagnostic(WindowsComObservation observation, WindowsComInventoryCall location) noexcept {
+  constexpr std::array<std::array<WindowsInventoryDiagnostic, 4>, 5> stages{{
+    {WindowsInventoryDiagnostic::apps_folder_start_uninitialized, WindowsInventoryDiagnostic::apps_folder_start_cancellation, WindowsInventoryDiagnostic::apps_folder_start_timer, WindowsInventoryDiagnostic::apps_folder_start_expired},
+    {WindowsInventoryDiagnostic::apps_folder_after_uninitialized, WindowsInventoryDiagnostic::apps_folder_after_cancellation, WindowsInventoryDiagnostic::apps_folder_after_timer, WindowsInventoryDiagnostic::apps_folder_after_expired},
+    {WindowsInventoryDiagnostic::apps_bind_after_uninitialized, WindowsInventoryDiagnostic::apps_bind_after_cancellation, WindowsInventoryDiagnostic::apps_bind_after_timer, WindowsInventoryDiagnostic::apps_bind_after_expired},
+    {WindowsInventoryDiagnostic::apps_next_start_uninitialized, WindowsInventoryDiagnostic::apps_next_start_cancellation, WindowsInventoryDiagnostic::apps_next_start_timer, WindowsInventoryDiagnostic::apps_next_start_expired},
+    {WindowsInventoryDiagnostic::apps_next_after_uninitialized, WindowsInventoryDiagnostic::apps_next_after_cancellation, WindowsInventoryDiagnostic::apps_next_after_timer, WindowsInventoryDiagnostic::apps_next_after_expired}}};
+  const auto row = static_cast<unsigned>(location), column = static_cast<unsigned>(observation);
+  return row < stages.size() && column >= 1 && column <= 4 ? stages[row][column - 1] : WindowsInventoryDiagnostic::apps_current;
+}
+WindowsInventoryDiagnostic windows_capture_bounds_diagnostic(const WindowsRect& value) noexcept {
+  if (value.valid()) return WindowsInventoryDiagnostic::none;
+  if (value.width < 0 || value.height < 0) return WindowsInventoryDiagnostic::capture_bounds_negative;
+  constexpr auto bound = WindowsRect::bound;
+  if (value.x < -bound || value.x > bound || value.y < -bound || value.y > bound || value.width > bound || value.height > bound ||
+      value.x > bound - value.width || value.y > bound - value.height) return WindowsInventoryDiagnostic::capture_bounds_range;
+  return WindowsInventoryDiagnostic::capture_bounds_empty;
+}
+WindowsInventoryDiagnostic windows_capture_empty_diagnostic(bool cloak_known, bool cloaked, bool visible, bool minimized) noexcept {
+  if (!cloak_known) return WindowsInventoryDiagnostic::capture_empty_unknown;
+  if (cloaked) return WindowsInventoryDiagnostic::capture_empty_cloaked;
+  if (minimized) return WindowsInventoryDiagnostic::capture_empty_minimized;
+  return visible ? WindowsInventoryDiagnostic::capture_empty_visible : WindowsInventoryDiagnostic::capture_empty_hidden;
+}
 bool WindowsRect::valid() const noexcept {
-  constexpr int64_t bound = 100'000'000;
   return x >= -bound && x <= bound && y >= -bound && y <= bound && width > 0 && height > 0 && width <= bound && height <= bound && x <= bound - width && y <= bound - height;
 }
 bool WindowsRect::contains(const WindowsRect& value) const noexcept {

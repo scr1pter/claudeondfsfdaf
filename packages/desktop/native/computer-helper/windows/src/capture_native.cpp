@@ -61,9 +61,17 @@ CaptureSurface structural(HWND hwnd, const ServerSession& session, WindowsInvent
   value.thread = GetWindowThreadProcessId(hwnd, &value.pid);
   RECT bounds{}; DWORD cloak = 0;
   if (value.thread == 0 || value.pid == 0 || GetAncestor(hwnd, GA_ROOT) != hwnd) { observe_windows_inventory_failure(diagnostic, WindowsInventoryDiagnostic::capture_identity); unavailable(L"changed"); }
-  if (!GetWindowRect(hwnd, &bounds)) { observe_windows_inventory_failure(diagnostic, WindowsInventoryDiagnostic::capture_bounds); unavailable(L"changed"); }
+  if (!GetWindowRect(hwnd, &bounds)) { observe_windows_inventory_failure(diagnostic, WindowsInventoryDiagnostic::capture_bounds_read); unavailable(L"changed"); }
   value.bounds = rectangle(bounds);
-  if (!value.bounds.valid()) { observe_windows_inventory_failure(diagnostic, WindowsInventoryDiagnostic::capture_bounds); unavailable(L"changed"); }
+  if (!value.bounds.valid()) {
+    auto reason = windows_capture_bounds_diagnostic(value.bounds);
+    if (diagnostic && reason == WindowsInventoryDiagnostic::capture_bounds_empty) {
+      DWORD empty_cloak = 0;
+      const auto known = SUCCEEDED(DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, &empty_cloak, sizeof(empty_cloak)));
+      reason = windows_capture_empty_diagnostic(known, empty_cloak != 0, IsWindowVisible(hwnd) != FALSE, IsIconic(hwnd) != FALSE);
+    }
+    observe_windows_inventory_failure(diagnostic, reason); unavailable(L"changed");
+  }
   RECT frame{};
   if (SUCCEEDED(DwmGetWindowAttribute(hwnd, DWMWA_EXTENDED_FRAME_BOUNDS, &frame, sizeof(frame)))) value.frame_bounds = rectangle(frame);
   value.visible = IsWindowVisible(hwnd) != FALSE; value.minimized = IsIconic(hwnd) != FALSE;
