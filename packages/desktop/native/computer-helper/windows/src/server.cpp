@@ -269,12 +269,13 @@ struct Dispatcher::State : std::enable_shared_from_this<Dispatcher::State> {
     if (!warmup) return;
     if (warmup->timer) warmup->timer(); warmup.reset();
   }
-  WarmupStatus wait_for_foreground(const Queued& queued, const Registration& registration) {
+  WarmupStatus wait_for_foreground(const Queued& queued, const Registration& registration, bool available) {
+    const bool eligible = registration.mutating && session && session->mode == L"foreground" && !session->paused &&
+      !halted && !physical_pause && releases.empty() && !release_failed && options.responsible && available && queued.generation == generation;
+    if (!eligible) { cancel_warmup(); return WarmupStatus::ready; }
     const bool same = warmup && warmup->request_id == queued.request.id && warmup->generation == generation && matches(warmup->session);
     if (same && options.now() >= warmup->deadline_at) { cancel_warmup(); return WarmupStatus::expired; }
-    const bool waiting = registration.mutating && session && session->mode == L"foreground" && !session->paused &&
-      !halted && !physical_pause && releases.empty() && !release_failed && options.responsible && options.available() &&
-      queued.generation == generation && !foreground_ready() && foreground_pending();
+    const bool waiting = !foreground_ready() && foreground_pending();
     if (!waiting) { cancel_warmup(); return WarmupStatus::ready; }
     if (!same) {
       cancel_warmup();
@@ -577,8 +578,9 @@ struct Dispatcher::State : std::enable_shared_from_this<Dispatcher::State> {
     if (ended || active) return;
     if (queue.empty()) { cancel_warmup(); return; }
     const auto pending = handlers.find(queue.front().request.op);
+    const bool available = pending == handlers.end() || options.available();
     if (pending != handlers.end()) {
-      const auto readiness = wait_for_foreground(queue.front(), pending->second);
+      const auto readiness = wait_for_foreground(queue.front(), pending->second, available);
       if (readiness == WarmupStatus::waiting) return;
       if (readiness == WarmupStatus::expired) {
         const auto request = std::move(queue.front().request); queue.pop_front(); pending_bytes -= std::min(pending_bytes, request.encoded_bytes);
@@ -594,9 +596,9 @@ struct Dispatcher::State : std::enable_shared_from_this<Dispatcher::State> {
       fail(queued.request, L"unsupported_action", L"This operation is not implemented."); pump(); return;
     }
     const auto registration = entry->second;
-    if (!options.responsible || (registration.requires_session && !session) || !options.available() || queued.generation != generation ||
+    if (!options.responsible || (registration.requires_session && !session) || !available || queued.generation != generation ||
         (registration.mutating && (halted || physical_pause || !releases.empty() || release_failed || (session && session->paused) || !session || !foreground_ready()))) {
-      const auto code = !options.responsible ? L"responsible_missing" : registration.mutating && halted ? L"stopped" : queued.generation != generation ? L"changed" : registration.mutating && session && (physical_pause || session->paused || !foreground_ready()) ? L"paused" : L"unavailable";
+      const auto code = !options.responsible ? L"responsible_missing" : registration.mutating && halted ? L"stopped" : queued.generation != generation ? L"changed" : !available ? L"unavailable" : registration.mutating && session && (physical_pause || session->paused || !foreground_ready()) ? L"paused" : L"unavailable";
       pending_bytes -= std::min(pending_bytes, queued.request.encoded_bytes); fail(queued.request, code, L"The native operation is not currently available."); pump(); return;
     }
     if (registration.mutating && session->revision && (text(field(queued.request.args, L"sessionId"), 256) != session->id || safe_integer(field(queued.request.args, L"phaseRevision")) != session->revision)) {
@@ -616,6 +618,14 @@ struct Dispatcher::State : std::enable_shared_from_this<Dispatcher::State> {
       { std::lock_guard lock(self->mutex);
         if (!self->active || self->active->token != selected) return;
         if (self->options.now() >= self->active->deadline_at) { self->expire(selected); return; }
+        if (!self->options.available()) {
+          // This worker has not entered its handler and owns no native effects. A known desktop
+          // blocker must be refused now, before pending detection can defer admission.
+          const auto blocked = std::move(self->active->request);
+          if (self->active->timer) self->active->timer(); self->active.reset();
+          self->pending_bytes -= std::min(self->pending_bytes, blocked.encoded_bytes);
+          self->fail(blocked, L"unavailable", L"The native operation is not currently available."); self->pump(); return;
+        }
         if (!self->current(selected)) {
           // A fresh probe may become pending after the request was queued to the operation
           // executor. No handler has run yet, so retain the exact original request for warmup.

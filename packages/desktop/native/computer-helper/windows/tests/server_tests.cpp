@@ -696,6 +696,32 @@ size_t run_server_tests() {
   });
   test([] {
     Fixture fixture; fixture.begin(); fixture.ready = false; fixture.pending = true; size_t writes = 0;
+    fixture.dispatcher->register_handler(L"input.key", 4000, true, true, [&](const auto&, const auto&, auto done) { ++writes; done(Reply{}); });
+    fixture.receive(2, L"input.key"); const auto timer = fixture.timers.back(); const auto scope = *fixture.dispatcher->session_snapshot();
+    fixture.time += 1001; fixture.available = false;
+    fixture.dispatcher->foreground_readiness_changed(scope); fixture.drain();
+    require(fixture.code(2, L"unavailable") && fixture.replies(2) == 1 && writes == 0 && timer->cancelled,
+      "server.known-availability-loss-outranks-expired-probe-budget-without-waiting");
+    fixture.available = true; fixture.ready = true; fixture.pending = false;
+    timer->body(); fixture.dispatcher->foreground_readiness_changed(scope); fixture.drain();
+    require(fixture.replies(2) == 1 && writes == 0, "server.stale-warmup-cannot-revive-a-request-refused-for-availability");
+    fixture.receive(3, L"input.key"); fixture.drain();
+    require(fixture.reply(3).GetNamedBoolean(L"ok") && writes == 1, "server.only-a-new-request-can-use-current-recovered-availability");
+  });
+  test([] {
+    Fixture fixture; fixture.begin(); size_t writes = 0;
+    fixture.dispatcher->register_handler(L"input.key", 4000, true, true, [&](const auto&, const auto&, auto done) { ++writes; done(Reply{}); });
+    fixture.receive(2, L"input.key"); const auto timer = fixture.timers.back(); const auto scope = *fixture.dispatcher->session_snapshot();
+    fixture.available = false; fixture.ready = false; fixture.pending = true; fixture.drain();
+    require(fixture.code(2, L"unavailable") && fixture.replies(2) == 1 && writes == 0 && timer->cancelled &&
+      std::none_of(fixture.timers.begin(), fixture.timers.end(), [](const auto& value) { return !value->cancelled && value->due < 5000; }),
+      "server.queued-worker-refuses-known-availability-loss-before-handler-or-probe-wait");
+    fixture.available = true; fixture.ready = true; fixture.pending = false;
+    timer->body(); fixture.dispatcher->foreground_readiness_changed(scope); fixture.drain();
+    require(fixture.replies(2) == 1 && writes == 0, "server.worker-refusal-retires-the-original-operation-timer-and-authority");
+  });
+  test([] {
+    Fixture fixture; fixture.begin(); fixture.ready = false; fixture.pending = true; size_t writes = 0;
     fixture.dispatcher->register_handler(L"input.key", 1000, true, true, [&](const auto&, const auto&, auto) { ++writes; });
     fixture.receive(2, L"input.key"); const auto timer = fixture.timers.back(); fixture.receive(3, L"cancel"); fixture.drain();
     fixture.ready = true; fixture.pending = false; timer->body(); fixture.dispatcher->foreground_readiness_changed(*fixture.dispatcher->session_snapshot()); fixture.drain();
