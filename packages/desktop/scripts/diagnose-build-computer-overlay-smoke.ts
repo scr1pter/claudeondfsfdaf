@@ -23,8 +23,8 @@ export async function diagnoseComputerOverlayBuild(
       write(
         `overlay-native-command-failed stage=${command.stage} tool=${command.tool} code=${result.code} reason=${result.failureReason ?? "exit"}\n`,
       )
-      // Only controlled CI compiler output is exposed; never print argv, environment or raw spawn errors.
-      if (["xcrun", "xcodebuild", "cmake", "cl"].includes(command.tool)) {
+      // Only controlled CI build/signature output is exposed; never print argv, environment or raw spawn errors.
+      if (["xcrun", "xcodebuild", "cmake", "cl", "codesign"].includes(command.tool)) {
         const output = result.diagnostic ?? `${result.stdout}\n${result.stderr}`
         write(`overlay-compiler-output-begin\n${boundedDiagnostic(output, 8192)}\noverlay-compiler-output-end\n`)
       }
@@ -84,7 +84,7 @@ function diagnosticCommand(binary: string, args: readonly string[]) {
   return { tool: "other", stage: "native-command" }
 }
 
-function boundedDiagnostic(value: string, limit: number) {
+export function boundedDiagnostic(value: string, limit: number) {
   const bytes = Buffer.from(value)
   if (bytes.byteLength <= limit) return value
   const marker = "\n[overlay diagnostic truncated]\n"

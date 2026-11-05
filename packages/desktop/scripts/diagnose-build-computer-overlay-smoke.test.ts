@@ -90,12 +90,12 @@ test("Windows configure/compile and MSVC toolchain failures identify the actual 
   }
 })
 
-test("noncompiler failures keep fixed context without exposing command arguments, environment or output", async () => {
+test("failed signature verification exposes bounded codesign output without printing argv or environment", async () => {
   const output: string[] = []
   const run: NativeCommand = async () => ({
     code: 1,
-    stdout: "hidden stdout",
-    stderr: "hidden stderr",
+    stdout: "controlled codesign stdout",
+    stderr: "controlled codesign reason",
     failureReason: "timed-out",
   })
   await expect(
@@ -103,14 +103,21 @@ test("noncompiler failures keep fixed context without exposing command arguments
       write: (message) => output.push(message),
       run,
       build: async (_options, input) => {
-        await input!.run!("/usr/bin/codesign", ["--sign", "private-identity", "private-path"], settings)
+        await input!.run!(
+          "/usr/bin/codesign",
+          ["--verify", "--strict", "--all-architectures", "/private-path/Electron.app"],
+          settings,
+        )
         throw new Error("The original signing failure.")
       },
     }),
   ).rejects.toThrow("The original signing failure.")
-  expect(output[0]).toBe("overlay-native-command-failed stage=driver-sign tool=codesign code=1 reason=timed-out\n")
-  expect(output).toHaveLength(2)
-  expect(output.join("")).not.toMatch(/hidden|private-|controlled\/checkout|ZERO_AR_DATE/)
+  expect(output[0]).toBe(
+    "overlay-native-command-failed stage=electron-signature tool=codesign code=1 reason=timed-out\n",
+  )
+  expect(output).toHaveLength(3)
+  expect(output[1]).toContain("controlled codesign reason")
+  expect(output.join("")).not.toMatch(/private-|controlled\/checkout|ZERO_AR_DATE/)
 })
 
 test("argument rejection cannot invoke the build and a noncommand verification rejection remains fatal", async () => {

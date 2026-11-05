@@ -38,6 +38,7 @@
     "scripts/computer-helper-unit-diagnostics.ts",
     "scripts/build-computer-overlay-smoke.ts",
     "scripts/diagnose-build-computer-overlay-smoke.ts",
+    "scripts/diagnose-computer-overlay-electron-signature.ts",
     "scripts/computer-overlay-smoke.ts",
     "scripts/computer-overlay-smoke-electron.ts",
     "scripts/computer-overlay-smoke-native.ts",

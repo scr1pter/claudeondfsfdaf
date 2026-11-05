@@ -317,6 +317,10 @@ jobs:
       - name: Install the exact pinned Electron runtime
         timeout-minutes: 5
         run: node node_modules/electron/install.js
+      - name: Diagnose installed and copied Electron signatures without release credit
+        continue-on-error: true
+        timeout-minutes: 2
+        run: bun --no-env-file ./scripts/diagnose-computer-overlay-electron-signature.ts
       - name: Run real Electron overlay properties and controller lifecycle
         timeout-minutes: 3
         run: bun --no-env-file ./scripts/computer-overlay-smoke.ts
