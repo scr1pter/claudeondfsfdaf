@@ -16,6 +16,7 @@ import {
 import { configuredPlanModels } from "./model-plan-config.js"
 import { stripeRecord } from "./model-plan-stripe.js"
 import { persistentStore } from "./persistent-store.js"
+import { syncOpsKillFlag } from "./ops-worker.js"
 import { syncRelayKillFlag } from "./remote-relay.js"
 import { requireUsageOwner } from "./usage.js"
 import { replayStripeEvents } from "../model-plans/replay.js"
@@ -148,6 +149,9 @@ async function run(
     // is copied there too. The switch itself already stops new tickets; `relay: "failed"` tells the owner to apply it
     // again (or to set the flag directly, owner-actions/remote.md).
     if (name === "remote") return { relay: await syncRelayKillFlag(raw.value === "off", fetcher, now) }
+    // WP A47: the same for the ops Worker, whose accounts read its kill flag at every wake. The switch itself already
+    // stops new settings and release watches here.
+    if (name === "ops") return { worker: await syncOpsKillFlag(raw.value === "off", fetcher, now) }
     return {}
   }
   if (action === "replay")

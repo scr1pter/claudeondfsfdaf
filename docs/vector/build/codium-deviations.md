@@ -1417,3 +1417,91 @@ outcome, verdict, actor.login` pass. Every paid plan includes it while the plan 
   - `.github/workflows/vector-codium.yml`, `bun.lock`.
   - Docs: `docs/vector/MODEL-PLANS.md` and `docs/vector/owner-actions/hosted-ops.md` (new; only the Worker's section, since
     A47 to A50 add theirs).
+
+## A47 GitHub webhook router and ops settings (4 Nov 2026)
+
+- **The handler shape is Codex's** (vector-at-mention spec 2.14): `{id, events, handle({name, action?, deliveryId,
+  payload})}`, defined in `api/_lib/github-webhook.ts`. The route keeps a static list (`GITHUB_WEBHOOK_HANDLERS` in
+  `api/github/webhook.ts`) with Codium's `ops` handler. A47 landed first, so the integration commit (A59) adds Codex's
+  `cloudAgentsWebhookHandler` (one import and one entry), as 2.14's second-lander rule says. A handler naming an event
+  the App does not subscribe to (`installation`, `installation_repositories`, `repository`, `pull_request`,
+  `deployment_status`) is refused when the route loads.
+- **Order.** The contract lists "verify signature, dedupe by `x-github-delivery`, filter event types before any store
+  read". The dedupe is a store write, so the filter runs before it: signature, then filter (a `ping`, or an event no
+  handler named, answers 200 with nothing parsed or stored), then dedupe, then the handlers.
+- **Dedupe.** A delivery is marked pending (SET NX, 60 s) and done (7 days) once every handler finished. A copy that
+  arrives while one runs gets 409 `GITHUB_DELIVERY_IN_PROGRESS` (retry-after 60); a finished one answers
+  `{ok:true, duplicate:true}`. When a handler fails, the mark is deleted and the answer is 500, so a redelivery runs every
+  handler again; GitHub never redelivers by itself. Each handler gets its own parse of the payload and 8 s.
+- **A repository's owner is its binding.** "Production environment per repo config" names no source for who owns a
+  repository. The ops handler and `/api/ops/repos` use Codex's binding (`bindingFor`, one account per repository id,
+  §4.18), through `registerRepoBindingReader` in `api/_lib/ops-settings.ts`, which A59 wires to `bindingFor`. This build
+  never imports Codex's files. Until A59 no repository is bound, so none can be set up and no deployment or pull request
+  is acted on. A suspended binding (transferred, deleted, binder left) counts as unbound.
+- **Repository settings live on the server** (`/api/ops/repos`): the deployment environment Release Guard watches, the
+  production URL, up to 5 paths (and the plan's path count), and the Release Guard and Ship Desk switches. The answer
+  includes the `.vector/ops.json` to commit, with the account's `opsId` (random, `ops_` + 22 base64url characters, made
+  with the account's first settings). The server does not read `.vector/ops.json` here: that needs App credentials, which
+  are A48's (`github-app-server.ts`), and S9 has A48 re-read the file before every write.
+- **`deployment_status` → Release Guard** calls the ops Worker's `release` directly: action `created` (or none), state
+  `success`, not a transient environment, the environment equal to the settings' without case, Release Guard on, a usable
+  snapshot with `caps.ops.releaseGuard` (active or renewing within grace; read from the snapshot alone, no reconcile on
+  this path), the ops services configured and the `ops` switch on. The URLs are the production URL joined with each path,
+  on domains verified now, at most the plan's paths; none verified starts nothing. `at` is the status's `created_at`. The
+  Worker dedupes by (repository, environment, sha) and counts the plan's releases a day; A48 adds the `.vector/ops.json`
+  check and the API-side daily cap ("dedupe before increment"). Ignored deliveries are never errors; the store or the
+  Worker being unreachable fails the delivery.
+- **`pull_request` → Ship Desk** applies the contract's filter: the author is the App's bot (`<VECTOR_GITHUB_APP_SLUG>[bot]`,
+  type Bot) and both head and base are the repository itself. Actions passed on: opened, reopened, synchronize,
+  ready_for_review, closed. It goes to an intake A49 registers (`registerShipDeskIntake`), which checks the plan and counts
+  cards; until then it is ignored. Codex's spec says Vector's pull requests are authored by `github-actions[bot]` by
+  default (only App publishing gives the App bot). A49 must decide whether to widen the filter (Codex suggests the
+  `<!-- vector:rid … -->` marker plus a matching run record); A47 keeps the contract's App-bot rule.
+- **Removals.** `installation.deleted`, `installation_repositories.removed`, and also `repository.deleted` and
+  `repository.transferred`, drop those repositories' settings from every account that has them (a previous binder's
+  settings included). Two index sets make that complete: `ops:repo:<repositoryId>` and
+  `ops:installation:<installationId>` (for an uninstall whose payload lists no repositories). The installation comes from
+  the binding when it has one, or from the first delivery that names it. Domains and monitors stay: they are the
+  account's, not the repository's.
+- **Domain verification.** The TXT record is `_vector-verify.<domain>` with the value `vector-verify=<token>` (a split
+  record is joined); the file is `https://<domain>/.well-known/vector-verify.txt` with that line. The TXT record is read
+  over Cloudflare's DNS-over-HTTPS (the Worker's resolver); the file through safeFetch (S8). Either verifies. Both
+  answering without the token is "failed"; a redirect, an oversized file or a private address counts as an answer
+  without it. A timeout, a resolver failure, 401, 403, 429 or 5xx is "inconclusive" and changes nothing. Domain names
+  follow the Worker's own rules (`validHostname`); the root test compares them.
+- **"Re-verified weekly"** is a check 7 days after the last success. An inconclusive re-check is retried daily, and
+  verification lapses 14 days after the last success whatever the re-checks said. A failed re-check ends it at once (the
+  domain shows `lost` and can be checked again on request). It runs in the daily `/api/ops/domains` job (contract §4.19,
+  04:10 UTC), which A47 adds to `vercel.json`; A50 adds its certificate, expiry and DNS drift checks to the same job. The
+  job reads a sorted set, `ops:domains:due`, so it touches only accounts with something due. The configuration test's
+  "no ops crons yet" expectation now expects this one.
+- **Counts.** Domains (pending or verified) count against `caps.ops.onCall.domains`, the only domain count in
+  ENTITLEMENTS; Release Guard uses the same verified domains. Monitors count against `caps.ops.onCall.urls` and must be on
+  a domain verified now. After a downgrade nothing is deleted: answers mark what is past the plan's counts, and the Worker
+  checks the earliest (A46). Removing a domain removes the monitors on it. At most 20 repositories per account
+  (server-only).
+- **Routes.** Any unrevoked `vct_` account token or a website session; run tokens get 401 (S3). Writes accept the site,
+  the phone app's origin and no origin. Adding needs the ops services (`VECTOR_OPS_ENABLED=true`, `VECTOR_OPS_WORKER_URL`,
+  `VECTOR_OPS_SHARED_SECRET`; else 503 `OPS_UNAVAILABLE`), the `ops` switch (503 `OPS_PAUSED`) and
+  `requireEntitlement(account, "ops")`; reading and removing work whatever the plan. Limits per account an hour: 240 reads,
+  60 writes, 20 checks. New codes: `OPS_UNAVAILABLE`, `OPS_INVALID`, `OPS_NOT_FOUND`, `OPS_REPO_NOT_BOUND`, `OPS_BUSY`,
+  `OPS_SETTINGS_UNREADABLE`, `GITHUB_WEBHOOK_UNAVAILABLE`, `GITHUB_WEBHOOK_SIGNATURE_INVALID`, `GITHUB_WEBHOOK_INVALID`,
+  `GITHUB_WEBHOOK_FAILED`, `GITHUB_DELIVERY_IN_PROGRESS`. `OPS_LIMIT` carries `{limit, max}`, `OPS_DOMAIN_UNVERIFIED`
+  `{domain}`.
+- **Store keys not in §4.6,** all under the Codium prefix: `ops:settings:<account>` (one JSON document, changed only by a
+  compare-and-set script that also keeps the index sets and the due set), `ops:repo:<repositoryId>`,
+  `ops:installation:<installationId>`, `ops:domains:due` and `github:delivery:<deliveryId>`.
+- **The Worker's copy.** After every change the verified domains (in verification order) and every monitor go to the
+  Worker's `config` when its hash differs from the last copy the Worker took. A change it missed is sent by the next
+  write or by the daily job (the account is due 15 minutes later). An account that never sent anything and has only
+  repositories sends nothing.
+- **The owner's `ops` switch** also sets the Worker's kill flag (A46 left this to A47 or A50), as the `remote` switch does
+  for the relay: `{worker: "updated" | "failed" | "not-configured"}`.
+- **Not built here:** the ops provisioner (`plan` pushes from the snapshot) and the `on-call` and `release-guard`
+  readiness checks in `perkServices`, since On Call and Release Guard do nothing useful before A48's report intake,
+  incidents and revert PRs; A48 or A50 adds them. Until a plan is pushed, the Worker answers `release` with
+  `not-in-plan` and checks nothing. A57 must call `eraseAccountOpsSettings(account)` (both Stripe modes).
+- **Files outside A47's list:** `api/_lib/ops-worker.ts` (the Worker client), `ops-settings.ts` (the store, bindings and
+  sync), `ops-domains.ts` (verification), `ops-api.ts` (what the routes do), `codium-owner-api.ts` (the switch),
+  `vercel.json` (the cron), `.env.example`, `docs/vector/MODEL-PLANS.md`, `docs/vector/owner-actions/hosted-ops.md`, the
+  test fixture `test/ops-fixture.ts` and the expectation in `packages/web/test/codium-configuration.test.ts`.
