@@ -10,9 +10,11 @@ do {
     _ = try runPackagedSelfTestTests()
     _ = try runBlocklistTests()
     _ = try runPermissionsTests()
+    _ = try runGeometryTests()
+    _ = try runCaptureTests()
     print("Computer helper unit checks passed.")
     exit(0)
 } catch {
-    FileHandle.standardError.write(Data("Computer helper M1 unit checks failed.\n".utf8))
+    FileHandle.standardError.write(Data("Computer helper unit checks failed.\n".utf8))
     exit(1)
 }

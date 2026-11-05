@@ -81,6 +81,33 @@ func runServerTests() throws -> Int {
   func test(_ body: () throws -> Void) throws { try body(); count += 1 }
 
   try test {
+    let fake = ServerFixture()
+    fake.server.notifyDisplayChange()
+    try serverExpect(fake.events.map(\.value) == [.object(["event": .string("display_change")])],
+                     "native display reconfiguration emits the exact geometry invalidation event without a session")
+    fake.server.close()
+    fake.server.notifyDisplayChange()
+    try serverExpect(fake.events.count == 1, "a closed helper cannot publish a late display event")
+  }
+
+  try test {
+    let fake = ServerFixture()
+    _ = try fake.begin()
+    let first = fake.server.sessionSnapshot()?.observationEpoch
+    _ = try fake.request("session.update", ["sessionId": .string("native-test"), "phaseRevision": .integer(0), "approved": .array([])])
+    let updated = fake.server.sessionSnapshot()?.observationEpoch
+    try serverExpect(first != nil && updated != nil && first != updated,
+                     "an accepted same-revision authority update retires old native observations")
+    _ = try fake.request("session.update", ["sessionId": .string("other"), "phaseRevision": .integer(0)])
+    try serverExpect(fake.server.sessionSnapshot()?.observationEpoch == updated,
+                     "a refused update preserves the current observation epoch")
+    _ = try fake.request("session.end")
+    _ = try fake.begin()
+    try serverExpect(fake.server.sessionSnapshot()?.observationEpoch != updated,
+                     "reusing a wire session id and revision cannot revive a retired capture")
+  }
+
+  try test {
     let fake = ServerFixture(responsible: false)
     let hello = try fake.request("hello", ["protocol": .object(["min": .integer(1), "max": .integer(1)])])
     let value = fake.result(hello)

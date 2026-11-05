@@ -12,6 +12,8 @@ struct ServerReply {
 }
 
 struct ServerSession {
+  /// Wire ids/revisions may be reused; native observations belong to one accepted authority snapshot.
+  var observationEpoch = UUID()
   let id: String
   var revision: Int?
   var mode: String
@@ -204,6 +206,14 @@ final class Dispatcher {
   }
 
   func sessionSnapshot() -> ServerSession? { locked { session } }
+
+  /// Native reconfiguration invalidates geometries before the notification reaches desktop main.
+  func notifyDisplayChange() {
+    locked {
+      guard !closed else { return }
+      emit(Event(name: "display_change"))
+    }
+  }
 
   private static let mutations: Set<String> = [
     "input.click", "input.move", "input.drag", "input.scroll", "input.key", "input.type", "input.hold",
@@ -539,6 +549,7 @@ final class Dispatcher {
       current.approved = request.args["approved"]?.arrayValue ?? current.approved
       current.escStops = request.args["escStops"]?.boolValue ?? current.escStops
       current.overlayWindowIds = Self.ids(request.args["overlayWindowIds"]) ?? current.overlayWindowIds
+      current.observationEpoch = UUID()
       session = current
       reply(.success(id: request.id))
       return true

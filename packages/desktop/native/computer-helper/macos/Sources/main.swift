@@ -1,4 +1,5 @@
 import AppKit
+import CoreGraphics
 import Darwin
 import Foundation
 
@@ -30,9 +31,20 @@ private final class HelperServer {
     private let reader = FrameReader()
     private let writer = FrameWriter(descriptor: 3)
     private let permissionService = PermissionService()
+    private let captureService = CaptureService()
+    private var displayCallbackRegistered = false
+    private var activeSpaceObserver: NSObjectProtocol?
+
+    private static let displayCallback: CGDisplayReconfigurationCallBack = { _, _, context in
+        guard let context else { return }
+        let server = Unmanaged<HelperServer>.fromOpaque(context).takeUnretainedValue()
+        server.captureService.invalidateDisplays()
+        server.dispatcher?.notifyDisplayChange()
+    }
 
     func start(parent: HelperParent) throws {
         let permissions = permissionService
+        let capture = captureService
         let server = Dispatcher(
             responsible: HelperLifecycle.isSelfResponsible(),
             architecture: architecture,
@@ -47,6 +59,7 @@ private final class HelperServer {
                 guard let self else { return }
                 do { try self.writer.write(response, binary: image) } catch { self.finish(code: 1) }
             },
+            features: { capture.features() },
             permissions: { permissions.status() }
         )
         server.register(op: "permissions.request", deadlineMs: 5000, requiresSession: false) { request, context, done in
@@ -54,6 +67,12 @@ private final class HelperServer {
         }
         server.register(op: "permissions.reset", deadlineMs: 4000, requiresSession: false) { request, context, done in
             permissions.reset(request.args, responsible: HelperLifecycle.isSelfResponsible(), context: context, completion: done)
+        }
+        server.register(op: "displays.list", deadlineMs: 5000, requiresSession: false) { request, context, done in
+            capture.listDisplays(request.args, context: context, completion: done)
+        }
+        server.register(op: "capture", deadlineMs: 10000) { request, context, done in
+            capture.capture(request.args, context: context, completion: done)
         }
         dispatcher = server
         watchers = try HelperLifecycle.installWorkerWatchers(parent: parent) { [weak self] in
@@ -64,6 +83,19 @@ private final class HelperServer {
         let input = DispatchSource.makeReadSource(fileDescriptor: 3, queue: DispatchQueue(label: "ai.vector.computer.protocol"))
         input.setEventHandler { [weak self] in self?.read() }
         source = input
+        // The server remains retained throughout the application run loop and exits only through finish.
+        lock.lock()
+        guard !ending else { lock.unlock(); input.resume(); return }
+        let registered = CGDisplayRegisterReconfigurationCallback(Self.displayCallback, Unmanaged.passUnretained(self).toOpaque()) == .success
+        displayCallbackRegistered = registered
+        lock.unlock()
+        guard registered else { input.resume(); finish(code: 1); return }
+        activeSpaceObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.activeSpaceDidChangeNotification, object: nil, queue: nil
+        ) { [weak self] _ in
+            self?.captureService.invalidateDisplays()
+            self?.dispatcher?.notifyDisplayChange()
+        }
         input.resume()
     }
 
@@ -113,10 +145,21 @@ private final class HelperServer {
         lock.lock()
         if ending { lock.unlock(); return }
         ending = true
+        let removeDisplayCallback = displayCallbackRegistered
+        displayCallbackRegistered = false
+        let removeActiveSpaceObserver = activeSpaceObserver
+        activeSpaceObserver = nil
         lock.unlock()
         // Dispatcher revocation invokes the native release hook before this process exits or closes its channel.
         dispatcher?.close(reason: "lifecycle")
         permissionService.close()
+        captureService.close()
+        if removeDisplayCallback {
+            _ = CGDisplayRemoveReconfigurationCallback(Self.displayCallback, Unmanaged.passUnretained(self).toOpaque())
+        }
+        if let removeActiveSpaceObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(removeActiveSpaceObserver)
+        }
         source?.cancel()
         watchers?.finish()
         _ = Darwin.close(3)

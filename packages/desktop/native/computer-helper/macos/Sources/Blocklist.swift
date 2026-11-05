@@ -220,6 +220,18 @@ struct NativeBlocklist {
 /// Metadata-only process/signature observation. Callers select a PID observed from native windows/AX, never a
 /// model-supplied bundle name. No permission request, window enumeration, capture or input is performed here.
 enum NativeIdentityReader {
+    /// Count-only proof for an opaque, excluded system-host window. This never authorizes source pixels or input.
+    static func nonApplicationSystemHost(pid: pid_t) -> HelperProcessIdentity? {
+        guard let before = HelperLifecycle.processIdentity(pid),
+              before.executable.hasPrefix("/System/") || before.executable.hasPrefix("/usr/libexec/"),
+              NSRunningApplication(processIdentifier: pid) == nil,
+              let facts = try? signing(pid: pid), facts.verified, facts.apple, facts.platform,
+              let identifier = facts.identifier, !identifier.isEmpty,
+              NSRunningApplication(processIdentifier: pid) == nil,
+              HelperLifecycle.processIdentity(pid) == before else { return nil }
+        return before
+    }
+
     static func observe(pid: pid_t) throws -> NativeOwner {
         guard let before = HelperLifecycle.processIdentity(pid),
               let app = NSRunningApplication(processIdentifier: pid), let bundle = app.bundleIdentifier,
