@@ -239,7 +239,30 @@ std::string command_output(const std::filesystem::path& executable, std::wstring
     exited = wait == WAIT_OBJECT_0;
   }
   DWORD exit = 1;
-  require(GetExitCodeProcess(child.get(), &exit) != FALSE && exit == 0, "version.exit-code");
+  require(GetExitCodeProcess(child.get(), &exit) != FALSE, "cli.exit-code-unavailable");
+  if (exit != 0) {
+    std::string label = arguments == L"--version --json" ? "cli.version" : arguments == L"--probe --json" ? "cli.probe" :
+      arguments == L"--self-test=unprivileged" ? "cli.unprivileged" : arguments == L"--self-test=packaged" ? "cli.packaged" : "cli.unknown";
+    if (arguments == L"--self-test=unprivileged" || arguments == L"--self-test=packaged") {
+      // Parse only fixed check names/booleans. Never print a child's private/raw stdout or stderr.
+      try {
+        const auto report = JsonObject::Parse(winrt::to_hstring(output));
+        for (const auto& value : report.GetNamedArray(L"checks")) {
+          const auto check = value.GetObject();
+          if (check.GetNamedBoolean(L"ok")) continue;
+          const auto name = check.GetNamedString(L"name");
+          if (name == L"wire-codec") label += ".wire-codec";
+          else if (name == L"packaged-pe") label += ".packaged-pe";
+          else if (name == L"packaged-manifest") label += ".packaged-manifest";
+          else if (name == L"packaged-version") label += ".packaged-version";
+          break;
+        }
+      } catch (...) {}
+    }
+    if (output == "The computer helper could not start safely.\n") label += ".safe-start";
+    label += ".exit-" + std::to_string(exit);
+    throw UnitFailure(label.c_str());
+  }
   return output;
 }
 
