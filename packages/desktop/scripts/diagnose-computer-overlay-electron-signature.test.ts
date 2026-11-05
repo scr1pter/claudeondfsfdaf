@@ -142,6 +142,46 @@ test("copy resealing is a fixed explicit opt-in without selectable paths, identi
     expect(() => parseElectronSignatureProbeOptions(args)).toThrow("only the fixed")
 })
 
+test.skipIf(process.platform === "win32")(
+  "metadata and bounded link context precede a containment rejection without signing",
+  async () => {
+    const f = await fixture(),
+      output: string[] = []
+    try {
+      const outside = path.join(f.root, "outside-bundle")
+      await writeFile(outside, "controlled outside bytes")
+      await symlink(outside, path.join(f.app, "Contents/absolute-link"))
+      await expect(
+        probeComputerOverlayElectronSignatures({
+          directory: f.root,
+          sealOwnedCopy: true,
+          write: (message) => output.push(message),
+          run: async (_binary, args) => {
+            expect(args).not.toContain("--sign")
+            return args.includes("--display")
+              ? {
+                  code: 0,
+                  stdout: "",
+                  stderr:
+                    "Identifier=Electron\nCodeDirectory v=20500 size=400 flags=0x20002(adhoc,linker-signed) hashes=4+4 location=embedded\n",
+                }
+              : { code: 1, stdout: "", stderr: "original missing resource envelope" }
+          },
+        }),
+      ).rejects.toThrow("internal relative bundle links")
+      const log = output.join("")
+      expect(log.indexOf("step=metadata-before")).toBeGreaterThanOrEqual(0)
+      expect(log.indexOf("step=metadata-before")).toBeLessThan(log.indexOf("electron-signature-trial-link"))
+      expect(log).toContain('"scope":"absolute"')
+      expect(log).toContain('"role":"source"')
+      expect(log).toContain('"role":"copy"')
+      expect(await readFile(outside, "utf8")).toBe("controlled outside bytes")
+    } finally {
+      await rm(f.root, { recursive: true, force: true })
+    }
+  },
+)
+
 test("the owned root-only seal preserves invalid baselines and requires metadata, nested/source bytes, deep verify and exact version", async () => {
   for (const mode of [
     "success",
@@ -159,8 +199,13 @@ test("the owned root-only seal preserves invalid baselines and requires metadata
       output: string[] = []
     const state = { sealed: false, copy: "", launches: 0 }
     try {
+      const physicalTemp = path.join(f.root, "physical-temp")
+      await mkdir(physicalTemp)
+      const aliasTemp = path.join(f.root, "alias-temp")
+      if (process.platform !== "win32") await symlink(physicalTemp, aliasTemp, "dir")
       const pending = probeComputerOverlayElectronSignatures({
         directory: f.root,
+        temporaryDirectory: process.platform === "win32" ? physicalTemp : aliasTemp,
         sealOwnedCopy: true,
         write: (message) => output.push(message),
         run: async (binary, args) => {
@@ -231,6 +276,8 @@ test("the owned root-only seal preserves invalid baselines and requires metadata
         const report = await pending
         expect(report.source).toBe("failed")
         expect(report.copy).toBe("failed")
+        expect(state.copy.startsWith(physicalTemp + path.sep)).toBe(true)
+        expect(state.copy.startsWith(aliasTemp + path.sep)).toBe(false)
         expect(report.trial).toMatchObject({
           metadataPreserved: true,
           nestedBytesUnchanged: true,

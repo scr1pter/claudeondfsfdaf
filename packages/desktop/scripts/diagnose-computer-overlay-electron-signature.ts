@@ -15,7 +15,13 @@ export function parseElectronSignatureProbeOptions(args: readonly string[]) {
 
 /** CI contrast with an explicit disposable-copy trial. No source mutation or release authority. */
 export async function probeComputerOverlayElectronSignatures(
-  input: { directory?: string; run?: NativeCommand; write?: (message: string) => void; sealOwnedCopy?: boolean } = {},
+  input: {
+    directory?: string
+    temporaryDirectory?: string
+    run?: NativeCommand
+    write?: (message: string) => void
+    sealOwnedCopy?: boolean
+  } = {},
 ) {
   const directory = path.resolve(input.directory ?? fileURLToPath(new URL("../", import.meta.url)))
   const require = createRequire(path.join(directory, "package.json"))
@@ -56,7 +62,10 @@ export async function probeComputerOverlayElectronSignatures(
       )
     return outcome
   }
-  const owned = await mkdtemp(path.join(tmpdir(), "vector-overlay-electron-signature-"))
+  // macOS exposes temp paths through /var aliases; compare every held bundle under its canonical root.
+  const owned = await realpath(
+    await mkdtemp(path.join(input.temporaryDirectory ?? tmpdir(), "vector-overlay-electron-signature-")),
+  )
   try {
     const sourceResult = await verify("source", source)
     // Preserve the measured builder's baseline copy before any explicitly requested trial.
@@ -138,13 +147,19 @@ async function sealOwnedElectronCopy(
       entitlements: hash(result.stdout.trim()),
     }
     write(`electron-signature-trial-metadata step=${step} ${JSON.stringify(observed)}\n`)
-    if (observed.identifier !== "com.github.Electron")
-      throw new Error("The owned Electron trial metadata does not have the expected bundle identifier.")
     return observed
   }
-  const sourceBefore = await electronTreeWitness(source)
-  const copyBefore = await electronTreeWitness(copy)
   const metadataBefore = await metadata("metadata-before")
+  const witnesses = await Promise.allSettled([
+    electronTreeWitness(source, "source", write),
+    electronTreeWitness(copy, "copy", write),
+  ])
+  if (witnesses[0]!.status === "rejected") throw witnesses[0]!.reason
+  if (witnesses[1]!.status === "rejected") throw witnesses[1]!.reason
+  const sourceBefore = witnesses[0]!.value
+  const copyBefore = witnesses[1]!.value
+  if (metadataBefore.identifier !== "com.github.Electron")
+    throw new Error("The owned Electron trial metadata does not have the expected bundle identifier.")
   await command("seal-owned-copy", "/usr/bin/codesign", [
     "--force",
     "--sign",
@@ -156,8 +171,8 @@ async function sealOwnedElectronCopy(
   await command("strict-all-architectures", "/usr/bin/codesign", ["--verify", "--strict", "--all-architectures", copy])
   await command("deep-strict", "/usr/bin/codesign", ["--verify", "--deep", "--strict", "--all-architectures", copy])
   const metadataAfter = await metadata("metadata-after")
-  const sourceAfter = await electronTreeWitness(source)
-  const copyAfter = await electronTreeWitness(copy)
+  const sourceAfter = await electronTreeWitness(source, "source", write)
+  const copyAfter = await electronTreeWitness(copy, "copy", write)
   const proof = {
     // CS_ADHOC records the requested signing-kind change; every other original flag remains authoritative.
     metadataPreserved:
@@ -180,7 +195,7 @@ async function sealOwnedElectronCopy(
 
 const hash = (value: Uint8Array | string) => createHash("sha256").update(value).digest("hex")
 
-async function electronTreeWitness(root: string) {
+async function electronTreeWitness(root: string, role: "source" | "copy", write: (message: string) => void) {
   const entries: { file: string; digest: string }[] = []
   async function visit(directory: string) {
     for (const entry of await readdir(directory, { withFileTypes: true })) {
@@ -194,8 +209,24 @@ async function electronTreeWitness(root: string) {
       if (!status.isSymbolicLink() && (!status.isFile() || status.size > 512 * 1024 * 1024))
         throw new Error("The Electron witness encountered an unsupported file.")
       const link = status.isSymbolicLink() ? await readlink(file) : undefined
-      if (link !== undefined && (path.isAbsolute(link) || !(await realpath(file)).startsWith(root + path.sep)))
-        throw new Error("The Electron trial requires internal relative bundle links.")
+      if (link !== undefined) {
+        const resolved = await realpath(file).catch(() => undefined)
+        const scope = path.isAbsolute(link)
+          ? "absolute"
+          : resolved === root
+            ? "bundle-root"
+            : resolved?.startsWith(root + path.sep)
+              ? "internal"
+              : resolved
+                ? "external"
+                : "unresolved"
+        if (scope !== "internal") {
+          write(
+            `electron-signature-trial-link ${JSON.stringify({ role, file: boundedDiagnostic(path.relative(root, file).split(path.sep).join("/"), 512), target: boundedDiagnostic(link, 1024), scope })}\n`,
+          )
+          throw new Error("The Electron trial requires internal relative bundle links.")
+        }
+      }
       entries.push({
         file: path.relative(root, file).split(path.sep).join("/"),
         digest: link === undefined ? hash(await readFile(file)) : `link:${link}`,
