@@ -55,14 +55,21 @@ def validate(data):
     assert compaction["baseline_regressions_failed"] == compaction["fixed_regressions_passed"] == 8
     assert compaction["core_typecheck_passed"] and compaction["engine_typecheck_passed"]
     assert compaction["paid_savings_measured"] is False
-    extra = data.get("additional_complete_study")
-    if extra is not None:
+    for extra in additional_studies(data):
         assert extra["status"] == "complete" and extra["settlement_complete"] is True
         assert extra["all_charges_retained"] is True
         for side in ("vector", "codex"):
             assert Decimal(extra[side]["cost_usd"]) >= 0
             assert 0 <= extra[side]["checks_passed"] <= extra[side]["checks_total"]
             assert extra[side]["requests"] > 0
+            if "review_scores" in extra[side]:
+                review = extra["blinded_review"]
+                assert len(review["reviewers"]) == len(set(review["reviewers"])) == 2
+                assert extra[side]["review_scores"] == [
+                    sum(row[side + "_score"] for row in review["categories"] if row["reviewer_id"] == reviewer)
+                    for reviewer in review["reviewers"]
+                ]
+                assert all(0 <= score <= 48 for score in extra[side]["review_scores"])
         if extra["quality_gate_met"]:
             assert all(extra[s]["checks_passed"] == extra[s]["checks_total"] for s in ("vector", "codex"))
             assert extra["vector"]["checks_total"] == extra["codex"]["checks_total"]
@@ -150,7 +157,7 @@ def cover(c, data, total):
 def benchmark(c, data, total):
     top(c, 2, total, data)
     y = text(c, "Measured on three workflows.", M, 700, CW, 30, 36, NAVY, True)
-    y = text(c, "Same model. High reasoning. One autonomous agent per runtime. Every recorded request retained, with no paid repair in this set.", M, y - 15, CW, 12.2, 18)
+    y = text(c, "Same model. High reasoning. One autonomous agent per runtime. All recorded runtime requests retained; no evaluator-triggered repair in this set.", M, y - 15, CW, 12.2, 18)
     table_top = y - 28
     widths = [170, 82, 82, 90, 98]
     headers = ["Workflow", "Vector<br/>API cost", "Codex<br/>API cost", "Checks<br/>each", "Review /48<br/>Vector / Codex"]
@@ -244,7 +251,7 @@ def evidence(c, data, total):
     y = text(c, "The earlier 220-test suite covers repeated tool outcomes, user rechecks, incomplete usage and background continuity. The latest suite adds summary-cost and cancellation checks. Counts overlap and are not additive; these are engineering checks, separate from application quality. [E3, E6]", M, y - 10, CW, 11.4, 16.5)
     y -= 24
     y = text(c, "Benchmark scope", M, y, CW, 17, 23, NAVY, True)
-    y = text(c, "Three single-trial pairs used the same gpt-6.1-sol model, High reasoning and one autonomous agent per runtime. Two tasks were development replications; one was held out. Results describe the tested candidate, required checks and fixed static rubric. The sample does not establish statistical significance or predict all workloads.", M, y - 10, CW, 10.6, 15.1)
+    y = text(c, "Three single-trial pairs on Windows used the same gpt-6.1-sol model, High reasoning and one autonomous agent per runtime. Two tasks were development replications; one was held out. Results describe the tested candidate, required checks and fixed static rubric. The sample does not establish statistical significance or predict all workloads.", M, y - 10, CW, 10.6, 15.1)
     y = text(c, "Prices are derived from recorded provider usage at the study schedule. Reviews use exact source and selected screenshots; passing checks do not certify production reliability or security. Larger multi-agent evidence is included only after a complete, settled comparison.", M, y - 11, CW, 10.6, 15.1)
     y -= 21
     y = text(c, "Evidence register", M, y, CW, 14, 19, NAVY, True)
@@ -255,10 +262,14 @@ def evidence(c, data, total):
     c.showPage()
 
 
-def additional(c, data, total):
-    study = data["additional_complete_study"]
-    top(c, 5, total, data)
-    y = text(c, "Additional matched evidence.", M, 700, CW, 30, 36, NAVY, True)
+def additional_studies(data):
+    assert not (data.get("additional_complete_study") and data.get("additional_complete_studies"))
+    return data.get("additional_complete_studies") or ([data["additional_complete_study"]] if data.get("additional_complete_study") else [])
+
+
+def additional(c, data, total, study, number):
+    top(c, number, total, data)
+    y = text(c, "Multi-agent stress validation.", M, 700, CW, 30, 36, NAVY, True)
     y = text(c, escape(study["label"]), M, y - 18, CW, 18, 24, NAVY, True)
     y = text(c, f"Same {escape(study['model'])} model and {escape(study['reasoning'])} reasoning; {study['team_size_each']} configured agents per runtime. All recorded charges retained and both episodes settled.", M, y - 15, CW, 12, 18)
     y -= 28
@@ -267,10 +278,14 @@ def additional(c, data, total):
         rect(c, M, y, CW, 94, PALE if side == "vector" else LIGHT)
         text(c, label, M + 18, y - 15, 130, 18, 23, NAVY, True)
         text(c, money(arm["cost_usd"]), M + 170, y - 15, 160, 25, 31, TEAL if side == "vector" else NAVY, True)
-        text(c, f"{arm['checks_passed']}/{arm['checks_total']} required checks; {arm['requests']} provider requests", M + 18, y - 61, CW - 36, 11, 16)
+        text(c, f"{arm['checks_passed']}/{arm['checks_total']} required checks; {arm['requests']} provider requests", M + 18, y - 52, CW - 36, 11, 16)
+        if arm.get("review_scores"):
+            text(c, "Blinded static reviews: " + " and ".join(str(score) + "/48" for score in arm["review_scores"]), M + 18, y - 72, CW - 36, 10, 14, MUTED)
         y -= 111
     y = text(c, "Recorded quality gate: " + ("met within the measured scope." if study["quality_gate_met"] else "not met; no quality-preserving savings claim is made."), M, y - 8, CW, 13, 19, NAVY, True)
-    text(c, escape(study["scope"]), M, y - 18, CW, 11.4, 17)
+    y = text(c, escape(study["scope"]), M, y - 15, CW, 10.5, 15)
+    if study.get("source_url"):
+        text(c, "<link href='" + escape(study["source_url"], quote=True) + "' color='#008E88'>Study evidence and original outcomes</link>", M, y - 14, CW, 10, 14, MUTED)
     c.showPage()
 
 
@@ -286,7 +301,7 @@ def main():
         pdfmetrics.registerFont(TTFont(name, str(options.font_dir / file)))
     pdfmetrics.registerFontFamily(FONT, normal=FONT, bold=BOLD, italic=ITALIC, boldItalic=BOLD)
     options.out.parent.mkdir(parents=True, exist_ok=True)
-    total = 5 if data.get("additional_complete_study") else 4
+    total = 4 + len(additional_studies(data))
     c = canvas.Canvas(str(options.out), pagesize=(W, H), pageCompression=1)
     c.setTitle(data["title"])
     c.setAuthor("Vector")
@@ -294,8 +309,8 @@ def main():
     c.setCreator("Vector investor brief builder")
     for page in (cover, benchmark, mechanics, evidence):
         page(c, data, total)
-    if data.get("additional_complete_study"):
-        additional(c, data, total)
+    for number, study in enumerate(additional_studies(data), 5):
+        additional(c, data, total, study, number)
     c.save()
     reader = PdfReader(options.out)
     assert len(reader.pages) == total

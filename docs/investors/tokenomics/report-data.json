@@ -99,7 +99,135 @@
     "scope": "Local scripted regression checks for V2 tool-loop and accounting behavior. These later controls were not the source used for the paid three-task result.",
     "source_id": "E3"
   },
-  "additional_complete_study": null,
+  "additional_complete_study": {
+    "status": "complete",
+    "label": "Nested seven-role API, CLI and SDK build",
+    "model": "gpt-6.1-sol",
+    "reasoning": "High",
+    "team_size_each": 7,
+    "settlement_complete": true,
+    "all_charges_retained": true,
+    "quality_gate_met": false,
+    "matched_native_audit_passed": false,
+    "vector": {
+      "cost_usd": "6.6391490",
+      "requests": 279,
+      "checks_passed": 53,
+      "checks_total": 54,
+      "native_roles_observed": 7,
+      "review_scores": [
+        46,
+        47
+      ]
+    },
+    "codex": {
+      "cost_usd": "4.6033534",
+      "requests": 300,
+      "checks_passed": 53,
+      "checks_total": 54,
+      "native_roles_observed": 7,
+      "review_scores": [
+        43,
+        42
+      ]
+    },
+    "scope": "Final snapshots passed 53/54 checks each. The remaining assertion expects 401 rather than 403 for the bootstrap credential; both products denied access. Vector stopped at a conservative request-reservation limit; Codex reached 300 requests during repair. Both original native audits require review. Vector scored higher in both blinded review totals, with two lower dimension scores in one review. These descriptive costs and reviews do not establish equal-quality savings. The smaller three-task result remains separate.",
+    "source_url": "https://github.com/scr1pter/claudeondfsfdaf/tree/investor-brief/docs/benchmarks/agentic-heavy-v2/relay-headless-2026-11-04",
+    "blinded_review": {
+      "same_rubric_and_reviewer_pool": true,
+      "source_and_required_artifacts_reviewed": true,
+      "reviewers": [
+        "R1",
+        "R2"
+      ],
+      "categories": [
+        {
+          "reviewer_id": "R1",
+          "name": "Functional completeness and coherent API semantics",
+          "vector_score": 7,
+          "codex_score": 8,
+          "maximum": 8
+        },
+        {
+          "reviewer_id": "R1",
+          "name": "Transactional integrity, recovery and corruption handling",
+          "vector_score": 8,
+          "codex_score": 4,
+          "maximum": 8
+        },
+        {
+          "reviewer_id": "R1",
+          "name": "Authorization boundaries and input/error validation",
+          "vector_score": 8,
+          "codex_score": 8,
+          "maximum": 8
+        },
+        {
+          "reviewer_id": "R1",
+          "name": "Concurrency, capability/lease fencing and lifecycle",
+          "vector_score": 8,
+          "codex_score": 8,
+          "maximum": 8
+        },
+        {
+          "reviewer_id": "R1",
+          "name": "CLI usability and typed SDK contract accuracy",
+          "vector_score": 8,
+          "codex_score": 7,
+          "maximum": 8
+        },
+        {
+          "reviewer_id": "R1",
+          "name": "Maintainability and meaningful independent verification",
+          "vector_score": 7,
+          "codex_score": 8,
+          "maximum": 8
+        },
+        {
+          "reviewer_id": "R2",
+          "name": "Functional completeness and coherent API semantics",
+          "vector_score": 8,
+          "codex_score": 6,
+          "maximum": 8
+        },
+        {
+          "reviewer_id": "R2",
+          "name": "Transactional integrity, recovery and corruption handling",
+          "vector_score": 8,
+          "codex_score": 6,
+          "maximum": 8
+        },
+        {
+          "reviewer_id": "R2",
+          "name": "Authorization boundaries and input/error validation",
+          "vector_score": 8,
+          "codex_score": 8,
+          "maximum": 8
+        },
+        {
+          "reviewer_id": "R2",
+          "name": "Concurrency, capability/lease fencing and lifecycle",
+          "vector_score": 8,
+          "codex_score": 8,
+          "maximum": 8
+        },
+        {
+          "reviewer_id": "R2",
+          "name": "CLI usability and typed SDK contract accuracy",
+          "vector_score": 8,
+          "codex_score": 7,
+          "maximum": 8
+        },
+        {
+          "reviewer_id": "R2",
+          "name": "Maintainability and meaningful independent verification",
+          "vector_score": 7,
+          "codex_score": 7,
+          "maximum": 8
+        }
+      ]
+    }
+  },
   "sources": [
     {
       "id": "E1",

@@ -79,6 +79,26 @@ class ClaimValidation(unittest.TestCase):
         del extra["blinded_review"]
         build_brief.validate(self.data)
 
+    def test_every_completed_followup_is_validated(self):
+        extra = self.extra()
+        self.data["additional_complete_study"] = None
+        self.data["additional_complete_studies"] = [extra, {**extra, "settlement_complete": False}]
+        with self.assertRaises(AssertionError):
+            build_brief.validate(self.data)
+
+    def test_single_and_list_followups_cannot_hide_each_other(self):
+        extra = self.extra()
+        self.data["additional_complete_studies"] = [extra]
+        with self.assertRaises(AssertionError):
+            build_brief.validate(self.data)
+
+    def test_descriptive_review_totals_must_match_locked_categories(self):
+        extra = self.extra()
+        extra["quality_gate_met"] = False
+        extra["vector"]["review_scores"] = [48, 48]
+        with self.assertRaises(AssertionError):
+            build_brief.validate(self.data)
+
 
 if __name__ == "__main__":
     unittest.main()

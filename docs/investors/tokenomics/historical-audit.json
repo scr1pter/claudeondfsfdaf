@@ -141,6 +141,142 @@
       "stageRevision": "367660e67ddd25c9f5b06e6ee150e2b55ec906e8",
       "scope": "The provider transport interruption makes this attempt ineligible as a completed paired comparison. Known charges and the entire unresolved reservation remain in the study budget. The original partial generated source is retained for audit, with no manual repair.",
       "source": "docs/benchmarks/agentic-heavy-v2/harbor-interrupted-2026-11-04/checkpoint.json"
+    },
+    {
+      "name": "Relay nested seven-role headless stress study",
+      "source_path": "docs/benchmarks/agentic-heavy-v2/relay-headless-2026-11-04",
+      "model": "gpt-6.1-sol",
+      "reasoning": "High",
+      "agents_each": 7,
+      "vector_usd": "6.6391490",
+      "codex_usd": "4.6033534",
+      "requests_vector": 279,
+      "requests_codex": 300,
+      "checks_passed_each": 53,
+      "checks_required_each": 54,
+      "quality_priority_met": false,
+      "status": "closed_settled_episodes",
+      "qualification": "Original Vector functional gate not_run; separate free final-source diagnostic53/54. Codex original and separate final diagnostic53/54. Both original native audits review_required. Costs are descriptive; no accepted-output/equal-quality savings claim. Bootstrap403vs401 assertion blocked access in both. Two blinded reviews locked before unblinding: Vector46/47, Codex43/42of48. Two dimensions lower for Vector in reviewer1; retain disagreements and no quality-preserving cost claim.",
+      "blinded_review": {
+        "kind": "unblinded-source-review-projection-v1",
+        "mapping": {
+          "A": "vector",
+          "B": "codex"
+        },
+        "mappingDisclosedAfterBothLocks": true,
+        "reviews": [
+          {
+            "reviewer": "R1",
+            "originalLockedSha256": "39184f6ef14c7d0c7dcfee2b772d1817f54415575b3861e11e1108a20462c84b",
+            "lockedAtUtc": "2026-11-05T02:19:09.681382+00:00",
+            "totals": {
+              "vector": 46,
+              "codex": 43
+            }
+          },
+          {
+            "reviewer": "R2",
+            "originalLockedSha256": "fb8d41c446a779103246a67fc094493dd232bc24554caa1a5306f86242ea48d7",
+            "lockedAtUtc": "2026-11-05T02:20:33.009607+00:00",
+            "totals": {
+              "vector": 47,
+              "codex": 42
+            }
+          }
+        ],
+        "categories": [
+          {
+            "reviewer_id": "R1",
+            "name": "Functional completeness and coherent API semantics",
+            "vector_score": 7,
+            "codex_score": 8,
+            "maximum": 8
+          },
+          {
+            "reviewer_id": "R1",
+            "name": "Transactional integrity, recovery and corruption handling",
+            "vector_score": 8,
+            "codex_score": 4,
+            "maximum": 8
+          },
+          {
+            "reviewer_id": "R1",
+            "name": "Authorization boundaries and input/error validation",
+            "vector_score": 8,
+            "codex_score": 8,
+            "maximum": 8
+          },
+          {
+            "reviewer_id": "R1",
+            "name": "Concurrency, capability/lease fencing and lifecycle",
+            "vector_score": 8,
+            "codex_score": 8,
+            "maximum": 8
+          },
+          {
+            "reviewer_id": "R1",
+            "name": "CLI usability and typed SDK contract accuracy",
+            "vector_score": 8,
+            "codex_score": 7,
+            "maximum": 8
+          },
+          {
+            "reviewer_id": "R1",
+            "name": "Maintainability and meaningful independent verification",
+            "vector_score": 7,
+            "codex_score": 8,
+            "maximum": 8
+          },
+          {
+            "reviewer_id": "R2",
+            "name": "Functional completeness and coherent API semantics",
+            "vector_score": 8,
+            "codex_score": 6,
+            "maximum": 8
+          },
+          {
+            "reviewer_id": "R2",
+            "name": "Transactional integrity, recovery and corruption handling",
+            "vector_score": 8,
+            "codex_score": 6,
+            "maximum": 8
+          },
+          {
+            "reviewer_id": "R2",
+            "name": "Authorization boundaries and input/error validation",
+            "vector_score": 8,
+            "codex_score": 8,
+            "maximum": 8
+          },
+          {
+            "reviewer_id": "R2",
+            "name": "Concurrency, capability/lease fencing and lifecycle",
+            "vector_score": 8,
+            "codex_score": 8,
+            "maximum": 8
+          },
+          {
+            "reviewer_id": "R2",
+            "name": "CLI usability and typed SDK contract accuracy",
+            "vector_score": 8,
+            "codex_score": 7,
+            "maximum": 8
+          },
+          {
+            "reviewer_id": "R2",
+            "name": "Maintainability and meaningful independent verification",
+            "vector_score": 7,
+            "codex_score": 7,
+            "maximum": 8
+          }
+        ],
+        "meanTotals": {
+          "vector": 46.5,
+          "codex": 42.5
+        },
+        "vectorNoLowerInEveryDimensionForEveryReviewer": false,
+        "scope": "Two bounded static reviews of exact final source; no app execution. Functional gate and original native audit remain separate. A higher total does not override a lower dimension. Original reviewer disagreements and interpretation limits are retained."
+      }
     }
   ],
   "non_inference_evidence": [
