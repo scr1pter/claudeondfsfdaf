@@ -49,5 +49,40 @@
     "skipped": 1
   },
   "windows": "x64 and native ARM64 build/units/version/probes passed; W1 protocol/isolated explicitly skipped",
-  "matchingMatrix": "pending measured pin follow-up; dirty M11 excluded"
+  "matchingMatrix": {
+    "run": 41980614444,
+    "head": "e02a3ef4afd3ebe2bff39f86775855cad9583239",
+    "conclusion": "success",
+    "jobs": {
+      "plan": 127089615935,
+      "windowsBuild": 127089678252,
+      "macBuild": 127089678280,
+      "windowsArm64": 127091122829,
+      "macIntel": 127093703382,
+      "mac26": 127093703402
+    },
+    "macOptionalPrivilegedSteps": "REST conclusion success plus actual logs 29 passed/1 skipped/0 failed in all three Mac lanes; REST does not expose outcome",
+    "windowsOptionalPrivilegedSteps": "explicit W1 readiness skips",
+    "reportArtifactsApiMetadata": [
+      {
+        "id": 13393683782,
+        "lane": "mac-build",
+        "sha256": "054d09484ec0a00c507e1a7db42277fd71cf99683dd5522b4afd1cb6f51b2b89",
+        "bytes": 1129
+      },
+      {
+        "id": 13393489637,
+        "lane": "mac-intel",
+        "sha256": "c135b2f943d3323bc683664827709e96c761c822132cfe8d9154d47232ca376f",
+        "bytes": 1147
+      },
+      {
+        "id": 13393908988,
+        "lane": "mac26",
+        "sha256": "956d4a20b072f8c0d515675546131d3807c490c6f4c668314f42244d71911ff4",
+        "bytes": 1147
+      }
+    ],
+    "matchingReportZipsDownloaded": false
+  }
 }
