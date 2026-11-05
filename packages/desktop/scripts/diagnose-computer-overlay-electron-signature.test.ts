@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test"
+import { createHash } from "node:crypto"
 import { lstat, mkdir, mkdtemp, readFile, readlink, realpath, rm, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
@@ -6,6 +7,8 @@ import {
   parseElectronSignatureProbeOptions,
   probeComputerOverlayElectronSignatures,
 } from "./diagnose-computer-overlay-electron-signature"
+
+const profile = "<plist><dict><key>com.apple.security.cs.allow-jit</key><true/></dict></plist>"
 
 async function fixture() {
   const root = await realpath(await mkdtemp(path.join(tmpdir(), "vector-electron-signature-test-")))
@@ -16,6 +19,12 @@ async function fixture() {
   await writeFile(path.join(electron, "package.json"), JSON.stringify({ name: "electron", version: "42.11.4" }))
   await writeFile(path.join(electron, "path.txt"), "Electron.app/Contents/MacOS/Electron\n")
   await writeFile(path.join(app, "Contents/MacOS/Electron"), "controlled Electron bytes")
+  await writeFile(
+    path.join(app, "Contents/Info.plist"),
+    "<plist><dict><key>CFBundleIdentifier</key><string>com.github.Electron</string></dict></plist>",
+  )
+  await mkdir(path.join(root, "resources"))
+  await writeFile(path.join(root, "resources/entitlements.plist"), profile)
   await mkdir(path.join(app, "Contents/Frameworks/Electron Helper.app/Contents/MacOS"), { recursive: true })
   await writeFile(
     path.join(app, "Contents/Frameworks/Electron Helper.app/Contents/MacOS/Electron Helper"),
@@ -125,7 +134,7 @@ test("the fast Mac signature probe follows pinned installation and cannot soften
     "bun --no-env-file ./scripts/diagnose-computer-overlay-electron-signature.ts --seal-owned-copy",
   )
   expect(diagnostic["continue-on-error"]).toBe(true)
-  expect(diagnostic["timeout-minutes"]).toBe(2)
+  expect(diagnostic["timeout-minutes"]).toBe(4)
   expect(diagnostic.outputs).toBeUndefined()
   expect(required.run).toBe("bun --no-env-file ./scripts/computer-overlay-smoke.ts")
   expect(required["continue-on-error"]).toBeUndefined()
@@ -185,7 +194,15 @@ test.skipIf(process.platform === "win32")(
 test("the owned root-only seal preserves invalid baselines and requires metadata, nested/source bytes, deep verify and exact version", async () => {
   for (const mode of [
     "success",
-    "stock-linker-identifier",
+    "known-linker-template",
+    "unknown-linker-template",
+    "wrong-bundle-id",
+    "c4-deep-fallback",
+    "c4-profile-mismatch",
+    "nested-timeout",
+    "nested-output-cap",
+    "nested-spawn-failed",
+    "unrelated-subcomponent",
     "nested-change",
     "metadata-change",
     "security-flag-add",
@@ -197,7 +214,11 @@ test("the owned root-only seal preserves invalid baselines and requires metadata
   ]) {
     const f = await fixture(),
       output: string[] = []
-    const state = { sealed: false, copy: "", launches: 0 }
+    const state = { sealed: false, copy: "", deepCopy: "", deepSealed: false, launches: 0 }
+    const template =
+      mode.startsWith("nested-") ||
+      mode === "unrelated-subcomponent" ||
+      ["known-linker-template", "unknown-linker-template", "c4-deep-fallback", "c4-profile-mismatch"].includes(mode)
     try {
       const physicalTemp = path.join(f.root, "physical-temp")
       await mkdir(physicalTemp)
@@ -209,42 +230,101 @@ test("the owned root-only seal preserves invalid baselines and requires metadata
         sealOwnedCopy: true,
         write: (message) => output.push(message),
         run: async (binary, args) => {
+          if (binary === "/usr/bin/plutil") {
+            if (args.includes("-extract")) {
+              expect(args).toEqual([
+                "-extract",
+                "CFBundleIdentifier",
+                "raw",
+                "-o",
+                "-",
+                path.join(state.copy, "Contents/Info.plist"),
+              ])
+              return {
+                code: 0,
+                stdout: mode === "wrong-bundle-id" ? "other.bundle\n" : "com.github.Electron\n",
+                stderr: "",
+              }
+            }
+            expect(args.slice(0, 4)).toEqual(["-convert", "json", "-o", "-"])
+            return {
+              code: 0,
+              stdout: JSON.stringify({
+                "com.apple.security.cs.allow-jit": !(
+                  mode === "c4-profile-mismatch" && args.at(-1)?.endsWith("observed-entitlements.plist")
+                ),
+              }),
+              stderr: "",
+            }
+          }
           if (binary !== "/usr/bin/codesign") {
-            expect(binary).toBe(path.join(state.copy, "Contents/MacOS/Electron"))
+            expect(binary).toBe(path.join(state.deepSealed ? state.deepCopy : state.copy, "Contents/MacOS/Electron"))
             expect(args).toEqual(["--version"])
             state.launches++
             return { code: 0, stdout: mode === "version-mismatch" ? "v42.11.3\n" : "v42.11.4\n", stderr: "" }
           }
           const bundle = args.at(-1)!
           if (args.includes("--display")) {
-            expect(bundle).toBe(state.copy)
+            expect(bundle).toBe(state.deepSealed ? state.deepCopy : state.copy)
             const flags = !state.sealed
-              ? mode === "stock-linker-identifier"
+              ? template
                 ? "0x20002"
                 : "0x10000"
-              : mode === "metadata-change"
+              : template && !state.deepSealed
                 ? "0x2"
-                : mode === "security-flag-add"
-                  ? "0x10102"
-                  : "0x10002"
+                : mode === "metadata-change"
+                  ? "0x2"
+                  : mode === "security-flag-add"
+                    ? "0x10102"
+                    : "0x10002"
             return {
               code: 0,
-              stdout:
-                state.sealed && mode === "entitlements-change"
-                  ? "<plist><dict><key>changed</key><true/></dict></plist>"
-                  : "<plist><dict/></plist>",
-              stderr: `Identifier=${mode === "stock-linker-identifier" ? "Electron" : "com.github.Electron"}\nCodeDirectory v=20500 size=400 flags=${flags}(runtime) hashes=4+4 location=embedded\n${mode === "stock-linker-identifier" ? "" : `Runtime Version=${state.sealed && mode === "runtime-change" ? "16.0.0" : "15.5.0"}\n`}`,
+              stdout: state.deepSealed
+                ? profile
+                : template && mode !== "unknown-linker-template"
+                  ? ""
+                  : state.sealed && mode === "entitlements-change"
+                    ? "<plist><dict><key>changed</key><true/></dict></plist>"
+                    : "<plist><dict/></plist>",
+              stderr: `Identifier=${template && !state.sealed ? "Electron" : "com.github.Electron"}\nCodeDirectory v=20500 size=400 flags=${flags}(runtime) hashes=4+4 location=embedded\n${(Number.parseInt(flags, 16) & 0x10000) === 0 ? "" : `Runtime Version=${state.sealed && mode === "runtime-change" ? "16.0.0" : "15.5.0"}\n`}`,
             }
           }
           if (args.includes("--sign")) {
-            expect(args).toEqual([
-              "--force",
-              "--sign",
-              "-",
-              "--timestamp=none",
-              "--preserve-metadata=identifier,entitlements,flags,runtime",
-              state.copy,
-            ])
+            if (args.includes("--deep")) {
+              expect(args).toEqual([
+                "--force",
+                "--deep",
+                "--sign",
+                "-",
+                "--options",
+                "runtime",
+                "--timestamp=none",
+                "--entitlements",
+                path.join(f.root, "resources/entitlements.plist"),
+                bundle,
+              ])
+              expect(bundle).not.toBe(state.copy)
+              expect(await readFile(path.join(bundle, "Contents/MacOS/Electron"), "utf8")).toBe(
+                "controlled Electron bytes",
+              )
+              state.deepCopy = bundle
+              state.deepSealed = true
+              await writeFile(
+                path.join(bundle, "Contents/Frameworks/Electron Helper.app/Contents/MacOS/Electron Helper"),
+                "re-signed nested bytes",
+              )
+            } else {
+              expect(args).toEqual([
+                "--force",
+                "--sign",
+                "-",
+                "--timestamp=none",
+                ...(template
+                  ? ["--identifier", "com.github.Electron"]
+                  : ["--preserve-metadata=identifier,entitlements,flags,runtime"]),
+                state.copy,
+              ])
+            }
             expect(bundle.startsWith(f.electron)).toBe(false)
             state.sealed = true
             await writeFile(path.join(bundle, "Contents/MacOS/Electron"), "new root signature bytes")
@@ -260,39 +340,85 @@ test("the owned root-only seal preserves invalid baselines and requires metadata
               )
             return { code: 0, stdout: "", stderr: "" }
           }
+          if (
+            state.sealed &&
+            !state.deepSealed &&
+            (mode.startsWith("c4-") || mode.startsWith("nested-") || mode === "unrelated-subcomponent") &&
+            args.includes("--deep")
+          )
+            return {
+              code: 1,
+              stdout: "",
+              stderr: `code object is not signed at all\nIn subcomponent: ${mode === "unrelated-subcomponent" ? f.root : path.join(state.copy, "Contents/Frameworks/Electron Helper.app")}\n`,
+              ...(mode.startsWith("nested-")
+                ? {
+                    failureReason:
+                      mode === "nested-timeout"
+                        ? ("timed-out" as const)
+                        : mode === "nested-output-cap"
+                          ? ("output-cap" as const)
+                          : ("spawn-failed" as const),
+                  }
+                : {}),
+            }
           if (!state.sealed) {
             if (bundle !== f.app) state.copy = bundle
             return { code: 1, stdout: "", stderr: "original missing resource envelope" }
           }
           expect(args).toEqual(
             args.includes("--deep")
-              ? ["--verify", "--deep", "--strict", "--all-architectures", state.copy]
-              : ["--verify", "--strict", "--all-architectures", state.copy],
+              ? [
+                  "--verify",
+                  "--deep",
+                  "--strict",
+                  "--all-architectures",
+                  state.deepSealed ? state.deepCopy : state.copy,
+                ]
+              : ["--verify", "--strict", "--all-architectures", state.deepSealed ? state.deepCopy : state.copy],
           )
           return { code: mode === "deep-failure" && args.includes("--deep") ? 1 : 0, stdout: "", stderr: "" }
         },
       })
-      if (mode === "success") {
+      if (["success", "known-linker-template", "c4-deep-fallback"].includes(mode)) {
         const report = await pending
         expect(report.source).toBe("failed")
         expect(report.copy).toBe("failed")
         expect(state.copy.startsWith(physicalTemp + path.sep)).toBe(true)
         expect(state.copy.startsWith(aliasTemp + path.sep)).toBe(false)
-        expect(report.trial).toMatchObject({
-          metadataPreserved: true,
-          nestedBytesUnchanged: true,
-          sourceBytesUnchanged: true,
-          strictVerified: true,
-          deepVerified: true,
-          versionVerified: true,
-        })
+        if (mode === "c4-deep-fallback") {
+          expect(report.trial).toMatchObject({
+            mode: "c4-deep-ad-hoc",
+            profileApplied: true,
+            profileSha256: createHash("sha256").update(profile).digest("hex"),
+            nestedBytePolicy: "re-signed-not-preserved",
+            sourceBytesUnchanged: true,
+            strictVerified: true,
+            deepVerified: true,
+            versionVerified: true,
+          })
+          expect(report.trial).not.toHaveProperty("nestedBytesUnchanged")
+          expect(output.join("")).toContain("root-only-result=failed")
+          await expect(lstat(path.resolve(state.deepCopy, "../.."))).rejects.toThrow()
+        } else {
+          expect(report.trial).toMatchObject({
+            mode: mode === "known-linker-template" ? "fresh-linker-template-bundle" : "preserved-bundle-metadata",
+            metadataPreserved: mode === "success",
+            freshBundleTransitionVerified: mode === "known-linker-template",
+            nestedBytesUnchanged: true,
+            sourceBytesUnchanged: true,
+            strictVerified: true,
+            deepVerified: true,
+            versionVerified: true,
+          })
+          expect(state.launches).toBe(1)
+          expect(output.join("")).toContain(
+            "result=verified version=42.11.4 baseline-unchanged=true no-release-credit=true",
+          )
+        }
         expect(state.launches).toBe(1)
-        expect(output.join("")).toContain(
-          "result=verified version=42.11.4 baseline-unchanged=true no-release-credit=true",
-        )
       } else {
         await expect(pending).rejects.toThrow()
-        if (mode === "stock-linker-identifier") {
+        if (mode === "unknown-linker-template") {
           expect(output.join("")).toContain(
             'step=metadata-before {"identifier":"Electron","flags":131074,"runtime":"none"',
           )
@@ -300,6 +426,8 @@ test("the owned root-only seal preserves invalid baselines and requires metadata
         }
         expect(state.launches).toBe(mode === "version-mismatch" ? 1 : 0)
         expect(output.join("")).not.toContain("result=verified version=42.11.4")
+        if (mode.startsWith("nested-") || mode === "unrelated-subcomponent" || mode === "deep-failure")
+          expect(state.deepSealed).toBe(false)
       }
       expect(output.join("")).toContain("role=source result=failed")
       expect(output.join("")).toContain("role=copy result=failed")

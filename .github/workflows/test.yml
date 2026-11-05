@@ -319,7 +319,7 @@ jobs:
         run: node node_modules/electron/install.js
       - name: Diagnose installed and copied Electron signatures without release credit
         continue-on-error: true
-        timeout-minutes: 2
+        timeout-minutes: 4
         run: bun --no-env-file ./scripts/diagnose-computer-overlay-electron-signature.ts --seal-owned-copy
       - name: Run real Electron overlay properties and controller lifecycle
         timeout-minutes: 3
