@@ -421,7 +421,8 @@ std::uint64_t number(std::wstring_view value, std::uint64_t maximum) {
   return result;
 }
 
-int wait_child(const Child& child, bool privileged = false) {
+int wait_child(const Child& child, bool privileged = false, DWORD* native_exit = nullptr) {
+  if (native_exit) *native_exit = 1;
   DWORD code = 1;
   const auto result = WaitForSingleObject(child.process.get(), privileged ? DWORD{140'000} : INFINITE);
   if (result == WAIT_TIMEOUT && privileged) {
@@ -430,7 +431,22 @@ int wait_child(const Child& child, bool privileged = false) {
     return 1;
   }
   if (result != WAIT_OBJECT_0 || !GetExitCodeProcess(child.process.get(), &code)) invalid();
+  if (native_exit) *native_exit = code;
   return code <= static_cast<DWORD>((std::numeric_limits<int>::max)()) ? static_cast<int>(code) : 1;
+}
+
+const char* child_exit_stage(bool bootstrap, DWORD code) noexcept {
+  switch (code) {
+    case 1: return bootstrap ? "bootstrap-child-exit-failure" : "helper-child-exit-failure";
+    case 2: return bootstrap ? "bootstrap-child-exit-usage" : "helper-child-exit-usage";
+    case 0xC0000005u: return bootstrap ? "bootstrap-child-exit-access-violation" : "helper-child-exit-access-violation";
+    case 0xC00000FDu: return bootstrap ? "bootstrap-child-exit-stack-overflow" : "helper-child-exit-stack-overflow";
+    case 0xC0000135u: return bootstrap ? "bootstrap-child-exit-dll-missing" : "helper-child-exit-dll-missing";
+    case 0xC0000142u: return bootstrap ? "bootstrap-child-exit-dll-initialization" : "helper-child-exit-dll-initialization";
+    case 0xC0000409u: return bootstrap ? "bootstrap-child-exit-fast-fail" : "helper-child-exit-fast-fail";
+    case 0xC000000Du: return bootstrap ? "bootstrap-child-exit-invalid-parameter" : "helper-child-exit-invalid-parameter";
+    default: return bootstrap ? "bootstrap-child-exit-other" : "helper-child-exit-other";
+  }
 }
 
 void report_startup_failure(HANDLE sink, bool internal, const char* stage) noexcept {
@@ -470,8 +486,10 @@ int wmain(int count, wchar_t** argv) {
     DWORD high_pid = 0; HANDLE bootstrap = nullptr;
     int offset = 1;
     if (count >= 2 && std::wstring_view(argv[1]) == L"--fixture-medium") {
-      if (count < 6 || std::wstring_view(argv[3]) != L"--bootstrap-handle") return 2;
       internal = true;
+      if (count < 6 || std::wstring_view(argv[3]) != L"--bootstrap-handle") {
+        report_startup_failure(diagnostic.get(), internal, stage); return 2;
+      }
       high_pid = static_cast<DWORD>(number(argv[2], (std::numeric_limits<DWORD>::max)()));
       bootstrap = reinterpret_cast<HANDLE>(static_cast<std::uintptr_t>(number(argv[4], (std::numeric_limits<std::uintptr_t>::max)())));
       offset = 5;
@@ -480,7 +498,9 @@ int wmain(int count, wchar_t** argv) {
     const bool serving = (count == offset + 1 && std::wstring_view(argv[offset]) == L"--stdio") || test_elevated_token;
     const bool probe = count == offset + 2 && std::wstring_view(argv[offset]) == L"--probe" && std::wstring_view(argv[offset + 1]) == L"--json";
     const bool privileged = count == offset + 1 && std::wstring_view(argv[offset]) == L"--self-test=privileged";
-    if ((!serving && !probe && !privileged) || !SetConsoleCtrlHandler(console_control, TRUE)) return 2;
+    if (!serving && !probe && !privileged) { report_startup_failure(diagnostic.get(), internal, stage); return 2; }
+    stage = "console-control";
+    if (!SetConsoleCtrlHandler(console_control, TRUE)) { report_startup_failure(diagnostic.get(), internal, stage); return 2; }
     stage = "parent-witness";
     ParentWatches watches;
     const auto own_start = created(GetCurrentProcess());
@@ -539,8 +559,9 @@ int wmain(int count, wchar_t** argv) {
       if (!vector::computer::serving_token_allowed(child_token) || !vector::computer::same_token(observed, child_token) ||
           !same_file(files.self, hold_file(process_path(child.process.get()))) || created(child.process.get()) < own_start) invalid();
       stage = "child-exit";
-      const auto code = wait_child(child, privileged);
-      if (code != 0 && code != 77) report_startup_failure(diagnostic.get(), internal, stage);
+      DWORD native_exit = 1;
+      const auto code = wait_child(child, privileged, &native_exit);
+      if (code != 0 && code != 77) report_startup_failure(diagnostic.get(), internal, child_exit_stage(true, native_exit));
       return code;
     }
     stage = "final-current";
@@ -555,8 +576,9 @@ int wmain(int count, wchar_t** argv) {
     stage = "helper-launch";
     auto child = launch(files.helper.path, command, nullptr, nullptr, serving);
     stage = "child-exit";
-    const auto code = wait_child(child, privileged);
-    if (code != 0 && code != 77) report_startup_failure(diagnostic.get(), internal, stage);
+    DWORD native_exit = 1;
+    const auto code = wait_child(child, privileged, &native_exit);
+    if (code != 0 && code != 77) report_startup_failure(diagnostic.get(), internal, child_exit_stage(false, native_exit));
     return code;
   } catch (...) {
     // Unwinding retired the death watches. Reporting cannot block on an inherited pipe.

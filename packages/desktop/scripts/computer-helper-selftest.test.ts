@@ -600,7 +600,7 @@ test("Windows report retains closed unit/Caller evidence while every observed fa
             exitAfterMs: 9,
             closeAfterMs: 10,
             sample: { status: "not-requested", suites: [], waits: [] },
-            windows: { unitSuite: "lifecycle", unitFailure: "integration.reply-pipe", caller: "initial.layout" },
+            windows: { unitSuite: "lifecycle", unitFailure: "integration.reply-pipe", caller: "initial.helper-child-exit-failure", helper: "safe-start" },
           },
         }
   fake.native.probe = async () => {
@@ -611,7 +611,7 @@ test("Windows report retains closed unit/Caller evidence while every observed fa
   expect(result.checks.find((check) => check.name === "unit")).toEqual({
     name: "unit",
     status: "failed",
-    reason: "windows-unit-failure-integration.reply-pipe.caller-initial.layout",
+    reason: "windows-unit-failure-integration.reply-pipe.caller-initial.helper-child-exit-failure.helper-safe-start",
   })
   expect(result.checks.find((check) => check.name === "probe.first")).toEqual({
     name: "probe.first",

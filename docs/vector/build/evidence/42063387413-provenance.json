@@ -1,0 +1,154 @@
+{
+  "run": 42063387413,
+  "head": "3b91bff29ac5082ccc0744fd0f99098931497b00",
+  "helperVersion": "1.0.13",
+  "intel": {
+    "job": 127378874828,
+    "artifact": 13434126976,
+    "zipBytes": 2253,
+    "zipSha256": "fc99af0479f220eded5217622f0f21978277e43aa6755e5bf5185aeed35c75a4",
+    "reports": {
+      "computer-darwin-matrix-privileged.json": {
+        "code": 0,
+        "counts": {
+          "passed": 33,
+          "failed": 0,
+          "skipped": 13
+        },
+        "nonPassing": [
+          {
+            "name": "privileged",
+            "status": "skipped",
+            "reason": "native-skip"
+          },
+          {
+            "name": "privileged.capture-color-patch",
+            "status": "skipped",
+            "reason": "screen_denied"
+          },
+          {
+            "name": "privileged.capture-overlay-exclusion",
+            "status": "skipped",
+            "reason": "screen_denied"
+          },
+          {
+            "name": "privileged.ax-counter-increment",
+            "status": "skipped",
+            "reason": "accessibility_denied"
+          },
+          {
+            "name": "privileged.ax-value-set-and-readback",
+            "status": "skipped",
+            "reason": "accessibility_denied"
+          },
+          {
+            "name": "privileged.secure-field-refusal",
+            "status": "skipped",
+            "reason": "accessibility_denied"
+          },
+          {
+            "name": "privileged.tagged-click-increments",
+            "status": "skipped",
+            "reason": "accessibility_denied"
+          },
+          {
+            "name": "privileged.stale-capture-refusal",
+            "status": "skipped",
+            "reason": "accessibility_denied"
+          },
+          {
+            "name": "privileged.background-ax-without-pointer-or-focus",
+            "status": "skipped",
+            "reason": "accessibility_denied"
+          },
+          {
+            "name": "privileged.background-selection-insertion",
+            "status": "skipped",
+            "reason": "accessibility_denied"
+          },
+          {
+            "name": "privileged.helper-tagged-escape-ignored",
+            "status": "skipped",
+            "reason": "accessibility_denied"
+          },
+          {
+            "name": "privileged.foreign-escape-stops",
+            "status": "skipped",
+            "reason": "accessibility_denied"
+          },
+          {
+            "name": "privileged.owned-input-release",
+            "status": "skipped",
+            "reason": "accessibility_denied"
+          }
+        ]
+      },
+      "computer-darwin-matrix-privileged.json.unit-diagnostic.json": {
+        "schemaVersion": 1,
+        "trigger": "complete",
+        "spawned": true,
+        "exitObserved": true,
+        "closeObserved": true,
+        "signaled": false,
+        "stdoutBytes": 36,
+        "stderrBytes": 2309,
+        "elapsedMs": 5222,
+        "exitAfterMs": 5222,
+        "closeAfterMs": 5222,
+        "sample": {
+          "status": "target-exited",
+          "suites": [],
+          "waits": []
+        },
+        "progress": {
+          "entered": true,
+          "passed": 24,
+          "complete": true,
+          "invalid": false
+        }
+      },
+      "computer-darwin-matrix.json": {
+        "code": 0,
+        "counts": {
+          "passed": 31,
+          "failed": 0,
+          "skipped": 1
+        },
+        "nonPassing": [
+          {
+            "name": "privileged",
+            "status": "skipped",
+            "reason": "disabled"
+          }
+        ]
+      },
+      "computer-darwin-matrix.json.unit-diagnostic.json": {
+        "schemaVersion": 1,
+        "trigger": "complete",
+        "spawned": true,
+        "exitObserved": true,
+        "closeObserved": true,
+        "signaled": false,
+        "stdoutBytes": 36,
+        "stderrBytes": 2309,
+        "elapsedMs": 4279,
+        "exitAfterMs": 4279,
+        "closeAfterMs": 4279,
+        "sample": {
+          "status": "target-exited",
+          "suites": [],
+          "waits": []
+        },
+        "progress": {
+          "entered": true,
+          "passed": 24,
+          "complete": true,
+          "invalid": false
+        }
+      }
+    }
+  },
+  "conclusion": "actual required31/0/1 and isolated33/0/13 pass; full24-suite units4.279s/5.222s; EOF and parent-death pass in both runs",
+  "scope": "isolated grant scenarios remain explicit missing-grant skips; no owner OS grant evidence",
+  "releaseReady": false
+}

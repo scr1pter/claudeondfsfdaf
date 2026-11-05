@@ -97,7 +97,7 @@ class Child {
   winrt::handle diagnostic;
   std::string diagnostic_line;
   size_t diagnostic_bytes = 0;
-  bool diagnostic_overflow = false, diagnostic_forwarded = false;
+  bool diagnostic_overflow = false, diagnostic_forwarded = false, helper_diagnostic_forwarded = false;
   explicit Child(const std::filesystem::path& caller, bool test_elevated_token = false) {
     SECURITY_ATTRIBUTES security{static_cast<DWORD>(sizeof(SECURITY_ATTRIBUTES)), nullptr, TRUE};
     HANDLE read = nullptr;
@@ -147,7 +147,7 @@ class Child {
     require_integration(WriteFile(input.get(), bytes.data(), static_cast<DWORD>(bytes.size()), &written, nullptr) != FALSE && written == bytes.size(), "integration.request-write");
   }
   void forward_caller_failure() {
-    if (diagnostic_forwarded || diagnostic_bytes >= 192) return;
+    if ((diagnostic_forwarded && helper_diagnostic_forwarded) || diagnostic_bytes >= 192) return;
     DWORD available = 0;
     if (!PeekNamedPipe(diagnostic.get(), nullptr, 0, nullptr, &available, nullptr) || !available) return;
     std::array<char, 192> bytes{};
@@ -155,9 +155,13 @@ class Child {
     DWORD received = 0;
     if (!ReadFile(diagnostic.get(), bytes.data(), count, &received, nullptr) || !received || received > count) return;
     diagnostic_bytes += received;
-    constexpr std::array<std::string_view, 20> stages{"layout-image", "layout-name", "layout-self-ancestors", "layout-helper-ancestors",
+    constexpr std::array<std::string_view, 39> stages{"layout-image", "layout-name", "layout-self-ancestors", "layout-helper-ancestors",
       "layout-self-file", "layout-helper-file", "layout-install-root", "arguments", "parent-witness", "apartment", "token", "layout", "ancestors",
-      "medium-admission", "restricted-token", "bootstrap-launch", "bootstrap-current", "child-exit", "final-current", "helper-launch"};
+      "medium-admission", "restricted-token", "bootstrap-launch", "bootstrap-current", "child-exit", "final-current", "helper-launch", "console-control",
+      "bootstrap-child-exit-failure", "helper-child-exit-failure", "bootstrap-child-exit-usage", "helper-child-exit-usage",
+      "bootstrap-child-exit-access-violation", "helper-child-exit-access-violation", "bootstrap-child-exit-stack-overflow", "helper-child-exit-stack-overflow", "bootstrap-child-exit-dll-missing", "helper-child-exit-dll-missing",
+      "bootstrap-child-exit-dll-initialization", "helper-child-exit-dll-initialization", "bootstrap-child-exit-fast-fail", "helper-child-exit-fast-fail",
+      "bootstrap-child-exit-invalid-parameter", "helper-child-exit-invalid-parameter", "bootstrap-child-exit-other", "helper-child-exit-other"};
     for (DWORD index = 0; index < received; ++index) {
       const auto value = bytes[index];
       if (value != '\n') {
@@ -169,11 +173,16 @@ class Child {
         if (!diagnostic_line.empty() && diagnostic_line.back() == '\r') diagnostic_line.pop_back();
         for (const auto mode : {"initial.", "medium."}) for (const auto stage : stages) {
           const auto fixed = std::string("vector-caller-failure ") + mode + std::string(stage);
-          if (diagnostic_line == fixed) {
+          if (!diagnostic_forwarded && diagnostic_line == fixed) {
             diagnostic_forwarded = true;
             // This is an allowlisted fixed line, never the private diagnostic stream.
             (void)write_utf8(GetStdHandle(STD_ERROR_HANDLE), fixed + "\n");
-            return;
+          }
+        }
+        if (!helper_diagnostic_forwarded) for (const auto fixed : {"The computer helper could not start safely.", "The helper process token could not be read."}) {
+          if (diagnostic_line == fixed) {
+            helper_diagnostic_forwarded = true;
+            (void)write_utf8(GetStdHandle(STD_ERROR_HANDLE), std::string(fixed) + "\n");
           }
         }
       }

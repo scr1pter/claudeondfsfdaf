@@ -278,7 +278,7 @@ export async function createWindowsVerifiedFixture(
         return {...channel, async next(timeoutMs: number) {
           const result = await channel.next(timeoutMs).catch(error => {
             const observed = channel.startupDiagnostic?.()
-            if (!received && observed?.caller)
+            if (!received && (observed?.caller || observed?.helper))
               throw new WindowsCheckFailure(windowsCommandReason({code: null, diagnostic: {windows: observed}}, "channel"))
             throw error
           })

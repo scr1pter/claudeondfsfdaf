@@ -535,7 +535,7 @@ export async function runComputerHelperSelfTest(options: SelfTestOptions, depend
               ? "native-skip"
               : status === "failed"
                 ? name === "unit" && options.platform === "win32" && result.diagnostic?.windows?.unitFailure
-                  ? `windows-unit-failure-${result.diagnostic.windows.unitFailure}${result.diagnostic.windows.caller ? `.caller-${result.diagnostic.windows.caller}` : ""}`
+                  ? `windows-unit-failure-${result.diagnostic.windows.unitFailure}${result.diagnostic.windows.caller ? `.caller-${result.diagnostic.windows.caller}` : ""}${result.diagnostic.windows.helper ? `.helper-${result.diagnostic.windows.helper}` : ""}`
                   : name === "unit" && options.platform === "win32" && result.diagnostic?.windows?.unitSuite
                     ? `windows-unit-after-${result.diagnostic.windows.unitSuite}`
                     : "native-check-failed"

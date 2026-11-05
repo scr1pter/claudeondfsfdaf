@@ -231,11 +231,22 @@ export const WINDOWS_CALLER_STAGES = [
   "arguments", "parent-witness", "apartment", "token", "layout", "ancestors",
   "medium-admission", "restricted-token", "bootstrap-launch", "bootstrap-current",
   "child-exit", "final-current", "helper-launch",
+  "console-control",
+  "bootstrap-child-exit-failure", "helper-child-exit-failure",
+  "bootstrap-child-exit-usage", "helper-child-exit-usage",
+  "bootstrap-child-exit-access-violation", "helper-child-exit-access-violation",
+  "bootstrap-child-exit-stack-overflow", "helper-child-exit-stack-overflow",
+  "bootstrap-child-exit-dll-missing", "helper-child-exit-dll-missing",
+  "bootstrap-child-exit-dll-initialization", "helper-child-exit-dll-initialization",
+  "bootstrap-child-exit-fast-fail", "helper-child-exit-fast-fail",
+  "bootstrap-child-exit-invalid-parameter", "helper-child-exit-invalid-parameter",
+  "bootstrap-child-exit-other", "helper-child-exit-other",
 ] as const
 export type WindowsDiagnostic = {
   unitSuite?: (typeof WINDOWS_UNIT_SUITES)[number]
   unitFailure?: (typeof WINDOWS_UNIT_FAILURE_LABELS)[number]
   caller?: `initial.${(typeof WINDOWS_CALLER_STAGES)[number]}` | `medium.${(typeof WINDOWS_CALLER_STAGES)[number]}`
+  helper?: "safe-start" | "token-read"
 }
 const unitLabels = new Set<string>(WINDOWS_UNIT_FAILURE_LABELS)
 const callerTokens = new Set<string>(WINDOWS_CALLER_STAGES.flatMap(stage => [`initial.${stage}`, `medium.${stage}`]))
@@ -243,15 +254,17 @@ const callerTokens = new Set<string>(WINDOWS_CALLER_STAGES.flatMap(stage => [`in
 export function windowsDiagnostic(value: unknown): WindowsDiagnostic {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid Windows diagnostics.")
   const body = value as Record<string, unknown>
-  if (Object.keys(body).some(key => !["unitSuite", "unitFailure", "caller"].includes(key)) ||
+  if (Object.keys(body).some(key => !["unitSuite", "unitFailure", "caller", "helper"].includes(key)) ||
       (body.unitSuite !== undefined && !WINDOWS_UNIT_SUITES.includes(body.unitSuite as WindowsDiagnostic["unitSuite"] & string)) ||
       (body.unitFailure !== undefined && (typeof body.unitFailure !== "string" || !unitLabels.has(body.unitFailure))) ||
-      (body.caller !== undefined && (typeof body.caller !== "string" || !callerTokens.has(body.caller))))
+      (body.caller !== undefined && (typeof body.caller !== "string" || !callerTokens.has(body.caller))) ||
+      (body.helper !== undefined && body.helper !== "safe-start" && body.helper !== "token-read"))
     throw new Error("Invalid Windows diagnostics.")
   return {
     ...(body.unitSuite === undefined ? {} : {unitSuite: body.unitSuite as WindowsDiagnostic["unitSuite"]}),
     ...(body.unitFailure === undefined ? {} : {unitFailure: body.unitFailure as WindowsDiagnostic["unitFailure"]}),
     ...(body.caller === undefined ? {} : {caller: body.caller as WindowsDiagnostic["caller"]}),
+    ...(body.helper === undefined ? {} : {helper: body.helper as WindowsDiagnostic["helper"]}),
   }
 }
 
@@ -279,6 +292,10 @@ export class WindowsDiagnosticReader {
             this.value.unitFailure = line.slice(5) as WindowsDiagnostic["unitFailure"]
           if (!this.value.caller && stream === "stderr" && line.startsWith("vector-caller-failure ") && callerTokens.has(line.slice(22)))
             this.value.caller = line.slice(22) as WindowsDiagnostic["caller"]
+          if (!this.value.helper && stream === "stderr") {
+            if (line === "The computer helper could not start safely.") this.value.helper = "safe-start"
+            if (line === "The helper process token could not be read.") this.value.helper = "token-read"
+          }
         }
         this.lines[stream] = ""
         this.overflow[stream] = false
@@ -291,18 +308,22 @@ export class WindowsDiagnosticReader {
 
 export class WindowsCheckFailure extends Error {
   constructor(readonly reason: string) {
-    const known = callerTokens.has(reason.slice("windows-caller-".length)) && reason.startsWith("windows-caller-")
+    const suffix = [".helper-safe-start", ".helper-token-read"].find(value => reason.endsWith(value))
+    const caller = suffix ? reason.slice(0, -suffix.length) : reason
+    const known = caller.startsWith("windows-caller-") && callerTokens.has(caller.slice("windows-caller-".length))
+    const helper = reason === "windows-helper-safe-start" || reason === "windows-helper-token-read"
     const fixed = ["deadline", "output-limit", "invalid-json", "invalid-permissions", "invalid-responsible", "invalid-elevated", "invalid-capture-blocked", "no-frame"]
     const command = /^windows-(?:probe|channel)-(.+)$/.exec(reason)?.[1]
     const exit = command ? /^exit-(0|[1-9][0-9]{0,2}|unknown)$/.exec(command)?.[1] : undefined
-    if (!known && !(command && fixed.includes(command)) && !(exit && (exit === "unknown" || Number(exit) <= 255)))
+    if (!known && !helper && !(command && fixed.includes(command)) && !(exit && (exit === "unknown" || Number(exit) <= 255)))
       throw new Error("Invalid Windows check failure.")
     super(reason)
   }
 }
 export function windowsCommandReason(result: {code: number | null; timedOut?: boolean; diagnostic?: {windows?: WindowsDiagnostic}}, mode: "probe" | "channel") {
   const observed = result.diagnostic?.windows
-  if (observed?.caller) return `windows-caller-${observed.caller}`
+  if (observed?.caller) return `windows-caller-${observed.caller}${observed.helper ? `.helper-${observed.helper}` : ""}`
+  if (observed?.helper) return `windows-helper-${observed.helper}`
   if (result.timedOut) return `windows-${mode}-deadline`
   const code = result.code
   return `windows-${mode}-exit-${Number.isSafeInteger(code) && code !== null && code >= 0 && code <= 255 ? code : "unknown"}`
