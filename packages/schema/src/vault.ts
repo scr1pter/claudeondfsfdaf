@@ -114,8 +114,9 @@ export type Snapshot = typeof Snapshot.Type
 // --- Vault API (A44): /api/vault/{setup, uploads, commit, snapshots, snapshots/:id}, DELETE /api/vault -----------------
 //
 // Every route takes a Vector account token (`vct_`), never a run token (S3). Errors are {error:{code, message}} with
-// VAULT_QUOTA 402, VAULT_SIZE_MISMATCH 409, VAULT_READ_ONLY 409, VAULT_NOT_FOUND 404, VAULT_EXISTS 409, and the plan
-// codes of contract §4.10. Signed links are R2 links valid at most 900 s; a PUT carries exactly the declared size.
+// VAULT_QUOTA 402, VAULT_SIZE_MISMATCH 409, VAULT_READ_ONLY 409, VAULT_NOT_FOUND 404, VAULT_EXISTS 409,
+// VAULT_REQUEST_INVALID 400, VAULT_UNAVAILABLE 503 (try again; also while Vault is not listed), and the plan codes of
+// contract §4.10. Signed links are R2 links valid at most 900 s; a PUT carries exactly the declared size.
 
 /** GET /api/vault/setup answers the vault (404 VAULT_NOT_FOUND without one); POST creates it once. */
 export const SetupRequest = Schema.Struct({ vault: VaultId, key: WrappedKey }).annotate({
@@ -202,5 +203,7 @@ export const ERROR_CODES = [
   "VAULT_READ_ONLY",
   "VAULT_NOT_FOUND",
   "VAULT_EXISTS",
+  "VAULT_REQUEST_INVALID",
+  "VAULT_UNAVAILABLE",
 ] as const
 export type ErrorCode = (typeof ERROR_CODES)[number]

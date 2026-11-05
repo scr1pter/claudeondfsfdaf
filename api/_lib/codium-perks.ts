@@ -9,6 +9,7 @@ import { playbooksReady } from "./playbooks.js"
 import { remoteConfigured } from "./remote-config.js"
 import { roadmapConfigured } from "./roadmap.js"
 import { reportEmailConfigured } from "./support-reports.js"
+import { vaultConfigured } from "./vault-store.js"
 import { phoneAppOrigin, pushConfigured } from "./web-push.js"
 
 export type PerkServices = Readonly<Partial<Record<PerkId, (fetcher: typeof fetch) => boolean | Promise<boolean>>>>
@@ -57,6 +58,10 @@ export const perkServices: PerkServices = {
   // live, the bucket can be signed and at least two playbooks are published. Which two are proven stays the owner's
   // call (contract §1.2).
   playbooks: (fetcher) => playbooksReady(fetcher),
+  // WP A44: Brain Vault on Vector needs VECTOR_VAULT_ENABLED=true, its store (Supabase's service role, the account
+  // salt and the vault bucket) and the read-only notice's email, since a lapsed vault is deleted only after it. The
+  // `vault` switch is checked with the other switches below. Listing it waits on the legal read (contract §1.2).
+  vault: () => vaultConfigured(),
 }
 
 const switches: Readonly<Partial<Record<PerkId, SwitchName>>> = {

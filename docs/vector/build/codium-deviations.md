@@ -1205,3 +1205,65 @@ outcome, verdict, actor.login` pass. Every paid plan includes it while the plan 
 - **A38/A41: alert copy.** The Settings and phone copy no longer say alerts never hold code or prompts: an alert's title
   carries the session's name, which starts as the first line of what was typed. The wording is in
   `PHONE_ALERT_CONTENT`, and a test ties it to `alertTitle`.
+
+## A44 Vault API (4 Nov 2026)
+
+- **Where the records live.** §4.6 lists no Vault keys and §6.1 names `brain-vault.sql`, so every Vault record is in
+  Supabase, behind one invoker function (`public.vector_brain_vault(jsonb)`, `service_role` only, RLS on and no grants
+  to `anon` or `authenticated`). Nothing is kept in Valkey except the rate counters. Accounts are an HMAC of the account
+  id under `VECTOR_VAULT_ACCOUNT_SALT` (§4.16), in the rows and in the R2 keys
+  (`<mode>/<account>/<vault>/{objects,versions}/<id>`); every row also carries the Stripe mode, so a test server never
+  reads or deletes a live vault. The salt must never change.
+- **Files outside A44's list:** `api/_lib/vault-api.ts` (the routes' plan rules; kept out of `vault-store.ts` because the
+  `vault` provisioner imports the store, and an entitlement import there closes a cycle through model-plan-account.ts),
+  `api/_lib/vault-meter.ts` (`meters.vault`, imported by `api/model-plans/status.ts` like A42's Remote meter),
+  `api/_lib/codium-provisioners.ts` (the `vault` provisioner replaces its stub), `api/_lib/codium-perks.ts` (readiness),
+  `vercel.json` (the 03:40 cron), `.env.example`, `packages/schema/src/vault.ts` (two error codes documented),
+  `docs/vector/owner-actions/brain-vault.md`, `docs/vector/MODEL-PLANS.md`, `test/brain-vault-fixture.ts`, and one
+  expectation in `packages/web/test/codium-configuration.test.ts`, which pinned "no vault cron yet"; it now pins the
+  contract's `/api/vault/cleanup` at `40 3 * * *` and still no hosted or ops cron.
+- **Atomic reservation.** One uploads request is one transaction that locks the vault's row, so parallel reservations
+  queue. It is all or nothing: if the new bytes (or the vault's 2 million objects, or a version's 1 million) do not fit,
+  402 `VAULT_QUOTA` and nothing is reserved, recorded or signed. The quota counts pending and stored blobs; blobs queued
+  for deletion do not count, so forgetting a version frees its space at once. Re-declaring an object: stored is
+  `present`; pending is signed again with no new reservation (a different size is 409 `VAULT_SIZE_MISMATCH`); queued for
+  deletion is reserved again like a new object; a deletion in flight answers 503 `VAULT_UNAVAILABLE` (retry), so a
+  delete can never remove a fresh upload of the same object.
+- **Commit.** It HEADs every object of the version still pending (a superset of "what was signed for it", since a
+  concurrent backup may have signed it) and the manifest, 32 at a time. Each object that arrives whole is stored at once,
+  so a version too big to check within 40 seconds answers 503 and a rerun of the backup finds those objects present. A
+  missing or resized object, and a declared count that differs from what the version names, answer 409
+  `VAULT_SIZE_MISMATCH`; the bad objects are queued and deleted from R2 in the same request.
+- **Read-only states (§4.4).** Paused, ended and frozen answer 409 `VAULT_READ_ONLY` (with `state`) to creating a vault,
+  reserving and committing. Frozen gets the same code (§4.4 says "uploads frozen"); the A43 client's message names only
+  paused and ended. An account being deleted gets 409 `MODEL_PLAN_ACCOUNT_CLOSING` for reads too. Renewing past the grace
+  is 503 `MODEL_PLAN_RENEWING`, no plan 402, and a plan without Vault (Plus) 403 `CODIUM_PERK_REQUIRED {perk: "vault",
+  plan: "vector-50"}`. Reads (the wrapped key, versions, signed downloads) and deletes (a version, the vault) need only
+  the sign-in, whatever the plan, the listing and the `vault` switch, so data stored while Vault was listed can always be
+  restored or deleted. Writes need `vault` listed and answer 503 `VAULT_UNAVAILABLE` before reading any sign-in
+  otherwise. The `vault` switch therefore stops new backups only.
+- **"Read-only 30 days with a notice, then deleted".** The 30 days count from the notice, not from the end of the plan,
+  so a notice the outbox had to retry never shortens them. The `vault` provisioner emails it once (Resend, to the
+  identity's email from Supabase's admin API, idempotency key per snapshot version) and only then records it; the cleanup
+  deletes a vault only once a notice is recorded and its date has passed. An identity that is already gone gets no email
+  and the notice is recorded. Without Resend the provisioner fails and the outbox retries, and `vault` cannot be listed:
+  its readiness check requires the notice email. A plan that starts again before the date clears it; `none` after
+  `ended` keeps the clock.
+- **Frozen holds the vault.** The provisioner marks it held: the cleanup prunes nothing, collects nothing and never
+  deletes it while held. Uploads that never committed are still swept, because they were never a backup.
+- **Cleanup.** "Prunes versions over 30 days" uses the plan's `vault.versionDays` (30 on every plan), stored on the vault
+  at each upload because the cleanup has no account ids; the newest committed version is always kept. "Sweeps
+  uncommitted objects after 1 hour" counts from the version's last uploads request, and an object is swept only once no
+  remaining version names it. It works a batch of 50 vaults at a time, each locked while it is cleaned (a busy one
+  waits for the next day), within 50 seconds, and cleans its own Stripe mode only: Vercel runs crons on Production, so
+  test vaults on a Preview are cleaned only by calling the route there.
+- **Server-only limits** (not in ENTITLEMENTS): 60 committed versions per vault (402 `VAULT_QUOTA`), four backups in
+  progress (429 `RATE_LIMITED`), 2 million objects per vault, 1 million per version, an object between 40 bytes and one
+  raw chunk plus 40, a manifest up to 16 MiB plus 40, a version id within 24 hours behind and 1 hour ahead of the
+  server's clock, links of 900 seconds. Rates per account and hour: 1200 reads, 1200 writes, 60 deletes. The quota is
+  the plan's `vault.gb` in decimal gigabytes, as the CLI shows sizes.
+- **Codes.** Besides §4.10's, `VAULT_UNAVAILABLE` 503 and `VAULT_REQUEST_INVALID` 400, now listed in
+  `Vault.ERROR_CODES`. An upload to a committed version is 409 `VAULT_EXISTS`. `GET /api/vault/snapshots` without a
+  vault is 404 `VAULT_NOT_FOUND`, which the A43 client reads as "holds nothing yet".
+- **Not decided here:** an account that downgrades to Plus keeps its stored vault (read-only by 403, no deletion date),
+  because §4.4 deletes only after a plan ends. The owner may want a lapse for that case too.

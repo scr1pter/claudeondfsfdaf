@@ -5,6 +5,7 @@ import { OUTBOX_SCRIPTS, registerProvisioner, type PerkProvisioner, type Transit
 import { ApiError } from "./http.js"
 import { persistentStore } from "./persistent-store.js"
 import { relayConfigured, relayErase, relayKill, relaySuspend, type RelaySuspendReason } from "./remote-relay.js"
+import { eraseAccountVault, holdVault, lapseVault, releaseVault, vaultStoreConfigured } from "./vault-store.js"
 import { eraseAccountPushSubscriptions, pushConfigured } from "./web-push.js"
 import type { EntitlementSnapshot } from "../../packages/schema/src/codium-entitlements.js"
 
@@ -14,8 +15,8 @@ import type { EntitlementSnapshot } from "../../packages/schema/src/codium-entit
  * each new snapshot version, and the outbox runs it (codium-provision.ts).
  *
  * WP A06 builds `github-runs` and `owner-notify`; WP A31 builds `founding`; WP A37 builds `push`; WP A40 builds
- * `remote`. The others are stubs, not configured, so they get no items: each service's work package replaces its stub
- * here (vault, hosted, ops) and the daily sweep then catches every account up to its snapshot.
+ * `remote`; WP A44 builds `vault`. The others are stubs, not configured, so they get no items: each service's work
+ * package replaces its stub here (hosted, ops) and the daily sweep then catches every account up to its snapshot.
  */
 
 const DAY_MS = 86_400_000
@@ -224,6 +225,42 @@ export const remote: PerkProvisioner = {
   },
 }
 
+// ── vault ──────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+/** What the vault should hold for a snapshot (§4.4's Brain Vault row). */
+export function vaultPolicy(snapshot: EntitlementSnapshot | undefined): "erase" | "hold" | "release" | "lapse" {
+  if (snapshot?.state === "ended" && snapshot.reason === "closing") return "erase"
+  if (snapshot?.state === "frozen") return "hold"
+  if (snapshot?.state === "active" || snapshot?.state === "renewing" || snapshot?.state === "paused") return "release"
+  return "lapse"
+}
+
+/**
+ * `vault` (WP A44, §4.4's Brain Vault row), converging the account's vault (vault-store.ts) to the snapshot. Uploads
+ * themselves are decided by each request from the snapshot; this keeps what the daily cleanup may delete in line:
+ * - active, renewing and paused: no hold and no deletion date (paused refuses uploads and keeps everything);
+ * - frozen: held, so nothing is deleted, not even versions past their days, until the dispute or warning is settled;
+ * - ended (or no plan any more): read-only for 30 days counted from an emailed notice, sent once, then deleted by the
+ *   cleanup; a plan that starts again before then clears the date;
+ * - account deletion (`closing`): the vault is erased at once, the wrapped key first (P5).
+ * A call is made only when the policy changes, or always when the previous snapshot is unknown (the sweep's
+ * catch-up); each is idempotent. Configured while the store is, so erasure still works after Vault is turned off.
+ */
+export const vault: PerkProvisioner = {
+  id: "vault",
+  configured: () => vaultStoreConfigured(),
+  async apply(t, fetcher = fetch) {
+    const { from, to } = t
+    const policy = vaultPolicy(to)
+    if (policy === "erase") return void (await eraseAccountVault(t.account, { fetcher }))
+    if (to.state === "none" && (!from || from.state === "none")) return
+    if (from && vaultPolicy(from) === policy && policy !== "lapse") return
+    if (policy === "hold") return holdVault(t.account, { fetcher })
+    if (policy === "release") return releaseVault(t.account, { fetcher })
+    await lapseVault(t.account, { fetcher, version: to.version })
+  },
+}
+
 // ── Stubs ──────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 /** A service not built yet: never configured, so it gets no items and does nothing. */
@@ -236,7 +273,7 @@ export const PROVISIONERS: readonly PerkProvisioner[] = [
   githubRuns,
   remote,
   push,
-  stub("vault"),
+  vault,
   stub("hosted"),
   stub("ops"),
   founding,

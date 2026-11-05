@@ -541,6 +541,10 @@
     {
       "path": "/api/model-plans/sweep",
       "schedule": "23 4 * * *"
+    },
+    {
+      "path": "/api/vault/cleanup",
+      "schedule": "40 3 * * *"
     }
   ]
 }
