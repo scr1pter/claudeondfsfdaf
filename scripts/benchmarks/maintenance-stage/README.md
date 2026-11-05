@@ -1,52 +1,20 @@
-# Prospective maintenance stage — unfunded and unqualified
+# Maintenance native-team study
 
-This thin wrapper derives from `headless-startup` commit `3951319` and imports
-the preregistered maintenance task from `maintenance-holdout` commit `764c217`.
-It retains the future native-command auditor and the explicit opt-in per-request
-startup headroom policy. The frozen R2 wrapper and all product/runtime code are
-unchanged.
+The earlier source-preparation checkpoint2d1726e retained UNFROZEN/UNQUALIFIED markers and authorized no runtime or funded use. This operational checkpoint binds the clean production candidate94c27c67185bbce343e0fa0eac4ec60bb801e343, written and baseline-tested by a coder withheld from the maintenance task. The task and its original acceptance requirements existed before that accounting fix; the operator saw only generic stage/qualification structure before the production freeze.
 
-At this source-preparation checkpoint, `CANDIDATE` is `UNFROZEN` and both runtime
-qualification hashes are `UNQUALIFIED`. Planning and execution refuse before
-loading the native instrument or any controller. Only the root may supply a
-new clean product freeze after its independent product work. The task and gold
-stay withheld from the root until then. A Git branch is not a funded plan.
+Actual Bun bridge qualification now records54/54 reference checks, the working seed's actual16/50 business baseline with all4 prerequisites, and5 intended negative mutants with complete54-row reports and all prerequisites. The public qualification.json/runtime-freeze.json files are authoritative; earlier source-preparation status remains historical provenance. Actual native fake-provider evidence is recorded separately under maintenance-controls when completed. Repository source is not itself a funded plan.
 
-The intended run requires the explicit `--startup-affordability-mode per-request`
-argument. This reserves no money at startup; every forwarded request retains the
-unchanged conservative request reservation, the original additional-$20 ceiling,
-both unresolved holds totalling7.177765, and the same cumulative upper exposure.
-There is no new allowance or release of uncertainty.
+The thin wrapper derives from headless-startup3951319 and retains explicit per-request startup affordability. It reserves no money at startup. Every forward still needs the unchanged exact conservative request reservation, original additionalUSD20 cap, both unresolved holds totaling7.177765, and the same cumulative upper exposure. There is no new allowance or release of uncertainty.
 
-The profile remains Sol High, automatic summaries, low verbosity, 1.05M context,
-32K output, seven native identities, six fixed child slots, depth2, 300 calls,
-7200 seconds and at most one same-session repair. The task-specific change is
-instructions for maintaining a working legacy service with API/CLI/SDK workflows.
-Browser tools and image handling remain available. Quality remains primary.
+Both arms retain gpt-6.1-sol High, automatic summaries, low verbosity,1.05M context,32K output, seven native identities, six fixed child lifetime slots, depth2,300calls,7200seconds and one formal same-session repair. The separate maintenance task has a working legacy service and connected API/CLI/SDK requirements. Browser and image capabilities remain available. The fixed48-point rubric and strict per-dimension comparison protocol remain separate from all54 functional checks.
 
-Before any paid execution, actual Bun qualification must demonstrate all54
-reference checks, all4 working-seed prerequisites and its real partial business
-baseline, and all5 damaged references with complete raw54-row reports, all4
-prerequisites and their intended business failure. The original requirement and
-evaluator bytes and their prospective correction chronology remain preserved.
+The actual-native fake proof starts with a labelled real command exiting7; the owned root transcript must retain that ordered integer failure. It then exercises the same7-role DAG, QA/judge follow-ups, API/CLI/SDK verification, trusted rg/git, browser/images and Vector background completion. Positive compound verification is fail-fast, so a later git exit0 cannot mask earlier failures. The real seed stays byte-identical and preserves its measured partial baseline. These are instrument capability controls, not paid model quality or cost results.
 
-The subsequent actual-native fake-provider proof must run both runtimes. Its
-first lead command intentionally prints a labelled message and exits7, proving
-a known failed command is retained without becoming an unknown native fatal.
-It then executes the original seven-role DAG, specialist/judge follow-up,
-background notification for Vector, local API, CLI, SDK, browser and image
-preview. Qualification requires the native known-failure count and successful
-integer-zero post-judge API/CLI/SDK records. The real working seed must remain
-byte-identical and retain its measured baseline. No command is represented as
-successful merely because a terminal or invocation started.
+Paid execution requires operator review of the final exact source, qualification facts and frozen plan within the user's already authorized budget, plus one explicit runtime invocation. Vector requires review of the exact closed first-arm summary. No automatic next arm/task, cloud deployment, hidden retries, model downgrade, image removal, context/output reduction or acceptance weakening is permitted. Current-arm settlement never means all historical calls settled.
 
-No Bun, Chrome, native runtime, application server, provider, credentials or paid
-benchmark are used by the prospective pure controls:
+Pure controls can run without Bun, Chrome, native CLI, application or provider:
 
 ```text
 python -B -m unittest discover -s scripts/benchmarks/maintenance-stage -p test_runner.py
 python -B -m unittest discover -s scripts/benchmarks/maintenance-holdout -p test_static.py
 ```
-
-Actual qualification waits for the root's exclusive runtime lease. Blinded R2
-review takes priority; this stage must not read its paid apps, costs or outputs.

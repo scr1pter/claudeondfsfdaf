@@ -14,12 +14,12 @@ import os
 from pathlib import Path
 import sys
 
-CANDIDATE = "UNFROZEN"
+CANDIDATE = "94c27c67185bbce343e0fa0eac4ec60bb801e343"
 COUNTS = {"api": 50, "browser": 0, "prerequisite": 4, "total": 54}
-QUALIFIED_SOURCE = "UNQUALIFIED"
+QUALIFIED_SOURCE = "c45c883bf4467fff724c9498e72813450b92a172527e3cc39f7d288be1492f2d"
 PROFILE_SHA256 = "4beba2133f2b22f244d9a8c79228a13403a48f4b85c53197c349be6606174226"
 PHASE_PLAN_SHA256 = "315615748b0bb5f163a07fa85e9724d31b408faf878143df0fe9f07f25bf2add"
-QUALIFICATION_BLOB = "UNQUALIFIED"
+QUALIFICATION_BLOB = "595085d2eb30630c9a18d6ea1164b0e6564b6faf8b1c15d90573a661ee81ef87"
 NEGATIVE_TARGETS = {"checksum-bypass": "checksum-corruption-refused", "revoked-replay": "revoked-idempotent-replay-denied",
     "inflight-revocation": "revoked-inflight-body-denied", "credit-cap-bypass": "overcredit-atomic-rejection",
     "invoice-recalculation": "late-usage-preserves-issued-invoice"}
