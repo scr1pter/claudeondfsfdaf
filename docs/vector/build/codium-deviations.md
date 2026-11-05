@@ -1138,3 +1138,49 @@ outcome, verdict, actor.login` pass. Every paid plan includes it while the plan 
   status, versions, restore and forget need only the sign-in, so a paused or ended plan can still restore during its
   read-only days (§4.4). The API enforces the quota and states (S1). Until A44 ships and the owner lists `vault`,
   `vector vault backup` works only with `--github`.
+
+## A36 Playbooks server (4 Nov 2026)
+
+- **New files outside A36's list.** `api/_lib/playbooks.ts` (the library in the store, its records, readiness and
+  the signed links), `packages/schema/src/playbooks.ts` (names, versions, limits and the listing's decoder, shared
+  with B07's client), `packages/core/src/playbooks/commands.ts` (the skill command allowlist) and `check.ts` (the
+  publish check), `packages/core/test/playbooks/commands.test.ts`, and a readiness check for `playbooks` in
+  `api/_lib/codium-perks.ts`. `docs/vector/MODEL-PLANS.md` gains a section.
+- **The skill command allowlist is not on this branch.** It is the learned skills' `simple`, `helper` and `check`
+  in self-evolving's `packages/core/src/brain/skill.ts` (Track B). `commands.ts` copies the three functions and their
+  lists unchanged (only the secrets-file regex is imported directly from `brain/document/sniff.ts`), and its test runs
+  BrainSkill's own command cases unchanged against the copy. When B01 merges this branch into Track B, `commands.ts`
+  should become a re-export of BrainSkill's functions so there is one list.
+- **"Every command in a playbook".** A playbook is a saved workflow, whose stages are prompts, so the commands it
+  names are its code spans and the lines of its fenced blocks, in any string (object keys too). Each must pass the
+  allowlist (a read-only helper or one check). A code span that is one relative path, not a secrets file and not a
+  script to run (`.sh`, `.ps1`, `./x`…) counts as a repository file instead. A fenced block marked json, yaml, text,
+  diff or markdown is data and is not read as commands; any other block (unmarked, a shell, a programming language)
+  holds only allowed commands. Also refused anywhere: a template value (`{{…}}`) inside a command, `!` followed by a
+  backtick, a backtick that does not open and close a span on one line, a fence left open, hidden characters, and a
+  secret (by shape, name or wording, or a value of the publisher's own secret settings). Nesting is capped at 32.
+  The workflow schema check is Track B's, once that schema is on this branch; it should also allow models only as
+  Codium roles and nested stages only naming `vector-*` playbooks.
+- **Store and bucket keys §4.6 does not list.** The library is one hash, `playbooks`, under the Codium prefix (field =
+  name, value = the record). Files are at `playbooks/<name>/<version>.json` in `vector-media`, and at
+  `playbooks/test/<name>/<version>.json` for the test store, so a test publish can never replace a live file. A record
+  whose key is not exactly that path for its name, version and the server's mode is never listed or signed.
+- **"Dark until Track B lists it"** is a 404 `NOT_FOUND` to every request (any method, with or without a sign-in)
+  until `listedPerks()` has `playbooks`, checked before any sign-in, snapshot or rate counter is read. Listing it needs,
+  besides `CODIUM_LISTED_PERKS`, `CODIUM_TRACK_B_LIVE=true` and the perk switch, a readiness check: the media bucket
+  configured, the store configured and at least two playbooks published (`Playbooks.MINIMUM`). §1.2's "two proven"
+  stays the owner's call; the check only keeps the perk from listing a smaller library.
+- **The answer is the bare array** `[{name, version, sha256, url}]` the contract gives, with no other field; links
+  live `Playbooks.LINK_SECONDS` (600). At most 50 playbooks (`Playbooks.MAX_LISTED`), sorted by name.
+- **Who.** Any valid, unrevoked `vct_` account token (desktop, CLI or one pasted from `/auth/cli`), as A33 and A34
+  take: S2 is about spending Codium, and a download spends none. Run tokens and website sessions get 401 (S3). The plan
+  is `requireEntitlement(account, "playbooks")`, so §4.4's row holds: active and renewing download; paused, ended and
+  frozen do not. 60 requests an hour per account; the contract names no limit.
+- **Versions never change.** `publish` takes only a version above the published one, or the same version with the
+  same file (a no-op). Before uploading it asks the bucket for the key (HEAD): the same file (R2's single-upload ETag is
+  the file's MD5) is not uploaded again, and another file is refused, so even a withdrawn version cannot come back with
+  other content. Two publishes of one playbook at the same moment are not guarded against; only the owner publishes.
+- **Owner step:** `vector-media`'s lifecycle rules (§6.1, 30 and 90 days) must not cover `playbooks/`.
+- **A36's dependency on A43** is not used: nothing here needs the Vault core. It builds on A37's `r2-presign.ts`.
+- **Not built here:** the estimate API's `{kind: "playbook", id}` band (model-plan-estimate.ts already leaves
+  playbooks to Track B) and every client piece (B07).

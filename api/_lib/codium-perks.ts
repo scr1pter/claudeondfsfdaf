@@ -5,6 +5,7 @@ import { githubAppConfiguration } from "./github-app.js"
 import { modelPlansEnabled } from "./model-plan-config.js"
 import { reviewPanelServed, secondOpinionServed } from "./model-plan-models.js"
 import { readDisabledSet, readSwitch, type SwitchName } from "./codium-switches.js"
+import { playbooksReady } from "./playbooks.js"
 import { remoteConfigured } from "./remote-config.js"
 import { roadmapConfigured } from "./roadmap.js"
 import { reportEmailConfigured } from "./support-reports.js"
@@ -52,6 +53,10 @@ export const perkServices: PerkServices = {
   // `remote` switch is checked with the other switches below. Listing it stays the owner's call after the outside
   // security review (contract §1.2).
   remote: () => remoteConfigured() && phoneAppOrigin() !== undefined,
+  // WP A36: Playbooks are downloaded from the media bucket by the Track B client, so they are ready once Track B is
+  // live, the bucket can be signed and at least two playbooks are published. Which two are proven stays the owner's
+  // call (contract §1.2).
+  playbooks: (fetcher) => playbooksReady(fetcher),
 }
 
 const switches: Readonly<Partial<Record<PerkId, SwitchName>>> = {
