@@ -31,14 +31,14 @@ test.skipIf(process.platform !== "darwin")(
       | "signing"
       | "verification"
       | "launch"
-      | "tamper" = "config-import"
+      | "tamper" = "bundle-build"
     try {
-      // This file runs in its own test process; its environment is set before the first config import.
-      const module = await import("../electron-builder.config")
       const packageDir = path.resolve(import.meta.dirname, "..")
-      stage = "bundle-build"
+      // Match packaging: Bun compiles the verifier before electron-builder loads its configuration.
       const compiled = await buildNodeComputerHelperPackage(packageDir)
       process.env.VECTOR_COMPUTER_HELPER_SIGN_SHA256 = compiled.signing.sha256
+      stage = "config-import"
+      const module = await import("../electron-builder.config")
       const app = path.join(directory, "Fixture ' release.app")
       const require = createRequire(import.meta.url)
       const builder = createRequire(require.resolve("electron-builder/package.json"))

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto"
 import { lstat, mkdir, readFile, realpath } from "node:fs/promises"
+import { createRequire } from "node:module"
 import path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import type { ComputerHelperPackContext, ComputerHelperPackageResult } from "./computer-helper-package"
@@ -46,12 +47,15 @@ export async function buildNodeComputerHelperPackage(directory = packageDirector
   await mkdir(output, { recursive: true })
   if (!(await realpath(output)).startsWith(base + path.sep))
     throw new Error("The computer helper verifier output escapes its package.")
+  const hands = await realpath(createRequire(import.meta.url).resolve("@vectordevai/schema/hands"))
+  if (!(await lstat(hands)).isFile()) throw new Error("The computer helper brand source is not a regular file.")
   const sources = new Set([
     path.join(base, "scripts/computer-helper-package.ts"),
     path.join(base, "scripts/computer-helper-package-node.ts"),
     path.join(base, "scripts/computer-helper-sign.ts"),
     path.join(base, "scripts/build-computer-helper.ts"),
     path.join(base, "scripts/computer-helper-identity.ts"),
+    hands,
   ])
   for (const entry of [
     { source: "computer-helper-package.ts", name: bundleName },
@@ -68,9 +72,14 @@ export async function buildNodeComputerHelperPackage(directory = packageDirector
           name: "preserve-computer-helper-package-source-roots",
           setup(builder) {
             builder.onLoad(
-              { filter: /(?:computer-helper-(?:package(?:-node)?|identity|sign)|build-computer-helper)\.ts$/ },
+              {
+                filter:
+                  /(?:(?:computer-helper-(?:package(?:-node)?|identity|sign)|build-computer-helper)\.ts|[/\\]hands\.ts)$/,
+              },
               async (args) => {
                 if (!sources.has(args.path)) return
+                // Hands self-reexports its namespace. Read its authoritative source independently
+                // of Bun.test's runtime module cache, just as for our transformed build entries.
                 return {
                   contents: (await readFile(args.path, "utf8")).replaceAll(
                     /\bimport\.meta\.url\b/g,

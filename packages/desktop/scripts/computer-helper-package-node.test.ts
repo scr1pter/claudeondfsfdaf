@@ -77,6 +77,28 @@ try {
     }
   }, 30_000)
 
+  test("actual Node imports the original source graph after the compiler process has loaded Hands", async () => {
+    const { Hands } = await import("@vectordevai/schema/hands")
+    expect(typeof Hands.helperBundleId).toBe("function")
+    const built = await buildNodeComputerHelperPackage(packageDir)
+    const executed = spawnSync(
+      "node",
+      [
+        "--input-type=module",
+        "--eval",
+        `const verifier = await import(process.argv[1]);
+const signer = await import(process.argv[2]);
+console.log(JSON.stringify({verifier:typeof verifier.prepareComputerHelper === "function",signer:typeof signer.signMacWithComputerHelper === "function",bun:typeof Bun}));`,
+        pathToFileURL(built.file).href,
+        pathToFileURL(built.signing.file).href,
+      ],
+      { encoding: "utf8", timeout: 10_000 },
+    )
+    expect(executed.error).toBeUndefined()
+    expect(executed.status, executed.stderr).toBe(0)
+    expect(JSON.parse(executed.stdout)).toEqual({ verifier: true, signer: true, bun: "undefined" })
+  }, 30_000)
+
   test("afterPack rejects changed verifier bytes before importing executable code", async () => {
     const base = path.join(packageDir, "native/build")
     await mkdir(base, { recursive: true })
