@@ -1,10 +1,13 @@
 #include "core.h"
 #include "identity.h"
 #include "protocol.h"
+#include "lifecycle.h"
 #include <tlhelp32.h>
 #include <algorithm>
 #include <array>
+#include <cstdint>
 #include <filesystem>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -227,6 +230,99 @@ void check_lifecycle(const FixtureFiles& files, bool parent_death) {
     parent_death ? "integration.parent-death-helper-within-one-second" : "integration.eof-helper-within-one-second");
   require_integration(WaitForSingleObject(child.process.get(), 1000) == WAIT_OBJECT_0, "integration.lifecycle-caller-exit");
 }
+
+struct ParentOnlyState { volatile LONG child = 0, cleanup_started = 0; };
+std::uintptr_t private_handle(std::string_view value) {
+  require_integration(!value.empty() && value.size() <= 20 && value.front() != '0', "integration.parent-only-private-handle");
+  std::uintptr_t result = 0;
+  for (const auto digit : value) {
+    require_integration(digit >= '0' && digit <= '9' && result <= ((std::numeric_limits<std::uintptr_t>::max)() - static_cast<unsigned>(digit - '0')) / 10,
+      "integration.parent-only-canonical-handle");
+    result = result * 10 + static_cast<unsigned>(digit - '0');
+  }
+  return result;
+}
+winrt::handle parent_only_child(bool parent, HANDLE mapping, HANDLE ready, HANDLE job = nullptr, bool finish77 = false) {
+  SECURITY_ATTRIBUTES security{static_cast<DWORD>(sizeof(SECURITY_ATTRIBUTES)), nullptr, TRUE};
+  winrt::handle null(CreateFileW(L"NUL", GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, &security, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr));
+  require_integration(null && GetFileType(null.get()) == FILE_TYPE_CHAR, "integration.parent-only-stdin-is-not-a-pipe");
+  SIZE_T size = 0;
+  const DWORD count = job ? DWORD{2} : DWORD{1};
+  (void)InitializeProcThreadAttributeList(nullptr, count, 0, &size);
+  require_integration(size > 0 && size < 65'536, "integration.parent-only-attribute-bound");
+  std::vector<unsigned char> storage(size);
+  const auto attributes = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(storage.data());
+  require_integration(InitializeProcThreadAttributeList(attributes, count, 0, &size) != FALSE, "integration.parent-only-attributes");
+  struct Attributes { LPPROC_THREAD_ATTRIBUTE_LIST value; ~Attributes() { DeleteProcThreadAttributeList(value); } } close{attributes};
+  std::array<HANDLE, 3> handles{mapping, ready, null.get()};
+  require_integration(UpdateProcThreadAttribute(attributes, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, handles.data(), sizeof(handles), nullptr, nullptr) != FALSE,
+    "integration.parent-only-private-inheritance");
+  if (job) require_integration(UpdateProcThreadAttribute(attributes, 0, PROC_THREAD_ATTRIBUTE_JOB_LIST, &job, sizeof(job), nullptr, nullptr) != FALSE,
+    "integration.parent-only-owned-job");
+  STARTUPINFOEXW startup{}; startup.StartupInfo.cb = static_cast<DWORD>(sizeof(startup));
+  startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES; startup.StartupInfo.hStdInput = startup.StartupInfo.hStdOutput = startup.StartupInfo.hStdError = null.get();
+  startup.lpAttributeList = attributes;
+  std::wstring image(32'768, L'\0'); const auto length = GetModuleFileNameW(nullptr, image.data(), static_cast<DWORD>(image.size()));
+  require_integration(length > 0 && length < image.size(), "integration.parent-only-test-image"); image.resize(length);
+  auto command = L"\"" + image + (parent ? L"\" --self-test=parent-only-parent " : finish77 ? L"\" --self-test=parent-only-finish77 " : L"\" --self-test=parent-only-child ") +
+    std::to_wstring(reinterpret_cast<std::uintptr_t>(mapping)) + L" " + std::to_wstring(reinterpret_cast<std::uintptr_t>(ready));
+  PROCESS_INFORMATION process{};
+  require_integration(CreateProcessW(image.c_str(), command.data(), nullptr, nullptr, TRUE, EXTENDED_STARTUPINFO_PRESENT | CREATE_NO_WINDOW,
+    nullptr, nullptr, &startup.StartupInfo, &process) != FALSE, "integration.parent-only-create");
+  winrt::handle thread(process.hThread); return winrt::handle(process.hProcess);
+}
+void check_parent_only_lifecycle() {
+  SECURITY_ATTRIBUTES security{static_cast<DWORD>(sizeof(SECURITY_ATTRIBUTES)), nullptr, TRUE};
+  winrt::handle mapping(CreateFileMappingW(INVALID_HANDLE_VALUE, &security, PAGE_READWRITE, 0, sizeof(ParentOnlyState), nullptr));
+  winrt::handle ready(CreateEventW(&security, TRUE, FALSE, nullptr));
+  require_integration(mapping && ready, "integration.parent-only-private-signals");
+  const auto state = static_cast<ParentOnlyState*>(MapViewOfFile(mapping.get(), FILE_MAP_ALL_ACCESS, 0, 0, sizeof(ParentOnlyState)));
+  require_integration(state != nullptr, "integration.parent-only-shared-state");
+  struct View { void* value; ~View() { UnmapViewOfFile(value); } } view{state};
+  InterlockedExchange(&state->child, 0); InterlockedExchange(&state->cleanup_started, 0);
+  // This root-owned job cleans test failures; it stays open throughout the timed assertion and
+  // therefore cannot make parent death look like a successful helper fuse.
+  winrt::handle job(CreateJobObjectW(nullptr, nullptr));
+  JOBOBJECT_EXTENDED_LIMIT_INFORMATION limit{}; limit.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+  require_integration(job && SetInformationJobObject(job.get(), JobObjectExtendedLimitInformation, &limit, sizeof(limit)), "integration.parent-only-root-cleanup-job");
+  const auto parent = parent_only_child(true, mapping.get(), ready.get(), job.get());
+  require_integration(WaitForSingleObject(ready.get(), 5000) == WAIT_OBJECT_0 && WaitForSingleObject(parent.get(), 0) == WAIT_TIMEOUT,
+    "integration.parent-only-child-ready");
+  const auto pid = static_cast<DWORD>(InterlockedCompareExchange(&state->child, 0, 0));
+  winrt::handle child(OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid));
+  require_integration(pid != 0 && child && GetProcessId(child.get()) == pid && WaitForSingleObject(child.get(), 0) == WAIT_TIMEOUT &&
+    parent_pid(pid) == GetProcessId(parent.get()) && process_created(child.get()) >= process_created(parent.get()), "integration.parent-only-held-child-witness");
+  const auto started = GetTickCount64();
+  require_integration(TerminateProcess(parent.get(), 0) != FALSE, "integration.parent-only-kill-actual-parent");
+  require_integration(WaitForSingleObject(child.get(), 1000) == WAIT_OBJECT_0 && GetTickCount64() - started <= 1000,
+    "integration.parent-only-fuse-exits-within-one-second-without-stdin");
+  DWORD code = 1;
+  require_integration(GetExitCodeProcess(child.get(), &code) != FALSE && code == 0, "integration.parent-only-actual-parent-death-exit");
+  require_integration(InterlockedCompareExchange(&state->cleanup_started, 0, 0) == 1, "integration.parent-only-fuse-survives-blocked-cleanup");
+  require_integration(ResetEvent(ready.get()) != FALSE, "integration.parent-only-finish-ready-reset");
+  const auto finishing = parent_only_child(false, mapping.get(), ready.get(), job.get(), true);
+  require_integration(WaitForSingleObject(ready.get(), 5000) == WAIT_OBJECT_0 && WaitForSingleObject(finishing.get(), 1000) == WAIT_OBJECT_0,
+    "integration.parent-only-explicit-finish-is-finite");
+  code = 1;
+  require_integration(GetExitCodeProcess(finishing.get(), &code) != FALSE && code == 77,
+    "integration.parent-only-explicit-skip-exit-survives-immediate-fuse");
+}
+}
+
+int integration_parent_only_child(bool parent, std::string_view mapping_value, std::string_view ready_value, bool finish77) {
+  try {
+    const auto mapping = reinterpret_cast<HANDLE>(private_handle(mapping_value)), ready = reinterpret_cast<HANDLE>(private_handle(ready_value));
+    require_integration(GetFileType(GetStdHandle(STD_INPUT_HANDLE)) == FILE_TYPE_CHAR, "integration.parent-only-child-has-no-stdin-pipe");
+    const auto state = static_cast<ParentOnlyState*>(MapViewOfFile(mapping, FILE_MAP_ALL_ACCESS, 0, 0, sizeof(ParentOnlyState)));
+    require_integration(state != nullptr, "integration.parent-only-child-state");
+    if (parent) { const auto child = parent_only_child(false, mapping, ready); Sleep(15'000); return 1; }
+    HelperLifecycle lifecycle(parent_pid(GetCurrentProcessId()), [state](StopReason) { InterlockedExchange(&state->cleanup_started, 1); Sleep(10'000); });
+    require_integration(lifecycle.parent_current() && !lifecycle.stopping(), "integration.parent-only-real-lifetime-armed");
+    InterlockedExchange(&state->child, static_cast<LONG>(GetCurrentProcessId()));
+    require_integration(SetEvent(ready) != FALSE, "integration.parent-only-ready-signal");
+    if (finish77) lifecycle.finish(77);
+    Sleep(15'000); return 1;
+  } catch (...) { return 1; }
 }
 
 void integration_lifecycle_test(bool parent_death) {
@@ -235,6 +331,7 @@ void integration_lifecycle_test(bool parent_death) {
 }
 
 void integration_tests() {
+  check_parent_only_lifecycle();
   FixtureFiles files;
   {
     Child child(files.caller); child.hello();

@@ -31,13 +31,39 @@ const windowsSmokeChecks = ["wire-codec", "packaged-pe", "packaged-manifest", "p
 export const WINDOWS_NATIVE_CHECKS = {
   unprivileged: windowsSmokeChecks,
   packaged: windowsSmokeChecks,
-  privileged: ["windows-privileged-target-pending"],
+  privileged: [
+    "privileged-isolated-target", "apps-running-target", "apps-installed-target",
+    "capture-color-patch", "capture-affinity-exclusion", "uia-counter-increment",
+    "uia-value-set-and-readback", "secure-field-refusal", "tagged-click-increments",
+    "unicode-type-readback", "stale-capture-refusal", "owned-input-release",
+    "input-detection-probe", "hardware-user-input-pauses", "isolated-target-cleanup",
+  ],
+  targetControl: ["windows-test-target-control-schema"],
   eof: ["caller-eof"],
   parentDeath: ["caller-parent-death"],
 } as const
+export const WINDOWS_NATIVE_REASONS = [
+  "isolation_required", "elevated_helper", "noninteractive_desktop", "capture_blocked",
+  "input_detection_unavailable", "foreground_unavailable", "affinity_unavailable", "target_not_installed",
+  "hardware_input_required", "target_unavailable", "target_validation_failed", "target_spawn_failed",
+  "target_state_invalid", "target_control_invalid", "target_token_invalid", "target_manifest_invalid",
+  "target_window_failed", "target_report_failed", "target_control_failed", "target_exited", "target_not_ready",
+  "assertion_failed", "native_operation_failed", "deadline_exceeded", "cleanup_failed", "dependency_failed", "physical_takeover",
+] as const
+const windowsReasons = new Set<string>(WINDOWS_NATIVE_REASONS)
+const windowsSkipReasons = new Set<string>([
+  "isolation_required", "elevated_helper", "noninteractive_desktop", "capture_blocked",
+  "input_detection_unavailable", "foreground_unavailable", "affinity_unavailable", "target_not_installed",
+  "hardware_input_required", "physical_takeover",
+])
 const WindowsNativeReport = Schema.Struct({
   checks: Schema.Array(
-    Schema.Struct({ name: Schema.String, ok: Schema.Boolean, skipped: Schema.optional(Schema.Boolean) }),
+    Schema.Struct({
+      name: Schema.String,
+      ok: Schema.Boolean,
+      skipped: Schema.optional(Schema.Boolean),
+      detail: Schema.optional(Schema.String),
+    }),
   ),
 })
 
@@ -53,16 +79,18 @@ export function windowsNativeSelfTestChecks(
   const expected = WINDOWS_NATIVE_CHECKS[mode]
   if (
     report.checks.length !== expected.length ||
-    report.checks.some((entry, index) => entry.name !== expected[index] || (entry.ok && entry.skipped === true))
+    report.checks.some((entry, index) =>
+      entry.name !== expected[index] ||
+      (entry.ok && entry.skipped === true) ||
+      (entry.skipped === true && (!entry.detail || !windowsSkipReasons.has(entry.detail))) ||
+      (entry.detail !== undefined && (mode !== "privileged" || !windowsReasons.has(entry.detail))),
+    )
   )
     throw new Error("Invalid Windows native catalog.")
   const failed = report.checks.some((entry) => !entry.ok && entry.skipped !== true)
   const skipped = report.checks.some((entry) => entry.skipped === true)
   if (code !== (failed ? 1 : skipped ? 77 : 0) || (mode !== "privileged" && skipped))
     throw new Error("Inconsistent Windows native exit.")
-  // W11 has not supplied native privileged scenarios yet. A pending scenario is always an explicit skip.
-  if (mode === "privileged" && report.checks.some((entry) => entry.ok || entry.skipped !== true))
-    throw new Error("Unimplemented Windows scenarios cannot pass.")
   return report.checks
 }
 
@@ -179,6 +207,7 @@ export async function createWindowsVerifiedFixture(
   if (files.bin !== (await realpath(options.bin))) throw new Error("The verified helper selection changed.")
   const temporary = await mkdtemp(path.join(tmpdir(), "vector-computer-win32-"))
   const helper = path.join(temporary, "resources/computer", path.basename(files.bin))
+  const target = path.join(path.dirname(helper), "tests", WINDOWS_TEST_ARTIFACTS.target)
   const caller = path.join(temporary, `${EXECUTABLE_NAMES[files.channel]}.exe`)
   const open = dependencies.channel ?? windowsNativeChannel
   let closed = false
@@ -186,16 +215,41 @@ export async function createWindowsVerifiedFixture(
     if (closed) throw new Error("The verified Windows fixture is closed.")
   }
   try {
-    await mkdir(path.dirname(helper), { recursive: true })
+    await mkdir(path.dirname(target), { recursive: true })
     await copyFile(files.bin, helper)
     await copyFile(files.caller, caller)
+    await copyFile(files.target, target)
     for (const [file, expected] of [
       [helper, files.helperManifest.files[path.basename(files.bin)]?.sha256],
       [caller, files.testManifest.files[WINDOWS_TEST_ARTIFACTS.caller]?.sha256],
+      [target, files.testManifest.files[WINDOWS_TEST_ARTIFACTS.target]?.sha256],
     ] as const) {
       const info = await lstat(file)
       if (!expected || !info.isFile() || info.isSymbolicLink() || digest(await readFile(file)) !== expected)
         throw new Error("Copying changed a verified Windows executable.")
+    }
+    for (const [source, destination, expected] of [
+      [
+        path.join(path.dirname(files.bin), "computer-helper.json"),
+        path.join(path.dirname(helper), "computer-helper.json"),
+        files.helperManifest,
+      ],
+      [
+        path.join(path.dirname(files.target), "computer-helper-tests.json"),
+        path.join(path.dirname(target), "computer-helper-tests.json"),
+        files.testManifest,
+      ],
+    ] as const) {
+      const original = await lstat(source)
+      if (!original.isFile() || original.isSymbolicLink() || original.size > 65_536)
+        throw new Error("The verified Windows manifest changed.")
+      await copyFile(source, destination)
+      const copied = await lstat(destination)
+      if (
+        !copied.isFile() || copied.isSymbolicLink() || copied.size > 65_536 ||
+        JSON.stringify(parseHelperManifest(JSON.parse(await readFile(destination, "utf8")))) !== JSON.stringify(expected)
+      )
+        throw new Error("Copying changed a verified Windows manifest.")
     }
     const lifecycle = async (mode: "eof" | "parentDeath") => {
       requireOpen()
@@ -237,14 +291,15 @@ export async function createWindowsVerifiedFixture(
       },
       eof: () => lifecycle("eof"),
       parentDeath: () => lifecycle("parentDeath"),
-      async privileged(target) {
+      async privileged(selected) {
         requireOpen()
-        if (target !== files.target) throw new Error("The isolated Windows target changed.")
-        // W2's exact native catalog reports the unimplemented W11 layer as a skip without OS actions.
+        if (selected !== files.target) throw new Error("The isolated Windows target changed.")
+        // The finite Caller derives only its fixed source-bound sibling target and observes its
+        // actual medium token, including the high -> medium bootstrap on hosted Windows runners.
         return dependencies.command({
-          executable: files.bin,
-          args: ["--self-test=privileged", "--target", target],
-          timeoutMs: 30_000,
+          executable: caller,
+          args: ["--self-test=privileged"],
+          timeoutMs: 150_000,
         })
       },
       async close() {

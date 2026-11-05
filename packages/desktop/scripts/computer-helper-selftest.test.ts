@@ -13,6 +13,7 @@ import { EXECUTABLE_NAMES } from "./channel-ids"
 import { readIdentity } from "./computer-helper-identity"
 import {
   WINDOWS_NATIVE_CHECKS,
+  WINDOWS_NATIVE_REASONS,
   createWindowsVerifiedFixture,
   verifyWindowsNativeFiles,
   windowsNativeChannel,
@@ -168,6 +169,7 @@ async function windowsArtifacts() {
     ),
   }
   await writeFile(path.join(root, "computer-helper.json"), JSON.stringify(helperManifest))
+  await writeFile(path.join(tests, "computer-helper-tests.json"), JSON.stringify(testManifest))
   const files: VerifiedWindowsArtifacts = {
     bin,
     unit: path.join(tests, WINDOWS_TEST_ARTIFACTS.unit),
@@ -180,8 +182,8 @@ async function windowsArtifacts() {
   return { root, files, options: { ...options, platform: "win32" as const, bin, tests } }
 }
 
-test("Windows reports require exact native catalogs, coherent exits, and an honest pending W11 skip", () => {
-  for (const mode of ["unprivileged", "packaged", "eof", "parentDeath"] as const) {
+test("Windows reports require exact native catalogs, fixed reasons and coherent pass/fail/skip exits", () => {
+  for (const mode of ["unprivileged", "packaged", "eof", "parentDeath", "targetControl"] as const) {
     const checks = WINDOWS_NATIVE_CHECKS[mode].map((name) => ({ name, ok: true }))
     expect(windowsNativeSelfTestChecks(JSON.stringify({ checks }), mode, 0)).toEqual(checks)
     for (const invalid of [
@@ -195,16 +197,33 @@ test("Windows reports require exact native catalogs, coherent exits, and an hone
       expect(() => windowsNativeSelfTestChecks(JSON.stringify(invalid), mode, 0)).toThrow()
     expect(() => windowsNativeSelfTestChecks(JSON.stringify({ checks }), mode, 77)).toThrow()
   }
-  const checks = [{ name: "windows-privileged-target-pending", ok: false, skipped: true }]
+  const passed = WINDOWS_NATIVE_CHECKS.privileged.map((name) => ({ name, ok: true }))
+  expect(windowsNativeSelfTestChecks(JSON.stringify({ checks: passed }), "privileged", 0)).toEqual(passed)
+  const checks = passed.map((entry) => ({ ...entry, ok: false, skipped: true, detail: "noninteractive_desktop" }))
   expect(windowsNativeSelfTestChecks(JSON.stringify({ checks }), "privileged", 77)).toEqual(checks)
   expect(() => windowsNativeSelfTestChecks(JSON.stringify({ checks }), "privileged", 0)).toThrow()
   expect(() =>
     windowsNativeSelfTestChecks(
-      JSON.stringify({ checks: [{ ...checks[0], ok: true, skipped: false }] }),
+      JSON.stringify({ checks: [{ ...checks[0], ok: true, skipped: false }, ...checks.slice(1)] }),
       "privileged",
       0,
     ),
   ).toThrow()
+  const failed = checks.map((entry, index) => index === 1 ? { ...entry, skipped: false, detail: "assertion_failed" } : entry)
+  expect(windowsNativeSelfTestChecks(JSON.stringify({ checks: failed }), "privileged", 1)).toEqual(failed)
+  expect(() => windowsNativeSelfTestChecks(JSON.stringify({ checks: failed }), "privileged", 77)).toThrow()
+  for (const detail of WINDOWS_NATIVE_REASONS) {
+    const failed = passed.map((entry, index) => index === 0 ? { ...entry, ok: false, detail } : entry)
+    expect(windowsNativeSelfTestChecks(JSON.stringify({ checks: failed }), "privileged", 1)).toEqual(failed)
+  }
+  for (const invalid of [
+    checks.slice(1), [...checks, checks[0]], [...checks].reverse(),
+    checks.map((entry) => ({ ...entry, detail: "PRIVATE" })),
+    checks.map((entry) => ({ ...entry, extra: "PRIVATE" })),
+    checks.map((entry) => ({ ...entry, detail: "target_validation_failed" })),
+    checks.map((entry) => ({ ...entry, detail: "assertion_failed" })),
+    checks.map((entry) => ({name: entry.name, ok: entry.ok, skipped: entry.skipped})),
+  ]) expect(() => windowsNativeSelfTestChecks(JSON.stringify({ checks: invalid }), "privileged", 77)).toThrow()
 })
 
 test("Windows channel inference verifies all test artifacts before the first helper version launch", async () => {
@@ -311,16 +330,24 @@ test("Windows fixtures bind copied Caller/helper bytes and use only manifested n
     expect(await readFile(path.join(path.dirname(caller), "resources/computer/vector-computer.exe"))).toEqual(
       await readFile(prepared.files.bin),
     )
+    const staged = path.join(path.dirname(caller), "resources/computer")
+    expect(await readFile(path.join(staged, "tests", WINDOWS_TEST_ARTIFACTS.target))).toEqual(await readFile(prepared.files.target))
+    expect(JSON.parse(await readFile(path.join(staged, "computer-helper.json"), "utf8"))).toEqual(prepared.files.helperManifest)
+    expect(JSON.parse(await readFile(path.join(staged, "tests/computer-helper-tests.json"), "utf8"))).toEqual(prepared.files.testManifest)
     await native.probe()
     expect(await native.unverifiedParent()).toBe(true)
     expect(channels[1]!.args).toEqual(["--stdio", "--parent-pid", String(process.pid)])
     expect(await native.eof()).toBe(true)
     expect(await native.parentDeath()).toBe(true)
+    await expect(native.privileged(path.join(prepared.root, "other-target.exe"))).rejects.toThrow("changed")
+    await native.privileged(prepared.files.target)
     expect(commands.map((item) => [item.executable, item.args])).toEqual([
       [caller, ["--probe", "--json"]],
       [prepared.files.unit, ["--self-test=lifecycle-eof"]],
       [prepared.files.unit, ["--self-test=lifecycle-parent-death"]],
+      [caller, ["--self-test=privileged"]],
     ])
+    expect(commands.at(-1)?.timeoutMs).toBe(150_000)
     await native.close()
     await expect(native.open()).rejects.toThrow("closed")
   } finally {
@@ -329,7 +356,7 @@ test("Windows fixtures bind copied Caller/helper bytes and use only manifested n
 })
 
 test("Windows copy drift refuses admission before a Caller, unit or helper can execute", async () => {
-  for (const artifact of ["caller", "bin"] as const) {
+  for (const artifact of ["caller", "bin", "target"] as const) {
     const prepared = await windowsArtifacts()
     let launches = 0
     try {
@@ -346,6 +373,25 @@ test("Windows copy drift refuses admission before a Caller, unit or helper can e
           },
         }),
       ).rejects.toThrow("changed")
+      expect(launches).toBe(0)
+    } finally {
+      await rm(prepared.root, { recursive: true, force: true })
+    }
+  }
+})
+
+test("Windows staged manifests must retain the verified helper and test facts before any child runs", async () => {
+  for (const name of ["computer-helper.json", "tests/computer-helper-tests.json"]) {
+    const prepared = await windowsArtifacts()
+    let launches = 0
+    try {
+      const file = path.join(prepared.root, name)
+      const manifest = JSON.parse(await readFile(file, "utf8"))
+      await writeFile(file, JSON.stringify({ ...manifest, sourceDigest: "9".repeat(64) }))
+      await expect(createWindowsVerifiedFixture(prepared.options, desktopDirectory, prepared.files, {
+        command: async () => { launches++; return { code: 0, stdout: "PRIVATE" } },
+        channel: () => { launches++; throw new Error("unreachable") },
+      })).rejects.toThrow("manifest")
       expect(launches).toBe(0)
     } finally {
       await rm(prepared.root, { recursive: true, force: true })
@@ -396,7 +442,7 @@ test("Windows channel uses three stdio pipes, preserves framed bytes, and kills 
   expect(kills).toBe(1)
 })
 
-test("Windows driver runs fixed grant-free native catalogs and keeps W11 skips visible", async () => {
+function windowsDriverFixture() {
   const fake = fixture({ minimal: true, platform: "windows" })
   fake.dependencies.platform = "win32"
   fake.dependencies.files = async () => ({
@@ -415,25 +461,60 @@ test("Windows driver runs fixed grant-free native catalogs and keeps W11 skips v
       ? { code: 0, stdout: "Windows native unit checks passed" }
       : {
           code: 0,
-          stdout: JSON.stringify({ checks: WINDOWS_NATIVE_CHECKS.unprivileged.map((name) => ({ name, ok: true })) }),
+          stdout: JSON.stringify({ checks: WINDOWS_NATIVE_CHECKS[command.args.includes("--self-test=control") ? "targetControl" : "unprivileged"].map((name) => ({ name, ok: true })) }),
         }
   }
   fake.native.privileged = async () => ({
     code: 77,
-    stdout: '{"checks":[{"name":"windows-privileged-target-pending","ok":false,"skipped":true}]}',
+    stdout: JSON.stringify({ checks: WINDOWS_NATIVE_CHECKS.privileged.map((name) => ({ name, ok: false, skipped: true, detail: "noninteractive_desktop" })) }),
   })
+  return fake
+}
+
+test("Windows driver runs the target-control smoke before native prerequisite skips and retains fixed reasons", async () => {
+  const fake = windowsDriverFixture()
+  const privileged = fake.native.privileged
+  fake.native.privileged = async (target) => {
+    expect(fake.state.commands.filter((command) => command.args.includes("--self-test=control"))).toHaveLength(1)
+    return privileged(target)
+  }
   const result = await runComputerHelperSelfTest(
     { ...options, platform: "win32", privileged: "auto" },
     fake.dependencies,
   )
   expect(result.code).toBe(0)
   expect(result.checks.find((item) => item.name === "packaged.packaged-pe")?.status).toBe("passed")
-  expect(result.checks.find((item) => item.name === "privileged.windows-privileged-target-pending")?.status).toBe(
-    "skipped",
-  )
-  expect(result.checks.find((item) => item.name === "target-control")?.reason).toBe("windows-target-control-pending")
+  expect(result.checks.find((item) => item.name === "privileged.privileged-isolated-target")).toMatchObject({status: "skipped", reason: "noninteractive_desktop"})
+  expect(result.checks.find((item) => item.name === "target-control")?.status).toBe("passed")
+  expect(result.checks.find((item) => item.name === "target-control.windows-test-target-control-schema")?.status).toBe("passed")
   expect(result.checks.find((item) => item.name === "conformance.heartbeat-loss")?.status).toBe("skipped")
   expect(fake.state.closed).toBe(1)
+})
+
+test("Windows target-control and admission/assertion failures stay failures even when optional scenarios can skip", async () => {
+  for (const defect of ["control", "admission", "assertion", "inconsistent-skip", "private-reason"] as const) {
+    const fake = windowsDriverFixture()
+    if (defect === "control") {
+      const command = fake.dependencies.command!
+      fake.dependencies.command = async (input) => input.args.includes("--self-test=control")
+        ? { code: 1, stdout: JSON.stringify({checks: WINDOWS_NATIVE_CHECKS.targetControl.map((name) => ({name, ok: false}))}) }
+        : command(input)
+      fake.native.privileged = async () => { throw new Error("An invalid target must not start scenarios") }
+    } else {
+      fake.native.privileged = async () => ({
+        code: defect === "inconsistent-skip" ? 77 : 1,
+        stdout: JSON.stringify({checks: WINDOWS_NATIVE_CHECKS.privileged.map((name, index) => index === 0
+          ? {name, ok: false, detail: defect === "admission" ? "target_validation_failed" : defect === "private-reason" ? "PRIVATE" : "assertion_failed"}
+          : {name, ok: false, skipped: true, detail: "noninteractive_desktop"})}),
+      })
+    }
+    const result = await runComputerHelperSelfTest({ ...options, platform: "win32", privileged: "auto" }, fake.dependencies)
+    expect(result.code).toBe(1)
+    expect(result.checks.find((item) => item.name === "privileged")?.status).toBe("failed")
+    expect(JSON.stringify(result)).not.toContain("PRIVATE")
+    if (defect === "admission") expect(result.checks.find((item) => item.name === "privileged.privileged-isolated-target")?.reason).toBe("target_validation_failed")
+    expect(fake.state.closed).toBe(1)
+  }
 })
 
 test("Windows probes cannot omit native capture/token facts or substitute a macOS helper", async () => {

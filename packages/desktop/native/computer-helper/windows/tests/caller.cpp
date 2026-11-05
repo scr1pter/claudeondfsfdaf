@@ -414,9 +414,15 @@ std::uint64_t number(std::wstring_view value, std::uint64_t maximum) {
   return result;
 }
 
-int wait_child(const Child& child) {
+int wait_child(const Child& child, bool privileged = false) {
   DWORD code = 1;
-  if (WaitForSingleObject(child.process.get(), INFINITE) != WAIT_OBJECT_0 || !GetExitCodeProcess(child.process.get(), &code)) invalid();
+  const auto result = WaitForSingleObject(child.process.get(), privileged ? DWORD{140'000} : INFINITE);
+  if (result == WAIT_TIMEOUT && privileged) {
+    (void)TerminateProcess(child.process.get(), 1);
+    (void)WaitForSingleObject(child.process.get(), 500);
+    return 1;
+  }
+  if (result != WAIT_OBJECT_0 || !GetExitCodeProcess(child.process.get(), &code)) invalid();
   return code <= static_cast<DWORD>((std::numeric_limits<int>::max)()) ? static_cast<int>(code) : 1;
 }
 }
@@ -436,7 +442,8 @@ int wmain(int count, wchar_t** argv) {
     const bool test_elevated_token = count == offset + 2 && std::wstring_view(argv[offset]) == L"--stdio" && std::wstring_view(argv[offset + 1]) == L"--test-elevated-token";
     const bool serving = (count == offset + 1 && std::wstring_view(argv[offset]) == L"--stdio") || test_elevated_token;
     const bool probe = count == offset + 2 && std::wstring_view(argv[offset]) == L"--probe" && std::wstring_view(argv[offset + 1]) == L"--json";
-    if ((!serving && !probe) || !SetConsoleCtrlHandler(console_control, TRUE)) return 2;
+    const bool privileged = count == offset + 1 && std::wstring_view(argv[offset]) == L"--self-test=privileged";
+    if ((!serving && !probe && !privileged) || !SetConsoleCtrlHandler(console_control, TRUE)) return 2;
     ParentWatches watches;
     const auto own_start = created(GetCurrentProcess());
     const auto parent_pid = actual_parent(GetCurrentProcessId());
@@ -479,21 +486,24 @@ int wmain(int count, wchar_t** argv) {
       for (const auto& ancestor : ancestors) current(ancestor);
       const auto command = L"\"" + files.self.path + L"\" --fixture-medium " + std::to_wstring(GetCurrentProcessId()) +
         L" --bootstrap-handle " + std::to_wstring(reinterpret_cast<std::uintptr_t>(high_handle.get())) +
-        (serving ? std::wstring(L" --stdio") + (test_elevated_token ? L" --test-elevated-token" : L"") : L" --probe --json");
+        (serving ? std::wstring(L" --stdio") + (test_elevated_token ? L" --test-elevated-token" : L"") : privileged ? L" --self-test=privileged" : L" --probe --json");
       auto child = launch(files.self.path, command, token.get(), high_handle.get(), serving);
       high_handle.close();
       const auto child_token = vector::computer::observe_token(child.process.get());
       if (!vector::computer::serving_token_allowed(child_token) || !vector::computer::same_token(observed, child_token) ||
           !same_file(files.self, hold_file(process_path(child.process.get()))) || created(child.process.get()) < own_start) invalid();
-      return wait_child(child);
+      return wait_child(child, privileged);
     }
+    if (privileged && own_token.integrity != SECURITY_MANDATORY_MEDIUM_RID) invalid();
     for (const auto& ancestor : ancestors) current(ancestor);
     if (!vector::computer::same_token(own_token, vector::computer::observe_token(GetCurrentProcess())) ||
         actual_parent(GetCurrentProcessId()) != parent_pid) invalid();
+    const auto target = files.helper.path.substr(0, files.helper.path.find_last_of(L'\\')) + L"\\tests\\computer-test-target.exe";
     const auto command = L"\"" + files.helper.path + L"\"" + (serving
-      ? L" --stdio --parent-pid " + std::to_wstring(GetCurrentProcessId()) + (test_elevated_token ? L" --test-elevated-token" : L"") : std::wstring(L" --probe --json"));
+      ? L" --stdio --parent-pid " + std::to_wstring(GetCurrentProcessId()) + (test_elevated_token ? L" --test-elevated-token" : L"")
+      : privileged ? L" --self-test=privileged --target \"" + target + L"\"" : std::wstring(L" --probe --json"));
     auto child = launch(files.helper.path, command, nullptr, nullptr, serving);
-    return wait_child(child);
+    return wait_child(child, privileged);
   } catch (...) {
     // Unwinding retired the death watches. Never block on a pipe while reporting a startup failure.
     return 1;

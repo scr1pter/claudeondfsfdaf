@@ -110,6 +110,22 @@ test("native jobs and privileged checks have independent deadlines with explicit
   }
 })
 
+test("Windows scenario isolation is explicit and confined to opt-in privileged steps", () => {
+  const isolated = ["Run explicitly isolated Windows scenarios", "Run explicitly isolated ARM64 scenarios"]
+  const found: string[] = []
+  for (const value of Object.values(jobs)) {
+    for (const step of steps(record(value))) {
+      if (!step.env || record(step.env).VECTOR_COMPUTER_TEST_ISOLATED === undefined) continue
+      expect(isolated).toContain(step.name)
+      expect(record(step.env).VECTOR_COMPUTER_TEST_ISOLATED).toBe("1")
+      expect(String(step.if)).toContain("isolated-desktop")
+      expect(String(step.run)).toContain("--platform win32")
+      found.push(String(step.name))
+    }
+  }
+  expect(found.toSorted()).toEqual(isolated.toSorted())
+})
+
 test("native actions are pinned, read-only and do not restore helper binaries from caches", () => {
   expect(helper.document.permissions).toEqual({ contents: "read" })
   expect(helper.source).not.toMatch(/\$\{\{[^}]*\bsecrets\./)

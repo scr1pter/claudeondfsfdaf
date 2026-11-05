@@ -17,6 +17,7 @@
 #include "input_guardian.h"
 #include "uia_input.h"
 #include "user_input.h"
+#include "privileged_target.h"
 #include "accessibility.h"
 #include "availability.h"
 #include <objidl.h>
@@ -43,6 +44,7 @@ void parent_identity_tests();
 void lifecycle_tests();
 void integration_tests();
 void integration_lifecycle_test(bool parent_death);
+int integration_parent_only_child(bool parent, std::string_view mapping, std::string_view ready, bool finish77);
 }
 
 namespace {
@@ -509,7 +511,7 @@ template<class Check> void run_check(const char* label, Check check) {
       (detail.starts_with("protocol.") || detail.starts_with("server.") || detail.starts_with("parent.") || detail.starts_with("lifecycle.") || detail.starts_with("integration.") ||
         detail.starts_with("windows-") || detail.starts_with("policy.") || detail.starts_with("tree.") || detail.starts_with("program.") || detail.starts_with("guard.") || detail.starts_with("capture.") || detail.starts_with("availability.") ||
         detail.starts_with("input.") || detail.starts_with("input-keys.") || detail.starts_with("held.") || detail.starts_with("guardian.") ||
-        detail.starts_with("uia-native.") || detail.starts_with("uia-input.") || detail.starts_with("accessibility.") || detail.starts_with("accessibility-registry.") || detail.starts_with("user-input.")) &&
+        detail.starts_with("uia-native.") || detail.starts_with("uia-input.") || detail.starts_with("accessibility.") || detail.starts_with("accessibility-registry.") || detail.starts_with("user-input.") || detail.starts_with("privileged.")) &&
       std::all_of(detail.begin(), detail.end(), [](char value) { return (value >= 'a' && value <= 'z') || (value >= '0' && value <= '9') || value == '.' || value == '-'; });
     throw UnitFailure(fixed ? error.what() : label);
   }
@@ -519,6 +521,10 @@ template<class Check> void run_check(const char* label, Check check) {
 }
 
 int main(int argc, char** argv) {
+  if (argc == 4 && (std::string_view(argv[1]) == "--self-test=parent-only-parent" || std::string_view(argv[1]) == "--self-test=parent-only-child" ||
+      std::string_view(argv[1]) == "--self-test=parent-only-finish77"))
+    return integration_parent_only_child(std::string_view(argv[1]) == "--self-test=parent-only-parent", argv[2], argv[3],
+      std::string_view(argv[1]) == "--self-test=parent-only-finish77");
   if (argc == 2 && (std::string_view(argv[1]) == "--self-test=lifecycle-eof" || std::string_view(argv[1]) == "--self-test=lifecycle-parent-death")) {
     const bool parent_death = std::string_view(argv[1]) == "--self-test=lifecycle-parent-death";
     bool passed = false;
@@ -566,6 +572,7 @@ int main(int argc, char** argv) {
     run_check("accessibility-service", [] { static_cast<void>(run_accessibility_tests()); });
     run_check("accessibility-references", [] { static_cast<void>(run_accessibility_registry_tests()); });
     run_check("user-input-detection-and-stop", [] { static_cast<void>(run_user_input_tests()); });
+    run_check("privileged-boundaries", [] { static_cast<void>(run_privileged_self_test_tests()); });
     std::cout << "Windows computer helper unit checks passed.\n";
     return 0;
   } catch (const UnitFailure& failure) {

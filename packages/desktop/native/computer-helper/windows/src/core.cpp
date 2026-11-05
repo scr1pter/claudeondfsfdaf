@@ -16,6 +16,7 @@
 #include "accessibility.h"
 #include "availability.h"
 #include "user_input.h"
+#include "privileged_self_test.h"
 #include <tlhelp32.h>
 #include <objidl.h>
 #include <xmllite.h>
@@ -451,6 +452,16 @@ int run_command(const Command& command, HANDLE output, HANDLE error) {
     // never universal DLP permission; an unverified caller cannot report capture readiness.
     result.Insert(L"captureBlocked", JsonValue::CreateBooleanValue(!responsible || probe->capture_blocked));
   } else if (command.mode == Mode::self_test) {
+    int self_test_code = 0;
+    std::shared_ptr<HelperLifecycle> privileged_lifetime;
+    const auto finish_self_test = [&](int code) {
+      if (privileged_lifetime) {
+        // Keep the held parent and independent fuse alive through every actual report write.
+        privileged_lifetime->finish(code);
+        (void)TerminateProcess(GetCurrentProcess(), static_cast<UINT>(code));
+      }
+      return code;
+    };
     JsonArray checks;
     bool all = true;
     const auto add = [&](std::wstring_view name, const std::function<bool()>& test, bool skipped = false) {
@@ -463,7 +474,10 @@ int run_command(const Command& command, HANDLE output, HANDLE error) {
       checks.Append(check);
       if (!passed) all = false;
     };
-    if (command.self_test == L"privileged") add(L"windows-privileged-target-pending", [] { return false; }, true);
+    if (command.self_test == L"privileged") {
+      const auto report = run_windows_privileged_self_test(command, &privileged_lifetime);
+      result = report.wire(); self_test_code = report.exit_code();
+    }
     else {
       // These grant-free checks inspect the running binary and actual codec. The driver separately
       // executes every unconditional golden transcript against the real framed child process.
@@ -474,15 +488,15 @@ int run_command(const Command& command, HANDLE output, HANDLE error) {
       add(L"packaged-pe", [&] { return check_pe(image); });
       add(L"packaged-manifest", check_manifest);
       add(L"packaged-version", [&] { return check_version(image); });
+      result.Insert(L"checks", checks); self_test_code = all ? 0 : 1;
     }
-    result.Insert(L"checks", checks);
     const auto document = winrt::to_string(result.Stringify()) + "\n";
     if (!command.report.empty()) {
       winrt::handle report(CreateFileW(command.report.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr));
-      if (!report || report.get() == INVALID_HANDLE_VALUE || !write_utf8(report.get(), document)) return 1;
+      if (!report || report.get() == INVALID_HANDLE_VALUE || !write_utf8(report.get(), document)) return finish_self_test(1);
     }
-    if (!write_utf8(output, document)) return 1;
-    return command.self_test == L"privileged" ? 77 : all ? 0 : 1;
+    if (!write_utf8(output, document)) return finish_self_test(1);
+    return finish_self_test(self_test_code);
   }
   return write_utf8(output, winrt::to_string(result.Stringify()) + "\n") ? 0 : 1;
 }

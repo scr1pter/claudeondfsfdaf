@@ -1,0 +1,44 @@
+#pragma once
+#include "core.h"
+#include <array>
+#include <atomic>
+#include <functional>
+#include <memory>
+
+namespace vector::computer {
+class HelperLifecycle;
+inline constexpr std::array<std::wstring_view, 15> windows_privileged_checks{
+  L"privileged-isolated-target", L"apps-running-target", L"apps-installed-target",
+  L"capture-color-patch", L"capture-affinity-exclusion", L"uia-counter-increment",
+  L"uia-value-set-and-readback", L"secure-field-refusal", L"tagged-click-increments",
+  L"unicode-type-readback", L"stale-capture-refusal", L"owned-input-release",
+  L"input-detection-probe", L"hardware-user-input-pauses", L"isolated-target-cleanup"};
+struct WindowsPrivilegedCheck { std::wstring name; bool ok = false, skipped = false; std::wstring detail; };
+struct WindowsPrivilegedReport {
+  std::vector<WindowsPrivilegedCheck> checks;
+  bool valid() const noexcept;
+  int exit_code() const noexcept;
+  JsonObject wire() const;
+  // Preserve every observed result when a later prerequisite prevents unrun scenarios.
+  void skip_unrun(std::wstring_view reason);
+  static WindowsPrivilegedReport skipped(std::wstring_view reason);
+};
+bool windows_privileged_reason(std::wstring_view) noexcept;
+bool windows_privileged_skip_reason(std::wstring_view) noexcept;
+// A monotonic admission gate over the already-held parent witness. Production supplies only bounded
+// kernel metadata; tests can advance that witness without creating a process or touching a desktop.
+class WindowsPrivilegedRunAuthority final {
+ public:
+  explicit WindowsPrivilegedRunAuthority(std::function<bool()> parent_current);
+  bool admit() noexcept;
+  bool current() const noexcept;
+  void revoke() noexcept;
+ private:
+  std::function<bool()> parent_current_;
+  std::atomic_bool admitted_{false};
+  mutable std::atomic_bool revoked_{false};
+};
+// Core retains the lifetime lease through actual report emission, then finishes immediately before
+// process exit. Finishing it while returning this report would race away the required JSON output.
+WindowsPrivilegedReport run_windows_privileged_self_test(const Command&, std::shared_ptr<HelperLifecycle>* lifetime = nullptr) noexcept;
+}

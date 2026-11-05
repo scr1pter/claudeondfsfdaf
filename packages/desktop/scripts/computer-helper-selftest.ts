@@ -484,7 +484,13 @@ export async function runComputerHelperSelfTest(options: SelfTestOptions, depend
           : {
               checks: windowsNativeSelfTestChecks(
                 result.stdout,
-                name === "privileged" ? "privileged" : name === "packaged" ? "packaged" : "unprivileged",
+                name === "privileged"
+                  ? "privileged"
+                  : name === "packaged"
+                    ? "packaged"
+                    : name === "target-control"
+                      ? "targetControl"
+                      : "unprivileged",
                 result.code,
               ),
             }
@@ -509,7 +515,7 @@ export async function runComputerHelperSelfTest(options: SelfTestOptions, depend
         const skipped = entry.skipped === true
         const state = skipped ? (mode === "require" ? "failed" : "skipped") : entry.ok ? "passed" : "failed"
         const reason =
-          options.platform === "darwin" && typeof entry.detail === "string"
+          typeof entry.detail === "string"
             ? entry.detail
             : skipped
               ? "native-skip"
@@ -543,16 +549,13 @@ export async function runComputerHelperSelfTest(options: SelfTestOptions, depend
   if (files) await child("unit", files.unit, [])
   await child("unprivileged", options.bin, ["--self-test=unprivileged"])
   await child("packaged", options.bin, ["--self-test=packaged"])
-  if (options.platform === "darwin" && files?.target)
-    await child("target-control", path.join(files.target, "Contents/MacOS", MAC_TEST_TARGET.executable), [
-      "--self-test=control",
-    ])
-  else
-    set(
+  if (files?.target)
+    await child(
       "target-control",
-      "skipped",
-      options.platform === "win32" ? "windows-target-control-pending" : "isolated-target-unavailable",
+      options.platform === "darwin" ? path.join(files.target, "Contents/MacOS", MAC_TEST_TARGET.executable) : files.target,
+      ["--self-test=control"],
     )
+  else set("target-control", "skipped", "isolated-target-unavailable")
   let fixture: VerifiedFixture | undefined
   try {
     fixture = await (dependencies.fixture ?? createVerifiedFixture)(options, files)
