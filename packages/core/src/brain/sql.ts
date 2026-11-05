@@ -636,6 +636,7 @@ export const ResearchNoteTable = sqliteTable(
     // Whether the quote states the claim (BrainLexical.states); false is a paraphrase.
     support: integer({ mode: "boolean" }).notNull(),
     verdict: text().$type<Research.Verdict>(),
+    measurement: text({ mode: "json" }).$type<Research.Measurement>(),
     created_at: integer().notNull(),
   },
   (table) => [

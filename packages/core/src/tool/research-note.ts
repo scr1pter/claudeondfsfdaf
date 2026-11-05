@@ -6,6 +6,7 @@ import { AgentV2 } from "../agent"
 import { makeLocationNode } from "../effect/app-node"
 import { ResearchSource } from "../research/source"
 import { ResearchStore } from "../research/store"
+import { ResearchClaim } from "../research/claim"
 import { ResearchRunV2 } from "./research-run"
 import { ToolRegistry } from "./registry"
 import { Tool } from "./tool"
@@ -22,7 +23,8 @@ export const description = `Saves a finding of this research run as a note (N1, 
 
 - source is the S# the quote is from; quote is copied word for word from it, at least 12 characters. A quote that is not in the source is refused, with the chunk to copy from.
 - claim says in one short sentence what the quote shows. When the quote does not state the whole claim, the note is kept as a paraphrase, which cannot make a section High confidence on its own.
-- stance: supports (default), contradicts (the source says otherwise), or context.`
+- stance: supports (default), contradicts (the source says otherwise), or context.
+- measurement optionally records a numeric metric, reported value, unit, scale and explicit scope (period, geography, population, methodology, definition, currency). Copy these from the quote; omit inferred scope. Vector compares compatible scopes and flags differences for review. This does not verify the source's truth.`
 
 export const Input = Schema.Struct({
   subquestion: Schema.String.check(Schema.isLengthBetween(1, 300)).annotate({
@@ -40,6 +42,10 @@ export const Input = Schema.Struct({
   }),
   stance: Schema.optional(Research.Stance).annotate({
     description: "supports (default), contradicts or context",
+  }),
+  measurement: Schema.optional(Research.Measurement).annotate({
+    description:
+      "Optional quantitative finding. Copy the number, unit and every supplied scope field from this quote. Do not convert amounts or guess missing dates/populations.",
   }),
 })
 
@@ -88,14 +94,18 @@ const layer = Layer.effectDiscard(
                 quote: input.quote,
                 ...(input.page ? { page: input.page } : {}),
                 ...(input.stance ? { stance: input.stance } : {}),
+                ...(input.measurement ? { measurement: input.measurement } : {}),
+                publicOnly: context.agent !== AgentV2.researchID,
               })
               if (noted.type === "refused")
                 return { text: noted.message, metadata: { runID: found.run.id, source: input.source, refused: true } }
               const note = noted.note
               return {
-                text: note.support
-                  ? `Saved ${note.id} (${note.source}${note.page ? ` p.${note.page}` : ""}, ${note.stance}). Cite it as [${note.id}].`
-                  : `Saved ${note.id} (${note.source}, ${note.stance}) as a paraphrase: the quote is in ${note.source} but does not state the whole claim, so on its own it cannot make a section High confidence. Narrow the claim to what the quote says, or quote the words that say it. Cite it as [${note.id}].`,
+                text:
+                  (note.support
+                    ? `Saved ${note.id} (${note.source}${note.page ? ` p.${note.page}` : ""}, ${note.stance}). Cite it as [${note.id}].`
+                    : `Saved ${note.id} (${note.source}, ${note.stance}) as a paraphrase: the quote is in ${note.source} but does not state the whole claim, so on its own it cannot make a section High confidence. Narrow the claim to what the quote says, or quote the words that say it. Cite it as [${note.id}].`) +
+                  (noted.comparisons?.length ? `\n${noted.comparisons.map(ResearchClaim.summary).join("\n")}` : ""),
                 metadata: { runID: found.run.id, note: note.id, source: note.source, support: note.support },
               }
             }),

@@ -10836,7 +10836,7 @@
             "in": "query",
             "schema": {
               "type": "string",
-              "enum": ["markdown", "json"]
+              "enum": ["markdown", "json", "docx", "pdf"]
             },
             "required": false
           }
@@ -10845,9 +10845,26 @@
           "200": {
             "description": "Success",
             "content": {
-              "text/markdown": {
+              "application/json": {
                 "schema": {
-                  "type": "string"
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "string",
+                      "format": "byte",
+                      "contentEncoding": "base64"
+                    },
+                    {
+                      "type": "string",
+                      "format": "byte",
+                      "contentEncoding": "base64"
+                    }
+                  ]
                 }
               }
             }
@@ -10880,7 +10897,7 @@
             }
           }
         },
-        "description": "The run as an attachment: the report with a bibliography as Markdown, or with `format=json` the run, its queries, sources, notes and report.",
+        "description": "The run as an attachment: the report with a bibliography as Markdown (default), Word (`format=docx`) or PDF (`format=pdf`). JSON contains the run, queries, sources, notes and report. Word and PDF are generated locally from saved text; no image or URL is fetched.",
         "summary": "Export a research run",
         "x-codeSamples": [
           {
@@ -36722,6 +36739,8 @@
               "enum": [
                 "truncated",
                 "scanned",
+                "ocr",
+                "ocr-incomplete",
                 "encrypted",
                 "macros-ignored",
                 "external-links",
@@ -37561,6 +37580,8 @@
               "enum": [
                 "truncated",
                 "scanned",
+                "ocr",
+                "ocr-incomplete",
                 "encrypted",
                 "macros-ignored",
                 "external-links",
@@ -38466,6 +38487,9 @@
           },
           "verdict": {
             "$ref": "#/components/schemas/ResearchVerdict"
+          },
+          "measurement": {
+            "$ref": "#/components/schemas/ResearchMeasurement"
           },
           "created_at": {
             "type": "integer",
@@ -46300,6 +46324,59 @@
           }
         },
         "required": ["accepted"],
+        "additionalProperties": false
+      },
+      "ResearchMeasurement": {
+        "type": "object",
+        "properties": {
+          "metric": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "value": {
+            "type": "number"
+          },
+          "unit": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "scale": {
+            "type": "string",
+            "enum": ["one", "thousand", "million", "billion", "trillion"]
+          },
+          "currency": {
+            "type": "string",
+            "pattern": "^[A-Z]{3}$"
+          },
+          "period": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "geography": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "population": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "methodology": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "definition": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          }
+        },
+        "required": ["metric", "value", "unit"],
         "additionalProperties": false
       },
       "ProjectDirectories": {

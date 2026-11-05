@@ -10,6 +10,7 @@ import { BrainKnowledge } from "@vectordevai/core/brain/knowledge"
 import type { BrainSchema } from "@vectordevai/core/brain/schema"
 import { Flag } from "@vectordevai/core/flag/flag"
 import { ResearchStore } from "@vectordevai/core/research/store"
+import { ResearchExport } from "@vectordevai/core/research/export"
 import { Git } from "@/git"
 import { Instruction } from "@/session/instruction"
 import { SessionDistill } from "@/session/distill"
@@ -115,7 +116,8 @@ export const memoryHandlers = HttpApiBuilder.group(InstanceHttpApi, "memory", (h
     const remove = Effect.fn("MemoryHttpApi.remove")(function* (ctx: { params: { memoryID: string } }) {
       const result = yield* brain.forget(yield* instruction.place(), ctx.params.memoryID)
       if (result === "not-found") return yield* missing(ctx.params.memoryID)
-      if (result === "file-entry") return yield* refused("This entry comes from a file you wrote; change it in that file.")
+      if (result === "file-entry")
+        return yield* refused("This entry comes from a file you wrote; change it in that file.")
       return true
     })
 
@@ -152,7 +154,8 @@ export const memoryHandlers = HttpApiBuilder.group(InstanceHttpApi, "memory", (h
     })
 
     const importMemory = Effect.fn("MemoryHttpApi.import")(function* (ctx: { payload: { text: string } }) {
-      if (ctx.payload.text.length > IMPORT_CHARS) return yield* refused("Vector imports at most 2 MB at a time.", "limit")
+      if (ctx.payload.text.length > IMPORT_CHARS)
+        return yield* refused("Vector imports at most 2 MB at a time.", "limit")
       return yield* BrainExport.importText({ brain, place: yield* instruction.place(), text: ctx.payload.text })
     })
 
@@ -255,7 +258,8 @@ export const memoryHandlers = HttpApiBuilder.group(InstanceHttpApi, "memory", (h
           .pipe(Effect.catch((error) => Effect.fail(refused(error.message, error.reason))))
       }
       if (ctx.payload.action === "remove") yield* knowledge.removeModel()
-      if (ctx.payload.action === "pause" || ctx.payload.action === "resume") yield* embed.pause(ctx.payload.action === "pause")
+      if (ctx.payload.action === "pause" || ctx.payload.action === "resume")
+        yield* embed.pause(ctx.payload.action === "pause")
       return yield* knowledge.model(place)
     })
 
@@ -368,10 +372,13 @@ export const memoryHandlers = HttpApiBuilder.group(InstanceHttpApi, "memory", (h
       if (file.type === "refused") return yield* refused(file.message, file.reason)
       const probed = yield* knowledge
         .probe({ name: file.name, bytes: file.bytes })
-        .pipe(Effect.catch((error) => Effect.fail(refused(`Vector could not read this file: ${error.message}`, "invalid"))))
+        .pipe(
+          Effect.catch((error) => Effect.fail(refused(`Vector could not read this file: ${error.message}`, "invalid"))),
+        )
       if ("type" in probed) return yield* refused(probed.message, probed.reason)
       const large =
-        file.bytes.length > REMEMBER_INSTEAD.bytes || (probed.format === "pdf" && (probed.pages ?? 0) > REMEMBER_INSTEAD.pages)
+        file.bytes.length > REMEMBER_INSTEAD.bytes ||
+        (probed.format === "pdf" && (probed.pages ?? 0) > REMEMBER_INSTEAD.pages)
       return {
         format: probed.format,
         ...(probed.pages === undefined ? {} : { pages: probed.pages }),
@@ -426,9 +433,12 @@ export const memoryHandlers = HttpApiBuilder.group(InstanceHttpApi, "memory", (h
       return (yield* knowledge.document(place, id, { personal: true }))?.document ?? before.document
     })
 
-    const removeDocument = Effect.fn("MemoryHttpApi.removeDocument")(function* (ctx: { params: { documentID: string } }) {
+    const removeDocument = Effect.fn("MemoryHttpApi.removeDocument")(function* (ctx: {
+      params: { documentID: string }
+    }) {
       const result = yield* knowledge.remove(yield* instruction.place(), ctx.params.documentID)
-      if (result === "not-found") return yield* missing(ctx.params.documentID, `No document ${ctx.params.documentID} here.`)
+      if (result === "not-found")
+        return yield* missing(ctx.params.documentID, `No document ${ctx.params.documentID} here.`)
       return true
     })
 
@@ -439,7 +449,8 @@ export const memoryHandlers = HttpApiBuilder.group(InstanceHttpApi, "memory", (h
       const page = Number.isNaN(number)
         ? undefined
         : yield* knowledge.page(yield* instruction.place(), ctx.params.documentID, number, { personal: true })
-      if (!page) return yield* missing(ctx.params.documentID, `No page ${ctx.params.page} in document ${ctx.params.documentID}.`)
+      if (!page)
+        return yield* missing(ctx.params.documentID, `No page ${ctx.params.page} in document ${ctx.params.documentID}.`)
       return page
     })
 
@@ -448,7 +459,10 @@ export const memoryHandlers = HttpApiBuilder.group(InstanceHttpApi, "memory", (h
     const documentFile = Effect.fn("MemoryHttpApi.documentFile")(function* (ctx: { params: { documentID: string } }) {
       const original = yield* knowledge.original(yield* instruction.place(), ctx.params.documentID)
       if (!original)
-        return yield* missing(ctx.params.documentID, `Vector keeps no copy of document ${ctx.params.documentID}'s file.`)
+        return yield* missing(
+          ctx.params.documentID,
+          `Vector keeps no copy of document ${ctx.params.documentID}'s file.`,
+        )
       const ascii = original.name.replace(/[^A-Za-z0-9._ -]/g, "_")
       return HttpServerResponse.uint8Array(original.bytes, {
         contentType: "application/octet-stream",
@@ -554,14 +568,18 @@ export const memoryHandlers = HttpApiBuilder.group(InstanceHttpApi, "memory", (h
       payload: BrainKnowledge.Resolution
     }) {
       const result = yield* knowledge.resolve(yield* instruction.place(), ctx.params.itemID, ctx.payload)
-      if (!result) return yield* missing(ctx.params.itemID, `Nothing here needs a look as ${ctx.params.itemID}, or not that way.`)
+      if (!result)
+        return yield* missing(ctx.params.itemID, `Nothing here needs a look as ${ctx.params.itemID}, or not that way.`)
       if (result.type === "refused") return yield* refused(result.message)
       if (result.type === "settled") return {}
       return { item: result.item, ...(result.entry ? { entry: result.entry } : {}) }
     })
 
     const cited = Effect.fn("MemoryHttpApi.knowledge")(function* (ctx: { query: { ids: string } }) {
-      const ids = ctx.query.ids.split(",").map((id) => id.trim()).filter(Boolean)
+      const ids = ctx.query.ids
+        .split(",")
+        .map((id) => id.trim())
+        .filter(Boolean)
       if (ids.length > BrainKnowledge.LIMIT.cards) return yield* refused("Ask for at most 50 ids at a time.", "limit")
       return yield* knowledge.cards(yield* instruction.place(), ids, { personal: true })
     })
@@ -606,10 +624,30 @@ export const memoryHandlers = HttpApiBuilder.group(InstanceHttpApi, "memory", (h
     // An attachment, never something a browser renders.
     const exportResearch = Effect.fn("MemoryHttpApi.exportResearch")(function* (ctx: {
       params: { runID: string }
-      query: { format?: "markdown" | "json" }
+      query: { format?: "markdown" | "json" | "docx" | "pdf" }
     }) {
-      const exported = yield* research.export(yield* instruction.place(), ctx.params.runID, ctx.query.format ?? "markdown")
+      const format = ctx.query.format ?? "markdown"
+      const exported = yield* research.export(
+        yield* instruction.place(),
+        ctx.params.runID,
+        format === "json" ? "json" : "markdown",
+      )
       if (!exported) return yield* noRun(ctx.params.runID)
+      if (format === "docx" || format === "pdf") {
+        const converted = yield* Effect.tryPromise({
+          try: () => ResearchExport.render(exported.body, format),
+          catch: (cause) => refused(cause instanceof Error ? cause.message : "Vector could not export this report."),
+        })
+        return HttpServerResponse.uint8Array(converted.bytes, {
+          contentType: converted.type,
+          headers: {
+            "content-disposition": `attachment; filename="${exported.name.replace(/\.md$/, `.${format}`).replace(/[^A-Za-z0-9._-]/g, "_")}"`,
+            "x-content-type-options": "nosniff",
+            "content-security-policy": "sandbox",
+            "cache-control": "no-store",
+          },
+        })
+      }
       return HttpServerResponse.text(exported.body, {
         contentType: `${exported.type}; charset=utf-8`,
         headers: {
@@ -625,7 +663,8 @@ export const memoryHandlers = HttpApiBuilder.group(InstanceHttpApi, "memory", (h
       params: { runID: string; sourceID: string }
     }) {
       const saved = yield* research.source(yield* instruction.place(), ctx.params.runID, ctx.params.sourceID)
-      if (!saved) return yield* missing(ctx.params.sourceID, `No source ${ctx.params.sourceID} in run ${ctx.params.runID}.`)
+      if (!saved)
+        return yield* missing(ctx.params.sourceID, `No source ${ctx.params.sourceID} in run ${ctx.params.runID}.`)
       return {
         source: { ...saved.source, ...(saved.forgotten ? { forgotten: true } : {}) },
         chunks: saved.chunks,

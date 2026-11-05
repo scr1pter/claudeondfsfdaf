@@ -136,6 +136,23 @@ export const Verdict = Schema.Literals(["supported", "partial", "unsupported", "
 })
 export type Verdict = typeof Verdict.Type
 
+// Optional, source-quoted metadata for comparing quantitative findings. These are the source's reported
+// quantities and scope, never a certification of the claim or a model's inferred population or date.
+const MeasureText = Schema.String.check(Schema.isLengthBetween(1, 160))
+export interface Measurement extends Schema.Schema.Type<typeof Measurement> {}
+export const Measurement = Schema.Struct({
+  metric: MeasureText,
+  value: Schema.Finite,
+  unit: Schema.String.check(Schema.isLengthBetween(1, 64)),
+  scale: optional(Schema.Literals(["one", "thousand", "million", "billion", "trillion"])),
+  currency: optional(Schema.String.check(Schema.isPattern(/^[A-Z]{3}$/))),
+  period: optional(MeasureText),
+  geography: optional(MeasureText),
+  population: optional(MeasureText),
+  methodology: optional(MeasureText),
+  definition: optional(MeasureText),
+}).annotate({ identifier: "Research.Measurement" })
+
 // A finding. Its quote was found in the saved text of its source when it was saved. `support` is whether the quote
 // states the claim (`BrainLexical.states`); a note where it does not is a paraphrase, which cannot make a section High
 // confidence on its own.
@@ -149,6 +166,7 @@ export const Note = Schema.Struct({
   stance: Stance,
   support: Schema.Boolean,
   verdict: optional(Verdict),
+  measurement: optional(Measurement),
   created_at: NonNegativeInt,
 }).annotate({ identifier: "ResearchNote" })
 export type Note = typeof Note.Type

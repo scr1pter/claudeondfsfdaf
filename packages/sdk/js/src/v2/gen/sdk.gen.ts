@@ -5267,14 +5267,14 @@ export class Research extends HeyApiClient {
   /**
    * Export a research run
    *
-   * The run as an attachment: the report with a bibliography as Markdown, or with `format=json` the run, its queries, sources, notes and report.
+   * The run as an attachment: the report with a bibliography as Markdown (default), Word (`format=docx`) or PDF (`format=pdf`). JSON contains the run, queries, sources, notes and report. Word and PDF are generated locally from saved text; no image or URL is fetched.
    */
   public export<ThrowOnError extends boolean = false>(
     parameters: {
       runID: string
       directory?: string
       workspace?: string
-      format?: "markdown" | "json"
+      format?: "markdown" | "json" | "docx" | "pdf"
     },
     options?: Options<never, ThrowOnError>,
   ) {

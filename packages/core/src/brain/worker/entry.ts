@@ -31,7 +31,10 @@ export function handle(
   }))
 }
 
-async function answer(request: BrainWorkerProtocol.Request, signal?: AbortSignal): Promise<BrainWorkerProtocol.Response> {
+async function answer(
+  request: BrainWorkerProtocol.Request,
+  signal?: AbortSignal,
+): Promise<BrainWorkerProtocol.Response> {
   if (request.type === "ping") return { id: request.id, type: "pong" }
   if (request.type === "load") return { id: request.id, type: "loaded", ...(await BrainWorkerEmbed.load(request)) }
   if (request.type === "embed") return { id: request.id, type: "embedded", ...(await BrainWorkerEmbed.embed(request)) }
@@ -75,7 +78,11 @@ async function answer(request: BrainWorkerProtocol.Request, signal?: AbortSignal
       code: [
         ...new Set(
           extracted.blocks.flatMap((block) =>
-            block.type === "paragraph" ? block.code : block.type === "list" ? block.items.flatMap((item) => item.code) : [],
+            block.type === "paragraph"
+              ? block.code
+              : block.type === "list"
+                ? block.items.flatMap((item) => item.code)
+                : [],
           ),
         ),
       ]
@@ -89,6 +96,9 @@ async function answer(request: BrainWorkerProtocol.Request, signal?: AbortSignal
 if (!isMainThread && parentPort) {
   const port = parentPort
   port.on("message", (request: BrainWorkerProtocol.Request) => {
+    // Local OCR replies are consumed by the PDF reader's own pending request, not the document protocol.
+    if (typeof request === "object" && request !== null && "kind" in request && request.kind === "brain-ocr-result")
+      return
     void handle(request).then((response) => port.postMessage(response))
   })
   port.postMessage({ type: "ready" } satisfies BrainWorkerProtocol.Response)

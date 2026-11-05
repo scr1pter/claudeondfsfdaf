@@ -201,6 +201,8 @@ export type DocumentStatus = typeof DocumentStatus.Type
 export const DocumentWarning = Schema.Literals([
   "truncated",
   "scanned",
+  "ocr",
+  "ocr-incomplete",
   "encrypted",
   "macros-ignored",
   "external-links",
@@ -412,7 +414,9 @@ export const Anchor = Schema.Struct({
   method: Schema.Literals(["path", "definition", "use", "route", "env", "constant", "user", "outcome"]),
   weight: Schema.Finite,
   /** A constant's value as the code gives it, in the unit its name or comment gives. */
-  value: Schema.optional(Schema.Struct({ raw: Schema.String, value: Schema.Finite, unit: Schema.optional(Schema.String) })),
+  value: Schema.optional(
+    Schema.Struct({ raw: Schema.String, value: Schema.Finite, unit: Schema.optional(Schema.String) }),
+  ),
   /** fresh: the linked line is unchanged (or only moved); drifted: it reads differently now; missing: it is gone. */
   status: Schema.Literals(["fresh", "drifted", "missing"]),
   origin: Schema.Literals(["extracted", "user", "outcome"]),

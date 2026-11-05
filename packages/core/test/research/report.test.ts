@@ -330,3 +330,79 @@ describe("ResearchReport.render", () => {
     expect(guard.attempts()).toEqual([])
   })
 })
+
+describe("quantitative report comparisons", () => {
+  test("shows a disagreement and the actual cited notes, without treating it as a truth verdict", () => {
+    const measurement: Research.Measurement = {
+      metric: "revenue",
+      value: 1.2,
+      unit: "USD",
+      scale: "billion",
+      period: "2025",
+      geography: "Europe",
+    }
+    const compared = [
+      note("N1", { measurement }),
+      note("N2", { source: "S2", measurement: { ...measurement, value: 1.8 } }),
+    ]
+    const report = ResearchReport.render(
+      {
+        title: "Revenue",
+        answer: "Estimates differ [N1, N2].",
+        sections: [{ heading: "Estimates", body: "Both reported revenue [N1, N2]." }],
+        open_questions: [],
+      },
+      { notes: compared, sources, judged: false, method: { pages: 2, searches: 1 } },
+    )
+    expect(report.sections[0]?.confidence).toMatchObject({ level: "low", disagree: true })
+    expect(report.markdown).toContain("## Quantitative comparisons")
+    expect(report.markdown).toContain("Reported values differ by more than 2%")
+    expect(report.markdown).toContain("not a verdict")
+    expect(report.markdown).toContain("[^N1]")
+    expect(report.markdown).toContain("[^N2]")
+  })
+
+  test("different periods are disclosed as different scope and do not lower confidence as a contradiction", () => {
+    const measurement: Research.Measurement = {
+      metric: "revenue",
+      value: 1.2,
+      unit: "USD",
+      period: "2025",
+      geography: "Europe",
+    }
+    const report = ResearchReport.render(
+      {
+        title: "Revenue",
+        answer: "Estimates [N1, N2].",
+        sections: [{ heading: "Estimates", body: "Historical estimates [N1, N2]." }],
+        open_questions: [],
+      },
+      {
+        notes: [
+          note("N1", { measurement }),
+          note("N2", { source: "S2", measurement: { ...measurement, value: 8, period: "2024" } }),
+        ],
+        sources,
+        judged: false,
+        method: { pages: 2, searches: 1 },
+      },
+    )
+    expect(report.sections[0]?.confidence.disagree).toBe(false)
+    expect(report.markdown).toContain("Different scope (period)")
+  })
+
+  test("the same DOI across domains cannot raise a report to High confidence", () => {
+    const report = ResearchReport.render(
+      { ...input, sections: [{ heading: "One study", body: "Mirrors [N1, N2]." }] },
+      {
+        notes,
+        sources: sources.map((item) =>
+          item.id === "S2" ? { ...item, signals: signal({ doi: "10.1000/hp", primary: true }) } : item,
+        ),
+        judged: false,
+        method: { pages: 2, searches: 1 },
+      },
+    )
+    expect(report.sections[0]?.confidence.level).toBe("medium")
+  })
+})

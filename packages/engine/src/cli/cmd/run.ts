@@ -368,7 +368,7 @@ export const RunCommand = effectCmd({
       })
       .option("report", {
         type: "string",
-        describe: "with --research: write the report, with its sources, to this Markdown file",
+        describe: "with --research: write the report and sources to a .md, .json, .docx or .pdf file",
       })
       .option("auto", {
         type: "boolean",
@@ -1538,7 +1538,7 @@ export function researchProgress(part: {
   return { icon: "⚙", title }
 }
 
-// Writes the run's latest report, with its sources, to `file` for `vector run --research --report`.
+// The extension selects the attachment format; unknown extensions keep the existing Markdown behavior.
 async function writeReport(client: VectorClient, sessionID: string, file: string) {
   const messages = (await client.session.messages({ sessionID }).catch(() => undefined))?.data ?? []
   const runID = messages
@@ -1558,15 +1558,23 @@ async function writeReport(client: VectorClient, sessionID: string, file: string
     process.exitCode = 1
     return
   }
+  const extension = path.extname(file).toLowerCase()
+  const format =
+    extension === ".pdf" ? "pdf" : extension === ".docx" ? "docx" : extension === ".json" ? "json" : "markdown"
+  const binary = format === "pdf" || format === "docx"
   const exported = await client.memory.research
-    .export({ runID, format: "markdown" })
+    .export({ runID, format }, { parseAs: binary ? "blob" : "text" })
     .catch((error: unknown) => ({ error, data: undefined }))
-  if (exported.error || typeof exported.data !== "string") {
+  const body: unknown = exported.data
+  if (exported.error || (binary ? !(body instanceof Blob) : typeof body !== "string")) {
     UI.error(`Could not read the report: ${formatRunError(exported.error)}`)
     process.exitCode = 1
     return
   }
-  await Bun.write(path.resolve(file), exported.data)
+  await Bun.write(
+    path.resolve(file),
+    body instanceof Blob ? new Uint8Array(await body.arrayBuffer()) : (body as string),
+  )
   process.stderr.write(`Report written to ${path.resolve(file)}${EOL}`)
 }
 

@@ -1,6 +1,7 @@
 export * as ResearchConfidence from "./confidence"
 
 import type { Research } from "@vectordevai/schema/research"
+import { ResearchClaim } from "./claim"
 
 // Vector's estimate of how well a report section is supported, from its cited notes alone. The rule is shown on hover
 // and is the same every time:
@@ -15,12 +16,17 @@ export type Level = "high" | "medium" | "low"
 export const LABEL: Readonly<Record<Level, string>> = { high: "High", medium: "Medium", low: "Low" }
 
 export const HOVER =
-  "Vector's estimate. High: at least two independent sites with quotes that support the claim, one of them a primary source, and nothing contradicting it."
+  "Vector's estimate. High: at least two sites with no known shared source lineage, quotes that support the claim, one primary source, and nothing contradicting it. Real-world independence is not verified."
 
 export const DISAGREE = "Sources disagree"
 
 /** A note cited in a section, with the site of its source and whether that source is primary. */
-export type Cited = { readonly note: Research.Note; readonly site: string; readonly primary: boolean }
+export type Cited = {
+  readonly note: Research.Note
+  readonly site: string
+  readonly primary: boolean
+  readonly lineage?: readonly string[]
+}
 
 export type Result = {
   readonly level: Level
@@ -40,6 +46,24 @@ export function section(cited: readonly Cited[], options: { readonly judged: boo
   })
   if (counted.some((item) => item.note.stance === "contradicts" || item.note.verdict === "contradicted"))
     return result("low", true)
+  if (
+    counted.some(
+      (left, index) =>
+        left.note.measurement &&
+        left.note.support &&
+        left.note.stance !== "context" &&
+        counted
+          .slice(index + 1)
+          .some(
+            (right) =>
+              right.note.measurement &&
+              right.note.support &&
+              right.note.stance !== "context" &&
+              ResearchClaim.compare(left.note.measurement!, right.note.measurement)?.kind === "conflict",
+          ),
+    )
+  )
+    return result("low", true)
   const supporting = counted.filter((item) => item.note.stance === "supports")
   // A paraphrase (a quote that does not state the claim) supports a Medium estimate, never a High one.
   const stated = supporting.filter((item) => item.note.support)
@@ -50,5 +74,15 @@ export function section(cited: readonly Cited[], options: { readonly judged: boo
 }
 
 function sites(cited: readonly Cited[]) {
-  return new Set(cited.map((item) => item.site)).size
+  // A single study copied onto another domain is still one evidentiary lineage. Joining both site and publication
+  // keys also handles transitive copies, rather than treating each DOI-bearing page as a separate corroboration.
+  return cited.reduce<readonly ReadonlySet<string>[]>((groups, item) => {
+    const keys = new Set([...(item.site ? [`site:${item.site.toLowerCase()}`] : []), ...(item.lineage ?? [])])
+    if (!keys.size) return groups
+    const joined = groups.filter((group) => [...keys].some((key) => group.has(key)))
+    return [
+      ...groups.filter((group) => !joined.includes(group)),
+      new Set([...keys, ...joined.flatMap((group) => [...group])]),
+    ]
+  }, []).length
 }
