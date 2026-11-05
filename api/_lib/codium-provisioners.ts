@@ -5,6 +5,9 @@ import { OUTBOX_SCRIPTS, registerProvisioner, type PerkProvisioner, type Transit
 import { ApiError } from "./http.js"
 import { persistentStore } from "./persistent-store.js"
 import { relayConfigured, relayErase, relayKill, relaySuspend, type RelaySuspendReason } from "./remote-relay.js"
+import { eraseAccountOpsRecords } from "./ops-incidents.js"
+import { eraseAccountOpsSettings } from "./ops-settings.js"
+import { opsCall, opsConfigured, opsPlanFor } from "./ops-worker.js"
 import { eraseAccountVault, holdVault, lapseVault, releaseVault, vaultStoreConfigured } from "./vault-store.js"
 import { eraseAccountPushSubscriptions, pushConfigured } from "./web-push.js"
 import type { EntitlementSnapshot } from "../../packages/schema/src/codium-entitlements.js"
@@ -15,8 +18,9 @@ import type { EntitlementSnapshot } from "../../packages/schema/src/codium-entit
  * each new snapshot version, and the outbox runs it (codium-provision.ts).
  *
  * WP A06 builds `github-runs` and `owner-notify`; WP A31 builds `founding`; WP A37 builds `push`; WP A40 builds
- * `remote`; WP A44 builds `vault`. The others are stubs, not configured, so they get no items: each service's work
- * package replaces its stub here (hosted, ops) and the daily sweep then catches every account up to its snapshot.
+ * `remote`; WP A44 builds `vault`; WP A48 builds `ops`. The others are stubs, not configured, so they get no items: each
+ * service's work package replaces its stub here (hosted) and the daily sweep then catches every account up to its
+ * snapshot.
  */
 
 const DAY_MS = 86_400_000
@@ -261,6 +265,31 @@ export const vault: PerkProvisioner = {
   },
 }
 
+// ── ops ────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+/**
+ * `ops` (WP A48, §4.4's On Call and Release Guard rows): pushes the ops Worker the plan the snapshot allows
+ * (ops-worker.ts `opsPlanFor`): checks and watches while active or renewing, checks only while paused, nothing once
+ * ended or frozen. The Worker keeps the newest version and stops by itself at `validUntil`. An account that has never
+ * had ops caps has nothing at the Worker, so it is not called. Account deletion (`closing`) erases the Worker's data,
+ * the ops settings and every ops record (P5). Configured while the Worker can be called.
+ */
+export const ops: PerkProvisioner = {
+  id: "ops",
+  configured: () => opsConfigured(),
+  async apply(t, fetcher = fetch) {
+    const { from, to } = t
+    if (to.state === "ended" && to.reason === "closing") {
+      await opsCall("erase", { account: t.account }, fetcher)
+      await eraseAccountOpsSettings(t.account, fetcher)
+      await eraseAccountOpsRecords(t.account, fetcher)
+      return
+    }
+    if (!to.caps.ops && (!from || !from.caps.ops)) return
+    await opsCall("plan", { account: t.account, plan: opsPlanFor(to) }, fetcher)
+  },
+}
+
 // ── Stubs ──────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 /** A service not built yet: never configured, so it gets no items and does nothing. */
@@ -275,7 +304,7 @@ export const PROVISIONERS: readonly PerkProvisioner[] = [
   push,
   vault,
   stub("hosted"),
-  stub("ops"),
+  ops,
   founding,
   ownerNotify,
 ]

@@ -13,7 +13,8 @@ import {
   type OpsRepo,
   type OpsSettings,
 } from "../ops-settings.js"
-import { opsConfigured, opsRelease, requireOpsService } from "../ops-worker.js"
+import { opsConfigured, requireOpsService } from "../ops-worker.js"
+import { hostPage, releaseIntake } from "../release-guard.js"
 
 /*
  * Codium's ops handler on the shared GitHub webhook router (WP A47). It takes:
@@ -23,8 +24,9 @@ import { opsConfigured, opsRelease, requireOpsService } from "../ops-worker.js"
  *   environments never count), is sent to the ops Worker to watch (`release`). The account's plan must allow Release
  *   Guard now (active or renewing within grace, a plan with ops caps: §4.4's Release Guard row), the ops services must
  *   be configured and the owner's `ops` switch on. The URLs are the production URL joined with each path, on domains the
- *   account verified, at most the plan's path count. The Worker dedupes by (repository, environment, sha) and counts the
- *   plan's releases a day; A48 adds the .vector/ops.json check and the revert PR.
+ *   account verified, at most the plan's path count. Release Guard's intake (release-guard.ts, WP A48) then dedupes by
+ *   (repository, environment, sha), checks the repository's .vector/ops.json opts in for this account and counts the
+ *   plan's releases a day (dedupe before increment) before the Worker watches it.
  * - `pull_request` → Ship Desk. A pull request the GitHub App's bot opened from a branch of the same repository, in a
  *   repository whose settings turn Ship Desk on, goes to the Ship Desk intake. A49 registers that intake (cards,
  *   counting, plan checks); until then it is not acted on.
@@ -244,20 +246,30 @@ async function deployment(
     .slice(0, caps.paths)
   if (!urls.length) return ignored("not-verified")
   const reported = typeof status.created_at === "string" ? Date.parse(status.created_at) : Number.NaN
-  const answer = await opsRelease(
+  const installationId = positive(record(event.payload.installation)?.id) ?? repo.installationId
+  const ref = typeof deploy.ref === "string" && deploy.ref.length <= 255 ? deploy.ref : undefined
+  // The host's page for the deployment (Vercel's, say), kept for the card's rollback link.
+  const targetUrl = hostPage(status.log_url) ?? hostPage(status.target_url)
+  const outcome = await releaseIntake(
     {
       account,
       repositoryId,
+      repository: repo.repository,
+      opsId: settings.opsId,
+      ...(installationId !== undefined ? { installationId } : {}),
       environment,
       sha,
       deployment: String(deploymentId),
       at: Number.isSafeInteger(reported) && reported > 0 ? reported : now,
       urls,
+      perDay: caps.perDay,
+      ...(ref ? { ref } : {}),
+      ...(targetUrl ? { targetUrl } : {}),
     },
     fetcher,
     now,
   )
-  return { kind: "release", answer }
+  return outcome.kind === "release" ? outcome : ignored(outcome.reason)
 }
 
 async function pullRequest(

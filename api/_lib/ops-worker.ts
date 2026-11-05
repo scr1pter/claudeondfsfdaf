@@ -1,7 +1,9 @@
+import type { EntitlementSnapshot } from "../../packages/schema/src/codium-entitlements.js"
 import {
   OPS_INTERNAL_PREFIX,
   type ConfigBody,
   type OpsAction,
+  type OpsPlan,
   type ReleaseAnswer,
   type ReleaseBody,
 } from "../../packages/ops-worker/src/protocol.js"
@@ -18,8 +20,9 @@ import { ApiError } from "./http.js"
  *   release {account, repositoryId, ...}   a production deployment that succeeded (github-webhook-handlers/ops.ts)
  *   flags {kill}                           the owner's `ops` switch (codium-owner-api.ts)
  *
- * `plan`, `state`, `suspend` and `erase` belong to the ops provisioner, the screens, the guard and account deletion
- * (A48, A50, A57); `opsCall` is ready for them. Nothing here logs an account, a URL or an answer.
+ * A48 adds `plan` (the ops provisioner, codium-provisioners.ts, from `opsPlanFor`) and `erase` (the same provisioner on
+ * account deletion). `state` and `suspend` belong to the screens and the guard (A50); `opsCall` is ready for them.
+ * Nothing here logs an account, a URL or an answer.
  */
 
 const ACCOUNT = /^[\x21-\x7e]{1,128}$/
@@ -149,4 +152,54 @@ export async function syncOpsKillFlag(
   } catch {
     return "failed"
   }
+}
+
+const DAY_MS = 86_400_000
+/** A pushed plan lasts until the period's end plus this (A46: periodEnd + 24 h), so a lost update stops by itself. */
+export const OPS_PLAN_GRACE_MS = DAY_MS
+/**
+ * While a payment is retried On Call keeps checking (§4.4), for at most this long from the push; the plan ends sooner
+ * when the subscription ends. The Worker refuses a validUntil more than 40 days ahead.
+ */
+export const OPS_PAUSED_MS = 35 * DAY_MS
+const OPS_MAX_AHEAD_MS = 39 * DAY_MS
+
+/**
+ * What the ops Worker may do for an account, from its entitlement snapshot (§4.4's On Call and Release Guard rows):
+ * - active and renewing: the plan's On Call checks and Release Guard watches, until the period's end plus a day;
+ * - paused: On Call keeps checking through Stripe's retry window, Release Guard starts no new watch;
+ * - ended, frozen, no plan, or a plan without ops: nothing, from now.
+ * Caps are the snapshot's own (ENTITLEMENTS ops, ramp applied), never the public copy, so a perk that is not listed yet
+ * still has its caps here; nothing reaches the Worker until the account sets something up (H1 is the listing's job).
+ */
+export function opsPlanFor(snapshot: EntitlementSnapshot, now = Date.now()): OpsPlan {
+  const ops = snapshot.plan ? snapshot.caps.ops : null
+  const off: OpsPlan = {
+    version: snapshot.version,
+    domains: 0,
+    onCall: null,
+    releaseGuard: null,
+    validUntil: Math.max(0, Math.min(now, snapshot.updatedAt)),
+  }
+  if (!ops) return off
+  const onCall =
+    ops.onCall.urls > 0 && ops.onCall.intervalSec > 0
+      ? { urls: ops.onCall.urls, intervalSec: ops.onCall.intervalSec }
+      : null
+  const releaseGuard =
+    ops.releaseGuard.perDay > 0 && ops.releaseGuard.watchMin > 0 && ops.releaseGuard.paths > 0
+      ? { perDay: ops.releaseGuard.perDay, watchMin: ops.releaseGuard.watchMin, paths: ops.releaseGuard.paths }
+      : null
+  const domains = ops.onCall.domains
+  if (snapshot.state === "active" || snapshot.state === "renewing")
+    return {
+      version: snapshot.version,
+      domains,
+      onCall,
+      releaseGuard,
+      validUntil: Math.min(snapshot.periodEnd + OPS_PLAN_GRACE_MS, now + OPS_MAX_AHEAD_MS),
+    }
+  if (snapshot.state === "paused")
+    return { version: snapshot.version, domains, onCall, releaseGuard: null, validUntil: now + OPS_PAUSED_MS }
+  return off
 }

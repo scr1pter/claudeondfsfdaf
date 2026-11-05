@@ -28,6 +28,7 @@ import {
   newOpsSettings,
   type OpsRepo,
 } from "../api/_lib/ops-settings"
+import { opsJson } from "../api/_lib/ops-api"
 import webhookRoute, { config as webhookConfig, GITHUB_WEBHOOK_HANDLERS } from "../api/github/webhook"
 import type { PlanId } from "../packages/schema/src/codium-plan"
 import { APP_SLUG, DAY, invoke, MAX, OpsWorld, OTHER, PRO, ULTRA, WEBHOOK_SECRET } from "./ops-fixture"
@@ -329,7 +330,7 @@ async function ready(account = MAX, plan: PlanId = "vector-100", repo: Partial<O
   world.seed(account, plan)
   if (plan === "vector-100" || plan === "vector-200") await world.worker.plan(account, plan)
   world.bind(REPO, account)
-  await updateOpsSettings(
+  const settings = await updateOpsSettings(
     account,
     () => ({
       ...newOpsSettings(),
@@ -349,6 +350,8 @@ async function ready(account = MAX, plan: PlanId = "vector-100", repo: Partial<O
     world.now,
   )
   expect(await syncOpsConfig(account, world.fetcher(), world.now)).toBe("synced")
+  // WP A48: the repository's .vector/ops.json opts in, as /api/ops/repos tells the account to commit it.
+  world.github.commitOptIn(REPO, opsJson(settings!, settings!.repos[0]!))
 }
 
 function deploymentStatus(overrides: { status?: object; deployment?: object; root?: object } = {}) {

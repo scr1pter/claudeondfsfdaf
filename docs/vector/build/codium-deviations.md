@@ -1505,3 +1505,100 @@ outcome, verdict, actor.login` pass. Every paid plan includes it while the plan 
   sync), `ops-domains.ts` (verification), `ops-api.ts` (what the routes do), `codium-owner-api.ts` (the switch),
   `vercel.json` (the cron), `.env.example`, `docs/vector/MODEL-PLANS.md`, `docs/vector/owner-actions/hosted-ops.md`, the
   test fixture `test/ops-fixture.ts` and the expectation in `packages/web/test/codium-configuration.test.ts`.
+
+## A48 Release Guard and incidents (4 Nov 2026)
+
+- **Files outside A48's list:** `api/_lib/ops-incidents.ts` (incidents, the Worker's reports, snooze, Fix it, erasure),
+  `api/_lib/ops-records.ts` (the four store scripts), `api/_lib/codium-provisioners.ts` (the `ops` provisioner),
+  `api/_lib/ops-worker.ts` (`opsPlanFor`), `api/_lib/github-webhook-handlers/ops.ts` (the deployment path now calls the
+  intake), the test fixture `test/ops-fixture.ts` (a fake GitHub API, the App's settings with a key made in memory per run,
+  the scripts as TypeScript, a Worker clock driver), one setup line in `test/github-webhook.test.ts` (`ready()` commits
+  the repository's `.vector/ops.json`; no expectation changed), `docs/vector/MODEL-PLANS.md` and
+  `docs/vector/owner-actions/hosted-ops.md`.
+- **"One-repo installation tokens for revert only".** The contract also asks the intake to check `.vector/ops.json`,
+  which needs a token. `github-app-server.ts` therefore mints two kinds, both for exactly one repository id: `check`
+  (Contents and Metadata: read; the intake's opt-in read) and `revert` (Contents and Pull requests: write, Metadata: read;
+  the only token that can write, minted only by the revert path). Each token's granted permissions must equal what was
+  asked and it must see only that repository (as `github-app.ts` checks for the Actions exchange); it never leaves the
+  module; it is revoked in `finally`. "Audited": an entry is written to `ops:audit:<account>` before the mint (a store that
+  cannot be reached means no token) and completed after the revoke with what it wrote and whether the revoke worked; no
+  token value is stored. The App is read through `githubAppConfiguration`, so it works only where `VERCEL_ENV` is
+  `production` or unset, as the existing exchange does.
+- **Intake order.** A47's checks first (binding, settings, Release Guard on, environment, ops service and switch, a usable
+  snapshot with `caps.ops.releaseGuard`, URLs on verified domains), then: a release already recorded is a duplicate (no
+  token, no count); the opt-in at the deployed commit (`opsId`, `releaseGuard: true`, the same environment without case);
+  then one script claims the release and counts it against the plan's releases a day (dedupe before increment); then the
+  Worker. The Worker unreachable gives the claim and the count back (the delivery fails and can be redelivered); a Worker
+  refusal (its own duplicate, `not-in-plan`, a stale report…) is not counted and is recorded skipped. A claim not yet
+  answered is held 10 minutes, so a function cut off mid-way does not make the release a duplicate for weeks. GitHub
+  unreachable at the intake fails the delivery with 503 `GITHUB_UNAVAILABLE`; GitHub does not redeliver on its own (the
+  owner or the account can redeliver from the App's settings). The API answers its own duplicates and daily cap in the
+  Worker's `ReleaseAnswer` shape, so A47's test expectations stand.
+- **The revert runs inside the Worker's report.** The Worker resends a report until it gets a 2xx with the same event ids
+  (A46), so it is the retry engine: GitHub unreachable during a revert answers 503 and the resend tries again. One claim per
+  repository, environment and sha (`ops:rg:<account>:revert:…`, 35 days) holds the outcome; a try holds it for 2 minutes
+  (another try meanwhile gets 503 `OPS_REVERT_IN_PROGRESS`), and after 8 tries against an unavailable GitHub the revert is
+  left to the person (`github-unavailable`) and the report is taken. The Worker gives up on a callback after 10 s; a slower
+  revert is finished by the first try and the resend then finds it.
+- **"Exactly one merged pull request".** The deployed sha is the `merge_commit_sha` of a merged pull request into the same
+  repository (from GitHub's commit-to-pulls API), and the range from the last good release is only that pull request: one
+  commit (squash), as many commits as the pull request had (rebase), or a merge commit whose first parent is the last good
+  release. Then GraphQL `revertPullRequest`. Otherwise a restore commit (the good release's tree, parent the deployed sha) on
+  `vector/revert-<sha12>` with a pull request, targeting the deployment's branch when its `ref` names one, else the default
+  branch, only while that branch's head is the deployed sha (`head-moved` otherwise). A range that is not "ahead" of the good
+  release is never written (`range`).
+- **Workflow files.** Any file in the range whose name or old name starts with `.github/workflows/` stops every write. The
+  compare API lists at most 300 files; a range that reaches 300 counts as possibly holding one.
+- **"Re-read before every write"** is read literally: `.vector/ops.json` on the target branch is read again before each
+  mutating call (the restore commit, its branch, the pull request, the GraphQL revert). Gone at any of them, nothing more
+  is written (`opt-in`).
+- **One pull request, ever.** Before opening, an open pull request from an earlier try is looked for and reused: GitHub's
+  `revert-<number>-<head branch>` for the GraphQL path, `vector/revert-<sha12>` for a restore. A `vector/revert-…` branch
+  that holds anything but the same restore is never touched (`branch-exists`).
+- **The card.** The commits the revert undoes (newest first, 50 at most, first line of each message), the total, and
+  migration paths: names under `migrations/`, `migration/`, `migrate/`, `alembic/`, `flyway/`, `liquibase/`, `drizzle/`,
+  `schema.prisma` and `*.sql`. The pull request body names the failing paths (no host), the commits, the migration warning
+  and that Vector never merges; no plan, usage or Codium wording (P6). Undo is the pull request (merged in GitHub, or in the
+  desktop with the person's own sign-in, A50), or "open in GitHub" (the merged pull request, or the comparison) and the
+  host's rollback link: the deployment status's `log_url`, else `target_url`, https only, from the last good release's
+  record, named `vercel`, `netlify` or `host`.
+- **Snooze** covers the incident's subject: one monitor, or one repository and environment. 1 to 24 whole hours. While it
+  runs, new incidents for it are recorded with no alert and, for Release Guard, no automatic revert (Undo shows
+  `snoozed` with the manual links). `{action: "unsnooze"}` ends it early.
+- **Fix it.** `registerOpsRunStarter` takes Codex's `startCloudRun` at A59 (`(trigger) => {id, url?}`); until then 503
+  `OPS_FIX_UNAVAILABLE`. The trigger is `{source: "ops", account, target: {kind: "github-run", repositoryId}, prompt,
+  criteria, purpose: "incident"}`. It needs the ops service and switch and `requireEntitlement(account, "ops")` (paused is
+  refused: "fix runs off"), counts against `caps.ops.onCall.fixRunsPerDay` per UTC day for every incident (Release Guard's
+  too: the contract names no other fix-run count), one per incident (dedupe before increment), in a repository in the
+  account's ops settings and still bound to it. A monitor's incident uses the repository whose production URL is on the
+  failing host when exactly one is (else 400 `OPS_FIX_REPOSITORY`). A start that fails gives its claim and count back.
+- **Alerts.** One per incident, titles only, at most 120 characters (a plain title replaces one that would be longer),
+  tags `on-call` and `release-guard` (the phone's tags are lower case). On Call sends while a payment is retried
+  (`allowPaused`); Release Guard does not. A recovery is announced only when the failure was. When GitHub cannot be
+  reached during a revert, the alert goes out first with a neutral title and is not repeated. `handleOpsReport` takes an
+  alert sender (default `sendServerAlert`) so the tests can see each one.
+- **The `ops` provisioner is built here** (A46 and A47 left it to A48 or A50, and without it the Worker never holds a plan):
+  active and renewing push the plan's On Call and Release Guard caps until `periodEnd + 24 h`; paused keeps On Call
+  (`releaseGuard: null`) until the push plus 35 days (the Worker refuses more than 40 days ahead; ended or recovered
+  snapshots replace it sooner); ended, frozen, no plan or a plan without ops push nothing from now. Unlike A46's note, the
+  caps are not cut to the listed perks: the listing can change with a redeploy while no snapshot changes, and the Worker
+  checks only what the account set up, which the screens show only when listed (H1). An account that never had ops caps is
+  not called. Account deletion (`closing`) erases the Worker's data, the ops settings and every ops record.
+- **Not added: the `on-call` and `release-guard` readiness checks.** Nobody can set either up before A50's screens, and a
+  listing must not promise that. Recommended for A50: `opsConfigured()` for both, and `githubServerConfigured()` for
+  Release Guard (the App gate is already in `listedPerks`).
+- **Store keys not in §4.6** (Codium prefix): `ops:rg:<account>:<repositoryId>:<environment hash>:<sha>` (release
+  records), `ops:rg:<account>:index`, `ops:rg:<account>:day:<date>`, `ops:rg:<account>:revert:<repositoryId>:<environment
+  hash>:<sha>`, `ops:incident:<account>:<id>`, `ops:incident:<account>:index`, `ops:incident:<account>:snooze:<hash>`,
+  `ops:incident:<account>:<id>:fix`, `ops:incident:<account>:fixes:<date>`, `ops:event:<account>` (event ids taken, one
+  sorted set per account so they are erased with it) and `ops:audit:<account>`. Environments are hashed in keys because
+  GitHub names them freely.
+- **New error codes:** `GITHUB_UNAVAILABLE` 503, `OPS_REVERT_IN_PROGRESS` 503, `OPS_REPORT_INVALID` 400,
+  `OPS_REPORT_UNFINISHED` 503, `OPS_RECORDS_UNAVAILABLE` 503, `OPS_FIX_UNAVAILABLE` 503, `OPS_FIX_STARTED` 409,
+  `OPS_FIX_REPOSITORY` 400. Reused: `OPS_LIMIT {limit: "fix-runs", max}`, `OPS_NOT_FOUND`, `OPS_INVALID`,
+  `OPS_REPO_NOT_BOUND`, `OPS_BUSY`, `CODIUM_PERK_REQUIRED`.
+- **Routes.** `/api/ops/incidents` (GET; POST snooze, unsnooze, fix) and `GET /api/ops/releases` take an unrevoked `vct_`
+  token or a website session (run tokens 401), 240 reads and 60 writes an hour per account. The releases list carries no
+  URLs, only how many paths were watched; a watch past its end with no verdict shows `ended`. `POST /api/ops/worker` takes
+  only the Worker's signed reports (`bodyParser: false`); a malformed or unknown event is skipped rather than blocking the
+  rest of the report forever.
