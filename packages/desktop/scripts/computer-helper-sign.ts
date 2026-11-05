@@ -471,7 +471,11 @@ export async function installUnsignedMacComputerHelperFuses<
 }
 
 /** osx-sign must skip both the helper bundle and everything inside it, while preserving the caller's ignores. */
-export function computerHelperSigningIgnore(helper: string, previous: MacSignOptions["ignore"]) {
+export function computerHelperSigningIgnore(
+  helper: string,
+  previous: MacSignOptions["ignore"],
+  callerFile: (file: string) => string = (file) => file,
+) {
   const root = path.resolve(helper)
   const ignored =
     typeof previous === "function"
@@ -481,7 +485,7 @@ export function computerHelperSigningIgnore(helper: string, previous: MacSignOpt
             (pattern) => file.match(pattern) !== null,
           )
   return (file: string) =>
-    path.resolve(file) === root || path.resolve(file).startsWith(root + path.sep) || ignored(file)
+    path.resolve(file) === root || path.resolve(file).startsWith(root + path.sep) || ignored(callerFile(file))
 }
 
 /** The custom hook receives builder's selected identity/keychain and keeps Electron's signing options. */
@@ -498,21 +502,30 @@ export async function signMacWithComputerHelper(
   const directory = dependencies.directory ?? packager.projectDir
   const settings = { ...dependencies, directory }
   const skip = computerHelperSkipRequested(channel, dependencies.environment ?? process.env)
-  if (!skip && !prepared.has(await realpath(options.app)))
-    throw new Error("The verified pre-sign computer helper baseline is missing.")
+  const app = skip ? options.app : await realpath(options.app)
+  const originalApp = path.resolve(options.app)
+  // The signer must walk the same canonical tree used by helper admission. Preserve the
+  // builder's original path spelling for callbacks whose rules close over that app path.
+  const callerFile = (file: string) => {
+    const resolved = path.resolve(file)
+    if (resolved === app) return originalApp
+    if (resolved.startsWith(app + path.sep)) return path.join(originalApp, path.relative(app, resolved))
+    return file
+  }
+  if (!skip && !prepared.has(app)) throw new Error("The verified pre-sign computer helper baseline is missing.")
   const helperInput = {
-    app: options.app,
+    app,
     channel,
     identity: options.identity,
     keychain: options.keychain,
-    timestamp: options.optionsForFile?.(path.join(options.app, "Contents/Helpers/VectorComputer.app"))?.timestamp,
+    timestamp: options.optionsForFile?.(callerFile(path.join(app, "Contents/Helpers/VectorComputer.app")))?.timestamp,
   }
   const helper = skip ? undefined : await signComputerHelperMac(helperInput, settings)
   const before = helper ? digest(await readFile(path.join(helper, "Contents/MacOS/VectorComputer"))) : undefined
   if (helper)
     await finalizeComputerHelperMacSigning(
       {
-        app: options.app,
+        app,
         channel,
         signing: options.identity === "-" ? "adhoc" : "developer-id",
       },
@@ -521,10 +534,11 @@ export async function signMacWithComputerHelper(
   const previous = options.optionsForFile
   const signing: MacSignOptions = {
     ...options,
+    app,
     keychain: options.identity === "-" ? undefined : options.keychain,
-    ...(helper ? { ignore: computerHelperSigningIgnore(helper, options.ignore) } : {}),
+    ...(helper ? { ignore: computerHelperSigningIgnore(helper, options.ignore, callerFile) } : {}),
     optionsForFile: (file) => {
-      const rules = previous?.(file) ?? {}
+      const rules = previous?.(callerFile(file)) ?? {}
       if (rules.additionalArguments?.includes("--deep"))
         throw new Error("Outer app signing must not recursively re-sign the computer helper.")
       return { ...rules, ...(options.identity === "-" ? { timestamp: "none" } : {}) }
@@ -540,12 +554,12 @@ export async function signMacWithComputerHelper(
     throw new Error("Outer app signing changed the separately signed computer helper.")
   await verifyComputerHelperMacSignature(helperInput, settings)
   const run = command(settings)
-  await run(["--verify", "--deep", "--strict", options.app], "The signed desktop app did not verify.")
+  await run(["--verify", "--deep", "--strict", app], "The signed desktop app did not verify.")
   if (options.identity !== "-") {
-    const outer = await run(["--display", "--verbose=4", options.app], "The desktop signature could not be read.")
+    const outer = await run(["--display", "--verbose=4", app], "The desktop signature could not be read.")
     const authority = (text: string) => text.match(/^Authority=(.+)\r?$/m)?.[1]?.trim()
     const team = (text: string) => text.match(/^TeamIdentifier=(.+)\r?$/m)?.[1]?.trim()
-    const paths = await helperPaths(options.app, channel)
+    const paths = await helperPaths(app, channel)
     for (const architecture of paths.architectures) {
       const inner = await run(
         ["--display", "--verbose=4", "--arch", architecture === "x64" ? "x86_64" : "arm64", helper],

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { createHash } from "node:crypto"
-import { cp, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises"
+import { cp, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { Hands } from "@vectordevai/schema/hands"
@@ -23,7 +23,7 @@ const certificate = "Developer ID Application: Vector Fixture (ABCDEFGHIJ)"
 const sha256 = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex")
 
 async function fixture(channel: Hands.Channel = "prod", universal = false) {
-  const directory = await mkdtemp(path.join(os.tmpdir(), "vector-helper-sign-"))
+  const directory = await realpath(await mkdtemp(path.join(os.tmpdir(), "vector-helper-sign-")))
   const app = path.join(directory, "Fixture ' release.app")
   const helper = path.join(app, "Contents/Helpers/VectorComputer.app")
   const executable = path.join(helper, "Contents/MacOS/VectorComputer")
@@ -272,6 +272,77 @@ describe("computer helper macOS signing", () => {
         true,
       )
     } finally {
+      await rm(f.directory, { recursive: true, force: true })
+    }
+  })
+
+  test("signer aliases use the admitted tree while preserving the builder's original callback paths", async () => {
+    const f = await fixture("dev")
+    const directory = await realpath(await mkdtemp(path.join(os.tmpdir(), "vector-helper-sign-alias-")))
+    const alias = path.join(directory, "source-alias")
+    try {
+      await symlink(f.directory, alias, "junction")
+      const app = path.join(alias, path.basename(f.app))
+      const callbackPaths: string[] = []
+      await prepareComputerHelperMacSigning({ app, channel: f.channel, sourceManifest: f.sourceManifest }, f)
+      f.calls.length = 0
+      await signMacWithComputerHelper(
+        {
+          app,
+          identity: "-",
+          ignore: (file) => file.startsWith("/Contents/PlugIns", app.length),
+          optionsForFile: (file) => {
+            callbackPaths.push(file)
+            return {
+              entitlements: file === app ? "/fixture/main.plist" : "/fixture/child.plist",
+              hardenedRuntime: true,
+            }
+          },
+        },
+        { appInfo: { id: APP_IDS.dev }, projectDir: f.directory },
+        {
+          ...f,
+          environment: {},
+          signAsync: async (options) => {
+            expect(options.app).toBe(f.app)
+            expect(typeof options.ignore).toBe("function")
+            if (typeof options.ignore !== "function") throw new Error("The helper ignore callback is missing.")
+            expect(options.ignore(f.helper)).toBe(true)
+            expect(options.ignore(f.executable)).toBe(true)
+            expect(options.ignore(f.helper + "-backup/Contents/MacOS/VectorComputer")).toBe(false)
+            expect(options.ignore(path.join(f.app, "Contents/PlugIns/fixture.plugin"))).toBe(true)
+            expect(options.optionsForFile?.(f.app)).toEqual({
+              entitlements: "/fixture/main.plist",
+              hardenedRuntime: true,
+              timestamp: "none",
+            })
+            expect(
+              options.optionsForFile?.(path.join(f.app, "Contents/Frameworks/Electron Framework.framework")),
+            ).toEqual({
+              entitlements: "/fixture/child.plist",
+              hardenedRuntime: true,
+              timestamp: "none",
+            })
+          },
+        },
+      )
+      expect(callbackPaths).toEqual([
+        path.join(app, "Contents/Helpers/VectorComputer.app"),
+        app,
+        path.join(app, "Contents/Frameworks/Electron Framework.framework"),
+      ])
+      expect(f.calls.filter((call) => call.includes("--sign")).length).toBe(1)
+      const outside = path.join(f.directory, "outside.app")
+      await cp(f.helper, outside, { recursive: true })
+      await rm(f.helper, { recursive: true })
+      await symlink(outside, f.helper, "junction")
+      f.calls.length = 0
+      await expect(signComputerHelperMac({ app, channel: f.channel, identity: "-" }, f)).rejects.toThrow(
+        "inside the app",
+      )
+      expect(f.calls).toEqual([])
+    } finally {
+      await rm(directory, { recursive: true, force: true })
       await rm(f.directory, { recursive: true, force: true })
     }
   })
