@@ -478,7 +478,7 @@ if CommandLine.arguments.dropFirst().elementsEqual(["--self-test=control"]) {
     _exit(passed ? 0 : 1)
 }
 
-var targetStartupExit = TargetExit.options
+private var targetStartupExit = TargetExit.options
 do {
     let options = try TargetOptions.parse(Array(CommandLine.arguments.dropFirst()))
     targetStartupExit = .bundle
