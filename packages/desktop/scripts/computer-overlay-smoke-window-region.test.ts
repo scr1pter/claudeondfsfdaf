@@ -104,7 +104,7 @@ test("the bridge sends only bounded stdin handles to one fixed noninteractive sy
   })
   expect(calls).toHaveLength(1)
   const request = calls[0]!
-  expect(request.command.toLowerCase()).toEndWith("\\system32\\windowspowershell\\v1.0\\powershell.exe")
+  expect(request.command.toLowerCase()).toMatch(/^[a-z]:\\program files\\powershell\\7\\pwsh\.exe$/)
   expect(request.args.slice(0, 3)).toEqual(["-NoProfile", "-NonInteractive", "-EncodedCommand"])
   expect(request.args).toHaveLength(4)
   expect(request.args[3]!.length).toBeLessThan(30_000)

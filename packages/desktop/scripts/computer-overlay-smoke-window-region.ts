@@ -494,15 +494,12 @@ export async function observeComputerSmokeWindowRegions(
   })
   if (Buffer.byteLength(stdin, "utf8") > LIMIT) return { ok: false, reason: "invalid_windows" }
   if (process.platform !== "win32" && !dependencies.run) return { ok: false, reason: "unsupported_platform" }
+  const drive = path.win32.parse(process.env.SystemRoot ?? "C:\\Windows").root
+  if (!/^[a-z]:\\$/i.test(drive)) return { ok: false, reason: "launch" }
   try {
     const result = await (dependencies.run ?? runRegionBridge)({
-      command: path.win32.join(
-        process.env.SystemRoot ?? "C:\\Windows",
-        "System32",
-        "WindowsPowerShell",
-        "v1.0",
-        "powershell.exe",
-      ),
+      // CI's protected PowerShell 7 installation compiles the same embedded C# in-process.
+      command: path.win32.join(drive, "Program Files", "PowerShell", "7", "pwsh.exe"),
       args: [
         "-NoProfile",
         "-NonInteractive",
