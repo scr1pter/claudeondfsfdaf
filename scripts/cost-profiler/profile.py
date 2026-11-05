@@ -376,7 +376,12 @@ def diagnostics(steps, scoped, requests):
 def profile_arm(arm, all_receipts, provisional=False, slack=5000):
     audit, receipts, requests, receipt_links, closed = reconcile(arm, all_receipts, provisional)
     binding = next(row for row in audit if row.get("type") == "arm_bound")
-    if (arm / "private-transcripts" / "manifest.json").exists() or binding.get("runtime") == "vector":
+    exported = arm / "private-transcripts" / "manifest.json"
+    declared = load_json(exported).get("runtime") if exported.exists() else None
+    runtime = binding.get("runtime") or declared or ("vector" if exported.exists() else "codex")
+    if runtime not in ("vector", "codex") or declared is not None and declared != runtime:
+        raise AuditError("Native runtime declarations conflict or are unknown")
+    if runtime == "vector":
         steps, native_info = vector_steps(arm)
     else:
         steps, native_info = codex_steps(arm)

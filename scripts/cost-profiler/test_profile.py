@@ -189,6 +189,30 @@ class ProfileTests(unittest.TestCase):
         self.assertEqual(before, db.read_bytes())
         self.assertNotIn("MUST_NOT_PUBLISH", json.dumps(result))
 
+    def test_closed_codex_export_is_not_mistaken_for_vector(self):
+        audit, receipts = self.fixture()
+        audit[0]["runtime"] = "codex"
+        self.write_audit(audit)
+        root = self.arm / "private-transcripts"
+        root.mkdir()
+        (root / "manifest.json").write_text(json.dumps({"runtime": "codex", "files": []}))
+        result = profile.profile_arm(self.arm, receipts)
+        self.assertEqual(result["native"]["adapter"], "codex")
+        self.assertEqual(result["accounting"]["knownMeasuredUsd"], "0.123456789")
+        self.assertEqual(result["coverage"]["unmatchedChargesRetained"]["receiptCount"], 1)
+
+    def test_conflicting_native_runtime_declarations_fail_closed(self):
+        audit, receipts = self.fixture()
+        audit[0]["runtime"] = "codex"
+        self.write_audit(audit)
+        self.vector()
+        manifest = self.arm / "private-transcripts" / "manifest.json"
+        data = json.loads(manifest.read_text())
+        data["runtime"] = "vector"
+        manifest.write_text(json.dumps(data))
+        with self.assertRaises(profile.AuditError):
+            profile.profile_arm(self.arm, receipts)
+
     def test_mixed_tools_are_not_relabelled_as_readonly(self):
         step = {"tools": [profile.tool_record("read", {}), profile.tool_record("bash", {"command": "test"})]}
         self.assertEqual(profile.turn_category(step), "mixed_heuristic")
