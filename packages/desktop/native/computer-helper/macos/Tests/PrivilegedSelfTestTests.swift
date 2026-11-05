@@ -74,6 +74,7 @@ func runPrivilegedSelfTestTests() throws -> Int {
             "target_responsibility_missing", "target_state_invalid", "target_identity_unavailable",
             "target_options_invalid", "target_bundle_invalid", "target_control_invalid", "target_application_failed",
             "target_report_invalid", "target_encoding_failed", "target_output_failed", "target_exited", "target_crashed",
+            "target_snapshot_invalid", "target_not_ready", "target_window_geometry_invalid", "target_view_geometry_invalid",
             "assertion_failed", "native_operation_failed", "deadline_exceeded", "cleanup_failed"],
             "Reports may use only the bounded machine-readable reason vocabulary")
         for stage in PrivilegedTargetStage.allCases {
@@ -84,12 +85,18 @@ func runPrivilegedSelfTestTests() throws -> Int {
                 "Every setup stage remains a real failure with a fixed content-free diagnostic")
         }
         for (code, expected) in [(20, PrivilegedTargetStage.options), (21, .bundle), (22, .control),
-                                 (23, .application), (24, .state), (25, .output), (26, .encoding), (0, .exited), (1, .exited)] {
+                                 (23, .application), (24, .snapshot), (25, .output), (26, .encoding), (27, .notReady), (0, .exited), (1, .exited)] {
             try privilegedExpect(PrivilegedTargetStage.failure(waitStatus: Int32(code << 8)) == expected,
                 "Private startup exit codes must remain fixed and content-free")
         }
         try privilegedExpect(PrivilegedTargetStage.failure(waitStatus: 9) == .crashed,
             "A signalled target remains a failure without reporting a crash payload")
+        try privilegedExpect(PrivilegedTargetPolicy.stateFailure(try privilegedReplacing(privilegedState(), ["ready"], .bool(false))) == .notReady,
+            "Not-ready handshake facts remain distinguishable from invalid private state")
+        try privilegedExpect(PrivilegedTargetPolicy.stateFailure(try privilegedReplacing(privilegedState(), ["backdropBounds"], privilegedRect(0, 0, 1, 1))) == .windowGeometry,
+            "Invalid window containment exposes only its fixed failure stage")
+        try privilegedExpect(PrivilegedTargetPolicy.stateFailure(try privilegedReplacing(privilegedState(), ["views", "patch", "bounds"], privilegedRect(0, 0, 1, 1))) == .viewGeometry,
+            "Invalid view containment exposes only its fixed failure stage")
     }
     try test {
         let report = PrivilegedCheckReport(checks: privilegedPasses())

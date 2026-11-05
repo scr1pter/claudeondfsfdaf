@@ -12,7 +12,7 @@ private let targetForeignTag: Int64 = 0x5654435446474553
 private enum TargetFailure: Error { case invalid }
 // Private startup diagnostics: only these fixed stages cross the parent boundary, never exception text.
 private enum TargetExit: Int32 {
-    case options = 20, bundle = 21, control = 22, application = 23, state = 24, output = 25, encoding = 26
+    case options = 20, bundle = 21, control = 22, application = 23, state = 24, output = 25, encoding = 26, notReady = 27
 }
 
 private func targetHex(_ value: String, count: Int) -> Bool {
@@ -300,7 +300,19 @@ private final class TargetApplication: NSObject, NSApplicationDelegate {
         window.contentView?.addSubview(counterLabel)
         backdrop.orderFront(nil); window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
         window.makeFirstResponder(button)
-        channel.reply(id: 0, state: snapshot())
+        publishReady(until: DispatchTime.now().uptimeNanoseconds + 6_000_000_000)
+    }
+    private func publishReady(until deadline: UInt64) {
+        guard getppid() == channel.options.parent else { _exit(0) }
+        let state = snapshot()
+        guard state.valid else { _exit(TargetExit.state.rawValue) }
+        if state.ready { channel.reply(id: 0, state: state); return }
+        guard DispatchTime.now().uptimeNanoseconds < deadline else { _exit(TargetExit.notReady.rawValue) }
+        // Ordering a window is not proof that Quartz has published its geometry yet. Keep one
+        // pending main-loop retry and retain the parent's original eight-second handshake bound.
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(20)) { [weak self] in
+            guard let self else { _exit(1) }; self.publishReady(until: deadline)
+        }
     }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
     @objc private func increment() { counter = min(1_000_000, counter + 1); counterLabel.stringValue = "Counter: \(counter)" }

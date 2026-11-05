@@ -19,6 +19,7 @@ enum PrivilegedCheckCatalog {
         "target_process_changed", "target_responsibility_missing", "target_state_invalid", "target_identity_unavailable",
         "target_options_invalid", "target_bundle_invalid", "target_control_invalid", "target_application_failed",
         "target_report_invalid", "target_encoding_failed", "target_output_failed", "target_exited", "target_crashed",
+        "target_snapshot_invalid", "target_not_ready", "target_window_geometry_invalid", "target_view_geometry_invalid",
         "assertion_failed", "native_operation_failed", "deadline_exceeded", "cleanup_failed"]
 }
 
@@ -134,6 +135,16 @@ enum PrivilegedTargetPolicy {
               ["idle", "posted", "not_granted", "not_foreground", "not_isolated", "failed"].contains(foreign["status"]?.stringValue ?? "") else { return false }
         return true
     }
+    static func stateFailure(_ value: JSONValue) -> PrivilegedTargetStage {
+        guard let fields = value.objectValue else { return .state }
+        if fields["ready"]?.boolValue == false { return .notReady }
+        guard let main = rect(fields["windowBounds"]), let back = rect(fields["backdropBounds"]),
+              main != back, back.contains(main) else { return .windowGeometry }
+        for name in ["patch", "button", "text", "secure"] {
+            guard let bounds = rect(fields["views"]?[name]?["bounds"]), main.contains(bounds) else { return .viewGeometry }
+        }
+        return .state
+    }
 }
 
 enum PrivilegedTargetStage: String, CaseIterable {
@@ -143,6 +154,8 @@ enum PrivilegedTargetStage: String, CaseIterable {
     case application = "target_application_failed", report = "target_report_invalid", output = "target_output_failed"
     case encoding = "target_encoding_failed"
     case exited = "target_exited", crashed = "target_crashed"
+    case snapshot = "target_snapshot_invalid", notReady = "target_not_ready"
+    case windowGeometry = "target_window_geometry_invalid", viewGeometry = "target_view_geometry_invalid"
 
     static func failure(waitStatus: Int32) -> PrivilegedTargetStage {
         guard waitStatus & 0x7f == 0 else { return .crashed }
@@ -151,9 +164,10 @@ enum PrivilegedTargetStage: String, CaseIterable {
         case 21: return .bundle
         case 22: return .control
         case 23: return .application
-        case 24: return .state
+        case 24: return .snapshot
         case 25: return .output
         case 26: return .encoding
+        case 27: return .notReady
         default: return .exited
         }
     }
@@ -261,7 +275,7 @@ private final class PrivilegedTargetChannel {
         }
         guard HelperLifecycle.responsiblePID(for: actual) == launched else { throw PrivilegedTestFailure.target(.responsibility) }
         guard PrivilegedTargetPolicy.state(ready, pid: launched, parent: getpid(), evidence: evidence) else {
-            throw PrivilegedTestFailure.target(.state)
+            throw PrivilegedTestFailure.target(PrivilegedTargetPolicy.stateFailure(ready))
         }
         lock.lock()
         guard !closed, pid == launched else { lock.unlock(); throw PrivilegedTestFailure.interrupted }
