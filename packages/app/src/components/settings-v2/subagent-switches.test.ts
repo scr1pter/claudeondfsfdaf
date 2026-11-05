@@ -3,10 +3,13 @@ import type { Config } from "@vectordevai/sdk/v2/client"
 import { NATIVE_SPECIALISTS } from "@vectordevai/core/agent/specialists"
 import { GENERAL_SUBAGENT_ID, SUBAGENT_IDENTITIES } from "@vectordevai/session-ui/subagent-identity"
 import {
+  COMMAND_ROOTS,
   SPECIALIST_IDS,
   agentEnabled,
   agentSwitchPatch,
+  commandRoots,
   createAgentSwitchSaver,
+  nothingRunning,
   runningWork,
   stopWorkDescription,
 } from "./subagent-switches"
@@ -59,6 +62,52 @@ describe("stopWorkDescription", () => {
     expect(stopWorkDescription({ sessions: 1, helpers: ["Vectorscope review", "Autocomplete"] })).toBe(
       "1 session is working right now. Vector's helpers are working too (Vectorscope review, Autocomplete). Changing this setting stops all of them, and the new setting applies from your next message.",
     )
+  })
+})
+
+// A save reloads every folder, which stops background commands too (5.H), and they run in idle conversations.
+describe("background commands", () => {
+  test("count as running work, so the page asks before a save stops them", () => {
+    expect(nothingRunning({ sessions: 0, helpers: [] })).toBe(true)
+    expect(nothingRunning({ sessions: 0, helpers: [], commands: 0 })).toBe(true)
+    expect(nothingRunning({ sessions: 0, helpers: [], commands: 1 })).toBe(false)
+    expect(stopWorkDescription({ sessions: 0, helpers: [], commands: 1 })).toBe(
+      "1 background command is running. Changing this setting stops it, and the new setting applies from your next message.",
+    )
+    expect(stopWorkDescription({ sessions: 1, helpers: [], commands: 2 })).toBe(
+      "1 session is working right now. 2 background commands are running. Changing this setting stops all of them, and the new setting applies from your next message.",
+    )
+  })
+
+  test("are asked of the recent conversations the app has seen work, never of subagents or Vector's helpers", () => {
+    const sessions: Record<
+      string,
+      { id: string; directory: string; parentID?: string; internal?: string; time: { updated: number } }
+    > = {
+      old: { id: "old", directory: "/a", time: { updated: 1 } },
+      recent: { id: "recent", directory: "/b", time: { updated: 9 } },
+      child: { id: "child", directory: "/a", parentID: "old", time: { updated: 10 } },
+      review: { id: "review", directory: "/a", internal: "vectorscope", time: { updated: 11 } },
+    }
+    const roots = commandRoots(
+      { old: { type: "idle" }, recent: { type: "idle" }, child: { type: "busy" }, review: { type: "busy" }, gone: {} },
+      (id) => sessions[id],
+      (session) => session.internal !== undefined,
+    )
+    expect(roots.map((session) => session.id)).toEqual(["recent", "old"])
+    const many = Object.fromEntries(
+      Array.from({ length: COMMAND_ROOTS + 5 }, (_, index) => [
+        `s${index}`,
+        { id: `s${index}`, directory: "/a", time: { updated: index } },
+      ]),
+    )
+    const picked = commandRoots(
+      many,
+      (id) => many[id],
+      () => false,
+    )
+    expect(picked).toHaveLength(COMMAND_ROOTS)
+    expect(picked[0]?.id).toBe(`s${COMMAND_ROOTS + 4}`)
   })
 })
 

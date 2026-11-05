@@ -18,9 +18,12 @@ import { helperLabel, isInternalSession } from "@/utils/internal-sessions"
 import {
   SPECIALIST_IDS,
   agentEnabled,
+  commandRoots,
   createAgentSwitchSaver,
+  nothingRunning,
   runningWork,
   stopWorkDescription,
+  type RunningWork,
 } from "./subagent-switches"
 import {
   SUBAGENT_LIMIT_DEFAULTS,
@@ -132,7 +135,7 @@ const LEGEND = [
 // Saving a switch reloads the engine's state, which stops every running
 // session, so the page asks first whenever something is working.
 function DialogStopRunningWork(props: {
-  work: ReturnType<typeof runningWork>
+  work: RunningWork
   title: string
   enable: boolean
   /** The confirm button's label when it is not a switch ("Save anyway"). */
@@ -188,27 +191,54 @@ export function SettingsSubagentsV2() {
   onCleanup(() => void saver.flush())
 
   const anySpecialist = () => SPECIALIST_IDS.some((id) => saver.enabled(id))
-  const currentWork = () =>
-    runningWork(serverSync().session.data.session_status, (sessionID) => {
+  // Saving reloads every folder, which stops its background commands too (5.H). They run while their conversation is
+  // idle, so the statuses miss them: an engine with backgroundShells is asked for each recent conversation's commands.
+  const runningCommands = async () => {
+    if (!capabilities().backgroundShells) return 0
+    const roots = commandRoots(
+      serverSync().session.data.session_status,
+      (sessionID) => serverSync().session.get(sessionID),
+      (session) => isInternalSession(session),
+    )
+    const signal = AbortSignal.timeout(3_000)
+    const counts = await Promise.all(
+      roots.map((session) =>
+        serverSDK()
+          .client.experimental.task.list(
+            { sessionID: session.id, directory: session.directory, active: "true", limit: "1", shells: "true" },
+            { throwOnError: false, signal },
+          )
+          .then((result) => (result.data?.shells ?? []).filter((shell) => shell.status === "running").length)
+          .catch(() => 0),
+      ),
+    )
+    return counts.reduce((sum, count) => sum + count, 0)
+  }
+  const currentWork = async (): Promise<RunningWork> => ({
+    ...runningWork(serverSync().session.data.session_status, (sessionID) => {
       const session = serverSync().session.get(sessionID)
       return isInternalSession(session) ? helperLabel(session?.internal ?? "") : undefined
-    })
+    }),
+    commands: await runningCommands(),
+  })
   const flip = (ids: readonly string[], enable: boolean, title: string) => {
     if (ids.every((id) => saver.enabled(id) === enable)) return
     const apply = () => saver.pick(Object.fromEntries(ids.map((id) => [id, enable])))
     // Flipping back before the save goes out saves nothing, so nothing stops.
     if (ids.every((id) => saver.committed(id) === enable)) return apply()
-    const work = currentWork()
-    if (work.sessions === 0 && work.helpers.length === 0) return apply()
-    void dialog.show(() => <DialogStopRunningWork work={work} title={title} enable={enable} onConfirm={apply} />)
+    void currentWork().then((work) => {
+      if (nothingRunning(work)) return apply()
+      void dialog.show(() => <DialogStopRunningWork work={work} title={title} enable={enable} onConfirm={apply} />)
+    })
   }
   // Every other save on this page (limits, workflows) also reloads the engine, so it asks the same way first (B.11).
   const confirmSave = (title: string, apply: () => void) => {
-    const work = currentWork()
-    if (work.sessions === 0 && work.helpers.length === 0) return apply()
-    void dialog.show(() => (
-      <DialogStopRunningWork work={work} title={title} enable confirm="Save anyway" onConfirm={apply} />
-    ))
+    void currentWork().then((work) => {
+      if (nothingRunning(work)) return apply()
+      void dialog.show(() => (
+        <DialogStopRunningWork work={work} title={title} enable confirm="Save anyway" onConfirm={apply} />
+      ))
+    })
   }
   const saveConfig = async (patch: Config) => {
     await serverSync()

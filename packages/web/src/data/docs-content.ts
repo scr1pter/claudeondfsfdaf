@@ -279,7 +279,7 @@ export const subagentKinds = [
   ],
   [
     "When Vector uses them",
-    `Vector's agent decides on its own, and it delegates only when splitting the work costs less than doing it. An independent part that is substantial on its own, roughly five or more files or a long check-and-repair loop, or broad research that would flood its context, goes to a subagent, and several such parts are launched together so they run at the same time while the agent keeps the integration and the final checks. Each subagent starts with a fresh context and re-reads what it needs, so ordinary multi-file changes, fixes, lookups and answers it does itself. It calls a specialist when part of the task fits that specialist's focus. You do not have to ask for either. ${release113.since} on ordinary (Work) and Thorough requests the agent may hand off independent, substantial parts, broad searches, and new work you send while it is busy; Light requests start no new subagents, and "no subagents" in a message stops new launches for that request.`,
+    `Vector's agent decides on its own, and it delegates only when splitting the work costs less than doing it. An independent part that is substantial on its own, roughly five or more files or a long check-and-repair loop, or broad research that would flood its context, goes to a subagent, and several such parts are launched together so they run at the same time while the agent keeps the integration and the final checks. Each subagent starts with a fresh context and re-reads what it needs, so ordinary multi-file changes, fixes, lookups and answers it does itself. It calls a specialist when part of the task fits that specialist's focus. You do not have to ask for either. ${release113.since} on ordinary (Work) and Thorough requests the agent may hand off independent, substantial parts, broad searches, and new work you send while it is busy; Light requests, and requests where you said "no subagents", start only the subagents you name with @.`,
   ],
   [
     "How many",
@@ -462,13 +462,11 @@ export const faqs = [
   },
   {
     question: "Can several agents work on one repository?",
-    answer:
-      "Yes, in two ways. Inside one session, Vector's agent starts subagents on its own for big tasks and runs them in the same checkout. For separate responsibilities, create agent workspaces: each works on its own copy or Git worktree, and you decide which changes are reviewed and merged.",
+    answer: `Yes, in two ways. Inside one session, Vector's agent starts subagents on its own for big tasks and runs them in the same checkout. For separate responsibilities, create agent workspaces: each works on its own copy or Git worktree, and you decide which changes are reviewed and merged. ${release113.since} ordinary (Work) and Thorough requests may delegate too, and a subagent may work in a Git worktree of its own (isolation: "worktree"), whose changes you review, merge or discard.`,
   },
   {
     question: "What is the difference between a subagent and a subagent specialist?",
-    answer:
-      "A subagent is general purpose: it takes whatever self-contained piece of the task Vector's agent hands it. Vector starts them for big tasks, one per independent part, and does small tasks itself. A subagent specialist is one of eight named agents, such as Review or Debug, with a fixed focus and its own permissions. Agents you define yourself count as custom specialists. Vector uses both on its own, and both appear in the chat and in Background tasks.",
+    answer: `A subagent is general purpose: it takes whatever self-contained piece of the task Vector's agent hands it. Vector starts them for big tasks, one per independent part, and does small tasks itself. A subagent specialist is one of eight named agents, such as Review or Debug, with a fixed focus and its own permissions. Agents you define yourself count as custom specialists. Vector uses both on its own, and both appear in the chat and in Background tasks. ${release113.since} ordinary (Work) and Thorough requests may delegate independent, substantial parts too, and a subagent may work in a Git worktree of its own (isolation: "worktree").`,
   },
   {
     question: "Is there a limit on how many subagents Vector runs?",

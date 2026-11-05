@@ -18,6 +18,7 @@ export const prerender = true
               <small>General purpose · for big tasks</small>
               <h4>Subagents</h4>
               <p>A subagent takes whatever piece of the task the main agent hands it: answer a question about the code, change a group of files, find out why a check fails. Vector uses them for big tasks, one per independent part, launched together so they run at the same time, and does small tasks itself. You can turn them off in Settings → Agents.</p>
+              <p>{release113.since} the agent may also hand independent, substantial parts of ordinary (Work) and Thorough requests to subagents, not only of big tasks; see <a href="#when-vector-delegates">When Vector delegates</a>.</p>
             </article>
             <article class="doc-card">
               <small>Named · one focus each</small>
@@ -78,11 +79,11 @@ export const prerender = true
             main agent integrates the results, runs the final checks itself and tells you the outcome.
           </p>
           <p>
-            {release113.since} Light requests start no new subagents, though they can still check, steer or stop the
-            ones already running and continue one whose report just arrived. Chat replies use no tools. "No subagents"
-            in a message stops new launches for that request, and the agent can still list, steer and stop the helpers
-            already running. "Be thorough" adds high effort for the agent and for the subagents it starts, the judge
-            when you have it on, and a push to split independent work.
+            {release113.since} Light requests, and requests where you said "no subagents", start only the subagents
+            you name with <code>@</code>. A Light request can still check, steer or stop the ones already running and
+            continue one whose report just arrived. Chat replies use no tools. With "no subagents" in a message the
+            agent can still list, steer and stop the helpers already running. "Be thorough" adds high effort for the
+            agent and for the subagents it starts, the judge when you have it on, and a push to split independent work.
           </p>
 
           <h2 id="while-subagents-run">While subagents run</h2>
@@ -136,8 +137,8 @@ export const prerender = true
           </p>
           <p>
             {release113.since} change them in Settings → Agents → Limits in the desktop app, which asks first when work
-            is running because saving reloads the engine, or with <code>budget.subagents</code> in your user config.
-            <code>running</code> takes 1 to 16 and <code>per_request</code> 1 to 1000. A repository's
+            is running, background commands included, because saving reloads the engine, or with
+            <code>budget.subagents</code> in your user config. <code>running</code> takes 1 to 16 and <code>per_request</code> 1 to 1000. A repository's
             <code>vector.json</code> may only lower <code>running</code> and <code>per_request</code>, and its
             <code>usd</code> is ignored whether you trust the repository or not.
           </p>
@@ -190,8 +191,9 @@ export const prerender = true
             own." with Resume all and Dismiss, and the Tasks pane lists them under "Interrupted when Vector restarted"
             with Resume and "Resume all (N) · up to 8 at once". <code>task_manage resume</code>, the TUI's
             <code>/tasks</code> and <code>vector tasks resume</code> do the same. A resumed helper continues in its own
-            session, with its conversation and the files it changed as it left them; a helper that never started is
-            relaunched instead. The agent may resume an interrupted helper, or one you stopped, only after you write
+            session, with its conversation and the files it changed as it left them. A helper that never started
+            cannot be resumed, Resume all included: the agent launches it again with the <code>task</code> tool, and
+            you can ask it to. The agent may resume an interrupted helper, or one you stopped, only after you write
             again.
           </p>
 
@@ -283,8 +285,8 @@ export const prerender = true
             {release113.since} <code>isolation: "worktree"</code> gives a subagent its own git worktree, on the branch
             <code>vector/subagent/&lt;id&gt;</code> under Vector's data folder, made from your current files, uncommitted
             changes included. If it changes nothing, the worktree is removed. If it changes files, they come back as "N
-            files changed · branch" with Review, Merge and Discard, and nothing reaches your files until you or the
-            agent merges them.
+            files changed · branch" with Review, Merge and Discard, and nothing outside linked folders reaches your
+            files until you or the agent merges them.
           </p>
           <p>
             {release113.since} Merge and Discard each need a second click. A merge with a conflict is refused and lists
@@ -317,6 +319,11 @@ export const prerender = true
     }
   }
 }`}</code></pre>
+          <p class="note is-caution">
+            {release113.since} a linked folder is your checkout's own folder. What a helper writes or deletes there, such
+            as an <code>npm install</code> into <code>node_modules</code> or a build into <code>dist</code>, changes
+            your files at once, and Review, Merge, Discard and checkpoints do not cover it.
+          </p>
 
           <h2 id="safe-edits">Safe edits in a shared folder</h2>
           <p>
@@ -358,8 +365,10 @@ export const prerender = true
           <p>
             {release113.since} the Tasks pane lists running commands under Background commands, with Stop and, in the
             desktop app with a server on this computer, Open output. Stop including helpers stops them; plain Stop does not. Quitting Vector
-            or reloading the folder ends them. After a crash Vector reports a command that may still be running, with
-            its process ID, and never stops a process it can no longer see. <code>vector run</code> waits for them as it
+            or reloading the folder ends them, and so does saving a setting, which reloads every open folder once its
+            turns and subagents finish; Settings → Agents asks first when it sees one running, and the agent gets a
+            note. After a crash Vector reports a command that may still be running, with its process ID, and never
+            stops a process it can no longer see. <code>vector run</code> waits for them as it
             waits for subagents.
           </p>
 

@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test"
 import type { Task } from "@vectordevai/schema/task"
-import { CREATED, openTasks, posts, rootID, rootTitle, session, setup } from "../utils/multiagent"
+import { openTasks, posts, rootID, setup } from "../utils/multiagent"
 
 // Background commands (5.H, 5.I.3): with `backgroundShells` the board asks for `shells=true` and the pane lists the
 // root's commands, with Stop for a running one (`task.stop` with its shl_ ID). "Open output" is the desktop's: it opens
@@ -51,10 +51,8 @@ test("the Background commands section lists the root's commands, and Stop stops 
     },
   })
   await app.open()
-  // The engine's next update of the conversation refreshes the board, as the command's start would.
-  await app.send("session.updated", {
-    info: session(rootID, rootTitle, { time: { created: CREATED, updated: Date.now() } }),
-  })
+  // No conversation event follows: an idle conversation with only a dev server running sends none, so the board must
+  // ask for the commands once the flags are known, however late they answer.
   const panel = await openTasks(page)
   const section = panel.locator(".vector-bg-tasks-shells")
   await expect(section.getByRole("heading", { name: "Background commands" })).toBeVisible()

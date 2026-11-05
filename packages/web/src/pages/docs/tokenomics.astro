@@ -54,6 +54,12 @@ export const prerender = true
             clears the app's model recommendations for that repository; <code>vector memory erase</code> and
             <code>vector memory workflow reset</code> cannot reach them.
           </p>
+          <p>
+            {release113.since} in learned defaults, runs where the agent handed work to subagents are their own split,
+            counted apart from runs it did alone, and a subagent model the agent picked on a brief never teaches the
+            learned subagent model. A run whose subagents were still working when the request ended, or that ran a
+            workflow, is kept out of the cost figures.
+          </p>
           <h3 id="subagent-spend">Subagent spend</h3>
           <p>
             {release113.since} the subagents of one request share a spend ceiling, $25 at catalog prices by default and
@@ -80,12 +86,6 @@ export const prerender = true
             per agent, minutes, and optionally dollars and tokens (<code>budget.workflow</code>). Its agents also share
             the request's subagent spend ceiling, and spend, tokens and agents carry across resumes, so a resume never
             starts the count again. See <a href="/docs/workflows#limits">Workflow limits</a>.
-          </p>
-          <p>
-            {release113.since} in learned defaults, runs where the agent handed work to subagents are their own split,
-            counted apart from runs it did alone, and a subagent model the agent picked on a brief never teaches the
-            learned subagent model. A run whose subagents were still working when the request ended, or that ran a
-            workflow, is kept out of the cost figures.
           </p>
                   <h3>Usage and streaks</h3>
           <p>

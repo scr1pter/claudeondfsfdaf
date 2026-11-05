@@ -39,6 +39,7 @@ export const disposeAllInstancesAndEmitGlobalDisposed = Effect.fn("Server.dispos
 
 // A global reload follows a settings change, such as a provider key, and disposing an instance stops the subagents and
 // turns running in it. An instance with work still running keeps its services until that work ends, and reloads then.
+// Background commands are not such work: the reload stops them.
 const disposeIdleInstances = Effect.fnUntraced(function* (store: InstanceStore.Interface) {
   const background = yield* Effect.serviceOption(BackgroundJob.Service)
   const statuses = yield* Effect.serviceOption(SessionStatus.Service)
@@ -47,8 +48,11 @@ const disposeIdleInstances = Effect.fnUntraced(function* (store: InstanceStore.I
     Effect.gen(function* () {
       const now = yield* Clock.currentTimeMillis
       // A background subagent that finished moments ago is still sending its report, which starts its parent's turn.
+      // A running background command does not hold the reload off: a dev server has no end, and the settings this
+      // reload brings, a lowered spend ceiling among them, would never apply. Disposal stops its process tree and the
+      // agent is told (5.H); one that just exited still gets its note out first.
       const working = (job: BackgroundJob.Info) =>
-        job.status === "running" ||
+        (job.status === "running" && job.type !== "shell") ||
         (job.metadata?.background === true && (job.completed_at ?? 0) > now - REPORT_IN_FLIGHT_MS)
       if ((yield* background.value.list()).some(working)) return true
       // A session waiting to retry a failed provider call is waiting on settings like the ones this reload brings.

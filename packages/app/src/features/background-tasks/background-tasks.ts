@@ -472,6 +472,15 @@ export function createBackgroundTasks(input: BackgroundTasksInput): BackgroundTa
     const timer = setTimeout(() => void refreshBoard(), 150)
     onCleanup(() => clearTimeout(timer))
   })
+  // The board asks for background commands only once the engine says it has them. That answer can land after the
+  // first refresh (a cold start, a restored tab), and an idle conversation sends no event that would refresh again.
+  createEffect(
+    on(
+      () => capabilities().backgroundShells,
+      () => void refreshBoard(),
+      { defer: true },
+    ),
+  )
   onCleanup(() => {
     boardRequest += 1
   })

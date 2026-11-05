@@ -237,8 +237,17 @@ test("the terminal copy says the next CLI release and what WSL servers keep", ()
 
 test("docs-content says the new limits, labelled, and no longer that Vector sets no cap", async () => {
   expect(await read("packages/web/src/data/docs-content.ts")).not.toMatch(/Vector sets no cap/)
-  for (const term of ["When Vector uses them", "How many", "Where they work", "How deep"])
+  for (const term of ["When Vector uses them", "How many", "While they run", "Where they work", "How deep"])
     expect([term, subagentKinds.find(([name]) => name === term)?.[1].includes(release113.since)]).toEqual([term, true])
+  // The shipped answers that said subagents are for big tasks keep their text and gain a labelled one (5.J).
+  for (const question of [
+    "Can several agents work on one repository?",
+    "What is the difference between a subagent and a subagent specialist?",
+  ])
+    expect([question, faqs.find((faq) => faq.question === question)?.answer.includes(release113.since)]).toEqual([
+      question,
+      true,
+    ])
   const many = subagentKinds.find(([name]) => name === "How many")![1]
   expect(many).toContain(`at most ${DEFAULTS.running} subagents run at once in a conversation`)
   expect(many).toContain(`(${GUEST.running}, ${GUEST.perRequest} and $${GUEST.usd} for guests)`)
@@ -251,6 +260,30 @@ test("docs-content says the new limits, labelled, and no longer that Vector sets
   const ceiling = spendRows.find(([term]) => term === "Subagent spend ceiling")
   expect(ceiling?.[1].startsWith(release113.since)).toBe(true)
   expect(ceiling?.[1]).toContain(`$${DEFAULTS.usd} at catalog prices by default ($${GUEST.usd} for guests)`)
+})
+
+test("the subagents page says what the engine does where it once said more", () => {
+  // TaskSize.withheld keeps task for a subagent the user named, on Light and after "no subagents" alike.
+  const delegates = plain(section(pages.subagents, "when-vector-delegates"))
+  expect(delegates).toContain(
+    'Light requests, and requests where you said "no subagents", start only the subagents you name with @',
+  )
+  expect(delegates).not.toContain("Light requests start no new subagents")
+  expect(subagentKinds.find(([name]) => name === "When Vector uses them")?.[1]).toContain(
+    "start only the subagents you name with @",
+  )
+  // TaskManager.resume refuses a child that never started; only the agent relaunches it (D.3 step 6).
+  const restart = plain(section(pages.subagents, "after-a-restart"))
+  expect(restart).toContain("A helper that never started cannot be resumed")
+  expect(restart).not.toContain("relaunched instead")
+  // A linked folder is a symlink (a junction on Windows) to the checkout's own folder, outside merge and discard.
+  const worktrees = plain(section(pages.subagents, "worktrees"))
+  expect(worktrees).toContain("nothing outside linked folders reaches your files until you or the agent merges them")
+  expect(worktrees).toContain("Review, Merge, Discard and checkpoints do not cover it")
+  // Learned defaults' subagent split is read where the models page links to it.
+  expect(plain(section(pages.tokenomics, "learned-defaults", "h3"))).toContain(
+    "runs where the agent handed work to subagents are their own split",
+  )
 })
 
 test("the 1.99.113 notes have a Multi-agent parity section that names every work package and its tests", () => {
