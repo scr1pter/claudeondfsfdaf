@@ -9,9 +9,9 @@ import {
 export const COMPUTER_SMOKE_WINDOW_PROBE_MARK = "computer-smoke-window-probe "
 export const COMPUTER_SMOKE_WINDOW_PROBE_VARIANTS = [
   "baseline",
-  "resizable",
-  "lock-after-bounds",
-  "explicit-constraints",
+  "constructor-minimizable-false",
+  "runtime-minimizable-refresh",
+  "runtime-maximizable-refresh",
 ] as const
 export type ComputerSmokeWindowProbe = {
   protocol: 1
@@ -94,7 +94,8 @@ type ProbeWindow = Pick<
   | "getContentBounds"
   | "isResizable"
   | "setBounds"
-  | "setResizable"
+  | "setMinimizable"
+  | "setMaximizable"
   | "destroy"
   | "isDestroyed"
 >
@@ -113,19 +114,18 @@ export function computerSmokeWindowProbes(input: {
         ...input.bounds,
         show: false,
         focusable: false,
-        resizable: variant === "resizable" || variant === "lock-after-bounds",
-        ...(variant === "explicit-constraints"
-          ? {
-              minWidth: input.bounds.width,
-              maxWidth: input.bounds.width,
-              minHeight: input.bounds.height,
-              maxHeight: input.bounds.height,
-            }
-          : {}),
+        resizable: false,
+        ...(variant === "constructor-minimizable-false" ? { minimizable: false } : {}),
       })
-      if (variant === "lock-after-bounds") {
+      if (variant === "runtime-minimizable-refresh") {
+        // Electron's public setter refreshes cached Win32 frame styles before restoring size.
+        // https://github.com/electron/electron/blob/v42.11.4/shell/browser/native_window_views.cc#L132-L143
+        window.setMinimizable(false)
         window.setBounds(input.bounds)
-        window.setResizable(false)
+      }
+      if (variant === "runtime-maximizable-refresh") {
+        window.setMaximizable(false)
+        window.setBounds(input.bounds)
       }
       const content = window.getContentBounds()
       return [

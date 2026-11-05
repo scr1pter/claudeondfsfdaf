@@ -73,7 +73,7 @@ function fixture(failedRead = false) {
   const create = (options: BrowserWindowConstructorOptions) => {
     const value = {
       options,
-      bounds: { ...receipt.requested, height: options.resizable ? 24 : 39 },
+      bounds: { ...receipt.requested, height: 39 },
       resizable: options.resizable === true,
       destroyed: false,
       calls: [] as string[],
@@ -92,9 +92,11 @@ function fixture(failedRead = false) {
         value.calls.push("bounds")
         value.bounds = { ...bounds }
       },
-      setResizable: (resizable: boolean) => {
-        value.calls.push("resizable")
-        value.resizable = resizable
+      setMinimizable: (minimizable: boolean) => {
+        value.calls.push(`minimizable:${minimizable}`)
+      },
+      setMaximizable: (maximizable: boolean) => {
+        value.calls.push(`maximizable:${maximizable}`)
       },
       isDestroyed: () => value.destroyed,
       destroy: () => {
@@ -106,7 +108,7 @@ function fixture(failedRead = false) {
   return { windows, create }
 }
 
-test("four fixed constructor variants stay hidden, preserve the base policy and destroy each owned window", () => {
+test("four fixed frame-style probes stay hidden, preserve the base policy and destroy each owned window", () => {
   const f = fixture()
   const options = {
     transparent: true,
@@ -119,8 +121,8 @@ test("four fixed constructor variants stay hidden, preserve the base policy and 
   }
   const probes = computerSmokeWindowProbes({ bounds: receipt.requested, options, create: f.create })
   expect(probes.map((probe) => probe.variant)).toEqual([...COMPUTER_SMOKE_WINDOW_PROBE_VARIANTS])
-  expect(probes.map((probe) => probe.actual.height)).toEqual([39, 24, 24, 39])
-  expect(probes.map((probe) => probe.resizable)).toEqual([false, true, false, false])
+  expect(probes.map((probe) => probe.actual.height)).toEqual([39, 39, 24, 24])
+  expect(probes.map((probe) => probe.resizable)).toEqual([false, false, false, false])
   expect(f.windows).toHaveLength(4)
   for (const window of f.windows) {
     expect(window.options.show).toBe(false)
@@ -128,9 +130,11 @@ test("four fixed constructor variants stay hidden, preserve the base policy and 
     expect(window.options.webPreferences).toEqual(options.webPreferences)
     expect(window.destroyed).toBe(true)
   }
-  expect(f.windows[2]!.calls).toEqual(["bounds", "resizable", "destroy"])
-  expect(f.windows[3]!.options).toMatchObject({ minWidth: 1024, maxWidth: 1024, minHeight: 24, maxHeight: 24 })
-  expect(options).not.toHaveProperty("minHeight")
+  expect(f.windows[2]!.calls).toEqual(["minimizable:false", "bounds", "destroy"])
+  expect(f.windows[3]!.calls).toEqual(["maximizable:false", "bounds", "destroy"])
+  expect(f.windows[1]!.options.minimizable).toBe(false)
+  expect(f.windows[0]!.options).not.toHaveProperty("minimizable")
+  expect(options).not.toHaveProperty("minimizable")
 })
 
 test("unavailable observations emit no data and still destroy every created window", () => {
