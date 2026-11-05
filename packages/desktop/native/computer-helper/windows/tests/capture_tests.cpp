@@ -1,5 +1,6 @@
 #include "capture.h"
 #include "availability.h"
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <stdexcept>
@@ -81,8 +82,20 @@ struct Fixture {
     check(result.has_value() && calls == 1, "capture.single-completion"); return std::move(*result);
   }
 };
-const Reply& success(const Dispatcher::Result& result) { check(std::holds_alternative<Reply>(result), "capture.expected-image-success"); return std::get<Reply>(result); }
-void failure(const Dispatcher::Result& result, std::wstring_view code) { check(std::holds_alternative<Failure>(result) && std::get<Failure>(result).code == code, "capture.expected-safe-failure"); }
+std::string failure_code(std::wstring_view code) {
+  constexpr std::array<std::wstring_view, 15> fixed{L"changed", L"unavailable", L"capture_unavailable", L"secure_desktop", L"elevated", L"protected", L"not_granted", L"failed", L"stale_frame", L"out_of_bounds", L"unsupported_action", L"stopped", L"paused", L"blocked_by_os", L"blocked"};
+  if (std::find(fixed.begin(), fixed.end(), code) == fixed.end()) return "unknown";
+  std::string result; for (const auto character : code) result.push_back(character == L'_' ? '-' : static_cast<char>(character)); return result;
+}
+const Reply& success(const Dispatcher::Result& result) {
+  if (const auto refused = std::get_if<Failure>(&result)) throw std::runtime_error("capture.expected-image-success." + failure_code(refused->code));
+  return std::get<Reply>(result);
+}
+void failure(const Dispatcher::Result& result, std::wstring_view code) {
+  const auto refused = std::get_if<Failure>(&result);
+  if (!refused) throw std::runtime_error("capture.expected-safe-failure.got-success");
+  if (refused->code != code) throw std::runtime_error("capture.expected-" + failure_code(code) + ".got-" + failure_code(refused->code));
+}
 CaptureReceipt receipt(std::wstring id, uint64_t generation, const ServerSession& session) {
   CaptureReceipt result; result.id = std::move(id); result.generation = generation; result.session_id = session.id; result.run_epoch = session.run_epoch;
   result.observation_epoch = session.observation_epoch; result.revision = session.revision; result.display_id = L"D1"; result.bounds = {-8, -4, 8, 8}; result.width = result.height = 8; result.image_scale = 1; result.dpi_scale = 1.5; return result;
@@ -90,7 +103,17 @@ CaptureReceipt receipt(std::wstring id, uint64_t generation, const ServerSession
 }
 
 size_t run_capture_tests() {
-  size_t groups = 0; const auto test = [&](const auto& work) { work(); ++groups; };
+  size_t groups = 0; const auto test = [&](const auto& work) {
+    try { work(); }
+    catch (const std::exception& error) {
+      const std::string_view detail(error.what());
+      const bool fixed = detail.starts_with("capture.") && detail.size() <= 112 &&
+        std::all_of(detail.begin(), detail.end(), [](char value) { return (value >= 'a' && value <= 'z') || (value >= '0' && value <= '9') || value == '.' || value == '-'; });
+      throw std::runtime_error("capture.group-" + std::to_string(groups + 1) + "." + (fixed ? std::string(detail.substr(8)) : "unexpected"));
+    }
+    catch (...) { throw std::runtime_error("capture.group-" + std::to_string(groups + 1) + ".unexpected"); }
+    ++groups;
+  };
   test([] {
     Fixture fixture; auto helper = ordinary_window().owner.process.token;
     fixture.availability = WindowsAvailabilityObservation{helper, {true, false, true}, false};
@@ -158,10 +181,19 @@ size_t run_capture_tests() {
   });
   test([] {
     Fixture fixture; auto extra = fixture.world.windows.front(); extra.hwnd = reinterpret_cast<HWND>(uintptr_t(99)); extra.excluded_overlay = true;
+    // Native inventory keeps an exactly excluded overlay structural; it does not copy another
+    // window's owner/identity witness into that overlay's distinct HWND.
+    extra.window.reset();
     fixture.world.windows.insert(fixture.world.windows.begin(), extra); const auto result = fixture.take(fixture.args(true)); success(result);
     check(!fixture.requests[0].occluded, "capture.exact-excluded-overlay-does-not-occlude-or-mask");
     auto changed = fixture.world; changed.windows.front().excluded_overlay = false;
     check(!same_capture_inventory(fixture.world, changed), "capture.lost-overlay-proof-reenters-inventory");
+  });
+  test([] {
+    Fixture fixture; auto inconsistent = fixture.world.windows.front(); inconsistent.hwnd = reinterpret_cast<HWND>(uintptr_t(99));
+    fixture.world.windows.insert(fixture.world.windows.begin(), inconsistent);
+    failure(fixture.take(fixture.args()), L"stale_frame");
+    check(fixture.reads == 0 && fixture.encodes == 0 && fixture.ids == 0, "capture.changed-structural-hwnd-cannot-borrow-another-window-witness");
   });
   test([] {
     Fixture fixture; fixture.session.vector_pids.Append(JsonValue::CreateNumberValue(4243)); const auto result = fixture.take(fixture.args()); const auto& image = success(result);

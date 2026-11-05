@@ -825,3 +825,8 @@ Because this build algorithm is a measured input, helper source intentionally ad
 ### C4 unsigned fixture loader scope
 
 Mac job127274658494 in42036089984 passes the corrected signing contracts/Node module checks, then Bun fails reading the shared Hands module before the unsigned fixture begins signing. Its first config import used an unnecessary query suffix despite being the only import in a fresh named test process with env already set. The suffix is removed and fixed failure-stage tokens now identify config import, bundle/dependency load, fixture creation, signing, fuses, verification, launch or tamper. Formatting/whitespace checks pass; native assertions and actual Node/signature/fuse/tamper behavior are unchanged. The original loader cause and actual signing fixture result remain unproven until CI runs.
+
+
+### Windows capture fixture witness correction
+
+The next native unit failure in42036089984 is the generic capture expected-image-success label. Source trace and independent fixture audit identify a deterministic invalid positive case: an exactly excluded overlay changes structural HWND10→99 while retaining the copied HWND10 owner/window witness. Production privacy correctly rejects that mismatch as stale_frame before pixels. The test now models native excluded-overlay inventory by omitting that unrelated optional witness. A new negative case proves an ordinary mismatched HWND still refuses before reads/encodes/receipts. Production capture is unchanged. Fixed group ordinal/closed failure-code diagnostics will identify any remaining actual failure;31 injected source groups await native CI. No other definite W6/W8 positive-fixture mismatch was found in the bounded Input/Guard/Availability/UIA audit.
