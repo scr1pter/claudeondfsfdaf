@@ -228,10 +228,14 @@ struct NativeWindows {
       if (!current()) refuse(L"changed");
       winrt::com_ptr<IShellItem> item; ULONG fetched = 0;
       HRESULT status = E_FAIL;
+      std::optional<WindowsComObservation> rejected;
       { WindowsComCall call;
         if (!call.current()) { observe_com_current(diagnostic, call, WindowsComInventoryCall::next_start); refuse(); }
         status = enumeration->Next(1, item.put(), &fetched);
-        if (!call.current()) { observe_com_current(diagnostic, call, WindowsComInventoryCall::next_after); refuse(); } }
+        if (!call.current()) rejected = call.observation(); }
+      // A late Next may already have advanced the cursor. Discard that item and stop enrichment;
+      // do not retry the RPC, renew its ticket or infer an installed identity from its late data.
+      if (rejected && !finish_windows_installed_next(*rejected, item, fetched, current, diagnostic)) break;
       if (status == S_FALSE) break;
       if (FAILED(status) || fetched != 1 || !item) { observe_windows_inventory_failure(diagnostic, WindowsInventoryDiagnostic::apps_next); refuse(); }
       try {
@@ -297,6 +301,8 @@ std::wstring_view windows_inventory_diagnostic_stage(WindowsInventoryDiagnostic 
     case WindowsInventoryDiagnostic::capture_empty_minimized: return L"capture-empty-minimized";
     case WindowsInventoryDiagnostic::capture_empty_hidden: return L"capture-empty-hidden";
     case WindowsInventoryDiagnostic::capture_empty_unknown: return L"capture-empty-unknown";
+    case WindowsInventoryDiagnostic::capture_empty_frame_unknown: return L"capture-empty-frame-unknown";
+    case WindowsInventoryDiagnostic::capture_empty_frame_geometry: return L"capture-empty-frame-geometry";
     case WindowsInventoryDiagnostic::apps_folder_start_uninitialized: return L"installed-folder-start-uninitialized";
     case WindowsInventoryDiagnostic::apps_folder_start_cancellation: return L"installed-folder-start-cancellation";
     case WindowsInventoryDiagnostic::apps_folder_start_timer: return L"installed-folder-start-timer";

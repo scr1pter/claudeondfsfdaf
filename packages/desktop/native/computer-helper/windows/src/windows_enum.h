@@ -1,5 +1,6 @@
 #pragma once
 #include "server.h"
+#include "windows_com.h"
 #include "windows_identity.h"
 #include <functional>
 #include <optional>
@@ -17,6 +18,7 @@ enum class WindowsInventoryDiagnostic {
   apps_bind_after_uninitialized, apps_bind_after_cancellation, apps_bind_after_timer, apps_bind_after_expired,
   apps_next_start_uninitialized, apps_next_start_cancellation, apps_next_start_timer, apps_next_start_expired,
   apps_next_after_uninitialized, apps_next_after_cancellation, apps_next_after_timer, apps_next_after_expired,
+  capture_empty_frame_unknown, capture_empty_frame_geometry,
   count
 };
 // Optional metadata-only observation; ordinary factories have no observer.
@@ -26,6 +28,22 @@ enum class WindowsComInventoryCall { folder_start, folder_after, bind_after, nex
 WindowsInventoryDiagnostic windows_com_inventory_diagnostic(WindowsComObservation, WindowsComInventoryCall) noexcept;
 void observe_windows_inventory_failure(WindowsInventoryObserver, WindowsInventoryDiagnostic) noexcept;
 std::wstring_view windows_inventory_diagnostic_stage(WindowsInventoryDiagnostic) noexcept;
+// The expired read is never an app observation. Its COM ticket must already be retired;
+// release the late item before returning the existing bounded partial catalog.
+template<class Item> bool finish_windows_installed_next(
+  WindowsComObservation observation, Item& item, ULONG& fetched,
+  const std::function<bool()>& current, WindowsInventoryObserver diagnostic = nullptr) {
+  if (observation == WindowsComObservation::expired) {
+    item = nullptr; fetched = 0;
+    if (!current || !current()) throw Failure{L"changed", L"The native window operation is unavailable."};
+    return false;
+  }
+  if (observation != WindowsComObservation::current) {
+    observe_windows_inventory_failure(diagnostic, windows_com_inventory_diagnostic(observation, WindowsComInventoryCall::next_after));
+    throw Failure{L"unavailable", L"The native window operation is unavailable."};
+  }
+  return true; // Ordinary status, identity and publication checks are still required.
+}
 struct WindowsRect {
   static constexpr int64_t bound = 100'000'000;
   int64_t x = 0, y = 0, width = 0, height = 0;

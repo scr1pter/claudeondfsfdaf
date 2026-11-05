@@ -63,17 +63,19 @@ CaptureSurface structural(HWND hwnd, const ServerSession& session, WindowsInvent
   if (value.thread == 0 || value.pid == 0 || GetAncestor(hwnd, GA_ROOT) != hwnd) { observe_windows_inventory_failure(diagnostic, WindowsInventoryDiagnostic::capture_identity); unavailable(L"changed"); }
   if (!GetWindowRect(hwnd, &bounds)) { observe_windows_inventory_failure(diagnostic, WindowsInventoryDiagnostic::capture_bounds_read); unavailable(L"changed"); }
   value.bounds = rectangle(bounds);
-  if (!value.bounds.valid()) {
-    auto reason = windows_capture_bounds_diagnostic(value.bounds);
-    if (diagnostic && reason == WindowsInventoryDiagnostic::capture_bounds_empty) {
-      DWORD empty_cloak = 0;
-      const auto known = SUCCEEDED(DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, &empty_cloak, sizeof(empty_cloak)));
-      reason = windows_capture_empty_diagnostic(known, empty_cloak != 0, IsWindowVisible(hwnd) != FALSE, IsIconic(hwnd) != FALSE);
-    }
-    observe_windows_inventory_failure(diagnostic, reason); unavailable(L"changed");
+  const auto bounds_reason = windows_capture_bounds_diagnostic(value.bounds);
+  if (bounds_reason != WindowsInventoryDiagnostic::none && bounds_reason != WindowsInventoryDiagnostic::capture_bounds_empty) {
+    observe_windows_inventory_failure(diagnostic, bounds_reason); unavailable(L"changed");
   }
   RECT frame{};
-  if (SUCCEEDED(DwmGetWindowAttribute(hwnd, DWMWA_EXTENDED_FRAME_BOUNDS, &frame, sizeof(frame)))) value.frame_bounds = rectangle(frame);
+  value.frame_known = SUCCEEDED(DwmGetWindowAttribute(hwnd, DWMWA_EXTENDED_FRAME_BOUNDS, &frame, sizeof(frame)));
+  if (value.frame_known) value.frame_bounds = rectangle(frame);
+  if (!capture_surface_geometry(value)) {
+    auto reason = windows_capture_bounds_diagnostic(value.bounds);
+    if (reason == WindowsInventoryDiagnostic::capture_bounds_empty)
+      reason = value.frame_known ? WindowsInventoryDiagnostic::capture_empty_frame_geometry : WindowsInventoryDiagnostic::capture_empty_frame_unknown;
+    observe_windows_inventory_failure(diagnostic, reason); unavailable(L"changed");
+  }
   value.visible = IsWindowVisible(hwnd) != FALSE; value.minimized = IsIconic(hwnd) != FALSE;
   if (FAILED(DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, &cloak, sizeof(cloak)))) { observe_windows_inventory_failure(diagnostic, WindowsInventoryDiagnostic::capture_cloak); unavailable(L"changed"); }
   value.cloaked = cloak != 0;
@@ -83,7 +85,7 @@ CaptureSurface structural(HWND hwnd, const ServerSession& session, WindowsInvent
   SetLastError(ERROR_SUCCESS); value.extended_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
   if (value.extended_style == 0 && GetLastError() != ERROR_SUCCESS) { observe_windows_inventory_failure(diagnostic, WindowsInventoryDiagnostic::capture_style); unavailable(L"changed"); }
   value.affinity_known = GetWindowDisplayAffinity(hwnd, &value.affinity) != FALSE;
-  value.excluded_overlay = value.affinity_known && value.affinity == WDA_EXCLUDEFROMCAPTURE &&
+  value.excluded_overlay = value.bounds.valid() && value.affinity_known && value.affinity == WDA_EXCLUDEFROMCAPTURE &&
     windows_overlay_passthrough_allowed({hwnd, value.pid, value.extended_style}, session);
   // WS_EX_LAYERED's absence does not establish a wholly opaque DWM/glass surface.
   value.opaque = false; return value;
@@ -110,7 +112,7 @@ struct NativeCapture {
         if (!current()) { observe_windows_inventory_failure(data.native->diagnostic, WindowsInventoryDiagnostic::capture_context); data.complete = false; return FALSE; }
         if (!IsWindowVisible(hwnd) && !IsIconic(hwnd)) return TRUE;
         auto surface = structural(hwnd, *data.session, data.native->diagnostic);
-        if (data.resolve && !surface.excluded_overlay) {
+        if (data.resolve && surface.bounds.valid() && !surface.excluded_overlay) {
           try { surface.window = data.native->windows.observe(hwnd); } catch (...) { /* Unknown owners remain structural privacy masks. */ }
         }
         if (!current()) { observe_windows_inventory_failure(data.native->diagnostic, WindowsInventoryDiagnostic::capture_context); data.complete = false; return FALSE; }

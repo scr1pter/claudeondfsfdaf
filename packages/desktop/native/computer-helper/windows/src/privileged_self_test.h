@@ -15,7 +15,7 @@ inline constexpr std::array<std::wstring_view, 15> windows_privileged_checks{
   L"uia-value-set-and-readback", L"secure-field-refusal", L"tagged-click-increments",
   L"unicode-type-readback", L"stale-capture-refusal", L"owned-input-release",
   L"input-detection-probe", L"hardware-user-input-pauses", L"isolated-target-cleanup"};
-inline constexpr std::array<std::wstring_view, 65> windows_privileged_stages{
+inline constexpr std::array<std::wstring_view, 67> windows_privileged_stages{
   L"installed-list-reply", L"installed-list-native", L"installed-seal",
   L"window-capture-reply", L"window-capture-receipt", L"png-decode",
   L"affinity-show", L"affinity-hide", L"display-capture-reply", L"display-capture-receipt",
@@ -32,7 +32,7 @@ inline constexpr std::array<std::wstring_view, 65> windows_privileged_stages{
   L"installed-folder-after-expired", L"installed-bind-after-uninitialized", L"installed-bind-after-cancellation", L"installed-bind-after-timer",
   L"installed-bind-after-expired", L"installed-next-start-uninitialized", L"installed-next-start-cancellation", L"installed-next-start-timer",
   L"installed-next-start-expired", L"installed-next-after-uninitialized", L"installed-next-after-cancellation", L"installed-next-after-timer",
-  L"installed-next-after-expired"};
+  L"installed-next-after-expired", L"capture-empty-frame-unknown", L"capture-empty-frame-geometry"};
 inline constexpr std::array<std::wstring_view, 32> windows_privileged_native_codes{
   L"unavailable", L"permissions", L"busy", L"stopped", L"paused", L"locked", L"blocked", L"protected", L"denied",
   L"not_granted", L"stale_frame", L"stale_ref", L"changed", L"occluded", L"secure_field", L"elevated",

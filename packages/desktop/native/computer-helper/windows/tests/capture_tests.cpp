@@ -30,6 +30,11 @@ CaptureSurface surface(const WindowsWindow& window) {
   value.bounds = value.frame_bounds = window.bounds; value.window_class = window.window_class; value.window = window;
   value.visible = true; value.cloaked = false; value.affinity_known = true; return value;
 }
+CaptureSurface empty_surface() {
+  CaptureSurface value; value.hwnd = reinterpret_cast<HWND>(uintptr_t(99)); value.pid = 9001; value.thread = 99;
+  value.bounds = {-7, -3, 0, 0}; value.frame_bounds = value.bounds; value.frame_known = true;
+  value.visible = true; value.cloaked = false; value.window_class = L"EmptyVisibleWindow"; return value;
+}
 struct Fixture {
   ServerSession session;
   CaptureInventory world;
@@ -171,6 +176,74 @@ size_t run_capture_tests() {
     fixture.world.windows.insert(fixture.world.windows.begin(), unknown); const auto result = fixture.take(fixture.args()); const auto& image = success(result);
     check(image.fields.GetNamedNumber(L"hiddenCount") == 1 && image.fields.GetNamedArray(L"masked").Size() > 0, "capture.unknown-owner-is-masked");
     check(fixture.encoded.bgra[0] == 0 && fixture.encoded.bgra[1] == 0 && fixture.encoded.bgra[2] == 0 && fixture.encoded.bgra[3] == 255, "capture.mask-is-opaque-before-encoding");
+  });
+  test([] {
+    auto value = empty_surface();
+    check(capture_surface_geometry(value), "capture.known-empty-structural-frame-is-canonical");
+    value.frame_known = false; check(!capture_surface_geometry(value), "capture.empty-structural-frame-must-be-observed");
+    value = empty_surface(); value.frame_bounds.width = -1;
+    check(!capture_surface_geometry(value), "capture.negative-empty-frame-refuses");
+    value = empty_surface(); value.frame_bounds = {WindowsRect::bound, 0, 1, 1};
+    check(!capture_surface_geometry(value), "capture.out-of-range-empty-frame-refuses");
+    value = empty_surface(); value.bounds.width = -1;
+    check(!capture_surface_geometry(value), "capture.negative-outer-frame-still-refuses");
+    value = empty_surface(); value.bounds = {WindowsRect::bound, 0, 0, 1}; value.frame_bounds = value.bounds;
+    check(capture_surface_geometry(value) && !value.bounds.valid(), "capture.internal-empty-does-not-change-public-rectangle-contract");
+    value = surface(ordinary_window()); value.frame_known = false;
+    check(capture_surface_geometry(value), "capture.positive-outer-legacy-frame-fallback-is-preserved");
+  });
+  test([] {
+    Fixture fixture; fixture.world.windows.insert(fixture.world.windows.begin(), empty_surface());
+    const auto result = fixture.take(fixture.args()); const auto& image = success(result);
+    check(image.fields.GetNamedArray(L"masked").Size() == 0 && image.fields.GetNamedNumber(L"hiddenCount") == 0,
+      "capture.known-empty-frame-has-no-painted-footprint");
+    const auto stored = fixture.service->receipt(L"capture-1", fixture.session);
+    check(stored.inventory.windows.size() == 2 && stored.inventory.windows.front().hwnd == empty_surface().hwnd &&
+      stored.inventory.windows.front().frame_known && fixture.service->current(stored, fixture.session),
+      "capture.empty-hwnd-remains-in-complete-currentness-witness");
+  });
+  test([] {
+    Fixture fixture; auto empty = empty_surface(); empty.frame_bounds = {-8, -4, 4, 4};
+    // Even an inconsistent optional identity or claimed overlay cannot make a zero-area HWND approved.
+    empty.window = ordinary_window(); empty.excluded_overlay = true; empty.opaque = true;
+    fixture.world.windows.insert(fixture.world.windows.begin(), empty);
+    const auto result = fixture.take(fixture.args()); const auto& image = success(result);
+    check(image.fields.GetNamedArray(L"masked").Size() > 0 && image.fields.GetNamedNumber(L"hiddenCount") == 1 &&
+      fixture.encoded.bgra[0] == 0 && fixture.encoded.bgra[1] == 0 && fixture.encoded.bgra[2] == 0,
+      "capture.empty-outer-positive-frame-is-always-private");
+    auto selected = fixture.args(true); selected.GetNamedObject(L"target").Insert(L"windowId", JsonValue::CreateStringValue(L"99"));
+    failure(fixture.take(selected), L"capture_unavailable");
+    fixture.requests.clear(); success(fixture.take(fixture.args(true)));
+    check(fixture.requests.size() == 1 && fixture.requests.front().occluded,
+      "capture.empty-outer-positive-frame-still-occludes-window-source");
+  });
+  test([] {
+    for (unsigned change = 0; change < 8; ++change) {
+      Fixture fixture; auto empty = empty_surface(); empty.excluded_overlay = true;
+      fixture.world.windows.insert(fixture.world.windows.begin(), empty);
+      success(fixture.take(fixture.args())); const auto stored = fixture.service->receipt(L"capture-1", fixture.session);
+      auto& value = fixture.world.windows.front();
+      if (change == 0) value.bounds.width = value.bounds.height = 1;
+      if (change == 1) ++value.bounds.x;
+      if (change == 2) value.frame_bounds.width = value.frame_bounds.height = 1;
+      if (change == 3) value.frame_known = false;
+      if (change == 4) value.visible = false;
+      if (change == 5) value.minimized = true;
+      if (change == 6) value.cloaked = true;
+      if (change == 7) value.pid = 9002;
+      check(!same_capture_inventory(stored.inventory, fixture.world) && !fixture.service->current(stored, fixture.session),
+        "capture.every-empty-surface-transition-retires-the-frame");
+    }
+  });
+  test([] {
+    Fixture fixture; auto empty = empty_surface(); empty.frame_known = false;
+    fixture.world.windows.insert(fixture.world.windows.begin(), empty);
+    failure(fixture.take(fixture.args()), L"capture_unavailable");
+    check(fixture.reads == 0 && fixture.encodes == 0, "capture.unknown-empty-frame-never-reads-pixels");
+    fixture.world.windows.front() = empty_surface();
+    fixture.during_read = [&] { fixture.world.windows.front().bounds.width = fixture.world.windows.front().bounds.height = 1; };
+    failure(fixture.take(fixture.args()), L"stale_frame");
+    check(fixture.encodes == 0 && fixture.ids == 0, "capture.empty-window-growth-during-read-cannot-publish");
   });
   test([] {
     Fixture fixture; CaptureSurface toast; toast.hwnd = reinterpret_cast<HWND>(uintptr_t(99)); toast.pid = 9001; toast.thread = 99;

@@ -28,6 +28,7 @@ bool phase(const CaptureReceipt& receipt, const ServerSession& session) {
 bool overlap(const WindowsRect& a, const WindowsRect& b) { return a.valid() && b.valid() && a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height; }
 bool same_surface(const CaptureSurface& a, const CaptureSurface& b) {
   return a.hwnd == b.hwnd && a.pid == b.pid && a.thread == b.thread && a.bounds == b.bounds && a.frame_bounds == b.frame_bounds &&
+    a.frame_known == b.frame_known &&
     a.visible == b.visible && a.minimized == b.minimized && a.cloaked == b.cloaked && a.opaque == b.opaque && a.affinity_known == b.affinity_known &&
     (!a.affinity_known || a.affinity == b.affinity) && a.extended_style == b.extended_style && a.window_class == b.window_class &&
     a.window.has_value() == b.window.has_value() && (!a.window || same_windows_window(*a.window, *b.window));
@@ -42,11 +43,13 @@ CapturePrivacyPlan privacy(const CaptureInventory& inventory, const WindowsRect&
   const WindowsSessionPolicy policy(session);
   std::vector<CapturePrivacyWindow> windows;
   for (const auto& surface : inventory.windows) {
-    CapturePrivacyWindow value; value.id = window_id(surface.hwnd); value.bounds = surface.bounds;
-    value.visible = surface.visible && !surface.minimized && !surface.cloaked; value.opaque = surface.opaque; value.overlay = surface.excluded_overlay;
+    const auto empty = surface.bounds.width == 0 || surface.bounds.height == 0;
+    CapturePrivacyWindow value; value.id = window_id(surface.hwnd); value.bounds = empty ? surface.frame_bounds : surface.bounds;
+    value.visible = surface.visible && !surface.minimized && !surface.cloaked && value.bounds.valid();
+    value.opaque = !empty && surface.opaque; value.overlay = !empty && surface.excluded_overlay;
     value.vector = surface.pid == GetCurrentProcessId() || has_pid(session.vector_pids, surface.pid) || has_id(session.vector_window_ids, surface.hwnd);
     value.owner_key = L"native-pid:" + std::to_wstring(surface.pid);
-    if (surface.window) {
+    if (!empty && surface.window) {
       require(surface.window->hwnd == surface.hwnd && surface.window->physical_owner.process.pid == surface.pid);
       const auto role = windows_surface_role(*surface.window);
       value.include = !value.vector && policy.include_in_display(*surface.window);
@@ -137,6 +140,16 @@ std::optional<std::pair<size_t, size_t>> receipt_cost(const CaptureReceipt& rece
 }
 }
 
+bool capture_surface_geometry(const CaptureSurface& surface) noexcept {
+  if (surface.bounds.valid()) return true;
+  const auto canonical = [](const WindowsRect& value) {
+    constexpr auto bound = WindowsRect::bound;
+    return value.x >= -bound && value.y >= -bound && value.width >= 0 && value.height >= 0 &&
+      value.width <= bound && value.height <= bound && value.x <= bound - value.width && value.y <= bound - value.height;
+  };
+  return canonical(surface.bounds) && (surface.bounds.width == 0 || surface.bounds.height == 0) &&
+    surface.frame_known && canonical(surface.frame_bounds);
+}
 bool same_capture_inventory(const CaptureInventory& a, const CaptureInventory& b) noexcept {
   if (a.displays.size() != b.displays.size()) return false;
   for (size_t index = 0; index < a.displays.size(); ++index) {
@@ -145,8 +158,8 @@ bool same_capture_inventory(const CaptureInventory& a, const CaptureInventory& b
   }
   size_t left = 0, right = 0;
   for (;;) {
-    while (left < a.windows.size() && a.windows[left].excluded_overlay) ++left;
-    while (right < b.windows.size() && b.windows[right].excluded_overlay) ++right;
+    while (left < a.windows.size() && a.windows[left].excluded_overlay && a.windows[left].bounds.valid()) ++left;
+    while (right < b.windows.size() && b.windows[right].excluded_overlay && b.windows[right].bounds.valid()) ++right;
     if (left == a.windows.size() || right == b.windows.size()) return left == a.windows.size() && right == b.windows.size();
     if (!same_surface(a.windows[left++], b.windows[right++])) return false;
   }
@@ -220,10 +233,11 @@ void CaptureService::capture(const JsonObject& input, const OperationContext& co
     if (args.window) require(backend_.window_supported && backend_.window_supported(), L"unsupported_action");
     const auto inventory = backend_.inventory(session, context.is_current); require(context.is_current(), L"changed");
     require(!inventory.displays.empty() && inventory.displays.size() <= 64 && inventory.windows.size() <= 4096, L"capture_unavailable");
+    for (const auto& surface : inventory.windows) require(capture_surface_geometry(surface), L"capture_unavailable");
     std::set<std::wstring> display_ids;
     for (const auto& value : inventory.displays) require(value.bounds.valid() && !value.id.empty() && value.id.size() <= 256 && std::isfinite(value.dpi_scale) && value.dpi_scale > 0 && value.dpi_scale <= 16 && display_ids.insert(value.id).second, L"capture_unavailable");
     const CaptureSurface* target = nullptr;
-    if (args.window) { const auto found = std::find_if(inventory.windows.begin(), inventory.windows.end(), [&](const auto& value) { return value.hwnd == *args.window; }); require(found != inventory.windows.end() && found->window.has_value(), L"capture_unavailable"); target = &*found; }
+    if (args.window) { const auto found = std::find_if(inventory.windows.begin(), inventory.windows.end(), [&](const auto& value) { return value.hwnd == *args.window; }); require(found != inventory.windows.end() && found->bounds.valid() && found->window.has_value(), L"capture_unavailable"); target = &*found; }
     const CaptureDisplay* display = nullptr;
     if (args.display) {
       const auto found = std::find_if(inventory.displays.begin(), inventory.displays.end(), [&](const auto& value) { return value.id == *args.display; }); require(found != inventory.displays.end(), L"capture_unavailable"); display = &*found;
@@ -251,7 +265,8 @@ void CaptureService::capture(const JsonObject& input, const OperationContext& co
       occluded = !std::any_of(inventory.displays.begin(), inventory.displays.end(), [&](const auto& value) { return value.bounds.contains(bounds); });
       for (const auto& value : inventory.windows) {
         if (value.hwnd == target->hwnd) break;
-        if (value.visible && !value.minimized && !value.cloaked && !value.excluded_overlay && overlap(value.bounds, bounds)) occluded = true;
+        const auto& covering = value.bounds.valid() ? value.bounds : value.frame_bounds;
+        if (value.visible && !value.minimized && !value.cloaked && !(value.excluded_overlay && value.bounds.valid()) && overlap(covering, bounds)) occluded = true;
       }
     }
     if (args.zoom) {

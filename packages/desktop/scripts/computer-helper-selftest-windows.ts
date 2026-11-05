@@ -153,6 +153,8 @@ export const WINDOWS_NATIVE_STAGES = [
   "installed-next-after-cancellation",
   "installed-next-after-timer",
   "installed-next-after-expired",
+  "capture-empty-frame-unknown",
+  "capture-empty-frame-geometry",
 ] as const
 export const WINDOWS_NATIVE_CODES = [...Computer.ComputerErrorCode.literals, "unknown"] as const
 export type WindowsNativeStage = (typeof WINDOWS_NATIVE_STAGES)[number]

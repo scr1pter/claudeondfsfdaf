@@ -26,7 +26,10 @@ struct CaptureSurface {
   LONG_PTR extended_style = 0;
   std::wstring window_class;
   std::optional<WindowsWindow> window;
+  // A zero-area outer HWND is retained only with an observed, canonical DWM footprint.
+  bool frame_known = false;
 };
+bool capture_surface_geometry(const CaptureSurface&) noexcept;
 struct CaptureInventory {
   std::vector<CaptureDisplay> displays;
   // Every visible top-level structural HWND, in native front-to-back order, including unknown owners.

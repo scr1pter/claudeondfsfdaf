@@ -1,4 +1,6 @@
 #include "windows_enum.h"
+#include <unknwn.h>
+#include <atomic>
 #include <limits>
 #include <stdexcept>
 #include <utility>
@@ -63,6 +65,25 @@ struct Fixture {
   auto done() { return [this](Dispatcher::Result value) { results.push_back(std::move(value)); }; }
   std::wstring code() const { require(results.size() == 1 && std::holds_alternative<Failure>(results[0]), "windows-enum.expected-failure"); return std::get<Failure>(results[0]).code; }
   JsonObject reply() const { require(results.size() == 1 && std::holds_alternative<Reply>(results[0]), "windows-enum.expected-success"); return std::get<Reply>(results[0]).fields; }
+};
+class TrackedItem final : public IUnknown {
+ public:
+  explicit TrackedItem(bool& released) : released_(released) {}
+  HRESULT STDMETHODCALLTYPE QueryInterface(REFIID id, void** output) override {
+    if (!output) return E_POINTER;
+    *output = nullptr;
+    if (id != __uuidof(IUnknown)) return E_NOINTERFACE;
+    *output = static_cast<IUnknown*>(this); AddRef(); return S_OK;
+  }
+  ULONG STDMETHODCALLTYPE AddRef() override { return ++references_; }
+  ULONG STDMETHODCALLTYPE Release() override {
+    const auto count = --references_;
+    if (!count) { released_ = true; delete this; }
+    return count;
+  }
+ private:
+  std::atomic<ULONG> references_{1};
+  bool& released_;
 };
 }
 
@@ -167,6 +188,51 @@ size_t run_windows_enum_tests() {
     Fixture fixture; fixture.service->cursor(JsonObject{}, fixture.context(false), fixture.done());
     require(fixture.reply().GetNamedNumber(L"x") == -50 && fixture.reply().GetNamedString(L"displayId") == L"actual-display", "windows-enum-real-native-cursor-seam");
     require(fixture.service->features().GetNamedBoolean(L"apps.open") && fixture.service->features().GetNamedBoolean(L"cursor.position"), "windows-enum-installed-feature-seams");
+  });
+  test([] {
+    Fixture fixture; bool released = false; ULONG fetched = 1; size_t accepted_late = 0;
+    WindowsBackend backend;
+    backend.list = [&](bool installed, const auto& current) {
+      require(installed && current(), "windows-enum.partial-installed-request");
+      std::vector<WindowsApplication> apps{WindowsApplication{fixture.observed.owner.identity, fixture.observed.owner, {}, false, {fixture.observed}}};
+      winrt::com_ptr<IUnknown> item; item.attach(new TrackedItem(released));
+      if (finish_windows_installed_next(WindowsComObservation::expired, item, fetched, current)) {
+        ++accepted_late; auto late = apps.front(); late.identity.name = L"Late unverified item"; apps.push_back(std::move(late));
+      }
+      require(!item && released && fetched == 0, "windows-enum.late-next-item-released-before-partial");
+      return apps;
+    };
+    WindowService service({}, std::move(backend)); JsonObject args; args.Insert(L"installed", JsonValue::CreateBooleanValue(true));
+    service.list(args, fixture.context(), fixture.done());
+    const auto apps = fixture.reply().GetNamedArray(L"apps");
+    require(apps.Size() == 1 && accepted_late == 0, "windows-enum.partial-keeps-only-prior-items");
+    require(apps.GetObjectAt(0).GetNamedObject(L"identity").GetNamedString(L"name") == fixture.observed.owner.identity.name,
+      "windows-enum.partial-keeps-prior-verified-identity");
+  });
+  test([] {
+    Fixture fixture; bool released = false; ULONG fetched = 1;
+    WindowsBackend backend;
+    backend.list = [&](bool, const auto& current) -> std::vector<WindowsApplication> {
+      winrt::com_ptr<IUnknown> item; item.attach(new TrackedItem(released)); fixture.current = false;
+      (void)finish_windows_installed_next(WindowsComObservation::expired, item, fetched, current);
+      throw std::runtime_error("windows-enum.revoked-partial-must-not-publish");
+    };
+    WindowService service({}, std::move(backend)); JsonObject args; args.Insert(L"installed", JsonValue::CreateBooleanValue(true));
+    service.list(args, fixture.context(), fixture.done());
+    require(fixture.code() == L"changed" && released && fetched == 0, "windows-enum.revoked-late-next-no-result");
+  });
+  test([] {
+    for (const auto state : {WindowsComObservation::uninitialized, WindowsComObservation::cancellation_unavailable,
+        WindowsComObservation::timer_unavailable, static_cast<WindowsComObservation>(-1)}) {
+      bool released = false, refused = false; ULONG fetched = 1; winrt::com_ptr<IUnknown> item; item.attach(new TrackedItem(released));
+      try { (void)finish_windows_installed_next(state, item, fetched, [] { return true; }); }
+      catch (const Failure& failure) { refused = failure.code == L"unavailable"; }
+      require(refused && item && fetched == 1 && !released, "windows-enum.non-expiry-next-refuses-not-partial");
+      item = nullptr; require(released, "windows-enum.refused-item-owned-until-unwind");
+    }
+    bool released = false; ULONG fetched = 1; size_t authority_reads = 0; winrt::com_ptr<IUnknown> item; item.attach(new TrackedItem(released));
+    require(finish_windows_installed_next(WindowsComObservation::current, item, fetched, [&] { ++authority_reads; return true; }) &&
+      item && fetched == 1 && !released && authority_reads == 0, "windows-enum.current-next-still-needs-normal-validation");
   });
   return groups;
 }
