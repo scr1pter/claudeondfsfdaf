@@ -299,11 +299,24 @@ final class AccessibilityRegistry<Element> {
     }
 
     private func receiptCost(_ record: AccessibilityReference<Element>) -> Int {
-        512 + record.ref.utf8.count + record.elementID.utf8.count + record.sessionID.utf8.count +
-            record.witness.process.executable.utf8.count + (record.witness.menu?.menuPath.reduce(0) { $0 + 32 + $1.utf8.count } ?? 0) +
-            (record.facts.map { $0.role.utf8.count + ($0.subrole?.utf8.count ?? 0) + $0.name.utf8.count +
-                ($0.document?.utf8.count ?? 0) + ($0.menuShortcut?.reduce(0) { $0 + 16 + $1.utf8.count } ?? 0) + ($0.owner?.path?.utf8.count ?? 0) + ($0.owner?.name.utf8.count ?? 0) +
-                ($0.owner?.bundleId.utf8.count ?? 0) + ($0.owner?.teamId?.utf8.count ?? 0) } ?? 0)
+        var cost: Int = 512
+        cost += record.ref.utf8.count
+        cost += record.elementID.utf8.count
+        cost += record.sessionID.utf8.count
+        cost += record.witness.process.executable.utf8.count
+        for part in record.witness.menu?.menuPath ?? [] { cost += 32 + part.utf8.count }
+        if let facts = record.facts {
+            cost += facts.role.utf8.count
+            cost += facts.subrole?.utf8.count ?? 0
+            cost += facts.name.utf8.count
+            cost += facts.document?.utf8.count ?? 0
+            for key in facts.menuShortcut ?? [] { cost += 16 + key.utf8.count }
+            cost += facts.owner?.path?.utf8.count ?? 0
+            cost += facts.owner?.name.utf8.count ?? 0
+            cost += facts.owner?.bundleId.utf8.count ?? 0
+            cost += facts.owner?.teamId?.utf8.count ?? 0
+        }
+        return cost
     }
     private func removeReceipt(_ ref: String) {
         if let old = receipts.removeValue(forKey: ref) { receiptBytes -= receiptCost(old) }
