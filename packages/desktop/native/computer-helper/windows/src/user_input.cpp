@@ -21,11 +21,11 @@ std::wstring lower(std::wstring_view value) { std::wstring result(value); for (a
 std::wstring trim(std::wstring_view value) { while (!value.empty() && value.front()==L' ') value.remove_prefix(1); while (!value.empty() && value.back()==L' ') value.remove_suffix(1); return lower(value); }
 WORD stop_key(std::wstring_view key) {
   if (key.size()==1 && ((key[0]>=L'a' && key[0]<=L'z') || (key[0]>=L'0' && key[0]<=L'9'))) return static_cast<WORD>(key[0]>=L'a'?key[0]-32:key[0]);
-  const std::map<std::wstring_view,WORD> values{{L"escape",VK_ESCAPE},{L"esc",VK_ESCAPE},{L"space",VK_SPACE},{L"spacebar",VK_SPACE},
-    {L"enter",VK_RETURN},{L"return",VK_RETURN},{L"tab",VK_TAB},{L"backspace",VK_BACK},{L"delete",VK_DELETE},{L"del",VK_DELETE},
-    {L"insert",VK_INSERT},{L"ins",VK_INSERT},{L"left",VK_LEFT},{L"arrowleft",VK_LEFT},{L"right",VK_RIGHT},{L"arrowright",VK_RIGHT},
-    {L"up",VK_UP},{L"arrowup",VK_UP},{L"down",VK_DOWN},{L"arrowdown",VK_DOWN},{L"home",VK_HOME},{L"end",VK_END},{L"pageup",VK_PRIOR},{L"pagedown",VK_NEXT},
-    {L"plus",VK_OEM_PLUS},{L"minus",VK_OEM_MINUS},{L"-",VK_OEM_MINUS}};
+  const std::map<std::wstring_view,WORD> values{{L"escape",WORD{VK_ESCAPE}},{L"esc",WORD{VK_ESCAPE}},{L"space",WORD{VK_SPACE}},{L"spacebar",WORD{VK_SPACE}},
+    {L"enter",WORD{VK_RETURN}},{L"return",WORD{VK_RETURN}},{L"tab",WORD{VK_TAB}},{L"backspace",WORD{VK_BACK}},{L"delete",WORD{VK_DELETE}},{L"del",WORD{VK_DELETE}},
+    {L"insert",WORD{VK_INSERT}},{L"ins",WORD{VK_INSERT}},{L"left",WORD{VK_LEFT}},{L"arrowleft",WORD{VK_LEFT}},{L"right",WORD{VK_RIGHT}},{L"arrowright",WORD{VK_RIGHT}},
+    {L"up",WORD{VK_UP}},{L"arrowup",WORD{VK_UP}},{L"down",WORD{VK_DOWN}},{L"arrowdown",WORD{VK_DOWN}},{L"home",WORD{VK_HOME}},{L"end",WORD{VK_END}},{L"pageup",WORD{VK_PRIOR}},{L"pagedown",WORD{VK_NEXT}},
+    {L"plus",WORD{VK_OEM_PLUS}},{L"minus",WORD{VK_OEM_MINUS}},{L"-",WORD{VK_OEM_MINUS}}};
   if (const auto found=values.find(key);found!=values.end()) return found->second;
   if (key.size()>=2 && key.size()<=3 && key[0]==L'f') {
     unsigned n=0; for (size_t i=1;i<key.size();++i) { if (key[i]<L'0' || key[i]>L'9') return 0; n=n*10+static_cast<unsigned>(key[i]-L'0'); }
@@ -211,9 +211,9 @@ struct UserInputService::State : std::enable_shared_from_this<UserInputService::
       for(auto& notice:notices)post(std::move(notice));
     } catch (...) {std::lock_guard lock(mutex);if(current_locked(expected)){expected->failed=true;expected->revoked=true;}}
   }
-  void challenge_expired(const std::shared_ptr<Scope>& expected,uint64_t sequence) {
+  void challenge_expired(const std::shared_ptr<Scope>& expected,uint64_t expected_sequence) {
     std::optional<Notice> notice;
-    {std::lock_guard lock(mutex);if(!current_locked(expected) || !challenge || challenge->scope!=expected || challenge->sequence!=sequence)return;
+    {std::lock_guard lock(mutex);if(!current_locked(expected) || !challenge || challenge->scope!=expected || challenge->sequence!=expected_sequence)return;
       const auto time=now();if(time>=challenge->sent && time-challenge->sent<500)return;
       challenge.reset();cancel_challenge={};expected->failed=true;notice=detection_locked(expected,false,L"probe_missing");
     }

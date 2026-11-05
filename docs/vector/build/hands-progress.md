@@ -691,3 +691,8 @@ Windows release verification reads the actual PE architecture and embedded names
 Vite encodes the verified final per-architecture hashes into a single internal computer-helper marker. Production Main decodes that same compiled string; a running environment cannot replace it. The common CLI has exclusive Mac/Windows modes and requires the exact Windows architecture/channel/signing arguments. Final-location version and packaged native self-tests execute only after all admission checks.
 
 This is source checkpoint70 of73. Focused checks pass: common verifier17 tests/90 assertions, Windows verifier16/78, pin codec6/42 and expanded desktop typecheck. CLI discriminant/channel narrowing and XML ancestry types were corrected without relaxing validation. Windows x64 and native ARM64 final package execution remain CI requirements. The native source10 matrix42025500005 separately reports new65/66 MSVC compatibility failures; these are being repaired and no native pass is claimed.
+
+
+### W9/W11 MSVC compatibility repair
+
+Run42025500005 ateb8a48d1 stops compiling the new W9/W11 production sources: stop-key map literals instantiate int-to-WORD narrowing under warnings-as-errors, a challenge parameter shadows the state's sequence, unqualified environment resolves to the backend member, and the report header uses a JsonObject alias not in its scope. The repair uses explicit WORD values, distinct local observer/parameter names and the existing fully qualified SDK type. It preserves warning enforcement and all readiness, raw-input and parent-lifetime behavior. Runtime policy/self-test execution remains unverified until a fresh Windows lane runs.

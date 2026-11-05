@@ -48,7 +48,7 @@ std::optional<RawRoutes> routes() noexcept {
   return result;
 }
 
-UserInputEnvironment environment() noexcept {
+UserInputEnvironment observe_environment() noexcept {
   UserInputEnvironment result{WindowsSurfaceState::unavailable,monotonic()};
   try {
     const auto observation=observe_windows_availability(WindowsAvailabilityBackend::system());
@@ -219,7 +219,7 @@ struct NativeListener final : std::enable_shared_from_this<NativeListener> {
     std::array<uint64_t,8> queued{}; size_t count=0;
     { std::lock_guard lock(probe_mutex); count=probe_count; std::copy_n(probes.begin(),count,queued.begin()); probe_count=0; ResetEvent(probe_event.get()); }
     for (size_t i=0;i<count && !closed.load();++i) {
-      if (environment().state!=WindowsSurfaceState::ready) { configuration(); continue; }
+      if (observe_environment().state!=WindowsSurfaceState::ready) { configuration(); continue; }
       INPUT input{}; input.type=INPUT_MOUSE; input.mi.dwFlags=MOUSEEVENTF_MOVE|MOUSEEVENTF_MOVE_NOCOALESCE;
       input.mi.dwExtraInfo=static_cast<ULONG_PTR>(queued[i]);
       // Acceptance is NOT receipt. A zero-distance move is not guaranteed to produce WM_INPUT.
@@ -349,7 +349,7 @@ UserInputBackend UserInputBackend::system() {
   UserInputBackend backend;
   backend.start=[state](auto receive){return state->start(std::move(receive));};
   backend.status=[state]{return state->status();};
-  backend.environment=environment;
+  backend.environment=observe_environment;
   backend.probe=[state](uint64_t marker){return state->probe(marker);};
   backend.close=[state]{state->close();};
   return backend;

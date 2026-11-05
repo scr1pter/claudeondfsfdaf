@@ -18,7 +18,7 @@ struct WindowsPrivilegedReport {
   std::vector<WindowsPrivilegedCheck> checks;
   bool valid() const noexcept;
   int exit_code() const noexcept;
-  JsonObject wire() const;
+  winrt::Windows::Data::Json::JsonObject wire() const;
   // Preserve every observed result when a later prerequisite prevents unrun scenarios.
   void skip_unrun(std::wstring_view reason);
   static WindowsPrivilegedReport skipped(std::wstring_view reason);
