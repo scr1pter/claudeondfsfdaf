@@ -12,6 +12,8 @@ import { SettingsRoadmapV2 } from "./roadmap"
 import { roadmapTab } from "./roadmap-model"
 import { SettingsRemoteV2 } from "./remote"
 import { remoteTab } from "./remote-model"
+import { SettingsProduction } from "@/features/cloud/ops/ops-settings"
+import { opsTab } from "@/features/cloud/ops/ops-model"
 import { SettingsGeneralV2 } from "./general"
 import { SettingsNotificationsV2 } from "./notifications"
 import { SettingsProvidersV2 } from "./providers"
@@ -62,6 +64,9 @@ export const SettingsWorkspace: Component<SettingsWorkspaceProps> = (props) => {
   // The Remote tab (WP A42) shows on the desktop when the plan includes the listed Remote, or when this computer
   // already has Remote on or a phone paired.
   const [remoting, setRemoting] = createSignal(false)
+  // The Production tab (WP A50) shows on the desktop when the plan includes a listed ops perk (On Call, Release Guard
+  // or Ship Desk); vectordev.ai still decides every action.
+  const [producing, setProducing] = createSignal(false)
   const votingRead = newestRead()
   const readVoting = async (signedIn: boolean) => {
     const account = platform.vectorAccount
@@ -69,12 +74,14 @@ export const SettingsWorkspace: Component<SettingsWorkspaceProps> = (props) => {
     const local = await platform.remote?.status().catch(() => undefined)
     if (!signedIn || !account?.codium) {
       setVoting(false)
+      setProducing(false)
       return setRemoting(Boolean(platform.remote) && remoteTab(undefined, local))
     }
     const status = await account.codium().catch(() => undefined)
     if (!newest()) return
     setVoting(Boolean(account.roadmap) && roadmapTab(status))
     setRemoting(Boolean(platform.remote) && remoteTab(status, local))
+    setProducing(Boolean(platform.ops) && opsTab(status))
   }
   // Spend limits live in the desktop ledger and the account in the desktop main process, which the web build does
   // not have.
@@ -83,6 +90,7 @@ export const SettingsWorkspace: Component<SettingsWorkspaceProps> = (props) => {
     if (item === "account") return !!platform.vectorAccount
     if (item === "roadmap") return voting()
     if (item === "remote") return remoting()
+    if (item === "production") return producing()
     return true
   }
   const groups = createMemo(() =>
@@ -127,6 +135,7 @@ export const SettingsWorkspace: Component<SettingsWorkspaceProps> = (props) => {
     if (item === "account") return <SettingsAccountV2 onUsage={() => setSection("usage")} />
     if (item === "roadmap") return <SettingsRoadmapV2 />
     if (item === "remote") return <SettingsRemoteV2 />
+    if (item === "production") return <SettingsProduction />
     if (item === "usage") return <SettingsUsageV2 />
     if (item === "spend") return <SettingsSpendLimitsV2 />
     if (item === "about") return <SettingsAboutV2 />

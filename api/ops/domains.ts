@@ -12,10 +12,13 @@ import {
   verifyOpsDomain,
   type OpsVerifyOptions,
 } from "../_lib/ops-api.js"
+import { runDomainHealth, type HealthRunInput } from "../_lib/ops-health.js"
 import { requireOpsService } from "../_lib/ops-worker.js"
 
 export const maxDuration = 60
 const BUDGET_MS = 45_000
+/** The daily job's re-verification gets this much of its budget; domain health (WP A50) gets the rest. */
+const REVERIFY_MS = 20_000
 
 export default function handler(request: ApiRequest, response: ApiResponse) {
   return handleOpsDomains(request, response)
@@ -40,7 +43,9 @@ function fromCron(request: ApiRequest) {
  * - `POST {domain, verify: true}`: checks it now. 20 an hour per account.
  * - `DELETE {domain}`: removes it and the On Call URLs on it, whatever the plan.
  * - `GET` with the cron secret: the daily job (contract §4.19, 04:10 UTC) checks again each verified domain whose week
- *   is up and updates the Worker. It answers counts only.
+ *   is up and updates the Worker, then (WP A50) reads each roster account's domain health: certificate expiry over
+ *   node:tls, registration expiry over RDAP and DNS drift over DNS-over-HTTPS (api/_lib/ops-health.ts). It answers
+ *   counts only.
  *
  * Writes take 60 an hour per account. Adding and checking need the ops services and a plan that includes them.
  */
@@ -49,11 +54,23 @@ export async function handleOpsDomains(
   response: ApiResponse,
   fetcher: typeof fetch = fetch,
   clock: () => number = Date.now,
-  options: OpsVerifyOptions = {},
+  options: OpsVerifyOptions & Pick<HealthRunInput, "readers" | "alert"> = {},
 ) {
   try {
-    if (request.method === "GET" && fromCron(request))
-      return json(response, 200, await reverifyOpsDomains({ fetcher, clock, budgetMs: BUDGET_MS, ...options }))
+    if (request.method === "GET" && fromCron(request)) {
+      const started = clock()
+      const { readers, alert, ...verify } = options
+      const reverified = await reverifyOpsDomains({ fetcher, clock, budgetMs: REVERIFY_MS, ...verify })
+      // WP A50: each roster account's domains, daily: certificate expiry, registration expiry and DNS drift.
+      const health = await runDomainHealth({
+        fetcher,
+        clock,
+        deadline: started + BUDGET_MS,
+        ...(readers ? { readers } : {}),
+        ...(alert ? { alert } : {}),
+      })
+      return json(response, 200, { ...reverified, health })
+    }
     const now = clock()
     if (request.method === "GET") {
       const caller = await requireOpsCaller(request, fetcher, now)

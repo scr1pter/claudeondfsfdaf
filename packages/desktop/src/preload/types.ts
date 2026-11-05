@@ -119,6 +119,16 @@ export type RemoteAPI = {
   onChange: (callback: (status: RemoteStatus) => void) => () => void
 }
 
+import type { OpsImageResult, OpsMergeResult, OpsResult } from "../main/ops"
+export type { OpsImageResult, OpsMergeResult, OpsResult } from "../main/ops"
+
+/** Production checks (WP A50): Settings → Production. The account token and GitHub sign-in stay in the main process. */
+export type OpsAPI = {
+  request: (input: unknown) => Promise<OpsResult>
+  image: (input: { card: string; n: number }) => Promise<OpsImageResult>
+  merge: (input: { repository: string; number: number; headSha?: string }) => Promise<OpsMergeResult>
+}
+
 /** Brain Vault on this computer (WP A45): Settings → Memory → Backup. The vault key stays in the main process. */
 export type VaultAPI = {
   status: () => Promise<VaultStatus>
@@ -873,6 +883,7 @@ export type ElectronAPI = {
   remote: RemoteAPI
   phoneAlerts: PhoneAlertsAPI
   vault: VaultAPI
+  ops: OpsAPI
   askHelpAssistant: (input: {
     messages: { role: "user" | "assistant"; content: string }[]
     context: string

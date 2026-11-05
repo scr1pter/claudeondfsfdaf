@@ -58,9 +58,14 @@ import { sendServerAlert } from "./web-push.js"
  */
 
 export const SHIP_DESK_LIMITS = {
-  /** Cards listed per account, and how long the index keeps a card (the longest `keepDays`). */
+  /**
+   * A card's record outlives its `expiresAt` by this (WP A50), hidden from every reader, so the ops cleanup
+   * (api/_lib/ops-cleanup.ts) can still find its images and delete them with it; the cleanup runs daily.
+   */
+  retainMs: 3 * 86_400_000,
+  /** Cards listed per account, and how long the index keeps a card (the longest `keepDays`, its retention and a day). */
   indexMax: 2_000,
-  indexKeepMs: 90 * 86_400_000,
+  indexKeepMs: 94 * 86_400_000,
   /** Cards a list answer carries. */
   listed: 50,
   /** A card's check runs are read again when it is opened, at most this often. */
@@ -311,17 +316,17 @@ async function saveCard(
       written = next !== undefined
       return next
     },
-    read.expiresAt - now,
+    read.expiresAt + SHIP_DESK_LIMITS.retainMs - now,
     fetcher,
   )
   return card ? { card, written } : undefined
 }
 
 // CARD. KEYS: the card, the run's card, the period's card meter, the account's card index. ARGV: the card, its id, the
-// plan's cards a month, the card's lifetime in ms, when the meter expires (ms), the index score, the oldest score the
-// index keeps, the most members it keeps, the index's lifetime in ms. Dedupe before increment: a card that exists
-// answers 0 and a run that already has a card 2, before the meter is read; -1 when the month's cards are used; 1 when
-// the card was made and counted.
+// plan's cards a month, the card's lifetime in ms (its retention included), when the meter expires (ms), the index
+// score, the oldest score the index keeps, the most members it keeps, the index's lifetime in ms. Dedupe before
+// increment: a card that exists answers 0 and a run that already has a card 2, before the meter is read; -1 when the
+// month's cards are used; 1 when the card was made and counted.
 const CARD = [
   "if redis.call('EXISTS', KEYS[1]) == 1 then return 0 end",
   "if redis.call('EXISTS', KEYS[2]) == 1 then return 2 end",
@@ -363,7 +368,7 @@ async function createCard(
       JSON.stringify(card),
       card.id,
       String(cap),
-      String(card.expiresAt - card.createdAt),
+      String(card.expiresAt - card.createdAt + SHIP_DESK_LIMITS.retainMs),
       String(snapshot.periodEnd + METER_KEEP_MS),
       String(card.createdAt),
       String(card.createdAt - SHIP_DESK_LIMITS.indexKeepMs),
@@ -1043,6 +1048,12 @@ async function r2Send(
     signal: AbortSignal.timeout(SHIP_DESK_LIMITS.r2Ms),
     cache: "no-store",
   })
+}
+
+/** Deletes card images from `vector-media` (the ops cleanup, WP A50); false when any delete failed or R2 is off. */
+export async function deleteCardObjects(keys: readonly string[], fetcher: typeof fetch = fetch, now = Date.now()) {
+  if (!r2Configured("media")) return false
+  return deleteObjects(keys, fetcher, now)
 }
 
 /** Deletes objects from `vector-media`; a missing object is fine. Answers whether every delete was taken. */

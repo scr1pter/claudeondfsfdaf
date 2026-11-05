@@ -31,6 +31,7 @@ import {
   type OpsRepo,
   type OpsSettings,
 } from "./ops-settings.js"
+import { healthView, readHealth, type DomainHealthView } from "./ops-health.js"
 import { opsConfigured } from "./ops-worker.js"
 import { persistentStore } from "./persistent-store.js"
 import { requireUnrevokedAccount, requireUnrevokedCliToken } from "./revocation.js"
@@ -154,6 +155,8 @@ export type OpsDomainView = {
   overLimit: boolean
   /** What to publish (and keep published: verification is checked again weekly). */
   record: ReturnType<typeof verificationRecord>
+  /** WP A50: the daily job's last reading of the certificate, the registration and the DNS. */
+  health?: DomainHealthView
 }
 
 export function domainView(domain: OpsDomain, settings: OpsSettings, caps: OpsCaps | null, now: number): OpsDomainView {
@@ -172,13 +175,18 @@ export function domainView(domain: OpsDomain, settings: OpsSettings, caps: OpsCa
 }
 
 export async function listOpsDomains(account: string, fetcher: typeof fetch = fetch, now = Date.now()) {
-  const [{ settings }, caps] = await Promise.all([
+  const [{ settings }, caps, health] = await Promise.all([
     readOpsSettings(account, fetcher),
     readOpsCaps(account, fetcher, now),
+    readHealth(account, fetcher),
   ])
   const current = settings ?? newOpsSettings()
   return {
-    domains: current.domains.map((domain) => domainView(domain, current, caps, now)),
+    domains: current.domains.map((domain) => {
+      const view = domainView(domain, current, caps, now)
+      const found = view.status === "verified" ? healthView(health.domains[domain.domain]) : undefined
+      return found ? { ...view, health: found } : view
+    }),
     limits: caps ? { domains: caps.onCall.domains } : null,
     synced: !settings || !workerBehind(account, settings, now),
   }

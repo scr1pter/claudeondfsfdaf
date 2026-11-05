@@ -12,7 +12,8 @@
     "./wsl/types": "./src/wsl/types.ts",
     "./vite": "./vite.js",
     "./index.css": "./src/index.css",
-    "./judge": "./src/features/judge/verified-completion.ts"
+    "./judge": "./src/features/judge/verified-completion.ts",
+    "./ops": "./src/features/cloud/ops/ops-requests.ts"
   },
   "scripts": {
     "typecheck": "tsgo -b",

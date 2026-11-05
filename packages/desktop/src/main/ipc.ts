@@ -16,6 +16,8 @@ import { write } from "./logging"
 import { listReports, reportStatuses, sendBugReport } from "./bug-report"
 import { REMOTE_STARTING, remoteLink, remoteNotify } from "./remote-runtime"
 import { vaultBackup, vaultStarting } from "./vault-runtime"
+import { createDesktopOps } from "./ops"
+import { resolveGithubAccess } from "./github-access"
 import { askHelpAssistant, type HelpInput } from "./help-assistant"
 import { clearLocalMemory, readLocalMemory, writeLocalMemory } from "./local-memory"
 import { desktopLocalStatus } from "./local-mode"
@@ -44,6 +46,7 @@ import {
   pullRequestAccessStatus,
   pullRequestChecks,
   pullRequestDiff,
+  putPullRequestMerge,
   setUpAutomaticReviews,
   submitPullRequestReview,
   viewPullRequest,
@@ -412,6 +415,16 @@ export function registerIpcHandlers(deps: Deps) {
   })
   handle("vault-forget", (_event, version: unknown) => vault().forget(typeof version === "string" ? version : ""))
   handle("vault-delete", () => vault().remove())
+  // Production checks (WP A50): Settings → Production. The account token and the GitHub sign-in stay in the main
+  // process; the renderer gets vectordev.ai's answers, screenshots as data URLs, and the outcome of a merge it asked for.
+  const desktopOps = createDesktopOps({
+    token: () => vectorAccount.token(),
+    github: () => resolveGithubAccess(),
+    merge: (access, repo, number, merge) => putPullRequestMerge(access, repo, number, merge),
+  })
+  handle("ops-request", (_event, input: unknown) => desktopOps.request(input))
+  handle("ops-image", (_event, input: unknown) => desktopOps.image(input))
+  handle("ops-merge", (_event, input: unknown) => desktopOps.merge(input))
   handle("help-assistant-ask", (_event, input: HelpInput) => askHelpAssistant(input))
   handle("agent-teams-list", (_event, scope?: { sourcePath?: string; parentSessionId?: string }) =>
     listAgentTeams(scope),

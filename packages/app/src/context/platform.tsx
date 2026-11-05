@@ -8,6 +8,7 @@ import type { UpdaterPlatform } from "../updater"
 import type { VectorAccountPlatform } from "../vector-account"
 import type { ReportsPlatform } from "../support-reports"
 import type { PhoneAlertEvent } from "./settings"
+import type { OpsMergeRequest, OpsRequest } from "../features/cloud/ops/ops-requests"
 
 type PickerPaths = string | string[] | null
 type OpenDirectoryPickerOptions = { title?: string; multiple?: boolean }
@@ -136,6 +137,20 @@ export type VaultPlatform = {
   onChange(callback: (status: VaultStatus) => void): () => void
 }
 
+/** Production checks through the desktop's main process (WP A50): Settings → Production. No token reaches the app. */
+export type OpsPlatform = {
+  /** One of the requests in features/cloud/ops/ops-requests.ts, answered with vectordev.ai's body or its refusal. */
+  request(
+    input: OpsRequest,
+  ): Promise<
+    { ok: true; body: Record<string, unknown> } | { ok: false; status?: number; code?: string; message: string }
+  >
+  /** A Ship Desk screenshot as a data URL (PNG or WebP only). */
+  image(input: { card: string; n: number }): Promise<{ ok: true; src: string } | { ok: false; message: string }>
+  /** Undo or Approve merged with the person's own GitHub sign-in, at the commit the card showed. */
+  merge(input: OpsMergeRequest): Promise<{ ok: true; message: string } | { ok: false; code?: string; message: string }>
+}
+
 export type FatalRendererErrorLog = {
   error: string
   url: string
@@ -205,6 +220,9 @@ type PlatformBase = {
 
   /** Brain Vault on this computer (desktop only; WP A45): Settings → Memory → Backup and the nightly backup. */
   vault?: VaultPlatform
+
+  /** Production checks (desktop only; WP A50): Settings → Production, with merges from the person's own GitHub sign-in. */
+  ops?: OpsPlatform
 
   /** Saved remote-server passwords in the OS keychain (desktop only); set resolves false when none is available. */
   serverCredentials?: {

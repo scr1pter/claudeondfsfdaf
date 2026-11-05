@@ -5,7 +5,8 @@ import { alertsErrorText, alertsState, turnOffAlerts, turnOnAlerts, type PushDep
 import { planNotice } from "../status"
 import { InstallCard, Notice, Panel, type RouteProps } from "./parts"
 
-function browserPush(): PushDeps {
+/** The browser's push manager and notification permission (the Production page asks too, WP A50). */
+export function browserPush(): PushDeps {
   return {
     fetcher: (input, init) => fetch(input, init),
     pushManager: async () => {

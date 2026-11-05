@@ -279,3 +279,80 @@ button.phone-feature {
   max-height: 200px;
   overflow: auto;
 }
+
+/* Production checks (WP A50): the section tabs, incident and card pieces, and Ship Desk's before and after slider. The
+   slider's clip is set through the element's style object by features/cloud/ops/before-after.tsx, never a style
+   attribute, so the CSP's style-src 'self' holds. */
+.phone-tabs {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+}
+
+.phone-tab {
+  flex: none;
+  padding: 7px 12px;
+  border: 1px solid var(--phone-line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--phone-muted);
+  font: inherit;
+}
+
+.phone-tab[aria-selected="true"] {
+  border-color: var(--phone-accent);
+  color: var(--phone-text);
+}
+
+.phone-card[data-state="resolved"] {
+  opacity: 0.75;
+}
+
+.phone-card h3,
+.phone-card p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+a.phone-button {
+  display: inline-block;
+  text-align: center;
+  text-decoration: none;
+  color: #fff;
+}
+
+.phone-compare {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+}
+
+.phone-compare-frame {
+  position: relative;
+  display: grid;
+  border: 1px solid var(--phone-line);
+  border-radius: 10px;
+  overflow: hidden;
+  background: #000;
+}
+
+.phone-compare-image {
+  grid-area: 1 / 1;
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+.phone-compare-image--after:not(.phone-compare-image--alone) {
+  border-right: 2px solid var(--phone-accent);
+}
+
+.phone-compare-range {
+  width: 100%;
+  accent-color: var(--phone-accent);
+}
+
+.phone-compare-caption {
+  color: var(--phone-muted);
+  font-size: 13px;
+}

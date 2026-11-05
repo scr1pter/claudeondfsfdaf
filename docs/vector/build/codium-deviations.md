@@ -1687,3 +1687,71 @@ outcome, verdict, actor.login` pass. Every paid plan includes it while the plan 
   `packages/core/src/local-mode/sources.ts`, `packages/app/src/features/local/local-model.ts`, `test/ops-fixture.ts`
   (check runs), the A47 test's expectation (the intake's new fields), `docs/vector/MODEL-PLANS.md` and
   `docs/vector/owner-actions/hosted-ops.md`.
+
+## A50 Ops UI and ops crons (5 Nov 2026)
+
+- **Settings → Production is a new settings tab** (`production`, after Remote in the Personal group), not a page under
+  `features/cloud`'s cloud console. It shows on the desktop only (`platform.ops`), when the status lists an ops part and
+  the plan's public entitlements carry `ops`. The component lives in `packages/app/src/features/cloud/ops/` as the
+  contract's file list says; `settings-registry.test.ts` now counts 18 pages.
+- **One request list for both surfaces.** `ops-requests.ts` names every request the screens may make, checked by shape,
+  and is exported as `@vectordevai/app/ops` so the desktop's main process can check what the renderer asks before it
+  sends the account token. The token and the GitHub sign-in never reach the renderer. A new Vector Local source,
+  `production-checks` (account purpose, blocked under Vector Local), labels these requests; merges stay on `github`.
+- **Screenshots.** The phone shows the signed R2 link in an `<img>`, so the phone origin's CSP gains
+  `img-src https://*.r2.cloudflarestorage.com`. A static header cannot read `VECTOR_R2_ACCOUNT_ID`, so the wildcard
+  covers every R2 account; it applies to images only, and scripts, styles and connections keep their own lists. The
+  desktop instead fetches the link in main (R2 host only, no redirect, at most 5 MB) and hands the renderer a data URL
+  only when the bytes are PNG or WebP by signature.
+- **Merges on the desktop** use the person's own GitHub sign-in through `github-pr.ts`'s `putPullRequestMerge`, at the
+  card's head sha for Approve. The repository's allowed merge method is found by trying squash, merge, rebase in that
+  order (GitHub answers 405 for a method it does not allow). Each merge needs a second click. The phone opens GitHub.
+- **The roster.** The guard and the cleanup must not scan every account's snapshot, so the `ops` provisioner keeps three
+  sorted sets of account ids and times under the Codium prefix, keys §4.6 does not list: `ops:roster:<plan>` (Max or
+  Ultra, active, renewing or paused), `ops:accounts` (every account that had ops caps) and `ops:erase:due`. The guard
+  adds `ops:guard:held` and `ops:guard:checked`; domain health adds `ops:health:<account>` and `ops:health:checked`;
+  the cleanup adds `ops:cleanup:cursor`. All are erased with the account.
+- **"From active counts"** counts the roster: paused accounts are included, because §4.4 keeps On Call's checks running
+  while a payment is retried, so they cost the Worker the same.
+- **The guard's spend.** "Cloudflare's analytics API" is read as the GraphQL Analytics API for the Worker script
+  (`workersInvocationsAdaptive`) and the `OpsAccount` namespace (`durableObjectsInvocationsAdaptiveGroups`,
+  `durableObjectsPeriodicGroups`), priced at the published Workers Paid rates without the included amounts or the base
+  fee, so it errs high. It needs a new read-only token and the namespace id (`VECTOR_OPS_CF_*`, not in §4.16). The cap
+  costs default to §1.4's $0.11 and $0.90 and can be overridden (`VECTOR_OPS_GUARD_CAP_COST_{100,200}_USD`). The $5 is
+  read as a fixed monthly allowance.
+- **"Pause only accounts above their own expected usage"** compares an account's probes over the last 25 hours (the
+  Worker's hourly totals, read through `state`) with its monitors at its plan's interval plus its release watches, with
+  a 1.25× margin and 12 probes of slack. A held account is suspended at the Worker with reason `guard`; nothing else
+  changes. Holds are released once the spend is under the budget, and a hold never outlives the month it was made in,
+  even while the analytics cannot be read. Without analytics the guard holds no one and emails the owner (once a day
+  when unreadable, once a month when unset).
+- **The 75% and 100% emails** go once a month each through `notifyOwner`, with the dollar figures in the email only;
+  the cron's answer carries counts and a share.
+- **Cards and their images.** To delete a card's images when it expires, the card's record now outlives its
+  `expiresAt` by 3 days (`SHIP_DESK_LIMITS.retainMs`), hidden from every reader (A49's reads already check
+  `expiresAt`). The cleanup deletes images first and keeps the card when any delete fails. The bucket's lifecycle rules
+  stay as the backstop. One side effect: a pull request event in the 3 days after its card expired finds the hidden
+  record and makes no new card (the intake answers `exists`); after the cleanup it would make a new card, as before.
+- **Frozen accounts.** The cleanup deletes none of a frozen account's cards (§4.4: hidden, not deleted). Their records
+  and images still lapse by their own lifetimes, as every card's do; nothing extends them while frozen.
+- **"Erases after a lost dispute plus 30 days"** applies to every ops record (Worker data, settings, incidents, Release
+  Guard records, cards and images, domain health), as §4.4's cloud-computer row says for disks. A loss reversed (a won
+  appeal, the owner clearing the block, a new plan) before the 30 days removes the date.
+- **Incidents** already expire after 90 days (A48); "cleanup expires … incidents" prunes their list entries.
+- **Domain health** runs in the existing daily `/api/ops/domains` job, after A47's re-verification, for roster accounts'
+  verified domains within the plan's domain count. RDAP finds the registry from IANA's bootstrap file and asks for the
+  shortest name it knows (`example.com`, then `example.co.uk`, then one more label). DNS drift compares the zone's name
+  servers and the domain's CNAME, never address records (CDNs rotate them); an empty or failed answer is not drift.
+  Alerts are title-only (P7), tag `on-call`, also while paused, at 14 and 3 days before a certificate ends, 30 and 7
+  before a registration ends, once for a broken certificate and once per DNS change. The record keeps dates, name
+  servers and the CNAME target for 40 days.
+- **Readiness checks.** `on-call`: the ops Worker is configured. `release-guard`: also the App's own tokens
+  (`githubServerConfigured`). `ship-desk`: also the media bucket. The App, phone alerts and the `ops` switch are checked
+  as before. Listing stays the owner's call after the outside review of the revert path.
+- **Files outside A50's list:** `api/_lib/ops-guard.ts`, `ops-cleanup.ts`, `ops-health.ts`, `ops-accounts.ts`,
+  `codium-perks.ts`, `codium-provisioners.ts`, `ops-api.ts`, `safe-fetch.ts` (export only), `ship-desk.ts`,
+  `vercel.json`, `.env.example`, `packages/app/package.json`, `context/platform.tsx`, `settings-registry.ts` and its
+  test, `dialog-settings-v2.tsx`, `features/local/local-model.ts`, `phone/phone.css`, `phone/routes/notifications.tsx`,
+  `packages/core/src/local-mode/sources.ts`, the desktop's `ipc.ts`, `preload/index.ts`, `preload/types.ts` and
+  `renderer/index.tsx`, `packages/web/test/codium-configuration.test.ts`, `docs/vector/MODEL-PLANS.md` and
+  `docs/vector/owner-actions/hosted-ops.md`.

@@ -95,6 +95,11 @@ const api: ElectronAPI = {
       return () => ipcRenderer.removeListener("vault-changed", handler)
     },
   },
+  ops: {
+    request: (input) => ipcRenderer.invoke("ops-request", input),
+    image: (input) => ipcRenderer.invoke("ops-image", input),
+    merge: (input) => ipcRenderer.invoke("ops-merge", input),
+  },
   askHelpAssistant: (input) => ipcRenderer.invoke("help-assistant-ask", input),
   agentTeams: {
     list: (scope) => ipcRenderer.invoke("agent-teams-list", scope),

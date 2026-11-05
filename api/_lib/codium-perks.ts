@@ -2,10 +2,13 @@ import { PERK_IDS, type PerkId } from "../../packages/schema/src/codium-entitlem
 import { CodiumCopy } from "../../packages/schema/src/codium-copy.js"
 import { foundingWindowOpen } from "./codium-founding.js"
 import { githubAppConfiguration } from "./github-app.js"
+import { githubServerConfigured } from "./github-app-server.js"
 import { modelPlansEnabled } from "./model-plan-config.js"
 import { reviewPanelServed, secondOpinionServed } from "./model-plan-models.js"
 import { readDisabledSet, readSwitch, type SwitchName } from "./codium-switches.js"
+import { opsConfigured } from "./ops-worker.js"
 import { playbooksReady } from "./playbooks.js"
+import { r2Configured } from "./r2-presign.js"
 import { remoteConfigured } from "./remote-config.js"
 import { roadmapConfigured } from "./roadmap.js"
 import { reportEmailConfigured } from "./support-reports.js"
@@ -62,6 +65,15 @@ export const perkServices: PerkServices = {
   // salt and the vault bucket) and the read-only notice's email, since a lapsed vault is deleted only after it. The
   // `vault` switch is checked with the other switches below. Listing it waits on the legal read (contract §1.2).
   vault: () => vaultConfigured(),
+  // WP A50: the ops perks have their screens (desktop Settings → Production and the phone's Production page), their
+  // guard and their cleanup. On Call needs the ops Worker (VECTOR_OPS_ENABLED, its address and the shared secret);
+  // Release Guard also needs the App's own tokens for its revert pull requests; Ship Desk also needs them to read check
+  // runs and the media bucket for its screenshots. The `ops` switch, the GitHub App and phone alerts (On Call, Ship
+  // Desk) are checked below and in CodiumCopy.requires. Listing them stays the owner's call after the App is
+  // registered and the outside review of the revert path (contract §1.2, §8.2 step 16).
+  "on-call": () => opsConfigured(),
+  "release-guard": () => opsConfigured() && githubServerConfigured(),
+  "ship-desk": () => opsConfigured() && githubServerConfigured() && r2Configured("media"),
 }
 
 const switches: Readonly<Partial<Record<PerkId, SwitchName>>> = {

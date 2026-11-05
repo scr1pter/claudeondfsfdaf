@@ -6,6 +6,7 @@ export type SettingsTab =
   | "account"
   | "roadmap"
   | "remote"
+  | "production"
   | "providers"
   | "models"
   | "servers"
@@ -65,6 +66,27 @@ export const settingsGroups: readonly SettingsGroup[] = [
         label: "Remote",
         icon: "link",
         keywords: ["remote", "phone", "mobile", "pair", "qr", "passkey", "approve from phone", "devices"],
+      },
+      // WP A50: shown on the desktop when the account's Codium plan includes a listed ops perk (On Call, Release Guard
+      // or Ship Desk; dialog-settings-v2.tsx).
+      {
+        value: "production",
+        label: "Production",
+        icon: "warning",
+        keywords: [
+          "production",
+          "on call",
+          "release guard",
+          "ship desk",
+          "incidents",
+          "revert",
+          "rollback",
+          "domains",
+          "health checks",
+          "monitors",
+          "cards",
+          "screenshots",
+        ],
       },
       {
         value: "general",

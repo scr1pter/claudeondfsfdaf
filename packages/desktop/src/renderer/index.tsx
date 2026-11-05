@@ -264,6 +264,7 @@ const createPlatform = (windowState: DesktopWindowState): Platform => {
     reports: window.api.reports,
     remote: window.api.remote,
     vault: window.api.vault,
+    ops: window.api.ops,
     phoneAlerts: {
       send: async (alert) => void (await window.api.phoneAlerts.send(alert)),
     },

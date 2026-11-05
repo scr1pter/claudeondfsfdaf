@@ -223,7 +223,8 @@ function bareHost(hostname: string) {
   return hostname.startsWith("[") && hostname.endsWith("]") ? hostname.slice(1, -1) : hostname
 }
 
-async function systemResolve(hostname: string) {
+/** The system resolver, every address of a host name (WP A50 reuses it for its TLS reads). */
+export async function systemResolve(hostname: string) {
   const answers = await lookup(hostname, { all: true, verbatim: true })
   return answers.map((answer) => answer.address)
 }

@@ -64,12 +64,15 @@ describe("Codium deployment configuration", () => {
       { path: "/api/model-plans/sweep", schedule: "23 4 * * *" },
     ])
     // WP A44 built the Vault cleanup (contract §4.19, 03:40 UTC) and WP A47 the ops domain job (04:10 UTC: weekly
-    // re-verification; A50 adds its certificate, expiry and DNS checks); the other hosted and ops crons are to come.
+    // re-verification, with A50's certificate, expiry and DNS checks); WP A50 the ops guard (every 10 minutes) and the
+    // ops cleanup (04:40 UTC). The hosted crons are to come.
     expect(crons.filter((cron) => /^\/api\/vault\//.test(cron.path))).toEqual([
       { path: "/api/vault/cleanup", schedule: "40 3 * * *" },
     ])
     expect(crons.filter((cron) => /^\/api\/(hosted|ops)\//.test(cron.path))).toEqual([
       { path: "/api/ops/domains", schedule: "10 4 * * *" },
+      { path: "/api/ops/guard", schedule: "*/10 * * * *" },
+      { path: "/api/ops/cleanup", schedule: "40 4 * * *" },
     ])
     for (const cron of crons) {
       const pathname = new URL(cron.path, "https://fixture.example.test").pathname

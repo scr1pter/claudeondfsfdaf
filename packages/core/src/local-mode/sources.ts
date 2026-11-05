@@ -422,6 +422,17 @@ export const SOURCES: readonly Source[] = [
     note: "Screenshots go to storage through links vectordev.ai signs; the app being shot runs on this computer",
   },
   {
+    id: "production-checks",
+    purpose: "account",
+    hosts: VECTOR,
+    sends: "Your Vector sign-in, and the domains, URLs and incident actions you add or choose in Settings > Production",
+    why: "Production checks: On Call's incidents and domains, Release Guard's releases and Ship Desk's cards",
+    local: "blocked",
+    where: ["desktop"],
+    callSites: ["packages/desktop/src/main/ops.ts"],
+    note: "Ship Desk's screenshots come from storage through links vectordev.ai signs; merging a pull request uses your own GitHub sign-in (github)",
+  },
+  {
     id: "phone-alerts",
     purpose: "account",
     hosts: VECTOR,

@@ -3,11 +3,12 @@ import { filterSettingsGroups, isSettingsTab, settingsGroups, settingsItemCount 
 
 describe("settings registry", () => {
   test("keeps every settings page reachable", () => {
-    expect(settingsItemCount(settingsGroups)).toBe(17)
+    expect(settingsItemCount(settingsGroups)).toBe(18)
     expect(settingsGroups.flatMap((group) => group.items.map((item) => item.value))).toEqual([
       "account",
       "roadmap",
       "remote",
+      "production",
       "general",
       "memory",
       "local",
@@ -105,6 +106,17 @@ describe("settings registry", () => {
     for (const query of ["roadmap", "vote", "ballot", "nominate"])
       expect(filterSettingsGroups(query).flatMap((group) => group.items.map((item) => item.value))).toEqual(["roadmap"])
     expect(isSettingsTab("roadmap")).toBe(true)
+  })
+
+  test("finds Settings → Production by what people call the ops perks, right after Remote (WP A50)", () => {
+    const personal = settingsGroups[0]!.items.map((item) => item.value)
+    expect(personal.indexOf("production")).toBe(personal.indexOf("remote") + 1)
+    expect(settingsGroups[0]!.items.find((item) => item.value === "production")?.label).toBe("Production")
+    for (const query of ["production", "On Call", "Release Guard", "Ship Desk", "incidents", "revert", "domains"])
+      expect(filterSettingsGroups(query).flatMap((group) => group.items.map((item) => item.value))).toEqual([
+        "production",
+      ])
+    expect(isSettingsTab("production")).toBe(true)
   })
 
   test("returns the complete registry for whitespace", () => {

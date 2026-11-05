@@ -109,6 +109,7 @@ const NAMES: Record<string, string> = {
   "phone-alerts": "Phone alerts",
   "brain-vault": "Brain Vault",
   "ship-desk": "Ship Desk",
+  "production-checks": "Production checks",
   "release-notes": "Release notes",
   "site-assets": "Release note pictures",
   updates: "Updates",
