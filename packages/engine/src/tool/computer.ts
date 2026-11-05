@@ -743,6 +743,16 @@ export const ComputerTool = Tool.define(
                         pid: inspect.pid,
                         ...(inspect.element?.ref ? { ref: inspect.element.ref } : {}),
                         ...(inspect.element?.elementId ? { elementId: inspect.element.elementId } : {}),
+                        ...(inspect.menu
+                          ? {
+                              menu: {
+                                path: [...inspect.menu.path],
+                                ...(inspect.menu.shortcut !== undefined
+                                  ? { shortcut: [...inspect.menu.shortcut] }
+                                  : {}),
+                              },
+                            }
+                          : {}),
                       },
                 ...(inspect.element?.label
                   ? { targetName: Computer.clean(inspect.element.label, Computer.LIMITS.labelChars) }

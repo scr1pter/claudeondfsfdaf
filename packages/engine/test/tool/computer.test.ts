@@ -404,8 +404,36 @@ function observedMenu(menuPath: readonly string[] = ["File", "Send"], menuShortc
   return value
 }
 
+const windowsMenuIdentity: Computer.WindowsAumidIdentity = {
+  platform: "windows",
+  kind: "aumid",
+  aumid: "Example.Notes!App",
+  system: false,
+  verified: true,
+  name: "Notes",
+  pid: 500,
+}
+function observedWindowsMenu(menu: Computer.WindowMenu): WindowInspect {
+  const value = Schema.decodeUnknownSync(Computer.InspectResult, { onExcessProperty: "error" })({
+    ...observedInspect,
+    app: windowsMenuIdentity,
+    element: {
+      role: "MenuItem",
+      label: menu.path.at(-1),
+      ref: "ui_1",
+      elementId: "native-menu-1",
+      secure: false,
+      enabled: true,
+      editable: false,
+    },
+    menu,
+  })
+  if (value.scope === "app-menu") throw new Error("Expected a real Windows window-menu observation")
+  return value
+}
+
 type DesktopFixture = {
-  identity: Computer.MacIdentity
+  identity: Computer.AppIdentity
   category: Computer.InspectResult["category"]
   verdict?: Computer.AccessVerdict
   inspect: Computer.InspectResult
@@ -589,7 +617,7 @@ const toolCase = Effect.fn("test.computerToolCase")(function* <A, E, R>(
       }
     if (body.command === "status")
       return {
-        platform: "macos",
+        platform: desktop.identity.platform === "windows" ? "windows" : "macos",
         backendVersion: "test",
         permissions: { screen: "granted", accessibility: "granted" },
         displays: [{ id: "display-1", name: "Display 1", bounds: desktop.frame.bounds, scale: 1, primary: true }],
@@ -880,7 +908,7 @@ for (const reason of ["policy", "changed", "unverified", "category"] as const) {
         // A desktop verdict without an explanation must not hide the engine's own approval ceiling.
         desktop.verdict = { verdict: "ask", canAlways: true, companyAllowed: false, changed: reason === "changed" }
         if (reason === "policy") fixture.config = { computer: { allow_always: false } }
-        if (reason === "unverified") desktop.identity = { ...desktop.identity, verified: false, teamId: undefined }
+        if (reason === "unverified") desktop.identity = { ...appIdentity, verified: false, teamId: undefined }
         if (reason === "category") desktop.category = "browser"
         yield* execute({ action: "screenshot", app: "Notes" })
         expect(desktop.requests).toHaveLength(1)
@@ -903,7 +931,7 @@ for (const identity of [
     () =>
       toolCase(({ desktop, execute }) =>
         Effect.gen(function* () {
-          desktop.identity = { ...desktop.identity, ...identity }
+          desktop.identity = { ...appIdentity, ...identity }
           yield* execute({ action: "screenshot", app: "Notes" })
           expect(desktop.requests).toHaveLength(1)
           expect(desktop.requests[0].metadata.target).toMatchObject({
@@ -921,7 +949,7 @@ for (const identity of [
 toolTests.instance("an app Vector built still asks and unverified identities do not offer Always", () =>
   toolCase(({ desktop, execute }) =>
     Effect.gen(function* () {
-      desktop.identity = { ...desktop.identity, verified: false, teamId: undefined }
+      desktop.identity = { ...appIdentity, verified: false, teamId: undefined }
       desktop.verdict = {
         verdict: "ask",
         canAlways: false,
@@ -1257,6 +1285,131 @@ toolTests.instance("menu consent uses the actual desktop path and element withou
       expect(() =>
         Schema.decodeUnknownSync(Computer.SensitiveAskMetadata, { onExcessProperty: "error" })(asks[0].metadata),
       ).not.toThrow()
+    }),
+  ),
+)
+
+toolTests.instance("a live Windows localized menu gate roundtrips exact observed once-consent metadata", () =>
+  toolCase(({ desktop, execute }) =>
+    Effect.gen(function* () {
+      desktop.identity = windowsMenuIdentity
+      desktop.inspect = { ...observedInspect, app: windowsMenuIdentity }
+      desktop.state = { ...desktop.state, backend: "local-windows", mode: "foreground" }
+      const menu = { path: ["Édition", "Coller"], shortcut: ["Control", "v"] }
+      const text = "Owner copied text beyond the displayed preview ".repeat(3)
+      const pending = { ...observedWindowsMenu(menu), clipboard: { agentOwned: false, text } }
+      const acts: Extract<Computer.BridgeRequest, { command: "act" }>[] = []
+      desktop.handle = ({ body }) => {
+        if (body.command !== "act") return
+        acts.push(body)
+        if (acts.length === 1) {
+          desktop.inspect = pending
+          return {
+            done: 0,
+            state: desktop.state,
+            pending: { index: 0, kind: "sensitive", why: "paste", inspect: pending },
+          }
+        }
+        const request = desktop.requests.find((request) => request.id === body.approvals?.[0]?.requestID)
+        expect(request?.permission).toBe("computer_sensitive")
+        const receipt = Schema.decodeUnknownSync(Computer.SensitiveAskMetadata, { onExcessProperty: "error" })(
+          request?.metadata,
+        )
+        expect(receipt.target).toEqual({
+          appKey: Computer.appKey(windowsMenuIdentity),
+          appName: "Notes",
+          windowId: "window-1",
+          pid: 500,
+          ref: "ui_1",
+          elementId: "native-menu-1",
+          menu,
+        })
+        expect(receipt.clipboardHash).toBe(createHash("sha256").update(text).digest("hex"))
+        expect(receipt.stepDigest).toBe(ComputerSensitive.digest(body.steps[0]))
+      }
+      const result = yield* execute({ action: "click", ref: "ui_1", intent: "Select the observed menu" })
+      expect(result.metadata.code).toBeUndefined()
+      const asks = desktop.requests.filter((request) => request.permission === "computer_sensitive")
+      expect(asks).toHaveLength(1)
+      expect(asks[0].always).toEqual([])
+      expect(asks[0].metadata).toMatchObject({ why: "paste", targetName: "Coller", target: { menu } })
+      expect(acts).toHaveLength(2)
+      expect(acts[1].approvals).toEqual([{ index: 0, requestID: asks[0].id }])
+    }),
+  ),
+)
+
+toolTests.instance("a Windows pending menu preserves positively absent accelerator evidence in its ask", () =>
+  toolCase(({ desktop, execute }) =>
+    Effect.gen(function* () {
+      desktop.identity = windowsMenuIdentity
+      desktop.inspect = { ...observedInspect, app: windowsMenuIdentity }
+      desktop.state = { ...desktop.state, backend: "local-windows", mode: "foreground" }
+      const menu = { path: ["Fichier", "Action"] }
+      const pending = observedWindowsMenu(menu)
+      const acts: Extract<Computer.BridgeRequest, { command: "act" }>[] = []
+      desktop.handle = ({ body }) => {
+        if (body.command !== "act") return
+        acts.push(body)
+        if (acts.length === 1) {
+          desktop.inspect = pending
+          return {
+            done: 0,
+            state: desktop.state,
+            pending: { index: 0, kind: "sensitive", why: "flagged", inspect: pending },
+          }
+        }
+      }
+      const result = yield* execute({ action: "click", ref: "ui_1" })
+      expect(result.metadata.code).toBeUndefined()
+      const asks = desktop.requests.filter((request) => request.permission === "computer_sensitive")
+      expect(asks).toHaveLength(1)
+      const receipt = Schema.decodeUnknownSync(Computer.SensitiveAskMetadata, { onExcessProperty: "error" })(
+        asks[0].metadata,
+      )
+      expect(receipt.why).toBe("flagged")
+      expect(receipt.target.menu).toEqual(menu)
+      expect(receipt.target.menu).not.toHaveProperty("shortcut")
+      expect(acts).toHaveLength(2)
+      expect(acts[1].approvals).toEqual([{ index: 0, requestID: asks[0].id }])
+    }),
+  ),
+)
+
+toolTests.instance("a changed Windows menu ancestry cannot reuse a prior reason's once-consent proof", () =>
+  toolCase(({ desktop, execute }) =>
+    Effect.gen(function* () {
+      desktop.identity = windowsMenuIdentity
+      desktop.inspect = observedWindowsMenu({ path: ["Café", "Send"] })
+      desktop.state = { ...desktop.state, backend: "local-windows", mode: "foreground" }
+      const acts: Extract<Computer.BridgeRequest, { command: "act" }>[] = []
+      desktop.handle = ({ body }) => {
+        if (body.command !== "act") return
+        acts.push(body)
+        if (acts.length !== 1) return
+        desktop.inspect = observedWindowsMenu({ path: ["Cafe\u0301", "Send"] })
+        return {
+          done: 0,
+          state: desktop.state,
+          pending: { index: 0, kind: "sensitive", why: "flagged", inspect: desktop.inspect },
+        }
+      }
+      const result = yield* execute({ action: "click", ref: "ui_1" })
+      expect(result.metadata.code).toBeUndefined()
+      const asks = desktop.requests.filter((request) => request.permission === "computer_sensitive")
+      expect(asks.map((request) => request.metadata.why)).toEqual(["send", "send", "flagged"])
+      const receipts = asks.map((request) =>
+        Schema.decodeUnknownSync(Computer.SensitiveAskMetadata, { onExcessProperty: "error" })(request.metadata),
+      )
+      expect(receipts[0].target.menu).toEqual({ path: ["Café", "Send"] })
+      expect(receipts[1].target.menu).toEqual({ path: ["Cafe\u0301", "Send"] })
+      expect(receipts[2].target.menu).toEqual(receipts[1].target.menu)
+      expect(acts).toHaveLength(2)
+      expect(acts[1].approvals).toEqual([
+        { index: 0, requestID: asks[1].id },
+        { index: 0, requestID: asks[2].id },
+      ])
+      expect(acts[1].approvals?.some((approval) => approval.requestID === asks[0].id)).toBe(false)
     }),
   ),
 )
@@ -1776,7 +1929,7 @@ for (const [name, input, scrolls] of [
 toolTests.instance("a verified app path resolves before launch and uses only its genuine app approval", () =>
   toolCase(({ desktop, execute, bridge }) =>
     Effect.gen(function* () {
-      desktop.identity = { ...desktop.identity, path: "/Applications/Resolved Notes.app" }
+      desktop.identity = { ...appIdentity, path: "/Applications/Resolved Notes.app" }
       const result = yield* execute({ action: "open_app", app: "/Applications/Notes Alias.app" })
       expect(result.metadata.code).toBeUndefined()
       expect(desktop.requests.map((request) => request.permission)).toEqual(["computer_app"])
@@ -1863,7 +2016,7 @@ for (const lookup of ["name", "key"] as const) {
         }
         const program = { ...descriptor, key: ComputerProgram.key(descriptor) }
         desktop.identity = {
-          ...desktop.identity,
+          ...appIdentity,
           name: program.name,
           verified: false,
           path: program.path,
