@@ -57,10 +57,55 @@ const nativeCommand: NativeCommand = (command, args, options) =>
       [...args],
       { cwd: options.cwd, env: options.env, timeout: options.timeoutMs, maxBuffer: 1024 * 1024 },
       (error, stdout, stderr) => {
-        resolve({ code: error ? (typeof error.code === "number" ? error.code : 1) : 0, stdout, stderr })
+        resolve({
+          code: error ? (typeof error.code === "number" ? error.code : 1) : 0,
+          stdout,
+          stderr,
+          ...(error?.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER"
+            ? { failureReason: "output-cap" as const }
+            : error?.killed
+              ? { failureReason: "timed-out" as const }
+              : error && typeof error.code === "string"
+                ? { failureReason: "spawn-failed" as const }
+                : {}),
+        })
       },
     )
   })
+
+/** Fixed build-diagnostic reasons; paths, certificate subjects and arbitrary command output stay private. */
+export function computerHelperCodeSignFailure(result: {
+  stdout: string
+  stderr: string
+  failureReason?: "timed-out" | "output-cap" | "spawn-failed"
+}) {
+  if (result.failureReason === "timed-out") return "codesign.timed-out"
+  if (result.failureReason === "output-cap") return "codesign.output-cap"
+  if (result.failureReason === "spawn-failed") return "codesign.spawn-failed"
+  const output = `${result.stdout}\n${result.stderr}`
+  if (/errSecInternalComponent/i.test(output)) return "codesign.security-internal"
+  if (
+    /errSecAuthFailed|errSecInteractionNotAllowed|user interaction is not allowed|CSSMERR_CSP_NO_USER_INTERACTION/i.test(
+      output,
+    )
+  )
+    return "codesign.keychain-access"
+  if (
+    /no identity found|specified item could not be found|no matching identity|does not exist in the keychain/i.test(
+      output,
+    )
+  )
+    return "codesign.identity-missing"
+  if (
+    /CSSMERR_TP_NOT_TRUSTED|CSSMERR_TP_INVALID_CERTIFICATE|unable to build chain|certificate.*not trusted/i.test(output)
+  )
+    return "codesign.certificate-trust"
+  if (/timestamp.*(?:unavailable|failed|invalid|expected|could not)|(?:unable|failed) to.*timestamp/i.test(output))
+    return "codesign.timestamp"
+  if (/resource fork|unsealed contents|invalid Info\.plist|bundle format.*(?:unrecognized|invalid)/i.test(output))
+    return "codesign.input-invalid"
+  return "codesign.failed"
+}
 
 function command(dependencies: SigningDependencies) {
   const directory = path.resolve(dependencies.directory ?? packageDirectory)
@@ -70,7 +115,7 @@ function command(dependencies: SigningDependencies) {
       env: dependencies.environment ?? process.env,
       timeoutMs: 120_000,
     })
-    if (result.code !== 0) throw new Error(message)
+    if (result.code !== 0) throw new Error(`${message} [${computerHelperCodeSignFailure(result)}]`)
     return `${result.stdout}\n${result.stderr}`
   }
 }

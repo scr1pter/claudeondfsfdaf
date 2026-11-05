@@ -8,6 +8,7 @@ import { APP_IDS } from "./channel-ids"
 import { binaryArchitectures } from "./verify-native"
 import {
   computerHelperSigningIgnore,
+  computerHelperCodeSignFailure,
   finalizeComputerHelperMacSigning,
   prepareComputerHelperMacSigning,
   installUnsignedMacComputerHelperFuses,
@@ -95,6 +96,23 @@ async function arm(f: Awaited<ReturnType<typeof fixture>>) {
 }
 
 describe("computer helper macOS signing", () => {
+  test("codesign diagnostics expose only fixed failure reasons", () => {
+    const cases = [
+      ["errSecInternalComponent", "codesign.security-internal"],
+      ["User interaction is not allowed", "codesign.keychain-access"],
+      ["The specified item could not be found in the keychain", "codesign.identity-missing"],
+      ["unable to build chain to self-signed root", "codesign.certificate-trust"],
+      ["A timestamp was expected but was not found", "codesign.timestamp"],
+      ["resource fork, Finder information, or similar detritus not allowed", "codesign.input-invalid"],
+      ["/private/fixture/secret arbitrary certificate subject", "codesign.failed"],
+    ] as const
+    for (const [stderr, reason] of cases) expect(computerHelperCodeSignFailure({ stdout: "", stderr })).toBe(reason)
+    for (const failureReason of ["timed-out", "output-cap", "spawn-failed"] as const)
+      expect(computerHelperCodeSignFailure({ stdout: "", stderr: "private", failureReason })).toBe(
+        `codesign.${failureReason}`,
+      )
+  })
+
   test("ad-hoc signing uses only the helper plist, runtime and exact beta identifier", async () => {
     const f = await fixture("beta")
     try {
@@ -731,7 +749,7 @@ test.skipIf(process.platform !== "darwin" || !process.env.VECTOR_TEST_CODESIGN_I
           }),
         },
         { appInfo: { id: APP_IDS.dev }, projectDir: sourceDirectory },
-        { environment: {} },
+        { environment: process.env },
       )
       await verifyComputerHelperMacSignature({
         app,

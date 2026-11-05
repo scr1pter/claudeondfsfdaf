@@ -407,11 +407,9 @@ jobs:
           cleanup() {
             result=$?
             trap - EXIT
-            if [[ -f "$certificate" ]]; then
-              sudo /usr/bin/security remove-trusted-cert -d "$certificate" >/dev/null 2>&1 || true
+            if ! bash "$GITHUB_WORKSPACE/.github/scripts/computer-helper-signing-cleanup.sh"; then
+              if [[ "$result" == 0 ]]; then result=1; fi
             fi
-            /usr/bin/security delete-keychain "$keychain" >/dev/null 2>&1 || true
-            rm -rf "$signing_dir"
             exit "$result"
           }
           trap cleanup EXIT
@@ -445,12 +443,7 @@ jobs:
         timeout-minutes: 2
         run: |
           set -euo pipefail
-          signing_dir="$RUNNER_TEMP/vector-hands-signing-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          if [[ -f "$signing_dir/signing.crt" ]]; then
-            sudo /usr/bin/security remove-trusted-cert -d "$signing_dir/signing.crt" >/dev/null 2>&1 || true
-          fi
-          /usr/bin/security delete-keychain "$signing_dir/signing.keychain-db" >/dev/null 2>&1 || true
-          rm -rf "$signing_dir"
+          bash "$GITHUB_WORKSPACE/.github/scripts/computer-helper-signing-cleanup.sh"
       - name: Install the exact pinned Electron runtime
         if: ${{ needs.plan.outputs.desktop == 'true' }}
         timeout-minutes: 5
