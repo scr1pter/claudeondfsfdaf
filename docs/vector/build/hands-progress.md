@@ -798,3 +798,8 @@ Matching Mac job127262202251 in42032469029 passes measured11/native checks, then
 The generic Electron fixture now starts through a fixed local CJS catch boundary, imports only its fixed sibling bundle and reports allowlisted loader code/name categories. This exposes module-load errors hidden by Electron's default error dialog without emitting arbitrary exception text, images, credentials or paths. Native-stage entrypoints/argv/pins remain unchanged. Report/diagnostic19 tests/107 assertions, actual source graph/compiler metadata12/38 and desktop typecheck pass.
 
 Focused Node run42034417496 after the production lifetime repair no longer reports a repeated acquire, but still fails the strict tool/image/approval/capture sequence. The unchanged assertions now include failure-only closed status/errorcode/command/count/presence facts so the next actual run can identify the remaining cause. Engine typecheck passes; no successful four-turn Node result is claimed yet.
+
+
+### C8 schema-valid fake UI reference
+
+Closed facts in focused Node run42036080080 at0634dba7 prove the repaired lifetime: screenshot completes with its exact image attachment and frame, one acquired lease persists, app approval is consumed, and task end cancels/releases it. Click then fails after two inspect calls before any sensitive ask or act. The fixture used ui_smoke_send, but the actual UiRef schema requires ui_ followed by1–6digits. Optional screenshot focus inspection may fail quietly, while required click inspection correctly rejects it. The fixture and both exact approval comparisons now use ui_1. No production validation, permission, frame, digest, image or cleanup assertion is relaxed. Actual focused Node execution follows.

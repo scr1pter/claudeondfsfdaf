@@ -435,7 +435,7 @@ async function startComputerBridge(project: string) {
     element: {
       role: "AXButton",
       label: "Send",
-      ref: "ui_smoke_send",
+      ref: "ui_1",
       elementId: "smoke-send-element",
       secure: false,
       enabled: true,
@@ -608,7 +608,7 @@ async function startComputerBridge(project: string) {
           metadata.target.appKey === COMPUTER_KEY &&
           metadata.target.windowId === "smoke-window" &&
           metadata.target.pid === COMPUTER_APP.pid &&
-          metadata.target.ref === "ui_smoke_send" &&
+          metadata.target.ref === "ui_1" &&
           metadata.target.elementId === "smoke-send-element",
         "sensitive proof changed the clicked target, frame or action",
       )
@@ -749,7 +749,7 @@ async function runComputerTurn(
             metadata.frame === bridge.state.frame &&
             metadata.target.pid === COMPUTER_APP.pid &&
             metadata.target.windowId === "smoke-window" &&
-            metadata.target.ref === "ui_smoke_send" &&
+            metadata.target.ref === "ui_1" &&
             metadata.target.elementId === "smoke-send-element",
       "unexpected computer permission or target",
     )
