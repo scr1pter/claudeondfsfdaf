@@ -611,16 +611,16 @@ final class InputNative {
         }
 
         func translate(_ code: UInt16, _ flags: UInt64) -> String? {
-            withExtendedLifetime((selected, source, data)) {
+            withExtendedLifetime((selected, source, data)) { () -> String? in
                 guard let bytes = CFDataGetBytePtr(data), Int(bitPattern: bytes) % MemoryLayout<UCKeyboardLayout>.alignment == 0 else { return nil }
                 let keyboard = UnsafeRawPointer(bytes).assumingMemoryBound(to: UCKeyboardLayout.self)
                 var dead: UInt32 = 0
-                var length: UniCharCount = 0
+                var length: Int = 0
                 var characters = [UniChar](repeating: 0, count: 8)
                 let status = characters.withUnsafeMutableBufferPointer { output in
                     UCKeyTranslate(keyboard, code, UInt16(kUCKeyActionDown), InputNative.carbonModifiers(flags), keyboardType,
                         OptionBits(1 << Int(kUCKeyTranslateNoDeadKeysBit)), &dead,
-                        UniCharCount(output.count), &length, output.baseAddress!)
+                        output.count, &length, output.baseAddress!)
                 }
                 guard status == noErr, length > 0, Int(length) <= characters.count, InputNative.validUnicode(Array(characters.prefix(Int(length)))) else { return nil }
                 return String(decoding: characters.prefix(Int(length)), as: UTF16.self)
