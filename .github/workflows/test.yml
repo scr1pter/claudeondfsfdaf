@@ -51,6 +51,7 @@ jobs:
     uses: ./.github/workflows/computer-helper.yml
     permissions:
       contents: read
+      actions: read
     with:
       artifact-suffix: pr-${{ github.sha }}
       windows-only: ${{ github.event_name == 'workflow_dispatch' && inputs.computer_helper && inputs.computer_helper_windows_only || false }}

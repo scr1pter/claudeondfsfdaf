@@ -78,6 +78,8 @@ test("the native workflow has safe reusable/manual defaults and the temporary CI
     expect(inputs["full-desktop-e2e"]).toMatchObject({ type: "boolean", default: true })
     expect(inputs["isolated-desktop"]).toMatchObject({ type: "boolean", default: false })
     expect(inputs["windows-only"]).toMatchObject({ type: "boolean", default: false })
+    expect(inputs["reuse-artifacts"]).toMatchObject({ type: "boolean", default: false })
+    expect(inputs["helper-channel"]).toMatchObject({ default: "prod" })
   }
   const outputs = record(record(events.workflow_call).outputs)
   for (const platform of ["darwin", "win32"])
@@ -129,10 +131,13 @@ test("Windows scenario isolation is explicit and confined to opt-in privileged s
 test("native actions are pinned, read-only and do not restore helper binaries from caches", () => {
   expect(helper.document.permissions).toEqual({ contents: "read" })
   expect(helper.source).not.toMatch(/\$\{\{[^}]*\bsecrets\./)
-  for (const value of Object.values(jobs)) {
+  for (const [name, value] of Object.entries(jobs)) {
     const current = record(value)
     expect(current.secrets).toBeUndefined()
-    if (current.permissions !== undefined) expect(current.permissions).toEqual({ contents: "read" })
+    if (current.permissions !== undefined)
+      expect(current.permissions).toEqual(
+        name === "mac-build" || name === "windows-build" ? { contents: "read", actions: "read" } : { contents: "read" },
+      )
     for (const step of steps(current)) {
       if (typeof step.uses !== "string") continue
       expect(step.uses).toMatch(/^[\w.-]+\/[\w./-]+@[a-f0-9]{40}$/)
@@ -152,10 +157,10 @@ test("every native runner installs frozen dependencies without package scripts",
   }
 })
 
-test("the normal test workflow reuses the native lane with only contents read", () => {
+test("the normal test workflow supplies only the native lane's read permissions", () => {
   const reuse = record(record(main.document.jobs)["computer-helper"])
   expect(reuse.uses).toBe("./.github/workflows/computer-helper.yml")
-  expect(reuse.permissions).toEqual({ contents: "read" })
+  expect(reuse.permissions).toEqual({ contents: "read", actions: "read" })
   expect(reuse.secrets).toBeUndefined()
   expect(reuse["timeout-minutes"]).toBeUndefined()
   expect(record(reuse.with)["artifact-suffix"]).toContain("github.sha")
@@ -312,7 +317,7 @@ test("the native lane covers supported runners and only expands PR matrices for 
 
 test("macOS rebuilds and checks shipping bytes before enforcing the measured lock", () => {
   const mac = steps(job("mac-build"))
-  const builds = mac.flatMap((step) =>
+  const builds = mac.filter((step) => step.id === "build").flatMap((step) =>
     typeof step.run === "string"
       ? step.run
           .split("\n")
@@ -325,7 +330,7 @@ test("macOS rebuilds and checks shipping bytes before enforcing the measured loc
       : [],
   )
   expect(builds).toHaveLength(2)
-  for (const build of builds) expect(build).toMatch(/--arch\s+universal.*--channel\s+prod/)
+  for (const build of builds) expect(build).toMatch(/--arch\s+universal.*--channel\s+"\$VECTOR_CHANNEL"/)
   const output = builds.map((build) => build.match(/--out\s+(\S+)/)?.[1])
   expect(output.every(Boolean)).toBe(true)
   expect(new Set(output).size).toBe(2)
@@ -359,16 +364,19 @@ test("shipping and test archives preserve executable modes while failure diagnos
     for (const step of steps(record(value))) {
       if (typeof step.uses !== "string" || !step.uses.startsWith("actions/upload-artifact@")) continue
       const upload = record(step.with)
-      expect(upload.overwrite).toBe(true)
       expect(upload["retention-days"]).toBe(14)
       expect(upload.name).toContain("needs.plan.outputs.suffix")
       if (typeof upload.path !== "string") throw new Error("Artifact uploads need explicit paths.")
       const filename = upload.path.split("/").at(-1)!
       if (required.has(filename)) {
+        expect(expression(String(upload.overwrite), { "reuse-artifacts": false })).toBe(true)
+        expect(expression(String(upload.overwrite), { "reuse-artifacts": true })).toBe(false)
+        expect(step.if).toContain("steps.restore.outputs.restored")
         required.delete(filename)
         expect(upload["if-no-files-found"]).toBe("error")
         continue
       }
+      expect(upload.overwrite).toBe(true)
       expect(upload.path).toMatch(/\.json$/)
       expect(step.if).toContain("always()")
       if (filename === "identity.lock.computed.json") candidates++

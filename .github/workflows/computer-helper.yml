@@ -3,6 +3,10 @@ name: Computer helper
 on:
   workflow_call:
     inputs:
+      helper-channel:
+        type: string
+        required: false
+        default: prod
       artifact-suffix:
         type: string
         required: false
@@ -23,6 +27,10 @@ on:
         type: boolean
         required: false
         default: false
+      reuse-artifacts:
+        type: boolean
+        required: false
+        default: false
     outputs:
       darwin-digest:
         description: Source digest of the verified macOS helper
@@ -32,6 +40,12 @@ on:
         value: ${{ jobs.windows-build.outputs.digest }}
   workflow_dispatch:
     inputs:
+      helper-channel:
+        description: Exact desktop/helper identity channel
+        type: choice
+        options: [prod, beta, dev]
+        required: false
+        default: prod
       artifact-suffix:
         description: Artifact suffix (letters, digits, dot, underscore or hyphen)
         type: string
@@ -57,6 +71,11 @@ on:
         type: boolean
         required: false
         default: false
+      reuse-artifacts:
+        description: Restore immutable shipping and test artifacts from this same run before rebuilding
+        type: boolean
+        required: false
+        default: false
   push:
     branches: ["ci/computer-**"]
 
@@ -64,11 +83,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-computer-helper-${{ inputs['windows-only'] && 'windows-only' || 'all' }}-${{ github.ref }}-${{ inputs['artifact-suffix'] || github.sha }}
+  group: ${{ github.workflow }}-computer-helper-${{ inputs['windows-only'] && 'windows-only' || 'all' }}-${{ github.ref }}-${{ inputs['helper-channel'] || 'prod' }}-${{ inputs['artifact-suffix'] || github.sha }}
   cancel-in-progress: true
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  VECTOR_CHANNEL: ${{ inputs['helper-channel'] || 'prod' }}
 
 jobs:
   plan:
@@ -97,6 +117,10 @@ jobs:
           HEAD_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
+          # HELPER_CHANNEL_GUARD_BEGIN
+          case "$VECTOR_CHANNEL" in prod|beta|dev) ;; *) echo "::error::Choose helper-channel prod, beta or dev."; exit 1 ;; esac
+          if [[ "$VECTOR_CHANNEL" != prod ]]; then ARTIFACT_SUFFIX="$ARTIFACT_SUFFIX-$VECTOR_CHANNEL"; fi
+          # HELPER_CHANNEL_GUARD_END
           if [[ ! "$ARTIFACT_SUFFIX" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]]; then
             echo "::error::The artifact suffix has unsupported characters."
             exit 1
@@ -133,6 +157,9 @@ jobs:
     if: ${{ !inputs['windows-only'] }}
     runs-on: macos-15
     timeout-minutes: 60
+    permissions:
+      contents: read
+      actions: read
     env:
       DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
     outputs:
@@ -164,14 +191,30 @@ jobs:
         timeout-minutes: 10
         working-directory: .
         run: bun install --frozen-lockfile --ignore-scripts
-      - name: Build the production universal helper twice
+      - name: Restore immutable helpers from an earlier attempt
+        id: restore
+        if: ${{ inputs['reuse-artifacts'] }}
+        timeout-minutes: 5
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_SUFFIX: ${{ needs.plan.outputs.suffix }}
+        run: bun --no-env-file ./scripts/computer-helper-artifact.ts --mode native-darwin --suffix "$ARTIFACT_SUFFIX" --destination native/out/darwin
+      - name: Verify restored macOS source and signature before native checks
+        if: ${{ steps.restore.outputs.restored == 'true' }}
+        timeout-minutes: 3
+        env:
+          VECTOR_COMPUTER_HELPER_PREBUILT: "true"
+        run: bun --no-env-file ./scripts/build-computer-helper.ts --platform darwin --arch universal --channel "$VECTOR_CHANNEL" --out native/out/darwin
+      - name: Build the channel universal helper twice
         id: build
+        if: ${{ steps.restore.outputs.restored != 'true' }}
         timeout-minutes: 20
         run: |
           set -euo pipefail
-          bun --no-env-file ./scripts/build-computer-helper.ts --platform darwin --arch universal --channel prod --out native/out/darwin
-          bun --no-env-file ./scripts/build-computer-helper.ts --platform darwin --arch universal --channel prod --out native/out/darwin-repro
+          bun --no-env-file ./scripts/build-computer-helper.ts --platform darwin --arch universal --channel "$VECTOR_CHANNEL" --out native/out/darwin
+          bun --no-env-file ./scripts/build-computer-helper.ts --platform darwin --arch universal --channel "$VECTOR_CHANNEL" --out native/out/darwin-repro
       - name: Require identical shipping bytes
+        if: ${{ steps.restore.outputs.restored != 'true' }}
         timeout-minutes: 2
         run: |
           set -euo pipefail
@@ -251,11 +294,11 @@ jobs:
       # still fails until that measurement is reviewed and committed; prebuilt verification avoids a third build.
       - name: Enforce the measured production identity lock
         id: lock
-        if: ${{ success() }}
+        if: ${{ success() && (inputs['helper-channel'] || 'prod') == 'prod' }}
         timeout-minutes: 3
         env:
           VECTOR_COMPUTER_HELPER_PREBUILT: "true"
-        run: bun --no-env-file ./scripts/build-computer-helper.ts --platform darwin --arch universal --channel prod --out native/out/darwin --check-lock
+        run: bun --no-env-file ./scripts/build-computer-helper.ts --platform darwin --arch universal --channel "$VECTOR_CHANNEL" --out native/out/darwin --check-lock
       - name: Check helper signing contracts and actual Node modules
         timeout-minutes: 3
         run: |
@@ -324,6 +367,16 @@ jobs:
           fi
           /usr/bin/security delete-keychain "$signing_dir/signing.keychain-db" >/dev/null 2>&1 || true
           rm -rf "$signing_dir"
+      - name: Require the measured macOS helper version and toolchain for this channel
+        timeout-minutes: 2
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFileSync } from "node:fs"
+          const lock = JSON.parse(readFileSync("native/computer-helper/macos/identity.lock.json", "utf8"))
+          const manifest = JSON.parse(readFileSync("native/out/darwin/computer-helper.json", "utf8"))
+          if (lock.enforce !== true || lock.helperVersion !== manifest.helperVersion || lock.toolchain !== manifest.toolchain)
+            throw new Error("The channel helper does not match the measured production version and toolchain.")
+          NODE
       - name: Expose the verified source digest
         id: digest
         run: |
@@ -333,28 +386,33 @@ jobs:
           appendFileSync(process.env.GITHUB_OUTPUT, "value=" + manifest.sourceDigest + "\n")
           NODE
       - name: Archive shipping files and native test executables separately
+        if: ${{ steps.restore.outputs.restored != 'true' }}
+        env:
+          COPYFILE_DISABLE: "1"
         run: |
           set -euo pipefail
-          tar -cpf "$RUNNER_TEMP/computer-helper-darwin.tar" -C native/out/darwin VectorComputer.app computer-helper.json
-          tar -cpf "$RUNNER_TEMP/computer-helper-darwin-tests.tar" -C native/out/darwin tests
+          tar -cpf "$RUNNER_TEMP/computer-helper-darwin.tar" --format=ustar --no-xattrs --no-acls --no-fflags -C native/out/darwin VectorComputer.app computer-helper.json
+          tar -cpf "$RUNNER_TEMP/computer-helper-darwin-tests.tar" --format=ustar --no-xattrs --no-acls --no-fflags -C native/out/darwin tests
       - name: Upload shipping helper
+        if: ${{ steps.restore.outputs.restored != 'true' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: computer-helper-darwin-${{ needs.plan.outputs.suffix }}
           path: ${{ runner.temp }}/computer-helper-darwin.tar
           if-no-files-found: error
-          overwrite: true
+          overwrite: ${{ !inputs['reuse-artifacts'] }}
           retention-days: 14
       - name: Upload native tests
+        if: ${{ steps.restore.outputs.restored != 'true' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: computer-helper-darwin-tests-${{ needs.plan.outputs.suffix }}
           path: ${{ runner.temp }}/computer-helper-darwin-tests.tar
           if-no-files-found: error
-          overwrite: true
+          overwrite: ${{ !inputs['reuse-artifacts'] }}
           retention-days: 14
       - name: Preserve measured lock candidate
-        if: ${{ always() && hashFiles('packages/desktop/native/out/darwin/identity.lock.computed.json') != '' }}
+        if: ${{ always() && (inputs['helper-channel'] || 'prod') == 'prod' && hashFiles('packages/desktop/native/out/darwin/identity.lock.computed.json') != '' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: computer-helper-darwin-lock-candidate-${{ needs.plan.outputs.suffix }}
@@ -418,7 +476,9 @@ jobs:
           tar -xpf "$RUNNER_TEMP/computer-artifacts/computer-helper-darwin.tar" -C native/out/darwin
           tar -xpf "$RUNNER_TEMP/computer-artifacts/computer-helper-darwin-tests.tar" -C native/out/darwin
           /usr/bin/codesign --verify --strict native/out/darwin/VectorComputer.app
-          bun --no-env-file ./scripts/build-computer-helper.ts --platform darwin --arch universal --channel prod --out native/out/darwin --check-lock
+          lock=()
+          if [[ "$VECTOR_CHANNEL" == prod ]]; then lock=(--check-lock); fi
+          bun --no-env-file ./scripts/build-computer-helper.ts --platform darwin --arch universal --channel "$VECTOR_CHANNEL" --out native/out/darwin "${lock[@]}"
       - name: Run required grant-free native checks
         timeout-minutes: 8
         run: bun --no-env-file ./scripts/computer-helper-selftest-node.ts --platform darwin --bin native/out/darwin/VectorComputer.app/Contents/MacOS/VectorComputer --tests native/out/darwin/tests --privileged off --report "$RUNNER_TEMP/computer-darwin-matrix.json"
@@ -493,6 +553,9 @@ jobs:
     if: ${{ needs.plan.outputs.windows == 'true' }}
     runs-on: windows-2025
     timeout-minutes: 45
+    permissions:
+      contents: read
+      actions: read
     outputs:
       digest: ${{ steps.digest.outputs.value }}
     defaults:
@@ -518,10 +581,29 @@ jobs:
         run: |
           bun install --frozen-lockfile --ignore-scripts
           if ($LASTEXITCODE -ne 0) { throw "Frozen dependency installation failed." }
-      - name: Build both production helper architectures
+      - name: Restore immutable helpers from an earlier attempt
+        id: restore
+        if: ${{ inputs['reuse-artifacts'] }}
+        timeout-minutes: 5
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_SUFFIX: ${{ needs.plan.outputs.suffix }}
+        run: |
+          bun --no-env-file ./scripts/computer-helper-artifact.ts --mode native-win32 --suffix $env:ARTIFACT_SUFFIX --destination native/out/win32
+          if ($LASTEXITCODE -ne 0) { throw "Immutable Windows helper restore failed." }
+      - name: Verify restored Windows source before native checks
+        if: ${{ steps.restore.outputs.restored == 'true' }}
+        timeout-minutes: 3
+        env:
+          VECTOR_COMPUTER_HELPER_PREBUILT: "true"
+        run: |
+          bun --no-env-file ./scripts/build-computer-helper.ts --platform win32 --arch x64,arm64 --channel $env:VECTOR_CHANNEL --out native/out/win32
+          if ($LASTEXITCODE -ne 0) { throw "Restored Windows helper source verification failed." }
+      - name: Build both channel helper architectures
+        if: ${{ steps.restore.outputs.restored != 'true' }}
         timeout-minutes: 20
         run: |
-          bun --no-env-file ./scripts/build-computer-helper.ts --platform win32 --arch x64,arm64 --channel prod --out native/out/win32
+          bun --no-env-file ./scripts/build-computer-helper.ts --platform win32 --arch x64,arm64 --channel $env:VECTOR_CHANNEL --out native/out/win32
           if ($LASTEXITCODE -ne 0) { throw "The Windows native build failed." }
       - name: Run Windows unit and fresh version/probe checks
         timeout-minutes: 5
@@ -596,26 +678,29 @@ jobs:
           if ($first.sourceDigest -ne $second.sourceDigest) { throw "Windows architecture source digests differ." }
           "value=$($first.sourceDigest)" >> $env:GITHUB_OUTPUT
       - name: Archive shipping files and tests separately
+        if: ${{ steps.restore.outputs.restored != 'true' }}
         run: |
-          tar -cpf "$env:RUNNER_TEMP/computer-helper-win32.tar" -C native/out/win32 x64/vector-computer.exe x64/computer-helper.json arm64/vector-computer.exe arm64/computer-helper.json
+          tar -cpf "$env:RUNNER_TEMP/computer-helper-win32.tar" --format=ustar --no-xattrs --no-acls --no-fflags -C native/out/win32 x64/vector-computer.exe x64/computer-helper.json arm64/vector-computer.exe arm64/computer-helper.json
           if ($LASTEXITCODE -ne 0) { throw "Windows shipping archive failed." }
-          tar -cpf "$env:RUNNER_TEMP/computer-helper-win32-tests.tar" -C native/out/win32 x64/tests arm64/tests
+          tar -cpf "$env:RUNNER_TEMP/computer-helper-win32-tests.tar" --format=ustar --no-xattrs --no-acls --no-fflags -C native/out/win32 x64/tests arm64/tests
           if ($LASTEXITCODE -ne 0) { throw "Windows test archive failed." }
       - name: Upload shipping helpers
+        if: ${{ steps.restore.outputs.restored != 'true' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: computer-helper-win32-${{ needs.plan.outputs.suffix }}
           path: ${{ runner.temp }}/computer-helper-win32.tar
           if-no-files-found: error
-          overwrite: true
+          overwrite: ${{ !inputs['reuse-artifacts'] }}
           retention-days: 14
       - name: Upload native tests
+        if: ${{ steps.restore.outputs.restored != 'true' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: computer-helper-win32-tests-${{ needs.plan.outputs.suffix }}
           path: ${{ runner.temp }}/computer-helper-win32-tests.tar
           if-no-files-found: error
-          overwrite: true
+          overwrite: ${{ !inputs['reuse-artifacts'] }}
           retention-days: 14
       - name: Preserve check reports
         if: ${{ always() }}
@@ -671,7 +756,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Windows helper extraction failed." }
           tar -xpf "$env:RUNNER_TEMP/computer-artifacts/computer-helper-win32-tests.tar" -C native/out/win32
           if ($LASTEXITCODE -ne 0) { throw "Windows native test extraction failed." }
-          bun --no-env-file ./scripts/build-computer-helper.ts --platform win32 --arch arm64 --channel prod --out native/out/win32
+          bun --no-env-file ./scripts/build-computer-helper.ts --platform win32 --arch arm64 --channel $env:VECTOR_CHANNEL --out native/out/win32
           if ($LASTEXITCODE -ne 0) { throw "ARM64 native artifact verification failed." }
       - name: Run ARM64 unit and fresh version/probe checks
         timeout-minutes: 5
