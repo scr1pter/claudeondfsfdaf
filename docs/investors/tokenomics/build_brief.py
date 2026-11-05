@@ -252,7 +252,7 @@ def evidence(c, data, total):
     y -= 24
     y = text(c, "Benchmark scope", M, y, CW, 17, 23, NAVY, True)
     y = text(c, "Three single-trial pairs on Windows used the same gpt-6.1-sol model, High reasoning and one autonomous agent per runtime. Two tasks were development replications; one was held out. Results describe the tested candidate, required checks and fixed static rubric. The sample does not establish statistical significance or predict all workloads.", M, y - 10, CW, 10.6, 15.1)
-    y = text(c, "Prices are derived from recorded provider usage at the study schedule. Reviews use exact source and selected screenshots; passing checks do not certify production reliability or security. Larger multi-agent evidence is included only after a complete, settled comparison.", M, y - 11, CW, 10.6, 15.1)
+    y = text(c, "Prices are derived from recorded provider usage at the study schedule. Reviews use exact source and selected screenshots; passing checks do not certify production reliability or security. Large-team episodes are reported separately with their stopping conditions and quality limits.", M, y - 11, CW, 10.6, 15.1)
     y -= 21
     y = text(c, "Evidence register", M, y, CW, 14, 19, NAVY, True)
     for source_id in ("E1", "E2", "E6", "E3"):

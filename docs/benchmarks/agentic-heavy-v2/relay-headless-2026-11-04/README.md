@@ -65,3 +65,34 @@ throughput. This single adaptive task pair does not establish statistical
 significance, universal quality, security certification or billion-token scale.
 Earlier unresolved financial liabilities remain held separately; they are not
 silently settled or included as known costs in these two closed episodes.
+
+## Cost investigation
+
+`cost-drivers.json` reconciles every scoped receipt, including 39 Codex charges
+without a unique native-transcript join. No charge is removed for an incomplete
+join. Its classifications are descriptive heuristics, not proof that a tool call
+was unnecessary.
+
+Vector generated 276,110 output tokens versus Codex's 147,744. Reasoning tokens
+(114,422 versus 42,851) are **included** in output, not added to it. The $2.0357956
+episode-cost difference decomposes into $1.2836600 more output cost, $0.5450625
+more cache writes, $0.3317151 more cache reads, and $0.1246420 less ordinary input
+cost. Both runtimes retained one stable cache key per role and observed cache
+reads. These traces do not support a cache-key-churn diagnosis.
+
+The ten Vector wait-only turns account for $0.0941166, about 1.42% of its episode
+cost. Some waiting is useful; only two immediate timeout-to-timeout pairs were
+observed. Removing that entire category would neither be a justified quality
+preserving change nor explain the larger cost difference. Likewise, repeated
+commands may be productive verification or mutations rather than waste.
+
+The original conservative reservation uses serialized UTF-8 bytes as a text
+token upper bound. Ten admitted Vector lead requests reached its full-context
+reservation without an image. The final rejected body was not retained, so its
+exact contents are unknown. The stop establishes insufficient single-call
+reservation headroom, not an image-triggered stop or actual token exhaustion.
+
+The separate cancellation-accounting defect found during follow-up source review
+is not credited with recovering any of this cost. The closed Vector trace has no
+disconnected provider request. Subsequent production corrections and validation
+are recorded under their own revisions.

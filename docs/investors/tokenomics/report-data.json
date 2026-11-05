@@ -132,7 +132,7 @@
       ]
     },
     "scope": "Final snapshots passed 53/54 checks each. The remaining assertion expects 401 rather than 403 for the bootstrap credential; both products denied access. Vector stopped at a conservative request-reservation limit; Codex reached 300 requests during repair. Both original native audits require review. Vector scored higher in both blinded review totals, with two lower dimension scores in one review. These descriptive costs and reviews do not establish equal-quality savings. The smaller three-task result remains separate.",
-    "source_url": "https://github.com/scr1pter/claudeondfsfdaf/tree/investor-brief/docs/benchmarks/agentic-heavy-v2/relay-headless-2026-11-04",
+    "source_url": "https://github.com/scr1pter/claudeondfsfdaf/tree/adcea35db736548b4b23f6e4211bf75c89ee3ea7/docs/benchmarks/agentic-heavy-v2/relay-headless-2026-11-04",
     "blinded_review": {
       "same_rubric_and_reviewer_pool": true,
       "source_and_required_artifacts_reviewed": true,
