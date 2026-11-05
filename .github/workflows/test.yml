@@ -282,7 +282,10 @@ jobs:
         # Twelve whole-file shards keep the native isolation suite from sharing too much work with other integration
         # files. In run 41185841620 the eight-way shard containing isolation (16 minutes alone) hit this 30-minute
         # deadline while tests were still passing; the other shards took 8 to 17 minutes. Preserve test deadlines.
-        timeout-minutes: 30
+        # The shard holding isolation, task sizing and the prompt loop ran its tests in 19 minutes in run 41925753700.
+        # In runs 41943664010 and 41959395503 the same files ran 1.5 to 2 times slower and hit 30 minutes, the second
+        # with every test it reached passing. 45 leaves room for a slow Windows runner; no test's own deadline changes.
+        timeout-minutes: 45
         working-directory: packages/engine
         # Whole-file shards retain the configured preloads and per-test deadlines; print passes to locate any stall.
         run: GITHUB_ACTIONS=false bun test --timeout 30000 --shard=${{ matrix.shard }}/12
