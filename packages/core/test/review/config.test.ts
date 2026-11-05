@@ -130,6 +130,56 @@ describe("parseReviewConfig", () => {
     expect(parseReviewConfig({ json: JSON.stringify({ verify: "off" }) }).config.verify).toBe("off")
   })
 
+  test("keeps today's verify default unless the shared verify policy is opted into", () => {
+    expect(parseReviewConfig().config).toMatchObject({ verify: "blocking", verifyPolicy: "legacy" })
+    expect(parseReviewConfig({ json: JSON.stringify({ verifyPolicy: "legacy" }) }).config.verify).toBe("blocking")
+    const shared = parseReviewConfig({ json: JSON.stringify({ verifyPolicy: "shared" }) })
+    expect(shared.config).toMatchObject({ verify: "all", verifyPolicy: "shared" })
+    expect(shared.warnings).toEqual([])
+    // An explicit setting wins over the policy's default, in review.json or in REVIEW_VERIFY.
+    for (const verify of ["blocking", "off", "all"] as const)
+      expect(parseReviewConfig({ json: JSON.stringify({ verifyPolicy: "shared", verify }) }).config.verify).toBe(verify)
+    expect(
+      parseReviewConfig({ json: JSON.stringify({ verifyPolicy: "shared" }), env: { REVIEW_VERIFY: "blocking" } }).config
+        .verify,
+    ).toBe("blocking")
+    // The environment opts in, or out, over review.json, as every other variable does.
+    expect(parseReviewConfig({ env: { REVIEW_VERIFY_POLICY: " Shared " } }).config).toMatchObject({
+      verify: "all",
+      verifyPolicy: "shared",
+    })
+    expect(
+      parseReviewConfig({ json: JSON.stringify({ verifyPolicy: "shared" }), env: { REVIEW_VERIFY_POLICY: "legacy" } })
+        .config,
+    ).toMatchObject({ verify: "blocking", verifyPolicy: "legacy" })
+  })
+
+  test("a bad verify policy is a warning and changes nothing", () => {
+    const bad = parseReviewConfig({ json: JSON.stringify({ verifyPolicy: "always" }) })
+    expect(bad.config).toEqual(DEFAULT_REVIEW_CONFIG)
+    expect(bad.warnings).toEqual(['.vector/review.json: "verifyPolicy" must be "legacy", "shared"; using "legacy".'])
+    // A bad variable leaves the file's valid choice, and a bad verify falls back to that policy's default.
+    const env = parseReviewConfig({
+      json: JSON.stringify({ verifyPolicy: "shared" }),
+      env: { REVIEW_VERIFY_POLICY: "maybe", REVIEW_VERIFY: "sometimes" },
+    })
+    expect(env.config).toMatchObject({ verify: "all", verifyPolicy: "shared" })
+    expect(env.warnings).toEqual([
+      'REVIEW_VERIFY must be "blocking", "all", "off"; using "all".',
+      'REVIEW_VERIFY_POLICY must be "legacy", "shared"; using "shared".',
+    ])
+  })
+
+  test("under the shared verify policy a triage model still keeps the double-check on", () => {
+    const { config, warnings } = parseReviewConfig({
+      json: JSON.stringify({ verifyPolicy: "shared", triageModel: "openrouter/cheap", verify: "off" }),
+    })
+    expect(config.verify).toBe("all")
+    expect(warnings).toEqual([
+      '"verify": "off" is ignored while "triageModel" is set: every finding of the cheaper first pass is double-checked on the review model.',
+    ])
+  })
+
   test("warns about auto, drafts and unknown keys, and ignores them", () => {
     const { config, warnings } = parseReviewConfig({
       json: '{"auto": false, "drafts": true, "bogus": 1, "__proto__": {"maxComments": 1}, "constructor": 2}',

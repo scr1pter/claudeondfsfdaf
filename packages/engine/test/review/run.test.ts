@@ -12,7 +12,13 @@ import { Ripgrep } from "@vectordevai/core/ripgrep"
 import { ProviderV2 } from "@vectordevai/core/provider"
 import { ModelV2 } from "@vectordevai/core/model"
 import { parseUnifiedDiff } from "@vectordevai/core/review/diff"
-import { noteTriageFixedUnchecked, noteTriageUnchecked, noteVerifySkipped } from "@vectordevai/core/review/format"
+import { parseReviewConfig } from "@vectordevai/core/review/config"
+import {
+  noteTriageFixedUnchecked,
+  noteTriageUnchecked,
+  noteVerifySkipped,
+  noteVerifyUnfinished,
+} from "@vectordevai/core/review/format"
 import {
   DEFAULT_REVIEW_CONFIG,
   type ModelFinding,
@@ -1502,6 +1508,152 @@ describe("Review.run", () => {
         expect(outcome.partial).toBe("model-error")
         expect(outcome.unreviewed).toEqual(["src/list.ts"])
         expect(outcome.selection.inline).toEqual([])
+      }),
+    TIMEOUT,
+  )
+})
+
+// VS-06: one verify policy for every surface, behind the off-by-default "verifyPolicy": "shared" (D3). With it off
+// the engine keeps its own rule, which the tests above pin and these compare against.
+describe("the verify policy", () => {
+  const blocking = finding()
+  const concern = finding({ line: 2, severity: "concern", title: "index is computed but never checked" })
+  const nit = finding({
+    line: 2,
+    severity: "nit",
+    category: "maintainability",
+    title: "Name the index for what it is",
+    suggestion: "  const end = items.length",
+  })
+  const [blockingID, concernID, nitID] = Review.normalizeFindings([blocking, concern, nit], "review", LIST).map(
+    (item) => item.id,
+  )
+  const candidateIDs = (body: Record<string, unknown>) =>
+    [...lastUserText(body).matchAll(/<untrusted_candidate id="([^"]+)"/g)].map((match) => match[1])
+
+  it.instance(
+    "legacy keeps the engine's rule; shared adds every untrusted suggestion, honours an explicit setting and defaults to all",
+    () =>
+      Effect.gen(function* () {
+        const { llm, directory } = yield* useServer()
+        // Each review reports the same three findings; returns the ids the verify pass was asked about, if it ran.
+        const checked = (overrides: Partial<Review.RunInput>, verified = true) =>
+          Effect.gen(function* () {
+            const before = (yield* llm.hits).filter(VERIFY).length
+            yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report([blocking, concern, nit])))
+            if (verified) yield* llm.pushMatch(VERIFY, reply().tool("StructuredOutput", { results: [] }))
+            const outcome = yield* Review.run(input(directory, overrides))
+            const asked = (yield* llm.hits).filter(VERIFY).slice(before)
+            expect(asked).toHaveLength(verified ? 1 : 0)
+            return { outcome, ids: asked[0] ? candidateIDs(asked[0].body) : [] }
+          })
+
+        // Legacy, untrusted, "all": the engine has never sent the nit's suggestion to the verify pass.
+        const legacy = yield* checked({ trust: "untrusted", config: config({ verify: "all" }) })
+        expect(legacy.ids).toEqual([blockingID, concernID])
+        expect(legacy.outcome.notes).toEqual([])
+        const legacyBlocking = yield* checked({ trust: "untrusted", config: config({ verify: "blocking" }) })
+        expect(legacyBlocking.ids).toEqual([blockingID, nitID])
+
+        // Shared, untrusted: every suggestion is a candidate, under "all" and under an explicit "blocking".
+        const all = yield* checked({ trust: "untrusted", config: config({ verify: "all", verifyPolicy: "shared" }) })
+        expect(all.ids).toEqual([blockingID, concernID, nitID])
+        const explicit = yield* checked({
+          trust: "untrusted",
+          config: config({ verify: "blocking", verifyPolicy: "shared" }),
+        })
+        expect(explicit.ids).toEqual([blockingID, nitID])
+        // An explicit "off" still turns it off, and the findings stand unverified.
+        const off = yield* checked({ config: config({ verify: "off", verifyPolicy: "shared" }) }, false)
+        expect(off.outcome.specialists.map((item) => item.name)).toEqual(["review"])
+        expect(off.outcome.notes).toEqual([])
+
+        // From review.json: the policy alone makes "all" the default; without it the default stays "blocking".
+        const parsed = (json: object) => parseReviewConfig({ json: JSON.stringify(json), trigger: "local" }).config
+        const opted = yield* checked({ config: parsed({ verifyPolicy: "shared" }) })
+        expect(opted.ids).toEqual([blockingID, concernID])
+        const today = yield* checked({ config: parsed({}) })
+        expect(today.ids).toEqual([blockingID])
+      }),
+    TIMEOUT,
+  )
+
+  it.instance(
+    "shared: a verify pass that was skipped, denied by the budget or failed says how many findings it left unchecked",
+    () =>
+      Effect.gen(function* () {
+        const { llm, directory } = yield* useServer(PRICE)
+        const policies = ["legacy", "shared"] as const
+
+        // Skipped before it started: too little budget was left after the review.
+        const skipped = yield* Effect.forEach(policies, (verifyPolicy) =>
+          Effect.gen(function* () {
+            yield* llm.pushMatch(
+              REVIEW,
+              reply()
+                .tool("StructuredOutput", report([blocking]))
+                .usage({ input: 50_000, output: 100 }),
+            )
+            return yield* Review.run(
+              input(directory, {
+                model: priced,
+                config: config({ verify: "blocking", verifyPolicy, maxCostUsd: 0.6 }),
+              }),
+            )
+          }),
+        )
+        for (const outcome of skipped)
+          expect(outcome.specialists.at(-1)).toEqual({ name: "verify", status: "skipped", steps: 0, detail: "budget" })
+        expect(skipped.map((outcome) => outcome.notes)).toEqual([
+          [noteVerifySkipped()],
+          [noteVerifyUnfinished(1, "budget")],
+        ])
+
+        // Admitted, then denied: its first step used most of the budget, so its next step and its finalizer are
+        // refused. Legacy said nothing about it.
+        const denied = yield* Effect.forEach(policies, (verifyPolicy) =>
+          Effect.gen(function* () {
+            yield* llm.pushMatch(
+              REVIEW,
+              reply()
+                .tool("StructuredOutput", report([blocking]))
+                .usage({ input: 1_000, output: 10 }),
+            )
+            yield* llm.pushMatch(
+              VERIFY,
+              reply()
+                .tool("read", { filePath: path.join(directory, "src/list.ts") })
+                .usage({ input: 50_000, output: 10 }),
+            )
+            return yield* Review.run(
+              input(directory, {
+                model: priced,
+                config: config({ verify: "blocking", verifyPolicy, maxCostUsd: 0.6 }),
+              }),
+            )
+          }),
+        )
+        for (const outcome of denied) {
+          expect(outcome.specialists.at(-1)).toMatchObject({ name: "verify", status: "stopped", detail: "budget" })
+          expect(outcome.selection.inline.map((item) => [item.id, item.verified])).toEqual([[blockingID, undefined]])
+          expect(outcome.partial).toBeUndefined()
+        }
+        expect(denied.map((outcome) => outcome.notes)).toEqual([[], [noteVerifyUnfinished(1, "budget")]])
+
+        // Failed: it answered in prose, and so did its finalizer. Legacy said nothing about this either.
+        const failed = yield* Effect.forEach(policies, (verifyPolicy) =>
+          Effect.gen(function* () {
+            yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report([blocking, concern])))
+            yield* llm.pushMatch(VERIFY, reply().text("They all look real to me.").stop())
+            yield* llm.pushMatch(FINALIZE, reply().text("Nothing to add.").stop())
+            return yield* Review.run(input(directory, { config: config({ verify: "all", verifyPolicy }) }))
+          }),
+        )
+        for (const outcome of failed) {
+          expect(outcome.specialists.at(-1)).toMatchObject({ name: "verify", status: "failed" })
+          expect(outcome.selection.inline.map((item) => item.verified)).toEqual([undefined, undefined])
+        }
+        expect(failed.map((outcome) => outcome.notes)).toEqual([[], [noteVerifyUnfinished(2, "unfinished")]])
       }),
     TIMEOUT,
   )

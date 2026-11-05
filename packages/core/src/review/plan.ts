@@ -1,9 +1,10 @@
-// What a review runs and what it may cost: which specialists, how much diff fits a model's context, and the cost
-// estimates behind the budget checks (sections 5.2 and 5.3). Pure and browser-safe.
+// What a review runs and what it may cost: which specialists, which findings the verify pass re-checks, how much diff
+// fits a model's context, and the cost estimates behind the budget checks (sections 5.2 and 5.3). Pure and
+// browser-safe.
 
 import type { DiffFile } from "./diff"
 import { isSensitivePath } from "./ignore"
-import type { CostKind, ReviewConfig } from "./types"
+import type { CostKind, Finding, ReviewConfig, Trust } from "./types"
 
 export type Specialist = "review" | "security"
 
@@ -41,6 +42,108 @@ export function planSpecialists(
     (file) => isSensitivePath(file.path) || (!!file.oldPath && isSensitivePath(file.oldPath)),
   )
   return sensitive ? ["review", "security"] : ["review"]
+}
+
+// The verify policy (VS-06). After the review and security passes, a second pass on the review model re-reads the
+// code behind each candidate finding and answers confirmed or rejected. A rejected finding is dropped; a confirmed one
+// is marked verified, which an untrusted review needs before it posts the finding's suggestion as a committable one.
+//
+// Candidates, by `verify`:
+//   "blocking"  each blocking finding at or above minConfidence
+//   "all"       each finding above a nit at or above minConfidence
+//   "off"       none
+// Two rules are stricter than the setting:
+//   - In an untrusted review every finding with a suggestion is a candidate too, whatever its severity or confidence.
+//   - After a cheaper triage pass, verify is read as "all" even when it is "off", and a candidate above a nit is
+//     reported only when the review model confirmed it (verifyUnconfirmed). A triage model's claims that earlier
+//     findings are fixed go to the same pass; the runner adds them.
+// An explicit setting wins over the default: REVIEW_VERIFY, then review.json's "verify", then the default, which is
+// SHARED_VERIFY_DEFAULT ("all") under this policy (the config parser applies it). Each id is a candidate once.
+//
+// A candidate the pass gave no verdict for stays unverified: outside a triage pass it is posted as before, without
+// the verified mark. A pass that was skipped, denied by the review's budget, stopped, timed out or failed leaves its
+// candidates unverified, and the review says they were not re-checked: noteVerifyUnfinished, with their number and
+// why, on the engine, and the panel's own note on the desktop.
+//
+// verifyPolicy "shared" (D3's opt-in) applies all of this on every surface. Under "legacy", the default, each surface
+// keeps the rule it had before this policy: the engine leaves the untrusted-suggestion rule out of "all" and of a
+// triage pass and never says when a pass that was not skipped failed to finish, and the desktop reads "blocking" as
+// "all" and does not merge candidates that share an id.
+export type VerifySurface = "engine" | "desktop"
+
+export interface VerifyRule {
+  verify: ReviewConfig["verify"]
+  policy: ReviewConfig["verifyPolicy"] | undefined // anything but "shared" is the legacy rule
+  minConfidence: number
+  trust: Trust
+  triaged: boolean // the review and security passes ran on a cheaper triage model
+}
+
+type Candidate = Pick<Finding, "id" | "severity" | "confidence" | "suggestion">
+type Verdicts = ReadonlyMap<string, "confirmed" | "rejected">
+
+// The findings the verify pass re-checks, in the order they were found.
+export function verifyCandidates<F extends Candidate>(
+  findings: readonly F[],
+  rule: VerifyRule,
+  surface: VerifySurface,
+) {
+  if (rule.policy !== "shared")
+    return surface === "engine" ? legacyEngine(findings, rule) : legacyDesktop(findings, rule)
+  if (rule.verify === "off" && !rule.triaged) return []
+  const all = rule.verify === "all" || rule.triaged
+  return onePerId(
+    findings.filter(
+      (finding) =>
+        (finding.confidence >= rule.minConfidence &&
+          (all ? finding.severity !== "nit" : finding.severity === "blocking")) ||
+        (rule.trust === "untrusted" && finding.suggestion !== undefined),
+    ),
+  )
+}
+
+// After a triage pass, the candidates above a nit that the review model did not confirm: they are left out. Outside a
+// triage pass nothing is left out for want of a verdict.
+export function verifyUnconfirmed<F extends Candidate>(candidates: readonly F[], verdicts: Verdicts, triaged: boolean) {
+  return triaged
+    ? candidates.filter((finding) => finding.severity !== "nit" && verdicts.get(finding.id) !== "confirmed")
+    : []
+}
+
+// The candidates the verify pass gave no verdict for.
+export function verifyUnanswered<F extends Candidate>(candidates: readonly F[], verdicts: Verdicts) {
+  return candidates.filter((finding) => !verdicts.has(finding.id))
+}
+
+// The engine's rule before the policy: "all" and a triage pass leave out the untrusted-suggestion rule.
+function legacyEngine<F extends Candidate>(findings: readonly F[], rule: VerifyRule) {
+  const all = rule.verify === "all" || rule.triaged
+  return onePerId(
+    (rule.verify === "off" && !rule.triaged ? [] : findings).filter((finding) =>
+      all
+        ? finding.severity !== "nit" && finding.confidence >= rule.minConfidence
+        : (finding.severity === "blocking" && finding.confidence >= rule.minConfidence) ||
+          (rule.trust === "untrusted" && finding.suggestion !== undefined),
+    ),
+  )
+}
+
+// The desktop's rule before the policy: every finding above a nit and every untrusted suggestion unless verify is
+// "off", so "blocking" reads as "all"; candidates that share an id are each sent.
+function legacyDesktop<F extends Candidate>(findings: readonly F[], rule: VerifyRule) {
+  return rule.verify === "off" && !rule.triaged
+    ? []
+    : findings.filter(
+        (finding) =>
+          (finding.severity !== "nit" && finding.confidence >= rule.minConfidence) ||
+          (rule.trust === "untrusted" && finding.suggestion !== undefined),
+      )
+}
+
+// One candidate per id, at the place its id first appears, carrying the last finding with that id, as the engine has
+// always sent them.
+function onePerId<F extends Candidate>(findings: readonly F[]): F[] {
+  return [...new Map(findings.map((finding) => [finding.id, finding])).values()]
 }
 
 // Characters of diff to inline for a model: 30% of the context left after a reserve, at 3.5 characters a token,

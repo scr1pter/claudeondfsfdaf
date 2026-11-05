@@ -413,6 +413,12 @@ bun script/vectorscope-eval/replay.ts --mirrors <dir> --prepare <out>
   `maxCostUsd`, `maxSteps` and `timeoutMinutes` only from the eval's config (the
   defaults where it leaves the last two out), so a base `review.json` cannot
   lift them.
+- The verify policy (VS-06) is measured as the config variant
+  `{ "verifyPolicy": "shared" }` against the frozen pipeline's default
+  (`"legacy"`). The replay reads it as a repository that opted in would be: the
+  base's own `verify` still wins, and without one the policy's default, `all`,
+  applies. The shared policy becomes the product default only after this
+  comparison of precision, recall and spend passes the D2 gate (D3).
 - An untrusted case replays only under the GitHub review job's isolation:
   `VECTOR_PURE=1` and `VECTOR_DISABLE_PROJECT_CONFIG=1`, with the provider and
   `lsp`, `formatter` and `snapshot` off in `VECTOR_CONFIG_CONTENT`, as the

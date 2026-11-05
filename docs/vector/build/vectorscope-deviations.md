@@ -378,3 +378,68 @@ imports, so D3's opt-in does not apply. No generator input changed.
   `script/vectorscope-eval/tsconfig.json`. It extends the engine's config; its
   `@/` path tries the engine's source and then the app's, since the scripts
   reach both through the replay adapters.
+
+## 2026-11-04 · VS-06 Verification parity
+
+- **The opt-in is a review setting.** D3 needs an off-by-default opt-in, and
+  the plan names none. It is `verifyPolicy` in `ReviewConfig`: `"legacy"` (the
+  default) or `"shared"`, read from `.vector/review.json` and from
+  `REVIEW_VERIFY_POLICY`. Every surface already parses that config (the CLI,
+  the GitHub job and the desktop panel), so the opt-in reaches all three
+  without editing `github.review.ts`, which @vector owns, and without new CLI
+  flags or desktop controls. Nothing in the product sets it, and the public
+  docs page does not mention it (D14); VS-20's rollout flags can set it later.
+- **Where the proposed default `all` applies.** Under `"shared"` the config
+  parser starts `verify` from `SHARED_VERIFY_DEFAULT` (`"all"`), and an
+  explicit `verify` in review.json or `REVIEW_VERIFY` still wins. The policy is
+  settled before the other keys, so a bad `verify` falls back to the policy's
+  default and its warning says so. `DEFAULT_REVIEW_CONFIG.verify` stays
+  `"blocking"`: a config built in code keeps the `verify` it sets.
+- **One function holds both rules.** `verifyCandidates` in core `plan.ts`
+  documents the shared policy and carries each surface's legacy rule as its
+  legacy branch, copied unchanged from engine `review/run.ts` and the app's
+  `ai-review.ts`. The D3 proof is in core `test/review/plan.test.ts`, which
+  compares both legacy branches with the old code, copied into the test, over
+  every combination of verify, trust, triage, severity, confidence, suggestion
+  and shared ids, and compares the triage drops too. The existing engine and
+  desktop tests pass unchanged, and new tests there pin the legacy behaviour
+  the shared policy changes.
+- **Policy choices the plan leaves open.**
+  - In an untrusted review every finding with a suggestion is a candidate,
+    whatever its severity or confidence, as both surfaces did for "blocking".
+    The shared policy also applies it under "all" and after a triage pass,
+    which the engine did not.
+  - After a triage pass verify is read as "all", even when it is "off", and
+    only candidates above a nit must be confirmed to be reported, as both
+    surfaces did.
+  - An explicit "off" turns the pass off outside a triage pass, untrusted
+    suggestions included, as both surfaces did; such a suggestion is still
+    never posted as a committable suggestion, which selection allows in an
+    untrusted review only for a verified finding.
+  - Each id is one candidate on both surfaces, as the engine sent them; the
+    desktop used to send findings that share an id more than once.
+  - Under "shared" an explicit "blocking" on the desktop checks only blocking
+    findings and untrusted suggestions; the desktop used to read it as "all".
+- **Incomplete verify.** Under "shared" the engine notes any verify pass that
+  did not finish (skipped before it started, denied by the budget, stopped,
+  timed out or failed) with the number of candidates left unverified and why,
+  through the new core note `noteVerifyUnfinished` in `format.ts`, a file the
+  row does not list. The legacy engine notes only a skipped pass, as before, so
+  a denied or failed pass still says nothing there; the new engine tests show
+  both. The desktop's notes are unchanged, since it already noted every pass
+  that did not finish. On both surfaces a finished pass that leaves out a
+  verdict leaves that finding unverified without a note, as before.
+- **The eval can measure it (VS-02 adapter).** `ReviewEval.replay` now reads a
+  variant's `verifyPolicy` as a repository that opted in would be, so the
+  variant `{ verifyPolicy: "shared" }` gets `all` unless the case's base sets
+  `verify`. Its test is in engine `test/review/eval.test.ts`, and the eval
+  README says how the comparison is made. This file is outside the row's list.
+- **Not measured, so no default changed.** The row asks for precision, recall
+  and added spend before a default changes. That needs paid replays, which wait
+  for the D7 environment and key and a paid replay entry point (D5, D12), so
+  `"legacy"` stays the default everywhere.
+- **Left for later variants.** The plan mentions, for VS-06, retries for
+  `vectorscope.*` passes, a verify pass that forks the review session to share
+  its prompt cache, and whether review passes are exempt from the multi-agent
+  task limits. All three depend on `self-evolving`, which is not on this
+  branch, and each is a measured variant, so none is built here.

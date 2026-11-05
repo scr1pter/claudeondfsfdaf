@@ -549,6 +549,18 @@ export function noteVerifySkipped(): string {
   return "Blocking findings were not re-checked: too little budget or time was left for the verify pass."
 }
 
+// The shared verify policy (plan.ts, VS-06): a verify pass that did not finish, for whatever reason, says how many of
+// its candidates are posted without being re-checked.
+export function noteVerifyUnfinished(count: number, why: "budget" | "time" | "unfinished"): string {
+  const reason =
+    why === "budget"
+      ? "too little of the review's budget was left for the verify pass"
+      : why === "time"
+        ? "too little time was left for the verify pass"
+        : "the verify pass did not finish"
+  return `${formatCount(count)} ${count === 1 ? "finding was" : "findings were"} not re-checked: ${reason}.`
+}
+
 // With a triage model only what the review model confirmed is reported, so a double-check that did not finish leaves
 // the cheaper pass's findings out instead of posting them unchecked.
 export function noteTriageUnchecked(count: number, triage: string, model: string): string {

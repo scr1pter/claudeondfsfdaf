@@ -1932,3 +1932,140 @@ describe("the findings list", () => {
     ])
   })
 })
+
+// VS-06: one verify policy for every surface, behind the off-by-default "verifyPolicy": "shared" (D3). Without it the
+// desktop keeps its own rule, which the tests above pin and these compare against.
+describe("the verify policy", () => {
+  const concern = {
+    path: "src/list.ts",
+    line: 1,
+    severity: "concern",
+    category: "bug",
+    title: "last() of an empty array is not handled",
+    body: "An empty array returns undefined without saying so.",
+    confidence: 0.9,
+  }
+  const nit = {
+    ...offByOne,
+    severity: "nit",
+    category: "maintainability",
+    title: "Use at(-1) for the last item",
+    suggestion: "  return items.at(-1)",
+  }
+  // The severities of the candidates in each double-check prompt, one finding of each severity being reported.
+  const candidateSeverities = (calls: { prompt: PromptCall[] }) =>
+    calls.prompt
+      .filter(isVerify)
+      .map((call) =>
+        [...(call.parts?.[0]?.text ?? "").matchAll(/<untrusted_candidate [^>]*severity="([a-z]+)"/g)]
+          .map((match) => match[1])
+          .join(","),
+      )
+  // Reviews the three findings under these review.json settings, in place or, untrusted, rebuilt from the diff.
+  const reviewed = async (json: object, options: { untrusted?: boolean } = {}) => {
+    const fake = fakeClient({
+      files: {
+        "src/list.ts": options.untrusted ? BASE : HEAD,
+        ".vector/review.json": JSON.stringify(json),
+      },
+      ...(options.untrusted ? { branch: "main" } : {}),
+      reply: (call) => (isVerify(call) ? answer(verdicts(call)) : answer(report([offByOne, concern, nit]))),
+    })
+    const outcome = (await run(fake.client))!
+    expect(outcome.checkout.trust).toBe(options.untrusted ? "untrusted" : "trusted")
+    return { outcome, checked: candidateSeverities(fake.calls) }
+  }
+
+  test("legacy, the default: every finding above a nit is double-checked, even under an explicit blocking", async () => {
+    expect((await reviewed({})).checked).toEqual(["blocking,concern"])
+    expect((await reviewed({ verify: "blocking" })).checked).toEqual(["blocking,concern"])
+    expect((await reviewed({ verifyPolicy: "legacy", verify: "blocking" })).checked).toEqual(["blocking,concern"])
+    expect((await reviewed({ verify: "off" })).checked).toEqual([])
+    // Untrusted, every suggestion too.
+    expect((await reviewed({ verify: "blocking" }, { untrusted: true })).checked).toEqual(["blocking,concern,nit"])
+  })
+
+  test("shared: all by default, an explicit blocking or off honoured, and every untrusted suggestion checked", async () => {
+    const all = await reviewed({ verifyPolicy: "shared" })
+    expect(all.checked).toEqual(["blocking,concern"])
+    expect(all.outcome.verification).toEqual({ checked: 2, rejected: 0, status: "ok" })
+    // An explicit "blocking" now means blocking, as on the engine; the concern is shown, unverified.
+    const blocking = await reviewed({ verifyPolicy: "shared", verify: "blocking" })
+    expect(blocking.checked).toEqual(["blocking"])
+    expect(blocking.outcome.selection.inline.map((finding) => [finding.severity, finding.verified])).toEqual([
+      ["blocking", true],
+      ["concern", undefined],
+    ])
+    expect(blocking.outcome.notes).toEqual([])
+    const off = await reviewed({ verifyPolicy: "shared", verify: "off" })
+    expect(off.checked).toEqual([])
+    expect(off.outcome.verification).toBeUndefined()
+    // Untrusted: the nit's suggestion is checked under "blocking" too, since its fix is offered only once confirmed.
+    expect((await reviewed({ verifyPolicy: "shared", verify: "blocking" }, { untrusted: true })).checked).toEqual([
+      "blocking,nit",
+    ])
+    expect((await reviewed({ verifyPolicy: "shared" }, { untrusted: true })).checked).toEqual(["blocking,concern,nit"])
+  })
+
+  test("shared: a double-check the run guard stopped, or that was stopped, keeps the findings and says they were not re-checked", async () => {
+    const settings = { ".vector/review.json": '{"verifyPolicy":"shared"}' }
+    const guarded = fakeClient({
+      files: { "src/list.ts": HEAD, ...settings },
+      reply: (call) => {
+        if (!isVerify(call)) return answer(report([offByOne, concern]))
+        const message = answer(undefined)
+        const error = { name: "BudgetStopError", data: { reason: "budget", message: "The session's budget is spent." } }
+        return { ...message, info: { ...message.info, error } }
+      },
+    })
+    const denied = (await run(guarded.client))!
+    expect(denied.verification).toEqual({ checked: 2, rejected: 0, status: "failed" })
+    expect(denied.selection.inline.map((finding) => finding.verified)).toEqual([undefined, undefined])
+    expect(denied.notes.join(" ")).toContain("not re-checked")
+
+    const controller = new AbortController()
+    let release = (_message: ReviewMessage) => {}
+    const stopped = fakeClient({
+      files: { "src/list.ts": HEAD, ...settings },
+      reply: (call) => {
+        if (!isVerify(call)) return answer(report([offByOne, concern]))
+        queueMicrotask(() => controller.abort())
+        return new Promise<ReviewMessage>((resolve) => {
+          release = resolve
+        })
+      },
+      onAbort: () => release({ info: { role: "assistant", error: { name: "MessageAbortedError" } }, parts: [] }),
+    })
+    const skipped = (await run(stopped.client, { signal: controller.signal }))!
+    expect(skipped.verification).toEqual({ checked: 2, rejected: 0, status: "skipped" })
+    expect(skipped.selection.inline.map((finding) => finding.verified)).toEqual([undefined, undefined])
+    expect(skipped.notes.join(" ")).toContain("not re-checked")
+  })
+
+  test("shared: after a triage pass only what the review model confirmed is shown, as before", async () => {
+    const cheap: ReviewModel = {
+      providerID: "openrouter",
+      modelID: "cheap-coder",
+      context: 128_000,
+      price: { input: 0.2, output: 0.8 },
+      costKind: "priced",
+    }
+    const { client, calls } = fakeClient({
+      files: {
+        "src/list.ts": HEAD,
+        ".vector/review.json": '{"verifyPolicy":"shared","triageModel":"openrouter/cheap-coder","verify":"off"}',
+      },
+      reply: (call) => {
+        if (!isVerify(call)) return answer(report([offByOne, concern]))
+        const [first] = verdicts(call).results
+        return answer({ results: first ? [first] : [] })
+      },
+    })
+    const outcome = (await run(client, { catalog: [sonnet, cheap] }))!
+    expect(candidateSeverities(calls)).toEqual(["blocking,concern"])
+    expect(outcome.selection.inline.map((finding) => [finding.title, finding.verified])).toEqual([
+      [offByOne.title, true],
+    ])
+    expect(outcome.selection.dropped).toContainEqual({ reason: "unconfirmed", count: 1 })
+  })
+})

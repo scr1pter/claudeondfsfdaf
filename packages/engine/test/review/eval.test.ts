@@ -791,6 +791,43 @@ describe("ReviewEval.replay", () => {
   )
 
   it.instance(
+    "a variant on the shared verify policy gets the policy's default unless the base's review.json sets verify",
+    () =>
+      Effect.gen(function* () {
+        const replayed = (baseConfig?: object) =>
+          Effect.gen(function* () {
+            const { directory, llm, base, head } = yield* checkout({
+              base: {
+                "src/list.ts": LIST_BASE,
+                ...(baseConfig ? { ".vector/review.json": JSON.stringify(baseConfig) } : {}),
+              },
+              head: { "src/list.ts": LIST_HEAD },
+            })
+            yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report()))
+            const replay = (config: Partial<typeof DEFAULT_REVIEW_CONFIG>) =>
+              ReviewEval.replay({
+                case: replayCase(directory, base, head),
+                model: MODEL,
+                config: { maxCostUsd: 2, ...config },
+                posting: ReviewEval.recordingPosting(),
+                check: recordingCheck().check,
+              }).pipe(Effect.map((artifact) => artifact.config.value))
+            const shared = yield* replay({ verifyPolicy: "shared" })
+            yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report()))
+            const legacy = yield* replay({})
+            return { shared, legacy }
+          })
+        const plain = yield* replayed()
+        expect(plain.shared).toMatchObject({ verifyPolicy: "shared", verify: "all" })
+        expect(plain.legacy).toMatchObject({ verifyPolicy: "legacy", verify: "blocking" })
+        const explicit = yield* replayed({ verify: "blocking" })
+        expect(explicit.shared).toMatchObject({ verifyPolicy: "shared", verify: "blocking" })
+      }),
+    GIT,
+    TIMEOUT,
+  )
+
+  it.instance(
     "posts nothing once the posting check refuses",
     () =>
       Effect.gen(function* () {

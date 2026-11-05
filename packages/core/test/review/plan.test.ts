@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { noteVerifyUnfinished } from "@vectordevai/core/review/format"
 import {
   combineCostKinds,
   contextRefusal,
@@ -7,7 +8,12 @@ import {
   MIN_CONTEXT,
   nextStepCostUsd,
   planSpecialists,
+  verifyCandidates,
+  verifyUnanswered,
+  verifyUnconfirmed,
+  type VerifyRule,
 } from "@vectordevai/core/review/plan"
+import type { Finding, ReviewConfig, Severity, Trust } from "@vectordevai/core/review/types"
 
 describe("planSpecialists", () => {
   test("adds security for sensitive paths when it is auto", () => {
@@ -111,5 +117,200 @@ describe("combineCostKinds", () => {
     expect(combineCostKinds(["priced", "plan"])).toBe("unknown")
     expect(combineCostKinds(["free", "unknown"])).toBe("unknown")
     expect(combineCostKinds([])).toBe("unknown")
+  })
+})
+
+describe("the verify policy", () => {
+  type Item = Pick<Finding, "id" | "severity" | "confidence" | "suggestion"> & { title: string }
+  const SEVERITY: Severity[] = ["blocking", "concern", "nit"]
+  // Every severity, a confidence on each side of 0.7, with and without a suggestion; then two findings that share an
+  // id with earlier ones, as the review and security passes can report the same defect.
+  const findings: Item[] = [
+    ...SEVERITY.flatMap((severity) =>
+      [0.5, 0.9].flatMap((confidence) =>
+        [undefined, "  return items[items.length - 1]"].map((suggestion) => ({
+          id: `${severity}-${confidence}-${suggestion ? "fix" : "plain"}`,
+          title: "first",
+          severity,
+          confidence,
+          ...(suggestion ? { suggestion } : {}),
+        })),
+      ),
+    ),
+    { id: "blocking-0.9-plain", title: "again", severity: "blocking", confidence: 0.95 },
+    { id: "nit-0.5-fix", title: "again", severity: "nit", confidence: 0.6, suggestion: "  return 0" },
+  ]
+  const VERIFY: ReviewConfig["verify"][] = ["blocking", "all", "off"]
+  const TRUST: Trust[] = ["trusted", "untrusted"]
+  const rules = (policy: VerifyRule["policy"]): VerifyRule[] =>
+    VERIFY.flatMap((verify) =>
+      TRUST.flatMap((trust) =>
+        [false, true].map((triaged) => ({ verify, policy, minConfidence: 0.7, trust, triaged })),
+      ),
+    )
+  const ids = (items: readonly Item[]) => items.map((item) => item.id)
+
+  // The candidate rules as engine review/run.ts and the desktop's ai-review.ts wrote them before the policy, copied
+  // unchanged. With the opt-in off, each surface must pick exactly what it picked then (D3).
+  function engineBefore(normalized: Item[], rule: VerifyRule) {
+    const config = { verify: rule.verify, minConfidence: rule.minConfidence }
+    const triaged = rule.triaged
+    const all = config.verify === "all" || triaged
+    return [
+      ...new Map(
+        (config.verify === "off" && !triaged ? [] : normalized)
+          .filter((finding) =>
+            all
+              ? finding.severity !== "nit" && finding.confidence >= config.minConfidence
+              : (finding.severity === "blocking" && finding.confidence >= config.minConfidence) ||
+                (rule.trust === "untrusted" && finding.suggestion !== undefined),
+          )
+          .map((finding) => [finding.id, finding]),
+      ).values(),
+    ]
+  }
+  function desktopBefore(proposed: Item[], rule: VerifyRule) {
+    const config = { verify: rule.verify, minConfidence: rule.minConfidence }
+    const triage = rule.triaged
+    return config.verify === "off" && !triage
+      ? []
+      : proposed.filter(
+          (finding) =>
+            (finding.severity !== "nit" && finding.confidence >= config.minConfidence) ||
+            (rule.trust === "untrusted" && finding.suggestion !== undefined),
+        )
+  }
+
+  test("with the opt-in off, each surface picks exactly the findings it picked before the policy", () => {
+    for (const policy of ["legacy", undefined] as const)
+      for (const rule of rules(policy)) {
+        const engine = verifyCandidates(findings, rule, "engine")
+        const desktop = verifyCandidates(findings, rule, "desktop")
+        expect(engine).toEqual(engineBefore(findings, rule))
+        expect(engine.every((item, index) => item === engineBefore(findings, rule)[index])).toBe(true)
+        expect(desktop).toEqual(desktopBefore(findings, rule))
+        expect(desktop.every((item, index) => item === desktopBefore(findings, rule)[index])).toBe(true)
+      }
+  })
+
+  test("with the opt-in off, a triage pass leaves out the same unconfirmed findings as before", () => {
+    const verdictSets: Map<string, "confirmed" | "rejected">[] = [
+      new Map(),
+      new Map(findings.map((item) => [item.id, "confirmed"] as const)),
+      new Map(findings.map((item, index) => [item.id, index % 2 ? "confirmed" : "rejected"] as const)),
+      new Map(findings.filter((item) => item.severity === "blocking").map((item) => [item.id, "confirmed"] as const)),
+    ]
+    for (const rule of rules("legacy"))
+      for (const verdicts of verdictSets) {
+        const engine = verifyCandidates(findings, rule, "engine")
+        const desktop = verifyCandidates(findings, rule, "desktop")
+        expect(ids(verifyUnconfirmed(engine, verdicts, rule.triaged))).toEqual(
+          ids(rule.triaged ? engine.filter((item) => verdicts.get(item.id) !== "confirmed") : []),
+        )
+        expect(ids(verifyUnconfirmed(desktop, verdicts, rule.triaged))).toEqual(
+          ids(
+            rule.triaged
+              ? desktop.filter((item) => item.severity !== "nit" && verdicts.get(item.id) !== "confirmed")
+              : [],
+          ),
+        )
+      }
+  })
+
+  test("shared: blocking, all and off, with every untrusted suggestion and one candidate per id", () => {
+    const pick = (verify: ReviewConfig["verify"], trust: Trust, triaged = false) =>
+      ids(verifyCandidates(findings, { verify, policy: "shared", minConfidence: 0.7, trust, triaged }, "engine"))
+    expect(pick("blocking", "trusted")).toEqual(["blocking-0.9-plain", "blocking-0.9-fix"])
+    expect(pick("all", "trusted")).toEqual([
+      "blocking-0.9-plain",
+      "blocking-0.9-fix",
+      "concern-0.9-plain",
+      "concern-0.9-fix",
+    ])
+    expect(pick("off", "trusted")).toEqual([])
+    // Untrusted: every suggestion too, whatever its severity or confidence, since its fix needs the verified mark.
+    expect(pick("blocking", "untrusted")).toEqual([
+      "blocking-0.5-fix",
+      "blocking-0.9-plain",
+      "blocking-0.9-fix",
+      "concern-0.5-fix",
+      "concern-0.9-fix",
+      "nit-0.5-fix",
+      "nit-0.9-fix",
+    ])
+    expect(pick("all", "untrusted")).toEqual([
+      "blocking-0.5-fix",
+      "blocking-0.9-plain",
+      "blocking-0.9-fix",
+      "concern-0.5-fix",
+      "concern-0.9-plain",
+      "concern-0.9-fix",
+      "nit-0.5-fix",
+      "nit-0.9-fix",
+    ])
+    // "off" is an explicit choice and wins, except after a triage pass, which reads it as "all".
+    expect(pick("off", "untrusted")).toEqual([])
+    expect(pick("off", "untrusted", true)).toEqual(pick("all", "untrusted"))
+    expect(pick("blocking", "trusted", true)).toEqual(pick("all", "trusted"))
+    // A shared id is one candidate, at its first place, carrying the later finding, as the engine always sent it.
+    const merged = verifyCandidates(
+      findings,
+      { verify: "all", policy: "shared", minConfidence: 0.7, trust: "trusted", triaged: false },
+      "engine",
+    )
+    expect(merged[0]).toMatchObject({ id: "blocking-0.9-plain", title: "again" })
+  })
+
+  test("shared: both surfaces pick the same findings", () => {
+    for (const rule of rules("shared"))
+      expect(verifyCandidates(findings, rule, "desktop")).toEqual(verifyCandidates(findings, rule, "engine"))
+  })
+
+  test("shared is never laxer than the engine's rule, and changes the desktop's only for an explicit blocking", () => {
+    for (const rule of rules("shared")) {
+      const shared = ids(verifyCandidates(findings, rule, "engine"))
+      const engine = ids(verifyCandidates(findings, { ...rule, policy: "legacy" }, "engine"))
+      const desktop = ids(verifyCandidates(findings, { ...rule, policy: "legacy" }, "desktop"))
+      for (const id of engine) expect(shared).toContain(id)
+      if (rule.verify !== "blocking" || rule.triaged) expect(shared).toEqual([...new Set(desktop)])
+      else expect(shared.length).toBeLessThan(new Set(desktop).size)
+    }
+  })
+
+  test("after a triage pass only confirmed findings above a nit are kept; otherwise a missing verdict leaves out nothing", () => {
+    const rule: VerifyRule = { verify: "all", policy: "shared", minConfidence: 0.7, trust: "untrusted", triaged: true }
+    const candidates = verifyCandidates(findings, rule, "engine")
+    const verdicts = new Map<string, "confirmed" | "rejected">([
+      ["blocking-0.9-plain", "confirmed"],
+      ["concern-0.9-plain", "rejected"],
+    ])
+    expect(ids(verifyUnconfirmed(candidates, verdicts, true))).toEqual([
+      "blocking-0.5-fix",
+      "blocking-0.9-fix",
+      "concern-0.5-fix",
+      "concern-0.9-plain",
+      "concern-0.9-fix",
+    ])
+    expect(verifyUnconfirmed(candidates, verdicts, false)).toEqual([])
+    expect(ids(verifyUnanswered(candidates, verdicts))).toEqual([
+      "blocking-0.5-fix",
+      "blocking-0.9-fix",
+      "concern-0.5-fix",
+      "concern-0.9-fix",
+      "nit-0.5-fix",
+      "nit-0.9-fix",
+    ])
+  })
+
+  test("a verify pass that did not finish says how many findings were not re-checked, and why", () => {
+    expect(noteVerifyUnfinished(1, "budget")).toBe(
+      "1 finding was not re-checked: too little of the review's budget was left for the verify pass.",
+    )
+    expect(noteVerifyUnfinished(3, "time")).toBe(
+      "3 findings were not re-checked: too little time was left for the verify pass.",
+    )
+    expect(noteVerifyUnfinished(2, "unfinished")).toBe(
+      "2 findings were not re-checked: the verify pass did not finish.",
+    )
   })
 })

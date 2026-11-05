@@ -18,7 +18,12 @@ import {
   type DiffFile,
 } from "@vectordevai/core/review/diff"
 import { fingerprint, normalizeCode, normalizeTitle } from "@vectordevai/core/review/fingerprint"
-import { noteTriageFixedUnchecked, noteTriageUnchecked, noteVerifySkipped } from "@vectordevai/core/review/format"
+import {
+  noteTriageFixedUnchecked,
+  noteTriageUnchecked,
+  noteVerifySkipped,
+  noteVerifyUnfinished,
+} from "@vectordevai/core/review/format"
 import { classifyPath, isSensitivePath } from "@vectordevai/core/review/ignore"
 import { reviewPermissionRules } from "@vectordevai/core/review/permission"
 import { packChanges, verifyHeadFiles } from "@vectordevai/core/review/pack"
@@ -29,6 +34,9 @@ import {
   NEXT_STEP_SLACK,
   nextStepCostUsd,
   planSpecialists,
+  verifyCandidates,
+  verifyUnanswered,
+  verifyUnconfirmed,
   type ReviewPrice,
 } from "@vectordevai/core/review/plan"
 import {
@@ -640,21 +648,20 @@ export const run: (
     const report = mergeReports(reports.map((entry) => entry.report))
     const normalized = reports.flatMap((entry) => normalizeFindings(entry.report.findings, entry.source, input.anchors))
 
-    // 7. Verify: blocking findings (and every suggestion when untrusted), or everything of concern or above. After a
-    // cheaper triage pass, everything of concern or above is confirmed on the review model, whatever `verify` says.
-    const all = config.verify === "all" || triaged
-    const candidates = [
-      ...new Map(
-        (config.verify === "off" && !triaged ? [] : normalized)
-          .filter((finding) =>
-            all
-              ? finding.severity !== "nit" && finding.confidence >= config.minConfidence
-              : (finding.severity === "blocking" && finding.confidence >= config.minConfidence) ||
-                (input.trust === "untrusted" && finding.suggestion !== undefined),
-          )
-          .map((finding) => [finding.id, finding]),
-      ).values(),
-    ]
+    // 7. Verify: the candidates the verify policy names (plan.ts). After a cheaper triage pass, everything of concern
+    // or above is confirmed on the review model, whatever `verify` says.
+    const shared = config.verifyPolicy === "shared"
+    const candidates = verifyCandidates(
+      normalized,
+      {
+        verify: config.verify,
+        policy: config.verifyPolicy,
+        minConfidence: config.minConfidence,
+        trust: input.trust,
+        triaged,
+      },
+      "engine",
+    )
     // After a triage pass the cheaper model's word that an earlier finding is fixed goes to the double-check too, so
     // only the review model closes a finding and resolves its thread. A claim about a finding the first pass reported
     // again contradicts itself and is dropped.
@@ -712,9 +719,9 @@ export const run: (
     const verdicts = new Map((verify?.value ?? []).map((entry) => [entry.id, entry.verdict]))
     // After a triage pass only what the review model confirmed is reported: a candidate it rejected, gave no verdict
     // for, or never saw because the double-check was skipped or failed is left out.
-    const unchecked = new Set(
-      triaged ? candidates.filter((finding) => verdicts.get(finding.id) !== "confirmed").map((finding) => finding.id) : [],
-    )
+    const unchecked = new Set(verifyUnconfirmed(candidates, verdicts, triaged).map((finding) => finding.id))
+    // Under the shared policy a pass that did not finish says how many candidates it left unverified.
+    const unanswered = shared && verify && verify.status !== "ok" ? verifyUnanswered(candidates, verdicts).length : 0
     const kept = normalized.filter((finding) => verdicts.get(finding.id) !== "rejected")
     const findings = kept
       .filter((finding) => !unchecked.has(finding.id))
@@ -826,9 +833,13 @@ export const run: (
               ...(unconfirmed ? [noteTriageUnchecked(unconfirmed, nameOf(triage), nameOf(input.model))] : []),
               ...(claims.length ? [noteTriageFixedUnchecked(claims.length, nameOf(triage), nameOf(input.model))] : []),
             ]
-          : verify?.status === "skipped"
-            ? [noteVerifySkipped()]
-            : []),
+          : shared
+            ? unanswered && verify
+              ? [noteVerifyUnfinished(unanswered, unfinished(verify))]
+              : []
+            : verify?.status === "skipped"
+              ? [noteVerifySkipped()]
+              : []),
         ...(state.incomplete
           ? [
               "Reported cost may be incomplete; work with uncertain usage retained its estimated budget exposure for this review.",
@@ -862,6 +873,13 @@ export function normalizeFindings(findings: ModelFinding[], source: Finding["sou
 
 function nameOf(model: Pick<ResolvedModel, "providerID" | "modelID">) {
   return `${model.providerID}/${model.modelID}`
+}
+
+// Why a verify pass did not finish, for its note: skipped or denied for budget, out of time, or anything else.
+function unfinished(verify: Pick<Asked<unknown>, "status" | "stop" | "detail">) {
+  if (verify.status === "timeout" || verify.stop === "timeout" || verify.detail === "time") return "time" as const
+  if (verify.stop === "budget" || verify.detail === "budget") return "budget" as const
+  return "unfinished" as const
 }
 
 function lastText(message: SessionV1.WithParts | undefined) {

@@ -217,8 +217,14 @@ export interface ReviewConfig {
   suggestions: boolean
   replyOnFix: boolean
   security: "auto" | "always" | "off" // "auto": runs when sensitive paths change
-  // "blocking": a second pass re-checks blocking findings (and, when untrusted, every suggestion).
+  // Which findings a second pass re-checks before they are posted; it drops the ones it rejects. The verify policy,
+  // `verifyCandidates` in plan.ts, documents the rules: "blocking" re-checks blocking findings, "all" every finding
+  // above a nit, "off" none, and an untrusted review or a triage model adds to what this names.
   verify: "blocking" | "all" | "off"
+  // VS-06's off-by-default opt-in (D3). "shared" applies that one verify policy on every surface, and a config that
+  // does not set `verify` then gets SHARED_VERIFY_DEFAULT ("all") instead of "blocking". "legacy" keeps each surface's
+  // rule as it was before the policy existed. It stays "legacy" until the D2 gate has measured the change.
+  verifyPolicy: "legacy" | "shared"
   failOn: "never" | "blocking" // "blocking" fails the job while blocking findings are open
   ignore: string[] // added to the defaults
   ignoreDefaults: boolean
@@ -252,6 +258,7 @@ export const DEFAULT_REVIEW_CONFIG: ReviewConfig = {
   replyOnFix: false,
   security: "auto",
   verify: "blocking",
+  verifyPolicy: "legacy",
   failOn: "never",
   ignore: [],
   ignoreDefaults: true,
@@ -269,3 +276,7 @@ export const DEFAULT_REVIEW_CONFIG: ReviewConfig = {
   nits: false,
   paths: [],
 }
+
+// The verify setting a review gets under verifyPolicy "shared" when neither review.json nor REVIEW_VERIFY sets one:
+// the plan's proposed default. Today's default stays DEFAULT_REVIEW_CONFIG.verify while the policy is "legacy".
+export const SHARED_VERIFY_DEFAULT: ReviewConfig["verify"] = "all"

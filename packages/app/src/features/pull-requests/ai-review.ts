@@ -54,6 +54,8 @@ import {
   diffBudgetChars,
   estimateCostUsd,
   planSpecialists,
+  verifyCandidates,
+  verifyUnconfirmed,
   type ReviewPrice,
   type Specialist,
 } from "@vectordevai/core/review/plan"
@@ -850,16 +852,20 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
 
   // The double-check: a second session re-reads the code behind each finding of concern or above and answers
   // confirmed or rejected; rejected findings are dropped. It is what keeps a reviewer's guesses off the pull request.
-  // `.vector/review.json` "verify": "off" turns it off, except after a triage pass; the desktop otherwise checks every
-  // finding above a nit.
-  const candidates =
-    config.verify === "off" && !triage
-      ? []
-      : proposed.filter(
-          (finding) =>
-            (finding.severity !== "nit" && finding.confidence >= config.minConfidence) ||
-            (checkout.trust === "untrusted" && finding.suggestion !== undefined),
-        )
+  // Which findings it checks is the verify policy (plan.ts). Under the legacy rule, the default, `.vector/review.json`
+  // "verify": "off" turns it off, except after a triage pass, and the desktop otherwise checks every finding above a
+  // nit; under "verifyPolicy": "shared" an explicit "blocking" checks only blocking findings, as the engine does.
+  const candidates = verifyCandidates(
+    proposed,
+    {
+      verify: config.verify,
+      policy: config.verifyPolicy,
+      minConfidence: config.minConfidence,
+      trust: checkout.trust,
+      triaged: triage !== undefined,
+    },
+    "desktop",
+  )
   if (candidates.length)
     status(
       `Double-checking ${candidates.length} ${candidates.length === 1 ? "finding" : "findings"}${triage ? ` with ${modelName(model)}` : ""}…${spentSoFar(runs, first)}`,
@@ -890,13 +896,7 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
   const verdicts = new Map((verify?.verdicts ?? []).map((entry) => [entry.id, entry.verdict]))
   // After a triage pass only what the review model confirmed is shown: a finding above a nit that it rejected, gave
   // no verdict for, or never saw because the double-check stopped or failed is left out.
-  const unchecked = new Set(
-    triage
-      ? candidates
-          .filter((finding) => finding.severity !== "nit" && verdicts.get(finding.id) !== "confirmed")
-          .map((finding) => finding.id)
-      : [],
-  )
+  const unchecked = new Set(verifyUnconfirmed(candidates, verdicts, triage !== undefined).map((finding) => finding.id))
   const kept = proposed.filter((finding) => verdicts.get(finding.id) !== "rejected")
   const checked = kept
     .filter((finding) => !unchecked.has(finding.id))

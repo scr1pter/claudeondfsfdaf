@@ -3,7 +3,7 @@
 // request. Pure and browser-safe.
 
 import { minimatch } from "minimatch"
-import { DEFAULT_REVIEW_CONFIG, SEVERITIES, type ReviewConfig, type Trigger } from "./types"
+import { DEFAULT_REVIEW_CONFIG, SEVERITIES, SHARED_VERIFY_DEFAULT, type ReviewConfig, type Trigger } from "./types"
 
 export const REVIEW_CONFIG_PATH = ".vector/review.json"
 export const REVIEW_RULES_PATHS = [".vector/review.md", ".vector/REVIEW.md"] as const
@@ -84,6 +84,7 @@ const FIELDS: Record<keyof ReviewConfig, Field> = {
   replyOnFix: bool,
   security: oneOf(["auto", "always", "off"]),
   verify: oneOf(["blocking", "all", "off"]),
+  verifyPolicy: oneOf(["legacy", "shared"]),
   failOn: oneOf(["never", "blocking"]),
   ignore: strings,
   ignoreDefaults: bool,
@@ -118,6 +119,7 @@ const ENV: { name: string; key: keyof ReviewConfig; kind: "number" | "text" }[] 
   { name: "REVIEW_MAX_COMMENTS", key: "maxComments", kind: "number" },
   { name: "REVIEW_SECURITY", key: "security", kind: "text" },
   { name: "REVIEW_VERIFY", key: "verify", kind: "text" },
+  { name: "REVIEW_VERIFY_POLICY", key: "verifyPolicy", kind: "text" },
   { name: "REVIEW_FAIL_ON", key: "failOn", kind: "text" },
   { name: "REVIEW_MAX_COST_USD", key: "maxCostUsd", kind: "number" },
   { name: "REVIEW_MAX_COST_USD_PER_PR", key: "maxCostUsdPerPr", kind: "number" },
@@ -133,6 +135,21 @@ function assign(config: ReviewConfig, key: keyof ReviewConfig, value: unknown, l
   }
   if (parsed.note) warnings.push(`${label}: ${parsed.note}.`)
   Object.assign(config, { [key]: parsed.value })
+}
+
+// The verify policy the passes in parseReviewConfig will settle on: a valid REVIEW_VERIFY_POLICY, then a valid
+// "verifyPolicy" in review.json, then the default.
+function verifyPolicyOf(
+  source: Record<string, unknown> | undefined,
+  env: Record<string, string | undefined>,
+): ReviewConfig["verifyPolicy"] {
+  const parse = (value: unknown) => FIELDS.verifyPolicy.parse(value)?.value as ReviewConfig["verifyPolicy"] | undefined
+  const raw = env.REVIEW_VERIFY_POLICY?.trim()
+  return (
+    (raw ? parse(raw.toLowerCase()) : undefined) ??
+    (source && Object.hasOwn(source, "verifyPolicy") ? parse(source.verifyPolicy) : undefined) ??
+    DEFAULT_REVIEW_CONFIG.verifyPolicy
+  )
 }
 
 function readJson(text: string | undefined, warnings: string[]): Record<string, unknown> | undefined {
@@ -168,13 +185,17 @@ export function parseReviewConfig(
     paths: [...DEFAULT_REVIEW_CONFIG.paths],
   }
   const source = readJson(input.json, warnings)
+  const env = input.env ?? {}
+  // The verify policy is settled first, so that under "shared" a config that does not set "verify" starts from
+  // SHARED_VERIFY_DEFAULT, and a "verify" in review.json or REVIEW_VERIFY still wins. The passes below read the
+  // policy again and give its warnings.
+  if (verifyPolicyOf(source, env) === "shared") config.verify = SHARED_VERIFY_DEFAULT
   for (const [key, value] of Object.entries(source ?? {})) {
     if (Object.hasOwn(RETIRED, key)) warnings.push(`${REVIEW_CONFIG_PATH}: ${RETIRED[key]}`)
     else if (!Object.hasOwn(FIELDS, key)) warnings.push(`${REVIEW_CONFIG_PATH}: unknown key "${key}" is ignored.`)
     else assign(config, key as keyof ReviewConfig, value, `${REVIEW_CONFIG_PATH}: "${key}"`, warnings)
   }
 
-  const env = input.env ?? {}
   for (const item of ENV) {
     const raw = env[item.name]?.trim()
     if (!raw) continue

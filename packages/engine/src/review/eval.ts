@@ -246,7 +246,10 @@ export const replay = Effect.fn("ReviewEval.replay")(function* (input: ReplayInp
   const json = yield* show(item.base, REVIEW_CONFIG_PATH)
   const rulesTexts = yield* Effect.forEach(REVIEW_RULES_PATHS, (file) => show(item.base, file))
   const attributesText = yield* show(item.base, ".gitattributes")
-  const parsed = parseReviewConfig({ json, env: {}, trigger })
+  // A variant that sets the verify policy (VS-06) is read as a repository that chose it would be: under "shared" the
+  // base's own "verify" still wins, and without one the policy's default applies.
+  const policy = input.config?.verifyPolicy
+  const parsed = parseReviewConfig({ json, env: policy ? { REVIEW_VERIFY_POLICY: policy } : {}, trigger })
   const config: ReviewConfig = {
     ...parsed.config,
     ...input.config,
