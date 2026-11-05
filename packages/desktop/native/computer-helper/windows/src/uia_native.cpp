@@ -1,7 +1,11 @@
-#include "uia_native.h"
-#include "windows_com.h"
+#include <windows.h>
+#include <objidl.h>
+#include <propidl.h>
+#include <oleacc.h>
 #include <uiautomation.h>
 #include <oleauto.h>
+#include "uia_native.h"
+#include "windows_com.h"
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -52,6 +56,10 @@ bool mutation_result(HRESULT status) {
 void current_mutation(const WindowsWindow* window) {
   current_call();
   if (!window || !windows_window_current(*window)) throw Failure{L"stale_ref", L"The native accessibility target changed."};
+  // Provider lookups above can run while the user changes apps. UIA actions remain foreground
+  // only, so repeat the cheap native window check immediately before the actual pattern call.
+  if (GetForegroundWindow()!=window->hwnd || !IsWindowVisible(window->hwnd) || IsIconic(window->hwnd))
+    throw Failure{L"not_foreground", L"The native accessibility target is no longer foreground."};
   current_call();
 }
 struct Variant {

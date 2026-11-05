@@ -516,6 +516,33 @@ export function createComputerGrants(input: {
       )
         return false
     } else if (metadata.target.scope === "app-menu") return false
+    else if (
+      (metadata.target.menu !== undefined ||
+        inspect.menu !== undefined ||
+        (inspect.app.platform === "windows" && inspect.element?.role === "MenuItem")) &&
+      (step.kind === "open" ||
+        metadata.why === "run_program" ||
+        inspect.app.platform !== "windows" ||
+        inspect.app.pid !== inspect.pid ||
+        inspect.element?.role !== "MenuItem" ||
+        !inspect.element.ref ||
+        !inspect.element.elementId ||
+        !metadata.target.windowId ||
+        metadata.target.windowId !== inspect.window.id ||
+        metadata.target.pid !== inspect.pid ||
+        metadata.target.ref !== inspect.element.ref ||
+        metadata.target.elementId !== inspect.element.elementId ||
+        !metadata.target.menu ||
+        !inspect.menu ||
+        !Schema.is(Computer.WindowMenu)(metadata.target.menu) ||
+        !Schema.is(Computer.WindowMenu)(inspect.menu) ||
+        metadata.target.menu.path.length !== inspect.menu.path.length ||
+        !metadata.target.menu.path.every((part, index) => part === inspect.menu!.path[index]) ||
+        metadata.target.menu.shortcut?.length !== inspect.menu.shortcut?.length ||
+        (metadata.target.menu.shortcut !== undefined &&
+          !metadata.target.menu.shortcut.every((part, index) => part === inspect.menu!.shortcut?.[index])))
+    )
+      return false
     else if (step.kind === "open" || metadata.why === "run_program") {
       const canonical = inspect.programPath ?? (step.kind === "open" ? nativePath(inspect.app) : undefined)
       if (

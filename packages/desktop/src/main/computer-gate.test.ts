@@ -202,6 +202,7 @@ async function fixture() {
               pid: hit.owner.pid,
               ...(hit.ref ? { ref: hit.ref } : {}),
               ...(hit.elementId ? { elementId: hit.elementId } : {}),
+              ...(hit.menu ? { menu: structuredClone(hit.menu) } : {}),
             },
       ...(hit.name ? { targetName: Computer.clean(hit.name, Computer.LIMITS.labelChars) } : {}),
       ...(ctx.frame ? { frame: ctx.frame.id } : {}),
@@ -873,6 +874,147 @@ test("localized paste reads the actual clipboard and binds its menu consent", as
   fake.ctx.approvals = [{ index: 0, requestID: "per_menu_paste" }]
   expect(await checkStep(MENU_CLICK, fake.ctx)).toMatchObject({ verdict: "ok" })
   expect(fake.grants.peekSensitive("per_menu_paste", SCOPE)).toBeUndefined()
+})
+
+const WINDOWS_MENU_APP: Computer.WindowsAumidIdentity = {
+  platform: "windows",
+  kind: "aumid",
+  aumid: "Example.Writer_fixture!App",
+  publisher: "Fixture Publisher",
+  system: false,
+  verified: true,
+  name: "Writer",
+  pid: 10,
+  exe: "C:\\Programs\\Writer\\writer.exe",
+}
+type WindowsMenuHit = Exclude<Computer.HitResult, { readonly scope: "app-menu" }>
+const WINDOWS_MENU: WindowsMenuHit = {
+  scope: "window",
+  owner: WINDOWS_MENU_APP,
+  windowId: "window-1",
+  ref: "ui_1",
+  elementId: "windows_menu_element",
+  role: "MenuItem",
+  name: "Save",
+  menu: { path: ["File", "Save"], shortcut: ["Control", "s"] },
+  enabled: true,
+  editable: false,
+  secure: false,
+  layout: { platform: "windows" },
+  focusedMenuShortcuts: [],
+  documentStatus: "none",
+}
+const WINDOWS_MENU_CLICK: Computer.Step = {
+  kind: "click",
+  at: { ref: "ui_1" },
+  button: "left",
+  count: 1,
+  modifiers: [],
+}
+async function windowsMenuFixture() {
+  const fake = await fixture()
+  fake.state.hit = structuredClone(WINDOWS_MENU)
+  fake.ctx.frame = undefined
+  fake.ctx.allowedApps = [Computer.appKey(WINDOWS_MENU_APP)]
+  await fake.appAsk("per_windows_app", WINDOWS_MENU_APP)
+  return fake
+}
+
+test("Windows MenuItem inspection retains window scope and deep copies complete helper menu facts", () => {
+  const hit = structuredClone(WINDOWS_MENU)
+  const inspect = inspectHit(hit, "general", "ui_41")
+  expect(inspect).toMatchObject({
+    scope: "window",
+    pid: 10,
+    window: { id: "window-1" },
+    element: { ref: "ui_41", elementId: "windows_menu_element" },
+    menu: { path: ["File", "Save"], shortcut: ["Control", "s"] },
+  })
+  if (!hit.menu || hit.owner.platform !== "windows") throw new Error("Missing fixture")
+  ;(hit.menu.path as string[])[0] = "Changed source"
+  ;(hit.menu.shortcut as string[])[0] = "Alt"
+  Object.assign(hit.owner, { publisher: "Changed signer" })
+  expect(inspect).toMatchObject({
+    app: { publisher: "Fixture Publisher" },
+    menu: { path: ["File", "Save"], shortcut: ["Control", "s"] },
+  })
+  expect(inspect).not.toHaveProperty("menuPath")
+  expect(inspect).not.toHaveProperty("menuShortcut")
+  expect(inspectHit(structuredClone(WINDOWS_MENU), "general")).toBeUndefined()
+})
+
+test("complete Windows window menu refs pass the live gate while missing menu or element witnesses cannot Invoke", async () => {
+  const fake = await windowsMenuFixture()
+  expect(await checkStep(WINDOWS_MENU_CLICK, fake.ctx)).toMatchObject({
+    verdict: "ok",
+    inspect: { window: { id: "window-1" }, menu: { path: ["File", "Save"] } },
+  })
+  for (const change of [{ menu: undefined }, { elementId: undefined }, { ref: undefined }]) {
+    fake.state.hit = { ...structuredClone(WINDOWS_MENU), ...change }
+    expect(await checkStep(WINDOWS_MENU_CLICK, fake.ctx)).toMatchObject({ verdict: "refuse" })
+  }
+  expect(fake.state.inputs).toEqual([])
+})
+
+test("the final Windows menu observation must retain owner signer native ref window and complete accelerator facts", async () => {
+  const changes: ((hit: WindowsMenuHit) => WindowsMenuHit)[] = [
+    (hit) => ({ ...hit, owner: { ...WINDOWS_MENU_APP, publisher: "Different Publisher" } }),
+    (hit) => ({ ...hit, owner: { ...WINDOWS_MENU_APP, aumid: "EXAMPLE.Writer_fixture!App" } }),
+    (hit) => ({ ...hit, owner: { ...WINDOWS_MENU_APP, exe: "C:\\Other\\writer.exe" } }),
+    (hit) => ({ ...hit, owner: { ...WINDOWS_MENU_APP, verified: false } }),
+    (hit) => ({ ...hit, windowId: "other-window" }),
+    (hit) => ({ ...hit, ref: "ui_2" }),
+    (hit) => ({ ...hit, elementId: "other-element" }),
+    (hit) => ({ ...hit, menu: { path: ["Other", "Save"], shortcut: ["Control", "s"] } }),
+    (hit) => ({ ...hit, menu: { path: ["File", "Save"], shortcut: ["s", "Control"] } }),
+    (hit) => ({ ...hit, menu: { path: ["File", "Save"] } }),
+    (hit) => ({ ...hit, menu: undefined }),
+  ]
+  for (const change of changes) {
+    const fake = await windowsMenuFixture()
+    let reads = 0
+    fake.ctx.resolveRef = async () => structuredClone(++reads === 1 ? WINDOWS_MENU : change(WINDOWS_MENU))
+    expect(await checkStep(WINDOWS_MENU_CLICK, fake.ctx)).toMatchObject({ verdict: "refuse", code: "changed" })
+    expect(fake.state.inputs).toEqual([])
+  }
+})
+
+test("localized Windows paste uses the observed shortcut to read the real clipboard and spend exact menu consent once", async () => {
+  const fake = await windowsMenuFixture()
+  fake.state.hit = {
+    ...structuredClone(WINDOWS_MENU),
+    name: "Coller",
+    menu: { path: ["Édition", "Coller"], shortcut: ["Control", "v"] },
+  }
+  fake.state.clipboard.text = "sk-" + "a".repeat(24)
+  expect(await checkStep(WINDOWS_MENU_CLICK, fake.ctx)).toMatchObject({ verdict: "refuse", code: "secure_field" })
+  fake.state.clipboard.text = "A harmless sentence"
+  expect(await checkStep(WINDOWS_MENU_CLICK, fake.ctx)).toMatchObject({
+    verdict: "pending",
+    kind: "sensitive",
+    why: "paste",
+    inspect: { menu: { path: ["Édition", "Coller"] }, clipboard: { text: "A harmless sentence" } },
+  })
+  await fake.sensitive("per_windows_paste", WINDOWS_MENU_CLICK, "paste")
+  fake.ctx.approvals = [{ index: 0, requestID: "per_windows_paste" }]
+  expect(await checkStep(WINDOWS_MENU_CLICK, fake.ctx)).toMatchObject({ verdict: "ok" })
+  expect(fake.grants.peekSensitive("per_windows_paste", SCOPE)).toBeUndefined()
+  expect(await checkStep(WINDOWS_MENU_CLICK, fake.ctx)).toMatchObject({ verdict: "refuse", code: "not_granted" })
+})
+
+test("changed Windows menu ancestry cannot spend a sensitive proof with unchanged owner label and step", async () => {
+  const fake = await windowsMenuFixture()
+  fake.state.hit = {
+    ...structuredClone(WINDOWS_MENU),
+    name: "Send",
+    menu: { path: ["Message", "Send"], shortcut: ["Control", "Enter"] },
+  }
+  await fake.sensitive("per_windows_send", WINDOWS_MENU_CLICK, "send")
+  fake.ctx.approvals = [{ index: 0, requestID: "per_windows_send" }]
+  fake.state.hit = { ...fake.state.hit, menu: { path: ["Draft", "Send"], shortcut: ["Control", "Enter"] } }
+  expect(await checkStep(WINDOWS_MENU_CLICK, fake.ctx)).toMatchObject({ verdict: "pending", kind: "sensitive" })
+  expect(fake.grants.peekSensitive("per_windows_send", SCOPE)).toBeDefined()
+  expect(fake.state.inputs).toEqual([])
 })
 
 test("background text sends one complete insertion and does not consult global focus", async () => {

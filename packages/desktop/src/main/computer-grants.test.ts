@@ -57,6 +57,40 @@ function menuInspect(menuPath: readonly string[] = ["File", "Send"]): MenuInspec
   return value
 }
 const MENU_INSPECT = menuInspect()
+const WINDOWS_MENU_APP: Computer.AppIdentity = {
+  platform: "windows",
+  kind: "exe",
+  publisher: "Fixture Software LLC",
+  product: "",
+  binary: "fixture.exe",
+  verified: true,
+  system: false,
+  name: "Fixture",
+  exe: "C:\\Fixture\\fixture.exe",
+  pid: 10,
+}
+function windowsMenuInspect(
+  menu: Computer.WindowMenu = { path: ["File", "Send"], shortcut: ["Control", "s"] },
+): WindowInspect {
+  return {
+    scope: "window",
+    app: WINDOWS_MENU_APP,
+    category: "general",
+    pid: 10,
+    window: { id: "windows-menu-window" },
+    menu: structuredClone(menu),
+    element: {
+      ref: "ui_1",
+      elementId: "windows-menu-element",
+      role: "MenuItem",
+      label: "Send",
+      secure: false,
+      enabled: true,
+      editable: false,
+    },
+    clipboard: { agentOwned: false },
+  }
+}
 
 function appMetadata(identity = APP, extra: Partial<Computer.AppAskMetadata> = {}): Computer.AppAskMetadata {
   if (identity.platform === "remote") throw new Error("No remote app fixture")
@@ -106,6 +140,24 @@ function menuMetadata(extra: Partial<Computer.SensitiveAskMetadata> = {}): Compu
       menuPath: ["File", "Send"],
     },
     frame: undefined,
+    stepDigest: ComputerSensitive.digest(MENU_STEP),
+    ...extra,
+  })
+}
+
+function windowsMenuMetadata(extra: Partial<Computer.SensitiveAskMetadata> = {}): Computer.SensitiveAskMetadata {
+  const inspect = windowsMenuInspect()
+  return sensitiveMetadata({
+    target: {
+      scope: "window",
+      appKey: Computer.appKey(inspect.app),
+      appName: inspect.app.name,
+      pid: inspect.pid,
+      windowId: inspect.window.id,
+      ref: inspect.element!.ref,
+      elementId: inspect.element!.elementId,
+      menu: structuredClone(inspect.menu!),
+    },
     stepDigest: ComputerSensitive.digest(MENU_STEP),
     ...extra,
   })
@@ -728,6 +780,223 @@ describe("desktop-observed app consent", () => {
     expect(fake.manager.consumeApp("per_cap_grant", SCOPE, APP)).toBe(false)
     barrier.resolve(SCOPE.rootSessionID)
     await Promise.all(pending)
+  })
+})
+
+describe("Windows window menu consent", () => {
+  test("complete window-scoped menu evidence spends exact consent once and grants no app access", async () => {
+    const fake = fixture(),
+      inspect = windowsMenuInspect()
+    await fake.answerSensitive("per_windows_menu_once", windowsMenuMetadata())
+    expect(
+      fake.manager.consumeSensitive("per_windows_menu_once", SCOPE, MENU_STEP, inspect, "frame-1", "send", false),
+    ).toBe(true)
+    expect(fake.manager.consumeSensitive("per_windows_menu_once", SCOPE, MENU_STEP, inspect, "frame-1", "send")).toBe(
+      true,
+    )
+    expect(fake.manager.consumeSensitive("per_windows_menu_once", SCOPE, MENU_STEP, inspect, "frame-1", "send")).toBe(
+      false,
+    )
+    expect(fake.manager.grants(SCOPE).task.size).toBe(0)
+    expect(fake.state.always).toEqual([])
+  })
+
+  test("ancestry and shortcut presence aliases order and code points bind the observed Windows menu", async () => {
+    const fake = fixture(),
+      inspect = windowsMenuInspect({ path: ["Café", "Send"], shortcut: ["Control", "s"] })
+    const metadata = windowsMenuMetadata()
+    if (metadata.target.scope === "app-menu") throw new Error("Expected Windows menu consent")
+    metadata.target.menu = structuredClone(inspect.menu!)
+    await fake.answerSensitive("per_windows_menu_facts", metadata)
+    for (const menu of [
+      { path: ["Cafe\u0301", "Send"], shortcut: ["Control", "s"] },
+      { path: ["Send"], shortcut: ["Control", "s"] },
+      { path: ["Other", "Send"], shortcut: ["Control", "s"] },
+      { path: ["Café", "Send", "Other"], shortcut: ["Control", "s"] },
+      { path: ["Café", "Send"] },
+      { path: ["Café", "Send"], shortcut: ["Ctrl", "s"] },
+      { path: ["Café", "Send"], shortcut: ["s", "Control"] },
+      { path: ["Café", "Send"], shortcut: ["Control", "r"] },
+      { path: [] },
+    ])
+      expect(
+        fake.manager.consumeSensitive(
+          "per_windows_menu_facts",
+          SCOPE,
+          MENU_STEP,
+          { ...inspect, menu },
+          "frame-1",
+          "send",
+        ),
+      ).toBe(false)
+    expect(fake.manager.consumeSensitive("per_windows_menu_facts", SCOPE, MENU_STEP, inspect, "frame-1", "send")).toBe(
+      true,
+    )
+    const withoutShortcut = windowsMenuMetadata()
+    if (withoutShortcut.target.scope === "app-menu") throw new Error("Expected Windows menu consent")
+    withoutShortcut.target.menu = { path: ["File", "Send"] }
+    await fake.answerSensitive("per_windows_menu_none", withoutShortcut)
+    expect(
+      fake.manager.consumeSensitive("per_windows_menu_none", SCOPE, MENU_STEP, windowsMenuInspect(), "frame-1", "send"),
+    ).toBe(false)
+    expect(
+      fake.manager.consumeSensitive(
+        "per_windows_menu_none",
+        SCOPE,
+        MENU_STEP,
+        windowsMenuInspect({ path: ["File", "Send"] }),
+        "frame-1",
+        "send",
+      ),
+    ).toBe(true)
+  })
+
+  test("actual Windows owner window reference and element witnesses cannot be substituted", async () => {
+    const fake = fixture(),
+      inspect = windowsMenuInspect()
+    await fake.answerSensitive("per_windows_menu_owner", windowsMenuMetadata())
+    for (const changed of [
+      { ...inspect, app: { ...inspect.app, pid: 11 }, pid: 11 },
+      { ...inspect, app: { ...inspect.app, pid: 11 } },
+      { ...inspect, app: { ...WINDOWS_MENU_APP, publisher: "Other publisher" } },
+      { ...inspect, window: { id: "other-window" } },
+      { ...inspect, element: { ...inspect.element!, ref: "ui_other" } },
+      { ...inspect, element: { ...inspect.element!, elementId: "other-element" } },
+      { ...inspect, element: { ...inspect.element!, elementId: undefined } },
+      { ...inspect, element: { ...inspect.element!, ref: undefined } },
+      { ...inspect, element: { ...inspect.element!, role: "Button" } },
+      { ...inspect, menu: undefined },
+      MENU_INSPECT,
+    ])
+      expect(
+        fake.manager.consumeSensitive("per_windows_menu_owner", SCOPE, MENU_STEP, changed, "frame-1", "send"),
+      ).toBe(false)
+    expect(fake.manager.consumeSensitive("per_windows_menu_owner", SCOPE, MENU_STEP, inspect, "frame-1", "send")).toBe(
+      true,
+    )
+  })
+
+  test("window menu metadata cannot upgrade an ordinary target proof or cross task and step boundaries", async () => {
+    const fake = fixture(),
+      inspect = windowsMenuInspect(),
+      metadata = windowsMenuMetadata()
+    if (metadata.target.scope === "app-menu") throw new Error("Expected Windows menu consent")
+    const withoutMenu = { ...metadata, target: { ...metadata.target, menu: undefined } }
+    await fake.answerSensitive("per_windows_menu_plain", withoutMenu)
+    expect(fake.manager.peekSensitive("per_windows_menu_plain", SCOPE)).toBeDefined()
+    expect(fake.manager.consumeSensitive("per_windows_menu_plain", SCOPE, MENU_STEP, inspect, "frame-1", "send")).toBe(
+      false,
+    )
+    await fake.answerSensitive("per_windows_menu_step", metadata)
+    for (const scope of [
+      { ...SCOPE, lease: 2 },
+      { ...SCOPE, sessionID: "ses_other" },
+      { ...SCOPE, rootSessionID: "ses_other" },
+      { ...SCOPE, directory: "/other" },
+    ])
+      expect(fake.manager.consumeSensitive("per_windows_menu_step", scope, MENU_STEP, inspect, "frame-1", "send")).toBe(
+        false,
+      )
+    expect(
+      fake.manager.consumeSensitive(
+        "per_windows_menu_step",
+        SCOPE,
+        { ...MENU_STEP, count: 2 },
+        inspect,
+        "frame-1",
+        "send",
+      ),
+    ).toBe(false)
+    expect(fake.manager.consumeSensitive("per_windows_menu_step", SCOPE, MENU_STEP, inspect, undefined, "send")).toBe(
+      false,
+    )
+    expect(fake.manager.consumeSensitive("per_windows_menu_step", SCOPE, MENU_STEP, inspect, "frame-1", "delete")).toBe(
+      false,
+    )
+    expect(fake.manager.consumeSensitive("per_windows_menu_step", SCOPE, MENU_STEP, inspect, "frame-1", "send")).toBe(
+      true,
+    )
+  })
+
+  test("nested ask and projected menu arrays cannot rewrite the stored once-only proof", async () => {
+    const fake = fixture(),
+      metadata = windowsMenuMetadata(),
+      inspect = windowsMenuInspect()
+    const event = asked("per_windows_menu_copy", metadata)
+    await fake.manager.observe(event)
+    const observed = (event.payload.properties as { metadata: Computer.SensitiveAskMetadata }).metadata
+    if (observed.target.scope === "app-menu" || !observed.target.menu) throw new Error("Expected Windows menu consent")
+    observed.target.menu.path = ["Changed", "Send"]
+    observed.target.menu.shortcut = ["Control", "r"]
+    await fake.manager.observe(replied("per_windows_menu_copy", "once"))
+    const snapshot = fake.manager.peekSensitive("per_windows_menu_copy", SCOPE)!
+    if (snapshot.target.scope === "app-menu" || !snapshot.target.menu) throw new Error("Expected Windows menu consent")
+    snapshot.target.menu.path = ["Changed again", "Send"]
+    snapshot.target.menu.shortcut = ["Alt", "r"]
+    expect(
+      fake.manager.consumeSensitive(
+        "per_windows_menu_copy",
+        SCOPE,
+        MENU_STEP,
+        { ...inspect, menu: snapshot.target.menu },
+        "frame-1",
+        "send",
+      ),
+    ).toBe(false)
+    expect(fake.manager.consumeSensitive("per_windows_menu_copy", SCOPE, MENU_STEP, inspect, "frame-1", "send")).toBe(
+      true,
+    )
+  })
+
+  test("incomplete Windows menu asks never become authority and an existing menu proof cannot launch a program", async () => {
+    const fake = fixture(),
+      valid = windowsMenuMetadata(),
+      inspect = windowsMenuInspect()
+    if (valid.target.scope === "app-menu") throw new Error("Expected Windows menu consent")
+    for (const [index, target] of [
+      { ...valid.target, menu: { path: [] } },
+      { ...valid.target, menu: { path: [""] } },
+      { ...valid.target, menu: { path: ["File", "Send"], shortcut: [] } },
+      { ...valid.target, pid: undefined },
+      { ...valid.target, windowId: undefined },
+      { ...valid.target, ref: undefined },
+      { ...valid.target, elementId: undefined },
+    ].entries()) {
+      const id = `per_windows_menu_bad_${index}`
+      await fake.answerSensitive(id, { ...valid, target })
+      expect(fake.manager.peekSensitive(id, SCOPE)).toBeUndefined()
+      expect(fake.manager.consumeSensitive(id, SCOPE, MENU_STEP, inspect, "frame-1", "send")).toBe(false)
+    }
+    await fake.answerSensitive(
+      "per_windows_menu_run",
+      windowsMenuMetadata({ why: "run_program", path: "C:\\Fixture\\fixture.exe" }),
+    )
+    expect(fake.manager.peekSensitive("per_windows_menu_run", SCOPE)).toBeDefined()
+    expect(
+      fake.manager.consumeSensitive(
+        "per_windows_menu_run",
+        SCOPE,
+        MENU_STEP,
+        { ...inspect, programPath: "C:\\Fixture\\fixture.exe" },
+        "frame-1",
+        "run_program",
+      ),
+    ).toBe(false)
+  })
+
+  test("a Windows menu proof cannot survive task reuse or an Always reply", async () => {
+    const fake = fixture(),
+      inspect = windowsMenuInspect()
+    await fake.answerSensitive("per_windows_menu_old", windowsMenuMetadata())
+    fake.manager.endTask(SCOPE.rootSessionID, SCOPE.directory)
+    fake.manager.beginTask(SCOPE)
+    expect(fake.manager.consumeSensitive("per_windows_menu_old", SCOPE, MENU_STEP, inspect, "frame-1", "send")).toBe(
+      false,
+    )
+    await fake.answerSensitive("per_windows_menu_always", windowsMenuMetadata(), "always")
+    expect(fake.manager.consumeSensitive("per_windows_menu_always", SCOPE, MENU_STEP, inspect, "frame-1", "send")).toBe(
+      false,
+    )
   })
 })
 

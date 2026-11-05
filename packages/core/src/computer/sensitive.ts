@@ -74,20 +74,27 @@ export function classify(step: Step, inspect: Computer.InspectResult, ctx: Conte
   if (inspect.elevated) return refuse("elevated", "Use handoff for this administrator window.")
   if (ComputerCredential.field(inspect.element) || (step.kind === "type" && ComputerCredential.secret(step.text)))
     return refuse("secure_field", "Use handoff so the user can enter credentials or payment details.")
-  if (inspect.scope === "app-menu" && ComputerKeys.forbiddenMenu(inspect.menuPath, inspect.menuShortcut))
+  const menuPath = inspect.scope === "app-menu" ? inspect.menuPath : inspect.menu?.path
+  const menuShortcut = inspect.scope === "app-menu" ? inspect.menuShortcut : inspect.menu?.shortcut
+  const menuLayout: ComputerKeys.Layout = { platform: inspect.app.platform === "windows" ? "windows" : "macos" }
+  if (
+    inspect.scope !== "app-menu" &&
+    inspect.app.platform === "windows" &&
+    inspect.element?.role === "MenuItem" &&
+    !inspect.menu
+  )
+    return refuse("blocked", "The menu action needs complete observed menu facts.")
+  if (menuPath && ComputerKeys.forbiddenMenu(menuPath, menuShortcut, menuLayout))
     return refuse("blocked", "This menu route is not permitted for computer use.")
-  if (inspect.scope === "app-menu" && step.kind === "type")
-    return refuse("blocked", "Menu items cannot receive typed text.")
+  if (menuPath && step.kind === "type") return refuse("blocked", "Menu items cannot receive typed text.")
   if (
     ctx.documentProtected ||
     [inspect.document, ctx.resolvedDocument].some((file) => file && protectedDocument(file, ctx))
   )
     return refuse("blocked", "Computer use cannot edit Vector's instructions, memory, permissions or configuration.")
   const key = step.kind === "key" ? ComputerKeys.resolve(step.combo, ctx.layout) : undefined
-  const menuKey =
-    inspect.scope === "app-menu" && inspect.menuShortcut
-      ? ComputerKeys.resolve(inspect.menuShortcut, { platform: "macos" })
-      : undefined
+  const menuKey = menuShortcut ? ComputerKeys.resolve(menuShortcut, menuLayout) : undefined
+  const menuEdits = menuShortcut !== undefined && ComputerKeys.menuTypesText(menuShortcut, menuLayout)
   const menu =
     key &&
     ctx.focusedMenuShortcuts?.find((item) => {
@@ -99,9 +106,7 @@ export function classify(step: Step, inspect: Computer.InspectResult, ctx: Conte
         candidate.modifiers.every((m) => key.modifiers.includes(m))
       )
     })
-  const label = WebFence.clean(
-    menu?.label ?? (inspect.scope === "app-menu" ? inspect.menuPath.at(-1) : inspect.element?.label) ?? "",
-  )
+  const label = WebFence.clean(menu?.label ?? menuPath?.at(-1) ?? inspect.element?.label ?? "")
     .normalize("NFKC")
     .trim()
   const activating =
@@ -113,10 +118,7 @@ export function classify(step: Step, inspect: Computer.InspectResult, ctx: Conte
     key?.key === "space"
   const paste =
     (activating && /^paste\b/i.test(label)) ||
-    (activating &&
-      inspect.scope === "app-menu" &&
-      inspect.menuShortcut !== undefined &&
-      ComputerKeys.pasteCombo(inspect.menuShortcut)) ||
+    (activating && menuShortcut !== undefined && ComputerKeys.pasteCombo(menuShortcut, menuLayout)) ||
     (step.kind === "key" && ComputerKeys.pasteCombo(step.combo, ctx.layout))
   if (paste && ctx.clipboardText && ComputerCredential.secret(ctx.clipboardText))
     return refuse("secure_field", "Use handoff so the user can enter credentials or payment details.")
@@ -126,35 +128,43 @@ export function classify(step: Step, inspect: Computer.InspectResult, ctx: Conte
       ((key.key === "space" || [...key.key].length === 1) &&
         key.modifiers.every((m) => m === "shift" || m === "altgraph")) ||
       (["x", "z", "y"].includes(key.key) && (key.modifiers.includes("control") || key.modifiers.includes("meta"))))
-  if (
-    inspect.scope === "app-menu" &&
-    step.kind === "key" &&
-    (paste || (edits && key?.key !== "enter" && key?.key !== "space"))
-  )
+  if (menuPath && step.kind === "key" && (paste || (edits && key?.key !== "enter" && key?.key !== "space")))
     return refuse("blocked", "Menu items cannot receive text editing keys.")
   const ideRun =
     inspect.category === "developer" &&
     activating &&
+    !menuEdits &&
     (menu ||
       (inspect.element &&
         !inspect.element.editable &&
         !/textfield|textarea|edit|input|combo/i.test(inspect.element.role))) &&
     (/^(?:run|build|debug|start debugging)\b/i.test(label) ||
-      (inspect.scope === "app-menu" &&
-        !inspect.element.editable &&
+      (menuPath &&
+        !inspect.element?.editable &&
         menuKey &&
         ((menuKey.modifiers.includes("meta") && ["r", "b", "u"].includes(menuKey.key)) ||
           (menuKey.key === "f5" && menuKey.modifiers.every((modifier) => modifier === "control")))))
+  const knownNontextMenu =
+    menuKey &&
+    ((menuKey.modifiers.includes("control") &&
+      menuKey.modifiers.every((modifier) => modifier === "control" || modifier === "shift") &&
+      ["a", "c", "s"].includes(menuKey.key)) ||
+      (menuKey.modifiers.length === 0 &&
+        ["arrowleft", "arrowright", "arrowup", "arrowdown", "home", "end", "pageup", "pagedown"].includes(menuKey.key)))
+  const disruptiveMenu =
+    menuPath &&
+    !menuEdits &&
+    ((menuKey &&
+      ((menuKey.key === "q" && menuKey.modifiers.includes("meta")) ||
+        (menuKey.key === "f4" && menuKey.modifiers.includes("alt")))) ||
+      /^(?:quit|exit|log out|log off|sign out|shut down|restart)\b/i.test(label))
   const title = inspect.scope === "app-menu" ? undefined : inspect.window.title
   if (
     inspect.category === "developer" &&
     (step.kind === "type" ||
       paste ||
-      (activating &&
-        inspect.scope === "app-menu" &&
-        inspect.menuShortcut !== undefined &&
-        ComputerKeys.menuTypesText(inspect.menuShortcut) &&
-        !ideRun) ||
+      (activating && menuEdits) ||
+      (activating && inspect.menu && !knownNontextMenu && !ideRun && !disruptiveMenu) ||
       (edits && !ideRun) ||
       (activating && /^(?:cut|delete|undo|redo|replace|insert|format|refactor)\b/i.test(label)))
   )
@@ -222,10 +232,7 @@ export function classify(step: Step, inspect: Computer.InspectResult, ctx: Conte
   if (
     (key &&
       ((key.key === "q" && key.modifiers.includes("meta")) || (key.key === "f4" && key.modifiers.includes("alt")))) ||
-    (activating &&
-      menuKey &&
-      ((menuKey.key === "q" && menuKey.modifiers.includes("meta")) ||
-        (menuKey.key === "f4" && menuKey.modifiers.includes("alt"))))
+    (activating && disruptiveMenu)
   )
     return ask("disruptive")
   if (ideRun)
@@ -239,8 +246,7 @@ export function classify(step: Step, inspect: Computer.InspectResult, ctx: Conte
   if (
     (ctx.settings ||
       /settings|preferences|configuration|options/i.test(title ?? "") ||
-      (inspect.scope === "app-menu" &&
-        inspect.menuPath.some((item) => /settings|preferences|configuration|options/i.test(item)))) &&
+      menuPath?.some((item) => /settings|preferences|configuration|options/i.test(item))) &&
     !/^(?:cancel|close|back|help|search)\b/i.test(label) &&
     (step.kind === "type" || paste || edits || activating)
   )
@@ -263,6 +269,7 @@ export function classify(step: Step, inspect: Computer.InspectResult, ctx: Conte
       !/^(?:cancel|close|back|home|help|search|view|history|statements?)\b/i.test(label)
     )
       return ask("buy")
+    if (inspect.menu && !knownNontextMenu) return ask("flagged")
   }
   return undefined
 }
@@ -277,6 +284,7 @@ function caution(ctx: Context, inspect: Computer.InspectResult): Result | undefi
   const screen = [
     ctx.screenText,
     inspect.scope === "app-menu" ? inspect.menuPath.join(" > ") : inspect.window.title,
+    inspect.menu?.path.join(" > "),
     inspect.element?.label,
   ]
     .filter(Boolean)

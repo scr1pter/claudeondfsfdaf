@@ -104,6 +104,7 @@ const Safe = (max: number) =>
 /** Bounded opaque text. */
 const Bounded = (max: number) => Schema.String.check(Schema.isMaxLength(max))
 const Id = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(256))
+const WindowId = Id
 const Name = Bounded(256)
 const Path = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(4096))
 const SessionRef = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(128))
@@ -461,27 +462,46 @@ export const MenuPath = Schema.Array(
   ),
 ).check(Schema.isMaxLength(30))
 export type MenuPath = typeof MenuPath.Type
-/** Actual AX command-character/modifier observation, never a proposed model shortcut. */
+/** Actual native accelerator/modifier observation, never a proposed model shortcut. */
 export const MenuShortcut = Schema.Array(KeyName).check(Schema.isLengthBetween(1, 8))
 export type MenuShortcut = typeof MenuShortcut.Type
 const ActionMenuPath = MenuPath.check(Schema.isMinLength(1))
+/** Complete observed Windows MenuItem ancestry within a real window. Omitted shortcut means observed none. */
+export interface WindowMenu extends Schema.Schema.Type<typeof WindowMenu> {}
+export const WindowMenu = Schema.Struct({
+  path: ActionMenuPath,
+  shortcut: optional(MenuShortcut),
+}).annotate({ identifier: "Computer.WindowMenu" })
 const NoMenuWindowFields = {
   window: optional(Schema.Never),
   windowId: optional(Schema.Never),
   windowTitle: optional(Schema.Never),
+  menu: optional(Schema.Never),
 }
 
 export const SensitiveAskTarget = Schema.Union([
   Schema.Struct({
     scope: optional(Schema.Literal("window")),
     menuShortcut: optional(Schema.Never),
+    menu: optional(WindowMenu),
     appName: Safe(256),
     appKey: Schema.Union([AppKey, ProgramKey]),
     windowId: optional(Id),
     pid: optional(PositiveInt),
     ref: optional(UiRef),
     elementId: optional(Id),
-  }),
+  }).check(
+    Schema.makeFilter(
+      (value) =>
+        !value.menu ||
+        (parseAppKey(value.appKey)?.platform === "windows" &&
+          value.windowId !== undefined &&
+          value.pid !== undefined &&
+          value.ref !== undefined &&
+          value.elementId !== undefined),
+      { expected: "a Windows menu bound to an actual window, process and element" },
+    ),
+  ),
   Schema.Struct({
     scope: Schema.Literal("app-menu"),
     ...NoMenuWindowFields,
@@ -888,12 +908,24 @@ export const InspectResult = Schema.Union([
     ...InspectObservationFields,
     scope: optional(Schema.Literal("window")),
     menuShortcut: optional(Schema.Never),
+    menu: optional(WindowMenu),
     app: AppIdentity,
     category: AppCategory,
     pid: PositiveInt,
     window: Schema.Struct({ id: Id, title: optional(Bounded(1024)) }),
     element: optional(Schema.Struct(InspectElementFields)),
-  }),
+  }).check(
+    Schema.makeFilter(
+      (value) =>
+        !value.menu ||
+        (value.app.platform === "windows" &&
+          value.app.pid === value.pid &&
+          value.element?.role === "MenuItem" &&
+          value.element.ref !== undefined &&
+          value.element.elementId !== undefined),
+      { expected: "observed menu facts on the actual Windows window MenuItem" },
+    ),
+  ),
   Schema.Struct({
     ...InspectObservationFields,
     scope: Schema.Literal("app-menu"),
@@ -921,7 +953,25 @@ const UiNodeFields = {
   secure: Schema.Boolean,
 }
 export const UiNode = Schema.Union([
-  Schema.Struct({ ...UiNodeFields, scope: optional(Schema.Literal("window")), menuShortcut: optional(Schema.Never) }),
+  Schema.Struct({
+    ...UiNodeFields,
+    scope: optional(Schema.Literal("window")),
+    menuShortcut: optional(Schema.Never),
+    menu: optional(WindowMenu),
+    pid: optional(PositiveInt),
+    windowId: optional(WindowId),
+    elementId: optional(Id),
+  }).check(
+    Schema.makeFilter(
+      (value) =>
+        !value.menu ||
+        (value.role === "MenuItem" &&
+          value.pid !== undefined &&
+          value.windowId !== undefined &&
+          value.elementId !== undefined),
+      { expected: "a window menu node with actual process, window and element witnesses" },
+    ),
+  ),
   Schema.Struct({
     ...UiNodeFields,
     ...NoMenuWindowFields,
@@ -1310,7 +1360,6 @@ export type HelperFeature = typeof HelperFeature.Type
 const HelperRequestId = NonNegativeInt.check(Schema.isLessThanOrEqualTo(Number.MAX_SAFE_INTEGER))
 const Version = Schema.Struct({ min: PositiveInt, max: PositiveInt })
 const Service = Schema.Literals(["screen", "accessibility"])
-const WindowId = Id
 export type NativePhase = { readonly sessionId: string; readonly phaseRevision: number }
 const ExpectedPhase = { sessionId: optional(Id), phaseRevision: optional(NonNegativeInt) }
 
@@ -1455,7 +1504,23 @@ export const TreeResult = Schema.Struct({
         scope: optional(Schema.Literal("window")),
         bounds: Rect,
         menuShortcut: optional(Schema.Never),
-      }),
+        menu: optional(WindowMenu),
+        owner: optional(Schema.Union([WindowsAumidIdentity, WindowsExeIdentity])),
+        pid: optional(PositiveInt),
+        windowId: optional(WindowId),
+        elementId: optional(Id),
+      }).check(
+        Schema.makeFilter(
+          (value) =>
+            !value.menu ||
+            (value.role === "MenuItem" &&
+              value.pid !== undefined &&
+              value.owner?.pid === value.pid &&
+              value.windowId !== undefined &&
+              value.elementId !== undefined),
+          { expected: "a Windows menu tree node with agreeing actual owner, process, window and element" },
+        ),
+      ),
       Schema.Struct({
         ...TreeNodeFields,
         ...NoMenuWindowFields,
@@ -1496,7 +1561,19 @@ export const HitResult = Schema.Union([
     windowId: WindowId,
     windowTitle: optional(Bounded(1024)),
     menuShortcut: optional(Schema.Never),
-  }),
+    menu: optional(WindowMenu),
+  }).check(
+    Schema.makeFilter(
+      (value) =>
+        !value.menu ||
+        (value.owner.platform === "windows" &&
+          value.owner.pid !== undefined &&
+          value.role === "MenuItem" &&
+          value.ref !== undefined &&
+          value.elementId !== undefined),
+      { expected: "a Windows menu hit bound to its actual process, window and element" },
+    ),
+  ),
   Schema.Struct({
     ...HitResultFields,
     ...NoMenuWindowFields,

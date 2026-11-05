@@ -17,6 +17,14 @@ type Capture = {
 type NativeReferenceWitness =
   | { privateScope: "window"; elementId?: string; pid?: number }
   | {
+      privateScope: "window-menu"
+      owner: string
+      pid: number
+      windowId: string
+      elementId: string
+      menu: Computer.WindowMenu
+    }
+  | {
       privateScope: "app-menu"
       pid: number
       elementId: string
@@ -98,13 +106,70 @@ export function createComputerFrames(input: {
       ...(value.bounds ? { nativeBounds: { ...value.bounds } } : {}),
     }
   }
+  const windowMenuWitness = (value: {
+    owner: Computer.AppIdentity
+    pid: number
+    windowId: string
+    elementId: string
+    menu: Computer.WindowMenu
+  }): Extract<NativeReferenceWitness, { privateScope: "window-menu" }> => {
+    if (
+      input.platform !== "windows" ||
+      value.owner.platform !== "windows" ||
+      !Schema.is(Computer.AppIdentity)(value.owner) ||
+      !value.owner.exe ||
+      !Number.isSafeInteger(value.pid) ||
+      value.pid <= 0 ||
+      value.owner.pid !== value.pid ||
+      !value.windowId ||
+      value.windowId.length > 256 ||
+      value.windowId.includes("\0") ||
+      !value.elementId ||
+      value.elementId.length > 256 ||
+      value.elementId.includes("\0") ||
+      !Schema.is(Computer.WindowMenu)(value.menu)
+    )
+      throw new ComputerError("stale_ref", "The actual window menu observation is unavailable.")
+    const owner = value.owner
+    return {
+      privateScope: "window-menu",
+      owner: JSON.stringify([
+        owner.kind,
+        owner.kind === "aumid" ? owner.aumid : [owner.publisher, owner.product, owner.binary],
+        owner.publisher,
+        owner.verified,
+        owner.system,
+        owner.exe,
+        owner.pid,
+      ]),
+      pid: value.pid,
+      windowId: value.windowId,
+      elementId: value.elementId,
+      menu: {
+        path: [...value.menu.path],
+        ...(value.menu.shortcut === undefined ? {} : { shortcut: [...value.menu.shortcut] }),
+      },
+    }
+  }
   const hitWitness = (hit: Computer.HitResult): NativeReferenceWitness => {
-    if (hit.scope !== "app-menu")
+    if (hit.scope !== "app-menu") {
+      if (hit.menu !== undefined) {
+        if (hit.role !== "MenuItem" || !hit.elementId || hit.owner.platform !== "windows" || !hit.owner.pid)
+          throw new ComputerError("stale_ref", "The actual window menu element changed.")
+        return windowMenuWitness({
+          owner: hit.owner,
+          pid: hit.owner.pid,
+          windowId: hit.windowId,
+          elementId: hit.elementId,
+          menu: hit.menu,
+        })
+      }
       return {
         privateScope: "window",
         elementId: hit.elementId,
         ...(hit.owner.platform !== "remote" && hit.owner.pid ? { pid: hit.owner.pid } : {}),
       }
+    }
     if (
       hit.owner.platform !== "macos" ||
       hit.owner.pid !== hit.pid ||
@@ -117,6 +182,18 @@ export function createComputerFrames(input: {
   }
   const sameWitness = (first: NativeReferenceWitness, second: NativeReferenceWitness) => {
     if (first.privateScope !== second.privateScope) return false
+    if (first.privateScope === "window-menu" && second.privateScope === "window-menu")
+      return (
+        first.owner === second.owner &&
+        first.pid === second.pid &&
+        first.windowId === second.windowId &&
+        first.elementId === second.elementId &&
+        first.menu.path.length === second.menu.path.length &&
+        first.menu.path.every((part, index) => part === second.menu.path[index]) &&
+        first.menu.shortcut?.length === second.menu.shortcut?.length &&
+        (first.menu.shortcut === undefined ||
+          first.menu.shortcut.every((part, index) => part === second.menu.shortcut?.[index]))
+      )
     if (first.privateScope === "app-menu" && second.privateScope === "app-menu")
       return (
         first.pid === second.pid &&
@@ -153,7 +230,11 @@ export function createComputerFrames(input: {
         witness = { ...witness, elementId: existing[1].witness.elementId }
       if (witness.privateScope === "window" && existing[1].witness.privateScope === "window" && !witness.pid)
         witness = { ...witness, pid: existing[1].witness.pid }
-      if (!sameWitness(existing[1].witness, witness)) throw new ComputerError("stale_ref", "The UI element changed.")
+      if (!sameWitness(existing[1].witness, witness)) {
+        if (existing[1].witness.privateScope === "window-menu" || witness.privateScope === "window-menu")
+          refs.delete(existing[0])
+        throw new ComputerError("stale_ref", "The UI element changed.")
+      }
       existing[1].witness = witness
       return existing[0]
     }
@@ -385,9 +466,36 @@ export function createComputerFrames(input: {
             ...(node.menuShortcut === undefined ? {} : { menuShortcut: [...node.menuShortcut] }),
             ref: mint(scope, node.ref, tree.generation, menuWitness(node)),
           }
+        const witness =
+          node.menu === undefined
+            ? undefined
+            : node.role !== "MenuItem" || !node.owner || !node.pid || !node.windowId || !node.elementId
+              ? undefined
+              : windowMenuWitness({
+                  owner: node.owner,
+                  pid: node.pid,
+                  windowId: node.windowId,
+                  elementId: node.elementId,
+                  menu: node.menu,
+                })
+        if (node.menu !== undefined && !witness)
+          throw new ComputerError("stale_ref", "The actual window menu ancestry is unavailable.")
+        if (witness && capture && "windowId" in capture.target && witness.windowId !== capture.target.windowId)
+          throw new ComputerError("stale_ref", "The actual window menu belongs to another captured window.")
         return {
           ...shared,
-          ref: mint(scope, node.ref, tree.generation),
+          ref: mint(scope, node.ref, tree.generation, witness),
+          ...(witness
+            ? {
+                pid: witness.pid,
+                windowId: witness.windowId,
+                elementId: witness.elementId,
+                menu: {
+                  path: [...witness.menu.path],
+                  ...(witness.menu.shortcut === undefined ? {} : { shortcut: [...witness.menu.shortcut] }),
+                },
+              }
+            : {}),
           ...(capture
             ? {
                 bounds: {
@@ -409,16 +517,26 @@ export function createComputerFrames(input: {
         throw new ComputerError("stale_ref", "Read the current UI before using this reference.")
       const hit = await input.backend.resolveRef(entry.native)
       const after = phase(scope)
+      let witness: NativeReferenceWitness
+      try {
+        witness = hitWitness(hit)
+      } catch (error) {
+        if (entry.witness.privateScope === "window-menu") refs.delete(id)
+        throw error
+      }
+      const matching = hit.ref === entry.native && sameWitness(entry.witness, witness)
       if (
         version !== epoch ||
         after.sessionId !== current.sessionId ||
         after.phaseRevision !== current.phaseRevision ||
         refs.get(id) !== entry ||
-        hit.ref !== entry.native ||
-        !sameWitness(entry.witness, hitWitness(hit))
-      )
+        !matching
+      ) {
+        if (!matching && (entry.witness.privateScope === "window-menu" || witness.privateScope === "window-menu"))
+          refs.delete(id)
         throw new ComputerError("stale_ref", "The UI element changed.")
-      entry.witness = hitWitness(hit)
+      }
+      entry.witness = witness
       entry.phase = { ...current }
       return hit
     },

@@ -229,6 +229,140 @@ describe("window and app-menu observation contracts", () => {
   })
 })
 
+describe("Windows window-menu evidence contracts", () => {
+  const app = {
+    platform: "windows",
+    kind: "aumid",
+    aumid: "Test.Editor!App",
+    name: "Editor",
+    system: false,
+    verified: true,
+    pid: 501,
+  }
+  const menu = { path: ["Édition", "Coller"], shortcut: ["Control", "v"] }
+  const node = {
+    ref: "ui_1",
+    role: "MenuItem",
+    name: "Coller",
+    secure: false,
+    enabled: true,
+    pid: 501,
+    windowId: "42",
+    elementId: "element-1",
+    menu,
+  }
+  const observed = {
+    ...inspect,
+    app,
+    element: { ...inspect.element, role: "MenuItem", ref: "ui_1", elementId: "element-1" },
+    menu,
+  }
+  const hit = {
+    ref: node.ref,
+    role: node.role,
+    name: node.name,
+    secure: node.secure,
+    enabled: node.enabled,
+    windowId: node.windowId,
+    elementId: node.elementId,
+    menu,
+    owner: app,
+  }
+  const tree = { ...node, owner: app, focused: false, bounds: rect }
+  const target = {
+    appName: "Editor",
+    appKey: "app:windows:aumid:test.editor!app",
+    pid: 501,
+    windowId: "42",
+    ref: "ui_1",
+    elementId: "element-1",
+    menu,
+  }
+  const trees = (value: unknown) => ({ generation: 1, truncated: false, nodes: [value] })
+
+  test("actual window menus retain nested ancestry and accelerator across observations and consent", () => {
+    accepts(Computer.WindowMenu, menu)
+    accepts(Computer.InspectResult, observed)
+    accepts(Computer.HitResult, hit)
+    accepts(Computer.UiNode, node)
+    accepts(Computer.TreeResult, trees(tree))
+    accepts(Computer.SensitiveAskTarget, target)
+    accepts(Computer.SensitiveAskMetadata, {
+      action: "click",
+      why: "paste",
+      target,
+      targetName: "Coller",
+      stepDigest: "a".repeat(64),
+    })
+  })
+
+  test("a known absent accelerator stays absent rather than inventing a key or root action", () => {
+    const noShortcut = { path: ["Fichier", "Enregistrer"] }
+    expect(strict(Computer.WindowMenu)(noShortcut)).toEqual(noShortcut)
+    expect(Schema.encodeSync(Computer.WindowMenu)({ ...noShortcut, shortcut: undefined })).toEqual(noShortcut)
+    accepts(Computer.InspectResult, { ...observed, menu: noShortcut })
+    accepts(Computer.HitResult, { ...hit, menu: noShortcut })
+    accepts(Computer.SensitiveAskTarget, { ...target, menu: noShortcut })
+    rejects(Computer.WindowMenu, { path: [] })
+    for (const path of [[""], ["File\n"], ["Save\u202e"], ["x".repeat(257)], Array(31).fill("File")])
+      rejects(Computer.WindowMenu, { path })
+    for (const shortcut of [[], [""], ["\n"], ["x".repeat(33)], Array(9).fill("Shift")])
+      rejects(Computer.WindowMenu, { ...menu, shortcut })
+  })
+
+  test("Windows menu evidence cannot be attached to Mac windowless or ordinary window observations", () => {
+    rejects(Computer.InspectResult, { ...observed, app: mac })
+    rejects(Computer.HitResult, { ...hit, owner: mac })
+    rejects(Computer.TreeResult, trees({ ...tree, owner: mac }))
+    rejects(Computer.SensitiveAskTarget, { ...target, appKey: "app:macos:test.editor" })
+    rejects(Computer.SensitiveAskTarget, { ...target, appKey: "program:windows:" + "a".repeat(64) })
+    for (const role of ["Button", "Edit", "AXMenuItem"]) {
+      rejects(Computer.InspectResult, { ...observed, element: { ...observed.element, role } })
+      rejects(Computer.HitResult, { ...hit, role })
+      rejects(Computer.UiNode, { ...node, role })
+      rejects(Computer.TreeResult, trees({ ...tree, role }))
+    }
+    rejects(Computer.InspectResult, { ...observed, scope: "app-menu", menuPath: menu.path })
+    rejects(Computer.HitResult, { ...hit, scope: "app-menu", menuPath: menu.path })
+    rejects(Computer.UiNode, { ...node, scope: "app-menu", menuPath: menu.path })
+    rejects(Computer.SensitiveAskTarget, { ...target, scope: "app-menu", menuPath: menu.path })
+  })
+
+  test("menu ownership requires the agreeing actual process and window", () => {
+    for (const owner of [
+      { ...app, pid: undefined },
+      { ...app, pid: 502 },
+    ]) {
+      rejects(Computer.InspectResult, { ...observed, app: owner })
+      rejects(Computer.TreeResult, trees({ ...tree, owner }))
+    }
+    rejects(Computer.HitResult, { ...hit, owner: { ...app, pid: undefined } })
+    for (const key of ["windowId", "elementId", "pid"] as const) {
+      rejects(Computer.UiNode, { ...node, [key]: undefined })
+      rejects(Computer.TreeResult, trees({ ...tree, [key]: undefined }))
+      rejects(Computer.SensitiveAskTarget, { ...target, [key]: undefined })
+    }
+    rejects(Computer.TreeResult, trees({ ...tree, owner: undefined }))
+    rejects(Computer.InspectResult, { ...observed, window: undefined })
+    rejects(Computer.HitResult, { ...hit, windowId: undefined })
+  })
+
+  test("native element identity is required and the Mac shortcut field cannot cross scopes", () => {
+    for (const key of ["ref", "elementId"] as const) {
+      rejects(Computer.InspectResult, { ...observed, element: { ...observed.element, [key]: undefined } })
+      rejects(Computer.HitResult, { ...hit, [key]: undefined })
+      rejects(Computer.SensitiveAskTarget, { ...target, [key]: undefined })
+    }
+    for (const [schema, value] of [
+      [Computer.InspectResult, observed],
+      [Computer.HitResult, hit],
+      [Computer.UiNode, node],
+      [Computer.SensitiveAskTarget, target],
+    ] as const)
+      rejects(schema, { ...value, menuShortcut: menu.shortcut })
+  })
+})
+
 // One sample request and at least one sample response for every bridge command.
 const bridge: Record<Computer.BridgeCommandName, { request: Record<string, unknown>; responses: unknown[] }> = {
   status: {

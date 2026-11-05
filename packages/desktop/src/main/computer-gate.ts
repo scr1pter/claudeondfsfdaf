@@ -63,7 +63,7 @@ export function inspectHit(
     ...(hit.name === undefined ? {} : { label: hit.name }),
   }
   const common = {
-    app: hit.owner,
+    app: structuredClone(hit.owner),
     category,
     pid: hit.owner.pid,
     element,
@@ -87,10 +87,19 @@ export function inspectHit(
       element: { ...element, ref, elementId: hit.elementId },
     }
   }
+  if (hit.menu !== undefined && (!ref || !hit.elementId)) return
   return {
     ...common,
     ...(hit.scope === "window" ? { scope: hit.scope } : {}),
     window: { id: hit.windowId, ...(hit.windowTitle === undefined ? {} : { title: hit.windowTitle }) },
+    ...(hit.menu === undefined
+      ? {}
+      : {
+          menu: {
+            path: [...hit.menu.path],
+            ...(hit.menu.shortcut === undefined ? {} : { shortcut: [...hit.menu.shortcut] }),
+          },
+        }),
   }
 }
 
@@ -155,6 +164,13 @@ export async function checkStep(step: Computer.Step, ctx: GateContext): Promise<
       })
     }
     const uiRef = ctx.uiRef?.(hit)
+    if (
+      hit.scope !== "app-menu" &&
+      hit.owner.platform === "windows" &&
+      hit.role === "MenuItem" &&
+      (!hit.menu || !uiRef || !hit.ref || !hit.elementId)
+    )
+      return refuse("blocked")
     const observed = inspectHit(hit, category, uiRef)
     if (!observed) return refuse("changed")
     if (ref && uiRef !== ref) return refuse("stale_ref")
@@ -197,7 +213,11 @@ export async function checkStep(step: Computer.Step, ctx: GateContext): Promise<
   if (step.kind === "key" || (step.kind === "type" && !(ctx.background && ref))) {
     // Reference-based text changes still require the actual focused field to agree.
     const focus = await ctx.backend.focused()
-    if (!sameTarget(inspect, focus)) return refuse("changed")
+    if (
+      !sameTarget(inspect, focus) ||
+      (inspect.scope !== "app-menu" && inspect.menu !== undefined && focus.ref !== hits.at(-1)!.ref)
+    )
+      return refuse("changed")
   }
   if (inspect.scope !== "app-menu") {
     const window = inspect.window
@@ -252,6 +272,7 @@ export async function checkStep(step: Computer.Step, ctx: GateContext): Promise<
   const previous = hits.at(-1)!
   if (
     !sameTarget(inspect, final) ||
+    (inspect.scope !== "app-menu" && inspect.menu !== undefined && final.ref !== previous.ref) ||
     final.elementId !== previous.elementId ||
     final.name !== previous.name ||
     final.secure !== previous.secure ||
@@ -390,7 +411,33 @@ function sameTarget(inspect: Computer.InspectResult, hit: Computer.HitResult) {
       hit.menuPath.length === inspect.menuPath.length &&
       hit.menuPath.every((part, index) => part === inspect.menuPath[index])
     )
-  return hit.scope !== "app-menu" && String(hit.windowId) === inspect.window.id
+  if (hit.scope === "app-menu" || String(hit.windowId) !== inspect.window.id) return false
+  if (inspect.menu !== undefined || hit.menu !== undefined)
+    return (
+      inspect.app.platform === "windows" &&
+      hit.owner.platform === "windows" &&
+      hit.owner.kind === inspect.app.kind &&
+      (hit.owner.kind === "aumid"
+        ? inspect.app.kind === "aumid" && hit.owner.aumid === inspect.app.aumid
+        : inspect.app.kind === "exe" &&
+          hit.owner.product === inspect.app.product &&
+          hit.owner.binary === inspect.app.binary) &&
+      hit.owner.publisher === inspect.app.publisher &&
+      hit.owner.exe === inspect.app.exe &&
+      hit.owner.verified === inspect.app.verified &&
+      hit.owner.system === inspect.app.system &&
+      inspect.element?.ref !== undefined &&
+      inspect.element.elementId !== undefined &&
+      hit.elementId === inspect.element.elementId &&
+      hit.menu !== undefined &&
+      inspect.menu !== undefined &&
+      hit.menu.path.length === inspect.menu.path.length &&
+      hit.menu.path.every((part, index) => part === inspect.menu!.path[index]) &&
+      hit.menu.shortcut?.length === inspect.menu.shortcut?.length &&
+      (hit.menu.shortcut === undefined ||
+        hit.menu.shortcut.every((part, index) => part === inspect.menu!.shortcut?.[index]))
+    )
+  return true
 }
 function isPaste(step: Computer.Step, inspect: Computer.InspectResult) {
   const key = step.kind === "key" ? ComputerKeys.resolve(step.combo, inspect.layout) : undefined
@@ -406,6 +453,13 @@ function isPaste(step: Computer.Step, inspect: Computer.InspectResult) {
       step.kind === "click" &&
       inspect.menuShortcut &&
       ComputerKeys.pasteCombo(inspect.menuShortcut)
+    ) ||
+    !!(
+      inspect.scope !== "app-menu" &&
+      inspect.app.platform === "windows" &&
+      step.kind === "click" &&
+      inspect.menu?.shortcut &&
+      ComputerKeys.pasteCombo(inspect.menu.shortcut)
     ) ||
     !!(
       key &&

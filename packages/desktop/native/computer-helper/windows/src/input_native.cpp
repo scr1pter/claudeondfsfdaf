@@ -57,16 +57,16 @@ bool desktop_available() {
 // https://github.com/chromium/chromium/blob/0676a288c03d068a583baca01fdf8c11fc55aefb/ui/events/keycodes/dom/dom_code_data.inc
 const std::map<std::wstring, WORD>& physical_scans() {
   static const std::map<std::wstring, WORD> values = {
-    {L"keya",0x1e},{L"keyb",0x30},{L"keyc",0x2e},{L"keyd",0x20},{L"keye",0x12},{L"keyf",0x21},{L"keyg",0x22},
-    {L"keyh",0x23},{L"keyi",0x17},{L"keyj",0x24},{L"keyk",0x25},{L"keyl",0x26},{L"keym",0x32},{L"keyn",0x31},
-    {L"keyo",0x18},{L"keyp",0x19},{L"keyq",0x10},{L"keyr",0x13},{L"keys",0x1f},{L"keyt",0x14},{L"keyu",0x16},
-    {L"keyv",0x2f},{L"keyw",0x11},{L"keyx",0x2d},{L"keyy",0x15},{L"keyz",0x2c},
-    {L"digit1",0x02},{L"digit2",0x03},{L"digit3",0x04},{L"digit4",0x05},{L"digit5",0x06},{L"digit6",0x07},
-    {L"digit7",0x08},{L"digit8",0x09},{L"digit9",0x0a},{L"digit0",0x0b},
-    {L"minus",0x0c},{L"equal",0x0d},{L"bracketleft",0x1a},{L"bracketright",0x1b},{L"backslash",0x2b},{L"semicolon",0x27},
-    {L"quote",0x28},{L"backquote",0x29},{L"comma",0x33},{L"period",0x34},{L"slash",0x35},
-    {L"numpad0",0x52},{L"numpad1",0x4f},{L"numpad2",0x50},{L"numpad3",0x51},{L"numpad4",0x4b},
-    {L"numpad5",0x4c},{L"numpad6",0x4d},{L"numpad7",0x47},{L"numpad8",0x48},{L"numpad9",0x49},
+    {L"keya",WORD{0x1e}},{L"keyb",WORD{0x30}},{L"keyc",WORD{0x2e}},{L"keyd",WORD{0x20}},{L"keye",WORD{0x12}},{L"keyf",WORD{0x21}},{L"keyg",WORD{0x22}},
+    {L"keyh",WORD{0x23}},{L"keyi",WORD{0x17}},{L"keyj",WORD{0x24}},{L"keyk",WORD{0x25}},{L"keyl",WORD{0x26}},{L"keym",WORD{0x32}},{L"keyn",WORD{0x31}},
+    {L"keyo",WORD{0x18}},{L"keyp",WORD{0x19}},{L"keyq",WORD{0x10}},{L"keyr",WORD{0x13}},{L"keys",WORD{0x1f}},{L"keyt",WORD{0x14}},{L"keyu",WORD{0x16}},
+    {L"keyv",WORD{0x2f}},{L"keyw",WORD{0x11}},{L"keyx",WORD{0x2d}},{L"keyy",WORD{0x15}},{L"keyz",WORD{0x2c}},
+    {L"digit1",WORD{0x02}},{L"digit2",WORD{0x03}},{L"digit3",WORD{0x04}},{L"digit4",WORD{0x05}},{L"digit5",WORD{0x06}},{L"digit6",WORD{0x07}},
+    {L"digit7",WORD{0x08}},{L"digit8",WORD{0x09}},{L"digit9",WORD{0x0a}},{L"digit0",WORD{0x0b}},
+    {L"minus",WORD{0x0c}},{L"equal",WORD{0x0d}},{L"bracketleft",WORD{0x1a}},{L"bracketright",WORD{0x1b}},{L"backslash",WORD{0x2b}},{L"semicolon",WORD{0x27}},
+    {L"quote",WORD{0x28}},{L"backquote",WORD{0x29}},{L"comma",WORD{0x33}},{L"period",WORD{0x34}},{L"slash",WORD{0x35}},
+    {L"numpad0",WORD{0x52}},{L"numpad1",WORD{0x4f}},{L"numpad2",WORD{0x50}},{L"numpad3",WORD{0x51}},{L"numpad4",WORD{0x4b}},
+    {L"numpad5",WORD{0x4c}},{L"numpad6",WORD{0x4d}},{L"numpad7",WORD{0x47}},{L"numpad8",WORD{0x48}},{L"numpad9",WORD{0x49}},
   };
   return values;
 }
@@ -76,9 +76,9 @@ InputRelease key_release(WORD vk, HKL layout) {
   return {InputReleaseKind::scan_key, vk, static_cast<WORD>(scan & 0xff), (scan & 0xff00) == 0xe000, 0};
 }
 WORD named_virtual(std::wstring_view key) {
-  const std::map<std::wstring_view, WORD> values = {{L"enter",VK_RETURN},{L"tab",VK_TAB},{L"escape",VK_ESCAPE},{L"backspace",VK_BACK},
-    {L"delete",VK_DELETE},{L"insert",VK_INSERT},{L"home",VK_HOME},{L"end",VK_END},{L"pageup",VK_PRIOR},{L"pagedown",VK_NEXT},
-    {L"arrowleft",VK_LEFT},{L"arrowright",VK_RIGHT},{L"arrowup",VK_UP},{L"arrowdown",VK_DOWN},{L"space",VK_SPACE}};
+  const std::map<std::wstring_view, WORD> values = {{L"enter",WORD{VK_RETURN}},{L"tab",WORD{VK_TAB}},{L"escape",WORD{VK_ESCAPE}},{L"backspace",WORD{VK_BACK}},
+    {L"delete",WORD{VK_DELETE}},{L"insert",WORD{VK_INSERT}},{L"home",WORD{VK_HOME}},{L"end",WORD{VK_END}},{L"pageup",WORD{VK_PRIOR}},{L"pagedown",WORD{VK_NEXT}},
+    {L"arrowleft",WORD{VK_LEFT}},{L"arrowright",WORD{VK_RIGHT}},{L"arrowup",WORD{VK_UP}},{L"arrowdown",WORD{VK_DOWN}},{L"space",WORD{VK_SPACE}}};
   if (const auto found = values.find(key); found != values.end()) return found->second;
   if (key.size() >= 2 && key.size() <= 3 && key[0] == L'f') {
     unsigned number = 0; for (size_t index = 1; index < key.size(); ++index) { if (key[index] < L'0' || key[index] > L'9') return 0; number = number * 10 + static_cast<unsigned>(key[index] - L'0'); }

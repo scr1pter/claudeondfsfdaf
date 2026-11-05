@@ -25,7 +25,7 @@ struct Fixture {
   ServerSession session;
   bool live = true, admitted = true, current = true, point_current = true, foreground_current = true, keyboard_current = true;
   uint64_t time = 100;
-  size_t mutations = 0, preparations = 0, fences = 0;
+  size_t mutations = 0, preparations = 0, fences = 0, point_preparations = 0, keyboard_checks = 0;
   std::function<void()> before_fence;
   std::vector<HWND> overlays;
   std::optional<DWORD> hit_pid;
@@ -37,7 +37,7 @@ struct Fixture {
   WindowsGuardBackend backend() {
     WindowsGuardBackend result;
     result.point = [this](POINT point, const ServerSession&) {
-      ++preparations; return WindowsPointOwner{pointer, pointer.surface, point, overlays, hit_pid.value_or(pointer.owner.process.pid), pointer.surface_thread_id, hit_class.value_or(pointer.window_class)};
+      ++preparations; ++point_preparations; return WindowsPointOwner{pointer, pointer.surface, point, overlays, hit_pid.value_or(pointer.owner.process.pid), pointer.surface_thread_id, hit_class.value_or(pointer.window_class)};
     };
     result.foreground = [this] { ++preparations; return focused; };
     result.current = [this](const WindowsWindow&) { return current; };
@@ -48,7 +48,7 @@ struct Fixture {
       return foreground_current && same_windows_window(actual, focused);
     };
     result.keyboard_current = [this](const WindowsWindow& actual) {
-      return keyboard_current && foreground_current && same_windows_window(actual, focused);
+      ++keyboard_checks; return keyboard_current && foreground_current && same_windows_window(actual, focused);
     };
     result.now = [this] { return time; };
     return result;
@@ -251,6 +251,71 @@ size_t run_guard_tests() {
     fails([&] { fixture.key(empty); }, L"failed");
     fails([&] { WindowsGuard(fixture.backend()).with_foreground(fixture.expected, fixture.session, fixture.context(), WindowsPolicyOperation::observe, [&] { ++fixture.mutations; }); }, L"failed");
     require(fixture.mutations == 0, "guard.read-only-operation-cannot-post-keyboard-input");
+  });
+  test([] {
+    Fixture fixture; fixture.keyboard_current = false; fixture.point_current = false;
+    WindowsGuard(fixture.backend()).with_element(fixture.expected, fixture.session, fixture.context(), WindowsPolicyOperation::pointer, [&] { ++fixture.mutations; }, false);
+    require(fixture.mutations == 1 && fixture.preparations == 1 && fixture.fences == 1 && fixture.keyboard_checks == 0 && fixture.point_preparations == 0,
+      "guard.nonfocused-uia-element-needs-foreground-app-not-keyboard-or-point-proof");
+    const std::array<std::wstring, 1> key{L"ArrowLeft"};
+    fails([&] { fixture.key(key); }, L"not_foreground");
+    fails([&] { WindowsGuard(fixture.backend()).with_foreground(fixture.expected, fixture.session, fixture.context(), WindowsPolicyOperation::pointer, [&] { ++fixture.mutations; }, false); }, L"failed");
+    require(fixture.mutations == 1, "guard.element-route-does-not-relax-keyboard-route");
+  });
+  test([] {
+    Fixture fixture; fixture.keyboard_current = false;
+    bool inside = false; auto context = fixture.context();
+    context.with_current = [&](const auto& body) {
+      inside = true; body(); inside = false; return true;
+    };
+    WindowsGuard(fixture.backend()).with_element(fixture.expected, fixture.session, context, WindowsPolicyOperation::set_value, [&] {
+      require(inside, "guard.private-element-proof-remains-inside-authority"); ++fixture.mutations;
+    }, false);
+    require(fixture.mutations == 1 && fixture.keyboard_checks == 0, "guard.value-pattern-does-not-require-field-focus");
+  });
+  test([] {
+    Fixture fixture;
+    for (const auto operation : {WindowsPolicyOperation::observe, WindowsPolicyOperation::capture, WindowsPolicyOperation::activate, WindowsPolicyOperation::key, WindowsPolicyOperation::type_text}) {
+      fails([&] { WindowsGuard(fixture.backend()).with_element(fixture.expected, fixture.session, fixture.context(), operation, [&] { ++fixture.mutations; }, false); }, L"failed");
+    }
+    for (const auto secure : {std::optional<bool>{}, std::optional<bool>{true}}) {
+      fails([&] { WindowsGuard(fixture.backend()).with_element(fixture.expected, fixture.session, fixture.context(), WindowsPolicyOperation::pointer, [&] { ++fixture.mutations; }, secure); }, L"secure_field");
+    }
+    require(fixture.mutations == 0 && fixture.preparations == 0, "guard.element-route-only-permits-known-nonsecure-uia-actions");
+  });
+  test([] {
+    Fixture fixture; fixture.before_fence = [&] { fixture.focused.hwnd = reinterpret_cast<HWND>(static_cast<uintptr_t>(101)); };
+    fails([&] { WindowsGuard(fixture.backend()).with_element(fixture.expected, fixture.session, fixture.context(), WindowsPolicyOperation::pointer, [&] { ++fixture.mutations; }, false); }, L"changed");
+    require(fixture.mutations == 0, "guard.element-foreground-change-before-pattern-call");
+    fixture.focused = fixture.expected; fixture.before_fence = [&] { fixture.time += 51; };
+    fails([&] { WindowsGuard(fixture.backend()).with_element(fixture.expected, fixture.session, fixture.context(), WindowsPolicyOperation::pointer, [&] { ++fixture.mutations; }, false); }, L"changed");
+    require(fixture.mutations == 0, "guard.element-window-proof-expired-before-pattern-call");
+  });
+  test([] {
+    Fixture fixture; auto context = fixture.context(); context.session->run_epoch += 1;
+    fails([&] { WindowsGuard(fixture.backend()).with_element(fixture.expected, fixture.session, context, WindowsPolicyOperation::pointer, [&] { ++fixture.mutations; }, false); }, L"changed");
+    require(fixture.mutations == 0 && fixture.preparations == 0, "guard.element-same-wire-ids-cannot-reuse-an-accepted-run");
+    fixture.before_fence = [&] { fixture.live = false; };
+    fails([&] { WindowsGuard(fixture.backend()).with_element(fixture.expected, fixture.session, fixture.context(), WindowsPolicyOperation::pointer, [&] { ++fixture.mutations; }, false); }, L"changed");
+    require(fixture.mutations == 0, "guard.element-cancel-before-pattern-call");
+  });
+  test([] {
+    Fixture fixture;
+    fails([&] { WindowsGuard(fixture.backend()).with_element(fixture.expected, fixture.session, fixture.context(), WindowsPolicyOperation::pointer, [&] {
+      throw Failure{L"stale_ref", L"The native element proof changed."};
+    }, false); }, L"stale_ref");
+    require(fixture.mutations == 0, "guard.element-proof-failure-is-not-converted-to-action");
+    fails([&] { WindowsGuard(fixture.backend()).with_element(fixture.expected, fixture.session, fixture.context(), WindowsPolicyOperation::pointer, [&] {
+      ++fixture.mutations; throw Failure{L"changed", L"The native action could not be confirmed."};
+    }, false); }, L"changed");
+    require(fixture.mutations == 1, "guard.uncertain-uia-action-never-retries");
+  });
+  test([] {
+    Fixture fixture; fixture.focused.window_class = L"ConsoleWindowClass";
+    fails([&] { WindowsGuard(fixture.backend()).with_element(fixture.expected, fixture.session, fixture.context(), WindowsPolicyOperation::pointer, [&] { ++fixture.mutations; }, false); }, L"protected");
+    fixture.focused = fixture.expected; fixture.session.vector_pids.Append(JsonValue::CreateNumberValue(fixture.expected.owner.process.pid));
+    fails([&] { WindowsGuard(fixture.backend()).with_element(fixture.expected, fixture.session, fixture.context(), WindowsPolicyOperation::pointer, [&] { ++fixture.mutations; }, false); }, L"protected");
+    require(fixture.mutations == 0, "guard.uia-element-route-retains-native-never-and-vector-floors");
   });
   return groups;
 }

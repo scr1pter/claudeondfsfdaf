@@ -21,6 +21,39 @@ const qwerty: ComputerKeys.Layout = {
 }
 
 describe("computer key floor", () => {
+  test("Windows menu accelerators use Windows system and inspector floors", () => {
+    for (const shortcut of [["Control", "s"], ["Control", "F5"], ["F5"], ["Alt", "F4"]])
+      expect(ComputerKeys.forbiddenMenu(["Fichier", "Action"], shortcut, windows), shortcut.join("+")).toBe(false)
+    for (const shortcut of [["Windows", "r"], ["Command", "s"], ["Control", "Shift", "i"], ["Alt", "Tab"], ["F12"]])
+      expect(ComputerKeys.forbiddenMenu(["Fichier", "Action"], shortcut, windows), shortcut.join("+")).toBe(true)
+    expect(ComputerKeys.forbiddenMenu(["Tools", "Console", "Action"], ["Control", "s"], windows)).toBe(true)
+    expect(ComputerKeys.forbiddenMenu(["Produit", "Action"], ["Control", "F5"], macos)).toBe(true)
+  })
+
+  test("Windows observed menu text effects include localized edit and paste bindings", () => {
+    for (const shortcut of [
+      ["Control", "v"],
+      ["Shift", "Insert"],
+      ["Control", "x"],
+      ["Control", "z"],
+      ["Control", "y"],
+      ["Backspace"],
+      ["Delete"],
+      ["Alt", "e"],
+    ])
+      expect(ComputerKeys.menuTypesText(shortcut, windows), shortcut.join("+")).toBe(true)
+    for (const shortcut of [
+      ["Control", "s"],
+      ["Control", "a"],
+      ["Control", "c"],
+      ["ArrowRight"],
+      ["F5"],
+      ["Control", "F5"],
+    ])
+      expect(ComputerKeys.menuTypesText(shortcut, windows), shortcut.join("+")).toBe(false)
+    expect(ComputerKeys.menuTypesText(["Command", "s"], windows)).toBe(true)
+  })
+
   test("the complete observed menu ancestry shares the shortcut safety floor", () => {
     for (const path of [
       ["File", "Services", "Summarize"],

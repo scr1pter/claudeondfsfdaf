@@ -48,6 +48,12 @@ class WindowsGuard final {
   void with_foreground(const WindowsWindow& expected, const ServerSession&, const OperationContext&,
                        WindowsPolicyOperation, const std::function<void()>& mutation,
                        std::optional<bool> secure_field = {}, std::span<const std::wstring> keys = {}) const;
+  // UIA element actions do not synthesize keyboard input or a pointer hit. The callback must
+  // verify its private native element/ref and invoke one bounded UIA actor job before returning.
+  // An element may be nonfocusable; its actual approved app/window must still be foreground.
+  void with_element(const WindowsWindow& expected, const ServerSession&, const OperationContext&,
+                    WindowsPolicyOperation, const std::function<void()>& bound_element_action,
+                    std::optional<bool> secure_field = {}) const;
   // A previous bounded UIA observation can precede these metadata-only native posting fences.
   // Prepared witnesses remain private native values; every actual hit/focus fact is repeated here.
   void commit_point(const WindowsPointOwner&, const ServerSession&, const OperationContext&,

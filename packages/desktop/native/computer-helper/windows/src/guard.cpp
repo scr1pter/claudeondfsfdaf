@@ -225,6 +225,24 @@ void WindowsGuard::with_foreground(const WindowsWindow& expected, const ServerSe
   if (!mutation || !context.is_current || !context.with_current || !same_session(session,context.session) || !context.is_current()) fail(L"changed",L"The computer session changed.");
   const auto actual=foreground(expected,session,operation,secure,keys); commit_foreground(actual,session,context,WindowsGuardStamp(session,backend_.now()),operation,mutation,secure,keys);
 }
+void WindowsGuard::with_element(const WindowsWindow& expected, const ServerSession& session, const OperationContext& context, WindowsPolicyOperation operation, const std::function<void()>& mutation, std::optional<bool> secure) const {
+  if (operation != WindowsPolicyOperation::pointer && operation != WindowsPolicyOperation::set_value) fail(L"failed", L"The native element operation is invalid.");
+  if (!mutation || !context.is_current || !context.with_current || !same_session(session, context.session) || !context.is_current()) fail(L"changed", L"The computer session changed.");
+  if (secure != false) fail(L"secure_field", L"The native element cannot receive this action.");
+  const auto actual = backend_.foreground();
+  WindowsSessionPolicy(session).require(actual, operation, secure);
+  if (!same_windows_window(actual, expected) || !backend_.current(actual)) fail(L"changed", L"The native element window changed.");
+  if (!actual.visible || actual.minimized || !actual.on_screen || !backend_.foreground_current(actual)) fail(L"not_foreground", L"The native element app is not visible and foreground.");
+  const auto stamp = WindowsGuardStamp(session, backend_.now());
+  if (!context.with_current([&] {
+    WindowsSessionPolicy(session).require(actual, operation, secure);
+    if (!current_stamp(stamp, session, backend_.now()) || !backend_.current(actual) || !backend_.foreground_current(actual) || !current_stamp(stamp, session, backend_.now())) fail(L"changed", L"The native element app changed before its action.");
+    // AccessibilityService repeats its private registry proof here, then its single actor job
+    // repeats element/security/menu facts. The actor caller waits at most 50ms and quarantines
+    // timeout/late completion; no provider wait extends this authority fence indefinitely.
+    mutation();
+  })) fail(L"changed", L"The computer session changed before the element action.");
+}
 void WindowsGuard::commit_foreground(const WindowsWindow& actual, const ServerSession& session, const OperationContext& context, const WindowsGuardStamp& stamp, WindowsPolicyOperation operation, const std::function<void()>& mutation, std::optional<bool> secure, std::span<const std::wstring> keys,const std::function<void()>& precondition) const {
   if (!mutation || !context.is_current || !context.with_current || !same_session(session, context.session) || !context.is_current()) fail(L"changed", L"The computer session changed.");
   if ((operation!=WindowsPolicyOperation::key && operation!=WindowsPolicyOperation::type_text && operation!=WindowsPolicyOperation::set_value) ||

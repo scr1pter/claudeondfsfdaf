@@ -13,6 +13,7 @@
 #include "input.h"
 #include "input_guardian.h"
 #include "uia_input.h"
+#include "accessibility.h"
 #include <tlhelp32.h>
 #include <objidl.h>
 #include <xmllite.h>
@@ -163,6 +164,7 @@ struct ServingRuntime {
   std::shared_ptr<WindowsProgramService> programs;
   std::shared_ptr<CaptureService> capture;
   std::shared_ptr<InputService> input;
+  std::shared_ptr<AccessibilityService> accessibility;
   std::atomic_int exit_code{0};
   void stop(StopReason reason) {
     if (lifecycle_exit_code(reason) != 0) exit_code.store(1);
@@ -171,10 +173,12 @@ struct ServingRuntime {
     std::shared_ptr<WindowsProgramService> launches;
     std::shared_ptr<CaptureService> screenshots;
     std::shared_ptr<InputService> inputs;
-    { std::scoped_lock lock(mutex); dispatcher = server; output = writer; launches = programs; screenshots = capture; inputs=input; }
+    std::shared_ptr<AccessibilityService> elements;
+    { std::scoped_lock lock(mutex); dispatcher = server; output = writer; launches = programs; screenshots = capture; inputs=input; elements=accessibility; }
     if (output) output->cancel();
     if (dispatcher) dispatcher->close(L"transport stopped");
     if (inputs) inputs->close();
+    if (elements) elements->close();
     if (launches) launches->close();
     if (screenshots) screenshots->close();
   }
@@ -213,21 +217,30 @@ int serve(const Command& command, HANDLE output) {
     const auto guardian=InputGuardian::native();
     auto native_input=InputBackend::system(captures,guardian);
     const auto input_rules=native_input.text_rules;
-    const auto inputs=std::make_shared<InputService>(uia_input_provider(WindowsUiaBackend::system(),{},{},input_rules),std::move(native_input));
+    const auto uia=WindowsUiaBackend::system();
+    const auto accessibility=std::make_shared<AccessibilityService>(AccessibilityBackend::system(captures,uia));
+    const std::weak_ptr<AccessibilityService> weak_accessibility=accessibility;
+    const auto inputs=std::make_shared<InputService>(uia_input_provider(uia,[weak_accessibility](const auto& observed,const auto& expected,const auto& session) {
+      const auto active=weak_accessibility.lock();
+      if (!active) throw Failure{L"stale_ref",L"The accessibility observation is unavailable."};
+      active->verify_input(observed,expected,session);
+    },{},input_rules),std::move(native_input));
     Dispatcher::Options options;
     options.responsible = true;
     options.send = [writer](const JsonObject& document, std::span<const uint8_t> image) { return writer->write(document, image); };
     options.available = [weak_lifecycle] { const auto active = weak_lifecycle.lock(); return active && !active->stopping(); };
     options.stopped = [weak_lifecycle] { if (const auto active = weak_lifecycle.lock()) active->request_stop(StopReason::shutdown); };
-    options.observations_invalidated = [programs, captures] { programs->invalidate_observations(); captures->invalidate(); };
-    options.cleanup = [programs, captures](std::wstring_view) { programs->invalidate_observations(); captures->invalidate(); };
+    options.session_changed = [accessibility](const auto& session) { accessibility->note_session(session); };
+    options.observations_invalidated = [programs, captures, accessibility] { programs->invalidate_observations(); captures->invalidate(); accessibility->invalidate_observations(); };
+    options.cleanup = [programs, captures, accessibility](std::wstring_view) { programs->invalidate_observations(); captures->invalidate(); accessibility->invalidate_observations(true); };
     options.release_all=[inputs] { return inputs->release_all(); };
     options.prepare_release_all=[inputs] { return inputs->prepare_release_all(); };
-    options.features = [windows, programs, captures, inputs] {
+    options.features = [windows, programs, captures, inputs, accessibility] {
       auto features = windows->features();
       for (const auto& entry : programs->features()) features.Insert(entry.Key(), entry.Value());
       for (const auto& entry : captures->features()) features.Insert(entry.Key(), entry.Value());
       for (const auto& entry : inputs->features()) features.Insert(entry.Key(), entry.Value());
+      for (const auto& entry : accessibility->features()) features.Insert(entry.Key(), entry.Value());
       return features;
     };
     const auto server = std::make_shared<Dispatcher>(std::move(options));
@@ -240,9 +253,15 @@ int serve(const Command& command, HANDLE output) {
     server->register_handler(L"program.launch", 15'000, true, true, [programs](const auto& request, const auto& context, auto done) { programs->launch_program(request.args, context, std::move(done)); });
     server->register_handler(L"displays.list", 4000, false, false, [captures](const auto& request, const auto& context, auto done) { captures->displays(request.args, context, std::move(done)); });
     server->register_handler(L"capture", 10'000, true, false, [captures](const auto& request, const auto& context, auto done) { captures->capture(request.args, context, std::move(done)); });
+    server->register_handler(L"ui.tree",15'000,true,false,[accessibility](const auto& request,const auto& context,auto done) { accessibility->tree(request.args,context,std::move(done)); });
+    server->register_handler(L"ui.hittest",5000,true,false,[accessibility](const auto& request,const auto& context,auto done) { accessibility->hit_test(request.args,context,std::move(done)); });
+    server->register_handler(L"ui.focused",5000,true,false,[accessibility](const auto& request,const auto& context,auto done) { accessibility->focused(request.args,context,std::move(done)); });
+    server->register_handler(L"ui.resolve",5000,true,false,[accessibility](const auto& request,const auto& context,auto done) { accessibility->resolve(request.args,context,std::move(done)); });
+    server->register_handler(L"ui.perform",5000,true,true,[accessibility](const auto& request,const auto& context,auto done) { accessibility->perform(request.args,context,std::move(done)); });
+    server->register_handler(L"ui.setValue",5000,true,true,[accessibility](const auto& request,const auto& context,auto done) { accessibility->set_value(request.args,context,std::move(done)); });
     for (const auto op:{L"input.click",L"input.move",L"input.drag",L"input.scroll",L"input.key",L"input.type",L"input.hold"})
       server->register_handler(op,30'000,true,true,[inputs](const auto& request,const auto& context,auto done) { inputs->handle(request.op,request.args,context,std::move(done)); });
-    { std::scoped_lock lock(runtime->mutex); runtime->writer = writer; runtime->server = server; runtime->programs = programs; runtime->capture = captures; runtime->input=inputs; }
+    { std::scoped_lock lock(runtime->mutex); runtime->writer = writer; runtime->server = server; runtime->programs = programs; runtime->capture = captures; runtime->input=inputs; runtime->accessibility=accessibility; }
     if (lifecycle->stopping()) runtime->stop(StopReason::eof);
     FrameReader reader;
     std::array<uint8_t, 65'536> bytes{};

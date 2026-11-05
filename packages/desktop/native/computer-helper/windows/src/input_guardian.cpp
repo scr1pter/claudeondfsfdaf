@@ -306,9 +306,9 @@ LRESULT CALLBACK mouse_hook(int code,WPARAM message,LPARAM data) {
   if (code==HC_ACTION && hook_state) {
     std::optional<uint8_t> button; bool down=false;
     switch (message) {
-      case WM_LBUTTONDOWN:button=0;down=true;break; case WM_LBUTTONUP:button=0;break;
-      case WM_RBUTTONDOWN:button=1;down=true;break; case WM_RBUTTONUP:button=1;break;
-      case WM_MBUTTONDOWN:button=2;down=true;break; case WM_MBUTTONUP:button=2;break;
+      case WM_LBUTTONDOWN:button=uint8_t{0};down=true;break; case WM_LBUTTONUP:button=uint8_t{0};break;
+      case WM_RBUTTONDOWN:button=uint8_t{1};down=true;break; case WM_RBUTTONUP:button=uint8_t{1};break;
+      case WM_MBUTTONDOWN:button=uint8_t{2};down=true;break; case WM_MBUTTONUP:button=uint8_t{2};break;
       default:break;
     }
     if (button) {

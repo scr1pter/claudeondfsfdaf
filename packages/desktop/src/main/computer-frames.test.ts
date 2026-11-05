@@ -25,7 +25,7 @@ function fixture(
 ) {
   const state = {
     scope: { ...SCOPE },
-    identity: structuredClone(APP),
+    identity: structuredClone(APP) as Computer.AppIdentity,
     phase: { ...PHASE },
     bounds: { ...NATIVE },
     appsWait: undefined as Promise<void> | undefined,
@@ -163,6 +163,184 @@ const menuTree = (hit = menuHit()): Computer.TreeResult => ({
       ...(hit.bounds ? { bounds: hit.bounds } : {}),
     },
   ],
+})
+
+const WINDOWS_APP: Computer.AppIdentity = {
+  platform: "windows",
+  kind: "aumid",
+  aumid: "Example.Writer_fixture!App",
+  publisher: "Fixture Publisher",
+  system: false,
+  verified: true,
+  name: "Writer",
+  pid: 20,
+  exe: "C:\\Programs\\Writer\\writer.exe",
+}
+type WindowHit = Exclude<Computer.HitResult, { readonly scope: "app-menu" }>
+const windowsMenuHit = (): WindowHit => ({
+  scope: "window",
+  owner: structuredClone(WINDOWS_APP),
+  windowId: "window",
+  ref: "native_windows_menu",
+  elementId: "windows_menu_element",
+  role: "MenuItem",
+  name: "Save",
+  secure: false,
+  enabled: true,
+  editable: false,
+  menu: { path: ["File", "Save"], shortcut: ["Control", "s"] },
+})
+const windowsMenuTree = (hit = windowsMenuHit()): Computer.TreeResult => ({
+  generation: 1,
+  truncated: false,
+  nodes: [
+    {
+      scope: "window",
+      owner: hit.owner.platform === "windows" ? structuredClone(hit.owner) : undefined,
+      pid: hit.owner.platform === "windows" ? hit.owner.pid : undefined,
+      windowId: hit.windowId,
+      ref: hit.ref!,
+      elementId: hit.elementId,
+      role: hit.role,
+      name: hit.name ?? "",
+      secure: hit.secure,
+      enabled: true,
+      focused: true,
+      bounds: { x: -1980, y: 43, w: 25, h: 16 },
+      menu: structuredClone(hit.menu!),
+    },
+  ],
+})
+
+test("Windows menu nodes retain real window owner witnesses and mint private refs without inventing a frame", async () => {
+  const fake = fixture("windows")
+  fake.state.hit = windowsMenuHit()
+  const node = fake.registry.tree(SCOPE, windowsMenuTree())[0]!
+  expect(node).toMatchObject({
+    pid: 20,
+    windowId: "window",
+    elementId: "windows_menu_element",
+    menu: { path: ["File", "Save"], shortcut: ["Control", "s"] },
+  })
+  expect(node.ref).not.toBe("native_windows_menu")
+  expect(node).not.toHaveProperty("menuPath")
+  expect(node).not.toHaveProperty("menuShortcut")
+  expect(node).not.toHaveProperty("bounds")
+  expect(fake.registry.uiRef(SCOPE, fake.state.hit)).toBe(node.ref)
+  expect(await fake.registry.resolve(SCOPE, node.ref)).toMatchObject({ windowId: "window", ref: "native_windows_menu" })
+})
+
+test("Windows menu owner path signer process window element and complete menu facts bind the private receipt", async () => {
+  const changes: ((hit: WindowHit) => WindowHit)[] = [
+    (hit) => ({ ...hit, owner: { ...WINDOWS_APP, publisher: "Different Publisher" } }),
+    (hit) => ({ ...hit, owner: { ...WINDOWS_APP, aumid: "EXAMPLE.Writer_fixture!App" } }),
+    (hit) => ({ ...hit, owner: { ...WINDOWS_APP, exe: "C:\\Other\\writer.exe" } }),
+    (hit) => ({ ...hit, owner: { ...WINDOWS_APP, pid: 21 } }),
+    (hit) => ({ ...hit, owner: { ...WINDOWS_APP, verified: false } }),
+    (hit) => ({ ...hit, windowId: "another_window" }),
+    (hit) => ({ ...hit, elementId: "another_element" }),
+    (hit) => ({ ...hit, menu: { ...hit.menu!, path: ["Message", "Save"] } }),
+    (hit) => ({ ...hit, menu: { ...hit.menu!, shortcut: ["Control", "r"] } }),
+    (hit) => ({ ...hit, menu: { ...hit.menu!, shortcut: ["s", "Control"] } }),
+    (hit) => ({ ...hit, menu: { path: [...hit.menu!.path] } }),
+    (hit) => ({ ...hit, menu: undefined }),
+  ]
+  for (const change of changes) {
+    const fake = fixture("windows")
+    const original = windowsMenuHit()
+    fake.state.hit = original
+    const id = fake.registry.uiRef(SCOPE, original)!
+    fake.state.hit = change(original)
+    expect(await fake.registry.resolve(SCOPE, id).catch((error) => error)).toMatchObject({ code: "stale_ref" })
+    fake.state.hit = original
+    expect(await fake.registry.resolve(SCOPE, id).catch((error) => error)).toMatchObject({ code: "stale_ref" })
+    expect(fake.registry.uiRef(SCOPE, original)).not.toBe(id)
+  }
+})
+
+test("public and helper-returned Windows menu arrays cannot rewrite private ancestry or shortcut witnesses", async () => {
+  const fake = fixture("windows")
+  fake.state.hit = windowsMenuHit()
+  const tree = windowsMenuTree()
+  const node = fake.registry.tree(SCOPE, tree)[0]!
+  if (node.scope === "app-menu" || !node.menu) throw new Error("Expected a Windows menu")
+  ;(node.menu.path as string[])[0] = "Changed public path"
+  ;(node.menu.shortcut as string[])[0] = "Alt"
+  const native = tree.nodes[0]!
+  if (native.scope === "app-menu" || !native.menu) throw new Error("Expected native window menu")
+  ;(native.menu.path as string[])[1] = "Changed source array"
+  expect(await fake.registry.resolve(SCOPE, node.ref)).toMatchObject({
+    menu: { path: ["File", "Save"], shortcut: ["Control", "s"] },
+  })
+})
+
+test("Windows menu refs cannot move between ordinary window app-menu or another task scope", async () => {
+  const fake = fixture("windows")
+  const original = windowsMenuHit()
+  fake.state.hit = original
+  const id = fake.registry.uiRef(SCOPE, original)!
+  fake.state.hit = { ...original, menu: undefined, role: "Button" }
+  expect(await fake.registry.resolve(SCOPE, id).catch((error) => error)).toMatchObject({ code: "stale_ref" })
+  fake.state.hit = original
+  const fresh = fake.registry.uiRef(SCOPE, original)!
+  fake.state.hit = { ...menuHit(), ref: original.ref!, elementId: original.elementId! }
+  expect(await fake.registry.resolve(SCOPE, fresh).catch((error) => error)).toMatchObject({ code: "stale_ref" })
+  fake.state.hit = original
+  const scoped = fake.registry.uiRef(SCOPE, original)!
+  fake.state.scope = { ...SCOPE, lease: 2 }
+  expect(await fake.registry.resolve(fake.state.scope, scoped).catch((error) => error)).toMatchObject({
+    code: "stale_ref",
+  })
+})
+
+test("an ordinary public ref never upgrades into observed Windows menu authority", async () => {
+  const fake = fixture("windows")
+  const original = windowsMenuHit()
+  fake.state.hit = { ...original, menu: undefined, role: "Button" }
+  const id = fake.registry.uiRef(SCOPE, fake.state.hit)!
+  fake.state.hit = original
+  expect(await fake.registry.resolve(SCOPE, id).catch((error) => error)).toMatchObject({ code: "stale_ref" })
+  expect(fake.registry.uiRef(SCOPE, original)).not.toBe(id)
+})
+
+test("Windows menu tree witnesses cannot be omitted borrowed from another frame or used on macOS", async () => {
+  const fake = fixture("windows", (rect) => rect)
+  fake.state.identity = WINDOWS_APP
+  const frame = await fake.registry.add(SCOPE, { ...fake.capture(), approved: [WINDOWS_APP] })
+  for (const change of [
+    { owner: undefined },
+    { pid: 21 },
+    { windowId: undefined },
+    { elementId: undefined },
+    { menu: { path: [] } },
+    { menu: { path: ["File", ""] } },
+  ]) {
+    const tree = windowsMenuTree()
+    expect(() => fake.registry.tree(SCOPE, { ...tree, nodes: [{ ...tree.nodes[0]!, ...change }] })).toThrow()
+  }
+  const other = windowsMenuHit()
+  expect(() => fake.registry.tree(SCOPE, windowsMenuTree({ ...other, windowId: "unrelated" }), frame.frame)).toThrow()
+  const mac = fixture()
+  expect(() => mac.registry.tree(SCOPE, windowsMenuTree())).toThrow()
+})
+
+test("only fresh unchanged native Windows menu resolution promotes an existing receipt across a stable phase", async () => {
+  const fake = fixture("windows")
+  fake.state.hit = windowsMenuHit()
+  const id = fake.registry.uiRef(SCOPE, fake.state.hit)!
+  const pending = Promise.withResolvers<void>()
+  fake.state.resolveWait = pending.promise
+  const result = fake.registry.resolve(SCOPE, id).catch((error) => error)
+  fake.state.phase.phaseRevision++
+  pending.resolve()
+  expect(await result).toMatchObject({ code: "stale_ref" })
+  // The raced attempt grants nothing; only an explicit unchanged resolve in a stable phase promotes it.
+  expect(await fake.registry.resolve(SCOPE, id)).toMatchObject({ menu: { path: ["File", "Save"] } })
+  const fresh = fake.registry.uiRef(SCOPE, fake.state.hit)!
+  expect(fresh).toBe(id)
+  fake.state.phase.phaseRevision++
+  expect(await fake.registry.resolve(SCOPE, fresh)).toMatchObject({ menu: { path: ["File", "Save"] } })
+  expect(fake.registry.uiRef(SCOPE, fake.state.hit)).toBe(fresh)
 })
 
 test("app-menu nodes retain native scope and identity without projecting bounds through a random frame", async () => {
