@@ -124,6 +124,7 @@ bool interactive_desktop() {
 }
 struct NativeWindows {
   std::function<std::optional<bool>(const WindowsOwner&)> shell_observer;
+  WindowsInventoryObserver diagnostic = nullptr;
 
   WindowsWindow observe(HWND window) const {
     if (!window || !IsWindow(window) || GetAncestor(window, GA_ROOT) != window) refuse(L"changed");
@@ -208,21 +209,27 @@ struct NativeWindows {
     }
     return apps;
   }
-  static void installed_apps(std::vector<WindowsApplication>& apps, Clock::time_point deadline, const std::function<bool()>& current) {
+  void installed_apps(std::vector<WindowsApplication>& apps, Clock::time_point deadline, const std::function<bool()>& current) const {
     winrt::com_ptr<IShellItem> folder;
     winrt::com_ptr<IEnumShellItems> enumeration;
     {
       WindowsComCall call;
-      if (!call.current() || FAILED(SHGetKnownFolderItem(FOLDERID_AppsFolder, KF_FLAG_DEFAULT, nullptr, IID_PPV_ARGS(folder.put()))) ||
-          !call.current() || FAILED(folder->BindToHandler(nullptr, BHID_EnumItems, IID_PPV_ARGS(enumeration.put()))) || !call.current()) refuse();
+      if (!call.current()) { observe_windows_inventory_failure(diagnostic, WindowsInventoryDiagnostic::apps_current); refuse(); }
+      if (FAILED(SHGetKnownFolderItem(FOLDERID_AppsFolder, KF_FLAG_DEFAULT, nullptr, IID_PPV_ARGS(folder.put())))) { observe_windows_inventory_failure(diagnostic, WindowsInventoryDiagnostic::apps_folder); refuse(); }
+      if (!call.current()) { observe_windows_inventory_failure(diagnostic, WindowsInventoryDiagnostic::apps_current); refuse(); }
+      if (FAILED(folder->BindToHandler(nullptr, BHID_EnumItems, IID_PPV_ARGS(enumeration.put())))) { observe_windows_inventory_failure(diagnostic, WindowsInventoryDiagnostic::apps_bind); refuse(); }
+      if (!call.current()) { observe_windows_inventory_failure(diagnostic, WindowsInventoryDiagnostic::apps_current); refuse(); }
     }
     for (size_t count = 0; count < 2048 && apps.size() < 1000 && Clock::now() < deadline; ++count) {
       if (!current()) refuse(L"changed");
       winrt::com_ptr<IShellItem> item; ULONG fetched = 0;
       HRESULT status = E_FAIL;
-      { WindowsComCall call; if (!call.current()) refuse(); status = enumeration->Next(1, item.put(), &fetched); if (!call.current()) refuse(); }
+      { WindowsComCall call;
+        if (!call.current()) { observe_windows_inventory_failure(diagnostic, WindowsInventoryDiagnostic::apps_current); refuse(); }
+        status = enumeration->Next(1, item.put(), &fetched);
+        if (!call.current()) { observe_windows_inventory_failure(diagnostic, WindowsInventoryDiagnostic::apps_current); refuse(); } }
       if (status == S_FALSE) break;
-      if (FAILED(status) || fetched != 1 || !item) refuse();
+      if (FAILED(status) || fetched != 1 || !item) { observe_windows_inventory_failure(diagnostic, WindowsInventoryDiagnostic::apps_next); refuse(); }
       try {
         winrt::com_ptr<IPropertyStore> properties;
         {
@@ -254,6 +261,32 @@ struct NativeWindows {
 };
 }
 
+void observe_windows_inventory_failure(WindowsInventoryObserver observer, WindowsInventoryDiagnostic diagnostic) noexcept {
+  try { if (observer) observer(diagnostic); } catch (...) {}
+}
+std::wstring_view windows_inventory_diagnostic_stage(WindowsInventoryDiagnostic diagnostic) noexcept {
+  switch (diagnostic) {
+    case WindowsInventoryDiagnostic::capture_identity: return L"capture-structural-identity";
+    case WindowsInventoryDiagnostic::capture_bounds: return L"capture-structural-bounds";
+    case WindowsInventoryDiagnostic::capture_cloak: return L"capture-structural-cloak";
+    case WindowsInventoryDiagnostic::capture_class: return L"capture-structural-class";
+    case WindowsInventoryDiagnostic::capture_style: return L"capture-structural-style";
+    case WindowsInventoryDiagnostic::capture_cap: return L"capture-enumeration-cap";
+    case WindowsInventoryDiagnostic::capture_deadline: return L"capture-enumeration-deadline";
+    case WindowsInventoryDiagnostic::capture_context: return L"capture-enumeration-context";
+    case WindowsInventoryDiagnostic::capture_enum: return L"capture-enumeration-api";
+    case WindowsInventoryDiagnostic::capture_structure: return L"capture-structural-exception";
+    case WindowsInventoryDiagnostic::apps_folder: return L"installed-apps-folder";
+    case WindowsInventoryDiagnostic::apps_bind: return L"installed-apps-bind";
+    case WindowsInventoryDiagnostic::apps_next: return L"installed-apps-next";
+    case WindowsInventoryDiagnostic::apps_current: return L"installed-apps-com-current";
+    case WindowsInventoryDiagnostic::apps_count: return L"installed-apps-count";
+    case WindowsInventoryDiagnostic::apps_shape: return L"installed-apps-shape";
+    case WindowsInventoryDiagnostic::apps_title: return L"installed-apps-title";
+    case WindowsInventoryDiagnostic::apps_icon: return L"installed-apps-icon";
+    default: return {};
+  }
+}
 bool WindowsRect::valid() const noexcept {
   constexpr int64_t bound = 100'000'000;
   return x >= -bound && x <= bound && y >= -bound && y <= bound && width > 0 && height > 0 && width <= bound && height <= bound && x <= bound - width && y <= bound - height;
@@ -309,8 +342,8 @@ bool windows_window_current(const WindowsWindow& window) noexcept {
   } catch (...) { return false; }
 }
 
-WindowsBackend WindowsBackend::system(std::function<std::optional<bool>(const WindowsOwner&)> shell_observer) {
-  const auto native = std::make_shared<NativeWindows>(NativeWindows{std::move(shell_observer)});
+WindowsBackend WindowsBackend::system(std::function<std::optional<bool>(const WindowsOwner&)> shell_observer, WindowsInventoryObserver diagnostic) {
+  const auto native = std::make_shared<NativeWindows>(NativeWindows{std::move(shell_observer), diagnostic});
   WindowsBackend backend;
   backend.list = [native](bool installed, const auto& current) { return native->list(installed, current); };
   backend.observe = [native](HWND window) { return native->observe(window); };

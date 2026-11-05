@@ -8,18 +8,23 @@
 namespace vector::computer {
 class HelperLifecycle;
 struct CaptureBackend;
+enum class WindowsInventoryDiagnostic;
 inline constexpr std::array<std::wstring_view, 15> windows_privileged_checks{
   L"privileged-isolated-target", L"apps-running-target", L"apps-installed-target",
   L"capture-color-patch", L"capture-affinity-exclusion", L"uia-counter-increment",
   L"uia-value-set-and-readback", L"secure-field-refusal", L"tagged-click-increments",
   L"unicode-type-readback", L"stale-capture-refusal", L"owned-input-release",
   L"input-detection-probe", L"hardware-user-input-pauses", L"isolated-target-cleanup"};
-inline constexpr std::array<std::wstring_view, 18> windows_privileged_stages{
+inline constexpr std::array<std::wstring_view, 36> windows_privileged_stages{
   L"installed-list-reply", L"installed-list-native", L"installed-seal",
   L"window-capture-reply", L"window-capture-receipt", L"png-decode",
   L"affinity-show", L"affinity-hide", L"display-capture-reply", L"display-capture-receipt",
   L"capture-service", L"capture-native", L"authority-completion", L"authority-delivery",
-  L"capture-inventory-initial", L"capture-inventory-refresh", L"capture-native-read", L"capture-commit-current"};
+  L"capture-inventory-initial", L"capture-inventory-refresh", L"capture-native-read", L"capture-commit-current",
+  L"capture-structural-identity", L"capture-structural-bounds", L"capture-structural-cloak", L"capture-structural-class", L"capture-structural-style",
+  L"capture-enumeration-cap", L"capture-enumeration-deadline", L"capture-enumeration-context", L"capture-enumeration-api", L"capture-structural-exception",
+  L"installed-apps-folder", L"installed-apps-bind", L"installed-apps-next", L"installed-apps-com-current",
+  L"installed-apps-count", L"installed-apps-shape", L"installed-apps-title", L"installed-apps-icon"};
 inline constexpr std::array<std::wstring_view, 32> windows_privileged_native_codes{
   L"unavailable", L"permissions", L"busy", L"stopped", L"paused", L"locked", L"blocked", L"protected", L"denied",
   L"not_granted", L"stale_frame", L"stale_ref", L"changed", L"occluded", L"secure_field", L"elevated",
@@ -46,6 +51,7 @@ std::wstring windows_privileged_native_code(std::wstring_view);
 std::wstring windows_privileged_origin_stage(std::wstring_view message, std::wstring_view fallback = {}, std::wstring_view capture_stage = {});
 // Injected providers exercise the same scoped observer without querying a real window or desktop.
 std::wstring windows_privileged_capture_diagnostic(CaptureBackend, const std::function<void(CaptureBackend&)>&);
+void windows_privileged_inventory_failure(WindowsInventoryDiagnostic) noexcept;
 bool windows_privileged_response_failure(const winrt::Windows::Data::Json::JsonObject&, std::wstring_view) noexcept;
 // A monotonic admission gate over the already-held parent witness. Production supplies only bounded
 // kernel metadata; tests can advance that witness without creating a process or touching a desktop.

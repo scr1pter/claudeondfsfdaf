@@ -32,7 +32,7 @@ template<class Body> void perform(const OperationContext& context, const Dispatc
 }
 }
 
-WindowService::WindowService(WindowPolicy policy, WindowsBackend backend) : policy_(std::move(policy)), backend_(std::move(backend)) {}
+WindowService::WindowService(WindowPolicy policy, WindowsBackend backend, WindowsInventoryObserver diagnostic) : policy_(std::move(policy)), backend_(std::move(backend)), diagnostic_(diagnostic) {}
 JsonObject WindowService::features() const {
   JsonObject value;
   value.Insert(L"apps.list", JsonValue::CreateBooleanValue(static_cast<bool>(backend_.list)));
@@ -44,16 +44,16 @@ void WindowService::list(const JsonObject& args, const OperationContext& context
   perform(context, done, [&]() -> Reply {
     if (!allowed(args, {L"installed"}) || (field(args, L"installed") && field(args, L"installed").ValueType() != JsonValueType::Boolean) || !backend_.list) fail();
     const auto applications = backend_.list(field(args, L"installed") && field(args, L"installed").GetBoolean(), [&] { return current(context); });
-    if (applications.size() > 1000) fail(L"unavailable");
+    if (applications.size() > 1000) { observe_windows_inventory_failure(diagnostic_, WindowsInventoryDiagnostic::apps_count); fail(L"unavailable"); }
     std::set<HWND> observed;
     size_t total_windows = 0;
     JsonArray apps;
     for (const auto& app : applications) {
       if (!current(context)) fail(L"changed");
-      if (app.windows.size() > 1000 || (!app.owner && !app.windows.empty())) fail(L"unavailable");
+      if (app.windows.size() > 1000 || (!app.owner && !app.windows.empty())) { observe_windows_inventory_failure(diagnostic_, WindowsInventoryDiagnostic::apps_shape); fail(L"unavailable"); }
       JsonArray windows;
       for (const auto& window : app.windows) {
-        if (++total_windows > 4096) fail(L"unavailable");
+        if (++total_windows > 4096) { observe_windows_inventory_failure(diagnostic_, WindowsInventoryDiagnostic::apps_count); fail(L"unavailable"); }
         if (!current(context)) fail(L"changed");
         if (!eligible_windows_window(window)) continue;
         if (!observed.insert(window.hwnd).second || !app.owner ||
@@ -64,7 +64,7 @@ void WindowService::list(const JsonObject& args, const OperationContext& context
           if (!backend_.current || !backend_.current(window) || !current(context)) fail(L"changed");
           title = backend_.title(window);
           if (!backend_.current(window) || !current(context) || !policy_.disclose(window, context.session)) fail(L"changed");
-          if (title.size() > 1024) fail(L"unavailable");
+          if (title.size() > 1024) { observe_windows_inventory_failure(diagnostic_, WindowsInventoryDiagnostic::apps_title); fail(L"unavailable"); }
         }
         JsonObject value;
         value.Insert(L"windowId", JsonValue::CreateStringValue(window_id(window.hwnd))); value.Insert(L"title", JsonValue::CreateStringValue(title));
@@ -74,7 +74,7 @@ void WindowService::list(const JsonObject& args, const OperationContext& context
       JsonObject value;
       value.Insert(L"identity", app.identity.wire()); value.Insert(L"active", JsonValue::CreateBooleanValue(app.active)); value.Insert(L"windows", windows);
       if (app.icon) {
-        if (!app.icon->starts_with("data:image/png;base64,") || app.icon->size() > 22 + ((8192 + 2) / 3) * 4) fail(L"unavailable");
+        if (!app.icon->starts_with("data:image/png;base64,") || app.icon->size() > 22 + ((8192 + 2) / 3) * 4) { observe_windows_inventory_failure(diagnostic_, WindowsInventoryDiagnostic::apps_icon); fail(L"unavailable"); }
         value.Insert(L"icon", JsonValue::CreateStringValue(winrt::to_hstring(*app.icon)));
       }
       apps.Append(value);

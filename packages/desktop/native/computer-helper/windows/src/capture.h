@@ -50,7 +50,7 @@ struct CaptureBackend {
   std::function<bool()> available;
   std::function<uint64_t()> now;
   std::function<std::wstring()> identifier;
-  static CaptureBackend system();
+  static CaptureBackend system(WindowsInventoryObserver diagnostic = nullptr);
 };
 
 struct CaptureReceipt {

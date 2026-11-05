@@ -6,6 +6,16 @@
 #include <vector>
 
 namespace vector::computer {
+enum class WindowsInventoryDiagnostic {
+  none, capture_identity, capture_bounds, capture_cloak, capture_class, capture_style,
+  capture_cap, capture_deadline, capture_context, capture_enum, capture_structure,
+  apps_folder, apps_bind, apps_next, apps_current, apps_count, apps_shape, apps_title, apps_icon,
+  count
+};
+// Optional metadata-only observation; ordinary factories have no observer.
+using WindowsInventoryObserver = void (*)(WindowsInventoryDiagnostic);
+void observe_windows_inventory_failure(WindowsInventoryObserver, WindowsInventoryDiagnostic) noexcept;
+std::wstring_view windows_inventory_diagnostic_stage(WindowsInventoryDiagnostic) noexcept;
 struct WindowsRect {
   int64_t x = 0, y = 0, width = 0, height = 0;
   bool operator==(const WindowsRect&) const = default;
@@ -61,12 +71,12 @@ struct WindowsBackend {
   // Only native initiation occurs under authority; foreground confirmation never holds it.
   std::function<bool(const WindowsWindow&, const OperationContext&, const std::function<void(const WindowsWindow&)>&)> focus;
   std::function<WindowsCursor()> cursor;
-  static WindowsBackend system(std::function<std::optional<bool>(const WindowsOwner&)> shell_observer = {});
+  static WindowsBackend system(std::function<std::optional<bool>(const WindowsOwner&)> shell_observer = {}, WindowsInventoryObserver diagnostic = nullptr);
 };
 
 class WindowService final {
  public:
-  explicit WindowService(WindowPolicy policy = {}, WindowsBackend backend = WindowsBackend::system());
+  explicit WindowService(WindowPolicy policy = {}, WindowsBackend backend = WindowsBackend::system(), WindowsInventoryObserver diagnostic = nullptr);
   JsonObject features() const;
   void list(const JsonObject& args, const OperationContext& context, Dispatcher::Completion done);
   void activate(const JsonObject& args, const OperationContext& context, Dispatcher::Completion done);
@@ -75,6 +85,7 @@ class WindowService final {
  private:
   WindowPolicy policy_;
   WindowsBackend backend_;
+  WindowsInventoryObserver diagnostic_ = nullptr;
   void mutate(const JsonObject&, const OperationContext&, Dispatcher::Completion, bool activate);
 };
 

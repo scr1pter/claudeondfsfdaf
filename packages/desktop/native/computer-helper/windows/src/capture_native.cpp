@@ -56,18 +56,24 @@ std::vector<CaptureDisplay> native_displays() {
   std::sort(state.displays.begin(), state.displays.end(), [](const auto& left, const auto& right) { return left.id < right.id; });
   return state.displays;
 }
-CaptureSurface structural(HWND hwnd, const ServerSession& session) {
+CaptureSurface structural(HWND hwnd, const ServerSession& session, WindowsInventoryObserver diagnostic) {
   CaptureSurface value; value.hwnd = hwnd;
   value.thread = GetWindowThreadProcessId(hwnd, &value.pid);
   RECT bounds{}; DWORD cloak = 0;
-  require(value.thread != 0 && value.pid != 0 && GetAncestor(hwnd, GA_ROOT) == hwnd && GetWindowRect(hwnd, &bounds), L"changed");
-  value.bounds = rectangle(bounds); require(value.bounds.valid(), L"changed");
+  if (value.thread == 0 || value.pid == 0 || GetAncestor(hwnd, GA_ROOT) != hwnd) { observe_windows_inventory_failure(diagnostic, WindowsInventoryDiagnostic::capture_identity); unavailable(L"changed"); }
+  if (!GetWindowRect(hwnd, &bounds)) { observe_windows_inventory_failure(diagnostic, WindowsInventoryDiagnostic::capture_bounds); unavailable(L"changed"); }
+  value.bounds = rectangle(bounds);
+  if (!value.bounds.valid()) { observe_windows_inventory_failure(diagnostic, WindowsInventoryDiagnostic::capture_bounds); unavailable(L"changed"); }
   RECT frame{};
   if (SUCCEEDED(DwmGetWindowAttribute(hwnd, DWMWA_EXTENDED_FRAME_BOUNDS, &frame, sizeof(frame)))) value.frame_bounds = rectangle(frame);
   value.visible = IsWindowVisible(hwnd) != FALSE; value.minimized = IsIconic(hwnd) != FALSE;
-  require(SUCCEEDED(DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, &cloak, sizeof(cloak))), L"changed"); value.cloaked = cloak != 0;
-  wchar_t name[257]{}; const auto length = GetClassNameW(hwnd, name, 257); require(length > 0 && length <= 256, L"changed"); value.window_class.assign(name, static_cast<size_t>(length));
-  SetLastError(ERROR_SUCCESS); value.extended_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE); require(value.extended_style != 0 || GetLastError() == ERROR_SUCCESS, L"changed");
+  if (FAILED(DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, &cloak, sizeof(cloak)))) { observe_windows_inventory_failure(diagnostic, WindowsInventoryDiagnostic::capture_cloak); unavailable(L"changed"); }
+  value.cloaked = cloak != 0;
+  wchar_t name[257]{}; const auto length = GetClassNameW(hwnd, name, 257);
+  if (length <= 0 || length > 256) { observe_windows_inventory_failure(diagnostic, WindowsInventoryDiagnostic::capture_class); unavailable(L"changed"); }
+  value.window_class.assign(name, static_cast<size_t>(length));
+  SetLastError(ERROR_SUCCESS); value.extended_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+  if (value.extended_style == 0 && GetLastError() != ERROR_SUCCESS) { observe_windows_inventory_failure(diagnostic, WindowsInventoryDiagnostic::capture_style); unavailable(L"changed"); }
   value.affinity_known = GetWindowDisplayAffinity(hwnd, &value.affinity) != FALSE;
   value.excluded_overlay = value.affinity_known && value.affinity == WDA_EXCLUDEFROMCAPTURE &&
     windows_overlay_passthrough_allowed({hwnd, value.pid, value.extended_style}, session);
@@ -76,6 +82,7 @@ CaptureSurface structural(HWND hwnd, const ServerSession& session) {
 }
 struct NativeCapture {
   WindowsBackend windows = WindowsBackend::system(windows_child_shell);
+  WindowsInventoryObserver diagnostic = nullptr;
   CaptureInventory inventory(const ServerSession& session, const std::function<bool()>& current, bool resolve = true) const {
     require_capture_surface();
     CaptureInventory result; result.displays = native_displays();
@@ -85,18 +92,30 @@ struct NativeCapture {
     } state{this, &session, &current, &result.windows, Clock::now() + std::chrono::seconds(4), resolve};
     const auto callback = [](HWND hwnd, LPARAM raw) -> BOOL {
       auto& data = *reinterpret_cast<State*>(raw);
+      const auto current = [&] {
+        try { return (*data.current)(); }
+        catch (...) { observe_windows_inventory_failure(data.native->diagnostic, WindowsInventoryDiagnostic::capture_context); throw; }
+      };
       try {
-        if (++data.count > 4096 || Clock::now() >= data.deadline || !(*data.current)()) { data.complete = false; return FALSE; }
+        if (++data.count > 4096) { observe_windows_inventory_failure(data.native->diagnostic, WindowsInventoryDiagnostic::capture_cap); data.complete = false; return FALSE; }
+        if (Clock::now() >= data.deadline) { observe_windows_inventory_failure(data.native->diagnostic, WindowsInventoryDiagnostic::capture_deadline); data.complete = false; return FALSE; }
+        if (!current()) { observe_windows_inventory_failure(data.native->diagnostic, WindowsInventoryDiagnostic::capture_context); data.complete = false; return FALSE; }
         if (!IsWindowVisible(hwnd) && !IsIconic(hwnd)) return TRUE;
-        auto surface = structural(hwnd, *data.session);
+        auto surface = structural(hwnd, *data.session, data.native->diagnostic);
         if (data.resolve && !surface.excluded_overlay) {
           try { surface.window = data.native->windows.observe(hwnd); } catch (...) { /* Unknown owners remain structural privacy masks. */ }
         }
-        if (!(*data.current)()) { data.complete = false; return FALSE; }
+        if (!current()) { observe_windows_inventory_failure(data.native->diagnostic, WindowsInventoryDiagnostic::capture_context); data.complete = false; return FALSE; }
         data.windows->push_back(std::move(surface)); return TRUE;
-      } catch (...) { data.complete = false; return FALSE; }
+      } catch (...) { observe_windows_inventory_failure(data.native->diagnostic, WindowsInventoryDiagnostic::capture_structure); data.complete = false; return FALSE; }
     };
-    require(EnumWindows(callback, reinterpret_cast<LPARAM>(&state)) && state.complete && current(), L"changed"); return result;
+    const auto enumerated = EnumWindows(callback, reinterpret_cast<LPARAM>(&state));
+    if (!enumerated) { if (state.complete) observe_windows_inventory_failure(diagnostic, WindowsInventoryDiagnostic::capture_enum); unavailable(L"changed"); }
+    if (!state.complete) unavailable(L"changed");
+    bool final_current = false;
+    try { final_current = current(); } catch (...) { observe_windows_inventory_failure(diagnostic, WindowsInventoryDiagnostic::capture_context); throw; }
+    if (!final_current) { observe_windows_inventory_failure(diagnostic, WindowsInventoryDiagnostic::capture_context); unavailable(L"changed"); }
+    return result;
   }
   bool current(const CaptureInventory& expected, const ServerSession& session) const {
     try {
@@ -295,8 +314,9 @@ void label_vector(CaptureBitmap& image, const CapturePrivacyPlan& plan, const Wi
 }
 }
 
-CaptureBackend CaptureBackend::system() {
+CaptureBackend CaptureBackend::system(WindowsInventoryObserver diagnostic) {
   const auto native = std::make_shared<NativeCapture>();
+  native->diagnostic = diagnostic;
   CaptureBackend backend; backend.displays = native_displays;
   backend.inventory = [native](const ServerSession& session, const std::function<bool()>& current) { return native->inventory(session, current); };
   backend.current = [native](const CaptureInventory& inventory, const ServerSession& session) { return native->current(inventory, session); };

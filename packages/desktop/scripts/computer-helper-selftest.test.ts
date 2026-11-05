@@ -768,7 +768,7 @@ test("Windows driver preserves validated privileged diagnostics and the failed a
   expect(fake.state.closed).toBe(1)
 })
 
-test("Windows capture origins remain closed failed rows throughout aggregate reporting", async () => {
+test("Windows private failure origins remain closed failed rows throughout aggregate reporting", async () => {
   for (const stage of [
     "capture-service",
     "capture-native",
@@ -778,13 +778,17 @@ test("Windows capture origins remain closed failed rows throughout aggregate rep
     "capture-inventory-refresh",
     "capture-native-read",
     "capture-commit-current",
+    "capture-structural-cloak",
+    "installed-apps-bind",
   ] as const) {
     const fake = windowsDriverFixture()
+    const index = stage.startsWith("installed-") ? 2 : 3
+    const name = `privileged.${WINDOWS_NATIVE_CHECKS.privileged[index]}`
     fake.native.privileged = async () => ({
       code: 1,
       stdout: JSON.stringify({
-        checks: WINDOWS_NATIVE_CHECKS.privileged.map((name, index) =>
-          index === 3
+        checks: WINDOWS_NATIVE_CHECKS.privileged.map((name, position) =>
+          position === index
             ? { name, ok: false, detail: "native_operation_failed", stage, nativeCode: "changed" }
             : { name, ok: true },
         ),
@@ -795,8 +799,8 @@ test("Windows capture origins remain closed failed rows throughout aggregate rep
       fake.dependencies,
     )
     expect(result.code).toBe(1)
-    expect(result.checks.find((item) => item.name === "privileged.capture-color-patch")).toEqual({
-      name: "privileged.capture-color-patch",
+    expect(result.checks.find((item) => item.name === name)).toEqual({
+      name,
       status: "failed",
       reason: "native_operation_failed",
       stage,

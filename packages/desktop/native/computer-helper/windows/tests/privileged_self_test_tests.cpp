@@ -223,6 +223,53 @@ size_t run_privileged_self_test_tests() {
     require(outer == L"capture-commit-current", "privileged.nesting-and-exceptions-restore-handler-scope");
   });
   test([] {
+    for (unsigned index = 1; index < static_cast<unsigned>(WindowsInventoryDiagnostic::count); ++index) {
+      const auto diagnostic = static_cast<WindowsInventoryDiagnostic>(index);
+      const auto expected = windows_inventory_diagnostic_stage(diagnostic);
+      require(!expected.empty() && std::find(windows_privileged_stages.begin(), windows_privileged_stages.end(), expected) != windows_privileged_stages.end(),
+        "privileged.native-inventory-origins-have-closed-report-stages");
+      const auto observed = windows_privileged_capture_diagnostic(CaptureBackend{}, [&](auto&) {
+        observe_windows_inventory_failure(windows_privileged_inventory_failure, diagnostic);
+      });
+      require(observed == expected, "privileged.actual-native-observer-reaches-request-local-trace");
+      require(windows_privileged_origin_stage(L"The native capture is unavailable. Check Windows Privacy & security settings.", L"window-capture-reply", observed) == observed,
+        "privileged.exact-native-fence-takes-precedence-over-generic-provider-origin");
+      require(windows_privileged_origin_stage(L"The native observation changed before delivery.", L"window-capture-reply", observed) == L"authority-delivery",
+        "privileged.native-fence-does-not-override-authority-loss");
+    }
+    const auto unknown = static_cast<WindowsInventoryDiagnostic>(-1);
+    require(windows_inventory_diagnostic_stage(unknown).empty() && windows_privileged_capture_diagnostic(CaptureBackend{}, [&](auto&) {
+      observe_windows_inventory_failure(windows_privileged_inventory_failure, unknown);
+    }).empty(), "privileged.unknown-inventory-enum-cannot-produce-metadata");
+    observe_windows_inventory_failure(nullptr, WindowsInventoryDiagnostic::capture_bounds);
+    observe_windows_inventory_failure(+[](WindowsInventoryDiagnostic) { throw std::runtime_error("PRIVATE observer explanation"); }, WindowsInventoryDiagnostic::capture_bounds);
+  });
+  test([] {
+    for (const bool shape : {false, true}) for (unsigned observer = 0; observer < 3; ++observer) {
+      WindowsBackend backend;
+      backend.list = [shape](bool, const auto&) {
+        std::vector<WindowsApplication> apps(shape ? 1U : 1001U);
+        if (shape) apps[0].windows.resize(1); return apps;
+      };
+      const WindowsInventoryObserver diagnostic = observer == 0 ? nullptr : observer == 1
+        ? +[](WindowsInventoryDiagnostic) { throw std::runtime_error("PRIVATE observer explanation"); }
+        : windows_privileged_inventory_failure;
+      WindowService service({}, backend, diagnostic);
+      OperationContext context; context.is_current = [] { return true; };
+      unsigned completions = 0;
+      const auto stage = windows_privileged_capture_diagnostic(CaptureBackend{}, [&](auto&) {
+        service.list(JsonObject{}, context, [&](Dispatcher::Result result) {
+          ++completions;
+          require(std::holds_alternative<Failure>(result) && std::get<Failure>(result).code == L"unavailable" &&
+            std::get<Failure>(result).message == L"The app or window operation is unavailable.",
+            "privileged.inventory-observer-preserves-service-failure-and-message");
+        });
+      });
+      require(completions == 1 && stage == (observer == 2 ? shape ? L"installed-apps-shape" : L"installed-apps-count" : L""),
+        "privileged.null-or-throwing-observer-does-not-change-service-result");
+    }
+  });
+  test([] {
     for (const auto reason : {L"isolation_required", L"elevated_helper", L"noninteractive_desktop", L"capture_blocked", L"input_detection_unavailable", L"foreground_unavailable", L"affinity_unavailable", L"target_not_installed", L"hardware_input_required", L"physical_takeover"})
       require(windows_privileged_skip_reason(reason) && WindowsPrivilegedReport::skipped(reason).valid() && WindowsPrivilegedReport::skipped(reason).exit_code() == 77,
         "privileged.only-actual-unavailable-prerequisites-or-takeover-can-skip");
