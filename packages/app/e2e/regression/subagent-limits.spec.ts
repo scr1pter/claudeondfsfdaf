@@ -31,7 +31,8 @@ test("the owner sees 8, 32 and $25, and saving 4 writes budget.subagents.running
   const app = await setup(page, engine())
   await app.open()
   const settings = await openAgents(page)
-  await expect(settings).toContainText("Up to 8 at once in a conversation and 32 new ones per request")
+  await expect(settings).toContainText("Up to 8 run at once in a conversation")
+  await expect(settings).toContainText("One request starts at most 32; past that, launches are refused.")
   await expect(settings).toContainText("$25.00 spend ceiling")
 
   const limits = settings.locator('[data-component="subagent-limits"]')
@@ -50,7 +51,7 @@ test("the owner sees 8, 32 and $25, and saving 4 writes budget.subagents.running
   await expect.poll(() => app.capture.config.length).toBe(1)
   expect(app.capture.config[0]).toEqual({ budget: { subagents: { running: 4, per_request: 32, usd: 25 } } })
   await expect(running).toHaveValue("4")
-  await expect(settings).toContainText("Up to 4 at once in a conversation")
+  await expect(settings).toContainText("Up to 4 run at once in a conversation")
 })
 
 test("an engine without subagentLimits shows Update this engine and no Limits card", async ({ page }) => {
@@ -78,8 +79,11 @@ test("a guest, refused the owner-only route, sees no Limits or Workflows card", 
   )
   await app.open()
   const settings = await openAgents(page)
-  // The facts still say what the engine does; only the owner's settings are hidden.
-  await expect(settings).toContainText("Up to 8 at once in a conversation and 32 new ones per request")
+  // The facts say what the engine does in a guest's conversations, the lower of the owner's limits and 4, 8 and $5;
+  // only the owner's settings are hidden.
+  await expect(settings).toContainText("Up to 4 run at once in a conversation")
+  await expect(settings).toContainText("One request starts at most 8;")
+  await expect(settings).toContainText("$5.00 spend ceiling")
   await expect.poll(() => probed).toBe(true)
   await page.waitForTimeout(500)
   await expect(settings.locator('[data-component="subagent-limits"]')).toHaveCount(0)

@@ -285,3 +285,14 @@ export function previewText(prompt: FollowupDraft["prompt"]) {
     .map((line) => line.trim())
     .find((line) => !!line)
 }
+
+/**
+ * Settings → General's follow-up text (R6): the queue drains only while a Vector window is open, and a browser that
+ * cannot share it between pages (no Web Locks) sends a queued message only while its own session is open.
+ */
+export function followupDescriptionKeys(shared: boolean) {
+  return [
+    "settings.general.row.followup.description",
+    shared ? "settings.general.row.followup.windowOpen" : "settings.general.row.followup.pageOnly",
+  ] as const
+}

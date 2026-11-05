@@ -50,7 +50,11 @@ import type { ServerScope } from "@/utils/server-scope"
 import { persisted } from "@/utils/persist"
 import { toggleMcp } from "./global-sync/mcp"
 import { createServerSession } from "./server-session"
-import { NO_CAPABILITIES, engineCapabilitiesQuery } from "@/features/background-tasks/engine-capabilities"
+import {
+  NO_CAPABILITIES,
+  capabilitiesChanged,
+  engineCapabilitiesQuery,
+} from "@/features/background-tasks/engine-capabilities"
 
 type GlobalStore = {
   ready: boolean
@@ -160,7 +164,8 @@ export function createServerSyncContextInner(serverSDK: ServerSDK) {
 
   const queryClient = useQueryClient()
 
-  // The engine's capability flags (I30), once per server; a reconnect may mean a different engine, so it reads them again.
+  // The engine's capability flags (I30), once per server; a reconnect may mean a different engine, and a settings reload
+  // may change a flag, so it reads them again after either (capabilitiesChanged).
   const capabilitiesQuery = useQuery(() => engineCapabilitiesQuery(serverSDK.scope, serverSDK.client))
 
   let bootedAt = 0
@@ -395,6 +400,10 @@ export function createServerSyncContextInner(serverSDK: ServerSDK) {
 
     session.apply(event)
 
+    // Saving settings reloads the engine, which can turn workflows on or off (I30), and a reconnect may reach another
+    // engine: the flags are read again after either.
+    if (capabilitiesChanged(event.type, connected)) void capabilitiesQuery.refetch({ cancelRefetch: false })
+
     if (directory === "global") {
       applyGlobalEvent({
         event,
@@ -406,10 +415,7 @@ export function createServerSyncContextInner(serverSDK: ServerSDK) {
         setGlobalProject: setProjects,
       })
       if (event.type === "server.connected") {
-        if (connected) {
-          setReconnects((count) => count + 1)
-          void capabilitiesQuery.refetch()
-        }
+        if (connected) setReconnects((count) => count + 1)
         connected = true
       }
       if (event.type === "server.connected" || event.type === "global.disposed") {
@@ -497,6 +503,8 @@ export function createServerSyncContextInner(serverSDK: ServerSDK) {
         result.data ? { ...result.data, locked: previous?.locked ?? [] } : previous,
       )
       bootstrap.refetch()
+      // A permission the save changed (Settings → Agents → Workflows) changes the engine's flags.
+      void capabilitiesQuery.refetch({ cancelRefetch: false })
       // Invalidate all provider queries so newly configured custom providers
       // appear immediately in the available provider list across all directories.
       queryClient.invalidateQueries({ queryKey: [serverSDK.scope, null, "providers"] })

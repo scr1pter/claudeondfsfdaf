@@ -5,6 +5,7 @@ import { SpendGuard } from "@vectordevai/core/spend-guard"
 import { TaskSize } from "@vectordevai/core/task-size"
 import type { BrainSchema } from "@vectordevai/core/brain/schema"
 import { BackgroundJob } from "@/background/job"
+import { BackgroundJobStore } from "@vectordevai/core/background-job-store"
 import { TaskPlace } from "./place"
 import { TaskIsolation } from "./isolation"
 import { EventV2Bridge } from "@/event-v2-bridge"
@@ -277,6 +278,7 @@ const layer = Layer.effect(
     const isolation = yield* TaskIsolation.Service
     const statuses = yield* SessionStatus.Service
     const background = yield* BackgroundJob.Service
+    const store = yield* BackgroundJobStore.Service
     const guard = yield* SpendGuard.Service
     const database = yield* Database.Service
     const truncate = yield* Truncate.Service
@@ -378,6 +380,21 @@ const layer = Layer.effect(
       },
     )
 
+    // A background command's exit note waits here in memory; its row keeps how it ended until the note is out (or
+    // dropped), so an engine that goes away first leaves it for restart recovery (5.H).
+    const markShells = (items: readonly Pending[]) =>
+      Effect.forEach(
+        items.flatMap(({ note }) => (note.kind === "shell" && note.shellID && !note.recovered ? [note.shellID] : [])),
+        (id) =>
+          Clock.currentTimeMillis.pipe(
+            Effect.flatMap((at) => store.delivered(id, at)),
+            Effect.catchCause((cause) =>
+              Effect.logWarning("a background command's note was not marked as sent", { id, cause }),
+            ),
+          ),
+        { discard: true },
+      )
+
     // Takes the whole batch and hands it to a delivery fiber of its own, which nothing interrupts but the engine's end.
     // Runs under the lock.
     const fire = (st: State, parentID: SessionID): Effect.Effect<void> =>
@@ -418,6 +435,8 @@ const layer = Layer.effect(
       const kept = (yield* Effect.forEach(batch, (item) =>
         current(parentID, item.note).pipe(Effect.map((ok) => (ok ? [item] : []))),
       )).flat()
+      // A command's note dropped with its launch is never written, so restart recovery leaves its row alone too.
+      yield* markShells(batch.filter((item) => !kept.includes(item)))
       if (kept.length === 0) return
       // Carry the parent's current turn settings: without a model the note would switch the parent to its agent's
       // configured model, and a note landing mid-run would drop the turn's fast mode or structured output.
@@ -508,7 +527,8 @@ const layer = Layer.effect(
               Effect.sync(() => {
                 delivering.set(messageID, { parentID, revoked: silent || fenced.has(parentID) })
               }),
-              () => lead.ops.prompt(prompt),
+              // A command's note is marked out as its message is written, so restart recovery never posts it again.
+              () => markShells(sent).pipe(Effect.andThen(lead.ops.prompt(prompt))),
               () =>
                 Effect.sync(() => {
                   delivering.delete(messageID)
@@ -770,6 +790,7 @@ export const node = LayerNode.make({
     Session.node,
     SessionStatus.node,
     BackgroundJob.node,
+    BackgroundJobStore.node,
     SpendGuard.node,
     Database.node,
     Truncate.node,

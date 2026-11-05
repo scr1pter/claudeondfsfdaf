@@ -26,7 +26,9 @@ import {
   phaseName,
   queuedLabel,
   readLifecycle,
+  patchTruncatedText,
   resultChip,
+  stageNotes,
   resolveAgent,
   runningAgentCount,
   statusSummary,
@@ -1731,16 +1733,34 @@ describe("1.99.113 labels", () => {
     expect(isolationLabel({ mode: "worktree", state: "preparing" })).toBe("Worktree: preparing")
   })
 
-  test("the JSON chip is green when valid, red when it failed, and absent for text results", () => {
-    expect(resultChip({ format: "json", valid: true })).toMatchObject({ state: "valid", label: "JSON" })
+  // The colour is not the only sign: the chip's text names its state too.
+  test("the JSON chip is green when valid, red when it failed, says which in words, and is absent for text results", () => {
+    expect(resultChip({ format: "json", valid: true })).toMatchObject({ state: "valid", label: "JSON valid" })
     expect(resultChip({ format: "json", valid: false, attempts: 3 })).toEqual({
       state: "invalid",
-      label: "JSON",
+      label: "JSON invalid",
       title: "Its JSON answer did not match the schema after 3 attempts",
     })
-    expect(resultChip({ format: "json" })?.state).toBe("pending")
+    expect(resultChip({ format: "json" })).toMatchObject({ state: "pending", label: "JSON unchecked" })
     expect(resultChip({ format: "text" })).toBeUndefined()
     expect(resultChip(undefined)).toBeUndefined()
+  })
+
+  // The pane names no folder and opens none, so a cut patch points at what the user can run or press.
+  test("a cut review patch says how to see the rest: git diff on the worktree's branch, or Merge for a copy", () => {
+    expect(patchTruncatedText({ branch: "vector/subagent/ses_1" })).toBe(
+      "The patch is cut short; the files above are all it changes. To see all of it, run git diff ...vector/subagent/ses_1 in this repository.",
+    )
+    expect(patchTruncatedText({})).toBe(
+      "The patch is cut short; the files above are all it changes, and Merge applies every change.",
+    )
+    for (const text of [patchTruncatedText({ branch: "b" }), patchTruncatedText({})])
+      expect(text).not.toContain("Open the worktree")
+  })
+
+  test("a stage's count says its failed and skipped agents in words, beside waiting on you", () => {
+    expect(stageNotes({ failed: 0, skipped: 0, waiting: 0 })).toEqual([])
+    expect(stageNotes({ failed: 2, skipped: 1, waiting: 1 })).toEqual(["2 failed", "1 skipped", "waiting on you"])
   })
 
   test("a workflow run's loaded agents leave the counts as they were with the run row alone", () => {

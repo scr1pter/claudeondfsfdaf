@@ -50,6 +50,9 @@ export type TaskActionsClient = {
 /** Route 3 takes at most 32 task IDs per request. */
 export const RESUME_CHUNK = 32
 
+/** The most of a workflow run's agents one list returns (the engine's MAX_TASKS); a run may have up to 1000. */
+export const RUN_AGENTS = 200
+
 function chunks<T>(items: readonly T[], size: number) {
   return Array.from({ length: Math.ceil(items.length / size) }, (_, index) =>
     items.slice(index * size, (index + 1) * size),
@@ -263,6 +266,8 @@ export type BackgroundTasks = {
   /** While the caller is mounted, load this workflow run's agents and keep them current with the board. */
   watchRun(runID: Accessor<string | undefined>): void
   runLoading(runID: string): boolean
+  /** The run has more agents than its list returned, so a stage's may be missing from it (the newest come first). */
+  runTruncated(runID: string): boolean
   canResumeRun(run: TaskAgent): boolean
   resumeRun(run: TaskAgent): Promise<void>
 }
@@ -349,6 +354,8 @@ export function createBackgroundTasks(input: BackgroundTasksInput): BackgroundTa
     desktop: readonly Task.Info[]
     /** Workflow runs' agents, loaded while a run's stages are shown (`task.list` on the run). */
     runs: Record<string, readonly Task.Info[]>
+    /** Runs whose list was cut: the engine returns at most RUN_AGENTS, active first, then the newest. */
+    runsTruncated: Record<string, boolean>
     limits?: Task.Limits
     shells: readonly Task.Shell[]
     refreshing: boolean
@@ -358,6 +365,7 @@ export function createBackgroundTasks(input: BackgroundTasksInput): BackgroundTa
     tasks: [],
     desktop: [],
     runs: {},
+    runsTruncated: {},
     shells: [],
     refreshing: false,
     truncated: { engine: false, desktop: false },
@@ -371,11 +379,13 @@ export function createBackgroundTasks(input: BackgroundTasksInput): BackgroundTa
     if (!board.runs[runID]) setLoadingRuns(runID, true)
     const result = await input
       .client()
-      .experimental.task.list({ sessionID: runID })
+      .experimental.task.list({ sessionID: runID, limit: String(RUN_AGENTS) })
       .catch(() => undefined)
     setLoadingRuns(runID, false)
     if (request !== boardRequest || rootID() !== sessionID || !watched.has(runID)) return
-    if (result?.data && Array.isArray(result.data.tasks)) setBoard("runs", runID, result.data.tasks)
+    if (!result?.data || !Array.isArray(result.data.tasks)) return
+    setBoard("runs", runID, result.data.tasks)
+    setBoard("runsTruncated", runID, result.data.truncated === true)
   }
   const refreshBoard = async () => {
     const sessionID = rootID()
@@ -439,6 +449,7 @@ export function createBackgroundTasks(input: BackgroundTasksInput): BackgroundTa
         error: undefined,
       })
       setBoard("runs", reconcile({}))
+      setBoard("runsTruncated", reconcile({}))
     }),
   )
 
@@ -920,9 +931,9 @@ export function createBackgroundTasks(input: BackgroundTasksInput): BackgroundTa
           }
           watched.delete(id)
           setBoard(
-            "runs",
-            produce((runs) => {
-              delete runs[id]
+            produce((state) => {
+              delete state.runs[id]
+              delete state.runsTruncated[id]
             }),
           )
         })
@@ -995,6 +1006,7 @@ export function createBackgroundTasks(input: BackgroundTasksInput): BackgroundTa
     openOutput,
     watchRun,
     runLoading: (runID) => loadingRuns[runID] === true,
+    runTruncated: (runID) => board.runsTruncated[runID] === true,
     canResumeRun,
     resumeRun,
   }

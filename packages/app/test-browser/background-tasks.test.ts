@@ -17,6 +17,7 @@ import { NO_CAPABILITIES, type EngineCapabilities } from "@/features/background-
 
 const ROOT = "ses_root"
 const CHILD = "ses_child"
+const RUN = "ses_run"
 
 const retryImmediately: typeof retry = (task) => task()
 
@@ -137,6 +138,9 @@ function engine() {
   }
   // Each board request's shells query, "" when it asked for none.
   const boards: string[] = []
+  // Each workflow run's list request, and what a run's list answers.
+  const runs: { sessionID: string; limit?: string }[] = []
+  const run: { truncated: boolean } = { truncated: false }
   const reach = (route: string, sessionID: string) => {
     calls.push(`${route}:${sessionID}`)
     if (unreachable.has(sessionID)) throw new Error("engine unreachable")
@@ -149,7 +153,11 @@ function engine() {
   const client = {
     experimental: {
       task: {
-        list: async (input?: { shells?: string }) => {
+        list: async (input?: { sessionID?: string; shells?: string; limit?: string }) => {
+          if (input?.sessionID === RUN) {
+            runs.push({ sessionID: input.sessionID, ...(input.limit ? { limit: input.limit } : {}) })
+            return { data: { tasks: [], truncated: run.truncated } }
+          }
           boards.push(input?.shells ?? "")
           if (state.invalidBoard) return { data: [] }
           const shells = input?.shells === "true" && state.shells ? { shells: state.shells } : {}
@@ -184,6 +192,8 @@ function engine() {
     client,
     calls,
     boards,
+    runs,
+    run,
     unreachable,
     state,
     count: (call: string) => calls.filter((item) => item === call).length,
@@ -270,6 +280,30 @@ async function until(condition: () => boolean, ms = 2_000) {
 }
 
 const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+
+describe("a workflow run's agents", () => {
+  // A run may have up to 1000 agents (max_agents), and the engine lists at most 200, the active and newest first.
+  test("are asked for as many as one list returns, and the pane learns when the list was cut", async () => {
+    for (const truncated of [true, false]) {
+      const fake = engine()
+      fake.run.truncated = truncated
+      const page = await open(fake, [ROOT])
+      const [shown, setShown] = createSignal<string | undefined>(undefined)
+      const watcher = createRoot((dispose) => {
+        page.tasks.watchRun(shown)
+        return dispose
+      })
+      setShown(RUN)
+      await until(() => fake.runs.length === 1 && !page.tasks.runLoading(RUN))
+      expect(fake.runs).toEqual([{ sessionID: RUN, limit: "200" }])
+      await until(() => page.tasks.runTruncated(RUN) === truncated)
+      // Closing the stages forgets the run, and what its list said with it.
+      watcher()
+      expect(page.tasks.runTruncated(RUN)).toBe(false)
+      page.dispose()
+    }
+  })
+})
 
 describe("Background tasks after the event stream dropped", () => {
   test("an unavailable task-list shape preserves the last valid observation", async () => {

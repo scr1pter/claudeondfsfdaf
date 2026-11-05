@@ -723,6 +723,39 @@ function noteFrom(child: string, state = "completed", extra: Record<string, unkn
   return message
 }
 
+// A helper's task_manage report, as TaskNotify writes it; one delivered without a turn carries taskQuiet.
+function reportFrom(child: string, extra: { quiet?: boolean } = {}) {
+  const message = user(`<task-message from="${child}">Halfway there.</task-message>`, { synthetic: true })
+  for (const part of message.parts)
+    if (part.type === "text")
+      part.metadata = {
+        taskMessage: { taskID: child },
+        ...(extra.quiet ? { [SessionTaskSize.QUIET]: true } : {}),
+      }
+  return message
+}
+
+// The shell tool's part for a command it started in the background.
+function startedCommand(shellID: string) {
+  return assistant("Started the build in the background.", "stop", [
+    { tool: "shell", metadata: { output: "", exit: null, background: true, shellID } },
+  ])
+}
+
+// A background command's exit note, as TaskNotify writes it into the conversation.
+function commandNote(shellID: string, state: string, quiet = false) {
+  const message = user(`<shell-notification id="${shellID}" state="${state}">Exited.</shell-notification>`, {
+    synthetic: true,
+  })
+  for (const part of message.parts)
+    if (part.type === "text")
+      part.metadata = {
+        shellNotification: { shellID, state, ...(state === "failed" ? { exitCode: 1 } : {}) },
+        ...(quiet ? { [SessionTaskSize.QUIET]: true } : {}),
+      }
+  return message
+}
+
 // A user message with a size the sender picked.
 function picked(text: string, size: "light" | "standard" | "thorough") {
   const message = user(text)
@@ -910,6 +943,63 @@ describe("SessionTaskSize request model", () => {
     // With the launch out of view, the ledger is the work before the thanks.
     const unseen = thanked("fix the parser bug in src/parser.ts", false)
     expect(size([...unseen, noteFrom("ses_unseen")])[1]).toMatchObject({
+      tier: "standard",
+      ledgerRequestID: unseen[0]!.info.id,
+    })
+  })
+
+  test("a Chat group a helper's wake report or a command's exit joined becomes standard with reason notified", () => {
+    // Message IDs are ordered, so each history is made in the order it happened.
+    const thanked = (ask: string, launch: () => SessionV1.WithParts) => [
+      user(ask),
+      launch(),
+      user("thanks", { agent: "quick" }),
+      assistant("You're welcome!", "stop", [], "quick"),
+    ]
+    // A helper's task_manage report sent with wake starts a turn: it is handled with full tools.
+    const reportedHistory = thanked("fix the parser bug in src/parser.ts", () => launched("ses_reporter"))
+    const report = reportFrom("ses_reporter")
+    const afterReport = size([...reportedHistory, report])
+    expect(afterReport).toHaveLength(2)
+    expect(afterReport[1]?.result).toMatchObject({ tier: "standard", source: "auto", reasons: ["notified"] })
+    expect(afterReport[1]?.ledgerRequestID).toBe(reportedHistory[0]!.info.id)
+    // A report is not a completion: it never lets a Light request resume the child.
+    expect(afterReport[1]?.notified).toBeUndefined()
+    // One recorded without a turn leaves the thanks on the quick lane.
+    const quietHistory = thanked("fix the parser bug in src/parser.ts", () => launched("ses_reporter"))
+    expect(size([...quietHistory, reportFrom("ses_reporter", { quiet: true })])[1]).toMatchObject({ tier: "chat" })
+    // A Thorough launch makes the report's turn Thorough.
+    const large = thanked(LARGE, () => launched("ses_reporter"))
+    expect(size([...large, reportFrom("ses_reporter")])[1]).toMatchObject({ tier: "thorough" })
+
+    // A background command that exited on its own or failed starts a turn: its log is read with full tools.
+    for (const state of ["completed", "failed"]) {
+      const history = thanked("run the build and fix what fails", () => startedCommand("shl_build"))
+      const requests = size([...history, commandNote("shl_build", state)])
+      expect(requests).toHaveLength(2)
+      expect(requests[1]?.result).toMatchObject({ tier: "standard", reasons: ["notified"] })
+      expect(requests[1]?.ledgerRequestID).toBe(history[0]!.info.id)
+      expect(requests[1]?.notified).toBeUndefined()
+    }
+    const thorough = thanked(LARGE, () => startedCommand("shl_large"))
+    expect(size([...thorough, commandNote("shl_large", "failed")])[1]).toMatchObject({ tier: "thorough" })
+    // A stopped command, a recovered interruption, and any note recorded without a turn leave it Chat.
+    for (const [state, quiet] of [
+      ["stopped", false],
+      ["interrupted", false],
+      ["completed", true],
+    ] as const) {
+      const history = thanked("run the build and fix what fails", () => startedCommand("shl_build"))
+      expect(size([...history, commandNote("shl_build", state, quiet)])[1]).toMatchObject({ tier: "chat" })
+    }
+    // A command whose launch is out of view counts as Work.
+    const unseen = [
+      user("fix the parser bug in src/parser.ts"),
+      assistant("Done."),
+      user("thanks", { agent: "quick" }),
+      assistant("You're welcome!", "stop", [], "quick"),
+    ]
+    expect(size([...unseen, commandNote("shl_unseen", "failed")])[1]).toMatchObject({
       tier: "standard",
       ledgerRequestID: unseen[0]!.info.id,
     })

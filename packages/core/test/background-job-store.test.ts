@@ -223,6 +223,56 @@ describe("BackgroundJobStore", () => {
     }),
   )
 
+  // A background command's exit note waits in its engine's memory; its row keeps how it ended until the note is out.
+  it.live("an ended command's note is undelivered until marked once, and only a gone owner's is offered", () =>
+    withStore((store) =>
+      Effect.gen(function* () {
+        const live = BackgroundJobStore.open()
+        const gone = foreign(exitedPid())
+        const shell = (owner: BackgroundJobStore.Owner) =>
+          row({ type: "shell", owner, metadata: { command: "bun run build", outputPath: "/tmp/shell.log" } })
+        const ended = shell(gone)
+        const held = shell(live)
+        const silent = shell(gone)
+        for (const job of [ended, held, silent]) {
+          yield* store.started(job)
+          yield* store.settled(job.id, { owner: job.owner.runtime, attempt: 1, status: "error", completedAt: 2_000 })
+        }
+        // A row that recorded no end (an older engine, or a metadata write that failed) is not offered.
+        for (const job of [ended, held]) yield* store.ended(job.id, { state: "failed", bytes: 12, exitCode: 2 })
+        const offered = yield* store.undelivered(directory)
+        expect(offered.map((item) => item.id)).toEqual([ended.id])
+        expect(offered[0]?.metadata).toEqual({
+          command: "bun run build",
+          outputPath: "/tmp/shell.log",
+          ended: { state: "failed", bytes: 12, exitCode: 2 },
+        })
+        expect(yield* store.undelivered(elsewhere)).toEqual([])
+        // Marked once, across engines; then it is no longer offered, and a late end no longer changes the row.
+        expect(yield* store.delivered(ended.id, 3_000)).toBe(true)
+        expect(yield* store.delivered(ended.id, 3_001)).toBe(false)
+        expect(yield* store.undelivered(directory)).toEqual([])
+        yield* store.ended(ended.id, { state: "completed", bytes: 1 })
+        const rows = yield* store.forParent("ses_parent")
+        expect(rows.find((item) => item.id === ended.id)).toMatchObject({
+          reportedAt: 3_000,
+          metadata: { ended: { state: "failed" } },
+        })
+        // An interrupted row is restart recovery's to claim, never marked here.
+        const interrupted = row({ type: "shell", owner: gone })
+        yield* store.started(interrupted)
+        yield* store.settled(interrupted.id, {
+          owner: gone.runtime,
+          attempt: 1,
+          status: "interrupted",
+          completedAt: 2_000,
+        })
+        expect(yield* store.delivered(interrupted.id, 3_000)).toBe(false)
+        BackgroundJobStore.close(live)
+      }),
+    ),
+  )
+
   it.live("a stale owner or attempt is a no-op", () =>
     withStore((store) =>
       Effect.gen(function* () {

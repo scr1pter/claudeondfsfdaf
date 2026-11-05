@@ -239,11 +239,23 @@ export interface Interface extends BackgroundJob.Store {
   /** Records a legacy helper as interrupted and reported: false when its job already has a row. */
   readonly insertLegacy: (row: Legacy) => Effect.Effect<boolean>
   readonly forParent: (parentSessionID: string) => Effect.Effect<Row[]>
+  /**
+   * Records on a background command's settled row how it ended (`metadata.ended`), so restart recovery can still tell
+   * its session when the engine holding its exit note went away before the note was out.
+   */
+  readonly ended: (id: string, ended: Record<string, unknown>) => Effect.Effect<void>
+  /** Marks an ended row's note as out, once: false when another engine, or an earlier delivery, got there first. */
+  readonly delivered: (id: string, at: number) => Effect.Effect<boolean>
+  /** This directory's ended background commands, recorded with `ended`, whose note never went out and whose owner is gone. */
+  readonly undelivered: (directory: string) => Effect.Effect<Row[]>
   /** Deletes ended rows last touched before `before`. An interrupted row stays until it was reported. */
   readonly prune: (before: number) => Effect.Effect<number>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@vector/BackgroundJobStore") {}
+
+// The statuses of a job that ended on its own or was stopped, as opposed to one its engine's going away interrupted.
+const ENDED: BackgroundJob.Status[] = ["completed", "error", "cancelled"]
 
 const METADATA_MAX = 4 * 1024
 const ERROR_MAX = 2_000
@@ -431,7 +443,79 @@ export function make(db: Database.Interface["db"]): Interface {
     return removed.length
   })
 
-  return { started, settled, promoted, heartbeat, candidates, claim, insertLegacy, forParent, prune }
+  const ended = Effect.fn("BackgroundJobStore.ended")(function* (id: string, value: Record<string, unknown>) {
+    const row = yield* db
+      .select({ metadata: BackgroundJobTable.metadata })
+      .from(BackgroundJobTable)
+      .where(eq(BackgroundJobTable.id, id))
+      .get()
+      .pipe(Effect.orDie)
+    // Metadata past its bound is not written: the row keeps what it had, and the note lives in memory as before.
+    const metadata = row && bounded({ ...(row.metadata ?? {}), ended: value })
+    if (!metadata) return
+    yield* db
+      .update(BackgroundJobTable)
+      .set({ metadata })
+      .where(and(eq(BackgroundJobTable.id, id), isNull(BackgroundJobTable.reported_at)))
+      .run()
+      .pipe(Effect.orDie)
+  })
+
+  const delivered = Effect.fn("BackgroundJobStore.delivered")(function* (id: string, at: number) {
+    const marked = yield* db
+      .update(BackgroundJobTable)
+      .set({ reported_at: at })
+      // The row's settlement is written apart from the job's completion, so it may still read running here. An
+      // interrupted row is restart recovery's, which claims it.
+      .where(
+        and(
+          eq(BackgroundJobTable.id, id),
+          ne(BackgroundJobTable.status, "interrupted"),
+          isNull(BackgroundJobTable.reported_at),
+        ),
+      )
+      .returning({ id: BackgroundJobTable.id })
+      .get()
+      .pipe(Effect.orDie)
+    return marked !== undefined
+  })
+
+  const undelivered = Effect.fn("BackgroundJobStore.undelivered")(function* (directory: string) {
+    const rows = yield* db
+      .select()
+      .from(BackgroundJobTable)
+      .where(
+        and(
+          eq(BackgroundJobTable.type, "shell"),
+          inArray(BackgroundJobTable.status, ENDED),
+          eq(BackgroundJobTable.directory, directory),
+          isNull(BackgroundJobTable.reported_at),
+        ),
+      )
+      .orderBy(asc(BackgroundJobTable.started_at), asc(BackgroundJobTable.id))
+      .all()
+      .pipe(Effect.orDie)
+    return rows
+      .map(decode)
+      .filter(
+        (row) => typeof row.metadata?.ended === "object" && row.metadata.ended !== null && alive(row.owner) === "dead",
+      )
+  })
+
+  return {
+    started,
+    settled,
+    promoted,
+    heartbeat,
+    candidates,
+    claim,
+    insertLegacy,
+    forParent,
+    ended,
+    delivered,
+    undelivered,
+    prune,
+  }
 }
 
 const layer = Layer.effect(

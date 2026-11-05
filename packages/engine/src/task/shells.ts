@@ -48,6 +48,8 @@ const WINDOW = 4096
 // How long stopping a command waits for its kill to settle. A descendant that left the command's process group (setsid,
 // `ssh -f`) can hold its output open after the command itself is dead, and the kill waits for that output to close.
 const KILL_WAIT = "10 seconds"
+// How much of "Vector could not follow it to the end" a row keeps for restart recovery.
+const FAILED_MAX = 500
 /** The most ended commands task_manage list shows the agent, beside every running one. */
 export const AGENT_ENDED = 5
 
@@ -283,6 +285,60 @@ export function started(shell: Pick<Task.Shell, "id" | "outputPath">) {
     `Vector notifies you when it exits. Read its output with read at ${file}; stop it with task_manage stop.`,
     "</shell>",
   ].join("\n")
+}
+
+/**
+ * The exit note of a command that ended while its engine still held the note, rebuilt for restart recovery from its row
+ * (`metadata.ended`, which `start` records) and the end of its log. Undefined when the row records no end.
+ */
+export const recoveredNote = Effect.fnUntraced(function* (
+  row: Pick<BackgroundJobStore.Row, "id" | "title" | "metadata">,
+) {
+  const ended = row.metadata?.ended
+  if (!ended || typeof ended !== "object") return undefined
+  const value = ended as Record<string, unknown>
+  const state =
+    value.state === "completed" || value.state === "failed" || value.state === "stopped" ? value.state : undefined
+  if (!state) return undefined
+  const number = (input: unknown) => (typeof input === "number" && Number.isFinite(input) ? input : undefined)
+  const file = text(row.metadata?.outputPath) ?? outputPath(row.id)
+  const withheld = value.withheld === true
+  const exitCode = number(value.exitCode)
+  return {
+    state,
+    ...(exitCode === undefined ? {} : { exitCode }),
+    text: note({
+      id: row.id,
+      state,
+      command: text(row.metadata?.command) ?? row.title ?? "command",
+      outputPath: file,
+      bytes: number(value.bytes) ?? 0,
+      exitCode,
+      timedOut: number(value.timedOut),
+      signalled: value.signalled === true,
+      truncated: value.truncated === true,
+      withheld,
+      failed: text(value.failed),
+      tail: withheld ? "" : yield* Effect.promise(() => readTail(file)),
+    }),
+  }
+})
+
+// The end of a command's log, as much as a note keeps before cutting it; empty when the log cannot be read.
+async function readTail(file: string) {
+  const handle = await open(file, "r").catch(() => undefined)
+  if (!handle) return ""
+  try {
+    const size = (await handle.stat()).size
+    const length = Math.min(size, KEEP)
+    const buffer = Buffer.alloc(length)
+    await handle.read(buffer, 0, length, size - length)
+    return decodeTail(buffer)
+  } catch {
+    return ""
+  } finally {
+    await handle.close().catch(() => {})
+  }
 }
 
 /**
@@ -533,6 +589,24 @@ const layer = Layer.effect(
               if (info.status === "running" || info.status === "interrupted") return
               const state =
                 info.status === "completed" ? "completed" : info.status === "cancelled" ? "stopped" : "failed"
+              // The note waits in memory for its window, so how the command ended is kept on its row too: an engine
+              // that goes away before the note is out leaves it for restart recovery (`recoveredNote`).
+              yield* store
+                .ended(id, {
+                  state,
+                  bytes: live.bytes,
+                  ...(live.exitCode === undefined ? {} : { exitCode: live.exitCode }),
+                  ...(live.timedOut === undefined ? {} : { timedOut: live.timedOut }),
+                  ...(live.signalled ? { signalled: true } : {}),
+                  ...(live.truncated ? { truncated: true } : {}),
+                  ...(live.withheld ? { withheld: true } : {}),
+                  ...(state === "failed" && live.failed ? { failed: live.failed.slice(0, FAILED_MAX) } : {}),
+                })
+                .pipe(
+                  Effect.catchCause((cause) =>
+                    Effect.logWarning("a background command's end was not recorded", { id, cause }),
+                  ),
+                )
               yield* notify.enqueue({
                 parentID: session.id,
                 note: {

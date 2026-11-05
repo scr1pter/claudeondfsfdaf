@@ -251,6 +251,11 @@ test("docs-content says the new limits, labelled, and no longer that Vector sets
   const many = subagentKinds.find(([name]) => name === "How many")![1]
   expect(many).toContain(`at most ${DEFAULTS.running} subagents run at once in a conversation`)
   expect(many).toContain(`(${GUEST.running}, ${GUEST.perRequest} and $${GUEST.usd} for guests)`)
+  // Only the at-once limit makes launches wait; past the per-request count they are refused (5.B.9).
+  expect(many).toContain(
+    "The main agent's launches past the at-once limit wait for a free slot; past the per-request count they are refused.",
+  )
+  expect(many).not.toContain("Further launches wait for a free slot")
   const limit = faqs.find((faq) => faq.question === "Is there a limit on how many subagents Vector runs?")
   expect(limit?.answer).toContain(`${release113.since} yes.`)
   expect(limit?.answer).toContain(`At most ${DEFAULTS.running} subagents run at once in a conversation`)
@@ -284,6 +289,33 @@ test("the subagents page says what the engine does where it once said more", () 
   expect(plain(section(pages.tokenomics, "learned-defaults", "h3"))).toContain(
     "runs where the agent handed work to subagents are their own split",
   )
+})
+
+test("the desktop page names the queue dock's own controls", async () => {
+  // session-followup-dock.tsx: Steer (Retry once a send failed) and Delete on each row, Resume while paused.
+  const dock = await read("packages/app/src/pages/session/composer/session-followup-dock.tsx")
+  const english = await read("packages/app/src/i18n/en.ts")
+  const label = (key: string) => {
+    expect(dock).toContain(`"${key}"`)
+    return new RegExp(`"${key.replaceAll(".", "\\.")}": "([^"]+)"`).exec(english)![1]!
+  }
+  const desktop = blocks(pages["desktop-app"])
+    .map(plain)
+    .find((block) => block.includes("wait in a dock"))!
+  expect(desktop).toBeDefined()
+  const controls = [
+    label("settings.general.row.followup.option.steer"),
+    label("session.followupDock.delete"),
+    label("session.followupDock.failed"),
+    label("session.followupDock.retry"),
+    label("session.followupDock.resume"),
+  ]
+  expect(controls).toEqual(["Steer", "Delete", "Not sent", "Retry", "Resume"])
+  for (const control of controls) expect([control, desktop.includes(control)]).toEqual([control, true])
+  // The dock has no Send now or Edit control.
+  for (const key of ["session.followupDock.sendNow", "session.followupDock.edit"]) expect(dock).not.toContain(key)
+  expect(desktop).not.toContain("Send now")
+  expect(desktop).not.toMatch(/\bEdit\b/)
 })
 
 test("the 1.99.113 notes have a Multi-agent parity section that names every work package and its tests", () => {

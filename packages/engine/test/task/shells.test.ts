@@ -255,6 +255,13 @@ describe("background shell commands", () => {
         }),
       ])
       expect((yield* shells.list(root.id)).map((item) => item.id)).toEqual([shell.id])
+      // How it ended stays on the row until its note is out, which marks the row reported: an engine that goes away
+      // while it holds the note leaves it for restart recovery.
+      const noted = yield* pollWithTimeout(
+        store.forParent(root.id).pipe(Effect.map((rows) => (rows[0]?.reportedAt ? rows[0] : undefined))),
+        "the command's row must be marked once its note is out",
+      )
+      expect(noted.metadata?.ended).toEqual({ state: "failed", bytes: ended.outputBytes, exitCode: 3 })
     }),
   )
 
@@ -634,6 +641,82 @@ describe("background shell commands after a restart", () => {
       yield* Effect.sleep("100 millis")
       expect(prompts).toHaveLength(count)
     }),
+  )
+
+  recovering.instance(
+    "a command that ended while a gone engine held its note gets that note from its row and log, once, quietly",
+    () =>
+      Effect.gen(function* () {
+        const sessions = yield* Session.Service
+        const store = yield* BackgroundJobStore.Service
+        const recovery = yield* TaskRecovery.Service
+        const { directory } = yield* TestInstance
+        const root = yield* sessions.create()
+        const here = BackgroundJobStore.current()
+        const gone = {
+          runtime: `${randomUUID()}:${randomUUID()}`,
+          pid: exited(),
+          boot: here.boot,
+          machine: here.machine,
+        }
+        // A live engine (this process's open lease) still holds its own note in memory: its row is left to it.
+        const live = BackgroundJobStore.open()
+        yield* Effect.addFinalizer(() => Effect.sync(() => BackgroundJobStore.close(live)))
+        const rows = [
+          { id: "shl_0123456789abEndedNoteRow01", owner: gone },
+          { id: "shl_0123456789abHeldNoteRow001", owner: live },
+        ]
+        for (const row of rows) {
+          const log = ShellJobs.outputPath(row.id)
+          yield* Effect.promise(async () => {
+            await fs.mkdir(path.dirname(log), { recursive: true })
+            await fs.writeFile(log, Array.from({ length: 50 }, (_, index) => `line ${index + 1}`).join("\n") + "\n")
+          })
+          yield* Effect.addFinalizer(() => Effect.promise(() => fs.rm(log, { force: true })))
+          yield* store.started({
+            id: row.id,
+            type: "shell",
+            title: "bun run build",
+            parentSessionID: root.id,
+            directory,
+            background: true,
+            startedAt: Date.now() - 60_000,
+            owner: row.owner,
+            metadata: {
+              parentSessionId: root.id,
+              background: true,
+              command: "bun run build",
+              outputPath: log,
+              pid: 4242,
+            },
+          })
+          yield* store.settled(row.id, { owner: row.owner.runtime, status: "error", completedAt: Date.now() })
+          yield* store.ended(row.id, { state: "failed", bytes: 341, exitCode: 2 })
+        }
+
+        yield* recovery.reconcile()
+
+        const [ended, held] = rows
+        const sent = yield* noteFor(ended!.id)
+        expect(sent.noReply).toBe(true)
+        expect(sent.parts[0]).toMatchObject({
+          metadata: { shellNotification: { shellID: ended!.id, state: "failed", exitCode: 2 }, taskQuiet: true },
+        })
+        const text = textOf(sent)
+        expect(text).toContain(`<shell-notification id="${ended!.id}" state="failed" exit_code="2">`)
+        expect(text).toContain(`is in ${ShellJobs.outputPath(ended!.id)}; read it with read.`)
+        expect(text).toContain("line 50")
+        expect(text).not.toContain("line 10\n")
+        const after = yield* store.forParent(root.id)
+        expect(after.find((row) => row.id === ended!.id)?.reportedAt).toEqual(expect.any(Number))
+        expect(after.find((row) => row.id === held!.id)?.reportedAt).toBeUndefined()
+        expect(prompts.some((input) => textOf(input).includes(held!.id))).toBe(false)
+        // A second pass reports nothing again.
+        const count = prompts.length
+        yield* recovery.reconcile()
+        yield* Effect.sleep("100 millis")
+        expect(prompts).toHaveLength(count)
+      }),
   )
 
   recovering.instance(

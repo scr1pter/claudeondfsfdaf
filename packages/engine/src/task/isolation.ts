@@ -532,29 +532,48 @@ const closeTerminals = Effect.fn("TaskIsolation.closeTerminals")(function* (
   work: InstanceContext,
   locations: LocationServiceMap.Service["Service"],
 ) {
-  const ref = Location.Ref.make({ directory: AbsolutePath.make(work.directory) })
-  // A location nothing has used has no terminals, and getting it here would start its services in the checkout.
-  if (!(yield* RcMap.has(locations.rcMap, ref))) return
-  const closed = yield* Effect.gen(function* () {
-    const pty = yield* Pty.Service
-    const terminals = yield* pty.list()
-    yield* Effect.forEach(
-      terminals,
-      (info) => pty.remove(info.id).pipe(Effect.catchTag("Pty.NotFoundError", () => Effect.void)),
-      { discard: true },
-    )
-    return terminals.filter((info) => info.status === "running")
-  }).pipe(
-    Effect.provide(locations.get(ref)),
-    // Location services that failed to start have no terminal service, so no terminals.
-    Effect.catch((cause) =>
-      Effect.logWarning("isolated checkout's location services did not start", {
-        directory: work.directory,
-        cause,
-      }).pipe(Effect.as([])),
-    ),
+  yield* closeTerminalsIn([work.directory], () => true, locations)
+})
+
+/**
+ * Closes the terminals `chosen` picks in these folders' location services, and waits for their programs. A location
+ * nothing has used has no terminals and is not started. Returns how many running programs it closed.
+ */
+export const closeTerminalsIn = Effect.fn("TaskIsolation.closeTerminalsIn")(function* (
+  directories: readonly string[],
+  chosen: (info: Pty.Info) => boolean,
+  locations: LocationServiceMap.Service["Service"],
+) {
+  const unique = [...new Map(directories.map((directory) => [FileLock.key(directory), directory])).values()]
+  const closed = yield* Effect.forEach(unique, (directory) =>
+    Effect.gen(function* () {
+      const ref = Location.Ref.make({ directory: AbsolutePath.make(directory) })
+      // Getting a location nothing has used would start its services in that folder.
+      if (!(yield* RcMap.has(locations.rcMap, ref))) return []
+      return yield* Effect.gen(function* () {
+        const pty = yield* Pty.Service
+        const terminals = (yield* pty.list()).filter(chosen)
+        yield* Effect.forEach(
+          terminals,
+          (info) => pty.remove(info.id).pipe(Effect.catchTag("Pty.NotFoundError", () => Effect.void)),
+          { discard: true },
+        )
+        return terminals.filter((info) => info.status === "running")
+      }).pipe(
+        Effect.provide(locations.get(ref)),
+        // Location services that failed to start have no terminal service, so no terminals.
+        Effect.catch((cause) =>
+          Effect.logWarning("a folder's location services did not start; its terminals were not closed", {
+            directory,
+            cause,
+          }).pipe(Effect.as([] as Pty.Info[])),
+        ),
+      )
+    }),
   )
-  yield* Effect.forEach(closed, (info) => ended(info.pid), { concurrency: "unbounded", discard: true })
+  const running = closed.flat()
+  yield* Effect.forEach(running, (info) => ended(info.pid), { concurrency: "unbounded", discard: true })
+  return running.length
 })
 
 // The close sent the terminal's program the terminal library's hangup or terminate. One that ignores it is killed, with
@@ -954,6 +973,21 @@ export const make = Effect.gen(function* () {
     })
   })
 
+  // Whether the disk holds one more isolated checkout of the project, and never less than the minimum free space: a
+  // worktree needs about HEAD's tracked files; a copy writes the project twice, as the copy and its baseline.
+  const room = Effect.fnUntraced(function* (mode: "worktree" | "copy", cwd: string, measured?: { bytes: number }) {
+    const limits = yield* Limits
+    const needed =
+      mode === "copy"
+        ? (measured ?? (yield* io(() => IsolationCopy.measureProject(cwd)))).bytes * 2
+        : (yield* text(cwd, ["ls-tree", "-r", "-l", "HEAD"]))
+            .split("\n")
+            .reduce((sum, line) => sum + (Number(line.split(/\s+/)[3]) || 0), 0) * 1.5
+    const disk = yield* io(() => statfs(Global.Path.data))
+    if (disk.bavail * disk.bsize < Math.max(limits.minFreeBytes, needed))
+      return yield* err("disk", "There is not enough free disk space for task isolation.")
+  })
+
   const check = Effect.fn("TaskIsolation.check")(function* (input: CheckInput) {
     const limits = yield* Limits
     const ctx = yield* home
@@ -993,15 +1027,7 @@ export const make = Effect.gen(function* () {
     if (sparse?.text().trim() === "true")
       return yield* err("sparse", "Task isolation does not support sparse checkouts.")
     const total = mode === "copy" ? yield* io(() => IsolationCopy.measureProject(cwd)) : undefined
-    // A worktree needs about HEAD's tracked files; a copy writes the project twice, as the copy and its baseline.
-    const needed = total
-      ? total.bytes * 2
-      : (yield* text(cwd, ["ls-tree", "-r", "-l", "HEAD"]))
-          .split("\n")
-          .reduce((sum, line) => sum + (Number(line.split(/\s+/)[3]) || 0), 0) * 1.5
-    const disk = yield* io(() => statfs(Global.Path.data))
-    if (disk.bavail * disk.bsize < Math.max(limits.minFreeBytes, needed))
-      return yield* err("disk", "There is not enough free disk space for task isolation.")
+    yield* room(mode, cwd, total)
     if (total) {
       if (total.files > limits.copyFiles)
         return yield* err("copy_limit", "The project exceeds the isolation copy file limit.")
@@ -1224,6 +1250,9 @@ export const make = Effect.gen(function* () {
           const settings = (yield* config.get()).sizing?.subagents?.isolation
           const created = yield* FileLock.forTree(record.parentDirectory)(
             Effect.gen(function* () {
+              // Checked again under the folder's lock: launches that passed `check` together all read the free space
+              // before any of them wrote a checkout, and each one created before this one has used some of it.
+              yield* room(record.mode, record.parentDirectory)
               if (record.mode === "copy") {
                 if (
                   yield* io(() =>
@@ -2759,6 +2788,9 @@ export const make = Effect.gen(function* () {
   })
   return {
     check,
+    /** Closes the terminals `chosen` picks in these folders, and waits for their programs (closeTerminalsIn). */
+    closeTerminals: (directories: readonly string[], chosen: (info: Pty.Info) => boolean) =>
+      closeTerminalsIn(directories, chosen, locations),
     fence: (sessionID: string) => audience.fenceIsolation({ sessionID, actor: "owner" }),
     reserve,
     start,

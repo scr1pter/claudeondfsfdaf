@@ -283,7 +283,7 @@ export const subagentKinds = [
   ],
   [
     "How many",
-    `A small task gets no subagents; a big one gets one per independent part. Up to desktop 1.99.112, Vector set no cap on either kind: your computer and your provider's rate limits were the practical limits, and each one spends its own tokens. ${release113.since} at most 8 subagents run at once in a conversation, one request starts at most 32, and the subagents of one request share a $25 spend ceiling (4, 8 and $5 for guests). Further launches wait for a free slot. Change the limits with budget.subagents or in Settings → Agents → Limits.`,
+    `A small task gets no subagents; a big one gets one per independent part. Up to desktop 1.99.112, Vector set no cap on either kind: your computer and your provider's rate limits were the practical limits, and each one spends its own tokens. ${release113.since} at most 8 subagents run at once in a conversation, one request starts at most 32, and the subagents of one request share a $25 spend ceiling (4, 8 and $5 for guests). The main agent's launches past the at-once limit wait for a free slot; past the per-request count they are refused. Change the limits with budget.subagents or in Settings → Agents → Limits.`,
   ],
   [
     "While they run",

@@ -61,7 +61,16 @@ export async function readEngineCapabilities(client: CapabilitiesClient, signal?
   return parseCapabilities(result.data)
 }
 
-/** The server-sync query: one copy per server, refetched when the event stream reconnects (server-sync.tsx). */
+/**
+ * Whether an engine event may change what its flags say (server-sync.tsx reads them again): a reconnect may reach
+ * another engine, and a reload of its settings may turn workflows on or off. A global config save emits
+ * `global.disposed`; a folder that waited for its running work reloads later, with `server.instance.disposed`.
+ */
+export function capabilitiesChanged(type: string, reconnect: boolean) {
+  return (type === "server.connected" && reconnect) || type === "global.disposed" || type === "server.instance.disposed"
+}
+
+/** The server-sync query: one copy per server, refetched after a reconnect or a settings reload (server-sync.tsx). */
 export const engineCapabilitiesQuery = (scope: ServerScope, client: CapabilitiesClient) =>
   queryOptions<EngineCapabilities>({
     queryKey: [scope, "capabilities"] as const,

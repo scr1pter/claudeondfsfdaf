@@ -28,6 +28,7 @@ import {
 import {
   SUBAGENT_LIMIT_DEFAULTS,
   SUBAGENT_LIMIT_FIELDS,
+  guestSubagentLimits,
   howManyFact,
   ownerFromStatus,
   parseSubagentLimits,
@@ -116,10 +117,12 @@ const SUBAGENT_FACTS = [
   },
 ] as const
 
-function subagentFacts(config: Config | undefined) {
+// `guest`: the reader is an invited guest, whose conversations run with the lower of these and 4, 8 and $5 (5.B.7).
+function subagentFacts(config: Config | undefined, guest: boolean) {
+  const limits = readSubagentLimits(config)
   return [
     ...SUBAGENT_FACTS.slice(0, 3),
-    { title: "How many", description: howManyFact(readSubagentLimits(config)) },
+    { title: "How many", description: howManyFact(guest ? guestSubagentLimits(limits) : limits) },
     ...SUBAGENT_FACTS.slice(3),
   ]
 }
@@ -132,8 +135,9 @@ const LEGEND = [
   { status: "pending", label: "Not started" },
 ] as const
 
-// Saving a switch reloads the engine's state, which stops every running
-// session, so the page asks first whenever something is working.
+// Saving a switch reloads the engine's state: each folder reloads once its
+// turns and subagents end, and the reload stops its background commands, so
+// the page asks first whenever something is working.
 function DialogStopRunningWork(props: {
   work: RunningWork
   title: string
@@ -304,9 +308,9 @@ export function SettingsSubagentsV2() {
               <div class="settings-v2-row-title">General subagents</div>
               <div class="settings-v2-row-description">
                 Vector's agent hands independent, substantial parts of a task to general-purpose subagents that run in
-                parallel. Turn this off to keep that work in the main agent; subagent specialists still work. Changing
-                it stops any work in progress, so Vector asks first when something is running, and the new setting
-                applies from your next message.
+                parallel. Turn this off to keep that work in the main agent; subagent specialists still work. A change
+                stops background commands and lets work in progress finish with the current setting, so Vector asks
+                first when something is running.
               </div>
             </div>
             <div class="settings-v2-row-control settings-v2-row-control--compact">
@@ -360,7 +364,13 @@ export function SettingsSubagentsV2() {
               </div>
             </div>
           </div>
-          <For each={capabilities().workDelegation ? subagentFacts(serverSync().globalConfig()) : LEGACY_FACTS}>
+          <For
+            each={
+              capabilities().workDelegation
+                ? subagentFacts(serverSync().globalConfig(), owner() === false)
+                : LEGACY_FACTS
+            }
+          >
             {(fact) => (
               <div class="settings-v2-row-modern settings-v2-row-modern--stacked">
                 <div class="settings-v2-row-copy">

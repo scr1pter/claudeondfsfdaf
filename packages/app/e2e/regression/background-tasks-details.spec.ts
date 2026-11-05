@@ -68,7 +68,7 @@ test("a row shows model · effort, the Fork badge and the JSON chip, and Details
   await expect(row.locator("td").nth(1)).toHaveText("haiku-fixture · low")
   await expect(item.locator('.vector-bg-tasks-badge[data-kind="fork"]')).toHaveText("Fork")
   const chip = item.locator('.vector-bg-tasks-badges .vector-bg-tasks-badge[data-kind="json"]')
-  await expect(chip).toHaveText("JSON")
+  await expect(chip).toHaveText("JSON valid")
   await expect(chip).toHaveAttribute("data-state", "valid")
 
   await item.getByRole("button", { name: "Details", exact: true }).click()

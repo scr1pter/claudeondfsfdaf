@@ -24,8 +24,10 @@ import {
   isolationLabel,
   KIND_LABEL,
   modelEffortLabel,
+  patchTruncatedText,
   queuedLabel,
   resultChip,
+  stageNotes,
   statusWord,
   waitingLabel,
   type TaskAgent,
@@ -1333,7 +1335,7 @@ function WorktreeRow(props: {
                   <pre data-component="task-patch">{changes().patch}</pre>
                 </Show>
                 <Show when={changes().truncated}>
-                  <p>{props.t("backgroundTasks.worktree.patchTruncated")}</p>
+                  <p>{patchTruncatedText(props.isolation, props.t)}</p>
                 </Show>
               </>
             )}
@@ -1585,9 +1587,8 @@ function WorkflowBody(props: { card: TaskCard; tasks: BackgroundTasks; t: TaskTr
                   <span class="vector-bg-tasks-phase-name">{stage.title}</span>
                   <span class="vector-bg-tasks-phase-count">
                     {stage.done}/{stage.total ?? "?"}
-                    <Show when={stage.waiting > 0}>
-                      <span> · {props.t("backgroundTasks.workflow.waiting")}</span>
-                    </Show>
+                    {/* The bar below is drawn for the eye only: what failed, was skipped or waits is said here. */}
+                    <For each={stageNotes(stage, props.t)}>{(note) => <span> · {note}</span>}</For>
                   </span>
                   <ChevronIcon />
                   <span class="vector-bg-tasks-stage-bar" aria-hidden="true">
@@ -1606,7 +1607,11 @@ function WorkflowBody(props: { card: TaskCard; tasks: BackgroundTasks; t: TaskTr
                         <p class="vector-bg-tasks-idle">
                           {props.card.runID && props.tasks.runLoading(props.card.runID)
                             ? props.t("backgroundTasks.workflow.loading")
-                            : props.t("backgroundTasks.workflow.noAgents")}
+                            : props.card.runID &&
+                                props.tasks.runTruncated(props.card.runID) &&
+                                stage.done + stage.failed + stage.running + stage.waiting > 0
+                              ? props.t("backgroundTasks.workflow.recentOnly")
+                              : props.t("backgroundTasks.workflow.noAgents")}
                         </p>
                       }
                     >

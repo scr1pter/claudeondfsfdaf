@@ -353,7 +353,10 @@ export function waitingLabel(waiting: TaskWaiting, now: number, t: TaskTranslate
     : t("backgroundTasks.waiting.permission", { time })
 }
 
-/** The JSON chip: "valid" (green), "invalid" (red) or "pending", with the tooltip that says which. */
+/**
+ * The JSON chip: "valid" (green), "invalid" (red) or "pending". Its text says which too ("JSON valid"), so the state
+ * is never shown by colour alone, and its tooltip adds the attempts.
+ */
 export function resultChip(result: TaskResult | undefined, t: TaskTranslate = english) {
   if (!result || result.format !== "json") return undefined
   const state: "valid" | "invalid" | "pending" =
@@ -363,7 +366,32 @@ export function resultChip(result: TaskResult | undefined, t: TaskTranslate = en
     result.attempts !== undefined && result.attempts > 1
       ? t("backgroundTasks.json.attempts", { label: base, count: result.attempts })
       : base
-  return { state, label: t("backgroundTasks.json"), title }
+  return { state, label: t(`backgroundTasks.json.label.${state}`), title }
+}
+
+/**
+ * What a workflow stage's count says beside done/total: its failed and skipped agents and whether one waits on the user.
+ * The stage's bar shows them by colour only, and is hidden from screen readers.
+ */
+export function stageNotes(
+  stage: Pick<Task.WorkflowStage, "failed" | "skipped" | "waiting">,
+  t: TaskTranslate = english,
+): string[] {
+  return [
+    ...(stage.failed > 0 ? [t("backgroundTasks.workflow.failed", { count: stage.failed })] : []),
+    ...(stage.skipped > 0 ? [t("backgroundTasks.workflow.skipped", { count: stage.skipped })] : []),
+    ...(stage.waiting > 0 ? [t("backgroundTasks.workflow.waiting")] : []),
+  ]
+}
+
+/**
+ * Below a review patch that was cut short: what the user can do to see the rest. The pane never holds the checkout's
+ * folder, so a worktree's branch is named for git, and a copy (which has no branch) is merged whole.
+ */
+export function patchTruncatedText(isolation: Pick<TaskIsolation, "branch">, t: TaskTranslate = english) {
+  return isolation.branch
+    ? t("backgroundTasks.worktree.patchTruncated.branch", { branch: isolation.branch })
+    : t("backgroundTasks.worktree.patchTruncated.copy")
 }
 
 /** "Worktree: vector/task-ses_1 · changed · 3 files changed". */

@@ -2917,9 +2917,17 @@ const layer = Layer.effect(
           const capped = shaped !== undefined && SessionTaskSize.capped(shaped.result)
           // "No subagents" or "don't be thorough": escalate may not raise the request.
           const held = shaped !== undefined && SessionTaskSize.held(shaped.result)
+          // A background command the agent started is stopped with task_manage (5.H), so Light keeps task_manage while
+          // one runs, as it does while subagents launched earlier work. Only Light withholds it, so only Light asks.
+          const commands =
+            shaped?.offered === "light" &&
+            shaped.snapshot.length === 0 &&
+            (yield* jobs.list()).some(
+              (job) => job.type === "shell" && job.status === "running" && job.metadata?.parentSessionId === sessionID,
+            )
           const offer: TaskSize.Offer | undefined = shaped && {
             capped: capped && !ProviderTransform.caches(model),
-            children: shaped.snapshot.length > 0,
+            children: shaped.snapshot.length > 0 || commands,
             notified: shaped.notified !== undefined,
           }
           if (quick) {

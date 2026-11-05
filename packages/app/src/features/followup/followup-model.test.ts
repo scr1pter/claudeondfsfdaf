@@ -5,6 +5,7 @@ import {
   attachmentBytes,
   claim,
   enqueue,
+  followupDescriptionKeys,
   lastRunEnded,
   legacyQueues,
   markFailed,
@@ -23,6 +24,7 @@ import {
   type FollowupItem,
   type FollowupQueue,
 } from "./followup-model"
+import { dict } from "@/i18n/en"
 
 const item = (id: string, extra: Partial<FollowupItem> = {}): FollowupItem => ({
   id,
@@ -247,5 +249,20 @@ describe("follow-up model: stored and legacy queues", () => {
   test("previewText shows the first non-empty line, or nothing for attachments alone", () => {
     expect(previewText([{ type: "text", content: "\n  hello\nworld", start: 0, end: 14 }])).toBe("hello")
     expect(previewText([])).toBeUndefined()
+  })
+})
+
+// R6: the queue drains only while a Vector window is open, and Settings says so.
+describe("followupDescriptionKeys", () => {
+  test("Settings says queued messages send while a Vector window is open, or only on their session's page", () => {
+    const text = (shared: boolean) =>
+      followupDescriptionKeys(shared)
+        .map((key) => dict[key])
+        .join(" ")
+    expect(text(true)).toContain("Queued messages send while a Vector window is open, even with their session closed.")
+    expect(text(false)).toContain("a queued message is sent only while its session is open")
+    expect(text(false)).not.toContain("even with their session closed")
+    for (const shared of [true, false])
+      expect(text(shared)).toStartWith(dict["settings.general.row.followup.description"])
   })
 })

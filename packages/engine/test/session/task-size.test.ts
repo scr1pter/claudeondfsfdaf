@@ -1,4 +1,4 @@
-import { readdirSync } from "node:fs"
+import { readdirSync, writeFileSync } from "node:fs"
 import { ConfigV1 } from "@vectordevai/core/v1/config/config"
 import { SessionV1 } from "@vectordevai/core/v1/session"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
@@ -27,6 +27,7 @@ import { SessionTaskSize } from "../../src/session/task-size"
 import { TaskLimits } from "../../src/task/limits"
 import { SubagentLifecycle } from "../../src/tool/subagent-lifecycle"
 import { isRecord } from "@/util/record"
+import { BackgroundJob } from "@/background/job"
 import { TestInstance } from "../fixture/fixture"
 import { pollWithTimeout, testEffect } from "../lib/effect"
 import { seen } from "../lib/file-state"
@@ -102,6 +103,7 @@ const it = testEffect(
       FSUtil.node,
       Database.node,
       TaskLimits.node,
+      BackgroundJob.node,
       LayerNode.make({ service: TestLLMServer, layer: TestLLMServer.layer, deps: [] }),
     ]),
     [
@@ -275,8 +277,12 @@ const launch = Effect.fn("test.launch")(function* (chatID: SessionID, gate: Prom
   return kids[0]!
 })
 
-// The history once a subagent's completion note has reached the session and the turn it started has ended.
-const noteTurn = Effect.fn("test.noteTurn")(function* (chatID: SessionID) {
+// Background commands run POSIX shell lines here.
+const posix = process.platform === "win32" ? it.instance.skip : it.instance
+
+// The history once a subagent's completion note (or another note, by its metadata key) has reached the session and
+// the turn it started has ended.
+const noteTurn = Effect.fn("test.noteTurn")(function* (chatID: SessionID, key = "taskNotification") {
   const status = yield* SessionStatus.Service
   return yield* pollWithTimeout(
     Effect.gen(function* () {
@@ -284,7 +290,7 @@ const noteTurn = Effect.fn("test.noteTurn")(function* (chatID: SessionID) {
       const at = messages.findLastIndex(
         (message) =>
           message.info.role === "user" &&
-          message.parts.some((part) => part.type === "text" && isRecord(part.metadata?.taskNotification)),
+          message.parts.some((part) => part.type === "text" && isRecord(part.metadata?.[key])),
       )
       if (at === -1) return undefined
       const answered = messages
@@ -1861,6 +1867,95 @@ describe("task sizing", () => {
         const answer = messages.findLast((message) => message.info.role === "assistant")
         expect(answer?.info.role === "assistant" && answer.info.agent).toBe("build")
         expect(answer?.info.role === "assistant" && answer.info.size).toBe("standard")
+      }),
+    { git: true },
+  )
+
+  // A background command's exit note is a report too (4.6): after a thanks it starts a turn with the full agent.
+  posix(
+    "a background command that fails after a thanks gets the full agent, with read and task_manage",
+    () =>
+      Effect.gen(function* () {
+        const { llm, prompt, sessions, directory } = yield* setup({ permission: { bash: "allow" } })
+        const chat = yield* sessions.create({ title: "Pinned" })
+        yield* llm.pushMatch(
+          root,
+          reply().tool("bash", {
+            command: "while [ ! -f build-gate ]; do sleep 0.05; done; echo 'error: 2 tests failed'; exit 1",
+            description: "Run the build",
+            background: true,
+          }),
+          reply().text("The build is running in the background.").stop(),
+        )
+        const started = yield* send(prompt, chat.id, "run the build in the background and fix what fails")
+        expect(started.info.role === "assistant" && started.info.size).toBe("standard")
+        const before = (yield* rootBodies).length
+        yield* llm.pushMatch(root, reply().text("You're welcome! The build is still running.").stop())
+        const thanks = yield* send(prompt, chat.id, "thanks!")
+        expect(thanks.info.role === "assistant" && thanks.info.size).toBe("chat")
+        expect(toolNames((yield* rootBodies)[before])).toEqual(QUICK)
+        // The build fails after the thanks, and its note is handled at the size of the request that started it.
+        yield* llm.pushMatch(root, reply().text("The build failed in two tests; reading its log next.").stop())
+        writeFileSync(path.join(directory, "build-gate"), "")
+        const messages = yield* noteTurn(chat.id, "shellNotification")
+        const [turn] = (yield* rootBodies).slice(before + 1)
+        expect(toolNames(turn)).toEqual(expect.arrayContaining(["read", "task_manage"]))
+        const answer = messages.findLast((message) => message.info.role === "assistant")
+        expect(answer?.info.role === "assistant" && answer.info.agent).toBe("build")
+        expect(answer?.info.role === "assistant" && answer.info.size).toBe("standard")
+      }),
+    { git: true },
+  )
+
+  // 5.H: the command's result says to stop it with task_manage, so a Light request that started one keeps the tool.
+  posix(
+    "Light keeps task_manage while a background command runs, and stops it by its shl_ ID",
+    () =>
+      Effect.gen(function* () {
+        const { llm, prompt, sessions } = yield* setup({ permission: { bash: "allow" } })
+        const chat = yield* sessions.create({ title: "Pinned" })
+        yield* llm.pushMatch(
+          root,
+          reply().tool("bash", { command: "sleep 60", description: "Start the dev server", background: true }),
+          reply().text("The dev server is running.").stop(),
+        )
+        yield* send(prompt, chat.id, "start the dev server in the background", { size: "light" })
+        const [first, second] = yield* rootBodies
+        for (const tool of ["task", "task_manage"]) expect(toolNames(first)).not.toContain(tool)
+        // Once the command runs, the same request is offered task_manage, and still launches nothing.
+        expect(toolNames(second)).toContain("task_manage")
+        expect(toolNames(second)).not.toContain("task")
+        const shellID = (yield* MessageV2.filterCompactedEffect(chat.id))
+          .flatMap((message) => message.parts)
+          .flatMap((part) =>
+            part.type === "tool" &&
+            part.state.status === "completed" &&
+            part.state.metadata?.background === true &&
+            typeof part.state.metadata.shellID === "string"
+              ? [part.state.metadata.shellID]
+              : [],
+          )[0]
+        expect(shellID?.startsWith("shl_")).toBe(true)
+        // A later Light request (this model caches nothing, so it is sized on its own) sees the command and stops it.
+        const before = (yield* rootBodies).length
+        yield* llm.pushMatch(
+          root,
+          reply().tool("task_manage", { action: "stop", task_ids: [shellID], reason: "the user asked" }),
+          reply().text("Stopped the dev server.").stop(),
+        )
+        yield* send(prompt, chat.id, "stop the dev server", { size: "light" })
+        const [stopping] = (yield* rootBodies).slice(before)
+        expect(toolNames(stopping)).toContain("task_manage")
+        const stop = (yield* MessageV2.filterCompactedEffect(chat.id))
+          .flatMap((message) => message.parts)
+          .findLast((part) => part.type === "tool" && part.tool === "task_manage")
+        expect(stop?.type === "tool" && stop.state.status).toBe("completed")
+        const jobs = yield* BackgroundJob.Service
+        const job = yield* pollWithTimeout(
+          jobs.get(shellID!).pipe(Effect.map((info) => (info && info.status !== "running" ? info : undefined))),
+          "the background command was never stopped",
+        )
+        expect(job.status).toBe("cancelled")
       }),
     { git: true },
   )

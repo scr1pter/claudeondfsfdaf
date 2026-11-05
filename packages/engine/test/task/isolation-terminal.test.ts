@@ -33,6 +33,7 @@ import { SessionRunState } from "@/session/run-state"
 import { SessionTools } from "@/session/tools"
 import { TaskClaims } from "@/task/claims"
 import { TaskIsolation } from "@/task/isolation"
+import { TaskManager } from "@/task/manager"
 import { TaskPlace } from "@/task/place"
 import { ToolRegistry } from "@/tool/registry"
 import { Truncate } from "@/tool/truncate"
@@ -48,6 +49,38 @@ import { testEffect } from "../lib/effect"
 const it = testEffect(
   AppNodeBuilder.build(
     LayerNode.group([
+      TaskIsolation.node,
+      Worktree.node,
+      InstanceStore.node,
+      Session.node,
+      SessionRunState.node,
+      BackgroundJob.node,
+      Git.node,
+      Agent.node,
+      Config.node,
+      CrossSpawnSpawner.node,
+      SessionAudience.node,
+      Database.node,
+      ToolRegistry.node,
+      Permission.node,
+      Plugin.node,
+      Provider.node,
+      MCP.node,
+      Brain.node,
+      EventV2Bridge.node,
+      Truncate.node,
+    ]),
+    [
+      [InstanceStore.bootstrapNode, Layer.succeed(InstanceBootstrap.Service, { run: Effect.void })],
+      [Npm.node, NpmTest.noop],
+    ],
+  ),
+)
+// The same, with the task manager, for Stop including helpers (5.D.1).
+const withManager = testEffect(
+  AppNodeBuilder.build(
+    LayerNode.group([
+      TaskManager.node,
       TaskIsolation.node,
       Worktree.node,
       InstanceStore.node,
@@ -279,6 +312,73 @@ if (process.platform !== "win32")
           expect((yield* helper({ action: "list" })).output).toBe("No terminals here. Open one with action open.")
           expect((yield* own({ action: "list" })).output).toContain(kept.metadata.id!)
           yield* own({ action: "close", id: kept.metadata.id })
+        }),
+      options,
+    )
+
+    withManager.instance(
+      "Stop including helpers closes the terminals the conversation's helpers opened; the main agent's and another conversation's stay",
+      () =>
+        Effect.gen(function* () {
+          const home = yield* InstanceState.context
+          const sessions = yield* Session.Service
+          const manager = yield* TaskManager.Service
+          const parent = yield* sessions.create({})
+          // A helper that already finished, and its own subagent: their programs outlive them in the home folder.
+          const record = (parentSessionID: string) => ({
+            subagent: {
+              kind: "subagent",
+              custom: false,
+              agent: "general",
+              title: "Watch the build",
+              parentSessionID,
+              parentMessageID: MessageID.ascending(),
+              model: ref,
+              background: true,
+              status: "completed",
+              startedAt: Date.now(),
+              completedAt: Date.now(),
+              attempt: 1,
+            },
+          })
+          const child = yield* sessions.create({ parentID: parent.id, metadata: record(parent.id) })
+          const grandchild = yield* sessions.create({ parentID: child.id, metadata: record(child.id) })
+          const stranger = yield* sessions.create({})
+
+          const opened: Output[] = []
+          yield* Effect.addFinalizer(() => Effect.sync(() => opened.forEach(stop)))
+          const track = (result: Output) => Effect.sync(() => void opened.push(result))
+          const helper = yield* (yield* terminal(child, home))(counter("helper.txt", true)).pipe(Effect.tap(track))
+          const nested = yield* (yield* terminal(grandchild, home))(counter("nested.txt")).pipe(Effect.tap(track))
+          const own = yield* terminal(parent, home)
+          const kept = yield* own(counter("parent.txt")).pipe(Effect.tap(track))
+          const other = yield* terminal(stranger, home)
+          const theirs = yield* other(counter("other.txt")).pipe(Effect.tap(track))
+          for (const file of ["helper.txt", "nested.txt", "parent.txt", "other.txt"])
+            for (let poll = 0; poll < 400 && (yield* count(path.join(home.directory, file))) < 1; poll++)
+              yield* Effect.sleep("25 millis")
+          for (const program of [helper, nested, kept, theirs]) expect(alive(pid(program))).toBe(true)
+
+          yield* manager.interrupt(
+            { sessionID: parent.id, helpers: true },
+            {
+              cancel: () => Effect.void,
+              resolvePromptParts: () => Effect.succeed([]),
+              prompt: () => Effect.die("Unexpected model request"),
+            },
+          )
+          // The helpers' programs ended before the stop returned, the one deaf to the hangup too.
+          expect(alive(pid(helper))).toBe(false)
+          expect(alive(pid(nested))).toBe(false)
+          expect(alive(pid(kept))).toBe(true)
+          expect(alive(pid(theirs))).toBe(true)
+          const listed = (yield* own({ action: "list" })).output
+          expect(listed).toContain(kept.metadata.id!)
+          expect(listed).toContain(theirs.metadata.id!)
+          expect(listed).not.toContain(helper.metadata.id!)
+          expect(listed).not.toContain(nested.metadata.id!)
+          yield* own({ action: "close", id: kept.metadata.id })
+          yield* own({ action: "close", id: theirs.metadata.id })
         }),
       options,
     )

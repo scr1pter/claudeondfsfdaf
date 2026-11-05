@@ -113,11 +113,25 @@ export function subagentLimitsChanged(config: Pick<Config, "budget"> | undefined
   return saved.running !== limits.running || saved.perRequest !== limits.perRequest || saved.usd !== limits.usd
 }
 
+/** What a conversation an invited guest has acted in runs with, at most (the engine's `TaskLimits.GUEST`, 5.B.7). */
+export const SUBAGENT_GUEST_LIMITS = { running: 4, perRequest: 8, usd: 5 } as const
+
+/** The limits a guest's conversations run with: each configured limit, or the guest's when that is lower. */
+export function guestSubagentLimits(limits: SubagentLimits): SubagentLimits {
+  return {
+    running: Math.min(limits.running, SUBAGENT_GUEST_LIMITS.running),
+    perRequest: Math.min(limits.perRequest, SUBAGENT_GUEST_LIMITS.perRequest),
+    usd: Math.min(limits.usd, SUBAGENT_GUEST_LIMITS.usd),
+  }
+}
+
 /**
- * "How many" on the page: the configured values, read from config, never hardcoded (5.I.4).
+ * "How many" on the page: the configured values, read from config, never hardcoded (5.I.4). Only the at-once limit
+ * makes the main agent's launches wait; past the per-request count a launch is refused (5.B.9), and a subagent's own
+ * launches are refused when no slot is free.
  */
 export function howManyFact(limits: SubagentLimits) {
-  return `Up to ${limits.running} at once in a conversation and ${limits.perRequest} new ones per request; more wait for a free slot. One request's subagents share a $${limits.usd.toFixed(2)} spend ceiling at catalog prices. When more than six are running or waiting, Vector tells you how many.`
+  return `Up to ${limits.running} run at once in a conversation, and the main agent's further launches wait for a free slot. One request starts at most ${limits.perRequest}; past that, launches are refused. One request's subagents share a $${limits.usd.toFixed(2)} spend ceiling at catalog prices. When more than six are running or waiting, Vector tells you how many.`
 }
 
 /**

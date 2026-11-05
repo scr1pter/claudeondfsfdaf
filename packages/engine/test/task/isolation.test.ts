@@ -497,6 +497,34 @@ it.instance(
   { git: true },
 )
 
+// F.4: reserve's check reads the free space before any checkout of the launches that passed it together is written,
+// so start checks again under the folder's lock, where each earlier creation has already used its share.
+it.instance(
+  "start checks the free disk space again under the folder's lock, and fails with disk when it ran out",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* fixture
+      const limits = (minFreeBytes: number) => ({
+        fileBytes: 50 * 1024 * 1024,
+        minFreeBytes,
+        copyBytes: 1024 ** 3,
+        copyFiles: 20_000,
+        patchBytes: 256 * 1024,
+      })
+      yield* f.reserve().pipe(Effect.provideService(TaskIsolation.Limits, limits(0)))
+      // Other checkouts used the space after this one's check passed.
+      yield* failure(
+        f.isolation
+          .start(f.child.id)
+          .pipe(Effect.provideService(TaskIsolation.Limits, limits(Number.MAX_SAFE_INTEGER))),
+        "disk",
+      )
+      expect(yield* exists(f.workPath)).toBe(false)
+      expect((yield* f.isolation.get(f.child.id)).state).toBe("failed")
+    }),
+  { git: true },
+)
+
 it.instance(
   "unchanged removes the checkout, reserved branch and inherited trust",
   () =>

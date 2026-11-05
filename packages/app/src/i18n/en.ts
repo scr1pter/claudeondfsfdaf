@@ -775,7 +775,9 @@ export const dict = {
   "backgroundTasks.effort": "{{model}} · {{effort}}",
   "backgroundTasks.fork": "Fork",
   "backgroundTasks.fork.title": "Started from the whole conversation and its prompt cache",
-  "backgroundTasks.json": "JSON",
+  "backgroundTasks.json.label.valid": "JSON valid",
+  "backgroundTasks.json.label.invalid": "JSON invalid",
+  "backgroundTasks.json.label.pending": "JSON unchecked",
   "backgroundTasks.json.valid": "Its JSON answer matches the schema",
   "backgroundTasks.json.invalid": "Its JSON answer did not match the schema",
   "backgroundTasks.json.pending": "Its JSON answer is not checked yet",
@@ -788,7 +790,10 @@ export const dict = {
   "backgroundTasks.worktree.hideReview": "Hide changes",
   "backgroundTasks.worktree.loading": "Loading changes…",
   "backgroundTasks.worktree.noFiles": "No changed files.",
-  "backgroundTasks.worktree.patchTruncated": "The patch is cut short. Open the worktree to see all of it.",
+  "backgroundTasks.worktree.patchTruncated.branch":
+    "The patch is cut short; the files above are all it changes. To see all of it, run git diff ...{{branch}} in this repository.",
+  "backgroundTasks.worktree.patchTruncated.copy":
+    "The patch is cut short; the files above are all it changes, and Merge applies every change.",
   "backgroundTasks.worktree.merge": "Merge",
   "backgroundTasks.worktree.mergeConfirm": "Confirm merge",
   "backgroundTasks.worktree.merging": "Merging…",
@@ -860,8 +865,12 @@ export const dict = {
   "backgroundTasks.workflow.stages": "Stages",
   "backgroundTasks.workflow.agents": "{{launched}} of {{max}} agents",
   "backgroundTasks.workflow.waiting": "waiting on you",
+  "backgroundTasks.workflow.failed": "{{count}} failed",
+  "backgroundTasks.workflow.skipped": "{{count}} skipped",
   "backgroundTasks.workflow.loading": "Loading agents…",
   "backgroundTasks.workflow.noAgents": "No agents started in this stage yet.",
+  "backgroundTasks.workflow.recentOnly":
+    "This run has more agents than the list shows, and it shows the active and most recent ones; this stage's are not among them.",
   "backgroundTasks.workflow.resume": "Resume",
   "backgroundTasks.workflow.resuming": "Resuming…",
   "backgroundTasks.workflow.resumed": "The workflow run resumes, reusing its finished agents.",
@@ -1077,6 +1086,8 @@ export const dict = {
     "Steer, the default, joins your message to the running turn at its next step. Queue holds it until the turn ends. Alt+Enter (Option+Enter on a Mac) does the other for one message; slash commands and shell input always queue.",
   "settings.general.row.followup.option.queue": "Queue",
   "settings.general.row.followup.option.steer": "Steer",
+  "settings.general.row.followup.windowOpen":
+    "Queued messages send while a Vector window is open, even with their session closed.",
   "settings.general.row.followup.pageOnly":
     "This browser cannot share the queue between pages, so a queued message is sent only while its session is open.",
   "settings.general.section.whileWorking.title": "While Vector works",

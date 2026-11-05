@@ -58,7 +58,7 @@ export const prerender = true
             <code>@</code> and its name.
           </p>
           <ul class="feature-list">
-            <li><strong>In the desktop app</strong><span>Switch off General subagents in Settings → Agents. Changing it stops any work in progress, and the new setting applies from your next message.</span></li>
+            <li><strong>In the desktop app</strong><span>Switch off General subagents in Settings → Agents. Work in progress, subagents included, finishes with the current setting, and the new setting applies once it ends; background commands stop when you change it.</span></li>
             <li><strong>In the terminal</strong><span>The terminal reads its own config file, so the desktop switch does not change it. From 1.99.99, add <code>{'"agent": { "general": { "disable": true } }'}</code> to <code>~/.config/vector/vector.json</code> (<code>%USERPROFILE%\.config\vector\vector.json</code> on Windows). It takes effect the next time you start Vector in the terminal.</span></li>
             <li><strong>For one repository</strong><span>From 1.99.99, put the same setting in the repository's <code>vector.json</code>. It turns subagents off for that repository in the terminal and the desktop app alike, whatever the switch says. Releases before 1.99.99, such as desktop 1.99.8 and npm CLI 1.99.7, do not read <code>vector.json</code>.</span></li>
           </ul>

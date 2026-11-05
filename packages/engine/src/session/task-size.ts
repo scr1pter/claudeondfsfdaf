@@ -86,7 +86,8 @@ export type Request = {
   readonly notes: readonly Note[]
   /**
    * The request whose delegated spend ledger this one's subagents share: the opening message, or for a Chat message a
-   * completion note made work, the request that launched that subagent, so a "thanks" never opens a fresh ledger.
+   * note made work, the request that launched the subagent or command it is about, so a "thanks" never opens a fresh
+   * ledger.
    */
   readonly ledgerRequestID: string
 }
@@ -162,17 +163,26 @@ export function size(input: Input): Request[] {
       rules.tier === "chat" && escalatedChat(group.messages)
         ? { ...rules, tier: "standard", reasons: ["escalated"] }
         : rules
-    // The completion notes that arrived in the request, by the request that launched each child (undefined when that
-    // launch is out of view, as after a compaction). A Chat message a note joined is work: the report is handled with
-    // the tools of the request that launched the child, never on the quick lane.
-    const launchers = reported(group.messages).map((note) => launcher(launches, note, position))
-    const sources = launchers.flatMap((at) =>
-      at !== undefined && at < position && sized[at]!.tier !== "chat" ? [at] : [],
-    )
-    const reportedTier = sources.reduce<TaskSize.Tier | undefined>(
-      (top, at) => TaskSize.max(top ?? sized[at]!.tier, sized[at]!.tier),
-      launchers.includes(undefined) ? "standard" : undefined,
-    )
+    // The notes that started a turn in the request, by the request that launched the work each is about (undefined
+    // when that launch is out of view, as after a compaction): a child's result, a child's report sent with wake, and a
+    // background command's exit. A Chat message a note joined is work: the note is handled with the tools of the
+    // request that launched the work, never on the quick lane.
+    const notes = reported(group.messages)
+    const launchers = notes.map((note) => launcher(launches, note, position))
+    const tierOf = (list: readonly (number | undefined)[]) => {
+      const sources = list.flatMap((at) =>
+        at !== undefined && at < position && sized[at]!.tier !== "chat" ? [at] : [],
+      )
+      const top = sources.reduce<TaskSize.Tier | undefined>(
+        (highest, at) => TaskSize.max(highest ?? sized[at]!.tier, sized[at]!.tier),
+        list.includes(undefined) ? "standard" : undefined,
+      )
+      return { sources, top }
+    }
+    const { sources, top: reportedTier } = tierOf(launchers)
+    // `notified` counts children's completion notes alone: on Light it lets the agent resume the child that reported.
+    const completions = launchers.filter((_, index) => notes[index]!.kind === "result")
+    const completedTier = tierOf(completions).top
     const upgraded = launchers.length > 0 && escalated.tier === "chat"
     const result: TaskSize.Result = upgraded
       ? { ...escalated, tier: TaskSize.max("standard", reportedTier ?? "standard"), reasons: ["notified"] }
@@ -182,7 +192,7 @@ export function size(input: Input): Request[] {
     const raised = !group.carried && states[0] && held(states[0].result) ? undefined : escalation(group.messages)
     const tier = raised ? TaskSize.max(result.tier, raised) : result.tier
     // A child this request launched itself reports at this request's size.
-    const notified = launchers.includes(position) ? TaskSize.max(reportedTier ?? tier, tier) : reportedTier
+    const notified = completions.includes(position) ? TaskSize.max(completedTier ?? tier, tier) : completedTier
     const start = (group.users[0] ?? group.messages[0]).info.time.created
     const warm = tier !== "chat" && input.caching && sticky !== undefined && start - end <= input.lifetime
     const offered = warm ? TaskSize.max(sticky!, tier) : tier
@@ -423,40 +433,58 @@ function noteEntries(
     )
 }
 
-// Completion notes in these messages that may start a turn: a child's result that was not cancelled or recorded quiet.
+type Reported = { taskID: string; messageID: string; kind: "result" | "message" | "shell" }
+
+// Notes in these messages that start a turn (4.6): a child's result that was not cancelled or recorded quiet, a
+// child's `task_manage report` delivered with a turn, and a background command's exit that was not a stop. A note
+// delivered without a turn carries `taskQuiet`. `taskID` is the child's session, or the command's `shl_` ID.
 function reported(messages: readonly SessionV1.WithParts[]) {
   return messages.flatMap((message) =>
     message.info.role !== "user"
       ? []
-      : message.parts.flatMap((part) => {
+      : message.parts.flatMap((part): Reported[] => {
           if (part.type !== "text" || part.metadata?.[QUIET] === true) return []
+          const messageID = message.info.id
           const note = part.metadata?.taskNotification
-          if (!isRecord(note) || typeof note.taskID !== "string" || note.state === "cancelled" || note.quiet === true)
-            return []
-          return [{ taskID: note.taskID, messageID: message.info.id }]
+          if (isRecord(note))
+            return typeof note.taskID !== "string" || note.state === "cancelled" || note.quiet === true
+              ? []
+              : [{ taskID: note.taskID, messageID, kind: "result" }]
+          const report = part.metadata?.taskMessage
+          if (isRecord(report))
+            return typeof report.taskID === "string" ? [{ taskID: report.taskID, messageID, kind: "message" }] : []
+          const shell = part.metadata?.shellNotification
+          if (isRecord(shell))
+            return typeof shell.shellID !== "string" || shell.state === "stopped" || shell.state === "interrupted"
+              ? []
+              : [{ taskID: shell.shellID, messageID, kind: "shell" }]
+          return []
         }),
   )
 }
 
 type Launch = { messageID: string; request: number }
 
-// Every task call's children, by child: the request whose message launched or resumed it, oldest first.
+// Every task call's children, by child, and every background command, by its `shl_` ID: the request whose message
+// launched or resumed it, oldest first.
 function launchesOf(list: readonly Group[]) {
   const launches = new Map<string, Launch[]>()
+  const add = (id: string, launch: Launch) => launches.set(id, [...(launches.get(id) ?? []), launch])
   for (const [request, group] of list.entries())
     for (const message of group.messages) {
       if (message.info.role !== "assistant") continue
       for (const part of message.parts) {
-        if (part.type !== "tool" || part.tool !== "task" || !("metadata" in part.state)) continue
+        if (part.type !== "tool" || !("metadata" in part.state)) continue
         const metadata = part.state.metadata
         if (!isRecord(metadata)) continue
+        // The shell tool's part names a command it started in the background (5.H).
+        if (metadata.background === true && typeof metadata.shellID === "string" && metadata.shellID.startsWith("shl_"))
+          add(metadata.shellID, { messageID: message.info.id, request })
+        if (part.tool !== "task") continue
         const entries: unknown[] = Array.isArray(metadata.tasks) ? metadata.tasks : [metadata]
         for (const entry of entries)
           if (isRecord(entry) && typeof entry.sessionId === "string")
-            launches.set(entry.sessionId, [
-              ...(launches.get(entry.sessionId) ?? []),
-              { messageID: message.info.id, request },
-            ])
+            add(entry.sessionId, { messageID: message.info.id, request })
       }
     }
   return launches

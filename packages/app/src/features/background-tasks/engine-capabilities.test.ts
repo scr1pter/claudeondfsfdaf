@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test"
+import { QueryClient } from "@tanstack/solid-query"
 import {
   FLAGS,
   NO_CAPABILITIES,
+  capabilitiesChanged,
   engineCapabilitiesQuery,
   firstSteerNotice,
   parseCapabilities,
@@ -96,6 +98,29 @@ describe("engine capabilities", () => {
     const query = engineCapabilitiesQuery("server-a" as never, client({ data: {}, response: ok }).client)
     expect([...query.queryKey]).toEqual(["server-a", "capabilities"])
     expect(query.staleTime).toBe(Infinity)
+  })
+
+  // Settings → Agents → Workflows writes permission.workflow, and the save reloads the engine: the flag follows it.
+  test("a settings reload or a reconnect reads the flags again; the first connection and other events do not", () => {
+    expect(capabilitiesChanged("global.disposed", false)).toBe(true)
+    expect(capabilitiesChanged("server.instance.disposed", false)).toBe(true)
+    expect(capabilitiesChanged("server.connected", true)).toBe(true)
+    expect(capabilitiesChanged("server.connected", false)).toBe(false)
+    for (const type of ["session.updated", "message.part.updated", "session.status"])
+      expect(capabilitiesChanged(type, true)).toBe(false)
+  })
+
+  test("the workflows flag follows a config save that turned workflows off", async () => {
+    let workflows = true
+    const engine = client(async () => ({ data: { workflows, backgroundSubagents: true }, response: ok }))
+    const queries = new QueryClient()
+    const query = engineCapabilitiesQuery("server-a" as never, engine.client)
+    expect((await queries.fetchQuery(query)).workflows).toBe(true)
+    // The save wrote permission.workflow: deny; the engine reloads and says so on its next answer.
+    workflows = false
+    expect((await queries.fetchQuery(query)).workflows).toBe(true)
+    if (capabilitiesChanged("global.disposed", true)) await queries.refetchQueries({ queryKey: query.queryKey })
+    expect(queries.getQueryData<{ workflows: boolean }>(query.queryKey)?.workflows).toBe(false)
   })
 })
 

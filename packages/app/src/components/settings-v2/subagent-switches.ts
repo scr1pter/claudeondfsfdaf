@@ -130,11 +130,18 @@ export const stopWorkDescription = (work: RunningWork) => {
       : `${work.sessions} sessions are working right now, subagents included.`
   const helpers = `${work.helpers.length === 1 ? "One of Vector's helpers is" : "Vector's helpers are"} working ${work.sessions > 0 ? "too" : "right now"} (${work.helpers.join(", ")}).`
   const running = commands === 1 ? "1 background command is running." : `${commands} background commands are running.`
-  const stops = work.sessions + work.helpers.length + commands === 1 ? "it" : "all of them"
+  // A save reloads each folder once its turns and subagents end, and that reload stops its background commands
+  // (global-lifecycle.ts): work in progress keeps the current setting, and nothing stops it.
+  const working = work.sessions + work.helpers.length > 0
+  const outcome = !working
+    ? `Changing this setting stops ${commands === 1 ? "it" : "them"}, and the new setting applies from your next message.`
+    : commands > 0
+      ? "Changing this setting stops the background commands. Other work keeps the current setting until it ends; the new setting applies after that."
+      : "That work keeps the current setting until it ends; the new setting applies after that."
   return [
     ...(work.sessions > 0 ? [sessions] : []),
     ...(work.helpers.length > 0 ? [helpers] : []),
     ...(commands > 0 ? [running] : []),
-    `Changing this setting stops ${stops}, and the new setting applies from your next message.`,
+    outcome,
   ].join(" ")
 }

@@ -274,6 +274,21 @@ const layer = Layer.effect(
                 ),
       )
 
+      // A command that ended while its engine still held its exit note, from an engine that went away before the note
+      // was out: the note is rebuilt from the row and the log's end, and posted quietly, once across every engine (5.H).
+      const ended: BackgroundJobStore.Row[] = []
+      yield* Effect.forEach(
+        yield* store.undelivered(ctx.directory),
+        (row) =>
+          store.delivered(row.id, now).pipe(
+            Effect.map((claimed) => {
+              if (claimed) ended.push(row)
+            }),
+            Effect.catchCause((cause) => Effect.logWarning("an ended background command was not recovered", { cause })),
+          ),
+        { discard: true },
+      )
+
       const records = yield* scan(ctx, now, boot)
       // Helpers an older Vector left running: they have no row, so one is inserted to report them once. An older Vector
       // keeps no lease, so its open work counts as stopped only once its session has been idle (LEGACY_IDLE).
@@ -341,6 +356,33 @@ const layer = Layer.effect(
             Effect.catchCause((cause) =>
               Effect.logWarning("an interrupted background command was not reported", { cause }),
             ),
+          ),
+        { discard: true },
+      )
+      yield* Effect.forEach(
+        ended,
+        (row) =>
+          Effect.gen(function* () {
+            const parent = yield* find(SessionID.make(row.parentSessionID))
+            const root = parent && (parent.parentID ? yield* rootOf(parent) : parent)
+            if (!root) return
+            // A note whose launching message is gone (reverted) is dropped, as the window drops it.
+            const launch = row.metadata?.parentMessageId
+            if (typeof launch === "string" && !(yield* exists(SessionID.make(row.parentSessionID), launch))) return
+            const rebuilt = yield* ShellJobs.recoveredNote(row)
+            if (!rebuilt) return
+            group(root).notes.push({
+              kind: "shell",
+              shellID: row.id,
+              state: rebuilt.state,
+              ...(rebuilt.exitCode === undefined ? {} : { exitCode: rebuilt.exitCode }),
+              text: rebuilt.text,
+              wake: false,
+              quiet: true,
+              recovered: true,
+            })
+          }).pipe(
+            Effect.catchCause((cause) => Effect.logWarning("an ended background command was not reported", { cause })),
           ),
         { discard: true },
       )

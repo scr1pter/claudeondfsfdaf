@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test"
 import {
+  SUBAGENT_GUEST_LIMITS,
   SUBAGENT_LIMIT_DEFAULTS,
+  guestSubagentLimits,
   howManyFact,
   ownerFromStatus,
   parseSubagentLimit,
@@ -90,9 +92,28 @@ describe("subagent limits", () => {
   })
 
   test("the How many fact names the configured values", () => {
-    expect(howManyFact({ running: 5, perRequest: 60, usd: 10 })).toContain("Up to 5 at once")
-    expect(howManyFact({ running: 5, perRequest: 60, usd: 10 })).toContain("60 new ones per request")
+    expect(howManyFact({ running: 5, perRequest: 60, usd: 10 })).toContain("Up to 5 run at once")
+    expect(howManyFact({ running: 5, perRequest: 60, usd: 10 })).toContain("One request starts at most 60")
     expect(howManyFact({ running: 5, perRequest: 60, usd: 10 })).toContain("$10.00 spend ceiling")
+  })
+
+  // 5.B.9: a launch past the per-request count is refused, and only the at-once limit makes launches wait.
+  test("the How many fact says launches past the per-request count are refused, not held", () => {
+    const fact = howManyFact({ running: 8, perRequest: 32, usd: 25 })
+    expect(fact).toContain("the main agent's further launches wait for a free slot")
+    expect(fact).toContain("One request starts at most 32; past that, launches are refused.")
+    expect(fact).not.toContain("32 new ones per request; more wait")
+  })
+
+  // 5.B.7: a conversation a guest acted in runs with the lower of the owner's limits and 4, 8 and $5.
+  test("a guest's limits are the lower of the configured ones and the guest's", () => {
+    expect(guestSubagentLimits({ running: 8, perRequest: 32, usd: 25 })).toEqual({ ...SUBAGENT_GUEST_LIMITS })
+    expect(guestSubagentLimits({ running: 2, perRequest: 3, usd: 1.5 })).toEqual({
+      running: 2,
+      perRequest: 3,
+      usd: 1.5,
+    })
+    expect(howManyFact(guestSubagentLimits({ running: 8, perRequest: 32, usd: 25 }))).toContain("Up to 4 run at once")
   })
 
   test("only a 401 or 403 from an owner-only route marks a guest", () => {

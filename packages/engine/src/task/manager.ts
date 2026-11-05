@@ -1412,6 +1412,20 @@ const layer = Layer.effect(
       return { tasks, shells }
     })
 
+    // Every subagent session under a conversation, finished ones and workflow agents included, within the board's
+    // walking budget.
+    const helpersOf = Effect.fnUntraced(function* (sessionID: SessionID) {
+      const found = new Set<string>()
+      const queue: SessionID[] = [sessionID]
+      while (queue.length > 0 && found.size < MAX_VISITED)
+        for (const child of yield* sessions.children(queue.shift()!)) {
+          if (child.internal || !SubagentLifecycle.read(child) || found.has(child.id)) continue
+          found.add(child.id)
+          queue.push(child.id)
+        }
+      return found
+    })
+
     const interrupt: Interface["interrupt"] = Effect.fn("TaskManager.interrupt")(function* (input, ops) {
       if (input.reason && input.reason.length > 1000)
         return yield* new Error({ code: "invalid", message: "Stop reasons are limited to 1000 characters." })
@@ -1452,6 +1466,21 @@ const layer = Layer.effect(
           )
         if (fresh.length === 0 && shells.length === 0) break
       }
+      // A helper's terminal program (the terminal tool keeps one running after its call) would outlive the stop: the
+      // ones this conversation's helpers opened, at home or in a helper's checkout, finished helpers' included, are
+      // closed and waited for. The main agent's own stay, as the user's terminal panel shows them.
+      const lineage = yield* helpersOf(session.id)
+      if (lineage.size > 0)
+        yield* isolation.closeTerminals(
+          [
+            yield* InstanceState.directory,
+            ...[...lineage].flatMap((id) => {
+              const place = TaskPlace.get(id)
+              return place ? [place.work.directory] : []
+            }),
+          ],
+          (info) => info.owner?.kind === "agent" && lineage.has(info.owner.sessionID),
+        )
       // Desktop workspaces and swarms keep their own runners and are left running; the ones Vector cannot reach
       // right now are counted apart.
       const left = board.filter((task) => !helper(task))
