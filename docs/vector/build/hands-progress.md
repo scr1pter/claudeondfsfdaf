@@ -842,3 +842,12 @@ Broad run42036089984 at0634dba7 completed with16 successful jobs, four known int
 ### Windows zero-duration fixture contract
 
 Run42040637108 at2a4f2a7b compiles both Windows architectures and advances to input.zero-hold-still-queues-cleanup-instead-of-running-under-post-fence. That older fixture contradicts the later atomic-zero-duration regression and the specification's zero-duration support/release-in-the-same-request contract. Production remains unchanged. The corrected fixture requires two matching UP receipts outside posting authority before success, no outstanding debt/timer/blocking drain, and no late duplicate completion. A cancellation-after-first-DOWN regression requires changed, no second DOWN and only owned cleanup outside authority. Source/independent review and whitespace checks pass; actual Windows execution is pending.
+
+
+### Independently admitted macOS helper12 measurement
+
+Run42040637108 at2a4f2a7ba3601324642050c92da8369391be614b builds the production universal helper twice with identical shipping bytes. Actual Node/native checks pass31 required with one disabled privileged skip, and33 isolated with13 explicit missing-grant skips; neither report has a failure. Both actual24-suite progress records complete validly. The job then fails the expected enforced11/source12 mismatch; this does not constitute signing, Electron or matrix approval.
+
+Candidate13423506598 and reports13422961782 were independently downloaded and their ZIP SHA-256/byte counts verified against GitHub artifact metadata. The exact archived source's own generator and C2 digest implementation reproduce c66713aaaf6d004f6ed537f8cd8c17d77fb1c96f93720f5227b4a55236f2f795 using the measured toolchain. Current measured inputs/schema are unchanged. The raw candidate is copied unchanged into the enforced12 lock; complete provenance is evidence/42040637108-provenance.json. Actual matching Intel/macOS26/native/signing, cross-platform overlays and artifacts-only packaging remain pending.
+
+Actual Linux run42042766702 passes corrected banner, sandbox and IPC checks, then reveals that Electron42's documented RGB-only getBackgroundColor cannot equal the old eight-digit expectation. The corrected smoke retains transparent window options, observes native RGB and checks actual html/body transparent backgrounds in both themes. Report24/170 and desktop typecheck pass; the fresh actual Linux run is pending. This is property evidence and does not claim compositor capture exclusion.

@@ -1,10 +1,10 @@
 {
   "enforce": true,
-  "helperVersion": "1.0.11",
-  "sourceDigest": "8d1ffbcc361f4b0a201b6bbfce2f8e82c4e421012e65477f916ad75db7617c23",
+  "helperVersion": "1.0.12",
+  "sourceDigest": "c66713aaaf6d004f6ed537f8cd8c17d77fb1c96f93720f5227b4a55236f2f795",
   "toolchain": "swift:\nApple Swift version 6.1.2 (swiftlang-6.1.2.1.2 clang-1700.0.13.5)\nTarget: arm64-apple-macosx15.0\nsdk:15.5\nxcode:\nXcode 16.4\nBuild version 16F6",
   "cdhash": {
-    "x64": "845c876e3f7f80c4b0a88f5d3c09f9a934ee4c71",
-    "arm64": "348f8f932218e39bce9d0f4abf10ae9cef5833fe"
+    "x64": "f2c80c59aadee7e10f9e1aa9fffb3e872a3571f7",
+    "arm64": "712015d8b0a353f81b2b618fbf016d4fcb8565d1"
   }
 }
