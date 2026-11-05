@@ -177,13 +177,15 @@ func runAccessibilityRegistryTests() throws -> Int {
         let session = accessibilityTestSession()
         let old = try registry.register(element: RegistryElement(), witness: accessibilityTestWitness(),
                                         snapshot: registry.beginSnapshot(session: session))
-        var changed = session
-        changed.observationEpoch = UUID()
+        let changed = accessibilityTestSession()
+        try accessibilityRegistryCheck(changed.id == session.id && changed.revision == session.revision &&
+                                       changed.runEpoch != session.runEpoch,
+                                       "A new accepted run can reuse wire IDs but never the private run epoch.")
         try accessibilityRegistryThrows { _ = try registry.resolve(old.ref, session: changed) }
         let fresh = try registry.register(element: old.element, witness: old.witness,
                                           snapshot: registry.currentSnapshot(session: changed))
         try accessibilityRegistryCheck(old.elementID != fresh.elementID && old.generation < fresh.generation,
-                                       "Same wire ID/revision with a fresh authority epoch must retire refs and stable IDs.")
+                                       "Same wire ID/revision with a new accepted run must retire refs and stable IDs.")
         try accessibilityRegistryThrows { _ = try registry.resolve(old.ref, session: session) }
     }
     try test {

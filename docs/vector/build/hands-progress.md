@@ -420,3 +420,10 @@ The raw1.0.7 candidate is accepted with enforcement enabled after verifying both
 ### M9 Swift receipt-cost compiler repair
 
 Run [41976359728](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/41976359728) at `711384a4` fails Mac compilation before native unit execution: Swift6.1.2 cannot type-check the single nested receipt-cost arithmetic/map/reduce expression in reasonable time. The repair uses an explicitly typed Int accumulator and separate additions/loops, preserving every existing retained-byte cost term and the4096-ref/8MiB limits. No1.0.8 measurement is accepted from this failed run. Dirty M11 sources, launcher and builder work are excluded from this repair checkpoint.
+
+
+### M9 accepted-run fixture correction
+
+Run [41976830206](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/41976830206) at `4cb1355a` compiles both Mac architectures and reproduces identical shipping bytes. Core reports 28 passed, one failed and one explicit privileged skip; actual lifecycle checks and all ten golden transcripts pass. Standalone units isolate the failure to the registry fixture for reused wire IDs: it changes only observationEpoch on a copied session, which now correctly represents an update within the same private run, while asserting that stable element IDs must retire as on a new accepted begin.
+
+The fixture now constructs a new accepted session with the same wire ID/revision and a distinct runEpoch, retaining both stale-ref refusals, the changed stable element ID and increased-generation assertions. Production behavior is unchanged; existing M9 phase-receipt tests retain explicit same-run resolution coverage. Both Windows lanes pass; no jobs were cancelled. No1.0.8 candidate is accepted. Dirty M11 sources and tooling are excluded from this repair checkpoint.
