@@ -511,6 +511,10 @@
     {
       "source": "/api/billing/status",
       "destination": "/api/legacy-desktop-access"
+    },
+    {
+      "source": "/api/ops/image/:card/:n",
+      "destination": "/api/ops/image?card=:card&n=:n"
     }
   ],
   "crons": [

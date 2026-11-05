@@ -410,6 +410,18 @@ export const SOURCES: readonly Source[] = [
     note: "Backups go to storage through links vectordev.ai signs; git's own pushes to GitHub are git-remote",
   },
   {
+    id: "ship-desk",
+    purpose: "account",
+    hosts: VECTOR,
+    sends:
+      "A Ship Desk capture ticket and the before and after screenshots of a pull request's app, from your repository's GitHub Actions job",
+    why: "Ship Desk: adds screenshots to the card of a pull request a Codium run opened",
+    local: "blocked",
+    where: ["engine"],
+    callSites: ["packages/engine/src/cli/cmd/ship.ts"],
+    note: "Screenshots go to storage through links vectordev.ai signs; the app being shot runs on this computer",
+  },
+  {
     id: "phone-alerts",
     purpose: "account",
     hosts: VECTOR,

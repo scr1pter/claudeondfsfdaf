@@ -42,6 +42,8 @@ import { APP_SLUG, DAY, invoke, MAX, OpsWorld, OTHER, PRO, ULTRA, WEBHOOK_SECRET
 let world = new OpsWorld()
 beforeEach(() => {
   world = new OpsWorld()
+  // api/github/webhook.ts registers Ship Desk's intake when it loads (WP A49); these cases register their own.
+  registerShipDeskIntake(undefined)
 })
 afterEach(() => {
   registerShipDeskIntake(undefined)
@@ -572,6 +574,11 @@ describe("pull requests → Ship Desk", () => {
         url: `https://github.com/octo-fixture/repo-${REPO}/pull/12`,
         installationId: 77,
         deliveryId: input.deliveryId,
+        // WP A49: what Ship Desk's intake also needs.
+        author: "app",
+        rid: "gh-42-1-1-1",
+        baseRef: "main",
+        opsId: (await readOpsSettings(MAX, world.fetcher())).settings!.opsId,
       },
     ])
     for (const action of ["reopened", "synchronize", "ready_for_review", "closed"])

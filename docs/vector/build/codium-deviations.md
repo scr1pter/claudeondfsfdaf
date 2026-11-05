@@ -1602,3 +1602,88 @@ outcome, verdict, actor.login` pass. Every paid plan includes it while the plan 
   URLs, only how many paths were watched; a watch past its end with no verdict shows `ended`. `POST /api/ops/worker` takes
   only the Worker's signed reports (`bodyParser: false`); a malformed or unknown event is skipped rather than blocking the
   rest of the report forever.
+
+## A49 Ship Desk and capture (4 Nov 2026)
+
+- **`github-actions[bot]` pull requests are taken too, with the run's record.** The contract says "cards from
+  App-bot-authored same-repo PRs". Vector's GitHub agent publishes with `GITHUB_TOKEN` by default (vector-at-mention
+  spec O14 and its note to A49), so its pull requests are `github-actions[bot]`'s and the App-bot filter alone would
+  cover only repositories that opted in to App publishing. A47 left the filter to A49. The webhook handler now also
+  passes a same-repository pull request by `github-actions[bot]` that carries the run marker `<!-- vector:rid <rid> -->`;
+  the intake makes a card of it only when Codex's run record (the reader A59 registers, now in
+  `api/_lib/cloud-run-reader.ts`) lists that run for the same account with the same repository id. Anyone with write
+  access can act as `github-actions[bot]`, so a marker alone is never enough; the App's bot cannot be acted as, so its
+  pull requests need the marker of a run in that repository but not the record. Each run makes at most one card, which
+  also bounds how many cards a forged marker could use. Release Guard's revert pull requests (App bot, no marker) make
+  no card. Before A59 only App-bot pull requests can make cards.
+- **Where the capture ticket comes from.** The contract names the ticket (one pull request, at most 8 files, 15 minutes)
+  but not who issues it. The capture job holds no `id-token` and no run token, so the run's own token asks for it:
+  `POST /api/ops/uploads {action: "ticket"}` with `Bearer vrt_…`, verified by the registered run verifier
+  (`requireModelPlanCaller`, so the account's revocation is checked). This is the only ops request a run token is
+  accepted for, and it can only ask for a ticket (S3: a run token reaches its own service's endpoints). The run id
+  (`gh-<repositoryId>-…`, vector-at-mention spec 2.x) names the repository, which must be bound to the account with Ship
+  Desk on, under a plan with Ship Desk now. A new subcommand, `vector ship ticket`, does this from the run token's file
+  (`$RUNNER_TEMP/vector-secrets/run-token`) and writes `capture=<ticket>` to `$GITHUB_OUTPUT`; Codex's V31 adds it to the
+  agent job right after the mint, before any checkout, and passes `needs.agent.outputs.capture` to the capture job. The
+  output is not masked (GitHub drops a masked output); the ticket's power is the point: the capture job's own code can
+  read it anyway.
+- **"15 min" is the capture window, from the ticket's first upload.** A ticket is asked for at the start of the run, which
+  may last two hours before the pull request exists. So a ticket must be first used before the run's deadline plus an
+  hour (at most 4 hours after it was issued), and its uploads then start and finish within 15 minutes of that first use.
+  `{action: "card"}` (what to capture) starts nothing. A start again before finishing replaces the pending capture; a
+  finished ticket takes no more.
+- **"One PR" is the run's pull request.** A ticket names a run, and a card holds one run (the newest one checked: a later
+  run on the same pull request, the agent pushing to its own branch, moves the card to it once no other card holds that
+  run). A ticket uploads only to the card whose run is its own, of an open pull request.
+- **"Served nosniff, sandbox CSP, no-store, owner-only signed GETs from R2".** R2's S3 address can sign the response's
+  type, cache control and disposition, but cannot send `X-Content-Type-Options` or a CSP. The image route
+  (`GET /api/ops/image/<card>/<n>`, the card's own account only) answers JSON with a 60-second signed link that pins the
+  stored image type, `no-store, private` and `attachment`, and carries `nosniff`, `default-src 'none'; sandbox` and
+  `no-store` itself. The bytes were checked to be PNG or WebP by signature before the card showed them, and an image
+  never reaches a browser under any other type. Proxying the bytes through a Function would add both headers, but
+  Appendix A item 6 moved images to R2 precisely so that reads do not pass through a Function. `presignR2` gained
+  `response` overrides for GETs.
+- **The file signature check runs after the upload.** Uploads go straight to R2 through links that sign the exact size
+  and the declared type, so the server never sees the bytes on the way in. `finish` reads each object back with HEAD (the
+  size) and a ranged GET of its first 64 bytes (PNG's signature and IHDR, or WebP's RIFF/WEBP and VP8/VP8L/VP8X header,
+  with sane dimensions, and the type that was declared). Anything else is deleted and never shown.
+- **Checks and verdict refresh when a card is opened.** The App is not subscribed to check events (A47's five events), so
+  the card reads the head's check runs at creation and again when the card is opened (`GET /api/ops/cards?id=`) while
+  the pull request is open and some are still running or none were found, at most once a minute and only while the
+  plan allows Ship Desk now. The verdict is read from the run record until the run ended. A list read asks GitHub
+  nothing.
+- **A read-only `ship` App token.** `GITHUB_SERVER_PERMISSIONS.ship` is Checks, Contents and Metadata: read, minted for one
+  repository, revoked after use and audited (A48's `withRepositoryToken`). The App's baseline already has Checks: read.
+- **The opt-in is checked for Ship Desk too.** §4.15 lists `shipDesk` in `.vector/ops.json`. A card needs the file on the
+  pull request's base branch to name the account's `opsId` with `shipDesk: true`, as Release Guard's intake does for its
+  own flag, although Ship Desk writes nothing to the repository.
+- **Phone alert on a new card.** One title-only alert per card ("<repository> #<n> is ready on Ship Desk", tag
+  `ship-desk`), not while paused (no new cards then). The contract's §1.2 ties Ship Desk to phone alerts being listed;
+  A38's note expected server alerts from Ship Desk.
+- **Keys not in §4.6** (Codium prefix, all under the listed `ops:card:*` and `ops:cards:*`): `ops:card:<account>:<card>`,
+  `ops:cards:<account>`, `ops:card:<account>:run:<rid>`, `ops:card:<account>:<card>:refresh`,
+  `ops:card:<account>:tickets` and `ops:card:ticket:<sha-256>`. Card ids are a hash of (repository id, number). Images
+  are in `vector-media` under `ship-desk/<mode>/k<keepDays>/<account hash>/<card>/<capture>/<n>.<png|webp>`, so the
+  bucket's lifecycle rules follow the plan's keep days.
+- **The month's count is a meter** (`meter:<account>:<meterEpoch>:ship-desk-cards`, the §4.3 key, written by the CARD
+  script with `INCR` and `PEXPIREAT periodEnd + 40 days`). `meters.shipDesk {used}` is registered from
+  `api/_lib/ship-desk-meter.ts`, imported by the status route only (A42's reason: registering beside the provisioner
+  would form an import cycle).
+- **The run-record reader moved** from `remote-ticket.ts` to `api/_lib/cloud-run-reader.ts`, unchanged and re-exported, so
+  Ship Desk reads A59's one registration without importing Remote.
+- **`vector ship` is hidden from `vector --help`** (Ship Desk shows only once listed, H1) and is an open command: the
+  capture job has no Vector account. `vector ship capture` refuses to run when the job can mint OIDC tokens, holds a run
+  token or holds `VECTOR_CLI_TOKEN`, and strips Vector's tickets, tokens and secrets from the repository's commands.
+  `.vector/ship.json` is read from the base commit, so the pull request itself cannot change what runs; the head's
+  own code still runs to be shot, which is why the job holds nothing worth taking. A new Vector Local source,
+  `ship-desk`, labels its requests (blocked under Vector Local, except the app on this computer).
+- **Not built here:** the `ship-desk` readiness check in `perkServices` (A50 builds the screens; nothing should list it
+  before them), the desktop merge (A50's `packages/desktop/src/main/ops.ts`), the workflow job (Codex's V31) and a
+  local try-out mode for `.vector/ship.json`.
+- **Files outside A49's list:** `packages/schema/src/ship-desk.ts`, `api/_lib/ship-desk-meter.ts`,
+  `api/_lib/cloud-run-reader.ts`, `api/_lib/remote-ticket.ts` (re-export), `api/_lib/github-webhook-handlers/ops.ts`,
+  `api/github/webhook.ts`, `api/_lib/github-app-server.ts`, `api/_lib/r2-presign.ts`, `api/_lib/codium-provisioners.ts`,
+  `api/model-plans/status.ts`, `vercel.json` (the image route's rewrite), `packages/engine/src/index.ts`,
+  `packages/core/src/local-mode/sources.ts`, `packages/app/src/features/local/local-model.ts`, `test/ops-fixture.ts`
+  (check runs), the A47 test's expectation (the intake's new fields), `docs/vector/MODEL-PLANS.md` and
+  `docs/vector/owner-actions/hosted-ops.md`.

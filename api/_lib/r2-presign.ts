@@ -82,6 +82,11 @@ export function presignR2(
     expiresIn?: number
     contentLength?: number
     contentType?: string
+    /**
+     * A GET's response overrides (WP A49): `response-content-type`, `response-cache-control` and
+     * `response-content-disposition`, signed with the URL so the holder cannot change them.
+     */
+    response?: { contentType?: string; cacheControl?: string; contentDisposition?: string }
     now?: number
     configuration?: R2Configuration
   },
@@ -110,15 +115,26 @@ export function presignR2(
     }
   } else if (input.contentLength !== undefined || input.contentType !== undefined)
     throw new Error("Only an R2 upload signs a content length or type.")
+  if (input.response !== undefined && input.method !== "GET") throw new Error("Only an R2 download takes overrides.")
+  const target = new URL(
+    `https://${configuration.accountId}.r2.cloudflarestorage.com/${configuration.bucket}/${input.key
+      .split("/")
+      .map(encodeSegment)
+      .join("/")}`,
+  )
+  for (const [name, value] of [
+    ["response-cache-control", input.response?.cacheControl],
+    ["response-content-disposition", input.response?.contentDisposition],
+    ["response-content-type", input.response?.contentType],
+  ] as const) {
+    if (value === undefined) continue
+    if (!/^[\x20-\x7e]{1,200}$/.test(value)) throw new Error("That R2 response override is not valid.")
+    target.searchParams.set(name, value)
+  }
   const now = input.now ?? Date.now()
   const url = presignSigV4({
     method: input.method,
-    url: new URL(
-      `https://${configuration.accountId}.r2.cloudflarestorage.com/${configuration.bucket}/${input.key
-        .split("/")
-        .map(encodeSegment)
-        .join("/")}`,
-    ),
+    url: target,
     region: "auto",
     service: "s3",
     accessKeyId: configuration.accessKeyId,

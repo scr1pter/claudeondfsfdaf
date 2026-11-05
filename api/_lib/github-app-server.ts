@@ -14,9 +14,10 @@ import { persistentStore } from "./persistent-store.js"
  * pull request, or a branch with one restore commit and its pull request (release-guard.ts decides which, and re-reads
  * the repository's .vector/ops.json before writing).
  *
- * Two kinds of token:
+ * Three kinds of token:
  * - `check`: Contents and Metadata read. Release Guard's intake reads .vector/ops.json with it before watching a release.
  * - `revert`: Contents and Pull requests write, Metadata read. Only the revert path mints it.
+ * - `ship`: Checks, Contents and Metadata read. Ship Desk (WP A49) reads the opt-in and a pull request's check runs.
  *
  * Each token is minted for exactly one repository id, its permissions are compared with what was asked, and the
  * repository it can see is checked to be that one before it is used (the same checks api/_lib/github-app.ts makes for
@@ -28,6 +29,8 @@ import { persistentStore } from "./persistent-store.js"
 export const GITHUB_SERVER_PERMISSIONS = {
   check: { contents: "read", metadata: "read" },
   revert: { contents: "write", metadata: "read", pull_requests: "write" },
+  // WP A49, Ship Desk: reads .vector/ops.json on the pull request's base branch and the head commit's check runs.
+  ship: { checks: "read", contents: "read", metadata: "read" },
 } as const
 export type GithubServerPurpose = keyof typeof GITHUB_SERVER_PERMISSIONS
 

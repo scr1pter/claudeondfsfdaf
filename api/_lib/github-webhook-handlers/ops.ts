@@ -1,4 +1,5 @@
 import type { ReleaseAnswer } from "../../../packages/ops-worker/src/protocol.js"
+import { ShipDesk } from "../../../packages/schema/src/ship-desk.js"
 import { readSnapshot, requireUsableSnapshot } from "../codium-snapshot.js"
 import type { GithubWebhookEvent, GithubWebhookHandler } from "../github-webhook.js"
 import { ApiError } from "../http.js"
@@ -27,9 +28,11 @@ import { hostPage, releaseIntake } from "../release-guard.js"
  *   account verified, at most the plan's path count. Release Guard's intake (release-guard.ts, WP A48) then dedupes by
  *   (repository, environment, sha), checks the repository's .vector/ops.json opts in for this account and counts the
  *   plan's releases a day (dedupe before increment) before the Worker watches it.
- * - `pull_request` → Ship Desk. A pull request the GitHub App's bot opened from a branch of the same repository, in a
- *   repository whose settings turn Ship Desk on, goes to the Ship Desk intake. A49 registers that intake (cards,
- *   counting, plan checks); until then it is not acted on.
+ * - `pull_request` → Ship Desk. A pull request opened from a branch of the same repository by the GitHub App's bot, or
+ *   by `github-actions[bot]` with the run marker Vector's publish step writes (`<!-- vector:rid <rid> -->`; Vector's
+ *   GitHub agent publishes with GITHUB_TOKEN by default), in a repository whose settings turn Ship Desk on, goes to the
+ *   Ship Desk intake (api/_lib/ship-desk.ts, WP A49, registered by api/github/webhook.ts), which checks the run, the
+ *   plan and the repository's opt-in, and counts cards. Until an intake is registered it is not acted on.
  * - `installation` (deleted), `installation_repositories` (removed) and `repository` (deleted, transferred) → the
  *   settings of those repositories are dropped from every account that has them.
  *
@@ -62,8 +65,17 @@ export type OpsPullRequest = {
   url: string
   installationId?: number
   deliveryId: string
+  /** Who opened it: the App's bot, or `github-actions[bot]` (then always with `rid`). */
+  author: "app" | "actions"
+  /** The run id in the body's marker: a lookup key only, never a verdict. */
+  rid?: string
+  title?: string
+  baseRef: string
+  baseSha?: string
+  /** The account's ops id, which the repository's .vector/ops.json must name. */
+  opsId: string
 }
-export type ShipDeskIntake = (pull: OpsPullRequest) => Promise<void>
+export type ShipDeskIntake = (pull: OpsPullRequest, context: { fetcher: typeof fetch; now: number }) => Promise<unknown>
 
 let shipDeskIntake: ShipDeskIntake | undefined
 
@@ -82,6 +94,8 @@ export type OpsWebhookContext = { fetcher?: typeof fetch; clock?: () => number }
 
 const SHA = /^[0-9a-f]{40}$/
 const SLUG = /^[a-z0-9][a-z0-9-]{0,98}[a-z0-9]$/
+/** GitHub's own bot for GITHUB_TOKEN writes. */
+export const ACTIONS_BOT = "github-actions[bot]"
 
 function record(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined
@@ -283,10 +297,19 @@ async function pullRequest(
   const repositoryId = positive(record(event.payload.repository)?.id)
   const number = positive(pull?.number)
   if (!pull || !repositoryId || !number) return ignored("payload")
-  // App-bot-authored: the bot of Vector's own GitHub App, never another bot or a person.
-  const author = record(pull.user)
+  // App-bot-authored: the bot of Vector's own GitHub App. Or `github-actions[bot]` carrying the run marker, which is how
+  // Vector's GitHub agent publishes by default; the intake then requires the run's own record (A49). Never another bot
+  // or a person.
+  const user = record(pull.user)
   const bot = appBotLogin()
-  if (!bot || author?.type !== "Bot" || author.login !== bot) return ignored("author")
+  const rid = ShipDesk.runMarker(pull.body)
+  const author =
+    bot && user?.type === "Bot" && user.login === bot
+      ? "app"
+      : bot && user?.type === "Bot" && user.login === ACTIONS_BOT && rid
+        ? "actions"
+        : undefined
+  if (!author) return ignored("author")
   // Same-repo: the head branch lives in the repository the pull request targets (no fork).
   const headRepo = positive(record(record(pull.head)?.repo)?.id)
   const baseRepo = positive(record(record(pull.base)?.repo)?.id)
@@ -294,6 +317,11 @@ async function pullRequest(
   const headSha = typeof record(pull.head)?.sha === "string" ? String(record(pull.head)!.sha).toLowerCase() : ""
   const url = typeof pull.html_url === "string" && pull.html_url.startsWith("https://") ? pull.html_url : undefined
   if (!SHA.test(headSha) || !url) return ignored("payload")
+  const base = record(pull.base)
+  const baseRef = typeof base?.ref === "string" ? base.ref : ""
+  if (!baseRef || baseRef.length > 255 || /[\u0000-\u001f\u007f]/.test(baseRef)) return ignored("payload")
+  const baseSha = typeof base?.sha === "string" && SHA.test(base.sha.toLowerCase()) ? base.sha.toLowerCase() : undefined
+  const title = typeof pull.title === "string" ? pull.title.slice(0, ShipDesk.LIMITS.titleChars * 2) : undefined
 
   const found = await configured(repositoryId, fetcher)
   if (!found.found) return ignored(found.reason)
@@ -302,19 +330,28 @@ async function pullRequest(
   await learnInstallation(found.account, found.repo, event.payload, fetcher, now)
   if (!shipDeskIntake) return ignored("ship-desk-unavailable")
   const installationId = positive(record(event.payload.installation)?.id)
-  await shipDeskIntake({
-    account: found.account,
-    repositoryId,
-    repository: found.repo.repository,
-    number,
-    action,
-    headSha,
-    merged: pull.merged === true,
-    draft: pull.draft === true,
-    url,
-    ...(installationId !== undefined ? { installationId } : {}),
-    deliveryId: event.deliveryId,
-  })
+  await shipDeskIntake(
+    {
+      account: found.account,
+      repositoryId,
+      repository: found.repo.repository,
+      number,
+      action,
+      headSha,
+      merged: pull.merged === true,
+      draft: pull.draft === true,
+      url,
+      ...(installationId !== undefined ? { installationId } : {}),
+      deliveryId: event.deliveryId,
+      author,
+      ...(rid ? { rid } : {}),
+      ...(title !== undefined ? { title } : {}),
+      baseRef,
+      ...(baseSha ? { baseSha } : {}),
+      opsId: found.settings.opsId,
+    },
+    { fetcher, now },
+  )
   return { kind: "ship-desk" }
 }
 

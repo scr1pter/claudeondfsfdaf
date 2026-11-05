@@ -295,6 +295,8 @@ export class FakeGithub {
   readonly optIns = new Map<string, string | null>()
   readonly compares = new Map<string, Json>()
   readonly commitPulls = new Map<string, Json[]>()
+  /** WP A49: a commit's check runs, by `<repositoryId>:<sha>`. */
+  readonly checkRuns = new Map<string, Json[]>()
   readonly pulls = new Map<string, FakePull>()
   readonly refs = new Map<string, string>()
   readonly commits = new Map<string, { tree: string; parents: string[] }>()
@@ -473,6 +475,13 @@ export class FakeGithub {
     if (compare && method === "GET") {
       const found = this.compares.get(`${repoId}:${decodeURIComponent(compare[1]!)}`)
       return found ? this.json(found) : this.json({ message: "Not Found" }, 404)
+    }
+    const checkRuns = /^\/commits\/([0-9a-f]{40})\/check-runs$/.exec(rest)
+    if (checkRuns && method === "GET") {
+      if (token.permissions.checks !== "read" && token.permissions.checks !== "write")
+        return this.json({ message: "Resource not accessible by integration" }, 403)
+      const runs = this.checkRuns.get(`${repoId}:${checkRuns[1]}`) ?? []
+      return this.json({ total_count: runs.length, check_runs: runs })
     }
     const commitPulls = /^\/commits\/([0-9a-f]{40})\/pulls$/.exec(rest)
     if (commitPulls && method === "GET") return this.json(this.commitPulls.get(`${repoId}:${commitPulls[1]}`) ?? [])

@@ -8,6 +8,7 @@ import { REMOTE_LIMITS } from "./codium-limits.js"
 import { readSwitch } from "./codium-switches.js"
 import { requireUnrevokedCliToken, requireUnrevokedAccount } from "./revocation.js"
 import { ApiError, type ApiRequest } from "./http.js"
+import { cloudRunReader, type CloudRunReader } from "./cloud-run-reader.js"
 import { remoteConfigured, ticketSigningKey } from "./remote-config.js"
 import {
   RELAY_DEVICE_ID,
@@ -312,22 +313,9 @@ export async function remoteDevices(
 
 // ── GitHub runs for the phone (Codex's run records) ───────────────────────────────────────────────────────────────
 
-/**
- * Reads an account's newest runs of Vector's GitHub agent. Codex's `listCloudRuns(account, {limit})`
- * (api/_lib/cloud-agents-runs.ts on vector-at-mention) is this shape; the integration commit (A59) registers it, as
- * this build never imports Codex's files. Until then the list is empty and says so.
- */
-export type CloudRunReader = (account: string, input: { limit: number }) => Promise<readonly unknown[]>
-let cloudRuns: CloudRunReader | undefined
-
-export function registerCloudRunReader(reader: CloudRunReader) {
-  if (typeof reader !== "function" || cloudRuns) throw new Error("Remote's GitHub run list has exactly one reader.")
-  cloudRuns = reader
-}
-
-export function cloudRunReader() {
-  return cloudRuns
-}
+// The reader of Codex's run records lives in cloud-run-reader.ts (WP A49 moved it there, unchanged, so Ship Desk reads
+// the same registration without importing Remote). It is re-exported here for Remote's callers.
+export { cloudRunReader, registerCloudRunReader, type CloudRunReader } from "./cloud-run-reader.js"
 
 export type RemoteCloudRun = {
   id: string
@@ -400,7 +388,7 @@ export async function remoteCloudRuns(
   limit: number,
   fetcher: typeof fetch = fetch,
   now = Date.now(),
-  reader: CloudRunReader | undefined = cloudRuns,
+  reader: CloudRunReader | undefined = cloudRunReader(),
 ): Promise<{ runs: RemoteCloudRun[]; available: boolean }> {
   await requireRemoteService(fetcher, now)
   await requireRemotePlan(account, fetcher, now)

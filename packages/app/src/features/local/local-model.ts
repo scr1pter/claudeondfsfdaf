@@ -108,6 +108,7 @@ const NAMES: Record<string, string> = {
   remote: "Vector Remote",
   "phone-alerts": "Phone alerts",
   "brain-vault": "Brain Vault",
+  "ship-desk": "Ship Desk",
   "release-notes": "Release notes",
   "site-assets": "Release note pictures",
   updates: "Updates",

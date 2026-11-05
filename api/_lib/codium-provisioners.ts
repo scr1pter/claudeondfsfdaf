@@ -7,6 +7,7 @@ import { persistentStore } from "./persistent-store.js"
 import { relayConfigured, relayErase, relayKill, relaySuspend, type RelaySuspendReason } from "./remote-relay.js"
 import { eraseAccountOpsRecords } from "./ops-incidents.js"
 import { eraseAccountOpsSettings } from "./ops-settings.js"
+import { eraseAccountShipDesk } from "./ship-desk.js"
 import { opsCall, opsConfigured, opsPlanFor } from "./ops-worker.js"
 import { eraseAccountVault, holdVault, lapseVault, releaseVault, vaultStoreConfigured } from "./vault-store.js"
 import { eraseAccountPushSubscriptions, pushConfigured } from "./web-push.js"
@@ -272,7 +273,8 @@ export const vault: PerkProvisioner = {
  * (ops-worker.ts `opsPlanFor`): checks and watches while active or renewing, checks only while paused, nothing once
  * ended or frozen. The Worker keeps the newest version and stops by itself at `validUntil`. An account that has never
  * had ops caps has nothing at the Worker, so it is not called. Account deletion (`closing`) erases the Worker's data,
- * the ops settings and every ops record (P5). Configured while the Worker can be called.
+ * the ops settings, every ops record and Ship Desk's cards with their images (P5). Configured while the Worker can be
+ * called. Ship Desk needs nothing pushed: its cards follow the snapshot when they are made (ship-desk.ts).
  */
 export const ops: PerkProvisioner = {
   id: "ops",
@@ -283,6 +285,8 @@ export const ops: PerkProvisioner = {
       await opsCall("erase", { account: t.account }, fetcher)
       await eraseAccountOpsSettings(t.account, fetcher)
       await eraseAccountOpsRecords(t.account, fetcher)
+      // WP A49: Ship Desk's cards, their images in vector-media, run claims and capture tickets.
+      await eraseAccountShipDesk(t.account, fetcher)
       return
     }
     if (!to.caps.ops && (!from || !from.caps.ops)) return
