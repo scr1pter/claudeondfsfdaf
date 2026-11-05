@@ -1,0 +1,49 @@
+{
+  "kind": "retired-synthetic-reference-release-v1",
+  "releasedAtUtc": "2026-11-05T04:02:52.311810+00:00",
+  "releasedAfterAllPaidRunsAndBothR3BlindedLocks": true,
+  "providerKeyHolderExited": true,
+  "notGivenToPaidModelAgents": true,
+  "retiredFromUnseenHoldoutScoring": true,
+  "references": {
+    "relay-headless": {
+      "fileCount": 7,
+      "sourceSha256": {
+        "app.mjs": "b21ec30c916c366d62070c3c15b5073f57febcb91e6b5c5afa230be0c5e5b001",
+        "cli.mjs": "100ac906b00294a1687ea193c60e6d856bd21ecc6901a2319c02bcb8158795db",
+        "package.json": "d948765da5095996c9822f1df887f10131d30044c718c5be10e36e3e7c8c632a",
+        "qualify.py": "3929bceb3a304ba6f78f8d7c9fb0a4256aae6de05ebf12b9ef4b1f95a2a1208d",
+        "sdk.d.mts": "93dc168370d15ec31eba1e5b8aef33f63f2a3baf1ad5ea37bd6db98af4a2d5b6",
+        "sdk.mjs": "176573501cc8546ac25e91ca73c81c512877fc0e717525c9e45fb73d20225528",
+        "STORAGE.md": "78efa8d78f63f81121fb604b73e629748193c6ffccffe674a8d1c6d66f8d3fce"
+      }
+    },
+    "ledgerdesk-maintenance": {
+      "fileCount": 6,
+      "sourceSha256": {
+        "app.mjs": "6fca3acaac022dfdce38b1cab3aeb67f1fcf44410766dc15792fa16a13e6292f",
+        "cli.mjs": "fae4685f61611ed5dbf1d67e9ae0ae4ee9cb5f4257f89fe16d0ff3f270f631ba",
+        "package.json": "7c40bd752eaf5b1c50112bc01f4cf05f17f192f9ff087376f6522da12ff4a50d",
+        "qualify_reference.py": "143ee8821142f68284367cc80a58c3c53c44ab8585b3d480e36ab2580b9dffe9",
+        "sdk.d.mts": "048d7017cfb934b618517775536236bef0db7b9a4b1276c96ac962793b162866",
+        "sdk.mjs": "3b2e52a15ed80bd3499e6870e3fe48d540e339d0915436848d09d60332f86f60"
+      }
+    },
+    "harbor-ui": {
+      "fileCount": 11,
+      "sourceSha256": {
+        ".gitignore": "b8405ef2c1a9d4252527d1f0f84eaa2676689fb09d82075c2a6eb21131bf5ac3",
+        "BUILD_SPEC.md": "59ff8112ef16fc0ea4eab5826342ec50d8fa4982bc6afd5f7365b714c34193ef",
+        "bun.lock": "f998df3682b4e1c8f80c6cca3cde577f031694ddadd8cdf5022b7ad104c1ee7e",
+        "index.html": "58f57f5c3741f0e4318fecba0aaffd2282bb389b7a11616242e0f0b744ca6b91",
+        "package.json": "1af43d3becce68e1beb7db477d7588dd02878b8d3fed8ee62c70f3c53415993f",
+        "tsconfig.json": "aa95408bce20dbb372c19f109cc3e15118868b7f2ea0ce36c6b041f93312e860",
+        "UI_CONTRACT.md": "266b4048213363029ffb12ba363e0534977fe101b3e09f3fa9ff7a58f3127472",
+        "vite.config.ts": "47246c7396fb9b30f1c26a57e4c287f51382368b5eb426fa0df95779d265d850",
+        "server/index.ts": "40deb23f6ff0df065ceec293c3d4840a58248e536de6cce5db0606d63929f321",
+        "src/main.tsx": "831910033052fff44a9466d0c30b5890308be84d505fff167f01f5e3414f27f8",
+        "src/style.css": "872839b91de3dcdfbbc64b88bf02a2222cf84a6034537a18b2bf3eb0da43fd45"
+      }
+    }
+  }
+}
