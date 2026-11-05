@@ -496,7 +496,8 @@ do {
     let delegate = TargetApplication(channel: channel)
     target = delegate
     application.delegate = delegate
-    guard application.setActivationPolicy(.regular) else { throw TargetFailure.invalid }
+    if application.activationPolicy() != .regular { _ = application.setActivationPolicy(.regular) }
+    guard application.activationPolicy() == .regular else { throw TargetFailure.invalid }
     application.run()
     _exit(0)
 } catch { _exit(targetStartupExit.rawValue) }
