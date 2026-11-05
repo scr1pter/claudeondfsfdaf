@@ -23,9 +23,22 @@
 
 namespace vector::computer {
 namespace {
-struct ScenarioFailure { std::wstring reason; };
+struct ScenarioFailure { std::wstring reason, stage, native_code; };
 struct ScenarioSkip { std::wstring reason; };
 void require(bool value) { if (!value) throw ScenarioFailure{L"assertion_failed"}; }
+template<class Body> decltype(auto) diagnostic_stage(std::wstring_view stage, Body body) {
+  try { return body(); }
+  catch (const ScenarioSkip&) { throw; }
+  catch (const ScenarioFailure& failure) {
+    if (!failure.stage.empty()) throw;
+    throw ScenarioFailure{failure.reason, std::wstring(stage), L"unknown"};
+  }
+  catch (const Failure& failure) {
+    throw ScenarioFailure{windows_privileged_reason(failure.code) ? failure.code : L"native_operation_failed",
+      std::wstring(stage), windows_privileged_native_code(failure.code)};
+  }
+  catch (...) { throw ScenarioFailure{L"native_operation_failed", std::wstring(stage), L"unknown"}; }
+}
 JsonObject object(std::wstring_view text) { return JsonObject::Parse(winrt::hstring(text)); }
 std::optional<uint64_t> number(const JsonObject& value, const wchar_t* name) { return value.HasKey(name) ? safe_integer(value.Lookup(name)) : std::nullopt; }
 bool isolated() {
@@ -184,8 +197,11 @@ class NativeScenario final {
     auto result = std::move(found->second); state->replies.erase(found); return result;
   }
   NativeReply request(std::wstring_view operation, const JsonObject& args = {}) { return wait(begin(operation, args)); }
-  static void success(const NativeReply& reply) { if (!reply.document.GetNamedBoolean(L"ok", false)) throw ScenarioFailure{L"native_operation_failed"}; }
-  static bool failure(const NativeReply& reply, std::wstring_view code) { return !reply.document.GetNamedBoolean(L"ok", true) && reply.document.GetNamedObject(L"error").GetNamedString(L"code", L"") == code; }
+  static void success(const NativeReply& reply, std::wstring_view stage = {}) {
+    if (!reply.document.GetNamedBoolean(L"ok", false)) throw ScenarioFailure{L"native_operation_failed", std::wstring(stage),
+      stage.empty() ? std::wstring{} : windows_privileged_native_code(reply.document.GetNamedString(L"code", L""))};
+  }
+  static bool failure(const NativeReply& reply, std::wstring_view code) { return windows_privileged_response_failure(reply.document, code); }
   ServerSession session() const { const auto current = server->session_snapshot(); if (!current) throw ScenarioFailure{L"native_operation_failed"}; return *current; }
   JsonObject phase(JsonObject args) const { const auto current = session(); args.Insert(L"sessionId", JsonValue::CreateStringValue(current.id)); args.Insert(L"phaseRevision", JsonValue::CreateNumberValue(static_cast<double>(current.revision.value_or(0)))); return args; }
   bool await_input() {
@@ -234,9 +250,16 @@ struct Captured { CaptureReceipt receipt; CaptureBitmap image; };
 Captured capture(NativeScenario& native, HWND window) {
   JsonObject target; target.Insert(L"windowId", JsonValue::CreateStringValue(window_id(window)));
   JsonObject args = object(LR"({"budget":{"maxWidth":1024,"maxHeight":1024,"maxPixels":1048576},"format":"png"})"); args.Insert(L"target", target);
-  const auto response = native.request(L"capture", args); NativeScenario::success(response);
-  const auto record = native.state->captures->receipt(response.document.GetNamedString(L"captureId"), native.session()); const auto image = decode_png(response.image);
-  require(image.width == record.width && image.height == record.height); return {record, image};
+  const auto response = diagnostic_stage(L"window-capture-reply", [&] {
+    auto reply = native.request(L"capture", args); NativeScenario::success(reply, L"window-capture-reply"); return reply;
+  });
+  const auto record = diagnostic_stage(L"window-capture-receipt", [&] {
+    return native.state->captures->receipt(response.document.GetNamedString(L"captureId"), native.session());
+  });
+  const auto image = diagnostic_stage(L"png-decode", [&] {
+    auto decoded = decode_png(response.image); require(decoded.width == record.width && decoded.height == record.height); return decoded;
+  });
+  return {record, image};
 }
 std::pair<int64_t, int64_t> image_point(const CaptureReceipt& frame, const WindowsRect& region) {
   require(frame.bounds.contains(region)); const auto x = static_cast<int64_t>(std::floor((double(region.x - frame.bounds.x) + double(region.width) / 2) * frame.image_scale)); const auto y = static_cast<int64_t>(std::floor((double(region.y - frame.bounds.y) + double(region.height) / 2) * frame.image_scale));
@@ -274,6 +297,16 @@ bool running_target(const NativeReply& reply, DWORD pid, HWND window) {
 }
 }
 
+std::wstring windows_privileged_native_code(std::wstring_view code) {
+  return std::find(windows_privileged_native_codes.begin(), windows_privileged_native_codes.end(), code) != windows_privileged_native_codes.end()
+    ? std::wstring(code) : std::wstring(L"unknown");
+}
+bool windows_privileged_response_failure(const JsonObject& reply, std::wstring_view code) noexcept {
+  try {
+    return !reply.GetNamedBoolean(L"ok", true) && reply.GetNamedString(L"code", L"") == code;
+  } catch (...) { return false; }
+}
+
 WindowsPrivilegedRunAuthority::WindowsPrivilegedRunAuthority(std::function<bool()> parent_current)
   : parent_current_(std::move(parent_current)) {}
 bool WindowsPrivilegedRunAuthority::admit() noexcept {
@@ -300,8 +333,16 @@ bool windows_privileged_skip_reason(std::wstring_view reason) noexcept {
 }
 bool WindowsPrivilegedReport::valid() const noexcept {
   if (checks.size() != windows_privileged_checks.size()) return false;
-  for (size_t index = 0; index < checks.size(); ++index) if (checks[index].name != windows_privileged_checks[index] || (checks[index].ok && checks[index].skipped) ||
-      (checks[index].skipped && !windows_privileged_skip_reason(checks[index].detail)) || (!checks[index].detail.empty() && !windows_privileged_reason(checks[index].detail))) return false;
+  for (size_t index = 0; index < checks.size(); ++index) {
+    const auto& check = checks[index];
+    if (check.name != windows_privileged_checks[index] || (check.ok && check.skipped) ||
+        (check.skipped && !windows_privileged_skip_reason(check.detail)) || (!check.detail.empty() && !windows_privileged_reason(check.detail))) return false;
+    if (!check.stage.empty() || !check.native_code.empty()) {
+      if (check.ok || check.skipped || check.detail.empty() ||
+          std::find(windows_privileged_stages.begin(), windows_privileged_stages.end(), check.stage) == windows_privileged_stages.end() ||
+          std::find(windows_privileged_native_codes.begin(), windows_privileged_native_codes.end(), check.native_code) == windows_privileged_native_codes.end()) return false;
+    }
+  }
   return true;
 }
 int WindowsPrivilegedReport::exit_code() const noexcept {
@@ -312,7 +353,9 @@ JsonObject WindowsPrivilegedReport::wire() const {
   JsonArray values; const bool coherent = valid();
   for (size_t index = 0; index < windows_privileged_checks.size(); ++index) {
     const auto check = coherent ? checks[index] : WindowsPrivilegedCheck{std::wstring(windows_privileged_checks[index]), false, false, L"native_operation_failed"};
-    JsonObject value; value.Insert(L"name", JsonValue::CreateStringValue(check.name)); value.Insert(L"ok", JsonValue::CreateBooleanValue(check.ok)); if (check.skipped) value.Insert(L"skipped", JsonValue::CreateBooleanValue(true)); if (!check.detail.empty()) value.Insert(L"detail", JsonValue::CreateStringValue(check.detail)); values.Append(value);
+    JsonObject value; value.Insert(L"name", JsonValue::CreateStringValue(check.name)); value.Insert(L"ok", JsonValue::CreateBooleanValue(check.ok)); if (check.skipped) value.Insert(L"skipped", JsonValue::CreateBooleanValue(true)); if (!check.detail.empty()) value.Insert(L"detail", JsonValue::CreateStringValue(check.detail));
+    if (!check.stage.empty()) { value.Insert(L"stage", JsonValue::CreateStringValue(check.stage)); value.Insert(L"nativeCode", JsonValue::CreateStringValue(check.native_code)); }
+    values.Append(value);
   }
   JsonObject result; result.Insert(L"checks", values); return result;
 }
@@ -336,7 +379,7 @@ WindowsPrivilegedReport run_windows_privileged_self_test(const Command& command,
     if (lifetime) *lifetime = lifecycle;
     return completed;
   };
-  const auto run = [&](size_t index, const auto& body) { try { body(); report.checks[index] = {std::wstring(windows_privileged_checks[index]), true, false, {}}; } catch (const ScenarioSkip& skip) { report.checks[index] = {std::wstring(windows_privileged_checks[index]), false, true, skip.reason}; } catch (const ScenarioFailure& failure) { report.checks[index] = {std::wstring(windows_privileged_checks[index]), false, false, failure.reason}; } catch (const Failure& failure) { report.checks[index] = {std::wstring(windows_privileged_checks[index]), false, false, windows_privileged_reason(failure.code) ? failure.code : L"native_operation_failed"}; } catch (...) { report.checks[index] = {std::wstring(windows_privileged_checks[index]), false, false, L"native_operation_failed"}; } };
+  const auto run = [&](size_t index, const auto& body) { try { body(); report.checks[index] = {std::wstring(windows_privileged_checks[index]), true, false, {}}; } catch (const ScenarioSkip& skip) { report.checks[index] = {std::wstring(windows_privileged_checks[index]), false, true, skip.reason}; } catch (const ScenarioFailure& failure) { report.checks[index] = {std::wstring(windows_privileged_checks[index]), false, false, failure.reason, failure.stage, failure.native_code}; } catch (const Failure& failure) { report.checks[index] = {std::wstring(windows_privileged_checks[index]), false, false, windows_privileged_reason(failure.code) ? failure.code : L"native_operation_failed"}; } catch (...) { report.checks[index] = {std::wstring(windows_privileged_checks[index]), false, false, L"native_operation_failed"}; } };
   try {
     if (command.target.empty() || !lifetime) throw ScenarioFailure{L"target_validation_failed"};
     // No serving/stdio pipe exists in this mode. Hold the actual kernel parent/start witness and
@@ -369,11 +412,16 @@ WindowsPrivilegedReport run_windows_privileged_self_test(const Command& command,
     report.checks[0] = {std::wstring(windows_privileged_checks[0]), true, false, {}};
     run(1, [&] { require(running_target(native->request(L"apps.list", object(LR"({"installed":false})")), initial.pid, initial.window)); });
     run(2, [&] {
-      require(running_target(native->request(L"apps.list", object(LR"({"installed":true})")), initial.pid, initial.window));
-      const auto applications = WindowsBackend::system(windows_child_shell).list(true, [&] { return target->current(); });
+      diagnostic_stage(L"installed-list-reply", [&] {
+        const auto reply = native->request(L"apps.list", object(LR"({"installed":true})")); NativeScenario::success(reply, L"installed-list-reply");
+        require(running_target(reply, initial.pid, initial.window));
+      });
+      const auto applications = diagnostic_stage(L"installed-list-native", [&] {
+        return WindowsBackend::system(windows_child_shell).list(true, [&] { return target->current(); });
+      });
       const auto found = std::find_if(applications.begin(), applications.end(), [&](const auto& app) { return app.owner && app.owner->process.pid == initial.pid && app.installed.has_value(); });
       if (found == applications.end()) throw ScenarioSkip{L"target_not_installed"};
-      require(windows_file_current(*found->installed));
+      diagnostic_stage(L"installed-seal", [&] { require(windows_file_current(*found->installed)); });
     });
     const bool input_ready = native->await_input();
     if (input_ready && GetForegroundWindow() != initial.window) {
@@ -382,14 +430,18 @@ WindowsPrivilegedReport run_windows_privileged_self_test(const Command& command,
     run(3, [&] { if (windows_capture_blocked(availability)) throw ScenarioSkip{L"capture_blocked"}; const auto state = target->request(); require(color(capture(*native, state.window), state.patch, {32, 128, 192})); });
     run(4, [&] {
       if (windows_capture_blocked(availability)) throw ScenarioSkip{L"capture_blocked"}; const auto state = target->request(); if (!state.affinity) throw ScenarioSkip{L"affinity_unavailable"};
-      target->request(WindowsTargetAction::show_excluded);
+      diagnostic_stage(L"affinity-show", [&] { target->request(WindowsTargetAction::show_excluded); });
       try {
         const auto shown = target->request(); require(shown.excluded_visible); const auto session = native->session(); const auto frame = capture(*native, shown.window); require(color(frame, shown.patch, {32, 128, 192}));
         JsonObject args = object(LR"({"budget":{"maxWidth":1024,"maxHeight":1024,"maxPixels":1048576},"format":"png"})"); JsonObject selection; selection.Insert(L"display", JsonValue::CreateStringValue(frame.receipt.display_id)); args.Insert(L"target", selection);
-        const auto response = native->request(L"capture", args); NativeScenario::success(response); const auto record = native->state->captures->receipt(response.document.GetNamedString(L"captureId"), session); const Captured display{record, decode_png(response.image)};
+        const auto response = diagnostic_stage(L"display-capture-reply", [&] {
+          auto reply = native->request(L"capture", args); NativeScenario::success(reply, L"display-capture-reply"); return reply;
+        });
+        const auto record = diagnostic_stage(L"display-capture-receipt", [&] { return native->state->captures->receipt(response.document.GetNamedString(L"captureId"), session); });
+        const auto image = diagnostic_stage(L"png-decode", [&] { return decode_png(response.image); }); const Captured display{record, image};
         require(color(display, shown.excluded_bounds, {32, 128, 192}));
       } catch (...) { target->request(WindowsTargetAction::hide_excluded); throw; }
-      target->request(WindowsTargetAction::hide_excluded);
+      diagnostic_stage(L"affinity-hide", [&] { target->request(WindowsTargetAction::hide_excluded); });
     });
     run(5, [&] {
       native->require_input(initial.window); const auto state = target->request(); const auto node = element(tree(*native, state), state.button, L"Button"); auto args = ref_args(node); args.Insert(L"action", JsonValue::CreateStringValue(L"Invoke")); NativeScenario::success(native->request(L"ui.perform", native->phase(args))); require(target->request().counter == state.counter + 1);

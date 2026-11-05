@@ -13,7 +13,21 @@ inline constexpr std::array<std::wstring_view, 15> windows_privileged_checks{
   L"uia-value-set-and-readback", L"secure-field-refusal", L"tagged-click-increments",
   L"unicode-type-readback", L"stale-capture-refusal", L"owned-input-release",
   L"input-detection-probe", L"hardware-user-input-pauses", L"isolated-target-cleanup"};
-struct WindowsPrivilegedCheck { std::wstring name; bool ok = false, skipped = false; std::wstring detail; };
+inline constexpr std::array<std::wstring_view, 10> windows_privileged_stages{
+  L"installed-list-reply", L"installed-list-native", L"installed-seal",
+  L"window-capture-reply", L"window-capture-receipt", L"png-decode",
+  L"affinity-show", L"affinity-hide", L"display-capture-reply", L"display-capture-receipt"};
+inline constexpr std::array<std::wstring_view, 32> windows_privileged_native_codes{
+  L"unavailable", L"permissions", L"busy", L"stopped", L"paused", L"locked", L"blocked", L"protected", L"denied",
+  L"not_granted", L"stale_frame", L"stale_ref", L"changed", L"occluded", L"secure_field", L"elevated",
+  L"secure_desktop", L"not_foreground", L"capture_unavailable", L"no_ui_tree", L"out_of_bounds", L"needs_foreground",
+  L"timeout", L"app_not_found", L"unsupported_action", L"frame_too_large", L"helper_incompatible", L"unsupported_os",
+  L"blocked_by_os", L"responsible_missing", L"failed", L"unknown"};
+struct WindowsPrivilegedCheck {
+  std::wstring name; bool ok = false, skipped = false; std::wstring detail;
+  // Closed failure-only diagnostics; never native error text, application names, paths or identifiers.
+  std::wstring stage, native_code;
+};
 struct WindowsPrivilegedReport {
   std::vector<WindowsPrivilegedCheck> checks;
   bool valid() const noexcept;
@@ -25,6 +39,8 @@ struct WindowsPrivilegedReport {
 };
 bool windows_privileged_reason(std::wstring_view) noexcept;
 bool windows_privileged_skip_reason(std::wstring_view) noexcept;
+std::wstring windows_privileged_native_code(std::wstring_view);
+bool windows_privileged_response_failure(const winrt::Windows::Data::Json::JsonObject&, std::wstring_view) noexcept;
 // A monotonic admission gate over the already-held parent witness. Production supplies only bounded
 // kernel metadata; tests can advance that witness without creating a process or touching a desktop.
 class WindowsPrivilegedRunAuthority final {

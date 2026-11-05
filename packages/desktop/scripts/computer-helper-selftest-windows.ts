@@ -19,7 +19,12 @@ import {
 } from "./build-computer-helper"
 import { EXECUTABLE_NAMES } from "./channel-ids"
 import { generateIdentitySources, readIdentity } from "./computer-helper-identity"
-import { WindowsCheckFailure, WindowsDiagnosticReader, windowsCommandReason, type WindowsDiagnostic } from "./computer-helper-windows-diagnostics"
+import {
+  WindowsCheckFailure,
+  WindowsDiagnosticReader,
+  windowsCommandReason,
+  type WindowsDiagnostic,
+} from "./computer-helper-windows-diagnostics"
 import type {
   Command,
   CommandResult,
@@ -33,29 +38,82 @@ export const WINDOWS_NATIVE_CHECKS = {
   unprivileged: windowsSmokeChecks,
   packaged: windowsSmokeChecks,
   privileged: [
-    "privileged-isolated-target", "apps-running-target", "apps-installed-target",
-    "capture-color-patch", "capture-affinity-exclusion", "uia-counter-increment",
-    "uia-value-set-and-readback", "secure-field-refusal", "tagged-click-increments",
-    "unicode-type-readback", "stale-capture-refusal", "owned-input-release",
-    "input-detection-probe", "hardware-user-input-pauses", "isolated-target-cleanup",
+    "privileged-isolated-target",
+    "apps-running-target",
+    "apps-installed-target",
+    "capture-color-patch",
+    "capture-affinity-exclusion",
+    "uia-counter-increment",
+    "uia-value-set-and-readback",
+    "secure-field-refusal",
+    "tagged-click-increments",
+    "unicode-type-readback",
+    "stale-capture-refusal",
+    "owned-input-release",
+    "input-detection-probe",
+    "hardware-user-input-pauses",
+    "isolated-target-cleanup",
   ],
   targetControl: ["windows-test-target-control-schema"],
   eof: ["caller-eof"],
   parentDeath: ["caller-parent-death"],
 } as const
 export const WINDOWS_NATIVE_REASONS = [
-  "isolation_required", "elevated_helper", "noninteractive_desktop", "capture_blocked",
-  "input_detection_unavailable", "foreground_unavailable", "affinity_unavailable", "target_not_installed",
-  "hardware_input_required", "target_unavailable", "target_validation_failed", "target_spawn_failed",
-  "target_state_invalid", "target_control_invalid", "target_token_invalid", "target_manifest_invalid",
-  "target_window_failed", "target_report_failed", "target_control_failed", "target_exited", "target_not_ready",
-  "assertion_failed", "native_operation_failed", "deadline_exceeded", "cleanup_failed", "dependency_failed", "physical_takeover",
+  "isolation_required",
+  "elevated_helper",
+  "noninteractive_desktop",
+  "capture_blocked",
+  "input_detection_unavailable",
+  "foreground_unavailable",
+  "affinity_unavailable",
+  "target_not_installed",
+  "hardware_input_required",
+  "target_unavailable",
+  "target_validation_failed",
+  "target_spawn_failed",
+  "target_state_invalid",
+  "target_control_invalid",
+  "target_token_invalid",
+  "target_manifest_invalid",
+  "target_window_failed",
+  "target_report_failed",
+  "target_control_failed",
+  "target_exited",
+  "target_not_ready",
+  "assertion_failed",
+  "native_operation_failed",
+  "deadline_exceeded",
+  "cleanup_failed",
+  "dependency_failed",
+  "physical_takeover",
 ] as const
+export const WINDOWS_NATIVE_STAGES = [
+  "installed-list-reply",
+  "installed-list-native",
+  "installed-seal",
+  "window-capture-reply",
+  "window-capture-receipt",
+  "png-decode",
+  "affinity-show",
+  "affinity-hide",
+  "display-capture-reply",
+  "display-capture-receipt",
+] as const
+export const WINDOWS_NATIVE_CODES = [...Computer.ComputerErrorCode.literals, "unknown"] as const
+export type WindowsNativeStage = (typeof WINDOWS_NATIVE_STAGES)[number]
+export type WindowsNativeCode = (typeof WINDOWS_NATIVE_CODES)[number]
 const windowsReasons = new Set<string>(WINDOWS_NATIVE_REASONS)
 const windowsSkipReasons = new Set<string>([
-  "isolation_required", "elevated_helper", "noninteractive_desktop", "capture_blocked",
-  "input_detection_unavailable", "foreground_unavailable", "affinity_unavailable", "target_not_installed",
-  "hardware_input_required", "physical_takeover",
+  "isolation_required",
+  "elevated_helper",
+  "noninteractive_desktop",
+  "capture_blocked",
+  "input_detection_unavailable",
+  "foreground_unavailable",
+  "affinity_unavailable",
+  "target_not_installed",
+  "hardware_input_required",
+  "physical_takeover",
 ])
 const WindowsNativeReport = Schema.Struct({
   checks: Schema.Array(
@@ -64,6 +122,8 @@ const WindowsNativeReport = Schema.Struct({
       ok: Schema.Boolean,
       skipped: Schema.optional(Schema.Boolean),
       detail: Schema.optional(Schema.String),
+      stage: Schema.optional(Schema.Literals(WINDOWS_NATIVE_STAGES)),
+      nativeCode: Schema.optional(Schema.Literals(WINDOWS_NATIVE_CODES)),
     }),
   ),
 })
@@ -80,11 +140,19 @@ export function windowsNativeSelfTestChecks(
   const expected = WINDOWS_NATIVE_CHECKS[mode]
   if (
     report.checks.length !== expected.length ||
-    report.checks.some((entry, index) =>
-      entry.name !== expected[index] ||
-      (entry.ok && entry.skipped === true) ||
-      (entry.skipped === true && (!entry.detail || !windowsSkipReasons.has(entry.detail))) ||
-      (entry.detail !== undefined && (mode !== "privileged" || !windowsReasons.has(entry.detail))),
+    report.checks.some(
+      (entry, index) =>
+        entry.name !== expected[index] ||
+        (entry.ok && entry.skipped === true) ||
+        (entry.skipped === true && (!entry.detail || !windowsSkipReasons.has(entry.detail))) ||
+        (entry.detail !== undefined && (mode !== "privileged" || !windowsReasons.has(entry.detail))) ||
+        ((entry.stage !== undefined || entry.nativeCode !== undefined) &&
+          (entry.stage === undefined ||
+            entry.nativeCode === undefined ||
+            mode !== "privileged" ||
+            entry.ok ||
+            entry.skipped === true ||
+            !entry.detail)),
     )
   )
     throw new Error("Invalid Windows native catalog.")
@@ -190,7 +258,7 @@ export async function verifyWindowsNativeFiles(
 
 type WindowsFixtureDependencies = {
   command: (command: Command) => Promise<CommandResult>
-  channel?: (executable: string, args: string[]) => NativeChannel & {startupDiagnostic?: () => WindowsDiagnostic}
+  channel?: (executable: string, args: string[]) => NativeChannel & { startupDiagnostic?: () => WindowsDiagnostic }
   temporary?: () => Promise<string>
   architecture?: HelperArchitecture
   verify?: (options: SelfTestOptions, directory: string, architecture?: string) => Promise<VerifiedWindowsArtifacts>
@@ -215,7 +283,8 @@ export async function createWindowsVerifiedFixture(
   }
   try {
     const status = await lstat(created)
-    if (!status.isDirectory() || status.isSymbolicLink()) throw new Error("The Windows fixture directory is not owned regular storage.")
+    if (!status.isDirectory() || status.isSymbolicLink())
+      throw new Error("The Windows fixture directory is not owned regular storage.")
     // TEMP may use a short-name or ancestor junction spelling. Launch from the actual owned
     // directory, matching native FixtureFiles; Caller still checks and holds every real ancestor.
     const temporary = await realpath(created)
@@ -253,8 +322,11 @@ export async function createWindowsVerifiedFixture(
       await copyFile(source, destination)
       const copied = await lstat(destination)
       if (
-        !copied.isFile() || copied.isSymbolicLink() || copied.size > 65_536 ||
-        JSON.stringify(parseHelperManifest(JSON.parse(await readFile(destination, "utf8")))) !== JSON.stringify(expected)
+        !copied.isFile() ||
+        copied.isSymbolicLink() ||
+        copied.size > 65_536 ||
+        JSON.stringify(parseHelperManifest(JSON.parse(await readFile(destination, "utf8")))) !==
+          JSON.stringify(expected)
       )
         throw new Error("Copying changed a verified Windows manifest.")
     }
@@ -275,19 +347,29 @@ export async function createWindowsVerifiedFixture(
         requireOpen()
         const channel = open(caller, ["--stdio"])
         let received = false
-        return {...channel, async next(timeoutMs: number) {
-          const result = await channel.next(timeoutMs).catch(error => {
-            const observed = channel.startupDiagnostic?.()
-            if (!received && (observed?.caller || observed?.helper))
-              throw new WindowsCheckFailure(windowsCommandReason({code: null, diagnostic: {windows: observed}}, "channel"))
-            throw error
-          })
-          if (!received && result?.kind === "exit")
-            throw new WindowsCheckFailure(windowsCommandReason({code: result.code, diagnostic: {windows: channel.startupDiagnostic?.()}}, "channel"))
-          if (!received && !result) throw new WindowsCheckFailure("windows-channel-no-frame")
-          if (result?.kind === "frame") received = true
-          return result
-        }}
+        return {
+          ...channel,
+          async next(timeoutMs: number) {
+            const result = await channel.next(timeoutMs).catch((error) => {
+              const observed = channel.startupDiagnostic?.()
+              if (!received && (observed?.caller || observed?.helper))
+                throw new WindowsCheckFailure(
+                  windowsCommandReason({ code: null, diagnostic: { windows: observed } }, "channel"),
+                )
+              throw error
+            })
+            if (!received && result?.kind === "exit")
+              throw new WindowsCheckFailure(
+                windowsCommandReason(
+                  { code: result.code, diagnostic: { windows: channel.startupDiagnostic?.() } },
+                  "channel",
+                ),
+              )
+            if (!received && !result) throw new WindowsCheckFailure("windows-channel-no-frame")
+            if (result?.kind === "frame") received = true
+            return result
+          },
+        }
       },
       async probe() {
         requireOpen()
@@ -297,20 +379,30 @@ export async function createWindowsVerifiedFixture(
           timeoutMs: 15_000,
           windowsDiagnostic: "caller",
         })
-        if (result.code !== 0 || result.timedOut)
-          throw new WindowsCheckFailure(windowsCommandReason(result, "probe"))
+        if (result.code !== 0 || result.timedOut) throw new WindowsCheckFailure(windowsCommandReason(result, "probe"))
         if (Buffer.byteLength(result.stdout) > 32_768) throw new WindowsCheckFailure("windows-probe-output-limit")
         let probe: unknown
-        try { probe = JSON.parse(result.stdout) } catch { throw new WindowsCheckFailure("windows-probe-invalid-json") }
-        if (!probe || typeof probe !== "object" || Array.isArray(probe)) throw new WindowsCheckFailure("windows-probe-invalid-json")
+        try {
+          probe = JSON.parse(result.stdout)
+        } catch {
+          throw new WindowsCheckFailure("windows-probe-invalid-json")
+        }
+        if (!probe || typeof probe !== "object" || Array.isArray(probe))
+          throw new WindowsCheckFailure("windows-probe-invalid-json")
         const value = probe as Record<string, unknown>
         const permissions = value.permissions
-        if (!permissions || typeof permissions !== "object" || Array.isArray(permissions) ||
-            (permissions as Record<string, unknown>).screen !== "n/a" || (permissions as Record<string, unknown>).accessibility !== "n/a")
+        if (
+          !permissions ||
+          typeof permissions !== "object" ||
+          Array.isArray(permissions) ||
+          (permissions as Record<string, unknown>).screen !== "n/a" ||
+          (permissions as Record<string, unknown>).accessibility !== "n/a"
+        )
           throw new WindowsCheckFailure("windows-probe-invalid-permissions")
         if (value.responsible !== true) throw new WindowsCheckFailure("windows-probe-invalid-responsible")
         if (value.elevated !== false) throw new WindowsCheckFailure("windows-probe-invalid-elevated")
-        if (typeof value.captureBlocked !== "boolean") throw new WindowsCheckFailure("windows-probe-invalid-capture-blocked")
+        if (typeof value.captureBlocked !== "boolean")
+          throw new WindowsCheckFailure("windows-probe-invalid-capture-blocked")
         return probe
       },
       async unverifiedParent() {
@@ -349,7 +441,11 @@ export async function createWindowsVerifiedFixture(
 }
 
 /** Windows protocol bytes use stdin/stdout. ChildProcess.kill targets Node's owned process handle. */
-export function windowsNativeChannel(executable: string, args: string[], launch: typeof spawn = spawn): NativeChannel & {startupDiagnostic: () => WindowsDiagnostic} {
+export function windowsNativeChannel(
+  executable: string,
+  args: string[],
+  launch: typeof spawn = spawn,
+): NativeChannel & { startupDiagnostic: () => WindowsDiagnostic } {
   const child = launch(executable, args, { stdio: ["pipe", "pipe", "pipe"], windowsHide: true })
   const inbox: Received[] = []
   const startup = new WindowsDiagnosticReader("caller")

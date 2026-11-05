@@ -1,5 +1,6 @@
 #include "privileged_self_test.h"
 #include "privileged_target.h"
+#include "protocol.h"
 #include <algorithm>
 #include <limits>
 #include <set>
@@ -84,6 +85,54 @@ size_t run_privileged_self_test_tests() {
       "privileged.observed-unavailable-prerequisite-is-explicit-skip");
     for (const auto& entry : report.checks)
       require(!entry.ok && entry.skipped && entry.detail == L"noninteractive_desktop", "privileged.skip-preserves-fixed-reason");
+  });
+  test([] {
+    // Use the production protocol constructor: error is text, while code is a top-level field.
+    const auto reply = response_failure(42, L"secure_field", L"PRIVATE native explanation");
+    require(reply.GetNamedString(L"error") == L"PRIVATE native explanation" &&
+      windows_privileged_response_failure(reply, L"secure_field") &&
+      !windows_privileged_response_failure(reply, L"changed"), "privileged.refusal-reads-production-top-level-code");
+    require(!windows_privileged_response_failure(response_success(42), L"secure_field"),
+      "privileged.success-is-not-a-refusal");
+    const auto legacy = JsonObject::Parse(LR"({"ok":false,"error":{"code":"secure_field"}})");
+    require(!windows_privileged_response_failure(legacy, L"secure_field"), "privileged.nested-error-cannot-substitute-code");
+    auto malformed = reply; malformed.Insert(L"code", JsonValue::CreateNumberValue(7));
+    require(!windows_privileged_response_failure(malformed, L"secure_field"), "privileged.malformed-code-is-not-a-match");
+  });
+  test([] {
+    require(std::set<std::wstring_view>(windows_privileged_stages.begin(), windows_privileged_stages.end()).size() == windows_privileged_stages.size() &&
+      std::set<std::wstring_view>(windows_privileged_native_codes.begin(), windows_privileged_native_codes.end()).size() == windows_privileged_native_codes.size(),
+      "privileged.diagnostic-enums-are-unique");
+    for (const auto stage : windows_privileged_stages) for (const auto code : windows_privileged_native_codes) {
+      auto report = passed_report(); report.checks[3] = {std::wstring(windows_privileged_checks[3]), false, false,
+        L"native_operation_failed", std::wstring(stage), std::wstring(code)};
+      require(report.valid() && report.exit_code() == 1, "privileged.closed-diagnostics-preserve-failure-exit");
+      const auto row = report.wire().GetNamedArray(L"checks").GetObjectAt(3);
+      require(row.GetNamedString(L"detail") == L"native_operation_failed" && row.GetNamedString(L"stage") == stage &&
+        row.GetNamedString(L"nativeCode") == code && !row.GetNamedBoolean(L"ok"), "privileged.closed-diagnostics-preserve-reason-and-fields");
+    }
+    require(windows_privileged_native_code(L"capture_unavailable") == L"capture_unavailable" &&
+      windows_privileged_native_code(L"PRIVATE native explanation") == L"unknown" && windows_privileged_native_code(L"") == L"unknown",
+      "privileged.unknown-native-codes-do-not-disclose-text");
+  });
+  test([] {
+    const WindowsPrivilegedCheck failed{std::wstring(windows_privileged_checks[3]), false, false,
+      L"native_operation_failed", L"window-capture-reply", L"capture_unavailable"};
+    for (size_t variation = 0; variation < 7; ++variation) {
+      auto report = passed_report(); auto row = failed;
+      if (variation == 0) row.stage.clear();
+      if (variation == 1) row.native_code.clear();
+      if (variation == 2) row.stage = L"PRIVATE native explanation";
+      if (variation == 3) row.native_code = L"PRIVATE native explanation";
+      if (variation == 4) row.ok = true;
+      if (variation == 5) { row.skipped = true; row.detail = L"capture_blocked"; }
+      if (variation == 6) row.detail.clear();
+      report.checks[3] = row;
+      require(!report.valid() && report.exit_code() == 1, "privileged.diagnostics-require-closed-paired-failure-only-fields");
+      const std::wstring wire(report.wire().Stringify());
+      require(wire.find(L"PRIVATE") == std::wstring::npos && wire.find(L"nativeCode") == std::wstring::npos,
+        "privileged.invalid-diagnostic-never-reaches-wire");
+    }
   });
   test([] {
     for (const auto reason : {L"isolation_required", L"elevated_helper", L"noninteractive_desktop", L"capture_blocked", L"input_detection_unavailable", L"foreground_unavailable", L"affinity_unavailable", L"target_not_installed", L"hardware_input_required", L"physical_takeover"})

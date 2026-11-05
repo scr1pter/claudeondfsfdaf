@@ -6,6 +6,7 @@ import { tmpdir } from "node:os"
 import path from "node:path"
 import { PassThrough } from "node:stream"
 import { fileURLToPath } from "node:url"
+import { Computer } from "@vectordevai/schema/computer"
 import { createFakeHelper, manualClock } from "../test/computer/fake-helper"
 import { encodeFrame, frameReader, type Line, type Received } from "../test/computer/transcript"
 import { WINDOWS_TEST_ARTIFACTS, type HelperManifest } from "./build-computer-helper"
@@ -14,7 +15,9 @@ import { readIdentity } from "./computer-helper-identity"
 import { WindowsCheckFailure } from "./computer-helper-windows-diagnostics"
 import {
   WINDOWS_NATIVE_CHECKS,
+  WINDOWS_NATIVE_CODES,
   WINDOWS_NATIVE_REASONS,
+  WINDOWS_NATIVE_STAGES,
   createWindowsVerifiedFixture,
   verifyWindowsNativeFiles,
   windowsNativeChannel,
@@ -233,6 +236,66 @@ test("Windows reports require exact native catalogs, fixed reasons and coherent 
     checks.map((entry) => ({ name: entry.name, ok: entry.ok, skipped: entry.skipped })),
   ])
     expect(() => windowsNativeSelfTestChecks(JSON.stringify({ checks: invalid }), "privileged", 77)).toThrow()
+})
+
+test("Windows failed privileged rows accept only paired closed stage and native-code diagnostics", () => {
+  const passed = WINDOWS_NATIVE_CHECKS.privileged.map((name) => ({ name, ok: true }))
+  const failed = {
+    ...passed[2],
+    ok: false,
+    detail: "native_operation_failed",
+    stage: "installed-list-reply",
+    nativeCode: "unavailable",
+  }
+  for (const entry of [
+    ...WINDOWS_NATIVE_STAGES.map((stage) => ({ ...failed, stage })),
+    ...WINDOWS_NATIVE_CODES.map((nativeCode) => ({ ...failed, nativeCode })),
+    { ...failed, skipped: false },
+  ]) {
+    const checks = passed.map((item, index) => (index === 2 ? entry : item))
+    expect(windowsNativeSelfTestChecks(JSON.stringify({ checks }), "privileged", 1)).toEqual(checks)
+    expect(() => windowsNativeSelfTestChecks(JSON.stringify({ checks }), "privileged", 77)).toThrow()
+  }
+  for (const entry of [
+    { ...failed, stage: "PRIVATE" },
+    { ...failed, nativeCode: "PRIVATE" },
+    { ...failed, stage: undefined },
+    { ...failed, nativeCode: undefined },
+    { ...failed, detail: undefined },
+    { ...failed, detail: "" },
+    { ...failed, ok: true },
+    { ...failed, skipped: true, detail: "noninteractive_desktop" },
+  ]) {
+    const checks = passed.map((item, index) => (index === 2 ? entry : item))
+    const code = entry.ok ? 0 : "skipped" in entry && entry.skipped ? 77 : 1
+    expect(() => windowsNativeSelfTestChecks(JSON.stringify({ checks }), "privileged", code)).toThrow()
+  }
+  for (const mode of ["unprivileged", "packaged", "eof", "parentDeath", "targetControl"] as const) {
+    const checks = WINDOWS_NATIVE_CHECKS[mode].map((name, index) =>
+      index === 0 ? { ...failed, name, detail: undefined } : { name, ok: true },
+    )
+    expect(() => windowsNativeSelfTestChecks(JSON.stringify({ checks }), mode, 1)).toThrow()
+  }
+  const macChecks = MAC_NATIVE_CHECKS.privileged.map((name, index) =>
+    index === 0 ? { ...failed, name } : { name, ok: true },
+  )
+  expect(() => nativeSelfTestChecks(JSON.stringify({ checks: macChecks }), "privileged", 1)).toThrow()
+  expect(WINDOWS_NATIVE_CODES).toEqual([...Computer.ComputerErrorCode.literals, "unknown"])
+})
+
+test("Windows privileged diagnostic enums match the native report allowlists exactly", async () => {
+  const source = await readFile(
+    path.join(desktopDirectory, "native/computer-helper/windows/src/privileged_self_test.h"),
+    "utf8",
+  )
+  for (const [name, expected] of [
+    ["windows_privileged_stages", WINDOWS_NATIVE_STAGES],
+    ["windows_privileged_native_codes", WINDOWS_NATIVE_CODES],
+  ] as const) {
+    const declaration = source.match(new RegExp(`${name}\\s*\\{([^}]+)\\};`))?.[1]
+    expect(declaration).toBeDefined()
+    expect([...declaration!.matchAll(/L"([^"]+)"/g)].map((match) => match[1])).toEqual([...expected])
+  }
 })
 
 test("Windows channel inference verifies all test artifacts before the first helper version launch", async () => {
@@ -661,6 +724,45 @@ test("Windows driver runs the target-control smoke before native prerequisite sk
     "passed",
   )
   expect(result.checks.find((item) => item.name === "conformance.heartbeat-loss")?.status).toBe("skipped")
+  expect(fake.state.closed).toBe(1)
+})
+
+test("Windows driver preserves validated privileged diagnostics and the failed aggregate result", async () => {
+  const fake = windowsDriverFixture()
+  fake.native.privileged = async () => ({
+    code: 1,
+    stdout: JSON.stringify({
+      checks: WINDOWS_NATIVE_CHECKS.privileged.map((name, index) =>
+        index === 2
+          ? {
+              name,
+              ok: false,
+              detail: "native_operation_failed",
+              stage: "installed-list-native",
+              nativeCode: "unavailable",
+            }
+          : { name, ok: true },
+      ),
+    }),
+  })
+  const result = await runComputerHelperSelfTest(
+    { ...options, platform: "win32", privileged: "auto" },
+    fake.dependencies,
+  )
+  expect(result.code).toBe(1)
+  expect(result.checks.find((item) => item.name === "privileged")).toEqual({
+    name: "privileged",
+    status: "failed",
+    reason: "native-check-failed",
+  })
+  expect(result.checks.find((item) => item.name === "privileged.apps-installed-target")).toEqual({
+    name: "privileged.apps-installed-target",
+    status: "failed",
+    reason: "native_operation_failed",
+    stage: "installed-list-native",
+    nativeCode: "unavailable",
+  })
+  expect(result.checks.filter((item) => item.stage !== undefined || item.nativeCode !== undefined)).toHaveLength(1)
   expect(fake.state.closed).toBe(1)
 })
 

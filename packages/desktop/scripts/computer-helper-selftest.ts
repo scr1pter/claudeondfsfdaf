@@ -48,6 +48,8 @@ import {
   verifyWindowsNativeFiles,
   windowsNativeSelfTestChecks,
   type VerifiedWindowsArtifacts,
+  type WindowsNativeCode,
+  type WindowsNativeStage,
 } from "./computer-helper-selftest-windows"
 
 const packageDir = fileURLToPath(new URL("../", import.meta.url))
@@ -160,7 +162,13 @@ export const CORE_TRANSCRIPTS = [
 ] as const
 export type PrivilegedMode = "auto" | "require" | "off"
 type Status = "passed" | "failed" | "skipped"
-type Check = { name: string; status: Status; reason?: string }
+type Check = {
+  name: string
+  status: Status
+  reason?: string
+  stage?: WindowsNativeStage
+  nativeCode?: WindowsNativeCode
+}
 type NativeFailureReason =
   | "supervisor-missing"
   | "supervisor-extra"
@@ -551,7 +559,7 @@ export async function runComputerHelperSelfTest(options: SelfTestOptions, depend
       }
       if (name === "unit") return
       if (result.timedOut || (result.code !== 0 && result.code !== 1 && result.code !== 77)) return
-      const report: unknown =
+      const report =
         options.platform === "darwin"
           ? {
               checks: nativeSelfTestChecks(
@@ -611,6 +619,14 @@ export async function runComputerHelperSelfTest(options: SelfTestOptions, depend
           name: `${name}.${nativeChecks.has(entry.name) ? entry.name : `check-${index + 1}`}`,
           status: state,
           ...(reason ? { reason } : {}),
+          ...(options.platform === "win32" &&
+          state === "failed" &&
+          "stage" in entry &&
+          entry.stage !== undefined &&
+          "nativeCode" in entry &&
+          entry.nativeCode !== undefined
+            ? { stage: entry.stage, nativeCode: entry.nativeCode }
+            : {}),
         })
         if (state === "failed") set(name, "failed", "native-check-failed")
       }
