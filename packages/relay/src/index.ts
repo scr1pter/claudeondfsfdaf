@@ -18,7 +18,7 @@ import { TICKET_PREFIX, accountHandle, importTicketKeys, verifyTicket } from "./
 export { AccountRelay }
 
 /** The object that records nonces for calls not about one account (the kill flag). Account names are 64 hex digits. */
-export const CONTROL_OBJECT = "control"
+const CONTROL_OBJECT = "control"
 const INTERNAL_PREFIX = "/internal/v1/"
 const ACCOUNT = /^[\x21-\x7e]{1,128}$/
 const TOKEN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/
