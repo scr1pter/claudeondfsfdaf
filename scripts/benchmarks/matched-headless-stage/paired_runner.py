@@ -582,6 +582,7 @@ def native_command_text(value):
 def normalize_transcript(path, runtime):
     """Normalize native descendants, never CLI root stdout, for browser auditing."""
     events, commands, executions, observations, start, unknown = [], {}, [], [], None, 0
+    known_failed_commands = 0
     with path.open("r", encoding="utf-8") as stream:
         for count, line in enumerate(stream, 1):
             require(count <= 200000 and len(line) <= 8000000, "native transcript audit bound exceeded")
@@ -607,10 +608,21 @@ def normalize_transcript(path, runtime):
                     events.append({"type": "tool_use", "part": data})
                     state = data.get("state", {})
                     args = data.get("input", state.get("input", {}))
-                    if data.get("tool", "").split(".")[-1] in {"bash", "terminal", "shell", "exec_command"} and isinstance(args, dict):
+                    tool = data.get("tool", "").split(".")[-1]
+                    if tool in {"bash", "terminal", "shell", "exec_command"} and isinstance(args, dict):
                         command = args.get("command", args.get("cmd"))
+                        # A terminal wait/read supplies no command. An ID alone in a snapshot does not prove the
+                        # same command generation, so its exit cannot qualify an earlier running open as success.
                         if isinstance(command, str):
-                            executions.append({"at": timestamp(state.get("time", {}).get("start", item.get("time_created"))), "command": command})
+                            metadata = state.get("metadata", {})
+                            metadata = metadata if isinstance(metadata, dict) else {}
+                            exit_code = metadata.get("exitCode" if tool == "terminal" else "exit")
+                            known_failed_commands += int(state.get("status") in ("completed", "error") and type(exit_code) is int and exit_code != 0)
+                            executions.append({"at": timestamp(state.get("time", {}).get("start", item.get("time_created"))),
+                                               "started": timestamp(state.get("time", {}).get("start")),
+                                               "ended": timestamp(state.get("time", {}).get("end")), "command": command,
+                                               "status": state.get("status"), "exitCode": exit_code,
+                                               "terminal": tool == "terminal", "processStatus": metadata.get("status") if tool == "terminal" else None})
                 continue
             payload = row.get("payload", {})
             at = timestamp(row.get("timestamp"))
@@ -624,18 +636,21 @@ def normalize_transcript(path, runtime):
                         command = native_command_text(item.get("command"))
                         began = timestamp(payload.get("started_at_ms"))
                         ended = timestamp(payload.get("completed_at_ms"))
-                        if not command or began is None or ended is None or began > ended or item.get("status") != "completed" or type(item.get("exit_code")) is not int:
+                        status, exit_code = item.get("status"), item.get("exit_code")
+                        known_failed = status == "failed" and type(exit_code) is int and exit_code != 0
+                        if not command or began is None or ended is None or began > ended or not (status == "completed" or known_failed) or type(exit_code) is not int:
                             unknown += 1
                             continue
                         key = item.get("id")
                         if not isinstance(key, str) or not key:
                             unknown += 1
                             continue
-                        executions.append({"at": began, "command": command})
+                        known_failed_commands += int(exit_code != 0)
+                        executions.append({"at": began, "started": began, "ended": ended, "command": command, "status": status, "exitCode": exit_code})
                         observations.append({"outcome": "assistant_started", "at": began})
                         events.extend([{ "type": "item.started", "item": {"id": key, "type": "command_execution", "command": command}},
                                        {"type": "item.completed", "item": {"id": key, "type": "command_execution", "command": command,
-                                                                            "exit_code": item["exit_code"]}}])
+                                                                            "status": status, "exit_code": exit_code}}])
                     elif item.get("type") == "CollabAgentToolCall":
                         if item.get("tool") != "wait" or item.get("status") != "completed":
                             unknown += 1
@@ -671,7 +686,8 @@ def normalize_transcript(path, runtime):
     completions = sorted(row["completed"] for row in chronology["turns"] if row["outcome"] == "completed")
     return {"events": events, "executions": executions, "started": start,
             "completed": completions[-1] if completions else None,
-            "completions": completions, "unknownInteractiveInputs": unknown, **chronology}
+            "completions": completions, "unknownInteractiveInputs": unknown,
+            "knownFailedCommandExecutions": known_failed_commands, **chronology}
 
 
 def owned_support_inventory(root, *, max_entries=10000, max_depth=32, max_link_hops=40):
@@ -830,6 +846,7 @@ def audit_descendants(common, runtime, directory, app, support, trusted_client, 
         review = review or audit.get("requiresManualReview", True) or normalized["unknownInteractiveInputs"] > 0
         coverage.append({"identitySha256": item["identitySha256"], "audit": audit,
                          "unknownInteractiveInputs": normalized["unknownInteractiveInputs"],
+                         "knownFailedCommandExecutions": normalized["knownFailedCommandExecutions"],
                          "latestNativeOutcome": normalized["latestOutcome"],
                          "nativeErrorObservations": normalized["nativeErrorObservations"],
                          "unknownNativeOutcomeObservations": normalized["unknownOutcomeObservations"]})
@@ -850,15 +867,21 @@ def audit_descendants(common, runtime, directory, app, support, trusted_client, 
     worker_completions = [value for worker in workers for value in worker.get("completions", [])]
     followups_reviewed = bool(judge_phases) and all(any(began is not None and ended is not None and began >= completed and ended >= began
                                   for began, ended in judge_phases) for completed in worker_completions)
-    final_commands = [row["command"] for row in root["executions"] if row["at"] is not None
-                      and judge.get("completed") is not None and row["at"] >= judge["completed"]]
-    browser_after_judge = any("browser_driver_client" in command.lower() or str(trusted_client).lower() in command.lower()
-                              for command in final_commands)
-    api_after_judge = any(re.search(r"\b(?:curl|invoke-restmethod|invoke-webrequest)\b|\bfetch\s*\(|urllib\.request|https?\.request", command, re.I)
-                          for command in final_commands)
-    cli_after_judge = any(re.search(r"(?:^|[\s\\/\"\'])cli\.mjs(?:[;\s\"\']|$)", command, re.I) for command in final_commands)
-    sdk_after_judge = any(re.search(r"(?:^|[\s\\/\"\'])sdk\.mjs(?:[;\s\"\']|$)", command, re.I) for command in final_commands)
-    interface_after_judge = browser_after_judge if verification_mode == "ui" else cli_after_judge and sdk_after_judge
+    final_executions = [row for row in root["executions"] if row["at"] is not None
+                        and judge.get("completed") is not None and row["at"] >= judge["completed"]]
+    def verification_commands(executions):
+        commands = [row["command"] for row in executions]
+        return {"browser": any("browser_driver_client" in command.lower() or str(trusted_client).lower() in command.lower() for command in commands),
+                "api": any(re.search(r"\b(?:curl|invoke-restmethod|invoke-webrequest)\b|\bfetch\s*\(|urllib\.request|https?\.request", command, re.I) for command in commands),
+                "cli": any(re.search(r"(?:^|[\s\\/\"\'])cli\.mjs(?:[;\s\"\']|$)", command, re.I) for command in commands),
+                "sdk": any(re.search(r"(?:^|[\s\\/\"\'])sdk\.mjs(?:[;\s\"\']|$)", command, re.I) for command in commands)}
+    observed = verification_commands(final_executions)
+    successful = verification_commands([row for row in final_executions
+        if row.get("status") == "completed" and type(row.get("exitCode")) is int and row["exitCode"] == 0
+        and row.get("started") is not None and row.get("ended") is not None
+        and judge.get("completed") is not None and judge["completed"] <= row["started"] <= row["ended"]
+        and (not row.get("terminal") or row.get("processStatus") == "exited")])
+    interface_after_judge = successful["browser"] if verification_mode == "ui" else successful["cli"] and successful["sdk"]
     tied_ordering = any(value == judge.get("started") for value in worker_done if value is not None) or any(
         began == completed for completed in worker_completions for began, _ in judge_phases if began is not None)
     role_rows = {role: timeline.get(key, {}) for role, key in keys.items()}
@@ -880,7 +903,7 @@ def audit_descendants(common, runtime, directory, app, support, trusted_client, 
             specialist_covered = specialist_covered and specialist.get("completed") is not None and specialist["completed"] >= formal_repair_started
     support_inventory = owned_support_inventory(support)
     return {"requiresManualReview": bool(review or not ordered or not followups_reviewed or not native_outcomes_settled
-                                          or not interface_after_judge or not api_after_judge or not starts_after or not completes_after or not specialist_covered
+                                          or not interface_after_judge or not successful["api"] or not starts_after or not completes_after or not specialist_covered
                                           or support_inventory["requiresManualReview"]), "descendantCoverageComplete": True,
             "observedNativeSessions": len(coverage), "autonomousActorsAdmitted": 1 + len(slots),
             "judgeStartedAfterBothWorkersCompleted": bool(ordered), "sessions": coverage,
@@ -893,10 +916,15 @@ def audit_descendants(common, runtime, directory, app, support, trusted_client, 
             "orderingTimestampEqualityObserved": tied_ordering,
             "orderingEvidence": "nondecreasing native timestamps normalized to seconds; ordering is not strict causal proof",
             "finalVerificationMode": verification_mode,
-            "rootPostJudgeCliVerificationCommandObserved": cli_after_judge,
-            "rootPostJudgeSdkVerificationCommandObserved": sdk_after_judge,
-            "rootPostJudgeCommonBrowserCommandObserved": browser_after_judge,
-            "rootPostJudgeApiVerificationCommandObserved": api_after_judge,
+            "rootPostJudgeCliVerificationCommandObserved": observed["cli"],
+            "rootPostJudgeSdkVerificationCommandObserved": observed["sdk"],
+            "rootPostJudgeCommonBrowserCommandObserved": observed["browser"],
+            "rootPostJudgeApiVerificationCommandObserved": observed["api"],
+            "rootPostJudgeCliVerificationCommandSucceeded": successful["cli"],
+            "rootPostJudgeSdkVerificationCommandSucceeded": successful["sdk"],
+            "rootPostJudgeCommonBrowserCommandSucceeded": successful["browser"],
+            "rootPostJudgeApiVerificationCommandSucceeded": successful["api"],
+            "verificationSuccessEvidence": "explicit completed command record with integer zero exit and ordered start/end; terminal process exited; split terminal ID-only correlation remains unproven",
             "ownedSupportDataFiles": support_inventory["regularFiles"], "ownedSupportDataInventory": support_inventory, "ownedSupportScriptPolicy":
             "explicit owned DATA_DIR retained; paths outside authored source remain manual review in common static audit",
             "coverageLimits": "bounded native telemetry/static script inspection; unrecognized verification scripts require manual review; no operating-system sandbox claim"}

@@ -486,7 +486,7 @@ class PairedRunnerTests(unittest.TestCase):
                 for index, (command, at) in enumerate(commands):
                     rows.append({"table": "part", "row": {"time_created": at, "data": json.dumps({"id": str(index),
                         "type": "tool", "tool": "bash", "state": {"status": "completed", "input": {"command": command},
-                        "time": {"start": at, "end": at + 1}}})}})
+                        "metadata": {"exit": 0}, "time": {"start": at, "end": at + 1}}})}})
                 name = hashlib.sha256(identity.encode()).hexdigest() + ".jsonl"
                 path = directory / name
                 path.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
@@ -572,7 +572,8 @@ class PairedRunnerTests(unittest.TestCase):
                 for index, (command, at) in enumerate(commands):
                     rows.append({"table": "part", "row": {"time_created": ms(at), "data": json.dumps({"id": str(index),
                         "type": "tool", "tool": "bash", "state": {"status": "completed", "input": {"command": command},
-                        "output": "Process exited with code " + str(command_exit), "time": {"start": ms(at), "end": ms(at + .01)}}})}})
+                        "metadata": {"exit": command_exit}, "output": "Process exited with code " + str(command_exit),
+                        "time": {"start": ms(at), "end": ms(at + .01)}}})}})
             else:
                 iso = lambda value: "2026-11-01T00:00:" + format(value, "06.3f") + "Z"
                 rows.append({"type": "session_meta", "timestamp": iso(turns[0][0]), "payload": {}})
@@ -592,12 +593,10 @@ class PairedRunnerTests(unittest.TestCase):
                         commands.append(("curl http://127.0.0.1:4123/api/synthetic", at + .2))
                 for index, (command, at) in enumerate(commands):
                     call = "synthetic-call-" + str(index)
-                    rows.extend([
-                        {"type": "response_item", "timestamp": iso(at), "payload": {"type": "function_call",
-                            "name": "functions.exec_command", "call_id": call, "arguments": json.dumps({"cmd": command})}},
-                        {"type": "response_item", "timestamp": iso(at + .01), "payload": {"type": "function_call_output",
-                            "call_id": call, "output": "Process exited with code " + str(command_exit)}},
-                    ])
+                    rows.append({"type": "event_msg", "timestamp": iso(at + .01), "payload": {"type": "item_completed",
+                        "started_at_ms": (1793491200 + at) * 1000, "completed_at_ms": (1793491200 + at + .01) * 1000,
+                        "item": {"type": "CommandExecution", "id": call, "command": ["pwsh.exe", "-Command", command],
+                                 "status": "completed" if command_exit == 0 else "failed", "exit_code": command_exit}}})
             name = hashlib.sha256(identity.encode()).hexdigest() + ".jsonl"
             path = directory / name
             path.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
@@ -717,7 +716,10 @@ class PairedRunnerTests(unittest.TestCase):
         for runtime in ("vector", "codex"):
             with self.subTest(runtime=runtime):
                 quality = self.native_phase_fixture(runtime, command_exit=1)
-                self.assertFalse(quality["requiresManualReview"])
+                self.assertTrue(quality["requiresManualReview"])
+                self.assertTrue(quality["requiredNativeLatestOutcomesSettled"])
+                self.assertTrue(quality["rootPostJudgeApiVerificationCommandObserved"])
+                self.assertFalse(quality["rootPostJudgeApiVerificationCommandSucceeded"])
                 self.assertEqual(sum(row["nativeErrorObservations"] for row in quality["sessions"]), 0)
 
     def test_task_command_freeze_rejects_unbound_external_code_and_file_operands(self):
