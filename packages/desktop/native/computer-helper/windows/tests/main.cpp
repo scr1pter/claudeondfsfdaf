@@ -10,6 +10,7 @@
 #include "build-config.h"
 #include "protocol.h"
 #include "server.h"
+#include "guard.h"
 #include <objidl.h>
 #include <xmllite.h>
 #include <algorithm>
@@ -526,6 +527,7 @@ int main(int argc, char** argv) {
     run_check("native-process-tree", [] { static_cast<void>(run_windows_process_tree_tests()); });
     run_check("program-capabilities", [] { static_cast<void>(run_program_registry_tests()); });
     run_check("program-resolution-and-launch", [] { static_cast<void>(run_windows_program_tests()); });
+    run_check("live-target-guard", [] { static_cast<void>(run_guard_tests()); });
     std::cout << "Windows computer helper unit checks passed.\n";
     return 0;
   } catch (const UnitFailure& failure) {
