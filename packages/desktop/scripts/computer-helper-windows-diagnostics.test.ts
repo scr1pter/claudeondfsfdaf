@@ -33,10 +33,17 @@ test("Windows unit catalog binds existing fixed native suite and failure labels"
   )
   const caller =
     (await readFile(new URL("../native/computer-helper/windows/tests/caller.cpp", import.meta.url), "utf8")) + desktop
+  const token = await readFile(
+    new URL("../native/computer-helper/windows/tests/caller_token_acl.h", import.meta.url),
+    "utf8",
+  )
   const stages = [...caller.matchAll(/stage = "([a-z-]+)"/g)].map((match) => match[1]!)
   const exits = [...caller.matchAll(/"((?:bootstrap|helper)-child-exit-[a-z-]+)"/g)].map((match) => match[1]!)
-  expect([...new Set([...stages, ...exits])].toSorted()).toEqual([...WINDOWS_CALLER_STAGES].toSorted())
-  const forwarded = integration.match(/constexpr std::array<std::string_view, 46> stages\{([^;]+)\};/s)?.[1] ?? ""
+  const tokenStages = [...token.matchAll(/"(restricted-acl-[a-z-]+)"/g)].map((match) => match[1]!)
+  expect([...new Set([...stages, ...exits, ...tokenStages])].toSorted()).toEqual([...WINDOWS_CALLER_STAGES].toSorted())
+  const catalogue = integration.match(/constexpr std::array<std::string_view, (\d+)> stages\{([^;]+)\};/s)
+  expect(Number(catalogue?.[1])).toBe(WINDOWS_CALLER_STAGES.length)
+  const forwarded = catalogue?.[2] ?? ""
   expect([...forwarded.matchAll(/"([a-z-]+)"/g)].map((match) => match[1])).toEqual([...WINDOWS_CALLER_STAGES])
 })
 

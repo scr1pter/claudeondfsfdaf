@@ -326,7 +326,8 @@ winrt::handle medium_token(const TokenIdentity& original, const char*& selected_
   if (!vector::computer::serving_token_allowed(observed) || !same_context(original, observed)) invalid();
   selected_route = "restricted";
   stage = "restricted-default-dacl";
-  repaired = vector::computer::caller_token_acl::ensure_owned_restricted(candidate.get());
+  repaired = vector::computer::caller_token_acl::ensure_owned_restricted(candidate.get(), &stage);
+  stage = "restricted-acl-basic-identity";
   if (!vector::computer::same_token(observed, token_identity(candidate.get()))) invalid();
   return candidate;
 }

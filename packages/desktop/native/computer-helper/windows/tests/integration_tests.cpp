@@ -50,6 +50,10 @@ void desktop_security_boundaries() {
 }
 void token_acl_boundaries() {
   namespace fixture = caller_token_acl;
+  require_integration(fixture::query_capacity(TokenStatistics) == sizeof(TOKEN_STATISTICS) &&
+    fixture::query_capacity(TokenMandatoryPolicy) == sizeof(TOKEN_MANDATORY_POLICY) &&
+    fixture::query_capacity(TokenHasRestrictions) == sizeof(DWORD) && fixture::query_capacity(TokenSandBoxInert) == sizeof(DWORD),
+    "integration.token-acl-fixed-query-sizes");
   std::vector<unsigned char> zero_groups(sizeof(DWORD));
   require_integration(fixture::sid_groups(zero_groups).empty(), "integration.token-acl-zero-restricted-sids");
   zero_groups[0] = 1;
@@ -113,6 +117,9 @@ void token_acl_boundaries() {
   require_integration(GetAce(reinterpret_cast<PACL>(inherited.data()), 0, &marked) != FALSE, "integration.token-acl-appended-ace");
   static_cast<ACE_HEADER*>(marked)->AceFlags = INHERIT_ONLY_ACE;
   require_integration(rejects(reinterpret_cast<PACL>(inherited.data())), "integration.token-acl-rejects-assignment-flags");
+  const char* rejected_stage = nullptr;
+  try { (void)fixture::lower_acl(reinterpret_cast<PACL>(inherited.data()), &rejected_stage); } catch (...) {}
+  require_integration(rejected_stage && std::string_view(rejected_stage) == "restricted-acl-shape-flags", "integration.token-acl-rejects-assignment-flags");
   static_cast<ACE_HEADER*>(marked)->AceFlags = 0;
   static_cast<ACE_HEADER*>(marked)->AceType = ACCESS_ALLOWED_CALLBACK_ACE_TYPE;
   require_integration(rejects(reinterpret_cast<PACL>(inherited.data())) && rejects(nullptr), "integration.token-acl-rejects-unsupported-or-null");
@@ -268,14 +275,33 @@ class Child {
     DWORD received = 0;
     if (!ReadFile(diagnostic.get(), bytes.data(), count, &received, nullptr) || !received || received > count) return;
     diagnostic_bytes += received;
-    constexpr std::array<std::string_view, 46> stages{"layout-image", "layout-name", "layout-self-ancestors", "layout-helper-ancestors",
-      "layout-self-file", "layout-helper-file", "layout-install-root", "arguments", "parent-witness", "apartment", "token", "layout", "ancestors",
-      "medium-admission", "restricted-token", "bootstrap-launch", "bootstrap-current", "child-exit", "final-current", "helper-launch", "console-control",
-      "bootstrap-child-exit-failure", "helper-child-exit-failure", "bootstrap-child-exit-usage", "helper-child-exit-usage",
-      "bootstrap-child-exit-access-violation", "helper-child-exit-access-violation", "bootstrap-child-exit-stack-overflow", "helper-child-exit-stack-overflow", "bootstrap-child-exit-dll-missing", "helper-child-exit-dll-missing",
-      "bootstrap-child-exit-dll-initialization", "helper-child-exit-dll-initialization", "bootstrap-child-exit-fast-fail", "helper-child-exit-fast-fail",
-      "bootstrap-child-exit-invalid-parameter", "helper-child-exit-invalid-parameter", "bootstrap-child-exit-other", "helper-child-exit-other",
-      "desktop-observation", "desktop-access", "desktop-private-security", "desktop-private-station", "desktop-private-default", "desktop-private-access", "restricted-default-dacl"};
+    constexpr std::array<std::string_view, 80> stages{"layout-image", "layout-name", "layout-self-ancestors",
+      "layout-helper-ancestors", "layout-self-file", "layout-helper-file",
+      "layout-install-root", "arguments", "parent-witness",
+      "apartment", "token", "layout",
+      "ancestors", "medium-admission", "restricted-token",
+      "bootstrap-launch", "bootstrap-current", "child-exit",
+      "final-current", "helper-launch", "console-control",
+      "bootstrap-child-exit-failure", "helper-child-exit-failure", "bootstrap-child-exit-usage",
+      "helper-child-exit-usage", "bootstrap-child-exit-access-violation", "helper-child-exit-access-violation",
+      "bootstrap-child-exit-stack-overflow", "helper-child-exit-stack-overflow", "bootstrap-child-exit-dll-missing",
+      "helper-child-exit-dll-missing", "bootstrap-child-exit-dll-initialization", "helper-child-exit-dll-initialization",
+      "bootstrap-child-exit-fast-fail", "helper-child-exit-fast-fail", "bootstrap-child-exit-invalid-parameter",
+      "helper-child-exit-invalid-parameter", "bootstrap-child-exit-other", "helper-child-exit-other",
+      "desktop-observation", "desktop-access", "desktop-private-security",
+      "desktop-private-station", "desktop-private-default", "desktop-private-access",
+      "restricted-default-dacl", "restricted-acl-access-check", "restricted-acl-append-build",
+      "restricted-acl-append-read", "restricted-acl-append-verify", "restricted-acl-basic-identity",
+      "restricted-acl-descriptor", "restricted-acl-duplicate", "restricted-acl-observe-default",
+      "restricted-acl-observe-identity", "restricted-acl-postproof", "restricted-acl-preproof",
+      "restricted-acl-query-default", "restricted-acl-query-groups", "restricted-acl-query-inert",
+      "restricted-acl-query-integrity", "restricted-acl-query-mandatory", "restricted-acl-query-owner",
+      "restricted-acl-query-primary", "restricted-acl-query-privileges", "restricted-acl-query-restricting",
+      "restricted-acl-query-restrictions", "restricted-acl-query-statistics", "restricted-acl-query-unknown",
+      "restricted-acl-query-user", "restricted-acl-readback", "restricted-acl-set",
+      "restricted-acl-shape-acl", "restricted-acl-shape-creator", "restricted-acl-shape-extent",
+      "restricted-acl-shape-flags", "restricted-acl-shape-sid", "restricted-acl-shape-type",
+      "restricted-acl-snapshot-identity", "restricted-acl-unchanged"};
     for (DWORD index = 0; index < received; ++index) {
       const auto value = bytes[index];
       if (value != '\n') {
