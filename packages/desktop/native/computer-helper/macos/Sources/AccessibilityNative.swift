@@ -37,8 +37,11 @@ enum AccessibilityNative {
         }
         return result
     }
-    static func describe(_ element: AccessibilityElement) throws -> AccessibilityAttributes {
+    static func describe(_ element: AccessibilityElement) throws -> AccessibilityAttributes { try describe(element, timeout: 0.05) }
+    static func textDescribe(_ element: AccessibilityElement) throws -> AccessibilityAttributes { try describe(element, timeout: 0.002) }
+    private static func describe(_ element: AccessibilityElement, timeout: Float) throws -> AccessibilityAttributes {
         let native = try handle(element)
+        guard AXUIElementSetMessagingTimeout(native, timeout) == .success else { throw unavailable }
         let keys = [kAXRoleAttribute, kAXSubroleAttribute, kAXTitleAttribute, kAXDescriptionAttribute, kAXPositionAttribute,
                     kAXSizeAttribute, kAXEnabledAttribute, kAXFocusedAttribute] as CFArray
         var values: CFArray?
@@ -62,9 +65,12 @@ enum AccessibilityNative {
         guard AXValueGetValue(values[4] as! AXValue, .cgPoint, &position), AXValueGetValue(values[5] as! AXValue, .cgSize, &size) else { throw unavailable }
         var editable = DarwinBoolean(false)
         let settable = AXUIElementIsAttributeSettable(native, kAXValueAttribute as CFString, &editable) == .success && editable.boolValue
+        let rawName: CFTypeRef? = CFGetTypeID(values[2]) == CFStringGetTypeID() ? values[2] :
+            CFGetTypeID(values[3]) == CFStringGetTypeID() ? values[3] : nil
+        let complete = rawName.flatMap { completeString($0, limit: 500) } != nil
         return AccessibilityAttributes(role: role, subrole: subrole,
-            name: decodeString(values[2]) ?? decodeString(values[3]) ?? "", bounds: CGRect(origin: position, size: size),
-            enabled: boolean(values[6]) ?? false, focused: boolean(values[7]) ?? false, editable: settable)
+            name: rawName.flatMap { decodeString($0) } ?? "", bounds: CGRect(origin: position, size: size),
+            enabled: boolean(values[6]) ?? false, focused: boolean(values[7]) ?? false, editable: settable, nameComplete: complete)
     }
     static func value(_ element: AccessibilityElement) throws -> String? {
         let native = try handle(element), process = try witness(native)
@@ -104,15 +110,124 @@ enum AccessibilityNative {
         guard AXUIElementCopyElementAtPosition(native, Float(point.x), Float(point.y), &element) == .success,
               let element else { throw unavailable }; return try wrap(element, expectedPID: expected)
     }
-    static func focused(_ app: AccessibilityElement) throws -> AccessibilityElement {
-        let native = try handle(app); var raw: CFTypeRef?
+    static func focused(_ app: AccessibilityElement) throws -> AccessibilityElement { try focused(app, timeout: 0.05) }
+    private static func focused(_ app: AccessibilityElement, timeout: Float) throws -> AccessibilityElement {
+        let native = try handle(app)
+        guard AXUIElementSetMessagingTimeout(native, timeout) == .success else { throw unavailable }
+        var raw: CFTypeRef?
         guard AXUIElementCopyAttributeValue(native, kAXFocusedUIElementAttribute as CFString, &raw) == .success,
               let raw, CFGetTypeID(raw) == AXUIElementGetTypeID() else { throw unavailable }
         // Return only the typed handle. The service verifies its actual PID and a hosted bridge before reading content.
         return try wrap(raw as! AXUIElement)
     }
-    static func containingWindow(_ element: AccessibilityElement) throws -> AccessibilityElement? {
+    static func menuRoot(_ app: AccessibilityElement) throws -> AccessibilityElement? {
+        let native = try handle(app), process = try witness(native)
+        guard AXUIElementSetMessagingTimeout(native, 0.005) == .success else { throw unavailable }
+        var raw: CFTypeRef?
+        let result = AXUIElementCopyAttributeValue(native, kAXMenuBarAttribute as CFString, &raw)
+        if result == .attributeUnsupported || result == .noValue { return nil }
+        guard result == .success, let raw, CFGetTypeID(raw) == AXUIElementGetTypeID(),
+              HelperLifecycle.processIdentity(process.pid) == process else { throw unavailable }
+        return try wrap(raw as! AXUIElement, expectedPID: process.pid)
+    }
+    static func menuParent(_ element: AccessibilityElement) throws -> AccessibilityElement? {
         let native = try handle(element), process = try witness(native)
+        guard AXUIElementSetMessagingTimeout(native, 0.005) == .success else { throw unavailable }
+        var raw: CFTypeRef?
+        let result = AXUIElementCopyAttributeValue(native, kAXParentAttribute as CFString, &raw)
+        if result == .attributeUnsupported || result == .noValue { return nil }
+        guard result == .success, let raw, CFGetTypeID(raw) == AXUIElementGetTypeID(),
+              HelperLifecycle.processIdentity(process.pid) == process else { throw unavailable }
+        return try wrap(raw as! AXUIElement, expectedPID: process.pid)
+    }
+    static func menuPerform(_ element: AccessibilityElement, _ action: String) throws -> Bool {
+        let native = try handle(element)
+        guard AXUIElementSetMessagingTimeout(native, 0.005) == .success else { throw unavailable }
+        let result = AXUIElementPerformAction(native, action as CFString)
+        if result == .actionUnsupported { return false }
+        guard result == .success else { throw unavailable }; return true
+    }
+    static func menuDescribe(_ element: AccessibilityElement) throws -> AccessibilityMenuAttributes {
+        let native = try handle(element), process = try witness(native)
+        guard AXUIElementSetMessagingTimeout(native, 0.005) == .success else { throw unavailable }
+        let keys = [kAXRoleAttribute, kAXSubroleAttribute, kAXTitleAttribute, kAXDescriptionAttribute,
+                    kAXEnabledAttribute, kAXFocusedAttribute, kAXPositionAttribute, kAXSizeAttribute,
+                    kAXMenuItemCmdCharAttribute, kAXMenuItemCmdModifiersAttribute, kAXMenuItemCmdVirtualKeyAttribute, kAXMenuItemCmdGlyphAttribute] as CFArray
+        var raw: CFArray?
+        guard AXUIElementCopyMultipleAttributeValues(native, keys, [], &raw) == .success,
+              let values = raw as? [AnyObject], values.count == 12, let role = token(values[0]) else { throw unavailable }
+        let subrole: String?
+        if CFGetTypeID(values[1]) == CFStringGetTypeID() {
+            guard let value = token(values[1]) else { throw unavailable }; subrole = value
+        } else {
+            var optional: CFTypeRef?
+            let result = AXUIElementCopyAttributeValue(native, kAXSubroleAttribute as CFString, &optional)
+            guard result == .attributeUnsupported || result == .noValue else { throw unavailable }; subrole = nil
+        }
+        let name: String
+        if let title = completeString(values[2], limit: 256) { name = title }
+        else {
+            guard role != "AXMenuItem", role != "AXMenuBarItem" else { throw unavailable }
+            name = completeString(values[3], limit: 256) ?? ""
+        }
+        var bounds: CGRect?
+        if CFGetTypeID(values[6]) == AXValueGetTypeID(), CFGetTypeID(values[7]) == AXValueGetTypeID(),
+           AXValueGetType(values[6] as! AXValue) == .cgPoint, AXValueGetType(values[7] as! AXValue) == .cgSize {
+            var point = CGPoint.zero, size = CGSize.zero
+            guard AXValueGetValue(values[6] as! AXValue, .cgPoint, &point), AXValueGetValue(values[7] as! AXValue, .cgSize, &size) else { throw unavailable }
+            let actual = CGRect(origin: point, size: size)
+            guard AccessibilityMenuScope.validBounds(actual) else { throw unavailable }; bounds = actual
+        }
+        var editable = DarwinBoolean(false)
+        let settable = AXUIElementIsAttributeSettable(native, kAXValueAttribute as CFString, &editable) == .success && editable.boolValue
+        guard HelperLifecycle.processIdentity(process.pid) == process else { throw unavailable }
+        let shortcut = role == "AXMenuItem"
+            ? decodeMenuShortcut(character: values[8], modifiers: values[9], virtualKey: values[10], glyph: values[11])
+            : (shortcut: Optional<[String]>.none, complete: true)
+        return AccessibilityMenuAttributes(role: role, subrole: subrole, name: name, bounds: bounds,
+            enabled: boolean(values[4]) ?? false, focused: boolean(values[5]) ?? false, editable: settable,
+            menuShortcut: shortcut.shortcut, shortcutComplete: shortcut.complete)
+    }
+    static func decodeMenuShortcut(character: CFTypeRef, modifiers: CFTypeRef, virtualKey: CFTypeRef,
+                                   glyph: CFTypeRef) -> (shortcut: [String]?, complete: Bool) {
+        func number(_ raw: CFTypeRef, _ maximum: Int) -> Int? {
+            guard CFGetTypeID(raw) == CFNumberGetTypeID(), let value = raw as? NSNumber,
+                  value.doubleValue.isFinite, value.doubleValue >= 0, value.doubleValue <= Double(maximum),
+                  value.doubleValue.rounded() == value.doubleValue else { return nil }
+            return value.intValue
+        }
+        func noValue(_ raw: CFTypeRef) -> Bool {
+            guard CFGetTypeID(raw) == AXValueGetTypeID(), AXValueGetType(raw as! AXValue) == .axError else { return false }
+            var error = AXError.success
+            return AXValueGetValue(raw as! AXValue, .axError, &error) && error == .noValue
+        }
+        let observed = completeString(character, limit: 32)
+        if (observed == "" || noValue(character)), noValue(virtualKey), (noValue(glyph) || number(glyph, 65535) == 0) {
+            return (nil, true)
+        }
+        guard let flags = number(modifiers, 15) else { return (nil, false) }
+        let key: String?
+        if let observed, !observed.isEmpty {
+            let controls = ["\r": "enter", "\n": "enter", "\t": "tab", "\u{1b}": "escape", " ": "space", "\u{7f}": "backspace"]
+            if let control = controls[observed] { key = control }
+            else if observed.count == 1, MacAppIdentity.safeName(observed) {
+                key = observed.utf8.count == 1 ? observed.lowercased() : observed
+            } else { return (nil, false) }
+        } else if let code = number(virtualKey, 127) { key = InputNative.menuKeyName(UInt16(code)) }
+        else { key = nil }
+        guard let key else { return (nil, false) }
+        var combo: [String] = []
+        if flags & 8 == 0 { combo.append("cmd") }
+        if flags & 1 != 0 { combo.append("shift") }
+        if flags & 2 != 0 { combo.append("alt") }
+        if flags & 4 != 0 { combo.append("ctrl") }
+        combo.append(key)
+        return (combo, true)
+    }
+    static func containingWindow(_ element: AccessibilityElement) throws -> AccessibilityElement? { try containingWindow(element, timeout: 0.05) }
+    private static func containingWindow(_ element: AccessibilityElement, timeout: Float) throws -> AccessibilityElement? {
+        let native = try handle(element), process = try witness(native)
+        guard AXUIElementSetMessagingTimeout(native, timeout) == .success else { throw unavailable }
         var raw: CFTypeRef?
         let result = AXUIElementCopyAttributeValue(native, kAXWindowAttribute as CFString, &raw)
         if result == .attributeUnsupported || result == .noValue {
@@ -130,21 +245,27 @@ enum AccessibilityNative {
         if result == .actionUnsupported { return false }
         guard result == .success else { throw unavailable }; return true
     }
-    static func setValue(_ element: AccessibilityElement, _ value: String) throws -> Bool {
+    static func setValue(_ element: AccessibilityElement, _ value: String) throws -> Bool { try setValue(element, value, timeout: 0.05) }
+    private static func setValue(_ element: AccessibilityElement, _ value: String, timeout: Float) throws -> Bool {
         guard value.utf16.count <= 4000 else { throw unavailable }
         let native = try handle(element)
+        guard AXUIElementSetMessagingTimeout(native, timeout) == .success else { throw unavailable }
         guard try !secure(native) else { throw secureField }
         let result = AXUIElementSetAttributeValue(native, kAXValueAttribute as CFString, value as CFString)
         if result == .attributeUnsupported || result == .notImplemented { return false }
         guard result == .success else { throw unavailable }; return true
     }
-    static func document(_ element: AccessibilityElement) throws -> String? {
+    static func document(_ element: AccessibilityElement) throws -> String? { try document(element, timeout: 0.05) }
+    private static func document(_ element: AccessibilityElement, timeout: Float) throws -> String? {
         let native = try handle(element), process = try witness(native)
+        guard AXUIElementSetMessagingTimeout(native, timeout) == .success else { throw unavailable }
         var raw: CFTypeRef?
         var result = AXUIElementCopyAttributeValue(native, kAXDocumentAttribute as CFString, &raw)
         if result == .attributeUnsupported || result == .noValue {
-            guard let window = try containingWindow(element), !AccessibilityElement.equivalent(element, window) else { return nil }
-            result = AXUIElementCopyAttributeValue(try handle(window), kAXDocumentAttribute as CFString, &raw)
+            guard let window = try containingWindow(element, timeout: timeout), !AccessibilityElement.equivalent(element, window) else { return nil }
+            let parent = try handle(window)
+            guard AXUIElementSetMessagingTimeout(parent, timeout) == .success else { throw unavailable }
+            result = AXUIElementCopyAttributeValue(parent, kAXDocumentAttribute as CFString, &raw)
         }
         if result == .attributeUnsupported || result == .noValue { return nil }
         guard result == .success, let raw, let url = documentURL(raw),
@@ -153,6 +274,65 @@ enum AccessibilityNative {
         let path = String(cString: resolved)
         return HelperLifecycle.processIdentity(process.pid) == process && MacAppIdentity.canonicalPathShape(path) ? path : nil
     }
+    static var textBackend: AccessibilityTextBackend {
+        AccessibilityTextBackend(attributes: textDescribe, state: textState,
+            focused: { try focused($0, timeout: 0.002) }, window: { try containingWindow($0, timeout: 0.002) },
+            bounds: textBounds, document: { try document($0, timeout: 0.002) },
+            setValue: { try setValue($0, $1, timeout: 0.002) }, setSelection: textSetSelection)
+    }
+    private static func textBounds(_ element: AccessibilityElement) throws -> CGRect {
+        let native = try handle(element), process = try witness(native)
+        guard AXUIElementSetMessagingTimeout(native, 0.002) == .success else { throw unavailable }
+        var raw: CFArray?
+        guard AXUIElementCopyMultipleAttributeValues(native, [kAXRoleAttribute, kAXPositionAttribute, kAXSizeAttribute] as CFArray, [], &raw) == .success,
+              let values = raw as? [AnyObject], values.count == 3, token(values[0]) == "AXWindow",
+              CFGetTypeID(values[1]) == AXValueGetTypeID(), CFGetTypeID(values[2]) == AXValueGetTypeID(),
+              AXValueGetType(values[1] as! AXValue) == .cgPoint, AXValueGetType(values[2] as! AXValue) == .cgSize else { throw unavailable }
+        var point = CGPoint.zero, size = CGSize.zero
+        guard AXValueGetValue(values[1] as! AXValue, .cgPoint, &point), AXValueGetValue(values[2] as! AXValue, .cgSize, &size),
+              HelperLifecycle.processIdentity(process.pid) == process else { throw unavailable }
+        let bounds = CGRect(origin: point, size: size)
+        guard CapturePrivacy.valid(bounds) else { throw unavailable }; return bounds
+    }
+    private static func textState(_ element: AccessibilityElement) throws -> AccessibilityTextState? {
+        let native = try handle(element), process = try witness(native)
+        guard AXUIElementSetMessagingTimeout(native, 0.002) == .success else { throw unavailable }
+        guard try !secure(native) else { throw secureField }
+        var raw: CFArray?
+        guard AXUIElementCopyMultipleAttributeValues(native, [kAXValueAttribute, kAXSelectedTextRangeAttribute] as CFArray, [], &raw) == .success,
+              let values = raw as? [AnyObject], values.count == 2,
+              CFGetTypeID(values[0]) == CFStringGetTypeID(), CFGetTypeID(values[1]) == AXValueGetTypeID(),
+              AXValueGetType(values[1] as! AXValue) == .cfRange else { return nil }
+        let string = values[0] as! CFString, count = CFStringGetLength(string)
+        guard count >= 0, count <= 4000 else { return nil }
+        var units = [UInt16](repeating: 0, count: count)
+        if count > 0 { units.withUnsafeMutableBufferPointer { CFStringGetCharacters(string, CFRange(location: 0, length: count), $0.baseAddress!) } }
+        guard AccessibilityTextEdit.validUnicode(units) else { return nil }
+        var range = CFRange(location: 0, length: 0)
+        guard AXValueGetValue(values[1] as! AXValue, .cfRange, &range), range.location >= 0, range.length >= 0,
+              range.location <= count, range.length <= count - range.location else { return nil }
+        var valueSettable = DarwinBoolean(false), rangeSettable = DarwinBoolean(false)
+        let first = AXUIElementIsAttributeSettable(native, kAXValueAttribute as CFString, &valueSettable)
+        let second = AXUIElementIsAttributeSettable(native, kAXSelectedTextRangeAttribute as CFString, &rangeSettable)
+        guard try !secure(native), HelperLifecycle.processIdentity(process.pid) == process else { throw secureField }
+        return AccessibilityTextState(value: String(decoding: units, as: UTF16.self),
+            selection: AccessibilitySelection(location: range.location, length: range.length),
+            valueSettable: first == .success && valueSettable.boolValue,
+            selectionSettable: second == .success && rangeSettable.boolValue)
+    }
+    private static func textSetSelection(_ element: AccessibilityElement, _ selection: AccessibilitySelection) throws -> Bool {
+        guard selection.location >= 0, selection.location <= 4000, selection.length >= 0,
+              selection.length <= 4000 - selection.location else { throw unavailable }
+        let native = try handle(element)
+        guard AXUIElementSetMessagingTimeout(native, 0.002) == .success else { throw unavailable }
+        guard try !secure(native) else { throw secureField }
+        var range = CFRange(location: selection.location, length: selection.length)
+        guard let value = AXValueCreate(.cfRange, &range) else { throw unavailable }
+        let result = AXUIElementSetAttributeValue(native, kAXSelectedTextRangeAttribute as CFString, value)
+        if result == .attributeUnsupported || result == .notImplemented { return false }
+        guard result == .success else { throw unavailable }; return true
+    }
+
     static func prepareWake(_ app: AccessibilityElement, _ owner: NativeOwner) throws -> AccessibilityWake? {
         guard owner.identity.verified, let team = owner.identity.teamId,
               let running = NSRunningApplication(processIdentifier: owner.process.pid),
@@ -169,7 +349,7 @@ enum AccessibilityNative {
         guard AXUIElementCopyAttributeValue(native, "AXManualAccessibility" as CFString, &raw) == .success,
               let raw, boolean(raw) == false else { return nil }
         let state = WakeState(native: native, process: owner.process)
-        return AccessibilityWake(apply: state.apply, restore: state.restore)
+        return AccessibilityWake(apply: state.apply, restore: state.restore, restoreVerified: state.restoreVerified)
     }
     private static func handle(_ element: AccessibilityElement) throws -> AXUIElement {
         guard let native = element.native, CFGetTypeID(native) == AXUIElementGetTypeID(),
@@ -295,15 +475,26 @@ enum AccessibilityNative {
             return applied
         }
 
-        func restore() {
+        func restore() { _ = restoreVerified() }
+        func restoreVerified() -> Bool {
             lock.lock(); defer { lock.unlock() }
-            guard !restored else { return }
-            restored = true
-            guard attempted, current() else { return }
+            if restored { return true }
+            if !attempted { restored = true; return true }
+            if HelperLifecycle.processIdentity(process.pid) != process { restored = true; return true }
+            guard current() else { return false }
             var raw: CFTypeRef?
             guard AXUIElementCopyAttributeValue(native, "AXManualAccessibility" as CFString, &raw) == .success,
-                  let raw, AccessibilityNative.boolean(raw) == true, current() else { return }
+                  let raw, let original = AccessibilityNative.boolean(raw), current() else { return false }
+            if !original { restored = true; return true }
             _ = AXUIElementSetAttributeValue(native, "AXManualAccessibility" as CFString, kCFBooleanFalse)
+            guard current() else {
+                if HelperLifecycle.processIdentity(process.pid) != process { restored = true; return true }
+                return false
+            }
+            var verified: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(native, "AXManualAccessibility" as CFString, &verified) == .success,
+                  let verified, AccessibilityNative.boolean(verified) == false, current() else { return false }
+            restored = true; return true
         }
     }
     private static func boolean(_ raw: CFTypeRef) -> Bool? {

@@ -12,6 +12,8 @@ struct ServerReply {
 }
 
 struct ServerSession {
+  /// One accepted begin, preserved through phase updates and never reconstructed from reusable wire IDs.
+  let runEpoch = UUID()
   /// Wire ids/revisions may be reused; native observations belong to one accepted authority snapshot.
   var observationEpoch = UUID()
   let id: String

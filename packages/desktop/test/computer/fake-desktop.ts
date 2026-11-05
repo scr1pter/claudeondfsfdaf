@@ -141,6 +141,12 @@ export interface FakeNode {
   readonly editable: boolean
   /** A button's effect when pressed. */
   readonly press?: string
+  subrole?: string
+  enabled?: boolean
+  document?: string
+  documentStatus?: "known" | "unknown" | "none"
+  /** Models a native bounded decoder which could not prove that the label was complete. */
+  nameComplete?: boolean
 }
 
 export interface FakeWindow {
@@ -153,6 +159,8 @@ export interface FakeWindow {
   /** Windows only: the class `ComputerApps` keys taskbar, desktop and console windows by. */
   readonly windowClass?: string
   readonly nodes: FakeNode[]
+  onScreen?: boolean
+  spaceWitness?: string
 }
 
 export interface FakeApp {
@@ -163,6 +171,21 @@ export interface FakeApp {
   readonly regular: boolean
   running: boolean
   focused?: string
+  /** App-owned AX menus exist even when the app has no WindowServer window. */
+  readonly menus: FakeMenuNode[]
+  readonly menuActions: string[]
+}
+
+export interface FakeMenuNode {
+  readonly id: string
+  readonly role: "AXMenuBar" | "AXMenuBarItem" | "AXMenuItem"
+  name: string
+  menuPath: string[]
+  menuShortcut?: string[]
+  bounds?: Rect
+  enabled: boolean
+  secure: boolean
+  nameComplete?: boolean
 }
 
 export interface FakeDisplay {
@@ -582,6 +605,29 @@ export function createDesktop(input: { platform?: Platform; scenario?: Scenario 
         pid: seed.pid,
         regular: seed.regular ?? true,
         running: seed.running ?? true,
+        menus:
+          platform === "macos" && seed.regular !== false
+            ? [
+                { id: `${seed.slot}.menu`, role: "AXMenuBar", name: "", menuPath: [], enabled: true, secure: false },
+                {
+                  id: `${seed.slot}.menu.file`,
+                  role: "AXMenuBarItem",
+                  name: "File",
+                  menuPath: ["File"],
+                  enabled: true,
+                  secure: false,
+                },
+                {
+                  id: `${seed.slot}.menu.new`,
+                  role: "AXMenuItem",
+                  name: "New",
+                  menuPath: ["File", "New"],
+                  enabled: true,
+                  secure: false,
+                },
+              ]
+            : [],
+        menuActions: [],
       },
     ]),
   )
@@ -649,6 +695,26 @@ export function createDesktop(input: { platform?: Platform; scenario?: Scenario 
     window: (windowId: string) => windows.find((window) => window.windowId === windowId),
     appOf: (window: FakeWindow) => apps.get(window.app)!,
     windowsOf: (slot: string) => windows.filter((window) => window.app === slot),
+    /** Close actual model windows without inventing a window for the app's remaining AXMenuBar. */
+    closeWindows(slot: string) {
+      for (let index = windows.length - 1; index >= 0; index--)
+        if (windows[index]!.app === slot) windows.splice(index, 1)
+      const app = apps.get(slot)
+      if (app) app.focused = app.menus[0]?.id
+      state.generation++
+    },
+    focusMenu(slot: string, id: string) {
+      const app = apps.get(slot)
+      if (!app?.menus.some((item) => item.id === id)) return
+      app.focused = id
+      state.generation++
+    },
+    pressMenu(app: FakeApp, item: FakeMenuNode) {
+      if (!app.running || !app.menus.includes(item) || !item.enabled || item.role === "AXMenuBar") return false
+      app.menuActions.push(item.id)
+      state.generation++
+      return true
+    },
     /** Windows on screen, front first. */
     stack: () => windows.filter((window) => !window.minimized && apps.get(window.app)!.running),
     frontmost: () => apps.get(state.frontmost)!,

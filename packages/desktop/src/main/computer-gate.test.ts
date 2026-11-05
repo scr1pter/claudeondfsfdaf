@@ -3,7 +3,7 @@ import { createHash } from "node:crypto"
 import { ComputerSensitive } from "@vectordevai/core/computer/sensitive"
 import { Computer } from "@vectordevai/schema/computer"
 import { ComputerApps } from "@vectordevai/schema/computer-apps"
-import { checkStep, typeChecked, type GateContext } from "./computer-gate"
+import { checkStep, inspectHit, typeChecked, type GateContext } from "./computer-gate"
 import { createComputerGrants, type GrantScope } from "./computer-grants"
 import { access, defaultPrefs, resolve, type AppGrants } from "./computer-settings"
 import { defaultPolicy } from "./computer-policy"
@@ -183,14 +183,26 @@ async function fixture() {
     const metadata: Computer.SensitiveAskMetadata = {
       action: step.kind === "type" || step.kind === "key" || step.kind === "drag" ? step.kind : "click",
       why,
-      target: {
-        appName: hit.owner.name,
-        appKey: Computer.appKey(hit.owner),
-        windowId: hit.windowId,
-        pid: hit.owner.pid,
-        ...(hit.ref ? { ref: hit.ref } : {}),
-        ...(hit.elementId ? { elementId: hit.elementId } : {}),
-      },
+      target:
+        hit.scope === "app-menu"
+          ? {
+              scope: "app-menu",
+              appName: hit.owner.name,
+              appKey: Computer.appKey(hit.owner),
+              pid: hit.pid,
+              ref: hit.ref,
+              elementId: hit.elementId,
+              menuPath: hit.menuPath,
+              ...(hit.menuShortcut ? { menuShortcut: hit.menuShortcut } : {}),
+            }
+          : {
+              appName: hit.owner.name,
+              appKey: Computer.appKey(hit.owner),
+              windowId: hit.windowId,
+              pid: hit.owner.pid,
+              ...(hit.ref ? { ref: hit.ref } : {}),
+              ...(hit.elementId ? { elementId: hit.elementId } : {}),
+            },
       ...(hit.name ? { targetName: Computer.clean(hit.name, Computer.LIMITS.labelChars) } : {}),
       ...(ctx.frame ? { frame: ctx.frame.id } : {}),
       ...(why === "paste" ? { clipboardHash: createHash("sha256").update(state.clipboard.text).digest("hex") } : {}),
@@ -805,4 +817,80 @@ test("a background quiet barrier runs before consuming a sensitive approval", as
   fake.ctx.beforeInput = undefined
   expect(await checkStep(CLICK, fake.ctx)).toMatchObject({ verdict: "ok" })
   expect(fake.grants.peekSensitive("per_quiet", SCOPE)).toBeUndefined()
+})
+
+const MENU: Computer.HitResult = {
+  scope: "app-menu",
+  owner: APP,
+  pid: 10,
+  ref: "ui_99",
+  elementId: "menu_element",
+  role: "AXMenuItem",
+  name: "New",
+  menuPath: ["File", "New"],
+  enabled: true,
+  editable: false,
+  secure: false,
+}
+const MENU_CLICK: Computer.Step = { kind: "click", at: { ref: "ui_99" }, button: "left", count: 1, modifiers: [] }
+
+test("a windowless menu uses its real owner and never borrows a window or globally focused target", async () => {
+  const fake = await fixture()
+  fake.state.hit = MENU
+  fake.ctx.background = true
+  fake.ctx.frame = undefined
+  const result = await checkStep(MENU_CLICK, fake.ctx)
+  expect(result).toMatchObject({ verdict: "ok", inspect: { scope: "app-menu", pid: 10, menuPath: ["File", "New"] } })
+  if (result.verdict !== "ok" || result.waiting) throw new Error("Missing menu inspection")
+  expect(Object.hasOwn(result.inspect, "window")).toBe(false)
+  expect(fake.state.calls).toEqual([])
+  expect(inspectHit({ ...MENU, windowId: "borrowed" } as Computer.HitResult, "general", "public_ref")).toBeUndefined()
+})
+
+test("menu roots stay read-only and localized unsafe shortcuts cannot be pressed", async () => {
+  const fake = await fixture()
+  fake.state.hit = { ...MENU, role: "AXMenuBar", name: "", menuPath: [] }
+  expect(await checkStep(MENU_CLICK, fake.ctx)).toMatchObject({ verdict: "refuse", code: "blocked" })
+  fake.state.hit = {
+    ...MENU,
+    name: "Inspecteur Web",
+    menuPath: ["Développement", "Inspecteur Web"],
+    menuShortcut: ["Command", "Option", "i"],
+  }
+  expect(await checkStep(MENU_CLICK, fake.ctx)).toMatchObject({ verdict: "refuse", code: "blocked" })
+})
+
+test("localized paste reads the actual clipboard and binds its menu consent", async () => {
+  const fake = await fixture()
+  fake.state.hit = { ...MENU, name: "Coller", menuPath: ["Édition", "Coller"], menuShortcut: ["Command", "v"] }
+  expect(await checkStep(MENU_CLICK, fake.ctx)).toMatchObject({
+    verdict: "pending",
+    why: "paste",
+    inspect: { clipboard: { text: fake.state.clipboard.text } },
+  })
+  await fake.sensitive("per_menu_paste", MENU_CLICK, "paste")
+  expect(fake.grants.peekSensitive("per_menu_paste", SCOPE)).toBeDefined()
+  fake.ctx.approvals = [{ index: 0, requestID: "per_menu_paste" }]
+  expect(await checkStep(MENU_CLICK, fake.ctx)).toMatchObject({ verdict: "ok" })
+  expect(fake.grants.peekSensitive("per_menu_paste", SCOPE)).toBeUndefined()
+})
+
+test("background text sends one complete insertion and does not consult global focus", async () => {
+  const fake = await fixture()
+  fake.state.hit = { ...fake.state.hit, role: "AXTextArea", name: "Body", editable: true }
+  fake.ctx.background = true
+  const text = "🙂e\u0301".repeat(40)
+  const sent: string[] = []
+  expect(
+    await typeChecked(
+      { kind: "type", ref: "ui_1", text },
+      fake.ctx,
+      async (part) => {
+        sent.push(part)
+      },
+      2,
+    ),
+  ).toMatchObject({ verdict: "ok" })
+  expect(sent).toEqual([text])
+  expect(fake.state.calls.filter((call) => call.op === "focused")).toEqual([])
 })

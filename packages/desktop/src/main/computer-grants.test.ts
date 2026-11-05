@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { createHash } from "node:crypto"
+import { Schema } from "effect"
 import { ComputerSensitive } from "@vectordevai/core/computer/sensitive"
 import { ComputerProgram } from "@vectordevai/core/computer/program"
 import { Computer } from "@vectordevai/schema/computer"
@@ -23,7 +24,9 @@ const APP: Computer.AppIdentity = {
 }
 const SCOPE: GrantScope = { rootSessionID: "ses_root", sessionID: "ses_root", directory: "/repo", lease: 1 }
 const STEP: Computer.Step = { kind: "click", button: "left", count: 1, at: { x: 20, y: 30 }, modifiers: [] }
-const INSPECT: Computer.InspectResult = {
+type WindowInspect = Exclude<Computer.InspectResult, { readonly scope: "app-menu" }>
+type MenuInspect = Extract<Computer.InspectResult, { readonly scope: "app-menu" }>
+const INSPECT: WindowInspect = {
   app: APP,
   category: "general",
   pid: 10,
@@ -31,6 +34,29 @@ const INSPECT: Computer.InspectResult = {
   element: { ref: "ui_1", role: "AXButton", label: "Send", secure: false, enabled: true, editable: false },
   clipboard: { agentOwned: true },
 }
+const MENU_STEP: Computer.Step = { ...STEP, at: { ref: "ui_1" } }
+function menuInspect(menuPath: readonly string[] = ["File", "Send"]): MenuInspect {
+  const value = Schema.decodeUnknownSync(Computer.InspectResult, { onExcessProperty: "error" })({
+    scope: "app-menu",
+    app: APP,
+    category: "general",
+    pid: 10,
+    menuPath,
+    element: {
+      ref: "ui_1",
+      elementId: "native-menu-1",
+      role: "AXMenuItem",
+      label: "Send",
+      secure: false,
+      enabled: true,
+      editable: false,
+    },
+    clipboard: { agentOwned: true },
+  })
+  if (value.scope !== "app-menu") throw new Error("Expected a native menu observation")
+  return value
+}
+const MENU_INSPECT = menuInspect()
 
 function appMetadata(identity = APP, extra: Partial<Computer.AppAskMetadata> = {}): Computer.AppAskMetadata {
   if (identity.platform === "remote") throw new Error("No remote app fixture")
@@ -66,6 +92,23 @@ function sensitiveMetadata(extra: Partial<Computer.SensitiveAskMetadata> = {}): 
     stepDigest: ComputerSensitive.digest(STEP),
     ...extra,
   }
+}
+
+function menuMetadata(extra: Partial<Computer.SensitiveAskMetadata> = {}): Computer.SensitiveAskMetadata {
+  return sensitiveMetadata({
+    target: {
+      scope: "app-menu",
+      appKey: Computer.appKey(APP),
+      appName: APP.name,
+      pid: 10,
+      ref: "ui_1",
+      elementId: "native-menu-1",
+      menuPath: ["File", "Send"],
+    },
+    frame: undefined,
+    stepDigest: ComputerSensitive.digest(MENU_STEP),
+    ...extra,
+  })
 }
 
 function asked(
@@ -689,6 +732,302 @@ describe("desktop-observed app consent", () => {
 })
 
 describe("once-only sensitive consent", () => {
+  test("an observed menu element spends exact consent once without granting an app or needing a fabricated frame", async () => {
+    const fake = fixture()
+    await fake.answerSensitive("per_menu_once", menuMetadata())
+    expect(
+      fake.manager.consumeSensitive("per_menu_once", SCOPE, MENU_STEP, MENU_INSPECT, undefined, "send", false),
+    ).toBe(true)
+    expect(
+      fake.manager.consumeSensitive("per_menu_once", SCOPE, MENU_STEP, MENU_INSPECT, undefined, "send", false),
+    ).toBe(true)
+    expect(fake.manager.grants(SCOPE).task.size).toBe(0)
+    expect(fake.manager.consumeSensitive("per_menu_once", SCOPE, MENU_STEP, MENU_INSPECT, undefined, "send")).toBe(true)
+    expect(fake.manager.consumeSensitive("per_menu_once", SCOPE, MENU_STEP, MENU_INSPECT, undefined, "send")).toBe(
+      false,
+    )
+  })
+
+  test("menu consent binds the actual PID reference element and complete parent path", async () => {
+    const fake = fixture()
+    await fake.answerSensitive("per_menu_identity", menuMetadata())
+    for (const inspect of [
+      { ...MENU_INSPECT, pid: 11, app: { ...MENU_INSPECT.app, pid: 11 } },
+      { ...MENU_INSPECT, app: { ...MENU_INSPECT.app, pid: 11 } },
+      { ...MENU_INSPECT, app: { ...MENU_INSPECT.app, bundleId: "com.example.Other" } },
+      { ...MENU_INSPECT, element: { ...MENU_INSPECT.element, ref: "ui_2" } },
+      { ...MENU_INSPECT, element: { ...MENU_INSPECT.element, elementId: "native-menu-2" } },
+      { ...MENU_INSPECT, element: { ...MENU_INSPECT.element, label: "Delete" } },
+      menuInspect(["Message", "Send"]),
+      menuInspect(["Send"]),
+      menuInspect(["File", "Send", "Other"]),
+      menuInspect([]),
+    ])
+      expect(fake.manager.consumeSensitive("per_menu_identity", SCOPE, MENU_STEP, inspect, undefined, "send")).toBe(
+        false,
+      )
+    expect(fake.manager.consumeSensitive("per_menu_identity", SCOPE, MENU_STEP, MENU_INSPECT, undefined, "send")).toBe(
+      true,
+    )
+  })
+
+  test("menu ancestry is byte-exact rather than a Unicode-normalized alias", async () => {
+    const fake = fixture()
+    const observed = menuInspect(["Café", "Send"])
+    const metadata = menuMetadata()
+    if (metadata.target.scope !== "app-menu") throw new Error("Expected menu consent")
+    metadata.target.menuPath = ["Café", "Send"]
+    await fake.answerSensitive("per_menu_unicode", metadata)
+    expect(
+      fake.manager.consumeSensitive(
+        "per_menu_unicode",
+        SCOPE,
+        MENU_STEP,
+        menuInspect(["Cafe\u0301", "Send"]),
+        undefined,
+        "send",
+      ),
+    ).toBe(false)
+    expect(fake.manager.consumeSensitive("per_menu_unicode", SCOPE, MENU_STEP, observed, undefined, "send")).toBe(true)
+  })
+
+  test("menu consent also binds observed shortcut presence aliases order and every key", async () => {
+    const fake = fixture(),
+      metadata = menuMetadata()
+    if (metadata.target.scope !== "app-menu") throw new Error("Expected menu consent")
+    metadata.target.menuShortcut = ["Command", "s"]
+    await fake.answerSensitive("per_menu_shortcut", metadata)
+    for (const menuShortcut of [undefined, ["Meta", "s"], ["s", "Command"], ["Command", "r"]])
+      expect(
+        fake.manager.consumeSensitive(
+          "per_menu_shortcut",
+          SCOPE,
+          MENU_STEP,
+          { ...MENU_INSPECT, menuShortcut },
+          undefined,
+          "send",
+        ),
+      ).toBe(false)
+    expect(
+      fake.manager.consumeSensitive(
+        "per_menu_shortcut",
+        SCOPE,
+        MENU_STEP,
+        { ...MENU_INSPECT, menuShortcut: ["Command", "s"] },
+        undefined,
+        "send",
+      ),
+    ).toBe(true)
+    await fake.answerSensitive("per_menu_no_shortcut", menuMetadata())
+    expect(
+      fake.manager.consumeSensitive(
+        "per_menu_no_shortcut",
+        SCOPE,
+        MENU_STEP,
+        { ...MENU_INSPECT, menuShortcut: ["Command", "s"] },
+        undefined,
+        "send",
+      ),
+    ).toBe(false)
+    expect(
+      fake.manager.consumeSensitive("per_menu_no_shortcut", SCOPE, MENU_STEP, MENU_INSPECT, undefined, "send"),
+    ).toBe(true)
+  })
+
+  test("a menu proof retains the exact digest action frame reason and scope checks", async () => {
+    const fake = fixture()
+    await fake.answerSensitive("per_menu_step", menuMetadata({ frame: "observed-frame" }))
+    expect(
+      fake.manager.consumeSensitive(
+        "per_menu_step",
+        SCOPE,
+        { ...MENU_STEP, count: 2 },
+        MENU_INSPECT,
+        "observed-frame",
+        "send",
+      ),
+    ).toBe(false)
+    expect(fake.manager.consumeSensitive("per_menu_step", SCOPE, MENU_STEP, MENU_INSPECT, undefined, "send")).toBe(
+      false,
+    )
+    expect(
+      fake.manager.consumeSensitive("per_menu_step", SCOPE, MENU_STEP, MENU_INSPECT, "observed-frame", "delete"),
+    ).toBe(false)
+    for (const scope of [
+      { ...SCOPE, lease: 2 },
+      { ...SCOPE, sessionID: "ses_child" },
+      { ...SCOPE, rootSessionID: "ses_other" },
+      { ...SCOPE, directory: "/other" },
+    ])
+      expect(
+        fake.manager.consumeSensitive("per_menu_step", scope, MENU_STEP, MENU_INSPECT, "observed-frame", "send"),
+      ).toBe(false)
+    expect(
+      fake.manager.consumeSensitive("per_menu_step", SCOPE, MENU_STEP, MENU_INSPECT, "observed-frame", "send"),
+    ).toBe(true)
+    await fake.answerSensitive("per_menu_wrong_action", menuMetadata({ action: "type" }))
+    expect(
+      fake.manager.consumeSensitive("per_menu_wrong_action", SCOPE, MENU_STEP, MENU_INSPECT, undefined, "send"),
+    ).toBe(false)
+  })
+
+  test("window and menu approvals cannot migrate across scopes even when the native IDs match", async () => {
+    const fake = fixture()
+    const window = { ...INSPECT, element: { ...INSPECT.element!, elementId: "native-menu-1" } }
+    await fake.answerSensitive(
+      "per_window_to_menu",
+      sensitiveMetadata({
+        target: {
+          appKey: Computer.appKey(APP),
+          appName: APP.name,
+          pid: 10,
+          windowId: "window-1",
+          ref: "ui_1",
+          elementId: "native-menu-1",
+        },
+        frame: undefined,
+        stepDigest: ComputerSensitive.digest(MENU_STEP),
+      }),
+    )
+    expect(fake.manager.consumeSensitive("per_window_to_menu", SCOPE, MENU_STEP, MENU_INSPECT, undefined, "send")).toBe(
+      false,
+    )
+    expect(fake.manager.consumeSensitive("per_window_to_menu", SCOPE, MENU_STEP, window, undefined, "send")).toBe(true)
+    await fake.answerSensitive("per_menu_to_window", menuMetadata())
+    expect(fake.manager.consumeSensitive("per_menu_to_window", SCOPE, MENU_STEP, window, undefined, "send")).toBe(false)
+    expect(fake.manager.consumeSensitive("per_menu_to_window", SCOPE, MENU_STEP, MENU_INSPECT, undefined, "send")).toBe(
+      true,
+    )
+  })
+
+  test("menu Paste consent still binds the complete current clipboard", async () => {
+    const fake = fixture(),
+      original = "Shared prefix ".repeat(8) + "original"
+    const metadata = menuMetadata({
+      why: "paste",
+      targetName: "Paste",
+      clipboardHash: createHash("sha256").update(original).digest("hex"),
+    })
+    if (metadata.target.scope !== "app-menu") throw new Error("Expected menu consent")
+    metadata.target.menuPath = ["Edit", "Paste"]
+    const observed = { ...menuInspect(["Edit", "Paste"]), element: { ...MENU_INSPECT.element, label: "Paste" } }
+    await fake.answerSensitive("per_menu_paste", metadata)
+    for (const clipboard of [
+      { agentOwned: false },
+      { agentOwned: false, text: "Shared prefix ".repeat(8) + "changed" },
+    ])
+      expect(
+        fake.manager.consumeSensitive(
+          "per_menu_paste",
+          SCOPE,
+          MENU_STEP,
+          { ...observed, clipboard },
+          undefined,
+          "paste",
+        ),
+      ).toBe(false)
+    expect(
+      fake.manager.consumeSensitive(
+        "per_menu_paste",
+        SCOPE,
+        MENU_STEP,
+        { ...observed, clipboard: { agentOwned: false, text: original } },
+        undefined,
+        "paste",
+      ),
+    ).toBe(true)
+  })
+
+  test("a projected menu path cannot mutate the stored proof and non-once replies never approve menus", async () => {
+    const fake = fixture()
+    await fake.answerSensitive("per_menu_copy", menuMetadata())
+    const snapshot = fake.manager.peekSensitive("per_menu_copy", SCOPE)!
+    if (snapshot.target.scope !== "app-menu") throw new Error("Expected menu consent")
+    snapshot.target.menuPath = ["Changed", "Send"]
+    expect(
+      fake.manager.consumeSensitive(
+        "per_menu_copy",
+        SCOPE,
+        MENU_STEP,
+        menuInspect(["Changed", "Send"]),
+        undefined,
+        "send",
+      ),
+    ).toBe(false)
+    expect(fake.manager.consumeSensitive("per_menu_copy", SCOPE, MENU_STEP, MENU_INSPECT, undefined, "send")).toBe(true)
+    for (const reply of ["always", "reject"] as const) {
+      await fake.answerSensitive(`per_menu_${reply}`, menuMetadata(), reply)
+      expect(
+        fake.manager.consumeSensitive(`per_menu_${reply}`, SCOPE, MENU_STEP, MENU_INSPECT, undefined, "send"),
+      ).toBe(false)
+    }
+  })
+
+  test("malformed root app-only hybrid and program-key menu asks never become proof records", async () => {
+    const fake = fixture(),
+      valid = menuMetadata()
+    for (const [index, target] of [
+      { ...valid.target, menuPath: [] },
+      { ...valid.target, menuPath: [""] },
+      { ...valid.target, pid: undefined },
+      { ...valid.target, ref: undefined },
+      { ...valid.target, elementId: undefined },
+      { ...valid.target, menuPath: undefined },
+      { ...valid.target, windowId: "window-1" },
+      { ...valid.target, scope: undefined },
+      { ...valid.target, appKey: "program:macos:" + "a".repeat(64) },
+      { ...sensitiveMetadata().target, menuPath: ["File", "Send"] },
+    ].entries()) {
+      const id = `per_menu_malformed_${index}`,
+        event = asked(id, valid)
+      await fake.manager.observe({
+        ...event,
+        payload: {
+          ...event.payload,
+          properties: {
+            ...(event.payload.properties as Record<string, unknown>),
+            metadata: JSON.parse(JSON.stringify({ ...valid, target })),
+          },
+        },
+      })
+      await fake.manager.observe(replied(id, "once"))
+      expect(fake.manager.peekSensitive(id, SCOPE)).toBeUndefined()
+      expect(fake.manager.consumeSensitive(id, SCOPE, MENU_STEP, MENU_INSPECT, undefined, "send")).toBe(false)
+    }
+  })
+
+  test("menu proofs cannot become legacy program launches or survive a reused task scope", async () => {
+    const fake = fixture()
+    await fake.answerSensitive(
+      "per_menu_program",
+      menuMetadata({ why: "run_program", path: "/Applications/Writer.app" }),
+    )
+    expect(
+      fake.manager.consumeSensitive(
+        "per_menu_program",
+        SCOPE,
+        MENU_STEP,
+        { ...MENU_INSPECT, programPath: "/Applications/Writer.app" },
+        undefined,
+        "run_program",
+      ),
+    ).toBe(false)
+    await fake.answerSensitive("per_menu_reused", menuMetadata())
+    fake.manager.endTask(SCOPE.rootSessionID, SCOPE.directory)
+    fake.manager.beginTask(SCOPE)
+    expect(fake.manager.consumeSensitive("per_menu_reused", SCOPE, MENU_STEP, MENU_INSPECT, undefined, "send")).toBe(
+      false,
+    )
+    await fake.answerSensitive("per_menu_reused", menuMetadata())
+    expect(fake.manager.consumeSensitive("per_menu_reused", SCOPE, MENU_STEP, MENU_INSPECT, undefined, "send")).toBe(
+      false,
+    )
+    await fake.answerSensitive("per_menu_fresh", menuMetadata())
+    expect(fake.manager.consumeSensitive("per_menu_fresh", SCOPE, MENU_STEP, MENU_INSPECT, undefined, "send")).toBe(
+      true,
+    )
+  })
+
   test("dry runs do not spend a proof; execution spends it exactly once", async () => {
     const fake = fixture()
     await fake.answerSensitive("per_sensitive")

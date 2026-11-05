@@ -443,20 +443,60 @@ export const SensitiveWhy = Schema.Literals([
 ]).annotate({ identifier: "Computer.SensitiveWhy" })
 export type SensitiveWhy = typeof SensitiveWhy.Type
 
-/** Metadata of a `computer_sensitive` ask: answered by a person every time, never Always. */
-export interface SensitiveAskMetadata extends Schema.Schema.Type<typeof SensitiveAskMetadata> {}
-export const SensitiveAskMetadata = Schema.Struct({
-  action: Schema.Literals(["click", "type", "key", "drag", "open"]),
-  why: SensitiveWhy,
-  target: Schema.Struct({
+/** Observed menu ancestry. An empty path denotes the read-only AXMenuBar root. */
+export const MenuPath = Schema.Array(
+  Safe(256).check(
+    Schema.isMinLength(1),
+    Schema.makeFilter((value) => !/[\p{C}\p{Zl}\p{Zp}]/u.test(value), { expected: "a complete visible menu label" }),
+  ),
+).check(Schema.isMaxLength(30))
+export type MenuPath = typeof MenuPath.Type
+/** Actual AX command-character/modifier observation, never a proposed model shortcut. */
+export const MenuShortcut = Schema.Array(KeyName).check(Schema.isLengthBetween(1, 8))
+export type MenuShortcut = typeof MenuShortcut.Type
+const ActionMenuPath = MenuPath.check(Schema.isMinLength(1))
+const NoMenuWindowFields = {
+  window: optional(Schema.Never),
+  windowId: optional(Schema.Never),
+  windowTitle: optional(Schema.Never),
+}
+
+export const SensitiveAskTarget = Schema.Union([
+  Schema.Struct({
+    scope: optional(Schema.Literal("window")),
+    menuShortcut: optional(Schema.Never),
     appName: Safe(256),
     appKey: Schema.Union([AppKey, ProgramKey]),
-    /** Observed target identity for the desktop's live, once-only proof check. */
     windowId: optional(Id),
     pid: optional(PositiveInt),
     ref: optional(UiRef),
     elementId: optional(Id),
   }),
+  Schema.Struct({
+    scope: Schema.Literal("app-menu"),
+    ...NoMenuWindowFields,
+    appName: Safe(256),
+    appKey: AppKey,
+    pid: PositiveInt,
+    ref: UiRef,
+    elementId: Id,
+    menuPath: ActionMenuPath,
+    menuShortcut: optional(MenuShortcut),
+  }).check(
+    Schema.makeFilter((value) => parseAppKey(value.appKey)?.platform === "macos", {
+      expected: "an actual macOS menu owner",
+    }),
+  ),
+]).annotate({ identifier: "Computer.SensitiveAskTarget" })
+export type SensitiveAskTarget = typeof SensitiveAskTarget.Type
+
+/** Metadata of a `computer_sensitive` ask: answered by a person every time, never Always. */
+export interface SensitiveAskMetadata extends Schema.Schema.Type<typeof SensitiveAskMetadata> {}
+export const SensitiveAskMetadata = Schema.Struct({
+  action: Schema.Literals(["click", "type", "key", "drag", "open"]),
+  why: SensitiveWhy,
+  /** Menu consent binds an actual observed element; it never grants an entire app-only surface. */
+  target: SensitiveAskTarget,
   /** A verified accessibility label, shown quoted. */
   targetName: optional(Safe(LIMITS.labelChars)),
   /** The exact text to be typed, or the first characters of a paste. */
@@ -779,24 +819,8 @@ export const Frame = Schema.Struct({
   hash: Hash,
 }).annotate({ identifier: "Computer.Frame" })
 
-/** Screen-derived strings here are untrusted data. */
-export interface InspectResult extends Schema.Schema.Type<typeof InspectResult> {}
-export const InspectResult = Schema.Struct({
-  app: AppIdentity,
-  category: AppCategory,
-  pid: PositiveInt,
-  window: Schema.Struct({ id: Id, title: optional(Bounded(1024)) }),
-  element: optional(
-    Schema.Struct({
-      role: Bounded(64),
-      ref: optional(UiRef),
-      elementId: optional(Id),
-      label: optional(Bounded(1024)),
-      secure: Schema.Boolean,
-      enabled: Schema.Boolean,
-      editable: Schema.Boolean,
-    }),
-  ),
+/** Shared observations remain addressable when InspectResult is a scope union. */
+export const InspectObservationFields = {
   document: optional(Path),
   /** `none` is a positive native observation of a non-file editor, not a missing document lookup. */
   documentStatus: optional(Schema.Literals(["none", "known", "unknown"])),
@@ -835,11 +859,48 @@ export const InspectResult = Schema.Struct({
   /** Canonical executable or script path resolved at the actual target. */
   programPath: optional(Path),
   elevated: optional(Schema.Boolean),
-}).annotate({ identifier: "Computer.InspectResult" })
+}
+
+const InspectElementFields = {
+  role: Bounded(64),
+  ref: optional(UiRef),
+  elementId: optional(Id),
+  label: optional(Bounded(1024)),
+  secure: Schema.Boolean,
+  enabled: Schema.Boolean,
+  editable: Schema.Boolean,
+}
+const AppMenuIdentity = Schema.Struct({ ...MacIdentity.fields, pid: PositiveInt })
+
+/** Screen-derived strings here are untrusted data. Menus never invent a containing window. */
+export const InspectResult = Schema.Union([
+  Schema.Struct({
+    ...InspectObservationFields,
+    scope: optional(Schema.Literal("window")),
+    menuShortcut: optional(Schema.Never),
+    app: AppIdentity,
+    category: AppCategory,
+    pid: PositiveInt,
+    window: Schema.Struct({ id: Id, title: optional(Bounded(1024)) }),
+    element: optional(Schema.Struct(InspectElementFields)),
+  }),
+  Schema.Struct({
+    ...InspectObservationFields,
+    scope: Schema.Literal("app-menu"),
+    ...NoMenuWindowFields,
+    app: AppMenuIdentity,
+    category: AppCategory,
+    pid: PositiveInt,
+    menuPath: MenuPath,
+    menuShortcut: optional(MenuShortcut),
+    bounds: optional(Rect),
+    element: Schema.Struct({ ...InspectElementFields, ref: UiRef, elementId: Id }),
+  }).check(Schema.makeFilter((value) => value.pid === value.app.pid, { expected: "the actual menu app process" })),
+]).annotate({ identifier: "Computer.InspectResult" })
+export type InspectResult = typeof InspectResult.Type
 
 /** A node from `read_ui`. Screen-derived and untrusted; `value` is never set for secure fields. */
-export interface UiNode extends Schema.Schema.Type<typeof UiNode> {}
-export const UiNode = Schema.Struct({
+const UiNodeFields = {
   ref: UiRef,
   role: Bounded(64),
   name: optional(Bounded(1024)),
@@ -848,7 +909,20 @@ export const UiNode = Schema.Struct({
   bounds: optional(Rect),
   enabled: Schema.Boolean,
   secure: Schema.Boolean,
-}).annotate({ identifier: "Computer.UiNode" })
+}
+export const UiNode = Schema.Union([
+  Schema.Struct({ ...UiNodeFields, scope: optional(Schema.Literal("window")), menuShortcut: optional(Schema.Never) }),
+  Schema.Struct({
+    ...UiNodeFields,
+    ...NoMenuWindowFields,
+    scope: Schema.Literal("app-menu"),
+    pid: PositiveInt,
+    elementId: Id,
+    menuPath: MenuPath,
+    menuShortcut: optional(MenuShortcut),
+  }),
+]).annotate({ identifier: "Computer.UiNode" })
+export type UiNode = typeof UiNode.Type
 
 const Button = Schema.Literals(["left", "right", "middle"])
 const Modifiers = Schema.Array(KeyName).check(Schema.isMaxLength(8))
@@ -1350,26 +1424,42 @@ export const TreeRequest = Schema.Union([
 export type TreeRequest = typeof TreeRequest.Type
 
 export interface TreeResult extends Schema.Schema.Type<typeof TreeResult> {}
+const TreeNodeFields = {
+  ref: Id,
+  role: Bounded(64),
+  subrole: optional(Bounded(64)),
+  name: Bounded(1024),
+  value: optional(Bounded(4096)),
+  enabled: Schema.Boolean,
+  focused: Schema.Boolean,
+  secure: Schema.Boolean,
+}
 export const TreeResult = Schema.Struct({
   generation: NonNegativeInt,
   truncated: Schema.Boolean,
   nodes: Schema.Array(
-    Schema.Struct({
-      ref: Id,
-      role: Bounded(64),
-      subrole: optional(Bounded(64)),
-      name: Bounded(1024),
-      value: optional(Bounded(4096)),
-      bounds: Rect,
-      enabled: Schema.Boolean,
-      focused: Schema.Boolean,
-      secure: Schema.Boolean,
-    }),
+    Schema.Union([
+      Schema.Struct({
+        ...TreeNodeFields,
+        scope: optional(Schema.Literal("window")),
+        bounds: Rect,
+        menuShortcut: optional(Schema.Never),
+      }),
+      Schema.Struct({
+        ...TreeNodeFields,
+        ...NoMenuWindowFields,
+        scope: Schema.Literal("app-menu"),
+        pid: PositiveInt,
+        elementId: Id,
+        menuPath: MenuPath,
+        bounds: optional(Rect),
+        menuShortcut: optional(MenuShortcut),
+      }),
+    ]),
   ),
 }).annotate({ identifier: "Computer.TreeResult" })
 
-export interface HitResult extends Schema.Schema.Type<typeof HitResult> {}
-export const HitResult = Schema.Struct({
+const HitResultFields = {
   ref: optional(Id),
   /** Stable native element identity within this helper session, even when a fresh ref has a newer generation. */
   elementId: optional(Id),
@@ -1378,18 +1468,38 @@ export const HitResult = Schema.Struct({
   secure: Schema.Boolean,
   enabled: optional(Schema.Boolean),
   editable: optional(Schema.Boolean),
-  owner: AppIdentity,
-  windowId: WindowId,
   signals: optional(Schema.Struct({ childShell: optional(Schema.Boolean), windowClass: optional(Bounded(256)) })),
-  windowTitle: optional(Bounded(1024)),
   elevated: optional(Schema.Boolean),
   /** Helper-observed context, never model assertions. Missing observations do not waive live gates. */
   document: optional(Path),
-  documentStatus: InspectResult.fields.documentStatus,
+  documentStatus: InspectObservationFields.documentStatus,
   programPath: optional(Path),
-  layout: InspectResult.fields.layout,
-  focusedMenuShortcuts: InspectResult.fields.focusedMenuShortcuts,
-}).annotate({ identifier: "Computer.HitResult" })
+  layout: InspectObservationFields.layout,
+  focusedMenuShortcuts: InspectObservationFields.focusedMenuShortcuts,
+}
+export const HitResult = Schema.Union([
+  Schema.Struct({
+    ...HitResultFields,
+    scope: optional(Schema.Literal("window")),
+    owner: AppIdentity,
+    windowId: WindowId,
+    windowTitle: optional(Bounded(1024)),
+    menuShortcut: optional(Schema.Never),
+  }),
+  Schema.Struct({
+    ...HitResultFields,
+    ...NoMenuWindowFields,
+    scope: Schema.Literal("app-menu"),
+    owner: AppMenuIdentity,
+    pid: PositiveInt,
+    ref: Id,
+    elementId: Id,
+    menuPath: MenuPath,
+    bounds: optional(Rect),
+    menuShortcut: optional(MenuShortcut),
+  }).check(Schema.makeFilter((value) => value.pid === value.owner.pid, { expected: "the actual menu app process" })),
+]).annotate({ identifier: "Computer.HitResult" })
+export type HitResult = typeof HitResult.Type
 
 /**
  * Input ops. Each is atomic in the helper: the ownership check and the posting happen in one call, and held keys and

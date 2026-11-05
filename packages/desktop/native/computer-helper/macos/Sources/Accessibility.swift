@@ -29,6 +29,7 @@ struct AccessibilityAttributes {
     var enabled = true
     var focused = false
     var editable = false
+    var nameComplete = true
     var secure: Bool { NativeIdentityReader.isSecure(role: role, subrole: subrole) }
 }
 
@@ -40,6 +41,7 @@ struct AccessibilityChildren {
 struct AccessibilityWake {
     let apply: () -> Bool
     let restore: () -> Void
+    var restoreVerified: (() -> Bool)? = nil
 }
 
 struct AccessibilityBackend {
@@ -66,6 +68,11 @@ struct AccessibilityBackend {
     var keyboardLayout: (() -> [String: JSONValue]?)? = nil
     var menuShortcuts: ((InputObservation, ServerSession) throws -> [InputMenuShortcut]?)? = nil
     var hostResolver: HostOwnershipResolver? = nil
+    var menuRoot: ((AccessibilityElement) throws -> AccessibilityElement?)? = nil
+    var parent: ((AccessibilityElement) throws -> AccessibilityElement?)? = nil
+    var menuDescribe: ((AccessibilityElement) throws -> AccessibilityMenuAttributes)? = nil
+    var menuPerform: ((AccessibilityElement, String) throws -> Bool)? = nil
+    var text: AccessibilityTextBackend? = nil
 
     static var system: AccessibilityBackend {
         var backend = AccessibilityBackend(preflight: { AXIsProcessTrusted() }, windows: AccessibilityNative.windows,
@@ -82,6 +89,11 @@ struct AccessibilityBackend {
         backend.keyboardLayout = InputNative.layoutWire
         backend.menuShortcuts = InputNative.menusWire
         backend.hostResolver = HostOwnershipResolver()
+        backend.menuRoot = AccessibilityNative.menuRoot
+        backend.parent = AccessibilityNative.menuParent
+        backend.menuDescribe = AccessibilityNative.menuDescribe
+        backend.menuPerform = AccessibilityNative.menuPerform
+        backend.text = AccessibilityNative.textBackend
         return backend
     }
 }
@@ -95,7 +107,15 @@ final class AccessibilityService {
     private let now: () -> UInt64
     private let lock = NSLock()
     private var closed = false
-    private var restoration: (() -> Void)?
+    private struct WakeEntry {
+        let token: UUID
+        let owner: NativeOwner
+        let runEpoch: UUID
+        let restore: () -> Bool
+        var retiring = false
+    }
+    private var wakeRun: UUID?
+    private var wakes: [UUID: WakeEntry] = [:]
     private static let actions: Set<String> = ["AXPress", "AXIncrement", "AXDecrement", "AXScrollToVisible", "AXShowMenu", "AXRaise", "AXConfirm", "AXCancel"]
 
     init(captures: CaptureRegistry = CaptureRegistry(), backend: AccessibilityBackend = .system,
@@ -136,12 +156,40 @@ final class AccessibilityService {
     }
 
     /// Called under the dispatcher's authority lock: no AX call, process lookup or restoration runs here.
-    func invalidateObservations() { registry.clear() }
+    func invalidateObservations(hard: Bool = false) { if hard { registry.clear() } else { registry.suspendObservations() } }
+
+    /// Called by the authority hook. It only changes private metadata; restoration is a separate drain.
+    func noteSession(_ session: ServerSession?) {
+        registry.noteSession(session)
+        lock.lock(); wakeRun = session?.runEpoch; lock.unlock()
+    }
+
+    func retireWakes(session: ServerSession?) {
+        let policy = session.flatMap { try? SessionPolicy(session: $0) }
+        lock.lock()
+        guard wakeRun == session?.runEpoch else { lock.unlock(); return }
+        var tokens: [UUID] = []
+        for (token, var entry) in wakes {
+            if closed || entry.runEpoch != session?.runEpoch || policy?.disclosure(entry.owner) != .content {
+                entry.retiring = true; wakes[token] = entry; tokens.append(token)
+            }
+        }
+        lock.unlock()
+        guard !tokens.isEmpty else { return }
+        execute { [self] in drainWakes(tokens) }
+    }
+
+    func wakeCleanupComplete() -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return !wakes.values.contains(where: { $0.retiring })
+    }
 
     func close() {
-        lock.lock(); closed = true; let restore = restoration; restoration = nil; lock.unlock()
-        registry.close()
-        restore?()
+        lock.lock(); closed = true; wakeRun = nil
+        let tokens = Array(wakes.keys)
+        for token in tokens { wakes[token]?.retiring = true }
+        lock.unlock()
+        registry.close(); drainWakes(tokens)
     }
 
     func tree(_ args: [String: JSONValue], context: OperationContext, completion: @escaping Dispatcher.Completion) {
@@ -171,7 +219,20 @@ final class AccessibilityService {
                 }
                 if selected.count > 128 { throw Self.unavailable }
             }
-            guard !selected.isEmpty, selected.count <= 128 else { throw Self.failure("app_not_found", "The native app window is unavailable.") }
+            var menuOwners: [NativeOwner] = []
+            if self.backend.menuRoot != nil {
+                if let pid = requestedPID {
+                    let owner = try self.backend.owner(pid)
+                    try policy.requireTarget(NativeTarget(owner: owner), operation: .observe)
+                    menuOwners.append(owner)
+                } else {
+                    for (_, target) in selected {
+                        let owner = target.grantOwner
+                        if !menuOwners.contains(where: { $0.process == owner.process }) { menuOwners.append(owner) }
+                    }
+                }
+            }
+            guard (!selected.isEmpty || !menuOwners.isEmpty), selected.count <= 128 else { throw Self.failure("app_not_found", "The native app window is unavailable.") }
             let snapshot = try self.publish(context) { try self.registry.beginSnapshot(session: session) }
             var result: [JSONValue] = []
             var truncated = nodes > 400 || depth > 30 || selectionTruncated
@@ -182,7 +243,6 @@ final class AccessibilityService {
                 var current = observed
                 try policy.requireTarget(current, operation: .observe)
                 let root: AccessibilityElement
-                defer { self.restoreWake() }
                 if let hosted = current.hosted {
                     root = hosted.physicalRoot
                     // The retained remote subtree is complete evidence; client-side chrome outside it is omitted.
@@ -209,7 +269,8 @@ final class AccessibilityService {
                         try policy.requireTarget(current, operation: .observe)
                         let attributes = try self.attributes(element)
                         let witness = self.witness(window, current.owner, hosted: current.hosted)
-                        let reference = try self.publish(context) { try self.registry.register(element: element, witness: witness, snapshot: snapshot) }
+                        let reference = try self.publish(context) { try self.registry.register(element: element, witness: witness, snapshot: snapshot,
+                            facts: self.receiptFacts(attributes, owner: current.grantOwner)) }
                         var fields: [String: JSONValue] = ["ref": .string(reference.ref), "role": .string(AccessibilityContent.sanitize(attributes.role, limit: 64)),
                             "name": .string(AccessibilityContent.sanitize(attributes.name)), "bounds": Self.rect(attributes.bounds),
                             "enabled": .bool(attributes.enabled), "focused": .bool(attributes.focused), "secure": .bool(attributes.secure)]
@@ -232,6 +293,11 @@ final class AccessibilityService {
                 }
                 try self.recheck(window, owner: current.owner, context: context, hosted: current.hosted)
             }
+            for owner in menuOwners {
+                if result.count >= limit || self.now() >= deadline { truncated = true; break }
+                try self.menuTree(owner, session: session, policy: policy, context: context, snapshot: snapshot,
+                    limit: limit, maxDepth: maxDepth, deadline: deadline, result: &result, truncated: &truncated)
+            }
             try self.requireCurrent(context)
             return ServerReply(fields: ["generation": .integer(Int64(snapshot.generation)), "truncated": .bool(truncated), "nodes": .array(result)])
         }
@@ -244,6 +310,7 @@ final class AccessibilityService {
             let frame = try self.captures.get(id, sessionID: session.id, observationEpoch: session.observationEpoch, phaseRevision: session.revision)
             let point = try frame.point(x: x, y: y)
             let windows = try self.catalog()
+            if frame.windowID == nil, let menu = try self.menuAtPoint(point, session: session, policy: policy, context: context) { return menu }
             let window: CaptureWindowInfo
             if let id = frame.windowID {
                 guard let current = windows.first(where: { $0.windowID == id }), current.bounds == frame.windowFrame,
@@ -313,6 +380,9 @@ final class AccessibilityService {
                 return try self.hit(element, window: window, owner: proof.physicalOwner, session: session,
                                     policy: policy, context: context, hosted: proof)
             }
+            if self.backend.menuRoot != nil, let _ = try? self.menuProof(element, owner: owner, context: context) {
+                return try self.hitMenu(element, owner: owner, session: session, policy: policy, context: context)
+            }
             let matches: [CaptureWindowInfo]
             if let containing = self.backend.containingWindow {
                 guard let root = try containing(element) else { throw Self.unavailable }
@@ -332,11 +402,19 @@ final class AccessibilityService {
     func resolve(_ args: [String: JSONValue], context: OperationContext, completion: @escaping Dispatcher.Completion) {
         run(context, completion) { session, policy in
             guard Set(args.keys) == ["ref"], let ref = Self.id(args["ref"]) else { throw Self.invalid }
-            let record = try self.registry.resolve(ref, session: session)
-            let (window, target) = try self.preparedTarget(record.witness, session: session, context: context)
+            let record: AccessibilityReference<AccessibilityElement>
+            let refreshing: Bool
+            if let active = try? self.registry.resolve(ref, session: session) { record = active; refreshing = false }
+            else { record = try self.registry.receipt(ref, session: session); refreshing = true }
+            if record.witness.menu != nil {
+                let owner = try self.backend.owner(record.witness.process.pid)
+                guard owner.process == record.witness.process else { throw Self.stale }
+                return try self.hitMenu(record.element, owner: owner, session: session, policy: policy, context: context, reference: record, refreshing: refreshing)
+            }
+            let (window, target) = try self.preparedTarget(record.witness, session: session, context: context, receipt: refreshing)
             try policy.requireTarget(target, operation: .observe)
             return try self.hit(record.element, window: window, owner: target.owner, session: session, policy: policy,
-                                context: context, reference: record, hosted: target.hosted)
+                                context: context, reference: record, hosted: target.hosted, refreshing: refreshing)
         }
     }
 
@@ -345,6 +423,128 @@ final class AccessibilityService {
     }
     func setValue(_ args: [String: JSONValue], context: OperationContext, completion: @escaping Dispatcher.Completion) {
         mutate(args, context: context, completion: completion, setting: true)
+    }
+
+    /// Background typing preserves the complete observed UTF-16 selection; it is never a replacement guess.
+    func insertText(_ args: [String: JSONValue], context: OperationContext, completion: @escaping Dispatcher.Completion) {
+        run(context, completion) { session, policy in
+            let allowed: Set<String> = ["ref", "pid", "windowId", "elementId", "text", "sessionId", "phaseRevision"]
+            guard Set(args.keys).isSubset(of: allowed), let ref = Self.id(args["ref"]),
+                  let pid = Self.pidArgument(args["pid"]), let inserted = args["text"]?.stringValue,
+                  (1...4000).contains(inserted.utf16.count),
+                  args["elementId"] == nil || Self.id(args["elementId"]) != nil else { throw Self.invalid }
+            guard Self.validPhase(args, session: session) else { throw Self.changed }
+            let record = try self.registry.resolve(ref, session: session)
+            guard record.witness.menu == nil else { throw Self.failure("blocked", "App menus cannot receive text edits.") }
+            if let window = args["windowId"] {
+                guard let requested = Self.id(window), requested == record.witness.windowID else { throw Self.stale }
+            }
+            guard let text = self.backend.text else { throw Self.needsForeground }
+            let expected = NativeExpectedTarget(pid: Int(pid), process: record.witness.process, windowID: record.witness.windowID,
+                ref: ref, elementID: args["elementId"]?.stringValue)
+            let prepared: TextObservation
+            let original: AccessibilityTextState
+            do {
+                prepared = try self.textObservation(record, text: text, session: session, policy: policy,
+                    expected: expected, context: context)
+                guard let state = try text.state(record.element), state.valueSettable, state.selectionSettable else { throw Self.needsForeground }
+                original = state
+            } catch let error as ServerFailure {
+                if ["unavailable", "unsupported_action"].contains(error.code) { throw Self.needsForeground }
+                throw error
+            }
+            guard let desired = AccessibilityTextEdit.insert(inserted, into: original) else { throw Self.needsForeground }
+            try self.requireAccess(context)
+            let currentTarget = try self.refreshed(prepared.target, window: prepared.window, session: session, context: context)
+            var attempted = false, wrote = false, selected = false, uncertain = false
+            var failure: ServerFailure?
+            guard context.withCurrent({
+                do {
+                    let started = self.now(), (deadline, overflow) = started.addingReportingOverflow(50_000_000)
+                    guard !overflow else { throw Self.changed }
+                    let live = try self.textObservation(record, text: text, session: session, policy: policy,
+                        expected: expected, context: context, prepared: currentTarget, root: prepared.root)
+                    guard live.facts == prepared.facts, let state = try text.state(record.element),
+                          state.valueSettable, state.selectionSettable, state.sameContent(original) else { throw Self.changed }
+                    let final = try self.textObservation(record, text: text, session: session, policy: policy,
+                        expected: expected, context: context, prepared: live.target, root: prepared.root)
+                    guard final.facts == prepared.facts, self.now() < deadline else { throw Self.changed }
+                    try self.requireAccess(context)
+                    attempted = true
+                    wrote = try text.setValue(record.element, desired.value)
+                    if wrote { selected = try text.setSelection(record.element, desired.selection) }
+                } catch {
+                    uncertain = attempted
+                    failure = attempted ? Self.changed : Self.failure(error)
+                }
+            }) else { throw Self.changed }
+            if let failure, !attempted { throw failure }
+            // No readback is allowed under stale authority or after a field becomes secure. Every failure after
+            // an attempted write is changed, so callers cannot type the same text again as a blind fallback.
+            do {
+                try self.requireAccess(context)
+                _ = try self.textObservation(record, text: text, session: session, policy: policy,
+                    expected: expected, context: context, root: prepared.root)
+                guard let after = try text.state(record.element) else { throw Self.changed }
+                _ = try self.textObservation(record, text: text, session: session, policy: policy,
+                    expected: expected, context: context, root: prepared.root)
+                try self.requireAccess(context)
+                if uncertain { throw Self.changed }
+                if wrote && selected && after.sameContent(desired) { return ServerReply() }
+                if after.sameContent(original) { throw Self.needsForeground }
+                throw Self.changed
+            } catch let error as ServerFailure {
+                if error.code == "needs_foreground" && !uncertain { throw error }
+                throw Self.changed
+            } catch { throw Self.changed }
+        }
+    }
+
+    private struct TextObservation {
+        let window: CaptureWindowInfo
+        let target: NativeTarget
+        let root: AccessibilityElement
+        let facts: AccessibilityReceiptFacts
+    }
+    private func textObservation(_ record: AccessibilityReference<AccessibilityElement>, text: AccessibilityTextBackend,
+                                 session: ServerSession, policy: SessionPolicy, expected: NativeExpectedTarget,
+                                 context: OperationContext, prepared: NativeTarget? = nil,
+                                 root expectedRoot: AccessibilityElement? = nil) throws -> TextObservation {
+        try requireAccess(context)
+        let selection: (CaptureWindowInfo, NativeTarget)
+        if let prepared {
+            let (actual, owner) = try liveTarget(record.witness)
+            guard owner.process == prepared.owner.process, owner.identity == prepared.owner.identity else { throw Self.changed }
+            selection = (actual, NativeTarget(owner: owner, windowID: actual.windowID, hosted: prepared.hosted))
+        } else { selection = try preparedTarget(record.witness, session: session, context: context) }
+        let (window, target) = selection
+        try policy.requireTarget(target, operation: .observe)
+        try requirePID(record.element, target.owner.process.pid)
+        let attributes = try text.attributes(record.element)
+        let bound = NativeTarget(owner: target.owner, windowID: window.windowID, ref: record.ref,
+            elementID: record.elementID, secure: attributes.secure, hosted: target.hosted)
+        try policy.requireTarget(bound, operation: .type, expected: expected)
+        guard attributes.enabled, attributes.editable, attributes.nameComplete else { throw Self.needsForeground }
+        let app = try backend.application(target.grantOwner.process.pid)
+        try requirePID(app, target.grantOwner.process.pid)
+        let focused = try text.focused(app)
+        try requirePID(focused, target.owner.process.pid)
+        guard backend.equal(focused, record.element), let root = try text.window(record.element) else { throw Self.needsForeground }
+        try requirePID(root, target.owner.process.pid)
+        guard expectedRoot.map({ backend.equal($0, root) }) ?? true,
+              try text.bounds(root) == window.bounds else { throw Self.stale }
+        if let hosted = target.hosted {
+            guard backend.equal(root, hosted.physicalRoot) else { throw Self.stale }
+        } else {
+            guard try catalog().filter({ $0.pid == window.pid && $0.bounds == window.bounds }).count == 1 else { throw Self.stale }
+        }
+        let document = try text.document(record.element)
+        let facts = receiptFacts(attributes, owner: target.grantOwner, document: document,
+            status: document == nil ? "unknown" : "known")
+        guard facts.complete, record.facts == facts else { throw Self.stale }
+        _ = try registry.resolve(record.ref, session: session, witness: witness(window, target.owner, hosted: target.hosted))
+        try requireAccess(context)
+        return TextObservation(window: window, target: bound, root: root, facts: facts)
     }
 
     private func mutate(_ args: [String: JSONValue], context: OperationContext, completion: @escaping Dispatcher.Completion, setting: Bool) {
@@ -358,6 +558,9 @@ final class AccessibilityService {
             if !setting && !Self.actions.contains(text) { throw Self.failure("unsupported_action", "This native element action is unavailable.") }
             guard Self.validPhase(args, session: session) else { throw Self.changed }
             let record = try self.registry.resolve(ref, session: session)
+            if record.witness.menu != nil {
+                return try self.mutateMenu(record, text: text, setting: setting, args: args, session: session, policy: policy, context: context)
+            }
             let (initialWindow, prepared) = try self.preparedTarget(record.witness, session: session, context: context)
             try policy.requireTarget(prepared, operation: .observe)
             try self.requireWindow(record.element, initialWindow, context: context, hosted: prepared.hosted)
@@ -408,7 +611,7 @@ final class AccessibilityService {
                     throw Self.failure("secure_field", "The native field cannot expose text.")
                 }
                 try self.requireAccess(context)
-                took = try self.backend.value(record.element) == text
+                took = try self.backend.value(record.element).map { $0.utf8.elementsEqual(text.utf8) } == true
             }
             try self.requirePID(record.element, current.owner.process.pid)
             if current.hosted != nil { try self.requireWindow(record.element, window, context: context, hosted: current.hosted) }
@@ -420,7 +623,7 @@ final class AccessibilityService {
     private func hit(_ element: AccessibilityElement, window: CaptureWindowInfo, owner: NativeOwner,
                      session: ServerSession, policy: SessionPolicy, context: OperationContext,
                      reference: AccessibilityReference<AccessibilityElement>? = nil,
-                     hosted: HostedWindowProof? = nil) throws -> ServerReply {
+                     hosted: HostedWindowProof? = nil, refreshing: Bool = false) throws -> ServerReply {
         let fresh = try refreshed(NativeTarget(owner: owner, windowID: window.windowID, hosted: hosted),
                                   window: window, session: session, context: context)
         let mapping = fresh.hosted
@@ -429,8 +632,11 @@ final class AccessibilityService {
         try requireWindow(element, window, context: context, hosted: mapping)
         let attributes = try self.attributes(element)
         let witness = self.witness(window, owner, hosted: mapping)
-        let record = try publish(context) {
-            if let reference { return try self.registry.resolve(reference.ref, session: session, witness: witness) }
+        var record = try publish(context) {
+            if let reference {
+                if refreshing { return reference }
+                return try self.registry.resolve(reference.ref, session: session, witness: witness)
+            }
             let snapshot = try self.registry.currentSnapshot(session: session)
             return try self.registry.register(element: element, witness: witness, snapshot: snapshot)
         }
@@ -455,7 +661,233 @@ final class AccessibilityService {
         try requirePID(element, owner.process.pid)
         if mapping != nil { try requireWindow(element, window, context: context, hosted: mapping) }
         try recheck(window, owner: owner, context: context, hosted: mapping)
+        let facts = receiptFacts(attributes, owner: mapping?.logicalOwner ?? owner,
+            document: fields["document"]?.stringValue, status: fields["documentStatus"]?.stringValue ?? "unknown")
+        record = try publish(context) {
+            if refreshing { return try registry.refreshReceipt(record, liveElement: element, witness: witness, facts: facts, session: session) }
+            return try registry.recordFacts(record.ref, facts: facts, session: session)
+        }
         return ServerReply(fields: fields)
+    }
+
+    private func receiptFacts(_ attributes: AccessibilityAttributes, owner: NativeOwner,
+                              document: String? = nil, status: String = "unknown") -> AccessibilityReceiptFacts {
+        AccessibilityReceiptFacts(role: attributes.role, subrole: attributes.subrole, name: attributes.name,
+            secure: attributes.secure, enabled: attributes.enabled, editable: attributes.editable,
+            document: document, documentStatus: status, owner: owner.identity, nameComplete: attributes.nameComplete)
+    }
+    private func menuFacts(_ proof: AccessibilityMenuProof, owner: NativeOwner) -> AccessibilityReceiptFacts {
+        AccessibilityReceiptFacts(role: proof.attributes.role, subrole: proof.attributes.subrole, name: proof.attributes.name,
+            secure: proof.attributes.secure, enabled: proof.attributes.enabled, editable: proof.attributes.editable, owner: owner.identity,
+            menuShortcut: proof.attributes.menuShortcut, menuShortcutComplete: proof.attributes.shortcutComplete)
+    }
+    private func sameNativeHost(_ old: HostedWindowProof, _ current: HostedWindowProof) -> Bool {
+        old.physicalOwner.process == current.physicalOwner.process && old.logicalOwner.process == current.logicalOwner.process &&
+            old.physicalOwner.identity == current.physicalOwner.identity && old.logicalOwner.identity == current.logicalOwner.identity &&
+            old.surface == current.surface && old.kind == current.kind &&
+            backend.equal(old.physicalRoot, current.physicalRoot) && backend.equal(old.logicalWindow, current.logicalWindow)
+    }
+
+    private func menuProof(_ element: AccessibilityElement, owner: NativeOwner, context: OperationContext,
+                           root: AccessibilityElement? = nil, budgetMs: UInt64 = 150) throws -> AccessibilityMenuProof {
+        try requireCurrent(context)
+        guard let session = context.session else { throw Self.stale }
+        try SessionPolicy(session: session).requireTarget(NativeTarget(owner: owner), operation: .observe)
+        return try AccessibilityMenuScope.observe(element: element, owner: owner, expectedRoot: root,
+            backend: backend, now: now, isCurrent: context.isCurrent, budgetMs: budgetMs)
+    }
+
+    private func menuTree(_ owner: NativeOwner, session: ServerSession, policy: SessionPolicy, context: OperationContext,
+                          snapshot: AccessibilitySnapshot, limit: Int, maxDepth: Int, deadline: UInt64,
+                          result: inout [JSONValue], truncated: inout Bool) throws {
+        try policy.requireTarget(NativeTarget(owner: owner), operation: .observe)
+        guard let lookup = backend.menuRoot else { return }
+        let app = try backend.application(owner.process.pid)
+        try requirePID(app, owner.process.pid)
+        try wake(app, owner, context: context)
+        guard let root = try lookup(app) else { return }
+        try requirePID(root, owner.process.pid)
+        var queue: [(AccessibilityElement, Int)] = [(root, 1)], visited: [AccessibilityElement] = []
+        var index = 0
+        while index < queue.count {
+            guard result.count < limit, now() < deadline else { truncated = true; break }
+            let (element, depth) = queue[index]; index += 1
+            if visited.contains(where: { backend.equal($0, element) }) { truncated = true; continue }
+            visited.append(element)
+            do {
+                let observedAt = now()
+                guard observedAt < deadline else { truncated = true; break }
+                let proof = try menuProof(element, owner: owner, context: context, root: root,
+                    budgetMs: min(150, max(1, (deadline - observedAt) / 1_000_000)))
+                let witness = AccessibilityWitness(process: owner.process, menu: proof.witness(session: session))
+                let record = try publish(context) { try registry.register(element: element, witness: witness, snapshot: snapshot,
+                    facts: menuFacts(proof, owner: owner)) }
+                var fields = menuFields(proof, owner: owner, record: record)
+                fields.removeValue(forKey: "owner"); fields.removeValue(forKey: "documentStatus"); fields.removeValue(forKey: "editable")
+                fields["focused"] = .bool(proof.attributes.focused)
+                if let subrole = proof.attributes.subrole { fields["subrole"] = .string(subrole) }
+                if proof.attributes.secure { fields["value"] = .string("REDACTED") }
+                result.append(.object(fields))
+                let remaining = max(0, limit - result.count - (queue.count - index))
+                let children = try backend.children(element, depth < maxDepth ? remaining : 0)
+                guard children.elements.count <= remaining || depth >= maxDepth else { throw Self.unavailable }
+                if children.truncated { truncated = true }
+                if depth < maxDepth { queue += children.elements.map { ($0, depth + 1) } }
+            } catch let error as ServerFailure {
+                if error.code == "changed" { throw error }
+                truncated = true
+            }
+        }
+    }
+
+    private func menuFields(_ proof: AccessibilityMenuProof, owner: NativeOwner,
+                            record: AccessibilityReference<AccessibilityElement>) -> [String: JSONValue] {
+        var fields: [String: JSONValue] = ["scope": .string("app-menu"), "pid": .integer(Int64(owner.process.pid)),
+            "owner": owner.identity.wire, "ref": .string(record.ref), "elementId": .string(record.elementID),
+            "menuPath": .array(proof.menuPath.map { .string(AccessibilityContent.sanitize($0, limit: 256)) }),
+            "role": .string(proof.attributes.role), "name": .string(AccessibilityContent.sanitize(proof.attributes.name, limit: 256)),
+            "secure": .bool(proof.attributes.secure), "enabled": .bool(proof.attributes.enabled), "editable": .bool(proof.attributes.editable),
+            "documentStatus": .string("unknown")]
+        if let shortcut = proof.attributes.menuShortcut { fields["menuShortcut"] = .array(shortcut.map(JSONValue.string)) }
+        if let bounds = proof.attributes.bounds { fields["bounds"] = Self.rect(bounds) }
+        return fields
+    }
+
+    private func hitMenu(_ element: AccessibilityElement, owner: NativeOwner, session: ServerSession, policy: SessionPolicy,
+                         context: OperationContext, reference: AccessibilityReference<AccessibilityElement>? = nil,
+                         refreshing: Bool = false) throws -> ServerReply {
+        try policy.requireTarget(NativeTarget(owner: owner), operation: .observe)
+        let proof = try menuProof(element, owner: owner, context: context, root: reference?.witness.menu?.root)
+        let witness = AccessibilityWitness(process: owner.process, menu: proof.witness(session: session))
+        var record = try publish(context) {
+            if let reference {
+                if refreshing { return reference }
+                return try registry.resolve(reference.ref, session: session, witness: witness)
+            }
+            let snapshot = try registry.currentSnapshot(session: session)
+            return try registry.register(element: element, witness: witness, snapshot: snapshot)
+        }
+        let layout = backend.keyboardLayout?()
+        let final = try menuProof(element, owner: owner, context: context, root: proof.root)
+        guard final.witness(session: session) == proof.witness(session: session) else { throw Self.stale }
+        let facts = menuFacts(final, owner: owner)
+        record = try publish(context) {
+            if refreshing { return try registry.refreshReceipt(record, liveElement: element, witness: witness, facts: facts, session: session) }
+            return try registry.recordFacts(record.ref, facts: facts, session: session)
+        }
+        var fields = menuFields(final, owner: owner, record: record)
+        if let layout { fields["layout"] = .object(layout) }
+        try requireCurrent(context)
+        return ServerReply(fields: fields)
+    }
+
+    private func menuAtPoint(_ point: CGPoint, session: ServerSession, policy: SessionPolicy,
+                             context: OperationContext) throws -> ServerReply? {
+        guard let lookup = backend.menuRoot, let describe = backend.menuDescribe,
+              let pid = backend.frontmostPID(), pid > 0 else { return nil }
+        let owner = try backend.owner(pid)
+        guard policy.disclosure(NativeTarget(owner: owner)) == .content else { return nil }
+        let app = try backend.application(pid)
+        try requirePID(app, pid)
+        guard let root = try lookup(app) else { return nil }
+        try requirePID(root, pid)
+        guard let bounds = try describe(root).bounds, bounds.contains(point) else { return nil }
+        let element = try backend.hitTest(app, point)
+        try requirePID(element, pid)
+        guard let proof = try? menuProof(element, owner: owner, context: context, root: root),
+              proof.attributes.bounds.map({ $0.contains(point) }) ?? false,
+              backend.frontmostPID() == pid else { return nil }
+        return try hitMenu(element, owner: owner, session: session, policy: policy, context: context)
+    }
+
+    private func mutateMenu(_ record: AccessibilityReference<AccessibilityElement>, text: String, setting: Bool,
+                            args: [String: JSONValue], session: ServerSession, policy: SessionPolicy,
+                            context: OperationContext) throws -> ServerReply {
+        guard let menu = record.witness.menu, menu.runEpoch == session.runEpoch else { throw Self.stale }
+        let owner = try backend.owner(record.witness.process.pid)
+        guard owner.process == record.witness.process else { throw Self.stale }
+        try policy.requireTarget(NativeTarget(owner: owner), operation: .observe)
+        let prepared = try menuProof(record.element, owner: owner, context: context, root: menu.root)
+        guard prepared.witness(session: session) == menu else { throw Self.stale }
+        let expected = NativeExpectedTarget(pid: Self.pidArgument(args["pid"]).map(Int.init), process: record.witness.process,
+            ref: record.ref, elementID: args["elementId"]?.stringValue)
+        try policy.requireTarget(NativeTarget(owner: owner, ref: record.ref, elementID: record.elementID, secure: prepared.attributes.secure),
+            operation: setting ? .setValue : .pointer, expected: expected)
+        guard MenuSafety.allowed(prepared.menuPath, shortcut: prepared.attributes.menuShortcut) else { throw Self.failure("blocked", "This native menu route is unavailable.") }
+        guard !setting else { throw Self.failure("blocked", "App menus cannot receive text edits.") }
+        if text == "AXPress" {
+            guard prepared.attributes.shortcutComplete else { throw menuFallback(session) }
+            if let shortcut = prepared.attributes.menuShortcut, MenuSafety.requiresTextTarget(shortcut) {
+                try requireMenuTypingTarget(owner: owner, shortcut: shortcut, session: session, policy: policy, context: context)
+                throw menuFallback(session)
+            }
+        }
+        guard record.facts == menuFacts(prepared, owner: owner) else { throw Self.stale }
+        if text == "AXRaise" { throw Self.failure("needs_foreground", "Raising an app needs the foreground.") }
+        var result: Result<Bool, ServerFailure>?
+        guard context.withCurrent({
+            do {
+                let commitStart = self.now(), (commitDeadline, overflow) = commitStart.addingReportingOverflow(50_000_000)
+                guard !overflow else { throw Self.changed }
+                try self.requireAccess(context)
+                let fresh = try self.backend.owner(owner.process.pid)
+                guard fresh.process == owner.process, fresh.identity == owner.identity else { throw Self.stale }
+                try policy.requireTarget(NativeTarget(owner: fresh), operation: .observe)
+                let remainingAt = self.now()
+                guard remainingAt < commitDeadline else { throw Self.failure("timeout", "The native menu validation timed out.") }
+                let proof = try self.menuProof(record.element, owner: fresh, context: context, root: menu.root,
+                    budgetMs: min(50, max(1, (commitDeadline - remainingAt) / 1_000_000)))
+                guard proof.witness(session: session) == menu else { throw Self.stale }
+                try policy.requireTarget(NativeTarget(owner: fresh, ref: record.ref, elementID: record.elementID, secure: proof.attributes.secure),
+                    operation: .pointer, expected: expected)
+                guard MenuSafety.allowed(proof.menuPath, shortcut: proof.attributes.menuShortcut) else { throw Self.failure("blocked", "This native menu route is unavailable.") }
+                guard record.facts == self.menuFacts(proof, owner: fresh) else { throw Self.stale }
+                if text == "AXPress" {
+                    guard proof.attributes.shortcutComplete else { throw self.menuFallback(session) }
+                    if let shortcut = proof.attributes.menuShortcut, MenuSafety.requiresTextTarget(shortcut) {
+                        // The prepared path normally rejects this before the commit; a changed shortcut is never acted upon.
+                        throw self.menuFallback(session)
+                    }
+                }
+                _ = try self.registry.resolve(record.ref, session: session,
+                    witness: AccessibilityWitness(process: fresh.process, menu: proof.witness(session: session)))
+                guard self.now() < commitDeadline else { throw Self.failure("timeout", "The native menu validation timed out.") }
+                try self.requireAccess(context)
+                result = .success(try (self.backend.menuPerform ?? self.backend.perform)(record.element, text))
+            } catch { result = .failure(Self.failure(error)) }
+        }), let result else { throw Self.changed }
+        let took = try result.get()
+        try requireAccess(context)
+        return ServerReply(fields: ["took": .bool(took)])
+    }
+
+    private func menuFallback(_ session: ServerSession) -> ServerFailure {
+        session.mode == "background" ? Self.needsForeground :
+            Self.failure("unsupported_action", "Use the actual focused field for this menu command.")
+    }
+    private func requireMenuTypingTarget(owner: NativeOwner, shortcut: [String], session: ServerSession,
+                                         policy: SessionPolicy, context: OperationContext) throws {
+        guard let text = backend.text else { throw menuFallback(session) }
+        try requireAccess(context)
+        let app = try backend.application(owner.process.pid)
+        try requirePID(app, owner.process.pid)
+        let focused = try text.focused(app)
+        try requirePID(focused, owner.process.pid)
+        let attributes = try text.attributes(focused)
+        let field = NativeTarget(owner: owner, secure: attributes.secure)
+        try policy.requireTarget(field, operation: .observe)
+        guard !attributes.secure else { throw Self.failure("secure_field", "The focused field cannot receive this menu command.") }
+        if MenuSafety.editsText(shortcut) { try policy.requireTarget(field, operation: .setValue) }
+        guard let root = try text.window(focused) else { throw menuFallback(session) }
+        try requirePID(root, owner.process.pid)
+        let bounds = try text.bounds(root)
+        let windows = try catalog().filter { $0.pid == owner.process.pid && $0.bounds == bounds }
+        guard windows.count == 1, let window = windows.first else { throw menuFallback(session) }
+        let target = NativeTarget(owner: owner, windowID: window.windowID, secure: attributes.secure)
+        try policy.requireTarget(target, operation: .observe)
+        guard !attributes.secure else { throw Self.failure("secure_field", "The focused field cannot receive this menu command.") }
+        if MenuSafety.editsText(shortcut) { try policy.requireTarget(target, operation: .setValue) }
+        try requireAccess(context)
     }
 
     private func run(_ context: OperationContext, _ completion: @escaping Dispatcher.Completion,
@@ -493,7 +925,7 @@ final class AccessibilityService {
     }
 
     private func preparedTarget(_ witness: AccessibilityWitness, session: ServerSession,
-                                context: OperationContext) throws -> (CaptureWindowInfo, NativeTarget) {
+                                context: OperationContext, receipt: Bool = false) throws -> (CaptureWindowInfo, NativeTarget) {
         let (window, owner) = try liveTarget(witness)
         guard let old = witness.hosted else {
             return (window, NativeTarget(owner: owner, windowID: window.windowID))
@@ -501,7 +933,8 @@ final class AccessibilityService {
         guard let resolver = backend.hostResolver,
               let fresh = try resolver.resolve(window: window, session: session,
                   logicalPID: old.logicalOwner.process.pid, isCurrent: context.isCurrent),
-              fresh.sameMapping(old), fresh.physicalOwner.process == witness.process else { throw Self.stale }
+              (receipt ? self.sameNativeHost(old, fresh) : fresh.sameMapping(old)),
+              fresh.physicalOwner.process == witness.process else { throw Self.stale }
         return (window, NativeTarget(owner: fresh.physicalOwner, windowID: window.windowID, hosted: fresh))
     }
 
@@ -544,6 +977,7 @@ final class AccessibilityService {
     }
 
     private func liveTarget(_ witness: AccessibilityWitness) throws -> (CaptureWindowInfo, NativeOwner) {
+        guard witness.menu == nil, witness.windowID != nil, witness.windowFrame != nil, witness.onScreen != nil else { throw Self.stale }
         let windows = try catalog().filter { $0.windowID == witness.windowID }
         let surfaceProcess = witness.hosted?.surface.process ?? witness.process
         guard windows.count == 1, let window = windows.first, window.pid == surfaceProcess.pid,
@@ -613,20 +1047,56 @@ final class AccessibilityService {
 
     private func wake(_ app: AccessibilityElement, _ owner: NativeOwner, context: OperationContext) throws {
         try requireAccess(context)
+        guard let session = context.session else { throw Self.changed }
+        lock.lock()
+        let previous = wakes.values.first { $0.owner.process == owner.process }
+        let full = wakes.count >= 32
+        lock.unlock()
+        if let previous {
+            guard previous.runEpoch == session.runEpoch, !previous.retiring else {
+                throw Self.failure("unavailable", "Native accessibility cleanup is pending.")
+            }
+            return
+        }
+        guard !full else { throw Self.failure("unavailable", "The accessibility wake limit was reached.") }
         guard let prepare = backend.prepareWake, let wake = try prepare(app, owner) else { return }
+        let token = UUID()
+        let entry = WakeEntry(token: token, owner: owner, runEpoch: session.runEpoch,
+            restore: wake.restoreVerified ?? { wake.restore(); return true })
         var applied = false
+        var recorded = false
         guard context.withCurrent({
             self.lock.lock(); defer { self.lock.unlock() }
-            guard !self.closed, self.restoration == nil else { return }
-            self.restoration = wake.restore
+            if self.wakeRun == nil && self.wakes.isEmpty { self.wakeRun = session.runEpoch }
+            guard !self.closed, self.wakeRun == session.runEpoch, self.wakes.count < 32,
+                  !self.wakes.values.contains(where: { $0.owner.process == owner.process }) else { return }
+            recorded = true
+            self.wakes[token] = entry // Record the original state before an AX timeout can hide an applied write.
             applied = wake.apply()
+            if !applied { self.wakes[token]?.retiring = true }
         }) else { throw Self.changed }
-        if !applied { restoreWake() }
+        guard recorded else { throw Self.changed }
+        if !applied { drainWakes([token]) }
     }
 
-    private func restoreWake() {
-        lock.lock(); let restore = restoration; restoration = nil; lock.unlock()
-        restore?()
+    private func drainWakes(_ tokens: [UUID]) {
+        let started = now(), (deadline, overflow) = started.addingReportingOverflow(200_000_000)
+        guard !overflow else { return }
+        var pending = tokens, attempts: [UUID: Int] = [:]
+        var index = 0
+        while index < pending.count, now() < deadline {
+            let token = pending[index]; index += 1
+            lock.lock(); let entry = wakes[token]; lock.unlock()
+            guard let entry, entry.retiring else { continue }
+            let restored = entry.restore()
+            lock.lock()
+            if restored, wakes[token]?.token == entry.token { wakes.removeValue(forKey: token) }
+            lock.unlock()
+            if !restored {
+                attempts[token, default: 0] += 1
+                if attempts[token, default: 0] < 3 { pending.append(token) }
+            }
+        }
     }
     private func requireOpen() throws { lock.lock(); defer { lock.unlock() }; if closed { throw Self.changed } }
     private func requireCurrent(_ context: OperationContext) throws { guard context.isCurrent() else { throw Self.changed }; try requireOpen() }
@@ -656,6 +1126,7 @@ final class AccessibilityService {
         guard let number = value?.intValue, number > 0, number <= Int(Int32.max) else { return nil }; return pid_t(number)
     }
     private static func rect(_ value: CGRect) -> JSONValue { .object(["x": .number(value.minX), "y": .number(value.minY), "w": .number(value.width), "h": .number(value.height)]) }
+    private static var needsForeground: ServerFailure { failure("needs_foreground", "This input needs foreground control.") }
     private static var invalid: ServerFailure { failure("failed", "The accessibility arguments are invalid.") }
     private static var unavailable: ServerFailure { failure("unavailable", "The native accessibility target could not be verified.") }
     private static var changed: ServerFailure { failure("changed", "The accessibility operation is no longer current.") }

@@ -58,6 +58,8 @@ describe("standalone native unit diagnostics", () => {
 
   test("registers native service suites with only their synthetic assertion types", async () => {
     const suites = [
+      "runAccessibilityTextTests",
+      "runMenuSafetyTests",
       "runHostOwnershipTests",
       "runProgramLaunchRegistryTests",
       "runAppsTests",
@@ -68,7 +70,16 @@ describe("standalone native unit diagnostics", () => {
     const source = unitDiagnosticMain(suites.map((suite) => `_ = try ${suite}()`).join("\n"))
     expect([...source.matchAll(/_ = try (run\w+Tests)\(\)/g)].map((match) => match[1])).toEqual(suites)
     const failures = await Promise.all(
-      ["HostOwnership", "ProgramLaunchRegistry", "Apps", "Clipboard", "EventTap", "Watchdog"].map(async (name) => {
+      [
+        "AccessibilityText",
+        "MenuSafety",
+        "HostOwnership",
+        "ProgramLaunchRegistry",
+        "Apps",
+        "Clipboard",
+        "EventTap",
+        "Watchdog",
+      ].map(async (name) => {
         const swift = await readFile(
           new URL(`../native/computer-helper/macos/Tests/${name}Tests.swift`, import.meta.url),
           "utf8",

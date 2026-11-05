@@ -1,4 +1,5 @@
 import { ComputerCredential } from "@vectordevai/core/computer/credential"
+import { Schema } from "effect"
 import { ComputerKeys } from "@vectordevai/core/computer/keys"
 import { ComputerSensitive } from "@vectordevai/core/computer/sensitive"
 import { Computer } from "@vectordevai/schema/computer"
@@ -15,6 +16,7 @@ export type GateContext = {
   allowedApps?: readonly string[]
   approvals?: readonly { index: number; requestID: string }[]
   frame?: Computer.Frame
+  background?: boolean
   /** Main's capture registry checks the live native geometry, not a model-provided timestamp. */
   frameCurrent?: (frame: Computer.Frame, hit: Computer.HitResult) => Promise<boolean>
   resolveRef?: (ref: string) => Promise<Computer.HitResult>
@@ -43,6 +45,54 @@ export type GateResult =
     }
   | { verdict: "refuse"; code: Computer.ComputerErrorCode }
   | { verdict: "pending"; kind: "app" | "sensitive"; why?: Computer.SensitiveWhy; inspect: Computer.InspectResult }
+
+/** Menu observations have actual app/element scope; they never borrow a window from another observation. */
+export function inspectHit(
+  hit: Computer.HitResult,
+  category: Computer.InspectResult["category"],
+  ref?: string,
+): Computer.InspectResult | undefined {
+  if (!Schema.is(Computer.HitResult)(hit) || hit.owner.platform === "remote" || !hit.owner.pid) return
+  const element = {
+    role: hit.role,
+    secure: hit.secure,
+    enabled: hit.enabled === true,
+    editable: hit.editable === true,
+    ...(ref ? { ref } : {}),
+    ...(hit.elementId ? { elementId: hit.elementId } : {}),
+    ...(hit.name === undefined ? {} : { label: hit.name }),
+  }
+  const common = {
+    app: hit.owner,
+    category,
+    pid: hit.owner.pid,
+    element,
+    clipboard: { agentOwned: false },
+    ...(hit.document ? { document: hit.document } : {}),
+    ...(hit.documentStatus ? { documentStatus: hit.documentStatus } : {}),
+    ...(hit.programPath ? { programPath: hit.programPath } : {}),
+    ...(hit.layout ? { layout: hit.layout } : {}),
+    ...(hit.focusedMenuShortcuts ? { focusedMenuShortcuts: hit.focusedMenuShortcuts } : {}),
+    ...(hit.elevated ? { elevated: true } : {}),
+  }
+  if (hit.scope === "app-menu") {
+    if (!ref) return
+    return {
+      ...common,
+      app: hit.owner,
+      scope: "app-menu",
+      pid: hit.pid,
+      menuPath: [...hit.menuPath],
+      ...(hit.menuShortcut ? { menuShortcut: [...hit.menuShortcut] } : {}),
+      element: { ...element, ref, elementId: hit.elementId },
+    }
+  }
+  return {
+    ...common,
+    ...(hit.scope === "window" ? { scope: hit.scope } : {}),
+    window: { id: hit.windowId, ...(hit.windowTitle === undefined ? {} : { title: hit.windowTitle }) },
+  }
+}
 
 /** Called for each step, after the preceding step has finished. No inspection supplied by the engine is authoritative. */
 export async function checkStep(step: Computer.Step, ctx: GateContext): Promise<GateResult> {
@@ -77,6 +127,7 @@ export async function checkStep(step: Computer.Step, ctx: GateContext): Promise<
   if (!ctx.grants.isActive(ctx.scope)) return refuse("stopped")
   const inspections: Computer.InspectResult[] = []
   for (const hit of hits) {
+    if (!Schema.is(Computer.HitResult)(hit)) return refuse("changed")
     const signals = { ...ctx.signals?.(hit), ...hit.signals }
     const category = ComputerApps.category(hit.owner, signals)
     if (category === "security" || category === "system-ui") return refuse("protected")
@@ -91,39 +142,23 @@ export async function checkStep(step: Computer.Step, ctx: GateContext): Promise<
       !ctx.allowedApps?.includes(Computer.appKey(hit.owner)) ||
       access.verdict !== "granted" ||
       access.level !== "interact"
-    )
+    ) {
+      // Menu contents require an approved app-scoped AX observation. Approval starts from the app catalog.
+      if (hit.scope === "app-menu") return refuse("not_granted")
       return pending("app", {
         app: hit.owner,
         category,
         pid: hit.owner.pid,
-        window: { id: String(hit.windowId) },
+        window: { id: hit.windowId },
         element: { role: hit.role, secure: hit.secure, enabled: hit.enabled === true, editable: hit.editable === true },
         clipboard: { agentOwned: false },
       })
-    const uiRef = ctx.uiRef?.(hit)
-    if (ref && uiRef !== ref) return refuse("stale_ref")
-    let inspect: Computer.InspectResult = {
-      app: hit.owner,
-      category,
-      pid: hit.owner.pid,
-      window: { id: String(hit.windowId) },
-      element: {
-        role: hit.role,
-        secure: hit.secure,
-        enabled: hit.enabled === true,
-        editable: hit.editable === true,
-        ...(uiRef ? { ref: uiRef } : {}),
-        ...(hit.elementId ? { elementId: hit.elementId } : {}),
-        ...(hit.name === undefined ? {} : { label: hit.name }),
-      },
-      clipboard: { agentOwned: false },
-      ...(hit.document ? { document: hit.document } : {}),
-      ...(hit.documentStatus ? { documentStatus: hit.documentStatus } : {}),
-      ...(hit.programPath ? { programPath: hit.programPath } : {}),
-      ...(hit.layout ? { layout: hit.layout } : {}),
-      ...(hit.focusedMenuShortcuts ? { focusedMenuShortcuts: hit.focusedMenuShortcuts } : {}),
-      ...(hit.elevated ? { elevated: true } : {}),
     }
+    const uiRef = ctx.uiRef?.(hit)
+    const observed = inspectHit(hit, category, uiRef)
+    if (!observed) return refuse("changed")
+    if (ref && uiRef !== ref) return refuse("stale_ref")
+    let inspect = observed
     if (ComputerCredential.field(inspect.element) || (step.kind === "type" && ComputerCredential.secret(step.text)))
       return refuse("secure_field")
     if (step.kind === "type" && (!hit.elementId || !hit.ref || hit.enabled !== true || hit.editable === undefined))
@@ -159,16 +194,19 @@ export async function checkStep(step: Computer.Step, ctx: GateContext): Promise<
   }
   let inspect = inspections.at(-1)!
   // A drag must pass every owner gate. Its final target is authoritative for dropping into Trash, for example.
-  if (step.kind === "key" || step.kind === "type") {
+  if (step.kind === "key" || (step.kind === "type" && !(ctx.background && ref))) {
     // Reference-based text changes still require the actual focused field to agree.
     const focus = await ctx.backend.focused()
     if (!sameTarget(inspect, focus)) return refuse("changed")
   }
-  const apps = await ctx.backend.apps()
-  const title =
-    hits.at(-1)!.windowTitle ??
-    apps.flatMap((app) => app.windows).find((window) => String(window.windowId) === inspect.window.id)?.title
-  if (title !== undefined) inspect = { ...inspect, window: { ...inspect.window, title } }
+  if (inspect.scope !== "app-menu") {
+    const window = inspect.window
+    const apps = await ctx.backend.apps()
+    const title =
+      hits.at(-1)!.windowTitle ??
+      apps.flatMap((app) => app.windows).find((candidate) => String(candidate.windowId) === window.id)?.title
+    if (title !== undefined) inspect = { ...inspect, window: { ...window, title } }
+  }
   if (isPaste(step, inspect)) {
     if (!ctx.clipboard) return refuse("blocked")
     const clipboard = await ctx.clipboard()
@@ -275,6 +313,17 @@ export async function typeChecked(
   if (!Number.isSafeInteger(chunkSize) || chunkSize < 1 || chunkSize > 1024) return refuse("blocked")
   const checked = await checkStep(step, ctx)
   if (checked.verdict !== "ok" || checked.waiting) return checked
+  if (ctx.background) {
+    if (checked.inspect.scope === "app-menu") return refuse("blocked")
+    await ctx.grants.synchronize()
+    if (!ctx.grants.isActive(ctx.scope)) return refuse("stopped")
+    ctx.beforeInput?.(checked.hit)
+    if (!ctx.grants.isActive(ctx.scope)) return refuse("stopped")
+    // The helper proves the complete value and selection before one AX insertion. Splitting text here
+    // would assume that every application preserves its caret after an AXValue replacement.
+    await send(step.text, checked.inspect, checked.hit)
+    return checked
+  }
   const characters = [...step.text]
   for (let offset = 0; offset < characters.length; offset += chunkSize) {
     await ctx.grants.synchronize()
@@ -324,13 +373,24 @@ export async function typeChecked(
 }
 
 function sameTarget(inspect: Computer.InspectResult, hit: Computer.HitResult) {
-  return (
-    hit.owner.platform !== "remote" &&
-    hit.owner.pid === inspect.pid &&
-    Computer.appKey(hit.owner) === Computer.appKey(inspect.app) &&
-    String(hit.windowId) === inspect.window.id &&
-    !hit.elevated
+  if (
+    !(
+      hit.owner.platform !== "remote" &&
+      hit.owner.pid === inspect.pid &&
+      Computer.appKey(hit.owner) === Computer.appKey(inspect.app) &&
+      !hit.elevated
+    )
   )
+    return false
+  if (inspect.scope === "app-menu")
+    return (
+      hit.scope === "app-menu" &&
+      hit.elementId === inspect.element.elementId &&
+      JSON.stringify(hit.menuShortcut) === JSON.stringify(inspect.menuShortcut) &&
+      hit.menuPath.length === inspect.menuPath.length &&
+      hit.menuPath.every((part, index) => part === inspect.menuPath[index])
+    )
+  return hit.scope !== "app-menu" && String(hit.windowId) === inspect.window.id
 }
 function isPaste(step: Computer.Step, inspect: Computer.InspectResult) {
   const key = step.kind === "key" ? ComputerKeys.resolve(step.combo, inspect.layout) : undefined
@@ -341,6 +401,12 @@ function isPaste(step: Computer.Step, inspect: Computer.InspectResult) {
       return candidate?.key === key.key && candidate.modifiers.join("+") === key.modifiers.join("+")
     })
   return (
+    !!(
+      inspect.scope === "app-menu" &&
+      step.kind === "click" &&
+      inspect.menuShortcut &&
+      ComputerKeys.pasteCombo(inspect.menuShortcut)
+    ) ||
     !!(
       key &&
       ((key.key === "v" && key.modifiers.some((value) => value === "control" || value === "meta")) ||

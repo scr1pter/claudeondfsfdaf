@@ -30,6 +30,8 @@ function fixture(
     bounds: { ...NATIVE },
     appsWait: undefined as Promise<void> | undefined,
     resolveWait: undefined as Promise<void> | undefined,
+    appReads: 0,
+    displayReads: 0,
     hit: {
       ref: "native_1",
       elementId: "element_1",
@@ -44,6 +46,7 @@ function fixture(
   }
   const backend = {
     async apps(): Promise<Computer.HelperApp[]> {
+      state.appReads++
       await state.appsWait
       return [
         {
@@ -56,6 +59,7 @@ function fixture(
       ]
     },
     async displays(): Promise<Computer.DisplayInfo[]> {
+      state.displayReads++
       return [
         {
           id: "display",
@@ -125,6 +129,177 @@ function fixture(
   })
   return { registry, state, capture, tree }
 }
+
+const menuHit = (): Extract<Computer.HitResult, { scope: "app-menu" }> => ({
+  scope: "app-menu",
+  pid: 20,
+  owner: { ...APP, platform: "macos", pid: 20 },
+  ref: "native_menu",
+  elementId: "menu_element",
+  menuPath: ["File", "New"],
+  role: "AXMenuItem",
+  name: "New",
+  secure: false,
+  enabled: true,
+  editable: false,
+  bounds: { x: -1980, y: 43, w: 25, h: 16 },
+})
+const menuTree = (hit = menuHit()): Computer.TreeResult => ({
+  generation: 1,
+  truncated: false,
+  nodes: [
+    {
+      scope: "app-menu",
+      pid: hit.pid,
+      ref: hit.ref,
+      elementId: hit.elementId,
+      menuPath: [...hit.menuPath],
+      ...(hit.menuShortcut === undefined ? {} : { menuShortcut: [...hit.menuShortcut] }),
+      role: hit.role,
+      name: hit.name ?? "",
+      secure: hit.secure,
+      enabled: true,
+      focused: true,
+      ...(hit.bounds ? { bounds: hit.bounds } : {}),
+    },
+  ],
+})
+
+test("app-menu nodes retain native scope and identity without projecting bounds through a random frame", async () => {
+  const fake = fixture()
+  const capture = await fake.registry.add(SCOPE, fake.capture(2))
+  fake.state.hit = menuHit()
+  const node = fake.registry.tree(SCOPE, menuTree(), capture.frame)[0]!
+  expect(node).toMatchObject({ scope: "app-menu", pid: 20, elementId: "menu_element", menuPath: ["File", "New"] })
+  expect(node).not.toHaveProperty("bounds")
+  expect(node).not.toHaveProperty("windowId")
+  expect(fake.registry.uiRef(SCOPE, fake.state.hit)).toBe(node.ref)
+  expect(await fake.registry.resolve(SCOPE, node.ref)).toMatchObject({ scope: "app-menu", bounds: menuHit().bounds })
+})
+
+test("menu-only reads do not require any capture and ignore an unrelated unavailable frame", () => {
+  const fake = fixture()
+  const unrelated = { id: "never-recorded" } as Computer.Frame
+  const nodes = fake.registry.tree(SCOPE, menuTree(), unrelated)
+  expect(nodes[0]).toMatchObject({ scope: "app-menu" })
+  expect(nodes[0]).not.toHaveProperty("bounds")
+  expect(() => fake.registry.tree(SCOPE, fake.tree(), unrelated)).toThrow()
+})
+
+test("menu hit coordinates require the latest full display frame and actual unchanged display geometry", async () => {
+  const fake = fixture()
+  const window = await fake.registry.add(SCOPE, fake.capture())
+  expect(await fake.registry.current(SCOPE, window.frame, menuHit())).toBe(false)
+  const display = await fake.registry.add(SCOPE, { ...fake.capture(), target: { display: "display" } })
+  const appReads = fake.state.appReads
+  expect(await fake.registry.current(SCOPE, display.frame, menuHit())).toBe(true)
+  expect(fake.state.appReads).toBe(appReads)
+  expect(await fake.registry.current(SCOPE, { ...display.frame, scope: "window" }, menuHit())).toBe(false)
+  expect(await fake.registry.current(SCOPE, { ...display.frame, image: { w: 10, h: 10 } }, menuHit())).toBe(false)
+  expect(
+    await fake.registry.current(SCOPE, { ...display.frame, bounds: { ...display.frame.bounds, x: 0 } }, menuHit()),
+  ).toBe(false)
+  const next = await fake.registry.add(SCOPE, { ...fake.capture(), target: { display: "display" } })
+  expect(await fake.registry.current(SCOPE, display.frame, menuHit())).toBe(false)
+  fake.state.bounds.x++
+  expect(await fake.registry.current(SCOPE, next.frame, menuHit())).toBe(false)
+})
+
+test("a display menu hit cannot survive a native phase change", async () => {
+  const fake = fixture()
+  const display = await fake.registry.add(SCOPE, { ...fake.capture(), target: { display: "display" } })
+  fake.state.phase.phaseRevision++
+  expect(await fake.registry.current(SCOPE, display.frame, menuHit())).toBe(false)
+})
+
+test("an old public menu ref cannot become a window ref with the same native token", async () => {
+  const fake = fixture()
+  fake.state.hit = menuHit()
+  const node = fake.registry.tree(SCOPE, menuTree())[0]!
+  fake.state.hit = {
+    ref: "native_menu",
+    elementId: "menu_element",
+    role: "AXButton",
+    secure: false,
+    owner: APP,
+    windowId: "window",
+  }
+  expect(await fake.registry.resolve(SCOPE, node.ref).catch((error) => error)).toMatchObject({ code: "stale_ref" })
+  expect(() => fake.registry.uiRef(SCOPE, fake.state.hit)).toThrow()
+})
+
+test("an old public window ref cannot become an app-menu ref", async () => {
+  const fake = fixture()
+  const ref = fake.registry.uiRef(SCOPE, fake.state.hit)!
+  fake.state.hit = { ...menuHit(), ref: "native_1", elementId: "element_1" }
+  expect(await fake.registry.resolve(SCOPE, ref).catch((error) => error)).toMatchObject({ code: "stale_ref" })
+})
+
+test("menu PID, ancestry and stable element identity each bind public ref resolution", async () => {
+  for (const change of [
+    (hit: ReturnType<typeof menuHit>) => ({ ...hit, pid: 21, owner: { ...hit.owner, pid: 21 } }),
+    (hit: ReturnType<typeof menuHit>) => ({ ...hit, menuPath: ["File", "Delete"] }),
+    (hit: ReturnType<typeof menuHit>) => ({ ...hit, elementId: "another_element" }),
+  ]) {
+    const fake = fixture()
+    fake.state.hit = menuHit()
+    const ref = fake.registry.uiRef(SCOPE, fake.state.hit)!
+    fake.state.hit = change(menuHit())
+    expect(await fake.registry.resolve(SCOPE, ref).catch((error) => error)).toMatchObject({ code: "stale_ref" })
+    expect(() => fake.registry.uiRef(SCOPE, fake.state.hit)).toThrow()
+  }
+})
+
+test("public menu path mutations cannot rewrite the private observed path", async () => {
+  const fake = fixture()
+  fake.state.hit = menuHit()
+  const node = fake.registry.tree(SCOPE, menuTree())[0]!
+  if (node.scope !== "app-menu") throw new Error("Expected an app menu")
+  const exposedPath = node.menuPath as string[]
+  exposedPath[0] = "Changed by consumer"
+  expect((await fake.registry.resolve(SCOPE, node.ref)).scope).toBe("app-menu")
+  expect(await fake.registry.resolve(SCOPE, node.ref)).toMatchObject({ menuPath: ["File", "New"] })
+})
+
+test("only an explicit unchanged receipt resolution promotes a menu ref across a stable phase", async () => {
+  const fake = fixture()
+  fake.state.hit = menuHit()
+  const old = fake.registry.uiRef(SCOPE, fake.state.hit)!
+  const gate = Promise.withResolvers<void>()
+  fake.state.resolveWait = gate.promise
+  const pending = fake.registry.resolve(SCOPE, old).catch((error) => error)
+  fake.state.phase.phaseRevision++
+  gate.resolve()
+  expect(await pending).toMatchObject({ code: "stale_ref" })
+  expect(await fake.registry.resolve(SCOPE, old)).toMatchObject({ scope: "app-menu", ref: "native_menu" })
+  expect(fake.registry.uiRef(SCOPE, fake.state.hit)).toBe(old)
+})
+
+test("Windows and mismatched native menu owners cannot mint menu authority", () => {
+  const windows = fixture("windows")
+  expect(() => windows.registry.tree(SCOPE, menuTree())).toThrow()
+  expect(() => windows.registry.uiRef(SCOPE, menuHit())).toThrow()
+  const mac = fixture()
+  expect(() => mac.registry.uiRef(SCOPE, { ...menuHit(), pid: 21 })).toThrow()
+})
+
+test("localized menu shortcut observations remain public data but bind the private receipt exactly", async () => {
+  for (const replacement of [["Command", "v"], ["s", "Command"], ["command", "s"], undefined]) {
+    const fake = fixture()
+    const original = {
+      ...menuHit(),
+      name: "Enregistrer",
+      menuPath: ["Fichier", "Enregistrer"],
+      menuShortcut: ["Command", "s"],
+    }
+    fake.state.hit = original
+    const node = fake.registry.tree(SCOPE, menuTree(original))[0]!
+    expect(node).toMatchObject({ scope: "app-menu", menuShortcut: ["Command", "s"] })
+    expect(node).not.toHaveProperty("bounds")
+    fake.state.hit = { ...original, menuShortcut: replacement }
+    expect(await fake.registry.resolve(SCOPE, node.ref).catch((error) => error)).toMatchObject({ code: "stale_ref" })
+  }
+})
 
 test("native PNG bytes determine MIME and scoped bridge IDs remain distinct from native captures", async () => {
   const fake = fixture()

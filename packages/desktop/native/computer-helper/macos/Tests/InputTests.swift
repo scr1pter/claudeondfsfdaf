@@ -130,7 +130,8 @@ private final class InputFixture {
     var session: ServerSession
     let service: InputService
 
-    init(approved: Bool = true, paused: Bool = false, mode: String = "foreground") {
+    init(approved: Bool = true, paused: Bool = false, mode: String = "foreground",
+         backgroundType: (([String: JSONValue], OperationContext, @escaping Dispatcher.Completion) -> Void)? = nil) {
         let state = InputTestState()
         state.referenceElement = state.element
         let captures = CaptureRegistry()
@@ -186,7 +187,8 @@ private final class InputFixture {
             },
             release: { event in state.releases.append(event); state.stream.append(event); return state.releaseResult },
             reconcile: { state.reconciliations += 1 },
-            menus: { _, _ in state.menuReads += 1; return state.menuShortcuts }
+            menus: { _, _ in state.menuReads += 1; return state.menuShortcuts },
+            backgroundType: backgroundType
         ), execute: { work in if state.holdWork { state.work.append(work) } else { work() } },
         schedule: { milliseconds, work in
             state.delays.append(milliseconds)
@@ -1131,6 +1133,61 @@ func runInputTests() throws -> Int {
         fake.call("input.type", fake.typeArgs("Never type through a protected client")); try fake.state.runTimers()
         try inputCheck(fake.failure() != nil && fake.state.posts.isEmpty,
                        "A missing protected-client proof does not fall back to a surface-only input authorization")
+    }
+
+    try test {
+        var insertions: [String] = []
+        let fake = InputFixture(mode: "background", backgroundType: { args, context, completion in
+            var wrote = false
+            let current = context.withCurrent { insertions.append(args["text"]!.stringValue!); wrote = true }
+            completion(current && wrote ? .success(ServerReply()) : .failure(ServerFailure(code: "changed", message: "Revoked")))
+        })
+        fake.state.granted = false // AX insertion does not require CGPostEvent permission.
+        fake.call("input.type", fake.typeArgs("A🙂e\u{301}")); _ = try fake.success()
+        try inputCheck(insertions == ["A🙂e\u{301}"] && fake.state.preflights == 0 && fake.state.posts.isEmpty &&
+                       fake.state.releases.isEmpty && fake.state.focusedPIDs.isEmpty,
+                       "Background insertion delegates the complete text without CG preflight, global focus or a held-input lease")
+    }
+
+    try test {
+        var calls = 0
+        let fake = InputFixture(mode: "background", backgroundType: { _, _, completion in
+            calls += 1
+            completion(.failure(ServerFailure(code: "changed", message: "Uncertain partial write")))
+        })
+        fake.call("input.type", fake.typeArgs("Never duplicate"))
+        try inputCheck(fake.failure() == "changed" && calls == 1 && fake.state.posts.isEmpty,
+                       "An uncertain AX insertion is returned without blind Unicode fallback")
+        var invalid = fake.typeArgs("Invalid"); invalid["text"] = .string("")
+        fake.call("input.type", invalid)
+        try inputCheck(fake.failure() == "failed" && calls == 1, "Malformed background text never reaches the AX delegate")
+    }
+
+    try test {
+        var calls = 0
+        let fake = InputFixture(paused: true, mode: "background", backgroundType: { _, _, _ in calls += 1 })
+        fake.call("input.type", fake.typeArgs("Paused"))
+        try inputCheck(fake.failure() == "paused" && calls == 0 && fake.state.preflights == 0,
+                       "Paused background insertion is refused before touching either backend")
+        let unsupported = InputFixture(mode: "background")
+        unsupported.call("input.type", unsupported.typeArgs("Unsupported"))
+        try inputCheck(unsupported.failure() == "needs_foreground" && unsupported.state.preflights == 0 && unsupported.state.posts.isEmpty,
+                       "An unavailable AX insertion capability asks for foreground without posting")
+    }
+
+    try test {
+        var pending: OperationContext?
+        let fake = InputFixture(mode: "background", backgroundType: { _, context, _ in pending = context })
+        fake.call("input.type", fake.typeArgs("Delayed"))
+        guard let context = pending else { throw InputTestFailure(message: "Missing insertion context") }
+        fake.state.epoch += 1
+        var writes = 0
+        try inputCheck(!context.isCurrent() && !context.withCurrent({ writes += 1 }),
+                       "A delayed AX insertion loses authority when the native epoch changes")
+        fake.state.epoch -= 1
+        fake.service.close()
+        try inputCheck(!context.isCurrent() && !context.withCurrent({ writes += 1 }) && writes == 0,
+                       "Closing the input service revokes a retained AX insertion context")
     }
 
     return count

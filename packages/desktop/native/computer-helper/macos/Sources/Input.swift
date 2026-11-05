@@ -67,6 +67,8 @@ struct InputBackend {
     let release: (InputPostedEvent) -> InputReleaseOutcome
     let reconcile: () -> Void
     var menus: ((InputObservation, ServerSession) throws -> [InputMenuShortcut]?)? = nil
+    /// AX insertion owns its own field/selection proof and never creates a CGEvent source or held-input lease.
+    var backgroundType: (([String: JSONValue], OperationContext, @escaping Dispatcher.Completion) -> Void)? = nil
 }
 
 enum InputReleaseOutcome { case released, discarded, retry }
@@ -243,7 +245,9 @@ final class InputService {
         }
     }
 
-    func features() -> [String: Bool] { ["input.pointer": true, "input.keyboard": true, "input.unicode": true] }
+    func features() -> [String: Bool] {
+        ["input.pointer": true, "input.keyboard": true, "input.unicode": true, "background": backend.backgroundType != nil]
+    }
 
     /// Verified serving calls this explicitly; construction, version and probe paths remain inert.
     func reconcileOnStart() {
@@ -271,6 +275,29 @@ final class InputService {
                 guard let session = context.session else { throw Self.failure("unavailable", "No computer session is active.") }
                 let request = try InputRequest(op: op, args: args, session: session)
                 let policy = try SessionPolicy(session: session)
+                if session.mode == "background", op == "input.type" {
+                    try requireOpen()
+                    guard context.isCurrent() else { throw Self.changed }
+                    guard !session.paused else { throw Self.failure("paused", "The computer session is paused.") }
+                    guard let insert = backend.backgroundType else {
+                        throw Self.failure("needs_foreground", "This text field needs the foreground.")
+                    }
+                    let scoped = OperationContext(session: session, isCurrent: {
+                        self.lock.lock(); let open = !self.closed; self.lock.unlock()
+                        return open && context.isCurrent()
+                    }, withCurrent: { body in
+                        var admitted = false
+                        let current = context.withCurrent {
+                            self.lock.lock(); let open = !self.closed; self.lock.unlock()
+                            guard open else { return }
+                            admitted = true
+                            body()
+                        }
+                        return current && admitted
+                    })
+                    insert(args, scoped, completion)
+                    return
+                }
                 var startFailure: Error?
                 guard context.withCurrent({
                     do {

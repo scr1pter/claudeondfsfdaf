@@ -14,7 +14,23 @@ type Capture = {
   target: Target
   geometry: Computer.Rect
 }
-type Reference = { scope: GrantScope; sessionId: string; native: string; generation?: number; elementId?: string }
+type NativeReferenceWitness =
+  | { privateScope: "window"; elementId?: string; pid?: number }
+  | {
+      privateScope: "app-menu"
+      pid: number
+      elementId: string
+      menuPath: readonly string[]
+      menuShortcut?: readonly string[]
+      nativeBounds?: Computer.Rect
+    }
+type Reference = {
+  scope: GrantScope
+  phase: Computer.NativePhase
+  native: string
+  generation?: number
+  witness: NativeReferenceWitness
+}
 
 /** Private coordinate/ref authority. Native IDs never double as engine-facing frame or accessibility IDs. */
 export function createComputerFrames(input: {
@@ -56,21 +72,95 @@ export function createComputerFrames(input: {
       throw new ComputerError("stale_frame", "Use a current full screenshot for these coordinates.")
     return entry
   }
-  const mint = (scope: GrantScope, native: string, generation?: number, elementId?: string) => {
+  const menuWitness = (value: {
+    pid: number
+    elementId: string
+    menuPath: readonly string[]
+    menuShortcut?: readonly string[]
+    bounds?: Computer.Rect
+  }): NativeReferenceWitness => {
+    if (
+      input.platform !== "macos" ||
+      !Number.isSafeInteger(value.pid) ||
+      value.pid <= 0 ||
+      !value.elementId ||
+      !Schema.is(Computer.MenuPath)(value.menuPath) ||
+      (value.menuShortcut !== undefined && !Schema.is(Computer.MenuShortcut)(value.menuShortcut)) ||
+      (value.bounds !== undefined && !Schema.is(Computer.Rect)(value.bounds))
+    )
+      throw new ComputerError("stale_ref", "The actual app menu observation is unavailable.")
+    return {
+      privateScope: "app-menu",
+      pid: value.pid,
+      elementId: value.elementId,
+      menuPath: [...value.menuPath],
+      ...(value.menuShortcut === undefined ? {} : { menuShortcut: [...value.menuShortcut] }),
+      ...(value.bounds ? { nativeBounds: { ...value.bounds } } : {}),
+    }
+  }
+  const hitWitness = (hit: Computer.HitResult): NativeReferenceWitness => {
+    if (hit.scope !== "app-menu")
+      return {
+        privateScope: "window",
+        elementId: hit.elementId,
+        ...(hit.owner.platform !== "remote" && hit.owner.pid ? { pid: hit.owner.pid } : {}),
+      }
+    if (
+      hit.owner.platform !== "macos" ||
+      hit.owner.pid !== hit.pid ||
+      hit.windowId !== undefined ||
+      hit.window !== undefined ||
+      hit.windowTitle !== undefined
+    )
+      throw new ComputerError("stale_ref", "The actual app menu process changed.")
+    return menuWitness(hit)
+  }
+  const sameWitness = (first: NativeReferenceWitness, second: NativeReferenceWitness) => {
+    if (first.privateScope !== second.privateScope) return false
+    if (first.privateScope === "app-menu" && second.privateScope === "app-menu")
+      return (
+        first.pid === second.pid &&
+        first.elementId === second.elementId &&
+        first.menuPath.length === second.menuPath.length &&
+        first.menuPath.every((part, index) => part === second.menuPath[index]) &&
+        ((first.menuShortcut === undefined && second.menuShortcut === undefined) ||
+          (first.menuShortcut !== undefined &&
+            second.menuShortcut !== undefined &&
+            first.menuShortcut.length === second.menuShortcut.length &&
+            first.menuShortcut.every((part, index) => part === second.menuShortcut![index])))
+      )
+    return (
+      (!first.elementId || first.elementId === second.elementId) &&
+      (first.privateScope !== "window" || second.privateScope !== "window" || !first.pid || first.pid === second.pid)
+    )
+  }
+  const mint = (
+    scope: GrantScope,
+    native: string,
+    generation?: number,
+    witness: NativeReferenceWitness = { privateScope: "window" },
+  ) => {
     const current = phase(scope)
     const existing = [...refs].find(
-      ([, entry]) => same(entry.scope, scope) && entry.sessionId === current.sessionId && entry.native === native,
+      ([, entry]) =>
+        same(entry.scope, scope) &&
+        entry.phase.sessionId === current.sessionId &&
+        entry.phase.phaseRevision === current.phaseRevision &&
+        entry.native === native,
     )
     if (existing) {
-      if (elementId && existing[1].elementId && elementId !== existing[1].elementId)
-        throw new ComputerError("stale_ref", "The UI element changed.")
-      if (elementId) existing[1].elementId = elementId
+      if (witness.privateScope === "window" && existing[1].witness.privateScope === "window" && !witness.elementId)
+        witness = { ...witness, elementId: existing[1].witness.elementId }
+      if (witness.privateScope === "window" && existing[1].witness.privateScope === "window" && !witness.pid)
+        witness = { ...witness, pid: existing[1].witness.pid }
+      if (!sameWitness(existing[1].witness, witness)) throw new ComputerError("stale_ref", "The UI element changed.")
+      existing[1].witness = witness
       return existing[0]
     }
     if (sequence >= 999999)
       throw new ComputerError("stale_ref", "Start a fresh desktop connection to read more UI references.")
     const id = `ui_${++sequence}`
-    refs.set(id, { scope: { ...scope }, sessionId: current.sessionId, native, generation, elementId })
+    refs.set(id, { scope: { ...scope }, phase: { ...current }, native, generation, witness })
     while (refs.size > 4000) refs.delete(refs.keys().next().value!)
     return id
   }
@@ -227,20 +317,39 @@ export function createComputerFrames(input: {
       const version = epoch
       const entry = record(scope, frame.id)
       const target = entry.target
+      const menu = hit.scope === "app-menu"
+      if (
+        menu &&
+        (input.platform !== "macos" ||
+          frame.scope !== "display" ||
+          frame.windowId !== undefined ||
+          entry.frame.scope !== "display" ||
+          "windowId" in target ||
+          frame.display !== entry.frame.display ||
+          target.display !== entry.header.displayId ||
+          !equalRect(frame.bounds, entry.frame.bounds) ||
+          frame.image.w !== entry.frame.image.w ||
+          frame.image.h !== entry.frame.image.h ||
+          frame.scale !== entry.frame.scale)
+      )
+        return false
+      if (menu) hitWitness(hit)
       const geometry =
         "windowId" in target
           ? (await input.backend.apps())
               .flatMap((app) => app.windows)
               .find((window) => window.windowId === target.windowId)?.bounds
           : (await input.backend.displays()).find((display) => display.id === target.display)?.bounds
-      phase(scope)
+      const current = phase(scope)
       const latest = [...frames.values()].findLast((candidate) => same(candidate.scope, scope))
       return (
         epoch === version &&
         latest === entry &&
         !!geometry &&
         equalRect(entry.geometry, geometry) &&
-        (!("windowId" in entry.target) || hit.windowId === entry.target.windowId)
+        (!menu ||
+          (entry.phase.sessionId === current.sessionId && entry.phase.phaseRevision === current.phaseRevision)) &&
+        (!("windowId" in entry.target) || (hit.scope !== "app-menu" && hit.windowId === entry.target.windowId))
       )
     },
     tree(scope: GrantScope, tree: Computer.TreeResult, frame?: Computer.Frame, expected?: Computer.NativePhase) {
@@ -249,7 +358,8 @@ export function createComputerFrames(input: {
       if (previous !== undefined && previous !== tree.generation)
         for (const [id, entry] of refs) if (same(entry.scope, scope)) refs.delete(id)
       generations.set(key(scope), tree.generation)
-      const capture = frame && record(scope, frame.id)
+      const capture =
+        frame && tree.nodes.some((node) => node.scope !== "app-menu") ? record(scope, frame.id) : undefined
       return tree.nodes.map((node): Computer.UiNode => {
         const secure = ComputerCredential.field({
           role: node.subrole ?? node.role,
@@ -258,13 +368,26 @@ export function createComputerFrames(input: {
           editable: /text|edit|input|combo/i.test(`${node.role} ${node.subrole ?? ""}`),
           enabled: node.enabled,
         })
-        return {
-          ref: mint(scope, node.ref, tree.generation),
+        const shared = {
           role: node.role,
           name: node.name,
           enabled: node.enabled,
           secure,
           ...(!secure && node.value !== undefined ? { value: node.value } : {}),
+        }
+        if (node.scope === "app-menu")
+          return {
+            ...shared,
+            scope: "app-menu",
+            pid: node.pid,
+            elementId: node.elementId,
+            menuPath: [...node.menuPath],
+            ...(node.menuShortcut === undefined ? {} : { menuShortcut: [...node.menuShortcut] }),
+            ref: mint(scope, node.ref, tree.generation, menuWitness(node)),
+          }
+        return {
+          ...shared,
+          ref: mint(scope, node.ref, tree.generation),
           ...(capture
             ? {
                 bounds: {
@@ -282,22 +405,25 @@ export function createComputerFrames(input: {
       const version = epoch
       const current = phase(scope)
       const entry = refs.get(id)
-      if (!entry || !same(entry.scope, scope) || entry.sessionId !== current.sessionId)
+      if (!entry || !same(entry.scope, scope) || entry.phase.sessionId !== current.sessionId)
         throw new ComputerError("stale_ref", "Read the current UI before using this reference.")
       const hit = await input.backend.resolveRef(entry.native)
-      phase(scope)
+      const after = phase(scope)
       if (
         version !== epoch ||
+        after.sessionId !== current.sessionId ||
+        after.phaseRevision !== current.phaseRevision ||
         refs.get(id) !== entry ||
         hit.ref !== entry.native ||
-        (entry.elementId && hit.elementId !== entry.elementId)
+        !sameWitness(entry.witness, hitWitness(hit))
       )
         throw new ComputerError("stale_ref", "The UI element changed.")
-      if (hit.elementId) entry.elementId = hit.elementId
+      entry.witness = hitWitness(hit)
+      entry.phase = { ...current }
       return hit
     },
     uiRef(scope: GrantScope, hit: Computer.HitResult) {
-      return hit.ref ? mint(scope, hit.ref, undefined, hit.elementId) : undefined
+      return hit.ref ? mint(scope, hit.ref, undefined, hitWitness(hit)) : undefined
     },
     clear(scope?: GrantScope) {
       epoch++

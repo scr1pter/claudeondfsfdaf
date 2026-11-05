@@ -63,6 +63,7 @@ final class InputNative {
             layout: { try? KeyboardSnapshot().fingerprint }, post: { try native.post($0) }, release: native.release,
             reconcile: native.reconcile)
         backend.menus = native.menus
+        if let accessibility { backend.backgroundType = accessibility.insertText }
         return backend
     }
 
@@ -743,6 +744,7 @@ final class InputNative {
     /// M8 shares the observed keyboard table without constructing a posting source or remapping physical codes.
     static func keyboardFingerprint() -> String? { try? KeyboardSnapshot().fingerprint }
     static func physicalKeyCode(_ name: String) -> UInt16? { namedKey(name) }
+    static func menuKeyName(_ code: UInt16) -> String? { semanticControl(code) }
 
     static func resolveKey(_ name: String, flags: UInt64,
                            translate: (UInt16, UInt64) -> String?) -> (code: UInt16, flags: UInt64)? {

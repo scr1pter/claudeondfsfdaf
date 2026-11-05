@@ -106,8 +106,19 @@ private final class HelperServer {
                 accessibility.invalidateObservations()
                 apps.invalidateObservations()
             },
-            cleanupRequested: { _ in clipboardQueue.async { clipboard.cleanup() } },
-            sessionChanged: { _ in monitoring.async { tap.refreshSession(); watchdog.refreshSession() } },
+            cleanupRequested: { reason in
+                if ["close", "physical-input", "stop", "environment", "heartbeat", "replacement", "end", "cancel"].contains(reason) {
+                    accessibility.invalidateObservations(hard: true)
+                }
+                clipboardQueue.async { clipboard.cleanup() }
+            },
+            sessionChanged: { [weak self] session in
+                accessibility.noteSession(session)
+                monitoring.async {
+                    tap.refreshSession(); watchdog.refreshSession()
+                    accessibility.retireWakes(session: self?.dispatcher?.sessionSnapshot())
+                }
+            },
             desktopAvailability: { watchdog.availability() },
             foregroundReady: { watchdog.foregroundReady($0) },
             nativeEventIsCurrent: { event, session in
@@ -307,7 +318,7 @@ private final class HelperServer {
         finished.enter()
         DispatchQueue.global(qos: .userInitiated).async {
             self.clipboardService.close { restored in
-                self.lock.lock(); self.cleanupFailed = !restored; self.lock.unlock()
+                self.lock.lock(); self.cleanupFailed = self.cleanupFailed || !restored; self.lock.unlock()
                 finished.leave()
             }
         }
@@ -322,6 +333,10 @@ private final class HelperServer {
             self.permissionService.close()
             self.captureService.close()
             self.accessibilityService.close()
+            let wakeCleanupFailed = !self.accessibilityService.wakeCleanupComplete()
+            self.lock.lock()
+            self.cleanupFailed = self.cleanupFailed || wakeCleanupFailed
+            self.lock.unlock()
             if removeDisplayCallback {
                 _ = CGDisplayRemoveReconfigurationCallback(Self.displayCallback, Unmanaged.passUnretained(self).toOpaque())
             }

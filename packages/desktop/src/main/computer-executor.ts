@@ -9,7 +9,7 @@ import { ComputerApps } from "@vectordevai/schema/computer-apps"
 import { Hands } from "@vectordevai/schema/hands"
 import { ComputerMainCopy } from "@vectordevai/app/computer/main-copy"
 import { ComputerError, type BridgeResponse, type ComputerBridgeKey, type ComputerExecutor } from "./computer-bridge"
-import { checkStep, typeChecked, type GateContext, type GateResult } from "./computer-gate"
+import { checkStep, inspectHit, typeChecked, type GateContext, type GateResult } from "./computer-gate"
 import { imageMime } from "./computer-frames"
 import type { createComputerGrants } from "./computer-grants"
 import type { createComputerSession, SessionClock, SessionScope } from "./computer-session"
@@ -421,28 +421,18 @@ export function createComputerExecutor(input: {
     const document = hit.document ? await after(flight, input.canonicalPath(hit.document)) : undefined
     const programPath = hit.programPath ? await after(flight, input.canonicalPath(hit.programPath)) : undefined
     await access(flight, hit.owner)
+    const observed = inspectHit(hit, category, input.registry.uiRef(flight.scope!, hit))
+    if (!observed) throw new ComputerError("changed", "The native observation could not be verified.")
     return {
-      app: hit.owner,
-      category,
-      pid: hit.owner.pid,
-      window: { id: hit.windowId, ...(hit.windowTitle ? { title: hit.windowTitle } : {}) },
-      element: {
-        role: hit.role,
-        ...(input.registry.uiRef(flight.scope!, hit) ? { ref: input.registry.uiRef(flight.scope!, hit) } : {}),
-        ...(hit.elementId ? { elementId: hit.elementId } : {}),
-        ...(hit.name === undefined ? {} : { label: hit.name }),
-        secure: hit.secure,
-        enabled: hit.enabled === true,
-        editable: hit.editable === true,
-      },
+      ...observed,
       clipboard: {
         agentOwned: clipboard.agentOwned,
         ...(!ComputerCredential.secret(clipboard.text) && clipboard.text.length <= Computer.LIMITS.typeTextChars
           ? { text: clipboard.text }
           : {}),
       },
-      ...(document ? { document } : {}),
-      ...(programPath ? { programPath } : {}),
+      document,
+      programPath,
       ...(hit.documentStatus ? { documentStatus: hit.documentStatus } : {}),
       ...(hit.layout ? { layout: hit.layout } : {}),
       ...(hit.focusedMenuShortcuts ? { focusedMenuShortcuts: hit.focusedMenuShortcuts } : {}),
@@ -618,6 +608,7 @@ export function createComputerExecutor(input: {
       frame,
       ...(point ? { point } : {}),
       frameCurrent: (current, hit) => input.registry.current(scope, current, hit),
+      background: input.controller.state().mode === "background",
       resolveRef: (ref) => input.registry.resolve(scope, ref),
       uiRef: (hit) => input.registry.uiRef(scope, hit),
       clipboard: () => readClipboard(scope),
@@ -763,6 +754,7 @@ export function createComputerExecutor(input: {
         const binding = { pid: checked.inspect.pid, ...target }
         const captureId = ctx.frame ? input.registry.captureId(flight.scope!, ctx.frame.id) : undefined
         const realPointer =
+          hit.scope !== "app-menu" &&
           input.controller.state().mode === "foreground" &&
           ((step.kind === "click" && "x" in step.at) || ["move", "drag", "scroll"].includes(step.kind))
         if (realPointer) input.overlay.realPointer(true)
@@ -797,7 +789,7 @@ export function createComputerExecutor(input: {
               await wait(flight, step.ms)
               return
             }
-            if (step.kind === "click" && "ref" in step.at) {
+            if (step.kind === "click" && ("ref" in step.at || hit.scope === "app-menu")) {
               if (!hit.ref || step.button !== "left" || step.count !== 1 || step.modifiers.length)
                 throw new ComputerError("unsupported_action", "This control does not support that click.")
               const result = await input.backend.perform(hit.ref, "press", phase, {
@@ -1250,12 +1242,16 @@ export function createComputerExecutor(input: {
           const window = request.window
             ? app.windows.find((window) => window.windowId === request.window)
             : app.windows.find((window) => !window.minimized)
-          if (!window) throw new ComputerError("app_not_found", "That app window could not be found.")
+          if (request.window && !window) throw new ComputerError("app_not_found", "That app window could not be found.")
+          if (app.identity.platform === "remote" || !app.identity.pid)
+            throw new ComputerError("changed", "The app no longer has a live process.")
           const phase = input.controller.nativePhase(flight.scope!)
           const result = await after(
             flight,
             input.backend.tree(
-              { op: "ui.tree", windowId: window.windowId, maxNodes: Computer.LIMITS.readUiNodesMax, maxDepth: 30 },
+              request.window && window
+                ? { op: "ui.tree", windowId: window.windowId, maxNodes: Computer.LIMITS.readUiNodesMax, maxDepth: 30 }
+                : { op: "ui.tree", pid: app.identity.pid, maxNodes: Computer.LIMITS.readUiNodesMax, maxDepth: 30 },
               Computer.LIMITS.uiTreeMs,
             ),
           )
@@ -1444,7 +1440,7 @@ function hash(text: string) {
 function witness(hit: Computer.HitResult) {
   return {
     ...(hit.owner.platform !== "remote" && hit.owner.pid ? { pid: hit.owner.pid } : {}),
-    windowId: hit.windowId,
+    ...(hit.scope === "app-menu" ? {} : { windowId: hit.windowId }),
     ...(hit.ref ? { ref: hit.ref } : {}),
     ...(hit.elementId ? { elementId: hit.elementId } : {}),
   }

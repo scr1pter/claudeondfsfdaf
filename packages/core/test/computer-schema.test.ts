@@ -72,6 +72,152 @@ const state = {
 const envelope = { v: 1, rootSessionID: "ses_root", sessionID: "ses_root", directory: "/Users/me/project" }
 const lease = 7
 
+describe("window and app-menu observation contracts", () => {
+  const node = { ref: "ui_1", role: "AXMenuItem", name: "Save", secure: false, enabled: true }
+  const hit = { ...node, owner: mac, windowId: "42", elementId: "element-1" }
+  const menu = {
+    scope: "app-menu",
+    app: mac,
+    category: "office",
+    pid: 501,
+    menuPath: ["File", "Save"],
+    element: { ...inspect.element, role: "AXMenuItem", ref: "ui_1", elementId: "element-1" },
+    clipboard: { agentOwned: false },
+  }
+  const menuHit = {
+    scope: "app-menu",
+    ...node,
+    owner: mac,
+    pid: 501,
+    elementId: "element-1",
+    menuPath: ["File", "Save"],
+  }
+  const menuNode = { scope: "app-menu", ...node, pid: 501, elementId: "element-1", menuPath: ["File", "Save"] }
+
+  test("legacy required-window observations and explicit window scope remain compatible", () => {
+    for (const scope of [undefined, "window"]) {
+      const explicit = scope ? { scope } : {}
+      accepts(Computer.InspectResult, { ...inspect, ...explicit })
+      accepts(Computer.HitResult, { ...hit, ...explicit })
+      accepts(Computer.UiNode, { ...node, ...explicit })
+      accepts(Computer.TreeResult, {
+        generation: 1,
+        truncated: false,
+        nodes: [{ ...node, ...explicit, bounds: rect, focused: false }],
+      })
+    }
+    rejects(Computer.InspectResult, { ...inspect, window: undefined })
+    rejects(Computer.HitResult, { ...hit, windowId: undefined })
+    rejects(Computer.TreeResult, { generation: 1, truncated: false, nodes: [{ ...node, focused: false }] })
+  })
+
+  test("menu observations require the explicit Mac scope and no fabricated window", () => {
+    accepts(Computer.InspectResult, menu)
+    accepts(Computer.HitResult, menuHit)
+    accepts(Computer.UiNode, menuNode)
+    accepts(Computer.TreeResult, { generation: 1, truncated: false, nodes: [{ ...menuNode, focused: false }] })
+    accepts(Computer.InspectResult, { ...menu, bounds: rect })
+    accepts(Computer.HitResult, { ...menuHit, bounds: rect })
+    rejects(Computer.InspectResult, { ...menu, window: inspect.window })
+    rejects(Computer.HitResult, { ...menuHit, windowId: "42" })
+    rejects(Computer.HitResult, { ...menuHit, windowTitle: "Invented" })
+    rejects(Computer.InspectResult, { ...menu, scope: undefined })
+    rejects(Computer.UiNode, { ...menuNode, scope: undefined })
+    rejects(Computer.InspectResult, { ...inspect, menuPath: ["File", "Save"] })
+    rejects(Computer.HitResult, { ...hit, menuPath: ["File", "Save"] })
+    const hybrids: readonly (readonly [Schema.Decoder<unknown>, unknown])[] = [
+      [Computer.InspectResult, { ...menu, window: inspect.window }],
+      [Computer.HitResult, { ...menuHit, windowId: "42" }],
+      [Computer.UiNode, { ...menuNode, windowId: "42" }],
+    ]
+    for (const [schema, hybrid] of hybrids) {
+      expect(Schema.is(schema)(hybrid)).toBe(false)
+      expect(() => Schema.decodeUnknownSync(schema)(hybrid)).toThrow()
+    }
+  })
+
+  test("menu ownership and private element identity cannot be replaced by app-only or Windows facts", () => {
+    const windows = {
+      platform: "windows",
+      kind: "aumid",
+      aumid: "Microsoft.WindowsCalculator_8wekyb3d8bbwe!App",
+      name: "Calculator",
+      system: true,
+      verified: true,
+      pid: 501,
+    }
+    for (const app of [windows, { ...mac, pid: undefined }, { ...mac, pid: 502 }]) {
+      rejects(Computer.InspectResult, { ...menu, app })
+      rejects(Computer.HitResult, { ...menuHit, owner: app })
+    }
+    for (const key of ["ref", "elementId"] as const) {
+      rejects(Computer.InspectResult, { ...menu, element: { ...menu.element, [key]: undefined } })
+      rejects(Computer.HitResult, { ...menuHit, [key]: undefined })
+      rejects(Computer.UiNode, { ...menuNode, [key]: undefined })
+    }
+    rejects(Computer.InspectResult, { ...menu, pid: 502 })
+    rejects(Computer.HitResult, { ...menuHit, pid: 502 })
+    rejects(Computer.UiNode, { ...menuNode, pid: undefined })
+  })
+
+  test("the read-only menu root is observable but cannot be a sensitive whole-app approval", () => {
+    accepts(Computer.InspectResult, { ...menu, menuPath: [] })
+    accepts(Computer.UiNode, { ...menuNode, menuPath: [] })
+    const target = {
+      scope: "app-menu",
+      appName: "Numbers",
+      appKey: "app:macos:com.apple.iwork.numbers",
+      pid: 501,
+      ref: "ui_1",
+      elementId: "element-1",
+      menuPath: ["File", "Send"],
+    }
+    const sensitive = { action: "click", why: "send", target, targetName: "Send", stepDigest: "a".repeat(64) }
+    accepts(Computer.SensitiveAskTarget, target)
+    accepts(Computer.SensitiveAskMetadata, sensitive)
+    for (const key of ["pid", "ref", "elementId", "menuPath"] as const)
+      rejects(Computer.SensitiveAskMetadata, { ...sensitive, target: { ...target, [key]: undefined } })
+    rejects(Computer.SensitiveAskMetadata, { ...sensitive, target: { ...target, menuPath: [] } })
+    rejects(Computer.SensitiveAskMetadata, { ...sensitive, target: { ...target, windowId: "42" } })
+    const programKey = "program:macos:" + "a".repeat(64)
+    accepts(Computer.ProgramKey, programKey)
+    rejects(Computer.SensitiveAskMetadata, { ...sensitive, target: { ...target, appKey: programKey } })
+    rejects(Computer.SensitiveAskMetadata, { ...sensitive, target: { ...target, scope: undefined } })
+  })
+
+  test("menu paths retain strict component and depth bounds across observations and consent", () => {
+    accepts(Computer.MenuPath, Array(30).fill("x".repeat(256)))
+    for (const path of [[""], ["Save\n"], ["Save\u202e"], ["x".repeat(257)], Array(31).fill("File")]) {
+      rejects(Computer.MenuPath, path)
+      rejects(Computer.InspectResult, { ...menu, menuPath: path })
+      rejects(Computer.UiNode, { ...menuNode, menuPath: path })
+    }
+  })
+
+  test("only explicit menu observations and receipts can carry a bounded observed shortcut", () => {
+    const menuShortcut = ["Command", "v"]
+    accepts(Computer.InspectResult, { ...menu, menuShortcut })
+    accepts(Computer.HitResult, { ...menuHit, menuShortcut })
+    accepts(Computer.UiNode, { ...menuNode, menuShortcut })
+    accepts(Computer.SensitiveAskTarget, {
+      scope: "app-menu",
+      appName: "Numbers",
+      appKey: "app:macos:com.apple.iwork.numbers",
+      pid: 501,
+      ref: "ui_1",
+      elementId: "element-1",
+      menuPath: ["Édition", "Coller"],
+      menuShortcut,
+    })
+    rejects(Computer.InspectResult, { ...inspect, menuShortcut })
+    rejects(Computer.HitResult, { ...hit, menuShortcut })
+    for (const invalid of [[], [""], ["\n"], ["x".repeat(33)], Array(9).fill("Shift")]) {
+      rejects(Computer.InspectResult, { ...menu, menuShortcut: invalid })
+      rejects(Computer.HitResult, { ...menuHit, menuShortcut: invalid })
+    }
+  })
+})
+
 // One sample request and at least one sample response for every bridge command.
 const bridge: Record<Computer.BridgeCommandName, { request: Record<string, unknown>; responses: unknown[] }> = {
   status: {

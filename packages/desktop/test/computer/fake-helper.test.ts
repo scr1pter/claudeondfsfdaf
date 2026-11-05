@@ -19,6 +19,484 @@ import { encodeFrame, readTranscript, replay, type Channel } from "./transcript"
 const FIXTURES = path.join(import.meta.dir, "../fixtures/computer-protocol")
 const FULL_DISPLAY = { maxWidth: 4096, maxHeight: 4096, maxPixels: 4096 * 4096 }
 
+describe("windowless macOS app-menu observations", () => {
+  const tree = (fake: ReturnType<typeof start>, slot = "notes", extra: Message = {}) =>
+    fake.call("ui.tree", { pid: fake.helper.desktop.app(slot)!.pid, maxNodes: 50, maxDepth: 4, ...extra })
+  const fresh = () => {
+    const fake = start({ scenario: "notes" })
+    fake.helper.desktop.closeWindows("notes")
+    fake.begin(["notes"], { mode: "background" })
+    return fake
+  }
+  const leaf = (fake: ReturnType<typeof start>) => tree(fake).nodes.find((item: Message) => item.name === "New")
+
+  test("a real windowless app exposes menu refs without a frame, fabricated window or bounds", () => {
+    const fake = fresh()
+    const desktop = fake.helper.desktop
+    const app = desktop.app("notes")!
+    const before = {
+      cursor: desktop.cursor,
+      front: desktop.frontmost().pid,
+      windows: desktop.apps().flatMap((item) => desktop.windowsOf(item.slot)).length,
+    }
+    const observed = tree(fake)
+    expect(observed).toMatchObject({ ok: true, truncated: false })
+    expect(observed.nodes).toHaveLength(3)
+    for (const node of observed.nodes) {
+      expect(node).toMatchObject({ scope: "app-menu", pid: app.pid })
+      expect(typeof node.ref).toBe("string")
+      expect(typeof node.elementId).toBe("string")
+      expect(node).not.toHaveProperty("windowId")
+      expect(node).not.toHaveProperty("bounds")
+    }
+    expect(observed.nodes[0].menuPath).toEqual([])
+    const target = observed.nodes.find((item: Message) => item.name === "New")
+    const resolved = fake.call("ui.resolve", { ref: target.ref })
+    expect(resolved).toMatchObject({
+      scope: "app-menu",
+      pid: app.pid,
+      owner: { platform: "macos", pid: app.pid },
+      menuPath: ["File", "New"],
+      elementId: target.elementId,
+    })
+    expect(resolved).not.toHaveProperty("windowId")
+    expect(resolved).not.toHaveProperty("windowTitle")
+    expect(
+      fake.call("ui.perform", { ref: target.ref, action: "AXPress", pid: app.pid, elementId: target.elementId }),
+    ).toMatchObject({ ok: true, took: true })
+    expect(app.menuActions).toEqual(["notes.menu.new"])
+    expect({
+      cursor: desktop.cursor,
+      front: desktop.frontmost().pid,
+      windows: desktop.apps().flatMap((item) => desktop.windowsOf(item.slot)).length,
+    }).toEqual(before)
+    expect(desktop.windowsOf("notes")).toEqual([])
+    expect(fake.kinds()).not.toContain("capture")
+    expect(fake.call("ui.resolve", { ref: target.ref })).toMatchObject({ code: "stale_ref" })
+  })
+
+  test("focused menus preserve actual app ownership and only real optional geometry", () => {
+    const fake = fresh()
+    expect(fake.call("ui.focused")).toMatchObject({ scope: "app-menu", role: "AXMenuBar", menuPath: [] })
+    const app = fake.helper.desktop.app("notes")!
+    app.menus[2]!.bounds = { x: 80, y: 25, w: 70, h: 18 }
+    fake.helper.desktop.focusMenu("notes", app.menus[2]!.id)
+    expect(fake.call("ui.focused")).toMatchObject({
+      scope: "app-menu",
+      menuPath: ["File", "New"],
+      bounds: app.menus[2]!.bounds,
+    })
+  })
+
+  test("unapproved and never-listed windowless apps disclose no menu refs", () => {
+    const fake = fresh()
+    fake.begin(["calculator"])
+    expect(tree(fake)).toMatchObject({ code: "not_granted" })
+    fake.helper.desktop.closeWindows("terminal")
+    fake.begin(["terminal"])
+    expect(tree(fake, "terminal")).toMatchObject({ code: "protected" })
+    expect(fake.helper.desktop.app("terminal")!.menuActions).toEqual([])
+  })
+
+  test("Windows has no fabricated app-menu surface", () => {
+    const fake = start({ platform: "windows", scenario: "notes" })
+    fake.helper.desktop.closeWindows("notes")
+    fake.begin(["notes"])
+    expect(tree(fake)).toMatchObject({ code: "app_not_found" })
+    expect(fake.helper.desktop.app("notes")!.menus).toEqual([])
+  })
+
+  test("menu actions bind actual PID and element identity", () => {
+    const fake = fresh()
+    const target = leaf(fake)
+    const pid = fake.helper.desktop.app("notes")!.pid
+    expect(fake.call("ui.perform", { ref: target.ref, action: "AXPress", pid: pid + 1 })).toMatchObject({
+      code: "changed",
+    })
+    expect(fake.call("ui.perform", { ref: target.ref, action: "AXPress", elementId: "different" })).toMatchObject({
+      code: "changed",
+    })
+    expect(fake.helper.desktop.app("notes")!.menuActions).toEqual([])
+  })
+
+  test("same element with changed menu ancestry cannot reuse its observed reference", () => {
+    const fake = fresh()
+    const target = leaf(fake)
+    fake.helper.desktop.app("notes")!.menus[2]!.menuPath = ["File", "Delete"]
+    expect(fake.call("ui.resolve", { ref: target.ref })).toMatchObject({ code: "stale_ref" })
+    expect(fake.call("ui.perform", { ref: target.ref, action: "AXPress" })).toMatchObject({ code: "stale_ref" })
+    expect(fake.helper.desktop.app("notes")!.menuActions).toEqual([])
+  })
+
+  test("accepted phase updates demote menu authority until an explicit unchanged refresh", () => {
+    const fake = fresh()
+    const original = leaf(fake)
+    expect(fake.call("session.update", { approved: [fake.identity("notes")] })).toMatchObject({ ok: true })
+    expect(fake.call("ui.perform", { ref: original.ref, action: "AXPress" })).toMatchObject({ code: "stale_ref" })
+    expect(fake.call("ui.resolve", { ref: original.ref })).toMatchObject({
+      ok: true,
+      ref: original.ref,
+      elementId: original.elementId,
+    })
+    const updated = leaf(fake)
+    fake.begin(["notes"], { mode: "background" })
+    expect(fake.call("ui.perform", { ref: updated.ref, action: "AXPress" })).toMatchObject({ code: "stale_ref" })
+  })
+
+  test("root and complete forbidden routes cannot mutate", () => {
+    const fake = fresh()
+    const root = tree(fake).nodes[0]
+    expect(fake.call("ui.perform", { ref: root.ref, action: "AXPress" })).toMatchObject({ code: "blocked" })
+    const menu = fake.helper.desktop.app("notes")!.menus[2]!
+    menu.name = "Run"
+    menu.menuPath = ["Tools", "Macros", "Run"]
+    const target = tree(fake).nodes.find((item: Message) => item.name === menu.name)
+    expect(fake.call("ui.perform", { ref: target.ref, action: "AXPress" })).toMatchObject({ code: "blocked" })
+    expect(fake.helper.desktop.app("notes")!.menuActions).toEqual([])
+  })
+
+  test("menu text and secure surfaces fail before any mutation", () => {
+    const fake = fresh()
+    const target = leaf(fake)
+    expect(fake.call("ui.setValue", { ref: target.ref, value: "replacement" })).toMatchObject({ code: "blocked" })
+    fake.helper.desktop.app("notes")!.menus[2]!.secure = true
+    expect(fake.call("ui.perform", { ref: target.ref, action: "AXPress" })).toMatchObject({ code: "secure_field" })
+    expect(fake.call("ui.setValue", { ref: target.ref, value: "secret" })).toMatchObject({ code: "secure_field" })
+    expect(fake.helper.desktop.app("notes")!.menuActions).toEqual([])
+  })
+
+  test("raising or typing into a menu never fabricates a coordinate target", () => {
+    const fake = fresh()
+    const target = leaf(fake)
+    const app = fake.helper.desktop.app("notes")!
+    const cursor = fake.helper.desktop.cursor
+    expect(fake.call("ui.perform", { ref: target.ref, action: "AXRaise" })).toMatchObject({ code: "needs_foreground" })
+    expect(fake.call("input.type", { pid: app.pid, ref: target.ref, elementId: target.elementId, text: "x" }).ok).toBe(
+      false,
+    )
+    expect(fake.helper.desktop.cursor).toEqual(cursor)
+    expect(fake.helper.desktop.windowsOf("notes")).toEqual([])
+    expect(app.menuActions).toEqual([])
+  })
+
+  test("menu depth and node limits report truncation without invented geometry", () => {
+    const fake = fresh()
+    const shallow = tree(fake, "notes", { maxDepth: 1 })
+    expect(shallow).toMatchObject({ truncated: true })
+    expect(shallow.nodes).toHaveLength(1)
+    expect(shallow.nodes[0].menuPath).toEqual([])
+    expect(tree(fake, "notes", { maxNodes: 2 })).toMatchObject({ truncated: true })
+    const menu = fake.helper.desktop.app("notes")!.menus[2]!
+    menu.menuPath = ["File", "x".repeat(257)]
+    expect(tree(fake)).toMatchObject({ code: "unavailable" })
+  })
+
+  test("locking retires a private menu ref even after the screen unlocks", () => {
+    const fake = fresh()
+    const target = leaf(fake)
+    fake.control({ type: "lock", locked: true })
+    expect(fake.call("ui.resolve", { ref: target.ref })).toMatchObject({ code: "locked" })
+    fake.control({ type: "lock", locked: false })
+    expect(fake.call("ui.resolve", { ref: target.ref })).toMatchObject({ code: "stale_ref" })
+    expect(fake.helper.desktop.app("notes")!.menuActions).toEqual([])
+  })
+})
+
+describe("run-owned inactive observation receipts", () => {
+  const setup = (kind: "window" | "menu", before?: (fake: ReturnType<typeof start>) => void) => {
+    const fake = start({ scenario: "notes" })
+    if (kind === "menu") fake.helper.desktop.closeWindows("notes")
+    before?.(fake)
+    fake.begin(["notes"], { mode: "background", escStops: false, paused: true, phaseRevision: 0 })
+    const app = fake.helper.desktop.app("notes")!
+    const result = fake.call("ui.tree", {
+      ...(kind === "menu" ? { pid: app.pid } : { windowId: "notes-1" }),
+      maxNodes: 50,
+      maxDepth: 4,
+    })
+    const node = result.nodes.find((item: Message) =>
+      kind === "menu" ? item.name === "New" : item.role === "AXTextField" && item.editable !== false,
+    )!
+    const hit = kind === "menu" ? { ...node, owner: fake.identity("notes") } : fake.call("ui.focused")
+    const update = (revision = 1, extra: Message = {}) =>
+      fake.call("session.update", {
+        sessionId: "test",
+        phaseRevision: revision,
+        paused: false,
+        approved: [fake.identity("notes")],
+        ...extra,
+      })
+    const act = (revision = 1) =>
+      fake.call(kind === "menu" ? "ui.perform" : "ui.setValue", {
+        ref: hit.ref,
+        pid: app.pid,
+        elementId: hit.elementId,
+        sessionId: "test",
+        phaseRevision: revision,
+        ...(kind === "menu" ? { action: "AXPress" } : { value: "Approved value" }),
+      })
+    return { fake, app, hit, update, act }
+  }
+
+  for (const kind of ["window", "menu"] as const) {
+    test(`${kind}: a phase change cannot act until explicit unchanged re-observation republishes the same receipt`, () => {
+      const { fake, app, hit, update, act } = setup(kind)
+      const before = { cursor: fake.helper.desktop.cursor, front: fake.helper.desktop.frontmost().pid }
+      expect(update()).toMatchObject({ ok: true })
+      expect(act()).toMatchObject({ code: "stale_ref" })
+      expect(fake.call("ui.resolve", { ref: hit.ref })).toMatchObject({
+        ok: true,
+        ref: hit.ref,
+        elementId: hit.elementId,
+      })
+      expect({ cursor: fake.helper.desktop.cursor, front: fake.helper.desktop.frontmost().pid }).toEqual(before)
+      expect(fake.helper.log.filter((entry) => entry.kind === "ui")).toEqual([])
+      expect(act()).toMatchObject({ ok: true, took: true })
+      if (kind === "menu") expect(app.menuActions).toEqual(["notes.menu.new"])
+    })
+
+    test(`${kind}: current app approval is required even for an unchanged inactive receipt`, () => {
+      const { fake, hit, update, act } = setup(kind)
+      update(1, { approved: [], paused: true })
+      expect(fake.call("ui.resolve", { ref: hit.ref })).toMatchObject({ code: "not_granted" })
+      update(2)
+      expect(act(2)).toMatchObject({ code: "stale_ref" })
+      expect(fake.call("ui.resolve", { ref: hit.ref })).toMatchObject({
+        ok: true,
+        ref: hit.ref,
+        elementId: hit.elementId,
+      })
+      expect(act(2)).toMatchObject({ ok: true, took: true })
+    })
+
+    test(`${kind}: a new tree permanently drops receipts instead of recreating old native refs`, () => {
+      const { fake, app, hit, update } = setup(kind)
+      update()
+      const next = fake.call("ui.tree", {
+        ...(kind === "menu" ? { pid: app.pid } : { windowId: "notes-1" }),
+        maxNodes: 50,
+        maxDepth: 4,
+      })
+      expect(next.nodes.some((node: Message) => node.ref === hit.ref)).toBe(false)
+      expect(fake.call("ui.resolve", { ref: hit.ref })).toMatchObject({ code: "stale_ref" })
+    })
+
+    test(`${kind}: reused wire session IDs cannot revive an older run receipt`, () => {
+      const { fake, hit } = setup(kind)
+      fake.begin(["notes"], { sessionId: "test", mode: "background", phaseRevision: 0 })
+      expect(fake.call("ui.resolve", { ref: hit.ref })).toMatchObject({ code: "stale_ref" })
+    })
+  }
+
+  test("window receipts bind complete names, role/security/document and actual window witnesses", () => {
+    const changes = [
+      (fake: ReturnType<typeof start>) =>
+        Object.assign(fake.helper.desktop.window("notes-1")!.nodes[0]!, { name: "Renamed" }),
+      (fake: ReturnType<typeof start>) =>
+        Object.assign(fake.helper.desktop.window("notes-1")!.nodes[0]!, { role: "AXButton" }),
+      (fake: ReturnType<typeof start>) =>
+        Object.assign(fake.helper.desktop.window("notes-1")!.nodes[0]!, { subrole: "AXSecureTextField", secure: true }),
+      (fake: ReturnType<typeof start>) =>
+        Object.assign(fake.helper.desktop.window("notes-1")!.nodes[0]!, { enabled: false }),
+      (fake: ReturnType<typeof start>) =>
+        Object.assign(fake.helper.desktop.window("notes-1")!.nodes[0]!, { editable: false }),
+      (fake: ReturnType<typeof start>) =>
+        Object.assign(fake.helper.desktop.window("notes-1")!.nodes[0]!, { documentStatus: "unknown" }),
+      (fake: ReturnType<typeof start>) =>
+        Object.assign(fake.helper.desktop.window("notes-1")!.nodes[0]!, {
+          documentStatus: "known",
+          document: "/virtual/different",
+        }),
+      (fake: ReturnType<typeof start>) => {
+        fake.helper.desktop.window("notes-1")!.bounds.x++
+      },
+      (fake: ReturnType<typeof start>) => {
+        fake.helper.desktop.window("notes-1")!.onScreen = false
+      },
+      (fake: ReturnType<typeof start>) => {
+        fake.helper.desktop.window("notes-1")!.spaceWitness = "different-space"
+      },
+      (fake: ReturnType<typeof start>) => {
+        fake.helper.desktop.window("notes-1")!.nodes[0] = { ...fake.helper.desktop.window("notes-1")!.nodes[0]! }
+      },
+    ]
+    for (const change of changes) {
+      const { fake, hit, update } = setup("window")
+      update()
+      change(fake)
+      expect(fake.call("ui.resolve", { ref: hit.ref })).toMatchObject({ code: "stale_ref" })
+      expect(fake.helper.log.filter((entry) => entry.kind === "ui")).toEqual([])
+    }
+  })
+
+  test("value edits do not become receipt identity and refreshing never returns the edited value", () => {
+    const { fake, hit, update, act } = setup("window")
+    update()
+    fake.helper.desktop.setValue(fake.helper.desktop.window("notes-1")!.nodes[0]!, "private edited value")
+    expect(act()).toMatchObject({ code: "stale_ref" })
+    const refreshed = fake.call("ui.resolve", { ref: hit.ref })
+    expect(refreshed).toMatchObject({ ok: true, ref: hit.ref, elementId: hit.elementId })
+    expect(refreshed).not.toHaveProperty("value")
+    expect(act()).toMatchObject({ ok: true, took: true })
+  })
+
+  test("truncated or Unicode-normalized names cannot refresh an older exact receipt", () => {
+    const incomplete = setup("window", (fake) => {
+      fake.helper.desktop.window("notes-1")!.nodes[0]!.nameComplete = false
+    })
+    incomplete.update()
+    expect(incomplete.fake.call("ui.resolve", { ref: incomplete.hit.ref })).toMatchObject({ code: "stale_ref" })
+    const canonical = setup("window", (fake) => {
+      Object.assign(fake.helper.desktop.window("notes-1")!.nodes[0]!, { name: "Caf\u00e9" })
+    })
+    canonical.update()
+    Object.assign(canonical.fake.helper.desktop.window("notes-1")!.nodes[0]!, { name: "Cafe\u0301" })
+    expect(canonical.fake.call("ui.resolve", { ref: canonical.hit.ref })).toMatchObject({ code: "stale_ref" })
+  })
+
+  test("menu receipts retain the actual root, full ancestry and complete label", () => {
+    for (const change of [
+      (app: ReturnType<typeof setup>["app"]) => {
+        app.menus[0] = { ...app.menus[0]! }
+      },
+      (app: ReturnType<typeof setup>["app"]) => {
+        app.menus[2]!.menuPath = ["Other", "New"]
+      },
+      (app: ReturnType<typeof setup>["app"]) => {
+        app.menus[2]!.name = "New name"
+      },
+      (app: ReturnType<typeof setup>["app"]) => {
+        app.menus[2]!.nameComplete = false
+      },
+      (app: ReturnType<typeof setup>["app"]) => {
+        app.menus[2]!.secure = true
+      },
+    ]) {
+      const { fake, app, hit, update } = setup("menu")
+      update()
+      change(app)
+      expect(fake.call("ui.resolve", { ref: hit.ref })).toMatchObject({ code: "stale_ref" })
+      expect(app.menuActions).toEqual([])
+    }
+  })
+
+  test("inactive receipts cannot retarget a replacement PID or changed signer", () => {
+    for (const kind of ["window", "menu"] as const) {
+      const pid = setup(kind)
+      pid.update()
+      Object.assign(pid.app, { pid: pid.app.pid + 1 })
+      Object.assign(pid.app.identity, { pid: pid.app.pid })
+      expect(pid.fake.call("ui.resolve", { ref: pid.hit.ref })).toMatchObject({ code: "stale_ref" })
+      const signer = setup(kind)
+      signer.update()
+      Object.assign(signer.app.identity, { teamId: "TEAM123456" })
+      expect(signer.fake.call("ui.resolve", { ref: signer.hit.ref })).toMatchObject({ code: "not_granted" })
+    }
+  })
+
+  test("the bounded private receipt ledger permanently evicts old lineage", () => {
+    const { fake, app, hit, update } = setup("menu")
+    update(1, { paused: true })
+    let latest = ""
+    for (let index = 0; index < 4096; index++) {
+      const item = {
+        id: `notes.extra.${index}`,
+        role: "AXMenuItem" as const,
+        name: `Item ${index}`,
+        menuPath: ["File", `Item ${index}`],
+        enabled: true,
+        secure: false,
+      }
+      app.menus.push(item)
+      app.focused = item.id
+      latest = fake.call("ui.focused").ref
+    }
+    expect(fake.call("ui.resolve", { ref: hit.ref })).toMatchObject({ code: "stale_ref" })
+    expect(fake.call("ui.resolve", { ref: latest })).toMatchObject({ ok: true, ref: latest })
+    expect(app.menuActions).toEqual([])
+  })
+})
+
+describe("observed localized menu shortcuts", () => {
+  const prepare = (
+    label: string,
+    shortcut: readonly string[] | undefined,
+    options: { slot?: "notes" | "ide"; windowless?: boolean; secure?: boolean; mode?: Computer.Mode } = {},
+  ) => {
+    const fake = start({ scenario: "notes" })
+    const slot = options.slot ?? "notes"
+    if (slot === "ide") fake.helper.desktop.activate(slot)
+    if (options.windowless) fake.helper.desktop.closeWindows(slot)
+    if (options.secure) fake.helper.desktop.select("notes-1", "notes.password")
+    const app = fake.helper.desktop.app(slot)!
+    const menu = app.menus[2]!
+    menu.name = label
+    menu.menuPath = ["Édition", label]
+    menu.menuShortcut = shortcut === undefined ? undefined : [...shortcut]
+    fake.begin([slot], { mode: options.mode ?? "background", escStops: false })
+    const tree = fake.call("ui.tree", { pid: app.pid, maxNodes: 50, maxDepth: 4 })
+    const target = tree.nodes?.find((node: Message) => node.scope === "app-menu" && node.name === label)
+    return { fake, app, menu, tree, target }
+  }
+
+  test("Inspecteur Web cannot hide the blocked Cmd+Option+I route behind a localized label", () => {
+    const { fake, app, target } = prepare("Inspecteur Web", ["Command", "Option", "i"], { windowless: true })
+    expect(target).toMatchObject({ menuShortcut: ["Command", "Option", "i"] })
+    expect(fake.call("ui.perform", { ref: target.ref, action: "AXPress" })).toMatchObject({ code: "blocked" })
+    expect(app.menuActions).toEqual([])
+  })
+
+  test("Coller uses actual Cmd+V semantics and cannot paste through a windowless menu", () => {
+    for (const mode of ["background", "foreground"] as const) {
+      const { fake, app, target } = prepare("Coller", ["Command", "v"], { windowless: true, mode })
+      expect(fake.call("ui.resolve", { ref: target.ref })).toMatchObject({ menuShortcut: ["Command", "v"] })
+      expect(fake.call("ui.perform", { ref: target.ref, action: "AXPress" })).toMatchObject({
+        code: mode === "background" ? "needs_foreground" : "unsupported_action",
+      })
+      expect(app.menuActions).toEqual([])
+      expect(fake.helper.desktop.windowsOf(app.slot)).toEqual([])
+    }
+  })
+
+  test("localized paste checks the actual focused field's secure and developer floors", () => {
+    const secure = prepare("Coller", ["Command", "v"], { secure: true })
+    expect(secure.fake.call("ui.perform", { ref: secure.target.ref, action: "AXPress" })).toMatchObject({
+      code: "secure_field",
+    })
+    const ide = prepare("Coller", ["Command", "v"], { slot: "ide" })
+    expect(ide.fake.call("ui.perform", { ref: ide.target.ref, action: "AXPress" })).toMatchObject({ code: "blocked" })
+    const ordinary = prepare("Coller", ["Command", "v"])
+    const before = ordinary.fake.helper.desktop.window("notes-1")!.nodes[0]!.value
+    expect(ordinary.fake.call("ui.perform", { ref: ordinary.target.ref, action: "AXPress" })).toMatchObject({
+      code: "needs_foreground",
+    })
+    expect(ordinary.fake.helper.desktop.window("notes-1")!.nodes[0]!.value).toBe(before)
+    for (const item of [secure, ide, ordinary]) expect(item.app.menuActions).toEqual([])
+  })
+
+  test("explicit malformed shortcut observations refuse instead of becoming absent legacy context", () => {
+    const malformed = prepare("Coller", [], { windowless: true })
+    expect(malformed.tree).toMatchObject({ code: "unavailable" })
+    const absent = prepare("Nouveau", undefined, { windowless: true })
+    expect(absent.target).not.toHaveProperty("menuShortcut")
+    expect(absent.fake.call("ui.perform", { ref: absent.target.ref, action: "AXPress" })).toMatchObject({
+      ok: true,
+      took: true,
+    })
+  })
+
+  test("shortcut changes cannot promote or mutate an older localized receipt", () => {
+    for (const replacement of [["Command", "v"], ["s", "Command"], ["command", "s"], undefined]) {
+      const { fake, app, menu, target } = prepare("Enregistrer", ["Command", "s"], { windowless: true })
+      fake.call("session.update", { approved: [fake.identity("notes")] })
+      menu.menuShortcut = replacement
+      expect(fake.call("ui.resolve", { ref: target.ref })).toMatchObject({ code: "stale_ref" })
+      expect(fake.call("ui.perform", { ref: target.ref, action: "AXPress" })).toMatchObject({ code: "stale_ref" })
+      expect(app.menuActions).toEqual([])
+    }
+  })
+})
+
 for (const platform of ["macos", "windows"] as const) {
   test(`${platform}: installed app facts expose a PID only after a real virtual launch`, () => {
     const fake = start({ platform })
@@ -539,7 +1017,10 @@ describe("fresh native observations for desktop main", () => {
       fake.call("session.update", { sessionId: "test", phaseRevision: 1, paused: true, approved: [] })
       expect(fake.call("ui.resolve", { ref: fresh.ref })).toMatchObject({ code: "not_granted" })
       fake.begin(["terminal"], { sessionId: "protected-owner", phaseRevision: 0, paused: true })
-      expect(fake.call("ui.resolve", { ref: `${desktop.generation}:terminal-1` })).toMatchObject({ code: "protected" })
+      expect(fake.call("ui.resolve", { ref: `${desktop.generation}:terminal-1` })).toMatchObject({ code: "stale_ref" })
+      expect(fake.call("ui.tree", { windowId: "terminal-1", maxNodes: 10, maxDepth: 2 })).toMatchObject({
+        code: "protected",
+      })
       expect(fake.helper.log.filter((entry) => ["input", "ui", "app", "program"].includes(entry.kind))).toEqual([])
       fake.call("shutdown")
     })
@@ -736,7 +1217,22 @@ describe("native approved identities retain their signer and unsigned process bi
         }),
       ).toMatchObject({ code: "changed" })
       expect(fake.helper.log.filter((entry) => entry.kind === "input")).toEqual([])
-      expect(fake.call("input.move", { ...input, pid: app.pid })).toMatchObject({ ok: true })
+      expect(fake.call("input.move", { ...input, pid: app.pid })).toMatchObject({ code: "changed" })
+      const currentHeader = fake.capture({ windowId: "calc-1" }).header
+      const currentHit = fake.call("ui.hittest", { captureId: currentHeader.captureId, x: 20, y: 100 })
+      expect(currentHit.ref).not.toBe(hit.ref)
+      expect(currentHit.elementId).not.toBe(hit.elementId)
+      expect(
+        fake.call("input.move", {
+          captureId: currentHeader.captureId,
+          x: 20,
+          y: 100,
+          pid: app.pid,
+          windowId: currentHit.windowId,
+          ref: currentHit.ref,
+          elementId: currentHit.elementId,
+        }),
+      ).toMatchObject({ ok: true })
       fake.call("shutdown")
     })
   }
@@ -803,10 +1299,22 @@ describe("native reference actions retain their observed process and element", (
         })
         Object.assign(app, { pid: app.pid + 1000 })
         Object.assign(app.identity, { pid: app.pid })
-        expect(fake.call(`ui.${action}`, { ...args, ...expected })).toMatchObject({ code: "changed" })
+        expect(fake.call(`ui.${action}`, { ...args, ...expected })).toMatchObject({ code: "stale_ref" })
         expect(node.value).toBe(before)
         expect(fake.helper.log.filter((entry) => entry.kind === "ui")).toEqual([])
-        expect(fake.call(`ui.${action}`, { ...args, ...expected, pid: app.pid })).toMatchObject({
+        const replacement = fake
+          .call("ui.tree", { windowId, maxNodes: 50, maxDepth: 4 })
+          .nodes.find((item: Message) => item.name === node.name)
+        const replacementHit = fake.call("ui.resolve", { ref: replacement.ref })
+        expect(replacementHit.elementId).not.toBe(expected.elementId)
+        expect(
+          fake.call(`ui.${action}`, {
+            ...args,
+            ref: replacement.ref,
+            pid: app.pid,
+            elementId: replacementHit.elementId,
+          }),
+        ).toMatchObject({
           ok: true,
           took: true,
         })
@@ -2324,8 +2832,9 @@ describe("options", () => {
       expect(run(...argv).code).toBe(2)
   })
 
-  test("the fake's import graph stays Node-only, including the exact shared program identity module", async () => {
+  test("the fake's import graph stays Node-only, including exact shared program and key safety modules", async () => {
     const program = path.resolve(import.meta.dir, "../../../core/src/computer/program.ts")
+    const keys = path.resolve(import.meta.dir, "../../../core/src/computer/keys.ts")
     const pending = ["fake-helper.ts", "fake-desktop.ts", "png.ts", "transcript.ts"].map((file) =>
       path.join(import.meta.dir, file),
     )
@@ -2336,11 +2845,18 @@ describe("options", () => {
       seen.add(file)
       const source = await Bun.file(file).text()
       expect(source).not.toMatch(/\bBun\.|["']bun(?::[\w-]+)?["']/)
-      const specifiers = [...source.matchAll(/^import[^"']*["']([^"']+)["']/gm)].map((match) => match[1]!)
+      const specifiers = [
+        ...source.matchAll(/^import[^"']*["']([^"']+)["']/gm),
+        ...source.matchAll(/^export\s+(?:\*|\{[^}]*\})[^\r\n]*\bfrom\s+["']([^"']+)["']/gm),
+      ].map((match) => match[1]!)
       expect(specifiers.length).toBeGreaterThan(0)
       for (const specifier of specifiers) {
         if (specifier === "@vectordevai/core/computer/program") {
           pending.push(program)
+          continue
+        }
+        if (specifier === "@vectordevai/core/computer/keys") {
+          pending.push(keys)
           continue
         }
         expect(specifier).toMatch(
@@ -2350,5 +2866,6 @@ describe("options", () => {
       }
     }
     expect(seen.has(program)).toBe(true)
+    expect(seen.has(keys)).toBe(true)
   })
 })

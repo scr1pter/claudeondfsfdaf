@@ -14,6 +14,8 @@ do {
     _ = try runCaptureTests()
     _ = try runAccessibilityRegistryTests()
     _ = try runAccessibilityTests()
+    _ = try runAccessibilityTextTests()
+    _ = try runMenuSafetyTests()
     _ = try runHeldInputTests()
     _ = try runInputTests()
     _ = try runInputKeySafetyTests()

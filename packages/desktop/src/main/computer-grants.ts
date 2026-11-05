@@ -258,7 +258,7 @@ export function createComputerGrants(input: {
         : undefined
     const sensitive =
       request?.permission === "computer_sensitive"
-        ? Schema.decodeUnknownOption(Computer.SensitiveAskMetadata)(request.metadata)
+        ? Schema.decodeUnknownOption(Computer.SensitiveAskMetadata, { onExcessProperty: "error" })(request.metadata)
         : undefined
     const metadata =
       app && Option.isSome(app)
@@ -498,7 +498,25 @@ export function createComputerGrants(input: {
       metadata.action !== actionOf(step)
     )
       return false
-    if (step.kind === "open" || metadata.why === "run_program") {
+    if (inspect.scope === "app-menu") {
+      if (
+        metadata.target.scope !== "app-menu" ||
+        step.kind === "open" ||
+        metadata.why === "run_program" ||
+        inspect.app.pid !== inspect.pid ||
+        metadata.target.pid !== inspect.pid ||
+        metadata.target.ref !== inspect.element.ref ||
+        metadata.target.elementId !== inspect.element.elementId ||
+        inspect.menuPath.length === 0 ||
+        metadata.target.menuPath.length !== inspect.menuPath.length ||
+        !metadata.target.menuPath.every((part, index) => part === inspect.menuPath[index]) ||
+        metadata.target.menuShortcut?.length !== inspect.menuShortcut?.length ||
+        (metadata.target.menuShortcut !== undefined &&
+          !metadata.target.menuShortcut.every((part, index) => part === inspect.menuShortcut?.[index]))
+      )
+        return false
+    } else if (metadata.target.scope === "app-menu") return false
+    else if (step.kind === "open" || metadata.why === "run_program") {
       const canonical = inspect.programPath ?? (step.kind === "open" ? nativePath(inspect.app) : undefined)
       if (
         !canonical ||
@@ -538,6 +556,7 @@ export function createComputerGrants(input: {
     if (
       !ComputerProgram.valid(program) ||
       !metadata ||
+      metadata.target.scope === "app-menu" ||
       metadata.action !== "open" ||
       metadata.why !== "run_program" ||
       metadata.target.appKey !== program.key ||

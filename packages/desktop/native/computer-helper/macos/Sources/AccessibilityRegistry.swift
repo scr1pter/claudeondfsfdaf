@@ -3,38 +3,78 @@ import Foundation
 
 struct AccessibilityWitness: Equatable {
     let process: HelperProcessIdentity
-    let windowID: String
-    let windowFrame: CGRect
-    let onScreen: Bool
+    let windowID: String?
+    let windowFrame: CGRect?
+    let onScreen: Bool?
     let spaceWitness: String?
-    /// The process above remains the real AX endpoint; this proof separately binds its client and CG surface.
     let hosted: HostedWindowProof?
+    let menu: AccessibilityMenuWitness?
 
     init(process: HelperProcessIdentity, windowID: String, windowFrame: CGRect,
          onScreen: Bool = true, spaceWitness: String? = nil, hosted: HostedWindowProof? = nil) {
-        self.process = process
-        self.windowID = windowID
-        self.windowFrame = windowFrame
-        self.onScreen = onScreen
-        self.spaceWitness = spaceWitness
-        self.hosted = hosted
+        self.process = process; self.windowID = windowID; self.windowFrame = windowFrame
+        self.onScreen = onScreen; self.spaceWitness = spaceWitness; self.hosted = hosted; menu = nil
     }
-
+    init(process: HelperProcessIdentity, menu: AccessibilityMenuWitness) {
+        self.process = process; self.menu = menu
+        windowID = nil; windowFrame = nil; onScreen = nil; spaceWitness = nil; hosted = nil
+    }
     fileprivate var valid: Bool {
-        process.pid > 0 && process.parentPID > 0 && process.startMicroseconds < 1_000_000 &&
-            MacAppIdentity.canonicalPathShape(process.executable) &&
-            !windowID.isEmpty && windowID.utf8.count <= 256 && !windowID.contains("\0") &&
+        guard process.pid > 0, process.parentPID > 0, process.startMicroseconds < 1_000_000,
+              MacAppIdentity.canonicalPathShape(process.executable) else { return false }
+        if let menu { return windowID == nil && windowFrame == nil && onScreen == nil && spaceWitness == nil && hosted == nil && menu.valid }
+        guard let windowID, let windowFrame, let onScreen else { return false }
+        return !windowID.isEmpty && windowID.utf8.count <= 256 && !windowID.contains("\0") &&
             windowFrame.minX.isFinite && windowFrame.minY.isFinite && windowFrame.width.isFinite && windowFrame.height.isFinite &&
             windowFrame.width > 0 && windowFrame.height > 0 && windowFrame.maxX.isFinite && windowFrame.maxY.isFinite &&
             (spaceWitness.map { !$0.isEmpty && $0.utf8.count <= 256 && !$0.contains("\0") } ?? true) &&
             (hosted.map { $0.physicalOwner.process == process && $0.surface.windowID == windowID &&
-                $0.surface.bounds == windowFrame && $0.surface.onScreen == onScreen &&
-                $0.surface.spaceWitness == spaceWitness } ?? true)
+                $0.surface.bounds == windowFrame && $0.surface.onScreen == onScreen && $0.surface.spaceWitness == spaceWitness } ?? true)
     }
-
     fileprivate func matches(_ snapshot: AccessibilitySnapshot) -> Bool {
-        hosted.map { $0.observationEpoch == snapshot.observationEpoch &&
+        if let menu { return menu.runEpoch == snapshot.runEpoch }
+        return hosted.map { $0.observationEpoch == snapshot.observationEpoch &&
             $0.sessionID.utf8.elementsEqual(snapshot.sessionID.utf8) && $0.phaseRevision == snapshot.phaseRevision } ?? true
+    }
+}
+
+struct AccessibilityReceiptFacts: Equatable {
+    let role: String
+    var subrole: String? = nil
+    let name: String
+    let secure: Bool
+    var enabled = true
+    var editable = false
+    var document: String? = nil
+    var documentStatus = "unknown"
+    var owner: MacAppIdentity? = nil
+    var nameComplete = true
+    var menuShortcut: [String]? = nil
+    var menuShortcutComplete = true
+
+    var complete: Bool {
+        nameComplete && menuShortcutComplete && (menuShortcut.map { !$0.isEmpty && $0.count <= 8 && $0.allSatisfy { !$0.isEmpty && $0.utf16.count <= 32 && MacAppIdentity.safeName($0) } } ?? true) && !role.isEmpty && role.utf16.count <= 64 && name.utf16.count <= 500 &&
+            (subrole.map({ $0.utf16.count <= 64 }) ?? true) &&
+            ["unknown", "known", "none"].contains(documentStatus) &&
+            (documentStatus == "known" ? document.map(MacAppIdentity.canonicalPathShape) == true : document == nil)
+    }
+    static func == (a: AccessibilityReceiptFacts, b: AccessibilityReceiptFacts) -> Bool {
+        same(a.role, b.role) && same(a.subrole, b.subrole) && same(a.name, b.name) && a.secure == b.secure &&
+            a.enabled == b.enabled && a.editable == b.editable && same(a.document, b.document) &&
+            a.documentStatus == b.documentStatus && a.nameComplete == b.nameComplete &&
+            a.menuShortcutComplete == b.menuShortcutComplete && sameShortcut(a.menuShortcut, b.menuShortcut) && sameOwner(a.owner, b.owner)
+    }
+    private static func same(_ a: String?, _ b: String?) -> Bool {
+        switch (a, b) { case (.none, .none): return true; case (.some(let x), .some(let y)): return x.utf8.elementsEqual(y.utf8); default: return false }
+    }
+    private static func sameShortcut(_ a: [String]?, _ b: [String]?) -> Bool {
+        guard let a, let b else { return a == nil && b == nil }
+        return a.count == b.count && zip(a, b).allSatisfy { same($0.0, $0.1) }
+    }
+    private static func sameOwner(_ a: MacAppIdentity?, _ b: MacAppIdentity?) -> Bool {
+        guard let a, let b else { return a == nil && b == nil }
+        return same(a.bundleId, b.bundleId) && same(a.teamId, b.teamId) && a.apple == b.apple && a.system == b.system &&
+            a.verified == b.verified && same(a.name, b.name) && same(a.path, b.path) && a.pid == b.pid
     }
 }
 
@@ -42,6 +82,7 @@ struct AccessibilitySnapshot {
     let generation: Int
     let sessionID: String
     let observationEpoch: UUID
+    let runEpoch: UUID
     let phaseRevision: Int?
     fileprivate let worker: UUID
     fileprivate let token: UUID
@@ -53,6 +94,9 @@ struct AccessibilityReference<Element> {
     let generation: Int
     let element: Element
     let witness: AccessibilityWitness
+    let runEpoch: UUID
+    let sessionID: String
+    let facts: AccessibilityReceiptFacts?
 }
 
 /// Element hash/equality are native CFHash/CFEqual in production, never an AXIdentifier or a screen label.
@@ -61,7 +105,8 @@ final class AccessibilityRegistry<Element> {
     private struct StableElement {
         let element: Element
         let process: HelperProcessIdentity
-        let windowID: String
+        let windowID: String?
+        let menu: AccessibilityMenuWitness?
         let hosted: HostedWindowProof?
         let hash: UInt
     }
@@ -77,6 +122,11 @@ final class AccessibilityRegistry<Element> {
     private var sequence = 0
     private var closed = false
     private var references: [String: AccessibilityReference<Element>] = [:]
+    private var receipts: [String: AccessibilityReference<Element>] = [:]
+    private var receiptOrder: [String] = []
+    private var receiptBytes = 0
+    private var runEpoch: UUID?
+    private var runSession: String?
     private var latestReference: [String: String] = [:]
     private var activeIDs = Set<String>()
     private var stable: [String: StableElement] = [:]
@@ -96,7 +146,7 @@ final class AccessibilityRegistry<Element> {
     func beginSnapshot(session: ServerSession) throws -> AccessibilitySnapshot {
         lock.lock()
         defer { lock.unlock() }
-        return try begin(session)
+        return try begin(session, tree: true)
     }
 
     /// Focus and hit-test observations share the current generation, until authority or a tree changes it.
@@ -104,11 +154,11 @@ final class AccessibilityRegistry<Element> {
         lock.lock()
         defer { lock.unlock() }
         if !closed, let snapshot, matches(snapshot, session) { return snapshot }
-        return try begin(session)
+        return try begin(session, tree: false)
     }
 
     func register(element: Element, witness: AccessibilityWitness,
-                  snapshot requested: AccessibilitySnapshot) throws -> AccessibilityReference<Element> {
+                  snapshot requested: AccessibilitySnapshot, facts: AccessibilityReceiptFacts? = nil) throws -> AccessibilityReference<Element> {
         lock.lock()
         defer { lock.unlock() }
         guard !closed, let snapshot, snapshot.worker == requested.worker, snapshot.token == requested.token,
@@ -116,6 +166,7 @@ final class AccessibilityRegistry<Element> {
         let elementHash = hash(element)
         let existingID = buckets[elementHash]?.first { id in
             guard let item = stable[id], item.process == witness.process, item.windowID == witness.windowID,
+                  item.menu == witness.menu,
                   item.hosted == witness.hosted else { return false }
             return equal(item.element, element)
         }
@@ -133,20 +184,22 @@ final class AccessibilityRegistry<Element> {
                     throw ServerFailure(code: "unavailable", message: "The accessibility identity limit was reached.")
                 }
                 let retired = stableOrder.remove(at: index)
+                for ref in receipts.keys.filter({ receipts[$0]?.elementID == retired }) { removeReceipt(ref) }
+                receiptOrder.removeAll { receipts[$0] == nil }
                 if let item = stable.removeValue(forKey: retired) {
                     buckets[item.hash]?.removeAll { $0 == retired }
                     if buckets[item.hash]?.isEmpty == true { buckets.removeValue(forKey: item.hash) }
                 }
             }
             elementID = try nextID("axe")
-            stable[elementID] = StableElement(element: element, process: witness.process, windowID: witness.windowID,
+            stable[elementID] = StableElement(element: element, process: witness.process, windowID: witness.windowID, menu: witness.menu,
                                               hosted: witness.hosted, hash: elementHash)
             buckets[elementHash, default: []].append(elementID)
             stableOrder.append(elementID)
         }
         let ref = try nextID("axr")
         let record = AccessibilityReference(ref: ref, elementID: elementID, generation: snapshot.generation,
-                                            element: element, witness: witness)
+                                            element: element, witness: witness, runEpoch: snapshot.runEpoch, sessionID: snapshot.sessionID, facts: facts?.complete == true ? facts : nil)
         references[ref] = record
         latestReference[elementID] = ref
         activeIDs.insert(elementID)
@@ -177,6 +230,95 @@ final class AccessibilityRegistry<Element> {
         return record
     }
 
+    func noteSession(_ session: ServerSession?) {
+        lock.lock(); defer { lock.unlock() }
+        guard let session else { retire(); return }
+        if !matchesRun(session) { retire(); runEpoch = session.runEpoch; runSession = session.id }
+    }
+
+    /// Phase updates demote authority, not native object evidence. Only explicit resolve can reauthorize it.
+    func suspendObservations() {
+        lock.lock(); defer { lock.unlock() }
+        demote()
+    }
+
+    func receipt(_ ref: String, session: ServerSession) throws -> AccessibilityReference<Element> {
+        lock.lock(); defer { lock.unlock() }
+        guard !closed, matchesRun(session) else { throw Self.stale }
+        if let snapshot, !matches(snapshot, session) { demote() }
+        guard let record = receipts[ref], record.runEpoch == session.runEpoch,
+              record.sessionID.utf8.elementsEqual(session.id.utf8), record.facts?.complete == true,
+              stable[record.elementID] != nil else { throw Self.stale }
+        return record
+    }
+
+    /// Caller has just reobserved policy, actual AX membership and all complete facts. No native work runs here.
+    func refreshReceipt(_ receipt: AccessibilityReference<Element>, liveElement: Element, witness: AccessibilityWitness,
+                        facts: AccessibilityReceiptFacts, session: ServerSession) throws -> AccessibilityReference<Element> {
+        lock.lock(); defer { lock.unlock() }
+        guard !closed, matchesRun(session), let stored = receipts[receipt.ref], stored.elementID == receipt.elementID,
+              stored.runEpoch == session.runEpoch, stored.sessionID.utf8.elementsEqual(session.id.utf8),
+              stable[stored.elementID] != nil, equal(stored.element, liveElement), equal(stored.element, receipt.element),
+              facts.complete, stored.facts?.complete == true, stored.facts == facts,
+              witness.valid, sameReceiptScope(stored.witness, witness) else { throw Self.stale }
+        let current: AccessibilitySnapshot
+        if let snapshot, matches(snapshot, session) { current = snapshot } else { current = try begin(session, tree: false) }
+        guard references.count < limit, witness.matches(current) else { throw Self.stale }
+        let record = AccessibilityReference(ref: stored.ref, elementID: stored.elementID, generation: current.generation,
+            element: stored.element, witness: witness, runEpoch: current.runEpoch, sessionID: current.sessionID, facts: facts)
+        removeReceipt(stored.ref); receiptOrder.removeAll { $0 == stored.ref }
+        if let old = stable[stored.elementID] {
+            stable[stored.elementID] = StableElement(element: stored.element, process: witness.process, windowID: witness.windowID,
+                menu: witness.menu, hosted: witness.hosted, hash: old.hash)
+        }
+        references[stored.ref] = record; latestReference[stored.elementID] = stored.ref; activeIDs.insert(stored.elementID)
+        return record
+    }
+
+    func recordFacts(_ ref: String, facts: AccessibilityReceiptFacts, session: ServerSession) throws -> AccessibilityReference<Element> {
+        lock.lock(); defer { lock.unlock() }
+        guard !closed, let snapshot, matches(snapshot, session), let record = references[ref] else { throw Self.stale }
+        let updated = AccessibilityReference(ref: record.ref, elementID: record.elementID, generation: record.generation,
+            element: record.element, witness: record.witness, runEpoch: record.runEpoch, sessionID: record.sessionID, facts: facts.complete ? facts : nil)
+        references[ref] = updated
+        return updated
+    }
+
+    private func sameReceiptScope(_ old: AccessibilityWitness, _ current: AccessibilityWitness) -> Bool {
+        guard old.process == current.process, old.windowID == current.windowID, old.windowFrame == current.windowFrame,
+              old.onScreen == current.onScreen, old.spaceWitness == current.spaceWitness, old.menu == current.menu else { return false }
+        if let oldHost = old.hosted, let newHost = current.hosted {
+            // Session/observation fields intentionally refresh; the actual three-way native binding does not.
+            return oldHost.physicalOwner.process == newHost.physicalOwner.process && oldHost.logicalOwner.process == newHost.logicalOwner.process &&
+                oldHost.physicalOwner.identity == newHost.physicalOwner.identity && oldHost.logicalOwner.identity == newHost.logicalOwner.identity &&
+                oldHost.surface == newHost.surface && oldHost.kind == newHost.kind &&
+                AccessibilityElement.equivalent(oldHost.physicalRoot, newHost.physicalRoot) &&
+                AccessibilityElement.equivalent(oldHost.logicalWindow, newHost.logicalWindow)
+        }
+        return old.hosted == nil && current.hosted == nil
+    }
+
+    private func receiptCost(_ record: AccessibilityReference<Element>) -> Int {
+        512 + record.ref.utf8.count + record.elementID.utf8.count + record.sessionID.utf8.count +
+            record.witness.process.executable.utf8.count + (record.witness.menu?.menuPath.reduce(0) { $0 + 32 + $1.utf8.count } ?? 0) +
+            (record.facts.map { $0.role.utf8.count + ($0.subrole?.utf8.count ?? 0) + $0.name.utf8.count +
+                ($0.document?.utf8.count ?? 0) + ($0.menuShortcut?.reduce(0) { $0 + 16 + $1.utf8.count } ?? 0) + ($0.owner?.path?.utf8.count ?? 0) + ($0.owner?.name.utf8.count ?? 0) +
+                ($0.owner?.bundleId.utf8.count ?? 0) + ($0.owner?.teamId?.utf8.count ?? 0) } ?? 0)
+    }
+    private func removeReceipt(_ ref: String) {
+        if let old = receipts.removeValue(forKey: ref) { receiptBytes -= receiptCost(old) }
+    }
+    private func demote() {
+        for (ref, record) in references where record.facts?.complete == true {
+            if receipts[ref] == nil { receiptOrder.append(ref) } else { removeReceipt(ref) }
+            receipts[ref] = record; receiptBytes += receiptCost(record)
+        }
+        while receiptOrder.count > limit || receiptBytes > 8 * 1_048_576 {
+            removeReceipt(receiptOrder.removeFirst())
+        }
+        snapshot = nil; references.removeAll(keepingCapacity: true); latestReference.removeAll(keepingCapacity: true); activeIDs.removeAll(keepingCapacity: true)
+    }
+
     func clear() {
         lock.lock()
         defer { lock.unlock() }
@@ -190,29 +332,37 @@ final class AccessibilityRegistry<Element> {
         retire()
     }
 
-    private func begin(_ session: ServerSession) throws -> AccessibilitySnapshot {
+    private func begin(_ session: ServerSession, tree: Bool) throws -> AccessibilitySnapshot {
         guard !closed, !session.id.isEmpty, session.id.utf8.count <= 256,
               !session.id.contains("\0"), session.revision.map({ $0 >= 0 }) ?? true,
               generation < 9_007_199_254_740_991 else { throw Self.stale }
-        if snapshot.map({ !matches($0, session) }) ?? true { retire() }
+        if !matchesRun(session) { retire(); runEpoch = session.runEpoch; runSession = session.id }
+        if tree {
+            if snapshot.map({ !matches($0, session) }) ?? true {
+                references.removeAll(); stable.removeAll(); buckets.removeAll(); stableOrder.removeAll()
+            }
+            receipts.removeAll(); receiptOrder.removeAll(); receiptBytes = 0
+        } else if let snapshot, !matches(snapshot, session) { demote() }
         generation += 1
-        references.removeAll(keepingCapacity: true)
-        latestReference.removeAll(keepingCapacity: true)
-        activeIDs.removeAll(keepingCapacity: true)
+        references.removeAll(keepingCapacity: true); latestReference.removeAll(keepingCapacity: true); activeIDs.removeAll(keepingCapacity: true)
         let value = AccessibilitySnapshot(generation: generation, sessionID: session.id,
-                                          observationEpoch: session.observationEpoch, phaseRevision: session.revision,
-                                          worker: worker, token: UUID())
+            observationEpoch: session.observationEpoch, runEpoch: session.runEpoch, phaseRevision: session.revision, worker: worker, token: UUID())
         snapshot = value
         return value
     }
 
+    private func matchesRun(_ session: ServerSession) -> Bool {
+        runEpoch == session.runEpoch && runSession.map { $0.utf8.elementsEqual(session.id.utf8) } == true
+    }
+
     private func matches(_ snapshot: AccessibilitySnapshot, _ session: ServerSession) -> Bool {
-        snapshot.worker == worker && snapshot.sessionID == session.id &&
-            snapshot.observationEpoch == session.observationEpoch && snapshot.phaseRevision == session.revision
+        snapshot.worker == worker && snapshot.sessionID.utf8.elementsEqual(session.id.utf8) &&
+            snapshot.observationEpoch == session.observationEpoch && snapshot.runEpoch == session.runEpoch && snapshot.phaseRevision == session.revision
     }
 
     private func retire() {
-        snapshot = nil
+        snapshot = nil; runEpoch = nil; runSession = nil
+        receipts.removeAll(keepingCapacity: true); receiptOrder.removeAll(keepingCapacity: true); receiptBytes = 0
         references.removeAll(keepingCapacity: true)
         latestReference.removeAll(keepingCapacity: true)
         activeIDs.removeAll(keepingCapacity: true)

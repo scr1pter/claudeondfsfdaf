@@ -126,6 +126,48 @@ const UNSAFE = /[\p{C}\p{Zl}\p{Zp}]/u
 const FORBIDDEN_MENU =
   /\b(?:macros?|scripts?|scripting|javascript|visual\s+basic|vb\s+editor|terminal|console|powershell|shell|developer|devtools|services|web\s+inspector|inspect\s+element|task\s+manager|mission\s+control|screen\s*capture|screenshots?|lock\s+screen|switch\s+user|enable\s+content)\b/i
 
+/** The complete native-observed ancestry, including the item. Empty paths are read-only menu roots. */
+export function forbiddenMenu(path: readonly string[], shortcut?: readonly string[]) {
+  if (
+    path.length < 1 ||
+    path.length > 30 ||
+    Array.from(path).some((label) => typeof label !== "string" || label.length > 256 || UNSAFE.test(label))
+  )
+    return true
+  const normalized = path.map((label) => label.normalize("NFKC"))
+  return (
+    normalized.some(
+      (value) => !value.trim() || UNSAFE.test(value) || value.length > 256 || FORBIDDEN_MENU.test(value),
+    ) ||
+    FORBIDDEN_MENU.test(normalized.join(" ")) ||
+    (shortcut !== undefined &&
+      !allowedCombo(shortcut, [{ combo: shortcut, label: path.at(-1)! }], { platform: "macos" }))
+  )
+}
+
+export function pasteCombo(combo: readonly string[], layout?: Layout) {
+  const key = resolve(combo, layout)
+  return (
+    !!key &&
+    ((key.key === "v" && (key.modifiers.includes("control") || key.modifiers.includes("meta"))) ||
+      (key.key === "insert" && key.modifiers.includes("shift")))
+  )
+}
+
+/** An observed menu binding can edit a document even when its translated label has no English verb. */
+export function menuTypesText(shortcut: readonly string[]) {
+  // Validate semantic tokens only; forbiddenMenu separately binds the actual observed menu ancestry.
+  if (!allowedCombo(shortcut, [{ combo: shortcut, label: "Menu action" }], { platform: "macos" })) return true
+  const key = resolve(shortcut, { platform: "macos" })
+  if (!key) return true
+  return (
+    pasteCombo(shortcut) ||
+    ["backspace", "delete"].includes(key.key) ||
+    (["x", "z", "y"].includes(key.key) && (key.modifiers.includes("control") || key.modifiers.includes("meta"))) ||
+    (printable(key.key) && key.modifiers.every((modifier) => ["shift", "alt", "altgraph"].includes(modifier)))
+  )
+}
+
 /** Resolve names and physical positions before both the key floor and the sensitive-action classifier inspect them. */
 export function resolve(combo: readonly string[], layout?: Layout): Resolved | undefined {
   if (combo.length < 1 || combo.length > 8 || combo.some((key) => !key || key.length > 32 || UNSAFE.test(key))) return
@@ -171,13 +213,7 @@ export function allowedCombo(
     const menu = resolve(shortcut.combo, layout)
     return menu?.key === resolved.key && menu.modifiers.join("+") === mods.join("+")
   })
-  if (
-    matching.some(
-      (shortcut) =>
-        !shortcut.label.trim() || UNSAFE.test(shortcut.label) || FORBIDDEN_MENU.test(shortcut.label.normalize("NFKC")),
-    )
-  )
-    return false
+  if (matching.some((shortcut) => forbiddenMenu([shortcut.label]))) return false
   const text = printable(resolved.key)
   if ((mods.length === 0 || (mods.length === 1 && mods[0] === "shift")) && (text || NAVIGATION.has(resolved.key)))
     return true

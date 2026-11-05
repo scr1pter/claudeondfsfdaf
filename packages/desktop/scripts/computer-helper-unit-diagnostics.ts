@@ -17,6 +17,8 @@ const knownSuites = new Set([
   "runCaptureTests",
   "runAccessibilityRegistryTests",
   "runAccessibilityTests",
+  "runAccessibilityTextTests",
+  "runMenuSafetyTests",
   "runHeldInputTests",
   "runInputTests",
   "runInputKeySafetyTests",
@@ -68,6 +70,7 @@ private func diagnosticReason(_ error: Error) -> String {
     let synthetic: Set<String> = ["ProtocolTestFailure", "ServerTestError", "LifecycleTestFailure",
         "PackagedSelfTestFailure", "BlocklistTestFailure", "PermissionTestFailure", "GeometryTestFailure",
         "CaptureTestFailure", "AccessibilityRegistryTestFailure", "AccessibilityTestFailure",
+        "AccessibilityTextTestFailure", "MenuSafetyTestFailure",
         "HeldInputTestFailure", "InputTestFailure", "InputKeySafetyTestFailure",
         "HostOwnershipTestFailure", "ProgramRegistryTestFailure", "AppsTestFailure", "ClipboardTestFailure",
         "EventTapTestFailure", "WatchdogTestFailure"]

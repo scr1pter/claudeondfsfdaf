@@ -21,6 +21,94 @@ const qwerty: ComputerKeys.Layout = {
 }
 
 describe("computer key floor", () => {
+  test("the complete observed menu ancestry shares the shortcut safety floor", () => {
+    for (const path of [
+      ["File", "Services", "Summarize"],
+      ["Tools", "Run Macro", "Apply"],
+      ["Tools", "Scripts", "Apply"],
+      ["Window", "Terminal", "New"],
+      ["Web", "Inspector"],
+      ["Enable", "Content"],
+      ["Task", "Manager"],
+      ["File", "Ｓｅｒｖｉｃｅｓ", "Apply"],
+      ["Tools", "αScripts", "Apply"],
+    ])
+      expect(ComputerKeys.forbiddenMenu(path), path.join(" > ")).toBe(true)
+    for (const path of [
+      ["File", "Save"],
+      ["Product", "Run"],
+      ["Product", "Build"],
+      ["Product", "Debug"],
+      ["View", "Manuscripts"],
+      ["Help", "Terminalia"],
+    ])
+      expect(ComputerKeys.forbiddenMenu(path), path.join(" > ")).toBe(false)
+  })
+
+  test("menu mutation paths refuse roots, malformed labels and Unicode disguises", () => {
+    for (const path of [
+      [],
+      [""],
+      ["   "],
+      ["File", "Save\n"],
+      ["File", "Save\u202e"],
+      ["File", "Save\u200b"],
+      ["File", "Save\ue000"],
+      ["File", "x".repeat(257)],
+      Array(31).fill("File"),
+      ["ﬃ".repeat(86)],
+      ["🙂".repeat(129)],
+    ])
+      expect(ComputerKeys.forbiddenMenu(path), JSON.stringify(path)).toBe(true)
+    expect(ComputerKeys.forbiddenMenu(Array(30).fill("File"))).toBe(false)
+    expect(ComputerKeys.forbiddenMenu(Array<string>(1))).toBe(true)
+    expect(ComputerKeys.forbiddenMenu(["x".repeat(256)])).toBe(false)
+    expect(ComputerKeys.forbiddenMenu(["🙂".repeat(128)])).toBe(false)
+  })
+
+  test("localized menu shortcuts retain the actual key safety and text classification floors", () => {
+    expect(ComputerKeys.forbiddenMenu(["Développement", "Inspecteur Web"], ["Command", "Alt", "i"])).toBe(true)
+    expect(ComputerKeys.forbiddenMenu(["Fichier", "Enregistrer"], ["Command", "s"])).toBe(false)
+    expect(ComputerKeys.forbiddenMenu(["Édition", "Coller"], ["Command", "v"])).toBe(false)
+    expect(ComputerKeys.forbiddenMenu(["Fichier", "Quitter"], ["Command", "Shift", "q"])).toBe(true)
+    expect(ComputerKeys.forbiddenMenu(["Fichier", "Enregistrer"], [])).toBe(true)
+    expect(ComputerKeys.forbiddenMenu(["Fichier", "Enregistrer"], ["Command", "KeyS"])).toBe(true)
+    for (const combo of [
+      ["Command", "v"],
+      ["Control", "v"],
+      ["Shift", "Insert"],
+    ])
+      expect(ComputerKeys.pasteCombo(combo)).toBe(true)
+    for (const combo of [
+      ["Command", "v"],
+      ["Shift", "Insert"],
+      ["Command", "x"],
+      ["Control", "y"],
+      ["Meta", "z"],
+      ["Backspace"],
+      ["Delete"],
+      ["a"],
+      ["Alt", "e"],
+      ["🙂"],
+      ["Cmd", "UnknownKey"],
+      ["Cmd", "KeyS"],
+      [],
+    ])
+      expect(ComputerKeys.menuTypesText(combo), combo.join("+")).toBe(true)
+    for (const combo of [
+      ["Command", "s"],
+      ["Command", "r"],
+      ["Command", "b"],
+      ["Meta", "c"],
+      ["Meta", "a"],
+      ["ArrowLeft"],
+      ["Enter"],
+      ["Tab"],
+      ["F5"],
+    ])
+      expect(ComputerKeys.menuTypesText(combo), combo.join("+")).toBe(false)
+  })
+
   test("only text, navigation, editing and focused-app menu shortcuts pass (INV-S7)", () => {
     for (const combo of [
       ["a"],

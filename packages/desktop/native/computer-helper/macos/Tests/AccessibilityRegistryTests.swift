@@ -51,6 +51,20 @@ private func accessibilityTestWitness(
                          windowID: window, windowFrame: frame, onScreen: onScreen, spaceWitness: space)
 }
 
+private func accessibilityTestMenuWitness(_ session: ServerSession, root: AccessibilityElement,
+                                          path: [String] = ["File", "Export"], process: HelperProcessIdentity? = nil) -> AccessibilityWitness {
+    AccessibilityWitness(process: process ?? accessibilityTestWitness().process,
+        menu: AccessibilityMenuWitness(root: root, menuPath: path, runEpoch: session.runEpoch))
+}
+
+private func accessibilityTestFacts(name: String = "Observed item", role: String = "AXMenuItem", secure: Bool = false,
+                                    enabled: Bool = true, editable: Bool = false, document: String? = nil,
+                                    status: String = "unknown", owner: MacAppIdentity? = nil,
+                                    complete: Bool = true) -> AccessibilityReceiptFacts {
+    AccessibilityReceiptFacts(role: role, name: name, secure: secure, enabled: enabled, editable: editable,
+        document: document, documentStatus: status, owner: owner, nameComplete: complete)
+}
+
 /// Every element and process/window witness is injected; no AX call, native handle or OS observation occurs.
 func runAccessibilityRegistryTests() throws -> Int {
     var count = 0
@@ -120,7 +134,8 @@ func runAccessibilityRegistryTests() throws -> Int {
         let element = RegistryElement()
         let snapshot = try registry.beginSnapshot(session: session)
         let original = accessibilityTestWitness()
-        let moved = accessibilityTestWitness(frame: original.windowFrame.offsetBy(dx: 10, dy: 0))
+        guard let originalFrame = original.windowFrame else { throw AccessibilityRegistryTestFailure(message: "Missing real window geometry") }
+        let moved = accessibilityTestWitness(frame: originalFrame.offsetBy(dx: 10, dy: 0))
         let old = try registry.register(element: element, witness: original, snapshot: snapshot)
         let fresh = try registry.register(element: element, witness: moved, snapshot: snapshot)
         try accessibilityRegistryCheck(old.ref != fresh.ref && old.elementID == fresh.elementID,
@@ -469,6 +484,226 @@ func runAccessibilityRegistryTests() throws -> Int {
         var changed = session; changed.observationEpoch = UUID()
         let next = try registry.beginSnapshot(session: changed)
         try accessibilityRegistryThrows { _ = try registry.register(element: RegistryElement(), witness: witness, snapshot: next) }
+    }
+    try test {
+        let registry = accessibilityTestRegistry()
+        let session = accessibilityTestSession()
+        let root = AccessibilityElement()
+        let element = RegistryElement()
+        let witness = accessibilityTestMenuWitness(session, root: root)
+        let record = try registry.register(element: element, witness: witness, snapshot: registry.beginSnapshot(session: session))
+        let resolved = try registry.resolve(record.ref, session: session, witness: witness)
+        let existing = try registry.resolveElement(record.elementID, session: session, witness: witness)
+        try accessibilityRegistryCheck(resolved.ref == record.ref && existing.ref == record.ref && resolved.element === element &&
+            resolved.witness.windowID == nil && resolved.witness.windowFrame == nil && resolved.witness.onScreen == nil &&
+            resolved.witness.spaceWitness == nil && resolved.witness.hosted == nil &&
+            resolved.witness.menu?.menuPath == ["File", "Export"],
+            "An app-menu reference retains its exact native element/root/path without manufacturing a CG window or geometry")
+        let rootRef = try registry.register(element: RegistryElement(), witness: accessibilityTestMenuWitness(session, root: root, path: []),
+                                            snapshot: registry.currentSnapshot(session: session))
+        _ = try registry.resolve(rootRef.ref, session: session, witness: rootRef.witness)
+        let actualWindow = accessibilityTestWitness()
+        let windowRef = try registry.register(element: element, witness: actualWindow, snapshot: registry.currentSnapshot(session: session))
+        try accessibilityRegistryCheck(windowRef.elementID != record.elementID,
+            "Menu and native-window scopes cannot share a stable identity merely because a handle compares equal")
+        try accessibilityRegistryThrows { _ = try registry.resolve(record.ref, session: session, witness: actualWindow) }
+        try accessibilityRegistryThrows { _ = try registry.resolve(windowRef.ref, session: session, witness: witness) }
+    }
+    try test {
+        let registry = accessibilityTestRegistry()
+        let session = accessibilityTestSession()
+        let element = RegistryElement()
+        let root = AccessibilityElement()
+        let original = accessibilityTestMenuWitness(session, root: root)
+        let first = try registry.register(element: element, witness: original, snapshot: registry.beginSnapshot(session: session))
+        let same = try registry.register(element: element, witness: original, snapshot: registry.beginSnapshot(session: session))
+        try accessibilityRegistryCheck(first.ref != same.ref && first.elementID == same.elementID,
+            "A fresh menu snapshot preserves the exact native element identity under the same private menu root")
+        let replacement = accessibilityTestMenuWitness(session, root: AccessibilityElement())
+        try accessibilityRegistryThrows { _ = try registry.resolve(same.ref, session: session, witness: replacement) }
+        let replaced = try registry.register(element: element, witness: replacement, snapshot: registry.currentSnapshot(session: session))
+        try accessibilityRegistryCheck(replaced.ref != same.ref && replaced.elementID != same.elementID,
+            "Replacing an actual menu root cannot inherit descendant identities from an identically labelled app menu")
+    }
+    try test {
+        let registry = accessibilityTestRegistry()
+        let session = accessibilityTestSession()
+        let root = AccessibilityElement()
+        let old = accessibilityTestMenuWitness(session, root: root, path: ["File", "Café"])
+        let record = try registry.register(element: RegistryElement(), witness: old, snapshot: registry.beginSnapshot(session: session))
+        let decomposed = accessibilityTestMenuWitness(session, root: root, path: ["File", "Cafe\u{301}"])
+        try accessibilityRegistryCheck("Café" == "Cafe\u{301}" && !Array("Café".utf8).elementsEqual("Cafe\u{301}".utf8),
+            "The fixture distinguishes Swift canonical equality from actual menu-path bytes")
+        try accessibilityRegistryThrows { _ = try registry.resolve(record.ref, session: session, witness: decomposed) }
+        try accessibilityRegistryThrows { _ = try registry.resolveElement(record.elementID, session: session, witness: decomposed) }
+        try accessibilityRegistryThrows {
+            _ = try registry.resolve(record.ref, session: session,
+                witness: accessibilityTestMenuWitness(session, root: root, path: ["Services", "Café"]))
+        }
+    }
+    try test {
+        let registry = accessibilityTestRegistry()
+        let session = accessibilityTestSession()
+        let root = AccessibilityElement()
+        let witness = accessibilityTestMenuWitness(session, root: root)
+        let record = try registry.register(element: RegistryElement(), witness: witness, snapshot: registry.beginSnapshot(session: session))
+        for process in [accessibilityTestWitness(pid: 102).process, accessibilityTestWitness(start: 21).process,
+                        accessibilityTestWitness(path: "/virtual/Replacement.app/Contents/MacOS/Replacement").process] {
+            try accessibilityRegistryThrows {
+                _ = try registry.resolve(record.ref, session: session,
+                    witness: accessibilityTestMenuWitness(session, root: root, process: process))
+            }
+        }
+        var revised = session; revised.observationEpoch = UUID()
+        try accessibilityRegistryThrows { _ = try registry.resolve(record.ref, session: revised, witness: witness) }
+        var reused = accessibilityTestSession(id: session.id)
+        reused.observationEpoch = session.observationEpoch
+        try accessibilityRegistryThrows { _ = try registry.resolve(record.ref, session: reused, witness: witness) }
+        let next = try registry.beginSnapshot(session: reused)
+        try accessibilityRegistryThrows { _ = try registry.register(element: RegistryElement(), witness: witness, snapshot: next) }
+    }
+    try test {
+        let registry = accessibilityTestRegistry()
+        let session = accessibilityTestSession()
+        let root = AccessibilityElement()
+        let snapshot = try registry.beginSnapshot(session: session)
+        for path in [[""], ["File", ""], [String(repeating: "x", count: 257)],
+                     Array(repeating: "File", count: 31), ["File", "Ex\u{202e}port"], ["File", "Ex\0port"]] {
+            try accessibilityRegistryThrows {
+                _ = try registry.register(element: RegistryElement(),
+                    witness: accessibilityTestMenuWitness(session, root: root, path: path), snapshot: snapshot)
+            }
+        }
+    }
+    try test {
+        let registry = accessibilityTestRegistry()
+        var session = accessibilityTestSession()
+        let root = AccessibilityElement(), element = RegistryElement()
+        let witness = accessibilityTestMenuWitness(session, root: root)
+        let facts = accessibilityTestFacts()
+        let first = try registry.register(element: element, witness: witness, snapshot: registry.beginSnapshot(session: session), facts: facts)
+        registry.suspendObservations()
+        session.observationEpoch = UUID(); session.revision = 4
+        registry.noteSession(session)
+        try accessibilityRegistryThrows { _ = try registry.resolve(first.ref, session: session) }
+        try accessibilityRegistryThrows { _ = try registry.resolveElement(first.elementID, session: session, witness: witness) }
+        let receipt = try registry.receipt(first.ref, session: session)
+        try accessibilityRegistryCheck(receipt.ref == first.ref && receipt.elementID == first.elementID && receipt.element === element,
+            "A phase transition keeps bounded native evidence while removing all active mutation authority")
+        let fresh = try registry.refreshReceipt(receipt, liveElement: element, witness: witness, facts: facts, session: session)
+        let resolved = try registry.resolve(first.ref, session: session, witness: witness)
+        try accessibilityRegistryCheck(fresh.ref == first.ref && fresh.elementID == first.elementID &&
+            fresh.generation > first.generation && resolved.ref == first.ref && resolved.element === element,
+            "Only an explicit complete revalidation may reactivate the same consent-bound native ref and element identity")
+        try accessibilityRegistryThrows { _ = try registry.receipt(first.ref, session: session) }
+    }
+    try test {
+        let registry = accessibilityTestRegistry()
+        var session = accessibilityTestSession()
+        let element = RegistryElement(), witness = accessibilityTestWitness(), facts = accessibilityTestFacts()
+        let first = try registry.register(element: element, witness: witness, snapshot: registry.beginSnapshot(session: session), facts: facts)
+        registry.suspendObservations(); session.observationEpoch = UUID()
+        _ = try registry.currentSnapshot(session: session)
+        try accessibilityRegistryThrows { _ = try registry.resolve(first.ref, session: session) }
+        _ = try registry.receipt(first.ref, session: session)
+        _ = try registry.beginSnapshot(session: session)
+        try accessibilityRegistryThrows { _ = try registry.receipt(first.ref, session: session) }
+        try accessibilityRegistryThrows { _ = try registry.refreshReceipt(first, liveElement: element, witness: witness, facts: facts, session: session) }
+    }
+    try test {
+        let owner = MacAppIdentity(bundleId: "example.receipt", teamId: "ABCDEFGHIJ", apple: false, system: false,
+            verified: true, name: "Receipt owner", path: "/virtual/Test.app/Contents/MacOS/Test", pid: 101)
+        let signer = MacAppIdentity(bundleId: owner.bundleId, teamId: "ZZZZZZZZZZ", apple: owner.apple, system: owner.system,
+            verified: owner.verified, name: owner.name, path: owner.path, pid: owner.pid)
+        let facts = accessibilityTestFacts(name: "Café", document: "/virtual/Café.txt", status: "known", owner: owner)
+        var changedShortcut = facts; changedShortcut.menuShortcut = ["Command", "V"]
+        var incompleteShortcut = facts; incompleteShortcut.menuShortcutComplete = false
+        let changes = [
+            accessibilityTestFacts(name: "Different", document: "/virtual/Café.txt", status: "known", owner: owner),
+            accessibilityTestFacts(name: "Cafe\u{301}", document: "/virtual/Café.txt", status: "known", owner: owner),
+            accessibilityTestFacts(name: "Café", role: "AXButton", document: "/virtual/Café.txt", status: "known", owner: owner),
+            accessibilityTestFacts(name: "Café", secure: true, document: "/virtual/Café.txt", status: "known", owner: owner),
+            accessibilityTestFacts(name: "Café", enabled: false, document: "/virtual/Café.txt", status: "known", owner: owner),
+            accessibilityTestFacts(name: "Café", editable: true, document: "/virtual/Café.txt", status: "known", owner: owner),
+            accessibilityTestFacts(name: "Café", document: "/virtual/Cafe\u{301}.txt", status: "known", owner: owner),
+            accessibilityTestFacts(name: "Café", owner: owner),
+            accessibilityTestFacts(name: "Café", document: "/virtual/Café.txt", status: "known", owner: signer),
+            accessibilityTestFacts(name: "Café", document: "/virtual/Café.txt", status: "known", owner: owner, complete: false),
+            changedShortcut, incompleteShortcut,
+        ]
+        for changed in changes {
+            let registry = accessibilityTestRegistry(), session = accessibilityTestSession(), element = RegistryElement()
+            let witness = accessibilityTestWitness()
+            let first = try registry.register(element: element, witness: witness, snapshot: registry.beginSnapshot(session: session), facts: facts)
+            registry.suspendObservations()
+            let receipt = try registry.receipt(first.ref, session: session)
+            try accessibilityRegistryThrows { _ = try registry.refreshReceipt(receipt, liveElement: element, witness: witness, facts: changed, session: session) }
+            try accessibilityRegistryThrows { _ = try registry.resolve(first.ref, session: session) }
+        }
+    }
+    try test {
+        let registry = accessibilityTestRegistry(), session = accessibilityTestSession(), element = RegistryElement(), root = AccessibilityElement()
+        let witness = accessibilityTestMenuWitness(session, root: root), facts = accessibilityTestFacts()
+        let first = try registry.register(element: element, witness: witness, snapshot: registry.beginSnapshot(session: session), facts: facts)
+        registry.suspendObservations()
+        let receipt = try registry.receipt(first.ref, session: session)
+        try accessibilityRegistryThrows { _ = try registry.refreshReceipt(receipt, liveElement: RegistryElement(), witness: witness, facts: facts, session: session) }
+        for changed in [accessibilityTestMenuWitness(session, root: AccessibilityElement()),
+                        accessibilityTestMenuWitness(session, root: root, path: ["Services", "Export"]),
+                        accessibilityTestMenuWitness(session, root: root, process: accessibilityTestWitness(start: 21).process),
+                        accessibilityTestWitness()] {
+            try accessibilityRegistryThrows { _ = try registry.refreshReceipt(receipt, liveElement: element, witness: changed, facts: facts, session: session) }
+        }
+    }
+    try test {
+        for boundary in ["new-run", "end", "hard-clear", "close"] {
+            let registry = accessibilityTestRegistry(), session = accessibilityTestSession(), element = RegistryElement()
+            let witness = accessibilityTestWitness(), facts = accessibilityTestFacts()
+            let first = try registry.register(element: element, witness: witness, snapshot: registry.beginSnapshot(session: session), facts: facts)
+            registry.suspendObservations()
+            var current = session
+            switch boundary {
+            case "new-run": current = accessibilityTestSession(id: session.id); current.observationEpoch = session.observationEpoch; registry.noteSession(current)
+            case "end": registry.noteSession(nil)
+            case "hard-clear": registry.clear()
+            default: registry.close()
+            }
+            try accessibilityRegistryThrows { _ = try registry.receipt(first.ref, session: current) }
+            try accessibilityRegistryThrows { _ = try registry.refreshReceipt(first, liveElement: element, witness: witness, facts: facts, session: current) }
+        }
+    }
+    try test {
+        for complete in [false, true] {
+            let registry = accessibilityTestRegistry(), session = accessibilityTestSession(), element = RegistryElement()
+            let witness = accessibilityTestWitness(), facts = accessibilityTestFacts(complete: complete)
+            let first = try registry.register(element: element, witness: witness, snapshot: registry.beginSnapshot(session: session), facts: facts)
+            if !complete {
+                registry.suspendObservations()
+                try accessibilityRegistryThrows { _ = try registry.receipt(first.ref, session: session) }
+            } else {
+                let updated = try registry.recordFacts(first.ref, facts: accessibilityTestFacts(name: "Complete final label"), session: session)
+                registry.suspendObservations()
+                let receipt = try registry.receipt(first.ref, session: session)
+                try accessibilityRegistryCheck(receipt.facts?.name == updated.facts?.name,
+                    "Only complete final inspection facts become evidence for an explicit later phase refresh")
+            }
+        }
+    }
+    try test {
+        let registry = accessibilityTestRegistry(limit: 2, stableLimit: 6)
+        var session = accessibilityTestSession()
+        let witness = accessibilityTestWitness(), facts = accessibilityTestFacts()
+        let first = try registry.currentSnapshot(session: session)
+        let a = try registry.register(element: RegistryElement(), witness: witness, snapshot: first, facts: facts)
+        let b = try registry.register(element: RegistryElement(), witness: witness, snapshot: first, facts: facts)
+        registry.suspendObservations(); session.observationEpoch = UUID()
+        let second = try registry.currentSnapshot(session: session)
+        let c = try registry.register(element: RegistryElement(), witness: witness, snapshot: second, facts: facts)
+        let d = try registry.register(element: RegistryElement(), witness: witness, snapshot: second, facts: facts)
+        registry.suspendObservations()
+        try accessibilityRegistryThrows { _ = try registry.receipt(a.ref, session: session) }
+        try accessibilityRegistryThrows { _ = try registry.receipt(b.ref, session: session) }
+        _ = try registry.receipt(c.ref, session: session); _ = try registry.receipt(d.ref, session: session)
     }
     return count
 }

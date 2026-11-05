@@ -9,6 +9,7 @@ import { Exit, Schema } from "effect"
 import { Computer } from "@vectordevai/schema/computer"
 import { ComputerApps } from "@vectordevai/schema/computer-apps"
 import { ComputerProgram } from "@vectordevai/core/computer/program"
+import { ComputerKeys } from "@vectordevai/core/computer/keys"
 import { Hands } from "@vectordevai/schema/hands"
 import { optional } from "@vectordevai/schema/schema"
 import identity from "../../native/computer-helper/identity.json" with { type: "json" }
@@ -20,6 +21,7 @@ import {
   SCENARIOS,
   type FakeApp,
   type FakeNode,
+  type FakeMenuNode,
   type FakeWindow,
   type Paint,
   type Platform,
@@ -148,6 +150,13 @@ type ResolvedLaunch =
   | Exclude<Computer.LaunchResolution, { kind: "program" }>
   | { kind: "program"; program: Omit<Computer.NativeProgramLaunch, "token"> }
 type Target = { readonly ok: true; readonly window: FakeWindow; readonly node?: FakeNode }
+type MenuTarget = {
+  readonly ok: true
+  readonly app: FakeApp
+  readonly menu: FakeMenuNode
+  readonly ref: string
+  readonly elementId: string
+}
 type Session = {
   readonly sessionId: string
   readonly phaseRevision?: number
@@ -319,6 +328,64 @@ export function createFakeHelper(options: FakeOptions, io: FakeIo) {
   const log: LogEntry[] = []
   const held = new Set<string>()
   const captures = new Map<string, Capture>()
+  let menuAuthority = 0
+  let referenceAuthority = 0
+  let receiptSequence = 0
+  const menuElements = new Map<FakeMenuNode, string>()
+  const windowElements = new Map<FakeNode | FakeWindow, { pid: number; id: string }>()
+  const menuRefs = new Map<
+    string,
+    {
+      run: number
+      authority: number
+      generation: number
+      sequence: number
+      app: FakeApp
+      pid: number
+      root: FakeMenuNode | undefined
+      menu: FakeMenuNode
+      menuPath: readonly string[]
+      menuShortcut: readonly string[] | undefined
+      elementId: string
+      facts: string
+      complete: boolean
+    }
+  >()
+  const windowRefs = new Map<
+    string,
+    {
+      run: number
+      authority: number
+      generation: number
+      sequence: number
+      window: FakeWindow
+      node: FakeNode | undefined
+      pid: number
+      owner: string
+      witness: string
+      elementId: string
+      facts: string
+      complete: boolean
+    }
+  >()
+  function invalidateReferences() {
+    menuAuthority++
+    referenceAuthority++
+    menuRefs.clear()
+    windowRefs.clear()
+    menuElements.clear()
+    windowElements.clear()
+  }
+  function demoteReferences() {
+    referenceAuthority++
+  }
+  function receiptRoom() {
+    if (menuRefs.size + windowRefs.size < 4096) return
+    const menu = [...menuRefs].sort((a, b) => a[1].sequence - b[1].sequence)[0]
+    const window = [...windowRefs].sort((a, b) => a[1].sequence - b[1].sequence)[0]
+    if (menu && (!window || menu[1].sequence < window[1].sequence)) menuRefs.delete(menu[0])
+    else if (window) windowRefs.delete(window[0])
+  }
   const programs: readonly FakeProgramArtifact[] = [
     ...(options.programs ?? [
       {
@@ -471,6 +538,7 @@ export function createFakeHelper(options: FakeOptions, io: FakeIo) {
   }
 
   function exit(code: number, reason: string) {
+    invalidateReferences()
     if (state.closed) return
     if (state.watchdog !== undefined) clock.clearTimeout(state.watchdog)
     if (state.current) clock.clearTimeout(state.current.timer)
@@ -505,6 +573,7 @@ export function createFakeHelper(options: FakeOptions, io: FakeIo) {
     if (state.watchdog !== undefined) clock.clearTimeout(state.watchdog)
     state.watchdog = clock.setTimeout(() => {
       state.watchdog = undefined
+      invalidateReferences()
       releaseAll("heartbeat")
       state.halted = "heartbeat"
       record("halt", { reason: "heartbeat" })
@@ -515,6 +584,7 @@ export function createFakeHelper(options: FakeOptions, io: FakeIo) {
 
   function endSession(reason: string) {
     launchTokens.clear()
+    invalidateReferences()
     if (!state.session) return
     releaseAll(reason)
     if (state.watchdog !== undefined) clock.clearTimeout(state.watchdog)
@@ -658,6 +728,7 @@ export function createFakeHelper(options: FakeOptions, io: FakeIo) {
   }
 
   function halt(by: "esc" | "chord") {
+    invalidateReferences()
     releaseAll("stop")
     state.halted = "stop"
     record("halt", { reason: "stop", by })
@@ -752,10 +823,28 @@ export function createFakeHelper(options: FakeOptions, io: FakeIo) {
     target: Target,
     expected: { pid?: number; windowId?: string; ref?: string; elementId?: string },
   ) {
+    if (expected.ref !== undefined) {
+      const observed = resolve(expected.ref)
+      if (!observed.ok || "menu" in observed || observed.window !== target.window || observed.node !== target.node)
+        return refuse("changed", "The observed target reference changed before input")
+    }
+    if (
+      expected.elementId !== undefined &&
+      expected.ref === undefined &&
+      ![...windowRefs.values()].some(
+        (record) =>
+          record.run === menuAuthority &&
+          record.authority === referenceAuthority &&
+          record.generation === desktop.generation &&
+          record.window === target.window &&
+          record.node === target.node &&
+          record.elementId === expected.elementId,
+      )
+    )
+      return refuse("changed", "The observed element identity is inactive")
     if (
       (expected.pid !== undefined && expected.pid !== desktop.appOf(target.window).pid) ||
       (expected.windowId !== undefined && expected.windowId !== target.window.windowId) ||
-      (expected.ref !== undefined && expected.ref !== refOf(target.window, target.node)) ||
       (expected.elementId !== undefined && expected.elementId !== elementIdOf(target.window, target.node))
     )
       return refuse("changed", "The target changed before input")
@@ -806,18 +895,237 @@ export function createFakeHelper(options: FakeOptions, io: FakeIo) {
     return { ok: true, window, node: desktop.focusedNode(app.slot) }
   }
 
-  const refOf = (window: FakeWindow, item?: FakeNode) =>
-    `${desktop.generation}:${window.windowId}${item ? `:${item.id}` : ""}`
-  const elementIdOf = (window: FakeWindow, item?: FakeNode) =>
-    `${state.sessions}:${window.windowId}:${item?.id ?? "window"}`
+  const elementIdOf = (window: FakeWindow, item?: FakeNode) => {
+    const object = item ?? window,
+      pid = desktop.appOf(window).pid
+    const existing = windowElements.get(object)
+    if (existing?.pid === pid) return existing.id
+    if (windowElements.size >= 8192) {
+      const retired = windowElements.keys().next().value!
+      const identity = windowElements.get(retired)!.id
+      windowElements.delete(retired)
+      for (const [ref, record] of windowRefs) if (record.elementId === identity) windowRefs.delete(ref)
+    }
+    const id = `window_element_${randomUUID()}`
+    windowElements.set(object, { pid, id })
+    return id
+  }
 
-  function resolve(ref: string): Target | Refusal {
-    const [generation, windowId, ...rest] = ref.split(":")
-    const window = windowId ? desktop.window(windowId) : undefined
-    const item = rest.length ? window?.nodes.find((entry) => entry.id === rest.join(":")) : undefined
-    if (generation !== String(desktop.generation) || !window || (rest.length && !item))
+  const ownerFacts = (app: FakeApp) =>
+    JSON.stringify([app.pid, Object.entries(app.identity).sort(([a], [b]) => a.localeCompare(b))])
+  const windowWitness = (window: FakeWindow) =>
+    JSON.stringify([
+      window.windowId,
+      window.bounds,
+      window.minimized,
+      window.onScreen ?? !window.minimized,
+      window.spaceWitness ?? null,
+    ])
+  const windowFacts = (window: FakeWindow, item?: FakeNode) =>
+    JSON.stringify([
+      ownerFacts(desktop.appOf(window)),
+      windowWitness(window),
+      window.title,
+      item?.role ?? "AXWindow",
+      item?.subrole ?? null,
+      item?.name ?? window.title,
+      item?.secure ?? false,
+      item?.enabled ?? true,
+      item?.editable ?? false,
+      item?.rect ?? null,
+      item?.document ?? null,
+      item?.documentStatus ?? "none",
+    ])
+  const completeWindowName = (window: FakeWindow, item?: FakeNode) =>
+    item?.nameComplete !== false && (item?.name ?? window.title).length <= 500
+  const menuFacts = (app: FakeApp, menu: FakeMenuNode) =>
+    JSON.stringify([
+      ownerFacts(app),
+      menu.role,
+      menu.name,
+      menu.menuPath,
+      menu.menuShortcut ?? null,
+      menu.bounds ?? null,
+      menu.secure,
+      menu.enabled,
+      false,
+      null,
+      "unknown",
+    ])
+
+  function refOf(window: FakeWindow, item?: FakeNode) {
+    const app = desktop.appOf(window)
+    const current = [...windowRefs].find(
+      ([, record]) =>
+        record.run === menuAuthority &&
+        record.authority === referenceAuthority &&
+        record.generation === desktop.generation &&
+        record.window === window &&
+        record.node === item &&
+        record.pid === app.pid &&
+        record.owner === ownerFacts(app) &&
+        record.witness === windowWitness(window) &&
+        record.facts === windowFacts(window, item),
+    )
+    if (current) return current[0]
+    receiptRoom()
+    const ref = `window_${randomUUID()}`
+    windowRefs.set(ref, {
+      run: menuAuthority,
+      authority: referenceAuthority,
+      generation: desktop.generation,
+      sequence: ++receiptSequence,
+      window,
+      node: item,
+      pid: app.pid,
+      owner: ownerFacts(app),
+      witness: windowWitness(window),
+      elementId: elementIdOf(window, item),
+      facts: windowFacts(window, item),
+      complete: completeWindowName(window, item),
+    })
+    return ref
+  }
+
+  function resolve(ref: string, refresh = false): Target | MenuTarget | Refusal {
+    const menu = menuRefs.get(ref)
+    if (menu) {
+      if (
+        platform !== "macos" ||
+        menu.run !== menuAuthority ||
+        !menu.app.running ||
+        menu.app.pid !== menu.pid ||
+        menu.app.identity.platform !== "macos" ||
+        menu.app.identity.pid !== menu.pid ||
+        menu.app.menus[0] !== menu.root ||
+        !menu.app.menus.includes(menu.menu) ||
+        JSON.stringify(menu.menu.menuPath) !== JSON.stringify(menu.menuPath) ||
+        JSON.stringify(menu.menu.menuShortcut ?? null) !== JSON.stringify(menu.menuShortcut ?? null) ||
+        (menu.menu.menuPath.length > 0 && menu.menu.menuPath.at(-1) !== menu.menu.name)
+      )
+        return refuse("stale_ref", "The observed app menu changed")
+      const denied = ownerOfApp(menu.app.slot)
+      if (denied) return denied
+      if (
+        refresh &&
+        (!menu.complete ||
+          menu.menu.nameComplete === false ||
+          menu.menu.name.length > 500 ||
+          menu.facts !== menuFacts(menu.app, menu.menu))
+      )
+        return refuse("stale_ref", "The complete app menu facts changed")
+      if (menu.authority !== referenceAuthority) {
+        if (!refresh || !menu.complete || menu.facts !== menuFacts(menu.app, menu.menu))
+          return refuse("stale_ref", "The inactive app menu receipt changed")
+        menu.authority = referenceAuthority
+        menu.generation = desktop.generation
+      } else if (menu.generation !== desktop.generation) return refuse("stale_ref", "The app menu observation changed")
+      return { ok: true, app: menu.app, menu: menu.menu, ref, elementId: menu.elementId }
+    }
+    const record = windowRefs.get(ref)
+    if (
+      !record ||
+      record.run !== menuAuthority ||
+      desktop.window(record.window.windowId) !== record.window ||
+      (record.node !== undefined && !record.window.nodes.includes(record.node))
+    )
       return refuse("stale_ref", "The element changed since the UI tree was read")
-    return owner(window) ?? { ok: true, window, node: item }
+    const { window, node } = record
+    const denied = owner(window)
+    if (denied) return denied
+    const app = desktop.appOf(window)
+    if (
+      !app.running ||
+      app.pid !== record.pid ||
+      ownerFacts(app) !== record.owner ||
+      windowWitness(window) !== record.witness
+    )
+      return refuse("stale_ref", "The actual native window owner changed")
+    if (
+      refresh &&
+      (!record.complete || !completeWindowName(window, node) || record.facts !== windowFacts(window, node))
+    )
+      return refuse("stale_ref", "The complete native element facts changed")
+    if (record.authority !== referenceAuthority) {
+      if (
+        !refresh ||
+        !record.complete ||
+        !completeWindowName(window, node) ||
+        record.facts !== windowFacts(window, node)
+      )
+        return refuse("stale_ref", "The inactive window receipt changed")
+      record.authority = referenceAuthority
+      record.generation = desktop.generation
+    } else if (record.generation !== desktop.generation) return refuse("stale_ref", "The native observation changed")
+    return { ok: true, window, node }
+  }
+
+  function menuTarget(app: FakeApp, menu: FakeMenuNode): MenuTarget | Refusal {
+    const denied = ownerOfApp(app.slot)
+    if (denied) return denied
+    if (
+      platform !== "macos" ||
+      app.identity.platform !== "macos" ||
+      app.identity.pid !== app.pid ||
+      !app.running ||
+      !app.menus.includes(menu) ||
+      !Schema.is(Computer.MenuPath)(menu.menuPath) ||
+      (menu.menuShortcut !== undefined && !Schema.is(Computer.MenuShortcut)(menu.menuShortcut)) ||
+      (menu.menuPath.length > 0 && menu.menuPath.at(-1) !== menu.name) ||
+      (menu.bounds !== undefined && !Schema.is(Computer.Rect)(menu.bounds))
+    )
+      return refuse("unavailable", "The actual app menu is unavailable")
+    let elementId = menuElements.get(menu)
+    if (!elementId) {
+      if (menuElements.size >= 8192) return refuse("unavailable", "The app menu identity limit was reached")
+      elementId = `menu_${randomUUID()}`
+      menuElements.set(menu, elementId)
+    }
+    const ref = `menu_${randomUUID()}`
+    receiptRoom()
+    menuRefs.set(ref, {
+      run: menuAuthority,
+      authority: referenceAuthority,
+      generation: desktop.generation,
+      sequence: ++receiptSequence,
+      app,
+      pid: app.pid,
+      root: app.menus[0],
+      menu,
+      menuPath: [...menu.menuPath],
+      menuShortcut: menu.menuShortcut === undefined ? undefined : [...menu.menuShortcut],
+      elementId,
+      facts: menuFacts(app, menu),
+      complete: menu.nameComplete !== false && menu.name.length <= 500,
+    })
+    return { ok: true, app, menu, ref, elementId }
+  }
+
+  function menuHit(target: MenuTarget) {
+    return {
+      scope: "app-menu" as const,
+      owner: target.app.identity,
+      pid: target.app.pid,
+      ref: target.ref,
+      elementId: target.elementId,
+      menuPath: [...target.menu.menuPath],
+      role: target.menu.role,
+      ...(target.menu.menuShortcut === undefined ? {} : { menuShortcut: [...target.menu.menuShortcut] }),
+      name: target.menu.name,
+      secure: target.menu.secure,
+      enabled: target.menu.enabled,
+      editable: false,
+      ...(target.menu.bounds ? { bounds: target.menu.bounds } : {}),
+      documentStatus: "unknown" as const,
+    }
+  }
+
+  function expectedMenu(target: MenuTarget, expected: { pid?: number; elementId?: string }) {
+    if (
+      (expected.pid !== undefined && expected.pid !== target.app.pid) ||
+      (expected.elementId !== undefined && expected.elementId !== target.elementId)
+    )
+      return refuse("changed", "The observed app menu target changed")
   }
 
   // What a hit-test may reveal: the owner and window always, so the desktop can ask for or refuse the app; the
@@ -837,13 +1145,14 @@ export function createFakeHelper(options: FakeOptions, io: FakeIo) {
         : {}),
       role: item?.role ?? "AXWindow",
       secure: secure(item),
-      enabled: true,
+      enabled: item?.enabled ?? true,
       editable: item?.editable ?? false,
       owner: desktop.appOf(window).identity,
       windowId: window.windowId,
       signals: signals(window),
-      // The virtual desktop's notes/fields are memory-only; it does not fabricate filesystem documents.
-      documentStatus: "none" as const,
+      // Default notes/fields are memory-only; optional document facts are explicit virtual native observations.
+      ...(item?.document ? { document: item.document } : {}),
+      documentStatus: item?.documentStatus ?? "none",
     }
   }
 
@@ -970,6 +1279,7 @@ export function createFakeHelper(options: FakeOptions, io: FakeIo) {
         if (args.mode === "background" && !features.background)
           return refuse("unsupported_action", "This helper cannot work in the background")
         launchTokens.clear()
+        invalidateReferences()
         state.sessions++
         state.session = {
           sessionId: args.sessionId,
@@ -1002,6 +1312,7 @@ export function createFakeHelper(options: FakeOptions, io: FakeIo) {
           return refuse("changed", "The computer session phase changed")
         if (session.physicalPause && args.paused === false)
           return refuse("changed", "Physical take-over needs a fresh session")
+        demoteReferences()
         state.session = {
           ...session,
           ...(args.phaseRevision === undefined ? {} : { phaseRevision: args.phaseRevision }),
@@ -1161,11 +1472,18 @@ export function createFakeHelper(options: FakeOptions, io: FakeIo) {
             : app
               ? desktop.windowsOf(app.slot)
               : []
-        if (!windows.length) return refuse("app_not_found", "No such app or window")
+        const menuApp = platform === "macos" && app ? app : undefined
+        if (!windows.length && !menuApp?.menus.length) return refuse("app_not_found", "No such app or window")
+        if (menuApp) {
+          const blocked = ownerOfApp(menuApp.slot)
+          if (blocked) return blocked
+        }
         const blocked = windows.map(owner).find((item) => item !== undefined)
         if (blocked) return blocked
+        menuRefs.clear()
+        windowRefs.clear()
         const focused = desktop.focusedNode()
-        const nodes = windows.flatMap((window) => [
+        const nodes: object[] = windows.flatMap((window) => [
           {
             ref: refOf(window),
             role: "AXWindow",
@@ -1180,15 +1498,45 @@ export function createFakeHelper(options: FakeOptions, io: FakeIo) {
             : window.nodes.map((item) => ({
                 ref: refOf(window, item),
                 role: item.role,
+                ...(item.subrole ? { subrole: item.subrole } : {}),
                 name: item.name,
                 ...(item.value !== undefined && !item.secure ? { value: item.value } : {}),
                 bounds: { ...item.rect, x: window.bounds.x + item.rect.x, y: window.bounds.y + item.rect.y },
-                enabled: true,
+                enabled: item.enabled ?? true,
                 focused: item === focused,
                 secure: secure(item),
               }))),
         ])
-        const cut = args.maxDepth < 2 && windows.some((window) => window.nodes.length > 0)
+        let menuCut = false
+        if (menuApp) {
+          for (const item of menuApp.menus) {
+            if (nodes.length >= args.maxNodes) {
+              menuCut = true
+              break
+            }
+            if (item.menuPath.length + 1 > args.maxDepth) {
+              menuCut = true
+              continue
+            }
+            const target = menuTarget(menuApp, item)
+            if (!target.ok) return target
+            nodes.push({
+              scope: "app-menu",
+              ref: target.ref,
+              elementId: target.elementId,
+              pid: menuApp.pid,
+              menuPath: [...item.menuPath],
+              role: item.role,
+              name: item.name,
+              enabled: item.enabled,
+              ...(item.menuShortcut === undefined ? {} : { menuShortcut: [...item.menuShortcut] }),
+              focused: menuApp.focused === item.id,
+              secure: item.secure,
+              ...(item.bounds ? { bounds: item.bounds } : {}),
+            })
+          }
+        }
+        const cut = menuCut || (args.maxDepth < 2 && windows.some((window) => window.nodes.length > 0))
         return ok({
           generation: desktop.generation,
           truncated: cut || nodes.length > args.maxNodes,
@@ -1208,18 +1556,77 @@ export function createFakeHelper(options: FakeOptions, io: FakeIo) {
         const denied = accessibility()
         if (denied) return denied
         const window = desktop.windowsOf(desktop.frontmost().slot).find((item) => !item.minimized)
+        const app = desktop.frontmost()
+        const menu = platform === "macos" ? app.menus.find((item) => item.id === app.focused) : undefined
+        if (menu) {
+          const target = menuTarget(app, menu)
+          return target.ok ? ok(menuHit(target)) : target
+        }
         if (!window) return refuse("not_foreground", "No window has keyboard focus")
         return ok(hit(window, desktop.focusedNode()))
       }
       case "ui.resolve": {
         if (state.locked) return refuse("locked", "The screen is locked")
-        const target = accessibility() ?? resolve(args.ref)
+        const target = accessibility() ?? resolve(args.ref, true)
         if (!target.ok) return target
-        return ok(hit(target.window, target.node))
+        return ok("menu" in target ? menuHit(target) : hit(target.window, target.node))
       }
       case "ui.perform": {
         const target = inputGate() ?? resolve(args.ref)
         if (!target.ok) return target
+        if ("menu" in target) {
+          const changed = expectedMenu(target, args)
+          if (changed) return changed
+          if (ComputerKeys.forbiddenMenu(target.menu.menuPath, target.menu.menuShortcut))
+            return refuse("blocked", "This menu route is unavailable")
+          if (target.menu.secure) return refuse("secure_field", "This menu is a secure surface")
+          if (args.action !== "AXPress" && args.action !== "AXShowMenu")
+            return args.action === "AXRaise"
+              ? needsForeground("Raising an app menu")
+              : refuse("unsupported_action", "That menu action is unavailable")
+          if (args.action === "AXPress") {
+            const shortcut = target.menu.menuShortcut
+            const combo = shortcut && ComputerKeys.resolve(shortcut, { platform: "macos" })
+            const primary = combo?.modifiers.some((key) => key === "meta" || key === "control")
+            const label = target.menu.name.normalize("NFKC")
+            const paste = shortcut !== undefined && ComputerKeys.pasteCombo(shortcut, { platform: "macos" })
+            const editsText =
+              paste ||
+              (shortcut !== undefined && typedKeys(shortcut, "macos") > 0) ||
+              (!!combo &&
+                ((primary && ["x", "y", "z"].includes(combo.key)) || ["backspace", "delete"].includes(combo.key))) ||
+              (shortcut === undefined && /\b(?:paste|cut|undo|redo|delete|backspace)\b/i.test(label))
+            const textTarget =
+              editsText ||
+              (!!combo && ((primary && ["a", "c"].includes(combo.key)) || ["enter", "tab"].includes(combo.key))) ||
+              (shortcut === undefined && /\b(?:copy|select\s+all)\b/i.test(label))
+            if (textTarget) {
+              const field = desktop.focusedNode(target.app.slot)
+              const window = field && desktop.windowsOf(target.app.slot).find((item) => item.nodes.includes(field))
+              if (window && field) {
+                const denied = owner(window)
+                if (denied) return denied
+                if (secure(field)) return refuse("secure_field", "That is a password field")
+                if (editsText) {
+                  const deniedText = textRefusal(window, field)
+                  if (deniedText) return deniedText
+                }
+              }
+              return background()
+                ? needsForeground("That menu text action")
+                : refuse("unsupported_action", "Use a separate verified input step for this menu text action")
+            }
+          }
+          const took = desktop.pressMenu(target.app, target.menu)
+          record("ui", {
+            scope: "app-menu",
+            action: args.action,
+            pid: target.app.pid,
+            node: target.menu.id,
+            menuPath: [...target.menu.menuPath],
+          })
+          return ok({ took })
+        }
         const changed = expectedTarget(target, args)
         if (changed) return changed
         const item = target.node
@@ -1236,6 +1643,10 @@ export function createFakeHelper(options: FakeOptions, io: FakeIo) {
       case "ui.setValue": {
         const target = inputGate() ?? resolve(args.ref)
         if (!target.ok) return target
+        if ("menu" in target) {
+          const changed = expectedMenu(target, args)
+          return changed ?? refuse(target.menu.secure ? "secure_field" : "blocked", "App menus cannot receive text")
+        }
         const changed = expectedTarget(target, args)
         if (changed) return changed
         const item = target.node
@@ -1570,6 +1981,7 @@ export function createFakeHelper(options: FakeOptions, io: FakeIo) {
       if (value.type === "lock") {
         state.locked = value.locked
         if (value.locked) {
+          invalidateReferences()
           releaseAll("locked")
           abortCurrent("locked", "The screen locked", "locked", true)
         }
@@ -1601,6 +2013,7 @@ export function createFakeHelper(options: FakeOptions, io: FakeIo) {
         value.dy === undefined ||
         Math.hypot(value.dx, value.dy) >= 8
       if (session.mode === "foreground" && takeover) {
+        invalidateReferences()
         // Inhibit queued writes before returning from the native callback. Even a newer phase update can have
         // been queued before this event, so only a fresh session.begin can clear physical take-over.
         state.session = {

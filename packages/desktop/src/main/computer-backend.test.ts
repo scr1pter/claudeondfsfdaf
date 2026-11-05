@@ -7,7 +7,11 @@ import { createHelperClient, type HelperChannel } from "./computer-helper"
 import { encodeFrame, FrameDecoder } from "./computer-protocol"
 
 // The actual client codecs drive a virtual clipboard; these checks start no process and read no OS clipboard.
-function connect(options: FakeOptions = {}, advertiseClipboard?: boolean) {
+function connect(
+  options: FakeOptions = {},
+  advertiseClipboard?: boolean,
+  rewrite?: (value: Record<string, unknown>) => Record<string, unknown>,
+) {
   const clock = manualClock(1000)
   const data = new Set<(bytes: Uint8Array) => void>()
   const exits = new Set<(value: { code?: number }) => void>()
@@ -28,7 +32,8 @@ function connect(options: FakeOptions = {}, advertiseClipboard?: boolean) {
               features: { ...(value.features as Record<string, boolean>), clipboard: advertiseClipboard },
             })
           : bytes
-      for (const callback of data) callback(frame)
+      const final = rewrite ? encodeFrame(rewrite(JSON.parse(Buffer.from(frame).subarray(4).toString("utf8")))) : frame
+      for (const callback of data) callback(final)
     },
     exit: (code) => {
       for (const callback of exits) callback({ code })
@@ -139,4 +144,45 @@ test("native clipboard methods cannot start a new helper after the backend close
   await expect(fake.backend.readClipboard()).rejects.toMatchObject({ code: "unavailable" })
   await expect(fake.backend.writeClipboard("Synthetic", PHASE)).rejects.toMatchObject({ code: "unavailable" })
   expect(fake.operations.length).toBe(count)
+})
+
+test("a Windows helper cannot return a macOS app-menu tree or focused hit", async () => {
+  const owner: Computer.MacIdentity = {
+    platform: "macos",
+    bundleId: "com.example.Menu",
+    name: "Menu",
+    pid: 501,
+    apple: false,
+    system: false,
+    verified: true,
+    teamId: "TEAM123456",
+  }
+  const menu = {
+    scope: "app-menu",
+    pid: 501,
+    ref: "menu_ref",
+    elementId: "menu_element",
+    role: "AXMenuItem",
+    name: "New",
+    menuPath: ["File", "New"],
+    enabled: true,
+    secure: false,
+    editable: false,
+  }
+  const fake = connect({ platform: "windows" }, undefined, (value) => {
+    if (value.ok !== true) return value
+    if (Array.isArray(value.nodes)) return { ...value, nodes: [{ ...menu, focused: false }] }
+    if ("owner" in value) return { id: value.id, ok: true, ...menu, owner }
+    return value
+  })
+  try {
+    const app = fake.helper.desktop.app("calculator")!
+    await fake.backend.beginSession({ ...SESSION, approved: [app.identity] })
+    await expect(
+      fake.backend.tree({ op: "ui.tree", pid: app.pid, maxNodes: 100, maxDepth: 30 }, 5000),
+    ).rejects.toMatchObject({ code: "changed" })
+    await expect(fake.backend.focused()).rejects.toMatchObject({ code: "changed" })
+  } finally {
+    await fake.backend.close()
+  }
 })

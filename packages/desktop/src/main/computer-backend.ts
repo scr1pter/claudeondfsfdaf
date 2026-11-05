@@ -190,19 +190,30 @@ export class NativeHelperBackend implements Computer.ComputerBackend {
 
   async tree(request: Computer.TreeRequest, deadlineMs: number) {
     await this.requireFeatures("ui.tree")
-    return this.client.request<Computer.TreeResult>("ui.tree", request, deadlineMs)
+    const result = await this.client.request<Computer.TreeResult>("ui.tree", request, deadlineMs)
+    for (const node of result.nodes) this.verifyScope(node)
+    return result
   }
 
-  hitTest(captureId: string, x: number, y: number) {
-    return this.client.request<Computer.HitResult>("ui.hittest", { captureId, x, y })
+  async hitTest(captureId: string, x: number, y: number) {
+    await this.hello()
+    const result = await this.client.request<Computer.HitResult>("ui.hittest", { captureId, x, y })
+    this.verifyScope(result)
+    return result
   }
 
-  focused() {
-    return this.client.request<Computer.HitResult>("ui.focused")
+  async focused() {
+    await this.hello()
+    const result = await this.client.request<Computer.HitResult>("ui.focused")
+    this.verifyScope(result)
+    return result
   }
 
-  resolveRef(ref: string) {
-    return this.client.request<Computer.HitResult>("ui.resolve", { ref })
+  async resolveRef(ref: string) {
+    await this.hello()
+    const result = await this.client.request<Computer.HitResult>("ui.resolve", { ref })
+    this.verifyScope(result)
+    return result
   }
 
   async perform(ref: string, action: string, phase?: Computer.NativePhase, expected?: Computer.NativeElementTarget) {
@@ -276,6 +287,11 @@ export class NativeHelperBackend implements Computer.ComputerBackend {
     const supported = this.capabilities().features
     if (features.some((feature) => supported[feature] !== true))
       throw new ComputerError("unsupported_action", "The computer helper does not support this operation.")
+  }
+
+  private verifyScope(value: { scope?: "window" | "app-menu" }) {
+    if (value.scope === "app-menu" && this.state.hello?.helper.platform !== "macos")
+      throw new ComputerError("changed", "The helper returned an unsupported native scope.")
   }
 }
 

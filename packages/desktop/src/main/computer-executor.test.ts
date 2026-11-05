@@ -340,14 +340,26 @@ function fixture(options: FakeOptions & { mode?: Computer.Mode; pointer?: "ask" 
       action: step.kind === "type" ? "type" : step.kind === "key" ? "key" : step.kind === "drag" ? "drag" : "click",
       why,
       stepDigest: ComputerSensitive.digest(step),
-      target: {
-        appKey: Computer.appKey(inspect.app),
-        appName: inspect.app.name,
-        pid: inspect.pid,
-        windowId: inspect.window.id,
-        ...(inspect.element?.ref ? { ref: inspect.element.ref } : {}),
-        ...(inspect.element?.elementId ? { elementId: inspect.element.elementId } : {}),
-      },
+      target:
+        inspect.scope === "app-menu"
+          ? {
+              scope: "app-menu",
+              appKey: Computer.appKey(inspect.app),
+              appName: inspect.app.name,
+              pid: inspect.pid,
+              ref: inspect.element.ref,
+              elementId: inspect.element.elementId,
+              menuPath: inspect.menuPath,
+              ...(inspect.menuShortcut ? { menuShortcut: inspect.menuShortcut } : {}),
+            }
+          : {
+              appKey: Computer.appKey(inspect.app),
+              appName: inspect.app.name,
+              pid: inspect.pid,
+              windowId: inspect.window.id,
+              ...(inspect.element?.ref ? { ref: inspect.element.ref } : {}),
+              ...(inspect.element?.elementId ? { elementId: inspect.element.elementId } : {}),
+            },
       ...(inspect.element?.label
         ? { targetName: Computer.clean(inspect.element.label, Computer.LIMITS.labelChars) }
         : {}),
@@ -1207,6 +1219,80 @@ test("readUi applies its result limit after filtering the query", async () => {
   expect(result.nodes[0].ref.startsWith("ui_")).toBe(true)
 })
 
+test("a windowless background app exposes menus and presses them without cursor or window input", async () => {
+  const fake = fixture({ mode: "background" })
+  await fake.acquire()
+  const calculator = await fake.grant("calculator")
+  fake.helper.desktop.closeWindows("calculator")
+  const pointer = { ...fake.helper.desktop.cursor }
+  const tree = await fake.run("readUi", { app: { key: calculator.key }, limit: 100 })
+  const item = tree.nodes.find((node) => node.name === "New")!
+  expect(item.scope).toBe("app-menu")
+  expect(item.bounds).toBeUndefined()
+  const inspect = await fake.run("inspect", { ref: item.ref })
+  expect(inspect).toMatchObject({ scope: "app-menu", pid: calculator.app.pid, menuPath: ["File", "New"] })
+  expect(Object.hasOwn(inspect, "window")).toBe(false)
+  const result = await fake.run("act", {
+    steps: [{ kind: "click", at: { ref: item.ref }, button: "left", count: 1, modifiers: [] }],
+    allowedApps: [calculator.key],
+    settleMs: 0,
+  })
+  expect(result.done).toBe(1)
+  expect(fake.helper.desktop.app("calculator")!.menuActions).toEqual(["calculator.menu.new"])
+  expect(fake.helper.desktop.cursor).toEqual(pointer)
+  expect(fake.sent.filter((request) => request.op.startsWith("input.") && request.op !== "input.releaseAll")).toEqual(
+    [],
+  )
+  expect(fake.state.realPointer).not.toContain(true)
+  expect(fake.sent.find((request) => request.op === "ui.tree")).toMatchObject({ pid: calculator.app.pid })
+})
+
+test("a menu sensitive approval refreshes the exact receipt through consent phases", async () => {
+  const fake = fixture({ mode: "background" })
+  await fake.acquire()
+  const calculator = await fake.grant("calculator")
+  const app = fake.helper.desktop.app("calculator")!
+  const command = app.menus.find((menu) => menu.id === "calculator.menu.new")!
+  command.name = "Quit"
+  command.menuPath = ["Calculator", "Quit"]
+  const tree = await fake.run("readUi", { app: { key: calculator.key }, limit: 100 })
+  const item = tree.nodes.find((node) => node.name === "Quit")!
+  const inspect = await fake.run("inspect", { ref: item.ref })
+  const step: Computer.Step = { kind: "click", at: { ref: item.ref }, button: "left", count: 1, modifiers: [] }
+  const pending = await fake.run("act", { steps: [step], allowedApps: [calculator.key], settleMs: 0 })
+  expect(pending).toMatchObject({ done: 0, pending: { kind: "sensitive", why: "disruptive" } })
+  expect(app.menuActions).toEqual([])
+  const requestID = await fake.sensitive(step, inspect, "disruptive")
+  const result = await fake.run("act", {
+    steps: [step],
+    allowedApps: [calculator.key],
+    approvals: [{ index: 0, requestID }],
+    settleMs: 0,
+  })
+  expect(result.done).toBe(1)
+  expect(app.menuActions).toEqual([command.id])
+  expect(fake.grants.peekSensitive(requestID, fake.state.scope!)).toBeUndefined()
+})
+
+test("changing a menu path after inspection refuses the old public reference before press", async () => {
+  const fake = fixture({ mode: "background" })
+  await fake.acquire()
+  const calculator = await fake.grant("calculator")
+  const app = fake.helper.desktop.app("calculator")!
+  const tree = await fake.run("readUi", { app: { key: calculator.key }, limit: 100 })
+  const item = tree.nodes.find((node) => node.name === "New")!
+  app.menus.find((menu) => menu.id === "calculator.menu.new")!.menuPath = ["Services", "New"]
+  await expect(
+    fake.run("act", {
+      steps: [{ kind: "click", at: { ref: item.ref }, button: "left", count: 1, modifiers: [] }],
+      allowedApps: [calculator.key],
+      settleMs: 0,
+    }),
+  ).rejects.toMatchObject({ code: "stale_ref" })
+  expect(app.menuActions).toEqual([])
+  expect(fake.sent.filter((request) => request.op === "ui.perform")).toEqual([])
+})
+
 test("sensitive proofs retain their frame, PID, window, ref, element and full-step binding", async () => {
   const fake = fixture()
   await fake.acquire()
@@ -1301,7 +1387,7 @@ test("background physical typing waits for two quiet seconds before spending a s
   const scope = await fake.acquire()
   const notes = await fake.grant("notes")
   const inspect = await fake.run("inspect", { focus: true })
-  const step: Computer.Step = { kind: "type", text: "outside@example.net" }
+  const step: Computer.Step = { kind: "type", ref: inspect.element!.ref!, text: "outside@example.net" }
   const requestID = await fake.sensitive(step, inspect, "new_destination")
   const request = {
     steps: [step],
@@ -1337,7 +1423,7 @@ test("background physical typing waits for two quiet seconds before spending a s
   expect(fake.grants.peekSensitive(requestID, scope)).toBeUndefined()
 })
 
-test("physical typing between chunks stops a background type without replaying its remaining text", async () => {
+test("physical typing after one background insertion prevents an automatic replay", async () => {
   const fake = fixture({ mode: "background" })
   await fake.acquire()
   const notes = await fake.grant("notes")
@@ -1354,7 +1440,7 @@ test("physical typing between chunks stops a background type without replaying i
   expect(fake.controller.state().phase).toBe("waiting")
   const chunks = fake.helper.log.filter((entry) => entry.kind === "input" && entry.op === "type")
   expect(chunks).toHaveLength(1)
-  expect(chunks[0].length).toBe(64)
+  expect(chunks[0].length).toBe(129)
   await fake.advance(2000)
   await until(() => fake.controller.state().phase === "working")
   expect(fake.helper.log.filter((entry) => entry.kind === "input" && entry.op === "type")).toHaveLength(1)
