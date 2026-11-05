@@ -5,8 +5,10 @@ import { createFakeHelper, manualClock } from "../test/computer/fake-helper"
 import { frameReader, type Line, type Received } from "../test/computer/transcript"
 import {
   CORE_TRANSCRIPTS,
+  MAC_NATIVE_CHECKS,
   classifySelfTestExit,
   lifecycleTopologyFailure,
+  nativeSelfTestChecks,
   parseSelfTestArgs,
   runComputerHelperSelfTest,
   transcriptFailureReason,
@@ -39,6 +41,7 @@ function fixture(input: { keyboard?: boolean; minimal?: boolean } = {}) {
     unverified: 0,
     eof: 0,
     parent: 0,
+    privileged: [] as string[],
   }
   const native: VerifiedFixture = {
     async probe() {
@@ -79,6 +82,14 @@ function fixture(input: { keyboard?: boolean; minimal?: boolean } = {}) {
       state.parent++
       return true
     },
+    async privileged(target) {
+      if (state.closed) throw new Error("The verified fixture has already closed")
+      state.privileged.push(target)
+      return {
+        code: 0,
+        stdout: JSON.stringify({ checks: MAC_NATIVE_CHECKS.privileged.map((name) => ({ name, ok: true })) }),
+      }
+    },
     async close() {
       state.closed++
     },
@@ -92,7 +103,15 @@ function fixture(input: { keyboard?: boolean; minimal?: boolean } = {}) {
     async command(command) {
       state.commands.push(command)
       if (!command.args.length) return { code: 0, stdout: "Unit checks passed" }
-      return { code: 0, stdout: JSON.stringify({ checks: [{ name: "strict-cli", ok: true }] }) }
+      const mode = command.args.includes("--self-test=packaged")
+        ? "packaged"
+        : command.args.includes("--self-test=control")
+          ? "targetControl"
+          : "unprivileged"
+      return {
+        code: 0,
+        stdout: JSON.stringify({ checks: MAC_NATIVE_CHECKS[mode].map((name) => ({ name, ok: true })) }),
+      }
     },
   }
   return { state, native, dependencies }
@@ -116,6 +135,115 @@ test("77 is a visible skip unless privileged checks are required", () => {
   expect(classifySelfTestExit(0, "require")).toBe("passed")
   expect(classifySelfTestExit(1, "off")).toBe("failed")
   expect(classifySelfTestExit(null, "off")).toBe("failed")
+})
+
+test("native reports require the complete fixed catalog and coherent exits", () => {
+  for (const mode of ["unprivileged", "packaged", "privileged", "targetControl"] as const) {
+    const checks = MAC_NATIVE_CHECKS[mode].map((name) => ({ name, ok: true }))
+    expect(nativeSelfTestChecks(JSON.stringify({ checks }), mode, 0)).toEqual(checks)
+    for (const invalid of [
+      { checks: checks.slice(1) },
+      { checks: [...checks, checks[0]] },
+      { checks: checks.map((entry, index) => (index === 0 ? { ...entry, name: "private-dynamic-name" } : entry)) },
+      ...(checks.length > 1 ? [{ checks: checks.toReversed() }] : []),
+      { checks, image: "PRIVATE" },
+      { checks: checks.map((entry, index) => (index === 0 ? { ...entry, detail: "PRIVATE" } : entry)) },
+      { checks: checks.map((entry, index) => (index === 0 ? { ...entry, typedText: "PRIVATE" } : entry)) },
+    ])
+      expect(() => nativeSelfTestChecks(JSON.stringify(invalid), mode, 0)).toThrow()
+    for (const code of [1, 77, null])
+      expect(() => nativeSelfTestChecks(JSON.stringify({ checks }), mode, code)).toThrow()
+  }
+  const skipped = MAC_NATIVE_CHECKS.privileged.map((name) => ({
+    name,
+    ok: false,
+    skipped: true,
+    detail: "accessibility_denied",
+  }))
+  expect(nativeSelfTestChecks(JSON.stringify({ checks: skipped }), "privileged", 77)).toEqual(skipped)
+  expect(() => nativeSelfTestChecks(JSON.stringify({ checks: skipped }), "privileged", 0)).toThrow()
+  const failed = skipped.map((entry, index) =>
+    index === 0 ? { ...entry, skipped: false, detail: "target_validation_failed" } : entry,
+  )
+  expect(nativeSelfTestChecks(JSON.stringify({ checks: failed }), "privileged", 1)).toEqual(failed)
+  expect(() => nativeSelfTestChecks(JSON.stringify({ checks: failed }), "privileged", 77)).toThrow()
+  expect(() => nativeSelfTestChecks(" ".repeat(32_769), "privileged", 77)).toThrow()
+})
+
+test("invalid native artifacts stop every subprocess and verified caller before admission", async () => {
+  const fake = fixture({ minimal: true })
+  fake.dependencies.files = async () => {
+    throw new Error("Synthetic artifact mismatch")
+  }
+  const result = await runComputerHelperSelfTest(options, fake.dependencies)
+  expect(result.code).toBe(1)
+  expect(result.checks.find((check) => check.name === "unit")).toMatchObject({
+    status: "failed",
+    reason: "unverified-native-artifacts",
+  })
+  expect(fake.state.commands).toEqual([])
+  expect(fake.state.opened).toBe(0)
+  expect(fake.state.probes).toBe(0)
+  expect(fake.state.privileged).toEqual([])
+})
+
+test("privileged tests stay off even when a verified isolated target is available", async () => {
+  const fake = fixture({ minimal: true })
+  fake.dependencies.files = async () => ({
+    unit: "/virtual/tests/VectorComputerTests",
+    target: "/virtual/tests/VectorComputerTestTarget.app",
+  })
+  const result = await runComputerHelperSelfTest(options, fake.dependencies)
+  expect(result.code).toBe(0)
+  expect(fake.state.privileged).toEqual([])
+  expect(fake.state.closed).toBe(1)
+  expect(result.checks.find((check) => check.name === "target-control")).toMatchObject({ status: "passed" })
+  expect(fake.state.commands.find((command) => command.args.includes("--self-test=control"))).toMatchObject({
+    executable: "/virtual/tests/VectorComputerTestTarget.app/Contents/MacOS/VectorComputerTestTarget",
+  })
+  expect(result.checks.find((check) => check.name === "privileged")).toMatchObject({
+    status: "skipped",
+    reason: "disabled",
+  })
+})
+
+test("failed required core checks prevent privileged input and still close the verified caller", async () => {
+  const fake = fixture({ minimal: true })
+  fake.dependencies.files = async () => ({
+    unit: "/virtual/tests/VectorComputerTests",
+    target: "/virtual/tests/VectorComputerTestTarget.app",
+  })
+  fake.native.eof = async () => false
+  const result = await runComputerHelperSelfTest({ ...options, privileged: "require" }, fake.dependencies)
+  expect(result.code).toBe(1)
+  expect(fake.state.privileged).toEqual([])
+  expect(fake.state.closed).toBe(1)
+  expect(result.checks.find((check) => check.name === "privileged")).toMatchObject({
+    status: "failed",
+    reason: "required-core-check-failed",
+  })
+})
+
+test("a malformed privileged report cannot leak payloads or bypass fixture cleanup", async () => {
+  const fake = fixture({ minimal: true })
+  fake.dependencies.files = async () => ({
+    unit: "/virtual/tests/VectorComputerTests",
+    target: "/virtual/tests/VectorComputerTestTarget.app",
+  })
+  fake.native.privileged = async () => ({
+    code: 0,
+    stdout: JSON.stringify({
+      checks: MAC_NATIVE_CHECKS.privileged.map((name) => ({ name, ok: true, detail: "PRIVATE" })),
+    }),
+  })
+  const result = await runComputerHelperSelfTest({ ...options, privileged: "auto" }, fake.dependencies)
+  expect(result.code).toBe(1)
+  expect(JSON.stringify(result)).not.toContain("PRIVATE")
+  expect(fake.state.closed).toBe(1)
+  expect(result.checks.find((check) => check.name === "privileged")).toMatchObject({
+    status: "failed",
+    reason: "invalid-native-result",
+  })
 })
 
 test("transcript diagnostics identify a bounded line and failure class without response data", () => {
@@ -408,14 +536,18 @@ test("optional native 77 stays skipped and required native 77 fails against the 
       unit: "/virtual/tests/VectorComputerTests",
       target: "/virtual/tests/VectorComputerTestTarget.app",
     })
-    const command = fake.dependencies.command!
-    fake.dependencies.command = async (value) => {
-      if (!value.args.includes("--self-test=privileged")) return command(value)
-      fake.state.commands.push(value)
+    fake.native.privileged = async (target) => {
+      expect(fake.state.closed).toBe(0)
+      fake.state.privileged.push(target)
       return {
         code: 77,
         stdout: JSON.stringify({
-          checks: [{ name: "privileged-native-checks", ok: false, skipped: true, detail: "PRIVATE SCREEN CONTENT" }],
+          checks: MAC_NATIVE_CHECKS.privileged.map((name) => ({
+            name,
+            ok: false,
+            skipped: true,
+            detail: "accessibility_denied",
+          })),
         }),
       }
     }
@@ -424,11 +556,9 @@ test("optional native 77 stays skipped and required native 77 fails against the 
     expect(result.checks.find((check) => check.name === "privileged")?.status).toBe(
       mode === "require" ? "failed" : "skipped",
     )
-    expect(fake.state.commands.at(-1)?.args).toEqual([
-      "--self-test=privileged",
-      "--target",
-      "/virtual/tests/VectorComputerTestTarget.app",
-    ])
+    expect(fake.state.privileged).toEqual(["/virtual/tests/VectorComputerTestTarget.app"])
+    expect(fake.state.commands.some((command) => command.args.includes("--self-test=privileged"))).toBe(false)
+    expect(fake.state.closed).toBe(1)
     expect(JSON.stringify(result)).not.toContain("PRIVATE")
   }
 })
@@ -470,7 +600,11 @@ test("raw child reports, unknown check names, and conformance diagnostics never 
   const result = await runComputerHelperSelfTest(options, fake.dependencies)
   expect(result.code).toBe(1)
   expect(JSON.stringify(result)).not.toMatch(/PRIVATE|SECRET|clipboard-secret/)
-  expect(result.checks.find((check) => check.name === "unprivileged.check-1")?.status).toBe("passed")
+  expect(result.checks.find((check) => check.name === "unprivileged")).toMatchObject({
+    status: "failed",
+    reason: "invalid-native-result",
+  })
+  expect(result.checks.some((check) => check.name === "unprivileged.check-1")).toBe(false)
   expect(result.checks.find((check) => check.name === "conformance.hello")).toMatchObject({
     status: "failed",
     reason: "transcript-failed",

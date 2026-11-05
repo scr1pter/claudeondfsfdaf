@@ -391,7 +391,16 @@ private func run() throws -> Int32 {
         application.run()
         withExtendedLifetime(server) {}
         return 0
+    case .privilegedWorker(let parentPID, let target, let report):
+        let parent = try HelperLifecycle.verifyWorker(parentPID: parentPID)
+        _ = signal(SIGPIPE, SIG_IGN)
+        // The runner owns lifecycle cancellation and bounded target/input cleanup before returning its report.
+        return try runHelperSelfTest(mode: "privileged", target: target, report: report, parent: parent)
     case .selfTest(let mode, let target, let report):
+        if mode == "privileged" {
+            guard let target else { throw HelperCommand.UsageError.invalidArguments }
+            return try HelperLifecycle.runPrivilegedSupervisor(parentPID: getppid(), target: target, report: report)
+        }
         return try runHelperSelfTest(mode: mode, target: target, report: report)
     }
 }

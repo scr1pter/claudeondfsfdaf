@@ -1,7 +1,7 @@
 import Foundation
 
 /** The grant-free shipped smoke uses the actual parser and codec. Native scenarios are added by M11. */
-func runHelperSelfTest(mode: String, target: String?, report: String?) throws -> Int32 {
+func runHelperSelfTest(mode: String, target: String?, report: String?, parent: HelperParent? = nil) throws -> Int32 {
     guard ["unprivileged", "privileged", "packaged"].contains(mode) else {
         throw HelperCommand.UsageError.invalidArguments
     }
@@ -13,14 +13,9 @@ func runHelperSelfTest(mode: String, target: String?, report: String?) throws ->
         checks.append(.object(["name": .string(name), "ok": .bool(passed)]))
     }
     if mode == "privileged" {
-        // M11 adds only isolated native targets; this mode never falls back to the owner's desktop.
-        let result: JSONValue = .object(["checks": .array([.object([
-            "name": .string("privileged-native-checks"),
-            "ok": .bool(false), "skipped": .bool(true),
-            "detail": .string("The native scenario is not included in this helper target yet."),
-        ])])])
-        try writeHelperReport(result, report: report)
-        return 77
+        let result = PrivilegedHelperSelfTest().run(path: target, parent: parent)
+        try writeHelperReport(result.wire, report: report)
+        return result.exitCode
     }
     record("strict-cli") {
         guard try HelperCommand.parse(["--version", "--json"]) == .version else { return false }

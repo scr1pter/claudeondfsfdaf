@@ -57,6 +57,24 @@ func runLifecycleTests() throws -> Int {
 
     try check(HelperLifecycle.exitCode(waitStatus: 0) == 0, "A clean child exit must be preserved")
     try check(HelperLifecycle.exitCode(waitStatus: 7 << 8) == 7, "A failed child exit must be preserved")
+    for code in [Int32(0), Int32(1), Int32(2), Int32(77)] {
+        try check(HelperLifecycle.exitCode(waitStatus: code << 8) == code, "One-shot pass, failure, usage and skip must survive supervisor reaping")
+    }
+    let target = "/fixture/tests/VectorComputerTestTarget.app"
+    for mode in [HelperWorkerLaunchMode.serving, .probe, .privileged(target: target, report: nil),
+                 .privileged(target: target, report: "/fixture/report.json")] {
+        let arguments = HelperLifecycle.workerArguments(parentPID: 123, mode: mode)
+        let parsed = try HelperCommand.parse(arguments)
+        switch mode {
+        case .serving:
+            try check(mode.usesProtocol && parsed == .worker(parentPID: 123, probe: false), "Only serving inherits the duplex protocol descriptor")
+        case .probe:
+            try check(!mode.usesProtocol && parsed == .worker(parentPID: 123, probe: true), "Probe remains a one-shot worker without fd3")
+        case .privileged(let path, let report):
+            try check(!mode.usesProtocol && !arguments.contains("--stdio") && !arguments.contains("--probe") &&
+                parsed == .privilegedWorker(parentPID: 123, target: path, report: report), "Privileged reports use their own strict one-shot worker, never protocol serving")
+        }
+    }
     try check(HelperLifecycle.exitCode(waitStatus: SIGTERM) == 128 + SIGTERM, "A signaled child exit must remain a failure")
     return checks
 }

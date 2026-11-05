@@ -6,6 +6,14 @@ import Foundation
 // It neither changes responsibility nor invokes a native permission, capture or input operation.
 private enum CallerError: Error { case arguments, bundle, descriptor, process, spawn }
 
+private enum CallerMode {
+    case serving
+    case probe
+    case privileged(target: String)
+
+    var usesProtocol: Bool { if case .serving = self { return true }; return false }
+}
+
 private struct CallerProcess: Equatable {
     let pid: pid_t
     let parent: pid_t
@@ -87,8 +95,31 @@ private func containingHelper() throws -> String {
     return helper.path
 }
 
-private func spawnHelper(_ executable: String, probe: Bool) throws -> pid_t {
-    if !probe {
+private func callerMode(_ arguments: [String]) throws -> CallerMode {
+    if arguments == ["--stdio"] { return .serving }
+    if arguments == ["--probe", "--json"] { return .probe }
+    guard arguments.count == 3, arguments[0] == "--self-test=privileged", arguments[1] == "--target" else {
+        throw CallerError.arguments
+    }
+    let path = arguments[2]
+    guard path.utf8.count <= 4096, canonical(path) == path,
+          !path.unicodeScalars.contains(where: { $0.value < 0x20 || (0x7f...0x9f).contains($0.value) }) else {
+        throw CallerError.arguments
+    }
+    let target = URL(fileURLWithPath: path)
+    let info = try plist(target.appendingPathComponent("Contents/Info.plist"))
+    let executable = target.appendingPathComponent("Contents/MacOS/VectorComputerTestTarget").path
+    var status = stat()
+    guard target.lastPathComponent == "VectorComputerTestTarget.app",
+          info.identifier == "ai.vector.computer.test-target", info.executable == "VectorComputerTestTarget",
+          canonical(executable) == executable, lstat(executable, &status) == 0,
+          status.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG),
+          status.st_mode & mode_t(S_IXUSR | S_IXGRP | S_IXOTH) != 0 else { throw CallerError.bundle }
+    return .privileged(target: path)
+}
+
+private func spawnHelper(_ executable: String, mode: CallerMode) throws -> pid_t {
+    if mode.usesProtocol {
         var status = stat()
         guard fstat(3, &status) == 0,
               [mode_t(S_IFIFO), mode_t(S_IFSOCK)].contains(status.st_mode & mode_t(S_IFMT)) else {
@@ -112,11 +143,16 @@ private func spawnHelper(_ executable: String, probe: Bool) throws -> pid_t {
     for fd in [STDIN_FILENO, STDOUT_FILENO, STDERR_FILENO] {
         guard posix_spawn_file_actions_addinherit_np(&actions, fd) == 0 else { throw CallerError.spawn }
     }
-    if !probe {
+    if mode.usesProtocol {
         guard posix_spawn_file_actions_addinherit_np(&actions, 3) == 0 else { throw CallerError.spawn }
     }
     // Keep the ordinary child relationship and process group. Only the unchanged helper's own launcher disclaims.
-    let arguments = [executable] + (probe ? ["--probe", "--json"] : ["--stdio", "--parent-pid", String(getpid())])
+    let arguments: [String]
+    switch mode {
+    case .serving: arguments = [executable, "--stdio", "--parent-pid", String(getpid())]
+    case .probe: arguments = [executable, "--probe", "--json"]
+    case .privileged(let target): arguments = [executable, "--self-test=privileged", "--target", target]
+    }
     let environment = ProcessInfo.processInfo.environment.map { "\($0.key)=\($0.value)" }
     let strings = arguments.map { strdup($0) }
     let variables = environment.map { strdup($0) }
@@ -128,7 +164,7 @@ private func spawnHelper(_ executable: String, probe: Bool) throws -> pid_t {
     let code = posix_spawn(&child, executable, &actions, &attributes, &argv, &envp)
     guard code == 0, child > 0 else { throw CallerError.spawn }
     // The fixture must never keep this endpoint alive after the actual helper has closed it.
-    if !probe { Darwin.close(3) }
+    if mode.usesProtocol { Darwin.close(3) }
     return child
 }
 
@@ -137,7 +173,8 @@ private final class CallerWatchdog {
     private let queue = DispatchQueue(label: "ai.vector.computer.fixture-watchdog")
     private let parent: CallerProcess
     private let child: pid_t
-    private let childIdentity: CallerProcess
+    private let childIdentity: CallerProcess?
+    private var exitedStatus: Int32?
     private var finished = false
     private var stopping = false
     private var parentWatch: DispatchSourceProcess?
@@ -148,14 +185,23 @@ private final class CallerWatchdog {
     init(parent: CallerProcess, child: pid_t) throws {
         self.parent = parent
         self.child = child
-        guard let identity = process(child), identity.parent == getpid() else {
+        if let identity = process(child), identity.parent == getpid() {
+            childIdentity = identity
+        } else {
+            var status: Int32 = 0
+            var result: pid_t
+            repeat { result = waitpid(child, &status, WNOHANG) } while result == -1 && errno == EINTR
+            if result == child {
+                // An ordinary one-shot may exit before proc_pidpath can observe it. Preserve its real status.
+                childIdentity = nil; exitedStatus = status; finished = true
+                return
+            }
+            guard result == 0 else { throw CallerError.process }
             // SIGCHLD was reset before spawning and no wait has run: this PID cannot have been reused yet.
             _ = Darwin.kill(child, SIGKILL)
-            var status: Int32 = 0
             while waitpid(child, &status, 0) == -1 && errno == EINTR {}
             throw CallerError.process
         }
-        childIdentity = identity
         queue.suspend()
         let watch = DispatchSource.makeProcessSource(identifier: parent.pid, eventMask: .exit, queue: queue)
         watch.setEventHandler { [weak self] in self?.stop(SIGTERM) }
@@ -198,11 +244,15 @@ private final class CallerWatchdog {
 
     private func signalChild(_ number: Int32) {
         // A reaped PID may already name somebody else. Never forward a signal without its captured start time.
-        guard process(child) == childIdentity else { return }
+        guard let childIdentity, process(child) == childIdentity else { return }
         _ = Darwin.kill(child, number)
     }
 
     func wait() -> Int32 {
+        if let status = exitedStatus {
+            let signal = status & 0x7f
+            return signal == 0 ? (status >> 8) & 0xff : 128 + signal
+        }
         var status: Int32 = 0
         while true {
             let result = waitpid(child, &status, 0)
@@ -223,18 +273,20 @@ private final class CallerWatchdog {
 
 private func runCaller() throws -> Int32 {
     let arguments = Array(CommandLine.arguments.dropFirst())
-    let probe = arguments == ["--probe", "--json"]
-    guard probe || arguments == ["--stdio"] else { throw CallerError.arguments }
+    let mode = try callerMode(arguments)
     guard getppid() > 1, let parent = process(getppid()) else { throw CallerError.process }
     let helper = try containingHelper()
     // Keep the spawned PID unreaped until our wait, including the setup-error cleanup path.
     Darwin.signal(SIGCHLD, SIG_DFL)
-    let child = try spawnHelper(helper, probe: probe)
+    let child = try spawnHelper(helper, mode: mode)
     return try CallerWatchdog(parent: parent, child: child).wait()
 }
 
 do {
     Darwin.exit(try runCaller())
+} catch CallerError.arguments {
+    FileHandle.standardError.write(Data("Invalid computer helper fixture arguments.\n".utf8))
+    Darwin.exit(2)
 } catch {
     FileHandle.standardError.write(Data("Computer helper fixture caller failed.\n".utf8))
     Darwin.exit(1)

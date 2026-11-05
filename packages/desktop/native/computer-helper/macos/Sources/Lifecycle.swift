@@ -35,6 +35,14 @@ struct HelperParent {
     let supervisor: HelperProcessIdentity?
 }
 
+enum HelperWorkerLaunchMode: Equatable {
+    case serving
+    case probe
+    case privileged(target: String, report: String?)
+
+    var usesProtocol: Bool { if case .serving = self { return true }; return false }
+}
+
 enum HelperLifecycle {
     static func protocolDescriptorIsValid(_ descriptor: Int32 = 3) -> Bool {
         var status = stat()
@@ -66,15 +74,46 @@ enum HelperLifecycle {
     /// Public modes run only as children of the containing Vector application's actual main executable.
     /// D14's one-shot probe has neither a parent argument nor fd 3, so main supplies its actual getppid().
     static func runSupervisor(parentPID: pid_t, probe: Bool) throws -> Int32 {
+        try runSupervisor(parentPID: parentPID, mode: probe ? .probe : .serving)
+    }
+
+    /// Privileged self-tests use the same independently attributed worker and verified application parent.
+    /// Their only channel is the bounded one-shot report on stdout; fd 3 is neither needed nor inherited.
+    static func runPrivilegedSupervisor(parentPID: pid_t, target: String, report: String?) throws -> Int32 {
+        try runSupervisor(parentPID: parentPID, mode: .privileged(target: target, report: report))
+    }
+
+    private static func runSupervisor(parentPID: pid_t, mode supplied: HelperWorkerLaunchMode) throws -> Int32 {
         try requireOrdinaryToken()
-        if !probe && !protocolDescriptorIsValid() { throw HelperLifecycleError.descriptor }
+        if supplied.usesProtocol && !protocolDescriptorIsValid() { throw HelperLifecycleError.descriptor }
         let parent = try verifyOriginalParent(parentPID, immediateParent: getpid())
         guard getppid() == parentPID else { throw HelperLifecycleError.parent }
+        let mode: HelperWorkerLaunchMode
+        if case .privileged(let target, let report) = supplied {
+            guard HelperCommand.absolutePath(target), canonicalPath(target) == target,
+                  URL(fileURLWithPath: target).lastPathComponent == "VectorComputerTestTarget.app" else {
+                throw HelperCommand.UsageError.invalidArguments
+            }
+            mode = .privileged(target: target, report: try report.map(canonicalReportPath))
+        } else { mode = supplied }
         let executable = try currentExecutable()
-        let child = try spawnWorker(executable: executable, parentPID: parentPID, probe: probe)
+        let child = try spawnWorker(executable: executable, parentPID: parentPID, mode: mode)
         // Only stage 2 owns the protocol endpoint. Keeping a copy here would postpone the desktop's channel EOF.
-        if !probe { Darwin.close(3) }
+        if mode.usesProtocol { Darwin.close(3) }
         return HelperSupervisorWatchdog(childPID: child, parent: parent).wait()
+    }
+
+    /// Pure argv construction is shared by the actual spawn and grant-free command/lifecycle tests.
+    static func workerArguments(parentPID: pid_t, mode: HelperWorkerLaunchMode) -> [String] {
+        var values = ["--computer-worker", "--parent-pid", String(parentPID)]
+        switch mode {
+        case .serving: values.append("--stdio")
+        case .probe: values.append(contentsOf: ["--probe", "--json"])
+        case .privileged(let target, let report):
+            values.append(contentsOf: ["--self-test=privileged", "--target", target])
+            if let report { values.append(contentsOf: ["--report", report]) }
+        }
+        return values
     }
 
     /// An internal command-line flag grants no authority. A worker must have this very helper as its real
@@ -154,6 +193,20 @@ enum HelperLifecycle {
         guard path.hasPrefix("/"), !path.contains("\0"), let resolved = realpath(path, nil) else { return nil }
         defer { free(resolved) }
         return String(cString: resolved)
+    }
+
+    private static func canonicalReportPath(_ path: String) throws -> String {
+        guard HelperCommand.absolutePath(path) else { throw HelperCommand.UsageError.invalidArguments }
+        let url = URL(fileURLWithPath: path)
+        guard let directory = canonicalPath(url.deletingLastPathComponent().path) else {
+            throw HelperCommand.UsageError.invalidArguments
+        }
+        let resolved = URL(fileURLWithPath: directory).appendingPathComponent(url.lastPathComponent).path
+        var status = stat()
+        let result = lstat(resolved, &status)
+        guard (result == 0 && status.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG) && status.st_uid == getuid()) ||
+              (result == -1 && errno == ENOENT) else { throw HelperCommand.UsageError.invalidArguments }
+        return resolved
     }
 
     private static func verifyOriginalParent(_ pid: pid_t, immediateParent: pid_t) throws -> HelperProcessIdentity {
@@ -258,7 +311,7 @@ enum HelperLifecycle {
         }
     }
 
-    private static func spawnWorker(executable: String, parentPID: pid_t, probe: Bool) throws -> pid_t {
+    private static func spawnWorker(executable: String, parentPID: pid_t, mode: HelperWorkerLaunchMode) throws -> pid_t {
         var attributes: posix_spawnattr_t?
         var actions: posix_spawn_file_actions_t?
         guard posix_spawnattr_init(&attributes) == 0 else { throw HelperLifecycleError.spawn(errno) }
@@ -279,14 +332,13 @@ enum HelperLifecycle {
               posix_spawn_file_actions_addinherit_np(&actions, STDERR_FILENO) == 0 else {
             throw HelperLifecycleError.spawn(errno)
         }
-        if probe {
+        if !mode.usesProtocol {
             guard posix_spawn_file_actions_addinherit_np(&actions, STDOUT_FILENO) == 0 else { throw HelperLifecycleError.spawn(errno) }
         } else {
             guard posix_spawn_file_actions_addopen(&actions, STDOUT_FILENO, "/dev/null", O_WRONLY, 0) == 0,
                   posix_spawn_file_actions_addinherit_np(&actions, 3) == 0 else { throw HelperLifecycleError.spawn(errno) }
         }
-        let values = [executable, "--computer-worker", "--parent-pid", String(parentPID)] +
-            (probe ? ["--probe", "--json"] : ["--stdio"])
+        let values = [executable] + workerArguments(parentPID: parentPID, mode: mode)
         let environment = ProcessInfo.processInfo.environment.map { "\($0.key)=\($0.value)" }
         let arguments = values.map { strdup($0) }
         let variables = environment.map { strdup($0) }

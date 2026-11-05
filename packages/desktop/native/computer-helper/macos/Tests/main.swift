@@ -8,6 +8,7 @@ do {
     _ = try runServerTests()
     _ = try runLifecycleTests()
     _ = try runPackagedSelfTestTests()
+    _ = try runPrivilegedSelfTestTests()
     _ = try runBlocklistTests()
     _ = try runPermissionsTests()
     _ = try runGeometryTests()

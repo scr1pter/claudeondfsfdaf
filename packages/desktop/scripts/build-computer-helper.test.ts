@@ -9,12 +9,14 @@ import {
   checkIdentityLock,
   computeSourceDigest,
   createManifest,
+  MAC_TEST_TARGET,
   parseBuildOptions,
   parseHelperManifest,
   renderHelperPlist,
   sourceDigestFor,
   swiftArguments,
   verifyPrebuiltHelper,
+  verifyMacTestArtifacts,
   windowsToolchainSelection,
 } from "./build-computer-helper"
 import type { HelperManifest, IdentityLock, NativeCommand } from "./build-computer-helper"
@@ -552,9 +554,21 @@ describe("native build boundaries", () => {
             const bundle = args.at(-1)!
             await mkdir(path.join(bundle, "Contents/_CodeSignature"), { recursive: true })
             await writeFile(path.join(bundle, "Contents/_CodeSignature/CodeResources"), "signed fixture resources")
-            const file = path.join(bundle, "Contents/MacOS/VectorComputer")
+            const file = path.join(
+              bundle,
+              "Contents/MacOS",
+              path.basename(bundle) === MAC_TEST_TARGET.bundle ? MAC_TEST_TARGET.executable : "VectorComputer",
+            )
             await writeFile(file, Buffer.concat([await readFile(file), Buffer.from("signed fixture bytes")]))
           }
+          if (command.endsWith("codesign") && args.includes("--display"))
+            return args.includes("--entitlements")
+              ? { code: 0, stdout: '<plist version="1.0"><dict/></plist>', stderr: "" }
+              : {
+                  code: 0,
+                  stdout: "",
+                  stderr: `Identifier=${MAC_TEST_TARGET.bundleId}\nSignature=adhoc\nCodeDirectory flags=0x10000(runtime)\n`,
+                }
           return { code: 0, stdout: "", stderr: args.includes("-dvvv") ? `CDHash=${codeHash}\n` : "" }
         } finally {
           active = false
@@ -583,7 +597,7 @@ describe("native build boundaries", () => {
       ) as IdentityLock
       expect(computed.cdhash).toEqual({ x64: codeHash, arm64: codeHash })
       const compilations = calls.filter((call) => call.includes("swiftc") && call.includes("-o"))
-      expect(compilations).toHaveLength(6)
+      expect(compilations).toHaveLength(8)
       const unit = compilations.find((call) => call.at(-1)?.endsWith("unit"))!
       expect(unit.filter((file) => file.endsWith("/main.swift"))).toEqual([
         path.join(root, "native/computer-helper/macos/Tests/main.swift"),
@@ -591,6 +605,192 @@ describe("native build boundaries", () => {
       const caller = compilations.find((call) => call.at(-1)?.endsWith("caller"))!
       expect(caller).toContain(path.join(root, "native/computer-helper/macos/TestSupport/Caller/main.swift"))
       expect(caller).not.toContain("-parse-as-library")
+      const targetBuilds = compilations.filter((call) => call.at(-1)?.endsWith("test-target"))
+      expect(targetBuilds).toHaveLength(2)
+      for (const call of targetBuilds) {
+        const sources = call.filter((file) => file.endsWith(".swift"))
+        expect(sources).toContain(path.join(root, "native/computer-helper/macos/TestTarget/main.swift"))
+        expect(
+          sources.every((file) =>
+            file.startsWith(path.join(root, "native/computer-helper/macos/TestTarget") + path.sep),
+          ),
+        ).toBe(true)
+        expect(call[call.indexOf("-module-name") + 1]).toBe(MAC_TEST_TARGET.executable)
+      }
+      expect(
+        calls.filter((call) => call[0]!.endsWith("codesign") && call.includes("--force")).map((call) => call.at(-1)),
+      ).toEqual([path.join(root, "out/VectorComputer.app"), path.join(root, "out/tests", MAC_TEST_TARGET.bundle)])
+      const targetSign = calls.find(
+        (call) =>
+          call[0]!.endsWith("codesign") && call.includes("--force") && call.at(-1)?.endsWith(MAC_TEST_TARGET.bundle),
+      )!
+      expect(targetSign).toContain("runtime")
+      expect(targetSign).toContain("--timestamp=none")
+      expect(targetSign[targetSign.indexOf("--identifier") + 1]).toBe(MAC_TEST_TARGET.bundleId)
+      expect(targetSign[targetSign.indexOf("--entitlements") + 1]).toBe(
+        path.join(root, "native/computer-helper/macos/entitlements.plist"),
+      )
+      const tests = path.join(root, "out/tests")
+      const testManifestFile = path.join(tests, MAC_TEST_TARGET.manifest)
+      const testManifest = JSON.parse(await readFile(testManifestFile, "utf8")) as HelperManifest
+      expect(testManifest.sourceDigest).toBe(result.sourceDigest)
+      expect(testManifest.helperVersion).toBe(result.helperVersion)
+      expect(testManifest.toolchain).toBe(result.toolchain)
+      expect(Object.keys(testManifest.files).sort()).toEqual([
+        "VectorComputerCaller",
+        "VectorComputerTestTarget.app/Contents/Info.plist",
+        "VectorComputerTestTarget.app/Contents/MacOS/VectorComputerTestTarget",
+        "VectorComputerTestTarget.app/Contents/_CodeSignature/CodeResources",
+        "VectorComputerTests",
+      ])
+      const testExecutable = path.join(tests, MAC_TEST_TARGET.bundle, "Contents/MacOS", MAC_TEST_TARGET.executable)
+      const testBytes = await readFile(testExecutable)
+      expect(testManifest.files[`${MAC_TEST_TARGET.bundle}/Contents/MacOS/${MAC_TEST_TARGET.executable}`]!.sha256).toBe(
+        createHash("sha256").update(testBytes).digest("hex"),
+      )
+      expect(
+        await verifyMacTestArtifacts(tests, ["x64", "arm64"], {
+          directory: root,
+          host: "linux",
+          helperManifest: result,
+        }),
+      ).toEqual(testManifest)
+      await expect(
+        verifyMacTestArtifacts(tests, ["x64"], {
+          directory: root,
+          host: "linux",
+          helperManifest: { ...result, sourceDigest: "0".repeat(64) },
+        }),
+      ).rejects.toThrow("manifest does not match")
+      await writeFile(testExecutable, "changed target bytes")
+      await expect(verifyMacTestArtifacts(tests, ["x64"], { directory: root, host: "linux" })).rejects.toThrow("hash")
+      await writeFile(testExecutable, testBytes)
+      const armOnlyTarget = Buffer.alloc(32)
+      armOnlyTarget.writeUInt32LE(0xfeedfacf)
+      armOnlyTarget.writeUInt32LE(0x100000c, 4)
+      await writeFile(testExecutable, armOnlyTarget)
+      const wrongArchitecture = structuredClone(testManifest)
+      wrongArchitecture.files[`${MAC_TEST_TARGET.bundle}/Contents/MacOS/${MAC_TEST_TARGET.executable}`]!.sha256 =
+        createHash("sha256").update(armOnlyTarget).digest("hex")
+      await writeFile(testManifestFile, JSON.stringify(wrongArchitecture))
+      await expect(verifyMacTestArtifacts(tests, ["x64"], { directory: root, host: "linux" })).rejects.toThrow(
+        "wrong architecture",
+      )
+      await writeFile(testExecutable, testBytes)
+      await writeFile(testManifestFile, JSON.stringify(testManifest))
+      const pe = Buffer.alloc(128)
+      pe.writeUInt16LE(0x5a4d)
+      pe.writeUInt32LE(64, 0x3c)
+      pe.writeUInt32LE(0x4550, 64)
+      pe.writeUInt16LE(0x8664, 68)
+      const wrongFormat = structuredClone(testManifest)
+      const originals = new Map<string, Buffer>()
+      for (const metadata of Object.values(wrongFormat.files)) metadata.arch = ["x64"]
+      for (const relative of [
+        "VectorComputerTests",
+        "VectorComputerCaller",
+        `${MAC_TEST_TARGET.bundle}/Contents/MacOS/${MAC_TEST_TARGET.executable}`,
+      ]) {
+        const file = path.join(tests, relative)
+        originals.set(file, await readFile(file))
+        await writeFile(file, pe)
+        wrongFormat.files[relative]!.sha256 = createHash("sha256").update(pe).digest("hex")
+      }
+      await writeFile(testManifestFile, JSON.stringify(wrongFormat))
+      await expect(verifyMacTestArtifacts(tests, ["x64"], { directory: root, host: "linux" })).rejects.toThrow("Mach-O")
+      for (const [file, bytes] of originals) await writeFile(file, bytes)
+      await writeFile(testManifestFile, JSON.stringify(testManifest))
+      const missingCaller = structuredClone(testManifest)
+      delete missingCaller.files.VectorComputerCaller
+      await writeFile(testManifestFile, JSON.stringify(missingCaller))
+      await expect(verifyMacTestArtifacts(tests, ["x64"], { directory: root, host: "linux" })).rejects.toThrow(
+        "expected layout",
+      )
+      await writeFile(testManifestFile, JSON.stringify(testManifest))
+      const infoFile = path.join(tests, MAC_TEST_TARGET.bundle, "Contents/Info.plist")
+      const infoBytes = await readFile(infoFile)
+      const changedInfo = Buffer.from(infoBytes.toString().replace(MAC_TEST_TARGET.bundleId, "com.example.Other"))
+      await writeFile(infoFile, changedInfo)
+      const changedManifest = structuredClone(testManifest)
+      changedManifest.files[`${MAC_TEST_TARGET.bundle}/Contents/Info.plist`]!.sha256 = createHash("sha256")
+        .update(changedInfo)
+        .digest("hex")
+      await writeFile(testManifestFile, JSON.stringify(changedManifest))
+      await expect(verifyMacTestArtifacts(tests, ["x64"], { directory: root, host: "linux" })).rejects.toThrow(
+        "metadata",
+      )
+      await writeFile(infoFile, infoBytes)
+      await writeFile(testManifestFile, JSON.stringify(testManifest))
+      await writeFile(path.join(tests, "unexpected"), "unmanifested artifact")
+      await expect(verifyMacTestArtifacts(tests, ["x64"], { directory: root, host: "linux" })).rejects.toThrow(
+        "outside its manifest",
+      )
+      await rm(path.join(tests, "unexpected"))
+      const targetSource = path.join(root, "native/computer-helper/macos/TestTarget/main.swift")
+      const sourceBytes = await readFile(targetSource)
+      await writeFile(targetSource, Buffer.concat([sourceBytes, Buffer.from("\n// changed source\n")]))
+      await expect(verifyMacTestArtifacts(tests, ["x64"], { directory: root, host: "linux" })).rejects.toThrow(
+        "source digest",
+      )
+      await writeFile(targetSource, sourceBytes)
+      const signatureCalls: string[][] = []
+      const signature: NativeCommand = async (command, args) => {
+        expect(command).toBe("/usr/bin/codesign")
+        signatureCalls.push([...args])
+        if (args.includes("--verify")) return { code: 0, stdout: "", stderr: "" }
+        if (args.includes("--entitlements"))
+          return { code: 0, stdout: '<plist version="1.0"><dict/></plist>', stderr: "" }
+        return {
+          code: 0,
+          stdout: "",
+          stderr: `Identifier=${MAC_TEST_TARGET.bundleId}\nSignature=adhoc\nCodeDirectory flags=0x10000(runtime)\n`,
+        }
+      }
+      await verifyMacTestArtifacts(tests, ["x64", "arm64"], { directory: root, host: "darwin", run: signature })
+      expect(signatureCalls).toHaveLength(5)
+      expect(signatureCalls[0]).toContain("--all-architectures")
+      expect(
+        signatureCalls.filter((args) => args.includes("--arch")).map((args) => args[args.indexOf("--arch") + 1]),
+      ).toEqual(["x86_64", "x86_64", "arm64", "arm64"])
+      for (const invalid of ["identifier", "runtime", "adhoc", "entitlements", "signature"]) {
+        const reject: NativeCommand = async (command, args, settings) => {
+          const normal = await signature(command, args, settings)
+          if (invalid === "signature" && args.includes("--verify")) return { ...normal, code: 1 }
+          if (invalid === "entitlements" && args.includes("--entitlements"))
+            return {
+              ...normal,
+              stdout: "<plist><dict><key>com.apple.security.get-task-allow</key><true/></dict></plist>",
+            }
+          return ["identifier", "runtime", "adhoc"].includes(invalid) &&
+            args.includes("--display") &&
+            !args.includes("--entitlements")
+            ? {
+                ...normal,
+                stderr: normal.stderr.replace(
+                  invalid === "identifier"
+                    ? MAC_TEST_TARGET.bundleId
+                    : invalid === "runtime"
+                      ? "runtime"
+                      : "Signature=adhoc",
+                  invalid === "identifier"
+                    ? "com.example.Other"
+                    : invalid === "runtime"
+                      ? "none"
+                      : "Signature=Developer ID",
+                ),
+              }
+            : normal
+        }
+        await expect(
+          verifyMacTestArtifacts(tests, ["x64"], { directory: root, host: "darwin", run: reject }),
+        ).rejects.toThrow(
+          invalid === "signature"
+            ? "signature is invalid"
+            : invalid === "entitlements"
+              ? "empty dictionary"
+              : "hardened ad-hoc",
+        )
+      }
       expect(
         await verifyPrebuiltHelper(path.join(root, "out"), "darwin", ["x64", "arm64"], {
           directory: root,

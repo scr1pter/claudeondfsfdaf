@@ -46,6 +46,21 @@ const validArchitecture = (value: unknown): value is HelperArchitecture => value
 const record = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value)
 
+export const MAC_TEST_TARGET = Object.freeze({
+  bundle: "VectorComputerTestTarget.app",
+  executable: "VectorComputerTestTarget",
+  bundleId: "ai.vector.computer.test-target",
+  name: "Vector Computer Test Target",
+  manifest: "computer-helper-tests.json",
+})
+const macTestArtifactNames = [
+  "VectorComputerTests",
+  "VectorComputerCaller",
+  `${MAC_TEST_TARGET.bundle}/Contents/Info.plist`,
+  `${MAC_TEST_TARGET.bundle}/Contents/MacOS/${MAC_TEST_TARGET.executable}`,
+  `${MAC_TEST_TARGET.bundle}/Contents/_CodeSignature/CodeResources`,
+].sort()
+
 export class HelperBuildError extends Error {
   constructor(
     message: string,
@@ -113,7 +128,8 @@ export function parseBuildOptions(
 export function swiftArguments(input: {
   arch: HelperArchitecture
   sources: readonly string[]
-  generated: string
+  generated?: string
+  moduleName?: string
   output: string
   sourceRoot: string
   sdk: string
@@ -129,13 +145,12 @@ export function swiftArguments(input: {
     "-sdk",
     input.sdk,
     "-module-name",
-    "VectorComputer",
+    input.moduleName ?? "VectorComputer",
     "-swift-version",
     "5",
     "-file-prefix-map",
     `${input.sourceRoot}=.`,
-    "-file-prefix-map",
-    `${path.dirname(input.generated)}=./generated`,
+    ...(input.generated ? ["-file-prefix-map", `${path.dirname(input.generated)}=./generated`] : []),
     "-Xlinker",
     "-dead_strip",
     ...[
@@ -151,7 +166,7 @@ export function swiftArguments(input: {
       "Security",
     ].flatMap((name) => ["-framework", name]),
     ...[...input.sources].sort(),
-    input.generated,
+    ...(input.generated ? [input.generated] : []),
     "-o",
     input.output,
   ]
@@ -412,14 +427,30 @@ export async function buildComputerHelper(
     ...(await filesUnder(path.join(native, "Tests"))).filter((file) => file.endsWith(".swift")),
   ]
   const callerSources = [path.join(native, "TestSupport/Caller/main.swift")]
+  const targetSources = (await filesUnder(path.join(native, "TestTarget"))).filter((file) => file.endsWith(".swift"))
+  if (!targetSources.length) throw new HelperBuildError("The native test target sources are missing.")
   const bundle = path.join(options.out, identity.mac.bundle)
   const executable = path.join(bundle, "Contents/MacOS", identity.mac.executable)
   const tests = path.join(options.out, "tests")
+  const testTarget = path.join(tests, MAC_TEST_TARGET.bundle)
   // Regenerate only this build's owned bundle; stale signed resources must never become new shipping inputs.
   await rm(bundle, { recursive: true, force: true })
+  await rm(testTarget, { recursive: true, force: true })
   await mkdir(path.dirname(executable), { recursive: true })
   await mkdir(path.join(bundle, "Contents/Resources"), { recursive: true })
   await mkdir(tests, { recursive: true })
+  await mkdir(path.join(testTarget, "Contents/MacOS"), { recursive: true })
+  await writeFile(
+    path.join(testTarget, "Contents/Info.plist"),
+    renderHelperPlist(await readFile(path.join(native, "TestTarget/Info.plist.template"), "utf8"), {
+      HELPER_BUNDLE_ID: MAC_TEST_TARGET.bundleId,
+      HELPER_EXECUTABLE: MAC_TEST_TARGET.executable,
+      HELPER_NAME: MAC_TEST_TARGET.name,
+      HELPER_VERSION: identity.helperVersion,
+      MINIMUM_SYSTEM_VERSION: identity.mac.minimumSystemVersion,
+      SOURCE_DIGEST: digest,
+    }),
+  )
   await writeFile(
     path.join(bundle, "Contents/Info.plist"),
     renderHelperPlist(await readFile(path.join(native, "Info.plist.template"), "utf8"), {
@@ -439,6 +470,11 @@ export async function buildComputerHelper(
     { name: "helper", sources: helperSources, output: executable },
     { name: "unit", sources: unitSources, output: path.join(tests, "VectorComputerTests") },
     { name: "caller", sources: callerSources, output: path.join(tests, "VectorComputerCaller") },
+    {
+      name: "test-target",
+      sources: targetSources,
+      output: path.join(testTarget, "Contents/MacOS", MAC_TEST_TARGET.executable),
+    },
   ]) {
     const slices: string[] = []
     for (const arch of options.architectures) {
@@ -446,7 +482,14 @@ export async function buildComputerHelper(
       await mkdir(path.dirname(slice), { recursive: true })
       await command(
         "xcrun",
-        swiftArguments({ arch, sources: target.sources, generated, output: slice, sourceRoot: directory, sdk }),
+        swiftArguments({
+          arch,
+          sources: target.sources,
+          ...(target.name === "test-target" ? { moduleName: MAC_TEST_TARGET.executable } : { generated }),
+          output: slice,
+          sourceRoot: directory,
+          sdk,
+        }),
         settings,
       )
       slices.push(slice)
@@ -474,6 +517,23 @@ export async function buildComputerHelper(
     settings,
   )
   await command("/usr/bin/codesign", ["--verify", "--strict", bundle], settings)
+  await command(
+    "/usr/bin/codesign",
+    [
+      "--force",
+      "--sign",
+      "-",
+      "--options",
+      "runtime",
+      "--timestamp=none",
+      "--entitlements",
+      path.join(native, "entitlements.plist"),
+      "--identifier",
+      MAC_TEST_TARGET.bundleId,
+      testTarget,
+    ],
+    settings,
+  )
   const builtArchitectures = binaryArchitectures(await readFile(executable))
   if (!options.architectures.every((arch) => builtArchitectures.includes(arch)))
     throw new HelperBuildError("The built macOS helper has the wrong architecture.")
@@ -488,6 +548,31 @@ export async function buildComputerHelper(
     files: await manifestFiles(options.out, await filesUnder(bundle), options.architectures),
   })
   await writeFile(path.join(options.out, "computer-helper.json"), json(manifest))
+  const testManifest = createManifest({
+    helperVersion: identity.helperVersion,
+    protocol: identity.protocol,
+    platform: "darwin",
+    sourceDigest: digest,
+    toolchain,
+    files: await manifestFiles(
+      tests,
+      [
+        path.join(tests, "VectorComputerTests"),
+        path.join(tests, "VectorComputerCaller"),
+        ...(await filesUnder(testTarget)),
+      ],
+      options.architectures,
+    ),
+  })
+  await writeFile(path.join(tests, MAC_TEST_TARGET.manifest), json(testManifest))
+  await verifyMacTestArtifacts(tests, options.architectures, {
+    directory,
+    channel: options.channel,
+    host,
+    run: command,
+    environment,
+    helperManifest: manifest,
+  })
   if (builtArchitectures.includes(input.hostArchitecture ?? process.arch))
     await verifyVersion(executable, manifest, command, settings)
   if (options.checkLock) await checkMacLock(directory, options.out, manifest, options.architectures, command, settings)
@@ -521,6 +606,141 @@ export function renderHelperPlist(template: string, values: Record<string, strin
   if (used.size !== tokens.size || result.includes("{{") || result.includes("}}"))
     throw new HelperBuildError("The helper bundle template is incomplete.")
   return result
+}
+
+/** Test artifacts have their own manifest and never become shipping helper resources. This never launches them. */
+export async function verifyMacTestArtifacts(
+  root: string,
+  architectures: readonly HelperArchitecture[],
+  input: {
+    directory?: string
+    channel?: BuildOptions["channel"]
+    host?: string
+    run?: NativeCommand
+    environment?: NodeJS.ProcessEnv
+    helperManifest?: HelperManifest
+  } = {},
+) {
+  const directory = input.directory ?? packageDirectory
+  const identity = readIdentity(path.join(directory, "native/computer-helper/identity.json"))
+  const base = await realpath(root)
+  const manifestFile = path.join(base, MAC_TEST_TARGET.manifest)
+  const manifestStatus = await lstat(manifestFile)
+  if (!manifestStatus.isFile() || manifestStatus.isSymbolicLink() || manifestStatus.size > 64 * 1024)
+    throw new HelperBuildError("The macOS test artifact manifest is not a bounded regular file.")
+  const manifest = parseHelperManifest(JSON.parse(await readFile(manifestFile, "utf8")))
+  if (
+    manifest.platform !== "darwin" ||
+    manifest.helperVersion !== identity.helperVersion ||
+    manifest.protocol.min !== identity.protocol.min ||
+    manifest.protocol.max !== identity.protocol.max ||
+    Object.keys(manifest.files).sort().join("\0") !== macTestArtifactNames.join("\0") ||
+    (input.helperManifest &&
+      (input.helperManifest.platform !== "darwin" ||
+        input.helperManifest.helperVersion !== manifest.helperVersion ||
+        input.helperManifest.sourceDigest !== manifest.sourceDigest ||
+        input.helperManifest.toolchain !== manifest.toolchain ||
+        input.helperManifest.protocol.min !== manifest.protocol.min ||
+        input.helperManifest.protocol.max !== manifest.protocol.max))
+  )
+    throw new HelperBuildError("The macOS test artifact manifest does not match the helper or expected layout.")
+  const actual = (await filesUnder(base))
+    .map((file) => path.relative(base, file).split(path.sep).join("/"))
+    .filter((file) => file !== MAC_TEST_TARGET.manifest)
+    .sort()
+  if (actual.join("\0") !== macTestArtifactNames.join("\0"))
+    throw new HelperBuildError("The macOS test artifact directory contains files outside its manifest.")
+  const declared = manifest.files.VectorComputerTests!.arch
+  if (!architectures.length || !architectures.every((arch) => declared.includes(arch)))
+    throw new HelperBuildError("The macOS test artifacts do not contain every requested architecture.")
+  for (const [relative, metadata] of Object.entries(manifest.files)) {
+    const file = path.join(base, ...relative.split("/"))
+    const status = await lstat(file),
+      resolved = await realpath(file)
+    if (
+      !status.isFile() ||
+      status.isSymbolicLink() ||
+      !resolved.startsWith(base + path.sep) ||
+      sha256(await readFile(file)) !== metadata.sha256 ||
+      metadata.arch.length !== declared.length ||
+      !metadata.arch.every((arch) => declared.includes(arch))
+    )
+      throw new HelperBuildError("A macOS test artifact failed its manifest hash or architecture check.")
+  }
+  for (const relative of [
+    "VectorComputerTests",
+    "VectorComputerCaller",
+    `${MAC_TEST_TARGET.bundle}/Contents/MacOS/${MAC_TEST_TARGET.executable}`,
+  ]) {
+    const bytes = await readFile(path.join(base, ...relative.split("/")))
+    const thin = bytes.length >= 32 && bytes.readUInt32LE(0) === 0xfeedfacf
+    const universal =
+      bytes.length >= 8 &&
+      bytes.readUInt32BE(0) === 0xcafebabe &&
+      bytes.readUInt32BE(4) === declared.length &&
+      bytes.length >= 8 + declared.length * 20
+    if (!thin && !universal) throw new HelperBuildError("A macOS test artifact is not a supported Mach-O binary.")
+    const found = binaryArchitectures(bytes)
+    if (found.length !== declared.length || !declared.every((arch) => found.includes(arch)))
+      throw new HelperBuildError("A macOS test artifact binary has the wrong architecture.")
+  }
+  const generated = path.join(directory, "native/build/computer-helper-tests-prebuilt/generated")
+  const identitySource = generateIdentitySources(generated, {
+    identity: path.join(directory, "native/computer-helper/identity.json"),
+    blocklist: path.join(directory, "native/computer-helper/blocklist.json"),
+  }).find((file) => file.endsWith("Identity.swift"))!
+  if (
+    manifest.sourceDigest !==
+    (await sourceDigestFor(directory, "darwin", input.channel ?? "prod", manifest.toolchain, identitySource))
+  )
+    throw new HelperBuildError("The macOS test artifact source digest does not match this source tree.")
+  const target = path.join(base, MAC_TEST_TARGET.bundle)
+  const expected = renderHelperPlist(
+    await readFile(path.join(directory, "native/computer-helper/macos/TestTarget/Info.plist.template"), "utf8"),
+    {
+      HELPER_BUNDLE_ID: MAC_TEST_TARGET.bundleId,
+      HELPER_EXECUTABLE: MAC_TEST_TARGET.executable,
+      HELPER_NAME: MAC_TEST_TARGET.name,
+      HELPER_VERSION: identity.helperVersion,
+      MINIMUM_SYSTEM_VERSION: identity.mac.minimumSystemVersion,
+      SOURCE_DIGEST: manifest.sourceDigest,
+    },
+  )
+  if ((await readFile(path.join(target, "Contents/Info.plist"), "utf8")) !== expected)
+    throw new HelperBuildError("The macOS test target metadata does not match its source template.")
+  if ((input.host ?? process.platform) === "darwin") {
+    const run = input.run ?? runNativeCommand
+    const settings = { cwd: directory, env: input.environment ?? process.env, timeoutMs: 5000 }
+    if ((await run("/usr/bin/codesign", ["--verify", "--strict", "--all-architectures", target], settings)).code !== 0)
+      throw new HelperBuildError("The macOS test target signature is invalid.")
+    for (const arch of declared) {
+      const architecture = arch === "x64" ? "x86_64" : "arm64"
+      const signature = await run(
+        "/usr/bin/codesign",
+        ["--display", "--verbose=4", "--arch", architecture, target],
+        settings,
+      )
+      const details = `${signature.stdout}\n${signature.stderr}`
+      if (
+        signature.code !== 0 ||
+        !details.split(/\r?\n/).includes(`Identifier=${MAC_TEST_TARGET.bundleId}`) ||
+        !/^Signature=adhoc\r?$/m.test(details) ||
+        !/\bflags=0x[0-9a-f]+\([^)]*\bruntime\b[^)]*\)/i.test(details)
+      )
+        throw new HelperBuildError("The macOS test target must have its own hardened ad-hoc signature.")
+      const entitlements = await run(
+        "/usr/bin/codesign",
+        ["--display", "--arch", architecture, "--entitlements", ":-", target],
+        settings,
+      )
+      const body = `${entitlements.stdout}\n${entitlements.stderr}`
+        .match(/<plist\b[^>]*>([\s\S]*?)<\/plist>/)?.[1]
+        ?.trim()
+      if (entitlements.code !== 0 || !body || !/^(?:<dict\s*\/\s*>|<dict>\s*<\/dict>)$/.test(body))
+        throw new HelperBuildError("The macOS test target entitlements must be an empty dictionary.")
+    }
+  }
+  return manifest
 }
 
 export async function verifyPrebuiltHelper(

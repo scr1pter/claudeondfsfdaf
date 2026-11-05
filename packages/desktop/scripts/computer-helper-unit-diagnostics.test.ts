@@ -58,6 +58,7 @@ describe("standalone native unit diagnostics", () => {
 
   test("registers native service suites with only their synthetic assertion types", async () => {
     const suites = [
+      "runPrivilegedSelfTestTests",
       "runAccessibilityTextTests",
       "runMenuSafetyTests",
       "runHostOwnershipTests",
@@ -71,6 +72,7 @@ describe("standalone native unit diagnostics", () => {
     expect([...source.matchAll(/_ = try (run\w+Tests)\(\)/g)].map((match) => match[1])).toEqual(suites)
     const failures = await Promise.all(
       [
+        "PrivilegedSelfTest",
         "AccessibilityText",
         "MenuSafety",
         "HostOwnership",

@@ -35,16 +35,82 @@ import {
 } from "../test/computer/transcript"
 import { APP_IDS } from "./channel-ids"
 import { readIdentity } from "./computer-helper-identity"
+import { MAC_TEST_TARGET, verifyMacTestArtifacts, verifyPrebuiltHelper } from "./build-computer-helper"
 
 const packageDir = fileURLToPath(new URL("../", import.meta.url))
-const nativeChecks = new Set([
+const privilegedTimeoutMs = 150_000
+const nativeSmokeChecks = [
   "strict-cli",
   "partial-frame-round-trip",
   "malformed-envelope-and-eof",
   "oversized-frame-refusal",
-  "packaged-bundle-and-signature",
-  "privileged-native-checks",
-])
+] as const
+export const MAC_NATIVE_CHECKS = {
+  unprivileged: nativeSmokeChecks,
+  packaged: [...nativeSmokeChecks, "packaged-bundle-and-signature"],
+  targetControl: ["test-target-control-schema"],
+  privileged: [
+    "privileged-isolated-target",
+    "capture-color-patch",
+    "capture-overlay-exclusion",
+    "ax-counter-increment",
+    "ax-value-set-and-readback",
+    "secure-field-refusal",
+    "tagged-click-increments",
+    "stale-capture-refusal",
+    "background-ax-without-pointer-or-focus",
+    "background-selection-insertion",
+    "helper-tagged-escape-ignored",
+    "foreign-escape-stops",
+    "owned-input-release",
+    "isolated-target-cleanup",
+  ],
+} as const
+const nativeChecks = new Set<string>(Object.values(MAC_NATIVE_CHECKS).flat())
+const NativeSelfTestReport = Schema.Struct({
+  checks: Schema.Array(
+    Schema.Struct({
+      name: Schema.String,
+      ok: Schema.Boolean,
+      skipped: Schema.optional(Schema.Boolean),
+      detail: Schema.optional(
+        Schema.Literals([
+          "responsibility_missing",
+          "accessibility_denied",
+          "screen_denied",
+          "post_event_denied",
+          "target_post_event_denied",
+          "noninteractive_desktop",
+          "input_detection_unavailable",
+          "physical_takeover",
+          "target_unavailable",
+          "target_validation_failed",
+          "assertion_failed",
+          "native_operation_failed",
+          "deadline_exceeded",
+          "cleanup_failed",
+        ]),
+      ),
+    }),
+  ),
+})
+
+/** Fixed catalogs and reason tokens prevent a child from turning omitted checks or private output into evidence. */
+export function nativeSelfTestChecks(stdout: string, mode: keyof typeof MAC_NATIVE_CHECKS, code: number | null) {
+  if (Buffer.byteLength(stdout) > 32_768) throw new Error("Invalid native self-test report.")
+  const value = Schema.decodeUnknownSync(Schema.UnknownFromJsonString)(stdout)
+  const report = Schema.decodeUnknownSync(NativeSelfTestReport, { onExcessProperty: "error" })(value)
+  const expected = MAC_NATIVE_CHECKS[mode]
+  if (
+    report.checks.length !== expected.length ||
+    report.checks.some((entry, index) => entry.name !== expected[index] || (entry.skipped === true && entry.ok))
+  )
+    throw new Error("Invalid native self-test catalog.")
+  const failed = report.checks.some((entry) => !entry.ok && entry.skipped !== true)
+  const skipped = report.checks.some((entry) => entry.skipped === true)
+  if (code !== (failed ? 1 : skipped ? 77 : 0)) throw new Error("Inconsistent native self-test exit.")
+  return report.checks
+}
 export const CORE_TRANSCRIPTS = [
   "cancel-idle",
   "eof",
@@ -178,6 +244,7 @@ export type VerifiedFixture = {
   unverifiedParent(): Promise<boolean>
   eof(): Promise<boolean>
   parentDeath(): Promise<boolean>
+  privileged(target: string): Promise<CommandResult>
   close(): Promise<void>
 }
 export type SelfTestDependencies = {
@@ -303,6 +370,7 @@ export async function runComputerHelperSelfTest(options: SelfTestOptions, depend
     "unit",
     "unprivileged",
     "packaged",
+    "target-control",
     "probe.first",
     "probe.fresh",
     "responsible",
@@ -344,9 +412,12 @@ export async function runComputerHelperSelfTest(options: SelfTestOptions, depend
     executable: string,
     args: string[],
     mode: PrivilegedMode = name === "privileged" ? options.privileged : "require",
+    run?: () => Promise<CommandResult>,
   ) {
     try {
-      const result = await command({ executable, args, timeoutMs: name === "privileged" ? 60_000 : 30_000 })
+      const result = await (run
+        ? run()
+        : command({ executable, args, timeoutMs: name === "privileged" ? privilegedTimeoutMs : 30_000 }))
       const status = result.timedOut ? "failed" : classifySelfTestExit(result.code, mode)
       set(
         name,
@@ -364,8 +435,23 @@ export async function runComputerHelperSelfTest(options: SelfTestOptions, depend
         return
       }
       if (name === "unit") return
-      if (result.code !== 0 && result.code !== 77) return
-      const report: unknown = JSON.parse(result.stdout)
+      if (result.timedOut || (result.code !== 0 && result.code !== 1 && result.code !== 77)) return
+      const report: unknown =
+        options.platform === "darwin"
+          ? {
+              checks: nativeSelfTestChecks(
+                result.stdout,
+                name === "privileged"
+                  ? "privileged"
+                  : name === "packaged"
+                    ? "packaged"
+                    : name === "target-control"
+                      ? "targetControl"
+                      : "unprivileged",
+                result.code,
+              ),
+            }
+          : JSON.parse(result.stdout)
       if (
         !report ||
         typeof report !== "object" ||
@@ -386,10 +472,18 @@ export async function runComputerHelperSelfTest(options: SelfTestOptions, depend
           throw new Error("Invalid native self-test check.")
         const skipped = entry.skipped === true
         const state = skipped ? (mode === "require" ? "failed" : "skipped") : entry.ok ? "passed" : "failed"
+        const reason =
+          options.platform === "darwin" && typeof entry.detail === "string"
+            ? entry.detail
+            : skipped
+              ? "native-skip"
+              : state === "failed"
+                ? "native-check-failed"
+                : undefined
         checks.push({
           name: `${name}.${nativeChecks.has(entry.name) ? entry.name : `check-${index + 1}`}`,
           status: state,
-          ...(skipped ? { reason: "native-skip" } : {}),
+          ...(reason ? { reason } : {}),
         })
         if (state === "failed") set(name, "failed", "native-check-failed")
       }
@@ -401,11 +495,23 @@ export async function runComputerHelperSelfTest(options: SelfTestOptions, depend
   try {
     files = await (dependencies.files ?? nativeTestFiles)(options)
   } catch {
-    set("unit", "failed", "missing-unit-executable")
+    set("unit", "failed", "unverified-native-artifacts")
+    for (const check of checks) {
+      if (check.reason !== "not-run") continue
+      check.status = "failed"
+      check.reason = "unverified-native-artifacts"
+    }
+    if (options.privileged === "off") set("privileged", "skipped", "disabled")
+    return report()
   }
   if (files) await child("unit", files.unit, [])
   await child("unprivileged", options.bin, ["--self-test=unprivileged"])
   await child("packaged", options.bin, ["--self-test=packaged"])
+  if (options.platform === "darwin" && files?.target)
+    await child("target-control", path.join(files.target, "Contents/MacOS", MAC_TEST_TARGET.executable), [
+      "--self-test=control",
+    ])
+  else set("target-control", "skipped", "isolated-target-unavailable")
   let fixture: VerifiedFixture | undefined
   try {
     fixture = await (dependencies.fixture ?? createVerifiedFixture)(options)
@@ -481,16 +587,21 @@ export async function runComputerHelperSelfTest(options: SelfTestOptions, depend
         check.reason = "verified-caller-unavailable"
       }
   } finally {
+    if (options.privileged === "off") set("privileged", "skipped", "disabled")
+    else if (!files?.target)
+      set("privileged", options.privileged === "require" ? "failed" : "skipped", "isolated-target-unavailable")
+    else if (!fixture || checks.some((check) => check.status === "failed"))
+      set("privileged", "failed", "required-core-check-failed")
+    else {
+      const target = files.target
+      await child("privileged", options.bin, [], options.privileged, () => fixture!.privileged(target))
+    }
     try {
       await fixture?.close()
     } catch {
       checks.push({ name: "fixture-cleanup", status: "failed", reason: "cleanup-failed" })
     }
   }
-  if (options.privileged === "off") set("privileged", "skipped", "disabled")
-  else if (!files?.target)
-    set("privileged", options.privileged === "require" ? "failed" : "skipped", "isolated-target-unavailable")
-  else await child("privileged", options.bin, ["--self-test=privileged", "--target", files.target])
   return report()
 }
 
@@ -546,19 +657,33 @@ async function nativeTestFiles(options: SelfTestOptions) {
     ? path.join(directory, options.platform === "darwin" ? "VectorComputerTests" : "vector-computer-tests.exe")
     : options.tests
   if (!(await stat(unit)).isFile()) throw new Error("Missing native unit executable.")
-  const candidate = path.join(
-    directory,
-    options.platform === "darwin" ? "VectorComputerTestTarget.app" : "computer-test-target.exe",
-  )
+  if (options.platform === "darwin") {
+    if (process.arch !== "x64" && process.arch !== "arm64") throw new Error("Unsupported native test architecture.")
+    const bundle = path.dirname(path.dirname(path.dirname(await realpath(options.bin))))
+    const identity = readIdentity()
+    if (
+      path.basename(bundle) !== identity.mac.bundle ||
+      path.join(bundle, "Contents/MacOS", identity.mac.executable) !== (await realpath(options.bin))
+    )
+      throw new Error("The helper is not in its generated bundle location.")
+    const info = await runNativeCommand({
+      executable: "/usr/bin/plutil",
+      args: ["-extract", "CFBundleIdentifier", "raw", "-o", "-", path.join(bundle, "Contents/Info.plist")],
+      timeoutMs: 5000,
+    })
+    const channel = Hands.CHANNELS.find((channel) => Hands.helperBundleId(APP_IDS[channel]) === info.stdout.trim())
+    if (info.code !== 0 || !channel) throw new Error("The native test helper channel is unknown.")
+    const helperManifest = await verifyPrebuiltHelper(path.dirname(bundle), "darwin", [process.arch], {
+      directory: packageDir,
+      channel,
+    })
+    await verifyMacTestArtifacts(directory, [process.arch], { directory: packageDir, channel, helperManifest })
+    const base = await realpath(directory)
+    return { unit: path.join(base, "VectorComputerTests"), target: path.join(base, MAC_TEST_TARGET.bundle) }
+  }
+  const candidate = path.join(directory, "computer-test-target.exe")
   const target = await realpath(candidate).catch(() => undefined)
   if (!target || path.dirname(target) !== (await realpath(directory))) return { unit }
-  if (options.platform === "darwin") {
-    const result = await runNativeCommand({
-      executable: "/usr/bin/plutil",
-      args: ["-extract", "CFBundleIdentifier", "raw", "-o", "-", path.join(target, "Contents/Info.plist")],
-    })
-    if (result.code !== 0 || result.stdout.trim() !== "ai.vector.computer.test-target") return { unit }
-  }
   return { unit, target }
 }
 
@@ -707,6 +832,12 @@ async function createVerifiedFixture(options: SelfTestOptions): Promise<Verified
     }
     return {
       open,
+      privileged: (target) =>
+        runNativeCommand({
+          executable,
+          args: ["--self-test=privileged", "--target", target],
+          timeoutMs: privilegedTimeoutMs,
+        }),
       async probe() {
         const result = await runNativeCommand({ executable, args: ["--probe", "--json"], timeoutMs: 5000 })
         if (result.code !== 0 || result.timedOut) throw new Error("The verified native probe failed.")
