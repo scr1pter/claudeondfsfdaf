@@ -435,10 +435,10 @@ jobs:
           PRIVILEGED_REQUIRED: ${{ inputs['privileged-required'] }}
         run: |
           set -euo pipefail
-          required=()
-          if [[ "$PRIVILEGED_REQUIRED" == true ]]; then required=(--require-native); fi
+          native_args=(--native-stage native/out/overlay-darwin)
+          if [[ "$PRIVILEGED_REQUIRED" == true ]]; then native_args+=(--require-native); fi
           status=0
-          bun --no-env-file ./scripts/computer-overlay-smoke.ts --native-stage native/out/overlay-darwin "${required[@]}" || status=$?
+          bun --no-env-file ./scripts/computer-overlay-smoke.ts "${native_args[@]}" || status=$?
           if [[ "$status" == 77 && "$PRIVILEGED_REQUIRED" != true ]]; then
             echo "SKIPPED: an actual pre-Electron native prerequisite is unavailable." >> "$GITHUB_STEP_SUMMARY"
           elif [[ "$status" != 0 ]]; then
@@ -522,9 +522,9 @@ jobs:
           tar -xpf "$RUNNER_TEMP/computer-artifacts/computer-helper-darwin.tar" -C native/out/darwin
           tar -xpf "$RUNNER_TEMP/computer-artifacts/computer-helper-darwin-tests.tar" -C native/out/darwin
           /usr/bin/codesign --verify --strict native/out/darwin/VectorComputer.app
-          lock=()
-          if [[ "$VECTOR_CHANNEL" == prod ]]; then lock=(--check-lock); fi
-          bun --no-env-file ./scripts/build-computer-helper.ts --platform darwin --arch universal --channel "$VECTOR_CHANNEL" --out native/out/darwin "${lock[@]}"
+          helper_args=(--platform darwin --arch universal --channel "$VECTOR_CHANNEL" --out native/out/darwin)
+          if [[ "$VECTOR_CHANNEL" == prod ]]; then helper_args+=(--check-lock); fi
+          bun --no-env-file ./scripts/build-computer-helper.ts "${helper_args[@]}"
       - name: Run required grant-free native checks
         timeout-minutes: 8
         run: bun --no-env-file ./scripts/computer-helper-selftest-node.ts --platform darwin --bin native/out/darwin/VectorComputer.app/Contents/MacOS/VectorComputer --tests native/out/darwin/tests --privileged off --report "$RUNNER_TEMP/computer-darwin-matrix.json"

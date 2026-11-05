@@ -239,7 +239,7 @@ test("the release and reusable native lane keep channel identities, source check
   for (const name of ["mac", "windows", "windows-arm64-helper"])
     expect(commands(job(name))).toContain("HELPER_ARTIFACT_SUFFIX")
   expect(commands(job("mac"))).toContain('-name "$VECTOR_PRODUCT_NAME.app"')
-  expect(commands(job("mac"))).toContain('if [ "$VECTOR_CHANNEL" = prod ]; then lock=(--check-lock); fi')
+  expect(commands(job("mac"))).toContain('if [ "$VECTOR_CHANNEL" = prod ]; then helper_args+=(--check-lock); fi')
   expect(commands(job("mac"))).toContain(
     "lock.helperVersion !== manifest.helperVersion || lock.toolchain !== manifest.toolchain",
   )

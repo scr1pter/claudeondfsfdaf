@@ -617,9 +617,9 @@ jobs:
         run: |
           set -euo pipefail
           codesign --verify --strict --all-architectures native/out/darwin/VectorComputer.app
-          lock=()
-          if [ "$VECTOR_CHANNEL" = prod ]; then lock=(--check-lock); fi
-          bun --no-env-file scripts/build-computer-helper.ts --platform darwin --arch universal --channel "$VECTOR_CHANNEL" --out native/out/darwin "${lock[@]}"
+          helper_args=(--platform darwin --arch universal --channel "$VECTOR_CHANNEL" --out native/out/darwin)
+          if [ "$VECTOR_CHANNEL" = prod ]; then helper_args+=(--check-lock); fi
+          bun --no-env-file scripts/build-computer-helper.ts "${helper_args[@]}"
           node --input-type=module <<'NODE'
           import { readFileSync } from "node:fs"
           const lock = JSON.parse(readFileSync("native/computer-helper/macos/identity.lock.json", "utf8"))
