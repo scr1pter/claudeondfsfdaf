@@ -193,11 +193,31 @@ export type ComputerSmokeRuntimeHint =
   | "loader_reference_error"
   | "loader_type_error"
   | "loader_syntax_error"
+export type ComputerSmokeLoaderModule =
+  | "electron"
+  | "jsonc-parser"
+  | "node_builtin"
+  | "workspace"
+  | "relative_main"
+  | "relative_other"
+  | "absolute"
+  | "other"
+const LOADER_MODULES: readonly ComputerSmokeLoaderModule[] = [
+  "electron",
+  "jsonc-parser",
+  "node_builtin",
+  "workspace",
+  "relative_main",
+  "relative_other",
+  "absolute",
+  "other",
+]
 export type ComputerSmokeFailureDiagnostic = {
   protocol: 1
   cause: ComputerSmokeFailureCause
   phase: ComputerSmokeLastPhase
   hint: ComputerSmokeRuntimeHint
+  module?: ComputerSmokeLoaderModule
 }
 const FAILURE_CAUSES: readonly ComputerSmokeFailureCause[] = [
   "setup_failed",
@@ -267,11 +287,12 @@ export function parseComputerSmokeFailure(line: string): ComputerSmokeFailureDia
   const value: unknown = JSON.parse(line.slice(COMPUTER_SMOKE_FAILURE_MARK.length))
   if (
     !record(value) ||
-    !exact(value, ["protocol", "cause", "phase", "hint"]) ||
+    !exact(value, ["protocol", "cause", "phase", "hint", "module"]) ||
     value.protocol !== 1 ||
     !FAILURE_CAUSES.includes(value.cause as ComputerSmokeFailureCause) ||
     !(value.phase === "none" || (COMPUTER_SMOKE_PHASES as readonly unknown[]).includes(value.phase)) ||
-    !RUNTIME_HINTS.includes(value.hint as ComputerSmokeRuntimeHint)
+    !RUNTIME_HINTS.includes(value.hint as ComputerSmokeRuntimeHint) ||
+    (value.module !== undefined && !LOADER_MODULES.includes(value.module as ComputerSmokeLoaderModule))
   )
     throw new Error("The computer smoke failure receipt is invalid.")
   return {
@@ -279,6 +300,7 @@ export function parseComputerSmokeFailure(line: string): ComputerSmokeFailureDia
     cause: value.cause as ComputerSmokeFailureCause,
     phase: value.phase as ComputerSmokeLastPhase,
     hint: value.hint as ComputerSmokeRuntimeHint,
+    ...(value.module === undefined ? {} : { module: value.module as ComputerSmokeLoaderModule }),
   }
 }
 
@@ -352,6 +374,80 @@ export function computerSmokeRuntimeHint(text: string): ComputerSmokeRuntimeHint
   return "none"
 }
 
+const LOADER_MODULE_REQUEST = String.raw`Cannot find (?:package|module) ['"]([^'"\r\n]{1,2048})['"]`
+const LOADER_RELATIVE_PREFIX = String.raw`^\.\.?(?:[\\/]|$)`
+const LOADER_ABSOLUTE_PREFIX = String.raw`^(?:/|[A-Za-z]:[\\/]|\\\\|file:)`
+const LOADER_BUILTINS = [
+  "assert",
+  "async_hooks",
+  "buffer",
+  "child_process",
+  "cluster",
+  "console",
+  "constants",
+  "crypto",
+  "dgram",
+  "diagnostics_channel",
+  "dns",
+  "domain",
+  "events",
+  "fs",
+  "http",
+  "http2",
+  "https",
+  "module",
+  "net",
+  "os",
+  "path",
+  "perf_hooks",
+  "process",
+  "punycode",
+  "querystring",
+  "readline",
+  "repl",
+  "stream",
+  "string_decoder",
+  "sys",
+  "timers",
+  "tls",
+  "trace_events",
+  "tty",
+  "url",
+  "util",
+  "v8",
+  "vm",
+  "wasi",
+  "worker_threads",
+  "zlib",
+]
+/** Known package ids or closed path classes only. The requested module string is never returned. */
+export function computerSmokeLoaderModule(error: unknown, mainURL?: string): ComputerSmokeLoaderModule {
+  try {
+    if (!error || typeof error !== "object") return "other"
+    const value = error as { moduleName?: unknown; message?: unknown; url?: unknown; path?: unknown }
+    const moduleName = value.moduleName,
+      message = value.message,
+      url = value.url,
+      filename = value.path
+    let request = typeof moduleName === "string" ? moduleName.slice(0, 2048) : ""
+    if (!request && typeof message === "string")
+      request = new RegExp(LOADER_MODULE_REQUEST, "i").exec(message.slice(0, 8192))?.[1] ?? ""
+    if (request === "electron" || request === "jsonc-parser") return request
+    if (!request && mainURL && url === mainURL) return "relative_main"
+    if (!request)
+      request =
+        typeof url === "string" ? url.slice(0, 2048) : typeof filename === "string" ? filename.slice(0, 2048) : ""
+    if (request === "./computer-overlay-smoke-electron.mjs" || request === "computer-overlay-smoke-electron.mjs")
+      return "relative_main"
+    if (request.startsWith("node:") || LOADER_BUILTINS.includes(request.split("/")[0]!)) return "node_builtin"
+    if (request.startsWith("@vectordevai/")) return "workspace"
+    if (new RegExp(LOADER_RELATIVE_PREFIX).test(request)) return "relative_other"
+    return new RegExp(LOADER_ABSOLUTE_PREFIX, "i").test(request) ? "absolute" : "other"
+  } catch {
+    return "other"
+  }
+}
+
 export const COMPUTER_SMOKE_LOADER_STARTED = "computer-smoke-loader-started"
 /** Generic properties only. The native stage keeps its exact admitted main argv and immutable pins. */
 export function computerSmokeBootstrapSource(): string {
@@ -360,9 +456,14 @@ const { app } = require("electron");
 const path = require("node:path");
 const { mkdirSync } = require("node:fs");
 const { pathToFileURL } = require("node:url");
+const mainURL = pathToFileURL(path.join(__dirname, "computer-overlay-smoke-electron.mjs")).href;
 const codes = ${JSON.stringify(LOADER_CODES)};
 const messages = ${JSON.stringify(LOADER_MESSAGES)};
 const names = ${JSON.stringify(LOADER_NAMES)};
+const builtins = ${JSON.stringify(LOADER_BUILTINS)};
+const requestPattern = ${JSON.stringify(LOADER_MODULE_REQUEST)};
+const relativePattern = ${JSON.stringify(LOADER_RELATIVE_PREFIX)};
+const absolutePattern = ${JSON.stringify(LOADER_ABSOLUTE_PREFIX)};
 function hint(error) {
   try {
     if (!error || typeof error !== "object") return "loader_failed";
@@ -373,8 +474,24 @@ function hint(error) {
     return typeof name === "string" && Object.hasOwn(names, name) ? names[name] : "loader_failed";
   } catch { return "loader_failed"; }
 }
+function moduleKind(error, expectedMain) {
+  try {
+    if (!error || typeof error !== "object") return "other";
+    const moduleName = error.moduleName, message = error.message, url = error.url, filename = error.path;
+    let request = typeof moduleName === "string" ? moduleName.slice(0, 2048) : "";
+    if (!request && typeof message === "string") request = new RegExp(requestPattern, "i").exec(message.slice(0, 8192))?.[1] || "";
+    if (request === "electron" || request === "jsonc-parser") return request;
+    if (!request && expectedMain && url === expectedMain) return "relative_main";
+    if (!request) request = typeof url === "string" ? url.slice(0, 2048) : typeof filename === "string" ? filename.slice(0, 2048) : "";
+    if (request === "./computer-overlay-smoke-electron.mjs" || request === "computer-overlay-smoke-electron.mjs") return "relative_main";
+    if (request.startsWith("node:") || builtins.includes(request.split("/")[0])) return "node_builtin";
+    if (request.startsWith("@vectordevai/")) return "workspace";
+    if (new RegExp(relativePattern).test(request)) return "relative_other";
+    return new RegExp(absolutePattern, "i").test(request) ? "absolute" : "other";
+  } catch { return "other"; }
+}
 function failed(error) {
-  const value = { protocol: 1, cause: "runtime_failed", phase: "none", hint: hint(error) };
+  const value = { protocol: 1, cause: "runtime_failed", phase: "none", hint: hint(error), module: moduleKind(error, mainURL) };
   process.stdout.write(${JSON.stringify(COMPUTER_SMOKE_FAILURE_MARK)} + JSON.stringify(value) + "\\n", () => app.exit(1));
 }
 process.stdout.write(${JSON.stringify(COMPUTER_SMOKE_LOADER_STARTED + "\n")});
@@ -382,7 +499,7 @@ try {
   const profile = path.resolve(__dirname, "..", "profile");
   mkdirSync(path.join(profile, "session"), { recursive: true });
   app.setPath("userData", profile); app.setPath("sessionData", path.join(profile, "session")); app.setPath("home", profile);
-  import(pathToFileURL(path.join(__dirname, "computer-overlay-smoke-electron.mjs")).href).catch(failed);
+  import(mainURL).catch(failed);
 } catch (error) { failed(error); }
 `
 }

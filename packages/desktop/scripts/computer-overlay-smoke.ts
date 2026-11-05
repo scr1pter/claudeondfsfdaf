@@ -22,6 +22,7 @@ import {
   type ComputerSmokeFailureCause,
   type ComputerSmokeRuntimeHint,
   type ComputerSmokeFailureDiagnostic,
+  type ComputerSmokeLoaderModule,
 } from "./computer-overlay-smoke-report"
 import { parseComputerOverlayBootstrapUnavailable, verifyComputerOverlayStage } from "./computer-overlay-smoke-stage"
 import { computerOverlayBundlePlan, type OverlayCompiler } from "./build-computer-overlay-smoke"
@@ -38,8 +39,9 @@ function failureDiagnostic(
   cause: ComputerSmokeFailureCause,
   phase: ComputerSmokeLastPhase,
   hint: ComputerSmokeRuntimeHint,
+  module?: ComputerSmokeLoaderModule,
 ): ComputerSmokeFailureDiagnostic {
-  return { protocol: 1, cause, phase, hint }
+  return { protocol: 1, cause, phase, hint, ...(module === undefined ? {} : { module }) }
 }
 function emitFailure(diagnostic: ComputerSmokeFailureDiagnostic) {
   process.stderr.write(COMPUTER_SMOKE_FAILURE_MARK + JSON.stringify(diagnostic) + "\n")
@@ -223,6 +225,7 @@ export async function runComputerOverlaySmoke(args = process.argv.slice(2)) {
             const entryFailure =
               received.phase === lastPhase &&
               received.hint === "none" &&
+              received.module === undefined &&
               ["deadline_exceeded", "runtime_failed"].includes(received.cause)
             if (streamState.childFailure || !(bootstrapFailure || entryFailure))
               throw new Error("The child failure receipt is invalid.")
@@ -253,7 +256,9 @@ export async function runComputerOverlaySmoke(args = process.argv.slice(2)) {
     stderrTail = ""
     if (forcedCause) throw new ComputerSmokeRunFailure(failureDiagnostic(forcedCause, lastPhase, hint))
     if (streamState.childFailure)
-      throw new ComputerSmokeRunFailure(failureDiagnostic(streamState.childFailure.cause, lastPhase, hint))
+      throw new ComputerSmokeRunFailure(
+        failureDiagnostic(streamState.childFailure.cause, lastPhase, hint, streamState.childFailure.module),
+      )
     if (
       pendingLine.startsWith(COMPUTER_SMOKE_PHASE_MARK) ||
       pendingLine.startsWith(COMPUTER_SMOKE_FAILURE_MARK) ||

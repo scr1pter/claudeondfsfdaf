@@ -1,4 +1,9 @@
 import { describe, expect, test } from "bun:test"
+import { spawn } from "node:child_process"
+import { mkdtemp, rm, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import path from "node:path"
+import { fileURLToPath } from "node:url"
 import {
   computerOverlayBundlePlan,
   computerOverlayCmakePins,
@@ -78,3 +83,56 @@ describe("finite never-shipped overlay build contracts", () => {
       expect(() => computerOverlayPinValues({ ...inputs, ...changed })).toThrow()
   })
 })
+
+test("the actual overlay compiler plan bundles pinned jsonc-parser ESM and runs its parser/edit/scanner on actual Node", async () => {
+  const directory = fileURLToPath(new URL("../", import.meta.url))
+  const root = await mkdtemp(path.join(tmpdir(), "vector-overlay-jsonc-node-"))
+  try {
+    const input = path.join(root, "parser-fixture.mjs")
+    await writeFile(
+      input,
+      `import { parse, modify, applyEdits, createScanner, SyntaxKind } from "jsonc-parser";
+if (process.versions.bun || !process.versions.node) throw new Error("This fixture requires actual Node.");
+const errors = [];
+const value = parse('{/* controlled fixture */"value":1,}', errors, { allowTrailingComma: true });
+const text = '{"value":1}';
+const updated = applyEdits(text, modify(text, ["value"], 2, {}));
+if (errors.length || value.value !== 1 || parse(updated).value !== 2 || createScanner("{}").scan() !== SyntaxKind.OpenBraceToken) throw new Error("The controlled parser fixture failed.");
+process.stdout.write("overlay-jsonc-parser-node-ok\\n");
+`,
+    )
+    const options = computerOverlayBundlePlan(directory, root)[0]!.options
+    const built = await Bun.build({ ...options, root, entrypoints: [input], naming: "parser-fixture-output.mjs" })
+    expect(built.success).toBe(true)
+    expect(built.outputs).toHaveLength(1)
+    const actualInputs = Object.keys(built.metafile?.inputs ?? {}).map((name) => name.replaceAll("\\", "/"))
+    expect(actualInputs.some((name) => name.includes("jsonc-parser/lib/esm/main.js"))).toBe(true)
+    expect(actualInputs.some((name) => name.includes("jsonc-parser/lib/umd/"))).toBe(false)
+    const child = spawn("node", [path.join(root, "parser-fixture-output.mjs")], {
+      cwd: root,
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+      env: { PATH: process.env.PATH ?? "", ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}) },
+    })
+    let stdout = "",
+      stderrBytes = 0
+    child.stdout.on("data", (bytes: Buffer) => {
+      stdout += bytes.toString("utf8")
+      if (Buffer.byteLength(stdout) > 4096) child.kill("SIGKILL")
+    })
+    child.stderr.on("data", (bytes: Buffer) => {
+      stderrBytes += bytes.length
+      if (stderrBytes > 65536) child.kill("SIGKILL")
+    })
+    const watchdog = setTimeout(() => child.kill("SIGKILL"), 5000)
+    const code = await new Promise<number | null>((resolve, reject) => {
+      child.once("error", () => reject(new Error("The actual Node parser fixture could not launch.")))
+      child.once("close", resolve)
+    }).finally(() => clearTimeout(watchdog))
+    expect(code).toBe(0)
+    expect(stdout).toBe("overlay-jsonc-parser-node-ok\n")
+    expect(stderrBytes).toBe(0)
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+}, 15000)

@@ -10,6 +10,7 @@ import {
   parseComputerSmokeFailure,
   computerSmokeRuntimeHint,
   computerSmokeLoaderHint,
+  computerSmokeLoaderModule,
   computerSmokeBootstrapSource,
   COMPUTER_SMOKE_LOADER_STARTED,
   type ComputerSmokeLastPhase,
@@ -238,12 +239,86 @@ describe("generic Electron ESM loader catch boundary", () => {
     expect(source).toContain(COMPUTER_SMOKE_LOADER_STARTED)
     expect(source).toContain('path.join(__dirname, "computer-overlay-smoke-electron.mjs")')
     expect(source).not.toMatch(/process\.argv|process\.env|console\.|error\.stack/)
-    expect(source.indexOf('app.setPath("sessionData"')).toBeLessThan(source.indexOf("import(pathToFileURL"))
+    expect(source.indexOf('app.setPath("sessionData"')).toBeLessThan(source.indexOf("import(mainURL)"))
   })
   test("the child CJS classifier matches the parent's pure classification without executing Electron or imports", () => {
     const source = computerSmokeBootstrapSource()
     const classifier = source.slice(source.indexOf("const codes ="), source.indexOf("function failed("))
     const script = new Script(classifier + "\nhint(error)")
     for (const [error, hint] of cases) expect(script.runInNewContext({ error }, { timeout: 100 })).toBe(hint)
+  })
+})
+
+describe("closed loader module categories", () => {
+  const mainURL = "file:///isolated/smoke/computer-overlay-smoke-electron.mjs"
+  const cases: readonly (readonly [unknown, string])[] = [
+    [{ message: "Cannot find package 'electron' imported from /private/source" }, "electron"],
+    [{ message: 'Cannot find module "jsonc-parser"', url: mainURL }, "jsonc-parser"],
+    [{ moduleName: "electron" }, "electron"],
+    [{ moduleName: "electron/main" }, "other"],
+    [{ moduleName: "jsonc-parser/unknown" }, "other"],
+    [{ moduleName: "node:fs/promises" }, "node_builtin"],
+    [{ message: "Cannot find module 'fs/promises'" }, "node_builtin"],
+    [{ moduleName: "@vectordevai/schema/computer" }, "workspace"],
+    [{ url: mainURL }, "relative_main"],
+    [{ moduleName: "./computer-overlay-smoke-electron.mjs" }, "relative_main"],
+    [{ message: "Cannot find module './impl/parser'" }, "relative_other"],
+    [{ moduleName: "../private/dependency" }, "relative_other"],
+    [{ moduleName: "/private/dependency" }, "absolute"],
+    [{ moduleName: String.raw`C:\private\dependency` }, "absolute"],
+    [{ url: "file:///different/smoke/computer-overlay-smoke-electron.mjs" }, "absolute"],
+    [{ path: "/private/package.json" }, "absolute"],
+    [{ moduleName: "unlisted-package", url: mainURL }, "other"],
+    [{ message: "private arbitrary text" }, "other"],
+    [
+      {
+        get moduleName() {
+          throw new Error("private getter")
+        },
+      },
+      "other",
+    ],
+    [null, "other"],
+  ]
+  test("returns exact allowed package ids or path classes without returning requested text", () => {
+    for (const [error, category] of cases) expect(computerSmokeLoaderModule(error, mainURL)).toBe(category)
+    expect(
+      computerSmokeLoaderModule(
+        {
+          get message() {
+            throw new Error("private getter")
+          },
+        },
+        mainURL,
+      ),
+    ).toBe("other")
+  })
+  test("generated CJS categorization matches the pure classifier without executing Electron or imports", () => {
+    const source = computerSmokeBootstrapSource()
+    const classifier = source.slice(source.indexOf("const codes ="), source.indexOf("function failed("))
+    expect(classifier).not.toContain("pathToFileURL")
+    const script = new Script(classifier + "\nmoduleKind(error, expectedMain)")
+    for (const [error, category] of cases)
+      expect(script.runInNewContext({ error, expectedMain: mainURL }, { timeout: 100 })).toBe(category)
+  })
+  test("failure receipts preserve only the closed module category and reject arbitrary fields", () => {
+    const value = {
+      protocol: 1,
+      cause: "runtime_failed",
+      phase: "none",
+      hint: "loader_module_not_found",
+      module: "relative_other",
+    }
+    expect(parseComputerSmokeFailure(COMPUTER_SMOKE_FAILURE_MARK + JSON.stringify(value))).toEqual(value)
+    for (const patch of [
+      { module: "/private/path" },
+      { module: "private-package" },
+      { moduleName: "private-package" },
+      { path: "/private/path" },
+      { url: "file:///private/path" },
+    ])
+      expect(() =>
+        parseComputerSmokeFailure(COMPUTER_SMOKE_FAILURE_MARK + JSON.stringify({ ...value, ...patch })),
+      ).toThrow()
   })
 })

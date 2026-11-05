@@ -37,12 +37,67 @@ import {
 import { computerOverlayStagePaths, verifyComputerOverlayStage } from "./computer-overlay-smoke-stage"
 import { binaryArchitectures } from "./verify-native"
 
+type OverlayCompilerPlugin = {
+  name: string
+  setup(builder: {
+    onResolve(options: { filter: RegExp }, resolve: (args: { path: string }) => Promise<{ path: string }>): void
+  }): void
+}
+
+/** jsonc-parser's UMD factory retains Node require('./impl/*') after bundling. Use its pinned ESM input. */
+function computerOverlayJsoncPlugin(directory: string): OverlayCompilerPlugin {
+  let entry: Promise<string> | undefined
+  return {
+    name: "computer-overlay-jsonc-parser-esm",
+    setup(builder) {
+      builder.onResolve({ filter: /^jsonc-parser$/ }, async () => {
+        entry ??= (async () => {
+          const require = createRequire(path.join(directory, "package.json"))
+          const packageFile = await realpath(require.resolve("jsonc-parser/package.json"))
+          const metadata = JSON.parse(await readFile(packageFile, "utf8")) as {
+            name?: unknown
+            version?: unknown
+            module?: unknown
+            main?: unknown
+          }
+          const desktop = JSON.parse(await readFile(path.join(directory, "package.json"), "utf8")) as {
+            dependencies?: { "jsonc-parser"?: unknown }
+          }
+          if (
+            metadata.name !== "jsonc-parser" ||
+            metadata.version !== "3.3.1" ||
+            desktop.dependencies?.["jsonc-parser"] !== "3.3.1" ||
+            metadata.module !== "./lib/esm/main.js" ||
+            metadata.main !== "./lib/umd/main.js"
+          )
+            throw new Error("The overlay compiler requires the exact pinned jsonc-parser ESM input.")
+          const base = path.dirname(packageFile),
+            requested = path.join(base, "lib/esm/main.js")
+          const status = await lstat(requested),
+            canonical = await realpath(requested)
+          if (
+            !status.isFile() ||
+            status.isSymbolicLink() ||
+            status.size < 1 ||
+            canonical !== requested ||
+            !canonical.startsWith(base + path.sep)
+          )
+            throw new Error("The pinned overlay parser input is invalid.")
+          return canonical
+        })()
+        return { path: await entry }
+      })
+    },
+  }
+}
+
 type OverlayCompileOptions = {
   entrypoints: string[]
   root: string
   target: "node"
   format: "esm" | "cjs"
   external: string[]
+  plugins: OverlayCompilerPlugin[]
   allowUnresolved: string[]
   splitting: false
   metafile: true
@@ -72,6 +127,7 @@ export function computerOverlayBundlePlan(directory: string, output: string, sou
       target: "node",
       format: entry.format,
       external: ["electron"],
+      plugins: [computerOverlayJsoncPlugin(directory)],
       allowUnresolved: [],
       splitting: false,
       metafile: true,
