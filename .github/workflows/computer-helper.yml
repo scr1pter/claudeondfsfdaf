@@ -126,13 +126,13 @@ jobs:
           elif [[ "$windows_protocol" != true ]]; then
             echo "Windows unit/version/probe checks run; protocol, conformance and parent-death checks remain pending W2." >> "$GITHUB_STEP_SUMMARY"
           fi
-          echo "C4 signing-path fixtures and C8 overlay/desktop end-to-end lanes remain pending their packages." >> "$GITHUB_STEP_SUMMARY"
+          echo "C4 runs helper signing and fuse fixtures on macOS; C8 overlay/desktop end-to-end lanes remain pending." >> "$GITHUB_STEP_SUMMARY"
 
   mac-build:
     needs: plan
     if: ${{ !inputs['windows-only'] }}
     runs-on: macos-15
-    timeout-minutes: 45
+    timeout-minutes: 60
     env:
       DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
     outputs:
@@ -256,6 +256,74 @@ jobs:
         env:
           VECTOR_COMPUTER_HELPER_PREBUILT: "true"
         run: bun --no-env-file ./scripts/build-computer-helper.ts --platform darwin --arch universal --channel prod --out native/out/darwin --check-lock
+      - name: Check helper signing contracts and actual Node modules
+        timeout-minutes: 3
+        run: |
+          set -euo pipefail
+          bun test --only-failures --timeout 30000 ./scripts/entitlements.test.ts
+          bun test --only-failures --timeout 30000 ./scripts/computer-helper-sign.test.ts
+          bun test --only-failures --timeout 30000 ./scripts/computer-helper-package-node.test.ts
+      - name: Install the pinned Electron runtime for the unsigned signing fixture
+        timeout-minutes: 5
+        run: node node_modules/electron/install.js
+      - name: Verify unsigned helper entitlements and final fuse signatures
+        timeout-minutes: 3
+        run: bun test --only-failures --timeout 90000 ./scripts/unsigned-mac.test.ts
+      - name: Verify certificate signing with a temporary trusted CI identity
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          signing_dir="$RUNNER_TEMP/vector-hands-signing-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          mkdir -m 700 "$signing_dir"
+          keychain="$signing_dir/signing.keychain-db"
+          certificate="$signing_dir/signing.crt"
+          cleanup() {
+            result=$?
+            trap - EXIT
+            if [[ -f "$certificate" ]]; then
+              sudo /usr/bin/security remove-trusted-cert -d "$certificate" >/dev/null 2>&1 || true
+            fi
+            /usr/bin/security delete-keychain "$keychain" >/dev/null 2>&1 || true
+            rm -rf "$signing_dir"
+            exit "$result"
+          }
+          trap cleanup EXIT
+          trap 'exit 130' INT
+          trap 'exit 143' TERM
+          password="$(openssl rand -hex 24)"
+          echo "::add-mask::$password"
+          identity="Vector Hands CI Signing ${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          cat > "$signing_dir/request.cnf" <<EOF
+          [req]
+          distinguished_name=subject
+          prompt=no
+          x509_extensions=extensions
+          [subject]
+          CN=$identity
+          [extensions]
+          basicConstraints=critical,CA:FALSE
+          keyUsage=critical,digitalSignature
+          extendedKeyUsage=codeSigning
+          EOF
+          openssl req -x509 -newkey rsa:2048 -sha256 -nodes -days 1 -config "$signing_dir/request.cnf" -keyout "$signing_dir/signing.key" -out "$certificate"
+          openssl pkcs12 -export -inkey "$signing_dir/signing.key" -in "$certificate" -out "$signing_dir/signing.p12" -passout "pass:$password" -keypbe PBE-SHA1-3DES -certpbe PBE-SHA1-3DES -macalg sha1
+          /usr/bin/security create-keychain -p "$password" "$keychain"
+          /usr/bin/security unlock-keychain -p "$password" "$keychain"
+          /usr/bin/security import "$signing_dir/signing.p12" -k "$keychain" -P "$password" -T /usr/bin/codesign
+          /usr/bin/security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$password" "$keychain"
+          sudo /usr/bin/security add-trusted-cert -d -r trustRoot -p codeSign -k "$keychain" "$certificate"
+          VECTOR_TEST_CODESIGN_IDENTITY="$identity" VECTOR_TEST_CODESIGN_KEYCHAIN="$keychain" bun test --only-failures --timeout 120000 ./scripts/computer-helper-sign.test.ts --test-name-pattern '^native certificate signing'
+      - name: Remove any interrupted signing fixture trust and keychain
+        if: ${{ always() }}
+        timeout-minutes: 2
+        run: |
+          set -euo pipefail
+          signing_dir="$RUNNER_TEMP/vector-hands-signing-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          if [[ -f "$signing_dir/signing.crt" ]]; then
+            sudo /usr/bin/security remove-trusted-cert -d "$signing_dir/signing.crt" >/dev/null 2>&1 || true
+          fi
+          /usr/bin/security delete-keychain "$signing_dir/signing.keychain-db" >/dev/null 2>&1 || true
+          rm -rf "$signing_dir"
       - name: Expose the verified source digest
         id: digest
         run: |

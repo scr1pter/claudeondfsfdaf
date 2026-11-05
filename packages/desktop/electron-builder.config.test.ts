@@ -38,6 +38,7 @@ for (const channel of channels) {
         to: "Helpers/VectorComputer.app",
       },
     ])
+    expect(typeof config.mac?.sign).toBe("function")
     expect(config.mac?.extraResources).toContainEqual({
       from: path.join(import.meta.dirname, "native/out/darwin/computer-helper.json"),
       to: "computer-helper.json",
@@ -111,6 +112,7 @@ test("allows only an explicit unsigned production package to skip platform verif
   else process.env.VECTOR_WINDOWS_PUBLISHER_NAME = previous.publisherName
 
   expect(config.mac?.identity).toBeNull()
+  expect(config.mac?.sign).toBeUndefined()
   expect(config.mac?.notarize).toBe(false)
   expect(config.mac?.hardenedRuntime).toBe(true)
   expect(typeof config.afterPack).toBe("function")

@@ -8,7 +8,11 @@ import type { Configuration } from "electron-builder"
 import { APP_IDS, EXECUTABLE_NAMES } from "./scripts/channel-ids"
 import { verifyNativeModules } from "./scripts/verify-native"
 import { computerHelperPaths } from "./scripts/computer-helper-package"
-import { computerHelperSkipRequested, prepareComputerHelperNode } from "./scripts/computer-helper-package-node"
+import {
+  computerHelperSkipRequested,
+  loadComputerHelperSigningNode,
+  prepareComputerHelperNode,
+} from "./scripts/computer-helper-package-node"
 
 const execFileAsync = promisify(execFile)
 const packageDir = path.dirname(fileURLToPath(import.meta.url))
@@ -87,14 +91,31 @@ const getBase = (appId: string, executableName: string): Configuration => ({
   afterPack: async (context) => {
     const platform = context.electronPlatformName
     if (platform !== "darwin" && platform !== "win32" && platform !== "linux") return
-    await prepareComputerHelperNode(context, { channel, directory: packageDir, environment: process.env })
+    const helper = await prepareComputerHelperNode(context, {
+      channel,
+      directory: packageDir,
+      environment: process.env,
+    })
     const app = path.join(context.appOutDir, `${context.packager.appInfo.productFilename}.app`)
     const resources =
       platform === "darwin" ? path.join(app, "Contents", "Resources") : path.join(context.appOutDir, "resources")
     const arch = Arch[context.arch]
     for (const target of arch === "universal" ? ["x64", "arm64"] : [arch])
       await verifyNativeModules(resources, platform, target)
-    if (unsignedMac && platform === "darwin") await signUnsignedMac(app)
+    if (platform !== "darwin" || skipComputerHelper) return
+    if (!helper || helper.manifests.length !== 1 || helper.manifests[0]?.platform !== "darwin")
+      throw new Error("The verified macOS computer helper manifest is missing.")
+    const signer = await loadComputerHelperSigningNode({ directory: packageDir, environment: process.env })
+    await signer.prepareComputerHelperMacSigning(
+      { app, channel, sourceManifest: helper.manifests[0] },
+      { directory: packageDir, environment: process.env },
+    )
+    if (unsignedMac)
+      await signer.installUnsignedMacComputerHelperFuses(
+        context.packager,
+        { channel, signUnsignedMac },
+        { directory: packageDir, environment: process.env },
+      )
   },
   extraResources: [
     {
@@ -140,6 +161,16 @@ const getBase = (appId: string, executableName: string): Configuration => ({
     // Even identity "-" enumerates keychains in the pinned builder. Apply the
     // ad-hoc signature ourselves, then let fuse reset re-seal the modified app.
     identity: signMac ? undefined : unsignedMac ? null : "-",
+    sign:
+      unsignedMac || skipComputerHelper
+        ? undefined
+        : async (options, packager) => {
+            const signer = await loadComputerHelperSigningNode({ directory: packageDir, environment: process.env })
+            await signer.signMacWithComputerHelper(options, packager, {
+              directory: packageDir,
+              environment: process.env,
+            })
+          },
     gatekeeperAssess: false,
     entitlements: "resources/entitlements.plist",
     entitlementsInherit: "resources/entitlements.plist",
@@ -232,19 +263,11 @@ function getConfig() {
 }
 
 export async function signUnsignedMac(appPath: string) {
-  await execFileAsync("/usr/bin/codesign", [
-    "--force",
-    "--deep",
-    "--sign",
-    "-",
-    "--options",
-    "runtime",
-    "--timestamp=none",
-    "--entitlements",
-    path.join(packageDir, "resources/entitlements.plist"),
-    appPath,
-  ])
-  await execFileAsync("/usr/bin/codesign", ["--verify", "--deep", "--strict", appPath])
+  const signer = await loadComputerHelperSigningNode({ directory: packageDir, environment: process.env })
+  return signer.signUnsignedMacWithComputerHelper(
+    { app: appPath, channel },
+    { directory: packageDir, environment: process.env },
+  )
 }
 
 export default getConfig()

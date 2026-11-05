@@ -2,9 +2,31 @@ import { describe, expect, test } from "bun:test"
 import { mkdtemp, rm } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
-import { computerHelperPackageRequests, macPackagePaths, packageEnvironment, packageRequest } from "./package-desktop"
+import {
+  computerHelperPackageRequests,
+  macPackagePaths,
+  packageEnvironment,
+  packageRequest,
+  requireDeveloperIdApplicationSignature,
+} from "./package-desktop"
 
 describe("desktop package request", () => {
+  test("signed Mac packages require actual Developer ID Application authority and a team", () => {
+    expect(() =>
+      requireDeveloperIdApplicationSignature(
+        "Authority=Developer ID Application: Fixture (ABCDEFGHIJ)\nTeamIdentifier=ABCDEFGHIJ\n",
+      ),
+    ).not.toThrow()
+    for (const signature of [
+      "",
+      "Signature=adhoc\nTeamIdentifier=not set",
+      "Authority=Apple Development: Fixture\nTeamIdentifier=ABCDEFGHIJ",
+      "Authority=Developer ID Application: Fixture\nTeamIdentifier=not set",
+      "log Authority=Developer ID Application: Fixture\nTeamIdentifier=ABCDEFGHIJ",
+      "Authority=Developer ID Application: Fixture\nSignature=adhoc\nTeamIdentifier=ABCDEFGHIJ",
+    ])
+      expect(() => requireDeveloperIdApplicationSignature(signature)).toThrow("actual Developer ID Application")
+  })
   test("prepares exactly the helper platforms and architectures requested by electron-builder", () => {
     const host = { hostPlatform: "linux", hostArchitecture: "x64" }
     expect(computerHelperPackageRequests({ ...host, builderArgs: ["--linux", "--arm64"] })).toEqual([

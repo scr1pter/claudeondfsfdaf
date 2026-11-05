@@ -13,8 +13,14 @@ declare const Bun: {
   resolveSync(specifier: string, directory: string): string
   spawnSync(
     command: string[],
-    options: { cwd: string; env: NodeJS.ProcessEnv; stderr: "inherit"; stdout: "inherit" },
-  ): { exitCode: number }
+    options: {
+      cwd: string
+      env: NodeJS.ProcessEnv
+      stderr: "inherit" | "pipe"
+      stdout: "inherit" | "pipe"
+      timeout?: number
+    },
+  ): { exitCode: number; stdout: Buffer; stderr: Buffer }
 }
 
 export function computerHelperPackageRequests(input: {
@@ -173,6 +179,15 @@ export function packageEnvironment(
   }
 }
 
+export function requireDeveloperIdApplicationSignature(signature: string) {
+  if (
+    !/^Authority=Developer ID Application: [^\r\n]+\r?$/m.test(signature) ||
+    /^Signature=adhoc\r?$/m.test(signature) ||
+    !/^TeamIdentifier=[A-Z0-9]{10}\r?$/m.test(signature)
+  )
+    throw new Error("VECTOR_SIGN_MAC requires an actual Developer ID Application signature.")
+}
+
 if (import.meta.main) {
   const packageDir = fileURLToPath(new URL("../", import.meta.url))
   const manifest: unknown = await Bun.file(path.join(packageDir, "package.json")).json()
@@ -223,10 +238,15 @@ if (import.meta.main) {
     !skipHelper && helperRequests.some((helper) => helper.platform !== "linux")
       ? await buildNodeComputerHelperPackage(packageDir)
       : undefined
-  const preparedEnvironment = {
+  const preparedEnvironment: NodeJS.ProcessEnv = {
     ...environment,
     ...(hasWindows ? { VECTOR_COMPUTER_HELPER_SHA256: JSON.stringify(windowsHashes) } : {}),
-    ...(verifier ? { VECTOR_COMPUTER_HELPER_PACKAGE_SHA256: verifier.sha256 } : {}),
+    ...(verifier
+      ? {
+          VECTOR_COMPUTER_HELPER_PACKAGE_SHA256: verifier.sha256,
+          VECTOR_COMPUTER_HELPER_SIGN_SHA256: verifier.signing.sha256,
+        }
+      : {}),
   }
   run([process.execPath, "run", "--no-env-file", "build"], packageDir, preparedEnvironment, "Desktop build failed")
 
@@ -257,6 +277,24 @@ if (import.meta.main) {
       channel: request.channel,
       hostArchitecture: process.arch,
     })) {
+      if (preparedEnvironment.VECTOR_SIGN_MAC === "true") {
+        run(
+          ["/usr/bin/codesign", "--verify", "--deep", "--strict", appPath],
+          packageDir,
+          preparedEnvironment,
+          "Developer ID app signature verification failed",
+        )
+        const signature = Bun.spawnSync(["/usr/bin/codesign", "--display", "--verbose=4", appPath], {
+          cwd: packageDir,
+          env: preparedEnvironment,
+          stdout: "pipe",
+          stderr: "pipe",
+          timeout: 10_000,
+        })
+        if (signature.exitCode !== 0)
+          throw new Error("The packaged Developer ID Application signature could not be read.")
+        requireDeveloperIdApplicationSignature(signature.stdout.toString() + "\n" + signature.stderr.toString())
+      }
       run(
         [process.execPath, "--no-env-file", "./scripts/verify-package.ts", appPath],
         packageDir,
