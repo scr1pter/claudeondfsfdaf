@@ -81,22 +81,54 @@ struct PrivilegedRunCleanup {
   }
 };
 enum class CaptureFailureStage { none, inventory_initial, inventory_refresh, native_read, commit_current };
+enum class CaptureReadRoute { none, screen, window };
+enum class CaptureColorStage { location, masked, unmasked, mask_unknown };
+std::wstring_view capture_color_stage(CaptureColorStage stage, CaptureReadRoute route) noexcept {
+  static constexpr std::array<std::array<std::wstring_view, 3>, 4> stages{{
+    {L"capture-color-location-screen", L"capture-color-location-window", L"capture-color-location-unknown"},
+    {L"capture-color-masked-screen", L"capture-color-masked-window", L"capture-color-masked-unknown"},
+    {L"capture-color-unmasked-screen", L"capture-color-unmasked-window", L"capture-color-unmasked-unknown"},
+    {L"capture-color-mask-unknown-screen", L"capture-color-mask-unknown-window", L"capture-color-mask-unknown-unknown"}}};
+  const auto index = route == CaptureReadRoute::screen ? 0U : route == CaptureReadRoute::window ? 1U : 2U;
+  return stages[static_cast<size_t>(stage)][index];
+}
+std::wstring_view capture_read_stage(CaptureReadPhase phase) noexcept {
+  static constexpr std::array<std::wstring_view, static_cast<size_t>(CaptureReadPhase::count)> stages{
+    L"", L"capture-read-surface-before", L"capture-read-context-before", L"capture-screen-bounds",
+    L"capture-screen-dc", L"capture-screen-memory-dc", L"capture-screen-dib", L"capture-screen-select",
+    L"capture-screen-blit", L"capture-screen-flush", L"capture-screen-copy", L"capture-window-supported",
+    L"capture-window-frame", L"capture-window-device", L"capture-window-interop", L"capture-window-item-ticket",
+    L"capture-window-item-create", L"capture-window-item-current", L"capture-window-item-size",
+    L"capture-window-pool", L"capture-window-session", L"capture-window-start-ticket", L"capture-window-start",
+    L"capture-window-start-current", L"capture-window-first-frame", L"capture-window-content-size",
+    L"capture-window-texture", L"capture-window-description", L"capture-window-staging", L"capture-window-copy",
+    L"capture-window-map", L"capture-window-crop", L"capture-window-current", L"capture-read-surface-after",
+    L"capture-read-context-after"};
+  const auto index = static_cast<size_t>(phase); return index < stages.size() ? stages[index] : std::wstring_view{};
+}
 struct CaptureFailureTrace {
   std::atomic_uint32_t inventories{0};
   std::atomic<CaptureFailureStage> failure{CaptureFailureStage::none};
   std::atomic<WindowsInventoryDiagnostic> native_failure{WindowsInventoryDiagnostic::none};
+  std::atomic<CaptureReadPhase> read_failure{CaptureReadPhase::none};
+  std::atomic<CaptureReadRoute> read_route{CaptureReadRoute::none};
   void record(CaptureFailureStage stage) noexcept {
-    if (native_failure.load() != WindowsInventoryDiagnostic::none) return;
+    if (native_failure.load() != WindowsInventoryDiagnostic::none || read_failure.load() != CaptureReadPhase::none) return;
     auto expected = CaptureFailureStage::none; failure.compare_exchange_strong(expected, stage);
   }
   void record_native(WindowsInventoryDiagnostic diagnostic) noexcept {
     if (failure.load() != CaptureFailureStage::none || windows_inventory_diagnostic_stage(diagnostic).empty()) return;
     auto expected = WindowsInventoryDiagnostic::none; native_failure.compare_exchange_strong(expected, diagnostic);
   }
+  void record_read(CaptureReadPhase phase) noexcept {
+    if (failure.load() != CaptureFailureStage::none || native_failure.load() != WindowsInventoryDiagnostic::none || capture_read_stage(phase).empty()) return;
+    auto expected = CaptureReadPhase::none; read_failure.compare_exchange_strong(expected, phase);
+  }
   std::wstring recorded() const noexcept {
     try {
       const auto exact = windows_inventory_diagnostic_stage(native_failure.load());
       if (!exact.empty()) return std::wstring(exact);
+      const auto read = capture_read_stage(read_failure.load()); if (!read.empty()) return std::wstring(read);
       switch (failure.load()) {
         case CaptureFailureStage::inventory_initial: return L"capture-inventory-initial";
         case CaptureFailureStage::inventory_refresh: return L"capture-inventory-refresh";
@@ -130,6 +162,7 @@ CaptureBackend diagnostic_capture_backend(CaptureBackend backend) {
   const auto read = backend.read;
   backend.read = [read](const auto& request, const auto& current) {
     const auto trace = capture_trace;
+    if (trace) trace->read_route.store(request.window && request.occluded ? CaptureReadRoute::window : CaptureReadRoute::screen);
     try { return read(request, current); }
     catch (...) { if (trace) trace->record(CaptureFailureStage::native_read); throw; }
   };
@@ -141,7 +174,11 @@ CaptureBackend diagnostic_capture_backend(CaptureBackend backend) {
   };
   return backend;
 }
-struct NativeReply { JsonObject document; std::vector<uint8_t> image; std::wstring failure_stage; };
+struct CaptureDiagnosticSummary { std::wstring failure_stage; CaptureReadRoute read_route = CaptureReadRoute::none; };
+struct NativeReply {
+  JsonObject document; std::vector<uint8_t> image; std::wstring failure_stage;
+  CaptureReadRoute read_route = CaptureReadRoute::none;
+};
 struct ScenarioState {
   std::weak_ptr<Dispatcher> dispatcher;
   std::shared_ptr<CaptureService> captures;
@@ -153,7 +190,7 @@ struct ScenarioState {
   std::mutex mutex;
   std::condition_variable changed;
   std::map<uint64_t, NativeReply> replies;
-  std::map<uint64_t, std::wstring> diagnostic_failures;
+  std::map<uint64_t, CaptureDiagnosticSummary> diagnostics;
   bool available() const noexcept { return live.load() && authority && authority->current(); }
   bool publish(const JsonObject& document, std::span<const uint8_t> image) {
     std::lock_guard lock(mutex);
@@ -161,9 +198,9 @@ struct ScenarioState {
     const auto id = number(document, L"id"); if (!id || *id == 0) return false;
     if (*id >= 1'000'000) return image.empty(); // Only the private heartbeat producer owns these ids.
     if (replies.size() >= 16 || image.size() > kMaxFrameBytes || replies.contains(*id)) return false;
-    std::wstring stage;
-    if (const auto found = diagnostic_failures.find(*id); found != diagnostic_failures.end()) { stage = std::move(found->second); diagnostic_failures.erase(found); }
-    replies.emplace(*id, NativeReply{JsonObject::Parse(document.Stringify()), {image.begin(), image.end()}, std::move(stage)}); changed.notify_all(); return true;
+    CaptureDiagnosticSummary diagnostic;
+    if (const auto found = diagnostics.find(*id); found != diagnostics.end()) { diagnostic = std::move(found->second); diagnostics.erase(found); }
+    replies.emplace(*id, NativeReply{JsonObject::Parse(document.Stringify()), {image.begin(), image.end()}, std::move(diagnostic.failure_stage), diagnostic.read_route}); changed.notify_all(); return true;
   }
 };
 Dispatcher::Handler diagnostic_handler(Dispatcher::Handler handler, std::weak_ptr<ScenarioState> weak) {
@@ -177,11 +214,10 @@ Dispatcher::Handler diagnostic_handler(Dispatcher::Handler handler, std::weak_pt
       try {
         observed = [weak, trace, id = request.id, done](Dispatcher::Result result) mutable {
           try {
-            if (std::holds_alternative<Failure>(result)) {
-              const auto stage = trace->recorded();
-              if (!stage.empty()) if (const auto active = weak.lock()) {
-                std::lock_guard lock(active->mutex); if (active->diagnostic_failures.size() < 16) active->diagnostic_failures.insert_or_assign(id, stage);
-              }
+            const auto stage = std::holds_alternative<Failure>(result) ? trace->recorded() : std::wstring{};
+            const auto route = trace->read_route.load();
+            if (!stage.empty() || route != CaptureReadRoute::none) if (const auto active = weak.lock()) {
+              std::lock_guard lock(active->mutex); if (active->diagnostics.size() < 16) active->diagnostics.insert_or_assign(id, CaptureDiagnosticSummary{stage, route});
             }
           } catch (...) {
             // Metadata is best effort; the original completion/result always remains authoritative.
@@ -202,7 +238,7 @@ class NativeScenario final {
     const std::weak_ptr<ScenarioState> weak = state;
     const auto native_windows = WindowsBackend::system(windows_child_shell, windows_privileged_inventory_failure);
     windows = std::make_shared<WindowService>(windows_window_policy(), native_windows, windows_privileged_inventory_failure);
-    auto capture_backend = CaptureBackend::system(windows_privileged_inventory_failure);
+    auto capture_backend = CaptureBackend::system(windows_privileged_inventory_failure, windows_privileged_capture_read_failure);
     try { capture_backend = diagnostic_capture_backend(capture_backend); } catch (...) {}
     state->captures = std::make_shared<CaptureService>(std::move(capture_backend));
     const auto uia = WindowsUiaBackend::system(); auto accessibility_backend = AccessibilityBackend::system(state->captures, uia);
@@ -342,7 +378,10 @@ CaptureBitmap decode_png(const std::vector<uint8_t>& bytes) {
   winrt::com_ptr<IWICFormatConverter> converter; winrt::check_hresult(factory->CreateFormatConverter(converter.put())); winrt::check_hresult(converter->Initialize(frame.get(), GUID_WICPixelFormat32bppBGRA, WICBitmapDitherTypeNone, nullptr, 0, WICBitmapPaletteTypeCustom));
   result.bgra.resize(static_cast<size_t>(result.width) * result.height * 4); winrt::check_hresult(converter->CopyPixels(nullptr, result.width * 4, static_cast<UINT>(result.bgra.size()), result.bgra.data())); require(result.valid()); return result;
 }
-struct Captured { CaptureReceipt receipt; CaptureBitmap image; };
+struct Captured {
+  CaptureReceipt receipt; CaptureBitmap image; JsonObject header;
+  CaptureReadRoute read_route = CaptureReadRoute::none;
+};
 Captured capture(NativeScenario& native, HWND window) {
   JsonObject target; target.Insert(L"windowId", JsonValue::CreateStringValue(window_id(window)));
   JsonObject args = object(LR"({"budget":{"maxWidth":1024,"maxHeight":1024,"maxPixels":1048576},"format":"png"})"); args.Insert(L"target", target);
@@ -355,15 +394,29 @@ Captured capture(NativeScenario& native, HWND window) {
   const auto image = diagnostic_stage(L"png-decode", [&] {
     auto decoded = decode_png(response.image); require(decoded.width == record.width && decoded.height == record.height); return decoded;
   });
-  return {record, image};
+  return {record, image, response.document, response.read_route};
 }
 std::pair<int64_t, int64_t> image_point(const CaptureReceipt& frame, const WindowsRect& region) {
   require(frame.bounds.contains(region)); const auto x = static_cast<int64_t>(std::floor((double(region.x - frame.bounds.x) + double(region.width) / 2) * frame.image_scale)); const auto y = static_cast<int64_t>(std::floor((double(region.y - frame.bounds.y) + double(region.height) / 2) * frame.image_scale));
   require(x >= 0 && y >= 0 && x < frame.width && y < frame.height); return {x, y};
 }
 bool color(const Captured& captured, const WindowsRect& region, std::array<int, 3> expected) {
-  const auto [x, y] = image_point(captured.receipt, region); const auto offset = (static_cast<size_t>(y) * captured.image.width + static_cast<size_t>(x)) * 4;
-  return std::abs(int(captured.image.bgra[offset + 2]) - expected[0]) <= 8 && std::abs(int(captured.image.bgra[offset + 1]) - expected[1]) <= 8 && std::abs(int(captured.image.bgra[offset]) - expected[2]) <= 8;
+  const auto [x, y] = diagnostic_stage(capture_color_stage(CaptureColorStage::location, captured.read_route), [&] { return image_point(captured.receipt, region); });
+  const auto offset = (static_cast<size_t>(y) * captured.image.width + static_cast<size_t>(x)) * 4;
+  if (std::abs(int(captured.image.bgra[offset + 2]) - expected[0]) <= 8 && std::abs(int(captured.image.bgra[offset + 1]) - expected[1]) <= 8 && std::abs(int(captured.image.bgra[offset]) - expected[2]) <= 8) return true;
+  // Classify the already-failed sample using only declared output masks. Values never reach reports.
+  auto coverage = CaptureColorStage::mask_unknown;
+  try {
+    coverage = CaptureColorStage::unmasked;
+    for (const auto& raw : captured.header.GetNamedArray(L"masked")) {
+      const auto mask = raw.GetObject();
+      const auto mx = signed_integer(mask.Lookup(L"x")), my = signed_integer(mask.Lookup(L"y"));
+      const auto width = signed_integer(mask.Lookup(L"w")), height = signed_integer(mask.Lookup(L"h"));
+      if (!mx || !my || !width || !height || !WindowsRect{*mx, *my, *width, *height}.valid()) { coverage = CaptureColorStage::mask_unknown; break; }
+      if (WindowsRect{*mx, *my, *width, *height}.contains({x, y, 1, 1})) { coverage = CaptureColorStage::masked; break; }
+    }
+  } catch (...) { coverage = CaptureColorStage::mask_unknown; }
+  throw ScenarioFailure{L"assertion_failed", std::wstring(capture_color_stage(coverage, captured.read_route)), L"unknown"};
 }
 JsonObject tree(NativeScenario& native, const WindowsTargetState& target) {
   JsonObject args = object(LR"({"maxNodes":100,"maxDepth":12})"); args.Insert(L"windowId", JsonValue::CreateStringValue(window_id(target.window))); const auto response = native.request(L"ui.tree", args); NativeScenario::success(response); return response.document;
@@ -400,6 +453,9 @@ std::wstring windows_privileged_native_code(std::wstring_view code) {
 void windows_privileged_inventory_failure(WindowsInventoryDiagnostic diagnostic) noexcept {
   const auto trace = capture_trace; if (trace) trace->record_native(diagnostic);
 }
+void windows_privileged_capture_read_failure(CaptureReadPhase phase) noexcept {
+  const auto trace = capture_trace; if (trace) trace->record_read(phase);
+}
 std::wstring windows_privileged_origin_stage(std::wstring_view message, std::wstring_view fallback, std::wstring_view capture_stage) {
   if (message == L"The computer session changed during the operation.") return L"authority-completion";
   if (message == L"The native observation changed before delivery.") return L"authority-delivery";
@@ -407,6 +463,8 @@ std::wstring windows_privileged_origin_stage(std::wstring_view message, std::wst
   if (std::find(trace_stages.begin(), trace_stages.end(), capture_stage) != trace_stages.end()) return std::wstring(capture_stage);
   for (unsigned index = 1; index < static_cast<unsigned>(WindowsInventoryDiagnostic::count); ++index)
     if (capture_stage == windows_inventory_diagnostic_stage(static_cast<WindowsInventoryDiagnostic>(index))) return std::wstring(capture_stage);
+  for (unsigned index = 1; index < static_cast<unsigned>(CaptureReadPhase::count); ++index)
+    if (capture_stage == capture_read_stage(static_cast<CaptureReadPhase>(index))) return std::wstring(capture_stage);
   if (message == L"The native capture changed. Take a new screenshot.") return L"capture-service";
   if (message == L"The native capture is unavailable. Check Windows Privacy & security settings.") return L"capture-native";
   if (std::find(windows_privileged_stages.begin(), windows_privileged_stages.end(), fallback) != windows_privileged_stages.end()) return std::wstring(fallback);
@@ -553,7 +611,7 @@ WindowsPrivilegedReport run_windows_privileged_self_test(const Command& command,
           auto reply = native->request(L"capture", args); NativeScenario::success(reply, L"display-capture-reply"); return reply;
         });
         const auto record = diagnostic_stage(L"display-capture-receipt", [&] { return native->state->captures->receipt(response.document.GetNamedString(L"captureId"), session); });
-        const auto image = diagnostic_stage(L"png-decode", [&] { return decode_png(response.image); }); const Captured display{record, image};
+        const auto image = diagnostic_stage(L"png-decode", [&] { return decode_png(response.image); }); const Captured display{record, image, response.document, response.read_route};
         require(color(display, shown.excluded_bounds, {32, 128, 192}));
       } catch (...) { target->request(WindowsTargetAction::hide_excluded); throw; }
       diagnostic_stage(L"affinity-hide", [&] { target->request(WindowsTargetAction::hide_excluded); });

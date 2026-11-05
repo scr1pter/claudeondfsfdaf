@@ -145,20 +145,29 @@ struct NativeCapture {
   }
 };
 
-CaptureBitmap screen_bitmap(const WindowsRect& bounds) {
+CaptureBitmap screen_bitmap(const WindowsRect& bounds, CaptureReadPhase& phase) {
+  phase = CaptureReadPhase::screen_bounds;
   require(bounds.valid() && bounds.width <= 32'768 && bounds.height <= 32'768 && uint64_t(bounds.width) * uint64_t(bounds.height) <= 64ULL * 1024 * 1024);
+  phase = CaptureReadPhase::screen_dc;
   struct Screen { HDC dc; ~Screen() { if (dc) ReleaseDC(nullptr, dc); } } screen{GetDC(nullptr)};
   require(screen.dc != nullptr);
+  phase = CaptureReadPhase::screen_memory_dc;
   struct DC { HDC dc; ~DC() { if (dc) DeleteDC(dc); } } memory{CreateCompatibleDC(screen.dc)};
   require(memory.dc != nullptr);
   BITMAPINFO info{}; info.bmiHeader.biSize = sizeof(info.bmiHeader); info.bmiHeader.biWidth = static_cast<LONG>(bounds.width); info.bmiHeader.biHeight = -static_cast<LONG>(bounds.height);
   info.bmiHeader.biPlanes = 1; info.bmiHeader.biBitCount = 32; info.bmiHeader.biCompression = BI_RGB;
   void* pixels = nullptr;
+  phase = CaptureReadPhase::screen_dib;
   struct Bitmap { HBITMAP value; ~Bitmap() { if (value) DeleteObject(value); } } bitmap{CreateDIBSection(screen.dc, &info, DIB_RGB_COLORS, &pixels, nullptr, 0)};
   require(bitmap.value && pixels);
+  phase = CaptureReadPhase::screen_select;
   const auto previous = SelectObject(memory.dc, bitmap.value); require(previous && previous != HGDI_ERROR);
   struct Selection { HDC dc; HGDIOBJ previous; ~Selection() { SelectObject(dc, previous); } } selection{memory.dc, previous};
-  require(BitBlt(memory.dc, 0, 0, static_cast<int>(bounds.width), static_cast<int>(bounds.height), screen.dc, static_cast<int>(bounds.x), static_cast<int>(bounds.y), SRCCOPY | CAPTUREBLT) && GdiFlush());
+  phase = CaptureReadPhase::screen_blit;
+  const auto copied = BitBlt(memory.dc, 0, 0, static_cast<int>(bounds.width), static_cast<int>(bounds.height), screen.dc, static_cast<int>(bounds.x), static_cast<int>(bounds.y), SRCCOPY | CAPTUREBLT);
+  if (copied) phase = CaptureReadPhase::screen_flush;
+  require(copied && GdiFlush());
+  phase = CaptureReadPhase::screen_copy;
   CaptureBitmap result{static_cast<uint32_t>(bounds.width), static_cast<uint32_t>(bounds.height), std::vector<uint8_t>(static_cast<size_t>(bounds.width) * static_cast<size_t>(bounds.height) * 4)};
   std::memcpy(result.bgra.data(), pixels, result.bgra.size());
   for (size_t index = 3; index < result.bgra.size(); index += 4) result.bgra[index] = 255;
@@ -168,51 +177,70 @@ CaptureBitmap screen_bitmap(const WindowsRect& bounds) {
 bool window_capture_supported() {
   try { return winrt::Windows::Graphics::Capture::GraphicsCaptureSession::IsSupported(); } catch (...) { return false; }
 }
-CaptureBitmap window_bitmap(const CaptureReadRequest& request, const std::function<bool()>& current) {
+CaptureBitmap window_bitmap(const CaptureReadRequest& request, const std::function<bool()>& current, CaptureReadPhase& phase) {
   using winrt::Windows::Graphics::Capture::Direct3D11CaptureFramePool;
   using winrt::Windows::Graphics::Capture::GraphicsCaptureItem;
   using winrt::Windows::Graphics::DirectX::DirectXPixelFormat;
+  phase = CaptureReadPhase::window_supported;
   require(request.window && window_capture_supported() && current());
+  phase = CaptureReadPhase::window_frame;
   RECT native_frame{};
   require(SUCCEEDED(DwmGetWindowAttribute(request.window->hwnd, DWMWA_EXTENDED_FRAME_BOUNDS, &native_frame, sizeof(native_frame))));
   const auto bounds = rectangle(native_frame); require(bounds.valid() && bounds.contains(request.bounds));
   require(bounds.width <= 32'768 && bounds.height <= 32'768 && uint64_t(bounds.width) * uint64_t(bounds.height) <= 64ULL * 1024 * 1024);
+  phase = CaptureReadPhase::window_device;
   winrt::com_ptr<ID3D11Device> device; winrt::com_ptr<ID3D11DeviceContext> commands;
   const auto create = [&](D3D_DRIVER_TYPE type) { return D3D11CreateDevice(nullptr, type, nullptr, D3D11_CREATE_DEVICE_BGRA_SUPPORT, nullptr, 0, D3D11_SDK_VERSION, device.put(), nullptr, commands.put()); };
   auto status = create(D3D_DRIVER_TYPE_HARDWARE);
   if (FAILED(status)) { device = nullptr; commands = nullptr; status = create(D3D_DRIVER_TYPE_WARP); }
   require(SUCCEEDED(status) && current());
+  phase = CaptureReadPhase::window_interop;
   const auto dxgi = device.as<IDXGIDevice>(); winrt::com_ptr<IInspectable> inspectable;
   winrt::check_hresult(CreateDirect3D11DeviceFromDXGIDevice(dxgi.get(), inspectable.put()));
   const auto graphics = inspectable.as<winrt::Windows::Graphics::DirectX::Direct3D11::IDirect3DDevice>();
   GraphicsCaptureItem item{nullptr};
+  phase = CaptureReadPhase::window_item_ticket;
   { WindowsComCall call; require(call.current());
+    phase = CaptureReadPhase::window_item_create;
     const auto interop = winrt::get_activation_factory<GraphicsCaptureItem, IGraphicsCaptureItemInterop>();
     winrt::check_hresult(interop->CreateForWindow(request.window->hwnd, winrt::guid_of<GraphicsCaptureItem>(), winrt::put_abi(item)));
+    phase = CaptureReadPhase::window_item_current;
     require(call.current() && current()); }
+  phase = CaptureReadPhase::window_item_size;
   const auto size = item.Size();
   // DWM's real extended frame and the OS capture item must agree; no guessed shadow/border offset.
   require(size.Width == bounds.width && size.Height == bounds.height);
+  phase = CaptureReadPhase::window_pool;
   auto pool = Direct3D11CaptureFramePool::CreateFreeThreaded(graphics, DirectXPixelFormat::B8G8R8A8UIntNormalized, 2, size);
+  phase = CaptureReadPhase::window_session;
   auto session = pool.CreateCaptureSession(item);
   struct Close { decltype(pool)& frame_pool; decltype(session)& capture_session; ~Close() { try { capture_session.Close(); } catch (...) {} try { frame_pool.Close(); } catch (...) {} } } close{pool, session};
   const auto deadline = Clock::now() + std::chrono::milliseconds(750);
-  { WindowsComCall call; require(call.current()); session.IsCursorCaptureEnabled(false); session.StartCapture(); require(call.current() && current()); }
+  phase = CaptureReadPhase::window_start_ticket;
+  { WindowsComCall call; require(call.current()); phase = CaptureReadPhase::window_start;
+    session.IsCursorCaptureEnabled(false); session.StartCapture(); phase = CaptureReadPhase::window_start_current; require(call.current() && current()); }
+  phase = CaptureReadPhase::window_first_frame;
   winrt::Windows::Graphics::Capture::Direct3D11CaptureFrame frame{nullptr};
   while (!frame && Clock::now() < deadline && current()) {
     frame = pool.TryGetNextFrame(); if (!frame) std::this_thread::sleep_for(std::chrono::milliseconds(5));
   }
   require(frame && current() && Clock::now() < deadline);
+  phase = CaptureReadPhase::window_content_size;
   const auto content = frame.ContentSize(); require(content.Width == size.Width && content.Height == size.Height);
+  phase = CaptureReadPhase::window_texture;
   const auto access = frame.Surface().as<::Windows::Graphics::DirectX::Direct3D11::IDirect3DDxgiInterfaceAccess>();
   winrt::com_ptr<ID3D11Texture2D> texture; winrt::check_hresult(access->GetInterface(__uuidof(ID3D11Texture2D), texture.put_void()));
+  phase = CaptureReadPhase::window_description;
   D3D11_TEXTURE2D_DESC description{}; texture->GetDesc(&description);
   require(description.Width >= static_cast<uint32_t>(size.Width) && description.Height >= static_cast<uint32_t>(size.Height) && description.Format == DXGI_FORMAT_B8G8R8A8_UNORM && description.SampleDesc.Count == 1);
   description.Width = static_cast<uint32_t>(size.Width); description.Height = static_cast<uint32_t>(size.Height); description.MipLevels = 1; description.ArraySize = 1;
   description.Usage = D3D11_USAGE_STAGING; description.BindFlags = 0; description.CPUAccessFlags = D3D11_CPU_ACCESS_READ; description.MiscFlags = 0;
+  phase = CaptureReadPhase::window_staging;
   winrt::com_ptr<ID3D11Texture2D> staging; winrt::check_hresult(device->CreateTexture2D(&description, nullptr, staging.put()));
+  phase = CaptureReadPhase::window_copy;
   D3D11_BOX region{0, 0, 0, description.Width, description.Height, 1}; commands->CopySubresourceRegion(staging.get(), 0, 0, 0, 0, texture.get(), 0, &region);
   D3D11_MAPPED_SUBRESOURCE mapped{};
+  phase = CaptureReadPhase::window_map;
   for (;;) {
     require(current() && Clock::now() < deadline);
     const auto map = commands->Map(staging.get(), 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &mapped);
@@ -220,6 +248,7 @@ CaptureBitmap window_bitmap(const CaptureReadRequest& request, const std::functi
     require(SUCCEEDED(map)); break;
   }
   struct Unmap { ID3D11DeviceContext* context; ID3D11Texture2D* texture; ~Unmap() { context->Unmap(texture, 0); } } unmap{commands.get(), staging.get()};
+  phase = CaptureReadPhase::window_crop;
   require(mapped.pData && mapped.RowPitch >= description.Width * 4U);
   CaptureBitmap result{static_cast<uint32_t>(request.bounds.width), static_cast<uint32_t>(request.bounds.height), std::vector<uint8_t>(static_cast<size_t>(request.bounds.width) * static_cast<size_t>(request.bounds.height) * 4)};
   const auto x = static_cast<size_t>(request.bounds.x - bounds.x), y = static_cast<size_t>(request.bounds.y - bounds.y);
@@ -230,6 +259,7 @@ CaptureBitmap window_bitmap(const CaptureReadRequest& request, const std::functi
     if (result.bgra[index + 3] != 255) result.bgra[index] = result.bgra[index + 1] = result.bgra[index + 2] = 0;
     result.bgra[index + 3] = 255;
   }
+  phase = CaptureReadPhase::window_current;
   require(current() && Clock::now() < deadline); return result;
 }
 
@@ -324,16 +354,24 @@ void label_vector(CaptureBitmap& image, const CapturePrivacyPlan& plan, const Wi
 }
 }
 
-CaptureBackend CaptureBackend::system(WindowsInventoryObserver diagnostic) {
+CaptureBackend CaptureBackend::system(WindowsInventoryObserver diagnostic, CaptureReadObserver read_diagnostic) {
   const auto native = std::make_shared<NativeCapture>();
   native->diagnostic = diagnostic;
   CaptureBackend backend; backend.displays = native_displays;
   backend.inventory = [native](const ServerSession& session, const std::function<bool()>& current) { return native->inventory(session, current); };
   backend.current = [native](const CaptureInventory& inventory, const ServerSession& session) { return native->current(inventory, session); };
-  backend.read = [](const CaptureReadRequest& request, const std::function<bool()>& current) {
-    require_capture_surface(request.window); require(current(), L"changed");
-    const auto result = request.window && request.occluded ? window_bitmap(request, current) : screen_bitmap(request.bounds);
-    require_capture_surface(request.window); require(current(), L"changed"); return result;
+  backend.read = [read_diagnostic](const CaptureReadRequest& request, const std::function<bool()>& current) {
+    auto phase = CaptureReadPhase::surface_before;
+    try {
+      require_capture_surface(request.window); phase = CaptureReadPhase::context_before; require(current(), L"changed");
+      const auto result = request.window && request.occluded ? window_bitmap(request, current, phase) : screen_bitmap(request.bounds, phase);
+      phase = CaptureReadPhase::surface_after; require_capture_surface(request.window);
+      phase = CaptureReadPhase::context_after; require(current(), L"changed"); return result;
+    } catch (...) {
+      // A best-effort observer cannot replace, suppress or recover the original native failure.
+      if (read_diagnostic) try { read_diagnostic(phase); } catch (...) {}
+      throw;
+    }
   };
   backend.label = label_vector; backend.encode = encode_bitmap;
   // The supported Windows floor has WGC. Feature reads publish implemented operations without a

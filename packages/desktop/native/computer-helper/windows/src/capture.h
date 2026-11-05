@@ -41,6 +41,17 @@ struct CaptureReadRequest {
   std::optional<WindowsWindow> window;
   bool occluded = false;
 };
+// Failure-only metadata for the private self-test. No native values or content are observed.
+enum class CaptureReadPhase {
+  none, surface_before, context_before, screen_bounds, screen_dc, screen_memory_dc,
+  screen_dib, screen_select, screen_blit, screen_flush, screen_copy, window_supported, window_frame,
+  window_device, window_interop, window_item_ticket, window_item_create, window_item_current,
+  window_item_size, window_pool, window_session, window_start_ticket, window_start,
+  window_start_current, window_first_frame, window_content_size, window_texture,
+  window_description, window_staging, window_copy, window_map, window_crop,
+  window_current, surface_after, context_after, count
+};
+using CaptureReadObserver = void (*)(CaptureReadPhase);
 struct CaptureBackend {
   std::function<std::vector<CaptureDisplay>()> displays;
   std::function<CaptureInventory(const ServerSession&, const std::function<bool()>&)> inventory;
@@ -53,7 +64,7 @@ struct CaptureBackend {
   std::function<bool()> available;
   std::function<uint64_t()> now;
   std::function<std::wstring()> identifier;
-  static CaptureBackend system(WindowsInventoryObserver diagnostic = nullptr);
+  static CaptureBackend system(WindowsInventoryObserver diagnostic = nullptr, CaptureReadObserver read_diagnostic = nullptr);
 };
 
 struct CaptureReceipt {
