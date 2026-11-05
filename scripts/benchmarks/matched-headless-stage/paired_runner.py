@@ -18,6 +18,7 @@ from pathlib import Path
 import re
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import threading
@@ -673,6 +674,140 @@ def normalize_transcript(path, runtime):
             "completions": completions, "unknownInteractiveInputs": unknown, **chronology}
 
 
+def owned_support_inventory(root, *, max_entries=10000, max_depth=32, max_link_hops=40):
+    """Count mutable owned DATA_DIR entries without opening content or traversing links."""
+    root = Path(os.path.abspath(root))
+    counts = {"regularFiles": 0, "directories": 0, "reparseEntries": 0,
+              "withinOwnedRootTargets": 0, "outsideOwnedRootTargets": 0,
+              "unresolvedTargets": 0, "unexpectedEntries": 0, "entriesVisited": 0}
+    observations = set()
+    complete = True
+
+    def reparse(info):
+        return stat.S_ISLNK(info.st_mode) or bool(getattr(info, "st_file_attributes", 0) & 0x400)
+
+    def known_link(info):
+        return stat.S_ISLNK(info.st_mode) or getattr(info, "st_reparse_tag", None) in (0xA0000003, 0xA000000C)
+
+    def target_scope(link):
+        current, seen, hops, inspected = root, set(), 0, 0
+        remaining = list(link.relative_to(root).parts)
+        while remaining:
+            part = remaining.pop(0)
+            inspected += 1
+            if inspected > (max_link_hops + 1) * (max_depth + 1):
+                return "unresolved"
+            if part == "..":
+                current = current.parent
+                if not current.is_relative_to(root):
+                    return "outside"
+                continue
+            candidate = current / part
+            if not candidate.is_relative_to(root):
+                return "outside"
+            try:
+                info = candidate.lstat()
+                if not reparse(info):
+                    if remaining and not stat.S_ISDIR(info.st_mode):
+                        return "unresolved"
+                    current = candidate
+                    continue
+                if not known_link(info) or candidate in seen or hops >= max_link_hops:
+                    return "unresolved"
+                seen.add(candidate)
+                hops += 1
+                value = os.readlink(candidate)
+            except (OSError, ValueError):
+                return "unresolved"
+            if len(value) > 32768:
+                return "unresolved"
+            # Normalize extended-length Windows syntax only. Resolve earlier link components before '..', and
+            # reject an outside hop before inspecting its target even when a later component would re-enter.
+            if value.startswith("\\\\?\\UNC\\"):
+                value = "\\\\" + value[8:]
+            elif value.startswith("\\\\?\\"):
+                value = value[4:]
+                if not re.match(r"^[A-Za-z]:[\\/]", value):
+                    return "unresolved"
+            elif value.startswith("\\\\.\\"):
+                return "unresolved"
+            target = Path(value)
+            if target.drive and not target.root:
+                return "unresolved"
+            if target.is_absolute():
+                if not target.is_relative_to(root):
+                    return "outside"
+                current, parts = root, target.relative_to(root).parts
+            else:
+                current, parts = candidate.parent, target.parts
+            if len(parts) + len(remaining) > max_depth + 1:
+                return "unresolved"
+            remaining = list(parts) + remaining
+        return "inside"
+
+    try:
+        info = root.lstat()
+    except OSError:
+        observations.add("support_root_unavailable")
+        complete = False
+    else:
+        if reparse(info) or not stat.S_ISDIR(info.st_mode):
+            observations.add("support_root_not_an_unlinked_directory")
+            complete = False
+        try:
+            if any(reparse(parent.lstat()) for parent in root.parents):
+                observations.add("support_root_has_reparse_ancestor")
+                complete = False
+        except OSError:
+            observations.add("support_root_ancestry_unavailable")
+            complete = False
+    pending = [(root, 0)] if complete else []
+    while pending:
+        directory, depth = pending.pop()
+        try:
+            with os.scandir(directory) as entries:
+                for entry in entries:
+                    if counts["entriesVisited"] >= max_entries:
+                        observations.add("support_entry_limit_reached")
+                        complete = False
+                        pending.clear()
+                        break
+                    counts["entriesVisited"] += 1
+                    try:
+                        info = entry.stat(follow_symlinks=False)
+                    except OSError:
+                        observations.add("support_entry_metadata_unavailable")
+                        complete = False
+                        continue
+                    if reparse(info):
+                        counts["reparseEntries"] += 1
+                        scope = target_scope(Path(entry.path)) if known_link(info) else "unresolved"
+                        counts[{"inside": "withinOwnedRootTargets", "outside": "outsideOwnedRootTargets",
+                                "unresolved": "unresolvedTargets"}[scope]] += 1
+                        if scope != "inside":
+                            observations.add("support_link_target_" + scope)
+                        continue
+                    if stat.S_ISREG(info.st_mode):
+                        counts["regularFiles"] += 1
+                        continue
+                    if stat.S_ISDIR(info.st_mode):
+                        counts["directories"] += 1
+                        if depth >= max_depth:
+                            observations.add("support_depth_limit_reached")
+                            complete = False
+                        else:
+                            pending.append((Path(entry.path), depth + 1))
+                        continue
+                    counts["unexpectedEntries"] += 1
+                    observations.add("support_entry_type_unexpected")
+        except OSError:
+            observations.add("support_directory_unavailable")
+            complete = False
+    return {**counts, "complete": complete, "requiresManualReview": bool(observations),
+            "observations": sorted(observations), "contentRead": False, "linksFollowedForTraversal": False,
+            "limits": {"entries": max_entries, "depth": max_depth, "linkHops": max_link_hops}}
+
+
 def audit_descendants(common, runtime, directory, app, support, trusted_client, slots, root_id, profile=None, formal_repair_started=None, verification_mode="ui"):
     """Unknown native/interactive/support paths stay review-required, never pass."""
     require(verification_mode in ("ui", "headless"), "unreviewed final verification mode")
@@ -743,9 +878,10 @@ def audit_descendants(common, runtime, directory, app, support, trusted_client, 
             for began, ended in phases) for role in profile["specialistInputs"])
         if formal_repair_started is not None:
             specialist_covered = specialist_covered and specialist.get("completed") is not None and specialist["completed"] >= formal_repair_started
-    support_files = common.manifest(support) if support.is_dir() else {}
+    support_inventory = owned_support_inventory(support)
     return {"requiresManualReview": bool(review or not ordered or not followups_reviewed or not native_outcomes_settled
-                                          or not interface_after_judge or not api_after_judge or not starts_after or not completes_after or not specialist_covered), "descendantCoverageComplete": True,
+                                          or not interface_after_judge or not api_after_judge or not starts_after or not completes_after or not specialist_covered
+                                          or support_inventory["requiresManualReview"]), "descendantCoverageComplete": True,
             "observedNativeSessions": len(coverage), "autonomousActorsAdmitted": 1 + len(slots),
             "judgeStartedAfterBothWorkersCompleted": bool(ordered), "sessions": coverage,
             "allWorkerCompletionPhasesReviewedBySameJudge": bool(followups_reviewed),
@@ -761,7 +897,7 @@ def audit_descendants(common, runtime, directory, app, support, trusted_client, 
             "rootPostJudgeSdkVerificationCommandObserved": sdk_after_judge,
             "rootPostJudgeCommonBrowserCommandObserved": browser_after_judge,
             "rootPostJudgeApiVerificationCommandObserved": api_after_judge,
-            "ownedSupportDataFiles": len(support_files), "ownedSupportScriptPolicy":
+            "ownedSupportDataFiles": support_inventory["regularFiles"], "ownedSupportDataInventory": support_inventory, "ownedSupportScriptPolicy":
             "explicit owned DATA_DIR retained; paths outside authored source remain manual review in common static audit",
             "coverageLimits": "bounded native telemetry/static script inspection; unrecognized verification scripts require manual review; no operating-system sandbox claim"}
 

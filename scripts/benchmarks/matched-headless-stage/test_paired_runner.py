@@ -514,7 +514,7 @@ class PairedRunnerTests(unittest.TestCase):
 
     def native_phase_fixture(self, runtime, *, worker_followup="completed", rejudge=True, lead_verifies=True,
                              judge_followup="completed", initial_judge="completed", command_exit=0,
-                             verification_mode="ui", cli=True, sdk=True, api=True):
+                             verification_mode="ui", cli=True, sdk=True, api=True, support_link=False):
         """Synthetic native schemas only; never an application/benchmark result."""
         base = self.directory / (runtime + "-phases")
         if base.exists():
@@ -522,6 +522,14 @@ class PairedRunnerTests(unittest.TestCase):
         directory, app, support = base / "transcripts", base / "app", base / "support-data"
         for path in (directory, app, support):
             path.mkdir(parents=True)
+        if support_link:
+            target = support / "owned-target"
+            target.mkdir()
+            (target / "synthetic-data.txt").write_text("synthetic support fixture", encoding="utf-8")
+            try:
+                (support / "owned-link").symlink_to(target, target_is_directory=True)
+            except OSError as error:
+                self.skipTest("directory symlink creation unavailable: " + type(error).__name__)
         client = base / "common-browser-client.cjs"
         client.write_text("// synthetic trusted client fixture", encoding="utf-8")
         (app / "cli.mjs").write_text("console.log(\"synthetic-fixture\")", encoding="utf-8")
@@ -607,6 +615,20 @@ class PairedRunnerTests(unittest.TestCase):
                 self.assertTrue(quality["rootPostJudgeApiVerificationCommandObserved"])
                 self.assertFalse(quality["rootPostJudgeCommonBrowserCommandObserved"])
                 self.assertTrue(quality["allWorkerCompletionPhasesReviewedBySameJudge"])
+
+    def test_internal_mutable_support_link_returns_inventory_instead_of_aborting_audit(self):
+        quality = self.native_phase_fixture("codex", verification_mode="headless", support_link=True)
+        self.assertFalse(quality["requiresManualReview"])
+        self.assertEqual(quality["ownedSupportDataFiles"], 1)
+        self.assertEqual(quality["ownedSupportDataInventory"]["reparseEntries"], 1)
+        self.assertEqual(quality["ownedSupportDataInventory"]["withinOwnedRootTargets"], 1)
+        self.assertFalse(quality["ownedSupportDataInventory"]["contentRead"])
+
+    def test_internal_support_link_never_clears_other_native_audit_review_flags(self):
+        quality = self.native_phase_fixture("codex", verification_mode="headless", cli=False, support_link=True)
+        self.assertTrue(quality["requiresManualReview"])
+        self.assertFalse(quality["rootPostJudgeCliVerificationCommandObserved"])
+        self.assertFalse(quality["ownedSupportDataInventory"]["requiresManualReview"])
 
     def test_headless_missing_interface_evidence_stays_review_required(self):
         for runtime in ("vector", "codex"):

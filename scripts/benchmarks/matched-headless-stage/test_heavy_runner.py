@@ -227,6 +227,8 @@ class HeavyRunnerTests(unittest.TestCase):
         """Observed native Codex record schemas with labelled synthetic timestamps."""
         directory = self.directory / "transcripts"
         directory.mkdir()
+        # NativeAdapter.prepare always creates this owned DATA_DIR before execution.
+        (self.directory / "support").mkdir()
         base = 1793577600
         def stamp(seconds):
             return datetime.fromtimestamp(base + seconds, tz=timezone.utc).isoformat()
