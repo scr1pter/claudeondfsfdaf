@@ -278,21 +278,55 @@ export const COMPUTER_SMOKE_NATIVE_PREREQUISITES: readonly string[] = [
 ]
 
 export type ComputerSmokeNativePhase = "artifact" | "button" | "spawn" | "ready" | "result" | "exit" | "cleanup"
-export type ComputerSmokeNativeCause =
-  | "exception"
-  | "stream_invalid"
-  | "spawn_error"
-  | "stdin_error"
-  | "deadline_exceeded"
-  | "exit_incomplete"
-  | "exit_mismatch"
+export const COMPUTER_SMOKE_NATIVE_CAUSES = [
+  "exception",
+  "stream_invalid",
+  "spawn_error",
+  "stdin_error",
+  "deadline_exceeded",
+  "exit_incomplete",
+  "exit_mismatch",
+  "artifact_root_io",
+  "manifest_io",
+  "manifest_type",
+  "manifest_size",
+  "manifest_json",
+  "identity_shape",
+  "identity_platform",
+  "identity_version",
+  "identity_source",
+  "identity_protocol",
+  "catalog_shape",
+  "catalog_sha",
+  "catalog_arch",
+  "catalog_path",
+  "file_io",
+  "file_kind",
+  "file_size",
+  "file_containment",
+  "file_hash",
+  "mandatory_file",
+  "target_nonce",
+  "target_banner",
+  "target_underlay",
+] as const
+export type ComputerSmokeNativeCause = (typeof COMPUTER_SMOKE_NATIVE_CAUSES)[number]
+export type ComputerSmokeNativeRole = "main" | "preload" | "fake" | "driver" | "runtime" | "resource"
 type ComputerSmokeNativeOutcome = {
   ok: boolean
   skipped?: true
   reason?: (typeof COMPUTER_SMOKE_NATIVE_REASONS)[number]
 }
 export type ComputerSmokeNativeDiagnostic =
-  | { protocol: 1; kind: "boundary"; phase: ComputerSmokeNativePhase; cause: ComputerSmokeNativeCause }
+  | {
+      protocol: 1
+      kind: "boundary"
+      phase: ComputerSmokeNativePhase
+      cause: ComputerSmokeNativeCause
+      role?: ComputerSmokeNativeRole
+      ordinal?: number
+      architecture?: "x64" | "arm64"
+    }
   | {
       protocol: 1
       kind: "result"
@@ -310,20 +344,23 @@ export function parseComputerSmokeNativeDiagnostic(line: string): ComputerSmokeN
   if (!record(value) || value.protocol !== 1) throw new Error("The native smoke diagnostic is invalid.")
   if (value.kind === "boundary") {
     if (
-      !exact(value, ["protocol", "kind", "phase", "cause"]) ||
-      Object.keys(value).length !== 4 ||
+      !exact(value, ["protocol", "kind", "phase", "cause", "role", "ordinal", "architecture"]) ||
       typeof value.phase !== "string" ||
       !["artifact", "button", "spawn", "ready", "result", "exit", "cleanup"].includes(value.phase) ||
       typeof value.cause !== "string" ||
-      ![
-        "exception",
-        "stream_invalid",
-        "spawn_error",
-        "stdin_error",
-        "deadline_exceeded",
-        "exit_incomplete",
-        "exit_mismatch",
-      ].includes(value.cause)
+      !(COMPUTER_SMOKE_NATIVE_CAUSES as readonly string[]).includes(value.cause) ||
+      (value.role !== undefined &&
+        (typeof value.role !== "string" ||
+          !["main", "preload", "fake", "driver", "runtime", "resource"].includes(value.role))) ||
+      (value.ordinal !== undefined &&
+        (value.role === undefined ||
+          typeof value.ordinal !== "number" ||
+          !Number.isInteger(value.ordinal) ||
+          value.ordinal < 0 ||
+          value.ordinal > 8191)) ||
+      (value.architecture !== undefined && value.architecture !== "x64" && value.architecture !== "arm64") ||
+      ((value.role !== undefined || value.ordinal !== undefined || value.architecture !== undefined) &&
+        value.phase !== "artifact")
     )
       throw new Error("The native smoke diagnostic is invalid.")
     return {
@@ -331,6 +368,9 @@ export function parseComputerSmokeNativeDiagnostic(line: string): ComputerSmokeN
       kind: "boundary",
       phase: value.phase as ComputerSmokeNativePhase,
       cause: value.cause as ComputerSmokeNativeCause,
+      ...(value.role === undefined ? {} : { role: value.role as ComputerSmokeNativeRole }),
+      ...(value.ordinal === undefined ? {} : { ordinal: value.ordinal as number }),
+      ...(value.architecture === undefined ? {} : { architecture: value.architecture as "x64" | "arm64" }),
     }
   }
   const outcome = (value: unknown): ComputerSmokeNativeOutcome => {

@@ -444,6 +444,15 @@ jobs:
           elif [[ "$status" != 0 ]]; then
             exit "$status"
           fi
+      - name: Preserve only the small overlay manifest diagnostic
+        if: ${{ always() && (needs.plan.outputs.desktop == 'true') }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: computer-overlay-darwin-manifest-diagnostic-${{ needs.plan.outputs.suffix }}-${{ github.run_attempt }}
+          path: packages/desktop/native/out/overlay-darwin/computer-overlay-smoke.json
+          if-no-files-found: ignore
+          overwrite: false
+          retention-days: 7
       - name: Archive the verified never-shipped overlay stage separately
         if: ${{ success() && steps.overlay-restore.outputs.restored != 'true' && (needs.plan.outputs.desktop == 'true') }}
         timeout-minutes: 5

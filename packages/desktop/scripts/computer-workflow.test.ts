@@ -384,10 +384,22 @@ test("shipping and test archives preserve executable modes while failure diagnos
     for (const step of steps(record(value))) {
       if (typeof step.uses !== "string" || !step.uses.startsWith("actions/upload-artifact@")) continue
       const upload = record(step.with)
-      expect(upload["retention-days"]).toBe(14)
       expect(upload.name).toContain("needs.plan.outputs.suffix")
       if (typeof upload.path !== "string") throw new Error("Artifact uploads need explicit paths.")
       const filename = upload.path.split("/").at(-1)!
+      if (filename === "computer-overlay-smoke.json") {
+        expect(step.name).toBe("Preserve only the small overlay manifest diagnostic")
+        expect(step.if).toBe("${{ always() && (needs.plan.outputs.desktop == 'true') }}")
+        expect(upload).toEqual({
+          name: "computer-overlay-darwin-manifest-diagnostic-${{ needs.plan.outputs.suffix }}-${{ github.run_attempt }}",
+          path: "packages/desktop/native/out/overlay-darwin/computer-overlay-smoke.json",
+          "if-no-files-found": "ignore",
+          overwrite: false,
+          "retention-days": 7,
+        })
+        continue
+      }
+      expect(upload["retention-days"]).toBe(14)
       if (required.has(filename)) {
         expect(expression(String(upload.overwrite), { "reuse-artifacts": false })).toBe(true)
         expect(expression(String(upload.overwrite), { "reuse-artifacts": true })).toBe(false)

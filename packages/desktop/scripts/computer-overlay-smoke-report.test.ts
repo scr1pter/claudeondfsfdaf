@@ -113,6 +113,29 @@ test("native proof diagnostics retain fixed boundary/result facts without changi
   const line = (value: unknown) => COMPUTER_SMOKE_NATIVE_MARK + JSON.stringify(value)
   const boundary = { protocol: 1, kind: "boundary", phase: "ready", cause: "stream_invalid" }
   expect(parseComputerSmokeNativeDiagnostic(line(boundary))).toEqual(boundary)
+  const artifact = {
+    ...boundary,
+    phase: "artifact",
+    cause: "file_hash",
+    role: "fake",
+    ordinal: 17,
+    architecture: "arm64",
+  }
+  expect(parseComputerSmokeNativeDiagnostic(line(artifact))).toEqual(artifact)
+  for (const patch of [
+    { role: "PRIVATE" },
+    { ordinal: -1 },
+    { ordinal: 8192 },
+    { ordinal: 1.5 },
+    { ordinal: "PRIVATE" },
+    { role: undefined },
+    { architecture: "aarch64" },
+    { architecture: "PRIVATE" },
+    { phase: "ready" },
+    { path: "PRIVATE" },
+    { hash: "PRIVATE" },
+  ])
+    expect(() => parseComputerSmokeNativeDiagnostic(line({ ...artifact, ...patch }))).toThrow()
   const result = {
     protocol: 1,
     kind: "result",

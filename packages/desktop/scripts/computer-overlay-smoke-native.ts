@@ -1,10 +1,13 @@
 import { spawn } from "node:child_process"
-import { createHash } from "node:crypto"
-import { lstat, readFile, realpath } from "node:fs/promises"
+import { lstat } from "node:fs/promises"
 import path from "node:path"
 import { screen, type BrowserWindow } from "electron"
 import { nativeId } from "../src/main/computer-overlay"
 import identity from "../native/computer-helper/identity.json"
+import {
+  ComputerSmokeNativeArtifactFailure,
+  verifyComputerSmokeNativeCatalog,
+} from "./computer-overlay-smoke-native-catalog"
 import {
   COMPUTER_SMOKE_NATIVE_MARK,
   COMPUTER_SMOKE_NATIVE_REASONS,
@@ -13,6 +16,7 @@ import {
   type ComputerSmokeReason,
   type ComputerSmokeNativePhase,
   type ComputerSmokeNativeCause,
+  type ComputerSmokeNativeRole,
 } from "./computer-overlay-smoke-report"
 
 // C2 supplies this literal in the exact source-bound prebuilt smoke bundle, before compiling the
@@ -29,7 +33,6 @@ const record = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value)
 const exact = (value: Record<string, unknown>, keys: readonly string[]) =>
   Object.keys(value).every((key) => keys.includes(key))
-const sha = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex")
 const hex = (value: unknown): value is string => typeof value === "string" && /^[0-9a-f]{64}$/.test(value)
 const unavailable = (reason: ComputerSmokeReason): Proof => ({
   stop: { ok: false, skipped: true, reason },
@@ -65,66 +68,6 @@ function outcome(value: unknown): Outcome {
               : "native_proof_invalid"
   return value.ok ? { ok: true } : value.skipped ? { ok: false, skipped: true, reason } : { ok: false, reason }
 }
-async function verifiedDriver(root: string) {
-  const canonical = await realpath(root)
-  const manifestFile = path.join(canonical, "computer-overlay-smoke.json")
-  const status = await lstat(manifestFile).catch((error: NodeJS.ErrnoException) => {
-    if (error.code === "ENOENT") return
-    throw error
-  })
-  if (!status) return undefined
-  if (!status.isFile() || status.isSymbolicLink() || status.size > 1024 * 1024 || !hex(sourceDigest))
-    throw new Error("The native smoke manifest is invalid.")
-  const manifest: unknown = JSON.parse(await readFile(manifestFile, "utf8"))
-  if (
-    !record(manifest) ||
-    manifest.platform !== process.platform ||
-    manifest.helperVersion !== identity.helperVersion ||
-    manifest.sourceDigest !== sourceDigest ||
-    !record(manifest.protocol) ||
-    manifest.protocol.min !== identity.protocol.min ||
-    manifest.protocol.max !== identity.protocol.max ||
-    !record(manifest.files)
-  )
-    throw new Error("The native smoke artifact does not match its compiled source.")
-  // The CI launcher owns C2 source/provenance admission before staging. Repeat the exact staged
-  // byte checks here; neither an environment variable nor a self-asserted native report is a pin.
-  for (const [relative, metadata] of Object.entries(manifest.files)) {
-    if (
-      !record(metadata) ||
-      !hex(metadata.sha256) ||
-      !Array.isArray(metadata.arch) ||
-      !metadata.arch.includes(process.arch) ||
-      relative.includes("\\") ||
-      relative.startsWith("/") ||
-      relative.split("/").some((part) => !part || part === "." || part === "..")
-    )
-      throw new Error("The native smoke file catalog is invalid.")
-    const file = path.join(canonical, ...relative.split("/")),
-      info = await lstat(file)
-    if (
-      !info.isFile() ||
-      info.isSymbolicLink() ||
-      info.size < 1 ||
-      info.size > 512 * 1024 * 1024 ||
-      !(await realpath(file)).startsWith(canonical + path.sep) ||
-      sha(await readFile(file)) !== metadata.sha256
-    )
-      throw new Error("A native smoke artifact failed its byte check.")
-  }
-  const relative =
-    process.platform === "win32"
-      ? "resources/computer/vector-computer.exe"
-      : "resources/computer/VectorComputerOverlayDriver.app/Contents/MacOS/VectorComputerOverlayDriver"
-  for (const mandatory of [
-    relative,
-    "smoke/computer-overlay-smoke-electron.mjs",
-    "smoke/computer-overlay-smoke-preload.cjs",
-    "smoke/computer-fake-helper.mjs",
-  ])
-    if (!Object.hasOwn(manifest.files, mandatory)) throw new Error("A required native smoke file is absent.")
-  return path.join(canonical, ...relative.split("/"))
-}
 function nativeRect(window: BrowserWindow, value: Electron.Rectangle): Rect {
   const native = process.platform === "win32" ? screen.dipToScreenRect(window, value) : value
   return { x: native.x, y: native.y, w: native.width, h: native.height }
@@ -139,7 +82,13 @@ type NativeProofInput = {
 }
 type NativeDiagnosticState = {
   phase: ComputerSmokeNativePhase
-  failure?: { phase: ComputerSmokeNativePhase; cause: ComputerSmokeNativeCause }
+  failure?: {
+    phase: ComputerSmokeNativePhase
+    cause: ComputerSmokeNativeCause
+    role?: ComputerSmokeNativeRole
+    ordinal?: number
+    architecture?: "x64" | "arm64"
+  }
 }
 function emitNativeDiagnostic(value: unknown) {
   try {
@@ -154,6 +103,7 @@ export async function runComputerNativeOverlayProof(input: NativeProofInput): Pr
   try {
     return await nativeProof(input, diagnostic)
   } catch (error) {
+    if (error instanceof ComputerSmokeNativeArtifactFailure) diagnostic.failure ??= error.diagnostic
     if (hex(sourceDigest))
       emitNativeDiagnostic({
         protocol: 1,
@@ -175,11 +125,27 @@ async function nativeProof(input: NativeProofInput, diagnostic: NativeDiagnostic
     if (manifest) throw new Error("A staged native smoke bundle has no compiled source admission.")
     return unavailable("native_harness_unavailable")
   }
-  const executable = await verifiedDriver(input.root)
+  const executable = await verifyComputerSmokeNativeCatalog(input.root, {
+    platform: process.platform,
+    architecture: process.arch,
+    helperVersion: identity.helperVersion,
+    sourceDigest,
+    protocol: identity.protocol,
+  })
   if (!executable) return unavailable("native_harness_unavailable")
   if (process.env.VECTOR_COMPUTER_TEST_ISOLATED !== "1") return unavailable("isolated_desktop_required")
-  if (!hex(input.nonce) || input.banner.isDestroyed() || input.underlay.isDestroyed())
+  if (!hex(input.nonce)) {
+    diagnostic.failure = { phase: "artifact", cause: "target_nonce" }
     throw new Error("The finite native target is invalid.")
+  }
+  if (input.banner.isDestroyed()) {
+    diagnostic.failure = { phase: "artifact", cause: "target_banner" }
+    throw new Error("The finite native target is invalid.")
+  }
+  if (input.underlay.isDestroyed()) {
+    diagnostic.failure = { phase: "artifact", cause: "target_underlay" }
+    throw new Error("The finite native target is invalid.")
+  }
   diagnostic.phase = "button"
   const rect: unknown = await input.banner.webContents.executeJavaScript(
     "(() => { const button = document.querySelector('button[data-action=stop]'); if (!button || button.textContent !== 'Stop' || button.disabled) return null; const box = button.getBoundingClientRect(); return {x:box.x,y:box.y,w:box.width,h:box.height} })()",
