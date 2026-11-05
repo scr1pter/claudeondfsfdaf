@@ -197,7 +197,8 @@ enum AccessibilityNative {
         let string: String?
         if CFGetTypeID(raw) == CFURLGetTypeID() { string = completeString(CFURLGetString(raw as! CFURL), limit: 4096) }
         else { string = completeString(raw, limit: 4096) }
-        guard let string, !string.contains("\0"), let url = URL(string: string), url.isFileURL,
+        // Reject encoded NUL before relying on Foundation's platform-dependent filesystem path conversion.
+        guard let string, !string.contains("\0"), !string.contains("%00"), let url = URL(string: string), url.isFileURL,
               url.query == nil, url.fragment == nil, !url.path.contains("\0"), url.path.hasPrefix("/"),
               url.host == nil || url.host == "" || url.host == "localhost" else { return nil }
         return url

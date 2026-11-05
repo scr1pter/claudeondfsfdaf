@@ -661,11 +661,17 @@ func runAccessibilityTests() throws -> Int {
         let prefix = "file:///virtual/Documents/" + String(repeating: "x", count: 4100)
         try accessibilityCheck(AccessibilityNative.documentURL(prefix as CFString) == nil,
                                "A truncated 4096-unit file URL prefix never becomes positive native document proof")
-        for text in ["file:///virtual/a\0b", "file:///virtual/a%00b", "file:///virtual/a?query=secret",
-                     "file:///virtual/a#fragment", "file://remote.example/virtual/a", "https://example.test/a"] {
+        for (index, text) in ["file:///virtual/a\0b", "file:///virtual/a%00b", "file:///virtual/a?query=secret",
+                     "file:///virtual/a#fragment", "file://remote.example/virtual/a", "https://example.test/a"].enumerated() {
             try accessibilityCheck(AccessibilityNative.documentURL(text as CFString) == nil,
-                                   "Native document URL decoding refuses NUL, remote hosts, nonfiles and query/fragment ambiguity")
+                                   "Native document URL decoding refuses invalid fixture \(index + 1)")
         }
+        if let encodedNUL = CFURLCreateWithString(nil, "file:///virtual/a%00b" as CFString, nil) {
+            try accessibilityCheck(AccessibilityNative.documentURL(encodedNUL) == nil,
+                                   "Native CFURL input cannot bypass the encoded-NUL refusal")
+        }
+        try accessibilityCheck(AccessibilityNative.documentURL("file:///virtual/a%2500b" as CFString) != nil,
+                               "A literal percent filename stays distinct from an encoded NUL")
         try accessibilityCheck(AccessibilityNative.documentURL("file:///virtual/Documents/Fixture.txt" as CFString)?.path ==
                                "/virtual/Documents/Fixture.txt", "A complete local file URL retains its exact path without filesystem access")
         let boundary = String(repeating: "a", count: 499) + "😀" + "tail"
