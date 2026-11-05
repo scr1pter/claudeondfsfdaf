@@ -54,6 +54,12 @@ import {
 } from "./computer-overlay-smoke-report"
 import { runComputerNativeOverlayProof } from "./computer-overlay-smoke-native"
 import { COMPUTER_SMOKE_WINDOW_PROBE_MARK, computerSmokeWindowProbes } from "./computer-overlay-smoke-window-probe"
+import { observeComputerSmokeWindowRegions } from "./computer-overlay-smoke-window-region"
+import {
+  COMPUTER_SMOKE_WINDOW_REGION_MARK,
+  computerSmokeOuterWindowMatches,
+  computerSmokeWindowRegionSummary,
+} from "./computer-overlay-smoke-window-region-report"
 
 type WindowRecord = {
   window: BrowserWindow
@@ -233,9 +239,82 @@ async function properties() {
     .flatMap((display) => ComputerOverlayLayout.stripBounds(display).map((strip) => strip.bounds))
   expected.push(ComputerOverlayLayout.bannerBounds(screen.getPrimaryDisplay(), ComputerOverlayLayout.BANNER.max))
   const rectangle = (value: Electron.Rectangle) => JSON.stringify([value.x, value.y, value.width, value.height])
-  const boundsMatch = expected.every((bounds) =>
+  const outerBoundsMatch = expected.every((bounds) =>
     owned.some((record) => rectangle(record.window.getBounds()) === rectangle(bounds)),
   )
+  const regionBoundsMatch =
+    platform === "win32"
+      ? await (async () => {
+          const strips = expected.slice(0, -1)
+          const pairs = owned.flatMap((record) => {
+            const bounds = strips.find(
+              (bounds) =>
+                !record.config.webPreferences?.preload &&
+                record.config.x === bounds.x &&
+                record.config.y === bounds.y &&
+                record.config.width === bounds.width &&
+                record.config.height === bounds.height,
+            )
+            return bounds ? [{ record, bounds }] : []
+          })
+          if (
+            pairs.length !== strips.length ||
+            new Set(pairs.map((pair) => rectangle(pair.bounds))).size !== strips.length
+          )
+            return false
+          const physical = pairs.map((pair) => screen.dipToScreenRect(pair.record.window, pair.bounds))
+          const painted = (
+            await Promise.all(
+              pairs.map(async (pair) => {
+                try {
+                  const content = pair.record.window.getContentBounds()
+                  const box: unknown = await pair.record.window.webContents.executeJavaScript(
+                    `(() => { const glow = document.querySelector(".glow"); if (!glow) return null; const box = glow.getBoundingClientRect(); return [box.x, box.y, box.width, box.height]; })()`,
+                  )
+                  return (
+                    content.x === pair.bounds.x &&
+                    content.y === pair.bounds.y &&
+                    Array.isArray(box) &&
+                    box.length === 4 &&
+                    box[0] === 0 &&
+                    box[1] === 0 &&
+                    box[2] === pair.bounds.width &&
+                    box[3] === pair.bounds.height
+                  )
+                } catch {
+                  return false
+                }
+              }),
+            )
+          ).filter(Boolean).length
+          const native = await observeComputerSmokeWindowRegions(
+            pairs.map((pair, index) => ({
+              handle: pair.record.window.getNativeWindowHandle(),
+              expected: physical[index]!,
+            })),
+          )
+          const summary = computerSmokeWindowRegionSummary(physical, painted, native)
+          process.stdout.write(COMPUTER_SMOKE_WINDOW_REGION_MARK + JSON.stringify(summary) + "\n")
+          return (
+            summary.ok &&
+            owned
+              .filter((record) => !pairs.some((pair) => pair.record === record))
+              .every((record) =>
+                computerSmokeOuterWindowMatches(
+                  record.window.getBounds(),
+                  {
+                    x: record.config.x!,
+                    y: record.config.y!,
+                    width: record.config.width!,
+                    height: record.config.height!,
+                  },
+                  expected,
+                ),
+              )
+          )
+        })().catch(() => false)
+      : false
+  const boundsMatch = platform === "win32" ? regionBoundsMatch : outerBoundsMatch
   let geometry = 0
   if (!boundsMatch)
     for (const [window, record] of owned.entries()) {

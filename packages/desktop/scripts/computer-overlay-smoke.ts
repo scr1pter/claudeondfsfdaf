@@ -41,6 +41,10 @@ import {
   acceptComputerSmokeWindowProbe,
   type ComputerSmokeWindowProbe,
 } from "./computer-overlay-smoke-window-probe"
+import {
+  COMPUTER_SMOKE_WINDOW_REGION_MARK,
+  parseComputerSmokeWindowRegionSummary,
+} from "./computer-overlay-smoke-window-region-report"
 
 // Compiler-only module-local type; no Bun globals are added to renderer or Node declarations.
 declare const Bun: OverlayCompiler
@@ -180,6 +184,7 @@ export async function runComputerOverlaySmoke(args = process.argv.slice(2)) {
     let lastController: ComputerSmokeControllerStep | undefined
     const geometryWindows = new Set<number>()
     const windowProbes = new Set<ComputerSmokeWindowProbe["variant"]>()
+    let windowRegion = false
     const nativeDiagnostics = new Set<string>()
     let forcedCause: ComputerSmokeFailureCause | undefined
     const streamState: { childFailure?: ComputerSmokeFailureDiagnostic; loaderStarted: boolean; exception: boolean } = {
@@ -301,6 +306,18 @@ export async function runComputerOverlaySmoke(args = process.argv.slice(2)) {
               seen: windowProbes,
             })
             process.stdout.write(COMPUTER_SMOKE_WINDOW_PROBE_MARK + JSON.stringify(probe) + "\n")
+          } else if (line.startsWith(COMPUTER_SMOKE_WINDOW_REGION_MARK)) {
+            if (
+              process.platform !== "win32" ||
+              lastPhase !== "properties" ||
+              streamState.childFailure ||
+              streamState.exception ||
+              windowRegion
+            )
+              throw new Error("The window region receipt is out of phase or duplicated.")
+            const region = parseComputerSmokeWindowRegionSummary(line)
+            windowRegion = true
+            process.stdout.write(COMPUTER_SMOKE_WINDOW_REGION_MARK + JSON.stringify(region) + "\n")
           } else if (line.startsWith(COMPUTER_SMOKE_NATIVE_MARK)) {
             if (
               !stage ||
@@ -392,6 +409,7 @@ export async function runComputerOverlaySmoke(args = process.argv.slice(2)) {
       pendingLine.startsWith(COMPUTER_SMOKE_CONTROLLER_MARK) ||
       pendingLine.startsWith(COMPUTER_SMOKE_GEOMETRY_MARK) ||
       pendingLine.startsWith(COMPUTER_SMOKE_WINDOW_PROBE_MARK) ||
+      pendingLine.startsWith(COMPUTER_SMOKE_WINDOW_REGION_MARK) ||
       pendingLine.startsWith(COMPUTER_SMOKE_NATIVE_MARK) ||
       pendingLine.startsWith(COMPUTER_SMOKE_FAILURE_MARK) ||
       pendingLine.startsWith(COMPUTER_SMOKE_EXCEPTION_MARK) ||

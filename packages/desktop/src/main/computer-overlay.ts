@@ -211,6 +211,8 @@ export function createComputerOverlay(options: {
       pointerRule()
       return
     }
+    if (record.kind === "glow" && options.platform === "win32")
+      await record.window.webContents.executeJavaScript(ComputerOverlayPage.glowSizeScript(record.bounds))
     const view = record.kind === "glow" ? ComputerOverlayPage.glowView(current) : cursorView(current)
     if (view) await record.window.webContents.executeJavaScript(ComputerOverlayPage.messageScript(view))
   }
@@ -298,6 +300,9 @@ export function createComputerOverlay(options: {
     }
     const timeout = time.setTimeout(fail, 5000)
     windows.set(key, record)
+    // Windows may enforce a taller container; the actual visible region remains the requested strip.
+    if (options.platform === "win32" && kind === "glow")
+      window.setShape([{ x: 0, y: 0, width: bounds.width, height: bounds.height }])
     configureComputerOverlayWindow(window, options.platform)
     window.webContents.setWindowOpenHandler(() => ({ action: "deny" }))
     const navigate = (event: { preventDefault(): void }) => event.preventDefault()
@@ -339,6 +344,8 @@ export function createComputerOverlay(options: {
   function setBounds(record: OverlayWindow, bounds: Rect) {
     if (Object.keys(bounds).some((key) => bounds[key as keyof Rect] !== record.bounds[key as keyof Rect])) {
       record.window.setBounds(bounds)
+      if (options.platform === "win32" && record.kind === "glow")
+        record.window.setShape([{ x: 0, y: 0, width: bounds.width, height: bounds.height }])
       record.bounds = { ...bounds }
     }
   }

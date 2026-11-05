@@ -157,6 +157,9 @@ class FakeWindow extends EventEmitter {
     this.bounds = { ...bounds }
     this.calls.push({ method: "setBounds", args: [bounds] })
   }
+  setShape(rects: Electron.Rectangle[]) {
+    this.calls.push({ method: "setShape", args: [rects.map((rect) => ({ ...rect }))] })
+  }
   setIgnoreMouseEvents(ignore: boolean, extra?: unknown) {
     this.ignored = ignore
     this.calls.push({ method: "ignore", args: extra === undefined ? [ignore] : [ignore, extra] })
@@ -354,6 +357,54 @@ describe("computer overlay windows", () => {
     }
     expect(f.overlay.windowIds()).toEqual(f.live().map((window) => window.handle.toString()))
     f.overlay.close()
+  })
+
+  test("Windows glow regions and paint keep the requested layout inside taller native containers", async () => {
+    const f = fixture(1, "win32")
+    const create = f.electron.createWindow
+    const loaded: { shape: unknown; visible: boolean }[] = []
+    f.electron.createWindow = (config) => {
+      const result = create(config)
+      const window = f.windows.at(-1)!
+      if (config.height === 24) window.bounds.height = 39
+      const load = window.loadURL.bind(window)
+      window.loadURL = (url) => {
+        loaded.push({ shape: window.calls.findLast((call) => call.method === "setShape"), visible: window.visible })
+        return load(url)
+      }
+      return result
+    }
+    await f.open(state({ backend: "local-windows" }))
+    expect(loaded).toHaveLength(5)
+    expect(loaded.every((entry) => !entry.visible)).toBe(true)
+    for (const [index, window] of f.windows.slice(0, 4).entries()) {
+      const size = { width: window.config.width!, height: window.config.height! }
+      expect(loaded[index]!.shape).toEqual({ method: "setShape", args: [[{ x: 0, y: 0, ...size }]] })
+      expect(window.webContents.scripts).toContain(ComputerOverlayPage.glowSizeScript(size))
+    }
+    expect(f.windows[0]!.bounds.height).toBe(39)
+    expect(f.windows[2]!.bounds.height).toBe(39)
+    expect(loaded[4]!.shape).toBeUndefined()
+    f.screen.displays = [
+      {
+        ...display(1),
+        bounds: { x: 0, y: 0, width: 1360, height: 900 },
+        workArea: { x: 0, y: 24, width: 1360, height: 876 },
+      },
+    ]
+    f.screen.emit("display-metrics-changed")
+    await f.overlay.ready()
+    expect(f.windows[0]!.calls.findLast((call) => call.method === "setShape")).toEqual({
+      method: "setShape",
+      args: [[{ x: 0, y: 0, width: 1360, height: 24 }]],
+    })
+    expect(f.windows[0]!.webContents.scripts.at(-2)).toBe(
+      ComputerOverlayPage.glowSizeScript({ width: 1360, height: 24 }),
+    )
+    expect(f.banner().calls.some((call) => call.method === "setShape")).toBe(false)
+    f.overlay.close()
+    expect(f.live()).toHaveLength(0)
+    expect(f.clock.count()).toBe(0)
   })
 
   test("macOS exclusions use CGWindowID instead of NSView pointers", async () => {

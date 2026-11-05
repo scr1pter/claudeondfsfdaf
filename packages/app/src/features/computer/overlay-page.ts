@@ -164,6 +164,13 @@ export function messageScript(message: OverlayMessage) {
   return `window.postMessage(${json(message)}, "*")`
 }
 
+/** Keep the glow's layout at its visible strip size when a native container is larger. */
+export function glowSizeScript(size: Pick<ComputerOverlayLayout.Rect, "width" | "height">) {
+  if (![size.width, size.height].every((value) => Number.isSafeInteger(value) && value > 0 && value <= 1_000_000))
+    throw new Error("The computer glow size is invalid.")
+  return `(() => { const glow = document.querySelector(".glow"); if (!glow) return; glow.style.width = "${size.width}px"; glow.style.height = "${size.height}px"; glow.style.right = "auto"; glow.style.bottom = "auto"; })()`
+}
+
 /** A page as a data URL. Base64, because a `#` in a CSS colour would end a plain data URL. */
 export function pageUrl(html: string) {
   const binary = Array.from(new TextEncoder().encode(html), (byte) => String.fromCharCode(byte)).join("")

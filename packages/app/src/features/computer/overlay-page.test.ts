@@ -412,6 +412,22 @@ describe("page script", () => {
     node.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, detail }))
   const banner = (patch: Partial<Computer.ComputerState>) => ComputerOverlayPage.bannerView(state(patch))!
 
+  test("a glow's visible layout can stay 24px high and update independently of its native viewport", () => {
+    load(ComputerOverlayPage.glowStripPage("bottom"))
+    new Function(ComputerOverlayPage.glowSizeScript({ width: 1024, height: 24 }))()
+    const glow = document.querySelector<HTMLElement>(".glow")!
+    expect(glow.style.width).toBe("1024px")
+    expect(glow.style.height).toBe("24px")
+    expect(glow.style.right).toBe("auto")
+    expect(glow.style.bottom).toBe("auto")
+    expect(styleOf(ComputerOverlayPage.glowStripPage("bottom"))).toContain(".layer { inset: -400px 0 0 0; }")
+    new Function(ComputerOverlayPage.glowSizeScript({ width: 1360, height: 24 }))()
+    expect(glow.style.width).toBe("1360px")
+    expect(glow.style.height).toBe("24px")
+    for (const width of [0, -1, 1.5, Infinity, 1_000_001])
+      expect(() => ComputerOverlayPage.glowSizeScript({ width, height: 24 })).toThrow()
+  })
+
   test("a label containing markup renders as text", () => {
     load(ComputerOverlayPage.bannerPage())
     send(banner({ step: "Clicking “<b>Save</b>” in <i>Numbers</i>", queue: [{ sessionID: "q", title: "x" }] }))
