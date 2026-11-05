@@ -3,6 +3,8 @@ import { readdirSync } from "node:fs"
 import path from "node:path"
 import { Schema } from "effect"
 
+import identity from "../../native/computer-helper/identity.json" with { type: "json" }
+
 import { Computer } from "@vectordevai/schema/computer"
 import { ComputerApps } from "@vectordevai/schema/computer-apps"
 import { ComputerProgram } from "@vectordevai/core/computer/program"
@@ -2253,7 +2255,7 @@ describe("options", () => {
     const version = run("--version", "--json")
     expect(version.code).toBe(0)
     expect(JSON.parse(version.out)).toMatchObject({
-      helperVersion: "1.0.0",
+      helperVersion: identity.helperVersion,
       protocol: { min: 1, max: 1 },
       platform: "darwin",
     })
