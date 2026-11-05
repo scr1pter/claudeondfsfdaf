@@ -808,3 +808,8 @@ Closed facts in focused Node run42036080080 at0634dba7 prove the repaired lifeti
 ### Typed Node bridge fixture state
 
 Focused Node run42037014653 at15b23f23 proves app approval, sensitive approval and one actual fake-bridge click, with both HTTP permission IDs consumed once and the lease correctly released. Its post-click decode then fails because the fixture's ComputerState used backend=fake and released phase=idle, neither allowed by that wire schema. It now uses local-macos and ready. The separate Capabilities backend remains fake. State, inspect and every handled command response now use type-only checks against the shared schemas; no runtime schema dependency is introduced into the unbundled Node script. Engine typecheck passes. All image, target/frame/digest, approval and cleanup assertions remain unchanged for the next actual run.
+
+
+### Independent matching Mac core matrix admission
+
+The native workflow now publishes source/hash-verified Mac helper/test archives only after required core, channel/version/toolchain admission and the enforced production lock. A native-ready output requires successful fresh uploads or independently reverified immutable restore. Intel/macOS26 matrix jobs use always plus that exact ready output, so a later signing/Electron failure does not hide their core results. Failed/canceled/unready native work cannot start the matrix. Complete mac-build/reusable/release failures are retained; early CI archives are not release approval. Actual routing/order/readiness19 tests/688 assertions, overlay workflow5/66 and actionlint pass.

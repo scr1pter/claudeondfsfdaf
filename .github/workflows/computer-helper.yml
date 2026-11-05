@@ -189,6 +189,7 @@ jobs:
       DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
     outputs:
       digest: ${{ steps.digest.outputs.value }}
+      native-ready: ${{ steps.native-ready.outputs.value }}
     defaults:
       run:
         shell: bash
@@ -329,6 +330,59 @@ jobs:
         env:
           VECTOR_COMPUTER_HELPER_PREBUILT: "true"
         run: bun --no-env-file ./scripts/build-computer-helper.ts --platform darwin --arch universal --channel "$VECTOR_CHANNEL" --out native/out/darwin --check-lock
+      - name: Require the measured macOS helper version and toolchain for this channel
+        timeout-minutes: 2
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFileSync } from "node:fs"
+          const lock = JSON.parse(readFileSync("native/computer-helper/macos/identity.lock.json", "utf8"))
+          const manifest = JSON.parse(readFileSync("native/out/darwin/computer-helper.json", "utf8"))
+          if (lock.enforce !== true || lock.helperVersion !== manifest.helperVersion || lock.toolchain !== manifest.toolchain)
+            throw new Error("The channel helper does not match the measured production version and toolchain.")
+          NODE
+      - name: Expose the verified source digest
+        id: digest
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFileSync, appendFileSync } from "node:fs"
+          const manifest = JSON.parse(readFileSync("native/out/darwin/computer-helper.json", "utf8"))
+          appendFileSync(process.env.GITHUB_OUTPUT, "value=" + manifest.sourceDigest + "\n")
+          NODE
+      - name: Archive shipping files and native test executables separately
+        if: ${{ steps.restore.outputs.restored != 'true' }}
+        env:
+          COPYFILE_DISABLE: "1"
+        run: |
+          set -euo pipefail
+          tar -cpf "$RUNNER_TEMP/computer-helper-darwin.tar" --format=ustar --no-xattrs --no-acls --no-fflags -C native/out/darwin VectorComputer.app computer-helper.json
+          tar -cpf "$RUNNER_TEMP/computer-helper-darwin-tests.tar" --format=ustar --no-xattrs --no-acls --no-fflags -C native/out/darwin tests
+      - name: Upload shipping helper
+        id: shipping-artifact
+        if: ${{ steps.restore.outputs.restored != 'true' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: computer-helper-darwin-${{ needs.plan.outputs.suffix }}
+          path: ${{ runner.temp }}/computer-helper-darwin.tar
+          if-no-files-found: error
+          overwrite: ${{ !inputs['reuse-artifacts'] }}
+          retention-days: 14
+      - name: Upload native tests
+        id: native-tests-artifact
+        if: ${{ steps.restore.outputs.restored != 'true' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: computer-helper-darwin-tests-${{ needs.plan.outputs.suffix }}
+          path: ${{ runner.temp }}/computer-helper-darwin-tests.tar
+          if-no-files-found: error
+          overwrite: ${{ !inputs['reuse-artifacts'] }}
+          retention-days: 14
+      # These admitted artifacts let the independent matrix diagnose the same bytes even if a later
+      # signing/Electron fixture fails. The complete reusable workflow remains a release dependency.
+      - name: Admit verified native artifacts for the independent macOS matrix
+        id: native-ready
+        if: ${{ success() && (steps.restore.outputs.restored == 'true' || (steps['shipping-artifact'].outcome == 'success' && steps['native-tests-artifact'].outcome == 'success')) }}
+        timeout-minutes: 1
+        run: echo "value=true" >> "$GITHUB_OUTPUT"
       - name: Check helper signing contracts and actual Node modules
         timeout-minutes: 3
         run: |
@@ -397,16 +451,6 @@ jobs:
           fi
           /usr/bin/security delete-keychain "$signing_dir/signing.keychain-db" >/dev/null 2>&1 || true
           rm -rf "$signing_dir"
-      - name: Require the measured macOS helper version and toolchain for this channel
-        timeout-minutes: 2
-        run: |
-          node --input-type=module <<'NODE'
-          import { readFileSync } from "node:fs"
-          const lock = JSON.parse(readFileSync("native/computer-helper/macos/identity.lock.json", "utf8"))
-          const manifest = JSON.parse(readFileSync("native/out/darwin/computer-helper.json", "utf8"))
-          if (lock.enforce !== true || lock.helperVersion !== manifest.helperVersion || lock.toolchain !== manifest.toolchain)
-            throw new Error("The channel helper does not match the measured production version and toolchain.")
-          NODE
       - name: Install the exact pinned Electron runtime
         if: ${{ needs.plan.outputs.desktop == 'true' }}
         timeout-minutes: 5
@@ -457,40 +501,6 @@ jobs:
           if-no-files-found: error
           overwrite: ${{ !inputs['reuse-artifacts'] }}
           retention-days: 14
-      - name: Expose the verified source digest
-        id: digest
-        run: |
-          node --input-type=module <<'NODE'
-          import { readFileSync, appendFileSync } from "node:fs"
-          const manifest = JSON.parse(readFileSync("native/out/darwin/computer-helper.json", "utf8"))
-          appendFileSync(process.env.GITHUB_OUTPUT, "value=" + manifest.sourceDigest + "\n")
-          NODE
-      - name: Archive shipping files and native test executables separately
-        if: ${{ steps.restore.outputs.restored != 'true' }}
-        env:
-          COPYFILE_DISABLE: "1"
-        run: |
-          set -euo pipefail
-          tar -cpf "$RUNNER_TEMP/computer-helper-darwin.tar" --format=ustar --no-xattrs --no-acls --no-fflags -C native/out/darwin VectorComputer.app computer-helper.json
-          tar -cpf "$RUNNER_TEMP/computer-helper-darwin-tests.tar" --format=ustar --no-xattrs --no-acls --no-fflags -C native/out/darwin tests
-      - name: Upload shipping helper
-        if: ${{ steps.restore.outputs.restored != 'true' }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: computer-helper-darwin-${{ needs.plan.outputs.suffix }}
-          path: ${{ runner.temp }}/computer-helper-darwin.tar
-          if-no-files-found: error
-          overwrite: ${{ !inputs['reuse-artifacts'] }}
-          retention-days: 14
-      - name: Upload native tests
-        if: ${{ steps.restore.outputs.restored != 'true' }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: computer-helper-darwin-tests-${{ needs.plan.outputs.suffix }}
-          path: ${{ runner.temp }}/computer-helper-darwin-tests.tar
-          if-no-files-found: error
-          overwrite: ${{ !inputs['reuse-artifacts'] }}
-          retention-days: 14
       - name: Preserve measured lock candidate
         if: ${{ always() && (inputs['helper-channel'] || 'prod') == 'prod' && hashFiles('packages/desktop/native/out/darwin/identity.lock.computed.json') != '' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -512,7 +522,7 @@ jobs:
 
   mac-test:
     needs: [plan, mac-build]
-    if: ${{ !inputs['linux-only'] && !inputs['windows-only'] && needs.plan.outputs.extended == 'true' }}
+    if: ${{ always() && !cancelled() && !inputs['linux-only'] && !inputs['windows-only'] && needs.plan.outputs.extended == 'true' && needs['mac-build'].outputs['native-ready'] == 'true' }}
     strategy:
       fail-fast: false
       matrix:

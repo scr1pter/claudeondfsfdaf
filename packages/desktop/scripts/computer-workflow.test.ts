@@ -37,6 +37,7 @@ function expression(
   event = "workflow_dispatch",
   ref = "refs/heads/hands",
   needs: Record<string, unknown> = {},
+  status: { cancelled?: boolean } = {},
 ) {
   // GitHub permits hyphens in dotted property names; translate those accesses outside string literals.
   const code = value
@@ -49,6 +50,8 @@ function expression(
     {
       inputs,
       needs,
+      always: () => true,
+      cancelled: () => status.cancelled ?? false,
       github: {
         workflow: "test",
         ref,
@@ -259,7 +262,10 @@ test("Windows-only dispatch is explicit, native-only and independent of all-nati
 })
 
 test("Windows-only native coverage keeps both architectures and required checks while skipping macOS", () => {
-  const needs = { plan: { outputs: { extended: "true", windows: "true", "windows-protocol": "true" } } }
+  const needs = {
+    plan: { outputs: { extended: "true", windows: "true", "windows-protocol": "true" } },
+    "mac-build": { result: "success", outputs: { "native-ready": "true" } },
+  }
   for (const windows of [false, true]) {
     const inputs = { "windows-only": windows }
     for (const name of ["mac-build", "mac-test"])
@@ -502,6 +508,7 @@ test("Linux-only dispatch keeps ordinary gates and native cancellation groups in
 test("Linux-only runs both real Electron lanes and skips every native OS lane", () => {
   const needs = {
     plan: { outputs: { extended: "true", windows: "true", "windows-protocol": "true", desktop: "true" } },
+    "mac-build": { result: "success", outputs: { "native-ready": "true" } },
   }
   for (const mode of [{}, { "windows-only": true }, { "linux-only": true }]) {
     for (const name of nativeJobs) {
@@ -565,4 +572,90 @@ test("the actual native plan refuses simultaneous Linux-only and Windows-only se
       expect(result.status).toBe(linux === "true" && windows === "true" ? 1 : 0)
       if (result.status === 1) expect(result.stdout).toContain("linux-only and windows-only cannot both be selected")
     }
+})
+
+test("macOS admits matrix artifacts only after core and lock checks, before signing or Electron fixtures", () => {
+  const build = job("mac-build")
+  const current = steps(build)
+  const index = (name: string) => current.findIndex((step) => step.name === name)
+  const ordered = [
+    "Run required grant-free native checks",
+    "Summarize native checks without payloads",
+    "Enforce the measured production identity lock",
+    "Require the measured macOS helper version and toolchain for this channel",
+    "Expose the verified source digest",
+    "Archive shipping files and native test executables separately",
+    "Upload shipping helper",
+    "Upload native tests",
+    "Admit verified native artifacts for the independent macOS matrix",
+    "Check helper signing contracts and actual Node modules",
+    "Install the pinned Electron runtime for the unsigned signing fixture",
+    "Run real Electron overlay properties and controller lifecycle",
+  ].map(index)
+  for (const position of ordered) expect(position).toBeGreaterThanOrEqual(0)
+  expect(ordered).toEqual(ordered.toSorted((first, second) => first - second))
+  const ready = current.find((step) => step.id === "native-ready")!
+  expect(record(build.outputs)["native-ready"]).toBe("${{ steps.native-ready.outputs.value }}")
+  expect(ready.run).toBe('echo "value=true" >> "$GITHUB_OUTPUT"')
+  expect(ready["continue-on-error"]).toBeUndefined()
+  for (const step of current.slice(
+    index("Expose the verified source digest"),
+    index("Check helper signing contracts and actual Node modules"),
+  )) {
+    expect(step["continue-on-error"]).toBeUndefined()
+    expect(String(step.if ?? "")).not.toContain("always()")
+  }
+  const code = String(ready.if).replace(/^\s*\$\{\{([\s\S]*)\}\}\s*$/, "$1")
+  for (const successful of [false, true])
+    for (const restored of [false, true])
+      for (const shipping of ["success", "failure", "skipped"])
+        for (const tests of ["success", "failure", "skipped"])
+          expect(
+            runInNewContext(
+              code,
+              {
+                success: () => successful,
+                steps: {
+                  restore: { outputs: { restored: String(restored) } },
+                  "shipping-artifact": { outcome: shipping },
+                  "native-tests-artifact": { outcome: tests },
+                },
+              },
+              { timeout: 100 },
+            ),
+          ).toBe(successful && (restored || (shipping === "success" && tests === "success")))
+})
+
+test("the macOS matrix can diagnose admitted artifacts after later fixture failures without authorizing release", () => {
+  const matrix = job("mac-test")
+  expect(matrix.needs).toEqual(["plan", "mac-build"])
+  expect(String(matrix.if)).toContain("always()")
+  for (const result of ["success", "failure", "cancelled", "skipped"])
+    for (const ready of ["true", "false", ""])
+      for (const extended of ["true", "false"]) {
+        const needs = {
+          plan: { result: "success", outputs: { extended } },
+          "mac-build": { result, outputs: { "native-ready": ready } },
+        }
+        expect(expression(String(matrix.if), {}, "workflow_dispatch", "refs/heads/hands", needs)).toBe(
+          ready === "true" && extended === "true",
+        )
+        expect(
+          expression(String(matrix.if), {}, "workflow_dispatch", "refs/heads/hands", needs, { cancelled: true }),
+        ).toBe(false)
+        for (const inputs of [{ "windows-only": true }, { "linux-only": true }])
+          expect(expression(String(matrix.if), inputs, "workflow_dispatch", "refs/heads/hands", needs)).toBe(false)
+      }
+  expect(job("mac-build")["continue-on-error"]).toBeUndefined()
+  expect(matrix["continue-on-error"]).toBeUndefined()
+  const release = record(workflow("vector-desktop-release.yml").document.jobs)
+  for (const name of ["mac", "windows"]) {
+    const current = record(release[name])
+    expect(current.needs).toContain("computer-helper")
+    expect(String(current.if ?? "")).not.toMatch(/always\(\)|native-ready/)
+    expect(current["continue-on-error"]).toBeUndefined()
+  }
+  const helperRelease = record(release["computer-helper"])
+  expect(helperRelease.uses).toBe("./.github/workflows/computer-helper.yml")
+  expect(helperRelease["continue-on-error"]).toBeUndefined()
 })
