@@ -7,6 +7,15 @@ import type { PhoneAlertEvent, QuietHours } from "@/context/settings"
 
 export const PHONE_APP_ADDRESS = "remote.vectordev.ai"
 
+/**
+ * What a phone alert from this computer holds, as Settings says it. `alertTitle` (context/phone-alerts.ts) builds each
+ * title from the session's name, and a new session's name is the first line of its first message until a better one
+ * is made, so this never promises that alerts leave out what was typed. remote-notify.ts seals every alert under the
+ * computer's alert key, which only paired phones hold.
+ */
+export const PHONE_ALERT_CONTENT =
+  "Alerts show a short title, such as the session's name, sealed so only your paired phones can read it."
+
 export const PHONE_ALERT_EVENTS: readonly { event: PhoneAlertEvent; title: string; description: string }[] = [
   { event: "finished", title: "An agent finished", description: "When a task you started on this computer finishes." },
   { event: "needsYou", title: "An agent needs you", description: "When an agent waits for an answer or a permission." },

@@ -8,7 +8,7 @@
 
 import { base64url, fromBase64url } from "./bytes"
 import { INTERNAL_NONCE_KEEP_MS } from "./internal"
-import { RELAY_LIMITS } from "./limits"
+import { RELAY_LIMITS, VIEWER_HOURS, type PlanRank } from "./limits"
 import {
   CLOSE,
   CLOSE_REASON,
@@ -46,7 +46,7 @@ export const INTERNAL_ACTIONS = ["kill", "suspend", "presence", "devices", "revo
 export type InternalAction = (typeof INTERNAL_ACTIONS)[number]
 
 type Attachment = { v: 1; role: DeviceRole; dev: string; iat: number; exp: number; at: number; active: number }
-type Plan = { epoch: string; periodEnd: number; computers: number; viewerHours: number; iat: number }
+type Plan = { epoch: string; periodEnd: number; computers: number; rank: PlanRank; iat: number }
 type Suspension = { reason: SuspendReason; at: number }
 type SuspendReason = "paused" | "frozen" | "owner"
 type DeviceRow = {
@@ -89,11 +89,19 @@ export class AccountRelay {
   private readonly closing = new WeakSet<RelaySocket>()
   private readonly ids = new Map<string, Uint8Array>()
   private announced: Partial<Record<DeviceRole, string>> = {}
+  private readonly viewerHours: Readonly<Record<PlanRank, number>>
 
-  constructor(ctx: DurableObjectState, env: Env, runtime: Runtime = workersRuntime()) {
+  /** The runtime calls this with `ctx` and `env`; tests pass a fake runtime and may pass smaller viewer-hours. */
+  constructor(
+    ctx: DurableObjectState,
+    env: Env,
+    runtime: Runtime = workersRuntime(),
+    viewerHours: Readonly<Record<PlanRank, number>> = VIEWER_HOURS,
+  ) {
     this.ctx = ctx
     this.env = env
     this.runtime = runtime
+    this.viewerHours = viewerHours
     this.migrate()
     ctx.setWebSocketAutoResponse(runtime.autoResponse(HEARTBEAT.request, HEARTBEAT.response))
     this.plan = this.meta<Plan>("plan")
@@ -171,12 +179,13 @@ export class AccountRelay {
     if (!handle) return failure(503, "RELAY_UNAVAILABLE")
     const known = this.meta<string>("account")
     if (known !== undefined && known !== handle) return failure(409, "RELAY_MISROUTED")
-    if (known === undefined) this.setMeta("account", handle)
     if (!this.once(`t:${claims.jti}`, (claims.exp + RELAY_LIMITS.ticketSkewSeconds) * 1000, now))
       return failure(401, "RELAY_TICKET_USED")
     this.sweep(now)
     let refusal = this.standing(claims)
     if (refusal === undefined) {
+      // Written only once the ticket stands, so a refused one (from before an erasure, say) stores no account.
+      if (known === undefined) this.setMeta("account", handle)
       this.applyPlan(claims, now)
       refusal = this.admission(claims, now)
     }
@@ -259,14 +268,14 @@ export class AccountRelay {
       current.epoch === claims.epoch &&
       current.periodEnd === claims.periodEnd &&
       current.computers === claims.computers &&
-      current.viewerHours === claims.viewerHours
+      current.rank === claims.rank
     )
       return
     const next: Plan = {
       epoch: claims.epoch,
       periodEnd: claims.periodEnd,
       computers: claims.computers,
-      viewerHours: claims.viewerHours,
+      rank: claims.rank,
       iat: claims.iat,
     }
     if (current && current.epoch !== next.epoch) {
@@ -574,7 +583,8 @@ export class AccountRelay {
   private fairUse(now: number): FairUse {
     const plan = this.plan
     if (!plan) return "ok"
-    const limit = plan.viewerHours * 3_600_000
+    // §4.2's viewer-hours stay here, by the ticket's public rank; a plan stored without a known rank allows nothing.
+    const limit = (this.viewerHours[plan.rank] ?? 0) * 3_600_000
     const since = this.meta<number>("viewing_since")
     const viewer = this.meter(plan.epoch, "viewer") + (since !== undefined ? Math.max(0, now - since) : 0)
     const awake = this.meter(plan.epoch, "awake") + this.awakePending
@@ -772,9 +782,18 @@ export class AccountRelay {
     return answer({ revoked: true, closed: sockets.length })
   }
 
-  /** Account deletion (P5, called by A57): every connection closes and everything stored here is deleted. */
+  /**
+   * Account deletion (P5, called by A57): every connection closes and everything stored here is deleted. Two things
+   * that hold nothing about the account stay, so a ticket or signed call from before the erasure cannot fill the object
+   * again: the random ids already used (ticket jti, internal nonces) until they expire, and a revocation time that
+   * refuses every ticket issued up to now, allowing for an issuer's clock up to the ticket skew ahead of this one.
+   */
   private async erase(now: number) {
     for (const socket of this.live()) this.drop(socket, CLOSE.REMOTE_REVOKED)
+    const used = this.sql<{ id: string; expires_at: number }>(
+      "SELECT id, expires_at FROM seen WHERE expires_at >= ?",
+      now,
+    )
     await this.ctx.storage.deleteAlarm()
     await this.ctx.storage.deleteAll()
     this.plan = undefined
@@ -782,6 +801,8 @@ export class AccountRelay {
     this.flushedAt = now
     this.announced = {}
     this.migrate()
+    for (const row of used) this.sql("INSERT INTO seen (id, expires_at) VALUES (?, ?)", row.id, row.expires_at)
+    this.setMeta("revoked_before", now + RELAY_LIMITS.ticketSkewSeconds * 1000)
     return answer({ erased: true })
   }
 

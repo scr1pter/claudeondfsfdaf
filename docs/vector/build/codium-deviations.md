@@ -1184,3 +1184,24 @@ outcome, verdict, actor.login` pass. Every paid plan includes it while the plan 
 - **A36's dependency on A43** is not used: nothing here needs the Vault core. It builds on A37's `r2-presign.ts`.
 - **Not built here:** the estimate API's `{kind: "playbook", id}` band (model-plan-estimate.ts already leaves
   playbooks to Track B) and every client piece (B07).
+
+## P6 review decisions (4 Nov 2026)
+
+- **A39/A40: tickets carry the plan's rank, not its viewer-hours.** §4.2 lists Remote's viewer-hours as a server-only
+  limit ("not shipped to clients"), but A39 put `viewerHours` in the ticket's claims, and a ticket is plain base64url
+  JSON that `POST /api/remote/ticket` hands to the desktop and the phone. A39's "device and fair-use caps from the
+  ticket" now reads as: the ticket carries the public caps (`computers`, and `rank` from ENTITLEMENTS, which every
+  status answer already shows), and the relay holds the viewer-hours itself, by rank (`VIEWER_HOURS` in
+  `packages/relay/src/limits.ts`, Plus 1 to Ultra 4). `test/remote-relay-contract.test.ts` keeps that table equal to
+  `REMOTE_LIMITS.viewerHours` plan by plan, and the API still refuses a plan with no viewer-hours entry. The relay's
+  `RELAY_LIMITS.maxViewerHours` is gone with the claim. `AccountRelay` takes an optional fourth constructor argument,
+  a viewer-hours table, which only the tests pass (the runtime calls it with `ctx` and `env`), so the fair-use cases
+  can still use up a one-hour allowance.
+- **A39: erase keeps two things that hold nothing about the account.** P5 asks that everything the relay object
+  stored be deleted, but deleting the used ticket ids and the revocation time let a ticket from before the erasure
+  register its device again. After `deleteAll()` the object keeps the unexpired `seen` ids (random ticket jti and
+  internal nonces, gone when they expire) and `revoked_before` = the erasure time plus the 60 s ticket skew. The
+  account handle is now written only once a ticket passes the standing check, so a refused ticket stores none.
+- **A38/A41: alert copy.** The Settings and phone copy no longer say alerts never hold code or prompts: an alert's title
+  carries the session's name, which starts as the first line of what was typed. The wording is in
+  `PHONE_ALERT_CONTENT`, and a test ties it to `alertTitle`.

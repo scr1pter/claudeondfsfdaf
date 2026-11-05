@@ -49,7 +49,7 @@ function ticket(overrides: Partial<TicketClaims>) {
       role: "computer",
       dev: device(),
       computers: 3,
-      viewerHours: 100,
+      rank: 2,
       epoch: "smoke_epoch_0000001",
       periodEnd: Date.now() + 86_400_000,
       iat,
@@ -166,7 +166,7 @@ try {
         role: "phone",
         dev: device(),
         computers: 3,
-        viewerHours: 100,
+        rank: 2,
         epoch: "smoke_epoch_0000001",
         periodEnd: Date.now() + 1,
         iat,
@@ -251,12 +251,15 @@ try {
     on.socket.close()
   })
 
-  await check("erase closes everything and leaves no device", async () => {
+  await check("erase closes everything, leaves no device and refuses tickets issued before it", async () => {
     const live = await open(await ticket({ role: "computer", dev: computerId }))
     await live.next((client) => client.texts.some((text) => text.includes('"hello"')))
+    const early = await ticket({ role: "phone", dev: device() })
     const result = await internal("erase", { account: ACCOUNT })
     assert(result.status === 200, JSON.stringify(result))
     assert((await closedWith(live)) === CLOSE.REMOTE_REVOKED, "erase did not close the computer")
+    const stale = await open(early)
+    assert((await closedWith(stale)) === CLOSE.REMOTE_REVOKED, "a ticket from before the erase was admitted")
     const devices = await internal("devices", { account: ACCOUNT })
     assert(Array.isArray(devices.body.devices) && devices.body.devices.length === 0, JSON.stringify(devices.body))
   })

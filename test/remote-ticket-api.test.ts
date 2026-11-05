@@ -343,7 +343,7 @@ describe("tickets", () => {
         dev: device(1),
         name: "Studio Mac",
         computers: ENTITLEMENTS["vector-10"].remote.computers,
-        viewerHours: REMOTE_LIMITS.viewerHours["vector-10"],
+        rank: ENTITLEMENTS["vector-10"].rank,
         epoch: relayEpoch(snapshot.meterEpoch),
         periodEnd: snapshot.periodEnd,
         iat,
@@ -363,7 +363,7 @@ describe("tickets", () => {
     expect(fakes.stripe.calls).toEqual([])
   })
 
-  test("each plan's ticket carries its own paired computers and viewer-hours", async () => {
+  test("each plan's ticket carries its own paired computers and rank, and no server-only limit", async () => {
     for (const [account, plan] of [
       [PLUS, "vector-10"],
       [PRO, "vector-50"],
@@ -373,10 +373,27 @@ describe("tickets", () => {
       seed(account, plan)
       const answer = await computerTicket(account)
       expect(answer.status).toBe(200)
-      expect(claims(answer.body.ticket)).toMatchObject({
-        computers: ENTITLEMENTS[plan].remote.computers,
-        viewerHours: REMOTE_LIMITS.viewerHours[plan],
-      })
+      const carried = claims(answer.body.ticket)
+      expect(carried).toMatchObject({ computers: ENTITLEMENTS[plan].remote.computers, rank: ENTITLEMENTS[plan].rank })
+      // The device can decode its ticket: §4.2's viewer-hours stay on the servers (the relay reads them by rank).
+      expect(Object.keys(carried).sort()).toEqual(
+        [
+          "aud",
+          "computers",
+          "dev",
+          "epoch",
+          "exp",
+          "iat",
+          "jti",
+          "name",
+          "periodEnd",
+          "rank",
+          "role",
+          "sub",
+          "v",
+        ].sort(),
+      )
+      expect(JSON.stringify(carried)).not.toContain(`"viewerHours"`)
     }
   })
 

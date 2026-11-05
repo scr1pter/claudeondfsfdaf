@@ -58,7 +58,10 @@ export function NotificationsRoute(props: RouteProps) {
           <p>Notifications for Vector are off in this phone's settings. Turn them on there, then come back.</p>
         </Match>
         <Match when={state() === "on"}>
-          <p>This phone gets Vector alerts: a short title when an agent finishes or needs you, never your code.</p>
+          <p>
+            This phone gets Vector alerts: a short title, such as the session's name, when an agent finishes or needs
+            you.
+          </p>
           <button
             type="button"
             class="phone-button phone-button--quiet"
@@ -69,7 +72,9 @@ export function NotificationsRoute(props: RouteProps) {
           </button>
         </Match>
         <Match when={state() === "off"}>
-          <p>Get a short alert on this phone when an agent finishes or needs you. Alerts never include your code.</p>
+          <p>
+            Get a short alert on this phone when an agent finishes or needs you: a title such as the session's name.
+          </p>
           <button type="button" class="phone-button" disabled={busy()} onClick={() => change(true)}>
             Turn on alerts
           </button>

@@ -1,15 +1,21 @@
-// The relay's fixed limits. The plan-dependent ones (paired computers, viewer-hours) arrive in each ticket from the
-// API's snapshot and `REMOTE_LIMITS` (api/_lib/codium-limits.ts, contract §4.2); the rest are §4.2's Remote line and
-// the relay's own housekeeping. test/remote-relay-contract.test.ts (repository root) keeps the shared values equal to
-// the API's.
+// The relay's fixed limits. Each ticket carries the plan's public caps from the API's snapshot: its paired computers
+// (ENTITLEMENTS remote.computers) and its rank. §4.2's server-only Remote limits stay on the servers: the viewer-hours
+// per rank are below, beside the rest of §4.2's Remote line and the relay's own housekeeping, because a ticket is
+// readable by the device that holds it. test/remote-relay-contract.test.ts (repository root) keeps the shared values
+// equal to the API's `REMOTE_LIMITS` (api/_lib/codium-limits.ts).
+
+/** A plan's rank (ENTITLEMENTS rank, public): Plus 1, Pro 2, Max 3, Ultra 4. */
+export type PlanRank = 1 | 2 | 3 | 4
+export const PLAN_RANKS: readonly PlanRank[] = [1, 2, 3, 4]
+
+/** §4.2: viewer-hours per period, by the plan's rank (REMOTE_LIMITS.viewerHours, server only). */
+export const VIEWER_HOURS: Readonly<Record<PlanRank, number>> = { 1: 60, 2: 100, 3: 200, 4: 200 }
 
 export const RELAY_LIMITS = {
   /** §4.2: phones per account, whatever the plan. */
   phones: 5,
   /** The most computers any plan pairs (ENTITLEMENTS remote.computers on Max and Ultra). A ticket asking more is invalid. */
   maxComputers: 5,
-  /** A ticket's viewer-hours above this are invalid (the largest plan has 200). */
-  maxViewerHours: 1_000,
   /** §4.2: awake-hours per account are at most this multiple of the plan's viewer-hours. */
   awakeFactor: 1.5,
   /** §4.2: a viewer that sent nothing for this long is closed. */

@@ -27,7 +27,7 @@ Edits to `api/_lib/model-plan-*.ts`: none.
 
 - **A40 (Remote API)** mints tickets exactly as `ticket.ts` describes:
   - Sign with `VECTOR_REMOTE_TICKET_SIGNING_KEY` (base64url PKCS#8). `test/remote-relay-contract.test.ts` shows the node:crypto way.
-  - `computers` comes from the snapshot's `caps.remote.computers` and `viewerHours` from `REMOTE_LIMITS.viewerHours[plan]`.
+  - `computers` comes from the snapshot's `caps.remote.computers`. (P6 review: the ticket now carries the plan's public `rank` instead of `viewerHours`, which are server-only; the relay reads them from `VIEWER_HOURS` in `limits.ts`. See `codium-p6-repairs.md`.)
   - `epoch` is a base64url hash of `meterEpoch` (16 to 64 characters, so no Stripe id reaches the relay). `periodEnd` comes from the snapshot.
   - A fresh `jti` for every ticket.
   - It calls the internal actions through `internalFetch("relay", …)`: `kill` with the snapshot's `revokedBefore` on revocation, `suspend` on paused and frozen (with `at` = the snapshot version's time), `flags` when the `remote` switch changes, and `devices` and `revoke-device` for `/api/remote/devices`.

@@ -1,13 +1,15 @@
 import { describe, expect, test } from "bun:test"
-import { RELAY_LIMITS } from "../src/limits"
+import { RELAY_LIMITS, VIEWER_HOURS } from "../src/limits"
 import { CLOSE, FRAME } from "../src/protocol"
 import { EPOCH, Harness, frame } from "./fakes"
 
 // WP A39 and §4.2: viewer time per period is capped by the plan's viewer-hours (60 / 100 / 200 / 200), awake time at
 // 1.5× that. Viewer time is counted in memory from the stored start and written at most once a minute while viewers
-// stay; meters belong to the period's epoch, so a renewal starts them over.
+// stay; meters belong to the period's epoch, so a renewal starts them over. The relay reads the hours from its own
+// table by the ticket's rank; the tests that use them up give rank 1 a single hour so an hour of watching does it.
 
 const MINUTE = 60_000
+const ONE_HOUR = { viewerHours: { ...VIEWER_HOURS, 1: 1 } }
 
 /** Sends a data frame from the phone every second for `ms`, answering heartbeats and firing alarms like the runtime. */
 async function stream(
@@ -79,23 +81,23 @@ describe("viewer time", () => {
   })
 
   test("used up: viewers are closed and refused for the rest of the period; computers still connect", async () => {
-    const h = await Harness.create()
-    const computer = await h.computer({ viewerHours: 1 })
-    const phone = await h.phone({ viewerHours: 1 })
-    const options = { computer: computer.dev, claims: { viewerHours: 1 } }
+    const h = await Harness.create(ONE_HOUR)
+    const computer = await h.computer({ rank: 1 })
+    const phone = await h.phone({ rank: 1 })
+    const options = { computer: computer.dev, claims: { rank: 1 as const } }
     await h.watch([phone], 59 * MINUTE, options)
     expect(phone.socket.closed).toBeUndefined()
     await h.watch([phone], 2 * MINUTE, options)
     expect(phone.socket.closed).toEqual({ code: CLOSE.REMOTE_FAIR_USE, reason: "REMOTE_FAIR_USE" })
     expect(h.meter("viewer")).toBeGreaterThanOrEqual(60 * MINUTE)
     expect(h.meter("viewer")).toBeLessThanOrEqual(61 * MINUTE)
-    expect((await h.phone({ viewerHours: 1 })).socket.closed?.code).toBe(CLOSE.REMOTE_FAIR_USE)
+    expect((await h.phone({ rank: 1 })).socket.closed?.code).toBe(CLOSE.REMOTE_FAIR_USE)
     expect(computer.socket.closed).toBeUndefined()
-    expect((await h.computer({ viewerHours: 1, dev: computer.dev })).socket.closed).toBeUndefined()
+    expect((await h.computer({ rank: 1, dev: computer.dev })).socket.closed).toBeUndefined()
     expect((await h.internal("devices", { account: "x" })).body.fairUse).toBe("viewer")
     // A renewal brings a new epoch: the meters start over.
     const renewed = await h.phone({
-      viewerHours: 1,
+      rank: 1,
       epoch: "epoch_fixture_0000002",
       periodEnd: h.clock.now + 30 * 86_400_000,
     })
@@ -105,13 +107,13 @@ describe("viewer time", () => {
   })
 
   test("a larger plan's viewer-hours raise the cap at once", async () => {
-    const h = await Harness.create()
-    const computer = await h.computer({ viewerHours: 1 })
-    const phone = await h.phone({ viewerHours: 1 })
-    await h.watch([phone], 56 * MINUTE, { computer: computer.dev, claims: { viewerHours: 1 } })
+    const h = await Harness.create(ONE_HOUR)
+    const computer = await h.computer({ rank: 1 })
+    const phone = await h.phone({ rank: 1 })
+    await h.watch([phone], 56 * MINUTE, { computer: computer.dev, claims: { rank: 1 } })
     expect(phone.socket.closed).toBeUndefined()
-    // An upgrade within the period: the API's next ticket carries the new plan's hours and a new epoch.
-    const upgraded = { viewerHours: 200, epoch: "epoch_fixture_upgrade1" }
+    // An upgrade within the period: the API's next ticket carries the new plan's rank and a new epoch.
+    const upgraded = { rank: 3 as const, epoch: "epoch_fixture_upgrade1" }
     await h.message(
       phone.socket,
       JSON.stringify({ t: "refresh", ticket: await h.ticket({ ...upgraded, role: "phone", dev: phone.dev }) }),
@@ -125,8 +127,8 @@ describe("viewer time", () => {
 
 describe("awake time", () => {
   test("counts the time the object is kept awake, even with no viewer, and is capped at 1.5× viewer-hours", async () => {
-    const h = await Harness.create()
-    const computer = await h.computer({ viewerHours: 1 })
+    const h = await Harness.create(ONE_HOUR)
+    const computer = await h.computer({ rank: 1 })
     // A computer that keeps the object awake with control messages and no viewer. Viewer time stays at zero.
     let sent = 0
     while (!computer.socket.closed && sent < 2000) {
@@ -142,13 +144,13 @@ describe("awake time", () => {
     expect(sent * 5_000).toBeLessThanOrEqual(awakeLimit + RELAY_LIMITS.fairCheckEveryMs + 20_000)
     expect(h.meter("viewer")).toBe(0)
     // Everyone is refused for the rest of the period.
-    expect((await h.computer({ viewerHours: 1, dev: computer.dev })).socket.closed?.code).toBe(CLOSE.REMOTE_FAIR_USE)
-    expect((await h.phone({ viewerHours: 1 })).socket.closed?.code).toBe(CLOSE.REMOTE_FAIR_USE)
+    expect((await h.computer({ rank: 1, dev: computer.dev })).socket.closed?.code).toBe(CLOSE.REMOTE_FAIR_USE)
+    expect((await h.phone({ rank: 1 })).socket.closed?.code).toBe(CLOSE.REMOTE_FAIR_USE)
   })
 
   test("an idle object costs nothing: hibernated hours with heartbeats only add no awake time", async () => {
-    const h = await Harness.create()
-    const computer = await h.computer({ viewerHours: 1 })
+    const h = await Harness.create(ONE_HOUR)
+    const computer = await h.computer({ rank: 1 })
     const start = h.meter("awake")
     // Heartbeats are answered by the runtime, so the object sees no event for hours.
     await h.run(10 * 60 * MINUTE, { step: MINUTE })

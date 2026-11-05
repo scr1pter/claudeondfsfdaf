@@ -5,6 +5,7 @@ import { onCodiumChange } from "@/vector-account"
 import { Card, Page, SelectRow, ToggleRow } from "./parts/page"
 import {
   DEFAULT_QUIET_HOURS,
+  PHONE_ALERT_CONTENT,
   PHONE_ALERT_EVENTS,
   PHONE_APP_ADDRESS,
   QUIET_TIMES,
@@ -58,7 +59,7 @@ export const SettingsNotificationsV2: Component = () => {
             <Card
               icon="share"
               title="Phone alerts"
-              description={`On your phone, open ${PHONE_APP_ADDRESS}, add it to your Home Screen (needed on iPhone), sign in with this account and turn on alerts. Alerts show a short title, never your code or prompts.`}
+              description={`On your phone, open ${PHONE_APP_ADDRESS}, add it to your Home Screen (needed on iPhone), sign in with this account and turn on alerts. ${PHONE_ALERT_CONTENT}`}
             >
               <Show when={platform.phoneAlerts}>
                 <For each={PHONE_ALERT_EVENTS}>

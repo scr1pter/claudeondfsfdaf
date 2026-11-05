@@ -1,8 +1,12 @@
 import { describe, expect, test } from "bun:test"
+import { readFile } from "node:fs/promises"
+import path from "node:path"
 import {
   AuthError,
   currentSession,
   finishGoogleSignIn,
+  GOOGLE_SIGN_IN_FAILED,
+  googleSignInFailed,
   googleSignInUrl,
   passwordSignIn,
   pkceChallenge,
@@ -90,6 +94,24 @@ describe("Google sign-in", () => {
     // The verifier is used once.
     await expect(finishGoogleSignIn(config, "code-1", storage, account.fetcher)).rejects.toThrow(AuthError)
   })
+
+  test("an error coming back gets fixed words, and only for a sign-in this phone started", async () => {
+    // A link anyone could send, with text of their own: nothing was started here, so nothing is said.
+    const fresh = memory()
+    expect(googleSignInFailed(fresh)).toBeUndefined()
+    const started = memory()
+    await googleSignInUrl(config, "https://remote.vectordev.ai/phone/", started)
+    expect(googleSignInFailed(started)).toBe(GOOGLE_SIGN_IN_FAILED)
+    // The attempt is over: its verifier is gone, and a second error link says nothing.
+    expect(started.data.has("vector-phone-pkce")).toBe(false)
+    expect(googleSignInFailed(started)).toBeUndefined()
+  })
+})
+
+test("the app never shows a sign-in error's text from the address it was opened with", async () => {
+  const app = await readFile(path.join(import.meta.dir, "app.tsx"), "utf8")
+  expect(app).not.toMatch(/\.get\(\s*["']error(_description)?["']\s*\)/)
+  expect(app).toContain("googleSignInFailed(storage)")
 })
 
 test("email and password sign-in, and a refusal in plain words", async () => {

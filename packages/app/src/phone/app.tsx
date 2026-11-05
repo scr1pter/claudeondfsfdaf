@@ -5,6 +5,7 @@ import {
   browserStorage,
   currentSession,
   finishGoogleSignIn,
+  googleSignInFailed,
   googleSignInUrl,
   passwordSignIn,
   readAuthConfig,
@@ -72,14 +73,16 @@ export function PhoneApp() {
     if (config instanceof Error) return setPhase({ kind: "unavailable", message: config.message })
     const query = new URLSearchParams(location.search)
     const code = query.get("code")
-    const failed = query.get("error_description")
+    const failed = query.has("error") || query.has("error_description")
     if (code || failed) history.replaceState(null, "", location.pathname)
+    // The address's own error text is never shown: anyone can send a link with one.
+    const failure = !code && failed ? googleSignInFailed(storage) : undefined
     try {
       const session = code
         ? await finishGoogleSignIn(config, code, storage, fetch)
         : await currentSession(config, storage, fetch)
       if (session) return setPhase({ kind: "signed-in", config, session })
-      setPhase({ kind: "signed-out", config, ...(failed ? { message: failed.slice(0, 200) } : {}) })
+      setPhase({ kind: "signed-out", config, ...(failure ? { message: failure } : {}) })
     } catch (cause) {
       setPhase({ kind: "signed-out", config, message: cause instanceof Error ? cause.message : "Sign in again." })
     }

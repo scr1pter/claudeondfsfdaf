@@ -4,7 +4,7 @@ import { REMOTE_LIMITS } from "../api/_lib/codium-limits"
 import { signInternal as apiSign, verifyInternal as apiVerify } from "../api/_lib/hosted-internal"
 import { utf8 } from "../packages/relay/src/bytes"
 import { signInternal as relaySign, verifyInternalSignature as relayVerify } from "../packages/relay/src/internal"
-import { RELAY_LIMITS } from "../packages/relay/src/limits"
+import { PLAN_RANKS, RELAY_LIMITS, VIEWER_HOURS } from "../packages/relay/src/limits"
 import { importTicketKeys, verifyTicket, type TicketClaims } from "../packages/relay/src/ticket"
 import { ENTITLEMENTS } from "../packages/schema/src/codium-entitlements"
 
@@ -65,7 +65,7 @@ describe("tickets signed with node:crypto", () => {
       role: "phone",
       dev: Buffer.alloc(16, 7).toString("base64url"),
       computers: ENTITLEMENTS["vector-50"].remote.computers,
-      viewerHours: REMOTE_LIMITS.viewerHours["vector-50"],
+      rank: ENTITLEMENTS["vector-50"].rank,
       epoch: "contract_epoch_000001",
       periodEnd: NOW + 86_400_000,
       iat,
@@ -88,13 +88,26 @@ describe("limits", () => {
     expect(RELAY_LIMITS.framesPerSecond).toBe(REMOTE_LIMITS.framesPerSecond)
   })
 
-  test("every plan's computers and viewer-hours fit what a ticket may carry", () => {
+  test("every plan's computers and rank fit what a ticket may carry", () => {
     const computers = Object.values(ENTITLEMENTS).map((caps) => caps.remote.computers)
     expect(Math.max(...computers)).toBe(RELAY_LIMITS.maxComputers)
     expect(Math.min(...computers)).toBeGreaterThanOrEqual(1)
-    for (const hours of Object.values(REMOTE_LIMITS.viewerHours)) {
-      expect(Number.isInteger(hours)).toBe(true)
-      expect(hours).toBeLessThanOrEqual(RELAY_LIMITS.maxViewerHours)
-    }
+    expect(
+      Object.values(ENTITLEMENTS)
+        .map((caps) => caps.rank)
+        .sort(),
+    ).toEqual([...PLAN_RANKS])
+  })
+
+  test("the relay's viewer-hours by rank are §4.2's REMOTE_LIMITS.viewerHours by plan", () => {
+    // Server-only (§4.2), so tickets carry the public rank and both servers hold the table.
+    const plans = Object.keys(REMOTE_LIMITS.viewerHours) as Array<keyof typeof REMOTE_LIMITS.viewerHours>
+    expect(plans.sort()).toEqual(Object.keys(ENTITLEMENTS).sort())
+    for (const plan of plans)
+      expect({ plan, hours: VIEWER_HOURS[ENTITLEMENTS[plan].rank] }).toEqual({
+        plan,
+        hours: REMOTE_LIMITS.viewerHours[plan],
+      })
+    expect(Object.keys(VIEWER_HOURS).map(Number).sort()).toEqual([...PLAN_RANKS])
   })
 })

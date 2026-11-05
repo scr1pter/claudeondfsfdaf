@@ -39,6 +39,11 @@ describe("source", () => {
     }
   })
 
+  test("the module the phone and desktop import holds no limit: protocol.ts imports nothing", async () => {
+    // §4.2's server-only limits (the viewer-hours in limits.ts) must not reach a device's bundle.
+    expect(await read("src/protocol.ts")).not.toMatch(/^\s*(?:import|export)\b[^"']*?from\s*["']/m)
+  })
+
   test("the Worker exports its fetch handler and the Durable Object class", () => {
     expect(typeof worker.default.fetch).toBe("function")
     expect(typeof worker.AccountRelay).toBe("function")

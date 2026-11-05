@@ -7,7 +7,8 @@
 //   signature = base64url of Ed25519 over the ASCII bytes "vector-relay-ticket-v1." payload
 //
 // Every character is a WebSocket subprotocol token character, so the ticket travels in `Sec-WebSocket-Protocol` and
-// never in a URL. Claims (all required unless marked):
+// never in a URL. The device that holds a ticket can read its claims, so they carry only what the account may see
+// (§4.2's server-only limits stay on the relay and the API). Claims (all required unless marked):
 //
 //   v            1
 //   aud          "vector-relay"
@@ -17,7 +18,7 @@
 //   name?        the name shown in Settings, 1-64 characters with no control characters
 //   key?         the device's public key for pairing, base64url, 32-128 characters (the relay stores and lists it)
 //   computers    the plan's paired-computer count (ENTITLEMENTS remote.computers), 0-5
-//   viewerHours  the plan's viewer-hours this period (REMOTE_LIMITS.viewerHours), 1-1000
+//   rank         the plan's rank (ENTITLEMENTS rank), 1-4; the relay reads its viewer-hours from VIEWER_HOURS
 //   epoch        a hash of the snapshot's meterEpoch, 16-64 base64url characters; the relay's time meters are per epoch
 //   periodEnd    the period's end, milliseconds; meters of the epoch are kept 40 days past it
 //   iat, exp     seconds; exp after iat, at most 300 s apart, and iat no more than 60 s ahead of the relay's clock
@@ -28,7 +29,7 @@
 // before the old one is retired.
 
 import { base64url, fromBase64url, fromUtf8, hex, utf8 } from "./bytes"
-import { RELAY_LIMITS } from "./limits"
+import { PLAN_RANKS, RELAY_LIMITS, type PlanRank } from "./limits"
 import { isDeviceId, type DeviceRole } from "./protocol"
 
 export const TICKET_PREFIX = "vt1"
@@ -47,7 +48,7 @@ export type TicketClaims = {
   name?: string
   key?: string
   computers: number
-  viewerHours: number
+  rank: PlanRank
   epoch: string
   periodEnd: number
   iat: number
@@ -80,7 +81,7 @@ export function decodeClaims(value: unknown): TicketClaims | undefined {
     return undefined
   if (claims.key !== undefined && (typeof claims.key !== "string" || !PUBLIC_KEY.test(claims.key))) return undefined
   if (!integer(claims.computers, 0, RELAY_LIMITS.maxComputers)) return undefined
-  if (!integer(claims.viewerHours, 1, RELAY_LIMITS.maxViewerHours)) return undefined
+  if (!PLAN_RANKS.includes(claims.rank as PlanRank)) return undefined
   if (typeof claims.epoch !== "string" || !TOKEN.test(claims.epoch)) return undefined
   if (!integer(claims.periodEnd, 1, Number.MAX_SAFE_INTEGER)) return undefined
   if (!integer(claims.iat, 1, 1e11) || !integer(claims.exp, 1, 1e11)) return undefined
@@ -94,7 +95,7 @@ export function decodeClaims(value: unknown): TicketClaims | undefined {
     ...(claims.name !== undefined ? { name: claims.name as string } : {}),
     ...(claims.key !== undefined ? { key: claims.key as string } : {}),
     computers: claims.computers as number,
-    viewerHours: claims.viewerHours as number,
+    rank: claims.rank as PlanRank,
     epoch: claims.epoch,
     periodEnd: claims.periodEnd as number,
     iat: claims.iat as number,

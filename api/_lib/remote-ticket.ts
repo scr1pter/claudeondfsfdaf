@@ -34,8 +34,10 @@ import { phoneAppOrigin } from "./web-push.js"
  *   that allows it: active, or renewing within grace (§4.4's Remote relay row). Paused, ended, frozen and no plan get
  *   the plan's own refusal (402 or 403); a plan without paired computers gets 403 `CODIUM_PERK_REQUIRED`.
  *
- * A ticket's paired-computer count, viewer-hours, meter epoch and period come from the snapshot and §4.2, never from
- * the request, so a patched client cannot widen anything (S1). The relay enforces the caps on every connection.
+ * A ticket's paired-computer count, plan rank, meter epoch and period come from the snapshot, never from the request,
+ * so a patched client cannot widen anything (S1). The relay enforces the caps on every connection. The device holding
+ * a ticket can read it, so it carries only public caps: §4.2's viewer-hours are not in it (they are server-only); the
+ * relay keeps the same table by rank (packages/relay/src/limits.ts VIEWER_HOURS).
  */
 
 export type RemoteRole = "computer" | "phone"
@@ -49,7 +51,8 @@ export type RelayTicketClaims = {
   name?: string
   key?: string
   computers: number
-  viewerHours: number
+  /** ENTITLEMENTS rank, public; the relay reads the plan's viewer-hours by it. */
+  rank: 1 | 2 | 3 | 4
   epoch: string
   periodEnd: number
   iat: number
@@ -199,13 +202,14 @@ export function ticketClaims(
 ): RelayTicketClaims {
   const plan = snapshot.plan as PlanId | null
   const computers = snapshot.caps.remote.computers
-  const viewerHours = plan ? REMOTE_LIMITS.viewerHours[plan] : undefined
+  const rank = snapshot.caps.rank
   if (
     !plan ||
+    !REMOTE_LIMITS.viewerHours[plan] ||
     !Number.isSafeInteger(computers) ||
     computers < 1 ||
     computers > RELAY_MAX_COMPUTERS ||
-    !viewerHours ||
+    ![1, 2, 3, 4].includes(rank) ||
     !snapshot.meterEpoch ||
     snapshot.meterEpoch === "none" ||
     !Number.isSafeInteger(snapshot.periodEnd) ||
@@ -222,7 +226,7 @@ export function ticketClaims(
     ...(request.name ? { name: request.name } : {}),
     ...(request.key ? { key: request.key } : {}),
     computers,
-    viewerHours,
+    rank,
     epoch: relayEpoch(snapshot.meterEpoch),
     periodEnd: snapshot.periodEnd,
     iat,

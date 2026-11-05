@@ -59,6 +59,19 @@ export async function googleSignInUrl(config: AuthConfig, redirectTo: string, st
   return url.toString()
 }
 
+export const GOOGLE_SIGN_IN_FAILED = "Google sign-in did not finish. Try again."
+
+/**
+ * What to say when the address came back with a sign-in error instead of a code: fixed words, and only when this phone
+ * started a Google sign-in (its verifier is still kept), which this forgets. Anyone can write an address with an error
+ * in it, so the provider's own text is never shown.
+ */
+export function googleSignInFailed(storage: KeyValue): string | undefined {
+  if (!storage.get(VERIFIER_KEY)) return undefined
+  storage.remove(VERIFIER_KEY)
+  return GOOGLE_SIGN_IN_FAILED
+}
+
 /** Exchanges the code Google sign-in returned for a session, with the verifier kept when it started. */
 export async function finishGoogleSignIn(
   config: AuthConfig,

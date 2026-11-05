@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, test } from "bun:test"
+import { readFile } from "node:fs/promises"
+import path from "node:path"
 import type { ModelPlanStatus } from "@vectordevai/core/model-plan-status"
+import { PHONE_ALERT_CONTENT } from "@/components/settings-v2/notifications-model"
 import type { Platform } from "./platform"
 import { alertTitle, resetPhoneAlerts, sendPhoneAlert, type PhoneAlert } from "./phone-alerts"
 
@@ -82,4 +85,21 @@ describe("sendPhoneAlert", () => {
     expect(alertTitle("Needs you", undefined)).toBe("Needs you")
     expect(alertTitle("Finished", "x".repeat(300)).length).toBe(120)
   })
+})
+
+test("what Settings and the phone say an alert holds is what alertTitle sends", async () => {
+  // A new session is named after the first line of its first message until a better name is made, and every alert
+  // title from this computer carries the session's name, so the copy may not promise that what was typed stays out.
+  const typed = "Fix the login redirect in auth.ts"
+  expect(alertTitle("Finished", typed)).toBe(`Finished: ${typed}`)
+  expect(alertTitle("Needs you", typed)).toContain(typed)
+  expect(PHONE_ALERT_CONTENT).toContain("session's name")
+  const sources = await Promise.all(
+    ["../components/settings-v2/notifications.tsx", "../phone/routes/notifications.tsx"].map((file) =>
+      readFile(path.resolve(import.meta.dir, file), "utf8"),
+    ),
+  )
+  for (const text of [PHONE_ALERT_CONTENT, ...sources].map((item) => item.replace(/\s+/g, " ")))
+    expect(text).not.toMatch(/never (include )?your (code|prompts?)|(code|prompts?) never (show|leave)/i)
+  expect(sources[0]).toContain("PHONE_ALERT_CONTENT")
 })

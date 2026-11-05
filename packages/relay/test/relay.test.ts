@@ -214,24 +214,63 @@ describe("internal calls", () => {
       expect((await h.internal("suspend", { account: "x", ...bad })).status).toBe(400)
   })
 
-  test("erase closes every connection and deletes everything the object stored (P5)", async () => {
+  test("erase closes every connection and deletes everything the object stored about the account (P5)", async () => {
     const h = await Harness.create()
     const computer = await h.computer({ name: "Studio" })
     const phone = await h.phone({ name: "Pixel" })
     await h.run(2 * 60_000)
     expect(h.devices()).toHaveLength(2)
+    const erasedAt = h.clock.now
     expect((await h.internal("erase", { account: "x" })).body).toEqual({ erased: true })
     expect(computer.socket.closed?.code).toBe(CLOSE.REMOTE_REVOKED)
     expect(phone.socket.closed?.code).toBe(CLOSE.REMOTE_REVOKED)
     expect(h.state.alarm).toBeNull()
-    for (const table of h.state.sql.tables())
-      expect({ table, rows: h.state.sql.rows(`SELECT * FROM ${table}`) }).toEqual({ table, rows: [] })
+    // What stays holds nothing about the account: a revocation time and the random ids already used.
+    const kept = (): Record<string, unknown[]> => {
+      const rows: Record<string, unknown[]> = Object.fromEntries(
+        h.state.sql.tables().map((table) => [table, h.state.sql.rows(`SELECT * FROM ${table}`)] as const),
+      )
+      return {
+        ...rows,
+        seen: (rows.seen ?? []).map((row) => (row as { id: string }).id.slice(0, 2)),
+      }
+    }
+    const afterErase = kept()
+    expect(afterErase).toEqual({
+      meta: [{ k: "revoked_before", v: String(erasedAt + 60_000) }],
+      devices: [],
+      meters: [],
+      seen: expect.any(Array),
+    })
+    expect(new Set(afterErase.seen)).toEqual(new Set(["t:", "n:"]))
     // The closes arriving afterwards store nothing again.
     h.advance(2 * 60_000)
     await h.disconnect(computer.socket)
     await h.disconnect(phone.socket)
-    for (const table of h.state.sql.tables())
-      expect({ table, rows: h.state.sql.rows(`SELECT * FROM ${table}`) }).toEqual({ table, rows: [] })
+    expect(kept()).toEqual(afterErase)
+  })
+
+  test("after an erase, a ticket from before it is refused and fills nothing in again", async () => {
+    const h = await Harness.create()
+    const dev = deviceId()
+    const used = await h.connect({ role: "computer", dev, name: "Studio" })
+    expect(used.socket.closed).toBeUndefined()
+    // Tickets the API issued before the erasure and nobody has used yet, one from an issuer clock a little ahead.
+    const unused = await h.ticket({ role: "phone", name: "Pixel" })
+    const ahead = await h.ticket({ role: "computer", iat: Math.floor(h.clock.now / 1000) + 30 })
+    h.advance(1000)
+    expect((await h.internal("erase", { account: "x" })).body).toEqual({ erased: true })
+    h.advance(1000)
+    expect((await h.connect({}, used.ticket)).response.status).toBe(401)
+    expect((await h.connect({}, unused)).socket.closed?.code).toBe(CLOSE.REMOTE_REVOKED)
+    expect((await h.connect({}, ahead)).socket.closed?.code).toBe(CLOSE.REMOTE_REVOKED)
+    expect(h.devices()).toEqual([])
+    expect(h.state.sql.rows("SELECT k FROM meta")).toEqual([{ k: "revoked_before" }])
+    expect(h.state.sql.rows("SELECT * FROM meters")).toEqual([])
+    // A ticket issued after the erasure (past the skew allowance) connects as any first device does.
+    h.advance(60_000)
+    expect((await h.computer({ dev })).socket.closed).toBeUndefined()
+    expect(h.devices()).toHaveLength(1)
   })
 
   test("a signed call reaches the object once: its nonce is remembered", async () => {

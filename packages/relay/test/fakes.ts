@@ -18,6 +18,7 @@ import type {
   SqlStorage,
   SqlValue,
 } from "../src/runtime"
+import type { PlanRank } from "../src/limits"
 import { signTicket, type TicketClaims } from "../src/ticket"
 
 export const NOW = Date.UTC(2026, 10, 3, 12, 0, 0)
@@ -246,9 +247,14 @@ export class Harness {
   readonly env: Env
   readonly keys: Awaited<ReturnType<typeof ticketKeys>>
   relay: AccountRelay
+  private readonly viewerHours: Readonly<Record<PlanRank, number>> | undefined
 
-  private constructor(keys: Awaited<ReturnType<typeof ticketKeys>>) {
+  private constructor(
+    keys: Awaited<ReturnType<typeof ticketKeys>>,
+    viewerHours: Readonly<Record<PlanRank, number>> | undefined,
+  ) {
     this.keys = keys
+    this.viewerHours = viewerHours
     this.env = {
       ACCOUNT_RELAY: new FakeNamespace(() => this.relay),
       REMOTE_FLAGS: this.kv,
@@ -256,16 +262,17 @@ export class Harness {
       INTERNAL_SECRET,
       ACCOUNT_KEY,
     }
-    this.relay = new AccountRelay(this.state, this.env, this.runtime)
+    this.relay = new AccountRelay(this.state, this.env, this.runtime, viewerHours)
   }
 
-  static async create() {
-    return new Harness(await ticketKeys())
+  /** `viewerHours` replaces the relay's table by rank (§4.2's 60 to 200 hours), so a test can use one up quickly. */
+  static async create(options: { viewerHours?: Readonly<Record<PlanRank, number>> } = {}) {
+    return new Harness(await ticketKeys(), options.viewerHours)
   }
 
   /** A new instance over the same storage and sockets, as after hibernation: everything in memory is gone. */
   wake() {
-    this.relay = new AccountRelay(this.state, this.env, this.runtime)
+    this.relay = new AccountRelay(this.state, this.env, this.runtime, this.viewerHours)
     return this.relay
   }
 
@@ -282,7 +289,7 @@ export class Harness {
       role: "computer",
       dev: deviceId(),
       computers: 3,
-      viewerHours: 100,
+      rank: 2,
       epoch: EPOCH,
       periodEnd: NOW + 20 * 24 * 60 * 60_000,
       iat,
