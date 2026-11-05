@@ -53,6 +53,17 @@ export const MAC_TEST_TARGET = Object.freeze({
   name: "Vector Computer Test Target",
   manifest: "computer-helper-tests.json",
 })
+export const WINDOWS_TEST_ARTIFACTS = Object.freeze({
+  caller: "VectorComputerCaller.exe",
+  unit: "vector-computer-tests.exe",
+  target: "computer-test-target.exe",
+  manifest: "computer-helper-tests.json",
+})
+const windowsTestArtifactNames = [
+  WINDOWS_TEST_ARTIFACTS.caller,
+  WINDOWS_TEST_ARTIFACTS.unit,
+  WINDOWS_TEST_ARTIFACTS.target,
+].sort()
 const macTestArtifactNames = [
   "VectorComputerTests",
   "VectorComputerCaller",
@@ -743,6 +754,74 @@ export async function verifyMacTestArtifacts(
   return manifest
 }
 
+/** Windows fixtures are executable artifacts too; their independent manifest binds them to the shipped source. */
+export async function verifyWindowsTestArtifacts(
+  root: string,
+  architecture: HelperArchitecture,
+  input: { directory?: string; channel?: BuildOptions["channel"]; helperManifest: HelperManifest },
+) {
+  const directory = input.directory ?? packageDirectory
+  const identity = readIdentity(path.join(directory, "native/computer-helper/identity.json"))
+  const base = await realpath(root)
+  const manifestFile = path.join(base, WINDOWS_TEST_ARTIFACTS.manifest)
+  const status = await lstat(manifestFile)
+  if (!status.isFile() || status.isSymbolicLink() || status.size > 65_536)
+    throw new HelperBuildError("The Windows test manifest is not a bounded regular file.")
+  const manifest = parseHelperManifest(JSON.parse(await readFile(manifestFile, "utf8")))
+  const helper = input.helperManifest
+  if (
+    manifest.platform !== "win32" ||
+    helper.platform !== "win32" ||
+    manifest.helperVersion !== identity.helperVersion ||
+    manifest.protocol.min !== identity.protocol.min ||
+    manifest.protocol.max !== identity.protocol.max ||
+    manifest.helperVersion !== helper.helperVersion ||
+    manifest.sourceDigest !== helper.sourceDigest ||
+    manifest.toolchain !== helper.toolchain ||
+    manifest.protocol.min !== helper.protocol.min ||
+    manifest.protocol.max !== helper.protocol.max ||
+    Object.keys(manifest.files).sort().join("\0") !== windowsTestArtifactNames.join("\0")
+  )
+    throw new HelperBuildError("The Windows test manifest does not match the helper or expected layout.")
+  const actual = (await filesUnder(base))
+    .map((file) => path.relative(base, file).split(path.sep).join("/"))
+    .filter((file) => file !== WINDOWS_TEST_ARTIFACTS.manifest)
+    .sort()
+  if (actual.join("\0") !== windowsTestArtifactNames.join("\0"))
+    throw new HelperBuildError("The Windows test directory contains files outside its manifest.")
+  for (const name of windowsTestArtifactNames) {
+    const file = path.join(base, name)
+    const info = await lstat(file)
+    if (!info.isFile() || info.isSymbolicLink() || info.size < 128 || info.size > 64 * 1024 * 1024)
+      throw new HelperBuildError("A Windows test artifact is not a bounded regular executable.")
+    const bytes = await readFile(file)
+    const metadata = manifest.files[name]!
+    const offset = bytes.readUInt16LE(0) === 0x5a4d ? bytes.readUInt32LE(0x3c) : 0
+    if (
+      metadata.sha256 !== sha256(bytes) ||
+      metadata.arch.length !== 1 ||
+      metadata.arch[0] !== architecture ||
+      offset < 64 ||
+      offset > bytes.length - 26 ||
+      bytes.readUInt32LE(offset) !== 0x4550 ||
+      bytes.readUInt16LE(offset + 24) !== 0x20b ||
+      !binaryArchitectures(bytes).includes(architecture)
+    )
+      throw new HelperBuildError("A Windows test artifact failed its hash, PE or architecture check.")
+  }
+  const generated = path.join(directory, "native/build/computer-helper-tests-win32/generated")
+  const identitySource = generateIdentitySources(generated, {
+    identity: path.join(directory, "native/computer-helper/identity.json"),
+    blocklist: path.join(directory, "native/computer-helper/blocklist.json"),
+  }).find((file) => file.endsWith("Identity.swift"))!
+  if (
+    manifest.sourceDigest !==
+    (await sourceDigestFor(directory, "win32", input.channel ?? "prod", manifest.toolchain, identitySource))
+  )
+    throw new HelperBuildError("The Windows test artifact source digest does not match this source tree.")
+  return manifest
+}
+
 export async function verifyPrebuiltHelper(
   root: string,
   platform: HelperPlatform,
@@ -958,7 +1037,7 @@ async function buildWindows(
       path.join(build, "Release", identity.windows.executable),
       path.join(output, identity.windows.executable),
     )
-    for (const file of ["vector-computer-tests.exe", "computer-test-target.exe"])
+    for (const file of windowsTestArtifactNames)
       await copyFile(path.join(build, "Release", file), path.join(output, "tests", file))
     if (
       (await sourceDigestFor(
@@ -979,6 +1058,20 @@ async function buildWindows(
       files: await manifestFiles(output, [path.join(output, identity.windows.executable)], [arch]),
     })
     await writeFile(path.join(output, "computer-helper.json"), json(manifest))
+    const testManifest = createManifest({
+      ...manifest,
+      files: await manifestFiles(
+        path.join(output, "tests"),
+        windowsTestArtifactNames.map((name) => path.join(output, "tests", name)),
+        [arch],
+      ),
+    })
+    await writeFile(path.join(output, "tests", WINDOWS_TEST_ARTIFACTS.manifest), json(testManifest))
+    await verifyWindowsTestArtifacts(path.join(output, "tests"), arch, {
+      directory,
+      channel: options.channel,
+      helperManifest: manifest,
+    })
     // An ARM64 binary cannot be executed on an x64 build host; its PE header still must match its output directory.
     if (!binaryArchitectures(await readFile(path.join(output, identity.windows.executable))).includes(arch))
       throw new HelperBuildError("The built Windows helper has the wrong architecture.")

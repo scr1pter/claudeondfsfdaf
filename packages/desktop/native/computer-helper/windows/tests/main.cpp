@@ -2,12 +2,15 @@
 #include "identity.h"
 #include "blocklist.h"
 #include "build-config.h"
+#include "protocol.h"
+#include "server.h"
 #include <objidl.h>
 #include <xmllite.h>
 #include <algorithm>
 #include <array>
 #include <charconv>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -18,21 +21,29 @@
 #include <winrt/Windows.Foundation.h>
 #include <winrt/Windows.Foundation.Collections.h>
 
+namespace vector::computer {
+int run_protocol_tests();
+void parent_identity_tests();
+void lifecycle_tests();
+void integration_tests();
+void integration_lifecycle_test(bool parent_death);
+}
+
 namespace {
 using namespace vector::computer;
 using winrt::Windows::Data::Json::JsonObject;
 using winrt::Windows::Data::Json::JsonValue;
 
-class Failure final : public std::exception {
+class UnitFailure final : public std::exception {
  public:
-  explicit Failure(const char* label) : label_(label) {}
-  const char* what() const noexcept override { return label_; }
+  explicit UnitFailure(const char* label) : label_(label) {}
+  const char* what() const noexcept override { return label_.c_str(); }
  private:
-  const char* label_;
+  std::string label_;
 };
 
 void require(bool condition, const char* label) {
-  if (!condition) throw Failure(label);
+  if (!condition) throw UnitFailure(label);
 }
 
 std::wstring wide(std::string_view value) {
@@ -54,7 +65,7 @@ std::filesystem::path shipped_executable() {
     const auto candidate = base / wide(identity::kExecutable);
     if (std::filesystem::is_regular_file(candidate)) return std::filesystem::canonical(candidate);
   }
-  throw Failure("unit.shipping-executable-missing");
+  throw UnitFailure("unit.shipping-executable-missing");
 }
 
 std::string resource(HMODULE module, WORD id, LPCWSTR kind) {
@@ -166,7 +177,7 @@ class ChildCleanup {
   HANDLE child_;
 };
 
-std::string version_output(const std::filesystem::path& executable) {
+std::string command_output(const std::filesystem::path& executable, std::wstring_view arguments) {
   SECURITY_ATTRIBUTES security{static_cast<DWORD>(sizeof(SECURITY_ATTRIBUTES)), nullptr, TRUE};
   HANDLE read = nullptr;
   HANDLE write = nullptr;
@@ -195,7 +206,7 @@ std::string version_output(const std::filesystem::path& executable) {
   startup.StartupInfo.hStdError = writer.get();
   startup.lpAttributeList = attributes;
   PROCESS_INFORMATION process{};
-  auto command = L"\"" + executable.wstring() + L"\" --version --json";
+  auto command = L"\"" + executable.wstring() + L"\" " + std::wstring(arguments);
   const auto start = GetTickCount64();
   require(CreateProcessW(executable.c_str(), command.data(), nullptr, nullptr, TRUE,
                          EXTENDED_STARTUPINFO_PRESENT | CREATE_NO_WINDOW, nullptr, nullptr,
@@ -233,7 +244,7 @@ std::string version_output(const std::filesystem::path& executable) {
 }
 
 void executable_metadata(const std::filesystem::path& executable) {
-  const auto value = JsonObject::Parse(winrt::to_hstring(version_output(executable)));
+  const auto value = JsonObject::Parse(winrt::to_hstring(command_output(executable, L"--version --json")));
   require(json_equal(value, version_document()), "version.actual-json-equality");
   require(value.GetNamedString(L"helperVersion") == winrt::to_hstring(identity::kHelperVersion), "version.helper-version");
   require(value.GetNamedString(L"platform") == L"win32", "version.platform");
@@ -242,6 +253,26 @@ void executable_metadata(const std::filesystem::path& executable) {
   require(pe.subsystem == IMAGE_SUBSYSTEM_WINDOWS_GUI, "pe.windows-gui-subsystem");
   const auto actualArchitecture = pe.machine == IMAGE_FILE_MACHINE_AMD64 ? "x64" : pe.machine == IMAGE_FILE_MACHINE_ARM64 ? "arm64" : "unsupported";
   require(std::string_view(actualArchitecture) == architecture() && value.GetNamedString(L"arch") == winrt::to_hstring(actualArchitecture), "pe.machine-matches-json-architecture");
+}
+
+void native_cli_checks(const std::filesystem::path& executable) {
+  for (const auto mode : {L"--self-test=unprivileged", L"--self-test=packaged"}) {
+    const auto result = JsonObject::Parse(winrt::to_hstring(command_output(executable, mode)));
+    require(result.Size() == 1 && result.HasKey(L"checks"), "self-test.report-envelope");
+    const auto checks = result.GetNamedArray(L"checks");
+    require(checks.Size() == 4, "self-test.actual-check-count");
+    std::set<std::wstring> names;
+    for (const auto& value : checks) {
+      const auto check = value.GetObject();
+      require(check.Size() == 2 && check.GetNamedBoolean(L"ok") && !check.HasKey(L"skipped"), "self-test.no-core-skip");
+      const auto name = check.GetNamedString(L"name");
+      require(names.emplace(name.c_str(), name.size()).second, "self-test.unique-check-names");
+    }
+    require(names == std::set<std::wstring>{L"wire-codec", L"packaged-pe", L"packaged-manifest", L"packaged-version"}, "self-test.real-check-catalog");
+  }
+  // A process outside the exact containing install root must not claim responsibility.
+  const auto probe = JsonObject::Parse(winrt::to_hstring(command_output(executable, L"--probe --json")));
+  require(!probe.GetNamedBoolean(L"responsible") && probe.GetNamedBoolean(L"captureBlocked"), "probe.unverified-parent-refused");
 }
 
 std::wstring xml_attribute(IXmlReader* reader, const wchar_t* name) {
@@ -354,7 +385,7 @@ void embedded_manifest(const std::filesystem::path& executable) {
   constexpr std::string_view duplicate = R"xml(<root xmlns:ws="http://schemas.microsoft.com/SMI/2005/WindowsSettings"><ws:dpiAware>true/PM</ws:dpiAware><ws:dpiAware>true/PM</ws:dpiAware></root>)xml";
   bool refused = false;
   try { check_manifest_xml(duplicate); }
-  catch (const Failure& failure) { refused = std::string_view(failure.what()) == "manifest.duplicate-setting"; }
+  catch (const UnitFailure& failure) { refused = std::string_view(failure.what()) == "manifest.duplicate-setting"; }
   require(refused, "manifest.duplicate-fixture-refused");
 }
 
@@ -417,13 +448,32 @@ void command_line() {
 
 template<class Check> void run_check(const char* label, Check check) {
   try { check(); }
-  catch (const Failure&) { throw; }
-  catch (...) { throw Failure(label); }
+  catch (const UnitFailure&) { throw; }
+  catch (const std::exception& error) {
+    const std::string_view detail(error.what(), strnlen_s(error.what(), 129));
+    const bool fixed = detail.size() <= 128 &&
+      (detail.starts_with("protocol.") || detail.starts_with("server.") || detail.starts_with("parent.") || detail.starts_with("lifecycle.") || detail.starts_with("integration.")) &&
+      std::all_of(detail.begin(), detail.end(), [](char value) { return (value >= 'a' && value <= 'z') || (value >= '0' && value <= '9') || value == '.' || value == '-'; });
+    throw UnitFailure(fixed ? error.what() : label);
+  }
+  catch (...) { throw UnitFailure(label); }
   std::cout << "PASS " << label << '\n';
 }
 }
 
-int main(int argc, char**) {
+int main(int argc, char** argv) {
+  if (argc == 2 && (std::string_view(argv[1]) == "--self-test=lifecycle-eof" || std::string_view(argv[1]) == "--self-test=lifecycle-parent-death")) {
+    const bool parent_death = std::string_view(argv[1]) == "--self-test=lifecycle-parent-death";
+    bool passed = false;
+    try {
+      winrt::init_apartment(winrt::apartment_type::multi_threaded);
+      integration_lifecycle_test(parent_death);
+      passed = true;
+    } catch (...) {}
+    // A finite native test report contains no observed path, token, PID, transcript or private content.
+    std::cout << "{\"checks\":[{\"name\":\"" << (parent_death ? "caller-parent-death" : "caller-eof") << "\",\"ok\":" << (passed ? "true" : "false") << "}]}\n";
+    return passed ? 0 : 1;
+  }
   try {
     require(argc == 1, "unit.unexpected-arguments");
     winrt::init_apartment(winrt::apartment_type::multi_threaded);
@@ -433,9 +483,15 @@ int main(int argc, char**) {
     run_check("executable-json-and-pe", [&] { executable_metadata(executable); });
     run_check("embedded-manifest", [&] { embedded_manifest(executable); });
     run_check("embedded-version", [&] { embedded_version(executable); });
-    std::cout << "Windows computer helper W1 unit checks passed.\n";
+    run_check("native-cli-checks", [&] { native_cli_checks(executable); });
+    run_check("protocol", [] { static_cast<void>(run_protocol_tests()); });
+    run_check("server", [] { static_cast<void>(run_server_tests()); });
+    run_check("parent-identity", parent_identity_tests);
+    run_check("lifecycle", lifecycle_tests);
+    run_check("caller-and-native-lifecycle", integration_tests);
+    std::cout << "Windows computer helper unit checks passed.\n";
     return 0;
-  } catch (const Failure& failure) {
+  } catch (const UnitFailure& failure) {
     std::cerr << "FAIL " << failure.what() << '\n';
     return 1;
   } catch (...) {

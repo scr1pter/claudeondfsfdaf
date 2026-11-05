@@ -1,8 +1,24 @@
 import { expect, test } from "bun:test"
+import { createHash } from "node:crypto"
+import { EventEmitter } from "node:events"
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
 import path from "node:path"
+import { PassThrough } from "node:stream"
 import { fileURLToPath } from "node:url"
 import { createFakeHelper, manualClock } from "../test/computer/fake-helper"
-import { frameReader, type Line, type Received } from "../test/computer/transcript"
+import { encodeFrame, frameReader, type Line, type Received } from "../test/computer/transcript"
+import { WINDOWS_TEST_ARTIFACTS, type HelperManifest } from "./build-computer-helper"
+import { EXECUTABLE_NAMES } from "./channel-ids"
+import { readIdentity } from "./computer-helper-identity"
+import {
+  WINDOWS_NATIVE_CHECKS,
+  createWindowsVerifiedFixture,
+  verifyWindowsNativeFiles,
+  windowsNativeChannel,
+  windowsNativeSelfTestChecks,
+  type VerifiedWindowsArtifacts,
+} from "./computer-helper-selftest-windows"
 import {
   CORE_TRANSCRIPTS,
   MAC_NATIVE_CHECKS,
@@ -22,6 +38,7 @@ import {
 } from "./computer-helper-selftest"
 
 const fixtures = fileURLToPath(new URL("../test/fixtures/computer-protocol", import.meta.url))
+const desktopDirectory = fileURLToPath(new URL("../", import.meta.url))
 const options: SelfTestOptions = {
   platform: "darwin",
   bin: "/virtual/VectorComputer.app/Contents/MacOS/VectorComputer",
@@ -31,7 +48,7 @@ const options: SelfTestOptions = {
 }
 const hello: Line[] = [{ send: { id: 1, op: "hello", protocol: { min: 1, max: 1 } }, expect: { id: 1, ok: true } }]
 
-function fixture(input: { keyboard?: boolean; minimal?: boolean } = {}) {
+function fixture(input: { keyboard?: boolean; minimal?: boolean; platform?: "macos" | "windows" } = {}) {
   const state = {
     clock: manualClock(),
     closed: 0,
@@ -54,7 +71,7 @@ function fixture(input: { keyboard?: boolean; minimal?: boolean } = {}) {
       const inbox: Received[] = []
       const reader = frameReader({ onFrame: (bytes) => inbox.push({ kind: "frame", bytes }) })
       const helper = createFakeHelper(
-        { disabled: input.keyboard ? [] : ["input.keyboard"] },
+        { disabled: input.keyboard ? [] : ["input.keyboard"], platform: input.platform },
         {
           clock: state.clock,
           write: (bytes) => reader.push(bytes),
@@ -116,6 +133,335 @@ function fixture(input: { keyboard?: boolean; minimal?: boolean } = {}) {
   }
   return { state, native, dependencies }
 }
+
+async function windowsArtifacts() {
+  const root = await mkdtemp(path.join(tmpdir(), "vector-computer-driver-test-"))
+  const tests = path.join(root, "tests")
+  await mkdir(tests)
+  const executable = readIdentity().windows.executable
+  const bin = path.join(root, executable)
+  const bytes = Buffer.alloc(256, 0x42)
+  bytes.write("MZ")
+  bytes.writeUInt32LE(128, 0x3c)
+  bytes.writeUInt32LE(0x4550, 128)
+  bytes.writeUInt16LE(0x8664, 132)
+  bytes.writeUInt16LE(0x20b, 152)
+  const hash = createHash("sha256").update(bytes).digest("hex")
+  await writeFile(bin, bytes)
+  for (const name of [WINDOWS_TEST_ARTIFACTS.unit, WINDOWS_TEST_ARTIFACTS.caller, WINDOWS_TEST_ARTIFACTS.target])
+    await writeFile(path.join(tests, name), bytes)
+  const helperManifest: HelperManifest = {
+    helperVersion: readIdentity().helperVersion,
+    protocol: { min: 1, max: 1 },
+    platform: "win32",
+    files: { [executable]: { sha256: hash, arch: ["x64"] } },
+    sourceDigest: "1".repeat(64),
+    toolchain: "injected-actual-test-toolchain",
+  }
+  const testManifest: HelperManifest = {
+    ...helperManifest,
+    files: Object.fromEntries(
+      [WINDOWS_TEST_ARTIFACTS.unit, WINDOWS_TEST_ARTIFACTS.caller, WINDOWS_TEST_ARTIFACTS.target].map((name) => [
+        name,
+        { sha256: hash, arch: ["x64"] },
+      ]),
+    ),
+  }
+  await writeFile(path.join(root, "computer-helper.json"), JSON.stringify(helperManifest))
+  const files: VerifiedWindowsArtifacts = {
+    bin,
+    unit: path.join(tests, WINDOWS_TEST_ARTIFACTS.unit),
+    caller: path.join(tests, WINDOWS_TEST_ARTIFACTS.caller),
+    target: path.join(tests, WINDOWS_TEST_ARTIFACTS.target),
+    channel: "beta",
+    helperManifest,
+    testManifest,
+  }
+  return { root, files, options: { ...options, platform: "win32" as const, bin, tests } }
+}
+
+test("Windows reports require exact native catalogs, coherent exits, and an honest pending W11 skip", () => {
+  for (const mode of ["unprivileged", "packaged", "eof", "parentDeath"] as const) {
+    const checks = WINDOWS_NATIVE_CHECKS[mode].map((name) => ({ name, ok: true }))
+    expect(windowsNativeSelfTestChecks(JSON.stringify({ checks }), mode, 0)).toEqual(checks)
+    for (const invalid of [
+      { checks: [] },
+      { checks: [...checks, checks[0]] },
+      { checks, private: "PRIVATE" },
+      { checks: checks.map((item) => ({ ...item, name: "PRIVATE" })) },
+      { checks: checks.map((item) => ({ ...item, detail: "PRIVATE" })) },
+      { checks: checks.map((item) => ({ ...item, ok: false, skipped: true })) },
+    ])
+      expect(() => windowsNativeSelfTestChecks(JSON.stringify(invalid), mode, 0)).toThrow()
+    expect(() => windowsNativeSelfTestChecks(JSON.stringify({ checks }), mode, 77)).toThrow()
+  }
+  const checks = [{ name: "windows-privileged-target-pending", ok: false, skipped: true }]
+  expect(windowsNativeSelfTestChecks(JSON.stringify({ checks }), "privileged", 77)).toEqual(checks)
+  expect(() => windowsNativeSelfTestChecks(JSON.stringify({ checks }), "privileged", 0)).toThrow()
+  expect(() =>
+    windowsNativeSelfTestChecks(
+      JSON.stringify({ checks: [{ ...checks[0], ok: true, skipped: false }] }),
+      "privileged",
+      0,
+    ),
+  ).toThrow()
+})
+
+test("Windows channel inference verifies all test artifacts before the first helper version launch", async () => {
+  const prepared = await windowsArtifacts()
+  const order: string[] = []
+  try {
+    const files = await verifyWindowsNativeFiles(prepared.options, desktopDirectory, "x64", {
+      source: async (_directory, _platform, channel, toolchain) => {
+        order.push(`source.${channel}`)
+        expect(toolchain).toBe(prepared.files.helperManifest.toolchain)
+        return channel === "beta" ? prepared.files.helperManifest.sourceDigest : "2".repeat(64)
+      },
+      tests: async (root, architecture, input) => {
+        order.push("all-test-bytes-verified")
+        expect(root).toBe(prepared.options.tests)
+        expect(architecture).toBe("x64")
+        expect(input.channel).toBe("beta")
+        expect(input.helperManifest).toEqual(prepared.files.helperManifest)
+        return prepared.files.testManifest
+      },
+      helper: async (root, platform, architectures, input) => {
+        order.push("helper-pe-hash-and-version")
+        expect(root).toBe(prepared.root)
+        expect(platform).toBe("win32")
+        expect(architectures).toEqual(["x64"])
+        expect(input?.channel).toBe("beta")
+        expect(input?.directory).toBe(desktopDirectory)
+        expect(input?.host).toBeUndefined()
+        expect(order.indexOf("all-test-bytes-verified")).toBeLessThan(order.indexOf("helper-pe-hash-and-version"))
+        return prepared.files.helperManifest
+      },
+    })
+    expect(files.channel).toBe("beta")
+    expect(files.unit).toBe(prepared.files.unit)
+    expect(order.filter((item) => item.startsWith("source."))).toHaveLength(3)
+  } finally {
+    await rm(prepared.root, { recursive: true, force: true })
+  }
+})
+
+test("missing or ambiguous Windows source channels and invalid test bytes cannot launch a helper", async () => {
+  const prepared = await windowsArtifacts()
+  let launches = 0
+  try {
+    for (const ambiguous of [false, true]) {
+      await expect(
+        verifyWindowsNativeFiles(prepared.options, desktopDirectory, "x64", {
+          source: async () => (ambiguous ? "1" : "2").repeat(64),
+          helper: async () => {
+            launches++
+            return prepared.files.helperManifest
+          },
+        }),
+      ).rejects.toThrow("channel")
+    }
+    await expect(
+      verifyWindowsNativeFiles(prepared.options, desktopDirectory, "x64", {
+        source: async (_directory, _platform, channel) => (channel === "beta" ? "1" : "2").repeat(64),
+        tests: async () => {
+          throw new Error("PRIVATE stale caller bytes")
+        },
+        helper: async () => {
+          launches++
+          return prepared.files.helperManifest
+        },
+      }),
+    ).rejects.toThrow()
+    expect(launches).toBe(0)
+  } finally {
+    await rm(prepared.root, { recursive: true, force: true })
+  }
+})
+
+test("Windows fixtures bind copied Caller/helper bytes and use only manifested native lifecycle modes", async () => {
+  const prepared = await windowsArtifacts()
+  const commands: Command[] = []
+  const channels: { executable: string; args: string[] }[] = []
+  try {
+    const native = await createWindowsVerifiedFixture(prepared.options, desktopDirectory, prepared.files, {
+      async command(command) {
+        commands.push(command)
+        if (command.args.includes("--probe"))
+          return {
+            code: 0,
+            stdout: '{"permissions":{"screen":"n/a","accessibility":"n/a"},"responsible":true,"elevated":false}',
+          }
+        const mode = command.args.includes("--self-test=lifecycle-eof") ? "eof" : "parentDeath"
+        return {
+          code: 0,
+          stdout: JSON.stringify({ checks: WINDOWS_NATIVE_CHECKS[mode].map((name) => ({ name, ok: true })) }),
+        }
+      },
+      channel(executable, args) {
+        channels.push({ executable, args })
+        return { write() {}, end() {}, next: async () => ({ kind: "exit", code: 1 }), dispose: async () => {} }
+      },
+    })
+    const running = await native.open()
+    await running.dispose()
+    const caller = channels[0]!.executable
+    expect(path.basename(caller)).toBe(`${EXECUTABLE_NAMES.beta}.exe`)
+    expect(channels[0]!.args).toEqual(["--stdio"])
+    expect(await readFile(caller)).toEqual(await readFile(prepared.files.caller))
+    expect(await readFile(path.join(path.dirname(caller), "resources/computer/vector-computer.exe"))).toEqual(
+      await readFile(prepared.files.bin),
+    )
+    await native.probe()
+    expect(await native.unverifiedParent()).toBe(true)
+    expect(channels[1]!.args).toEqual(["--stdio", "--parent-pid", String(process.pid)])
+    expect(await native.eof()).toBe(true)
+    expect(await native.parentDeath()).toBe(true)
+    expect(commands.map((item) => [item.executable, item.args])).toEqual([
+      [caller, ["--probe", "--json"]],
+      [prepared.files.unit, ["--self-test=lifecycle-eof"]],
+      [prepared.files.unit, ["--self-test=lifecycle-parent-death"]],
+    ])
+    await native.close()
+    await expect(native.open()).rejects.toThrow("closed")
+  } finally {
+    await rm(prepared.root, { recursive: true, force: true })
+  }
+})
+
+test("Windows copy drift refuses admission before a Caller, unit or helper can execute", async () => {
+  for (const artifact of ["caller", "bin"] as const) {
+    const prepared = await windowsArtifacts()
+    let launches = 0
+    try {
+      await writeFile(prepared.files[artifact], "changed since source verification")
+      await expect(
+        createWindowsVerifiedFixture(prepared.options, desktopDirectory, prepared.files, {
+          command: async () => {
+            launches++
+            return { code: 0, stdout: "PRIVATE" }
+          },
+          channel: () => {
+            launches++
+            throw new Error("unreachable")
+          },
+        }),
+      ).rejects.toThrow("changed")
+      expect(launches).toBe(0)
+    } finally {
+      await rm(prepared.root, { recursive: true, force: true })
+    }
+  }
+})
+
+test("Windows channel uses three stdio pipes, preserves framed bytes, and kills only its owned child handle", async () => {
+  const child = new EventEmitter()
+  const stdin = new PassThrough(),
+    stdout = new PassThrough(),
+    stderr = new PassThrough()
+  const sent: Buffer[] = []
+  stdin.on("data", (bytes: Buffer) => sent.push(bytes))
+  let kills = 0
+  const processState = Object.assign(child, {
+    stdin,
+    stdout,
+    stderr,
+    exitCode: null as number | null,
+    signalCode: null as NodeJS.Signals | null,
+    kill() {
+      kills++
+      Object.assign(child, { signalCode: "SIGKILL" })
+      child.emit("close", null)
+      return true
+    },
+  })
+  const channel = windowsNativeChannel("verified-caller.exe", ["--stdio"], ((
+    executable: string,
+    args: readonly string[],
+    setup: unknown,
+  ) => {
+    expect(executable).toBe("verified-caller.exe")
+    expect(args).toEqual(["--stdio"])
+    expect(setup).toEqual({ stdio: ["pipe", "pipe", "pipe"], windowsHide: true })
+    return processState
+  }) as unknown as typeof import("node:child_process").spawn)
+  const frame = encodeFrame({ id: 1, ok: true })
+  channel.write(frame)
+  expect(Buffer.concat(sent)).toEqual(Buffer.from(frame))
+  stderr.write("PRIVATE native diagnostics")
+  stdout.write(frame.subarray(0, 3))
+  stdout.write(frame.subarray(3))
+  expect(await channel.next(10)).toEqual({ kind: "frame", bytes: Buffer.from(frame.subarray(4)) })
+  channel.end()
+  await channel.dispose()
+  expect(kills).toBe(1)
+})
+
+test("Windows driver runs fixed grant-free native catalogs and keeps W11 skips visible", async () => {
+  const fake = fixture({ minimal: true, platform: "windows" })
+  fake.dependencies.platform = "win32"
+  fake.dependencies.files = async () => ({
+    unit: "/virtual/tests/vector-computer-tests.exe",
+    target: "/virtual/tests/computer-test-target.exe",
+  })
+  fake.native.probe = async () => ({
+    permissions: { screen: "n/a", accessibility: "n/a" },
+    responsible: true,
+    elevated: false,
+    captureBlocked: true,
+  })
+  fake.dependencies.command = async (command) => {
+    fake.state.commands.push(command)
+    return command.args.length === 0
+      ? { code: 0, stdout: "Windows native unit checks passed" }
+      : {
+          code: 0,
+          stdout: JSON.stringify({ checks: WINDOWS_NATIVE_CHECKS.unprivileged.map((name) => ({ name, ok: true })) }),
+        }
+  }
+  fake.native.privileged = async () => ({
+    code: 77,
+    stdout: '{"checks":[{"name":"windows-privileged-target-pending","ok":false,"skipped":true}]}',
+  })
+  const result = await runComputerHelperSelfTest(
+    { ...options, platform: "win32", privileged: "auto" },
+    fake.dependencies,
+  )
+  expect(result.code).toBe(0)
+  expect(result.checks.find((item) => item.name === "packaged.packaged-pe")?.status).toBe("passed")
+  expect(result.checks.find((item) => item.name === "privileged.windows-privileged-target-pending")?.status).toBe(
+    "skipped",
+  )
+  expect(result.checks.find((item) => item.name === "target-control")?.reason).toBe("windows-target-control-pending")
+  expect(result.checks.find((item) => item.name === "conformance.heartbeat-loss")?.status).toBe("skipped")
+  expect(fake.state.closed).toBe(1)
+})
+
+test("Windows probes cannot omit native capture/token facts or substitute a macOS helper", async () => {
+  for (const invalid of ["missing-capture", "wrong-token", "wrong-platform"] as const) {
+    const fake = fixture({ minimal: true, platform: invalid === "wrong-platform" ? "macos" : "windows" })
+    fake.dependencies.platform = "win32"
+    fake.native.probe = async () => ({
+      permissions: { screen: "n/a", accessibility: "n/a" },
+      responsible: true,
+      elevated: invalid === "wrong-token",
+      ...(invalid === "missing-capture" ? {} : { captureBlocked: true }),
+    })
+    fake.dependencies.command = async (command) =>
+      command.args.length === 0
+        ? { code: 0, stdout: "native units passed" }
+        : {
+            code: 0,
+            stdout: JSON.stringify({ checks: WINDOWS_NATIVE_CHECKS.unprivileged.map((name) => ({ name, ok: true })) }),
+          }
+    const result = await runComputerHelperSelfTest({ ...options, platform: "win32" }, fake.dependencies)
+    expect(result.code).toBe(1)
+    expect(
+      result.checks.find((item) => item.name === (invalid === "wrong-platform" ? "responsible" : "probe.first"))
+        ?.status,
+    ).toBe("failed")
+    expect(fake.state.closed).toBe(1)
+  }
+})
 
 test("native:test defaults to privileged off and resolves host-native output paths", () => {
   const mac = parseSelfTestArgs([], "darwin", "arm64")

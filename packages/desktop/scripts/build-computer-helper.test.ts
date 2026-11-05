@@ -10,6 +10,7 @@ import {
   computeSourceDigest,
   createManifest,
   MAC_TEST_TARGET,
+  WINDOWS_TEST_ARTIFACTS,
   parseBuildOptions,
   parseHelperManifest,
   renderHelperPlist,
@@ -17,6 +18,7 @@ import {
   swiftArguments,
   verifyPrebuiltHelper,
   verifyMacTestArtifacts,
+  verifyWindowsTestArtifacts,
   windowsToolchainSelection,
 } from "./build-computer-helper"
 import type { HelperManifest, IdentityLock, NativeCommand } from "./build-computer-helper"
@@ -369,7 +371,12 @@ describe("native build boundaries", () => {
           if (command === "cmake" && args[0] === "--build") {
             const release = path.join(args[1]!, "Release")
             await mkdir(release, { recursive: true })
-            for (const file of [identity.windows.executable, "vector-computer-tests.exe", "computer-test-target.exe"])
+            for (const file of [
+              identity.windows.executable,
+              WINDOWS_TEST_ARTIFACTS.unit,
+              WINDOWS_TEST_ARTIFACTS.target,
+              WINDOWS_TEST_ARTIFACTS.caller,
+            ])
               await writeFile(path.join(release, file), "virtual compiler output")
             const changed =
               changedInput === "source"
@@ -431,7 +438,13 @@ describe("native build boundaries", () => {
           bytes.writeUInt32LE(64, 0x3c)
           bytes.writeUInt32LE(0x4550, 64)
           bytes.writeUInt16LE(architectures.get(args[1]!) === "x64" ? 0x8664 : 0xaa64, 68)
-          for (const file of [identity.windows.executable, "vector-computer-tests.exe", "computer-test-target.exe"])
+          bytes.writeUInt16LE(0x20b, 88)
+          for (const file of [
+            identity.windows.executable,
+            WINDOWS_TEST_ARTIFACTS.unit,
+            WINDOWS_TEST_ARTIFACTS.target,
+            WINDOWS_TEST_ARTIFACTS.caller,
+          ])
             await writeFile(path.join(release, file), bytes)
         }
         if (command.endsWith(identity.windows.executable)) {
@@ -475,6 +488,47 @@ describe("native build boundaries", () => {
       expect(configure.every((call) => call[call.indexOf("-T") + 1] === "version=14.44.35207")).toBe(true)
       expect(configure.every((call) => call.includes("--fresh"))).toBe(true)
       expect(calls.filter((call) => call[0]!.endsWith(identity.windows.executable))).toHaveLength(1)
+      const tests = path.join(root, "out/x64/tests")
+      const checked = await verifyWindowsTestArtifacts(tests, "x64", { directory: root, helperManifest: outputs[0]! })
+      expect(checked.files[WINDOWS_TEST_ARTIFACTS.caller]?.arch).toEqual(["x64"])
+      expect(Object.keys(outputs[0]!.files)).toEqual([identity.windows.executable])
+      const manifestFile = path.join(tests, WINDOWS_TEST_ARTIFACTS.manifest)
+      const originalManifest = await readFile(manifestFile, "utf8")
+      const callerFile = path.join(tests, WINDOWS_TEST_ARTIFACTS.caller)
+      const originalCaller = await readFile(callerFile)
+      for (const mutation of ["bytes", "architecture", "format"] as const) {
+        const changed = Buffer.from(originalCaller)
+        if (mutation === "bytes") changed[100] = 1
+        if (mutation === "architecture") changed.writeUInt16LE(0xaa64, 68)
+        if (mutation === "format") changed.writeUInt16LE(0, 0)
+        await writeFile(callerFile, changed)
+        if (mutation !== "bytes") {
+          const updated = JSON.parse(originalManifest) as HelperManifest
+          updated.files[WINDOWS_TEST_ARTIFACTS.caller]!.sha256 = createHash("sha256").update(changed).digest("hex")
+          await writeFile(manifestFile, JSON.stringify(updated))
+        }
+        await expect(
+          verifyWindowsTestArtifacts(tests, "x64", { directory: root, helperManifest: outputs[0]! }),
+        ).rejects.toThrow("hash, PE or architecture")
+        await writeFile(callerFile, originalCaller)
+        await writeFile(manifestFile, originalManifest)
+      }
+      await writeFile(path.join(tests, "unexpected.dll"), "Unclassified test artifact")
+      await expect(
+        verifyWindowsTestArtifacts(tests, "x64", { directory: root, helperManifest: outputs[0]! }),
+      ).rejects.toThrow("outside its manifest")
+      await rm(path.join(tests, "unexpected.dll"))
+      await expect(
+        verifyWindowsTestArtifacts(tests, "x64", {
+          directory: root,
+          helperManifest: { ...outputs[0]!, sourceDigest: "0".repeat(64) },
+        }),
+      ).rejects.toThrow("does not match the helper")
+      await writeFile(path.join(native, "changed-source.cpp"), "// Source changed after the measured fixture build.\n")
+      await expect(
+        verifyWindowsTestArtifacts(tests, "x64", { directory: root, helperManifest: outputs[0]! }),
+      ).rejects.toThrow("source digest")
+      await rm(path.join(native, "changed-source.cpp"))
       calls.length = 0
       await expect(
         buildComputerHelper(options, { directory: root, host: "win32", environment: {}, run }),

@@ -36,6 +36,13 @@ import {
 import { APP_IDS } from "./channel-ids"
 import { readIdentity } from "./computer-helper-identity"
 import { MAC_TEST_TARGET, verifyMacTestArtifacts, verifyPrebuiltHelper } from "./build-computer-helper"
+import {
+  WINDOWS_NATIVE_CHECKS,
+  createWindowsVerifiedFixture,
+  verifyWindowsNativeFiles,
+  windowsNativeSelfTestChecks,
+  type VerifiedWindowsArtifacts,
+} from "./computer-helper-selftest-windows"
 
 const packageDir = fileURLToPath(new URL("../", import.meta.url))
 const privilegedTimeoutMs = 150_000
@@ -66,7 +73,10 @@ export const MAC_NATIVE_CHECKS = {
     "isolated-target-cleanup",
   ],
 } as const
-const nativeChecks = new Set<string>(Object.values(MAC_NATIVE_CHECKS).flat())
+const nativeChecks = new Set<string>([
+  ...Object.values(MAC_NATIVE_CHECKS).flat(),
+  ...Object.values(WINDOWS_NATIVE_CHECKS).flat(),
+])
 const NativeSelfTestReport = Schema.Struct({
   checks: Schema.Array(
     Schema.Struct({
@@ -253,13 +263,14 @@ export type VerifiedFixture = {
   privileged(target: string): Promise<CommandResult>
   close(): Promise<void>
 }
+export type NativeTestFiles = { unit: string; target?: string; windows?: VerifiedWindowsArtifacts }
 export type SelfTestDependencies = {
   platform?: NodeJS.Platform
   command?: (command: Command) => Promise<CommandResult>
-  fixture?: (options: SelfTestOptions) => Promise<VerifiedFixture>
+  fixture?: (options: SelfTestOptions, files?: NativeTestFiles) => Promise<VerifiedFixture>
   catalog?: (directory: string) => Promise<readonly string[]>
   transcript?: (file: string) => Promise<Line[]>
-  files?: (options: SelfTestOptions) => Promise<{ unit: string; target?: string }>
+  files?: (options: SelfTestOptions) => Promise<NativeTestFiles>
   wait?: (ms: number) => Promise<void>
 }
 
@@ -457,7 +468,13 @@ export async function runComputerHelperSelfTest(options: SelfTestOptions, depend
                 result.code,
               ),
             }
-          : JSON.parse(result.stdout)
+          : {
+              checks: windowsNativeSelfTestChecks(
+                result.stdout,
+                name === "privileged" ? "privileged" : name === "packaged" ? "packaged" : "unprivileged",
+                result.code,
+              ),
+            }
       if (
         !report ||
         typeof report !== "object" ||
@@ -497,7 +514,7 @@ export async function runComputerHelperSelfTest(options: SelfTestOptions, depend
       set(name, "failed", "invalid-native-result")
     }
   }
-  let files: { unit: string; target?: string } | undefined
+  let files: NativeTestFiles | undefined
   try {
     files = await (dependencies.files ?? nativeTestFiles)(options)
   } catch {
@@ -517,21 +534,33 @@ export async function runComputerHelperSelfTest(options: SelfTestOptions, depend
     await child("target-control", path.join(files.target, "Contents/MacOS", MAC_TEST_TARGET.executable), [
       "--self-test=control",
     ])
-  else set("target-control", "skipped", "isolated-target-unavailable")
+  else
+    set(
+      "target-control",
+      "skipped",
+      options.platform === "win32" ? "windows-target-control-pending" : "isolated-target-unavailable",
+    )
   let fixture: VerifiedFixture | undefined
   try {
-    fixture = await (dependencies.fixture ?? createVerifiedFixture)(options)
+    fixture = await (dependencies.fixture ?? createVerifiedFixture)(options, files)
     for (const name of ["probe.first", "probe.fresh"]) {
       try {
         // Each call starts a separate verified native caller and one-shot helper. Never reuse a prior process's
         // permission cache, and never include observed grant values or raw probe output in the report.
-        Schema.decodeUnknownSync(
-          Schema.Struct({
-            permissions: Computer.PermissionsStatus,
-            responsible: Schema.Literal(true),
-            elevated: Schema.Literal(false),
-          }),
-        )(await fixture.probe())
+        const probeSchema: Schema.Decoder<unknown> =
+          options.platform === "win32"
+            ? Schema.Struct({
+                permissions: Schema.Struct({ screen: Schema.Literal("n/a"), accessibility: Schema.Literal("n/a") }),
+                responsible: Schema.Literal(true),
+                elevated: Schema.Literal(false),
+                captureBlocked: Schema.Boolean,
+              })
+            : Schema.Struct({
+                permissions: Computer.PermissionsStatus,
+                responsible: Schema.Literal(true),
+                elevated: Schema.Literal(false),
+              })
+        Schema.decodeUnknownSync(probeSchema)(await fixture.probe())
         set(name, "passed")
       } catch {
         set(name, "failed", "native-probe-failed")
@@ -551,6 +580,8 @@ export async function runComputerHelperSelfTest(options: SelfTestOptions, depend
         { wait },
       )
       hello = Schema.decodeUnknownSync(Computer.HelperHello)(result.messages[0])
+      if (hello.helper.platform !== (options.platform === "darwin" ? "macos" : "windows"))
+        throw new Error("The verified helper returned the wrong platform.")
       set("responsible", "passed")
     } finally {
       await channel.dispose()
@@ -656,7 +687,11 @@ export async function runNativeCommand(command: Command): Promise<CommandResult>
   })
 }
 
-async function nativeTestFiles(options: SelfTestOptions) {
+async function nativeTestFiles(options: SelfTestOptions): Promise<NativeTestFiles> {
+  if (options.platform === "win32") {
+    const windows = await verifyWindowsNativeFiles(options, packageDir)
+    return { unit: windows.unit, target: windows.target, windows }
+  }
   const supplied = await stat(options.tests)
   const directory = supplied.isDirectory() ? options.tests : path.dirname(options.tests)
   const unit = supplied.isDirectory()
@@ -687,10 +722,7 @@ async function nativeTestFiles(options: SelfTestOptions) {
     const base = await realpath(directory)
     return { unit: path.join(base, "VectorComputerTests"), target: path.join(base, MAC_TEST_TARGET.bundle) }
   }
-  const candidate = path.join(directory, "computer-test-target.exe")
-  const target = await realpath(candidate).catch(() => undefined)
-  if (!target || path.dirname(target) !== (await realpath(directory))) return { unit }
-  return { unit, target }
+  throw new Error("The native test platform is unavailable.")
 }
 
 async function bundleDigest(directory: string) {
@@ -714,8 +746,9 @@ async function bundleDigest(directory: string) {
   return hash.digest("hex")
 }
 
-async function createVerifiedFixture(options: SelfTestOptions): Promise<VerifiedFixture> {
-  if (options.platform !== "darwin") throw new Error("The Windows verified caller arrives with W2.")
+async function createVerifiedFixture(options: SelfTestOptions, files?: NativeTestFiles): Promise<VerifiedFixture> {
+  if (options.platform === "win32")
+    return createWindowsVerifiedFixture(options, packageDir, files?.windows, { command: runNativeCommand })
   const identity = readIdentity()
   const bundle = path.dirname(path.dirname(path.dirname(await realpath(options.bin))))
   if (
