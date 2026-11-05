@@ -36,6 +36,11 @@ import {
 import { parseComputerOverlayBootstrapUnavailable, verifyComputerOverlayStage } from "./computer-overlay-smoke-stage"
 import { computerOverlayBundlePlan, type OverlayCompiler } from "./build-computer-overlay-smoke"
 import { COMPUTER_SMOKE_SAMPLE_MARK, sampleOwnedComputerSmoke } from "./computer-overlay-smoke-sample"
+import {
+  COMPUTER_SMOKE_WINDOW_PROBE_MARK,
+  acceptComputerSmokeWindowProbe,
+  type ComputerSmokeWindowProbe,
+} from "./computer-overlay-smoke-window-probe"
 
 // Compiler-only module-local type; no Bun globals are added to renderer or Node declarations.
 declare const Bun: OverlayCompiler
@@ -174,6 +179,7 @@ export async function runComputerOverlaySmoke(args = process.argv.slice(2)) {
       hint: ComputerSmokeRuntimeHint = "none"
     let lastController: ComputerSmokeControllerStep | undefined
     const geometryWindows = new Set<number>()
+    const windowProbes = new Set<ComputerSmokeWindowProbe["variant"]>()
     const nativeDiagnostics = new Set<string>()
     let forcedCause: ComputerSmokeFailureCause | undefined
     const streamState: { childFailure?: ComputerSmokeFailureDiagnostic; loaderStarted: boolean; exception: boolean } = {
@@ -287,6 +293,14 @@ export async function runComputerOverlaySmoke(args = process.argv.slice(2)) {
             if (geometryWindows.has(geometry.window)) throw new Error("The geometry receipt is duplicated.")
             geometryWindows.add(geometry.window)
             process.stdout.write(COMPUTER_SMOKE_GEOMETRY_MARK + JSON.stringify(geometry) + "\n")
+          } else if (line.startsWith(COMPUTER_SMOKE_WINDOW_PROBE_MARK)) {
+            const probe = acceptComputerSmokeWindowProbe(line, {
+              platform: process.platform,
+              phase: lastPhase,
+              terminal: Boolean(streamState.childFailure || streamState.exception),
+              seen: windowProbes,
+            })
+            process.stdout.write(COMPUTER_SMOKE_WINDOW_PROBE_MARK + JSON.stringify(probe) + "\n")
           } else if (line.startsWith(COMPUTER_SMOKE_NATIVE_MARK)) {
             if (
               !stage ||
@@ -377,6 +391,7 @@ export async function runComputerOverlaySmoke(args = process.argv.slice(2)) {
       pendingLine.startsWith(COMPUTER_SMOKE_PHASE_MARK) ||
       pendingLine.startsWith(COMPUTER_SMOKE_CONTROLLER_MARK) ||
       pendingLine.startsWith(COMPUTER_SMOKE_GEOMETRY_MARK) ||
+      pendingLine.startsWith(COMPUTER_SMOKE_WINDOW_PROBE_MARK) ||
       pendingLine.startsWith(COMPUTER_SMOKE_NATIVE_MARK) ||
       pendingLine.startsWith(COMPUTER_SMOKE_FAILURE_MARK) ||
       pendingLine.startsWith(COMPUTER_SMOKE_EXCEPTION_MARK) ||

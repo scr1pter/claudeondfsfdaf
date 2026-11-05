@@ -53,6 +53,7 @@ import {
   type ComputerSmokeReason,
 } from "./computer-overlay-smoke-report"
 import { runComputerNativeOverlayProof } from "./computer-overlay-smoke-native"
+import { COMPUTER_SMOKE_WINDOW_PROBE_MARK, computerSmokeWindowProbes } from "./computer-overlay-smoke-window-probe"
 
 type WindowRecord = {
   window: BrowserWindow
@@ -272,6 +273,19 @@ async function properties() {
       }
       geometry++
     }
+  if (!boundsMatch && platform === "win32" && expected[0]) {
+    try {
+      const bounds = expected[0]
+      const probes = computerSmokeWindowProbes({
+        bounds,
+        options: computerOverlayWindowOptions({ platform, kind: "glow", bounds }),
+        create: (options) => new BrowserWindow(options),
+      })
+      for (const probe of probes) process.stdout.write(COMPUTER_SMOKE_WINDOW_PROBE_MARK + JSON.stringify(probe) + "\n")
+    } catch {
+      // Hidden constructor observations cannot replace the exact production assertion.
+    }
+  }
   check("overlay-bounds", boundsMatch)
   check(
     "overlay-window-properties",
