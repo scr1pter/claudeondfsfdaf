@@ -85,6 +85,22 @@ func runServerTests() throws -> Int {
   try test {
     let fake = ServerFixture()
     _ = try fake.begin()
+    var late: Dispatcher.Completion?
+    fake.server.register(op: "input.hold", deadlineMs: 20000) { _, _, done in late = done }
+    let hold = try fake.request("input.hold", fake.phase())
+    let before = fake.releases
+    fake.server.notifyDisplayChange()
+    try serverExpect(fake.releases == before + 1 && fake.result(hold)?["code"]?.stringValue == "changed",
+                     "native geometry change releases held input and answers its pending operation immediately")
+    late?(.success(ServerReply()))
+    try serverExpect(fake.responses.filter { $0.value["id"]?.intValue == hold }.count == 1,
+                     "a late hold completion cannot revive input after geometry invalidation")
+    try serverExpect(fake.server.sessionSnapshot()?.id == "native-test", "geometry invalidation retains the task authority")
+  }
+
+  try test {
+    let fake = ServerFixture()
+    _ = try fake.begin()
     try serverExpect(fake.observationInvalidations == 1, "a new authority lifetime clears native observations before acknowledgment")
     _ = try fake.request("session.update", ["sessionId": .string("other"), "phaseRevision": .integer(1)])
     try serverExpect(fake.observationInvalidations == 1, "a refused update preserves current native observations")

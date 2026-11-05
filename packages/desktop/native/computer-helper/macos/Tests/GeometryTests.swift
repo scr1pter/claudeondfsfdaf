@@ -343,6 +343,7 @@ func runGeometryTests() throws -> Int {
             CaptureWindowWitness(windowID: original.windowID, process: process, bounds: CGRect(x: -100, y: -50, width: 101, height: 80), spaceWitness: "space-a"),
             CaptureWindowWitness(windowID: original.windowID, process: process, bounds: original.bounds, onScreen: false, spaceWitness: "space-a"),
             CaptureWindowWitness(windowID: original.windowID, process: process, bounds: original.bounds, minimized: true, spaceWitness: "space-a"),
+            CaptureWindowWitness(windowID: original.windowID, process: process, bounds: original.bounds, alpha: 0, spaceWitness: "space-a"),
             CaptureWindowWitness(windowID: original.windowID, process: process, bounds: original.bounds, spaceWitness: "space-b"),
         ] {
             try geometryCheck(retained.windows[0] != changed, "Every process/geometry/visibility/space change must remain detectable.")

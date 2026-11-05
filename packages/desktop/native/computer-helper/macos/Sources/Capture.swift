@@ -416,7 +416,7 @@ final class CaptureService {
             guard !session.overlayWindowIds.contains(item.windowID), let process = item.owner?.process ?? item.nonApplicationHost else { return nil }
             if !item.onScreen && item.minimized == nil && item.windowID != window?.windowID { return nil }
             return CaptureWindowWitness(windowID: item.windowID, process: process, bounds: item.bounds,
-                onScreen: item.onScreen, minimized: item.minimized ?? paused, spaceWitness: item.spaceWitness)
+                onScreen: item.onScreen, minimized: item.minimized ?? paused, alpha: item.alpha, spaceWitness: item.spaceWitness)
         }
         let geometry = CaptureGeometry(captureID: "cap_" + UUID().uuidString.lowercased(), displayID: display.id,
             bounds: bounds, nativePixelSize: CGSize(width: bounds.width * captureScale, height: bounds.height * captureScale),

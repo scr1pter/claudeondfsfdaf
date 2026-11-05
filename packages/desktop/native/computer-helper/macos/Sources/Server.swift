@@ -216,7 +216,10 @@ final class Dispatcher {
   func notifyDisplayChange() {
     locked {
       guard !closed else { return }
+      invalidateSessionWork()
+      guard !closed else { return }
       emit(Event(name: "display_change"))
+      pump()
     }
   }
 

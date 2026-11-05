@@ -151,6 +151,18 @@ final class AccessibilityRegistry<Element> {
         return record
     }
 
+    /// Element-only expected targets may bind only to an already observed current reference.
+    func resolveElement(_ elementID: String, session: ServerSession,
+                        witness: AccessibilityWitness) throws -> AccessibilityReference<Element> {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !closed, let snapshot, matches(snapshot, session), witness.valid,
+              stable[elementID] != nil, let ref = latestReference[elementID], let record = references[ref],
+              record.elementID == elementID, record.generation == snapshot.generation,
+              record.witness == witness else { throw Self.stale }
+        return record
+    }
+
     func clear() {
         lock.lock()
         defer { lock.unlock() }

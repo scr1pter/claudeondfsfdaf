@@ -34,12 +34,14 @@ private final class HelperServer {
     private let captureRegistry = CaptureRegistry()
     private lazy var captureService = CaptureService(registry: captureRegistry)
     private lazy var accessibilityService = AccessibilityService(captures: captureRegistry)
+    private lazy var inputService = InputService(captures: captureRegistry, accessibility: accessibilityService)
     private var displayCallbackRegistered = false
     private var activeSpaceObserver: NSObjectProtocol?
 
     private static let displayCallback: CGDisplayReconfigurationCallBack = { _, _, context in
         guard let context else { return }
         let server = Unmanaged<HelperServer>.fromOpaque(context).takeUnretainedValue()
+        _ = server.inputService.releaseAll()
         server.captureService.invalidateDisplays()
         server.accessibilityService.invalidateObservations()
         server.dispatcher?.notifyDisplayChange()
@@ -49,6 +51,7 @@ private final class HelperServer {
         let permissions = permissionService
         let capture = captureService
         let accessibility = accessibilityService
+        let inputs = inputService
         let server = Dispatcher(
             responsible: HelperLifecycle.isSelfResponsible(),
             architecture: architecture,
@@ -58,6 +61,7 @@ private final class HelperServer {
                 guard let self else { return }
                 do { try self.writer.write(event) } catch { self.finish(code: 1) }
             },
+            releaseAll: { inputs.releaseAll() },
             observationsInvalidated: {
                 capture.invalidateDisplays()
                 accessibility.invalidateObservations()
@@ -67,7 +71,10 @@ private final class HelperServer {
                 guard let self else { return }
                 do { try self.writer.write(response, binary: image) } catch { self.finish(code: 1) }
             },
-            features: { capture.features().merging(accessibility.features()) { _, current in current } },
+            features: {
+                capture.features().merging(accessibility.features()) { _, current in current }
+                    .merging(inputs.features()) { _, current in current }
+            },
             permissions: { permissions.status() }
         )
         server.register(op: "permissions.request", deadlineMs: 5000, requiresSession: false) { request, context, done in
@@ -100,7 +107,13 @@ private final class HelperServer {
         server.register(op: "ui.setValue", deadlineMs: 10000) { request, context, done in
             accessibility.setValue(request.args, context: context, completion: done)
         }
+        for op in ["input.move", "input.click", "input.drag", "input.scroll", "input.key", "input.type", "input.hold"] {
+            server.register(op: op, deadlineMs: op == "input.hold" ? 20000 : 10000) { request, context, done in
+                inputs.handle(op: request.op, args: request.args, context: context, completion: done)
+            }
+        }
         dispatcher = server
+        inputs.reconcileOnStart()
         watchers = try HelperLifecycle.installWorkerWatchers(parent: parent) { [weak self] in
             self?.finish(code: 0)
         }
@@ -119,6 +132,7 @@ private final class HelperServer {
         activeSpaceObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.activeSpaceDidChangeNotification, object: nil, queue: nil
         ) { [weak self] _ in
+            _ = self?.inputService.releaseAll()
             self?.captureService.invalidateDisplays()
             self?.accessibilityService.invalidateObservations()
             self?.dispatcher?.notifyDisplayChange()
@@ -182,6 +196,7 @@ private final class HelperServer {
         permissionService.close()
         captureService.close()
         accessibilityService.close()
+        inputService.close()
         if removeDisplayCallback {
             _ = CGDisplayRemoveReconfigurationCallback(Self.displayCallback, Unmanaged.passUnretained(self).toOpaque())
         }

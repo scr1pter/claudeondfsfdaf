@@ -71,15 +71,17 @@ struct CaptureWindowWitness: Equatable {
     let bounds: CGRect
     let onScreen: Bool
     let minimized: Bool
+    let alpha: Double
     let spaceWitness: String?
 
     init(windowID: String, process: HelperProcessIdentity, bounds: CGRect,
-         onScreen: Bool = true, minimized: Bool = false, spaceWitness: String? = nil) {
+         onScreen: Bool = true, minimized: Bool = false, alpha: Double = 1, spaceWitness: String? = nil) {
         self.windowID = windowID
         self.process = process
         self.bounds = bounds
         self.onScreen = onScreen
         self.minimized = minimized
+        self.alpha = alpha
         self.spaceWitness = spaceWitness
     }
 }
@@ -201,7 +203,8 @@ struct CaptureGeometry {
               spaceWitness.map(Self.validString) ?? true, zoomSourceID.map(Self.validString) ?? true,
               ownerProcess.map(Self.validProcess) ?? true,
               windows.allSatisfy({ Self.validString($0.windowID) && Self.validProcess($0.process) &&
-                  Self.validRect($0.bounds) && ($0.spaceWitness.map(Self.validString) ?? true) }) else { return false }
+                  Self.validRect($0.bounds) && $0.alpha.isFinite && (0...1).contains($0.alpha) &&
+                  ($0.spaceWitness.map(Self.validString) ?? true) }) else { return false }
         // A small bounded window catalog is enough for stale checks, even on unusually busy desktops.
         let metadataBytes = windows.reduce(0) { $0 + $1.windowID.utf8.count + $1.process.executable.utf8.count +
             ($1.spaceWitness?.utf8.count ?? 0) + 96 }

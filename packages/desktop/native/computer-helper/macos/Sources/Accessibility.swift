@@ -63,6 +63,8 @@ struct AccessibilityBackend {
     var hash: (AccessibilityElement) -> UInt = AccessibilityElement.hash
     var prepareWake: ((AccessibilityElement, NativeOwner) throws -> AccessibilityWake?)? = nil
     var containingWindow: ((AccessibilityElement) throws -> AccessibilityElement?)? = nil
+    var keyboardLayout: (() -> [String: JSONValue]?)? = nil
+    var menuShortcuts: ((InputObservation, ServerSession) throws -> [InputMenuShortcut]?)? = nil
 
     static var system: AccessibilityBackend {
         var backend = AccessibilityBackend(preflight: { AXIsProcessTrusted() }, windows: AccessibilityNative.windows,
@@ -73,6 +75,8 @@ struct AccessibilityBackend {
             perform: AccessibilityNative.perform, setValue: AccessibilityNative.setValue, document: AccessibilityNative.document)
         backend.prepareWake = AccessibilityNative.prepareWake
         backend.containingWindow = AccessibilityNative.containingWindow
+        backend.keyboardLayout = InputNative.layoutWire
+        backend.menuShortcuts = InputNative.menusWire
         return backend
     }
 }
@@ -99,6 +103,28 @@ final class AccessibilityService {
     }
 
     func features() -> [String: Bool] { ["ui.tree": true, "ui.actions": true, "ui.secureFieldDetect": true] }
+
+    /// M5 compares the actual scoped AX object with an existing M4 observation; input never mints a new ref.
+    func verifyInputTarget(element: AccessibilityElement?, target: NativeTarget, window: CaptureWindowInfo,
+                           expected: NativeExpectedTarget, session: ServerSession) throws -> NativeTarget {
+        try requireOpen()
+        let policy = try SessionPolicy(session: session)
+        try policy.requireTarget(target, operation: .observe)
+        var actual = target
+        if expected.ref != nil || expected.elementID != nil {
+            guard let element else { throw Self.stale }
+            try requirePID(element, target.owner.process.pid)
+            let witness = self.witness(window, target.owner)
+            let record: AccessibilityReference<AccessibilityElement>
+            if let ref = expected.ref { record = try registry.resolve(ref, session: session, witness: witness) }
+            else if let id = expected.elementID { record = try registry.resolveElement(id, session: session, witness: witness) }
+            else { throw Self.stale }
+            guard backend.equal(element, record.element) else { throw Self.stale }
+            actual.ref = record.ref; actual.elementID = record.elementID
+        }
+        try policy.requireTarget(actual, operation: .observe, expected: expected)
+        return actual
+    }
 
     /// Called under the dispatcher's authority lock: no AX call, process lookup or restoration runs here.
     func invalidateObservations() { registry.clear() }
@@ -347,6 +373,15 @@ final class AccessibilityService {
         fields["role"] = .string(AccessibilityContent.sanitize(attributes.role, limit: 64))
         fields["name"] = .string(AccessibilityContent.sanitize(attributes.name))
         fields["secure"] = .bool(attributes.secure); fields["enabled"] = .bool(attributes.enabled); fields["editable"] = .bool(attributes.editable)
+        if let layout = backend.keyboardLayout?() { fields["layout"] = .object(layout) }
+        if let observer = backend.menuShortcuts,
+           let shortcuts = try? observer(InputObservation(target: NativeTarget(owner: owner, windowID: window.windowID, secure: attributes.secure),
+                window: window, element: element), session), shortcuts.count <= 128,
+           shortcuts.allSatisfy({ (1...8).contains($0.combo.count) && $0.combo.allSatisfy({ !$0.isEmpty && $0.utf16.count <= 32 && MacAppIdentity.safeName($0) }) }) {
+            fields["focusedMenuShortcuts"] = .array(shortcuts.map {
+                .object(["combo": .array($0.combo.map(JSONValue.string)), "label": .string(AccessibilityContent.sanitize($0.label, limit: 256))])
+            })
+        }
         if let document = try backend.document(element), MacAppIdentity.canonicalPathShape(document) {
             fields["document"] = .string(document); fields["documentStatus"] = .string("known")
         } else { fields["documentStatus"] = .string("unknown") }

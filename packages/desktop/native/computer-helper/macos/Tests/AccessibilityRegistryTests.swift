@@ -335,5 +335,28 @@ func runAccessibilityRegistryTests() throws -> Int {
                                        AccessibilityContent.value(nil, secure: false, disclosure: .content) == nil,
                                        "Only approved nonsecure values may be sanitized and returned.")
     }
+    try test {
+        let registry = accessibilityTestRegistry(limit: 1, stableLimit: 1)
+        let session = accessibilityTestSession()
+        let element = RegistryElement()
+        let witness = accessibilityTestWitness()
+        let first = try registry.register(element: element, witness: witness, snapshot: registry.beginSnapshot(session: session))
+        let existing = try registry.resolveElement(first.elementID, session: session, witness: witness)
+        try accessibilityRegistryCheck(existing.ref == first.ref && existing.element === element,
+                                       "Element-only binding must preserve an existing exact ref and native handle.")
+        try accessibilityRegistryThrows { _ = try registry.resolveElement(first.elementID, session: session, witness: accessibilityTestWitness(onScreen: false)) }
+        var changed = session
+        changed.observationEpoch = UUID()
+        try accessibilityRegistryThrows { _ = try registry.resolveElement(first.elementID, session: changed, witness: witness) }
+        let next = try registry.beginSnapshot(session: session)
+        try accessibilityRegistryThrows { _ = try registry.resolveElement(first.elementID, session: session, witness: witness) }
+        let fresh = try registry.register(element: element, witness: witness, snapshot: next)
+        let current = try registry.resolveElement(first.elementID, session: session, witness: witness)
+        try accessibilityRegistryCheck(current.ref == fresh.ref && current.ref != first.ref,
+                                       "A stable element ID may bind only its latest already observed generation ref.")
+        let last = try registry.beginSnapshot(session: session)
+        _ = try registry.register(element: RegistryElement(), witness: witness, snapshot: last)
+        try accessibilityRegistryThrows { _ = try registry.resolveElement(first.elementID, session: session, witness: witness) }
+    }
     return count
 }

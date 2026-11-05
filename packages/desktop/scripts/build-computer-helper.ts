@@ -144,6 +144,7 @@ export function swiftArguments(input: {
       "Carbon",
       "CoreGraphics",
       "CoreText",
+      "CryptoKit",
       "ImageIO",
       "ScreenCaptureKit",
       "Security",

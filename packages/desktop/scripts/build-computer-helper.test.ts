@@ -134,6 +134,7 @@ describe("computer helper build planning", () => {
     expect(arm).toContain("Carbon")
     expect(arm).toContain("ImageIO")
     expect(arm).toContain("CoreText")
+    expect(arm).toContain("CryptoKit")
     expect(arm.indexOf(input.sources[1]!)).toBeLessThan(arm.indexOf(input.sources[0]!))
     expect(arm.slice(-3)).toEqual([input.generated, "-o", input.output])
     expect(arm).not.toContain("-parse-as-library")
