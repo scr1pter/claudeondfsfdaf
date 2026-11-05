@@ -1,0 +1,105 @@
+# A46 Ops Worker: implementation record
+
+A46 builds on A37 (the internal HMAC and the S8 rules). It adds `packages/ops-worker`, a Cloudflare Worker (`vector-ops`) with one Durable Object per account that runs On Call checks and Release Guard watches. No Cloudflare account, API or deployment was touched. The tests drive the Worker and the object with an in-memory runtime whose SQL runs on a real SQLite engine and whose network is scripted. The CI lane runs the deploy bundle on Cloudflare's local runtime through miniflare. Readings of the contract are in `codium-deviations.md` under "A46 Ops Worker (4 Nov 2026)".
+
+## What changed
+
+| Area          | Change                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Worker        | `src/index.ts`. `POST /internal/v1/<action>` checks A37's signature (service `ops`), then forwards the checked body, its nonce and its signed time to the account's object, `idFromName(HMAC(ACCOUNT_KEY, account))`, or to a `control` object for `flags`. `GET /health`. Anything else is 404. Bodies over 32 KiB get 413.                                                                                                                                                                                                                                                                                                           |
+| Interface     | `src/protocol.ts`, pure types for the API. Actions: `plan {account, plan}` (version, domains, `onCall {urls, intervalSec}` or null, `releaseGuard {perDay, watchMin, paths}` or null, `validUntil`); `config {account, domains, monitors}`; `release {account, repositoryId, environment, sha, deployment, at, urls}`; `state {account}`; `suspend {account, suspended, reason, at}`; `erase {account}`; `flags {kill}`. Reports: `POST <API_ORIGIN>/api/ops/worker` with `{v:1, account, events}`; the events are `monitor.down`, `monitor.up`, `release.regressed` and `release.passed`.                                             |
+| Object        | `src/ops-account.ts`. One alarm at the earliest due check, watch round, watch end, report retry or plan expiry. It is always at least 25 s ahead, work due within those 25 s shares the wake, and wakes are capped at 125 per clock hour. Each wake: kill flag, then the due checks and watch rounds (each URL probed once even when a check and a watch share it), then the results, then the reports. The results are applied with no await between reading and writing state, so a config or release that arrived during the probes is kept.                                                                                        |
+| Probes        | `src/check.ts`. GET, 8 s timeout, at most 6 in flight per account, `redirect: "manual"`. Up: 2xx, 304, or a same-origin 3xx (not followed). Failure: other 4xx/5xx, a cross-domain 3xx, a timeout, a network failure, a host with no address. Inconclusive: 401, 403, 429, challenge headers or markers in a 5xx HTML page, a host on a private address, a failed lookup. Bodies are cancelled unread except the first 8 KiB of a 5xx HTML page.                                                                                                                                                                                       |
+| S8            | `src/ssrf.ts`. Only `https` on 443, no credentials, no IP literal in any spelling, no private names, and only a verified host (exact match). Every host is looked up over DNS-over-HTTPS (A and AAAA, reused for 60 s to 5 min), and one non-public address refuses it. The address rules are safe-fetch.ts's.                                                                                                                                                                                                                                                                                                                         |
+| On Call       | Max checks every 5 minutes, Ultra every minute (the plan's `intervalSec`). Monitors added later join the next round. Two failures in a row: down, with one `monitor.down` report. One success after that: up, with one `monitor.up` report. Inconclusive answers neither count nor break the run. The plan's URL and domain caps take the earliest entries.                                                                                                                                                                                                                                                                            |
+| Release Guard | `src/release-watch.ts`. A watch starts 60 s after the deployment's success; the first round is never early. Every 30 s for the plan's `watchMin` it compares with the last good release: a path that passed then and fails twice in a row now opens one `release.regressed` report, which names the good sha and the failing paths, and ends the watch. A watch that runs to its end passes, sends `release.passed` and becomes the baseline. A newer deployment ends the running watch. Releases are deduped by (repository, environment, sha) before the plan's releases a day are counted. Older and stale reports are not watched. |
+| Plan expiry   | Nothing runs at or after the pushed plan's `validUntil` (the API sends periodEnd + 24 h). A wake at `validUntil` stops running watches with no verdict and removes the alarm.                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| Kill flag     | KV `OPS_FLAGS`, key `kill`, value `1`. It is read at every wake and before a watch starts. While it is set nothing is probed, watched or reported, and an account with work re-reads it every 10 minutes. A flag that cannot be read counts as set.                                                                                                                                                                                                                                                                                                                                                                                    |
+| Storage       | SQLite: `meta` (the plan, domains, account id, suspension, the erasure time, and one row of running state written per wake), `monitors`, `changes` (state changes only), `hourly` (per monitor-hour), `releases`, `baselines`, `outbox` (at most 200, at most a day) and `seen` (nonces). Changes, totals and finished releases are deleted after 30 days.                                                                                                                                                                                                                                                                             |
+| Reports       | Batches of at most 20 events, signed for `ops`, retried 30 s after a failure and doubling to an hour, with the same event ids. A redirect is not a delivery.                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| Erase         | Everything the account's object holds is deleted except the used nonces and the erasure time. A write signed at or before the erasure gets 409 `OPS_ERASED`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| Config        | `wrangler.jsonc`: `vector-ops`, `OpsAccount` with a `new_sqlite_classes` migration, KV `OPS_FLAGS` (zero placeholder id), `workers_dev`, compatibility date 2025-04-01, variable `API_ORIGIN`, no secrets. `package.json` pins `wrangler` 4.50.0, already in `bun.lock`.                                                                                                                                                                                                                                                                                                                                                               |
+| CI            | `.github/workflows/vector-codium.yml`: an `ops-worker` typecheck entry and an `ops-worker` job that runs `bun run dry-run`, then `bun run smoke` (`e2e/ops-smoke.mjs` under Node, miniflare from beside wrangler). The test picker already runs `packages/ops-worker/test/*.test.ts` and the new root test.                                                                                                                                                                                                                                                                                                                            |
+| Docs          | `docs/vector/MODEL-PLANS.md` (the ops Worker bullet and its settings). `docs/vector/owner-actions/hosted-ops.md` (new: what the Worker holds, KV, secrets, deploy, kill flag, cost).                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+
+Edits to `api/_lib/model-plan-*.ts`: none. No file under `api/` changed.
+
+## Interfaces for later packages
+
+- **A47** (webhook router, domains, monitors):
+  - Calls `config` with the account's verified domains, in verification order, and its On Call monitors (`{id, url}`, in the order added) whenever either changes. An empty list removes everything.
+  - Sets `VECTOR_OPS_WORKER_URL` and calls the Worker with `internalFetch("ops", "<origin>/internal/v1/<action>", …)`. The secret is `VECTOR_OPS_SHARED_SECRET`.
+  - On a production `deployment_status` success for a repository whose `.vector/ops.json` opts in, calls `release` with the repository id, environment, sha, deployment id, the status's `created_at` in ms, and `productionUrl` joined with each path.
+- **The ops provisioner** (A48 or A50) calls `plan` on every snapshot change, with the snapshot's `version`, the private caps from `caps.ops`, and `validUntil = periodEnd + 24 h`. It maps §4.4:
+  - active and renewing: both perks on;
+  - paused: `releaseGuard: null`, with checks kept through Stripe's retry window;
+  - ended: `validUntil` at the period's end;
+  - frozen: `validUntil` now.
+  - Only listed perks get non-null caps (H1).
+- **A48** builds `POST /api/ops/worker`:
+  - checks it with `requireInternalRequest("ops", req)` (the route exports `config = { api: { bodyParser: false } }`);
+  - dedupes by event id;
+  - turns `release.regressed` into one revert PR (SET NX per repository, environment and sha);
+  - turns `monitor.down` into an incident and a phone alert (`sendServerAlert(…, {allowPaused: true})`).
+  - A 2xx answer means every event in the request was taken.
+- **A50**:
+  - the guard holds an account with `suspend {reason: "guard"}`;
+  - the owner's `ops` switch sets `flags {kill}`;
+  - the ops screens read `state`, which carries monitor ids, never URLs.
+- **A57** calls `erase {account}` for P5.
+- **A58** deploys `packages/ops-worker` with `target=ops` and runs the same dry run.
+
+## Tests run here (one file at a time)
+
+| Package    | File                                                                                                                                                                                                                                                                                                             | Result  |
+| ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
+| ops-worker | `test/check.test.ts` (probe classification, no redirect followed, timeout, challenge pages, pool cap)                                                                                                                                                                                                            | 13 pass |
+| ops-worker | `test/ssrf.test.ts` (S8 list: schemes, ports, credentials, IP spellings, private names, exact verified hosts, address ranges, DNS-over-HTTPS answers)                                                                                                                                                            | 10 pass |
+| ops-worker | `test/on-call.test.ts` (intervals per plan over an hour, upgrade, joining rounds, in-flight cap 6, URL and domain caps, two-failure rule, inconclusive answers, recovery, failure kinds, private address never probed, DNS reuse, storage of changes and hourly totals only, state, URL change, pruning)         | 16 pass |
+| ops-worker | `test/schedule.test.ts` (no work no alarm, 25 s minimum, shared wakes, wake cap, validUntil, plan versions and bounds, kill flag including unreadable, suspend)                                                                                                                                                  | 12 pass |
+| ops-worker | `test/release-watch.test.ts` (60 s wait, 30 s rounds, first round never early, regression report, inconclusive answers, first release, no verdict, supersede, dedupe, older and stale, daily cap after dedupe, verified URLs and path cap, not in plan, malformed)                                               | 14 pass |
+| ops-worker | `test/internal.test.ts` (HMAC canonical string and tampering, routes, object naming, refusals, nonce replay, kill flag through the control object, misrouting, config validation, erase and late calls, report signing and retry backoff, redirect not a delivery, missing API_ORIGIN, origin rules, outbox cap) | 17 pass |
+| ops-worker | `test/source.test.ts` (no Bun or Node module or global in `src/`, no logging, `protocol.ts` imports nothing, every fetch has `redirect: "manual"`, handlers exported, wrangler config holds no secret)                                                                                                           | 7 pass  |
+| root       | `test/ops-worker-contract.test.ts` (A37 HMAC byte for byte both ways and the report path, other services refused, skew and nonce memory, ENTITLEMENTS plans accepted as they are, Ultra's caps as the hard maxima, the fixed probe rules, address rules equal to safe-fetch.ts)                                  | 8 pass  |
+| cloud      | `src/workflow-compliance.test.ts` (unchanged; the edited lane)                                                                                                                                                                                                                                                   | 22 pass |
+
+Also run here:
+
+- `wrangler deploy --dry-run --outdir dist` once, with metrics off and no Cloudflare account. It produced a 59.38 KiB bundle (16.70 KiB gzip) with the `OpsAccount`, `OPS_FLAGS` and `API_ORIGIN` bindings and no Bun or Node import. Wrangler noted that a newer version exists; nothing was uploaded. `dist/` is ignored and was deleted.
+- `node --check e2e/ops-smoke.mjs` (syntax only; the smoke itself was not run).
+- `bun install --ignore-scripts`, once, to link the new workspace. `bun.lock` gained only the workspace entry.
+
+Typecheck: `packages/ops-worker` `tsgo --noEmit` is clean. No other package's source changed. Root tests sit outside every typecheck config.
+
+**CI only:** `e2e/ops-smoke.mjs` under miniflare, after the dry run, takes about three minutes because alarms run in real time. It covers what the fakes cannot: workerd's alarms on SQLite-backed Durable Objects, real `fetch` with `redirect: "manual"` and abort timeouts, KV, and the signed calls both ways. Checks:
+
+- unsigned calls are refused;
+- nothing is probed before the 25 s alarm;
+- ten monitors probed once each, at most 6 at a time, after DNS lookups (a same-origin redirect is not followed);
+- the second failure in a row reports `monitor.down`, with a signature the stand-in API verifies;
+- state shows nine up and one down, with no URL;
+- a lapsed plan probes nothing;
+- a release is accepted once, then deduped;
+- the kill flag stops probes for 70 s and clears;
+- erase leaves nothing, and a replayed nonce is refused.
+
+The rules forbid running miniflare or `wrangler dev` on this Mac.
+
+## Owner steps this needs
+
+These are in `owner-actions/hosted-ops.md`:
+
+- Workers Paid and budget alerts (shared with the relay).
+- Create the `OPS_FLAGS` namespace and put its id in `wrangler.jsonc`.
+- Set `INTERNAL_SECRET` (the value of `VECTOR_OPS_SHARED_SECRET`) and a permanent `ACCOUNT_KEY` with `wrangler secret put`.
+- Deploy through A58's workflow (`target=ops`).
+- Set `VECTOR_OPS_WORKER_URL` once A47 reads it.
+
+## Not done
+
+- Nothing calls the Worker yet. The API-side client, the `ops` provisioner, the router and domain verification (A47), the `/api/ops/worker` intake, incidents, revert PRs and phone alerts (A48), and the guard, cleanup and screens (A50) are their own packages. Until A48 exists, reports get 404 and are dropped after a day.
+- The `ops` runtime switch is not wired to `flags` yet (A47 or A50), and `VECTOR_OPS_WORKER_URL` and `VECTOR_OPS_ENABLED` are not in `.env.example`, since nothing reads them yet.
+- Certificate expiry, domain expiry and DNS drift are Vercel crons in A50 (Appendix A item 5), not Worker work.
+- `on-call` and `release-guard` have no readiness checks in `perkServices`. A47 or A48 adds them when the Worker can be called.
+- The miniflare smoke and the CI jobs have not run anywhere yet.
+- Nothing was pushed or deployed.

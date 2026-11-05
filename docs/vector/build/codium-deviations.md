@@ -1325,3 +1325,95 @@ outcome, verdict, actor.login` pass. Every paid plan includes it while the plan 
 - **A test expectation outside A45:** `packages/app/src/features/local/local-model.test.ts` already failed before this
   work ("every source in the registry has a name of its own" did not hold for A43's `brain-vault`). The source now has
   its name, "Brain Vault", in `local-model.ts`; no expectation changed.
+
+## A46 Ops Worker (4 Nov 2026)
+
+- **The Worker's interface is defined here,** because A47 and A48, which call it, are not built. `packages/ops-worker/src/protocol.ts`
+  (no imports, so the API can import its types) holds it. The API calls `POST /internal/v1/<action>` with A37's HMAC
+  under the `ops` key: `plan`, `config`, `release`, `state`, `suspend`, `erase`, `flags`. The Worker reports to
+  `POST <API_ORIGIN>/api/ops/worker`, signed the same way, with `{v:1, account, events}`; the events are `monitor.down`,
+  `monitor.up`, `release.regressed` and `release.passed`. A48 builds that route with `requireInternalRequest("ops", …)`
+  and must dedupe by event id, because a report is sent again with the same ids until it gets a 2xx.
+- **"Pushed snapshot with validUntil = periodEnd + 24 h"** is the `plan` action. It carries only the snapshot's version, the
+  plan's private ops caps (domains, `onCall {urls, intervalSec}`, `releaseGuard {perDay, watchMin, paths}`) and
+  `validUntil`, never the snapshot itself. The API maps §4.4: `onCall: null` stops checks (frozen, ended), `releaseGuard:
+  null` stops new watches (paused), and a `validUntil` at or before now stops everything at once. A plan with a lower
+  version than the stored one is ignored. Plans outside any real plan's bounds are refused, and so is a `validUntil` more
+  than 40 days ahead. `test/ops-worker-contract.test.ts` checks that every ENTITLEMENTS plan passes as it is.
+- **Worker settings the contract does not name:** the secrets `INTERNAL_SECRET` (the value of `VECTOR_OPS_SHARED_SECRET`)
+  and `ACCOUNT_KEY` (the HMAC key behind `idFromName`, kept separate so rotating the shared secret never resets
+  accounts), and the plain variable `API_ORIGIN` (`https://vectordev.ai` in `wrangler.jsonc`). Unlike the relay, the
+  object keeps the account id, because its reports must name the account; the object's name is still the HMAC.
+- **"Verified hostnames only"** is read as an exact match, with no subdomain and no parent, against the domains the
+  account verified (A47 sends them in `config`). The plan's domain cap takes the first `domains` in verification order,
+  and its URL cap takes the first `onCall.urls` monitors (in the order added) whose host is one of those domains. A
+  monitor past either cap is kept but not checked, so a downgrade keeps the earliest.
+- **S8 on a Worker.** A Worker cannot connect to an address it chose, so the Worker cannot pin the address it checked.
+  - Host names are checked as safe-fetch.ts does: no IP literal in any spelling, no private names, plus `.invalid`,
+    `.test` and `.example`.
+  - Every address is looked up over DNS-over-HTTPS (`cloudflare-dns.com`, A and AAAA) before the probe; one non-public
+    address refuses the host.
+  - Answers are reused for their TTL, 60 s to 5 minutes. A refused host is inconclusive (`address`): never probed and
+    never reported down. A name with no address is a failure (`dns`). A lookup that failed is inconclusive (`resolver`).
+  - Cloudflare's own fetch also refuses prohibited addresses; the lookup makes the rule explicit.
+  - The address rules match safe-fetch.ts; the root contract test compares the two.
+- **"No redirects (a cross-domain redirect fails)":** a redirect is never followed. A 3xx whose Location resolves to the
+  probed URL's own origin counts as up. A 3xx to another host, scheme or port, or with no usable Location, is a failure.
+- **"Challenge pages"** are recognised by `cf-mitigated: challenge`, `x-vercel-mitigated: challenge` or
+  `x-amzn-waf-action: challenge|captcha` on any status, or by challenge markers in the first 8 KiB of a 5xx HTML page.
+  Other bodies are cancelled unread.
+- **Up and down.** Two failures in a row make a URL down. Inconclusive answers neither count nor break a run of failures.
+  One conclusive success makes a down URL up again, because the contract names no rule for recovery. A report goes out
+  only on going down and on coming back up. Probes send `cache-control: no-cache` and no `cache` fetch option, which
+  needs a compatibility flag: a wrong guess there would make every probe throw and report a false outage.
+- **Release watch readings.**
+  - The comparison is with the stored results of the last good release (the paths that passed when its watch ended),
+    not a live probe of the old deployment, whose own URL is not a verified host.
+  - A regression is a path that passed on the last good release and now fails twice in a row. The first release watched
+    has no baseline and cannot regress; it becomes the baseline.
+  - A watch that saw no conclusive answer ends `stopped` with no verdict and leaves the baseline alone. A passing watch
+    keeps the earlier passes for paths it could not check.
+  - "Waits 60 s after success" counts from the deployment's reported time. A late report starts at once; a time ahead of
+    the clock starts at most 60 s from now. The first round is never pulled early into another wake.
+  - Any newer deployment of the same repository and environment ends the running watch (`superseded`), even one that is
+    not watched itself (a repeated sha or the daily cap). An older deployment reported late is not watched, and a report
+    more than a day old is `stale`.
+  - The Worker also enforces the plan's releases a day (A48 checks it first), after the dedupe. A release refused for the
+    cap or for having no verified URL is recorded as `skipped`, so a repeat of it is a duplicate.
+- **"Alarms at the next due time, always at least 25 s ahead, capped wakes per hour".** One alarm per account. Work due
+  within 25 s of a wake is done in that wake, so checks and watch rounds share wakes. Wakes are capped at 125 per clock
+  hour: an Ultra account with checks every minute and a watch every 30 s needs 120. Past the cap the next alarm waits for
+  the next hour. While the kill flag is set, an account with work re-reads it every 10 minutes and does nothing else.
+- **"Stores state changes and hourly totals only".** Each wake writes one row of running state: streaks, due times, the
+  hour's counters and DNS answers, as JSON in `meta`. Besides that, storage holds a row per state change, a row per
+  monitor-hour, release records, the last good release per repository and environment, undelivered reports (at most 200,
+  for at most a day) and seen nonces. Changes, totals and finished releases are deleted after 30 days. `state` answers
+  monitor ids, never URLs.
+- **Reports** go out in batches of at most 20 events. A failed delivery is retried after 30 s, doubling to an hour, and
+  dropped after a day. A redirect from the API is not a delivery. Without `API_ORIGIN`, reports wait, and no alarm is
+  set just for them.
+- **Delete** is the `erase` action, for A57, named as in the relay. Everything goes except the nonces already used and the
+  erasure time. A write signed at or before the erasure gets 409 `OPS_ERASED`, so a delayed call cannot fill the object
+  again. A later account with the same id starts clean.
+- **`suspend {account, suspended, reason: "guard" | "owner", at}`** is added for A50's guard ("pause only accounts above
+  their own expected usage"). It is ordered by `at` and kept apart from `plan`, so a plan push from the snapshot cannot
+  undo a guard hold.
+- **"Miniflare in CI"** is done in two parts.
+  - Here: unit tests drive the Worker and the object on an in-memory runtime whose SQL runs on a real SQLite engine.
+    They cover intervals per plan, the in-flight cap, the two-failure rule, validUntil, the kill flag and delete.
+  - In CI: `e2e/ops-smoke.mjs` runs the deploy dry run's own bundle under miniflare, loaded from beside wrangler, so
+    there is no new dependency. Every outbound request (sites, DNS-over-HTTPS, the API) is answered locally, and alarms
+    run in real time (about three minutes).
+  - It runs in a new `ops-worker` job of `vector-codium.yml` after `wrangler deploy --dry-run`. Running miniflare on
+    the owner's Mac is forbidden; the dry run itself was run here once.
+- **No `@cloudflare/workers-types`:** `src/runtime.ts` declares the subset used, as in the relay.
+- **`wrangler.jsonc`:** `vector-ops`, `OpsAccount` with a `new_sqlite_classes` migration, a zero KV id for `OPS_FLAGS`
+  (the owner replaces it; a deploy carrying it fails), `workers_dev`, compatibility date 2025-04-01, and `API_ORIGIN`.
+- **`bun.lock`** gains the `packages/ops-worker` workspace entry only; no package version changed.
+- **Files outside A46's list:**
+  - Ops Worker package: `src/{runtime,bytes,limits,protocol}.ts`, `e2e/ops-smoke.mjs`, `package.json`, `tsconfig.json`,
+    `.gitignore`.
+  - Root test: `test/ops-worker-contract.test.ts`.
+  - `.github/workflows/vector-codium.yml`, `bun.lock`.
+  - Docs: `docs/vector/MODEL-PLANS.md` and `docs/vector/owner-actions/hosted-ops.md` (new; only the Worker's section, since
+    A47 to A50 add theirs).

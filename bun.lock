@@ -550,6 +550,15 @@
         "@vectordevai/http-recorder": "workspace:*",
       },
     },
+    "packages/ops-worker": {
+      "name": "@vectordevai/ops-worker",
+      "devDependencies": {
+        "@tsconfig/bun": "catalog:",
+        "@types/bun": "catalog:",
+        "@typescript/native-preview": "catalog:",
+        "wrangler": "4.50.0",
+      },
+    },
     "packages/plugin": {
       "name": "@vectordevai/plugin",
       "version": "1.17.14",
@@ -2338,6 +2347,8 @@
     "@vectordevai/httpapi-codegen": ["@vectordevai/httpapi-codegen@workspace:packages/httpapi-codegen"],
 
     "@vectordevai/llm": ["@vectordevai/llm@workspace:packages/llm"],
+
+    "@vectordevai/ops-worker": ["@vectordevai/ops-worker@workspace:packages/ops-worker"],
 
     "@vectordevai/plugin": ["@vectordevai/plugin@workspace:packages/plugin"],
 

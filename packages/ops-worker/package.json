@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json.schemastore.org/package.json",
+  "name": "@vectordevai/ops-worker",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./protocol": "./src/protocol.ts",
+    "./internal": "./src/internal.ts",
+    "./limits": "./src/limits.ts"
+  },
+  "scripts": {
+    "typecheck": "tsgo --noEmit",
+    "dry-run": "wrangler deploy --dry-run --outdir dist",
+    "smoke": "node e2e/ops-smoke.mjs"
+  },
+  "devDependencies": {
+    "@tsconfig/bun": "catalog:",
+    "@types/bun": "catalog:",
+    "@typescript/native-preview": "catalog:",
+    "wrangler": "4.50.0"
+  }
+}

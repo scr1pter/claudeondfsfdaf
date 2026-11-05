@@ -66,6 +66,10 @@ jobs:
           - name: relay
             directory: packages/relay
             command: bun typecheck
+          # WP A46: the ops Worker (On Call and Release Guard).
+          - name: ops-worker
+            directory: packages/ops-worker
+            command: bun typecheck
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
       - uses: ./.github/actions/setup-bun
@@ -198,6 +202,38 @@ jobs:
 
       - name: Smoke-test the relay under wrangler dev --local
         working-directory: packages/relay
+        run: bun run smoke
+
+  # WP A46: the ops Worker's done criterion is a green deploy dry run. Its smoke test then runs that same bundle on
+  # Cloudflare's local runtime through miniflare (wrangler's own dependency), answering every outbound request itself, so
+  # it needs no Cloudflare account, no secret and no internet. Alarms run in real time: about three minutes.
+  ops-worker:
+    name: Ops Worker (dry run and miniflare smoke)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      WRANGLER_SEND_METRICS: "false"
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+
+      - uses: ./.github/actions/setup-bun
+        with:
+          install-flags: --frozen-lockfile
+
+      - name: Dry-run the ops Worker deploy
+        working-directory: packages/ops-worker
+        run: bun run dry-run
+
+      - name: Smoke-test the ops Worker bundle under miniflare
+        working-directory: packages/ops-worker
         run: bun run smoke
 
   browser:
