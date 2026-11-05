@@ -44,7 +44,7 @@ private final class HelperServer {
     private let clipboardLifecycle = DispatchQueue(label: "ai.vector.computer.clipboard-lifecycle")
     private let lifecycleCleanup = DispatchQueue(label: "ai.vector.computer.lifecycle-cleanup")
     private let monitoring = DispatchQueue(label: "ai.vector.computer.monitoring")
-    private lazy var eventTap = EventTapMonitor(
+    private lazy var eventTap: EventTapMonitor = EventTapMonitor(
         session: { [weak self] in self?.dispatcher?.sessionSnapshot() },
         input: { [weak self] event, session, takeover in
             self?.dispatcher?.handlePhysicalInput(event, expected: session, takeover: takeover) ?? false
@@ -52,7 +52,7 @@ private final class HelperServer {
         stop: { [weak self] by, session in self?.dispatcher?.stopFromPhysicalInput(by: by, expected: session) ?? false },
         status: { [weak self] status in self?.watchdog.observeTap(status) }
     )
-    private lazy var watchdog = WatchdogService(
+    private lazy var watchdog: WatchdogService = WatchdogService(
         session: { [weak self] in self?.dispatcher?.sessionSnapshot() },
         tapStatus: { [weak self] in self?.eventTap.status() ?? EventTapStatus(generation: 0, installed: false, enabled: false) },
         recoverTap: { [weak self] in self?.eventTap.recover() },
@@ -89,8 +89,8 @@ private final class HelperServer {
         let clipboard = clipboardService
         let clipboardQueue = clipboardLifecycle
         let tap = eventTap
-        let watchdog = watchdog
-        let monitoring = monitoring
+        let watchdog = self.watchdog
+        let monitoring = self.monitoring
         let server = Dispatcher(
             responsible: HelperLifecycle.isSelfResponsible(),
             architecture: architecture,

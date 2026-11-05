@@ -76,6 +76,12 @@ private final class EventTapFixture {
     }, status: { self.statuses.append($0) }, backend: backend, ownPID: 900, tag: 77)
 
     func start() { monitor.start() }
+    func withChord(_ chord: String) {
+        guard let previous = current else { return }
+        current = ServerSession(id: previous.id, revision: previous.revision, mode: previous.mode, paused: previous.paused,
+            approved: previous.approved, vectorPids: previous.vectorPids, vectorWindowIds: previous.vectorWindowIds,
+            overlayWindowIds: previous.overlayWindowIds, escStops: previous.escStops, stopChord: chord)
+    }
     @discardableResult func send(_ sample: EventTapSample) -> Bool { received?(sample) ?? false }
     func escape(_ kind: EventTapKind = .keyDown, source: pid_t = 0, flags: UInt64 = 0, repeated: Bool = false) -> EventTapSample {
         EventTapSample(kind: kind, sourcePID: source, keyCode: 53, flags: flags, repeated: repeated)
@@ -256,7 +262,7 @@ func runEventTapTests() throws -> Int {
         }
         let plus = EventTapChord.parse("Command+Control+Plus", layout: "synthetic", code: EventTapFixture.code, resolve: EventTapFixture.punctuation)
         try eventTapCheck(plus?.code == 24 && plus?.flags == (command | CGEventFlags.maskControl.rawValue | shift), "Plus retains actual layout-required Shift.")
-        let f = EventTapFixture(); f.current?.stopChord = "Command+Shift+Plus"; f.start()
+        let f = EventTapFixture(); f.withChord("Command+Shift+Plus"); f.start()
         _ = f.send(EventTapSample(kind: .keyDown, keyCode: 24, flags: command | shift))
         try eventTapCheck(f.events.last?.value.objectValue?["by"] == .string("chord"), "A valid punctuation chord must reach native Stop observation.")
     }
@@ -265,12 +271,12 @@ func runEventTapTests() throws -> Int {
         try eventTapCheck(f.monitor.status().enabled && !f.monitor.status().bindingReady, "A healthy installed tap cannot stand in for completed chord binding.")
         let tasks = f.tasks; f.tasks.removeAll(); tasks.forEach { $0() }
         try eventTapCheck(f.monitor.status().bindingReady && f.monitor.status().bindingEpoch == f.current?.observationEpoch, "Completed binding must name the actual captured epoch.")
-        f.current?.stopChord = "Other"; f.monitor.refreshSession()
+        f.withChord("Other"); f.monitor.refreshSession()
         let next = f.tasks; f.tasks.removeAll(); next.forEach { $0() }
         try eventTapCheck(f.monitor.status().enabled && !f.monitor.status().bindingReady, "Unsupported configured chord cannot report detection readiness.")
-        f.current?.stopChord = "Command+Shift+Escape"; f.queued = false
+        f.withChord("Command+Shift+Escape"); f.queued = false; f.monitor.refreshSession()
         f.monitor.probe(challenge: 91)
-        try eventTapCheck(f.monitor.status().bindingReady && f.monitor.status().challenge == 91, "A later probe can retry a failed native binding without new input or prompts.")
+        try eventTapCheck(f.monitor.status().bindingReady && f.monitor.status().challenge == 91, "A fresh accepted configuration and loop probe can recover without input or prompts.")
     }
     try test {
         try eventTapCheck(EventTapChord.parse("Command+Alt+Escape", layout: "synthetic", code: EventTapFixture.code) == nil, "Even private configuration cannot reserve Force Quit as a helper stop chord.")
@@ -281,12 +287,12 @@ func runEventTapTests() throws -> Int {
         try eventTapCheck(f.monitor.status().enabled && !f.monitor.status().bindingReady, "Loop liveness must not preserve an unavailable current keyboard binding.")
         f.keyboardAvailable = true; f.monitor.probe(challenge: 102)
         try eventTapCheck(f.monitor.status().bindingReady && f.monitor.status().bindingEpoch == f.current?.observationEpoch, "A valid measured binding can recover on a later real loop probe.")
-        f.current?.stopChord = "Command+Shift+Q"; f.monitor.refreshSession(); f.keyboardAvailable = false
+        f.withChord("Command+Shift+Q"); f.monitor.refreshSession(); f.keyboardAvailable = false
         _ = f.send(EventTapSample(kind: .keyDown, keyCode: 12, flags: CGEventFlags.maskCommand.rawValue | CGEventFlags.maskShift.rawValue))
         try eventTapCheck(!f.monitor.status().bindingReady, "A fresh stop-key binding failure must immediately invalidate advertised binding health.")
     }
     try test {
-        let f = EventTapFixture(); f.current?.stopChord = "Command+Shift+Plus"; f.start()
+        let f = EventTapFixture(); f.withChord("Command+Shift+Plus"); f.start()
         f.layoutName = "changed-measured-layout"; f.punctuationOffset = 6
         _ = f.send(EventTapSample(kind: .keyDown, keyCode: 30, flags: CGEventFlags.maskCommand.rawValue | CGEventFlags.maskShift.rawValue))
         try eventTapCheck(f.events.last?.value.objectValue?["by"] == .string("chord"), "A layout-dependent punctuation chord must resolve its new actual code before matching.")
