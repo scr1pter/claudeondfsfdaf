@@ -46,6 +46,7 @@ def main(argv=None):
         result = team.coordinate_team_arm(supervisor=supervisor, runtime=options.runtime,
             label="synthetic-headless-adapter-" + options.runtime, adapter=adapter, task=plan["task"], common=common,
             max_calls=300, seconds=7200, soft_usd=plan["softUsd"], profile=plan["profile"],
+            startup_mode=options.startup_affordability_mode,
             check_frozen=lambda: entry.require(entry.build_plan(options)[0] == plan, "headless qualification freeze changed"),
             persist=lambda value: common.save(options.out / "private-result.json", value))
         capabilities = native_pair_smoke.capabilities(adapter)

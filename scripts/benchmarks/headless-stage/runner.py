@@ -134,6 +134,8 @@ def bootstrap(options):
 
 
 def build_plan(options):
+    require(options.startup_affordability_mode in ("maximum-request", "per-request"),
+            "unreviewed startup affordability mode")
     require(digest(manifest(options.task_dir)) == options.expected_task_sha, "reviewed task changed")
     heavy, team, witness, common = bootstrap(options)
     task = load_task(options.task_dir)
@@ -177,7 +179,11 @@ def build_plan(options):
             "newRoundHardCapUsd": funding.new_round_usd, "historicalLiabilityHeldUsd": funding.historical_liability_usd,
             "historicalUncertaintyRemains": True, "allHistoricalAdmissionsSettled": False,
             "cumulativeActorCapsUsd": dict(funding.actor_caps), "maxCalls": 300, "maxSeconds": 7200,
-            "softUsd": options.soft_usd, "maxSameSessionRepairs": 1, "armAdmissionReservationUsd": 5.73,
+            "softUsd": options.soft_usd, "maxSameSessionRepairs": 1,
+            "startupMaximumRequestHeadroomCheckUsd": 5.73 if options.startup_affordability_mode == "maximum-request" else None,
+            "startupAffordabilityMode": options.startup_affordability_mode,
+            "startupReservesMoney": False, "maximumRequestReservationBoundUsd": 5.73,
+            "startupAffordabilityPolicy": "maximum-request reserves no money at startup; per-request requires positive finite global and actor headroom, then every forward uses the unchanged conservative request-bound gate",
             "providerBase": options.provider_base, "appPort": options.app_port, "frozenPaths": paths,
             "teamInstrumentFiles": manifest(options.team_runner_root), "commonInstrumentFiles": manifest(options.common_runner_root),
             "browserDriverFiles": browser_files, "entrypointFiles": manifest(Path(__file__).resolve().parent),
@@ -248,6 +254,7 @@ def parser():
     result.add_argument("--label", default="heavy-headless-01")
     result.add_argument("--provider-base", default="http://127.0.0.1:23128")
     result.add_argument("--app-port", type=int, default=4125)
+    result.add_argument("--startup-affordability-mode", choices=("maximum-request", "per-request"), default="maximum-request")
     for name in ("write-plan", "reviewed-plan", "controller-config", "receipt-jsonl"):
         result.add_argument("--" + name, type=Path)
     result.add_argument("--expected-plan-sha")
@@ -325,7 +332,8 @@ def main(argv=None):
     arm = team.coordinate_team_arm(supervisor=supervisor, runtime=options.runtime, label=options.label + "-" + options.runtime,
         adapter=adapter, task=plan["task"], common=common,
         check_frozen=lambda: require(build_plan(options)[0] == plan, "follow-up freeze changed"),
-        persist=persist, max_calls=300, seconds=7200, soft_usd=options.soft_usd, profile=options.team_profile)
+        persist=persist, max_calls=300, seconds=7200, soft_usd=options.soft_usd, profile=options.team_profile,
+        startup_mode=options.startup_affordability_mode)
     print(json.dumps({"runtime": options.runtime, **{key: arm.get(key) for key in
         ("stopReason", "providerRequests", "measuredUsd", "functionalVerdict", "reviewRequired", "settlementComplete")}}, indent=2))
     return 0 if arm.get("settlementComplete") and arm.get("functionalVerdict") == "passed" and not arm.get("reviewRequired", True) else 2

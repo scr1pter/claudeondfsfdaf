@@ -103,11 +103,18 @@ def preserved_history(state, before=None, idle=True, funding_profile=None):
     return state
 
 
-def affordability(state, runtime, funding_profile=None):
+def affordability(state, runtime, funding_profile=None, startup_mode="maximum-request"):
+    require(startup_mode in ("maximum-request", "per-request"), "unreviewed startup affordability mode")
     state = preserved_history(state, funding_profile=funding_profile)
     require(state.get("batchCallsRemaining") == 0, "another scope is open")
     global_headroom, actor_headroom = financial_headroom(state, ACTORS[runtime], funding_profile)
-    return {"affordable": min(global_headroom, actor_headroom) + 1e-8 >= FULL_RESERVATION_USD,
+    available = min(global_headroom, actor_headroom)
+    affordable = (math.isfinite(global_headroom) and math.isfinite(actor_headroom) and available > 0
+                  if startup_mode == "per-request" else available + 1e-8 >= FULL_RESERVATION_USD)
+    return {"affordable": affordable, "startupAffordabilityMode": startup_mode,
+            "startupMaximumRequestCheckDeferred": startup_mode == "per-request",
+            "startupReservesMoney": False, "maximumRequestReservationBoundUsd": FULL_RESERVATION_USD,
+            # Compatibility diagnostic; neither startup mode reserves money.
             "requiredFullQualityReservationUsd": FULL_RESERVATION_USD,
             "globalHeadroomUsd": global_headroom, "actorHeadroomUsd": actor_headroom}
 
@@ -290,15 +297,20 @@ def settled_invocation_state(supervisor, arm, timeout=700, clock=time.monotonic,
 
 
 def coordinate_team_arm(*, supervisor, runtime, label, adapter, task, common, check_frozen, persist,
-                        max_calls=300, seconds=7200, soft_usd=3, clock=time.monotonic, profile=None):
+                        max_calls=300, seconds=7200, soft_usd=3, clock=time.monotonic, profile=None,
+                        startup_mode="maximum-request"):
     """One arm, callback-testable without a process, network or model call."""
     profile = PROFILE if profile is None else profile
     roles = tuple(profile["childLifetimeSlots"])
+    require(startup_mode == "maximum-request" or startup_mode == "per-request"
+            and task.get("expectedBrowserChecks") == 0 and profile["nativeAutonomousIdentities"] == 7,
+            "per-request startup requires the explicit seven-role headless task")
     result = {"runtime": runtime, "attempts": [], "allChargesRetained": True, "historicalAmountsReset": False,
               "functionalVerdict": "not_run", "nativeAuditVerdict": "not_run", "blindedCodeReviewVerdict": "pending_external_review", "qualityComparisonMet": False, "reviewRequired": False,
               "stopReason": None, "settlementComplete": False}
     check_frozen()
-    headroom = affordability(supervisor.controller("/status"), runtime, funding_profile=supervisor.funding_profile)
+    headroom = affordability(supervisor.controller("/status"), runtime, funding_profile=supervisor.funding_profile,
+                             startup_mode=startup_mode)
     result["preflight"] = headroom
     if not headroom["affordable"]:
         result.update(stopReason="unaffordable_arm_not_run", reviewRequired=False)
