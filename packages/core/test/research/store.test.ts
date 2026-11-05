@@ -1188,7 +1188,7 @@ describe("research migration", () => {
       declared: declared(table),
       stored: stored(db, getTableConfig(table).name),
     }))
-    const triggers = db.query("SELECT name FROM sqlite_master WHERE type = 'trigger'").all()
+    const triggers = db.query("SELECT name FROM sqlite_master WHERE type = 'trigger' ORDER BY name").all()
     db.close()
     const untouched = new Database(fixture, { readonly: true })
     const before = (untouched.query("SELECT id FROM migration").all() as { id: string }[]).length
@@ -1199,7 +1199,14 @@ describe("research migration", () => {
     expect(document).toEqual([{ id: "d1", origin: "upload", source_url: null, fetched_at: null, run_id: null }])
     expect(kept).toEqual({ entries: [{ id: "m1a2b3" }], postings: [{ term: 1, item: 1, count: 2 }] })
     for (const shape of shapes) expect(shape.stored).toEqual(shape.declared)
-    expect(triggers).toEqual([{ name: "research_report_forgotten" }])
+    expect(triggers).toEqual([
+      { name: "brain_document_visibility_revocation" },
+      { name: "brain_event_revocation" },
+      { name: "brain_repository_docs_initial_revocation" },
+      { name: "brain_repository_docs_revocation" },
+      { name: "brain_repository_document_revocation" },
+      { name: "research_report_forgotten" },
+    ])
   })
 })
 
