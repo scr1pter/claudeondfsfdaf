@@ -72,6 +72,8 @@ func runPrivilegedSelfTestTests() throws -> Int {
             "target_post_event_denied", "noninteractive_desktop", "input_detection_unavailable", "physical_takeover", "target_unavailable",
             "target_validation_failed", "target_spawn_failed", "target_handshake_failed", "target_process_changed",
             "target_responsibility_missing", "target_state_invalid", "target_identity_unavailable",
+            "target_options_invalid", "target_bundle_invalid", "target_control_invalid", "target_application_failed",
+            "target_report_invalid", "target_encoding_failed", "target_output_failed", "target_exited", "target_crashed",
             "assertion_failed", "native_operation_failed", "deadline_exceeded", "cleanup_failed"],
             "Reports may use only the bounded machine-readable reason vocabulary")
         for stage in PrivilegedTargetStage.allCases {
@@ -81,6 +83,13 @@ func runPrivilegedSelfTestTests() throws -> Int {
             try privilegedExpect(report.valid && report.exitCode == 1 && report.wire["checks"]?.arrayValue?.first?["detail"] == .string(stage.rawValue),
                 "Every setup stage remains a real failure with a fixed content-free diagnostic")
         }
+        for (code, expected) in [(20, PrivilegedTargetStage.options), (21, .bundle), (22, .control),
+                                 (23, .application), (24, .state), (25, .output), (26, .encoding), (0, .exited), (1, .exited)] {
+            try privilegedExpect(PrivilegedTargetStage.failure(waitStatus: Int32(code << 8)) == expected,
+                "Private startup exit codes must remain fixed and content-free")
+        }
+        try privilegedExpect(PrivilegedTargetStage.failure(waitStatus: 9) == .crashed,
+            "A signalled target remains a failure without reporting a crash payload")
     }
     try test {
         let report = PrivilegedCheckReport(checks: privilegedPasses())

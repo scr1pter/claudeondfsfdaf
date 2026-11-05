@@ -10,6 +10,10 @@ private let targetExecutable = "VectorComputerTestTarget"
 private let targetFrameLimit = 16 * 1024
 private let targetForeignTag: Int64 = 0x5654435446474553
 private enum TargetFailure: Error { case invalid }
+// Private startup diagnostics: only these fixed stages cross the parent boundary, never exception text.
+private enum TargetExit: Int32 {
+    case options = 20, bundle = 21, control = 22, application = 23, state = 24, output = 25, encoding = 26
+}
 
 private func targetHex(_ value: String, count: Int) -> Bool {
     value.utf8.count == count && value.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) }
@@ -209,31 +213,32 @@ private final class TargetChannel {
     }
 
     func reply(id: Int, state: TargetState?, code: String? = nil) {
-        guard getppid() == options.parent, state?.valid ?? true else { _exit(1) }
+        guard getppid() == options.parent else { _exit(0) }
+        guard state?.valid ?? true else { _exit(TargetExit.state.rawValue) }
         let deadline = DispatchTime.now().uptimeNanoseconds + 50_000_000
         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
         guard var bytes = try? encoder.encode(TargetReply(id: id, nonce: options.nonce, ok: code == nil, code: code, state: state)),
-              bytes.count < targetFrameLimit else { _exit(1) }
+              bytes.count < targetFrameLimit else { _exit(TargetExit.encoding.rawValue) }
         bytes.append(10)
-        guard writer.wait(timeout: DispatchTime(uptimeNanoseconds: deadline)) == .success else { _exit(1) }
+        guard writer.wait(timeout: DispatchTime(uptimeNanoseconds: deadline)) == .success else { _exit(TargetExit.output.rawValue) }
         defer { writer.signal() }
         bytes.withUnsafeBytes { raw in
             var offset = 0
             while offset < raw.count {
                 let now = DispatchTime.now().uptimeNanoseconds
-                guard now < deadline else { _exit(1) }
+                guard now < deadline else { _exit(TargetExit.output.rawValue) }
                 let written = Darwin.write(STDOUT_FILENO, raw.baseAddress?.advanced(by: offset), raw.count - offset)
                 if written > 0 {
                     offset += written
-                    guard DispatchTime.now().uptimeNanoseconds < deadline else { _exit(1) }
+                    guard DispatchTime.now().uptimeNanoseconds < deadline else { _exit(TargetExit.output.rawValue) }
                     continue
                 }
                 if written < 0 && errno == EINTR { continue }
-                guard written < 0, errno == EAGAIN || errno == EWOULDBLOCK else { _exit(1) }
+                guard written < 0, errno == EAGAIN || errno == EWOULDBLOCK else { _exit(TargetExit.output.rawValue) }
                 var item = pollfd(fd: STDOUT_FILENO, events: Int16(POLLOUT), revents: 0)
                 let remaining = Int32(max(1, (deadline - now + 999_999) / 1_000_000))
                 guard poll(&item, 1, remaining) > 0, item.revents & Int16(POLLOUT) != 0,
-                      item.revents & Int16(POLLERR | POLLHUP | POLLNVAL) == 0 else { _exit(1) }
+                      item.revents & Int16(POLLERR | POLLHUP | POLLNVAL) == 0 else { _exit(TargetExit.output.rawValue) }
             }
         }
     }
@@ -473,16 +478,20 @@ if CommandLine.arguments.dropFirst().elementsEqual(["--self-test=control"]) {
     _exit(passed ? 0 : 1)
 }
 
+var targetStartupExit = TargetExit.options
 do {
     let options = try TargetOptions.parse(Array(CommandLine.arguments.dropFirst()))
+    targetStartupExit = .bundle
     let bundle = Bundle.main.bundleURL.resolvingSymlinksInPath().standardizedFileURL
     guard Bundle.main.bundleIdentifier == targetBundleID, bundle.lastPathComponent == "VectorComputerTestTarget.app",
           Bundle.main.executableURL?.resolvingSymlinksInPath().standardizedFileURL.path == bundle.appendingPathComponent("Contents/MacOS/" + targetExecutable).path,
           Bundle.main.object(forInfoDictionaryKey: "VectorComputerSourceDigest") as? String == options.artifact else { throw TargetFailure.invalid }
+    targetStartupExit = .control
     let channel = try TargetChannel(options)
     var target: TargetApplication?
     // The independent EOF/parent watchers are armed before AppKit can block while opening its first window.
     channel.start { command in guard let target else { _exit(1) }; target.receive(command) }
+    targetStartupExit = .application
     let application = NSApplication.shared
     let delegate = TargetApplication(channel: channel)
     target = delegate
@@ -490,4 +499,4 @@ do {
     guard application.setActivationPolicy(.regular) else { throw TargetFailure.invalid }
     application.run()
     _exit(0)
-} catch { _exit(2) }
+} catch { _exit(targetStartupExit.rawValue) }

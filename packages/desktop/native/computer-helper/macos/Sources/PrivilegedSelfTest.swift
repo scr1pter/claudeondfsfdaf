@@ -17,6 +17,8 @@ enum PrivilegedCheckCatalog {
         "target_post_event_denied", "noninteractive_desktop", "input_detection_unavailable", "physical_takeover",
         "target_unavailable", "target_validation_failed", "target_spawn_failed", "target_handshake_failed",
         "target_process_changed", "target_responsibility_missing", "target_state_invalid", "target_identity_unavailable",
+        "target_options_invalid", "target_bundle_invalid", "target_control_invalid", "target_application_failed",
+        "target_report_invalid", "target_encoding_failed", "target_output_failed", "target_exited", "target_crashed",
         "assertion_failed", "native_operation_failed", "deadline_exceeded", "cleanup_failed"]
 }
 
@@ -137,6 +139,24 @@ enum PrivilegedTargetPolicy {
 enum PrivilegedTargetStage: String, CaseIterable {
     case spawn = "target_spawn_failed", handshake = "target_handshake_failed", process = "target_process_changed"
     case responsibility = "target_responsibility_missing", state = "target_state_invalid", identity = "target_identity_unavailable"
+    case options = "target_options_invalid", bundle = "target_bundle_invalid", control = "target_control_invalid"
+    case application = "target_application_failed", report = "target_report_invalid", output = "target_output_failed"
+    case encoding = "target_encoding_failed"
+    case exited = "target_exited", crashed = "target_crashed"
+
+    static func failure(waitStatus: Int32) -> PrivilegedTargetStage {
+        guard waitStatus & 0x7f == 0 else { return .crashed }
+        switch HelperLifecycle.exitCode(waitStatus: waitStatus) {
+        case 20: return .options
+        case 21: return .bundle
+        case 22: return .control
+        case 23: return .application
+        case 24: return .state
+        case 25: return .output
+        case 26: return .encoding
+        default: return .exited
+        }
+    }
 }
 private enum PrivilegedTestFailure: Error { case assertion, operation, timeout, interrupted, target(PrivilegedTargetStage) }
 
@@ -154,6 +174,7 @@ private final class PrivilegedTargetChannel {
     private var replies: [Int: JSONValue] = [:]
     private var nextID = 0
     private var failed = false
+    private var malformed = false
     private var closed = false
 
     init(path: String, sourceDigest: String) throws {
@@ -233,7 +254,8 @@ private final class PrivilegedTargetChannel {
         let ready: JSONValue
         do { ready = try awaitReply(0, milliseconds: 8000) }
         catch PrivilegedTestFailure.timeout { throw PrivilegedTestFailure.timeout }
-        catch { throw PrivilegedTestFailure.target(.handshake) }
+        catch PrivilegedTestFailure.interrupted { throw PrivilegedTestFailure.interrupted }
+        catch { throw PrivilegedTestFailure.target(handshakeFailure()) }
         guard let actual = HelperLifecycle.processIdentity(launched), actual.executable.utf8.elementsEqual(evidence.executablePath.utf8) else {
             throw PrivilegedTestFailure.target(.process)
         }
@@ -283,16 +305,34 @@ private final class PrivilegedTargetChannel {
                 guard frame.count <= 16 * 1024, let packet = try? JSONDecoder().decode(JSONValue.self, from: frame),
                       let object = packet.objectValue, Set(object.keys).isSubset(of: ["id", "nonce", "ok", "state", "code"]),
                       let id = object["id"]?.intValue, id >= 0, object["nonce"]?.stringValue == nonce,
-                      object["ok"]?.boolValue == true, let state = object["state"], replies.count < 16, replies[id] == nil else { failed = true; return }
+                      object["ok"]?.boolValue == true, let state = object["state"], replies.count < 16, replies[id] == nil else { malformed = true; failed = true; return }
                 replies[id] = state
             }
-            if buffered.count > 16 * 1024 { failed = true; return }
+            if buffered.count > 16 * 1024 { malformed = true; failed = true; return }
         }
+    }
+    private func handshakeFailure() -> PrivilegedTargetStage {
+        // Only this unreaped child is inspected. Reaping and PID retirement share close's fence,
+        // so cancellation cannot kill a reused PID after an exit diagnostic consumes its status.
+        for _ in 0..<10 {
+            lock.lock()
+            if malformed { lock.unlock(); return .report }
+            guard !closed, pid > 1 else { lock.unlock(); return .handshake }
+            var status: Int32 = 0
+            let result = waitpid(pid, &status, WNOHANG)
+            let nativeError = errno
+            if result == pid { pid = 0; process = nil; lock.unlock(); return PrivilegedTargetStage.failure(waitStatus: status) }
+            lock.unlock()
+            if result < 0 && nativeError != EINTR { return .handshake }
+            _ = CFRunLoopRunInMode(.defaultMode, 0.01, true)
+        }
+        return .handshake
     }
     private func awaitReply(_ id: Int, milliseconds: UInt64) throws -> JSONValue {
         let deadline = DispatchTime.now().uptimeNanoseconds + milliseconds * 1_000_000
         while DispatchTime.now().uptimeNanoseconds < deadline {
-            lock.lock(); let value = replies.removeValue(forKey: id); let failed = self.failed || closed; lock.unlock()
+            lock.lock(); let value = replies.removeValue(forKey: id); let failed = self.failed; let closed = self.closed; lock.unlock()
+            if closed { throw PrivilegedTestFailure.interrupted }
             if let value { return value }; if failed { throw PrivilegedTestFailure.operation }
             _ = CFRunLoopRunInMode(.defaultMode, 0.01, true)
         }

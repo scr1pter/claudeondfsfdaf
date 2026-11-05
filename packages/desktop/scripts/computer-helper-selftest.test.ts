@@ -520,6 +520,15 @@ test("native reports require the complete fixed catalog and coherent exits", () 
     "target_responsibility_missing",
     "target_state_invalid",
     "target_identity_unavailable",
+    "target_options_invalid",
+    "target_bundle_invalid",
+    "target_control_invalid",
+    "target_application_failed",
+    "target_report_invalid",
+    "target_encoding_failed",
+    "target_output_failed",
+    "target_exited",
+    "target_crashed",
   ]) {
     const checks = failed.map((entry, index) => (index === 0 ? { ...entry, detail } : entry))
     expect(nativeSelfTestChecks(JSON.stringify({ checks }), "privileged", 1)).toEqual(checks)
