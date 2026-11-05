@@ -80,10 +80,16 @@ const frameKinds: readonly [ComputerSmokeSampleFrame, RegExp][] = [
 ]
 
 /** Only counted frames within an explicitly named main-thread call graph contribute closed categories. */
-export function computerSmokeMainThreadSample(raw: string): Pick<ComputerSmokeSampleReport, "mainThread" | "frames"> {
+export function computerSmokeMainThreadSample(
+  raw: string,
+  partial = false,
+): Pick<ComputerSmokeSampleReport, "mainThread" | "frames"> {
   const result: Pick<ComputerSmokeSampleReport, "mainThread" | "frames"> = { mainThread: false, frames: [] }
   let graph = false
-  for (const line of raw.slice(0, SAMPLE_BYTES).split(/\r?\n/)) {
+  const bounded = raw.slice(0, SAMPLE_BYTES)
+  // A diagnostic deadline/cap may interrupt a frame; only newline-complete records are evidence.
+  const complete = partial ? bounded.slice(0, bounded.lastIndexOf("\n") + 1) : bounded
+  for (const line of complete.split(/\r?\n/)) {
     if (!graph) {
       if (/^\s*Call graph:\s*$/.test(line)) graph = true
       continue
@@ -157,13 +163,26 @@ export async function sampleOwnedComputerSmoke(target: {
       chunks.length = 0
       resolve(value)
     }
+    const observed = (status: "sampled" | "deadline" | "output-cap" | "failed") => {
+      try {
+        if (target.signal.aborted || !target.alive()) return finish(report("target-exited"))
+        if (status === "failed") return finish(report("failed"))
+        finish({
+          ...report(status),
+          ...computerSmokeMainThreadSample(Buffer.concat(chunks).toString("utf8"), status !== "sampled"),
+        })
+      } catch {
+        finish(report("failed"))
+      }
+    }
     const abort = () => finish(report("target-exited"))
-    const timer = setTimeout(() => finish(report("deadline")), 2000)
+    // Diagnostic tool startup/symbolication only; the functional watchdog remains unchanged.
+    const timer = setTimeout(() => observed("deadline"), 8000)
     target.signal.addEventListener("abort", abort, { once: true })
     const capture = (chunk: Buffer, stdout: boolean) => {
       if (ended) return
       bytes += chunk.length
-      if (bytes > SAMPLE_BYTES) return finish(report("output-cap"))
+      if (bytes > SAMPLE_BYTES) return observed("output-cap")
       if (stdout) chunks.push(chunk)
     }
     child.stdout?.on("data", (chunk: Buffer) => capture(chunk, true))
@@ -173,13 +192,7 @@ export async function sampleOwnedComputerSmoke(target: {
     child.once("error", () => finish(report("unavailable")))
     child.once("close", (code) => {
       if (ended) return
-      try {
-        if (target.signal.aborted || !target.alive()) return finish(report("target-exited"))
-      } catch {
-        return finish(report("failed"))
-      }
-      if (code !== 0) return finish(report("failed"))
-      finish({ ...report("sampled"), ...computerSmokeMainThreadSample(Buffer.concat(chunks).toString("utf8")) })
+      observed(code === 0 ? "sampled" : "failed")
     })
     try {
       if (target.signal.aborted || !target.alive()) abort()

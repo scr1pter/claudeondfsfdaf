@@ -87,6 +87,16 @@ Binary Images:
     )
   })
 
+  test("partial diagnostics retain complete observed frames and discard an interrupted last frame", () => {
+    const raw = "Call graph:\n  10 Thread_42: Main Thread\n  + 10 -[NSWindow close] (in AppKit)\n  + 10 v8::"
+    expect(computerSmokeMainThreadSample(raw, true)).toEqual({ mainThread: true, frames: ["nswindow-close"] })
+    expect(computerSmokeMainThreadSample(raw)).toEqual({ mainThread: true, frames: ["nswindow-close", "v8"] })
+    expect(computerSmokeMainThreadSample("Call graph:\n  10 Thread_42: Main Thread\n  + 10 uv_run", true)).toEqual({
+      mainThread: true,
+      frames: [],
+    })
+  })
+
   test("ends at an aggregate header and never searches beyond the input bound", () => {
     expect(
       computerSmokeMainThreadSample(`Call graph:
