@@ -2,6 +2,7 @@
 #include "guard.h"
 #include "windows_com.h"
 #include "windows_process_tree.h"
+#include "availability.h"
 #include <d3d11.h>
 #include <dwmapi.h>
 #include <objidl.h>
@@ -27,13 +28,13 @@ using Clock = std::chrono::steady_clock;
 [[noreturn]] void unavailable(std::wstring code = L"capture_unavailable") { throw Failure{std::move(code), L"The native capture is unavailable. Check Windows Privacy & security settings."}; }
 void require(bool value, std::wstring code = L"capture_unavailable") { if (!value) unavailable(std::move(code)); }
 WindowsRect rectangle(const RECT& value) { return {value.left, value.top, int64_t(value.right) - value.left, int64_t(value.bottom) - value.top}; }
-bool desktop_available() {
-  if (!AreDpiAwarenessContextsEqual(GetThreadDpiAwarenessContext(), DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)) return false;
-  const auto desktop = OpenInputDesktop(0, FALSE, DESKTOP_READOBJECTS);
-  if (!desktop) return false;
-  wchar_t name[64]{}; DWORD bytes = 0;
-  const bool ready = GetUserObjectInformationW(desktop, UOI_NAME, name, sizeof(name), &bytes) && bytes > sizeof(wchar_t) && bytes <= sizeof(name) && name[63] == L'\0' && std::wstring_view(name) == L"Default";
-  CloseDesktop(desktop); return ready;
+void require_capture_surface(const std::optional<WindowsWindow>& window = {}) {
+  const auto actual = observe_windows_availability(WindowsAvailabilityBackend::system());
+  if (window) {
+    require_windows_capture(actual, &window->owner.process.token);
+    require_windows_capture(actual, &window->physical_owner.process.token);
+  } else require_windows_capture(actual);
+  require(AreDpiAwarenessContextsEqual(GetThreadDpiAwarenessContext(), DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) != FALSE);
 }
 std::vector<CaptureDisplay> native_displays() {
   struct State { std::vector<CaptureDisplay> displays; bool complete = true; } state;
@@ -76,7 +77,7 @@ CaptureSurface structural(HWND hwnd, const ServerSession& session) {
 struct NativeCapture {
   WindowsBackend windows = WindowsBackend::system(windows_child_shell);
   CaptureInventory inventory(const ServerSession& session, const std::function<bool()>& current, bool resolve = true) const {
-    require(desktop_available(), L"secure_desktop");
+    require_capture_surface();
     CaptureInventory result; result.displays = native_displays();
     struct State {
       const NativeCapture* native; const ServerSession* session; const std::function<bool()>* current;
@@ -300,14 +301,14 @@ CaptureBackend CaptureBackend::system() {
   backend.inventory = [native](const ServerSession& session, const std::function<bool()>& current) { return native->inventory(session, current); };
   backend.current = [native](const CaptureInventory& inventory, const ServerSession& session) { return native->current(inventory, session); };
   backend.read = [](const CaptureReadRequest& request, const std::function<bool()>& current) {
-    require(current() && desktop_available(), L"secure_desktop");
-    if (request.window && request.occluded) return window_bitmap(request, current);
-    const auto result = screen_bitmap(request.bounds); require(current() && desktop_available(), L"changed"); return result;
+    require_capture_surface(request.window); require(current(), L"changed");
+    const auto result = request.window && request.occluded ? window_bitmap(request, current) : screen_bitmap(request.bounds);
+    require_capture_surface(request.window); require(current(), L"changed"); return result;
   };
   backend.label = label_vector; backend.encode = encode_bitmap;
   // The supported Windows floor has WGC. Feature reads publish implemented operations without a
   // potentially blocking WinRT activation under Dispatcher authority; actual support is checked at read time.
-  backend.window_supported = [] { return true; }; backend.available = desktop_available;
+  backend.window_supported = [] { return true; }; backend.available = [] { require_capture_surface(); return true; };
   backend.now = [] { FILETIME time{}; GetSystemTimeAsFileTime(&time); const auto ticks = (uint64_t(time.dwHighDateTime) << 32) | time.dwLowDateTime; require(ticks >= 116'444'736'000'000'000ULL); return (ticks - 116'444'736'000'000'000ULL) / 10'000; };
   backend.identifier = [] {
     GUID value{}; winrt::check_hresult(CoCreateGuid(&value)); wchar_t text[40]{}; require(StringFromGUID2(value, text, 40) > 0);

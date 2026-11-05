@@ -17,6 +17,7 @@
 #include "input_guardian.h"
 #include "uia_input.h"
 #include "accessibility.h"
+#include "availability.h"
 #include <objidl.h>
 #include <xmllite.h>
 #include <algorithm>
@@ -482,13 +483,19 @@ void command_line() {
   require(probe && probe->mode == Mode::probe, "cli.probe");
   const auto serve = parse({L"--stdio", L"--parent-pid", L"123"});
   require(serve && serve->mode == Mode::serve && serve->parent == 123, "cli.serve");
+  const auto denial = parse({L"--stdio", L"--parent-pid", L"123", L"--test-elevated-token"});
+  require(denial && denial->mode == Mode::serve && denial->parent == 123 && denial->test_elevated_token && !serve->test_elevated_token,
+    "cli.elevation-switch-only-adds-serving-refusal");
   const auto self = parse({L"--self-test=privileged", L"--target", L"isolated-target", L"--report", L"report.json"});
   require(self && self->mode == Mode::self_test && self->self_test == L"privileged" && self->target == L"isolated-target", "cli.self-test");
   for (const auto& arguments : std::vector<std::vector<std::wstring>>{
       {}, {L"--version"}, {L"--version", L"--json", L"--json"}, {L"--probe", L"--version", L"--json"},
       {L"--stdio", L"--parent-pid", L"0"}, {L"--stdio", L"--parent-pid", L"-1"},
       {L"--stdio", L"--parent-pid", L"4294967296"}, {L"--stdio", L"--parent-pid", L"1", L"--parent-pid", L"2"},
-      {L"--self-test=unknown"}, {L"--self-test=unprivileged", L"--stdio"}, {L"--unknown"}})
+      {L"--self-test=unknown"}, {L"--self-test=unprivileged", L"--stdio"}, {L"--unknown"},
+      {L"--test-elevated-token"}, {L"--version", L"--json", L"--test-elevated-token"},
+      {L"--probe", L"--json", L"--test-elevated-token"}, {L"--self-test=unprivileged", L"--test-elevated-token"},
+      {L"--stdio", L"--test-elevated-token"}, {L"--stdio", L"--parent-pid", L"123", L"--test-elevated-token", L"--test-elevated-token"}})
     require(!parse_command(arguments), "cli.invalid-arguments");
 }
 
@@ -499,7 +506,7 @@ template<class Check> void run_check(const char* label, Check check) {
     const std::string_view detail(error.what(), strnlen_s(error.what(), 129));
     const bool fixed = detail.size() <= 128 &&
       (detail.starts_with("protocol.") || detail.starts_with("server.") || detail.starts_with("parent.") || detail.starts_with("lifecycle.") || detail.starts_with("integration.") ||
-        detail.starts_with("windows-") || detail.starts_with("policy.") || detail.starts_with("tree.") || detail.starts_with("program.") || detail.starts_with("guard.") || detail.starts_with("capture.") ||
+        detail.starts_with("windows-") || detail.starts_with("policy.") || detail.starts_with("tree.") || detail.starts_with("program.") || detail.starts_with("guard.") || detail.starts_with("capture.") || detail.starts_with("availability.") ||
         detail.starts_with("input.") || detail.starts_with("input-keys.") || detail.starts_with("held.") || detail.starts_with("guardian.") ||
         detail.starts_with("uia-native.") || detail.starts_with("uia-input.") || detail.starts_with("accessibility.") || detail.starts_with("accessibility-registry.")) &&
       std::all_of(detail.begin(), detail.end(), [](char value) { return (value >= 'a' && value <= 'z') || (value >= '0' && value <= '9') || value == '.' || value == '-'; });
@@ -536,6 +543,7 @@ int main(int argc, char** argv) {
     run_check("protocol", [] { static_cast<void>(run_protocol_tests()); });
     run_check("server", [] { static_cast<void>(run_server_tests()); });
     run_check("parent-identity", parent_identity_tests);
+    run_check("surface-availability", [] { static_cast<void>(run_availability_tests()); });
     run_check("lifecycle", lifecycle_tests);
     run_check("caller-and-native-lifecycle", integration_tests);
     run_check("window-identities", [] { static_cast<void>(run_windows_identity_tests()); });

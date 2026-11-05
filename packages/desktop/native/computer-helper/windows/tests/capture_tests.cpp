@@ -1,4 +1,5 @@
 #include "capture.h"
+#include "availability.h"
 #include <array>
 #include <cmath>
 #include <stdexcept>
@@ -37,6 +38,7 @@ struct Fixture {
   CaptureBitmap encoded;
   std::wstring format;
   std::function<void()> during_read, during_encode;
+  std::optional<WindowsAvailabilityObservation> availability;
   std::unique_ptr<CaptureService> service;
   Fixture() {
     session.id = L"capture-test"; session.run_epoch = 1; session.observation_epoch = 2; session.revision = 1;
@@ -47,7 +49,7 @@ struct Fixture {
     backend.displays = [this] { return world.displays; };
     backend.inventory = [this](const auto&, const auto&) { return world; };
     backend.current = [this](const auto& expected, const auto&) { return metadata_current && same_capture_inventory(expected, world); };
-    backend.available = [this] { return available; }; backend.window_supported = [] { return true; };
+    backend.available = [this] { if (availability) require_windows_capture(*availability); return available; }; backend.window_supported = [] { return true; };
     backend.read = [this](const CaptureReadRequest& request, const auto&) {
       ++reads; requests.push_back(request); if (during_read) during_read();
       CaptureBitmap result{static_cast<uint32_t>(request.bounds.width), static_cast<uint32_t>(request.bounds.height), std::vector<uint8_t>(static_cast<size_t>(request.bounds.width * request.bounds.height) * 4, 0)};
@@ -89,6 +91,28 @@ CaptureReceipt receipt(std::wstring id, uint64_t generation, const ServerSession
 
 size_t run_capture_tests() {
   size_t groups = 0; const auto test = [&](const auto& work) { work(); ++groups; };
+  test([] {
+    Fixture fixture; auto helper = ordinary_window().owner.process.token;
+    fixture.availability = WindowsAvailabilityObservation{helper, {true, false, true}, false};
+    const auto result = fixture.take(fixture.args());
+    check(std::holds_alternative<Failure>(result) && std::get<Failure>(result).code == L"secure_desktop" && fixture.reads == 0 && fixture.encodes == 0,
+      "capture.secure-desktop-gate-precedes-every-native-pixel-read");
+  });
+  test([] {
+    for (const auto policy : {std::optional<bool>{}, std::optional<bool>{true}}) {
+      Fixture fixture; fixture.availability = WindowsAvailabilityObservation{ordinary_window().owner.process.token, {true, true, true}, policy};
+      const auto result = fixture.take(fixture.args());
+      check(std::holds_alternative<Failure>(result) && std::get<Failure>(result).code == L"capture_unavailable" && fixture.reads == 0,
+        "capture.unknown-or-observed-policy-block-never-reads-pixels");
+    }
+  });
+  test([] {
+    Fixture fixture; fixture.availability = WindowsAvailabilityObservation{ordinary_window().owner.process.token, {true, true, true}, false};
+    fixture.during_read = [&] { fixture.availability->desktop.default_name = false; };
+    const auto result = fixture.take(fixture.args());
+    check(std::holds_alternative<Failure>(result) && std::get<Failure>(result).code == L"secure_desktop" && fixture.ids == 0,
+      "capture.desktop-switch-before-publication-retains-typed-refusal-and-no-receipt");
+  });
   test([] {
     Fixture fixture; const auto result = fixture.take(fixture.args()); const auto& image = success(result);
     check(image.fields.GetNamedNumber(L"width") == 8 && image.fields.GetNamedNumber(L"height") == 4 && image.fields.GetNamedNumber(L"imageScale") == 0.5 && image.fields.GetNamedNumber(L"dpiScale") == 1.5, "capture.negative-origin-mixed-dpi-isotropic-header");

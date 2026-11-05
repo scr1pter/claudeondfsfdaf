@@ -51,7 +51,7 @@ configure_file(src/build-config.h.in generated/build-config.h @ONLY)
 configure_file(version.rc.in generated/version.rc @ONLY)
 configure_file(tests/inputs.rc.in generated/test-inputs.rc @ONLY)
 
-add_library(computer-core STATIC src/core.cpp src/protocol.cpp src/server.cpp src/parent_identity.cpp src/lifecycle.cpp
+add_library(computer-core STATIC src/core.cpp src/protocol.cpp src/server.cpp src/parent_identity.cpp src/lifecycle.cpp src/availability.cpp
   src/windows_identity.cpp src/windows_enum.cpp src/windows_apps.cpp src/windows_com.cpp src/windows_icon.cpp
   src/windows_policy.cpp src/windows_process_tree.cpp src/program_registry.cpp src/windows_program.cpp src/guard.cpp
   src/capture.cpp src/capture_native.cpp src/capture_math.cpp
@@ -71,7 +71,7 @@ add_executable(vector-computer-tests tests/main.cpp tests/protocol_tests.cpp tes
   tests/windows_identity_tests.cpp tests/windows_enum_tests.cpp tests/windows_icon_tests.cpp tests/windows_policy_tests.cpp tests/windows_process_tree_tests.cpp
   tests/program_registry_tests.cpp tests/windows_program_tests.cpp tests/guard_tests.cpp tests/capture_math_tests.cpp tests/capture_tests.cpp
   tests/input_tests.cpp tests/input_held_tests.cpp tests/input_keys_tests.cpp tests/input_guardian_tests.cpp tests/uia_native_tests.cpp tests/uia_input_tests.cpp
-  tests/accessibility_tests.cpp tests/accessibility_registry_tests.cpp "${CMAKE_CURRENT_BINARY_DIR}/generated/test-inputs.rc")
+  tests/accessibility_tests.cpp tests/accessibility_registry_tests.cpp tests/availability_tests.cpp "${CMAKE_CURRENT_BINARY_DIR}/generated/test-inputs.rc")
 target_link_libraries(vector-computer-tests PRIVATE computer-core xmllite version)
 add_dependencies(vector-computer-tests vector-computer)
 

@@ -30,6 +30,7 @@ struct WindowsGuardBackend {
   std::function<bool(const WindowsPointOwner&, const ServerSession&)> point_current;
   std::function<bool(const WindowsWindow&)> foreground_current;
   std::function<bool(const WindowsWindow&)> keyboard_current;
+  std::function<void(const WindowsWindow&)> require_surface;
   std::function<uint64_t()> now;
   static WindowsGuardBackend system();
 };

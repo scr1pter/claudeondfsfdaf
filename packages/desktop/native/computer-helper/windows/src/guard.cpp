@@ -1,5 +1,6 @@
 #include "guard.h"
 #include "windows_process_tree.h"
+#include "availability.h"
 #include <dwmapi.h>
 #include <algorithm>
 #include <array>
@@ -142,6 +143,7 @@ bool windows_overlay_passthrough_allowed(const WindowsOverlayWitness& observed, 
 }
 WindowsGuardBackend WindowsGuardBackend::system() {
   auto windows = WindowsBackend::system(windows_child_shell);
+  const auto availability = WindowsAvailabilityBackend::system();
   WindowsGuardBackend result;
   result.point = [windows](POINT point, const ServerSession& session) {
     const auto hit = native_hit(point, session, true);
@@ -165,6 +167,11 @@ WindowsGuardBackend WindowsGuardBackend::system() {
   result.current = [](const WindowsWindow& window) { return windows_window_current(window); };
   result.foreground_current = [windows](const WindowsWindow& window) { return windows.foreground(window); };
   result.keyboard_current = [windows](const WindowsWindow& window) { return keyboard_focus_current(window, windows); };
+  result.require_surface = [availability](const WindowsWindow& window) {
+    const auto actual = observe_windows_availability(availability);
+    require_windows_surface(actual, &window.owner.process.token);
+    require_windows_surface(actual, &window.physical_owner.process.token);
+  };
   result.point_current = [](const WindowsPointOwner& expected, const ServerSession& session) {
     try {
       const auto actual = native_hit(expected.point, session, false);
@@ -182,10 +189,12 @@ WindowsGuardBackend WindowsGuardBackend::system() {
   return result;
 }
 WindowsGuard::WindowsGuard(WindowsGuardBackend backend) : backend_(std::move(backend)) {
-  if (!backend_.point || !backend_.foreground || !backend_.current || !backend_.point_current || !backend_.foreground_current || !backend_.keyboard_current || !backend_.now) throw std::invalid_argument("guard.incomplete-backend");
+  if (!backend_.point || !backend_.foreground || !backend_.current || !backend_.point_current || !backend_.foreground_current || !backend_.keyboard_current || !backend_.require_surface || !backend_.now) throw std::invalid_argument("guard.incomplete-backend");
 }
 WindowsPointOwner WindowsGuard::point(const WindowsWindow& expected, POINT point, const ServerSession& session) const {
+  backend_.require_surface(expected);
   auto actual = backend_.point(point, session);
+  backend_.require_surface(actual.window);
   WindowsSessionPolicy(session).require(actual.window, WindowsPolicyOperation::pointer);
   if (!class_allowed(actual.window.owner.identity, actual.hit_class)) fail(L"protected", L"The native input surface is protected.");
   if (!same_point(actual.point, point) || !actual.hit || actual.hit_pid != actual.window.owner.process.pid || actual.hit_thread == 0 || actual.hit_class.empty() ||
@@ -198,7 +207,9 @@ WindowsPointOwner WindowsGuard::point(const WindowsWindow& expected, POINT point
 WindowsWindow WindowsGuard::foreground(const WindowsWindow& expected, const ServerSession& session, WindowsPolicyOperation operation, std::optional<bool> secure, std::span<const std::wstring> keys) const {
   if ((operation != WindowsPolicyOperation::key && operation != WindowsPolicyOperation::type_text && operation != WindowsPolicyOperation::set_value) ||
       (operation == WindowsPolicyOperation::key && (keys.empty() || keys.size() > 8))) fail(L"failed", L"The native keyboard operation is invalid.");
+  backend_.require_surface(expected);
   auto actual = backend_.foreground();
+  backend_.require_surface(actual);
   WindowsSessionPolicy(session).require(actual, operation, secure, keys);
   if (!same_windows_window(actual, expected) || !backend_.current(actual)) fail(L"changed", L"The native foreground app changed.");
   if (!actual.visible || actual.minimized || !actual.on_screen || !backend_.keyboard_current(actual)) fail(L"not_foreground", L"The native target is not visible and foreground.");
@@ -210,14 +221,18 @@ void WindowsGuard::with_point(const WindowsWindow& expected, POINT point, const 
 }
 void WindowsGuard::commit_point(const WindowsPointOwner& actual, const ServerSession& session, const OperationContext& context, const std::function<void()>& mutation,const std::function<void()>& precondition) const {
   if (!mutation || !context.is_current || !context.with_current || !same_session(session, context.session) || !context.is_current()) fail(L"changed", L"The computer session changed.");
+  backend_.require_surface(actual.window);
   WindowsSessionPolicy(session).require(actual.window,WindowsPolicyOperation::pointer);
   if (!actual.hit || actual.hit_pid!=actual.window.owner.process.pid || !actual.hit_thread || actual.hit_class.empty() ||
       !class_allowed(actual.window.owner.identity,actual.hit_class)) fail(L"protected",L"The native input surface is protected.");
   if (!current_stamp(actual.stamp,session,backend_.now())) fail(L"changed",L"The native pointer observation expired.");
   if (!context.with_current([&] {
+    backend_.require_surface(actual.window);
     if (precondition) precondition();
     WindowsSessionPolicy(session).require(actual.window,WindowsPolicyOperation::pointer);
     if (!current_stamp(actual.stamp,session,backend_.now()) || !backend_.current(actual.window) || !backend_.foreground_current(actual.window) || !backend_.point_current(actual, session) || !current_stamp(actual.stamp,session,backend_.now())) fail(L"changed", L"The native pointer ownership changed before input.");
+    backend_.require_surface(actual.window);
+    if (!current_stamp(actual.stamp,session,backend_.now())) fail(L"changed",L"The native pointer observation expired before input.");
     mutation();
   })) fail(L"changed", L"The computer session changed before input.");
 }
@@ -229,17 +244,22 @@ void WindowsGuard::with_element(const WindowsWindow& expected, const ServerSessi
   if (operation != WindowsPolicyOperation::pointer && operation != WindowsPolicyOperation::set_value) fail(L"failed", L"The native element operation is invalid.");
   if (!mutation || !context.is_current || !context.with_current || !same_session(session, context.session) || !context.is_current()) fail(L"changed", L"The computer session changed.");
   if (secure != false) fail(L"secure_field", L"The native element cannot receive this action.");
+  backend_.require_surface(expected);
   const auto actual = backend_.foreground();
+  backend_.require_surface(actual);
   WindowsSessionPolicy(session).require(actual, operation, secure);
   if (!same_windows_window(actual, expected) || !backend_.current(actual)) fail(L"changed", L"The native element window changed.");
   if (!actual.visible || actual.minimized || !actual.on_screen || !backend_.foreground_current(actual)) fail(L"not_foreground", L"The native element app is not visible and foreground.");
   const auto stamp = WindowsGuardStamp(session, backend_.now());
   if (!context.with_current([&] {
+    backend_.require_surface(actual);
     WindowsSessionPolicy(session).require(actual, operation, secure);
     if (!current_stamp(stamp, session, backend_.now()) || !backend_.current(actual) || !backend_.foreground_current(actual) || !current_stamp(stamp, session, backend_.now())) fail(L"changed", L"The native element app changed before its action.");
     // AccessibilityService repeats its private registry proof here, then its single actor job
     // repeats element/security/menu facts. The actor caller waits at most 50ms and quarantines
     // timeout/late completion; no provider wait extends this authority fence indefinitely.
+    backend_.require_surface(actual);
+    if (!current_stamp(stamp,session,backend_.now())) fail(L"changed",L"The native element observation expired before its action.");
     mutation();
   })) fail(L"changed", L"The computer session changed before the element action.");
 }
@@ -247,12 +267,16 @@ void WindowsGuard::commit_foreground(const WindowsWindow& actual, const ServerSe
   if (!mutation || !context.is_current || !context.with_current || !same_session(session, context.session) || !context.is_current()) fail(L"changed", L"The computer session changed.");
   if ((operation!=WindowsPolicyOperation::key && operation!=WindowsPolicyOperation::type_text && operation!=WindowsPolicyOperation::set_value) ||
       (operation==WindowsPolicyOperation::key && (keys.empty() || keys.size()>8))) fail(L"failed",L"The native keyboard operation is invalid.");
+  backend_.require_surface(actual);
   WindowsSessionPolicy(session).require(actual,operation,secure,keys);
   if (!current_stamp(stamp,session,backend_.now())) fail(L"changed",L"The native keyboard observation expired.");
   if (!context.with_current([&] {
+    backend_.require_surface(actual);
     if (precondition) precondition();
     WindowsSessionPolicy(session).require(actual,operation,secure,keys);
     if (!current_stamp(stamp,session,backend_.now()) || !backend_.current(actual) || !backend_.keyboard_current(actual) || !current_stamp(stamp,session,backend_.now())) fail(L"changed", L"The native foreground app changed before input.");
+    backend_.require_surface(actual);
+    if (!current_stamp(stamp,session,backend_.now())) fail(L"changed",L"The native keyboard observation expired before input.");
     mutation();
   })) fail(L"changed", L"The computer session changed before input.");
 }

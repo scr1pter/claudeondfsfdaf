@@ -90,7 +90,7 @@ class Child {
   winrt::handle process;
   winrt::handle input;
   winrt::handle output;
-  explicit Child(const std::filesystem::path& caller) {
+  explicit Child(const std::filesystem::path& caller, bool test_elevated_token = false) {
     SECURITY_ATTRIBUTES security{static_cast<DWORD>(sizeof(SECURITY_ATTRIBUTES)), nullptr, TRUE};
     HANDLE read = nullptr;
     HANDLE write = nullptr;
@@ -117,7 +117,7 @@ class Child {
     startup.StartupInfo.hStdInput = child_input.get(); startup.StartupInfo.hStdOutput = child_output.get(); startup.StartupInfo.hStdError = error.get();
     startup.lpAttributeList = attributes;
     PROCESS_INFORMATION child{};
-    auto command = L"\"" + caller.wstring() + L"\" --stdio";
+    auto command = L"\"" + caller.wstring() + L"\" --stdio" + (test_elevated_token ? L" --test-elevated-token" : L"");
     require_integration(CreateProcessW(caller.c_str(), command.data(), nullptr, nullptr, TRUE, EXTENDED_STARTUPINFO_PRESENT | CREATE_NO_WINDOW,
       nullptr, nullptr, &startup.StartupInfo, &child) != FALSE, "integration.caller-create");
     process.attach(child.hProcess);
@@ -245,6 +245,18 @@ void integration_tests() {
     require_integration(WaitForSingleObject(helper.get(), 1000) == WAIT_OBJECT_0 && WaitForSingleObject(child.process.get(), 1000) == WAIT_OBJECT_0, "integration.shutdown-process-exit");
     DWORD code = 1;
     require_integration(GetExitCodeProcess(child.process.get(), &code) != FALSE && code == 0, "integration.shutdown-clean-code");
+  }
+  {
+    // The successful actual medium-token/responsible hello above is the baseline. This switch
+    // adds only a refusal to the same verified high -> medium -> helper path; it cannot supply
+    // token facts, bypass caller checks, or turn an already elevated helper into an allowed one.
+    Child child(files.caller, true);
+    require_integration(WaitForSingleObject(child.process.get(), 10'000) == WAIT_OBJECT_0, "integration.test-elevated-token-refuses-within-startup-bound");
+    DWORD code = 0;
+    require_integration(GetExitCodeProcess(child.process.get(), &code) != FALSE && code == 1, "integration.test-elevated-token-refuses-with-exit-one");
+    DWORD available = 0; SetLastError(ERROR_SUCCESS);
+    const auto peeked = PeekNamedPipe(child.output.get(), nullptr, 0, nullptr, &available, nullptr);
+    require_integration((peeked || GetLastError() == ERROR_BROKEN_PIPE) && available == 0, "integration.test-elevated-token-emits-no-serving-frames");
   }
   {
     Child child(files.caller); child.hello();

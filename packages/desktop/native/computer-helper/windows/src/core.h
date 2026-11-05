@@ -17,6 +17,7 @@ struct Command {
   std::wstring self_test;
   std::wstring target;
   std::wstring report;
+  bool test_elevated_token = false;
 };
 
 std::optional<Command> parse_command(std::span<const std::wstring> arguments);

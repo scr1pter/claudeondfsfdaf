@@ -1,4 +1,5 @@
 #include "guard.h"
+#include "availability.h"
 #include <array>
 #include <stdexcept>
 
@@ -26,10 +27,11 @@ struct Fixture {
   bool live = true, admitted = true, current = true, point_current = true, foreground_current = true, keyboard_current = true;
   uint64_t time = 100;
   size_t mutations = 0, preparations = 0, fences = 0, point_preparations = 0, keyboard_checks = 0;
-  std::function<void()> before_fence;
+  std::function<void()> before_fence, during_surface;
   std::vector<HWND> overlays;
   std::optional<DWORD> hit_pid;
   std::optional<std::wstring> hit_class;
+  std::optional<WindowsAvailabilityObservation> availability;
   Fixture() {
     session.id = L"synthetic"; session.run_epoch = 1; session.observation_epoch = 2;
     session.approved.Append(expected.owner.identity.wire());
@@ -49,6 +51,12 @@ struct Fixture {
     };
     result.keyboard_current = [this](const WindowsWindow& actual) {
       ++keyboard_checks; return keyboard_current && foreground_current && same_windows_window(actual, focused);
+    };
+    result.require_surface = [this](const WindowsWindow& window) {
+      if (during_surface) during_surface();
+      if (!availability) return;
+      require_windows_surface(*availability, &window.owner.process.token);
+      require_windows_surface(*availability, &window.physical_owner.process.token);
     };
     result.now = [this] { return time; };
     return result;
@@ -73,6 +81,15 @@ struct Fixture {
   }
   void type(std::optional<bool> secure = false) {
     WindowsGuard(backend()).with_foreground(expected, session, context(), WindowsPolicyOperation::type_text, [this] { ++mutations; }, secure);
+  }
+  void available_surface() {
+    TokenIdentity helper;
+    helper.user = {1}; helper.logon = {2}; helper.authentication = 3; helper.session = 1;
+    helper.integrity = SECURITY_MANDATORY_MEDIUM_RID;
+    helper.elevated = helper.ui_access = helper.app_container = false;
+    availability = WindowsAvailabilityObservation{helper, {true, true, true}, false};
+    expected.owner.process.token = helper; expected.physical_owner = expected.owner;
+    pointer = expected; focused = expected;
   }
 };
 void fails(const std::function<void()>& body, std::wstring_view expected) {
@@ -316,6 +333,76 @@ size_t run_guard_tests() {
     fixture.focused = fixture.expected; fixture.session.vector_pids.Append(JsonValue::CreateNumberValue(fixture.expected.owner.process.pid));
     fails([&] { WindowsGuard(fixture.backend()).with_element(fixture.expected, fixture.session, fixture.context(), WindowsPolicyOperation::pointer, [&] { ++fixture.mutations; }, false); }, L"protected");
     require(fixture.mutations == 0, "guard.uia-element-route-retains-native-never-and-vector-floors");
+  });
+  test([] {
+    Fixture fixture; fixture.available_surface(); fixture.click();
+    require(fixture.mutations == 1, "guard.actual-normal-surface-contract-permits-owned-input");
+    fixture.availability->capture_policy_blocked = true;
+    fixture.type(false);
+    require(fixture.mutations == 2, "guard.capture-policy-never-invents-an-input-permission");
+  });
+  test([] {
+    Fixture fixture; fixture.available_surface(); fixture.availability->desktop.default_name = false;
+    fails([&] { fixture.click(); }, L"secure_desktop");
+    fails([&] { fixture.type(); }, L"secure_desktop");
+    fails([&] { WindowsGuard(fixture.backend()).with_element(fixture.expected, fixture.session, fixture.context(), WindowsPolicyOperation::pointer, [&] { ++fixture.mutations; }, false); }, L"secure_desktop");
+    require(fixture.mutations == 0 && fixture.preparations == 0, "guard.secure-desktop-stops-pointer-keyboard-and-uia-before-native-work");
+  });
+  test([] {
+    Fixture fixture; fixture.available_surface();
+    fixture.before_fence = [&] { fixture.availability->desktop.opened = false; };
+    fails([&] { fixture.click(); }, L"secure_desktop");
+    require(fixture.mutations == 0, "guard.desktop-switch-retains-typed-refusal-at-final-post-fence");
+  });
+  test([] {
+    for (int field = 0; field < 4; ++field) {
+      Fixture fixture; fixture.available_surface();
+      auto& token = fixture.expected.owner.process.token;
+      if (field == 0) token.elevated = true;
+      if (field == 1) token.integrity = SECURITY_MANDATORY_HIGH_RID;
+      if (field == 2) token.integrity = SECURITY_MANDATORY_MEDIUM_PLUS_RID;
+      if (field == 3) token.ui_access = true;
+      fixture.expected.physical_owner = fixture.expected.owner; fixture.pointer = fixture.expected; fixture.focused = fixture.expected;
+      fails([&] { fixture.click(); }, L"elevated");
+      require(fixture.mutations == 0 && fixture.preparations == 0, "guard.actual-target-token-overrides-legacy-window-flag");
+    }
+  });
+  test([] {
+    Fixture fixture; fixture.available_surface();
+    fixture.expected.physical_owner.process.pid = 200; fixture.expected.physical_owner.identity.pid = 200;
+    fixture.expected.physical_owner.process.token.integrity = SECURITY_MANDATORY_HIGH_RID;
+    fixture.pointer = fixture.expected;
+    fails([&] { fixture.click(); }, L"elevated");
+    require(fixture.mutations == 0, "guard.hosted-physical-endpoint-must-also-respect-integrity");
+  });
+  test([] {
+    for (int field = 0; field < 4; ++field) {
+      Fixture fixture; fixture.available_surface(); auto& token = fixture.expected.owner.process.token;
+      if (field == 0) token.user = {9};
+      if (field == 1) token.logon = {9};
+      if (field == 2) ++token.authentication;
+      if (field == 3) ++token.session;
+      fixture.expected.physical_owner = fixture.expected.owner; fixture.pointer = fixture.expected;
+      fails([&] { fixture.click(); }, L"unavailable");
+      require(fixture.mutations == 0, "guard.foreign-token-context-never-posts");
+    }
+  });
+  test([] {
+    Fixture fixture; fixture.available_surface(); fixture.availability->helper.reset();
+    fails([&] { fixture.click(); }, L"unavailable");
+    require(fixture.mutations == 0, "guard.unknown-actual-helper-token-never-defaults-medium");
+  });
+  test([] {
+    for (int route = 0; route < 3; ++route) {
+      Fixture fixture; fixture.available_surface(); size_t final_surfaces = 0;
+      fixture.during_surface = [&] { if (fixture.fences != 0 && ++final_surfaces == 2) fixture.time += 51; };
+      fails([&] {
+        if (route == 0) fixture.click();
+        if (route == 1) fixture.type();
+        if (route == 2) WindowsGuard(fixture.backend()).with_element(fixture.expected, fixture.session, fixture.context(), WindowsPolicyOperation::pointer, [&] { ++fixture.mutations; }, false);
+      }, L"changed");
+      require(final_surfaces == 2 && fixture.mutations == 0, "guard.final-availability-read-cannot-extend-private-observation-deadline");
+    }
   });
   return groups;
 }

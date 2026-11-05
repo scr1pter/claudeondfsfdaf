@@ -6,6 +6,7 @@
 #include <oleauto.h>
 #include "uia_native.h"
 #include "windows_com.h"
+#include "availability.h"
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -56,6 +57,9 @@ bool mutation_result(HRESULT status) {
 void current_mutation(const WindowsWindow* window) {
   current_call();
   if (!window || !windows_window_current(*window)) throw Failure{L"stale_ref", L"The native accessibility target changed."};
+  const auto actual = observe_windows_availability(WindowsAvailabilityBackend::system());
+  require_windows_surface(actual, &window->owner.process.token);
+  require_windows_surface(actual, &window->physical_owner.process.token);
   // Provider lookups above can run while the user changes apps. UIA actions remain foreground
   // only, so repeat the cheap native window check immediately before the actual pattern call.
   if (GetForegroundWindow()!=window->hwnd || !IsWindowVisible(window->hwnd) || IsIconic(window->hwnd))
@@ -264,6 +268,9 @@ class NativeUia final : public std::enable_shared_from_this<NativeUia> {
     current_call(); return UiaName{safe, length <= 500 && safe == raw};
   }
   UiaElement root(const WindowsWindow& window) {
+    const auto actual = observe_windows_availability(WindowsAvailabilityBackend::system());
+    require_windows_surface(actual, &window.owner.process.token);
+    require_windows_surface(actual, &window.physical_owner.process.token);
     DWORD pid = 0;
     if (!eligible_windows_window(window) || GetWindowThreadProcessId(window.surface, &pid) != window.surface_thread_id || pid != window.owner.process.pid ||
         GetAncestor(window.surface, GA_ROOT) != window.hwnd || !windows_owner_current(window.owner) || !windows_owner_current(window.physical_owner)) unavailable();

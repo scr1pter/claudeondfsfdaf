@@ -433,7 +433,8 @@ int wmain(int count, wchar_t** argv) {
       bootstrap = reinterpret_cast<HANDLE>(static_cast<std::uintptr_t>(number(argv[4], (std::numeric_limits<std::uintptr_t>::max)())));
       offset = 5;
     }
-    const bool serving = count == offset + 1 && std::wstring_view(argv[offset]) == L"--stdio";
+    const bool test_elevated_token = count == offset + 2 && std::wstring_view(argv[offset]) == L"--stdio" && std::wstring_view(argv[offset + 1]) == L"--test-elevated-token";
+    const bool serving = (count == offset + 1 && std::wstring_view(argv[offset]) == L"--stdio") || test_elevated_token;
     const bool probe = count == offset + 2 && std::wstring_view(argv[offset]) == L"--probe" && std::wstring_view(argv[offset + 1]) == L"--json";
     if ((!serving && !probe) || !SetConsoleCtrlHandler(console_control, TRUE)) return 2;
     ParentWatches watches;
@@ -477,7 +478,8 @@ int wmain(int count, wchar_t** argv) {
       if (!vector::computer::serving_token_allowed(observed) || !same_context(own_token, observed)) invalid();
       for (const auto& ancestor : ancestors) current(ancestor);
       const auto command = L"\"" + files.self.path + L"\" --fixture-medium " + std::to_wstring(GetCurrentProcessId()) +
-        L" --bootstrap-handle " + std::to_wstring(reinterpret_cast<std::uintptr_t>(high_handle.get())) + (serving ? L" --stdio" : L" --probe --json");
+        L" --bootstrap-handle " + std::to_wstring(reinterpret_cast<std::uintptr_t>(high_handle.get())) +
+        (serving ? std::wstring(L" --stdio") + (test_elevated_token ? L" --test-elevated-token" : L"") : L" --probe --json");
       auto child = launch(files.self.path, command, token.get(), high_handle.get(), serving);
       high_handle.close();
       const auto child_token = vector::computer::observe_token(child.process.get());
@@ -489,7 +491,7 @@ int wmain(int count, wchar_t** argv) {
     if (!vector::computer::same_token(own_token, vector::computer::observe_token(GetCurrentProcess())) ||
         actual_parent(GetCurrentProcessId()) != parent_pid) invalid();
     const auto command = L"\"" + files.helper.path + L"\"" + (serving
-      ? L" --stdio --parent-pid " + std::to_wstring(GetCurrentProcessId()) : std::wstring(L" --probe --json"));
+      ? L" --stdio --parent-pid " + std::to_wstring(GetCurrentProcessId()) + (test_elevated_token ? L" --test-elevated-token" : L"") : std::wstring(L" --probe --json"));
     auto child = launch(files.helper.path, command, nullptr, nullptr, serving);
     return wait_child(child);
   } catch (...) {

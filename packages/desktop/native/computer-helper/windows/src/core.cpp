@@ -14,6 +14,7 @@
 #include "input_guardian.h"
 #include "uia_input.h"
 #include "accessibility.h"
+#include "availability.h"
 #include <tlhelp32.h>
 #include <objidl.h>
 #include <xmllite.h>
@@ -33,6 +34,14 @@
 namespace vector::computer {
 namespace {
 void require_native(bool value) { if (!value) throw std::runtime_error("native self-test failed"); }
+std::optional<TokenIdentity> process_token(std::string* diagnostic = nullptr) {
+  if (diagnostic) diagnostic->clear();
+  try { return observe_token(GetCurrentProcess()); }
+  catch (const TokenObservationError& error) {
+    if (diagnostic) *diagnostic = "token.step." + std::to_string(static_cast<unsigned>(error.step)) + ".information." + std::to_string(error.information_class) + ".error-" + std::to_string(error.win32_error);
+    return {};
+  } catch (...) { return {}; }
+}
 
 DWORD immediate_parent() {
   winrt::handle snapshot(CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0));
@@ -200,6 +209,9 @@ int serve(const Command& command, HANDLE output) {
   try {
     const auto parent = verify_parent(command.parent);
     require_native(lifecycle->bind_parent(parent) && !lifecycle->stopping());
+    // Actual verified token evidence is mandatory before the test-only switch can add a refusal.
+    // No native service or protocol output is constructed on either elevated refusal path.
+    require_native(windows_helper_may_serve(parent->evidence().helper_token, command.test_elevated_token));
     require_native(lifecycle->attach_io_thread(GetCurrentThread()));
     const std::weak_ptr<HelperLifecycle> weak_lifecycle = lifecycle;
     const auto writer = std::make_shared<PipeFrameWriter>(output, lifecycle->stop_event(), [weak_lifecycle] {
@@ -244,23 +256,33 @@ int serve(const Command& command, HANDLE output) {
       return features;
     };
     const auto server = std::make_shared<Dispatcher>(std::move(options));
-    server->register_handler(L"apps.list", 5000, false, false, [windows](const auto& request, const auto& context, auto done) { windows->list(request.args, context, std::move(done)); });
-    server->register_handler(L"cursor.position", 4000, false, false, [windows](const auto& request, const auto& context, auto done) { windows->cursor(request.args, context, std::move(done)); });
-    server->register_handler(L"app.activate", 10'000, true, true, [windows](const auto& request, const auto& context, auto done) { windows->activate(request.args, context, std::move(done)); });
-    server->register_handler(L"window.focus", 10'000, true, true, [windows](const auto& request, const auto& context, auto done) { windows->focus(request.args, context, std::move(done)); });
-    server->register_handler(L"apps.resolve", 15'000, true, false, [programs](const auto& request, const auto& context, auto done) { programs->resolve(request.args, context, std::move(done)); });
-    server->register_handler(L"app.launch", 15'000, true, true, [programs](const auto& request, const auto& context, auto done) { programs->launch(request.args, context, std::move(done)); });
-    server->register_handler(L"program.launch", 15'000, true, true, [programs](const auto& request, const auto& context, auto done) { programs->launch_program(request.args, context, std::move(done)); });
-    server->register_handler(L"displays.list", 4000, false, false, [captures](const auto& request, const auto& context, auto done) { captures->displays(request.args, context, std::move(done)); });
-    server->register_handler(L"capture", 10'000, true, false, [captures](const auto& request, const auto& context, auto done) { captures->capture(request.args, context, std::move(done)); });
-    server->register_handler(L"ui.tree",15'000,true,false,[accessibility](const auto& request,const auto& context,auto done) { accessibility->tree(request.args,context,std::move(done)); });
-    server->register_handler(L"ui.hittest",5000,true,false,[accessibility](const auto& request,const auto& context,auto done) { accessibility->hit_test(request.args,context,std::move(done)); });
-    server->register_handler(L"ui.focused",5000,true,false,[accessibility](const auto& request,const auto& context,auto done) { accessibility->focused(request.args,context,std::move(done)); });
-    server->register_handler(L"ui.resolve",5000,true,false,[accessibility](const auto& request,const auto& context,auto done) { accessibility->resolve(request.args,context,std::move(done)); });
-    server->register_handler(L"ui.perform",5000,true,true,[accessibility](const auto& request,const auto& context,auto done) { accessibility->perform(request.args,context,std::move(done)); });
-    server->register_handler(L"ui.setValue",5000,true,true,[accessibility](const auto& request,const auto& context,auto done) { accessibility->set_value(request.args,context,std::move(done)); });
+    const auto availability = WindowsAvailabilityBackend::system();
+    const auto register_surface = [server, availability](std::wstring op, uint32_t deadline, bool requires_session, bool mutating, Dispatcher::Handler handler) {
+      return server->register_handler(std::move(op), deadline, requires_session, mutating,
+        [availability, handler = std::move(handler)](const auto& request, const auto& context, auto done) {
+          try { require_windows_surface(observe_windows_availability(availability)); }
+          catch (const Failure& error) { done(error); return; }
+          catch (...) { done(Failure{L"unavailable", L"The Windows desktop or token could not be verified."}); return; }
+          handler(request, context, std::move(done));
+        });
+    };
+    register_surface(L"apps.list", 5000, false, false, [windows](const auto& request, const auto& context, auto done) { windows->list(request.args, context, std::move(done)); });
+    register_surface(L"cursor.position", 4000, false, false, [windows](const auto& request, const auto& context, auto done) { windows->cursor(request.args, context, std::move(done)); });
+    register_surface(L"app.activate", 10'000, true, true, [windows](const auto& request, const auto& context, auto done) { windows->activate(request.args, context, std::move(done)); });
+    register_surface(L"window.focus", 10'000, true, true, [windows](const auto& request, const auto& context, auto done) { windows->focus(request.args, context, std::move(done)); });
+    register_surface(L"apps.resolve", 15'000, true, false, [programs](const auto& request, const auto& context, auto done) { programs->resolve(request.args, context, std::move(done)); });
+    register_surface(L"app.launch", 15'000, true, true, [programs](const auto& request, const auto& context, auto done) { programs->launch(request.args, context, std::move(done)); });
+    register_surface(L"program.launch", 15'000, true, true, [programs](const auto& request, const auto& context, auto done) { programs->launch_program(request.args, context, std::move(done)); });
+    register_surface(L"displays.list", 4000, false, false, [captures](const auto& request, const auto& context, auto done) { captures->displays(request.args, context, std::move(done)); });
+    register_surface(L"capture", 10'000, true, false, [captures](const auto& request, const auto& context, auto done) { captures->capture(request.args, context, std::move(done)); });
+    register_surface(L"ui.tree",15'000,true,false,[accessibility](const auto& request,const auto& context,auto done) { accessibility->tree(request.args,context,std::move(done)); });
+    register_surface(L"ui.hittest",5000,true,false,[accessibility](const auto& request,const auto& context,auto done) { accessibility->hit_test(request.args,context,std::move(done)); });
+    register_surface(L"ui.focused",5000,true,false,[accessibility](const auto& request,const auto& context,auto done) { accessibility->focused(request.args,context,std::move(done)); });
+    register_surface(L"ui.resolve",5000,true,false,[accessibility](const auto& request,const auto& context,auto done) { accessibility->resolve(request.args,context,std::move(done)); });
+    register_surface(L"ui.perform",5000,true,true,[accessibility](const auto& request,const auto& context,auto done) { accessibility->perform(request.args,context,std::move(done)); });
+    register_surface(L"ui.setValue",5000,true,true,[accessibility](const auto& request,const auto& context,auto done) { accessibility->set_value(request.args,context,std::move(done)); });
     for (const auto op:{L"input.click",L"input.move",L"input.drag",L"input.scroll",L"input.key",L"input.type",L"input.hold"})
-      server->register_handler(op,30'000,true,true,[inputs](const auto& request,const auto& context,auto done) { inputs->handle(request.op,request.args,context,std::move(done)); });
+      register_surface(op,30'000,true,true,[inputs](const auto& request,const auto& context,auto done) { inputs->handle(request.op,request.args,context,std::move(done)); });
     { std::scoped_lock lock(runtime->mutex); runtime->writer = writer; runtime->server = server; runtime->programs = programs; runtime->capture = captures; runtime->input=inputs; runtime->accessibility=accessibility; }
     if (lifecycle->stopping()) runtime->stop(StopReason::eof);
     FrameReader reader;
@@ -302,7 +324,7 @@ std::optional<Command> parse_command(std::span<const std::wstring> arguments) {
   std::map<std::wstring, std::wstring> values;
   for (size_t index = 0; index < arguments.size(); ++index) {
     const auto& argument = arguments[index];
-    if (argument == L"--version" || argument == L"--probe" || argument == L"--json" || argument == L"--stdio") {
+    if (argument == L"--version" || argument == L"--probe" || argument == L"--json" || argument == L"--stdio" || argument == L"--test-elevated-token") {
       if (!flags.insert(argument).second) return std::nullopt;
     } else if (argument == L"--parent-pid" || argument == L"--target" || argument == L"--report") {
       if (++index >= arguments.size() || values.contains(argument)) return std::nullopt;
@@ -320,6 +342,7 @@ std::optional<Command> parse_command(std::span<const std::wstring> arguments) {
   }
   if (values.empty() && flags == std::set<std::wstring>{L"--version", L"--json"}) return Command{Mode::version};
   if (values.empty() && flags == std::set<std::wstring>{L"--probe", L"--json"}) return Command{Mode::probe};
+  const auto test_elevated = flags.erase(L"--test-elevated-token") != 0;
   if (flags != std::set<std::wstring>{L"--stdio"} || values.size() != 1 || !values.contains(L"--parent-pid")) return std::nullopt;
   uint64_t parent = 0;
   for (const wchar_t digit : values[L"--parent-pid"]) {
@@ -328,7 +351,9 @@ std::optional<Command> parse_command(std::span<const std::wstring> arguments) {
     if (parent > std::numeric_limits<DWORD>::max()) return std::nullopt;
   }
   if (parent == 0) return std::nullopt;
-  return Command{Mode::serve, static_cast<DWORD>(parent)};
+  Command command{Mode::serve, static_cast<DWORD>(parent)};
+  command.test_elevated_token = test_elevated;
+  return command;
 }
 
 std::string_view architecture() {
@@ -355,14 +380,9 @@ JsonObject version_document() {
 }
 
 std::optional<bool> process_elevated(std::string* diagnostic) {
-  if (diagnostic) diagnostic->clear();
-  try {
-    const auto token = observe_token(GetCurrentProcess());
-    return token.elevated || token.integrity >= SECURITY_MANDATORY_HIGH_RID;
-  } catch (const TokenObservationError& error) {
-    if (diagnostic) *diagnostic = "token.step." + std::to_string(static_cast<unsigned>(error.step)) + ".information." + std::to_string(error.information_class) + ".error-" + std::to_string(error.win32_error);
-    return std::nullopt;
-  } catch (...) { return std::nullopt; }
+  const auto token = process_token(diagnostic);
+  if (!token) return {};
+  return token->elevated || token->integrity > SECURITY_MANDATORY_MEDIUM_RID || token->ui_access;
 }
 
 bool write_utf8(HANDLE output, std::string_view value) {
@@ -377,13 +397,17 @@ bool write_utf8(HANDLE output, std::string_view value) {
 }
 
 int run_command(const Command& command, HANDLE output, HANDLE error) {
+  if (command.test_elevated_token && command.mode != Mode::serve) return 2;
   if (command.mode == Mode::serve) return serve(command, output);
   JsonObject result;
   if (command.mode == Mode::version) result = version_document();
   else if (command.mode == Mode::probe) {
     std::string diagnostic;
-    const auto elevated = process_elevated(&diagnostic);
-    if (!elevated) {
+    auto availability = WindowsAvailabilityBackend::system();
+    availability.helper = [&diagnostic] { return process_token(&diagnostic); };
+    const auto observed = observe_windows_availability(availability);
+    const auto probe = windows_availability_probe(observed);
+    if (!probe) {
       write_utf8(error, "The helper process token could not be read.\n");
       if (!diagnostic.empty()) write_utf8(error, diagnostic + "\n");
       return 1;
@@ -398,9 +422,10 @@ int run_command(const Command& command, HANDLE output, HANDLE error) {
       responsible = parent->unchanged();
     } catch (...) { /* A read-only probe reports a refused parent without inventing responsibility. */ }
     result.Insert(L"responsible", JsonValue::CreateBooleanValue(responsible));
-    result.Insert(L"elevated", JsonValue::CreateBooleanValue(*elevated));
-    // W8 supplies the actual capture availability probe. A skeleton must never advertise capture readiness.
-    result.Insert(L"captureBlocked", JsonValue::CreateBooleanValue(true));
+    result.Insert(L"elevated", JsonValue::CreateBooleanValue(probe->elevated));
+    // No pixel is captured. False means current metadata has no applicable known blocker,
+    // never universal DLP permission; an unverified caller cannot report capture readiness.
+    result.Insert(L"captureBlocked", JsonValue::CreateBooleanValue(!responsible || probe->capture_blocked));
   } else if (command.mode == Mode::self_test) {
     JsonArray checks;
     bool all = true;

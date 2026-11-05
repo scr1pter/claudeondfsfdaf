@@ -1,5 +1,6 @@
 #include "input.h"
 #include "input_guardian.h"
+#include "availability.h"
 #include <algorithm>
 #include <map>
 #include <stdexcept>
@@ -90,6 +91,7 @@ struct Fixture {
   bool point_current = true, foreground_current = true, keyboard_current = true, quiet = true, available = true;
   bool enabled = true, focused = true, focusable = true, value_pattern = true, text_pattern = false, ref_current = true, element_current = true;
   std::optional<bool> secure = false, read_only = false, text_read_only;
+  std::optional<WindowsAvailabilityObservation> availability;
   uint64_t observation_age = 0;
   WindowsWindow world = window_fixture(); ServerSession session; CaptureReceipt capture;
   std::shared_ptr<InputElementWitness> element = std::make_shared<Element>();
@@ -127,6 +129,11 @@ struct Fixture {
     native.point_current = [this](const auto& old, const auto&) { return point_current && same_windows_window(old.window, world); };
     native.foreground_current = [this](const auto& old) { return foreground_current && same_windows_window(old, world); };
     native.keyboard_current = [this](const auto& old) { return keyboard_current && foreground_current && same_windows_window(old, world); };
+    native.require_surface = [this](const WindowsWindow& window) {
+      if (!availability) return;
+      require_windows_surface(*availability, &window.owner.process.token);
+      require_windows_surface(*availability, &window.physical_owner.process.token);
+    };
     native.now = [this] { return now; }; guard = std::make_shared<WindowsGuard>(std::move(native));
     InputObservationProvider provider;
     provider.focused = [this](const auto&, const auto&) { return observe(); };
@@ -182,7 +189,8 @@ struct Fixture {
     };
     backend.keyboard_current = [this](auto proof, const auto&, auto) { return keyboard_current && proof == fingerprint; };
     backend.keyboard_fingerprint = [this](const auto&) { return fingerprint; };
-    backend.quiet = [this] { return quiet; }; backend.available = [this] { return available; };
+    backend.quiet = [this] { return quiet; };
+    backend.available = [this] { if (availability) require_windows_surface(*availability); return available; };
     backend.post = [this](const InputPostedEvent& event) {
       check(inside, "input.native-post-only-inside-current-authority");
       if (post_result == InputPostResult::accepted || (post_result == InputPostResult::uncertain && reflect_uncertain)) {
@@ -201,6 +209,14 @@ struct Fixture {
     service = std::make_unique<InputService>(std::move(provider), std::move(backend),
       [this](auto ms, auto body) { return timers.add(ms, std::move(body)); }, [this] { return now; },
       [this](auto ms, auto body) { return inspections.add(ms, std::move(body)); });
+  }
+  void available_surface() {
+    TokenIdentity helper;
+    helper.user = {1}; helper.logon = {2}; helper.authentication = 3; helper.session = 1;
+    helper.integrity = SECURITY_MANDATORY_MEDIUM_RID;
+    helper.elevated = helper.ui_access = helper.app_container = false;
+    availability = WindowsAvailabilityObservation{helper, {true, true, true}, false};
+    world.owner.process.token = helper; world.physical_owner = world.owner; capture.window = world;
   }
   void approve() { session.approved.Clear(); session.approved.Append(world.owner.identity.wire()); }
   InputObservation observe() {
@@ -294,6 +310,44 @@ size_t downs(const Fixture& fixture) {
 
 size_t run_input_tests() {
   size_t groups = 0; const auto test = [&](const auto& body) { body(); ++groups; };
+  test([] {
+    for (const auto op : {L"input.move", L"input.click", L"input.scroll", L"input.drag", L"input.key", L"input.type", L"input.hold"}) {
+      Fixture fixture; fixture.available_surface(); fixture.availability->desktop.default_name = false;
+      failure(fixture.take(op), L"secure_desktop");
+      check(fixture.events.empty() && fixture.batches.empty(), "input.secure-desktop-returns-typed-handoff-before-all-native-posts");
+    }
+  });
+  test([] {
+    for (const auto op : {L"input.click", L"input.key", L"input.type"}) {
+      for (int field = 0; field < 4; ++field) {
+        Fixture fixture; fixture.available_surface(); auto& token = fixture.world.owner.process.token;
+        if (field == 0) token.elevated = true;
+        if (field == 1) token.integrity = SECURITY_MANDATORY_HIGH_RID;
+        if (field == 2) token.integrity = SECURITY_MANDATORY_MEDIUM_PLUS_RID;
+        if (field == 3) token.ui_access = true;
+        fixture.world.physical_owner = fixture.world.owner; fixture.capture.window = fixture.world;
+        failure(fixture.take(op), L"elevated");
+        check(fixture.events.empty() && fixture.batches.empty(), "input.actual-target-token-handoff-overrides-an-ordinary-window-flag");
+      }
+    }
+  });
+  test([] {
+    for (const auto op : {L"input.click", L"input.type"}) {
+      Fixture fixture; fixture.available_surface();
+      fixture.before_fence = [&] { fixture.availability->desktop.opened = false; };
+      failure(fixture.take(op), L"secure_desktop");
+      check(fixture.events.empty() && fixture.batches.empty(), "input.desktop-switch-at-commit-keeps-typed-refusal-with-zero-posts");
+    }
+  });
+  test([] {
+    Fixture fixture; fixture.available_surface(); fixture.send(L"input.hold");
+    check(downs(fixture) == 2 && !fixture.result, "input.owned-hold-is-established-before-the-desktop-switch");
+    fixture.availability->desktop.default_name = false; fixture.advance(25); fixture.pump();
+    check(fixture.result.has_value(), "input.desktop-switch-finishes-held-action-after-cleanup");
+    failure(*fixture.result, L"secure_desktop");
+    check(downs(fixture) == 2 && fixture.guardian->ups.size() == 2 && !fixture.guardian->ledger.pending(),
+      "input.desktop-switch-keeps-owned-up-cleanup-without-another-down");
+  });
   test([] {
     Fixture fixture; const auto features = fixture.service->features();
     check(features.GetNamedBoolean(L"input.pointer") && features.GetNamedBoolean(L"input.keyboard") &&

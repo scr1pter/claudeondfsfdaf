@@ -2,6 +2,7 @@
 #include "windows_com.h"
 #include "windows_icon.h"
 #include "core.h"
+#include "availability.h"
 #include <dwmapi.h>
 #include <knownfolders.h>
 #include <propidl.h>
@@ -152,7 +153,17 @@ struct NativeWindows {
       if (!result.surface_thread_id || !result.bounds.contains(result.surface_bounds)) refuse(L"protected");
     }
     const auto own_token = observe_token(GetCurrentProcess());
-    result.elevated = physical.process.token.integrity > own_token.integrity || result.owner.process.token.integrity > own_token.integrity;
+    auto availability = WindowsAvailabilityBackend::system();
+    availability.helper = [own_token] { return std::optional<TokenIdentity>(own_token); };
+    const auto actual = observe_windows_availability(availability);
+    require_windows_surface(actual);
+    const auto physical_state = windows_surface_state(actual, &physical.process.token);
+    const auto logical_state = windows_surface_state(actual, &result.owner.process.token);
+    // Elevated surfaces may be listed structurally for handoff, while another principal or an
+    // unknown context cannot disclose a title or become an app-scoped native target.
+    if (physical_state != WindowsSurfaceState::elevated) require_windows_surface(actual, &physical.process.token);
+    if (logical_state != WindowsSurfaceState::elevated) require_windows_surface(actual, &result.owner.process.token);
+    result.elevated = physical_state == WindowsSurfaceState::elevated || logical_state == WindowsSurfaceState::elevated;
     if (shell_observer) result.child_shell = shell_observer(result.owner);
     if (!windows_window_current(result)) refuse(L"changed");
     return result;

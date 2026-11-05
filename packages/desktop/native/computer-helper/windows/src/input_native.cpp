@@ -1,6 +1,7 @@
 #include "input.h"
 #include "input_guardian.h"
 #include "windows_process_tree.h"
+#include "availability.h"
 #include <imm.h>
 #include <algorithm>
 #include <array>
@@ -43,13 +44,8 @@ std::optional<std::wstring> normalize_menu(std::wstring_view value) {
   return safe_unicode(result) ? std::optional{result} : std::nullopt;
 }
 bool desktop_available() {
-  const auto desktop = OpenInputDesktop(0, FALSE, DESKTOP_READOBJECTS);
-  if (!desktop) return false;
-  struct Close { HDESK value; ~Close() { CloseDesktop(value); } } close{desktop};
-  wchar_t name[64]{}; DWORD size = 0; USEROBJECTFLAGS flags{};
-  return GetUserObjectInformationW(desktop, UOI_NAME, name, sizeof(name), &size) && size > sizeof(wchar_t) && size <= sizeof(name) &&
-    CompareStringOrdinal(name, -1, L"Default", -1, TRUE) == CSTR_EQUAL &&
-    GetUserObjectInformationW(GetProcessWindowStation(), UOI_FLAGS, &flags, sizeof(flags), &size) && (flags.dwFlags & WSF_VISIBLE) != 0;
+  require_windows_surface(observe_windows_availability(WindowsAvailabilityBackend::system()));
+  return true;
 }
 
 // Physical positions are the documented Windows scan-code column of Chromium's USB/PS2 table,
