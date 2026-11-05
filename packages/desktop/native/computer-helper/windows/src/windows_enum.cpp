@@ -4,9 +4,11 @@
 #include "core.h"
 #include <dwmapi.h>
 #include <knownfolders.h>
+#include <propidl.h>
 #include <propkey.h>
 #include <propsys.h>
 #include <propvarutil.h>
+#include <shellapi.h>
 #include <shlobj.h>
 #include <shobjidl.h>
 #include <uiautomation.h>
@@ -289,7 +291,9 @@ bool windows_window_current(const WindowsWindow& window) noexcept {
         native_bounds(window.hwnd) != window.bounds || native_bounds(window.surface) != window.surface_bounds || native_class(window.hwnd) != window.window_class) return false;
     if (window.hwnd != window.surface) { const auto children = child_windows(window.hwnd); if (children.size() != 1 || children[0] != std::make_pair(window.surface, window.owner.process.pid)) return false; }
     DWORD cloak = 1;
-    return current_desktop(window.hwnd) == window.current_desktop && SUCCEEDED(DwmGetWindowAttribute(window.hwnd, DWMWA_CLOAKED, &cloak, sizeof(cloak))) && (cloak != 0) == window.cloaked &&
+    // DesktopManager is an outside-authority preparation fact. This final check is native metadata
+    // only; cloak changes and the caller's <=50ms preparation/observation epoch retire that fact.
+    return SUCCEEDED(DwmGetWindowAttribute(window.hwnd, DWMWA_CLOAKED, &cloak, sizeof(cloak))) && (cloak != 0) == window.cloaked &&
         (IsWindowVisible(window.hwnd) != FALSE) == window.visible && (IsIconic(window.hwnd) != FALSE) == window.minimized;
   } catch (...) { return false; }
 }
@@ -315,15 +319,16 @@ WindowsBackend WindowsBackend::system(std::function<std::optional<bool>(const Wi
   };
   backend.focus = [native](const WindowsWindow& prepared, const OperationContext& context, const std::function<void(const WindowsWindow&)>& policy) {
     if (!interactive_desktop()) refuse(L"secure_desktop");
+    auto prepared_at = Clock::now();
     auto live = native->observe(prepared.hwnd);
     if (!same_windows_window(live, prepared)) refuse(L"changed");
     if (live.minimized) {
       bool initiated = false;
-      if (!context.with_current([&] { if (!windows_window_current(live)) refuse(L"changed"); policy(live); initiated = ShowWindowAsync(live.hwnd, SW_RESTORE) != FALSE; })) refuse(L"changed");
+      if (!context.with_current([&] { if (Clock::now() - prepared_at >= std::chrono::milliseconds(50) || !windows_window_current(live)) refuse(L"changed"); policy(live); initiated = ShowWindowAsync(live.hwnd, SW_RESTORE) != FALSE; })) refuse(L"changed");
       if (!initiated) return false;
       const auto deadline = Clock::now() + std::chrono::milliseconds(700);
       while (IsIconic(live.hwnd) && Clock::now() < deadline) { if (!context.is_current()) refuse(L"changed"); std::this_thread::sleep_for(std::chrono::milliseconds(10)); }
-      const auto restored = native->observe(live.hwnd);
+      prepared_at = Clock::now(); const auto restored = native->observe(live.hwnd);
       if (!same_windows_window_target(restored, live) || restored.minimized) refuse(L"changed");
       live = restored;
     }
@@ -340,14 +345,15 @@ WindowsBackend WindowsBackend::system(std::function<std::optional<bool>(const Wi
       if (FAILED(focused->get_CurrentProcessId(&pid)) || FAILED(focused->get_CurrentNativeWindowHandle(&handle)) ||
           pid <= 0 || static_cast<DWORD>(pid) != live.owner.process.pid || reinterpret_cast<HWND>(handle) != live.surface || !call.current()) return false;
     }
+    // UIA preparation may use its own entire RPC budget. Renew full desktop/owner/tree facts outside
+    // authority immediately before the native initiation, then keep final checks metadata-only.
+    prepared_at = Clock::now(); const auto final = native->observe(live.hwnd);
+    if (!same_windows_window(final, live)) refuse(L"changed"); live = final;
     bool requested = false;
     if (!context.with_current([&] {
-      if (!windows_window_current(live)) refuse(L"changed"); policy(live);
+      if (Clock::now() - prepared_at >= std::chrono::milliseconds(50) || !windows_window_current(live)) refuse(L"changed"); policy(live);
       WindowsComCall call;
       if (!call.current()) return;
-      int pid = 0; UIA_HWND handle = nullptr;
-      if (FAILED(focused->get_CurrentProcessId(&pid)) || FAILED(focused->get_CurrentNativeWindowHandle(&handle)) ||
-          pid <= 0 || static_cast<DWORD>(pid) != live.owner.process.pid || reinterpret_cast<HWND>(handle) != live.surface || !call.current()) return;
       // Respect the OS foreground rules; UIA is the real user-equivalent focus route.
       (void)SetForegroundWindow(live.hwnd);
       const auto result = focused->SetFocus();
