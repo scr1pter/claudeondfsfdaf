@@ -155,3 +155,131 @@ export function parseComputerSmokeReport(
     throw new Error("Required native computer smoke evidence is unavailable.")
   return { protocol: 1, platform: value.platform as ComputerSmokeReport["platform"], electron: input.electron, checks }
 }
+
+export const COMPUTER_SMOKE_PHASE_MARK = "computer-smoke-phase "
+export const COMPUTER_SMOKE_FAILURE_MARK = "computer-smoke-failure "
+export const COMPUTER_SMOKE_PHASES = ["boot", "ready", "properties", "controller", "cleanup", "report"] as const
+export type ComputerSmokePhase = (typeof COMPUTER_SMOKE_PHASES)[number]
+export type ComputerSmokeLastPhase = ComputerSmokePhase | "none"
+export type ComputerSmokeFailureCause =
+  | "setup_failed"
+  | "launch_failed"
+  | "deadline_exceeded"
+  | "stdout_limit"
+  | "stderr_limit"
+  | "invalid_progress"
+  | "missing_report"
+  | "invalid_report"
+  | "runtime_failed"
+  | "assertion_failed"
+  | "required_native_unavailable"
+export type ComputerSmokeRuntimeHint =
+  | "none"
+  | "display_auth"
+  | "display_unavailable"
+  | "sandbox_unavailable"
+  | "loader_failed"
+export type ComputerSmokeFailureDiagnostic = {
+  protocol: 1
+  cause: ComputerSmokeFailureCause
+  phase: ComputerSmokeLastPhase
+  hint: ComputerSmokeRuntimeHint
+}
+const FAILURE_CAUSES: readonly ComputerSmokeFailureCause[] = [
+  "setup_failed",
+  "launch_failed",
+  "deadline_exceeded",
+  "stdout_limit",
+  "stderr_limit",
+  "invalid_progress",
+  "missing_report",
+  "invalid_report",
+  "runtime_failed",
+  "assertion_failed",
+  "required_native_unavailable",
+]
+const RUNTIME_HINTS: readonly ComputerSmokeRuntimeHint[] = [
+  "none",
+  "display_auth",
+  "display_unavailable",
+  "sandbox_unavailable",
+  "loader_failed",
+]
+
+/** Receipts establish progress only. They can never replace the complete assertion catalog. */
+export function parseComputerSmokePhase(line: string, previous: ComputerSmokeLastPhase = "none"): ComputerSmokePhase {
+  if (!line.startsWith(COMPUTER_SMOKE_PHASE_MARK) || line.length > 160)
+    throw new Error("The computer smoke phase receipt is invalid.")
+  const value: unknown = JSON.parse(line.slice(COMPUTER_SMOKE_PHASE_MARK.length))
+  if (
+    !record(value) ||
+    !exact(value, ["protocol", "phase"]) ||
+    value.protocol !== 1 ||
+    typeof value.phase !== "string" ||
+    !(COMPUTER_SMOKE_PHASES as readonly string[]).includes(value.phase)
+  )
+    throw new Error("The computer smoke phase receipt is invalid.")
+  const phase = value.phase as ComputerSmokePhase
+  const next: Record<ComputerSmokeLastPhase, readonly ComputerSmokePhase[]> = {
+    none: ["boot"],
+    boot: ["ready"],
+    ready: ["properties"],
+    properties: ["controller", "cleanup"],
+    controller: ["cleanup"],
+    cleanup: ["report"],
+    report: [],
+  }
+  if (!next[previous].includes(phase)) throw new Error("The computer smoke phase receipt is stale.")
+  return phase
+}
+
+export function parseComputerSmokeFailure(line: string): ComputerSmokeFailureDiagnostic {
+  if (!line.startsWith(COMPUTER_SMOKE_FAILURE_MARK) || line.length > 240)
+    throw new Error("The computer smoke failure receipt is invalid.")
+  const value: unknown = JSON.parse(line.slice(COMPUTER_SMOKE_FAILURE_MARK.length))
+  if (
+    !record(value) ||
+    !exact(value, ["protocol", "cause", "phase", "hint"]) ||
+    value.protocol !== 1 ||
+    !FAILURE_CAUSES.includes(value.cause as ComputerSmokeFailureCause) ||
+    !(value.phase === "none" || (COMPUTER_SMOKE_PHASES as readonly unknown[]).includes(value.phase)) ||
+    !RUNTIME_HINTS.includes(value.hint as ComputerSmokeRuntimeHint)
+  )
+    throw new Error("The computer smoke failure receipt is invalid.")
+  return {
+    protocol: 1,
+    cause: value.cause as ComputerSmokeFailureCause,
+    phase: value.phase as ComputerSmokeLastPhase,
+    hint: value.hint as ComputerSmokeRuntimeHint,
+  }
+}
+
+/** Recognize only known runtime errors. No stderr text, path, nonce or arbitrary exception is returned. */
+export function computerSmokeRuntimeHint(text: string): ComputerSmokeRuntimeHint {
+  const bounded = text.slice(-8192)
+  if (
+    /Authorization required, but no authorization protocol specified|Invalid MIT-MAGIC-COOKIE-1 key|X11 connection rejected because of wrong authentication/i.test(
+      bounded,
+    )
+  )
+    return "display_auth"
+  if (
+    /No usable sandbox|Running as root without --no-sandbox|Failed to move to new namespace|The SUID sandbox helper binary was found|InitializeSandbox.*failed/i.test(
+      bounded,
+    )
+  )
+    return "sandbox_unavailable"
+  if (
+    /ERR_MODULE_NOT_FOUND|ERR_UNKNOWN_FILE_EXTENSION|Cannot find module|Unable to find Electron app|A JavaScript error occurred in the main process|Dynamic require of .* is not supported/i.test(
+      bounded,
+    )
+  )
+    return "loader_failed"
+  if (
+    /Missing X server or \$DISPLAY|The platform failed to initialize|cannot open display|Unable to open X display|Failed to connect to (?:the )?X server/i.test(
+      bounded,
+    )
+  )
+    return "display_unavailable"
+  return "none"
+}

@@ -33,6 +33,10 @@ import {
   COMPUTER_SMOKE_CHECKS,
   COMPUTER_SMOKE_LIMIT_MS,
   COMPUTER_SMOKE_MARK,
+  COMPUTER_SMOKE_PHASE_MARK,
+  COMPUTER_SMOKE_FAILURE_MARK,
+  type ComputerSmokePhase,
+  type ComputerSmokeLastPhase,
   type ComputerSmokeCheck,
   type ComputerSmokeName,
   type ComputerSmokeReason,
@@ -55,6 +59,14 @@ const platform = process.platform
 const checks = new Map<ComputerSmokeName, ComputerSmokeCheck>()
 const disposers: (() => void | Promise<void>)[] = []
 const records: WindowRecord[] = []
+let currentPhase: ComputerSmokeLastPhase = "none"
+function phase(value: ComputerSmokePhase) {
+  currentPhase = value
+  process.stdout.write(COMPUTER_SMOKE_PHASE_MARK + JSON.stringify({ protocol: 1, phase: value }) + "\n")
+}
+function childFailure(cause: "deadline_exceeded" | "runtime_failed") {
+  return COMPUTER_SMOKE_FAILURE_MARK + JSON.stringify({ protocol: 1, cause, phase: currentPhase, hint: "none" }) + "\n"
+}
 
 function check(name: ComputerSmokeName, ok: boolean, reason?: ComputerSmokeReason) {
   checks.set(name, { name, ok, ...(!ok ? { reason: reason ?? "assertion_failed" } : {}) })
@@ -613,12 +625,16 @@ async function main() {
   app.on("window-all-closed", () => {})
   registerComputerOverlayIpc(ipcMain)
   await app.whenReady()
+  phase("ready")
   try {
+    phase("properties")
     await properties()
+    phase("controller")
     await controllerChecks()
   } catch {
     for (const name of COMPUTER_SMOKE_CHECKS) if (!checks.has(name)) check(name, false, "runtime_failure")
   } finally {
+    phase("cleanup")
     for (const dispose of disposers.reverse())
       await Promise.resolve()
         .then(dispose)
@@ -627,20 +643,27 @@ async function main() {
   }
   for (const name of COMPUTER_SMOKE_CHECKS) if (!checks.has(name)) check(name, false, "runtime_failure")
   const results = COMPUTER_SMOKE_CHECKS.map((name) => checks.get(name)!)
-  process.stdout.write(
+  phase("report")
+  const report =
     COMPUTER_SMOKE_MARK +
-      JSON.stringify({ protocol: 1, platform, electron: process.versions.electron, checks: results }) +
-      "\n",
+    JSON.stringify({ protocol: 1, platform, electron: process.versions.electron, checks: results }) +
+    "\n"
+  // app.exit is immediate. Flush the fixed bounded report before terminating the actual runtime.
+  await new Promise<void>((resolve, reject) =>
+    process.stdout.write(report, (error) => (error ? reject(error) : resolve())),
   )
   app.exit(results.some((result) => !result.ok && !result.skipped) ? 1 : 0)
 }
 
 if (process.versions.electron) {
-  const watchdog = globalThis.setTimeout(() => app.exit(1), COMPUTER_SMOKE_LIMIT_MS - 2000)
+  phase("boot")
+  process.stdout.on("error", () => app.exit(1))
+  const watchdog = globalThis.setTimeout(() => {
+    process.stdout.write(childFailure("deadline_exceeded"), () => app.exit(1))
+  }, COMPUTER_SMOKE_LIMIT_MS - 2000)
   void main()
     .catch(() => {
-      process.stderr.write("The bounded computer smoke failed.\n")
-      app.exit(1)
+      process.stdout.write(childFailure("runtime_failed"), () => app.exit(1))
     })
     .finally(() => clearTimeout(watchdog))
 }

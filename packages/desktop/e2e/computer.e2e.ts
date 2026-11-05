@@ -248,6 +248,10 @@ async function desktop(
         TEMP: path.join(root, "tmp"),
         TMP: path.join(root, "tmp"),
         ...(process.env.DISPLAY ? { DISPLAY: process.env.DISPLAY } : {}),
+        ...(process.platform === "linux" && process.env.XAUTHORITY ? { XAUTHORITY: process.env.XAUTHORITY } : {}),
+        ...(process.platform === "linux" && process.env.XDG_RUNTIME_DIR
+          ? { XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR }
+          : {}),
         ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
         ...(process.env.WINDIR ? { WINDIR: process.env.WINDIR } : {}),
         VECTOR_CONFIG_CONTENT: JSON.stringify(providerConfig(`http://127.0.0.1:${address.port}/v1`)),

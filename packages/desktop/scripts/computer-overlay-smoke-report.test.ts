@@ -2,6 +2,13 @@ import { describe, expect, test } from "bun:test"
 import {
   COMPUTER_SMOKE_CHECKS,
   COMPUTER_SMOKE_MARK,
+  COMPUTER_SMOKE_PHASE_MARK,
+  COMPUTER_SMOKE_FAILURE_MARK,
+  COMPUTER_SMOKE_PHASES,
+  parseComputerSmokePhase,
+  parseComputerSmokeFailure,
+  computerSmokeRuntimeHint,
+  type ComputerSmokeLastPhase,
   parseComputerSmokeReport,
   type ComputerSmokeReport,
 } from "./computer-overlay-smoke-report"
@@ -119,5 +126,70 @@ describe("fixed real Electron computer smoke reports", () => {
     ).toEqual(report())
     for (const text of ["", line + "\n" + line, "x".repeat(65_537) + "\n" + line, COMPUTER_SMOKE_MARK + "{"])
       expect(() => parseComputerSmokeReport(text, { electron: "42.11.4", platform: "darwin", exitCode: 0 })).toThrow()
+  })
+})
+
+describe("bounded closed Electron smoke diagnostics", () => {
+  const receipt = (phase: string) => COMPUTER_SMOKE_PHASE_MARK + JSON.stringify({ protocol: 1, phase })
+  test("tracks the actual six phases and the cleanup branch after a properties failure", () => {
+    let previous: ComputerSmokeLastPhase = "none"
+    for (const phase of COMPUTER_SMOKE_PHASES) previous = parseComputerSmokePhase(receipt(phase), previous)
+    expect(previous).toBe("report")
+    expect(parseComputerSmokePhase(receipt("cleanup"), "properties")).toBe("cleanup")
+    expect(() => parseComputerSmokePhase(receipt("report"), "none")).toThrow()
+    expect(() => parseComputerSmokePhase(receipt("properties"), "properties")).toThrow()
+    expect(() => parseComputerSmokePhase(receipt("boot"), "ready")).toThrow()
+  })
+  test("phase records reject payloads, unknown phases and unbounded output", () => {
+    for (const value of [
+      { protocol: 2, phase: "boot" },
+      { protocol: 1, phase: "private-window-title" },
+      { protocol: 1, phase: "boot", cookie: "private" },
+      { phase: "boot" },
+    ])
+      expect(() => parseComputerSmokePhase(COMPUTER_SMOKE_PHASE_MARK + JSON.stringify(value))).toThrow()
+    expect(() => parseComputerSmokePhase(receipt("boot") + " ".repeat(161))).toThrow()
+    expect(() => parseComputerSmokePhase(COMPUTER_SMOKE_PHASE_MARK + "{")).toThrow()
+  })
+  test("runtime stderr is classified into fixed hints without returning any raw field", () => {
+    for (const [text, hint] of [
+      ["Authorization required, but no authorization protocol specified\n/private/xauthority-cookie", "display_auth"],
+      ["Missing X server or $DISPLAY: private-display-value", "display_unavailable"],
+      ["The platform failed to initialize. Exiting.", "display_unavailable"],
+      ["No usable sandbox! private-runtime-path", "sandbox_unavailable"],
+      ["Error [ERR_MODULE_NOT_FOUND]: Cannot find module '/private/fixture/main.mjs'", "loader_failed"],
+      ["ordinary unrelated runtime message /private/path", "none"],
+    ])
+      expect(computerSmokeRuntimeHint(text!)).toBe(hint)
+    expect(
+      computerSmokeRuntimeHint("Authorization required, but no authorization protocol specified" + " ".repeat(8193)),
+    ).toBe("none")
+  })
+  test("failure receipts admit only fixed causes, last phases and hints", () => {
+    const value = { protocol: 1, cause: "deadline_exceeded", phase: "none", hint: "display_auth" }
+    expect(parseComputerSmokeFailure(COMPUTER_SMOKE_FAILURE_MARK + JSON.stringify(value))).toEqual(value)
+    for (const patch of [
+      { cause: "private error text" },
+      { phase: "private-window" },
+      { hint: "private-cookie" },
+      { details: "private text" },
+      { protocol: 2 },
+    ])
+      expect(() =>
+        parseComputerSmokeFailure(COMPUTER_SMOKE_FAILURE_MARK + JSON.stringify({ ...value, ...patch })),
+      ).toThrow()
+  })
+  test("progress and runtime hints never substitute for the actual assertion report", () => {
+    const phases = COMPUTER_SMOKE_PHASES.map(receipt).join("\n")
+    expect(() => parseComputerSmokeReport(phases, { electron: "42.11.4", platform: "linux", exitCode: 0 })).toThrow(
+      "exactly one",
+    )
+    expect(
+      parseComputerSmokeReport(phases + "\n" + COMPUTER_SMOKE_MARK + JSON.stringify(report()), {
+        electron: "42.11.4",
+        platform: "darwin",
+        exitCode: 0,
+      }),
+    ).toEqual(report())
   })
 })

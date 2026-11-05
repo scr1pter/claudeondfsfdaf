@@ -7,12 +7,41 @@ import { createRequire } from "node:module"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
-import { COMPUTER_SMOKE_LIMIT_MS, COMPUTER_SMOKE_MARK, parseComputerSmokeReport } from "./computer-overlay-smoke-report"
+import {
+  COMPUTER_SMOKE_LIMIT_MS,
+  COMPUTER_SMOKE_MARK,
+  COMPUTER_SMOKE_PHASE_MARK,
+  COMPUTER_SMOKE_FAILURE_MARK,
+  parseComputerSmokeReport,
+  parseComputerSmokePhase,
+  parseComputerSmokeFailure,
+  computerSmokeRuntimeHint,
+  type ComputerSmokeLastPhase,
+  type ComputerSmokeFailureCause,
+  type ComputerSmokeRuntimeHint,
+  type ComputerSmokeFailureDiagnostic,
+} from "./computer-overlay-smoke-report"
 import { parseComputerOverlayBootstrapUnavailable, verifyComputerOverlayStage } from "./computer-overlay-smoke-stage"
 import { computerOverlayBundlePlan, type OverlayCompiler } from "./build-computer-overlay-smoke"
 
 // Compiler-only module-local type; no Bun globals are added to renderer or Node declarations.
 declare const Bun: OverlayCompiler
+
+class ComputerSmokeRunFailure extends Error {
+  constructor(readonly diagnostic: ComputerSmokeFailureDiagnostic) {
+    super("The bounded computer smoke failed.")
+  }
+}
+function failureDiagnostic(
+  cause: ComputerSmokeFailureCause,
+  phase: ComputerSmokeLastPhase,
+  hint: ComputerSmokeRuntimeHint,
+): ComputerSmokeFailureDiagnostic {
+  return { protocol: 1, cause, phase, hint }
+}
+function emitFailure(diagnostic: ComputerSmokeFailureDiagnostic) {
+  process.stderr.write(COMPUTER_SMOKE_FAILURE_MARK + JSON.stringify(diagnostic) + "\n")
+}
 
 /** CI only: Bun compiles; Electron and its embedded actual Node own every child runtime. */
 export async function runComputerOverlaySmoke(args = process.argv.slice(2)) {
@@ -90,6 +119,10 @@ export async function runComputerOverlaySmoke(args = process.argv.slice(2)) {
     const environment: NodeJS.ProcessEnv = {
       PATH: process.env.PATH ?? "",
       DISPLAY: process.env.DISPLAY ?? "",
+      ...(process.platform === "linux" && process.env.XAUTHORITY ? { XAUTHORITY: process.env.XAUTHORITY } : {}),
+      ...(process.platform === "linux" && process.env.XDG_RUNTIME_DIR
+        ? { XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR }
+        : {}),
       LANG: "en_US.UTF-8",
       LC_ALL: "en_US.UTF-8",
       VECTOR_COMPUTER_SMOKE_PROFILE: path.join(directory, "profile"),
@@ -116,34 +149,80 @@ export async function runComputerOverlaySmoke(args = process.argv.slice(2)) {
       windowsHide: true,
     })
     const output: Buffer[] = []
-    let outputBytes = 0
-    let stdout = "",
-      failed = false,
-      timedOut = false,
+    let outputBytes = 0,
+      stdout = "",
+      pendingLine = "",
+      stderrTail = "",
       stderrBytes = 0
-    const kill = () => {
-      failed = true
+    let lastPhase: ComputerSmokeLastPhase = "none",
+      hint: ComputerSmokeRuntimeHint = "none"
+    let forcedCause: ComputerSmokeFailureCause | undefined
+    const streamState: { childFailure?: ComputerSmokeFailureDiagnostic } = {}
+    const fail = (cause: ComputerSmokeFailureCause) => {
+      forcedCause ??= cause
       child.kill("SIGKILL")
     }
+    const hintPriority: readonly ComputerSmokeRuntimeHint[] = [
+      "none",
+      "display_unavailable",
+      "loader_failed",
+      "sandbox_unavailable",
+      "display_auth",
+    ]
     child.stdout.on("data", (bytes: Buffer) => {
-      if (outputBytes + bytes.length > 65_536) return kill()
+      if (outputBytes + bytes.length > 65_536) return fail("stdout_limit")
       output.push(bytes)
       outputBytes += bytes.length
-      stdout += bytes.toString("utf8")
+      const text = bytes.toString("utf8")
+      stdout += text
+      pendingLine += text
+      let newline: number
+      while ((newline = pendingLine.indexOf("\n")) >= 0) {
+        const line = pendingLine.slice(0, newline).replace(/\r$/, "")
+        pendingLine = pendingLine.slice(newline + 1)
+        try {
+          if (line.startsWith(COMPUTER_SMOKE_PHASE_MARK)) {
+            if (streamState.childFailure) throw new Error("A terminal computer smoke receipt cannot advance.")
+            lastPhase = parseComputerSmokePhase(line, lastPhase)
+            process.stdout.write(COMPUTER_SMOKE_PHASE_MARK + JSON.stringify({ protocol: 1, phase: lastPhase }) + "\n")
+          } else if (line.startsWith(COMPUTER_SMOKE_FAILURE_MARK)) {
+            const received = parseComputerSmokeFailure(line)
+            if (
+              streamState.childFailure ||
+              received.phase !== lastPhase ||
+              received.hint !== "none" ||
+              !["deadline_exceeded", "runtime_failed"].includes(received.cause)
+            )
+              throw new Error("The child failure receipt is invalid.")
+            streamState.childFailure = received
+          }
+        } catch {
+          return fail("invalid_progress")
+        }
+      }
     })
     child.stderr.on("data", (bytes: Buffer) => {
       stderrBytes += bytes.length
-      if (stderrBytes > 1024 * 1024) kill()
+      stderrTail = (stderrTail + bytes.toString("utf8")).slice(-8192)
+      const observed = computerSmokeRuntimeHint(stderrTail)
+      if (hintPriority.indexOf(observed) > hintPriority.indexOf(hint)) hint = observed
+      if (stderrBytes > 1024 * 1024) fail("stderr_limit")
     })
-    const timer = setTimeout(() => {
-      timedOut = true
-      kill()
-    }, COMPUTER_SMOKE_LIMIT_MS)
+    child.stdout.on("error", () => fail("runtime_failed"))
+    child.stderr.on("error", () => fail("runtime_failed"))
+    const timer = setTimeout(() => fail("deadline_exceeded"), COMPUTER_SMOKE_LIMIT_MS)
     const exit = await new Promise<number | null>((resolve, reject) => {
-      child.once("error", reject)
+      child.once("error", () =>
+        reject(new ComputerSmokeRunFailure(failureDiagnostic("launch_failed", lastPhase, hint))),
+      )
       child.once("close", (code) => resolve(code))
     }).finally(() => clearTimeout(timer))
-    if (failed || timedOut) throw new Error("The computer overlay smoke failed its bounded runtime.")
+    stderrTail = ""
+    if (forcedCause) throw new ComputerSmokeRunFailure(failureDiagnostic(forcedCause, lastPhase, hint))
+    if (streamState.childFailure)
+      throw new ComputerSmokeRunFailure(failureDiagnostic(streamState.childFailure.cause, lastPhase, hint))
+    if (pendingLine.startsWith(COMPUTER_SMOKE_PHASE_MARK) || pendingLine.startsWith(COMPUTER_SMOKE_FAILURE_MARK))
+      throw new ComputerSmokeRunFailure(failureDiagnostic("invalid_progress", lastPhase, hint))
     const unavailable = bootstrap ? parseComputerOverlayBootstrapUnavailable(Buffer.concat(output), exit) : undefined
     if (unavailable) {
       // No Electron property assertion ran. This distinct bounded prerequisite report must never
@@ -151,14 +230,32 @@ export async function runComputerOverlaySmoke(args = process.argv.slice(2)) {
       process.stdout.write("computer-smoke-unavailable " + JSON.stringify(unavailable) + "\n")
       return flags.has("--require-native") ? 1 : 77
     }
-    const report = parseComputerSmokeReport(stdout, {
-      electron: installed.version,
-      platform: process.platform,
-      exitCode: exit,
-      requireNative: flags.has("--require-native"),
-    })
+    let report: ReturnType<typeof parseComputerSmokeReport>
+    try {
+      report = parseComputerSmokeReport(stdout, {
+        electron: installed.version,
+        platform: process.platform,
+        exitCode: exit,
+      })
+    } catch {
+      const cause = stdout.split(/\r?\n/).some((line) => line.startsWith(COMPUTER_SMOKE_MARK))
+        ? "invalid_report"
+        : "missing_report"
+      throw new ComputerSmokeRunFailure(failureDiagnostic(cause, lastPhase, hint))
+    }
     process.stdout.write(COMPUTER_SMOKE_MARK + JSON.stringify(report) + "\n")
-    return report.checks.every((check) => check.ok || check.skipped) ? 0 : 1
+    const failed = report.checks.some((check) => !check.ok && !check.skipped)
+    const missingNative =
+      flags.has("--require-native") &&
+      report.checks.some(
+        (check) =>
+          check.skipped &&
+          (check.name === "native-os-stop" ||
+            (check.name === "native-capture-exclusion" && report.platform === "darwin")),
+      )
+    if (failed || missingNative)
+      emitFailure(failureDiagnostic(failed ? "assertion_failed" : "required_native_unavailable", lastPhase, hint))
+    return failed || missingNative ? 1 : 0
   } finally {
     await rm(directory, { recursive: true, force: true })
   }
@@ -169,8 +266,10 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     (code) => {
       process.exitCode = code
     },
-    () => {
-      process.stderr.write("The computer overlay smoke failed.\n")
+    (error: unknown) => {
+      emitFailure(
+        error instanceof ComputerSmokeRunFailure ? error.diagnostic : failureDiagnostic("setup_failed", "none", "none"),
+      )
       process.exitCode = 1
     },
   )

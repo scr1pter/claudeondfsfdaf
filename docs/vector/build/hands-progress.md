@@ -744,3 +744,10 @@ Run42029815801 at46f3a6ee now preserves the actual late compiler failure: overla
 ### C9 repository wording regression repair
 
 Full CI's Linux unit job127253857303 passes ordinary/desktop units, generated-client checks and HttpApi exerciser gates, then the hosted API suite reports164pass/1fail in the existing owner terminology guard. New Hands guide/release copy used project code and project's configuration, which violate the17October repository/workspace wording rule. The new copy now says running code and a repository's/user's configuration; the changelog is regenerated from the same source. The original guard remains unchanged and passes both focused tests/16 assertions from the web package. Already-published historical notes are unchanged.
+
+
+### C8 isolated Xvfb authorization and bounded smoke receipts
+
+Both actual Electron fixtures now preserve the disposable Xvfb display's matching XAUTHORITY and optional XDG_RUNTIME_DIR along with DISPLAY. Temporary HOME/profile, source-bound admission and native isolation remain enforced; no cookie/path values or raw child stderr are logged. Fixed ordered boot/ready/properties/controller/cleanup/report receipts and closed display/sandbox/loader failure hints distinguish launch, runtime, assertion and unavailable native outcomes. Final JSON is flushed before immediate app.exit. No timeout or success criterion is relaxed.
+
+Focused checks pass: report/diagnostics16 tests/71 assertions, real source graph/compiler metadata12/38, desktop typecheck and formatting. Actual Linux Electron execution must validate the display repair. Source11 mac-build in42029815801 reaches the expected enforced10-lock mismatch; candidate/native reports require independent verification before any lock update.
