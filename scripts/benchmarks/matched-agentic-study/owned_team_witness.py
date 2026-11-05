@@ -151,6 +151,37 @@ def known_length_incomplete(response):
     return isinstance(split, dict) and split.get("ttl_12h_tokens", 0) == 0 and split.get("ttl_30m_tokens", writes) == writes
 
 
+def known_completed_usage(response):
+    """Only waive a cancelled stream when every priced token category is known."""
+    if terminal_problem(response) is not None:
+        return False
+    usage = response.get("usage")
+    if not isinstance(usage, dict) or not isinstance(usage.get("input_tokens_details"), dict):
+        return False
+    details = usage["input_tokens_details"]
+    counts = [usage.get("input_tokens"), usage.get("output_tokens"), details.get("cached_tokens"), details.get("cache_write_tokens")]
+    integer = lambda value: isinstance(value, int) and not isinstance(value, bool) and value >= 0
+    if not all(integer(value) for value in counts):
+        return False
+    inputs, outputs, reads, writes = counts
+    if inputs > CONTEXT_LIMIT or outputs > OUTPUT_CEILING or reads + writes > inputs:
+        return False
+    if "total_tokens" in usage and (not integer(usage["total_tokens"]) or usage["total_tokens"] != inputs + outputs):
+        return False
+    split = details.get("cache_write_tokens_details", {})
+    if not isinstance(split, dict) or set(split) - {"ttl_12h_tokens", "ttl_30m_tokens"}:
+        return False
+    long, short = split.get("ttl_12h_tokens", 0), split.get("ttl_30m_tokens", writes)
+    if not integer(long) or not integer(short) or long != 0 or short != writes:
+        return False
+    output = usage.get("output_tokens_details", {})
+    return isinstance(output, dict) and integer(output.get("reasoning_tokens", 0)) and output.get("reasoning_tokens", 0) <= outputs
+
+
+class QueuedClientCancelled(PolicyError):
+    """Authenticated request was cancelled before forwarding; never replay it."""
+
+
 class OwnedArm:
     def __init__(self, runtime, registry, roles, token, before, controller, audit, max_calls=300, seconds=7200, soft_usd=3, label=None, role_parents=None, funding_profile=None):
         require(runtime in ACTORS and registry.runtime == runtime, "invalid fixed team")
@@ -215,6 +246,48 @@ class OwnedArm:
             self.handlers -= 1
             self.condition.notify_all()
 
+    def validated_request(self, body, headers):
+        native = self.registry.resolve(headers)
+        require(native["root"] == self.registry.root_id, "wrong arm root")
+        identity_kind = native.get("identityKind")
+        require(identity_kind in ("autonomous", "helper"), "unknown native identity kind")
+        if identity_kind == "helper":
+            producer = native.get("producer")
+            require(producer in self.registry.helper_producers and native["helper"] and native["role"] == "helper", "unknown native helper identity")
+            require(native["parent"] in self.admitted_ids and (native["parent"] == self.registry.root_id or native["parent"] in self.slots.values()), "helper outside admitted team")
+            require(producer not in self.helper_slots or self.helper_slots[producer] == native["id"], "duplicate lifetime helper producer")
+        else:
+            self.profile.admit(native, self.registry.root_id, self.slots)
+        normalized = profile_body(body, identity_kind == "helper" or not self.profile.delegates(native["role"]))
+        if identity_kind == "helper":
+            require(not body.get("tools") and not any(isinstance(item, dict) and item.get("type") == "additional_tools" and item.get("tools") for item in body["input"]), "native helper may not have tools")
+        wire = json.dumps(normalized, ensure_ascii=False, separators=(",", ":")).encode()
+        require(len(wire) <= MAX_BODY, "normalized request oversized")
+        return native, wire, reservation_bound(normalized, wire)
+
+    def remember_native(self, native):
+        if native["identityKind"] == "autonomous":
+            self.admitted_ids.add(native["id"])
+            if native["id"] != self.registry.root_id:
+                self.slots[native["role"]] = native["id"]
+        else:
+            self.helper_slots[native["producer"]] = native["id"]
+
+    def cancelled_before_forward(self, body, headers):
+        require(not self.failure and not self.closing and len(self.requests) < self.max_calls
+                and time.monotonic() < self.deadline, "arm stopping threshold")
+        healthy(self.controller("/status"), self.before, funding_profile=self.funding_profile)
+        native, wire, _reserve = self.validated_request(body, headers)
+        observation = {"reason": "known_unforwarded_client_cancellation", "identitySha256": hashlib.sha256(native["id"].encode()).hexdigest(),
+                       "role": native["role"], "requestSha256": hashlib.sha256(wire).hexdigest(),
+                       "upstreamForwarded": False, "providerRequests": 0, "measuredUsd": 0}
+        self.record({"type": "nonfatal_review_observation", **observation})
+        # The native identity already exists even though it consumed no inference.
+        # Preserve its lifetime slot so a later replacement cannot hide here.
+        self.remember_native(native)
+        self.nonfatal_reviews.append(observation)
+        raise QueuedClientCancelled("known unforwarded client cancellation; not replayed")
+
     def enter(self, body, headers, cancelled):
         ticket = object()
         with self.condition:
@@ -223,46 +296,27 @@ class OwnedArm:
             try:
                 while self.forwarding or self.queue[0] is not ticket:
                     if cancelled():
-                        self.latch("queued_client_cancelled")
+                        self.cancelled_before_forward(body, headers)
                     if time.monotonic() >= self.deadline:
                         self.latch("arm_deadline")
                     require(not self.failure and not self.closing, "arm stopped")
                     self.condition.wait(timeout=0.05)
                 require(not self.failure and not self.closing, "arm stopped")
                 if cancelled():
-                    self.latch("queued_client_cancelled")
-                    raise PolicyError("client cancelled")
+                    self.cancelled_before_forward(body, headers)
                 state = healthy(self.controller("/status"), self.before, idle=True, funding_profile=self.funding_profile)
                 require(len(self.requests) < self.max_calls and time.monotonic() < self.deadline, "arm stopping threshold")
-                native = self.registry.resolve(headers)
-                require(native["root"] == self.registry.root_id, "wrong arm root")
-                identity_kind = native.get("identityKind")
-                require(identity_kind in ("autonomous", "helper"), "unknown native identity kind")
-                if identity_kind == "helper":
-                    producer = native.get("producer")
-                    require(producer in self.registry.helper_producers and native["helper"] and native["role"] == "helper", "unknown native helper identity")
-                    require(native["parent"] in self.admitted_ids and (native["parent"] == self.registry.root_id or native["parent"] in self.slots.values()), "helper outside admitted team")
-                    require(producer not in self.helper_slots or self.helper_slots[producer] == native["id"], "duplicate lifetime helper producer")
-                else:
-                    self.profile.admit(native, self.registry.root_id, self.slots)
-                normalized = profile_body(body, identity_kind == "helper" or not self.profile.delegates(native["role"]))
-                if identity_kind == "helper":
-                    require(not body.get("tools") and not any(isinstance(item, dict) and item.get("type") == "additional_tools" and item.get("tools") for item in body["input"]), "native helper may not have tools")
-                wire = json.dumps(normalized, ensure_ascii=False, separators=(",", ":")).encode()
-                require(len(wire) <= MAX_BODY, "normalized request oversized")
-                reserve = reservation_bound(normalized, wire)
+                native, wire, reserve = self.validated_request(body, headers)
+                identity_kind = native["identityKind"]
                 require(state["measuredUsd"] + reserve <= 48 and state["actors"][self.actor]["measuredUsd"] + reserve <= self.funding.actor_cap(self.actor), "single-call reservation headroom insufficient")
                 entry = {"ordinal": len(self.requests) + 1, "requestSha256": hashlib.sha256(wire).hexdigest(), "identitySha256": hashlib.sha256(native["id"].encode()).hexdigest(), "identityKind": identity_kind, "role": native["role"], "helper": native["helper"], "purpose": native["purpose"], "upstreamTerminal": False, "receiptRegistered": False}
                 self.record({"type": "before_upstream", **entry, "requiredReservationUsd": reserve})
-                if identity_kind == "autonomous":
-                    self.admitted_ids.add(native["id"])
-                    if native["id"] != self.registry.root_id:
-                        self.slots[native["role"]] = native["id"]
-                else:
-                    self.helper_slots[native["producer"]] = native["id"]
+                self.remember_native(native)
                 self.requests.append(entry)
                 self.forwarding = True
                 return wire, entry
+            except QueuedClientCancelled:
+                raise
             except Exception as error:
                 if not self.audit_failed:
                     try:
@@ -275,14 +329,16 @@ class OwnedArm:
                 self.queue.remove(ticket)
                 self.condition.notify_all()
 
-    def finish(self, entry, terminal, disconnected, transport_failed, issue=None, event=None):
+    def finish(self, entry, terminal, disconnected, transport_failed, issue=None, event=None, delivery=None):
         with self.condition:
             outcome = issue or terminal_problem(terminal, event)
+            if delivery is not None and delivery.get("unambiguousTail") is False:
+                outcome = outcome or "upstream_trailing_event_unknown"
             continuation = outcome == "upstream_response_incomplete" and known_length_incomplete(terminal) and not disconnected and not transport_failed
             entry.update(upstreamTerminal=terminal is not None, upstreamOutcome="length_continuation_review" if continuation else outcome or "completed", clientDisconnected=disconnected, transportFailed=transport_failed)
             try:
                 usage = terminal.get("usage") if terminal and isinstance(terminal.get("usage"), dict) else {}
-                self.record({"type": "after_upstream", "ordinal": entry["ordinal"], "requestSha256": entry["requestSha256"], "terminalObserved": terminal is not None, "outcome": entry["upstreamOutcome"], "terminalEvent": event, "clientDisconnected": disconnected, "transportFailed": transport_failed, "usage": {key: usage[key] for key in ("input_tokens", "output_tokens", "total_tokens") if known(usage.get(key))}})
+                self.record({"type": "after_upstream", "ordinal": entry["ordinal"], "requestSha256": entry["requestSha256"], "terminalObserved": terminal is not None, "outcome": entry["upstreamOutcome"], "terminalEvent": event, "clientDisconnected": disconnected, "transportFailed": transport_failed, "delivery": delivery, "usage": {key: usage[key] for key in ("input_tokens", "output_tokens", "total_tokens") if known(usage.get(key))}})
                 if terminal is None or transport_failed:
                     self.latch("upstream_or_terminal_unknown")
                 elif continuation:
@@ -292,7 +348,16 @@ class OwnedArm:
                 elif outcome:
                     self.latch(outcome)
                 if disconnected:
-                    self.latch("forwarded_client_cancelled")
+                    if not outcome and not transport_failed and known_completed_usage(terminal) and delivery is not None and delivery.get("upstreamEof") is True:
+                        clean = delivery.get("terminalFrameWritten") is True and delivery.get("unambiguousTail") is True
+                        if clean:
+                            self.record({"type": "normal_post_terminal_client_eof", "ordinal": entry["ordinal"], "socketWriteIsApplicationAck": False})
+                        else:
+                            observation = {"ordinal": entry["ordinal"], "identitySha256": entry["identitySha256"], "reason": "known_completed_client_cancellation", "automaticReplay": False}
+                            self.record({"type": "nonfatal_review_observation", **observation})
+                            self.nonfatal_reviews.append(observation)
+                    else:
+                        self.latch("forwarded_client_cancelled" if outcome or transport_failed else "cancelled_upstream_usage_or_delivery_unknown")
             finally:
                 self.forwarding = False
                 self.condition.notify_all()
@@ -391,12 +456,16 @@ class Handler(BaseHTTPRequestHandler):
                 except OSError:
                     return True
             wire, entry = arm.enter(body, self.headers, cancelled)
+        except QueuedClientCancelled:
+            return self.reply(409, {"error": "request cancelled before upstream; not replayed"})
         except (PolicyError, ValueError, TypeError, OSError):
             arm.latch("request_or_policy_failure")
             return self.reply(400, {"error": "owned arm stopped for review"})
         connection = http.client.HTTPConnection(*self.server.upstream, timeout=650)
         sent, disconnected, transport_failed, terminal, buffer = False, False, False, None, b""
         terminal_event, event_label, issue, terminal_count = None, None, None, 0
+        terminal_frame_complete, terminal_frame_written, frame_terminal = False, False, False
+        upstream_eof, unambiguous_tail, terminal_written_ns, disconnect_observed_ns = False, True, None, None
         try:
             connection.request("POST", "/v1/responses", body=wire, headers={**{key: value for key, value in self.headers.items() if key.lower() not in HOP | {"content-type"}}, "Authorization": "Bearer " + arm._funded_token, "Content-Type": "application/json"})
             response = connection.getresponse()
@@ -411,6 +480,7 @@ class Handler(BaseHTTPRequestHandler):
             while chunk := response.read1(65536):
                 if cancelled():
                     disconnected = True
+                    disconnect_observed_ns = disconnect_observed_ns or time.time_ns()
                 buffer += chunk
                 require(len(buffer) <= MAX_BODY, "upstream frame bound")
                 if "text/event-stream" in content_type:
@@ -418,16 +488,23 @@ class Handler(BaseHTTPRequestHandler):
                         line, buffer = buffer.split(b"\n", 1)
                         line = line.rstrip(b"\r")
                         if not line:
+                            terminal_frame_complete = terminal_frame_complete or frame_terminal
+                            frame_terminal = False
                             event_label = None
                         if line.startswith(b"event:"):
                             event_label = line[6:].strip().decode("utf-8", errors="replace")
+                            if terminal_count:
+                                unambiguous_tail = False
                         if line.startswith(b"data:"):
+                            if terminal_count == 1 and event_label is None and line[5:].strip() == b"[DONE]":
+                                continue
                             try:
                                 event = json.loads(line[5:])
                                 kind = event.get("type") if isinstance(event, dict) else None
                                 kinds = ("response.completed", "response.done", "response.incomplete", "response.failed")
                                 if kind in kinds:
                                     terminal_count += 1
+                                    frame_terminal = True
                                     terminal_event = kind
                                     terminal = event.get("response") if isinstance(event.get("response"), dict) else None
                                     issue = issue or terminal_problem(terminal, kind, event_label)
@@ -435,18 +512,34 @@ class Handler(BaseHTTPRequestHandler):
                                         issue = "multiple_upstream_terminals"
                                 elif event_label in (*kinds, "error") or kind == "error":
                                     issue = issue or "upstream_terminal_event_status_mismatch"
+                                elif terminal_count:
+                                    unambiguous_tail = False
                             except (ValueError, RecursionError):
                                 if event_label in ("response.completed", "response.done", "response.failed", "response.incomplete", "error"):
                                     terminal_count += 1
                                     issue = "malformed_upstream_terminal"
+                                elif terminal_count:
+                                    unambiguous_tail = False
                 if not disconnected:
                     try:
                         self.wfile.write(chunk)
                         self.wfile.flush()
+                        if terminal_frame_complete:
+                            terminal_frame_written = True
+                            terminal_written_ns = terminal_written_ns or time.time_ns()
                     except OSError:
                         disconnected = True
+                        disconnect_observed_ns = disconnect_observed_ns or time.time_ns()
+            upstream_eof = True
             if "text/event-stream" in content_type and buffer.strip() and event_label in ("response.completed", "response.done", "response.failed", "response.incomplete", "error"):
                 issue = "malformed_upstream_terminal"
+            if "text/event-stream" in content_type:
+                if terminal is not None and not terminal_frame_complete:
+                    issue = issue or "incomplete_upstream_terminal_frame"
+                if buffer.strip() and not buffer.lstrip().startswith(b":"):
+                    unambiguous_tail = False
+                if not unambiguous_tail:
+                    issue = issue or "upstream_trailing_event_unknown"
             if "text/event-stream" not in content_type:
                 try:
                     value = json.loads(buffer)
@@ -462,7 +555,10 @@ class Handler(BaseHTTPRequestHandler):
         finally:
             connection.close()
             try:
-                arm.finish(entry, terminal, disconnected, transport_failed, issue, terminal_event)
+                arm.finish(entry, terminal, disconnected, transport_failed, issue, terminal_event,
+                    delivery={"terminalFrameWritten": terminal_frame_written, "terminalFrameWrittenUnixNs": terminal_written_ns,
+                              "firstDisconnectObservedUnixNs": disconnect_observed_ns, "upstreamEof": upstream_eof,
+                              "unambiguousTail": unambiguous_tail, "socketWriteIsApplicationAck": False})
             except PolicyError:
                 pass
             self.close_connection = True

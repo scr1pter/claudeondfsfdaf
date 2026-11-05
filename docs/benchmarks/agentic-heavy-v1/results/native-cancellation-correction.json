@@ -1,0 +1,155 @@
+{
+  "kind": "native-cancellation-correction-evidence-v1",
+  "correctedWitnessCodeRevision": "4cfa1db6c68c458d33afa954b2981e6259be43e5",
+  "correctedMatchedManifestSha256": "31357229ddb010df9eb764aa3b8dee5a001eff7122b2b1ed2a08c84beaa736dd",
+  "baselineEvidence": "native-cancellation-baseline.json",
+  "freeControlsPassed": 198,
+  "actualUnchangedMeterControlsEnabled": true,
+  "realProviderCalls": 0,
+  "fundedMeterCalls": 0,
+  "bunRuns": 0,
+  "browserRuns": 0,
+  "productEvaluationPerformed": false,
+  "qualityComparisonMet": false,
+  "efficiencyClaimMet": false,
+  "originalRealCodexFailureRewritten": false,
+  "originalRealCodexNineChargesRetained": true,
+  "automaticReplay": false,
+  "socketWriteIsApplicationAck": false,
+  "cases": [
+    {
+      "case": "tail",
+      "mode": "final-tail",
+      "nativeExitCode": 0,
+      "providerRequests": 1,
+      "syntheticMeasuredUsd": 1.2e-05,
+      "receiptCount": 1,
+      "settlementComplete": true,
+      "runtimeQuiesced": true,
+      "transcriptCoverageComplete": true,
+      "nativeTranscriptCount": 1,
+      "fatalStopReason": null,
+      "reviewRequired": false,
+      "nonfatalObservationReasons": [],
+      "cancelledQueuedProviderRequests": 0,
+      "normalPostTerminalEofObservations": 1,
+      "delivery": [
+        {
+          "ordinal": 1,
+          "clientDisconnected": true,
+          "terminalFrameWritten": true,
+          "upstreamEof": true,
+          "unambiguousTail": true
+        }
+      ],
+      "summarySha256": "1b5ce2533041a2c7b4be8855f4510dcf96c08e17f3d266759e31ddd79719493e"
+    },
+    {
+      "case": "inflight",
+      "mode": "message-inflight",
+      "nativeExitCode": 0,
+      "providerRequests": 6,
+      "syntheticMeasuredUsd": 7.2e-05,
+      "receiptCount": 6,
+      "settlementComplete": true,
+      "runtimeQuiesced": true,
+      "transcriptCoverageComplete": true,
+      "nativeTranscriptCount": 2,
+      "fatalStopReason": null,
+      "reviewRequired": true,
+      "nonfatalObservationReasons": [
+        "known_completed_client_cancellation"
+      ],
+      "cancelledQueuedProviderRequests": 0,
+      "normalPostTerminalEofObservations": 0,
+      "delivery": [
+        {
+          "ordinal": 1,
+          "clientDisconnected": false,
+          "terminalFrameWritten": true,
+          "upstreamEof": true,
+          "unambiguousTail": true
+        },
+        {
+          "ordinal": 2,
+          "clientDisconnected": false,
+          "terminalFrameWritten": true,
+          "upstreamEof": true,
+          "unambiguousTail": true
+        },
+        {
+          "ordinal": 3,
+          "clientDisconnected": false,
+          "terminalFrameWritten": true,
+          "upstreamEof": true,
+          "unambiguousTail": true
+        },
+        {
+          "ordinal": 4,
+          "clientDisconnected": true,
+          "terminalFrameWritten": false,
+          "upstreamEof": true,
+          "unambiguousTail": true
+        },
+        {
+          "ordinal": 5,
+          "clientDisconnected": false,
+          "terminalFrameWritten": true,
+          "upstreamEof": true,
+          "unambiguousTail": true
+        },
+        {
+          "ordinal": 6,
+          "clientDisconnected": false,
+          "terminalFrameWritten": true,
+          "upstreamEof": true,
+          "unambiguousTail": true
+        }
+      ],
+      "summarySha256": "259f88be1bc5615c3b10dcb50d6b361830e660730a3dc14edc522cc3d0eb5698"
+    },
+    {
+      "case": "queued",
+      "mode": "interrupt-queued",
+      "nativeExitCode": 0,
+      "providerRequests": 3,
+      "syntheticMeasuredUsd": 3.6e-05,
+      "receiptCount": 3,
+      "settlementComplete": true,
+      "runtimeQuiesced": true,
+      "transcriptCoverageComplete": true,
+      "nativeTranscriptCount": 3,
+      "fatalStopReason": null,
+      "reviewRequired": true,
+      "nonfatalObservationReasons": [
+        "known_unforwarded_client_cancellation"
+      ],
+      "cancelledQueuedProviderRequests": 0,
+      "normalPostTerminalEofObservations": 0,
+      "delivery": [
+        {
+          "ordinal": 1,
+          "clientDisconnected": false,
+          "terminalFrameWritten": true,
+          "upstreamEof": true,
+          "unambiguousTail": true
+        },
+        {
+          "ordinal": 2,
+          "clientDisconnected": false,
+          "terminalFrameWritten": true,
+          "upstreamEof": true,
+          "unambiguousTail": true
+        },
+        {
+          "ordinal": 3,
+          "clientDisconnected": false,
+          "terminalFrameWritten": true,
+          "upstreamEof": true,
+          "unambiguousTail": true
+        }
+      ],
+      "summarySha256": "f3f9f22ae527865058a3853e9c18016d390917c10b52f13ae21cad9fb0c2f79f"
+    }
+  ]
+}
