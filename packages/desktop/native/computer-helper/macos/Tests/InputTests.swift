@@ -27,6 +27,7 @@ private final class InputTestTimer {
 private final class InputTestState {
     let tag: Int64 = 0x564543544f52
     var owner = inputOwner()
+    var keyboardPID: pid_t?
     var granted = true
     var denyInsideFence = false
     var epoch = 1
@@ -237,13 +238,13 @@ private final class InputFixture {
     }
 
     func keyArgs(_ combo: [String] = ["Command", "s"], repeat count: Int = 1) -> [String: JSONValue] {
-        var args = phase(); args["pid"] = .integer(Int64(state.owner.process.pid))
+        var args = phase(); args["pid"] = .integer(Int64(state.keyboardPID ?? state.owner.process.pid))
         args["combo"] = .array(combo.map(JSONValue.string)); args["repeat"] = .integer(Int64(count))
         return args
     }
 
     func typeArgs(_ text: String = "Synthetic text") -> [String: JSONValue] {
-        var args = phase(); args["pid"] = .integer(Int64(state.owner.process.pid)); args["text"] = .string(text)
+        var args = phase(); args["pid"] = .integer(Int64(state.keyboardPID ?? state.owner.process.pid)); args["text"] = .string(text)
         return args
     }
 
@@ -273,6 +274,43 @@ private final class InputFixture {
     func failure() -> String? {
         guard let result = state.results.last, case .failure(let error) = result else { return nil }
         return error.code
+    }
+
+    /// Reuses the actual injected host resolver's private proof; no request string fabricates a mapping.
+    @discardableResult
+    func hosted(_ host: HostOwnershipTestFixture, secure: Bool? = false) throws -> HostedWindowProof {
+        let session = host.session()
+        let proof = try host.proof(session: session)
+        configureHost(host, session: session, proof: proof, secure: secure)
+        return proof
+    }
+
+    func configureHost(_ host: HostOwnershipTestFixture, session: ServerSession,
+                       proof: HostedWindowProof?, secure: Bool? = false) {
+        self.session = session
+        state.owner = host.physical; state.extraOwners[host.logical.process.pid] = host.logical
+        state.keyboardPID = host.logical.process.pid
+        state.windowsOverride = host.windows
+        state.windowID = host.surface.windowID; state.windowBounds = host.surface.bounds
+        state.onScreen = host.surface.onScreen; state.minimized = host.surface.minimized; state.space = host.surface.spaceWitness
+        state.element = host.physicalRoot; state.referenceElement = host.physicalRoot
+        let observation = InputObservation(target: NativeTarget(owner: host.physical, windowID: host.surface.windowID,
+            secure: secure, hosted: proof), window: host.surface, element: host.physicalRoot, menuShortcuts: state.menuShortcuts)
+        state.pointerOverride = observation; state.focusedOverride = observation
+    }
+
+    func retainHostedCapture(_ proof: HostedWindowProof, windowCapture: Bool = false) throws -> String {
+        let id = "cap_synthetic_host_input"
+        let surface = proof.surface
+        try captures.store(CaptureGeometry(captureID: id, displayID: "1", bounds: surface.bounds,
+            nativePixelSize: CGSize(width: 600, height: 400), captureScale: 2, width: 600, height: 400, imageScale: 2,
+            sessionID: session.id, observationEpoch: session.observationEpoch, phaseRevision: session.revision,
+            configurationGeneration: captures.generation, windowID: windowCapture ? surface.windowID : nil,
+            windowFrame: windowCapture ? surface.bounds : nil, ownerProcess: windowCapture ? surface.process : nil,
+            windows: [CaptureWindowWitness(windowID: surface.windowID, process: surface.process, bounds: surface.bounds,
+                onScreen: surface.onScreen, minimized: false, alpha: surface.alpha, spaceWitness: surface.spaceWitness, hosted: proof)],
+            spaceWitness: windowCapture ? surface.spaceWitness : nil))
+        return id
     }
 }
 
@@ -885,6 +923,214 @@ func runInputTests() throws -> Int {
             translate: { code, flags in code == 7 && flags == command ? "v" : nil })
         try inputCheck(paste.semanticKeys.map { NativeOperation.key($0).typesText } == true,
                        "A physical shortcut that translates to Paste retains text-changing semantic keys for native policy")
+    }
+
+    try test {
+        for surfaceIsPhysical in [false, true] {
+            let host = HostOwnershipTestFixture(surfaceIsPhysical: surfaceIsPhysical)
+            let fake = InputFixture()
+            _ = try fake.hosted(host)
+            fake.call("input.type", fake.typeArgs("Hosted panel text")); try fake.state.runTimers(); _ = try fake.success()
+            let downs = fake.state.posts.filter { $0.kind == .unicodeDown }
+            try inputCheck(fake.session.approved == [host.logical.identity.wire] && !downs.isEmpty &&
+                           fake.state.focusedPIDs.allSatisfy { $0 == host.logical.process.pid },
+                           "Hosted text uses only the logical client's grant and requested foreground PID for either real CG-surface owner")
+            try inputCheck(downs.allSatisfy { $0.destination == host.physical.process && $0.foreground == host.logical.process } &&
+                           fake.state.releases.allSatisfy { $0.destination == host.physical.process && $0.foreground == host.logical.process },
+                           "Hosted Unicode downs and matching ups retain the physical AX destination separately from the logical foreground witness")
+            try inputCheck(fake.state.bindings.allSatisfy { $0.pid == Int(host.logical.process.pid) && $0.process == host.physical.process },
+                           "Hosted keyboard bindings never replace the physical AX process receipt with the logical grant identity")
+        }
+    }
+
+    try test {
+        for surfaceIsPhysical in [false, true] {
+            for windowCapture in [false, true] {
+                let host = HostOwnershipTestFixture(surfaceIsPhysical: surfaceIsPhysical)
+                let fake = InputFixture()
+                let proof = try fake.hosted(host)
+                let capture = try fake.retainHostedCapture(proof, windowCapture: windowCapture)
+                var args = fake.clickArgs(capture)
+                args["pid"] = .integer(Int64(host.logical.process.pid)); args["windowId"] = .string(host.surface.windowID)
+                fake.call("input.click", args); try fake.state.runTimers(); _ = try fake.success()
+                try inputCheck(fake.state.posts.filter { $0.kind == .buttonDown }.count == 1 &&
+                               fake.state.posts.allSatisfy { $0.destination == host.physical.process } &&
+                               fake.state.bindings.allSatisfy { $0.pid == Int(host.logical.process.pid) && $0.process == host.physical.process },
+                               "Hosted pointer input binds capture pixels to the actual visible surface while retaining its separate physical AX endpoint")
+                try inputCheck(fake.service.releaseAll() == 0,
+                               "A complete hosted click leaves no synthetic button held for either display or window captures")
+            }
+        }
+    }
+
+    try test {
+        let cases = ["physical-process", "logical-process", "surface-geometry", "responsibility", "responsibility-during-metadata", "expired-proof"]
+        for name in cases {
+            let host = HostOwnershipTestFixture()
+            let fake = InputFixture()
+            _ = try fake.hosted(host)
+            fake.state.onFence = {
+                guard !fake.state.focusedPIDs.isEmpty else { return }
+                fake.state.onFence = nil
+                switch name {
+                case "physical-process": host.processes[host.physical.process.pid] = inputOwner(pid: host.physical.process.pid, start: 99).process
+                case "logical-process": host.processes[host.logical.process.pid] = inputOwner(pid: host.logical.process.pid, start: 99).process
+                case "surface-geometry":
+                    let surface = host.surface
+                    host.windows = [CaptureWindowInfo(windowID: surface.windowID, pid: surface.pid,
+                        bounds: surface.bounds.offsetBy(dx: 1, dy: 0), onScreen: true, minimized: false,
+                        spaceWitness: surface.spaceWitness)]
+                case "responsibility": host.responsible = nil
+                case "responsibility-during-metadata":
+                    host.onWindows = { host.responsible = 303; host.onWindows = nil }
+                default: host.time += 50_000_001
+                }
+            }
+            fake.call("input.type", fake.typeArgs("Never post stale panel text")); try fake.state.runTimers()
+            try inputCheck(fake.failure() == "changed" && fake.state.posts.isEmpty && fake.state.releases.isEmpty,
+                           "Final hosted metadata guard refuses \(name) changed after AX observation and before any native down")
+        }
+    }
+
+    try test {
+        let host = HostOwnershipTestFixture(surfaceIsPhysical: true)
+        let fake = InputFixture()
+        let proof = try fake.hosted(host)
+        let capture = try fake.retainHostedCapture(proof, windowCapture: true)
+        fake.state.onFence = {
+            guard !fake.state.pointerPoints.isEmpty else { return }
+            fake.state.onFence = nil; host.responsible = 303
+        }
+        fake.call("input.click", fake.clickArgs(capture)); try fake.state.runTimers()
+        try inputCheck(fake.failure() == "changed" && fake.state.posts.isEmpty,
+                       "A host responsibility switch after pointer hit-test cannot reuse the captured panel's grant at posting time")
+    }
+
+    try test {
+        let host = HostOwnershipTestFixture()
+        let fake = InputFixture()
+        _ = try fake.hosted(host)
+        let id = fake.session.id, revision = fake.session.revision
+        fake.session.observationEpoch = UUID()
+        fake.call("input.type", fake.typeArgs("Retired authority text")); try fake.state.runTimers()
+        try inputCheck(fake.session.id == id && fake.session.revision == revision && fake.failure() == "changed" && fake.state.posts.isEmpty,
+                       "Reusing a wire session ID and revision never revives a hosted proof from another private observation epoch")
+    }
+
+    try test {
+        let host = HostOwnershipTestFixture()
+        let fake = InputFixture()
+        _ = try fake.hosted(host)
+        let replacementWindow = AccessibilityElement()
+        host.elementPIDs[replacementWindow.identity] = host.logical.process.pid
+        host.elementBounds[replacementWindow.identity] = host.surface.bounds
+        host.links = [HostAXBridge(logicalPID: host.logical.process.pid, logicalWindow: replacementWindow,
+            linkedRoot: host.physicalRoot, physicalRoot: host.physicalRoot)]
+        let replacement = try host.proof(session: fake.session)
+        fake.state.onFocused = { _ in
+            if fake.state.focusedPIDs.count == 2 {
+                fake.state.focusedOverride = InputObservation(target: NativeTarget(owner: host.physical,
+                    windowID: host.surface.windowID, secure: false, hosted: replacement), window: host.surface,
+                    element: host.physicalRoot, menuShortcuts: fake.state.menuShortcuts)
+            }
+        }
+        fake.call("input.key", fake.keyArgs(["Command", "a"])); try fake.state.runTimers()
+        try inputCheck(fake.failure() == "changed" && fake.state.posts.isEmpty,
+                       "The post-menu same-focus check includes the actual logical AX mapping even when physical process, element and CG rectangle stay equal")
+    }
+
+    try test {
+        let host = HostOwnershipTestFixture()
+        let fake = InputFixture()
+        let captured = try fake.hosted(host)
+        let capture = try fake.retainHostedCapture(captured, windowCapture: true)
+        let replacementWindow = AccessibilityElement()
+        host.elementPIDs[replacementWindow.identity] = host.logical.process.pid
+        host.elementBounds[replacementWindow.identity] = host.surface.bounds
+        host.links = [HostAXBridge(logicalPID: host.logical.process.pid, logicalWindow: replacementWindow,
+            linkedRoot: host.physicalRoot, physicalRoot: host.physicalRoot)]
+        let replacement = try host.proof(session: fake.session)
+        fake.state.pointerOverride = InputObservation(target: NativeTarget(owner: host.physical,
+            windowID: host.surface.windowID, secure: false, hosted: replacement), window: host.surface, element: host.physicalRoot)
+        fake.call("input.click", fake.clickArgs(capture)); try fake.state.runTimers()
+        try inputCheck(fake.failure() == "stale_frame" && fake.state.posts.isEmpty,
+                       "A captured host mapping cannot be swapped for another logical AX window while retaining the same surface and physical endpoint")
+    }
+
+    try test {
+        let host = HostOwnershipTestFixture()
+        let fake = InputFixture()
+        _ = try fake.hosted(host)
+        fake.session.approved = [host.physical.identity.wire]
+        fake.call("input.type", fake.typeArgs("No logical client grant")); try fake.state.runTimers()
+        try inputCheck(fake.failure() == "not_granted" && fake.state.posts.isEmpty,
+                       "Approving the Apple host process cannot substitute for approval of the panel's logical client")
+    }
+
+    try test {
+        let host = HostOwnershipTestFixture()
+        host.logical = inputOwner("com.microsoft.VSCode", pid: host.logical.process.pid)
+        host.install(host.logical)
+        let fake = InputFixture()
+        let proof = try fake.hosted(host)
+        fake.call("input.type", fake.typeArgs("IDE panel text")); try fake.state.runTimers()
+        try inputCheck(fake.failure() == "blocked" && fake.state.posts.isEmpty,
+                       "A hosted panel retains its logical developer client's click-only typing floor")
+        let capture = try fake.retainHostedCapture(proof)
+        fake.call("input.click", fake.clickArgs(capture)); try fake.state.runTimers(); _ = try fake.success()
+        try inputCheck(fake.state.posts.filter { $0.kind == .buttonDown }.count == 1,
+                       "Click-only policy still permits a proven hosted button click")
+    }
+
+    try test {
+        let security: [Bool?] = [true, nil]
+        for secure in security {
+            let host = HostOwnershipTestFixture()
+            let fake = InputFixture()
+            _ = try fake.hosted(host, secure: secure)
+            fake.call("input.type", fake.typeArgs("Private panel text")); try fake.state.runTimers()
+            try inputCheck(fake.failure() == "secure_field" && fake.state.posts.isEmpty,
+                           "Hosted secure or unobserved-security fields cannot receive Unicode text")
+            fake.call("input.key", fake.keyArgs(["Enter"])); try fake.state.runTimers(); _ = try fake.success()
+            try inputCheck(fake.state.posts.allSatisfy { $0.destination == host.physical.process && $0.foreground == host.logical.process },
+                           "A non-typing hosted navigation key preserves the logical grant and physical destination without waiving text protection")
+        }
+    }
+
+    try test {
+        for surfaceIsPhysical in [false, true] {
+            let host = HostOwnershipTestFixture(surfaceIsPhysical: surfaceIsPhysical)
+            let fake = InputFixture()
+            fake.configureHost(host, session: host.session(), proof: nil)
+            var forged = fake.typeArgs("Forged panel text")
+            forged["hosted"] = .object(["logicalPID": .integer(Int64(host.logical.process.pid)),
+                                        "physicalPID": .integer(Int64(host.physical.process.pid))])
+            fake.call("input.type", forged); try fake.state.runTimers()
+            try inputCheck(fake.failure() == "failed" && fake.state.focusedPIDs.isEmpty && fake.state.posts.isEmpty,
+                           "Wire-supplied host/client identifiers are refused before observation and never become a private mapping proof")
+            fake.call("input.type", fake.typeArgs("Unproven panel text")); try fake.state.runTimers()
+            try inputCheck(fake.failure() != nil && fake.state.posts.isEmpty,
+                           "A responsible PID, matching rectangle and client request cannot invent a hosted keyboard grant without a private AX bridge proof")
+            let request = fake.state.results.count
+            var args = fake.keyArgs(["Enter"]); args["pid"] = .integer(Int64(host.physical.process.pid))
+            fake.call("input.key", args); try fake.state.runTimers()
+            try inputCheck(fake.state.results.count == request + 1 && fake.failure() != nil && fake.state.posts.isEmpty,
+                           "Falling back to the physical system host as a requested app still fails its native security/ownership floor")
+        }
+    }
+
+    try test {
+        let host = HostOwnershipTestFixture()
+        host.logical = inputOwner("com.apple.Terminal", pid: host.logical.process.pid)
+        host.install(host.logical)
+        let session = host.session()
+        let proof = try host.makeResolver().resolve(window: host.surface, session: session)
+        try inputCheck(proof == nil, "An explicitly granted terminal cannot obtain a host proof through a benign Apple panel service")
+        let fake = InputFixture()
+        fake.configureHost(host, session: session, proof: proof)
+        fake.call("input.type", fake.typeArgs("Never type through a protected client")); try fake.state.runTimers()
+        try inputCheck(fake.failure() != nil && fake.state.posts.isEmpty,
+                       "A missing protected-client proof does not fall back to a surface-only input authorization")
     }
 
     return count

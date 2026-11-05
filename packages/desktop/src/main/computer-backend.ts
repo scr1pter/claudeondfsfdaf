@@ -61,7 +61,7 @@ export class NativeHelperBackend implements Computer.ComputerBackend {
       Computer.HelperFeature.literals.map((feature) => [
         feature,
         feature !== "locked" &&
-          !(feature === "background" && hello.helper.platform === "windows") &&
+          !((feature === "background" || feature === "clipboard") && hello.helper.platform === "windows") &&
           hello.features[feature] === true,
       ]),
     )
@@ -230,6 +230,16 @@ export class NativeHelperBackend implements Computer.ComputerBackend {
           : ["input.pointer", "capture.exclude"]
     await this.requireFeatures(...features)
     await this.client.request(input.op, input, deadlineMs)
+  }
+
+  async readClipboard(): Promise<string> {
+    await this.requireFeatures("clipboard")
+    return (await this.client.request<{ text: string }>("clipboard.read", {}, 2000)).text
+  }
+
+  async writeClipboard(text: string, phase: Computer.NativePhase): Promise<void> {
+    await this.requireFeatures("clipboard")
+    await this.client.request("clipboard.write", { text, ...phase }, 2000)
   }
 
   async releaseAll() {

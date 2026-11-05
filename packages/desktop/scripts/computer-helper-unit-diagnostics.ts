@@ -20,6 +20,10 @@ const knownSuites = new Set([
   "runHeldInputTests",
   "runInputTests",
   "runInputKeySafetyTests",
+  "runHostOwnershipTests",
+  "runProgramLaunchRegistryTests",
+  "runAppsTests",
+  "runClipboardTests",
 ])
 const marker = "vector-unit-diagnostic"
 
@@ -62,7 +66,8 @@ private func diagnosticReason(_ error: Error) -> String {
     let synthetic: Set<String> = ["ProtocolTestFailure", "ServerTestError", "LifecycleTestFailure",
         "PackagedSelfTestFailure", "BlocklistTestFailure", "PermissionTestFailure", "GeometryTestFailure",
         "CaptureTestFailure", "AccessibilityRegistryTestFailure", "AccessibilityTestFailure",
-        "HeldInputTestFailure", "InputTestFailure", "InputKeySafetyTestFailure"]
+        "HeldInputTestFailure", "InputTestFailure", "InputKeySafetyTestFailure",
+        "HostOwnershipTestFailure", "ProgramRegistryTestFailure", "AppsTestFailure", "ClipboardTestFailure"]
     guard synthetic.contains(String(describing: type(of: error))),
           let reason = Mirror(reflecting: error).children.first(where: {
               $0.label == "message" || $0.label == "description" || $0.label == "failed"

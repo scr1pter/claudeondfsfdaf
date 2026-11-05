@@ -107,6 +107,8 @@ function fixture(options: FakeOptions & { mode?: Computer.Mode; pointer?: "ask" 
     clipboardRead: undefined as Promise<string> | undefined,
     clipboardReads: 0,
     clipboardWrites: [] as { text: string; phase: Computer.NativePhase }[],
+    canonicalPaths: [] as string[],
+    protectedDocuments: new Set<string>(),
     always: [] as Computer.AlwaysAllowed[],
     views: [] as Computer.ComputerState[],
     aborts: [] as string[],
@@ -211,9 +213,13 @@ function fixture(options: FakeOptions & { mode?: Computer.Mode; pointer?: "ask" 
         return clock.setTimeout(callback, ms)
       },
     },
-    canonicalPath: async (file) => paths.get(file) ?? file,
+    canonicalPath: async (file) => {
+      state.canonicalPaths.push(file)
+      return paths.get(file) ?? file
+    },
     protectedPaths: ["/virtual/Vector/instructions.md"],
     protectedDirectories: ["/virtual/Vector/private"],
+    documentProtected: (file) => state.protectedDocuments.has(file),
     clipboard: {
       readText: () => {
         state.clipboardReads++
@@ -766,6 +772,46 @@ test("late input from an old task cannot enter a successor's native session", as
   expect(["stopped", "changed"]).toContain((await oldResult).code)
   expect(fake.helper.log.filter((entry) => entry.kind === "input")).toHaveLength(posted)
   expect(fake.controller.state().holder?.sessionID).toBe(NEXT.rootSessionID)
+})
+
+test("protected raw paths and canonical aliases are refused before native artifact resolution", async () => {
+  const fake = fixture()
+  await fake.acquire()
+  for (const file of [
+    "/virtual/project/AGENTS.md",
+    "/virtual/project/.vector/state.json",
+    "/virtual/Vector/instructions.md",
+    "/virtual/Vector/private/artifact.script",
+    "/virtual/configured.script",
+  ]) {
+    fake.state.protectedDocuments.add("/virtual/configured.script")
+    fake.paths.set(file, "/virtual/example.script")
+    const canonicalCount = fake.state.canonicalPaths.length
+    await expect(fake.run("prepareOpen", { app: { path: file } })).rejects.toMatchObject({ code: "blocked" })
+    expect(fake.state.canonicalPaths).toHaveLength(canonicalCount)
+  }
+  fake.paths.set("/virtual/alias", "/virtual/Vector/private/artifact.script")
+  await expect(fake.run("prepareOpen", { app: { path: "/virtual/alias" } })).rejects.toMatchObject({ code: "blocked" })
+  await expect(fake.run("focusWindow", { app: { path: "/virtual/alias" } })).rejects.toMatchObject({ code: "blocked" })
+  expect(fake.sent.filter((request) => request.op === "apps.resolve")).toEqual([])
+})
+
+test("prepared programs recheck changed path protection before fingerprinting or spending approval", async () => {
+  const fake = fixture()
+  await fake.acquire()
+  const prepared = await fake.run("prepareOpen", { app: { path: "/virtual/example.script" } })
+  if (prepared.kind !== "program") throw new Error("Expected a prepared virtual program")
+  const requestID = await fake.programProof(prepared.program)
+  const resolutions = fake.sent.filter((request) => request.op === "apps.resolve").length
+  fake.paths.set(prepared.program.path, "/virtual/Vector/private/replacement.script")
+  await expect(fake.run("openApp", { app: { program: prepared.program }, requestID })).rejects.toMatchObject({
+    code: "blocked",
+  })
+  expect(fake.sent.filter((request) => request.op === "apps.resolve")).toHaveLength(resolutions)
+  expect(fake.sent.filter((request) => request.op === "program.launch")).toEqual([])
+  fake.paths.delete(prepared.program.path)
+  const opened = await fake.run("openApp", { app: { program: prepared.program }, requestID })
+  expect("launched" in opened && opened.launched).toBe(true)
 })
 
 test("a canonical script needs its own once-only program proof and exposes no native token", async () => {

@@ -358,5 +358,117 @@ func runAccessibilityRegistryTests() throws -> Int {
         _ = try registry.register(element: RegistryElement(), witness: witness, snapshot: last)
         try accessibilityRegistryThrows { _ = try registry.resolveElement(first.elementID, session: session, witness: witness) }
     }
+    try test {
+        let host = HostOwnershipTestFixture()
+        let session = host.session()
+        let proof = try host.proof(session: session)
+        let witness = AccessibilityWitness(process: host.physical.process, windowID: proof.surface.windowID,
+            windowFrame: proof.surface.bounds, onScreen: proof.surface.onScreen,
+            spaceWitness: proof.surface.spaceWitness, hosted: proof)
+        let registry = accessibilityTestRegistry()
+        let element = RegistryElement()
+        let record = try registry.register(element: element, witness: witness, snapshot: registry.beginSnapshot(session: session))
+        let resolved = try registry.resolve(record.ref, session: session, witness: witness)
+        try accessibilityRegistryCheck(resolved.element === element && resolved.ref == record.ref &&
+            resolved.witness.process == host.physical.process && resolved.witness.hosted?.surface.process == host.logical.process &&
+            resolved.witness.hosted?.logicalOwner.process == host.logical.process,
+            "A reference keeps its actual AX endpoint, real CG surface and separate logical grant without replacing any private witness")
+    }
+    try test {
+        let host = HostOwnershipTestFixture()
+        let session = host.session()
+        let original = try host.proof(session: session)
+        let registry = accessibilityTestRegistry()
+        let element = RegistryElement()
+        let firstWitness = AccessibilityWitness(process: host.physical.process, windowID: original.surface.windowID,
+            windowFrame: original.surface.bounds, onScreen: original.surface.onScreen,
+            spaceWitness: original.surface.spaceWitness, hosted: original)
+        let first = try registry.register(element: element, witness: firstWitness, snapshot: registry.beginSnapshot(session: session))
+        host.time += 60_000_000
+        let refreshed = try host.proof(session: session)
+        let freshWitness = AccessibilityWitness(process: host.physical.process, windowID: refreshed.surface.windowID,
+            windowFrame: refreshed.surface.bounds, onScreen: refreshed.surface.onScreen,
+            spaceWitness: refreshed.surface.spaceWitness, hosted: refreshed)
+        let fresh = try registry.register(element: element, witness: freshWitness, snapshot: registry.beginSnapshot(session: session))
+        try accessibilityRegistryCheck(first.ref != fresh.ref && first.elementID == fresh.elementID,
+            "Fresh proof timestamps do not replace the same native element identity across snapshots")
+        try accessibilityRegistryThrows { _ = try registry.resolve(first.ref, session: session, witness: freshWitness) }
+    }
+    try test {
+        let host = HostOwnershipTestFixture(surfaceIsPhysical: true)
+        var session = host.session()
+        let otherProcess = HelperProcessIdentity(pid: 303, parentPID: 1, startSeconds: 20, startMicroseconds: 30,
+                                                executable: "/virtual/OtherClient.app/Contents/MacOS/OtherClient")
+        let other = NativeOwner(identity: MacAppIdentity(bundleId: "example.host.registry-client", teamId: "ABCDEFGHIJ",
+            apple: false, system: false, verified: true, name: "Other approved client", path: otherProcess.executable,
+            pid: Int(otherProcess.pid)), process: otherProcess, childShell: false)
+        session.approved.append(other.identity.wire)
+        let original = try host.proof(session: session)
+        let registry = accessibilityTestRegistry()
+        let snapshot = try registry.beginSnapshot(session: session)
+        let element = RegistryElement()
+        let oldWitness = AccessibilityWitness(process: host.physical.process, windowID: original.surface.windowID,
+            windowFrame: original.surface.bounds, spaceWitness: original.surface.spaceWitness, hosted: original)
+        let old = try registry.register(element: element, witness: oldWitness, snapshot: snapshot)
+        host.logical = other; host.install(other); host.responsible = otherProcess.pid
+        host.elementPIDs[host.logicalWindow.identity] = otherProcess.pid
+        host.links = [HostAXBridge(logicalPID: otherProcess.pid, logicalWindow: host.logicalWindow,
+                                  linkedRoot: host.physicalRoot, physicalRoot: host.physicalRoot)]
+        let remapped = try host.proof(session: session)
+        let newWitness = AccessibilityWitness(process: host.physical.process, windowID: remapped.surface.windowID,
+            windowFrame: remapped.surface.bounds, spaceWitness: remapped.surface.spaceWitness, hosted: remapped)
+        let fresh = try registry.register(element: element, witness: newWitness, snapshot: snapshot)
+        try accessibilityRegistryCheck(old.ref != fresh.ref && old.elementID != fresh.elementID &&
+            old.witness.process == fresh.witness.process && old.witness.windowFrame == fresh.witness.windowFrame,
+            "A logical-client remap retires stable identity despite unchanged native handle, host process and visible geometry")
+        try accessibilityRegistryThrows { _ = try registry.resolve(old.ref, session: session, witness: newWitness) }
+        try accessibilityRegistryThrows { _ = try registry.resolveElement(old.elementID, session: session, witness: newWitness) }
+    }
+    try test {
+        let host = HostOwnershipTestFixture()
+        let session = host.session()
+        let original = try host.proof(session: session)
+        let registry = accessibilityTestRegistry()
+        let snapshot = try registry.beginSnapshot(session: session)
+        let element = RegistryElement()
+        let oldWitness = AccessibilityWitness(process: host.physical.process, windowID: original.surface.windowID,
+            windowFrame: original.surface.bounds, spaceWitness: original.surface.spaceWitness, hosted: original)
+        let old = try registry.register(element: element, witness: oldWitness, snapshot: snapshot)
+        let newRoot = AccessibilityElement()
+        host.elementPIDs[newRoot.identity] = host.physical.process.pid
+        host.elementBounds[newRoot.identity] = original.surface.bounds
+        host.links = [HostAXBridge(logicalPID: host.logical.process.pid, logicalWindow: host.logicalWindow,
+                                  linkedRoot: newRoot, physicalRoot: newRoot)]
+        let proof = try host.proof(session: session)
+        let witness = AccessibilityWitness(process: host.physical.process, windowID: proof.surface.windowID,
+            windowFrame: proof.surface.bounds, spaceWitness: proof.surface.spaceWitness, hosted: proof)
+        let fresh = try registry.register(element: element, witness: witness, snapshot: snapshot)
+        try accessibilityRegistryCheck(old.elementID != fresh.elementID,
+            "An actual CFEqual root replacement cannot retain an old hosted element identity just because all labels and PIDs match")
+        try accessibilityRegistryThrows { _ = try registry.resolve(old.ref, session: session, witness: witness) }
+    }
+    try test {
+        let host = HostOwnershipTestFixture()
+        let session = host.session()
+        let proof = try host.proof(session: session)
+        let surface = proof.surface
+        let registry = accessibilityTestRegistry()
+        let snapshot = try registry.beginSnapshot(session: session)
+        for witness in [
+            AccessibilityWitness(process: host.logical.process, windowID: surface.windowID, windowFrame: surface.bounds,
+                                 spaceWitness: surface.spaceWitness, hosted: proof),
+            AccessibilityWitness(process: host.physical.process, windowID: "wrong-surface", windowFrame: surface.bounds,
+                                 spaceWitness: surface.spaceWitness, hosted: proof),
+            AccessibilityWitness(process: host.physical.process, windowID: surface.windowID, windowFrame: surface.bounds.offsetBy(dx: 1, dy: 0),
+                                 spaceWitness: surface.spaceWitness, hosted: proof),
+        ] {
+            try accessibilityRegistryThrows { _ = try registry.register(element: RegistryElement(), witness: witness, snapshot: snapshot) }
+        }
+        let witness = AccessibilityWitness(process: host.physical.process, windowID: surface.windowID,
+            windowFrame: surface.bounds, spaceWitness: surface.spaceWitness, hosted: proof)
+        var changed = session; changed.observationEpoch = UUID()
+        let next = try registry.beginSnapshot(session: changed)
+        try accessibilityRegistryThrows { _ = try registry.register(element: RegistryElement(), witness: witness, snapshot: next) }
+    }
     return count
 }

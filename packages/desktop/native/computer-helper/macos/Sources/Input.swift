@@ -20,6 +20,8 @@ struct InputPostedEvent: Equatable {
     var pixelScroll = false
     var unicode: [UInt16] = []
     var destination: HelperProcessIdentity? = nil
+    /// Hosted AX endpoints can differ from the actual foreground application; both are private witnesses.
+    var foreground: HelperProcessIdentity? = nil
     var tag: Int64 = 0
 }
 
@@ -298,7 +300,8 @@ final class InputService {
             for units in Self.unicodeChunks(request.text) {
                 let observation = try keyboard(flight, chord: nil)
                 var down = InputPostedEvent(kind: .unicodeDown)
-                down.unicode = units; down.destination = observation.target.owner.process; down.tag = backend.tag
+                down.unicode = units; down.destination = observation.target.owner.process
+                down.foreground = observation.target.grantOwner.process; down.tag = backend.tag
                 let up = Self.up(down, kind: .unicodeUp)
                 try scoped(flight) {
                     try self.journal.press(lease: flight.lease, id: "unicode", up: up) { try self.post(down, flight) }
@@ -409,10 +412,14 @@ final class InputService {
         guard observation.window.windowID == previous.windowID else {
             throw Self.failure(frame.windowID == nil ? "changed" : "occluded", "Another native window covers the captured target.")
         }
-        guard observation.target.owner.process == previous.process else { throw Self.stale }
+        let surface = observation.target.hosted?.surface.process ?? observation.target.owner.process
+        guard surface == previous.process else { throw Self.stale }
+        if let hosted = previous.hosted {
+            guard let current = observation.target.hosted, hosted.sameMapping(current) else { throw Self.stale }
+        }
         guard observation.window.bounds == previous.bounds, observation.window.onScreen == previous.onScreen,
               observation.window.alpha == previous.alpha, observation.window.spaceWitness == previous.spaceWitness else { throw Self.stale }
-        var expected = request.expected[index]; expected.process = previous.process
+        var expected = request.expected[index]; expected.process = observation.target.owner.process
         let target = try backend.bind(observation, expected, flight.session)
         try flight.policy.requireTarget(target, operation: .pointer, expected: expected)
         guard flight.session.mode == "foreground" else { throw Self.failure("needs_foreground", "This input needs the real pointer.") }
@@ -428,7 +435,7 @@ final class InputService {
         guard let pid = flight.request.pid else { throw Self.changed }
         var observation = try backend.focused(pid, flight.session)
         try coherent(observation)
-        guard observation.target.owner.process.pid == pid else { throw Self.changed }
+        guard observation.target.grantOwner.process.pid == pid else { throw Self.changed }
         try flight.policy.requireTarget(observation.target, operation: .observe)
         let menus = chord == nil ? nil : try backend.menus?(observation, flight.session) ?? observation.menuShortcuts
         if chord != nil && backend.menus != nil {
@@ -473,7 +480,8 @@ final class InputService {
             if key.isModifier { flags |= key.flags }
             var event = InputPostedEvent(kind: .keyDown)
             event.keyCode = key.code; event.flags = key.isModifier ? flags : chord.flags
-            event.destination = current.target.owner.process; event.tag = backend.tag
+            event.destination = current.target.owner.process; event.foreground = current.target.grantOwner.process
+            event.tag = backend.tag
             var up = Self.up(event, kind: .keyUp)
             up.flags = key.isModifier ? before : flags
             try scoped(flight) {
@@ -538,8 +546,9 @@ final class InputService {
             guard let window = windows.first(where: { $0.windowID == prepared.window.windowID }) else { throw Self.changed }
             actual = window
         }
-        let owner = try backend.owner(actual.pid)
-        try flight.policy.requireTarget(NativeTarget(owner: owner, windowID: actual.windowID, secure: prepared.target.secure), operation: .pointer)
+        let owner = try backend.owner(prepared.target.owner.process.pid)
+        try flight.policy.requireTarget(NativeTarget(owner: owner, windowID: actual.windowID, secure: prepared.target.secure,
+            hosted: prepared.target.hosted), operation: .pointer)
         if actual.windowID != prepared.window.windowID {
             throw Self.failure(flight.preparedFrame?.windowID == nil ? "changed" : "occluded", "The native input target changed.")
         }
@@ -549,10 +558,16 @@ final class InputService {
               actual.minimized == prepared.window.minimized, actual.spaceWitness == prepared.window.spaceWitness else {
             throw flight.preparedPoint == nil ? Self.changed : Self.stale
         }
+        if let proof = prepared.target.hosted {
+            guard proof.surface.process == (try backend.owner(actual.pid)).process,
+                  proof.surface.bounds == actual.bounds, proof.surface.onScreen == actual.onScreen,
+                  proof.surface.alpha == actual.alpha, proof.surface.spaceWitness == actual.spaceWitness else { throw Self.changed }
+        }
     }
 
     private func sameFocus(_ first: InputObservation, _ second: InputObservation) -> Bool {
         guard first.target.owner.process == second.target.owner.process, first.window.windowID == second.window.windowID,
+              first.target.grantOwner.process == second.target.grantOwner.process, first.target.hosted == second.target.hosted,
               first.window.bounds == second.window.bounds, first.window.spaceWitness == second.window.spaceWitness else { return false }
         if let first = first.element, let second = second.element { return AccessibilityElement.equivalent(first, second) }
         return first.element == nil && second.element == nil
@@ -579,8 +594,9 @@ final class InputService {
         guard current >= flight.started, current < flight.deadline else { throw Self.failure("timeout", "The input operation timed out.") }
     }
     private func coherent(_ observation: InputObservation) throws {
-        guard observation.window.pid == observation.target.owner.process.pid,
-              observation.target.owner.identity.pid == Int(observation.window.pid),
+        let surface = observation.target.hosted?.surface.process ?? observation.target.owner.process
+        guard observation.window.pid == surface.pid,
+              observation.target.owner.identity.pid == Int(observation.target.owner.process.pid),
               observation.target.windowID == observation.window.windowID, CapturePrivacy.valid(observation.window.bounds) else { throw Self.changed }
     }
     private func catalog() throws -> [CaptureWindowInfo] {
@@ -604,6 +620,7 @@ final class InputService {
         default: break
         }
         result.destination = kind == .buttonUp ? nil : event.destination; result.tag = event.tag
+        result.foreground = event.foreground
         return result
     }
     static func unicodeChunks(_ text: String) -> [[UInt16]] {

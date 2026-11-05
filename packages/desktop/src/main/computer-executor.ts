@@ -3,6 +3,7 @@ import path from "node:path"
 import { Schema } from "effect"
 import { ComputerCredential } from "@vectordevai/core/computer/credential"
 import { ComputerProgram } from "@vectordevai/core/computer/program"
+import { ComputerSensitive } from "@vectordevai/core/computer/sensitive"
 import { Computer } from "@vectordevai/schema/computer"
 import { ComputerApps } from "@vectordevai/schema/computer-apps"
 import { Hands } from "@vectordevai/schema/hands"
@@ -280,11 +281,24 @@ export function createComputerExecutor(input: {
     return pending
   }
 
+  function launchPathFloor(file: string) {
+    if (ComputerSensitive.protectedDocument(file, input) || input.documentProtected?.(file))
+      throw new ComputerError("blocked", `${Hands.NAME} cannot open that target.`)
+  }
+
+  async function canonicalLaunchPath(flight: Flight, file: string) {
+    // Refuse both spellings before the native resolver can read or fingerprint an artifact.
+    launchPathFloor(file)
+    const canonical = await after(flight, input.canonicalPath(file))
+    if (!canonical) throw new ComputerError("app_not_found", "That target could not be resolved.")
+    launchPathFloor(canonical)
+    return canonical
+  }
+
   async function resolve(flight: Flight, query: OpenTarget, installed = true): Promise<Computer.HelperApp> {
     live(flight)
     if ("path" in query) {
-      const canonical = await after(flight, input.canonicalPath(query.path))
-      if (!canonical) throw new ComputerError("app_not_found", "That app could not be resolved.")
+      const canonical = await canonicalLaunchPath(flight, query.path)
       const resolution = await after(flight, input.backend.resolveLaunch(canonical))
       if (resolution.kind === "protected") throw new ComputerError("blocked", `${Hands.NAME} cannot open that target.`)
       if (resolution.kind !== "app") throw new ComputerError("not_granted", "Prepare this program before opening it.")
@@ -515,8 +529,7 @@ export function createComputerExecutor(input: {
       if (app?.identity.verified) return { kind: "app" as const, identity: app.identity }
       throw new ComputerError("app_not_found", "The installed artifact path is unavailable.")
     }
-    const canonical = await after(flight, input.canonicalPath(file))
-    if (!canonical) throw new ComputerError("app_not_found", "That target could not be resolved.")
+    const canonical = await canonicalLaunchPath(flight, file)
     const resolved = await after(flight, input.backend.resolveLaunch(canonical))
     if (resolved.kind === "protected") throw new ComputerError("blocked", `${Hands.NAME} cannot open that target.`)
     if (resolved.kind === "app") return resolved
@@ -538,7 +551,10 @@ export function createComputerExecutor(input: {
       throw new ComputerError("not_granted", "Prepare this program before opening it.")
     await programCeiling(flight, previous)
     await barrier(flight, { action: "open_app" })
-    const resolved = await after(flight, input.backend.resolveLaunch(previous.path))
+    const canonical = await canonicalLaunchPath(flight, previous.path)
+    if (canonical !== previous.path)
+      throw new ComputerError("changed", "The program changed before it could be opened.")
+    const resolved = await after(flight, input.backend.resolveLaunch(canonical))
     if (resolved.kind !== "program")
       throw new ComputerError("changed", "The program changed before it could be opened.")
     const program = ComputerProgram.publicLaunch(resolved.program)

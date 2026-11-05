@@ -379,5 +379,82 @@ func runGeometryTests() throws -> Int {
         }
         count += 1
     }
+    do {
+        let host = HostOwnershipTestFixture()
+        let session = host.session()
+        let proof = try host.proof(session: session)
+        let surface = proof.surface
+        let witness = CaptureWindowWitness(windowID: surface.windowID, process: surface.process, bounds: surface.bounds,
+            onScreen: surface.onScreen, alpha: surface.alpha, spaceWitness: surface.spaceWitness, hosted: proof)
+        let registry = CaptureRegistry()
+        try registry.store(geometryRecord(session: session.id, epoch: session.observationEpoch, revision: session.revision,
+            bounds: surface.bounds, width: 300, height: 200, captureScale: 1,
+            windowID: surface.windowID, windowFrame: surface.bounds, process: surface.process, windows: [witness]))
+        let retained = try registry.get("frame", sessionID: session.id, observationEpoch: session.observationEpoch)
+        try geometryCheck(retained.ownerProcess == host.logical.process && retained.windows[0].process == host.logical.process &&
+                          retained.windows[0].hosted?.physicalOwner.process == host.physical.process,
+                          "Capture geometry preserves the real CG surface separately from its physical AX endpoint and logical grant owner")
+        host.time += 60_000_000
+        try geometryCheck(!proof.validAuthority(session: session, physicalOwner: host.physical, windowID: surface.windowID),
+                          "Retaining metadata must never prolong the proof's short native authority lifetime")
+        let refreshed = try host.proof(session: session)
+        let current = CaptureWindowWitness(windowID: surface.windowID, process: surface.process, bounds: surface.bounds,
+            onScreen: surface.onScreen, alpha: surface.alpha, spaceWitness: surface.spaceWitness, hosted: refreshed)
+        try geometryCheck(witness == current, "A freshly re-proven identical mapping retains the same captured geometry witness")
+        count += 1
+    }
+    do {
+        let host = HostOwnershipTestFixture(surfaceIsPhysical: true)
+        var session = host.session()
+        let process = geometryProcess(pid: 303, path: "/virtual/Other.app/Contents/MacOS/Other")
+        let identity = MacAppIdentity(bundleId: "example.host.other", teamId: "ABCDEFGHIJ", apple: false, system: false,
+                                     verified: true, name: "Other client", path: process.executable, pid: Int(process.pid))
+        let logical = NativeOwner(identity: identity, process: process, childShell: false)
+        session.approved.append(identity.wire)
+        let original = try host.proof(session: session)
+        let surface = original.surface
+        let before = CaptureWindowWitness(windowID: surface.windowID, process: surface.process, bounds: surface.bounds,
+            onScreen: surface.onScreen, alpha: surface.alpha, spaceWitness: surface.spaceWitness, hosted: original)
+        host.logical = logical; host.install(logical); host.responsible = process.pid
+        host.elementPIDs[host.logicalWindow.identity] = process.pid
+        host.links = [HostAXBridge(logicalPID: process.pid, logicalWindow: host.logicalWindow,
+                                  linkedRoot: host.physicalRoot, physicalRoot: host.physicalRoot)]
+        let remapped = try host.proof(session: session)
+        let after = CaptureWindowWitness(windowID: surface.windowID, process: surface.process, bounds: surface.bounds,
+            onScreen: surface.onScreen, alpha: surface.alpha, spaceWitness: surface.spaceWitness, hosted: remapped)
+        try geometryCheck(before.process == after.process && before.bounds == after.bounds && before != after,
+                          "An approved-client remap remains detectable when the physical host and visible geometry are identical")
+        count += 1
+    }
+    do {
+        let host = HostOwnershipTestFixture()
+        let session = host.session()
+        let proof = try host.proof(session: session)
+        let surface = proof.surface
+        let invalid = [
+            CaptureWindowWitness(windowID: "another-window", process: surface.process, bounds: surface.bounds,
+                                 spaceWitness: surface.spaceWitness, hosted: proof),
+            CaptureWindowWitness(windowID: surface.windowID, process: host.physical.process, bounds: surface.bounds,
+                                 spaceWitness: surface.spaceWitness, hosted: proof),
+            CaptureWindowWitness(windowID: surface.windowID, process: surface.process, bounds: surface.bounds.offsetBy(dx: 1, dy: 0),
+                                 spaceWitness: surface.spaceWitness, hosted: proof),
+            CaptureWindowWitness(windowID: surface.windowID, process: surface.process, bounds: surface.bounds,
+                                 onScreen: false, spaceWitness: surface.spaceWitness, hosted: proof),
+        ]
+        let registry = CaptureRegistry()
+        for (index, witness) in invalid.enumerated() {
+            try geometryThrows("stale_frame") {
+                try registry.store(geometryRecord(id: "bad-host-\(index)", session: session.id, epoch: session.observationEpoch,
+                    revision: session.revision, windows: [witness]))
+            }
+        }
+        let valid = CaptureWindowWitness(windowID: surface.windowID, process: surface.process, bounds: surface.bounds,
+            onScreen: surface.onScreen, alpha: surface.alpha, spaceWitness: surface.spaceWitness, hosted: proof)
+        try geometryThrows("stale_frame") {
+            try registry.store(geometryRecord(id: "wrong-host-era", session: session.id, epoch: UUID(),
+                                              revision: session.revision, windows: [valid]))
+        }
+        count += 1
+    }
     return count
 }

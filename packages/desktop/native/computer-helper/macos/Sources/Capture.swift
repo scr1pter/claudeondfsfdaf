@@ -30,12 +30,18 @@ struct CaptureWindowInfo {
     var nonApplicationHost: HelperProcessIdentity? = nil
     var captureScale: Double? = nil
     var sourceAvailable = true
+    var hosted: HostedWindowProof? = nil
+
+    var target: NativeTarget? {
+        if let hosted { return NativeTarget(owner: hosted.physicalOwner, windowID: windowID, hosted: hosted) }
+        return owner.map { NativeTarget(owner: $0, windowID: windowID) }
+    }
 }
 
 struct CaptureInventory {
     let displays: [CaptureDisplayInfo]
     /// Native front-to-back order. Overlay windows remain in this inventory, but never in source or masks.
-    let windows: [CaptureWindowInfo]
+    var windows: [CaptureWindowInfo]
     var nativeContent: SCShareableContent? = nil
 }
 
@@ -91,7 +97,7 @@ enum CapturePrivacy {
                     throw failure("changed", "A native window owner changed.")
                 }
                 notification = owner.identity.bundleId.lowercased() == "com.apple.notificationcenterui"
-                allowed = !vector && !notification && policy.mayIncludeInDisplay(NativeTarget(owner: owner, windowID: window.windowID))
+                allowed = !vector && !notification && window.target.map(policy.mayIncludeInDisplay) == true
             } else {
                 guard let host = window.nonApplicationHost, host.pid == window.pid else {
                     throw failure("unavailable", "A visible native window owner could not be verified.")
@@ -156,11 +162,16 @@ struct CaptureBackend {
     let content: (@escaping (Result<CaptureInventory, ServerFailure>) -> Void) -> Void
     let screenshot: (CaptureImageRequest, @escaping (Result<CGImage, ServerFailure>) -> Void) -> Void
     var windowState: ((CaptureWindowInfo, CaptureInventory, OperationContext) -> Bool?)? = nil
+    var hostOwnership: ((CaptureWindowInfo, ServerSession, OperationContext) throws -> HostedWindowProof?)? = nil
 
     static var system: CaptureBackend {
         var backend = CaptureBackend(preflight: { CGPreflightScreenCaptureAccess() }, displays: CaptureService.nativeDisplays,
             content: CaptureService.nativeContent, screenshot: CaptureService.nativeScreenshot)
         backend.windowState = CaptureService.nativeMinimized
+        let hosts = HostOwnershipResolver()
+        backend.hostOwnership = { window, session, operation in
+            try hosts.resolve(window: window, session: session, isCurrent: operation.isCurrent)
+        }
         return backend
     }
 }
@@ -322,6 +333,7 @@ final class CaptureService {
         let space: String?
         let scale: Double?
         let sourceAvailable: Bool
+        let hosted: HostedWindowProof?
     }
     private struct DisplayFingerprint: Equatable {
         let id: String
@@ -349,13 +361,27 @@ final class CaptureService {
                 onScreen: $0.onScreen, minimized: $0.minimized, alpha: $0.alpha, layer: $0.layer,
                 identity: $0.owner?.identity, process: $0.owner?.process, childShell: $0.owner?.childShell,
                 regular: $0.regularOwner, host: $0.nonApplicationHost, space: $0.spaceWitness, scale: $0.captureScale,
-                sourceAvailable: $0.sourceAvailable) }
+                sourceAvailable: $0.sourceAvailable, hosted: $0.hosted) }
         }
     }
 
-    private func prepare(_ args: CaptureArguments, _ inventory: CaptureInventory, _ session: ServerSession,
+    private func prepare(_ args: CaptureArguments, _ sourceInventory: CaptureInventory, _ session: ServerSession,
                          _ policy: SessionPolicy, _ generation: UInt64, _ operation: OperationContext) throws -> Work {
+        var inventory = sourceInventory
         guard Self.validDisplays(inventory.displays), inventory.windows.count <= 4096 else { throw Self.stale }
+        if let resolve = backend.hostOwnership {
+            let started = DispatchTime.now().uptimeNanoseconds
+            inventory.windows = try inventory.windows.map { original in
+                guard operation.isCurrent(), DispatchTime.now().uptimeNanoseconds - started < 750_000_000 else { throw Self.stale }
+                if !original.onScreen && original.windowID != args.window { return original }
+                if original.windowID != args.window && original.target.map(policy.mayIncludeInDisplay) == true { return original }
+                guard let proof = try resolve(original, session, operation) else { return original }
+                var window = original
+                window.hosted = proof
+                window.owner = proof.surface.process == proof.physicalOwner.process ? proof.physicalOwner : proof.logicalOwner
+                return window
+            }
+        }
         let window = args.window.flatMap { id in inventory.windows.first { $0.windowID == id } }
         if args.window != nil && window == nil { throw CapturePrivacy.failure("capture_unavailable", "The native window is unavailable.") }
         let display: CaptureDisplayInfo?
@@ -384,7 +410,8 @@ final class CaptureService {
             }
             guard CapturePrivacy.valid(window.bounds) else { throw Self.stale }
             guard window.sourceAvailable else { throw Self.stale }
-            try policy.requireTarget(NativeTarget(owner: owner, windowID: window.windowID), operation: .capture)
+            guard let target = window.target else { throw Self.stale }
+            try policy.requireTarget(target, operation: .capture)
             guard let minimized = window.minimized ?? backend.windowState?(window, inventory, operation) else {
                 throw CapturePrivacy.failure("unavailable", "The native window state could not be verified.")
             }
@@ -416,7 +443,8 @@ final class CaptureService {
             guard !session.overlayWindowIds.contains(item.windowID), let process = item.owner?.process ?? item.nonApplicationHost else { return nil }
             if !item.onScreen && item.minimized == nil && item.windowID != window?.windowID { return nil }
             return CaptureWindowWitness(windowID: item.windowID, process: process, bounds: item.bounds,
-                onScreen: item.onScreen, minimized: item.minimized ?? paused, alpha: item.alpha, spaceWitness: item.spaceWitness)
+                onScreen: item.onScreen, minimized: item.minimized ?? paused, alpha: item.alpha, spaceWitness: item.spaceWitness,
+                hosted: item.hosted)
         }
         let geometry = CaptureGeometry(captureID: "cap_" + UUID().uuidString.lowercased(), displayID: display.id,
             bounds: bounds, nativePixelSize: CGSize(width: bounds.width * captureScale, height: bounds.height * captureScale),

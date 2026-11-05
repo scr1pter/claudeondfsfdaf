@@ -51,6 +51,28 @@ func runBlocklistTests() throws -> Int {
     let rules = try NativeBlocklist.generated()
 
     try test {
+        let identity = blocklistIdentity(pid: nil)
+        try SessionPolicy(session: blocklistSession([identity])).requireLaunchIdentity(identity)
+        try blocklistRefusal("not_granted") {
+            try SessionPolicy(session: blocklistSession([])).requireLaunchIdentity(identity)
+        }
+        try blocklistRefusal("not_granted") {
+            try SessionPolicy(session: blocklistSession([identity])).requireLaunchIdentity(blocklistIdentity(team: "ZZZZZZZZZZ", pid: nil))
+        }
+        try blocklistRefusal("paused") {
+            try SessionPolicy(session: blocklistSession([identity], paused: true)).requireLaunchIdentity(identity)
+        }
+        let terminal = blocklistIdentity("com.apple.Terminal", team: nil, apple: true, system: true,
+            path: "/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal", pid: nil)
+        try blocklistRefusal("protected") {
+            try SessionPolicy(session: blocklistSession([terminal])).requireLaunchIdentity(terminal)
+        }
+        try blocklistRefusal("unavailable") {
+            try SessionPolicy(session: blocklistSession([identity])).requireLaunchIdentity(blocklistIdentity(verified: false, pid: nil))
+        }
+    }
+
+    try test {
         let source = try JSONDecoder().decode(JSONValue.self, from: Data(Blocklist.json.utf8))
         guard let rows = source["entries"]?.arrayValue else { throw BlocklistTestFailure(message: "Missing generated rows") }
         try blocklistCheck(rules.entries.map(\.key) == rows.compactMap { $0["key"]?.stringValue },

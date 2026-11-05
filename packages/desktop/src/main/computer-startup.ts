@@ -766,6 +766,7 @@ export async function startComputer(deps: ComputerStartupDeps): Promise<Computer
       readText: () => deps.clipboard.readText(),
       writeText: (text, phase) => {
         controller.assertNativePhase(phase)
+        if (backend.capabilities().features.clipboard === true) return backend.writeClipboard(text, phase)
         deps.clipboard.writeText(text)
       },
     },

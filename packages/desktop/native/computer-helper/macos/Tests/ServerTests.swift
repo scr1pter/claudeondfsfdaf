@@ -37,6 +37,9 @@ private final class ServerFixture {
   var events: [Event] = []
   var releases = 0
   var observationInvalidations = 0
+  var cleanupReasons: [String] = []
+  var cleanupWork: [() -> Void] = []
+  var trace: [String] = []
   var stopped = false
   var nextId = 0
   var server: Dispatcher!
@@ -44,10 +47,18 @@ private final class ServerFixture {
   init(responsible: Bool = true, pendingLimitBytes: Int = 2 * maxFrameBytes) {
     server = Dispatcher(
       responsible: responsible, architecture: "arm64", operatingSystem: "virtual test OS",
-      send: { [weak self] in self?.responses.append($0) },
+      send: { [weak self] response in
+        self?.responses.append(response)
+        self?.trace.append("response:\(response.value["id"]?.intValue ?? -1)")
+      },
       event: { [weak self] in self?.events.append($0) },
       releaseAll: { [weak self] in self?.releases += 1; return 0 },
       observationsInvalidated: { [weak self] in self?.observationInvalidations += 1 },
+      cleanupRequested: { [weak self] reason in
+        self?.cleanupReasons.append(reason)
+        self?.trace.append("cleanup:\(reason)")
+        self?.cleanupWork.append { [weak self] in self?.trace.append("cleanup-finished:\(reason)") }
+      },
       stopped: { [weak self] in self?.stopped = true },
       execute: { $0() }, deliver: { $0() },
       schedule: clock.schedule, pendingLimitBytes: pendingLimitBytes
@@ -443,6 +454,196 @@ func runServerTests() throws -> Int {
     try serverExpect(context?.isCurrent() == false, "cancellation invalidates the old native callback")
     let freshRequest = try fake.request("input.key", fake.phase())
     try serverExpect(fake.result(freshRequest)?["ok"]?.boolValue == true && posts == 1, "cancel does not invent a process-wide stop latch for later requests")
+  }
+
+  try test {
+    let fake = ServerFixture()
+    _ = try fake.begin()
+    let firstEpoch = fake.server.sessionSnapshot()?.observationEpoch
+    try serverExpect(fake.cleanupReasons.isEmpty, "an initial accepted session has no prior clipboard loan to replace")
+    let sameID = try fake.begin()
+    try serverExpect(fake.cleanupReasons == ["replacement"] && fake.server.sessionSnapshot()?.observationEpoch != firstEpoch,
+                     "an accepted begin with the same wire ID and revision requests cleanup for the retired private authority")
+    let cleanup = fake.trace.firstIndex(of: "cleanup:replacement")
+    let reply = fake.trace.firstIndex(of: "response:\(sameID)")
+    try serverExpect(cleanup != nil && reply != nil && cleanup! < reply! && fake.cleanupWork.count == 1,
+                     "replacement cleanup is enqueued before acknowledgment without waiting for pasteboard restoration")
+    let different = try fake.begin("different-task")
+    try serverExpect(fake.cleanupReasons == ["replacement", "replacement"] && fake.result(different)?["ok"]?.boolValue == true,
+                     "a different session ID receives the same explicit replacement boundary")
+    try serverExpect(!fake.trace.contains(where: { $0.hasPrefix("cleanup-finished:") }),
+                     "the dispatcher does not synchronously run queued clipboard providers or restoration work")
+  }
+
+  try test {
+    let fake = ServerFixture()
+    let invalidInitial = try fake.request("session.begin", ["sessionId": .string("bad")])
+    try serverExpect(fake.result(invalidInitial)?["code"]?.stringValue == "failed" && fake.cleanupReasons.isEmpty,
+                     "a malformed initial begin cannot request cleanup or create task authority")
+    _ = try fake.begin()
+    let epoch = fake.server.sessionSnapshot()?.observationEpoch
+    let invalidReplacement = try fake.begin(approved: [.object(["platform": .string("macos")])])
+    var background: [String: JSONValue] = [
+      "sessionId": .string("replacement"), "mode": .string("background"), "approved": .array([]),
+      "vectorPids": .array([]), "vectorWindowIds": .array([]), "overlayWindowIds": .array([]),
+      "escStops": .bool(false), "stopChord": .string("Command+Shift+Escape"), "heartbeatMs": .integer(2000),
+    ]
+    background["phaseRevision"] = .integer(0); background["paused"] = .bool(false)
+    let unsupported = try fake.request("session.begin", background)
+    try serverExpect(fake.result(invalidReplacement)?["code"]?.stringValue == "failed" &&
+                     fake.result(unsupported)?["code"]?.stringValue == "unsupported_action" && fake.cleanupReasons.isEmpty &&
+                     fake.server.sessionSnapshot()?.observationEpoch == epoch,
+                     "invalid or unsupported replacement begins leave the current loan and private session epoch intact")
+    let unbound = ServerFixture(responsible: false)
+    _ = try unbound.begin()
+    try serverExpect(unbound.cleanupReasons.isEmpty, "a responsibility refusal cannot manufacture a cleanup boundary")
+  }
+
+  try test {
+    let fake = ServerFixture()
+    _ = try fake.begin()
+    var late: Dispatcher.Completion?
+    fake.server.register(op: "input.hold", deadlineMs: 1000) { _, _, done in late = done }
+    let hold = try fake.request("input.hold", fake.phase())
+    _ = try fake.request("session.update", ["sessionId": .string("native-test"), "phaseRevision": .integer(1), "paused": .bool(true)])
+    late?(.failure(ServerFailure(code: "failed", message: "A retired operation failed.")))
+    _ = try fake.request("input.releaseAll")
+    fake.server.notifyDisplayChange()
+    _ = try fake.request("heartbeat")
+    try serverExpect(fake.result(hold)?["code"]?.stringValue == "changed" && fake.cleanupReasons.isEmpty,
+                     "ordinary phase updates, input release, geometry changes and late retired failures never restore a pending clipboard loan")
+  }
+
+  try test {
+    let fake = ServerFixture()
+    _ = try fake.begin()
+    let bad = try fake.request("session.end", ["sessionId": .string("native-test")])
+    try serverExpect(fake.result(bad)?["code"]?.stringValue == "failed" && fake.cleanupReasons.isEmpty,
+                     "a malformed end cannot retire clipboard ownership")
+    let end = try fake.request("session.end")
+    let cleanup = fake.trace.firstIndex(of: "cleanup:end")
+    let reply = fake.trace.firstIndex(of: "response:\(end)")
+    try serverExpect(fake.cleanupReasons == ["end"] && fake.server.sessionSnapshot() == nil &&
+                     cleanup != nil && reply != nil && cleanup! < reply!,
+                     "an accepted end queues owned clipboard cleanup before acknowledging the retired session")
+  }
+
+  try test {
+    let fake = ServerFixture()
+    _ = try fake.begin()
+    let malformed: [[String: JSONValue]] = [["target": .integer(-1)], ["target": .number(1.5)],
+                                          ["target": .bool(true)], ["unexpected": .bool(true)]]
+    for invalid in malformed {
+      let request = try fake.request("cancel", invalid)
+      try serverExpect(fake.result(request)?["code"]?.stringValue == "failed", "malformed cancel arguments are refused")
+    }
+    try serverExpect(fake.cleanupReasons.isEmpty, "malformed cancellation cannot end a clipboard loan")
+    let idle = try fake.request("cancel")
+    let unknown = try fake.request("cancel", ["target": .integer(99999)])
+    try serverExpect(fake.cleanupReasons == ["cancel", "cancel"] && fake.result(idle)?["ok"]?.boolValue == true &&
+                     fake.result(unknown)?["ok"]?.boolValue == true,
+                     "every valid explicit cancel is a clipboard cleanup boundary, including idle and unknown request targets")
+  }
+
+  try test {
+    let fake = ServerFixture()
+    _ = try fake.begin()
+    var completion: Dispatcher.Completion?
+    fake.server.register(op: "unit.clipboard-pending", deadlineMs: 1000, requiresSession: false) { request, _, done in
+      fake.trace.append("start:\(request.id)"); completion = done
+    }
+    let active = try fake.request("unit.clipboard-pending")
+    let queued = try fake.request("unit.clipboard-pending")
+    _ = try fake.request("cancel", ["target": .integer(Int64(active))])
+    let cleanup = fake.trace.firstIndex(of: "cleanup:cancel")
+    let next = fake.trace.firstIndex(of: "start:\(queued)")
+    try serverExpect(fake.cleanupReasons == ["cancel"] && cleanup != nil && next != nil && cleanup! < next!,
+                     "cancellation enqueues clipboard cleanup before a successor handler can be admitted")
+    completion?(.success(ServerReply()))
+  }
+
+  try test {
+    let fake = ServerFixture()
+    _ = try fake.begin()
+    var late: Dispatcher.Completion?
+    fake.server.register(op: "unit.clipboard-error", deadlineMs: 1000, requiresSession: false) { _, _, done in late = done }
+    let request = try fake.request("unit.clipboard-error")
+    late?(.failure(ServerFailure(code: "blocked", message: "A fixed native failure.")))
+    late?(.failure(ServerFailure(code: "failed", message: "A duplicate late failure.")))
+    let cleanup = fake.trace.firstIndex(of: "cleanup:error")
+    let reply = fake.trace.firstIndex(of: "response:\(request)")
+    try serverExpect(fake.cleanupReasons == ["error"] && fake.result(request)?["code"]?.stringValue == "blocked" &&
+                     cleanup != nil && reply != nil && cleanup! < reply!,
+                     "a native handler failure enqueues exactly one cleanup before its error response; duplicate callbacks have no authority")
+  }
+
+  try test {
+    let fake = ServerFixture()
+    _ = try fake.begin()
+    var late: Dispatcher.Completion?
+    fake.server.register(op: "input.hold", deadlineMs: 100) { _, _, done in late = done }
+    let request = try fake.request("input.hold", fake.phase())
+    fake.clock.advance(99)
+    try serverExpect(fake.cleanupReasons.isEmpty, "an operation whose deadline has not arrived retains its clipboard loan")
+    fake.clock.advance(1)
+    late?(.failure(ServerFailure(code: "failed", message: "A late timed-out failure.")))
+    let cleanup = fake.trace.firstIndex(of: "cleanup:timeout")
+    let reply = fake.trace.firstIndex(of: "response:\(request)")
+    try serverExpect(fake.cleanupReasons == ["timeout"] && fake.result(request)?["code"]?.stringValue == "timeout" &&
+                     cleanup != nil && reply != nil && cleanup! < reply!,
+                     "a native deadline requests cleanup before reporting timeout and fences the old failure callback")
+  }
+
+  try test {
+    let fake = ServerFixture()
+    _ = try fake.begin()
+    fake.server.register(op: "unit.clipboard-read-timeout", deadlineMs: 100, requiresSession: false) { _, _, _ in }
+    let request = try fake.request("unit.clipboard-read-timeout")
+    fake.clock.advance(100)
+    try serverExpect(fake.cleanupReasons == ["timeout"] && fake.result(request)?["code"]?.stringValue == "timeout",
+                     "a stalled observation also requests clipboard cleanup without pretending it was an input mutation")
+  }
+
+  try test {
+    let fake = ServerFixture()
+    _ = try fake.begin()
+    fake.clock.advance(4999)
+    _ = try fake.request("heartbeat")
+    fake.clock.advance(4999)
+    try serverExpect(fake.cleanupReasons.isEmpty, "fresh heartbeats cancel the superseded clipboard cleanup deadline")
+    fake.clock.advance(1)
+    fake.clock.advance(20000)
+    try serverExpect(fake.cleanupReasons == ["heartbeat"],
+                     "heartbeat loss retires the clipboard loan once at the actual silence deadline")
+  }
+
+  try test {
+    let fake = ServerFixture()
+    fake.server.pauseForPhysicalInput()
+    try serverExpect(fake.cleanupReasons.isEmpty, "physical events without an active session have no clipboard cleanup authority")
+    _ = try fake.begin()
+    fake.server.pauseForPhysicalInput(); fake.server.pauseForPhysicalInput()
+    try serverExpect(fake.cleanupReasons == ["physical-input"], "repeated physical events coalesce at one active-session take-over boundary")
+    fake.server.close(); fake.server.pauseForPhysicalInput()
+    try serverExpect(fake.cleanupReasons == ["physical-input", "close"], "a late physical callback cannot enqueue cleanup after helper close")
+  }
+
+  try test {
+    let fake = ServerFixture()
+    _ = try fake.begin()
+    var late: Dispatcher.Completion?
+    fake.server.register(op: "unit.clipboard-close", deadlineMs: 100, requiresSession: false) { _, _, done in late = done }
+    let request = try fake.request("unit.clipboard-close")
+    fake.server.close(reason: "eof"); fake.server.close(reason: "parent-death")
+    late?(.failure(ServerFailure(code: "failed", message: "A late closed-worker failure.")))
+    fake.clock.advance(10000)
+    try serverExpect(fake.cleanupReasons == ["close"] && fake.result(request)?["code"]?.stringValue == "stopped",
+                     "helper close requests cleanup once and cancels all later operation/heartbeat cleanup callbacks")
+    let shutdown = ServerFixture()
+    _ = try shutdown.begin()
+    let stop = try shutdown.request("shutdown")
+    try serverExpect(shutdown.cleanupReasons == ["close"] && shutdown.result(stop)?["ok"]?.boolValue == true && shutdown.stopped,
+                     "shutdown uses the same owned cleanup boundary before its acknowledgment and exit callback")
   }
 
   return count

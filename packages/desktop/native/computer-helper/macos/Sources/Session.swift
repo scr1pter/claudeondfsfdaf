@@ -20,6 +20,27 @@ struct SessionPolicy {
 
     static func validApprovals(_ values: [JSONValue]) -> Bool { decodeApproved(values) != nil }
 
+    /// The caller supplies fresh static Security evidence, never a wire identity or an invented process witness.
+    func requireLaunchIdentity(_ identity: MacAppIdentity) throws {
+        guard identity.pid == nil, identity.verified, identity.apple || identity.teamId.map(MacAppIdentity.validTeam) == true,
+              !identity.system || identity.apple, let path = identity.path, MacAppIdentity.canonicalPathShape(path),
+              MacAppIdentity(wire: identity.wire) != nil else {
+            throw refusal("unavailable", "The app's static identity could not be verified.")
+        }
+        let category = blocklist.category(identity)
+        let protectedRoot = path == "/System" || path.hasPrefix("/System/") ||
+            path == "/usr/libexec" || path.hasPrefix("/usr/libexec/")
+        if blocklist.never.contains(category) || category == "system-ui" ||
+            (protectedRoot && !(identity.apple && identity.system)) {
+            throw refusal("protected", "This native app is protected.")
+        }
+        guard approved.contains(where: { $0.verified && $0.key == identity.key && $0.apple == identity.apple &&
+            $0.teamId == identity.teamId }) else {
+            throw refusal("not_granted", "This app is not approved for the current task.")
+        }
+        guard !session.paused else { throw refusal("paused", "The computer session is paused.") }
+    }
+
     static func decodeApproved(_ values: [JSONValue]) -> [MacAppIdentity]? {
         guard values.count <= 4096 else { return nil }
         var result: [MacAppIdentity] = []
@@ -42,7 +63,14 @@ struct SessionPolicy {
     /// The caller must re-observe native ownership immediately before mutation and put the actual mutation
     /// inside OperationContext.withCurrent. Expected witnesses originate in native observations, not model text.
     func requireTarget(_ target: NativeTarget, operation: NativeOperation, expected: NativeExpectedTarget? = nil) throws {
-        let owner = target.owner
+        guard coherent(target.owner) else { throw refusal("changed", "The native process identity changed.") }
+        if let hosted = target.hosted {
+            guard target.owner.process.pid != helperPID, !session.vectorPids.contains(Int(target.owner.process.pid)),
+                  hosted.validAuthority(session: session, physicalOwner: target.owner, windowID: target.windowID) else {
+                throw refusal("changed", "The native panel ownership changed.")
+            }
+        }
+        let owner = target.grantOwner
         guard coherent(owner) else { throw refusal("changed", "The native process identity changed.") }
         let category = blocklist.category(owner.identity, childShell: owner.childShell == true)
         if never(owner, category: category) || category == "system-ui" || excluded(target) {
@@ -59,7 +87,7 @@ struct SessionPolicy {
         }
         if let expected {
             if let pid = expected.pid, pid != Int(owner.process.pid) { throw refusal("changed", "The native owner changed.") }
-            if let process = expected.process, process != owner.process { throw refusal("changed", "The native process changed.") }
+            if let process = expected.process, process != target.owner.process { throw refusal("changed", "The native process changed.") }
             if let window = expected.windowID, window != target.windowID { throw refusal("changed", "The native window changed.") }
             if let ref = expected.ref, ref != target.ref { throw refusal("stale_ref", "The native element reference changed.") }
             if let element = expected.elementID, element != target.elementID { throw refusal("stale_ref", "The native element changed.") }
@@ -84,7 +112,11 @@ struct SessionPolicy {
     }
 
     func disclosure(_ target: NativeTarget) -> NativeDisclosure {
-        excluded(target) ? .structural : disclosure(target.owner)
+        if target.hosted != nil {
+            do { try requireTarget(target, operation: .observe); return .content }
+            catch { return .structural }
+        }
+        return excluded(target) ? .structural : disclosure(target.owner)
     }
 
     /// OS furniture is the sole unapproved display exemption. Its actual Apple/platform proof must hold;
@@ -97,7 +129,13 @@ struct SessionPolicy {
         return matchesApproval(owner)
     }
 
-    func mayIncludeInDisplay(_ target: NativeTarget) -> Bool { !excluded(target) && mayIncludeInDisplay(target.owner) }
+    func mayIncludeInDisplay(_ target: NativeTarget) -> Bool {
+        if target.hosted != nil {
+            do { try requireTarget(target, operation: .capture); return true }
+            catch { return false }
+        }
+        return !excluded(target) && mayIncludeInDisplay(target.owner)
+    }
 
     private func coherent(_ owner: NativeOwner) -> Bool {
         let process = owner.process

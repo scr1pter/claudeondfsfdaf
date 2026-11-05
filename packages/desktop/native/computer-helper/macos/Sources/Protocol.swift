@@ -169,6 +169,11 @@ final class FrameReader {
     private var discarded: UInt64 = 0
 
     func consume(_ data: Data, onRequest: (Request) -> Void, onFailure: (Response) -> Void) {
+        consume(data, onSizedRequest: { request, _ in onRequest(request) }, onFailure: onFailure)
+    }
+
+    /// The bounded ingress queue accounts for actual wire bytes, including whitespace and the frame header.
+    func consume(_ data: Data, onSizedRequest: (Request, Int) -> Void, onFailure: (Response) -> Void) {
         var cursor = data.startIndex
         while cursor < data.endIndex {
             if discarded > 0 {
@@ -201,11 +206,12 @@ final class FrameReader {
             cursor += count
             if body.count != expected { continue }
             let complete = body
+            let wireBytes = complete.count + 4
             body = Data()
             expected = nil
             do {
                 guard String(data: complete, encoding: .utf8) != nil else { throw ProtocolError.invalidEnvelope }
-                onRequest(try JSONDecoder().decode(Request.self, from: complete))
+                onSizedRequest(try JSONDecoder().decode(Request.self, from: complete), wireBytes)
             } catch ProtocolError.invalidRequest(let id, let code) {
                 onFailure(.failure(id: id, code: code, error: "The protocol request is malformed."))
             } catch {

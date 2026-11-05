@@ -105,9 +105,11 @@ enum AccessibilityNative {
               let element else { throw unavailable }; return try wrap(element, expectedPID: expected)
     }
     static func focused(_ app: AccessibilityElement) throws -> AccessibilityElement {
-        let native = try handle(app), expected = try pid(app); var raw: CFTypeRef?
+        let native = try handle(app); var raw: CFTypeRef?
         guard AXUIElementCopyAttributeValue(native, kAXFocusedUIElementAttribute as CFString, &raw) == .success,
-              let raw, CFGetTypeID(raw) == AXUIElementGetTypeID() else { throw unavailable }; return try wrap(raw as! AXUIElement, expectedPID: expected)
+              let raw, CFGetTypeID(raw) == AXUIElementGetTypeID() else { throw unavailable }
+        // Return only the typed handle. The service verifies its actual PID and a hosted bridge before reading content.
+        return try wrap(raw as! AXUIElement)
     }
     static func containingWindow(_ element: AccessibilityElement) throws -> AccessibilityElement? {
         let native = try handle(element), process = try witness(native)

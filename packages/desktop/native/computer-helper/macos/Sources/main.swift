@@ -1,6 +1,7 @@
 import AppKit
 import CoreGraphics
 import Darwin
+import Dispatch
 import Foundation
 
 private let architecture: String = {
@@ -27,6 +28,9 @@ private final class HelperServer {
     private var watchers: HelperWorkerWatchers?
     private var dispatcher: Dispatcher?
     private var pendingErrors = 0
+    private var pendingRequests = 0
+    private var pendingRequestBytes = 0
+    private let requestIngress = DispatchQueue(label: "ai.vector.computer.request-ingress")
     private let errorOutput = DispatchQueue(label: "ai.vector.computer.protocol-errors")
     private let reader = FrameReader()
     private let writer = FrameWriter(descriptor: 3)
@@ -35,6 +39,11 @@ private final class HelperServer {
     private lazy var captureService = CaptureService(registry: captureRegistry)
     private lazy var accessibilityService = AccessibilityService(captures: captureRegistry)
     private lazy var inputService = InputService(captures: captureRegistry, accessibility: accessibilityService)
+    private lazy var appsService = AppsService()
+    private let clipboardService = ClipboardService()
+    private let clipboardLifecycle = DispatchQueue(label: "ai.vector.computer.clipboard-lifecycle")
+    private let lifecycleCleanup = DispatchQueue(label: "ai.vector.computer.lifecycle-cleanup")
+    private var cleanupFailed = false
     private var displayCallbackRegistered = false
     private var activeSpaceObserver: NSObjectProtocol?
 
@@ -52,6 +61,9 @@ private final class HelperServer {
         let capture = captureService
         let accessibility = accessibilityService
         let inputs = inputService
+        let apps = appsService
+        let clipboard = clipboardService
+        let clipboardQueue = clipboardLifecycle
         let server = Dispatcher(
             responsible: HelperLifecycle.isSelfResponsible(),
             architecture: architecture,
@@ -65,7 +77,9 @@ private final class HelperServer {
             observationsInvalidated: {
                 capture.invalidateDisplays()
                 accessibility.invalidateObservations()
+                apps.invalidateObservations()
             },
+            cleanupRequested: { _ in clipboardQueue.async { clipboard.cleanup() } },
             stopped: { [weak self] in self?.finish(code: 0) },
             sendImage: { [weak self] response, image in
                 guard let self else { return }
@@ -74,6 +88,8 @@ private final class HelperServer {
             features: {
                 capture.features().merging(accessibility.features()) { _, current in current }
                     .merging(inputs.features()) { _, current in current }
+                    .merging(apps.features()) { _, current in current }
+                    .merging(clipboard.features()) { _, current in current }
             },
             permissions: { permissions.status() }
         )
@@ -112,6 +128,33 @@ private final class HelperServer {
                 inputs.handle(op: request.op, args: request.args, context: context, completion: done)
             }
         }
+        server.register(op: "apps.list", deadlineMs: 5000, requiresSession: false) { request, context, done in
+            apps.list(request.args, context: context, completion: done)
+        }
+        server.register(op: "apps.resolve", deadlineMs: 10000) { request, context, done in
+            apps.resolve(request.args, context: context, completion: done)
+        }
+        server.register(op: "app.activate", deadlineMs: 10000) { request, context, done in
+            apps.activate(request.args, context: context, completion: done)
+        }
+        server.register(op: "app.launch", deadlineMs: 10000) { request, context, done in
+            apps.launch(request.args, context: context, completion: done)
+        }
+        server.register(op: "window.focus", deadlineMs: 10000) { request, context, done in
+            apps.focus(request.args, context: context, completion: done)
+        }
+        server.register(op: "program.launch", deadlineMs: 10000) { request, context, done in
+            apps.launchProgram(request.args, context: context, completion: done)
+        }
+        server.register(op: "cursor.position", deadlineMs: 5000, requiresSession: false) { request, context, done in
+            apps.cursor(request.args, context: context, completion: done)
+        }
+        server.register(op: "clipboard.read", deadlineMs: 2000) { request, context, done in
+            clipboardQueue.async { clipboard.read(request.args, context: context, completion: done) }
+        }
+        server.register(op: "clipboard.write", deadlineMs: 2000) { request, context, done in
+            clipboardQueue.async { clipboard.write(request.args, context: context, completion: done) }
+        }
         dispatcher = server
         inputs.reconcileOnStart()
         watchers = try HelperLifecycle.installWorkerWatchers(parent: parent) { [weak self] in
@@ -124,7 +167,7 @@ private final class HelperServer {
         source = input
         // The server remains retained throughout the application run loop and exits only through finish.
         lock.lock()
-        guard !ending else { lock.unlock(); input.resume(); return }
+        guard !ending else { lock.unlock(); input.cancel(); input.resume(); return }
         let registered = CGDisplayRegisterReconfigurationCallback(Self.displayCallback, Unmanaged.passUnretained(self).toOpaque()) == .success
         displayCallbackRegistered = registered
         lock.unlock()
@@ -143,10 +186,12 @@ private final class HelperServer {
     private func read() {
         var buffer = [UInt8](repeating: 0, count: 64 * 1024)
         while true {
+            lock.lock(); let stopped = ending; lock.unlock()
+            if stopped { return }
             let count = buffer.withUnsafeMutableBytes { Darwin.read(3, $0.baseAddress, $0.count) }
             if count > 0 {
-                reader.consume(Data(buffer.prefix(count)), onRequest: { [weak self] request in
-                    self?.dispatcher?.receive(request)
+                reader.consume(Data(buffer.prefix(count)), onSizedRequest: { [weak self] request, bytes in
+                    self?.enqueue(request, bytes: bytes)
                 }, onFailure: { [weak self] failure in self?.malformed(failure) })
                 continue
             }
@@ -164,6 +209,31 @@ private final class HelperServer {
 
     private func write(_ response: Response) {
         do { try writer.write(response) } catch { finish(code: 1) }
+    }
+
+    private func enqueue(_ request: Request, bytes: Int) {
+        lock.lock()
+        guard !ending else { lock.unlock(); return }
+        let remaining = (2 * (maxFrameBytes + 4)).subtractingReportingOverflow(pendingRequestBytes)
+        guard pendingRequests < 16, bytes > 0, bytes <= maxFrameBytes + 4,
+              pendingRequestBytes >= 0, !remaining.overflow, remaining.partialValue >= 0,
+              bytes <= remaining.partialValue else {
+            lock.unlock()
+            finish(code: 1)
+            return
+        }
+        pendingRequests += 1
+        pendingRequestBytes += bytes
+        lock.unlock()
+        // Never let Dispatcher admission (or a native commit holding its lock) prevent fd3 EOF detection.
+        requestIngress.async {
+            self.lock.lock(); let live = !self.ending; self.lock.unlock()
+            if live { self.dispatcher?.receive(request) }
+            self.lock.lock()
+            self.pendingRequests -= 1
+            self.pendingRequestBytes -= bytes
+            self.lock.unlock()
+        }
     }
 
     private func malformed(_ response: Response) {
@@ -191,22 +261,43 @@ private final class HelperServer {
         let removeActiveSpaceObserver = activeSpaceObserver
         activeSpaceObserver = nil
         lock.unlock()
-        // Dispatcher revocation invokes the native release hook before this process exits or closes its channel.
-        dispatcher?.close(reason: "lifecycle")
-        permissionService.close()
-        captureService.close()
-        accessibilityService.close()
-        inputService.close()
-        if removeDisplayCallback {
-            _ = CGDisplayRemoveReconfigurationCallback(Self.displayCallback, Unmanaged.passUnretained(self).toOpaque())
-        }
-        if let removeActiveSpaceObserver {
-            NSWorkspace.shared.notificationCenter.removeObserver(removeActiveSpaceObserver)
-        }
         source?.cancel()
-        watchers?.finish()
-        _ = Darwin.close(3)
-        Darwin._exit(code)
+        // Arm this before touching Dispatcher or service locks: synchronous native pasteboard IPC may stall
+        // while holding its commit fence. The fuse remains independent of that RPC and all cleanup queues.
+        DispatchQueue.global(qos: .userInteractive).asyncAfter(deadline: .now() + .milliseconds(750)) {
+            Darwin._exit(code == 0 ? 1 : code)
+        }
+        let finished = DispatchGroup()
+        finished.enter()
+        DispatchQueue.global(qos: .userInitiated).async {
+            self.clipboardService.close { restored in
+                self.lock.lock(); self.cleanupFailed = !restored; self.lock.unlock()
+                finished.leave()
+            }
+        }
+        finished.enter()
+        lifecycleCleanup.async {
+            // Revoke each native service's own admission before Dispatcher close can wait on an in-flight RPC.
+            self.inputService.close()
+            self.appsService.close()
+            self.dispatcher?.close(reason: "lifecycle")
+            self.permissionService.close()
+            self.captureService.close()
+            self.accessibilityService.close()
+            if removeDisplayCallback {
+                _ = CGDisplayRemoveReconfigurationCallback(Self.displayCallback, Unmanaged.passUnretained(self).toOpaque())
+            }
+            if let removeActiveSpaceObserver {
+                NSWorkspace.shared.notificationCenter.removeObserver(removeActiveSpaceObserver)
+            }
+            finished.leave()
+        }
+        finished.notify(queue: lifecycleCleanup) {
+            self.lock.lock(); let failed = self.cleanupFailed; self.lock.unlock()
+            self.watchers?.finish()
+            _ = Darwin.close(3)
+            Darwin._exit(failed && code == 0 ? 1 : code)
+        }
     }
 }
 

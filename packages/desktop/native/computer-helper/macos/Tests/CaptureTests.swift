@@ -123,7 +123,8 @@ private final class CaptureFixture {
     let registry: CaptureRegistry
     let service: CaptureService
 
-    init(windows: [CaptureWindowInfo]? = nil, display: CaptureDisplayInfo = captureDisplay(), paused: Bool = false) {
+    init(windows: [CaptureWindowInfo]? = nil, display: CaptureDisplayInfo = captureDisplay(), paused: Bool = false,
+         hostOwnership: ((CaptureWindowInfo, ServerSession, OperationContext) throws -> HostedWindowProof?)? = nil) {
         let owner = captureOwner("example.capture.allowed", pid: 101)
         let registry = CaptureRegistry()
         let state = CaptureTestState(inventory: CaptureInventory(displays: [display], windows: windows ?? [
@@ -155,7 +156,8 @@ private final class CaptureFixture {
                         catch { completion(.failure(ServerFailure(code: "failed", message: "Synthetic bitmap failed."))) }
                     }
                 },
-                windowState: { _, _, _ in state.windowStateReads += 1; return state.windowStateResult }
+                windowState: { _, _, _ in state.windowStateReads += 1; return state.windowStateResult },
+                hostOwnership: hostOwnership
             ),
             execute: { $0() },
             encode: { work in
@@ -799,5 +801,93 @@ func runCaptureTests() throws -> Int {
                          "Out-of-bounds, empty and fractional zoom crops never reach the screenshot backend")
     }
 
+    try test {
+        let host = HostOwnershipTestFixture()
+        var surface = host.surface
+        surface.owner = host.logical; surface.regularOwner = true
+        host.window = surface; host.windows = [surface]
+        let resolver = host.makeResolver()
+        let fake = CaptureFixture(windows: [surface], display: captureDisplay(bounds: surface.bounds),
+            hostOwnership: { window, session, operation in
+                try resolver.resolve(window: window, session: session, isCurrent: operation.isCurrent)
+            })
+        fake.session = host.session()
+        fake.capture(fake.args(target: ["windowId": .string(surface.windowID)]))
+        let reply = try fake.success()
+        guard let id = reply.fields["captureId"]?.stringValue else { throw CaptureTestFailure(message: "Missing hosted capture id") }
+        let frame = try fake.registry.get(id, sessionID: fake.session.id, observationEpoch: fake.session.observationEpoch)
+        try captureCheck(frame.ownerProcess == host.logical.process && frame.windows.first?.process == host.logical.process &&
+                         frame.windows.first?.hosted?.physicalOwner.process == host.physical.process &&
+                         frame.windows.first?.hosted?.logicalOwner.process == host.logical.process,
+                         "An explicit client-owned CG window retains a separate physical AX host proof without rewriting its actual capture owner")
+        try captureCheck(fake.state.screenshotRequests.first?.includedWindowIDs == [surface.windowID],
+                         "Hosted captures continue to name the real WindowServer surface, never an invented logical window id")
+    }
+
+    try test {
+        let host = HostOwnershipTestFixture(surfaceIsPhysical: true)
+        var surface = host.surface
+        surface.owner = host.physical; surface.regularOwner = false
+        host.window = surface; host.windows = [surface]
+        let resolver = host.makeResolver()
+        let fake = CaptureFixture(windows: [surface], display: captureDisplay(bounds: surface.bounds),
+            hostOwnership: { window, session, operation in
+                try resolver.resolve(window: window, session: session, isCurrent: operation.isCurrent)
+            })
+        fake.session = host.session()
+        fake.capture()
+        let reply = try fake.success()
+        try captureCheck(reply.fields["masked"] == .array([]) && reply.fields["hiddenCount"] == .integer(0),
+                         "A proven panel for the approved client is visible even when its real CG owner is the normally protected system host")
+        let request = fake.state.screenshotRequests.first
+        try captureCheck(request?.includedWindowIDs == [surface.windowID] &&
+                         request?.inventory.windows.first?.owner?.process == host.physical.process,
+                         "Including an approved hosted surface never replaces the native capture process with its logical grant owner")
+    }
+
+    try test {
+        let host = HostOwnershipTestFixture(surfaceIsPhysical: true)
+        var surface = host.surface
+        surface.owner = host.physical; surface.regularOwner = false
+        host.window = surface; host.windows = [surface]
+        let resolver = host.makeResolver()
+        let fake = CaptureFixture(windows: [surface], display: captureDisplay(bounds: surface.bounds),
+            hostOwnership: { window, session, operation in
+                try resolver.resolve(window: window, session: session, isCurrent: operation.isCurrent)
+            })
+        fake.session = host.session()
+        let replacement = captureOwner("example.host.second", pid: 303)
+        fake.session.approved.append(replacement.identity.wire)
+        fake.state.holdScreenshot = true
+        fake.capture()
+        guard let request = fake.state.screenshotRequests.first, let complete = fake.state.pendingScreenshot else {
+            throw CaptureTestFailure(message: "Missing pending hosted screenshot")
+        }
+        host.logical = replacement; host.install(replacement); host.responsible = replacement.process.pid
+        host.elementPIDs[host.logicalWindow.identity] = replacement.process.pid
+        host.links = [HostAXBridge(logicalPID: replacement.process.pid, logicalWindow: host.logicalWindow,
+                                  linkedRoot: host.physicalRoot, physicalRoot: host.physicalRoot)]
+        complete(.success(try captureBitmap(width: request.width, height: request.height)))
+        try captureCheck(fake.failure() == "stale_frame", "A panel client remap while capturing invalidates the image even when physical PID, CG id and bounds stay unchanged")
+    }
+
+    try test {
+        let host = HostOwnershipTestFixture(surfaceIsPhysical: true)
+        let security = captureOwner("com.apple.SecurityAgent", pid: 202, apple: true, system: true, team: nil,
+            path: "/System/Library/CoreServices/SecurityAgent.app/Contents/MacOS/SecurityAgent")
+        host.physical = security; host.install(security)
+        var surface = host.surface
+        surface.owner = security; surface.regularOwner = false
+        host.window = surface; host.windows = [surface]
+        let resolver = host.makeResolver()
+        let fake = CaptureFixture(windows: [surface], display: captureDisplay(bounds: surface.bounds),
+            hostOwnership: { window, session, operation in
+                try resolver.resolve(window: window, session: session, isCurrent: operation.isCurrent)
+            })
+        fake.session = host.session()
+        fake.capture(fake.args(target: ["windowId": .string(surface.windowID)]))
+        try captureCheck(fake.failure() == "protected" && fake.state.screenshotRequests.isEmpty,
+                         "A responsible approved client and matching AX roots never exempt a real security host from capture refusal")
+    }
     return count
 }

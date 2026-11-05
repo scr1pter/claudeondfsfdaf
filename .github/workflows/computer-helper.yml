@@ -181,6 +181,11 @@ jobs:
       - name: Run required grant-free native checks
         timeout-minutes: 8
         run: bun --no-env-file ./scripts/computer-helper-selftest-node.ts --platform darwin --bin native/out/darwin/VectorComputer.app/Contents/MacOS/VectorComputer --tests native/out/darwin/tests --privileged off --report "$RUNNER_TEMP/computer-darwin-core.json"
+      - name: Diagnose failed build-host native units separately
+        if: failure()
+        continue-on-error: true
+        timeout-minutes: 8
+        run: bun --no-env-file ./scripts/computer-helper-unit-diagnostics.ts
       - name: Run explicitly isolated privileged scenarios
         if: ${{ inputs['isolated-desktop'] }}
         timeout-minutes: 5

@@ -1711,6 +1711,9 @@ export interface ComputerBackend {
   resolveRef(ref: string): Promise<HitResult>
   perform(ref: string, action: string, phase?: NativePhase, expected?: NativeElementTarget): Promise<{ took?: boolean }>
   setValue(ref: string, value: string, phase?: NativePhase, expected?: NativeElementTarget): Promise<{ took?: boolean }>
+  /** Optional native clipboard support preserves non-text types around task-owned writes. */
+  readClipboard?(): Promise<string>
+  writeClipboard?(text: string, phase: NativePhase): Promise<void>
   input(op: InputOp, deadlineMs: number): Promise<void>
   releaseAll(): Promise<number>
   cancel(id?: string): Promise<void>

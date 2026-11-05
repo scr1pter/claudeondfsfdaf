@@ -73,9 +73,11 @@ struct CaptureWindowWitness: Equatable {
     let minimized: Bool
     let alpha: Double
     let spaceWitness: String?
+    let hosted: HostedWindowProof?
 
     init(windowID: String, process: HelperProcessIdentity, bounds: CGRect,
-         onScreen: Bool = true, minimized: Bool = false, alpha: Double = 1, spaceWitness: String? = nil) {
+         onScreen: Bool = true, minimized: Bool = false, alpha: Double = 1, spaceWitness: String? = nil,
+         hosted: HostedWindowProof? = nil) {
         self.windowID = windowID
         self.process = process
         self.bounds = bounds
@@ -83,10 +85,11 @@ struct CaptureWindowWitness: Equatable {
         self.minimized = minimized
         self.alpha = alpha
         self.spaceWitness = spaceWitness
+        self.hosted = hosted
     }
 }
 
-/// Metadata only: neither image bytes nor reusable permission grants belong in this registry.
+/// Native geometry and private ownership witnesses only; no image bytes or reusable app approvals.
 /// Bounds are already global Quartz top-left points, including negative display origins.
 struct CaptureGeometry {
     let captureID: String
@@ -204,11 +207,33 @@ struct CaptureGeometry {
               ownerProcess.map(Self.validProcess) ?? true,
               windows.allSatisfy({ Self.validString($0.windowID) && Self.validProcess($0.process) &&
                   Self.validRect($0.bounds) && $0.alpha.isFinite && (0...1).contains($0.alpha) &&
-                  ($0.spaceWitness.map(Self.validString) ?? true) }) else { return false }
+                  ($0.spaceWitness.map(Self.validString) ?? true) && storedHostMapping($0) }) else { return false }
         // A small bounded window catalog is enough for stale checks, even on unusually busy desktops.
-        let metadataBytes = windows.reduce(0) { $0 + $1.windowID.utf8.count + $1.process.executable.utf8.count +
-            ($1.spaceWitness?.utf8.count ?? 0) + 96 }
+        let metadataBytes = windows.reduce(0) { total, window in
+            let hostBytes = window.hosted.map { proof in
+                [proof.physicalOwner, proof.logicalOwner].reduce(0) { bytes, owner in
+                    bytes + owner.process.executable.utf8.count + owner.identity.bundleId.utf8.count +
+                        owner.identity.name.utf8.count + (owner.identity.teamId?.utf8.count ?? 0) + 128
+                }
+            } ?? 0
+            return total + window.windowID.utf8.count + window.process.executable.utf8.count +
+                (window.spaceWitness?.utf8.count ?? 0) + hostBytes + 96
+        }
         return metadataBytes <= 1024 * 1024
+    }
+
+    /// Stored capture bindings are compared without consulting the OS or treating an old proof as a new grant.
+    private func storedHostMapping(_ window: CaptureWindowWitness) -> Bool {
+        guard let proof = window.hosted else { return true }
+        guard proof.surface.windowID == window.windowID, proof.surface.process == window.process,
+              proof.surface.bounds == window.bounds, proof.surface.onScreen == window.onScreen,
+              proof.surface.alpha == window.alpha, proof.surface.spaceWitness == window.spaceWitness,
+              proof.sessionID.utf8.elementsEqual(sessionID.utf8), proof.observationEpoch == observationEpoch,
+              proof.phaseRevision == phaseRevision else { return false }
+        return [proof.physicalOwner, proof.logicalOwner].allSatisfy { owner in
+            Self.validProcess(owner.process) && owner.identity.pid == Int(owner.process.pid) &&
+                owner.identity.path == owner.process.executable && MacAppIdentity(wire: owner.identity.wire) != nil
+        }
     }
 
     private static func validRect(_ rect: CGRect) -> Bool {

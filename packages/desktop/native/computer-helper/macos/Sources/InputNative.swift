@@ -19,16 +19,29 @@ final class InputNative {
         let process: HelperProcessIdentity
         let overlays: Set<String>
         let point: CGPoint
+        let hosted: HostedInputWitness?
+    }
+    private struct HostedInputWitness {
+        let proof: HostedWindowProof
+        let element: AccessibilityElement
+        let session: ServerSession
     }
     private var pointerWitness: PointerWitness?
+    private var keyboardWitness: HostedInputWitness?
     private var ownedUps: [String: InputPostedEvent] = [:]
     private var ownedOrder: [String] = []
     private var sourceReady = true
+    private let hosts = HostOwnershipResolver()
+
+    private static func observedOwner(_ pid: pid_t) throws -> NativeOwner {
+        do { return try NativeIdentityReader.observe(pid: pid) }
+        catch { return try NativeIdentityReader.observeHost(pid: pid) }
+    }
 
     static func backend(accessibility: AccessibilityService? = nil) -> InputBackend {
         let native = InputNative()
         var backend = InputBackend(tag: eventTag, preflight: { AXIsProcessTrusted() && CGPreflightPostEventAccess() },
-            windows: AccessibilityNative.windows, owner: NativeIdentityReader.observe,
+            windows: AccessibilityNative.windows, owner: observedOwner,
             pointer: native.pointer, focused: native.focused,
             bind: { observation, expected, session in
                 if let accessibility {
@@ -57,48 +70,95 @@ final class InputNative {
         guard finite(point) else { throw InputNative.unavailable }
         let windows = try AccessibilityNative.windows()
         guard let window = windows.first(where: { $0.onScreen && $0.alpha > 0 && $0.bounds.contains(point) && !session.overlayWindowIds.contains($0.windowID) }) else { throw InputNative.unavailable }
-        let owner = try NativeIdentityReader.observe(pid: window.pid)
+        let hosted = try hosts.resolve(window: window, session: session)
+        let owner = try hosted?.physicalOwner ?? Self.observedOwner(window.pid)
         let policy = try SessionPolicy(session: session)
-        try policy.requireTarget(NativeTarget(owner: owner, windowID: window.windowID), operation: .observe)
+        let target = NativeTarget(owner: owner, windowID: window.windowID, hosted: hosted)
+        try policy.requireTarget(target, operation: .observe)
         var element: AccessibilityElement?
         var secure: Bool?
         // Coordinate input still works on approved surfaces that expose no usable AX tree.
-        if let app = try? axApplication(window.pid),
-           let hit = try? axHit(app, point, pid: window.pid),
-           let root = try? axWindow(hit, pid: window.pid),
-           let bounds = try? axBounds(root, pid: window.pid), bounds == window.bounds,
+        let endpoint = owner.process.pid
+        if let app = try? axApplication(endpoint),
+           let hit = try? axHit(app, point, pid: endpoint),
+           let root = try? axWindow(hit, pid: endpoint),
+           hosted.map({ AccessibilityElement.equivalent(root, $0.physicalRoot) }) ?? ((try? axBounds(root, pid: endpoint)) == window.bounds),
            windows.filter({ $0.pid == window.pid && $0.bounds == window.bounds }).count == 1,
-           let actual = hit.native, try AccessibilityNative.pid(hit) == window.pid {
+           let actual = hit.native, try AccessibilityNative.pid(hit) == endpoint {
             element = hit
-            secure = axSecure(actual, pid: window.pid)
+            secure = axSecure(actual, pid: endpoint)
         }
+        guard hosted == nil || element != nil else { throw InputNative.unavailable }
         try recheck(owner, window: window)
         sourceLock.lock()
-        pointerWitness = PointerWitness(window: window, process: owner.process, overlays: Set(session.overlayWindowIds), point: point)
+        let witness = hosted.flatMap { proof in element.map { HostedInputWitness(proof: proof, element: $0, session: session) } }
+        pointerWitness = PointerWitness(window: window, process: owner.process, overlays: Set(session.overlayWindowIds), point: point, hosted: witness)
         sourceLock.unlock()
-        return InputObservation(target: NativeTarget(owner: owner, windowID: window.windowID, secure: secure), window: window, element: element)
+        return InputObservation(target: NativeTarget(owner: owner, windowID: window.windowID, secure: secure, hosted: hosted), window: window, element: element)
     }
 
     private func focused(_ pid: pid_t, _ session: ServerSession) throws -> InputObservation {
         guard pid > 0, NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else { throw InputNative.changed }
-        let owner = try NativeIdentityReader.observe(pid: pid)
+        let logical = try NativeIdentityReader.observe(pid: pid)
         let policy = try SessionPolicy(session: session)
         // Policy is checked before asking the app for a focused AX element or its security metadata.
-        try policy.requireTarget(NativeTarget(owner: owner), operation: .observe)
+        try policy.requireTarget(NativeTarget(owner: logical), operation: .observe)
         let app = try axApplication(pid)
-        let focused = try axElement(app, attribute: kAXFocusedUIElementAttribute, pid: pid)
-        guard try AccessibilityNative.pid(focused) == pid,
-              let root = try axWindow(focused, pid: pid),
-              try AccessibilityNative.pid(root) == pid else { throw InputNative.changed }
-        let frame = try axBounds(root, pid: pid)
-        let windows = try AccessibilityNative.windows().filter { $0.pid == pid && $0.bounds == frame }
-        guard windows.count == 1, let window = windows.first else { throw InputNative.unavailable }
-        try policy.requireTarget(NativeTarget(owner: owner, windowID: window.windowID), operation: .observe)
-        guard let native = focused.native else { throw InputNative.unavailable }
-        let secure = axSecure(native, pid: pid)
-        try recheck(owner, window: window)
-        guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else { throw InputNative.changed }
-        return InputObservation(target: NativeTarget(owner: owner, windowID: window.windowID, secure: secure), window: window, element: focused)
+        let nativeApp = try axHandle(app, pid: pid)
+        var raw: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(nativeApp, kAXFocusedUIElementAttribute as CFString, &raw) == .success,
+              let raw, CFGetTypeID(raw) == AXUIElementGetTypeID() else { throw InputNative.unavailable }
+        // Reading the approved client's scoped reference does not authorize querying a foreign endpoint.
+        let linked = AccessibilityElement(native: raw as! AXUIElement)
+        let linkedPID = try AccessibilityNative.pid(linked)
+        if linkedPID != pid {
+            let foreign = try Self.observedOwner(linkedPID)
+            if try HostOwnershipNative.kind(foreign) == nil {
+                // Security and unknown hosts retain their own refusal before any foreign AX query.
+                try policy.requireTarget(NativeTarget(owner: foreign), operation: .observe)
+                throw InputNative.changed
+            }
+        }
+        let ownRoot = linkedPID == pid ? try axWindow(linked, pid: pid) : nil
+        let ownBounds = try ownRoot.map { try axBounds($0, pid: pid) }
+        let all = try AccessibilityNative.windows()
+        let candidates = all.filter { window in
+            guard window.onScreen, window.alpha > 0 else { return false }
+            if let ownBounds { return window.pid == pid && window.bounds == ownBounds }
+            return window.pid == pid || window.pid == linkedPID
+        }
+        guard !candidates.isEmpty, candidates.count <= 32 else { throw InputNative.unavailable }
+        let deadline = DispatchTime.now().uptimeNanoseconds + 200_000_000
+        for window in candidates {
+            guard DispatchTime.now().uptimeNanoseconds < deadline else { throw InputNative.changed }
+            let hosted = try hosts.resolve(window: window, session: session, logicalPID: pid)
+            if let hosted {
+                let endpoint = hosted.physicalOwner.process.pid
+                guard linkedPID == pid || linkedPID == endpoint else { continue }
+                if let ownRoot, !AccessibilityElement.equivalent(ownRoot, hosted.logicalWindow) { continue }
+                let focused = linkedPID == endpoint ? linked : try axElement(axApplication(endpoint), attribute: kAXFocusedUIElementAttribute, pid: endpoint)
+                guard let root = try axWindow(focused, pid: endpoint),
+                      AccessibilityElement.equivalent(root, hosted.physicalRoot),
+                      hosts.contains(element: focused, proof: hosted) else { continue }
+                let target = NativeTarget(owner: hosted.physicalOwner, windowID: window.windowID,
+                    secure: focused.native.flatMap { axSecure($0, pid: endpoint) }, hosted: hosted)
+                try policy.requireTarget(target, operation: .observe)
+                try recheck(hosted.physicalOwner, window: window)
+                guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else { throw InputNative.changed }
+                sourceLock.lock(); keyboardWitness = HostedInputWitness(proof: hosted, element: focused, session: session); sourceLock.unlock()
+                return InputObservation(target: target, window: window, element: focused)
+            }
+            guard linkedPID == pid, window.pid == pid, window.bounds == ownBounds,
+                  all.filter({ $0.pid == pid && $0.bounds == window.bounds }).count == 1 else { continue }
+            let target = NativeTarget(owner: logical, windowID: window.windowID,
+                secure: linked.native.flatMap { axSecure($0, pid: pid) })
+            try policy.requireTarget(target, operation: .observe)
+            try recheck(logical, window: window)
+            guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else { throw InputNative.changed }
+            sourceLock.lock(); keyboardWitness = nil; sourceLock.unlock()
+            return InputObservation(target: target, window: window, element: linked)
+        }
+        throw InputNative.changed
     }
 
     private func axApplication(_ pid: pid_t) throws -> AccessibilityElement {
@@ -177,15 +237,37 @@ final class InputNative {
     }
 
     private func recheck(_ owner: NativeOwner, window: CaptureWindowInfo) throws {
-        let current = try NativeIdentityReader.observe(pid: owner.process.pid)
+        let current = try Self.observedOwner(owner.process.pid)
         guard current.process == owner.process, current.identity == owner.identity,
               let actual = try AccessibilityNative.windows().first(where: { $0.windowID == window.windowID }),
               actual.pid == window.pid, actual.bounds == window.bounds, actual.onScreen == window.onScreen,
               actual.alpha == window.alpha else { throw InputNative.changed }
     }
 
+    /// A single bounded AXWindow comparison closes same-process reparenting after preparation.
+    /// Full resolver/parent-tree work remains outside the current-operation posting fence.
+    private func currentHostedWindow(_ witness: HostedInputWitness) -> Bool {
+        let proof = witness.proof, pid = proof.physicalOwner.process.pid
+        guard proof.validAuthority(session: witness.session, physicalOwner: proof.physicalOwner, windowID: proof.surface.windowID),
+              let element = try? axHandle(witness.element, pid: pid) else { return false }
+        var raw: CFTypeRef?
+        if AccessibilityElement.equivalent(witness.element, proof.physicalRoot) {
+            guard AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &raw) == .success,
+                  let raw, AccessibilityNative.completeString(raw, limit: 64) == "AXWindow" else { return false }
+        } else {
+            guard AXUIElementCopyAttributeValue(element, kAXWindowAttribute as CFString, &raw) == .success,
+                  let raw, CFGetTypeID(raw) == AXUIElementGetTypeID() else { return false }
+            let root = AccessibilityElement(native: raw as! AXUIElement)
+            guard (try? AccessibilityNative.pid(root)) == pid,
+                  AccessibilityElement.equivalent(root, proof.physicalRoot) else { return false }
+        }
+        return proof.validAuthority(session: witness.session, physicalOwner: proof.physicalOwner, windowID: proof.surface.windowID)
+    }
+
     /// A bounded, complete app-scoped menu observation. Incomplete data remains unknown, never an empty proof.
     private func menus(_ observation: InputObservation, _ session: ServerSession) throws -> [InputMenuShortcut]? {
+        // A panel's private AX endpoint need not expose its client's menu bar. Unknown stays unknown.
+        if observation.target.hosted != nil { return nil }
         let owner = observation.target.owner
         try SessionPolicy(session: session).requireTarget(observation.target, operation: .observe)
         try recheck(owner, window: observation.window)
@@ -297,7 +379,9 @@ final class InputNative {
         if keyboard {
             guard let destination = descriptor.destination, HelperLifecycle.processIdentity(destination.pid) == destination else { return false }
             if descriptor.kind == .keyDown || descriptor.kind == .unicodeDown {
-                guard NSWorkspace.shared.frontmostApplication?.processIdentifier == destination.pid else { return false }
+                let foreground = descriptor.foreground ?? destination
+                guard HelperLifecycle.processIdentity(foreground.pid) == foreground,
+                      NSWorkspace.shared.frontmostApplication?.processIdentifier == foreground.pid else { return false }
                 let layout = try KeyboardSnapshot()
                 source.keyboardType = layout.keyboardType
                 generatedLayout = layout.fingerprint
@@ -342,12 +426,21 @@ final class InputNative {
         if keyboard {
             guard let destination = descriptor.destination, HelperLifecycle.processIdentity(destination.pid) == destination else { return false }
             if descriptor.kind == .keyDown || descriptor.kind == .unicodeDown {
-                guard NSWorkspace.shared.frontmostApplication?.processIdentifier == destination.pid,
+                let foreground = descriptor.foreground ?? destination
+                guard HelperLifecycle.processIdentity(foreground.pid) == foreground,
+                      NSWorkspace.shared.frontmostApplication?.processIdentifier == foreground.pid,
                       let generatedLayout, let current = try? KeyboardSnapshot(), current.fingerprint == generatedLayout,
                       current.keyboardType == source.keyboardType else { return false }
                 if descriptor.kind == .keyDown {
                     sourceLock.lock(); let expected = resolvedLayout; sourceLock.unlock()
                     guard expected == generatedLayout else { return false }
+                }
+                sourceLock.lock(); let hosted = keyboardWitness; sourceLock.unlock()
+                if let hosted {
+                    guard hosted.proof.physicalOwner.process == destination,
+                          hosted.proof.logicalOwner.process == foreground, currentHostedWindow(hosted),
+                          HelperLifecycle.processIdentity(destination.pid) == destination,
+                          NSWorkspace.shared.frontmostApplication?.processIdentifier == foreground.pid else { return false }
                 }
             }
             guard recordDown(descriptor) else { return false }
@@ -361,6 +454,13 @@ final class InputNative {
                       let current = try AccessibilityNative.windows().first(where: { $0.onScreen && $0.alpha > 0 && $0.bounds.contains(descriptor.point) && !witness.overlays.contains($0.windowID) }),
                       current.windowID == witness.window.windowID, current.pid == witness.window.pid,
                       current.bounds == witness.window.bounds, current.alpha == witness.window.alpha else { return false }
+                if let hosted = witness.hosted {
+                    guard currentHostedWindow(hosted), HelperLifecycle.processIdentity(witness.process.pid) == witness.process,
+                          let final = try AccessibilityNative.windows().first(where: { $0.onScreen && $0.alpha > 0 &&
+                              $0.bounds.contains(descriptor.point) && !witness.overlays.contains($0.windowID) }),
+                          final.windowID == witness.window.windowID, final.pid == witness.window.pid,
+                          final.bounds == witness.window.bounds, final.alpha == witness.window.alpha else { return false }
+                }
             }
             guard recordDown(descriptor) else { return false }
             event.post(tap: .cghidEventTap)

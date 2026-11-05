@@ -13,6 +13,12 @@ describe("standalone native unit diagnostics", () => {
   test("preserves every actual aggregate suite in order without accepting arbitrary calls", async () => {
     const actual = await readFile(new URL("../native/computer-helper/macos/Tests/main.swift", import.meta.url), "utf8")
     expect(diagnosticSuites(actual).length).toBeGreaterThanOrEqual(11)
+    expect(diagnosticSuites(actual).slice(-4)).toEqual([
+      "runHostOwnershipTests",
+      "runProgramLaunchRegistryTests",
+      "runAppsTests",
+      "runClipboardTests",
+    ])
     expect(diagnosticSuites(aggregate)).toEqual(["runCommandLineTests", "runCaptureTests", "runAccessibilityTests"])
     for (const invalid of [
       "",
@@ -46,6 +52,34 @@ describe("standalone native unit diagnostics", () => {
     expect(source).not.toContain("diagnosticWrite(fixture")
     expect(unitDiagnosticMain("try runCaptureTests()\n")).not.toContain("documentRefusals")
     expect(unitDiagnosticMain("try runCaptureTests()\n")).not.toContain("AccessibilityNative.documentURL")
+  })
+
+  test("registers M7 capability, app and clipboard suites with only their synthetic assertion types", async () => {
+    const suites = ["runHostOwnershipTests", "runProgramLaunchRegistryTests", "runAppsTests", "runClipboardTests"]
+    const source = unitDiagnosticMain(suites.map((suite) => `_ = try ${suite}()`).join("\n"))
+    expect([...source.matchAll(/_ = try (run\w+Tests)\(\)/g)].map((match) => match[1])).toEqual(suites)
+    const failures = await Promise.all(
+      ["HostOwnership", "ProgramLaunchRegistry", "Apps", "Clipboard"].map(async (name) => {
+        const swift = await readFile(
+          new URL(`../native/computer-helper/macos/Tests/${name}Tests.swift`, import.meta.url),
+          "utf8",
+        )
+        const failure = /private\s+struct\s+([A-Za-z][A-Za-z0-9]*)\s*:\s*Error\b/.exec(swift)?.[1]
+        expect(failure).toBeDefined()
+        return failure!
+      }),
+    )
+    for (const failure of failures) expect(source).toContain(`"${failure}"`)
+    expect(source).not.toContain('"ServerFailure"')
+    expect(source).not.toContain("String(describing: error)")
+    const output = suites.flatMap((suite) => [
+      `vector-unit-diagnostic BEGIN ${suite}`,
+      `vector-unit-diagnostic FAIL ${suite} Synthetic fixture assertion`,
+    ])
+    expect(unitDiagnosticLines(output.join("\n"), suites)).toEqual(output)
+    expect(
+      unitDiagnosticLines(output.join("\n") + "\nvector-unit-diagnostic FAIL runOwnerAppTests private", suites),
+    ).toEqual(output)
   })
 
   test("keeps a partial crash trail and a bounded synthetic failure while dropping other native output", () => {

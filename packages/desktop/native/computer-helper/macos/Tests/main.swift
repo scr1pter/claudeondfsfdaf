@@ -17,6 +17,10 @@ do {
     _ = try runHeldInputTests()
     _ = try runInputTests()
     _ = try runInputKeySafetyTests()
+    _ = try runHostOwnershipTests()
+    _ = try runProgramLaunchRegistryTests()
+    _ = try runAppsTests()
+    _ = try runClipboardTests()
     print("Computer helper unit checks passed.")
     exit(0)
 } catch {

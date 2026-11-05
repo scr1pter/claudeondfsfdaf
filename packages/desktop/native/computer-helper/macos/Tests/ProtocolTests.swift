@@ -69,6 +69,22 @@ func runProtocolTests() throws -> Int {
     try protocolCheck(requests.count == 3 && reader.finish(), "Coalesced frames were lost or left partial state.")
     checks += 1
 
+    let raw = Data(" \n{  \"id\" : 43,  \"op\" : \"hello\",  \"extra\" : \"é 🧪\"  }\n ".utf8)
+    let rawFrame = protocolBody(raw)
+    let sized = FrameReader()
+    var sizedRequests: [Request] = []
+    var rawCosts: [Int] = []
+    for byte in rawFrame + frame {
+        sized.consume(Data([byte]), onSizedRequest: { request, bytes in
+            sizedRequests.append(request); rawCosts.append(bytes)
+        }, onFailure: { failures.append($0) })
+    }
+    try protocolCheck(sizedRequests.map(\.id) == [43, 42] && rawCosts == [rawFrame.count, frame.count] && sized.finish(),
+                      "Sized ingress must retain exact UTF-8 wire costs including whitespace/header and request order across fragmented frames.")
+    try protocolCheck(rawCosts[0] > (try JSONEncoder().encode(sizedRequests[0]).count + 4) && failures.isEmpty,
+                      "Ingress cost must not be reduced by JSON normalization or request decoding.")
+    checks += 1
+
     for body in ["{not json", "[1,2,3]", "{\"op\":\"hello\"}", "{\"id\":0,\"op\":\"hello\"}",
                  "{\"id\":-1,\"op\":\"hello\"}", "{\"id\":true,\"op\":\"hello\"}",
                  "{\"id\":1.5,\"op\":\"hello\"}", "{\"id\":9007199254740992,\"op\":\"hello\"}"] {

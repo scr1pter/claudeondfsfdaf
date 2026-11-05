@@ -67,6 +67,8 @@ final class Dispatcher {
   private let event: (Event) -> Void
   private let releaseAll: () -> Int
   private let observationsInvalidated: () -> Void
+  /// Runs under the authority lock: implementations may only enqueue cleanup, never enter native IPC or wait.
+  private let cleanupRequested: (String) -> Void
   private let stopped: () -> Void
   private let features: () -> [String: Bool]
   private let permissions: () -> [String: JSONValue]
@@ -99,6 +101,7 @@ final class Dispatcher {
     event: @escaping (Event) -> Void,
     releaseAll: @escaping () -> Int = { 0 },
     observationsInvalidated: @escaping () -> Void = {},
+    cleanupRequested: @escaping (String) -> Void = { _ in },
     stopped: @escaping () -> Void = {},
     sendImage: ((Response, Data) -> Void)? = nil,
     features: @escaping () -> [String: Bool] = { [:] },
@@ -117,6 +120,7 @@ final class Dispatcher {
     self.event = event
     self.releaseAll = releaseAll
     self.observationsInvalidated = observationsInvalidated
+    self.cleanupRequested = cleanupRequested
     self.stopped = stopped
     self.sendImage = sendImage
     self.features = features
@@ -188,6 +192,7 @@ final class Dispatcher {
       halted = true
       generation &+= 1
       observationsInvalidated()
+      cleanupRequested("close")
       cancelHeartbeat?()
       cancelHeartbeat = nil
       _ = releaseAll()
@@ -200,10 +205,12 @@ final class Dispatcher {
   /// M8 calls this before publishing physical take-over; session.update can never clear the resulting latch.
   func pauseForPhysicalInput() {
     locked {
+      guard !closed, session != nil, !physicalPause else { return }
       physicalPause = true
       session?.paused = true
       generation &+= 1
       observationsInvalidated()
+      cleanupRequested("physical-input")
       _ = releaseAll()
       cancelActive(code: "paused", message: "Physical input paused this task.")
       pump()
@@ -368,7 +375,9 @@ final class Dispatcher {
           }
           else { fail(active.request, "capture_unavailable", "Image output is unavailable.") }
         } else { reply(response) }
-      case .failure(let failure): fail(active.request, failure.code, failure.message)
+      case .failure(let failure):
+        cleanupRequested("error")
+        fail(active.request, failure.code, failure.message)
       }
       pump()
     }
@@ -377,6 +386,7 @@ final class Dispatcher {
   private func deadline(_ token: UUID) {
     locked {
       guard let active, active.token == token else { return }
+      cleanupRequested("timeout")
       if active.mutating {
         halted = true
         _ = releaseAll()
@@ -446,6 +456,7 @@ final class Dispatcher {
       if let target = request.args["target"], target.intValue == nil || target.intValue! < 0 || target.intValue! > 9_007_199_254_740_991 {
         fail(request, "failed", "Invalid cancellation target."); return
       }
+      cleanupRequested("cancel")
       if let target = request.args["target"]?.intValue,
          let index = queue.firstIndex(where: { $0.id == target }) {
         let pending = queue.remove(at: index)
@@ -482,6 +493,7 @@ final class Dispatcher {
         self.cancelHeartbeat = nil
         self.halted = true
         self.generation &+= 1
+        self.cleanupRequested("heartbeat")
         _ = self.releaseAll()
         self.cancelActive(code: "stopped", message: "Input stopped because no heartbeat arrived.")
         self.pump()
@@ -526,6 +538,7 @@ final class Dispatcher {
       guard responsible else { fail(request, "responsible_missing", "The helper does not own its OS permissions."); return true }
       guard let next = Self.decodeSession(request.args) else { fail(request, "failed", "Invalid session arguments."); return true }
       if next.mode == "background" && features()["background"] != true { fail(request, "unsupported_action", "Background operation is unavailable."); return true }
+      if session != nil { cleanupRequested("replacement") }
       invalidateSessionWork()
       guard !closed else { return true }
       session = next
@@ -564,6 +577,7 @@ final class Dispatcher {
       return true
     case "session.end":
       guard request.args.isEmpty else { fail(request, "failed", "Invalid session end arguments."); return true }
+      cleanupRequested("end")
       invalidateSessionWork()
       guard !closed else { return true }
       cancelHeartbeat?()

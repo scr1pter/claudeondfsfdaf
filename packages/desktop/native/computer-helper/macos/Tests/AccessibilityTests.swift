@@ -68,6 +68,8 @@ private final class AccessibilityTestState {
     var focusedApplications: [UUID] = []
     var containingWindowReads = 0
     var containingWindowInsideFence: AccessibilityTestNode?
+    var containingElement: AccessibilityElement?
+    var containingElementInsideFence: AccessibilityElement?
     var actions: [(String, UUID, Bool)] = []
     var writes: [(String, UUID, Bool)] = []
     var actionTakes = true
@@ -85,6 +87,8 @@ private final class AccessibilityTestState {
     var wakeRestores = 0
     var wakeApplyInsideFence = false
     var pidOverrides: [UUID: pid_t] = [:]
+    var ownerOverrides: [pid_t: NativeOwner] = [:]
+    var applicationOverrides: [pid_t: AccessibilityElement] = [:]
     var windows: [CaptureWindowInfo] = []
     var nodes: [UUID: AccessibilityTestNode] = [:]
     var results: [Result<ServerReply, ServerFailure>] = []
@@ -137,7 +141,8 @@ private final class AccessibilityFixture {
     let captures: CaptureRegistry
     let service: AccessibilityService
 
-    init(approved: Bool = true, paused: Bool = false, mode: String = "foreground", containingWindow: Bool = false) {
+    init(approved: Bool = true, paused: Bool = false, mode: String = "foreground", containingWindow: Bool = false,
+         hostResolver: HostOwnershipResolver? = nil) {
         let state = AccessibilityTestState()
         let captures = CaptureRegistry()
         self.state = state; self.captures = captures
@@ -151,10 +156,11 @@ private final class AccessibilityFixture {
                 windows: { state.windowReads += 1; return state.windows },
                 owner: { pid in
                     state.ownerReads += 1; state.onOwner?()
-                    guard pid == state.owner.process.pid else { throw ServerFailure(code: "app_not_found", message: "No synthetic owner.") }
-                    return state.owner
+                    if pid == state.owner.process.pid { return state.owner }
+                    guard let owner = state.ownerOverrides[pid] else { throw ServerFailure(code: "app_not_found", message: "No synthetic owner.") }
+                    return owner
                 },
-                application: { pid in state.applications.append(pid); return state.app.element },
+                application: { pid in state.applications.append(pid); return state.applicationOverrides[pid] ?? state.app.element },
                 pid: { element in state.pidOverrides[element.identity] ?? state.owner.process.pid },
                 describe: { element in
                     state.descriptions[element.identity, default: 0] += 1
@@ -200,8 +206,12 @@ private final class AccessibilityFixture {
                 },
                 containingWindow: containingWindow ? { (_: AccessibilityElement) throws -> AccessibilityElement? in
                     state.containingWindowReads += 1
-                    return state.insideFence ? (state.containingWindowInsideFence ?? state.window).element : state.window.element
-                } : nil
+                    if state.insideFence {
+                        return state.containingElementInsideFence ?? state.containingWindowInsideFence?.element ?? state.containingElement ?? state.window.element
+                    }
+                    return state.containingElement ?? state.window.element
+                } : nil,
+                hostResolver: hostResolver
             ),
             execute: { work in if state.holdWork { state.work.append(work) } else { work() } },
             now: { state.clock }
@@ -283,6 +293,62 @@ private final class AccessibilityFixture {
             windows: [CaptureWindowWitness(windowID: window.windowID, process: state.owner.process,
                                            bounds: window.bounds, onScreen: window.onScreen)]))
         return id
+    }
+}
+
+private final class AccessibilityHostParents {
+    var links: [UUID: AccessibilityElement] = [:]
+}
+
+/// A real resolver-backed hosted panel, with actual endpoint/CG/client distinctions but no native handles.
+private final class AccessibilityHostedFixture {
+    let host: HostOwnershipTestFixture
+    let fake: AccessibilityFixture
+    let parents: AccessibilityHostParents
+
+    init(surfaceIsPhysical: Bool = false, resolverEnabled: Bool = true, containingWindow: Bool = true) {
+        let host = HostOwnershipTestFixture(surfaceIsPhysical: surfaceIsPhysical)
+        let parents = AccessibilityHostParents()
+        var backend = host.backend()
+        backend.parent = { parents.links[$0.identity] }
+        let resolver = HostOwnershipResolver(backend: backend, now: { host.time })
+        let fake = AccessibilityFixture(containingWindow: containingWindow, hostResolver: resolverEnabled ? resolver : nil)
+        self.host = host; self.fake = fake; self.parents = parents
+        let state = fake.state
+        state.owner = host.physical
+        state.ownerOverrides[host.logical.process.pid] = host.logical
+        state.foreground = host.logical.process.pid
+        state.window.bounds = host.surface.bounds
+        state.app.bounds = host.surface.bounds
+        state.text.bounds = CGRect(x: host.surface.bounds.minX + 20, y: host.surface.bounds.minY + 20, width: 100, height: 30)
+        state.button.bounds = CGRect(x: host.surface.bounds.minX + 20, y: host.surface.bounds.minY + 70, width: 100, height: 30)
+        state.password.bounds = CGRect(x: host.surface.bounds.minX + 20, y: host.surface.bounds.minY + 120, width: 100, height: 30)
+        state.nodes[host.physicalRoot.identity] = state.window
+        state.nodes[host.logicalWindow.identity] = state.window
+        state.containingElement = host.physicalRoot
+        state.pidOverrides[state.app.element.identity] = host.logical.process.pid
+        state.pidOverrides[host.logicalWindow.identity] = host.logical.process.pid
+        state.applicationOverrides[host.logical.process.pid] = state.app.element
+        let physicalApp = AccessibilityTestNode("AXApplication", name: "Synthetic physical host", bounds: host.surface.bounds)
+        physicalApp.children = [state.window]
+        state.nodes[physicalApp.element.identity] = physicalApp
+        state.applicationOverrides[host.physical.process.pid] = physicalApp.element
+        for node in [state.window, state.text, state.button, state.password, physicalApp] {
+            host.elementPIDs[node.element.identity] = host.physical.process.pid
+            host.elementBounds[node.element.identity] = node.bounds
+            parents.links[node.element.identity] = host.physicalRoot
+        }
+        host.elementPIDs[state.app.element.identity] = host.logical.process.pid
+        host.elementBounds[state.app.element.identity] = host.surface.bounds
+        var window = host.surface
+        window.owner = surfaceIsPhysical ? host.physical : host.logical
+        host.window = window; host.windows = [window]; state.windows = [window]
+        fake.session = host.session()
+    }
+
+    func mutateArgs(_ ref: String, value: String = "Hosted edit") -> [String: JSONValue] {
+        ["ref": .string(ref), "value": .string(value), "pid": .integer(Int64(host.logical.process.pid)),
+         "sessionId": .string(fake.session.id), "phaseRevision": .integer(Int64(fake.session.revision ?? 0))]
     }
 }
 
@@ -826,5 +892,164 @@ func runAccessibilityTests() throws -> Int {
                                "Closing during an AX read restores temporary wake exactly once, including the traversal defer")
     }
 
+    try test {
+        let hosted = AccessibilityHostedFixture()
+        let fake = hosted.fake
+        fake.call("ui.tree", ["pid": .integer(Int64(hosted.host.logical.process.pid)), "maxNodes": .integer(100), "maxDepth": .integer(8)])
+        let tree = try fake.success()
+        let nodes = tree["nodes"]?.arrayValue ?? []
+        try accessibilityCheck(tree["truncated"] == .bool(true) && nodes.contains { $0["name"] == .string("Title") } &&
+                               !nodes.contains { $0["name"] == .string("Synthetic app") },
+                               "A logical-client tree returns only its proven physical host subtree and marks omitted client chrome truncated")
+        try accessibilityCheck(fake.state.values[fake.state.password.element.identity] == nil &&
+                               nodes.contains { $0["secure"] == .bool(true) && $0["value"] == .string("REDACTED") },
+                               "Hosted tree traversal reads no secure values from the actual physical field")
+    }
+    try test {
+        let hosted = AccessibilityHostedFixture()
+        let fake = hosted.fake
+        fake.call("ui.focused")
+        let hit = try fake.success()
+        guard let ref = hit["ref"]?.stringValue, let elementID = hit["elementId"]?.stringValue else {
+            throw AccessibilityTestFailure(message: "Hosted focus omitted its native reference")
+        }
+        try accessibilityCheck(hit["owner"] == hosted.host.logical.identity.wire &&
+                               hit["windowId"] == .string(hosted.host.surface.windowID) &&
+                               fake.state.owner.process.pid == 202 && fake.state.foreground == 101,
+                               "Focused wire ownership is the approved logical client while AX calls retain the distinct real host PID and CG window")
+        hosted.host.time += 60_000_000
+        fake.call("ui.resolve", ["ref": .string(ref)])
+        let refreshed = try fake.success()
+        try accessibilityCheck(refreshed["ref"] == .string(ref) && refreshed["elementId"] == .string(elementID),
+                               "Re-proving an unchanged hosted mapping preserves the exact old ref and native identity without focus changes")
+    }
+    try test {
+        let hosted = AccessibilityHostedFixture()
+        let fake = hosted.fake
+        fake.call("ui.focused")
+        guard let ref = try fake.success()["ref"]?.stringValue else { throw AccessibilityTestFailure(message: "Missing hosted edit ref") }
+        fake.call("ui.setValue", hosted.mutateArgs(ref))
+        try accessibilityCheck(try fake.success()["took"] == .bool(true) && fake.state.writes.count == 1 &&
+                               fake.state.writes[0].1 == fake.state.text.element.identity && fake.state.writes[0].2,
+                               "A logical PID witness authorizes only the proven actual physical field, with the mutation inside the current fence")
+        var wrong = hosted.mutateArgs(ref); wrong["pid"] = .integer(202)
+        fake.call("ui.setValue", wrong)
+        try accessibilityCheck(fake.failure() == "changed" && fake.state.writes.count == 1,
+                               "The physical host PID is never accepted as an app approval substitute on the wire")
+    }
+    try test {
+        let secure = AccessibilityHostedFixture()
+        secure.fake.state.focused = secure.fake.state.password
+        secure.fake.call("ui.focused")
+        guard let secureRef = try secure.fake.success()["ref"]?.stringValue else { throw AccessibilityTestFailure(message: "Missing secure hosted ref") }
+        secure.fake.call("ui.setValue", secure.mutateArgs(secureRef))
+        try accessibilityCheck(secure.fake.failure() == "secure_field" && secure.fake.state.writes.isEmpty &&
+                               secure.fake.state.values[secure.fake.state.password.element.identity] == nil,
+                               "A hosted secure field refuses text before any physical write or value read")
+        let developer = AccessibilityHostedFixture()
+        let owner = accessibilityOwner("com.microsoft.VSCode")
+        developer.host.logical = owner; developer.host.install(owner)
+        developer.fake.state.ownerOverrides[101] = owner
+        developer.fake.session = developer.host.session()
+        developer.fake.call("ui.focused")
+        guard let developerRef = try developer.fake.success()["ref"]?.stringValue else { throw AccessibilityTestFailure(message: "Missing developer hosted ref") }
+        developer.fake.call("ui.setValue", developer.mutateArgs(developerRef))
+        try accessibilityCheck(developer.fake.failure() == "blocked" && developer.fake.state.writes.isEmpty,
+                               "Logical developer click-only policy survives delegation through an eligible system host")
+    }
+    try test {
+        let hosted = AccessibilityHostedFixture(surfaceIsPhysical: true)
+        let fake = hosted.fake
+        let other = accessibilityOwner("example.host.other", pid: 303)
+        fake.session.approved.append(other.identity.wire)
+        fake.call("ui.focused")
+        let old = try fake.success()
+        guard let oldRef = old["ref"]?.stringValue, let oldID = old["elementId"]?.stringValue else {
+            throw AccessibilityTestFailure(message: "Missing initial hosted reference")
+        }
+        hosted.host.logical = other; hosted.host.install(other); hosted.host.responsible = 303
+        hosted.host.elementPIDs[hosted.host.logicalWindow.identity] = 303
+        hosted.host.links = [HostAXBridge(logicalPID: 303, logicalWindow: hosted.host.logicalWindow,
+                                        linkedRoot: hosted.host.physicalRoot, physicalRoot: hosted.host.physicalRoot)]
+        fake.state.ownerOverrides[303] = other; fake.state.foreground = 303
+        let otherApp = AccessibilityElement()
+        fake.state.applicationOverrides[303] = otherApp; fake.state.pidOverrides[otherApp.identity] = 303
+        fake.call("ui.resolve", ["ref": .string(oldRef)])
+        try accessibilityCheck(fake.failure() == "stale_ref", "A client remap invalidates old hosted refs despite unchanged physical PID, AX handle and CG geometry")
+        fake.call("ui.focused")
+        let current = try fake.success()
+        try accessibilityCheck(current["owner"] == other.identity.wire && current["ref"]?.stringValue != oldRef &&
+                               current["elementId"]?.stringValue != oldID,
+                               "A fresh observation of the new approved client mints distinct native identity instead of resurrecting the old mapping")
+    }
+    try test {
+        let hosted = AccessibilityHostedFixture()
+        let fake = hosted.fake
+        fake.call("ui.focused")
+        guard let ref = try fake.success()["ref"]?.stringValue else { throw AccessibilityTestFailure(message: "Missing epoch-bound hosted ref") }
+        let reads = fake.state.descriptions.values.reduce(0, +)
+        fake.session.observationEpoch = UUID()
+        fake.call("ui.resolve", ["ref": .string(ref)])
+        try accessibilityCheck(fake.failure() == "stale_ref" && fake.state.descriptions.values.reduce(0, +) == reads,
+                               "A reused session/revision with new authority cannot re-resolve old host content or native handles")
+    }
+    try test {
+        let hosted = AccessibilityHostedFixture()
+        hosted.parents.links.removeValue(forKey: hosted.fake.state.text.element.identity)
+        hosted.fake.call("ui.focused")
+        try accessibilityCheck(hosted.fake.failure() == "stale_ref" && hosted.fake.state.descriptions.isEmpty &&
+                               hosted.fake.state.values.isEmpty && hosted.fake.state.actions.isEmpty,
+                               "The same physical host PID alone never permits reading a foreign handle outside the proven client subtree")
+    }
+    try test {
+        let hosted = AccessibilityHostedFixture(surfaceIsPhysical: true, resolverEnabled: false)
+        hosted.fake.call("ui.tree", ["windowId": .string(hosted.host.surface.windowID), "maxNodes": .integer(20), "maxDepth": .integer(4)])
+        try accessibilityCheck(hosted.fake.failure() == "protected" && hosted.fake.state.descriptions.isEmpty && hosted.fake.state.values.isEmpty,
+                               "Without native host proof, a protected physical host remains structural and its tree content is never requested")
+        hosted.fake.call("ui.focused")
+        try accessibilityCheck(hosted.fake.failure() == "stale_ref" && hosted.fake.state.descriptions.isEmpty,
+                               "A foreign focused handle cannot be adopted without a resolver-backed mapping")
+    }
+    try test {
+        let hosted = AccessibilityHostedFixture(surfaceIsPhysical: true)
+        let path = "/System/Library/CoreServices/SecurityAgent.app/Contents/MacOS/SecurityAgent"
+        let process = HelperProcessIdentity(pid: 202, parentPID: 1, startSeconds: 10, startMicroseconds: 20, executable: path)
+        let security = NativeOwner(identity: MacAppIdentity(bundleId: "com.apple.SecurityAgent", apple: true, system: true,
+            verified: true, name: "Synthetic security host", path: path, pid: 202), process: process, childShell: false)
+        hosted.host.physical = security; hosted.host.install(security)
+        hosted.fake.state.owner = security
+        var window = hosted.host.surface; window.owner = security
+        hosted.host.window = window; hosted.host.windows = [window]; hosted.fake.state.windows = [window]
+        hosted.fake.call("ui.tree", ["windowId": .string(window.windowID), "maxNodes": .integer(20), "maxDepth": .integer(4)])
+        try accessibilityCheck(hosted.fake.failure() == "protected" && hosted.fake.state.descriptions.isEmpty && hosted.fake.state.values.isEmpty,
+                               "An actual security host is never remapped into ordinary approved-client AX content")
+    }
+    try test {
+        let hosted = AccessibilityHostedFixture()
+        let fake = hosted.fake
+        fake.call("ui.focused")
+        guard let ref = try fake.success()["ref"]?.stringValue else { throw AccessibilityTestFailure(message: "Missing reparent test ref") }
+        fake.state.containingElementInsideFence = AccessibilityElement()
+        for operation in ["ui.perform", "ui.setValue"] {
+            var args = hosted.mutateArgs(ref)
+            if operation == "ui.perform" { args.removeValue(forKey: "value"); args["action"] = .string("AXPress") }
+            fake.call(operation, args)
+            try accessibilityCheck(fake.failure() == "stale_ref" && fake.state.actions.isEmpty && fake.state.writes.isEmpty,
+                                   "Same-PID reparenting at commit entry refuses both perform and setValue before any native action")
+        }
+    }
+    try test {
+        let hosted = AccessibilityHostedFixture(containingWindow: false)
+        let fake = hosted.fake
+        fake.state.window.role = "AXGroup"
+        fake.call("ui.tree", ["pid": .integer(101), "maxNodes": .integer(20), "maxDepth": .integer(4)])
+        let nodes = try fake.success()["nodes"]?.arrayValue ?? []
+        guard let ref = nodes.first(where: { $0["name"] == .string("Title") })?["ref"]?.stringValue else {
+            throw AccessibilityTestFailure(message: "A proven group subtree should remain observable")
+        }
+        fake.call("ui.setValue", hosted.mutateArgs(ref))
+        try accessibilityCheck(fake.failure() == "stale_ref" && fake.state.writes.isEmpty,
+                               "Group-only host proof without an actual current AXWindow remains readable but cannot authorize mutation")
+    }
     return count
 }

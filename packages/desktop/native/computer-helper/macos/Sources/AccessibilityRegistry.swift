@@ -7,14 +7,17 @@ struct AccessibilityWitness: Equatable {
     let windowFrame: CGRect
     let onScreen: Bool
     let spaceWitness: String?
+    /// The process above remains the real AX endpoint; this proof separately binds its client and CG surface.
+    let hosted: HostedWindowProof?
 
     init(process: HelperProcessIdentity, windowID: String, windowFrame: CGRect,
-         onScreen: Bool = true, spaceWitness: String? = nil) {
+         onScreen: Bool = true, spaceWitness: String? = nil, hosted: HostedWindowProof? = nil) {
         self.process = process
         self.windowID = windowID
         self.windowFrame = windowFrame
         self.onScreen = onScreen
         self.spaceWitness = spaceWitness
+        self.hosted = hosted
     }
 
     fileprivate var valid: Bool {
@@ -23,7 +26,15 @@ struct AccessibilityWitness: Equatable {
             !windowID.isEmpty && windowID.utf8.count <= 256 && !windowID.contains("\0") &&
             windowFrame.minX.isFinite && windowFrame.minY.isFinite && windowFrame.width.isFinite && windowFrame.height.isFinite &&
             windowFrame.width > 0 && windowFrame.height > 0 && windowFrame.maxX.isFinite && windowFrame.maxY.isFinite &&
-            (spaceWitness.map { !$0.isEmpty && $0.utf8.count <= 256 && !$0.contains("\0") } ?? true)
+            (spaceWitness.map { !$0.isEmpty && $0.utf8.count <= 256 && !$0.contains("\0") } ?? true) &&
+            (hosted.map { $0.physicalOwner.process == process && $0.surface.windowID == windowID &&
+                $0.surface.bounds == windowFrame && $0.surface.onScreen == onScreen &&
+                $0.surface.spaceWitness == spaceWitness } ?? true)
+    }
+
+    fileprivate func matches(_ snapshot: AccessibilitySnapshot) -> Bool {
+        hosted.map { $0.observationEpoch == snapshot.observationEpoch &&
+            $0.sessionID.utf8.elementsEqual(snapshot.sessionID.utf8) && $0.phaseRevision == snapshot.phaseRevision } ?? true
     }
 }
 
@@ -51,6 +62,7 @@ final class AccessibilityRegistry<Element> {
         let element: Element
         let process: HelperProcessIdentity
         let windowID: String
+        let hosted: HostedWindowProof?
         let hash: UInt
     }
 
@@ -100,10 +112,11 @@ final class AccessibilityRegistry<Element> {
         lock.lock()
         defer { lock.unlock() }
         guard !closed, let snapshot, snapshot.worker == requested.worker, snapshot.token == requested.token,
-              witness.valid else { throw Self.stale }
+              witness.valid, witness.matches(snapshot) else { throw Self.stale }
         let elementHash = hash(element)
         let existingID = buckets[elementHash]?.first { id in
-            guard let item = stable[id], item.process == witness.process, item.windowID == witness.windowID else { return false }
+            guard let item = stable[id], item.process == witness.process, item.windowID == witness.windowID,
+                  item.hosted == witness.hosted else { return false }
             return equal(item.element, element)
         }
         if let id = existingID, let ref = latestReference[id], let record = references[ref], record.witness == witness {
@@ -126,7 +139,8 @@ final class AccessibilityRegistry<Element> {
                 }
             }
             elementID = try nextID("axe")
-            stable[elementID] = StableElement(element: element, process: witness.process, windowID: witness.windowID, hash: elementHash)
+            stable[elementID] = StableElement(element: element, process: witness.process, windowID: witness.windowID,
+                                              hosted: witness.hosted, hash: elementHash)
             buckets[elementHash, default: []].append(elementID)
             stableOrder.append(elementID)
         }
@@ -147,7 +161,7 @@ final class AccessibilityRegistry<Element> {
         defer { lock.unlock() }
         guard !closed, let snapshot, matches(snapshot, session),
               let record = references[ref], record.generation == snapshot.generation,
-              witness.map({ $0.valid && $0 == record.witness }) ?? true else { throw Self.stale }
+              witness.map({ $0.valid && $0.matches(snapshot) && $0 == record.witness }) ?? true else { throw Self.stale }
         return record
     }
 
@@ -156,7 +170,7 @@ final class AccessibilityRegistry<Element> {
                         witness: AccessibilityWitness) throws -> AccessibilityReference<Element> {
         lock.lock()
         defer { lock.unlock() }
-        guard !closed, let snapshot, matches(snapshot, session), witness.valid,
+        guard !closed, let snapshot, matches(snapshot, session), witness.valid, witness.matches(snapshot),
               stable[elementID] != nil, let ref = latestReference[elementID], let record = references[ref],
               record.elementID == elementID, record.generation == snapshot.generation,
               record.witness == witness else { throw Self.stale }

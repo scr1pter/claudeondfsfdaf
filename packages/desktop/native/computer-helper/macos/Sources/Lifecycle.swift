@@ -47,6 +47,17 @@ enum HelperLifecycle {
         ResponsibilityAPI.shared.isSelfResponsible()
     }
 
+    static func disclaimSpawn(_ attributes: UnsafeMutablePointer<posix_spawnattr_t?>) -> Bool {
+        ResponsibilityAPI.shared.disclaim(attributes)
+    }
+
+    static func responsiblePID(for process: HelperProcessIdentity) -> pid_t? {
+        guard processIdentity(process.pid) == process,
+              let responsible = ResponsibilityAPI.shared.responsiblePID(process.pid),
+              processIdentity(process.pid) == process else { return nil }
+        return responsible
+    }
+
     static func responsibilityMatches(observed: pid_t?, current: pid_t) -> Bool {
         guard let observed, observed > 0, current > 0 else { return false }
         return observed == current
@@ -324,6 +335,11 @@ private final class ResponsibilityAPI {
     func isSelfResponsible() -> Bool {
         HelperLifecycle.responsibilityMatches(observed: observer?(getpid()), current: getpid())
     }
+
+    func responsiblePID(_ pid: pid_t) -> pid_t? {
+        guard pid > 0, let observed = observer?(pid), observed > 0 else { return nil }
+        return observed
+    }
 }
 
 /// Dispatch's process source uses kqueue EVFILT_PROC/NOTE_EXIT. The start-time poll is a second fence against
@@ -468,7 +484,9 @@ private final class HelperSupervisorWatchdog {
         guard !completed, !terminating else { return }
         terminating = true
         Darwin.kill(childPID, number)
-        queue.asyncAfter(deadline: .now() + .milliseconds(250)) { [weak self] in
+        // Input release and clipboard restoration each have a 300 ms budget. Leave their parallel
+        // cleanup room to finish, while keeping the parent's hard stop inside the one-second exit bound.
+        queue.asyncAfter(deadline: .now() + .milliseconds(750)) { [weak self] in
             guard let self, !self.completed else { return }
             // The PID cannot be reused before this supervisor reaps its child.
             Darwin.kill(self.childPID, SIGKILL)

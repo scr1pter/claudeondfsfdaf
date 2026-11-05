@@ -74,12 +74,16 @@ struct NativeOwner {
 }
 
 struct NativeTarget {
+    /// The actual AX/input endpoint. A hosted panel never replaces this with a different process's identity.
     let owner: NativeOwner
     var windowID: String? = nil
     var ref: String? = nil
     var elementID: String? = nil
     /// nil means the focused field's security could not be observed.
     var secure: Bool? = nil
+    var hosted: HostedWindowProof? = nil
+
+    var grantOwner: NativeOwner { hosted?.logicalOwner ?? owner }
 }
 
 struct NativeExpectedTarget {
@@ -251,6 +255,27 @@ enum NativeIdentityReader {
               MacAppIdentity(wire: identity.wire) != nil else { throw unavailable() }
         let shell = childShell(pid: pid)
         guard HelperLifecycle.processIdentity(pid) == before else { throw ServerFailure(code: "changed", message: "The native process changed.") }
+        return NativeOwner(identity: identity, process: before, childShell: shell)
+    }
+
+    /// XPC view services need not have an NSRunningApplication. This observes their actual running
+    /// Apple/platform signature and sealed bundle ID; it grants no eligibility or app approval.
+    static func observeHost(pid: pid_t) throws -> NativeOwner {
+        guard let before = HelperLifecycle.processIdentity(pid),
+              before.executable.hasPrefix("/System/") || before.executable.hasPrefix("/usr/libexec/") else {
+            throw unavailable()
+        }
+        let facts = try signing(pid: pid)
+        guard facts.verified, facts.apple, facts.platform, let bundle = facts.bundleID,
+              !bundle.isEmpty, bundle.utf16.count <= 255, MacAppIdentity.safeName(bundle),
+              facts.identifier?.caseInsensitiveCompare(bundle) == .orderedSame else { throw unavailable() }
+        let identity = MacAppIdentity(bundleId: bundle, teamId: facts.team, apple: true, system: true,
+            verified: true, name: clean(bundle), path: before.executable, pid: Int(pid))
+        guard MacAppIdentity(wire: identity.wire) != nil else { throw unavailable() }
+        let shell = childShell(pid: pid)
+        guard HelperLifecycle.processIdentity(pid) == before else {
+            throw ServerFailure(code: "changed", message: "The native process changed.")
+        }
         return NativeOwner(identity: identity, process: before, childShell: shell)
     }
 

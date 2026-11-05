@@ -37,5 +37,33 @@
       "x64": "48f75c02ade676276d7bb18ed0bfa4aaf093e1e1",
       "arm64": "916c252c16527329fc51e988faaf6ededbe54921"
     }
+  },
+  "matchingValidation": {
+    "run": 41961608652,
+    "commit": "b68e6c3191bce51422b053210899bb008629e5e4",
+    "conclusion": "success",
+    "macProductionUniversalReproducibilityAndEnforcedLock": "passed",
+    "mac15Intel": "passed",
+    "mac26IncludingDocumentURLRefusal": "passed",
+    "windowsX64AndArm64BuildAndUnits": "passed",
+    "macLaneChecks": {
+      "passed": 29,
+      "failed": 0,
+      "skipped": 1
+    },
+    "reportArtifactArchiveDigestsFromGitHub": {
+      "mac15Intel": {
+        "artifact": 13385518886,
+        "sha256": "d438e222e4a43b3723d4c3850c20e9934ed32ebcb1a420c96161dd71677d912b"
+      },
+      "mac26": {
+        "artifact": 13386710064,
+        "sha256": "770ae19b3ce20c6698a95e7152f9ccd1c2afd264bfb81649a21b722a5442af79"
+      },
+      "production": {
+        "artifact": 13385344962,
+        "sha256": "7ea514a3bcf9b8a08c60bd268b471ef8c2de4ce9eb179b24c4ff68ae4c3c9718"
+      }
+    }
   }
 }
