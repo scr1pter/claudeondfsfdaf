@@ -107,6 +107,7 @@ const NAMES: Record<string, string> = {
   "report-status": "Report status",
   remote: "Vector Remote",
   "phone-alerts": "Phone alerts",
+  "brain-vault": "Brain Vault",
   "release-notes": "Release notes",
   "site-assets": "Release note pictures",
   updates: "Updates",

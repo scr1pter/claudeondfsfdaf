@@ -15,6 +15,7 @@ import { isRendererStoreName } from "./store-keys"
 import { write } from "./logging"
 import { listReports, reportStatuses, sendBugReport } from "./bug-report"
 import { REMOTE_STARTING, remoteLink, remoteNotify } from "./remote-runtime"
+import { vaultBackup, vaultStarting } from "./vault-runtime"
 import { askHelpAssistant, type HelpInput } from "./help-assistant"
 import { clearLocalMemory, readLocalMemory, writeLocalMemory } from "./local-memory"
 import { desktopLocalStatus } from "./local-mode"
@@ -389,6 +390,28 @@ export function registerIpcHandlers(deps: Deps) {
     "phone-alert-send",
     (_event, alert: unknown) => remoteNotify()?.send(alert) ?? { sent: false, reason: "not-paired" as const },
   )
+  // Brain Vault (WP A45). The vault key stays in the main process; the renderer gets status and results, and a new
+  // vault's recovery code once, from the backup that created it.
+  const vault = () => {
+    const backup = vaultBackup()
+    if (!backup) throw new Error("Vector is still starting. Try again in a moment.")
+    return backup
+  }
+  handle("vault-status", () => vaultBackup()?.status() ?? vaultStarting())
+  handle("vault-configure", (_event, input: unknown) =>
+    vault().configure(input && typeof input === "object" ? (input as Record<string, unknown>) : {}),
+  )
+  handle("vault-backup", () => vault().backup())
+  handle("vault-versions", () => vault().versions())
+  handle("vault-restore", (_event, input: unknown) => {
+    const value = input && typeof input === "object" ? (input as Record<string, unknown>) : {}
+    return vault().restore({
+      ...(typeof value.version === "string" ? { version: value.version } : {}),
+      ...(typeof value.code === "string" ? { code: value.code } : {}),
+    })
+  })
+  handle("vault-forget", (_event, version: unknown) => vault().forget(typeof version === "string" ? version : ""))
+  handle("vault-delete", () => vault().remove())
   handle("help-assistant-ask", (_event, input: HelpInput) => askHelpAssistant(input))
   handle("agent-teams-list", (_event, scope?: { sourcePath?: string; parentSessionId?: string }) =>
     listAgentTeams(scope),

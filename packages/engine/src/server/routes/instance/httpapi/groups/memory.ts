@@ -136,6 +136,44 @@ export const MemoryImportResult = Schema.Struct({
   over: Schema.Finite,
 }).annotate({ identifier: "MemoryImportResult" })
 
+/** One memory file of a Brain Vault backup: the `vector-memory` JSON of the person's own memory or a repository's. */
+export const MemoryBackupFile = Schema.Struct({
+  path: Schema.String,
+  section: Schema.Literal("memory"),
+  /** The export JSON. */
+  text: Schema.String,
+  /** The repository's id, or "" for the person's own memory. */
+  repository: Schema.String,
+  /** Where that repository was last opened on this computer. */
+  worktree: Schema.optional(Schema.String),
+}).annotate({ identifier: "MemoryBackupFile" })
+
+export const MemoryBackup = Schema.Struct({
+  files: Schema.Array(MemoryBackupFile),
+}).annotate({ identifier: "MemoryBackup" })
+
+export const MemoryRestorePayload = Schema.Struct({
+  /** A memory file of the person's own vault, opened with its key: the `vector-memory` JSON, at most 2 MB. */
+  text: Schema.String,
+  /** The repository it came from, or "" for the person's own memory. */
+  repository: Schema.String,
+  worktree: Schema.optional(Schema.String),
+})
+
+export const MemoryRestoreResult = Schema.Struct({
+  /** Entries brought back, and of them those in use, pinned, and waiting for review as they were. */
+  restored: Schema.Finite,
+  active: Schema.Finite,
+  pinned: Schema.Finite,
+  waiting: Schema.Finite,
+  /** Entries already in memory here, left as they are. */
+  known: Schema.Finite,
+  /** Entries refused: forgotten here, a secret, or past what may wait for review. */
+  refused: Schema.Finite,
+  /** Documents the file names, which a restore leaves out (their files are the person's to add again). */
+  documents: Schema.Finite,
+}).annotate({ identifier: "MemoryRestoreResult" })
+
 export const MemoryTidy = Schema.Struct({
   merged: Schema.Finite,
   promoted: Schema.Finite,
@@ -701,6 +739,30 @@ export const MemoryApi = HttpApi.make("memory")
             summary: "Import memory",
             description:
               "Read an export (Markdown or JSON) back in. Every preference, term, decision, lesson and fact it holds lands waiting for your approval, so a changed file cannot put memory in use; rules stay in their files. What you forgot is not imported again.",
+          }),
+        ),
+        HttpApiEndpoint.get("backup", `${root}/backup`, {
+          query: WorkspaceRoutingQuery,
+          success: described(MemoryBackup, "This computer's memory as Brain Vault backup files"),
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "memory.backup",
+            summary: "Memory for a Brain Vault backup",
+            description:
+              "Your own memory and each repository's that has learned entries, as export JSON, for the desktop app to encrypt on this computer before a Brain Vault backup. Never the documents' files.",
+          }),
+        ),
+        HttpApiEndpoint.post("restore", `${root}/restore`, {
+          query: WorkspaceRoutingQuery,
+          payload: MemoryRestorePayload,
+          success: described(MemoryRestoreResult, "What the restore brought back"),
+          error: MemoryApiError,
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "memory.restore",
+            summary: "Restore memory from your Brain Vault",
+            description:
+              "Restore one memory file of your own Brain Vault, opened on this computer with its key. What the backup had in use and pinned comes back in use and pinned; what waited for review waits again. What you forgot here is not restored, and what is already in memory stays as it is.",
           }),
         ),
         HttpApiEndpoint.post("tidy", `${root}/tidy`, {

@@ -72,6 +72,70 @@ export type RemotePlatform = {
   onChange(callback: (status: RemoteStatus) => void): () => void
 }
 
+/** Brain Vault on this computer, as the desktop's main process reports it (WP A45). No key, code or content. */
+export type VaultStatus = {
+  /** The OS credential store can keep the vault key; without it no vault is made on this computer. */
+  secure: boolean
+  /** The nightly backup while the app is open. */
+  enabled: boolean
+  backend: "vector" | "github"
+  githubRepo?: string
+  hasVault: boolean
+  running?: "backup" | "restore" | "forget" | "delete"
+  last?: { version: string; at: number; files: number; sentBytes: number }
+  error?: string
+  warning?: string
+  /** GitHub: the bytes the vault takes in the repository. */
+  storedBytes?: number
+  nextAt?: number
+}
+
+export type VaultResult = { ok: boolean; message: string; status: VaultStatus; code?: string }
+
+export type VaultVersions =
+  | {
+      ok: true
+      label: string
+      snapshots: readonly { id: string; createdAt: number; bytes: number }[]
+      usage?: { usedBytes: number; quotaBytes: number }
+      storedBytes?: number
+      readOnly?: boolean
+      deleteAt?: number
+      mine: boolean
+      status: VaultStatus
+    }
+  | { ok: false; message: string; status: VaultStatus }
+
+export type VaultRestoreResult = VaultResult & {
+  needsCode?: boolean
+  totals?: {
+    restored: number
+    active: number
+    pinned: number
+    waiting: number
+    known: number
+    refused: number
+    documents: number
+    unreadable: number
+    version: string
+    newer: boolean
+  }
+}
+
+export type VaultPlatform = {
+  status(): Promise<VaultStatus>
+  configure(input: { enabled?: boolean; backend?: "vector" | "github"; githubRepo?: string }): Promise<VaultResult>
+  /** Backs up now; the first backup answers the new vault's recovery code once. */
+  backup(): Promise<VaultResult>
+  versions(): Promise<VaultVersions>
+  /** Restores a version (the newest by default) with this computer's key, or with the recovery code. */
+  restore(input: { version?: string; code?: string }): Promise<VaultRestoreResult>
+  forget(version: string): Promise<VaultResult>
+  /** Deletes the whole vault where backups go now. */
+  remove(): Promise<VaultResult>
+  onChange(callback: (status: VaultStatus) => void): () => void
+}
+
 export type FatalRendererErrorLog = {
   error: string
   url: string
@@ -138,6 +202,9 @@ type PlatformBase = {
 
   /** Vector Remote on this computer (desktop only; WP A41): pairing, the paired phones and "Disconnect all phones". */
   remote?: RemotePlatform
+
+  /** Brain Vault on this computer (desktop only; WP A45): Settings → Memory → Backup and the nightly backup. */
+  vault?: VaultPlatform
 
   /** Saved remote-server passwords in the OS keychain (desktop only); set resolves false when none is available. */
   serverCredentials?: {

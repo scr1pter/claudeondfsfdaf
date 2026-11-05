@@ -263,6 +263,7 @@ const createPlatform = (windowState: DesktopWindowState): Platform => {
     vectorAccount: window.api.vectorAccount,
     reports: window.api.reports,
     remote: window.api.remote,
+    vault: window.api.vault,
     phoneAlerts: {
       send: async (alert) => void (await window.api.phoneAlerts.send(alert)),
     },

@@ -1,17 +1,12 @@
 import type { Argv } from "yargs"
 import fs from "node:fs/promises"
 import path from "node:path"
-import { createHash } from "node:crypto"
 import * as prompts from "@clack/prompts"
 import { Effect, Option, Schema, Stream } from "effect"
-import { Brain } from "@vectordevai/core/brain/brain"
-import { BrainExport } from "@vectordevai/core/brain/export"
-import { BrainKnowledge } from "@vectordevai/core/brain/knowledge"
 import { Global } from "@vectordevai/core/global"
 import { Egress } from "@vectordevai/core/local-mode/egress"
 import { ModelPlanStatus } from "@vectordevai/core/model-plan-status"
 import { ModelPlans } from "@vectordevai/core/model-plans"
-import { Project as ProjectV2 } from "@vectordevai/core/project"
 import { VaultBackup } from "@vectordevai/core/vault/vault"
 import { VaultCrypto } from "@vectordevai/core/vault/crypto"
 import { isVaultError } from "@vectordevai/core/vault/error"
@@ -22,9 +17,8 @@ import type { VaultStore } from "@vectordevai/core/vault/store"
 import { VectorAccount } from "@vectordevai/core/vector-account"
 import { Vault } from "@vectordevai/schema/vault"
 import { Auth } from "@/auth"
+import { VaultMemory } from "@/brain/vault-memory"
 import { Git } from "@/git"
-import { Project } from "@/project/project"
-import { Instruction } from "@/session/instruction"
 import { cmd } from "./cmd"
 import { effectCmd, fail } from "../effect-cmd"
 import { UI } from "../ui"
@@ -193,36 +187,11 @@ const storeFor = Effect.fnUntraced(function* (input: {
   return { store, backend: { type: "vector" as const } }
 })
 
-/** This computer's memory, as files for a backup: the person's own, then each repository Vector knows that has any. */
+/** This computer's memory, as files for a backup (VaultMemory.files, which the desktop's backup reads too). */
 const memoryFiles = Effect.fnUntraced(function* () {
-  const instruction = yield* Instruction.Service
-  const brain = yield* Brain.Service
-  const knowledge = yield* BrainKnowledge.Service
-  const projects = yield* Project.Service
-  const here = yield* instruction.place()
   const encoder = new TextEncoder()
-  const json = (file: BrainExport.File) => encoder.encode(JSON.stringify(Schema.encodeSync(BrainExport.File)(file)))
-  const files: VaultBackup.Input[] = []
-  const personal = yield* BrainExport.collect({ brain, knowledge, place: here, scope: "personal" })
-  if (personal.entries.length) files.push({ path: "memory/personal.json", section: "memory", bytes: json(personal), repository: "" })
-  const places: Brain.Place[] = [
-    here,
-    ...(yield* projects.list())
-      .filter((project) => project.id !== ProjectV2.ID.global && project.id !== here.repository)
-      .map((project) => ({ repository: project.id, root: project.worktree, sources: [], held: false })),
-  ]
-  for (const place of places) {
-    const file = yield* BrainExport.collect({ brain, knowledge, place, scope: "repository" })
-    if (!file.entries.some((entry) => !entry.file)) continue
-    files.push({
-      path: `memory/repository-${createHash("sha256").update(place.repository).digest("hex").slice(0, 24)}.json`,
-      section: "memory",
-      bytes: json(file),
-      repository: place.repository,
-      worktree: place.root,
-    })
-  }
-  return { files, here }
+  const { files, here } = yield* VaultMemory.files(yield* VaultMemory.services())
+  return { files: files.map(({ text, ...file }): VaultBackup.Input => ({ ...file, bytes: encoder.encode(text) })), here }
 })
 
 const recoveryCode = Effect.fnUntraced(function* () {
@@ -417,30 +386,28 @@ export const VaultRestoreCommand = effectCmd({
     const { store, backend } = yield* storeFor({ ...(args.github ? { github: args.github } : {}), ...(local ? { local } : {}) })
     const opened = yield* openFor({ store, local, backend, adopt: true })
     const read = yield* promise(() => VaultBackup.read({ store, opened, ...(args.id ? { version: args.id } : {}) }))
-    const instruction = yield* Instruction.Service
-    const brain = yield* Brain.Service
-    const here = yield* instruction.place()
+    const services = yield* VaultMemory.services()
     const total = { restored: 0, active: 0, pinned: 0, waiting: 0, known: 0, refused: 0, unreadable: 0, documents: 0 }
     for (const { file, bytes: content } of read.files) {
-      const memory = file.section === "memory" ? BrainExport.decodeBackup(content.toString("utf8")) : undefined
-      if (!memory || file.repository === undefined) {
+      const done =
+        file.section === "memory"
+          ? yield* VaultMemory.restore(services, {
+              text: content.toString("utf8"),
+              ...(file.repository !== undefined ? { repository: file.repository } : {}),
+              ...(file.worktree !== undefined ? { worktree: file.worktree } : {}),
+            })
+          : ({ unreadable: true } as const)
+      if (done.unreadable) {
         total.unreadable++
         continue
       }
-      // The person's own memory and this repository's land here; another repository's under its own id, which is
-      // where Vector finds it once that repository is opened on this computer.
-      const place: Brain.Place =
-        file.repository === "" || file.repository === here.repository
-          ? here
-          : { repository: file.repository, root: file.worktree ?? here.root, sources: [], held: false }
-      const done = yield* BrainExport.restore({ brain, place, file: memory, trust: "vault" })
       total.restored += done.restored
       total.active += done.active
       total.pinned += done.pinned
       total.waiting += done.waiting
       total.known += done.known
       total.refused += done.refused
-      total.documents += memory.documents.length
+      total.documents += done.documents
     }
     UI.println(
       UI.Style.TEXT_SUCCESS_BOLD +

@@ -255,6 +255,9 @@ import type {
   McpStatusData,
   McpStatusErrors,
   McpStatusResponses,
+  MemoryBackupData,
+  MemoryBackupErrors,
+  MemoryBackupResponses,
   MemoryCreateData,
   MemoryCreateErrors,
   MemoryCreateResponses,
@@ -363,6 +366,9 @@ import type {
   MemoryResearchSourceData,
   MemoryResearchSourceErrors,
   MemoryResearchSourceResponses,
+  MemoryRestoreData,
+  MemoryRestoreErrors,
+  MemoryRestoreResponses,
   MemoryReviewListData,
   MemoryReviewListErrors,
   MemoryReviewListResponses,
@@ -3027,6 +3033,34 @@ export class Memory extends HeyApiClient {
   public import<ThrowOnError extends boolean = false>(options?: Options<MemoryImportData, ThrowOnError>) {
     return (options?.client ?? this.client).post<MemoryImportResponses, MemoryImportErrors, ThrowOnError>({
       url: "/memory/import",
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+      },
+    })
+  }
+
+  /**
+   * Memory for a Brain Vault backup
+   *
+   * Your own memory and each repository's that has learned entries, as export JSON, for the desktop app to encrypt on this computer before a Brain Vault backup. Never the documents' files.
+   */
+  public backup<ThrowOnError extends boolean = false>(options?: Options<MemoryBackupData, ThrowOnError>) {
+    return (options?.client ?? this.client).get<MemoryBackupResponses, MemoryBackupErrors, ThrowOnError>({
+      url: "/memory/backup",
+      ...options,
+    })
+  }
+
+  /**
+   * Restore memory from your Brain Vault
+   *
+   * Restore one memory file of your own Brain Vault, opened on this computer with its key. What the backup had in use and pinned comes back in use and pinned; what waited for review waits again. What you forgot here is not restored, and what is already in memory stays as it is.
+   */
+  public restore<ThrowOnError extends boolean = false>(options?: Options<MemoryRestoreData, ThrowOnError>) {
+    return (options?.client ?? this.client).post<MemoryRestoreResponses, MemoryRestoreErrors, ThrowOnError>({
+      url: "/memory/restore",
       ...options,
       headers: {
         "Content-Type": "application/json",

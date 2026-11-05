@@ -63,8 +63,12 @@ Never put a key in this repository, a chat or a ticket.
   only when you call it there yourself (`curl -H "Authorization: Bearer $CRON_SECRET" <preview>/api/vault/cleanup`).
 - **Costs** are in the contract (§1.4, "R2 and recordings"); deletes are free.
 
+## The desktop (A45)
+
+Settings → Memory → Backup offers Brain Vault on Vector only while the account's status lists `vault` with storage, so
+nothing changes in the app until you list it. The free GitHub backend shows on every plan, and so does the Backup tab.
+
 ## Not done here
 
-- The desktop's backup and Settings → Memory → Backup (A45).
 - Account deletion's full erase marker and retries (A57).
 - The legal read, the privacy page's `#vault` paragraph, and listing `vault` (A60).

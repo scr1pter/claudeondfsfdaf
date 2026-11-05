@@ -869,6 +869,15 @@ const scenarios: Scenario[] = [
       },
       "status",
     ),
+  http.protected.get("/memory/backup", "memory.backup").json(200, (body) => {
+    object(body)
+    check(Array.isArray(body.files), "a backup should list its memory files")
+  }),
+  http.protected
+    .post("/memory/restore", "memory.restore")
+    .mutating()
+    .at((ctx) => ({ path: "/memory/restore", headers: ctx.headers(), body: { text: "{}", repository: "" } }))
+    .json(400, object, "status"),
   http.protected.get("/memory/settings", "memory.settings.get").json(200, (body) => {
     object(body)
     check(

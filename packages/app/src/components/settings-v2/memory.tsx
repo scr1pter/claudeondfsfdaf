@@ -7,11 +7,14 @@ import { useDialog } from "@vectordevai/ui/context/dialog"
 import { getFilename } from "@vectordevai/core/util/path"
 import { useGlobal } from "@/context/global"
 import { useServer } from "@/context/server"
+import { usePlatform } from "@/context/platform"
 import { sessionHref } from "@/utils/session-route"
 import { LocalMemoryPanel } from "@/features/memory/local-memory-panel"
 import { Markdown } from "@vectordevai/session-ui/markdown"
 import { CITE_PREFIX, HELD, reportMarkdown, reportPath, size, statusLabel } from "@/features/research/research-model"
 import { SettingsMemoryDocuments } from "./memory-documents"
+import { SettingsMemoryBackup } from "./memory-backup"
+import { BACKUP_TAB } from "./memory-backup-model"
 import { SettingsMemorySearchModel } from "./memory-search-model"
 import {
   ABOUT,
@@ -66,6 +69,10 @@ const PRIVATE =
 export function SettingsMemoryV2(props: { repositoryPath?: string; sessionDirectory?: string; tab?: MemoryTab }) {
   const global = useGlobal()
   const server = useServer()
+  const platform = usePlatform()
+  // Backup (WP A45) is the desktop's: its main process holds the vault key and runs the nightly backup.
+  const tabs = (): readonly { value: MemoryTab; label: string }[] =>
+    platform.vault ? [...MEMORY_TABS, BACKUP_TAB] : MEMORY_TABS
   const directory = () => props.sessionDirectory ?? props.repositoryPath
   const [tab, setTab] = createSignal<MemoryTab>(props.tab ?? "memory")
   const [scope, setScope] = createSignal<Scope>(directory() ? "repository" : "personal")
@@ -152,7 +159,7 @@ export function SettingsMemoryV2(props: { repositoryPath?: string; sessionDirect
       </div>
 
       <div class="settings-memory-segments settings-memory-tabs" role="tablist" aria-label="Memory sections">
-        <For each={MEMORY_TABS}>
+        <For each={tabs()}>
           {(item) => (
             <button
               type="button"
@@ -187,6 +194,10 @@ export function SettingsMemoryV2(props: { repositoryPath?: string; sessionDirect
 
       <Show when={tab() === "model"}>
         <SettingsMemorySearchModel client={client} />
+      </Show>
+
+      <Show when={tab() === "backup" && platform.vault}>
+        <SettingsMemoryBackup />
       </Show>
 
       <Show when={tab() === "memory"}>

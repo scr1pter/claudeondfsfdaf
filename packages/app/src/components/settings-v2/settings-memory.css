@@ -633,3 +633,20 @@ button.settings-memory-doc-title:hover {
 .settings-memory .settings-v2-card-head.settings-memory-facet-head {
   grid-template-columns: 1fr auto;
 }
+
+/* Backup (WP A45): the recovery code, shown once, large enough to copy by hand. */
+.settings-memory-backup-code {
+  margin: 8px 0;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 16px;
+  letter-spacing: 0.04em;
+  word-break: break-word;
+  user-select: all;
+}
+
+[data-component="settings-memory-backup-versions"] .settings-memory-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}

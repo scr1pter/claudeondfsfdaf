@@ -95,6 +95,8 @@ import type { FailureMemory } from "../main/failure-memory"
 import type { RemoteStatus } from "../main/remote-link"
 import type { NotifyResult, PhoneAlertEvent } from "../main/remote-notify"
 export type { RemoteStatus } from "../main/remote-link"
+import type { VaultResult, VaultRestoreResult, VaultStatus, VaultVersions } from "../main/vault-backup"
+export type { VaultResult, VaultRestoreResult, VaultStatus, VaultVersions } from "../main/vault-backup"
 export type { FailureMemory, FailureRepair, FailureSignatureRecord } from "../main/failure-memory"
 import type { AgentTeam, TeamCollaborationGraph, TeamMessage, TeamTopology } from "../main/agent-team-model"
 
@@ -115,6 +117,18 @@ export type RemoteAPI = {
   /** Whether a phone started the turn any of these sessions runs; the app's auto-accept leaves those to a person. */
   isPhoneTurn: (sessionIDs: string[]) => Promise<boolean>
   onChange: (callback: (status: RemoteStatus) => void) => () => void
+}
+
+/** Brain Vault on this computer (WP A45): Settings → Memory → Backup. The vault key stays in the main process. */
+export type VaultAPI = {
+  status: () => Promise<VaultStatus>
+  configure: (input: { enabled?: boolean; backend?: "vector" | "github"; githubRepo?: string }) => Promise<VaultResult>
+  backup: () => Promise<VaultResult>
+  versions: () => Promise<VaultVersions>
+  restore: (input: { version?: string; code?: string }) => Promise<VaultRestoreResult>
+  forget: (version: string) => Promise<VaultResult>
+  remove: () => Promise<VaultResult>
+  onChange: (callback: (status: VaultStatus) => void) => () => void
 }
 
 /** Alerts from this computer to its paired phones, encrypted end to end (WP A41). */
@@ -858,6 +872,7 @@ export type ElectronAPI = {
   reports: ReportsPlatform
   remote: RemoteAPI
   phoneAlerts: PhoneAlertsAPI
+  vault: VaultAPI
   askHelpAssistant: (input: {
     messages: { role: "user" | "assistant"; content: string }[]
     context: string

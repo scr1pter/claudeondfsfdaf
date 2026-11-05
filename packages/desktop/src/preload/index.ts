@@ -81,6 +81,20 @@ const api: ElectronAPI = {
   phoneAlerts: {
     send: (alert) => ipcRenderer.invoke("phone-alert-send", alert),
   },
+  vault: {
+    status: () => ipcRenderer.invoke("vault-status"),
+    configure: (input) => ipcRenderer.invoke("vault-configure", input),
+    backup: () => ipcRenderer.invoke("vault-backup"),
+    versions: () => ipcRenderer.invoke("vault-versions"),
+    restore: (input) => ipcRenderer.invoke("vault-restore", input),
+    forget: (version) => ipcRenderer.invoke("vault-forget", version),
+    remove: () => ipcRenderer.invoke("vault-delete"),
+    onChange: (callback) => {
+      const handler = (_event: unknown, status: Parameters<typeof callback>[0]) => callback(status)
+      ipcRenderer.on("vault-changed", handler)
+      return () => ipcRenderer.removeListener("vault-changed", handler)
+    },
+  },
   askHelpAssistant: (input) => ipcRenderer.invoke("help-assistant-ask", input),
   agentTeams: {
     list: (scope) => ipcRenderer.invoke("agent-teams-list", scope),

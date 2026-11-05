@@ -104,6 +104,12 @@ export const settingsGroups: readonly SettingsGroup[] = [
           "reports",
           "sources",
           "citations",
+          // WP A45: Settings → Memory → Backup (desktop).
+          "backup",
+          "back up",
+          "brain vault",
+          "restore",
+          "recovery code",
         ],
       },
       {

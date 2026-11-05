@@ -10,7 +10,9 @@ import { BrainKnowledge } from "@vectordevai/core/brain/knowledge"
 import type { BrainSchema } from "@vectordevai/core/brain/schema"
 import { Flag } from "@vectordevai/core/flag/flag"
 import { ResearchStore } from "@vectordevai/core/research/store"
+import { VaultMemory } from "@/brain/vault-memory"
 import { Git } from "@/git"
+import { Project } from "@/project/project"
 import { Instruction } from "@/session/instruction"
 import { SessionDistill } from "@/session/distill"
 import { SessionPosting } from "@/session/posting"
@@ -64,6 +66,7 @@ export const memoryHandlers = HttpApiBuilder.group(InstanceHttpApi, "memory", (h
     const research = yield* ResearchStore.Service
     const sessions = yield* Session.Service
     const git = yield* Git.Service
+    const projects = yield* Project.Service
 
     const list = Effect.fn("MemoryHttpApi.list")(function* (ctx: {
       query: { scope?: "repository" | "personal"; filter?: Brain.Filter; query?: string }
@@ -154,6 +157,30 @@ export const memoryHandlers = HttpApiBuilder.group(InstanceHttpApi, "memory", (h
     const importMemory = Effect.fn("MemoryHttpApi.import")(function* (ctx: { payload: { text: string } }) {
       if (ctx.payload.text.length > IMPORT_CHARS) return yield* refused("Vector imports at most 2 MB at a time.", "limit")
       return yield* BrainExport.importText({ brain, place: yield* instruction.place(), text: ctx.payload.text })
+    })
+
+    // Brain Vault (WP A45): the desktop app encrypts these files on this computer before a backup, and restores the
+    // files it opened with the vault's key. Like every memory route, both are the owner's own (guests get 403).
+    const backup = Effect.fn("MemoryHttpApi.backup")(function* () {
+      return { files: (yield* VaultMemory.files({ instruction, brain, knowledge, projects })).files }
+    })
+
+    const restoreMemory = Effect.fn("MemoryHttpApi.restore")(function* (ctx: {
+      payload: { text: string; repository: string; worktree?: string }
+    }) {
+      if (ctx.payload.text.length > IMPORT_CHARS) return yield* refused("Vector restores at most 2 MB at a time.", "limit")
+      const done = yield* VaultMemory.restore({ instruction, brain }, ctx.payload)
+      if (done.unreadable)
+        return yield* refused("This backup needs a newer version of Vector. Update Vector, then restore it.", "version")
+      return {
+        restored: done.restored,
+        active: done.active,
+        pinned: done.pinned,
+        waiting: done.waiting,
+        known: done.known,
+        refused: done.refused,
+        documents: done.documents,
+      }
     })
 
     const tidy = Effect.fn("MemoryHttpApi.tidy")(function* () {
@@ -704,5 +731,7 @@ export const memoryHandlers = HttpApiBuilder.group(InstanceHttpApi, "memory", (h
       .handle("eraseSession", eraseSession)
       .handle("export", exportMemory)
       .handle("import", importMemory)
+      .handle("backup", backup)
+      .handle("restore", restoreMemory)
   }),
 )

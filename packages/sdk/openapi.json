@@ -8183,6 +8183,163 @@
         ]
       }
     },
+    "/memory/backup": {
+      "get": {
+        "tags": ["memory"],
+        "operationId": "memory.backup",
+        "parameters": [
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "This computer's memory as Brain Vault backup files",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemoryBackup"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BadRequestError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ForbiddenError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Your own memory and each repository's that has learned entries, as export JSON, for the desktop app to encrypt on this computer before a Brain Vault backup. Never the documents' files.",
+        "summary": "Memory for a Brain Vault backup",
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createVectorClient } from \"@vectordevai/sdk\"\n\nconst client = createVectorClient()\nawait client.memory.backup({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/memory/restore": {
+      "post": {
+        "tags": ["memory"],
+        "operationId": "memory.restore",
+        "parameters": [
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "What the restore brought back",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemoryRestoreResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "MemoryError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/MemoryError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ForbiddenError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Restore one memory file of your own Brain Vault, opened on this computer with its key. What the backup had in use and pinned comes back in use and pinned; what waited for review waits again. What you forgot here is not restored, and what is already in memory stays as it is.",
+        "summary": "Restore memory from your Brain Vault",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "text": {
+                    "type": "string"
+                  },
+                  "repository": {
+                    "type": "string"
+                  },
+                  "worktree": {
+                    "type": "string"
+                  }
+                },
+                "required": ["text", "repository"],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createVectorClient } from \"@vectordevai/sdk\"\n\nconst client = createVectorClient()\nawait client.memory.restore({\n  ...\n})"
+          }
+        ]
+      }
+    },
     "/memory/tidy": {
       "post": {
         "tags": ["memory"],
@@ -36914,6 +37071,70 @@
           }
         },
         "required": ["entries", "known", "refused", "over"],
+        "additionalProperties": false
+      },
+      "MemoryBackupFile": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "section": {
+            "type": "string",
+            "enum": ["memory"]
+          },
+          "text": {
+            "type": "string"
+          },
+          "repository": {
+            "type": "string"
+          },
+          "worktree": {
+            "type": "string"
+          }
+        },
+        "required": ["path", "section", "text", "repository"],
+        "additionalProperties": false
+      },
+      "MemoryBackup": {
+        "type": "object",
+        "properties": {
+          "files": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MemoryBackupFile"
+            }
+          }
+        },
+        "required": ["files"],
+        "additionalProperties": false
+      },
+      "MemoryRestoreResult": {
+        "type": "object",
+        "properties": {
+          "restored": {
+            "type": "number"
+          },
+          "active": {
+            "type": "number"
+          },
+          "pinned": {
+            "type": "number"
+          },
+          "waiting": {
+            "type": "number"
+          },
+          "known": {
+            "type": "number"
+          },
+          "refused": {
+            "type": "number"
+          },
+          "documents": {
+            "type": "number"
+          }
+        },
+        "required": ["restored", "active", "pinned", "waiting", "known", "refused", "documents"],
         "additionalProperties": false
       },
       "MemoryTidy": {

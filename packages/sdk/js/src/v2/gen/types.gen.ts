@@ -3712,6 +3712,28 @@ export type MemoryImportResult = {
   over: number
 }
 
+export type MemoryBackupFile = {
+  path: string
+  section: "memory"
+  text: string
+  repository: string
+  worktree?: string
+}
+
+export type MemoryBackup = {
+  files: Array<MemoryBackupFile>
+}
+
+export type MemoryRestoreResult = {
+  restored: number
+  active: number
+  pinned: number
+  waiting: number
+  known: number
+  refused: number
+  documents: number
+}
+
 export type MemoryTidy = {
   merged: number
   promoted: number
@@ -13913,6 +13935,74 @@ export type MemoryImportResponses = {
 }
 
 export type MemoryImportResponse = MemoryImportResponses[keyof MemoryImportResponses]
+
+export type MemoryBackupData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/memory/backup"
+}
+
+export type MemoryBackupErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type MemoryBackupError = MemoryBackupErrors[keyof MemoryBackupErrors]
+
+export type MemoryBackupResponses = {
+  /**
+   * This computer's memory as Brain Vault backup files
+   */
+  200: MemoryBackup
+}
+
+export type MemoryBackupResponse = MemoryBackupResponses[keyof MemoryBackupResponses]
+
+export type MemoryRestoreData = {
+  body?: {
+    text: string
+    repository: string
+    worktree?: string
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/memory/restore"
+}
+
+export type MemoryRestoreErrors = {
+  /**
+   * MemoryError | InvalidRequestError
+   */
+  400: MemoryError | InvalidRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type MemoryRestoreError = MemoryRestoreErrors[keyof MemoryRestoreErrors]
+
+export type MemoryRestoreResponses = {
+  /**
+   * What the restore brought back
+   */
+  200: MemoryRestoreResult
+}
+
+export type MemoryRestoreResponse = MemoryRestoreResponses[keyof MemoryRestoreResponses]
 
 export type MemoryTidyData = {
   body?: never

@@ -77,6 +77,7 @@ import {
 import { createTray, destroyTray, notifyScheduledRunFinished, updateTray } from "./tray"
 import { engineEventSource, setDesktopWorkBlocker, startKeepAwake } from "./keep-awake"
 import { remoteLink, startRemote, stopRemote } from "./remote-runtime"
+import { startVault, stopVault } from "./vault-runtime"
 import { getStore } from "./store"
 import { USAGE_STORE } from "./store-keys"
 import { createUsageCheckin, usageCheckinEndpoint } from "./usage-checkin"
@@ -223,6 +224,7 @@ const main = Effect.gen(function* () {
   const stopSidecars = async () => {
     unregisterManagedAccount()
     stopRemote()
+    stopVault()
     keepAwake?.stop()
     setDesktopWorkBlocker(undefined)
     await Promise.all([killSidecar(), stopBrowserBridge(), stopCloudBridge(), wslServers.stopAll()])
@@ -592,6 +594,9 @@ const main = Effect.gen(function* () {
       log: (message, meta) => logger.log(message, meta),
     })
     app.once("will-quit", () => stopRemote())
+    // Brain Vault (WP A45): Settings → Memory → Backup, and the nightly backup while the app is open.
+    startVault({ engine: { url, password }, log: (message, meta) => logger.log(message, meta) })
+    app.once("will-quit", () => stopVault())
     // The sidebar's name and photo; never holds up startup.
     void vectorAccount.refreshProfile()
     if (process.platform === "win32") {

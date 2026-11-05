@@ -1267,3 +1267,61 @@ outcome, verdict, actor.login` pass. Every paid plan includes it while the plan 
   vault is 404 `VAULT_NOT_FOUND`, which the A43 client reads as "holds nothing yet".
 - **Not decided here:** an account that downgrades to Plus keeps its stored vault (read-only by 403, no deletion date),
   because §4.4 deletes only after a plan ends. The owner may want a lapse for that case too.
+
+## A45 Desktop vault and Settings → Memory → Backup (4 Nov 2026)
+
+- **Restore is in the desktop too, through two new engine routes.** A45's list names only the backup, but v3's item AC
+  (which §0's precedence reads where the contract is silent) puts restore and "a list of versions, and delete" in
+  Settings → Memory → Backup, and the desktop's brain is not the CLI's on macOS (the desktop's engine keeps its data in
+  `<userData>/xdg-data`), so `vector vault restore` from a terminal cannot reach it. The desktop's main process cannot
+  open brain.db (the engine is another process, on Windows possibly in WSL), so the engine gained two owner-only memory
+  routes: `GET /memory/backup` (the backup's memory files, the person's own and each repository's, as export JSON) and
+  `POST /memory/restore` (one memory file, at most 2 MB, put back through `BrainExport.restore` with `trust: "vault"`).
+  Like every `/memory` route, a guest gets 403 (`isOwnerOnlyRoute`), and Remote's phone allowlist does not include
+  them. The owner can already approve and pin entries through the memory API, so the restore route grants nothing new;
+  the vault's own guarantee (only a backup opened with the vault key is restored) holds in the desktop, which decrypts.
+  The CLI's memory collection and restore loop moved unchanged into `packages/engine/src/brain/vault-memory.ts`, which
+  both use. The SDK was regenerated (additive: `memory.backup`, `memory.restore`); the client generator changed nothing.
+- **Backup reads go through one route, not the export route per repository.** Reading each repository through
+  `GET /memory/export?directory=<worktree>` would boot an engine instance per repository every night. The new route
+  builds each repository's place from the project list as the CLI does.
+- **Restore requests are cut on the desktop.** A memory file can pass the engine's 2 MB request limit, so the desktop
+  sends each one without evidence and documents (a restore reads neither) in parts of at most 500 entries and about
+  1.5 MB, each a valid export file. A part the engine cannot read (400) counts the file as needing a newer Vector.
+- **"Vault key in safeStorage".** As A41 did for Remote's keys: the key record is sealed in-process with
+  `vault-secrets.ts`, whose key the OS credential store holds through safeStorage and opens once per launch, and kept in
+  the `vector-vault` store. Without a secure credential store (`vaultSecrets.available()` false) the desktop makes no
+  vault and says why.
+- **§4.15's `vault.enabled`, `vault.backend`, `vault.githubRepo` live in the main process's `vector-vault` store,** not
+  the app settings, because the main process runs the nightly backup before any window opens (A41 did the same for
+  `remote.enabled`). They are read and changed through `platform.vault`.
+- **The desktop's vault is its own.** A43 left open whether the desktop and the CLI share one key. The CLI's file is in
+  its own data folder, and the desktop's terminal does not pass `VECTOR_CREDENTIAL_KEY` to its children, so neither can
+  open the other's sealed key. They stay separate; a store holding the other's vault refuses a backup ("holds another
+  vault"), and restoring that vault with its recovery code makes it the one that computer or CLI backs up to.
+- **"Nightly while the app is open".** Checked every 15 minutes (first 3 minutes after launch): due from 02:00 to before
+  06:00 local time when the last backup is 20 hours old and the last attempt an hour old, or at any hour once the last
+  backup is 36 hours old and the last attempt 6 hours old (a computer asleep at night). The nightly run never creates a
+  vault, because the recovery code must be shown to the person; Back up now does, and answers the code once, even if the
+  backup itself then fails, so a vault never exists without its code having been shown.
+- **"Warns on total repo size above 1 GB".** The size is the vault's blobs in the branch's tree (`list().storedBytes`)
+  after each backup, compared with 1,000,000,000 bytes; history GitHub keeps after a forced push is not counted.
+- **git in the desktop.** The store is core's (A43). The desktop runs `git` from PATH with the person's own credentials
+  (`GIT_TERMINAL_PROMPT=0`, Vector's own secrets left out by `untrustedChildEnvironment`), a 10-minute limit per command,
+  and decides `ls-remote`, `fetch` and `push` as `git-remote` on the remote's host before git starts; with Web access
+  None it sets `GIT_ALLOW_PROTOCOL=file`. The desktop's GitHub sign-in is not used for these pushes. `git-remote` and
+  `brain-vault` now list the desktop as a call site; `brain-vault` lost its `planned` entries.
+- **Vector's backend.** Offered in Settings only while the account's status lists `vault` with `vault.gb` above 0 (H1),
+  or while it is already the chosen backend so the person can move off it. A backup to it reads the status first and
+  refuses without it; the Vault API decides anyway (S1). Its numbers on the page (GB, days of versions) come from the
+  status's entitlements; the GitHub copy takes "7" from `Vault.LIMIT.githubVersions`.
+- **Files outside A45's list:** `packages/desktop/src/main/vault-runtime.ts` (Electron wiring, like A41's
+  remote-runtime.ts), the IPC handlers, preload and renderer wiring, `packages/desktop/src/main/index.ts`, the app's
+  `platform.tsx`, `memory-backup-model.ts`, `memory-backup.tsx`, the Memory page's tab list (`memory.tsx`,
+  `memory-model.ts`'s `MemoryTab` type; `MEMORY_TABS` itself is unchanged and the tab is added only where
+  `platform.vault` exists), `settings-memory.css`, the Memory item's search keywords, `packages/core/src/local-mode/sources.ts`,
+  the engine routes and their exerciser entries, `packages/engine/src/brain/vault-memory.ts`, the CLI refactor, the
+  regenerated SDK, `docs/vector/MODEL-PLANS.md` and `owner-actions/brain-vault.md`.
+- **A test expectation outside A45:** `packages/app/src/features/local/local-model.test.ts` already failed before this
+  work ("every source in the registry has a name of its own" did not hold for A43's `brain-vault`). The source now has
+  its name, "Brain Vault", in `local-model.ts`; no expectation changed.
