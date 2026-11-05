@@ -138,17 +138,29 @@ test("a fresh engine lists the account's last catalog while vectordev.ai is slow
   await ModelPlans.createClient({ file, request: async () => Response.json(active) }).catalog(account, { force: true })
   // The file names the account by digest; the token itself is never written.
   expect(await Bun.file(file).text()).not.toContain(account)
-  // Next launch: vectordev.ai answers after the listing deadline.
-  const slow = () => Bun.sleep(50).then(() => Response.json(active))
-  const restarted = ModelPlans.createClient({ file, timeout: 5, request: slow })
-  expect(await restarted.catalog(account)).toEqual(active)
-  expect(await restarted.catalog("vct_another-account.token")).toEqual(off)
-  // A refused token replaces what was saved.
-  await ModelPlans.createClient({ file, request: async () => new Response("revoked", { status: 403 }) }).catalog(
-    account,
-    { force: true },
-  )
-  expect(await ModelPlans.createClient({ file, timeout: 5, request: slow }).catalog(account)).toEqual(off)
+  // Keep network refreshes pending while checking the saved catalog, account isolation and a later refusal.
+  // A real-time sleep lets an older client's refresh overwrite the refusal during slow filesystem work.
+  const pending: ReturnType<typeof Promise.withResolvers<Response>>[] = []
+  const slow = () => {
+    const request = Promise.withResolvers<Response>()
+    pending.push(request)
+    return request.promise
+  }
+  try {
+    const restarted = ModelPlans.createClient({ file, timeout: 5, request: slow })
+    expect(await restarted.catalog(account)).toEqual(active)
+    expect(await restarted.catalog("vct_another-account.token")).toEqual(off)
+    // A refused token replaces what was saved.
+    await ModelPlans.createClient({ file, request: async () => new Response("revoked", { status: 403 }) }).catalog(
+      account,
+      { force: true },
+    )
+    expect(await ModelPlans.createClient({ file, timeout: 5, request: slow }).catalog(account)).toEqual(off)
+    expect(pending).toHaveLength(3)
+  } finally {
+    for (const request of pending) request.reject(new Error("The controlled background request has ended."))
+    await Promise.all(pending.map((request) => request.promise.catch(() => {})))
+  }
 })
 
 test("catalog caches are bounded and disabled mode makes no requests", async () => {

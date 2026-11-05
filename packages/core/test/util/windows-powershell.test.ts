@@ -101,7 +101,12 @@ $processId = (Get-Process -Id $PID).Id
 Write-FixtureCheckpoint 'process-command-finished'
 $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath ${quote(file)}).Hash
 Write-FixtureCheckpoint 'file-hash-finished'
-[pscustomobject]@{ Edition = $PSEdition; CertificateProvider = $certificateProvider; ArchiveCommand = $archiveCommand; ProcessId = $processId; Hash = $hash; Marker = $env:VECTOR_INSTALLER_ENV_MARKER } | ConvertTo-Json -Compress
+# This regression covers native module discovery; serialize its scalar results in Bun rather than loading
+# PowerShell's unrelated JSON conversion pipeline inside the same native-operation deadline.
+Write-FixtureCheckpoint 'fixture-output-started'
+$values = [string[]]@($PSEdition, $certificateProvider, $archiveCommand, $processId, $hash, $env:VECTOR_INSTALLER_ENV_MARKER)
+[Console]::Out.WriteLine([string]::Join([string][char]9, $values))
+[Console]::Out.Flush()
 Write-FixtureCheckpoint 'native-output-written'`,
       )}], { env: environment, stdin: "ignore", stdout: "pipe", stderr: "pipe" })
       await checkpoint("native-started", { pid: child.pid })
@@ -116,7 +121,13 @@ Write-FixtureCheckpoint 'native-output-written'`,
         const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()])
         await checkpoint("native-finished", { code, stdout, stderr })
         assert.equal(code, 0, stderr)
-        await Bun.write(Bun.stdout, stdout)
+        const values = stdout.trimEnd().split("\\t")
+        assert.equal(values.length, 6, "native commands must return each actual scalar result")
+        assert.match(values[3], /^[1-9][0-9]*$/, "Get-Process must return its actual positive PID")
+        const processId = Number(values[3])
+        assert.ok(Number.isSafeInteger(processId), "the native PID must be a safe integer")
+        const result = { Edition: values[0], CertificateProvider: values[1], ArchiveCommand: values[2], ProcessId: processId, Hash: values[4], Marker: values[5] }
+        await Bun.write(Bun.stdout, JSON.stringify(result) + "\\n")
         await checkpoint("bun-output-written")
       } finally {
         clearTimeout(timeout)
