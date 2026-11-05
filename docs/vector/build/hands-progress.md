@@ -739,3 +739,8 @@ The actual Linux Electron overlay/job and dev-app journey also fail before usabl
 ### C8 Windows overlay policy compiler repair
 
 Run42029815801 at46f3a6ee now preserves the actual late compiler failure: overlay_driver.cpp declares a local near predicate, which conflicts with Windows SDK's legacy near macro (C2513). It is renamed adjacent without changing the one-pixel bounds predicate or assertions. The closed diagnostic identifies exit-1, not a timed-out command. This diagnoses this source's failure; it does not establish the cause of the earlier generic c4239534 failure. Native Windows runtime remains pending. macOS measured inputs and its enforced lock are unchanged by this Windows-only repair.
+
+
+### C9 repository wording regression repair
+
+Full CI's Linux unit job127253857303 passes ordinary/desktop units, generated-client checks and HttpApi exerciser gates, then the hosted API suite reports164pass/1fail in the existing owner terminology guard. New Hands guide/release copy used project code and project's configuration, which violate the17October repository/workspace wording rule. The new copy now says running code and a repository's/user's configuration; the changelog is regenerated from the same source. The original guard remains unchanged and passes both focused tests/16 assertions from the web package. Already-published historical notes are unchanged.
