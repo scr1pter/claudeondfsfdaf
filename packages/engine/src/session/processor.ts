@@ -368,6 +368,7 @@ const layer = Layer.effect(
           patched: boolean
         },
         confirm?: Effect.Effect<boolean>,
+        checkpoint?: Effect.Effect<void>,
       ) {
         const tools = ctx.stepTools
         ctx.stepTools = []
@@ -375,25 +376,39 @@ const layer = Layer.effect(
         const contextTokens = step.tokens.input + step.tokens.cache.read + step.tokens.cache.write
         // The next step is estimated at the rates its context will be billed at, a long-context tier included.
         const rates = Session.costAt(input.model.cost, contextTokens + NEXT_STEP_SLACK)
-        const verdict = yield* guard.record(
-          ctx.sessionID,
-          {
-            costUsd: step.costUsd,
-            unpriced: step.unpriced && !step.billed,
-            // A model the catalog lists no price for is still priced when its provider reported what the step cost.
-            costKind: kind === "unknown" && step.billed ? "priced" : kind,
-            price: rates && SpendGuard.priceOf(rates),
-            contextTokens,
-            cachedTokens: step.tokens.cache.read,
-            continues: step.continues,
-            tools: (yield* config.get()).budget?.loop?.enabled === false ? [] : tools,
-            patched: step.patched,
-          },
-          confirm,
-        )
+        let confirmation: Exit.Exit<boolean> | undefined
+        const recorded = yield* guard
+          .record(
+            ctx.sessionID,
+            {
+              costUsd: step.costUsd,
+              unpriced: step.unpriced && !step.billed,
+              // A model the catalog lists no price for is still priced when its provider reported what the step cost.
+              costKind: kind === "unknown" && step.billed ? "priced" : kind,
+              price: rates && SpendGuard.priceOf(rates),
+              contextTokens,
+              cachedTokens: step.tokens.cache.read,
+              continues: step.continues,
+              tools: (yield* config.get()).budget?.loop?.enabled === false ? [] : tools,
+              patched: step.patched,
+            },
+            confirm?.pipe(
+              Effect.exit,
+              Effect.map((exit) => {
+                confirmation = exit
+                return Exit.isSuccess(exit) && exit.value
+              }),
+            ),
+          )
+          .pipe(Effect.exit)
+        // A cancelled snapshot confirmation must not erase the bill or replace the original interruption.
+        if (confirmation && Exit.isFailure(confirmation)) yield* Effect.failCause(confirmation.cause)
+        const verdict = Exit.isFailure(recorded) ? yield* Effect.failCause(recorded.cause) : recorded.value
+        // Deliver a pending cancellation after accounting, before a cap verdict replaces its turn error.
+        if (checkpoint) yield* checkpoint
         if (verdict.state !== "stopped" || !step.continues) return
         yield* stopTurn(verdict)
-      })
+      }, Effect.uninterruptible)
 
       // Ends this turn with the reason the spend guard stopped its run.
       const stopTurn = Effect.fn("SessionProcessor.stopTurn")(function* (
@@ -686,7 +701,7 @@ const layer = Layer.effect(
             }
             // The provider has billed this step, so its usage is recorded whole before the snapshot, which can wait
             // on the worktree's snapshot lock long enough for a cancel to land.
-            yield* Effect.uninterruptible(
+            yield* Effect.uninterruptibleMask((restore) =>
               Effect.gen(function* () {
                 ctx.started = undefined
                 ctx.assistantMessage.finish = value.reason
@@ -695,46 +710,47 @@ const layer = Layer.effect(
                 ctx.assistantMessage.tokens = usage.tokens
                 yield* session.updatePart(stepFinish)
                 yield* session.updateMessage(ctx.assistantMessage)
+                yield* Effect.forEach(Object.keys(ctx.reasoningMap), finishReasoning)
+                // The step is over once the provider's terminal event is recorded, so the loop moves on now. The closing
+                // snapshot and the step's patch run in the session's snapshot queue, ahead of the next step's tools.
+                const start = ctx.snapshot
+                const opening = ctx.opening
+                ctx.snapshot = undefined
+                ctx.opening = undefined
+                const work = yield* enqueue(
+                  ctx.sessionID,
+                  Effect.gen(function* () {
+                    const closing = yield* snapshot.track()
+                    if (closing) yield* session.updatePart({ ...stepFinish, snapshot: closing })
+                    const from = start ?? (opening ? yield* result(opening) : undefined)
+                    const changed = from ? yield* recordPatch(from) : false
+                    yield* summary
+                      .summarize({
+                        sessionID: ctx.sessionID,
+                        messageID: ctx.assistantMessage.parentID,
+                      })
+                      .pipe(Effect.ignore, Effect.forkIn(scope))
+                    return changed
+                  }),
+                )
+                yield* recordStep(
+                  {
+                    costUsd: usage.cost,
+                    billed: usage.billed,
+                    unpriced: usage.unpriced,
+                    tokens: usage.tokens,
+                    // The loop's own rule: it goes on after "tool-calls", and after local tool calls under any finish
+                    // reason. A StructuredOutput call is the final answer.
+                    continues:
+                      (value.reason === "tool-calls" || ctx.stepTools.some((item) => !item.providerExecuted)) &&
+                      !ctx.stepTools.some((item) => item.tool === "StructuredOutput"),
+                    // The step's patch is taken off the request path, so a successful edit tool stands in for it here.
+                    patched: ctx.stepTools.some((item) => FILE_TOOLS.has(item.tool) && item.error === undefined),
+                  },
+                  restore(result(work).pipe(Effect.map((changed) => changed === true))),
+                  restore(Effect.void),
+                )
               }),
-            )
-            yield* Effect.forEach(Object.keys(ctx.reasoningMap), finishReasoning)
-            // The step is over once the provider's terminal event is recorded, so the loop moves on now. The closing
-            // snapshot and the step's patch run in the session's snapshot queue, ahead of the next step's tools.
-            const start = ctx.snapshot
-            const opening = ctx.opening
-            ctx.snapshot = undefined
-            ctx.opening = undefined
-            const work = yield* enqueue(
-              ctx.sessionID,
-              Effect.gen(function* () {
-                const closing = yield* snapshot.track()
-                if (closing) yield* session.updatePart({ ...stepFinish, snapshot: closing })
-                const from = start ?? (opening ? yield* result(opening) : undefined)
-                const changed = from ? yield* recordPatch(from) : false
-                yield* summary
-                  .summarize({
-                    sessionID: ctx.sessionID,
-                    messageID: ctx.assistantMessage.parentID,
-                  })
-                  .pipe(Effect.ignore, Effect.forkIn(scope))
-                return changed
-              }),
-            )
-            yield* recordStep(
-              {
-                costUsd: usage.cost,
-                billed: usage.billed,
-                unpriced: usage.unpriced,
-                tokens: usage.tokens,
-                // The loop's own rule: it goes on after "tool-calls", and after local tool calls under any finish
-                // reason. A StructuredOutput call is the final answer.
-                continues:
-                  (value.reason === "tool-calls" || ctx.stepTools.some((item) => !item.providerExecuted)) &&
-                  !ctx.stepTools.some((item) => item.tool === "StructuredOutput"),
-                // The step's patch is taken off the request path, so a successful edit tool stands in for it here.
-                patched: ctx.stepTools.some((item) => FILE_TOOLS.has(item.tool) && item.error === undefined),
-              },
-              result(work).pipe(Effect.map((changed) => changed === true)),
             )
             if (
               !ctx.assistantMessage.summary &&

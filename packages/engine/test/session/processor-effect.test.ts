@@ -5,7 +5,7 @@ import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { expect } from "bun:test"
 import { tool } from "ai"
-import { Cause, Effect, Exit, Fiber, Layer, Stream } from "effect"
+import { Cause, Effect, Exit, Fiber, Layer, Schema, Stream } from "effect"
 import path from "path"
 import z from "zod"
 import type { Agent } from "../../src/agent/agent"
@@ -326,6 +326,60 @@ const gatewayLLM = Layer.succeed(
 const itGateway = testEffect(LayerNode.compile(root, [...replacements, [LLM.node, gatewayLLM]]))
 const itStalledSnapshot = testEffect(
   LayerNode.compile(root, [...replacements, [LLM.node, billedLLM], [Snapshot.node, stalledSnapshot()]]),
+)
+const itBilled = testEffect(LayerNode.compile(root, [...replacements, [LLM.node, billedLLM]]))
+
+const confirmationGate = { started: defer<void>(), release: defer<void>(), tracks: 0, changed: false }
+const confirmationSnapshot = Layer.succeed(
+  Snapshot.Service,
+  Snapshot.Service.of({
+    init: () => Effect.void,
+    cleanup: () => Effect.void,
+    track: () =>
+      Effect.suspend(() => {
+        if (++confirmationGate.tracks < 6) return Effect.succeed("start")
+        confirmationGate.started.resolve()
+        return Effect.promise(() => confirmationGate.release.promise).pipe(Effect.as("end"))
+      }),
+    patch: () =>
+      Effect.succeed({
+        hash: "start",
+        files: confirmationGate.changed && confirmationGate.tracks >= 6 ? ["/changed.txt"] : [],
+      }),
+    restore: () => Effect.void,
+    revert: () => Effect.void,
+    diff: () => Effect.succeed(""),
+    diffFull: () => Effect.succeed([]),
+  }),
+)
+const repeatingBilledLLM = Layer.succeed(
+  LLM.Service,
+  LLM.Service.of({
+    stream: () =>
+      Stream.make(
+        LLMEvent.stepStart({ index: 0 }),
+        ...["call-1"].flatMap((id) => [
+          LLMEvent.toolInputStart({ id, name: "lookup" }),
+          LLMEvent.toolInputEnd({ id, name: "lookup" }),
+          LLMEvent.toolCall({ id, name: "lookup", input: {}, providerExecuted: true }),
+          LLMEvent.toolResult({
+            id,
+            name: "lookup",
+            result: { type: "text", value: "unchanged" },
+            providerExecuted: true,
+          }),
+        ]),
+        LLMEvent.stepFinish({
+          index: 0,
+          reason: "tool-calls",
+          usage: new Usage({ inputTokens: 10_000, outputTokens: 1_000, totalTokens: 11_000 }),
+        }),
+        LLMEvent.finish({ reason: "tool-calls" }),
+      ),
+  }),
+)
+const itConfirmation = testEffect(
+  LayerNode.compile(root, [...replacements, [LLM.node, repeatingBilledLLM], [Snapshot.node, confirmationSnapshot]]),
 )
 
 // The opening snapshot lands only when the test releases it; the closing one returns at once. Each landing is logged
@@ -1341,6 +1395,149 @@ itStalledSnapshot.live(
       },
     ),
 )
+
+for (const unknown of [false, true]) {
+  for (const linked of [false, true]) {
+    const suite = unknown ? itProviderError : itBilled
+    suite.live(
+      `session.processor accounting retains a completed bill in the guard when cancelled during publication (${unknown ? "unknown" : "priced"}, ${linked ? "linked child" : "root"})`,
+      () =>
+        provideTmpdirInstance(
+          (dir) =>
+            Effect.gen(function* () {
+              const { processors, session, provider } = yield* boot()
+              const events = yield* EventV2Bridge.Service
+              const guard = yield* SpendGuard.Service
+              const owner = yield* session.create({})
+              yield* guard.begin(owner.id, { usd: 0.3, unpricedSteps: 1 })
+              const chat = linked ? yield* session.create({ parentID: owner.id }) : owner
+              if (linked) yield* guard.link(chat.id, owner.id)
+              const cost = unknown ? 0 : 0.315
+              const parent = yield* user(chat.id, "cancel billed publication")
+              const msg = yield* assistant(chat.id, parent.id, path.resolve(dir))
+              const mdl = yield* provider.getModel(ref.providerID, ref.modelID)
+              const published = defer<void>()
+              const release = defer<void>()
+              let gated = false
+              const off = yield* events.listen((event) => {
+                if (event.type !== SessionV1.Event.MessageUpdated.type || gated) return Effect.void
+                const data = Schema.decodeUnknownSync(SessionV1.Event.MessageUpdated.data)(event.data)
+                if (data.info.id !== msg.id || data.info.role !== "assistant" || data.info.finish !== "stop")
+                  return Effect.void
+                gated = true
+                published.resolve()
+                return Effect.promise(() => release.promise)
+              })
+              const handle = yield* processors.create({ assistantMessage: msg, sessionID: chat.id, model: mdl })
+              const run = yield* handle
+                .process({
+                  user: {
+                    id: parent.id,
+                    sessionID: chat.id,
+                    role: "user",
+                    time: parent.time,
+                    agent: "build",
+                    model: ref,
+                  },
+                  sessionID: chat.id,
+                  model: mdl,
+                  agent: agent(),
+                  system: [],
+                  messages: [{ role: "user", content: "cancel billed publication" }],
+                  tools: {},
+                })
+                .pipe(Effect.forkChild)
+              yield* Effect.promise(() => published.promise)
+              const cancelling = yield* Fiber.interrupt(run).pipe(Effect.forkChild({ startImmediately: true }))
+              release.resolve()
+              yield* Fiber.join(cancelling)
+              const exit = yield* Fiber.await(run)
+              yield* off
+              expect(Exit.isFailure(exit) && Cause.hasInterrupts(exit.cause)).toBe(true)
+              const saved = yield* MessageV2.get({ sessionID: chat.id, messageID: msg.id })
+              expect(saved.parts.filter((part) => part.type === "step-finish")).toHaveLength(1)
+              expect(saved.info).toMatchObject({ cost, error: { name: "MessageAbortedError" } })
+              expect((yield* session.get(chat.id)).cost).toBeCloseTo(cost)
+              expect((yield* session.usage({ directory: dir })).lifetimeCost).toBeCloseTo(cost)
+              expect(yield* guard.snapshot(chat.id)).toMatchObject({
+                spentUsd: cost,
+                steps: 1,
+                unpricedSteps: Number(unknown),
+              })
+              expect(yield* guard.snapshot(owner.id)).toMatchObject({
+                spentUsd: cost,
+                steps: 1,
+                unpricedSteps: Number(unknown),
+              })
+              expect((yield* guard.stopped(owner.id))?.reason).toBe(unknown ? "unpriced" : "cap")
+            }),
+          { trusted: true, config: accountingCfg("http://localhost:1/v1") },
+        ),
+    )
+  }
+}
+
+for (const outcome of ["cancelled", "cancelled_at_cap", "changed", "unchanged"] as const) {
+  itConfirmation.live(
+    `session.processor accounting settles a billed loop candidate when its snapshot is ${outcome}`,
+    () =>
+      provideTmpdirInstance(
+        (dir) =>
+          Effect.gen(function* () {
+            const cancelled = outcome === "cancelled" || outcome === "cancelled_at_cap"
+            confirmationGate.started = defer<void>()
+            confirmationGate.release = defer<void>()
+            confirmationGate.tracks = 0
+            confirmationGate.changed = outcome === "changed"
+            const session = yield* Session.Service
+            const guard = yield* SpendGuard.Service
+            const owner = yield* session.create({})
+            yield* guard.begin(owner.id, { usd: 5 })
+            const chat = yield* session.create({ parentID: owner.id })
+            yield* guard.link(chat.id, owner.id)
+            // Two real provider steps establish the loop history before the third needs snapshot confirmation.
+            for (let index = 0; index < 2; index++) {
+              const previous = yield* admissionTurn(dir, chat.id)
+              expect(yield* previous.run).toBe("continue")
+            }
+            const turn = yield* admissionTurn(dir, chat.id)
+            const run = yield* turn.run.pipe(Effect.forkChild)
+            yield* Effect.promise(() => confirmationGate.started.promise)
+            if (cancelled) {
+              // Tighten while the snapshot is pending; the final record must still apply the latest cap.
+              if (outcome === "cancelled_at_cap") yield* guard.tighten(owner.id, { usd: 0.1 })
+              // The already-launched child keeps charging its original run even while its owner starts another.
+              yield* guard.end(owner.id)
+              yield* guard.begin(owner.id, { usd: 5 })
+              const cancelling = yield* Fiber.interrupt(run).pipe(Effect.forkChild({ startImmediately: true }))
+              yield* Fiber.join(cancelling).pipe(
+                Effect.timeout("5 seconds"),
+                Effect.ensuring(Effect.sync(() => confirmationGate.release.resolve())),
+              )
+              const exit = yield* Fiber.await(run)
+              expect(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)).toBe(true)
+              expect(yield* guard.snapshot(owner.id)).toMatchObject({ spentUsd: 0, steps: 0 })
+              expect((yield* guard.stopped(chat.id))?.reason).toBe(outcome === "cancelled_at_cap" ? "cap" : "loop")
+            } else {
+              confirmationGate.release.resolve()
+              expect(yield* Fiber.join(run)).toBe(outcome === "changed" ? "continue" : "stop")
+              expect((yield* guard.stopped(owner.id))?.reason).toBe(outcome === "changed" ? undefined : "loop")
+            }
+            const saved = yield* MessageV2.get({ sessionID: chat.id, messageID: turn.handle.message.id })
+            expect(saved.parts.filter((part) => part.type === "step-finish")).toHaveLength(1)
+            expect(saved.info).toMatchObject({ cost: 0.045 })
+            if (cancelled) expect(saved.info).toMatchObject({ error: { name: "MessageAbortedError" } })
+            expect((yield* session.get(chat.id)).cost).toBeCloseTo(0.135)
+            expect((yield* session.usage({ directory: dir })).lifetimeCost).toBeCloseTo(0.135)
+            expect(yield* guard.snapshot(chat.id)).toMatchObject({ spentUsd: 0.135, steps: 3, unpricedSteps: 0 })
+          }),
+        {
+          trusted: true,
+          config: { ...accountingCfg("http://localhost:1/v1"), permission: { doom_loop: "allow" } },
+        },
+      ),
+  )
+}
 
 for (const guarded of [false, true]) {
   for (const outcome of ["stopped", "fail"] as const) {
