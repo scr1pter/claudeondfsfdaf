@@ -70,8 +70,17 @@ func runPrivilegedSelfTestTests() throws -> Int {
             "The privileged catalog must retain all fourteen concrete scenario names in their fixed order")
         try privilegedExpect(PrivilegedCheckCatalog.reasons == ["responsibility_missing", "accessibility_denied", "screen_denied", "post_event_denied",
             "target_post_event_denied", "noninteractive_desktop", "input_detection_unavailable", "physical_takeover", "target_unavailable",
-            "target_validation_failed", "assertion_failed", "native_operation_failed", "deadline_exceeded", "cleanup_failed"],
+            "target_validation_failed", "target_spawn_failed", "target_handshake_failed", "target_process_changed",
+            "target_responsibility_missing", "target_state_invalid", "target_identity_unavailable",
+            "assertion_failed", "native_operation_failed", "deadline_exceeded", "cleanup_failed"],
             "Reports may use only the bounded machine-readable reason vocabulary")
+        for stage in PrivilegedTargetStage.allCases {
+            var checks = privilegedPasses()
+            checks[0] = PrivilegedCheckResult(name: PrivilegedCheckCatalog.names[0], ok: false, detail: stage.rawValue)
+            let report = PrivilegedCheckReport(checks: checks)
+            try privilegedExpect(report.valid && report.exitCode == 1 && report.wire["checks"]?.arrayValue?.first?["detail"] == .string(stage.rawValue),
+                "Every setup stage remains a real failure with a fixed content-free diagnostic")
+        }
     }
     try test {
         let report = PrivilegedCheckReport(checks: privilegedPasses())

@@ -15,7 +15,9 @@ enum PrivilegedCheckCatalog {
         "helper-tagged-escape-ignored", "foreign-escape-stops", "owned-input-release", "isolated-target-cleanup"]
     static let reasons: Set<String> = ["responsibility_missing", "accessibility_denied", "screen_denied", "post_event_denied",
         "target_post_event_denied", "noninteractive_desktop", "input_detection_unavailable", "physical_takeover",
-        "target_unavailable", "target_validation_failed", "assertion_failed", "native_operation_failed", "deadline_exceeded", "cleanup_failed"]
+        "target_unavailable", "target_validation_failed", "target_spawn_failed", "target_handshake_failed",
+        "target_process_changed", "target_responsibility_missing", "target_state_invalid", "target_identity_unavailable",
+        "assertion_failed", "native_operation_failed", "deadline_exceeded", "cleanup_failed"]
 }
 
 struct PrivilegedCheckResult {
@@ -132,7 +134,11 @@ enum PrivilegedTargetPolicy {
     }
 }
 
-private enum PrivilegedTestFailure: Error { case assertion, operation, timeout, interrupted }
+enum PrivilegedTargetStage: String, CaseIterable {
+    case spawn = "target_spawn_failed", handshake = "target_handshake_failed", process = "target_process_changed"
+    case responsibility = "target_responsibility_missing", state = "target_state_invalid", identity = "target_identity_unavailable"
+}
+private enum PrivilegedTestFailure: Error { case assertion, operation, timeout, interrupted, target(PrivilegedTargetStage) }
 
 /// Own child and two private pipes only. No shell, inherited helper descriptor, or generic command endpoint.
 private final class PrivilegedTargetChannel {
@@ -184,11 +190,11 @@ private final class PrivilegedTargetChannel {
     }
     func launch() throws -> JSONValue {
         var incoming = [Int32](repeating: -1, count: 2), outgoing = [Int32](repeating: -1, count: 2)
-        guard pipe(&incoming) == 0 else { throw PrivilegedTestFailure.operation }
-        guard pipe(&outgoing) == 0 else { incoming.forEach { _ = Darwin.close($0) }; throw PrivilegedTestFailure.operation }
+        guard pipe(&incoming) == 0 else { throw PrivilegedTestFailure.target(.spawn) }
+        guard pipe(&outgoing) == 0 else { incoming.forEach { _ = Darwin.close($0) }; throw PrivilegedTestFailure.target(.spawn) }
         var actions: posix_spawn_file_actions_t?, attributes: posix_spawnattr_t?
         guard posix_spawn_file_actions_init(&actions) == 0, posix_spawnattr_init(&attributes) == 0 else {
-            (incoming + outgoing).forEach { _ = Darwin.close($0) }; throw PrivilegedTestFailure.operation
+            (incoming + outgoing).forEach { _ = Darwin.close($0) }; throw PrivilegedTestFailure.target(.spawn)
         }
         defer { posix_spawn_file_actions_destroy(&actions); posix_spawnattr_destroy(&attributes) }
         var defaults = sigset_t(), mask = sigset_t(); sigfillset(&defaults); sigemptyset(&mask)
@@ -199,14 +205,14 @@ private final class PrivilegedTargetChannel {
               posix_spawn_file_actions_adddup2(&actions, outgoing[1], STDOUT_FILENO) == 0,
               (incoming + outgoing).allSatisfy({ posix_spawn_file_actions_addclose(&actions, $0) == 0 }),
               posix_spawn_file_actions_addopen(&actions, STDERR_FILENO, "/dev/null", O_WRONLY, 0) == 0 else {
-            (incoming + outgoing).forEach { _ = Darwin.close($0) }; throw PrivilegedTestFailure.operation
+            (incoming + outgoing).forEach { _ = Darwin.close($0) }; throw PrivilegedTestFailure.target(.spawn)
         }
         let args = [evidence.executablePath, "--nonce", nonce, "--artifact", evidence.sourceDigest,
             "--parent-pid", String(getpid()), "--isolated"]
         let environment = ["PATH=/usr/bin:/bin", "HOME=" + NSHomeDirectory(), "TMPDIR=" + NSTemporaryDirectory()]
         let allocated = (args + environment).map { $0.withCString { strdup($0) } }
         defer { allocated.forEach { free($0) } }
-        guard allocated.allSatisfy({ $0 != nil }) else { (incoming + outgoing).forEach { _ = Darwin.close($0) }; throw PrivilegedTestFailure.operation }
+        guard allocated.allSatisfy({ $0 != nil }) else { (incoming + outgoing).forEach { _ = Darwin.close($0) }; throw PrivilegedTestFailure.target(.spawn) }
         var argv = Array(allocated.prefix(args.count)) + [nil], envp = Array(allocated.dropFirst(args.count)) + [nil]
         var launched: pid_t = 0
         // Publication and close share one fence: cancellation cannot leave a late child unowned.
@@ -217,17 +223,24 @@ private final class PrivilegedTargetChannel {
         let result = posix_spawn(&launched, evidence.executablePath, &actions, &attributes, &argv, &envp)
         _ = Darwin.close(incoming[0]); _ = Darwin.close(outgoing[1])
         guard result == 0, launched > 1 else {
-            lock.unlock(); _ = Darwin.close(incoming[1]); _ = Darwin.close(outgoing[0]); throw PrivilegedTestFailure.operation
+            lock.unlock(); _ = Darwin.close(incoming[1]); _ = Darwin.close(outgoing[0]); throw PrivilegedTestFailure.target(.spawn)
         }
         pid = launched; input = incoming[1]; output = outgoing[0]
         guard fcntl(input, F_SETFL, fcntl(input, F_GETFL) | O_NONBLOCK) == 0,
-              fcntl(output, F_SETFL, fcntl(output, F_GETFL) | O_NONBLOCK) == 0 else { lock.unlock(); throw PrivilegedTestFailure.operation }
+              fcntl(output, F_SETFL, fcntl(output, F_GETFL) | O_NONBLOCK) == 0 else { lock.unlock(); throw PrivilegedTestFailure.target(.spawn) }
         let read = DispatchSource.makeReadSource(fileDescriptor: output, queue: DispatchQueue(label: "ai.vector.self-test.target-output"))
         read.setEventHandler { [weak self] in self?.receive() }; source = read; read.resume(); lock.unlock()
-        let ready = try awaitReply(0, milliseconds: 8000)
-        guard let actual = HelperLifecycle.processIdentity(launched), actual.executable.utf8.elementsEqual(evidence.executablePath.utf8),
-              HelperLifecycle.responsiblePID(for: actual) == launched,
-              PrivilegedTargetPolicy.state(ready, pid: launched, parent: getpid(), evidence: evidence) else { throw PrivilegedTestFailure.operation }
+        let ready: JSONValue
+        do { ready = try awaitReply(0, milliseconds: 8000) }
+        catch PrivilegedTestFailure.timeout { throw PrivilegedTestFailure.timeout }
+        catch { throw PrivilegedTestFailure.target(.handshake) }
+        guard let actual = HelperLifecycle.processIdentity(launched), actual.executable.utf8.elementsEqual(evidence.executablePath.utf8) else {
+            throw PrivilegedTestFailure.target(.process)
+        }
+        guard HelperLifecycle.responsiblePID(for: actual) == launched else { throw PrivilegedTestFailure.target(.responsibility) }
+        guard PrivilegedTargetPolicy.state(ready, pid: launched, parent: getpid(), evidence: evidence) else {
+            throw PrivilegedTestFailure.target(.state)
+        }
         lock.lock()
         guard !closed, pid == launched else { lock.unlock(); throw PrivilegedTestFailure.interrupted }
         process = actual; lock.unlock()
@@ -563,6 +576,7 @@ final class PrivilegedHelperSelfTest {
             else { skip(index, "physical_takeover") }
         }
         catch PrivilegedTestFailure.timeout { results[name] = PrivilegedCheckResult(name: name, ok: false, detail: "deadline_exceeded") }
+        catch PrivilegedTestFailure.target(let stage) { results[name] = PrivilegedCheckResult(name: name, ok: false, detail: stage.rawValue) }
         catch { results[name] = PrivilegedCheckResult(name: name, ok: false, detail: "native_operation_failed") }
     }
     private func report(defaultReason: String = "target_unavailable") -> PrivilegedCheckReport {
@@ -609,9 +623,11 @@ final class PrivilegedHelperSelfTest {
         var owner: NativeOwner?
         check(0) {
             _ = try channel.launch()
-            let observed = try NativeIdentityReader.observe(pid: channel.targetPID)
+            let observed: NativeOwner
+            do { observed = try NativeIdentityReader.observe(pid: channel.targetPID) }
+            catch { throw PrivilegedTestFailure.target(.identity) }
             guard observed.process.executable.utf8.elementsEqual(channel.evidence.executablePath.utf8),
-                  observed.identity.bundleId == PrivilegedTargetPolicy.identifier else { return false }
+                  observed.identity.bundleId == PrivilegedTargetPolicy.identifier else { throw PrivilegedTestFailure.target(.identity) }
             owner = observed
             try self.current()
             native.start(target: channel.targetPID, executable: channel.evidence.executablePath)

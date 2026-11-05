@@ -167,6 +167,18 @@ test("native reports require the complete fixed catalog and coherent exits", () 
   )
   expect(nativeSelfTestChecks(JSON.stringify({ checks: failed }), "privileged", 1)).toEqual(failed)
   expect(() => nativeSelfTestChecks(JSON.stringify({ checks: failed }), "privileged", 77)).toThrow()
+  for (const detail of [
+    "target_spawn_failed",
+    "target_handshake_failed",
+    "target_process_changed",
+    "target_responsibility_missing",
+    "target_state_invalid",
+    "target_identity_unavailable",
+  ]) {
+    const checks = failed.map((entry, index) => (index === 0 ? { ...entry, detail } : entry))
+    expect(nativeSelfTestChecks(JSON.stringify({ checks }), "privileged", 1)).toEqual(checks)
+    expect(() => nativeSelfTestChecks(JSON.stringify({ checks }), "privileged", 77)).toThrow()
+  }
   expect(() => nativeSelfTestChecks(" ".repeat(32_769), "privileged", 77)).toThrow()
 })
 
