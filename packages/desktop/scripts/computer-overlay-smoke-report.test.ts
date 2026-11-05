@@ -19,6 +19,7 @@ import {
   computerSmokeLoaderModule,
   computerSmokeBootstrapSource,
   computerSmokeBannerProbe,
+  computerSmokeControllerReady,
   COMPUTER_SMOKE_TRANSPARENCY_PROBE,
   computerSmokeTransparentBackground,
   COMPUTER_SMOKE_LOADER_STARTED,
@@ -97,6 +98,58 @@ describe("fixed real Electron computer smoke reports", () => {
     root.backgroundColor = "rgba(0, 0, 0, 0)"
     body.backgroundColor = "rgba(0, 0, 0, 1)"
     expect(observe()).toBe(false)
+  })
+  test("controller fault admission waits for its indicator and rejects pre-ready lease or window loss", async () => {
+    const ready = Promise.withResolvers<void>()
+    let armed = false
+    const live = { isDestroyed: () => false, isVisible: () => true }
+    const pending = computerSmokeControllerReady(
+      ready.promise,
+      () => true,
+      () => [live],
+    ).then(() => {
+      armed = true
+    })
+    await Promise.resolve()
+    expect(armed).toBe(false)
+    ready.resolve()
+    await pending
+    expect(armed).toBe(true)
+
+    for (const loss of ["lease", "absent", "hidden", "destroyed"] as const) {
+      const delayed = Promise.withResolvers<void>()
+      let current = true
+      let visible = true
+      let destroyed = false
+      let owned = true
+      let injected = false
+      const indicator = { isDestroyed: () => destroyed, isVisible: () => visible }
+      const admission = computerSmokeControllerReady(
+        delayed.promise,
+        () => current,
+        () => (owned ? [indicator] : []),
+      ).then(() => {
+        injected = true
+      })
+      const refused = admission.then(
+        () => undefined,
+        (error: unknown) => error,
+      )
+      if (loss === "lease") current = false
+      if (loss === "absent") owned = false
+      if (loss === "hidden") visible = false
+      if (loss === "destroyed") destroyed = true
+      delayed.resolve()
+      expect(await refused).toBeInstanceOf(Error)
+      expect(injected).toBe(false)
+    }
+    await expect(
+      computerSmokeControllerReady(
+        Promise.reject(new Error("not ready")),
+        () => true,
+        () => [live],
+      ),
+    ).rejects.toThrow("not ready")
   })
   test("preserves the complete catalog and exact runtime without including observed content", () => {
     const value = report()

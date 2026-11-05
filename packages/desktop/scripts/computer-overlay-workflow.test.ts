@@ -124,6 +124,55 @@ test("native prerequisite absence never swallows an assertion failure or authori
   }
 })
 
+test("Mac compiler feedback after a fatal controller failure cannot grant native, artifact or release credit", () => {
+  const current = steps("mac-build")
+  const controller = current.find((step) => step.id === "overlay_controller")!
+  const build = current.find((step) => String(step.name).startsWith("Build the source-bound never-shipped"))!
+  const protectedSteps = current.filter((step) =>
+    /^(Run actual isolated macOS overlay|Archive the verified never-shipped|Upload the immutable never-shipped)/.test(
+      String(step.name),
+    ),
+  )
+  const evaluate = (
+    step: Record<string, unknown>,
+    state: { controller?: string; success?: boolean; cancelled?: boolean; desktop?: boolean; restored?: boolean } = {},
+  ) =>
+    runInNewContext(
+      String(step.if)
+        .replace(/^\s*\$\{\{([\s\S]*)\}\}\s*$/, "$1")
+        .replaceAll("steps.overlay-restore", "steps['overlay-restore']"),
+      {
+        cancelled: () => state.cancelled ?? false,
+        success: () => state.success ?? true,
+        steps: {
+          overlay_controller: { outcome: state.controller ?? "success" },
+          "overlay-restore": { outputs: { restored: state.restored ? "true" : "false" } },
+        },
+        inputs: { "isolated-desktop": true },
+        needs: { plan: { outputs: { desktop: state.desktop === false ? "false" : "true" } } },
+      },
+      { timeout: 100 },
+    ) as unknown
+
+  expect(controller.run).toBe("bun --no-env-file ./scripts/computer-overlay-smoke.ts")
+  expect(controller["continue-on-error"]).toBeUndefined()
+  expect(build["continue-on-error"]).toBeUndefined()
+  expect(job("mac-build")["continue-on-error"]).toBeUndefined()
+  expect(evaluate(build)).toBe(true)
+  expect(evaluate(build, { controller: "failure", success: false })).toBe(true)
+  for (const outcome of ["", "skipped", "cancelled"])
+    expect(evaluate(build, { controller: outcome, success: false })).toBe(false)
+  for (const state of [{ cancelled: true }, { desktop: false }, { restored: true }])
+    expect(evaluate(build, { ...state, controller: "failure", success: false })).toBe(false)
+  expect(protectedSteps).toHaveLength(3)
+  for (const step of protectedSteps) {
+    expect(step.if).toContain("success()")
+    expect(evaluate(step)).toBe(true)
+    expect(evaluate(step, { controller: "failure", success: false })).toBe(false)
+    expect(step["continue-on-error"]).toBeUndefined()
+  }
+})
+
 test("Linux properties and dev e2e run real pinned Electron and actual Node without a fake host platform", () => {
   expect(commands("overlay-linux")).toContain("node node_modules/electron/install.js")
   expect(commands("overlay-linux")).toContain("kernel.apparmor_restrict_unprivileged_userns=0")

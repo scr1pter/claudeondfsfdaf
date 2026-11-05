@@ -568,3 +568,16 @@ export function computerSmokeTransparentBackground(
     pageTransparent === true
   )
 }
+
+/** Loss checks start only after a real indicator exists for the same acquired lease. */
+export async function computerSmokeControllerReady(
+  ready: Promise<void>,
+  current: () => boolean,
+  windows: () => readonly { isDestroyed(): boolean; isVisible(): boolean }[],
+): Promise<void> {
+  await ready
+  if (!current()) throw new Error("The controlled smoke lease changed before its indicator was ready.")
+  const owned = windows()
+  if (!owned.length || owned.some((window) => window.isDestroyed() || !window.isVisible()))
+    throw new Error("The controlled smoke indicator is not visible.")
+}

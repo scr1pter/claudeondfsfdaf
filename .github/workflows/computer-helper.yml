@@ -410,6 +410,7 @@ jobs:
         timeout-minutes: 5
         run: node node_modules/electron/install.js
       - name: Run real Electron overlay properties and controller lifecycle
+        id: overlay_controller
         if: ${{ needs.plan.outputs.desktop == 'true' }}
         timeout-minutes: 3
         run: bun --no-env-file ./scripts/computer-overlay-smoke.ts
@@ -422,11 +423,12 @@ jobs:
           ARTIFACT_SUFFIX: ${{ needs.plan.outputs.suffix }}
         run: bun --no-env-file ./scripts/computer-overlay-smoke-artifact.ts --platform darwin --suffix "$ARTIFACT_SUFFIX" --destination native/out/overlay-darwin
       - name: Build the source-bound never-shipped native overlay stage
-        if: ${{ steps.overlay-restore.outputs.restored != 'true' && (needs.plan.outputs.desktop == 'true') }}
+        # Preserve compiler feedback after a fatal controller failure; this cannot authorize native checks or archives.
+        if: ${{ !cancelled() && (steps.overlay_controller.outcome == 'success' || steps.overlay_controller.outcome == 'failure') && steps.overlay-restore.outputs.restored != 'true' && (needs.plan.outputs.desktop == 'true') }}
         timeout-minutes: 20
         run: bun --no-env-file ./scripts/diagnose-build-computer-overlay-smoke.ts --platform darwin --helper native/out/darwin --out native/out/overlay-darwin
       - name: Run actual isolated macOS overlay Stop and capture
-        if: ${{ inputs['isolated-desktop'] && (needs.plan.outputs.desktop == 'true') }}
+        if: ${{ success() && inputs['isolated-desktop'] && (needs.plan.outputs.desktop == 'true') }}
         timeout-minutes: 3
         env:
           VECTOR_COMPUTER_TEST_ISOLATED: "1"
@@ -443,11 +445,11 @@ jobs:
             exit "$status"
           fi
       - name: Archive the verified never-shipped overlay stage separately
-        if: ${{ steps.overlay-restore.outputs.restored != 'true' && (needs.plan.outputs.desktop == 'true') }}
+        if: ${{ success() && steps.overlay-restore.outputs.restored != 'true' && (needs.plan.outputs.desktop == 'true') }}
         timeout-minutes: 5
         run: bun --no-env-file ./scripts/computer-overlay-smoke-artifact.ts --platform darwin --archive native/out/overlay-darwin --output "$RUNNER_TEMP/computer-overlay-smoke-darwin.tar"
       - name: Upload the immutable never-shipped overlay stage
-        if: ${{ steps.overlay-restore.outputs.restored != 'true' && (needs.plan.outputs.desktop == 'true') }}
+        if: ${{ success() && steps.overlay-restore.outputs.restored != 'true' && (needs.plan.outputs.desktop == 'true') }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: computer-overlay-smoke-darwin-${{ needs.plan.outputs.suffix }}

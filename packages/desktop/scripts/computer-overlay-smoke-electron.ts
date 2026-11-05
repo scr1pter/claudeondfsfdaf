@@ -38,6 +38,7 @@ import {
   type ComputerSmokeControllerStep,
   COMPUTER_SMOKE_FAILURE_MARK,
   computerSmokeBannerProbe,
+  computerSmokeControllerReady,
   COMPUTER_SMOKE_TRANSPARENCY_PROBE,
   computerSmokeTransparentBackground,
   type ComputerSmokePhase,
@@ -444,6 +445,7 @@ async function controllerFixture() {
     close: () => helper.close(),
   }
   const backend = new NativeHelperBackend(observed, platform === "win32" ? "local-windows" : "local-macos")
+  const firstWindow = records.length
   const overlay = createComputerOverlay({ platform, preloadPath: preload, electron })
   const prefs = {
     ...defaultPrefs(platform),
@@ -529,6 +531,19 @@ async function controllerFixture() {
   engineHeartbeat = setInterval(() => {
     void controller.heartbeat(scope).catch(() => {})
   }, 1000)
+  await computerSmokeControllerReady(
+    overlay.ready(),
+    () => {
+      const current = controller.state()
+      return (
+        current.phase === "working" &&
+        current.lease === scope.lease &&
+        current.holder?.sessionID === scope.rootSessionID &&
+        current.holder.directory === scope.directory
+      )
+    },
+    () => records.slice(firstWindow).map((record) => record.window),
+  )
   return { helper, backend, controller, overlay, scope, fault, children, acknowledged, close }
 }
 
