@@ -165,7 +165,7 @@ private final class PrivilegedTargetChannel {
               let info = NSDictionary(contentsOf: URL(fileURLWithPath: root + "/Contents/Info.plist")) else { throw PrivilegedTestFailure.operation }
         var code: SecStaticCode?, signing: CFDictionary?
         guard SecStaticCodeCreateWithPath(URL(fileURLWithPath: root) as CFURL, [], &code) == errSecSuccess, let code,
-              SecStaticCodeCheckValidity(code, SecCSFlags(rawValue: kSecCSCheckAllArchitectures | kSecCSStrictValidate | kSecCSNoNetworkAccess), nil) == errSecSuccess,
+              SecStaticCodeCheckValidity(code, SecCSFlags(rawValue: kSecCSCheckAllArchitectures | kSecCSStrictValidate).union(.noNetworkAccess), nil) == errSecSuccess,
               SecCodeCopySigningInformation(code, SecCSFlags(rawValue: kSecCSSigningInformation), &signing) == errSecSuccess,
               let signing else { throw PrivilegedTestFailure.operation }
         let fields = signing as NSDictionary

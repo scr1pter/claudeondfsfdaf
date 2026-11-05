@@ -448,3 +448,8 @@ This is source checkpoint 57 of 73, helper 1.0.9, with W2 next. Local checks pas
 
 
 Matching M9 run [41980614444](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/41980614444) at `e02a3ef4` passes every required lane: Mac production build/reproducibility/enforced identity, Mac 15 Intel, Mac 26, Windows x64 and native ARM64 checks. All three optional Mac steps also conclude success and their actual logs report 29 passed, zero failed and one explicit privileged skip; no hidden optional failure is inferred away. Windows protocol/isolated layers retain their explicit W1 readiness skips. Matching report artifact IDs/digests are recorded as API metadata, not download-verified ZIPs. The immutable M11 validation run follows this complete matrix; dirty W2 work is excluded from both.
+
+
+### M11 Security flag compiler repair
+
+Run [41982327710](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/41982327710) at `1dc21a5e` fails Mac compilation before native unit, core or target-control execution: the Swift import does not expose kSecCSNoNetworkAccess. The target verifier now uses the already compiled AppsNative form: raw strict/all-architecture flags unioned with .noNetworkAccess. Verification remains strict and offline. No helper1.0.9 candidate is accepted from this failed run; dirty Windows W2 source is excluded from the repair.
