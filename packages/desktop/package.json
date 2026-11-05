@@ -26,6 +26,7 @@
     "native:build": "bun --no-env-file ./scripts/build-computer-helper.ts",
     "native:test": "bun --no-env-file ./scripts/computer-helper-selftest-node.ts",
     "verify:package": "bun ./scripts/verify-package.ts",
+    "verify:computer-helper": "bun --no-env-file ./scripts/verify-computer-helper.ts",
     "verify:brain-worker": "bun ./scripts/verify-brain-worker.ts"
   },
   "main": "./out/main/index.js",

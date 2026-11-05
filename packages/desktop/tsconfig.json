@@ -28,6 +28,8 @@
     "scripts/computer-helper-package-build.ts",
     "scripts/build-desktop.ts",
     "scripts/package-desktop.ts",
+    "scripts/verify-package.ts",
+    "scripts/verify-computer-helper.ts",
     "scripts/computer-helper-selftest.ts",
     "scripts/computer-helper-selftest-node.ts",
     "scripts/computer-helper-unit-diagnostics.ts",

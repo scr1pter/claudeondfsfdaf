@@ -101,7 +101,7 @@ const getBase = (appId: string, executableName: string): Configuration => ({
       platform === "darwin" ? path.join(app, "Contents", "Resources") : path.join(context.appOutDir, "resources")
     const arch = Arch[context.arch]
     for (const target of arch === "universal" ? ["x64", "arm64"] : [arch])
-      await verifyNativeModules(resources, platform, target)
+      await verifyNativeModules(resources, platform, target, { skipComputerHelper })
     if (platform !== "darwin" || skipComputerHelper) return
     if (!helper || helper.manifests.length !== 1 || helper.manifests[0]?.platform !== "darwin")
       throw new Error("The verified macOS computer helper manifest is missing.")
