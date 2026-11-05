@@ -58,6 +58,8 @@ export function computerOverlayWindowOptions(input: {
       ...input.bounds,
       transparent: true,
       frame: false,
+      // Frameless macOS overlays must retain display edges beyond AppKit's menu/work-area clamp.
+      ...(input.platform === "darwin" ? { enableLargerThanScreen: true } : {}),
       hasShadow: false,
       focusable: false,
       skipTaskbar: true,

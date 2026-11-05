@@ -22,6 +22,11 @@ on:
         type: boolean
         required: false
         default: false
+      computer_helper_macos_overlay_only:
+        description: Diagnose only real macOS Electron overlay/controller behavior with computer_helper
+        type: boolean
+        required: false
+        default: false
       computer_helper_macos_signing_only:
         description: Diagnose only the temporary macOS certificate fixture with computer_helper
         type: boolean
@@ -55,7 +60,7 @@ concurrency:
   # because every format() result is a non-empty string and can never read as falsy.
   # Native checks, Node bundle smoke, UI checks and benchmarks have separate cancellation groups.
   # The native selector takes precedence; otherwise both Hands flags run their two focused jobs together.
-  group: ${{ github.event_name == 'workflow_dispatch' && inputs.desktop_engine_node && format('{0}-desktop-engine-node-{1}', github.workflow, github.ref) || github.event_name == 'workflow_dispatch' && inputs.computer_helper && format('{0}-computer-helper{1}{2}{3}{4}-{5}', github.workflow, inputs.computer_helper_windows_only && '-windows-only' || '', inputs.computer_helper_linux_only && '-linux-only' || '', inputs.computer_helper_windows_units_only && '-windows-units-only' || '', inputs.computer_helper_macos_signing_only && '-macos-signing-only' || '', github.ref) || github.event_name == 'workflow_dispatch' && inputs.hands_ui && format('{0}-hands-ui{1}-{2}', github.workflow, inputs.hands_benchmark && '-benchmark' || '', github.ref) || (github.event_name == 'workflow_dispatch' && inputs.hands_benchmark && format('{0}-hands-benchmark-{1}', github.workflow, github.ref) || (github.ref == 'refs/heads/main' && format('{0}-{1}', github.workflow, github.run_id) || format('{0}-{1}', github.workflow, github.event.pull_request.number || github.ref))) }}
+  group: ${{ github.event_name == 'workflow_dispatch' && inputs.desktop_engine_node && format('{0}-desktop-engine-node-{1}', github.workflow, github.ref) || github.event_name == 'workflow_dispatch' && inputs.computer_helper && format('{0}-computer-helper{1}{2}{3}{4}{5}-{6}', github.workflow, inputs.computer_helper_windows_only && '-windows-only' || '', inputs.computer_helper_linux_only && '-linux-only' || '', inputs.computer_helper_windows_units_only && '-windows-units-only' || '', inputs.computer_helper_macos_signing_only && '-macos-signing-only' || '', inputs.computer_helper_macos_overlay_only && '-macos-overlay-only' || '', github.ref) || github.event_name == 'workflow_dispatch' && inputs.hands_ui && format('{0}-hands-ui{1}-{2}', github.workflow, inputs.hands_benchmark && '-benchmark' || '', github.ref) || (github.event_name == 'workflow_dispatch' && inputs.hands_benchmark && format('{0}-hands-benchmark-{1}', github.workflow, github.ref) || (github.ref == 'refs/heads/main' && format('{0}-{1}', github.workflow, github.run_id) || format('{0}-{1}', github.workflow, github.event.pull_request.number || github.ref))) }}
   cancel-in-progress: true
 
 permissions:
@@ -67,7 +72,7 @@ env:
 
 jobs:
   computer-helper:
-    if: github.event_name != 'workflow_dispatch' || (!inputs.desktop_engine_node && !(inputs.computer_helper && (inputs.computer_helper_windows_units_only || inputs.computer_helper_macos_signing_only)) && (inputs.computer_helper || (!inputs.hands_benchmark && !inputs.hands_ui)))
+    if: github.event_name != 'workflow_dispatch' || (!inputs.desktop_engine_node && !(inputs.computer_helper && (inputs.computer_helper_windows_units_only || inputs.computer_helper_macos_signing_only || inputs.computer_helper_macos_overlay_only)) && (inputs.computer_helper || (!inputs.hands_benchmark && !inputs.hands_ui)))
     uses: ./.github/workflows/computer-helper.yml
     permissions:
       contents: read
@@ -82,7 +87,7 @@ jobs:
 
   computer-helper-windows-units:
     name: Windows x64 native unit and protocol diagnostic (no release evidence)
-    if: github.event_name == 'workflow_dispatch' && !inputs.desktop_engine_node && inputs.computer_helper == true && inputs.computer_helper_windows_units_only == true && !inputs.computer_helper_macos_signing_only
+    if: github.event_name == 'workflow_dispatch' && !inputs.desktop_engine_node && inputs.computer_helper == true && inputs.computer_helper_windows_units_only == true && !inputs.computer_helper_macos_signing_only && !inputs.computer_helper_macos_overlay_only
     runs-on: windows-2025
     timeout-minutes: 30
     permissions:
@@ -177,7 +182,7 @@ jobs:
 
   computer-helper-macos-signing:
     name: macOS temporary certificate diagnostic (no release evidence)
-    if: github.event_name == 'workflow_dispatch' && !inputs.desktop_engine_node && inputs.computer_helper == true && inputs.computer_helper_macos_signing_only == true
+    if: github.event_name == 'workflow_dispatch' && !inputs.desktop_engine_node && inputs.computer_helper == true && inputs.computer_helper_macos_signing_only == true && !inputs.computer_helper_macos_overlay_only
     runs-on: macos-15
     timeout-minutes: 20
     permissions:
@@ -233,6 +238,54 @@ jobs:
         run: |
           set -euo pipefail
           bash "$GITHUB_WORKSPACE/.github/scripts/computer-helper-signing-cleanup.sh"
+
+  computer-helper-macos-overlay:
+    name: macOS Electron overlay/controller diagnostic (no release evidence)
+    if: github.event_name == 'workflow_dispatch' && !inputs.desktop_engine_node && inputs.computer_helper == true && inputs.computer_helper_macos_overlay_only == true
+    runs-on: macos-15
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash
+        working-directory: packages/desktop
+    steps:
+      - name: Reject incompatible overlay selectors before setup
+        working-directory: .
+        env:
+          WINDOWS_ONLY: ${{ inputs.computer_helper_windows_only || false }}
+          LINUX_ONLY: ${{ inputs.computer_helper_linux_only || false }}
+          WINDOWS_UNITS_ONLY: ${{ inputs.computer_helper_windows_units_only || false }}
+          MACOS_SIGNING_ONLY: ${{ inputs.computer_helper_macos_signing_only || false }}
+        run: |
+          set -euo pipefail
+          if [[ "$WINDOWS_ONLY" == true || "$LINUX_ONLY" == true || "$WINDOWS_UNITS_ONLY" == true || "$MACOS_SIGNING_ONLY" == true ]]; then
+            echo "::error::macOS overlay diagnostics require all other platform selectors to be off."
+            exit 1
+          fi
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: package.json
+      - name: Install frozen dependencies without lifecycle scripts
+        timeout-minutes: 10
+        working-directory: .
+        run: bun install --frozen-lockfile --ignore-scripts
+      - name: Install the exact pinned Electron runtime
+        timeout-minutes: 5
+        run: node node_modules/electron/install.js
+      - name: Run real Electron overlay properties and controller lifecycle
+        timeout-minutes: 3
+        run: bun --no-env-file ./scripts/computer-overlay-smoke.ts
 
   unit:
     if: github.event_name != 'workflow_dispatch' || (!inputs.desktop_engine_node && !inputs.computer_helper && !inputs.hands_benchmark && !inputs.hands_ui)

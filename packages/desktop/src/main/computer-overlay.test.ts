@@ -267,6 +267,7 @@ describe("computer overlay windows", () => {
         expect(window.config).toMatchObject({
           transparent: true,
           frame: false,
+          enableLargerThanScreen: true,
           hasShadow: false,
           focusable: false,
           skipTaskbar: true,

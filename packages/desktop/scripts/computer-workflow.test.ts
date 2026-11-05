@@ -448,6 +448,7 @@ test("focused Node smoke keeps normal CI gates and uses its own cancellation gro
     computer_helper: true,
     computer_helper_windows_units_only: true,
     computer_helper_macos_signing_only: true,
+    computer_helper_macos_overlay_only: true,
     hands_ui: true,
     hands_benchmark: true,
   }
@@ -455,7 +456,13 @@ test("focused Node smoke keeps normal CI gates and uses its own cancellation gro
     const current = record(value)
     expect(expression(String(current.if), focused), name).toBe(name === "desktop-engine-node")
     if (
-      !["hands-ui", "hands-benchmark", "computer-helper-windows-units", "computer-helper-macos-signing"].includes(name)
+      ![
+        "hands-ui",
+        "hands-benchmark",
+        "computer-helper-windows-units",
+        "computer-helper-macos-signing",
+        "computer-helper-macos-overlay",
+      ].includes(name)
     ) {
       expect(expression(String(current.if), {}), name).toBe(true)
       expect(expression(String(current.if), {}, "pull_request"), name).toBe(true)
@@ -834,4 +841,78 @@ test("the fast macOS certificate lane shares the real fixture and cleanup withou
   for (const name of ["mac", "windows"]) expect(record(release[name]).needs).toContain("computer-helper")
   for (const value of Object.values(release))
     expect(JSON.stringify(value)).not.toContain("computer-helper-macos-signing")
+})
+
+test("macOS overlay diagnostics require explicit native dispatch and keep all cancellation groups independent", () => {
+  const inputs = record(record(record(main.document.on).workflow_dispatch).inputs)
+  expect(inputs.computer_helper_macos_overlay_only).toMatchObject({ type: "boolean", default: false })
+  expect(Object.keys(inputs).length).toBeLessThanOrEqual(10)
+  const all = record(main.document.jobs)
+  const diagnostic = record(all["computer-helper-macos-overlay"])
+  const selected = { computer_helper: true, computer_helper_macos_overlay_only: true }
+  for (const event of ["workflow_dispatch", "pull_request", "push"])
+    for (const native of [false, true])
+      for (const overlay of [false, true])
+        expect(
+          expression(
+            String(diagnostic.if),
+            { computer_helper: native, computer_helper_macos_overlay_only: overlay },
+            event,
+          ),
+        ).toBe(event === "workflow_dispatch" && native && overlay)
+  for (const [name, value] of Object.entries(all)) {
+    expect(expression(String(record(value).if), selected), name).toBe(name === "computer-helper-macos-overlay")
+    for (const event of ["workflow_dispatch", "pull_request", "push"])
+      expect(expression(String(record(value).if), { computer_helper_macos_overlay_only: true }, event), name).toBe(
+        expression(String(record(value).if), {}, event),
+      )
+  }
+  const modes = [
+    {},
+    { computer_helper_windows_only: true },
+    { computer_helper_linux_only: true },
+    { computer_helper_windows_units_only: true },
+    { computer_helper_macos_signing_only: true },
+  ].flatMap((mode) => [
+    { computer_helper: true, ...mode },
+    { ...selected, ...mode },
+  ])
+  expect(new Set(modes.map((mode) => group(record(main.document.concurrency).group, mode))).size).toBe(modes.length)
+})
+
+test("the fast macOS overlay lane runs the real pinned Electron commands without helper/certificate/release work", () => {
+  const diagnostic = record(record(main.document.jobs)["computer-helper-macos-overlay"])
+  expect(diagnostic["runs-on"]).toBe("macos-15")
+  expect(diagnostic.permissions).toEqual({ contents: "read" })
+  for (const key of ["outputs", "needs", "continue-on-error", "environment"]) expect(diagnostic[key]).toBeUndefined()
+  const current = steps(diagnostic)
+  expect(current[0]!.name).toBe("Reject incompatible overlay selectors before setup")
+  for (let bits = 0; bits < 16; bits++)
+    expect(
+      spawnSync("bash", ["--noprofile", "--norc", "-c", String(current[0]!.run)], {
+        env: {
+          ...process.env,
+          WINDOWS_ONLY: String(Boolean(bits & 1)),
+          LINUX_ONLY: String(Boolean(bits & 2)),
+          WINDOWS_UNITS_ONLY: String(Boolean(bits & 4)),
+          MACOS_SIGNING_ONLY: String(Boolean(bits & 8)),
+        },
+        timeout: 5000,
+      }).status,
+    ).toBe(bits === 0 ? 0 : 1)
+  for (const name of [
+    "Install the exact pinned Electron runtime",
+    "Run real Electron overlay properties and controller lifecycle",
+  ]) {
+    const step = current.find((step) => step.name === name)!
+    expect(step.run).toBe(steps(job("mac-build")).find((step) => step.name === name)?.run)
+    expect(step.if).toBeUndefined()
+    expect(step["continue-on-error"]).toBeUndefined()
+  }
+  expect(commands(diagnostic)).toContain("bun install --frozen-lockfile --ignore-scripts")
+  expect(commands(diagnostic)).not.toMatch(/build-computer-helper|--native-stage|signing-fixture|tar -|native-ready/)
+  expect(current.some((step) => String(step.uses).includes("upload-artifact"))).toBe(false)
+  const release = record(workflow("vector-desktop-release.yml").document.jobs)
+  for (const value of Object.values(release))
+    expect(JSON.stringify(value)).not.toContain("computer-helper-macos-overlay")
 })
