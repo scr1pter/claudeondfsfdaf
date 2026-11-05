@@ -1,0 +1,53 @@
+{
+  "run": 41978712305,
+  "head": "d7af35f236e93af3ea9822ee56d4d86452ab5c2d",
+  "macJob": 127083618897,
+  "artifacts": [
+    {
+      "id": 13393800998,
+      "kind": "candidate",
+      "sha256": "e3593b9a9a5f4930c4bda649a84e3a939ca1f1489f0ed2a075f350cd89dbf0fa",
+      "bytes": 475,
+      "files": [
+        "identity.lock.computed.json"
+      ]
+    },
+    {
+      "id": 13393292719,
+      "kind": "reports",
+      "sha256": "0a43333e4f95b8204ea7af7e1005485a81bd816bfba98537c59c5812359f4abd",
+      "bytes": 1129,
+      "files": [
+        "computer-darwin-core.json",
+        "computer-darwin-privileged.json"
+      ]
+    }
+  ],
+  "candidateSha256": "d990c486caca688c868a4aac52d0bf8929e1976470b525d68e50c1da4b745c98",
+  "independentSourceArchive": "d7af35f236e93af3ea9822ee56d4d86452ab5c2d",
+  "independentSourceDigest": "4ee5f4621388fb1ddae24e4e7e6fddae184898c9845588f9338b23b41a8f0f1b",
+  "sourceDigestMatches": true,
+  "candidate": {
+    "enforce": true,
+    "helperVersion": "1.0.8",
+    "sourceDigest": "4ee5f4621388fb1ddae24e4e7e6fddae184898c9845588f9338b23b41a8f0f1b",
+    "toolchain": "swift:\nApple Swift version 6.1.2 (swiftlang-6.1.2.1.2 clang-1700.0.13.5)\nTarget: arm64-apple-macosx15.0\nsdk:15.5\nxcode:\nXcode 16.4\nBuild version 16F6",
+    "cdhash": {
+      "x64": "2ccf9ae2757e9b03267239af1adacc62d6f28afa",
+      "arm64": "2d3932cffd74cdb7f68d5e3507793e830812e8a0"
+    }
+  },
+  "nativeUnits": "required aggregate passed",
+  "core": {
+    "passed": 29,
+    "failed": 0,
+    "skipped": 1
+  },
+  "isolatedAuto": {
+    "passed": 29,
+    "failed": 0,
+    "skipped": 1
+  },
+  "windows": "x64 and native ARM64 build/units/version/probes passed; W1 protocol/isolated explicitly skipped",
+  "matchingMatrix": "pending measured pin follow-up; dirty M11 excluded"
+}
