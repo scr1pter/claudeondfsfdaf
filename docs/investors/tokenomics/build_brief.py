@@ -60,8 +60,15 @@ def validate(data):
     assert legacy["fixed_new_controls_passed"] == 8 and legacy["failed_tests"] == 0
     assert legacy["package_typechecks_passed"] == 23 and legacy["prompt_abort_existing_skips"] == 8
     assert legacy["paid_savings_measured"] is False and legacy["provider_calls"] == 0
+    publication = data["publication_validation"]
+    assert publication["baseline_failed"] == 12 and publication["baseline_passed"] == 4
+    assert publication["new_controls_passed"] == 24 and publication["failed_tests"] == 0
+    assert publication["processor_usage_tests_passed"] == 109 and publication["guard_abort_tests_passed"] == 37
+    assert publication["final_combined_tests_passed"] == 32
+    assert publication["package_typechecks_passed"] == 23 and publication["guard_abort_existing_skips"] == 8
+    assert publication["paid_savings_measured"] is False and publication["provider_calls"] == 0
     for extra in additional_studies(data):
-        assert extra["status"] == "complete" and extra["settlement_complete"] is True
+        assert extra["status"] in ("closed", "complete") and extra["settlement_complete"] is True
         assert extra["all_charges_retained"] is True
         for side in ("vector", "codex"):
             assert Decimal(extra[side]["cost_usd"]) >= 0
@@ -248,8 +255,8 @@ def evidence(c, data, total):
     y = text(c, "Progress that can be audited.", M, 700, CW, 30, 36, NAVY, True)
     y = text(c, "A disciplined cycle connects measured behavior to product changes and regression checks.", M, y - 15, CW, 12.2, 18)
     for offset, value, label, detail in [
-        (0, str(data["compaction_validation"]["tests_passed"]), "V2 accounting tests passed", "Eight baseline failures resolved. [E6]"),
-        (270, str(data["legacy_cancellation_validation"]["package_typechecks_passed"]), "Package typechecks passed", "Latest Legacy accounting fix. [E8]"),
+        (0, str(data["compaction_validation"]["tests_passed"]), "Accounting tests passed", "Eight baseline failures resolved. [E6]"),
+        (270, str(data["publication_validation"]["package_typechecks_passed"]), "Package typechecks passed", "Completed-call accounting fixes. [E8]"),
     ]:
         rect(c, M + offset, y - 23, 252, 112, PALE)
         text(c, value, M + offset + 16, y - 36, 215, 34, 39, TEAL, True)
@@ -257,19 +264,21 @@ def evidence(c, data, total):
         text(c, detail, M + offset + 16, y - 104, 222, 9.1, 12, MUTED)
     y -= 162
     y = text(c, "What the current controls address", M, y, CW, 17, 23, NAVY, True)
-    y = text(c, "The earlier 220-test suite covers repeated outcomes, rechecks and continuity. V2 adds summary-cost checks. The separate Legacy fix passed 85 processor/usage and 35 budget/abort tests, with eight existing skips. Six failing controls now pass; two normal controls remain passing. Suites overlap and are not additive. Paid savings from these later fixes are not measured. [E3, E6, E7]", M, y - 10, CW, 10.8, 15.2)
-    y -= 24
+    y = text(c, "Earlier 220 tests cover repeated outcomes, rechecks and continuity. Latest completed-call accounting passed 109 usage and 37 budget/abort tests, with eight existing skips. A 24-case failure matrix passed, including 12 cases that failed before the latest fix. Suites overlap and are not additive. API cost benefits from these accounting changes have not been isolated. [E3, E6, E9]", M, y - 10, CW, 10.8, 15.2)
+    y -= 14
     y = text(c, "Benchmark scope", M, y, CW, 17, 23, NAVY, True)
-    y = text(c, "Three single-trial pairs on Windows used the same gpt-6.1-sol model, High reasoning and one autonomous agent per runtime. Two tasks were development replications; one was held out. Results describe the tested candidate, required checks and fixed static rubric. The sample does not establish statistical significance or predict all workloads.", M, y - 10, CW, 10.6, 15.1)
+    y = text(c, "Three custom synthetic task pairs on Windows used the same gpt-6.1-sol model, High reasoning and one autonomous agent per runtime, with one trial per task. Two tasks were development replications; one was held out. Results describe the tested candidate, required checks and fixed static rubric. The sample does not establish statistical significance or predict all workloads.", M, y - 10, CW, 10.6, 15.1)
     y = text(c, "Prices are derived from recorded provider usage at the study schedule. Reviews use exact source and selected screenshots; passing checks do not certify production reliability or security. Large-team episodes are reported separately with their stopping conditions and quality limits.", M, y - 11, CW, 10.6, 15.1)
-    y -= 21
+    y -= 16
     y = text(c, "Evidence register", M, y, CW, 14, 19, NAVY, True)
     for source_id in ("E1", "E2", "E6", "E7", "E3"):
         source = next(item for item in data["sources"] if item["id"] == source_id)
         label = f"<b>{escape(source['id'])}</b>   <link href='{escape(source['url'], quote=True)}' color='#008E88'>{escape(source['label'])}</link>"
         if source_id == "E7":
             extra = next(item for item in data["sources"] if item["id"] == "E8")
-            label += f"   <b>E8</b>   <link href='{escape(extra['url'], quote=True)}' color='#008E88'>23-package verification</link>"
+            label += f" &nbsp; | &nbsp; <b>E8</b>   <link href='{escape(extra['url'], quote=True)}' color='#008E88'>23-package verification</link>"
+            last = next(item for item in data["sources"] if item["id"] == "E9")
+            label += f" &nbsp; | &nbsp; <b>E9</b>   <link href='{escape(last['url'], quote=True)}' color='#008E88'>Saving-error checks</link>"
         y = text(c, label, M, y - 8, CW, 9.4, 13.1, MUTED)
     c.showPage()
 
@@ -281,9 +290,10 @@ def additional_studies(data):
 
 def additional(c, data, total, study, number):
     top(c, number, total, data)
-    y = text(c, "Multi-agent stress validation.", M, 700, CW, 30, 36, NAVY, True)
+    y = text(c, escape(study.get("heading", "Multi-agent stress validation.")), M, 700, CW, 30, 36, NAVY, True)
     y = text(c, escape(study["label"]), M, y - 18, CW, 18, 24, NAVY, True)
-    y = text(c, f"Same {escape(study['model'])} model and {escape(study['reasoning'])} reasoning; {study['team_size_each']} configured agents per runtime. All recorded charges retained and both episodes settled.", M, y - 15, CW, 12, 18)
+    intro = study.get("intro") or f"Same {study['model']} model and {study['reasoning']} reasoning; {study['team_size_each']} configured agents per runtime. All recorded charges retained and both episodes settled."
+    y = text(c, escape(intro), M, y - 15, CW, 12, 18)
     y -= 28
     for side, label in [("vector", "Vector"), ("codex", "Codex")]:
         arm = study[side]
@@ -292,9 +302,11 @@ def additional(c, data, total, study, number):
         text(c, money(arm["cost_usd"]), M + 170, y - 15, 160, 25, 31, TEAL if side == "vector" else NAVY, True)
         text(c, f"{arm['checks_passed']}/{arm['checks_total']} {arm.get('checks_label', 'required checks')}; {arm['requests']} provider requests", M + 18, y - 52, CW - 36, 11, 16)
         if arm.get("review_scores"):
-            text(c, "Blinded static reviews: " + " and ".join(str(score) + "/48" for score in arm["review_scores"]), M + 18, y - 72, CW - 36, 10, 14, MUTED)
+            label = "Blinded static reviews: " + " and ".join(str(score) + "/48" for score in arm["review_scores"])
+            label += f"; agents {arm['native_roles_observed']}/{study['team_size_each']}"
+            text(c, label, M + 18, y - 72, CW - 36, 10, 14, MUTED)
         y -= 111
-    y = text(c, "Recorded quality gate: " + ("met within the measured scope." if study["quality_gate_met"] else "not met; no quality-preserving savings claim is made."), M, y - 8, CW, 13, 19, NAVY, True)
+    y = text(c, "Full quality criteria " + ("were met within the measured scope." if study["quality_gate_met"] else "were not met in this run."), M, y - 8, CW, 13, 19, NAVY, True)
     y = text(c, escape(study["scope"]), M, y - 15, CW, 10.5, 15)
     if study.get("source_url"):
         text(c, "<link href='" + escape(study["source_url"], quote=True) + "' color='#008E88'>Study evidence and original outcomes</link>", M, y - 14, CW, 10, 14, MUTED)

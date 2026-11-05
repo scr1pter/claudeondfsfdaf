@@ -86,7 +86,7 @@
         "output_tokens": 114470
       }
     },
-    "scope_note": "Three single-trial task pairs in a small adaptive evaluation: two development replications and one held-out task. Costs varied by workload; Vector was cheaper on one of three tasks. Recorded quality gates cover the specified checks and rubric, not every future output or production behavior.",
+    "scope_note": "Three custom synthetic single-trial task pairs in a small adaptive evaluation: two development replications and one held-out task. Costs varied by workload; Vector was cheaper on one of three tasks. Recorded quality gates cover the specified checks and rubric, not every future output or production behavior.",
     "source_id": "E1"
   },
   "current_controls": {
@@ -98,137 +98,6 @@
     "paid_savings_measured": false,
     "scope": "Local scripted regression checks for V2 tool-loop and accounting behavior. These later controls were not the source used for the paid three-task result.",
     "source_id": "E3"
-  },
-  "additional_complete_study": {
-    "status": "complete",
-    "label": "Nested seven-role API, CLI and SDK build",
-    "model": "gpt-6.1-sol",
-    "reasoning": "High",
-    "team_size_each": 7,
-    "settlement_complete": true,
-    "all_charges_retained": true,
-    "quality_gate_met": false,
-    "matched_native_audit_passed": false,
-    "vector": {
-      "cost_usd": "6.6391490",
-      "requests": 279,
-      "checks_passed": 53,
-      "checks_total": 54,
-      "native_roles_observed": 7,
-      "review_scores": [
-        46,
-        47
-      ],
-      "checks_label": "final-source diagnostic"
-    },
-    "codex": {
-      "cost_usd": "4.6033534",
-      "requests": 300,
-      "checks_passed": 53,
-      "checks_total": 54,
-      "native_roles_observed": 7,
-      "review_scores": [
-        43,
-        42
-      ],
-      "checks_label": "final-source diagnostic"
-    },
-    "scope": "Shown checks are separate free final-source diagnostics; Vector's original submission check was not run. The remaining assertion expects 401 rather than 403 for the bootstrap credential; both products denied access. Vector stopped at a conservative request-reservation limit; Codex reached 300 requests during repair. Both original native audits require review. Vector scored higher in both blinded review totals, with two lower dimension scores in one review. These descriptive costs and reviews do not establish equal-quality savings. The smaller three-task result remains separate.",
-    "source_url": "https://github.com/scr1pter/claudeondfsfdaf/tree/adcea35db736548b4b23f6e4211bf75c89ee3ea7/docs/benchmarks/agentic-heavy-v2/relay-headless-2026-11-04",
-    "blinded_review": {
-      "same_rubric_and_reviewer_pool": true,
-      "source_and_required_artifacts_reviewed": true,
-      "reviewers": [
-        "R1",
-        "R2"
-      ],
-      "categories": [
-        {
-          "reviewer_id": "R1",
-          "name": "Functional completeness and coherent API semantics",
-          "vector_score": 7,
-          "codex_score": 8,
-          "maximum": 8
-        },
-        {
-          "reviewer_id": "R1",
-          "name": "Transactional integrity, recovery and corruption handling",
-          "vector_score": 8,
-          "codex_score": 4,
-          "maximum": 8
-        },
-        {
-          "reviewer_id": "R1",
-          "name": "Authorization boundaries and input/error validation",
-          "vector_score": 8,
-          "codex_score": 8,
-          "maximum": 8
-        },
-        {
-          "reviewer_id": "R1",
-          "name": "Concurrency, capability/lease fencing and lifecycle",
-          "vector_score": 8,
-          "codex_score": 8,
-          "maximum": 8
-        },
-        {
-          "reviewer_id": "R1",
-          "name": "CLI usability and typed SDK contract accuracy",
-          "vector_score": 8,
-          "codex_score": 7,
-          "maximum": 8
-        },
-        {
-          "reviewer_id": "R1",
-          "name": "Maintainability and meaningful independent verification",
-          "vector_score": 7,
-          "codex_score": 8,
-          "maximum": 8
-        },
-        {
-          "reviewer_id": "R2",
-          "name": "Functional completeness and coherent API semantics",
-          "vector_score": 8,
-          "codex_score": 6,
-          "maximum": 8
-        },
-        {
-          "reviewer_id": "R2",
-          "name": "Transactional integrity, recovery and corruption handling",
-          "vector_score": 8,
-          "codex_score": 6,
-          "maximum": 8
-        },
-        {
-          "reviewer_id": "R2",
-          "name": "Authorization boundaries and input/error validation",
-          "vector_score": 8,
-          "codex_score": 8,
-          "maximum": 8
-        },
-        {
-          "reviewer_id": "R2",
-          "name": "Concurrency, capability/lease fencing and lifecycle",
-          "vector_score": 8,
-          "codex_score": 8,
-          "maximum": 8
-        },
-        {
-          "reviewer_id": "R2",
-          "name": "CLI usability and typed SDK contract accuracy",
-          "vector_score": 8,
-          "codex_score": 7,
-          "maximum": 8
-        },
-        {
-          "reviewer_id": "R2",
-          "name": "Maintainability and meaningful independent verification",
-          "vector_score": 7,
-          "codex_score": 7,
-          "maximum": 8
-        }
-      ]
-    }
   },
   "sources": [
     {
@@ -245,7 +114,7 @@
     },
     {
       "id": "E3",
-      "label": "Latest control-suite validation",
+      "label": "Earlier V2 control-suite validation",
       "path": "docs/benchmarks/agentic-heavy-v1/checkpoint-2026-11-04/v2-integration-validation.json",
       "url": "https://github.com/scr1pter/claudeondfsfdaf/blob/587be6478aff24e2cdf98192269bc2bd3ca755bd/docs/benchmarks/agentic-heavy-v1/checkpoint-2026-11-04/v2-integration-validation.json"
     },
@@ -269,15 +138,21 @@
     },
     {
       "id": "E7",
-      "label": "Completed-step cancellation validation",
-      "path": "docs/benchmarks/tokenomics-2026-11-04/legacy-cancellation-accounting.md",
-      "url": "https://github.com/scr1pter/claudeondfsfdaf/blob/94c27c67185bbce343e0fa0eac4ec60bb801e343/docs/benchmarks/tokenomics-2026-11-04/legacy-cancellation-accounting.md"
+      "label": "Cancellation accounting validation",
+      "path": "docs/investors/tokenomics/legacy-engineering-validation.json",
+      "url": "https://github.com/scr1pter/claudeondfsfdaf/blob/98f6f319243aecd561d05a0c4bb43f74fe8f68fd/docs/investors/tokenomics/legacy-engineering-validation.json"
     },
     {
       "id": "E8",
       "label": "23-package post-push verification",
-      "path": "docs/investors/tokenomics/legacy-post-push-validation.json",
-      "url": "https://github.com/scr1pter/claudeondfsfdaf/blob/98f6f319243aecd561d05a0c4bb43f74fe8f68fd/docs/investors/tokenomics/legacy-post-push-validation.json"
+      "path": "docs/investors/tokenomics/publication-post-push-validation.json",
+      "url": "https://github.com/scr1pter/claudeondfsfdaf/blob/766093ae4382d79f1d1b9ee07e4a66492caa2b4e/docs/investors/tokenomics/publication-post-push-validation.json"
+    },
+    {
+      "id": "E9",
+      "label": "Saving-error accounting checks",
+      "path": "docs/investors/tokenomics/publication-engineering-validation.json",
+      "url": "https://github.com/scr1pter/claudeondfsfdaf/blob/766093ae4382d79f1d1b9ee07e4a66492caa2b4e/docs/investors/tokenomics/publication-engineering-validation.json"
     }
   ],
   "compaction_validation": {
@@ -314,5 +189,298 @@
     "independent_source_review": "no blocking regression",
     "scope": "Local deterministic provider fixtures through the actual Legacy processor. Focused cases overlap broader suites; counts are not additive. No inference quality or paid savings claim. Model, reasoning, context and verification settings unchanged.",
     "limitation": "A pre-existing non-interruption publication defect can still exit before the guard records the completed call. This correction covers cancellation and snapshot-confirmation interruption, not every possible publication failure."
+  },
+  "additional_complete_study": null,
+  "additional_complete_studies": [
+    {
+      "status": "closed",
+      "label": "Nested seven-role API, CLI and SDK build",
+      "model": "gpt-6.1-sol",
+      "reasoning": "High",
+      "team_size_each": 7,
+      "settlement_complete": true,
+      "all_charges_retained": true,
+      "quality_gate_met": false,
+      "matched_native_audit_passed": false,
+      "vector": {
+        "cost_usd": "6.6391490",
+        "requests": 279,
+        "checks_passed": 53,
+        "checks_total": 54,
+        "native_roles_observed": 7,
+        "review_scores": [
+          46,
+          47
+        ],
+        "checks_label": "final-source diagnostic"
+      },
+      "codex": {
+        "cost_usd": "4.6033534",
+        "requests": 300,
+        "checks_passed": 53,
+        "checks_total": 54,
+        "native_roles_observed": 7,
+        "review_scores": [
+          43,
+          42
+        ],
+        "checks_label": "final-source diagnostic"
+      },
+      "scope": "Shown checks are separate free final-source diagnostics; Vector's original submission check was not run. The remaining assertion expects 401 rather than 403 for the bootstrap credential; both products denied access. Vector stopped at a conservative request-reservation limit; Codex reached 300 requests during repair. Both original native audits require review. Vector scored higher in both blinded review totals, with two lower dimension scores in one review. These descriptive costs and reviews do not establish equal-quality savings. The smaller three-task result remains separate.",
+      "source_url": "https://github.com/scr1pter/claudeondfsfdaf/tree/0fe95c04de437f497db8d4f3f5091ea25f93b496/docs/benchmarks/agentic-heavy-v2/relay-headless-2026-11-04",
+      "blinded_review": {
+        "same_rubric_and_reviewer_pool": true,
+        "source_and_required_artifacts_reviewed": true,
+        "reviewers": [
+          "R1",
+          "R2"
+        ],
+        "categories": [
+          {
+            "reviewer_id": "R1",
+            "name": "Functional completeness and coherent API semantics",
+            "vector_score": 7,
+            "codex_score": 8,
+            "maximum": 8
+          },
+          {
+            "reviewer_id": "R1",
+            "name": "Transactional integrity, recovery and corruption handling",
+            "vector_score": 8,
+            "codex_score": 4,
+            "maximum": 8
+          },
+          {
+            "reviewer_id": "R1",
+            "name": "Authorization boundaries and input/error validation",
+            "vector_score": 8,
+            "codex_score": 8,
+            "maximum": 8
+          },
+          {
+            "reviewer_id": "R1",
+            "name": "Concurrency, capability/lease fencing and lifecycle",
+            "vector_score": 8,
+            "codex_score": 8,
+            "maximum": 8
+          },
+          {
+            "reviewer_id": "R1",
+            "name": "CLI usability and typed SDK contract accuracy",
+            "vector_score": 8,
+            "codex_score": 7,
+            "maximum": 8
+          },
+          {
+            "reviewer_id": "R1",
+            "name": "Maintainability and meaningful independent verification",
+            "vector_score": 7,
+            "codex_score": 8,
+            "maximum": 8
+          },
+          {
+            "reviewer_id": "R2",
+            "name": "Functional completeness and coherent API semantics",
+            "vector_score": 8,
+            "codex_score": 6,
+            "maximum": 8
+          },
+          {
+            "reviewer_id": "R2",
+            "name": "Transactional integrity, recovery and corruption handling",
+            "vector_score": 8,
+            "codex_score": 6,
+            "maximum": 8
+          },
+          {
+            "reviewer_id": "R2",
+            "name": "Authorization boundaries and input/error validation",
+            "vector_score": 8,
+            "codex_score": 8,
+            "maximum": 8
+          },
+          {
+            "reviewer_id": "R2",
+            "name": "Concurrency, capability/lease fencing and lifecycle",
+            "vector_score": 8,
+            "codex_score": 8,
+            "maximum": 8
+          },
+          {
+            "reviewer_id": "R2",
+            "name": "CLI usability and typed SDK contract accuracy",
+            "vector_score": 8,
+            "codex_score": 7,
+            "maximum": 8
+          },
+          {
+            "reviewer_id": "R2",
+            "name": "Maintainability and meaningful independent verification",
+            "vector_score": 7,
+            "codex_score": 7,
+            "maximum": 8
+          }
+        ]
+      }
+    },
+    {
+      "status": "closed",
+      "heading": "Budget-limited maintenance.",
+      "label": "Upgrading an existing billing service",
+      "model": "gpt-6.1-sol",
+      "reasoning": "High",
+      "team_size_each": 7,
+      "intro": "Same gpt-6.1-sol model, High reasoning and seven configured agents per runtime, using the shared remaining study budget. Both episodes ended at the reservation guard; all 189 charges are retained and settled.",
+      "settlement_complete": true,
+      "all_charges_retained": true,
+      "quality_gate_met": false,
+      "matched_native_audit_passed": false,
+      "blinded_review": {
+        "same_rubric_and_reviewer_pool": true,
+        "source_and_required_artifacts_reviewed": true,
+        "reviewers": [
+          "R1",
+          "R2"
+        ],
+        "categories": [
+          {
+            "reviewer_id": "R1",
+            "name": "Functional completeness and coherent API semantics",
+            "vector_score": 7,
+            "codex_score": 8,
+            "maximum": 8
+          },
+          {
+            "reviewer_id": "R1",
+            "name": "Transactional integrity, recovery and corruption handling",
+            "vector_score": 8,
+            "codex_score": 8,
+            "maximum": 8
+          },
+          {
+            "reviewer_id": "R1",
+            "name": "Authorization boundaries and input/error validation",
+            "vector_score": 7,
+            "codex_score": 8,
+            "maximum": 8
+          },
+          {
+            "reviewer_id": "R1",
+            "name": "Concurrency, capability/lease fencing and lifecycle",
+            "vector_score": 8,
+            "codex_score": 8,
+            "maximum": 8
+          },
+          {
+            "reviewer_id": "R1",
+            "name": "CLI usability and typed SDK contract accuracy",
+            "vector_score": 8,
+            "codex_score": 8,
+            "maximum": 8
+          },
+          {
+            "reviewer_id": "R1",
+            "name": "Maintainability and meaningful independent verification",
+            "vector_score": 7,
+            "codex_score": 8,
+            "maximum": 8
+          },
+          {
+            "reviewer_id": "R2",
+            "name": "Functional completeness and coherent API semantics",
+            "vector_score": 7,
+            "codex_score": 8,
+            "maximum": 8
+          },
+          {
+            "reviewer_id": "R2",
+            "name": "Transactional integrity, recovery and corruption handling",
+            "vector_score": 8,
+            "codex_score": 8,
+            "maximum": 8
+          },
+          {
+            "reviewer_id": "R2",
+            "name": "Authorization boundaries and input/error validation",
+            "vector_score": 7,
+            "codex_score": 7,
+            "maximum": 8
+          },
+          {
+            "reviewer_id": "R2",
+            "name": "Concurrency, capability/lease fencing and lifecycle",
+            "vector_score": 8,
+            "codex_score": 8,
+            "maximum": 8
+          },
+          {
+            "reviewer_id": "R2",
+            "name": "CLI usability and typed SDK contract accuracy",
+            "vector_score": 8,
+            "codex_score": 8,
+            "maximum": 8
+          },
+          {
+            "reviewer_id": "R2",
+            "name": "Maintainability and meaningful independent verification",
+            "vector_score": 7,
+            "codex_score": 8,
+            "maximum": 8
+          }
+        ]
+      },
+      "scope": "Codex submitted 53/54; its interrupted repair left the source unchanged. Vector's original check was not run; a separate free final-source diagnostic passed 53/54. Both rejected an invalid key scope with 404 where the gate expected 400. Vector stopped after five implementation roles, before independent QA and the judge; its source reviews also scored lower. This trial cannot establish savings at matching quality or compare fully completed workflows. Original outcomes and static findings remain in the evidence.",
+      "source_url": "https://github.com/scr1pter/claudeondfsfdaf/tree/0fe95c04de437f497db8d4f3f5091ea25f93b496/docs/benchmarks/agentic-heavy-v3/ledgerdesk-maintenance-2026-11-04",
+      "vector": {
+        "cost_usd": "1.4211116",
+        "requests": 58,
+        "checks_passed": 53,
+        "checks_total": 54,
+        "native_roles_observed": 5,
+        "review_scores": [
+          45,
+          45
+        ],
+        "checks_label": "final-source diagnostic"
+      },
+      "codex": {
+        "cost_usd": "2.3666455",
+        "requests": 131,
+        "checks_passed": 53,
+        "checks_total": 54,
+        "native_roles_observed": 7,
+        "review_scores": [
+          48,
+          47
+        ],
+        "checks_label": "first-submission checks"
+      }
+    }
+  ],
+  "publication_validation": {
+    "kind": "publication-error-accounting-validation-projection-v1",
+    "source_revision": "89525f448be3d2c650af528b1328d210e822d149",
+    "source_base": "94c27c67185bbce343e0fa0eac4ec60bb801e343",
+    "baseline_failed": 12,
+    "baseline_passed": 4,
+    "baseline_total": 16,
+    "new_controls_passed": 24,
+    "new_controls_assertions": 252,
+    "processor_usage_tests_passed": 109,
+    "processor_usage_assertions": 704,
+    "guard_abort_tests_passed": 37,
+    "guard_abort_existing_skips": 8,
+    "guard_abort_assertions": 160,
+    "final_combined_tests_passed": 32,
+    "final_combined_assertions": 324,
+    "failed_tests": 0,
+    "package_typechecks_passed": 23,
+    "provider_calls": 0,
+    "paid_savings_measured": false,
+    "independent_source_review": "no blocking regression",
+    "scope": "Local deterministic fixtures through actual processing, storage projection and budget services. Existing and new suites overlap; counts are not additive. Known and unknown usage, parent/child ownership, cancellation and original error handling are checked. Model, reasoning, context, output and verification settings are unchanged.",
+    "limitation": "Failed durable projections remain failed; a part-derived subtotal can remain absent while recorded assistant/global usage and the budget guard retain the bill. Durable-write retry or universal storage/guard recovery is not claimed.",
+    "post_paid_change": true,
+    "paid_benchmark_revision_remains": "94c27c67185bbce343e0fa0eac4ec60bb801e343"
   }
 }
