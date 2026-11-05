@@ -109,6 +109,9 @@ private struct TargetRect: Encodable, Equatable {
     let x: Double, y: Double, w: Double, h: Double
     init(_ value: CGRect) { x = Double(value.minX); y = Double(value.minY); w = Double(value.width); h = Double(value.height) }
     var valid: Bool { x.isFinite && y.isFinite && w.isFinite && h.isFinite && w > 0 && h > 0 }
+    func contains(_ value: TargetRect) -> Bool {
+        valid && value.valid && value.x >= x && value.y >= y && value.x + value.w <= x + w && value.y + value.h <= y + h
+    }
 }
 private struct TargetSelection: Encodable { let location: Int, length: Int }
 private struct TargetText: Encodable {
@@ -121,6 +124,13 @@ private struct TargetText: Encodable {
     }
 }
 private struct TargetView: Encodable { let identifier: String; let bounds: TargetRect? }
+private func targetGeometryReady(_ main: TargetRect?, _ backdrop: TargetRect?, _ views: [String: TargetView]) -> Bool {
+    guard let main, let backdrop, main != backdrop, backdrop.contains(main),
+          Set(views.keys) == ["patch", "button", "text", "secure"] else { return false }
+    return views.values.allSatisfy { view in
+        guard let bounds = view.bounds else { return false }; return main.contains(bounds)
+    }
+}
 private struct TargetEvents: Encodable {
     var keyDowns = 0, keyUps = 0, buttonDowns = 0, buttonUps = 0, heldKeys = 0, heldButtons = 0, escapes = 0
     var valid: Bool { [keyDowns, keyUps, buttonDowns, buttonUps, escapes].allSatisfy { (0...1_000_000).contains($0) } &&
@@ -144,7 +154,7 @@ private struct TargetState: Encodable {
             windowNumber > 0 && backdropWindowNumber > 0 && windowNumber != backdropWindowNumber &&
             Set(views.keys) == ["patch", "button", "text", "secure"] &&
             views.allSatisfy { $0.value.identifier == "fixture." + $0.key && ($0.value.bounds?.valid ?? !ready) } &&
-            (!ready || (windowBounds?.valid == true && backdropBounds?.valid == true && windowBounds != backdropBounds)) &&
+            (!ready || targetGeometryReady(windowBounds, backdropBounds, views)) &&
             patchRGB == [32, 128, 192] && backdropRGB == [224, 96, 32] &&
             (0...1_000_000).contains(counter) && text.valid && secure.valid && events.valid &&
             ["idle", "posted", "not_granted", "not_foreground", "not_isolated", "failed"].contains(foreignEsc.status) &&
@@ -158,6 +168,7 @@ private final class TargetChannel {
     let options: TargetOptions
     private let lock = NSLock()
     private var pending = 0, pendingBytes = 0
+    private var pendingIDs: [Int: Int] = [:]
     private let writer = DispatchSemaphore(value: 1)
     private var parentWatch: DispatchSourceProcess?
     private var timer: DispatchSourceTimer?
@@ -199,12 +210,11 @@ private final class TargetChannel {
                     guard let command = try? TargetCommand.parse(frame, nonce: options.nonce) else { _exit(1) }
                     let cost = frame.count + 1
                     lock.lock()
-                    guard pending < 8, cost <= 2 * targetFrameLimit - pendingBytes else { lock.unlock(); _exit(1) }
-                    pending += 1; pendingBytes += cost; lock.unlock()
+                    guard pending < 8, pendingIDs[command.id] == nil, cost <= 2 * targetFrameLimit - pendingBytes else { lock.unlock(); _exit(1) }
+                    pending += 1; pendingBytes += cost; pendingIDs[command.id] = cost; lock.unlock()
                     DispatchQueue.main.async { [self] in
                         guard getppid() == options.parent else { _exit(0) }
                         receive(command)
-                        lock.lock(); pending -= 1; pendingBytes -= cost; lock.unlock()
                     }
                 }
                 guard buffered.count <= targetFrameLimit else { _exit(1) }
@@ -241,6 +251,11 @@ private final class TargetChannel {
                       item.revents & Int16(POLLERR | POLLHUP | POLLNVAL) == 0 else { _exit(TargetExit.output.rawValue) }
             }
         }
+        if id > 0 {
+            lock.lock()
+            guard let cost = pendingIDs.removeValue(forKey: id) else { lock.unlock(); _exit(TargetExit.control.rawValue) }
+            pending -= 1; pendingBytes -= cost; lock.unlock()
+        }
     }
 }
 
@@ -272,6 +287,7 @@ private final class TargetApplication: NSObject, NSApplicationDelegate {
     var counter = 0, events = TargetEvents()
     var heldKeys = Set<UInt16>(), heldButtons = Set<Int>()
     var foreignStatus = "idle"
+    private var pendingReplies = Set<Int>()
 
     init(channel: TargetChannel) { self.channel = channel; super.init() }
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -288,7 +304,7 @@ private final class TargetApplication: NSObject, NSApplicationDelegate {
         window.observe = { [weak self] event in self?.observe(event) }
         backdrop.isReleasedWhenClosed = false; backdrop.ignoresMouseEvents = true
         backdrop.contentView = ColorPatch(frame: NSRect(x: 0, y: 0, width: 560, height: 382), rgb: [224, 96, 32])
-        backdrop.setFrame(window.frame.insetBy(dx: -24, dy: -24), display: false)
+        window.hasShadow = false; backdrop.hasShadow = false
         button.frame = NSRect(x: 250, y: 30, width: 240, height: 36); button.target = self; button.action = #selector(increment)
         counterLabel.frame = NSRect(x: 250, y: 80, width: 240, height: 28)
         plain.frame = NSRect(x: 20, y: 160, width: 500, height: 28)
@@ -300,18 +316,29 @@ private final class TargetApplication: NSObject, NSApplicationDelegate {
         window.contentView?.addSubview(counterLabel)
         backdrop.orderFront(nil); window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
         window.makeFirstResponder(button)
-        publishReady(until: DispatchTime.now().uptimeNanoseconds + 6_000_000_000)
+        anchorBackdrop()
+        backdrop.order(.below, relativeTo: window.windowNumber)
+        queueReply(id: 0, milliseconds: 6000)
     }
-    private func publishReady(until deadline: UInt64) {
+    private func anchorBackdrop() {
+        let desired = window.frame.insetBy(dx: -24, dy: -24)
+        if backdrop.frame != desired { backdrop.setFrame(desired, display: backdrop.isVisible) }
+    }
+    private func queueReply(id: Int, milliseconds: UInt64 = 2000, quit: Bool = false) {
+        guard pendingReplies.count < 8, pendingReplies.insert(id).inserted else { _exit(TargetExit.control.rawValue) }
+        publishReady(id: id, until: DispatchTime.now().uptimeNanoseconds + milliseconds * 1_000_000, quit: quit)
+    }
+    private func publishReady(id: Int, until deadline: UInt64, quit: Bool) {
         guard getppid() == channel.options.parent else { _exit(0) }
+        anchorBackdrop()
         let state = snapshot()
         guard state.valid else { _exit(TargetExit.state.rawValue) }
-        if state.ready { channel.reply(id: 0, state: state); return }
+        if state.ready { channel.reply(id: id, state: state); pendingReplies.remove(id); if quit { _exit(0) }; return }
         guard DispatchTime.now().uptimeNanoseconds < deadline else { _exit(TargetExit.notReady.rawValue) }
         // Ordering a window is not proof that Quartz has published its geometry yet. Keep one
         // pending main-loop retry and retain the parent's original eight-second handshake bound.
         DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(20)) { [weak self] in
-            guard let self else { _exit(1) }; self.publishReady(until: deadline)
+            guard let self else { _exit(1) }; self.publishReady(id: id, until: deadline, quit: quit)
         }
     }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
@@ -348,9 +375,9 @@ private final class TargetApplication: NSObject, NSApplicationDelegate {
             show(); window.makeFirstResponder(nil); plain.stringValue = value; window.makeFirstResponder(plain)
             (plain.currentEditor() as? NSTextView)?.setSelectedRange(selection)
         case .foreignEsc: postForeignEsc()
-        case .quit: channel.reply(id: command.id, state: snapshot()); _exit(0)
+        case .quit: queueReply(id: command.id, quit: true); return
         }
-        channel.reply(id: command.id, state: snapshot())
+        queueReply(id: command.id)
     }
 
     private func show() {
@@ -402,11 +429,13 @@ private final class TargetApplication: NSObject, NSApplicationDelegate {
         }
         events.heldKeys = heldKeys.count; events.heldButtons = heldButtons.count
         let bundle = Bundle.main.bundleURL.resolvingSymlinksInPath().standardizedFileURL.path
+        let mainRect = mainBounds.map(TargetRect.init), backRect = backBounds.map(TargetRect.init)
+        let ready = targetGeometryReady(mainRect, backRect, views)
         return TargetState(pid: Int(getpid()), parentPID: Int(getppid()), bundleID: Bundle.main.bundleIdentifier ?? "",
             bundlePath: bundle, executablePath: Bundle.main.executableURL?.resolvingSymlinksInPath().standardizedFileURL.path ?? "",
             sourceDigest: Bundle.main.object(forInfoDictionaryKey: "VectorComputerSourceDigest") as? String ?? "",
-            ready: mainBounds != nil && backBounds != nil, windowNumber: window.windowNumber, backdropWindowNumber: backdrop.windowNumber,
-            windowBounds: mainBounds.map(TargetRect.init), backdropBounds: backBounds.map(TargetRect.init), views: views,
+            ready: ready, windowNumber: window.windowNumber, backdropWindowNumber: backdrop.windowNumber,
+            windowBounds: mainRect, backdropBounds: backRect, views: views,
             patchRGB: [32, 128, 192], backdropRGB: [224, 96, 32], counter: counter, text: textState(plain), secure: textState(secure),
             visible: window.isVisible, minimized: window.isMiniaturized, foreground: NSWorkspace.shared.frontmostApplication?.processIdentifier == getpid(),
             postEvent: CGPreflightPostEventAccess(), events: events,
@@ -473,7 +502,14 @@ private func targetControlSelfTest() -> Bool {
         patchRGB: [32, 128, 192], backdropRGB: [224, 96, 32], counter: 0, text: summary, secure: summary,
         visible: true, minimized: false, foreground: true, postEvent: false, events: TargetEvents(),
         foreignEsc: TargetForeignEsc(status: "idle", pid: 123, tag: String(targetForeignTag, radix: 16)))
-    guard state.valid, let encoded = try? JSONEncoder().encode(state), encoded.count < targetFrameLimit,
+    var outsideViews = state.views
+    outsideViews["patch"] = TargetView(identifier: "fixture.patch", bounds: TargetRect(CGRect(x: -101, y: 20, width: 100, height: 50)))
+    guard state.valid, targetGeometryReady(state.windowBounds, state.backdropBounds, state.views),
+          !targetGeometryReady(state.windowBounds, state.windowBounds, state.views),
+          !targetGeometryReady(state.windowBounds, TargetRect(CGRect(x: -99, y: 21, width: 1, height: 1)), state.views),
+          !targetGeometryReady(state.windowBounds, state.backdropBounds, outsideViews),
+          !targetGeometryReady(state.windowBounds, state.backdropBounds, [:]),
+          let encoded = try? JSONEncoder().encode(state), encoded.count < targetFrameLimit,
           let serialized = String(data: encoded, encoding: .utf8), !serialized.contains(secret),
           !TargetEvents(heldKeys: 129).valid else { return false }
     return TargetText(length: 0, sha256: String(repeating: "0", count: 64), selection: nil).valid &&
