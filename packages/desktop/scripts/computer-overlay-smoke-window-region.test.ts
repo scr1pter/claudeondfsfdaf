@@ -3,6 +3,10 @@ import { expect, test } from "bun:test"
 import {
   observeComputerSmokeWindowRegions,
   parseComputerSmokeWindowRegions,
+  COMPUTER_SMOKE_REGION_PHASE_MARK,
+  COMPUTER_SMOKE_REGION_PHASES,
+  computerSmokeRegionProgress,
+  computerSmokeRegionDeadline,
   type ComputerSmokeRegionRunner,
 } from "./computer-overlay-smoke-window-region"
 
@@ -142,7 +146,17 @@ test("child faults, exit mismatches and forged results fail closed with fixed re
       },
     }),
   ).toEqual({ ok: false, reason: "output" })
-  for (const reason of ["launch", "output", "deadline"] as const)
+  for (const reason of [
+    "launch",
+    "output",
+    "deadline",
+    "deadline_launch",
+    "deadline_compile",
+    "deadline_input",
+    "deadline_parent",
+    "deadline_region",
+    "deadline_output",
+  ] as const)
     expect(
       await observeComputerSmokeWindowRegions(input, {
         run: async () => ({ code: null, stdout: "PRIVATE", failed: true, reason }),
@@ -159,4 +173,57 @@ test("child faults, exit mismatches and forged results fail closed with fixed re
       run: async () => ({ code: 1, stdout: JSON.stringify({ protocol: 1, ok: false, reason: "region" }) }),
     }),
   ).toEqual({ ok: false, reason: "region" })
+})
+
+test("streamed bridge progress retains only five complete ordered fixed markers across chunk boundaries", () => {
+  const progress = computerSmokeRegionProgress()
+  progress.feed("PRIVATE stderr\n" + COMPUTER_SMOKE_REGION_PHASE_MARK.slice(0, 9))
+  progress.feed(COMPUTER_SMOKE_REGION_PHASE_MARK.slice(9) + "compile\r")
+  progress.feed("\n")
+  for (const phase of COMPUTER_SMOKE_REGION_PHASES.slice(1))
+    progress.feed(Buffer.from(COMPUTER_SMOKE_REGION_PHASE_MARK + phase + "\r\n"))
+  const result = progress.finish()
+  expect(result).toEqual({ phase: "output", count: 5, invalid: false })
+  expect(JSON.stringify(result)).not.toContain("PRIVATE")
+  progress.feed(COMPUTER_SMOKE_REGION_PHASE_MARK + "compile\n")
+  expect(progress.finish()).toEqual(result)
+})
+
+test("malformed, replayed, oversized and unterminated progress cannot create a deadline phase", () => {
+  const marker = (phase: string) => COMPUTER_SMOKE_REGION_PHASE_MARK + phase + "\n"
+  for (const source of [
+    marker("input"),
+    marker("compile") + marker("compile"),
+    marker("compile") + marker("parent"),
+    COMPUTER_SMOKE_REGION_PHASES.map(marker).join("") + marker("output"),
+    marker("PRIVATE_PID_123"),
+    COMPUTER_SMOKE_REGION_PHASE_MARK + "compile",
+    COMPUTER_SMOKE_REGION_PHASE_MARK + "x".repeat(300) + "\n",
+    "x".repeat(65_537),
+  ]) {
+    const progress = computerSmokeRegionProgress()
+    progress.feed(source)
+    const result = progress.finish()
+    expect(result.invalid).toBe(true)
+    expect(result.count).toBeLessThanOrEqual(5)
+    expect(JSON.stringify(result)).not.toContain("PRIVATE")
+    expect(computerSmokeRegionDeadline(result, true)).toBe("deadline")
+  }
+  const ordinary = computerSmokeRegionProgress()
+  ordinary.feed("PRIVATE" + "x".repeat(1000) + "\nunknown partial")
+  expect(ordinary.finish()).toEqual({ count: 0, invalid: false })
+})
+
+test("the unchanged deadline identifies only trusted launch or phase observations", () => {
+  expect(computerSmokeRegionDeadline({ count: 0, invalid: false }, false)).toBe("deadline")
+  expect(computerSmokeRegionDeadline({ count: 0, invalid: false }, true)).toBe("deadline_launch")
+  const progress = computerSmokeRegionProgress()
+  for (const phase of COMPUTER_SMOKE_REGION_PHASES) {
+    const single = computerSmokeRegionProgress()
+    for (const known of COMPUTER_SMOKE_REGION_PHASES.slice(0, COMPUTER_SMOKE_REGION_PHASES.indexOf(phase) + 1))
+      single.feed(COMPUTER_SMOKE_REGION_PHASE_MARK + known + "\n")
+    expect(computerSmokeRegionDeadline(single.finish(), true)).toBe("deadline_" + phase)
+  }
+  expect(computerSmokeRegionDeadline({ phase: "compile", count: 2, invalid: false }, true)).toBe("deadline")
+  expect(computerSmokeRegionDeadline(progress.finish(), true)).toBe("deadline_launch")
 })

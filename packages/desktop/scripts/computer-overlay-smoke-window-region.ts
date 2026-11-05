@@ -25,8 +25,26 @@ export const COMPUTER_SMOKE_REGION_FAILURES = [
   "liveness",
   "output",
   "deadline",
+  "deadline_launch",
+  "deadline_compile",
+  "deadline_input",
+  "deadline_parent",
+  "deadline_region",
+  "deadline_output",
 ] as const
 export type ComputerSmokeRegionFailure = (typeof COMPUTER_SMOKE_REGION_FAILURES)[number]
+const REGION_RUNNER_FAILURES = [
+  "launch",
+  "output",
+  "deadline",
+  "deadline_launch",
+  "deadline_compile",
+  "deadline_input",
+  "deadline_parent",
+  "deadline_region",
+  "deadline_output",
+] as const
+type RegionRunnerFailure = (typeof REGION_RUNNER_FAILURES)[number]
 type RegionRequest = {
   command: string
   args: string[]
@@ -38,9 +56,93 @@ export type ComputerSmokeRegionRunner = (request: RegionRequest) => Promise<{
   code: number | null
   stdout: string
   failed?: boolean
-  reason?: "launch" | "output" | "deadline"
+  reason?: RegionRunnerFailure
 }>
 const LIMIT = 65_536
+export const COMPUTER_SMOKE_REGION_PHASE_MARK = "computer-region-phase "
+export const COMPUTER_SMOKE_REGION_PHASES = ["compile", "input", "parent", "region", "output"] as const
+export type ComputerSmokeRegionProgress = {
+  phase?: (typeof COMPUTER_SMOKE_REGION_PHASES)[number]
+  count: number
+  invalid: boolean
+}
+
+/** Only complete fixed markers survive; all other stderr and bounded partial lines are discarded. */
+export function computerSmokeRegionProgress() {
+  let pending = "",
+    dropping = false,
+    closed = false,
+    invalid = false,
+    bytes = 0,
+    marked = 0,
+    count = 0
+  let phase: ComputerSmokeRegionProgress["phase"]
+  const line = (value: string) => {
+    if (!value.startsWith(COMPUTER_SMOKE_REGION_PHASE_MARK) || invalid) return
+    const expected = COMPUTER_SMOKE_REGION_PHASES[count]
+    if (
+      expected === undefined ||
+      value !== COMPUTER_SMOKE_REGION_PHASE_MARK + expected ||
+      marked + Buffer.byteLength(value, "utf8") + 1 > 256
+    ) {
+      invalid = true
+      return
+    }
+    phase = expected
+    count++
+    marked += Buffer.byteLength(value, "utf8") + 1
+  }
+  return {
+    feed(chunk: Buffer | string) {
+      if (closed) return
+      const text = typeof chunk === "string" ? chunk : chunk.toString("utf8")
+      bytes += Buffer.byteLength(text, "utf8")
+      if (bytes > LIMIT) {
+        invalid = true
+        pending = ""
+        dropping = true
+        return
+      }
+      for (const character of text) {
+        if (character === "\n") {
+          if (!dropping) line(pending.endsWith("\r") ? pending.slice(0, -1) : pending)
+          pending = ""
+          dropping = false
+        } else if (!dropping) {
+          if (pending.length >= 256) {
+            if (pending.startsWith(COMPUTER_SMOKE_REGION_PHASE_MARK)) invalid = true
+            pending = ""
+            dropping = true
+          } else pending += character
+        }
+      }
+    },
+    finish(): ComputerSmokeRegionProgress {
+      if (!closed && !dropping && pending.startsWith(COMPUTER_SMOKE_REGION_PHASE_MARK)) invalid = true
+      closed = true
+      pending = ""
+      return { ...(phase === undefined ? {} : { phase }), count, invalid }
+    },
+  }
+}
+
+export function computerSmokeRegionDeadline(
+  progress: ComputerSmokeRegionProgress,
+  spawned: boolean,
+): RegionRunnerFailure {
+  const index = COMPUTER_SMOKE_REGION_PHASES.indexOf(progress.phase!)
+  if (
+    progress.invalid ||
+    !Number.isSafeInteger(progress.count) ||
+    progress.count < 0 ||
+    progress.count > 5 ||
+    (progress.phase === undefined ? progress.count !== 0 : index < 0 || progress.count !== index + 1)
+  )
+    return "deadline"
+  if (progress.phase !== undefined) return `deadline_${progress.phase}`
+  return spawned ? "deadline_launch" : "deadline"
+}
+
 const record = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value)
 const exact = (value: Record<string, unknown>, keys: readonly string[]) =>
@@ -67,6 +169,8 @@ $probe = $null
 $phase = 'compile'
 $compiled = $false
 try {
+  [Console]::Error.WriteLine('computer-region-phase compile')
+  [Console]::Error.Flush()
   $source = @'
 using System;
 using System.Collections.Generic;
@@ -201,6 +305,8 @@ public sealed class VectorOwnedWindowRegions : IDisposable {
 '@
   Add-Type -TypeDefinition $source -Language CSharp -ErrorAction Stop
   $compiled = $true
+  [Console]::Error.WriteLine('computer-region-phase input')
+  [Console]::Error.Flush()
   $phase = 'output'
   $buffer = New-Object char[] 1024
   $builder = New-Object System.Text.StringBuilder
@@ -215,10 +321,16 @@ public sealed class VectorOwnedWindowRegions : IDisposable {
   $entries = @($request.windows)
   $count = $entries.Count
   $phase = 'parent'
+  [Console]::Error.WriteLine('computer-region-phase parent')
+  [Console]::Error.Flush()
   $probe = New-Object -TypeName VectorOwnedWindowRegions -ArgumentList $count
+  [Console]::Error.WriteLine('computer-region-phase region')
+  [Console]::Error.Flush()
   foreach ($entry in $entries) {
     $probe.Observe([string]$entry.handle, [int]$entry.expected.x, [int]$entry.expected.y, [int]$entry.expected.width, [int]$entry.expected.height)
   }
+  [Console]::Error.WriteLine('computer-region-phase output')
+  [Console]::Error.Flush()
   $result = $probe.Finish()
   if ([Text.Encoding]::UTF8.GetByteCount($result) -gt 65536) { throw 'invalid' }
   $probe.Dispose()
@@ -243,12 +355,16 @@ const runRegionBridge: ComputerSmokeRegionRunner = (request) =>
   new Promise((resolve) => {
     const child = spawn(request.command, request.args, { windowsHide: true, stdio: ["pipe", "pipe", "pipe"] })
     let settled = false,
+      spawned = false,
       bytes = 0
     const stdout: Buffer[] = []
-    const finish = (code: number | null, reason?: "launch" | "output" | "deadline") => {
+    const progress = computerSmokeRegionProgress()
+    const finish = (code: number | null, received?: RegionRunnerFailure) => {
       if (settled) return
       settled = true
       clearTimeout(timer)
+      const observed = progress.finish()
+      const reason = received === "deadline" ? computerSmokeRegionDeadline(observed, spawned) : received
       if (reason) {
         child.kill()
         child.stdin.destroy()
@@ -271,7 +387,11 @@ const runRegionBridge: ComputerSmokeRegionRunner = (request) =>
     })
     child.stderr.on("data", (chunk: Buffer) => {
       bytes += chunk.length
-      if (bytes > request.maxBytes) finish(null, "output")
+      if (bytes > request.maxBytes) return finish(null, "output")
+      progress.feed(chunk)
+    })
+    child.once("spawn", () => {
+      spawned = true
     })
     child.once("error", () => finish(null, "launch"))
     child.once("close", (code) => finish(code))
@@ -396,7 +516,7 @@ export async function observeComputerSmokeWindowRegions(
     if (result.failed)
       return {
         ok: false,
-        reason: ["launch", "output", "deadline"].includes(String(result.reason)) ? result.reason! : "launch",
+        reason: REGION_RUNNER_FAILURES.includes(result.reason as RegionRunnerFailure) ? result.reason! : "launch",
       }
     const parsed = parseComputerSmokeWindowRegions(
       result.stdout,
