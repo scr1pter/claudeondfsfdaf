@@ -25,7 +25,7 @@ declare const Bun: {
 
 const packageDir = fileURLToPath(new URL("../", import.meta.url))
 
-/** Bun compiles the tool once; all helper transport and lifecycle checks run in actual Node. */
+/** Bun compiles once; command collection, unit diagnostics, transport and lifecycle run in actual Node. */
 export async function buildNodeSelfTest(outdir: string) {
   const directory = path.resolve(outdir)
   const entry = fileURLToPath(new URL("./computer-helper-selftest.ts", import.meta.url))

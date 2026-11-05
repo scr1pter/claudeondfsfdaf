@@ -42,6 +42,24 @@ test("the actual Node bundle preserves source roots, rejects unsupported usage, 
     expect(defaults.tests).toBe(path.join(packageDir, "native/out/darwin/tests"))
     expect(defaults.fixtures).toBe(fixtures)
     expect(defaults.privileged).toBe("off")
+    const observed = spawnSync(
+      "node",
+      [
+        "--input-type=module",
+        "--eval",
+        'const driver=await import(process.argv[1]);const result=await driver.runNativeCommand({executable:process.execPath,args:["-e","setTimeout(()=>process.exit(0),2000)"],timeoutMs:150});console.log(JSON.stringify(result.diagnostic))',
+        pathToFileURL(path.join(directory, "driver.mjs")).href,
+      ],
+      { encoding: "utf8", timeout: 5000 },
+    )
+    expect(observed.error).toBeUndefined()
+    expect(observed.status, observed.stderr).toBe(0)
+    expect(JSON.parse(observed.stdout)).toMatchObject({
+      schemaVersion: 1,
+      trigger: "wall-deadline",
+      spawned: true,
+      closeObserved: false,
+    })
     const usage = spawnSync("node", [bootstrap, "--platform", "unsupported"], { encoding: "utf8", timeout: 10_000 })
     expect(usage.error).toBeUndefined()
     expect(usage.status).toBe(2)

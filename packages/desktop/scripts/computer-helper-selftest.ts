@@ -34,6 +34,11 @@ import {
   type Received,
 } from "../test/computer/transcript"
 import { APP_IDS } from "./channel-ids"
+import {
+  runObservedNativeCommand,
+  writeNativeUnitDiagnostic,
+  type NativeCommandDiagnostic,
+} from "./computer-helper-command-diagnostics"
 import { readIdentity } from "./computer-helper-identity"
 import { MAC_TEST_TARGET, verifyMacTestArtifacts, verifyPrebuiltHelper } from "./build-computer-helper"
 import {
@@ -265,7 +270,12 @@ export type SelfTestOptions = {
   report?: string
 }
 export type Command = { executable: string; args: string[]; timeoutMs?: number }
-export type CommandResult = { code: number | null; stdout: string; timedOut?: boolean }
+export type CommandResult = {
+  code: number | null
+  stdout: string
+  timedOut?: boolean
+  diagnostic?: NativeCommandDiagnostic
+}
 export type NativeChannel = Channel & { dispose(): Promise<void> }
 export type VerifiedFixture = {
   open(): Promise<NativeChannel>
@@ -448,18 +458,33 @@ export async function runComputerHelperSelfTest(options: SelfTestOptions, depend
       const result = await (run
         ? run()
         : command({ executable, args, timeoutMs: name === "privileged" ? privilegedTimeoutMs : 30_000 }))
-      const status = result.timedOut ? "failed" : classifySelfTestExit(result.code, mode)
+      let diagnosticWriteFailed = false
+      if (name === "unit" && options.platform === "darwin" && options.report && result.diagnostic) {
+        try {
+          await writeNativeUnitDiagnostic(options.report, result.diagnostic)
+        } catch {
+          diagnosticWriteFailed = true
+        }
+      }
+      const status =
+        result.timedOut || (result.diagnostic && result.diagnostic.trigger !== "complete")
+          ? "failed"
+          : classifySelfTestExit(result.code, mode)
       set(
         name,
         status,
-        result.timedOut
-          ? "deadline"
-          : status === "skipped"
-            ? "native-skip"
-            : status === "failed"
-              ? "native-check-failed"
-              : undefined,
+        result.diagnostic && result.diagnostic.trigger !== "complete"
+          ? result.diagnostic.trigger
+          : result.timedOut
+            ? "deadline"
+            : status === "skipped"
+              ? "native-skip"
+              : status === "failed"
+                ? "native-check-failed"
+                : undefined,
       )
+      // Diagnostic failure cannot hide an existing native failure or turn a failed unit into a pass.
+      if (diagnosticWriteFailed && status !== "failed") set(name, "failed", "diagnostic-write-failed")
       if (name !== "privileged" && result.code === 77) {
         set(name, "failed", "unexpected-core-skip")
         return
@@ -546,13 +571,31 @@ export async function runComputerHelperSelfTest(options: SelfTestOptions, depend
     if (options.privileged === "off") set("privileged", "skipped", "disabled")
     return report()
   }
-  if (files) await child("unit", files.unit, [])
+  if (files)
+    await child(
+      "unit",
+      files.unit,
+      [],
+      "require",
+      dependencies.command
+        ? undefined
+        : () =>
+            runObservedNativeCommand(
+              { executable: files!.unit, args: [], timeoutMs: 30_000 },
+              {
+                // Only this exact verified unit executable is eligible; never a helper operation or model PID.
+                sampleUnit: options.platform === "darwin" && options.report !== undefined,
+              },
+            ),
+    )
   await child("unprivileged", options.bin, ["--self-test=unprivileged"])
   await child("packaged", options.bin, ["--self-test=packaged"])
   if (files?.target)
     await child(
       "target-control",
-      options.platform === "darwin" ? path.join(files.target, "Contents/MacOS", MAC_TEST_TARGET.executable) : files.target,
+      options.platform === "darwin"
+        ? path.join(files.target, "Contents/MacOS", MAC_TEST_TARGET.executable)
+        : files.target,
       ["--self-test=control"],
     )
   else set("target-control", "skipped", "isolated-target-unavailable")
@@ -658,49 +701,11 @@ export async function runComputerHelperSelfTest(options: SelfTestOptions, depend
   return report()
 }
 
-/** All subprocesses are native executables, bounded, and have bounded captured output. Nothing shells out to Bun. */
+/** Actual Node collection retains the original deadline and never stores stderr in diagnostics. */
 export async function runNativeCommand(command: Command): Promise<CommandResult> {
-  if (/^(?:bun|bun\.exe)$/i.test(path.basename(command.executable)))
-    throw new Error("Nested Bun processes are unavailable.")
-  return new Promise((resolve, reject) => {
-    const child = spawn(command.executable, command.args, {
-      stdio: ["ignore", "pipe", "pipe"],
-      windowsHide: true,
-      detached: process.platform !== "win32",
-    })
-    const chunks: Buffer[] = []
-    let bytes = 0
-    let timedOut = false
-    const kill = () => {
-      try {
-        if (process.platform !== "win32" && child.pid) process.kill(-child.pid, "SIGKILL")
-        else child.kill("SIGKILL")
-      } catch {}
-    }
-    const timer = setTimeout(() => {
-      timedOut = true
-      kill()
-    }, command.timeoutMs ?? 30_000)
-    const capture = (chunk: Buffer, keep: boolean) => {
-      bytes += chunk.byteLength
-      if (bytes > 1_048_576) {
-        timedOut = true
-        kill()
-        return
-      }
-      if (keep) chunks.push(chunk)
-    }
-    child.stdout.on("data", (chunk: Buffer) => capture(chunk, true))
-    child.stderr.on("data", (chunk: Buffer) => capture(chunk, false))
-    child.once("error", () => {
-      clearTimeout(timer)
-      reject(new Error("The native check could not start."))
-    })
-    child.once("close", (code) => {
-      clearTimeout(timer)
-      resolve({ code, stdout: Buffer.concat(chunks).toString("utf8"), ...(timedOut ? { timedOut: true } : {}) })
-    })
-  })
+  const result = await runObservedNativeCommand(command)
+  if (result.diagnostic.trigger === "spawn-failed") throw new Error("The native check could not start.")
+  return result
 }
 
 async function nativeTestFiles(options: SelfTestOptions): Promise<NativeTestFiles> {

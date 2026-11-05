@@ -237,6 +237,14 @@ jobs:
             appendFileSync(process.env.GITHUB_STEP_SUMMARY, "\n" + name + ": " + counts + "\n")
             for (const check of report.checks.filter(check => check.status === "skipped" || check.status === "failed"))
               appendFileSync(process.env.GITHUB_STEP_SUMMARY, "- " + check.status.toUpperCase() + " " + check.name + ": " + check.reason + "\n")
+            const sidecar = file + ".unit-diagnostic.json"
+            if (existsSync(sidecar)) {
+              const d = JSON.parse(readFileSync(sidecar, "utf8"))
+              if (!["complete", "wall-deadline", "output-cap", "spawn-failed", "io-error"].includes(d.trigger) ||
+                  typeof d.exitObserved !== "boolean" || typeof d.closeObserved !== "boolean" ||
+                  ![d.stdoutBytes, d.stderrBytes].every(n => Number.isSafeInteger(n) && n >= 0)) throw new Error("Invalid unit diagnostic summary.")
+              appendFileSync(process.env.GITHUB_STEP_SUMMARY, "- Unit command: " + d.trigger + ", exit=" + d.exitObserved + ", close=" + d.closeObserved + ", stdoutBytes=" + d.stdoutBytes + ", stderrBytes=" + d.stderrBytes + "\n")
+            }
           }
           NODE
       # Only reproducible builds with passing core checks may produce a baseline candidate. The enforced gate
@@ -392,6 +400,14 @@ jobs:
             appendFileSync(process.env.GITHUB_STEP_SUMMARY, "\n" + name + ": " + counts + "\n")
             for (const check of report.checks.filter(check => check.status === "skipped" || check.status === "failed"))
               appendFileSync(process.env.GITHUB_STEP_SUMMARY, "- " + check.status.toUpperCase() + " " + check.name + ": " + check.reason + "\n")
+            const sidecar = file + ".unit-diagnostic.json"
+            if (existsSync(sidecar)) {
+              const d = JSON.parse(readFileSync(sidecar, "utf8"))
+              if (!["complete", "wall-deadline", "output-cap", "spawn-failed", "io-error"].includes(d.trigger) ||
+                  typeof d.exitObserved !== "boolean" || typeof d.closeObserved !== "boolean" ||
+                  ![d.stdoutBytes, d.stderrBytes].every(n => Number.isSafeInteger(n) && n >= 0)) throw new Error("Invalid unit diagnostic summary.")
+              appendFileSync(process.env.GITHUB_STEP_SUMMARY, "- Unit command: " + d.trigger + ", exit=" + d.exitObserved + ", close=" + d.closeObserved + ", stdoutBytes=" + d.stdoutBytes + ", stderrBytes=" + d.stderrBytes + "\n")
+            }
           }
           NODE
       - name: Preserve check report

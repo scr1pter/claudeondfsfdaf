@@ -648,3 +648,10 @@ The Windows driver now stages only source/hash-verified helper, unit, Caller and
 The parent-only lifecycle holds the actual immediate Caller PID/start witness before expensive identity work, repeats synchronous liveness checks at mutation fences, and retains its independent 750ms exit fuse through report serialization/stdout. Cleanup can block without extending the one-second parent-death limit. Explicit exit77 survives finish; an earlier failure cannot become a skip. Native regressions use a held child process handle, NUL rather than a stdin pipe, and deliberately blocked cleanup.
 
 This is source checkpoint66 of73. Local focused checks pass: self-test39 tests/470 assertions, actual Node bundle1/11, workflow13/331 and desktop typecheck; actionlint and whitespace checks pass. Native source adds32 pure groups and two finite lifecycle scenarios. Actual Windows x64/ARM64 execution, physical-input provenance, grants and privileged results remain CI/manual gates. Later packaging, signing, smoke and documentation files are excluded.
+
+
+### Intel native-unit command diagnostics
+
+The unresolved Intel core failure is still a failure: standalone diagnostics rebuilt a different thin test executable and do not identify which suite stalled in the verified artifact. The unchanged command deadline now records separate wall-deadline, output-cap, spawn and I/O triggers, actual exit/pipe-close observations and bounded byte/time counts. An optional two-second sample observes only the already verified owned unit child; raw sample/output is never saved. Its sidecar admits only fixed suite/wait tokens and numeric facts. No native source, C2 measured input, identity, lock, timeout or success criterion changes.
+
+Focused local checks pass: diagnostic6 tests/130 assertions (finite actual Node fixtures), self-test39/470, actual Node bundle1/14 and desktop typecheck. Native CI must diagnose the actual source10 artifact; no Intel repair or native pass is claimed.
