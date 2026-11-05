@@ -13,6 +13,7 @@ import {
 } from "electron"
 import { base64Encode } from "@vectordevai/core/util/encode"
 import { CHANNEL } from "./constants"
+import { decodeComputerHelperPins } from "../shared/computer-helper-pins"
 import { isComputerOverlay, nativeId } from "./computer-overlay"
 import { openComputerSettings } from "./computer-settings"
 import type { ComputerStartupDeps } from "./computer-startup"
@@ -36,7 +37,10 @@ export function electronComputerDeps(input: {
     resourcesPath: process.resourcesPath,
     userData: app.getPath("userData"),
     env: process.env,
-    hashes: typeof VECTOR_COMPUTER_HELPER_SHA256 === "undefined" ? undefined : VECTOR_COMPUTER_HELPER_SHA256,
+    hashes:
+      typeof VECTOR_COMPUTER_HELPER_SHA256 === "undefined"
+        ? undefined
+        : decodeComputerHelperPins(VECTOR_COMPUTER_HELPER_SHA256),
     openSettings: (policy) => openComputerSettings(policy),
     promptStore: getStore(),
     systemPreferences: {

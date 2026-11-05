@@ -252,11 +252,17 @@ describe("final computer helper signature and provenance parsing", () => {
 
   test("the explicit CLI rejects duplicate, missing and unrelated arguments", () => {
     expect(parseVerifyComputerHelperArgs(["--app", "/fixture/Vector.app", "--expect-signing=adhoc"])).toEqual({
+      platform: "darwin",
       app: path.resolve("/fixture/Vector.app"),
       expectSigning: "adhoc",
     })
     for (const args of [
       [],
+      ["--app", "/a", "--expect-signing", "unsigned"],
+      ["--app", "/a", "--win", "/b", "--expect-signing", "adhoc"],
+      ["--app", "/a", "--arch", "x64", "--expect-signing", "adhoc"],
+      ["--app", "/a", "--publisher", "CN=Vector", "--expect-signing", "adhoc"],
+      ["--app", "/a", "--channel", "unknown", "--expect-signing", "adhoc"],
       ["--app", "/fixture/Vector.app"],
       ["--app", "/fixture/Vector.app", "--expect-signing", "unknown"],
       ["--app", "/a", "--app", "/b", "--expect-signing", "adhoc"],
@@ -264,6 +270,59 @@ describe("final computer helper signature and provenance parsing", () => {
       ["--app", "/a", "--expect-signing", "adhoc", "unexpected"],
     ])
       expect(() => parseVerifyComputerHelperArgs(args)).toThrow()
+  })
+
+  test("the Windows CLI binds one package, architecture, channel and signing mode", () => {
+    const base = ["--win", "/fixture/win-unpacked", "--arch", "arm64", "--channel", "beta"]
+    expect(parseVerifyComputerHelperArgs([...base, "--expect-signing", "unsigned"])).toEqual({
+      platform: "win32",
+      app: path.resolve("/fixture/win-unpacked"),
+      architecture: "arm64",
+      channel: "beta",
+      expectSigning: "unsigned",
+    })
+    const publisher = "CN=Vector Publisher, O=Vector, C=US"
+    expect(
+      parseVerifyComputerHelperArgs([...base, "--expect-signing", "authenticode", "--publisher", publisher]),
+    ).toEqual({
+      platform: "win32",
+      app: path.resolve("/fixture/win-unpacked"),
+      architecture: "arm64",
+      channel: "beta",
+      expectSigning: "authenticode",
+      publisher,
+    })
+    for (const args of [
+      ["--win", "/a", "--arch", "x64", "--expect-signing", "unsigned"],
+      ["--win", "/a", "--channel", "prod", "--expect-signing", "unsigned"],
+      [...base, "--expect-signing", "adhoc"],
+      [...base, "--expect-signing", "developer-id"],
+      [...base, "--expect-signing", "authenticode"],
+      [...base, "--expect-signing", "authenticode", "--publisher", ""],
+      [...base, "--expect-signing", "authenticode", "--publisher", "CN=Vector\n"],
+      [...base, "--expect-signing", "unsigned", "--publisher", publisher],
+      [...base, "--expect-signing", "unsigned", "--arch", "x64"],
+      [...base, "--expect-signing", "unsigned", "--channel", "prod"],
+      [...base, "--expect-signing", "unsigned", "--win", "/other"],
+      [...base, "--expect-signing", "authenticode", "--publisher", publisher, "--publisher=CN=Other"],
+      [...base, "--expect-signing", "unsigned", "--unknown", "value"],
+      [...base, "--expect-signing", "unsigned", "unexpected"],
+    ])
+      expect(() => parseVerifyComputerHelperArgs(args)).toThrow()
+    expect(() =>
+      parseVerifyComputerHelperArgs(["--win=/a", "--arch=ia32", "--channel=prod", "--expect-signing=unsigned"]),
+    ).toThrow()
+  })
+
+  test("the Mac CLI keeps the explicit channel for actual bundle verification", () => {
+    expect(
+      parseVerifyComputerHelperArgs(["--app=/fixture/Vector.app", "--channel=prod", "--expect-signing=developer-id"]),
+    ).toEqual({
+      platform: "darwin",
+      app: path.resolve("/fixture/Vector.app"),
+      channel: "prod",
+      expectSigning: "developer-id",
+    })
   })
 })
 
@@ -365,6 +424,21 @@ describe("final-location verifier admission", () => {
         ["--self-test=packaged"],
       ])
       expect(value.calls.find((call) => call.args.includes("--deep"))?.args).toContain(value.app)
+    } finally {
+      await value.cleanup()
+    }
+  })
+
+  test("a requested channel mismatch refuses before helper execution", async () => {
+    const value = await fixture()
+    try {
+      await expect(
+        verifyComputerHelperMac(
+          { app: value.app, channel: "beta", expectSigning: "adhoc" },
+          { directory: value.directory, run: value.run, expectedSourceDigest: async () => "a".repeat(64) },
+        ),
+      ).rejects.toThrow("requested verification channel")
+      expect(value.calls.some((call) => !call.command.startsWith("/usr/bin/"))).toBe(false)
     } finally {
       await value.cleanup()
     }

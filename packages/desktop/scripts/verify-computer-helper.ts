@@ -354,6 +354,7 @@ export async function verifyComputerHelperMac(
   input: {
     app: string
     expectSigning: "adhoc" | "developer-id"
+    channel?: "prod" | "beta" | "dev"
   },
   dependencies: {
     directory?: string
@@ -386,6 +387,8 @@ export async function verifyComputerHelperMac(
   const bundleID = await plist(path.join(root, "Contents/Info.plist"), "CFBundleIdentifier")
   const channel = (Object.keys(APP_IDS) as (keyof typeof APP_IDS)[]).find((value) => APP_IDS[value] === bundleID)
   if (!channel) throw new Error("The packaged desktop has an unknown channel identifier.")
+  if (input.channel !== undefined && input.channel !== channel)
+    throw new Error("The packaged desktop channel differs from the requested verification channel.")
   const helper = path.join(root, "Contents/Helpers/VectorComputer.app")
   const helperInfo = await lstat(helper)
   if (!helperInfo.isDirectory() || helperInfo.isSymbolicLink() || !(await realpath(helper)).startsWith(root + path.sep))
@@ -524,23 +527,69 @@ export function parseVerifyComputerHelperArgs(args: readonly string[]) {
     args: [...args],
     strict: true,
     allowPositionals: false,
-    options: { app: { type: "string" }, "expect-signing": { type: "string" } },
+    options: {
+      app: { type: "string" },
+      win: { type: "string" },
+      arch: { type: "string" },
+      channel: { type: "string" },
+      "expect-signing": { type: "string" },
+      publisher: { type: "string" },
+    },
   })
-  if (!parsed.values.app || !["adhoc", "developer-id"].includes(parsed.values["expect-signing"] ?? ""))
-    throw new Error("Usage: --app <Vector.app> --expect-signing adhoc|developer-id")
-  if (
-    args.filter((value) => value === "--app" || value.startsWith("--app=")).length !== 1 ||
-    args.filter((value) => value === "--expect-signing" || value.startsWith("--expect-signing=")).length !== 1
-  )
-    throw new Error("Verification arguments must be supplied exactly once.")
-  return {
-    app: path.resolve(parsed.values.app),
-    expectSigning: parsed.values["expect-signing"] as "adhoc" | "developer-id",
+  for (const name of Object.keys(parsed.values))
+    if (args.filter((value) => value === `--${name}` || value.startsWith(`--${name}=`)).length !== 1)
+      throw new Error("Verification arguments must be supplied exactly once.")
+  const channel = parsed.values.channel
+  if (channel !== undefined && channel !== "prod" && channel !== "beta" && channel !== "dev")
+    throw new Error("The verification channel must be prod, beta or dev.")
+  if (parsed.values.app !== undefined) {
+    if (
+      !parsed.values.app ||
+      parsed.values.win !== undefined ||
+      parsed.values.arch !== undefined ||
+      parsed.values.publisher !== undefined ||
+      (parsed.values["expect-signing"] !== "adhoc" && parsed.values["expect-signing"] !== "developer-id")
+    )
+      throw new Error("Usage: --app <Vector.app> [--channel prod|beta|dev] --expect-signing adhoc|developer-id")
+    return {
+      platform: "darwin" as const,
+      app: path.resolve(parsed.values.app),
+      expectSigning: parsed.values["expect-signing"],
+      ...(channel !== undefined ? { channel } as const : {}),
+    } as const
   }
+  const architecture = parsed.values.arch
+  const expectSigning = parsed.values["expect-signing"]
+  const publisher = parsed.values.publisher
+  if (
+    !parsed.values.win ||
+    (architecture !== "x64" && architecture !== "arm64") ||
+    channel === undefined ||
+    (expectSigning !== "unsigned" && expectSigning !== "authenticode") ||
+    (expectSigning === "unsigned" && publisher !== undefined) ||
+    (expectSigning === "authenticode" && (!publisher?.trim() || publisher.length > 512 || /[\p{C}]/u.test(publisher)))
+  )
+    throw new Error(
+      "Usage: --win <unpacked-dir> --arch x64|arm64 --channel prod|beta|dev --expect-signing unsigned|authenticode [--publisher <exact certificate Subject>]",
+    )
+  return {
+    platform: "win32" as const,
+    app: path.resolve(parsed.values.win),
+    architecture,
+    channel,
+    expectSigning,
+    ...(publisher !== undefined ? { publisher } : {}),
+  } as const
 }
 
 if (import.meta.main) {
-  const result = await verifyComputerHelperMac(parseVerifyComputerHelperArgs(process.argv.slice(2)))
-  for (const warning of result.warnings) console.warn(warning)
+  const input = parseVerifyComputerHelperArgs(process.argv.slice(2))
+  if (input.platform === "win32") {
+    const { verifyComputerHelperWindows } = await import("./verify-computer-helper-windows")
+    await verifyComputerHelperWindows(input)
+  } else {
+    const result = await verifyComputerHelperMac(input)
+    for (const warning of result.warnings) console.warn(warning)
+  }
   console.log("Verified the final computer helper identity, signatures, provenance and packaged self-test.")
 }
