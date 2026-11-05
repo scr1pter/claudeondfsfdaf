@@ -1194,3 +1194,12 @@ The private fixture now classifies a failed sample by declared output-mask cover
 Fast Windows run42125718778 at `9e1ec121` successfully completed a separate fixed Windows PowerShell5.1 Add-Type warm-up, but the actual observer still stopped at deadline_compile with four painted strips and zero native-owned/simple/matching receipts. The warm-up did not resolve the failure and is removed. No native region pass is claimed.
 
 The next source-bound control invokes only CI's protected PowerShell7 path under the local SystemRoot drive's Program Files/PowerShell/7 directory. UNC or non-drive roots fail closed; there is no PATH search, executable/DLL selector, policy bypass or fallback. PowerShell7's Add-Type uses in-process Roslyn compilation; the embedded C# source, stdin,15-second observer limit,120-second parent limit and every actual parent/owner/DPI/SIMPLE/exact-extent check are unchanged. Independent review, the9 region tests/111 assertions, desktop typecheck, formatting and actionlint passed. Actual native readback remains CI work.
+
+
+## Complete helper15 ordinary regression
+
+Full run [42122694547](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/42122694547) at `16b16b6b` completed all 15 ordinary jobs successfully in GitHub attempt 1: both unit jobs, ten engine shards, the actual Node engine bundle and both browser jobs. No GitHub job was retried. Windows engine shard 5's previously timed-out review fixture passed directly in 5738.41 ms, with the same source and deadline.
+
+Windows browser results include one internal Playwright retry. The unchanged memory-documents citation case first timed out waiting 30 seconds for its initial Documents session title, before any citation assertion, then passed retry #1. Its initial cause remains unproven. Linux browser reported 305 passed/1 explicit skip, Windows 304 passed/1 flaky/1 explicit skip; each additional viewer suite passed all five cases. [Exact ordinary provenance](./evidence/42122694547-ordinary-provenance.json) records every actual job ID, source, count, skip and retry distinction. The overall run still failed its separate Mac old-lock and Windows native-overlay gates; ordinary success does not supply native or release credit.
+
+[The failed Windows compiler control](./evidence/42125718778-windows-warmup-provenance.json) independently binds the warm-up run, artifact ZIP/API digest, raw report and all closed ASAR/region receipts. Compiler preparation succeeded; the real proof still failed deadline_compile. The cold PowerShell 7 control is running separately.
