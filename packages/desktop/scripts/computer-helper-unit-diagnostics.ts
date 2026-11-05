@@ -41,6 +41,16 @@ export function diagnosticSuites(main: string) {
 /** No test source is rewritten. Only known synthetic assertion types may disclose bounded fixture messages. */
 export function unitDiagnosticMain(main: string) {
   const suites = diagnosticSuites(main)
+  const documentProbe = suites.includes("runAccessibilityTests")
+    ? `    let documentRefusals = ["file:///virtual/a\\0b", "file:///virtual/a%00b", "file:///virtual/a?query=secret",
+        "file:///virtual/a#fragment", "file://remote.example/virtual/a", "https://example.test/a"]
+    for (index, fixture) in documentRefusals.enumerated() {
+        if AccessibilityNative.documentURL(fixture as CFString) != nil {
+            diagnosticWrite("${marker} FAIL runAccessibilityTests document-refusal-case-\\(index + 1)")
+        }
+    }
+`
+    : ""
   return `import Foundation
 import Darwin
 
@@ -67,7 +77,7 @@ ${suites
   .map(
     (suite) => `diagnosticWrite("${marker} BEGIN ${suite}")
 do {
-    _ = try ${suite}()
+${suite === "runAccessibilityTests" ? documentProbe : ""}    _ = try ${suite}()
     diagnosticWrite("${marker} PASS ${suite}")
 } catch {
     diagnosticWrite("${marker} FAIL ${suite} " + diagnosticReason(error))
@@ -91,7 +101,7 @@ export function unitDiagnosticLines(output: string, suites: readonly string[]) {
       )
       return !!match && known.has(match[2]!) && (match[1] === "FAIL" ? !!match[3] : match[3] === undefined)
     })
-    .slice(0, suites.length * 3)
+    .slice(0, suites.length * 3 + (known.has("runAccessibilityTests") ? 6 : 0))
 }
 
 async function swiftFiles(root: string): Promise<string[]> {

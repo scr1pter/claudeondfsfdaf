@@ -38,6 +38,14 @@ describe("standalone native unit diagnostics", () => {
     expect(source).not.toContain("standardError")
     expect(source.indexOf("BEGIN runCaptureTests")).toBeLessThan(source.indexOf("_ = try runCaptureTests()"))
     expect(source.indexOf("_ = try runCaptureTests()")).toBeLessThan(source.indexOf("PASS runCaptureTests"))
+    expect(source.indexOf("documentRefusals.enumerated()")).toBeLessThan(
+      source.indexOf("_ = try runAccessibilityTests()"),
+    )
+    expect(source).toContain('"file:///virtual/a\\0b", "file:///virtual/a%00b"')
+    expect(source).toContain("document-refusal-case-\\(index + 1)")
+    expect(source).not.toContain("diagnosticWrite(fixture")
+    expect(unitDiagnosticMain("try runCaptureTests()\n")).not.toContain("documentRefusals")
+    expect(unitDiagnosticMain("try runCaptureTests()\n")).not.toContain("AccessibilityNative.documentURL")
   })
 
   test("keeps a partial crash trail and a bounded synthetic failure while dropping other native output", () => {
@@ -59,5 +67,10 @@ describe("standalone native unit diagnostics", () => {
     expect(
       unitDiagnosticLines("vector-unit-diagnostic BEGIN runCaptureTests\n".repeat(100), ["runCaptureTests"]),
     ).toHaveLength(3)
+    const cases = Array.from(
+      { length: 6 },
+      (_, index) => `vector-unit-diagnostic FAIL runAccessibilityTests document-refusal-case-${index + 1}`,
+    )
+    expect(unitDiagnosticLines(cases.join("\n"), ["runAccessibilityTests"])).toEqual(cases)
   })
 })
