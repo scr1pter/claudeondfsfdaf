@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Workflow Runner</title>
+    <style>
+      body {
+        font: 16px system-ui;
+        background: #f4f5f7;
+        color: #18232e;
+        margin: 0;
+      }
+      main {
+        max-width: 960px;
+        margin: auto;
+        padding: 32px 20px;
+      }
+      h1 {
+        font-size: 36px;
+      }
+      form,
+      article {
+        background: white;
+        border: 1px solid #d8dfe5;
+        border-radius: 12px;
+        padding: 20px;
+        margin: 16px 0;
+      }
+      label {
+        display: block;
+        margin: 12px 0;
+      }
+      input,
+      select,
+      textarea,
+      button {
+        font: inherit;
+        padding: 10px;
+        max-width: 100%;
+        box-sizing: border-box;
+      }
+      input,
+      textarea {
+        width: 100%;
+      }
+      button {
+        background: #254d71;
+        color: white;
+        border: 0;
+        border-radius: 6px;
+        cursor: pointer;
+      }
+      .status {
+        font-weight: 700;
+      }
+      pre {
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+      }
+      [role="alert"] {
+        color: #a32a25;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Workflow Runner</h1>
+      <p>A local, durable queue for small tasks.</p>
+      <form id="job-form">
+        <h2>New legacy job</h2>
+        <label>Job name<input name="name" required maxlength="120" /></label
+        ><label
+          >Job behavior<select name="kind">
+            <option value="succeed">Succeed</option>
+            <option value="fail">Fail</option>
+            <option value="fail_once">Fail once</option>
+            <option value="block">Wait for release</option>
+          </select></label
+        ><button>Create job</button>
+        <p role="alert" id="error"></p>
+      </form>
+      <section aria-label="Legacy jobs">
+        <h2>Legacy jobs</h2>
+        <div id="jobs"></div>
+      </section>
+    </main>
+    <script>
+      const form = document.querySelector("#job-form");
+      const jobs = document.querySelector("#jobs");
+      const error = document.querySelector("#error");
+      async function refresh() {
+        try {
+          const response = await fetch("/api/jobs");
+          const data = await response.json();
+          jobs.replaceChildren(
+            ...data.jobs.map((job) => {
+              const card = document.createElement("article");
+              card.setAttribute("aria-label", "Legacy job " + job.name);
+              const title = document.createElement("h3");
+              title.textContent = job.name;
+              const status = document.createElement("p");
+              status.className = "status";
+              status.textContent = job.status;
+              const detail = document.createElement("pre");
+              detail.textContent = job.result || job.error || "";
+              card.append(title, status, detail);
+              return card;
+            }),
+          );
+        } catch {
+          error.textContent = "Could not refresh jobs.";
+        }
+      }
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        error.textContent = "";
+        const data = new FormData(form);
+        try {
+          const response = await fetch("/api/jobs", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              name: data.get("name"),
+              kind: data.get("kind"),
+            }),
+          });
+          const result = await response.json();
+          if (!response.ok)
+            throw new Error(result.error?.message || "Create failed");
+          form.reset();
+          await refresh();
+        } catch (failure) {
+          error.textContent = failure.message;
+        }
+      });
+      refresh();
+      setInterval(refresh, 500);
+    </script>
+  </body>
+</html>

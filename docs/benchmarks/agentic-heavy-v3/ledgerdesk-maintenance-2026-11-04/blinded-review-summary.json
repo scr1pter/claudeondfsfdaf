@@ -1,0 +1,120 @@
+{
+  "kind": "unblinded-source-review-projection-v1",
+  "mapping": {
+    "A": "vector",
+    "B": "codex"
+  },
+  "mappingDisclosedAfterBothLocks": true,
+  "reviews": [
+    {
+      "reviewer": "R1",
+      "lockedAtUtc": "2026-11-05T03:53:00.936994+00:00",
+      "originalLockedSha256": "4550d8146f48f19256cfd6b36b8d8e7ac7830ad948f6d50724e0838776adb1a2",
+      "totals": {
+        "vector": 45,
+        "codex": 48
+      }
+    },
+    {
+      "reviewer": "R2",
+      "lockedAtUtc": "2026-11-05T03:52:23Z",
+      "originalLockedSha256": "0187cd801ea4be71f0c3ff427bcfd25bf206c7fc70e8ebdd4c89729f0ec63b59",
+      "totals": {
+        "vector": 45,
+        "codex": 47
+      }
+    }
+  ],
+  "categories": [
+    {
+      "reviewer_id": "R1",
+      "name": "Functional completeness and coherent API semantics",
+      "vector_score": 7,
+      "codex_score": 8,
+      "maximum": 8
+    },
+    {
+      "reviewer_id": "R1",
+      "name": "Transactional integrity, recovery and corruption handling",
+      "vector_score": 8,
+      "codex_score": 8,
+      "maximum": 8
+    },
+    {
+      "reviewer_id": "R1",
+      "name": "Authorization boundaries and input/error validation",
+      "vector_score": 7,
+      "codex_score": 8,
+      "maximum": 8
+    },
+    {
+      "reviewer_id": "R1",
+      "name": "Concurrency, capability/lease fencing and lifecycle",
+      "vector_score": 8,
+      "codex_score": 8,
+      "maximum": 8
+    },
+    {
+      "reviewer_id": "R1",
+      "name": "CLI usability and typed SDK contract accuracy",
+      "vector_score": 8,
+      "codex_score": 8,
+      "maximum": 8
+    },
+    {
+      "reviewer_id": "R1",
+      "name": "Maintainability and meaningful independent verification",
+      "vector_score": 7,
+      "codex_score": 8,
+      "maximum": 8
+    },
+    {
+      "reviewer_id": "R2",
+      "name": "Functional completeness and coherent API semantics",
+      "vector_score": 7,
+      "codex_score": 8,
+      "maximum": 8
+    },
+    {
+      "reviewer_id": "R2",
+      "name": "Transactional integrity, recovery and corruption handling",
+      "vector_score": 8,
+      "codex_score": 8,
+      "maximum": 8
+    },
+    {
+      "reviewer_id": "R2",
+      "name": "Authorization boundaries and input/error validation",
+      "vector_score": 7,
+      "codex_score": 7,
+      "maximum": 8
+    },
+    {
+      "reviewer_id": "R2",
+      "name": "Concurrency, capability/lease fencing and lifecycle",
+      "vector_score": 8,
+      "codex_score": 8,
+      "maximum": 8
+    },
+    {
+      "reviewer_id": "R2",
+      "name": "CLI usability and typed SDK contract accuracy",
+      "vector_score": 8,
+      "codex_score": 8,
+      "maximum": 8
+    },
+    {
+      "reviewer_id": "R2",
+      "name": "Maintainability and meaningful independent verification",
+      "vector_score": 7,
+      "codex_score": 8,
+      "maximum": 8
+    }
+  ],
+  "meanTotals": {
+    "vector": 45.0,
+    "codex": 47.5
+  },
+  "vectorNoLowerInEveryDimensionForEveryReviewer": false,
+  "scope": "Bounded static reviews; original findings, author/instrument familiarity disclosures and disagreements retained. No runtime/source repair, rescore or security certification."
+}

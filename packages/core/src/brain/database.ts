@@ -20,6 +20,7 @@ import code from "./migration/20261120000000_code"
 import creditedOnce from "./migration/20261121000000_credited_once"
 import research from "./migration/20261201000000_research"
 import facets from "./migration/20261202000000_facets"
+import revocation from "./migration/20261203000000_revocation"
 
 // brain.db, opened once per process and shared by everything that reads or writes the brain: memory entries, and the
 // documents and records Vector reads into it. One connection means one writer per process, which SQLite wants, and
@@ -57,6 +58,7 @@ export const layerFor = (file: string) =>
         creditedOnce,
         research,
         facets,
+        revocation,
       ])
       // SQLite gives the -wal and -shm files the database's own mode, but on the first open they exist before this.
       if (file !== ":memory:" && process.platform !== "win32")

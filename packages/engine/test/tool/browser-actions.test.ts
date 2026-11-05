@@ -88,6 +88,14 @@ const visible = (start = "", html = SIGNED_IN) => {
             title: "Docs",
             url: state.current,
             text: "Welcome to the docs",
+            layout: {
+              viewportWidth: 390,
+              viewportHeight: 844,
+              documentWidth: 548,
+              documentHeight: 1200,
+              scrollX: 0,
+              scrollY: 120,
+            },
             elements: [{ ref: "ref_1", role: "link", name: "Guides", tag: "a", href: "http://localhost:4000/guides" }],
           },
         })
@@ -270,6 +278,12 @@ it.instance(
       expect(output(observe)).toContain('ref_1 link "Guides" → http://localhost:4000/guides')
       // type still takes a selector, so observe names the fields by theirs.
       expect(output(observe)).toContain("- #search — search")
+      expect(output(observe)).toContain(
+        "Layout (CSS px): viewport=390x844; document=548x1200; scroll=0,120; horizontal overflow=158",
+      )
+      expect(output(observe).indexOf("Layout (CSS px):")).toBeLessThan(
+        output(observe).indexOf("</untrusted_web_page"),
+      )
       expect(click?.state.status).toBe("completed")
       expect(output(shot)).toBe(NO_IMAGES)
       expect(commands(before)).toEqual(["inspectDom", "observePage", "inspectDom", "clickRef"])

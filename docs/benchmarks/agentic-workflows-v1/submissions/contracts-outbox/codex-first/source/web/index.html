@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Support desk</title><link rel="stylesheet" href="/style.css"></head>
+<body><main>
+  <header><div><p class="eyebrow">LOCAL SUPPORT WORKSPACE</p><h1>Support desk</h1><p>Synthetic customer conversations · durable delivery</p></div><div class="queue-tools"><button id="process">Process queue</button><button id="refresh">Refresh</button><p id="queue-status" role="status"></p></div></header>
+  <p id="processing" role="status"></p>
+  <div id="error" role="alert" hidden></div>
+  <div class="workspace"><nav aria-label="Tickets" id="tickets"></nav><section aria-labelledby="subject">
+    <p id="customer" class="eyebrow"></p><h2 id="subject">Select a ticket</h2><p id="summary"></p>
+    <div id="messages" aria-live="polite"></div>
+    <p id="empty">No saved replies yet. Write a reply below to start a draft.</p>
+    <form id="compose"><label for="reply">Reply</label><p class="hint">Save your draft, then queue it. Delivery begins when you process the queue.</p><textarea id="reply" name="reply" rows="4"></textarea><p><button id="save" type="submit">Save draft</button><span id="editing"></span></p></form>
+  </section></div>
+</main><script type="module" src="/app.js"></script></body>
+</html>

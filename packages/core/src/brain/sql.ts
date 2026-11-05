@@ -129,6 +129,8 @@ export const BrainSourceTable = sqliteTable("brain_source", {
 export const BrainStateTable = sqliteTable("brain_state", {
   repository_id: text().primaryKey(),
   revision: integer().notNull().default(0),
+  // Explicit withdrawals and corrections only. Never reset by event retention or erasing a scope's content.
+  revocation_revision: integer().notNull().default(0),
   learning: integer({ mode: "boolean" }).notNull().default(true),
   consolidated_at: integer(),
   // Documents keep a revision of their own, so a memory write never invalidates what is cached about documents.

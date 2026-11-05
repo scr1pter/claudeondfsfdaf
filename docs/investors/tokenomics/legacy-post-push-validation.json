@@ -1,0 +1,56 @@
+{
+  "kind": "legacy-post-push-validation-evidence-v1",
+  "recordedAtUtc": "2026-11-05T02:53:54.760510+00:00",
+  "codeRevision": "94c27c67185bbce343e0fa0eac4ec60bb801e343",
+  "branch": "legacy-step-accounting",
+  "evidenceSource": "Previously completed tool results from the actual push and following SHA verification; no validation was rerun to create this projection.",
+  "push": {
+    "command": "git -c credential.username=scr1pter -c credential.interactive=false push -u origin legacy-step-accounting",
+    "environment": {
+      "GIT_TERMINAL_PROMPT": "0",
+      "bunVersionOnPath": "1.3.14"
+    },
+    "exitCode": 0,
+    "hookPath": ".husky/pre-push",
+    "hookScript": "#!/bin/sh\nset -e\n# Check if bun version matches package.json\n# keep in sync with packages/script/src/index.ts semver qualifier\nbun -e '\nimport { semver } from \"bun\";\nconst pkg = await Bun.file(\"package.json\").json();\nconst expectedBunVersion = pkg.packageManager?.split(\"@\")[1];\nif (!expectedBunVersion) {\n  throw new Error(\"packageManager field not found in root package.json\");\n}\nconst expectedBunVersionRange = `^${expectedBunVersion}`;\nif (!semver.satisfies(process.versions.bun, expectedBunVersionRange)) {\n  throw new Error(`This script requires bun@${expectedBunVersionRange}, but you are using bun@${process.versions.bun}`);\n}\nif (process.versions.bun !== expectedBunVersion) {\n  console.warn(`Warning: Bun version ${process.versions.bun} differs from expected ${expectedBunVersion}`);\n}\n'\nbun typecheck",
+    "validationCommand": "bun typecheck",
+    "expandedValidationCommand": "bun turbo typecheck",
+    "successfulPackageTypechecks": 23,
+    "totalPackageTypechecks": 23,
+    "actualOutputExcerpt": [
+      "$ bun turbo typecheck",
+      " Tasks:    23 successful, 23 total",
+      "Cached:    0 cached, 23 total",
+      "  Time:    3m0.434s ",
+      " * [new branch]      legacy-step-accounting -> legacy-step-accounting",
+      "branch 'legacy-step-accounting' set up to track 'origin/legacy-step-accounting'."
+    ]
+  },
+  "postPushVerification": {
+    "commands": [
+      "git rev-parse HEAD",
+      "git ls-remote --heads origin legacy-step-accounting",
+      "git status --short"
+    ],
+    "exitCode": 0,
+    "localHead": "94c27c67185bbce343e0fa0eac4ec60bb801e343",
+    "remoteHead": "94c27c67185bbce343e0fa0eac4ec60bb801e343",
+    "remoteRef": "refs/heads/legacy-step-accounting",
+    "localAndRemoteMatch": true,
+    "worktreeClean": true,
+    "actualOutputExcerpt": [
+      "94c27c67185bbce343e0fa0eac4ec60bb801e343",
+      "94c27c67185bbce343e0fa0eac4ec60bb801e343\trefs/heads/legacy-step-accounting"
+    ],
+    "statusShortOutput": ""
+  },
+  "scope": {
+    "paidSavingsMeasured": false,
+    "providerInferenceCalls": 0,
+    "nativeBenchmarkRuns": 0,
+    "candidateSourceEditedForThisProjection": false,
+    "privateMachinePathsIncluded": false,
+    "credentialsOrTokensIncluded": false,
+    "r3TaskOrEvaluationDetailsRead": false
+  }
+}

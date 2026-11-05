@@ -62,9 +62,10 @@ import { llmClient } from "../../effect/app-node-platform"
  *   - [ ] Honor interruption and reject stale work after runtime attachment replacement.
  *   - [x] Honor optional agent step limits.
  *   - [x] Stop a guarded run at its spend, step, or unpriced-step limit before the next provider turn.
- *   - [ ] Record compaction model calls with the spend guard; a compaction's cost is not counted against the cap.
+ *   - [x] Record compaction model calls with the spend guard.
  *   - [ ] Apply the user's budget.run config to runs; only a prompt's own budget arms a V2 run today.
- *   - [ ] Bound provider retries and repeated identical tool calls.
+ *   - [ ] Bound provider retries.
+ *   - [x] Bound repeated identical tool calls through the spend guard.
  *
  * - Runtime context assembly
  *   - Track V1 runtime-context parity canonically in `specs/v2/session.md`.
@@ -122,7 +123,7 @@ const layer = Layer.effect(
     const snapshots = yield* Snapshot.Service
     const guard = yield* SpendGuard.Service
     const db = (yield* Database.Service).db
-    const compaction = SessionCompaction.make({ events, llm, config: yield* config.entries() })
+    const compaction = SessionCompaction.make({ events, llm, guard, config: yield* config.entries() })
     const getSession = Effect.fn("SessionRunner.getSession")(function* (sessionID: SessionSchema.ID) {
       const session = yield* store.get(sessionID)
       if (!session) return yield* Effect.die(`Session not found: ${sessionID}`)
@@ -159,7 +160,9 @@ const layer = Layer.effect(
       named: string | undefined,
     ) {
       const selected = yield* agents.select(named, session.internal !== undefined)
-      return selected.info || named === session.agent ? selected : yield* agents.select(session.agent, session.internal !== undefined)
+      return selected.info || named === session.agent
+        ? selected
+        : yield* agents.select(session.agent, session.internal !== undefined)
     })
     const failInterruptedTools = Effect.fn("SessionRunner.failInterruptedTools")(function* (
       sessionID: SessionSchema.ID,
@@ -217,6 +220,8 @@ const layer = Layer.effect(
       step: number,
       recoverOverflow?: typeof compaction.compactAfterOverflow,
     ) {
+      // Compaction rebuilds recurse here without returning to the outer drain's guard check.
+      if (yield* guard.stopped(sessionID)) return { needsContinuation: false, step }
       const session = yield* getSession(sessionID)
       if (session.location.directory !== location.directory || session.location.workspaceID !== location.workspaceID)
         return yield* Effect.interrupt
@@ -250,7 +255,10 @@ const layer = Layer.effect(
           promoted += Number(yield* SessionInput.promoteNextQueued(db, events, session.id))
           promoted += yield* SessionInput.promoteSteers(db, events, session.id, cutoff)
         }
-        if (promoted > 0) currentStep = 1
+        if (promoted > 0) {
+          currentStep = 1
+          yield* guard.resetLoops(session.id)
+        }
       }
       const system =
         initialized ?? (yield* SessionContextEpoch.prepare(db, events, loadSystemContext(agent), session.id))
@@ -296,6 +304,8 @@ const layer = Layer.effect(
       })
       if (yield* compaction.compactIfNeeded({ sessionID: session.id, entries, model, request }))
         return yield* Effect.die(continueAfterCompaction(currentStep))
+      // A blank or failed summary still spent a provider step and may have stopped the root run.
+      if (yield* guard.stopped(session.id)) return { needsContinuation: false, step: currentStep }
       const startSnapshot = yield* snapshots.capture()
       const publisher = createLLMEventPublisher(events, {
         sessionID: session.id,
@@ -386,7 +396,7 @@ const layer = Layer.effect(
           const settleStep = Effect.gen(function* () {
             const stepSettlement = publisher.stepSettlement()
             if (!stepSettlement) return undefined
-            if (llmFailure || publisher.hasProviderError()) {
+            if ((llmFailure || publisher.hasProviderError()) && !stepSettlement.incomplete) {
               yield* guard.record(
                 session.id,
                 SessionRunnerModel.spendStep(model, stepSettlement, { continues: false, patched: false }),
@@ -402,10 +412,10 @@ const layer = Layer.effect(
                 : undefined
             const tokens = stepSettlement.tokens
             const spend = SessionRunnerModel.spendStep(model, stepSettlement, {
-              continues: needsContinuation,
+              continues: stepSettlement.incomplete ? false : needsContinuation,
               patched: Boolean(files?.length),
             })
-            // A step that used no tokens owes nothing whatever the model charges.
+            // Missing terminal usage is uncertain, unlike explicitly reported zero usage.
             const used = tokens.input + tokens.output + tokens.reasoning + tokens.cache.read + tokens.cache.write
             yield* withPublication(
               events.publish(SessionEvent.Step.Ended, {
@@ -416,7 +426,7 @@ const layer = Layer.effect(
                 // The durable event keeps a finite cost, so an unknown price is recorded as 0 and marked unpriced:
                 // readers then tell it apart from a free model instead of counting it as measured free spend.
                 cost: spend.costUsd ?? 0,
-                ...(spend.costUsd === undefined && used > 0 ? { unpriced: true } : {}),
+                ...(stepSettlement.incomplete || (spend.costUsd === undefined && used > 0) ? { unpriced: true } : {}),
                 tokens,
                 snapshot: endSnapshot,
                 files,
@@ -445,6 +455,10 @@ const layer = Layer.effect(
             const message = failure instanceof Error ? failure.message : String(failure)
             yield* withPublication(publisher.failUnsettledTools(`Tool execution failed: ${message}`))
           }
+          if (publisher.hasProviderError())
+            yield* withPublication(publisher.failUnsettledTools("Tool execution interrupted"))
+          if (stream._tag === "Success" && !publisher.hasProviderError())
+            yield* withPublication(publisher.failUnsettledTools("Provider did not return a tool result", true))
           const verdict = yield* settleStep
           if (verdict?.state === "stopped") {
             // The step's answer is final when nothing follows it; only a cut-short continuation says why on the
@@ -452,10 +466,6 @@ const layer = Layer.effect(
             if (needsContinuation) yield* withPublication(publisher.failAssistant(verdict.message))
             needsContinuation = false
           }
-          if (publisher.hasProviderError())
-            yield* withPublication(publisher.failUnsettledTools("Tool execution interrupted"))
-          if (stream._tag === "Success" && !publisher.hasProviderError())
-            yield* withPublication(publisher.failUnsettledTools("Provider did not return a tool result", true))
           if (stream._tag === "Failure") return yield* Effect.failCause(stream.cause)
           if (settled._tag === "Failure" && Cause.hasInterrupts(settled.cause))
             return yield* Effect.failCause(settled.cause)

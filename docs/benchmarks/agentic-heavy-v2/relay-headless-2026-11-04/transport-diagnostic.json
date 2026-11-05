@@ -1,0 +1,115 @@
+{
+  "kind": "separate-transport-diagnostic-v1",
+  "originalEvaluatorUnchanged": true,
+  "authoredSourceUnchanged": true,
+  "rows": [
+    {
+      "runtime": "codex",
+      "checks": [
+        {
+          "case": "missing",
+          "actualStatus": 401,
+          "expectedStatus": 401,
+          "errorCode": "unauthorized",
+          "passed": true
+        },
+        {
+          "case": "unknown",
+          "actualStatus": 401,
+          "expectedStatus": 401,
+          "errorCode": "unauthorized",
+          "passed": true
+        },
+        {
+          "case": "bootstrap-on-workspace",
+          "actualStatus": 403,
+          "expectedStatus": 401,
+          "errorCode": "forbidden",
+          "passed": false
+        },
+        {
+          "case": "invalid-json",
+          "actualStatus": 400,
+          "expectedStatus": 400,
+          "errorCode": "invalid_json",
+          "passed": true
+        },
+        {
+          "case": "invalid-utf8",
+          "actualStatus": 400,
+          "expectedStatus": 400,
+          "errorCode": "invalid_utf8",
+          "passed": true
+        },
+        {
+          "case": "wrong-content-type",
+          "actualStatus": 415,
+          "expectedStatus": 415,
+          "errorCode": "unsupported_media_type",
+          "passed": true
+        },
+        {
+          "case": "oversize",
+          "actualStatus": 413,
+          "expectedStatus": 413,
+          "errorCode": "body_too_large",
+          "passed": true
+        }
+      ]
+    },
+    {
+      "runtime": "vector",
+      "checks": [
+        {
+          "case": "missing",
+          "actualStatus": 401,
+          "expectedStatus": 401,
+          "errorCode": "UNAUTHORIZED",
+          "passed": true
+        },
+        {
+          "case": "unknown",
+          "actualStatus": 401,
+          "expectedStatus": 401,
+          "errorCode": "UNAUTHORIZED",
+          "passed": true
+        },
+        {
+          "case": "bootstrap-on-workspace",
+          "actualStatus": 403,
+          "expectedStatus": 401,
+          "errorCode": "FORBIDDEN",
+          "passed": false
+        },
+        {
+          "case": "invalid-json",
+          "actualStatus": 400,
+          "expectedStatus": 400,
+          "errorCode": "INVALID_INPUT",
+          "passed": true
+        },
+        {
+          "case": "invalid-utf8",
+          "actualStatus": 400,
+          "expectedStatus": 400,
+          "errorCode": "INVALID_INPUT",
+          "passed": true
+        },
+        {
+          "case": "wrong-content-type",
+          "actualStatus": 415,
+          "expectedStatus": 415,
+          "errorCode": "UNSUPPORTED_MEDIA_TYPE",
+          "passed": true
+        },
+        {
+          "case": "oversize",
+          "actualStatus": 413,
+          "expectedStatus": 413,
+          "errorCode": "BODY_TOO_LARGE",
+          "passed": true
+        }
+      ]
+    }
+  ]
+}

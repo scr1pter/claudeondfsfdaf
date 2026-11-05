@@ -522,6 +522,18 @@ export const dict = {
   "context.stats.sessionCreated": "Session Created",
   "context.stats.lastActivity": "Last Activity",
 
+  "context.scope.summary":
+    "Context usage is from the latest measured turn. Token and cost totals include all turns, agents, and background helpers.",
+  "context.scope.latestTurn": "Latest turn",
+  "context.scope.latestTurnContext": "Latest turn context",
+  "context.scope.chatInputTokens": "Chat input tokens",
+  "context.scope.chatOutputTokens": "Chat output tokens",
+  "context.scope.chatReasoningTokens": "Chat reasoning tokens",
+  "context.scope.chatCacheTokens": "Chat cache tokens (read/write)",
+  "context.scope.breakdownTitle": "Chat usage breakdown",
+  "context.scope.breakdownNote":
+    "Cumulative usage recorded in this chat. Delegated agent and helper usage is listed separately and included in the totals above.",
+
   "context.usage.tokens": "Tokens",
   "context.usage.usage": "Usage",
   "context.usage.cost": "Cost",

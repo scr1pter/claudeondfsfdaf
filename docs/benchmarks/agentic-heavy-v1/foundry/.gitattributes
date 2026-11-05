@@ -1,0 +1,7 @@
+evaluate.py text eol=lf
+test_adapter.py text eol=lf
+task.json text eol=lf
+qualification.json text eol=lf
+provenance.json text eol=lf
+instrument/** -text whitespace=cr-at-eol
+owned_process.py -text whitespace=cr-at-eol

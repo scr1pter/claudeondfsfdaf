@@ -1,0 +1,134 @@
+{
+  "schemaVersion": 1,
+  "date": "2026-11-02",
+  "runtimeSourceRevision": "968307223f40318673361f5d09602c607a1af919",
+  "baseRevision": "661d3b36c34c68181d3b9c9b551862f8f40517ff",
+  "environment": {
+    "platform": "Windows",
+    "bun": "1.3.14",
+    "node": "24.22.0",
+    "chrome": "156.0.8078.79",
+    "playwright": "1.59.1"
+  },
+  "providerCalls": 0,
+  "cloudActions": 0,
+  "paidComparisonPerformed": false,
+  "checks": [
+    {
+      "name": "syntax",
+      "status": "passed",
+      "exitCode": 0,
+      "files": 11
+    },
+    {
+      "name": "whitespace",
+      "status": "passed",
+      "exitCode": 0,
+      "command": "git diff --check"
+    },
+    {
+      "name": "engine-browser",
+      "status": "passed",
+      "exitCode": 0,
+      "command": "bun test test/tool/browser-format.test.ts test/tool/browser-actions.test.ts --timeout 90000",
+      "cwd": "packages/engine",
+      "passed": 20,
+      "failed": 0,
+      "assertions": 146,
+      "elapsedSeconds": 54.54
+    },
+    {
+      "name": "desktop-page",
+      "status": "passed",
+      "exitCode": 0,
+      "command": "bun test src/main/browser-page.test.ts --timeout 30000",
+      "cwd": "packages/desktop",
+      "passed": 29,
+      "failed": 0,
+      "assertions": 123,
+      "elapsedSeconds": 0.842
+    },
+    {
+      "name": "fixed-numeric-reader",
+      "status": "passed",
+      "exitCode": 0,
+      "command": "node --test scripts/benchmarks/browser-driver/layout.test.cjs",
+      "passed": 2,
+      "failed": 0
+    },
+    {
+      "name": "real-native-common-layout",
+      "status": "passed",
+      "exitCode": 0,
+      "command": "node scripts/benchmarks/browser-driver/layout-smoke.cjs --playwright-module <pinned package> --chrome <pinned binary>",
+      "controls": [
+        {
+          "fixture": "uncontained",
+          "viewportWidth": 390,
+          "viewportHeight": 844,
+          "documentWidth": 548,
+          "horizontalOverflow": 158
+        },
+        {
+          "fixture": "contained",
+          "viewportWidth": 390,
+          "viewportHeight": 844,
+          "documentWidth": 390,
+          "horizontalOverflow": 0
+        }
+      ],
+      "nativeCommonReadersAgree": true,
+      "domFocusScrollViewportUnchanged": true
+    },
+    {
+      "name": "common-driver-smoke",
+      "status": "passed",
+      "exitCode": 0,
+      "command": "node scripts/benchmarks/browser-driver/smoke.cjs --playwright-module <pinned package> --chrome <pinned binary> --out <new owned directory>",
+      "passed": 17,
+      "failed": 0,
+      "checks": [
+        "real browser opens owned fixture and observes semantic controls",
+        "reference fill updates live DOM",
+        "stale references fail with fresh observation",
+        "exact role and name selection and submit reach real app state",
+        "ambiguous role and name never chooses arbitrary match",
+        "safe keyboard action works and clipboard shortcut is refused",
+        "mobile screenshot is an owned PNG file without base64 output",
+        "screenshot traversal is refused",
+        "console diagnostics are available",
+        "external origin, redirected requests, fetch and websocket never reach denied server",
+        "large control inventory is bounded",
+        "focused input metadata uses a current ref and observe preserves focus",
+        "focused password metadata and observations never expose its value",
+        "Tab leaving and re-entering the document is observed without changing focus",
+        "uncontained table reports 158px document overflow at viewport390",
+        "contained scrolling table does not report document overflow",
+        "missing valid local token cannot access driver"
+      ],
+      "deniedServerRequests": 0,
+      "providerCalls": 0,
+      "cloudActions": 0
+    },
+    {
+      "name": "engine-types",
+      "status": "passed",
+      "exitCode": 0,
+      "command": "bun run typecheck",
+      "cwd": "packages/engine"
+    },
+    {
+      "name": "desktop-types",
+      "status": "passed",
+      "exitCode": 0,
+      "command": "bun run typecheck",
+      "cwd": "packages/desktop"
+    }
+  ],
+  "limits": [
+    "Current paid arms, task apps and original evidence remain unchanged.",
+    "Both future arms must pin identical common-driver source.",
+    "Common-driver diagnostics are a methodology improvement, not a measured product cost saving.",
+    "No new paid outcome or generated-app quality claim follows from these local controls."
+  ]
+}

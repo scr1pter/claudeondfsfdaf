@@ -1,0 +1,337 @@
+{
+  "kind": "seven-identity-heavy-adapter-free-qualification-v1",
+  "date": "2026-11-02",
+  "classification": "free synthetic upstream actual-runtime qualification; not app quality, real inference throughput or real spend evidence",
+  "realProviderCalls": 0,
+  "fundedMeterCalls": 0,
+  "frozenProductRevision": "479303cf229badc0fa2c770f27d7d845dfa4fa68",
+  "qualifiedInstrumentRevision": "288abfd65d47c5841d93d9367111a0d6ea27595b",
+  "pureRunnerAndPathControlsPassed": 56,
+  "task": "previously observed heavy Foundry scaffold; real 76-check evaluator expected negative on unchanged scaffold",
+  "teamProfileSha256": "6f70ed35534e60d66c832323bd5df78be68d20f22233c382c2b8633430bf194b",
+  "nativeIdentities": 7,
+  "maxDepth": 2,
+  "fixedEdges": {
+    "backend_coordinator": "lead",
+    "backend_api": "backend_coordinator",
+    "backend_data": "backend_coordinator",
+    "frontend_worker": "lead",
+    "qa_specialist": "lead",
+    "team_judge": "lead"
+  },
+  "formalRepair": "one same-lead CLI resume; same QA and judge native identities resumed after trusted repair admission boundary",
+  "codeMode": "Codex native custom exec preserved; actual persisted CommandExecution telemetry used without evaluating model JavaScript",
+  "images": "actual saved screenshots read through Vector ReadTool and Codex view_image, then present in subsequent fake-provider input_image requests",
+  "vectorScreenshotPermission": "only each owned browser-driver/screenshots directory allowed through otherwise-denied external_directory permission",
+  "fixtureBoundary": "labelled local Python API/page tests shell and common browser capabilities only; it is not the benchmark app",
+  "allAttemptsRetained": [
+    {
+      "case": "heavy-adapter-vector-01",
+      "originalSummarySha256": "9732af711c9fbb56c0d77ca08e8d07d9e3160b5cebdc060a599c3c224b416828",
+      "runtime": "vector",
+      "sourceRevision": "479303cf229badc0fa2c770f27d7d845dfa4fa68",
+      "profileSha256": "6f70ed35534e60d66c832323bd5df78be68d20f22233c382c2b8633430bf194b",
+      "realProviderCalls": 0,
+      "fundedMeterCalls": 0,
+      "fakeRequests": 28,
+      "unchangedRealSeed": true,
+      "allSolHighAutoLow": true,
+      "capabilityEvidence": {
+        "successfulActualShellApiAndCommonBrowser": true,
+        "rootShellCallsObserved": 2,
+        "fixtureApiRequests": 2,
+        "fixtureBrowserPageRequests": 2
+      },
+      "backgroundEvidence": {
+        "applicable": true,
+        "backgroundTaskLaunches": 1,
+        "ownedCompletionNotifications": 0
+      },
+      "nativeImagePreviewRequests": null,
+      "functionalVerdict": "product_failure",
+      "nativeAuditVerdict": "passed",
+      "stopReason": "product_failure_after_one_same_session_repair",
+      "reviewRequired": false,
+      "settlementComplete": true,
+      "providerRequests": 28,
+      "autonomousActorsAdmitted": 7,
+      "qualificationPassed": false,
+      "nativeRoleRequestCounts": {
+        "backend_api": 2,
+        "backend_coordinator": 3,
+        "backend_data": 2,
+        "frontend_worker": 2,
+        "lead": 11,
+        "qa_specialist": 4,
+        "team_judge": 4
+      },
+      "observedRoleDepths": {
+        "backend_api": [
+          2
+        ],
+        "backend_coordinator": [
+          1
+        ],
+        "backend_data": [
+          2
+        ],
+        "frontend_worker": [
+          1
+        ],
+        "lead": [
+          0
+        ],
+        "qa_specialist": [
+          1
+        ],
+        "team_judge": [
+          1
+        ]
+      },
+      "nativeAuditFlags": {
+        "requiresManualReview": false,
+        "descendantCoverageComplete": true,
+        "observedNativeSessions": 7,
+        "autonomousActorsAdmitted": 7,
+        "judgeStartedAfterBothWorkersCompleted": true,
+        "allWorkerCompletionPhasesReviewedBySameJudge": true,
+        "roleCreationDependenciesSatisfied": true,
+        "roleCompletionDependenciesSatisfied": true,
+        "specialistCoversLatestWorkerPhasesAndRepair": true,
+        "requiredNativeLatestOutcomesSettled": true,
+        "workerFollowupCompletions": 1,
+        "judgeFollowupCompletions": 1,
+        "orderingTimestampEqualityObserved": false,
+        "orderingEvidence": "nondecreasing native timestamps normalized to seconds; ordering is not strict causal proof",
+        "rootPostJudgeCommonBrowserCommandObserved": true,
+        "rootPostJudgeApiVerificationCommandObserved": true,
+        "ownedSupportDataFiles": 0
+      },
+      "ownedRuntimeTreeQuiesced": true,
+      "functionalInvocations": [
+        {
+          "verdict": "product_failure",
+          "checks": 76,
+          "sourceUnchanged": true
+        },
+        {
+          "verdict": "product_failure",
+          "checks": 76,
+          "sourceUnchanged": true
+        }
+      ]
+    },
+    {
+      "case": "heavy-adapter-vector-02",
+      "originalSummarySha256": "2b2d59d8db284b07581b1594415c850277aff797f97c4ccf387fab8a5b414d87",
+      "runtime": "vector",
+      "sourceRevision": "479303cf229badc0fa2c770f27d7d845dfa4fa68",
+      "profileSha256": "6f70ed35534e60d66c832323bd5df78be68d20f22233c382c2b8633430bf194b",
+      "realProviderCalls": 0,
+      "fundedMeterCalls": 0,
+      "fakeRequests": 32,
+      "unchangedRealSeed": true,
+      "allSolHighAutoLow": true,
+      "capabilityEvidence": {
+        "successfulActualShellApiAndCommonBrowser": true,
+        "rootShellCallsObserved": 4,
+        "fixtureApiRequests": 2,
+        "fixtureBrowserPageRequests": 2
+      },
+      "backgroundEvidence": {
+        "applicable": true,
+        "backgroundTaskLaunches": 1,
+        "ownedCompletionNotifications": 1
+      },
+      "nativeImagePreviewRequests": 7,
+      "functionalVerdict": "product_failure",
+      "nativeAuditVerdict": "passed",
+      "stopReason": "product_failure_after_one_same_session_repair",
+      "reviewRequired": false,
+      "settlementComplete": true,
+      "providerRequests": 32,
+      "autonomousActorsAdmitted": 7,
+      "qualificationPassed": true,
+      "nativeRoleRequestCounts": {
+        "backend_api": 2,
+        "backend_coordinator": 3,
+        "backend_data": 2,
+        "frontend_worker": 2,
+        "lead": 15,
+        "qa_specialist": 4,
+        "team_judge": 4
+      },
+      "observedRoleDepths": {
+        "backend_api": [
+          2
+        ],
+        "backend_coordinator": [
+          1
+        ],
+        "backend_data": [
+          2
+        ],
+        "frontend_worker": [
+          1
+        ],
+        "lead": [
+          0
+        ],
+        "qa_specialist": [
+          1
+        ],
+        "team_judge": [
+          1
+        ]
+      },
+      "nativeAuditFlags": {
+        "requiresManualReview": false,
+        "descendantCoverageComplete": true,
+        "observedNativeSessions": 7,
+        "autonomousActorsAdmitted": 7,
+        "judgeStartedAfterBothWorkersCompleted": true,
+        "allWorkerCompletionPhasesReviewedBySameJudge": true,
+        "roleCreationDependenciesSatisfied": true,
+        "roleCompletionDependenciesSatisfied": true,
+        "specialistCoversLatestWorkerPhasesAndRepair": true,
+        "requiredNativeLatestOutcomesSettled": true,
+        "workerFollowupCompletions": 1,
+        "judgeFollowupCompletions": 1,
+        "orderingTimestampEqualityObserved": false,
+        "orderingEvidence": "nondecreasing native timestamps normalized to seconds; ordering is not strict causal proof",
+        "rootPostJudgeCommonBrowserCommandObserved": true,
+        "rootPostJudgeApiVerificationCommandObserved": true,
+        "ownedSupportDataFiles": 0
+      },
+      "ownedRuntimeTreeQuiesced": true,
+      "functionalInvocations": [
+        {
+          "verdict": "product_failure",
+          "checks": 76,
+          "sourceUnchanged": true
+        },
+        {
+          "verdict": "product_failure",
+          "checks": 76,
+          "sourceUnchanged": true
+        }
+      ]
+    },
+    {
+      "case": "heavy-adapter-codex-01",
+      "originalSummarySha256": "b3c3518c29065c8bf87eb776372f715ebf883e9167c7c45b55596e31a67308e7",
+      "runtime": "codex",
+      "sourceRevision": "479303cf229badc0fa2c770f27d7d845dfa4fa68",
+      "profileSha256": "6f70ed35534e60d66c832323bd5df78be68d20f22233c382c2b8633430bf194b",
+      "realProviderCalls": 0,
+      "fundedMeterCalls": 0,
+      "fakeRequests": 38,
+      "unchangedRealSeed": true,
+      "allSolHighAutoLow": true,
+      "capabilityEvidence": {
+        "successfulActualShellApiAndCommonBrowser": true,
+        "rootShellCallsObserved": 4,
+        "fixtureApiRequests": 2,
+        "fixtureBrowserPageRequests": 2
+      },
+      "backgroundEvidence": {
+        "applicable": false
+      },
+      "nativeImagePreviewRequests": 9,
+      "functionalVerdict": "product_failure",
+      "nativeAuditVerdict": "passed",
+      "stopReason": "product_failure_after_one_same_session_repair",
+      "reviewRequired": false,
+      "settlementComplete": true,
+      "providerRequests": 38,
+      "autonomousActorsAdmitted": 7,
+      "qualificationPassed": true,
+      "nativeRoleRequestCounts": {
+        "backend_api": 2,
+        "backend_coordinator": 5,
+        "backend_data": 2,
+        "frontend_worker": 2,
+        "lead": 19,
+        "qa_specialist": 4,
+        "team_judge": 4
+      },
+      "observedRoleDepths": {
+        "backend_api": [
+          2
+        ],
+        "backend_coordinator": [
+          1
+        ],
+        "backend_data": [
+          2
+        ],
+        "frontend_worker": [
+          1
+        ],
+        "lead": [
+          0
+        ],
+        "qa_specialist": [
+          1
+        ],
+        "team_judge": [
+          1
+        ]
+      },
+      "nativeAuditFlags": {
+        "requiresManualReview": false,
+        "descendantCoverageComplete": true,
+        "observedNativeSessions": 7,
+        "autonomousActorsAdmitted": 7,
+        "judgeStartedAfterBothWorkersCompleted": true,
+        "allWorkerCompletionPhasesReviewedBySameJudge": true,
+        "roleCreationDependenciesSatisfied": true,
+        "roleCompletionDependenciesSatisfied": true,
+        "specialistCoversLatestWorkerPhasesAndRepair": true,
+        "requiredNativeLatestOutcomesSettled": true,
+        "workerFollowupCompletions": 1,
+        "judgeFollowupCompletions": 1,
+        "orderingTimestampEqualityObserved": false,
+        "orderingEvidence": "nondecreasing native timestamps normalized to seconds; ordering is not strict causal proof",
+        "rootPostJudgeCommonBrowserCommandObserved": true,
+        "rootPostJudgeApiVerificationCommandObserved": true,
+        "ownedSupportDataFiles": 0
+      },
+      "ownedRuntimeTreeQuiesced": true,
+      "functionalInvocations": [
+        {
+          "verdict": "product_failure",
+          "checks": 76,
+          "sourceUnchanged": true
+        },
+        {
+          "verdict": "product_failure",
+          "checks": 76,
+          "sourceUnchanged": true
+        }
+      ]
+    }
+  ],
+  "firstVectorCounterCorrection": {
+    "kind": "bounded-posthoc-notification-counter-correction-v1",
+    "sourceRevision": "cf37343",
+    "originalSummarySha256": "9732af711c9fbb56c0d77ca08e8d07d9e3160b5cebdc060a599c3c224b416828",
+    "originalQualificationPassed": false,
+    "originalUnmodified": true,
+    "newProviderOrNativeCalls": 0,
+    "correctedBackgroundEvidence": {
+      "applicable": true,
+      "backgroundTaskLaunches": 1,
+      "ownedCompletionNotifications": 1
+    },
+    "correctedQualificationPassed": true,
+    "doesNotRelabelOriginalSmoke": true,
+    "correction": "recognize producer opening tag with attributes instead of requiring attribute-free exact tag"
+  },
+  "finalBothActualAdapterQualificationsPassed": true,
+  "blindedSemanticQualityReview": "not run for fake qualification; required on future paid outputs",
+  "efficiencyClaimMet": false,
+  "timingLimitation": "witness serializes provider requests equally; fake timings are not production team throughput",
+  "privacy": "raw requests, native IDs, prompts, aliases, receipt IDs, runtime homes and screenshots remain private",
+  "fundingBoundary": "no real controller config, real receipt ledger or API key was read by these qualification commands"
+}

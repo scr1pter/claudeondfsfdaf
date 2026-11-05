@@ -9,6 +9,10 @@ import { WorkspaceTrust } from "@vectordevai/core/workspace-trust/workspace-trus
 import { Global } from "@vectordevai/core/global"
 import { FSUtil } from "@vectordevai/core/fs-util"
 import { Database } from "@vectordevai/core/database/database"
+import { EventTable } from "@vectordevai/core/event/sql"
+import { SpendGuard } from "@vectordevai/core/spend-guard"
+import { EventV2Bridge } from "@/event-v2-bridge"
+import { eq } from "drizzle-orm"
 import { describe, expect } from "bun:test"
 import { Effect, Fiber, Layer } from "effect"
 import path from "path"
@@ -93,6 +97,8 @@ const it = testEffect(
       Ripgrep.node,
       FSUtil.node,
       Database.node,
+      SpendGuard.node,
+      EventV2Bridge.node,
       LayerNode.make({ service: TestLLMServer, layer: TestLLMServer.layer, deps: [] }),
     ]),
     [
@@ -709,6 +715,97 @@ describe("task sizing", () => {
           { round: 2, size: "thorough", verdict: "PASS" },
         ])
         expect((yield* llm.inputs).filter((body) => !isTitle(body))).toHaveLength(6)
+      }),
+    { git: true },
+  )
+
+  it.instance(
+    "legacy accounting conserves priced root and automatic judge repair attempts without replay inflation",
+    () =>
+      Effect.gen(function* () {
+        const fake = yield* TestLLMServer
+        const base = providerConfig(fake.url).provider!.lmstudio!
+        const selected = { providerID: ProviderV2.ID.make("lmstudio"), modelID: ModelV2.ID.make("accounting-judge") }
+        const { llm, prompt, sessions, directory } = yield* setup({
+          provider: {
+            lmstudio: {
+              ...base,
+              models: {
+                "accounting-judge": {
+                  ...base.models!["north-mini-code"],
+                  id: "accounting-judge",
+                  cost: { input: 2, output: 10 },
+                },
+              },
+            },
+          },
+        })
+        const guard = yield* SpendGuard.Service
+        const database = yield* Database.Service
+        const events = yield* EventV2Bridge.Service
+        const chat = yield* sessions.create({ title: "Pinned" })
+        const target = path.join(directory, "accounting-router.ts")
+        yield* llm.push(
+          reply()
+            .tool("write", { filePath: target, content: "export const router = 1\n" })
+            .usage({ input: 1_000, output: 100 }),
+          reply().text("Migrated the router.").usage({ input: 2_000, output: 200 }).stop(),
+          reply()
+            .text("VERDICT: FAIL\nBLOCKERS:\n- router exports a number")
+            .usage({ input: 3_000, output: 300 })
+            .stop(),
+          reply()
+            .tool("write", { filePath: target, content: "export const router = () => {}\n" })
+            .usage({ input: 4_000, output: 400 }),
+          reply().text("Repaired the export.").usage({ input: 5_000, output: 500 }).stop(),
+          reply().text("VERDICT: PASS").usage({ input: 6_000, output: 600 }).stop(),
+        )
+        yield* send(prompt, chat.id, "be thorough: migrate the router and verify the repair", {
+          model: selected,
+          judge: "thorough",
+          budget: { usd: 1 },
+        })
+        const children = yield* sessions.children(chat.id)
+        const root = yield* sessions.get(chat.id)
+        // At $2/M input and $10/M output: root attempts 1,2,4,5 cost $0.036; judge attempts 3,6 cost $0.027.
+        expect(root.cost).toBeCloseTo(0.036, 9)
+        expect(root.subagentCost).toBeCloseTo(0.027, 9)
+        expect(root.tokens).toMatchObject({ input: 12_000, output: 1_200, reasoning: 0, cache: { read: 0, write: 0 } })
+        expect(root.subagentTokens).toEqual({ input: 9_000, output: 900, reasoning: 0, cache: { read: 0, write: 0 } })
+        expect(children).toHaveLength(2)
+        expect(children.map((child) => child.cost).toSorted((a, b) => (a ?? 0) - (b ?? 0))).toEqual([0.009, 0.018])
+        expect(children.every((child) => child.metadata?.subagent?.agent === "judge")).toBe(true)
+        expect(judgeVerdicts(yield* MessageV2.filterCompactedEffect(chat.id))).toEqual([
+          { round: 1, size: "thorough", verdict: "FAIL" },
+          { round: 2, size: "thorough", verdict: "PASS" },
+        ])
+        expect((yield* guard.snapshot(chat.id))?.spentUsd).toBeCloseTo(0.063, 9)
+        expect((yield* guard.snapshot(chat.id))?.steps).toBe(6)
+        const bodies = (yield* llm.inputs).filter((body) => !isTitle(body))
+        expect(bodies).toHaveLength(6)
+        expect(bodies.every((body) => body.model === "accounting-judge")).toBe(true)
+        const recorded = yield* database.db
+          .select()
+          .from(EventTable)
+          .where(eq(EventTable.aggregate_id, children[0].id))
+          .all()
+        const settlement = recorded.find(
+          (event) =>
+            event.type.startsWith(`${SessionV1.Event.PartUpdated.type}.`) &&
+            (event.data as { part?: { type?: string } }).part?.type === "step-finish",
+        )
+        if (!settlement) return yield* Effect.die("Missing real judge settlement")
+        yield* events.replay({
+          id: settlement.id,
+          aggregateID: settlement.aggregate_id,
+          seq: settlement.seq,
+          type: settlement.type,
+          data: settlement.data,
+        })
+        expect((yield* sessions.get(chat.id)).subagentCost).toBeCloseTo(0.027, 9)
+        expect((yield* guard.snapshot(chat.id))?.spentUsd).toBeCloseTo(0.063, 9)
+        expect((yield* guard.snapshot(chat.id))?.steps).toBe(6)
+        expect(yield* llm.calls).toBe(6)
       }),
     { git: true },
   )
