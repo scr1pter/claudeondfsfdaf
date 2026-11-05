@@ -289,6 +289,18 @@ jobs:
         run: |
           node node_modules/electron/install.js
           if ($LASTEXITCODE -ne 0) { throw "The pinned Electron installation failed." }
+      - name: Prepare the Windows PowerShell C# compiler
+        timeout-minutes: 1
+        run: |
+          # Prepare compiler caches before the observer's unchanged, separately bounded native read.
+          $regionWarmupScript = @'
+          $ErrorActionPreference = 'Stop'
+          Add-Type -TypeDefinition 'public sealed class VectorRegionCompilerPreparation { public static int Check() { return 1; } }' -Language CSharp -ErrorAction Stop
+          if ([VectorRegionCompilerPreparation]::Check() -ne 1) { throw 'The fixed compiler preparation failed.' }
+          '@
+          $regionWarmupEncoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($regionWarmupScript))
+          & "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -EncodedCommand $regionWarmupEncoded
+          if ($LASTEXITCODE -ne 0) { throw "Windows PowerShell compiler preparation failed." }
       - name: Run real Electron overlay properties and controller lifecycle
         timeout-minutes: 3
         run: |
