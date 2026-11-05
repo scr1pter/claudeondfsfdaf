@@ -142,10 +142,10 @@ bool check_version(const std::filesystem::path& path) {
     require_native(text[length - 1] == L'\0');
     return std::wstring(text, length - 1);
   };
-  return winrt::to_hstring(string(L"FileVersion")) == winrt::to_hstring(identity::kHelperVersion) &&
-    winrt::to_hstring(string(L"ProductVersion")) == winrt::to_hstring(identity::kHelperVersion) &&
-    winrt::to_hstring(string(L"OriginalFilename")) == winrt::to_hstring(identity::kExecutable) &&
-    winrt::to_hstring(string(L"FileDescription")) == winrt::to_hstring(identity::kDisplayName);
+  return string(L"FileVersion") == winrt::to_hstring(identity::kHelperVersion).c_str() &&
+    string(L"ProductVersion") == winrt::to_hstring(identity::kHelperVersion).c_str() &&
+    string(L"OriginalFilename") == winrt::to_hstring(identity::kExecutable).c_str() &&
+    string(L"FileDescription") == winrt::to_hstring(identity::kDisplayName).c_str();
 }
 
 struct ServingRuntime {
