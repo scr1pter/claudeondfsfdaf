@@ -734,7 +734,7 @@ test("x64 diagnostics reuse exact bounded native checks and publish no release e
     /--arch (?:arm64|x64,arm64)|--privileged (?:auto|require)|--native-stage|tar -|native-ready/,
   )
   const uploads = current.filter((step) => String(step.uses).includes("upload-artifact"))
-  expect(uploads).toHaveLength(1)
+  expect(uploads).toHaveLength(2)
   expect(uploads[0]!.if).toBe("${{ always() }}")
   expect(uploads[0]!.with).toEqual({
     name: "computer-helper-win32-x64-diagnostic-${{ github.sha }}-${{ github.run_attempt }}",
@@ -754,10 +754,100 @@ test("x64 diagnostics reuse exact bounded native checks and publish no release e
   expect(protocol["timeout-minutes"]).toBe(8)
   expect(current.indexOf(protocol)).toBeGreaterThan(current.indexOf(checks))
   expect(current.indexOf(uploads[0]!)).toBeGreaterThan(current.indexOf(protocol))
+  expect(protocol.id).toBe("required_protocol")
+  const compile = current.find((step) => step.id === "direct_node_compile")!
+  const paired = current.find((step) => step.name === "Diagnose the same Windows self-test with a direct Node parent")!
+  expect(compile.if).toBe("${{ failure() && steps.required_protocol.outcome == 'failure' }}")
+  expect(paired.if).toBe(
+    "${{ failure() && steps.required_protocol.outcome == 'failure' && steps.direct_node_compile.outcome == 'success' }}",
+  )
+  expect(compile["continue-on-error"]).toBe(true)
+  expect(paired["continue-on-error"]).toBe(true)
+  expect(compile["timeout-minutes"]).toBe(2)
+  expect(paired["timeout-minutes"]).toBe(protocol["timeout-minutes"])
+  expect(String(compile.run)).toContain(
+    'import { buildNodeSelfTest } from "./scripts/computer-helper-selftest-node.ts"',
+  )
+  expect(String(compile.run)).toContain('await buildNodeSelfTest(path.resolve("native/build/selftest-direct-node"))')
+  expect(String(compile.run)).not.toMatch(/runNodeSelfTest\(|spawn\(|runSelfTestCLI\(/)
+  const original = String(protocol.run).split("\n")[0]!
+  const direct = String(paired.run).split("\n")[0]!
+  expect(direct).toBe(
+    original
+      .replace(
+        "bun --no-env-file ./scripts/computer-helper-selftest-node.ts",
+        "node ./native/build/selftest-direct-node/run.mjs",
+      )
+      .replace("computer-win32-core.json", "computer-win32-direct-node.json"),
+  )
+  expect(uploads[1]!.if).toBe("${{ always() && steps.required_protocol.outcome == 'failure' }}")
+  expect(uploads[1]!.with).toEqual({
+    name: "computer-helper-win32-direct-node-diagnostic-${{ github.sha }}-${{ github.run_attempt }}",
+    path: "${{ runner.temp }}/computer-win32-direct-node.json",
+    "if-no-files-found": "ignore",
+    overwrite: false,
+    "retention-days": 7,
+  })
+  expect(current.indexOf(compile)).toBeGreaterThan(current.indexOf(protocol))
+  expect(current.indexOf(paired)).toBeGreaterThan(current.indexOf(compile))
+  expect(current.indexOf(uploads[1]!)).toBeGreaterThan(current.indexOf(paired))
   const release = record(workflow("vector-desktop-release.yml").document.jobs)
   for (const name of ["mac", "windows"]) expect(record(release[name]).needs).toContain("computer-helper")
   for (const value of Object.values(release))
     expect(JSON.stringify(value)).not.toContain("computer-helper-windows-units")
+})
+
+test("successful direct Windows checks forward only deduplicated fixed Caller context receipts", () => {
+  const check = steps(record(record(main.document.jobs)["computer-helper-windows-units"])).find(
+    (step) => step.name === "Run Windows unit and fresh version/probe checks",
+  )!
+  const body = String(check.run)
+    .split("<<'NODE'\n")[1]!
+    .replace(/\nNODE\s*$/, "")
+    .replace(/^import .*$/gm, "")
+  const emitted: string[] = []
+  const receipt = "vector-caller-context initial r=linked d=parent o=u a=g"
+  const second = "vector-caller-context initial r=serving d=owned o=x a=d"
+  const unknown = "vector-caller-context initial r=restricted d=parent o=n a=n"
+  const stderr = [
+    receipt,
+    "PRIVATE",
+    receipt,
+    second,
+    unknown,
+    "vector-caller-context initial r=PRIVATE d=parent o=u a=g",
+    "vector-caller-context initial r=linked d=parent o=PRIVATE a=g",
+    "vector-caller-context initial r=linked d=parent o=u a=PRIVATE",
+    "vector-caller-context initial r=linked d=parent",
+    second + " PRIVATE",
+  ].join("\n")
+  let calls = 0
+  runInNewContext(
+    body,
+    {
+      path,
+      readFileSync: () => JSON.stringify({ sourceDigest: "fixture-digest" }),
+      spawnSync(_file: string, args: string[], options: Record<string, unknown>) {
+        calls++
+        expect(options).toMatchObject({ timeout: 30000, maxBuffer: 65536, windowsHide: true })
+        const stdout = args.includes("--version")
+          ? JSON.stringify({ sourceDigest: "fixture-digest", arch: "x64" })
+          : args.includes("--probe")
+            ? JSON.stringify({
+                permissions: { screen: "n/a", accessibility: "n/a" },
+                captureBlocked: false,
+                elevated: false,
+              })
+            : ""
+        return { status: 0, stdout, stderr }
+      },
+      process: { stderr: { write: (text: string) => emitted.push(text) } },
+    },
+    { timeout: 1000 },
+  )
+  expect(calls).toBe(4)
+  expect(emitted).toEqual([receipt + "\n", second + "\n", unknown + "\n"])
+  expect(emitted.join("")).not.toContain("PRIVATE")
 })
 
 test("macOS certificate diagnostics are explicit, isolated and keep default and Node routes intact", () => {

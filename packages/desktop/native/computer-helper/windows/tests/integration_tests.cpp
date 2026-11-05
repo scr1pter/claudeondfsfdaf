@@ -128,7 +128,7 @@ class Child {
   winrt::handle diagnostic;
   std::string diagnostic_line;
   size_t diagnostic_bytes = 0;
-  bool diagnostic_overflow = false, diagnostic_forwarded = false, helper_diagnostic_forwarded = false;
+  bool diagnostic_overflow = false, diagnostic_forwarded = false, helper_diagnostic_forwarded = false, context_forwarded = false;
   explicit Child(const std::filesystem::path& caller, bool test_elevated_token = false) {
     SECURITY_ATTRIBUTES security{static_cast<DWORD>(sizeof(SECURITY_ATTRIBUTES)), nullptr, TRUE};
     HANDLE read = nullptr;
@@ -178,7 +178,7 @@ class Child {
     require_integration(WriteFile(input.get(), bytes.data(), static_cast<DWORD>(bytes.size()), &written, nullptr) != FALSE && written == bytes.size(), "integration.request-write");
   }
   void forward_caller_failure() {
-    if ((diagnostic_forwarded && helper_diagnostic_forwarded) || diagnostic_bytes >= 192) return;
+    if ((diagnostic_forwarded && helper_diagnostic_forwarded && context_forwarded) || diagnostic_bytes >= 192) return;
     DWORD available = 0;
     if (!PeekNamedPipe(diagnostic.get(), nullptr, 0, nullptr, &available, nullptr) || !available) return;
     std::array<char, 192> bytes{};
@@ -203,8 +203,18 @@ class Child {
       }
       if (!diagnostic_overflow) {
         if (!diagnostic_line.empty() && diagnostic_line.back() == '\r') diagnostic_line.pop_back();
-        for (const auto mode : {"initial.", "medium."}) for (const auto stage : stages) {
-          const auto fixed = std::string("vector-caller-failure ") + mode + std::string(stage);
+        if (!context_forwarded) for (const auto route : {"serving", "linked", "restricted"}) for (const auto desktop : {"parent", "owned"})
+          for (const auto owner : {'u', 'x', 'n'}) for (const auto access : {'g', 'd', 'n'}) {
+          const auto fixed = std::string("vector-caller-context initial r=") + route + " d=" + desktop + " o=" + owner + " a=" + access;
+          if (diagnostic_line == fixed) {
+            context_forwarded = true;
+            (void)write_utf8(GetStdHandle(STD_ERROR_HANDLE), fixed + "\n");
+          }
+        }
+        for (const auto mode : {"initial.", "medium."}) for (const auto stage : stages)
+          for (const auto route : {"", " r=serving", " r=linked", " r=restricted"}) for (const auto desktop : {"", " d=parent", " d=owned"}) {
+          if (!*route && *desktop) continue;
+          const auto fixed = std::string("vector-caller-failure ") + mode + std::string(stage) + route + desktop;
           if (!diagnostic_forwarded && diagnostic_line == fixed) {
             diagnostic_forwarded = true;
             // This is an allowlisted fixed line, never the private diagnostic stream.

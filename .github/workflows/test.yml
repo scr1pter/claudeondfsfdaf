@@ -145,11 +145,20 @@ jobs:
           import { spawnSync } from "node:child_process"
           import path from "node:path"
           const root = path.resolve("native/out/win32/x64")
+          const contexts = new Set()
           const run = (file, args) => {
             const result = spawnSync(file, args, { encoding: "utf8", timeout: 30000, maxBuffer: 65536, windowsHide: true })
             if (result.error || result.status !== 0) {
               if (result.stderr) process.stderr.write(result.stderr.slice(0, 8192))
               throw new Error("A required Windows native check failed.")
+            }
+            for (const line of (result.stderr || "").split(/\r?\n/)) {
+              const match = /^vector-caller-context initial r=(serving|linked|restricted) d=(parent|owned) o=(u|x|n) a=(g|d|n)$/.exec(line)
+              if (!match) continue
+              const context = `vector-caller-context initial r=${match[1]} d=${match[2]} o=${match[3]} a=${match[4]}`
+              if (contexts.has(context)) continue
+              contexts.add(context)
+              process.stderr.write(context + "\n")
             }
             return result.stdout
           }
@@ -166,16 +175,41 @@ jobs:
           NODE
 
       - name: Run required Windows protocol and lifecycle checks
+        id: required_protocol
         timeout-minutes: 8
         run: |
           bun --no-env-file ./scripts/computer-helper-selftest-node.ts --platform win32 --bin native/out/win32/x64/vector-computer.exe --tests native/out/win32/x64/tests --privileged off --report "$env:RUNNER_TEMP/computer-win32-core.json"
           if ($LASTEXITCODE -ne 0) { throw "Required Windows conformance failed." }
+      - name: Compile the direct Node Windows self-test diagnostic
+        id: direct_node_compile
+        if: ${{ failure() && steps.required_protocol.outcome == 'failure' }}
+        continue-on-error: true
+        timeout-minutes: 2
+        run: |
+          bun --no-env-file --eval 'import path from "node:path"; import { buildNodeSelfTest } from "./scripts/computer-helper-selftest-node.ts"; await buildNodeSelfTest(path.resolve("native/build/selftest-direct-node"));'
+          if ($LASTEXITCODE -ne 0) { throw "The direct Node diagnostic did not compile." }
+      - name: Diagnose the same Windows self-test with a direct Node parent
+        if: ${{ failure() && steps.required_protocol.outcome == 'failure' && steps.direct_node_compile.outcome == 'success' }}
+        continue-on-error: true
+        timeout-minutes: 8
+        run: |
+          node ./native/build/selftest-direct-node/run.mjs --platform win32 --bin native/out/win32/x64/vector-computer.exe --tests native/out/win32/x64/tests --privileged off --report "$env:RUNNER_TEMP/computer-win32-direct-node.json"
+          if ($LASTEXITCODE -ne 0) { throw "The separate direct Node diagnostic failed." }
       - name: Preserve the bounded x64 diagnostic report
         if: ${{ always() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: computer-helper-win32-x64-diagnostic-${{ github.sha }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/computer-win32-core.json
+          if-no-files-found: ignore
+          overwrite: false
+          retention-days: 7
+      - name: Preserve the separate direct Node diagnostic report
+        if: ${{ always() && steps.required_protocol.outcome == 'failure' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: computer-helper-win32-direct-node-diagnostic-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/computer-win32-direct-node.json
           if-no-files-found: ignore
           overwrite: false
           retention-days: 7

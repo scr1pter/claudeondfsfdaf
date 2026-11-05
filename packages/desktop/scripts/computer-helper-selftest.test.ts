@@ -427,20 +427,26 @@ test("Windows fixture launches only from its canonical owned directory through a
     expect(created).not.toBe(canonical)
     const native = await createWindowsVerifiedFixture(prepared.options, desktopDirectory, prepared.files, {
       temporary: async () => created,
-      command: async () => { throw new Error("unreachable") },
+      command: async () => {
+        throw new Error("unreachable")
+      },
       channel(executable) {
         launches++
         expect(path.dirname(executable)).toBe(canonical)
-        return {write() {}, end() {}, next: async () => ({kind: "exit", code: 1}), dispose: async () => {}}
+        return { write() {}, end() {}, next: async () => ({ kind: "exit", code: 1 }), dispose: async () => {} }
       },
     })
     const channel = await native.open()
     expect(launches).toBe(1)
-    expect(await readFile(path.join(canonical, `${EXECUTABLE_NAMES.beta}.exe`))).toEqual(await readFile(prepared.files.caller))
+    expect(await readFile(path.join(canonical, `${EXECUTABLE_NAMES.beta}.exe`))).toEqual(
+      await readFile(prepared.files.caller),
+    )
     await channel.dispose()
     await native.close()
     await expect(readFile(path.join(canonical, `${EXECUTABLE_NAMES.beta}.exe`))).rejects.toThrow()
-  } finally { await rm(prepared.root, {recursive: true, force: true}) }
+  } finally {
+    await rm(prepared.root, { recursive: true, force: true })
+  }
 })
 
 test("Windows copy drift refuses admission before a Caller, unit or helper can execute", async () => {
@@ -600,7 +606,14 @@ test("Windows report retains closed unit/Caller evidence while every observed fa
             exitAfterMs: 9,
             closeAfterMs: 10,
             sample: { status: "not-requested", suites: [], waits: [] },
-            windows: { unitSuite: "lifecycle", unitFailure: "integration.reply-pipe", caller: "initial.helper-child-exit-failure", helper: "safe-start" },
+            windows: {
+              unitSuite: "lifecycle",
+              unitFailure: "integration.reply-pipe",
+              caller: "initial.helper-child-exit-failure",
+              helper: "safe-start",
+              tokenRoute: "restricted-fallback",
+              desktop: "owned-proved",
+            },
           },
         }
   fake.native.probe = async () => {
@@ -611,7 +624,8 @@ test("Windows report retains closed unit/Caller evidence while every observed fa
   expect(result.checks.find((check) => check.name === "unit")).toEqual({
     name: "unit",
     status: "failed",
-    reason: "windows-unit-failure-integration.reply-pipe.caller-initial.helper-child-exit-failure.helper-safe-start",
+    reason:
+      "windows-unit-failure-integration.reply-pipe.caller-initial.helper-child-exit-failure.route-restricted-fallback.desktop-owned-proved.helper-safe-start",
   })
   expect(result.checks.find((check) => check.name === "probe.first")).toEqual({
     name: "probe.first",

@@ -32,7 +32,7 @@ export const WINDOWS_UNIT_SUITES = [
   "accessibility-references",
   "user-input-detection-and-stop",
   "privileged-boundaries",
-  "overlay-driver-boundaries"
+  "overlay-driver-boundaries",
 ] as const
 export const WINDOWS_UNIT_FAILURE_LABELS = [
   "accessibility.h",
@@ -231,57 +231,150 @@ export const WINDOWS_UNIT_FAILURE_LABELS = [
   "version.process-create",
   "version.process-wait",
   "version.source-digest",
-  "version.stdin-create"
+  "version.stdin-create",
 ] as const
 export const WINDOWS_CALLER_STAGES = [
-  "layout-image", "layout-name", "layout-self-ancestors", "layout-helper-ancestors",
-  "layout-self-file", "layout-helper-file", "layout-install-root",
-  "arguments", "parent-witness", "apartment", "token", "layout", "ancestors",
-  "medium-admission", "restricted-token", "bootstrap-launch", "bootstrap-current",
-  "child-exit", "final-current", "helper-launch",
+  "layout-image",
+  "layout-name",
+  "layout-self-ancestors",
+  "layout-helper-ancestors",
+  "layout-self-file",
+  "layout-helper-file",
+  "layout-install-root",
+  "arguments",
+  "parent-witness",
+  "apartment",
+  "token",
+  "layout",
+  "ancestors",
+  "medium-admission",
+  "restricted-token",
+  "bootstrap-launch",
+  "bootstrap-current",
+  "child-exit",
+  "final-current",
+  "helper-launch",
   "console-control",
-  "bootstrap-child-exit-failure", "helper-child-exit-failure",
-  "bootstrap-child-exit-usage", "helper-child-exit-usage",
-  "bootstrap-child-exit-access-violation", "helper-child-exit-access-violation",
-  "bootstrap-child-exit-stack-overflow", "helper-child-exit-stack-overflow",
-  "bootstrap-child-exit-dll-missing", "helper-child-exit-dll-missing",
-  "bootstrap-child-exit-dll-initialization", "helper-child-exit-dll-initialization",
-  "bootstrap-child-exit-fast-fail", "helper-child-exit-fast-fail",
-  "bootstrap-child-exit-invalid-parameter", "helper-child-exit-invalid-parameter",
-  "bootstrap-child-exit-other", "helper-child-exit-other",
-  "desktop-observation", "desktop-access", "desktop-private-security", "desktop-private-station", "desktop-private-default", "desktop-private-access",
+  "bootstrap-child-exit-failure",
+  "helper-child-exit-failure",
+  "bootstrap-child-exit-usage",
+  "helper-child-exit-usage",
+  "bootstrap-child-exit-access-violation",
+  "helper-child-exit-access-violation",
+  "bootstrap-child-exit-stack-overflow",
+  "helper-child-exit-stack-overflow",
+  "bootstrap-child-exit-dll-missing",
+  "helper-child-exit-dll-missing",
+  "bootstrap-child-exit-dll-initialization",
+  "helper-child-exit-dll-initialization",
+  "bootstrap-child-exit-fast-fail",
+  "helper-child-exit-fast-fail",
+  "bootstrap-child-exit-invalid-parameter",
+  "helper-child-exit-invalid-parameter",
+  "bootstrap-child-exit-other",
+  "helper-child-exit-other",
+  "desktop-observation",
+  "desktop-access",
+  "desktop-private-security",
+  "desktop-private-station",
+  "desktop-private-default",
+  "desktop-private-access",
 ] as const
+export type WindowsCallerContext = {
+  tokenRoute: "already-serving" | "validated-linked" | "restricted-fallback"
+  desktop: "parent-proved" | "owned-proved"
+  owner: "user" | "other" | "unknown"
+  defaultDaclProcessAll: "granted" | "denied" | "unknown"
+}
 export type WindowsDiagnostic = {
   unitSuite?: (typeof WINDOWS_UNIT_SUITES)[number]
   unitFailure?: (typeof WINDOWS_UNIT_FAILURE_LABELS)[number]
   caller?: `initial.${(typeof WINDOWS_CALLER_STAGES)[number]}` | `medium.${(typeof WINDOWS_CALLER_STAGES)[number]}`
   helper?: "safe-start" | "token-read"
+  tokenRoute?: "already-serving" | "validated-linked" | "restricted-fallback"
+  desktop?: "parent-proved" | "owned-proved"
+  context?: WindowsCallerContext
 }
 const unitLabels = new Set<string>(WINDOWS_UNIT_FAILURE_LABELS)
-const callerTokens = new Set<string>(WINDOWS_CALLER_STAGES.flatMap(stage => [`initial.${stage}`, `medium.${stage}`]))
+const callerTokens = new Set<string>(WINDOWS_CALLER_STAGES.flatMap((stage) => [`initial.${stage}`, `medium.${stage}`]))
 
 export function windowsDiagnostic(value: unknown): WindowsDiagnostic {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid Windows diagnostics.")
   const body = value as Record<string, unknown>
-  if (Object.keys(body).some(key => !["unitSuite", "unitFailure", "caller", "helper"].includes(key)) ||
-      (body.unitSuite !== undefined && !WINDOWS_UNIT_SUITES.includes(body.unitSuite as WindowsDiagnostic["unitSuite"] & string)) ||
-      (body.unitFailure !== undefined && (typeof body.unitFailure !== "string" || !unitLabels.has(body.unitFailure))) ||
-      (body.caller !== undefined && (typeof body.caller !== "string" || !callerTokens.has(body.caller))) ||
-      (body.helper !== undefined && body.helper !== "safe-start" && body.helper !== "token-read"))
+  if (
+    Object.keys(body).some(
+      (key) => !["unitSuite", "unitFailure", "caller", "helper", "tokenRoute", "desktop", "context"].includes(key),
+    ) ||
+    (body.unitSuite !== undefined &&
+      !WINDOWS_UNIT_SUITES.includes(body.unitSuite as WindowsDiagnostic["unitSuite"] & string)) ||
+    (body.unitFailure !== undefined && (typeof body.unitFailure !== "string" || !unitLabels.has(body.unitFailure))) ||
+    (body.caller !== undefined && (typeof body.caller !== "string" || !callerTokens.has(body.caller))) ||
+    (body.helper !== undefined && body.helper !== "safe-start" && body.helper !== "token-read") ||
+    (body.tokenRoute !== undefined &&
+      (typeof body.tokenRoute !== "string" ||
+        !["already-serving", "validated-linked", "restricted-fallback"].includes(body.tokenRoute) ||
+        body.caller === undefined)) ||
+    (body.desktop !== undefined &&
+      (typeof body.desktop !== "string" ||
+        !["parent-proved", "owned-proved"].includes(body.desktop) ||
+        body.tokenRoute === undefined))
+  )
     throw new Error("Invalid Windows diagnostics.")
   return {
-    ...(body.unitSuite === undefined ? {} : {unitSuite: body.unitSuite as WindowsDiagnostic["unitSuite"]}),
-    ...(body.unitFailure === undefined ? {} : {unitFailure: body.unitFailure as WindowsDiagnostic["unitFailure"]}),
-    ...(body.caller === undefined ? {} : {caller: body.caller as WindowsDiagnostic["caller"]}),
-    ...(body.helper === undefined ? {} : {helper: body.helper as WindowsDiagnostic["helper"]}),
+    ...(body.unitSuite === undefined ? {} : { unitSuite: body.unitSuite as WindowsDiagnostic["unitSuite"] }),
+    ...(body.unitFailure === undefined ? {} : { unitFailure: body.unitFailure as WindowsDiagnostic["unitFailure"] }),
+    ...(body.caller === undefined ? {} : { caller: body.caller as WindowsDiagnostic["caller"] }),
+    ...(body.helper === undefined ? {} : { helper: body.helper as WindowsDiagnostic["helper"] }),
+    ...(body.tokenRoute === undefined ? {} : { tokenRoute: body.tokenRoute as WindowsDiagnostic["tokenRoute"] }),
+    ...(body.desktop === undefined ? {} : { desktop: body.desktop as WindowsDiagnostic["desktop"] }),
+    ...(body.context === undefined ? {} : { context: windowsCallerContext(body.context) }),
   }
+}
+
+function windowsCallerContext(value: unknown): WindowsCallerContext {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid Windows caller context.")
+  const body = value as Record<string, unknown>
+  if (
+    Object.keys(body).length !== 4 ||
+    Object.keys(body).some((key) => !["tokenRoute", "desktop", "owner", "defaultDaclProcessAll"].includes(key)) ||
+    typeof body.tokenRoute !== "string" ||
+    !["already-serving", "validated-linked", "restricted-fallback"].includes(body.tokenRoute) ||
+    typeof body.desktop !== "string" ||
+    !["parent-proved", "owned-proved"].includes(body.desktop) ||
+    typeof body.owner !== "string" ||
+    !["user", "other", "unknown"].includes(body.owner) ||
+    typeof body.defaultDaclProcessAll !== "string" ||
+    !["granted", "denied", "unknown"].includes(body.defaultDaclProcessAll)
+  )
+    throw new Error("Invalid Windows caller context.")
+  return {
+    tokenRoute: body.tokenRoute,
+    desktop: body.desktop,
+    owner: body.owner,
+    defaultDaclProcessAll: body.defaultDaclProcessAll,
+  } as WindowsCallerContext
+}
+
+export function windowsContextReceipt(value: WindowsCallerContext) {
+  const context = windowsCallerContext(value)
+  const route =
+    context.tokenRoute === "already-serving"
+      ? "serving"
+      : context.tokenRoute === "validated-linked"
+        ? "linked"
+        : "restricted"
+  const desktop = context.desktop === "parent-proved" ? "parent" : "owned"
+  const owner = context.owner === "user" ? "u" : context.owner === "other" ? "x" : "n"
+  const access =
+    context.defaultDaclProcessAll === "granted" ? "g" : context.defaultDaclProcessAll === "denied" ? "d" : "n"
+  return `vector-caller-context initial r=${route} d=${desktop} o=${owner} a=${access}\n`
 }
 
 /** Lines are bounded independently of stream chunks; unknown text is discarded immediately. */
 export class WindowsDiagnosticReader {
   private value: WindowsDiagnostic = {}
-  private lines = {stdout: "", stderr: ""}
-  private overflow = {stdout: false, stderr: false}
+  private lines = { stdout: "", stderr: "" }
+  private overflow = { stdout: false, stderr: false }
   private remaining = 65_536
   constructor(private readonly mode: "unit" | "caller") {}
   consume(bytes: Uint8Array, stream: "stdout" | "stderr") {
@@ -291,16 +384,60 @@ export class WindowsDiagnosticReader {
       if (byte === 10) {
         if (!this.overflow[stream]) {
           const line = this.lines[stream].replace(/\r$/, "")
+          if (!this.value.context && stream === "stderr") {
+            const context =
+              /^vector-caller-context initial r=(serving|linked|restricted) d=(parent|owned) o=(u|x|n) a=(g|d|n)$/.exec(
+                line,
+              )
+            if (context)
+              this.value.context = {
+                tokenRoute:
+                  context[1] === "serving"
+                    ? "already-serving"
+                    : context[1] === "linked"
+                      ? "validated-linked"
+                      : "restricted-fallback",
+                desktop: context[2] === "parent" ? "parent-proved" : "owned-proved",
+                owner: context[3] === "u" ? "user" : context[3] === "x" ? "other" : "unknown",
+                defaultDaclProcessAll: context[4] === "g" ? "granted" : context[4] === "d" ? "denied" : "unknown",
+              }
+            if (context && this.value.caller?.startsWith("initial.") && !this.value.tokenRoute && this.value.context) {
+              this.value.tokenRoute = this.value.context.tokenRoute
+              this.value.desktop = this.value.context.desktop
+            }
+          }
           if (this.mode === "unit" && stream === "stdout" && line.startsWith("PASS ")) {
             const suite = line.slice(5)
             const index = WINDOWS_UNIT_SUITES.indexOf(suite as (typeof WINDOWS_UNIT_SUITES)[number])
-            if (index >= 0 && (this.value.unitSuite === undefined || index > WINDOWS_UNIT_SUITES.indexOf(this.value.unitSuite)))
+            if (
+              index >= 0 &&
+              (this.value.unitSuite === undefined || index > WINDOWS_UNIT_SUITES.indexOf(this.value.unitSuite))
+            )
               this.value.unitSuite = WINDOWS_UNIT_SUITES[index]
           }
           if (this.mode === "unit" && stream === "stderr" && line.startsWith("FAIL ") && unitLabels.has(line.slice(5)))
             this.value.unitFailure = line.slice(5) as WindowsDiagnostic["unitFailure"]
-          if (!this.value.caller && stream === "stderr" && line.startsWith("vector-caller-failure ") && callerTokens.has(line.slice(22)))
-            this.value.caller = line.slice(22) as WindowsDiagnostic["caller"]
+          if (!this.value.caller && stream === "stderr") {
+            const caller =
+              /^vector-caller-failure ((?:initial|medium)\.[a-z-]+)(?: r=(serving|linked|restricted))?(?: d=(parent|owned))?$/.exec(
+                line,
+              )
+            if (caller && callerTokens.has(caller[1]!) && (!caller[3] || caller[2])) {
+              this.value.caller = caller[1] as WindowsDiagnostic["caller"]
+              if (caller[2])
+                this.value.tokenRoute =
+                  caller[2] === "serving"
+                    ? "already-serving"
+                    : caller[2] === "linked"
+                      ? "validated-linked"
+                      : "restricted-fallback"
+              if (caller[3]) this.value.desktop = caller[3] === "parent" ? "parent-proved" : "owned-proved"
+              if (caller[1]!.startsWith("initial.") && !caller[2] && this.value.context) {
+                this.value.tokenRoute = this.value.context.tokenRoute
+                this.value.desktop = this.value.context.desktop
+              }
+            }
+          }
           if (!this.value.helper && stream === "stderr") {
             if (line === "The computer helper could not start safely.") this.value.helper = "safe-start"
             if (line === "The helper process token could not be read.") this.value.helper = "token-read"
@@ -312,26 +449,48 @@ export class WindowsDiagnosticReader {
       else this.overflow[stream] = true
     }
   }
-  finish() { return windowsDiagnostic(this.value) }
+  finish() {
+    return windowsDiagnostic(this.value)
+  }
 }
 
 export class WindowsCheckFailure extends Error {
   constructor(readonly reason: string) {
-    const suffix = [".helper-safe-start", ".helper-token-read"].find(value => reason.endsWith(value))
-    const caller = suffix ? reason.slice(0, -suffix.length) : reason
-    const known = caller.startsWith("windows-caller-") && callerTokens.has(caller.slice("windows-caller-".length))
+    const caller =
+      /^windows-caller-((?:initial|medium)\.[a-z-]+)(?:\.route-(already-serving|validated-linked|restricted-fallback))?(?:\.desktop-(parent-proved|owned-proved))?(?:\.helper-(safe-start|token-read))?$/.exec(
+        reason,
+      )
+    const known = caller && callerTokens.has(caller[1]!) && (!caller[3] || caller[2])
     const helper = reason === "windows-helper-safe-start" || reason === "windows-helper-token-read"
-    const fixed = ["deadline", "output-limit", "invalid-json", "invalid-permissions", "invalid-responsible", "invalid-elevated", "invalid-capture-blocked", "no-frame"]
+    const fixed = [
+      "deadline",
+      "output-limit",
+      "invalid-json",
+      "invalid-permissions",
+      "invalid-responsible",
+      "invalid-elevated",
+      "invalid-capture-blocked",
+      "no-frame",
+    ]
     const command = /^windows-(?:probe|channel)-(.+)$/.exec(reason)?.[1]
     const exit = command ? /^exit-(0|[1-9][0-9]{0,2}|unknown)$/.exec(command)?.[1] : undefined
-    if (!known && !helper && !(command && fixed.includes(command)) && !(exit && (exit === "unknown" || Number(exit) <= 255)))
+    if (
+      !known &&
+      !helper &&
+      !(command && fixed.includes(command)) &&
+      !(exit && (exit === "unknown" || Number(exit) <= 255))
+    )
       throw new Error("Invalid Windows check failure.")
     super(reason)
   }
 }
-export function windowsCommandReason(result: {code: number | null; timedOut?: boolean; diagnostic?: {windows?: WindowsDiagnostic}}, mode: "probe" | "channel") {
+export function windowsCommandReason(
+  result: { code: number | null; timedOut?: boolean; diagnostic?: { windows?: WindowsDiagnostic } },
+  mode: "probe" | "channel",
+) {
   const observed = result.diagnostic?.windows
-  if (observed?.caller) return `windows-caller-${observed.caller}${observed.helper ? `.helper-${observed.helper}` : ""}`
+  if (observed?.caller)
+    return `windows-caller-${observed.caller}${observed.tokenRoute ? `.route-${observed.tokenRoute}` : ""}${observed.desktop ? `.desktop-${observed.desktop}` : ""}${observed.helper ? `.helper-${observed.helper}` : ""}`
   if (observed?.helper) return `windows-helper-${observed.helper}`
   if (result.timedOut) return `windows-${mode}-deadline`
   const code = result.code

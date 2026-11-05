@@ -40,7 +40,7 @@ import {
   type NativeCommandDiagnostic,
 } from "./computer-helper-command-diagnostics"
 import { readIdentity } from "./computer-helper-identity"
-import { WindowsCheckFailure } from "./computer-helper-windows-diagnostics"
+import { WindowsCheckFailure, windowsContextReceipt } from "./computer-helper-windows-diagnostics"
 import { MAC_TEST_TARGET, verifyMacTestArtifacts, verifyPrebuiltHelper } from "./build-computer-helper"
 import {
   WINDOWS_NATIVE_CHECKS,
@@ -512,6 +512,8 @@ export async function runComputerHelperSelfTest(options: SelfTestOptions, depend
       const result = await (run
         ? run()
         : command({ executable, args, timeoutMs: name === "privileged" ? privilegedTimeoutMs : 30_000 }))
+      if (name === "unit" && options.platform === "win32" && result.diagnostic?.windows?.context)
+        process.stderr.write(windowsContextReceipt(result.diagnostic.windows.context))
       let diagnosticWriteFailed = false
       if (name === "unit" && options.platform === "darwin" && options.report && result.diagnostic) {
         try {
@@ -535,7 +537,7 @@ export async function runComputerHelperSelfTest(options: SelfTestOptions, depend
               ? "native-skip"
               : status === "failed"
                 ? name === "unit" && options.platform === "win32" && result.diagnostic?.windows?.unitFailure
-                  ? `windows-unit-failure-${result.diagnostic.windows.unitFailure}${result.diagnostic.windows.caller ? `.caller-${result.diagnostic.windows.caller}` : ""}${result.diagnostic.windows.helper ? `.helper-${result.diagnostic.windows.helper}` : ""}`
+                  ? `windows-unit-failure-${result.diagnostic.windows.unitFailure}${result.diagnostic.windows.caller ? `.caller-${result.diagnostic.windows.caller}` : ""}${result.diagnostic.windows.tokenRoute ? `.route-${result.diagnostic.windows.tokenRoute}` : ""}${result.diagnostic.windows.desktop ? `.desktop-${result.diagnostic.windows.desktop}` : ""}${result.diagnostic.windows.helper ? `.helper-${result.diagnostic.windows.helper}` : ""}`
                   : name === "unit" && options.platform === "win32" && result.diagnostic?.windows?.unitSuite
                     ? `windows-unit-after-${result.diagnostic.windows.unitSuite}`
                     : "native-check-failed"
