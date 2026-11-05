@@ -34,6 +34,8 @@ import {
   COMPUTER_SMOKE_LIMIT_MS,
   COMPUTER_SMOKE_MARK,
   COMPUTER_SMOKE_PHASE_MARK,
+  COMPUTER_SMOKE_CONTROLLER_MARK,
+  type ComputerSmokeControllerStep,
   COMPUTER_SMOKE_FAILURE_MARK,
   computerSmokeBannerProbe,
   COMPUTER_SMOKE_TRANSPARENCY_PROBE,
@@ -66,6 +68,9 @@ let currentPhase: ComputerSmokeLastPhase = "none"
 function phase(value: ComputerSmokePhase) {
   currentPhase = value
   process.stdout.write(COMPUTER_SMOKE_PHASE_MARK + JSON.stringify({ protocol: 1, phase: value }) + "\n")
+}
+function controllerStep(step: ComputerSmokeControllerStep) {
+  process.stdout.write(COMPUTER_SMOKE_CONTROLLER_MARK + JSON.stringify({ protocol: 1, step }) + "\n")
 }
 function childFailure(cause: "deadline_exceeded" | "runtime_failed") {
   return COMPUTER_SMOKE_FAILURE_MARK + JSON.stringify({ protocol: 1, cause, phase: currentPhase, hint: "none" }) + "\n"
@@ -539,20 +544,26 @@ async function controllerChecks() {
       skip(name, "linux_properties_only")
     return
   }
+  controllerStep("underlay")
   const user = await underlay()
   {
+    controllerStep("stop-acquire")
     const fixture = await controllerFixture()
+    controllerStep("stop-check")
     try {
       const before = fixture.acknowledged.filter((op) => op === "cancel").length
       await fixture.controller.stop()
       await until(() => fixture.acknowledged.filter((op) => op === "cancel").length > before)
       check("controller-stop-cancels-helper", true)
     } finally {
+      controllerStep("stop-close")
       await fixture.close()
     }
   }
   {
+    controllerStep("heartbeat-acquire")
     const fixture = await controllerFixture()
+    controllerStep("heartbeat-check")
     try {
       fixture.fault.heartbeat = true
       await until(
@@ -563,11 +574,14 @@ async function controllerChecks() {
     } catch {
       check("heartbeat-loss-removes-overlays", false)
     } finally {
+      controllerStep("heartbeat-close")
       await fixture.close()
     }
   }
   {
+    controllerStep("crash-acquire")
     const fixture = await controllerFixture()
+    controllerStep("crash-check")
     try {
       require(fixture.children.at(-1))
       fixture.children.at(-1)!.kill("SIGKILL")
@@ -579,6 +593,7 @@ async function controllerChecks() {
     } catch {
       check("helper-crash-removes-overlays", false)
     } finally {
+      controllerStep("crash-close")
       await fixture.close()
     }
   }
@@ -588,17 +603,22 @@ async function controllerChecks() {
   const nonce = nonceArgument && /^[0-9a-f]{64}$/.test(nonceArgument) ? nonceArgument : randomBytes(32).toString("hex")
   user.setTitle(`Vector computer smoke underlay ${nonce}`)
   app.setAccessibilitySupportEnabled(true)
+  controllerStep("native-acquire")
   const fixture = await controllerFixture()
   try {
+    controllerStep("native-pause")
     await fixture.controller.pause("button")
+    controllerStep("native-ready")
     await fixture.overlay.ready()
     const banner = fixture.overlay.banner()
     require(banner)
     banner.setTitle(`Vector computer smoke ${nonce}`)
     const before = fixture.acknowledged.filter((op) => op === "cancel").length
+    controllerStep("native-listener")
     await banner.webContents.executeJavaScript(
       "window.__computerSmokeTrustedStop = false; document.addEventListener('click', event => { if (event.isTrusted && event.button === 0 && event.target?.closest('button[data-action=stop]')) window.__computerSmokeTrustedStop = true }, {capture:true})",
     )
+    controllerStep("native-proof")
     const proof = await runComputerNativeOverlayProof({
       root,
       nonce,
@@ -624,6 +644,7 @@ async function controllerChecks() {
     check("native-os-stop", false, "native_proof_invalid")
     check("native-capture-exclusion", false, "native_proof_invalid")
   } finally {
+    controllerStep("native-close")
     await fixture.close()
   }
 }

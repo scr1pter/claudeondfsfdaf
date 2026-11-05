@@ -1,6 +1,7 @@
 #include "core.h"
 #include "identity.h"
 #include "parent_identity.h"
+#include "caller_desktop.h"
 #include <tlhelp32.h>
 #include <algorithm>
 #include <array>
@@ -340,7 +341,7 @@ class QuotaPrivilege final {
   bool enabled_ = false;
 };
 
-struct Child { winrt::handle process; winrt::handle thread; DWORD pid = 0; };
+struct Child { winrt::handle process; winrt::handle thread; DWORD pid = 0; std::shared_ptr<vector::computer::caller_desktop::Binding> desktop; };
 
 void close_standard_handles() {
   const DWORD kinds[] = {STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE};
@@ -363,8 +364,18 @@ void close_standard_handles() {
   }
 }
 
-Child launch(const std::wstring& executable, std::wstring command, HANDLE token, HANDLE bootstrap, bool serving) {
+Child launch(const std::wstring& executable, std::wstring command, HANDLE token, HANDLE bootstrap, bool serving, const char*& stage) {
   const auto original_command = command;
+  const auto launch_stage = stage;
+  winrt::handle own_token;
+  if (!token) {
+    HANDLE raw = nullptr;
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY | TOKEN_DUPLICATE, &raw)) invalid();
+    own_token.attach(raw);
+  }
+  const auto candidate = token ? token : own_token.get();
+  const auto desktop = vector::computer::caller_desktop::prepare(candidate, token_identity(candidate), stage);
+  stage = launch_stage;
   std::array<winrt::handle, 3> copies;
   std::vector<HANDLE> inherited;
   const DWORD kinds[] = {STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE};
@@ -391,6 +402,7 @@ Child launch(const std::wstring& executable, std::wstring command, HANDLE token,
   startup.StartupInfo.cb = sizeof(startup); startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
   startup.StartupInfo.hStdInput = copies[0].get(); startup.StartupInfo.hStdOutput = copies[1].get(); startup.StartupInfo.hStdError = copies[2].get();
   startup.lpAttributeList = attributes;
+  startup.StartupInfo.lpDesktop = desktop->path.data();
   PROCESS_INFORMATION process{};
   const DWORD flags = EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW;
   BOOL success = token
@@ -405,7 +417,7 @@ Child launch(const std::wstring& executable, std::wstring command, HANDLE token,
     }
   }
   if (!success) invalid();
-  Child result{winrt::handle{process.hProcess}, winrt::handle{process.hThread}, process.dwProcessId};
+  Child result{winrt::handle{process.hProcess}, winrt::handle{process.hThread}, process.dwProcessId, desktop};
   close_standard_handles();
   return result;
 }
@@ -552,7 +564,7 @@ int wmain(int count, wchar_t** argv) {
         L" --bootstrap-handle " + std::to_wstring(reinterpret_cast<std::uintptr_t>(high_handle.get())) +
         (serving ? std::wstring(L" --stdio") + (test_elevated_token ? L" --test-elevated-token" : L"") : privileged ? L" --self-test=privileged" : L" --probe --json");
       stage = "bootstrap-launch";
-      auto child = launch(files.self.path, command, token.get(), high_handle.get(), serving);
+      auto child = launch(files.self.path, command, token.get(), high_handle.get(), serving, stage);
       high_handle.close();
       stage = "bootstrap-current";
       const auto child_token = vector::computer::observe_token(child.process.get());
@@ -574,7 +586,7 @@ int wmain(int count, wchar_t** argv) {
       ? L" --stdio --parent-pid " + std::to_wstring(GetCurrentProcessId()) + (test_elevated_token ? L" --test-elevated-token" : L"")
       : privileged ? L" --self-test=privileged --target \"" + target + L"\"" : std::wstring(L" --probe --json"));
     stage = "helper-launch";
-    auto child = launch(files.helper.path, command, nullptr, nullptr, serving);
+    auto child = launch(files.helper.path, command, nullptr, nullptr, serving, stage);
     stage = "child-exit";
     DWORD native_exit = 1;
     const auto code = wait_child(child, privileged, &native_exit);

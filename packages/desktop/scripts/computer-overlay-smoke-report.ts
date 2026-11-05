@@ -158,6 +158,42 @@ export function parseComputerSmokeReport(
 
 export const COMPUTER_SMOKE_PHASE_MARK = "computer-smoke-phase "
 export const COMPUTER_SMOKE_FAILURE_MARK = "computer-smoke-failure "
+export const COMPUTER_SMOKE_CONTROLLER_MARK = "computer-smoke-controller "
+export const COMPUTER_SMOKE_CONTROLLER_STEPS = [
+  "underlay",
+  "stop-acquire",
+  "stop-check",
+  "stop-close",
+  "heartbeat-acquire",
+  "heartbeat-check",
+  "heartbeat-close",
+  "crash-acquire",
+  "crash-check",
+  "crash-close",
+  "native-acquire",
+  "native-pause",
+  "native-ready",
+  "native-listener",
+  "native-proof",
+  "native-close",
+] as const
+export type ComputerSmokeControllerStep = (typeof COMPUTER_SMOKE_CONTROLLER_STEPS)[number]
+
+/** Fixed milestones locate an owned fixture await; they establish no assertion or native-input evidence. */
+export function parseComputerSmokeController(
+  line: string,
+  previous?: ComputerSmokeControllerStep,
+): ComputerSmokeControllerStep {
+  if (!line.startsWith(COMPUTER_SMOKE_CONTROLLER_MARK) || line.length > 160)
+    throw new Error("The computer smoke controller receipt is invalid.")
+  const value: unknown = JSON.parse(line.slice(COMPUTER_SMOKE_CONTROLLER_MARK.length))
+  if (!record(value) || !exact(value, ["protocol", "step"]) || value.protocol !== 1 || typeof value.step !== "string")
+    throw new Error("The computer smoke controller receipt is invalid.")
+  const next = (COMPUTER_SMOKE_CONTROLLER_STEPS as readonly string[]).indexOf(value.step)
+  if (next < 0 || (previous === undefined ? next !== 0 : next <= COMPUTER_SMOKE_CONTROLLER_STEPS.indexOf(previous)))
+    throw new Error("The computer smoke controller receipt is stale or unknown.")
+  return value.step as ComputerSmokeControllerStep
+}
 export const COMPUTER_SMOKE_PHASES = ["boot", "ready", "properties", "controller", "cleanup", "report"] as const
 export type ComputerSmokePhase = (typeof COMPUTER_SMOKE_PHASES)[number]
 export type ComputerSmokeLastPhase = ComputerSmokePhase | "none"

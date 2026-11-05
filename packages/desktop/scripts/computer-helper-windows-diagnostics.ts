@@ -81,6 +81,14 @@ export const WINDOWS_UNIT_FAILURE_LABELS = [
   "integration.caller-artifact",
   "integration.caller-create",
   "integration.copy-unchanged-artifacts",
+  "integration.desktop-denial-only-isolation",
+  "integration.desktop-exact-owner",
+  "integration.desktop-exact-security",
+  "integration.desktop-medium-label-required",
+  "integration.desktop-no-broad-acl",
+  "integration.desktop-protected-acl",
+  "integration.desktop-test-descriptor",
+  "integration.desktop-test-sid",
   "integration.eof-helper-within-one-second",
   "integration.failed-transport-exits",
   "integration.failed-transport-nonzero-code",
@@ -241,6 +249,7 @@ export const WINDOWS_CALLER_STAGES = [
   "bootstrap-child-exit-fast-fail", "helper-child-exit-fast-fail",
   "bootstrap-child-exit-invalid-parameter", "helper-child-exit-invalid-parameter",
   "bootstrap-child-exit-other", "helper-child-exit-other",
+  "desktop-observation", "desktop-access", "desktop-private-security", "desktop-private-station", "desktop-private-default", "desktop-private-access",
 ] as const
 export type WindowsDiagnostic = {
   unitSuite?: (typeof WINDOWS_UNIT_SUITES)[number]

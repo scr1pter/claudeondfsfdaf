@@ -11,6 +11,9 @@ import {
   COMPUTER_SMOKE_LIMIT_MS,
   COMPUTER_SMOKE_MARK,
   COMPUTER_SMOKE_PHASE_MARK,
+  COMPUTER_SMOKE_CONTROLLER_MARK,
+  parseComputerSmokeController,
+  type ComputerSmokeControllerStep,
   COMPUTER_SMOKE_FAILURE_MARK,
   COMPUTER_SMOKE_LOADER_STARTED,
   computerSmokeBootstrapSource,
@@ -162,6 +165,7 @@ export async function runComputerOverlaySmoke(args = process.argv.slice(2)) {
       stderrBytes = 0
     let lastPhase: ComputerSmokeLastPhase = "none",
       hint: ComputerSmokeRuntimeHint = "none"
+    let lastController: ComputerSmokeControllerStep | undefined
     let forcedCause: ComputerSmokeFailureCause | undefined
     const streamState: { childFailure?: ComputerSmokeFailureDiagnostic; loaderStarted: boolean } = {
       loaderStarted: false,
@@ -213,6 +217,13 @@ export async function runComputerOverlaySmoke(args = process.argv.slice(2)) {
             lastPhase = parseComputerSmokePhase(line, lastPhase)
             if (hint === "loader_pending") hint = "none"
             process.stdout.write(COMPUTER_SMOKE_PHASE_MARK + JSON.stringify({ protocol: 1, phase: lastPhase }) + "\n")
+          } else if (line.startsWith(COMPUTER_SMOKE_CONTROLLER_MARK)) {
+            if (lastPhase !== "controller" || streamState.childFailure)
+              throw new Error("The controller receipt is out of phase.")
+            lastController = parseComputerSmokeController(line, lastController)
+            process.stdout.write(
+              COMPUTER_SMOKE_CONTROLLER_MARK + JSON.stringify({ protocol: 1, step: lastController }) + "\n",
+            )
           } else if (line.startsWith(COMPUTER_SMOKE_FAILURE_MARK)) {
             const received = parseComputerSmokeFailure(line)
             const bootstrapFailure =
@@ -261,6 +272,7 @@ export async function runComputerOverlaySmoke(args = process.argv.slice(2)) {
       )
     if (
       pendingLine.startsWith(COMPUTER_SMOKE_PHASE_MARK) ||
+      pendingLine.startsWith(COMPUTER_SMOKE_CONTROLLER_MARK) ||
       pendingLine.startsWith(COMPUTER_SMOKE_FAILURE_MARK) ||
       pendingLine.startsWith(COMPUTER_SMOKE_LOADER_STARTED)
     )

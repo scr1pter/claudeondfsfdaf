@@ -2,6 +2,7 @@
 #include "identity.h"
 #include "protocol.h"
 #include "lifecycle.h"
+#include "caller_desktop.h"
 #include <tlhelp32.h>
 #include <algorithm>
 #include <array>
@@ -16,6 +17,36 @@
 namespace vector::computer {
 namespace {
 void require_integration(bool value, const char* label) { if (!value) throw std::runtime_error(label); }
+void desktop_security_boundaries() {
+  namespace fixture = caller_desktop;
+  require_integration(fixture::may_isolate(fixture::Access::denied) && !fixture::may_isolate(fixture::Access::unknown) &&
+    !fixture::may_isolate(fixture::Access::allowed), "integration.desktop-denial-only-isolation");
+  TokenIdentity token;
+  const auto sid = [](const wchar_t* text) {
+    PSID raw = nullptr;
+    require_integration(ConvertStringSidToSidW(text, &raw) != FALSE, "integration.desktop-test-sid");
+    fixture::Local close{raw};
+    std::vector<unsigned char> value(GetLengthSid(raw));
+    require_integration(CopySid(static_cast<DWORD>(value.size()), value.data(), raw) != FALSE, "integration.desktop-test-sid");
+    return value;
+  };
+  token.user = sid(L"S-1-5-21-1-2-3-1001"); token.logon = sid(L"S-1-5-5-11-12");
+  const auto user = fixture::sid_text(token.user), logon = fixture::sid_text(token.logon);
+  const auto valid = [&](const std::wstring& text) {
+    PSECURITY_DESCRIPTOR raw = nullptr;
+    require_integration(ConvertStringSecurityDescriptorToSecurityDescriptorW(text.c_str(), SDDL_REVISION_1, &raw, nullptr) != FALSE,
+      "integration.desktop-test-descriptor");
+    fixture::Local close{raw};
+    return fixture::descriptor_matches(raw, token, fixture::desktop_all);
+  };
+  const auto dacl = L"(A;;GA;;;" + user + L")(A;;GA;;;" + logon + L")";
+  require_integration(valid(L"O:" + user + L"D:P" + dacl + L"S:(ML;;NW;;;ME)"), "integration.desktop-exact-security");
+  require_integration(!valid(L"O:" + user + L"D:P" + dacl + L"(A;;GA;;;WD)S:(ML;;NW;;;ME)"), "integration.desktop-no-broad-acl");
+  require_integration(!valid(L"O:" + user + L"D:" + dacl + L"S:(ML;;NW;;;ME)"), "integration.desktop-protected-acl");
+  require_integration(!valid(L"O:SYD:P" + dacl + L"S:(ML;;NW;;;ME)"), "integration.desktop-exact-owner");
+  require_integration(!valid(L"O:" + user + L"D:P" + dacl + L"S:(ML;;NW;;;HI)") && !valid(L"O:" + user + L"D:P" + dacl),
+    "integration.desktop-medium-label-required");
+}
 std::wstring wide(std::string_view value) { const auto text = winrt::to_hstring(value); return {text.c_str(), text.size()}; }
 std::filesystem::path own_directory() {
   std::wstring path(32'768, L'\0');
@@ -155,13 +186,14 @@ class Child {
     DWORD received = 0;
     if (!ReadFile(diagnostic.get(), bytes.data(), count, &received, nullptr) || !received || received > count) return;
     diagnostic_bytes += received;
-    constexpr std::array<std::string_view, 39> stages{"layout-image", "layout-name", "layout-self-ancestors", "layout-helper-ancestors",
+    constexpr std::array<std::string_view, 45> stages{"layout-image", "layout-name", "layout-self-ancestors", "layout-helper-ancestors",
       "layout-self-file", "layout-helper-file", "layout-install-root", "arguments", "parent-witness", "apartment", "token", "layout", "ancestors",
       "medium-admission", "restricted-token", "bootstrap-launch", "bootstrap-current", "child-exit", "final-current", "helper-launch", "console-control",
       "bootstrap-child-exit-failure", "helper-child-exit-failure", "bootstrap-child-exit-usage", "helper-child-exit-usage",
       "bootstrap-child-exit-access-violation", "helper-child-exit-access-violation", "bootstrap-child-exit-stack-overflow", "helper-child-exit-stack-overflow", "bootstrap-child-exit-dll-missing", "helper-child-exit-dll-missing",
       "bootstrap-child-exit-dll-initialization", "helper-child-exit-dll-initialization", "bootstrap-child-exit-fast-fail", "helper-child-exit-fast-fail",
-      "bootstrap-child-exit-invalid-parameter", "helper-child-exit-invalid-parameter", "bootstrap-child-exit-other", "helper-child-exit-other"};
+      "bootstrap-child-exit-invalid-parameter", "helper-child-exit-invalid-parameter", "bootstrap-child-exit-other", "helper-child-exit-other",
+      "desktop-observation", "desktop-access", "desktop-private-security", "desktop-private-station", "desktop-private-default", "desktop-private-access"};
     for (DWORD index = 0; index < received; ++index) {
       const auto value = bytes[index];
       if (value != '\n') {
@@ -383,6 +415,7 @@ void integration_lifecycle_test(bool parent_death) {
 }
 
 void integration_tests() {
+  desktop_security_boundaries();
   check_parent_only_lifecycle();
   FixtureFiles files;
   {

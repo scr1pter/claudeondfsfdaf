@@ -6,6 +6,10 @@ import {
   COMPUTER_SMOKE_CHECKS,
   COMPUTER_SMOKE_MARK,
   COMPUTER_SMOKE_PHASE_MARK,
+  COMPUTER_SMOKE_CONTROLLER_MARK,
+  COMPUTER_SMOKE_CONTROLLER_STEPS,
+  parseComputerSmokeController,
+  type ComputerSmokeControllerStep,
   COMPUTER_SMOKE_FAILURE_MARK,
   COMPUTER_SMOKE_PHASES,
   parseComputerSmokePhase,
@@ -216,6 +220,23 @@ describe("bounded closed Electron smoke diagnostics", () => {
       expect(() => parseComputerSmokePhase(COMPUTER_SMOKE_PHASE_MARK + JSON.stringify(value))).toThrow()
     expect(() => parseComputerSmokePhase(receipt("boot") + " ".repeat(161))).toThrow()
     expect(() => parseComputerSmokePhase(COMPUTER_SMOKE_PHASE_MARK + "{")).toThrow()
+  })
+  test("controller receipts identify only ordered fixed owned-fixture waits", () => {
+    const receipt = (step: string) => COMPUTER_SMOKE_CONTROLLER_MARK + JSON.stringify({ protocol: 1, step })
+    let previous: ComputerSmokeControllerStep | undefined
+    for (const step of COMPUTER_SMOKE_CONTROLLER_STEPS) previous = parseComputerSmokeController(receipt(step), previous)
+    expect(previous).toBe("native-close")
+    expect(parseComputerSmokeController(receipt("stop-close"), "stop-acquire")).toBe("stop-close")
+    for (const step of ["stop-check", "PRIVATE", "native-close"])
+      expect(() => parseComputerSmokeController(receipt(step))).toThrow()
+    expect(() => parseComputerSmokeController(receipt("stop-check"), "stop-check")).toThrow()
+    expect(() => parseComputerSmokeController(receipt("stop-acquire"), "stop-close")).toThrow()
+    for (const value of [
+      { protocol: 2, step: "underlay" },
+      { protocol: 1, step: "underlay", private: "PRIVATE" },
+    ])
+      expect(() => parseComputerSmokeController(COMPUTER_SMOKE_CONTROLLER_MARK + JSON.stringify(value))).toThrow()
+    expect(() => parseComputerSmokeController(receipt("underlay") + " ".repeat(161))).toThrow()
   })
   test("runtime stderr is classified into fixed hints without returning any raw field", () => {
     for (const [text, hint] of [
