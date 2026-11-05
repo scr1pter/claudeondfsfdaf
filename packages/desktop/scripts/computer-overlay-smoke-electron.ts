@@ -35,6 +35,7 @@ import {
   COMPUTER_SMOKE_MARK,
   COMPUTER_SMOKE_PHASE_MARK,
   COMPUTER_SMOKE_FAILURE_MARK,
+  computerSmokeBannerProbe,
   type ComputerSmokePhase,
   type ComputerSmokeLastPhase,
   type ComputerSmokeCheck,
@@ -260,14 +261,13 @@ async function properties() {
       owned.every((record) => record.protection.at(-1) === true && record.window.isContentProtected()),
     )
   else skip("overlay-content-protection", "not_applicable")
+  const expectedView = ComputerOverlayPage.bannerView(state())
+  require(expectedView)
   await until(
     async () =>
-      (await banner.webContents.executeJavaScript("document.querySelector('.line')?.textContent")) === Hands.BANNER,
+      (await banner.webContents.executeJavaScript(computerSmokeBannerProbe(Hands.BANNER, expectedView.line))) === true,
   )
-  check(
-    "overlay-banner-copy",
-    (await banner.webContents.executeJavaScript("document.querySelector('.line')?.textContent")) === Hands.BANNER,
-  )
+  check("overlay-banner-copy", true)
   const sandbox = await Promise.all(
     owned.map(async (record) => {
       const preferences = record.config.webPreferences

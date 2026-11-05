@@ -503,3 +503,13 @@ try {
 } catch (error) { failed(error); }
 `
 }
+
+/** Fixed banner copy and the state delivered over IPC occupy different page fields. */
+export function computerSmokeBannerProbe(title: string, line: string): string {
+  return `(() => {
+    const stop = document.querySelector('button[data-action="stop"]');
+    return document.querySelector('.title')?.textContent === ${JSON.stringify(title)} &&
+      document.querySelector('.line')?.textContent === ${JSON.stringify(line)} &&
+      !!stop && stop.textContent === 'Stop' && stop.disabled === false;
+  })()`
+}

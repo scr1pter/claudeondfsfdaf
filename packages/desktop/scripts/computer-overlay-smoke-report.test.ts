@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { Script } from "node:vm"
+import { Hands } from "@vectordevai/schema/hands"
+import { ComputerOverlayPage } from "@vectordevai/app/computer/overlay-page"
 import {
   COMPUTER_SMOKE_CHECKS,
   COMPUTER_SMOKE_MARK,
@@ -12,6 +14,7 @@ import {
   computerSmokeLoaderHint,
   computerSmokeLoaderModule,
   computerSmokeBootstrapSource,
+  computerSmokeBannerProbe,
   COMPUTER_SMOKE_LOADER_STARTED,
   type ComputerSmokeLastPhase,
   parseComputerSmokeReport,
@@ -33,6 +36,38 @@ const parse = (value: unknown, options: { platform?: string; exitCode?: number; 
   })
 
 describe("fixed real Electron computer smoke reports", () => {
+  test("checks fixed banner title separately from delivered Working state and enabled Stop", () => {
+    const view = ComputerOverlayPage.bannerView({
+      phase: "working",
+      backend: "local-macos",
+      mode: "foreground",
+      holder: { sessionID: "smoke", directory: "/fixture", title: "Controlled", startedAt: 1, actions: 0 },
+      apps: [],
+      queue: [],
+      escStops: false,
+      stopChord: Hands.STOP_CHORD.darwin,
+      lease: 1,
+      reduceMotion: true,
+    })
+    expect(view?.line).toBe("Working")
+    expect(ComputerOverlayPage.bannerPage()).toContain(`<span class="title">${Hands.BANNER}</span>`)
+    const elements = {
+      ".title": { textContent: Hands.BANNER },
+      ".line": { textContent: view!.line },
+      'button[data-action="stop"]': { textContent: "Stop", disabled: false },
+    }
+    const script = new Script(computerSmokeBannerProbe(Hands.BANNER, view!.line))
+    const observe = () =>
+      script.runInNewContext({
+        document: { querySelector: (selector: keyof typeof elements) => elements[selector] },
+      })
+    expect(observe()).toBe(true)
+    elements[".line"].textContent = Hands.BANNER
+    expect(observe()).toBe(false)
+    elements[".line"].textContent = view!.line
+    elements['button[data-action="stop"]'].disabled = true
+    expect(observe()).toBe(false)
+  })
   test("preserves the complete catalog and exact runtime without including observed content", () => {
     const value = report()
     expect(parse(value)).toEqual(value)
