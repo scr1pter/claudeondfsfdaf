@@ -18,6 +18,7 @@ WindowsWindow fixture() {
   owner.process.pid = 123; owner.process.creation_time = 100;
   owner.process.image.path = owner.identity.exe; owner.process.image.signature = SignatureState::valid;
   owner.process.image.size = 1024; owner.process.image.volume = 1; owner.process.image.id[0] = 1; owner.process.image.sha256[0] = 1;
+  owner.process.image.created = 50; owner.process.image.modified = 75;
   window.physical_owner = owner; window.bounds = {0, 0, 800, 600}; window.surface_bounds = window.bounds;
   window.window_class = L"FixtureWindow"; window.visible = true; window.on_screen = true;
   window.cloaked = false; window.current_desktop = true; window.elevated = false; window.child_shell = false;
@@ -45,7 +46,17 @@ std::string generated_json() {
 
 size_t run_windows_policy_tests() {
   size_t groups = 0;
-  const auto test = [&](const std::function<void()>& body) { body(); ++groups; };
+  const auto test = [&](const std::function<void()>& body) {
+    try { body(); }
+    catch (const Failure& error) {
+      const std::array<std::wstring_view, 8> codes{L"failed", L"changed", L"protected", L"unavailable", L"not_granted", L"secure_field", L"blocked", L"paused"};
+      const auto known = std::find_if(codes.begin(), codes.end(), [&](auto code) { return code == error.code; });
+      std::string suffix = "unknown";
+      if (known != codes.end()) { suffix.clear(); for (const auto unit : *known) suffix.push_back(unit == L'_' ? '-' : static_cast<char>(unit)); }
+      throw std::runtime_error("policy.group-" + std::to_string(groups + 1) + "." + suffix);
+    }
+    ++groups;
+  };
   test([] {
     const auto rules = WindowsBlocklist::generated();
     require(!rules.entries().empty(), "policy.generated-entries");
@@ -188,7 +199,15 @@ size_t run_windows_policy_tests() {
     package.trust = WindowsPackageTrust::store; package.development_mode = false;
     window.owner.process.package = package; window.physical_owner = window.owner;
     const auto session = session_for(window);
+    require(windows_package_identity_matches(window.owner.identity, window.owner.process), "policy.fixture-packaged-evidence");
     WindowsSessionPolicy(session, 9999).require(window, WindowsPolicyOperation::pointer);
+    for (const auto missing_created : {true, false}) {
+      auto invalid = window;
+      invalid.owner.process.image.created = missing_created ? 0 : 50;
+      invalid.owner.process.image.modified = missing_created ? 75 : 0;
+      invalid.physical_owner = invalid.owner;
+      refusal(invalid, session, L"changed");
+    }
     window.owner.process.package->development_mode = true; window.physical_owner = window.owner;
     refusal(window, session, L"changed");
     window.owner.process.package = package; window.owner.process.package->trust = WindowsPackageTrust::developer; window.physical_owner = window.owner;
