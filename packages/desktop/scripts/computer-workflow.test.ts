@@ -443,11 +443,17 @@ test("focused Node smoke keeps normal CI gates and uses its own cancellation gro
   const inputs = record(record(record(main.document.on).workflow_dispatch).inputs)
   expect(inputs.desktop_engine_node).toMatchObject({ type: "boolean", default: false })
   const all = record(main.document.jobs)
-  const focused = { desktop_engine_node: true, computer_helper: true, hands_ui: true, hands_benchmark: true }
+  const focused = {
+    desktop_engine_node: true,
+    computer_helper: true,
+    computer_helper_windows_units_only: true,
+    hands_ui: true,
+    hands_benchmark: true,
+  }
   for (const [name, value] of Object.entries(all)) {
     const current = record(value)
     expect(expression(String(current.if), focused), name).toBe(name === "desktop-engine-node")
-    if (!["hands-ui", "hands-benchmark"].includes(name)) {
+    if (!["hands-ui", "hands-benchmark", "computer-helper-windows-units"].includes(name)) {
       expect(expression(String(current.if), {}), name).toBe(true)
       expect(expression(String(current.if), {}, "pull_request"), name).toBe(true)
     }
@@ -658,4 +664,70 @@ test("the macOS matrix can diagnose admitted artifacts after later fixture failu
   const helperRelease = record(release["computer-helper"])
   expect(helperRelease.uses).toBe("./.github/workflows/computer-helper.yml")
   expect(helperRelease["continue-on-error"]).toBeUndefined()
+})
+
+test("x64 unit diagnostics require explicit native dispatch and keep independent cancellation groups", () => {
+  const inputs = record(record(record(main.document.on).workflow_dispatch).inputs)
+  expect(inputs.computer_helper_windows_units_only).toMatchObject({ type: "boolean", default: false })
+  const all = record(main.document.jobs)
+  const diagnostic = record(all["computer-helper-windows-units"])
+  const selected = { computer_helper: true, computer_helper_windows_units_only: true }
+  for (const event of ["workflow_dispatch", "pull_request", "push"])
+    for (const native of [false, true])
+      for (const units of [false, true])
+        expect(
+          expression(
+            String(diagnostic.if),
+            { computer_helper: native, computer_helper_windows_units_only: units },
+            event,
+          ),
+        ).toBe(event === "workflow_dispatch" && native && units)
+  for (const [name, value] of Object.entries(all)) {
+    expect(expression(String(record(value).if), selected), name).toBe(name === "computer-helper-windows-units")
+    for (const event of ["workflow_dispatch", "pull_request", "push"])
+      expect(expression(String(record(value).if), { computer_helper_windows_units_only: true }, event), name).toBe(
+        expression(String(record(value).if), {}, event),
+      )
+  }
+  const modes = [
+    selected,
+    { computer_helper: true },
+    { computer_helper: true, computer_helper_windows_only: true },
+    { computer_helper: true, computer_helper_linux_only: true },
+    { desktop_engine_node: true },
+    { ...selected, computer_helper_windows_only: true },
+    { ...selected, computer_helper_linux_only: true },
+  ]
+  expect(new Set(modes.map((mode) => group(record(main.document.concurrency).group, mode))).size).toBe(modes.length)
+})
+
+test("x64 diagnostics reuse exact bounded native checks and publish no release evidence", () => {
+  const diagnostic = record(record(main.document.jobs)["computer-helper-windows-units"])
+  expect(diagnostic["runs-on"]).toBe("windows-2025")
+  expect(diagnostic.permissions).toEqual({ contents: "read" })
+  for (const key of ["outputs", "needs", "continue-on-error", "environment"]) expect(diagnostic[key]).toBeUndefined()
+  const current = steps(diagnostic)
+  const guard = current[0]!
+  expect(guard.name).toBe("Reject incompatible diagnostic selectors before setup")
+  for (const windows of ["true", "false"])
+    for (const linux of ["true", "false"])
+      expect(
+        spawnSync("bash", ["--noprofile", "--norc", "-c", String(guard.run)], {
+          env: { ...process.env, WINDOWS_ONLY: windows, LINUX_ONLY: linux },
+          timeout: 5000,
+        }).status,
+      ).toBe(windows === "true" || linux === "true" ? 1 : 0)
+  const script = commands(diagnostic)
+  expect(script).toContain("--platform win32 --arch x64 --channel prod --out native/out/win32")
+  expect(script).toContain("bun install --frozen-lockfile --ignore-scripts")
+  expect(script).not.toMatch(/--arch (?:arm64|x64,arm64)|--privileged|--native-stage|tar -|native-ready/)
+  expect(current.some((step) => String(step.uses).includes("upload-artifact"))).toBe(false)
+  const checks = current.find((step) => step.name === "Run Windows unit and fresh version/probe checks")!
+  expect(checks.run).toBe(steps(job("windows-build")).find((step) => step.name === checks.name)?.run)
+  expect(checks["timeout-minutes"]).toBe(5)
+  expect(checks["continue-on-error"]).toBeUndefined()
+  const release = record(workflow("vector-desktop-release.yml").document.jobs)
+  for (const name of ["mac", "windows"]) expect(record(release[name]).needs).toContain("computer-helper")
+  for (const value of Object.values(release))
+    expect(JSON.stringify(value)).not.toContain("computer-helper-windows-units")
 })

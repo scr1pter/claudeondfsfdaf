@@ -6,7 +6,12 @@ import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { Hands } from "@vectordevai/schema/hands"
 import { APP_IDS } from "./channel-ids"
-import { createManifest, renderHelperPlist, sourceDigestFor } from "./build-computer-helper"
+import {
+  COMPUTER_HELPER_BUILD_INPUTS,
+  createManifest,
+  renderHelperPlist,
+  sourceDigestFor,
+} from "./build-computer-helper"
 import type { HelperArchitecture, HelperManifest, HelperPlatform, NativeCommand } from "./build-computer-helper"
 import { generateIdentitySources, readIdentity } from "./computer-helper-identity"
 import { computerHelperPaths, ensureComputerHelper, prepareComputerHelper } from "./computer-helper-package"
@@ -72,9 +77,7 @@ async function fixture<T>(
       "native/computer-helper/identity.json",
       "native/computer-helper/blocklist.json",
       `native/computer-helper/${platform === "darwin" ? "macos" : "windows"}`,
-      "scripts/build-computer-helper.ts",
-      "scripts/computer-helper-identity.ts",
-      "scripts/channel-ids.ts",
+      ...COMPUTER_HELPER_BUILD_INPUTS,
       ...(["prod", "beta", "dev"] as const).map(
         (name) => `icons/${name}/icon.${platform === "darwin" ? "icns" : "ico"}`,
       ),

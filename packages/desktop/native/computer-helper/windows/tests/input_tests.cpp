@@ -44,7 +44,7 @@ class FakeGuardian final : public InputGuardian {
  public:
   explicit FakeGuardian(bool& authority, uint64_t& clock) : inside(authority), now(clock), ledger(own_tag) {}
   bool& inside; uint64_t& now; InputGuardianLedger ledger;
-  bool running = true, armed = false, ready_result = true, reserve_result = true, auto_up = true, wrong_up_tag = false, process_exited=false, drain_under_authority=false;
+  bool running = true, armed = false, ready_result = true, reserve_result = true, auto_up = true, wrong_up_tag = false, process_exited=false, drain_under_authority=false, closed=false;
   unsigned ready_calls = 0, reserve_calls = 0, drain_calls = 0, close_calls = 0;
   std::vector<InputRelease> ups;
   std::function<void()> on_ready;
@@ -84,7 +84,10 @@ class FakeGuardian final : public InputGuardian {
     const bool up = event.kind == InputEventKind::key_up || event.kind == InputEventKind::button_up || event.kind == InputEventKind::unicode_up;
     if (down || up) ledger.observe({event.release, event.tag, true, down, now});
   }
-  void close() noexcept override { ++close_calls; ledger.close(); if (running && auto_up) release(false); running = false; }
+  void close() noexcept override {
+    if (closed) return; closed = true; ++close_calls;
+    ledger.close(); if (running && auto_up) release(false); running = false;
+  }
 };
 struct Element final : InputElementWitness {};
 struct Fixture {
@@ -805,6 +808,14 @@ size_t run_input_tests() {
   test([] {
     Fixture fixture; fixture.send(L"input.hold"); fixture.service->close(); fixture.pump();
     check(fixture.guardian->close_calls == 1 && !fixture.guardian->ledger.pending(), "input.close-preserves-independent-owned-up-cleanup");
+    check(downs(fixture) == 2 && fixture.guardian->ups.size() == 2 && fixture.guardian->ledger.released_count() == 2 && fixture.parent_ups == 0 && !fixture.guardian->drain_under_authority,
+      "input.close-keeps-exact-matching-guardian-ups-without-parent-release-posts");
+    fixture.service->close(); fixture.pump();
+    check(fixture.guardian->close_calls == 1 && fixture.guardian->ups.size() == 2, "input.repeated-close-cannot-create-another-release-obligation");
+    bool done = false, complete = true; uint32_t released = 99;
+    fixture.service->release_all_async([&](bool value, uint32_t count) { done = true; complete = value; released = count; }); fixture.pump();
+    check(done && !complete && released == 0 && fixture.guardian->drain(1) == 0 && fixture.parent_ups == 0,
+      "input.closed-control-channel-cannot-confirm-or-credit-independent-child-cleanup");
     failure(fixture.take(L"input.key"), L"unavailable");
   });
   test([] {
