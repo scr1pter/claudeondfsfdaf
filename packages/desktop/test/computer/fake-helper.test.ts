@@ -1575,6 +1575,9 @@ describe("approval and the refusals", () => {
       ["Option", "KeyS"],
       ["Alt", "Shift", "k"],
       ["fn", "e"],
+      ["Command", "v"],
+      ["Control", "KeyV"],
+      ["Shift", "Insert"],
     ])
       expect(fake.call("input.key", { pid, combo, repeat: 1 })).toMatchObject({ code: "secure_field" })
     expect(fake.call("input.hold", { pid, combo: ["h"], ms: 1000 })).toMatchObject({ code: "secure_field" })
@@ -1612,7 +1615,15 @@ describe("approval and the refusals", () => {
     fake.begin(["notes"])
     fake.control({ type: "focus", windowId: "notes-1", node: "notes.password" })
     const pid = fake.helper.desktop.app("notes")!.pid
-    for (const combo of [["Control", "Alt", "KeyQ"], ["Ctrl", "Alt", "2"], ["Alt", "Numpad2"], ["IntlBackslash"]])
+    for (const combo of [
+      ["Control", "Alt", "KeyQ"],
+      ["Ctrl", "Alt", "2"],
+      ["Alt", "Numpad2"],
+      ["IntlBackslash"],
+      ["Control", "v"],
+      ["Ctrl", "Shift", "KeyV"],
+      ["Shift", "Insert"],
+    ])
       expect(fake.call("input.key", { pid, combo, repeat: 1 })).toMatchObject({ code: "secure_field" })
     for (const combo of [["Control", "a"], ["Alt", "f"], ["Win", "d"], ["Control", "Alt", "Delete"], ["Tab"]])
       expect(fake.call("input.key", { pid, combo, repeat: 1 })).toMatchObject({ ok: true })
@@ -1777,6 +1788,14 @@ describe("approval and the refusals", () => {
       expect(fake.call("ui.setValue", { ref: editor.ref, value: "x" })).toMatchObject({ code: "blocked" })
       expect(fake.helper.log.filter((entry) => entry.kind === "input")).toEqual([])
       const shortcut = platform === "macos" ? "Command" : "Control"
+      for (const combo of [
+        [shortcut, "v"],
+        [shortcut, "Shift", "KeyV"],
+        ["Shift", "Insert"],
+      ]) {
+        expect(fake.call("input.key", { pid, combo, repeat: 1 })).toMatchObject({ code: "blocked" })
+        expect(fake.call("input.hold", { pid, combo, ms: 500 })).toMatchObject({ code: "blocked" })
+      }
       for (const combo of [[shortcut, "s"], ["Enter"], ["ArrowDown"], ["Tab"]])
         expect(fake.call("input.key", { pid, combo, repeat: 1 })).toMatchObject({ ok: true })
       const { header, image } = fake.capture({ display: platform === "macos" ? "1" : "\\\\.\\DISPLAY1" })

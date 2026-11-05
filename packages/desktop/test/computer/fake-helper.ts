@@ -240,13 +240,20 @@ const NON_TYPING_PATTERN = /^(?:f(?:[1-9]|1\d|2[0-4])|media[a-z]+|audiovolume[a-
 
 /**
  * How many characters a key combo types per press, so the secure-field and click-only floors apply to a key op that
- * types as to `input.type` (INV-S4): 0 for a shortcut, for modifiers alone, and for keys that never type (Enter,
+ * types as to `input.type` (INV-S4): known paste shortcuts count as text-changing; 0 for other shortcuts,
+ * for modifiers alone, and for keys that never type (Enter,
  * Tab, Backspace, Delete, Escape, the arrows, Home, End, the page keys, Insert, F1 to F24, the media keys). Any other
  * key types, so a key name the helper does not know is held to the floors too.
  */
 function typedKeys(combo: readonly string[], platform: Platform) {
   const keys = combo.map((key) => key.toLowerCase())
   const has = (group: ReadonlySet<string>) => keys.some((key) => group.has(key))
+  if (
+    ((keys.includes("v") || keys.includes("keyv")) && (has(META) || has(CONTROL))) ||
+    ((keys.includes("insert") || keys.includes("ins")) &&
+      keys.some((key) => ["shift", "shiftleft", "shiftright", "⇧"].includes(key)))
+  )
+    return 1
   const windowsShortcut = has(CONTROL) ? !has(ALT) : has(ALT) && !keys.some((key) => key.startsWith("numpad"))
   if (has(META) || (platform === "macos" ? has(CONTROL) : windowsShortcut)) return 0
   return keys.filter(

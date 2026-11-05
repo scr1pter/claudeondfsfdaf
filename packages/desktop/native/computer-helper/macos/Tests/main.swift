@@ -8,6 +8,7 @@ do {
     _ = try runServerTests()
     _ = try runLifecycleTests()
     _ = try runPackagedSelfTestTests()
+    _ = try runBlocklistTests()
     print("Computer helper M1 unit checks passed.")
     exit(0)
 } catch {

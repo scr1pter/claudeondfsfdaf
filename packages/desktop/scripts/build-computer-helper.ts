@@ -138,7 +138,7 @@ export function swiftArguments(input: {
     `${path.dirname(input.generated)}=./generated`,
     "-Xlinker",
     "-dead_strip",
-    ...["AppKit", "ApplicationServices", "CoreGraphics", "ScreenCaptureKit", "Security"].flatMap((name) => [
+    ...["AppKit", "ApplicationServices", "Carbon", "CoreGraphics", "ScreenCaptureKit", "Security"].flatMap((name) => [
       "-framework",
       name,
     ]),

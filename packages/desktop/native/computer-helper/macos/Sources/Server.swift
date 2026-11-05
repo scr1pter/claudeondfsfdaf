@@ -561,7 +561,9 @@ final class Dispatcher {
     if let value = fields["phaseRevision"], value.intValue == nil || value.intValue! < 0 || value.intValue! > 9_007_199_254_740_991 { return false }
     if let value = fields["mode"], value.stringValue != "foreground" && value.stringValue != "background" { return false }
     for key in ["paused", "escStops"] { if let value = fields[key], value.boolValue == nil { return false } }
-    if let value = fields["approved"], value.arrayValue == nil || !value.arrayValue!.allSatisfy({ $0.objectValue != nil }) { return false }
+    if let value = fields["approved"] {
+      guard let approved = value.arrayValue, SessionPolicy.validApprovals(approved) else { return false }
+    }
     if let value = fields["overlayWindowIds"], ids(value) == nil { return false }
     return true
   }

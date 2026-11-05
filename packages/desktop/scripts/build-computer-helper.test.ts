@@ -131,6 +131,7 @@ describe("computer helper build planning", () => {
     expect(arm).toContain("/fixture=.")
     expect(arm).toContain("/tmp/generated=./generated")
     expect(arm).toContain("Security")
+    expect(arm).toContain("Carbon")
     expect(arm.indexOf(input.sources[1]!)).toBeLessThan(arm.indexOf(input.sources[0]!))
     expect(arm.slice(-3)).toEqual([input.generated, "-o", input.output])
     expect(arm).not.toContain("-parse-as-library")

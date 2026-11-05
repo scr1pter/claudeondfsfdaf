@@ -60,10 +60,11 @@ private final class ServerFixture {
 
   func result(_ id: Int) -> JSONValue? { responses.first { $0.value["id"]?.intValue == id }?.value }
 
-  @discardableResult func begin(_ id: String = "native-test", revision: Int = 0, paused: Bool = false) throws -> Int {
+  @discardableResult func begin(_ id: String = "native-test", revision: Int = 0, paused: Bool = false,
+                               approved: [JSONValue] = []) throws -> Int {
     try request("session.begin", [
       "sessionId": .string(id), "phaseRevision": .integer(Int64(revision)), "paused": .bool(paused),
-      "mode": .string("foreground"), "approved": .array([]), "vectorPids": .array([.integer(200)]),
+      "mode": .string("foreground"), "approved": .array(approved), "vectorPids": .array([.integer(200)]),
       "vectorWindowIds": .array([.string("vector-1")]), "overlayWindowIds": .array([.string("overlay-1")]),
       "escStops": .bool(true), "stopChord": .string("Command+Shift+Escape"), "heartbeatMs": .integer(2000),
     ])
@@ -178,6 +179,29 @@ func runServerTests() throws -> Int {
     let rewrite = try fake.request("session.update", ["vectorPids": .array([])])
     try serverExpect(fake.result(rewrite)?["code"]?.stringValue == "failed", "Vector process exclusions cannot be rewritten")
     try serverExpect(fake.server.sessionSnapshot()?.vectorPids == [200], "the begin exclusions remain intact")
+  }
+
+  try test {
+    let fake = ServerFixture()
+    let malformed: JSONValue = .object(["platform": .string("macos"), "bundleId": .string("com.example.fixture")])
+    let foreign: JSONValue = .object(["platform": .string("windows"), "kind": .string("aumid"), "aumid": .string("fixture")])
+    let identity: JSONValue = .object([
+      "platform": .string("macos"), "bundleId": .string("com.example.fixture"), "teamId": .string("ABCDEFGHIJ"),
+      "apple": .bool(false), "system": .bool(false), "verified": .bool(true), "name": .string("Fixture app"),
+    ])
+    let badBegin = try fake.begin(approved: [malformed])
+    try serverExpect(fake.result(badBegin)?["code"]?.stringValue == "failed", "malformed approvals refuse before begin acknowledgment")
+    try serverExpect(fake.server.sessionSnapshot() == nil, "a refused begin creates no session authority")
+    let begin = try fake.begin(approved: [identity])
+    try serverExpect(fake.result(begin)?["ok"]?.boolValue == true, "strict valid native approval begins normally")
+    for invalid in [malformed, foreign] {
+      let update = try fake.request("session.update", [
+        "sessionId": .string("native-test"), "phaseRevision": .integer(1), "approved": .array([invalid]),
+      ])
+      try serverExpect(fake.result(update)?["code"]?.stringValue == "failed", "malformed and foreign approvals refuse before update acknowledgment")
+      try serverExpect(fake.server.sessionSnapshot()?.approved == [identity] && fake.server.sessionSnapshot()?.revision == 0,
+                       "a refused approval update cannot replace the captured policy or phase")
+    }
   }
 
   try test {
