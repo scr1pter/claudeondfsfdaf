@@ -31,6 +31,10 @@ import { tmpdir } from "node:os"
 import path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { deflateSync } from "node:zlib"
+import type { Computer } from "@vectordevai/schema/computer"
+
+type ComputerBridgeResponse<C extends Computer.BridgeCommandName> =
+  (typeof Computer.BridgeCommands)[C]["response"]["Type"]
 
 const PROVIDER = "smoke"
 const MODEL = "smoke-model"
@@ -416,9 +420,9 @@ async function startComputerBridge(project: string) {
     capabilities: 0,
     failures: [],
   }
-  const desktopState = () => ({
-    phase: state.released ? "idle" : "working",
-    backend: "fake",
+  const desktopState = (): Computer.ComputerState => ({
+    phase: state.released ? "ready" : "working",
+    backend: "local-macos",
     mode: "foreground",
     apps: state.level ? [{ key: COMPUTER_KEY, name: COMPUTER_APP.name }] : [],
     queue: [],
@@ -427,7 +431,7 @@ async function startComputerBridge(project: string) {
     lease: 1,
     reduceMotion: false,
   })
-  const inspect = () => ({
+  const inspect = (): Computer.InspectResult => ({
     app: COMPUTER_APP,
     category: "office",
     pid: COMPUTER_APP.pid,
@@ -460,21 +464,21 @@ async function startComputerBridge(project: string) {
       requireComputer(!state.holder && !state.released, "unexpected second acquire")
       state.sessionID = body.sessionID
       state.holder = body.sessionID
-      return { lease: 1 }
+      return { lease: 1 } satisfies ComputerBridgeResponse<"acquire">
     }
     requireComputer(body.sessionID === state.sessionID, "request belongs to another fixture lease")
     requireComputer(
       command === "cancel" || command === "status" || body.lease === 1,
       "request has the wrong fixture lease",
     )
-    if (command === "cancel") return { ok: true }
+    if (command === "cancel") return { ok: true } satisfies ComputerBridgeResponse<"cancel">
     if (command === "release") {
       state.holder = undefined
       state.level = undefined
       state.released = true
-      return { ok: true }
+      return { ok: true } satisfies ComputerBridgeResponse<"release">
     }
-    if (command === "heartbeat") return { state: desktopState() }
+    if (command === "heartbeat") return { state: desktopState() } satisfies ComputerBridgeResponse<"heartbeat">
     if (command === "status")
       return {
         platform: "macos",
@@ -482,16 +486,21 @@ async function startComputerBridge(project: string) {
         permissions: { screen: "granted", accessibility: "granted" },
         displays: [{ id: "1", name: "Fixture display", bounds: { x: 0, y: 0, w: 64, h: 48 }, scale: 1, primary: true }],
         mode: "foreground",
-      }
+      } satisfies ComputerBridgeResponse<"status">
     if (command === "access") {
       requireComputer(appQuery(body.app), "access did not name the fixture app")
-      return {
-        identity: COMPUTER_APP,
-        category: "office",
-        ...(state.level
-          ? { verdict: "granted", level: state.level, via: "task" }
-          : { verdict: "ask", canAlways: false, companyAllowed: false, changed: false }),
-      }
+      return (
+        state.level
+          ? { identity: COMPUTER_APP, category: "office", verdict: "granted", level: state.level, via: "task" }
+          : {
+              identity: COMPUTER_APP,
+              category: "office",
+              verdict: "ask",
+              canAlways: false,
+              companyAllowed: false,
+              changed: false,
+            }
+      ) satisfies ComputerBridgeResponse<"access">
     }
     if (command === "grant") {
       const identity = body.identity
@@ -518,7 +527,7 @@ async function startComputerBridge(project: string) {
       )
       consumed.add(body.requestID)
       state.level = body.level
-      return { ok: true }
+      return { ok: true } satisfies ComputerBridgeResponse<"grant">
     }
     requireComputer(state.level !== undefined && !state.released, "observation preceded the app approval")
     if (command === "inspect") {
@@ -556,7 +565,7 @@ async function startComputerBridge(project: string) {
         visible: [COMPUTER_APP],
         hiddenCount: 0,
         pointer: { x: 32, y: 24 },
-      }
+      } satisfies ComputerBridgeResponse<"screenshot">
     }
     if (command === "act") {
       requireComputer(
@@ -614,7 +623,7 @@ async function startComputerBridge(project: string) {
       )
       consumed.add(id)
       state.clicked++
-      return { done: 1, state: desktopState() }
+      return { done: 1, state: desktopState() } satisfies ComputerBridgeResponse<"act">
     }
     throw new Error("computer-smoke: unexpected fixture command")
   }
@@ -632,7 +641,7 @@ async function startComputerBridge(project: string) {
           backend: "fake",
           actions: ["screenshot", "click"],
           features: { background: false, uiTree: false, zoom: false, clipboard: false, locked: false },
-        }
+        } satisfies Computer.Capabilities
       }
       requireComputer(request.method === "POST" && request.url === "/computer", "unexpected bridge HTTP route")
       const chunks: Buffer[] = []

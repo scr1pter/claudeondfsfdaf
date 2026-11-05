@@ -803,3 +803,8 @@ Focused Node run42034417496 after the production lifetime repair no longer repor
 ### C8 schema-valid fake UI reference
 
 Closed facts in focused Node run42036080080 at0634dba7 prove the repaired lifetime: screenshot completes with its exact image attachment and frame, one acquired lease persists, app approval is consumed, and task end cancels/releases it. Click then fails after two inspect calls before any sensitive ask or act. The fixture used ui_smoke_send, but the actual UiRef schema requires ui_ followed by1–6digits. Optional screenshot focus inspection may fail quietly, while required click inspection correctly rejects it. The fixture and both exact approval comparisons now use ui_1. No production validation, permission, frame, digest, image or cleanup assertion is relaxed. Actual focused Node execution follows.
+
+
+### Typed Node bridge fixture state
+
+Focused Node run42037014653 at15b23f23 proves app approval, sensitive approval and one actual fake-bridge click, with both HTTP permission IDs consumed once and the lease correctly released. Its post-click decode then fails because the fixture's ComputerState used backend=fake and released phase=idle, neither allowed by that wire schema. It now uses local-macos and ready. The separate Capabilities backend remains fake. State, inspect and every handled command response now use type-only checks against the shared schemas; no runtime schema dependency is introduced into the unbundled Node script. Engine typecheck passes. All image, target/frame/digest, approval and cleanup assertions remain unchanged for the next actual run.
