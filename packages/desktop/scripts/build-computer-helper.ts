@@ -146,6 +146,7 @@ export function swiftArguments(input: {
       "CoreText",
       "CryptoKit",
       "ImageIO",
+      "IOKit",
       "ScreenCaptureKit",
       "Security",
     ].flatMap((name) => ["-framework", name]),

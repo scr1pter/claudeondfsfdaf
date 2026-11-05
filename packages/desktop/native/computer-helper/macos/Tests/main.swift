@@ -21,6 +21,8 @@ do {
     _ = try runProgramLaunchRegistryTests()
     _ = try runAppsTests()
     _ = try runClipboardTests()
+    _ = try runEventTapTests()
+    _ = try runWatchdogTests()
     print("Computer helper unit checks passed.")
     exit(0)
 } catch {

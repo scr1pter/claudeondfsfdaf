@@ -44,6 +44,7 @@ final class Dispatcher {
     let deadlineMs: Int
     let requiresSession: Bool
     let mutating: Bool
+    let requiresAvailableDesktop: Bool
     let handler: Handler
   }
 
@@ -55,6 +56,9 @@ final class Dispatcher {
     let revision: Int?
     let mutating: Bool
     let requiresSession: Bool
+    let requiresAvailableDesktop: Bool
+    let desktopEpoch: UInt64
+    var readinessAttempts = 0
     var cancelDeadline: (() -> Void)?
   }
 
@@ -69,6 +73,11 @@ final class Dispatcher {
   private let observationsInvalidated: () -> Void
   /// Runs under the authority lock: implementations may only enqueue cleanup, never enter native IPC or wait.
   private let cleanupRequested: (String) -> Void
+  /// Hooks only enqueue native reconfiguration; readiness providers return cached metadata without OS calls.
+  private let sessionChanged: (ServerSession?) -> Void
+  private let desktopAvailability: () -> WatchdogAvailability
+  private let foregroundReady: (ServerSession) -> Bool
+  private let nativeEventIsCurrent: (Event, ServerSession?) -> Bool
   private let stopped: () -> Void
   private let features: () -> [String: Bool]
   private let permissions: () -> [String: JSONValue]
@@ -87,6 +96,8 @@ final class Dispatcher {
   private var closed = false
   private var halted = false
   private var physicalPause = false
+  private var availabilityState: WatchdogAvailability = .available
+  private var desktopEpoch: UInt64 = 0
   private var cancelHeartbeat: (() -> Void)?
   private var heartbeatGeneration: UInt64 = 0
   private var pendingOutputCount = 0
@@ -102,6 +113,10 @@ final class Dispatcher {
     releaseAll: @escaping () -> Int = { 0 },
     observationsInvalidated: @escaping () -> Void = {},
     cleanupRequested: @escaping (String) -> Void = { _ in },
+    sessionChanged: @escaping (ServerSession?) -> Void = { _ in },
+    desktopAvailability: @escaping () -> WatchdogAvailability = { .available },
+    foregroundReady: @escaping (ServerSession) -> Bool = { _ in true },
+    nativeEventIsCurrent: @escaping (Event, ServerSession?) -> Bool = { _, _ in true },
     stopped: @escaping () -> Void = {},
     sendImage: ((Response, Data) -> Void)? = nil,
     features: @escaping () -> [String: Bool] = { [:] },
@@ -121,6 +136,11 @@ final class Dispatcher {
     self.releaseAll = releaseAll
     self.observationsInvalidated = observationsInvalidated
     self.cleanupRequested = cleanupRequested
+    self.sessionChanged = sessionChanged
+    self.desktopAvailability = desktopAvailability
+    self.foregroundReady = foregroundReady
+    self.nativeEventIsCurrent = nativeEventIsCurrent
+    self.availabilityState = desktopAvailability()
     self.stopped = stopped
     self.sendImage = sendImage
     self.features = features
@@ -144,12 +164,14 @@ final class Dispatcher {
     deadlineMs: Int,
     requiresSession: Bool = true,
     mutating: Bool = false,
+    requiresAvailableDesktop: Bool = true,
     handler: @escaping Handler
   ) {
     locked {
       guard !closed, !Self.builtins.contains(op), deadlineMs > 0, deadlineMs <= 600_000 else { return }
       handlers[op] = Registration(deadlineMs: deadlineMs, requiresSession: Self.mutations.contains(op) || requiresSession,
-                                  mutating: Self.mutations.contains(op) || mutating, handler: handler)
+                                  mutating: Self.mutations.contains(op) || mutating,
+                                  requiresAvailableDesktop: Self.mutations.contains(op) || requiresAvailableDesktop, handler: handler)
     }
   }
 
@@ -199,6 +221,7 @@ final class Dispatcher {
       cancelActive(code: "stopped", message: "The helper has closed.")
       rejectQueued(code: "stopped", message: "The helper has closed.")
       session = nil
+      sessionChanged(nil)
     }
   }
 
@@ -208,16 +231,99 @@ final class Dispatcher {
       guard !closed, session != nil, !physicalPause else { return }
       physicalPause = true
       session?.paused = true
+      session?.escStops = false
       generation &+= 1
       observationsInvalidated()
       cleanupRequested("physical-input")
       _ = releaseAll()
+      sessionChanged(session)
       cancelActive(code: "paused", message: "Physical input paused this task.")
       pump()
     }
   }
 
   func sessionSnapshot() -> ServerSession? { locked { session } }
+
+  private func matches(_ expected: ServerSession?) -> Bool {
+    guard let expected else { return session == nil }
+    guard let session else { return false }
+    return session.observationEpoch == expected.observationEpoch && session.revision == expected.revision &&
+      session.id.utf8.elementsEqual(expected.id.utf8)
+  }
+
+  private var available: Bool { availabilityState == .available && desktopAvailability() == .available }
+
+  @discardableResult
+  func publishNativeEvent(_ value: Event, expected: ServerSession?) -> Bool {
+    locked {
+      guard !closed, matches(expected), nativeEventIsCurrent(value, expected) else { return false }
+      emitScoped(value, expected: expected)
+      return true
+    }
+  }
+
+  @discardableResult
+  func handlePhysicalInput(_ value: Event, expected: ServerSession, takeover: Bool) -> Bool {
+    locked {
+      guard !closed, matches(expected), value.value["event"]?.stringValue == "user_input" else { return false }
+      if takeover && session?.mode == "foreground" { pauseForPhysicalInput() }
+      guard !closed, matches(expected) else { return false }
+      emitScoped(value, expected: expected)
+      return true
+    }
+  }
+
+  @discardableResult
+  func stopFromPhysicalInput(by: String, expected: ServerSession) -> Bool {
+    locked {
+      guard !closed, !halted, matches(expected), by == "esc" || by == "chord" else { return false }
+      if by == "esc" && (session?.escStops != true || session?.mode != "foreground" || session?.paused != false) { return false }
+      halted = true; physicalPause = true; session?.paused = true; session?.escStops = false
+      generation &+= 1
+      observationsInvalidated(); cleanupRequested("stop"); _ = releaseAll()
+      cancelActive(code: "stopped", message: "Physical Stop ended this task.")
+      cancelQueuedMutations()
+      sessionChanged(session)
+      emitScoped(Event(name: "stop", fields: ["by": .string(by)]), expected: expected)
+      pump()
+      return true
+    }
+  }
+
+  @discardableResult
+  func pauseForEnvironment(expected: ServerSession, reason: String) -> Bool {
+    locked {
+      guard !closed, matches(expected) else { return false }
+      if !physicalPause || session?.paused != true || session?.escStops == true {
+        physicalPause = true; session?.paused = true; session?.escStops = false
+        generation &+= 1
+        observationsInvalidated(); cleanupRequested("environment"); _ = releaseAll()
+        cancelActive(code: reason == "locked" ? "locked" : "paused", message: "The native desktop is unavailable for this task.")
+        sessionChanged(session)
+        pump()
+      }
+      return true
+    }
+  }
+
+  func setDesktopAvailability(_ value: WatchdogAvailability) {
+    locked {
+      guard !closed, value != availabilityState else { return }
+      availabilityState = value
+      guard value != .available else { pump(); return }
+      desktopEpoch &+= 1
+      generation &+= 1
+      observationsInvalidated(); cleanupRequested("environment"); _ = releaseAll()
+      if session != nil { physicalPause = true; session?.paused = true; session?.escStops = false }
+      let code = value == .locked ? "locked" : "unavailable"
+      if active?.requiresAvailableDesktop == true { cancelActive(code: code, message: "The native desktop is unavailable.") }
+      let cancelled = queue.filter { handlers[$0.op]?.requiresAvailableDesktop == true }
+      let ids = Set(cancelled.map(\.id)); queue.removeAll { ids.contains($0.id) }
+      for request in cancelled { forget(request.id); fail(request, code, "The native desktop is unavailable.") }
+      sessionChanged(session)
+      pump()
+    }
+  }
 
   /// Native reconfiguration invalidates geometries before the notification reaches desktop main.
   func notifyDisplayChange() {
@@ -273,6 +379,44 @@ final class Dispatcher {
     output(bytes) { self.event(value) }
   }
 
+  private func emitScoped(_ value: Event, expected: ServerSession?) {
+    let epoch = desktopEpoch
+    let bytes = (try? JSONEncoder().encode(value).count) ?? maxFrameBytes + 1
+    output(bytes) {
+      self.locked {
+        guard !self.closed, self.matches(expected), self.desktopEpoch == epoch,
+              self.nativeEventIsCurrent(value, expected) else { return }
+        self.event(value)
+      }
+    }
+  }
+
+  private func observationCurrent(_ authority: Active) -> Bool {
+    guard !closed else { return false }
+    if authority.requiresAvailableDesktop {
+      guard available, authority.desktopEpoch == desktopEpoch, authority.generation == generation else { return false }
+    }
+    if authority.requiresSession || authority.sessionId != nil {
+      guard authority.generation == generation, authority.sessionId == session?.id, authority.revision == session?.revision else { return false }
+    }
+    return true
+  }
+
+  private func replyObserved(_ response: Response, image: Data?, authority: Active) {
+    let bytes = ((try? JSONEncoder().encode(response).count) ?? maxFrameBytes + 1) + (image?.count ?? 0)
+    output(bytes) {
+      self.locked {
+        guard self.observationCurrent(authority) else {
+          let code = self.availabilityState == .locked || self.desktopAvailability() == .locked ? "locked" : "changed"
+          self.send(.failure(id: authority.request.id, code: code, error: "The native observation changed before delivery."))
+          return
+        }
+        if let image, let sendImage = self.sendImage { sendImage(response, image) }
+        else { self.send(response) }
+      }
+    }
+  }
+
   private func fail(_ request: Request, _ code: String, _ message: String) {
     reply(.failure(id: request.id, code: code, error: message))
   }
@@ -283,7 +427,8 @@ final class Dispatcher {
     let registration = handlers[request.op]
     let token = UUID()
     active = Active(token: token, request: request, generation: admittedGenerations[request.id] ?? generation, sessionId: session?.id,
-                    revision: session?.revision, mutating: registration?.mutating ?? false, requiresSession: registration?.requiresSession ?? true)
+                    revision: session?.revision, mutating: registration?.mutating ?? false, requiresSession: registration?.requiresSession ?? true,
+                    requiresAvailableDesktop: registration?.requiresAvailableDesktop ?? false, desktopEpoch: desktopEpoch)
     execute { [weak self] in self?.start(request, registration, token) }
   }
 
@@ -301,6 +446,20 @@ final class Dispatcher {
         forget(request.id)
         active = nil
         pump()
+        return nil
+      }
+      if let active, active.readinessAttempts < 100, active.generation == generation,
+         registration.requiresAvailableDesktop, availabilityState != .locked,
+         (!registration.mutating || (!halted && !physicalPause && session?.paused != true)),
+         (!available || (registration.mutating && session?.mode == "foreground" && session?.paused == false &&
+           !halted && !physicalPause && session.map({ !foregroundReady($0) }) == true)) {
+        self.active?.readinessAttempts += 1
+        let cancel = schedule(10) { [weak self] in
+          guard let self else { return }
+          self.execute { self.start(request, registration, token) }
+        }
+        guard self.active?.token == token else { cancel(); return nil }
+        self.active?.cancelDeadline = cancel
         return nil
       }
       if let refusal = admission(request, registration) {
@@ -335,18 +494,25 @@ final class Dispatcher {
 
   private func current(_ token: UUID) -> Bool {
     guard !closed, let active, active.token == token else { return false }
-    if (active.requiresSession || active.sessionId != nil) &&
+    if (active.requiresSession || active.requiresAvailableDesktop || active.sessionId != nil) &&
        (active.generation != generation || active.sessionId != session?.id || active.revision != session?.revision) { return false }
-    return !active.mutating || (!halted && !physicalPause && session?.paused == false)
+    if active.requiresAvailableDesktop && (active.desktopEpoch != desktopEpoch || !available) { return false }
+    return !active.mutating || (!halted && !physicalPause && session?.paused == false &&
+      session.map(foregroundReady) == true)
   }
 
   private func admission(_ request: Request, _ registration: Registration) -> ServerFailure? {
     guard responsible else { return ServerFailure(code: "responsible_missing", message: "The helper does not own its OS permissions.") }
     if registration.mutating && halted { return ServerFailure(code: "stopped", message: "Input has stopped until a new session begins.") }
+    if registration.requiresAvailableDesktop && !available {
+      return ServerFailure(code: availabilityState == .locked || desktopAvailability() == .locked ? "locked" : "unavailable",
+                           message: "The native desktop is unavailable.")
+    }
     if registration.requiresSession && session == nil { return ServerFailure(code: "unavailable", message: "No computer session is active.") }
-    if registration.requiresSession && active?.generation != generation { return ServerFailure(code: "changed", message: "The computer session changed while the request was queued.") }
+    if (registration.requiresSession || registration.requiresAvailableDesktop) && active?.generation != generation { return ServerFailure(code: "changed", message: "The computer session changed while the request was queued.") }
     if registration.mutating {
       if physicalPause || session?.paused == true { return ServerFailure(code: "paused", message: "This task is paused.") }
+      if let session, !foregroundReady(session) { return ServerFailure(code: "paused", message: "Native input detection is not ready.") }
       if let session, let revision = session.revision,
          request.args["sessionId"]?.stringValue != session.id || request.args["phaseRevision"]?.intValue != revision {
         return ServerFailure(code: "changed", message: "The computer session phase changed.")
@@ -369,13 +535,8 @@ final class Dispatcher {
       switch result {
       case .success(let value):
         let response = Response.success(id: active.request.id, fields: value.fields)
-        if let image = value.image {
-          if let sendImage {
-            let bytes = ((try? JSONEncoder().encode(response).count) ?? maxFrameBytes + 1) + image.count
-            output(bytes) { sendImage(response, image) }
-          }
-          else { fail(active.request, "capture_unavailable", "Image output is unavailable.") }
-        } else { reply(response) }
+        if value.image != nil && sendImage == nil { fail(active.request, "capture_unavailable", "Image output is unavailable.") }
+        else { replyObserved(response, image: value.image, authority: active) }
       case .failure(let failure):
         cleanupRequested("error")
         fail(active.request, failure.code, failure.message)
@@ -420,11 +581,11 @@ final class Dispatcher {
     generation &+= 1
     observationsInvalidated()
     _ = releaseAll()
-    if active?.requiresSession == true || active?.sessionId != nil {
+    if active?.requiresSession == true || active?.requiresAvailableDesktop == true || active?.sessionId != nil {
       cancelActive(code: "changed", message: "The computer session phase changed.")
     }
-    let cancelled = queue.filter { handlers[$0.op]?.requiresSession == true }
-    queue.removeAll { handlers[$0.op]?.requiresSession == true }
+    let cancelled = queue.filter { handlers[$0.op]?.requiresSession == true || handlers[$0.op]?.requiresAvailableDesktop == true }
+    queue.removeAll { handlers[$0.op]?.requiresSession == true || handlers[$0.op]?.requiresAvailableDesktop == true }
     for request in cancelled {
       forget(request.id)
       fail(request, "changed", "The computer session changed while this request was queued.")
@@ -495,10 +656,14 @@ final class Dispatcher {
         guard let self, !self.closed, self.session != nil, self.heartbeatGeneration == ticket else { return }
         self.cancelHeartbeat = nil
         self.halted = true
+        self.session?.paused = true
+        self.session?.escStops = false
         self.generation &+= 1
+        self.observationsInvalidated()
         self.cleanupRequested("heartbeat")
         _ = self.releaseAll()
         self.cancelActive(code: "stopped", message: "Input stopped because no heartbeat arrived.")
+        self.sessionChanged(self.session)
         self.pump()
       }
     }
@@ -539,19 +704,18 @@ final class Dispatcher {
       return true
     case "session.begin":
       guard responsible else { fail(request, "responsible_missing", "The helper does not own its OS permissions."); return true }
-      guard let next = Self.decodeSession(request.args) else { fail(request, "failed", "Invalid session arguments."); return true }
+      guard var next = Self.decodeSession(request.args) else { fail(request, "failed", "Invalid session arguments."); return true }
       if next.mode == "background" && features()["background"] != true { fail(request, "unsupported_action", "Background operation is unavailable."); return true }
       if session != nil { cleanupRequested("replacement") }
       invalidateSessionWork()
       guard !closed else { return true }
+      let environmentPaused = availabilityState == .locked || (!available && physicalPause)
+      if environmentPaused { next.paused = true; next.escStops = false }
       session = next
       halted = false
-      physicalPause = false
+      physicalPause = environmentPaused
       armHeartbeat()
-      if next.revision != nil {
-        let detection = Event(name: "input_detection", fields: ["alive": .bool(false), "reason": .string("probe_missing")])
-        emit(detection)
-      }
+      sessionChanged(session)
       reply(.success(id: request.id))
       return true
     case "session.update":
@@ -565,6 +729,9 @@ final class Dispatcher {
         fail(request, "changed", "The computer session phase changed."); return true
       }
       if physicalPause && request.args["paused"]?.boolValue == false { fail(request, "changed", "Physical take-over needs a fresh session."); return true }
+      if !available && request.args["paused"]?.boolValue == false {
+        fail(request, availabilityState == .locked ? "locked" : "unavailable", "The native desktop is unavailable."); return true
+      }
       if request.args["mode"]?.stringValue == "background" && features()["background"] != true { fail(request, "unsupported_action", "Background operation is unavailable."); return true }
       invalidateSessionWork()
       guard !closed else { return true }
@@ -576,6 +743,7 @@ final class Dispatcher {
       current.overlayWindowIds = Self.ids(request.args["overlayWindowIds"]) ?? current.overlayWindowIds
       current.observationEpoch = UUID()
       session = current
+      sessionChanged(session)
       reply(.success(id: request.id))
       return true
     case "session.end":
@@ -586,6 +754,7 @@ final class Dispatcher {
       cancelHeartbeat?()
       cancelHeartbeat = nil
       session = nil
+      sessionChanged(nil)
       reply(.success(id: request.id))
       return true
     default: return false

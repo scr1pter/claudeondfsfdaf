@@ -231,9 +231,9 @@ final class FrameReader {
     }
 }
 
-/// One lock covers an entire JSON/binary pair, including short-write and EINTR retries.
+/// One bounded serialization lease covers an entire JSON/binary pair and all short-write/EINTR retries.
 final class FrameWriter {
-    private let lock = NSLock()
+    private let serialization = DispatchSemaphore(value: 1)
     private let writeBytes: (UnsafeRawBufferPointer) throws -> Int
     private let descriptor: Int32?
     private let writeTimeoutMs: Int
@@ -275,6 +275,7 @@ final class FrameWriter {
     }
 
     func write(_ response: Response, binary: Data? = nil) throws {
+        let deadline = DispatchTime.now().uptimeNanoseconds + UInt64(writeTimeoutMs) * 1_000_000
         let imageBytes = response.value["imageBytes"]
         if let binary = binary {
             guard response.value["ok"]?.boolValue == true, let count = imageBytes?.intValue,
@@ -282,18 +283,22 @@ final class FrameWriter {
         } else if imageBytes != nil { throw ProtocolError.imageLengthMismatch }
         let header = try FrameWriter.frame(response.value)
         let image = try binary.map(FrameWriter.frameBytes)
-        lock.lock()
-        defer { lock.unlock() }
-        let deadline = DispatchTime.now().uptimeNanoseconds + UInt64(writeTimeoutMs) * 1_000_000
+        guard serialization.wait(timeout: DispatchTime(uptimeNanoseconds: deadline)) == .success else {
+            throw POSIXError(.ETIMEDOUT)
+        }
+        defer { serialization.signal() }
         try writeAll(header, deadline: deadline)
         if let image = image { try writeAll(image, deadline: deadline) }
     }
 
     func write(_ event: Event) throws {
+        let deadline = DispatchTime.now().uptimeNanoseconds + UInt64(writeTimeoutMs) * 1_000_000
         let frame = try FrameWriter.frame(event.value)
-        lock.lock()
-        defer { lock.unlock() }
-        try writeAll(frame, deadline: DispatchTime.now().uptimeNanoseconds + UInt64(writeTimeoutMs) * 1_000_000)
+        guard serialization.wait(timeout: DispatchTime(uptimeNanoseconds: deadline)) == .success else {
+            throw POSIXError(.ETIMEDOUT)
+        }
+        defer { serialization.signal() }
+        try writeAll(frame, deadline: deadline)
     }
 
     private func writable(until deadline: UInt64) throws {
@@ -323,6 +328,7 @@ final class FrameWriter {
                     let count = try writeBytes(UnsafeRawBufferPointer(rebasing: bytes[offset...]))
                     guard count > 0, count <= bytes.count - offset else { throw ProtocolError.shortWrite }
                     offset += count
+                    guard DispatchTime.now().uptimeNanoseconds < deadline else { throw POSIXError(.ETIMEDOUT) }
                 } catch let error as POSIXError where error.code == .EINTR { continue }
                 catch let error as POSIXError where error.code.rawValue == EAGAIN || error.code.rawValue == EWOULDBLOCK {
                     try writable(until: deadline)

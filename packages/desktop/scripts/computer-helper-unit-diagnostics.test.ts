@@ -13,11 +13,13 @@ describe("standalone native unit diagnostics", () => {
   test("preserves every actual aggregate suite in order without accepting arbitrary calls", async () => {
     const actual = await readFile(new URL("../native/computer-helper/macos/Tests/main.swift", import.meta.url), "utf8")
     expect(diagnosticSuites(actual).length).toBeGreaterThanOrEqual(11)
-    expect(diagnosticSuites(actual).slice(-4)).toEqual([
+    expect(diagnosticSuites(actual).slice(-6)).toEqual([
       "runHostOwnershipTests",
       "runProgramLaunchRegistryTests",
       "runAppsTests",
       "runClipboardTests",
+      "runEventTapTests",
+      "runWatchdogTests",
     ])
     expect(diagnosticSuites(aggregate)).toEqual(["runCommandLineTests", "runCaptureTests", "runAccessibilityTests"])
     for (const invalid of [
@@ -54,12 +56,19 @@ describe("standalone native unit diagnostics", () => {
     expect(unitDiagnosticMain("try runCaptureTests()\n")).not.toContain("AccessibilityNative.documentURL")
   })
 
-  test("registers M7 capability, app and clipboard suites with only their synthetic assertion types", async () => {
-    const suites = ["runHostOwnershipTests", "runProgramLaunchRegistryTests", "runAppsTests", "runClipboardTests"]
+  test("registers native service suites with only their synthetic assertion types", async () => {
+    const suites = [
+      "runHostOwnershipTests",
+      "runProgramLaunchRegistryTests",
+      "runAppsTests",
+      "runClipboardTests",
+      "runEventTapTests",
+      "runWatchdogTests",
+    ]
     const source = unitDiagnosticMain(suites.map((suite) => `_ = try ${suite}()`).join("\n"))
     expect([...source.matchAll(/_ = try (run\w+Tests)\(\)/g)].map((match) => match[1])).toEqual(suites)
     const failures = await Promise.all(
-      ["HostOwnership", "ProgramLaunchRegistry", "Apps", "Clipboard"].map(async (name) => {
+      ["HostOwnership", "ProgramLaunchRegistry", "Apps", "Clipboard", "EventTap", "Watchdog"].map(async (name) => {
         const swift = await readFile(
           new URL(`../native/computer-helper/macos/Tests/${name}Tests.swift`, import.meta.url),
           "utf8",

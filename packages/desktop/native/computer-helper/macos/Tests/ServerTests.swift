@@ -35,32 +35,61 @@ private final class ServerFixture {
   let clock = ServerTestClock()
   var responses: [Response] = []
   var events: [Event] = []
+  var images: [(Response, Data)] = []
   var releases = 0
   var observationInvalidations = 0
   var cleanupReasons: [String] = []
   var cleanupWork: [() -> Void] = []
   var trace: [String] = []
+  var changedSessions: [ServerSession?] = []
+  var onSessionChanged: ((ServerSession?) -> Void)?
+  var onEvent: ((Event) -> Void)?
+  var availability = WatchdogAvailability.available
+  var readyForForeground = true
+  var nativeEventsCurrent = true
+  var holdDelivery = false
+  var deliveries: [() -> Void] = []
   var stopped = false
   var nextId = 0
   var server: Dispatcher!
 
-  init(responsible: Bool = true, pendingLimitBytes: Int = 2 * maxFrameBytes) {
+  init(responsible: Bool = true, pendingLimitBytes: Int = 2 * maxFrameBytes,
+       initialAvailability: WatchdogAvailability = .available) {
+    availability = initialAvailability
     server = Dispatcher(
       responsible: responsible, architecture: "arm64", operatingSystem: "virtual test OS",
       send: { [weak self] response in
         self?.responses.append(response)
         self?.trace.append("response:\(response.value["id"]?.intValue ?? -1)")
       },
-      event: { [weak self] in self?.events.append($0) },
-      releaseAll: { [weak self] in self?.releases += 1; return 0 },
-      observationsInvalidated: { [weak self] in self?.observationInvalidations += 1 },
+      event: { [weak self] event in
+        self?.events.append(event)
+        self?.trace.append("event:\(event.value["event"]?.stringValue ?? "unknown")")
+        self?.onEvent?(event)
+      },
+      releaseAll: { [weak self] in self?.releases += 1; self?.trace.append("release"); return 0 },
+      observationsInvalidated: { [weak self] in self?.observationInvalidations += 1; self?.trace.append("invalidate") },
       cleanupRequested: { [weak self] reason in
         self?.cleanupReasons.append(reason)
         self?.trace.append("cleanup:\(reason)")
         self?.cleanupWork.append { [weak self] in self?.trace.append("cleanup-finished:\(reason)") }
       },
+      sessionChanged: { [weak self] session in
+        self?.changedSessions.append(session)
+        self?.trace.append("phase:\(session?.id ?? "nil")")
+        self?.onSessionChanged?(session)
+      },
+      desktopAvailability: { [weak self] in self?.availability ?? .unknown },
+      foregroundReady: { [weak self] _ in self?.readyForForeground == true },
+      nativeEventIsCurrent: { [weak self] _, _ in self?.nativeEventsCurrent == true },
       stopped: { [weak self] in self?.stopped = true },
-      execute: { $0() }, deliver: { $0() },
+      sendImage: { [weak self] response, bytes in
+        self?.images.append((response, bytes))
+        self?.trace.append("image:\(response.value["id"]?.intValue ?? -1)")
+      },
+      execute: { $0() }, deliver: { [weak self] work in
+        if self?.holdDelivery == true { self?.deliveries.append(work) } else { work() }
+      },
       schedule: clock.schedule, pendingLimitBytes: pendingLimitBytes
     )
   }
@@ -85,6 +114,20 @@ private final class ServerFixture {
 
   func phase(_ revision: Int = 0, id: String = "native-test") -> [String: JSONValue] {
     ["sessionId": .string(id), "phaseRevision": .integer(Int64(revision))]
+  }
+
+  func setAvailability(_ state: WatchdogAvailability) {
+    availability = state
+    server.setDesktopAvailability(state)
+  }
+
+  func drainDelivery() {
+    while !deliveries.isEmpty { deliveries.removeFirst()() }
+  }
+
+  func snapshot() throws -> ServerSession {
+    guard let session = server.sessionSnapshot() else { throw ServerTestError.failed("Expected a captured synthetic session") }
+    return session
   }
 }
 
@@ -246,8 +289,8 @@ func runServerTests() throws -> Int {
     let fake = ServerFixture()
     let begin = try fake.begin(paused: true)
     try serverExpect(fake.result(begin)?["ok"]?.boolValue == true, "a valid phased session starts")
-    try serverExpect(fake.events.first?.value["event"]?.stringValue == "input_detection", "each phased begin supplies its detection witness")
-    try serverExpect(fake.events.first?.value["alive"]?.boolValue == false, "M1 reports that no event tap exists yet")
+    try serverExpect(fake.events.isEmpty && fake.changedSessions.count == 1 && fake.changedSessions[0]?.paused == true,
+                     "the phase observer receives configuration while only the actual watchdog may publish detector liveness")
     let stale = try fake.request("session.update", ["sessionId": .string("other"), "phaseRevision": .integer(1), "paused": .bool(false)])
     try serverExpect(fake.result(stale)?["code"]?.stringValue == "changed", "a foreign session cannot unpause the holder")
     let update = try fake.request("session.update", ["sessionId": .string("native-test"), "phaseRevision": .integer(2), "paused": .bool(false)])
@@ -689,13 +732,465 @@ func runServerTests() throws -> Int {
     let catalog = try fake.request("unit.catalog-no-session")
     try serverExpect(captured?.session == nil && captured?.isCurrent() == true,
                      "a genuine sessionless catalog retains no app approval or private title authority")
-    _ = try fake.begin()
     var observedStructure = false
     let allowed = captured?.withCurrent { observedStructure = true }
     complete?(.success(ServerReply(fields: ["catalog": .string("structural-only")])))
     try serverExpect(allowed == true && observedStructure && fake.result(catalog)?["ok"]?.boolValue == true &&
                      fake.result(catalog)?["catalog"]?.stringValue == "structural-only",
-                     "a catalog captured without a session can finish safely without borrowing a later session's approvals")
+                     "a catalog captured without a session can finish safely without borrowing any app approval")
+  }
+
+  try test {
+    let fake = ServerFixture()
+    try serverExpect(fake.changedSessions.isEmpty, "constructing the dispatcher does not publish invented session phases")
+    let begin = try fake.begin()
+    let first = try fake.snapshot()
+    let beginPhase = fake.trace.firstIndex(of: "phase:native-test"), beginReply = fake.trace.firstIndex(of: "response:\(begin)")
+    try serverExpect(fake.changedSessions.count == 1 && fake.changedSessions[0]?.observationEpoch == first.observationEpoch &&
+                     beginPhase != nil && beginReply != nil && beginPhase! < beginReply!,
+                     "accepted begin publishes the committed private phase before its acknowledgment")
+    fake.trace.removeAll()
+    let update = try fake.request("session.update", ["sessionId": .string(first.id), "phaseRevision": .integer(0), "paused": .bool(true), "escStops": .bool(false)])
+    let changed = try fake.snapshot()
+    let observed = fake.changedSessions.last ?? nil
+    let updatePhase = fake.trace.firstIndex(of: "phase:native-test"), updateReply = fake.trace.firstIndex(of: "response:\(update)")
+    try serverExpect(fake.changedSessions.count == 2 && changed.observationEpoch != first.observationEpoch && changed.paused &&
+                     observed?.observationEpoch == changed.observationEpoch && updatePhase != nil && updateReply != nil && updatePhase! < updateReply!,
+                     "same-revision updates notify the newly committed authority and stop-key phase before acknowledgment")
+    let before = fake.changedSessions.count
+    _ = try fake.request("session.update", ["sessionId": .string("foreign"), "phaseRevision": .integer(0)])
+    _ = try fake.request("session.begin", ["sessionId": .string("malformed")])
+    try serverExpect(fake.changedSessions.count == before, "refused begin/update calls do not change the tap's observed phase")
+    fake.trace.removeAll()
+    let end = try fake.request("session.end")
+    let endPhase = fake.trace.firstIndex(of: "phase:nil"), endReply = fake.trace.firstIndex(of: "response:\(end)")
+    try serverExpect(fake.changedSessions.count == before + 1 && fake.changedSessions.last! == nil &&
+                     endPhase != nil && endReply != nil && endPhase! < endReply!,
+                     "session end retires the observed phase before its acknowledgment")
+    _ = try fake.begin()
+    let closing = fake.changedSessions.count
+    fake.server.close(); fake.server.close()
+    try serverExpect(fake.changedSessions.count == closing + 1 && fake.changedSessions.last! == nil,
+                     "closing an active dispatcher publishes one final retired phase")
+  }
+
+  try test {
+    for transition in ["update", "same-id-restart", "other-id"] {
+      let fake = ServerFixture()
+      _ = try fake.begin()
+      let old = try fake.snapshot()
+      if transition == "update" {
+        _ = try fake.request("session.update", ["sessionId": .string(old.id), "phaseRevision": .integer(0)])
+      } else {
+        _ = try fake.request("session.end")
+        _ = try fake.begin(transition == "same-id-restart" ? old.id : "next-task")
+      }
+      let current = try fake.snapshot()
+      let releases = fake.releases, invalidations = fake.observationInvalidations
+      let cleanups = fake.cleanupReasons, events = fake.events.count, phases = fake.changedSessions.count
+      let input = Event(name: "user_input", fields: ["kind": .string("pointer"), "dx": .integer(9), "dy": .integer(1)])
+      let detection = Event(name: "input_detection", fields: ["alive": .bool(false), "reason": .string("tap_disabled")])
+      try serverExpect(!fake.server.handlePhysicalInput(input, expected: old, takeover: true) &&
+                       !fake.server.stopFromPhysicalInput(by: "chord", expected: old) &&
+                       !fake.server.pauseForEnvironment(expected: old, reason: "secure_input") &&
+                       !fake.server.publishNativeEvent(detection, expected: old),
+                       "native callbacks captured before an authority boundary cannot bind a successor with reused wire IDs")
+      try serverExpect(fake.releases == releases && fake.observationInvalidations == invalidations &&
+                       fake.cleanupReasons == cleanups && fake.events.count == events && fake.changedSessions.count == phases &&
+                       fake.server.sessionSnapshot()?.observationEpoch == current.observationEpoch && fake.server.sessionSnapshot()?.paused == false,
+                       "a stale native callback has no release, cleanup, publication or pause side effect")
+    }
+  }
+
+  try test {
+    let fake = ServerFixture()
+    _ = try fake.begin()
+    let current = try fake.snapshot()
+    var wrongEpoch = current; wrongEpoch.observationEpoch = UUID()
+    var wrongRevision = current; wrongRevision.revision = 1
+    var wrongID = ServerSession(id: "foreign-id", revision: current.revision, mode: current.mode, paused: current.paused,
+      approved: current.approved, vectorPids: current.vectorPids, vectorWindowIds: current.vectorWindowIds,
+      overlayWindowIds: current.overlayWindowIds, escStops: current.escStops, stopChord: current.stopChord)
+    wrongID.observationEpoch = current.observationEpoch
+    let releases = fake.releases, events = fake.events.count
+    for expected in [wrongEpoch, wrongRevision, wrongID] {
+      try serverExpect(!fake.server.stopFromPhysicalInput(by: "chord", expected: expected),
+                       "native stop requires the exact observation epoch, wire ID and phase revision independently")
+    }
+    try serverExpect(fake.releases == releases && fake.events.count == events && fake.server.sessionSnapshot()?.paused == false,
+                     "partially matching native identity cannot halt or publish into the current phase")
+  }
+
+  try test {
+    let fake = ServerFixture()
+    _ = try fake.begin()
+    let expected = try fake.snapshot()
+    var oldContext: OperationContext?
+    var complete: Dispatcher.Completion?
+    var posted = 0
+    fake.server.register(op: "input.hold", deadlineMs: 1000) { _, context, done in oldContext = context; complete = done }
+    fake.server.register(op: "input.key", deadlineMs: 1000) { _, context, done in
+      _ = context.withCurrent { posted += 1 }; done(.success(ServerReply()))
+    }
+    let hold = try fake.request("input.hold", fake.phase())
+    let queued = try fake.request("input.key", fake.phase())
+    let releases = fake.releases
+    var safeAtEvent = false
+    fake.onEvent = { event in
+      guard event.value["event"] == .string("user_input") else { return }
+      var lateDown = false
+      let admitted = oldContext?.withCurrent { lateDown = true }
+      safeAtEvent = fake.releases > releases && oldContext?.isCurrent() == false && admitted == false && !lateDown &&
+        fake.server.sessionSnapshot()?.paused == true && fake.server.sessionSnapshot()?.escStops == false
+    }
+    let input = Event(name: "user_input", fields: ["kind": .string("pointer"), "dx": .integer(9), "dy": .integer(1)])
+    try serverExpect(fake.server.handlePhysicalInput(input, expected: expected, takeover: true), "the current physical event is accepted")
+    try serverExpect(safeAtEvent && fake.events.last?.value == input.value && fake.result(hold)?["code"]?.stringValue == "paused" &&
+                     fake.result(queued)?["ok"]?.boolValue == false && posted == 0,
+                     "physical take-over releases and fences old input before exact event publication or queued mutation admission")
+    let responses = fake.responses.filter { $0.value["id"]?.intValue == hold }.count
+    complete?(.success(ServerReply())); complete?(.failure(ServerFailure(code: "failed", message: "Retired hold.")))
+    try serverExpect(fake.responses.filter { $0.value["id"]?.intValue == hold }.count == responses,
+                     "late physical-pause completions cannot answer twice or revive their old context")
+  }
+
+  try test {
+    let fake = ServerFixture()
+    _ = try fake.begin(paused: true)
+    _ = try fake.request("session.update", ["sessionId": .string("native-test"), "phaseRevision": .integer(0), "escStops": .bool(false)])
+    let expected = try fake.snapshot()
+    let releases = fake.releases
+    var releasedBeforeEvent = false
+    fake.onEvent = { event in
+      if event.value == .object(["event": .string("stop"), "by": .string("chord")]) { releasedBeforeEvent = fake.releases > releases }
+    }
+    try serverExpect(fake.server.stopFromPhysicalInput(by: "chord", expected: expected),
+                     "the genuine stop chord remains active in a paused non-Escape phase")
+    try serverExpect(releasedBeforeEvent && fake.events.last?.value == .object(["event": .string("stop"), "by": .string("chord")]),
+                     "matching ups precede a chord stop event with no key identity or payload")
+    var posted = 0
+    fake.server.register(op: "input.key", deadlineMs: 1000) { _, context, done in
+      _ = context.withCurrent { posted += 1 }; done(.success(ServerReply()))
+    }
+    _ = try fake.request("heartbeat")
+    _ = try fake.request("session.update", ["sessionId": .string("native-test"), "phaseRevision": .integer(1), "paused": .bool(false)])
+    let stopped = try fake.snapshot()
+    let blocked = try fake.request("input.key", fake.phase(stopped.revision ?? 0, id: stopped.id))
+    try serverExpect(fake.result(blocked)?["code"]?.stringValue == "stopped" && posted == 0,
+                     "heartbeat and session metadata updates cannot clear a native stop latch")
+    _ = try fake.begin()
+    let fresh = try fake.request("input.key", fake.phase())
+    try serverExpect(fake.result(fresh)?["ok"]?.boolValue == true && posted == 1,
+                     "only a fresh available session can rearm native input after a chord stop")
+  }
+
+  try test {
+    let fake = ServerFixture()
+    _ = try fake.begin()
+    let expected = try fake.snapshot()
+    var context: OperationContext?
+    var complete: Dispatcher.Completion?
+    fake.server.register(op: "input.hold", deadlineMs: 1000) { _, current, done in context = current; complete = done }
+    let hold = try fake.request("input.hold", fake.phase())
+    let releases = fake.releases
+    try serverExpect(fake.server.pauseForEnvironment(expected: expected, reason: "secure_input") &&
+                     fake.releases > releases && context?.isCurrent() == false && fake.result(hold)?["code"]?.stringValue == "paused",
+                     "an exact environment pause releases pending input before retiring its native continuation")
+    let paused = try fake.snapshot()
+    try serverExpect(paused.paused && !paused.escStops, "environment pauses disable working-only Escape consumption")
+    let unpause = try fake.request("session.update", ["sessionId": .string(paused.id), "phaseRevision": .integer(1), "paused": .bool(false)])
+    try serverExpect(fake.result(unpause)?["code"]?.stringValue == "changed",
+                     "a metadata update cannot rearm an environment-paused native phase")
+    complete?(.success(ServerReply()))
+    try serverExpect(fake.responses.filter { $0.value["id"]?.intValue == hold }.count == 1,
+                     "a late environment-paused completion has no publication authority")
+  }
+
+  try test {
+    let fake = ServerFixture()
+    var oldContext: OperationContext?
+    var complete: Dispatcher.Completion?
+    fake.server.register(op: "unit.catalog-before-authority", deadlineMs: 1000, requiresSession: false) { _, context, done in
+      oldContext = context; complete = done
+    }
+    let request = try fake.request("unit.catalog-before-authority")
+    _ = try fake.begin()
+    var accessed = false
+    let allowed = oldContext?.withCurrent { accessed = true }
+    complete?(.success(ServerReply(fields: ["oldCatalog": .bool(true)])))
+    try serverExpect(fake.result(request)?["code"]?.stringValue == "changed" && oldContext?.isCurrent() == false && allowed == false && !accessed &&
+                     fake.responses.filter { $0.value["id"]?.intValue == request }.count == 1,
+                     "owner observations captured without a session cannot outlive a newly created native authority")
+  }
+
+  try test {
+    let fake = ServerFixture()
+    _ = try fake.begin()
+    var ownerReads = 0, mutations = 0, safeReads = 0
+    fake.server.register(op: "apps.list", deadlineMs: 1000, requiresSession: false) { _, _, done in ownerReads += 1; done(.success(ServerReply())) }
+    fake.server.register(op: "cursor.position", deadlineMs: 1000, requiresSession: false) { _, _, done in ownerReads += 1; done(.success(ServerReply())) }
+    fake.server.register(op: "input.key", deadlineMs: 1000, requiresAvailableDesktop: false) { _, _, done in mutations += 1; done(.success(ServerReply())) }
+    fake.server.register(op: "unit.public-status", deadlineMs: 1000, requiresSession: false, requiresAvailableDesktop: false) { _, _, done in
+      safeReads += 1; done(.success(ServerReply(fields: ["status": .string("public-only")])))
+    }
+    fake.setAvailability(.locked)
+    for op in ["apps.list", "cursor.position"] {
+      let request = try fake.request(op)
+      try serverExpect(fake.result(request)?["code"]?.stringValue == "locked", "locked desktops refuse owner observations even when registered sessionless")
+    }
+    let input = try fake.request("input.key", fake.phase())
+    let safe = try fake.request("unit.public-status")
+    let permissions = try fake.request("permissions.status")
+    try serverExpect(fake.result(input)?["code"]?.stringValue == "locked" && ownerReads == 0 && mutations == 0 &&
+                     fake.result(safe)?["ok"]?.boolValue == true && safeReads == 1 && fake.result(permissions)?["ok"]?.boolValue == true,
+                     "a known mutation cannot opt out of the lock guard, while explicitly safe metadata remains available")
+  }
+
+  try test {
+    let fake = ServerFixture()
+    fake.setAvailability(.locked)
+    let begin = try fake.begin()
+    let locked = try fake.snapshot()
+    try serverExpect(fake.result(begin)?["ok"]?.boolValue == true && locked.paused && !locked.escStops,
+                     "locked session configuration remains grant-free but cannot enable input or consume working Escape")
+    _ = try fake.request("session.end")
+    _ = try fake.begin()
+    try serverExpect(try fake.snapshot().paused, "ending and recreating a session cannot clear the independently observed lock state")
+    fake.setAvailability(.available)
+    try serverExpect(try fake.snapshot().paused, "an unlock observation never silently resumes a paused task")
+    let update = try fake.request("session.update", ["sessionId": .string("native-test"), "phaseRevision": .integer(1), "paused": .bool(false), "escStops": .bool(true)])
+    try serverExpect(fake.result(update)?["code"]?.stringValue == "changed", "unlock still requires a fresh begin rather than a metadata-only unpause")
+    var posted = 0
+    fake.server.register(op: "input.key", deadlineMs: 1000) { _, context, done in _ = context.withCurrent { posted += 1 }; done(.success(ServerReply())) }
+    _ = try fake.begin()
+    let fresh = try fake.request("input.key", fake.phase())
+    try serverExpect(fake.result(fresh)?["ok"]?.boolValue == true && posted == 1,
+                     "a fresh available session can rearm only after the independent lock state clears")
+  }
+
+  try test {
+    let fake = ServerFixture()
+    _ = try fake.begin()
+    fake.server.register(op: "unit.owner-read", deadlineMs: 1000, requiresSession: false) { _, _, done in
+      done(.success(ServerReply(fields: ["private": .bool(true)])))
+    }
+    fake.setAvailability(.unknown)
+    let read = try fake.request("unit.owner-read")
+    fake.clock.advance(1000)
+    try serverExpect(fake.result(read)?["code"]?.stringValue == "unavailable" && fake.result(read)?["private"] == nil &&
+                     !fake.events.contains { $0.value["event"] == .string("locked") && $0.value["locked"] == .bool(true) },
+                     "missing desktop evidence fails closed without inventing a factual physical-lock event")
+    _ = try fake.begin()
+    let configured = try fake.snapshot()
+    try serverExpect(configured.paused && !configured.escStops, "an unknown desktop can configure only an inert paused native phase")
+  }
+
+  try test {
+    for image in [false, true] {
+      for transition in ["update", "replacement", "locked"] {
+        let fake = ServerFixture()
+        _ = try fake.begin()
+        fake.holdDelivery = true
+        fake.server.register(op: "unit.queued-private-result", deadlineMs: 1000, requiresSession: false) { _, _, done in
+          done(.success(ServerReply(fields: ["privateTitle": .string("RETIRED_SYNTHETIC_DELIVERY")], image: image ? Data([1, 2, 3]) : nil)))
+        }
+        let request = try fake.request("unit.queued-private-result")
+        if transition == "update" {
+          _ = try fake.request("session.update", ["sessionId": .string("native-test"), "phaseRevision": .integer(0)])
+        } else if transition == "replacement" { _ = try fake.begin() }
+        else { fake.setAvailability(.locked) }
+        fake.drainDelivery()
+        try serverExpect(fake.result(request)?["code"]?.stringValue == (transition == "locked" ? "locked" : "changed") &&
+                         !fake.responses.contains { $0.value["privateTitle"] != nil } && fake.images.isEmpty &&
+                         fake.responses.filter { $0.value["id"]?.intValue == request }.count == 1,
+                         "actual JSON/image delivery rechecks session and desktop authority after asynchronous output queuing")
+      }
+    }
+  }
+
+  try test {
+    let fake = ServerFixture()
+    _ = try fake.begin()
+    let expected = try fake.snapshot()
+    let stale = Event(name: "input_detection", fields: ["alive": .bool(false), "reason": .string("secure_input"),
+                                                       "holder": .string("retired-synthetic-owner")])
+    fake.holdDelivery = true
+    try serverExpect(fake.server.publishNativeEvent(stale, expected: expected), "a current native observation may enqueue its bounded event")
+    _ = try fake.begin()
+    fake.drainDelivery()
+    try serverExpect(!fake.events.contains { $0.value["holder"] == .string("retired-synthetic-owner") } &&
+                     !fake.server.publishNativeEvent(stale, expected: expected),
+                     "queued and newly arriving native metadata from a retired phase cannot publish into its successor")
+  }
+
+  try test {
+    for transition in ["stop", "physical", "environment", "locked"] {
+      let fake = ServerFixture()
+      _ = try fake.begin()
+      let expected = try fake.snapshot()
+      var old: OperationContext?, current: OperationContext?
+      var late: Dispatcher.Completion?, finish: Dispatcher.Completion?
+      fake.server.register(op: "unit.old-native", deadlineMs: 1000, requiresSession: false) { _, context, done in old = context; late = done }
+      fake.server.register(op: "unit.new-native", deadlineMs: 1000) { _, context, done in current = context; finish = done }
+      let request = try fake.request("unit.old-native")
+      switch transition {
+      case "stop": _ = fake.server.stopFromPhysicalInput(by: "chord", expected: expected)
+      case "physical": _ = fake.server.handlePhysicalInput(Event(name: "user_input", fields: ["kind": .string("key")]), expected: expected, takeover: true)
+      case "environment": _ = fake.server.pauseForEnvironment(expected: expected, reason: "secure_input")
+      default: fake.setAvailability(.locked); fake.setAvailability(.available)
+      }
+      _ = try fake.begin()
+      let successor = try fake.snapshot()
+      _ = try fake.request("unit.new-native")
+      let cleanup = fake.cleanupReasons
+      late?(.success(ServerReply(fields: ["retired": .bool(true)])))
+      late?(.failure(ServerFailure(code: "failed", message: "Late retired native failure.")))
+      try serverExpect(old?.isCurrent() == false && current?.isCurrent() == true && fake.cleanupReasons == cleanup &&
+                       fake.server.sessionSnapshot()?.observationEpoch == successor.observationEpoch &&
+                       fake.responses.filter { $0.value["id"]?.intValue == request }.count == 1 &&
+                       !fake.responses.contains { $0.value["retired"] != nil },
+                       "late native completions after stop/pause/lock cannot answer twice, clean up or inhibit a reused-ID successor")
+      finish?(.success(ServerReply()))
+    }
+  }
+
+  try test {
+    let recovering = ServerFixture()
+    recovering.readyForForeground = false
+    _ = try recovering.begin()
+    var posted = 0
+    recovering.server.register(op: "input.key", deadlineMs: 1000) { _, context, done in
+      _ = context.withCurrent { posted += 1 }; done(.success(ServerReply()))
+    }
+    let waiting = try recovering.request("input.key", recovering.phase())
+    recovering.clock.advance(499)
+    try serverExpect(recovering.result(waiting) == nil && posted == 0,
+                     "a fresh foreground phase waits without posting while its native detection challenge is pending")
+    recovering.readyForForeground = true
+    recovering.clock.advance(1)
+    try serverExpect(recovering.result(waiting)?["ok"]?.boolValue == true && posted == 1,
+                     "the same live request can proceed once its own bounded native readiness challenge succeeds")
+    let unavailable = ServerFixture()
+    unavailable.readyForForeground = false
+    _ = try unavailable.begin()
+    unavailable.server.register(op: "input.key", deadlineMs: 1000) { _, _, _ in posted += 100 }
+    let denied = try unavailable.request("input.key", unavailable.phase())
+    unavailable.clock.advance(999)
+    try serverExpect(unavailable.result(denied) == nil, "the readiness grace is bounded and does not invent an early successful probe")
+    unavailable.clock.advance(1)
+    try serverExpect(unavailable.result(denied)?["code"]?.stringValue == "paused" && posted == 1,
+                     "missing native detection readiness fails closed after its one-second grace without entering the handler")
+  }
+
+  try test {
+    let fake = ServerFixture()
+    fake.readyForForeground = false
+    _ = try fake.begin()
+    var posted = 0
+    fake.server.register(op: "input.key", deadlineMs: 1000) { _, _, _ in posted += 1 }
+    let waiting = try fake.request("input.key", fake.phase())
+    _ = try fake.request("session.update", ["sessionId": .string("native-test"), "phaseRevision": .integer(0)])
+    fake.readyForForeground = true
+    fake.clock.advance(1000)
+    try serverExpect(fake.result(waiting)?["code"]?.stringValue == "changed" && posted == 0 &&
+                     fake.responses.filter { $0.value["id"]?.intValue == waiting }.count == 1,
+                     "a native readiness retry belongs to one phase and cannot admit old input after a same-revision update")
+  }
+
+  try test {
+    let disabled = ServerFixture()
+    _ = try disabled.begin()
+    _ = try disabled.request("session.update", ["sessionId": .string("native-test"), "phaseRevision": .integer(0), "escStops": .bool(false)])
+    let expected = try disabled.snapshot()
+    let releases = disabled.releases, events = disabled.events.count
+    try serverExpect(!disabled.server.stopFromPhysicalInput(by: "esc", expected: expected) &&
+                     !disabled.server.stopFromPhysicalInput(by: "raw-key-53", expected: expected) &&
+                     disabled.releases == releases && disabled.events.count == events,
+                     "nonworking Escape and unknown stop sources never consume a key or alter native input authority")
+    let working = ServerFixture()
+    _ = try working.begin()
+    let current = try working.snapshot()
+    try serverExpect(working.server.stopFromPhysicalInput(by: "esc", expected: current) &&
+                     working.events.last?.value == .object(["event": .string("stop"), "by": .string("esc")]),
+                     "a genuine enabled working Escape publishes only its bounded stop reason")
+  }
+
+  try test {
+    let fake = ServerFixture()
+    _ = try fake.begin()
+    let expected = try fake.snapshot()
+    let releases = fake.releases
+    let observation = Event(name: "user_input", fields: ["kind": .string("pointer"), "dx": .integer(1), "dy": .integer(0)])
+    try serverExpect(fake.server.handlePhysicalInput(observation, expected: expected, takeover: false) &&
+                     fake.events.last?.value == observation.value && fake.releases == releases && fake.server.sessionSnapshot()?.paused == false,
+                     "a non-takeover physical observation publishes its displacement without inventing an input pause")
+    let count = fake.events.count
+    try serverExpect(!fake.server.handlePhysicalInput(Event(name: "stop", fields: ["by": .string("chord")]), expected: expected, takeover: true) &&
+                     fake.events.count == count && fake.releases == releases,
+                     "the physical observation hook cannot substitute another event kind for the separately gated stop path")
+  }
+
+  try test {
+    let fake = ServerFixture()
+    _ = try fake.begin("café")
+    let current = try fake.snapshot()
+    var normalized = ServerSession(id: "cafe\u{301}", revision: current.revision, mode: current.mode, paused: current.paused,
+      approved: current.approved, vectorPids: current.vectorPids, vectorWindowIds: current.vectorWindowIds,
+      overlayWindowIds: current.overlayWindowIds, escStops: current.escStops, stopChord: current.stopChord)
+    normalized.observationEpoch = current.observationEpoch
+    let releases = fake.releases, events = fake.events.count
+    try serverExpect(current.id == normalized.id && !current.id.utf8.elementsEqual(normalized.id.utf8) &&
+                     !fake.server.stopFromPhysicalInput(by: "chord", expected: normalized) &&
+                     fake.releases == releases && fake.events.count == events && fake.server.sessionSnapshot()?.paused == false,
+                     "canonical Unicode equivalence cannot replace the byte-exact native session identity of a stop callback")
+  }
+
+  try test {
+    let fake = ServerFixture()
+    _ = try fake.begin()
+    let expected = try fake.snapshot()
+    let event = Event(name: "input_detection", fields: ["alive": .bool(false), "reason": .string("tap_disabled")])
+    fake.holdDelivery = true
+    try serverExpect(fake.server.publishNativeEvent(event, expected: expected), "a fresh native liveness observation can enter the output queue")
+    fake.nativeEventsCurrent = false
+    fake.drainDelivery()
+    try serverExpect(!fake.events.contains { $0.value == event.value } && !fake.server.publishNativeEvent(event, expected: expected),
+                     "the producer's fresh metadata predicate is checked both before enqueue and at actual native-event delivery")
+  }
+
+  try test {
+    let fake = ServerFixture()
+    _ = try fake.begin()
+    let expected = try fake.snapshot()
+    var context: OperationContext?
+    var complete: Dispatcher.Completion?
+    fake.server.register(op: "input.hold", deadlineMs: 1000) { _, current, done in context = current; complete = done }
+    let hold = try fake.request("input.hold", fake.phase())
+    fake.readyForForeground = false
+    var posted = false
+    let admitted = context?.withCurrent { posted = true }
+    try serverExpect(context?.isCurrent() == false && admitted == false && !posted,
+                     "fresh detection failure fences an active posting continuation before the asynchronous pause callback arrives")
+    _ = fake.server.pauseForEnvironment(expected: expected, reason: "detection")
+    fake.readyForForeground = true
+    complete?(.success(ServerReply()))
+    try serverExpect(fake.result(hold)?["code"]?.stringValue == "paused" && fake.responses.filter { $0.value["id"]?.intValue == hold }.count == 1,
+                     "late readiness recovery cannot revive an already environment-paused native continuation")
+  }
+
+  try test {
+    let fake = ServerFixture(initialAvailability: .unknown)
+    let begin = try fake.begin()
+    try serverExpect(fake.result(begin)?["ok"]?.boolValue == true, "initial unknown metadata does not break grant-free session negotiation")
+    var posted = 0
+    fake.server.register(op: "input.key", deadlineMs: 1000) { _, context, done in _ = context.withCurrent { posted += 1 }; done(.success(ServerReply())) }
+    let waiting = try fake.request("input.key", fake.phase())
+    fake.clock.advance(99)
+    try serverExpect(fake.result(waiting) == nil && posted == 0, "initial unknown desktop state cannot enter any native posting handler")
+    fake.setAvailability(.available)
+    fake.clock.advance(1)
+    try serverExpect(fake.result(waiting)?["ok"]?.boolValue == true && posted == 1,
+                     "an initial healthy desktop sample may complete negotiation without pretending a physical-lock pause occurred")
   }
 
   return count

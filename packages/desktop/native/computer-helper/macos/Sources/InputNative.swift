@@ -740,6 +740,10 @@ final class InputNative {
         return resolveKey(name, flags: flags, translate: snapshot.translate)
     }
 
+    /// M8 shares the observed keyboard table without constructing a posting source or remapping physical codes.
+    static func keyboardFingerprint() -> String? { try? KeyboardSnapshot().fingerprint }
+    static func physicalKeyCode(_ name: String) -> UInt16? { namedKey(name) }
+
     static func resolveKey(_ name: String, flags: UInt64,
                            translate: (UInt16, UInt64) -> String?) -> (code: UInt16, flags: UInt64)? {
         if let named = namedKey(name) { return (named, flags) }

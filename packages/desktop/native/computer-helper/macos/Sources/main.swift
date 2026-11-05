@@ -33,7 +33,7 @@ private final class HelperServer {
     private let requestIngress = DispatchQueue(label: "ai.vector.computer.request-ingress")
     private let errorOutput = DispatchQueue(label: "ai.vector.computer.protocol-errors")
     private let reader = FrameReader()
-    private let writer = FrameWriter(descriptor: 3)
+    private let writer = FrameWriter(descriptor: 3, writeTimeoutMs: 50)
     private let permissionService = PermissionService()
     private let captureRegistry = CaptureRegistry()
     private lazy var captureService = CaptureService(registry: captureRegistry)
@@ -43,6 +43,27 @@ private final class HelperServer {
     private let clipboardService = ClipboardService()
     private let clipboardLifecycle = DispatchQueue(label: "ai.vector.computer.clipboard-lifecycle")
     private let lifecycleCleanup = DispatchQueue(label: "ai.vector.computer.lifecycle-cleanup")
+    private let monitoring = DispatchQueue(label: "ai.vector.computer.monitoring")
+    private lazy var eventTap = EventTapMonitor(
+        session: { [weak self] in self?.dispatcher?.sessionSnapshot() },
+        input: { [weak self] event, session, takeover in
+            self?.dispatcher?.handlePhysicalInput(event, expected: session, takeover: takeover) ?? false
+        },
+        stop: { [weak self] by, session in self?.dispatcher?.stopFromPhysicalInput(by: by, expected: session) ?? false },
+        status: { [weak self] status in self?.watchdog.observeTap(status) }
+    )
+    private lazy var watchdog = WatchdogService(
+        session: { [weak self] in self?.dispatcher?.sessionSnapshot() },
+        tapStatus: { [weak self] in self?.eventTap.status() ?? EventTapStatus(generation: 0, installed: false, enabled: false) },
+        recoverTap: { [weak self] in self?.eventTap.recover() },
+        probeTap: { [weak self] nonce in self?.eventTap.probe(challenge: nonce) },
+        pause: { [weak self] session, reason in self?.dispatcher?.pauseForEnvironment(expected: session, reason: reason) ?? false },
+        emit: { [weak self] event, session in _ = self?.dispatcher?.publishNativeEvent(event, expected: session) },
+        environmentChanged: { [weak self] _ in
+            guard let self else { return }
+            self.dispatcher?.setDesktopAvailability(self.watchdog.availability())
+        }
+    )
     private var cleanupFailed = false
     private var displayCallbackRegistered = false
     private var activeSpaceObserver: NSObjectProtocol?
@@ -57,6 +78,9 @@ private final class HelperServer {
     }
 
     func start(parent: HelperParent) throws {
+        // Native notifications may publish as soon as monitors start. Their writes must already be nonblocking.
+        let flags = fcntl(3, F_GETFL)
+        guard flags >= 0, fcntl(3, F_SETFL, flags | O_NONBLOCK) == 0 else { throw HelperCommand.UsageError.invalidArguments }
         let permissions = permissionService
         let capture = captureService
         let accessibility = accessibilityService
@@ -64,6 +88,9 @@ private final class HelperServer {
         let apps = appsService
         let clipboard = clipboardService
         let clipboardQueue = clipboardLifecycle
+        let tap = eventTap
+        let watchdog = watchdog
+        let monitoring = monitoring
         let server = Dispatcher(
             responsible: HelperLifecycle.isSelfResponsible(),
             architecture: architecture,
@@ -80,6 +107,15 @@ private final class HelperServer {
                 apps.invalidateObservations()
             },
             cleanupRequested: { _ in clipboardQueue.async { clipboard.cleanup() } },
+            sessionChanged: { _ in monitoring.async { tap.refreshSession(); watchdog.refreshSession() } },
+            desktopAvailability: { watchdog.availability() },
+            foregroundReady: { watchdog.foregroundReady($0) },
+            nativeEventIsCurrent: { event, session in
+                if ["locked", "input_detection"].contains(event.value["event"]?.stringValue ?? "") {
+                    return watchdog.eventIsCurrent(event: event, expected: session)
+                }
+                return true
+            },
             stopped: { [weak self] in self?.finish(code: 0) },
             sendImage: { [weak self] response, image in
                 guard let self else { return }
@@ -156,12 +192,12 @@ private final class HelperServer {
             clipboardQueue.async { clipboard.write(request.args, context: context, completion: done) }
         }
         dispatcher = server
+        tap.start()
+        watchdog.start()
         inputs.reconcileOnStart()
         watchers = try HelperLifecycle.installWorkerWatchers(parent: parent) { [weak self] in
             self?.finish(code: 0)
         }
-        let flags = fcntl(3, F_GETFL)
-        guard flags >= 0, fcntl(3, F_SETFL, flags | O_NONBLOCK) == 0 else { throw HelperCommand.UsageError.invalidArguments }
         let input = DispatchSource.makeReadSource(fileDescriptor: 3, queue: DispatchQueue(label: "ai.vector.computer.protocol"))
         input.setEventHandler { [weak self] in self?.read() }
         source = input
@@ -278,6 +314,8 @@ private final class HelperServer {
         finished.enter()
         lifecycleCleanup.async {
             // Revoke each native service's own admission before Dispatcher close can wait on an in-flight RPC.
+            self.watchdog.close()
+            self.eventTap.close()
             self.inputService.close()
             self.appsService.close()
             self.dispatcher?.close(reason: "lifecycle")

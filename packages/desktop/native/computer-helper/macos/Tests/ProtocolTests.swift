@@ -198,6 +198,60 @@ func runProtocolTests() throws -> Int {
     } catch let error as POSIXError where error.code == .ETIMEDOUT {}
     checks += 1
 
+    let firstEntered = DispatchSemaphore(value: 0)
+    let releaseFirst = DispatchSemaphore(value: 0)
+    let firstFinished = DispatchSemaphore(value: 0)
+    let contentionLock = NSLock()
+    var contentionCalls = 0
+    var contentionOutput = Data()
+    var firstFailure: Error?
+    let contended = FrameWriter(writeTimeoutMs: 50, writeBytes: { bytes in
+        contentionLock.lock()
+        contentionCalls += 1
+        let first = contentionCalls == 1
+        contentionLock.unlock()
+        if first {
+            firstEntered.signal()
+            guard releaseFirst.wait(timeout: .now() + .milliseconds(500)) == .success else { throw POSIXError(.ETIMEDOUT) }
+        }
+        contentionLock.lock()
+        contentionOutput.append(contentsOf: bytes)
+        contentionLock.unlock()
+        return bytes.count
+    })
+    defer { releaseFirst.signal() }
+    DispatchQueue.global(qos: .userInitiated).async {
+        defer { firstFinished.signal() }
+        do { try contended.write(success) }
+        catch { contentionLock.lock(); firstFailure = error; contentionLock.unlock() }
+    }
+    let entered = firstEntered.wait(timeout: .now() + .milliseconds(500)) == .success
+    var contentionTimedOut = false
+    if entered {
+        do { try contended.write(event) }
+        catch let error as POSIXError where error.code == .ETIMEDOUT { contentionTimedOut = true }
+        catch {}
+    }
+    contentionLock.lock()
+    let rejectedWithoutWrite = contentionCalls == 1 && contentionOutput.isEmpty
+    contentionLock.unlock()
+    releaseFirst.signal()
+    let joined = firstFinished.wait(timeout: .now() + .milliseconds(500)) == .success
+    try protocolCheck(entered && joined && contentionTimedOut && rejectedWithoutWrite,
+                      "A contending writer must use its own total deadline without entering the held callback or writing a partial frame.")
+    contentionLock.lock()
+    let firstTimedOut = (firstFailure as? POSIXError)?.code == .ETIMEDOUT
+    contentionLock.unlock()
+    try protocolCheck(firstTimedOut, "The first writer's expired budget must not restart after its blocked callback returns.")
+    let freshEvent = Event(name: "stop", fields: ["by": .string("chord")])
+    try contended.write(freshEvent)
+    let contentionFrames = try protocolFrames(contentionOutput)
+    try protocolCheck(contentionFrames.count == 2 &&
+                      (try decoder.decode(Response.self, from: contentionFrames[0])) == success &&
+                      (try decoder.decode(Event.self, from: contentionFrames[1])) == freshEvent,
+                      "A writer timeout must release serialization for a fresh write without leaking the rejected frame.")
+    checks += 1
+
     var concurrentOutput = Data()
     let concurrent = FrameWriter(writeBytes: { bytes in
         let count = min(5, bytes.count)
