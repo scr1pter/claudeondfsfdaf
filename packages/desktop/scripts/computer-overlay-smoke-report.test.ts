@@ -10,6 +10,8 @@ import {
   COMPUTER_SMOKE_CONTROLLER_MARK,
   COMPUTER_SMOKE_CONTROLLER_STEPS,
   parseComputerSmokeController,
+  COMPUTER_SMOKE_GEOMETRY_MARK,
+  parseComputerSmokeGeometry,
   type ComputerSmokeControllerStep,
   COMPUTER_SMOKE_FAILURE_MARK,
   COMPUTER_SMOKE_PHASES,
@@ -47,6 +49,40 @@ const parse = (value: unknown, options: { platform?: string; exitCode?: number; 
     exitCode: options.exitCode ?? 0,
     requireNative: options.requireNative,
   })
+
+test("geometry diagnostics retain only bounded owned-window rectangles and a fixed kind", () => {
+  const value = {
+    protocol: 1,
+    window: 3,
+    kind: "left",
+    expected: { x: -1920, y: 12, width: 12, height: 1056 },
+    actual: { x: -1920, y: 12, width: 64, height: 1056 },
+  }
+  const line = (value: unknown) => COMPUTER_SMOKE_GEOMETRY_MARK + JSON.stringify(value)
+  const parsed = parseComputerSmokeGeometry(line(value))
+  expect(parsed).toEqual(value)
+  expect(parsed).not.toBe(value)
+  expect(parsed.expected).not.toBe(value.expected)
+  for (const patch of [
+    { protocol: 2 },
+    { window: -1 },
+    { window: 129 },
+    { window: 0.5 },
+    { kind: "private-window-title" },
+    { kind: ["left"] },
+    { expected: { ...value.expected, title: "PRIVATE" } },
+    { actual: { ...value.actual, path: "PRIVATE" } },
+    { expected: { x: 0, y: 0, width: 1 } },
+    { actual: { ...value.actual, width: 0 } },
+    { actual: { ...value.actual, x: 1_000_001 } },
+    { actual: { ...value.actual, y: Number.POSITIVE_INFINITY } },
+    { actual: { ...value.actual, width: "64" } },
+    { display: "PRIVATE" },
+  ])
+    expect(() => parseComputerSmokeGeometry(line({ ...value, ...patch }))).toThrow()
+  expect(() => parseComputerSmokeGeometry(line(value) + " ".repeat(513))).toThrow()
+  expect(() => parseComputerSmokeGeometry(COMPUTER_SMOKE_GEOMETRY_MARK + "{")).toThrow()
+})
 
 describe("fixed real Electron computer smoke reports", () => {
   test("checks fixed banner title separately from delivered Working state and enabled Stop", () => {

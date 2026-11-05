@@ -35,6 +35,8 @@ import {
   COMPUTER_SMOKE_MARK,
   COMPUTER_SMOKE_PHASE_MARK,
   COMPUTER_SMOKE_CONTROLLER_MARK,
+  COMPUTER_SMOKE_GEOMETRY_MARK,
+  parseComputerSmokeGeometry,
   type ComputerSmokeControllerStep,
   COMPUTER_SMOKE_FAILURE_MARK,
   COMPUTER_SMOKE_EXCEPTION_MARK,
@@ -230,10 +232,36 @@ async function properties() {
     .flatMap((display) => ComputerOverlayLayout.stripBounds(display).map((strip) => strip.bounds))
   expected.push(ComputerOverlayLayout.bannerBounds(screen.getPrimaryDisplay(), ComputerOverlayLayout.BANNER.max))
   const rectangle = (value: Electron.Rectangle) => JSON.stringify([value.x, value.y, value.width, value.height])
-  check(
-    "overlay-bounds",
-    expected.every((bounds) => owned.some((record) => rectangle(record.window.getBounds()) === rectangle(bounds))),
+  const boundsMatch = expected.every((bounds) =>
+    owned.some((record) => rectangle(record.window.getBounds()) === rectangle(bounds)),
   )
+  let geometry = 0
+  if (!boundsMatch)
+    for (const [window, record] of owned.entries()) {
+      if (geometry >= 8) break
+      try {
+        const index = expected.findIndex(
+          (bounds) =>
+            record.config.x === bounds.x &&
+            record.config.y === bounds.y &&
+            record.config.width === bounds.width &&
+            record.config.height === bounds.height,
+        )
+        if (index < 0) continue
+        const bounds = expected[index]!
+        const actual = record.window.getBounds()
+        if (rectangle(actual) === rectangle(bounds)) continue
+        const kind =
+          index === expected.length - 1 ? "banner" : (["top", "right", "bottom", "left"] as const)[index % 4]!
+        const line =
+          COMPUTER_SMOKE_GEOMETRY_MARK + JSON.stringify({ protocol: 1, window, kind, expected: bounds, actual })
+        process.stdout.write(COMPUTER_SMOKE_GEOMETRY_MARK + JSON.stringify(parseComputerSmokeGeometry(line)) + "\n")
+      } catch {
+        // Missing windows or out-of-bound diagnostics cannot replace the exact assertion below.
+      }
+      geometry++
+    }
+  check("overlay-bounds", boundsMatch)
   check(
     "overlay-window-properties",
     owned.every(

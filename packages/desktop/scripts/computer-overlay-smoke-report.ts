@@ -159,6 +159,57 @@ export function parseComputerSmokeReport(
 export const COMPUTER_SMOKE_PHASE_MARK = "computer-smoke-phase "
 export const COMPUTER_SMOKE_FAILURE_MARK = "computer-smoke-failure "
 export const COMPUTER_SMOKE_CONTROLLER_MARK = "computer-smoke-controller "
+export const COMPUTER_SMOKE_GEOMETRY_MARK = "computer-smoke-geometry "
+export type ComputerSmokeGeometry = {
+  protocol: 1
+  window: number
+  kind: "top" | "right" | "bottom" | "left" | "banner"
+  expected: { x: number; y: number; width: number; height: number }
+  actual: { x: number; y: number; width: number; height: number }
+}
+/** Failure-only owned-window coordinates; no display identifiers or window content. */
+export function parseComputerSmokeGeometry(line: string): ComputerSmokeGeometry {
+  if (!line.startsWith(COMPUTER_SMOKE_GEOMETRY_MARK) || line.length > 512)
+    throw new Error("The computer smoke geometry receipt is invalid.")
+  const value: unknown = JSON.parse(line.slice(COMPUTER_SMOKE_GEOMETRY_MARK.length))
+  const rectangle = (value: unknown) =>
+    record(value) &&
+    exact(value, ["x", "y", "width", "height"]) &&
+    Object.keys(value).length === 4 &&
+    [value.x, value.y, value.width, value.height].every(
+      (number) => typeof number === "number" && Number.isSafeInteger(number) && Math.abs(number) <= 1_000_000,
+    ) &&
+    Number(value.width) > 0 &&
+    Number(value.height) > 0
+  if (
+    !record(value) ||
+    !exact(value, ["protocol", "window", "kind", "expected", "actual"]) ||
+    Object.keys(value).length !== 5 ||
+    value.protocol !== 1 ||
+    typeof value.window !== "number" ||
+    !Number.isSafeInteger(value.window) ||
+    value.window < 0 ||
+    value.window > 128 ||
+    typeof value.kind !== "string" ||
+    !["top", "right", "bottom", "left", "banner"].includes(value.kind) ||
+    !rectangle(value.expected) ||
+    !rectangle(value.actual)
+  )
+    throw new Error("The computer smoke geometry receipt is invalid.")
+  const copy = (value: Record<string, unknown>) => ({
+    x: Number(value.x),
+    y: Number(value.y),
+    width: Number(value.width),
+    height: Number(value.height),
+  })
+  return {
+    protocol: 1,
+    window: value.window,
+    kind: value.kind as ComputerSmokeGeometry["kind"],
+    expected: copy(value.expected as Record<string, unknown>),
+    actual: copy(value.actual as Record<string, unknown>),
+  }
+}
 export const COMPUTER_SMOKE_CONTROLLER_STEPS = [
   "underlay",
   "stop-acquire",

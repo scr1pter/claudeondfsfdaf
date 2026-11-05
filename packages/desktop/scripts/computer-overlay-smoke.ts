@@ -12,6 +12,8 @@ import {
   COMPUTER_SMOKE_MARK,
   COMPUTER_SMOKE_PHASE_MARK,
   COMPUTER_SMOKE_CONTROLLER_MARK,
+  COMPUTER_SMOKE_GEOMETRY_MARK,
+  parseComputerSmokeGeometry,
   parseComputerSmokeController,
   type ComputerSmokeControllerStep,
   COMPUTER_SMOKE_FAILURE_MARK,
@@ -169,6 +171,7 @@ export async function runComputerOverlaySmoke(args = process.argv.slice(2)) {
     let lastPhase: ComputerSmokeLastPhase = "none",
       hint: ComputerSmokeRuntimeHint = "none"
     let lastController: ComputerSmokeControllerStep | undefined
+    const geometryWindows = new Set<number>()
     let forcedCause: ComputerSmokeFailureCause | undefined
     const streamState: { childFailure?: ComputerSmokeFailureDiagnostic; loaderStarted: boolean; exception: boolean } = {
       loaderStarted: false,
@@ -269,6 +272,18 @@ export async function runComputerOverlaySmoke(args = process.argv.slice(2)) {
             if (lastPhase === "cleanup" || lastPhase === "report") cancelSample()
             if (hint === "loader_pending") hint = "none"
             process.stdout.write(COMPUTER_SMOKE_PHASE_MARK + JSON.stringify({ protocol: 1, phase: lastPhase }) + "\n")
+          } else if (line.startsWith(COMPUTER_SMOKE_GEOMETRY_MARK)) {
+            if (
+              lastPhase !== "properties" ||
+              streamState.childFailure ||
+              streamState.exception ||
+              geometryWindows.size >= 8
+            )
+              throw new Error("The geometry receipt is out of phase or exceeds its bound.")
+            const geometry = parseComputerSmokeGeometry(line)
+            if (geometryWindows.has(geometry.window)) throw new Error("The geometry receipt is duplicated.")
+            geometryWindows.add(geometry.window)
+            process.stdout.write(COMPUTER_SMOKE_GEOMETRY_MARK + JSON.stringify(geometry) + "\n")
           } else if (line.startsWith(COMPUTER_SMOKE_CONTROLLER_MARK)) {
             if (lastPhase !== "controller" || streamState.childFailure || streamState.exception)
               throw new Error("The controller receipt is out of phase.")
@@ -343,6 +358,7 @@ export async function runComputerOverlaySmoke(args = process.argv.slice(2)) {
     if (
       pendingLine.startsWith(COMPUTER_SMOKE_PHASE_MARK) ||
       pendingLine.startsWith(COMPUTER_SMOKE_CONTROLLER_MARK) ||
+      pendingLine.startsWith(COMPUTER_SMOKE_GEOMETRY_MARK) ||
       pendingLine.startsWith(COMPUTER_SMOKE_FAILURE_MARK) ||
       pendingLine.startsWith(COMPUTER_SMOKE_EXCEPTION_MARK) ||
       pendingLine.startsWith(COMPUTER_SMOKE_LOADER_STARTED)

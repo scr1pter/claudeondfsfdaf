@@ -253,8 +253,11 @@
     "archiveSourceDigest": "b5c627541099fc4336a40961eb07e7ae2d39d3135f7fcc4407ea8979ba208496",
     "currentSourceDigest": "b5c627541099fc4336a40961eb07e7ae2d39d3135f7fcc4407ea8979ba208496",
     "sourceDrift": false,
-    "frozenLockSha256": "8aba65bc20cf71e0774f8378a8d5da1b465774e5ea7253ece155c19e580bcfa1",
-    "candidateSelfCheck": true
+    "candidateSelfCheck": true,
+    "frozenDependencyLock": {
+      "path": "bun.lock",
+      "sha256": "8aba65bc20cf71e0774f8378a8d5da1b465774e5ea7253ece155c19e580bcfa1"
+    }
   },
   "admission": {
     "helperVersion": "1.0.14",
