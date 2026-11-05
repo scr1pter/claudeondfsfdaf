@@ -224,10 +224,13 @@ bool same_context(const TokenIdentity& left, const TokenIdentity& right) {
 }
 
 std::vector<unsigned char> information(HANDLE token, TOKEN_INFORMATION_CLASS kind) {
-  DWORD size = 0;
-  if (GetTokenInformation(token, kind, nullptr, 0, &size) || GetLastError() != ERROR_INSUFFICIENT_BUFFER || size == 0 || size > 65'536) invalid();
+  const auto fixed = vector::computer::fixed_token_information_size(kind);
+  DWORD size = fixed;
+  if (!fixed && (GetTokenInformation(token, kind, nullptr, 0, &size) || GetLastError() != ERROR_INSUFFICIENT_BUFFER || size == 0)) invalid();
+  if (size > 65'536) invalid();
   std::vector<unsigned char> result(size);
-  if (!GetTokenInformation(token, kind, result.data(), size, &size) || size > result.size()) invalid();
+  if (!GetTokenInformation(token, kind, result.data(), size, &size) || !size || size > result.size() || (fixed && size != fixed)) invalid();
+  result.resize(size);
   return result;
 }
 

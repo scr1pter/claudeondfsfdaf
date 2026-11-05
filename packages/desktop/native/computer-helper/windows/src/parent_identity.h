@@ -9,6 +9,19 @@
 #include <vector>
 
 namespace vector::computer {
+// Fixed-size token classes must be queried with their SDK buffer size. In particular,
+// TokenElevation can reject a zero-length sizing request with ERROR_BAD_LENGTH.
+constexpr DWORD fixed_token_information_size(TOKEN_INFORMATION_CLASS kind) noexcept {
+  switch (kind) {
+    case TokenStatistics: return static_cast<DWORD>(sizeof(TOKEN_STATISTICS));
+    case TokenElevation: return static_cast<DWORD>(sizeof(TOKEN_ELEVATION));
+    case TokenSessionId:
+    case TokenUIAccess:
+    case TokenIsAppContainer: return static_cast<DWORD>(sizeof(DWORD));
+    default: return 0;
+  }
+}
+
 struct TokenIdentity {
   std::vector<unsigned char> user;
   std::vector<unsigned char> logon;

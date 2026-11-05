@@ -54,15 +54,19 @@ bool same_install_parent(const std::wstring& helper, const std::wstring& parent)
 }
 
 std::vector<unsigned char> information(HANDLE token, TOKEN_INFORMATION_CLASS kind) {
-  DWORD size = 0;
-  const auto first = GetTokenInformation(token, kind, nullptr, 0, &size);
-  const auto first_error = first ? DWORD{ERROR_SUCCESS} : GetLastError();
-  if (first || first_error != ERROR_INSUFFICIENT_BUFFER || size == 0)
-    throw TokenObservationError(static_cast<DWORD>(kind), first_error, TokenObservationError::Step::size);
+  const auto fixed = fixed_token_information_size(kind);
+  DWORD size = fixed;
+  if (!fixed) {
+    const auto first = GetTokenInformation(token, kind, nullptr, 0, &size);
+    const auto first_error = first ? DWORD{ERROR_SUCCESS} : GetLastError();
+    if (first || first_error != ERROR_INSUFFICIENT_BUFFER || size == 0)
+      throw TokenObservationError(static_cast<DWORD>(kind), first_error, TokenObservationError::Step::size);
+  }
   if (size > 65'536) throw TokenObservationError(static_cast<DWORD>(kind), ERROR_INSUFFICIENT_BUFFER, TokenObservationError::Step::capacity);
   std::vector<unsigned char> value(size);
   if (!GetTokenInformation(token, kind, value.data(), size, &size)) throw TokenObservationError(static_cast<DWORD>(kind), GetLastError(), TokenObservationError::Step::read);
-  if (size > value.size()) throw TokenObservationError(static_cast<DWORD>(kind), ERROR_INSUFFICIENT_BUFFER, TokenObservationError::Step::extent);
+  if (!size || size > value.size() || (fixed && size != fixed)) throw TokenObservationError(static_cast<DWORD>(kind), ERROR_BAD_LENGTH, TokenObservationError::Step::extent);
+  value.resize(size);
   return value;
 }
 
