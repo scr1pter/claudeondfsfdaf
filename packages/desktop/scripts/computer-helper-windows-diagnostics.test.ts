@@ -36,7 +36,7 @@ test("Windows unit catalog binds existing fixed native suite and failure labels"
   const stages = [...caller.matchAll(/stage = "([a-z-]+)"/g)].map((match) => match[1]!)
   const exits = [...caller.matchAll(/"((?:bootstrap|helper)-child-exit-[a-z-]+)"/g)].map((match) => match[1]!)
   expect([...new Set([...stages, ...exits])].toSorted()).toEqual([...WINDOWS_CALLER_STAGES].toSorted())
-  const forwarded = integration.match(/constexpr std::array<std::string_view, 45> stages\{([^;]+)\};/s)?.[1] ?? ""
+  const forwarded = integration.match(/constexpr std::array<std::string_view, 46> stages\{([^;]+)\};/s)?.[1] ?? ""
   expect([...forwarded.matchAll(/"([a-z-]+)"/g)].map((match) => match[1])).toEqual([...WINDOWS_CALLER_STAGES])
 })
 
@@ -227,21 +227,31 @@ test("outer context receipts retain only token/default-DACL facts and preserve r
 })
 
 test("unknown access observations preserve an exact closed cause without inventing denied access", async () => {
-  const caller = await readFile(new URL("../native/computer-helper/windows/tests/caller.cpp", import.meta.url), "utf8")
-  const native = [...new Set([...caller.matchAll(/cause = '([a-z])'/g)].map((match) => match[1]!))].toSorted()
+  const caller =
+    (await readFile(new URL("../native/computer-helper/windows/tests/caller.cpp", import.meta.url), "utf8")) +
+    (await readFile(new URL("../native/computer-helper/windows/tests/caller_token_acl.h", import.meta.url), "utf8"))
+  const native = [
+    ...new Set(
+      [...caller.matchAll(/cause\s*=\s*([^;\n]+)/g)].flatMap((match) =>
+        [...match[1]!.matchAll(/'([a-z])'/g)].map((value) => value[1]!),
+      ),
+    ),
+  ].toSorted()
   expect(native).toEqual(Object.keys(WINDOWS_DACL_REASONS).toSorted())
   for (const [code, reason] of Object.entries(WINDOWS_DACL_REASONS)) {
-    const text = `vector-caller-context initial r=restricted d=parent o=u a=${code === "s" ? "g" : "n"} c=${code}\n`
+    const text = `vector-caller-context initial r=restricted d=parent o=u a=${code === "s" || code === "b" ? "g" : "n"} c=${code}\n`
     const reader = new WindowsDiagnosticReader("caller")
     reader.consume(bytes(text), "stderr")
     expect(reader.finish().context?.defaultDaclReason).toBe(reason)
-    expect(reader.finish().context?.defaultDaclProcessAll).toBe(code === "s" ? "granted" : "unknown")
+    expect(reader.finish().context?.defaultDaclProcessAll).toBe(code === "s" || code === "b" ? "granted" : "unknown")
     expect(windowsContextReceipt(reader.finish().context!)).toBe(text)
   }
   for (const text of [
     "vector-caller-context initial r=restricted d=parent o=u a=n c=secret",
     "vector-caller-context initial r=restricted d=parent o=u a=g c=r",
     "vector-caller-context initial r=restricted d=parent o=n a=n c=s",
+    "vector-caller-context initial r=linked d=parent o=u a=g c=b",
+    "vector-caller-context initial r=restricted d=parent o=u a=n c=b",
   ]) {
     const reader = new WindowsDiagnosticReader("caller")
     reader.consume(bytes(text + "\n"), "stderr")

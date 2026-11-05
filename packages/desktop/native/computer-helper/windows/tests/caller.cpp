@@ -2,6 +2,7 @@
 #include "identity.h"
 #include "parent_identity.h"
 #include "caller_desktop.h"
+#include "caller_token_acl.h"
 #include <tlhelp32.h>
 #include <algorithm>
 #include <array>
@@ -280,57 +281,11 @@ TokenIdentity token_identity(HANDLE token) {
   return result;
 }
 
-struct CandidateAccess { char owner = 'n'; char process_dacl = 'n'; char cause = 'q'; };
-CandidateAccess candidate_access(HANDLE token) noexcept {
-  CandidateAccess result;
-  try {
-    const auto user = information(token, TokenUser), owner = information(token, TokenOwner);
-    if (user.size() < sizeof(TOKEN_USER) || owner.size() < sizeof(TOKEN_OWNER)) { result.cause = 'o'; return result; }
-    const auto user_sid = reinterpret_cast<const TOKEN_USER*>(user.data())->User.Sid;
-    const auto owner_sid = reinterpret_cast<const TOKEN_OWNER*>(owner.data())->Owner;
-    if (!IsValidSid(user_sid) || !IsValidSid(owner_sid)) { result.cause = 'o'; return result; }
-    result.owner = EqualSid(user_sid, owner_sid) ? 'u' : 'x';
-    const auto group = information(token, TokenPrimaryGroup), defaults = information(token, TokenDefaultDacl);
-    if (group.size() < sizeof(TOKEN_PRIMARY_GROUP)) { result.cause = 'g'; return result; }
-    if (defaults.size() < sizeof(TOKEN_DEFAULT_DACL)) { result.cause = 'm'; return result; }
-    const auto group_sid = reinterpret_cast<const TOKEN_PRIMARY_GROUP*>(group.data())->PrimaryGroup;
-    const auto source = reinterpret_cast<const TOKEN_DEFAULT_DACL*>(defaults.data())->DefaultDacl;
-    if (!IsValidSid(group_sid)) { result.cause = 'g'; return result; }
-    if (!source) { result.cause = 'z'; return result; }
-    if (!IsValidAcl(source)) { result.cause = 'i'; return result; }
-    // This private clone is only for a conservative DACL-only AccessCheck; no token changes.
-    result.cause = 'e';
-    std::vector<unsigned char> acl(source->AclSize);
-    std::memcpy(acl.data(), source, acl.size());
-    const auto copied = reinterpret_cast<PACL>(acl.data());
-    for (DWORD index = 0; index < static_cast<DWORD>(copied->AceCount); ++index) {
-      void* raw = nullptr;
-      if (!GetAce(copied, index, &raw)) { result.cause = 'i'; return result; }
-      const auto ace = static_cast<ACCESS_ALLOWED_ACE*>(raw);
-      if (static_cast<size_t>(ace->Header.AceSize) < sizeof(ACCESS_ALLOWED_ACE)) { result.cause = 'i'; return result; }
-      if (ace->Header.AceType != ACCESS_ALLOWED_ACE_TYPE && ace->Header.AceType != ACCESS_DENIED_ACE_TYPE) { result.cause = 't'; return result; }
-      if (ace->Mask & (GENERIC_READ | GENERIC_WRITE | GENERIC_EXECUTE)) { result.cause = 'r'; return result; }
-      if (ace->Mask & GENERIC_ALL) ace->Mask = (ace->Mask & ~GENERIC_ALL) | PROCESS_ALL_ACCESS;
-    }
-    SECURITY_DESCRIPTOR descriptor{};
-    if (!InitializeSecurityDescriptor(&descriptor, SECURITY_DESCRIPTOR_REVISION) ||
-        !SetSecurityDescriptorOwner(&descriptor, owner_sid, FALSE) || !SetSecurityDescriptorGroup(&descriptor, group_sid, FALSE) ||
-        !SetSecurityDescriptorDacl(&descriptor, TRUE, copied, FALSE)) { result.cause = 'v'; return result; }
-    HANDLE raw = nullptr;
-    if (!DuplicateTokenEx(token, TOKEN_QUERY | TOKEN_IMPERSONATE, nullptr, SecurityImpersonation, TokenImpersonation, &raw)) { result.cause = 'p'; return result; }
-    winrt::handle impersonation{raw};
-    GENERIC_MAPPING mapping{0, 0, 0, PROCESS_ALL_ACCESS};
-    alignas(PRIVILEGE_SET) std::array<unsigned char, 1024> privileges{};
-    DWORD size = static_cast<DWORD>(privileges.size()), granted = 0; BOOL allowed = FALSE;
-    if (!AccessCheck(&descriptor, impersonation.get(), PROCESS_ALL_ACCESS, &mapping,
-                     reinterpret_cast<PPRIVILEGE_SET>(privileges.data()), &size, &granted, &allowed)) { result.cause = 'a'; return result; }
-    result.process_dacl = allowed && (granted & PROCESS_ALL_ACCESS) == PROCESS_ALL_ACCESS ? 'g' : 'd';
-    result.cause = 's';
-  } catch (...) { /* Unknown observations never change a token or a launch decision. */ }
-  return result;
-}
+using CandidateAccess = vector::computer::caller_token_acl::Observation;
+CandidateAccess candidate_access(HANDLE token) noexcept { return vector::computer::caller_token_acl::observe(token); }
 
-winrt::handle medium_token(const TokenIdentity& original, const char*& selected_route) {
+winrt::handle medium_token(const TokenIdentity& original, const char*& selected_route, bool& repaired, const char*& stage) {
+  repaired = false;
   HANDLE raw = nullptr;
   const DWORD access = TOKEN_QUERY | TOKEN_DUPLICATE | TOKEN_ASSIGN_PRIMARY | TOKEN_ADJUST_DEFAULT;
   if (!OpenProcessToken(GetCurrentProcess(), access, &raw)) invalid();
@@ -370,6 +325,9 @@ winrt::handle medium_token(const TokenIdentity& original, const char*& selected_
   const auto observed = token_identity(candidate.get());
   if (!vector::computer::serving_token_allowed(observed) || !same_context(original, observed)) invalid();
   selected_route = "restricted";
+  stage = "restricted-default-dacl";
+  repaired = vector::computer::caller_token_acl::ensure_owned_restricted(candidate.get());
+  if (!vector::computer::same_token(observed, token_identity(candidate.get()))) invalid();
   return candidate;
 }
 
@@ -418,7 +376,7 @@ void close_standard_handles() {
 
 void report_context(HANDLE sink, const char* route, const char* desktop, CandidateAccess access) noexcept;
 
-Child launch(const std::wstring& executable, std::wstring command, HANDLE token, HANDLE bootstrap, bool serving, const char*& stage, const char*& selected_desktop, HANDLE context_output, const char* selected_route) {
+Child launch(const std::wstring& executable, std::wstring command, HANDLE token, HANDLE bootstrap, bool serving, const char*& stage, const char*& selected_desktop, HANDLE context_output, const char* selected_route, bool repaired) {
   const auto original_command = command;
   const auto launch_stage = stage;
   winrt::handle own_token;
@@ -460,7 +418,12 @@ Child launch(const std::wstring& executable, std::wstring command, HANDLE token,
   startup.StartupInfo.lpDesktop = desktop->path.data();
   PROCESS_INFORMATION process{};
   const DWORD flags = EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW;
-  if (context_output) report_context(context_output, selected_route, selected_desktop, candidate_access(candidate));
+  auto access = candidate_access(candidate);
+  if (selected_route && std::string_view(selected_route) == "restricted") {
+    if (access.process_dacl != 'g') invalid();
+    if (repaired) access.cause = 'b';
+  }
+  if (context_output) report_context(context_output, selected_route, selected_desktop, access);
   BOOL success = token
     ? CreateProcessAsUserW(token, executable.c_str(), command.data(), nullptr, nullptr, TRUE, flags, nullptr, nullptr, &startup.StartupInfo, &process)
     : CreateProcessW(executable.c_str(), command.data(), nullptr, nullptr, TRUE, flags, nullptr, nullptr, &startup.StartupInfo, &process);
@@ -560,6 +523,7 @@ int wmain(int count, wchar_t** argv) {
   const char* stage = "arguments";
   const char* token_route = nullptr;
   const char* desktop_route = nullptr;
+  bool token_repaired = false;
   winrt::handle diagnostic;
   const auto report = [&](const char* failure_stage) {
     report_startup_failure(diagnostic.get(), internal, failure_stage, internal || !desktop_route ? token_route : nullptr, internal ? desktop_route : nullptr);
@@ -628,7 +592,7 @@ int wmain(int count, wchar_t** argv) {
     if (!vector::computer::serving_token_allowed(own_token)) {
       stage = "restricted-token";
       if (internal || !own_token.elevated || own_token.integrity < SECURITY_MANDATORY_HIGH_RID || own_token.ui_access || own_token.app_container) invalid();
-      const auto token = medium_token(own_token, token_route);
+      const auto token = medium_token(own_token, token_route, token_repaired, stage);
       HANDLE raw = nullptr;
       if (!DuplicateHandle(GetCurrentProcess(), GetCurrentProcess(), GetCurrentProcess(), &raw,
                            SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, TRUE, 0)) invalid();
@@ -640,7 +604,7 @@ int wmain(int count, wchar_t** argv) {
         L" --bootstrap-handle " + std::to_wstring(reinterpret_cast<std::uintptr_t>(high_handle.get())) +
         (serving ? std::wstring(L" --stdio") + (test_elevated_token ? L" --test-elevated-token" : L"") : privileged ? L" --self-test=privileged" : L" --probe --json");
       stage = "bootstrap-launch";
-      auto child = launch(files.self.path, command, token.get(), high_handle.get(), serving, stage, desktop_route, internal ? nullptr : diagnostic.get(), token_route);
+      auto child = launch(files.self.path, command, token.get(), high_handle.get(), serving, stage, desktop_route, internal ? nullptr : diagnostic.get(), token_route, token_repaired);
       high_handle.close();
       stage = "bootstrap-current";
       const auto child_token = vector::computer::observe_token(child.process.get());
@@ -662,7 +626,7 @@ int wmain(int count, wchar_t** argv) {
       ? L" --stdio --parent-pid " + std::to_wstring(GetCurrentProcessId()) + (test_elevated_token ? L" --test-elevated-token" : L"")
       : privileged ? L" --self-test=privileged --target \"" + target + L"\"" : std::wstring(L" --probe --json"));
     stage = "helper-launch";
-    auto child = launch(files.helper.path, command, nullptr, nullptr, serving, stage, desktop_route, internal ? nullptr : diagnostic.get(), token_route);
+    auto child = launch(files.helper.path, command, nullptr, nullptr, serving, stage, desktop_route, internal ? nullptr : diagnostic.get(), token_route, false);
     stage = "child-exit";
     DWORD native_exit = 1;
     const auto code = wait_child(child, privileged, &native_exit);

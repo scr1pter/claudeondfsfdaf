@@ -3,6 +3,7 @@
 #include "protocol.h"
 #include "lifecycle.h"
 #include "caller_desktop.h"
+#include "caller_token_acl.h"
 #include <tlhelp32.h>
 #include <algorithm>
 #include <array>
@@ -46,6 +47,87 @@ void desktop_security_boundaries() {
   require_integration(!valid(L"O:SYD:P" + dacl + L"S:(ML;;NW;;;ME)"), "integration.desktop-exact-owner");
   require_integration(!valid(L"O:" + user + L"D:P" + dacl + L"S:(ML;;NW;;;HI)") && !valid(L"O:" + user + L"D:P" + dacl),
     "integration.desktop-medium-label-required");
+}
+void token_acl_boundaries() {
+  namespace fixture = caller_token_acl;
+  std::vector<unsigned char> zero_groups(sizeof(DWORD));
+  require_integration(fixture::sid_groups(zero_groups).empty(), "integration.token-acl-zero-restricted-sids");
+  zero_groups[0] = 1;
+  bool bad_groups = false; try { (void)fixture::sid_groups(zero_groups); } catch (...) { bad_groups = true; }
+  require_integration(bad_groups, "integration.token-acl-malformed-groups-refusal");
+  std::array<unsigned char, 4> short_sid{};
+  require_integration(!fixture::sid_fits(short_sid.data(), short_sid.size()), "integration.token-acl-truncated-sid-refusal");
+  PSID raw = nullptr;
+  require_integration(ConvertStringSidToSidW(L"S-1-5-21-1-2-3-1001", &raw) != FALSE, "integration.token-acl-test-sid");
+  caller_desktop::Local close{raw};
+  const auto first = static_cast<const unsigned char*>(raw);
+  const std::vector<unsigned char> user(first, first + GetLengthSid(raw));
+  std::vector<unsigned char> original(512);
+  const auto source = reinterpret_cast<PACL>(original.data());
+  require_integration(InitializeAcl(source, static_cast<DWORD>(original.size()), ACL_REVISION_DS) &&
+    AddAccessDeniedAceEx(source, ACL_REVISION_DS, 0, GENERIC_WRITE, raw) &&
+    AddAccessAllowedAceEx(source, ACL_REVISION_DS, 0, GENERIC_READ | GENERIC_EXECUTE | PROCESS_QUERY_LIMITED_INFORMATION, raw),
+    "integration.token-acl-test-source");
+  const auto untouched = original;
+  bool bad_user = false; try { (void)fixture::append_user(source, std::vector<unsigned char>(4)); } catch (...) { bad_user = true; }
+  require_integration(bad_user && !fixture::exact_append(source, source, std::vector<unsigned char>(4)), "integration.token-acl-truncated-sid-refusal");
+  const auto lower = fixture::lower_acl(source);
+  void* deny = nullptr; void* allow = nullptr;
+  require_integration(lower.incomplete && GetAce(reinterpret_cast<PACL>(const_cast<unsigned char*>(lower.bytes.data())), 0, &deny) &&
+    GetAce(reinterpret_cast<PACL>(const_cast<unsigned char*>(lower.bytes.data())), 1, &allow) &&
+    static_cast<ACCESS_ALLOWED_ACE*>(deny)->Mask == PROCESS_ALL_ACCESS &&
+    static_cast<ACCESS_ALLOWED_ACE*>(allow)->Mask == PROCESS_QUERY_LIMITED_INFORMATION && original == untouched,
+    "integration.token-acl-conservative-lower-bound");
+  auto appended = fixture::append_user(source, user);
+  const auto target = reinterpret_cast<PACL>(appended.data());
+  require_integration(fixture::exact_append(source, target, user) && target->AclRevision == ACL_REVISION_DS && original == untouched,
+    "integration.token-acl-exact-single-user-append");
+  void* added = nullptr;
+  require_integration(GetAce(target, source->AceCount, &added) != FALSE, "integration.token-acl-appended-ace");
+  const auto added_ace = static_cast<ACCESS_ALLOWED_ACE*>(added);
+  added_ace->Mask = GENERIC_READ;
+  require_integration(!fixture::exact_append(source, target, user), "integration.token-acl-rejects-weak-or-wrong-append");
+  added_ace->Mask = GENERIC_ALL;
+  const auto added_sid = reinterpret_cast<unsigned char*>(&added_ace->SidStart);
+  added_sid[user.size() - 1] ^= 1;
+  require_integration(!fixture::exact_append(source, target, user), "integration.token-acl-rejects-weak-or-wrong-append");
+  added_sid[user.size() - 1] ^= 1;
+  void* old_prefix = nullptr;
+  require_integration(GetAce(target, 0, &old_prefix) != FALSE, "integration.token-acl-appended-ace");
+  const auto old_deny = static_cast<ACCESS_ALLOWED_ACE*>(old_prefix);
+  const auto original_mask = old_deny->Mask; old_deny->Mask ^= PROCESS_QUERY_LIMITED_INFORMATION;
+  require_integration(!fixture::exact_append(source, target, user), "integration.token-acl-preserves-existing-denies");
+  old_deny->Mask = original_mask;
+  const auto twice = fixture::append_user(target, user);
+  require_integration(!fixture::exact_append(source, reinterpret_cast<PACL>(const_cast<unsigned char*>(twice.data())), user),
+    "integration.token-acl-rejects-multiple-appends");
+  const auto rejects = [](PACL value) { try { (void)fixture::lower_acl(value); } catch (...) { return true; } return false; };
+  std::vector<unsigned char> truncated(sizeof(ACL) + sizeof(ACCESS_ALLOWED_ACE));
+  const auto malformed = reinterpret_cast<PACL>(truncated.data());
+  require_integration(InitializeAcl(malformed, static_cast<DWORD>(truncated.size()), ACL_REVISION) != FALSE, "integration.token-acl-test-source");
+  malformed->AceCount = 1;
+  const auto malformed_ace = reinterpret_cast<ACCESS_ALLOWED_ACE*>(truncated.data() + sizeof(ACL));
+  malformed_ace->Header.AceSize = sizeof(ACCESS_ALLOWED_ACE); malformed_ace->Header.AceType = ACCESS_ALLOWED_ACE_TYPE;
+  require_integration(rejects(malformed), "integration.token-acl-malformed-ace-refusal");
+  auto inherited = original; void* marked = nullptr;
+  require_integration(GetAce(reinterpret_cast<PACL>(inherited.data()), 0, &marked) != FALSE, "integration.token-acl-appended-ace");
+  static_cast<ACE_HEADER*>(marked)->AceFlags = INHERIT_ONLY_ACE;
+  require_integration(rejects(reinterpret_cast<PACL>(inherited.data())), "integration.token-acl-rejects-assignment-flags");
+  static_cast<ACE_HEADER*>(marked)->AceFlags = 0;
+  static_cast<ACE_HEADER*>(marked)->AceType = ACCESS_ALLOWED_CALLBACK_ACE_TYPE;
+  require_integration(rejects(reinterpret_cast<PACL>(inherited.data())) && rejects(nullptr), "integration.token-acl-rejects-unsupported-or-null");
+  PSID creator = nullptr;
+  require_integration(ConvertStringSidToSidW(L"S-1-3-0", &creator) != FALSE, "integration.token-acl-test-sid");
+  caller_desktop::Local close_creator{creator};
+  std::vector<unsigned char> substituted(128); const auto substitution = reinterpret_cast<PACL>(substituted.data());
+  require_integration(InitializeAcl(substitution, static_cast<DWORD>(substituted.size()), ACL_REVISION) &&
+    AddAccessDeniedAce(substitution, ACL_REVISION, GENERIC_ALL, creator), "integration.token-acl-test-source");
+  require_integration(rejects(substitution), "integration.token-acl-rejects-creator-substitution");
+  std::vector<unsigned char> full(65'532); const auto full_acl = reinterpret_cast<PACL>(full.data());
+  require_integration(InitializeAcl(full_acl, static_cast<DWORD>(full.size()), ACL_REVISION) != FALSE, "integration.token-acl-test-source");
+  for (unsigned attempt = 0; attempt < 8192 && AddAccessAllowedAce(full_acl, ACL_REVISION, GENERIC_ALL, raw); ++attempt) {}
+  bool refused = false; try { (void)fixture::append_user(full_acl, user); } catch (...) { refused = true; }
+  require_integration(refused, "integration.token-acl-bounded-overflow-refusal");
 }
 std::wstring wide(std::string_view value) { const auto text = winrt::to_hstring(value); return {text.c_str(), text.size()}; }
 std::filesystem::path own_directory() {
@@ -186,14 +268,14 @@ class Child {
     DWORD received = 0;
     if (!ReadFile(diagnostic.get(), bytes.data(), count, &received, nullptr) || !received || received > count) return;
     diagnostic_bytes += received;
-    constexpr std::array<std::string_view, 45> stages{"layout-image", "layout-name", "layout-self-ancestors", "layout-helper-ancestors",
+    constexpr std::array<std::string_view, 46> stages{"layout-image", "layout-name", "layout-self-ancestors", "layout-helper-ancestors",
       "layout-self-file", "layout-helper-file", "layout-install-root", "arguments", "parent-witness", "apartment", "token", "layout", "ancestors",
       "medium-admission", "restricted-token", "bootstrap-launch", "bootstrap-current", "child-exit", "final-current", "helper-launch", "console-control",
       "bootstrap-child-exit-failure", "helper-child-exit-failure", "bootstrap-child-exit-usage", "helper-child-exit-usage",
       "bootstrap-child-exit-access-violation", "helper-child-exit-access-violation", "bootstrap-child-exit-stack-overflow", "helper-child-exit-stack-overflow", "bootstrap-child-exit-dll-missing", "helper-child-exit-dll-missing",
       "bootstrap-child-exit-dll-initialization", "helper-child-exit-dll-initialization", "bootstrap-child-exit-fast-fail", "helper-child-exit-fast-fail",
       "bootstrap-child-exit-invalid-parameter", "helper-child-exit-invalid-parameter", "bootstrap-child-exit-other", "helper-child-exit-other",
-      "desktop-observation", "desktop-access", "desktop-private-security", "desktop-private-station", "desktop-private-default", "desktop-private-access"};
+      "desktop-observation", "desktop-access", "desktop-private-security", "desktop-private-station", "desktop-private-default", "desktop-private-access", "restricted-default-dacl"};
     for (DWORD index = 0; index < received; ++index) {
       const auto value = bytes[index];
       if (value != '\n') {
@@ -204,7 +286,7 @@ class Child {
       if (!diagnostic_overflow) {
         if (!diagnostic_line.empty() && diagnostic_line.back() == '\r') diagnostic_line.pop_back();
         if (!context_forwarded) for (const auto route : {"serving", "linked", "restricted"}) for (const auto desktop : {"parent", "owned"})
-          for (const auto owner : {'u', 'x', 'n'}) for (const auto access : {'g', 'd', 'n'}) for (const auto cause : {'s', 'q', 'o', 'g', 'm', 'z', 'i', 't', 'r', 'v', 'p', 'a', 'e'}) {
+          for (const auto owner : {'u', 'x', 'n'}) for (const auto access : {'g', 'd', 'n'}) for (const auto cause : {'s', 'q', 'o', 'g', 'm', 'z', 'i', 't', 'r', 'v', 'p', 'a', 'e', 'b'}) {
           const auto fixed = std::string("vector-caller-context initial r=") + route + " d=" + desktop + " o=" + owner + " a=" + access + " c=" + cause;
           if (diagnostic_line == fixed) {
             context_forwarded = true;
@@ -426,6 +508,7 @@ void integration_lifecycle_test(bool parent_death) {
 
 void integration_tests() {
   desktop_security_boundaries();
+  token_acl_boundaries();
   check_parent_only_lifecycle();
   FixtureFiles files;
   {

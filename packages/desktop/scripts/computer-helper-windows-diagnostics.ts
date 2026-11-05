@@ -154,6 +154,22 @@ export const WINDOWS_UNIT_FAILURE_LABELS = [
   "integration.test-elevated-token-emits-no-serving-frames",
   "integration.test-elevated-token-refuses-with-exit-one",
   "integration.test-elevated-token-refuses-within-startup-bound",
+  "integration.token-acl-appended-ace",
+  "integration.token-acl-bounded-overflow-refusal",
+  "integration.token-acl-conservative-lower-bound",
+  "integration.token-acl-exact-single-user-append",
+  "integration.token-acl-malformed-ace-refusal",
+  "integration.token-acl-malformed-groups-refusal",
+  "integration.token-acl-preserves-existing-denies",
+  "integration.token-acl-rejects-assignment-flags",
+  "integration.token-acl-rejects-creator-substitution",
+  "integration.token-acl-rejects-multiple-appends",
+  "integration.token-acl-rejects-unsupported-or-null",
+  "integration.token-acl-rejects-weak-or-wrong-append",
+  "integration.token-acl-test-sid",
+  "integration.token-acl-test-source",
+  "integration.token-acl-truncated-sid-refusal",
+  "integration.token-acl-zero-restricted-sids",
   "integration.unit-image",
   "integration.windows-permanent-feature-limits",
   "integration.windows-permissions",
@@ -279,6 +295,7 @@ export const WINDOWS_CALLER_STAGES = [
   "desktop-private-station",
   "desktop-private-default",
   "desktop-private-access",
+  "restricted-default-dacl",
 ] as const
 export const WINDOWS_DACL_REASONS = {
   s: "complete",
@@ -294,6 +311,7 @@ export const WINDOWS_DACL_REASONS = {
   p: "duplicate-token-failed",
   a: "access-check-failed",
   e: "observer-exception",
+  b: "restricted-user-dacl-repaired",
 } as const
 export type WindowsCallerContext = {
   tokenRoute: "already-serving" | "validated-linked" | "restricted-fallback"
@@ -365,9 +383,13 @@ function windowsCallerContext(value: unknown): WindowsCallerContext {
     !["granted", "denied", "unknown"].includes(body.defaultDaclProcessAll) ||
     typeof body.defaultDaclReason !== "string" ||
     !(Object.values(WINDOWS_DACL_REASONS) as string[]).includes(body.defaultDaclReason) ||
-    (body.defaultDaclReason === "complete"
-      ? body.defaultDaclProcessAll === "unknown" || body.owner === "unknown"
-      : body.defaultDaclProcessAll !== "unknown")
+    (body.defaultDaclReason === "restricted-user-dacl-repaired"
+      ? body.defaultDaclProcessAll !== "granted" ||
+        body.owner === "unknown" ||
+        body.tokenRoute !== "restricted-fallback"
+      : body.defaultDaclReason === "complete"
+        ? body.defaultDaclProcessAll === "unknown" || body.owner === "unknown"
+        : body.defaultDaclProcessAll !== "unknown")
   )
     throw new Error("Invalid Windows caller context.")
   return {
@@ -411,10 +433,17 @@ export class WindowsDiagnosticReader {
           const line = this.lines[stream].replace(/\r$/, "")
           if (!this.value.context && stream === "stderr") {
             const context =
-              /^vector-caller-context initial r=(serving|linked|restricted) d=(parent|owned) o=(u|x|n) a=(g|d|n) c=(s|q|o|g|m|z|i|t|r|v|p|a|e)$/.exec(
+              /^vector-caller-context initial r=(serving|linked|restricted) d=(parent|owned) o=(u|x|n) a=(g|d|n) c=(s|q|o|g|m|z|i|t|r|v|p|a|e|b)$/.exec(
                 line,
               )
-            if (context && (context[5] === "s" ? context[4] !== "n" && context[3] !== "n" : context[4] === "n"))
+            if (
+              context &&
+              (context[5] === "b"
+                ? context[1] === "restricted" && context[4] === "g" && context[3] !== "n"
+                : context[5] === "s"
+                  ? context[4] !== "n" && context[3] !== "n"
+                  : context[4] === "n")
+            )
               this.value.context = {
                 tokenRoute:
                   context[1] === "serving"

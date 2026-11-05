@@ -810,6 +810,7 @@ test("successful direct Windows checks forward only deduplicated fixed Caller co
   const second = "vector-caller-context initial r=serving d=owned o=x a=d c=s"
   const unknown = "vector-caller-context initial r=restricted d=parent o=n a=n c=q"
   const generic = "vector-caller-context initial r=restricted d=parent o=u a=n c=r"
+  const repaired = "vector-caller-context initial r=restricted d=parent o=u a=g c=b"
   const stderr = [
     receipt,
     "PRIVATE",
@@ -817,6 +818,7 @@ test("successful direct Windows checks forward only deduplicated fixed Caller co
     second,
     unknown,
     generic,
+    repaired,
     "vector-caller-context initial r=PRIVATE d=parent o=u a=g c=s",
     "vector-caller-context initial r=linked d=parent o=PRIVATE a=g c=s",
     "vector-caller-context initial r=linked d=parent o=u a=PRIVATE c=s",
@@ -850,7 +852,7 @@ test("successful direct Windows checks forward only deduplicated fixed Caller co
     { timeout: 1000 },
   )
   expect(calls).toBe(4)
-  expect(emitted).toEqual([receipt + "\n", second + "\n", unknown + "\n", generic + "\n"])
+  expect(emitted).toEqual([receipt + "\n", second + "\n", unknown + "\n", generic + "\n", repaired + "\n"])
   expect(emitted.join("")).not.toContain("PRIVATE")
 })
 
