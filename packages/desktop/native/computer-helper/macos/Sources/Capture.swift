@@ -335,9 +335,15 @@ final class CaptureService {
         let displays: [DisplayFingerprint]
         let windows: [WindowFingerprint]
         init(_ inventory: CaptureInventory, overlays: [String]) throws {
-            guard inventory.windows.count <= 4096,
-                  inventory.windows.reduce(0, { $0 + ($1.owner?.process.executable.utf8.count ?? 0) +
-                    ($1.owner?.identity.bundleId.utf8.count ?? 0) + ($1.nonApplicationHost?.executable.utf8.count ?? 0) + 256 }) <= 1024 * 1024 else { throw CaptureService.stale }
+            guard inventory.windows.count <= 4096 else { throw CaptureService.stale }
+            var metadataBytes: Int = 0
+            for window in inventory.windows {
+                metadataBytes += window.owner?.process.executable.utf8.count ?? 0
+                metadataBytes += window.owner?.identity.bundleId.utf8.count ?? 0
+                metadataBytes += window.nonApplicationHost?.executable.utf8.count ?? 0
+                metadataBytes += 256
+                guard metadataBytes <= 1024 * 1024 else { throw CaptureService.stale }
+            }
             displays = inventory.displays.map { DisplayFingerprint(id: $0.id, bounds: $0.bounds, pixels: $0.pixelSize, scale: $0.scale, primary: $0.primary, captureScale: $0.captureScale) }
             windows = inventory.windows.filter { !overlays.contains($0.windowID) }.map { WindowFingerprint(id: $0.windowID, pid: $0.pid, bounds: $0.bounds,
                 onScreen: $0.onScreen, minimized: $0.minimized, alpha: $0.alpha, layer: $0.layer,
@@ -674,9 +680,11 @@ final class CaptureService {
         configuration.ignoreShadowsSingleWindow = true
         if #available(macOS 14.2, *) { configuration.includeChildWindows = false }
         configuration.showsCursor = false; configuration.capturesAudio = false
-        configuration.backgroundColor = CGColor(gray: 0, alpha: 1)
+        let background = CGColor(gray: 0, alpha: 1)
+        configuration.backgroundColor = background
         configuration.sourceRect = request.sourceRect(origin: origin)
         SCScreenshotManager.captureImage(contentFilter: filter, configuration: configuration) { image, _ in
+            defer { withExtendedLifetime(background) {} }
             guard let image else { completion(.failure(CapturePrivacy.failure("capture_unavailable", "ScreenCaptureKit did not return an image."))); return }
             completion(.success(image))
         }
