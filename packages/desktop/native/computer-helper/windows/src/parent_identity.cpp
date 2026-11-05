@@ -55,9 +55,14 @@ bool same_install_parent(const std::wstring& helper, const std::wstring& parent)
 
 std::vector<unsigned char> information(HANDLE token, TOKEN_INFORMATION_CLASS kind) {
   DWORD size = 0;
-  if (GetTokenInformation(token, kind, nullptr, 0, &size) || GetLastError() != ERROR_INSUFFICIENT_BUFFER || size == 0 || size > 65'536) unknown();
+  const auto first = GetTokenInformation(token, kind, nullptr, 0, &size);
+  const auto first_error = first ? DWORD{ERROR_SUCCESS} : GetLastError();
+  if (first || first_error != ERROR_INSUFFICIENT_BUFFER || size == 0)
+    throw TokenObservationError(static_cast<DWORD>(kind), first_error, TokenObservationError::Step::size);
+  if (size > 65'536) throw TokenObservationError(static_cast<DWORD>(kind), ERROR_INSUFFICIENT_BUFFER, TokenObservationError::Step::capacity);
   std::vector<unsigned char> value(size);
-  if (!GetTokenInformation(token, kind, value.data(), size, &size) || size > value.size()) unknown();
+  if (!GetTokenInformation(token, kind, value.data(), size, &size)) throw TokenObservationError(static_cast<DWORD>(kind), GetLastError(), TokenObservationError::Step::read);
+  if (size > value.size()) throw TokenObservationError(static_cast<DWORD>(kind), ERROR_INSUFFICIENT_BUFFER, TokenObservationError::Step::extent);
   return value;
 }
 
@@ -240,7 +245,7 @@ bool parent_evidence_allowed(const ParentEvidence& value) {
 
 TokenIdentity observe_token(HANDLE process) {
   HANDLE raw = nullptr;
-  if (!OpenProcessToken(process, TOKEN_QUERY, &raw)) unknown();
+  if (!OpenProcessToken(process, TOKEN_QUERY, &raw)) throw TokenObservationError(0, GetLastError(), TokenObservationError::Step::open_token);
   winrt::handle token{raw};
   TokenIdentity result;
   auto user = information(token.get(), TokenUser);

@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -17,6 +18,15 @@ struct TokenIdentity {
   bool elevated = true;
   bool ui_access = true;
   bool app_container = true;
+};
+class TokenObservationError final : public std::runtime_error {
+ public:
+  enum class Step { open_token, size, capacity, read, extent };
+  TokenObservationError(DWORD observed_class, DWORD native_error, Step observed_step)
+    : std::runtime_error("The process token information could not be read."), information_class(observed_class), win32_error(native_error), step(observed_step) {}
+  DWORD information_class;
+  DWORD win32_error;
+  Step step;
 };
 
 enum class SignatureState { unsigned_file, valid, invalid };

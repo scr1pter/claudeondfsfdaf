@@ -320,10 +320,14 @@ JsonObject version_document() {
   return value;
 }
 
-std::optional<bool> process_elevated() {
+std::optional<bool> process_elevated(std::string* diagnostic) {
+  if (diagnostic) diagnostic->clear();
   try {
     const auto token = observe_token(GetCurrentProcess());
     return token.elevated || token.integrity >= SECURITY_MANDATORY_HIGH_RID;
+  } catch (const TokenObservationError& error) {
+    if (diagnostic) *diagnostic = "token.step." + std::to_string(static_cast<unsigned>(error.step)) + ".information." + std::to_string(error.information_class) + ".error-" + std::to_string(error.win32_error);
+    return std::nullopt;
   } catch (...) { return std::nullopt; }
 }
 
@@ -343,8 +347,13 @@ int run_command(const Command& command, HANDLE output, HANDLE error) {
   JsonObject result;
   if (command.mode == Mode::version) result = version_document();
   else if (command.mode == Mode::probe) {
-    const auto elevated = process_elevated();
-    if (!elevated) { write_utf8(error, "The helper process token could not be read.\n"); return 1; }
+    std::string diagnostic;
+    const auto elevated = process_elevated(&diagnostic);
+    if (!elevated) {
+      write_utf8(error, "The helper process token could not be read.\n");
+      if (!diagnostic.empty()) write_utf8(error, diagnostic + "\n");
+      return 1;
+    }
     JsonObject permissions;
     permissions.Insert(L"screen", JsonValue::CreateStringValue(L"n/a"));
     permissions.Insert(L"accessibility", JsonValue::CreateStringValue(L"n/a"));

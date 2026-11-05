@@ -269,6 +269,15 @@ std::string command_output(const std::filesystem::path& executable, std::wstring
       } catch (...) {}
     }
     if (output == "The computer helper could not start safely.\n") label += ".safe-start";
+    if (output == "The helper process token could not be read.\n") label += ".token-read";
+    constexpr std::string_view token_prefix = "The helper process token could not be read.\n";
+    if (output.starts_with(token_prefix)) {
+      auto detail = std::string_view(output).substr(token_prefix.size());
+      if (!detail.empty() && detail.back() == '\n') detail.remove_suffix(1);
+      if (detail.size() <= 80 && detail.starts_with("token.step.") &&
+          std::all_of(detail.begin(), detail.end(), [](char value) { return (value >= 'a' && value <= 'z') || (value >= '0' && value <= '9') || value == '.' || value == '-'; }))
+        label += "." + std::string(detail);
+    }
     label += ".exit-" + std::to_string(exit);
     throw UnitFailure(label.c_str());
   }
