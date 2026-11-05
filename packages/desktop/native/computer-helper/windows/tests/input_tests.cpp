@@ -305,9 +305,19 @@ struct Fixture {
   void advance(uint64_t ms) { now += ms; timers.run(); inspections.run(); timers.run(); }
   void pump() { timers.run(); inspections.run(); timers.run(); }
 };
-void success(const Dispatcher::Result& result) { check(std::holds_alternative<Reply>(result), "input.expected-success"); }
+std::string failure_code(std::wstring_view code) {
+  constexpr std::array<std::wstring_view, 17> fixed{L"changed", L"unavailable", L"failed", L"blocked", L"secure_field", L"stale_frame", L"stale_ref", L"protected", L"not_granted", L"needs_foreground", L"unsupported_action", L"out_of_bounds", L"elevated", L"secure_desktop", L"stopped", L"busy", L"paused"};
+  if (std::find(fixed.begin(), fixed.end(), code) == fixed.end()) return "unknown";
+  std::string result; for (const auto character : code) result.push_back(character == L'_' ? '-' : static_cast<char>(character)); return result;
+}
+void success(const Dispatcher::Result& result) {
+  if (const auto refused = std::get_if<Failure>(&result)) throw std::runtime_error("input.expected-success.got-" + failure_code(refused->code));
+  check(std::holds_alternative<Reply>(result), "input.expected-success.got-unknown");
+}
 void failure(const Dispatcher::Result& result, std::wstring_view code) {
-  check(std::holds_alternative<Failure>(result) && std::get<Failure>(result).code == code, "input.expected-refusal");
+  const auto refused = std::get_if<Failure>(&result);
+  if (!refused) throw std::runtime_error("input.expected-" + failure_code(code) + (std::holds_alternative<Reply>(result) ? ".got-success" : ".got-unknown"));
+  if (refused->code != code) throw std::runtime_error("input.expected-" + failure_code(code) + ".got-" + failure_code(refused->code));
 }
 JsonArray combo(std::initializer_list<const wchar_t*> names) {
   JsonArray value; for (const auto name : names) value.Append(JsonValue::CreateStringValue(name)); return value;
@@ -320,7 +330,17 @@ size_t downs(const Fixture& fixture) {
 }
 
 size_t run_input_tests() {
-  size_t groups = 0; const auto test = [&](const auto& body) { body(); ++groups; };
+  size_t groups = 0; const auto test = [&](const auto& body) {
+    try { body(); }
+    catch (const std::exception& error) {
+      const std::string_view detail(error.what());
+      const bool fixed = detail.starts_with("input.") && detail.size() <= 112 &&
+        std::all_of(detail.begin(), detail.end(), [](char value) { return (value >= 'a' && value <= 'z') || (value >= '0' && value <= '9') || value == '.' || value == '-'; });
+      throw std::runtime_error("input.group-" + std::to_string(groups + 1) + "." + (fixed ? std::string(detail.substr(6)) : "unexpected"));
+    }
+    catch (...) { throw std::runtime_error("input.group-" + std::to_string(groups + 1) + ".unexpected"); }
+    ++groups;
+  };
   test([] {
     for (const auto op : {L"input.move", L"input.click", L"input.scroll", L"input.drag", L"input.key", L"input.type", L"input.hold"}) {
       Fixture fixture; fixture.available_surface(); fixture.availability->desktop.default_name = false;

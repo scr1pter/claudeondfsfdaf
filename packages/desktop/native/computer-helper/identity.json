@@ -1,6 +1,6 @@
 {
   "displayName": "Vector Hands",
-  "helperVersion": "1.0.12",
+  "helperVersion": "1.0.13",
   "protocol": { "min": 1, "max": 1 },
   "bundleIdSuffix": "computer",
   "mac": { "bundle": "VectorComputer.app", "executable": "VectorComputer", "minimumSystemVersion": "14.0" },

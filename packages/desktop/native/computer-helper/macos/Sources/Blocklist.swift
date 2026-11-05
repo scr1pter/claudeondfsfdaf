@@ -123,7 +123,12 @@ struct NativeBlocklist {
     let never: Set<String>
     let clickOnly: Set<String>
 
-    static func generated() throws -> NativeBlocklist { try NativeBlocklist(json: Blocklist.json) }
+    // Only the immutable generated catalog is shared; validation failures stay fail-closed too.
+    private static let generatedCatalog: Result<NativeBlocklist, Error> = Result {
+        try NativeBlocklist(json: Blocklist.json)
+    }
+
+    static func generated() throws -> NativeBlocklist { try generatedCatalog.get() }
 
     init(json: String) throws {
         let categories: Set<String> = ["vector", "terminal", "scripting", "password-manager", "security", "remote-viewer",
