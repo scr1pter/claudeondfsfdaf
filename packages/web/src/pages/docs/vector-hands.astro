@@ -1,0 +1,135 @@
+---
+import DocsPage from "../../layouts/DocsPage.astro"
+import { Hands } from "@vectordevai/schema/hands"
+import { release112 } from "../../data/vector-releases"
+
+export const prerender = true
+---
+
+<DocsPage id="vector-hands">
+  <p class="note">
+    {release112.since} {Hands.NAME} lets Vector work in the desktop apps you approve while you are at your computer.
+    Availability depends on your operating system, local engine and permissions.
+  </p>
+  <p>
+    Add <strong>@{Hands.MENTION}</strong> or an app from the composer's Computer group, then describe what you want
+    done. Vector can read the approved screen, follow controls and use the pointer and keyboard. It asks before
+    entering another app or taking a sensitive step. Text on a page or in an app is information, never your approval.
+  </p>
+
+  <h2 id="setup">Set it up</h2>
+  <ol>
+    <li>Open Settings and choose <strong>{Hands.NAME}</strong>, or choose <strong>@{Hands.MENTION}</strong> in a conversation.</li>
+    <li>Read the explanation and turn it on. A company policy may keep it off or restrict the available choices.</li>
+    <li>On macOS, use the setup buttons to grant Screen Recording and Accessibility to the separately listed helper, then return to Vector.</li>
+    <li>Choose the apps for the task. Allowing observation does not automatically allow interaction.</li>
+  </ol>
+  <p>
+    Keep the computer unlocked and remain available for questions. Close private material you do not want a model
+    to see. Vector limits captures to approved apps and masks protected windows, but approved app content can still
+    include personal information.
+  </p>
+
+  <h2 id="permissions">Permissions and setup problems</h2>
+  <p>
+    On macOS, Screen Recording lets the helper read pixels, and Accessibility lets it inspect and operate controls.
+    Post-event access must also be available before keyboard or pointer input. The helper appears separately from
+    Vector in System Settings; beta and dev have their own entries. Use the setup buttons to open the relevant pane:
+    <a href="x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture">Screen Recording</a>
+    or <a href="x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility">Accessibility</a>.
+    Grant access yourself; Vector does not answer an OS permission prompt for you.
+  </p>
+  <p>
+    On Windows, run Vector normally. An administrator window, consent prompt, secure desktop or unavailable capture
+    needs a manual handoff. Running Vector as administrator keeps this feature unavailable. Use Windows
+    <a href="ms-settings:privacy">Privacy &amp; security</a> when capture is blocked; company restrictions may also apply.
+  </p>
+  <p>
+    Ad-hoc macOS builds are labelled <strong>Preview</strong>. A helper update may cause macOS to ask for access again.
+    Only use <strong>Reset and ask again</strong> if Vector offers it; the availability of that button depends on
+    verification for your release. Changing an app's verified identity can also require a fresh app approval.
+  </p>
+
+  <h2 id="asks">App access and sensitive steps</h2>
+  <p>
+    App access lasts for the approved task unless you choose an available <strong>Always allow</strong> option.
+    Browsers, file managers, finance apps and developer apps always ask; they do not offer a remembered approval.
+    You can review and revoke remembered choices in Settings. A company allow rule still needs your consent,
+    and a company denial takes priority.
+  </p>
+  <p>
+    Vector asks separately before actions such as sending, deleting, buying, submitting, pasting your clipboard,
+    running a program or running project code. Each approval covers the proposed step and observed target once.
+    Changed targets need another check. For code and other developer text changes, use Vector's editing tools;
+    approval does not turn desktop typing into a code editor.
+  </p>
+
+  <h2 id="never-list">Apps and fields it never operates</h2>
+  <p>
+    Terminals, command shells and scripting tools, password managers, remote-control viewers, security and permission
+    tools, and Vector's own controls are
+    protected. Password and other credential fields require you to enter the information. System consent and
+    administrator prompts are yours to complete. These restrictions cannot be removed with Always allow or a
+    company app rule. Unsafe console, inspector, scripting and shell-launcher routes remain unavailable inside
+    otherwise approved apps too.
+  </p>
+
+  <h2 id="stop">Stop and take over</h2>
+  <p>
+    While Vector acts, a glow and the <strong>{Hands.BANNER}</strong> banner identify the work. Press
+    <strong>Stop</strong> in the tray to end it. Move the pointer to pause, then use the banner's
+    <strong>Stop</strong> or <strong>Take over</strong> controls. Genuine keyboard, click or significant pointer input pauses a foreground run rather than competing
+    with you. Press <strong>Esc</strong> while it works in the foreground, or use the configured stop shortcut.
+    The defaults are <strong>Command + Shift + Escape</strong> on macOS and
+    <strong>Control + Alt + Shift + Escape</strong> on Windows.
+  </p>
+  <p>
+    Returning after an interruption requires fresh checks. A lost engine connection, missing heartbeat or failed
+    input detector stops further input. A locked screen or protected desktop is a handoff, not permission for
+    unattended work. For work on another machine, use Vector Remote; it does not grant access to this local desktop.
+  </p>
+
+  <h2 id="data-controls">Screenshots, retention and sharing</h2>
+  <p>
+    Screenshots stay in conversations on this computer and are sent to the model you selected when image input is
+    available. A screen-reader turn sends the bounded accessibility text instead. Your provider's data handling
+    applies to the content you send it. Screenshots can contain private information even when the task itself is harmless.
+  </p>
+  <p>
+    Settings lets you keep screenshots until the task ends, for a selected period or until you delete the conversation,
+    subject to your company's maximum. <strong>Delete all screenshots</strong> removes the local stored screenshots;
+    removed history entries stay marked as removed. It cannot retract content already sent to a provider or shared.
+    Conversation shares leave screenshots out unless you explicitly choose <strong>Include screenshots</strong>.
+    Review them before sharing.
+  </p>
+
+  <h2 id="administrators">For administrators</h2>
+  <p>
+    The managed <code>computer</code> policy requires <strong>Vector 1.99.112 or later</strong>. Put it only in an
+    authenticated company-managed configuration source described in <a href="/docs/local">Vector Local</a>.
+    Do not add it to a project's or user's <code>vector.json</code>; older engines reject unknown top-level keys.
+    Personal preferences belong to the desktop Settings page.
+  </p>
+  <pre><code>{`{
+  "computer": {
+    "enabled": true,
+    "default_app_access": "ask",
+    "allow_always": false,
+    "background": false,
+    "screenshot_retention_days": 7,
+    "native_tools": "off"
+  }
+}`}</code></pre>
+  <p>
+    Company policy can disable the feature, deny apps, limit retention and turn off remembered app approvals.
+    Enabling the feature or allowing an app in policy never supplies the user's consent.
+  </p>
+
+  <h2 id="limits">Supported environments and limits</h2>
+  <p>
+    Requires macOS 14 or later, or Windows 10 version 2004/build 19041 or later, with a compatible local desktop
+    engine. Linux, WSL and remote engines cannot operate this local desktop. Windows foreground operation does not
+    imply background support. Locked-session operation is not included. Capture, app providers and keyboard layouts
+    can impose further limits; when the target or field cannot be verified, Vector asks you to take over.
+  </p>
+</DocsPage>

@@ -43,6 +43,15 @@ test("the site marks the latest shipped desktop release as published", () => {
   expect(upcomingRelease.summary).not.toMatch(/\b\d+\.\d+\.\d+\b/)
 })
 
+test("the planned Hands release keeps its preview re-ask caveat and does not mark installers published", () => {
+  const release = release199.find((item) => item.version === "1.99.112")
+  if (Bun.semver.order(publishedDesktopVersion, "1.99.112") < 0) expect(release?.availability).toContain("pending")
+  else expect(release?.availability).toBeUndefined()
+  expect(release?.summary).toContain("Ad-hoc macOS builds are Preview")
+  expect(release?.summary).toContain("grant access again after a helper update")
+  expect(release?.summary).toContain("locked-session operation are not included")
+})
+
 test("website and README copy no longer call 1.99.99 unpublished or say Vector cannot update itself", () => {
   expect(
     sources.flatMap((source) =>
@@ -113,10 +122,15 @@ test("Check for Updates is named only as the macOS menu item", () => {
 
 test("no page or README links to the private source repository or offers installers without an account", async () => {
   // Release notes keep their wording, but none may send readers to the private repository's releases.
-  const notes = [...sources, { file: "public/changelog.json", text: await Bun.file(`${web}public/changelog.json`).text() }]
+  const notes = [
+    ...sources,
+    { file: "public/changelog.json", text: await Bun.file(`${web}public/changelog.json`).text() },
+  ]
   expect(
     notes.flatMap((source) =>
-      (source.text.match(/[^.]*\bGitHub releases?\b[^.]*/gi) ?? []).map((match) => `${source.file}: ${match.trim().slice(0, 120)}`),
+      (source.text.match(/[^.]*\bGitHub releases?\b[^.]*/gi) ?? []).map(
+        (match) => `${source.file}: ${match.trim().slice(0, 120)}`,
+      ),
     ),
   ).toEqual([])
   expect(

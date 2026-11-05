@@ -1,6 +1,6 @@
 # Vector release workflow
 
-Vector's canonical source repository is `scr1pter/Vectordev.ai`. The `main`
+Vector's canonical source repository is `scr1pter/claudeondfsfdaf`. The `main`
 branch is connected to the production `vectordev-ai` project on Vercel.
 
 ## Publish source and website changes
@@ -56,9 +56,9 @@ public plugin artifact version.
    the plugin and every CLI package must exist at `vectorRequiredCliVersion`. When
    that version is already published, a desktop-only release skips steps 1 to 3.
 5. Confirm all platform installers, manifests and update channels before marking
-   the release available. Unsigned releases also advance the update feeds (owner decision,
-   2 October 2026, confirmed again for 1.99.99), so installed copies are offered them through
-   Check for Updates; the app verifies publisher signatures only for signed builds.
+   the release available. Follow the current `release-policy.json` and protected workflow
+   gates for unsigned releases; do not infer publication authority from an earlier
+   release's exception. The current unsigned preview path is download-only.
 
 Container preparation uses the same verified musl archives and commit. Publishing
 additionally requires the owner-controlled namespace and explicit enablement; see
@@ -78,3 +78,43 @@ development binary or claim Windows/Linux runtime validation from a Mac build.
 
 The prototype workspace `@vectordevai/cli-dev` and its platform outputs are private;
 they are never npm release artifacts.
+
+
+## Vector Hands in desktop1.99.112
+
+Hands uses the exact tested native helpers from the same release run. The reusable
+native workflow validates its explicit prod/beta/dev channel; stable releases select
+prod and beta releases select beta. Channel-specific source/identity verification
+prevents relabeling a production helper. Artifact names carry the release tag and,
+for nonproduction channels, its channel suffix, without a retry attempt number.
+Restores bind the current repository, run, source commit, artifact id and digest;
+incomplete or expired immutable artifact sets fail.
+
+Before macOS signing, verify the reproducible production ad-hoc helper against its
+measured lock. Beta/dev use independent channel source/identity evidence and require
+the measured version/toolchain. Sign the copied helper with its own empty entitlements
+and hardened runtime, exclude its subtree from Electron signing, and verify all final
+bytes after fuse changes. The outer signature seals the source/final-byte receipt.
+Developer ID changes the helper cdhash, so final certificate/team/provenance checks
+replace comparison of that changed cdhash to the ad-hoc measurement.
+
+On Windows, restore or create final signed helper copies before compiling Main's
+architecture hashes. Never sign them again during the copy into an installer. Verify
+the actual PE manifest, exact publisher Subject, final helper hashes and compiled pins
+inside the actual packaged app.asar. A separate native Windows ARM64 job must execute
+version/packaged checks on the same packaged proof bytes before publication. Linux
+packages must have no resources/computer helper.
+
+For review before publication, the release workflow supports an artifacts-only unsigned
+dry run on the same repository's hands branch, with explicit dry_run and allow_unsigned
+and the stable channel. It receives no production signing/feed credentials and cannot
+publish a release, activate a channel, change tags or deploy the website. The version
+and reviewed release metadata must still agree. Do not create a release tag merely to
+run this preview.
+
+See [Hands artifact details](build/hands-release-artifacts.md),
+[engineering notes](VECTOR-HANDS.md), and the
+[1.99.112 owner checklist](owner-actions/release-199112.md) for source measurement,
+CI evidence, real OS grant/hardware checks, Reset and final copy/legal approval.
+Keep public availability on the previously published version until the actual release
+passes those gates.

@@ -1,6 +1,20 @@
 {
   "releases": [
     {
+      "tag": "v1.99.112",
+      "highlights": [
+        {
+          "source": "desktop",
+          "items": [
+            {
+              "title": "Vector Hands: approved desktop apps, with Stop and take over",
+              "description": "Vector Hands lets Vector work in the local desktop apps you approve. App access asks separately from sensitive steps such as sending, deleting, pasting your clipboard or running project code. Eligible apps can offer Always allow; browsers, file managers, finance and developer apps continue to ask. A glow and the “Vector is using your computer” banner show when it acts, with Stop, Take over and Esc while working in the foreground. Protected apps and credential fields stay yours to operate. Screenshots stay in conversations on this computer, go to the model you select when image input is available, and are excluded from conversation shares unless you include them. Settings offers retention and Delete all screenshots. Requires macOS 14 or later or Windows 10 build 19041 or later with a compatible local engine. Linux, WSL, remote engines and locked-session operation are not included. Ad-hoc macOS builds are Preview, and macOS may ask you to grant access again after a helper update. Windows administrator and consent surfaces require a manual handoff."
+            }
+          ]
+        }
+      ]
+    },
+    {
       "tag": "v1.99.111",
       "highlights": [
         {

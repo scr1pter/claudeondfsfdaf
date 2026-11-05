@@ -1,3 +1,5 @@
+import { Hands } from "@vectordevai/schema/hands"
+
 export type VectorRelease = {
   version: string
   title: string
@@ -740,5 +742,11 @@ export const release199: VectorRelease[] = [
     title: "Deep research preview, Vector Local, and new model choices",
     summary:
       "Deep research arrives in preview with editable plans, Focused and Deep modes, isolated research browsers, and reports linked to source quotes. It makes no code changes. Research searches in each agent's own browser, with a fallback when search is blocked, and does not solve CAPTCHAs, disguise the browser or rotate addresses. Vector Local adds desktop controls for the model servers you choose, web access, and an origin-based request log. It is a policy inside Vector, not a firewall; programs the agent starts have separate network behavior, and Windows has no shell sandbox. Settings → Memory → About you makes learned preferences editable and undoable, and more Vector agents can use relevant preferences. Host locally keeps installed coding agents under the owner's control, with up to four running at once, explicit Try a fix actions, and exclusions from background work, learning, training and benchmark exports. The model picker separates free models provided by Vector from your own provider choices, with your own OpenRouter free copies under OpenRouter and labelled (free). Eligible new free models join the daily refresh, with training-policy consent and US only tags where applicable. The Codium catalog and pricing page now feature DeepSeek V4.1 Flash 1017, Claude Haiku 5.5, GPT-6 Luna, Kimi K3.1 Pro, and Gemini 4 Argon; DeepSeek is listed first and is the default, and Kimi and Gemini use credits faster. Model download notices clear when the model is ready. The required CLI remains 1.99.99; desktop connections to older engines explain which newer features are unavailable, and Vector Local prevents an older WSL engine from starting. This release is not yet code-signed, so a new install may show an operating-system warning on first launch.",
+  },
+  {
+    version: "1.99.112",
+    title: `${Hands.NAME}: approved desktop apps, with Stop and take over`,
+    availability: "Planned for desktop 1.99.112; release approval and native manual checks remain pending.",
+    summary: `${Hands.NAME} lets Vector work in the local desktop apps you approve. App access asks separately from sensitive steps such as sending, deleting, pasting your clipboard or running project code. Eligible apps can offer Always allow; browsers, file managers, finance and developer apps continue to ask. A glow and the “${Hands.BANNER}” banner show when it acts, with Stop, Take over and Esc while working in the foreground. Protected apps and credential fields stay yours to operate. Screenshots stay in conversations on this computer, go to the model you select when image input is available, and are excluded from conversation shares unless you include them. Settings offers retention and Delete all screenshots. Requires macOS 14 or later or Windows 10 build 19041 or later with a compatible local engine. Linux, WSL, remote engines and locked-session operation are not included. Ad-hoc macOS builds are Preview, and macOS may ask you to grant access again after a helper update. Windows administrator and consent surfaces require a manual handoff.`,
   },
 ]
