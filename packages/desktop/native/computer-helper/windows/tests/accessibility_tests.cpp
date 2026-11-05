@@ -33,16 +33,16 @@ struct Fixture {
   CaptureReceipt frame;
   uint64_t clock = 100;
   bool current = true, live = true, frame_live = true, membership = true, focus_matches = true;
-  bool deny_fence = false, inside_fence = false, set_result = true, partial = false, uncertain = false;
+  bool deny_fence = false, inside_fence = false, set_result = true, partial = false, uncertain = false,detector_ready=true;
   size_t roots = 0, child_reads = 0, focused_reads = 0, point_reads = 0, performed = 0, writes = 0, attempts = 0, fences = 0, closes = 0;
   size_t max_children = 0;
   std::map<uint64_t, size_t> names, values, securities;
   std::wstring last_action;
-  std::function<void()> on_prepare, on_commit, on_value, after_write;
+  std::function<void()> on_prepare, on_commit, on_value, after_write,on_provider_prepare;
   std::function<void(uint64_t)> on_security;
   std::vector<Dispatcher::Result> results;
   std::unique_ptr<AccessibilityService> service;
-  Fixture(bool approved = true) {
+  Fixture(bool approved = true,bool native_commit=false) {
     session.id = L"uia-service"; session.run_epoch = 100; session.observation_epoch = 200; session.revision = 1;
     window.hwnd = reinterpret_cast<HWND>(uintptr_t(42)); window.surface = window.hwnd; window.thread_id = 10; window.surface_thread_id = 10;
     auto& owner = window.owner;
@@ -66,6 +66,7 @@ struct Fixture {
     backend.inventory = [this](const auto& valid) { if (!valid()) throw Failure{L"changed", L"Cancelled fixture."}; return inventory; };
     backend.foreground = [this] { return actual_foreground; };
     backend.now = [this] { return clock; };
+    backend.mutation_current=[this](const ServerSession& expected){return detector_ready && expected.id==session.id && expected.run_epoch==session.run_epoch && expected.observation_epoch==session.observation_epoch && expected.revision==session.revision;};
     backend.windows.observe = [this](HWND hwnd) { for (const auto& candidate : inventory) if (candidate.hwnd == hwnd) return candidate; throw Failure{L"changed", L"The fixture window changed."}; };
     backend.windows.current = [this](const WindowsWindow& expected) {
       if (!live) return false;
@@ -137,6 +138,11 @@ struct Fixture {
       if (cursor != observed_root || path.empty() || path.size() > 30) return {};
       std::reverse(path.begin(), path.end());
       return UiaMenuShortcut{std::move(path), element == menu_leaf ? menu_accelerator : L"", element == menu_leaf ? menu_access : L""};
+    };
+    if(native_commit)backend.uia.commit=[this](const UiaObservation& expected,const auto&,std::wstring_view action,const std::optional<std::wstring>& value,const std::function<bool()>& gate){
+      require(inside_fence,"accessibility.native-job-keeps-caller-authority");if(on_provider_prepare)on_provider_prepare();require_uia_mutation_gate(gate);
+      if(value){++attempts;++writes;nodes.at(expected.element->identity).value=*value;return true;}
+      ++performed;last_action=action;return true;
     };
     service = std::make_unique<AccessibilityService>(std::move(backend)); service->note_session(session);
   }
@@ -457,6 +463,20 @@ size_t run_accessibility_tests() {
       const auto expected = kind == 0 ? L"unsupported_action" : kind == 1 ? L"secure_field" : L"blocked";
       require(fixture.code() == expected && fixture.focused_reads > 0 && fixture.performed == 0 && fixture.writes == 0 && fixture.values[fixture.text->identity] == value_reads &&
           fixture.values[fixture.secure->identity] == 0, "accessibility.localized-paste-checks-real-focus-policy-before-explicit-no-mutation-fallback");
+    }
+  });
+  test([]{
+    Fixture fixture(true,true);const auto ref=fixture.mint();fixture.reset();
+    fixture.service->set_value(fixture.action(ref,L"value",L"accepted"),fixture.context(),fixture.done());
+    require(fixture.reply().GetNamedBoolean(L"took") && fixture.writes==1,"accessibility.native-metadata-gate-allows-current-private-scope");
+  });
+  test([]{
+    for(const bool replace:{false,true}){
+      Fixture fixture(true,true);const auto ref=fixture.mint();fixture.reset();
+      fixture.on_provider_prepare=[&]{if(replace)++fixture.session.run_epoch;else fixture.detector_ready=false;};
+      fixture.service->set_value(fixture.action(ref,L"value",L"refused"),fixture.context(),fixture.done());
+      require(fixture.code()==L"changed" && fixture.writes==0 && fixture.performed==0 && fixture.attempts==0,
+        "accessibility.detector-revocation-or-run-replacement-during-provider-prep-prevents-mutation");
     }
   });
   return groups;

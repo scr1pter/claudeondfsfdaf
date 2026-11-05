@@ -60,6 +60,9 @@ class Dispatcher final {
     std::function<void(std::optional<ServerSession>)> session_changed = [](auto) {};
     std::function<bool()> available = [] { return true; };
     std::function<bool(const ServerSession&)> foreground_ready = [](const auto&) { return true; };
+    std::function<bool(const ServerSession&)> foreground_pending = [](const auto&) { return false; };
+    // Cached metadata only; checked at actual native event publication under authority.
+    std::function<bool(const JsonObject&, const std::optional<ServerSession>&)> native_event_current = [](const auto&, const auto&) { return true; };
     std::function<JsonObject()> features;
     std::wstring os = L"Windows";
     bool responsible = true;
@@ -87,6 +90,8 @@ class Dispatcher final {
   bool closed() const;
   bool physical_input(const JsonObject& event, const ServerSession& expected, bool takeover);
   bool stop_from_physical_input(std::wstring_view by, const ServerSession& expected);
+  bool input_detection(bool alive, std::wstring_view reason, const ServerSession& expected);
+  void foreground_readiness_changed(const ServerSession& expected);
   void notify_display_change();
 
  private:

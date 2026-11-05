@@ -255,6 +255,9 @@ struct InputService::State : std::enable_shared_from_this<InputService::State> {
       if (flight->prepared && !observations.fresh(*flight->prepared,50)) changed();
       if (!backend.guardian->alive() || !backend.quiet() || (backend.available && !backend.available())) changed();
       if (!point && !backend.keyboard_current(flight->layout,flight->window,journal.owned())) changed();
+      // The detector can revoke readiness while this same-thread metadata preparation runs.
+      // Guard owns Dispatcher authority here; no actor/thread hop is permitted by this callback.
+      if (!flight->context.is_current()) changed();
       body();
     };
     if (point) backend.commit_point(*point,flight->session,flight->context,precondition,mutation);
@@ -414,7 +417,7 @@ struct InputService::State : std::enable_shared_from_this<InputService::State> {
       (void)journal.press(flight->lease,ticket.id,ticket.ticket.release,[&] {
         arm(flight); const auto kind=ticket.ticket.release.kind==InputReleaseKind::mouse_button?InputEventKind::button_down:InputEventKind::key_down;
         attempted(flight,ticket); outcome=InputPostResult::uncertain;
-        outcome=backend.post({kind,point?point->point:POINT{},ticket.ticket.release,0,0,backend.tag});
+        outcome=backend.post({kind,point?point->point:POINT{},ticket.ticket.release,0,0,backend.tag},flight->context.is_current);
         if (outcome==InputPostResult::not_posted) attempted(flight,ticket,false);
         return outcome;
       });
@@ -436,7 +439,7 @@ struct InputService::State : std::enable_shared_from_this<InputService::State> {
     retire_completed(flight,ticket);
   }
   void event(const std::shared_ptr<Flight>& flight,const WindowsPointOwner& point,InputPostedEvent event) {
-    event.tag=backend.tag; commit(flight,point,[&] { journal.post(flight->lease,[&] { return backend.post(event); }); });
+    event.tag=backend.tag; commit(flight,point,[&] { journal.post(flight->lease,[&] { return backend.post(event,flight->context.is_current); }); });
   }
   void run_pointer(const std::shared_ptr<Flight>& flight) {
     flight->receipt=backend.receipt(flight->request.capture_id,flight->session);
@@ -473,7 +476,7 @@ struct InputService::State : std::enable_shared_from_this<InputService::State> {
           InputPostResult outcome=InputPostResult::not_posted;
           try { commit(flight,{},[&] { journal.post(flight->lease,[&] {
             for (const auto& ticket:tickets) attempted(flight,ticket);
-            outcome=InputPostResult::uncertain; outcome=backend.post_batch(events);
+            outcome=InputPostResult::uncertain; outcome=backend.post_batch(events,flight->context.is_current);
             if (outcome==InputPostResult::not_posted) for (const auto& ticket:tickets) attempted(flight,ticket,false);
             return outcome;
           }); }); } catch (...) { if (outcome==InputPostResult::uncertain) { std::lock_guard lock(mutex); faulted=true; } throw; }

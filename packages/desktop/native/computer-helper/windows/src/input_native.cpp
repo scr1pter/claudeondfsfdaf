@@ -190,7 +190,7 @@ class NativeInput final {
     if (snapshot(observation.window).fingerprint != keyboard.fingerprint || !quiet()) changed();
     InputNativeChord chord; chord.semantic = *semantic; chord.keys = modifiers(effective, keyboard); chord.keys.push_back({leaf, 0}); return chord;
   }
-  InputPostResult post(const InputPostedEvent& event) {
+  InputPostResult post(const InputPostedEvent& event,const std::function<bool()>& current={}) {
     std::lock_guard guard(mutex);
     const bool up = event.kind == InputEventKind::button_up || event.kind == InputEventKind::key_up || event.kind == InputEventKind::unicode_up;
     if (event.tag != tag || (!up && (closed || !desktop_available() || !quiet()))) return InputPostResult::not_posted;
@@ -227,13 +227,14 @@ class NativeInput final {
           (event.release.extended ? KEYEVENTF_EXTENDEDKEY : 0) | (up ? KEYEVENTF_KEYUP : 0); value.ki.dwExtraInfo = static_cast<ULONG_PTR>(tag);
       }
     }
+    if (!up && (!current || !current())) changed();
     if (SendInput(1, &value, sizeof(INPUT)) != 1) return InputPostResult::not_posted;
     if (!up && event.kind != InputEventKind::move && event.kind != InputEventKind::scroll) owned.push_back(event.release);
     if (up) owned.erase(std::remove(owned.begin(), owned.end(), event.release), owned.end());
     if (event.kind == InputEventKind::move) { POINT actual{}; if (!GetCursorPos(&actual) || actual.x != event.point.x || actual.y != event.point.y) return InputPostResult::uncertain; }
     return InputPostResult::accepted;
   }
-  InputPostResult batch(std::span<const InputPostedEvent> events) {
+  InputPostResult batch(std::span<const InputPostedEvent> events,const std::function<bool()>& current) {
     std::lock_guard guard(mutex);
     if (closed || !desktop_available() || !quiet() || (events.size() != 2 && events.size() != 4)) return InputPostResult::not_posted;
     std::array<INPUT, 4> values{};
@@ -249,6 +250,7 @@ class NativeInput final {
       values[index].ki.dwFlags = KEYEVENTF_UNICODE; values[index + 1].ki.dwFlags = KEYEVENTF_UNICODE | KEYEVENTF_KEYUP;
       values[index].ki.dwExtraInfo = values[index + 1].ki.dwExtraInfo = static_cast<ULONG_PTR>(tag);
     }
+    if (!current || !current()) changed();
     const auto sent = SendInput(static_cast<UINT>(events.size()), values.data(), sizeof(INPUT));
     if (sent == events.size()) return InputPostResult::accepted;
     return sent == 0 ? InputPostResult::not_posted : InputPostResult::uncertain;
@@ -293,8 +295,8 @@ InputBackend InputBackend::system(std::shared_ptr<CaptureService> captures, std:
   };
   result.keyboard_fingerprint = [](const WindowsWindow& window) { return snapshot(window).fingerprint; };
   result.quiet = [native] { return native->quiet(); }; result.available = desktop_available;
-  result.post = [native](const auto& event) { return native->post(event); };
-  result.post_batch = [native](auto events) { return native->batch(events); };
+  result.post = [native](const auto& event,const auto& current) { return native->post(event,current); };
+  result.post_batch = [native](auto events,const auto& current) { return native->batch(events,current); };
   result.release = [native](const InputRelease& release) { return native->post({release.kind == InputReleaseKind::mouse_button ? InputEventKind::button_up : release.kind == InputReleaseKind::unicode_key ? InputEventKind::unicode_up : InputEventKind::key_up, {}, release, 0, 0, native->tag}) == InputPostResult::accepted; };
   result.confirm_down = [native](const InputRelease& release) {
     std::lock_guard lock(native->mutex);

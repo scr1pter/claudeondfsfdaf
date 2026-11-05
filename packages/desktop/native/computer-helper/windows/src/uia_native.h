@@ -65,12 +65,15 @@ struct WindowsUiaBackend {
   std::function<bool()> available;
   // One bounded native job repeats target facts and invokes the selected pattern; no nested UIA waits
   // or a sequence of independent RPC budgets is permitted inside the final authority fence.
-  std::function<bool(const UiaObservation&, const UiaName&, std::wstring_view, const std::optional<std::wstring>&)> commit;
+  std::function<bool(const UiaObservation&, const UiaName&, std::wstring_view, const std::optional<std::wstring>&,
+                     const std::function<bool()>& metadata_gate)> commit;
   std::function<std::optional<UiaMenuShortcut>(const UiaElement&, const UiaElement&)> menu_target;
   static WindowsUiaBackend system();
 };
 
 std::wstring sanitize_uia(std::wstring_view text, size_t maximum = 500);
+// Metadata only: never a Dispatcher callback, UIA query, provider RPC or native input operation.
+void require_uia_mutation_gate(const std::function<bool()>&);
 // Unsupported IsPassword is acceptable only for documented nontext controls with positively absent
 // ValuePattern/TextPattern. Editable/custom/document controls always need an explicit boolean.
 std::optional<bool> classify_uia_password(int control_type, std::optional<bool> reported,

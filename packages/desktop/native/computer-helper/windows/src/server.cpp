@@ -205,6 +205,8 @@ struct Dispatcher::State : std::enable_shared_from_this<Dispatcher::State> {
   struct Queued { Request request; uint64_t generation; };
   struct Authority { uint64_t generation; std::optional<ServerSession> session; bool requires_session; bool mutating; };
   struct Active { Request request; Registration registration; Authority authority; uint64_t token; uint64_t deadline_at; Cancel timer; };
+  struct Warmup { uint64_t ticket, request_id, generation, deadline_at; std::optional<ServerSession> session; uint32_t attempts = 0; Cancel timer; };
+  enum class WarmupStatus { ready, waiting, expired };
   struct Terminal { Request request; std::wstring code, message; uint64_t deadline_at; };
   struct Cleanup {
     Authority authority; std::optional<Request> request; JsonObject event;
@@ -220,12 +222,13 @@ struct Dispatcher::State : std::enable_shared_from_this<Dispatcher::State> {
   std::map<std::wstring, Registration> handlers;
   std::deque<Queued> queue;
   std::optional<Active> active;
+  std::optional<Warmup> warmup;
   std::map<uint64_t, Cleanup> releases;
   std::vector<Terminal> pending_terminals;
   std::optional<ServerSession> session;
   std::deque<Output> outputs;
   size_t pending_bytes = 0, output_bytes = 0, output_count = 0, release_bytes = 0;
-  uint64_t generation = 0, token = 0, epoch = 0, publication = 0, heartbeat_ticket = 0, release_ticket = 0;
+  uint64_t generation = 0, token = 0, epoch = 0, publication = 0, heartbeat_ticket = 0, release_ticket = 0, warmup_ticket = 0;
   bool ended = false, halted = false, physical_pause = false, output_scheduled = false, notified_stop = false;
   bool release_failed = false;
   bool owned_output = false;
@@ -257,6 +260,42 @@ struct Dispatcher::State : std::enable_shared_from_this<Dispatcher::State> {
   bool foreground_ready() const {
     const auto snapshot = clone_session(session);
     return snapshot && options.foreground_ready(*snapshot);
+  }
+  bool foreground_pending() const {
+    const auto snapshot = clone_session(session);
+    return snapshot && snapshot->mode == L"foreground" && !snapshot->paused && options.foreground_pending(*snapshot);
+  }
+  void cancel_warmup() {
+    if (!warmup) return;
+    if (warmup->timer) warmup->timer(); warmup.reset();
+  }
+  WarmupStatus wait_for_foreground(const Queued& queued, const Registration& registration) {
+    const bool same = warmup && warmup->request_id == queued.request.id && warmup->generation == generation && matches(warmup->session);
+    if (same && options.now() >= warmup->deadline_at) { cancel_warmup(); return WarmupStatus::expired; }
+    const bool waiting = registration.mutating && session && session->mode == L"foreground" && !session->paused &&
+      !halted && !physical_pause && releases.empty() && !release_failed && options.responsible && options.available() &&
+      queued.generation == generation && !foreground_ready() && foreground_pending();
+    if (!waiting) { cancel_warmup(); return WarmupStatus::ready; }
+    if (!same) {
+      cancel_warmup();
+      const auto now = options.now();
+      const auto deadline = std::numeric_limits<uint64_t>::max() - now < 1000 ? std::numeric_limits<uint64_t>::max() : now + 1000;
+      if (warmup_ticket == std::numeric_limits<uint64_t>::max()) return WarmupStatus::expired;
+      warmup = Warmup{++warmup_ticket, queued.request.id, generation, deadline, clone_session(session)};
+    }
+    if (warmup->timer) return WarmupStatus::waiting;
+    if (warmup->attempts >= 100 || options.now() >= warmup->deadline_at) { cancel_warmup(); return WarmupStatus::expired; }
+    const auto ticket = warmup->ticket; ++warmup->attempts;
+    const auto timer = options.schedule(10, [weak = weak_from_this(), ticket] {
+      const auto self = weak.lock(); if (!self) return;
+      std::lock_guard lock(self->mutex);
+      if (!self->warmup || self->warmup->ticket != ticket || self->ended) return;
+      self->warmup->timer = {};
+      if (self->warmup->generation != self->generation || !self->matches(self->warmup->session) || self->queue.empty() || self->queue.front().request.id != self->warmup->request_id) { self->cancel_warmup(); return; }
+      self->pump();
+    });
+    if (warmup && warmup->ticket == ticket) warmup->timer = timer; else if (timer) timer();
+    return WarmupStatus::waiting;
   }
   bool current(uint64_t expected) const {
     if (!active || active->token != expected || options.now() >= active->deadline_at || !observed(active->authority) || !options.available()) return false;
@@ -384,7 +423,8 @@ struct Dispatcher::State : std::enable_shared_from_this<Dispatcher::State> {
           const auto id = safe_integer(field(output.document, L"id"));
           // A retired native event is dropped; it must never become an id=0 request response.
           delivered = !id || (options.send && options.send(response_failure(*id, L"changed", L"The native observation changed before delivery."), {}));
-        } else delivered = options.send && options.send(output.document, output.image);
+        } else if (output.document.HasKey(L"event") && !options.native_event_current(output.document, output.authority ? output.authority->session : std::optional<ServerSession>{})) delivered = true;
+        else delivered = options.send && options.send(output.document, output.image);
       } catch (...) { delivered = false; }
       output_bytes -= std::min(output_bytes, output.bytes);
       output_count -= std::min<size_t>(output_count, 1);
@@ -417,6 +457,7 @@ struct Dispatcher::State : std::enable_shared_from_this<Dispatcher::State> {
     for (const auto& request : cancelled) { if (ended) break; fail(request, code, L"The native operation was cancelled."); }
   }
   void invalidate() {
+    cancel_warmup();
     ++generation; ++publication; if (session) session->observation_epoch = ++epoch; options.observations_invalidated();
     retire_releases();
     cancel_active(L"changed", L"The computer session changed."); cancel_queue(false);
@@ -424,6 +465,7 @@ struct Dispatcher::State : std::enable_shared_from_this<Dispatcher::State> {
   void close(std::wstring_view reason, bool notify = true) {
     if (ended) { if (notify) stopped(); return; }
     ended = true; halted = true; ++generation;
+    cancel_warmup();
     retire_releases();
     pending_terminals.clear();
     outputs.clear(); output_bytes = 0; output_count = 0;
@@ -440,7 +482,7 @@ struct Dispatcher::State : std::enable_shared_from_this<Dispatcher::State> {
       if (const auto self = weak.lock()) {
         std::lock_guard lock(self->mutex);
         if (self->ended || !self->session || self->heartbeat_ticket != ticket) return;
-        self->heartbeat_timer = {}; self->halted = true; self->session->paused = true; self->session->esc_stops = false;
+        self->heartbeat_timer = {}; self->cancel_warmup(); self->halted = true; self->session->paused = true; self->session->esc_stops = false;
         ++self->generation; ++self->publication; self->session->observation_epoch = ++self->epoch;
         self->options.observations_invalidated(); self->retire_releases(); self->cleanup(L"heartbeat");
         self->cancel_active(L"stopped", L"Input stopped because no heartbeat arrived."); self->cancel_queue(true, L"stopped");
@@ -519,8 +561,9 @@ struct Dispatcher::State : std::enable_shared_from_this<Dispatcher::State> {
       ++publication; cleanup(L"cancel");
       const auto id = safe_integer(target);
       const auto found = std::find_if(queue.begin(), queue.end(), [&](const auto& item) { return id && item.request.id == *id; });
-      if (found != queue.end()) { const auto cancelled_request = found->request; queue.erase(found); pending_bytes -= std::min(pending_bytes, cancelled_request.encoded_bytes); fail(cancelled_request, L"failed", L"Cancelled."); }
-      else if (active && (!id || active->request.id == *id)) { cancel_queue(true); cancel_active(L"failed", L"Cancelled."); }
+      if (!id) { cancel_queue(true); cancel_active(L"failed", L"Cancelled."); }
+      else if (found != queue.end()) { const auto cancelled_request = found->request; queue.erase(found); pending_bytes -= std::min(pending_bytes, cancelled_request.encoded_bytes); fail(cancelled_request, L"failed", L"Cancelled."); }
+      else if (active && active->request.id == *id) { cancel_queue(true); cancel_active(L"failed", L"Cancelled."); }
       if (active && active->registration.mutating) cancel_active(L"failed", L"Owned input was revoked during cancellation.");
       release_input(request); pump(); return;
     }
@@ -531,7 +574,18 @@ struct Dispatcher::State : std::enable_shared_from_this<Dispatcher::State> {
     if (request.op == L"shutdown") { close(L"shutdown", false); emit(response_success(request.id), {}, {}, true); }
   }
   void pump() {
-    if (ended || active || queue.empty()) return;
+    if (ended || active) return;
+    if (queue.empty()) { cancel_warmup(); return; }
+    const auto pending = handlers.find(queue.front().request.op);
+    if (pending != handlers.end()) {
+      const auto readiness = wait_for_foreground(queue.front(), pending->second);
+      if (readiness == WarmupStatus::waiting) return;
+      if (readiness == WarmupStatus::expired) {
+        const auto request = std::move(queue.front().request); queue.pop_front(); pending_bytes -= std::min(pending_bytes, request.encoded_bytes);
+        fail(request, L"paused", L"Fresh native input detection was not confirmed before admission."); pump(); return;
+      }
+    }
+    cancel_warmup();
     auto queued = std::move(queue.front()); queue.pop_front();
     if (builtin_request(queued.request)) { pending_bytes -= std::min(pending_bytes, queued.request.encoded_bytes); pump(); return; }
     const auto entry = handlers.find(queued.request.op);
@@ -559,7 +613,20 @@ struct Dispatcher::State : std::enable_shared_from_this<Dispatcher::State> {
     options.execute([weak = weak_from_this(), selected] {
       const auto self = weak.lock(); if (!self) return;
       Request request; Handler handler; OperationContext context;
-      { std::lock_guard lock(self->mutex); if (!self->active || !self->current(selected)) return;
+      { std::lock_guard lock(self->mutex);
+        if (!self->active || self->active->token != selected) return;
+        if (self->options.now() >= self->active->deadline_at) { self->expire(selected); return; }
+        if (!self->current(selected)) {
+          // A fresh probe may become pending after the request was queued to the operation
+          // executor. No handler has run yet, so retain the exact original request for warmup.
+          if (self->active->registration.mutating && self->observed(self->active->authority) && !self->halted && !self->physical_pause &&
+              self->releases.empty() && !self->release_failed && self->session && !self->session->paused && self->options.available() &&
+              !self->foreground_ready() && self->foreground_pending()) {
+            auto waiting = Queued{std::move(self->active->request), self->active->authority.generation};
+            if (self->active->timer) self->active->timer(); self->active.reset(); self->queue.push_front(std::move(waiting)); self->pump();
+          }
+          return;
+        }
         request = self->active->request; handler = self->active->registration.handler; context.session = clone_session(self->active->authority.session); }
       context.is_current = [weak, selected] { const auto state = weak.lock(); if (!state) return false; std::lock_guard lock(state->mutex); return state->current(selected); };
       context.with_current = [weak, selected](const Task& body) { const auto state = weak.lock(); if (!state) return false; std::lock_guard lock(state->mutex); if (!state->current(selected)) return false; body(); return true; };
@@ -633,6 +700,7 @@ bool Dispatcher::physical_input(const JsonObject& event, const ServerSession& ex
   std::lock_guard lock(state_->mutex);
   if (state_->ended || !state_->matches(expected) || text(field(event, L"event"), 64) != L"user_input") return false;
   if (takeover && state_->session->mode == L"foreground") {
+    state_->cancel_warmup();
     state_->physical_pause = true; state_->session->paused = true; state_->session->esc_stops = false; ++state_->generation; ++state_->publication; state_->session->observation_epoch = ++state_->epoch;
     state_->options.observations_invalidated(); state_->retire_releases(); state_->cleanup(L"physical-input");
     state_->cancel_active(L"paused", L"Physical input paused the task."); state_->cancel_queue(true, L"paused"); state_->changed_session();
@@ -644,10 +712,34 @@ bool Dispatcher::stop_from_physical_input(std::wstring_view by, const ServerSess
   std::lock_guard lock(state_->mutex);
   if (state_->ended || state_->halted || !state_->matches(expected) || (by != L"esc" && by != L"chord") ||
       (by == L"esc" && (!state_->session->esc_stops || state_->session->mode != L"foreground" || state_->session->paused))) return false;
-  state_->halted = true; state_->physical_pause = true; state_->session->paused = true; state_->session->esc_stops = false; ++state_->generation; ++state_->publication; state_->session->observation_epoch = ++state_->epoch;
+  state_->cancel_warmup(); state_->halted = true; state_->physical_pause = true; state_->session->paused = true; state_->session->esc_stops = false; ++state_->generation; ++state_->publication; state_->session->observation_epoch = ++state_->epoch;
   state_->options.observations_invalidated(); state_->retire_releases(); state_->cleanup(L"stop");
   state_->cancel_active(L"stopped", L"Physical Stop ended this task."); state_->cancel_queue(true, L"stopped"); state_->changed_session();
   JsonObject fields; fields.Insert(L"by", JsonValue::CreateStringValue(by)); state_->release_input({}, false, event_document(L"stop", fields)); state_->pump(); return true;
+}
+bool Dispatcher::input_detection(bool alive, std::wstring_view reason, const ServerSession& expected) {
+  std::lock_guard lock(state_->mutex);
+  if (state_->ended || !state_->session || !state_->matches(expected) || state_->session->mode != L"foreground" ||
+      (alive ? !reason.empty() : reason != L"probe_missing" && reason != L"elevated_foreground" && reason != L"secure_desktop")) return false;
+  JsonObject fields; fields.Insert(L"alive", JsonValue::CreateBooleanValue(alive));
+  if (!alive) fields.Insert(L"reason", JsonValue::CreateStringValue(reason));
+  const auto event = event_document(L"input_detection", fields);
+  if (alive) {
+    if (!state_->options.native_event_current(event, state_->session)) return false;
+    state_->emit(event, {}, State::Authority{state_->generation, state_->session, true, false}); state_->pump(); return true;
+  }
+  state_->cancel_warmup();
+  if (!state_->physical_pause || !state_->session->paused || state_->session->esc_stops) {
+    state_->physical_pause = true; state_->session->paused = true; state_->session->esc_stops = false;
+    ++state_->generation; ++state_->publication; state_->session->observation_epoch = ++state_->epoch;
+    state_->options.observations_invalidated(); state_->retire_releases();
+    state_->cleanup(L"input-detection"); state_->cancel_active(L"paused", L"Native input detection became unavailable."); state_->cancel_queue(true, L"paused"); state_->changed_session();
+  }
+  state_->release_input({}, false, event); state_->pump(); return true;
+}
+void Dispatcher::foreground_readiness_changed(const ServerSession& expected) {
+  std::lock_guard lock(state_->mutex);
+  if (!state_->ended && state_->session && state_->matches(expected)) state_->pump();
 }
 void Dispatcher::notify_display_change() {
   std::lock_guard lock(state_->mutex); if (state_->ended) return;

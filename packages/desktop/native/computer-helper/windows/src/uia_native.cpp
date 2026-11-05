@@ -125,6 +125,7 @@ class NativeUia final : public std::enable_shared_from_this<NativeUia> {
   uint64_t sequence_ = 0;
   const UiaObservation* mutation_ = nullptr;
   std::wstring mutation_name_;
+  std::function<bool()> mutation_gate_;
 
   IUIAutomationElement* native(const UiaElement& value) {
     current_call(); if (!value || !value->native_ || !value->native_->element) unavailable(); return value->native_->element.get();
@@ -415,6 +416,7 @@ class NativeUia final : public std::enable_shared_from_this<NativeUia> {
         throw Failure{L"stale_ref", L"The native accessibility menu changed."};
     }
     current_mutation(window);
+    require_uia_mutation_gate(mutation_gate_);
   }
   bool set_value(const UiaElement& element, const std::wstring& text, const WindowsWindow* window = nullptr) {
     const auto state = security(element); if (state.password) throw Failure{L"secure_field", L"The native field is secure."};
@@ -460,7 +462,7 @@ class NativeUia final : public std::enable_shared_from_this<NativeUia> {
     return false;
   }
   bool commit(const UiaObservation& expected, const UiaName& expected_name, const std::wstring& action,
-              const std::optional<std::wstring>& text, const std::shared_ptr<std::atomic_bool>& attempted) {
+              const std::optional<std::wstring>& text, const std::shared_ptr<std::atomic_bool>& attempted,const std::function<bool()>& metadata_gate) {
     if (!windows_window_current(expected.window) || !equal(root(expected.window), expected.root) || !belongs(expected.element, expected.window))
       throw Failure{L"stale_ref", L"The native accessibility target changed."};
     const auto state = security(expected.element); const auto label = name(expected.element); const auto& old = expected.security;
@@ -472,11 +474,16 @@ class NativeUia final : public std::enable_shared_from_this<NativeUia> {
       if (!menu || !expected.menu || menu->path != expected.menu->path || menu->accelerator != expected.menu->accelerator || menu->access != expected.menu->access)
         throw Failure{L"stale_ref", L"The native accessibility menu changed."};
     } else if (expected.menu) throw Failure{L"stale_ref", L"The native accessibility target changed."};
-    current_call(); attempted->store(true); mutation_ = &expected; mutation_name_ = expected_name.text;
-    struct Reset { const UiaObservation*& target; std::wstring& name; ~Reset() { target = nullptr; name.clear(); } } reset{mutation_, mutation_name_};
+    current_call(); attempted->store(true); mutation_ = &expected; mutation_name_ = expected_name.text;mutation_gate_=metadata_gate;
+    struct Reset { const UiaObservation*& target; std::wstring& name;std::function<bool()>& gate; ~Reset() { target = nullptr; name.clear();gate={}; } } reset{mutation_, mutation_name_,mutation_gate_};
     return text ? set_value(expected.element, *text, &expected.window) : perform(expected.element, action, &expected.window);
   }
 };
+
+void require_uia_mutation_gate(const std::function<bool()>& gate) {
+  bool current=false;try{current=gate && gate();}catch(...){}
+  if(!current)throw Failure{L"changed",L"Physical input detection no longer permits the accessibility action."};
+}
 
 WindowsUiaBackend WindowsUiaBackend::system() {
   const auto native = NativeUia::make(); WindowsUiaBackend backend;
@@ -495,9 +502,9 @@ WindowsUiaBackend WindowsUiaBackend::system() {
   backend.close = [native] { native->close(); };
   backend.menu_shortcuts = [native](const auto& root) { try { return native->call([native, root] { return native->menus(root); }); } catch (...) { return std::optional<std::vector<UiaMenuShortcut>>{}; } };
   backend.available = [native] { return native->available(); };
-  backend.commit = [native](const auto& observed, const auto& name, std::wstring_view action, const std::optional<std::wstring>& text) {
+  backend.commit = [native](const auto& observed, const auto& name, std::wstring_view action, const std::optional<std::wstring>& text,const std::function<bool()>& metadata_gate) {
     const auto attempted = std::make_shared<std::atomic_bool>(false);
-    try { return native->call([native, observed, name, action = std::wstring(action), text, attempted] { return native->commit(observed, name, action, text, attempted); }); }
+    try { return native->call([native, observed, name, action = std::wstring(action), text, attempted,metadata_gate] { return native->commit(observed, name, action, text, attempted,metadata_gate); }); }
     catch (...) { if (attempted->load()) throw Failure{L"changed", L"The native accessibility action could not be confirmed."}; throw; }
   };
   backend.menu_target = [native](const auto& element, const auto& root) -> std::optional<UiaMenuShortcut> {

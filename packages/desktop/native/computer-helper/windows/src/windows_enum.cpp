@@ -335,7 +335,7 @@ WindowsBackend WindowsBackend::system(std::function<std::optional<bool>(const Wi
     if (!same_windows_window(live, prepared)) refuse(L"changed");
     if (live.minimized) {
       bool initiated = false;
-      if (!context.with_current([&] { if (Clock::now() - prepared_at >= std::chrono::milliseconds(50) || !windows_window_current(live)) refuse(L"changed"); policy(live); initiated = ShowWindowAsync(live.hwnd, SW_RESTORE) != FALSE; })) refuse(L"changed");
+      if (!context.with_current([&] { if (Clock::now() - prepared_at >= std::chrono::milliseconds(50) || !windows_window_current(live)) refuse(L"changed"); policy(live); if(!context.is_current())refuse(L"changed");initiated = ShowWindowAsync(live.hwnd, SW_RESTORE) != FALSE; })) refuse(L"changed");
       if (!initiated) return false;
       const auto deadline = Clock::now() + std::chrono::milliseconds(700);
       while (IsIconic(live.hwnd) && Clock::now() < deadline) { if (!context.is_current()) refuse(L"changed"); std::this_thread::sleep_for(std::chrono::milliseconds(10)); }
@@ -366,7 +366,9 @@ WindowsBackend WindowsBackend::system(std::function<std::optional<bool>(const Wi
       WindowsComCall call;
       if (!call.current()) return;
       // Respect the OS foreground rules; UIA is the real user-equivalent focus route.
+      if(!context.is_current())refuse(L"changed");
       (void)SetForegroundWindow(live.hwnd);
+      if(!context.is_current())refuse(L"changed");
       const auto result = focused->SetFocus();
       if (!call.current()) refuse(L"changed"); requested = SUCCEEDED(result);
     })) refuse(L"changed");

@@ -56,7 +56,8 @@ add_library(computer-core STATIC src/core.cpp src/protocol.cpp src/server.cpp sr
   src/windows_policy.cpp src/windows_process_tree.cpp src/program_registry.cpp src/windows_program.cpp src/guard.cpp
   src/capture.cpp src/capture_native.cpp src/capture_math.cpp
   src/input.cpp src/input_native.cpp src/input_events.cpp src/input_held.cpp src/input_keys.cpp src/input_guardian.cpp
-  src/uia_native.cpp src/uia_input.cpp src/accessibility.cpp src/accessibility_registry.cpp)
+  src/uia_native.cpp src/uia_input.cpp src/accessibility.cpp src/accessibility_registry.cpp
+  src/user_input.cpp src/user_input_native.cpp)
 target_include_directories(computer-core PUBLIC src "${VECTOR_COMPUTER_GENERATED_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/generated")
 target_compile_definitions(computer-core PUBLIC UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX _WIN32_WINNT=0x0A00 WINVER=0x0A00)
 target_link_libraries(computer-core PUBLIC windowsapp uiautomationcore d3d11 dxgi gdi32 user32 shcore wintrust crypt32 advapi32 shell32 ole32 bcrypt xmllite version dwmapi propsys uuid shlwapi windowscodecs imm32 normaliz)
@@ -71,7 +72,7 @@ add_executable(vector-computer-tests tests/main.cpp tests/protocol_tests.cpp tes
   tests/windows_identity_tests.cpp tests/windows_enum_tests.cpp tests/windows_icon_tests.cpp tests/windows_policy_tests.cpp tests/windows_process_tree_tests.cpp
   tests/program_registry_tests.cpp tests/windows_program_tests.cpp tests/guard_tests.cpp tests/capture_math_tests.cpp tests/capture_tests.cpp
   tests/input_tests.cpp tests/input_held_tests.cpp tests/input_keys_tests.cpp tests/input_guardian_tests.cpp tests/uia_native_tests.cpp tests/uia_input_tests.cpp
-  tests/accessibility_tests.cpp tests/accessibility_registry_tests.cpp tests/availability_tests.cpp "${CMAKE_CURRENT_BINARY_DIR}/generated/test-inputs.rc")
+  tests/accessibility_tests.cpp tests/accessibility_registry_tests.cpp tests/availability_tests.cpp tests/user_input_tests.cpp "${CMAKE_CURRENT_BINARY_DIR}/generated/test-inputs.rc")
 target_link_libraries(vector-computer-tests PRIVATE computer-core xmllite version)
 add_dependencies(vector-computer-tests vector-computer)
 

@@ -34,7 +34,8 @@ struct Fixture {
   std::vector<std::wstring> cleanup;
   std::vector<ServerSession> announced;
   uint32_t releases = 0, invalidations = 0, stops = 0;
-  bool write_ok = true, available = true, ready = true, receiving = false, throw_cleanup = false;
+  bool write_ok = true, available = true, ready = true, pending = false, receiving = false, throw_cleanup = false, detection_current = true;
+  std::optional<ServerSession> readiness_scope;
   std::unique_ptr<Dispatcher> dispatcher;
   explicit Fixture(CleanupMode mode) : Fixture(1000, 2 * kMaxFrameBytes, 2 * kMaxFrameBytes + 8, true, mode != CleanupMode::synchronous, mode == CleanupMode::prepared) {}
   explicit Fixture(size_t queue_limit = 1000, size_t byte_limit = 2 * kMaxFrameBytes, size_t output_limit = 2 * kMaxFrameBytes + 8, bool responsible = true, bool deferred_cleanup = false, bool prepared_cleanup = false) {
@@ -64,7 +65,14 @@ struct Fixture {
     options.observations_invalidated = [this] { ++invalidations; };
     options.session_changed = [this](const auto& session) { if (session) announced.push_back(*session); };
     options.available = [this] { return available; };
-    options.foreground_ready = [this](const auto&) { return ready; };
+    options.foreground_ready = [this](const auto& session) {
+      return ready && (!readiness_scope || (readiness_scope->run_epoch == session.run_epoch && readiness_scope->observation_epoch == session.observation_epoch && readiness_scope->id == session.id && readiness_scope->revision == session.revision));
+    };
+    options.foreground_pending = [this](const auto&) { return pending; };
+    options.native_event_current = [this](const JsonObject& event, const std::optional<ServerSession>& session) {
+      if (event.GetNamedString(L"event") != L"input_detection" || !event.GetNamedBoolean(L"alive")) return true;
+      return detection_current && ready && session.has_value() && (!readiness_scope || (readiness_scope->run_epoch == session->run_epoch && readiness_scope->observation_epoch == session->observation_epoch && readiness_scope->id == session->id && readiness_scope->revision == session->revision));
+    };
     options.execute = [this](Task task) { work.push_back(std::move(task)); };
     options.output_execute = [this](Task task) { output.push_back(std::move(task)); };
     options.schedule = [this](uint32_t ms, Task task) {
@@ -100,6 +108,13 @@ struct Fixture {
     return static_cast<size_t>(std::count_if(delivered.begin(), delivered.end(), [id](const auto& item) { return item.value.HasKey(L"id") && safe_integer(item.value.Lookup(L"id")) == id; }));
   }
   bool code(uint64_t id, std::wstring_view expected) const { const auto value = reply(id); return value.HasKey(L"code") && value.GetNamedString(L"code") == expected; }
+  size_t events(std::wstring_view name) const {
+    return static_cast<size_t>(std::count_if(delivered.begin(), delivered.end(), [&](const auto& item) { return item.value.HasKey(L"event") && item.value.GetNamedString(L"event") == name; }));
+  }
+  JsonObject event(std::wstring_view name) const {
+    for (auto it = delivered.rbegin(); it != delivered.rend(); ++it) if (it->value.HasKey(L"event") && it->value.GetNamedString(L"event") == name) return it->value;
+    throw std::runtime_error("server.missing-event");
+  }
 };
 }
 
@@ -498,6 +513,201 @@ size_t run_server_tests() {
     fixture.cleaners(); require(fixture.cleanup_completions.size() == 1, "server.retired-preparations-never-start-late-cleanup-providers");
     fixture.cleanup_completions[0](true, 0); fixture.outputs();
     require(fixture.code(1, L"changed") && fixture.code(127, L"changed") && fixture.reply(128).GetNamedBoolean(L"ok") && !fixture.dispatcher->closed(), "server.bounded-retired-controls-return-only-after-current-confirmed-cleanup");
+  });
+  test([] {
+    Fixture fixture; fixture.begin(4); fixture.ready = false; fixture.pending = true; size_t writes = 0;
+    fixture.dispatcher->register_handler(L"input.key", 1000, true, true, [&](const auto&, const auto&, auto done) { ++writes; done(Reply{}); });
+    fixture.receive(2, L"input.key", object(LR"({"sessionId":"synthetic","phaseRevision":4})")); fixture.drain(); fixture.advance(9);
+    require(writes == 0 && fixture.replies(2) == 0, "server.foreground-pending-keeps-original-request-before-handler");
+    fixture.ready = true; fixture.pending = false; fixture.advance(1);
+    require(writes == 1 && fixture.reply(2).GetNamedBoolean(L"ok"), "server.fresh-probe-admits-original-request-at-next-ten-ms-poll");
+    fixture.advance(1000); require(writes == 1 && fixture.replies(2) == 1, "server.retired-warmup-cannot-run-handler-twice");
+  });
+  test([] {
+    Fixture fixture; fixture.begin(); fixture.ready = false; fixture.pending = false; size_t writes = 0;
+    fixture.dispatcher->register_handler(L"input.key", 1000, true, true, [&](const auto&, const auto&, auto) { ++writes; });
+    fixture.receive(2, L"input.key"); fixture.drain();
+    require(fixture.code(2, L"paused") && writes == 0 && std::none_of(fixture.timers.begin(), fixture.timers.end(), [](const auto& timer) { return !timer->cancelled && timer->due < 5000; }), "server.known-missing-detector-does-not-invent-warmup");
+  });
+  test([] {
+    Fixture fixture; fixture.begin(); fixture.ready = false; fixture.pending = true; size_t writes = 0;
+    fixture.dispatcher->register_handler(L"input.key", 1000, true, true, [&](const auto&, const auto&, auto) { ++writes; });
+    const auto releases = fixture.releases; fixture.receive(2, L"input.key"); fixture.advance(999);
+    require(writes == 0 && fixture.replies(2) == 0, "server.pending-probe-keeps-bounded-warmup-open-before-one-second");
+    fixture.advance(1);
+    require(fixture.code(2, L"paused") && writes == 0 && fixture.releases == releases && fixture.replies(2) == 1, "server.missing-fresh-probe-refuses-before-handler-at-one-second");
+  });
+  test([] {
+    Fixture fixture; fixture.begin(); fixture.ready = false; fixture.pending = true; size_t writes = 0;
+    fixture.dispatcher->register_handler(L"input.key", 1000, true, true, [&](const auto&, const auto&, auto done) { ++writes; done(Reply{}); });
+    fixture.receive(2, L"input.key"); const auto timer = fixture.timers.back(); auto stale = *fixture.dispatcher->session_snapshot(); ++stale.observation_epoch;
+    fixture.ready = true; fixture.pending = false; fixture.dispatcher->foreground_readiness_changed(stale); fixture.drain();
+    require(writes == 0 && fixture.replies(2) == 0, "server.foreign-readiness-callback-cannot-wake-current-front-request");
+    fixture.dispatcher->foreground_readiness_changed(*fixture.dispatcher->session_snapshot()); fixture.drain();
+    require(writes == 1 && fixture.reply(2).GetNamedBoolean(L"ok") && timer->cancelled, "server.exact-readiness-callback-wakes-without-an-extra-poll");
+    timer->body(); fixture.drain(); require(writes == 1 && fixture.replies(2) == 1, "server.late-cancelled-readiness-timer-is-inert");
+  });
+  test([] {
+    Fixture fixture; fixture.begin(4); fixture.ready = false; fixture.pending = true; size_t writes = 0;
+    fixture.dispatcher->register_handler(L"input.key", 1000, true, true, [&](const auto&, const auto&, auto done) { ++writes; done(Reply{}); });
+    const auto old = *fixture.dispatcher->session_snapshot(); fixture.readiness_scope = old;
+    fixture.receive(2, L"input.key", object(LR"({"sessionId":"synthetic","phaseRevision":4})")); const auto timer = fixture.timers.back();
+    fixture.receive(3, L"session.begin", begin_args(4)); fixture.receive(4, L"input.key", object(LR"({"sessionId":"synthetic","phaseRevision":4})")); fixture.drain();
+    fixture.ready = true; timer->body(); fixture.dispatcher->foreground_readiness_changed(old); fixture.drain();
+    require(fixture.code(2, L"changed") && writes == 0 && fixture.replies(4) == 0, "server.old-run-probe-and-timer-cannot-admit-reused-wire-session");
+    fixture.readiness_scope = *fixture.dispatcher->session_snapshot(); fixture.pending = false;
+    fixture.dispatcher->foreground_readiness_changed(*fixture.readiness_scope); fixture.drain();
+    require(writes == 1 && fixture.reply(4).GetNamedBoolean(L"ok") && fixture.replies(2) == 1, "server.new-private-run-readiness-admits-only-new-request");
+  });
+  test([] {
+    Fixture fixture; fixture.begin(4); fixture.ready = false; fixture.pending = true; size_t writes = 0;
+    fixture.dispatcher->register_handler(L"input.key", 1000, true, true, [&](const auto&, const auto&, auto) { ++writes; });
+    fixture.receive(2, L"input.key", object(LR"({"sessionId":"synthetic","phaseRevision":4})")); const auto old = *fixture.dispatcher->session_snapshot(); const auto timer = fixture.timers.back();
+    fixture.receive(3, L"session.update", object(LR"({"sessionId":"synthetic","phaseRevision":4,"escStops":false})")); fixture.drain();
+    fixture.ready = true; fixture.pending = false; fixture.dispatcher->foreground_readiness_changed(old); timer->body(); fixture.drain();
+    require(writes == 0 && fixture.code(2, L"changed") && fixture.replies(2) == 1 && fixture.dispatcher->session_snapshot()->observation_epoch != old.observation_epoch, "server.same-revision-update-retires-exact-warmup-scope");
+  });
+  test([] {
+    Fixture fixture; fixture.begin(); fixture.ready = false; fixture.pending = true; size_t writes = 0;
+    fixture.dispatcher->register_handler(L"input.key", 1000, true, true, [&](const auto&, const auto&, auto) { ++writes; });
+    fixture.receive(2, L"input.key"); const auto timer = fixture.timers.back(); const auto session = *fixture.dispatcher->session_snapshot();
+    fixture.dispatcher->close(L"eof"); fixture.ready = true; fixture.pending = false; timer->body(); fixture.dispatcher->foreground_readiness_changed(session); fixture.drain();
+    require(fixture.dispatcher->closed() && timer->cancelled && writes == 0 && fixture.replies(2) == 0, "server.eof-cancels-warmup-without-waiting-or-late-native-work");
+  });
+  test([] {
+    Fixture fixture; fixture.begin(); fixture.ready = false; fixture.pending = true; size_t writes = 0;
+    fixture.dispatcher->register_handler(L"input.key", 1000, true, true, [&](const auto&, const auto&, auto) { ++writes; });
+    fixture.receive(2, L"input.key"); const auto timer = fixture.timers.back();
+    require(fixture.dispatcher->stop_from_physical_input(L"chord", *fixture.dispatcher->session_snapshot()), "server.stop-during-fresh-probe-warmup"); fixture.drain();
+    fixture.ready = true; fixture.pending = false; timer->body(); fixture.dispatcher->foreground_readiness_changed(*fixture.dispatcher->session_snapshot()); fixture.receive(3, L"input.key"); fixture.drain();
+    require(fixture.code(2, L"stopped") && fixture.code(3, L"stopped") && fixture.events(L"stop") == 1 && writes == 0, "server.stop-cancels-warmup-and-positive-readiness-cannot-resume");
+  });
+  test([] {
+    Fixture fixture; fixture.begin(); fixture.ready = false; fixture.pending = true; size_t writes = 0;
+    fixture.dispatcher->register_handler(L"input.key", 1000, true, true, [&](const auto&, const auto&, auto done) { ++writes; done(Reply{}); });
+    fixture.receive(2, L"input.key"); const auto timer = fixture.timers.back(); fixture.receive(3, L"cancel", object(LR"({"target":2})")); fixture.drain();
+    fixture.ready = true; fixture.pending = false; fixture.receive(4, L"input.key"); fixture.drain(); timer->body(); fixture.drain();
+    require(fixture.code(2, L"failed") && fixture.reply(3).GetNamedBoolean(L"ok") && fixture.reply(4).GetNamedBoolean(L"ok") && writes == 1, "server.cancelled-warmup-timer-cannot-retarget-successor");
+  });
+  test([] {
+    Fixture fixture; fixture.begin(); size_t writes = 0;
+    fixture.dispatcher->register_handler(L"input.key", 1000, true, true, [&](const auto&, const auto&, auto done) { ++writes; done(Reply{}); });
+    fixture.receive(2, L"input.key"); const auto old_deadline = fixture.timers.back(); fixture.ready = false; fixture.pending = true; fixture.workers();
+    require(writes == 0 && fixture.replies(2) == 0 && old_deadline->cancelled, "server.probe-pending-at-worker-start-requeues-before-native-handler");
+    fixture.ready = true; fixture.pending = false; fixture.dispatcher->foreground_readiness_changed(*fixture.dispatcher->session_snapshot()); fixture.drain(); old_deadline->body(); fixture.drain();
+    require(writes == 1 && fixture.reply(2).GetNamedBoolean(L"ok") && fixture.replies(2) == 1, "server.pre-handler-warmup-retains-request-and-retires-old-deadline-token");
+  });
+  test([] {
+    Fixture fixture; fixture.begin(); fixture.ready = false; fixture.pending = true; size_t writes = 0;
+    fixture.dispatcher->register_handler(L"input.key", 1000, true, true, [&](const auto&, const auto&, auto) { ++writes; });
+    fixture.receive(2, L"input.key"); const auto timer = fixture.timers.back(); fixture.time += 1001; fixture.ready = true; fixture.pending = false;
+    fixture.dispatcher->foreground_readiness_changed(*fixture.dispatcher->session_snapshot()); fixture.drain(); timer->body(); fixture.drain();
+    require(writes == 0 && fixture.code(2, L"paused") && fixture.replies(2) == 1, "server.late-positive-readiness-cannot-extend-original-warmup-budget");
+  });
+  test([] {
+    Fixture fixture; fixture.begin(); fixture.ready = false; fixture.pending = true; size_t reads = 0;
+    fixture.dispatcher->register_handler(L"synthetic.read", 1000, true, false, [&](const auto&, const auto&, auto done) { ++reads; done(Reply{}); });
+    fixture.receive(2, L"synthetic.read"); fixture.receive(3, L"permissions.status"); fixture.drain();
+    require(reads == 1 && fixture.reply(2).GetNamedBoolean(L"ok") && fixture.reply(3).GetNamedString(L"accessibility") == L"n/a", "server.detector-warmup-does-not-block-read-only-or-inert-handlers");
+  });
+  test([] {
+    Fixture fixture; ServerSession unknown; unknown.id = L"synthetic";
+    require(!fixture.dispatcher->input_detection(true, L"", unknown) && !fixture.dispatcher->input_detection(false, L"probe_missing", unknown), "server.sessionless-input-detection-is-inert");
+    fixture.begin(4); const auto current = *fixture.dispatcher->session_snapshot(); const auto releases = fixture.releases;
+    for (const auto reason : {L"", L"tap_disabled", L"secure_input", L"unknown"}) require(!fixture.dispatcher->input_detection(false, reason, current), "server.windows-detection-refuses-unknown-or-foreign-platform-reasons");
+    require(!fixture.dispatcher->input_detection(true, L"probe_missing", current), "server.positive-health-cannot-carry-a-negative-reason");
+    auto foreign = current; ++foreign.run_epoch;
+    require(!fixture.dispatcher->input_detection(false, L"probe_missing", foreign) && !fixture.dispatcher->input_detection(true, L"", foreign), "server.detection-needs-exact-private-run-not-reused-wire-id");
+    fixture.outputs(); require(fixture.releases == releases && fixture.events(L"input_detection") == 0 && !fixture.dispatcher->session_snapshot()->paused, "server.rejected-detection-does-not-mutate-authority-or-publish");
+  });
+  test([] {
+    Fixture fixture; fixture.begin(4); const auto current = *fixture.dispatcher->session_snapshot(); const auto releases = fixture.releases;
+    require(fixture.dispatcher->input_detection(true, L"", current), "server.positive-current-detector-witness"); fixture.outputs();
+    const auto event = fixture.event(L"input_detection");
+    require(event.GetNamedBoolean(L"alive") && !event.HasKey(L"reason") && fixture.releases == releases && fixture.dispatcher->session_snapshot()->observation_epoch == current.observation_epoch, "server.positive-health-is-observation-without-release-or-authority-change");
+  });
+  test([] {
+    for (const auto reason : {L"probe_missing", L"elevated_foreground", L"secure_desktop"}) {
+      Fixture fixture; fixture.begin(4); const auto expected = *fixture.dispatcher->session_snapshot(); const auto releases = fixture.releases;
+      require(fixture.dispatcher->input_detection(false, reason, expected), "server.current-windows-detection-loss-admitted");
+      const auto paused = *fixture.dispatcher->session_snapshot();
+      require(paused.paused && !paused.esc_stops && paused.run_epoch == expected.run_epoch && paused.observation_epoch != expected.observation_epoch && fixture.releases > releases && fixture.events(L"input_detection") == 0, "server.detection-loss-pauses-and-revokes-before-wire-event");
+      fixture.outputs(); const auto event = fixture.event(L"input_detection");
+      require(!event.GetNamedBoolean(L"alive") && event.GetNamedString(L"reason") == reason, "server.windows-negative-detection-keeps-exact-native-reason");
+    }
+  });
+  test([] {
+    Fixture fixture(CleanupMode::deferred); fixture.begin_deferred(4); OperationContext context;
+    fixture.dispatcher->register_handler(L"input.key", 1000, true, true, [&](const auto&, const auto& actual, auto) { context = actual; });
+    fixture.receive(2, L"input.key", object(LR"({"sessionId":"synthetic","phaseRevision":4})")); fixture.receive(3, L"input.key", object(LR"({"sessionId":"synthetic","phaseRevision":4})")); fixture.workers();
+    const auto expected = *fixture.dispatcher->session_snapshot(); fixture.ready = false;
+    require(fixture.dispatcher->input_detection(false, L"probe_missing", expected), "server.foreground-detection-loss-admitted-with-owned-input"); fixture.drain();
+    require(!context.is_current() && fixture.replies(2) == 0 && fixture.code(3, L"paused") && fixture.events(L"input_detection") == 0, "server.detection-loss-revokes-active-and-queued-input-before-cleanup-event");
+    fixture.cleaners(); fixture.cleanup_completions[1](true, 2); fixture.drain();
+    require(fixture.code(2, L"paused") && fixture.events(L"input_detection") == 1 && !fixture.event(L"input_detection").GetNamedBoolean(L"alive"), "server.detection-loss-event-and-interrupted-error-follow-confirmed-owned-ups");
+    fixture.receive(4, L"session.update", object(LR"({"sessionId":"synthetic","phaseRevision":5,"paused":false})")); fixture.drain();
+    require(fixture.code(4, L"changed"), "server.newer-working-update-cannot-resume-detection-pause");
+  });
+  test([] {
+    Fixture fixture; fixture.begin(4); fixture.ready = false;
+    require(fixture.dispatcher->input_detection(false, L"probe_missing", *fixture.dispatcher->session_snapshot()), "server.pause-before-positive-health"); fixture.outputs();
+    const auto paused = *fixture.dispatcher->session_snapshot(); fixture.ready = true;
+    require(fixture.dispatcher->input_detection(true, L"", paused), "server.positive-health-observed-while-paused"); fixture.outputs();
+    fixture.dispatcher->foreground_readiness_changed(paused);
+    const auto after = *fixture.dispatcher->session_snapshot();
+    require(after.paused && !after.esc_stops && after.observation_epoch == paused.observation_epoch && fixture.events(L"input_detection") == 2, "server.health-recovery-never-unpauses-or-rotates-authority");
+    fixture.dispatcher->register_handler(L"input.key", 1000, true, true, [](const auto&, const auto&, auto) {});
+    fixture.receive(2, L"input.key", object(LR"({"sessionId":"synthetic","phaseRevision":4})")); fixture.drain(); require(fixture.code(2, L"paused"), "server.positive-health-cannot-resume-native-input");
+  });
+  test([] {
+    Fixture fixture; fixture.begin(4); const auto expected = *fixture.dispatcher->session_snapshot();
+    require(fixture.dispatcher->input_detection(true, L"", expected), "server.queued-positive-health-admitted");
+    fixture.detection_current = false; fixture.ready = false; fixture.receive(2, L"permissions.status"); fixture.outputs();
+    require(fixture.events(L"input_detection") == 0 && fixture.reply(2).GetNamedString(L"screen") == L"n/a" && fixture.dispatcher->session_snapshot()->observation_epoch == expected.observation_epoch, "server.same-scope-health-loss-drops-queued-alive-without-filtering-responses");
+    require(std::none_of(fixture.delivered.begin(), fixture.delivered.end(), [](const auto& item) { return item.value.HasKey(L"id") && safe_integer(item.value.Lookup(L"id")) == 0; }), "server.dropped-stale-health-never-becomes-id-zero-response");
+    require(!fixture.dispatcher->input_detection(true, L"", expected), "server.known-stale-positive-health-is-refused-before-enqueue");
+  });
+  test([] {
+    Fixture fixture(CleanupMode::deferred); fixture.begin_deferred(4); fixture.ready = false;
+    require(fixture.dispatcher->input_detection(false, L"probe_missing", *fixture.dispatcher->session_snapshot()), "server.negative-cause-before-cleanup");
+    fixture.ready = true; fixture.detection_current = false; fixture.cleaners(); fixture.cleanup_completions[1](true, 1); fixture.outputs();
+    require(fixture.events(L"input_detection") == 1 && !fixture.event(L"input_detection").GetNamedBoolean(L"alive") && fixture.event(L"input_detection").GetNamedString(L"reason") == L"probe_missing", "server.historical-negative-cause-survives-same-paused-scope-health-change");
+  });
+  test([] {
+    Fixture fixture(CleanupMode::deferred); fixture.begin_deferred(); OperationContext context;
+    fixture.dispatcher->register_handler(L"input.key", 1000, true, true, [&](const auto&, const auto& actual, auto) { context = actual; });
+    fixture.receive(2, L"input.key"); fixture.workers(); fixture.ready = false;
+    require(fixture.dispatcher->input_detection(false, L"secure_desktop", *fixture.dispatcher->session_snapshot()), "server.negative-detection-with-unknown-release");
+    fixture.cleaners(); fixture.cleanup_completions[1](false, 0); fixture.drain(); fixture.cleanup_completions[1](true, 1); fixture.drain();
+    require(!context.is_current() && fixture.code(2, L"failed") && fixture.events(L"input_detection") == 0 && fixture.dispatcher->session_snapshot()->paused, "server.failed-detection-cleanup-does-not-publish-release-success-or-recover-on-late-callback");
+  });
+  test([] {
+    Fixture fixture(CleanupMode::deferred); fixture.begin_deferred(4); fixture.ready = false;
+    const auto old = *fixture.dispatcher->session_snapshot(); require(fixture.dispatcher->input_detection(false, L"probe_missing", old), "server.negative-detection-before-replacement"); fixture.cleaners();
+    fixture.ready = true; fixture.receive(2, L"session.begin", begin_args(4)); fixture.cleaners(); fixture.cleanup_completions[1](true, 1); fixture.drain();
+    require(fixture.events(L"input_detection") == 0 && fixture.replies(2) == 0 && !fixture.dispatcher->input_detection(true, L"", old), "server.old-detection-cause-and-positive-callback-cannot-retarget-new-run");
+    fixture.cleanup_completions[2](true, 0); fixture.drain(); require(fixture.reply(2).GetNamedBoolean(L"ok") && !fixture.dispatcher->session_snapshot()->paused && fixture.events(L"input_detection") == 0, "server.only-fresh-begin-and-current-cleanup-admit-replacement-run");
+  });
+  test([] {
+    Fixture fixture; fixture.begin(); fixture.ready = false; fixture.pending = true; fixture.available = false; size_t writes = 0;
+    fixture.dispatcher->register_handler(L"input.key", 1000, true, true, [&](const auto&, const auto&, auto) { ++writes; });
+    fixture.receive(2, L"input.key"); fixture.drain();
+    require(fixture.code(2, L"unavailable") && writes == 0 && std::none_of(fixture.timers.begin(), fixture.timers.end(), [](const auto& timer) { return !timer->cancelled && timer->due < 5000; }), "server.pending-probe-never-delays-existing-desktop-availability-refusal");
+  });
+  test([] {
+    Fixture fixture; fixture.begin(); fixture.ready = false; fixture.pending = true; size_t writes = 0;
+    fixture.dispatcher->register_handler(L"input.key", 1000, true, true, [&](const auto&, const auto&, auto) { ++writes; });
+    fixture.receive(2, L"input.key"); const auto timer = fixture.timers.back(); fixture.receive(3, L"cancel"); fixture.drain();
+    fixture.ready = true; fixture.pending = false; timer->body(); fixture.dispatcher->foreground_readiness_changed(*fixture.dispatcher->session_snapshot()); fixture.drain();
+    require(fixture.code(2, L"changed") && fixture.reply(3).GetNamedBoolean(L"ok") && writes == 0 && fixture.replies(2) == 1, "server.idle-global-cancel-also-retires-request-held-in-readiness-warmup");
+  });
+  test([] {
+    Fixture fixture; fixture.begin(4); fixture.ready = false; fixture.pending = true; size_t writes = 0;
+    fixture.dispatcher->register_handler(L"input.key", 1000, true, true, [&](const auto&, const auto&, auto) { ++writes; });
+    fixture.receive(2, L"input.key", object(LR"({"sessionId":"synthetic","phaseRevision":4})")); const auto timer = fixture.timers.back(); const auto old = *fixture.dispatcher->session_snapshot();
+    require(fixture.dispatcher->input_detection(false, L"probe_missing", old), "server.pending-probe-failure-is-current-negative-cause"); fixture.drain();
+    fixture.ready = true; fixture.pending = false; timer->body(); fixture.dispatcher->foreground_readiness_changed(old); fixture.drain();
+    require(fixture.code(2, L"paused") && fixture.events(L"input_detection") == 1 && !fixture.event(L"input_detection").GetNamedBoolean(L"alive") && writes == 0, "server.negative-detector-witness-cancels-warmup-before-handler-or-old-readiness-wakeup");
   });
   return groups;
 }

@@ -73,9 +73,11 @@ struct InputBackend {
   std::function<std::wstring(const WindowsWindow&)> keyboard_fingerprint;
   std::function<bool()> quiet;
   std::function<bool()> available;
-  std::function<InputPostResult(const InputPostedEvent&)> post;
+  // Called on the same authority-owning thread immediately before the native SendInput call,
+  // after its kernel/layout preparation. Owned cleanup UPs deliberately have no current gate.
+  std::function<InputPostResult(const InputPostedEvent&,const std::function<bool()>& current)> post;
   // One complete Unicode scalar (one/two UTF16 units), DOWN/UP pairs in one atomic SendInput array.
-  std::function<InputPostResult(std::span<const InputPostedEvent>)> post_batch;
+  std::function<InputPostResult(std::span<const InputPostedEvent>,const std::function<bool()>& current)> post_batch;
   std::function<bool(const InputRelease&)> release;
   // Metadata only, after an actual matching tagged-DOWN receipt, including Unicode scalar batches.
   std::function<void(const InputRelease&)> confirm_down;

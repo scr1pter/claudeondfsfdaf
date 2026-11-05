@@ -330,8 +330,11 @@ void AccessibilityService::mutate(const JsonObject& args, const OperationContext
       WindowsSessionPolicy(session).require(window, operation, prepared.native.security.password);
       if (menu(prepared.native.security.control_type)) require_menu(prepared.facts, menu_rules);
       if (backend_.uia.commit) {
+        if(!backend_.mutation_current)failure(L"changed");
+        const auto metadata_gate=[valid=backend_.mutation_current,session] {return valid(session);};
+        require_uia_mutation_gate(metadata_gate);
         attempted = true;
-        accepted = backend_.uia.commit(prepared.native, prepared.facts.name, setting ? std::wstring_view{} : std::wstring_view(*payload), setting ? std::optional<std::wstring>(*payload) : std::nullopt);
+        accepted = backend_.uia.commit(prepared.native, prepared.facts.name, setting ? std::wstring_view{} : std::wstring_view(*payload), setting ? std::optional<std::wstring>(*payload) : std::nullopt,metadata_gate);
       } else {
         // Explicit injected backends run the same fresh-fact fence synchronously. Production uses
         // the single-job UIA commit above, with one total RPC deadline and late-result quarantine.
@@ -339,6 +342,7 @@ void AccessibilityService::mutate(const JsonObject& args, const OperationContext
         if (!same_accessibility_facts(prepared.facts, live.facts) || backend_.now() - began >= 50) failure(L"stale_ref");
         WindowsSessionPolicy(session).require(window, operation, live.native.security.password);
         if (live.native.security.password) failure(L"secure_field");
+        current(context);if(backend_.mutation_current && !backend_.mutation_current(session))failure(L"changed");
         attempted = true;
         accepted = setting ? backend_.uia.set_value(record.element, *payload) : backend_.uia.perform(record.element, *payload);
       }

@@ -101,7 +101,7 @@ struct Fixture {
   InputPostResult post_result = InputPostResult::accepted, batch_result = InputPostResult::accepted;
   bool reflect_uncertain = false, azerty = false;
   size_t observations = 0, binds = 0, menu_reads = 0, capture_checks = 0, point_checks = 0, commits = 0, parent_ups = 0, forgets = 0;
-  std::function<void()> before_fence, before_observe, during_menus;
+  std::function<void()> before_fence, before_observe, during_menus,during_capture_current,during_freshness,during_native_preparation;
   std::function<void(const InputPostedEvent&)> after_post;
   std::function<void(size_t)> after_batch;
   std::function<void(POINT)> on_point;
@@ -150,6 +150,7 @@ struct Fixture {
         a.text_pattern == b.text_pattern && a.text_read_only == b.text_read_only;
     };
     provider.fresh = [this](const auto& value, uint64_t age) {
+      if(inside && during_freshness)during_freshness();
       return element_current && now >= value.observed_at_ms && now - value.observed_at_ms <= age;
     };
     provider.menus = [this](const auto&, const auto&) { ++menu_reads; if (during_menus) during_menus(); return menus; };
@@ -161,6 +162,7 @@ struct Fixture {
     };
     backend.capture_current = [this](const auto& old, const ServerSession& authority) {
       ++capture_checks;
+      if(inside && during_capture_current)during_capture_current();
       return capture_valid && old.generation == capture.generation && old.run_epoch == authority.run_epoch &&
         old.observation_epoch == authority.observation_epoch && old.revision == authority.revision;
     };
@@ -191,15 +193,20 @@ struct Fixture {
     backend.keyboard_fingerprint = [this](const auto&) { return fingerprint; };
     backend.quiet = [this] { return quiet; };
     backend.available = [this] { if (availability) require_windows_surface(*availability); return available; };
-    backend.post = [this](const InputPostedEvent& event) {
+    backend.post = [this](const InputPostedEvent& event,const std::function<bool()>& current) {
       check(inside, "input.native-post-only-inside-current-authority");
+      if(during_native_preparation)during_native_preparation();
+      if(!current || !current())throw Failure{L"changed",L"Synthetic native input authority changed."};
       if (post_result == InputPostResult::accepted || (post_result == InputPostResult::uncertain && reflect_uncertain)) {
         events.push_back(event); guardian->event(event);
       }
       if (after_post) after_post(event); return post_result;
     };
-    backend.post_batch = [this](auto posted) {
-      check(inside, "input.native-batch-only-inside-current-authority"); batches.emplace_back(posted.begin(), posted.end());
+    backend.post_batch = [this](auto posted,const std::function<bool()>& current) {
+      check(inside, "input.native-batch-only-inside-current-authority");
+      if(during_native_preparation)during_native_preparation();
+      if(!current || !current())throw Failure{L"changed",L"Synthetic native input authority changed."};
+      batches.emplace_back(posted.begin(), posted.end());
       size_t accepted = batch_result == InputPostResult::accepted ? posted.size() : (reflect_uncertain ? 1U : 0U);
       for (size_t index = 0; index < accepted; ++index) { events.push_back(posted[index]); guardian->event(posted[index]); }
       if (after_batch) after_batch(batches.size()); return batch_result;
@@ -845,6 +852,24 @@ size_t run_input_tests() {
       failure(fixture.take(op,value),L"changed"); fixture.pump();
       check(crossed && fixture.guardian->ledger.released_count()==1 && !fixture.guardian->ledger.pending(),
         "input.up-receipt-crossing-held-cap-cannot-erase-the-age-witness-and-report-success");
+    }
+  });
+  test([] {
+    Fixture fixture;fixture.during_capture_current=[&]{fixture.live=false;};
+    failure(fixture.take(L"input.click"),L"changed");fixture.pump();
+    check(fixture.events.empty() && fixture.guardian->ups.empty(),"input.hardware-revocation-during-capture-precondition-prevents-native-mutation");
+  });
+  test([] {
+    Fixture fixture;fixture.during_freshness=[&]{fixture.live=false;};
+    failure(fixture.take(L"input.key"),L"changed");fixture.pump();
+    check(fixture.events.empty() && fixture.guardian->ups.empty(),"input.hardware-revocation-during-keyboard-precondition-prevents-native-mutation");
+  });
+  test([] {
+    for(const auto op:{L"input.click",L"input.key",L"input.type"}){
+      Fixture fixture;fixture.during_native_preparation=[&]{fixture.live=false;};
+      auto args=fixture.args(op);if(std::wstring_view(op)==L"input.type")args.Insert(L"text",JsonValue::CreateStringValue(L"a"));
+      failure(fixture.take(op,args),L"changed");fixture.pump();
+      check(fixture.events.empty() && fixture.batches.empty() && fixture.guardian->ups.empty(),"input.hardware-revocation-during-last-native-preparation-prevents-sendinput");
     }
   });
   return groups;

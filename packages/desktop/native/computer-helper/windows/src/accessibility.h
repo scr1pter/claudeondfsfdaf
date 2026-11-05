@@ -17,6 +17,7 @@ struct AccessibilityBackend {
   std::function<bool(const CaptureReceipt&, const ServerSession&)> capture_current;
   std::function<uint64_t()> now;
   InputKeyTextRules key_rules;
+  std::function<bool(const ServerSession&)> mutation_current;
   static AccessibilityBackend system(std::shared_ptr<CaptureService>, WindowsUiaBackend = WindowsUiaBackend::system());
 };
 

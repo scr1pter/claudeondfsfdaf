@@ -233,6 +233,7 @@ void WindowsGuard::commit_point(const WindowsPointOwner& actual, const ServerSes
     if (!current_stamp(actual.stamp,session,backend_.now()) || !backend_.current(actual.window) || !backend_.foreground_current(actual.window) || !backend_.point_current(actual, session) || !current_stamp(actual.stamp,session,backend_.now())) fail(L"changed", L"The native pointer ownership changed before input.");
     backend_.require_surface(actual.window);
     if (!current_stamp(actual.stamp,session,backend_.now())) fail(L"changed",L"The native pointer observation expired before input.");
+    if(!context.is_current())fail(L"changed",L"Physical input revoked the native pointer action.");
     mutation();
   })) fail(L"changed", L"The computer session changed before input.");
 }
@@ -260,6 +261,7 @@ void WindowsGuard::with_element(const WindowsWindow& expected, const ServerSessi
     // timeout/late completion; no provider wait extends this authority fence indefinitely.
     backend_.require_surface(actual);
     if (!current_stamp(stamp,session,backend_.now())) fail(L"changed",L"The native element observation expired before its action.");
+    if(!context.is_current())fail(L"changed",L"Physical input revoked the native element action.");
     mutation();
   })) fail(L"changed", L"The computer session changed before the element action.");
 }
@@ -277,6 +279,7 @@ void WindowsGuard::commit_foreground(const WindowsWindow& actual, const ServerSe
     if (!current_stamp(stamp,session,backend_.now()) || !backend_.current(actual) || !backend_.keyboard_current(actual) || !current_stamp(stamp,session,backend_.now())) fail(L"changed", L"The native foreground app changed before input.");
     backend_.require_surface(actual);
     if (!current_stamp(stamp,session,backend_.now())) fail(L"changed",L"The native keyboard observation expired before input.");
+    if(!context.is_current())fail(L"changed",L"Physical input revoked the native keyboard action.");
     mutation();
   })) fail(L"changed", L"The computer session changed before input.");
 }

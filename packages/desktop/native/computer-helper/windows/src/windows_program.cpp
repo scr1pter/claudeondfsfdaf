@@ -309,6 +309,7 @@ struct NativePrograms final : std::enable_shared_from_this<NativePrograms> {
         if (closed || !children.contains(child->pid) || !current(*seal)) return;
         if (policy.refusal(expected.identity) || policy.protected_path(artifact.path) || policy.protected_path(executable)) protected_route();
         commit();
+        if(!allowed(context))changed();
         if (ResumeThread(child->thread.get()) == static_cast<DWORD>(-1)) return;
         JOBOBJECT_EXTENDED_LIMIT_INFORMATION released{};
         if (!SetInformationJobObject(child->job.get(), JobObjectExtendedLimitInformation, &released, sizeof(released))) return;
@@ -333,7 +334,7 @@ struct NativePrograms final : std::enable_shared_from_this<NativePrograms> {
         std::lock_guard guard(mutex);
         if (closed || !call.current() || !app.lease || !same_stamp(app.image, stamp(app.lease->file_handle()))) return;
         if (policy.refusal(app.identity) || policy.protected_path(app.image.path)) protected_route();
-        commit(); initiated = true;
+        commit();if(!allowed(context))changed();initiated = true;
         result = manager->ActivateApplication(app.identity.aumid.c_str(), L"", static_cast<ACTIVATEOPTIONS>(AO_NOERRORUI | AO_NOSPLASHSCREEN), &pid);
       })) changed();
       timely = call.current();
