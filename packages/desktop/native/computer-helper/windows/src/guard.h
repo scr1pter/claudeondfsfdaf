@@ -4,6 +4,14 @@
 namespace vector::computer {
 struct WindowsOverlayWitness { HWND window = nullptr; DWORD pid = 0; LONG_PTR extended_style = 0; };
 bool windows_overlay_passthrough_allowed(const WindowsOverlayWitness&, const ServerSession&);
+struct WindowsGuardStamp {
+  uint64_t observed_at_ms=0, run_epoch=0, observation_epoch=0;
+  std::wstring session_id;
+  std::optional<uint64_t> revision;
+  WindowsGuardStamp()=default;
+  WindowsGuardStamp(const ServerSession& session,uint64_t observed)
+    : observed_at_ms(observed),run_epoch(session.run_epoch),observation_epoch(session.observation_epoch),session_id(session.id),revision(session.revision) {}
+};
 struct WindowsPointOwner {
   WindowsWindow window;
   HWND hit = nullptr;
@@ -11,6 +19,7 @@ struct WindowsPointOwner {
   std::vector<HWND> skipped_overlays;
   DWORD hit_pid = 0, hit_thread = 0;
   std::wstring hit_class;
+  WindowsGuardStamp stamp;
 };
 
 struct WindowsGuardBackend {
@@ -39,6 +48,14 @@ class WindowsGuard final {
   void with_foreground(const WindowsWindow& expected, const ServerSession&, const OperationContext&,
                        WindowsPolicyOperation, const std::function<void()>& mutation,
                        std::optional<bool> secure_field = {}, std::span<const std::wstring> keys = {}) const;
+  // A previous bounded UIA observation can precede these metadata-only native posting fences.
+  // Prepared witnesses remain private native values; every actual hit/focus fact is repeated here.
+  void commit_point(const WindowsPointOwner&, const ServerSession&, const OperationContext&,
+                    const std::function<void()>& mutation,const std::function<void()>& precondition={}) const;
+  void commit_foreground(const WindowsWindow&, const ServerSession&, const OperationContext&,
+                         const WindowsGuardStamp&, WindowsPolicyOperation, const std::function<void()>& mutation,
+                         std::optional<bool> secure_field = {}, std::span<const std::wstring> keys = {},
+                         const std::function<void()>& precondition={}) const;
  private:
   WindowsGuardBackend backend_;
 };

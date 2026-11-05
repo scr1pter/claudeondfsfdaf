@@ -10,6 +10,9 @@
 #include "windows_process_tree.h"
 #include "windows_program.h"
 #include "capture.h"
+#include "input.h"
+#include "input_guardian.h"
+#include "uia_input.h"
 #include <tlhelp32.h>
 #include <objidl.h>
 #include <xmllite.h>
@@ -159,6 +162,7 @@ struct ServingRuntime {
   std::shared_ptr<PipeFrameWriter> writer;
   std::shared_ptr<WindowsProgramService> programs;
   std::shared_ptr<CaptureService> capture;
+  std::shared_ptr<InputService> input;
   std::atomic_int exit_code{0};
   void stop(StopReason reason) {
     if (lifecycle_exit_code(reason) != 0) exit_code.store(1);
@@ -166,9 +170,11 @@ struct ServingRuntime {
     std::shared_ptr<PipeFrameWriter> output;
     std::shared_ptr<WindowsProgramService> launches;
     std::shared_ptr<CaptureService> screenshots;
-    { std::scoped_lock lock(mutex); dispatcher = server; output = writer; launches = programs; screenshots = capture; }
+    std::shared_ptr<InputService> inputs;
+    { std::scoped_lock lock(mutex); dispatcher = server; output = writer; launches = programs; screenshots = capture; inputs=input; }
     if (output) output->cancel();
     if (dispatcher) dispatcher->close(L"transport stopped");
+    if (inputs) inputs->close();
     if (launches) launches->close();
     if (screenshots) screenshots->close();
   }
@@ -204,6 +210,10 @@ int serve(const Command& command, HANDLE output) {
     launch_policy.require_window = [](const WindowsWindow& window, const ServerSession& session) { WindowsSessionPolicy(session).require(window, WindowsPolicyOperation::activate); };
     const auto programs = std::make_shared<WindowsProgramService>(launch_policy, WindowsProgramBackend::system(launch_policy), native_windows);
     const auto captures = std::make_shared<CaptureService>();
+    const auto guardian=InputGuardian::native();
+    auto native_input=InputBackend::system(captures,guardian);
+    const auto input_rules=native_input.text_rules;
+    const auto inputs=std::make_shared<InputService>(uia_input_provider(WindowsUiaBackend::system(),{},{},input_rules),std::move(native_input));
     Dispatcher::Options options;
     options.responsible = true;
     options.send = [writer](const JsonObject& document, std::span<const uint8_t> image) { return writer->write(document, image); };
@@ -211,10 +221,13 @@ int serve(const Command& command, HANDLE output) {
     options.stopped = [weak_lifecycle] { if (const auto active = weak_lifecycle.lock()) active->request_stop(StopReason::shutdown); };
     options.observations_invalidated = [programs, captures] { programs->invalidate_observations(); captures->invalidate(); };
     options.cleanup = [programs, captures](std::wstring_view) { programs->invalidate_observations(); captures->invalidate(); };
-    options.features = [windows, programs, captures] {
+    options.release_all=[inputs] { return inputs->release_all(); };
+    options.prepare_release_all=[inputs] { return inputs->prepare_release_all(); };
+    options.features = [windows, programs, captures, inputs] {
       auto features = windows->features();
       for (const auto& entry : programs->features()) features.Insert(entry.Key(), entry.Value());
       for (const auto& entry : captures->features()) features.Insert(entry.Key(), entry.Value());
+      for (const auto& entry : inputs->features()) features.Insert(entry.Key(), entry.Value());
       return features;
     };
     const auto server = std::make_shared<Dispatcher>(std::move(options));
@@ -227,7 +240,9 @@ int serve(const Command& command, HANDLE output) {
     server->register_handler(L"program.launch", 15'000, true, true, [programs](const auto& request, const auto& context, auto done) { programs->launch_program(request.args, context, std::move(done)); });
     server->register_handler(L"displays.list", 4000, false, false, [captures](const auto& request, const auto& context, auto done) { captures->displays(request.args, context, std::move(done)); });
     server->register_handler(L"capture", 10'000, true, false, [captures](const auto& request, const auto& context, auto done) { captures->capture(request.args, context, std::move(done)); });
-    { std::scoped_lock lock(runtime->mutex); runtime->writer = writer; runtime->server = server; runtime->programs = programs; runtime->capture = captures; }
+    for (const auto op:{L"input.click",L"input.move",L"input.drag",L"input.scroll",L"input.key",L"input.type",L"input.hold"})
+      server->register_handler(op,30'000,true,true,[inputs](const auto& request,const auto& context,auto done) { inputs->handle(request.op,request.args,context,std::move(done)); });
+    { std::scoped_lock lock(runtime->mutex); runtime->writer = writer; runtime->server = server; runtime->programs = programs; runtime->capture = captures; runtime->input=inputs; }
     if (lifecycle->stopping()) runtime->stop(StopReason::eof);
     FrameReader reader;
     std::array<uint8_t, 65'536> bytes{};

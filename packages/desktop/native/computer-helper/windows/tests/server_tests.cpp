@@ -23,17 +23,21 @@ JsonObject begin_args(std::optional<uint64_t> revision = {}) {
 }
 struct Timer { uint64_t due; Task body; bool cancelled = false; };
 struct Delivered { JsonObject value; std::vector<uint8_t> image; };
+enum class CleanupMode { synchronous, deferred, prepared };
 struct Fixture {
   uint64_t time = 100;
-  std::deque<Task> work, output;
+  std::deque<Task> work, output, cleanup_work;
+  std::vector<Dispatcher::CleanupCompletion> cleanup_completions;
+  std::vector<uint32_t> prepared_baselines;
   std::vector<std::shared_ptr<Timer>> timers;
   std::vector<Delivered> delivered;
   std::vector<std::wstring> cleanup;
   std::vector<ServerSession> announced;
   uint32_t releases = 0, invalidations = 0, stops = 0;
-  bool write_ok = true, available = true, ready = true;
+  bool write_ok = true, available = true, ready = true, receiving = false, throw_cleanup = false;
   std::unique_ptr<Dispatcher> dispatcher;
-  explicit Fixture(size_t queue_limit = 1000, size_t byte_limit = 2 * kMaxFrameBytes, size_t output_limit = 2 * kMaxFrameBytes + 8, bool responsible = true) {
+  explicit Fixture(CleanupMode mode) : Fixture(1000, 2 * kMaxFrameBytes, 2 * kMaxFrameBytes + 8, true, mode != CleanupMode::synchronous, mode == CleanupMode::prepared) {}
+  explicit Fixture(size_t queue_limit = 1000, size_t byte_limit = 2 * kMaxFrameBytes, size_t output_limit = 2 * kMaxFrameBytes + 8, bool responsible = true, bool deferred_cleanup = false, bool prepared_cleanup = false) {
     Dispatcher::Options options;
     options.send = [this](const JsonObject& value, std::span<const uint8_t> image) {
       if (!write_ok) return false;
@@ -41,6 +45,21 @@ struct Fixture {
     };
     options.stopped = [this] { ++stops; };
     options.release_all = [this] { return ++releases; };
+    if (deferred_cleanup) {
+      options.cleanup_execute = [this](Task task) { cleanup_work.push_back(std::move(task)); };
+      if (prepared_cleanup) options.prepare_release_all = [this] {
+        const auto baseline = ++releases;
+        return [this, baseline](Dispatcher::CleanupCompletion done) {
+          require(!receiving, "server.prepared-cleanup-outside-ingress");
+          prepared_baselines.push_back(baseline); cleanup_completions.push_back(std::move(done));
+        };
+      };
+      else options.release_all_async = [this](Dispatcher::CleanupCompletion done) {
+        require(!receiving, "server.cleanup-outside-ingress");
+        if (throw_cleanup) throw std::runtime_error("server.synthetic-cleanup-provider-failure");
+        cleanup_completions.push_back(std::move(done));
+      };
+    }
     options.cleanup = [this](auto reason) { cleanup.emplace_back(reason); };
     options.observations_invalidated = [this] { ++invalidations; };
     options.session_changed = [this](const auto& session) { if (session) announced.push_back(*session); };
@@ -57,10 +76,12 @@ struct Fixture {
     dispatcher = std::make_unique<Dispatcher>(std::move(options));
   }
   void workers() { for (size_t count = 0; !work.empty(); ++count) { require(count < 2000, "server.worker-bound"); auto task = std::move(work.front()); work.pop_front(); task(); } }
+  void cleaners() { for (size_t count = 0; !cleanup_work.empty(); ++count) { require(count < 2000, "server.cleanup-bound"); auto task = std::move(cleanup_work.front()); cleanup_work.pop_front(); task(); } }
   void outputs() { for (size_t count = 0; !output.empty(); ++count) { require(count < 2000, "server.output-bound"); auto task = std::move(output.front()); output.pop_front(); task(); } }
   void drain() { workers(); outputs(); }
-  void receive(uint64_t id, std::wstring_view op, JsonObject args = {}) { dispatcher->receive(request(id, op, std::move(args))); }
+  void receive(uint64_t id, std::wstring_view op, JsonObject args = {}) { receiving = true; dispatcher->receive(request(id, op, std::move(args))); receiving = false; }
   void begin(std::optional<uint64_t> revision = {}) { receive(1, L"session.begin", begin_args(revision)); drain(); }
+  void begin_deferred(std::optional<uint64_t> revision = {}) { begin(revision); cleaners(); require(cleanup_completions.size() == 1, "server.begin-cleanup-prepared"); cleanup_completions[0](true, 0); drain(); }
   void advance(uint64_t ms) {
     const auto limit = time + ms;
     for (size_t count = 0; count < 2000; ++count) {
@@ -301,6 +322,182 @@ size_t run_server_tests() {
     fixture.dispatcher->close(L"eof");
     require(fixture.dispatcher->wait_for_output(0), "server.closed-injected-output-is-idle");
     fixture.outputs(); require(fixture.delivered.empty(), "server.close-drops-queued-wire-output");
+  });
+  test([] {
+    Fixture fixture(CleanupMode::deferred); size_t writes = 0;
+    fixture.dispatcher->register_handler(L"synthetic.write", 1000, true, true, [&](const auto&, const auto&, auto done) { ++writes; done(Reply{}); });
+    fixture.begin(); fixture.receive(2, L"synthetic.write"); fixture.receive(3, L"permissions.status"); fixture.drain();
+    require(fixture.replies(1) == 0 && fixture.code(2, L"unavailable") && fixture.reply(3).GetNamedString(L"screen") == L"n/a" && writes == 0, "server.pending-begin-cleanup-inhibits-mutations-only");
+    require(fixture.cleanup_completions.empty() && fixture.cleanup_work.size() == 1, "server.cleanup-never-inline-under-control-ingress");
+    fixture.cleaners(); fixture.cleanup_completions[0](true, 0); fixture.drain();
+    fixture.receive(4, L"synthetic.write"); fixture.drain();
+    require(fixture.reply(1).GetNamedBoolean(L"ok") && fixture.reply(4).GetNamedBoolean(L"ok") && writes == 1, "server.confirmed-begin-cleanup-admits-mutations");
+  });
+  test([] {
+    Fixture fixture(CleanupMode::deferred); fixture.begin_deferred(); OperationContext context;
+    fixture.dispatcher->register_handler(L"input.key", 1000, true, true, [&](const auto&, const auto& actual, auto) { context = actual; });
+    fixture.receive(2, L"input.key"); fixture.workers(); fixture.receive(3, L"input.releaseAll"); fixture.drain();
+    require(!context.is_current() && fixture.replies(2) == 0 && fixture.replies(3) == 0, "server.release-revokes-before-confirmation");
+    fixture.cleaners(); fixture.cleanup_completions[1](true, 3); fixture.drain();
+    require(fixture.code(2, L"failed") && fixture.reply(3).GetNamedBoolean(L"ok") && fixture.reply(3).GetNamedNumber(L"released") == 3, "server.release-count-and-interrupted-operation-follow-actual-up-receipts");
+    fixture.cleanup_completions[1](false, 0); fixture.drain(); require(fixture.replies(3) == 1, "server.duplicate-cleanup-callback-inert");
+  });
+  test([] {
+    Fixture fixture(CleanupMode::deferred); fixture.begin_deferred(); OperationContext context;
+    fixture.dispatcher->register_handler(L"synthetic.write", 1000, true, true, [&](const auto&, const auto& actual, auto) { context = actual; });
+    fixture.receive(2, L"synthetic.write"); fixture.receive(3, L"synthetic.write"); fixture.workers();
+    fixture.receive(4, L"cancel", object(LR"({"target":2})")); fixture.drain();
+    require(!context.is_current() && fixture.replies(2) == 0 && fixture.code(3, L"changed") && fixture.replies(4) == 0, "server.cancel-ack-waits-for-owned-release");
+    fixture.cleaners(); fixture.cleanup_completions[1](true, 2); fixture.drain(); require(fixture.code(2, L"failed") && fixture.reply(4).GetNamedBoolean(L"ok"), "server.cancel-ack-and-interrupted-operation-after-cleanup");
+  });
+  test([] {
+    Fixture fixture(CleanupMode::deferred); fixture.begin_deferred(); size_t writes = 0;
+    fixture.dispatcher->register_handler(L"synthetic.write", 1000, true, true, [&](const auto&, const auto&, auto done) { ++writes; done(Reply{}); });
+    fixture.receive(2, L"input.releaseAll"); fixture.cleaners(); fixture.cleanup_completions[1](false, 1); fixture.drain();
+    fixture.receive(3, L"synthetic.write"); fixture.drain();
+    require(fixture.code(2, L"failed") && !fixture.reply(2).HasKey(L"released") && fixture.code(3, L"unavailable") && writes == 0, "server.failed-cleanup-does-not-claim-release-or-admit-writes");
+    fixture.cleanup_completions[1](true, 100); fixture.receive(4, L"synthetic.write"); fixture.drain();
+    require(fixture.code(4, L"unavailable"), "server.failed-ticket-late-success-cannot-clear-debt");
+    fixture.receive(5, L"input.releaseAll"); fixture.cleaners(); fixture.cleanup_completions[2](true, 1); fixture.drain();
+    fixture.receive(6, L"synthetic.write"); fixture.drain(); require(fixture.reply(6).GetNamedBoolean(L"ok") && writes == 1, "server.new-confirmed-cleanup-retires-debt");
+  });
+  test([] {
+    Fixture fixture(CleanupMode::deferred); fixture.begin_deferred();
+    fixture.receive(2, L"input.releaseAll"); fixture.cleaners(); fixture.time += 750;
+    fixture.cleanup_completions[1](true, 2); fixture.drain();
+    require(fixture.code(2, L"failed") && !fixture.reply(2).HasKey(L"released"), "server.cleanup-deadline-checked-before-delayed-timer");
+    fixture.advance(1); require(fixture.replies(2) == 1, "server.cleanup-timeout-one-reply");
+  });
+  test([] {
+    Fixture fixture(CleanupMode::deferred); fixture.begin_deferred(4); size_t writes = 0;
+    fixture.dispatcher->register_handler(L"synthetic.write", 1000, true, true, [&](const auto&, const auto&, auto done) { ++writes; done(Reply{}); });
+    fixture.receive(2, L"input.releaseAll"); fixture.cleaners(); const auto old = *fixture.dispatcher->session_snapshot();
+    fixture.receive(3, L"session.begin", begin_args(4)); fixture.cleaners(); fixture.drain();
+    require(fixture.replies(2) == 0 && fixture.replies(3) == 0 && fixture.dispatcher->session_snapshot()->run_epoch != old.run_epoch, "server.replacement-carries-old-control-without-early-terminal");
+    fixture.cleanup_completions[1](true, 99); fixture.receive(4, L"synthetic.write", object(LR"({"sessionId":"synthetic","phaseRevision":4})")); fixture.drain();
+    require(fixture.code(4, L"unavailable") && fixture.replies(3) == 0 && writes == 0, "server.old-run-cleanup-cannot-admit-replacement");
+    fixture.cleanup_completions[2](true, 0); fixture.drain(); fixture.receive(5, L"synthetic.write", object(LR"({"sessionId":"synthetic","phaseRevision":4})")); fixture.drain();
+    require(fixture.code(2, L"changed") && fixture.reply(3).GetNamedBoolean(L"ok") && fixture.reply(5).GetNamedBoolean(L"ok") && writes == 1 && fixture.replies(2) == 1, "server.new-run-own-cleanup-confirms-authority-and-old-control-error");
+  });
+  test([] {
+    Fixture fixture(CleanupMode::deferred); fixture.begin_deferred(4);
+    fixture.receive(2, L"input.releaseAll"); fixture.cleaners(); const auto old = *fixture.dispatcher->session_snapshot();
+    fixture.receive(3, L"session.update", object(LR"({"sessionId":"synthetic","phaseRevision":4,"escStops":false})")); fixture.cleaners();
+    fixture.cleanup_completions[1](false, 0); fixture.outputs();
+    require(fixture.replies(2) == 0 && fixture.replies(3) == 0 && fixture.dispatcher->session_snapshot()->run_epoch == old.run_epoch && fixture.dispatcher->session_snapshot()->observation_epoch != old.observation_epoch, "server.same-revision-new-observation-carries-cleanup-control");
+    fixture.cleanup_completions[2](true, 0); fixture.drain(); require(fixture.code(2, L"changed") && fixture.reply(3).GetNamedBoolean(L"ok"), "server.phase-cleanup-confirms-current-and-retired-control-independently");
+  });
+  test([] {
+    Fixture fixture(CleanupMode::deferred); fixture.begin_deferred(); OperationContext context;
+    fixture.dispatcher->register_handler(L"input.key", 1000, true, true, [&](const auto&, const auto& actual, auto) { context = actual; });
+    fixture.receive(2, L"input.key"); fixture.workers(); const auto old = *fixture.dispatcher->session_snapshot();
+    require(fixture.dispatcher->stop_from_physical_input(L"esc", old), "server.deferred-stop-admitted"); fixture.drain();
+    const auto stop_events = [&] { return std::count_if(fixture.delivered.begin(), fixture.delivered.end(), [](const auto& value) { return value.value.HasKey(L"event") && value.value.GetNamedString(L"event") == L"stop"; }); };
+    require(!context.is_current() && fixture.replies(2) == 0 && stop_events() == 0, "server.stop-event-and-interrupted-operation-wait-for-owned-ups");
+    fixture.cleaners(); fixture.cleanup_completions[1](true, 2); fixture.drain(); require(fixture.code(2, L"stopped") && stop_events() == 1, "server.stop-event-after-confirmed-cleanup");
+  });
+  test([] {
+    Fixture fixture(CleanupMode::deferred); fixture.begin_deferred();
+    require(fixture.dispatcher->stop_from_physical_input(L"chord", *fixture.dispatcher->session_snapshot()), "server.failing-stop-admitted");
+    fixture.cleaners(); fixture.cleanup_completions[1](false, 0); fixture.drain(); fixture.cleanup_completions[1](true, 1); fixture.drain();
+    require(std::none_of(fixture.delivered.begin(), fixture.delivered.end(), [](const auto& value) { return value.value.HasKey(L"event") && value.value.GetNamedString(L"event") == L"stop"; }), "server.failed-cleanup-never-publishes-stop-success");
+    fixture.dispatcher->register_handler(L"input.key", 1000, true, true, [](const auto&, const auto&, auto) {});
+    fixture.receive(2, L"input.key"); fixture.drain(); require(fixture.code(2, L"stopped"), "server.failed-stop-remains-halted");
+  });
+  test([] {
+    Fixture fixture(CleanupMode::deferred); fixture.begin_deferred(); auto event = event_document(L"user_input", object(LR"({"kind":"click"})"));
+    require(fixture.dispatcher->physical_input(event, *fixture.dispatcher->session_snapshot(), true), "server.deferred-physical-takeover");
+    event.Insert(L"kind", JsonValue::CreateStringValue(L"substituted")); fixture.outputs();
+    require(std::none_of(fixture.delivered.begin(), fixture.delivered.end(), [](const auto& value) { return value.value.HasKey(L"event"); }), "server.takeover-publication-waits-cleanup");
+    fixture.cleaners(); fixture.cleanup_completions[1](true, 1); fixture.drain();
+    const auto found = std::find_if(fixture.delivered.begin(), fixture.delivered.end(), [](const auto& value) { return value.value.HasKey(L"event"); });
+    require(found != fixture.delivered.end() && found->value.GetNamedString(L"kind") == L"click", "server.deferred-event-private-snapshot");
+  });
+  test([] {
+    Fixture fixture(CleanupMode::deferred); fixture.begin_deferred(); fixture.receive(2, L"input.releaseAll"); fixture.cleaners();
+    const auto before = fixture.releases; fixture.dispatcher->close(L"parent-death"); fixture.cleanup_completions[1](true, 1); fixture.drain();
+    require(fixture.dispatcher->closed() && fixture.stops == 1 && fixture.releases > before && fixture.replies(2) == 0, "server.emergency-close-does-not-await-cleanup-callback");
+  });
+  test([] {
+    Fixture fixture(CleanupMode::deferred);
+    for (uint64_t id = 1; id <= 128; ++id) fixture.receive(id, L"input.releaseAll");
+    fixture.receive(129, L"input.releaseAll"); fixture.outputs();
+    require(fixture.cleanup_work.size() == 128 && fixture.code(129, L"busy") && !fixture.dispatcher->closed(), "server.cleanup-control-count-is-bounded");
+    fixture.cleaners(); require(fixture.cleanup_completions.size() == 128, "server.cleanup-executor-has-finite-pending-work");
+  });
+  test([] {
+    Fixture fixture(CleanupMode::deferred); fixture.begin_deferred(); fixture.receive(2, L"input.releaseAll"); fixture.receive(2, L"cancel"); fixture.outputs();
+    require(fixture.code(2, L"failed") && fixture.cleanup_work.size() == 1, "server.pending-cleanup-request-id-is-reserved");
+  });
+  test([] {
+    Fixture fixture(CleanupMode::prepared); fixture.begin_deferred(); fixture.receive(2, L"input.releaseAll");
+    const auto baseline = fixture.releases; fixture.releases += 100; fixture.cleaners();
+    require(fixture.prepared_baselines.back() == baseline, "server.cleanup-preparation-retains-immutable-revocation-baseline");
+    fixture.cleanup_completions[1](true, 4); fixture.drain(); require(fixture.reply(2).GetNamedNumber(L"released") == 4, "server.prepared-count-uses-actual-completion");
+  });
+  test([] {
+    Fixture fixture(CleanupMode::deferred); fixture.begin_deferred(); fixture.receive(2, L"input.releaseAll"); fixture.cleaners();
+    fixture.cleanup_completions[1](true, 1);
+    fixture.receive(3, L"session.update", object(LR"({"escStops":false})")); fixture.outputs();
+    require(fixture.code(2, L"changed") && fixture.replies(3) == 0, "server.confirmed-cleanup-ack-rechecks-authority-at-wire-publication");
+  });
+  test([] {
+    Fixture fixture(CleanupMode::deferred); fixture.begin_deferred(); size_t writes = 0;
+    fixture.dispatcher->register_handler(L"synthetic.write", 1000, true, true, [&](const auto&, const auto&, auto done) {
+      if (++writes == 1) done(Failure{L"failed", L"Synthetic attempted write failed."}); else done(Reply{});
+    });
+    fixture.receive(2, L"synthetic.write"); fixture.drain(); fixture.receive(3, L"synthetic.write"); fixture.drain();
+    require(fixture.replies(2) == 0 && fixture.code(3, L"unavailable") && writes == 1, "server.failed-mutation-error-and-successor-wait-for-cleanup");
+    fixture.cleaners(); fixture.cleanup_completions[1](true, 1); fixture.receive(4, L"synthetic.write"); fixture.drain();
+    require(fixture.code(2, L"failed") && fixture.reply(4).GetNamedBoolean(L"ok") && writes == 2, "server.successor-after-attempted-write-release-confirmation");
+  });
+  test([] {
+    Fixture fixture(CleanupMode::deferred); fixture.begin_deferred(); OperationContext context;
+    fixture.dispatcher->register_handler(L"input.key", 1000, true, true, [&](const auto&, const auto& actual, auto) { context = actual; });
+    fixture.receive(2, L"input.key"); fixture.workers(); fixture.receive(3, L"cancel"); fixture.cleaners();
+    fixture.cleanup_completions[1](false, 1); fixture.drain();
+    require(!context.is_current() && fixture.code(2, L"failed") && fixture.code(3, L"failed") && fixture.replies(2) == 1 && !fixture.reply(3).HasKey(L"released"), "server.unconfirmed-cleanup-returns-failure-for-interrupted-operation-and-control");
+    fixture.cleanup_completions[1](true, 2); fixture.drain(); require(fixture.replies(2) == 1 && fixture.replies(3) == 1, "server.late-up-proof-cannot-rewrite-terminal-errors");
+  });
+  test([] {
+    Fixture fixture(CleanupMode::deferred); fixture.begin_deferred(4); OperationContext context;
+    fixture.dispatcher->register_handler(L"input.key", 1000, true, true, [&](const auto&, const auto& actual, auto) { context = actual; });
+    fixture.receive(2, L"input.key", object(LR"({"sessionId":"synthetic","phaseRevision":4})")); fixture.workers();
+    fixture.receive(3, L"cancel"); fixture.cleaners(); fixture.receive(4, L"session.begin", begin_args(4)); fixture.cleaners(); fixture.drain();
+    require(!context.is_current() && fixture.replies(2) == 0 && fixture.replies(3) == 0 && fixture.replies(4) == 0, "server.replacement-carries-unreleased-terminal-and-control-without-returning-early");
+    fixture.cleanup_completions[1](true, 1); fixture.drain(); require(fixture.replies(2) == 0 && fixture.replies(4) == 0, "server.retired-cleanup-cannot-publish-detached-terminal");
+    fixture.cleanup_completions[2](true, 1); fixture.drain();
+    require(fixture.code(2, L"failed") && fixture.code(3, L"changed") && fixture.reply(4).GetNamedBoolean(L"ok") && fixture.replies(2) == 1, "server.current-cleanup-publishes-original-failed-ids-after-actual-release");
+  });
+  test([] {
+    Fixture fixture; fixture.begin(); OperationContext context;
+    fixture.dispatcher->register_handler(L"input.key", 1000, true, true, [&](const auto&, const auto& actual, auto) { context = actual; });
+    fixture.receive(2, L"input.key"); fixture.workers(); fixture.receive(3, L"input.releaseAll"); fixture.drain();
+    require(!context.is_current() && fixture.code(2, L"failed") && fixture.reply(3).GetNamedBoolean(L"ok") && fixture.reply(3).GetNamedNumber(L"released") > 0 && fixture.cleanup_work.empty(), "server.inline-no-input-fallback-publishes-interrupted-terminal-and-control");
+  });
+  test([] {
+    Fixture fixture(CleanupMode::deferred); fixture.begin_deferred(); fixture.throw_cleanup = true;
+    fixture.receive(2, L"input.releaseAll"); fixture.cleaners(); fixture.drain();
+    require(fixture.code(2, L"failed") && !fixture.reply(2).HasKey(L"released") && fixture.cleanup_completions.size() == 1, "server.throwing-cleanup-provider-never-claims-release");
+    fixture.dispatcher->register_handler(L"input.key", 1000, true, true, [](const auto&, const auto&, auto) {});
+    fixture.receive(3, L"input.key"); fixture.drain(); require(fixture.code(3, L"unavailable"), "server.throwing-cleanup-retains-mutation-debt");
+  });
+  test([] {
+    Fixture fixture(CleanupMode::deferred); fixture.begin_deferred(); fixture.receive(2, L"input.releaseAll"); fixture.cleaners();
+    fixture.time += 700; fixture.receive(3, L"session.begin", begin_args()); fixture.cleaners();
+    fixture.time += 50; fixture.cleanup_completions[2](true, 1); fixture.drain();
+    require(fixture.code(2, L"failed") && fixture.code(3, L"failed") && !fixture.reply(2).HasKey(L"released"), "server.replacement-cannot-extend-original-cleanup-deadline-or-claim-late-release");
+    fixture.cleanup_completions[1](true, 1); fixture.drain(); require(fixture.replies(2) == 1 && fixture.replies(3) == 1, "server.expired-carried-controls-ignore-old-completion");
+  });
+  test([] {
+    Fixture fixture(CleanupMode::deferred);
+    for (uint64_t id = 1; id <= 128; ++id) fixture.receive(id, L"session.begin", begin_args());
+    const auto accepted_run = fixture.dispatcher->session_snapshot()->run_epoch;
+    fixture.receive(129, L"session.begin", begin_args()); fixture.outputs();
+    require(fixture.code(129, L"busy") && fixture.cleanup_work.size() == 128 && fixture.dispatcher->session_snapshot()->run_epoch == accepted_run, "server.retired-control-metadata-count-is-bounded-before-new-authority");
+    fixture.cleaners(); require(fixture.cleanup_completions.size() == 1, "server.retired-preparations-never-start-late-cleanup-providers");
+    fixture.cleanup_completions[0](true, 0); fixture.outputs();
+    require(fixture.code(1, L"changed") && fixture.code(127, L"changed") && fixture.reply(128).GetNamedBoolean(L"ok") && !fixture.dispatcher->closed(), "server.bounded-retired-controls-return-only-after-current-confirmed-cleanup");
   });
   return groups;
 }

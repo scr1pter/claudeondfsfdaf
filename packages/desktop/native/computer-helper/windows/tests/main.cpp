@@ -12,6 +12,10 @@
 #include "server.h"
 #include "guard.h"
 #include "capture.h"
+#include "input.h"
+#include "input_held.h"
+#include "input_guardian.h"
+#include "uia_input.h"
 #include <objidl.h>
 #include <xmllite.h>
 #include <algorithm>
@@ -494,7 +498,9 @@ template<class Check> void run_check(const char* label, Check check) {
     const std::string_view detail(error.what(), strnlen_s(error.what(), 129));
     const bool fixed = detail.size() <= 128 &&
       (detail.starts_with("protocol.") || detail.starts_with("server.") || detail.starts_with("parent.") || detail.starts_with("lifecycle.") || detail.starts_with("integration.") ||
-        detail.starts_with("windows-") || detail.starts_with("policy.") || detail.starts_with("tree.") || detail.starts_with("program.") || detail.starts_with("guard.") || detail.starts_with("capture.")) &&
+        detail.starts_with("windows-") || detail.starts_with("policy.") || detail.starts_with("tree.") || detail.starts_with("program.") || detail.starts_with("guard.") || detail.starts_with("capture.") ||
+        detail.starts_with("input.") || detail.starts_with("input-keys.") || detail.starts_with("held.") || detail.starts_with("guardian.") ||
+        detail.starts_with("uia-native.") || detail.starts_with("uia-input.")) &&
       std::all_of(detail.begin(), detail.end(), [](char value) { return (value >= 'a' && value <= 'z') || (value >= '0' && value <= '9') || value == '.' || value == '-'; });
     throw UnitFailure(fixed ? error.what() : label);
   }
@@ -541,6 +547,12 @@ int main(int argc, char** argv) {
     run_check("live-target-guard", [] { static_cast<void>(run_guard_tests()); });
     run_check("capture-geometry-and-privacy", [] { static_cast<void>(run_capture_math_tests()); });
     run_check("capture-service-and-receipts", [] { static_cast<void>(run_capture_tests()); });
+    run_check("input-key-semantics", [] { static_cast<void>(run_input_keys_tests()); });
+    run_check("input-owned-journal", [] { static_cast<void>(run_input_held_tests()); });
+    run_check("input-release-guardian", [] { static_cast<void>(run_input_guardian_tests()); });
+    run_check("input-uia-observation", [] { static_cast<void>(run_uia_native_tests()); });
+    run_check("input-uia-binding", [] { static_cast<void>(run_uia_input_tests()); });
+    run_check("input-service-and-cleanup", [] { static_cast<void>(run_input_tests()); });
     std::cout << "Windows computer helper unit checks passed.\n";
     return 0;
   } catch (const UnitFailure& failure) {

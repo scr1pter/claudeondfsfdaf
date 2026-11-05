@@ -39,12 +39,21 @@ class Dispatcher final {
   using Cancel = std::function<void()>;
   using Execute = std::function<void(std::function<void()>)>;
   using Schedule = std::function<Cancel(uint32_t, std::function<void()>)>;
+  using CleanupCompletion = std::function<void(bool complete, uint32_t released)>;
+  using PreparedCleanup = std::function<void(CleanupCompletion)>;
   struct Options {
     // Invoked on a separate serial output executor. Native writer must obey its total 50ms
     // deadline; the final current-authority fence covers actual wire publication.
     std::function<bool(const JsonObject&, std::span<const uint8_t>)> send;
     std::function<void()> stopped = [] {};
+    // Immediate lease revocation/enqueue only. Never performs IPC or waits under authority.
     std::function<uint32_t()> release_all = [] { return 0U; };
+    // Actual owned-UP confirmation. Invoked outside authority; false retains cleanup debt.
+    std::function<void(CleanupCompletion)> release_all_async;
+    // Metadata-only preparation binds this revocation's exact count baseline before enqueueing.
+    std::function<PreparedCleanup()> prepare_release_all;
+    // Enqueue-only independent cleanup executor, so a blocked operation cannot delay release.
+    Execute cleanup_execute;
     // Metadata-only/enqueue-only hooks: never native IPC or a wait under authority.
     std::function<void(std::wstring_view)> cleanup = [](std::wstring_view) {};
     std::function<void()> observations_invalidated = [] {};
