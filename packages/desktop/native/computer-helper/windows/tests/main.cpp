@@ -254,11 +254,7 @@ std::wstring xml_attribute(IXmlReader* reader, const wchar_t* name) {
   return result;
 }
 
-void embedded_manifest(const std::filesystem::path& executable) {
-  const auto module = LoadLibraryExW(executable.c_str(), nullptr, LOAD_LIBRARY_AS_DATAFILE | LOAD_LIBRARY_AS_IMAGE_RESOURCE);
-  require(module != nullptr, "manifest.load-as-data");
-  struct ModuleCleanup { HMODULE value; ~ModuleCleanup() { FreeLibrary(value); } } cleanup{module};
-  const auto bytes = resource(module, 1, RT_MANIFEST);
+void check_manifest_xml(std::string_view bytes) {
   winrt::com_ptr<IStream> stream;
   winrt::check_hresult(CreateStreamOnHGlobal(nullptr, TRUE, stream.put()));
   ULONG written = 0;
@@ -273,13 +269,14 @@ void embedded_manifest(const std::filesystem::path& executable) {
   std::map<std::wstring, std::wstring> text;
   std::set<std::wstring> seen;
   std::wstring current;
-  UINT currentDepth = 0;
+  std::wstring currentNamespace;
   bool execution = false;
   bool supported = false;
   XmlNodeType node = XmlNodeType_None;
   HRESULT status = S_OK;
   while ((status = reader->Read(&node)) == S_OK) {
     if (node == XmlNodeType_Element) {
+      require(current.empty(), "manifest.nested-setting");
       const wchar_t* local = nullptr;
       const wchar_t* uri = nullptr;
       UINT localLength = 0;
@@ -299,9 +296,10 @@ void embedded_manifest(const std::filesystem::path& executable) {
         ((name == L"dpiAwareness" || name == L"longPathAware") && space == L"http://schemas.microsoft.com/SMI/2016/WindowsSettings") ||
         (name == L"activeCodePage" && space == L"http://schemas.microsoft.com/SMI/2019/WindowsSettings");
       if (setting) {
-        require(current.empty() && seen.insert(name).second, "manifest.duplicate-setting");
+        require(seen.insert(name).second, "manifest.duplicate-setting");
+        require(!reader->IsEmptyElement(), "manifest.empty-setting");
         current = name;
-        winrt::check_hresult(reader->GetDepth(&currentDepth));
+        currentNamespace = space;
       }
     } else if (!current.empty() && (node == XmlNodeType_Text || node == XmlNodeType_Whitespace || node == XmlNodeType_CDATA)) {
       const wchar_t* value = nullptr;
@@ -309,9 +307,18 @@ void embedded_manifest(const std::filesystem::path& executable) {
       winrt::check_hresult(reader->GetValue(&value, &length));
       text[current].append(value, length);
     } else if (!current.empty() && node == XmlNodeType_EndElement) {
-      UINT depth = 0;
-      winrt::check_hresult(reader->GetDepth(&depth));
-      if (depth == currentDepth) current.clear();
+      // XmlLite measures depth before processing this node, so an end tag's depth differs from its start tag.
+      const wchar_t* local = nullptr;
+      const wchar_t* uri = nullptr;
+      UINT localLength = 0;
+      UINT uriLength = 0;
+      winrt::check_hresult(reader->GetLocalName(&local, &localLength));
+      winrt::check_hresult(reader->GetNamespaceUri(&uri, &uriLength));
+      if (current == std::wstring_view(local, localLength) &&
+          currentNamespace == std::wstring_view(uri ? uri : L"", uriLength)) {
+        current.clear();
+        currentNamespace.clear();
+      }
     }
   }
   winrt::check_hresult(status);
@@ -335,6 +342,20 @@ std::wstring version_string(const std::vector<unsigned char>& bytes, const wchar
   const auto text = static_cast<const wchar_t*>(pointer);
   require(text[length - 1] == L'\0', "version-resource.string-terminator");
   return std::wstring(text, length - 1);
+}
+
+void embedded_manifest(const std::filesystem::path& executable) {
+  const auto module = LoadLibraryExW(executable.c_str(), nullptr, LOAD_LIBRARY_AS_DATAFILE | LOAD_LIBRARY_AS_IMAGE_RESOURCE);
+  require(module != nullptr, "manifest.load-as-data");
+  struct ModuleCleanup { HMODULE value; ~ModuleCleanup() { FreeLibrary(value); } } cleanup{module};
+  check_manifest_xml(resource(module, 1, RT_MANIFEST));
+
+  // A valid close tag must finish the first value, while a second setting must still be rejected.
+  constexpr std::string_view duplicate = R"xml(<root xmlns:ws="http://schemas.microsoft.com/SMI/2005/WindowsSettings"><ws:dpiAware>true/PM</ws:dpiAware><ws:dpiAware>true/PM</ws:dpiAware></root>)xml";
+  bool refused = false;
+  try { check_manifest_xml(duplicate); }
+  catch (const Failure& failure) { refused = std::string_view(failure.what()) == "manifest.duplicate-setting"; }
+  require(refused, "manifest.duplicate-fixture-refused");
 }
 
 void embedded_version(const std::filesystem::path& executable) {
