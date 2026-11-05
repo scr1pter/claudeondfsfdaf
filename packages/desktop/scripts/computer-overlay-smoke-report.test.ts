@@ -13,6 +13,11 @@ import {
   COMPUTER_SMOKE_GEOMETRY_MARK,
   COMPUTER_SMOKE_NATIVE_MARK,
   COMPUTER_SMOKE_ASAR_MARK,
+  COMPUTER_SMOKE_PROPERTIES_MARK,
+  COMPUTER_SMOKE_PROPERTY_STEPS,
+  COMPUTER_SMOKE_BOOTSTRAP_TOKEN_MARK,
+  parseComputerSmokePropertiesDiagnostic,
+  parseComputerSmokeBootstrapTokenDiagnostic,
   parseComputerSmokeAsarDiagnostic,
   parseComputerSmokeNativeDiagnostic,
   parseComputerSmokeGeometry,
@@ -109,6 +114,81 @@ test("geometry diagnostics retain only bounded owned-window rectangles, native s
     expect(() => parseComputerSmokeGeometry(line({ ...value, ...patch }))).toThrow()
   expect(() => parseComputerSmokeGeometry(line(value) + " ".repeat(513))).toThrow()
   expect(() => parseComputerSmokeGeometry(COMPUTER_SMOKE_GEOMETRY_MARK + "{")).toThrow()
+})
+
+test("caught properties diagnostics retain only the fixed failing operation before cleanup", () => {
+  const line = (value: unknown) => COMPUTER_SMOKE_PROPERTIES_MARK + JSON.stringify(value)
+  const parseDiagnostic = (line: string) =>
+    parseComputerSmokePropertiesDiagnostic(line, { phase: "properties", terminal: false, seen: false })
+  for (const step of COMPUTER_SMOKE_PROPERTY_STEPS)
+    expect(parseDiagnostic(line({ protocol: 1, step }))).toEqual({ protocol: 1, step })
+  for (const value of [
+    { protocol: 2, step: "underlay-load" },
+    { protocol: 1, step: "PRIVATE" },
+    { protocol: 1, step: ["underlay-load"] },
+    { protocol: 1, step: "underlay-load", message: "PRIVATE" },
+    { protocol: 1, step: "underlay-load", url: "PRIVATE" },
+    { protocol: 1 },
+  ])
+    expect(() => parseDiagnostic(line(value))).toThrow()
+  expect(() => parseDiagnostic(line({ protocol: 1, step: "banner" }) + " ".repeat(161))).toThrow()
+  for (const input of [
+    { phase: "cleanup", terminal: false, seen: false },
+    { phase: "properties", terminal: true, seen: false },
+    { phase: "properties", terminal: false, seen: true },
+  ] as const)
+    expect(() => parseComputerSmokePropertiesDiagnostic(line({ protocol: 1, step: "banner" }), input)).toThrow()
+  const failed = report("win32")
+  failed.checks = failed.checks.map((check) => ({ name: check.name, ok: false, reason: "runtime_failure" }))
+  const stdout = line({ protocol: 1, step: "underlay-load" }) + "\n" + COMPUTER_SMOKE_MARK + JSON.stringify(failed)
+  expect(parseComputerSmokeReport(stdout, { electron: failed.electron, platform: "win32", exitCode: 1 })).toEqual(
+    failed,
+  )
+  expect(() =>
+    parseComputerSmokeReport(stdout, { electron: failed.electron, platform: "win32", exitCode: 0 }),
+  ).toThrow()
+})
+
+test("bootstrap candidate observations expose only closed route and access letters without native Stop credit", () => {
+  const line = (value: unknown) => COMPUTER_SMOKE_BOOTSTRAP_TOKEN_MARK + JSON.stringify(value)
+  const parseDiagnostic = (line: string) =>
+    parseComputerSmokeBootstrapTokenDiagnostic(line, { bootstrap: true, phase: "none", terminal: false, seen: false })
+  const value = { protocol: 1, route: "restricted", owner: "x", access: "d", cause: "s" }
+  expect(parseDiagnostic(line(value))).toEqual(value)
+  for (const route of ["serving", "linked"]) expect(parseDiagnostic(line({ ...value, route })).route).toBe(route)
+  for (const patch of [
+    { protocol: 2 },
+    { route: "PRIVATE" },
+    { route: ["restricted"] },
+    { owner: "PRIVATE" },
+    { owner: ["x"] },
+    { access: "PRIVATE" },
+    { access: ["d"] },
+    { cause: "PRIVATE" },
+    { cause: ["s"] },
+    { token: "PRIVATE" },
+    { sid: "PRIVATE" },
+    { acl: "PRIVATE" },
+    { pid: 123 },
+  ])
+    expect(() => parseDiagnostic(line({ ...value, ...patch }))).toThrow()
+  expect(() => parseDiagnostic(line(value) + " ".repeat(257))).toThrow()
+  for (const input of [
+    { bootstrap: false, phase: "none", terminal: false, seen: false },
+    { bootstrap: true, phase: "boot", terminal: false, seen: false },
+    { bootstrap: true, phase: "none", terminal: true, seen: false },
+    { bootstrap: true, phase: "none", terminal: false, seen: true },
+  ] as const)
+    expect(() => parseComputerSmokeBootstrapTokenDiagnostic(line(value), input)).toThrow()
+  const failed = report("win32")
+  failed.checks[16] = { name: "native-os-stop", ok: false, reason: "native_proof_invalid" }
+  const stdout = line(value) + "\n" + COMPUTER_SMOKE_MARK + JSON.stringify(failed)
+  expect(parseComputerSmokeReport(stdout, { electron: failed.electron, platform: "win32", exitCode: 1 })).toEqual(
+    failed,
+  )
+  expect(() =>
+    parseComputerSmokeReport(stdout, { electron: failed.electron, platform: "win32", exitCode: 0 }),
+  ).toThrow()
 })
 
 test("ASAR capability receipts expose only bounded metadata and cannot convert native report outcomes", () => {

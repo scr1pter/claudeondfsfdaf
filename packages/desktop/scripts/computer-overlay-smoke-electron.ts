@@ -36,6 +36,8 @@ import {
   COMPUTER_SMOKE_PHASE_MARK,
   COMPUTER_SMOKE_CONTROLLER_MARK,
   COMPUTER_SMOKE_GEOMETRY_MARK,
+  COMPUTER_SMOKE_PROPERTIES_MARK,
+  type ComputerSmokePropertyStep,
   parseComputerSmokeGeometry,
   type ComputerSmokeControllerStep,
   COMPUTER_SMOKE_FAILURE_MARK,
@@ -78,6 +80,7 @@ const checks = new Map<ComputerSmokeName, ComputerSmokeCheck>()
 const disposers: (() => void | Promise<void>)[] = []
 const records: WindowRecord[] = []
 let currentPhase: ComputerSmokeLastPhase = "none"
+let propertyStep: ComputerSmokePropertyStep = "underlay-create"
 function phase(value: ComputerSmokePhase) {
   currentPhase = value
   process.stdout.write(COMPUTER_SMOKE_PHASE_MARK + JSON.stringify({ protocol: 1, phase: value }) + "\n")
@@ -167,6 +170,7 @@ function state(): Computer.ComputerState {
   }
 }
 async function underlay(nonce?: string) {
+  if (currentPhase === "properties") propertyStep = "underlay-create"
   const target = new BrowserWindow({
     ...screen.getPrimaryDisplay().workArea,
     frame: false,
@@ -179,6 +183,7 @@ async function underlay(nonce?: string) {
       partition: "computer-smoke-underlay",
     },
   })
+  if (currentPhase === "properties") propertyStep = "underlay-load"
   await target.loadURL(
     "data:text/html;charset=utf-8," +
       encodeURIComponent(
@@ -187,6 +192,7 @@ async function underlay(nonce?: string) {
   )
   if (nonce) target.setTitle(`Vector computer smoke underlay ${nonce}`)
   if (platform !== "linux") {
+    if (currentPhase === "properties") propertyStep = "underlay-focus"
     app.focus({ steal: true })
     target.focus()
   }
@@ -198,8 +204,10 @@ async function underlay(nonce?: string) {
 async function properties() {
   const user = await underlay()
   const first = records.length
+  propertyStep = "overlay-create"
   const overlay = createComputerOverlay({ platform, preloadPath: preload, electron })
   disposers.push(() => overlay.close())
+  propertyStep = "overlay-show"
   if (platform === "linux") {
     // Production render deliberately refuses Linux. Exercise its shared real window configuration
     // only, without inventing another platform, a native window ID or a running Hands session.
@@ -228,11 +236,14 @@ async function properties() {
     created.webContents.send("computer-overlay-state", ComputerOverlayPage.bannerView(state()))
   } else {
     await overlay.show(state())
+    propertyStep = "overlay-ready"
     await overlay.ready()
   }
   const owned = records.slice(first)
   const banner = owned.find((record) => record.config.webPreferences?.preload)?.window
+  propertyStep = "banner"
   require(banner)
+  propertyStep = "later-checks"
   check("overlay-count", owned.length === screen.getAllDisplays().length * 4 + 1)
   const expected = screen
     .getAllDisplays()
@@ -818,6 +829,8 @@ async function main() {
     phase("controller")
     await controllerChecks()
   } catch {
+    if (currentPhase === "properties")
+      process.stdout.write(COMPUTER_SMOKE_PROPERTIES_MARK + JSON.stringify({ protocol: 1, step: propertyStep }) + "\n")
     for (const name of COMPUTER_SMOKE_CHECKS) if (!checks.has(name)) check(name, false, "runtime_failure")
   } finally {
     phase("cleanup")

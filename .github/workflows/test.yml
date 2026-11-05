@@ -38,7 +38,7 @@ on:
         required: false
         default: false
       computer_helper_windows_units_only:
-        description: Diagnose x64 native unit, protocol and isolated scenarios; no release evidence
+        description: Diagnose x64 native checks and the finite staged overlay; no release evidence
         type: boolean
         required: false
         default: false
@@ -91,10 +91,11 @@ jobs:
       isolated-desktop: true
 
   computer-helper-windows-units:
-    name: Windows x64 native unit, protocol and isolated scenario diagnostic (no release evidence)
+    name: Windows x64 native and staged diagnostics (no release evidence)
     if: github.event_name == 'workflow_dispatch' && !inputs.desktop_engine_node && inputs.computer_helper == true && inputs.computer_helper_windows_units_only == true && !inputs.computer_helper_macos_signing_only && !inputs.computer_helper_macos_overlay_only && !inputs.computer_helper_windows_overlay_only
     runs-on: windows-2025
-    timeout-minutes: 30
+    # Includes the separate source-bound stage build; each native/runtime deadline stays unchanged.
+    timeout-minutes: 45
     permissions:
       contents: read
     defaults:
@@ -235,6 +236,43 @@ jobs:
         with:
           name: computer-helper-win32-x64-isolated-diagnostic-${{ github.sha }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/computer-win32-privileged.json
+          if-no-files-found: ignore
+          overwrite: false
+          retention-days: 7
+      - name: Install the pinned Electron runtime for the staged diagnostic
+        if: ${{ success() && steps.required_protocol.outcome == 'success' }}
+        timeout-minutes: 5
+        run: |
+          node node_modules/electron/install.js
+          if ($LASTEXITCODE -ne 0) { throw "The pinned diagnostic Electron installation failed." }
+      - name: Build the source-bound x64 native overlay diagnostic stage
+        if: ${{ success() && steps.required_protocol.outcome == 'success' }}
+        timeout-minutes: 15
+        run: |
+          bun --no-env-file ./scripts/diagnose-build-computer-overlay-smoke.ts --platform win32 --helper native/out/win32/x64 --out native/out/overlay-win32
+          if ($LASTEXITCODE -ne 0) { throw "The x64 native overlay diagnostic stage failed to build." }
+      - name: Run the actual medium-token staged overlay diagnostic
+        if: ${{ success() && steps.required_protocol.outcome == 'success' }}
+        timeout-minutes: 3
+        env:
+          VECTOR_COMPUTER_TEST_ISOLATED: "1"
+        run: |
+          bun --no-env-file ./scripts/computer-overlay-smoke.ts --native-stage native/out/overlay-win32 2>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP/computer-win32-staged-diagnostic.log"
+          $status = $LASTEXITCODE
+          if ($status -eq 77) {
+            "SKIPPED: an actual pre-Electron native prerequisite is unavailable." >> $env:GITHUB_STEP_SUMMARY
+            exit 0
+          } elseif ($status -ne 0) {
+            throw "The actual medium-token staged overlay diagnostic failed."
+          }
+      - name: Preserve the bounded staged overlay diagnostic evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: computer-overlay-win32-x64-native-diagnostic-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/computer-win32-staged-diagnostic.log
+            packages/desktop/native/out/overlay-win32/computer-overlay-smoke.json
           if-no-files-found: ignore
           overwrite: false
           retention-days: 7

@@ -206,7 +206,16 @@ CaptureBitmap window_bitmap(const CaptureReadRequest& request, const std::functi
     phase = CaptureReadPhase::window_factory_current; require(call.current());
     phase = CaptureReadPhase::window_factory_context; require(current());
     phase = CaptureReadPhase::window_item_create;
-    winrt::check_hresult(interop->CreateForWindow(request.window->hwnd, winrt::guid_of<GraphicsCaptureItem>(), winrt::put_abi(item)));
+    const auto created = interop->CreateForWindow(request.window->hwnd, winrt::guid_of<GraphicsCaptureItem>(), winrt::put_abi(item));
+    if (FAILED(created)) {
+      const auto observation = call.observation();
+      const auto cancelled = created == RPC_E_CALL_CANCELED || created == HRESULT_FROM_WIN32(RPC_S_CALL_CANCELLED) || created == HRESULT_FROM_WIN32(ERROR_CANCELLED);
+      if (observation == WindowsComObservation::expired)
+        phase = cancelled ? CaptureReadPhase::window_item_expired_cancelled : created == E_ACCESSDENIED ? CaptureReadPhase::window_item_expired_denied : CaptureReadPhase::window_item_expired_other;
+      if (observation == WindowsComObservation::current)
+        phase = cancelled ? CaptureReadPhase::window_item_current_cancelled : created == E_ACCESSDENIED ? CaptureReadPhase::window_item_current_denied : CaptureReadPhase::window_item_current_other;
+    }
+    winrt::check_hresult(created);
     phase = CaptureReadPhase::window_item_current; require(call.current());
     phase = CaptureReadPhase::window_item_context; require(current()); }
   phase = CaptureReadPhase::window_item_size;

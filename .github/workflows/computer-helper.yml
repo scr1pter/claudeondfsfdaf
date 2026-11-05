@@ -782,6 +782,7 @@ jobs:
           $status = $LASTEXITCODE
           if ($status -eq 77 -and $env:PRIVILEGED_REQUIRED -ne "true") {
             "SKIPPED: an actual pre-Electron native prerequisite is unavailable." >> $env:GITHUB_STEP_SUMMARY
+            exit 0
           } elseif ($status -ne 0) {
             throw "Actual isolated overlay Stop failed or required native evidence is unavailable."
           }

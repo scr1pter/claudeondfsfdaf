@@ -4,10 +4,14 @@
 #include <atomic>
 #include <functional>
 #include <memory>
+#include <optional>
 
 namespace vector::computer {
 class HelperLifecycle;
 struct CaptureBackend;
+struct CaptureBitmap;
+struct CaptureReceipt;
+struct WindowsRect;
 enum class WindowsInventoryDiagnostic;
 enum class CaptureReadPhase;
 inline constexpr std::array<std::wstring_view, 15> windows_privileged_checks{
@@ -16,7 +20,7 @@ inline constexpr std::array<std::wstring_view, 15> windows_privileged_checks{
   L"uia-value-set-and-readback", L"secure-field-refusal", L"tagged-click-increments",
   L"unicode-type-readback", L"stale-capture-refusal", L"owned-input-release",
   L"input-detection-probe", L"hardware-user-input-pauses", L"isolated-target-cleanup"};
-inline constexpr std::array<std::wstring_view, 117> windows_privileged_stages{
+inline constexpr std::array<std::wstring_view, 128> windows_privileged_stages{
   L"installed-list-reply", L"installed-list-native", L"installed-seal",
   L"window-capture-reply", L"window-capture-receipt", L"png-decode",
   L"affinity-show", L"affinity-hide", L"display-capture-reply", L"display-capture-receipt",
@@ -40,7 +44,8 @@ inline constexpr std::array<std::wstring_view, 117> windows_privileged_stages{
   L"capture-screen-copy", L"capture-window-supported", L"capture-window-frame",
   L"capture-window-device", L"capture-window-interop", L"capture-window-item-ticket",
   L"capture-window-factory", L"capture-window-factory-current", L"capture-window-factory-context",
-  L"capture-window-item-create", L"capture-window-item-current", L"capture-window-item-context", L"capture-window-item-size",
+  L"capture-window-item-create", L"capture-window-item-expired-cancelled", L"capture-window-item-expired-denied", L"capture-window-item-expired-other",
+  L"capture-window-item-current-cancelled", L"capture-window-item-current-denied", L"capture-window-item-current-other", L"capture-window-item-current", L"capture-window-item-context", L"capture-window-item-size",
   L"capture-window-pool", L"capture-window-session", L"capture-window-start-ticket",
   L"capture-window-start", L"capture-window-start-current", L"capture-window-first-frame",
   L"capture-window-content-size", L"capture-window-texture", L"capture-window-description",
@@ -50,7 +55,8 @@ inline constexpr std::array<std::wstring_view, 117> windows_privileged_stages{
   L"capture-color-location-unknown", L"capture-color-masked-screen", L"capture-color-masked-window",
   L"capture-color-masked-unknown", L"capture-color-unmasked-screen", L"capture-color-unmasked-window",
   L"capture-color-unmasked-unknown", L"capture-color-mask-unknown-screen", L"capture-color-mask-unknown-window",
-  L"capture-color-mask-unknown-unknown"};
+  L"capture-color-mask-unknown-unknown",
+  L"affinity-sample-plan", L"affinity-fixture-current", L"affinity-native-sample-missing", L"affinity-native-sample-mismatch", L"affinity-display-proof"};
 inline constexpr std::array<std::wstring_view, 32> windows_privileged_native_codes{
   L"unavailable", L"permissions", L"busy", L"stopped", L"paused", L"locked", L"blocked", L"protected", L"denied",
   L"not_granted", L"stale_frame", L"stale_ref", L"changed", L"occluded", L"secure_field", L"elevated",
@@ -80,6 +86,9 @@ std::wstring windows_privileged_capture_diagnostic(CaptureBackend, const std::fu
 void windows_privileged_inventory_failure(WindowsInventoryDiagnostic) noexcept;
 void windows_privileged_capture_read_failure(CaptureReadPhase) noexcept;
 bool windows_privileged_response_failure(const winrt::Windows::Data::Json::JsonObject&, std::wstring_view) noexcept;
+// Pure fixture proof: a masked delivered pixel alone never establishes native affinity exclusion.
+bool windows_privileged_affinity_sample_verified(std::optional<bool>, const CaptureBitmap&, const CaptureReceipt&,
+  const winrt::Windows::Data::Json::JsonObject&, const WindowsRect&) noexcept;
 // A monotonic admission gate over the already-held parent witness. Production supplies only bounded
 // kernel metadata; tests can advance that witness without creating a process or touching a desktop.
 class WindowsPrivilegedRunAuthority final {

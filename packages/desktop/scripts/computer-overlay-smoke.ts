@@ -15,6 +15,10 @@ import {
   COMPUTER_SMOKE_GEOMETRY_MARK,
   COMPUTER_SMOKE_NATIVE_MARK,
   COMPUTER_SMOKE_ASAR_MARK,
+  COMPUTER_SMOKE_PROPERTIES_MARK,
+  COMPUTER_SMOKE_BOOTSTRAP_TOKEN_MARK,
+  parseComputerSmokePropertiesDiagnostic,
+  parseComputerSmokeBootstrapTokenDiagnostic,
   parseComputerSmokeAsarDiagnostic,
   parseComputerSmokeNativeDiagnostic,
   parseComputerSmokeGeometry,
@@ -189,6 +193,8 @@ export async function runComputerOverlaySmoke(args = process.argv.slice(2)) {
     let windowRegion = false
     const nativeDiagnostics = new Set<string>()
     let asarDiagnostic = false
+    let propertiesDiagnostic = false
+    let bootstrapTokenDiagnostic = false
     let forcedCause: ComputerSmokeFailureCause | undefined
     const streamState: { childFailure?: ComputerSmokeFailureDiagnostic; loaderStarted: boolean; exception: boolean } = {
       loaderStarted: false,
@@ -282,6 +288,15 @@ export async function runComputerOverlaySmoke(args = process.argv.slice(2)) {
             streamState.loaderStarted = true
             if (hint === "none") hint = "loader_pending"
             process.stdout.write(COMPUTER_SMOKE_LOADER_STARTED + "\n")
+          } else if (line.startsWith(COMPUTER_SMOKE_BOOTSTRAP_TOKEN_MARK)) {
+            const diagnostic = parseComputerSmokeBootstrapTokenDiagnostic(line, {
+              bootstrap,
+              phase: lastPhase,
+              seen: bootstrapTokenDiagnostic,
+              terminal: Boolean(streamState.childFailure || streamState.exception),
+            })
+            bootstrapTokenDiagnostic = true
+            process.stdout.write(COMPUTER_SMOKE_BOOTSTRAP_TOKEN_MARK + JSON.stringify(diagnostic) + "\n")
           } else if (line.startsWith(COMPUTER_SMOKE_PHASE_MARK)) {
             if (streamState.childFailure || streamState.exception)
               throw new Error("A terminal computer smoke receipt cannot advance.")
@@ -289,6 +304,14 @@ export async function runComputerOverlaySmoke(args = process.argv.slice(2)) {
             if (lastPhase === "cleanup" || lastPhase === "report") cancelSample()
             if (hint === "loader_pending") hint = "none"
             process.stdout.write(COMPUTER_SMOKE_PHASE_MARK + JSON.stringify({ protocol: 1, phase: lastPhase }) + "\n")
+          } else if (line.startsWith(COMPUTER_SMOKE_PROPERTIES_MARK)) {
+            const diagnostic = parseComputerSmokePropertiesDiagnostic(line, {
+              phase: lastPhase,
+              seen: propertiesDiagnostic,
+              terminal: Boolean(streamState.childFailure || streamState.exception),
+            })
+            propertiesDiagnostic = true
+            process.stdout.write(COMPUTER_SMOKE_PROPERTIES_MARK + JSON.stringify(diagnostic) + "\n")
           } else if (line.startsWith(COMPUTER_SMOKE_GEOMETRY_MARK)) {
             if (
               lastPhase !== "properties" ||
@@ -428,6 +451,8 @@ export async function runComputerOverlaySmoke(args = process.argv.slice(2)) {
       pendingLine.startsWith(COMPUTER_SMOKE_WINDOW_REGION_MARK) ||
       pendingLine.startsWith(COMPUTER_SMOKE_NATIVE_MARK) ||
       pendingLine.startsWith(COMPUTER_SMOKE_ASAR_MARK) ||
+      pendingLine.startsWith(COMPUTER_SMOKE_PROPERTIES_MARK) ||
+      pendingLine.startsWith(COMPUTER_SMOKE_BOOTSTRAP_TOKEN_MARK) ||
       pendingLine.startsWith(COMPUTER_SMOKE_FAILURE_MARK) ||
       pendingLine.startsWith(COMPUTER_SMOKE_EXCEPTION_MARK) ||
       pendingLine.startsWith(COMPUTER_SMOKE_LOADER_STARTED)
@@ -464,7 +489,13 @@ export async function runComputerOverlaySmoke(args = process.argv.slice(2)) {
             (check.name === "native-capture-exclusion" && report.platform === "darwin")),
       )
     if (failed || missingNative)
-      emitFailure(failureDiagnostic(failed ? "assertion_failed" : "required_native_unavailable", lastPhase, hint))
+      emitFailure(
+        failureDiagnostic(
+          failed ? "assertion_failed" : "required_native_unavailable",
+          propertiesDiagnostic ? "properties" : lastPhase,
+          hint,
+        ),
+      )
     return failed || missingNative ? 1 : 0
   } finally {
     await rm(directory, { recursive: true, force: true })

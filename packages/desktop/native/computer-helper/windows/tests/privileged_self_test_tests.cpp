@@ -103,6 +103,35 @@ size_t run_privileged_self_test_tests() {
     require(!windows_privileged_response_failure(malformed, L"secure_field"), "privileged.malformed-code-is-not-a-match");
   });
   test([] {
+    CaptureReceipt receipt; receipt.bounds = {0, 0, 4, 4}; receipt.width = receipt.height = 4; receipt.image_scale = 1;
+    CaptureBitmap blue{4, 4, std::vector<uint8_t>(4 * 4 * 4)};
+    for (size_t offset = 0; offset < blue.bgra.size(); offset += 4) {
+      blue.bgra[offset] = 192; blue.bgra[offset + 1] = 128; blue.bgra[offset + 2] = 32; blue.bgra[offset + 3] = 255;
+    }
+    auto black = blue; const size_t sample = (2 * 4 + 2) * 4;
+    black.bgra[sample] = black.bgra[sample + 1] = black.bgra[sample + 2] = 0;
+    const WindowsRect region{1, 1, 2, 2};
+    const auto masked = JsonObject::Parse(LR"({"masked":[{"x":0,"y":0,"w":4,"h":4}]})");
+    const auto unmasked = JsonObject::Parse(LR"({"masked":[]})");
+    for (const auto raw : {std::optional<bool>{}, std::optional<bool>{false}})
+      require(!windows_privileged_affinity_sample_verified(raw, black, receipt, masked, region), "privileged.masked-black-alone-never-proves-native-affinity");
+    require(windows_privileged_affinity_sample_verified(true, black, receipt, masked, region), "privileged.native-underlay-and-opaque-mask-are-both-required");
+    require(!windows_privileged_affinity_sample_verified(true, blue, receipt, masked, region), "privileged.declared-mask-must-actually-be-painted");
+    black.bgra[sample + 3] = 254;
+    require(!windows_privileged_affinity_sample_verified(true, black, receipt, masked, region), "privileged.declared-mask-must-be-fully-opaque");
+    require(windows_privileged_affinity_sample_verified(true, blue, receipt, unmasked, region), "privileged.unmasked-output-still-requires-original-fixture-color");
+    require(!windows_privileged_affinity_sample_verified(true, black, receipt, unmasked, region), "privileged.unmasked-black-does-not-prove-affinity");
+    blue.bgra[sample + 3] = 254;
+    require(!windows_privileged_affinity_sample_verified(true, blue, receipt, unmasked, region), "privileged.fixture-sample-must-remain-opaque");
+    black.bgra[sample + 3] = 255;
+    for (const auto& malformed : {
+        LR"({"masked":[{"x":0,"y":0,"w":4,"h":4},{"x":0,"y":0,"w":-1,"h":1}]})",
+        LR"({"masked":[{"x":0,"y":0,"w":5,"h":4}]})",
+        LR"({"masked":[{"x":0,"y":0,"w":4,"h":4,"extra":true}]})",
+        LR"({"masked":"unknown"})"})
+      require(!windows_privileged_affinity_sample_verified(true, black, receipt, JsonObject::Parse(malformed), region), "privileged.malformed-mask-never-satisfies-affinity-proof");
+  });
+  test([] {
     require(std::set<std::wstring_view>(windows_privileged_stages.begin(), windows_privileged_stages.end()).size() == windows_privileged_stages.size() &&
       std::set<std::wstring_view>(windows_privileged_native_codes.begin(), windows_privileged_native_codes.end()).size() == windows_privileged_native_codes.size(),
       "privileged.diagnostic-enums-are-unique");

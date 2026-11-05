@@ -174,6 +174,12 @@ export const WINDOWS_NATIVE_STAGES = [
   "capture-window-factory-current",
   "capture-window-factory-context",
   "capture-window-item-create",
+  "capture-window-item-expired-cancelled",
+  "capture-window-item-expired-denied",
+  "capture-window-item-expired-other",
+  "capture-window-item-current-cancelled",
+  "capture-window-item-current-denied",
+  "capture-window-item-current-other",
   "capture-window-item-current",
   "capture-window-item-context",
   "capture-window-item-size",
@@ -205,6 +211,11 @@ export const WINDOWS_NATIVE_STAGES = [
   "capture-color-mask-unknown-screen",
   "capture-color-mask-unknown-window",
   "capture-color-mask-unknown-unknown",
+  "affinity-sample-plan",
+  "affinity-fixture-current",
+  "affinity-native-sample-missing",
+  "affinity-native-sample-mismatch",
+  "affinity-display-proof",
 ] as const
 export const WINDOWS_NATIVE_CODES = [...Computer.ComputerErrorCode.literals, "unknown"] as const
 export type WindowsNativeStage = (typeof WINDOWS_NATIVE_STAGES)[number]

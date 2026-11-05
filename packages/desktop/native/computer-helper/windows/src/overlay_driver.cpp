@@ -6,6 +6,7 @@
 #include "input_guardian.h"
 #include "uia_native.h"
 #include "windows_process_tree.h"
+#include "../tests/caller_token_acl.h"
 #include <bcrypt.h>
 #include <tlhelp32.h>
 #include <algorithm>
@@ -238,14 +239,25 @@ OverlayDriverResult click_stop(const OverlayDriverOptions& options, const std::s
   } catch (...) { guardian->retire(*ticket, !attempted); (void)guardian->drain(300); throw; }
   require(confirmed_up, L"cleanup_failed"); return {true, false, {}};
 }
-winrt::handle medium_token() {
+caller_token_acl::Observation bootstrap_token_diagnostic(HANDLE output, HANDLE token, const char* route) {
+  const auto proof = caller_token_acl::observe(token);
+  JsonObject value; value.Insert(L"protocol", JsonValue::CreateNumberValue(1)); value.Insert(L"route", JsonValue::CreateStringValue(widen(route)));
+  value.Insert(L"owner", JsonValue::CreateStringValue(widen(std::string(1, proof.owner)))); value.Insert(L"access", JsonValue::CreateStringValue(widen(std::string(1, proof.process_dacl)))); value.Insert(L"cause", JsonValue::CreateStringValue(widen(std::string(1, proof.cause))));
+  const auto document = "computer-smoke-bootstrap-token " + winrt::to_string(value.Stringify()) + "\n"; DWORD written = 0;
+  require(document.size() <= 256 && WriteFile(output, document.data(), static_cast<DWORD>(document.size()), &written, nullptr) && written == document.size(), L"control_invalid"); return proof;
+}
+winrt::handle medium_token(const TokenIdentity& original, HANDLE output) {
   HANDLE raw = nullptr; const DWORD access = TOKEN_QUERY | TOKEN_DUPLICATE | TOKEN_ASSIGN_PRIMARY | TOKEN_ADJUST_DEFAULT;
   require(OpenProcessToken(GetCurrentProcess(), access, &raw) != FALSE, L"medium_token_unavailable"); winrt::handle source(raw);
   TOKEN_ELEVATION_TYPE elevation{}; DWORD returned = 0;
   if (GetTokenInformation(source.get(), TokenElevationType, &elevation, sizeof(elevation), &returned) && returned == sizeof(elevation) && elevation == TokenElevationTypeFull) {
     TOKEN_LINKED_TOKEN linked{}; if (GetTokenInformation(source.get(), TokenLinkedToken, &linked, sizeof(linked), &returned) && returned == sizeof(linked)) {
       winrt::handle limited(linked.LinkedToken); HANDLE duplicate = nullptr;
-      if (limited && DuplicateTokenEx(limited.get(), access, nullptr, SecurityImpersonation, TokenPrimary, &duplicate)) return winrt::handle(duplicate);
+      if (limited && DuplicateTokenEx(limited.get(), access, nullptr, SecurityImpersonation, TokenPrimary, &duplicate)) {
+        winrt::handle candidate(duplicate); const auto observed = observe_token(candidate.get());
+        require(serving_token_allowed(observed) && same_context(original, observed), L"parent_invalid");
+        (void)bootstrap_token_diagnostic(output, candidate.get(), "linked"); return candidate;
+      }
     }
   }
   alignas(DWORD) std::array<std::array<unsigned char, SECURITY_MAX_SID_SIZE>, 2> storage{}; std::array<SID_AND_ATTRIBUTES, 2> disabled{};
@@ -254,7 +266,14 @@ winrt::handle medium_token() {
   raw = nullptr; require(CreateRestrictedToken(source.get(), LUA_TOKEN | DISABLE_MAX_PRIVILEGE, static_cast<DWORD>(disabled.size()), disabled.data(), 0, nullptr, 0, nullptr, &raw) != FALSE, L"medium_token_unavailable"); winrt::handle token(raw);
   struct Label { TOKEN_MANDATORY_LABEL label{}; alignas(DWORD) std::array<unsigned char, SECURITY_MAX_SID_SIZE> sid{}; } label;
   DWORD count = SECURITY_MAX_SID_SIZE; require(CreateWellKnownSid(WinMediumLabelSid, nullptr, label.sid.data(), &count) != FALSE, L"medium_token_unavailable"); label.label.Label.Sid = label.sid.data(); label.label.Label.Attributes = SE_GROUP_INTEGRITY;
-  require(SetTokenInformation(token.get(), TokenIntegrityLevel, &label.label, static_cast<DWORD>(offsetof(Label, sid) + count)) != FALSE, L"medium_token_unavailable"); return token;
+  require(SetTokenInformation(token.get(), TokenIntegrityLevel, &label.label, static_cast<DWORD>(offsetof(Label, sid) + count)) != FALSE, L"medium_token_unavailable");
+  const auto observed = observe_token(token.get()); require(serving_token_allowed(observed) && same_context(original, observed), L"parent_invalid");
+  const auto proof = bootstrap_token_diagnostic(output, token.get(), "restricted");
+  // Match the never-shipped Caller's proven startup boundary on this newly owned candidate only.
+  // Unknown access fails closed; source/high/linked tokens and process/global ACLs are never changed.
+  require(proof.process_dacl == 'g' || proof.process_dacl == 'd', L"bootstrap_failed");
+  if (proof.process_dacl == 'd') (void)caller_token_acl::ensure_owned_restricted(token.get());
+  require(same_token(observed, observe_token(token.get())), L"parent_invalid"); return token;
 }
 class QuotaPrivilege final {
  public:
@@ -275,11 +294,15 @@ std::vector<wchar_t> child_environment(const std::filesystem::path& profile) {
   values[L"USERPROFILE"] = (profile / L"home").wstring(); values[L"APPDATA"] = (profile / L"AppData" / L"Roaming").wstring(); values[L"LOCALAPPDATA"] = (profile / L"AppData" / L"Local").wstring(); values[L"TEMP"] = (profile / L"tmp").wstring(); values[L"TMP"] = values[L"TEMP"];
   std::vector<wchar_t> result; for (const auto& entry : values) { result.insert(result.end(), entry.first.begin(), entry.first.end()); result.push_back(L'='); result.insert(result.end(), entry.second.begin(), entry.second.end()); result.push_back(L'\0'); } result.push_back(L'\0'); return result;
 }
-int launch_electron(const OverlayDriverOptions& options, const std::shared_ptr<Lifetime>& life, const FixtureFiles& files) {
+int launch_electron(const OverlayDriverOptions& options, const std::shared_ptr<Lifetime>& life, const FixtureFiles& files, HANDLE output) {
   require(life->current() && files.current(), L"parent_invalid"); if (!isolated()) throw DriverSkip{L"isolation_required"}; if (!windows_desktop_available(observe_windows_desktop())) throw DriverSkip{L"noninteractive_desktop"};
   const auto original = observe_token(GetCurrentProcess()); require(!original.ui_access && !original.app_container, L"parent_invalid");
   winrt::handle token;
-  if (!serving_token_allowed(original)) { if (!original.elevated || original.integrity < SECURITY_MANDATORY_HIGH_RID) invalid(L"parent_invalid"); token = medium_token(); }
+  if (!serving_token_allowed(original)) { if (!original.elevated || original.integrity < SECURITY_MANDATORY_HIGH_RID) invalid(L"parent_invalid"); token = medium_token(original, output); }
+  else {
+    HANDLE raw = nullptr; require(OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY | TOKEN_DUPLICATE, &raw) != FALSE, L"bootstrap_failed"); winrt::handle serving(raw);
+    (void)bootstrap_token_diagnostic(output, serving.get(), "serving");
+  }
   std::array<winrt::handle, 3> standard; std::array<HANDLE, 3> inherited{}; const DWORD kinds[]{STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE};
   for (size_t index = 0; index < standard.size(); ++index) {
     const auto handle = GetStdHandle(kinds[index]); const auto kind = handle && handle != INVALID_HANDLE_VALUE ? GetFileType(handle) : FILE_TYPE_UNKNOWN; require(kind == FILE_TYPE_PIPE || kind == FILE_TYPE_CHAR || kind == FILE_TYPE_DISK, L"control_invalid");
@@ -370,7 +393,7 @@ int run_overlay_driver(const OverlayDriverOptions& options, HANDLE input, HANDLE
     const auto parent = actual_parent(); require(parent && parent != GetCurrentProcessId() && (options.mode == OverlayDriverMode::launch_electron || parent == options.parent), L"parent_invalid"); life = Lifetime::arm(parent, options.mode == OverlayDriverMode::launch_electron ? 122'000 : 15'000);
     if (options.mode == OverlayDriverMode::stop) { require(GetFileType(input) == FILE_TYPE_PIPE && GetFileType(output) == FILE_TYPE_PIPE, L"control_invalid"); writer = std::make_unique<PipeFrameWriter>(output, life->stop.get(), [life] { life->revoked.store(true); }); }
     const auto files = fixture_files();
-    if (options.mode == OverlayDriverMode::launch_electron) { const auto status = launch_electron(options, life, files); SetEvent(life->stop.get()); return status; }
+    if (options.mode == OverlayDriverMode::launch_electron) { const auto status = launch_electron(options, life, files, output); SetEvent(life->stop.get()); return status; }
     result = click_stop(options, life, files, input, *writer);
   } catch (const DriverSkip& failure) { result = {false, true, failure.reason}; }
   catch (const DriverFailure& failure) { result = {false, options.mode == OverlayDriverMode::launch_electron && failure.reason == L"medium_token_unavailable", failure.reason}; }

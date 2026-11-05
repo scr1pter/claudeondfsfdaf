@@ -20,6 +20,7 @@
 #include <mutex>
 #include <set>
 #include <thread>
+#include <utility>
 
 namespace vector::computer {
 namespace {
@@ -99,7 +100,8 @@ std::wstring_view capture_read_stage(CaptureReadPhase phase) noexcept {
     L"capture-screen-blit", L"capture-screen-flush", L"capture-screen-copy", L"capture-window-supported",
     L"capture-window-frame", L"capture-window-device", L"capture-window-interop", L"capture-window-item-ticket",
     L"capture-window-factory", L"capture-window-factory-current", L"capture-window-factory-context",
-    L"capture-window-item-create", L"capture-window-item-current", L"capture-window-item-context", L"capture-window-item-size",
+    L"capture-window-item-create", L"capture-window-item-expired-cancelled", L"capture-window-item-expired-denied", L"capture-window-item-expired-other",
+    L"capture-window-item-current-cancelled", L"capture-window-item-current-denied", L"capture-window-item-current-other", L"capture-window-item-current", L"capture-window-item-context", L"capture-window-item-size",
     L"capture-window-pool", L"capture-window-session", L"capture-window-start-ticket", L"capture-window-start",
     L"capture-window-start-current", L"capture-window-first-frame", L"capture-window-content-size",
     L"capture-window-texture", L"capture-window-description", L"capture-window-staging", L"capture-window-copy",
@@ -107,12 +109,45 @@ std::wstring_view capture_read_stage(CaptureReadPhase phase) noexcept {
     L"capture-read-context-after"};
   const auto index = static_cast<size_t>(phase); return index < stages.size() ? stages[index] : std::wstring_view{};
 }
+bool fixture_color(const CaptureBitmap& image, uint32_t x, uint32_t y) noexcept {
+  if (!image.valid() || x >= image.width || y >= image.height) return false;
+  const auto offset = (static_cast<size_t>(y) * image.width + x) * 4;
+  return image.bgra[offset + 3] == 255 && std::abs(int(image.bgra[offset + 2]) - 32) <= 8 && std::abs(int(image.bgra[offset + 1]) - 128) <= 8 && std::abs(int(image.bgra[offset]) - 192) <= 8;
+}
+struct AffinitySamplePlan {
+  uint64_t request_id = 0;
+  std::weak_ptr<WindowsTargetClient> client;
+  WindowsTargetState fixture;
+  WindowsWindow main, excluded;
+  ServerSession session;
+  CaptureDisplay display;
+  uint32_t sample_x = 0, sample_y = 0;
+  bool phase(const ServerSession& value) const noexcept {
+    return session.id == value.id && session.run_epoch == value.run_epoch && session.observation_epoch == value.observation_epoch &&
+      session.revision == value.revision && session.mode == value.mode && session.paused == value.paused;
+  }
+  bool current() const noexcept {
+    try {
+      const auto target = client.lock();
+      if (!target || !target->current() || target->pid() != fixture.pid || !windows_window_current(main) || !windows_window_current(excluded)) return false;
+      const POINT point{static_cast<LONG>(display.bounds.x + sample_x), static_cast<LONG>(display.bounds.y + sample_y)};
+      DWORD affinity = WDA_NONE;
+      return fixture.patch.contains(point) && fixture.excluded_bounds.contains(point) &&
+        GetWindow(excluded.hwnd, GW_OWNER) == main.hwnd && GetAncestor(WindowFromPoint(point), GA_ROOT) == excluded.hwnd &&
+        GetWindowDisplayAffinity(excluded.hwnd, &affinity) && affinity == WDA_EXCLUDEFROMCAPTURE;
+    } catch (...) { return false; }
+  }
+};
 struct CaptureFailureTrace {
   std::atomic_uint32_t inventories{0};
   std::atomic<CaptureFailureStage> failure{CaptureFailureStage::none};
   std::atomic<WindowsInventoryDiagnostic> native_failure{WindowsInventoryDiagnostic::none};
   std::atomic<CaptureReadPhase> read_failure{CaptureReadPhase::none};
   std::atomic<CaptureReadRoute> read_route{CaptureReadRoute::none};
+  std::shared_ptr<const AffinitySamplePlan> affinity_plan;
+  std::function<bool()> affinity_current;
+  std::atomic_bool affinity_attempted{false};
+  std::atomic_int affinity_sample{0}; // 0 absent, 1 false, 2 true; private metadata only.
   void record(CaptureFailureStage stage) noexcept {
     if (native_failure.load() != WindowsInventoryDiagnostic::none || read_failure.load() != CaptureReadPhase::none) return;
     auto expected = CaptureFailureStage::none; failure.compare_exchange_strong(expected, stage);
@@ -164,7 +199,24 @@ CaptureBackend diagnostic_capture_backend(CaptureBackend backend) {
   backend.read = [read](const auto& request, const auto& current) {
     const auto trace = capture_trace;
     if (trace) trace->read_route.store(request.window && request.isolate_window ? CaptureReadRoute::window : CaptureReadRoute::screen);
-    try { return read(request, current); }
+    try {
+      bool sample = false;
+      try {
+        sample = trace && trace->affinity_plan && !trace->affinity_attempted.exchange(true) &&
+          !request.window && !request.isolate_window && request.bounds == trace->affinity_plan->display.bounds &&
+          trace->affinity_current && trace->affinity_current() && current() && trace->affinity_plan->current();
+      } catch (...) {}
+      auto image = read(request, current);
+      try {
+        if (sample && image.valid() && image.width == request.bounds.width && image.height == request.bounds.height &&
+            trace->affinity_plan->sample_x < image.width && trace->affinity_plan->sample_y < image.height &&
+            trace->affinity_current() && current() && trace->affinity_plan->current()) {
+          const auto matches = fixture_color(image, trace->affinity_plan->sample_x, trace->affinity_plan->sample_y);
+          if (trace->affinity_current() && current()) trace->affinity_sample.store(matches ? 2 : 1);
+        }
+      } catch (...) { /* Sampling never changes the production read result or failure. */ }
+      return image;
+    }
     catch (...) { if (trace) trace->record(CaptureFailureStage::native_read); throw; }
   };
   const auto current = backend.current;
@@ -175,10 +227,14 @@ CaptureBackend diagnostic_capture_backend(CaptureBackend backend) {
   };
   return backend;
 }
-struct CaptureDiagnosticSummary { std::wstring failure_stage; CaptureReadRoute read_route = CaptureReadRoute::none; };
+struct CaptureDiagnosticSummary {
+  std::wstring failure_stage; CaptureReadRoute read_route = CaptureReadRoute::none;
+  std::optional<bool> affinity_sample;
+};
 struct NativeReply {
   JsonObject document; std::vector<uint8_t> image; std::wstring failure_stage;
   CaptureReadRoute read_route = CaptureReadRoute::none;
+  std::optional<bool> affinity_sample;
 };
 struct ScenarioState {
   std::weak_ptr<Dispatcher> dispatcher;
@@ -192,6 +248,7 @@ struct ScenarioState {
   std::condition_variable changed;
   std::map<uint64_t, NativeReply> replies;
   std::map<uint64_t, CaptureDiagnosticSummary> diagnostics;
+  std::shared_ptr<const AffinitySamplePlan> pending_affinity;
   bool available() const noexcept { return live.load() && authority && authority->current(); }
   bool publish(const JsonObject& document, std::span<const uint8_t> image) {
     std::lock_guard lock(mutex);
@@ -201,7 +258,7 @@ struct ScenarioState {
     if (replies.size() >= 16 || image.size() > kMaxFrameBytes || replies.contains(*id)) return false;
     CaptureDiagnosticSummary diagnostic;
     if (const auto found = diagnostics.find(*id); found != diagnostics.end()) { diagnostic = std::move(found->second); diagnostics.erase(found); }
-    replies.emplace(*id, NativeReply{JsonObject::Parse(document.Stringify()), {image.begin(), image.end()}, std::move(diagnostic.failure_stage), diagnostic.read_route}); changed.notify_all(); return true;
+    replies.emplace(*id, NativeReply{JsonObject::Parse(document.Stringify()), {image.begin(), image.end()}, std::move(diagnostic.failure_stage), diagnostic.read_route, diagnostic.affinity_sample}); changed.notify_all(); return true;
   }
 };
 Dispatcher::Handler diagnostic_handler(Dispatcher::Handler handler, std::weak_ptr<ScenarioState> weak) {
@@ -211,14 +268,30 @@ Dispatcher::Handler diagnostic_handler(Dispatcher::Handler handler, std::weak_pt
       try { trace = std::make_shared<CaptureFailureTrace>(); } catch (...) {}
       CaptureTraceScope scope(trace);
       if (!trace) { handler(request, context, std::move(done)); return; }
+      try {
+        std::shared_ptr<const AffinitySamplePlan> plan;
+        if (const auto active = weak.lock()) {
+          std::lock_guard lock(active->mutex);
+          if (active->pending_affinity && active->pending_affinity->request_id == request.id) plan = std::exchange(active->pending_affinity, {});
+        }
+        if (plan && request.op == L"capture" && context.session && plan->phase(*context.session) &&
+            request.args.GetNamedObject(L"target").GetNamedString(L"display") == plan->display.id) {
+          trace->affinity_plan = std::move(plan);
+          trace->affinity_current = [weak, current = context.is_current] {
+            const auto active = weak.lock(); return active && active->available() && current();
+          };
+        }
+      } catch (...) { /* An unbound sample remains absent and cannot satisfy the private assertion. */ }
       Dispatcher::Completion observed;
       try {
         observed = [weak, trace, id = request.id, done](Dispatcher::Result result) mutable {
           try {
             const auto stage = std::holds_alternative<Failure>(result) ? trace->recorded() : std::wstring{};
             const auto route = trace->read_route.load();
+            const auto sample = trace->affinity_sample.load();
+            const auto affinity = sample == 0 ? std::optional<bool>{} : std::optional<bool>{sample == 2};
             if (!stage.empty() || route != CaptureReadRoute::none) if (const auto active = weak.lock()) {
-              std::lock_guard lock(active->mutex); if (active->diagnostics.size() < 16) active->diagnostics.insert_or_assign(id, CaptureDiagnosticSummary{stage, route});
+              std::lock_guard lock(active->mutex); if (active->diagnostics.size() < 16) active->diagnostics.insert_or_assign(id, CaptureDiagnosticSummary{stage, route, affinity});
             }
           } catch (...) {
             // Metadata is best effort; the original completion/result always remains authoritative.
@@ -327,6 +400,41 @@ class NativeScenario final {
     auto result = std::move(found->second); state->replies.erase(found); return result;
   }
   NativeReply request(std::wstring_view operation, const JsonObject& args = {}) { return wait(begin(operation, args)); }
+  NativeReply capture_affinity_display(const CaptureReceipt& frame, const WindowsTargetState& shown, const std::shared_ptr<WindowsTargetClient>& target) {
+    const auto plan = diagnostic_stage(L"affinity-sample-plan", [&] {
+      const auto phase = session();
+      require(state->available() && target && target->current() && frame.window && valid_windows_target_state(shown) && shown.affinity && shown.excluded_visible && shown.patch.contains(shown.excluded_bounds));
+      require(target->pid() == shown.pid && frame.window->hwnd == shown.window && frame.window->surface == shown.window && frame.window->bounds == shown.bounds &&
+        frame.window->owner.process.pid == shown.pid && frame.window->physical_owner.process.pid == shown.pid && frame.window->window_class == windows_target_class);
+      require(frame.session_id == phase.id && frame.run_epoch == phase.run_epoch && frame.observation_epoch == phase.observation_epoch && frame.revision == phase.revision && state->captures->current(frame, phase));
+      const auto display = std::find_if(frame.inventory.displays.begin(), frame.inventory.displays.end(), [&](const auto& value) { return value.id == frame.display_id; });
+      const auto excluded = std::find_if(frame.inventory.windows.begin(), frame.inventory.windows.end(), [&](const auto& value) { return value.hwnd == shown.excluded; });
+      require(display != frame.inventory.displays.end() && display->bounds.contains(shown.excluded_bounds) && excluded != frame.inventory.windows.end() && excluded->window);
+      require(excluded->window->surface == shown.excluded && excluded->window->bounds == shown.excluded_bounds && excluded->window->owner.process.pid == shown.pid &&
+        excluded->window->physical_owner.process.pid == shown.pid && excluded->window->window_class == L"VectorComputerIsolatedTargetExcluded");
+      const auto fit = fit_capture(display->bounds, {1024, 1024, 1'048'576});
+      const auto x = std::floor((double(shown.excluded_bounds.x - display->bounds.x) + double(shown.excluded_bounds.width) / 2) * fit.scale);
+      const auto y = std::floor((double(shown.excluded_bounds.y - display->bounds.y) + double(shown.excluded_bounds.height) / 2) * fit.scale);
+      const auto source_x = std::floor((x + 0.5) / fit.scale), source_y = std::floor((y + 0.5) / fit.scale);
+      require(x >= 0 && y >= 0 && x < fit.width && y < fit.height && source_x >= 0 && source_y >= 0 && source_x < display->bounds.width && source_y < display->bounds.height);
+      require(next < 999'999);
+      auto value = std::make_shared<AffinitySamplePlan>(); value->request_id = next + 1; value->client = target; value->fixture = shown;
+      value->main = *frame.window; value->excluded = *excluded->window; value->session = phase; value->display = *display;
+      value->sample_x = static_cast<uint32_t>(source_x); value->sample_y = static_cast<uint32_t>(source_y);
+      require(value->current() && state->available()); return value;
+    });
+    JsonObject args = object(LR"({"budget":{"maxWidth":1024,"maxHeight":1024,"maxPixels":1048576},"format":"png"})");
+    JsonObject selection; selection.Insert(L"display", JsonValue::CreateStringValue(plan->display.id)); args.Insert(L"target", selection);
+    struct Clear {
+      std::shared_ptr<ScenarioState> state; uint64_t id;
+      ~Clear() {
+        std::shared_ptr<const AffinitySamplePlan> retired;
+        { std::lock_guard lock(state->mutex); if (state->pending_affinity && state->pending_affinity->request_id == id) retired = std::exchange(state->pending_affinity, {}); }
+      }
+    } clear{state, plan->request_id};
+    { std::lock_guard lock(state->mutex); require(!state->pending_affinity); state->pending_affinity = plan; }
+    return request(L"capture", args);
+  }
   static void success(const NativeReply& reply, std::wstring_view stage = {}) {
     if (!reply.document.GetNamedBoolean(L"ok", false)) {
       const auto origin = windows_privileged_origin_stage(reply.document.GetNamedString(L"error", L""), stage, reply.failure_stage);
@@ -357,6 +465,8 @@ class NativeScenario final {
     bool released = false;
     try { if (!server->closed() && state->live.load()) { const auto id = begin(L"input.releaseAll", JsonObject{}); released = wait(id, 1000).document.GetNamedBoolean(L"ok", false); } } catch (...) {}
     closed = true; state->live.store(false); state->changed.notify_all(); if (heartbeat.joinable()) heartbeat.request_stop();
+    std::shared_ptr<const AffinitySamplePlan> retired_sample;
+    { std::lock_guard lock(state->mutex); retired_sample = std::exchange(state->pending_affinity, {}); }
     try { server->close(L"isolated-close"); state->detector->close(); state->input->close(); state->accessibility->close(); state->captures->close(); cleanup_ok = server->wait_for_output(200) && released; } catch (...) { cleanup_ok = false; }
     return cleanup_ok;
   }
@@ -478,6 +588,29 @@ std::wstring windows_privileged_capture_diagnostic(CaptureBackend backend, const
 bool windows_privileged_response_failure(const JsonObject& reply, std::wstring_view code) noexcept {
   try {
     return !reply.GetNamedBoolean(L"ok", true) && reply.GetNamedString(L"code", L"") == code;
+  } catch (...) { return false; }
+}
+bool windows_privileged_affinity_sample_verified(std::optional<bool> native_sample, const CaptureBitmap& image,
+    const CaptureReceipt& receipt, const JsonObject& header, const WindowsRect& region) noexcept {
+  try {
+    if (!native_sample || !*native_sample || !image.valid() || image.width != receipt.width || image.height != receipt.height) return false;
+    const auto fit = fit_capture(receipt.bounds, {1024, 1024, 1'048'576});
+    if (receipt.width != fit.width || receipt.height != fit.height || receipt.image_scale != fit.scale) return false;
+    const auto [x, y] = image_point(receipt, region);
+    const auto masks = header.GetNamedArray(L"masked"); if (masks.Size() > 4096) return false;
+    bool masked = false;
+    for (const auto& raw : masks) {
+      const auto value = raw.GetObject(); if (value.Size() != 4) return false;
+      const auto mx = signed_integer(value.Lookup(L"x")), my = signed_integer(value.Lookup(L"y"));
+      const auto width = signed_integer(value.Lookup(L"w")), height = signed_integer(value.Lookup(L"h"));
+      if (!mx || !my || !width || !height) return false;
+      const WindowsRect mask{*mx, *my, *width, *height};
+      if (!mask.valid() || !WindowsRect{0, 0, image.width, image.height}.contains(mask)) return false;
+      masked = masked || mask.contains(WindowsRect{x, y, 1, 1});
+    }
+    if (!masked) return fixture_color(image, static_cast<uint32_t>(x), static_cast<uint32_t>(y));
+    const auto offset = (static_cast<size_t>(y) * image.width + static_cast<size_t>(x)) * 4;
+    return image.bgra[offset] == 0 && image.bgra[offset + 1] == 0 && image.bgra[offset + 2] == 0 && image.bgra[offset + 3] == 255;
   } catch (...) { return false; }
 }
 
@@ -607,13 +740,22 @@ WindowsPrivilegedReport run_windows_privileged_self_test(const Command& command,
       diagnostic_stage(L"affinity-show", [&] { target->request(WindowsTargetAction::show_excluded); });
       try {
         const auto shown = target->request(); require(shown.excluded_visible); const auto session = native->session(); const auto frame = capture(*native, shown.window); require(color(frame, shown.patch, {32, 128, 192}));
-        JsonObject args = object(LR"({"budget":{"maxWidth":1024,"maxHeight":1024,"maxPixels":1048576},"format":"png"})"); JsonObject selection; selection.Insert(L"display", JsonValue::CreateStringValue(frame.receipt.display_id)); args.Insert(L"target", selection);
         const auto response = diagnostic_stage(L"display-capture-reply", [&] {
-          auto reply = native->request(L"capture", args); NativeScenario::success(reply, L"display-capture-reply"); return reply;
+          auto reply = native->capture_affinity_display(frame.receipt, shown, target); NativeScenario::success(reply, L"display-capture-reply"); return reply;
         });
         const auto record = diagnostic_stage(L"display-capture-receipt", [&] { return native->state->captures->receipt(response.document.GetNamedString(L"captureId"), session); });
         const auto image = diagnostic_stage(L"png-decode", [&] { return decode_png(response.image); }); const Captured display{record, image, response.document, response.read_route};
-        require(color(display, shown.excluded_bounds, {32, 128, 192}));
+        diagnostic_stage(L"affinity-fixture-current", [&] {
+          const auto fresh = target->request();
+          require(target->current() && fresh.pid == shown.pid && fresh.parent == shown.parent && fresh.window == shown.window && fresh.excluded == shown.excluded &&
+            fresh.bounds == shown.bounds && fresh.patch == shown.patch && fresh.excluded_bounds == shown.excluded_bounds && fresh.visible && !fresh.minimized && fresh.affinity && fresh.excluded_visible &&
+            native->state->available() && native->state->captures->current(record, native->session()));
+        });
+        diagnostic_stage(L"affinity-native-sample-missing", [&] { require(response.affinity_sample.has_value()); });
+        diagnostic_stage(L"affinity-native-sample-mismatch", [&] { require(*response.affinity_sample); });
+        diagnostic_stage(L"affinity-display-proof", [&] {
+          require(display.read_route == CaptureReadRoute::screen && windows_privileged_affinity_sample_verified(response.affinity_sample, display.image, display.receipt, display.header, shown.excluded_bounds));
+        });
       } catch (...) { target->request(WindowsTargetAction::hide_excluded); throw; }
       diagnostic_stage(L"affinity-hide", [&] { target->request(WindowsTargetAction::hide_excluded); });
     });

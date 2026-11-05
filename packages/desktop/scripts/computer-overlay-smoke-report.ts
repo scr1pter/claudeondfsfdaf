@@ -225,6 +225,79 @@ export function parseComputerSmokeGeometry(line: string): ComputerSmokeGeometry 
     content: [value.content[0], value.content[1]],
   }
 }
+export const COMPUTER_SMOKE_PROPERTIES_MARK = "computer-smoke-properties "
+export const COMPUTER_SMOKE_PROPERTY_STEPS = [
+  "underlay-create",
+  "underlay-load",
+  "underlay-focus",
+  "overlay-create",
+  "overlay-show",
+  "overlay-ready",
+  "banner",
+  "later-checks",
+] as const
+export type ComputerSmokePropertyStep = (typeof COMPUTER_SMOKE_PROPERTY_STEPS)[number]
+
+/** A caught properties failure keeps its last fixed operation before cleanup replaces the phase. */
+export function parseComputerSmokePropertiesDiagnostic(
+  line: string,
+  input: { phase: ComputerSmokeLastPhase; terminal: boolean; seen: boolean },
+) {
+  if (
+    input.phase !== "properties" ||
+    input.terminal ||
+    input.seen ||
+    !line.startsWith(COMPUTER_SMOKE_PROPERTIES_MARK) ||
+    line.length > 160
+  )
+    throw new Error("The properties failure receipt is invalid.")
+  const value: unknown = JSON.parse(line.slice(COMPUTER_SMOKE_PROPERTIES_MARK.length))
+  if (
+    !record(value) ||
+    !exact(value, ["protocol", "step"]) ||
+    value.protocol !== 1 ||
+    !(COMPUTER_SMOKE_PROPERTY_STEPS as readonly unknown[]).includes(value.step)
+  )
+    throw new Error("The properties failure receipt is invalid.")
+  return { protocol: 1 as const, step: value.step as ComputerSmokePropertyStep }
+}
+
+export const COMPUTER_SMOKE_BOOTSTRAP_TOKEN_MARK = "computer-smoke-bootstrap-token "
+
+/** Read-only candidate facts; no token identifier, ACL bytes or authority enters this receipt. */
+export function parseComputerSmokeBootstrapTokenDiagnostic(
+  line: string,
+  input: { bootstrap: boolean; phase: ComputerSmokeLastPhase; terminal: boolean; seen: boolean },
+) {
+  if (
+    !input.bootstrap ||
+    input.phase !== "none" ||
+    input.terminal ||
+    input.seen ||
+    !line.startsWith(COMPUTER_SMOKE_BOOTSTRAP_TOKEN_MARK) ||
+    line.length > 256
+  )
+    throw new Error("The bootstrap token receipt is invalid.")
+  const value: unknown = JSON.parse(line.slice(COMPUTER_SMOKE_BOOTSTRAP_TOKEN_MARK.length))
+  if (
+    !record(value) ||
+    !exact(value, ["protocol", "route", "owner", "access", "cause"]) ||
+    value.protocol !== 1 ||
+    !(["serving", "linked", "restricted"] as readonly unknown[]).includes(value.route) ||
+    !(["u", "x", "n"] as readonly unknown[]).includes(value.owner) ||
+    !(["g", "d", "n"] as readonly unknown[]).includes(value.access) ||
+    !(["s", "q", "o", "g", "m", "z", "i", "t", "r", "v", "p", "a", "e"] as readonly unknown[]).includes(value.cause)
+  )
+    throw new Error("The bootstrap token receipt is invalid.")
+  return {
+    protocol: 1 as const,
+    route: value.route as "serving" | "linked" | "restricted",
+    owner: value.owner as "u" | "x" | "n",
+    access: value.access as "g" | "d" | "n",
+    cause: value.cause as "s" | "q" | "o" | "g" | "m" | "z" | "i" | "t" | "r" | "v" | "p" | "a" | "e",
+  }
+}
+
 export const COMPUTER_SMOKE_ASAR_MARK = "computer-smoke-asar "
 export type ComputerSmokeAsarDiagnostic = {
   protocol: 1
