@@ -335,8 +335,8 @@ bool valid_overlay_stop_request(const OverlayStopRequest& value) noexcept {
 }
 bool overlay_stop_bounds_match(const WindowsRect& hint, const WindowsRect& observed) noexcept {
   if (!hint.valid() || !observed.valid()) return false;
-  const auto near = [](int64_t a, int64_t b) { return a >= b - 1 && a <= b + 1; };
-  return near(hint.x, observed.x) && near(hint.y, observed.y) && near(hint.x + hint.width, observed.x + observed.width) && near(hint.y + hint.height, observed.y + observed.height);
+  const auto adjacent = [](int64_t a, int64_t b) { return a >= b - 1 && a <= b + 1; };
+  return adjacent(hint.x, observed.x) && adjacent(hint.y, observed.y) && adjacent(hint.x + hint.width, observed.x + observed.width) && adjacent(hint.y + hint.height, observed.y + observed.height);
 }
 std::optional<OverlayStopRequest> parse_overlay_stop_request(const JsonObject& value) {
   try {
