@@ -69,6 +69,8 @@ type NativeFailureReason =
   | "caller-exit-status"
   | `caller-exit-status-${number}`
   | "unexpected-lifecycle-frame"
+  | `unexpected-lifecycle-event-${"user_input" | "stop" | "input_detection" | "exit"}`
+  | "lifecycle-event-limit"
   | "descendant-exit-deadline"
   | "channel-deadline"
   | "channel-io"
@@ -88,6 +90,47 @@ class NativeCheckFailure extends Error {
 export function lifecycleTopologyFailure(role: "supervisor" | "worker", count: number) {
   if (count === 1) return
   return `${role}-${count === 0 ? "missing" : "extra"}` as const
+}
+
+/** Hello-only fixtures have no task scope. Only global environment notifications may precede process exit. */
+export async function waitForLifecycleExit(
+  channel: Pick<Channel, "next">,
+  deadline: number,
+  now: () => number = () => performance.now(),
+) {
+  let events = 0
+  while (true) {
+    const started = now()
+    const remaining = deadline - started
+    if (!Number.isFinite(remaining) || remaining <= 0) throw new NativeCheckFailure("caller-exit-deadline")
+    const result = await channel.next(remaining)
+    const receivedAt = now()
+    if (!result || !Number.isFinite(receivedAt) || receivedAt < started || receivedAt >= deadline) {
+      throw new NativeCheckFailure("caller-exit-deadline")
+    }
+    if (result.kind === "exit") return result
+    if (result.bytes.byteLength > 1024) throw new NativeCheckFailure("unexpected-lifecycle-frame")
+    const parsed = Schema.decodeUnknownOption(Schema.UnknownFromJsonString)(Buffer.from(result.bytes).toString("utf8"))
+    if (
+      parsed._tag === "None" ||
+      typeof parsed.value !== "object" ||
+      parsed.value === null ||
+      Array.isArray(parsed.value)
+    ) {
+      throw new NativeCheckFailure("unexpected-lifecycle-frame")
+    }
+    const decoded = Schema.decodeUnknownOption(Computer.HelperEvent)(parsed.value)
+    if (decoded._tag === "None") throw new NativeCheckFailure("unexpected-lifecycle-frame")
+    const event = decoded.value
+    if (event.event !== "locked" && event.event !== "display_change") {
+      throw new NativeCheckFailure(`unexpected-lifecycle-event-${event.event}`)
+    }
+    const keys = Object.keys(parsed.value).sort().join(",")
+    if (keys !== (event.event === "locked" ? "event,locked" : "event")) {
+      throw new NativeCheckFailure("unexpected-lifecycle-frame")
+    }
+    if (++events > 16) throw new NativeCheckFailure("lifecycle-event-limit")
+  }
 }
 
 function boundedExitCode(code: number | null) {
@@ -645,9 +688,7 @@ async function createVerifiedFixture(options: SelfTestOptions): Promise<Verified
         const deadline = performance.now() + 1000
         if (parentDeath) running.killParent()
         else running.end()
-        const result = await running.next(1000)
-        if (!result) throw new NativeCheckFailure("caller-exit-deadline")
-        if (result.kind !== "exit") throw new NativeCheckFailure("unexpected-lifecycle-frame")
+        const result = await waitForLifecycleExit(running, deadline)
         if (!parentDeath && result.code !== 0) {
           const code = boundedExitCode(result.code)
           throw new NativeCheckFailure(code === undefined ? "caller-exit-status" : `caller-exit-status-${code}`)

@@ -11,6 +11,7 @@ import {
   runComputerHelperSelfTest,
   transcriptFailureReason,
   validateCoreTranscript,
+  waitForLifecycleExit,
   type Command,
   type NativeChannel,
   type SelfTestDependencies,
@@ -160,6 +161,129 @@ test("native failure diagnostics retain bounded exit statuses and only missing v
     expect(lifecycleTopologyFailure(role, 1)).toBeUndefined()
     for (const count of [2, 3, 1_000_000]) expect(lifecycleTopologyFailure(role, count)).toBe(`${role}-extra`)
   }
+})
+
+test("lifecycle exit accepts only global environment events within its original deadline", async () => {
+  let now = 0
+  const waits: number[] = []
+  const messages: Received[] = [
+    { kind: "frame", bytes: Buffer.from('{"event":"locked","locked":false}') },
+    { kind: "frame", bytes: Buffer.from('{"event":"display_change"}') },
+    { kind: "exit", code: 0 },
+  ]
+  const elapsed = [75, 125, 25]
+  const result = await waitForLifecycleExit(
+    {
+      next: async (ms) => {
+        waits.push(ms)
+        now += elapsed.shift()!
+        return messages.shift()
+      },
+    },
+    1000,
+    () => now,
+  )
+  expect(result).toEqual({ kind: "exit", code: 0 })
+  expect(waits).toEqual([1000, 925, 800])
+  expect(now).toBe(225)
+})
+
+test("hello-only lifecycle checks reject session-scoped events with private-free reason codes", async () => {
+  for (const event of [
+    { event: "user_input", kind: "key", pid: 101 },
+    { event: "stop", by: "chord" },
+    { event: "input_detection", alive: false, reason: "secure_input", holder: "PRIVATE" },
+    { event: "exit", code: 0 },
+  ]) {
+    await expect(
+      waitForLifecycleExit(
+        { next: async () => ({ kind: "frame", bytes: Buffer.from(JSON.stringify(event)) }) },
+        1000,
+        () => 0,
+      ),
+    ).rejects.toMatchObject({
+      reason: `unexpected-lifecycle-event-${event.event}`,
+      message: `unexpected-lifecycle-event-${event.event}`,
+    })
+  }
+})
+
+test("lifecycle checks reject responses, image data, malformed and excess event fields", async () => {
+  for (const bytes of [
+    Buffer.from("{not JSON"),
+    Buffer.from([0, 255, 128, 0]),
+    Buffer.from('{"id":1,"ok":true}'),
+    Buffer.from('{"imageBytes":1}'),
+    Buffer.from('{"event":"locked","locked":"false"}'),
+    Buffer.from('{"event":"locked","locked":false,"id":1}'),
+    Buffer.from('{"event":"display_change","imageBytes":1}'),
+    Buffer.from('{"event":"display_change","private":"PRIVATE"}'),
+    Buffer.from('{"event":"unknown"}'),
+    Buffer.from("[]"),
+    Buffer.alloc(1025, 32),
+  ]) {
+    await expect(
+      waitForLifecycleExit({ next: async () => ({ kind: "frame", bytes }) }, 1000, () => 0),
+    ).rejects.toMatchObject({ reason: "unexpected-lifecycle-frame", message: "unexpected-lifecycle-frame" })
+  }
+})
+
+test("lifecycle events cannot restart the exit deadline or hide an event flood", async () => {
+  let now = 0
+  const waits: number[] = []
+  let reads = 0
+  await expect(
+    waitForLifecycleExit(
+      {
+        next: async (ms) => {
+          waits.push(ms)
+          reads++
+          now += reads === 3 ? 201 : 400
+          return reads === 3
+            ? { kind: "exit", code: 0 }
+            : { kind: "frame", bytes: Buffer.from('{"event":"locked","locked":false}') }
+        },
+      },
+      1000,
+      () => now,
+    ),
+  ).rejects.toMatchObject({ reason: "caller-exit-deadline" })
+  expect(waits).toEqual([1000, 600, 200])
+  reads = 0
+  await expect(
+    waitForLifecycleExit(
+      {
+        next: async () => {
+          reads++
+          return { kind: "frame", bytes: Buffer.from('{"event":"display_change"}') }
+        },
+      },
+      1000,
+      () => 0,
+    ),
+  ).rejects.toMatchObject({ reason: "lifecycle-event-limit" })
+  expect(reads).toBe(17)
+})
+
+test("lifecycle exit rejects elapsed or invalid clocks and still requires an actual process exit", async () => {
+  for (const receivedAt of [1000, 1001, -1, Number.NaN]) {
+    let now = 0
+    await expect(
+      waitForLifecycleExit(
+        {
+          next: async () => {
+            now = receivedAt
+            return { kind: "exit", code: 0 }
+          },
+        },
+        1000,
+        () => now,
+      ),
+    ).rejects.toMatchObject({ reason: "caller-exit-deadline" })
+  }
+  await expect(waitForLifecycleExit({ next: async () => undefined }, 1000, () => 0)).rejects.toMatchObject({
+    reason: "caller-exit-deadline",
+  })
 })
 
 test("transcript diagnostics discard unknown fixtures, arbitrary errors, and out-of-range lines", () => {
