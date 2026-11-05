@@ -5,7 +5,15 @@ import path from "node:path"
 import { screen, type BrowserWindow } from "electron"
 import { nativeId } from "../src/main/computer-overlay"
 import identity from "../native/computer-helper/identity.json"
-import type { ComputerSmokeReason } from "./computer-overlay-smoke-report"
+import {
+  COMPUTER_SMOKE_NATIVE_MARK,
+  COMPUTER_SMOKE_NATIVE_REASONS,
+  COMPUTER_SMOKE_NATIVE_PREREQUISITES,
+  parseComputerSmokeNativeDiagnostic,
+  type ComputerSmokeReason,
+  type ComputerSmokeNativePhase,
+  type ComputerSmokeNativeCause,
+} from "./computer-overlay-smoke-report"
 
 // C2 supplies this literal in the exact source-bound prebuilt smoke bundle, before compiling the
 // native driver's immutable bundle pins. A generic properties-only bundle has no native authority.
@@ -27,56 +35,6 @@ const unavailable = (reason: ComputerSmokeReason): Proof => ({
   stop: { ok: false, skipped: true, reason },
   capture: { ok: false, skipped: true, reason: process.platform === "win32" ? "not_applicable" : reason },
 })
-const REASONS = [
-  "isolation_required",
-  "noninteractive_desktop",
-  "elevated_parent",
-  "foreground_unavailable",
-  "uia_unavailable",
-  "guardian_unavailable",
-  "physical_input",
-  "source_mismatch",
-  "parent_invalid",
-  "control_invalid",
-  "stop_target_invalid",
-  "proof_changed",
-  "input_post_failed",
-  "cleanup_failed",
-  "deadline_exceeded",
-  "medium_token_unavailable",
-  "bootstrap_failed",
-  "native_failure",
-  "responsibility_missing",
-  "accessibility_denied",
-  "post_event_denied",
-  "screen_denied",
-  "capture_unavailable",
-  "capture_assertion_failed",
-  "artifact_invalid",
-  "request_invalid",
-  "desktop_unavailable",
-  "target_unavailable",
-  "window_changed",
-  "button_unavailable",
-  "capture_failed",
-  "assertion_failed",
-  "source_unavailable",
-] as const
-const PREREQUISITES: readonly string[] = [
-  "isolation_required",
-  "noninteractive_desktop",
-  "elevated_parent",
-  "foreground_unavailable",
-  "uia_unavailable",
-  "physical_input",
-  "medium_token_unavailable",
-  "responsibility_missing",
-  "accessibility_denied",
-  "post_event_denied",
-  "screen_denied",
-  "desktop_unavailable",
-  "target_unavailable",
-]
 
 function outcome(value: unknown): Outcome {
   if (
@@ -85,8 +43,10 @@ function outcome(value: unknown): Outcome {
     typeof value.ok !== "boolean" ||
     (value.skipped !== undefined && value.skipped !== true) ||
     (value.ok && (value.skipped || value.reason !== undefined)) ||
-    (!value.ok && (typeof value.reason !== "string" || !(REASONS as readonly string[]).includes(value.reason))) ||
-    (value.skipped && !PREREQUISITES.includes(String(value.reason)))
+    (!value.ok &&
+      (typeof value.reason !== "string" ||
+        !(COMPUTER_SMOKE_NATIVE_REASONS as readonly string[]).includes(value.reason))) ||
+    (value.skipped && !COMPUTER_SMOKE_NATIVE_PREREQUISITES.includes(String(value.reason)))
   )
     throw new Error("The finite native driver returned invalid evidence.")
   const reason: ComputerSmokeReason =
@@ -170,13 +130,40 @@ function nativeRect(window: BrowserWindow, value: Electron.Rectangle): Rect {
   return { x: native.x, y: native.y, w: native.width, h: native.height }
 }
 
-export async function runComputerNativeOverlayProof(input: {
+type NativeProofInput = {
   root: string
   nonce: string
   banner: BrowserWindow
   underlay: BrowserWindow
   glow: readonly BrowserWindow[]
-}): Promise<Proof> {
+}
+type NativeDiagnosticState = {
+  phase: ComputerSmokeNativePhase
+  failure?: { phase: ComputerSmokeNativePhase; cause: ComputerSmokeNativeCause }
+}
+function emitNativeDiagnostic(value: unknown) {
+  try {
+    const receipt = parseComputerSmokeNativeDiagnostic(COMPUTER_SMOKE_NATIVE_MARK + JSON.stringify(value))
+    process.stdout.write(COMPUTER_SMOKE_NATIVE_MARK + JSON.stringify(receipt) + "\n")
+  } catch {
+    // Diagnostics cannot replace the original native proof, refusal, exit or cleanup path.
+  }
+}
+export async function runComputerNativeOverlayProof(input: NativeProofInput): Promise<Proof> {
+  const diagnostic: NativeDiagnosticState = { phase: "artifact" }
+  try {
+    return await nativeProof(input, diagnostic)
+  } catch (error) {
+    if (hex(sourceDigest))
+      emitNativeDiagnostic({
+        protocol: 1,
+        kind: "boundary",
+        ...(diagnostic.failure ?? { phase: diagnostic.phase, cause: "exception" }),
+      })
+    throw error
+  }
+}
+async function nativeProof(input: NativeProofInput, diagnostic: NativeDiagnosticState): Promise<Proof> {
   if (process.platform !== "darwin" && process.platform !== "win32") return unavailable("linux_properties_only")
   if (!hex(sourceDigest)) {
     const manifest = await lstat(path.join(input.root, "computer-overlay-smoke.json")).catch(
@@ -193,6 +180,7 @@ export async function runComputerNativeOverlayProof(input: {
   if (process.env.VECTOR_COMPUTER_TEST_ISOLATED !== "1") return unavailable("isolated_desktop_required")
   if (!hex(input.nonce) || input.banner.isDestroyed() || input.underlay.isDestroyed())
     throw new Error("The finite native target is invalid.")
+  diagnostic.phase = "button"
   const rect: unknown = await input.banner.webContents.executeJavaScript(
     "(() => { const button = document.querySelector('button[data-action=stop]'); if (!button || button.textContent !== 'Stop' || button.disabled) return null; const box = button.getBoundingClientRect(); return {x:box.x,y:box.y,w:box.width,h:box.height} })()",
   )
@@ -210,6 +198,7 @@ export async function runComputerNativeOverlayProof(input: {
     width: Number(rect.w),
     height: Number(rect.h),
   })
+  diagnostic.phase = "spawn"
   const child = spawn(executable, ["--overlay-stop", "--parent-pid", String(process.pid), "--nonce", input.nonce], {
     stdio: ["pipe", "pipe", "pipe"],
     windowsHide: true,
@@ -224,16 +213,18 @@ export async function runComputerNativeOverlayProof(input: {
     final: Record<string, unknown> | undefined,
     failed = false,
     diagnostics = 0
-  const kill = () => {
+  diagnostic.phase = "ready"
+  const kill = (cause: ComputerSmokeNativeCause) => {
+    diagnostic.failure ??= { phase: diagnostic.phase, cause }
     failed = true
     child.kill("SIGKILL")
   }
-  const timer = setTimeout(kill, 20_000)
+  const timer = setTimeout(() => kill("deadline_exceeded"), 20_000)
   child.stderr.on("data", (bytes: Buffer) => {
     diagnostics += bytes.length
-    if (diagnostics > 65_536) kill()
+    if (diagnostics > 65_536) kill("stream_invalid")
   })
-  child.stdin.on("error", kill)
+  child.stdin.on("error", () => kill("stdin_error"))
   child.stdout.on("data", (bytes: Buffer) => {
     try {
       if (buffer.length + bytes.length > 16_384) throw new Error("The native frame bound was exceeded.")
@@ -248,6 +239,7 @@ export async function runComputerNativeOverlayProof(input: {
         buffer = buffer.subarray(size + 4)
         if (!record(value) || value.protocol !== 1 || final) throw new Error("The finite native response is invalid.")
         if (value.id === 0) {
+          diagnostic.phase = "ready"
           if (
             ready ||
             !exact(value, [
@@ -293,6 +285,7 @@ export async function runComputerNativeOverlayProof(input: {
           child.stdin.write(Buffer.concat([header, body]))
           continue
         }
+        diagnostic.phase = "result"
         if (
           value.id !== 1 ||
           value.check !== "native-os-stop" ||
@@ -308,15 +301,22 @@ export async function runComputerNativeOverlayProof(input: {
         final = value
       }
     } catch {
-      kill()
+      kill("stream_invalid")
     }
   })
   try {
     const status = await new Promise<number | null>((resolve, reject) => {
-      child.once("error", reject)
+      child.once("error", (error) => {
+        diagnostic.failure ??= { phase: "spawn", cause: "spawn_error" }
+        reject(error)
+      })
       child.once("close", (code) => resolve(code))
     })
-    if (failed || buffer.length || !final) throw new Error("The finite native driver did not finish cleanly.")
+    diagnostic.phase = "exit"
+    if (failed || buffer.length || !final) {
+      diagnostic.failure ??= { phase: "exit", cause: "exit_incomplete" }
+      throw new Error("The finite native driver did not finish cleanly.")
+    }
     const result = final as Record<string, unknown>
     const stop = outcome({
       ok: result.ok,
@@ -331,13 +331,32 @@ export async function runComputerNativeOverlayProof(input: {
           : stop.skipped
             ? { ...stop }
             : { ok: false, reason: "native_proof_invalid" }
+    const receiptOutcome = (value: Record<string, unknown>) => ({
+      ok: value.ok,
+      ...(value.skipped === undefined ? {} : { skipped: value.skipped }),
+      ...(value.reason === undefined ? {} : { reason: value.reason }),
+    })
+    emitNativeDiagnostic({
+      protocol: 1,
+      kind: "result",
+      phase: "exit",
+      stop: receiptOutcome(result),
+      ...(record(result.capture) ? { capture: receiptOutcome(result.capture) } : {}),
+      exitCode: status,
+    })
     const expected =
       (!stop.ok && !stop.skipped) || (!capture.ok && !capture.skipped) ? 1 : stop.skipped || capture.skipped ? 77 : 0
     // Windows's non-applicable capture is a parent-only catalog entry, not an extra driver skip.
-    if (status !== (process.platform === "win32" ? (stop.ok ? 0 : stop.skipped ? 77 : 1) : expected))
+    if (status !== (process.platform === "win32" ? (stop.ok ? 0 : stop.skipped ? 77 : 1) : expected)) {
+      diagnostic.failure ??= { phase: "exit", cause: "exit_mismatch" }
       throw new Error("The native result disagrees with its process exit.")
+    }
     return { stop, capture }
+  } catch (error) {
+    diagnostic.failure ??= { phase: diagnostic.phase, cause: "exception" }
+    throw error
   } finally {
+    diagnostic.phase = "cleanup"
     clearTimeout(timer)
     child.stdin.destroy()
     if (child.exitCode === null) child.kill("SIGKILL")

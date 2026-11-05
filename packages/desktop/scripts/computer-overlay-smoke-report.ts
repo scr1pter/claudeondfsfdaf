@@ -225,6 +225,155 @@ export function parseComputerSmokeGeometry(line: string): ComputerSmokeGeometry 
     content: [value.content[0], value.content[1]],
   }
 }
+export const COMPUTER_SMOKE_NATIVE_MARK = "computer-smoke-native "
+export const COMPUTER_SMOKE_NATIVE_REASONS = [
+  "isolation_required",
+  "noninteractive_desktop",
+  "elevated_parent",
+  "foreground_unavailable",
+  "uia_unavailable",
+  "guardian_unavailable",
+  "physical_input",
+  "source_mismatch",
+  "parent_invalid",
+  "control_invalid",
+  "stop_target_invalid",
+  "proof_changed",
+  "input_post_failed",
+  "cleanup_failed",
+  "deadline_exceeded",
+  "medium_token_unavailable",
+  "bootstrap_failed",
+  "native_failure",
+  "responsibility_missing",
+  "accessibility_denied",
+  "post_event_denied",
+  "screen_denied",
+  "capture_unavailable",
+  "capture_assertion_failed",
+  "artifact_invalid",
+  "request_invalid",
+  "desktop_unavailable",
+  "target_unavailable",
+  "window_changed",
+  "button_unavailable",
+  "capture_failed",
+  "assertion_failed",
+  "source_unavailable",
+] as const
+export const COMPUTER_SMOKE_NATIVE_PREREQUISITES: readonly string[] = [
+  "isolation_required",
+  "noninteractive_desktop",
+  "elevated_parent",
+  "foreground_unavailable",
+  "uia_unavailable",
+  "physical_input",
+  "medium_token_unavailable",
+  "responsibility_missing",
+  "accessibility_denied",
+  "post_event_denied",
+  "screen_denied",
+  "desktop_unavailable",
+  "target_unavailable",
+]
+
+export type ComputerSmokeNativePhase = "artifact" | "button" | "spawn" | "ready" | "result" | "exit" | "cleanup"
+export type ComputerSmokeNativeCause =
+  | "exception"
+  | "stream_invalid"
+  | "spawn_error"
+  | "stdin_error"
+  | "deadline_exceeded"
+  | "exit_incomplete"
+  | "exit_mismatch"
+type ComputerSmokeNativeOutcome = {
+  ok: boolean
+  skipped?: true
+  reason?: (typeof COMPUTER_SMOKE_NATIVE_REASONS)[number]
+}
+export type ComputerSmokeNativeDiagnostic =
+  | { protocol: 1; kind: "boundary"; phase: ComputerSmokeNativePhase; cause: ComputerSmokeNativeCause }
+  | {
+      protocol: 1
+      kind: "result"
+      phase: "exit"
+      stop: ComputerSmokeNativeOutcome
+      capture?: ComputerSmokeNativeOutcome
+      exitCode: number | null
+    }
+
+/** Observational fixed reasons only; this receipt cannot authorize native action or replace its result. */
+export function parseComputerSmokeNativeDiagnostic(line: string): ComputerSmokeNativeDiagnostic {
+  if (!line.startsWith(COMPUTER_SMOKE_NATIVE_MARK) || line.length > 512)
+    throw new Error("The native smoke diagnostic is invalid.")
+  const value: unknown = JSON.parse(line.slice(COMPUTER_SMOKE_NATIVE_MARK.length))
+  if (!record(value) || value.protocol !== 1) throw new Error("The native smoke diagnostic is invalid.")
+  if (value.kind === "boundary") {
+    if (
+      !exact(value, ["protocol", "kind", "phase", "cause"]) ||
+      Object.keys(value).length !== 4 ||
+      typeof value.phase !== "string" ||
+      !["artifact", "button", "spawn", "ready", "result", "exit", "cleanup"].includes(value.phase) ||
+      typeof value.cause !== "string" ||
+      ![
+        "exception",
+        "stream_invalid",
+        "spawn_error",
+        "stdin_error",
+        "deadline_exceeded",
+        "exit_incomplete",
+        "exit_mismatch",
+      ].includes(value.cause)
+    )
+      throw new Error("The native smoke diagnostic is invalid.")
+    return {
+      protocol: 1,
+      kind: "boundary",
+      phase: value.phase as ComputerSmokeNativePhase,
+      cause: value.cause as ComputerSmokeNativeCause,
+    }
+  }
+  const outcome = (value: unknown): ComputerSmokeNativeOutcome => {
+    if (
+      !record(value) ||
+      !exact(value, ["ok", "skipped", "reason"]) ||
+      typeof value.ok !== "boolean" ||
+      (value.skipped !== undefined && value.skipped !== true) ||
+      (value.reason !== undefined &&
+        (typeof value.reason !== "string" ||
+          !(COMPUTER_SMOKE_NATIVE_REASONS as readonly string[]).includes(value.reason))) ||
+      (value.ok && (value.skipped !== undefined || value.reason !== undefined)) ||
+      (!value.ok && value.reason === undefined) ||
+      (value.skipped === true && !COMPUTER_SMOKE_NATIVE_PREREQUISITES.includes(String(value.reason)))
+    )
+      throw new Error("The native smoke diagnostic outcome is invalid.")
+    return {
+      ok: value.ok,
+      ...(value.skipped ? { skipped: true } : {}),
+      ...(value.reason ? { reason: value.reason as ComputerSmokeNativeOutcome["reason"] } : {}),
+    }
+  }
+  if (
+    value.kind !== "result" ||
+    value.phase !== "exit" ||
+    !exact(value, ["protocol", "kind", "phase", "stop", "capture", "exitCode"]) ||
+    (value.exitCode !== null &&
+      (typeof value.exitCode !== "number" ||
+        !Number.isInteger(value.exitCode) ||
+        value.exitCode < 0 ||
+        value.exitCode > 255))
+  )
+    throw new Error("The native smoke diagnostic is invalid.")
+  return {
+    protocol: 1,
+    kind: "result",
+    phase: "exit",
+    stop: outcome(value.stop),
+    ...(value.capture === undefined ? {} : { capture: outcome(value.capture) }),
+    exitCode: value.exitCode,
+  }
+}
+
 export const COMPUTER_SMOKE_CONTROLLER_STEPS = [
   "underlay",
   "stop-acquire",

@@ -11,6 +11,8 @@ import {
   COMPUTER_SMOKE_CONTROLLER_STEPS,
   parseComputerSmokeController,
   COMPUTER_SMOKE_GEOMETRY_MARK,
+  COMPUTER_SMOKE_NATIVE_MARK,
+  parseComputerSmokeNativeDiagnostic,
   parseComputerSmokeGeometry,
   type ComputerSmokeControllerStep,
   COMPUTER_SMOKE_FAILURE_MARK,
@@ -105,6 +107,70 @@ test("geometry diagnostics retain only bounded owned-window rectangles, native s
     expect(() => parseComputerSmokeGeometry(line({ ...value, ...patch }))).toThrow()
   expect(() => parseComputerSmokeGeometry(line(value) + " ".repeat(513))).toThrow()
   expect(() => parseComputerSmokeGeometry(COMPUTER_SMOKE_GEOMETRY_MARK + "{")).toThrow()
+})
+
+test("native proof diagnostics retain fixed boundary/result facts without changing failed reports or exits", () => {
+  const line = (value: unknown) => COMPUTER_SMOKE_NATIVE_MARK + JSON.stringify(value)
+  const boundary = { protocol: 1, kind: "boundary", phase: "ready", cause: "stream_invalid" }
+  expect(parseComputerSmokeNativeDiagnostic(line(boundary))).toEqual(boundary)
+  const result = {
+    protocol: 1,
+    kind: "result",
+    phase: "exit",
+    stop: { ok: false, reason: "parent_invalid" },
+    exitCode: 1,
+  }
+  const parsed = parseComputerSmokeNativeDiagnostic(line(result))
+  expect(parsed).toEqual(result)
+  expect(parsed).not.toBe(result)
+  if (parsed.kind !== "result") throw new Error("Expected result diagnostic.")
+  expect(parsed.stop).not.toBe(result.stop)
+  const skipped = {
+    ...result,
+    stop: { ok: false, skipped: true, reason: "screen_denied" },
+    capture: { ok: false, skipped: true, reason: "screen_denied" },
+    exitCode: 77,
+  }
+  expect(parseComputerSmokeNativeDiagnostic(line(skipped))).toEqual(skipped)
+  expect(parseComputerSmokeNativeDiagnostic(line({ ...result, stop: { ok: true }, exitCode: 0 }))).toEqual({
+    ...result,
+    stop: { ok: true },
+    exitCode: 0,
+  })
+  const failed = report("darwin")
+  failed.checks[16] = { name: "native-os-stop", ok: false, reason: "native_proof_invalid" }
+  failed.checks[17] = { name: "native-capture-exclusion", ok: false, reason: "native_proof_invalid" }
+  const stdout = line(result) + "\n" + line(boundary) + "\n" + COMPUTER_SMOKE_MARK + JSON.stringify(failed)
+  expect(parseComputerSmokeReport(stdout, { electron: failed.electron, platform: "darwin", exitCode: 1 })).toEqual(
+    failed,
+  )
+  expect(() =>
+    parseComputerSmokeReport(stdout, { electron: failed.electron, platform: "darwin", exitCode: 0 }),
+  ).toThrow()
+  for (const patch of [
+    { protocol: 2 },
+    { kind: "PRIVATE" },
+    { phase: "PRIVATE" },
+    { stop: { ok: false, reason: "PRIVATE" } },
+    { stop: { ok: false, reason: "artifact_invalid", skipped: true } },
+    { stop: { ok: true, reason: "screen_denied" } },
+    { stop: { ok: false } },
+    { stop: { ok: false, reason: "parent_invalid", path: "PRIVATE" } },
+    { capture: { ok: false, reason: "PRIVATE" } },
+    { capture: { ok: false, skipped: true, reason: "capture_failed" } },
+    { exitCode: -1 },
+    { exitCode: 256 },
+    { exitCode: "1" },
+    { nonce: "PRIVATE" },
+    { path: "PRIVATE" },
+    { pid: 123 },
+    { stderr: "PRIVATE" },
+  ])
+    expect(() => parseComputerSmokeNativeDiagnostic(line({ ...result, ...patch }))).toThrow()
+  for (const patch of [{ cause: "PRIVATE" }, { phase: "PRIVATE" }, { stop: { ok: true } }, { error: "PRIVATE" }])
+    expect(() => parseComputerSmokeNativeDiagnostic(line({ ...boundary, ...patch }))).toThrow()
+  expect(() => parseComputerSmokeNativeDiagnostic(line(result) + " ".repeat(513))).toThrow()
+  expect(() => parseComputerSmokeNativeDiagnostic(COMPUTER_SMOKE_NATIVE_MARK + "{")).toThrow()
 })
 
 describe("fixed real Electron computer smoke reports", () => {

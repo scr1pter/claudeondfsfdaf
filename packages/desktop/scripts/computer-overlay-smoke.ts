@@ -13,6 +13,8 @@ import {
   COMPUTER_SMOKE_PHASE_MARK,
   COMPUTER_SMOKE_CONTROLLER_MARK,
   COMPUTER_SMOKE_GEOMETRY_MARK,
+  COMPUTER_SMOKE_NATIVE_MARK,
+  parseComputerSmokeNativeDiagnostic,
   parseComputerSmokeGeometry,
   parseComputerSmokeController,
   type ComputerSmokeControllerStep,
@@ -172,6 +174,7 @@ export async function runComputerOverlaySmoke(args = process.argv.slice(2)) {
       hint: ComputerSmokeRuntimeHint = "none"
     let lastController: ComputerSmokeControllerStep | undefined
     const geometryWindows = new Set<number>()
+    const nativeDiagnostics = new Set<string>()
     let forcedCause: ComputerSmokeFailureCause | undefined
     const streamState: { childFailure?: ComputerSmokeFailureDiagnostic; loaderStarted: boolean; exception: boolean } = {
       loaderStarted: false,
@@ -284,6 +287,21 @@ export async function runComputerOverlaySmoke(args = process.argv.slice(2)) {
             if (geometryWindows.has(geometry.window)) throw new Error("The geometry receipt is duplicated.")
             geometryWindows.add(geometry.window)
             process.stdout.write(COMPUTER_SMOKE_GEOMETRY_MARK + JSON.stringify(geometry) + "\n")
+          } else if (line.startsWith(COMPUTER_SMOKE_NATIVE_MARK)) {
+            if (
+              !stage ||
+              lastPhase !== "controller" ||
+              lastController !== "native-proof" ||
+              streamState.childFailure ||
+              streamState.exception ||
+              nativeDiagnostics.size >= 2 ||
+              nativeDiagnostics.has("boundary")
+            )
+              throw new Error("The native diagnostic receipt is out of phase or exceeds its bound.")
+            const diagnostic = parseComputerSmokeNativeDiagnostic(line)
+            if (nativeDiagnostics.has(diagnostic.kind)) throw new Error("The native diagnostic receipt is duplicated.")
+            nativeDiagnostics.add(diagnostic.kind)
+            process.stdout.write(COMPUTER_SMOKE_NATIVE_MARK + JSON.stringify(diagnostic) + "\n")
           } else if (line.startsWith(COMPUTER_SMOKE_CONTROLLER_MARK)) {
             if (lastPhase !== "controller" || streamState.childFailure || streamState.exception)
               throw new Error("The controller receipt is out of phase.")
@@ -359,6 +377,7 @@ export async function runComputerOverlaySmoke(args = process.argv.slice(2)) {
       pendingLine.startsWith(COMPUTER_SMOKE_PHASE_MARK) ||
       pendingLine.startsWith(COMPUTER_SMOKE_CONTROLLER_MARK) ||
       pendingLine.startsWith(COMPUTER_SMOKE_GEOMETRY_MARK) ||
+      pendingLine.startsWith(COMPUTER_SMOKE_NATIVE_MARK) ||
       pendingLine.startsWith(COMPUTER_SMOKE_FAILURE_MARK) ||
       pendingLine.startsWith(COMPUTER_SMOKE_EXCEPTION_MARK) ||
       pendingLine.startsWith(COMPUTER_SMOKE_LOADER_STARTED)
