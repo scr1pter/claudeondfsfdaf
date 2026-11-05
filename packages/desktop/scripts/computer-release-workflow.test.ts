@@ -71,6 +71,7 @@ test("native reuse restores first, retains fresh required checks and prevents im
     for (const step of steps(native)) {
       const settings = step.with === undefined ? undefined : record(step.with)
       if (typeof settings?.path !== "string" || !settings.path.endsWith(".tar")) continue
+      if (typeof settings.name !== "string" || !settings.name.startsWith("computer-helper-")) continue
       expect(step.if).toContain("steps.restore.outputs.restored")
       expect(settings.overwrite).toBe("${{ !inputs['reuse-artifacts'] }}")
     }

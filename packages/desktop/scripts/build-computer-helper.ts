@@ -37,7 +37,13 @@ export type NativeCommand = (
   command: string,
   args: readonly string[],
   options: { cwd: string; env: NodeJS.ProcessEnv; timeoutMs: number },
-) => Promise<{ code: number; stdout: string; stderr: string }>
+) => Promise<{
+  code: number
+  stdout: string
+  stderr: string
+  failureReason?: "timed-out" | "output-cap" | "spawn-failed"
+  diagnostic?: string
+}>
 
 const packageDirectory = fileURLToPath(new URL("../", import.meta.url))
 const sha256 = (bytes: Uint8Array | string) => createHash("sha256").update(bytes).digest("hex")
@@ -45,6 +51,16 @@ const validHash = (value: unknown): value is string => typeof value === "string"
 const validArchitecture = (value: unknown): value is HelperArchitecture => value === "x64" || value === "arm64"
 const record = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value)
+
+export const COMPUTER_HELPER_BUILD_INPUTS = Object.freeze([
+  "scripts/build-computer-helper.ts",
+  "scripts/computer-helper-identity.ts",
+  "scripts/channel-ids.ts",
+  "scripts/build-computer-overlay-smoke.ts",
+  "scripts/computer-overlay-smoke-source.ts",
+  "scripts/computer-overlay-smoke-stage.ts",
+  "scripts/computer-overlay-smoke-artifact.ts",
+])
 
 export const MAC_TEST_TARGET = Object.freeze({
   bundle: "VectorComputerTestTarget.app",
@@ -313,49 +329,103 @@ export function checkIdentityLock(lock: unknown, candidate: IdentityLock) {
   return { ok: problems.length === 0 || !lock.enforce, enforced: lock.enforce, problems }
 }
 
+function nativeCommandOutput() {
+  const limit = 32_768
+  const marker = Buffer.from("\n[native output truncated]\n")
+  const tailLimit = Math.floor((limit - marker.byteLength) / 2)
+  let head = Buffer.alloc(0)
+  let tail = Buffer.alloc(0)
+  let bytes = 0
+  return {
+    add(value: Buffer) {
+      // Normalize each observed chunk before measuring retained diagnostic bytes. No argument,
+      // environment or raw spawn-error value is added to the compiler's own output.
+      const chunk = Buffer.from(value.toString("utf8"))
+      bytes += chunk.byteLength
+      if (head.byteLength < limit) head = Buffer.concat([head, chunk.subarray(0, limit - head.byteLength)])
+      tail = Buffer.concat([tail, chunk]).subarray(-tailLimit)
+    },
+    value() {
+      if (bytes <= limit) return head.toString("utf8")
+      let end = limit - marker.byteLength - tailLimit
+      while (end > 0 && (head[end]! & 0xc0) === 0x80) end--
+      let start = 0
+      while (start < tail.byteLength && (tail[start]! & 0xc0) === 0x80) start++
+      return Buffer.concat([head.subarray(0, end), marker, tail.subarray(start)]).toString("utf8")
+    },
+  }
+}
+
 export async function runNativeCommand(
   command: string,
   args: readonly string[],
   options: Parameters<NativeCommand>[2],
 ) {
   return new Promise<Awaited<ReturnType<NativeCommand>>>((resolve) => {
-    const child = spawn(command, [...args], {
-      cwd: options.cwd,
-      env: options.env,
-      stdio: ["ignore", "pipe", "pipe"],
-      detached: process.platform !== "win32",
-      windowsHide: true,
-    })
-    const output = { stdout: "", stderr: "", bytes: 0, done: false }
+    let child: ReturnType<typeof spawn>
+    try {
+      child = spawn(command, [...args], {
+        cwd: options.cwd,
+        env: options.env,
+        stdio: ["ignore", "pipe", "pipe"],
+        detached: process.platform !== "win32",
+        windowsHide: true,
+      })
+    } catch {
+      resolve({ code: 1, stdout: "", stderr: "", failureReason: "spawn-failed" })
+      return
+    }
+    const diagnostic = nativeCommandOutput()
+    const output = {
+      stdout: "",
+      stderr: "",
+      bytes: 0,
+      done: false,
+      failureReason: undefined as Awaited<ReturnType<NativeCommand>>["failureReason"],
+    }
     const stop = () => {
       if (!child.pid) return
-      if (process.platform === "win32") {
-        child.kill("SIGKILL")
-        return
-      }
       try {
-        process.kill(-child.pid, "SIGKILL")
+        if (process.platform === "win32") child.kill("SIGKILL")
+        else process.kill(-child.pid, "SIGKILL")
       } catch {
-        child.kill("SIGKILL")
+        try {
+          child.kill("SIGKILL")
+        } catch {}
       }
     }
-    const timer = setTimeout(stop, options.timeoutMs)
+    const fail = (reason: NonNullable<typeof output.failureReason>) => {
+      output.failureReason ??= reason
+      stop()
+    }
+    const timer = setTimeout(() => fail("timed-out"), options.timeoutMs)
     const finish = (code: number) => {
       if (output.done) return
       output.done = true
       clearTimeout(timer)
-      resolve({ code, stdout: output.stdout, stderr: output.stderr })
+      resolve({
+        code: output.failureReason ? 1 : code,
+        stdout: output.stdout,
+        stderr: output.stderr,
+        ...(output.failureReason ? { failureReason: output.failureReason } : {}),
+        ...(code !== 0 || output.failureReason ? { diagnostic: diagnostic.value() } : {}),
+      })
     }
     for (const stream of ["stdout", "stderr"] as const)
-      child[stream].on("data", (chunk: Buffer) => {
+      child[stream]!.on("data", (chunk: Buffer) => {
+        if (output.done) return
+        diagnostic.add(chunk)
         output.bytes += chunk.byteLength
         if (output.bytes > 4 * 1024 * 1024) {
-          stop()
+          fail("output-cap")
           return
         }
         output[stream] += chunk.toString("utf8")
       })
-    child.once("error", () => finish(1))
+    child.once("error", () => {
+      output.failureReason ??= "spawn-failed"
+      finish(1)
+    })
     child.once("close", (code) => finish(code ?? 1))
   })
 }
@@ -378,13 +448,17 @@ export async function buildComputerHelper(
   const identity = readIdentity(path.join(directory, "native/computer-helper/identity.json"))
   const command: NativeCommand = async (executable, args, settings) => {
     const result = await run(executable, args, settings)
-    if (result.code !== 0) {
+    if (result.code !== 0 || result.failureReason) {
       // Compiler diagnostics contain repository source locations, never protocol payloads or environment values.
       // MSBuild and MSVC report many errors on stdout rather than stderr.
-      if (["cmake", "cl", "xcrun"].includes(path.basename(executable)) && result.stdout)
-        console.error(result.stdout.slice(0, 32_768))
-      if (result.stderr) console.error(result.stderr.slice(0, 32_768))
-      throw new HelperBuildError(`The native helper command failed: ${path.basename(executable)}.`)
+      const diagnostic = nativeCommandOutput()
+      if (["cmake", "cl", "xcrun"].includes(path.basename(executable)))
+        diagnostic.add(Buffer.from(result.diagnostic ?? `${result.stdout}\n${result.stderr}`))
+      else diagnostic.add(Buffer.from(result.stderr))
+      if (diagnostic.value()) console.error(diagnostic.value())
+      throw new HelperBuildError(
+        `The native helper command failed: ${path.basename(executable)} (${result.failureReason ?? `exit-${result.code}`}).`,
+      )
     }
     return result
   }
@@ -436,6 +510,8 @@ export async function buildComputerHelper(
   const unitSources = [
     ...helperSources.filter((file) => path.basename(file) !== "main.swift"),
     ...(await filesUnder(path.join(native, "Tests"))).filter((file) => file.endsWith(".swift")),
+    path.join(native, "TestOverlayDriver/Policy.swift"),
+    path.join(native, "TestOverlayDriver/PolicyTests.swift"),
   ]
   const callerSources = [path.join(native, "TestSupport/Caller/main.swift")]
   const targetSources = (await filesUnder(path.join(native, "TestTarget"))).filter((file) => file.endsWith(".swift"))
@@ -1112,9 +1188,7 @@ export async function sourceDigestFor(
     ...[
       "native/computer-helper/identity.json",
       "native/computer-helper/blocklist.json",
-      "scripts/build-computer-helper.ts",
-      "scripts/computer-helper-identity.ts",
-      "scripts/channel-ids.ts",
+      ...COMPUTER_HELPER_BUILD_INPUTS,
       `icons/${channel}/${platform === "darwin" ? "icon.icns" : "icon.ico"}`,
     ].map((file) => path.join(directory, file)),
   )

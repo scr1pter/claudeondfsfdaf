@@ -420,6 +420,11 @@ export class ComputerHelper implements HelperClient {
     this.active = active
   }
 
+  /** Intentional permission replacement retains a paused task; transport dependency loss does not. */
+  isRefreshing() {
+    return this.refreshing !== undefined
+  }
+
   private check(executable: string) {
     if (this.options.check) return this.options.check(executable)
     return preflight({
@@ -470,7 +475,8 @@ export class ComputerHelper implements HelperClient {
     this.time.clearTimeout(this.restartTimer)
     this.restartTimer = undefined
     const generation = ++this.generation
-    const starting = this.launch(generation).finally(() => {
+    const retiring = this.retiring
+    const starting = (retiring ? retiring.then(() => this.launch(generation)) : this.launch(generation)).finally(() => {
       if (this.starting === starting) this.starting = undefined
     })
     this.starting = starting
@@ -507,23 +513,38 @@ export class ComputerHelper implements HelperClient {
     )
     const client = createHelperClient(channel, { clock: this.time })
     this.client = client
+    const lost = (event: Extract<Computer.HelperEvent, { event: "exit" }>, closeChannel = false) => {
+      if (generation !== this.generation || this.client !== client || this.stopped) return
+      this.time.clearTimeout(this.heartbeatTimer)
+      this.time.clearTimeout(this.restartTimer)
+      this.heartbeatTimer = this.restartTimer = undefined
+      this.client = undefined
+      this.greeting = undefined
+      // Latch before listeners retire the run and clear active. A stale task never restarts itself.
+      this.needsResume ||= this.active
+      const retiring = closeChannel ? client.close().catch(() => {}) : Promise.resolve()
+      if (closeChannel) {
+        this.retiring = retiring
+        void retiring.finally(() => { if (this.retiring === retiring) this.retiring = undefined })
+      }
+      for (const listener of this.listeners)
+        try { listener(event) } catch { /* One listener cannot retain somebody else's authority. */ }
+      const restart = () => {
+        if (generation !== this.generation || this.stopped || this.client || this.needsResume || this.active) return
+        this.restartTimer = this.time.setTimeout(() => {
+          if (generation !== this.generation || this.stopped) return
+          this.restartTimer = undefined
+          void this.restart().catch(() => {})
+        }, 100)
+      }
+      if (!this.active && !this.needsResume) {
+        if (closeChannel) void retiring.then(restart)
+        else restart()
+      }
+    }
     client.onEvent((event) => {
       if (generation !== this.generation || this.client !== client || this.stopped) return
-      if (event.event === "exit") {
-        this.time.clearTimeout(this.heartbeatTimer)
-        this.heartbeatTimer = undefined
-        this.client = undefined
-        this.greeting = undefined
-        this.needsResume ||= this.active
-        for (const listener of this.listeners) listener(event)
-        if (!this.active && !this.needsResume)
-          this.restartTimer = this.time.setTimeout(() => {
-            if (generation !== this.generation || this.stopped) return
-            this.restartTimer = undefined
-            void this.restart().catch(() => {})
-          }, 100)
-        return
-      }
+      if (event.event === "exit") return lost(event)
       for (const listener of this.listeners) listener(event)
     })
     const hello = await client
@@ -551,7 +572,7 @@ export class ComputerHelper implements HelperClient {
     this.greeting = hello
     const beat = () => {
       if (this.stopped || this.client !== client) return
-      void client.request("heartbeat", {}, 2000).catch(() => {})
+      void client.request("heartbeat", {}, 2000).catch(() => lost({ event: "exit" }, true))
       this.heartbeatTimer = this.time.setTimeout(beat, Computer.LIMITS.heartbeatMs)
     }
     this.heartbeatTimer = this.time.setTimeout(beat, Computer.LIMITS.heartbeatMs)

@@ -67,7 +67,9 @@ function fixture(
   const state = {
     autoDetect: true,
     helperLatched: false,
+    refreshing: false,
     displays: [] as Promise<void>[],
+    helloWait: undefined as Promise<void> | undefined,
     beginWait: undefined as Promise<void> | undefined,
     endWait: undefined as Promise<void> | undefined,
     abortWait: undefined as Promise<void> | undefined,
@@ -92,6 +94,7 @@ function fixture(
     kind: options.kind ?? "local-macos",
     async hello() {
       record("hello")
+      await state.helloWait
       if (state.helperLatched) throw new Error("The virtual helper requires explicit recovery.")
       return {
         protocol: { min: Computer.PROTOCOL, max: Computer.PROTOCOL },
@@ -204,6 +207,7 @@ function fixture(
       },
     },
     helper: {
+      isRefreshing: () => state.refreshing,
       setRunActive(active) {
         record("helper-active", active)
       },
@@ -689,13 +693,18 @@ describe("pause, physical presence and power", () => {
     expect(fake.state.activeGrants.size).toBe(0)
   })
 
-  test("helper exit pauses without an automatic restart", async () => {
+  test("helper dependency loss retires the exact lease, grants and overlays without restart", async () => {
     const fake = fixture()
     const scope = await fake.acquire()
     await fake.session.beforeStep(scope)
     fake.session.helperEvent({ event: "exit", code: 1 })
     await flush()
-    expect(fake.session.state()).toMatchObject({ phase: "paused", pause: "helper" })
+    expect(fake.session.state()).toMatchObject({ phase: "ready" })
+    expect(fake.session.state().holder).toBeUndefined()
+    expect(fake.state.visible).toBe(false)
+    expect(fake.state.activeGrants.size).toBe(0)
+    expect(fake.state.aborts).toEqual([{ scope, reason: "stopped" }])
+    await expect(fake.session.beforeStep(scope)).rejects.toMatchObject({ code: "stopped" })
     await fake.advance(20_000, scope)
     expect(fake.kinds()).not.toContain("helper-resume")
     expect(fake.state.begins).toHaveLength(1)
@@ -708,7 +717,7 @@ describe("pause, physical presence and power", () => {
     fake.state.helperLatched = true
     fake.session.helperEvent({ event: "exit", code: 1 })
     await flush()
-    expect(fake.session.state()).toMatchObject({ phase: "paused", pause: "helper" })
+    expect(fake.session.state()).toMatchObject({ phase: "ready" })
     await fake.advance(20_000, scope)
     expect(fake.kinds()).not.toContain("helper-resume")
     await fake.session.stop()
@@ -725,6 +734,59 @@ describe("pause, physical presence and power", () => {
     expect((await fake.acquire(NEXT)).lease).toBe(next.lease)
     expect(fake.kinds().filter((kind) => kind === "helper-resume")).toHaveLength(1)
     expect(fake.session.state()).toMatchObject({ phase: "working", holder: { sessionID: NEXT.rootSessionID } })
+  })
+
+  test("helper loss during pending acquisition rejects the candidate and every queued request", async () => {
+    const fake = fixture()
+    const hello = deferred()
+    fake.state.helloWait = hello.promise
+    const first = fake.request(ROOT, true)
+    const second = fake.request(NEXT, true)
+    const pending = fake.session.acquire(first.body, first.key).catch((error) => error)
+    const queued = fake.session.acquire(second.body, second.key).catch((error) => error)
+    await flush()
+    expect(fake.kinds().filter((kind) => kind === "hello")).toHaveLength(1)
+    fake.session.helperEvent({ event: "exit", code: 1 })
+    expect(await pending).toMatchObject({ code: "stopped" })
+    expect(await queued).toMatchObject({ code: "stopped" })
+    hello.resolve()
+    await flush()
+    expect(fake.session.state().holder).toBeUndefined()
+    expect(fake.session.state().queue).toEqual([])
+    expect(fake.state.activeGrants.size).toBe(0)
+    expect(fake.state.visible).toBe(false)
+    expect(fake.kinds()).not.toContain("helper-resume")
+    expect(fake.state.begins).toHaveLength(0)
+  })
+
+  test("helper dependency loss rejects queued work before any successor can inherit approval", async () => {
+    const fake = fixture()
+    const scope = await fake.acquire()
+    await fake.session.beforeStep(scope)
+    const queued = fake.request(NEXT, true)
+    const waiting = fake.session.acquire(queued.body, queued.key).catch((error) => error)
+    fake.session.helperEvent({ event: "exit", code: 1 })
+    expect(await waiting).toMatchObject({ code: "stopped" })
+    await flush()
+    expect(fake.state.begins).toHaveLength(1)
+    expect(fake.state.activeGrants.size).toBe(0)
+    expect(fake.state.visible).toBe(false)
+    expect(fake.session.state().queue).toEqual([])
+    await expect(fake.session.beforeStep(scope)).rejects.toMatchObject({ code: "stopped" })
+  })
+
+  test("an intentional permission replacement keeps its paused task UI and still needs Resume", async () => {
+    const fake = fixture()
+    const scope = await fake.acquire()
+    await fake.session.beforeStep(scope)
+    fake.state.refreshing = true
+    fake.session.helperEvent({ event: "exit" })
+    fake.state.refreshing = false
+    await flush()
+    expect(fake.session.state()).toMatchObject({ phase: "paused", pause: "helper" })
+    expect(fake.state.visible).toBe(true)
+    await expect(fake.session.beforeStep(scope)).rejects.toMatchObject({ code: "paused" })
+    expect(fake.kinds()).not.toContain("helper-resume")
   })
 
   test("lost detection and secure input pause foreground input immediately", async () => {

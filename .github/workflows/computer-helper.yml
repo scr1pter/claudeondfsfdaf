@@ -57,7 +57,7 @@ on:
         required: false
         default: false
       full-desktop-e2e:
-        description: Request the desktop lanes supplied by C8
+        description: Run real Electron overlay and desktop end-to-end lanes
         type: boolean
         required: false
         default: true
@@ -97,6 +97,7 @@ jobs:
     outputs:
       suffix: ${{ steps.plan.outputs.suffix }}
       extended: ${{ steps.plan.outputs.extended }}
+      desktop: ${{ steps.plan.outputs.desktop }}
       windows: ${{ steps.plan.outputs.windows }}
       windows-protocol: ${{ steps.plan.outputs.windows-protocol }}
     steps:
@@ -113,6 +114,7 @@ jobs:
           PRIVILEGED_REQUIRED: ${{ inputs['privileged-required'] || false }}
           ISOLATED_DESKTOP: ${{ inputs['isolated-desktop'] || false }}
           EVENT_NAME: ${{ github.event_name }}
+          FULL_DESKTOP_E2E: ${{ toJSON(inputs['full-desktop-e2e']) }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.sha }}
         run: |
@@ -141,6 +143,11 @@ jobs:
           windows_protocol=false
           if [[ -f packages/desktop/native/computer-helper/windows/CMakeLists.txt ]]; then windows=true; fi
           if [[ "$windows" == true && -f packages/desktop/native/computer-helper/windows/src/protocol.cpp ]]; then windows_protocol=true; fi
+          # A reusable release caller may itself be a push: its explicit false must win.
+          # Only a direct CI-branch push has no input and defaults to the full desktop lanes.
+          desktop=false
+          if [[ "$FULL_DESKTOP_E2E" == true || ( "$EVENT_NAME" == push && "$FULL_DESKTOP_E2E" != false ) ]]; then desktop=true; fi
+          echo "desktop=$desktop" >> "$GITHUB_OUTPUT"
           echo "suffix=$ARTIFACT_SUFFIX" >> "$GITHUB_OUTPUT"
           echo "extended=$extended" >> "$GITHUB_OUTPUT"
           echo "windows=$windows" >> "$GITHUB_OUTPUT"
@@ -150,13 +157,13 @@ jobs:
           elif [[ "$windows_protocol" != true ]]; then
             echo "Windows unit/version/probe checks run; protocol, conformance and parent-death checks remain pending W2." >> "$GITHUB_STEP_SUMMARY"
           fi
-          echo "C4 runs helper signing and fuse fixtures on macOS; C8 overlay/desktop end-to-end lanes remain pending." >> "$GITHUB_STEP_SUMMARY"
+          echo "C4 checks helper signing; C8 runs real Electron overlay properties and actual Linux unsupported Hands behavior. Native OS Stop/capture requires isolated-desktop." >> "$GITHUB_STEP_SUMMARY"
 
   mac-build:
     needs: plan
     if: ${{ !inputs['windows-only'] }}
     runs-on: macos-15
-    timeout-minutes: 60
+    timeout-minutes: 90
     permissions:
       contents: read
       actions: read
@@ -183,6 +190,11 @@ jobs:
           fi
           xcodebuild -version
           xcrun --sdk macosx swiftc --version
+      - name: Setup Node for the real Electron smoke
+        if: ${{ needs.plan.outputs.desktop == 'true' }}
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
       - name: Setup Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
@@ -377,6 +389,56 @@ jobs:
           if (lock.enforce !== true || lock.helperVersion !== manifest.helperVersion || lock.toolchain !== manifest.toolchain)
             throw new Error("The channel helper does not match the measured production version and toolchain.")
           NODE
+      - name: Install the exact pinned Electron runtime
+        if: ${{ needs.plan.outputs.desktop == 'true' }}
+        timeout-minutes: 5
+        run: node node_modules/electron/install.js
+      - name: Run real Electron overlay properties and controller lifecycle
+        if: ${{ needs.plan.outputs.desktop == 'true' }}
+        timeout-minutes: 3
+        run: bun --no-env-file ./scripts/computer-overlay-smoke.ts
+      - name: Restore the immutable never-shipped overlay stage
+        id: overlay-restore
+        if: ${{ inputs['reuse-artifacts'] && (needs.plan.outputs.desktop == 'true') }}
+        timeout-minutes: 5
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_SUFFIX: ${{ needs.plan.outputs.suffix }}
+        run: bun --no-env-file ./scripts/computer-overlay-smoke-artifact.ts --platform darwin --suffix "$ARTIFACT_SUFFIX" --destination native/out/overlay-darwin
+      - name: Build the source-bound never-shipped native overlay stage
+        if: ${{ steps.overlay-restore.outputs.restored != 'true' && (needs.plan.outputs.desktop == 'true') }}
+        timeout-minutes: 20
+        run: bun --no-env-file ./scripts/build-computer-overlay-smoke.ts --platform darwin --helper native/out/darwin --out native/out/overlay-darwin
+      - name: Run actual isolated macOS overlay Stop and capture
+        if: ${{ inputs['isolated-desktop'] && (needs.plan.outputs.desktop == 'true') }}
+        timeout-minutes: 3
+        env:
+          VECTOR_COMPUTER_TEST_ISOLATED: "1"
+          PRIVILEGED_REQUIRED: ${{ inputs['privileged-required'] }}
+        run: |
+          set -euo pipefail
+          required=()
+          if [[ "$PRIVILEGED_REQUIRED" == true ]]; then required=(--require-native); fi
+          status=0
+          bun --no-env-file ./scripts/computer-overlay-smoke.ts --native-stage native/out/overlay-darwin "${required[@]}" || status=$?
+          if [[ "$status" == 77 && "$PRIVILEGED_REQUIRED" != true ]]; then
+            echo "SKIPPED: an actual pre-Electron native prerequisite is unavailable." >> "$GITHUB_STEP_SUMMARY"
+          elif [[ "$status" != 0 ]]; then
+            exit "$status"
+          fi
+      - name: Archive the verified never-shipped overlay stage separately
+        if: ${{ steps.overlay-restore.outputs.restored != 'true' && (needs.plan.outputs.desktop == 'true') }}
+        timeout-minutes: 5
+        run: bun --no-env-file ./scripts/computer-overlay-smoke-artifact.ts --platform darwin --archive native/out/overlay-darwin --output "$RUNNER_TEMP/computer-overlay-smoke-darwin.tar"
+      - name: Upload the immutable never-shipped overlay stage
+        if: ${{ steps.overlay-restore.outputs.restored != 'true' && (needs.plan.outputs.desktop == 'true') }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: computer-overlay-smoke-darwin-${{ needs.plan.outputs.suffix }}
+          path: ${{ runner.temp }}/computer-overlay-smoke-darwin.tar
+          if-no-files-found: error
+          overwrite: ${{ !inputs['reuse-artifacts'] }}
+          retention-days: 14
       - name: Expose the verified source digest
         id: digest
         run: |
@@ -552,7 +614,7 @@ jobs:
     needs: plan
     if: ${{ needs.plan.outputs.windows == 'true' }}
     runs-on: windows-2025
-    timeout-minutes: 45
+    timeout-minutes: 75
     permissions:
       contents: read
       actions: read
@@ -567,6 +629,11 @@ jobs:
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           persist-credentials: false
+      - name: Setup Node for the real Electron smoke
+        if: ${{ needs.plan.outputs.desktop == 'true' }}
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
       - name: Setup Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
@@ -670,6 +737,67 @@ jobs:
               appendFileSync(process.env.GITHUB_STEP_SUMMARY, "- " + check.status.toUpperCase() + " " + check.name + ": " + check.reason + "\n")
           }
           NODE
+      - name: Install the exact pinned Electron runtime
+        if: ${{ needs.plan.outputs.desktop == 'true' }}
+        timeout-minutes: 5
+        run: |
+          node node_modules/electron/install.js
+          if ($LASTEXITCODE -ne 0) { throw "The pinned Electron installation failed." }
+      - name: Run real Electron overlay properties and controller lifecycle
+        if: ${{ needs.plan.outputs.desktop == 'true' }}
+        timeout-minutes: 3
+        run: |
+          bun --no-env-file ./scripts/computer-overlay-smoke.ts
+          if ($LASTEXITCODE -ne 0) { throw "The actual Electron overlay properties or controller lifecycle failed." }
+      - name: Restore the immutable never-shipped overlay stage
+        id: overlay-restore
+        if: ${{ inputs['reuse-artifacts'] && (needs.plan.outputs.desktop == 'true') }}
+        timeout-minutes: 5
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_SUFFIX: ${{ needs.plan.outputs.suffix }}
+        run: |
+          bun --no-env-file ./scripts/computer-overlay-smoke-artifact.ts --platform win32 --suffix $env:ARTIFACT_SUFFIX --destination native/out/overlay-win32
+          if ($LASTEXITCODE -ne 0) { throw "Immutable overlay stage restore failed." }
+      - name: Build the source-bound never-shipped native overlay stage
+        if: ${{ steps.overlay-restore.outputs.restored != 'true' && (needs.plan.outputs.desktop == 'true') }}
+        timeout-minutes: 20
+        run: |
+          bun --no-env-file ./scripts/build-computer-overlay-smoke.ts --platform win32 --helper native/out/win32/x64 --out native/out/overlay-win32
+          if ($LASTEXITCODE -ne 0) { throw "The never-shipped Windows overlay stage build failed." }
+      - name: Run actual isolated medium-token Windows overlay Stop
+        if: ${{ inputs['isolated-desktop'] && (needs.plan.outputs.desktop == 'true') }}
+        timeout-minutes: 3
+        env:
+          VECTOR_COMPUTER_TEST_ISOLATED: "1"
+          PRIVILEGED_REQUIRED: ${{ inputs['privileged-required'] }}
+        run: |
+          # The native stage always enters its finite verified medium-token Electron bootstrap.
+          # A high-token process cannot become an input fallback, even on an elevated hosted runner.
+          $required = @()
+          if ($env:PRIVILEGED_REQUIRED -eq "true") { $required = @("--require-native") }
+          bun --no-env-file ./scripts/computer-overlay-smoke.ts --native-stage native/out/overlay-win32 @required
+          $status = $LASTEXITCODE
+          if ($status -eq 77 -and $env:PRIVILEGED_REQUIRED -ne "true") {
+            "SKIPPED: an actual pre-Electron native prerequisite is unavailable." >> $env:GITHUB_STEP_SUMMARY
+          } elseif ($status -ne 0) {
+            throw "Actual isolated overlay Stop failed or required native evidence is unavailable."
+          }
+      - name: Archive the verified never-shipped overlay stage separately
+        if: ${{ steps.overlay-restore.outputs.restored != 'true' && (needs.plan.outputs.desktop == 'true') }}
+        timeout-minutes: 5
+        run: |
+          bun --no-env-file ./scripts/computer-overlay-smoke-artifact.ts --platform win32 --archive native/out/overlay-win32 --output "$env:RUNNER_TEMP/computer-overlay-smoke-win32.tar"
+          if ($LASTEXITCODE -ne 0) { throw "The verified overlay stage archive failed." }
+      - name: Upload the immutable never-shipped overlay stage
+        if: ${{ steps.overlay-restore.outputs.restored != 'true' && (needs.plan.outputs.desktop == 'true') }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: computer-overlay-smoke-win32-${{ needs.plan.outputs.suffix }}
+          path: ${{ runner.temp }}/computer-overlay-smoke-win32.tar
+          if-no-files-found: error
+          overwrite: ${{ !inputs['reuse-artifacts'] }}
+          retention-days: 14
       - name: Expose the verified source digest
         id: digest
         run: |
@@ -832,3 +960,96 @@ jobs:
           if-no-files-found: ignore
           overwrite: true
           retention-days: 14
+
+  overlay-linux:
+    needs: plan
+    if: ${{ !inputs['windows-only'] && (needs.plan.outputs.desktop == 'true') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+        working-directory: packages/desktop
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: package.json
+      - name: Install frozen dependencies without lifecycle scripts
+        timeout-minutes: 10
+        working-directory: .
+        run: bun install --frozen-lockfile --ignore-scripts
+      - name: Install isolated Electron display dependencies
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends xvfb xauth libnss3 libatk1.0-0t64 libatk-bridge2.0-0t64 libx11-xcb1 libxcomposite1 libxdamage1 libxrandr2 libgbm1 libgtk-3-0t64 libasound2t64
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          node node_modules/electron/install.js
+      - name: Check actual Linux Electron overlay properties
+        timeout-minutes: 3
+        run: xvfb-run -a -s "-screen 0 1280x900x24 -nolisten tcp" bun --no-env-file ./scripts/computer-overlay-smoke.ts
+
+  desktop-e2e-linux:
+    needs: plan
+    if: ${{ !inputs['windows-only'] && (needs.plan.outputs.desktop == 'true') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    continue-on-error: true
+    defaults:
+      run:
+        shell: bash
+        working-directory: packages/desktop
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: package.json
+      - name: Install frozen dependencies without lifecycle scripts
+        timeout-minutes: 10
+        working-directory: .
+        run: bun install --frozen-lockfile --ignore-scripts
+      - name: Install isolated Electron display dependencies
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends xvfb xauth libnss3 libatk1.0-0t64 libatk-bridge2.0-0t64 libx11-xcb1 libxcomposite1 libxdamage1 libxrandr2 libgbm1 libgtk-3-0t64 libasound2t64
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          node node_modules/electron/install.js
+      - name: Build the actual dev desktop and Node engine
+        timeout-minutes: 15
+        env:
+          VECTOR_CHANNEL: dev
+          VECTOR_COMPUTER_HELPER: skip
+        run: |
+          set -euo pipefail
+          export VECTOR_RELEASE_CATALOG_PATH="$PWD/../web/public/models/api.json"
+          export VECTOR_RELEASE_CATALOG_SHA256="$(sha256sum "$VECTOR_RELEASE_CATALOG_PATH" | cut -d ' ' -f 1)"
+          bun --no-env-file ./scripts/prebuild.ts
+          bun --no-env-file ./scripts/build-desktop.ts
+      - name: Compile the explicit virtual helper for actual Node
+        timeout-minutes: 2
+        run: bun build ./test/computer/fake-helper.ts --target node --format esm --outfile "$RUNNER_TEMP/computer-fake-helper.mjs"
+      - name: Run actual Node Playwright against the dev Electron
+        timeout-minutes: 5
+        env:
+          VECTOR_COMPUTER_E2E_FAKE_HELPER: ${{ runner.temp }}/computer-fake-helper.mjs
+        run: xvfb-run -a -s "-screen 0 1280x900x24 -nolisten tcp" node ./node_modules/@playwright/test/cli.js test --config=e2e/playwright.config.ts

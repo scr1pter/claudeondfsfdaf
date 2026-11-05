@@ -10,6 +10,7 @@ export const NATIVE_UNIT_SUITES = [
   "runLifecycleTests",
   "runPackagedSelfTestTests",
   "runPrivilegedSelfTestTests",
+  "runOverlayDriverPolicyTests",
   "runBlocklistTests",
   "runPermissionsTests",
   "runGeometryTests",
@@ -47,6 +48,14 @@ export type NativeUnitSample = {
   suites: UnitSuite[]
   waits: WaitCategory[]
 }
+export type NativeUnitProgress = {
+  entered: boolean
+  passed: number
+  active?: UnitSuite
+  // The COMPLETE marker is evidence of aggregate progress, never a substitute for actual exit.
+  complete: boolean
+  invalid: boolean
+}
 export type NativeCommandDiagnostic = {
   schemaVersion: 1
   trigger: (typeof triggers)[number]
@@ -60,6 +69,7 @@ export type NativeCommandDiagnostic = {
   exitAfterMs?: number
   closeAfterMs?: number
   sample: NativeUnitSample
+  progress?: NativeUnitProgress
 }
 export type ObservedNativeCommand = { executable: string; args: readonly string[]; timeoutMs?: number }
 export type ObservedNativeResult = {
@@ -73,6 +83,7 @@ export type OwnedUnitSampler = (process: OwnedUnitProcess) => Promise<NativeUnit
 type CommandObservations = {
   // Installed only for the already verified unit executable, never for an arbitrary helper operation.
   sampleUnit?: boolean
+  observeUnitProgress?: boolean
   sampler?: OwnedUnitSampler
   sampleAfterMs?: number
   outputLimitBytes?: number
@@ -83,6 +94,95 @@ const emptySample = (status: NativeUnitSample["status"]): NativeUnitSample => ({
 const count = (value: number) => Math.min(Number.MAX_SAFE_INTEGER, Math.max(0, Math.floor(value)))
 const exact = (value: Record<string, unknown>, allowed: readonly string[]) =>
   Object.keys(value).every((key) => allowed.includes(key))
+const progressPrefix = "vector-unit-progress "
+
+/** Accept only an exact ordered protocol; arbitrary stderr never becomes a suite or a report field. */
+export function nativeUnitProgress(value: unknown): NativeUnitProgress {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid native unit progress.")
+  const body = value as Record<string, unknown>
+  if (
+    !exact(body, ["entered", "passed", "active", "complete", "invalid"]) ||
+    ["entered", "complete", "invalid"].some((key) => typeof body[key] !== "boolean") ||
+    !Number.isSafeInteger(body.passed) ||
+    Number(body.passed) < 0 ||
+    Number(body.passed) > NATIVE_UNIT_SUITES.length ||
+    (!body.entered && (body.passed !== 0 || body.active !== undefined || body.complete)) ||
+    (body.active !== undefined &&
+      (!body.entered || body.complete || body.active !== NATIVE_UNIT_SUITES[Number(body.passed)])) ||
+    (body.complete && (body.invalid || body.passed !== NATIVE_UNIT_SUITES.length))
+  )
+    throw new Error("Invalid native unit progress.")
+  return {
+    entered: body.entered as boolean,
+    passed: body.passed as number,
+    ...(body.active === undefined ? {} : { active: body.active as UnitSuite }),
+    complete: body.complete as boolean,
+    invalid: body.invalid as boolean,
+  }
+}
+
+export class NativeUnitProgressReader {
+  private value: NativeUnitProgress = { entered: false, passed: 0, complete: false, invalid: false }
+  private line = ""
+  private overflow = false
+  private ended = false
+  private remaining = outputLimitBytes
+
+  private invalid() {
+    this.value.invalid = true
+    this.value.complete = false
+  }
+  private accept(line: string) {
+    if (!line.startsWith(progressPrefix)) return
+    if (line === progressPrefix + "ENTER" && !this.value.entered) {
+      this.value.entered = true
+      return
+    }
+    if (this.value.entered && !this.value.complete) {
+      const expected = NATIVE_UNIT_SUITES[this.value.passed]
+      if (expected && !this.value.active && line === progressPrefix + "BEGIN " + expected) {
+        this.value.active = expected
+        return
+      }
+      if (this.value.active && line === progressPrefix + "PASS " + this.value.active) {
+        this.value.passed++
+        delete this.value.active
+        return
+      }
+      if (!expected && !this.value.active && line === progressPrefix + "COMPLETE") {
+        this.value.complete = true
+        return
+      }
+    }
+    this.invalid()
+  }
+  consume(bytes: Uint8Array) {
+    if (this.ended || this.value.invalid) return
+    const bounded = bytes.subarray(0, this.remaining)
+    this.remaining -= bounded.length
+    for (const byte of bounded) {
+      if (byte === 10) {
+        if (this.overflow) {
+          if (this.line.startsWith(progressPrefix)) this.invalid()
+        } else this.accept(this.line.endsWith("\r") ? this.line.slice(0, -1) : this.line)
+        this.line = ""
+        this.overflow = false
+        if (this.value.invalid) return
+      } else if (this.line.length < 128) this.line += String.fromCharCode(byte)
+      else this.overflow = true
+    }
+  }
+  snapshot() {
+    return nativeUnitProgress(this.value)
+  }
+  finish() {
+    if (!this.ended && this.line.startsWith(progressPrefix)) this.invalid()
+    this.ended = true
+    this.line = ""
+    this.overflow = false
+    return this.snapshot()
+  }
+}
 
 /** Only frame-shaped lines can contribute fixed symbols. The raw sample is never returned or written. */
 export function sanitizeNativeUnitSample(raw: string): Pick<NativeUnitSample, "suites" | "waits"> {
@@ -124,6 +224,7 @@ export function nativeCommandDiagnostic(value: unknown): NativeCommandDiagnostic
       "exitAfterMs",
       "closeAfterMs",
       "sample",
+      "progress",
     ]) ||
     body.schemaVersion !== 1 ||
     !triggers.includes(body.trigger as NativeCommandDiagnostic["trigger"]) ||
@@ -175,6 +276,7 @@ export function nativeCommandDiagnostic(value: unknown): NativeCommandDiagnostic
       suites: NATIVE_UNIT_SUITES.filter((suite) => sample.suites instanceof Array && sample.suites.includes(suite)),
       waits: waitCategories.filter((wait) => sample.waits instanceof Array && sample.waits.includes(wait)),
     },
+    ...(body.progress === undefined ? {} : { progress: nativeUnitProgress(body.progress) }),
   }
 }
 
@@ -266,6 +368,7 @@ export async function runObservedNativeCommand(
       detached: process.platform !== "win32",
     })
     const chunks: Buffer[] = []
+    const progress = options.sampleUnit || options.observeUnitProgress ? new NativeUnitProgressReader() : undefined
     const sampleAbort = new AbortController()
     let code: number | null = null,
       ended = false,
@@ -289,6 +392,7 @@ export async function runObservedNativeCommand(
       if (sampleBudget) clearTimeout(sampleBudget)
       sampleAbort.abort()
       diagnostic.elapsedMs = elapsed()
+      if (progress) diagnostic.progress = progress.finish()
       // The promise cannot wait forever for a descendant to retain an inherited pipe after exit.
       child.stdout.destroy()
       child.stderr.destroy()
@@ -309,8 +413,10 @@ export async function runObservedNativeCommand(
     const timer = setTimeout(() => stop("wall-deadline"), Math.max(0, timeout - elapsed()))
     const capture = (chunk: Buffer, stdout: boolean) => {
       if (ended) return
+      const remaining = Math.max(0, limit - diagnostic.stdoutBytes - diagnostic.stderrBytes)
       if (stdout) diagnostic.stdoutBytes = count(diagnostic.stdoutBytes + chunk.length)
       else diagnostic.stderrBytes = count(diagnostic.stderrBytes + chunk.length)
+      if (!stdout) progress?.consume(chunk.subarray(0, remaining))
       if (diagnostic.stdoutBytes + diagnostic.stderrBytes > limit) {
         stop("output-cap")
         return

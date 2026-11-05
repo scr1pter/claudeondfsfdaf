@@ -36,12 +36,20 @@
     "scripts/computer-helper-selftest.ts",
     "scripts/computer-helper-selftest-node.ts",
     "scripts/computer-helper-unit-diagnostics.ts",
+    "scripts/build-computer-overlay-smoke.ts",
+    "scripts/computer-overlay-smoke.ts",
+    "scripts/computer-overlay-smoke-electron.ts",
+    "scripts/computer-overlay-smoke-native.ts",
+    "scripts/computer-overlay-smoke-report.ts",
+    "scripts/computer-overlay-smoke-stage.ts",
+    "scripts/computer-overlay-smoke-artifact.ts",
     "test/computer/bridge-node.ts",
     "test/computer/helper-node.ts",
     "test/computer/fake-desktop.ts",
     "test/computer/fake-helper.ts",
     "test/computer/png.ts",
-    "test/computer/transcript.ts"
+    "test/computer/transcript.ts",
+    "e2e"
   ],
   "exclude": ["src/**/*.test.ts"]
 }

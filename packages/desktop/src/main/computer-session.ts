@@ -103,7 +103,7 @@ export function createComputerSession(input: {
     disconnect(): void
     observe?(event: KeepAwakeEvent): void | Promise<void>
   }
-  helper: { setRunActive(active: boolean): void; resume(): Promise<unknown> }
+  helper: { setRunActive(active: boolean): void; resume(): Promise<unknown>; isRefreshing?(): boolean }
   exclusions():
     | { vectorPids: readonly number[]; vectorWindowIds: readonly string[] }
     | Promise<{ vectorPids: readonly number[]; vectorWindowIds: readonly string[] }>
@@ -412,10 +412,10 @@ export function createComputerSession(input: {
     }, WAIT_MS)
   }
 
-  function rejectQueue() {
+  function rejectQueue(notify = true) {
     for (const entry of [...queue.values()])
       settle(entry, undefined, new ComputerError("stopped", `The user stopped ${Hands.NAME}.`))
-    publish()
+    if (notify) publish()
   }
 
   function detach(run: Run) {
@@ -1235,7 +1235,18 @@ export function createComputerSession(input: {
       if (event.event === "locked") state.locked = event.locked
       if (event.event === "exit") state.helperEpoch++
       const run = state.run
-      if (!run) return
+      if (!run) {
+        if (event.event === "exit" && !input.helper.isRefreshing?.()) {
+          state.needsResume = true
+          // A hello/permissions candidate has no Run yet; its queued authority must still end.
+          rejectQueue(false)
+          clearEndTimers()
+          input.overlay.close()
+          state.current = base()
+          publish()
+        }
+        return
+      }
       if (event.event === "user_input") {
         run.lastInput = clock.now()
         return
@@ -1247,7 +1258,15 @@ export function createComputerSession(input: {
       if (event.event === "exit") {
         state.needsResume = true
         run.inputAlive = false
-        void pause("helper")
+        if (input.helper.isRefreshing?.()) {
+          void pause("helper")
+          return
+        }
+        // Dependency loss retires exact task/queue authority before any successor or publication.
+        // Intentional asks, handoffs and permission replacement keep their ordinary paused UX.
+        rejectQueue(false)
+        retire(run, "stopped", false)
+        try { void input.abort(run.scope, "stopped").catch(() => {}) } catch {}
         return
       }
       if (event.event === "locked") {

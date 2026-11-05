@@ -381,6 +381,58 @@ describe("helper supervisor", () => {
     expect(connection.requests.filter((request) => request.op === "heartbeat")).toHaveLength(1)
   })
 
+  test("a failed active heartbeat revokes once before a listener clears active and awaits retirement", async () => {
+    const fixture = supervisor()
+    const events: Computer.HelperEvent[] = []
+    fixture.helper.onEvent((event) => { events.push(event); fixture.helper.setRunActive(false) })
+    await fixture.helper.start()
+    fixture.helper.setRunActive(true)
+    const old = fixture.connections[0]!
+    old.ignore.add("heartbeat")
+    old.ignore.add("input.releaseAll")
+    old.ignore.add("shutdown")
+    fixture.time.advance(4000)
+    await flush()
+    expect(events).toEqual([{ event: "exit" }])
+    await expect(fixture.helper.request("displays.list")).rejects.toMatchObject({ reason: "helper_missing" })
+    const resumed = fixture.helper.resume()
+    await flush()
+    expect(fixture.spawns).toHaveLength(1)
+    fixture.time.advance(300)
+    await flush()
+    fixture.time.advance(300)
+    await flush()
+    await resumed
+    expect(fixture.spawns).toHaveLength(2)
+    old.crash(19)
+    fixture.time.advance(100)
+    await flush()
+    expect(events).toHaveLength(1)
+    expect(fixture.spawns).toHaveLength(2)
+    expect(await fixture.helper.request("permissions.status")).toEqual({ screen: "granted", accessibility: "granted" })
+  })
+
+  test("a pending old heartbeat cannot retire a permission replacement", async () => {
+    const fixture = supervisor()
+    const events: Computer.HelperEvent[] = []
+    const intentional: boolean[] = []
+    fixture.helper.onEvent((event) => { events.push(event); intentional.push(fixture.helper.isRefreshing()) })
+    await fixture.helper.start()
+    fixture.helper.setRunActive(true)
+    fixture.connections[0]!.ignore.add("heartbeat")
+    fixture.time.advance(2000)
+    const refreshed = fixture.helper.refreshPermissions()
+    expect(fixture.helper.isRefreshing()).toBe(true)
+    await refreshed
+    await flush()
+    expect(events).toEqual([{ event: "exit" }])
+    expect(intentional).toEqual([true])
+    expect(fixture.helper.isRefreshing()).toBe(false)
+    await fixture.helper.resume()
+    expect(await fixture.helper.request("displays.list")).toHaveProperty("displays")
+    expect(fixture.spawns).toHaveLength(2)
+  })
+
   test("allows at most three automatic restarts per rolling minute while idle", async () => {
     const fixture = supervisor()
     await fixture.helper.start()

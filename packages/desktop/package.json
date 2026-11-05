@@ -25,6 +25,9 @@
     "package:linux": "bun --no-env-file ./scripts/package-desktop.ts --target=linux",
     "native:build": "bun --no-env-file ./scripts/build-computer-helper.ts",
     "native:test": "bun --no-env-file ./scripts/computer-helper-selftest-node.ts",
+    "native:overlay-build": "bun --no-env-file ./scripts/build-computer-overlay-smoke.ts",
+    "smoke:computer-overlay": "bun --no-env-file ./scripts/computer-overlay-smoke.ts",
+    "test:computer-e2e": "node ./node_modules/@playwright/test/cli.js test --config=e2e/playwright.config.ts",
     "verify:package": "bun ./scripts/verify-package.ts",
     "verify:computer-helper": "bun --no-env-file ./scripts/verify-computer-helper.ts",
     "verify:brain-worker": "bun ./scripts/verify-brain-worker.ts"

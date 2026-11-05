@@ -47,6 +47,48 @@ const clock: OverlayClock = {
   clearTimeout: (timer) => clearTimeout(timer as ReturnType<typeof setTimeout>),
 }
 
+/** Shared native window configuration; Linux smoke checks properties without enabling a Linux backend. */
+export function computerOverlayWindowOptions(input: {
+  platform: NodeJS.Platform
+  kind: "glow" | "banner" | "cursor"
+  bounds: ComputerOverlayLayout.Rect
+  preload?: string
+}): BrowserWindowConstructorOptions {
+  return {
+      ...input.bounds,
+      transparent: true,
+      frame: false,
+      hasShadow: false,
+      focusable: false,
+      skipTaskbar: true,
+      resizable: false,
+      movable: false,
+      show: false,
+      backgroundColor: "#00000000",
+      hiddenInMissionControl: true,
+      type: input.platform === "darwin" ? "panel" : "toolbar",
+      ...(input.kind === "banner" ? { acceptFirstMouse: true } : {}),
+      webPreferences: {
+        sandbox: true,
+        contextIsolation: true,
+        nodeIntegration: false,
+        devTools: false,
+        partition: PARTITION,
+        backgroundThrottling: false,
+        ...(input.kind === "banner" ? { preload: input.preload } : {}),
+      },
+    }
+}
+
+/** These are real Electron setters; native input/capture readiness is checked separately. */
+export function configureComputerOverlayWindow(window: BrowserWindow, platform: NodeJS.Platform) {
+  window.setAlwaysOnTop(true, "screen-saver")
+  if (platform === "darwin")
+    window.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true, skipTransformProcessType: true })
+  if (platform === "win32") window.setContentProtection(true)
+  window.setIgnoreMouseEvents(true)
+}
+
 /** Local overlays only. Tests inject windows/screen/clock; importing this module never starts Electron. */
 export function createComputerOverlay(options: {
   platform: NodeJS.Platform
@@ -195,30 +237,7 @@ export function createComputerOverlay(options: {
       options.preloadPath ?? (electron.appPath && path.join(electron.appPath, "out/preload/computer-overlay.js"))
     if (kind === "banner" && !preload)
       throw new ComputerError("unavailable", "The computer overlay preload is unavailable.")
-    const window = electron.createWindow({
-      ...bounds,
-      transparent: true,
-      frame: false,
-      hasShadow: false,
-      focusable: false,
-      skipTaskbar: true,
-      resizable: false,
-      movable: false,
-      show: false,
-      backgroundColor: "#00000000",
-      hiddenInMissionControl: true,
-      type: options.platform === "darwin" ? "panel" : "toolbar",
-      ...(kind === "banner" ? { acceptFirstMouse: true } : {}),
-      webPreferences: {
-        sandbox: true,
-        contextIsolation: true,
-        nodeIntegration: false,
-        devTools: false,
-        partition: PARTITION,
-        backgroundThrottling: false,
-        ...(kind === "banner" ? { preload } : {}),
-      },
-    })
+    const window = electron.createWindow(computerOverlayWindowOptions({ platform: options.platform, kind, bounds, preload }))
     registerComputerOverlay(window)
     if (kind === "banner") state.armed = undefined
     const pending = Promise.withResolvers<void>()
@@ -275,11 +294,7 @@ export function createComputerOverlay(options: {
     }
     const timeout = time.setTimeout(fail, 5000)
     windows.set(key, record)
-    window.setAlwaysOnTop(true, "screen-saver")
-    if (options.platform === "darwin")
-      window.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true, skipTransformProcessType: true })
-    if (options.platform === "win32") window.setContentProtection(true)
-    window.setIgnoreMouseEvents(true)
+    configureComputerOverlayWindow(window, options.platform)
     window.webContents.setWindowOpenHandler(() => ({ action: "deny" }))
     const navigate = (event: { preventDefault(): void }) => event.preventDefault()
     window.webContents.on("will-navigate", navigate)

@@ -18,6 +18,7 @@
 #include "uia_input.h"
 #include "user_input.h"
 #include "privileged_target.h"
+#include "overlay_driver.h"
 #include "accessibility.h"
 #include "availability.h"
 #include <objidl.h>
@@ -511,7 +512,7 @@ template<class Check> void run_check(const char* label, Check check) {
       (detail.starts_with("protocol.") || detail.starts_with("server.") || detail.starts_with("parent.") || detail.starts_with("lifecycle.") || detail.starts_with("integration.") ||
         detail.starts_with("windows-") || detail.starts_with("policy.") || detail.starts_with("tree.") || detail.starts_with("program.") || detail.starts_with("guard.") || detail.starts_with("capture.") || detail.starts_with("availability.") ||
         detail.starts_with("input.") || detail.starts_with("input-keys.") || detail.starts_with("held.") || detail.starts_with("guardian.") ||
-        detail.starts_with("uia-native.") || detail.starts_with("uia-input.") || detail.starts_with("accessibility.") || detail.starts_with("accessibility-registry.") || detail.starts_with("user-input.") || detail.starts_with("privileged.")) &&
+        detail.starts_with("uia-native.") || detail.starts_with("uia-input.") || detail.starts_with("accessibility.") || detail.starts_with("accessibility-registry.") || detail.starts_with("user-input.") || detail.starts_with("privileged.") || detail.starts_with("overlay-driver.") || detail.starts_with("overlay-driver-")) &&
       std::all_of(detail.begin(), detail.end(), [](char value) { return (value >= 'a' && value <= 'z') || (value >= '0' && value <= '9') || value == '.' || value == '-'; });
     throw UnitFailure(fixed ? error.what() : label);
   }
@@ -573,6 +574,7 @@ int main(int argc, char** argv) {
     run_check("accessibility-references", [] { static_cast<void>(run_accessibility_registry_tests()); });
     run_check("user-input-detection-and-stop", [] { static_cast<void>(run_user_input_tests()); });
     run_check("privileged-boundaries", [] { static_cast<void>(run_privileged_self_test_tests()); });
+    run_check("overlay-driver-boundaries", [] { static_cast<void>(run_overlay_driver_tests()); });
     std::cout << "Windows computer helper unit checks passed.\n";
     return 0;
   } catch (const UnitFailure& failure) {

@@ -22,6 +22,31 @@ string(LENGTH "${VECTOR_COMPUTER_SOURCE_DIGEST}" SOURCE_DIGEST_LENGTH)
 if(NOT SOURCE_DIGEST_LENGTH EQUAL 64 OR NOT VECTOR_COMPUTER_SOURCE_DIGEST MATCHES "^[0-9a-f]+$")
   message(FATAL_ERROR "C2 must supply the measured 64-character source digest.")
 endif()
+# Pure overlay-driver policy tests compile without any Electron runtime bytes. Only the
+# separate never-shipped driver executable requires C2's measured immutable artifact pins.
+option(VECTOR_COMPUTER_OVERLAY_DRIVER "Build the finite never-shipped overlay OS driver" OFF)
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/../../../package.json" DESKTOP_PACKAGE_JSON)
+string(JSON PINNED_OVERLAY_ELECTRON_VERSION GET "${DESKTOP_PACKAGE_JSON}" devDependencies electron)
+if(NOT PINNED_OVERLAY_ELECTRON_VERSION MATCHES "^[0-9]+[.][0-9]+[.][0-9]+$")
+  message(FATAL_ERROR "The desktop must pin an exact Electron version for overlay tests.")
+endif()
+set(VECTOR_OVERLAY_ELECTRON_VERSION "${PINNED_OVERLAY_ELECTRON_VERSION}" CACHE STRING "Pinned overlay test Electron version")
+if(NOT "${VECTOR_OVERLAY_ELECTRON_VERSION}" STREQUAL "${PINNED_OVERLAY_ELECTRON_VERSION}")
+  message(FATAL_ERROR "The overlay driver Electron version differs from the desktop pin.")
+endif()
+set(VECTOR_OVERLAY_PIN_VARIABLES
+  VECTOR_OVERLAY_ELECTRON_SHA256 VECTOR_OVERLAY_MAIN_SHA256 VECTOR_OVERLAY_PRELOAD_SHA256
+  VECTOR_OVERLAY_DEFAULT_APP_SHA256 VECTOR_OVERLAY_FAKE_HELPER_SHA256)
+foreach(PIN IN LISTS VECTOR_OVERLAY_PIN_VARIABLES)
+  set(${PIN} "" CACHE STRING "C2 measured overlay test artifact SHA-256")
+  if(VECTOR_COMPUTER_OVERLAY_DRIVER OR NOT "${${PIN}}" STREQUAL "")
+    string(LENGTH "${${PIN}}" OVERLAY_PIN_LENGTH)
+    if(NOT OVERLAY_PIN_LENGTH EQUAL 64 OR NOT "${${PIN}}" MATCHES "^[0-9a-f]+$")
+      message(FATAL_ERROR "C2 must supply every measured 64-character overlay artifact pin.")
+    endif()
+  endif()
+endforeach()
+
 foreach(HEADER identity.h blocklist.h)
   if(NOT EXISTS "${VECTOR_COMPUTER_GENERATED_DIR}/${HEADER}")
     message(FATAL_ERROR "Run the C1 identity generator before configuring this project.")
@@ -48,6 +73,7 @@ set(VECTOR_COMPUTER_MANIFEST "${CMAKE_CURRENT_SOURCE_DIR}/vector-computer.manife
 set(VECTOR_COMPUTER_IDENTITY_INPUT "${CMAKE_CURRENT_SOURCE_DIR}/../identity.json")
 set(VECTOR_COMPUTER_BLOCKLIST_INPUT "${CMAKE_CURRENT_SOURCE_DIR}/../blocklist.json")
 configure_file(src/build-config.h.in generated/build-config.h @ONLY)
+configure_file(src/overlay-driver-identity.h.in generated/overlay-driver-identity.h @ONLY)
 configure_file(version.rc.in generated/version.rc @ONLY)
 configure_file(tests/inputs.rc.in generated/test-inputs.rc @ONLY)
 
@@ -62,6 +88,10 @@ target_include_directories(computer-core PUBLIC src "${VECTOR_COMPUTER_GENERATED
 target_compile_definitions(computer-core PUBLIC UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX _WIN32_WINNT=0x0A00 WINVER=0x0A00)
 target_link_libraries(computer-core PUBLIC windowsapp uiautomationcore d3d11 dxgi gdi32 user32 shcore wintrust crypt32 advapi32 shell32 ole32 bcrypt xmllite version dwmapi propsys uuid shlwapi windowscodecs imm32 normaliz comctl32)
 
+# This support library is linked only by tests and the dedicated driver, never by the shipping entry.
+add_library(overlay-driver-support STATIC src/overlay_driver.cpp)
+target_link_libraries(overlay-driver-support PUBLIC computer-core)
+
 add_executable(vector-computer WIN32 src/main.cpp "${CMAKE_CURRENT_BINARY_DIR}/generated/version.rc")
 target_link_libraries(vector-computer PRIVATE computer-core)
 # The explicit resource is the whole application manifest; suppress the linker's separate default manifest.
@@ -72,8 +102,8 @@ add_executable(vector-computer-tests tests/main.cpp tests/protocol_tests.cpp tes
   tests/windows_identity_tests.cpp tests/windows_enum_tests.cpp tests/windows_icon_tests.cpp tests/windows_policy_tests.cpp tests/windows_process_tree_tests.cpp
   tests/program_registry_tests.cpp tests/windows_program_tests.cpp tests/guard_tests.cpp tests/capture_math_tests.cpp tests/capture_tests.cpp
   tests/input_tests.cpp tests/input_held_tests.cpp tests/input_keys_tests.cpp tests/input_guardian_tests.cpp tests/uia_native_tests.cpp tests/uia_input_tests.cpp
-  tests/accessibility_tests.cpp tests/accessibility_registry_tests.cpp tests/availability_tests.cpp tests/user_input_tests.cpp tests/privileged_self_test_tests.cpp "${CMAKE_CURRENT_BINARY_DIR}/generated/test-inputs.rc")
-target_link_libraries(vector-computer-tests PRIVATE computer-core xmllite version)
+  tests/accessibility_tests.cpp tests/accessibility_registry_tests.cpp tests/availability_tests.cpp tests/user_input_tests.cpp tests/privileged_self_test_tests.cpp tests/overlay_driver_tests.cpp "${CMAKE_CURRENT_BINARY_DIR}/generated/test-inputs.rc")
+target_link_libraries(vector-computer-tests PRIVATE computer-core overlay-driver-support xmllite version)
 add_dependencies(vector-computer-tests vector-computer)
 
 # A separate console fixture is copied under the generated channel executable name by the test driver.
@@ -87,10 +117,21 @@ add_dependencies(vector-computer-tests computer-test-caller)
 add_executable(computer-test-target WIN32 tests/privileged_target.cpp)
 target_link_libraries(computer-test-target PRIVATE computer-core comctl32)
 
-foreach(TARGET computer-core vector-computer vector-computer-tests computer-test-target computer-test-caller)
+if(VECTOR_COMPUTER_OVERLAY_DRIVER)
+  # The staging builder alone copies this dedicated test image to its private resources/computer/vector-computer.exe.
+  add_executable(computer-overlay-driver WIN32 tests/overlay_driver.cpp)
+  target_link_libraries(computer-overlay-driver PRIVATE overlay-driver-support)
+  set_target_properties(computer-overlay-driver PROPERTIES OUTPUT_NAME VectorComputerOverlayDriver WIN32_EXECUTABLE ON)
+endif()
+
+set(VECTOR_COMPUTER_TARGETS computer-core overlay-driver-support vector-computer vector-computer-tests computer-test-target computer-test-caller)
+if(VECTOR_COMPUTER_OVERLAY_DRIVER)
+  list(APPEND VECTOR_COMPUTER_TARGETS computer-overlay-driver)
+endif()
+foreach(TARGET IN LISTS VECTOR_COMPUTER_TARGETS)
   target_compile_options(${TARGET} PRIVATE
     "$<$<COMPILE_LANGUAGE:CXX>:/W4;/WX;/EHsc;/utf-8;/guard:cf;/sdl;/Brepro;/Zc:__cplusplus>")
-  if(NOT "${TARGET}" STREQUAL "computer-core")
+  if(NOT "${TARGET}" STREQUAL "computer-core" AND NOT "${TARGET}" STREQUAL "overlay-driver-support")
     target_link_options(${TARGET} PRIVATE /guard:cf /Brepro "/PDBALTPATH:%_PDB%")
     if(CMAKE_VS_PLATFORM_NAME STREQUAL "x64")
       target_link_options(${TARGET} PRIVATE /CETCOMPAT)

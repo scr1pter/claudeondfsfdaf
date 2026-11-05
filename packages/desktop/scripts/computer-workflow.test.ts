@@ -112,8 +112,13 @@ test("native jobs and privileged checks have independent deadlines with explicit
   }
 })
 
-test("Windows scenario isolation is explicit and confined to opt-in privileged steps", () => {
-  const isolated = ["Run explicitly isolated Windows scenarios", "Run explicitly isolated ARM64 scenarios"]
+test("native scenario isolation is explicit and confined to opt-in native steps", () => {
+  const isolated = [
+    "Run explicitly isolated Windows scenarios",
+    "Run explicitly isolated ARM64 scenarios",
+    "Run actual isolated macOS overlay Stop and capture",
+    "Run actual isolated medium-token Windows overlay Stop",
+  ]
   const found: string[] = []
   for (const value of Object.values(jobs)) {
     for (const step of steps(record(value))) {
@@ -121,7 +126,8 @@ test("Windows scenario isolation is explicit and confined to opt-in privileged s
       expect(isolated).toContain(step.name)
       expect(record(step.env).VECTOR_COMPUTER_TEST_ISOLATED).toBe("1")
       expect(String(step.if)).toContain("isolated-desktop")
-      expect(String(step.run)).toContain("--platform win32")
+      if (String(step.name).startsWith("Run actual isolated")) expect(String(step.run)).toContain("--native-stage")
+      else expect(String(step.run)).toContain("--platform win32")
       found.push(String(step.name))
     }
   }
@@ -317,18 +323,20 @@ test("the native lane covers supported runners and only expands PR matrices for 
 
 test("macOS rebuilds and checks shipping bytes before enforcing the measured lock", () => {
   const mac = steps(job("mac-build"))
-  const builds = mac.filter((step) => step.id === "build").flatMap((step) =>
-    typeof step.run === "string"
-      ? step.run
-          .split("\n")
-          .filter(
-            (line) =>
-              line.includes("build-computer-helper.ts") &&
-              line.includes("--platform darwin") &&
-              !line.includes("--check-lock"),
-          )
-      : [],
-  )
+  const builds = mac
+    .filter((step) => step.id === "build")
+    .flatMap((step) =>
+      typeof step.run === "string"
+        ? step.run
+            .split("\n")
+            .filter(
+              (line) =>
+                line.includes("build-computer-helper.ts") &&
+                line.includes("--platform darwin") &&
+                !line.includes("--check-lock"),
+            )
+        : [],
+    )
   expect(builds).toHaveLength(2)
   for (const build of builds) expect(build).toMatch(/--arch\s+universal.*--channel\s+"\$VECTOR_CHANNEL"/)
   const output = builds.map((build) => build.match(/--out\s+(\S+)/)?.[1])
@@ -373,6 +381,13 @@ test("shipping and test archives preserve executable modes while failure diagnos
         expect(expression(String(upload.overwrite), { "reuse-artifacts": true })).toBe(false)
         expect(step.if).toContain("steps.restore.outputs.restored")
         required.delete(filename)
+        expect(upload["if-no-files-found"]).toBe("error")
+        continue
+      }
+      if (/^computer-overlay-smoke-(?:darwin|win32)\.tar$/.test(filename)) {
+        expect(expression(String(upload.overwrite), { "reuse-artifacts": false })).toBe(true)
+        expect(expression(String(upload.overwrite), { "reuse-artifacts": true })).toBe(false)
+        expect(step.if).toContain("steps.overlay-restore.outputs.restored")
         expect(upload["if-no-files-found"]).toBe("error")
         continue
       }

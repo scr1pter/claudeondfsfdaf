@@ -1,11 +1,13 @@
 import { describe, expect, test } from "bun:test"
+import { spawnSync } from "node:child_process"
 import { createHash } from "node:crypto"
 import { cp, mkdtemp, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
-import { fileURLToPath } from "node:url"
+import { fileURLToPath, pathToFileURL } from "node:url"
 import {
   buildComputerHelper,
+  COMPUTER_HELPER_BUILD_INPUTS,
   checkIdentityLock,
   computeSourceDigest,
   createManifest,
@@ -53,6 +55,65 @@ async function fixture<T>(run: (root: string) => Promise<T>) {
     await rm(root, { recursive: true, force: true })
   }
 }
+
+test(
+  "actual Node compiler collection retains late diagnostics and separates bounds from compiler exits",
+  () =>
+    fixture(async (root) => {
+      const built = await Bun.build({
+        entrypoints: [fileURLToPath(new URL("./build-computer-helper.ts", import.meta.url))],
+        outdir: root,
+        target: "node",
+        format: "esm",
+        naming: "native-command.mjs",
+      })
+      expect(built.success).toBe(true)
+      const observed = spawnSync(
+        "node",
+        [
+          "--input-type=module",
+          "--eval",
+          String.raw`
+        const driver = await import(process.argv[1]);
+        const settings = {cwd: process.cwd(), env: {...process.env, PRIVATE_ENV: "ENV_SECRET"}, timeoutMs: 5000};
+        const summarize = result => ({
+          code: result.code, reason: result.failureReason,
+          bytes: Buffer.byteLength(result.diagnostic ?? ""),
+          head: result.diagnostic?.includes("COMPILER_HEAD"),
+          tail: result.diagnostic?.includes("LATE_MSVC_ERROR"),
+          stderr: result.diagnostic?.includes("COMPILER_STDERR"),
+          truncated: result.diagnostic?.includes("[native output truncated]"),
+        });
+        const late = await driver.runNativeCommand(process.execPath, ["-e",
+          'process.stderr.write("COMPILER_STDERR\\n");process.stdout.write("COMPILER_HEAD\\n"+"λ".repeat(50000)+"\\nLATE_MSVC_ERROR\\n",()=>process.exit(2))'], settings);
+        const capped = await driver.runNativeCommand(process.execPath, ["-e",
+          'process.stdout.write("COMPILER_HEAD\\n"+"x".repeat(4*1024*1024+65536),()=>process.exit(0))'], settings);
+        const deadline = await driver.runNativeCommand(process.execPath, ["-e",
+          'setTimeout(()=>process.exit(0),3000)'], {...settings, timeoutMs: 150});
+        const missing = await driver.runNativeCommand("vector-no-such-native-compiler", ["ARG_SECRET"], settings);
+        const invalid = await driver.runNativeCommand("invalid\0compiler", ["ARG_SECRET"], settings);
+        console.log(JSON.stringify({late: summarize(late), capped: summarize(capped), deadline: summarize(deadline), missing, invalid}));
+      `,
+          pathToFileURL(path.join(root, "native-command.mjs")).href,
+        ],
+        { cwd: directory, encoding: "utf8", timeout: 15_000, maxBuffer: 65_536 },
+      )
+      expect(observed.error).toBeUndefined()
+      expect(observed.status, observed.stderr).toBe(0)
+      const report = JSON.parse(observed.stdout)
+      expect(report.late).toMatchObject({ code: 2, head: true, tail: true, truncated: true })
+      expect(report.late.reason).toBeUndefined()
+      expect(report.late.bytes).toBeLessThanOrEqual(32_768)
+      expect(report.capped).toMatchObject({ code: 1, reason: "output-cap", head: true, truncated: true })
+      expect(report.capped.bytes).toBeLessThanOrEqual(32_768)
+      expect(report.deadline).toMatchObject({ code: 1, reason: "timed-out" })
+      for (const result of [report.missing, report.invalid])
+        expect(result).toMatchObject({ code: 1, stdout: "", stderr: "", failureReason: "spawn-failed" })
+      expect(observed.stdout).not.toContain("ARG_SECRET")
+      expect(observed.stdout).not.toContain("ENV_SECRET")
+    }),
+  25_000,
+)
 
 describe("computer helper build planning", () => {
   test("Windows toolset and SDK selectors use the actual developer environment and reject unmeasured values", () => {
@@ -251,9 +312,7 @@ describe("native build boundaries", () => {
         "native/computer-helper/identity.json",
         "native/computer-helper/blocklist.json",
         "icons/prod/icon.ico",
-        "scripts/build-computer-helper.ts",
-        "scripts/computer-helper-identity.ts",
-        "scripts/channel-ids.ts",
+        ...COMPUTER_HELPER_BUILD_INPUTS,
       ]) {
         await mkdir(path.dirname(path.join(root, item)), { recursive: true })
         await cp(path.join(directory, item), path.join(root, item))
@@ -350,9 +409,7 @@ describe("native build boundaries", () => {
           "native/computer-helper/identity.json",
           "native/computer-helper/blocklist.json",
           "icons/prod/icon.ico",
-          "scripts/build-computer-helper.ts",
-          "scripts/computer-helper-identity.ts",
-          "scripts/channel-ids.ts",
+          ...COMPUTER_HELPER_BUILD_INPUTS,
         ]) {
           await mkdir(path.dirname(path.join(root, item)), { recursive: true })
           await cp(path.join(directory, item), path.join(root, item))
@@ -408,9 +465,7 @@ describe("native build boundaries", () => {
         "native/computer-helper/identity.json",
         "native/computer-helper/blocklist.json",
         "icons/prod/icon.ico",
-        "scripts/build-computer-helper.ts",
-        "scripts/computer-helper-identity.ts",
-        "scripts/channel-ids.ts",
+        ...COMPUTER_HELPER_BUILD_INPUTS,
       ]) {
         await mkdir(path.dirname(path.join(root, item)), { recursive: true })
         await cp(path.join(directory, item), path.join(root, item))
@@ -551,13 +606,7 @@ describe("native build boundaries", () => {
 
   test("a serial injected universal build hashes final signed shipping bytes and emits a failing lock candidate", () =>
     fixture(async (root) => {
-      for (const item of [
-        "native/computer-helper",
-        "icons/prod",
-        "scripts/build-computer-helper.ts",
-        "scripts/computer-helper-identity.ts",
-        "scripts/channel-ids.ts",
-      ]) {
+      for (const item of ["native/computer-helper", "icons/prod", ...COMPUTER_HELPER_BUILD_INPUTS]) {
         await mkdir(path.dirname(path.join(root, item)), { recursive: true })
         await cp(path.join(directory, item), path.join(root, item), { recursive: true })
       }

@@ -12,6 +12,7 @@ const knownSuites = new Set([
   "runLifecycleTests",
   "runPackagedSelfTestTests",
   "runPrivilegedSelfTestTests",
+  "runOverlayDriverPolicyTests",
   "runBlocklistTests",
   "runPermissionsTests",
   "runGeometryTests",
@@ -163,9 +164,13 @@ async function runUnitDiagnostics() {
     })
     if (sdk.code !== 0 || !path.isAbsolute(sdk.stdout.trim())) throw new Error("The native SDK is unavailable.")
     const executable = path.join(scratch, "VectorComputerUnitDiagnostics")
-    const sources = (
-      await Promise.all([swiftFiles(path.join(native, "Sources")), swiftFiles(path.join(native, "Tests"))])
-    ).flat()
+    const sources = [
+      ...(
+        await Promise.all([swiftFiles(path.join(native, "Sources")), swiftFiles(path.join(native, "Tests"))])
+      ).flat(),
+      path.join(native, "TestOverlayDriver/Policy.swift"),
+      path.join(native, "TestOverlayDriver/PolicyTests.swift"),
+    ]
     const compiled = await runNativeCommand(
       "xcrun",
       swiftArguments({

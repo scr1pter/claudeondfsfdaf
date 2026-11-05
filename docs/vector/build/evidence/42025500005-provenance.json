@@ -1,0 +1,320 @@
+{
+  "run": 42025500005,
+  "head": "eb8a48d13131049cde138907fa4ddf049b63fdd6",
+  "helperVersion": "1.0.10",
+  "enforcedLockChanged": false,
+  "artifacts": [
+    {
+      "id": 13414905280,
+      "zipSha256": "110d4043fca5cee7472e920b6e0f0feb32f323ca0631f69d87c822a353043295",
+      "bytes": 2146,
+      "reports": {
+        "computer-darwin-core.json": {
+          "code": 0,
+          "counts": {
+            "passed": 31,
+            "skipped": 1
+          },
+          "nonPassing": [
+            {
+              "name": "privileged",
+              "status": "skipped",
+              "reason": "disabled"
+            }
+          ]
+        },
+        "computer-darwin-core.json.unit-diagnostic.json": {
+          "schemaVersion": 1,
+          "trigger": "complete",
+          "spawned": true,
+          "exitObserved": true,
+          "closeObserved": true,
+          "signaled": false,
+          "stdoutBytes": 36,
+          "stderrBytes": 0,
+          "elapsedMs": 9776,
+          "exitAfterMs": 9775,
+          "closeAfterMs": 9776,
+          "sample": {
+            "status": "target-exited",
+            "suites": [],
+            "waits": []
+          }
+        },
+        "computer-darwin-privileged.json": {
+          "code": 0,
+          "counts": {
+            "passed": 33,
+            "skipped": 13
+          },
+          "nonPassing": [
+            {
+              "name": "privileged",
+              "status": "skipped",
+              "reason": "native-skip"
+            },
+            {
+              "name": "privileged.capture-color-patch",
+              "status": "skipped",
+              "reason": "screen_denied"
+            },
+            {
+              "name": "privileged.capture-overlay-exclusion",
+              "status": "skipped",
+              "reason": "screen_denied"
+            },
+            {
+              "name": "privileged.ax-counter-increment",
+              "status": "skipped",
+              "reason": "accessibility_denied"
+            },
+            {
+              "name": "privileged.ax-value-set-and-readback",
+              "status": "skipped",
+              "reason": "accessibility_denied"
+            },
+            {
+              "name": "privileged.secure-field-refusal",
+              "status": "skipped",
+              "reason": "accessibility_denied"
+            },
+            {
+              "name": "privileged.tagged-click-increments",
+              "status": "skipped",
+              "reason": "accessibility_denied"
+            },
+            {
+              "name": "privileged.stale-capture-refusal",
+              "status": "skipped",
+              "reason": "accessibility_denied"
+            },
+            {
+              "name": "privileged.background-ax-without-pointer-or-focus",
+              "status": "skipped",
+              "reason": "accessibility_denied"
+            },
+            {
+              "name": "privileged.background-selection-insertion",
+              "status": "skipped",
+              "reason": "accessibility_denied"
+            },
+            {
+              "name": "privileged.helper-tagged-escape-ignored",
+              "status": "skipped",
+              "reason": "accessibility_denied"
+            },
+            {
+              "name": "privileged.foreign-escape-stops",
+              "status": "skipped",
+              "reason": "accessibility_denied"
+            },
+            {
+              "name": "privileged.owned-input-release",
+              "status": "skipped",
+              "reason": "accessibility_denied"
+            }
+          ]
+        },
+        "computer-darwin-privileged.json.unit-diagnostic.json": {
+          "schemaVersion": 1,
+          "trigger": "complete",
+          "spawned": true,
+          "exitObserved": true,
+          "closeObserved": true,
+          "signaled": false,
+          "stdoutBytes": 36,
+          "stderrBytes": 0,
+          "elapsedMs": 9297,
+          "exitAfterMs": 9297,
+          "closeAfterMs": 9297,
+          "sample": {
+            "status": "target-exited",
+            "suites": [],
+            "waits": []
+          }
+        }
+      }
+    },
+    {
+      "id": 13414477260,
+      "zipSha256": "26c20fa00fa27b011285bdaf1e9a7d21e12df7b131c1f8a64a67d6dc776a05f3",
+      "bytes": 2190,
+      "reports": {
+        "computer-darwin-matrix-privileged.json": {
+          "code": 0,
+          "counts": {
+            "passed": 33,
+            "skipped": 13
+          },
+          "nonPassing": [
+            {
+              "name": "privileged",
+              "status": "skipped",
+              "reason": "native-skip"
+            },
+            {
+              "name": "privileged.capture-color-patch",
+              "status": "skipped",
+              "reason": "screen_denied"
+            },
+            {
+              "name": "privileged.capture-overlay-exclusion",
+              "status": "skipped",
+              "reason": "screen_denied"
+            },
+            {
+              "name": "privileged.ax-counter-increment",
+              "status": "skipped",
+              "reason": "accessibility_denied"
+            },
+            {
+              "name": "privileged.ax-value-set-and-readback",
+              "status": "skipped",
+              "reason": "accessibility_denied"
+            },
+            {
+              "name": "privileged.secure-field-refusal",
+              "status": "skipped",
+              "reason": "accessibility_denied"
+            },
+            {
+              "name": "privileged.tagged-click-increments",
+              "status": "skipped",
+              "reason": "accessibility_denied"
+            },
+            {
+              "name": "privileged.stale-capture-refusal",
+              "status": "skipped",
+              "reason": "accessibility_denied"
+            },
+            {
+              "name": "privileged.background-ax-without-pointer-or-focus",
+              "status": "skipped",
+              "reason": "accessibility_denied"
+            },
+            {
+              "name": "privileged.background-selection-insertion",
+              "status": "skipped",
+              "reason": "accessibility_denied"
+            },
+            {
+              "name": "privileged.helper-tagged-escape-ignored",
+              "status": "skipped",
+              "reason": "accessibility_denied"
+            },
+            {
+              "name": "privileged.foreign-escape-stops",
+              "status": "skipped",
+              "reason": "accessibility_denied"
+            },
+            {
+              "name": "privileged.owned-input-release",
+              "status": "skipped",
+              "reason": "accessibility_denied"
+            }
+          ]
+        },
+        "computer-darwin-matrix-privileged.json.unit-diagnostic.json": {
+          "schemaVersion": 1,
+          "trigger": "complete",
+          "spawned": true,
+          "exitObserved": true,
+          "closeObserved": true,
+          "signaled": false,
+          "stdoutBytes": 36,
+          "stderrBytes": 0,
+          "elapsedMs": 12359,
+          "exitAfterMs": 12356,
+          "closeAfterMs": 12358,
+          "sample": {
+            "status": "target-exited",
+            "suites": [],
+            "waits": []
+          }
+        },
+        "computer-darwin-matrix.json": {
+          "code": 0,
+          "counts": {
+            "passed": 31,
+            "skipped": 1
+          },
+          "nonPassing": [
+            {
+              "name": "privileged",
+              "status": "skipped",
+              "reason": "disabled"
+            }
+          ]
+        },
+        "computer-darwin-matrix.json.unit-diagnostic.json": {
+          "schemaVersion": 1,
+          "trigger": "complete",
+          "spawned": true,
+          "exitObserved": true,
+          "closeObserved": true,
+          "signaled": false,
+          "stdoutBytes": 36,
+          "stderrBytes": 0,
+          "elapsedMs": 15197,
+          "exitAfterMs": 15192,
+          "closeAfterMs": 15196,
+          "sample": {
+            "status": "target-exited",
+            "suites": [],
+            "waits": []
+          }
+        }
+      }
+    },
+    {
+      "id": 13414527304,
+      "zipSha256": "cc6dc75b075156fca6ad2965b8efac5bc54d81480b458c9e4dbad5413e87f1b1",
+      "bytes": 965,
+      "reports": {
+        "computer-darwin-matrix.json": {
+          "code": 1,
+          "counts": {
+            "passed": 30,
+            "failed": 1,
+            "skipped": 1
+          },
+          "nonPassing": [
+            {
+              "name": "unit",
+              "status": "failed",
+              "reason": "wall-deadline"
+            },
+            {
+              "name": "privileged",
+              "status": "skipped",
+              "reason": "disabled"
+            }
+          ]
+        },
+        "computer-darwin-matrix.json.unit-diagnostic.json": {
+          "schemaVersion": 1,
+          "trigger": "wall-deadline",
+          "spawned": true,
+          "exitObserved": false,
+          "closeObserved": false,
+          "signaled": false,
+          "stdoutBytes": 0,
+          "stderrBytes": 0,
+          "elapsedMs": 30002,
+          "sample": {
+            "status": "deadline",
+            "suites": [],
+            "waits": []
+          }
+        }
+      }
+    }
+  ],
+  "completeMatchingPass": false,
+  "windows": {
+    "job": 127238724374,
+    "result": "compile-failed",
+    "fixedBy": "c4239534b4fb7d74cc555be2452730f76fba627f"
+  },
+  "intelStandaloneDiagnostic": "failed before emitting toolchain/suite output; no suite attribution"
+}
