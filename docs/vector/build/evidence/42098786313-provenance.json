@@ -1,0 +1,271 @@
+{
+  "run": 42098786313,
+  "head": "e7535097ac7f14a359afff64be464a20f10115f8",
+  "macJob": 127495900767,
+  "jobConclusion": "failure",
+  "candidateArtifact": {
+    "id": 13449975956,
+    "name": "computer-helper-darwin-lock-candidate-pr-e7535097ac7f14a359afff64be464a20f10115f8",
+    "zipSha256": "16ea979a5a637e014b579981b511aeea067075ab72c6d2f6edd6a2f82126d876",
+    "zipBytes": 477,
+    "zipDigestMatchesApi": true,
+    "rawSha256": "daea8350858e75ba3f314dd035522cac0db8b59227a5820c28e11aa5bcbe4d08",
+    "rawBytes": 441,
+    "createdAt": "2026-11-05T20:07:12Z",
+    "expiresAt": "2026-11-19T20:07:10Z",
+    "artifactRun": 42098786313,
+    "artifactHead": "e7535097ac7f14a359afff64be464a20f10115f8"
+  },
+  "reportsArtifact": {
+    "id": 13450100649,
+    "name": "computer-helper-darwin-reports-pr-e7535097ac7f14a359afff64be464a20f10115f8",
+    "zipSha256": "92d1bf65a878b5b89cdbf506aa3398d85fed70f1628e7d64e40e81b8e12d6bf7",
+    "zipBytes": 2220,
+    "zipDigestMatchesApi": true,
+    "createdAt": "2026-11-05T20:07:13Z",
+    "expiresAt": "2026-11-19T20:07:11Z",
+    "artifactRun": 42098786313,
+    "artifactHead": "e7535097ac7f14a359afff64be464a20f10115f8"
+  },
+  "candidate": {
+    "enforce": true,
+    "helperVersion": "1.0.14",
+    "sourceDigest": "b5c627541099fc4336a40961eb07e7ae2d39d3135f7fcc4407ea8979ba208496",
+    "toolchain": "swift:\nApple Swift version 6.1.2 (swiftlang-6.1.2.1.2 clang-1700.0.13.5)\nTarget: arm64-apple-macosx15.0\nsdk:15.5\nxcode:\nXcode 16.4\nBuild version 16F6",
+    "cdhash": {
+      "x64": "8ad55a1abec39c3cea95ae896cbf16cb35b9d7b5",
+      "arm64": "b1a65f7acb7a0d25b7a5e4ae1c7d4b66cd7c0ac8"
+    }
+  },
+  "builds": "production universal helper built twice; Require identical shipping bytes step passed",
+  "steps": {
+    "Build the channel universal helper twice": "success",
+    "Require identical shipping bytes": "success",
+    "Run required grant-free native checks": "success",
+    "Run explicitly isolated privileged scenarios": "success",
+    "Enforce the measured production identity lock": "failure",
+    "Preserve measured lock candidate": "success",
+    "Preserve check reports": "success"
+  },
+  "expectedLockFailure": {
+    "expected": true,
+    "status": "failure",
+    "enforcedAtMeasuredSource": true,
+    "lockHelperVersion": "1.0.13",
+    "candidateHelperVersion": "1.0.14",
+    "sameToolchainAsMeasured13": true,
+    "closedMessages": [
+      "The helper version changed; review and commit the measured identity lock.",
+      "The helper source digest changed; review and commit the measured identity lock.",
+      "The x64 helper cdhash changed; review and commit the measured identity lock.",
+      "The arm64 helper cdhash changed; review and commit the measured identity lock."
+    ]
+  },
+  "reports": {
+    "computer-darwin-core.json": {
+      "code": 0,
+      "counts": {
+        "passed": 31,
+        "failed": 0,
+        "skipped": 1
+      },
+      "nonPassing": [
+        {
+          "name": "privileged",
+          "status": "skipped",
+          "reason": "disabled"
+        }
+      ]
+    },
+    "computer-darwin-core.json.unit-diagnostic.json": {
+      "schemaVersion": 1,
+      "trigger": "complete",
+      "spawned": true,
+      "exitObserved": true,
+      "closeObserved": true,
+      "signaled": false,
+      "stdoutBytes": 36,
+      "stderrBytes": 2309,
+      "elapsedMs": 1471,
+      "exitAfterMs": 1471,
+      "closeAfterMs": 1471,
+      "sample": {
+        "status": "target-exited",
+        "suites": [],
+        "waits": []
+      },
+      "progress": {
+        "entered": true,
+        "passed": 24,
+        "complete": true,
+        "invalid": false
+      }
+    },
+    "computer-darwin-privileged.json": {
+      "code": 0,
+      "counts": {
+        "passed": 33,
+        "failed": 0,
+        "skipped": 13
+      },
+      "nonPassing": [
+        {
+          "name": "privileged",
+          "status": "skipped",
+          "reason": "native-skip"
+        },
+        {
+          "name": "privileged.capture-color-patch",
+          "status": "skipped",
+          "reason": "screen_denied"
+        },
+        {
+          "name": "privileged.capture-overlay-exclusion",
+          "status": "skipped",
+          "reason": "screen_denied"
+        },
+        {
+          "name": "privileged.ax-counter-increment",
+          "status": "skipped",
+          "reason": "accessibility_denied"
+        },
+        {
+          "name": "privileged.ax-value-set-and-readback",
+          "status": "skipped",
+          "reason": "accessibility_denied"
+        },
+        {
+          "name": "privileged.secure-field-refusal",
+          "status": "skipped",
+          "reason": "accessibility_denied"
+        },
+        {
+          "name": "privileged.tagged-click-increments",
+          "status": "skipped",
+          "reason": "accessibility_denied"
+        },
+        {
+          "name": "privileged.stale-capture-refusal",
+          "status": "skipped",
+          "reason": "accessibility_denied"
+        },
+        {
+          "name": "privileged.background-ax-without-pointer-or-focus",
+          "status": "skipped",
+          "reason": "accessibility_denied"
+        },
+        {
+          "name": "privileged.background-selection-insertion",
+          "status": "skipped",
+          "reason": "accessibility_denied"
+        },
+        {
+          "name": "privileged.helper-tagged-escape-ignored",
+          "status": "skipped",
+          "reason": "accessibility_denied"
+        },
+        {
+          "name": "privileged.foreign-escape-stops",
+          "status": "skipped",
+          "reason": "accessibility_denied"
+        },
+        {
+          "name": "privileged.owned-input-release",
+          "status": "skipped",
+          "reason": "accessibility_denied"
+        }
+      ]
+    },
+    "computer-darwin-privileged.json.unit-diagnostic.json": {
+      "schemaVersion": 1,
+      "trigger": "complete",
+      "spawned": true,
+      "exitObserved": true,
+      "closeObserved": true,
+      "signaled": false,
+      "stdoutBytes": 36,
+      "stderrBytes": 2309,
+      "elapsedMs": 1400,
+      "exitAfterMs": 1399,
+      "closeAfterMs": 1399,
+      "sample": {
+        "status": "target-exited",
+        "suites": [],
+        "waits": []
+      },
+      "progress": {
+        "entered": true,
+        "passed": 24,
+        "complete": true,
+        "invalid": false
+      }
+    }
+  },
+  "reportFiles": {
+    "computer-darwin-core.json": {
+      "rawBytes": 2611,
+      "rawSha256": "c8d5457bceb4d48f20e6d7600a360c2280f98541c25fec7b1e752c8a23680a92"
+    },
+    "computer-darwin-core.json.unit-diagnostic.json": {
+      "rawBytes": 438,
+      "rawSha256": "4dbf582a3d24f8f6f70a916f4b3bc4cabcd120aebc1178851dc72e5f571ede29"
+    },
+    "computer-darwin-privileged.json": {
+      "rawBytes": 4368,
+      "rawSha256": "070a4f3bd6fad17c3c5e9e13e8e60e200c363a259258e12a932284ec719a155b"
+    },
+    "computer-darwin-privileged.json.unit-diagnostic.json": {
+      "rawBytes": 438,
+      "rawSha256": "0d164dfa74372f2936db32c294b5b3393ae66dc4f10557d4e6e48f50c25f7c30"
+    }
+  },
+  "lifecycle": {
+    "computer-darwin-core.json": {
+      "unit": "passed",
+      "probe.first": "passed",
+      "probe.fresh": "passed",
+      "responsible": "passed",
+      "unverified-parent": "passed",
+      "channel-eof": "passed",
+      "parent-death": "passed",
+      "conformance.eof": "passed",
+      "conformance.shutdown": "passed",
+      "conformance.frame-too-large": "passed",
+      "conformance.heartbeat-loss": "passed"
+    },
+    "computer-darwin-privileged.json": {
+      "unit": "passed",
+      "probe.first": "passed",
+      "probe.fresh": "passed",
+      "responsible": "passed",
+      "unverified-parent": "passed",
+      "channel-eof": "passed",
+      "parent-death": "passed",
+      "conformance.eof": "passed",
+      "conformance.shutdown": "passed",
+      "conformance.frame-too-large": "passed",
+      "conformance.heartbeat-loss": "passed"
+    }
+  },
+  "independentSourceDigestVerification": {
+    "source": "e7535097ac7f14a359afff64be464a20f10115f8",
+    "method": "git archive source; fresh generated Identity.swift; archived generateIdentitySources and sourceDigestFor; archived workspace schema resolution; exact candidate toolchain",
+    "archiveSourceDigest": "b5c627541099fc4336a40961eb07e7ae2d39d3135f7fcc4407ea8979ba208496",
+    "currentSourceDigest": "b5c627541099fc4336a40961eb07e7ae2d39d3135f7fcc4407ea8979ba208496",
+    "sourceDrift": false,
+    "frozenLockSha256": "8aba65bc20cf71e0774f8378a8d5da1b465774e5ea7253ece155c19e580bcfa1",
+    "candidateSelfCheck": true
+  },
+  "admission": {
+    "helperVersion": "1.0.14",
+    "enforce": true,
+    "rawCandidateCopiedUnchanged": true,
+    "rawSha256": "daea8350858e75ba3f314dd035522cac0db8b59227a5820c28e11aa5bcbe4d08",
+    "path": "packages/desktop/native/computer-helper/macos/identity.lock.json",
+    "matchingLockRerunRequired": true
+  },
+  "matchingMatrix": "mac-test job127501272266 skipped because the enforced13 lock gate failed; no matching14 Intel/macOS26 result from this run.",
+  "signingAndElectron": "Later signing, generic Electron and native overlay stages were skipped behind the lock gate; no helper14 final signing/package evidence from this run.",
+  "scope": "Build-host helper14 reproducibility/core evidence with explicit disabled/missing-grant skips. The expected measured13 lock mismatch remains an actual job failure, not a pass. No full privileged, matrix, final package or release approval.",
+  "releaseReady": false
+}
