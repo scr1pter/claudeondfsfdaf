@@ -11,6 +11,7 @@ class ClaimValidation(unittest.TestCase):
         self.data = json.loads(Path(__file__).with_name("report-data.json").read_text(encoding="utf-8"))
 
     def extra(self):
+        self.data["additional_complete_studies"] = []
         self.data["additional_complete_study"] = {
             "status": "complete", "settlement_complete": True, "all_charges_retained": True,
             "quality_gate_met": True, "team_size_each": 7, "matched_native_audit_passed": True,
@@ -72,12 +73,19 @@ class ClaimValidation(unittest.TestCase):
         with self.assertRaises(AssertionError):
             build_brief.validate(self.data)
 
-    def test_neutral_complete_result_can_fail_quality(self):
+    def test_neutral_closed_result_can_fail_quality(self):
         extra = self.extra()
+        extra["status"] = "closed"
         extra["quality_gate_met"] = False
         extra["vector"].update(checks_passed=50)
         del extra["blinded_review"]
         build_brief.validate(self.data)
+
+    def test_running_followup_cannot_be_published_as_closed(self):
+        extra = self.extra()
+        extra["status"] = "running"
+        with self.assertRaises(AssertionError):
+            build_brief.validate(self.data)
 
     def test_every_completed_followup_is_validated(self):
         extra = self.extra()
@@ -106,6 +114,16 @@ class ClaimValidation(unittest.TestCase):
 
     def test_existing_skips_cannot_disappear_from_validation(self):
         self.data["legacy_cancellation_validation"]["prompt_abort_existing_skips"] = 0
+        with self.assertRaises(AssertionError):
+            build_brief.validate(self.data)
+
+    def test_post_study_hardening_cannot_claim_measured_paid_savings(self):
+        self.data["publication_validation"]["paid_savings_measured"] = True
+        with self.assertRaises(AssertionError):
+            build_brief.validate(self.data)
+
+    def test_printed_validation_totals_must_match_evidence(self):
+        self.data["publication_validation"]["processor_usage_tests_passed"] = 110
         with self.assertRaises(AssertionError):
             build_brief.validate(self.data)
 

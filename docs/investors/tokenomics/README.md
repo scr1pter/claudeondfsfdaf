@@ -1,8 +1,9 @@
 # Vector tokenomics investor brief
 
-Status: **preliminary scaffold**. Do not distribute the generated PDF as the final
-investor report until the new benchmark round is closed and its contents reviewed.
-This status belongs in this working README, not on the designed PDF pages.
+Status: **final six-page report**. Paid work is closed; the PDF is rendered and
+checked before publication. Editable data, the builder, claim tests and evidence
+remain in this folder. See `pdf-qa.json` for the published artifact's exact hash
+and final visual/text/link verification.
 
 The brief presents high-level product functions and measured benchmark outcomes.
 It contains no proprietary source, algorithms, internal thresholds or architecture
@@ -19,7 +20,7 @@ python build_brief.py --data report-data.json --out <private-output-directory>/v
 pdftoppm -r 120 -png <private-output-directory>/vector-tokenomics-brief.pdf <private-output-directory>/page
 ```
 
-`requirements.txt` pins the authoring-library versions used for the preliminary
+`requirements.txt` pins the authoring-library versions used for the
 build. The report does not fetch any source, model, account data or remote asset.
 
 The default font directory is the Windows standard font directory. `--font-dir`
@@ -34,14 +35,17 @@ text from the written PDF to check page count and required evidence labels.
 `historical-audit.json` retains other experiment cohorts and their qualifications.
 `build_brief.py` is reproducible document source, not application code.
 
-## Optional completed follow-up
+## Closed follow-up episodes
 
-`additional_complete_study` is initially null. A later fully settled matched study
-can add a fifth page with this object:
+`additional_complete_studies` contains two separately reported closed episodes.
+The legacy singular key is retained for compatibility. Here, `closed` means that
+execution ended and its charges reconcile; it does not mean the generated
+product passed, or that the configured team completed. A future closed episode
+can add a separate page with this object:
 
 ```json
 {
-  "status": "complete",
+  "status": "closed",
   "label": "Study name",
   "model": "exact matched model",
   "reasoning": "matched reasoning",
@@ -57,8 +61,8 @@ can add a fifth page with this object:
 }
 ```
 
-This is a schema example, not benchmark evidence. Pending, partial or unsettled
-episodes are rejected. A completed study that misses the quality gate is reported
+This is a schema example, not benchmark evidence. Pending or financially unsettled
+episodes are rejected. A closed study that misses the quality gate is reported
 neutrally; it cannot produce a quality-preserving savings claim. If new results
 need more nuanced treatment, revise content and re-render instead of compressing
 material information into an unreadable footnote.

@@ -277,6 +277,37 @@
         "vectorNoLowerInEveryDimensionForEveryReviewer": false,
         "scope": "Two bounded static reviews of exact final source; no app execution. Functional gate and original native audit remain separate. A higher total does not override a lower dimension. Original reviewer disagreements and interpretation limits are retained."
       }
+    },
+    {
+      "name": "Budget-limited LedgerDesk maintenance trial",
+      "source_path": "docs/benchmarks/agentic-heavy-v3/ledgerdesk-maintenance-2026-11-04",
+      "status": "closed_settled_episodes",
+      "model": "gpt-6.1-sol",
+      "reasoning": "High",
+      "configured_agents_each": 7,
+      "observed_vector_roles": 5,
+      "observed_codex_roles": 7,
+      "vector_usd": "1.4211116",
+      "codex_usd": "2.3666455",
+      "vector_requests": 58,
+      "codex_requests": 131,
+      "checks_passed_each": 53,
+      "checks_total_each": 54,
+      "check_provenance": {
+        "vector": "separate free final-source diagnostic; originalnot_run",
+        "codex": "original firstsubmission; finalsourceidentical"
+      },
+      "review_vector": [
+        45,
+        45
+      ],
+      "review_codex": [
+        48,
+        47
+      ],
+      "quality_priority_met": false,
+      "efficiency_claim_met": false,
+      "qualification": "Both cut by conservative request-reservation headroom. Actual team lifecycle unmatched: no Vector QA/judge. All189fees retained. Same invalidscope404vs400 assertion in both; original outcomes unchanged. Lower partial cost notaccepted asmatching-quality savings."
     }
   ],
   "non_inference_evidence": [
@@ -289,7 +320,7 @@
       "qualification": "Component accounting workload; no billion-token inference quality or throughput claim."
     },
     {
-      "name": "Latest V2 control suite",
+      "name": "Earlier V2 control suite",
       "focused_tests_passed": 220,
       "assertions": 845,
       "core_typecheck": "passed",
