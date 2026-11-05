@@ -6,7 +6,7 @@ import type { ReviewClient, ReviewMessage, ReviewModel } from "../../packages/ap
 import { VERIFY_JSON_SCHEMA } from "../../packages/core/src/review/schema"
 import { Ledger, type Limits } from "./budget"
 import { gitEnv, loadManifest, type Manifest } from "./dataset"
-import { candidateDiff, desktopReplay } from "./desktop"
+import { candidateDiff, desktopReplay, withReviewSettings } from "./desktop"
 import {
   ADAPTERS,
   admitReplay,
@@ -299,7 +299,7 @@ describe("the desktop replay", () => {
   })
 
   // A stand-in for the SDK client on an engine server whose instance is the prepared checkout, at the base.
-  function fakeClient(directory: string) {
+  function fakeClient(directory: string, findings: object[] = [bug]) {
     const prompts: string[] = []
     const replies = new Map<string, ReviewMessage[]>()
     let sessions = 0
@@ -322,7 +322,7 @@ describe("the desktop replay", () => {
                   summary: "total() now skips the first item.",
                   risk: "high",
                   files: [{ path: "app.py", note: "slice" }],
-                  findings: [bug],
+                  findings,
                 })
           replies.set(input.sessionID, [...(replies.get(input.sessionID) ?? []), message])
           return { data: message }
@@ -410,5 +410,68 @@ describe("the desktop replay", () => {
     expect(artifact.outcome).toBeUndefined()
     expect(artifact.error).toContain("no changes to review")
     expect(artifact.placed).toEqual([])
+  })
+
+  // VS-06: the verify policy replayed as a variant, as the engine replay takes it, so both runners can be compared.
+  test("replays a verify policy variant as the case's own review.json would carry it, keeping the base's verify", async () => {
+    // The base sets "verify": "blocking", which the desktop's legacy rule reads as "all" and the shared policy does not.
+    const settled = buildMirror(join(root, "mirror-settings"), { ".vector/review.json": '{"verify":"blocking"}' })
+    const caseView = { repository: view.repository, base: settled.base, head: settled.head }
+    const concern = { ...bug, severity: "concern", title: "total() of an empty list is not tested" }
+    const replay = async (name: string, config?: { verifyPolicy: "legacy" | "shared" }) => {
+      const directory = checkoutDirectory(join(root, `desktop-${name}`), planned.id)
+      expect(prepareCheckout({ mirror: settled.dir, view: caseView, directory })).toEqual([])
+      return desktopReplay({
+        planned: { ...planned, case: { ...planned.case, base: settled.base, head: settled.head } },
+        directory,
+        diff: candidateDiff(directory, caseView),
+        model,
+        client: fakeClient(directory, [bug, concern]).client,
+        ...(config ? { config } : {}),
+      })
+    }
+    const legacy = await replay("legacy")
+    const shared = await replay("shared", { verifyPolicy: "shared" })
+    for (const artifact of [legacy, shared]) expect(artifact.error).toBeUndefined()
+    expect(legacy.variant).toBeUndefined()
+    expect(shared.variant).toEqual({ verifyPolicy: "shared", applied: true })
+    // Legacy double-checks both findings; under the shared policy the base's "blocking" means blocking.
+    expect(legacy.outcome?.verification).toEqual({ checked: 2, rejected: 0, status: "ok" })
+    expect(shared.outcome?.verification).toEqual({ checked: 1, rejected: 0, status: "ok" })
+    expect(legacy.placed.map((item) => [item.severity, item.verified])).toEqual([
+      ["blocking", true],
+      ["concern", true],
+    ])
+    expect(shared.placed.map((item) => [item.severity, item.verified])).toEqual([
+      ["blocking", true],
+      ["concern", false],
+    ])
+  })
+
+  test("the variant's settings go over the file's own, and the artifact says whether the runner read them", async () => {
+    const files: Record<string, string> = {
+      ".vector/review.json": '﻿{"verify":"off","verifyPolicy":"legacy"}',
+      "app.py": "print(1)\n",
+    }
+    const inner = fakeClient(root).client
+    const settings = (text: string | undefined) =>
+      withReviewSettings(
+        {
+          ...inner,
+          file: { read: async ({ path }) => ({ data: { type: "text", content: text ?? files[path] ?? "" } }) },
+        },
+        { verifyPolicy: "shared" },
+      )
+    const read = async (client: ReturnType<typeof settings>, path: string) =>
+      (await client.client.file.read({ path })).data?.content
+    const kept = settings(undefined)
+    expect(kept.served()).toBe(false)
+    expect(await read(kept, "app.py")).toBe("print(1)\n")
+    expect(kept.served()).toBe(false)
+    expect(JSON.parse((await read(kept, ".vector/review.json"))!)).toEqual({ verify: "off", verifyPolicy: "shared" })
+    expect(kept.served()).toBe(true)
+    // A missing file, or one that is not a JSON object, reads as the variant's keys alone.
+    for (const text of ["", "not json", "[1, 2]"])
+      expect(JSON.parse((await read(settings(text), ".vector/review.json"))!)).toEqual({ verifyPolicy: "shared" })
   })
 })

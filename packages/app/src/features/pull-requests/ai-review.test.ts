@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { createVectorClient } from "@vectordevai/sdk/v2/client"
 import { parseUnifiedDiff } from "@vectordevai/core/review/diff"
-import { noteTriageUnchecked } from "@vectordevai/core/review/format"
+import { noteTriageUnchecked, noteVerifyUnfinished } from "@vectordevai/core/review/format"
 import { reviewPermissionRules } from "@vectordevai/core/review/permission"
 import { buildFinalizePrompt, SCOPE } from "@vectordevai/core/review/prompt"
 import { REVIEW_REPORT_JSON_SCHEMA, VERIFY_JSON_SCHEMA } from "@vectordevai/core/review/schema"
@@ -2067,5 +2067,80 @@ describe("the verify policy", () => {
       [offByOne.title, true],
     ])
     expect(outcome.selection.dropped).toContainEqual({ reason: "unconfirmed", count: 1 })
+  })
+
+  test("shared: a double-check that finished without a verdict for some findings says so, after a triage pass too", async () => {
+    const cheap: ReviewModel = {
+      providerID: "openrouter",
+      modelID: "cheap-coder",
+      context: 128_000,
+      price: { input: 0.2, output: 0.8 },
+      costKind: "priced",
+    }
+    // The double-check finishes, but answers for its first candidate, the blocking finding, alone.
+    const firstOnly = (call: PromptCall) => {
+      const [first] = verdicts(call).results
+      return answer({ results: first ? [first] : [] })
+    }
+    const reviewed = async (json: object) => {
+      const { client } = fakeClient({
+        files: { "src/list.ts": HEAD, ".vector/review.json": JSON.stringify(json) },
+        reply: (call) => (isVerify(call) ? firstOnly(call) : answer(report([offByOne, concern]))),
+      })
+      return (await run(client, { catalog: [sonnet, cheap] }))!
+    }
+
+    // Without a triage pass the concern is shown unverified, as before; the shared policy says so.
+    const plain = await Promise.all([reviewed({}), reviewed({ verifyPolicy: "shared" })])
+    for (const outcome of plain) {
+      expect(outcome.verification).toEqual({ checked: 2, rejected: 0, status: "ok" })
+      expect(outcome.selection.inline.map((finding) => [finding.severity, finding.verified])).toEqual([
+        ["blocking", true],
+        ["concern", undefined],
+      ])
+    }
+    expect(plain.map((outcome) => outcome.notes)).toEqual([[], [noteVerifyUnfinished(1, "unanswered")]])
+
+    // After a triage pass the concern is left out, as before; the shared policy says so.
+    const triage = { triageModel: "openrouter/cheap-coder" }
+    const triaged = await Promise.all([reviewed(triage), reviewed({ ...triage, verifyPolicy: "shared" })])
+    for (const outcome of triaged) {
+      expect(outcome.selection.inline.map((finding) => [finding.title, finding.verified])).toEqual([
+        [offByOne.title, true],
+      ])
+      expect(outcome.verification).toEqual({ checked: 2, rejected: 0, unconfirmed: 1, status: "ok" })
+    }
+    expect(triaged.map((outcome) => outcome.notes)).toEqual([
+      [],
+      [noteTriageUnchecked(1, "openrouter/cheap-coder", "anthropic/claude-sonnet-4-5", "unanswered")],
+    ])
+  })
+
+  test("shared: a double-check cut off by the review's time limit says how many findings it left and why", async () => {
+    const reviewed = async (json: object) => {
+      let release = (_message: ReviewMessage) => {}
+      const { client } = fakeClient({
+        files: { "src/list.ts": HEAD, ".vector/review.json": JSON.stringify(json) },
+        reply: (call) => {
+          if (!isVerify(call)) return answer(report([offByOne, concern]))
+          return new Promise<ReviewMessage>((resolve) => {
+            release = resolve
+          })
+        },
+        onAbort: () => release({ info: { role: "assistant", error: { name: "MessageAbortedError" } }, parts: [] }),
+      })
+      return (await run(client, { timeoutMs: 1_000 }))!
+    }
+    const [legacy, shared] = await Promise.all([reviewed({}), reviewed({ verifyPolicy: "shared" })])
+    for (const outcome of [legacy, shared]) {
+      expect(outcome.specialists.map((specialist) => specialist.status)).toEqual(["ok"])
+      expect(outcome.verification).toEqual({ checked: 2, rejected: 0, status: "skipped" })
+      expect(outcome.selection.inline.map((finding) => finding.verified)).toEqual([undefined, undefined])
+    }
+    // The legacy note, word for word, and the shared policy's count and reason.
+    expect(legacy.notes).toEqual([
+      "The double-check did not finish, so these findings were not re-checked. Treat them with more care before posting.",
+    ])
+    expect(shared.notes).toEqual([noteVerifyUnfinished(2, "time")])
   })
 })

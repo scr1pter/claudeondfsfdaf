@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { noteVerifyUnfinished } from "@vectordevai/core/review/format"
+import { noteTriageUnchecked, noteVerifyUnfinished } from "@vectordevai/core/review/format"
 import {
   combineCostKinds,
   contextRefusal,
@@ -300,9 +300,20 @@ describe("the verify policy", () => {
       "nit-0.5-fix",
       "nit-0.9-fix",
     ])
+    // After the triage pass the unanswered ones above a nit are left out (verifyUnconfirmed), so only the untrusted
+    // nits' suggestions are posted without a verdict. Together they are every candidate without one.
+    expect(ids(verifyUnanswered(candidates, verdicts, true))).toEqual(["nit-0.5-fix", "nit-0.9-fix"])
+    const leftOut = verifyUnconfirmed(candidates, verdicts, true).filter((item) => !verdicts.has(item.id))
+    expect([...ids(leftOut), ...ids(verifyUnanswered(candidates, verdicts, true))].toSorted()).toEqual(
+      ids(verifyUnanswered(candidates, verdicts)).toSorted(),
+    )
+    // A pass that answered for every candidate leaves nothing unanswered.
+    const answered = new Map(candidates.map((item) => [item.id, "confirmed"] as const))
+    expect(verifyUnanswered(candidates, answered)).toEqual([])
+    expect(verifyUnanswered(candidates, answered, true)).toEqual([])
   })
 
-  test("a verify pass that did not finish says how many findings were not re-checked, and why", () => {
+  test("a verify pass that left findings without a verdict says how many were not re-checked, and why", () => {
     expect(noteVerifyUnfinished(1, "budget")).toBe(
       "1 finding was not re-checked: too little of the review's budget was left for the verify pass.",
     )
@@ -311,6 +322,30 @@ describe("the verify policy", () => {
     )
     expect(noteVerifyUnfinished(2, "unfinished")).toBe(
       "2 findings were not re-checked: the verify pass did not finish.",
+    )
+    // It finished, but gave no verdict for them.
+    expect(noteVerifyUnfinished(1, "unanswered")).toBe(
+      "1 finding was not re-checked: the verify pass gave no verdict for it.",
+    )
+    expect(noteVerifyUnfinished(2, "unanswered")).toBe(
+      "2 findings were not re-checked: the verify pass gave no verdict for them.",
+    )
+  })
+
+  test("after a triage pass, the note for findings left out keeps its words and adds one for a pass that finished", () => {
+    // The wording both surfaces have always used for a double-check that did not finish (D3).
+    expect(noteTriageUnchecked(2, "a/cheap", "b/strong")).toBe(
+      "The double-check on b/strong did not finish, so 2 findings from the cheaper first pass on a/cheap were left out: with a triage model, only findings the review model confirmed are reported.",
+    )
+    expect(noteTriageUnchecked(1, "a/cheap", "b/strong", "unfinished")).toBe(
+      "The double-check on b/strong did not finish, so 1 finding from the cheaper first pass on a/cheap was left out: with a triage model, only findings the review model confirmed are reported.",
+    )
+    // The shared policy: it finished without a verdict for them.
+    expect(noteTriageUnchecked(1, "a/cheap", "b/strong", "unanswered")).toBe(
+      "The double-check on b/strong gave no verdict for 1 finding from the cheaper first pass on a/cheap, so it was left out: with a triage model, only findings the review model confirmed are reported.",
+    )
+    expect(noteTriageUnchecked(3, "a/cheap", "b/strong", "unanswered")).toBe(
+      "The double-check on b/strong gave no verdict for 3 findings from the cheaper first pass on a/cheap, so they were left out: with a triage model, only findings the review model confirmed are reported.",
     )
   })
 })

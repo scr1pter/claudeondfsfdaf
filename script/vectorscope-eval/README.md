@@ -443,6 +443,13 @@ bun script/vectorscope-eval/replay.ts --mirrors <dir> --prepare <out>
   prompt by pass and digest with what it reported spending, the sessions and
   their permission digests) plus what the panel's Post button would send,
   which is never sent.
+- `desktopReplay` takes the verify policy variant as the engine replay does,
+  `config: { verifyPolicy: "shared" }`. The desktop reads no environment, so
+  the variant reaches it as the case's own `.vector/review.json` would carry
+  it: the base's file with `verifyPolicy` set, its `verify` kept. The runner
+  never reads a `review.json` that the change itself edits, so the artifact's
+  `variant.applied` says whether the variant reached it; a case with
+  `applied: false` ran under the defaults and is left out of the comparison.
 
 Nothing here sends a model request. A replay that spends money is admitted by
 the eval budget ledger: `admitReplay` reserves the case's whole bound before

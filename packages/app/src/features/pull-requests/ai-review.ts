@@ -41,6 +41,7 @@ import {
   formatUsd,
   noteNothingToReview,
   noteTriageUnchecked,
+  noteVerifyUnfinished,
   sanitizeModelMarkdown,
   type RepoRef,
 } from "@vectordevai/core/review/format"
@@ -55,6 +56,7 @@ import {
   estimateCostUsd,
   planSpecialists,
   verifyCandidates,
+  verifyUnanswered,
   verifyUnconfirmed,
   type ReviewPrice,
   type Specialist,
@@ -904,6 +906,40 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
   const rejected = proposed.length - kept.length
   const unconfirmed = kept.length - checked.length
   const findings = [...checked, ...carried]
+  // What the panel says about the double-check. The shared policy (plan.ts) accounts for every candidate left without a
+  // verdict, whether or not the pass finished, in the engine's words. The legacy rule gives one note for a pass that did
+  // not finish.
+  const finished = verify?.status === "ok"
+  const unanswered =
+    config.verifyPolicy === "shared" && verify ? verifyUnanswered(candidates, verdicts, triage !== undefined).length : 0
+  const why = finished
+    ? "unanswered"
+    : verify?.status === "skipped" && stop.stopped() === "timeout"
+      ? "time"
+      : "unfinished"
+  const verifyNotes = !verify
+    ? []
+    : config.verifyPolicy === "shared"
+      ? [
+          ...(triage && unconfirmed
+            ? [
+                noteTriageUnchecked(
+                  unconfirmed,
+                  modelName(triage),
+                  modelName(model),
+                  finished ? "unanswered" : "unfinished",
+                ),
+              ]
+            : []),
+          ...(unanswered ? [noteVerifyUnfinished(unanswered, why)] : []),
+        ]
+      : !finished
+        ? [
+            triage && unconfirmed
+              ? noteTriageUnchecked(unconfirmed, modelName(triage), modelName(model))
+              : VERIFY_SKIPPED_NOTE,
+          ]
+        : []
   const report: ModelReport = {
     summary: (reports.find((entry) => entry.source === "review") ?? reports[0]!).report.summary,
     risk: RISKS[Math.max(...reports.map((entry) => RISKS.indexOf(entry.report.risk)))] ?? "low",
@@ -1023,13 +1059,7 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
     sessions: [...runs, ...(verify ? [verify] : [])].flatMap((run) => (run.sessionID ? [run.sessionID] : [])),
     banners: partialBanners(runs, timeoutMs),
     notes: [
-      ...(verify && verify.status !== "ok"
-        ? [
-            triage && unconfirmed
-              ? noteTriageUnchecked(unconfirmed, modelName(triage), modelName(model))
-              : VERIFY_SKIPPED_NOTE,
-          ]
-        : []),
+      ...verifyNotes,
       ...(config.triageModel && !triage && !named
         ? [
             `The triage model in .vector/review.json, ${config.triageModel}, is not connected, so the whole review ran on ${modelName(model)}.`,

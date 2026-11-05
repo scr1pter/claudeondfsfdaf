@@ -720,8 +720,10 @@ export const run: (
     // After a triage pass only what the review model confirmed is reported: a candidate it rejected, gave no verdict
     // for, or never saw because the double-check was skipped or failed is left out.
     const unchecked = new Set(verifyUnconfirmed(candidates, verdicts, triaged).map((finding) => finding.id))
-    // Under the shared policy a pass that did not finish says how many candidates it left unverified.
-    const unanswered = shared && verify && verify.status !== "ok" ? verifyUnanswered(candidates, verdicts).length : 0
+    // Under the shared policy the review says how many candidates it posts without a verdict, whether or not the pass
+    // finished; after a triage pass, how many it left out for want of one.
+    const unanswered = shared && verify ? verifyUnanswered(candidates, verdicts, triaged).length : 0
+    const finished = verify?.status === "ok"
     const kept = normalized.filter((finding) => verdicts.get(finding.id) !== "rejected")
     const findings = kept
       .filter((finding) => !unchecked.has(finding.id))
@@ -801,6 +803,28 @@ export const run: (
       })
     }
 
+    // What the review says about its verify pass. The shared policy (plan.ts) accounts for every candidate left without
+    // a verdict, whether or not the pass finished. The legacy rule notes a skipped pass and, after a triage pass, one
+    // that did not finish.
+    const triageNote = (why: "unfinished" | "unanswered") =>
+      unconfirmed ? [noteTriageUnchecked(unconfirmed, nameOf(triage), nameOf(input.model), why)] : []
+    const fixedNote = claims.length
+      ? [noteTriageFixedUnchecked(claims.length, nameOf(triage), nameOf(input.model))]
+      : []
+    const verifyNotes = !verify
+      ? []
+      : shared
+        ? [
+            ...(triaged ? triageNote(finished ? "unanswered" : "unfinished") : []),
+            ...(triaged && !finished ? fixedNote : []),
+            ...(unanswered ? [noteVerifyUnfinished(unanswered, finished ? "unanswered" : unfinished(verify))] : []),
+          ]
+        : triaged && !finished
+          ? [...triageNote("unfinished"), ...fixedNote]
+          : verify.status === "skipped"
+            ? [noteVerifySkipped()]
+            : []
+
     const spentByPass = yield* passes()
     return {
       report: checked,
@@ -828,18 +852,7 @@ export const run: (
         deletions: input.files.reduce((sum, file) => sum + file.deletions, 0),
       },
       notes: [
-        ...(triaged && verify && verify.status !== "ok"
-          ? [
-              ...(unconfirmed ? [noteTriageUnchecked(unconfirmed, nameOf(triage), nameOf(input.model))] : []),
-              ...(claims.length ? [noteTriageFixedUnchecked(claims.length, nameOf(triage), nameOf(input.model))] : []),
-            ]
-          : shared
-            ? unanswered && verify
-              ? [noteVerifyUnfinished(unanswered, unfinished(verify))]
-              : []
-            : verify?.status === "skipped"
-              ? [noteVerifySkipped()]
-              : []),
+        ...verifyNotes,
         ...(state.incomplete
           ? [
               "Reported cost may be incomplete; work with uncertain usage retained its estimated budget exposure for this review.",

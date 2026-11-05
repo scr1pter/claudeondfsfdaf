@@ -8,9 +8,10 @@ import {
   type ReviewModel,
   type ReviewOutcomeLite,
 } from "../../packages/app/src/features/pull-requests/ai-review"
+import { REVIEW_CONFIG_PATH } from "../../packages/core/src/review/config"
 import type { ReviewPrice } from "../../packages/core/src/review/plan"
 import { REVIEW_REPORT_JSON_SCHEMA, VERIFY_JSON_SCHEMA } from "../../packages/core/src/review/schema"
-import type { CostKind, Trust } from "../../packages/core/src/review/types"
+import type { CostKind, ReviewConfig, Trust } from "../../packages/core/src/review/types"
 import type { PlacedRecord } from "../../packages/engine/src/review/eval"
 import { untrustedGitEnv, UNTRUSTED_GIT } from "./dataset"
 import type { PlannedReplay } from "./replay"
@@ -59,6 +60,9 @@ export interface DesktopArtifact {
   placed: PlacedRecord[]
   // What the panel's Post button would send, which is never sent here.
   proposed?: { body: string; comments: LineComment[]; untrusted: boolean }
+  // The config variant replayed (VS-06), and whether it reached the runner: it never reads a review.json that the
+  // change itself edits, so such a case ran under the default settings and cannot be compared.
+  variant?: { verifyPolicy: ReviewConfig["verifyPolicy"]; applied: boolean }
   error?: string // why runReview failed, when it threw
 }
 
@@ -72,6 +76,9 @@ export interface DesktopReplayInput {
   source?: { vector?: string; manifest?: string }
   timeoutMs?: number
   now?: () => number
+  // A config variant, as the engine replay's `config` takes it: the verify policy (VS-06), read as a repository that
+  // chose it would be.
+  config?: Partial<Pick<ReviewConfig, "verifyPolicy">>
 }
 
 // Replays one case through the desktop runner as a pull request from someone else's fork: untrusted, with no viewer,
@@ -80,6 +87,8 @@ export interface DesktopReplayInput {
 export async function desktopReplay(input: DesktopReplayInput): Promise<DesktopArtifact> {
   const item = input.planned.case
   const recording = recordingClient(input.client)
+  const policy = input.config?.verifyPolicy
+  const settings = policy ? withReviewSettings(recording.client, { verifyPolicy: policy }) : undefined
   const repository = item.repository?.url
   const pr = {
     number: 1,
@@ -103,7 +112,7 @@ export async function desktopReplay(input: DesktopReplayInput): Promise<DesktopA
       ...(input.timeoutMs !== undefined ? { timeoutMs: input.timeoutMs } : {}),
       ...(input.now ? { now: input.now } : {}),
     },
-    recording.client,
+    settings?.client ?? recording.client,
   ).catch((error: unknown) => (error instanceof Error ? error : new Error(String(error))))
   const done = outcome instanceof Error ? undefined : outcome
   const posting = done ? buildDesktopReview(done, pr.url) : undefined
@@ -156,7 +165,40 @@ export async function desktopReplay(input: DesktopReplayInput): Promise<DesktopA
       verified: finding.verified === true,
     })),
     ...(posting ? { proposed: { body: posting.body, comments: posting.comments, untrusted: posting.untrusted } } : {}),
+    ...(policy && settings ? { variant: { verifyPolicy: policy, applied: settings.served() } } : {}),
     ...(outcome instanceof Error ? { error: outcome.message } : {}),
+  }
+}
+
+// A client that reads the case's review.json with these keys set over its own, as a repository that chose them would
+// have it, and passes every other call through. The file's other keys, "verify" among them, stay, as in the engine
+// replay, where the variant's policy arrives as REVIEW_VERIFY_POLICY and the base's "verify" still wins. A file that
+// is not a JSON object reads as one holding only these keys, which leaves the same settings as the engine's parser
+// does with the defaults. served() says whether the runner read the file at all.
+export function withReviewSettings(inner: ReviewClient, keys: Record<string, unknown>) {
+  let served = false
+  const client: ReviewClient = {
+    ...inner,
+    file: {
+      ...inner.file,
+      read: async (request) => {
+        if (request.path !== REVIEW_CONFIG_PATH) return inner.file.read(request)
+        served = true
+        const result = await inner.file.read(request).catch(() => undefined)
+        const text = result?.data?.type === "text" ? result.data.content : ""
+        return { data: { type: "text", content: JSON.stringify({ ...jsonObject(text), ...keys }) } }
+      },
+    },
+  }
+  return { client, served: () => served }
+}
+
+function jsonObject(text: string): Record<string, unknown> {
+  try {
+    const value: unknown = JSON.parse(text.replace(/^﻿/, ""))
+    return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {}
+  } catch {
+    return {}
   }
 }
 

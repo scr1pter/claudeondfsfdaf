@@ -60,15 +60,17 @@ export function planSpecialists(
 // An explicit setting wins over the default: REVIEW_VERIFY, then review.json's "verify", then the default, which is
 // SHARED_VERIFY_DEFAULT ("all") under this policy (the config parser applies it). Each id is a candidate once.
 //
-// A candidate the pass gave no verdict for stays unverified: outside a triage pass it is posted as before, without
-// the verified mark. A pass that was skipped, denied by the review's budget, stopped, timed out or failed leaves its
-// candidates unverified, and the review says they were not re-checked: noteVerifyUnfinished, with their number and
-// why, on the engine, and the panel's own note on the desktop.
+// A candidate the pass gave no verdict for is never passed over in silence, whether the pass finished or was skipped,
+// denied by the review's budget, stopped, timed out or failed. After a triage pass one above a nit is left out, and the
+// review says how many were (noteTriageUnchecked). Any other is posted without the verified mark, and the review says
+// how many were not re-checked and why (verifyUnanswered, noteVerifyUnfinished). Both surfaces give the same notes.
 //
 // verifyPolicy "shared" (D3's opt-in) applies all of this on every surface. Under "legacy", the default, each surface
-// keeps the rule it had before this policy: the engine leaves the untrusted-suggestion rule out of "all" and of a
-// triage pass and never says when a pass that was not skipped failed to finish, and the desktop reads "blocking" as
-// "all" and does not merge candidates that share an id.
+// keeps the rule it had before this policy. The engine leaves the untrusted-suggestion rule out of "all" and of a
+// triage pass, and notes only a pass it skipped or, after a triage pass, one that did not finish. The desktop reads
+// "blocking" as "all", does not merge candidates that share an id, and gives one note, without a count unless a triage
+// pass left findings out, for a pass that did not finish. Neither says anything of a finished pass that left out
+// verdicts.
 export type VerifySurface = "engine" | "desktop"
 
 export interface VerifyRule {
@@ -110,9 +112,10 @@ export function verifyUnconfirmed<F extends Candidate>(candidates: readonly F[],
     : []
 }
 
-// The candidates the verify pass gave no verdict for.
-export function verifyUnanswered<F extends Candidate>(candidates: readonly F[], verdicts: Verdicts) {
-  return candidates.filter((finding) => !verdicts.has(finding.id))
+// The candidates the verify pass gave no verdict for that are still posted, unverified. After a triage pass only nits
+// (an untrusted review's suggestions) are; verifyUnconfirmed leaves the others out.
+export function verifyUnanswered<F extends Candidate>(candidates: readonly F[], verdicts: Verdicts, triaged = false) {
+  return candidates.filter((finding) => !verdicts.has(finding.id) && !(triaged && finding.severity !== "nit"))
 }
 
 // The engine's rule before the policy: "all" and a triage pass leave out the untrusted-suggestion rule.

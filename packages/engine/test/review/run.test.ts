@@ -1654,6 +1654,102 @@ describe("the verify policy", () => {
           expect(outcome.selection.inline.map((item) => item.verified)).toEqual([undefined, undefined])
         }
         expect(failed.map((outcome) => outcome.notes)).toEqual([[], [noteVerifyUnfinished(2, "unfinished")]])
+
+        // Skipped for time: less than the verify pass's two minutes was left of the review's one.
+        const late = yield* Effect.forEach(policies, (verifyPolicy) =>
+          Effect.gen(function* () {
+            yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report([blocking])))
+            return yield* Review.run(
+              input(directory, { config: config({ verify: "blocking", verifyPolicy, timeoutMinutes: 1 }) }),
+            )
+          }),
+        )
+        for (const outcome of late)
+          expect(outcome.specialists.at(-1)).toEqual({ name: "verify", status: "skipped", steps: 0, detail: "time" })
+        expect(late.map((outcome) => outcome.notes)).toEqual([[noteVerifySkipped()], [noteVerifyUnfinished(1, "time")]])
+      }),
+    TIMEOUT,
+  )
+
+  it.instance(
+    "shared: a verify pass that finished without a verdict for some findings says so, after a triage pass too",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const llm = yield* TestLLMServer
+        const fs = yield* FSUtil.Service
+        const provider = testProviderConfig(llm.url)
+        Object.assign(provider.provider.lmstudio.models, {
+          "cheap-model": { ...provider.provider.lmstudio.models["test-model"], id: "cheap-model", name: "Cheap" },
+        })
+        yield* fs.writeWithDirs(
+          path.join(test.directory, "vector.json"),
+          JSON.stringify({ $schema: "https://vectordev.ai/config.json", ...provider }),
+        )
+        yield* fs.writeWithDirs(path.join(test.directory, "src/list.ts"), LIST_SOURCE)
+        yield* Effect.promise(() => trustWorkspace(test.directory))
+        const cheap = { ...ref, modelID: ModelV2.ID.make("cheap-model"), context: 100_000, costKind: "free" as const }
+        const policies = ["legacy", "shared"] as const
+        // The verify pass finishes, but answers for the blocking finding alone.
+        const onlyBlocking = () =>
+          llm.pushMatch(
+            VERIFY,
+            reply().tool("StructuredOutput", {
+              results: [{ id: blockingID, verdict: "confirmed", reason: "Reproduced." }],
+            }),
+          )
+
+        // Without a triage pass the concern is posted unverified, as before; the shared policy says so.
+        const plain = yield* Effect.forEach(policies, (verifyPolicy) =>
+          Effect.gen(function* () {
+            yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report([blocking, concern])))
+            yield* onlyBlocking()
+            return yield* Review.run(input(test.directory, { config: config({ verify: "all", verifyPolicy }) }))
+          }),
+        )
+        for (const outcome of plain) {
+          expect(outcome.specialists.at(-1)).toMatchObject({ name: "verify", status: "ok" })
+          expect(outcome.selection.inline.map((item) => [item.id, item.verified])).toEqual([
+            [blockingID, true],
+            [concernID, undefined],
+          ])
+        }
+        expect(plain.map((outcome) => outcome.notes)).toEqual([[], [noteVerifyUnfinished(1, "unanswered")]])
+
+        // After a triage pass the concern is left out, as before; the shared policy says so. Untrusted, it also checks
+        // the nit's suggestion, which is posted without a verdict and counted too.
+        const triaged = yield* Effect.forEach(policies, (verifyPolicy) =>
+          Effect.gen(function* () {
+            const before = (yield* llm.hits).filter(VERIFY).length
+            yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report([blocking, concern, nit])))
+            yield* onlyBlocking()
+            const outcome = yield* Review.run(
+              input(test.directory, {
+                triage: cheap,
+                trust: "untrusted",
+                config: config({ verify: "all", verifyPolicy, nits: true }),
+              }),
+            )
+            const asked = (yield* llm.hits).filter(VERIFY).slice(before)
+            return { outcome, ids: asked[0] ? candidateIDs(asked[0].body) : [] }
+          }),
+        )
+        expect(triaged.map((entry) => entry.ids)).toEqual([
+          [blockingID, concernID],
+          [blockingID, concernID, nitID],
+        ])
+        for (const { outcome } of triaged) {
+          expect(outcome.specialists.at(-1)).toMatchObject({ name: "verify", status: "ok" })
+          expect(outcome.selection.inline.map((item) => [item.id, item.verified])).toEqual([[blockingID, true]])
+          expect(outcome.selection.dropped).toContainEqual({ reason: "unconfirmed", count: 1 })
+        }
+        expect(triaged.map((entry) => entry.outcome.notes)).toEqual([
+          [],
+          [
+            noteTriageUnchecked(1, "lmstudio/cheap-model", "lmstudio/test-model", "unanswered"),
+            noteVerifyUnfinished(1, "unanswered"),
+          ],
+        ])
       }),
     TIMEOUT,
   )

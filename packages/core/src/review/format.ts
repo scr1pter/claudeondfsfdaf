@@ -549,22 +549,35 @@ export function noteVerifySkipped(): string {
   return "Blocking findings were not re-checked: too little budget or time was left for the verify pass."
 }
 
-// The shared verify policy (plan.ts, VS-06): a verify pass that did not finish, for whatever reason, says how many of
-// its candidates are posted without being re-checked.
-export function noteVerifyUnfinished(count: number, why: "budget" | "time" | "unfinished"): string {
+// The shared verify policy (plan.ts, VS-06): a verify pass that left candidates without a verdict says how many are
+// posted without being re-checked, and why: it did not finish, for one of these reasons, or it finished ("unanswered")
+// without a verdict for them.
+export function noteVerifyUnfinished(count: number, why: "budget" | "time" | "unfinished" | "unanswered"): string {
   const reason =
     why === "budget"
       ? "too little of the review's budget was left for the verify pass"
       : why === "time"
         ? "too little time was left for the verify pass"
-        : "the verify pass did not finish"
+        : why === "unanswered"
+          ? `the verify pass gave no verdict for ${count === 1 ? "it" : "them"}`
+          : "the verify pass did not finish"
   return `${formatCount(count)} ${count === 1 ? "finding was" : "findings were"} not re-checked: ${reason}.`
 }
 
 // With a triage model only what the review model confirmed is reported, so a double-check that did not finish leaves
-// the cheaper pass's findings out instead of posting them unchecked.
-export function noteTriageUnchecked(count: number, triage: string, model: string): string {
-  return `The double-check on ${model} did not finish, so ${formatCount(count)} ${count === 1 ? "finding" : "findings"} from the cheaper first pass on ${triage} ${count === 1 ? "was" : "were"} left out: with a triage model, only findings the review model confirmed are reported.`
+// the cheaper pass's findings out instead of posting them unchecked. Under the shared verify policy (plan.ts, VS-06) a
+// double-check that finished without a verdict for some of them says so too ("unanswered").
+export function noteTriageUnchecked(
+  count: number,
+  triage: string,
+  model: string,
+  why: "unfinished" | "unanswered" = "unfinished",
+): string {
+  const findings = `${formatCount(count)} ${count === 1 ? "finding" : "findings"} from the cheaper first pass on ${triage}`
+  const rule = "with a triage model, only findings the review model confirmed are reported."
+  if (why === "unanswered")
+    return `The double-check on ${model} gave no verdict for ${findings}, so ${count === 1 ? "it was" : "they were"} left out: ${rule}`
+  return `The double-check on ${model} did not finish, so ${findings} ${count === 1 ? "was" : "were"} left out: ${rule}`
 }
 
 // With a triage model only the review model can close an earlier finding, so when its check did not finish the

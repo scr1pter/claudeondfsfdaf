@@ -443,3 +443,53 @@ imports, so D3's opt-in does not apply. No generator input changed.
   its prompt cache, and whether review passes are exempt from the multi-agent
   task limits. All three depend on `self-evolving`, which is not on this
   branch, and each is a measured variant, so none is built here.
+
+## 2026-11-04 · VS-06 Verification parity, completed
+
+The second pass on VS-06. Each change is behind the same opt-in,
+`"verifyPolicy": "shared"`; with it off both surfaces behave as before, and new
+tests pin the legacy notes word for word. Where an entry above changes, it says
+which.
+
+- **No candidate is left without a verdict in silence (amends "Incomplete
+  verify" above).** The row's tests cover "incomplete verify", and a verify
+  pass that finishes without a verdict for some candidates is one. Under
+  "shared" both surfaces now account for every candidate left without a
+  verdict, whether the pass finished or not. Outside a triage pass the review
+  says how many it posts unverified and why (`noteVerifyUnfinished`, with a new
+  reason, `"unanswered"`, for a pass that finished). After a triage pass it
+  says how many it left out (`noteTriageUnchecked`, with a new optional reason,
+  `"unanswered"`). In an untrusted review it also counts the nits' suggestions
+  the pass left without a verdict, which are posted unverified
+  (`verifyUnanswered` in core `plan.ts` now takes `triaged`). The legacy rule is
+  unchanged on both surfaces: the engine notes only a skipped pass, or after a
+  triage pass one that did not finish, and the desktop gives its one general
+  note for a pass that did not finish. Neither says anything about a finished
+  pass that left out verdicts.
+- **The desktop uses the engine's notes under "shared" (amends "The desktop's
+  notes are unchanged" in "Incomplete verify" above).** With "shared" on, the
+  panel gives the same
+  core notes, with the count and the reason, as the engine. A double-check cut
+  off by the review's time limit gives `"time"`, and any other stop or failure
+  gives `"unfinished"`. The desktop cannot tell a run-guard budget stop from
+  other failures, so it never gives `"budget"`.
+- **The desktop eval driver takes the variant (VS-02 adapter; the first pass
+  left it without one).** `desktopReplay` takes
+  `config: { verifyPolicy }`, as `ReviewEval.replay` does. The desktop runner
+  reads no environment, so the variant reaches it as the case's own
+  `.vector/review.json` would carry it. That is the base's file with
+  `verifyPolicy` set and its other keys kept, so the base's `verify` still wins,
+  as in the engine replay. The runner never reads a `review.json` that the
+  change edits, so the artifact's `variant.applied` records whether the variant
+  reached it. No app file changed for this; the driver wraps the client's file
+  read. Its tests are in `script/vectorscope-eval/replay.test.ts`, and the eval
+  README describes it.
+- **Still not measured, so no default changed.** "Evaluate precision, recall
+  and added spend before changing defaults" still needs paid replays of
+  `legacy` against `{ verifyPolicy: "shared" }` on both adapters. They wait for
+  three things outside this branch's code: the owner's protected
+  `vectorscope-eval` environment and its new key (D7), the pilot budget that
+  follows from them (D5), and a paid replay entry point. That entry point
+  (VS-02/VS-03's open note above) can only be exercised after D7, and for the
+  desktop it also needs an engine server. `"legacy"` stays the default on every
+  surface.
