@@ -620,3 +620,8 @@ This is source checkpoint64 of73, helper1.0.10. Sources add43 injected groups (A
 ### Engine Windows-menu consent roundtrip repair
 
 The engine's sensitive-ask window target copier now retains a deep copy of observed Windows menu ancestry and the actual accelerator (including positively observed absence). Without it, Main's exact window-menu consent witness could not match the ask. Three real tool/permission/fake-bridge regressions cover localized paste, absent accelerators and changed Unicode ancestry invalidating earlier consent. The focused file passes174 other cases, and the live roundtrip passes its12 assertions after dropping an unrelated inspection-count assumption; engine typecheck passes with the legacy Mac fixtures explicitly typed through their Mac identity base. The production runtime change is confined to the target copier; the prepared C8 Node smoke is excluded from this repair.
+
+
+### Windows test-executable SDK repair
+
+Run42016276009 at69a5ea10 compiles/links the x64 production helper, then stops compiling the test executable: a synthetic key-code pair narrows inferred char/int into WORD, one accessibility fixture shadows its node map, and a fixture uses the unavailable std::wstring to_hstring overload. The repair gives fixture pairs explicit native widths, renames the local list and compares actual wide strings directly. Assertions and warning enforcement are preserved. Runtime/token/conformance checks have not executed yet, and ARM64 has not been validated for this new source. Dirty W9 APIs and tests are excluded from this repair commit.

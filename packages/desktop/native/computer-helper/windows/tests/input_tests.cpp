@@ -243,10 +243,10 @@ struct Fixture {
     if (!semantic) throw Failure{L"unsupported_action", L"Synthetic key has no complete mapping."};
     InputNativeChord value; value.semantic = *semantic; value.keys = modifiers(semantic->modifiers);
     InputRelease release{InputReleaseKind::scan_key, 'A', 0x1e, false, 0};
-    const std::map<std::wstring, std::pair<WORD, WORD>> codes{{L"a", {'A', 0x1e}}, {L"c", {'C', 0x2e}}, {L"i", {'I', 0x17}},
-      {L"q", {'Q', 0x10}}, {L"s", {'S', 0x1f}}, {L"v", {'V', 0x2f}}, {L"x", {'X', 0x2d}}, {L"y", {'Y', 0x15}}, {L"z", {'Z', 0x2c}},
-      {L"4", {'4', 0x05}}, {L"$", {'4', 0x05}}, {L"f5", {VK_F5, 0x3f}}, {L"f12", {VK_F12, 0x58}},
-      {L"arrowleft", {VK_LEFT, 0x4b}}, {L"tab", {VK_TAB, 0x0f}}, {L"backspace", {VK_BACK, 0x0e}}, {L"delete", {VK_DELETE, 0x53}}};
+    const std::map<std::wstring, std::pair<WORD, WORD>> codes{{L"a", {WORD{'A'}, WORD{0x1e}}}, {L"c", {WORD{'C'}, WORD{0x2e}}}, {L"i", {WORD{'I'}, WORD{0x17}}},
+      {L"q", {WORD{'Q'}, WORD{0x10}}}, {L"s", {WORD{'S'}, WORD{0x1f}}}, {L"v", {WORD{'V'}, WORD{0x2f}}}, {L"x", {WORD{'X'}, WORD{0x2d}}}, {L"y", {WORD{'Y'}, WORD{0x15}}}, {L"z", {WORD{'Z'}, WORD{0x2c}}},
+      {L"4", {WORD{'4'}, WORD{0x05}}}, {L"$", {WORD{'4'}, WORD{0x05}}}, {L"f5", {WORD{VK_F5}, WORD{0x3f}}}, {L"f12", {WORD{VK_F12}, WORD{0x58}}},
+      {L"arrowleft", {WORD{VK_LEFT}, WORD{0x4b}}}, {L"tab", {WORD{VK_TAB}, WORD{0x0f}}}, {L"backspace", {WORD{VK_BACK}, WORD{0x0e}}}, {L"delete", {WORD{VK_DELETE}, WORD{0x53}}}};
     const auto found = codes.find(semantic->key);
     if (found != codes.end()) { release.virtual_key = found->second.first; release.scan = found->second.second; }
     release.extended = semantic->key == L"arrowleft" || semantic->key == L"delete";

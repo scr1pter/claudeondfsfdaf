@@ -180,8 +180,8 @@ struct Fixture {
   JsonObject point_args() const { JsonObject args; args.Insert(L"captureId", JsonValue::CreateStringValue(frame.id)); args.Insert(L"x", JsonValue::CreateNumberValue(20)); args.Insert(L"y", JsonValue::CreateNumberValue(25)); return args; }
   JsonObject focus_args() const { return JsonObject{}; }
   std::wstring mint(std::wstring_view name = L"Plain field") {
-    reset(); service->tree(tree_args(), context(), done()); const auto nodes = reply().GetNamedArray(L"nodes");
-    for (const auto& value : nodes) if (value.GetObject().GetNamedString(L"name") == winrt::hstring(name)) { const auto ref = std::wstring(value.GetObject().GetNamedString(L"ref")); reset(); return ref; }
+    reset(); service->tree(tree_args(), context(), done()); const auto listed_nodes = reply().GetNamedArray(L"nodes");
+    for (const auto& value : listed_nodes) if (value.GetObject().GetNamedString(L"name") == winrt::hstring(name)) { const auto ref = std::wstring(value.GetObject().GetNamedString(L"ref")); reset(); return ref; }
     throw std::runtime_error("accessibility.missing-fixture-node");
   }
   JsonObject resolve(const std::wstring& ref) { reset(); JsonObject args; args.Insert(L"ref", JsonValue::CreateStringValue(ref)); service->resolve(args, context(), done()); return reply(); }
@@ -193,7 +193,7 @@ struct Fixture {
   void phase() { service->invalidate_observations(); ++session.observation_epoch; session.revision = *session.revision + 1; service->note_session(session); reset(); }
   UiaObservation observation() const { return UiaObservation{window, current_root, text, nodes.at(text->identity).security, clock}; }
   void structural() const {
-    const auto value = reply(); require(value.GetNamedString(L"role") == L"Window" && value.GetNamedString(L"windowId") == winrt::to_hstring(window_id(window.hwnd)), "accessibility.real-window-structural-result");
+    const auto value = reply(); require(value.GetNamedString(L"role") == L"Window" && std::wstring(value.GetNamedString(L"windowId")) == window_id(window.hwnd), "accessibility.real-window-structural-result");
     for (const auto key : {L"ref", L"elementId", L"name", L"value", L"document", L"layout", L"focusedMenuShortcuts"}) require(!value.HasKey(key), "accessibility.no-content-in-structural-result");
     require(roots == 0 && names.empty() && values.empty() && securities.empty() && point_reads == 0 && focused_reads == 0, "accessibility.structural-never-calls-uia");
   }
