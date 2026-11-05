@@ -2,9 +2,41 @@ import { describe, expect, test } from "bun:test"
 import { mkdtemp, rm } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
-import { macPackagePaths, packageEnvironment, packageRequest } from "./package-desktop"
+import { computerHelperPackageRequests, macPackagePaths, packageEnvironment, packageRequest } from "./package-desktop"
 
 describe("desktop package request", () => {
+  test("prepares exactly the helper platforms and architectures requested by electron-builder", () => {
+    const host = { hostPlatform: "linux", hostArchitecture: "x64" }
+    expect(computerHelperPackageRequests({ ...host, builderArgs: ["--linux", "--arm64"] })).toEqual([
+      { platform: "linux", architectures: [] },
+    ])
+    expect(
+      computerHelperPackageRequests({
+        ...host,
+        builderArgs: ["--mac", "dmg:arm64", "zip:arm64", "--win=nsis:x64", "--publish", "never"],
+      }),
+    ).toEqual([
+      { platform: "darwin", architectures: ["arm64"] },
+      { platform: "win32", architectures: ["x64"] },
+    ])
+    expect(computerHelperPackageRequests({ ...host, builderArgs: ["--mac=zip", "--universal"] })).toEqual([
+      { platform: "darwin", architectures: ["x64", "arm64"] },
+    ])
+    expect(computerHelperPackageRequests({ ...host, builderArgs: ["--win", "--arm64", "--x64"] })).toEqual([
+      { platform: "win32", architectures: ["x64", "arm64"] },
+    ])
+    expect(
+      computerHelperPackageRequests({ hostPlatform: "darwin", hostArchitecture: "arm64", builderArgs: [] }),
+    ).toEqual([{ platform: "darwin", architectures: ["arm64"] }])
+    expect(() => computerHelperPackageRequests({ ...host, builderArgs: ["--win", "--universal"] })).toThrow(
+      "Universal Windows",
+    )
+    expect(() => computerHelperPackageRequests({ ...host, builderArgs: ["--mac", "--ia32"] })).toThrow("x64 and arm64")
+    expect(() => computerHelperPackageRequests({ ...host, builderArgs: ["--win=nsis:ia32"] })).toThrow(
+      "supported computer helper",
+    )
+  })
+
   test("routes every package script through the release safeguard", async () => {
     const manifest: unknown = await Bun.file(path.join(import.meta.dir, "..", "package.json")).json()
     expect(manifest).toBeObject()

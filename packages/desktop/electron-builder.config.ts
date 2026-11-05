@@ -7,6 +7,8 @@ import { Arch } from "electron-builder"
 import type { Configuration } from "electron-builder"
 import { APP_IDS, EXECUTABLE_NAMES } from "./scripts/channel-ids"
 import { verifyNativeModules } from "./scripts/verify-native"
+import { computerHelperPaths } from "./scripts/computer-helper-package"
+import { computerHelperSkipRequested, prepareComputerHelperNode } from "./scripts/computer-helper-package-node"
 
 const execFileAsync = promisify(execFile)
 const packageDir = path.dirname(fileURLToPath(import.meta.url))
@@ -48,6 +50,11 @@ const channel = (() => {
   return "dev"
 })()
 const unsignedMac = allowUnsignedRelease && !signMac && channel !== "dev"
+const skipComputerHelper = computerHelperSkipRequested(channel, process.env)
+const macComputerHelper = skipComputerHelper ? undefined : computerHelperPaths("darwin", channel, undefined, packageDir)
+const windowsComputerHelper = skipComputerHelper
+  ? undefined
+  : computerHelperPaths("win32", channel, undefined, packageDir)
 
 if (process.env.GITHUB_ACTIONS === "true" && channel === "prod" && !allowUnsignedRelease) {
   if (process.platform === "darwin" && (!signMac || !notarizeMac || !signDmg)) {
@@ -80,6 +87,7 @@ const getBase = (appId: string, executableName: string): Configuration => ({
   afterPack: async (context) => {
     const platform = context.electronPlatformName
     if (platform !== "darwin" && platform !== "win32" && platform !== "linux") return
+    await prepareComputerHelperNode(context, { channel, directory: packageDir, environment: process.env })
     const app = path.join(context.appOutDir, `${context.packager.appInfo.productFilename}.app`)
     const resources =
       platform === "darwin" ? path.join(app, "Contents", "Resources") : path.join(context.appOutDir, "resources")
@@ -116,9 +124,11 @@ const getBase = (appId: string, executableName: string): Configuration => ({
     },
   ],
   mac: {
+    extraFiles: macComputerHelper?.extraFiles ?? [],
     extraResources: [
       { from: "node_modules/electron/dist/LICENSE", to: "Electron-LICENSE.txt" },
       { from: "node_modules/electron/dist/LICENSES.chromium.html", to: "LICENSES.chromium.html" },
+      ...(macComputerHelper?.extraResources ?? []),
     ],
     category: "public.app-category.developer-tools",
     icon: `resources/icons/icon.icns`,
@@ -144,6 +154,9 @@ const getBase = (appId: string, executableName: string): Configuration => ({
     schemes: ["vector"],
   },
   win: {
+    extraResources: windowsComputerHelper?.extraResources ?? [],
+    // The helper manifest/pin describe its final bytes; release signing happens before the desktop build.
+    signExts: ["!vector-computer.exe"],
     icon: `resources/icons/icon.ico`,
     signExecutable: !allowUnsignedRelease,
     signtoolOptions: allowUnsignedRelease

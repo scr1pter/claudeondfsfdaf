@@ -32,6 +32,25 @@ for (const channel of channels) {
       from: "out/vector-build.json",
       to: "vector-build.json",
     })
+    expect(config.mac?.extraFiles).toEqual([
+      {
+        from: path.join(import.meta.dirname, "native/out/darwin/VectorComputer.app"),
+        to: "Helpers/VectorComputer.app",
+      },
+    ])
+    expect(config.mac?.extraResources).toContainEqual({
+      from: path.join(import.meta.dirname, "native/out/darwin/computer-helper.json"),
+      to: "computer-helper.json",
+    })
+    expect(config.win?.extraResources).toEqual([
+      {
+        from: path.join(import.meta.dirname, "native/out/win32/${arch}"),
+        to: "computer",
+        filter: ["vector-computer.exe", "computer-helper.json"],
+      },
+    ])
+    expect(config.win?.signExts).toEqual(["!vector-computer.exe"])
+    expect(config.files).toEqual(["out/**/*", "resources/**/*"])
     if (channel.channel === "dev") {
       expect(config.electronFuses).toBeUndefined()
       return
@@ -127,4 +146,38 @@ test("electron-builder merges common and macOS notices into packaged Resources",
     expect(await Bun.file(matching[0]!.from).exists()).toBe(true)
     expect((await Bun.file(matching[0]!.from).text()).length).toBeGreaterThan(100)
   }
+})
+
+test("electron-builder expands the Windows architecture and adds no helper to Linux resources", async () => {
+  const require = createRequire(import.meta.url)
+  const builderRequire = createRequire(require.resolve("electron-builder/package.json"))
+  const { getFileMatchers } = await import(builderRequire.resolve("app-builder-lib/out/fileMatcher.js"))
+  const config = (await import("./electron-builder.config.ts?computer-resources")).default
+  const destination = path.join(import.meta.dirname, "dist/computer-resource-test/resources")
+  for (const architecture of ["x64", "arm64"]) {
+    const matchers: { from: string; to: string; patterns: string[] }[] = getFileMatchers(
+      config,
+      "extraResources",
+      destination,
+      {
+        defaultSrc: import.meta.dirname,
+        customBuildOptions: config.win,
+        globalOutDir: path.join(import.meta.dirname, "dist"),
+        macroExpander: (value: string) => value.replaceAll("${arch}", architecture),
+      },
+    )
+    const helper = matchers.filter((entry) => entry.to === path.join(destination, "computer"))
+    expect(helper).toHaveLength(1)
+    expect(helper[0]!.from).toBe(path.join(import.meta.dirname, "native/out/win32", architecture))
+    expect(helper[0]!.patterns).toEqual(["vector-computer.exe", "computer-helper.json"])
+  }
+  const linux: { from: string; to: string }[] = getFileMatchers(config, "extraResources", destination, {
+    defaultSrc: import.meta.dirname,
+    customBuildOptions: config.linux,
+    globalOutDir: path.join(import.meta.dirname, "dist"),
+    macroExpander: (value: string) => value,
+  })
+  expect(
+    linux.some((entry) => entry.from.includes("computer-helper") || entry.to === path.join(destination, "computer")),
+  ).toBe(false)
 })

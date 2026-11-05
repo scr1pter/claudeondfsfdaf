@@ -730,3 +730,10 @@ Each item keeps the contract's intent (sections 1.5 K, 2.9, 4.2 D23; INV-C8; E13
 1. The standalone privileged harness has no serving stdin pipe. Its explicit parent-only lifecycle validates and holds the real immediate Caller before expensive identity work; serving retains its separate pipe requirement. Both keep the same parent-death fuse and synchronous currentness fences.
 2. Lifecycle ownership extends through actual report/stdout completion. Releasing it at the end of native operations would leave reporting outside the parent-death bound. Explicit finish preserves0/1/77 while earlier scenario failures dominate later prerequisite skips.
 3. Only the fixed prerequisite/takeover reasons may produce77. Missing staged target, bad admission or malformed reports fail. Native source and injected checks do not establish actual granted/hardware Windows behavior.
+
+
+## C3 — Channel identity and actual Node packaging
+
+1. Do not rewrite Info.plist after copying a verified prebuilt: it would invalidate the admitted signature and manifest. Build/verify each requested channel independently; reject a prod helper offered for beta/dev.
+2. Electron-builder afterPack runs under Node. Bun only compiles its private verifier bundle; an actual Node import checks immutable compiler-output bytes and source roots. Build-only environment metadata cannot replace runtime helper identity checks.
+3. Windows signing must finish before Main pins are compiled. The pinned builder's negative signExts suffix excludes vector-computer.exe from later signing. Exact final archive/package verification follows in C4/C5/W10/C7.

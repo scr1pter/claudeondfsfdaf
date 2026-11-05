@@ -1,14 +1,85 @@
 import path from "node:path"
+import { fileURLToPath } from "node:url"
 import { BUILD_IDENTITY_FILE, parseBuildIdentity, requiredCliVersion } from "./build-identity"
+import { ensureComputerHelper } from "./computer-helper-package"
+import { parseComputerHelperHashes } from "./computer-helper-package-build"
+import { buildNodeComputerHelperPackage, computerHelperSkipRequested } from "./computer-helper-package-node"
 
 type PackageTarget = "mac" | "win" | "linux"
+
+declare const Bun: {
+  env: NodeJS.ProcessEnv
+  file(file: string): { json(): Promise<unknown>; text(): Promise<string> }
+  resolveSync(specifier: string, directory: string): string
+  spawnSync(
+    command: string[],
+    options: { cwd: string; env: NodeJS.ProcessEnv; stderr: "inherit"; stdout: "inherit" },
+  ): { exitCode: number }
+}
+
+export function computerHelperPackageRequests(input: {
+  builderArgs: readonly string[]
+  hostPlatform: string
+  hostArchitecture: string
+}) {
+  const targets = [
+    { flag: "--mac", platform: "darwin" },
+    { flag: "--win", platform: "win32" },
+    { flag: "--linux", platform: "linux" },
+  ] as const
+  const selected = targets.filter((target) =>
+    input.builderArgs.some((argument) => argument === target.flag || argument.startsWith(`${target.flag}=`)),
+  )
+  const platforms = selected.length ? selected : targets.filter((target) => target.platform === input.hostPlatform)
+  if (!platforms.length) throw new Error("The desktop package platform is unsupported.")
+  return platforms.map((target) => {
+    if (target.platform === "linux") return { platform: target.platform, architectures: [] }
+    if (input.builderArgs.some((argument) => argument === "--ia32" || argument === "--armv7l"))
+      throw new Error("The computer helper supports x64 and arm64 desktop packages only.")
+    const flags = ["x64", "arm64", "universal"].filter((architecture) =>
+      input.builderArgs.includes(`--${architecture}`),
+    )
+    if (target.platform === "win32" && flags.includes("universal"))
+      throw new Error("Universal Windows computer helpers are unsupported.")
+    const packageTargets = input.builderArgs.flatMap((argument, index) => {
+      if (argument.startsWith(`${target.flag}=`)) return [argument.slice(target.flag.length + 1)]
+      if (argument !== target.flag) return []
+      const remaining = input.builderArgs.slice(index + 1)
+      const end = remaining.findIndex((value) => value.startsWith("-"))
+      return remaining.slice(0, end < 0 ? undefined : end)
+    })
+    const architectures = (packageTargets.length ? packageTargets : [""]).flatMap((value) => {
+      const explicit = value.split(":")[1]
+      const requested = explicit ? [explicit] : flags.length ? flags : [input.hostArchitecture]
+      if (
+        requested.some(
+          (architecture) =>
+            architecture !== "x64" &&
+            architecture !== "arm64" &&
+            (architecture !== "universal" || target.platform !== "darwin"),
+        )
+      )
+        throw new Error("Choose a supported computer helper package architecture.")
+      return requested.flatMap((architecture) => (architecture === "universal" ? ["x64", "arm64"] : [architecture]))
+    })
+    return {
+      platform: target.platform,
+      architectures: (["x64", "arm64"] as const).filter((architecture) => architectures.includes(architecture)),
+    }
+  })
+}
 
 export function packageRequest(input: {
   argv: readonly string[]
   version: string
   environmentChannel?: string
   unsignedRelease?: boolean
-}) {
+}): {
+  channel: "dev" | "beta" | "prod"
+  target: PackageTarget | undefined
+  environment: Record<string, string>
+  builderArgs: string[]
+} {
   // Bun's named scripts insert --target before a caller's forwarding separator.
   // The separator belongs to the script runner, not electron-builder's parser.
   const argv = input.argv.filter((arg) => arg !== "--")
@@ -86,7 +157,10 @@ export function macPackagePaths(input: {
   return architectures.map((arch) => path.join("dist", arch === "x64" ? "mac" : `mac-${arch}`, `${name}.app`))
 }
 
-export function packageEnvironment(environment: Record<string, string | undefined>, unsigned: boolean) {
+export function packageEnvironment(
+  environment: Record<string, string | undefined>,
+  unsigned: boolean,
+): NodeJS.ProcessEnv {
   if (!unsigned) return { ...environment }
   return {
     ...Object.fromEntries(
@@ -100,7 +174,7 @@ export function packageEnvironment(environment: Record<string, string | undefine
 }
 
 if (import.meta.main) {
-  const packageDir = path.dirname(import.meta.dir)
+  const packageDir = fileURLToPath(new URL("../", import.meta.url))
   const manifest: unknown = await Bun.file(path.join(packageDir, "package.json")).json()
   if (!manifest || typeof manifest !== "object" || !("version" in manifest) || typeof manifest.version !== "string") {
     throw new Error("Desktop package.json has no version")
@@ -119,7 +193,42 @@ if (import.meta.main) {
     { ...process.env, ...request.environment, VECTOR_REQUIRED_CLI_VERSION: requiredVersion },
     Bun.env.VECTOR_ALLOW_UNSIGNED_RELEASE === "true",
   )
-  run([process.execPath, "run", "--no-env-file", "build"], packageDir, environment, "Desktop build failed")
+  const skipHelper = computerHelperSkipRequested(request.channel, environment)
+  const helperRequests = computerHelperPackageRequests({
+    builderArgs: request.builderArgs,
+    hostPlatform: process.platform,
+    hostArchitecture: process.arch,
+  })
+  const windowsHashes: Partial<Record<"x64" | "arm64", string>> = {}
+  for (const helper of helperRequests) {
+    const result = await ensureComputerHelper({
+      ...helper,
+      channel: request.channel,
+      directory: packageDir,
+      environment,
+    })
+    Object.assign(windowsHashes, result.windowsHashes)
+  }
+  const hasWindows = helperRequests.some((helper) => helper.platform === "win32")
+  const suppliedHashes = parseComputerHelperHashes(environment.VECTOR_COMPUTER_HELPER_SHA256)
+  if (
+    hasWindows &&
+    !skipHelper &&
+    environment.VECTOR_COMPUTER_HELPER_SHA256 !== undefined &&
+    (Object.keys(suppliedHashes).length !== Object.keys(windowsHashes).length ||
+      (["x64", "arm64"] as const).some((architecture) => suppliedHashes[architecture] !== windowsHashes[architecture]))
+  )
+    throw new Error("The supplied Windows helper hash map differs from the verified final helper bytes.")
+  const verifier =
+    !skipHelper && helperRequests.some((helper) => helper.platform !== "linux")
+      ? await buildNodeComputerHelperPackage(packageDir)
+      : undefined
+  const preparedEnvironment = {
+    ...environment,
+    ...(hasWindows ? { VECTOR_COMPUTER_HELPER_SHA256: JSON.stringify(windowsHashes) } : {}),
+    ...(verifier ? { VECTOR_COMPUTER_HELPER_PACKAGE_SHA256: verifier.sha256 } : {}),
+  }
+  run([process.execPath, "run", "--no-env-file", "build"], packageDir, preparedEnvironment, "Desktop build failed")
 
   const identity = parseBuildIdentity(await Bun.file(path.join(packageDir, "out", BUILD_IDENTITY_FILE)).text())
   if (
@@ -131,15 +240,18 @@ if (import.meta.main) {
     throw new Error("Desktop build identity does not match the requested package channel and version")
   }
 
-  const builder = path.join(path.dirname(Bun.resolveSync("electron-builder/package.json", import.meta.dir)), "cli.js")
+  const builder = path.join(
+    path.dirname(Bun.resolveSync("electron-builder/package.json", path.dirname(fileURLToPath(import.meta.url)))),
+    "cli.js",
+  )
   run(
     ["node", builder, "--config", "electron-builder.config.ts", ...request.builderArgs],
     packageDir,
-    environment,
+    preparedEnvironment,
     "Desktop packaging failed",
   )
 
-  if (request.target === "mac" || request.builderArgs.some((arg) => arg === "--mac" || arg.startsWith("--mac="))) {
+  if (helperRequests.some((helper) => helper.platform === "darwin")) {
     for (const appPath of macPackagePaths({
       builderArgs: request.builderArgs,
       channel: request.channel,
@@ -148,7 +260,7 @@ if (import.meta.main) {
       run(
         [process.execPath, "--no-env-file", "./scripts/verify-package.ts", appPath],
         packageDir,
-        environment,
+        preparedEnvironment,
         "Packaged app verification failed",
       )
     }
