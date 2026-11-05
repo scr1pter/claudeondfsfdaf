@@ -425,11 +425,41 @@ int wait_child(const Child& child, bool privileged = false) {
   if (result != WAIT_OBJECT_0 || !GetExitCodeProcess(child.process.get(), &code)) invalid();
   return code <= static_cast<DWORD>((std::numeric_limits<int>::max)()) ? static_cast<int>(code) : 1;
 }
+
+void report_startup_failure(HANDLE sink, bool internal, const char* stage) noexcept {
+  if (!sink || sink == INVALID_HANDLE_VALUE) return;
+  try {
+    HANDLE raw = nullptr;
+    if (!DuplicateHandle(GetCurrentProcess(), sink, GetCurrentProcess(), &raw, 0, FALSE, DUPLICATE_SAME_ACCESS)) return;
+    winrt::handle held_output{raw};
+    struct Report { winrt::handle output; winrt::handle done; std::string line; };
+    auto report = std::make_shared<Report>();
+    report->output = std::move(held_output);
+    report->done.attach(CreateEventW(nullptr, TRUE, FALSE, nullptr));
+    if (!report->done) return;
+    report->line = std::string("vector-caller-failure ") + (internal ? "medium." : "initial.") + stage + "\n";
+    // A full inherited diagnostic pipe cannot strand Caller after startup failure.
+    // The worker owns its handles and the process returns after at most this fixed wait.
+    std::thread([report] {
+      DWORD written = 0;
+      (void)WriteFile(report->output.get(), report->line.data(), static_cast<DWORD>(report->line.size()), &written, nullptr);
+      (void)SetEvent(report->done.get());
+    }).detach();
+    (void)WaitForSingleObject(report->done.get(), 50);
+  } catch (...) { /* Diagnostics never change the refused outcome. */ }
+}
 }
 
 int wmain(int count, wchar_t** argv) {
+  bool internal = false;
+  const char* stage = "arguments";
+  winrt::handle diagnostic;
   try {
-    bool internal = false;
+    HANDLE raw_diagnostic = nullptr;
+    const auto standard_error = GetStdHandle(STD_ERROR_HANDLE);
+    if (standard_error && standard_error != INVALID_HANDLE_VALUE &&
+        DuplicateHandle(GetCurrentProcess(), standard_error, GetCurrentProcess(), &raw_diagnostic, 0, FALSE, DUPLICATE_SAME_ACCESS))
+      diagnostic.attach(raw_diagnostic);
     DWORD high_pid = 0; HANDLE bootstrap = nullptr;
     int offset = 1;
     if (count >= 2 && std::wstring_view(argv[1]) == L"--fixture-medium") {
@@ -444,6 +474,7 @@ int wmain(int count, wchar_t** argv) {
     const bool probe = count == offset + 2 && std::wstring_view(argv[offset]) == L"--probe" && std::wstring_view(argv[offset + 1]) == L"--json";
     const bool privileged = count == offset + 1 && std::wstring_view(argv[offset]) == L"--self-test=privileged";
     if ((!serving && !probe && !privileged) || !SetConsoleCtrlHandler(console_control, TRUE)) return 2;
+    stage = "parent-witness";
     ParentWatches watches;
     const auto own_start = created(GetCurrentProcess());
     const auto parent_pid = actual_parent(GetCurrentProcessId());
@@ -460,14 +491,19 @@ int wmain(int count, wchar_t** argv) {
       watches.arm(ancestors.back());
     }
     // The independent held-parent waits are already armed before token/path work or a helper launch.
+    stage = "apartment";
     winrt::init_apartment(winrt::apartment_type::multi_threaded);
+    stage = "token";
     const auto own_token = vector::computer::observe_token(GetCurrentProcess());
+    stage = "layout";
     auto files = layout();
+    stage = "ancestors";
     for (const auto& ancestor : ancestors) {
       current(ancestor);
       if (!same_context(own_token, vector::computer::observe_token(ancestor.handle.get()))) invalid();
     }
     if (internal) {
+      stage = "medium-admission";
       const auto high_token = vector::computer::observe_token(ancestors.front().handle.get());
       if (!vector::computer::serving_token_allowed(own_token) || !high_token.elevated ||
           high_token.integrity < SECURITY_MANDATORY_HIGH_RID || high_token.ui_access || high_token.app_container ||
@@ -475,6 +511,7 @@ int wmain(int count, wchar_t** argv) {
           actual_parent(high_pid) != ancestors.back().pid || actual_parent(GetCurrentProcessId()) != high_pid) invalid();
     }
     if (!vector::computer::serving_token_allowed(own_token)) {
+      stage = "restricted-token";
       if (internal || !own_token.elevated || own_token.integrity < SECURITY_MANDATORY_HIGH_RID || own_token.ui_access || own_token.app_container) invalid();
       const auto token = medium_token(own_token);
       HANDLE raw = nullptr;
@@ -487,13 +524,19 @@ int wmain(int count, wchar_t** argv) {
       const auto command = L"\"" + files.self.path + L"\" --fixture-medium " + std::to_wstring(GetCurrentProcessId()) +
         L" --bootstrap-handle " + std::to_wstring(reinterpret_cast<std::uintptr_t>(high_handle.get())) +
         (serving ? std::wstring(L" --stdio") + (test_elevated_token ? L" --test-elevated-token" : L"") : privileged ? L" --self-test=privileged" : L" --probe --json");
+      stage = "bootstrap-launch";
       auto child = launch(files.self.path, command, token.get(), high_handle.get(), serving);
       high_handle.close();
+      stage = "bootstrap-current";
       const auto child_token = vector::computer::observe_token(child.process.get());
       if (!vector::computer::serving_token_allowed(child_token) || !vector::computer::same_token(observed, child_token) ||
           !same_file(files.self, hold_file(process_path(child.process.get()))) || created(child.process.get()) < own_start) invalid();
-      return wait_child(child, privileged);
+      stage = "child-exit";
+      const auto code = wait_child(child, privileged);
+      if (code != 0 && code != 77) report_startup_failure(diagnostic.get(), internal, stage);
+      return code;
     }
+    stage = "final-current";
     if (privileged && own_token.integrity != SECURITY_MANDATORY_MEDIUM_RID) invalid();
     for (const auto& ancestor : ancestors) current(ancestor);
     if (!vector::computer::same_token(own_token, vector::computer::observe_token(GetCurrentProcess())) ||
@@ -502,10 +545,15 @@ int wmain(int count, wchar_t** argv) {
     const auto command = L"\"" + files.helper.path + L"\"" + (serving
       ? L" --stdio --parent-pid " + std::to_wstring(GetCurrentProcessId()) + (test_elevated_token ? L" --test-elevated-token" : L"")
       : privileged ? L" --self-test=privileged --target \"" + target + L"\"" : std::wstring(L" --probe --json"));
+    stage = "helper-launch";
     auto child = launch(files.helper.path, command, nullptr, nullptr, serving);
-    return wait_child(child, privileged);
+    stage = "child-exit";
+    const auto code = wait_child(child, privileged);
+    if (code != 0 && code != 77) report_startup_failure(diagnostic.get(), internal, stage);
+    return code;
   } catch (...) {
-    // Unwinding retired the death watches. Never block on a pipe while reporting a startup failure.
+    // Unwinding retired the death watches. Reporting cannot block on an inherited pipe.
+    report_startup_failure(diagnostic.get(), internal, stage);
     return 1;
   }
 }

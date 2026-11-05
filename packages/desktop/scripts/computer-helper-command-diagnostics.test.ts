@@ -256,6 +256,12 @@ if (test === "sample" || test === "invalid-sample" || test === "stalled-sample")
  options = {sampleUnit:true,sampleAfterMs:10,sampler:async target=>{calls++;if(!target.alive()||target.pid<=1)throw Error('not-owned');if(test==='stalled-sample')return new Promise(()=>{});return test==='invalid-sample'?{status:'sampled',suites:['runPrivateOwnerTests'],waits:[],raw:'secret'}:{status:'sampled',suites:['runProtocolTests'],waits:['mutex-wait']};}};
 }
 if (test === "sample-exited") options = {sampleUnit:true,sampleAfterMs:1000,sampler:async()=>{calls++;throw Error('must-not-sample-dead-child')}};
+if (test === "windows-unit" || test === "windows-caller") {
+ const newline = String.fromCharCode(10);
+ const output = "PASS server" + newline;
+ const failures = ["private-secret", "FAIL integration.reply-pipe", "vector-caller-failure medium.layout", ""].join(newline);
+ command = {...command,windowsDiagnostic:test==="windows-unit"?"unit":"caller",args:["-e","process.stdout.write("+JSON.stringify(output)+");process.stderr.write("+JSON.stringify(failures)+");process.exitCode=7"]};
+}
 if (test.startsWith("progress-")) {
  const progress = event => "vector-unit-progress " + event + "\\n";
  const all = progress("ENTER") + NATIVE_UNIT_SUITES.map(suite=>progress("BEGIN " + suite)+progress("PASS " + suite)).join("") + progress("COMPLETE");
@@ -283,6 +289,8 @@ console.log(JSON.stringify({node:process.release.name,result,calls}));
       "invalid-sample",
       "stalled-sample",
       "sample-exited",
+      "windows-unit",
+      "windows-caller",
       "progress-active",
       "progress-complete",
       "progress-invalid",
@@ -298,7 +306,13 @@ console.log(JSON.stringify({node:process.release.name,result,calls}));
       const result = value.result
       const info = nativeCommandDiagnostic(result.diagnostic)
       expect(JSON.stringify(info), name).not.toMatch(/private|secret|argv|rawSample|node:child_process/i)
-      if (name.startsWith("progress-")) {
+      if (name === "windows-unit" || name === "windows-caller") {
+        expect(result.code).toBe(7)
+        expect(info.trigger).toBe("complete")
+        expect(info.windows).toEqual(name === "windows-unit"
+          ? {unitSuite: "server", unitFailure: "integration.reply-pipe", caller: "medium.layout"}
+          : {caller: "medium.layout"})
+      } else if (name.startsWith("progress-")) {
         expect(info.sample.status).toBe("not-requested")
         if (name === "progress-active") {
           expect(info.progress).toEqual({

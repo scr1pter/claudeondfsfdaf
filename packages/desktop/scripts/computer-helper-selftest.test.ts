@@ -11,6 +11,7 @@ import { encodeFrame, frameReader, type Line, type Received } from "../test/comp
 import { WINDOWS_TEST_ARTIFACTS, type HelperManifest } from "./build-computer-helper"
 import { EXECUTABLE_NAMES } from "./channel-ids"
 import { readIdentity } from "./computer-helper-identity"
+import { WindowsCheckFailure } from "./computer-helper-windows-diagnostics"
 import {
   WINDOWS_NATIVE_CHECKS,
   WINDOWS_NATIVE_REASONS,
@@ -25,6 +26,8 @@ import {
   MAC_NATIVE_CHECKS,
   classifySelfTestExit,
   lifecycleTopologyFailure,
+  lifecycleDescendants,
+  lifecycleProcessAlive,
   nativeSelfTestChecks,
   parseSelfTestArgs,
   runComputerHelperSelfTest,
@@ -32,6 +35,7 @@ import {
   validateCoreTranscript,
   waitForLifecycleExit,
   type Command,
+  type CommandResult,
   type NativeChannel,
   type SelfTestDependencies,
   type SelfTestOptions,
@@ -209,21 +213,26 @@ test("Windows reports require exact native catalogs, fixed reasons and coherent 
       0,
     ),
   ).toThrow()
-  const failed = checks.map((entry, index) => index === 1 ? { ...entry, skipped: false, detail: "assertion_failed" } : entry)
+  const failed = checks.map((entry, index) =>
+    index === 1 ? { ...entry, skipped: false, detail: "assertion_failed" } : entry,
+  )
   expect(windowsNativeSelfTestChecks(JSON.stringify({ checks: failed }), "privileged", 1)).toEqual(failed)
   expect(() => windowsNativeSelfTestChecks(JSON.stringify({ checks: failed }), "privileged", 77)).toThrow()
   for (const detail of WINDOWS_NATIVE_REASONS) {
-    const failed = passed.map((entry, index) => index === 0 ? { ...entry, ok: false, detail } : entry)
+    const failed = passed.map((entry, index) => (index === 0 ? { ...entry, ok: false, detail } : entry))
     expect(windowsNativeSelfTestChecks(JSON.stringify({ checks: failed }), "privileged", 1)).toEqual(failed)
   }
   for (const invalid of [
-    checks.slice(1), [...checks, checks[0]], [...checks].reverse(),
+    checks.slice(1),
+    [...checks, checks[0]],
+    [...checks].reverse(),
     checks.map((entry) => ({ ...entry, detail: "PRIVATE" })),
     checks.map((entry) => ({ ...entry, extra: "PRIVATE" })),
     checks.map((entry) => ({ ...entry, detail: "target_validation_failed" })),
     checks.map((entry) => ({ ...entry, detail: "assertion_failed" })),
-    checks.map((entry) => ({name: entry.name, ok: entry.ok, skipped: entry.skipped})),
-  ]) expect(() => windowsNativeSelfTestChecks(JSON.stringify({ checks: invalid }), "privileged", 77)).toThrow()
+    checks.map((entry) => ({ name: entry.name, ok: entry.ok, skipped: entry.skipped })),
+  ])
+    expect(() => windowsNativeSelfTestChecks(JSON.stringify({ checks: invalid }), "privileged", 77)).toThrow()
 })
 
 test("Windows channel inference verifies all test artifacts before the first helper version launch", async () => {
@@ -308,7 +317,8 @@ test("Windows fixtures bind copied Caller/helper bytes and use only manifested n
         if (command.args.includes("--probe"))
           return {
             code: 0,
-            stdout: '{"permissions":{"screen":"n/a","accessibility":"n/a"},"responsible":true,"elevated":false}',
+            stdout:
+              '{"permissions":{"screen":"n/a","accessibility":"n/a"},"responsible":true,"elevated":false,"captureBlocked":false}',
           }
         const mode = command.args.includes("--self-test=lifecycle-eof") ? "eof" : "parentDeath"
         return {
@@ -331,10 +341,17 @@ test("Windows fixtures bind copied Caller/helper bytes and use only manifested n
       await readFile(prepared.files.bin),
     )
     const staged = path.join(path.dirname(caller), "resources/computer")
-    expect(await readFile(path.join(staged, "tests", WINDOWS_TEST_ARTIFACTS.target))).toEqual(await readFile(prepared.files.target))
-    expect(JSON.parse(await readFile(path.join(staged, "computer-helper.json"), "utf8"))).toEqual(prepared.files.helperManifest)
-    expect(JSON.parse(await readFile(path.join(staged, "tests/computer-helper-tests.json"), "utf8"))).toEqual(prepared.files.testManifest)
+    expect(await readFile(path.join(staged, "tests", WINDOWS_TEST_ARTIFACTS.target))).toEqual(
+      await readFile(prepared.files.target),
+    )
+    expect(JSON.parse(await readFile(path.join(staged, "computer-helper.json"), "utf8"))).toEqual(
+      prepared.files.helperManifest,
+    )
+    expect(JSON.parse(await readFile(path.join(staged, "tests/computer-helper-tests.json"), "utf8"))).toEqual(
+      prepared.files.testManifest,
+    )
     await native.probe()
+    expect(commands[0]?.windowsDiagnostic).toBe("caller")
     expect(await native.unverifiedParent()).toBe(true)
     expect(channels[1]!.args).toEqual(["--stdio", "--parent-pid", String(process.pid)])
     expect(await native.eof()).toBe(true)
@@ -350,6 +367,48 @@ test("Windows fixtures bind copied Caller/helper bytes and use only manifested n
     expect(commands.at(-1)?.timeoutMs).toBe(150_000)
     await native.close()
     await expect(native.open()).rejects.toThrow("closed")
+  } finally {
+    await rm(prepared.root, { recursive: true, force: true })
+  }
+})
+
+test("Windows verified fixture preserves only closed startup and probe-shape failure categories", async () => {
+  const prepared = await windowsArtifacts()
+  let outcome: { code: number; stdout: string; timedOut?: boolean } = { code: 1, stdout: "PRIVATE" }
+  try {
+    let transportError = false
+    const native = await createWindowsVerifiedFixture(prepared.options, desktopDirectory, prepared.files, {
+      command: async () => outcome,
+      channel: () => ({
+        write() {},
+        end() {},
+        next: async () => {
+          if (transportError) throw new Error("PRIVATE EPIPE")
+          return { kind: "exit", code: 1 }
+        },
+        dispose: async () => {},
+        startupDiagnostic: () => ({ caller: "medium.layout" }),
+      }),
+    })
+    await expect(native.probe()).rejects.toThrow("windows-probe-exit-1")
+    outcome = { code: 0, stdout: "PRIVATE" }
+    await expect(native.probe()).rejects.toThrow("windows-probe-invalid-json")
+    outcome = {
+      code: 0,
+      stdout: JSON.stringify({
+        permissions: { screen: "n/a", accessibility: "n/a" },
+        responsible: false,
+        elevated: false,
+        captureBlocked: true,
+      }),
+    }
+    await expect(native.probe()).rejects.toThrow("windows-probe-invalid-responsible")
+    const channel = await native.open()
+    await expect(channel.next(1000)).rejects.toThrow("windows-caller-medium.layout")
+    transportError = true
+    await expect(channel.next(1000)).rejects.toThrow("windows-caller-medium.layout")
+    await channel.dispose()
+    await native.close()
   } finally {
     await rm(prepared.root, { recursive: true, force: true })
   }
@@ -388,10 +447,18 @@ test("Windows staged manifests must retain the verified helper and test facts be
       const file = path.join(prepared.root, name)
       const manifest = JSON.parse(await readFile(file, "utf8"))
       await writeFile(file, JSON.stringify({ ...manifest, sourceDigest: "9".repeat(64) }))
-      await expect(createWindowsVerifiedFixture(prepared.options, desktopDirectory, prepared.files, {
-        command: async () => { launches++; return { code: 0, stdout: "PRIVATE" } },
-        channel: () => { launches++; throw new Error("unreachable") },
-      })).rejects.toThrow("manifest")
+      await expect(
+        createWindowsVerifiedFixture(prepared.options, desktopDirectory, prepared.files, {
+          command: async () => {
+            launches++
+            return { code: 0, stdout: "PRIVATE" }
+          },
+          channel: () => {
+            launches++
+            throw new Error("unreachable")
+          },
+        }),
+      ).rejects.toThrow("manifest")
       expect(launches).toBe(0)
     } finally {
       await rm(prepared.root, { recursive: true, force: true })
@@ -461,15 +528,73 @@ function windowsDriverFixture() {
       ? { code: 0, stdout: "Windows native unit checks passed" }
       : {
           code: 0,
-          stdout: JSON.stringify({ checks: WINDOWS_NATIVE_CHECKS[command.args.includes("--self-test=control") ? "targetControl" : "unprivileged"].map((name) => ({ name, ok: true })) }),
+          stdout: JSON.stringify({
+            checks: WINDOWS_NATIVE_CHECKS[
+              command.args.includes("--self-test=control") ? "targetControl" : "unprivileged"
+            ].map((name) => ({ name, ok: true })),
+          }),
         }
   }
   fake.native.privileged = async () => ({
     code: 77,
-    stdout: JSON.stringify({ checks: WINDOWS_NATIVE_CHECKS.privileged.map((name) => ({ name, ok: false, skipped: true, detail: "noninteractive_desktop" })) }),
+    stdout: JSON.stringify({
+      checks: WINDOWS_NATIVE_CHECKS.privileged.map((name) => ({
+        name,
+        ok: false,
+        skipped: true,
+        detail: "noninteractive_desktop",
+      })),
+    }),
   })
   return fake
 }
+
+test("Windows report retains closed unit/Caller evidence while every observed failure remains failed", async () => {
+  const fake = windowsDriverFixture()
+  const command = fake.dependencies.command!
+  fake.dependencies.command = async (input) =>
+    input.args.length
+      ? command(input)
+      : {
+          code: 1,
+          stdout: "PRIVATE",
+          diagnostic: {
+            schemaVersion: 1,
+            trigger: "complete",
+            spawned: true,
+            exitObserved: true,
+            closeObserved: true,
+            signaled: false,
+            stdoutBytes: 7,
+            stderrBytes: 64,
+            elapsedMs: 10,
+            exitAfterMs: 9,
+            closeAfterMs: 10,
+            sample: { status: "not-requested", suites: [], waits: [] },
+            windows: { unitSuite: "lifecycle", unitFailure: "integration.reply-pipe" },
+          },
+        }
+  fake.native.probe = async () => {
+    throw new WindowsCheckFailure("windows-caller-medium.layout")
+  }
+  const result = await runComputerHelperSelfTest({ ...options, platform: "win32" }, fake.dependencies)
+  expect(result.code).toBe(1)
+  expect(result.checks.find((check) => check.name === "unit")).toEqual({
+    name: "unit",
+    status: "failed",
+    reason: "windows-unit-failure-integration.reply-pipe",
+  })
+  expect(result.checks.find((check) => check.name === "probe.first")).toEqual({
+    name: "probe.first",
+    status: "failed",
+    reason: "windows-caller-medium.layout",
+  })
+  expect(JSON.stringify(result)).not.toContain("PRIVATE")
+  expect(fake.state.closed).toBe(1)
+  expect(transcriptFailureReason("hello", new WindowsCheckFailure("windows-caller-medium.layout"))).toBe(
+    "windows-caller-medium.layout",
+  )
+})
 
 test("Windows driver runs the target-control smoke before native prerequisite skips and retains fixed reasons", async () => {
   const fake = windowsDriverFixture()
@@ -484,9 +609,14 @@ test("Windows driver runs the target-control smoke before native prerequisite sk
   )
   expect(result.code).toBe(0)
   expect(result.checks.find((item) => item.name === "packaged.packaged-pe")?.status).toBe("passed")
-  expect(result.checks.find((item) => item.name === "privileged.privileged-isolated-target")).toMatchObject({status: "skipped", reason: "noninteractive_desktop"})
+  expect(result.checks.find((item) => item.name === "privileged.privileged-isolated-target")).toMatchObject({
+    status: "skipped",
+    reason: "noninteractive_desktop",
+  })
   expect(result.checks.find((item) => item.name === "target-control")?.status).toBe("passed")
-  expect(result.checks.find((item) => item.name === "target-control.windows-test-target-control-schema")?.status).toBe("passed")
+  expect(result.checks.find((item) => item.name === "target-control.windows-test-target-control-schema")?.status).toBe(
+    "passed",
+  )
   expect(result.checks.find((item) => item.name === "conformance.heartbeat-loss")?.status).toBe("skipped")
   expect(fake.state.closed).toBe(1)
 })
@@ -496,23 +626,50 @@ test("Windows target-control and admission/assertion failures stay failures even
     const fake = windowsDriverFixture()
     if (defect === "control") {
       const command = fake.dependencies.command!
-      fake.dependencies.command = async (input) => input.args.includes("--self-test=control")
-        ? { code: 1, stdout: JSON.stringify({checks: WINDOWS_NATIVE_CHECKS.targetControl.map((name) => ({name, ok: false}))}) }
-        : command(input)
-      fake.native.privileged = async () => { throw new Error("An invalid target must not start scenarios") }
+      fake.dependencies.command = async (input) =>
+        input.args.includes("--self-test=control")
+          ? {
+              code: 1,
+              stdout: JSON.stringify({
+                checks: WINDOWS_NATIVE_CHECKS.targetControl.map((name) => ({ name, ok: false })),
+              }),
+            }
+          : command(input)
+      fake.native.privileged = async () => {
+        throw new Error("An invalid target must not start scenarios")
+      }
     } else {
       fake.native.privileged = async () => ({
         code: defect === "inconsistent-skip" ? 77 : 1,
-        stdout: JSON.stringify({checks: WINDOWS_NATIVE_CHECKS.privileged.map((name, index) => index === 0
-          ? {name, ok: false, detail: defect === "admission" ? "target_validation_failed" : defect === "private-reason" ? "PRIVATE" : "assertion_failed"}
-          : {name, ok: false, skipped: true, detail: "noninteractive_desktop"})}),
+        stdout: JSON.stringify({
+          checks: WINDOWS_NATIVE_CHECKS.privileged.map((name, index) =>
+            index === 0
+              ? {
+                  name,
+                  ok: false,
+                  detail:
+                    defect === "admission"
+                      ? "target_validation_failed"
+                      : defect === "private-reason"
+                        ? "PRIVATE"
+                        : "assertion_failed",
+                }
+              : { name, ok: false, skipped: true, detail: "noninteractive_desktop" },
+          ),
+        }),
       })
     }
-    const result = await runComputerHelperSelfTest({ ...options, platform: "win32", privileged: "auto" }, fake.dependencies)
+    const result = await runComputerHelperSelfTest(
+      { ...options, platform: "win32", privileged: "auto" },
+      fake.dependencies,
+    )
     expect(result.code).toBe(1)
     expect(result.checks.find((item) => item.name === "privileged")?.status).toBe("failed")
     expect(JSON.stringify(result)).not.toContain("PRIVATE")
-    if (defect === "admission") expect(result.checks.find((item) => item.name === "privileged.privileged-isolated-target")?.reason).toBe("target_validation_failed")
+    if (defect === "admission")
+      expect(result.checks.find((item) => item.name === "privileged.privileged-isolated-target")?.reason).toBe(
+        "target_validation_failed",
+      )
     expect(fake.state.closed).toBe(1)
   }
 })
@@ -740,6 +897,132 @@ test("native failure diagnostics retain bounded exit statuses and only missing v
     expect(lifecycleTopologyFailure(role, 0)).toBe(`${role}-missing`)
     expect(lifecycleTopologyFailure(role, 1)).toBeUndefined()
     for (const count of [2, 3, 1_000_000]) expect(lifecycleTopologyFailure(role, count)).toBe(`${role}-extra`)
+  }
+})
+
+function inspectedProcess(stdout: string, code = 0): CommandResult {
+  return {
+    code,
+    stdout,
+    diagnostic: {
+      schemaVersion: 1,
+      trigger: "complete",
+      spawned: true,
+      exitObserved: true,
+      closeObserved: true,
+      signaled: false,
+      stdoutBytes: Buffer.byteLength(stdout),
+      stderrBytes: 0,
+      elapsedMs: 1,
+      exitAfterMs: 1,
+      closeAfterMs: 1,
+      sample: { status: "not-requested", suites: [], waits: [] },
+    },
+  }
+}
+
+test("Mac topology inspections retain stage and fail closed on incomplete command outcomes", () => {
+  for (const role of ["supervisor", "worker"] as const) {
+    expect(lifecycleDescendants(role, inspectedProcess("123\n"))).toEqual([123])
+    expect(lifecycleDescendants(role, inspectedProcess("123\n456\n"))).toEqual([123, 456])
+    expect(lifecycleDescendants(role, inspectedProcess("", 1))).toEqual([])
+    const complete = inspectedProcess("123\n")
+    for (const [result, reason] of [
+      [{ ...complete, timedOut: true }, "timeout"],
+      [{ ...complete, diagnostic: { ...complete.diagnostic!, trigger: "wall-deadline" } }, "timeout"],
+      [{ ...complete, diagnostic: { ...complete.diagnostic!, trigger: "spawn-failed" } }, "spawn-failed"],
+      [{ ...complete, diagnostic: { ...complete.diagnostic!, trigger: "io-error" } }, "incomplete"],
+      [{ ...complete, diagnostic: { ...complete.diagnostic!, trigger: "output-cap" } }, "incomplete"],
+      [{ ...complete, diagnostic: { ...complete.diagnostic!, closeObserved: false } }, "incomplete"],
+      [{ ...complete, diagnostic: undefined }, "incomplete"],
+      [inspectedProcess("PRIVATE", 2), "exit-status"],
+      [inspectedProcess("PRIVATE"), "malformed-stdout"],
+      [inspectedProcess("123\n", 1), "malformed-stdout"],
+    ] as const)
+      expect(() => lifecycleDescendants(role, result)).toThrow(`${role}-pgrep-${reason}`)
+  }
+})
+
+test("Mac liveness requires completed ps evidence or a genuine ESRCH including race-to-exit", async () => {
+  for (const role of ["supervisor", "worker"] as const) {
+    let inspections = 0
+    const missing = () => {
+      throw Object.assign(new Error("PRIVATE"), { code: "ESRCH" })
+    }
+    const inspect = async () => {
+      inspections++
+      return inspectedProcess("S+")
+    }
+    expect(await lifecycleProcessAlive(role, missing, inspect)).toBe(false)
+    expect(inspections).toBe(0)
+    for (const status of ["S", "Ss", "R+", "T", "U", "I"]) {
+      expect(
+        await lifecycleProcessAlive(
+          role,
+          () => {},
+          async () => inspectedProcess(status),
+        ),
+      ).toBe(true)
+    }
+    for (const status of ["Z", "Z+", "Zs"]) {
+      expect(
+        await lifecycleProcessAlive(
+          role,
+          () => {},
+          async () => inspectedProcess(status),
+        ),
+      ).toBe(false)
+    }
+    let probes = 0
+    expect(
+      await lifecycleProcessAlive(
+        role,
+        () => {
+          if (++probes === 2) missing()
+        },
+        async () => inspectedProcess("", 1),
+      ),
+    ).toBe(false)
+    expect(probes).toBe(2)
+    for (const [result, reason] of [
+      [{ ...inspectedProcess("Z"), timedOut: true }, "timeout"],
+      [
+        { ...inspectedProcess("Z"), diagnostic: { ...inspectedProcess("Z").diagnostic!, trigger: "io-error" } },
+        "incomplete",
+      ],
+      [
+        { ...inspectedProcess("Z"), diagnostic: { ...inspectedProcess("Z").diagnostic!, trigger: "spawn-failed" } },
+        "spawn-failed",
+      ],
+      [inspectedProcess("", 1), "exit-status"],
+      [inspectedProcess("PRIVATE", 2), "exit-status"],
+      [inspectedProcess(""), "malformed-stdout"],
+      [inspectedProcess("Zombie PRIVATE"), "malformed-stdout"],
+      [inspectedProcess("Z\nS"), "malformed-stdout"],
+    ] as const) {
+      await expect(
+        lifecycleProcessAlive(
+          role,
+          () => {},
+          async () => result,
+        ),
+      ).rejects.toThrow(`${role}-ps-${reason}`)
+    }
+    for (const [code, reason] of [
+      ["EPERM", "probe-denied"],
+      ["PRIVATE", "probe-failed"],
+    ] as const) {
+      await expect(
+        lifecycleProcessAlive(
+          role,
+          () => {
+            throw Object.assign(new Error("PRIVATE"), { code })
+          },
+          inspect,
+        ),
+      ).rejects.toThrow(`${role}-ps-${reason}`)
+    }
+    expect(inspections).toBe(0)
   }
 })
 

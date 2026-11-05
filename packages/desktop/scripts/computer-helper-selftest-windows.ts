@@ -19,6 +19,7 @@ import {
 } from "./build-computer-helper"
 import { EXECUTABLE_NAMES } from "./channel-ids"
 import { generateIdentitySources, readIdentity } from "./computer-helper-identity"
+import { WindowsCheckFailure, WindowsDiagnosticReader, windowsCommandReason, type WindowsDiagnostic } from "./computer-helper-windows-diagnostics"
 import type {
   Command,
   CommandResult,
@@ -189,7 +190,7 @@ export async function verifyWindowsNativeFiles(
 
 type WindowsFixtureDependencies = {
   command: (command: Command) => Promise<CommandResult>
-  channel?: (executable: string, args: string[]) => NativeChannel
+  channel?: (executable: string, args: string[]) => NativeChannel & {startupDiagnostic?: () => WindowsDiagnostic}
   architecture?: HelperArchitecture
   verify?: (options: SelfTestOptions, directory: string, architecture?: string) => Promise<VerifiedWindowsArtifacts>
 }
@@ -266,7 +267,21 @@ export async function createWindowsVerifiedFixture(
     return {
       async open() {
         requireOpen()
-        return open(caller, ["--stdio"])
+        const channel = open(caller, ["--stdio"])
+        let received = false
+        return {...channel, async next(timeoutMs: number) {
+          const result = await channel.next(timeoutMs).catch(error => {
+            const observed = channel.startupDiagnostic?.()
+            if (!received && observed?.caller)
+              throw new WindowsCheckFailure(windowsCommandReason({code: null, diagnostic: {windows: observed}}, "channel"))
+            throw error
+          })
+          if (!received && result?.kind === "exit")
+            throw new WindowsCheckFailure(windowsCommandReason({code: result.code, diagnostic: {windows: channel.startupDiagnostic?.()}}, "channel"))
+          if (!received && !result) throw new WindowsCheckFailure("windows-channel-no-frame")
+          if (result?.kind === "frame") received = true
+          return result
+        }}
       },
       async probe() {
         requireOpen()
@@ -274,10 +289,23 @@ export async function createWindowsVerifiedFixture(
           executable: caller,
           args: ["--probe", "--json"],
           timeoutMs: 15_000,
+          windowsDiagnostic: "caller",
         })
-        if (result.code !== 0 || result.timedOut || Buffer.byteLength(result.stdout) > 32_768)
-          throw new Error("The verified Windows probe failed.")
-        return JSON.parse(result.stdout) as unknown
+        if (result.code !== 0 || result.timedOut)
+          throw new WindowsCheckFailure(windowsCommandReason(result, "probe"))
+        if (Buffer.byteLength(result.stdout) > 32_768) throw new WindowsCheckFailure("windows-probe-output-limit")
+        let probe: unknown
+        try { probe = JSON.parse(result.stdout) } catch { throw new WindowsCheckFailure("windows-probe-invalid-json") }
+        if (!probe || typeof probe !== "object" || Array.isArray(probe)) throw new WindowsCheckFailure("windows-probe-invalid-json")
+        const value = probe as Record<string, unknown>
+        const permissions = value.permissions
+        if (!permissions || typeof permissions !== "object" || Array.isArray(permissions) ||
+            (permissions as Record<string, unknown>).screen !== "n/a" || (permissions as Record<string, unknown>).accessibility !== "n/a")
+          throw new WindowsCheckFailure("windows-probe-invalid-permissions")
+        if (value.responsible !== true) throw new WindowsCheckFailure("windows-probe-invalid-responsible")
+        if (value.elevated !== false) throw new WindowsCheckFailure("windows-probe-invalid-elevated")
+        if (typeof value.captureBlocked !== "boolean") throw new WindowsCheckFailure("windows-probe-invalid-capture-blocked")
+        return probe
       },
       async unverifiedParent() {
         requireOpen()
@@ -315,9 +343,10 @@ export async function createWindowsVerifiedFixture(
 }
 
 /** Windows protocol bytes use stdin/stdout. ChildProcess.kill targets Node's owned process handle. */
-export function windowsNativeChannel(executable: string, args: string[], launch: typeof spawn = spawn): NativeChannel {
+export function windowsNativeChannel(executable: string, args: string[], launch: typeof spawn = spawn): NativeChannel & {startupDiagnostic: () => WindowsDiagnostic} {
   const child = launch(executable, args, { stdio: ["pipe", "pipe", "pipe"], windowsHide: true })
   const inbox: Received[] = []
+  const startup = new WindowsDiagnosticReader("caller")
   const listeners = new Set<() => void>()
   let buffered = 0
   let error: Error | undefined
@@ -352,6 +381,7 @@ export function windowsNativeChannel(executable: string, args: string[], launch:
   // Native diagnostics are drained but never retained or mixed into protocol bytes/reports.
   let diagnostics = 0
   child.stderr.on("data", (bytes: Buffer) => {
+    startup.consume(bytes, "stderr")
     diagnostics += bytes.byteLength
     if (diagnostics > 65_536) fail()
   })
@@ -362,6 +392,7 @@ export function windowsNativeChannel(executable: string, args: string[], launch:
     wake()
   })
   return {
+    startupDiagnostic: () => startup.finish(),
     write(bytes) {
       if (error) throw error
       if (child.stdin.writableLength + bytes.byteLength > 32 * 1024 * 1024)

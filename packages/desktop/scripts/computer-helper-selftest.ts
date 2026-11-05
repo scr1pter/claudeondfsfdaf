@@ -40,6 +40,7 @@ import {
   type NativeCommandDiagnostic,
 } from "./computer-helper-command-diagnostics"
 import { readIdentity } from "./computer-helper-identity"
+import { WindowsCheckFailure } from "./computer-helper-windows-diagnostics"
 import { MAC_TEST_TARGET, verifyMacTestArtifacts, verifyPrebuiltHelper } from "./build-computer-helper"
 import {
   WINDOWS_NATIVE_CHECKS,
@@ -179,7 +180,7 @@ type NativeFailureReason =
   | "channel-oversized-output"
   | "channel-receive-limit"
   | "channel-send-limit"
-  | "process-inspection-failed"
+  | `${"supervisor" | "worker"}-${"pgrep" | "ps"}-${"timeout" | "spawn-failed" | "exit-status" | "malformed-stdout" | "incomplete" | "probe-denied" | "probe-failed"}`
 class NativeCheckFailure extends Error {
   constructor(readonly reason: NativeFailureReason) {
     super(reason)
@@ -190,6 +191,59 @@ class NativeCheckFailure extends Error {
 export function lifecycleTopologyFailure(role: "supervisor" | "worker", count: number) {
   if (count === 1) return
   return `${role}-${count === 0 ? "missing" : "extra"}` as const
+}
+
+/** Interpret only completed inspections of the owned fixture; child output never enters a reason. */
+function requireLifecycleInspection(role: "supervisor" | "worker", command: "pgrep" | "ps", result: CommandResult) {
+  const diagnostic = result.diagnostic
+  const failure =
+    result.timedOut || diagnostic?.trigger === "wall-deadline"
+      ? "timeout"
+      : diagnostic?.trigger === "spawn-failed"
+        ? "spawn-failed"
+        : !diagnostic || diagnostic.trigger !== "complete" || !diagnostic.exitObserved || !diagnostic.closeObserved
+          ? "incomplete"
+          : result.code !== 0 && result.code !== 1
+            ? "exit-status"
+            : undefined
+  if (failure) throw new NativeCheckFailure(`${role}-${command}-${failure}`)
+}
+
+export function lifecycleDescendants(role: "supervisor" | "worker", result: CommandResult): number[] {
+  requireLifecycleInspection(role, "pgrep", result)
+  if (!/^\s*(?:\d+\s*)*$/.test(result.stdout) || (result.code === 1 && result.stdout.trim() !== ""))
+    throw new NativeCheckFailure(`${role}-pgrep-malformed-stdout`)
+  return result.code === 1 ? [] : result.stdout.trim().split(/\s+/).filter(Boolean).map(Number)
+}
+
+/** A failed ps inspection cannot establish death; an intervening exit requires a fresh ESRCH witness. */
+export async function lifecycleProcessAlive(
+  role: "supervisor" | "worker",
+  probe: () => void,
+  inspect: () => Promise<CommandResult>,
+): Promise<boolean> {
+  const exists = () => {
+    try {
+      probe()
+      return true
+    } catch (error) {
+      const code = error && typeof error === "object" ? (error as NodeJS.ErrnoException).code : undefined
+      if (code === "ESRCH") return false
+      throw new NativeCheckFailure(`${role}-ps-${code === "EPERM" ? "probe-denied" : "probe-failed"}`)
+    }
+  }
+  if (!exists()) return false
+  const result = await inspect()
+  requireLifecycleInspection(role, "ps", result)
+  if (result.code === 1) {
+    if (result.stdout.trim() !== "") throw new NativeCheckFailure(`${role}-ps-malformed-stdout`)
+    if (!exists()) return false
+    throw new NativeCheckFailure(`${role}-ps-exit-status`)
+  }
+  const status = result.stdout.trim()
+  // macOS primary states plus documented stat modifiers; multiple rows and arbitrary text fail closed.
+  if (!/^[IRSTUZ][+<AN>ELSVWXs]*$/.test(status)) throw new NativeCheckFailure(`${role}-ps-malformed-stdout`)
+  return status[0] !== "Z"
 }
 
 /** Hello-only fixtures have no task scope. Only global environment notifications may precede process exit. */
@@ -239,7 +293,7 @@ function boundedExitCode(code: number | null) {
 
 /** Keep only a classified fixture/line and a fixed category; replay errors may contain private response values. */
 export function transcriptFailureReason(name: string, error: unknown) {
-  if (error instanceof NativeCheckFailure) return error.reason
+  if (error instanceof NativeCheckFailure || error instanceof WindowsCheckFailure) return error.reason
   if (!(error instanceof Error) || !CORE_TRANSCRIPTS.some((item) => item === name)) return "transcript-failed"
   if (error.message === "The conformance fixture contains a non-isolated operation.") return "fixture-policy"
   if (/:\d+: not a \{send, expect\} line$/.test(error.message)) return "fixture-format"
@@ -269,7 +323,7 @@ export type SelfTestOptions = {
   privileged: PrivilegedMode
   report?: string
 }
-export type Command = { executable: string; args: string[]; timeoutMs?: number }
+export type Command = { executable: string; args: string[]; timeoutMs?: number; windowsDiagnostic?: "unit" | "caller" }
 export type CommandResult = {
   code: number | null
   stdout: string
@@ -480,7 +534,11 @@ export async function runComputerHelperSelfTest(options: SelfTestOptions, depend
             : status === "skipped"
               ? "native-skip"
               : status === "failed"
-                ? "native-check-failed"
+                ? name === "unit" && options.platform === "win32" && result.diagnostic?.windows?.unitFailure
+                  ? `windows-unit-failure-${result.diagnostic.windows.unitFailure}`
+                  : name === "unit" && options.platform === "win32" && result.diagnostic?.windows?.unitSuite
+                    ? `windows-unit-after-${result.diagnostic.windows.unitSuite}`
+                    : "native-check-failed"
                 : undefined,
       )
       // Diagnostic failure cannot hide an existing native failure or turn a failed unit into a pass.
@@ -581,7 +639,12 @@ export async function runComputerHelperSelfTest(options: SelfTestOptions, depend
         ? undefined
         : () =>
             runObservedNativeCommand(
-              { executable: files!.unit, args: [], timeoutMs: 30_000 },
+              {
+                executable: files!.unit,
+                args: [],
+                timeoutMs: 30_000,
+                ...(options.platform === "win32" ? { windowsDiagnostic: "unit" as const } : {}),
+              },
               {
                 // Only this exact verified unit executable is eligible; never a helper operation or model PID.
                 sampleUnit: options.platform === "darwin" && options.report !== undefined,
@@ -621,8 +684,8 @@ export async function runComputerHelperSelfTest(options: SelfTestOptions, depend
               })
         Schema.decodeUnknownSync(probeSchema)(await fixture.probe())
         set(name, "passed")
-      } catch {
-        set(name, "failed", "native-probe-failed")
+      } catch (error) {
+        set(name, "failed", error instanceof WindowsCheckFailure ? error.reason : "native-probe-failed")
       }
     }
     const channel = await fixture.open()
@@ -674,9 +737,9 @@ export async function runComputerHelperSelfTest(options: SelfTestOptions, depend
         set(name, "failed", error instanceof NativeCheckFailure ? error.reason : "lifecycle-check-failed")
       }
     }
-  } catch {
+  } catch (error) {
     if (checks.find((item) => item.name === "responsible")?.status !== "passed")
-      set("responsible", "failed", "verified-caller-unavailable")
+      set("responsible", "failed", error instanceof WindowsCheckFailure ? error.reason : "verified-caller-unavailable")
     for (const check of checks)
       if (check.reason === "not-run" && check.name !== "privileged") {
         check.status = "failed"
@@ -827,26 +890,20 @@ async function createVerifiedFixture(options: SelfTestOptions, files?: NativeTes
     if ((await bundleDigest(bundle)) !== (await bundleDigest(destination)))
       throw new Error("Copying or signing changed the shipped helper.")
     const open = async () => nativeChannel(executable, ["--stdio"])
-    const alive = async (pid: number) => {
-      try {
-        process.kill(pid, 0)
-      } catch (error) {
-        return (error as NodeJS.ErrnoException).code !== "ESRCH"
-      }
-      const result = await runNativeCommand({
-        executable: "/bin/ps",
-        args: ["-p", String(pid), "-o", "stat="],
-        timeoutMs: 500,
-      })
-      return result.code === 0 && !/^\s*Z/.test(result.stdout)
-    }
-    const descendants = async (pid: number) => {
-      const result = await runNativeCommand({ executable: "/usr/bin/pgrep", args: ["-P", String(pid)], timeoutMs: 500 })
-      if (result.code === 1) return []
-      if (result.code !== 0 || !/^\s*(?:\d+\s*)*$/.test(result.stdout))
-        throw new NativeCheckFailure("process-inspection-failed")
-      return result.stdout.trim().split(/\s+/).filter(Boolean).map(Number)
-    }
+    const alive = (pid: number, role: "supervisor" | "worker") =>
+      lifecycleProcessAlive(
+        role,
+        () => {
+          process.kill(pid, 0)
+        },
+        () =>
+          runObservedNativeCommand({ executable: "/bin/ps", args: ["-p", String(pid), "-o", "stat="], timeoutMs: 500 }),
+      )
+    const descendants = async (pid: number, role: "supervisor" | "worker") =>
+      lifecycleDescendants(
+        role,
+        await runObservedNativeCommand({ executable: "/usr/bin/pgrep", args: ["-P", String(pid)], timeoutMs: 500 }),
+      )
     const lifetime = async (parentDeath: boolean) => {
       const running = nativeChannel(executable, ["--stdio"])
       try {
@@ -864,10 +921,10 @@ async function createVerifiedFixture(options: SelfTestOptions, files?: NativeTes
             },
           },
         )
-        const supervisors = await descendants(running.pid)
+        const supervisors = await descendants(running.pid, "supervisor")
         const supervisorFailure = lifecycleTopologyFailure("supervisor", supervisors.length)
         if (supervisorFailure) throw new NativeCheckFailure(supervisorFailure)
-        const workers = await descendants(supervisors[0]!)
+        const workers = await descendants(supervisors[0]!, "worker")
         const workerFailure = lifecycleTopologyFailure("worker", workers.length)
         if (workerFailure) throw new NativeCheckFailure(workerFailure)
         const deadline = performance.now() + 1000
@@ -879,7 +936,7 @@ async function createVerifiedFixture(options: SelfTestOptions, files?: NativeTes
           throw new NativeCheckFailure(code === undefined ? "caller-exit-status" : `caller-exit-status-${code}`)
         }
         while (performance.now() < deadline) {
-          if (!(await alive(supervisors[0]!)) && !(await alive(workers[0]!))) {
+          if (!(await alive(supervisors[0]!, "supervisor")) && !(await alive(workers[0]!, "worker"))) {
             if (performance.now() > deadline) throw new NativeCheckFailure("descendant-exit-deadline")
             return true
           }

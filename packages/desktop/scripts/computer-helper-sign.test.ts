@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { createHash } from "node:crypto"
+import { createHash, X509Certificate } from "node:crypto"
 import { cp, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
@@ -22,6 +22,12 @@ import type { HelperManifest, NativeCommand } from "./build-computer-helper"
 const empty = '<?xml version="1.0"?><plist version="1.0"><dict/></plist>'
 const certificate = "Developer ID Application: Vector Fixture (ABCDEFGHIJ)"
 const sha256 = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex")
+
+function fixtureSigningIdentities(output: string, name: string, fingerprint: string) {
+  return [...output.matchAll(/^\s*\d+\)\s+([a-fA-F0-9]{40})\s+"([^"\r\n]+)"(?:\s+\([^\r\n]*\))?\s*$/gm)]
+    .filter((entry) => entry[2] === name && entry[1]?.toUpperCase() === fingerprint)
+    .map((entry) => entry[1]!.toUpperCase())
+}
 
 async function fixture(channel: Hands.Channel = "prod", universal = false) {
   const directory = await realpath(await mkdtemp(path.join(os.tmpdir(), "vector-helper-sign-")))
@@ -96,6 +102,18 @@ async function arm(f: Awaited<ReturnType<typeof fixture>>) {
 }
 
 describe("computer helper macOS signing", () => {
+  test("certificate fixture selection requires its exact observed name and certificate fingerprint", () => {
+    const fingerprint = "A".repeat(40)
+    const entry = `  1) ${fingerprint} "Fixture Certificate"`
+    expect(
+      fixtureSigningIdentities(`${entry}\n  1 valid identities found`, "Fixture Certificate", fingerprint),
+    ).toEqual([fingerprint])
+    expect(fixtureSigningIdentities(entry, "Other Certificate", fingerprint)).toEqual([])
+    expect(fixtureSigningIdentities(entry, "Fixture Certificate", "B".repeat(40))).toEqual([])
+    expect(fixtureSigningIdentities("  0 valid identities found", "Fixture Certificate", fingerprint)).toEqual([])
+    expect(fixtureSigningIdentities(`${entry}\n${entry}`, "Fixture Certificate", fingerprint)).toHaveLength(2)
+  })
+
   test("codesign diagnostics expose only fixed failure reasons", () => {
     const cases = [
       ["errSecInternalComponent", "codesign.security-internal"],
@@ -734,11 +752,35 @@ test.skipIf(process.platform !== "darwin" || !process.env.VECTOR_TEST_CODESIGN_I
       await mkdir(path.join(app, "Contents/Resources"), { recursive: true })
       await writeFile(path.join(app, "Contents/Resources/computer-helper.json"), JSON.stringify(sourceManifest))
       await prepareComputerHelperMacSigning({ app, channel: "dev", sourceManifest })
+      const certificateFile = process.env.VECTOR_TEST_CODESIGN_CERTIFICATE
+      const keychain = process.env.VECTOR_TEST_CODESIGN_KEYCHAIN
+      if (!certificateFile || !keychain) throw new Error("certificate-fixture missing-public-certificate-or-keychain")
+      const certificate = new X509Certificate(await readFile(certificateFile))
+      const name = process.env.VECTOR_TEST_CODESIGN_IDENTITY!
+      expect(certificate.subject).toBe(`CN=${name}`)
+      const fingerprint = certificate.fingerprint.replaceAll(":", "")
+      expect(fingerprint).toMatch(/^[A-F0-9]{40}$/)
+      const identityQuery = (valid: boolean) =>
+        Bun.spawnSync(["/usr/bin/security", "find-identity", ...(valid ? ["-v"] : []), "-p", "codesigning", keychain], {
+          env: process.env,
+          stdout: "pipe",
+          stderr: "pipe",
+          timeout: 10_000,
+        })
+      const matching = identityQuery(false)
+      const valid = identityQuery(true)
+      expect(matching.exitCode, "certificate-fixture matching-identity-query").toBe(0)
+      expect(valid.exitCode, "certificate-fixture valid-identity-query").toBe(0)
+      const matches = new Set(fixtureSigningIdentities(matching.stdout.toString(), name, fingerprint))
+      const identities = fixtureSigningIdentities(valid.stdout.toString(), name, fingerprint)
+      const trust = /CSSMERR_TP_NOT_TRUSTED/.test(matching.stdout.toString()) ? "untrusted" : "unknown"
+      console.log(`certificate-fixture matching=${matches.size} valid=${identities.length} trust=${trust}`)
+      expect(identities.length, "certificate-fixture exact-valid-identity").toBe(1)
       await signMacWithComputerHelper(
         {
           app,
-          identity: process.env.VECTOR_TEST_CODESIGN_IDENTITY!,
-          keychain: process.env.VECTOR_TEST_CODESIGN_KEYCHAIN,
+          identity: identities[0]!,
+          keychain,
           platform: "darwin",
           preAutoEntitlements: false,
           preEmbedProvisioningProfile: false,

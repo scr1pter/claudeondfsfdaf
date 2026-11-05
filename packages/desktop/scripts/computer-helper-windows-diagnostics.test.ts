@@ -1,0 +1,51 @@
+import { expect, test } from "bun:test"
+import { readFile } from "node:fs/promises"
+import {
+  WINDOWS_CALLER_STAGES,
+  WINDOWS_UNIT_FAILURE_LABELS,
+  WINDOWS_UNIT_SUITES,
+  WindowsCheckFailure,
+  WindowsDiagnosticReader,
+  windowsCommandReason,
+  windowsDiagnostic,
+} from "./computer-helper-windows-diagnostics"
+
+const bytes = (value: string) => Buffer.from(value)
+
+test("Windows unit catalog binds existing fixed native suite and failure labels", async () => {
+  const main = await readFile(new URL("../native/computer-helper/windows/tests/main.cpp", import.meta.url), "utf8")
+  const integration = await readFile(new URL("../native/computer-helper/windows/tests/integration_tests.cpp", import.meta.url), "utf8")
+  expect([...main.matchAll(/run_check\("([a-z0-9-]+)"/g)].map(match => match[1])).toEqual([...WINDOWS_UNIT_SUITES])
+  const labels = [...new Set([...(main + "\n" + integration).matchAll(/"([a-z][a-z0-9-]*(?:\.[a-z0-9-]+)+)"/g)].map(match => match[1]!))].toSorted()
+  expect(labels).toEqual([...WINDOWS_UNIT_FAILURE_LABELS])
+  const caller = await readFile(new URL("../native/computer-helper/windows/tests/caller.cpp", import.meta.url), "utf8")
+  expect([...new Set([...caller.matchAll(/stage = "([a-z-]+)"/g)].map(match => match[1]))]).toEqual([...WINDOWS_CALLER_STAGES])
+})
+
+test("split lines preserve only exact unit failure and Caller stage, with the first cause retained", () => {
+  const reader = new WindowsDiagnosticReader("unit")
+  for (const chunk of ["PASS identity-and-", "blocklist\r\nPASS server\nPASS unknown-secret\n"]) reader.consume(bytes(chunk), "stdout")
+  for (const chunk of ["private /owner/secret\nFAIL integration.reply-", "pipe\nvector-caller-failure medium.layout\nvector-caller-failure initial.child-exit\n"]) reader.consume(bytes(chunk), "stderr")
+  expect(reader.finish()).toEqual({unitSuite: "server", unitFailure: "integration.reply-pipe", caller: "medium.layout"})
+  expect(windowsCommandReason({code: 1, diagnostic: {windows: reader.finish()}}, "probe")).toBe("windows-caller-medium.layout")
+})
+
+test("unknown fields, incomplete lines, overlong lines and output past the bound never serialize", () => {
+  const reader = new WindowsDiagnosticReader("caller")
+  reader.consume(bytes("x".repeat(193) + "vector-caller-failure initial.layout\nvector-caller-failure initial.private-secret\nFAIL integration.reply-pipe\nvector-caller-failure medium.layout"), "stderr")
+  expect(reader.finish()).toEqual({})
+  const bounded = new WindowsDiagnosticReader("caller")
+  bounded.consume(bytes("x".repeat(65_536) + "\nvector-caller-failure initial.layout\n"), "stderr")
+  expect(bounded.finish()).toEqual({})
+  for (const value of [{caller: "initial.secret"}, {unitFailure: "integration.owner-secret"}, {unitSuite: "owner-secret"}, {caller: "medium.layout", path: "/owner"}])
+    expect(() => windowsDiagnostic(value)).toThrow()
+  for (const reason of ["private-secret", "windows-caller-medium.secret", "windows-probe-exit-999", "windows-probe-exit-001"])
+    expect(() => new WindowsCheckFailure(reason)).toThrow()
+})
+
+test("command outcome categories retain finite exit and bound failures without a pass conversion", () => {
+  expect(windowsCommandReason({code: 1}, "probe")).toBe("windows-probe-exit-1")
+  expect(windowsCommandReason({code: 3221225477}, "probe")).toBe("windows-probe-exit-unknown")
+  expect(windowsCommandReason({code: 0, timedOut: true}, "channel")).toBe("windows-channel-deadline")
+  expect(() => { new WindowsCheckFailure("windows-probe-invalid-responsible") }).not.toThrow()
+})

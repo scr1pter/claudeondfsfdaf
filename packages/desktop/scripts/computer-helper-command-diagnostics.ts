@@ -2,6 +2,7 @@ import { spawn } from "node:child_process"
 import { constants } from "node:fs"
 import { mkdir, open } from "node:fs/promises"
 import path from "node:path"
+import { WindowsDiagnosticReader, windowsDiagnostic, type WindowsDiagnostic } from "./computer-helper-windows-diagnostics"
 
 export const NATIVE_UNIT_SUITES = [
   "runCommandLineTests",
@@ -70,8 +71,9 @@ export type NativeCommandDiagnostic = {
   closeAfterMs?: number
   sample: NativeUnitSample
   progress?: NativeUnitProgress
+  windows?: WindowsDiagnostic
 }
-export type ObservedNativeCommand = { executable: string; args: readonly string[]; timeoutMs?: number }
+export type ObservedNativeCommand = { executable: string; args: readonly string[]; timeoutMs?: number; windowsDiagnostic?: "unit" | "caller" }
 export type ObservedNativeResult = {
   code: number | null
   stdout: string
@@ -225,6 +227,7 @@ export function nativeCommandDiagnostic(value: unknown): NativeCommandDiagnostic
       "closeAfterMs",
       "sample",
       "progress",
+      "windows",
     ]) ||
     body.schemaVersion !== 1 ||
     !triggers.includes(body.trigger as NativeCommandDiagnostic["trigger"]) ||
@@ -277,6 +280,7 @@ export function nativeCommandDiagnostic(value: unknown): NativeCommandDiagnostic
       waits: waitCategories.filter((wait) => sample.waits instanceof Array && sample.waits.includes(wait)),
     },
     ...(body.progress === undefined ? {} : { progress: nativeUnitProgress(body.progress) }),
+    ...(body.windows === undefined ? {} : { windows: windowsDiagnostic(body.windows) }),
   }
 }
 
@@ -369,6 +373,7 @@ export async function runObservedNativeCommand(
     })
     const chunks: Buffer[] = []
     const progress = options.sampleUnit || options.observeUnitProgress ? new NativeUnitProgressReader() : undefined
+    const windows = command.windowsDiagnostic ? new WindowsDiagnosticReader(command.windowsDiagnostic) : undefined
     const sampleAbort = new AbortController()
     let code: number | null = null,
       ended = false,
@@ -393,6 +398,7 @@ export async function runObservedNativeCommand(
       sampleAbort.abort()
       diagnostic.elapsedMs = elapsed()
       if (progress) diagnostic.progress = progress.finish()
+      if (windows) diagnostic.windows = windows.finish()
       // The promise cannot wait forever for a descendant to retain an inherited pipe after exit.
       child.stdout.destroy()
       child.stderr.destroy()
@@ -417,6 +423,7 @@ export async function runObservedNativeCommand(
       if (stdout) diagnostic.stdoutBytes = count(diagnostic.stdoutBytes + chunk.length)
       else diagnostic.stderrBytes = count(diagnostic.stderrBytes + chunk.length)
       if (!stdout) progress?.consume(chunk.subarray(0, remaining))
+      windows?.consume(chunk.subarray(0, remaining), stdout ? "stdout" : "stderr")
       if (diagnostic.stdoutBytes + diagnostic.stderrBytes > limit) {
         stop("output-cap")
         return

@@ -447,13 +447,16 @@ test("focused Node smoke keeps normal CI gates and uses its own cancellation gro
     desktop_engine_node: true,
     computer_helper: true,
     computer_helper_windows_units_only: true,
+    computer_helper_macos_signing_only: true,
     hands_ui: true,
     hands_benchmark: true,
   }
   for (const [name, value] of Object.entries(all)) {
     const current = record(value)
     expect(expression(String(current.if), focused), name).toBe(name === "desktop-engine-node")
-    if (!["hands-ui", "hands-benchmark", "computer-helper-windows-units"].includes(name)) {
+    if (
+      !["hands-ui", "hands-benchmark", "computer-helper-windows-units", "computer-helper-macos-signing"].includes(name)
+    ) {
       expect(expression(String(current.if), {}), name).toBe(true)
       expect(expression(String(current.if), {}, "pull_request"), name).toBe(true)
     }
@@ -720,14 +723,115 @@ test("x64 diagnostics reuse exact bounded native checks and publish no release e
   const script = commands(diagnostic)
   expect(script).toContain("--platform win32 --arch x64 --channel prod --out native/out/win32")
   expect(script).toContain("bun install --frozen-lockfile --ignore-scripts")
-  expect(script).not.toMatch(/--arch (?:arm64|x64,arm64)|--privileged|--native-stage|tar -|native-ready/)
-  expect(current.some((step) => String(step.uses).includes("upload-artifact"))).toBe(false)
+  expect(script).not.toMatch(
+    /--arch (?:arm64|x64,arm64)|--privileged (?:auto|require)|--native-stage|tar -|native-ready/,
+  )
+  const uploads = current.filter((step) => String(step.uses).includes("upload-artifact"))
+  expect(uploads).toHaveLength(1)
+  expect(uploads[0]!.if).toBe("${{ always() }}")
+  expect(uploads[0]!.with).toEqual({
+    name: "computer-helper-win32-x64-diagnostic-${{ github.sha }}-${{ github.run_attempt }}",
+    path: "${{ runner.temp }}/computer-win32-core.json",
+    "if-no-files-found": "ignore",
+    overwrite: false,
+    "retention-days": 7,
+  })
   const checks = current.find((step) => step.name === "Run Windows unit and fresh version/probe checks")!
   expect(checks.run).toBe(steps(job("windows-build")).find((step) => step.name === checks.name)?.run)
   expect(checks["timeout-minutes"]).toBe(5)
   expect(checks["continue-on-error"]).toBeUndefined()
+  const protocol = current.find((step) => step.name === "Run required Windows protocol and lifecycle checks")!
+  expect(protocol.run).toBe(steps(job("windows-build")).find((step) => step.name === protocol.name)?.run)
+  expect(protocol.if).toBeUndefined()
+  expect(protocol["continue-on-error"]).toBeUndefined()
+  expect(protocol["timeout-minutes"]).toBe(8)
+  expect(current.indexOf(protocol)).toBeGreaterThan(current.indexOf(checks))
+  expect(current.indexOf(uploads[0]!)).toBeGreaterThan(current.indexOf(protocol))
   const release = record(workflow("vector-desktop-release.yml").document.jobs)
   for (const name of ["mac", "windows"]) expect(record(release[name]).needs).toContain("computer-helper")
   for (const value of Object.values(release))
     expect(JSON.stringify(value)).not.toContain("computer-helper-windows-units")
+})
+
+test("macOS certificate diagnostics are explicit, isolated and keep default and Node routes intact", () => {
+  const inputs = record(record(record(main.document.on).workflow_dispatch).inputs)
+  expect(inputs.computer_helper_macos_signing_only).toMatchObject({ type: "boolean", default: false })
+  const all = record(main.document.jobs)
+  const diagnostic = record(all["computer-helper-macos-signing"])
+  const selected = { computer_helper: true, computer_helper_macos_signing_only: true }
+  for (const event of ["workflow_dispatch", "pull_request", "push"])
+    for (const native of [false, true])
+      for (const signing of [false, true])
+        expect(
+          expression(
+            String(diagnostic.if),
+            { computer_helper: native, computer_helper_macos_signing_only: signing },
+            event,
+          ),
+        ).toBe(event === "workflow_dispatch" && native && signing)
+  for (const [name, value] of Object.entries(all)) {
+    expect(expression(String(record(value).if), selected), name).toBe(name === "computer-helper-macos-signing")
+    for (const event of ["workflow_dispatch", "pull_request", "push"])
+      expect(expression(String(record(value).if), { computer_helper_macos_signing_only: true }, event), name).toBe(
+        expression(String(record(value).if), {}, event),
+      )
+  }
+  const modes = [
+    {},
+    { computer_helper_windows_only: true },
+    { computer_helper_linux_only: true },
+    { computer_helper_windows_units_only: true },
+  ].flatMap((mode) => [
+    { computer_helper: true, ...mode },
+    { ...selected, ...mode },
+  ])
+  expect(new Set(modes.map((mode) => group(record(main.document.concurrency).group, mode))).size).toBe(modes.length)
+})
+
+test("the fast macOS certificate lane shares the real fixture and cleanup without native build or release credit", () => {
+  const diagnostic = record(record(main.document.jobs)["computer-helper-macos-signing"])
+  expect(diagnostic["runs-on"]).toBe("macos-15")
+  expect(record(diagnostic.env).DEVELOPER_DIR).toBe("/Applications/Xcode_16.4.app/Contents/Developer")
+  expect(diagnostic.permissions).toEqual({ contents: "read" })
+  for (const key of ["outputs", "needs", "continue-on-error", "environment"]) expect(diagnostic[key]).toBeUndefined()
+  const current = steps(diagnostic)
+  expect(current[0]!.name).toBe("Reject incompatible signing selectors before setup")
+  for (const windows of ["true", "false"])
+    for (const linux of ["true", "false"])
+      for (const units of ["true", "false"])
+        expect(
+          spawnSync("bash", ["--noprofile", "--norc", "-c", String(current[0]!.run)], {
+            env: { ...process.env, WINDOWS_ONLY: windows, LINUX_ONLY: linux, WINDOWS_UNITS_ONLY: units },
+            timeout: 5000,
+          }).status,
+        ).toBe([windows, linux, units].includes("true") ? 1 : 0)
+  for (const name of [
+    "Verify certificate signing with a temporary trusted CI identity",
+    "Remove any interrupted signing fixture trust and keychain",
+  ]) {
+    const step = current.find((step) => step.name === name)!
+    expect(step.run).toBe(steps(job("mac-build")).find((step) => step.name === name)?.run)
+    expect(step["continue-on-error"]).toBeUndefined()
+  }
+  expect(current.at(-1)!.if).toBe("${{ always() && steps.checkout.outcome == 'success' }}")
+  expect(commands(diagnostic)).toContain("bun install --frozen-lockfile --ignore-scripts")
+  expect(commands(diagnostic)).not.toMatch(
+    /build-computer-helper|computer-helper-selftest|--native-stage|tar -|native-ready/,
+  )
+  expect(current.some((step) => String(step.uses).includes("upload-artifact"))).toBe(false)
+  const fixture = readFileSync(
+    new URL("../../../.github/scripts/computer-helper-signing-fixture.sh", import.meta.url),
+    "utf8",
+  )
+  expect(fixture).toContain(
+    'sudo /usr/bin/security add-trusted-cert -d -r trustRoot -p codeSign -k "$keychain" "$certificate"',
+  )
+  expect(fixture).toContain('VECTOR_TEST_CODESIGN_CERTIFICATE="$certificate"')
+  expect(fixture).toContain("--test-name-pattern '^native certificate signing'")
+  expect(fixture).toContain('bash "$GITHUB_WORKSPACE/.github/scripts/computer-helper-signing-cleanup.sh"')
+  expect(fixture).not.toMatch(/build-computer-helper|--timestamp=none/)
+  const release = record(workflow("vector-desktop-release.yml").document.jobs)
+  for (const name of ["mac", "windows"]) expect(record(release[name]).needs).toContain("computer-helper")
+  for (const value of Object.values(release))
+    expect(JSON.stringify(value)).not.toContain("computer-helper-macos-signing")
 })
