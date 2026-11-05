@@ -55,31 +55,31 @@ export function computerOverlayWindowOptions(input: {
   preload?: string
 }): BrowserWindowConstructorOptions {
   return {
-      ...input.bounds,
-      transparent: true,
-      frame: false,
-      // Frameless macOS overlays must retain display edges beyond AppKit's menu/work-area clamp.
-      ...(input.platform === "darwin" ? { enableLargerThanScreen: true } : {}),
-      hasShadow: false,
-      focusable: false,
-      skipTaskbar: true,
-      resizable: false,
-      movable: false,
-      show: false,
-      backgroundColor: "#00000000",
-      hiddenInMissionControl: true,
-      type: input.platform === "darwin" ? "panel" : "toolbar",
-      ...(input.kind === "banner" ? { acceptFirstMouse: true } : {}),
-      webPreferences: {
-        sandbox: true,
-        contextIsolation: true,
-        nodeIntegration: false,
-        devTools: false,
-        partition: PARTITION,
-        backgroundThrottling: false,
-        ...(input.kind === "banner" ? { preload: input.preload } : {}),
-      },
-    }
+    ...input.bounds,
+    transparent: true,
+    frame: false,
+    // Frameless macOS overlays must retain display edges beyond AppKit's menu/work-area clamp.
+    ...(input.platform === "darwin" ? { enableLargerThanScreen: true } : {}),
+    hasShadow: false,
+    focusable: false,
+    skipTaskbar: true,
+    resizable: false,
+    movable: false,
+    show: false,
+    backgroundColor: "#00000000",
+    hiddenInMissionControl: true,
+    type: input.platform === "darwin" ? "panel" : "toolbar",
+    ...(input.kind === "banner" ? { acceptFirstMouse: true } : {}),
+    webPreferences: {
+      sandbox: true,
+      contextIsolation: true,
+      nodeIntegration: false,
+      devTools: false,
+      partition: PARTITION,
+      backgroundThrottling: false,
+      ...(input.kind === "banner" ? { preload: input.preload } : {}),
+    },
+  }
 }
 
 /** These are real Electron setters; native input/capture readiness is checked separately. */
@@ -239,7 +239,9 @@ export function createComputerOverlay(options: {
       options.preloadPath ?? (electron.appPath && path.join(electron.appPath, "out/preload/computer-overlay.js"))
     if (kind === "banner" && !preload)
       throw new ComputerError("unavailable", "The computer overlay preload is unavailable.")
-    const window = electron.createWindow(computerOverlayWindowOptions({ platform: options.platform, kind, bounds, preload }))
+    const window = electron.createWindow(
+      computerOverlayWindowOptions({ platform: options.platform, kind, bounds, preload }),
+    )
     registerComputerOverlay(window)
     if (kind === "banner") state.armed = undefined
     const pending = Promise.withResolvers<void>()
@@ -296,6 +298,9 @@ export function createComputerOverlay(options: {
     }
     const timeout = time.setTimeout(fail, 5000)
     windows.set(key, record)
+    // Restore thin Windows bounds after construction; Electron resets fixed-size constraints here.
+    // https://github.com/electron/electron/blob/v42.11.4/shell/browser/native_window_views.cc#L889-L898
+    if (options.platform === "win32") window.setBounds(bounds)
     configureComputerOverlayWindow(window, options.platform)
     window.webContents.setWindowOpenHandler(() => ({ action: "deny" }))
     const navigate = (event: { preventDefault(): void }) => event.preventDefault()
