@@ -13,7 +13,10 @@ export type Input = {
   rootSessionID: SessionID
   sessionID: SessionID
   directory: string
+  /** Owns the whole attended task, including time between individual computer calls. */
   signal?: AbortSignal
+  /** Cancels this invocation only; its listener ends when the serialized call returns. */
+  callSignal?: AbortSignal
 }
 
 /** One task generation. Action state belongs to the FIFO; the heartbeat also updates its control clock. */
@@ -80,7 +83,7 @@ export const use = serviceUse(Service)
 type Task = {
   state: State
   controller: AbortController
-  input: Omit<Input, "signal">
+  input: Omit<Input, "signal" | "callSignal">
   signals: Set<AbortSignal>
   workers: Set<Fiber.Fiber<unknown, unknown>>
   abort: () => void
@@ -477,7 +480,7 @@ export const layer = Layer.effect(
           message: "Computer use requires the attended root conversation.",
         })
       if (retired.has(input.rootSessionID)) return yield* stopped()
-      if (input.signal?.aborted) return yield* stopped()
+      if (input.signal?.aborted || input.callSignal?.aborted) return yield* stopped()
       const root: Root =
         roots.get(input.rootSessionID) ??
         ({
@@ -488,7 +491,7 @@ export const layer = Layer.effect(
       roots.set(input.rootSessionID, root)
       if (root.closing) yield* Deferred.await(root.closing)
       if (retired.has(input.rootSessionID)) return yield* stopped()
-      if (input.signal?.aborted) return yield* stopped()
+      if (input.signal?.aborted || input.callSignal?.aborted) return yield* stopped()
       const fresh = !root.task
       if (!root.task) {
         const controller = new AbortController()
@@ -534,6 +537,11 @@ export const layer = Layer.effect(
         input.signal.addEventListener("abort", task.abort, { once: true })
       }
       if (input.signal?.aborted) task.abort()
+      // Provider request controllers also abort on normal stream closure. They can stop unfinished
+      // work, but cannot retire a completed call's lease/frame while the next model request starts.
+      const callSignal = input.callSignal !== input.signal ? input.callSignal : undefined
+      callSignal?.addEventListener("abort", task.abort, { once: true })
+      if (callSignal?.aborted) task.abort()
       return yield* Effect.acquireUseRelease(
         exclusive(
           root,
@@ -564,7 +572,7 @@ export const layer = Layer.effect(
             task.workers.delete(worker)
             if (task.state.signal.aborted) yield* finish(root, task)
           }),
-      )
+      ).pipe(Effect.ensuring(Effect.sync(() => callSignal?.removeEventListener("abort", task.abort))))
     })
 
     const unsubscribe = yield* events.listen((event) => {

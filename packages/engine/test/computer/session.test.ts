@@ -576,6 +576,78 @@ it.effect("abort between completed computer calls releases the task without anot
   ),
 )
 
+it.effect("completed invocation aborts preserve the task frame until its real run ends", () =>
+  fixture((sessions, calls) =>
+    Effect.gen(function* () {
+      const run = new AbortController()
+      const first = new AbortController()
+      const state = yield* sessions.serialized({ ...input, signal: run.signal, callSignal: first.signal }, (state) =>
+        Effect.sync(() => {
+          state.lease = 24
+          state.grants.set("app", "interact")
+          ComputerSession.remember(state, frame("frame-between-requests"))
+          return state
+        }),
+      )
+      first.abort()
+      yield* TestClock.adjust(0)
+      expect(state.signal.aborted).toBe(false)
+      expect(calls).toHaveLength(0)
+      const second = new AbortController()
+      const next = yield* sessions.serialized(
+        { ...input, signal: run.signal, callSignal: second.signal },
+        Effect.succeed,
+      )
+      expect(next).toBe(state)
+      expect(next.lease).toBe(24)
+      expect(next.frames.map((value) => value.id)).toEqual(["frame-between-requests"])
+      expect(next.grants.get("app")).toBe("interact")
+      second.abort()
+      yield* TestClock.adjust(0)
+      expect(state.signal.aborted).toBe(false)
+      expect(calls).toHaveLength(0)
+      run.abort()
+      yield* TestClock.adjust(0)
+      expect(state.signal.aborted).toBe(true)
+      expect(state.frames).toHaveLength(0)
+      expect(state.grants.size).toBe(0)
+      expect(calls).toMatchObject([
+        { command: "cancel", lease: 24 },
+        { command: "release", lease: 24 },
+      ])
+    }),
+  ),
+)
+
+it.effect("an invocation aborted while unfinished retires its task and releases its lease", () =>
+  fixture((sessions, calls) =>
+    Effect.gen(function* () {
+      const run = new AbortController()
+      const call = new AbortController()
+      const entered = yield* Deferred.make<ComputerSession.State>()
+      const worker = yield* sessions
+        .serialized({ ...input, signal: run.signal, callSignal: call.signal }, (state) =>
+          Effect.gen(function* () {
+            state.lease = 25
+            yield* Deferred.succeed(entered, state)
+            return yield* Effect.never
+          }),
+        )
+        .pipe(Effect.result, Effect.forkChild)
+      const state = yield* Deferred.await(entered)
+      call.abort()
+      expect(Result.isFailure(yield* Fiber.join(worker))).toBe(true)
+      expect(run.signal.aborted).toBe(false)
+      expect(state.signal.aborted).toBe(true)
+      expect(state.lease).toBeUndefined()
+      expect(calls).toMatchObject([
+        { command: "cancel", lease: 25 },
+        { command: "release", lease: 25 },
+      ])
+    }),
+  ),
+)
+
 it.effect("a pre-aborted call and a child session cannot start a task", () =>
   fixture((sessions, calls) =>
     Effect.gen(function* () {

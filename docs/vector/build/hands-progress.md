@@ -772,3 +772,12 @@ Windows-only run42031291175 at85a05de9 compiles the production helper, Caller, i
 A default-off computer_helper_linux_only dispatch selects only the two actual Linux Electron lanes. It has separate parent/child cancellation groups from all-native, Windows-only and Node-only checks, so diagnosing loader failures does not cancel matching macOS evidence. The actual plan rejects simultaneous Linux/Windows selectors. Normal PR/full/release native gates retain their defaults. Workflow routing17 tests/518 assertions and actionlint pass, including actual Bash selection/mutual-exclusion checks.
 
 Matching run42032469029 at8216bee2 now passes the real Linux dev-app journey after the XAUTHORITY fix. The overlay smoke still reports a bounded loader failure before its boot receipt; further fixed loader classification is in progress. This is a failure, not a native grant skip.
+
+
+### Production attended-task lifetime repair
+
+Focused Node run42031131528 at9b3426a6 advances past the204 fix and real app approval, then its strict bridge observes a lease released between screenshot and click. Investigation confirms the production seam: AI SDK aborts its per-model-request signal on normal stream closure, while computer serialized state retained that signal as the whole task's lifetime. Reacquiring could not preserve the previous frame or approval and the smoke correctly refused it.
+
+V1 runLoop now owns one attended-task AbortController across provider rounds and aborts it before processor settlement. SessionTools passes that separate internal signal to computer tools; ordinary SDK invocation cancellation remains unchanged. ComputerSession retains the task signal through cleanup, observes invocation abort only while its serialized call is active, and removes that listener on return. Active-call cancellation, actual task end, Stop, idle/deletion and instance teardown still revoke and clean up. No public wire/schema or generated SDK changes are needed.
+
+Focused actual implementation checks pass: computer service35 tests/185 assertions, complete computer tool176/1136, actual two-provider prompt signal regression1/11 and engine typecheck. Four regressions cover preserved lease/frame/grants after normal stream closure, cancellation of unfinished work, and prompt-owned signal continuity/termination. Independent review found no concrete blocker. The actual Node screenshot→click/HTTP-approval smoke must now verify the production fix; its strict acquire/frame/cleanup assertions remain unchanged.

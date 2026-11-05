@@ -2089,6 +2089,54 @@ it.instance("loop continues after a missing-file read with a valid read and fina
   }),
 )
 
+it.instance("one prompt task signal spans provider requests and ends before the run returns", () =>
+  Effect.gen(function* () {
+    const setup = yield* useServerConfig(providerCfg)
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const registry = yield* ToolRegistry.Service
+    const { read } = yield* registry.named()
+    const original = read.execute
+    const seen: { abort: AbortSignal; taskAbort?: AbortSignal }[] = []
+    read.execute = (args, context) =>
+      Effect.gen(function* () {
+        expect(context.taskAbort).toBeDefined()
+        expect(context.taskAbort?.aborted).toBe(false)
+        if (seen.length) {
+          expect(seen[0]!.abort.aborted).toBe(true)
+          expect(context.taskAbort).toBe(seen[0]!.taskAbort)
+          expect(context.abort).not.toBe(seen[0]!.abort)
+        }
+        seen.push({ abort: context.abort, taskAbort: context.taskAbort })
+        return yield* original(args, context)
+      })
+    yield* Effect.addFinalizer(() =>
+      Effect.sync(() => {
+        read.execute = original
+      }),
+    )
+    const session = yield* sessions.create({
+      title: "Task signal",
+      permission: [{ permission: "*", pattern: "*", action: "allow" }],
+    })
+    const file = path.join(setup.dir, "task-signal.txt")
+    yield* writeText(file, "owned task signal fixture")
+    yield* setup.llm.tool("read", { filePath: file })
+    yield* setup.llm.tool("read", { filePath: file })
+    yield* setup.llm.text("Read twice.")
+    yield* prompt.prompt({
+      sessionID: session.id,
+      model: ref,
+      agent: "build",
+      parts: [{ type: "text", text: "Read the requested file and recover if it is missing." }],
+    })
+    expect(seen).toHaveLength(2)
+    expect(seen[0]!.taskAbort).toBe(seen[1]!.taskAbort)
+    expect(seen.every((value) => value.abort.aborted && value.taskAbort?.aborted)).toBe(true)
+    expect(yield* setup.llm.pending).toBe(0)
+  }),
+)
+
 it.instance("glob tool keeps instance context during prompt runs", () =>
   Effect.gen(function* () {
     const { dir, llm } = yield* useServerConfig(providerCfg)

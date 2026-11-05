@@ -291,7 +291,8 @@ export const ComputerTool = Tool.define(
           sessionID: ctx.sessionID,
           directory: instance.directory,
         } as const
-        return yield* computer.serialized({ ...envelope, signal: ctx.abort }, (state) =>
+        const signal = ctx.taskAbort ?? ctx.abort
+        return yield* computer.serialized({ ...envelope, signal, callSignal: ctx.abort }, (state) =>
           Effect.gen(function* () {
             if (state.failedMessageID === ctx.messageID) {
               yield* notExecuted("failed")

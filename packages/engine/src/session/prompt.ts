@@ -2016,7 +2016,11 @@ const layer = Layer.effect(
       // A run that ends before the provider answers keeps its provisional title without starting another request.
       const answering = yield* Deferred.make<boolean>()
       const ended = yield* Deferred.make<void>()
-      const steps = runSteps(session, answering, Deferred.await(ended), resumed).pipe(
+      const taskAbort = new AbortController()
+      const steps = runSteps(session, answering, Deferred.await(ended), taskAbort.signal, resumed).pipe(
+        // A completed provider request ends only its invocation signal. The attended run owns
+        // cross-request resources, and releases them before waiting for processor settlement.
+        Effect.ensuring(Effect.sync(() => taskAbort.abort())),
         Effect.ensuring(Deferred.succeed(answering, false)),
         // Stop waits for queued snapshots so immediate undo sees all changes from completed steps.
         Effect.ensuring(processor.settle(sessionID)),
@@ -2139,6 +2143,7 @@ const layer = Layer.effect(
       session: Session.Info,
       answering: Deferred.Deferred<boolean>,
       ended: Effect.Effect<void>,
+      taskAbort: AbortSignal,
       resumed?: ResumeFreeModelsInput & { parentID: MessageID },
     ) {
       const ctx = yield* InstanceState.context
@@ -2474,6 +2479,7 @@ const layer = Layer.effect(
             invokedAgents,
             messages: msgs,
             promptOps,
+            taskAbort,
             // A role whose output leaves the machine gets no pointer to a private document when it reads a linked file,
             // and its memory tool finds nothing personal.
             personal: personal && audience === "owner",

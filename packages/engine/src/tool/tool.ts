@@ -40,6 +40,8 @@ export type Context<M extends Metadata = Metadata> = {
   messageID: MessageID
   agent: string
   abort: AbortSignal
+  /** The attended prompt run, spanning provider requests; absent for standalone tool callers. */
+  taskAbort?: AbortSignal
   callID?: string
   extra?: { [key: string]: unknown }
   /** Assignment scope supplied by the session runtime, never by model arguments. */

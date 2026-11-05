@@ -1077,6 +1077,38 @@ toolTests.instance("one app approval covers observation and interaction with the
   ),
 )
 
+toolTests.instance("provider stream closure keeps one lease and frame for the next computer call", () =>
+  toolCase(({ desktop, execute, bridge }) =>
+    Effect.gen(function* () {
+      const task = new AbortController()
+      const first = new AbortController()
+      const screenshot = yield* execute(
+        { action: "screenshot", app: "Notes" },
+        { abort: first.signal, taskAbort: task.signal },
+      )
+      expect(screenshot.metadata.code).toBeUndefined()
+      first.abort()
+      const second = new AbortController()
+      const clicked = yield* execute(
+        { action: "click", x: 100, y: 50, screenshot: false },
+        { abort: second.signal, taskAbort: task.signal },
+      )
+      expect(clicked.metadata.code).toBeUndefined()
+      expect(desktop.requests).toHaveLength(1)
+      expect(bridge.commands().filter((command) => command === "acquire")).toHaveLength(1)
+      expect(bridge.commands()).not.toContain("cancel")
+      expect(bridge.commands()).not.toContain("release")
+      expect(bridge.calls().findLast((call) => call.body.command === "act")?.body).toMatchObject({
+        lease: 1,
+        frame: "frame-1",
+        steps: [{ kind: "click", at: { x: 100, y: 50 } }],
+      })
+      second.abort()
+      expect(task.signal.aborted).toBe(false)
+    }),
+  ),
+)
+
 toolTests.instance("a coordinate click without a full frame never reaches the desktop act command", () =>
   toolCase(({ execute, bridge }) =>
     Effect.gen(function* () {

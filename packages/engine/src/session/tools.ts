@@ -55,6 +55,8 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
   invokedAgents: readonly string[]
   messages: SessionV1.WithParts[]
   promptOps: TaskPromptOps
+  /** Owned by the prompt run, independently of each provider request. */
+  taskAbort?: AbortSignal
   // The request's size this step, for the escalate tool; absent where sizing does not apply.
   taskSize?: TaskSizeContext
   // Whether the owner's personal memory and private documents may go to this step's model: no guest is in the
@@ -84,6 +86,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
     sessionID: input.session.id,
     parentID: input.session.parentID,
     abort: options.abortSignal!,
+    taskAbort: input.taskAbort,
     messageID: input.processor.message.id,
     callID: options.toolCallId,
     extra: {
