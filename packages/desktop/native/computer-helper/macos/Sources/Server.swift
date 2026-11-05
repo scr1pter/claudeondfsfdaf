@@ -66,6 +66,7 @@ final class Dispatcher {
   private let sendImage: ((Response, Data) -> Void)?
   private let event: (Event) -> Void
   private let releaseAll: () -> Int
+  private let observationsInvalidated: () -> Void
   private let stopped: () -> Void
   private let features: () -> [String: Bool]
   private let permissions: () -> [String: JSONValue]
@@ -97,6 +98,7 @@ final class Dispatcher {
     send: @escaping (Response) -> Void,
     event: @escaping (Event) -> Void,
     releaseAll: @escaping () -> Int = { 0 },
+    observationsInvalidated: @escaping () -> Void = {},
     stopped: @escaping () -> Void = {},
     sendImage: ((Response, Data) -> Void)? = nil,
     features: @escaping () -> [String: Bool] = { [:] },
@@ -114,6 +116,7 @@ final class Dispatcher {
     self.send = send
     self.event = event
     self.releaseAll = releaseAll
+    self.observationsInvalidated = observationsInvalidated
     self.stopped = stopped
     self.sendImage = sendImage
     self.features = features
@@ -184,6 +187,7 @@ final class Dispatcher {
       closed = true
       halted = true
       generation &+= 1
+      observationsInvalidated()
       cancelHeartbeat?()
       cancelHeartbeat = nil
       _ = releaseAll()
@@ -199,6 +203,7 @@ final class Dispatcher {
       physicalPause = true
       session?.paused = true
       generation &+= 1
+      observationsInvalidated()
       _ = releaseAll()
       cancelActive(code: "paused", message: "Physical input paused this task.")
       pump()
@@ -399,6 +404,7 @@ final class Dispatcher {
 
   private func invalidateSessionWork() {
     generation &+= 1
+    observationsInvalidated()
     _ = releaseAll()
     if active?.requiresSession == true { cancelActive(code: "changed", message: "The computer session phase changed.") }
     let cancelled = queue.filter { handlers[$0.op]?.requiresSession == true }

@@ -36,6 +36,7 @@ private final class ServerFixture {
   var responses: [Response] = []
   var events: [Event] = []
   var releases = 0
+  var observationInvalidations = 0
   var stopped = false
   var nextId = 0
   var server: Dispatcher!
@@ -46,6 +47,7 @@ private final class ServerFixture {
       send: { [weak self] in self?.responses.append($0) },
       event: { [weak self] in self?.events.append($0) },
       releaseAll: { [weak self] in self?.releases += 1; return 0 },
+      observationsInvalidated: { [weak self] in self?.observationInvalidations += 1 },
       stopped: { [weak self] in self?.stopped = true },
       execute: { $0() }, deliver: { $0() },
       schedule: clock.schedule, pendingLimitBytes: pendingLimitBytes
@@ -79,6 +81,24 @@ private final class ServerFixture {
 func runServerTests() throws -> Int {
   var count = 0
   func test(_ body: () throws -> Void) throws { try body(); count += 1 }
+
+  try test {
+    let fake = ServerFixture()
+    _ = try fake.begin()
+    try serverExpect(fake.observationInvalidations == 1, "a new authority lifetime clears native observations before acknowledgment")
+    _ = try fake.request("session.update", ["sessionId": .string("other"), "phaseRevision": .integer(1)])
+    try serverExpect(fake.observationInvalidations == 1, "a refused update preserves current native observations")
+    _ = try fake.request("session.update", ["sessionId": .string("native-test"), "phaseRevision": .integer(0)])
+    try serverExpect(fake.observationInvalidations == 2, "a same-revision accepted update retires observations")
+    _ = try fake.request("session.end")
+    try serverExpect(fake.observationInvalidations == 3, "ending authority releases retained native references")
+    _ = try fake.begin()
+    fake.server.pauseForPhysicalInput()
+    try serverExpect(fake.observationInvalidations == 5, "physical take-over retires native observations immediately")
+    fake.server.close()
+    fake.server.close()
+    try serverExpect(fake.observationInvalidations == 6, "worker close clears observations exactly once")
+  }
 
   try test {
     let fake = ServerFixture()

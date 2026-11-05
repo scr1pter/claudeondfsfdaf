@@ -12,6 +12,8 @@ do {
     _ = try runPermissionsTests()
     _ = try runGeometryTests()
     _ = try runCaptureTests()
+    _ = try runAccessibilityRegistryTests()
+    _ = try runAccessibilityTests()
     print("Computer helper unit checks passed.")
     exit(0)
 } catch {

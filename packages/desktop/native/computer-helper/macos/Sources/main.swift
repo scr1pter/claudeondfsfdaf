@@ -31,7 +31,9 @@ private final class HelperServer {
     private let reader = FrameReader()
     private let writer = FrameWriter(descriptor: 3)
     private let permissionService = PermissionService()
-    private let captureService = CaptureService()
+    private let captureRegistry = CaptureRegistry()
+    private lazy var captureService = CaptureService(registry: captureRegistry)
+    private lazy var accessibilityService = AccessibilityService(captures: captureRegistry)
     private var displayCallbackRegistered = false
     private var activeSpaceObserver: NSObjectProtocol?
 
@@ -39,12 +41,14 @@ private final class HelperServer {
         guard let context else { return }
         let server = Unmanaged<HelperServer>.fromOpaque(context).takeUnretainedValue()
         server.captureService.invalidateDisplays()
+        server.accessibilityService.invalidateObservations()
         server.dispatcher?.notifyDisplayChange()
     }
 
     func start(parent: HelperParent) throws {
         let permissions = permissionService
         let capture = captureService
+        let accessibility = accessibilityService
         let server = Dispatcher(
             responsible: HelperLifecycle.isSelfResponsible(),
             architecture: architecture,
@@ -54,12 +58,16 @@ private final class HelperServer {
                 guard let self else { return }
                 do { try self.writer.write(event) } catch { self.finish(code: 1) }
             },
+            observationsInvalidated: {
+                capture.invalidateDisplays()
+                accessibility.invalidateObservations()
+            },
             stopped: { [weak self] in self?.finish(code: 0) },
             sendImage: { [weak self] response, image in
                 guard let self else { return }
                 do { try self.writer.write(response, binary: image) } catch { self.finish(code: 1) }
             },
-            features: { capture.features() },
+            features: { capture.features().merging(accessibility.features()) { _, current in current } },
             permissions: { permissions.status() }
         )
         server.register(op: "permissions.request", deadlineMs: 5000, requiresSession: false) { request, context, done in
@@ -73,6 +81,24 @@ private final class HelperServer {
         }
         server.register(op: "capture", deadlineMs: 10000) { request, context, done in
             capture.capture(request.args, context: context, completion: done)
+        }
+        server.register(op: "ui.tree", deadlineMs: 15000) { request, context, done in
+            accessibility.tree(request.args, context: context, completion: done)
+        }
+        server.register(op: "ui.hittest", deadlineMs: 10000) { request, context, done in
+            accessibility.hitTest(request.args, context: context, completion: done)
+        }
+        server.register(op: "ui.focused", deadlineMs: 10000) { request, context, done in
+            accessibility.focused(request.args, context: context, completion: done)
+        }
+        server.register(op: "ui.resolve", deadlineMs: 10000) { request, context, done in
+            accessibility.resolve(request.args, context: context, completion: done)
+        }
+        server.register(op: "ui.perform", deadlineMs: 10000) { request, context, done in
+            accessibility.perform(request.args, context: context, completion: done)
+        }
+        server.register(op: "ui.setValue", deadlineMs: 10000) { request, context, done in
+            accessibility.setValue(request.args, context: context, completion: done)
         }
         dispatcher = server
         watchers = try HelperLifecycle.installWorkerWatchers(parent: parent) { [weak self] in
@@ -94,6 +120,7 @@ private final class HelperServer {
             forName: NSWorkspace.activeSpaceDidChangeNotification, object: nil, queue: nil
         ) { [weak self] _ in
             self?.captureService.invalidateDisplays()
+            self?.accessibilityService.invalidateObservations()
             self?.dispatcher?.notifyDisplayChange()
         }
         input.resume()
@@ -154,6 +181,7 @@ private final class HelperServer {
         dispatcher?.close(reason: "lifecycle")
         permissionService.close()
         captureService.close()
+        accessibilityService.close()
         if removeDisplayCallback {
             _ = CGDisplayRemoveReconfigurationCallback(Self.displayCallback, Unmanaged.passUnretained(self).toOpaque())
         }
