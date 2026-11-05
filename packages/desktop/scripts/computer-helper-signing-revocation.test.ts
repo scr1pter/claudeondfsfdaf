@@ -4,11 +4,12 @@ import { readFileSync } from "node:fs"
 import {
   certificateWitness,
   cleanupStages,
+  identityInventory,
   parseCertificateWitness,
   parseSearchList,
   validateSearchList,
   verifyCertificateWitness,
-  verifyNoValidIdentity,
+  verifyKeychainDeletion,
   verifyRevocationReport,
 } from "../../../.github/scripts/computer-helper-signing-verification.mjs"
 
@@ -60,19 +61,43 @@ test("only the complete independent revocation result permits cleanup", () => {
     expect(() => verifyRevocationReport(value)).toThrow("revocation-report")
 })
 
-test("the actual codesigning identity query must no longer admit the exact fingerprint", () => {
+test("legacy identity inventory distinguishes a listed denied identity from malformed output", () => {
   const sha1 = "a".repeat(40)
-  expect(() => verifyNoValidIdentity("     0 valid identities found\n", sha1)).not.toThrow()
-  expect(() =>
-    verifyNoValidIdentity(`  1) ${"B".repeat(40)} "Other identity"\n     1 valid identities found\n`, sha1),
-  ).not.toThrow()
+  expect(identityInventory("     0 valid identities found\n", sha1)).toEqual({ count: 0, fixturePresent: false })
+  expect(identityInventory(`  1) ${"B".repeat(40)} "Other identity"\n     1 valid identities found\n`, sha1)).toEqual({
+    count: 1,
+    fixturePresent: false,
+  })
+  expect(
+    identityInventory(
+      `  1) ${sha1.toUpperCase()} "Fixture" (CSSMERR_TP_NOT_TRUSTED)\n     1 valid identities found\n`,
+      sha1,
+    ),
+  ).toEqual({ count: 1, fixturePresent: true })
   for (const value of [
     "",
     "query failed",
     "1 valid identities found\n",
-    `  1) ${sha1.toUpperCase()} "Fixture"\n     1 valid identities found\n`,
+    "0 valid identities found\n0 valid identities found\n",
   ])
-    expect(() => verifyNoValidIdentity(value, sha1)).toThrow("identity-still-valid")
+    expect(() => identityInventory(value, sha1)).toThrow("identity-output")
+})
+
+test("deletion requires the owned keychain gone, its exact search list restored, and the exact identity absent", () => {
+  const complete = {
+    keychainPresent: false,
+    original: ["/original"],
+    observed: ["/original"],
+    output: "0 valid identities found\n",
+    sha1: "a".repeat(40),
+  }
+  expect(() => verifyKeychainDeletion(complete)).not.toThrow()
+  expect(() => verifyKeychainDeletion({ ...complete, keychainPresent: true })).toThrow("keychain-retained")
+  expect(() => verifyKeychainDeletion({ ...complete, observed: ["/different"] })).toThrow("search-list-readback")
+  expect(() =>
+    verifyKeychainDeletion({ ...complete, output: `1) ${complete.sha1} "Fixture"\n1 valid identities found\n` }),
+  ).toThrow("identity-still-present")
+  expect(() => verifyKeychainDeletion({ ...complete, output: "unrecognized" })).toThrow("identity-output")
 })
 
 test("keychain deletion requires both revocation and exact search-list restoration, with failures retaining evidence", () => {

@@ -70,12 +70,12 @@ export function verifyRevocationReport(value) {
     fail("revocation-report")
 }
 
-export function verifyNoValidIdentity(output, sha1) {
+export function identityInventory(output, sha1) {
   if (typeof output !== "string" || output.length > 65_536 || !/^[a-f0-9]{40}$/.test(sha1)) fail("identity-query")
   const identities = [...output.matchAll(/^\s*\d+\)\s+([a-fA-F0-9]{40})\s+"[^\r\n]*"[^\r\n]*$/gm)]
-  const count = output.match(/^\s*(\d+) valid identities found\s*$/m)?.[1]
+  const counts = [...output.matchAll(/^\s*(\d+) valid identities found\s*$/gm)]
   if (
-    count === undefined ||
+    counts.length !== 1 ||
     output
       .split(/\r?\n/)
       .some(
@@ -84,10 +84,17 @@ export function verifyNoValidIdentity(output, sha1) {
           !/^\s*\d+\)\s+[a-fA-F0-9]{40}\s+"[^\r\n]*"[^\r\n]*$/.test(line) &&
           !/^\s*\d+ valid identities found\s*$/.test(line),
       ) ||
-    Number(count) !== identities.length ||
-    identities.some((item) => item[1].toLowerCase() === sha1)
+    Number(counts[0][1]) !== identities.length
   )
-    fail("identity-still-valid")
+    fail("identity-output")
+  return { count: identities.length, fixturePresent: identities.some((item) => item[1].toLowerCase() === sha1) }
+}
+
+export function verifyKeychainDeletion({ keychainPresent, original, observed, output, sha1 }) {
+  if (keychainPresent !== false) fail("keychain-retained")
+  if (JSON.stringify(validateSearchList(original)) !== JSON.stringify(validateSearchList(observed)))
+    fail("search-list-readback")
+  if (identityInventory(output, sha1).fixturePresent) fail("identity-still-present")
 }
 
 /** Both revocation and exact search-list restoration precede deletion; failed attempts retain retry evidence. */
@@ -148,7 +155,7 @@ function main() {
     console.log("certificate-fixture certificate-witness=recorded")
     return
   }
-  const security = (args, stage, timeout = 10_000) => command("/usr/bin/security", args, stage, timeout)
+  const security = (args, stage, timeout = 5_000) => command("/usr/bin/security", args, stage, timeout)
   const command = (executable, args, stage, timeout) => {
     try {
       return execFileSync(executable, args, {
@@ -172,7 +179,8 @@ function main() {
     "deny-verification",
     "revocation-report",
     "identity-query",
-    "identity-still-valid",
+    "identity-output",
+    "identity-still-present",
     "search-list-invalid",
     "search-list-snapshot",
     "search-list-restore",
@@ -227,9 +235,16 @@ function main() {
           ),
         ),
       )
-      verifyNoValidIdentity(
+      // Apple's legacy IdentityCursor "valid" filter omits the explicit-Deny
+      // trust result. Inventory can therefore retain this now-denied identity
+      // until its private key is deleted; the public SecTrust .deny above is
+      // the effective code-signing trust gate.
+      const inventory = identityInventory(
         security(["find-identity", "-v", "-p", "codesigning", keychain], "identity-query"),
         witness.sha1,
+      )
+      console.log(
+        `signing-cleanup identity-inventory count=${inventory.count} fixture-present=${inventory.fixturePresent} scope=owned-keychain`,
       )
       regular("signing.keychain-db", 64 * 1024 * 1024)
       verifyCertificateWitness(
@@ -270,6 +285,15 @@ function main() {
         20_000,
       )
       if (existsSync(keychain)) fail("keychain-retained")
+      const witness = parseCertificateWitness(JSON.parse(readFileSync(regular("certificate-witness.json"), "utf8")))
+      verifyKeychainDeletion({
+        keychainPresent: existsSync(keychain),
+        original: JSON.parse(readFileSync(regular("keychain-search-list.json"), "utf8")),
+        observed: parseSearchList(security(["list-keychains", "-d", "user"], "search-list-readback")),
+        output: security(["find-identity", "-v", "-p", "codesigning"], "identity-query"),
+        sha1: witness.sha1,
+      })
+      console.log("signing-cleanup owned-keychain=deleted exact-identity=absent-from-restored-search-list")
     },
     discardLoosePrivateFiles() {
       for (const name of ["signing.key", "signing.p12", "request.cnf", "signing-verification.der"])
