@@ -60,6 +60,49 @@ BOOL WINAPI token_query_fixture(HANDLE token, TOKEN_INFORMATION_CLASS kind, LPVO
     default: SetLastError(ERROR_ACCESS_DENIED); return FALSE;
   }
 }
+BOOL WINAPI snapshot_query_fixture(HANDLE token, TOKEN_INFORMATION_CLASS kind, LPVOID output, DWORD capacity, PDWORD returned) {
+  if (reinterpret_cast<std::uintptr_t>(token) == static_cast<std::uintptr_t>(kind)) { SetLastError(ERROR_ACCESS_DENIED); return FALSE; }
+  if (kind == TokenHasRestrictions) { *returned = 1; return TRUE; }
+  if (capacity < sizeof(TOKEN_STATISTICS)) { // The fixed scalar classes are handled separately.
+    if (capacity != sizeof(DWORD) || (kind != TokenMandatoryPolicy && kind != TokenSandBoxInert)) return FALSE;
+    const DWORD value = kind == TokenMandatoryPolicy ? TOKEN_MANDATORY_POLICY_NO_WRITE_UP : 1;
+    std::memcpy(output, &value, sizeof(value)); *returned = sizeof(value); return TRUE;
+  }
+  constexpr std::array<unsigned char, 12> sid{1, 1, 0, 0, 0, 0, 0, 5, 18, 0, 0, 0};
+  const auto with_sid = [&](size_t offset) -> PSID {
+    if (offset > capacity || sid.size() > capacity - offset) return nullptr;
+    const auto address = static_cast<unsigned char*>(output) + offset;
+    std::memcpy(address, sid.data(), sid.size()); *returned = static_cast<DWORD>(offset + sid.size()); return address;
+  };
+  switch (kind) {
+    case TokenUser: {
+      const auto value = static_cast<TOKEN_USER*>(output); value->User = {with_sid(sizeof(TOKEN_USER)), SE_GROUP_ENABLED}; return value->User.Sid != nullptr;
+    }
+    case TokenOwner: {
+      const auto value = static_cast<TOKEN_OWNER*>(output); value->Owner = with_sid(sizeof(TOKEN_OWNER)); return value->Owner != nullptr;
+    }
+    case TokenPrimaryGroup: {
+      const auto value = static_cast<TOKEN_PRIMARY_GROUP*>(output); value->PrimaryGroup = with_sid(sizeof(TOKEN_PRIMARY_GROUP)); return value->PrimaryGroup != nullptr;
+    }
+    case TokenIntegrityLevel: {
+      const auto value = static_cast<TOKEN_MANDATORY_LABEL*>(output); value->Label = {with_sid(sizeof(TOKEN_MANDATORY_LABEL)), SE_GROUP_INTEGRITY}; return value->Label.Sid != nullptr;
+    }
+    case TokenGroups:
+    case TokenRestrictedSids: {
+      const auto value = static_cast<TOKEN_GROUPS*>(output); value->GroupCount = 1;
+      value->Groups[0] = {with_sid(sizeof(TOKEN_GROUPS)), kind == TokenGroups ? SE_GROUP_USE_FOR_DENY_ONLY : SE_GROUP_ENABLED}; return value->Groups[0].Sid != nullptr;
+    }
+    case TokenPrivileges: {
+      const auto value = static_cast<TOKEN_PRIVILEGES*>(output); value->PrivilegeCount = 1;
+      value->Privileges[0] = {{71, 0}, SE_PRIVILEGE_ENABLED}; *returned = sizeof(TOKEN_PRIVILEGES); return TRUE;
+    }
+    case TokenStatistics: {
+      const auto value = static_cast<TOKEN_STATISTICS*>(output); value->TokenId = {91, 0}; value->AuthenticationId = {92, 0};
+      value->TokenType = TokenPrimary; *returned = sizeof(TOKEN_STATISTICS); return TRUE;
+    }
+    default: return FALSE;
+  }
+}
 void token_acl_boundaries() {
   namespace fixture = caller_token_acl;
   const auto fixed = fixture::query(reinterpret_cast<HANDLE>(std::uintptr_t{1}), TokenHasRestrictions, nullptr, token_query_fixture);
@@ -75,6 +118,21 @@ void token_acl_boundaries() {
     fixture::query_capacity(TokenMandatoryPolicy) == sizeof(TOKEN_MANDATORY_POLICY) &&
     fixture::query_capacity(TokenHasRestrictions) == sizeof(DWORD) && fixture::query_capacity(TokenSandBoxInert) == sizeof(DWORD),
     "integration.token-acl-fixed-query-sizes");
+  const auto authority = fixture::snapshot(nullptr, nullptr, snapshot_query_fixture);
+  require_integration(authority.token == 91 && authority.authentication == 92 && authority.type == TokenPrimary &&
+    authority.user.attributes == SE_GROUP_ENABLED && !authority.owner.empty() && !authority.primary.empty() &&
+    authority.integrity.attributes == SE_GROUP_INTEGRITY && authority.groups.size() == 1 && authority.restricting.size() == 1 &&
+    authority.groups[0].attributes == SE_GROUP_USE_FOR_DENY_ONLY && authority.restricting[0].attributes == SE_GROUP_ENABLED &&
+    authority.privileges.size() == 1 && authority.privileges[0].id == 71 && authority.privileges[0].attributes == SE_PRIVILEGE_ENABLED &&
+    authority.mandatory == TOKEN_MANDATORY_POLICY_NO_WRITE_UP && authority.inert == 1,
+    "integration.token-acl-current-authority-snapshot");
+  constexpr std::array required{TokenUser, TokenOwner, TokenPrimaryGroup, TokenIntegrityLevel, TokenGroups,
+    TokenRestrictedSids, TokenPrivileges, TokenStatistics, TokenMandatoryPolicy, TokenSandBoxInert};
+  for (const auto kind : required) {
+    bool refused = false;
+    try { (void)fixture::snapshot(reinterpret_cast<HANDLE>(static_cast<std::uintptr_t>(kind)), nullptr, snapshot_query_fixture); } catch (...) { refused = true; }
+    require_integration(refused, "integration.token-acl-authority-query-failure-refused");
+  }
   std::vector<unsigned char> zero_groups(sizeof(DWORD));
   require_integration(fixture::sid_groups(zero_groups).empty(), "integration.token-acl-zero-restricted-sids");
   zero_groups[0] = 1;

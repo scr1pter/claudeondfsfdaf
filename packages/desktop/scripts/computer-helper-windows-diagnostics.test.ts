@@ -47,6 +47,40 @@ test("Windows unit catalog binds existing fixed native suite and failure labels"
   expect([...forwarded.matchAll(/"([a-z-]+)"/g)].map((match) => match[1])).toEqual([...WINDOWS_CALLER_STAGES])
 })
 
+test("restricted startup snapshot requires current authority without the historical filtering getter", async () => {
+  const token = await readFile(
+    new URL("../native/computer-helper/windows/tests/caller_token_acl.h", import.meta.url),
+    "utf8",
+  )
+  const snapshot = token.slice(
+    token.indexOf("inline Snapshot snapshot("),
+    token.indexOf("inline bool ensure_owned_restricted("),
+  )
+  const queries = [...snapshot.matchAll(/\b(?:read|scalar)\((Token[A-Za-z]+)\)/g)]
+    .map((match) => match[1]!)
+    .toSorted()
+  expect(queries).toEqual(
+    [
+      "TokenUser",
+      "TokenOwner",
+      "TokenPrimaryGroup",
+      "TokenIntegrityLevel",
+      "TokenGroups",
+      "TokenRestrictedSids",
+      "TokenPrivileges",
+      "TokenStatistics",
+      "TokenMandatoryPolicy",
+      "TokenSandBoxInert",
+    ].toSorted(),
+  )
+  expect(snapshot).toContain("result.token = luid(stats->TokenId)")
+  expect(snapshot).toContain("result.authentication = luid(stats->AuthenticationId)")
+  expect(snapshot).toContain("result.type = static_cast<DWORD>(stats->TokenType)")
+  // The strict historical getter and its previous closed failure categories remain available.
+  expect(token).toContain('case TokenHasRestrictions: return "restricted-acl-query-restrictions"')
+  expect(token).toContain('"restricted-acl-restrictions-short"')
+})
+
 test("split lines preserve only exact unit failure and Caller stage, with the first cause retained", () => {
   const reader = new WindowsDiagnosticReader("unit")
   for (const chunk of ["PASS identity-and-", "blocklist\r\nPASS server\nPASS unknown-secret\n"])

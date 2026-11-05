@@ -215,13 +215,15 @@ inline std::vector<Sid> sid_groups(const std::vector<unsigned char>& bytes) {
 }
 struct Snapshot {
   Sid user, integrity; std::vector<unsigned char> owner, primary; std::vector<Sid> groups, restricting; std::vector<Privilege> privileges;
-  std::uint64_t token = 0, authentication = 0; DWORD type = 0, mandatory = 0, restrictions = 0, inert = 0;
+  std::uint64_t token = 0, authentication = 0; DWORD type = 0, mandatory = 0, inert = 0;
   bool operator==(const Snapshot&) const = default;
 };
 inline std::uint64_t luid(LUID value) noexcept { return (std::uint64_t(static_cast<DWORD>(value.HighPart)) << 32) | value.LowPart; }
-inline Snapshot snapshot(HANDLE token, const char** stage = nullptr) {
+inline Snapshot snapshot(HANDLE token, const char** stage = nullptr,
+                         decltype(&GetTokenInformation) reader = &GetTokenInformation) {
   Snapshot result;
-  const auto user = query(token, TokenUser, stage), owner = query(token, TokenOwner, stage), primary = query(token, TokenPrimaryGroup, stage), integrity = query(token, TokenIntegrityLevel, stage);
+  const auto read = [&](TOKEN_INFORMATION_CLASS kind) { return query(token, kind, stage, reader); };
+  const auto user = read(TokenUser), owner = read(TokenOwner), primary = read(TokenPrimaryGroup), integrity = read(TokenIntegrityLevel);
   mark(stage, "restricted-acl-snapshot-identity");
   if (user.size() < sizeof(TOKEN_USER) || owner.size() < sizeof(TOKEN_OWNER) || primary.size() < sizeof(TOKEN_PRIMARY_GROUP) || integrity.size() < sizeof(TOKEN_MANDATORY_LABEL)) refused();
   const auto actual_user = reinterpret_cast<const TOKEN_USER*>(user.data());
@@ -230,18 +232,22 @@ inline Snapshot snapshot(HANDLE token, const char** stage = nullptr) {
   result.primary = sid_bytes(primary, reinterpret_cast<const TOKEN_PRIMARY_GROUP*>(primary.data())->PrimaryGroup);
   const auto label = reinterpret_cast<const TOKEN_MANDATORY_LABEL*>(integrity.data());
   result.integrity = {sid_bytes(integrity, label->Label.Sid), label->Label.Attributes};
-  result.groups = sid_groups(query(token, TokenGroups, stage)); result.restricting = sid_groups(query(token, TokenRestrictedSids, stage));
-  const auto privileges = query(token, TokenPrivileges, stage);
+  result.groups = sid_groups(read(TokenGroups)); result.restricting = sid_groups(read(TokenRestrictedSids));
+  const auto privileges = read(TokenPrivileges);
   if (privileges.size() < FIELD_OFFSET(TOKEN_PRIVILEGES, Privileges)) refused();
   const auto values = reinterpret_cast<const TOKEN_PRIVILEGES*>(privileges.data());
   if (values->PrivilegeCount > (privileges.size() - FIELD_OFFSET(TOKEN_PRIVILEGES, Privileges)) / sizeof(LUID_AND_ATTRIBUTES)) refused();
   for (DWORD index = 0; index < values->PrivilegeCount; ++index) result.privileges.push_back({luid(values->Privileges[index].Luid), values->Privileges[index].Attributes});
-  const auto statistics = query(token, TokenStatistics, stage);
+  const auto statistics = read(TokenStatistics);
   if (statistics.size() < sizeof(TOKEN_STATISTICS)) refused();
   const auto stats = reinterpret_cast<const TOKEN_STATISTICS*>(statistics.data());
   result.token = luid(stats->TokenId); result.authentication = luid(stats->AuthenticationId); result.type = static_cast<DWORD>(stats->TokenType);
-  const auto scalar = [&](TOKEN_INFORMATION_CLASS kind) { const auto bytes = query(token, kind, stage); if (bytes.size() != sizeof(DWORD)) refused(); DWORD value = 0; std::memcpy(&value, bytes.data(), sizeof(value)); return value; };
-  result.mandatory = scalar(TokenMandatoryPolicy); result.restrictions = scalar(TokenHasRestrictions); result.inert = scalar(TokenSandBoxInert);
+  const auto scalar = [&](TOKEN_INFORMATION_CLASS kind) { const auto bytes = read(kind); if (bytes.size() != sizeof(DWORD)) refused(); DWORD value = 0; std::memcpy(&value, bytes.data(), sizeof(value)); return value; };
+  // TokenHasRestrictions describes historical filtering, not current authority. Its getter
+  // can return an incompatible short DWORD extent. Do not invent a value for it: this
+  // comparison binds the same TokenId/AuthId and every current filtering fact, and the
+  // sole mutation is the documented TokenDefaultDacl assignment on that owned token.
+  result.mandatory = scalar(TokenMandatoryPolicy); result.inert = scalar(TokenSandBoxInert);
   return result;
 }
 inline bool ensure_owned_restricted(HANDLE token, const char** stage = nullptr) {
