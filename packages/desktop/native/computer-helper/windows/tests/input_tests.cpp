@@ -44,7 +44,7 @@ class FakeGuardian final : public InputGuardian {
  public:
   explicit FakeGuardian(bool& authority, uint64_t& clock) : inside(authority), now(clock), ledger(own_tag) {}
   bool& inside; uint64_t& now; InputGuardianLedger ledger;
-  bool running = true, armed = false, ready_result = true, reserve_result = true, auto_up = true, wrong_up_tag = false, process_exited=false;
+  bool running = true, armed = false, ready_result = true, reserve_result = true, auto_up = true, wrong_up_tag = false, process_exited=false, drain_under_authority=false;
   unsigned ready_calls = 0, reserve_calls = 0, drain_calls = 0, close_calls = 0;
   std::vector<InputRelease> ups;
   std::function<void()> on_ready;
@@ -68,6 +68,7 @@ class FakeGuardian final : public InputGuardian {
   }
   void retire(const InputGuardianTicket& ticket, bool not_posted = false) noexcept override { ledger.retire(ticket, not_posted); }
   uint32_t drain(uint32_t = 300) noexcept override {
+    drain_under_authority = drain_under_authority || inside;
     ++drain_calls; if (!running || !auto_up) return 0; return release(false);
   }
   uint32_t release(bool retired_only) noexcept {
@@ -713,8 +714,26 @@ size_t run_input_tests() {
       failure(fixture.take(L"input.hold", value), L"failed"); check(fixture.events.empty(), "input.hold-cap-is-enforced-before-posting");
     }
     Fixture fixture; auto value = fixture.args(L"input.hold"); value.Insert(L"ms", JsonValue::CreateNumberValue(0));
-    fixture.send(L"input.hold", value); check(!fixture.result, "input.zero-hold-still-queues-cleanup-instead-of-running-under-post-fence");
-    fixture.pump(); check(fixture.result.has_value(), "input.zero-hold-has-finite-asynchronous-completion"); success(*fixture.result);
+    size_t observed_ups = 0;
+    fixture.guardian->on_observed = [&](bool down) {
+      if (!down) { check(!fixture.inside && !fixture.result, "input.zero-hold-awaits-matching-up-outside-post-fence-before-success"); ++observed_ups; }
+    };
+    fixture.send(L"input.hold", value);
+    check(fixture.result.has_value() && observed_ups == 2 && downs(fixture) == 2 && fixture.guardian->ups.size() == 2 && !fixture.guardian->ledger.pending(),
+      "input.zero-hold-completes-only-after-the-whole-chord-has-matching-ups");
+    success(*fixture.result);
+    check(fixture.guardian->drain_calls == 0 && fixture.timers.jobs.empty() && fixture.inspections.jobs.empty(), "input.zero-hold-needs-no-expiry-or-blocking-cleanup-under-post-fence");
+    fixture.pump(); check(fixture.completions == 1 && fixture.guardian->ups.size() == 2, "input.zero-hold-has-no-late-second-release-or-completion");
+  });
+  test([] {
+    Fixture fixture; auto value = fixture.args(L"input.hold"); value.Insert(L"ms", JsonValue::CreateNumberValue(0));
+    fixture.guardian->on_observed = [&](bool down) { if (down) fixture.live = false; };
+    fixture.send(L"input.hold", value);
+    check(fixture.result.has_value(), "input.zero-hold-cancellation-is-observed-after-actual-down"); failure(*fixture.result, L"changed");
+    fixture.pump();
+    check(downs(fixture) == 1 && fixture.guardian->ups.size() == 1 && !fixture.guardian->ledger.pending() &&
+      !fixture.guardian->drain_under_authority && fixture.completions == 1,
+      "input.zero-hold-cancellation-stops-the-chord-and-cleans-only-owned-input-outside-authority");
   });
   test([] {
     Fixture fixture; size_t first = 0;

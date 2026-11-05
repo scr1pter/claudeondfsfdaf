@@ -830,3 +830,15 @@ Mac job127274658494 in42036089984 passes the corrected signing contracts/Node mo
 ### Windows capture fixture witness correction
 
 The next native unit failure in42036089984 is the generic capture expected-image-success label. Source trace and independent fixture audit identify a deterministic invalid positive case: an exactly excluded overlay changes structural HWND10→99 while retaining the copied HWND10 owner/window witness. Production privacy correctly rejects that mismatch as stale_frame before pixels. The test now models native excluded-overlay inventory by omitting that unrelated optional witness. A new negative case proves an ordinary mismatched HWND still refuses before reads/encodes/receipts. Production capture is unchanged. Fixed group ordinal/closed failure-code diagnostics will identify any remaining actual failure;31 injected source groups await native CI. No other definite W6/W8 positive-fixture mismatch was found in the bounded Input/Guard/Availability/UIA audit.
+
+
+### Actual Node computer loop passes; native integration continues
+
+Focused run42040625704 at2a4f2a7ba3601324642050c92da8369391be614b passes the compiled desktop engine smoke under actual Node24.22.2 (job127290208675). All four turns pass, including exact screenshot attachments, app and sensitive HTTP approvals, click target/frame/digest checks and clean lease cancellation/release against the isolated fake bridge. This validates the production attended-task lifetime repair together with the corrected wire fixtures; it is not native capture/input or OS permission evidence.
+
+Broad run42036089984 at0634dba7 completed with16 successful jobs, four known integration failures and four skipped jobs. Its ordinary engine/unit/E2E checks pass; the failed Node fixture is superseded by the focused passing run above. Native/signing and overlay failures still require their own actual checks. The Linux overlay now reaches real window properties, exposing a smoke assertion that incorrectly expected fixed banner copy in the dynamic status field. The fixture now checks the exact title, delivered Working line and enabled Stop separately. Its focused report tests pass23/160 and desktop typecheck passes; fresh actual Electron CI remains authoritative.
+
+
+### Windows zero-duration fixture contract
+
+Run42040637108 at2a4f2a7b compiles both Windows architectures and advances to input.zero-hold-still-queues-cleanup-instead-of-running-under-post-fence. That older fixture contradicts the later atomic-zero-duration regression and the specification's zero-duration support/release-in-the-same-request contract. Production remains unchanged. The corrected fixture requires two matching UP receipts outside posting authority before success, no outstanding debt/timer/blocking drain, and no late duplicate completion. A cancellation-after-first-DOWN regression requires changed, no second DOWN and only owned cleanup outside authority. Source/independent review and whitespace checks pass; actual Windows execution is pending.
