@@ -1,5 +1,6 @@
 import { SessionV1 } from "@vectordevai/core/v1/session"
 import { SpendGuard } from "@vectordevai/core/spend-guard"
+import { SessionStatusEvent } from "@vectordevai/schema/session-status-event"
 import { Database } from "@vectordevai/core/database/database"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { EventV2Bridge } from "@/event-v2-bridge"
@@ -328,6 +329,26 @@ const itStalledSnapshot = testEffect(
   LayerNode.compile(root, [...replacements, [LLM.node, billedLLM], [Snapshot.node, stalledSnapshot()]]),
 )
 const itBilled = testEffect(LayerNode.compile(root, [...replacements, [LLM.node, billedLLM]]))
+const publicationLLM = Layer.succeed(
+  LLM.Service,
+  LLM.Service.of({
+    stream: (input) =>
+      Stream.make(
+        LLMEvent.stepStart({ index: 0 }),
+        LLMEvent.reasoningStart({ id: "pending-reasoning" }),
+        LLMEvent.reasoningDelta({ id: "pending-reasoning", text: "pending" }),
+        LLMEvent.stepFinish({
+          index: 0,
+          reason: "stop",
+          ...(input.messages[0]?.content === "unknown"
+            ? {}
+            : { usage: new Usage({ inputTokens: 10_000, outputTokens: 1_000, totalTokens: 11_000 }) }),
+        }),
+        LLMEvent.finish({ reason: "stop" }),
+      ),
+  }),
+)
+const itPublication = testEffect(LayerNode.compile(root, [...replacements, [LLM.node, publicationLLM]]))
 
 const confirmationGate = { started: defer<void>(), release: defer<void>(), tracks: 0, changed: false }
 const confirmationSnapshot = Layer.succeed(
@@ -1474,6 +1495,123 @@ for (const unknown of [false, true]) {
           { trusted: true, config: accountingCfg("http://localhost:1/v1") },
         ),
     )
+  }
+}
+
+for (const publication of ["part", "message", "reasoning", "spend", "message-spend", "interrupt-part"] as const) {
+  for (const unknown of [false, true]) {
+    for (const linked of [false, true]) {
+      itPublication.live(
+        `session.processor publication defect retains terminal accounting (${publication}, ${unknown ? "unknown" : "priced"}, ${linked ? "linked child" : "root"})`,
+        () =>
+          provideTmpdirInstance(
+            (dir) =>
+              Effect.gen(function* () {
+                const { processors, session, provider } = yield* boot()
+                const events = yield* EventV2Bridge.Service
+                const guard = yield* SpendGuard.Service
+                const owner = yield* session.create({})
+                yield* guard.begin(owner.id, { usd: 0.04, unpricedSteps: 1 })
+                const chat = linked ? yield* session.create({ parentID: owner.id }) : owner
+                if (linked) yield* guard.link(chat.id, owner.id)
+                const parent = yield* user(chat.id, "terminal publication")
+                const msg = yield* assistant(chat.id, parent.id, path.resolve(dir))
+                const model = yield* provider.getModel(ref.providerID, ref.modelID)
+                const defect = new Error("terminal publication defect")
+                const interrupted = publication === "interrupt-part"
+                let failed = false
+                let secondarySpendFailed = false
+                const fail = Effect.gen(function* () {
+                  failed = true
+                  if (linked) {
+                    yield* guard.end(owner.id)
+                    yield* guard.begin(owner.id, { usd: 1 })
+                  }
+                  if (interrupted) yield* Effect.interrupt
+                  yield* Effect.die(defect)
+                })
+                yield* events.project(SessionV1.Event.PartUpdated, (event) => {
+                  const part = event.data.part
+                  if (failed || part.messageID !== msg.id) return Effect.void
+                  return ((publication === "part" || interrupted) && part.type === "step-finish") ||
+                    (publication === "reasoning" && part.type === "reasoning" && part.time.end !== undefined)
+                    ? fail
+                    : Effect.void
+                })
+                yield* events.project(SessionV1.Event.MessageUpdated, (event) =>
+                  !failed &&
+                  (publication === "message" || publication === "message-spend") &&
+                  event.data.info.id === msg.id &&
+                  event.data.info.role === "assistant" &&
+                  event.data.info.finish === "stop"
+                    ? fail
+                    : Effect.void,
+                )
+                const off = yield* events.listen((event) => {
+                  if (event.type !== SessionStatusEvent.Spend.type) return Effect.void
+                  const data = Schema.decodeUnknownSync(Schema.Struct({ sessionID: SessionID }))(event.data)
+                  if (data.sessionID !== chat.id && data.sessionID !== owner.id) return Effect.void
+                  if (publication === "message-spend" && failed && !secondarySpendFailed) {
+                    secondarySpendFailed = true
+                    return Effect.die(new Error("secondary spend notification defect"))
+                  }
+                  return !failed && publication === "spend" ? fail : Effect.void
+                })
+                const handle = yield* processors.create({ assistantMessage: msg, sessionID: chat.id, model })
+                const exit = yield* handle
+                  .process({
+                    user: {
+                      id: parent.id,
+                      sessionID: chat.id,
+                      role: "user",
+                      time: parent.time,
+                      agent: "build",
+                      model: ref,
+                    },
+                    sessionID: chat.id,
+                    model,
+                    agent: agent(),
+                    system: [],
+                    messages: [{ role: "user", content: unknown ? "unknown" : "priced" }],
+                    tools: {},
+                  })
+                  .pipe(Effect.exit)
+                expect(
+                  interrupted
+                    ? Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)
+                    : Exit.isSuccess(exit) && exit.value === "stop",
+                ).toBe(true)
+                yield* off
+                const cost = unknown ? 0 : 0.045
+                const saved = yield* MessageV2.get({ sessionID: chat.id, messageID: msg.id })
+                expect(saved.info).toMatchObject({
+                  cost,
+                  ...(unknown ? { unpriced: true } : {}),
+                  error: interrupted
+                    ? { name: "MessageAbortedError" }
+                    : { name: "UnknownError", data: { message: defect.message } },
+                })
+                expect(failed).toBe(true)
+                expect(saved.parts.filter((part) => part.type === "step-start")).toHaveLength(1)
+                expect(saved.parts.filter((part) => part.type === "step-finish")).toHaveLength(
+                  publication === "part" || interrupted ? 0 : 1,
+                )
+                // A rolled-back terminal part is absent; financial fallback does not invent a successful write.
+                expect((yield* session.get(chat.id)).cost).toBeCloseTo(publication === "part" || interrupted ? 0 : cost)
+                expect((yield* session.usage({ directory: dir })).lifetimeCost).toBeCloseTo(cost)
+                expect(yield* guard.snapshot(chat.id)).toMatchObject({
+                  spentUsd: cost,
+                  steps: 1,
+                  unpricedSteps: Number(unknown),
+                })
+                expect((yield* guard.stopped(chat.id))?.reason).toBe(unknown ? "unpriced" : "cap")
+                expect(secondarySpendFailed).toBe(publication === "message-spend")
+                if (linked) expect(yield* guard.snapshot(owner.id)).toMatchObject({ spentUsd: 0, steps: 0 })
+              }),
+            { trusted: true, config: accountingCfg("http://localhost:1/v1") },
+          ),
+      )
+    }
   }
 }
 

@@ -366,11 +366,12 @@ const layer = Layer.effect(
           tokens: SessionV1.Assistant["tokens"]
           continues: boolean
           patched: boolean
+          financialOnly?: boolean
         },
         confirm?: Effect.Effect<boolean>,
         checkpoint?: Effect.Effect<void>,
       ) {
-        const tools = ctx.stepTools
+        const tools = step.financialOnly ? [] : ctx.stepTools
         ctx.stepTools = []
         const kind = (yield* result(costKind)) ?? "unknown"
         const contextTokens = step.tokens.input + step.tokens.cache.read + step.tokens.cache.write
@@ -701,6 +702,7 @@ const layer = Layer.effect(
             }
             // The provider has billed this step, so its usage is recorded whole before the snapshot, which can wait
             // on the worktree's snapshot lock long enough for a cancel to land.
+            let recording = false
             yield* Effect.uninterruptibleMask((restore) =>
               Effect.gen(function* () {
                 ctx.started = undefined
@@ -733,6 +735,8 @@ const layer = Layer.effect(
                     return changed
                   }),
                 )
+                // A recording failure can follow the ledger update, so never retry an entered record.
+                recording = true
                 yield* recordStep(
                   {
                     costUsd: usage.cost,
@@ -750,7 +754,21 @@ const layer = Layer.effect(
                   restore(result(work).pipe(Effect.map((changed) => changed === true))),
                   restore(Effect.void),
                 )
-              }),
+              }).pipe(
+                Effect.onExit((exit) =>
+                  Exit.isFailure(exit) && !recording
+                    ? recordStep({
+                        costUsd: usage.cost,
+                        billed: usage.billed,
+                        unpriced: usage.unpriced,
+                        tokens: usage.tokens,
+                        continues: false,
+                        patched: false,
+                        financialOnly: true,
+                      }).pipe(Effect.exit, Effect.asVoid)
+                    : Effect.void,
+                ),
+              ),
             )
             if (
               !ctx.assistantMessage.summary &&
