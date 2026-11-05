@@ -29,6 +29,7 @@ import {
 } from "./computer-overlay-smoke-report"
 import { parseComputerOverlayBootstrapUnavailable, verifyComputerOverlayStage } from "./computer-overlay-smoke-stage"
 import { computerOverlayBundlePlan, type OverlayCompiler } from "./build-computer-overlay-smoke"
+import { COMPUTER_SMOKE_SAMPLE_MARK, sampleOwnedComputerSmoke } from "./computer-overlay-smoke-sample"
 
 // Compiler-only module-local type; no Bun globals are added to renderer or Node declarations.
 declare const Bun: OverlayCompiler
@@ -170,8 +171,54 @@ export async function runComputerOverlaySmoke(args = process.argv.slice(2)) {
     const streamState: { childFailure?: ComputerSmokeFailureDiagnostic; loaderStarted: boolean } = {
       loaderStarted: false,
     }
+    let childRunning = true
+    let sampleTimer: ReturnType<typeof setTimeout> | undefined
+    let sampleArmed = false
+    const sampleAbort = new AbortController()
+    const cancelSample = () => {
+      if (sampleTimer) clearTimeout(sampleTimer)
+      sampleTimer = undefined
+      sampleAbort.abort()
+    }
+    const sampleHeartbeatStall = () => {
+      if (process.platform !== "darwin") return
+      sampleArmed = true
+      // A healthy/failed five-second loss check has already advanced by this point.
+      sampleTimer = setTimeout(() => {
+        sampleTimer = undefined
+        if (!childRunning || !child.pid || sampleAbort.signal.aborted) return
+        void sampleOwnedComputerSmoke({
+          pid: child.pid,
+          alive: () => childRunning && child.exitCode === null && child.signalCode === null,
+          signal: sampleAbort.signal,
+        }).then(
+          (report) => process.stdout.write(COMPUTER_SMOKE_SAMPLE_MARK + JSON.stringify(report) + "\n"),
+          () =>
+            process.stdout.write(
+              COMPUTER_SMOKE_SAMPLE_MARK +
+                JSON.stringify({
+                  protocol: 1,
+                  step: "heartbeat-check",
+                  status: "failed",
+                  mainThread: false,
+                  frames: [],
+                }) +
+                "\n",
+            ),
+        )
+      }, 7000)
+    }
+    child.once("exit", () => {
+      childRunning = false
+      cancelSample()
+    })
+    child.once("error", () => {
+      childRunning = false
+      cancelSample()
+    })
     const fail = (cause: ComputerSmokeFailureCause) => {
       forcedCause ??= cause
+      cancelSample()
       child.kill("SIGKILL")
     }
     const hintPriority = (value: ComputerSmokeRuntimeHint) =>
@@ -215,12 +262,15 @@ export async function runComputerOverlaySmoke(args = process.argv.slice(2)) {
           } else if (line.startsWith(COMPUTER_SMOKE_PHASE_MARK)) {
             if (streamState.childFailure) throw new Error("A terminal computer smoke receipt cannot advance.")
             lastPhase = parseComputerSmokePhase(line, lastPhase)
+            if (lastPhase === "cleanup" || lastPhase === "report") cancelSample()
             if (hint === "loader_pending") hint = "none"
             process.stdout.write(COMPUTER_SMOKE_PHASE_MARK + JSON.stringify({ protocol: 1, phase: lastPhase }) + "\n")
           } else if (line.startsWith(COMPUTER_SMOKE_CONTROLLER_MARK)) {
             if (lastPhase !== "controller" || streamState.childFailure)
               throw new Error("The controller receipt is out of phase.")
             lastController = parseComputerSmokeController(line, lastController)
+            if (lastController === "heartbeat-check") sampleHeartbeatStall()
+            else if (sampleArmed) cancelSample()
             process.stdout.write(
               COMPUTER_SMOKE_CONTROLLER_MARK + JSON.stringify({ protocol: 1, step: lastController }) + "\n",
             )
@@ -242,6 +292,7 @@ export async function runComputerOverlaySmoke(args = process.argv.slice(2)) {
               throw new Error("The child failure receipt is invalid.")
             if (hintPriority(received.hint) > hintPriority(hint)) hint = received.hint
             streamState.childFailure = received
+            cancelSample()
           }
         } catch {
           return fail("invalid_progress")
@@ -263,7 +314,10 @@ export async function runComputerOverlaySmoke(args = process.argv.slice(2)) {
         reject(new ComputerSmokeRunFailure(failureDiagnostic("launch_failed", lastPhase, hint))),
       )
       child.once("close", (code) => resolve(code))
-    }).finally(() => clearTimeout(timer))
+    }).finally(() => {
+      clearTimeout(timer)
+      cancelSample()
+    })
     stderrTail = ""
     if (forcedCause) throw new ComputerSmokeRunFailure(failureDiagnostic(forcedCause, lastPhase, hint))
     if (streamState.childFailure)
