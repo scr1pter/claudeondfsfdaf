@@ -23,14 +23,26 @@ test.skipIf(process.platform !== "darwin")(
     )
     const directory = await mkdtemp(path.join(os.tmpdir(), "vector-unsigned-mac-"))
     Object.assign(process.env, values)
+    let stage:
+      | "config-import"
+      | "bundle-build"
+      | "dependency-import"
+      | "fixture"
+      | "signing"
+      | "verification"
+      | "launch"
+      | "tamper" = "config-import"
     try {
-      const module = await import("../electron-builder.config.ts?unsigned-native-fixture")
+      // This file runs in its own test process; its environment is set before the first config import.
+      const module = await import("../electron-builder.config")
       const packageDir = path.resolve(import.meta.dirname, "..")
+      stage = "bundle-build"
       const compiled = await buildNodeComputerHelperPackage(packageDir)
       process.env.VECTOR_COMPUTER_HELPER_SIGN_SHA256 = compiled.signing.sha256
       const app = path.join(directory, "Fixture ' release.app")
       const require = createRequire(import.meta.url)
       const builder = createRequire(require.resolve("electron-builder/package.json"))
+      stage = "dependency-import"
       const { PlatformPackager } = await import(builder.resolve("app-builder-lib"))
       const library = createRequire(builder.resolve("app-builder-lib/package.json"))
       const { createPackage } = await import(library.resolve("@electron/asar"))
@@ -38,6 +50,7 @@ test.skipIf(process.platform !== "darwin")(
       const { flipFuses, getCurrentFuseWire, FuseV1Options } = await import(library.resolve("@electron/fuses"))
       const { FuseState } = await import(library.resolve("@electron/fuses/dist/constants"))
       const run = (args: string[]) => Bun.spawnSync(args, { stdout: "pipe", stderr: "pipe", timeout: 10_000 })
+      stage = "fixture"
       const copied = run([
         "/usr/bin/ditto",
         path.join(path.dirname(require.resolve("electron/package.json")), "dist/Electron.app"),
@@ -84,6 +97,7 @@ app.exit(0)
         path.join(app, "Contents/Info.plist"),
       ])
       expect(metadata.exitCode, metadata.stderr.toString()).toBe(0)
+      stage = "signing"
       const signer = await loadComputerHelperSigningNode({ directory: packageDir, environment: process.env })
       await signer.prepareComputerHelperMacSigning(
         { app, channel: "prod", sourceManifest },
@@ -111,6 +125,7 @@ app.exit(0)
         { appOutDir: directory, electronPlatformName: "darwin", packager },
         await PlatformPackager.prototype.generateFuseConfig(module.default.electronFuses),
       )
+      stage = "verification"
       const verified = run(["/usr/bin/codesign", "--verify", "--deep", "--strict", app])
       expect(verified.exitCode, verified.stderr.toString()).toBe(0)
       const signature = run(["/usr/bin/codesign", "--display", "--verbose=4", app])
@@ -158,9 +173,11 @@ app.exit(0)
       expect(fuses[FuseV1Options.EnableEmbeddedAsarIntegrityValidation]).toBe(FuseState.ENABLE)
       expect(fuses[FuseV1Options.OnlyLoadAppFromAsar]).toBe(FuseState.ENABLE)
       expect(fuses[FuseV1Options.GrantFileProtocolExtraPrivileges]).toBe(FuseState.DISABLE)
+      stage = "launch"
       const started = run([path.join(app, "Contents/MacOS/Electron")])
       expect(started.exitCode, started.stderr.toString()).toBe(0)
       expect(started.stdout.toString().trim()).toBe("fixture-started")
+      stage = "tamper"
       const helperInfo = path.join(helper, "Contents/Info.plist")
       const infoBefore = await readFile(helperInfo)
       await writeFile(helperInfo, Buffer.concat([infoBefore, Buffer.from("\n<!-- tampered -->\n")]))
@@ -169,6 +186,9 @@ app.exit(0)
       expect(run(["/usr/bin/codesign", "--verify", "--deep", "--strict", app]).exitCode).toBe(0)
       await Bun.write(path.join(app, "Contents/Resources/unsigned-fixture-tamper.txt"), "tampered")
       expect(run(["/usr/bin/codesign", "--verify", "--deep", "--strict", app]).exitCode).not.toBe(0)
+    } catch (error) {
+      console.error(`unsigned-mac-fixture stage=${stage}`)
+      throw error
     } finally {
       for (const [key, value] of Object.entries(previous)) {
         if (value === undefined) delete process.env[key]
