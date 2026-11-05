@@ -158,18 +158,59 @@ size_t run_capture_tests() {
   });
   test([] {
     Fixture fixture; const auto result = fixture.take(fixture.args(true)); const auto& image = success(result);
-    check(image.fields.GetNamedNumber(L"width") == 6 && fixture.requests.size() == 1 && !fixture.requests[0].occluded && fixture.requests[0].window.has_value(), "capture.unobscured-window-primary-screen-path");
+    check(image.fields.GetNamedNumber(L"width") == 6 && fixture.requests.size() == 1 && !fixture.requests[0].isolate_window && fixture.requests[0].window.has_value(), "capture.unobscured-window-primary-screen-path");
+  });
+  test([] {
+    Fixture fixture; auto private_lower = empty_surface(); private_lower.bounds = private_lower.frame_bounds = fixture.world.displays[0].bounds;
+    fixture.world.windows.push_back(private_lower);
+    const auto result = fixture.take(fixture.args(true)); const auto& image = success(result);
+    check(fixture.requests.size() == 1 && fixture.requests[0].isolate_window && fixture.requests[0].window.has_value() &&
+      fixture.requests[0].window->hwnd == fixture.world.windows[0].hwnd && fixture.requests[0].bounds == fixture.world.windows[0].frame_bounds,
+      "capture.unknown-alpha-with-private-lower-window-uses-isolated-source");
+    check(image.fields.GetNamedArray(L"masked").Size() == 0 && image.fields.GetNamedNumber(L"hiddenCount") == 0 &&
+      fixture.encoded.bgra[0] == 40 && fixture.encoded.bgra[1] == 80 && fixture.encoded.bgra[2] == 120 && fixture.encoded.bgra[3] == 255,
+      "capture.isolated-window-retains-only-its-independent-pixels");
+  });
+  test([] {
+    Fixture fixture; auto private_lower = empty_surface(); private_lower.bounds = private_lower.frame_bounds = fixture.world.displays[0].bounds;
+    fixture.world.windows.push_back(private_lower);
+    const auto result = fixture.take(fixture.args()); const auto& image = success(result);
+    check(fixture.requests.size() == 1 && !fixture.requests[0].isolate_window && !fixture.requests[0].window.has_value() &&
+      image.fields.GetNamedArray(L"masked").Size() == 1 && image.fields.GetNamedNumber(L"hiddenCount") == 1,
+      "capture.display-keeps-composed-screen-and-private-lower-mask");
+    for (size_t index = 0; index < fixture.encoded.bgra.size(); index += 4)
+      check(fixture.encoded.bgra[index] == 0 && fixture.encoded.bgra[index + 1] == 0 && fixture.encoded.bgra[index + 2] == 0 && fixture.encoded.bgra[index + 3] == 255,
+        "capture.unknown-alpha-display-never-exposes-lower-private-pixels");
+  });
+  test([] {
+    Fixture fixture; fixture.world.windows[0].opaque = true;
+    auto private_lower = empty_surface(); private_lower.bounds = private_lower.frame_bounds = fixture.world.displays[0].bounds;
+    fixture.world.windows.push_back(private_lower);
+    const auto result = fixture.take(fixture.args(true)); const auto& image = success(result);
+    check(fixture.requests.size() == 1 && !fixture.requests[0].isolate_window && fixture.requests[0].window.has_value() &&
+      image.fields.GetNamedArray(L"masked").Size() == 0 && fixture.encoded.bgra[0] == 40,
+      "capture.proven-opaque-target-without-screen-masks-retains-bitblt");
+  });
+  test([] {
+    for (const bool change_scene : {false, true}) {
+      Fixture fixture; auto private_lower = empty_surface(); private_lower.bounds = private_lower.frame_bounds = fixture.world.displays[0].bounds;
+      fixture.world.windows.push_back(private_lower);
+      fixture.during_read = [&] { if (change_scene) ++fixture.world.windows.back().bounds.x; else ++fixture.session.observation_epoch; };
+      failure(fixture.take(fixture.args(true)), change_scene ? L"stale_frame" : L"changed");
+      check(fixture.requests.size() == 1 && fixture.requests[0].isolate_window && fixture.encodes == 0 && fixture.ids == 0,
+        "capture.isolated-window-still-rejects-scene-or-authority-change");
+    }
   });
   test([] {
     Fixture fixture; CaptureSurface top; top.hwnd = reinterpret_cast<HWND>(uintptr_t(99)); top.pid = 9001; top.thread = 99; top.bounds = top.frame_bounds = {-6, -3, 2, 2}; top.visible = true; top.cloaked = false;
     fixture.world.windows.insert(fixture.world.windows.begin(), top); const auto result = fixture.take(fixture.args(true)); const auto& image = success(result);
-    check(fixture.requests[0].occluded && image.fields.GetNamedArray(L"masked").Size() == 0 && image.fields.GetNamedNumber(L"hiddenCount") == 0, "capture.occluded-window-uses-independent-source");
+    check(fixture.requests[0].isolate_window && image.fields.GetNamedArray(L"masked").Size() == 0 && image.fields.GetNamedNumber(L"hiddenCount") == 0, "capture.occluded-window-uses-independent-source");
   });
   test([] {
     Fixture fixture; auto& target = fixture.world.windows[0]; target.bounds = target.frame_bounds = {100, 100, 6, 4};
     target.window->bounds = target.window->surface_bounds = target.bounds; target.window->on_screen = false;
     const auto result = fixture.take(fixture.args(true)); const auto& image = success(result);
-    check(fixture.requests[0].occluded && image.fields.GetNamedObject(L"origin").GetNamedNumber(L"x") == 100, "capture.offscreen-approved-window-uses-independent-source");
+    check(fixture.requests[0].isolate_window && image.fields.GetNamedObject(L"origin").GetNamedNumber(L"x") == 100, "capture.offscreen-approved-window-uses-independent-source");
   });
   test([] {
     Fixture fixture; CaptureSurface unknown; unknown.hwnd = reinterpret_cast<HWND>(uintptr_t(99)); unknown.pid = 9001; unknown.thread = 99; unknown.bounds = unknown.frame_bounds = {-8, -4, 4, 4}; unknown.visible = true; unknown.cloaked = false;
@@ -214,7 +255,7 @@ size_t run_capture_tests() {
     auto selected = fixture.args(true); selected.GetNamedObject(L"target").Insert(L"windowId", JsonValue::CreateStringValue(L"99"));
     failure(fixture.take(selected), L"capture_unavailable");
     fixture.requests.clear(); success(fixture.take(fixture.args(true)));
-    check(fixture.requests.size() == 1 && fixture.requests.front().occluded,
+    check(fixture.requests.size() == 1 && fixture.requests.front().isolate_window,
       "capture.empty-outer-positive-frame-still-occludes-window-source");
   });
   test([] {
@@ -258,7 +299,7 @@ size_t run_capture_tests() {
     // window's owner/identity witness into that overlay's distinct HWND.
     extra.window.reset();
     fixture.world.windows.insert(fixture.world.windows.begin(), extra); const auto result = fixture.take(fixture.args(true)); success(result);
-    check(!fixture.requests[0].occluded, "capture.exact-excluded-overlay-does-not-occlude-or-mask");
+    check(!fixture.requests[0].isolate_window, "capture.exact-excluded-overlay-does-not-occlude-or-mask");
     auto changed = fixture.world; changed.windows.front().excluded_overlay = false;
     check(!same_capture_inventory(fixture.world, changed), "capture.lost-overlay-proof-reenters-inventory");
   });

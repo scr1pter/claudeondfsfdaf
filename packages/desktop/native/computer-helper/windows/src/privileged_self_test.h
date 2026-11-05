@@ -16,7 +16,7 @@ inline constexpr std::array<std::wstring_view, 15> windows_privileged_checks{
   L"uia-value-set-and-readback", L"secure-field-refusal", L"tagged-click-increments",
   L"unicode-type-readback", L"stale-capture-refusal", L"owned-input-release",
   L"input-detection-probe", L"hardware-user-input-pauses", L"isolated-target-cleanup"};
-inline constexpr std::array<std::wstring_view, 113> windows_privileged_stages{
+inline constexpr std::array<std::wstring_view, 117> windows_privileged_stages{
   L"installed-list-reply", L"installed-list-native", L"installed-seal",
   L"window-capture-reply", L"window-capture-receipt", L"png-decode",
   L"affinity-show", L"affinity-hide", L"display-capture-reply", L"display-capture-receipt",
@@ -39,7 +39,8 @@ inline constexpr std::array<std::wstring_view, 113> windows_privileged_stages{
   L"capture-screen-select", L"capture-screen-blit", L"capture-screen-flush",
   L"capture-screen-copy", L"capture-window-supported", L"capture-window-frame",
   L"capture-window-device", L"capture-window-interop", L"capture-window-item-ticket",
-  L"capture-window-item-create", L"capture-window-item-current", L"capture-window-item-size",
+  L"capture-window-factory", L"capture-window-factory-current", L"capture-window-factory-context",
+  L"capture-window-item-create", L"capture-window-item-current", L"capture-window-item-context", L"capture-window-item-size",
   L"capture-window-pool", L"capture-window-session", L"capture-window-start-ticket",
   L"capture-window-start", L"capture-window-start-current", L"capture-window-first-frame",
   L"capture-window-content-size", L"capture-window-texture", L"capture-window-description",

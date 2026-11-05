@@ -201,11 +201,14 @@ CaptureBitmap window_bitmap(const CaptureReadRequest& request, const std::functi
   GraphicsCaptureItem item{nullptr};
   phase = CaptureReadPhase::window_item_ticket;
   { WindowsComCall call; require(call.current());
-    phase = CaptureReadPhase::window_item_create;
+    phase = CaptureReadPhase::window_factory;
     const auto interop = winrt::get_activation_factory<GraphicsCaptureItem, IGraphicsCaptureItemInterop>();
+    phase = CaptureReadPhase::window_factory_current; require(call.current());
+    phase = CaptureReadPhase::window_factory_context; require(current());
+    phase = CaptureReadPhase::window_item_create;
     winrt::check_hresult(interop->CreateForWindow(request.window->hwnd, winrt::guid_of<GraphicsCaptureItem>(), winrt::put_abi(item)));
-    phase = CaptureReadPhase::window_item_current;
-    require(call.current() && current()); }
+    phase = CaptureReadPhase::window_item_current; require(call.current());
+    phase = CaptureReadPhase::window_item_context; require(current()); }
   phase = CaptureReadPhase::window_item_size;
   const auto size = item.Size();
   // DWM's real extended frame and the OS capture item must agree; no guessed shadow/border offset.
@@ -364,7 +367,7 @@ CaptureBackend CaptureBackend::system(WindowsInventoryObserver diagnostic, Captu
     auto phase = CaptureReadPhase::surface_before;
     try {
       require_capture_surface(request.window); phase = CaptureReadPhase::context_before; require(current(), L"changed");
-      const auto result = request.window && request.occluded ? window_bitmap(request, current, phase) : screen_bitmap(request.bounds, phase);
+      const auto result = request.window && request.isolate_window ? window_bitmap(request, current, phase) : screen_bitmap(request.bounds, phase);
       phase = CaptureReadPhase::surface_after; require_capture_surface(request.window);
       phase = CaptureReadPhase::context_after; require(current(), L"changed"); return result;
     } catch (...) {

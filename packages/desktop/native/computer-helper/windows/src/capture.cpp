@@ -275,8 +275,12 @@ void CaptureService::capture(const JsonObject& input, const OperationContext& co
       bounds = zoom_bounds(source, args.region);
     }
     const auto fit = fit_capture(bounds, args.budget);
-    const auto plan = window && occluded ? CapturePrivacyPlan{} : privacy(inventory, bounds, session);
-    auto native = backend_.read({bounds, window, occluded}, context.is_current);
+    auto plan = window && occluded ? CapturePrivacyPlan{} : privacy(inventory, bounds, session);
+    // Unknown target opacity cannot prove that a composed screen hides private lower windows.
+    // Isolate that approved window instead of removing masks from any screen capture.
+    const bool isolate_window = window && (occluded || !plan.masks.empty());
+    if (isolate_window) plan = {};
+    auto native = backend_.read({bounds, window, isolate_window}, context.is_current);
     const auto captured_at = backend_.now();
     require(captured_at <= kMaximumSafeInteger, L"capture_unavailable");
     require(native.valid() && native.width == bounds.width && native.height == bounds.height && !all_black(native), L"capture_unavailable");

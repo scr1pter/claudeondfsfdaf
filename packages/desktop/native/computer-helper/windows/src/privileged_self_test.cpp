@@ -98,7 +98,8 @@ std::wstring_view capture_read_stage(CaptureReadPhase phase) noexcept {
     L"capture-screen-dc", L"capture-screen-memory-dc", L"capture-screen-dib", L"capture-screen-select",
     L"capture-screen-blit", L"capture-screen-flush", L"capture-screen-copy", L"capture-window-supported",
     L"capture-window-frame", L"capture-window-device", L"capture-window-interop", L"capture-window-item-ticket",
-    L"capture-window-item-create", L"capture-window-item-current", L"capture-window-item-size",
+    L"capture-window-factory", L"capture-window-factory-current", L"capture-window-factory-context",
+    L"capture-window-item-create", L"capture-window-item-current", L"capture-window-item-context", L"capture-window-item-size",
     L"capture-window-pool", L"capture-window-session", L"capture-window-start-ticket", L"capture-window-start",
     L"capture-window-start-current", L"capture-window-first-frame", L"capture-window-content-size",
     L"capture-window-texture", L"capture-window-description", L"capture-window-staging", L"capture-window-copy",
@@ -162,7 +163,7 @@ CaptureBackend diagnostic_capture_backend(CaptureBackend backend) {
   const auto read = backend.read;
   backend.read = [read](const auto& request, const auto& current) {
     const auto trace = capture_trace;
-    if (trace) trace->read_route.store(request.window && request.occluded ? CaptureReadRoute::window : CaptureReadRoute::screen);
+    if (trace) trace->read_route.store(request.window && request.isolate_window ? CaptureReadRoute::window : CaptureReadRoute::screen);
     try { return read(request, current); }
     catch (...) { if (trace) trace->record(CaptureFailureStage::native_read); throw; }
   };
