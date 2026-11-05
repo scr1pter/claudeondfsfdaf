@@ -46,6 +46,7 @@ import {
   hasGeneratedHeader,
   parseGitAttributes,
 } from "@vectordevai/core/review/ignore"
+import { evidenceScope, type EvidenceScope } from "@vectordevai/core/review/model-evidence"
 import type { ReviewPrice } from "@vectordevai/core/review/plan"
 import { Flag } from "@vectordevai/core/flag/flag"
 import { redactSecrets } from "@vectordevai/core/review/redact"
@@ -155,6 +156,9 @@ export interface ReplayArtifact {
   trust: Trust
   trigger: Trigger
   config: { digest: string; warnings: string[]; value: ReviewConfig }
+  // What a model certificate (core model-evidence.ts, VS-07) made from this replay would cover: the runner, pipeline
+  // revision, prompts, review settings and triage model.
+  scope: EvidenceScope
   rules: { digest: string }
   models: { review: ModelRecord; triage?: ModelRecord }
   context: { digest: string; related: number; history: number; instructions: boolean; headFiles: number }
@@ -300,6 +304,11 @@ export const replay = Effect.fn("ReviewEval.replay")(function* (input: ReplayInp
     decided.filter((entry) => entry.header?.reviewedAnyway).map((entry) => entry.file.path),
   )
 
+  // The cheaper first pass, as Review.run reads it: a triage model that is the review model is no triage pass.
+  const triaged =
+    input.triage && modelRecord(input.triage).id !== modelRecord(input.model).id
+      ? modelRecord(input.triage).id
+      : undefined
   const common = {
     version: 1 as const,
     label: item.label,
@@ -324,6 +333,7 @@ export const replay = Effect.fn("ReviewEval.replay")(function* (input: ReplayInp
     trust: item.trust,
     trigger,
     config: { digest: digest(config), warnings: parsed.warnings, value: config },
+    scope: evidenceScope({ adapter: "engine", config, ...(triaged ? { triage: triaged } : {}) }),
     rules: { digest: digest(rules) },
     models: { review: modelRecord(input.model), ...(input.triage ? { triage: modelRecord(input.triage) } : {}) },
     files: { reviewed: files.map((file) => file.path), skipped },

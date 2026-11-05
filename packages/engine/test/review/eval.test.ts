@@ -13,6 +13,7 @@ import { ProviderV2 } from "@vectordevai/core/provider"
 import { ModelV2 } from "@vectordevai/core/model"
 import { parseUnifiedDiff } from "@vectordevai/core/review/diff"
 import { DEFAULT_REVIEW_CONFIG, type ModelFinding, type ReviewOutcome } from "@vectordevai/core/review/types"
+import { evidenceScope } from "@vectordevai/core/review/model-evidence"
 import { SpendGuard } from "@vectordevai/core/spend-guard"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { Agent } from "../../src/agent/agent"
@@ -464,6 +465,8 @@ describe("ReviewEval.replay", () => {
         // A trusted case runs in the user's own trusted checkout; the artifact says what could run in it.
         expect(artifact.runtime.isolation).toMatchObject({ pure: false, projectConfig: true, trusted: true })
         expect(artifact.config.digest).toBe(ReviewEval.digest(DEFAULT_REVIEW_CONFIG))
+        // What a model certificate made from this replay would cover (VS-07): no triage pass ran.
+        expect(artifact.scope).toEqual(evidenceScope({ adapter: "engine", config: DEFAULT_REVIEW_CONFIG }))
         expect(artifact.models.review).toEqual({
           id: "lmstudio/test-model",
           context: 100_000,

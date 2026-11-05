@@ -576,3 +576,52 @@ cd packages/core && bun test test/review/eval-report.test.ts
 cd script/vectorscope-eval && bun test judge.test.ts
 cd script/vectorscope-eval && bun test report.test.ts
 ```
+
+## Model evidence
+
+What a passing held-out report says about one exact model (VS-07). A review
+reads it only from `MODEL_EVIDENCE` in `packages/core/src/review/model-evidence.ts`,
+which is empty: no model has passed a held-out run, so every model is unvetted.
+
+```
+bun script/vectorscope-eval/certify.ts --report <report.json> --outputs <dir> --manifest <manifest.json> --id <id> \
+  --collected <day> --approved <day> --expires <day>
+```
+
+- **Scope.** Every replay artifact, engine and desktop, records `scope`: the
+  runner, `REVIEW_PIPELINE_REVISION`, a digest of the core prompts and output
+  schemas, a digest of the review settings that change what is found or posted
+  (`EVIDENCE_POLICY_KEYS`) and the triage model. A certificate covers a review
+  only in the same scope.
+- **The certificate.** `certify.ts` reads the JSON report `report.ts --out`
+  wrote, the candidate's artifacts and the frozen manifest. It prints a
+  certificate only when the gate passed with a release decision, the
+  manifest's held-out labels are frozen and every one of the candidate's runs
+  shares one scope. The certificate names the report file by digest, the
+  manifest by its freeze digest, the gate by its digest and the day the
+  results were collected. The owner gives the approval day and the expiry, at
+  most 90 days later (`MAX_CERTIFICATE_DAYS`).
+- **Nothing is certified by printing.** A certificate applies only once it is
+  committed to `MODEL_EVIDENCE` with the owner's approval of the report (D12).
+  It then stops applying on its expiry, or when the model, runner, pipeline
+  revision, prompts, settings, triage model or variant differ. A router or
+  preset can never be certified, and a certificate of one route to a model
+  does not cover another route to it.
+- **What a review says.** Only behind the off-by-default opt-in
+  `"modelEvidence": "warn"` in `.vector/review.json` (or
+  `REVIEW_MODEL_EVIDENCE=warn`). The CLI, the GitHub job and the desktop panel
+  then add notes for an unvetted, expired, stale, retired or rerouted model,
+  for a free model labelled "May train on your prompts", and for replies from
+  a model the review did not choose. Each note says why the model was used.
+  No note switches, refuses or recommends a model, and none treats a free or
+  no-training model as evaluated. A certified model gets no note, so no note
+  claims review quality. With the opt-in, `vector review` also says a model
+  its provider retired is retired, where it said only that it was not
+  available; it refused that model before as well.
+
+The tests need no provider:
+
+```
+cd packages/core && bun test test/review/model-evidence.test.ts
+cd script/vectorscope-eval && bun test certify.test.ts
+```

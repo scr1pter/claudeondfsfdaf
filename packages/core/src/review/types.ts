@@ -225,6 +225,10 @@ export interface ReviewConfig {
   // does not set `verify` then gets SHARED_VERIFY_DEFAULT ("all") instead of "blocking". "legacy" keeps each surface's
   // rule as it was before the policy existed. It stays "legacy" until the D2 gate has measured the change.
   verifyPolicy: "legacy" | "shared"
+  // VS-07's off-by-default opt-in (D3). "warn" adds notes on what VectorScope's evaluation says about the review's models
+  // (model-evidence.ts): unvetted, expired, retired or rerouted models, and free models whose providers may train on
+  // the code. It never changes which model runs. "off" keeps today's review.
+  modelEvidence: "off" | "warn"
   failOn: "never" | "blocking" // "blocking" fails the job while blocking findings are open
   ignore: string[] // added to the defaults
   ignoreDefaults: boolean
@@ -259,6 +263,7 @@ export const DEFAULT_REVIEW_CONFIG: ReviewConfig = {
   security: "auto",
   verify: "blocking",
   verifyPolicy: "legacy",
+  modelEvidence: "off",
   failOn: "never",
   ignore: [],
   ignoreDefaults: true,

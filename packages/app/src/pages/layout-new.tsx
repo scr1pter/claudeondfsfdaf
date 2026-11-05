@@ -45,6 +45,7 @@ import {
   workflowModel,
   workingTreeChanges,
 } from "@/features/pull-requests/ai-review"
+import { parseReviewConfig, REVIEW_CONFIG_PATH } from "@vectordevai/core/review/config"
 import { setNavigate } from "@/utils/notification-click"
 import { setV2Toast, showToast, ToastRegion } from "@/utils/toast"
 import { useProviders } from "@/hooks/use-providers"
@@ -1085,6 +1086,24 @@ export default function NewLayout(props: ParentProps) {
     sourcePath: activeTaskScope().projectPath,
     parentSessionId: activeTaskScope().taskId,
   })
+  // The open project's .vector/review.json when it opts into model evidence ("modelEvidence": "warn", VS-07): the
+  // automatic-review set-up then warns about its model under these settings. Read while the Pull Requests panel is
+  // open; undefined, and so off, when the file does not opt in or cannot be read.
+  const [reviewModelEvidence] = createResource(
+    () => (pullRequestsOpen() ? activeWorkspaceScope().sourcePath : undefined),
+    async (directory) => {
+      const file = await Promise.resolve()
+        .then(() =>
+          serverSDK()
+            .createClient({ directory, throwOnError: true })
+            .file.read({ directory, path: REVIEW_CONFIG_PATH }),
+        )
+        .catch(() => undefined)
+      const json = file?.data?.type === "text" && file.data.content.trim() ? file.data.content : undefined
+      const { config } = parseReviewConfig({ json, trigger: "auto" })
+      return config.modelEvidence === "warn" ? config : undefined
+    },
+  )
   // The folder the open session or draft runs in. For an agent or parallel workspace it is not the source repository,
   // and the engine trusts it separately, so Settings, Repository trust checks it as well.
   const activeSessionDirectory = () =>
@@ -6887,7 +6906,9 @@ export default function NewLayout(props: ParentProps) {
             ? workingTreeChanges(serverSDK().createClient({ directory, throwOnError: true }), directory)
             : Promise.resolve(undefined)
         }}
-        automaticReviewModel={() => workflowModel(reviewModels(), byokProviders.connected())}
+        automaticReviewModel={() =>
+          workflowModel(reviewModels(), byokProviders.connected(), { evidence: reviewModelEvidence() })
+        }
         onApplyFix={(fix) => {
           const directory = activeWorkspaceScope().sourcePath
           if (!directory) return Promise.reject(new Error("Open a repository before applying a fix."))

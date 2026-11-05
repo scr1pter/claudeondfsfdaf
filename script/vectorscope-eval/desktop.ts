@@ -8,7 +8,8 @@ import {
   type ReviewModel,
   type ReviewOutcomeLite,
 } from "../../packages/app/src/features/pull-requests/ai-review"
-import { REVIEW_CONFIG_PATH } from "../../packages/core/src/review/config"
+import { parseReviewConfig, REVIEW_CONFIG_PATH } from "../../packages/core/src/review/config"
+import { evidenceScope, type EvidenceScope } from "../../packages/core/src/review/model-evidence"
 import type { ReviewPrice } from "../../packages/core/src/review/plan"
 import { REVIEW_REPORT_JSON_SCHEMA, VERIFY_JSON_SCHEMA } from "../../packages/core/src/review/schema"
 import type { CostKind, ReviewConfig, Trust } from "../../packages/core/src/review/types"
@@ -52,6 +53,9 @@ export interface DesktopArtifact {
   trust?: Trust // how the runner treated the checkout: untrusted when it rebuilt the change from the diff
   authored?: Trust
   models: { review: { id: string; context?: number; costKind: CostKind; price?: ReviewPrice } }
+  // What a model certificate (core model-evidence.ts, VS-07) made from this replay would cover: the desktop runner,
+  // the pipeline revision, prompts, the review settings the runner read and the triage model it ran with.
+  scope: EvidenceScope
   sessions: { pass: string; title: string; permission: string }[] // permission is a digest of the session's rules
   passes: { pass: string; model?: string; digest: string; chars: number }[]
   attempts: DesktopAttempt[]
@@ -89,6 +93,7 @@ export async function desktopReplay(input: DesktopReplayInput): Promise<DesktopA
   const recording = recordingClient(input.client)
   const policy = input.config?.verifyPolicy
   const settings = policy ? withReviewSettings(recording.client, { verifyPolicy: policy }) : undefined
+  const read = settingsReader(settings?.client ?? recording.client)
   const repository = item.repository?.url
   const pr = {
     number: 1,
@@ -112,10 +117,13 @@ export async function desktopReplay(input: DesktopReplayInput): Promise<DesktopA
       ...(input.timeoutMs !== undefined ? { timeoutMs: input.timeoutMs } : {}),
       ...(input.now ? { now: input.now } : {}),
     },
-    settings?.client ?? recording.client,
+    read.client,
   ).catch((error: unknown) => (error instanceof Error ? error : new Error(String(error))))
   const done = outcome instanceof Error ? undefined : outcome
   const posting = done ? buildDesktopReview(done, pr.url) : undefined
+  // The settings as the runner parses them: what it read of review.json, or the defaults when it read none.
+  const json = read.text()
+  const { config } = parseReviewConfig({ json: json?.trim() ? json : undefined, trigger: "desktop" })
   return {
     version: 1,
     label: item.label,
@@ -142,6 +150,7 @@ export async function desktopReplay(input: DesktopReplayInput): Promise<DesktopA
         ...(input.model.price ? { price: input.model.price } : {}),
       },
     },
+    scope: evidenceScope({ adapter: "desktop", config, ...(done?.triage ? { triage: done.triage } : {}) }),
     sessions: recording.sessions,
     passes: recording.attempts.map((attempt) => ({
       pass: attempt.pass,
@@ -191,6 +200,23 @@ export function withReviewSettings(inner: ReviewClient, keys: Record<string, unk
     },
   }
   return { client, served: () => served }
+}
+
+// A client that passes every call through and keeps the text of the last review.json the runner read.
+function settingsReader(inner: ReviewClient) {
+  let text: string | undefined
+  const client: ReviewClient = {
+    ...inner,
+    file: {
+      ...inner.file,
+      read: async (request) => {
+        const result = await inner.file.read(request)
+        if (request.path === REVIEW_CONFIG_PATH) text = result?.data?.type === "text" ? result.data.content : undefined
+        return result
+      },
+    },
+  }
+  return { client, text: () => text }
 }
 
 function jsonObject(text: string): Record<string, unknown> {

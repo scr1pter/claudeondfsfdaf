@@ -493,3 +493,102 @@ which.
   (VS-02/VS-03's open note above) can only be exercised after D7, and for the
   desktop it also needs an engine server. `"legacy"` stays the default on every
   surface.
+
+## 2026-11-04 · VS-07 Model evidence
+
+- **The opt-in is a review setting.** D3 needs an off-by-default opt-in. It is
+  `modelEvidence` in `ReviewConfig`: `"off"` (the default) or `"warn"`, read
+  from `.vector/review.json` and `REVIEW_MODEL_EVIDENCE`, as VS-06's
+  `verifyPolicy` is. The CLI, the GitHub job (through `Review.run`'s notes,
+  which it already posts, so `github.review.ts` is not edited) and the desktop
+  panel all parse it. There is no value that refuses or replaces a model: the
+  row says to warn without switching. With it off, both runners send the same
+  requests and give the same outcome, and the tests in engine
+  `test/review/run.test.ts`, `test/cli/review.test.ts`,
+  `test/review/model.test.ts` and app `ai-review.test.ts` show it.
+- **Where certificates live.** A certificate is a record in `MODEL_EVIDENCE`,
+  a constant in the new core `review/model-evidence.ts`, as VS-04's gate is
+  `DEFAULT_GATE`. It names one exact "provider/model", the report file's
+  sha256, the frozen manifest's freeze digest, the held-out split, the gate
+  decision and digest, the collection day, the runners replayed, the owner's
+  approval day and an expiry. `MODEL_EVIDENCE` is empty, because no model has
+  passed a held-out run (D5, D12). `certificateProblems` refuses a malformed
+  record, a router or preset, a split other than held-out and an approval
+  other than the owner's.
+- **Choices the plan leaves open.**
+  - A certificate expires at most 90 days after its approval
+    (`MAX_CERTIFICATE_DAYS`). The plan asks for an expiry and sets none.
+  - It applies only in the scope its runs were replayed in: the runner, the
+    pipeline revision, a digest of the core prompts and output schemas, a
+    digest of the settings that change what is found or posted
+    (`EVIDENCE_POLICY_KEYS`: security, verify, verifyPolicy, minSeverity,
+    minConfidence, nits, suggestions, maxComments, maxSteps, maxDiffChars),
+    the triage model and the variant. Budgets, time limits, ignores and skips
+    are not part of it. A change to either runner's code is caught only by
+    bumping `REVIEW_PIPELINE_REVISION`, since a digest of the runners' source
+    cannot be built in the browser. A prompt or schema change is caught
+    without a bump.
+  - The statuses are certified, unvetted, expired, stale (with what
+    changed), retired and rerouted. Rerouted covers a router or preset
+    (`openRouterModelRouting`'s rule), a certificate of the same model through
+    another route (VS-04's `sameModel` from core `eval.ts`, reused rather than
+    copied), and replies from a model the review did not choose.
+  - A triage model is covered by its pipeline's certificate, which records it.
+    It gets a note only when it is retired, a router, or labelled "May train on
+    your prompts".
+  - A certified model gets no note, so no note ever claims review quality.
+- **Private-code policy has one rule.** Whether a free model may train comes
+  from `freeModelMayTrain`, as everywhere else. The plan's
+  `subagent-model.ts` (`self-evolving`) is not on this branch, so it is not
+  used; VS-09 resolves the review and triage models with it after that merge.
+  A note says a free model "does not train on prompts" only when Vector's
+  record says no-training. The unattended free fallback is unchanged and its
+  note says which rule chose it.
+- **Retired models.** The engine drops a retired model when it loads a
+  provider, so a resolved model is never retired. Under the opt-in, `vector
+  review` names a retired local model as retired, from the catalog, where it
+  said only that the model was not available. It refused that model before as
+  well, and a workflow already named it as retired. That is the new
+  `ResolveInput.evidence` in engine `review/model.ts`. The desktop's catalog of
+  connected models normally leaves retired ones out, so the panel says
+  "retired" only for a model the catalog lists with that status. A
+  review.json model that is not connected, retired or not, is reported as not
+  connected.
+- **No silent switch.** The engine never falls back from a chosen model. The
+  desktop has always run on the agent's model when review.json names a model
+  that is not connected. That is unchanged, and under the opt-in the review
+  now says so. On the desktop the note says "No model is set in
+  .vector/review.json" rather than "No review model is set", because the
+  agent's model may be one the person chose (`choice.unset` in
+  `ModelSubject`).
+- **The resolver describes its choice.** `ResolvedModel.subject` records which
+  setting chose the model, or which default it fell back to, and the catalog's
+  facts about it. It is always set but read only under the opt-in. The eval's
+  `modelRecord` does not copy it, so replay artifacts are unchanged apart from
+  `scope`.
+- **Workflow setup.** The automatic-review setup card in `pull-requests.tsx`
+  shows warnings about the model it writes to `MODEL`. They are computed from
+  the open project's local review.json, which `layout-new.tsx` reads while the
+  Pull Requests panel is open, and are about the engine runner, which runs
+  the job. When review.json names a model, the job runs that model instead of
+  `MODEL`, and the card says so. With the opt-in off the card is unchanged,
+  apart from that one file read. Core `review/workflow.ts` and desktop
+  `github-pr.ts` are not edited. They need no change for this package,
+  because the job reads `modelEvidence` from the base branch's review.json.
+  Nothing is left for VS-05 from VS-07.
+- **Eval artifacts (VS-02 adapters) and a new script.** Engine and desktop
+  replay artifacts record `scope`. The desktop driver parses the review.json
+  the runner read, or the defaults when it read none. The new
+  `script/vectorscope-eval/certify.ts`, which the row does not list, turns a
+  passing held-out report and the candidate's artifacts into a certificate
+  through core `certify`. It prints the certificate and certifies nothing: a
+  certificate applies only once it is committed to `MODEL_EVIDENCE` with the
+  owner's approval. `report.ts` still does not load desktop artifacts (Phase 0
+  review), so for now only engine runs can be certified.
+- **Files outside the row.** Core `format.ts` now exports its existing
+  `codeSpan`, which the notes use for model names. Core `config.ts` and
+  `types.ts` carry the setting. Engine `review/eval.ts`, `cli/cmd/review.ts`
+  and the eval driver `desktop.ts` are listed above.
+- **Not user-facing in 1.99.113 (D14).** Nothing in the product sets the
+  opt-in, the public docs page does not mention it, and no model is
+  certified. VS-20's rollout flags and local model status can show it later.

@@ -38,6 +38,7 @@ import {
   type ReviewTarget,
   type RepoRulesApi,
   type WorkingTreeChanges,
+  type WorkflowModel,
 } from "./ai-review"
 import {
   buildPullRequestCreateInput,
@@ -701,8 +702,9 @@ export function PullRequests(props: {
   onReview: (input: ReviewRequest) => Promise<ReviewOutcomeLite | undefined>
   // The open project's uncommitted changes, for "Review my changes"; undefined when the engine cannot say.
   onChanges?: () => Promise<WorkingTreeChanges | undefined>
-  // The model automatic reviews would run on, with its provider's key variables (see workflowModel).
-  automaticReviewModel?: () => { model: string; keys: string[]; reason?: string } | undefined
+  // The model automatic reviews would run on, with its provider's key variables (see workflowModel), and the model
+  // evidence warnings when the open project opted into them ("modelEvidence": "warn", VS-07).
+  automaticReviewModel?: () => WorkflowModel | undefined
   // Applies a finding's fix to the open project's files (see applyReviewFix).
   onApplyFix?: (fix: ReviewFix) => Promise<"applied" | "changed">
   // Hands a prompt to the agent in the task on screen, or starts one with it.
@@ -2012,6 +2014,13 @@ export function PullRequests(props: {
                   </p>
                 )}
               </Show>
+              <For each={props.automaticReviewModel?.()?.warnings ?? []}>
+                {(warning) => (
+                  <p class="mx-4 mt-4 rounded-[6px] border border-[color:color-mix(in_srgb,var(--vx-amber)_30%,transparent)] bg-[color:color-mix(in_srgb,var(--vx-amber)_8%,transparent)] px-3 py-2 text-[12px] leading-relaxed text-[color:var(--vx-amber)]">
+                    <CodeText text={warning} />
+                  </p>
+                )}
+              </For>
               <Show when={panel.preview}>
                 {(workflow) => (
                   <>

@@ -996,7 +996,7 @@ function where(path: string, line: number | null): string {
 }
 
 // Paths and branch names come from the pull request, so they cannot close the code span or carry a marker.
-function codeSpan(text: string): string {
+export function codeSpan(text: string): string {
   return "`" + escapeVectorMarkers(text.replace(/[\r\n]+/g, " ").replace(/`/g, "'")) + "`"
 }
 

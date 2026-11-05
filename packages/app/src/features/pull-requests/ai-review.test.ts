@@ -2,7 +2,10 @@ import { describe, expect, test } from "bun:test"
 import { createVectorClient } from "@vectordevai/sdk/v2/client"
 import { parseUnifiedDiff } from "@vectordevai/core/review/diff"
 import { noteTriageUnchecked, noteVerifyUnfinished } from "@vectordevai/core/review/format"
+import { evidenceScope, type ModelCertificate } from "@vectordevai/core/review/model-evidence"
 import { reviewPermissionRules } from "@vectordevai/core/review/permission"
+import { parseReviewConfig } from "@vectordevai/core/review/config"
+import { DEFAULT_REVIEW_CONFIG } from "@vectordevai/core/review/types"
 import { buildFinalizePrompt, SCOPE } from "@vectordevai/core/review/prompt"
 import { REVIEW_REPORT_JSON_SCHEMA, VERIFY_JSON_SCHEMA } from "@vectordevai/core/review/schema"
 import {
@@ -26,6 +29,7 @@ import {
   findingGroups,
   findingSections,
   keptDismissals,
+  modelName,
   passLines,
   pickReviewModel,
   reviewCatalog,
@@ -2142,5 +2146,184 @@ describe("the verify policy", () => {
       "The double-check did not finish, so these findings were not re-checked. Treat them with more care before posting.",
     ])
     expect(shared.notes).toEqual([noteVerifyUnfinished(2, "time")])
+  })
+})
+
+describe("model evidence (VS-07)", () => {
+  const NOW = Date.parse("2026-12-15T12:00:00Z")
+  const WARN = { ".vector/review.json": '{"modelEvidence":"warn"}' }
+  const unvetted = (name: string) =>
+    `\`${name}\` has no VectorScope evaluation on record, so how well it reviews is unmeasured.`
+  const certificate = (
+    model: string,
+    adapter: "engine" | "desktop",
+    config = DEFAULT_REVIEW_CONFIG,
+  ): ModelCertificate => {
+    const scope = evidenceScope({ adapter, config })
+    return {
+      version: 1,
+      id: "vs-test",
+      model,
+      adapters: [adapter],
+      pipeline: scope.pipeline,
+      prompts: scope.prompts,
+      policy: scope.policy,
+      evaluation: {
+        report: `sha256:${"a".repeat(64)}`,
+        manifest: `sha256:${"b".repeat(64)}`,
+        split: "held-out",
+        decision: "D2",
+        gate: "c".repeat(16),
+        collected: "2026-12-01",
+      },
+      approved: { by: "owner", date: "2026-12-02" },
+      expires: "2027-02-01",
+    }
+  }
+
+  test("off by default: the same review sends the same prompts to the same model and gives no note", async () => {
+    const today = fakeClient({ files: { "src/list.ts": HEAD } })
+    const off = (await run(today.client, { now: () => NOW }))!
+    const opted = fakeClient({ files: { "src/list.ts": HEAD, ...WARN } })
+    const warn = (await run(opted.client, { now: () => NOW }))!
+    expect(off.notes).toEqual([])
+    expect(opted.calls.prompt.map((call) => [call.model, call.parts])).toEqual(
+      today.calls.prompt.map((call) => [call.model, call.parts]),
+    )
+    expect(warn.selection).toEqual(off.selection)
+    expect(warn.cost).toEqual(off.cost)
+    // The agent's model may be one the person chose, so the note says only that review.json named none.
+    expect(warn.notes).toEqual([
+      `${unvetted("anthropic/claude-sonnet-4-5")} No model is set in .vector/review.json, so Vector used your agent's model.`,
+    ])
+  })
+
+  test("a model named in review.json is the explicit choice; one that is not connected is said to be replaced", async () => {
+    const named = fakeClient({
+      files: {
+        "src/list.ts": HEAD,
+        ".vector/review.json": '{"modelEvidence":"warn","model":"anthropic/claude-sonnet-4-5"}',
+      },
+    })
+    const explicit = (await run(named.client, { preferredModels: ["openai/gpt-5.5"], now: () => NOW }))!
+    expect(named.calls.prompt.map((call) => call.model?.modelID)).toEqual(
+      named.calls.prompt.map(() => "claude-sonnet-4-5"),
+    )
+    expect(explicit.notes).toEqual([
+      `${unvetted("anthropic/claude-sonnet-4-5")} Vector used it because model in .vector/review.json names it, and does not switch a chosen model.`,
+    ])
+
+    const missing = fakeClient({
+      files: { "src/list.ts": HEAD, ".vector/review.json": '{"modelEvidence":"warn","model":"acme/gone"}' },
+    })
+    const replaced = (await run(missing.client, { now: () => NOW }))!
+    expect(replaced.notes).toEqual([
+      "The model in .vector/review.json, acme/gone, is not connected, so the review ran on anthropic/claude-sonnet-4-5.",
+      unvetted("anthropic/claude-sonnet-4-5"),
+    ])
+    // Off, the same fallback happens as it always did, without a note.
+    const quiet = fakeClient({ files: { "src/list.ts": HEAD, ".vector/review.json": '{"model":"acme/gone"}' } })
+    expect((await run(quiet.client, { now: () => NOW }))!.notes).toEqual([])
+  })
+
+  test("replies from a model the review did not choose are named", async () => {
+    // The fake engine answers every prompt as anthropic/claude-sonnet-4-5, whatever model was asked for.
+    const { client, calls } = fakeClient({ files: { "src/list.ts": HEAD, ...WARN } })
+    const outcome = (await run(client, { preferredModels: ["openai/gpt-5.5"], now: () => NOW }))!
+    expect(calls.prompt.map((call) => call.model?.modelID)).toEqual(calls.prompt.map(() => "gpt-5.5"))
+    expect(outcome.notes).toEqual([
+      `${unvetted("openai/gpt-5.5")} No model is set in .vector/review.json, so Vector used your agent's model.`,
+      "Replies in this review came from `anthropic/claude-sonnet-4-5`, which it did not choose.",
+    ])
+  })
+
+  test("certified, retired, routed and may-train models, with the certificate's runner and settings", async () => {
+    const review = async (catalog: ReviewModel[], certificates: ModelCertificate[] = []) =>
+      (await run(fakeClient({ files: { "src/list.ts": HEAD, ...WARN } }).client, {
+        catalog,
+        preferredModels: [modelName(catalog[0]!)],
+        certificates,
+        now: () => NOW,
+      }))!.notes
+    const warn = parseReviewConfig({ json: '{"modelEvidence":"warn"}', trigger: "desktop" }).config
+    // Certified for the desktop runner under these settings: nothing to say, and nothing claims quality.
+    expect(await review([sonnet], [certificate("anthropic/claude-sonnet-4-5", "desktop", warn)])).toEqual([])
+    // A certificate of the engine runner does not cover the desktop's.
+    expect((await review([sonnet], [certificate("anthropic/claude-sonnet-4-5", "engine", warn)]))[0]).toStartWith(
+      "The VectorScope evaluation of `anthropic/claude-sonnet-4-5` on record (`vs-test`) was made with another review runner, so it does not apply here.",
+    )
+    expect((await review([{ ...sonnet, status: "deprecated" }]))[0]).toStartWith(
+      "`anthropic/claude-sonnet-4-5` is retired by its provider, so no evaluation applies to it. Choose a current model.",
+    )
+    const router: ReviewModel = { providerID: "vector", modelID: "openrouter/free", context: 200_000, costKind: "free" }
+    expect((await review([router]))[0]).toStartWith(
+      "`vector/openrouter/free` is a router: each request may be answered by a different model, so no evaluation applies to it.",
+    )
+    const learner: ReviewModel = {
+      providerID: "vector",
+      modelID: "acme/coder:free",
+      context: 200_000,
+      costKind: "free",
+      freeModel: { source: "shared", dataPolicy: "may-train" },
+    }
+    expect((await review([learner]))[0]).toBe(
+      `${unvetted("vector/acme/coder:free")} Being free is not evidence of review quality. \`vector/acme/coder:free\` is labelled "May train on your prompts": its provider may log the code it is sent and use it to train models. Don't use it for private code. No model is set in .vector/review.json, so Vector used your agent's model.`,
+    )
+  })
+
+  test("the automatic-review set-up warns only when the open project opts in, and never changes the model", () => {
+    const providers: Parameters<typeof workflowModel>[1] = [
+      {
+        id: "anthropic",
+        source: "env",
+        env: ["ANTHROPIC_API_KEY"],
+        models: { sonnet: { id: "claude-sonnet-4-5", cost: { input: 3, output: 15 } } },
+      },
+      {
+        id: "vector",
+        source: "api",
+        env: [],
+        models: {
+          coder: { id: "acme/coder:free", freeModel: { source: "shared", dataPolicy: "may-train" } },
+          router: { id: "openrouter/free" },
+        },
+      },
+    ]
+    const today = workflowModel(["anthropic/claude-sonnet-4-5"], providers)
+    expect(today).toEqual({ model: "anthropic/claude-sonnet-4-5", keys: ["ANTHROPIC_API_KEY"] })
+    const parsed = (json: object) => parseReviewConfig({ json: JSON.stringify(json), trigger: "auto" }).config
+    // Settings that do not opt in change nothing.
+    expect(workflowModel(["anthropic/claude-sonnet-4-5"], providers, { evidence: parsed({}), now: NOW })).toEqual(today)
+
+    const warn = parsed({ modelEvidence: "warn" })
+    expect(workflowModel(["anthropic/claude-sonnet-4-5"], providers, { evidence: warn, now: NOW })).toEqual({
+      model: "anthropic/claude-sonnet-4-5",
+      keys: ["ANTHROPIC_API_KEY"],
+      warnings: [unvetted("anthropic/claude-sonnet-4-5")],
+    })
+    // Certified for the engine under the open project's settings: no warning at all.
+    expect(
+      workflowModel(["anthropic/claude-sonnet-4-5"], providers, {
+        evidence: warn,
+        now: NOW,
+        certificates: [certificate("anthropic/claude-sonnet-4-5", "engine", warn)],
+      }),
+    ).toEqual(today)
+    expect(workflowModel(["vector/openrouter/free"], providers, { evidence: warn, now: NOW })?.warnings).toEqual([
+      "`vector/openrouter/free` is a router: each request may be answered by a different model, so no evaluation applies to it.",
+    ])
+    expect(workflowModel(["vector/acme/coder:free"], providers, { evidence: warn, now: NOW })?.warnings?.[0]).toContain(
+      'is labelled "May train on your prompts"',
+    )
+    // A model named in review.json runs instead of the workflow's MODEL; the warning names it and describes that one.
+    const named = workflowModel(["anthropic/claude-sonnet-4-5"], providers, {
+      evidence: parsed({ modelEvidence: "warn", model: "vector/openrouter/free" }),
+      now: NOW,
+    })
+    expect(named).toMatchObject({ model: "anthropic/claude-sonnet-4-5", keys: ["ANTHROPIC_API_KEY"] })
+    expect(named?.warnings).toEqual([
+      "Automatic reviews read `.vector/review.json` from the pull request's base branch, and a model named there runs instead of `anthropic/claude-sonnet-4-5`: here `vector/openrouter/free`.",
+      "`vector/openrouter/free` is a router: each request may be answered by a different model, so no evaluation applies to it.",
+    ])
   })
 })

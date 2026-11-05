@@ -13,6 +13,7 @@ import { ProviderV2 } from "@vectordevai/core/provider"
 import { ModelV2 } from "@vectordevai/core/model"
 import { parseUnifiedDiff } from "@vectordevai/core/review/diff"
 import { parseReviewConfig } from "@vectordevai/core/review/config"
+import { certificateProblems, evidenceScope, type ModelCertificate } from "@vectordevai/core/review/model-evidence"
 import {
   noteTriageFixedUnchecked,
   noteTriageUnchecked,
@@ -24,6 +25,7 @@ import {
   type ModelFinding,
   type ReviewConfig,
   type ReviewCost,
+  type ReviewOutcome,
 } from "@vectordevai/core/review/types"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { Agent } from "../../src/agent/agent"
@@ -1749,6 +1751,117 @@ describe("the verify policy", () => {
             noteTriageUnchecked(1, "lmstudio/cheap-model", "lmstudio/test-model", "unanswered"),
             noteVerifyUnfinished(1, "unanswered"),
           ],
+        ])
+      }),
+    TIMEOUT,
+  )
+})
+
+describe("model evidence (VS-07)", () => {
+  // The certificate a held-out run would have given the test model, in the scope these reviews run in. Review.run reads
+  // the clock, so the dates are around today: collected two days ago, approved yesterday, expiring in thirty days.
+  const day = (offset: number) => new Date(Date.now() + offset * 86_400_000).toISOString().slice(0, 10)
+  const certificate = (scope: ReturnType<typeof evidenceScope>): ModelCertificate => ({
+    version: 1,
+    id: "vs-test",
+    model: "lmstudio/test-model",
+    adapters: ["engine"],
+    pipeline: scope.pipeline,
+    prompts: scope.prompts,
+    policy: scope.policy,
+    evaluation: {
+      report: `sha256:${"a".repeat(64)}`,
+      manifest: `sha256:${"b".repeat(64)}`,
+      split: "held-out",
+      decision: "D2",
+      gate: "c".repeat(16),
+      collected: day(-2),
+    },
+    approved: { by: "owner", date: day(-1) },
+    expires: day(30),
+  })
+  const stable = (outcome: ReviewOutcome) => {
+    const { durationMs: _duration, sessions: _sessions, notes: _notes, ...rest } = outcome
+    return rest
+  }
+
+  it.instance(
+    "off by default: the same review sends the same requests and gives the same outcome, with no note; warn only adds notes",
+    () =>
+      Effect.gen(function* () {
+        const { llm, directory } = yield* useServer()
+        const reviewed = (overrides: Partial<Review.RunInput>) =>
+          Effect.gen(function* () {
+            const before = (yield* modelRequests(llm)).length
+            yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report([finding()])))
+            const outcome = yield* Review.run(input(directory, overrides))
+            const sent = (yield* modelRequests(llm)).slice(before).map((body) => body.model)
+            return { outcome, sent }
+          })
+
+        const today = yield* reviewed({ config: config() })
+        const warn = yield* reviewed({ config: config({ modelEvidence: "warn" }) })
+        expect(today.outcome.notes).toEqual([])
+        expect(warn.sent).toEqual(today.sent)
+        expect(warn.sent).toEqual(["test-model"])
+        expect(stable(warn.outcome)).toEqual(stable(today.outcome))
+        // A model built without the resolver says only what it is; it never names another model to use.
+        expect(warn.outcome.notes).toEqual([
+          "`lmstudio/test-model` has no VectorScope evaluation on record, so how well it reviews is unmeasured.",
+        ])
+      }),
+    TIMEOUT,
+  )
+
+  it.instance(
+    "warn: a certified model says nothing about quality, but a provider that may train on the code is still named",
+    () =>
+      Effect.gen(function* () {
+        const { llm, directory } = yield* useServer()
+        const before = (yield* modelRequests(llm)).length
+        const warn = config({ modelEvidence: "warn" })
+        const certificates = [certificate(evidenceScope({ adapter: "engine", config: warn }))]
+        expect(certificateProblems(certificates[0])).toEqual([])
+        const model = {
+          ...ref,
+          context: 100_000,
+          costKind: "priced" as const,
+          subject: { model: "lmstudio/test-model", free: false, choice: { explicit: true, setting: "--model" } },
+        }
+
+        yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report([finding()])))
+        const certified = yield* Review.run(input(directory, { model, config: warn, certificates }))
+        expect(certified.notes).toEqual([])
+
+        // Another review setting is another scope: the certificate no longer applies, and the note says why.
+        yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report([finding()])))
+        const stale = yield* Review.run(
+          input(directory, { model, config: { ...warn, minConfidence: 0.2 }, certificates }),
+        )
+        expect(stale.notes).toEqual([
+          "The VectorScope evaluation of `lmstudio/test-model` on record (`vs-test`) was made with other review settings, so it does not apply here. Vector used it because --model names it, and does not switch a chosen model.",
+        ])
+
+        yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report([finding()])))
+        const trainer = yield* Review.run(
+          input(directory, {
+            model: {
+              ...model,
+              costKind: "free",
+              subject: { ...model.subject, free: true, freeModel: { source: "openrouter", dataPolicy: "may-train" } },
+            },
+            config: warn,
+            certificates,
+          }),
+        )
+        expect(trainer.notes).toEqual([
+          '`lmstudio/test-model` is labelled "May train on your prompts": its provider may log the code it is sent and use it to train models. Don\'t use it for private code. Vector used it because --model names it, and does not switch a chosen model.',
+        ])
+        // Every review ran on the model it was given.
+        expect((yield* modelRequests(llm)).slice(before).map((body) => body.model)).toEqual([
+          "test-model",
+          "test-model",
+          "test-model",
         ])
       }),
     TIMEOUT,

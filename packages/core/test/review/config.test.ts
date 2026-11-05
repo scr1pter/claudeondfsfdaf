@@ -170,6 +170,24 @@ describe("parseReviewConfig", () => {
     ])
   })
 
+  test("model evidence is off unless review.json or REVIEW_MODEL_EVIDENCE opts into its warnings (VS-07)", () => {
+    expect(DEFAULT_REVIEW_CONFIG.modelEvidence).toBe("off")
+    expect(parseReviewConfig().config.modelEvidence).toBe("off")
+    expect(parseReviewConfig({ json: JSON.stringify({ modelEvidence: "warn" }) })).toEqual({
+      config: { ...DEFAULT_REVIEW_CONFIG, modelEvidence: "warn" },
+      warnings: [],
+    })
+    expect(parseReviewConfig({ env: { REVIEW_MODEL_EVIDENCE: " Warn " } }).config.modelEvidence).toBe("warn")
+    expect(
+      parseReviewConfig({ json: JSON.stringify({ modelEvidence: "warn" }), env: { REVIEW_MODEL_EVIDENCE: "off" } })
+        .config.modelEvidence,
+    ).toBe("off")
+    // There is nothing to enforce: a value that would refuse or switch models is not a choice.
+    const bad = parseReviewConfig({ json: JSON.stringify({ modelEvidence: "require" }) })
+    expect(bad.config).toEqual(DEFAULT_REVIEW_CONFIG)
+    expect(bad.warnings).toEqual(['.vector/review.json: "modelEvidence" must be "off", "warn"; using "off".'])
+  })
+
   test("under the shared verify policy a triage model still keeps the double-check on", () => {
     const { config, warnings } = parseReviewConfig({
       json: JSON.stringify({ verifyPolicy: "shared", triageModel: "openrouter/cheap", verify: "off" }),

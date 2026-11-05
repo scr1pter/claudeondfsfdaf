@@ -25,6 +25,13 @@ import {
   noteVerifyUnfinished,
 } from "@vectordevai/core/review/format"
 import { classifyPath, isSensitivePath } from "@vectordevai/core/review/ignore"
+import {
+  assessReview,
+  evidenceScope,
+  modelEvidenceNotes,
+  type ModelCertificate,
+  type ModelSubject,
+} from "@vectordevai/core/review/model-evidence"
 import { reviewPermissionRules } from "@vectordevai/core/review/permission"
 import { packChanges, verifyHeadFiles } from "@vectordevai/core/review/pack"
 import {
@@ -115,6 +122,9 @@ export interface RunInput {
   // The eval's view of the run (ReviewEval.replay): each pass's prompt and every provider attempt, admitted or
   // refused, with what it settled at. Off unless set, and observing changes nothing the review does.
   observe?: (event: Observation) => void
+  // The certificates model evidence (VS-07) compares the models with when config.modelEvidence is "warn":
+  // MODEL_EVIDENCE when absent. The eval and tests pass their own.
+  certificates?: readonly ModelCertificate[]
 }
 
 type Name = ReviewOutcome["specialists"][number]["name"]
@@ -227,7 +237,8 @@ export const run: (
   const tracks = new Map<string, Track>()
   const reservations = new Map<Name, { turn: number; finalize: number }>()
   const sessionIDs: SessionID[] = []
-  const state = { spent: 0, reported: 0, uncertain: 0, incomplete: false }
+  // served: every model a reply came from, as the last measure saw them.
+  const state = { spent: 0, reported: 0, uncertain: 0, incomplete: false, served: [] as string[] }
   const scope = yield* Scope.make()
 
   const progress = (event: Progress) =>
@@ -304,6 +315,7 @@ export const run: (
     // Each model a reply came from, with its cost kind when it is one this review chose.
     const chosen = triaged ? [input.model, triage] : [input.model]
     const used = [...new Set(assistant.map((message) => `${message.providerID}/${message.modelID}`))]
+    state.served = used
     const kinds = used.map((name) => chosen.find((model) => nameOf(model) === name)?.costKind)
     const known = kinds.every((kind) => kind !== undefined)
     return {
@@ -826,11 +838,27 @@ export const run: (
             : []
 
     const spentByPass = yield* passes()
+    const cost = yield* measure()
+    // Model evidence (VS-07), only when review.json opts in: notes on what VectorScope's evaluation says about the
+    // models, after the replies are known. It never changes which model ran.
+    const evidenceNotes =
+      config.modelEvidence === "warn"
+        ? modelEvidenceNotes(
+            assessReview({
+              review: subjectOf(input.model),
+              ...(triaged ? { triage: subjectOf(triage) } : {}),
+              scope: evidenceScope({ adapter: "engine", config, ...(triaged ? { triage: nameOf(triage) } : {}) }),
+              served: state.served,
+              now: Date.now(),
+              ...(input.certificates ? { certificates: input.certificates } : {}),
+            }),
+          )
+        : []
     return {
       report: checked,
       selection,
       skipped: input.skipped,
-      cost: yield* measure(),
+      cost,
       ...(spentByPass.length ? { passes: spentByPass } : {}),
       durationMs: Date.now() - started,
       base: input.base,
@@ -858,6 +886,7 @@ export const run: (
               "Reported cost may be incomplete; work with uncertain usage retained its estimated budget exposure for this review.",
             ]
           : []),
+        ...evidenceNotes,
       ],
     } satisfies ReviewOutcome
   })
@@ -886,6 +915,18 @@ export function normalizeFindings(findings: ModelFinding[], source: Finding["sou
 
 function nameOf(model: Pick<ResolvedModel, "providerID" | "modelID">) {
   return `${model.providerID}/${model.modelID}`
+}
+
+// What model evidence reads about a model. One built without the resolver gives only its name and whether it is free,
+// so its note says nothing about why it was used.
+function subjectOf(model: ResolvedModel): ModelSubject {
+  return (
+    model.subject ?? {
+      model: nameOf(model),
+      ...(model.variant ? { variant: model.variant } : {}),
+      free: model.costKind === "free",
+    }
+  )
 }
 
 // Why a verify pass did not finish, for its note: skipped or denied for budget, out of time, or anything else.

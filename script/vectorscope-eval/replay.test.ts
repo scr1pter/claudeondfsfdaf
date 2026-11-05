@@ -3,7 +3,10 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os"
 import { basename, dirname, join } from "node:path"
 import type { ReviewClient, ReviewMessage, ReviewModel } from "../../packages/app/src/features/pull-requests/ai-review"
+import { parseReviewConfig } from "../../packages/core/src/review/config"
+import { evidenceScope } from "../../packages/core/src/review/model-evidence"
 import { VERIFY_JSON_SCHEMA } from "../../packages/core/src/review/schema"
+import { DEFAULT_REVIEW_CONFIG } from "../../packages/core/src/review/types"
 import { Ledger, type Limits } from "./budget"
 import { gitEnv, loadManifest, type Manifest } from "./dataset"
 import { candidateDiff, desktopReplay, withReviewSettings } from "./desktop"
@@ -371,6 +374,8 @@ describe("the desktop replay", () => {
       authored: "untrusted",
       models: { review: { id: "test/reviewer", costKind: "priced", price: { input: 3, output: 15 } } },
     })
+    // What a model certificate made from this replay would cover (VS-07): the desktop runner under the defaults.
+    expect(artifact.scope).toEqual(evidenceScope({ adapter: "desktop", config: DEFAULT_REVIEW_CONFIG }))
     // The final placed findings, where the desktop would put them, as the engine replay records them.
     expect(artifact.placed.map((item) => [item.path, item.line, item.side, item.source, item.verified])).toEqual([
       ["app.py", 2, "RIGHT", "review", true],
@@ -435,6 +440,13 @@ describe("the desktop replay", () => {
     for (const artifact of [legacy, shared]) expect(artifact.error).toBeUndefined()
     expect(legacy.variant).toBeUndefined()
     expect(shared.variant).toEqual({ verifyPolicy: "shared", applied: true })
+    // Each artifact's evidence scope is of the settings the runner read: the base's, with the variant over them.
+    const settings = (json: object) => parseReviewConfig({ json: JSON.stringify(json), trigger: "desktop" }).config
+    expect(legacy.scope).toEqual(evidenceScope({ adapter: "desktop", config: settings({ verify: "blocking" }) }))
+    expect(shared.scope).toEqual(
+      evidenceScope({ adapter: "desktop", config: settings({ verify: "blocking", verifyPolicy: "shared" }) }),
+    )
+    expect(shared.scope.policy).not.toBe(legacy.scope.policy)
     // Legacy double-checks both findings; under the shared policy the base's "blocking" means blocking.
     expect(legacy.outcome?.verification).toEqual({ checked: 2, rejected: 0, status: "ok" })
     expect(shared.outcome?.verification).toEqual({ checked: 1, rejected: 0, status: "ok" })
