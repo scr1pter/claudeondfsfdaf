@@ -36,6 +36,8 @@ import {
   COMPUTER_SMOKE_PHASE_MARK,
   COMPUTER_SMOKE_FAILURE_MARK,
   computerSmokeBannerProbe,
+  COMPUTER_SMOKE_TRANSPARENCY_PROBE,
+  computerSmokeTransparentBackground,
   type ComputerSmokePhase,
   type ComputerSmokeLastPhase,
   type ComputerSmokeCheck,
@@ -315,17 +317,26 @@ async function properties() {
     remove()
     probe.destroy()
   }
+  const transparent = async () =>
+    (
+      await Promise.all(
+        owned.map(async (record) =>
+          computerSmokeTransparentBackground(
+            record.config,
+            record.window.getBackgroundColor(),
+            await record.window.webContents.executeJavaScript(COMPUTER_SMOKE_TRANSPARENCY_PROBE),
+          ),
+        ),
+      )
+    ).every(Boolean)
   const theme = nativeTheme.themeSource
   try {
     nativeTheme.themeSource = "dark"
     await setTimeout(50)
-    const dark = owned.every((record) => record.window.getBackgroundColor().toLowerCase() === "#00000000")
+    const dark = await transparent()
     nativeTheme.themeSource = "light"
     await setTimeout(50)
-    check(
-      "transparent-theme-switch",
-      dark && owned.every((record) => record.window.getBackgroundColor().toLowerCase() === "#00000000"),
-    )
+    check("transparent-theme-switch", dark && (await transparent()))
   } finally {
     nativeTheme.themeSource = theme
   }

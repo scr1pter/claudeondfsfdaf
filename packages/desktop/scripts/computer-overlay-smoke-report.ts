@@ -513,3 +513,22 @@ export function computerSmokeBannerProbe(title: string, line: string): string {
       !!stop && stop.textContent === 'Stop' && stop.disabled === false;
   })()`
 }
+
+/** Electron's native getter is RGB-only; renderer styles independently expose page alpha. */
+export const COMPUTER_SMOKE_TRANSPARENCY_PROBE = `(() =>
+  [document.documentElement, document.body].every(element =>
+    !!element && getComputedStyle(element).backgroundColor === 'rgba(0, 0, 0, 0)'
+  )
+)()`
+export function computerSmokeTransparentBackground(
+  config: { transparent?: boolean; backgroundColor?: string },
+  nativeColor: string,
+  pageTransparent: unknown,
+): boolean {
+  return (
+    config.transparent === true &&
+    config.backgroundColor === "#00000000" &&
+    nativeColor.toLowerCase() === "#000000" &&
+    pageTransparent === true
+  )
+}

@@ -15,6 +15,8 @@ import {
   computerSmokeLoaderModule,
   computerSmokeBootstrapSource,
   computerSmokeBannerProbe,
+  COMPUTER_SMOKE_TRANSPARENCY_PROBE,
+  computerSmokeTransparentBackground,
   COMPUTER_SMOKE_LOADER_STARTED,
   type ComputerSmokeLastPhase,
   parseComputerSmokeReport,
@@ -66,6 +68,30 @@ describe("fixed real Electron computer smoke reports", () => {
     expect(observe()).toBe(false)
     elements[".line"].textContent = view!.line
     elements['button[data-action="stop"]'].disabled = true
+    expect(observe()).toBe(false)
+  })
+  test("requires native RGB, configured window alpha and independently observed page alpha", () => {
+    const config = { transparent: true, backgroundColor: "#00000000" }
+    const root = { backgroundColor: "rgba(0, 0, 0, 0)" }
+    const body = { backgroundColor: "rgba(0, 0, 0, 0)" }
+    const script = new Script(COMPUTER_SMOKE_TRANSPARENCY_PROBE)
+    const observe = () =>
+      script.runInNewContext({
+        document: { documentElement: root, body },
+        getComputedStyle: (element: typeof root) => element,
+      })
+    expect(observe()).toBe(true)
+    expect(computerSmokeTransparentBackground(config, "#000000", observe())).toBe(true)
+    // The documented getter drops alpha: never infer transparency from native black alone.
+    for (const color of ["#ffffff", "#00000000", "transparent"])
+      expect(computerSmokeTransparentBackground(config, color, observe())).toBe(false)
+    expect(computerSmokeTransparentBackground({ ...config, transparent: false }, "#000000", true)).toBe(false)
+    expect(computerSmokeTransparentBackground({ ...config, backgroundColor: "#ff000000" }, "#000000", true)).toBe(false)
+    root.backgroundColor = "rgb(0, 0, 0)"
+    expect(observe()).toBe(false)
+    expect(computerSmokeTransparentBackground(config, "#000000", observe())).toBe(false)
+    root.backgroundColor = "rgba(0, 0, 0, 0)"
+    body.backgroundColor = "rgba(0, 0, 0, 1)"
     expect(observe()).toBe(false)
   })
   test("preserves the complete catalog and exact runtime without including observed content", () => {
