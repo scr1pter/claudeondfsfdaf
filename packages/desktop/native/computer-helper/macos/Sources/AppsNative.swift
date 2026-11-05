@@ -80,9 +80,9 @@ final class AppsNative {
         guard MacAppIdentity.canonicalPathShape(result) else { throw AppsNative.unavailable }
         return result
     }
-    private static func status(_ path: String, following: Bool = false) throws -> Stamp {
+    private static func status(_ path: String) throws -> Stamp {
         var value = stat()
-        let result = following ? Darwin.stat(path, &value) : lstat(path, &value)
+        let result = lstat(path, &value)
         guard result == 0 else { throw AppsNative.unavailable }
         return Stamp(value)
     }
@@ -112,7 +112,8 @@ final class AppsNative {
         guard regular(executableStamp.mode), executableStamp.mode & mode_t(S_ISUID | S_ISGID) == 0 else { throw AppsNative.protected }
         var code: SecStaticCode?, info: CFDictionary?
         let created = SecStaticCodeCreateWithPath(URL(fileURLWithPath: canonical) as CFURL, [], &code) == errSecSuccess
-        let valid = created && code.map { SecStaticCodeCheckValidity($0, [.checkAllArchitectures, .strictValidate, .noNetworkAccess], nil) == errSecSuccess } == true
+        let validation = SecCSFlags(rawValue: kSecCSCheckAllArchitectures | kSecCSStrictValidate).union(.noNetworkAccess)
+        let valid = created && code.map { SecStaticCodeCheckValidity($0, validation, nil) == errSecSuccess } == true
         if let code { _ = SecCodeCopySigningInformation(code, SecCSFlags(rawValue: kSecCSSigningInformation), &info) }
         let fields: NSDictionary
         if let info { fields = info as NSDictionary } else { fields = NSDictionary() }
@@ -704,7 +705,9 @@ final class AppsNative {
               posix_spawn_file_actions_addopen(&actions, STDIN_FILENO, "/dev/null", O_RDONLY, 0) == 0,
               posix_spawn_file_actions_addopen(&actions, STDOUT_FILENO, "/dev/null", O_WRONLY, 0) == 0,
               posix_spawn_file_actions_addopen(&actions, STDERR_FILENO, "/dev/null", O_WRONLY, 0) == 0 else { throw AppsNative.unavailable }
-        let arguments = [strdup(path)], variables = ["PATH=/usr/bin:/bin", "HOME=" + NSHomeDirectory(), "TMPDIR=" + NSTemporaryDirectory()].map { strdup($0) }
+        let arguments = [path.withCString { strdup($0) }]
+        let environment: [String] = ["PATH=/usr/bin:/bin", "HOME=" + NSHomeDirectory(), "TMPDIR=" + NSTemporaryDirectory()]
+        let variables = environment.map { value in value.withCString { strdup($0) } }
         defer { arguments.forEach { free($0) }; variables.forEach { free($0) } }
         guard arguments.allSatisfy({ $0 != nil }), variables.allSatisfy({ $0 != nil }) else { throw AppsNative.unavailable }
         var argv = arguments + [nil], envp = variables + [nil], pid: pid_t = 0

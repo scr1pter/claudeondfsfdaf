@@ -646,5 +646,57 @@ func runServerTests() throws -> Int {
                      "shutdown uses the same owned cleanup boundary before its acknowledgment and exit callback")
   }
 
+  try test {
+    let identity = MacAppIdentity(bundleId: "example.catalog.fixture", teamId: "ABCDEFGHIJ", apple: false,
+      system: false, verified: true, name: "Synthetic catalog owner",
+      path: "/virtual/Catalog.app/Contents/MacOS/Catalog", pid: 101)
+    for change in ["update", "same-id", "other-id"] {
+      let fake = ServerFixture()
+      _ = try fake.begin(approved: [identity.wire])
+      var captured: OperationContext?
+      var complete: Dispatcher.Completion?
+      fake.server.register(op: "unit.catalog-session-snapshot", deadlineMs: 1000, requiresSession: false) { _, context, done in
+        captured = context; complete = done
+      }
+      let catalog = try fake.request("unit.catalog-session-snapshot")
+      let oldEpoch = captured?.session?.observationEpoch
+      try serverExpect(captured?.session?.approved == [identity.wire] && captured?.isCurrent() == true,
+                       "a sessionless catalog may still capture current approval authority for private titles")
+      if change == "update" {
+        _ = try fake.request("session.update", ["sessionId": .string("native-test"), "phaseRevision": .integer(0), "approved": .array([])])
+      } else { _ = try fake.begin(change == "same-id" ? "native-test" : "successor-task", approved: []) }
+      var readOldTitle = false
+      let allowed = captured?.withCurrent { readOldTitle = true }
+      try serverExpect(fake.result(catalog)?["code"]?.stringValue == "changed" && captured?.isCurrent() == false &&
+                       allowed == false && !readOldTitle && fake.server.sessionSnapshot()?.observationEpoch != oldEpoch,
+                       "any captured session retires catalog callbacks immediately, including same-ID/revision authority updates")
+      let cleanups = fake.cleanupReasons
+      complete?(.success(ServerReply(fields: ["privateTitle": .string("RETIRED_SYNTHETIC_TITLE")])))
+      complete?(.failure(ServerFailure(code: "failed", message: "Retired catalog failure.")))
+      try serverExpect(fake.responses.filter { $0.value["id"]?.intValue == catalog }.count == 1 &&
+                       !fake.responses.contains { $0.value["privateTitle"] != nil } && fake.cleanupReasons == cleanups,
+                       "retired catalog success/failure cannot disclose content, answer twice or clean up a successor")
+    }
+  }
+
+  try test {
+    let fake = ServerFixture()
+    var captured: OperationContext?
+    var complete: Dispatcher.Completion?
+    fake.server.register(op: "unit.catalog-no-session", deadlineMs: 1000, requiresSession: false) { _, context, done in
+      captured = context; complete = done
+    }
+    let catalog = try fake.request("unit.catalog-no-session")
+    try serverExpect(captured?.session == nil && captured?.isCurrent() == true,
+                     "a genuine sessionless catalog retains no app approval or private title authority")
+    _ = try fake.begin()
+    var observedStructure = false
+    let allowed = captured?.withCurrent { observedStructure = true }
+    complete?(.success(ServerReply(fields: ["catalog": .string("structural-only")])))
+    try serverExpect(allowed == true && observedStructure && fake.result(catalog)?["ok"]?.boolValue == true &&
+                     fake.result(catalog)?["catalog"]?.stringValue == "structural-only",
+                     "a catalog captured without a session can finish safely without borrowing a later session's approvals")
+  }
+
   return count
 }

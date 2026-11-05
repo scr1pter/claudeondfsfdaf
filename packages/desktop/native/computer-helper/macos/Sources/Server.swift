@@ -335,7 +335,8 @@ final class Dispatcher {
 
   private func current(_ token: UUID) -> Bool {
     guard !closed, let active, active.token == token else { return false }
-    if active.requiresSession && (active.generation != generation || active.sessionId != session?.id || active.revision != session?.revision) { return false }
+    if (active.requiresSession || active.sessionId != nil) &&
+       (active.generation != generation || active.sessionId != session?.id || active.revision != session?.revision) { return false }
     return !active.mutating || (!halted && !physicalPause && session?.paused == false)
   }
 
@@ -419,7 +420,9 @@ final class Dispatcher {
     generation &+= 1
     observationsInvalidated()
     _ = releaseAll()
-    if active?.requiresSession == true { cancelActive(code: "changed", message: "The computer session phase changed.") }
+    if active?.requiresSession == true || active?.sessionId != nil {
+      cancelActive(code: "changed", message: "The computer session phase changed.")
+    }
     let cancelled = queue.filter { handlers[$0.op]?.requiresSession == true }
     queue.removeAll { handlers[$0.op]?.requiresSession == true }
     for request in cancelled {

@@ -229,7 +229,7 @@ enum HostOwnershipNative {
 
     static func explicitlyProtected(_ owner: NativeOwner) -> Bool {
         guard let rules = try? NativeBlocklist.generated() else { return true }
-        if ComputerIdentity.vectorBundleIds.contains(where: { $0.caseInsensitiveCompare(owner.identity.bundleId) == .orderedSame }) { return true }
+        if Identity.vectorBundleIds.contains(where: { $0.caseInsensitiveCompare(owner.identity.bundleId) == .orderedSame }) { return true }
         return rules.entries.contains { entry in
             rules.never.contains(entry.category) && entry.patterns.contains { NativeBlocklist.matches($0, owner.identity.bundleId) }
         }
