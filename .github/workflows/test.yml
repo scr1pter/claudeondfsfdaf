@@ -81,6 +81,25 @@ jobs:
           fi
           rg --version
 
+      # Without rg on PATH the core search tests download it from its releases page while they run, and in run
+      # 41968211015 that download hung past their 60-second preparation deadline. Install it as the Windows engine
+      # shards do.
+      - name: Install ripgrep (Windows)
+        if: runner.os == 'Windows'
+        timeout-minutes: 10
+        shell: pwsh
+        run: |
+          choco install ripgrep -y --no-progress
+          if ($LASTEXITCODE -ne 0) { throw "Installing ripgrep failed." }
+          # Chocolatey's .NET shim cannot start from the long paths used by trusted skill snapshots.
+          # Find the native executable in the installed package instead of invoking that shim.
+          $tools = Join-Path $env:ChocolateyInstall 'lib\ripgrep\tools'
+          $native = @(Get-ChildItem -LiteralPath $tools -Filter rg.exe -File -Recurse)
+          if ($native.Count -ne 1) { throw "Expected one native ripgrep executable in $tools." }
+          & ($native[0].FullName) --version
+          if ($LASTEXITCODE -ne 0) { throw "The native ripgrep executable failed." }
+          $native[0].DirectoryName | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
       - name: Configure git identity
         run: |
           git config --global user.email "bot@vectordev.ai"
