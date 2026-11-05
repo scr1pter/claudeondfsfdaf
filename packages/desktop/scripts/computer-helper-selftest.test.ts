@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test"
 import { createHash } from "node:crypto"
 import { EventEmitter } from "node:events"
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { PassThrough } from "node:stream"
@@ -414,6 +414,35 @@ test("Windows verified fixture preserves only closed startup and probe-shape fai
   }
 })
 
+test("Windows fixture launches only from its canonical owned directory through an ancestor alias", async () => {
+  const prepared = await windowsArtifacts()
+  const actual = path.join(prepared.root, "actual")
+  const alias = path.join(prepared.root, "alias")
+  let launches = 0
+  try {
+    await mkdir(actual)
+    await symlink(actual, alias, process.platform === "win32" ? "junction" : "dir")
+    const created = await mkdtemp(path.join(alias, "owned-"))
+    const canonical = await realpath(created)
+    expect(created).not.toBe(canonical)
+    const native = await createWindowsVerifiedFixture(prepared.options, desktopDirectory, prepared.files, {
+      temporary: async () => created,
+      command: async () => { throw new Error("unreachable") },
+      channel(executable) {
+        launches++
+        expect(path.dirname(executable)).toBe(canonical)
+        return {write() {}, end() {}, next: async () => ({kind: "exit", code: 1}), dispose: async () => {}}
+      },
+    })
+    const channel = await native.open()
+    expect(launches).toBe(1)
+    expect(await readFile(path.join(canonical, `${EXECUTABLE_NAMES.beta}.exe`))).toEqual(await readFile(prepared.files.caller))
+    await channel.dispose()
+    await native.close()
+    await expect(readFile(path.join(canonical, `${EXECUTABLE_NAMES.beta}.exe`))).rejects.toThrow()
+  } finally { await rm(prepared.root, {recursive: true, force: true}) }
+})
+
 test("Windows copy drift refuses admission before a Caller, unit or helper can execute", async () => {
   for (const artifact of ["caller", "bin", "target"] as const) {
     const prepared = await windowsArtifacts()
@@ -571,7 +600,7 @@ test("Windows report retains closed unit/Caller evidence while every observed fa
             exitAfterMs: 9,
             closeAfterMs: 10,
             sample: { status: "not-requested", suites: [], waits: [] },
-            windows: { unitSuite: "lifecycle", unitFailure: "integration.reply-pipe" },
+            windows: { unitSuite: "lifecycle", unitFailure: "integration.reply-pipe", caller: "initial.layout" },
           },
         }
   fake.native.probe = async () => {
@@ -582,7 +611,7 @@ test("Windows report retains closed unit/Caller evidence while every observed fa
   expect(result.checks.find((check) => check.name === "unit")).toEqual({
     name: "unit",
     status: "failed",
-    reason: "windows-unit-failure-integration.reply-pipe",
+    reason: "windows-unit-failure-integration.reply-pipe.caller-initial.layout",
   })
   expect(result.checks.find((check) => check.name === "probe.first")).toEqual({
     name: "probe.first",

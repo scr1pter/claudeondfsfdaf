@@ -134,7 +134,8 @@ export const WINDOWS_UNIT_FAILURE_LABELS = [
   "integration.shutdown-ack-before-exit",
   "integration.shutdown-clean-code",
   "integration.shutdown-process-exit",
-  "integration.stderr-null",
+  "integration.stderr-pipe",
+  "integration.stderr-private",
   "integration.stdin-pipe",
   "integration.stdin-private",
   "integration.stdout-pipe",
@@ -225,6 +226,8 @@ export const WINDOWS_UNIT_FAILURE_LABELS = [
   "version.stdin-create"
 ] as const
 export const WINDOWS_CALLER_STAGES = [
+  "layout-image", "layout-name", "layout-self-ancestors", "layout-helper-ancestors",
+  "layout-self-file", "layout-helper-file", "layout-install-root",
   "arguments", "parent-witness", "apartment", "token", "layout", "ancestors",
   "medium-admission", "restricted-token", "bootstrap-launch", "bootstrap-current",
   "child-exit", "final-current", "helper-launch",

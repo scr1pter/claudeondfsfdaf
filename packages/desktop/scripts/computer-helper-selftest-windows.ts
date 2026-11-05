@@ -191,6 +191,7 @@ export async function verifyWindowsNativeFiles(
 type WindowsFixtureDependencies = {
   command: (command: Command) => Promise<CommandResult>
   channel?: (executable: string, args: string[]) => NativeChannel & {startupDiagnostic?: () => WindowsDiagnostic}
+  temporary?: () => Promise<string>
   architecture?: HelperArchitecture
   verify?: (options: SelfTestOptions, directory: string, architecture?: string) => Promise<VerifiedWindowsArtifacts>
 }
@@ -206,16 +207,21 @@ export async function createWindowsVerifiedFixture(
   const files =
     verified ?? (await (dependencies.verify ?? verifyWindowsNativeFiles)(options, directory, dependencies.architecture))
   if (files.bin !== (await realpath(options.bin))) throw new Error("The verified helper selection changed.")
-  const temporary = await mkdtemp(path.join(tmpdir(), "vector-computer-win32-"))
-  const helper = path.join(temporary, "resources/computer", path.basename(files.bin))
-  const target = path.join(path.dirname(helper), "tests", WINDOWS_TEST_ARTIFACTS.target)
-  const caller = path.join(temporary, `${EXECUTABLE_NAMES[files.channel]}.exe`)
+  const created = await (dependencies.temporary ?? (() => mkdtemp(path.join(tmpdir(), "vector-computer-win32-"))))()
   const open = dependencies.channel ?? windowsNativeChannel
   let closed = false
   const requireOpen = () => {
     if (closed) throw new Error("The verified Windows fixture is closed.")
   }
   try {
+    const status = await lstat(created)
+    if (!status.isDirectory() || status.isSymbolicLink()) throw new Error("The Windows fixture directory is not owned regular storage.")
+    // TEMP may use a short-name or ancestor junction spelling. Launch from the actual owned
+    // directory, matching native FixtureFiles; Caller still checks and holds every real ancestor.
+    const temporary = await realpath(created)
+    const helper = path.join(temporary, "resources/computer", path.basename(files.bin))
+    const target = path.join(path.dirname(helper), "tests", WINDOWS_TEST_ARTIFACTS.target)
+    const caller = path.join(temporary, `${EXECUTABLE_NAMES[files.channel]}.exe`)
     await mkdir(path.dirname(target), { recursive: true })
     await copyFile(files.bin, helper)
     await copyFile(files.caller, caller)
@@ -337,7 +343,7 @@ export async function createWindowsVerifiedFixture(
       },
     }
   } catch (error) {
-    await rm(temporary, { recursive: true, force: true })
+    await rm(created, { recursive: true, force: true })
     throw error
   }
 }

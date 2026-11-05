@@ -10,6 +10,7 @@
 #include <limits>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace vector::computer {
@@ -93,6 +94,10 @@ class Child {
   winrt::handle process;
   winrt::handle input;
   winrt::handle output;
+  winrt::handle diagnostic;
+  std::string diagnostic_line;
+  size_t diagnostic_bytes = 0;
+  bool diagnostic_overflow = false, diagnostic_forwarded = false;
   explicit Child(const std::filesystem::path& caller, bool test_elevated_token = false) {
     SECURITY_ATTRIBUTES security{static_cast<DWORD>(sizeof(SECURITY_ATTRIBUTES)), nullptr, TRUE};
     HANDLE read = nullptr;
@@ -103,8 +108,9 @@ class Child {
     require_integration(CreatePipe(&read, &write, &security, 0) != FALSE, "integration.stdout-pipe");
     output.attach(read); winrt::handle child_output(write);
     require_integration(SetHandleInformation(output.get(), HANDLE_FLAG_INHERIT, 0) != FALSE, "integration.stdout-private");
-    winrt::handle error(CreateFileW(L"NUL", GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, &security, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr));
-    require_integration(error && error.get() != INVALID_HANDLE_VALUE, "integration.stderr-null");
+    require_integration(CreatePipe(&read, &write, &security, 0) != FALSE, "integration.stderr-pipe");
+    diagnostic.attach(read); winrt::handle error(write);
+    require_integration(SetHandleInformation(diagnostic.get(), HANDLE_FLAG_INHERIT, 0) != FALSE, "integration.stderr-private");
     SIZE_T count = 0;
     InitializeProcThreadAttributeList(nullptr, 1, 0, &count);
     require_integration(count > 0 && count <= 65'536, "integration.attribute-size");
@@ -140,14 +146,51 @@ class Child {
     DWORD written = 0;
     require_integration(WriteFile(input.get(), bytes.data(), static_cast<DWORD>(bytes.size()), &written, nullptr) != FALSE && written == bytes.size(), "integration.request-write");
   }
+  void forward_caller_failure() {
+    if (diagnostic_forwarded || diagnostic_bytes >= 192) return;
+    DWORD available = 0;
+    if (!PeekNamedPipe(diagnostic.get(), nullptr, 0, nullptr, &available, nullptr) || !available) return;
+    std::array<char, 192> bytes{};
+    const auto count = std::min<DWORD>(available, static_cast<DWORD>(bytes.size() - diagnostic_bytes));
+    DWORD received = 0;
+    if (!ReadFile(diagnostic.get(), bytes.data(), count, &received, nullptr) || !received || received > count) return;
+    diagnostic_bytes += received;
+    constexpr std::array<std::string_view, 20> stages{"layout-image", "layout-name", "layout-self-ancestors", "layout-helper-ancestors",
+      "layout-self-file", "layout-helper-file", "layout-install-root", "arguments", "parent-witness", "apartment", "token", "layout", "ancestors",
+      "medium-admission", "restricted-token", "bootstrap-launch", "bootstrap-current", "child-exit", "final-current", "helper-launch"};
+    for (DWORD index = 0; index < received; ++index) {
+      const auto value = bytes[index];
+      if (value != '\n') {
+        if (diagnostic_line.size() < 96) diagnostic_line.push_back(value);
+        else diagnostic_overflow = true;
+        continue;
+      }
+      if (!diagnostic_overflow) {
+        if (!diagnostic_line.empty() && diagnostic_line.back() == '\r') diagnostic_line.pop_back();
+        for (const auto mode : {"initial.", "medium."}) for (const auto stage : stages) {
+          const auto fixed = std::string("vector-caller-failure ") + mode + std::string(stage);
+          if (diagnostic_line == fixed) {
+            diagnostic_forwarded = true;
+            // This is an allowlisted fixed line, never the private diagnostic stream.
+            (void)write_utf8(GetStdHandle(STD_ERROR_HANDLE), fixed + "\n");
+            return;
+          }
+        }
+      }
+      diagnostic_line.clear(); diagnostic_overflow = false;
+    }
+  }
   JsonObject receive() {
     std::vector<uint8_t> bytes;
     std::optional<size_t> length;
     const auto start = GetTickCount64();
     while (!length || bytes.size() < *length + 4) {
       require_integration(GetTickCount64() - start < 10'000, "integration.reply-deadline");
+      forward_caller_failure();
       DWORD available = 0;
-      require_integration(PeekNamedPipe(output.get(), nullptr, 0, nullptr, &available, nullptr) != FALSE, "integration.reply-pipe");
+      const auto peeked = PeekNamedPipe(output.get(), nullptr, 0, nullptr, &available, nullptr);
+      if (!peeked) forward_caller_failure();
+      require_integration(peeked != FALSE, "integration.reply-pipe");
       if (available == 0) { Sleep(5); continue; }
       std::array<uint8_t, 4096> buffer{};
       DWORD received = 0;

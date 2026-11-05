@@ -20,6 +20,8 @@ test("Windows unit catalog binds existing fixed native suite and failure labels"
   expect(labels).toEqual([...WINDOWS_UNIT_FAILURE_LABELS])
   const caller = await readFile(new URL("../native/computer-helper/windows/tests/caller.cpp", import.meta.url), "utf8")
   expect([...new Set([...caller.matchAll(/stage = "([a-z-]+)"/g)].map(match => match[1]))]).toEqual([...WINDOWS_CALLER_STAGES])
+  const forwarded = integration.match(/constexpr std::array<std::string_view, 20> stages\{([^;]+)\};/s)?.[1] ?? ""
+  expect([...forwarded.matchAll(/"([a-z-]+)"/g)].map(match => match[1])).toEqual([...WINDOWS_CALLER_STAGES])
 })
 
 test("split lines preserve only exact unit failure and Caller stage, with the first cause retained", () => {
@@ -48,4 +50,7 @@ test("command outcome categories retain finite exit and bound failures without a
   expect(windowsCommandReason({code: 3221225477}, "probe")).toBe("windows-probe-exit-unknown")
   expect(windowsCommandReason({code: 0, timedOut: true}, "channel")).toBe("windows-channel-deadline")
   expect(() => { new WindowsCheckFailure("windows-probe-invalid-responsible") }).not.toThrow()
+  const reader = new WindowsDiagnosticReader("caller")
+  reader.consume(bytes("vector-caller-failure initial.layout-helper-ancestors\n"), "stderr")
+  expect(reader.finish()).toEqual({caller: "initial.layout-helper-ancestors"})
 })

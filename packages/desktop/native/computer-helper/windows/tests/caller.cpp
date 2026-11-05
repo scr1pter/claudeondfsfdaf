@@ -199,8 +199,10 @@ void hold_directories(const std::wstring& file, std::vector<winrt::handle>& held
   }
 }
 
-Layout layout() {
+Layout layout(const char*& stage) {
+  stage = "layout-image";
   const auto image = process_path(GetCurrentProcess());
+  stage = "layout-name";
   const auto slash = image.find_last_of(L'\\');
   if (slash == std::wstring::npos || slash <= 2) invalid();
   const auto name = image.substr(slash + 1);
@@ -209,10 +211,15 @@ Layout layout() {
       }) || vector::computer::identity::kExecutable != "vector-computer.exe") invalid();
   const auto helper = image.substr(0, slash) + L"\\resources\\computer\\vector-computer.exe";
   Layout result;
+  stage = "layout-self-ancestors";
   hold_directories(image, result.directories);
+  stage = "layout-helper-ancestors";
   hold_directories(helper, result.directories);
+  stage = "layout-self-file";
   result.self = hold_file(image);
+  stage = "layout-helper-file";
   result.helper = hold_file(helper);
+  stage = "layout-install-root";
   const auto root = vector::computer::helper_install_root(result.helper.path);
   if (!root || !equal_path(*root, image.substr(0, slash))) invalid();
   return result;
@@ -496,7 +503,7 @@ int wmain(int count, wchar_t** argv) {
     stage = "token";
     const auto own_token = vector::computer::observe_token(GetCurrentProcess());
     stage = "layout";
-    auto files = layout();
+    auto files = layout(stage);
     stage = "ancestors";
     for (const auto& ancestor : ancestors) {
       current(ancestor);
