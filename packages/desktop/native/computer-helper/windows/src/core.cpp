@@ -5,6 +5,10 @@
 #include "parent_identity.h"
 #include "protocol.h"
 #include "server.h"
+#include "windows_enum.h"
+#include "windows_policy.h"
+#include "windows_process_tree.h"
+#include "windows_program.h"
 #include <tlhelp32.h>
 #include <objidl.h>
 #include <xmllite.h>
@@ -152,14 +156,17 @@ struct ServingRuntime {
   std::mutex mutex;
   std::shared_ptr<Dispatcher> server;
   std::shared_ptr<PipeFrameWriter> writer;
+  std::shared_ptr<WindowsProgramService> programs;
   std::atomic_int exit_code{0};
   void stop(StopReason reason) {
     if (lifecycle_exit_code(reason) != 0) exit_code.store(1);
     std::shared_ptr<Dispatcher> dispatcher;
     std::shared_ptr<PipeFrameWriter> output;
-    { std::scoped_lock lock(mutex); dispatcher = server; output = writer; }
+    std::shared_ptr<WindowsProgramService> launches;
+    { std::scoped_lock lock(mutex); dispatcher = server; output = writer; launches = programs; }
     if (output) output->cancel();
     if (dispatcher) dispatcher->close(L"transport stopped");
+    if (launches) launches->close();
   }
 };
 
@@ -184,13 +191,35 @@ int serve(const Command& command, HANDLE output) {
     const auto writer = std::make_shared<PipeFrameWriter>(output, lifecycle->stop_event(), [weak_lifecycle] {
       if (const auto active = weak_lifecycle.lock()) active->request_stop(StopReason::transport_error);
     });
+    const auto native_windows = WindowsBackend::system(windows_child_shell);
+    const auto windows = std::make_shared<WindowService>(windows_window_policy(), native_windows);
+    WindowsProgramPolicy launch_policy;
+    launch_policy.protected_path = windows_protected_path;
+    launch_policy.refusal = windows_identity_refusal;
+    launch_policy.require_app = [](const WindowsAppIdentity& identity, const ServerSession& session) { WindowsSessionPolicy(session).require_launch(identity); };
+    launch_policy.require_window = [](const WindowsWindow& window, const ServerSession& session) { WindowsSessionPolicy(session).require(window, WindowsPolicyOperation::activate); };
+    const auto programs = std::make_shared<WindowsProgramService>(launch_policy, WindowsProgramBackend::system(launch_policy), native_windows);
     Dispatcher::Options options;
     options.responsible = true;
     options.send = [writer](const JsonObject& document, std::span<const uint8_t> image) { return writer->write(document, image); };
     options.available = [weak_lifecycle] { const auto active = weak_lifecycle.lock(); return active && !active->stopping(); };
     options.stopped = [weak_lifecycle] { if (const auto active = weak_lifecycle.lock()) active->request_stop(StopReason::shutdown); };
+    options.observations_invalidated = [programs] { programs->invalidate_observations(); };
+    options.cleanup = [programs](std::wstring_view) { programs->invalidate_observations(); };
+    options.features = [windows, programs] {
+      auto features = windows->features();
+      for (const auto& entry : programs->features()) features.Insert(entry.Key(), entry.Value());
+      return features;
+    };
     const auto server = std::make_shared<Dispatcher>(std::move(options));
-    { std::scoped_lock lock(runtime->mutex); runtime->writer = writer; runtime->server = server; }
+    server->register_handler(L"apps.list", 5000, false, false, [windows](const auto& request, const auto& context, auto done) { windows->list(request.args, context, std::move(done)); });
+    server->register_handler(L"cursor.position", 4000, false, false, [windows](const auto& request, const auto& context, auto done) { windows->cursor(request.args, context, std::move(done)); });
+    server->register_handler(L"app.activate", 10'000, true, true, [windows](const auto& request, const auto& context, auto done) { windows->activate(request.args, context, std::move(done)); });
+    server->register_handler(L"window.focus", 10'000, true, true, [windows](const auto& request, const auto& context, auto done) { windows->focus(request.args, context, std::move(done)); });
+    server->register_handler(L"apps.resolve", 15'000, true, false, [programs](const auto& request, const auto& context, auto done) { programs->resolve(request.args, context, std::move(done)); });
+    server->register_handler(L"app.launch", 15'000, true, true, [programs](const auto& request, const auto& context, auto done) { programs->launch(request.args, context, std::move(done)); });
+    server->register_handler(L"program.launch", 15'000, true, true, [programs](const auto& request, const auto& context, auto done) { programs->launch_program(request.args, context, std::move(done)); });
+    { std::scoped_lock lock(runtime->mutex); runtime->writer = writer; runtime->server = server; runtime->programs = programs; }
     if (lifecycle->stopping()) runtime->stop(StopReason::eof);
     FrameReader reader;
     std::array<uint8_t, 65'536> bytes{};

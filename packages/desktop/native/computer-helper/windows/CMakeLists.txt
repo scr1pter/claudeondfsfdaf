@@ -51,10 +51,12 @@ configure_file(src/build-config.h.in generated/build-config.h @ONLY)
 configure_file(version.rc.in generated/version.rc @ONLY)
 configure_file(tests/inputs.rc.in generated/test-inputs.rc @ONLY)
 
-add_library(computer-core STATIC src/core.cpp src/protocol.cpp src/server.cpp src/parent_identity.cpp src/lifecycle.cpp)
+add_library(computer-core STATIC src/core.cpp src/protocol.cpp src/server.cpp src/parent_identity.cpp src/lifecycle.cpp
+  src/windows_identity.cpp src/windows_enum.cpp src/windows_apps.cpp src/windows_com.cpp src/windows_icon.cpp
+  src/windows_policy.cpp src/windows_process_tree.cpp src/program_registry.cpp src/windows_program.cpp)
 target_include_directories(computer-core PUBLIC src "${VECTOR_COMPUTER_GENERATED_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/generated")
 target_compile_definitions(computer-core PUBLIC UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX _WIN32_WINNT=0x0A00 WINVER=0x0A00)
-target_link_libraries(computer-core PUBLIC windowsapp uiautomationcore d3d11 dxgi gdi32 user32 shcore wintrust crypt32 advapi32 shell32 ole32 bcrypt xmllite version)
+target_link_libraries(computer-core PUBLIC windowsapp uiautomationcore d3d11 dxgi gdi32 user32 shcore wintrust crypt32 advapi32 shell32 ole32 bcrypt xmllite version dwmapi propsys uuid shlwapi windowscodecs)
 
 add_executable(vector-computer WIN32 src/main.cpp "${CMAKE_CURRENT_BINARY_DIR}/generated/version.rc")
 target_link_libraries(vector-computer PRIVATE computer-core)
@@ -62,7 +64,9 @@ target_link_libraries(vector-computer PRIVATE computer-core)
 target_link_options(vector-computer PRIVATE /MANIFEST:NO)
 set_target_properties(vector-computer PROPERTIES OUTPUT_NAME vector-computer WIN32_EXECUTABLE ON)
 
-add_executable(vector-computer-tests tests/main.cpp tests/protocol_tests.cpp tests/server_tests.cpp tests/parent_identity_tests.cpp tests/lifecycle_tests.cpp tests/integration_tests.cpp "${CMAKE_CURRENT_BINARY_DIR}/generated/test-inputs.rc")
+add_executable(vector-computer-tests tests/main.cpp tests/protocol_tests.cpp tests/server_tests.cpp tests/parent_identity_tests.cpp tests/lifecycle_tests.cpp tests/integration_tests.cpp
+  tests/windows_identity_tests.cpp tests/windows_enum_tests.cpp tests/windows_icon_tests.cpp tests/windows_policy_tests.cpp tests/windows_process_tree_tests.cpp
+  tests/program_registry_tests.cpp tests/windows_program_tests.cpp "${CMAKE_CURRENT_BINARY_DIR}/generated/test-inputs.rc")
 target_link_libraries(vector-computer-tests PRIVATE computer-core xmllite version)
 add_dependencies(vector-computer-tests vector-computer)
 

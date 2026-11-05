@@ -1098,7 +1098,13 @@ export async function startComputer(deps: ComputerStartupDeps): Promise<Computer
         if (rows.has(key) || !name || (needle && !name.toLocaleLowerCase().includes(needle))) continue
         const verdict = settings.access(app.identity).verdict
         const rule = verdict === "never" || verdict === "blocked" || verdict === "company-deny" ? verdict : undefined
-        rows.set(key, { key, name, running: live.has(key), ...(rule ? { rule } : {}) })
+        rows.set(key, {
+          key,
+          name,
+          running: live.has(key),
+          ...(app.icon ? { icon: app.icon } : {}),
+          ...(rule ? { rule } : {}),
+        })
         if (rows.size >= 200) break
       }
       return [...rows.values()]

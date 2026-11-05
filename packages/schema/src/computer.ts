@@ -126,6 +126,16 @@ const KeyName = Schema.String.check(
 export const Icon = Schema.String.check(
   Schema.isPattern(/^data:image\/png;base64,[A-Za-z0-9+/]*={0,2}$/),
   Schema.isMaxLength("data:image/png;base64,".length + Math.ceil(LIMITS.iconBytes / 3) * 4),
+  Schema.makeFilter(
+    (value: string) => {
+      const encoded = value.slice("data:image/png;base64,".length)
+      return (
+        encoded.length % 4 === 0 &&
+        (encoded.length / 4) * 3 - (encoded.endsWith("==") ? 2 : encoded.endsWith("=") ? 1 : 0) <= LIMITS.iconBytes
+      )
+    },
+    { expected: "a PNG icon within the decoded byte limit" },
+  ),
 ).annotate({ identifier: "Computer.Icon" })
 
 /** A JPEG or PNG frame as a data URL, within the bridge's response limit. */
@@ -1372,6 +1382,7 @@ export interface HelperApp extends Schema.Schema.Type<typeof HelperApp> {}
 export const HelperApp = Schema.Struct({
   identity: AppIdentity,
   active: Schema.Boolean,
+  icon: optional(Icon),
   windows: Schema.Array(
     Schema.Struct({
       windowId: WindowId,

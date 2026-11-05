@@ -1,4 +1,10 @@
 #include "core.h"
+#include "windows_identity.h"
+#include "windows_enum.h"
+#include "windows_icon.h"
+#include "windows_policy.h"
+#include "windows_process_tree.h"
+#include "windows_program.h"
 #include "identity.h"
 #include "blocklist.h"
 #include "build-config.h"
@@ -23,6 +29,7 @@
 
 namespace vector::computer {
 int run_protocol_tests();
+size_t run_windows_identity_tests();
 void parent_identity_tests();
 void lifecycle_tests();
 void integration_tests();
@@ -512,6 +519,13 @@ int main(int argc, char** argv) {
     run_check("parent-identity", parent_identity_tests);
     run_check("lifecycle", lifecycle_tests);
     run_check("caller-and-native-lifecycle", integration_tests);
+    run_check("window-identities", [] { static_cast<void>(run_windows_identity_tests()); });
+    run_check("window-catalog-and-focus", [] { static_cast<void>(run_windows_enum_tests()); });
+    run_check("generated-app-icons", [] { static_cast<void>(run_windows_icon_tests()); });
+    run_check("window-policy", [] { static_cast<void>(run_windows_policy_tests()); });
+    run_check("native-process-tree", [] { static_cast<void>(run_windows_process_tree_tests()); });
+    run_check("program-capabilities", [] { static_cast<void>(run_program_registry_tests()); });
+    run_check("program-resolution-and-launch", [] { static_cast<void>(run_windows_program_tests()); });
     std::cout << "Windows computer helper unit checks passed.\n";
     return 0;
   } catch (const UnitFailure& failure) {

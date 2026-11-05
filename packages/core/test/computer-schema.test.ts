@@ -48,6 +48,17 @@ const frame = {
 }
 const jpeg = "data:image/jpeg;base64,AAAA"
 const png = "data:image/png;base64,AAAA"
+test("native app icons retain the exact decoded PNG byte cap", () => {
+  const row = { identity: mac, active: false, windows: [] }
+  const maximum = `data:image/png;base64,${Buffer.alloc(Computer.LIMITS.iconBytes).toString("base64")}`
+  const overflow = `data:image/png;base64,${Buffer.alloc(Computer.LIMITS.iconBytes + 1).toString("base64")}`
+  expect(maximum.length).toBe(overflow.length)
+  expect(strict(Computer.HelperApp)({ ...row, icon: maximum })).toEqual({ ...row, icon: maximum })
+  expect(strict(Computer.HelperApp)(row)).toEqual(row)
+  rejects(Computer.HelperApp, { ...row, icon: overflow })
+  rejects(Computer.HelperApp, { ...row, icon: "data:image/jpeg;base64,AAAA" })
+  rejects(Computer.HelperApp, { ...row, icon: "data:image/png;base64,A" })
+})
 const inspect = {
   app: mac,
   category: "office",
