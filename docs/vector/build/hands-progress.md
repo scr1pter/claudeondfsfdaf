@@ -765,3 +765,10 @@ This accepts the reproducible ad-hoc baseline, not a matching Intel/Windows matr
 ### Windows native compile budget evidence
 
 Windows-only run42031291175 at85a05de9 compiles the production helper, Caller, isolated target and overlay support library, then reaches the existing300000ms cmake build deadline while compiling the expanded unit target. The fixed diagnostic reports timed-out; no compiler error is present in its bounded head/tail output. MSVC now uses two workers for independent translation units, preserving warnings-as-errors, hardening, reproducible flags and every existing timeout/assertion. This Windows CMake change does not alter macOS measured inputs or its11 lock. Actual x64/ARM64 compilation and unit/runtime checks must validate the change.
+
+
+### Focused Linux Electron CI routing
+
+A default-off computer_helper_linux_only dispatch selects only the two actual Linux Electron lanes. It has separate parent/child cancellation groups from all-native, Windows-only and Node-only checks, so diagnosing loader failures does not cancel matching macOS evidence. The actual plan rejects simultaneous Linux/Windows selectors. Normal PR/full/release native gates retain their defaults. Workflow routing17 tests/518 assertions and actionlint pass, including actual Bash selection/mutual-exclusion checks.
+
+Matching run42032469029 at8216bee2 now passes the real Linux dev-app journey after the XAUTHORITY fix. The overlay smoke still reports a bounded loader failure before its boot receipt; further fixed loader classification is in progress. This is a failure, not a native grant skip.

@@ -1,5 +1,8 @@
 import { expect, test } from "bun:test"
-import { readFileSync } from "node:fs"
+import { spawnSync } from "node:child_process"
+import { mkdtempSync, readFileSync, rmSync } from "node:fs"
+import { tmpdir } from "node:os"
+import path from "node:path"
 import { runInNewContext } from "node:vm"
 
 function record(value: unknown): Record<string, unknown> {
@@ -78,6 +81,7 @@ test("the native workflow has safe reusable/manual defaults and the temporary CI
     expect(inputs["full-desktop-e2e"]).toMatchObject({ type: "boolean", default: true })
     expect(inputs["isolated-desktop"]).toMatchObject({ type: "boolean", default: false })
     expect(inputs["windows-only"]).toMatchObject({ type: "boolean", default: false })
+    expect(inputs["linux-only"]).toMatchObject({ type: "boolean", default: false })
     expect(inputs["reuse-artifacts"]).toMatchObject({ type: "boolean", default: false })
     expect(inputs["helper-channel"]).toMatchObject({ default: "prod" })
   }
@@ -445,4 +449,120 @@ test("focused Node smoke keeps normal CI gates and uses its own cancellation gro
   const cancellation = record(main.document.concurrency)
   expect(group(cancellation.group, focused)).not.toBe(group(cancellation.group, {}))
   expect(group(cancellation.group, focused)).not.toBe(group(cancellation.group, { computer_helper: true }))
+})
+
+test("Linux-only dispatch keeps ordinary gates and native cancellation groups independent", () => {
+  const inputs = record(record(record(main.document.on).workflow_dispatch).inputs)
+  expect(inputs.computer_helper_linux_only).toMatchObject({ type: "boolean", default: false })
+  const all = record(main.document.jobs)
+  const reuse = record(all["computer-helper"])
+  const selector = record(reuse.with)["linux-only"]
+  expect(typeof selector).toBe("string")
+  for (const event of ["workflow_dispatch", "pull_request", "push"])
+    for (const native of [false, true])
+      for (const linux of [false, true])
+        expect(
+          expression(String(selector), { computer_helper: native, computer_helper_linux_only: linux }, event),
+        ).toBe(event === "workflow_dispatch" && native && linux)
+  const linux = { computer_helper: true, computer_helper_linux_only: true, hands_ui: true, hands_benchmark: true }
+  for (const [name, value] of Object.entries(all))
+    expect(expression(String(record(value).if), linux), `${name} has incorrect Linux-only routing`).toBe(
+      name === "computer-helper",
+    )
+  const baseline = { computer_helper: false, hands_ui: false, hands_benchmark: false }
+  for (const value of Object.values(all))
+    for (const event of ["workflow_dispatch", "pull_request", "push"])
+      expect(expression(String(record(value).if), { ...baseline, computer_helper_linux_only: true }, event)).toBe(
+        expression(String(record(value).if), baseline, event),
+      )
+  const cancellation = record(main.document.concurrency)
+  const modes = [
+    { computer_helper: true },
+    { computer_helper: true, computer_helper_windows_only: true },
+    { computer_helper: true, computer_helper_linux_only: true },
+    { computer_helper: true, computer_helper_windows_only: true, computer_helper_linux_only: true },
+    { desktop_engine_node: true },
+  ]
+  expect(new Set(modes.map((mode) => group(cancellation.group, mode))).size).toBe(modes.length)
+  expect(group(cancellation.group, { ...baseline, computer_helper_linux_only: true })).toBe(
+    group(cancellation.group, baseline),
+  )
+  const child = record(helper.document.concurrency)
+  const suffix = { "artifact-suffix": "same-immutable-source" }
+  const childModes = [
+    {},
+    { "windows-only": true },
+    { "linux-only": true },
+    { "windows-only": true, "linux-only": true },
+  ]
+  expect(new Set(childModes.map((mode) => group(child.group, { ...suffix, ...mode }))).size).toBe(childModes.length)
+  expect(group(child.group, { ...suffix, "linux-only": false })).toBe(group(child.group, suffix))
+})
+
+test("Linux-only runs both real Electron lanes and skips every native OS lane", () => {
+  const needs = {
+    plan: { outputs: { extended: "true", windows: "true", "windows-protocol": "true", desktop: "true" } },
+  }
+  for (const mode of [{}, { "windows-only": true }, { "linux-only": true }]) {
+    for (const name of nativeJobs) {
+      const expected = !mode["linux-only"] && (!mode["windows-only"] || name.startsWith("windows"))
+      expect(expression(String(job(name).if), mode, "workflow_dispatch", "refs/heads/hands", needs), name).toBe(
+        expected,
+      )
+    }
+    for (const name of ["overlay-linux", "desktop-e2e-linux"])
+      expect(expression(String(job(name).if), mode, "workflow_dispatch", "refs/heads/hands", needs), name).toBe(
+        !mode["windows-only"],
+      )
+  }
+  const plan = commands(job("plan"))
+  const begin = plan.indexOf("desktop=false\n")
+  const end = plan.indexOf('echo "suffix=', begin)
+  expect(begin).toBeGreaterThanOrEqual(0)
+  expect(end).toBeGreaterThan(begin)
+  const temporary = mkdtempSync(path.join(tmpdir(), "vector-computer-linux-plan-"))
+  const output = path.join(temporary, "output")
+  try {
+    for (const linux of ["true", "false"])
+      for (const desktop of ["true", "false"])
+        for (const event of ["workflow_dispatch", "workflow_call", "push"]) {
+          rmSync(output, { force: true })
+          const result = spawnSync(
+            "bash",
+            ["--noprofile", "--norc", "-c", `set -euo pipefail\n${plan.slice(begin, end)}`],
+            {
+              env: {
+                ...process.env,
+                LINUX_ONLY: linux,
+                FULL_DESKTOP_E2E: desktop,
+                EVENT_NAME: event,
+                GITHUB_OUTPUT: output,
+              },
+              encoding: "utf8",
+              timeout: 5000,
+            },
+          )
+          expect(result.status).toBe(0)
+          expect(readFileSync(output, "utf8").trim()).toBe(`desktop=${linux === "true" || desktop === "true"}`)
+        }
+  } finally {
+    rmSync(temporary, { recursive: true, force: true })
+  }
+})
+
+test("the actual native plan refuses simultaneous Linux-only and Windows-only selectors", () => {
+  const guard = commands(job("plan")).match(
+    /# HELPER_PLATFORM_GUARD_BEGIN\n([\s\S]*?)\n\s*# HELPER_PLATFORM_GUARD_END/,
+  )?.[1]
+  expect(guard).toBeDefined()
+  for (const linux of ["true", "false"])
+    for (const windows of ["true", "false"]) {
+      const result = spawnSync("bash", ["--noprofile", "--norc", "-c", `set -euo pipefail\n${guard}`], {
+        env: { ...process.env, LINUX_ONLY: linux, WINDOWS_ONLY: windows },
+        encoding: "utf8",
+        timeout: 5000,
+      })
+      expect(result.status).toBe(linux === "true" && windows === "true" ? 1 : 0)
+      if (result.status === 1) expect(result.stdout).toContain("linux-only and windows-only cannot both be selected")
+    }
 })

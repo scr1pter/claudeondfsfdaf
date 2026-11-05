@@ -27,6 +27,10 @@ on:
         type: boolean
         required: false
         default: false
+      linux-only:
+        type: boolean
+        required: false
+        default: false
       reuse-artifacts:
         type: boolean
         required: false
@@ -71,6 +75,11 @@ on:
         type: boolean
         required: false
         default: false
+      linux-only:
+        description: Run only the Linux Electron overlay and desktop checks
+        type: boolean
+        required: false
+        default: false
       reuse-artifacts:
         description: Restore immutable shipping and test artifacts from this same run before rebuilding
         type: boolean
@@ -83,7 +92,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-computer-helper-${{ inputs['windows-only'] && 'windows-only' || 'all' }}-${{ github.ref }}-${{ inputs['helper-channel'] || 'prod' }}-${{ inputs['artifact-suffix'] || github.sha }}
+  group: ${{ github.workflow }}-computer-helper-${{ inputs['linux-only'] && (inputs['windows-only'] && 'invalid-linux-windows' || 'linux-only') || inputs['windows-only'] && 'windows-only' || 'all' }}-${{ github.ref }}-${{ inputs['helper-channel'] || 'prod' }}-${{ inputs['artifact-suffix'] || github.sha }}
   cancel-in-progress: true
 
 env:
@@ -115,10 +124,18 @@ jobs:
           ISOLATED_DESKTOP: ${{ inputs['isolated-desktop'] || false }}
           EVENT_NAME: ${{ github.event_name }}
           FULL_DESKTOP_E2E: ${{ toJSON(inputs['full-desktop-e2e']) }}
+          LINUX_ONLY: ${{ inputs['linux-only'] || false }}
+          WINDOWS_ONLY: ${{ inputs['windows-only'] || false }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
+          # HELPER_PLATFORM_GUARD_BEGIN
+          if [[ "$LINUX_ONLY" == true && "$WINDOWS_ONLY" == true ]]; then
+            echo "::error::linux-only and windows-only cannot both be selected."
+            exit 1
+          fi
+          # HELPER_PLATFORM_GUARD_END
           # HELPER_CHANNEL_GUARD_BEGIN
           case "$VECTOR_CHANNEL" in prod|beta|dev) ;; *) echo "::error::Choose helper-channel prod, beta or dev."; exit 1 ;; esac
           if [[ "$VECTOR_CHANNEL" != prod ]]; then ARTIFACT_SUFFIX="$ARTIFACT_SUFFIX-$VECTOR_CHANNEL"; fi
@@ -147,6 +164,7 @@ jobs:
           # Only a direct CI-branch push has no input and defaults to the full desktop lanes.
           desktop=false
           if [[ "$FULL_DESKTOP_E2E" == true || ( "$EVENT_NAME" == push && "$FULL_DESKTOP_E2E" != false ) ]]; then desktop=true; fi
+          if [[ "${LINUX_ONLY:-false}" == true ]]; then desktop=true; fi
           echo "desktop=$desktop" >> "$GITHUB_OUTPUT"
           echo "suffix=$ARTIFACT_SUFFIX" >> "$GITHUB_OUTPUT"
           echo "extended=$extended" >> "$GITHUB_OUTPUT"
@@ -161,7 +179,7 @@ jobs:
 
   mac-build:
     needs: plan
-    if: ${{ !inputs['windows-only'] }}
+    if: ${{ !inputs['linux-only'] && !inputs['windows-only'] }}
     runs-on: macos-15
     timeout-minutes: 90
     permissions:
@@ -494,7 +512,7 @@ jobs:
 
   mac-test:
     needs: [plan, mac-build]
-    if: ${{ !inputs['windows-only'] && needs.plan.outputs.extended == 'true' }}
+    if: ${{ !inputs['linux-only'] && !inputs['windows-only'] && needs.plan.outputs.extended == 'true' }}
     strategy:
       fail-fast: false
       matrix:
@@ -612,7 +630,7 @@ jobs:
 
   windows-build:
     needs: plan
-    if: ${{ needs.plan.outputs.windows == 'true' }}
+    if: ${{ !inputs['linux-only'] && needs.plan.outputs.windows == 'true' }}
     runs-on: windows-2025
     timeout-minutes: 75
     permissions:
@@ -842,7 +860,7 @@ jobs:
 
   windows-arm64-test:
     needs: [plan, windows-build]
-    if: ${{ (inputs['windows-only'] || needs.plan.outputs.extended == 'true') && needs.plan.outputs.windows == 'true' }}
+    if: ${{ !inputs['linux-only'] && (inputs['windows-only'] || needs.plan.outputs.extended == 'true') && needs.plan.outputs.windows == 'true' }}
     runs-on: windows-11-arm
     timeout-minutes: 30
     defaults:
