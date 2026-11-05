@@ -22,6 +22,8 @@ fail their named assertions before runtime qualification can be claimed.
 At source publication this task is **not runtime qualified**. Only six pure
 Python static controls and six seed/private-reference module syntax checks have run. No model,
 provider, Bun, browser, application server or paid benchmark execution is claimed.
+Those syntax checks belong to the earlier source checkpoint; the private
+reference's later byte-buffer hardening still needs fresh runtime qualification.
 An owner must release the shared runtime lease, qualify the actual Bun/node/TS
 toolchain and native adapters, freeze all inputs and bind the unchanged budget
 before any paid arm is admitted. Source files alone do not authorize spending.

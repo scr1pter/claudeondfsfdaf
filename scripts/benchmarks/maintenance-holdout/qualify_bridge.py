@@ -11,6 +11,13 @@ import sys
 import gate_bridge
 import owned_process
 
+EXPECTED_REQUIREMENTS = "86834277bf53afa9b8d8725556c919eae4f9ebb789d3ef8272f5c0bd0f4da5b8"
+EXPECTED_EVALUATOR = "8aba9dc770cc22493c40f093dde9bf95e1e99d6491f601997dde47ba25afe702"
+EXPECTED_INVENTORY = "b4e32b995387656c6d610b9479f3d456d408ab068d1ecbd00ac05238ded43f7d"
+NEGATIVE_TARGETS = {"checksum-bypass": "checksum-corruption-refused", "revoked-replay": "revoked-idempotent-replay-denied",
+    "inflight-revocation": "revoked-inflight-body-denied", "credit-cap-bypass": "overcredit-atomic-rejection",
+    "invoice-recalculation": "late-usage-preserves-issued-invoice"}
+
 
 def digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()).hexdigest()
@@ -35,11 +42,25 @@ def main():
          and proof.get("seed", {}).get("prerequisitesPassed") == 4
          and proof.get("negativeControlsRejected") == proof.get("negativeControlsTotal") == 5
          and set(proof.get("negativeControls", {})) == set(inventory["negativeControls"])
-         and all(row.get("rejected") is True for row in proof["negativeControls"].values())
+         and all(row.get("rejected") is True and row.get("prerequisitesPassed") == 4
+                 and row.get("allIndependentRowsRetained") is True
+                 and row.get("report", {}).get("prerequisitesPassed") == 4
+                 and row.get("report", {}).get("sourceUnchanged") is True
+                 and len(row.get("report", {}).get("checks", [])) == 54
+                 and any(check.get("name") == row.get("target") and check.get("scope") == "business" and check.get("passed") is False
+                         for check in row["report"]["checks"]) for row in proof["negativeControls"].values())
          and proof.get("originalRequirementsUnchanged") is True and proof.get("noReferenceInPublicTask") is True,
          "actual Bun private controls are incomplete")
-    for filename, field in (("instrument/BUILD_SPEC.md", "requirementsSha256"), ("evaluate.py", "evaluatorSha256"), ("CHECK-INVENTORY.json", "inventorySha256")):
-        need(hashlib.sha256((root / filename).read_bytes()).hexdigest() == proof.get(field), "requirements, inventory or evaluator changed")
+    for name, control in proof["negativeControls"].items():
+        need(control.get("target") == NEGATIVE_TARGETS[name], "damaged-reference intended target changed")
+        normalized = gate_bridge.normalize(control["report"], 2, control["report"].get("sourceUnchanged") is True)
+        need(normalized["summary"]["prerequisite"]["passed"] == 4
+             and {row["name"] for row in normalized["checks"]} == set(inventory["business"] + inventory["prerequisite"]),
+             "damaged-reference complete row inventory or prerequisites differ")
+    for filename, field, expected in (("instrument/BUILD_SPEC.md", "requirementsSha256", EXPECTED_REQUIREMENTS),
+            ("evaluate.py", "evaluatorSha256", EXPECTED_EVALUATOR), ("CHECK-INVENTORY.json", "inventorySha256", EXPECTED_INVENTORY)):
+        need(hashlib.sha256((root / filename).read_bytes()).hexdigest() == proof.get(field) == expected,
+             "requirements, inventory or evaluator changed")
     reference = {name: hashlib.sha256((args.reference / name).read_bytes()).hexdigest()
                  for name in ("app.mjs", "sdk.mjs", "sdk.d.mts", "cli.mjs", "package.json")}
     need(reference == proof.get("referenceSha256"), "private reference changed after qualification")
@@ -63,11 +84,11 @@ def main():
         "originalRequirementsUnchanged": True, "privateReferenceOutsideTaskRoot": True,
         "actualSeedBusinessPasses": proof["seed"]["businessPassed"], "seedZeroRequired": False,
         "sourceFreezeAggregateSha256": aggregate, "privateProofSha256": hashlib.sha256(args.private_proof.read_bytes()).hexdigest()}
-    (root / "qualification.json").write_text(json.dumps(qualification, indent=2) + "\n", encoding="utf-8")
+    (root / "qualification.json").write_text(json.dumps(qualification, indent=2) + "\n", encoding="utf-8", newline="\n")
     freeze = {"kind": "maintenance-runtime-freeze-v1", "status": "runtime_qualified", "files": files, "aggregateSha256": aggregate,
         "qualificationReportSha256": hashlib.sha256((root / "qualification.json").read_bytes()).hexdigest(),
         "binarySha256": {key: hashlib.sha256(getattr(args, key).read_bytes()).hexdigest() for key in ("runtime", "node", "typescript")}}
-    (root / "runtime-freeze.json").write_text(json.dumps(freeze, indent=2) + "\n", encoding="utf-8")
+    (root / "runtime-freeze.json").write_text(json.dumps(freeze, indent=2) + "\n", encoding="utf-8", newline="\n")
     print(json.dumps({"referenceChecks": 54, "actualSeedBusinessPasses": proof["seed"]["businessPassed"],
                       "negativeControlsRejected": 5, "runtimeQualified": True, "sourceAggregateSha256": aggregate}))
 
