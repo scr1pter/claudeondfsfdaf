@@ -1,0 +1,32 @@
+{
+  "kind": "maintenance-runtime-freeze-v1",
+  "status": "runtime_qualified",
+  "files": {
+    ".gitattributes": "a79691a93b46e49ce460c26ef22afcc03d6eca1e63bf2edbc20e96159510f6c9",
+    "CHECK-INVENTORY.json": "b4e32b995387656c6d610b9479f3d456d408ab068d1ecbd00ac05238ded43f7d",
+    "evaluate.py": "8aba9dc770cc22493c40f093dde9bf95e1e99d6491f601997dde47ba25afe702",
+    "gate_bridge.py": "39680fa1da571f4504862fee7ff60260cc2c0929277409904b697579245c23b7",
+    "headless_profile.py": "cf8d3008cfc3ac266eb5090a4f09b8a646613d03acc93689289133416804dee2",
+    "instrument/BUILD_SPEC.md": "86834277bf53afa9b8d8725556c919eae4f9ebb789d3ef8272f5c0bd0f4da5b8",
+    "instrument/seed/app.mjs": "2c63034d3beef9178c5a66cada0d276bd110d40d833a236551582da59d43f512",
+    "instrument/seed/cli.mjs": "ddcfd06e624a86bc0c30a772cc4f0a635d1063f7c4d78b008b9ceca9474812d8",
+    "instrument/seed/package.json": "7c40bd752eaf5b1c50112bc01f4cf05f17f192f9ff087376f6522da12ff4a50d",
+    "instrument/seed/README.md": "ac083a81240ffc6b1922fda5f42d8b9c12d04a136226190765399737a82ba66d",
+    "instrument/seed/sdk.d.mts": "0e29b4df9af4ce9bf5a1b1dfaef5799ef4e4f2cc3d4faa97f220b4950ccdab2b",
+    "instrument/seed/sdk.mjs": "d3ee92c4b231406b976ab4c4d0bf9ab50cf75864c8dcbdbf656dd5e244082f21",
+    "INSTRUMENT_CORRECTIONS.md": "aff62fdc26aaec009508ec10e3099fea7d97fedaa9f28cd8f89ec4a7d6aa812c",
+    "owned_process.py": "efd2e2a3d6371be359ba03dc9c5df1c51ac7dbd46703337b9ffd6dc53a7b0589",
+    "qualify_bridge.py": "d856404a174c64edbb8b3c7685d933d6319e803ecb2c8157187b5ab9e9f2df0c",
+    "r1-profile.json": "2efe08f483e104d6df869dae6937e6c6a964ea15c43f411beacfdda9c0f4be59",
+    "README.md": "26d2c566b70d466ac0817deb04ae01e6905774d743729a977031c1d96f073515",
+    "task.json": "67162826d12781a19ff3afc8c56e26e409f259768779a8b7d696dd1f74e34643",
+    "test_static.py": "d861b162ae8ed8d17f77cd8257d2587c5008a2312db8546f8270940bcd9feee6"
+  },
+  "aggregateSha256": "c45c883bf4467fff724c9498e72813450b92a172527e3cc39f7d288be1492f2d",
+  "qualificationReportSha256": "595085d2eb30630c9a18d6ea1164b0e6564b6faf8b1c15d90573a661ee81ef87",
+  "binarySha256": {
+    "runtime": "0187f68d843f825a72ada4a7eca60db896ed753759a7f8252edcd31ac1bf1b9c",
+    "node": "ba93f9a70bd86fce3ebbb39ec758501458453467aa92a34a0a3602d1e3fc2b9c",
+    "typescript": "2cffde0b8c6760dfb0b5b0382bbb7e00ba6a8b2d981b9205b256a700a481d983"
+  }
+}
