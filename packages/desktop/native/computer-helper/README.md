@@ -99,6 +99,8 @@ From `packages/desktop` on macOS, `bun run native:build -- --arch arm64` (or `x6
 
 The self-test report accounts for every classified transcript and distinguishes passed, failed and skipped checks. M1’s absent keyboard implementation leaves its heartbeat-input case explicitly skipped until M5. Required grant-free checks cannot skip, privileged checks default off, and every future/override fixture must satisfy the safe catalog and operation rules.
 
+`native:test` uses one Bun compiler host to emit a temporary driver and then runs its transport in actual Node, matching desktop main. Paired native CI proved the same helper/golden succeeds under Node while Bun's transport exits early on the oversized write. The native framing, probes and lifecycle limits are unchanged. The launcher creates no child Bun, preserves original fixture roots/CLI guards and removes its generated files on completion.
+
 CI uses `.github/workflows/computer-helper.yml`. To run only this lane from the authorized development branch, use `gh workflow run test.yml --ref hands -f computer_helper=true`. It builds twice on pinned Xcode 16.4, requires native core checks and the measured identity lock, and restores verified shipping/test tarballs on the secondary runners. Hosted CI opts into optional scenarios only against the isolated target. Windows protocol checks remain pending W2, and the summary keeps C4/C8 obligations explicit.
 
 ## Windows target

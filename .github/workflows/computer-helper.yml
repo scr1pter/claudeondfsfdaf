@@ -180,33 +180,7 @@ jobs:
           NODE
       - name: Run required grant-free native checks
         timeout-minutes: 8
-        run: bun --no-env-file ./scripts/computer-helper-selftest.ts --platform darwin --bin native/out/darwin/VectorComputer.app/Contents/MacOS/VectorComputer --tests native/out/darwin/tests --privileged off --report "$RUNNER_TEMP/computer-darwin-core.json"
-      - name: Compare the grant-free driver under actual Node
-        if: ${{ always() && steps.build.outcome == 'success' }}
-        timeout-minutes: 8
-        run: |
-          set -euo pipefail
-          bun --no-env-file - <<'BUILD'
-          import { readFile } from "node:fs/promises"
-          import { pathToFileURL } from "node:url"
-          const result = await Bun.build({
-            entrypoints: ["./scripts/computer-helper-selftest.ts"],
-            target: "node",
-            outdir: "./scripts",
-            naming: ".computer-helper-selftest-node.mjs",
-            plugins: [{
-              name: "preserve-imported-tool-location",
-              setup(build) {
-                build.onLoad({ filter: /computer-helper-identity\.ts$/ }, async args => ({
-                  contents: (await readFile(args.path, "utf8")).replaceAll("import.meta.url", JSON.stringify(pathToFileURL(args.path).href)),
-                  loader: "ts",
-                }))
-              },
-            }],
-          })
-          if (!result.success) throw new Error("The diagnostic Node driver did not bundle.")
-          BUILD
-          node ./scripts/.computer-helper-selftest-node.mjs --platform darwin --bin native/out/darwin/VectorComputer.app/Contents/MacOS/VectorComputer --tests native/out/darwin/tests --privileged off --report "$RUNNER_TEMP/computer-darwin-node.json"
+        run: bun --no-env-file ./scripts/computer-helper-selftest-node.ts --platform darwin --bin native/out/darwin/VectorComputer.app/Contents/MacOS/VectorComputer --tests native/out/darwin/tests --privileged off --report "$RUNNER_TEMP/computer-darwin-core.json"
       - name: Run explicitly isolated privileged scenarios
         if: ${{ inputs['isolated-desktop'] }}
         timeout-minutes: 5
@@ -217,7 +191,7 @@ jobs:
           set -euo pipefail
           mode=auto
           if [[ "$PRIVILEGED_REQUIRED" == true ]]; then mode=require; fi
-          bun --no-env-file ./scripts/computer-helper-selftest.ts --platform darwin --bin native/out/darwin/VectorComputer.app/Contents/MacOS/VectorComputer --tests native/out/darwin/tests --privileged "$mode" --report "$RUNNER_TEMP/computer-darwin-privileged.json"
+          bun --no-env-file ./scripts/computer-helper-selftest-node.ts --platform darwin --bin native/out/darwin/VectorComputer.app/Contents/MacOS/VectorComputer --tests native/out/darwin/tests --privileged "$mode" --report "$RUNNER_TEMP/computer-darwin-privileged.json"
       - name: Summarize native checks without payloads
         if: ${{ always() }}
         timeout-minutes: 2
@@ -225,7 +199,7 @@ jobs:
           node --input-type=module <<'NODE'
           import { existsSync, readFileSync, appendFileSync } from "node:fs"
           import path from "node:path"
-          for (const name of ["computer-darwin-core.json", "computer-darwin-node.json", "computer-darwin-privileged.json"]) {
+          for (const name of ["computer-darwin-core.json", "computer-darwin-privileged.json"]) {
             const file = path.join(process.env.RUNNER_TEMP, name)
             if (!existsSync(file)) continue
             const report = JSON.parse(readFileSync(file, "utf8"))
@@ -341,7 +315,7 @@ jobs:
           bun --no-env-file ./scripts/build-computer-helper.ts --platform darwin --arch universal --channel prod --out native/out/darwin --check-lock
       - name: Run required grant-free native checks
         timeout-minutes: 8
-        run: bun --no-env-file ./scripts/computer-helper-selftest.ts --platform darwin --bin native/out/darwin/VectorComputer.app/Contents/MacOS/VectorComputer --tests native/out/darwin/tests --privileged off --report "$RUNNER_TEMP/computer-darwin-matrix.json"
+        run: bun --no-env-file ./scripts/computer-helper-selftest-node.ts --platform darwin --bin native/out/darwin/VectorComputer.app/Contents/MacOS/VectorComputer --tests native/out/darwin/tests --privileged off --report "$RUNNER_TEMP/computer-darwin-matrix.json"
       - name: Run explicitly isolated matrix scenarios
         if: ${{ inputs['isolated-desktop'] }}
         timeout-minutes: 5
@@ -352,7 +326,7 @@ jobs:
           set -euo pipefail
           mode=auto
           if [[ "$PRIVILEGED_REQUIRED" == true ]]; then mode=require; fi
-          bun --no-env-file ./scripts/computer-helper-selftest.ts --platform darwin --bin native/out/darwin/VectorComputer.app/Contents/MacOS/VectorComputer --tests native/out/darwin/tests --privileged "$mode" --report "$RUNNER_TEMP/computer-darwin-matrix-privileged.json"
+          bun --no-env-file ./scripts/computer-helper-selftest-node.ts --platform darwin --bin native/out/darwin/VectorComputer.app/Contents/MacOS/VectorComputer --tests native/out/darwin/tests --privileged "$mode" --report "$RUNNER_TEMP/computer-darwin-matrix-privileged.json"
       - name: Summarize matrix checks without payloads
         if: ${{ always() }}
         timeout-minutes: 2
@@ -447,7 +421,7 @@ jobs:
         if: ${{ needs.plan.outputs.windows-protocol == 'true' }}
         timeout-minutes: 8
         run: |
-          bun --no-env-file ./scripts/computer-helper-selftest.ts --platform win32 --bin native/out/win32/x64/vector-computer.exe --tests native/out/win32/x64/tests --privileged off --report "$env:RUNNER_TEMP/computer-win32-core.json"
+          bun --no-env-file ./scripts/computer-helper-selftest-node.ts --platform win32 --bin native/out/win32/x64/vector-computer.exe --tests native/out/win32/x64/tests --privileged off --report "$env:RUNNER_TEMP/computer-win32-core.json"
           if ($LASTEXITCODE -ne 0) { throw "Required Windows conformance failed." }
       - name: Run explicitly isolated Windows scenarios
         if: ${{ inputs['isolated-desktop'] && needs.plan.outputs.windows-protocol == 'true' }}
@@ -457,7 +431,7 @@ jobs:
           PRIVILEGED_REQUIRED: ${{ inputs['privileged-required'] }}
         run: |
           $mode = if ($env:PRIVILEGED_REQUIRED -eq "true") { "require" } else { "auto" }
-          bun --no-env-file ./scripts/computer-helper-selftest.ts --platform win32 --bin native/out/win32/x64/vector-computer.exe --tests native/out/win32/x64/tests --privileged $mode --report "$env:RUNNER_TEMP/computer-win32-privileged.json"
+          bun --no-env-file ./scripts/computer-helper-selftest-node.ts --platform win32 --bin native/out/win32/x64/vector-computer.exe --tests native/out/win32/x64/tests --privileged $mode --report "$env:RUNNER_TEMP/computer-win32-privileged.json"
           if ($LASTEXITCODE -ne 0) { throw "The isolated Windows scenarios failed or were required but skipped." }
       - name: Summarize Windows protocol readiness
         if: ${{ always() }}
@@ -596,7 +570,7 @@ jobs:
         if: ${{ needs.plan.outputs.windows-protocol == 'true' }}
         timeout-minutes: 8
         run: |
-          bun --no-env-file ./scripts/computer-helper-selftest.ts --platform win32 --bin native/out/win32/arm64/vector-computer.exe --tests native/out/win32/arm64/tests --privileged off --report "$env:RUNNER_TEMP/computer-win32-arm64.json"
+          bun --no-env-file ./scripts/computer-helper-selftest-node.ts --platform win32 --bin native/out/win32/arm64/vector-computer.exe --tests native/out/win32/arm64/tests --privileged off --report "$env:RUNNER_TEMP/computer-win32-arm64.json"
           if ($LASTEXITCODE -ne 0) { throw "Required ARM64 conformance failed." }
       - name: Run explicitly isolated ARM64 scenarios
         if: ${{ inputs['isolated-desktop'] && needs.plan.outputs.windows-protocol == 'true' }}
@@ -606,7 +580,7 @@ jobs:
           PRIVILEGED_REQUIRED: ${{ inputs['privileged-required'] }}
         run: |
           $mode = if ($env:PRIVILEGED_REQUIRED -eq "true") { "require" } else { "auto" }
-          bun --no-env-file ./scripts/computer-helper-selftest.ts --platform win32 --bin native/out/win32/arm64/vector-computer.exe --tests native/out/win32/arm64/tests --privileged $mode --report "$env:RUNNER_TEMP/computer-win32-arm64-privileged.json"
+          bun --no-env-file ./scripts/computer-helper-selftest-node.ts --platform win32 --bin native/out/win32/arm64/vector-computer.exe --tests native/out/win32/arm64/tests --privileged $mode --report "$env:RUNNER_TEMP/computer-win32-arm64-privileged.json"
           if ($LASTEXITCODE -ne 0) { throw "The isolated ARM64 scenarios failed or were required but skipped." }
       - name: Summarize ARM64 protocol readiness
         if: ${{ always() }}

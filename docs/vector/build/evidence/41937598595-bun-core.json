@@ -1,0 +1,131 @@
+{
+  "schemaVersion": 1,
+  "platform": "darwin",
+  "privileged": "off",
+  "checks": [
+    {
+      "name": "catalog",
+      "status": "passed"
+    },
+    {
+      "name": "unit",
+      "status": "passed"
+    },
+    {
+      "name": "unprivileged",
+      "status": "passed"
+    },
+    {
+      "name": "packaged",
+      "status": "passed"
+    },
+    {
+      "name": "probe.first",
+      "status": "passed"
+    },
+    {
+      "name": "probe.fresh",
+      "status": "passed"
+    },
+    {
+      "name": "responsible",
+      "status": "passed"
+    },
+    {
+      "name": "unverified-parent",
+      "status": "passed"
+    },
+    {
+      "name": "channel-eof",
+      "status": "passed"
+    },
+    {
+      "name": "parent-death",
+      "status": "passed"
+    },
+    {
+      "name": "conformance.cancel-idle",
+      "status": "passed"
+    },
+    {
+      "name": "conformance.eof",
+      "status": "passed"
+    },
+    {
+      "name": "conformance.frame-too-large",
+      "status": "failed",
+      "reason": "line-1-unexpected-exit-0"
+    },
+    {
+      "name": "conformance.heartbeat-loss",
+      "status": "skipped",
+      "reason": "requires-input.keyboard"
+    },
+    {
+      "name": "conformance.hello",
+      "status": "passed"
+    },
+    {
+      "name": "conformance.malformed-json",
+      "status": "passed"
+    },
+    {
+      "name": "conformance.permissions",
+      "status": "passed"
+    },
+    {
+      "name": "conformance.session",
+      "status": "passed"
+    },
+    {
+      "name": "conformance.shutdown",
+      "status": "passed"
+    },
+    {
+      "name": "conformance.unsupported-action",
+      "status": "passed"
+    },
+    {
+      "name": "privileged",
+      "status": "skipped",
+      "reason": "disabled"
+    },
+    {
+      "name": "unprivileged.strict-cli",
+      "status": "passed"
+    },
+    {
+      "name": "unprivileged.partial-frame-round-trip",
+      "status": "passed"
+    },
+    {
+      "name": "unprivileged.malformed-envelope-and-eof",
+      "status": "passed"
+    },
+    {
+      "name": "unprivileged.oversized-frame-refusal",
+      "status": "passed"
+    },
+    {
+      "name": "packaged.strict-cli",
+      "status": "passed"
+    },
+    {
+      "name": "packaged.partial-frame-round-trip",
+      "status": "passed"
+    },
+    {
+      "name": "packaged.malformed-envelope-and-eof",
+      "status": "passed"
+    },
+    {
+      "name": "packaged.oversized-frame-refusal",
+      "status": "passed"
+    },
+    {
+      "name": "packaged.packaged-bundle-and-signature",
+      "status": "passed"
+    }
+  ],
+  "code": 1
+}

@@ -24,7 +24,7 @@
     "package:win": "bun --no-env-file ./scripts/package-desktop.ts --target=win",
     "package:linux": "bun --no-env-file ./scripts/package-desktop.ts --target=linux",
     "native:build": "bun --no-env-file ./scripts/build-computer-helper.ts",
-    "native:test": "bun --no-env-file ./scripts/computer-helper-selftest.ts",
+    "native:test": "bun --no-env-file ./scripts/computer-helper-selftest-node.ts",
     "verify:package": "bun ./scripts/verify-package.ts",
     "verify:brain-worker": "bun ./scripts/verify-brain-worker.ts"
   },

@@ -787,9 +787,9 @@ function nativeChannel(executable: string, args: string[]) {
   }
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+export async function runSelfTestCLI(argv: readonly string[]) {
   try {
-    const options = parseSelfTestArgs(process.argv.slice(2))
+    const options = parseSelfTestArgs(argv)
     const result = await runComputerHelperSelfTest(options)
     const report =
       options.report ?? path.join(await mkdtemp(path.join(tmpdir(), "vector-computer-report-")), "report.json")
@@ -803,4 +803,8 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     process.stderr.write("Computer helper self-test could not run. Check native host, build outputs and arguments.\n")
     process.exitCode = 2
   }
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  await runSelfTestCLI(process.argv.slice(2))
 }
