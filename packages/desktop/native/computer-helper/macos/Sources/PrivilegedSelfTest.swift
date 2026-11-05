@@ -78,7 +78,9 @@ enum PrivilegedTargetPolicy {
     static func rect(_ value: JSONValue?) -> CGRect? {
         guard let fields = value?.objectValue, Set(fields.keys) == ["x", "y", "w", "h"],
               let x = fields["x"]?.doubleValue, let y = fields["y"]?.doubleValue,
-              let width = fields["w"]?.doubleValue, let height = fields["h"]?.doubleValue else { return nil }
+              let width = fields["w"]?.doubleValue, let height = fields["h"]?.doubleValue,
+              [x, y, width, height].allSatisfy({ $0.isFinite && abs($0) <= 1_000_000 }),
+              width > 0, height > 0 else { return nil }
         let result = CGRect(x: x, y: y, width: width, height: height)
         return CapturePrivacy.valid(result) ? result : nil
     }

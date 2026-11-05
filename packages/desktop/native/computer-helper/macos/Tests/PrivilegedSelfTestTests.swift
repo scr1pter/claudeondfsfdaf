@@ -173,11 +173,11 @@ func runPrivilegedSelfTestTests() throws -> Int {
     try test {
         try privilegedExpect(PrivilegedTargetPolicy.rect(privilegedRect(-200.5, 40.25, 12.5, 20)) == CGRect(x: -200.5, y: 40.25, width: 12.5, height: 20),
             "Actual Quartz geometry retains finite negative origins and fractional points")
-        for value in [privilegedRect(0, 0, 0, 2), privilegedRect(0, 0, -1, 2), privilegedRect(Double.nan, 0, 1, 2),
+        for (index, value) in [privilegedRect(0, 0, 0, 2), privilegedRect(0, 0, -1, 2), privilegedRect(0, 0, 1, -2), privilegedRect(Double.nan, 0, 1, 2),
                       privilegedRect(0, Double.infinity, 1, 2), privilegedRect(Double.greatestFiniteMagnitude, 0, Double.greatestFiniteMagnitude, 2),
                       JSONValue.object(["x": .bool(true), "y": .integer(0), "w": .integer(1), "h": .integer(1)]),
-                      .object(["x": .integer(0), "y": .integer(0), "w": .integer(1), "h": .integer(1), "text": .string("private")])] {
-            try privilegedExpect(PrivilegedTargetPolicy.rect(value) == nil, "Malformed, overflowing or extra-field rectangles cannot become target geometry")
+                      .object(["x": .integer(0), "y": .integer(0), "w": .integer(1), "h": .integer(1), "text": .string("private")])].enumerated() {
+            try privilegedExpect(PrivilegedTargetPolicy.rect(value) == nil, "Malformed, overflowing or extra-field rectangles cannot become target geometry (case \(index + 1))")
         }
     }
     try test {

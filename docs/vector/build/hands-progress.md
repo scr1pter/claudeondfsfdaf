@@ -453,3 +453,8 @@ Matching M9 run [41980614444](https://github.com/scr1pter/claudeondfsfdaf/action
 ### M11 Security flag compiler repair
 
 Run [41982327710](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/41982327710) at `1dc21a5e` fails Mac compilation before native unit, core or target-control execution: the Swift import does not expose kSecCSNoNetworkAccess. The target verifier now uses the already compiled AppsNative form: raw strict/all-architecture flags unioned with .noNetworkAccess. Verification remains strict and offline. No helper1.0.9 candidate is accepted from this failed run; dirty Windows W2 source is excluded from the repair.
+
+
+### M11 raw target-geometry validation repair
+
+Run [41983574150](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/41983574150) at `e002ec70` compiles reproducibly and passes the actual grant-free test-target control smoke. Core reports 30 passed, one failed and one explicit privileged skip. Standalone units identify the malformed target-rectangle assertion: CGRect width/height accessors standardize a negative size before the existing capture validator reads it. The target decoder now checks raw finite bounded dimensions and positive raw width/height before constructing CGRect. The unchanged refusal assertion gains a symmetric negative-height case and a fixed fixture index. No helper 1.0.9 candidate is accepted; Windows build and ARM64 checks pass. Dirty W2 source/tooling stays excluded.
