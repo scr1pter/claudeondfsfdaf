@@ -1,0 +1,41 @@
+{
+  "run": 41964212013,
+  "commit": "96c7d1c2bd80b7597e14e418235bc82f75a6b7f1",
+  "candidateArtifact": 13387701078,
+  "candidateArchiveSha256": "c81a1cbd9d65cd14cbe4943cea1cbc5647ae8f7f75593960a716a557b00697f9",
+  "candidateFileSha256": "eb5d0c661d463fa720249a30837926a27f12ac2eb2b9f70362544bea1860fc3a",
+  "reportsArtifact": 13387342836,
+  "reportsArchiveSha256": "a40ed70c40685a688b16714110dbb2912e008c6be6ef1e9b1ee1c7782fdb1a73",
+  "sourceVerification": "Measured digest independently recomputed against an exact git archive of 96c7d1c2 and its generated identity; all in-progress M8 files and framework/keyboard hooks excluded.",
+  "validation": {
+    "universalCompilation": "passed",
+    "reproducibleShippingBytes": "passed",
+    "nativeUnitAggregate": "passed",
+    "requiredNodeCore": {
+      "passed": 29,
+      "failed": 0,
+      "skipped": 1
+    },
+    "isolatedAutoCore": {
+      "passed": 29,
+      "failed": 0,
+      "skipped": 1
+    },
+    "skipReasons": [
+      "disabled",
+      "isolated-target-unavailable"
+    ],
+    "windowsX64AndArm64Build": "passed",
+    "windowsArm64NativeUnitAndFreshProbe": "passed"
+  },
+  "lock": {
+    "enforce": true,
+    "helperVersion": "1.0.6",
+    "sourceDigest": "0d532db6991fb109c7fce4b47c9786f130bb1e030f505f81ef0fed8bb8615ce3",
+    "toolchain": "swift:\nApple Swift version 6.1.2 (swiftlang-6.1.2.1.2 clang-1700.0.13.5)\nTarget: arm64-apple-macosx15.0\nsdk:15.5\nxcode:\nXcode 16.4\nBuild version 16F6",
+    "cdhash": {
+      "x64": "48daa194027449e328731d7349bd8fc027b1ae05",
+      "arm64": "d12f17c7cd19442734067a98567f8a8c3f9e1b13"
+    }
+  }
+}
