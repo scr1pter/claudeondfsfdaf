@@ -12,6 +12,11 @@ on:
         type: boolean
         required: false
         default: false
+      computer_helper_windows_only:
+        description: Limit computer_helper to Windows build and native checks
+        type: boolean
+        required: false
+        default: false
       hands_benchmark:
         description: Run only the production app baseline for the desktop app-control work
         type: boolean
@@ -28,9 +33,9 @@ concurrency:
   # commit history. PRs and other branches still share a group and cancel stale runs.
   # Expressions have no ternary, so this is the `&&`/`||` idiom; it is safe here only
   # because every format() result is a non-empty string and can never read as falsy.
-  # Native-only checks, UI checks and benchmarks have separate groups from normal checks and each other.
+  # All-native checks, Windows-only native checks, UI checks and benchmarks have separate cancellation groups.
   # The native selector takes precedence; otherwise both Hands flags run their two focused jobs together.
-  group: ${{ github.event_name == 'workflow_dispatch' && inputs.computer_helper && format('{0}-computer-helper-{1}', github.workflow, github.ref) || github.event_name == 'workflow_dispatch' && inputs.hands_ui && format('{0}-hands-ui{1}-{2}', github.workflow, inputs.hands_benchmark && '-benchmark' || '', github.ref) || (github.event_name == 'workflow_dispatch' && inputs.hands_benchmark && format('{0}-hands-benchmark-{1}', github.workflow, github.ref) || (github.ref == 'refs/heads/main' && format('{0}-{1}', github.workflow, github.run_id) || format('{0}-{1}', github.workflow, github.event.pull_request.number || github.ref))) }}
+  group: ${{ github.event_name == 'workflow_dispatch' && inputs.computer_helper && format('{0}-computer-helper{1}-{2}', github.workflow, inputs.computer_helper_windows_only && '-windows-only' || '', github.ref) || github.event_name == 'workflow_dispatch' && inputs.hands_ui && format('{0}-hands-ui{1}-{2}', github.workflow, inputs.hands_benchmark && '-benchmark' || '', github.ref) || (github.event_name == 'workflow_dispatch' && inputs.hands_benchmark && format('{0}-hands-benchmark-{1}', github.workflow, github.ref) || (github.ref == 'refs/heads/main' && format('{0}-{1}', github.workflow, github.run_id) || format('{0}-{1}', github.workflow, github.event.pull_request.number || github.ref))) }}
   cancel-in-progress: true
 
 permissions:
@@ -48,6 +53,7 @@ jobs:
       contents: read
     with:
       artifact-suffix: pr-${{ github.sha }}
+      windows-only: ${{ github.event_name == 'workflow_dispatch' && inputs.computer_helper && inputs.computer_helper_windows_only || false }}
       # Hosted native jobs use a disposable desktop and the driver's fixed isolated target only. Local and direct
       # workflow callers retain the off default; missing native scenarios are reported as skipped, never passed.
       isolated-desktop: true

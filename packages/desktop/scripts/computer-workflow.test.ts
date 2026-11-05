@@ -33,11 +33,19 @@ function expression(
   inputs: Record<string, unknown>,
   event = "workflow_dispatch",
   ref = "refs/heads/hands",
+  needs: Record<string, unknown> = {},
 ) {
+  // GitHub permits hyphens in dotted property names; translate those accesses outside string literals.
+  const code = value
+    .replace(/^\s*\$\{\{([\s\S]*)\}\}\s*$/, "$1")
+    .replace(/'(?:''|[^'])*'|"(?:\\.|[^"\\])*"|\.([A-Za-z_][A-Za-z0-9_-]*)/g, (match, property: string | undefined) =>
+      property?.includes("-") ? `[${JSON.stringify(property)}]` : match,
+    )
   return runInNewContext(
-    value.replace(/^\s*\$\{\{([\s\S]*)\}\}\s*$/, "$1"),
+    code,
     {
       inputs,
+      needs,
       github: {
         workflow: "test",
         ref,
@@ -69,6 +77,7 @@ test("the native workflow has safe reusable/manual defaults and the temporary CI
     expect(inputs["privileged-required"]).toMatchObject({ type: "boolean", default: false })
     expect(inputs["full-desktop-e2e"]).toMatchObject({ type: "boolean", default: true })
     expect(inputs["isolated-desktop"]).toMatchObject({ type: "boolean", default: false })
+    expect(inputs["windows-only"]).toMatchObject({ type: "boolean", default: false })
   }
   const outputs = record(record(events.workflow_call).outputs)
   for (const platform of ["darwin", "win32"])
@@ -173,6 +182,81 @@ test("a native-only dispatch excludes ordinary and focused jobs without sharing 
   const native = group(child.group, { "artifact-suffix": "fixture" })
   expect(native).not.toBe(group(cancellation.group, modes[0]!))
   expect(native).not.toBe(group(child.group, { "artifact-suffix": "fixture" }, "refs/heads/another-task"))
+})
+
+test("Windows-only dispatch is explicit, native-only and independent of all-native cancellation", () => {
+  const inputs = record(record(record(main.document.on).workflow_dispatch).inputs)
+  expect(inputs.computer_helper_windows_only).toMatchObject({ type: "boolean", default: false })
+  const all = record(main.document.jobs)
+  const reuse = record(all["computer-helper"])
+  const selector = record(reuse.with)["windows-only"]
+  expect(typeof selector).toBe("string")
+  for (const event of ["workflow_dispatch", "pull_request", "push"])
+    for (const native of [false, true])
+      for (const windows of [false, true]) {
+        const mode = {
+          computer_helper: native,
+          computer_helper_windows_only: windows,
+          hands_ui: false,
+          hands_benchmark: false,
+        }
+        expect(expression(String(selector), mode, event)).toBe(event === "workflow_dispatch" && native && windows)
+      }
+  const windows = { computer_helper: true, computer_helper_windows_only: true, hands_ui: true, hands_benchmark: true }
+  for (const [name, value] of Object.entries(all))
+    expect(expression(String(record(value).if), windows), `${name} has incorrect Windows-only routing`).toBe(
+      name === "computer-helper",
+    )
+  // The flag by itself leaves ordinary full-regression routing and cancellation unchanged.
+  const baseline = { computer_helper: false, hands_ui: false, hands_benchmark: false }
+  for (const value of Object.values(all)) {
+    const condition = String(record(value).if)
+    expect(expression(condition, { ...baseline, computer_helper_windows_only: true })).toBe(
+      expression(condition, baseline),
+    )
+  }
+  const cancellation = record(main.document.concurrency)
+  const native = { ...baseline, computer_helper: true }
+  expect(group(cancellation.group, windows)).not.toBe(group(cancellation.group, native))
+  expect(group(cancellation.group, { ...baseline, computer_helper_windows_only: true })).toBe(
+    group(cancellation.group, baseline),
+  )
+  const child = record(helper.document.concurrency)
+  const suffix = { "artifact-suffix": "same-immutable-source" }
+  expect(group(child.group, { ...suffix, "windows-only": true })).not.toBe(group(child.group, suffix))
+  expect(group(child.group, { ...suffix, "windows-only": false })).toBe(group(child.group, suffix))
+})
+
+test("Windows-only native coverage keeps both architectures and required checks while skipping macOS", () => {
+  const needs = { plan: { outputs: { extended: "true", windows: "true", "windows-protocol": "true" } } }
+  for (const windows of [false, true]) {
+    const inputs = { "windows-only": windows }
+    for (const name of ["mac-build", "mac-test"])
+      expect(expression(String(job(name).if), inputs, "workflow_dispatch", "refs/heads/hands", needs)).toBe(!windows)
+    for (const name of ["windows-build", "windows-arm64-test"]) {
+      const current = job(name)
+      expect(expression(String(current.if), inputs, "workflow_dispatch", "refs/heads/hands", needs)).toBe(true)
+      expect(current.needs).not.toContain("mac-build")
+      const required = steps(current).filter(
+        (step) => typeof step.run === "string" && /--privileged(?:\s+|=)off/.test(step.run),
+      )
+      expect(required).toHaveLength(1)
+      expect(required[0]?.["continue-on-error"]).toBeUndefined()
+      expect(expression(String(required[0]?.if), inputs, "workflow_dispatch", "refs/heads/hands", needs)).toBe(true)
+    }
+  }
+  const narrow = { plan: { outputs: { ...needs.plan.outputs, extended: "false" } } }
+  expect(expression(String(job("mac-test").if), {}, "pull_request", "refs/heads/hands", narrow)).toBe(false)
+  expect(expression(String(job("windows-arm64-test").if), {}, "pull_request", "refs/heads/hands", narrow)).toBe(false)
+  expect(
+    expression(
+      String(job("windows-arm64-test").if),
+      { "windows-only": true },
+      "pull_request",
+      "refs/heads/hands",
+      narrow,
+    ),
+  ).toBe(true)
 })
 
 test("the native lane covers supported runners and only expands PR matrices for relevant changes", () => {

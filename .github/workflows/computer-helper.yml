@@ -19,6 +19,10 @@ on:
         type: boolean
         required: false
         default: false
+      windows-only:
+        type: boolean
+        required: false
+        default: false
     outputs:
       darwin-digest:
         description: Source digest of the verified macOS helper
@@ -48,6 +52,11 @@ on:
         type: boolean
         required: false
         default: false
+      windows-only:
+        description: Run both Windows architectures without the macOS jobs
+        type: boolean
+        required: false
+        default: false
   push:
     branches: ["ci/computer-**"]
 
@@ -55,7 +64,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-computer-helper-${{ github.ref }}-${{ inputs['artifact-suffix'] || github.sha }}
+  group: ${{ github.workflow }}-computer-helper-${{ inputs['windows-only'] && 'windows-only' || 'all' }}-${{ github.ref }}-${{ inputs['artifact-suffix'] || github.sha }}
   cancel-in-progress: true
 
 env:
@@ -121,6 +130,7 @@ jobs:
 
   mac-build:
     needs: plan
+    if: ${{ !inputs['windows-only'] }}
     runs-on: macos-15
     timeout-minutes: 45
     env:
@@ -273,7 +283,7 @@ jobs:
 
   mac-test:
     needs: [plan, mac-build]
-    if: ${{ needs.plan.outputs.extended == 'true' }}
+    if: ${{ !inputs['windows-only'] && needs.plan.outputs.extended == 'true' }}
     strategy:
       fail-fast: false
       matrix:
@@ -504,7 +514,7 @@ jobs:
 
   windows-arm64-test:
     needs: [plan, windows-build]
-    if: ${{ needs.plan.outputs.extended == 'true' && needs.plan.outputs.windows == 'true' }}
+    if: ${{ (inputs['windows-only'] || needs.plan.outputs.extended == 'true') && needs.plan.outputs.windows == 'true' }}
     runs-on: windows-11-arm
     timeout-minutes: 30
     defaults:
