@@ -87,9 +87,9 @@ bun ./test/computer/fake-helper.ts --probe --json
 
 `macos/Sources` contains the M1 native transport, dispatcher, CLI and verified two-stage launcher. `macos/Tests/main.swift` is a separate unit entry and must never be linked with `Sources/main.swift`; C2 supplies the build assembly. Both targets consume `Identity.swift` rendered by `scripts/computer-helper-identity.ts --out <temporary directory>`. Build outputs belong under `native/out/darwin`, not `resources` or this source tree.
 
-Serving uses the inherited duplex fd 3; stdout is reserved for the explicit metadata/probe/self-test modes. The one-shot probe verifies its actual parent, launches the same independent worker and never requests a permission. A direct/unverified worker or absent serving descriptor fails closed. The current skeleton reports unobserved `notDetermined` placeholders and no native desktop features; M2–M9 supply those services.
+Serving uses the inherited duplex fd 3; stdout is reserved for the explicit metadata/probe/self-test modes. The one-shot probe verifies its actual parent, launches the same independent worker and never requests a permission. A direct/unverified worker or absent serving descriptor fails closed. M2 reports actual preflight-only Screen Recording, Accessibility and post-event status; only an explicit onboarding request may prompt, and reset targets the helper’s own generated identity. No capture/input/UI feature is advertised until its native handler exists.
 
-The grant-free unit source covers framing, phase/cancellation deadlines, caller topology and isolated pipe/socket behavior. These are source tests until compiled and run on macOS. Linux syntax parsing does not prove native behavior. C2/C6 own the reproducible compile and actual lifecycle/conformance evidence, and M11 supplies the final native scenario target.
+The grant-free unit source covers framing, phase/cancellation deadlines, caller topology, native session policy, injected permission operations and isolated pipe/socket behavior. Native CI compiles and runs the aggregate; new package checks remain source evidence until their corresponding run succeeds. Linux syntax parsing does not prove native behavior. C2/C6 own the reproducible compile and actual lifecycle/conformance evidence, and M11 supplies the final native scenario target.
 
 ## Build and safe checks
 

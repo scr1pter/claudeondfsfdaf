@@ -494,6 +494,15 @@ final class Dispatcher {
       guard request.args.isEmpty else { fail(request, "failed", "Invalid permission status arguments."); return true }
       reply(.success(id: request.id, fields: permissions()))
       return true
+    case "permissions.request" where !responsible:
+      // A helper that does not own attribution may report status, but never enter an OS prompt handler.
+      guard Set(request.args.keys) == Set(["service"]),
+            let service = request.args["service"]?.stringValue, ["screen", "accessibility"].contains(service) else {
+        fail(request, "failed", "Invalid permission request arguments.")
+        return true
+      }
+      reply(.success(id: request.id, fields: permissions()))
+      return true
     case "session.begin":
       guard responsible else { fail(request, "responsible_missing", "The helper does not own its OS permissions."); return true }
       guard let next = Self.decodeSession(request.args) else { fail(request, "failed", "Invalid session arguments."); return true }

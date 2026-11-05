@@ -9,7 +9,8 @@ do {
     _ = try runLifecycleTests()
     _ = try runPackagedSelfTestTests()
     _ = try runBlocklistTests()
-    print("Computer helper M1 unit checks passed.")
+    _ = try runPermissionsTests()
+    print("Computer helper unit checks passed.")
     exit(0)
 } catch {
     FileHandle.standardError.write(Data("Computer helper M1 unit checks failed.\n".utf8))

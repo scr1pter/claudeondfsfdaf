@@ -88,7 +88,7 @@ func runServerTests() throws -> Int {
     try serverExpect(value?["responsible"]?.boolValue == false, "hello reports actual responsibility")
     try serverExpect(value?["helper"]?["version"]?.stringValue == Identity.helperVersion, "hello uses generated identity")
     try serverExpect(value?["features"]?.objectValue == [:], "M1 advertises no unimplemented capability")
-    try serverExpect(value?["permissions"]?["screen"]?.stringValue == "notDetermined", "M1 leaves OS grants unobserved")
+    try serverExpect(value?["permissions"]?["screen"]?.stringValue == "notDetermined", "an unbound dispatcher leaves OS grants unobserved")
     let incompatible = try fake.request("hello", ["protocol": .object(["min": .integer(2), "max": .integer(2)])])
     try serverExpect(fake.result(incompatible)?["code"]?.stringValue == "helper_incompatible", "incompatible hello refuses")
   }
@@ -102,7 +102,11 @@ func runServerTests() throws -> Int {
     }
     let request = try fake.request("permissions.request", ["service": .string("screen")])
     try serverExpect(!invoked, "a nonresponsible helper never enters an OS prompt handler")
-    try serverExpect(fake.result(request)?["code"]?.stringValue == "responsible_missing", "responsibility failure is explicit")
+    try serverExpect(fake.result(request)?["ok"]?.boolValue == true && fake.result(request)?["screen"]?.stringValue == "notDetermined",
+                     "a nonresponsible permission request returns status without an OS prompt")
+    let malformed = try fake.request("permissions.request", ["service": .string("screen"), "bundleId": .string("other.app")])
+    try serverExpect(fake.result(malformed)?["code"]?.stringValue == "failed" && !invoked,
+                     "the nonresponsible status fallback still rejects extra authority fields")
     let begin = try fake.begin()
     try serverExpect(fake.result(begin)?["code"]?.stringValue == "responsible_missing", "nonresponsible session refused")
     let status = try fake.request("permissions.status")

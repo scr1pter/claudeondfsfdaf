@@ -29,9 +29,11 @@ private final class HelperServer {
     private let errorOutput = DispatchQueue(label: "ai.vector.computer.protocol-errors")
     private let reader = FrameReader()
     private let writer = FrameWriter(descriptor: 3)
+    private let permissionService = PermissionService()
 
     func start(parent: HelperParent) throws {
-        dispatcher = Dispatcher(
+        let permissions = permissionService
+        let server = Dispatcher(
             responsible: HelperLifecycle.isSelfResponsible(),
             architecture: architecture,
             operatingSystem: ProcessInfo.processInfo.operatingSystemVersionString,
@@ -44,8 +46,16 @@ private final class HelperServer {
             sendImage: { [weak self] response, image in
                 guard let self else { return }
                 do { try self.writer.write(response, binary: image) } catch { self.finish(code: 1) }
-            }
+            },
+            permissions: { permissions.status() }
         )
+        server.register(op: "permissions.request", deadlineMs: 5000, requiresSession: false) { request, context, done in
+            permissions.request(request.args, responsible: HelperLifecycle.isSelfResponsible(), context: context, completion: done)
+        }
+        server.register(op: "permissions.reset", deadlineMs: 4000, requiresSession: false) { request, context, done in
+            permissions.reset(request.args, responsible: HelperLifecycle.isSelfResponsible(), context: context, completion: done)
+        }
+        dispatcher = server
         watchers = try HelperLifecycle.installWorkerWatchers(parent: parent) { [weak self] in
             self?.finish(code: 0)
         }
@@ -106,6 +116,7 @@ private final class HelperServer {
         lock.unlock()
         // Dispatcher revocation invokes the native release hook before this process exits or closes its channel.
         dispatcher?.close(reason: "lifecycle")
+        permissionService.close()
         source?.cancel()
         watchers?.finish()
         _ = Darwin.close(3)
@@ -136,7 +147,7 @@ private func run() throws -> Int32 {
         _ = signal(SIGPIPE, SIG_IGN)
         if probe {
             try printJSON(.object([
-                "permissions": .object(["screen": .string("notDetermined"), "accessibility": .string("notDetermined")]),
+                "permissions": .object(PermissionService().status()),
                 "responsible": .bool(HelperLifecycle.isSelfResponsible()),
                 "elevated": .bool(geteuid() == 0),
             ]))
