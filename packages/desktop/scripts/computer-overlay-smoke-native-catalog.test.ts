@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test"
 import { spawnSync } from "node:child_process"
 import { createHash } from "node:crypto"
-import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises"
+import { lstat, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
@@ -33,7 +33,7 @@ async function fixture() {
     "smoke/computer-overlay-smoke-electron.mjs",
     "smoke/computer-overlay-smoke-preload.cjs",
     fake,
-    "electron/runtime.bin",
+    "electron/Electron.app/Contents/Resources/default_app.asar",
   ]
   const files: Record<string, { sha256: string; arch: "arm64"[] }> = {}
   for (const name of names) {
@@ -144,6 +144,26 @@ test("native catalog failures expose only fixed roles and ordinals while rejecti
   }
 })
 
+test("an explicit physical filesystem admits complete ASAR bytes while a virtual archive-root view still fails closed", async () => {
+  const f = await fixture()
+  try {
+    const archive = path.join(f.root, "electron/Electron.app/Contents/Resources/default_app.asar")
+    const virtual = { lstat: async (file: string) => lstat(file === archive ? f.root : file), readFile, realpath }
+    await expect(verifyComputerSmokeNativeCatalog(f.root, expected, virtual)).rejects.toMatchObject({
+      diagnostic: { cause: "file_kind", role: "runtime" },
+    })
+    expect(await verifyComputerSmokeNativeCatalog(f.root, expected, { lstat, readFile, realpath })).toBe(
+      path.join(f.root, driver),
+    )
+    await writeFile(archive, "changed physical archive bytes")
+    await expect(
+      verifyComputerSmokeNativeCatalog(f.root, expected, { lstat, readFile, realpath }),
+    ).rejects.toMatchObject({ diagnostic: { cause: "file_hash", role: "runtime" } })
+  } finally {
+    await f.close()
+  }
+})
+
 test("actual Node imports the compiled catalog without Electron and enforces its same byte checks", async () => {
   const f = await fixture()
   const output = await mkdtemp(path.join(tmpdir(), "vector-native-catalog-node-"))
@@ -163,7 +183,7 @@ test("actual Node imports the compiled catalog without Electron and enforces its
         [
           "--input-type=module",
           "--eval",
-          `const catalog = await import(process.argv[1]); try { const driver = await catalog.verifyComputerSmokeNativeCatalog(process.argv[2], JSON.parse(process.argv[3])); console.log(JSON.stringify({driver,bun:typeof Bun})); } catch(error) { console.log(JSON.stringify({diagnostic:error.diagnostic,bun:typeof Bun})); process.exitCode=1; }`,
+          `const catalog = await import(process.argv[1]); const files = await import("node:fs/promises"); try { const driver = await catalog.verifyComputerSmokeNativeCatalog(process.argv[2], JSON.parse(process.argv[3]), files); console.log(JSON.stringify({driver,bun:typeof Bun})); } catch(error) { console.log(JSON.stringify({diagnostic:error.diagnostic,bun:typeof Bun})); process.exitCode=1; }`,
           pathToFileURL(built.outputs[0]!.path).href,
           f.root,
           JSON.stringify(expected),

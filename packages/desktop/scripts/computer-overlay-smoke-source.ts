@@ -201,7 +201,7 @@ export async function computerOverlaySourceGraph(directory: string): Promise<Ove
     if (canonical.endsWith(".json")) continue
     const source = Buffer.from(entry.bytes).toString("utf8")
     for (const specifier of computerOverlayModuleReferences(canonical, source)) {
-      if (isBuiltin(specifier) || specifier === "electron") continue
+      if (isBuiltin(specifier) || specifier === "electron" || specifier === "original-fs") continue
       const resolved = ts.resolveModuleName(specifier, canonical, options, ts.sys).resolvedModule
       if (!resolved)
         throw new Error(

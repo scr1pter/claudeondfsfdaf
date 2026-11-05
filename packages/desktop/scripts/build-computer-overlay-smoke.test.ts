@@ -59,8 +59,8 @@ describe("finite never-shipped overlay build contracts", () => {
       expect(options.outdir).toBe(output)
       expect(options).not.toHaveProperty("outfile")
       expect(options.target).toBe("node")
-      expect(options.external).toEqual(["electron"])
-      expect(options.allowUnresolved).toEqual([])
+      expect(options.external).toEqual(["electron", "original-fs"])
+      expect(options.allowUnresolved).toEqual(["original-fs"])
       expect(options.define).toEqual({ VECTOR_COMPUTER_SMOKE_SOURCE_DIGEST: JSON.stringify(inputs.sourceDigest) })
     }
     expect(

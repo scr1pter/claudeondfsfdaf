@@ -1,15 +1,19 @@
 import { spawn } from "node:child_process"
-import { lstat } from "node:fs/promises"
+import { lstat, readFile } from "node:fs/promises"
+import originalFs from "original-fs"
 import path from "node:path"
 import { screen, type BrowserWindow } from "electron"
 import { nativeId } from "../src/main/computer-overlay"
 import identity from "../native/computer-helper/identity.json"
+import { computerSmokeAsarCapability } from "./computer-overlay-smoke-asar"
 import {
   ComputerSmokeNativeArtifactFailure,
   verifyComputerSmokeNativeCatalog,
 } from "./computer-overlay-smoke-native-catalog"
 import {
   COMPUTER_SMOKE_NATIVE_MARK,
+  COMPUTER_SMOKE_ASAR_MARK,
+  parseComputerSmokeAsarDiagnostic,
   COMPUTER_SMOKE_NATIVE_REASONS,
   COMPUTER_SMOKE_NATIVE_PREREQUISITES,
   parseComputerSmokeNativeDiagnostic,
@@ -99,6 +103,13 @@ function emitNativeDiagnostic(value: unknown) {
   }
 }
 export async function runComputerNativeOverlayProof(input: NativeProofInput): Promise<Proof> {
+  try {
+    const value = await computerSmokeAsarCapability({ lstat, readFile }, originalFs.promises, process.resourcesPath)
+    const receipt = parseComputerSmokeAsarDiagnostic(COMPUTER_SMOKE_ASAR_MARK + JSON.stringify(value))
+    process.stdout.write(COMPUTER_SMOKE_ASAR_MARK + JSON.stringify(receipt) + "\n")
+  } catch {
+    // Capability diagnostics cannot change native admission, results, exits or skips.
+  }
   const diagnostic: NativeDiagnosticState = { phase: "artifact" }
   try {
     return await nativeProof(input, diagnostic)
@@ -125,13 +136,17 @@ async function nativeProof(input: NativeProofInput, diagnostic: NativeDiagnostic
     if (manifest) throw new Error("A staged native smoke bundle has no compiled source admission.")
     return unavailable("native_harness_unavailable")
   }
-  const executable = await verifyComputerSmokeNativeCatalog(input.root, {
-    platform: process.platform,
-    architecture: process.arch,
-    helperVersion: identity.helperVersion,
-    sourceDigest,
-    protocol: identity.protocol,
-  })
+  const executable = await verifyComputerSmokeNativeCatalog(
+    input.root,
+    {
+      platform: process.platform,
+      architecture: process.arch,
+      helperVersion: identity.helperVersion,
+      sourceDigest,
+      protocol: identity.protocol,
+    },
+    originalFs.promises,
+  )
   if (!executable) return unavailable("native_harness_unavailable")
   if (process.env.VECTOR_COMPUTER_TEST_ISOLATED !== "1") return unavailable("isolated_desktop_required")
   if (!hex(input.nonce)) {

@@ -14,6 +14,8 @@ import {
   COMPUTER_SMOKE_CONTROLLER_MARK,
   COMPUTER_SMOKE_GEOMETRY_MARK,
   COMPUTER_SMOKE_NATIVE_MARK,
+  COMPUTER_SMOKE_ASAR_MARK,
+  parseComputerSmokeAsarDiagnostic,
   parseComputerSmokeNativeDiagnostic,
   parseComputerSmokeGeometry,
   parseComputerSmokeController,
@@ -186,6 +188,7 @@ export async function runComputerOverlaySmoke(args = process.argv.slice(2)) {
     const windowProbes = new Set<ComputerSmokeWindowProbe["variant"]>()
     let windowRegion = false
     const nativeDiagnostics = new Set<string>()
+    let asarDiagnostic = false
     let forcedCause: ComputerSmokeFailureCause | undefined
     const streamState: { childFailure?: ComputerSmokeFailureDiagnostic; loaderStarted: boolean; exception: boolean } = {
       loaderStarted: false,
@@ -318,6 +321,19 @@ export async function runComputerOverlaySmoke(args = process.argv.slice(2)) {
             const region = parseComputerSmokeWindowRegionSummary(line)
             windowRegion = true
             process.stdout.write(COMPUTER_SMOKE_WINDOW_REGION_MARK + JSON.stringify(region) + "\n")
+          } else if (line.startsWith(COMPUTER_SMOKE_ASAR_MARK)) {
+            if (
+              (process.platform !== "darwin" && process.platform !== "win32") ||
+              lastPhase !== "controller" ||
+              lastController !== "native-proof" ||
+              streamState.childFailure ||
+              streamState.exception ||
+              asarDiagnostic
+            )
+              throw new Error("The ASAR capability receipt is out of phase or duplicated.")
+            const diagnostic = parseComputerSmokeAsarDiagnostic(line)
+            asarDiagnostic = true
+            process.stdout.write(COMPUTER_SMOKE_ASAR_MARK + JSON.stringify(diagnostic) + "\n")
           } else if (line.startsWith(COMPUTER_SMOKE_NATIVE_MARK)) {
             if (
               !stage ||
@@ -411,6 +427,7 @@ export async function runComputerOverlaySmoke(args = process.argv.slice(2)) {
       pendingLine.startsWith(COMPUTER_SMOKE_WINDOW_PROBE_MARK) ||
       pendingLine.startsWith(COMPUTER_SMOKE_WINDOW_REGION_MARK) ||
       pendingLine.startsWith(COMPUTER_SMOKE_NATIVE_MARK) ||
+      pendingLine.startsWith(COMPUTER_SMOKE_ASAR_MARK) ||
       pendingLine.startsWith(COMPUTER_SMOKE_FAILURE_MARK) ||
       pendingLine.startsWith(COMPUTER_SMOKE_EXCEPTION_MARK) ||
       pendingLine.startsWith(COMPUTER_SMOKE_LOADER_STARTED)

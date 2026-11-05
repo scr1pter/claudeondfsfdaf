@@ -225,6 +225,49 @@ export function parseComputerSmokeGeometry(line: string): ComputerSmokeGeometry 
     content: [value.content[0], value.content[1]],
   }
 }
+export const COMPUTER_SMOKE_ASAR_MARK = "computer-smoke-asar "
+export type ComputerSmokeAsarDiagnostic = {
+  protocol: 1
+  rawRegular: boolean
+  rawBounded: boolean
+  rawBytes: number
+  rawRead: boolean
+  virtualDirectory: boolean
+  virtualRead: boolean
+}
+export function parseComputerSmokeAsarDiagnostic(line: string): ComputerSmokeAsarDiagnostic {
+  if (!line.startsWith(COMPUTER_SMOKE_ASAR_MARK) || line.length > 512)
+    throw new Error("The ASAR capability receipt is invalid.")
+  const value: unknown = JSON.parse(line.slice(COMPUTER_SMOKE_ASAR_MARK.length))
+  if (
+    !record(value) ||
+    !exact(value, ["protocol", "rawRegular", "rawBounded", "rawBytes", "rawRead", "virtualDirectory", "virtualRead"]) ||
+    value.protocol !== 1 ||
+    typeof value.rawRegular !== "boolean" ||
+    typeof value.rawBounded !== "boolean" ||
+    typeof value.rawRead !== "boolean" ||
+    typeof value.virtualDirectory !== "boolean" ||
+    typeof value.virtualRead !== "boolean" ||
+    typeof value.rawBytes !== "number" ||
+    !Number.isSafeInteger(value.rawBytes) ||
+    value.rawBytes < 0 ||
+    value.rawBytes > 16 * 1024 * 1024 ||
+    (value.rawBounded && !value.rawRegular) ||
+    (value.rawRead && (!value.rawBounded || value.rawBytes === 0)) ||
+    (!value.rawBounded && value.rawBytes !== 0)
+  )
+    throw new Error("The ASAR capability receipt is invalid.")
+  return {
+    protocol: 1,
+    rawRegular: value.rawRegular,
+    rawBounded: value.rawBounded,
+    rawBytes: value.rawBytes,
+    rawRead: value.rawRead,
+    virtualDirectory: value.virtualDirectory,
+    virtualRead: value.virtualRead,
+  }
+}
+
 export const COMPUTER_SMOKE_NATIVE_MARK = "computer-smoke-native "
 export const COMPUTER_SMOKE_NATIVE_REASONS = [
   "isolation_required",

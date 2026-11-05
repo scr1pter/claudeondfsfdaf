@@ -12,6 +12,8 @@ import {
   parseComputerSmokeController,
   COMPUTER_SMOKE_GEOMETRY_MARK,
   COMPUTER_SMOKE_NATIVE_MARK,
+  COMPUTER_SMOKE_ASAR_MARK,
+  parseComputerSmokeAsarDiagnostic,
   parseComputerSmokeNativeDiagnostic,
   parseComputerSmokeGeometry,
   type ComputerSmokeControllerStep,
@@ -107,6 +109,45 @@ test("geometry diagnostics retain only bounded owned-window rectangles, native s
     expect(() => parseComputerSmokeGeometry(line({ ...value, ...patch }))).toThrow()
   expect(() => parseComputerSmokeGeometry(line(value) + " ".repeat(513))).toThrow()
   expect(() => parseComputerSmokeGeometry(COMPUTER_SMOKE_GEOMETRY_MARK + "{")).toThrow()
+})
+
+test("ASAR capability receipts expose only bounded metadata and cannot convert native report outcomes", () => {
+  const value = {
+    protocol: 1,
+    rawRegular: true,
+    rawBounded: true,
+    rawBytes: 321,
+    rawRead: true,
+    virtualDirectory: true,
+    virtualRead: false,
+  }
+  const line = (value: unknown) => COMPUTER_SMOKE_ASAR_MARK + JSON.stringify(value)
+  expect(parseComputerSmokeAsarDiagnostic(line(value))).toEqual(value)
+  for (const patch of [
+    { protocol: 2 },
+    { rawRegular: false },
+    { rawBounded: false },
+    { rawBytes: -1 },
+    { rawBytes: 16 * 1024 * 1024 + 1 },
+    { rawBytes: 0.5 },
+    { rawBytes: "PRIVATE" },
+    { rawRead: "PRIVATE" },
+    { virtualDirectory: "PRIVATE" },
+    { virtualRead: "PRIVATE" },
+    { path: "PRIVATE" },
+    { hash: "PRIVATE" },
+    { content: "PRIVATE" },
+  ])
+    expect(() => parseComputerSmokeAsarDiagnostic(line({ ...value, ...patch }))).toThrow()
+  const failed = report("darwin")
+  failed.checks[16] = { name: "native-os-stop", ok: false, reason: "native_proof_invalid" }
+  const stdout = line(value) + "\n" + COMPUTER_SMOKE_MARK + JSON.stringify(failed)
+  expect(parseComputerSmokeReport(stdout, { electron: failed.electron, platform: "darwin", exitCode: 1 })).toEqual(
+    failed,
+  )
+  expect(() =>
+    parseComputerSmokeReport(stdout, { electron: failed.electron, platform: "darwin", exitCode: 0 }),
+  ).toThrow()
 })
 
 test("native proof diagnostics retain fixed boundary/result facts without changing failed reports or exits", () => {

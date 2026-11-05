@@ -109,6 +109,27 @@ describe("independent overlay source admission", () => {
     expect(graph.bunVersion).toBe("1.3.14")
     expect(new Set(graph.entries.map((entry) => entry.path)).size).toBe(graph.entries.length)
   })
+  test("admits only the explicit Electron original-fs builtin while preserving its source and compiler binding", async () => {
+    const value = await fixture()
+    await writeFile(value.dependency, 'import originalFs from "original-fs"; export const raw = originalFs.promises\n')
+    const graph = await computerOverlaySourceGraph(value.desktop)
+    const consumed = graph.entries.find((entry) => entry.path === "packages/desktop/src/main/dependency.ts")!
+    expect(Buffer.from(consumed.bytes).toString("utf8")).toContain('from "original-fs"')
+    const built = await Bun.build({
+      entrypoints: [value.entry],
+      target: "node",
+      format: "esm",
+      outdir: path.join(value.root, "out"),
+      naming: "main.mjs",
+      metafile: true,
+      external: ["electron", "original-fs"],
+      allowUnresolved: ["original-fs"],
+    })
+    expect(built.success).toBe(true)
+    await verifyComputerOverlayBundleGraph(built.metafile, value.desktop, graph, COMPUTER_OVERLAY_ENTRYPOINTS[0].input)
+    await writeFile(value.dependency, 'import "unadmitted-electron-builtin"\n')
+    await expect(computerOverlaySourceGraph(value.desktop)).rejects.toThrow("unresolved import")
+  })
   test("a transitive source change or native C2 digest changes dedicated overlay authority", async () => {
     const value = await fixture(),
       before = await computerOverlaySourceGraph(value.desktop)

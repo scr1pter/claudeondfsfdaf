@@ -1,8 +1,14 @@
 import { createHash } from "node:crypto"
+import type { Stats } from "node:fs"
 import { lstat, readFile, realpath } from "node:fs/promises"
 import path from "node:path"
 import type { ComputerSmokeNativeCause, ComputerSmokeNativeRole } from "./computer-overlay-smoke-report"
 
+export type ComputerSmokeNativeFiles = {
+  lstat(file: string): Promise<Pick<Stats, "size" | "isFile" | "isDirectory" | "isSymbolicLink">>
+  realpath(file: string): Promise<string>
+  readFile: { (file: string): Promise<Buffer>; (file: string, encoding: "utf8"): Promise<string> }
+}
 type Expected = {
   platform: "darwin" | "win32"
   architecture: string
@@ -28,7 +34,11 @@ function role(relative: string): ComputerSmokeNativeRole {
 }
 
 /** Repeat the admitted stage's exact regular-file checks without starting Electron or native code. */
-export async function verifyComputerSmokeNativeCatalog(root: string, expected: Expected) {
+export async function verifyComputerSmokeNativeCatalog(
+  root: string,
+  expected: Expected,
+  files: ComputerSmokeNativeFiles = { lstat, readFile, realpath },
+) {
   const architecture =
     expected.architecture === "x64" || expected.architecture === "arm64" ? expected.architecture : undefined
   function fail(cause: ComputerSmokeNativeCause, fact: ArtifactFact = {}): never {
@@ -46,9 +56,9 @@ export async function verifyComputerSmokeNativeCatalog(root: string, expected: E
       return fail(cause, fact)
     }
   }
-  const canonical = await io("artifact_root_io", () => realpath(root))
+  const canonical = await io("artifact_root_io", () => files.realpath(root))
   const manifestFile = path.join(canonical, "computer-overlay-smoke.json")
-  const status = await lstat(manifestFile).catch((error: NodeJS.ErrnoException) => {
+  const status = await files.lstat(manifestFile).catch((error: NodeJS.ErrnoException) => {
     // Preserve the original unavailable-harness result when no manifest exists.
     if (error.code === "ENOENT") return
     return fail("manifest_io")
@@ -57,7 +67,7 @@ export async function verifyComputerSmokeNativeCatalog(root: string, expected: E
   if (!status.isFile() || status.isSymbolicLink()) fail("manifest_type")
   if (status.size > 1024 * 1024) fail("manifest_size")
   if (!hex(expected.sourceDigest)) fail("identity_source")
-  const bytes = await io("manifest_io", () => readFile(manifestFile, "utf8"))
+  const bytes = await io("manifest_io", () => files.readFile(manifestFile, "utf8"))
   let manifest: unknown
   try {
     manifest = JSON.parse(bytes)
@@ -88,14 +98,14 @@ export async function verifyComputerSmokeNativeCatalog(root: string, expected: E
     )
       fail("catalog_path", fact)
     const file = path.join(canonical, ...relative.split("/"))
-    const info = await io("file_io", () => lstat(file), fact)
+    const info = await io("file_io", () => files.lstat(file), fact)
     if (!info.isFile() || info.isSymbolicLink()) fail("file_kind", fact)
     if (info.size < 1 || info.size > 512 * 1024 * 1024) fail("file_size", fact)
-    if (!(await io("file_io", () => realpath(file), fact)).startsWith(canonical + path.sep))
+    if (!(await io("file_io", () => files.realpath(file), fact)).startsWith(canonical + path.sep))
       fail("file_containment", fact)
     if (
       createHash("sha256")
-        .update(await io("file_io", () => readFile(file), fact))
+        .update(await io("file_io", () => files.readFile(file), fact))
         .digest("hex") !== metadata.sha256
     )
       fail("file_hash", fact)
