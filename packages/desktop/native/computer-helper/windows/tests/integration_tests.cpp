@@ -90,7 +90,7 @@ BOOL WINAPI snapshot_query_fixture(HANDLE token, TOKEN_INFORMATION_CLASS kind, L
     case TokenGroups:
     case TokenRestrictedSids: {
       const auto value = static_cast<TOKEN_GROUPS*>(output); value->GroupCount = 1;
-      value->Groups[0] = {with_sid(sizeof(TOKEN_GROUPS)), kind == TokenGroups ? SE_GROUP_USE_FOR_DENY_ONLY : SE_GROUP_ENABLED}; return value->Groups[0].Sid != nullptr;
+      value->Groups[0] = {with_sid(sizeof(TOKEN_GROUPS)), static_cast<DWORD>(kind == TokenGroups ? SE_GROUP_USE_FOR_DENY_ONLY : SE_GROUP_ENABLED)}; return value->Groups[0].Sid != nullptr;
     }
     case TokenPrivileges: {
       const auto value = static_cast<TOKEN_PRIVILEGES*>(output); value->PrivilegeCount = 1;
