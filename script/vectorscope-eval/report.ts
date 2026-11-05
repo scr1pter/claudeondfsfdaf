@@ -27,7 +27,7 @@ import { Ledger, readJournal, type Entry, type Summary } from "./budget"
 import { caseView, manifestProblems, SEED_MANIFEST, SPLITS, type Case, type Manifest } from "./dataset"
 import { listFixtures, loadFixture, type Fixture } from "./fixture"
 import { outsideRepository, REPO_ROOT } from "./paths"
-import { replayCharge } from "./replay"
+import { replayCaseKey, replayCharge, replayVariant } from "./replay"
 
 export { outsideRepository }
 
@@ -296,10 +296,10 @@ export function fromRunReport(report: RunReport, fixtures: readonly Fixture[]) {
   }
 }
 
-// A replay artifact: the engine pipeline on a dataset case. The reviewers' findings are what was proposed; the line
-// comments and the findings the summary lists are what would be posted, when those writes got through the posting
-// check. Its spend is its attempts' settlements, with unsettled or incomplete ones kept at their estimates, and its paid
-// attempts are accounted for only when the eval ledger's journal admitted the replay.
+// A replay artifact: the engine pipeline, or a variant of it (replayVariant), on a dataset case. The reviewers' findings
+// are what was proposed; the line comments and the findings the summary lists are what would be posted, when those
+// writes got through the posting check. Its spend is its attempts' settlements, with unsettled or incomplete ones kept
+// at their estimates, and its paid attempts are accounted for only when the eval ledger's journal admitted the replay.
 export function fromArtifact(
   artifact: ReplayArtifact,
   manifest: Manifest | undefined,
@@ -345,7 +345,10 @@ export function fromArtifact(
     : []
   const charge = replayCharge(artifact.attempts)
   const paid = artifact.attempts.some((attempt) => attempt.admitted)
-  const caseKey = `${models.join(" + ")} ${artifact.label}#${artifact.repetition}`
+  // The variant the eval asked for names the run's pipeline, so a variant's replays form their own group and pair
+  // with the frozen pipeline's under --candidate and --baseline, and its admission is its own.
+  const variant = replayVariant("engine", artifact.variant)
+  const caseKey = replayCaseKey({ variant, models, id: artifact.label, repetition: artifact.repetition })
   const tokens = artifact.attempts.flatMap((attempt) => (attempt.settled?.tokens ? [attempt.settled.tokens] : []))
   const written = artifact.posted
     .flatMap((write) =>
@@ -355,7 +358,7 @@ export function fromArtifact(
     )
     .join("\n")
   return {
-    variant: "engine",
+    variant,
     model: artifact.models.review.id,
     models,
     case: artifact.label,
@@ -481,8 +484,9 @@ Re-scores saved eval outputs against settled judgements and evaluates the releas
   --judgements <path>      Judgement file from judge.ts (without one, every finding is unjudged)
   --manifest <path>        Dataset manifest for replay artifacts (default: the seed manifest)
   --split <name>           Split the replay artifacts come from: ${SPLITS.join(", ")} (default development)
-  --candidate <v>=<model>  Pipeline variant and model the gate decides on (default: the only one)
-  --baseline <v>=<model>   The frozen pipeline to compare recall with on paired cases
+  --candidate <v>=<model>  Pipeline variant and model the gate decides on (default: the only one); a replay's
+                           variant is engine, or engine:shared-verify for the shared verify policy
+  --baseline <v>=<model>   The frozen pipeline to compare recall with on paired cases, such as engine=<model>
   --gate <path>            Gate config JSON (default: the owner's approved D2 gate)
   --ledger <path>          Eval ledger journal, which shows what each replay was admitted for; its summary is the
                            report's ledger line, instead of the journals the run.ts reports carry

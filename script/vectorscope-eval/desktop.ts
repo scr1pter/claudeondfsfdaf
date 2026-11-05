@@ -9,6 +9,7 @@ import {
   type ReviewOutcomeLite,
 } from "../../packages/app/src/features/pull-requests/ai-review"
 import { parseReviewConfig, REVIEW_CONFIG_PATH } from "../../packages/core/src/review/config"
+import { parseUnifiedDiff } from "../../packages/core/src/review/diff"
 import { evidenceScope, type EvidenceScope } from "../../packages/core/src/review/model-evidence"
 import type { ReviewPrice } from "../../packages/core/src/review/plan"
 import { REVIEW_REPORT_JSON_SCHEMA, VERIFY_JSON_SCHEMA } from "../../packages/core/src/review/schema"
@@ -92,8 +93,12 @@ export async function desktopReplay(input: DesktopReplayInput): Promise<DesktopA
   const item = input.planned.case
   const recording = recordingClient(input.client)
   const policy = input.config?.verifyPolicy
-  const settings = policy ? withReviewSettings(recording.client, { verifyPolicy: policy }) : undefined
-  const read = settingsReader(settings?.client ?? recording.client)
+  // The runner never takes settings from a review.json the pull request changes (runReview's setting()), and then reads
+  // that file only as a changed file. So a case whose change touches it gets no variant and keeps its own text, and
+  // its settings are the defaults; the artifact says the variant was not applied.
+  const touched = changesFile(input.diff, REVIEW_CONFIG_PATH)
+  const settings = policy && !touched ? withReviewSettings(recording.client, { verifyPolicy: policy }) : undefined
+  const read = settingsReader(settings?.client ?? recording.client, { ignore: touched })
   const repository = item.repository?.url
   const pr = {
     number: 1,
@@ -174,16 +179,18 @@ export async function desktopReplay(input: DesktopReplayInput): Promise<DesktopA
       verified: finding.verified === true,
     })),
     ...(posting ? { proposed: { body: posting.body, comments: posting.comments, untrusted: posting.untrusted } } : {}),
-    ...(policy && settings ? { variant: { verifyPolicy: policy, applied: settings.served() } } : {}),
+    ...(policy ? { variant: { verifyPolicy: policy, applied: settings?.served() ?? false } } : {}),
     ...(outcome instanceof Error ? { error: outcome.message } : {}),
   }
 }
 
-// A client that reads the case's review.json with these keys set over its own, as a repository that chose them would
-// have it, and passes every other call through. The file's other keys, "verify" among them, stay, as in the engine
-// replay, where the variant's policy arrives as REVIEW_VERIFY_POLICY and the base's "verify" still wins. A file that
-// is not a JSON object reads as one holding only these keys, which leaves the same settings as the engine's parser
-// does with the defaults. served() says whether the runner read the file at all.
+// A client that answers the runner's settings read of the case's review.json with these keys set over the file's own,
+// as a repository that chose them would have it, and passes every other call through. The file's other keys, "verify"
+// among them, stay, as in the engine replay, where the variant's policy arrives as REVIEW_VERIFY_POLICY and the base's
+// "verify" still wins. A file that is not a JSON object reads as one holding only these keys, which leaves the same
+// settings as the engine's parser does with the defaults. Only the first read is the settings read: the runner makes
+// it before it reads any changed file, so a later read (a finding that names the file) gets the file as it is.
+// served() says whether the runner read its settings. Use it only for a case whose change leaves the file alone.
 export function withReviewSettings(inner: ReviewClient, keys: Record<string, unknown>) {
   let served = false
   const client: ReviewClient = {
@@ -191,7 +198,7 @@ export function withReviewSettings(inner: ReviewClient, keys: Record<string, unk
     file: {
       ...inner.file,
       read: async (request) => {
-        if (request.path !== REVIEW_CONFIG_PATH) return inner.file.read(request)
+        if (request.path !== REVIEW_CONFIG_PATH || served) return inner.file.read(request)
         served = true
         const result = await inner.file.read(request).catch(() => undefined)
         const text = result?.data?.type === "text" ? result.data.content : ""
@@ -202,21 +209,35 @@ export function withReviewSettings(inner: ReviewClient, keys: Record<string, unk
   return { client, served: () => served }
 }
 
-// A client that passes every call through and keeps the text of the last review.json the runner read.
-function settingsReader(inner: ReviewClient) {
+// A client that passes every call through and keeps the text of the runner's settings read of review.json, its first
+// read of that file. With `ignore`, for a case whose change touches the file, it keeps none: the runner then reads the
+// file only as a changed file and runs under the defaults.
+function settingsReader(inner: ReviewClient, options: { ignore?: boolean } = {}) {
   let text: string | undefined
+  let seen = false
   const client: ReviewClient = {
     ...inner,
     file: {
       ...inner.file,
       read: async (request) => {
         const result = await inner.file.read(request)
-        if (request.path === REVIEW_CONFIG_PATH) text = result?.data?.type === "text" ? result.data.content : undefined
+        if (request.path === REVIEW_CONFIG_PATH && !seen && !options.ignore) {
+          seen = true
+          text = result?.data?.type === "text" ? result.data.content : undefined
+        }
         return result
       },
     },
   }
   return { client, text: () => text }
+}
+
+// Whether a unified diff changes this path, at either end of a rename, compared without case as the runner does.
+function changesFile(diff: string, path: string) {
+  const wanted = path.toLowerCase()
+  return parseUnifiedDiff(diff).some((file) =>
+    [file.path, file.oldPath ?? file.path].some((name) => name.toLowerCase() === wanted),
+  )
 }
 
 function jsonObject(text: string): Record<string, unknown> {

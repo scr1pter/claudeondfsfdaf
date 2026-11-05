@@ -814,7 +814,7 @@ describe("ReviewEval.replay", () => {
                 config: { maxCostUsd: 2, ...config },
                 posting: ReviewEval.recordingPosting(),
                 check: recordingCheck().check,
-              }).pipe(Effect.map((artifact) => artifact.config.value))
+              }).pipe(Effect.map((artifact) => ({ ...artifact.config.value, variant: artifact.variant })))
             const shared = yield* replay({ verifyPolicy: "shared" })
             yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report()))
             const legacy = yield* replay({})
@@ -823,6 +823,9 @@ describe("ReviewEval.replay", () => {
         const plain = yield* replayed()
         expect(plain.shared).toMatchObject({ verifyPolicy: "shared", verify: "all" })
         expect(plain.legacy).toMatchObject({ verifyPolicy: "legacy", verify: "blocking" })
+        // The artifact names the variant the eval asked for, so the report keeps its runs apart from the frozen pipeline's.
+        expect(plain.shared.variant).toEqual({ verifyPolicy: "shared" })
+        expect(plain.legacy.variant).toBeUndefined()
         const explicit = yield* replayed({ verify: "blocking" })
         expect(explicit.shared).toMatchObject({ verifyPolicy: "shared", verify: "blocking" })
       }),

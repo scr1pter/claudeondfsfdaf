@@ -89,17 +89,49 @@ function planned(item: Case, mirror: string | undefined): PlannedReplay {
   }
 }
 
+// A pipeline variant a replay can run (VS-06): the verify policy, which the engine replay takes in its config and
+// the desktop driver as the case's review.json would carry it.
+export type ReplayVariant = { verifyPolicy?: "legacy" | "shared" }
+
+// The name the report gives a replay's pipeline: its runner, followed by the variant when the eval asked for one other
+// than the frozen pipeline's, so "engine" is the frozen engine pipeline and "engine:shared-verify" the shared verify
+// policy on it. It has no "=", which separates a variant from its model in report.ts --candidate and --baseline.
+export function replayVariant(adapter: string, variant?: ReplayVariant) {
+  return variant?.verifyPolicy && variant.verifyPolicy !== "legacy"
+    ? `${adapter}:${variant.verifyPolicy}-verify`
+    : adapter
+}
+
+// The runner a replayVariant name runs on.
+export function variantAdapter(name: string) {
+  return name.split(":")[0] ?? name
+}
+
+// A replay's case in the eval ledger: its pipeline variant, its models, the case and the repetition. admitReplay admits
+// under it, the report looks a replay's admission up by it, and judge calls on the replay are charged to it, so each
+// variant of a case has its own admission and its own per-case bound.
+export function replayCaseKey(input: { variant: string; models: readonly string[]; id: string; repetition?: number }) {
+  return `${input.variant} ${input.models.join(" + ")} ${input.id}#${input.repetition ?? 1}`
+}
+
 // A replay's admission. Review.run admits each of its provider attempts itself, retries and the finalizer included,
 // against the review's maxCostUsd, as long as its models are priced. So the eval ledger reserves the case's whole bound
 // before a replay starts and hands Review.run that bound as its cap: every attempt is admitted against money the
 // ledger has set aside. A model without a price cannot be bounded, so it is refused and the ledger stops admitting.
+// The engine replay's config carries the variant too, so the artifact names the variant the replay was admitted for.
 export function admitReplay(
   ledger: Ledger,
-  input: { id: string; repetition?: number; models: readonly Pick<ModelRecord, "id" | "costKind" | "price">[] },
+  input: {
+    id: string
+    repetition?: number
+    models: readonly Pick<ModelRecord, "id" | "costKind" | "price">[]
+    variant?: ReplayVariant
+  },
 ):
   | {
       admitted: true
-      config: { maxCostUsd: number } // the case's cap, applied over the base's review.json
+      // The case's cap and the variant, applied over the base's review.json: ReviewEval.replay's config.
+      config: { maxCostUsd: number } & ReplayVariant
       ticket: Ticket
       // Settles the case from its artifact's attempts; with no artifact (the replay failed), the whole bound is kept.
       settle(artifact?: { attempts: readonly ReplayAttempt[] }): Settlement
@@ -107,11 +139,16 @@ export function admitReplay(
   | { admitted: false; reason: Refusal; detail: string } {
   const priced =
     input.models.length > 0 && input.models.every((model) => model.costKind === "priced" && model.price !== undefined)
-  const model = input.models.map((item) => item.id).join(" + ")
+  const models = input.models.map((item) => item.id)
   const admission = ledger.admit({
-    case: `${model} ${input.id}#${input.repetition ?? 1}`,
+    case: replayCaseKey({
+      variant: replayVariant("engine", input.variant),
+      models,
+      id: input.id,
+      ...(input.repetition !== undefined ? { repetition: input.repetition } : {}),
+    }),
     kind: "provider",
-    model,
+    model: models.join(" + "),
     note: "replay",
     estimateUsd: priced ? ledger.limits.caseUsd : Number.NaN,
   })
@@ -119,7 +156,10 @@ export function admitReplay(
   const ticket = admission.ticket
   return {
     admitted: true,
-    config: { maxCostUsd: ledger.limits.caseUsd },
+    config: {
+      maxCostUsd: ledger.limits.caseUsd,
+      ...(input.variant?.verifyPolicy ? { verifyPolicy: input.variant.verifyPolicy } : {}),
+    },
     ticket,
     settle: (artifact) => (artifact ? ticket.settle(replayCharge(artifact.attempts)) : ticket.settle()),
   }

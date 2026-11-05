@@ -23,14 +23,14 @@ const MODEL = "acme/reviewer"
 const SCOPE = evidenceScope({ adapter: "engine", config: DEFAULT_REVIEW_CONFIG })
 const FREEZE = `sha256:${"b".repeat(64)}`
 
-const report = (overrides: { outcome?: string; eligible?: boolean } = {}) => ({
+const report = (overrides: { outcome?: string; eligible?: boolean; variant?: string } = {}) => ({
   title: "VectorScope eval: held-out",
   split: "held-out",
   frozen: true,
   gate: { config: DEFAULT_GATE, digest: gateDigest(DEFAULT_GATE) },
   decision: {
     decision: DEFAULT_GATE.decision,
-    candidate: { variant: "engine", model: MODEL },
+    candidate: { variant: overrides.variant ?? "engine", model: MODEL },
     outcome: overrides.outcome ?? "pass",
     rules: [],
     release:
@@ -48,15 +48,18 @@ const artifact = (label: string, extra: object = {}) => ({
   ...extra,
 })
 
-function files(name: string, input: { report: object; artifacts: object[]; manifest?: object }) {
+// The report records the manifest it was built from, as report.ts does ("<path> sha256 <hex>"), unless `sources` says
+// otherwise.
+function files(name: string, input: { report: object; artifacts: object[]; manifest?: object; sources?: object }) {
   const dir = join(root, name)
   mkdirSync(join(dir, "outputs"), { recursive: true })
-  const reportText = JSON.stringify(input.report, null, 2)
+  const manifestText = JSON.stringify(input.manifest ?? { freeze: { date: "2026-12-01", digest: FREEZE } })
+  const sources = input.sources ?? {
+    manifest: `manifest.json sha256 ${createHash("sha256").update(manifestText).digest("hex")}`,
+  }
+  const reportText = JSON.stringify({ ...input.report, sources }, null, 2)
   writeFileSync(join(dir, "report.json"), reportText)
-  writeFileSync(
-    join(dir, "manifest.json"),
-    JSON.stringify(input.manifest ?? { freeze: { date: "2026-12-01", digest: FREEZE } }),
-  )
+  writeFileSync(join(dir, "manifest.json"), manifestText)
   input.artifacts.forEach((item, index) => writeFileSync(join(dir, "outputs", `${index}.json`), JSON.stringify(item)))
   return {
     reportDigest: `sha256:${createHash("sha256").update(reportText).digest("hex")}`,
@@ -150,5 +153,79 @@ describe("certify.ts", () => {
     expect(long.stderr).toContain("days after approved.date")
 
     expect((await main(["--report", "x"])).code).toBe(2)
+  })
+
+  // Phase 1 review: the variant and the manifest came from the operator's flags alone.
+  test("takes the model variant from the runs, and refuses mixed variants or a --variant they do not bear out", async () => {
+    const high = (label: string) => artifact(label, { models: { review: { id: MODEL, variant: "high" } } })
+    const certificate = (result: { stdout: string }) =>
+      JSON.parse(result.stdout.slice(0, result.stdout.indexOf("\n\n"))) as ModelCertificate
+    // Left out, the variant is the runs' own; given, it must agree.
+    const implied = await main(files("variant", { report: report(), artifacts: [high("a"), high("b")] }).args())
+    expect(implied.stderr).toBe("")
+    expect(certificate(implied).variant).toBe("high")
+    const confirmed = await main(
+      files("variant-confirmed", { report: report(), artifacts: [high("a")] }).args(["--variant", "high"]),
+    )
+    expect(certificate(confirmed).variant).toBe("high")
+
+    const wrong = await main(
+      files("variant-wrong", { report: report(), artifacts: [high("a")] }).args(["--variant", "low"]),
+    )
+    expect(wrong.code).toBe(1)
+    expect(wrong.stderr).toContain("--variant low is not the model variant the candidate's runs used (high)")
+    const invented = await main(
+      files("variant-invented", { report: report(), artifacts: [artifact("a")] }).args(["--variant", "high"]),
+    )
+    expect(invented.code).toBe(1)
+    expect(invented.stderr).toContain("--variant high is not the model variant the candidate's runs used (none)")
+    const mixed = await main(files("variant-mixed", { report: report(), artifacts: [high("a"), artifact("b")] }).args())
+    expect(mixed.code).toBe(1)
+    expect(mixed.stderr).toContain("the candidate's runs used different model variants (high, none)")
+  })
+
+  test("refuses a manifest other than the one the report was built from", async () => {
+    const other = await main(
+      files("manifest-other", {
+        report: report(),
+        artifacts: [artifact("a")],
+        sources: { manifest: `manifest.json sha256 ${"d".repeat(64)}` },
+      }).args(),
+    )
+    expect(other.code).toBe(1)
+    expect(other.stderr).toContain("is not the manifest the report was built from")
+    const unrecorded = await main(
+      files("manifest-unrecorded", { report: report(), artifacts: [artifact("a")], sources: {} }).args(),
+    )
+    expect(unrecorded.code).toBe(1)
+    expect(unrecorded.stderr).toContain("the report does not record the manifest it was built from")
+  })
+
+  test("a pipeline variant's certificate covers that variant's runs only", async () => {
+    const shared = (label: string) =>
+      artifact(label, { variant: { verifyPolicy: "shared" }, scope: { ...SCOPE, policy: "1".repeat(16) } })
+    // The frozen pipeline's runs of the same model are not the shared variant's, and do not mix their scope in.
+    const result = await main(
+      files("pipeline-variant", {
+        report: report({ variant: "engine:shared-verify" }),
+        artifacts: [shared("a"), shared("b"), artifact("a"), artifact("b")],
+      }).args(),
+    )
+    expect(result.stderr).toBe("")
+    expect(JSON.parse(result.stdout.slice(0, result.stdout.indexOf("\n\n"))).policy).toBe("1".repeat(16))
+    // A desktop replay whose variant never reached the runner is not one of the variant's runs.
+    const unapplied = await main(
+      files("pipeline-unapplied", {
+        report: report({ variant: "desktop:shared-verify" }),
+        artifacts: [true, false].map((applied, index) => ({
+          ...shared(String(index)),
+          adapter: "desktop",
+          variant: { verifyPolicy: "shared", applied },
+          scope: { ...SCOPE, adapter: "desktop", policy: "1".repeat(16) },
+        })),
+      }).args(),
+    )
+    expect(unapplied.code).toBe(1)
+    expect(unapplied.stderr).toContain("asked for the variant, but it never reached the runner")
   })
 })

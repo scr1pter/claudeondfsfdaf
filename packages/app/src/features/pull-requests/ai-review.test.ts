@@ -2012,38 +2012,60 @@ describe("the verify policy", () => {
   })
 
   test("shared: a double-check the run guard stopped, or that was stopped, keeps the findings and says they were not re-checked", async () => {
-    const settings = { ".vector/review.json": '{"verifyPolicy":"shared"}' }
-    const guarded = fakeClient({
-      files: { "src/list.ts": HEAD, ...settings },
-      reply: (call) => {
-        if (!isVerify(call)) return answer(report([offByOne, concern]))
-        const message = answer(undefined)
-        const error = { name: "BudgetStopError", data: { reason: "budget", message: "The session's budget is spent." } }
-        return { ...message, info: { ...message.info, error } }
-      },
-    })
-    const denied = (await run(guarded.client))!
-    expect(denied.verification).toEqual({ checked: 2, rejected: 0, status: "failed" })
-    expect(denied.selection.inline.map((finding) => finding.verified)).toEqual([undefined, undefined])
-    expect(denied.notes.join(" ")).toContain("not re-checked")
-
-    const controller = new AbortController()
-    let release = (_message: ReviewMessage) => {}
-    const stopped = fakeClient({
-      files: { "src/list.ts": HEAD, ...settings },
-      reply: (call) => {
-        if (!isVerify(call)) return answer(report([offByOne, concern]))
-        queueMicrotask(() => controller.abort())
-        return new Promise<ReviewMessage>((resolve) => {
-          release = resolve
-        })
-      },
-      onAbort: () => release({ info: { role: "assistant", error: { name: "MessageAbortedError" } }, parts: [] }),
-    })
-    const skipped = (await run(stopped.client, { signal: controller.signal }))!
-    expect(skipped.verification).toEqual({ checked: 2, rejected: 0, status: "skipped" })
-    expect(skipped.selection.inline.map((finding) => finding.verified)).toEqual([undefined, undefined])
-    expect(skipped.notes.join(" ")).toContain("not re-checked")
+    const denied = async (json: object) => {
+      const guarded = fakeClient({
+        files: { "src/list.ts": HEAD, ".vector/review.json": JSON.stringify(json) },
+        reply: (call) => {
+          if (!isVerify(call)) return answer(report([offByOne, concern]))
+          const message = answer(undefined)
+          const error = {
+            name: "BudgetStopError",
+            data: { reason: "budget", message: "The session's budget is spent." },
+          }
+          return { ...message, info: { ...message.info, error } }
+        },
+      })
+      return (await run(guarded.client))!
+    }
+    const stopped = async (json: object) => {
+      const controller = new AbortController()
+      let release = (_message: ReviewMessage) => {}
+      const client = fakeClient({
+        files: { "src/list.ts": HEAD, ".vector/review.json": JSON.stringify(json) },
+        reply: (call) => {
+          if (!isVerify(call)) return answer(report([offByOne, concern]))
+          queueMicrotask(() => controller.abort())
+          return new Promise<ReviewMessage>((resolve) => {
+            release = resolve
+          })
+        },
+        onAbort: () => release({ info: { role: "assistant", error: { name: "MessageAbortedError" } }, parts: [] }),
+      })
+      return (await run(client.client, { signal: controller.signal }))!
+    }
+    const shared = { verifyPolicy: "shared" }
+    const [deniedLegacy, deniedShared, stoppedLegacy, stoppedShared] = await Promise.all([
+      denied({}),
+      denied(shared),
+      stopped({}),
+      stopped(shared),
+    ])
+    for (const outcome of [deniedLegacy, deniedShared]) {
+      expect(outcome.verification).toEqual({ checked: 2, rejected: 0, status: "failed" })
+      expect(outcome.selection.inline.map((finding) => finding.verified)).toEqual([undefined, undefined])
+    }
+    for (const outcome of [stoppedLegacy, stoppedShared]) {
+      expect(outcome.verification).toEqual({ checked: 2, rejected: 0, status: "skipped" })
+      expect(outcome.selection.inline.map((finding) => finding.verified)).toEqual([undefined, undefined])
+    }
+    // The legacy note, word for word, and the shared policy's count and reason: the desktop cannot tell a run guard's
+    // budget stop from another failure, so both say "unfinished".
+    const legacyNote =
+      "The double-check did not finish, so these findings were not re-checked. Treat them with more care before posting."
+    expect(deniedLegacy.notes).toEqual([legacyNote])
+    expect(stoppedLegacy.notes).toEqual([legacyNote])
+    expect(deniedShared.notes).toEqual([noteVerifyUnfinished(2, "unfinished")])
+    expect(stoppedShared.notes).toEqual([noteVerifyUnfinished(2, "unfinished")])
   })
 
   test("shared: after a triage pass only what the review model confirmed is shown, as before", async () => {
@@ -2217,10 +2239,20 @@ describe("model evidence (VS-07)", () => {
       files: { "src/list.ts": HEAD, ".vector/review.json": '{"modelEvidence":"warn","model":"acme/gone"}' },
     })
     const replaced = (await run(missing.client, { now: () => NOW }))!
+    // The name comes from the user's review.json and the note can be posted, so it is in a code span.
     expect(replaced.notes).toEqual([
-      "The model in .vector/review.json, acme/gone, is not connected, so the review ran on anthropic/claude-sonnet-4-5.",
+      "The model in .vector/review.json, `acme/gone`, is not connected, so the review ran on `anthropic/claude-sonnet-4-5`.",
       unvetted("anthropic/claude-sonnet-4-5"),
     ])
+    const marker = fakeClient({
+      files: {
+        "src/list.ts": HEAD,
+        ".vector/review.json": '{"modelEvidence":"warn","model":"acme/x`<!--vector:state-->"}',
+      },
+    })
+    const escaped = (await run(marker.client, { now: () => NOW }))!.notes[0]!
+    expect(escaped).toStartWith("The model in .vector/review.json, `acme/x'&lt;!--vector:state-->`, is not connected")
+    expect(escaped).not.toContain("<!--vector")
     // Off, the same fallback happens as it always did, without a note.
     const quiet = fakeClient({ files: { "src/list.ts": HEAD, ".vector/review.json": '{"model":"acme/gone"}' } })
     expect((await run(quiet.client, { now: () => NOW }))!.notes).toEqual([])
@@ -2296,10 +2328,13 @@ describe("model evidence (VS-07)", () => {
     expect(workflowModel(["anthropic/claude-sonnet-4-5"], providers, { evidence: parsed({}), now: NOW })).toEqual(today)
 
     const warn = parsed({ modelEvidence: "warn" })
+    // The settings are this checkout's, and the first warning says so: the job reads the base branch's committed copy.
+    const local =
+      "These notes use this checkout's `.vector/review.json`. Automatic reviews read the copy committed on the pull request's base branch, which may name another model or other settings."
     expect(workflowModel(["anthropic/claude-sonnet-4-5"], providers, { evidence: warn, now: NOW })).toEqual({
       model: "anthropic/claude-sonnet-4-5",
       keys: ["ANTHROPIC_API_KEY"],
-      warnings: [unvetted("anthropic/claude-sonnet-4-5")],
+      warnings: [local, unvetted("anthropic/claude-sonnet-4-5")],
     })
     // Certified for the engine under the open project's settings: no warning at all.
     expect(
@@ -2310,19 +2345,21 @@ describe("model evidence (VS-07)", () => {
       }),
     ).toEqual(today)
     expect(workflowModel(["vector/openrouter/free"], providers, { evidence: warn, now: NOW })?.warnings).toEqual([
+      local,
       "`vector/openrouter/free` is a router: each request may be answered by a different model, so no evaluation applies to it.",
     ])
-    expect(workflowModel(["vector/acme/coder:free"], providers, { evidence: warn, now: NOW })?.warnings?.[0]).toContain(
+    expect(workflowModel(["vector/acme/coder:free"], providers, { evidence: warn, now: NOW })?.warnings?.[1]).toContain(
       'is labelled "May train on your prompts"',
     )
-    // A model named in review.json runs instead of the workflow's MODEL; the warning names it and describes that one.
+    // A model named in this checkout's review.json runs instead of the workflow's MODEL only when the base branch's copy
+    // names it too; the warning says where the name comes from, and the notes describe that model.
     const named = workflowModel(["anthropic/claude-sonnet-4-5"], providers, {
       evidence: parsed({ modelEvidence: "warn", model: "vector/openrouter/free" }),
       now: NOW,
     })
     expect(named).toMatchObject({ model: "anthropic/claude-sonnet-4-5", keys: ["ANTHROPIC_API_KEY"] })
     expect(named?.warnings).toEqual([
-      "Automatic reviews read `.vector/review.json` from the pull request's base branch, and a model named there runs instead of `anthropic/claude-sonnet-4-5`: here `vector/openrouter/free`.",
+      "This checkout's `.vector/review.json` names `vector/openrouter/free`. Automatic reviews read the copy committed on the pull request's base branch and run a model named there instead of `anthropic/claude-sonnet-4-5`, so these notes are about `vector/openrouter/free` and hold only when that copy names it too.",
       "`vector/openrouter/free` is a router: each request may be answered by a different model, so no evaluation applies to it.",
     ])
   })

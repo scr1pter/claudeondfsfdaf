@@ -411,7 +411,8 @@ describe("saved replay artifacts", () => {
     ledger.admit({ case: key, kind: "provider", model: "m", note: "replay", estimateUsd: 1 })
     return [...ledger.entries]
   }
-  const key = `vendor/reviewer-large + vendor/triage-small ${bug.id}#1`
+  // admitReplay's case: the pipeline variant, the models, the case and the repetition.
+  const key = `engine vendor/reviewer-large + vendor/triage-small ${bug.id}#1`
 
   test("propose the reviewers' findings and post what selection kept and the writes carried", () => {
     const run = fromArtifact(artifact(), seed, journal(key))
@@ -437,6 +438,25 @@ describe("saved replay artifacts", () => {
     expect(run.spend).toEqual({ costUsd: 0.05, uncertainUsd: 0.1, usageMissing: true, admitted: true })
     expect(run.tokens).toEqual({ input: 5000, output: 500 })
     expect(fromArtifact(artifact(), seed, []).spend.admitted).toBe(false)
+  })
+
+  // Phase 1 review: every engine artifact was "engine", so a variant's replays merged with the frozen pipeline's.
+  test("a variant's replays are their own run, admitted under their own case", () => {
+    const shared = artifact({ variant: { verifyPolicy: "shared" } })
+    const sharedKey = `engine:shared-verify vendor/reviewer-large + vendor/triage-small ${bug.id}#1`
+    expect(fromArtifact(shared, seed, journal(sharedKey))).toMatchObject({
+      variant: "engine:shared-verify",
+      model: "vendor/reviewer-large",
+      spend: { admitted: true },
+    })
+    // The frozen pipeline's admission does not account for the variant's paid attempts, nor the reverse.
+    expect(fromArtifact(shared, seed, journal(key)).spend.admitted).toBe(false)
+    expect(fromArtifact(artifact(), seed, journal(sharedKey)).spend.admitted).toBe(false)
+    // An explicit "legacy" is the frozen pipeline.
+    expect(fromArtifact(artifact({ variant: { verifyPolicy: "legacy" } }), seed, journal(key))).toMatchObject({
+      variant: "engine",
+      spend: { admitted: true },
+    })
   })
 
   test("partial, failed and empty replays are not complete", () => {
@@ -567,6 +587,41 @@ describe("report.ts", () => {
     expect(result.stdout).toContain("actionable finding(s) have no settled verdict")
     // The replay's paid attempts were never admitted by an eval ledger.
     expect(result.stdout).toContain("| maxUnaccountedAttempts | 0 | 1 |")
+  })
+
+  test("the frozen pipeline's and a variant's replays of one model are two groups that pair as baseline and candidate", async () => {
+    const dir = join(root, "variants")
+    mkdirSync(dir)
+    writeFileSync(join(dir, "legacy.json"), JSON.stringify(artifact()))
+    writeFileSync(join(dir, "shared.json"), JSON.stringify(artifact({ variant: { verifyPolicy: "shared" } })))
+    const loaded = await loadOutputs({ paths: [dir] })
+    const development = seed.cases.filter((item) => item.split === "development")
+    expect(loaded.runs.map((run) => [run.variant, run.model])).toEqual([
+      ["engine", "vendor/reviewer-large"],
+      ["engine:shared-verify", "vendor/reviewer-large"],
+    ])
+    // Each group plans every case of the split.
+    expect(loaded.plan.filter((entry) => entry.variant === "engine")).toHaveLength(development.length)
+    expect(loaded.plan.filter((entry) => entry.variant === "engine:shared-verify")).toHaveLength(development.length)
+    const out = join(root, "variants-report.json")
+    const result = await main([
+      "--outputs",
+      dir,
+      "--candidate",
+      "engine:shared-verify=vendor/reviewer-large",
+      "--baseline",
+      "engine=vendor/reviewer-large",
+      "--out",
+      out,
+    ])
+    expect(result.code).toBe(0)
+    expect(result.stdout).toContain("## engine · vendor/reviewer-large")
+    expect(result.stdout).toContain("## engine:shared-verify · vendor/reviewer-large")
+    const saved = await Bun.file(out).json()
+    expect(saved.groups.map((group: { variant: string }) => group.variant)).toEqual(["engine", "engine:shared-verify"])
+    expect(saved.decision.candidate).toEqual({ variant: "engine:shared-verify", model: "vendor/reviewer-large" })
+    expect(saved.decision.baseline).toEqual({ variant: "engine", model: "vendor/reviewer-large" })
+    expect(saved.problems.join(" ")).not.toContain("has no planned runs")
   })
 
   test("refuses output inside the repository, an unknown split and an invalid gate", async () => {

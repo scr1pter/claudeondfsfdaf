@@ -156,6 +156,9 @@ export interface ReplayArtifact {
   trust: Trust
   trigger: Trigger
   config: { digest: string; warnings: string[]; value: ReviewConfig }
+  // The pipeline variant the eval asked for, when it set one (VS-06's verify policy), so the report can tell a
+  // variant's replays from the frozen pipeline's.
+  variant?: { verifyPolicy: ReviewConfig["verifyPolicy"] }
   // What a model certificate (core model-evidence.ts, VS-07) made from this replay would cover: the runner, pipeline
   // revision, prompts, review settings and triage model.
   scope: EvidenceScope
@@ -333,6 +336,7 @@ export const replay = Effect.fn("ReviewEval.replay")(function* (input: ReplayInp
     trust: item.trust,
     trigger,
     config: { digest: digest(config), warnings: parsed.warnings, value: config },
+    ...(policy ? { variant: { verifyPolicy: policy } } : {}),
     scope: evidenceScope({ adapter: "engine", config, ...(triaged ? { triage: triaged } : {}) }),
     rules: { digest: digest(rules) },
     models: { review: modelRecord(input.model), ...(input.triage ? { triage: modelRecord(input.triage) } : {}) },

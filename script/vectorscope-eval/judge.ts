@@ -19,6 +19,7 @@ import {
 } from "../../packages/core/src/review/eval-judge"
 import { estimateUsd, type Ledger, type Price } from "./budget"
 import { outsideRepository, REPO_ROOT } from "./paths"
+import { replayCaseKey } from "./replay"
 import { JUDGEMENTS_SCHEMA, loadOutputs, readJudgements, type JudgementFile } from "./report"
 
 // Blinded judging of saved eval outputs (VectorScope plan, VS-04). A coordinator keeps the judgement file, which holds
@@ -83,11 +84,17 @@ export function ledgerAdmission(
   }
 }
 
-// The case a run is charged to in the eval ledger, named as run.ts and admitReplay name it.
+// The case a run is charged to in the eval ledger, named as run.ts and admitReplay name it: a replay's variant is part
+// of its case, so judging one variant's replay never takes from another variant's bound.
 export function ledgerCase(run: EvalRun) {
   return run.variant === "single-prompt"
     ? `${run.model} ${run.case}#${run.repetition}`
-    : `${(run.models ?? [run.model]).join(" + ")} ${run.case}#${run.repetition}`
+    : replayCaseKey({
+        variant: run.variant,
+        models: run.models ?? [run.model],
+        id: run.case,
+        repetition: run.repetition,
+      })
 }
 
 // A filled worksheet as a judge: its answers, by task.

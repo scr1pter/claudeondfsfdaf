@@ -1,8 +1,12 @@
 import { describe, expect, test } from "bun:test"
+import { readFileSync } from "node:fs"
+import path from "node:path"
 import { FREE_MODEL_TRAINING_LABEL } from "@vectordevai/core/free-model-choice"
 import { DEFAULT_GATE, gateDigest } from "@vectordevai/core/review/eval-report"
+import { fnv1a64 } from "@vectordevai/core/review/fingerprint"
 import {
   assessReview,
+  canonicalPrompts,
   certificateProblems,
   certify,
   evidenceScope,
@@ -12,12 +16,29 @@ import {
   policyDigest,
   promptsDigest,
   REVIEW_PIPELINE_REVISION,
+  REVIEW_PIPELINE_SOURCES,
   routedModel,
   type EvidenceScope,
   type ModelCertificate,
   type ModelSubject,
 } from "@vectordevai/core/review/model-evidence"
 import { DEFAULT_REVIEW_CONFIG } from "@vectordevai/core/review/types"
+
+// The review pipeline's sources, from the repository root: both runners, the core code they share for planning,
+// packing, selection, anchoring and the prompts (whose length limits promptsDigest cannot see), and the review and
+// security agents' own prompts. REVIEW_PIPELINE_SOURCES pins a digest of them.
+const REVIEW_PIPELINE_FILES = [
+  "packages/engine/src/review/run.ts",
+  "packages/app/src/features/pull-requests/ai-review.ts",
+  "packages/core/src/review/plan.ts",
+  "packages/core/src/review/pack.ts",
+  "packages/core/src/review/select.ts",
+  "packages/core/src/review/diff.ts",
+  "packages/core/src/review/fingerprint.ts",
+  "packages/core/src/review/prompt.ts",
+  "packages/engine/src/agent/prompt/review.txt",
+  "packages/engine/src/agent/prompt/security.txt",
+]
 
 // Model evidence (VS-07) over synthetic certificates. No real certificate exists: MODEL_EVIDENCE is empty until the
 // owner approves one from a held-out run.
@@ -98,6 +119,67 @@ describe("scope", () => {
       adapter: "desktop",
       triage: "acme/cheap",
     })
+  })
+
+  // Phase 1 review: the digest rendered bare inputs only, so a section a prompt shows only when it has something to show
+  // could change without changing it.
+  test("the prompts digest renders every section a prompt can have, with and without nits, uncommitted too", () => {
+    const text = canonicalPrompts().join("\n")
+    for (const section of [
+      "## Open findings",
+      "<open_findings>",
+      "## Focus",
+      "<focus>",
+      "were reviewed before; their diff is shown without context lines",
+      "The last review was of",
+      "<untrusted_pr_title>",
+      "<untrusted_pr_body>",
+      "<untrusted_commits>",
+      "<untrusted_diff>",
+      "<untrusted_changed_files_not_inlined>",
+      "open them yourself",
+      "their pull request versions are in `<untrusted_pr_file>` blocks when they fit",
+      'annotated="true"',
+      "<related_code>",
+      "<ci_checks>",
+      "<untrusted_ci_log",
+      "<untrusted_linked_requirements>",
+      "<history>",
+      "<untrusted_comments>",
+      "<team_dismissed>",
+      "the repository root",
+      "<repository_instructions",
+      "<review_rules",
+      "Nit means a clarity or style point",
+      "Do not report nits.",
+      "- Formatting, or anything a linter catches.",
+      "- Style, formatting, naming, comments, wording",
+      "Reviewing the uncommitted changes in the working tree",
+      "the uncommitted changes in the working tree.",
+      "<untrusted_fixed_claim",
+      "Each `<untrusted_fixed_claim>`",
+      "<how_the_owner_reviews>",
+      "Stop investigating.",
+      "Anything that is not a security defect.",
+      "The working tree is the base branch.",
+    ])
+      expect(text).toContain(section)
+  })
+
+  // The runners and the core code they share have no digest a review can compute, so this pins one: a change to any of
+  // these files fails here until someone decides whether REVIEW_PIPELINE_REVISION goes up and updates the pin.
+  test("the pipeline's sources are pinned next to REVIEW_PIPELINE_REVISION", () => {
+    const root = path.join(import.meta.dir, "..", "..", "..", "..")
+    const digest = fnv1a64(
+      REVIEW_PIPELINE_FILES.map(
+        (file) => `${file}\n${readFileSync(path.join(root, file), "utf8").replace(/\r\n/g, "\n")}`,
+      ).join("\0"),
+    )
+    if (digest !== REVIEW_PIPELINE_SOURCES)
+      throw new Error(
+        `The review pipeline's sources changed (${REVIEW_PIPELINE_FILES.join(", ")}). If the change alters what a review finds or posts, bump REVIEW_PIPELINE_REVISION (REVIEW_PIPELINE_REVISION is ${REVIEW_PIPELINE_REVISION}). Then set REVIEW_PIPELINE_SOURCES in packages/core/src/review/model-evidence.ts to "${digest}".`,
+      )
+    expect(digest).toBe(REVIEW_PIPELINE_SOURCES)
   })
 
   test("the policy digest follows the settings that change what is found or posted, and no others", () => {

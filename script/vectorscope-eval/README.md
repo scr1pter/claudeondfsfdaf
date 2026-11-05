@@ -417,8 +417,13 @@ bun script/vectorscope-eval/replay.ts --mirrors <dir> --prepare <out>
   `{ "verifyPolicy": "shared" }` against the frozen pipeline's default
   (`"legacy"`). The replay reads it as a repository that opted in would be: the
   base's own `verify` still wins, and without one the policy's default, `all`,
-  applies. The shared policy becomes the product default only after this
-  comparison of precision, recall and spend passes the D2 gate (D3).
+  applies. The artifact's `variant` records the variant the eval asked for, so
+  `report.ts` names those runs `engine:shared-verify` and the frozen
+  pipeline's `engine`: two groups per model, compared with
+  `--candidate engine:shared-verify=<model> --baseline engine=<model>`. Each
+  variant of a case is admitted, bounded and charged on its own. The shared
+  policy becomes the product default only after this comparison of
+  precision, recall and spend passes the D2 gate (D3).
 - An untrusted case replays only under the GitHub review job's isolation:
   `VECTOR_PURE=1` and `VECTOR_DISABLE_PROJECT_CONFIG=1`, with the provider and
   `lsp`, `formatter` and `snapshot` off in `VECTOR_CONFIG_CONTENT`, as the
@@ -446,14 +451,21 @@ bun script/vectorscope-eval/replay.ts --mirrors <dir> --prepare <out>
 - `desktopReplay` takes the verify policy variant as the engine replay does,
   `config: { verifyPolicy: "shared" }`. The desktop reads no environment, so
   the variant reaches it as the case's own `.vector/review.json` would carry
-  it: the base's file with `verifyPolicy` set, its `verify` kept. The runner
-  never reads a `review.json` that the change itself edits, so the artifact's
-  `variant.applied` says whether the variant reached it; a case with
-  `applied: false` ran under the defaults and is left out of the comparison.
+  it: the base's file with `verifyPolicy` set, its `verify` kept. Only the
+  runner's settings read gets that text; any later read of the file gets the
+  file as it is. The runner never takes settings from a `review.json` the
+  change itself edits, so for such a case, decided from the diff before the
+  runner starts, the driver does not touch the file, the artifact's scope is
+  the defaults' and `variant.applied` is `false`. Such a case ran without the
+  variant and must be left out of a comparison. `report.ts` does not load
+  desktop artifacts yet, so the desktop comparison cannot be run there until
+  it does, and `certify.ts` refuses a variant's run that was not applied.
 
 Nothing here sends a model request. A replay that spends money is admitted by
 the eval budget ledger: `admitReplay` reserves the case's whole bound before
-the replay starts and passes it to `Review.run` as the review's cap, so each
+the replay starts, under a case named by the pipeline variant, the models, the
+case and the repetition, and passes the bound, with the variant, to
+`Review.run` as the review's cap and config, so each
 provider attempt the review admits, retries and the finalizer included, is
 covered by money the ledger set aside. Afterwards the case settles at its
 artifact's reported costs, with unsettled or incomplete attempts kept at their
@@ -592,12 +604,19 @@ bun script/vectorscope-eval/certify.ts --report <report.json> --outputs <dir> --
   runner, `REVIEW_PIPELINE_REVISION`, a digest of the core prompts and output
   schemas, a digest of the review settings that change what is found or posted
   (`EVIDENCE_POLICY_KEYS`) and the triage model. A certificate covers a review
-  only in the same scope.
+  only in the same scope. The prompts digest renders every section a prompt
+  can have. A change to the runners or the core code they share is caught by
+  `REVIEW_PIPELINE_SOURCES`, a digest of those files that core
+  `test/review/model-evidence.test.ts` pins: CI fails until someone decides
+  whether the revision goes up and updates the pin.
 - **The certificate.** `certify.ts` reads the JSON report `report.ts --out`
   wrote, the candidate's artifacts and the frozen manifest. It prints a
   certificate only when the gate passed with a release decision, the
-  manifest's held-out labels are frozen and every one of the candidate's runs
-  shares one scope. The certificate names the report file by digest, the
+  manifest's held-out labels are frozen, the manifest is the one the report
+  records by sha256, and every one of the candidate's runs (its model and
+  pipeline variant) shares one scope and one model variant. The model variant
+  comes from the artifacts; `--variant` only confirms it. The certificate
+  names the report file by digest, the
   manifest by its freeze digest, the gate by its digest and the day the
   results were collected. The owner gives the approval day and the expiry, at
   most 90 days later (`MAX_CERTIFICATE_DAYS`).

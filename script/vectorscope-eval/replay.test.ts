@@ -19,6 +19,8 @@ import {
   replayBudget,
   replayCharge,
   replayPlan,
+  replayVariant,
+  variantAdapter,
   type PlannedReplay,
 } from "./replay"
 
@@ -30,7 +32,7 @@ afterAll(() => rmSync(root, { recursive: true, force: true }))
 
 const mirror = buildMirror(join(root, "mirror"))
 
-function buildMirror(dir: string, extra: Record<string, string> = {}) {
+function buildMirror(dir: string, extra: Record<string, string> = {}, headExtra: Record<string, string> = {}) {
   mkdirSync(dir, { recursive: true })
   const env = {
     ...gitEnv(),
@@ -57,7 +59,7 @@ function buildMirror(dir: string, extra: Record<string, string> = {}) {
   }
   git("init", "--quiet", "--initial-branch=main")
   const base = commit("base", { "app.py": "def total(items):\n    return sum(items)\n", ...extra })
-  const head = commit("candidate", { "app.py": "def total(items):\n    return sum(items[1:])\n" })
+  const head = commit("candidate", { "app.py": "def total(items):\n    return sum(items[1:])\n", ...headExtra })
   const fix = commit("fix", { "app.py": "def total(items):\n    # every item counts\n    return sum(items)\n" })
   return { dir, base, head, fix }
 }
@@ -201,6 +203,32 @@ describe("replay admission", () => {
     admitReplay(ledger, { id: "case-b", models: [priced] })
     admitReplay(ledger, { id: "case-c", models: [priced] })
     expect(admitReplay(ledger, { id: "case-d", models: [priced] })).toMatchObject({ admitted: false, reason: "budget" })
+  })
+
+  // Phase 1 review: the case key had no variant, so a variant's replay of a case hit the bound the frozen pipeline's
+  // replay of it had reserved.
+  test("admits the frozen pipeline and a variant on one case separately, each with its own bound and config", () => {
+    const ledger = Ledger.open({ limits })
+    const legacy = admitReplay(ledger, { id: "case-a", models: [priced] })
+    const shared = admitReplay(ledger, { id: "case-a", models: [priced], variant: { verifyPolicy: "shared" } })
+    if (!legacy.admitted || !shared.admitted) throw new Error("both replays should be admitted")
+    // The variant goes into the replay's config, so the artifact names the variant it was admitted for.
+    expect(legacy.config).toEqual({ maxCostUsd: 3 })
+    expect(shared.config).toEqual({ maxCostUsd: 3, verifyPolicy: "shared" })
+    expect(ledger.summary().outstandingUsd).toBe(6)
+    expect(ledger.entries.flatMap((entry) => (entry.type === "admit" ? [entry.case] : []))).toEqual([
+      "engine test/review case-a#1",
+      "engine:shared-verify test/review case-a#1",
+    ])
+    expect(replayVariant("engine")).toBe("engine")
+    expect(replayVariant("engine", { verifyPolicy: "legacy" })).toBe("engine")
+    expect(replayVariant("desktop", { verifyPolicy: "shared" })).toBe("desktop:shared-verify")
+    expect(variantAdapter("engine:shared-verify")).toBe("engine")
+    // A second replay of the same variant and case is still held to that case's one bound.
+    expect(admitReplay(ledger, { id: "case-a", models: [priced], variant: { verifyPolicy: "shared" } })).toMatchObject({
+      admitted: false,
+      reason: "case",
+    })
   })
 
   test("refuses a model without a price, and the ledger stops admitting", () => {
@@ -460,6 +488,44 @@ describe("the desktop replay", () => {
     ])
   })
 
+  // Phase 1 review: the wrapper used to answer every read of review.json, the changed file's own reads included.
+  test("a case whose change edits review.json gets no variant: its own text, the default settings, applied false", async () => {
+    const edited = buildMirror(
+      join(root, "mirror-edits-settings"),
+      { ".vector/review.json": '{"verify":"blocking"}\n' },
+      { ".vector/review.json": '{"verify":"off"}\n' },
+    )
+    const caseView = { repository: view.repository, base: edited.base, head: edited.head }
+    const replay = async (name: string, config?: { verifyPolicy: "shared" }) => {
+      const directory = checkoutDirectory(join(root, `desktop-edits-${name}`), planned.id)
+      expect(prepareCheckout({ mirror: edited.dir, view: caseView, directory })).toEqual([])
+      const fake = fakeClient(directory)
+      const artifact = await desktopReplay({
+        planned: { ...planned, case: { ...planned.case, base: edited.base, head: edited.head } },
+        directory,
+        diff: candidateDiff(directory, caseView),
+        model,
+        client: fake.client,
+        ...(config ? { config } : {}),
+      })
+      return { artifact, prompts: fake.prompts }
+    }
+    const legacy = await replay("legacy")
+    const shared = await replay("shared", { verifyPolicy: "shared" })
+    for (const run of [legacy, shared]) expect(run.artifact.error).toBeUndefined()
+    expect(legacy.artifact.variant).toBeUndefined()
+    expect(shared.artifact.variant).toEqual({ verifyPolicy: "shared", applied: false })
+    // The runner ran under the defaults, and the scope says so, not the base's file or the variant.
+    for (const run of [legacy, shared])
+      expect(run.artifact.scope).toEqual(evidenceScope({ adapter: "desktop", config: DEFAULT_REVIEW_CONFIG }))
+    // The changed file is rebuilt from its own text, as without the variant, so both runs review the same change.
+    const settingsFile = (run: typeof legacy) =>
+      run.artifact.outcome?.checkout.headFiles.find((file) => file.path === ".vector/review.json")
+    expect(settingsFile(shared)).toEqual({ path: ".vector/review.json", text: '{"verify":"off"}\n', exact: true })
+    expect(shared.artifact.outcome?.checkout).toEqual(legacy.artifact.outcome?.checkout)
+    expect(shared.prompts).toEqual(legacy.prompts)
+  })
+
   test("the variant's settings go over the file's own, and the artifact says whether the runner read them", async () => {
     const files: Record<string, string> = {
       ".vector/review.json": '﻿{"verify":"off","verifyPolicy":"legacy"}',
@@ -482,6 +548,8 @@ describe("the desktop replay", () => {
     expect(kept.served()).toBe(false)
     expect(JSON.parse((await read(kept, ".vector/review.json"))!)).toEqual({ verify: "off", verifyPolicy: "shared" })
     expect(kept.served()).toBe(true)
+    // Only the first read is the settings read; a later one, such as a finding naming the file, gets the file as it is.
+    expect(await read(kept, ".vector/review.json")).toBe(files[".vector/review.json"])
     // A missing file, or one that is not a JSON object, reads as the variant's keys alone.
     for (const text of ["", "not json", "[1, 2]"])
       expect(JSON.parse((await read(settings(text), ".vector/review.json"))!)).toEqual({ verifyPolicy: "shared" })

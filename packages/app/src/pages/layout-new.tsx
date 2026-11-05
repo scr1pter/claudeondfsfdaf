@@ -1087,10 +1087,15 @@ export default function NewLayout(props: ParentProps) {
     parentSessionId: activeTaskScope().taskId,
   })
   // The open project's .vector/review.json when it opts into model evidence ("modelEvidence": "warn", VS-07): the
-  // automatic-review set-up then warns about its model under these settings. Read while the Pull Requests panel is
-  // open; undefined, and so off, when the file does not opt in or cannot be read.
+  // automatic-review set-up then warns about its model under these settings. Read only once the set-up card asks for
+  // its model (automaticReviewModel below), so opening the Pull Requests panel sends no new request; asked again each
+  // time the panel opens. Undefined, and so off, when the file does not opt in or cannot be read.
+  const [reviewEvidenceAsked, setReviewEvidenceAsked] = createSignal(false)
+  createEffect(() => {
+    if (!pullRequestsOpen()) setReviewEvidenceAsked(false)
+  })
   const [reviewModelEvidence] = createResource(
-    () => (pullRequestsOpen() ? activeWorkspaceScope().sourcePath : undefined),
+    () => (pullRequestsOpen() && reviewEvidenceAsked() ? activeWorkspaceScope().sourcePath : undefined),
     async (directory) => {
       const file = await Promise.resolve()
         .then(() =>
@@ -6906,9 +6911,12 @@ export default function NewLayout(props: ParentProps) {
             ? workingTreeChanges(serverSDK().createClient({ directory, throwOnError: true }), directory)
             : Promise.resolve(undefined)
         }}
-        automaticReviewModel={() =>
-          workflowModel(reviewModels(), byokProviders.connected(), { evidence: reviewModelEvidence() })
-        }
+        automaticReviewModel={() => {
+          // Only the automatic-review set-up card asks for this; its first ask starts the review.json read above,
+          // outside the computation that asked.
+          if (!reviewEvidenceAsked()) queueMicrotask(() => setReviewEvidenceAsked(true))
+          return workflowModel(reviewModels(), byokProviders.connected(), { evidence: reviewModelEvidence() })
+        }}
         onApplyFix={(fix) => {
           const directory = activeWorkspaceScope().sourcePath
           if (!directory) return Promise.reject(new Error("Open a repository before applying a fix."))

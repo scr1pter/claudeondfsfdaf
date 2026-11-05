@@ -592,3 +592,95 @@ which.
 - **Not user-facing in 1.99.113 (D14).** Nothing in the product sets the
   opt-in, the public docs page does not mention it, and no model is
   certified. VS-20's rollout flags and local model status can show it later.
+
+## 2026-11-04 · Phase 1 review
+
+The review's nine findings were each checked against the code. All were
+confirmed; two (the certificate's variant and manifest) were the same finding
+twice. All are fixed. Where a fix changes an earlier entry above, it says which.
+Every reviewer change is behind the existing opt-ins (`"verifyPolicy":
+"shared"`, `"modelEvidence": "warn"`), apart from the setup card's file read,
+which now happens less. With both off, both runners send the same requests and
+give the same outcome as before; the existing D3 tests still show it. No
+generator input changed.
+
+- **A variant has an identity in the eval (VS-06; amends "The eval can measure
+  it" and "Still not measured" above).** The engine replay artifact records
+  the variant the eval asked for (`variant`, engine `review/eval.ts`), and
+  `report.ts` names its runs with `replayVariant`: `engine` for the frozen
+  pipeline and `engine:shared-verify` for the shared verify policy, so one
+  model's two pipelines are two groups that pair under `--candidate` and
+  `--baseline`. The review suggested `engine:verify=shared`; the name has no
+  `=` because `--candidate <variant>=<model>` splits on the first one. The
+  eval ledger's case for a replay (`replayCaseKey`) now starts with that name,
+  in `admitReplay`, in the report's admission lookup and in the judge's
+  charges (`ledgerCase`), so each variant of a case is admitted against its
+  own bound. `admitReplay` also returns the variant in the replay's config, so
+  the artifact names the variant it was admitted for. The engine comparison
+  can now be run once paid replays exist; nothing has been run (D5, D12). The
+  desktop's cannot yet: `report.ts` still does not load desktop artifacts, so
+  the earlier claim that a desktop case with `applied: false` "is left out of
+  the comparison" described no code. The README now says such a case must be
+  left out once the report reads desktop artifacts, and `certify.ts` refuses
+  a variant's desktop run that was not applied.
+- **The desktop driver touches only the settings read (VS-06; amends "The
+  desktop eval driver takes the variant" above).** `desktopReplay` decides from
+  the diff, by the runner's own rule, whether the change touches
+  `.vector/review.json`. If it does, the client is not wrapped, the scope is
+  the defaults' and `variant.applied` is `false`. Otherwise only the first read
+  of the file, the runner's settings read, gets the variant, and later reads
+  (a finding that names the file) get the file as it is. The scope is built
+  from that first read only. Before this, every read of the file was answered,
+  so a case that edited it reviewed a corrupted file and said the variant had
+  applied.
+- **The prompts digest renders every section, and the pipeline's sources are
+  pinned (VS-07; replaces "A change to either runner's code is caught only by
+  bumping `REVIEW_PIPELINE_REVISION` ... A prompt or schema change is caught
+  without a bump" above).** `promptsDigest` now hashes `canonicalPrompts()`:
+  each pass's prompt bare and with every optional input set (full and
+  incremental, nits on and off, a commit and uncommitted changes), the verify
+  prompt with fixed claims and annotated files, and the owner's memory block.
+  A test checks that every conditional section is in it. It still cannot see
+  a runner filling those inputs differently, or a change to the prompts'
+  length limits. So `REVIEW_PIPELINE_SOURCES` in `model-evidence.ts` holds a
+  digest of ten files, which core `test/review/model-evidence.test.ts` pins:
+  both runners, core `plan.ts`, `pack.ts`, `select.ts`, `diff.ts`,
+  `fingerprint.ts` and `prompt.ts`, and the engine's `review.txt` and
+  `security.txt` agent prompts. Any edit to one of them, a merge from `main`
+  included, fails that test until someone decides whether
+  `REVIEW_PIPELINE_REVISION` goes up and updates the pin; the failure says how.
+  That is the plan's "certification expires when the ... pipeline changes",
+  enforced by CI rather than by memory.
+- **The certificate's variant and manifest come from the evidence (VS-07;
+  amends "Eval artifacts (VS-02 adapters) and a new script" above).**
+  `certify.ts` takes the model variant from the candidate's artifacts
+  (`models.review.variant`), refuses runs with different variants, and keeps
+  `--variant` only as a check that must agree. It hashes the `--manifest` file
+  and refuses unless the sha256 matches the one the report records in
+  `sources.manifest`. It picks the candidate's runs by model and pipeline
+  variant.
+- **The setup card says whose settings it read, and reads them later (VS-07;
+  amends "Workflow setup" above).** The warnings now start by saying they use
+  this checkout's `.vector/review.json` and that automatic reviews read the
+  copy committed on the pull request's base branch. A model named locally is
+  described as that, holding only when the base branch's copy names it too.
+  `layout-new.tsx` reads the file only once the set-up card asks for its
+  model, and again each time the panel opens, so opening the Pull Requests
+  panel no longer sends that request.
+- **The setup card's warnings move to V25's card after the @vector merge
+  (VS-07 and VS-20; amends "Nothing is left for VS-05 from VS-07" above).**
+  Nothing is left for VS-05. The plan's VS-20 route says V25's "Set up @vector"
+  card replaces the auto-review setup in `pull-requests.tsx` and that
+  VectorScope's status joins it through props agreed with the @vector owner,
+  not a second card. So after the merge, the model evidence warnings
+  (`WorkflowModel.warnings`) must move into V25's card through such props, as
+  part of VS-20's GitHub half. Until then they stay in today's card behind the
+  opt-in.
+- **A posted note names a model in a code span (VS-07).** The desktop note for
+  a review.json model that is not connected now wraps that name, and the model
+  the review ran on, in `codeSpan`, which escapes Vector's markers, since
+  desktop notes reach what the Post button sends.
+- **Desktop tests pin the notes (VS-06).** The test of a double-check the run
+  guard stopped, or that was stopped, now expects the shared policy's exact
+  note (`noteVerifyUnfinished(2, "unfinished")`) and the legacy note word for
+  word, for both cases, where it only looked for "not re-checked".

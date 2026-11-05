@@ -22,15 +22,24 @@ import {
   buildReviewPrompt,
   buildSecurityPrompt,
   buildVerifyPrompt,
+  ownerBlock,
   type PromptInput,
+  type VerifyPromptInput,
 } from "./prompt"
 import { REVIEW_REPORT_JSON_SCHEMA, VERIFY_JSON_SCHEMA } from "./schema"
-import type { Finding, ReviewConfig } from "./types"
+import type { Finding, PriorFinding, ReviewConfig } from "./types"
 
-// Bump when a change to either runner (engine review/run.ts, the desktop's ai-review.ts) or to the review agent's own
-// prompt changes what a review finds or posts: every certificate made before it then stops applying. Changes to the
-// core prompts and output schemas are caught by promptsDigest without a bump.
+// Bump when a change to the review pipeline changes what a review finds or posts: either runner (engine review/run.ts,
+// the desktop's ai-review.ts), the core code they share for planning, packing, selection and anchoring, or the review
+// and security agents' own prompts. Every certificate made before it then stops applying. promptsDigest catches a
+// change to the text of the core prompts and output schemas without a bump, since it renders every section a prompt
+// can have; it cannot see a runner filling those inputs differently or a change to the prompts' length limits.
 export const REVIEW_PIPELINE_REVISION = 1
+
+// A digest of the pipeline's sources (REVIEW_PIPELINE_FILES in core test/review/model-evidence.test.ts), which that
+// test pins, so CI fails when one of them changes and nobody decided whether REVIEW_PIPELINE_REVISION goes up. When it
+// fails: bump the revision if the change alters what a review finds or posts, then set this to the digest it prints.
+export const REVIEW_PIPELINE_SOURCES = "cebdc594212560b1"
 
 // The longest a certificate may run from its approval. The plan asks for an expiry and sets none; a hosted model can
 // change underneath its id, so the evidence is re-earned on this cadence.
@@ -153,29 +162,94 @@ const CANONICAL_INPUT: PromptInput = {
   maxComments: 10,
 }
 
+const CANONICAL_PRIOR: PriorFinding = {
+  id: "111111111111",
+  where: "inline",
+  path: "src/example.ts",
+  line: 1,
+  side: "RIGHT",
+  severity: "concern",
+  category: "bug",
+  title: "Example",
+  sha: "1".repeat(40),
+  status: "open",
+}
+
+// Every optional input set, so every section a prompt renders only when it has something to show is in the digest:
+// the pull request's title, body and commits, open findings, the diff and the files left out of it, annotated and
+// exact head files, related code, CI checks, linked requirements, history, comments, the team's dismissals, the
+// repository's instructions and review rules, and an incremental review's focus and settled files.
+const POPULATED_INPUT: PromptInput = {
+  ...CANONICAL_INPUT,
+  baseRef: "main",
+  pr: { number: 1, title: "Example", body: "Example.", author: "example", commits: ["Example"] },
+  diff: "diff --git a/src/example.ts b/src/example.ts",
+  notInlined: [{ path: "src/other.ts", additions: 1, deletions: 1 }],
+  focus: [{ path: "src/example.ts", start: 1, end: 2 }],
+  headFiles: [
+    { path: "src/example.ts", text: "example", exact: true },
+    { path: "src/annotated.ts", text: "1 + example", exact: true, annotated: true },
+  ],
+  related: [
+    { symbol: "example", path: "src/example.ts", hits: [{ path: "src/caller.ts", line: 1, text: "example()" }] },
+  ],
+  history: [{ path: "src/example.ts", text: "1111111 Example" }],
+  requirements: "[R1] Example.",
+  instructions: "Example.",
+  checks: [
+    { name: "test", conclusion: "failure", excerpt: "Example." },
+    { name: "lint", conclusion: "" },
+  ],
+  rules: "Example.",
+  teamDismissed: [
+    { category: "style", dir: "", words: ["example"] },
+    { category: "bug", dir: "src", words: ["example"] },
+  ],
+  humanComments: [{ author: "example", association: "MEMBER", path: "src/example.ts", line: 1, body: "Example." }],
+  prior: [CANONICAL_PRIOR],
+  settled: ["src/settled.ts"],
+}
+
+const POPULATED_VERIFY: Omit<VerifyPromptInput, "trust"> = {
+  head: CANONICAL_INPUT.head,
+  uncommitted: true,
+  candidates: [CANONICAL_FINDING],
+  fixed: [{ ...CANONICAL_PRIOR, reason: "Example." }],
+  headFiles: POPULATED_INPUT.headFiles,
+}
+
+// The prompts promptsDigest is built from, for its test: for trusted and untrusted reviews, the review and security
+// prompts bare and with every input set (full and incremental, with and without nits, a commit and uncommitted
+// changes), the verify prompt bare and with every input set, the finalizer and the owner's memory block.
+export function canonicalPrompts(): string[] {
+  return [
+    ...(["trusted", "untrusted"] as const).flatMap((trust) => {
+      const headFiles = trust === "untrusted" ? [{ path: "src/example.ts", text: "", exact: true }] : undefined
+      const inputs: PromptInput[] = [
+        { ...CANONICAL_INPUT, trust, ...(headFiles ? { headFiles } : {}) },
+        { ...CANONICAL_INPUT, trust, mode: "incremental", since: "2".repeat(40) },
+        { ...POPULATED_INPUT, trust, nits: true },
+        { ...POPULATED_INPUT, trust, nits: false, uncommitted: true },
+        { ...POPULATED_INPUT, trust, mode: "incremental", since: "2".repeat(40), nits: true },
+        { ...POPULATED_INPUT, trust, mode: "incremental", since: "2".repeat(40), uncommitted: true },
+      ]
+      return [
+        ...inputs.flatMap((input) => [buildReviewPrompt(input), buildSecurityPrompt(input)]),
+        buildVerifyPrompt({ trust, head: CANONICAL_INPUT.head, candidates: [CANONICAL_FINDING] }),
+        buildVerifyPrompt({ ...POPULATED_VERIFY, trust }),
+      ]
+    }),
+    buildFinalizePrompt(),
+    ownerBlock(["Example."]),
+  ]
+}
+
 let prompts: string | undefined
 
 // A digest of the core review prompts and output schemas, built from fixed inputs so it changes only when their text
-// does: trusted and untrusted, full and incremental, each pass and the finalizer.
+// does (canonicalPrompts).
 export function promptsDigest(): string {
-  prompts ??= fnv1a64(
-    JSON.stringify([
-      ...(["trusted", "untrusted"] as const).flatMap((trust) => {
-        const headFiles = trust === "untrusted" ? [{ path: "src/example.ts", text: "", exact: true }] : undefined
-        const inputs: PromptInput[] = [
-          { ...CANONICAL_INPUT, trust, ...(headFiles ? { headFiles } : {}) },
-          { ...CANONICAL_INPUT, trust, mode: "incremental", since: "2".repeat(40) },
-        ]
-        return [
-          ...inputs.flatMap((input) => [buildReviewPrompt(input), buildSecurityPrompt(input)]),
-          buildVerifyPrompt({ trust, head: CANONICAL_INPUT.head, candidates: [CANONICAL_FINDING] }),
-        ]
-      }),
-      buildFinalizePrompt(),
-      REVIEW_REPORT_JSON_SCHEMA,
-      VERIFY_JSON_SCHEMA,
-    ]),
-  )
+  prompts ??= fnv1a64(JSON.stringify([...canonicalPrompts(), REVIEW_REPORT_JSON_SCHEMA, VERIFY_JSON_SCHEMA]))
   return prompts
 }
 

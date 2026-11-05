@@ -440,7 +440,8 @@ export function reviewCatalog(providers: readonly CatalogProvider[]): ReviewMode
 // variables its provider reads a key from, which the workflow takes from repository secrets of the same names. reason
 // says why Actions could not use it. With `evidence`, the open project's review settings when they opt into model
 // evidence ("modelEvidence": "warn", VS-07), warnings say what VectorScope's evaluation says about the model automatic
-// reviews would use under those settings. They never change the model the workflow is set up with.
+// reviews would use under those settings, after a first warning that says they are this checkout's and that the job
+// reads the base branch's committed copy. They never change the model the workflow is set up with.
 export function workflowModel(
   candidates: readonly (string | undefined)[],
   providers: readonly (CatalogProvider & { env?: readonly string[] })[],
@@ -453,28 +454,26 @@ export function workflowModel(
   const config = options.evidence
   if (config?.modelEvidence !== "warn") return chosen
   // The workflow's reviews run in the engine, which takes a model in review.json over the workflow's MODEL. The card
-  // already says why it chose its model, so the notes leave that out.
+  // already says why it chose its model, so the notes leave that out. The settings are this checkout's, which may
+  // differ from the copy committed on the base branch that the job reads, so the first warning says whose they are.
   const named = config.model && config.model !== chosen.model ? config.model : undefined
   const reviewed = named ? pickReviewModel([named], catalog) : model
   const triage = config.triageModel && config.triageModel !== (named ?? chosen.model) ? config.triageModel : undefined
-  const warnings = [
-    ...(named
-      ? [
-          `Automatic reviews read ${codeSpan(REVIEW_CONFIG_PATH)} from the pull request's base branch, and a model named there runs instead of ${codeSpan(chosen.model)}: here ${codeSpan(named)}.`,
-        ]
-      : []),
-    ...modelEvidenceNotes(
-      assessReview({
-        // A named model that is not connected here is described by its name alone.
-        review: reviewed ? subjectOf(reviewed) : { model: named!, free: false },
-        scope: evidenceScope({ adapter: "engine", config, ...(triage ? { triage } : {}) }),
-        now: options.now ?? Date.now(),
-        ...(options.certificates ? { certificates: options.certificates } : {}),
-      }),
-      { choice: false },
-    ),
-  ]
-  return warnings.length ? { ...chosen, warnings } : chosen
+  const notes = modelEvidenceNotes(
+    assessReview({
+      // A named model that is not connected here is described by its name alone.
+      review: reviewed ? subjectOf(reviewed) : { model: named!, free: false },
+      scope: evidenceScope({ adapter: "engine", config, ...(triage ? { triage } : {}) }),
+      now: options.now ?? Date.now(),
+      ...(options.certificates ? { certificates: options.certificates } : {}),
+    }),
+    { choice: false },
+  )
+  if (!named && !notes.length) return chosen
+  const source = named
+    ? `This checkout's ${codeSpan(REVIEW_CONFIG_PATH)} names ${codeSpan(named)}. Automatic reviews read the copy committed on the pull request's base branch and run a model named there instead of ${codeSpan(chosen.model)}, so these notes are about ${codeSpan(named)} and hold only when that copy names it too.`
+    : `These notes use this checkout's ${codeSpan(REVIEW_CONFIG_PATH)}. Automatic reviews read the copy committed on the pull request's base branch, which may name another model or other settings.`
+  return { ...chosen, warnings: [source, ...notes] }
 }
 
 export type WorkflowModel = { model: string; keys: string[]; reason?: string; warnings?: string[] }
@@ -1200,7 +1199,10 @@ function evidenceNotes(context: {
           }
   return [
     ...(missing
-      ? [`The model in ${REVIEW_CONFIG_PATH}, ${missing}, is not connected, so the review ran on ${modelName(model)}.`]
+      ? [
+          // The name comes from the user's review.json and the note can be posted, so it goes in a code span.
+          `The model in ${REVIEW_CONFIG_PATH}, ${codeSpan(missing)}, is not connected, so the review ran on ${codeSpan(modelName(model))}.`,
+        ]
       : []),
     ...modelEvidenceNotes(
       assessReview({
