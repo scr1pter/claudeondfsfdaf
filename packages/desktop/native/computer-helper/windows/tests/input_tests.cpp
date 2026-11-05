@@ -47,6 +47,8 @@ class FakeGuardian final : public InputGuardian {
   bool running = true, armed = false, ready_result = true, reserve_result = true, auto_up = true, wrong_up_tag = false, process_exited=false, drain_under_authority=false, closed=false;
   unsigned ready_calls = 0, reserve_calls = 0, drain_calls = 0, close_calls = 0;
   std::vector<InputRelease> ups;
+  std::vector<InputGuardianTicket> reservations;
+  std::vector<std::pair<InputGuardianTicket,bool>> retirements;
   std::function<void()> on_ready;
   std::function<void(bool down)> on_observed;
   uint64_t tag() const noexcept override { return own_tag; }
@@ -58,7 +60,8 @@ class FakeGuardian final : public InputGuardian {
   }
   std::optional<InputGuardianTicket> reserve(const InputRelease& release) override {
     check(!inside, "input.guardian-reservation-is-outside-authority"); ++reserve_calls;
-    return running && reserve_result ? ledger.reserve(release) : std::nullopt;
+    const auto ticket = running && reserve_result ? ledger.reserve(release) : std::nullopt;
+    if (ticket) reservations.push_back(*ticket); return ticket;
   }
   bool observed(const InputGuardianTicket& ticket, bool down, uint32_t) override {
     check(!inside, "input.guardian-observation-wait-is-outside-authority");
@@ -66,7 +69,7 @@ class FakeGuardian final : public InputGuardian {
     if (!running) return false;
     if (!down && auto_up) release(true); return ledger.observed(ticket, down);
   }
-  void retire(const InputGuardianTicket& ticket, bool not_posted = false) noexcept override { ledger.retire(ticket, not_posted); }
+  void retire(const InputGuardianTicket& ticket, bool not_posted = false) noexcept override { retirements.emplace_back(ticket,not_posted); ledger.retire(ticket, not_posted); }
   uint32_t drain(uint32_t = 300) noexcept override {
     drain_under_authority = drain_under_authority || inside;
     ++drain_calls; if (!running || !auto_up) return 0; return release(false);
@@ -95,6 +98,7 @@ struct Fixture {
   bool point_current = true, foreground_current = true, keyboard_current = true, quiet = true, available = true;
   bool enabled = true, focused = true, focusable = true, value_pattern = true, text_pattern = false, ref_current = true, element_current = true;
   std::optional<bool> secure = false, read_only = false, text_read_only;
+  std::optional<std::wstring> pre_post_refusal;
   std::optional<WindowsAvailabilityObservation> availability;
   uint64_t observation_age = 0;
   WindowsWindow world = window_fixture(); ServerSession session; CaptureReceipt capture;
@@ -200,7 +204,8 @@ struct Fixture {
     backend.post = [this](const InputPostedEvent& event,const std::function<bool()>& current) {
       check(inside, "input.native-post-only-inside-current-authority");
       if(during_native_preparation)during_native_preparation();
-      if(!current || !current())throw Failure{L"changed",L"Synthetic native input authority changed."};
+      if (pre_post_refusal) throw InputPrePostRefusal{Failure{*pre_post_refusal,L"Synthetic native preparation refused."}};
+      if(!current || !current())throw InputPrePostRefusal{Failure{L"changed",L"Synthetic native input authority changed."}};
       if (post_result == InputPostResult::accepted || (post_result == InputPostResult::uncertain && reflect_uncertain)) {
         events.push_back(event); guardian->event(event);
       }
@@ -920,6 +925,44 @@ size_t run_input_tests() {
       auto args=fixture.args(op);if(std::wstring_view(op)==L"input.type")args.Insert(L"text",JsonValue::CreateStringValue(L"a"));
       failure(fixture.take(op,args),L"changed");fixture.pump();
       check(fixture.events.empty() && fixture.batches.empty() && fixture.guardian->ups.empty(),"input.hardware-revocation-during-last-native-preparation-prevents-sendinput");
+    }
+  });
+  test([] {
+    for (const auto code : {L"changed",L"elevated",L"secure_desktop",L"unavailable"}) {
+      Fixture fixture; fixture.pre_post_refusal = code;
+      failure(fixture.take(L"input.key"), code); fixture.pump();
+      check(fixture.events.empty() && fixture.guardian->ups.empty() && !fixture.guardian->ledger.pending() &&
+        fixture.guardian->reservations.size() == 2 && fixture.guardian->retirements.size() == 2 &&
+        std::all_of(fixture.guardian->reservations.begin(), fixture.guardian->reservations.end(), [&](const auto& ticket) {
+          return std::count_if(fixture.guardian->retirements.begin(), fixture.guardian->retirements.end(), [&](const auto& retired) { return retired.first == ticket && retired.second; }) == 1;
+        }), "input.proven-pre-post-refusal-retires-each-exact-unposted-reservation-once-without-ups");
+      bool done = false, complete = false; uint32_t released = 99;
+      fixture.service->release_all_async([&](bool value, uint32_t count) { done = true; complete = value; released = count; }); fixture.pump();
+      check(done && complete && released == 0, "input.proven-no-call-does-not-leave-uncertain-journal-or-cleanup-debt");
+      fixture.pre_post_refusal.reset(); ++fixture.session.observation_epoch;
+      success(fixture.take(L"input.key"));
+      check(downs(fixture) == 2 && fixture.guardian->ups.size() == 2, "input.only-a-fresh-request-posts-after-proven-preparation-refusal");
+    }
+  });
+  test([] {
+    Fixture fixture; unsigned preparations = 0;
+    fixture.during_native_preparation = [&] { if (++preparations == 2) fixture.pre_post_refusal = L"changed"; };
+    failure(fixture.take(L"input.key"), L"changed"); fixture.pump();
+    check(downs(fixture) == 1 && fixture.guardian->reservations.size() == 2 &&
+      fixture.guardian->ups == std::vector{fixture.guardian->reservations.front().release} && !fixture.guardian->ledger.pending(),
+      "input.pre-post-leaf-refusal-still-cleans-the-earlier-actual-modifier-down");
+    const auto unposted = fixture.guardian->reservations.back();
+    check(std::count_if(fixture.guardian->retirements.begin(), fixture.guardian->retirements.end(), [&](const auto& retired) { return retired.first == unposted && retired.second; }) == 1,
+      "input.pre-post-leaf-no-call-proof-never-retires-or-releases-another-ticket");
+  });
+  test([] {
+    for (const bool typed : {false,true}) {
+      Fixture fixture;
+      fixture.after_post = [typed](const auto&) { if (typed) throw Failure{L"changed",L"Synthetic exception after actual down."}; throw std::runtime_error("synthetic-after-down"); };
+      failure(fixture.take(L"input.key"), L"failed"); fixture.pump();
+      check(downs(fixture) == 1 && fixture.guardian->ups.size() == 1 && !fixture.guardian->ledger.pending() && fixture.parent_ups == 0,
+        "input.arbitrary-or-typed-after-down-exception-remains-uncertain-with-owned-cleanup");
+      failure(fixture.take(L"input.key"), L"unavailable");
     }
   });
   return groups;

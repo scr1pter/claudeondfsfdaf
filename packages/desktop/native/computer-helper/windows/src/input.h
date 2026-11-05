@@ -54,6 +54,9 @@ struct InputNativeChord {
   // Explicit modifier downs followed by the one actual nonmodifier key, in native posting order.
   std::vector<InputNativeKey> keys;
 };
+// Trusted backend evidence that this call was refused during preparation, before SendInput.
+// Never use for an exception after posting or for an unknown native outcome.
+struct InputPrePostRefusal final : Failure {};
 struct InputBackend {
   uint64_t tag = 0;
   InputKeyTextRules text_rules;

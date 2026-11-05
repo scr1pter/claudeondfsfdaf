@@ -193,41 +193,49 @@ class NativeInput final {
   InputPostResult post(const InputPostedEvent& event,const std::function<bool()>& current={}) {
     std::lock_guard guard(mutex);
     const bool up = event.kind == InputEventKind::button_up || event.kind == InputEventKind::key_up || event.kind == InputEventKind::unicode_up;
-    if (event.tag != tag || (!up && (closed || !desktop_available() || !quiet()))) return InputPostResult::not_posted;
     INPUT value{};
-    if (event.kind == InputEventKind::move) {
-      const InputDesktopExtent extent{GetSystemMetrics(SM_XVIRTUALSCREEN), GetSystemMetrics(SM_YVIRTUALSCREEN), GetSystemMetrics(SM_CXVIRTUALSCREEN), GetSystemMetrics(SM_CYVIRTUALSCREEN)};
-      const auto absolute = input_absolute_center(event.point.x, event.point.y, extent); if (!absolute) return InputPostResult::not_posted;
-      value.type = INPUT_MOUSE; value.mi.dx = absolute->x; value.mi.dy = absolute->y;
-      value.mi.dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK; value.mi.dwExtraInfo = static_cast<ULONG_PTR>(tag);
-    } else if (event.kind == InputEventKind::scroll) {
-      if ((event.dx == 0) == (event.dy == 0) || event.dx < -10'000 || event.dx > 10'000 || event.dy < -10'000 || event.dy > 10'000) return InputPostResult::not_posted;
-      value.type = INPUT_MOUSE; value.mi.dwFlags = event.dx ? MOUSEEVENTF_HWHEEL : MOUSEEVENTF_WHEEL;
-      value.mi.mouseData = static_cast<DWORD>((event.dx ? event.dx : -event.dy) * WHEEL_DELTA); value.mi.dwExtraInfo = static_cast<ULONG_PTR>(tag);
-    } else {
-      if (!valid_input_release(event.release)) return InputPostResult::not_posted;
-      if (up && std::find(owned.begin(), owned.end(), event.release) == owned.end()) return InputPostResult::accepted;
-      if (event.release.kind == InputReleaseKind::mouse_button) {
-        if (event.kind != InputEventKind::button_down && event.kind != InputEventKind::button_up) return InputPostResult::not_posted;
-        constexpr DWORD downs[] = {MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_MIDDLEDOWN};
-        constexpr DWORD ups[] = {MOUSEEVENTF_LEFTUP, MOUSEEVENTF_RIGHTUP, MOUSEEVENTF_MIDDLEUP};
-        value.type = INPUT_MOUSE; value.mi.dwFlags = up ? ups[event.release.button] : downs[event.release.button]; value.mi.dwExtraInfo = static_cast<ULONG_PTR>(tag);
-        if (!up) {
-          const InputDesktopExtent extent{GetSystemMetrics(SM_XVIRTUALSCREEN),GetSystemMetrics(SM_YVIRTUALSCREEN),GetSystemMetrics(SM_CXVIRTUALSCREEN),GetSystemMetrics(SM_CYVIRTUALSCREEN)};
-          const auto absolute=input_absolute_center(event.point.x,event.point.y,extent); if (!absolute) return InputPostResult::not_posted;
-          // The button's own INPUT also carries the exact position. A physical cursor move between
-          // hover and DOWN can never redirect the click to a different current cursor position.
-          value.mi.dx=absolute->x; value.mi.dy=absolute->y; value.mi.dwFlags|=MOUSEEVENTF_MOVE|MOUSEEVENTF_ABSOLUTE|MOUSEEVENTF_VIRTUALDESK;
-        }
+    try {
+      if (event.tag != tag || (!up && (closed || !desktop_available() || !quiet()))) return InputPostResult::not_posted;
+      if (event.kind == InputEventKind::move) {
+        const InputDesktopExtent extent{GetSystemMetrics(SM_XVIRTUALSCREEN), GetSystemMetrics(SM_YVIRTUALSCREEN), GetSystemMetrics(SM_CXVIRTUALSCREEN), GetSystemMetrics(SM_CYVIRTUALSCREEN)};
+        const auto absolute = input_absolute_center(event.point.x, event.point.y, extent); if (!absolute) return InputPostResult::not_posted;
+        value.type = INPUT_MOUSE; value.mi.dx = absolute->x; value.mi.dy = absolute->y;
+        value.mi.dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK; value.mi.dwExtraInfo = static_cast<ULONG_PTR>(tag);
+      } else if (event.kind == InputEventKind::scroll) {
+        if ((event.dx == 0) == (event.dy == 0) || event.dx < -10'000 || event.dx > 10'000 || event.dy < -10'000 || event.dy > 10'000) return InputPostResult::not_posted;
+        value.type = INPUT_MOUSE; value.mi.dwFlags = event.dx ? MOUSEEVENTF_HWHEEL : MOUSEEVENTF_WHEEL;
+        value.mi.mouseData = static_cast<DWORD>((event.dx ? event.dx : -event.dy) * WHEEL_DELTA); value.mi.dwExtraInfo = static_cast<ULONG_PTR>(tag);
       } else {
-        if (event.kind != InputEventKind::key_down && event.kind != InputEventKind::key_up && event.kind != InputEventKind::unicode_down && event.kind != InputEventKind::unicode_up) return InputPostResult::not_posted;
-        if ((event.release.kind == InputReleaseKind::unicode_key) != (event.kind == InputEventKind::unicode_down || event.kind == InputEventKind::unicode_up)) return InputPostResult::not_posted;
-        value.type = INPUT_KEYBOARD; value.ki.wVk = 0; value.ki.wScan = event.release.scan;
-        value.ki.dwFlags = (event.release.kind == InputReleaseKind::unicode_key ? KEYEVENTF_UNICODE : KEYEVENTF_SCANCODE) |
-          (event.release.extended ? KEYEVENTF_EXTENDEDKEY : 0) | (up ? KEYEVENTF_KEYUP : 0); value.ki.dwExtraInfo = static_cast<ULONG_PTR>(tag);
+        if (!valid_input_release(event.release)) return InputPostResult::not_posted;
+        if (up && std::find(owned.begin(), owned.end(), event.release) == owned.end()) return InputPostResult::accepted;
+        if (event.release.kind == InputReleaseKind::mouse_button) {
+          if (event.kind != InputEventKind::button_down && event.kind != InputEventKind::button_up) return InputPostResult::not_posted;
+          constexpr DWORD downs[] = {MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_MIDDLEDOWN};
+          constexpr DWORD ups[] = {MOUSEEVENTF_LEFTUP, MOUSEEVENTF_RIGHTUP, MOUSEEVENTF_MIDDLEUP};
+          value.type = INPUT_MOUSE; value.mi.dwFlags = up ? ups[event.release.button] : downs[event.release.button]; value.mi.dwExtraInfo = static_cast<ULONG_PTR>(tag);
+          if (!up) {
+            const InputDesktopExtent extent{GetSystemMetrics(SM_XVIRTUALSCREEN),GetSystemMetrics(SM_YVIRTUALSCREEN),GetSystemMetrics(SM_CXVIRTUALSCREEN),GetSystemMetrics(SM_CYVIRTUALSCREEN)};
+            const auto absolute=input_absolute_center(event.point.x,event.point.y,extent); if (!absolute) return InputPostResult::not_posted;
+            // The button's own INPUT also carries the exact position. A physical cursor move between
+            // hover and DOWN can never redirect the click to a different current cursor position.
+            value.mi.dx=absolute->x; value.mi.dy=absolute->y; value.mi.dwFlags|=MOUSEEVENTF_MOVE|MOUSEEVENTF_ABSOLUTE|MOUSEEVENTF_VIRTUALDESK;
+          }
+        } else {
+          if (event.kind != InputEventKind::key_down && event.kind != InputEventKind::key_up && event.kind != InputEventKind::unicode_down && event.kind != InputEventKind::unicode_up) return InputPostResult::not_posted;
+          if ((event.release.kind == InputReleaseKind::unicode_key) != (event.kind == InputEventKind::unicode_down || event.kind == InputEventKind::unicode_up)) return InputPostResult::not_posted;
+          value.type = INPUT_KEYBOARD; value.ki.wVk = 0; value.ki.wScan = event.release.scan;
+          value.ki.dwFlags = (event.release.kind == InputReleaseKind::unicode_key ? KEYEVENTF_UNICODE : KEYEVENTF_SCANCODE) |
+            (event.release.extended ? KEYEVENTF_EXTENDEDKEY : 0) | (up ? KEYEVENTF_KEYUP : 0); value.ki.dwExtraInfo = static_cast<ULONG_PTR>(tag);
+        }
       }
+      if (!up && (!current || !current())) changed();
+    } catch (const Failure& error) {
+      // This catch ends before the only SendInput call. Only these known preparation refusals
+      // prove no call occurred; every other exception keeps the caller's uncertain-outcome path.
+      if (!up && (error.code==L"changed" || error.code==L"elevated" || error.code==L"secure_desktop" || error.code==L"unavailable"))
+        throw InputPrePostRefusal{error};
+      throw;
     }
-    if (!up && (!current || !current())) changed();
     if (SendInput(1, &value, sizeof(INPUT)) != 1) return InputPostResult::not_posted;
     if (!up && event.kind != InputEventKind::move && event.kind != InputEventKind::scroll) owned.push_back(event.release);
     if (up) owned.erase(std::remove(owned.begin(), owned.end(), event.release), owned.end());

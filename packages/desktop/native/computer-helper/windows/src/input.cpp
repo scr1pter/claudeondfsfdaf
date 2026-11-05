@@ -413,15 +413,25 @@ struct InputService::State : std::enable_shared_from_this<InputService::State> {
   }
   void down(const std::shared_ptr<Flight>& flight,const OwnedTicket& ticket,const std::optional<WindowsPointOwner>& point) {
     InputPostResult outcome=InputPostResult::not_posted;
+    std::optional<Failure> refusal;
+    const auto retire_refused = [&] {
+      backend.guardian->retire(ticket.ticket,true);
+      std::lock_guard lock(mutex); std::erase_if(flight->tickets,[&](const auto& item){return item.ticket==ticket.ticket;});
+    };
     try { commit(flight,point,[&] {
       (void)journal.press(flight->lease,ticket.id,ticket.ticket.release,[&] {
         arm(flight); const auto kind=ticket.ticket.release.kind==InputReleaseKind::mouse_button?InputEventKind::button_down:InputEventKind::key_down;
         attempted(flight,ticket); outcome=InputPostResult::uncertain;
-        outcome=backend.post({kind,point?point->point:POINT{},ticket.ticket.release,0,0,backend.tag},flight->context.is_current);
+        try { outcome=backend.post({kind,point?point->point:POINT{},ticket.ticket.release,0,0,backend.tag},flight->context.is_current); }
+        catch (const InputPrePostRefusal& error) {
+          if (error.code!=L"changed" && error.code!=L"elevated" && error.code!=L"secure_desktop" && error.code!=L"unavailable") throw;
+          refusal=static_cast<const Failure&>(error); outcome=InputPostResult::not_posted;
+        }
         if (outcome==InputPostResult::not_posted) attempted(flight,ticket,false);
         return outcome;
       });
-    }); } catch (...) { if (outcome==InputPostResult::uncertain) { std::lock_guard lock(mutex); faulted=true; } throw; }
+    }); } catch (...) { if (refusal) retire_refused(); if (outcome==InputPostResult::uncertain) { std::lock_guard lock(mutex); faulted=true; } throw; }
+    if (refusal) { retire_refused(); throw *refusal; }
     if (outcome!=InputPostResult::accepted) { backend.guardian->retire(ticket.ticket,outcome==InputPostResult::not_posted); if (outcome==InputPostResult::uncertain) { std::lock_guard lock(mutex); faulted=true; } failed(); }
     if (!backend.guardian->observed(ticket.ticket,true,50)) { std::lock_guard lock(mutex); faulted=true; failed(); }
     receipt(flight,ticket,false);
