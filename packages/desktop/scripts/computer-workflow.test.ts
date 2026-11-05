@@ -428,3 +428,21 @@ test("optional native unit failures retain separate bounded suite diagnostics", 
     expect(String(step.run)).toContain("computer-helper-unit-diagnostics.ts")
   }
 })
+
+test("focused Node smoke keeps normal CI gates and uses its own cancellation group", () => {
+  const inputs = record(record(record(main.document.on).workflow_dispatch).inputs)
+  expect(inputs.desktop_engine_node).toMatchObject({ type: "boolean", default: false })
+  const all = record(main.document.jobs)
+  const focused = { desktop_engine_node: true, computer_helper: true, hands_ui: true, hands_benchmark: true }
+  for (const [name, value] of Object.entries(all)) {
+    const current = record(value)
+    expect(expression(String(current.if), focused), name).toBe(name === "desktop-engine-node")
+    if (!["hands-ui", "hands-benchmark"].includes(name)) {
+      expect(expression(String(current.if), {}), name).toBe(true)
+      expect(expression(String(current.if), {}, "pull_request"), name).toBe(true)
+    }
+  }
+  const cancellation = record(main.document.concurrency)
+  expect(group(cancellation.group, focused)).not.toBe(group(cancellation.group, {}))
+  expect(group(cancellation.group, focused)).not.toBe(group(cancellation.group, { computer_helper: true }))
+})

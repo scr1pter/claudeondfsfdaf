@@ -708,7 +708,14 @@ async function runComputerTurn(
   const json = async (route: string, init?: { method?: string; body?: unknown }) => {
     const response = await request(route, init)
     requireComputer(response.ok, `HTTP ${init?.method ?? "GET"} ${route} returned ${response.status}`)
-    return (await response.json()) as unknown
+    const text = await response.text()
+    // prompt_async acknowledges admission with 204; permission replies still require their JSON true.
+    if (response.status === 204) {
+      requireComputer(text.length === 0, "HTTP no-content acknowledgement included a body")
+      return undefined
+    }
+    requireComputer(text.length > 0, `HTTP ${init?.method ?? "GET"} ${route} returned empty JSON`)
+    return JSON.parse(text) as unknown
   }
   const session = await json("/session", { method: "POST", body: { title: "isolated Node computer smoke" } })
   requireComputer(isRecord(session) && typeof session.id === "string", "HTTP session creation failed")
