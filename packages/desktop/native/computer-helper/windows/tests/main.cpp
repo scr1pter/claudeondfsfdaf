@@ -11,6 +11,7 @@
 #include "protocol.h"
 #include "server.h"
 #include "guard.h"
+#include "capture.h"
 #include <objidl.h>
 #include <xmllite.h>
 #include <algorithm>
@@ -483,7 +484,8 @@ template<class Check> void run_check(const char* label, Check check) {
   catch (const std::exception& error) {
     const std::string_view detail(error.what(), strnlen_s(error.what(), 129));
     const bool fixed = detail.size() <= 128 &&
-      (detail.starts_with("protocol.") || detail.starts_with("server.") || detail.starts_with("parent.") || detail.starts_with("lifecycle.") || detail.starts_with("integration.")) &&
+      (detail.starts_with("protocol.") || detail.starts_with("server.") || detail.starts_with("parent.") || detail.starts_with("lifecycle.") || detail.starts_with("integration.") ||
+        detail.starts_with("windows-") || detail.starts_with("policy.") || detail.starts_with("tree.") || detail.starts_with("program.") || detail.starts_with("guard.") || detail.starts_with("capture.")) &&
       std::all_of(detail.begin(), detail.end(), [](char value) { return (value >= 'a' && value <= 'z') || (value >= '0' && value <= '9') || value == '.' || value == '-'; });
     throw UnitFailure(fixed ? error.what() : label);
   }
@@ -528,6 +530,8 @@ int main(int argc, char** argv) {
     run_check("program-capabilities", [] { static_cast<void>(run_program_registry_tests()); });
     run_check("program-resolution-and-launch", [] { static_cast<void>(run_windows_program_tests()); });
     run_check("live-target-guard", [] { static_cast<void>(run_guard_tests()); });
+    run_check("capture-geometry-and-privacy", [] { static_cast<void>(run_capture_math_tests()); });
+    run_check("capture-service-and-receipts", [] { static_cast<void>(run_capture_tests()); });
     std::cout << "Windows computer helper unit checks passed.\n";
     return 0;
   } catch (const UnitFailure& failure) {

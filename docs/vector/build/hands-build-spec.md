@@ -3742,7 +3742,7 @@ frame.
     app and a user consent capability that a per-user installer does not have); the helper therefore
     defaults to the screen path and documents the border on the WGC path. Minimized windows are not
     captured; the helper returns a `paused`/not-capturable marker so the caller focuses first.
-  - **Downscale in the helper.** Shrink to `CaptureBudget {maxWidth, maxHeight, maxPixels}` (section 2.8; long edge plus a megapixel cap, so portrait and ultrawide monitors fit), never a single fixed width. Encode JPEG (quality 80) by default and PNG for zoom. Return the section 2.10 header `{captureId, width, height, origin, imageScale, dpiScale, displayId, capturedAtMs, masked, hash, imageBytes}` followed by the binary frame, keep each capture's geometry by `captureId` for W4's stale check, and compute a perceptual `hash` for the repeated-action rule (E8), where `imageScale` = physical pixels per image pixel and
+  - **Downscale in the helper.** Shrink to `CaptureBudget {maxWidth, maxHeight, maxPixels}` (section 2.8; long edge plus a megapixel cap, so portrait and ultrawide monitors fit), never a single fixed width. Encode JPEG (quality 80) by default and PNG for zoom. Return the section 2.10 header `{captureId, width, height, origin, imageScale, dpiScale, displayId, capturedAtMs, masked, hash, imageBytes}` followed by the binary frame, keep each capture's geometry by `captureId` for W4's stale check, and compute a perceptual `hash` for the repeated-action rule (E8), where `imageScale` = image pixels per physical pixel (the shared section 2.10 convention) and
     `dpiScale` is the monitor's per-monitor DPI scale, reported separately.
   - `capture.displays` returns each monitor `{id, bounds (physical, virtual-desktop space), dpiScale}`.
 

@@ -170,7 +170,10 @@ class Child {
       helper.GetNamedString(L"version") == winrt::to_hstring(identity::kHelperVersion), "integration.actual-helper-identity");
     const auto permission = result.GetNamedObject(L"permissions");
     require_integration(permission.GetNamedString(L"screen") == L"n/a" && permission.GetNamedString(L"accessibility") == L"n/a", "integration.windows-permissions");
-    for (const auto& feature : result.GetNamedObject(L"features")) require_integration(!feature.Value().GetBoolean(), "integration.no-future-features");
+    const auto features = result.GetNamedObject(L"features");
+    for (const auto& feature : features) require_integration(feature.Value().ValueType() == JsonValueType::Boolean, "integration.boolean-feature-contract");
+    require_integration((!features.HasKey(L"background") || !features.GetNamedBoolean(L"background")) &&
+      (!features.HasKey(L"clipboard") || !features.GetNamedBoolean(L"clipboard")), "integration.windows-permanent-feature-limits");
   }
 };
 

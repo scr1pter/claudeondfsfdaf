@@ -1,0 +1,99 @@
+#pragma once
+#include "capture_math.h"
+#include "windows_policy.h"
+#include <deque>
+#include <mutex>
+
+namespace vector::computer {
+struct CaptureDisplay {
+  HMONITOR monitor = nullptr;
+  std::wstring id;
+  WindowsRect bounds;
+  double dpi_scale = 0;
+  bool primary = false;
+};
+struct CaptureSurface {
+  HWND hwnd = nullptr;
+  DWORD pid = 0, thread = 0;
+  WindowsRect bounds;
+  WindowsRect frame_bounds;
+  bool visible = false, minimized = false, cloaked = true;
+  // Unknown alpha never establishes an opaque occluder of a private window behind it.
+  bool opaque = false;
+  bool excluded_overlay = false;
+  bool affinity_known = false;
+  DWORD affinity = 0;
+  LONG_PTR extended_style = 0;
+  std::wstring window_class;
+  std::optional<WindowsWindow> window;
+};
+struct CaptureInventory {
+  std::vector<CaptureDisplay> displays;
+  // Every visible top-level structural HWND, in native front-to-back order, including unknown owners.
+  std::vector<CaptureSurface> windows;
+};
+bool same_capture_inventory(const CaptureInventory&, const CaptureInventory&) noexcept;
+struct CaptureReadRequest {
+  WindowsRect bounds;
+  std::optional<WindowsWindow> window;
+  bool occluded = false;
+};
+struct CaptureBackend {
+  std::function<std::vector<CaptureDisplay>()> displays;
+  std::function<CaptureInventory(const ServerSession&, const std::function<bool()>&)> inventory;
+  // Fast native metadata only: no trust/hash, process-tree scan, UIA, deployment or manifest RPC.
+  std::function<bool(const CaptureInventory&, const ServerSession&)> current;
+  std::function<CaptureBitmap(const CaptureReadRequest&, const std::function<bool()>&)> read;
+  std::function<void(CaptureBitmap&, const CapturePrivacyPlan&, const WindowsRect&, const CaptureFit&)> label;
+  std::function<std::vector<uint8_t>(const CaptureBitmap&, std::wstring_view, uint32_t)> encode;
+  std::function<bool()> window_supported;
+  std::function<bool()> available;
+  std::function<uint64_t()> now;
+  std::function<std::wstring()> identifier;
+  static CaptureBackend system();
+};
+
+struct CaptureReceipt {
+  std::wstring id, display_id, session_id;
+  uint64_t run_epoch = 0, observation_epoch = 0, generation = 0;
+  std::optional<uint64_t> revision;
+  WindowsRect bounds;
+  uint32_t width = 0, height = 0;
+  double image_scale = 0, dpi_scale = 0;
+  std::optional<WindowsWindow> window;
+  CaptureInventory inventory;
+  std::optional<std::wstring> zoom_source;
+  POINT point(int64_t x, int64_t y) const;
+};
+class CaptureRegistry final {
+ public:
+  void invalidate() noexcept;
+  void close() noexcept;
+  uint64_t generation() const noexcept;
+  bool put(CaptureReceipt receipt, uint64_t expected_generation);
+  CaptureReceipt get(std::wstring_view id, const ServerSession&, bool allow_zoom = false) const;
+ private:
+  mutable std::mutex mutex_;
+  uint64_t generation_ = 1;
+  bool closed_ = false;
+  struct Entry { CaptureReceipt receipt; size_t bytes = 0, witnesses = 0; };
+  size_t retained_bytes_ = 0, retained_witnesses_ = 0;
+  std::deque<Entry> receipts_;
+};
+
+class CaptureService final {
+ public:
+  explicit CaptureService(CaptureBackend backend = CaptureBackend::system());
+  JsonObject features() const;
+  void displays(const JsonObject&, const OperationContext&, Dispatcher::Completion);
+  void capture(const JsonObject&, const OperationContext&, Dispatcher::Completion);
+  CaptureReceipt receipt(std::wstring_view id, const ServerSession&, bool allow_zoom = false) const;
+  bool current(const CaptureReceipt&, const ServerSession&) const;
+  void invalidate() noexcept;
+  void close() noexcept;
+ private:
+  CaptureBackend backend_;
+  CaptureRegistry registry_;
+};
+size_t run_capture_tests();
+}
