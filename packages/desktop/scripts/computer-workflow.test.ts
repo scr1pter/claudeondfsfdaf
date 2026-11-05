@@ -369,6 +369,23 @@ test("shipping and test archives preserve executable modes while failure diagnos
       (step) => typeof step.run === "string" && step.run.includes("GITHUB_STEP_SUMMARY"),
     )
     expect(summary.length, `${name} must report skipped native checks`).toBeGreaterThan(0)
-    expect(summary.some((step) => String(step.run).includes("SKIPPED"))).toBe(true)
+    expect(summary.some((step) => String(step.run).includes('check.status === "skipped"'))).toBe(true)
+    expect(summary.some((step) => String(step.run).includes('check.status === "failed"'))).toBe(true)
+  }
+})
+
+test("optional native unit failures retain separate bounded suite diagnostics", () => {
+  for (const name of ["mac-build", "mac-test"]) {
+    const current = steps(job(name))
+    const isolated = current.findIndex((step) => step.id === "isolated")
+    const diagnostics = current.findIndex((step) => step.name === "Diagnose failed optional native units separately")
+    expect(isolated).toBeGreaterThan(-1)
+    expect(diagnostics).toBeGreaterThan(isolated)
+    const step = current[diagnostics]!
+    expect(String(step.if)).toContain("steps.isolated.outcome == 'failure'")
+    expect(step["continue-on-error"]).toBe(true)
+    expect(step["timeout-minutes"]).toBe(8)
+    expect(String(step.run)).toContain('check.name === "unit" && check.status === "failed"')
+    expect(String(step.run)).toContain("computer-helper-unit-diagnostics.ts")
   }
 })

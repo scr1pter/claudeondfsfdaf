@@ -599,3 +599,10 @@ This is source checkpoint63 of73, helper1.0.10. New native sources add65 accessi
 
 
 W4's first native compile at `635231bd` stops before token/runtime checks: MSVC/WX rejects inferred int-to-WORD scan-map values and int-to-uint8_t optional button assignments, and the UIA SDK reports undeclared interface syntax. This checkpoint makes the native integer widths explicit and includes Windows/COM/UIA SDK prerequisites before the helper's WinRT headers. No warning setting or SDK declaration is changed; fresh native compilation must confirm the repair. The already running measured-lock matrix retains its exact earlier source and cannot validate these uncommitted-at-dispatch fixes.
+
+
+### Matching 1.0.10 matrix and next native diagnostics
+
+Run42011210765 at5d1ffe43 verifies the measured production lock and required core31/1/0 on the build host, macOS26 and macOS15 Intel. Build-host/26 optional reports are33/13/0. Intel's optional report is30 passed/0 skipped/2 failed despite its green job conclusion: the repeated native unit aggregate times out; privileged checks then correctly fail required-core-check-failed without running. The exact Intel ZIP hash and failures are recorded in the measurement provenance. This is not a complete matching pass or a proved target-geometry regression. No unit deadline is raised. Failed optional units now trigger the existing bounded standalone suite diagnostics, and summaries display failed as well as skipped check names/reasons.
+
+Windows run42012426838 at54b6d434 progresses past the earlier type/include failures and reports one actual compiler error: UIA ValuePattern.SetValue requires BSTR. The native setter now allocates/frees a bounded real BSTR instead of passing a const wchar_t pointer. Native runtime/token checks have still not executed at this checkpoint. Workflow structural checks12/322 and actionlint pass; native compilation and the unresolved Intel unit deadline require a fresh run.

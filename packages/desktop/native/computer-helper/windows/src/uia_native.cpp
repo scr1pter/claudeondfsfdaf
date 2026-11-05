@@ -417,7 +417,10 @@ class NativeUia final : public std::enable_shared_from_this<NativeUia> {
     BOOL read_only = TRUE; if (FAILED(pattern->get_CurrentIsReadOnly(&read_only)) || read_only) return false;
     const auto final = security(element); if (final.password) throw Failure{L"secure_field", L"The native field is secure."};
     if (!final.enabled || !final.value_pattern || final.read_only != false || !final.editable()) return false;
-    before_mutation(window); return mutation_result(pattern->SetValue(text.c_str()));
+    const auto value=SysAllocStringLen(text.data(),static_cast<UINT>(text.size()));
+    if (!value) unavailable();
+    struct Value { BSTR data; ~Value() { SysFreeString(data); } } release_value{value};
+    before_mutation(window); return mutation_result(pattern->SetValue(value));
   }
   bool perform(const UiaElement& element, std::wstring_view action, const WindowsWindow* window = nullptr) {
     const auto state = security(element); if (!state.enabled) return false;

@@ -197,6 +197,7 @@ jobs:
         timeout-minutes: 8
         run: bun --no-env-file ./scripts/computer-helper-unit-diagnostics.ts
       - name: Run explicitly isolated privileged scenarios
+        id: isolated
         if: ${{ inputs['isolated-desktop'] }}
         timeout-minutes: 5
         continue-on-error: ${{ !inputs['privileged-required'] }}
@@ -207,6 +208,20 @@ jobs:
           mode=auto
           if [[ "$PRIVILEGED_REQUIRED" == true ]]; then mode=require; fi
           bun --no-env-file ./scripts/computer-helper-selftest-node.ts --platform darwin --bin native/out/darwin/VectorComputer.app/Contents/MacOS/VectorComputer --tests native/out/darwin/tests --privileged "$mode" --report "$RUNNER_TEMP/computer-darwin-privileged.json"
+      - name: Diagnose failed optional native units separately
+        if: ${{ always() && steps.isolated.outcome == 'failure' }}
+        continue-on-error: true
+        timeout-minutes: 8
+        run: |
+          if node --input-type=module <<'NODE'
+          import { existsSync, readFileSync } from "node:fs"
+          import path from "node:path"
+          const file = path.join(process.env.RUNNER_TEMP, "computer-darwin-privileged.json")
+          process.exit(existsSync(file) && JSON.parse(readFileSync(file, "utf8")).checks.some(check => check.name === "unit" && check.status === "failed") ? 0 : 1)
+          NODE
+          then
+            bun --no-env-file ./scripts/computer-helper-unit-diagnostics.ts
+          fi
       - name: Summarize native checks without payloads
         if: ${{ always() }}
         timeout-minutes: 2
@@ -220,8 +235,8 @@ jobs:
             const report = JSON.parse(readFileSync(file, "utf8"))
             const counts = ["passed", "failed", "skipped"].map(status => status + "=" + report.checks.filter(check => check.status === status).length).join(", ")
             appendFileSync(process.env.GITHUB_STEP_SUMMARY, "\n" + name + ": " + counts + "\n")
-            for (const check of report.checks.filter(check => check.status === "skipped"))
-              appendFileSync(process.env.GITHUB_STEP_SUMMARY, "- SKIPPED " + check.name + ": " + check.reason + "\n")
+            for (const check of report.checks.filter(check => check.status === "skipped" || check.status === "failed"))
+              appendFileSync(process.env.GITHUB_STEP_SUMMARY, "- " + check.status.toUpperCase() + " " + check.name + ": " + check.reason + "\n")
           }
           NODE
       # Only reproducible builds with passing core checks may produce a baseline candidate. The enforced gate
@@ -337,6 +352,7 @@ jobs:
         timeout-minutes: 8
         run: bun --no-env-file ./scripts/computer-helper-unit-diagnostics.ts
       - name: Run explicitly isolated matrix scenarios
+        id: isolated
         if: ${{ inputs['isolated-desktop'] }}
         timeout-minutes: 5
         continue-on-error: ${{ !inputs['privileged-required'] }}
@@ -347,6 +363,20 @@ jobs:
           mode=auto
           if [[ "$PRIVILEGED_REQUIRED" == true ]]; then mode=require; fi
           bun --no-env-file ./scripts/computer-helper-selftest-node.ts --platform darwin --bin native/out/darwin/VectorComputer.app/Contents/MacOS/VectorComputer --tests native/out/darwin/tests --privileged "$mode" --report "$RUNNER_TEMP/computer-darwin-matrix-privileged.json"
+      - name: Diagnose failed optional native units separately
+        if: ${{ always() && steps.isolated.outcome == 'failure' }}
+        continue-on-error: true
+        timeout-minutes: 8
+        run: |
+          if node --input-type=module <<'NODE'
+          import { existsSync, readFileSync } from "node:fs"
+          import path from "node:path"
+          const file = path.join(process.env.RUNNER_TEMP, "computer-darwin-matrix-privileged.json")
+          process.exit(existsSync(file) && JSON.parse(readFileSync(file, "utf8")).checks.some(check => check.name === "unit" && check.status === "failed") ? 0 : 1)
+          NODE
+          then
+            bun --no-env-file ./scripts/computer-helper-unit-diagnostics.ts
+          fi
       - name: Summarize matrix checks without payloads
         if: ${{ always() }}
         timeout-minutes: 2
@@ -360,8 +390,8 @@ jobs:
             const report = JSON.parse(readFileSync(file, "utf8"))
             const counts = ["passed", "failed", "skipped"].map(status => status + "=" + report.checks.filter(check => check.status === status).length).join(", ")
             appendFileSync(process.env.GITHUB_STEP_SUMMARY, "\n" + name + ": " + counts + "\n")
-            for (const check of report.checks.filter(check => check.status === "skipped"))
-              appendFileSync(process.env.GITHUB_STEP_SUMMARY, "- SKIPPED " + check.name + ": " + check.reason + "\n")
+            for (const check of report.checks.filter(check => check.status === "skipped" || check.status === "failed"))
+              appendFileSync(process.env.GITHUB_STEP_SUMMARY, "- " + check.status.toUpperCase() + " " + check.name + ": " + check.reason + "\n")
           }
           NODE
       - name: Preserve check report
@@ -469,8 +499,8 @@ jobs:
             const report = JSON.parse(readFileSync(path.join(process.env.RUNNER_TEMP, name), "utf8"))
             const counts = ["passed", "failed", "skipped"].map(status => status + "=" + report.checks.filter(check => check.status === status).length).join(", ")
             appendFileSync(process.env.GITHUB_STEP_SUMMARY, "\n" + name + ": " + counts + "\n")
-            for (const check of report.checks.filter(check => check.status === "skipped"))
-              appendFileSync(process.env.GITHUB_STEP_SUMMARY, "- SKIPPED " + check.name + ": " + check.reason + "\n")
+            for (const check of report.checks.filter(check => check.status === "skipped" || check.status === "failed"))
+              appendFileSync(process.env.GITHUB_STEP_SUMMARY, "- " + check.status.toUpperCase() + " " + check.name + ": " + check.reason + "\n")
           }
           NODE
       - name: Expose the verified source digest
@@ -618,8 +648,8 @@ jobs:
             const report = JSON.parse(readFileSync(path.join(process.env.RUNNER_TEMP, name), "utf8"))
             const counts = ["passed", "failed", "skipped"].map(status => status + "=" + report.checks.filter(check => check.status === status).length).join(", ")
             appendFileSync(process.env.GITHUB_STEP_SUMMARY, "\n" + name + ": " + counts + "\n")
-            for (const check of report.checks.filter(check => check.status === "skipped"))
-              appendFileSync(process.env.GITHUB_STEP_SUMMARY, "- SKIPPED " + check.name + ": " + check.reason + "\n")
+            for (const check of report.checks.filter(check => check.status === "skipped" || check.status === "failed"))
+              appendFileSync(process.env.GITHUB_STEP_SUMMARY, "- " + check.status.toUpperCase() + " " + check.name + ": " + check.reason + "\n")
           }
           NODE
       - name: Preserve check report
