@@ -96,3 +96,25 @@ The separate cancellation-accounting defect found during follow-up source review
 is not credited with recovering any of this cost. The closed Vector trace has no
 disconnected provider request. Subsequent production corrections and validation
 are recorded under their own revisions.
+
+## Separate post-run durability adjudication
+
+Both blinded reviewers independently identified possible acknowledged-state
+rollback in Codex's generated journal recovery. After their scores were locked,
+`tail-diagnostic.py` applied the same three damage cases to fresh synthetic
+directories for both unchanged final products. It first committed one member and
+observed version 1, then gracefully stopped the service and removed, emptied, or
+removed one complete final record from the documented journal.
+
+Vector refused startup with its own nonzero exit in all three cases. Codex
+announced readiness in all three: the missing/empty cases lost the workspace's
+capability authority, and the valid-prefix case returned version 0 with no member
+despite the previously acknowledged commit. The observer distinguishes natural
+startup refusal from a test cleanup kill. All 45 source hashes still match the
+closed manifests; no model, browser or external service was called.
+
+These six observations are **post-run adjudication**, not preregistered acceptance
+checks or additional points. Original 53/54 diagnostics, original native audit
+flags and both reviewers' original scores remain unchanged. See
+`tail-diagnostic.json` and `tail-diagnostic-provenance.json`. This narrow result
+does not establish general product reliability or security certification.

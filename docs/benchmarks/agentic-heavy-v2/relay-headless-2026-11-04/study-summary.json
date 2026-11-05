@@ -167,5 +167,14 @@
     "Vector stopped on remaining single-call reservation headroom; Codex reached300calls during its one formal repair.",
     "Both original native auditors raised StudyError while the strict frozen-input walker inventoried mutable runtime support links. Future audit corrections do not retroactively pass either original audit or erase other observations.",
     "Single adaptive Windows task pair; no statistical, production or billion-token claim."
-  ]
+  ],
+  "postRunDurabilityAdjudication": {
+    "providerCalls": 0,
+    "preRegistered": false,
+    "casesEach": 3,
+    "vectorRefusedDamagedStartup": 3,
+    "codexRefusedDamagedStartup": 0,
+    "originalGatesAndScoresUnchanged": true,
+    "evidence": "tail-diagnostic.json"
+  }
 }
