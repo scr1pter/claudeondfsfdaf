@@ -136,6 +136,21 @@ const qwen = (id: string) => ({
   limit: { context: 100_000, output: 8_000 },
 })
 
+// Vector Local as the owner sets it in their own config, so the config watcher, which may read the files again at
+// any moment, applies the same policy instead of turning Vector Local off in the middle of a test. A watcher can
+// outlive every test here: the process-wide AppRuntime, which another file in the same Bun process may have started,
+// keeps its config layer, and so its watcher, until the run ends, and re-reads the files 50ms after each change.
+function setLocal(block?: ConfigLocalV1.Info) {
+  const file = path.join(Global.Path.config, "vector.json")
+  rmSync(file, { force: true })
+  if (block) {
+    mkdirSync(path.dirname(file), { recursive: true })
+    writeFileSync(file, JSON.stringify({ local: block }))
+  }
+  Config.refreshLocal()
+  Config.confirmLocal()
+}
+
 describe("the provider under Vector Local", () => {
   const it = testEffect(LayerNode.compile(LayerNode.group([Provider.node, Env.node, Plugin.node, Auth.node])))
   const BOX = "http://127.0.0.1:9"
@@ -1456,18 +1471,6 @@ describe("the agent's own actions under Vector Local", () => {
         ),
       ),
   })
-  // Vector Local as the owner sets it in their own config, so the config watcher, which may read the files again at
-  // any moment, applies the same policy instead of turning Vector Local off in the middle of a test.
-  const setLocal = (block?: ConfigLocalV1.Info) => {
-    const file = path.join(Global.Path.config, "vector.json")
-    rmSync(file, { force: true })
-    if (block) {
-      mkdirSync(path.dirname(file), { recursive: true })
-      writeFileSync(file, JSON.stringify({ local: block }))
-    }
-    Config.refreshLocal()
-    Config.confirmLocal()
-  }
   const on = (web: "ask" | "none" = "ask") =>
     Effect.sync(() => {
       asked.length = 0
@@ -1945,6 +1948,10 @@ describe("Vector's own services under Vector Local", () => {
 
 describe("Vector's own git and the V2 runner under Vector Local", () => {
   const git = testEffect(LayerNode.compile(LayerNode.group([Git.node, CrossSpawnSpawner.node])))
+  afterEach(() => {
+    setLocal()
+    rmSync(Config.localConfirmedFile(), { force: true })
+  })
 
   git.live("decides a git fetch to github.com before git starts, and blocks it with Web access None", () =>
     Effect.gen(function* () {
@@ -1952,7 +1959,7 @@ describe("Vector's own git and the V2 runner under Vector Local", () => {
       const repo = yield* Git.Service
       const repository = yield* repo.repo.discover(AbsolutePath.make(dir))
       expect(repository).toBeDefined()
-      Egress.configure(LocalPolicy.resolve({ global: { enabled: true, web: "none" } }))
+      setLocal({ enabled: true, web: "none" })
       expect(Git.gitEnvironment()).toEqual({ GIT_ALLOW_PROTOCOL: "file" })
       const fetched = yield* repo.sync
         .fetchRemotes(repository!, { remoteUrl: "https://github.com/vectordevai/vector.git" })
@@ -1983,7 +1990,7 @@ describe("Vector's own git and the V2 runner under Vector Local", () => {
       // .invalid names never resolve, so nothing could be reached even if a decision were missed.
       yield* Effect.promise(() => Bun.$`git -C ${dir} remote add team/fork https://git.invalid/team/fork.git`.quiet())
       yield* Effect.promise(() => Bun.$`git -C ${dir} config url.https://git.invalid/.insteadOf gh:`.quiet())
-      Egress.configure(LocalPolicy.resolve({ global: { enabled: true } }))
+      setLocal({ enabled: true })
       const named = yield* repo.sync.fetchBranch(repository!, { remote: "team/fork", branch: "main" }).pipe(Effect.flip)
       expect(named.message).toBe(
         "Vector Local blocked a git request to git.invalid. Vector Local blocks Vector's own git requests to internet servers unless you allow one.",
@@ -2098,7 +2105,7 @@ describe("Vector's own git and the V2 runner under Vector Local", () => {
       // With Vector Local off, the first model that has a route is the automatic choice.
       expect((yield* automatic).providerID).toBe(ProviderV2.ID.make("anthropic"))
 
-      Egress.configure(LocalPolicy.resolve({ global: { enabled: true, endpoints: ["http://127.0.0.1:9"] } }))
+      setLocal({ enabled: true, endpoints: ["http://127.0.0.1:9"] })
       const refused = yield* refusal(cloud)
       expect(refused.message).toBe(
         "anthropic/claude: off in Vector Local. https://api.anthropic.com is a cloud AI service, not a server you host. Your company's policy can list it, or turn Vector Local off to use it.",

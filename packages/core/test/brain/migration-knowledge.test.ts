@@ -156,6 +156,7 @@ describe("Brain knowledge migration", () => {
       { id: "20261201000000_research" },
       { id: "20261202000000_facets" },
       { id: "20261203000000_revocation" },
+      { id: "20261212000000_research_claims" },
     ])
     // What was learned before private memory existed is not private.
     expect(entries).toEqual([{ id: "m1a2b3", private: 0 }])

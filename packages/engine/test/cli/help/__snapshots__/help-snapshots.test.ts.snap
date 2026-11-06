@@ -130,8 +130,8 @@ Options:
                      and the addresses in the message)         [string] [choices: "browser", "none"]
       --scope        with --research: the web, this repository's brain and files, or both (all)
                                                            [string] [choices: "web", "brain", "all"]
-      --report       with --research: write the report, with its sources, to this Markdown file
-                                                                                            [string]
+      --report       with --research: write the report and sources to a .md, .json, .docx or .pdf
+                     file                                                                   [string]
       --auto         auto-approve permissions that are not explicitly denied (dangerous!)
                                                                           [boolean] [default: false]
       --local        keep this run on Vector Local: model calls go only to the model servers on your

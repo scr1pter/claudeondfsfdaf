@@ -147,6 +147,8 @@ const ADDRESSES: Readonly<Record<string, string>> = {
   "packages/core/src/provider-policy.ts": "The sign-in origins Vector accepts for each provider; it connects to none.",
   "packages/core/src/public-session-share.ts": SHOWN,
   "packages/core/src/repository.ts": GIT,
+  "packages/core/src/research/export.ts":
+    "The Office Open XML namespace names a Word export writes into its own package parts; nothing fetches them.",
   "packages/core/src/review/format.ts": SHOWN,
   "packages/core/src/session/runner/model.ts": MODEL_API,
   "packages/engine/src/cli/cmd/github.git.ts": GIT,
@@ -163,6 +165,8 @@ const ADDRESSES: Readonly<Record<string, string>> = {
   "packages/engine/src/plugin/gitlab.ts": MODEL_API,
   "packages/engine/src/plugin/poe.ts": MODEL_API,
   "packages/engine/src/plugin/xai.ts": MODEL_API,
+  "packages/engine/src/provider/transform.ts":
+    "OpenAI's default API address, parsed only to recognize the official endpoint for prompt cache breakpoints; the model call itself goes through provider.ts's model call decision.",
   "packages/engine/src/server/routes/instance/httpapi/handlers/teams.ts": SHOWN,
   "packages/engine/src/util/repository.ts": GIT,
   "packages/llm/src/protocols/anthropic-messages.ts": MODEL_API,
