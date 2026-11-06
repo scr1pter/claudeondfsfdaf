@@ -254,7 +254,7 @@ winrt::handle medium_token(const TokenIdentity& original, HANDLE output) {
     TOKEN_LINKED_TOKEN linked{}; if (GetTokenInformation(source.get(), TokenLinkedToken, &linked, sizeof(linked), &returned) && returned == sizeof(linked)) {
       winrt::handle limited(linked.LinkedToken); HANDLE duplicate = nullptr;
       if (limited && DuplicateTokenEx(limited.get(), access, nullptr, SecurityImpersonation, TokenPrimary, &duplicate)) {
-        winrt::handle candidate(duplicate); const auto observed = observe_token(candidate.get());
+        winrt::handle candidate(duplicate); const auto observed = observe_token_handle(candidate.get());
         require(serving_token_allowed(observed) && same_context(original, observed), L"parent_invalid");
         (void)bootstrap_token_diagnostic(output, candidate.get(), "linked"); return candidate;
       }
@@ -267,13 +267,13 @@ winrt::handle medium_token(const TokenIdentity& original, HANDLE output) {
   struct Label { TOKEN_MANDATORY_LABEL label{}; alignas(DWORD) std::array<unsigned char, SECURITY_MAX_SID_SIZE> sid{}; } label;
   DWORD count = SECURITY_MAX_SID_SIZE; require(CreateWellKnownSid(WinMediumLabelSid, nullptr, label.sid.data(), &count) != FALSE, L"medium_token_unavailable"); label.label.Label.Sid = label.sid.data(); label.label.Label.Attributes = SE_GROUP_INTEGRITY;
   require(SetTokenInformation(token.get(), TokenIntegrityLevel, &label.label, static_cast<DWORD>(offsetof(Label, sid) + count)) != FALSE, L"medium_token_unavailable");
-  const auto observed = observe_token(token.get()); require(serving_token_allowed(observed) && same_context(original, observed), L"parent_invalid");
+  const auto observed = observe_token_handle(token.get()); require(serving_token_allowed(observed) && same_context(original, observed), L"parent_invalid");
   const auto proof = bootstrap_token_diagnostic(output, token.get(), "restricted");
   // Match the never-shipped Caller's proven startup boundary on this newly owned candidate only.
   // Unknown access fails closed; source/high/linked tokens and process/global ACLs are never changed.
   require(proof.process_dacl == 'g' || proof.process_dacl == 'd', L"bootstrap_failed");
   if (proof.process_dacl == 'd') (void)caller_token_acl::ensure_owned_restricted(token.get());
-  require(same_token(observed, observe_token(token.get())), L"parent_invalid"); return token;
+  require(same_token(observed, observe_token_handle(token.get())), L"parent_invalid"); return token;
 }
 class QuotaPrivilege final {
  public:

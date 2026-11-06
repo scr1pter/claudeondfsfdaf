@@ -78,6 +78,8 @@ bool parent_evidence_allowed(const ParentEvidence& evidence);
 
 // Throws on unknown observations. Callers must not synthesize a non-elevated token on failure.
 TokenIdentity observe_token(HANDLE process);
+// Reads a borrowed token handle directly; never closes it or treats it as a process handle.
+TokenIdentity observe_token_handle(HANDLE token);
 
 class ParentIdentity final {
  public:

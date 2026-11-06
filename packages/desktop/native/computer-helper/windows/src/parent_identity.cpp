@@ -247,15 +247,12 @@ bool parent_evidence_allowed(const ParentEvidence& value) {
   return same_install_parent(value.helper_image.path, value.parent_image.path);
 }
 
-TokenIdentity observe_token(HANDLE process) {
-  HANDLE raw = nullptr;
-  if (!OpenProcessToken(process, TOKEN_QUERY, &raw)) throw TokenObservationError(0, GetLastError(), TokenObservationError::Step::open_token);
-  winrt::handle token{raw};
+TokenIdentity observe_token_handle(HANDLE token) {
   TokenIdentity result;
-  auto user = information(token.get(), TokenUser);
+  auto user = information(token, TokenUser);
   if (user.size() < sizeof(TOKEN_USER)) unknown();
   result.user = sid_bytes(reinterpret_cast<const TOKEN_USER*>(user.data())->User.Sid);
-  auto groups = information(token.get(), TokenGroups);
+  auto groups = information(token, TokenGroups);
   if (groups.size() < FIELD_OFFSET(TOKEN_GROUPS, Groups)) unknown();
   const auto group = reinterpret_cast<const TOKEN_GROUPS*>(groups.data());
   if (group->GroupCount > (groups.size() - FIELD_OFFSET(TOKEN_GROUPS, Groups)) / sizeof(SID_AND_ATTRIBUTES)) unknown();
@@ -264,15 +261,15 @@ TokenIdentity observe_token(HANDLE process) {
     if (!result.logon.empty()) unknown();
     result.logon = sid_bytes(group->Groups[index].Sid);
   }
-  auto stats = information(token.get(), TokenStatistics);
+  auto stats = information(token, TokenStatistics);
   if (stats.size() < sizeof(TOKEN_STATISTICS)) unknown();
   const auto authentication = reinterpret_cast<const TOKEN_STATISTICS*>(stats.data())->AuthenticationId;
   result.authentication = (std::uint64_t(static_cast<DWORD>(authentication.HighPart)) << 32) | authentication.LowPart;
-  auto session = information(token.get(), TokenSessionId);
-  auto integrity = information(token.get(), TokenIntegrityLevel);
-  auto elevated = information(token.get(), TokenElevation);
-  auto ui = information(token.get(), TokenUIAccess);
-  auto container = information(token.get(), TokenIsAppContainer);
+  auto session = information(token, TokenSessionId);
+  auto integrity = information(token, TokenIntegrityLevel);
+  auto elevated = information(token, TokenElevation);
+  auto ui = information(token, TokenUIAccess);
+  auto container = information(token, TokenIsAppContainer);
   if (session.size() < sizeof(DWORD) || integrity.size() < sizeof(TOKEN_MANDATORY_LABEL) || elevated.size() < sizeof(TOKEN_ELEVATION) ||
       ui.size() < sizeof(DWORD) || container.size() < sizeof(DWORD)) unknown();
   result.session = *reinterpret_cast<const DWORD*>(session.data());
@@ -283,6 +280,13 @@ TokenIdentity observe_token(HANDLE process) {
   result.ui_access = *reinterpret_cast<const DWORD*>(ui.data()) != 0;
   result.app_container = *reinterpret_cast<const DWORD*>(container.data()) != 0;
   return result;
+}
+
+TokenIdentity observe_token(HANDLE process) {
+  HANDLE raw = nullptr;
+  if (!OpenProcessToken(process, TOKEN_QUERY, &raw)) throw TokenObservationError(0, GetLastError(), TokenObservationError::Step::open_token);
+  winrt::handle token{raw};
+  return observe_token_handle(token.get());
 }
 
 struct ParentIdentity::State {

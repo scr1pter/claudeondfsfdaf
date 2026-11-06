@@ -199,12 +199,34 @@ CaptureBitmap window_bitmap(const CaptureReadRequest& request, const std::functi
   winrt::check_hresult(CreateDirect3D11DeviceFromDXGIDevice(dxgi.get(), inspectable.put()));
   const auto graphics = inspectable.as<winrt::Windows::Graphics::DirectX::Direct3D11::IDirect3DDevice>();
   GraphicsCaptureItem item{nullptr};
-  phase = CaptureReadPhase::window_item_ticket;
-  { WindowsComCall call; require(call.current());
+  winrt::com_ptr<IGraphicsCaptureItemInterop> interop;
+  // Two distinct metadata calls each retain a <=50ms ticket and share one absolute acceptance bound.
+  const auto metadata_deadline = Clock::now() + std::chrono::milliseconds(100);
+  const auto metadata_current = [&] {
+    require(Clock::now() < metadata_deadline && current());
+    require_capture_surface(request.window);
+    require(windows_window_current(*request.window));
+    RECT fresh{};
+    require(SUCCEEDED(DwmGetWindowAttribute(request.window->hwnd, DWMWA_EXTENDED_FRAME_BOUNDS, &fresh, sizeof(fresh))) && rectangle(fresh) == bounds);
+    require(current() && Clock::now() < metadata_deadline);
+  };
+  const auto ticket_budget = [&] {
+    const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(metadata_deadline - Clock::now()).count();
+    require(remaining > 0);
+    return static_cast<uint32_t>(std::min<int64_t>(50, remaining));
+  };
+  phase = CaptureReadPhase::window_factory_ticket; metadata_current();
+  { WindowsComCall call(ticket_budget()); require(call.current());
+    require(current() && Clock::now() < metadata_deadline && call.current());
     phase = CaptureReadPhase::window_factory;
-    const auto interop = winrt::get_activation_factory<GraphicsCaptureItem, IGraphicsCaptureItemInterop>();
-    phase = CaptureReadPhase::window_factory_current; require(call.current());
+    interop = winrt::get_activation_factory<GraphicsCaptureItem, IGraphicsCaptureItemInterop>();
+    phase = CaptureReadPhase::window_factory_current; require(call.current() && Clock::now() < metadata_deadline);
     phase = CaptureReadPhase::window_factory_context; require(current());
+  } // Retire and join the first timer before admitting any successor RPC on this thread.
+  phase = CaptureReadPhase::window_factory_retired; metadata_current();
+  phase = CaptureReadPhase::window_item_ticket;
+  { WindowsComCall call(ticket_budget()); require(call.current());
+    require(current() && Clock::now() < metadata_deadline && call.current());
     phase = CaptureReadPhase::window_item_create;
     const auto created = interop->CreateForWindow(request.window->hwnd, winrt::guid_of<GraphicsCaptureItem>(), winrt::put_abi(item));
     if (FAILED(created)) {
@@ -216,8 +238,9 @@ CaptureBitmap window_bitmap(const CaptureReadRequest& request, const std::functi
         phase = cancelled ? CaptureReadPhase::window_item_current_cancelled : created == E_ACCESSDENIED ? CaptureReadPhase::window_item_current_denied : CaptureReadPhase::window_item_current_other;
     }
     winrt::check_hresult(created);
-    phase = CaptureReadPhase::window_item_current; require(call.current());
+    phase = CaptureReadPhase::window_item_current; require(call.current() && Clock::now() < metadata_deadline);
     phase = CaptureReadPhase::window_item_context; require(current()); }
+  phase = CaptureReadPhase::window_item_retired; metadata_current();
   phase = CaptureReadPhase::window_item_size;
   const auto size = item.Size();
   // DWM's real extended frame and the OS capture item must agree; no guessed shadow/border offset.
