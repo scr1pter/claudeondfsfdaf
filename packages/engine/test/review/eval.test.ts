@@ -926,6 +926,14 @@ describe("ReviewEval.replay", () => {
         expect(yield* refused({ config: { verifyPolicy: "shared" } })).toContain(
           "config sets verifyPolicy, a pipeline variant's setting: pass the variant in `variant`",
         )
+        // Nor a route setting (VS-23a): nothing enforces one in a replay, so its artifact may not record one.
+        // @ts-expect-error Route settings come only from trusted sources, so a typed caller cannot put one in config.
+        const route: ReplayInput["config"] = { privacy: "zdr" }
+        expect(route).toBeDefined()
+        expect(yield* refused({ config: { privacy: "zdr", zdrAttested: ["openrouter"] } })).toContain(
+          "config sets privacy, zdrAttested, a route setting a replay cannot apply",
+        )
+        expect(yield* refused({ config: { privacy: "standard" } })).toContain("config sets privacy, a route setting")
         // A pending name with nothing to set would be the frozen pipeline.
         expect(yield* refused({ variant: { name: "engine:trivial-skip", keys: {} } })).toContain(
           "sets no key and no model requirement, so it would run the frozen pipeline under its name",

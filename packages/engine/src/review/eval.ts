@@ -40,6 +40,8 @@ import {
   REVIEW_CONFIG_PATH,
   REVIEW_RULES_PATHS,
   rulesForPaths,
+  SOURCED_REVIEW_KEYS,
+  type SourcedReviewKey,
 } from "@vectordevai/core/review/config"
 import {
   buildNoteBody,
@@ -129,9 +131,11 @@ export interface ReplayInput {
   triage?: ResolvedModel
   // The eval's own settings, applied over the base's review.json: its limits, and settings a test fixes. Its
   // maxCostUsd must be a positive cap, and it alone sets maxCostUsd, maxSteps and timeoutMinutes (the defaults where
-  // it leaves the last two out). It never sets a variant's key (VARIANT_KEYS.engine): that goes in `variant`. The type
-  // says so, and step 0b refuses one from an untyped caller.
-  config?: Partial<Omit<ReviewConfig, (typeof VARIANT_KEYS.engine)[number]>>
+  // it leaves the last two out). It never sets a variant's key (VARIANT_KEYS.engine): that goes in `variant`. Nor does
+  // it set a route setting (SOURCED_REVIEW_KEYS: privacy, zdrAttested), which comes only from a trusted source through
+  // mergeReviewConfig once a runner enforces it (VS-23b). The type says so, and step 0b refuses either from an
+  // untyped caller.
+  config?: Partial<Omit<ReviewConfig, (typeof VARIANT_KEYS.engine)[number] | SourcedReviewKey>>
   // The pipeline variant the eval admitted the replay for (admitReplay), applied over the base's settings and `config`.
   // Absent for the frozen pipeline.
   variant?: Omit<VariantRecord, "applied">
@@ -1108,11 +1112,16 @@ export function quotedLocations(related: readonly RelatedCode[]) {
 }
 
 // Why a replay's settings cannot name its run, if they cannot: a variant's key set through `config`, which would leave
-// the run unnamed, or a variant that would run the frozen pipeline, or anything but itself, under its name.
+// the run unnamed, a route setting there, which nothing would enforce, or a variant that would run the frozen pipeline,
+// or anything but itself, under its name.
 function variantProblem(input: ReplayInput) {
   const misplaced = VARIANT_KEYS.engine.filter((key) => input.config && Object.hasOwn(input.config, key))
   if (misplaced.length)
     return `config sets ${misplaced.join(", ")}, a pipeline variant's setting: pass the variant in \`variant\`, as admitReplay hands it out, so the artifact names the run.`
+  // Nothing enforces the route rules in a replay yet, so its artifact may not record a route setting.
+  const sourced = SOURCED_REVIEW_KEYS.filter((key) => input.config && Object.hasOwn(input.config, key))
+  if (sourced.length)
+    return `config sets ${sourced.join(", ")}, a route setting a replay cannot apply: route settings come only from trusted settings once a runner enforces them.`
   const variant = input.variant
   if (!variant) return undefined
   if (!variant.name.startsWith("engine:") || !VARIANT_NAME.test(variant.name))

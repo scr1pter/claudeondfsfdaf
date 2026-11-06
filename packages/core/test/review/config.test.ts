@@ -1,10 +1,12 @@
 import { describe, expect, test } from "bun:test"
 import {
   MAX_RULES_BYTES,
+  mergeReviewConfig,
   parseReviewConfig,
   parseReviewRules,
   REVIEW_CONFIG_PATH,
   rulesForPaths,
+  SOURCED_REVIEW_KEYS,
 } from "@vectordevai/core/review/config"
 import { DEFAULT_REVIEW_CONFIG } from "@vectordevai/core/review/types"
 
@@ -17,6 +19,11 @@ describe("parseReviewConfig", () => {
     config.ignore.push("mutated")
     expect(DEFAULT_REVIEW_CONFIG.skipLabels).toEqual(["vector:skip", "no-review"])
     expect(DEFAULT_REVIEW_CONFIG.ignore).toEqual([])
+    // The route settings (VS-23a) have no default entry, so the defaults and every digest of them stay as they were.
+    for (const key of SOURCED_REVIEW_KEYS) {
+      expect(Object.hasOwn(DEFAULT_REVIEW_CONFIG, key)).toBe(false)
+      expect(Object.hasOwn(config, key)).toBe(false)
+    }
   })
 
   test("falls back to the defaults on bad JSON", () => {
@@ -275,6 +282,246 @@ describe("parseReviewConfig", () => {
       'REVIEW_VERIFY must be "blocking", "all", "off"; using "blocking".',
       "REVIEW_MAX_COST_USD must be a number of at least 0; using 3.",
     ])
+  })
+})
+
+describe("mergeReviewConfig", () => {
+  const JSON_TEXT = JSON.stringify({ maxComments: 4, minSeverity: "nit", ignore: ["gen/**"], bogus: 1, auto: true })
+  const ENV = {
+    REVIEW_MAX_COMMENTS: "3",
+    REVIEW_AUTO_MODEL: "anthropic/claude-haiku-4-5",
+    REVIEW_VERIFY: "sometimes",
+    REVIEW_IGNORE: "docs/**",
+  }
+  const zdrWarning = (label: string) => `${label} must be "standard" or "zdr"; using "zdr", the stricter setting.`
+
+  test("with neither route setting it is parseReviewConfig, on every surface", () => {
+    const texts = [
+      JSON_TEXT,
+      undefined,
+      "{",
+      "[1, 2]",
+      "null",
+      '"text"',
+      "",
+      '\uFEFF{"maxComments": 4}',
+      '{"auto": false, "drafts": true, "bogus": 1, "__proto__": {"maxComments": 1}, "constructor": 2}',
+    ]
+    for (const text of texts) {
+      // The GitHub job: the base's review.json and the workflow's environment, on an automatic run.
+      expect(mergeReviewConfig({ surface: "github", json: { at: "base", text }, env: ENV, trigger: "auto" })).toEqual(
+        parseReviewConfig({ json: text, env: ENV, trigger: "auto" }),
+      )
+      // The CLI on your own branch, and with --pr.
+      for (const at of ["working-tree", "base"] as const)
+        expect(
+          mergeReviewConfig({ surface: "local", global: {}, json: { at, text }, env: ENV, trigger: "local" }),
+        ).toEqual(parseReviewConfig({ json: text, env: ENV, trigger: "local" }))
+      // The desktop: no environment.
+      expect(mergeReviewConfig({ surface: "local", json: { at: "working-tree", text }, trigger: "desktop" })).toEqual(
+        parseReviewConfig({ json: text, trigger: "desktop" }),
+      )
+    }
+    // The desktop's base blob, when a pull request changes review.json, keeps today's defaults.
+    expect(
+      mergeReviewConfig({
+        surface: "local",
+        json: { at: "base", text: JSON_TEXT, privacyOnly: true },
+        trigger: "desktop",
+      }).config,
+    ).toEqual(parseReviewConfig({ trigger: "desktop" }).config)
+  })
+
+  test("parseReviewConfig itself still ignores both, so no surface takes zdr before it enforces it", () => {
+    const { config, warnings } = parseReviewConfig({
+      json: JSON.stringify({ privacy: "zdr", zdrAttested: ["openrouter"] }),
+      env: { REVIEW_PRIVACY: "zdr", REVIEW_ZDR_ATTESTED: "openrouter" },
+    })
+    expect(config).toEqual(DEFAULT_REVIEW_CONFIG)
+    expect(Object.hasOwn(config, "privacy")).toBe(false)
+    expect(warnings).toEqual([
+      `${REVIEW_CONFIG_PATH}: unknown key "privacy" is ignored.`,
+      `${REVIEW_CONFIG_PATH}: unknown key "zdrAttested" is ignored.`,
+    ])
+  })
+
+  test("privacy is raised by any source and lowered by none", () => {
+    const values = [undefined, "standard", "zdr"] as const
+    for (const surface of ["local", "github"] as const)
+      for (const global of values)
+        for (const json of values)
+          for (const env of values) {
+            const result = mergeReviewConfig({
+              surface,
+              ...(global === undefined ? {} : { global: { privacy: global } }),
+              json: { at: "base", text: json === undefined ? undefined : JSON.stringify({ privacy: json }) },
+              env: env === undefined ? {} : { REVIEW_PRIVACY: env },
+            })
+            expect(result.config.privacy).toBe([global, json, env].includes("zdr") ? "zdr" : undefined)
+            expect(result.warnings).toEqual([])
+          }
+  })
+
+  test("privacy is read without case or surrounding space", () => {
+    for (const input of [
+      { global: { privacy: " ZDR " } },
+      { json: { at: "working-tree" as const, text: '{"privacy": "Zdr"}' } },
+      { env: { REVIEW_PRIVACY: " zdr\n" } },
+    ]) {
+      const result = mergeReviewConfig({ surface: "local", ...input })
+      expect(result.config.privacy).toBe("zdr")
+      expect(result.warnings).toEqual([])
+    }
+    const standard = mergeReviewConfig({ surface: "local", env: { REVIEW_PRIVACY: "Standard" } })
+    expect(Object.hasOwn(standard.config, "privacy")).toBe(false)
+    expect(standard.warnings).toEqual([])
+  })
+
+  test("a privacy value that cannot be read fails closed to zdr, with a warning", () => {
+    for (const value of ["zero", true, null, 1, ""]) {
+      const result = mergeReviewConfig({
+        surface: "local",
+        json: { at: "base", text: JSON.stringify({ privacy: value }) },
+      })
+      expect(result.config.privacy).toBe("zdr")
+      expect(result.warnings).toEqual([zdrWarning(`${REVIEW_CONFIG_PATH}: "privacy"`)])
+    }
+    const env = mergeReviewConfig({ surface: "github", env: { REVIEW_PRIVACY: "maybe" } })
+    expect(env.config.privacy).toBe("zdr")
+    expect(env.warnings).toEqual([zdrWarning("REVIEW_PRIVACY")])
+    const global = mergeReviewConfig({ surface: "local", global: { privacy: 3 } })
+    expect(global.config.privacy).toBe("zdr")
+    expect(global.warnings).toEqual([zdrWarning("review.privacy in the global config")])
+    // A blank environment value is unset, as for every other variable.
+    const blank = mergeReviewConfig({ surface: "local", env: { REVIEW_PRIVACY: "  " } })
+    expect(blank).toEqual(parseReviewConfig({ env: { REVIEW_PRIVACY: "  " } }))
+  })
+
+  test("a review.json that cannot be read fails closed only when it mentions privacy", () => {
+    for (const text of ['{"privacy": "zdr",}', '["privacy"]', "privacy: zdr"]) {
+      const result = mergeReviewConfig({ surface: "github", json: { at: "base", text } })
+      expect(result.config).toEqual({ ...DEFAULT_REVIEW_CONFIG, privacy: "zdr" })
+      expect(result.warnings).toHaveLength(2)
+      expect(result.warnings[1]).toBe(
+        `${REVIEW_CONFIG_PATH} could not be read and mentions "privacy"; using "zdr", the stricter setting.`,
+      )
+    }
+    const text = '{"maxComments": 4,}'
+    expect(mergeReviewConfig({ surface: "github", json: { at: "base", text } })).toEqual(
+      parseReviewConfig({ json: text }),
+    )
+  })
+
+  test("locally, zdrAttested comes only from the global config", () => {
+    const global = mergeReviewConfig({ surface: "local", global: { zdrAttested: ["openrouter", " gpu-box:8080 "] } })
+    expect(global.config.zdrAttested).toEqual(["openrouter", "gpu-box:8080"])
+    expect(global.warnings).toEqual([])
+    const ignored = `${REVIEW_CONFIG_PATH}: "zdrAttested" is ignored: "zdrAttested" is read only from the global config.`
+    // Your working tree, even beside the global config's own list, and the base a pull request is reviewed against.
+    const tree = mergeReviewConfig({
+      surface: "local",
+      global: { zdrAttested: ["openrouter"] },
+      json: { at: "working-tree", text: '{"zdrAttested": ["acme"]}' },
+    })
+    expect(tree.config.zdrAttested).toEqual(["openrouter"])
+    expect(tree.warnings).toEqual([ignored])
+    for (const json of [
+      { at: "base" as const, text: '{"zdrAttested": ["acme"]}' },
+      { at: "base" as const, text: '{"zdrAttested": ["acme"]}', privacyOnly: true },
+    ]) {
+      const result = mergeReviewConfig({ surface: "local", json, trigger: "desktop" })
+      expect(Object.hasOwn(result.config, "zdrAttested")).toBe(false)
+      expect(result.warnings).toEqual([ignored])
+    }
+    // No environment variable is read for it.
+    const env = mergeReviewConfig({
+      surface: "local",
+      env: { REVIEW_ZDR_ATTESTED: "openrouter", ZDR_ATTESTED: "openrouter", REVIEW_ATTESTED: "openrouter" },
+    })
+    expect(Object.hasOwn(env.config, "zdrAttested")).toBe(false)
+    expect(env.warnings).toEqual([])
+  })
+
+  test("in CI, zdrAttested comes only from the base branch's review.json", () => {
+    const base = mergeReviewConfig({ surface: "github", json: { at: "base", text: '{"zdrAttested": ["openrouter"]}' } })
+    expect(base.config.zdrAttested).toEqual(["openrouter"])
+    expect(base.warnings).toEqual([])
+    const only = `"zdrAttested" is read only from ${REVIEW_CONFIG_PATH} on the base branch.`
+    const global = mergeReviewConfig({ surface: "github", global: { zdrAttested: ["openrouter"] } })
+    expect(Object.hasOwn(global.config, "zdrAttested")).toBe(false)
+    expect(global.warnings).toEqual([`review.zdrAttested in the global config is ignored: ${only}`])
+    const tree = mergeReviewConfig({
+      surface: "github",
+      json: { at: "working-tree", text: '{"zdrAttested": ["openrouter"]}' },
+    })
+    expect(Object.hasOwn(tree.config, "zdrAttested")).toBe(false)
+    expect(tree.warnings).toEqual([`${REVIEW_CONFIG_PATH}: "zdrAttested" is ignored: ${only}`])
+    const env = mergeReviewConfig({ surface: "github", env: { REVIEW_ZDR_ATTESTED: "openrouter" } })
+    expect(Object.hasOwn(env.config, "zdrAttested")).toBe(false)
+  })
+
+  test("a zdrAttested that is not a list of names attests nothing it cannot read", () => {
+    const label = "review.zdrAttested in the global config"
+    const text = mergeReviewConfig({ surface: "local", global: { zdrAttested: "openrouter" } })
+    expect(Object.hasOwn(text.config, "zdrAttested")).toBe(false)
+    expect(text.warnings).toEqual([`${label} must be a list of provider IDs and model server hosts; it is ignored.`])
+    const mixed = mergeReviewConfig({ surface: "local", global: { zdrAttested: [1, " openrouter ", " ", null] } })
+    expect(mixed.config.zdrAttested).toEqual(["openrouter"])
+    expect(mixed.warnings).toEqual([`${label}: entries that are not text were dropped.`])
+    const urls = mergeReviewConfig({
+      surface: "local",
+      global: { zdrAttested: ["https://gpu-box:8080", "gpu-box", "gpu box", "user@host"] },
+    })
+    expect(urls.config.zdrAttested).toEqual(["gpu-box"])
+    expect(urls.warnings).toEqual([
+      `${label}: "https://gpu-box:8080", "gpu box", "user@host" name neither a provider ID nor a host, so they were dropped; write a server as its host, such as "gpu-box:8080".`,
+    ])
+    const empty = mergeReviewConfig({ surface: "local", global: { zdrAttested: [] } })
+    expect(empty).toEqual(parseReviewConfig())
+  })
+
+  test("the desktop's base blob raises privacy, and changes nothing else", () => {
+    const blob = mergeReviewConfig({
+      surface: "local",
+      json: { at: "base", text: '{"privacy": "zdr", "maxComments": 1, "zdrAttested": ["acme"]}', privacyOnly: true },
+      trigger: "desktop",
+    })
+    expect(blob.config).toEqual({ ...parseReviewConfig({ trigger: "desktop" }).config, privacy: "zdr" })
+    expect(blob.warnings).toEqual([
+      `${REVIEW_CONFIG_PATH}: "zdrAttested" is ignored: "zdrAttested" is read only from the global config.`,
+    ])
+    // On any surface: a base blob read for privacy alone is never the trusted source of zdrAttested.
+    const github = mergeReviewConfig({
+      surface: "github",
+      json: { at: "base", text: '{"zdrAttested":["openrouter"]}', privacyOnly: true },
+    })
+    expect(github.config).toEqual(parseReviewConfig({}).config)
+    expect(github.config.zdrAttested).toBeUndefined()
+    expect(github.warnings).toEqual([
+      `${REVIEW_CONFIG_PATH}: "zdrAttested" is ignored: "zdrAttested" is read only from ${REVIEW_CONFIG_PATH} on the base branch.`,
+    ])
+    // With no review.json read at all, today's fallback, the global setting still applies.
+    const fallback = mergeReviewConfig({ surface: "local", global: { privacy: "zdr" }, trigger: "desktop" })
+    expect(fallback.config).toEqual({ ...DEFAULT_REVIEW_CONFIG, privacy: "zdr" })
+    // A pull request's own review.json can never lower the base's or the global setting.
+    for (const input of [{ global: { privacy: "zdr" } }, { env: { REVIEW_PRIVACY: "zdr" } }])
+      expect(
+        mergeReviewConfig({
+          surface: "local",
+          ...input,
+          json: { at: "working-tree", text: '{"privacy": "standard"}' },
+        }).config.privacy,
+      ).toBe("zdr")
+  })
+
+  test("returns new arrays", () => {
+    const global = { zdrAttested: ["openrouter"] }
+    const result = mergeReviewConfig({ surface: "local", global })
+    result.config.zdrAttested?.push("mutated")
+    result.config.skipLabels.push("mutated")
+    expect(global.zdrAttested).toEqual(["openrouter"])
+    expect(DEFAULT_REVIEW_CONFIG.skipLabels).toEqual(["vector:skip", "no-review"])
+    expect(Object.hasOwn(DEFAULT_REVIEW_CONFIG, "zdrAttested")).toBe(false)
   })
 })
 

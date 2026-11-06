@@ -30,16 +30,17 @@ import { REVIEW_REPORT_JSON_SCHEMA, VERIFY_JSON_SCHEMA } from "./schema"
 import type { Finding, PriorFinding, ReviewConfig } from "./types"
 
 // Bump when a change to the review pipeline changes what a review finds or posts: either runner (engine review/run.ts,
-// the desktop's ai-review.ts), the core code they share for planning, packing, selection and anchoring, or the review
-// and security agents' own prompts. Every certificate made before it then stops applying. promptsDigest catches a
-// change to the text of the core prompts and output schemas without a bump, since it renders every section a prompt
-// can have; it cannot see a runner filling those inputs differently or a change to the prompts' length limits.
+// the desktop's ai-review.ts), the core code they share for planning, packing, selection and anchoring, the route rules
+// (privacy.ts), or the review and security agents' own prompts. Every certificate made before it then stops applying.
+// promptsDigest catches a change to the text of the core prompts and output schemas without a bump, since it renders
+// every section a prompt can have; it cannot see a runner filling those inputs differently or a change to the prompts'
+// length limits.
 export const REVIEW_PIPELINE_REVISION = 1
 
 // A digest of the pipeline's sources (REVIEW_PIPELINE_FILES in core test/review/model-evidence.test.ts), which that
 // test pins, so CI fails when one of them changes and nobody decided whether REVIEW_PIPELINE_REVISION goes up. When it
 // fails: bump the revision if the change alters what a review finds or posts, then set this to the digest it prints.
-export const REVIEW_PIPELINE_SOURCES = "228a42cb975134ce"
+export const REVIEW_PIPELINE_SOURCES = "54fbad71b62bdbda"
 
 // The longest a certificate may run from its approval. The plan asks for an expiry and sets none; a hosted model can
 // change underneath its id, so the evidence is re-earned on this cadence.
@@ -71,6 +72,9 @@ export interface EvidenceScope {
   prompts: string // promptsDigest()
   policy: string // policyDigest(config)
   triage?: string // the cheaper first pass's "provider/model", when the review had one
+  // "zdr" only when a runner enforced the route rules (privacy.ts) for the whole review: VS-23b and VS-23c set it.
+  // Absent otherwise, so every scope and certificate made before VS-23 still matches.
+  route?: "zdr"
 }
 
 export interface ModelCertificate {
@@ -79,6 +83,7 @@ export interface ModelCertificate {
   model: string // the exact "provider/model" evaluated; another route or provider to the same model is another model
   variant?: string
   triage?: string // the triage model the evaluated pipeline ran with
+  route?: "zdr" // the evaluated pipeline ran on zero data retention routes only (EvidenceScope.route)
   adapters: EvidenceAdapter[] // the runners the eval replayed
   pipeline: number
   prompts: string
@@ -115,7 +120,7 @@ export interface ModelSubject {
 }
 
 export type EvidenceStatus = "certified" | "unvetted" | "expired" | "stale" | "retired" | "rerouted"
-export type ScopeChange = "adapter" | "pipeline" | "prompts" | "policy" | "triage" | "variant"
+export type ScopeChange = "adapter" | "pipeline" | "prompts" | "policy" | "triage" | "variant" | "route"
 
 export interface ModelEvidence {
   role: "review" | "triage"
@@ -257,10 +262,13 @@ export function policyDigest(config: Pick<ReviewConfig, (typeof EVIDENCE_POLICY_
   return fnv1a64(JSON.stringify(EVIDENCE_POLICY_KEYS.map((key) => [key, config[key]])))
 }
 
+// `route` is the caller's to set, only when it enforced the route rules; it is never read from the config, so no scope
+// claims a zero data retention route that nothing enforced.
 export function evidenceScope(input: {
   adapter: EvidenceAdapter
   config: Pick<ReviewConfig, (typeof EVIDENCE_POLICY_KEYS)[number]>
   triage?: string
+  route?: "zdr"
 }): EvidenceScope {
   return {
     adapter: input.adapter,
@@ -268,6 +276,7 @@ export function evidenceScope(input: {
     prompts: promptsDigest(),
     policy: policyDigest(input.config),
     ...(input.triage ? { triage: input.triage } : {}),
+    ...(input.route ? { route: input.route } : {}),
   }
 }
 
@@ -315,6 +324,7 @@ export function certificateProblems(value: unknown): string[] {
     ...(cert.triage === undefined || (typeof cert.triage === "string" && MODEL.test(cert.triage))
       ? []
       : ['triage must be a "provider/model" when set']),
+    ...(cert.route === undefined || cert.route === "zdr" ? [] : ['route must be "zdr" when set']),
     ...(adapters?.length &&
     adapters.every((item) => ADAPTERS.includes(item as EvidenceAdapter)) &&
     new Set(adapters).size === adapters.length
@@ -389,6 +399,9 @@ export function certify(input: {
     )
       ? ["the candidate's runs were replayed under different pipelines, prompts, settings or triage models"]
       : []),
+    ...(first && input.scopes.some((scope) => scope.route !== first.route)
+      ? ["the candidate's runs were replayed under different privacy routes"]
+      : []),
   ]
   if (!decision || !first) return { problems }
   const certificate: ModelCertificate = {
@@ -397,6 +410,7 @@ export function certify(input: {
     model: decision.candidate.model,
     ...(input.variant ? { variant: input.variant } : {}),
     ...(first.triage ? { triage: first.triage } : {}),
+    ...(first.route ? { route: first.route } : {}),
     adapters: ADAPTERS.filter((adapter) => input.scopes.some((scope) => scope.adapter === adapter)),
     pipeline: first.pipeline,
     prompts: first.prompts,
@@ -494,6 +508,7 @@ function changes(cert: ModelCertificate, subject: ModelSubject, scope: EvidenceS
     ...(cert.policy === scope.policy ? [] : ["policy" as const]),
     ...(cert.triage === scope.triage ? [] : ["triage" as const]),
     ...(cert.variant === subject.variant ? [] : ["variant" as const]),
+    ...(cert.route === scope.route ? [] : ["route" as const]),
   ]
 }
 
@@ -511,6 +526,7 @@ const CHANGE_WORDS: Record<ScopeChange, string> = {
   policy: "other review settings",
   triage: "another triage model, or none",
   variant: "another variant of the model",
+  route: "another privacy setting",
 }
 
 // One paragraph per model that has something to say: what the evidence is, whether its provider may train on the code

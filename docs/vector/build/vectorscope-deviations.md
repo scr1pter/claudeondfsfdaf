@@ -2423,3 +2423,429 @@ taken differently. Nothing is committed.
   - Replays of trivial controls with trigger `auto` (VS-24 wiring).
   - Adversarial cases with PR text need PR text in `ReplayCase`; the case view
     has none today.
+
+## 2026-11-06 · VS-23a Pure route rules and source-tagged config
+
+Contract §1.1, §1.2 (`privacy.ts`) and §4 VS-23a of `vectorscope-upgrade.md`,
+in the "Now" window: one new pure core module, two optional `ReviewConfig`
+keys, a merge function, an `EvidenceScope` field and a note, none of which
+any runner calls. No runner, provider, LLM or posting file and no file @vector
+owns changed (`run.ts`, `ai-review.ts`, `provider.ts`, `session/llm.ts`,
+`posting.ts`, `workflow.ts`, `command.ts`, `github.*`, `github-*.ts` are
+untouched). Branch `vectorscope-engine` at `7cadfcb8`. It implements the
+VS-23a plan as corrected by its critique; the critique bullets below say where
+a point was taken differently. Nothing is committed.
+
+- **What landed.**
+  - **New core `review/privacy.ts`**, pure and browser-safe, importing only
+    what exists (I-10): `denyDataCollection`, `isOpenRouterFreeModel`,
+    `isOpenRouterURL`, `openRouterModelRouting`, `sendsToOpenRouter` and
+    `sendsToOpenRouterFree` from `free-model-catalog.ts` (unchanged),
+    `LocalPolicy.host`, `hostClass` and `origin`, and
+    `ModelPlanStatus.PROVIDER_ID` and `SITE`. Exports: `ReviewPrivacy`,
+    `ROUTE_REFUSALS` (exactly §1.2's thirteen names) and `RouteRefusal`,
+    `RouteKind`, `RouteDecision`, `RouteModel`, `decideRoute`,
+    `zdrBodyRefusal` and `zdrRequestBody`. Its header says nothing calls it
+    yet, that `zdrRequestBody` applies only to bodies on an
+    `openrouter-attested` route (every other allowed kind sends its body
+    unchanged, since `provider` is OpenRouter's field), and that ZDR reduces
+    retention but cannot rule it out (I-3).
+  - **Core `types.ts`**: `ReviewConfig` gains optional `privacy?: "standard"
+    | "zdr"` and `zdrAttested?: string[]`, absent meaning `standard` and none.
+    `DEFAULT_REVIEW_CONFIG` is unchanged. The file stays import-free.
+  - **Core `config.ts`**: `RAISE_ONLY` (`privacy`, with `REVIEW_PRIVACY`) and
+    `TRUSTED_ONLY` (`zdrAttested`) tables, `SourcedReviewKey` and
+    `SOURCED_REVIEW_KEYS`; `FIELDS`, `ENV` and `assign` exclude the sourced
+    keys; `parseReviewConfig`'s body moved unchanged into a private `settle`;
+    new `mergeReviewConfig({ surface, global?, json?, env?, trigger? })`.
+    `config.ts` does not import `privacy.ts`.
+  - **Core `model-evidence.ts`**: `EvidenceScope.route?: "zdr"`,
+    `evidenceScope({ route })`, `ModelCertificate.route?`, `ScopeChange`
+    `"route"` with `CHANGE_WORDS.route` "another privacy setting",
+    `certificateProblems` (`route must be "zdr" when set`), `certify`'s own
+    mismatch message and copy of the route, `changes()` comparing routes; the
+    revision comment names the route rules; the pin.
+  - **Core `format.ts`**: `notePrivacyRefused({ model, refusal, attempts })`
+    with a reason per refusal, importing `RouteRefusal` as a type only.
+  - **Engine `review/eval.ts`** (critique, below): `ReplayInput.config` omits
+    `SourcedReviewKey`, and step 0b refuses `privacy` or `zdrAttested` from an
+    untyped caller. Not a pinned file and not a runner the window holds back;
+    it changes nothing for any input a caller sends today.
+  - **`script/vectorscope-eval/certify.ts`**: comment only (the scope list
+    gains "route").
+- **Signature deviations from §1.2.**
+  - `decideRoute`'s `npm?` and `baseURL?` become `destinations: readonly
+    unknown[]`, as `sendsToOpenRouterFree` takes: the model's and provider's
+    base URLs, the SDK package, and the origins requests are actually sent to
+    (`provider.ts` `requestOrigins`: the base URL with variables filled in,
+    else `SDK_ORIGINS`, and a `preconnect` origin). Every URL must pass, the
+    first refusal in order wins, and with no URL at all the route is
+    `unknown-destination`, so the caller passes the SDK's default origin
+    (OpenRouter's SDK package alone is refused this way). A destination that
+    is neither an http(s) URL nor an SDK package name (`ftp:`, `file:`,
+    `localhost:11434`, an unfilled `${VAR}`) is `unknown-destination`.
+  - The input also gains `apiID?` (configuration can name one model and send
+    another), `defaultOrigins?` (below), `price?` (below) and `forwards?`
+    (below).
+  - `RouteDecision` kinds: `standard` is added, since `standard` decides
+    nothing, and `attested` is split into `attested-provider` and
+    `attested-host`, so VS-23b's notes and audit can say which attestation
+    allowed a route.
+  - New exports `ROUTE_REFUSALS`, `RouteKind`, `RouteModel` and
+    `zdrBodyRefusal`, which gives VS-23c a typed reason.
+  - `zdrRequestBody` also returns undefined for a body that is not a JSON
+    object, a body `model` that is free, routed, `:online` or
+    retention-required, any `plugins` key (the web plugin, an empty list and
+    `enabled: false` included) and a `web_search_options` key.
+  - `ReviewPrivacy` is `NonNullable<ReviewConfig["privacy"]>`, so the union
+    lives in import-free `types.ts`.
+- **Rule decisions** (`decideRoute`, in order).
+  1. Under `standard`, `{ allowed: true, kind: "standard" }`. Any other value
+     is treated as `zdr` (fail closed).
+  2. The model's own refusals come before any destination, so no attestation
+     overrides them: `vector-plan` is `codium-unaccepted`; the catalog's free
+     flag, provider `vector`, and `sendsToOpenRouterFree` with the listed
+     price (a zero price on an OpenRouter route, exactly resolveSDK's
+     free-route condition) are `free-model`; then, on `modelID` and `apiID`,
+     `:free` (also stacked or versioned), `openrouter/free` and `stealth/` are
+     `free-model`, `openrouter/*` and `@preset/` (LiteLLM-style
+     `openrouter/...` names on this computer included) are
+     `router-or-preset`, an `:online` variant anywhere in the chain is
+     `plugins`, and a Fable or Mythos token is `retention-required-model`.
+     The token match `(?:^|[^a-z0-9])(?:fable|mythos)(?![a-z])` is dated
+     2026-11-05 [enablers §1.6], so `fable5` matches and `fabled-coder` does
+     not; a local model named `fable` is refused too.
+  3. `forwards` (the caller's `holds.passesOn`, such as an Ollama cloud
+     model) is `unknown-destination` on any destination, attested or not:
+     privacy.ts cannot import `ollama.ts` (Node-only Egress), and the name
+     rule is not copied (I-10).
+  4. A model whose requests go to OpenRouter (`sendsToOpenRouter`: provider
+     `openrouter`, the `@openrouter` SDK, or any OpenRouter URL) needs its
+     provider ID attested as the account (`openrouter` for the standard
+     provider; a custom provider at openrouter.ai holds its own key, so its
+     own ID). OpenRouter itself and a stand-in on this computer pass requests
+     on to that account; every other hop must pass as a server in its own
+     right (vectordev.ai refused, a LAN or internet hop only by host). A host
+     attestation never attests an account (`openrouter.ai` attests nothing).
+     Only this kind gets the ZDR body.
+  5. Otherwise, per destination: `vectordev.ai` and its subdomains are
+     `codium-unaccepted` even when attested; this computer is `loopback`
+     (LocalPolicy's rule: 127/8, `::1`, `localhost`, `0.0.0.0` and `::`;
+     `*.localhost` is the internet); an attested host is `attested-host`; a
+     LAN host (LocalPolicy's `your-network`: private ranges, link-local,
+     ULA, single-label names, `.local`, `.lan`, `.internal`, `.home.arpa`,
+     `*.ts.net`) is otherwise `unattested-network-server`, and a provider-ID
+     attestation never covers it; an internet host is `attested-provider`
+     only when the provider ID is attested and the origin is one of
+     `defaultOrigins`, else `unattested-provider`. CGNAT 100.64/10 is the
+     internet. A company server on a public name is a host on the internet.
+  6. With every destination allowed, the kind is the first attested one, else
+     `loopback`.
+  - **Attestation entries** are read both ways: exactly (trimmed) as a
+    provider ID, and as a host normalised through `LocalPolicy.host`, with or
+    without a port and in any case (`GPU-Box:9999`, `[fd00::1]:1`). A
+    single-label entry such as `gpu-box` therefore attests both a host and a
+    provider of that ID; both are the owner's own statement and each covers
+    only its own rule, so this collision is accepted and documented. A URL
+    entry attests no host.
+- **Config decisions.**
+  - `parseReviewConfig` is deliberately unchanged for both keys: review.json's
+    `privacy` and `zdrAttested` are still "unknown key ... is ignored" and
+    `REVIEW_PRIVACY` is not read, so no surface takes `zdr` before it enforces
+    it. `mergeReviewConfig` is their only reader, and nothing calls it.
+  - Every other key goes through `settle`, so with neither key set
+    `mergeReviewConfig` equals `parseReviewConfig` (config and warnings) for
+    the GitHub, CLI own-branch, CLI `--pr` and desktop shapes, bad JSON, a
+    BOM, retired and unknown keys and `__proto__`.
+  - `privacy` is the strictest of `global.privacy`, review.json's `privacy`
+    and `REVIEW_PRIVACY` (blank is unset), read trimmed and without case. Any
+    other value (garbage, `null`, `true`, a number, `""`) is `zdr` with a
+    warning. It is set on the config only when raised.
+  - **An unreadable review.json** (not JSON, or not an object) whose text
+    mentions `privacy` counts as `zdr`, with a warning; one that does not
+    mention it keeps today's defaults. Failing closed on every unreadable
+    file would, once wired, raise privacy and stop reviews for every
+    repository with a broken review.json that never set the key, breaking
+    I-1 for them; a broken file that mentions the key may have meant `zdr`.
+  - `zdrAttested` follows the surface: `local` (the CLI, the desktop and the
+    eval's replay entry point, whose global config is the operator's; the
+    eval passes its own settings as `global`) trusts `global` only; `github`
+    trusts review.json `at: "base"` only. A value from any other source,
+    including a working tree or the desktop's base blob locally, is ignored
+    with a warning naming the trusted source. No environment variable is
+    read for it. It is parsed by an `attestations` field (`strings`, plus
+    entries with a scheme, path, user or space dropped with a warning naming
+    them); an empty list is left out like the default.
+  - `json.privacyOnly` is the desktop's base blob when a PR changes
+    review.json (VS-23d): it may raise `privacy`, and every other key keeps
+    today's defaults (I-1).
+- **Scope.** `EvidenceScope.route` is set only by an explicit `evidenceScope`
+  caller, never from the config; every existing caller (`run.ts`,
+  `ai-review.ts`, engine `eval.ts`, `script/vectorscope-eval/desktop.ts`) is
+  untouched, so every scope stays byte-identical. A route mismatch makes a
+  certificate stale with `["route"]`; `certify` refuses mixed routes with its
+  own message ("the candidate's runs were replayed under different privacy
+  routes"), leaving the existing message as it was. `EVIDENCE_POLICY_KEYS`
+  is unchanged, so `policyDigest` and `promptsDigest` are default-stable
+  (tested with `privacy` and `zdrAttested` set). `privacy.ts` joins
+  `REVIEW_PIPELINE_FILES`: `REVIEW_PIPELINE_SOURCES` moves from
+  `228a42cb975134ce` to `3c100812158a4ab5`. `REVIEW_PIPELINE_REVISION` stays
+  1: no runner reads the new file, so nothing a review finds or posts
+  changed.
+- **Off by default (I-1).** Nothing calls `decideRoute`, `zdrBodyRefusal`,
+  `zdrRequestBody`, `mergeReviewConfig` or `notePrivacyRefused`, and no
+  caller passes `route`. `DEFAULT_REVIEW_CONFIG`, every `parseReviewConfig`
+  result, every scope and every replay artifact's `config.value` and
+  `config.digest` are byte-identical (the optional keys are what make the
+  artifacts identical; the plan's required keys would have changed both).
+  The only behaviour change is the replay's step 0b refusing a `config` that
+  sets a route key, which no caller sends. No `VARIANT_KEYS` change;
+  `engine:privacy-zdr` stays pending until VS-23c. The engine D3 parity suite
+  (`run.test.ts`) and the desktop's (`ai-review.test.ts`) pass unchanged.
+- **Owner questions: none decided.** Q1: the default stays `standard`
+  (absent). Q2: the attestation mechanism exists, the list is empty
+  everywhere and nothing reads it. Q7: no eval key setup. Q13: no wiring.
+  Q16: the global setting is VS-23d; `mergeReviewConfig`'s `global` input has
+  no reader yet.
+- **Critique of the plan, point by point.**
+  1. *OpenRouter attested whatever the base URL* (blocker): taken, and
+     stricter than proposed. A non-OpenRouter hop must pass as a server
+     (vectordev.ai refused; LAN and internet hops need their host attested)
+     **and** the account must be attested. **Not taken:** treating an
+     OpenRouter provider pointed at this computer as plain `loopback`. Such a
+     provider is a local proxy or a test stand-in that passes requests on to
+     the OpenRouter account, so it needs the account attested and gets the
+     ZDR body (`openrouter-attested`); as plain loopback its body would leave
+     the machine without `zdr`, and VS-23c's fake-server test would not run
+     on the real path. Fixtures for an internet proxy, a LAN hop and
+     vectordev.ai.
+  2. *One `baseURL`* (major): taken as `destinations` (above), every URL
+     required to pass; tested where the catalog URL and the provider base URL
+     disagree. **Taken differently:** no implicit SDK default; the caller
+     passes it, and a route with no URL is refused.
+  3. *Price ignored* (major): taken through `sendsToOpenRouterFree` with
+     `price`, so the check matches resolveSDK's free-route condition; a zero
+     price on this computer is not free (tested).
+  4. *`:online` and `web_search_options`* (major): taken; both refused as
+     `plugins`. Neither could be read in OpenRouter's docs here (host
+     blocked); VS-23c's fake server checks the wire.
+  5. *Provider-ID attestation covers any host* (major): taken now, not
+     deferred. It covers only `defaultOrigins`, which the caller fills from
+     `SDK_ORIGINS` or the catalog URL as shipped; without them it covers
+     nothing. Attested `anthropic` at `https://other.example` is refused
+     (tested). Recorded under Q2 as a rule decision.
+  6. *Forwarding loopback* (major): taken as `forwards` (above), with tests.
+  7. *"Nothing was sent" always* (major): taken. `attempts` is required;
+     with 0 the note says "Nothing was sent.", otherwise "Nothing was sent to
+     `<model>`, but this review had already sent N request(s) on routes
+     Vector may use." Both forms tested.
+  8. *Eval config lowering privacy* (major): taken both ways: the doc says
+     the eval passes its settings as `global` on `local`, and
+     `ReplayInput.config` omits the sourced keys, with step 0b refusing them
+     from an untyped caller (tested in engine `eval.test.ts`), so no artifact
+     can record a route setting nothing enforced.
+  9. *Required keys change every artifact* (minor): taken; the keys are
+     optional (above).
+  10. *Unreadable review.json fails open* (minor): taken differently, as the
+      "mentions privacy" rule (above), with tests both ways.
+  11. *certify's message* (minor): taken as its own message, tested.
+  12. *Regex and the D14 claim* (minor): taken; the regex lets a digit follow
+      (`fable5` tested). The note uses the existing "Vector" wording and does
+      not name VectorScope (tested); it changes no existing string.
+  13. *Flat attestation list* (minor): taken as the split kinds, the
+      `attestations` warning, and the documented both-ways reading (above).
+  14. *`zdrRequestBody` only for OpenRouter* (minor): taken, in the header
+      and here.
+  15. *Source table* (minor): taken as `RAISE_ONLY` and `TRUSTED_ONLY`, so
+      VS-29b's `alternateModel` and `inversion` and VS-30's `runtime` are one
+      table entry each.
+  16. *Browser bundle* (minor): taken; `browser-bundle.test.ts` passes.
+      `format.ts`'s import of `privacy.ts` is type-only and erased.
+- **Plan steps taken differently, besides the critique.** The plan's
+  `settle` default copy of `zdrAttested`, and its pushing onto `zdrAttested`
+  in the "new arrays" test, fall away with the optional keys (that test
+  asserts instead that neither key is in the defaults or the result).
+  `zdrAttested` is parsed by `attestations`, not plain `strings`.
+- **Deferred, for VS-23b to VS-23d and later.**
+  - VS-23b: `ReviewOutcome.partial` and `run.ts`'s `Stop` gain `"privacy"`;
+    the note for a review that ran under ZDR, with I-3's caveats; model
+    resolution passing `destinations` (`api.url`, `api.npm`, the provider
+    `baseURL`, and `requestOrigins` with `SDK_ORIGINS`), `defaultOrigins`
+    (from `SDK_ORIGINS` and the shipped catalog only, never a URL project
+    config set), `price` (`model.cost` unless unpriced), `freeModel` and
+    `forwards`; the surfaces switching to `mergeReviewConfig`; the eval entry
+    point passing its settings as `global` and lifting step 0b's refusal.
+  - VS-23c: `zdrRequestBody` on `openrouter-attested` routes only; `batch`
+    and `unattributed-request`; `:online`, `web_search_options` and the
+    `zdr: true` wire behaviour checked on the fake server, since OpenRouter's
+    prose docs are unread.
+  - Subscription (OAuth plan) credentials, which ZDR does not cover even for
+    an attested provider ID.
+  - Account-default plugins, which the client cannot see, belong in the
+    attestation's owner setup (README, Q7).
+  - Adding `privacy.ts` to the browser-bundle module list once the app
+    imports it as a value (VS-23b/d).
+  - Later changes to Anthropic's Covered Models list.
+- **Evidence.** Each file was run alone through the lock with
+  `--timeout 30000`, `GITHUB_ACTIONS=false`, and `TMPDIR` and XDG roots under
+  `/tmp/vector-vectorscope/vs23a-*`:
+
+  | Where | File | Pass |
+  |---|---|---|
+  | core | `test/review/privacy.test.ts` (new) | 21 |
+  | core | `test/review/config.test.ts` | 31 (20 before) |
+  | core | `test/review/model-evidence.test.ts` | 17 (16 before) |
+  | core | `test/review/format.test.ts` | 46 (45 before) |
+  | core | `pipeline`, `skip`, `ignore`, `plan`, `eval`, `eval-report`, `github-payload` | 2, 11, 13, 18, 42, 19, 8 |
+  | engine | `test/review/eval.test.ts` (assertions added) | 26 |
+  | engine | `test/review/model.test.ts`, `vectorscope-replay.test.ts`, `run.test.ts` | 16, 13, 44 |
+  | app | `src/features/pull-requests/ai-review.test.ts`, `src/browser-bundle.test.ts` | 107, 4 |
+  | eval scripts | `certify`, `replay` | 6, 32 |
+
+  - `bun typecheck` in core, engine, app and desktop, and
+    `bun tsgo -p ../../script/vectorscope-eval/tsconfig.json` from
+    `packages/engine`, exit 0.
+  - `prettier --check` passes on every changed and new TypeScript file.
+  - The pin was set after `privacy.ts` was final, and the pin test re-run.
+  - **One unexplained failure.** Engine `eval.test.ts` was run ten times after
+    its change: nine passed (26 of 26), and one, run straight after the
+    typechecks while the first run of the series had taken 57 s against the
+    usual 34 s, reported 25 pass and 1 fail. Its output was not captured, so
+    the failing test is not known. It made 311 `expect()` calls, as every
+    passing run does, so the failure was a test's last assertion, not an
+    earlier one; the likeliest is the hung-model replay's wall-clock bound
+    (`Date.now() - started` under 20 s, with a 1.2 s review deadline), which
+    is timing-bound under load. This package's change there (step 0b) runs
+    before any instance or git work, and its one new assertion is
+    deterministic. Not fixed and not loosened: recorded for the next agent
+    who sees it to capture the output.
+  - The full root typecheck (`bun turbo typecheck --concurrency=1`) was not
+    run: nothing is pushed.
+  - Nothing was sent, no paid path ran, no workflow was dispatched, no
+    dependency was added, and no existing user-visible string changed (D14).
+
+### 2026-11-06 · VS-23a review fixes
+
+Ten review findings, one of them blocking. Every one was fixed; none was
+declined. Where a finding offered two ways, the bullet says which was taken.
+Only core `review/privacy.ts`, `config.ts`, `format.ts` and
+`model-evidence.ts` (the pin) and their tests changed; no runner, provider,
+LLM or posting file and no file @vector owns. Nothing is committed. The
+points below supersede the entry above where they differ.
+
+- **Blocking: a direct provider's attestation attested an OpenRouter
+  account** (I-3; I-2 when the base URL comes from the working tree). Taken
+  as suggested. On a model whose requests go to OpenRouter, the provider-ID
+  attestation now covers the account only when the provider is `openrouter`,
+  or has no `defaultOrigins` (absent or an empty list: a provider defined in
+  configuration, such as `my-or`), or its `defaultOrigins` include an
+  OpenRouter origin. `decideRoute` computes this and hands it to
+  `openRouterRoute` as `attested.provider`. "Absent or empty" is read on the
+  raw list, so a list of blank or unreadable entries fails closed. This
+  narrows rule 4 above ("a custom provider at openrouter.ai holds its own
+  key, so its own ID"). Tests: attested `anthropic` with its base URL moved
+  to OpenRouter is `unattested-openrouter`, also with `openrouter.ai`
+  attested as a host, through OpenRouter's SDK on a loopback stand-in, and
+  with a blank `defaultOrigins` entry. `my-or` (with no and with empty
+  `defaultOrigins`), `acme` with OpenRouter's SDK on this computer, and
+  `acme` whose `defaultOrigins` are `https://openrouter.ai` stay
+  `openrouter-attested`.
+- **`json.privacyOnly` trusted on `github`.** Taken the first way:
+  review.json is the trusted source only when the surface is `github`, the
+  file is at the base, and it was not read for privacy alone. Test: in "the
+  desktop's base blob raises privacy, and changes nothing else", a `github`
+  base blob read with `privacyOnly` that sets `zdrAttested` leaves it unset
+  and warns. The warning names review.json on the base branch as the trusted
+  source, which reads oddly when the blob is that base. That is left as it
+  is: no caller passes `privacyOnly` on `github`.
+- **A bare word among the destinations was read as an SDK package.** Taken
+  the first way, as §1.2's signature has it: `RouteModel` gains
+  `npm?: string`, and every text in `destinations` is read as a URL, so a
+  bare word (`gpu-box`, `localhost`, and a package name placed there) is
+  `unknown-destination`. The `PACKAGE` pattern is gone.
+  `sendsToOpenRouter` and `sendsToOpenRouterFree` read
+  `[npm, ...destinations]` through a small `destinations(model)` helper,
+  which both calls use. Of the signature deviations above, `npm?` now matches §1.2;
+  `baseURL?` is still `destinations`, a list of URLs only. Tests: every
+  fixture passes its package as `npm`, and `["gpu-box"]`, `["localhost"]`
+  and the probe `["https://api.anthropic.com/v1", "gpu-box"]` are
+  `unknown-destination` with everything attested.
+- **OpenRouter over plain http was the account's route.** Taken the first
+  way: `openRouterRoute` passes only an `https://` OpenRouter origin on to
+  the account. An `http://` one is a hop like any other and goes through
+  `serverVerdict`, so it is `unattested-provider` unless its host is attested
+  as a host. Tests: `openrouter` and `acme` at `http://openrouter.ai` and
+  `http://eu.openrouter.ai`, with their IDs attested, are
+  `unattested-provider`, and so is a plain http copy beside the https URL.
+  Unchanged and noted for VS-23b's review: any other plain-http host on the
+  internet whose host is attested is still `attested-host`. Transport
+  security for an attested host is the owner's statement there, as before.
+- **The test name overstated the body check.** Taken the first way: renamed
+  "refuses routing, plugins, a refused body model and anything it cannot
+  read". The body's `model` is not bound to `modelID`. The body carries the
+  ID sent (`api.id`), which may differ from the catalog's `modelID` on its
+  own, so binding would refuse configured models unless the caller passed the
+  sent ID. And under `zdr: true` a mismatch keeps no data.
+- **The unexplained engine `eval.test.ts` failure.** Rerun eight times
+  through the lock from `packages/engine` with `--timeout 30000`, the full
+  output of each kept under `/tmp/vector-vectorscope/vs23a-fix/` (scratch,
+  not committed). All eight passed (26 of 26, 311 `expect()` calls, 33 to
+  35 s, load average about 1). The failure did not reproduce, so the failing
+  test is still unknown. No follow-up was opened: nothing beyond the earlier
+  guess points at the hung-model bound. No load was added to force it, since
+  the lock allows one Bun workload at a time and a CPU hog would slow the
+  other lanes' runs. Not loosened and not skipped. Whoever sees it fail
+  again captures the output and records the test and its assertion here.
+- **A host attestation dropped its port.** Taken the first way: an entry
+  with a port (`gpu-box:8080`, `[fd00::1]:8080`) attests that port alone,
+  matched against the origin's port (80 or 443 when the origin names none).
+  A host alone still covers every port, and a bare IPv6 address names no
+  port (brackets give it one). `gpu-box:80` reads as port 80, although the
+  URL parser drops http's own port. This replaces "with or without a port"
+  and the `GPU-Box:9999` and `[fd00::1]:1` examples above. Tests: those two
+  no longer attest `:8080`; `gpu-box:8080` does not attest `:4000`;
+  `gpu-box:80` attests `http://gpu-box`, `gpu-box:443` does not, and attests
+  `https://gpu-box`. `config.ts`'s comment says a port limits the entry. Its
+  warning's example `"gpu-box:8080"` is now accurate as written.
+- **Two reasons in `notePrivacyRefused` made product claims.** Taken with
+  neutral wording about Vector's rule. `codium-unaccepted` is now "Vector
+  does not yet accept Vector Codium or the free models Vector provides as
+  zero data retention routes." `batch` is now "Vector does not send batch
+  requests on zero data retention routes." The suggested "while privacy is
+  zdr" would repeat the note's own opening clause. Both strings are new in
+  this package, so no existing string changed (D14). `format.test.ts`'s full
+  Codium note is updated.
+- **A non-string attestation entry threw.** Taken: `decideRoute` keeps only
+  the entries that are text before either reading, so a bad entry attests
+  nothing. Test: `[42, null, { id: "anthropic" }, ["anthropic"]]` attests
+  neither the provider nor a host and does not throw; with `"anthropic"`
+  added, the provider is attested.
+- **A body's `preset` was refused as `fallback-models`.** Taken:
+  `zdrBodyRefusal` maps `preset` to `router-or-preset` first, and keeps
+  `fallback-models` for `models` and `route`. Tests: the `preset` case now
+  expects `router-or-preset`, and a body with both `models` and `preset` is
+  `router-or-preset`.
+- **Pin.** `privacy.ts` changed, so `REVIEW_PIPELINE_SOURCES` moves from
+  `3c100812158a4ab5` to `54fbad71b62bdbda`. It was set after `privacy.ts` was
+  final, and the pin test was re-run. `REVIEW_PIPELINE_REVISION` stays 1,
+  since no runner reads the file. Off by default as before (I-1): nothing
+  calls the changed functions, and `parseReviewConfig` is unchanged.
+- **Evidence.** Each file was run alone through the lock with
+  `--timeout 30000`, `GITHUB_ACTIONS=false`, and `TMPDIR` and XDG roots under
+  `/tmp/vector-vectorscope/vs23a-fix/`:
+
+  | Where | File | Pass |
+  |---|---|---|
+  | core | `test/review/privacy.test.ts` | 24 (21 before) |
+  | core | `test/review/config.test.ts` | 31 (one case added to an existing test) |
+  | core | `test/review/format.test.ts` | 46 |
+  | core | `test/review/model-evidence.test.ts` | 17 |
+  | engine | `test/review/eval.test.ts`, eight runs | 26 each |
+  | app | `src/browser-bundle.test.ts` | 4 |
+
+  - `bun typecheck` in core exits 0. No other package imports the changed
+    code: `format.ts` imports `privacy.ts` as a type only, and `format.ts`'s
+    change is two strings.
+  - `prettier --check` passes on the six changed TypeScript files.
+  - Nothing was sent, no paid path ran, no workflow was dispatched, and no
+    dependency was added.

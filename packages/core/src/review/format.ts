@@ -3,6 +3,7 @@
 // sanitizeModelMarkdown before it is placed, and Vector's own markers are added after it.
 
 import { normalizeTitle } from "./fingerprint"
+import type { RouteRefusal } from "./privacy"
 import { MAX_SUGGESTION_CHARS } from "./schema"
 import {
   SUMMARY_MARKER,
@@ -501,6 +502,36 @@ export function notePartial(input: {
   const more =
     input.unreviewed.length > MAX_UNREVIEWED_SHOWN ? ` and ${input.unreviewed.length - MAX_UNREVIEWED_SHOWN} more` : ""
   return `**Partial review.** ${stop}${after}. Not reviewed: ${shown}${more}. The next run reviews them, or comment \`/vector review\` to continue now.`
+}
+
+// Why a model has no route a review may use while `privacy` is "zdr", for notePrivacyRefused.
+const PRIVACY_REFUSAL: Record<RouteRefusal, string> = {
+  "free-model": "it is a free model, and free endpoints may keep or train on what they are sent.",
+  "router-or-preset": "it is a router or preset, which may answer with another model.",
+  "fallback-models": "the request names fallback models, which may answer from other endpoints.",
+  plugins: "the request turns on a plugin, such as web search, which sends the query to another service.",
+  "unattested-provider": "its provider, or the host its requests go to, is not listed in `zdrAttested`.",
+  "unattested-openrouter": "the OpenRouter account it uses is not listed in `zdrAttested`.",
+  "unattested-network-server": "its model server is on your network and is not listed in `zdrAttested`.",
+  "retention-required-model": "its provider requires 30-day data retention for this model.",
+  "codium-unaccepted":
+    "Vector does not yet accept Vector Codium or the free models Vector provides as zero data retention routes.",
+  batch: "Vector does not send batch requests on zero data retention routes.",
+  "unreadable-body": "Vector could not read the request it would send.",
+  "unattributed-request": "Vector could not tell which review the request belongs to.",
+  "unknown-destination": "Vector cannot tell where its requests go.",
+}
+
+// A review stopped by the route rules (privacy.ts) before it sent code to `model`. `attempts` counts the requests the
+// review had already sent on allowed routes, so the note says what left the machine. A refusal is never retried on
+// another model (I-3), and the review is never shown as clean (I-7). Nothing shows it before VS-23b.
+export function notePrivacyRefused(input: { model: string; refusal: RouteRefusal; attempts: number }): string {
+  const reason = PRIVACY_REFUSAL[input.refusal]
+  const sent =
+    input.attempts > 0
+      ? `Nothing was sent to ${codeSpan(input.model)}, but this review had already sent ${formatCount(input.attempts)} ${input.attempts === 1 ? "request" : "requests"} on routes Vector may use.`
+      : "Nothing was sent."
+  return `**Not reviewed.** ${codeSpan(input.model)} has no zero data retention route Vector may use while \`privacy\` is \`"zdr"\`: ${reason} ${sent} Vector does not retry the review on another model.`
 }
 
 export function noteSuperseded(newHead: string): string {

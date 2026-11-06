@@ -74,7 +74,46 @@ const paths: Field = {
   expected: 'a list of { "path", "instructions" } objects',
 }
 
-const FIELDS: Record<keyof ReviewConfig, Field> = {
+// Provider IDs and model server hosts (privacy.ts reads them). An entry with a scheme, path, user or space, such as a
+// URL, names neither, so it is dropped: a server is written as its host alone, for every port, or with one port.
+const attestations: Field = {
+  parse: (value) => {
+    const parsed = strings.parse(value)
+    const list = Array.isArray(parsed?.value)
+      ? parsed.value.filter((item): item is string => typeof item === "string")
+      : undefined
+    if (!list) return undefined
+    const named = list.filter((item) => /[\s/@?#\\]/.test(item))
+    const notes = [
+      parsed?.note,
+      named.length
+        ? `${named.map((item) => JSON.stringify(item)).join(", ")} ${named.length === 1 ? "names" : "name"} neither a provider ID nor a host, so ${named.length === 1 ? "it was" : "they were"} dropped; write a server as its host, such as "gpu-box:8080"`
+        : undefined,
+    ].filter((note) => note !== undefined)
+    return {
+      value: list.filter((item) => !named.includes(item)),
+      note: notes.length ? notes.join("; ") : undefined,
+    }
+  },
+  expected: "a list of provider IDs and model server hosts",
+}
+
+// Keys whose sources are tagged (contract §1.1, invariant I-2). parseReviewConfig reads none of them: review.json's
+// copy is an unknown key and the environment's is not read, so no surface takes "zdr" before it enforces it.
+// mergeReviewConfig is their only reader.
+// - Raise-only: each level is stricter than the one before. Any source may raise the key and none may lower it, and a
+//   value that is not a level reads as the strictest.
+const RAISE_ONLY = {
+  privacy: { levels: ["standard", "zdr"], env: "REVIEW_PRIVACY" },
+} as const satisfies Partial<Record<keyof ReviewConfig, { levels: readonly string[]; env: string }>>
+// - Trusted-only: read from the surface's trusted source alone, never from the working tree or the environment.
+const TRUSTED_ONLY = { zdrAttested: attestations } satisfies Partial<Record<keyof ReviewConfig, Field>>
+
+export type SourcedReviewKey = keyof typeof RAISE_ONLY | keyof typeof TRUSTED_ONLY
+export const SOURCED_REVIEW_KEYS = Object.keys({ ...RAISE_ONLY, ...TRUSTED_ONLY }) as readonly SourcedReviewKey[]
+type PlainKey = Exclude<keyof ReviewConfig, SourcedReviewKey>
+
+const FIELDS: Record<PlainKey, Field> = {
   incremental: bool,
   minSeverity: oneOf(SEVERITIES),
   minConfidence: number({ min: 0, max: 1 }),
@@ -114,7 +153,7 @@ const RETIRED: Record<string, string> = {
     '"drafts" is no longer read: to review drafts, delete the `draft == false` line in .github/workflows/vector.yml.',
 }
 
-const ENV: { name: string; key: keyof ReviewConfig; kind: "number" | "text" }[] = [
+const ENV: { name: string; key: PlainKey; kind: "number" | "text" }[] = [
   { name: "REVIEW_MIN_SEVERITY", key: "minSeverity", kind: "text" },
   { name: "REVIEW_MIN_CONFIDENCE", key: "minConfidence", kind: "number" },
   { name: "REVIEW_MAX_COMMENTS", key: "maxComments", kind: "number" },
@@ -129,7 +168,7 @@ const ENV: { name: string; key: keyof ReviewConfig; kind: "number" | "text" }[] 
   { name: "REVIEW_TIMEOUT_MINUTES", key: "timeoutMinutes", kind: "number" },
 ]
 
-function assign(config: ReviewConfig, key: keyof ReviewConfig, value: unknown, label: string, warnings: string[]) {
+function assign(config: ReviewConfig, key: PlainKey, value: unknown, label: string, warnings: string[]) {
   const parsed = FIELDS[key].parse(value)
   if (!parsed) {
     warnings.push(`${label} must be ${FIELDS[key].expected}; using ${JSON.stringify(config[key])}.`)
@@ -177,6 +216,109 @@ export function parseReviewConfig(
   input: { json?: string; env?: Record<string, string | undefined>; trigger?: Trigger } = {},
 ): { config: ReviewConfig; warnings: string[] } {
   const warnings: string[] = []
+  const config = settle(readJson(input.json, warnings), input.env ?? {}, input.trigger, warnings)
+  return { config, warnings }
+}
+
+/**
+ * Review settings from sources tagged with where each comes from (contract §1.1). Nothing calls this yet: the surfaces
+ * switch to it when the route rules are enforced (VS-23b to VS-23d), and until then they read parseReviewConfig, which
+ * ignores the keys below.
+ * - `surface`: "local" for the CLI, the desktop and the eval's replay entry point, whose global config is the
+ *   operator's (the eval passes its own settings as `global`); "github" for the CI job.
+ * - `global`: the global config's `review` block (VS-23d adds it to the config schema).
+ * - `json`: the one review.json the surface reads, at the base commit or in the working tree. `privacyOnly` is the
+ *   desktop's base blob when a pull request changes review.json: it may raise `privacy`, and every other key keeps
+ *   today's defaults there.
+ *
+ * Every key outside RAISE_ONLY and TRUSTED_ONLY is read exactly as parseReviewConfig reads it. `privacy` is the
+ * strictest of the global config, review.json and REVIEW_PRIVACY, and a review.json that cannot be read but mentions it
+ * counts as "zdr". `zdrAttested` comes from the trusted source alone: the global config on "local" (your own branch can
+ * hold other people's commits), review.json at the base on "github" (a pull request can edit the workflow and its
+ * environment). It has no environment variable, and a value from any other source is ignored with a warning. Neither
+ * key is set when it has its default, so with both unset the result is parseReviewConfig's.
+ */
+export function mergeReviewConfig(input: {
+  surface: "local" | "github"
+  global?: Partial<Record<SourcedReviewKey, unknown>>
+  json?: { at: "base" | "working-tree"; text: string | undefined; privacyOnly?: boolean }
+  env?: Record<string, string | undefined>
+  trigger?: Trigger
+}): { config: ReviewConfig; warnings: string[] } {
+  const warnings: string[] = []
+  const env = input.env ?? {}
+  const text = input.json?.text
+  const source = readJson(text, warnings)
+  const config = settle(
+    input.json?.privacyOnly || !source
+      ? undefined
+      : Object.fromEntries(Object.entries(source).filter(([key]) => !SOURCED_REVIEW_KEYS.some((item) => item === key))),
+    env,
+    input.trigger,
+    warnings,
+  )
+  const sources: { values: Record<string, unknown> | undefined; trusted: boolean; label: (key: string) => string }[] = [
+    { values: input.global, trusted: input.surface === "local", label: (key) => `review.${key} in the global config` },
+    {
+      values: source,
+      // The desktop's base blob may raise `privacy` and nothing else, so it is never the trusted source.
+      trusted: input.surface === "github" && input.json?.at === "base" && !input.json.privacyOnly,
+      label: (key) => `${REVIEW_CONFIG_PATH}: "${key}"`,
+    },
+  ]
+  const given = (values: Record<string, unknown> | undefined, key: string) =>
+    !!values && Object.hasOwn(values, key) && values[key] !== undefined
+
+  for (const [key, rule] of Object.entries(RAISE_ONLY)) {
+    const levels: readonly string[] = rule.levels
+    const strictest = levels.length - 1
+    const using = `using "${levels[strictest]}", the stricter setting.`
+    const readings = [
+      ...sources.flatMap((item) =>
+        given(item.values, key) ? [{ label: item.label(key), value: item.values?.[key] }] : [],
+      ),
+      ...(env[rule.env]?.trim() ? [{ label: rule.env, value: env[rule.env] }] : []),
+    ]
+    const read = readings.map((reading) => {
+      const level = typeof reading.value === "string" ? levels.indexOf(reading.value.trim().toLowerCase()) : -1
+      if (level >= 0) return level
+      warnings.push(`${reading.label} must be ${levels.map((item) => `"${item}"`).join(" or ")}; ${using}`)
+      return strictest
+    })
+    // A review.json that cannot be read may have meant the stricter setting, so one that mentions the key fails closed.
+    const unreadable = text !== undefined && !source && text.toLowerCase().includes(key.toLowerCase())
+    if (unreadable) warnings.push(`${REVIEW_CONFIG_PATH} could not be read and mentions "${key}"; ${using}`)
+    const level = Math.max(0, ...read, unreadable ? strictest : 0)
+    if (level > 0) Object.assign(config, { [key]: levels[level] })
+  }
+
+  const trusted = input.surface === "local" ? "the global config" : `${REVIEW_CONFIG_PATH} on the base branch`
+  for (const [key, field] of Object.entries(TRUSTED_ONLY))
+    for (const item of sources.filter((entry) => given(entry.values, key))) {
+      const label = item.label(key)
+      if (!item.trusted) {
+        warnings.push(`${label} is ignored: "${key}" is read only from ${trusted}.`)
+        continue
+      }
+      const parsed = field.parse(item.values?.[key])
+      if (!parsed) {
+        warnings.push(`${label} must be ${field.expected}; it is ignored.`)
+        continue
+      }
+      if (parsed.note) warnings.push(`${label}: ${parsed.note}.`)
+      // An empty list is the default, and is left out like one.
+      if (!Array.isArray(parsed.value) || parsed.value.length) Object.assign(config, { [key]: parsed.value })
+    }
+  return { config, warnings }
+}
+
+// Every key but the sourced ones, from one review.json record and one environment, over the defaults.
+function settle(
+  source: Record<string, unknown> | undefined,
+  env: Record<string, string | undefined>,
+  trigger: Trigger | undefined,
+  warnings: string[],
+): ReviewConfig {
   // New arrays, so a caller that mutates its config never changes the shared defaults.
   const config: ReviewConfig = {
     ...DEFAULT_REVIEW_CONFIG,
@@ -186,8 +328,6 @@ export function parseReviewConfig(
     skipBranches: [...DEFAULT_REVIEW_CONFIG.skipBranches],
     paths: [...DEFAULT_REVIEW_CONFIG.paths],
   }
-  const source = readJson(input.json, warnings)
-  const env = input.env ?? {}
   // The verify policy is settled first, so that under "shared" a config that does not set "verify" starts from
   // SHARED_VERIFY_DEFAULT, and a "verify" in review.json or REVIEW_VERIFY still wins. The passes below read the
   // policy again and give its warnings.
@@ -195,7 +335,7 @@ export function parseReviewConfig(
   for (const [key, value] of Object.entries(source ?? {})) {
     if (Object.hasOwn(RETIRED, key)) warnings.push(`${REVIEW_CONFIG_PATH}: ${RETIRED[key]}`)
     else if (!Object.hasOwn(FIELDS, key)) warnings.push(`${REVIEW_CONFIG_PATH}: unknown key "${key}" is ignored.`)
-    else assign(config, key as keyof ReviewConfig, value, `${REVIEW_CONFIG_PATH}: "${key}"`, warnings)
+    else assign(config, key as PlainKey, value, `${REVIEW_CONFIG_PATH}: "${key}"`, warnings)
   }
 
   for (const item of ENV) {
@@ -210,7 +350,7 @@ export function parseReviewConfig(
     .filter(Boolean)
   if (ignore?.length) config.ignore = [...config.ignore, ...ignore]
   const auto = env.REVIEW_AUTO_MODEL?.trim()
-  if (auto && input.trigger === "auto") assign(config, "model", auto, "REVIEW_AUTO_MODEL", warnings)
+  if (auto && trigger === "auto") assign(config, "model", auto, "REVIEW_AUTO_MODEL", warnings)
   // A cheaper first pass is only posted once the review model confirmed it, so its double-check cannot be off.
   if (config.triageModel && config.verify === "off") {
     warnings.push(
@@ -218,7 +358,7 @@ export function parseReviewConfig(
     )
     config.verify = "all"
   }
-  return { config, warnings }
+  return config
 }
 
 export interface ReviewRules {

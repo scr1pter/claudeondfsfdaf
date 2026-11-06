@@ -11,9 +11,9 @@ import { replayVariant, variantAdapter, variantProblems } from "./replay"
 // Model evidence (VectorScope plan, VS-07): turns a held-out report whose gate passed into a model certificate, for the
 // owner to approve. The certificate names the report file by digest, the frozen manifest by its freeze digest, the gate
 // by its digest, and the scope every one of the candidate's runs was replayed in (runner, pipeline revision, prompts,
-// review settings and triage model), from the replay artifacts. The model variant comes from those artifacts too, and
-// the manifest must be the one the report was built from. It expires on the date given, at most MAX_CERTIFICATE_DAYS
-// after the owner's approval.
+// review settings, triage model and route), from the replay artifacts. The model variant comes from those artifacts
+// too, and the manifest must be the one the report was built from. It expires on the date given, at most
+// MAX_CERTIFICATE_DAYS after the owner's approval.
 //
 // It reads files and sends nothing. Printing a certificate certifies nothing: a review reads only the certificates in
 // MODEL_EVIDENCE (packages/core/src/review/model-evidence.ts), and one goes there only with the owner's approval of the

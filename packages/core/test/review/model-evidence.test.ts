@@ -22,11 +22,11 @@ import {
   type ModelCertificate,
   type ModelSubject,
 } from "@vectordevai/core/review/model-evidence"
-import { DEFAULT_REVIEW_CONFIG } from "@vectordevai/core/review/types"
+import { DEFAULT_REVIEW_CONFIG, type ReviewConfig } from "@vectordevai/core/review/types"
 
 // The review pipeline's sources, from the repository root: both runners, the core code they share for planning,
-// packing, selection, anchoring and the prompts (whose length limits promptsDigest cannot see), and the review and
-// security agents' own prompts. REVIEW_PIPELINE_SOURCES pins a digest of them.
+// packing, selection, anchoring and the prompts (whose length limits promptsDigest cannot see), the route rules
+// (VS-23a), and the review and security agents' own prompts. REVIEW_PIPELINE_SOURCES pins a digest of them.
 const REVIEW_PIPELINE_FILES = [
   "packages/engine/src/review/run.ts",
   "packages/app/src/features/pull-requests/ai-review.ts",
@@ -36,6 +36,7 @@ const REVIEW_PIPELINE_FILES = [
   "packages/core/src/review/diff.ts",
   "packages/core/src/review/fingerprint.ts",
   "packages/core/src/review/prompt.ts",
+  "packages/core/src/review/privacy.ts",
   "packages/engine/src/agent/prompt/review.txt",
   "packages/engine/src/agent/prompt/security.txt",
 ]
@@ -199,8 +200,22 @@ describe("scope", () => {
       { ignore: ["docs/**"] },
       { modelEvidence: "warn" as const },
       { model: "acme/other" },
+      // The route settings (VS-23a) are scope, not policy: EvidenceScope.route, set only by a runner enforcing them.
+      { privacy: "zdr" as const },
+      { zdrAttested: ["openrouter"] },
     ])
       expect(policyDigest({ ...DEFAULT_REVIEW_CONFIG, ...change })).toBe(base)
+  })
+
+  test("a route is in the scope only when the caller enforced it", () => {
+    expect(Object.hasOwn(SCOPE, "route")).toBe(false)
+    expect(evidenceScope({ adapter: "engine", config: DEFAULT_REVIEW_CONFIG, route: "zdr" })).toEqual({
+      ...SCOPE,
+      route: "zdr",
+    })
+    // A config that asks for zdr does not make the scope claim a route nothing enforced.
+    const asked: ReviewConfig = { ...DEFAULT_REVIEW_CONFIG, privacy: "zdr" }
+    expect(evidenceScope({ adapter: "engine", config: asked })).toEqual(SCOPE)
   })
 })
 
@@ -242,6 +257,8 @@ describe("certificates", () => {
     expect(certificateProblems({ ...cert(), expires: undefined })).toContain("expires must be a YYYY-MM-DD date")
     expect(certificateProblems(cert({ expires: "2027-02-30" }))).toContain("expires must be a YYYY-MM-DD date")
     expect(certificateProblems("cert")).toEqual(["the certificate is not an object"])
+    expect(certificateProblems(cert({ route: "zdr" }))).toEqual([])
+    expect(certificateProblems({ ...cert(), route: "other" })).toContain('route must be "zdr" when set')
   })
 
   test("certify builds one only from a passing release decision on frozen labels with one scope", () => {
@@ -293,6 +310,12 @@ describe("certificates", () => {
       "the candidate's runs were replayed under different pipelines, prompts, settings or triage models",
     )
     expect(certify({ ...input, scopes: [] }).problems).toContain("no replay scope was given for the candidate's runs")
+    // A privacy route is its own reason, and a certificate from runs on one route names it.
+    const zdr = { ...SCOPE, route: "zdr" as const }
+    expect(certify({ ...input, scopes: [SCOPE, zdr] }).problems).toEqual([
+      "the candidate's runs were replayed under different privacy routes",
+    ])
+    expect(certify({ ...input, scopes: [zdr, zdr] })).toEqual({ certificate: cert({ route: "zdr" }), problems: [] })
     expect(certify({ ...input, expires: "2027-12-01" }).certificate).toBeUndefined()
     const router = certify({
       ...input,
@@ -366,6 +389,17 @@ describe("assessing a review's models", () => {
     expect(triaged.models[0]!.changed).toEqual(["triage"])
     const variant = assess(chosen(SONNET, { variant: "high" }))
     expect(variant.models[0]!.changed).toEqual(["variant"])
+    // A certificate made on zero data retention routes covers only reviews on them, and the other way round.
+    const zdr = { ...SCOPE, route: "zdr" as const }
+    const route = assess(chosen(SONNET), { certificates: [cert({ route: "zdr" })] })
+    expect(route.models[0]).toMatchObject({ status: "stale", changed: ["route"] })
+    expect(modelEvidenceNotes(route)[0]).toStartWith(
+      "The VectorScope evaluation of `anthropic/claude-sonnet-4-5` on record (`vs-2026-12-sonnet`) was made with another privacy setting, so it does not apply here.",
+    )
+    expect(assess(chosen(SONNET), { scope: zdr }).models[0]).toMatchObject({ status: "stale", changed: ["route"] })
+    expect(assess(chosen(SONNET), { scope: zdr, certificates: [cert({ route: "zdr" })] }).models[0]!.status).toBe(
+      "certified",
+    )
 
     // The closest certificate is the one reported: here the current one, which certifies.
     const both = assess(chosen(SONNET), {

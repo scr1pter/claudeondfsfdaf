@@ -26,12 +26,14 @@ import {
   noteNothingToReview,
   notePartial,
   notePrBudget,
+  notePrivacyRefused,
   noteRebase,
   noteSuperseded,
   noteTooLarge,
   sanitizeModelMarkdown,
   type SummaryInput,
 } from "@vectordevai/core/review/format"
+import { ROUTE_REFUSALS } from "@vectordevai/core/review/privacy"
 import { emptyState, parseFindingMarker, readState } from "@vectordevai/core/review/state"
 import type {
   AnchorFailure,
@@ -558,6 +560,38 @@ describe("notes", () => {
     ).toContain("Stopped at the 12-minute time limit after 3 of 4 files. Not reviewed: `x.ts`.")
     expect(notePartial({ reason: "model-error", unreviewed: [], detail: "security: timed out" })).toBe(
       "**Partial review.** One reviewer could not finish: security: timed out. Comment `/vector review` to try again.",
+    )
+  })
+
+  test("a route refusal is never shown as clean, and says what was sent (VS-23a)", () => {
+    const notes = ROUTE_REFUSALS.map((refusal) =>
+      notePrivacyRefused({ model: "anthropic/claude-sonnet-5", refusal, attempts: 0 }),
+    )
+    for (const note of notes) {
+      expect(note).toStartWith(
+        '**Not reviewed.** `anthropic/claude-sonnet-5` has no zero data retention route Vector may use while `privacy` is `"zdr"`: ',
+      )
+      expect(note).toEndWith(" Nothing was sent. Vector does not retry the review on another model.")
+      expect(note).not.toContain("No issues found")
+      expect(note).not.toContain("VectorScope")
+    }
+    // Each refusal says its own reason.
+    expect(new Set(notes).size).toBe(ROUTE_REFUSALS.length)
+    expect(notePrivacyRefused({ model: "vector-plan/auto", refusal: "codium-unaccepted", attempts: 0 })).toBe(
+      '**Not reviewed.** `vector-plan/auto` has no zero data retention route Vector may use while `privacy` is `"zdr"`: Vector does not yet accept Vector Codium or the free models Vector provides as zero data retention routes. Nothing was sent. Vector does not retry the review on another model.',
+    )
+    // The model's name comes from configuration, so it cannot close the code span.
+    expect(notePrivacyRefused({ model: "acme/odd`name", refusal: "free-model", attempts: 0 })).toContain(
+      "`acme/odd'name`",
+    )
+    // A refusal after earlier passes went out on allowed routes says so, instead of "Nothing was sent".
+    const later = notePrivacyRefused({ model: "acme/verify", refusal: "unattested-provider", attempts: 2 })
+    expect(later).toContain(
+      "Nothing was sent to `acme/verify`, but this review had already sent 2 requests on routes Vector may use.",
+    )
+    expect(later).not.toContain("Nothing was sent.")
+    expect(notePrivacyRefused({ model: "acme/verify", refusal: "plugins", attempts: 1 })).toContain(
+      "had already sent 1 request on routes",
     )
   })
 

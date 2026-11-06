@@ -229,6 +229,13 @@ export interface ReviewConfig {
   // (model-evidence.ts): unvetted, expired, retired or rerouted models, and free models whose providers may train on
   // the code. It never changes which model runs. "off" keeps today's review.
   modelEvidence: "off" | "warn"
+  // VS-23's opt-in (D3, Q1): "zdr" sends code only on zero data retention routes (privacy.ts). Raise-only: any source
+  // may set it and none may lower it. Absent means "standard", and DEFAULT_REVIEW_CONFIG leaves it out, so every
+  // config and its digest stay as they were. Only mergeReviewConfig reads it, and no runner calls that before VS-23b.
+  privacy?: "standard" | "zdr"
+  // The routes the owner attests are zero data retention (Q2): provider IDs, `openrouter` for an OpenRouter account,
+  // and model server hosts. Read only from a trusted source (mergeReviewConfig); absent means none.
+  zdrAttested?: string[]
   failOn: "never" | "blocking" // "blocking" fails the job while blocking findings are open
   ignore: string[] // added to the defaults
   ignoreDefaults: boolean
