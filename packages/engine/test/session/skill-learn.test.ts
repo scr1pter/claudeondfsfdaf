@@ -7,7 +7,7 @@ import { BrainKnowledge } from "@vectordevai/core/brain/knowledge"
 import { BrainSkill } from "@vectordevai/core/brain/skill"
 import { ChildEnvironment } from "@vectordevai/core/child-environment"
 import { FreeModelGuests } from "@vectordevai/core/free-model-guests"
-import type { SpendGuard } from "@vectordevai/core/spend-guard"
+import { SpendGuard } from "@vectordevai/core/spend-guard"
 import { MemoryEvent } from "@vectordevai/schema/memory-event"
 import { EventV2Bridge } from "../../src/event-v2-bridge"
 import { SessionSkillLearn } from "../../src/session/skill-learn"
@@ -285,6 +285,86 @@ it.instance(
       yield* send(sessionID, "Thanks, anything else?")
       const [skill] = yield* until(learned(place), (list) => list.length > 0)
       expect(skill?.skill?.drafter).toBe("rules")
+    }),
+  { git: true },
+  90_000,
+)
+
+it.instance(
+  "the model drafter's request counts against the run that launched it, as the model learner's does",
+  () =>
+    Effect.gen(function* () {
+      // Priced at $1 per million tokens, so the drafter's million input tokens cost $1.
+      const { dir, place, llm } = yield* setup({ model: { cost: { input: 1, output: 1 } } })
+      const guard = yield* SpendGuard.Service
+      yield* drafter("always")
+      yield* recover(dir)
+      const gate = Promise.withResolvers<void>()
+      yield* llm.pushMatch(
+        drafting,
+        reply().text(WORDED).usage({ input: 1_000_000, output: 0 }).wait(gate.promise).stop(),
+      )
+      const sessionID = yield* chat()
+      yield* send(sessionID, "The typecheck fails, fix it", { size: "standard" })
+      yield* until(llm.hits, (hits) => hits.some(drafting))
+      const ran = yield* guard.snapshot(sessionID)
+      gate.resolve()
+      const [skill] = yield* until(learned(place), (list) => list.length > 0)
+      expect(skill?.skill?.drafter).toBe("model")
+      const after = yield* guard.snapshot(sessionID)
+      expect(after?.steps).toBe((ran?.steps ?? 0) + 1)
+      expect((after?.spentUsd ?? 0) - (ran?.spentUsd ?? 0)).toBeCloseTo(1)
+    }),
+  { git: true },
+  90_000,
+)
+
+it.instance(
+  "a run that stopped after its snapshot keeps the plain draft, and the model drafter sends nothing",
+  () =>
+    Effect.gen(function* () {
+      const { dir, place, llm } = yield* setup()
+      const sessions = yield* Session.Service
+      const skillLearn = yield* SessionSkillLearn.Service
+      // The run drafts by rules; the drafter is then called again on its turn, as the run's end would call it.
+      yield* drafter("off")
+      yield* recover(dir)
+      const sessionID = yield* chat()
+      yield* send(sessionID, "The typecheck fails, fix it", { size: "standard" })
+      yield* until(learned(place), (list) => list.length > 0)
+      yield* settle()
+      yield* drafter("always")
+      const session = yield* sessions.get(sessionID).pipe(Effect.orDie)
+      const user = (yield* sessions.messages({ sessionID }).pipe(Effect.orDie)).find(
+        (message) => message.info.role === "user",
+      )!
+      const taught = new Map([[user.info.id, { message: user, tier: "standard" as const }]])
+      const recorded: string[] = []
+      const spend = (stopped?: SpendGuard.Stop): SessionSkillLearn.Spend => ({
+        captured: {
+          record: (usageID) =>
+            Effect.sync(() => {
+              recorded.push(usageID)
+              return { state: "ok" as const }
+            }),
+          stopped: Effect.succeed(stopped),
+          release: Effect.void,
+        },
+        costKind: () => Effect.succeed("priced" as const),
+      })
+
+      const stopped = yield* skillLearn.run(session, taught, undefined, spend({ reason: "cap", message: "" }))
+      expect(stopped).toBeDefined()
+      yield* stopped!
+      expect((yield* llm.hits).some(drafting)).toBe(false)
+      expect(recorded).toEqual([])
+
+      // Not stopped, the same turn's drafter asks the model, and its request is charged to the captured run.
+      yield* llm.textMatch(drafting, WORDED, { usage: { input: 1_000, output: 10 } })
+      const going = yield* skillLearn.run(session, taught, undefined, spend())
+      yield* going!
+      expect((yield* llm.hits).some(drafting)).toBe(true)
+      expect(recorded).toHaveLength(1)
     }),
   { git: true },
   90_000,

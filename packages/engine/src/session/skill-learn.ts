@@ -33,6 +33,16 @@ import { TitleUsage } from "./title-usage"
 // for the owner unless they chose "auto" and a second untainted session did the same. A guest's session drafts nothing,
 // and a session that took in outside content drafts only what waits for review, with no model call.
 
+/**
+ * What the model drafter's request is charged to: the run that launched it, captured before that run ended, as for the
+ * title and the model learner. The caller lets it go once the drafter is done.
+ */
+export interface Spend {
+  readonly captured: SpendGuard.Captured
+  /** How the request is priced: the prompt's helper cost check, so a Codium, local or plan model counts as one. */
+  readonly costKind: (model: Provider.Model) => Effect.Effect<SpendGuard.CostKind>
+}
+
 export interface Interface {
   /**
    * Drafts the run's skill, if it earned one. Returns the model drafter, to run in the background where the session's
@@ -42,6 +52,7 @@ export interface Interface {
     session: Session.Info,
     taught: ReadonlyMap<MessageID, { readonly message: SessionV1.WithParts; readonly tier: TaskSize.Tier }>,
     snapshot: SpendGuard.Run | undefined,
+    spend: Spend,
   ) => Effect.Effect<Effect.Effect<void> | undefined>
 }
 
@@ -86,6 +97,7 @@ const layer = Layer.effect(
       session: Session.Info,
       taught: ReadonlyMap<MessageID, { readonly message: SessionV1.WithParts; readonly tier: TaskSize.Tier }>,
       snapshot: SpendGuard.Run | undefined,
+      spend: Spend,
     ) {
       if (session.parentID || session.internal || flags.pure) return undefined
       const last = [...taught.values()]
@@ -170,7 +182,7 @@ const layer = Layer.effect(
         return undefined
       }
       // Cancelled by the next prompt, the run still gets the plain draft.
-      return modelDraft(session, last.message.info, model, trace).pipe(
+      return modelDraft(session, last.message.info, model, trace, spend).pipe(
         Effect.flatMap((worded) => propose(worded ?? plain)),
         Effect.onInterrupt(() => propose(plain).pipe(Effect.ignore)),
         Effect.catchCause((cause) => Effect.logWarning("skill drafter failed", { cause })),
@@ -191,16 +203,26 @@ const layer = Layer.effect(
     })
 
     // One request on the title helper's settings: no tools, no repository context, the run's trace wrapped as data. Its
-    // reply counts only as far as `BrainSkill.lock` finds it within what the run showed.
+    // reply counts only as far as `BrainSkill.lock` finds it within what the run showed. Like the model learner's, the
+    // request is charged to the run that launched it; a run that has stopped since its snapshot keeps the plain draft.
     const modelDraft = Effect.fnUntraced(function* (
       session: Session.Info,
       user: SessionV1.Info,
       model: Provider.Model,
       trace: BrainSkill.Trace,
+      spend: Spend,
     ) {
       const title = yield* agents.get("title")
       if (!title || user.role !== "user") return undefined
-      const usage = TitleUsage.create({ sessionID: session.id, model, publish: events.publish, purpose: "memory" })
+      if (yield* spend.captured.stopped) return undefined
+      const usage = TitleUsage.create({
+        sessionID: session.id,
+        model,
+        publish: events.publish,
+        purpose: "memory",
+        spend: spend.captured,
+        costKind: yield* spend.costKind(model),
+      })
       const reply = yield* llm
         .stream({
           agent: { ...title, name: "brain.skill", prompt: BrainSkill.PROMPT, temperature: 0 },

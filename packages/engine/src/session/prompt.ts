@@ -3324,11 +3324,21 @@ const layer = Layer.effect(
             .observe({ session, taught, since, run: snapshot, background: running, step: decided })
             .pipe(Effect.ignore, Effect.forkIn(background.scope)),
         )
+        // The model drafter's request counts against this run, as the model learner's does, so its scopes are captured
+        // before the run ends. The drafter lets them go when it is done; with no drafter, they go at once.
         kept(
-          yield* skillLearn.run(session, taught, snapshot).pipe(
-            Effect.flatMap((later) =>
-              later
-                ? later.pipe(
+          yield* Effect.uninterruptibleMask((restore) =>
+            Effect.gen(function* () {
+              const spend = yield* guard.capture(sessionID)
+              let drafting = false
+              return yield* restore(
+                skillLearn.run(session, taught, snapshot, { captured: spend, costKind: helperCostKind }),
+              ).pipe(
+                Effect.flatMap((later) => {
+                  if (!later) return Effect.void
+                  drafting = true
+                  return restore(later).pipe(
+                    Effect.ensuring(spend.release),
                     Effect.forkIn(background.scope),
                     Effect.map((drafter) => {
                       drafters.set(sessionID, kept(drafter))
@@ -3337,10 +3347,12 @@ const layer = Layer.effect(
                       })
                     }),
                   )
-                : Effect.void,
-            ),
-            Effect.catchCause((cause) => Effect.logWarning("skill learning failed", { cause })),
-            Effect.forkIn(background.scope),
+                }),
+                Effect.ensuring(Effect.suspend(() => (drafting ? Effect.void : spend.release))),
+                Effect.catchCause((cause) => Effect.logWarning("skill learning failed", { cause })),
+                Effect.forkIn(background.scope),
+              )
+            }),
           ),
         )
         // What the user typed teaches Vector how they work: plain code at once, and the model learner, where it runs,

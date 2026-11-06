@@ -511,3 +511,105 @@ it.instance(
       yield* session.remove(empty.id)
     }),
 )
+
+for (const days of [undefined, 7]) {
+  it.instance(
+    `a V2 compaction summary without Codium counts in ${days ? "window" : "lifetime"} own cost and tokens, as on main`,
+    () =>
+      Effect.gen(function* () {
+        const session = yield* Session.Service
+        const { db } = yield* Database.Service
+        const before = yield* aggregateSessionStats(days)
+        const info = yield* session.create({ title: "V2 compaction" })
+        // What the projector leaves for a priced compaction summary: its cost and tokens, and no own-only proof.
+        yield* db
+          .update(SessionTable)
+          .set({ cost: 0.05, tokens_input: 3_000, tokens_output: 200, tokens_own_only: false })
+          .where(eq(SessionTable.id, info.id))
+          .run()
+          .pipe(Effect.orDie)
+        const message = Schema.encodeSync(SessionMessage.Message)(
+          Schema.decodeUnknownSync(SessionMessage.Message)({
+            id: "msg_stats_own_compaction",
+            type: "compaction",
+            time: { created: Date.now() },
+            reason: "auto",
+            summary: "summary",
+            recent: "recent",
+            cost: 0.05,
+            tokens: { input: 3_000, output: 200, reasoning: 0, cache: { read: 0, write: 0 } },
+          }),
+        )
+        const { id, type, ...data } = message
+        yield* db
+          .insert(SessionMessageTable)
+          .values({
+            id: SessionMessage.ID.make(id),
+            session_id: info.id,
+            type,
+            seq: 0,
+            time_created: Date.now(),
+            time_updated: Date.now(),
+            data,
+          })
+          .run()
+          .pipe(Effect.orDie)
+        const after = yield* aggregateSessionStats(days)
+        expect(after.totalCost - before.totalCost).toBeCloseTo(0.05)
+        expect(after.totalTokens.input - before.totalTokens.input).toBe(3_000)
+        expect(after.totalTokens.output - before.totalTokens.output).toBe(200)
+        expect(after.unpricedSteps - before.unpricedSteps).toBe(0)
+        expect(after.codiumResponses - before.codiumResponses).toBe(0)
+        yield* session.remove(info.id)
+      }),
+  )
+}
+
+it.instance("lifetime statistics show 1.99.112 Codium history as Codium, not as unpriced requests", () =>
+  Effect.gen(function* () {
+    const session = yield* Session.Service
+    const events = yield* EventV2.Service
+    const { db } = yield* Database.Service
+    const before = yield* aggregateSessionStats()
+    const info = yield* session.create({ title: "Codium on 1.99.112" })
+    // 1.99.112 stamped no Codium flag: each Codium step and its Codium title were recorded unpriced.
+    yield* step(info.id, Date.now(), 0, "vector-plan", true)
+    yield* step(info.id, Date.now(), 0, "vector-plan", true)
+    yield* events.publish(SessionEvent.AncillaryUsage, {
+      sessionID: info.id,
+      timestamp: DateTime.makeUnsafe(Date.now()),
+      usageID: EventV2.ID.create(),
+      model: { providerID: ProviderV2.ID.make("vector-plan"), id: ModelV2.ID.make("codium-title") },
+      purpose: "title",
+      cost: 0,
+      unpriced: true,
+      tokens: { input: 500, output: 20, reasoning: 0, cache: { read: 0, write: 0 } },
+    })
+    // ...and counted all three as ordinary unpriced steps, with no Codium step.
+    yield* db
+      .update(SessionTable)
+      .set({ unpriced_steps: 3, codium_steps: 0 })
+      .where(eq(SessionTable.id, info.id))
+      .run()
+      .pipe(Effect.orDie)
+    const after = yield* aggregateSessionStats()
+    expect(after.unpricedSteps - before.unpricedSteps).toBe(0)
+    expect(after.codiumResponses - before.codiumResponses).toBe(3)
+    expect(after.totalCost - before.totalCost).toBeCloseTo(0)
+    expect(after.totalTokens.input - before.totalTokens.input).toBe(0)
+    const lines: string[] = []
+    const log = spyOn(console, "log").mockImplementation((...items) => {
+      lines.push(items.join(" "))
+    })
+    try {
+      displayStats(after)
+    } finally {
+      log.mockRestore()
+    }
+    const output = lines.join("\n")
+    expect(output).not.toContain("Unpriced/incomplete requests")
+    expect(output).not.toContain("+ unknown")
+    expect(output).toMatch(/Uncached Input\s+Codium/)
+    yield* session.remove(info.id)
+  }),
+)

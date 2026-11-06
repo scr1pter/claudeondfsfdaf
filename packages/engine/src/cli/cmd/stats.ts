@@ -279,6 +279,7 @@ export const aggregateSessionStats = Effect.fn("Cli.stats.aggregate")(function* 
                     unpriced: !!data.unpriced,
                     billing,
                     model: data.model ? `${data.model.providerID}/${data.model.id}` : undefined,
+                    compaction: row.type === "compaction",
                   },
                 ]
               })
@@ -289,8 +290,15 @@ export const aggregateSessionStats = Effect.fn("Cli.stats.aggregate")(function* 
         const sessionReceipts = receiptsBySession.get(session.id) ?? []
         const receipts = sessionReceipts.filter((usage) => !Billing.of(usage))
         const recordedCodium = Math.max(0, (session.codiumSteps ?? 0) - (sessionReceipts.length - receipts.length))
+        // A compaction row names no model. Unflagged, it is the session's own work, as main counts it, unless the
+        // session shows Codium: then it is counted as neither own nor Codium.
+        const codiumSession = (session.codiumSteps ?? 0) > 0 || Boolean(Billing.of(session))
         const own = steps.filter(
-          (step) => !step.billing && Billing.hasOwnIdentity({ providerID: step.model?.split("/")[0] }),
+          (step) =>
+            !step.billing &&
+            (step.model
+              ? Billing.hasOwnIdentity({ providerID: step.model.split("/")[0] })
+              : "compaction" in step && step.compaction && !codiumSession),
         )
         const observedCodium = steps.filter((step) => Boolean(step.billing)).length
         const codiumResponses = cutoffTime > 0 ? observedCodium : Math.max(observedCodium, recordedCodium)
@@ -307,6 +315,28 @@ export const aggregateSessionStats = Effect.fn("Cli.stats.aggregate")(function* 
                 : 0),
             0,
           ) + v2Steps.reduce((sum, step) => sum + (step.billing && !step.storedBilling ? step.cost : 0), 0)
+        // Every Codium record added one unpriced step to the session's counters, but only a flagged one, or a Codium
+        // receipt projected since the flag, added a Codium step as well: 1.99.112 recorded Codium steps and helper
+        // requests as ordinary unpriced steps. So every Codium record seen comes out of the unpriced steps, or the
+        // Codium steps where those are more.
+        const codiumUnpriced = Math.max(
+          session.codiumSteps ?? 0,
+          messages.reduce(
+            (sum, message) =>
+              sum +
+              (message.info.role === "assistant"
+                ? message.parts.filter(
+                    (part) =>
+                      part.type === "step-finish" &&
+                      (part.billing === "codium" || (Boolean(Billing.of(message.info)) && part.unpriced === true)),
+                  ).length
+                : 0),
+            0,
+          ) +
+            v2Steps.filter((step) => step.storedBilling || (step.billing && step.unpriced)).length +
+            sessionReceipts.filter((usage) => Billing.of(usage) && (usage.billing === "codium" || uncertain(usage)))
+              .length,
+        )
         const ownCost = own.reduce((sum, step) => sum + (step.cost || 0), 0)
         // Remove every projected ancillary receipt from lifetime counters before adding the deduplicated attempts
         // globally. Transcript/archive duplication outside ancillary usage is not changed by this calculation.
@@ -391,7 +421,7 @@ export const aggregateSessionStats = Effect.fn("Cli.stats.aggregate")(function* 
               ? steps.filter((step) => step.unpriced && !step.billing).length
               : Math.max(
                   0,
-                  CodiumUsage.ownUnpricedSteps(session.unpricedSteps, session.codiumSteps) -
+                  CodiumUsage.ownUnpricedSteps(session.unpricedSteps, codiumUnpriced) -
                     receipts.filter(uncertain).length,
                 ),
           messageCount: messages.length + v2Steps.length,

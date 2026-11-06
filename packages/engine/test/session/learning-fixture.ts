@@ -52,6 +52,7 @@ import { SessionRevert } from "../../src/session/revert"
 import { SessionRunState } from "../../src/session/run-state"
 import { SessionStatus } from "../../src/session/status"
 import { SessionWorkflow } from "../../src/session/workflow"
+import { SessionSkillLearn } from "../../src/session/skill-learn"
 import { Skill } from "../../src/skill"
 import { LearnedSkill } from "../../src/skill/learned"
 import { SystemPrompt } from "../../src/session/system"
@@ -148,6 +149,7 @@ const root = LayerNode.group([
   BrainWorkflow.node,
   LearnedSkill.node,
   SessionWorkflow.node,
+  SessionSkillLearn.node,
   FreeModelGuests.node,
   SessionArchive.node,
   ProjectV2.node,
