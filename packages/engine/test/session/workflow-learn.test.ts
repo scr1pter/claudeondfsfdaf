@@ -193,13 +193,20 @@ it.instance(
       const { place } = yield* setup({ model: { cost: { input: 3, output: 15 } } })
       const llm = yield* TestLLMServer
       const sessionID = yield* chat()
-      yield* llm.tool("escalate", { reason: "A refactor across the whole parser" })
-      yield* llm.tool("task", {
-        description: "Split the lexer",
-        prompt: "Move the lexer into src/lexer.ts.",
-        subagent_type: "general",
-        background: true,
-      })
+      // Every step reports its usage: a step without counters is incomplete, and leaves the run's cost unknown.
+      yield* llm.push(
+        reply().tool("escalate", { reason: "A refactor across the whole parser" }).usage({ input: 800, output: 40 }),
+      )
+      yield* llm.push(
+        reply()
+          .tool("task", {
+            description: "Split the lexer",
+            prompt: "Move the lexer into src/lexer.ts.",
+            subagent_type: "general",
+            background: true,
+          })
+          .usage({ input: 900, output: 60 }),
+      )
       // The subagent's request, whose last message is its brief, never ends; the parent's answer does.
       yield* llm.pushMatch((hit) => JSON.stringify(lastMessage(hit.body)).includes("Move the lexer"), reply().hang())
       yield* llm.text("Started the lexer split in the background.", { usage: { input: 1000, output: 100 } })

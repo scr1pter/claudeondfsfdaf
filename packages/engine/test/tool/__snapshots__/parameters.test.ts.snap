@@ -687,7 +687,7 @@ exports[`tool parameters JSON Schema (wire shape) terminal 1`] = `
       "type": "integer",
     },
     "pattern": {
-      "description": "wait: a regular expression to wait for in the output",
+      "description": "open, wait: a regular expression to wait for in the output; open waits for readiness when supplied",
       "type": "string",
     },
     "quiet": {
@@ -713,7 +713,7 @@ exports[`tool parameters JSON Schema (wire shape) terminal 1`] = `
       "type": "string",
     },
     "timeout": {
-      "description": "wait: give up after this many milliseconds (30000 by default, at most 60000)",
+      "description": "open with pattern, wait: give up after this many milliseconds (30000 by default, at most 60000)",
       "exclusiveMinimum": 0,
       "maximum": 9007199254740991,
       "minimum": -9007199254740991,
