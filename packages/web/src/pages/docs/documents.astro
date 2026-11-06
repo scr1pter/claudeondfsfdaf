@@ -23,11 +23,36 @@ export const prerender = true
             <div><dt>A new version</dt><dd><strong>Replace</strong> reads a file with the name of a document Vector keeps as that document's next version. Vector says what changed, and keeps your edits and pins.</dd></div>
           </dl>
           <p>
-            Pictures of text, such as scanned pages, are named but not read, password-protected parts are left out,
+            Scanned pages need local OCR to become searchable text; see <a href="#ocr">Local OCR</a> for the development-build setup. Password-protected parts are left out,
             links to outside files are not followed, and Vector removes what looks like a secret from what it reads
             before saving it. A passage that reads like instructions to an AI, or hides text or characters from a
             reader, waits for your review. Vector does not keep a copy of the file you added unless you turn on
             <strong>Keep copies of added files</strong>; a kept copy is the file as you added it, secrets included.
+          </p>
+
+          <h2 id="ocr">Local OCR</h2>
+          <p class="note">
+            In development builds: scanned PDF pages can be read with Tesseract and Poppler installed on the computer
+            running Vector's engine. Published installers do not include these new OCR tools or their language data.
+          </p>
+          <p>
+            Set <code>VECTOR_OCR_TESSERACT</code> and <code>VECTOR_OCR_PDFTOPPM</code> to the absolute paths of the
+            installed executables before launching Vector. <code>VECTOR_OCR_LANGUAGE</code> defaults to
+            <code>eng</code>; a value such as <code>eng+deu</code> requires both language files. Set
+            <code>VECTOR_OCR_TESSDATA</code> to their directory when it is not part of the installation. These are
+            machine settings; a repository and its documents cannot choose a program to run.
+          </p>
+          <p>
+            Vector keeps each page's original text when it exists and uses OCR for pages with too little text.
+            Recognition runs locally, without uploading a page to an OCR service. Recognized text retains its PDF page
+            number and is marked as OCR; check important numbers and quotations against the original image.
+          </p>
+          <p>
+            OCR takes PDFs of up to 20 MB and attempts at most 20 scanned pages in one read, with a 60-second total
+            limit and a 15-second limit for each native command. Pages beyond those limits or that recognition cannot
+            read remain listed as unread. Missing tools do not prevent native PDF text from being read. Larger scans
+            can be split into smaller documents. Native OCR tools have their own resource requirements; these limits
+            are not a hard operating-system memory sandbox.
           </p>
 
           <h2 id="privacy">Who a document reaches</h2>

@@ -1,0 +1,50 @@
+{
+  "kind": "owner-approved-additional-20-phase-v1",
+  "phaseID": "heavy-additional-20-v1",
+  "authorizedAdditionalUsd": 20,
+  "historicalKnownMeasuredUsd": 29.579095,
+  "historicalLatestAdmittedSeq": 1340,
+  "historicalSettledThroughSeq": 1339,
+  "historicalActorMeasuredUsd": {
+    "diagnostics": 0.3693985,
+    "foundry-codex": 8.9592263,
+    "foundry-vector": 17.6761006,
+    "saas-codex": 1.0112827,
+    "saas-vector": 1.5630869
+  },
+  "carriedUnsettled": {
+    "seq": 1340,
+    "actor": "foundry-codex",
+    "reservedUsd": 5.73,
+    "requestSha256": "bf9701d300414db23526c714e969a8a85537bf60a4231b4268413bb1c3517679",
+    "admissionCanonicalSha256": "9a7e1b150f5990ea1a48821935b45c0e628d737a34c074ba87ea59397425bc91"
+  },
+  "cumulativeUpperExposureLimitUsd": 55.309095,
+  "actorLimitsUsd": {
+    "diagnostics": 0.3693985,
+    "foundry-codex": 34.6892263,
+    "foundry-vector": 37.6761006,
+    "saas-codex": 1.0112827,
+    "saas-vector": 1.5630869
+  },
+  "historicalFiles": {
+    "admissions-v2.jsonl": "8c5e564e270e2f42da67fc3a3266a75b797df946e6b2e82448650564db8e6605",
+    "receipts.jsonl": "5b23b213590b9bf6d256f8146e57b71c8a1c06e6992e997f85bc886e5495d9b0",
+    "status.json": "350794f9d170818a854fd850776e9b6391c5c2b150d7deb90dde087d7946f069",
+    "phase-allocation-v5.json": "8b3bdc5436b37df44e9fa582d2782d61fa85ca548c992d208d43f130b76eda5c"
+  },
+  "historicalRowCounts": {
+    "admissions": 1306,
+    "receipts": 1339
+  },
+  "previousPhasePlanSha256": "5f75ba025ae3d4f3cde51b4d85586df63fee00e76fdcc300dc1ecd530a0e4c6e",
+  "historicalPricingRates": {
+    "input": 2.0,
+    "read": 0.1,
+    "write30m": 2.5,
+    "write12h": 5.0,
+    "output": 10.0
+  },
+  "noOldLiabilityReleased": true,
+  "allHistoricalAdmissionsSettled": false
+}

@@ -7,6 +7,7 @@ import { ToolJsonSchema } from "./json-schema"
 import { ResearchRun } from "./research-run"
 import { assertExternalDirectoryEffect } from "./external-directory"
 import { TaskMailbox } from "@vectordevai/core/task-mailbox"
+import { abortError, waitForAbort } from "@vectordevai/core/process"
 
 const ids = Schema.Array(Schema.String).check(Schema.isMinLength(1), Schema.isMaxLength(200))
 // Provider adapters flatten root unions and can lose their action discriminators.
@@ -104,6 +105,8 @@ export const TaskManageTool = Tool.define(
       jsonSchema: ToolJsonSchema.fromSchema(PublicParameters),
       execute: (input: typeof Parameters.Type, context: Tool.Context) =>
         Effect.gen(function* () {
+          if (input.action === "wait" && context.abort.aborted)
+            return yield* Effect.fail(abortError(context.abort))
           const ops = context.extra?.promptOps as TaskPromptOps | undefined
           if (PROMPTED.has(input.action) && !ops)
             return yield* Effect.die(new Error("Task management requires prompt operations"))
@@ -122,7 +125,7 @@ export const TaskManageTool = Tool.define(
                 : Effect.fail(new globalThis.Error("Merging requires Vector's writable-path checks.")),
             assertExternalDirectory: (file: string) => assertExternalDirectoryEffect(context, file),
           }
-          const result = yield* ((): Effect.Effect<unknown, TaskManager.Error> => {
+          const result = yield* ((): Effect.Effect<unknown, TaskManager.Error | Error> => {
             switch (input.action) {
               case "list":
                 // The agent sees its running background commands and the few that ended last (5.H); the route lists
@@ -171,7 +174,10 @@ export const TaskManageTool = Tool.define(
               case "report":
                 return tasks.report({ sessionID, text: input.text, wake: input.wake }, ops!)
               case "wait":
-                return tasks.wait({ sessionID, taskIDs: input.task_ids, mode: input.mode, timeout: input.timeout })
+                // A wait ends when its call is aborted; the tasks it waited on keep running.
+                return tasks
+                  .wait({ sessionID, taskIDs: input.task_ids, mode: input.mode, timeout: input.timeout })
+                  .pipe(Effect.raceFirst(waitForAbort(context.abort)))
             }
           })()
           return { title: `Task ${input.action}`, metadata: { action: input.action }, output: JSON.stringify(result) }

@@ -1,0 +1,1129 @@
+{
+  "kind": "foundry-navigation-overlay-v2",
+  "baseTaskRevision": "8ce4af881b98aaef2d73979073910f5a538c4f31",
+  "baseTaskDirectory": "docs/benchmarks/agentic-heavy-v1/foundry",
+  "originalTaskManifest": {
+    ".gitattributes": "a34b555b92014f9d77cbe80b28aeafda42c13f0b7e75c858298cf32efec35005",
+    "README.md": "9bb421da3a6cabe2eee6f68dc6d8c5e986a80ccca231f4a5417f62bc31e63b4c",
+    "evaluate.py": "c61010c9705ac14a8650e36a85548a9427d487d836aee44dd8560124930c9ee5",
+    "instrument/BUILD_SPEC.md": "62c42361ffec2b6cf91ef3ef5fb49706503aa05ff420ecf315e270904467c35a",
+    "instrument/README.md": "bc0f0d0d511d637400fc3e524e5ca2ec426250b5ece7fde2fc6972131cdf7ed1",
+    "instrument/browser-eval.cjs": "b6784542f7ac1d943e96f58029e1f890a92a0bb8ec039dd1ce345ab47bd8a262",
+    "instrument/browser-eval.test.cjs": "7a027c669350c57f3650a0af4e6e4e0435e52826c390e6bb6c9a2ef395075416",
+    "instrument/browser-instrument-validation.json": "378b5e4e9f360f6f1e62a733ec76c3a6ba1d475c499c6cba3442f9f2e058f643",
+    "instrument/browser-invoice-control.cjs": "032213c2baec1c64f20aa9e1616c5151906fa38ec9c46ab2b0158da6535e42da",
+    "instrument/browser-navigation-control.cjs": "b726c7de72e0d46b57feb867b18f92bf6cfe3ab72cbc74d98894468f7ce66a84",
+    "instrument/browser-state-control.cjs": "e6f0d56e3318b6ad8d3f7587b946f0c1f2cc42b1c804deede208deeaebea1323",
+    "instrument/build-output.cjs": "750621a2481622099c7f3dbff405ab5a86d3f706a7eb97a35787709ac78e3a35",
+    "instrument/code-quality-rubric.md": "cc556b60fa83cb4a0c0f2db3a1d654978645ad2d42b9a876acdf884ad31f54f9",
+    "instrument/evaluate.py": "ebaa5108a5493b737a61f3f6f7edb013626f6af762a7415271e0fb9a00df68cc",
+    "instrument/prepare.py": "399ed1bcdd503df67cce4246e45816f38facd6bc3c3a3b13c44572f93d52237d",
+    "instrument/seed/.gitignore": "b51be4624adc7e02eeef930f3ddf9c8e3110892e7efc3e81114cf2ab850b58a5",
+    "instrument/seed/bun.lock": "472e9ec37725ad3fda42738a5650c9660bec4a06881c91f257324380eeba0a90",
+    "instrument/seed/package.json": "c038f9fb6b7ab91b3db31f52aa04ddf3f2f0ffe2b92889c0af2e1942cf550632",
+    "instrument/seed/tsconfig.json": "aa95408bce20dbb372c19f109cc3e15118868b7f2ea0ce36c6b041f93312e860",
+    "instrument/test_instrument.py": "5de1baa18a9480f9f6fae34258752803b60ed0e224c17b5f4b844e6693b4027b",
+    "instrument/visual-rubric.md": "42418c193dd17ac228b7dd0b6cc7e320eaa10bd64393769ab12271394dec21a5",
+    "owned_process.py": "c3c7ea92c3aff03867c8d20757e03b5e6266992a5724de2bb2db787d9725054c",
+    "provenance.json": "6a658377a1ec832d0eecbf859d046633a9e67d8f3ca9d045f5bbe794350898f5",
+    "qualification.json": "d3c7adbe371f52b515a70bebd95306a40141981fc4124e6b04637f40382b0003",
+    "task.json": "d40692bcc39d89300f46a38cba2bbc6c5f82ff8b1d0b936e30de0a5b6de22bc1",
+    "test_adapter.py": "9e2ac2c8fcaf916f10f5f05cf773ae41f8617a7243eb1b2f7c32d433e2408833"
+  },
+  "originalTaskManifestSha256": "59244487c280c959a3b517765c2b8b3d4dc176500f2a2046e22519718454b596",
+  "copiedFiles": {
+    ".gitattributes": {
+      "originalSha256": "a34b555b92014f9d77cbe80b28aeafda42c13f0b7e75c858298cf32efec35005",
+      "overlaySha256": "a34b555b92014f9d77cbe80b28aeafda42c13f0b7e75c858298cf32efec35005",
+      "byteIdentical": true
+    },
+    "README.md": {
+      "originalSha256": "9bb421da3a6cabe2eee6f68dc6d8c5e986a80ccca231f4a5417f62bc31e63b4c",
+      "overlaySha256": "9bb421da3a6cabe2eee6f68dc6d8c5e986a80ccca231f4a5417f62bc31e63b4c",
+      "byteIdentical": true
+    },
+    "evaluate.py": {
+      "originalSha256": "c61010c9705ac14a8650e36a85548a9427d487d836aee44dd8560124930c9ee5",
+      "overlaySha256": "c61010c9705ac14a8650e36a85548a9427d487d836aee44dd8560124930c9ee5",
+      "byteIdentical": true
+    },
+    "instrument/BUILD_SPEC.md": {
+      "originalSha256": "62c42361ffec2b6cf91ef3ef5fb49706503aa05ff420ecf315e270904467c35a",
+      "overlaySha256": "62c42361ffec2b6cf91ef3ef5fb49706503aa05ff420ecf315e270904467c35a",
+      "byteIdentical": true
+    },
+    "instrument/README.md": {
+      "originalSha256": "bc0f0d0d511d637400fc3e524e5ca2ec426250b5ece7fde2fc6972131cdf7ed1",
+      "overlaySha256": "bc0f0d0d511d637400fc3e524e5ca2ec426250b5ece7fde2fc6972131cdf7ed1",
+      "byteIdentical": true
+    },
+    "instrument/browser-eval.cjs": {
+      "originalSha256": "b6784542f7ac1d943e96f58029e1f890a92a0bb8ec039dd1ce345ab47bd8a262",
+      "overlaySha256": "a74bf1099bf3b7babb7491aced2a563ef5406320761d8600bc9495cf2b18db5d",
+      "byteIdentical": false
+    },
+    "instrument/browser-eval.test.cjs": {
+      "originalSha256": "7a027c669350c57f3650a0af4e6e4e0435e52826c390e6bb6c9a2ef395075416",
+      "overlaySha256": "7a027c669350c57f3650a0af4e6e4e0435e52826c390e6bb6c9a2ef395075416",
+      "byteIdentical": true
+    },
+    "instrument/browser-instrument-validation.json": {
+      "originalSha256": "378b5e4e9f360f6f1e62a733ec76c3a6ba1d475c499c6cba3442f9f2e058f643",
+      "overlaySha256": "378b5e4e9f360f6f1e62a733ec76c3a6ba1d475c499c6cba3442f9f2e058f643",
+      "byteIdentical": true
+    },
+    "instrument/browser-invoice-control.cjs": {
+      "originalSha256": "032213c2baec1c64f20aa9e1616c5151906fa38ec9c46ab2b0158da6535e42da",
+      "overlaySha256": "032213c2baec1c64f20aa9e1616c5151906fa38ec9c46ab2b0158da6535e42da",
+      "byteIdentical": true
+    },
+    "instrument/browser-navigation-control.cjs": {
+      "originalSha256": "b726c7de72e0d46b57feb867b18f92bf6cfe3ab72cbc74d98894468f7ce66a84",
+      "overlaySha256": "b726c7de72e0d46b57feb867b18f92bf6cfe3ab72cbc74d98894468f7ce66a84",
+      "byteIdentical": true
+    },
+    "instrument/browser-state-control.cjs": {
+      "originalSha256": "e6f0d56e3318b6ad8d3f7587b946f0c1f2cc42b1c804deede208deeaebea1323",
+      "overlaySha256": "e6f0d56e3318b6ad8d3f7587b946f0c1f2cc42b1c804deede208deeaebea1323",
+      "byteIdentical": true
+    },
+    "instrument/build-output.cjs": {
+      "originalSha256": "750621a2481622099c7f3dbff405ab5a86d3f706a7eb97a35787709ac78e3a35",
+      "overlaySha256": "750621a2481622099c7f3dbff405ab5a86d3f706a7eb97a35787709ac78e3a35",
+      "byteIdentical": true
+    },
+    "instrument/code-quality-rubric.md": {
+      "originalSha256": "cc556b60fa83cb4a0c0f2db3a1d654978645ad2d42b9a876acdf884ad31f54f9",
+      "overlaySha256": "cc556b60fa83cb4a0c0f2db3a1d654978645ad2d42b9a876acdf884ad31f54f9",
+      "byteIdentical": true
+    },
+    "instrument/evaluate.py": {
+      "originalSha256": "ebaa5108a5493b737a61f3f6f7edb013626f6af762a7415271e0fb9a00df68cc",
+      "overlaySha256": "ebaa5108a5493b737a61f3f6f7edb013626f6af762a7415271e0fb9a00df68cc",
+      "byteIdentical": true
+    },
+    "instrument/prepare.py": {
+      "originalSha256": "399ed1bcdd503df67cce4246e45816f38facd6bc3c3a3b13c44572f93d52237d",
+      "overlaySha256": "399ed1bcdd503df67cce4246e45816f38facd6bc3c3a3b13c44572f93d52237d",
+      "byteIdentical": true
+    },
+    "instrument/seed/.gitignore": {
+      "originalSha256": "b51be4624adc7e02eeef930f3ddf9c8e3110892e7efc3e81114cf2ab850b58a5",
+      "overlaySha256": "b51be4624adc7e02eeef930f3ddf9c8e3110892e7efc3e81114cf2ab850b58a5",
+      "byteIdentical": true
+    },
+    "instrument/seed/bun.lock": {
+      "originalSha256": "472e9ec37725ad3fda42738a5650c9660bec4a06881c91f257324380eeba0a90",
+      "overlaySha256": "472e9ec37725ad3fda42738a5650c9660bec4a06881c91f257324380eeba0a90",
+      "byteIdentical": true
+    },
+    "instrument/seed/package.json": {
+      "originalSha256": "c038f9fb6b7ab91b3db31f52aa04ddf3f2f0ffe2b92889c0af2e1942cf550632",
+      "overlaySha256": "c038f9fb6b7ab91b3db31f52aa04ddf3f2f0ffe2b92889c0af2e1942cf550632",
+      "byteIdentical": true
+    },
+    "instrument/seed/tsconfig.json": {
+      "originalSha256": "aa95408bce20dbb372c19f109cc3e15118868b7f2ea0ce36c6b041f93312e860",
+      "overlaySha256": "aa95408bce20dbb372c19f109cc3e15118868b7f2ea0ce36c6b041f93312e860",
+      "byteIdentical": true
+    },
+    "instrument/test_instrument.py": {
+      "originalSha256": "5de1baa18a9480f9f6fae34258752803b60ed0e224c17b5f4b844e6693b4027b",
+      "overlaySha256": "5de1baa18a9480f9f6fae34258752803b60ed0e224c17b5f4b844e6693b4027b",
+      "byteIdentical": true
+    },
+    "instrument/visual-rubric.md": {
+      "originalSha256": "42418c193dd17ac228b7dd0b6cc7e320eaa10bd64393769ab12271394dec21a5",
+      "overlaySha256": "42418c193dd17ac228b7dd0b6cc7e320eaa10bd64393769ab12271394dec21a5",
+      "byteIdentical": true
+    },
+    "owned_process.py": {
+      "originalSha256": "c3c7ea92c3aff03867c8d20757e03b5e6266992a5724de2bb2db787d9725054c",
+      "overlaySha256": "c3c7ea92c3aff03867c8d20757e03b5e6266992a5724de2bb2db787d9725054c",
+      "byteIdentical": true
+    },
+    "provenance.json": {
+      "originalSha256": "6a658377a1ec832d0eecbf859d046633a9e67d8f3ca9d045f5bbe794350898f5",
+      "overlaySha256": "6a658377a1ec832d0eecbf859d046633a9e67d8f3ca9d045f5bbe794350898f5",
+      "byteIdentical": true
+    },
+    "qualification.json": {
+      "originalSha256": "d3c7adbe371f52b515a70bebd95306a40141981fc4124e6b04637f40382b0003",
+      "overlaySha256": "d3c7adbe371f52b515a70bebd95306a40141981fc4124e6b04637f40382b0003",
+      "byteIdentical": true
+    },
+    "task.json": {
+      "originalSha256": "d40692bcc39d89300f46a38cba2bbc6c5f82ff8b1d0b936e30de0a5b6de22bc1",
+      "overlaySha256": "d40692bcc39d89300f46a38cba2bbc6c5f82ff8b1d0b936e30de0a5b6de22bc1",
+      "byteIdentical": true
+    },
+    "test_adapter.py": {
+      "originalSha256": "9e2ac2c8fcaf916f10f5f05cf773ae41f8617a7243eb1b2f7c32d433e2408833",
+      "overlaySha256": "9e2ac2c8fcaf916f10f5f05cf773ae41f8617a7243eb1b2f7c32d433e2408833",
+      "byteIdentical": true
+    }
+  },
+  "changedFiles": [
+    "instrument/browser-eval.cjs"
+  ],
+  "helperDiffFile": "helper.diff",
+  "helperDiffSha256": "c32175036141608d22507053a002f81b99b919f7d3ae7a14babef9ed60616412",
+  "checkInventory": {
+    "apiGroups": 32,
+    "browserChecks": 40,
+    "prerequisites": 4,
+    "total": 76
+  },
+  "seedPromptContractChanged": false,
+  "qualification": {
+    "localDate": "2026-11-02",
+    "timezone": "America/Los_Angeles",
+    "modelCalls": 0,
+    "fundedMeterCalls": 0,
+    "overlayPureControlsPassed": 6,
+    "unchangedPythonControlsPassed": 11,
+    "unchangedNodeControlsPassed": 30,
+    "realChromiumControls": {
+      "kind": "foundry-project-navigation-chromium-controls-v2",
+      "modelCalls": 0,
+      "appRuns": 0,
+      "instrumentSha256": "a74bf1099bf3b7babb7491aced2a563ef5406320761d8600bc9495cf2b18db5d",
+      "checks": [
+        {
+          "name": "opens-exact-target-from-listing",
+          "status": "passed",
+          "evidence": {
+            "board": "Delivery launch",
+            "clicks": [
+              "Projects",
+              "Open project Delivery launch"
+            ]
+          },
+          "elapsedMs": 303
+        },
+        {
+          "name": "opens-exact-target-from-Delivery launch",
+          "status": "passed",
+          "evidence": {
+            "board": "Delivery launch",
+            "clicks": [
+              "Projects",
+              "All projects",
+              "Open project Delivery launch"
+            ]
+          },
+          "elapsedMs": 119
+        },
+        {
+          "name": "opens-exact-target-from-Other project",
+          "status": "passed",
+          "evidence": {
+            "board": "Delivery launch",
+            "clicks": [
+              "Projects",
+              "All projects",
+              "Open project Delivery launch"
+            ]
+          },
+          "elapsedMs": 116
+        },
+        {
+          "name": "rejects-missing-exact-opener",
+          "status": "passed",
+          "evidence": {
+            "board": null,
+            "clicks": [
+              "Projects"
+            ]
+          },
+          "elapsedMs": 715
+        },
+        {
+          "name": "rejects-wrong-board-without-return-control",
+          "status": "passed",
+          "evidence": {
+            "board": "Other project",
+            "clicks": [
+              "Projects"
+            ]
+          },
+          "elapsedMs": 715
+        },
+        {
+          "name": "rejects-no-op-return-control",
+          "status": "passed",
+          "evidence": {
+            "board": "Other project",
+            "clicks": [
+              "Projects",
+              "All projects"
+            ]
+          },
+          "elapsedMs": 715
+        },
+        {
+          "name": "rejects-hidden-return-control-is-not-used",
+          "status": "passed",
+          "evidence": {
+            "board": "Other project",
+            "clicks": [
+              "Projects"
+            ]
+          },
+          "elapsedMs": 718
+        },
+        {
+          "name": "rejects-target-opener-does-not-open-board",
+          "status": "passed",
+          "evidence": {
+            "board": null,
+            "clicks": [
+              "Projects",
+              "Open project Delivery launch"
+            ]
+          },
+          "elapsedMs": 713
+        },
+        {
+          "name": "rejects-near-label-is-not-target-opener",
+          "status": "passed",
+          "evidence": {
+            "board": null,
+            "clicks": [
+              "Projects"
+            ]
+          },
+          "elapsedMs": 724
+        },
+        {
+          "name": "no-external-network-request",
+          "status": "passed",
+          "evidence": {
+            "blockedRequests": 0
+          },
+          "elapsedMs": 0
+        }
+      ],
+      "passed": 10,
+      "failed": 0,
+      "profileRetainedPrivate": true,
+      "skippedBenchmarkChecksRelabelled": false
+    },
+    "fullApplicationChecks": {
+      "knownPositive": {
+        "process": {
+          "exitCode": 0,
+          "stopReason": null,
+          "timedOut": false,
+          "wallMs": 35047.0
+        },
+        "sourceFileCount": 17,
+        "sourceManifestSha256": "b737c29f677d67d64961bbec1239420828947606ba5ef33af9edcbcaffc987be",
+        "copiedAuthoredSourceUnchanged": true,
+        "originalAuthoredSourceUnchanged": true,
+        "verdict": "passed",
+        "reportSha256": "847a6588da6ed41edf19d32fbf1d77adbad7c8375e20746e8bd9a452b34046d8",
+        "counts": {
+          "passed": 76,
+          "failed": 0,
+          "not_run": 0
+        },
+        "checks": [
+          {
+            "name": "prerequisite:typecheck",
+            "category": "prerequisite",
+            "status": "passed"
+          },
+          {
+            "name": "prerequisite:build",
+            "category": "prerequisite",
+            "status": "passed"
+          },
+          {
+            "name": "prerequisite:startup",
+            "category": "prerequisite",
+            "status": "passed"
+          },
+          {
+            "name": "prerequisite:source_integrity",
+            "category": "prerequisite",
+            "status": "passed"
+          },
+          {
+            "name": "api:authentication_bootstrap",
+            "category": "api",
+            "status": "passed"
+          },
+          {
+            "name": "api:sessions_password_storage",
+            "category": "api",
+            "status": "passed"
+          },
+          {
+            "name": "api:workspaces_selection",
+            "category": "api",
+            "status": "passed"
+          },
+          {
+            "name": "api:invites_email_single_use",
+            "category": "api",
+            "status": "passed"
+          },
+          {
+            "name": "api:roles_owner_protection",
+            "category": "api",
+            "status": "passed"
+          },
+          {
+            "name": "api:tenant_boundary",
+            "category": "api",
+            "status": "passed"
+          },
+          {
+            "name": "api:customers_crud_search",
+            "category": "api",
+            "status": "passed"
+          },
+          {
+            "name": "api:customers_uniqueness_validation",
+            "category": "api",
+            "status": "passed"
+          },
+          {
+            "name": "api:products_crud_cents",
+            "category": "api",
+            "status": "passed"
+          },
+          {
+            "name": "api:stock_ledger_validation",
+            "category": "api",
+            "status": "passed"
+          },
+          {
+            "name": "api:stock_concurrency",
+            "category": "api",
+            "status": "passed"
+          },
+          {
+            "name": "api:orders_price_snapshots",
+            "category": "api",
+            "status": "passed"
+          },
+          {
+            "name": "api:draft_order_state_machine",
+            "category": "api",
+            "status": "passed"
+          },
+          {
+            "name": "api:fulfillment_atomic_retry",
+            "category": "api",
+            "status": "passed"
+          },
+          {
+            "name": "api:fulfillment_idempotency",
+            "category": "api",
+            "status": "passed"
+          },
+          {
+            "name": "api:fulfillment_competing_orders",
+            "category": "api",
+            "status": "passed"
+          },
+          {
+            "name": "api:fulfillment_same_key_concurrency",
+            "category": "api",
+            "status": "passed"
+          },
+          {
+            "name": "api:invoices_snapshot_validation",
+            "category": "api",
+            "status": "passed"
+          },
+          {
+            "name": "api:invoice_number_concurrency",
+            "category": "api",
+            "status": "passed"
+          },
+          {
+            "name": "api:invoice_status_transitions",
+            "category": "api",
+            "status": "passed"
+          },
+          {
+            "name": "api:projects_crud",
+            "category": "api",
+            "status": "passed"
+          },
+          {
+            "name": "api:tasks_crud_filters_validation",
+            "category": "api",
+            "status": "passed"
+          },
+          {
+            "name": "api:comments_permissions",
+            "category": "api",
+            "status": "passed"
+          },
+          {
+            "name": "api:project_cascade",
+            "category": "api",
+            "status": "passed"
+          },
+          {
+            "name": "api:csv_import_atomicity",
+            "category": "api",
+            "status": "passed"
+          },
+          {
+            "name": "api:csv_exports_roundtrip",
+            "category": "api",
+            "status": "passed"
+          },
+          {
+            "name": "api:attachments_bytes_auth",
+            "category": "api",
+            "status": "passed"
+          },
+          {
+            "name": "api:attachment_validation_paths",
+            "category": "api",
+            "status": "passed"
+          },
+          {
+            "name": "api:attachment_cascade",
+            "category": "api",
+            "status": "passed"
+          },
+          {
+            "name": "api:activity_sync_analytics",
+            "category": "api",
+            "status": "passed"
+          },
+          {
+            "name": "api:membership_revocation",
+            "category": "api",
+            "status": "passed"
+          },
+          {
+            "name": "api:restart_persistence",
+            "category": "api",
+            "status": "passed"
+          },
+          {
+            "name": "browser:signup-and-workspace",
+            "category": "browser",
+            "status": "passed"
+          },
+          {
+            "name": "browser:multiple-workspaces-and-isolated-selection",
+            "category": "browser",
+            "status": "passed"
+          },
+          {
+            "name": "browser:customer-create-real-api",
+            "category": "browser",
+            "status": "passed"
+          },
+          {
+            "name": "browser:customer-edit-keeps-real-data",
+            "category": "browser",
+            "status": "passed"
+          },
+          {
+            "name": "browser:customer-search",
+            "category": "browser",
+            "status": "passed"
+          },
+          {
+            "name": "browser:unused-customer-delete-confirmation",
+            "category": "browser",
+            "status": "passed"
+          },
+          {
+            "name": "browser:quoted-customer-csv-import",
+            "category": "browser",
+            "status": "passed"
+          },
+          {
+            "name": "browser:customer-export-escaping-and-formula-safety",
+            "category": "browser",
+            "status": "passed"
+          },
+          {
+            "name": "browser:product-creation-and-exact-cents",
+            "category": "browser",
+            "status": "passed"
+          },
+          {
+            "name": "browser:product-search-and-export",
+            "category": "browser",
+            "status": "passed"
+          },
+          {
+            "name": "browser:stock-receipt-real-movements",
+            "category": "browser",
+            "status": "passed"
+          },
+          {
+            "name": "browser:stock-history-visible-reason-delta-date",
+            "category": "browser",
+            "status": "passed"
+          },
+          {
+            "name": "browser:negative-stock-visible-error-no-write",
+            "category": "browser",
+            "status": "passed"
+          },
+          {
+            "name": "browser:multi-line-order-price-snapshots",
+            "category": "browser",
+            "status": "passed"
+          },
+          {
+            "name": "browser:order-status-filter-and-export",
+            "category": "browser",
+            "status": "passed"
+          },
+          {
+            "name": "browser:order-fulfillment-updates-stock-once",
+            "category": "browser",
+            "status": "passed"
+          },
+          {
+            "name": "browser:invoice-issued-from-fulfilled-order",
+            "category": "browser",
+            "status": "passed"
+          },
+          {
+            "name": "browser:invoice-sent-paid-workflow",
+            "category": "browser",
+            "status": "passed"
+          },
+          {
+            "name": "browser:invoice-immutable-after-catalog-customer-edits",
+            "category": "browser",
+            "status": "passed"
+          },
+          {
+            "name": "browser:project-create-and-board",
+            "category": "browser",
+            "status": "passed"
+          },
+          {
+            "name": "browser:tasks-created-with-assignee-date-and-priority",
+            "category": "browser",
+            "status": "passed"
+          },
+          {
+            "name": "browser:task-edit-moves-kanban-column",
+            "category": "browser",
+            "status": "passed"
+          },
+          {
+            "name": "browser:task-search-and-composed-filters",
+            "category": "browser",
+            "status": "passed"
+          },
+          {
+            "name": "browser:task-comment-safe-rendering",
+            "category": "browser",
+            "status": "passed"
+          },
+          {
+            "name": "browser:task-attachment-upload-download-exact-bytes",
+            "category": "browser",
+            "status": "passed"
+          },
+          {
+            "name": "browser:unsupported-attachment-visible-error-no-persistence",
+            "category": "browser",
+            "status": "passed"
+          },
+          {
+            "name": "browser:attachment-delete-removes-download",
+            "category": "browser",
+            "status": "passed"
+          },
+          {
+            "name": "browser:task-delete-confirmation-real-api",
+            "category": "browser",
+            "status": "passed"
+          },
+          {
+            "name": "browser:overview-real-workspace-analytics",
+            "category": "browser",
+            "status": "passed"
+          },
+          {
+            "name": "browser:activity-real-events-and-author",
+            "category": "browser",
+            "status": "passed"
+          },
+          {
+            "name": "browser:owner-invite-and-read-only-join",
+            "category": "browser",
+            "status": "passed"
+          },
+          {
+            "name": "browser:read-only-ui-permissions",
+            "category": "browser",
+            "status": "passed"
+          },
+          {
+            "name": "browser:live-role-promotion",
+            "category": "browser",
+            "status": "passed"
+          },
+          {
+            "name": "browser:cross-client-live-product-update",
+            "category": "browser",
+            "status": "passed"
+          },
+          {
+            "name": "browser:membership-revocation-reacts-live",
+            "category": "browser",
+            "status": "passed"
+          },
+          {
+            "name": "browser:session-refresh-sign-out-sign-in",
+            "category": "browser",
+            "status": "passed"
+          },
+          {
+            "name": "browser:keyboard-dialog-escape-and-focus-return",
+            "category": "browser",
+            "status": "passed"
+          },
+          {
+            "name": "browser:accessible-controls-and-desktop-evidence",
+            "category": "browser",
+            "status": "passed"
+          },
+          {
+            "name": "browser:mobile-responsive-pages-and-evidence",
+            "category": "browser",
+            "status": "passed"
+          },
+          {
+            "name": "browser:browser-runtime-diagnostics",
+            "category": "browser",
+            "status": "passed"
+          }
+        ]
+      },
+      "unchangedVector": {
+        "process": {
+          "exitCode": 1,
+          "stopReason": null,
+          "timedOut": false,
+          "wallMs": 33531.0
+        },
+        "sourceFileCount": 39,
+        "sourceManifestSha256": "4675be85beaa531ce3525bceca3a673659ed3c0f8e9e225aae634daa743f352e",
+        "copiedAuthoredSourceUnchanged": true,
+        "originalAuthoredSourceUnchanged": true,
+        "verdict": "product_failure",
+        "reportSha256": "6ea74387748db60c6f22bb8c284644457107789ef03dba5dae81cfc0e71ae7c3",
+        "counts": {
+          "passed": 74,
+          "failed": 2,
+          "not_run": 0
+        },
+        "checks": [
+          {
+            "name": "prerequisite:typecheck",
+            "category": "prerequisite",
+            "status": "passed"
+          },
+          {
+            "name": "prerequisite:build",
+            "category": "prerequisite",
+            "status": "passed"
+          },
+          {
+            "name": "prerequisite:startup",
+            "category": "prerequisite",
+            "status": "passed"
+          },
+          {
+            "name": "prerequisite:source_integrity",
+            "category": "prerequisite",
+            "status": "passed"
+          },
+          {
+            "name": "api:authentication_bootstrap",
+            "category": "api",
+            "status": "passed"
+          },
+          {
+            "name": "api:sessions_password_storage",
+            "category": "api",
+            "status": "passed"
+          },
+          {
+            "name": "api:workspaces_selection",
+            "category": "api",
+            "status": "passed"
+          },
+          {
+            "name": "api:invites_email_single_use",
+            "category": "api",
+            "status": "passed"
+          },
+          {
+            "name": "api:roles_owner_protection",
+            "category": "api",
+            "status": "passed"
+          },
+          {
+            "name": "api:tenant_boundary",
+            "category": "api",
+            "status": "passed"
+          },
+          {
+            "name": "api:customers_crud_search",
+            "category": "api",
+            "status": "passed"
+          },
+          {
+            "name": "api:customers_uniqueness_validation",
+            "category": "api",
+            "status": "passed"
+          },
+          {
+            "name": "api:products_crud_cents",
+            "category": "api",
+            "status": "passed"
+          },
+          {
+            "name": "api:stock_ledger_validation",
+            "category": "api",
+            "status": "passed"
+          },
+          {
+            "name": "api:stock_concurrency",
+            "category": "api",
+            "status": "passed"
+          },
+          {
+            "name": "api:orders_price_snapshots",
+            "category": "api",
+            "status": "passed"
+          },
+          {
+            "name": "api:draft_order_state_machine",
+            "category": "api",
+            "status": "failed",
+            "error": "expected HTTP200, received400",
+            "reason": "expected HTTP200, received400"
+          },
+          {
+            "name": "api:fulfillment_atomic_retry",
+            "category": "api",
+            "status": "passed"
+          },
+          {
+            "name": "api:fulfillment_idempotency",
+            "category": "api",
+            "status": "passed"
+          },
+          {
+            "name": "api:fulfillment_competing_orders",
+            "category": "api",
+            "status": "passed"
+          },
+          {
+            "name": "api:fulfillment_same_key_concurrency",
+            "category": "api",
+            "status": "passed"
+          },
+          {
+            "name": "api:invoices_snapshot_validation",
+            "category": "api",
+            "status": "passed"
+          },
+          {
+            "name": "api:invoice_number_concurrency",
+            "category": "api",
+            "status": "passed"
+          },
+          {
+            "name": "api:invoice_status_transitions",
+            "category": "api",
+            "status": "passed"
+          },
+          {
+            "name": "api:projects_crud",
+            "category": "api",
+            "status": "passed"
+          },
+          {
+            "name": "api:tasks_crud_filters_validation",
+            "category": "api",
+            "status": "passed"
+          },
+          {
+            "name": "api:comments_permissions",
+            "category": "api",
+            "status": "passed"
+          },
+          {
+            "name": "api:project_cascade",
+            "category": "api",
+            "status": "passed"
+          },
+          {
+            "name": "api:csv_import_atomicity",
+            "category": "api",
+            "status": "passed"
+          },
+          {
+            "name": "api:csv_exports_roundtrip",
+            "category": "api",
+            "status": "passed"
+          },
+          {
+            "name": "api:attachments_bytes_auth",
+            "category": "api",
+            "status": "passed"
+          },
+          {
+            "name": "api:attachment_validation_paths",
+            "category": "api",
+            "status": "passed"
+          },
+          {
+            "name": "api:attachment_cascade",
+            "category": "api",
+            "status": "passed"
+          },
+          {
+            "name": "api:activity_sync_analytics",
+            "category": "api",
+            "status": "passed"
+          },
+          {
+            "name": "api:membership_revocation",
+            "category": "api",
+            "status": "passed"
+          },
+          {
+            "name": "api:restart_persistence",
+            "category": "api",
+            "status": "passed"
+          },
+          {
+            "name": "browser:signup-and-workspace",
+            "category": "browser",
+            "status": "passed"
+          },
+          {
+            "name": "browser:multiple-workspaces-and-isolated-selection",
+            "category": "browser",
+            "status": "passed"
+          },
+          {
+            "name": "browser:customer-create-real-api",
+            "category": "browser",
+            "status": "passed"
+          },
+          {
+            "name": "browser:customer-edit-keeps-real-data",
+            "category": "browser",
+            "status": "passed"
+          },
+          {
+            "name": "browser:customer-search",
+            "category": "browser",
+            "status": "passed"
+          },
+          {
+            "name": "browser:unused-customer-delete-confirmation",
+            "category": "browser",
+            "status": "passed"
+          },
+          {
+            "name": "browser:quoted-customer-csv-import",
+            "category": "browser",
+            "status": "passed"
+          },
+          {
+            "name": "browser:customer-export-escaping-and-formula-safety",
+            "category": "browser",
+            "status": "passed"
+          },
+          {
+            "name": "browser:product-creation-and-exact-cents",
+            "category": "browser",
+            "status": "passed"
+          },
+          {
+            "name": "browser:product-search-and-export",
+            "category": "browser",
+            "status": "passed"
+          },
+          {
+            "name": "browser:stock-receipt-real-movements",
+            "category": "browser",
+            "status": "passed"
+          },
+          {
+            "name": "browser:stock-history-visible-reason-delta-date",
+            "category": "browser",
+            "status": "passed"
+          },
+          {
+            "name": "browser:negative-stock-visible-error-no-write",
+            "category": "browser",
+            "status": "passed"
+          },
+          {
+            "name": "browser:multi-line-order-price-snapshots",
+            "category": "browser",
+            "status": "passed"
+          },
+          {
+            "name": "browser:order-status-filter-and-export",
+            "category": "browser",
+            "status": "passed"
+          },
+          {
+            "name": "browser:order-fulfillment-updates-stock-once",
+            "category": "browser",
+            "status": "passed"
+          },
+          {
+            "name": "browser:invoice-issued-from-fulfilled-order",
+            "category": "browser",
+            "status": "passed"
+          },
+          {
+            "name": "browser:invoice-sent-paid-workflow",
+            "category": "browser",
+            "status": "passed"
+          },
+          {
+            "name": "browser:invoice-immutable-after-catalog-customer-edits",
+            "category": "browser",
+            "status": "passed"
+          },
+          {
+            "name": "browser:project-create-and-board",
+            "category": "browser",
+            "status": "passed"
+          },
+          {
+            "name": "browser:tasks-created-with-assignee-date-and-priority",
+            "category": "browser",
+            "status": "passed"
+          },
+          {
+            "name": "browser:task-edit-moves-kanban-column",
+            "category": "browser",
+            "status": "passed"
+          },
+          {
+            "name": "browser:task-search-and-composed-filters",
+            "category": "browser",
+            "status": "passed"
+          },
+          {
+            "name": "browser:task-comment-safe-rendering",
+            "category": "browser",
+            "status": "passed"
+          },
+          {
+            "name": "browser:task-attachment-upload-download-exact-bytes",
+            "category": "browser",
+            "status": "passed"
+          },
+          {
+            "name": "browser:unsupported-attachment-visible-error-no-persistence",
+            "category": "browser",
+            "status": "passed"
+          },
+          {
+            "name": "browser:attachment-delete-removes-download",
+            "category": "browser",
+            "status": "passed"
+          },
+          {
+            "name": "browser:task-delete-confirmation-real-api",
+            "category": "browser",
+            "status": "passed"
+          },
+          {
+            "name": "browser:overview-real-workspace-analytics",
+            "category": "browser",
+            "status": "passed"
+          },
+          {
+            "name": "browser:activity-real-events-and-author",
+            "category": "browser",
+            "status": "passed"
+          },
+          {
+            "name": "browser:owner-invite-and-read-only-join",
+            "category": "browser",
+            "status": "passed"
+          },
+          {
+            "name": "browser:read-only-ui-permissions",
+            "category": "browser",
+            "status": "passed"
+          },
+          {
+            "name": "browser:live-role-promotion",
+            "category": "browser",
+            "status": "passed"
+          },
+          {
+            "name": "browser:cross-client-live-product-update",
+            "category": "browser",
+            "status": "passed"
+          },
+          {
+            "name": "browser:membership-revocation-reacts-live",
+            "category": "browser",
+            "status": "passed"
+          },
+          {
+            "name": "browser:session-refresh-sign-out-sign-in",
+            "category": "browser",
+            "status": "passed"
+          },
+          {
+            "name": "browser:keyboard-dialog-escape-and-focus-return",
+            "category": "browser",
+            "status": "passed"
+          },
+          {
+            "name": "browser:accessible-controls-and-desktop-evidence",
+            "category": "browser",
+            "status": "passed"
+          },
+          {
+            "name": "browser:mobile-responsive-pages-and-evidence",
+            "category": "browser",
+            "status": "failed",
+            "reason": "Mobile document overflow (contained tables/boards allowed): [{\"page\":\"Overview\",\"viewportWidth\":390,\"documentWidth\":390,\"overflow\":0},{\"page\":\"Customers\",\"viewportWidth\":390,\"documentWidth\":544,\"overflow\":154},{\"page\":\"Inventory\",\"viewportWidth\":390,\"documentWidth\":499,\"overflow\":109},{\"page\":\"Orders\",\"viewportWidth\":390,\"documentWidth\":503,\"overflow\":113},{\"page\":\"Project board\",\"viewportWidth\":390,\"documentWidth\":390,\"overflow\":0}]",
+            "error": "Mobile document overflow (contained tables/boards allowed): [{\"page\":\"Overview\",\"viewportWidth\":390,\"documentWidth\":390,\"overflow\":0},{\"page\":\"Customers\",\"viewportWidth\":390,\"documentWidth\":544,\"overflow\":154},{\"page\":\"Inventory\",\"viewportWidth\":390,\"documentWidth\":499,\"overflow\":109},{\"page\":\"Orders\",\"viewportWidth\":390,\"documentWidth\":503,\"overflow\":113},{\"page\":\"Project board\",\"viewportWidth\":390,\"documentWidth\":390,\"overflow\":0}]"
+          },
+          {
+            "name": "browser:browser-runtime-diagnostics",
+            "category": "browser",
+            "status": "passed"
+          }
+        ]
+      }
+    },
+    "originalPaidResultRewritten": false,
+    "allOriginalChargesRetained": true,
+    "noAppSourceEdits": true,
+    "knownPositiveAndVectorEvaluationSequential": true
+  },
+  "priorOriginalFailuresRewritten": false,
+  "applicationImplementationCopied": false,
+  "originalByteFreeze": "Original b84 paid-plan taskFiles from canonical runtime directory; executable/spec/seed are unchanged from8ce4af8; historical metadata newline spellings are retained exactly.",
+  "qualificationMetadataAlignment": "Original-source metadata was aligned to b84 after first control/positive run; executable files, browser helper, public spec and scaffold hashes did not change."
+}

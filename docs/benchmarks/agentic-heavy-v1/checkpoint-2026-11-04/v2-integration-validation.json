@@ -1,0 +1,40 @@
+{
+  "kind": "v2-loop-guard-integrated-validation",
+  "date": "2026-11-04",
+  "sourceRevision": "dae48615985f03e85c9dede9ba0b4556a3da39f2",
+  "integrationRevision": "b9bc0cbb942bd844bb6dac12b7a26380f3978eb4",
+  "allPackageAndCommonDriverContentsMatchTestedRevision": true,
+  "focusedTests": {
+    "passed": 220,
+    "failed": 0,
+    "assertions": 845,
+    "files": 5,
+    "executedIn": "isolated candidate worktree; not rerun on canonical identical package contents"
+  },
+  "coreTypecheckExitCode": 0,
+  "canonicalEngineTypecheck": {
+    "command": "bun run typecheck",
+    "cwd": "packages/engine",
+    "exitCode": 0
+  },
+  "intentionalNegativeControls": [
+    {
+      "mutation": "omit signature forwarding",
+      "expectedFailures": 2,
+      "actualFailures": 2,
+      "fixedBytesRestored": true
+    },
+    {
+      "mutation": "omit promotion-only loop reset",
+      "expectedFailures": 4,
+      "actualFailures": 4,
+      "fixedBytesRestored": true
+    }
+  ],
+  "peerSourceReview": "no remaining actionable finding",
+  "newPaidProviderCalls": 0,
+  "modelReasoningContextImagesOrVerificationReduced": false,
+  "historicalLegacyPaidResultsReinterpreted": false,
+  "measuredSavings": false,
+  "sourceReleasedOrMergedToMain": false
+}

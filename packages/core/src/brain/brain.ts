@@ -2040,6 +2040,7 @@ function make(db: BrainDatabase.Database, dirs: { readonly data: string; readonl
     return row?.kind === "skill"
   })
 
+  // The changed content and the event that advances its revocation counter commit together.
   const update = Effect.fn("Brain.update")(function* (
     place: Place,
     id: string,
@@ -2204,7 +2205,7 @@ function make(db: BrainDatabase.Database, dirs: { readonly data: string; readonl
     yield* bump(row.repository_id)
     const next = yield* find(place, id, true)
     return next ? { type: "merged" as const, entry: toEntry(next) } : undefined
-  })
+  }, (effect) => db.transaction(() => effect).pipe(Effect.orDie))
 
   // Forgetting is a real delete: the row and its evidence go, and only a hash of the text stays so it is not learned
   // again for 180 days.
@@ -2223,10 +2224,10 @@ function make(db: BrainDatabase.Database, dirs: { readonly data: string; readonl
             .run()
           yield* tx.delete(BrainUseTable).where(eq(BrainUseTable.entry_id, row.id)).run()
           yield* tx.delete(BrainEventTable).where(eq(BrainEventTable.entry_id, row.id)).run()
+          yield* event(row, "forgotten", "user")
         }),
       )
       .pipe(Effect.orDie)
-    yield* event(row, "forgotten", "user")
     yield* bump(row.repository_id)
   })
 
@@ -2292,6 +2293,18 @@ function make(db: BrainDatabase.Database, dirs: { readonly data: string; readonl
                 ),
               )
               .run()
+          // A content-free event advances the durable revocation counter in this transaction. An all-memory erase
+          // uses the personal scope, which every digest observes, even after this event is eventually pruned.
+          yield* tx
+            .insert(BrainEventTable)
+            .values({
+              entry_id: "",
+              repository_id: scope === "all" || scope === "personal" ? PERSONAL : place.repository,
+              at: Date.now(),
+              action: "forgotten",
+              actor: "user",
+            })
+            .run()
           // Documents belong to a repository whoever added them, so erasing personal memory keeps them. Sections,
           // passages, records and postings go with their document and item. So do learned skills and workflow insights,
           // which are kept per repository; the repository's marker went with its tombstones above.

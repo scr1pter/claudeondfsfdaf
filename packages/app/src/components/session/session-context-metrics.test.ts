@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import type { Message, AssistantMessage } from "@vectordevai/sdk/v2/client"
 import { getSessionContext } from "./session-context-metrics"
+import { sessionSpend, sessionTokens } from "@/utils/session-cost"
 
 const assistant = (
   id: string,
@@ -104,6 +105,32 @@ describe("getSessionContext", () => {
     const ctx = getSessionContext(undefined, undefined)
 
     expect(ctx).toBeUndefined()
+  })
+
+  test("keeps latest-turn context distinct from cumulative chat and delegated usage", () => {
+    const messages = [
+      assistant("first", { input: 800, output: 100, reasoning: 100, read: 0, write: 0 }, 1),
+      assistant("cached", { input: 0, output: 0, reasoning: 200, read: 500, write: 0 }, 0.25),
+    ]
+    // The engine marks session totals as this chat's own usage; the app trusts them only then.
+    const info = {
+      cost: 1.25,
+      subagentCost: 0.75,
+      tokens: { input: 800, output: 100, reasoning: 300, cache: { read: 500, write: 0 } },
+      subagentTokens: { input: 100, output: 20, reasoning: 30, cache: { read: 200, write: 50 } },
+      tokensOwnOnly: true,
+      subagentTokensOwnOnly: true,
+    }
+    const providers = [{ id: "openai", models: { "gpt-4.1": { limit: { context: 1000 } } } }]
+
+    expect(getSessionContext(messages, providers)).toMatchObject({
+      message: { id: "cached" },
+      tokens: 500,
+      usage: 50,
+    })
+    expect(sessionTokens({ tokens: info.tokens, tokensOwnOnly: true })).toBe(1700)
+    expect(sessionTokens(info)).toBe(2100)
+    expect(sessionSpend(info)).toEqual({ cost: 2, unpricedSteps: 0, codiumSteps: 0 })
   })
 })
 

@@ -1,0 +1,323 @@
+{
+  "schemaVersion": 1,
+  "study": "agentic-workflows-v1",
+  "task": "workflow-runner",
+  "stage": "baseline",
+  "costBasis": "Usage-derived provider receipt charges; not invoice-reconciled",
+  "allChargesRetained": true,
+  "historicalSpendingReset": false,
+  "tokenUsage": {
+    "available": true,
+    "artifact": "baseline-token-usage.json",
+    "source": "Sanitized numeric projection of the original paid provider receipts, matched to all three attempts",
+    "reasoningTokensAreSubsetOfOutput": true,
+    "cacheWritesAndReadsAreSubsetsOfInput": true,
+    "allRequestedModel": "gpt-6.1-sol",
+    "allRequestedHigh": true,
+    "allHttp200": true,
+    "note": "Input includes cache reads and writes; output includes reasoning. Total tokens equal input plus output. Cost comparisons use the recorded usage-derived charges, not unweighted token counts or invoices."
+  },
+  "submissions": [
+    {
+      "id": "codex-first",
+      "runtime": "Codex",
+      "phase": "first_submission",
+      "incrementalProviderRequests": 28,
+      "incrementalMeasuredUsd": 0.9333972,
+      "agentWallMs": 681078,
+      "tokens": {
+        "inputTokens": 1659392,
+        "cachedInputTokens": 1567067,
+        "cacheWriteTokens": 92241,
+        "cacheWrite30mTokens": 92241,
+        "cacheWrite12hTokens": 0,
+        "uncachedNonWriteInputTokens": 84,
+        "outputTokens": 54592,
+        "reasoningTokens": 12919,
+        "totalTokens": 1713984
+      },
+      "originalEvaluation": {
+        "recordedVerdict": "passed",
+        "apiPassed": 16,
+        "apiRequired": 16,
+        "browserPassed": 8,
+        "browserRequired": 8,
+        "failedChecks": []
+      },
+      "correctedEvaluation": {
+        "verdict": "passed",
+        "apiPassed": 16,
+        "apiRequired": 16,
+        "browserPassed": 8,
+        "browserRequired": 8,
+        "sourceUnchanged": true
+      },
+      "protectedInputViolations": 0,
+      "workerCalls": 0,
+      "toolInventory": null
+    },
+    {
+      "id": "vector-first",
+      "runtime": "Vector",
+      "phase": "first_submission",
+      "incrementalProviderRequests": 37,
+      "incrementalMeasuredUsd": 0.6540243,
+      "agentWallMs": 440922,
+      "tokens": {
+        "inputTokens": 1520842,
+        "cachedInputTokens": 1453448,
+        "cacheWriteTokens": 67283,
+        "cacheWrite30mTokens": 67283,
+        "cacheWrite12hTokens": 0,
+        "uncachedNonWriteInputTokens": 111,
+        "outputTokens": 34025,
+        "reasoningTokens": 7445,
+        "totalTokens": 1554867
+      },
+      "originalEvaluation": {
+        "recordedVerdict": "product_failure",
+        "retrospectiveClassification": "instrument_failure",
+        "apiPassed": 16,
+        "apiRequired": 16,
+        "browserPassed": 7,
+        "browserRequired": 8,
+        "failedChecks": [
+          "mobile_layout_and_keyboard"
+        ]
+      },
+      "correctedEvaluation": {
+        "verdict": "passed",
+        "apiPassed": 16,
+        "apiRequired": 16,
+        "browserPassed": 8,
+        "browserRequired": 8,
+        "sourceUnchanged": true
+      },
+      "protectedInputViolations": 0,
+      "workerCalls": 0,
+      "toolInventory": [
+        "apply_patch",
+        "bash",
+        "glob",
+        "read",
+        "terminal",
+        "todowrite"
+      ]
+    },
+    {
+      "id": "vector-repair",
+      "runtime": "Vector",
+      "phase": "same_session_repair",
+      "incrementalProviderRequests": 17,
+      "incrementalMeasuredUsd": 0.295553,
+      "agentWallMs": 227641,
+      "tokens": {
+        "inputTokens": 1387917,
+        "cachedInputTokens": 1364085,
+        "cacheWriteTokens": 23781,
+        "cacheWrite30mTokens": 23781,
+        "cacheWrite12hTokens": 0,
+        "uncachedNonWriteInputTokens": 51,
+        "outputTokens": 9959,
+        "reasoningTokens": 4404,
+        "totalTokens": 1397876
+      },
+      "originalEvaluation": {
+        "recordedVerdict": "product_failure",
+        "retrospectiveClassification": "instrument_failure",
+        "apiPassed": 16,
+        "apiRequired": 16,
+        "browserPassed": 7,
+        "browserRequired": 8,
+        "failedChecks": [
+          "mobile_layout_and_keyboard"
+        ]
+      },
+      "correctedEvaluation": {
+        "verdict": "passed",
+        "apiPassed": 16,
+        "apiRequired": 16,
+        "browserPassed": 8,
+        "browserRequired": 8,
+        "sourceUnchanged": true
+      },
+      "protectedInputViolations": 0,
+      "workerCalls": 0,
+      "toolInventory": [
+        "apply_patch",
+        "bash",
+        "read",
+        "terminal"
+      ]
+    }
+  ],
+  "completeEpisodes": {
+    "codex": {
+      "providerRequests": 28,
+      "measuredUsd": 0.9333972,
+      "agentWallMs": 681078,
+      "tokens": {
+        "inputTokens": 1659392,
+        "cachedInputTokens": 1567067,
+        "cacheWriteTokens": 92241,
+        "cacheWrite30mTokens": 92241,
+        "cacheWrite12hTokens": 0,
+        "uncachedNonWriteInputTokens": 84,
+        "outputTokens": 54592,
+        "reasoningTokens": 12919,
+        "totalTokens": 1713984
+      },
+      "paidRepairs": 0,
+      "settlementComplete": true,
+      "correctedFunctionalVerdict": "passed"
+    },
+    "vector": {
+      "providerRequests": 54,
+      "measuredUsd": 0.9495773,
+      "agentWallMs": 668563,
+      "tokens": {
+        "inputTokens": 2908759,
+        "cachedInputTokens": 2817533,
+        "cacheWriteTokens": 91064,
+        "cacheWrite30mTokens": 91064,
+        "cacheWrite12hTokens": 0,
+        "uncachedNonWriteInputTokens": 162,
+        "outputTokens": 43984,
+        "reasoningTokens": 11849,
+        "totalTokens": 2952743
+      },
+      "paidRepairs": 1,
+      "settlementComplete": true,
+      "correctedFunctionalVerdict": "passed"
+    }
+  },
+  "instrumentCorrection": {
+    "revision": "postlaunch-keyboard-v2",
+    "originalTaskCommit": "44f93362a683d39198ead037beb639abc828fb63",
+    "originalTaskSha256": "722a00ba024522e2e88aee585f778dad206b115a30a8d1caded38681cf7cd761",
+    "originalFailureMessage": "No keyboard-focusable dashboard control",
+    "cause": "One Tab from the prior Events control could move focus into browser chrome, leaving document.activeElement as body. The original check treated that normal transition as absence of a keyboard-focusable control.",
+    "correctedContract": "Native Tab navigation must reach all four required form controls after a visible-heading pointer click; body/browser-chrome transitions are allowed within a bounded traversal.",
+    "appliedAfterPaidRepairSettled": true,
+    "reevaluatedUnchangedSubmissions": [
+      "codex-first",
+      "vector-first",
+      "vector-repair"
+    ],
+    "reevaluationModelCalls": 0,
+    "additionalProviderChargeUsd": 0,
+    "originalResultsRetained": true
+  },
+  "toolActivity": {
+    "artifact": "baseline-tool-activity.json",
+    "attemptMapping": {
+      "codex[0]": "codex-first",
+      "vector[0]": "vector-first",
+      "vector[1]": "vector-repair"
+    },
+    "observedToolCalls": {
+      "codexFirst": 35,
+      "vectorFirst": 57,
+      "vectorRepair": 24
+    },
+    "limitation": "Deduplicated observed CLI events and byte observations are not model tokens or cost. Missing fields have no observations, not measured zero size. Explicit tool errors or nonzero exits can include expected negative checks and do not alone establish waste or product failure."
+  },
+  "blindedCodeReview": {
+    "method": "Blinded static source review with two supplied independent screenshots per submission",
+    "independentExecution": false,
+    "mapping": {
+      "larch": "Codex",
+      "rowan": "Vector"
+    },
+    "maximumScore": 48,
+    "scores": {
+      "codex": 45,
+      "vector": 44
+    },
+    "criticalFindingsEstablished": {
+      "codex": 0,
+      "vector": 0
+    },
+    "dimensions": [
+      {
+        "name": "Contract and data integrity",
+        "maximum": 12,
+        "codex": 12,
+        "vector": 12
+      },
+      {
+        "name": "Durable state and recovery",
+        "maximum": 10,
+        "codex": 9,
+        "vector": 9
+      },
+      {
+        "name": "Structure and maintainability",
+        "maximum": 8,
+        "codex": 8,
+        "vector": 8
+      },
+      {
+        "name": "Errors and resource bounds",
+        "maximum": 6,
+        "codex": 5,
+        "vector": 5
+      },
+      {
+        "name": "Added verification",
+        "maximum": 6,
+        "codex": 6,
+        "vector": 5
+      },
+      {
+        "name": "User interface and accessibility",
+        "maximum": 6,
+        "codex": 5,
+        "vector": 5
+      }
+    ],
+    "limitation": "Static source and screenshot coverage does not establish production security, reliability, or usability."
+  },
+  "accounting": {
+    "beforeBaseline": {
+      "providerRequests": 449,
+      "measuredUsd": 11.2319408
+    },
+    "baselinePairIncludingRepair": {
+      "providerRequests": 82,
+      "measuredUsd": 1.8829745
+    },
+    "studyThroughBaseline": {
+      "providerRequests": 531,
+      "measuredUsd": 13.1149153
+    }
+  },
+  "interpretation": {
+    "firstSubmissionVectorSavingsPercent": 29.9308,
+    "completeEpisodeVectorSavingsPercent": -1.7335,
+    "primaryTwentyPercentTargetMet": false,
+    "noLowerBlindedQualityCriterionMet": false,
+    "conclusion": "No primary 20% savings claim. Vector's first submission was cheaper and passes the corrected gate, but the complete charged episode costs more than Codex and its blinded code score is one point lower. The repair charge remains included despite the instrument defect."
+  },
+  "sanitization": {
+    "sources": [
+      "baseline summary and runtime run aggregates",
+      "corrected evaluation summary",
+      "two blinded review records",
+      "sanitized tool-activity projection",
+      "sanitized numeric provider-receipt usage projection",
+      "public task and rubric documentation"
+    ],
+    "privatePathsIdentifiersCredentialsAndRawLogsExcluded": true,
+    "toolInventoryNote": "Inventories list names, not call counts. The Codex aggregate contains no populated inventory; this is missing evidence, not evidence of zero tool activity."
+  },
+  "browserProvisioningDeviation": {
+    "observation": "Codex authored scripts/verify-browser.mjs importing the provided Playwright module and launching Chrome directly; three execution references were verified in the completed command records.",
+    "sameHostCapabilitiesOfferedToBothRuntimes": true,
+    "commonDriverExclusivityEnforced": false,
+    "interpretation": "The agent-owned checks did not all stay within the common browser client despite the task wording. Costs and delivery checks remain recorded, but these observations are exploratory and do not establish strict shared-client protocol adherence.",
+    "independentAcceptanceBrowserFencedSeparately": true,
+    "noUnobservedExternalInteractionOrCheatingAssumed": true,
+    "instrumentInstructionConflict": "The old runner explicitly advertised PLAYWRIGHT_MODULE and CHROME_PATH alongside a common-client-only helper instruction. This is conflicting instrumentation, not assumed agent misconduct."
+  }
+}

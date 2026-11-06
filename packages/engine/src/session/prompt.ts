@@ -11,6 +11,7 @@ import {
   freeModelMayTrain,
 } from "@vectordevai/core/free-model-choice"
 import { isFreeModel, isFreeModelRef } from "@vectordevai/schema/free-model"
+import { Billing } from "@vectordevai/schema/billing"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { PermissionV1 } from "@vectordevai/core/v1/permission"
 import path from "path"
@@ -80,6 +81,8 @@ import { SessionMemory } from "./memory"
 import { Egress } from "@vectordevai/core/local-mode/egress"
 import type { LocalMode } from "@vectordevai/schema/local-mode"
 import { Brain } from "@vectordevai/core/brain/brain"
+import { BrainDatabase } from "@vectordevai/core/brain/database"
+import { BrainRevocation } from "@vectordevai/core/brain/revocation"
 import { BrainKnowledge } from "@vectordevai/core/brain/knowledge"
 import { BrainLearn } from "@vectordevai/core/brain/learn"
 import { BrainSkill } from "@vectordevai/core/brain/skill"
@@ -94,6 +97,8 @@ import { SessionAudience } from "@vectordevai/core/session/audience"
 import { SessionTools } from "./tools"
 import { SessionFork } from "./fork"
 import { TitleUsage } from "./title-usage"
+import { Auth } from "@/auth"
+import { providerCredentialAllowed, providerUsable } from "@vectordevai/core/provider-policy"
 import { LLMEvent } from "@vectordevai/llm"
 import { SpendGuard } from "@vectordevai/core/spend-guard"
 import { RunBudget } from "@vectordevai/schema/run-budget"
@@ -278,6 +283,7 @@ const layer = Layer.effect(
     const sessions = yield* Session.Service
     const agents = yield* Agent.Service
     const provider = yield* Provider.Service
+    const auth = yield* Auth.Service
     const freeModels = yield* FreeModels.Service
     const freeCredentials = yield* FreeModels.CredentialsService
     const processor = yield* SessionProcessor.Service
@@ -305,6 +311,7 @@ const layer = Layer.effect(
     const database = yield* Database.Service
     const guard = yield* SpendGuard.Service
     const brain = yield* Brain.Service
+    const brainDatabase = yield* BrainDatabase.Service
     const knowledge = yield* BrainKnowledge.Service
     const guests = yield* FreeModelGuests.Service
     const isolation = yield* TaskIsolation.Service
@@ -330,7 +337,8 @@ const layer = Layer.effect(
     // system prompt ahead of the whole conversation, so re-reading them every step meant one edit, often the agent's own
     // memory update, re-wrote the entire cached context at the cache-write price. They are read again only when that
     // context is re-written anyway: after compaction gives the session a new history start, on another model, or once
-    // the provider's cache has expired. An edit the agent makes itself is already in its context. Keyed by session, so
+    // the provider's cache has expired. Explicit user revocations also refresh it; normal learned writes do not.
+    // An edit the agent makes itself is already in its context. Keyed by session, so
     // concurrent sessions keep their own snapshot.
     // `personal` counts the owner's own entries the digest carries, for Vector Local's network log.
     const instructionSnapshots = new Map<
@@ -360,15 +368,16 @@ const layer = Layer.effect(
         readonly files: boolean
       },
     ) {
+      const place = yield* instruction.place()
+      const revoked = yield* BrainRevocation.revision(brainDatabase.db, place.repository)
       const snapshot = instructionSnapshots.get(sessionID)
-      const full = `${key}|${memory.personal ? "personal" : "shared"}|${memory.index ? "index" : "plain"}|${memory.audience}|${memory.kinds?.join(",") ?? "all"}|${memory.facets?.join(",") ?? "all"}|${memory.files ? "files" : "brief"}`
+      const full = `${key}|${memory.personal ? "personal" : "shared"}|${memory.index ? "index" : "plain"}|${memory.audience}|${memory.kinds?.join(",") ?? "all"}|${memory.facets?.join(",") ?? "all"}|${memory.files ? "files" : "brief"}|${revoked}`
       // Re-inserting keeps the most recently used sessions at the end; the oldest go once there are too many.
       instructionSnapshots.delete(sessionID)
       if (snapshot && snapshot.key === full && !cold) {
         instructionSnapshots.set(sessionID, snapshot)
         return snapshot
       }
-      const place = yield* instruction.place()
       // The repository's documents get one line beside the memory index, taken with the rest of the snapshot, and the
       // memory tool says how to open them for as long as the snapshot holds.
       // A role whose output leaves the machine is not told which private documents there are.
@@ -490,6 +499,24 @@ const layer = Layer.effect(
       return parts
     })
 
+    const helperCostKind = Effect.fn("SessionPrompt.helperCostKind")(function* (model: Provider.Model) {
+      const signIn = yield* auth.get(model.providerID).pipe(Effect.catch(() => Effect.succeed(undefined)))
+      const line = yield* provider.line(model)
+      return SpendGuard.costKindOf({
+        codium: Billing.isCodium(model.providerID),
+        free: isFreeModel(model) || model.freeModel !== undefined,
+        oauthPlan:
+          signIn?.type === "oauth" &&
+          providerCredentialAllowed(
+            model.providerID,
+            signIn,
+            providerUsable(model.providerID, { npm: model.api.npm, api: model.api.url }),
+          ),
+        listed: model.cost.input > 0 || model.cost.output > 0,
+        local: line?.local ?? false,
+      })
+    })
+
     const title = Effect.fn("SessionPrompt.ensureTitle")(function* (input: {
       session: Session.Info
       history: SessionV1.WithParts[]
@@ -499,6 +526,7 @@ const layer = Layer.effect(
       answering: Effect.Effect<boolean>
       // Completes when the run ends.
       ended: Effect.Effect<void>
+      spend: SpendGuard.Captured
       // For a sized session: the request this run answers, whether it is only a greeting, and whether it is the
       // session's first request that is more than one.
       sized?: { users: readonly SessionV1.WithParts[]; chat: boolean; first: boolean }
@@ -587,7 +615,14 @@ const layer = Layer.effect(
       // compete with the run's own requests.
       if (isFreeModel(mdl)) yield* input.ended
       if (!(yield* kept)) return
-      const usage = TitleUsage.create({ sessionID: input.session.id, model: mdl, publish: events.publish })
+      if (yield* input.spend.stopped) return
+      const usage = TitleUsage.create({
+        sessionID: input.session.id,
+        model: mdl,
+        publish: events.publish,
+        spend: input.spend,
+        costKind: yield* helperCostKind(mdl),
+      })
       // A title sent to the session's provider needs a connection of its own beside the one opened for the first step.
       yield* provider.preconnect(mdl)
       const text = yield* llm
@@ -2556,26 +2591,34 @@ const layer = Layer.effect(
 
         if (step === 1 && !resumed) {
           const background = yield* InstanceState.get(backgroundTasks)
-          const fiber = yield* title({
-            session,
-            modelID: lastUser.model.modelID,
-            providerID: lastUser.model.providerID,
-            history: msgs,
-            answering: Deferred.await(answering),
-            ended,
-            // The composer's Quick mode is a greeting lane of its own, titled the same way.
-            ...(lastUser.agent === "quick"
-              ? { sized: { users: [], chat: true, first: false } }
-              : sized
-                ? {
-                    sized: {
-                      users: sized.users,
-                      chat: sized.tier === "chat",
-                      first: !requests.slice(0, -1).some((request) => request.tier !== "chat"),
-                    },
-                  }
-                : {}),
-          }).pipe(Effect.ignore, Effect.forkIn(background.scope))
+          const fiber = yield* Effect.uninterruptibleMask((restore) =>
+            Effect.gen(function* () {
+              const spend = yield* guard.capture(sessionID)
+              return yield* restore(
+                title({
+                  session,
+                  spend,
+                  modelID: lastUser.model.modelID,
+                  providerID: lastUser.model.providerID,
+                  history: msgs,
+                  answering: Deferred.await(answering),
+                  ended,
+                  // The composer's Quick mode is a greeting lane of its own, titled the same way.
+                  ...(lastUser.agent === "quick"
+                    ? { sized: { users: [], chat: true, first: false } }
+                    : sized
+                      ? {
+                          sized: {
+                            users: sized.users,
+                            chat: sized.tier === "chat",
+                            first: !requests.slice(0, -1).some((request) => request.tier !== "chat"),
+                          },
+                        }
+                      : {}),
+                }),
+              ).pipe(Effect.ensuring(spend.release), Effect.ignore, Effect.forkIn(background.scope))
+            }),
+          )
           background.titles.add(fiber)
           fiber.addObserver(() => background.titles.delete(fiber))
         }
@@ -3308,9 +3351,15 @@ const layer = Layer.effect(
           ),
         )
         if (later) {
-          const learner = yield* later.pipe(
-            Effect.catchCause(() => Effect.void),
-            Effect.forkIn(background.scope),
+          const learner = yield* Effect.uninterruptibleMask((restore) =>
+            Effect.gen(function* () {
+              const spend = yield* guard.capture(sessionID)
+              return yield* restore(later(spend)).pipe(
+                Effect.ensuring(spend.release),
+                Effect.catchCause(() => Effect.void),
+                Effect.forkIn(background.scope),
+              )
+            }),
           )
           learners.set(sessionID, learner)
           background.titles.add(learner)
@@ -3503,19 +3552,21 @@ const layer = Layer.effect(
       const msgs = yield* sessions.messages({ sessionID: session.id })
       const tainted = SessionMemory.taint(msgs) !== undefined
       const before = msgs.filter((message) => message.info.id < user.id)
-      return Effect.gen(function* () {
-        const learned = yield* modelLearn({
-          session,
-          user,
-          typed: last.typed,
-          reply: SessionTaskSize.closingText(before).slice(-600),
-          tainted,
-          settings,
+      return (spend: SpendGuard.Captured) =>
+        Effect.gen(function* () {
+          const learned = yield* modelLearn({
+            session,
+            user,
+            typed: last.typed,
+            reply: SessionTaskSize.closingText(before).slice(-600),
+            tainted,
+            settings,
+            spend,
+          })
+          // A model's own words wait for the user, never for the same words from another session: a model would
+          // write them again.
+          yield* write(last.message, learned, "review")
         })
-        // A model's own words wait for the user, never for the same words from another session: a model would
-        // write them again.
-        yield* write(last.message, learned, "review")
-      })
     })
 
     // The optional model learner (section 6.3): one small-model request reads a correction ("no, I meant…") after the
@@ -3531,7 +3582,9 @@ const layer = Layer.effect(
       reply: string
       tainted: boolean
       settings: Brain.LearnSettings
+      spend: SpendGuard.Captured
     }) {
+      if (yield* input.spend.stopped) return []
       const primary = yield* provider
         .getModel(input.user.model.providerID, input.user.model.modelID)
         .pipe(Effect.option)
@@ -3548,6 +3601,8 @@ const layer = Layer.effect(
         model,
         publish: events.publish,
         purpose: "memory",
+        spend: input.spend,
+        costKind: yield* helperCostKind(model),
       })
       const reply = yield* llm
         .stream({
@@ -4972,6 +5027,7 @@ export const node = LayerNode.make({
     Session.node,
     Agent.node,
     Provider.node,
+    Auth.node,
     FreeModels.node,
     FreeModels.credentialsNode,
     SessionProcessor.node,
@@ -4999,6 +5055,7 @@ export const node = LayerNode.make({
     Database.node,
     SpendGuard.node,
     Brain.node,
+    BrainDatabase.node,
     BrainKnowledge.node,
     BrainSkill.node,
     LearnedSkill.node,

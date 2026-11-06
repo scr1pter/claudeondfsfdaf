@@ -3821,6 +3821,8 @@ export type MemoryDocument = {
   warnings: Array<
     | "truncated"
     | "scanned"
+    | "ocr"
+    | "ocr-incomplete"
     | "encrypted"
     | "macros-ignored"
     | "external-links"
@@ -4206,6 +4208,8 @@ export type MemoryDocumentDetail = {
   warnings: Array<
     | "truncated"
     | "scanned"
+    | "ocr"
+    | "ocr-incomplete"
     | "encrypted"
     | "macros-ignored"
     | "external-links"
@@ -4518,6 +4522,7 @@ export type ResearchNote = {
   stance: ResearchStance
   support: boolean
   verdict?: ResearchVerdict
+  measurement?: ResearchMeasurement
   created_at: number
 }
 
@@ -7412,6 +7417,19 @@ export type WorkflowResumeInput = {
     [key: string]: unknown
   }
   retryFailed?: boolean
+}
+
+export type ResearchMeasurement = {
+  metric: string
+  value: number
+  unit: string
+  scale?: "one" | "thousand" | "million" | "billion" | "trillion"
+  currency?: string
+  period?: string
+  geography?: string
+  population?: string
+  methodology?: string
+  definition?: string
 }
 
 export type ProjectDirectories = Array<{
@@ -16396,7 +16414,7 @@ export type MemoryResearchExportData = {
   query?: {
     directory?: string
     workspace?: string
-    format?: "markdown" | "json"
+    format?: "markdown" | "json" | "docx" | "pdf"
   }
   url: "/memory/research/{runID}/export"
 }

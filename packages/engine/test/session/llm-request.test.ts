@@ -85,6 +85,139 @@ const prepare = (value: Input) => Effect.runPromise(LLMRequestPrep.prepare(value
 const systemMessages = (prepared: LLMRequestPrep.Prepared) =>
   prepared.messages.flatMap((message) => (message.role === "system" ? [message.content] : []))
 
+describe("internal stable-prefix marker", () => {
+  const selected = {
+    ...model("gpt-6.1-sol", "@ai-sdk/openai", "openai"),
+    api: { id: "gpt-6.1-sol", npm: "@ai-sdk/openai", url: "https://api.openai.com/v1" },
+  }
+  const marked = () => {
+    const value = input({ model: selected, directory: "/work/cache" })
+    return { ...value, provider: { ...value.provider, options: { promptCacheBreakpoints: true, apiKey: "test-key" } } }
+  }
+
+  test("marks only the exact unchanged stable prefix and does not change model-facing text", async () => {
+    const value = marked()
+    const prepared = await prepare(value)
+    const baseline = await prepare({ ...value, provider: { ...value.provider, options: { apiKey: "test-key" } } })
+    const prefix = [...SystemPrompt.provider(selected), STABLE].join("\n")
+    expect(prepared.headers[ProviderTransform.PROMPT_CACHE_PREFIX_HEADER]).toBe(
+      ProviderTransform.promptCachePrefix(prefix),
+    )
+    expect(prepared.messages).toEqual(baseline.messages)
+    expect(prepared.params).toEqual(baseline.params)
+  })
+
+  test.each([
+    { setting: undefined, url: "https://api.openai.com/v1", expected: true },
+    { setting: false, url: "https://api.openai.com/v1", expected: false },
+    { setting: undefined, url: "https://proxy.example/v1", expected: false },
+    { setting: undefined, url: "http://127.0.0.1:1234/v1", expected: false },
+    { setting: true, url: "http://127.0.0.1:1234/v1", expected: true },
+  ])("resolves cache marker default for $url with setting $setting", async ({ setting, url, expected }) => {
+    const value = marked()
+    const prepared = await prepare({
+      ...value,
+      provider: {
+        ...value.provider,
+        options: {
+          apiKey: "test-key",
+          baseURL: url,
+          ...(setting !== undefined ? { promptCacheBreakpoints: setting } : {}),
+        },
+      },
+    })
+    expect(prepared.headers[ProviderTransform.PROMPT_CACHE_PREFIX_HEADER] !== undefined).toBe(expected)
+  })
+
+  test("default eligibility accepts stored or provider API keys but never an OAuth credential", async () => {
+    const value = marked()
+    for (const selected of [
+      { auth: { type: "api", key: "test-key" }, providerKey: undefined, expected: true },
+      { auth: undefined, providerKey: "test-key", expected: true },
+      { auth: undefined, providerKey: undefined, expected: false },
+      {
+        auth: { type: "oauth", access: "test", refresh: "test", expires: 0 },
+        providerKey: "test-key",
+        expected: false,
+      },
+    ] as const) {
+      const prepared = await prepare({
+        ...value,
+        auth: selected.auth,
+        provider: { ...value.provider, key: selected.providerKey, options: {} },
+      })
+      expect(prepared.headers[ProviderTransform.PROMPT_CACHE_PREFIX_HEADER] !== undefined).toBe(selected.expected)
+    }
+  })
+
+  test("default breakpoints preserve separate session cache keys", async () => {
+    const value = marked()
+    const prepared = await Promise.all(
+      ["ses_alpha", "ses_beta"].map((sessionID) =>
+        prepare({ ...value, sessionID, provider: { ...value.provider, options: { apiKey: "test-key" } } }),
+      ),
+    )
+    expect(prepared.map((item) => item.params.options.promptCacheKey)).toEqual(["ses_alpha", "ses_beta"])
+    expect(prepared.every((item) => item.headers[ProviderTransform.PROMPT_CACHE_PREFIX_HEADER] !== undefined)).toBe(
+      true,
+    )
+  })
+
+  test.each([
+    { setCacheKey: true, expected: "session" },
+    { setCacheKey: false, expected: undefined },
+    { setCacheKey: undefined, modelKey: "model-cache", expected: "model-cache" },
+    { setCacheKey: undefined, modelKey: "model-cache", agentKey: "agent-cache", expected: "agent-cache" },
+  ])("preserves explicit key controls with default breakpoints: $expected", async (selected) => {
+    const value = marked()
+    const prepared = await prepare({
+      ...value,
+      model: { ...value.model, options: { ...(selected.modelKey ? { promptCacheKey: selected.modelKey } : {}) } },
+      agent: { ...value.agent, options: { ...(selected.agentKey ? { promptCacheKey: selected.agentKey } : {}) } },
+      provider: {
+        ...value.provider,
+        options: {
+          apiKey: "test-key",
+          ...(selected.setCacheKey !== undefined ? { setCacheKey: selected.setCacheKey } : {}),
+        },
+      },
+    })
+    expect(prepared.params.options.promptCacheKey).toBe(
+      selected.expected === "session" ? value.sessionID : selected.expected,
+    )
+    expect(prepared.headers[ProviderTransform.PROMPT_CACHE_PREFIX_HEADER]).toBeDefined()
+  })
+
+  test("does not mark OAuth, native, helpers, unsupported models, or plugin-rewritten prefixes", async () => {
+    const base = marked()
+    const plugin: Input["plugin"] = {
+      ...base.plugin,
+      trigger: (name, _input, output) => {
+        if (name === "experimental.chat.system.transform") {
+          const changed = output as { system: string[] }
+          changed.system[0] = "Rewritten by plugin"
+        }
+        return Effect.succeed(output)
+      },
+    }
+    const variants: Input[] = [
+      { ...base, auth: { type: "oauth", access: "test", refresh: "test", expires: 0 } },
+      { ...base, flags: { ...base.flags, experimentalNativeLlm: true } },
+      { ...base, small: true },
+      { ...base, isWorkflow: true },
+      { ...base, model: gpt },
+      { ...base, plugin },
+    ]
+    for (const value of variants) {
+      const prepared = await prepare({
+        ...value,
+        model: { ...value.model, headers: { [ProviderTransform.PROMPT_CACHE_PREFIX_HEADER]: "forged" } },
+      })
+      expect(prepared.headers[ProviderTransform.PROMPT_CACHE_PREFIX_HEADER]).toBeUndefined()
+    }
+  })
+})
+
 describe("system prompt layout across sessions", () => {
   test("a ChatGPT sign-in keeps instructions the same from session to session and sends the session after them", async () => {
     const first = await prepare(input({ model: gpt, directory: "/work/a", oauth: true }))
@@ -369,6 +502,30 @@ describe("a fork's cache key", () => {
     expect(strip(keyed)).toEqual(strip(own))
     expect(JSON.stringify(keyed.params.options)).not.toContain("ses_root")
   })
+
+  // The root's key only routes the fork to the cache that holds the parent's prefix. The explicit stable-prefix cache
+  // boundary stays on the same static prefix, so the two compose instead of replacing each other.
+  test("keeps the stable-prefix cache boundary while it names the root's key", async () => {
+    const sol = {
+      ...model("gpt-6.1-sol", "@ai-sdk/openai", "openai"),
+      api: { id: "gpt-6.1-sol", npm: "@ai-sdk/openai", url: "https://api.openai.com/v1" },
+    }
+    const value = input({ model: sol, directory: "/work/root" })
+    const base = { ...value, provider: { ...value.provider, options: { apiKey: "test-key" } } }
+    const root = await prepare({ ...base, sessionID: "ses_root" })
+    const fork = { ...base, sessionID: "ses_child", parentSessionID: "ses_root" }
+    const own = await prepare(fork)
+    const keyed = await prepare({ ...fork, cacheKey: "ses_root" })
+    const marker = ProviderTransform.promptCachePrefix([...SystemPrompt.provider(sol), STABLE].join("\n"))
+    expect(root.headers[ProviderTransform.PROMPT_CACHE_PREFIX_HEADER]).toBe(marker)
+    expect(own.headers[ProviderTransform.PROMPT_CACHE_PREFIX_HEADER]).toBe(marker)
+    expect(keyed.headers[ProviderTransform.PROMPT_CACHE_PREFIX_HEADER]).toBe(marker)
+    expect(root.params.options.promptCacheKey).toBe("ses_root")
+    expect(own.params.options.promptCacheKey).toBe("ses_child")
+    expect(keyed.params.options.promptCacheKey).toBe("ses_root")
+    expect(keyed.messages).toEqual(root.messages)
+    expect(new Headers(keyed.headers).get("x-session-id")).toBe("ses_child")
+  })
 })
 
 // A fork's cache breakpoint is placed by the index of its last inherited message in the request's messages, which must
@@ -419,5 +576,84 @@ describe("LLMRequestPrep.promptIndex", () => {
     expect(LLMRequestPrep.promptIndex(messages, 5)).toBe(4)
     expect(LLMRequestPrep.promptIndex(messages, 6)).toBe(5)
     expect(JSON.stringify(prompt[LLMRequestPrep.promptIndex(messages, 5)])).toContain('"toolCallId":"b"')
+  })
+})
+
+describe("automatic title output budget", () => {
+  test.each([
+    { fast: false, allowance: undefined, output: 128_000, context: 400_000, expected: 512 },
+    { fast: true, allowance: 32_000, output: 128_000, context: 400_000, expected: 512 },
+    { fast: true, allowance: 96, output: 128_000, context: 400_000, expected: 96 },
+    { fast: false, allowance: 32_000, output: 128, context: 400_000, expected: 128 },
+    { fast: false, allowance: 32_000, output: 0, context: 1_024, expected: 256 },
+  ])("a title keeps its $expected-token allowance with fast=$fast", async (selected) => {
+    const value = input({ model: gpt, directory: "/work/title" })
+    const prepared = await prepare({
+      ...value,
+      agent: { ...value.agent, name: "title" },
+      small: true,
+      user: selected.fast ? { ...value.user, executionMode: "fast" } : value.user,
+      flags: { ...value.flags, outputTokenMax: selected.allowance },
+      model: { ...gpt, limit: { output: selected.output, context: selected.context } },
+    })
+    expect(prepared.params.maxOutputTokens).toBe(selected.expected)
+  })
+
+  test.each([
+    { name: "build", small: false, fast: false, expected: 32_000 },
+    { name: "build", small: false, fast: true, expected: 48_000 },
+    { name: "brain.learn", small: true, fast: false, expected: 32_000 },
+    { name: "summary", small: true, fast: false, expected: 32_000 },
+    { name: "compaction", small: false, fast: false, expected: 32_000 },
+    { name: "title", small: false, fast: false, expected: 32_000 },
+  ])("leaves $name small=$small fast=$fast at $expected tokens", async (selected) => {
+    const value = input({ model: gpt, directory: "/work/task" })
+    const prepared = await prepare({
+      ...value,
+      agent: { ...value.agent, name: selected.name },
+      small: selected.small,
+      user: selected.fast ? { ...value.user, executionMode: "fast" } : value.user,
+    })
+    expect(prepared.params.maxOutputTokens).toBe(selected.expected)
+  })
+
+  test("the real SDK sends the automatic title cap to the provider", async () => {
+    const requests: Array<Record<string, unknown>> = []
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch(request) {
+        requests.push((await request.json()) as Record<string, unknown>)
+        const events = [
+          { type: "response.created", response: { id: "resp_title", created_at: 1, model: gpt.api.id } },
+          { type: "response.completed", response: { usage: { input_tokens: 1, output_tokens: 1 } } },
+        ]
+        return new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""), {
+          headers: { "content-type": "text/event-stream" },
+        })
+      },
+    })
+    try {
+      const value = input({ model: gpt, directory: "/work/title" })
+      const prepared = await prepare({
+        ...value,
+        agent: { ...value.agent, name: "title", prompt: "Output only a short title." },
+        user: { ...value.user, executionMode: "fast" },
+        small: true,
+        tools: {},
+      })
+      const sdk = createOpenAI({ apiKey: "local-test-only", baseURL: `${server.url.origin}/v1` })
+      await streamText({
+        model: sdk.responses(gpt.api.id),
+        messages: prepared.messages,
+        maxOutputTokens: prepared.params.maxOutputTokens,
+        providerOptions: ProviderTransform.providerOptions(gpt, prepared.params.options),
+      }).consumeStream()
+
+      expect(requests).toHaveLength(1)
+      expect(requests[0]?.max_output_tokens).toBe(512)
+    } finally {
+      server.stop(true)
+    }
   })
 })

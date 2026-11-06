@@ -22,7 +22,7 @@ import { EventTable } from "@vectordevai/core/event/sql"
 import { Project } from "@vectordevai/core/project"
 import { ProjectTable } from "@vectordevai/core/project/sql"
 import { QuestionV2 } from "@vectordevai/core/question"
-import { AbsolutePath } from "@vectordevai/core/schema"
+import { AbsolutePath, RelativePath } from "@vectordevai/core/schema"
 import { SessionV2 } from "@vectordevai/core/session"
 import { Snapshot } from "@vectordevai/core/snapshot"
 import { ContextSnapshotDecodeError } from "@vectordevai/core/session/error"
@@ -37,6 +37,7 @@ import { SessionRunner } from "@vectordevai/core/session/runner"
 import * as SessionRunnerLLM from "@vectordevai/core/session/runner/llm"
 import { SessionRunnerModel } from "@vectordevai/core/session/runner/model"
 import { SpendGuard } from "@vectordevai/core/spend-guard"
+import { SessionStatusEvent } from "@vectordevai/schema/session-status-event"
 import { ToolRegistry } from "@vectordevai/core/tool/registry"
 import { ApplicationTools } from "@vectordevai/core/tool/application-tools"
 import { AgentV2 } from "@vectordevai/core/agent"
@@ -228,8 +229,21 @@ const config = Layer.succeed(
       ]),
   }),
 )
+let snapshotVersion: number | undefined
+const snapshots = Layer.succeed(
+  Snapshot.Service,
+  Snapshot.Service.of({
+    capture: () =>
+      Effect.sync(() => (snapshotVersion === undefined ? undefined : Snapshot.ID.make(String(snapshotVersion)))),
+    files: ({ from, to }) => Effect.succeed(from === to ? [] : [RelativePath.make("progress.txt")]),
+    diff: () => Effect.succeed([]),
+    preview: () => Effect.succeed([]),
+    restore: () => Effect.void,
+    checkout: () => Effect.void,
+  }),
+)
 const runnerLayer = AppNodeBuilder.build(SessionRunnerLLM.node, [
-  [Snapshot.node, Snapshot.noopLayer],
+  [Snapshot.node, snapshots],
   [LayerNodePlatform.llmClient, client],
   [SessionRunnerModel.node, models],
   [SystemContextRegistry.node, systemContext],
@@ -287,7 +301,7 @@ const it = testEffect(
       [Location.node, Location.boundNode({ directory: AbsolutePath.make("/project") })],
       [SkillGuidance.node, skillGuidance],
       [ReferenceGuidance.node, referenceGuidance],
-      [Snapshot.node, Snapshot.noopLayer],
+      [Snapshot.node, snapshots],
       [SessionExecution.node, execution],
       [Config.node, config],
     ],
@@ -316,6 +330,7 @@ const insertSession = (id: SessionV2.ID) =>
 
 const setup = Effect.gen(function* () {
   const { db } = yield* Database.Service
+  requests.length = 0
   response = []
   systemBaseline = "Initial context"
   systemRemoved = false
@@ -323,6 +338,7 @@ const setup = Effect.gen(function* () {
   systemLoadHook = Effect.void
   modelResolveHook = Effect.void
   currentModel = model
+  snapshotVersion = undefined
   skillBaselines.clear()
   responses = undefined
   streamFailure = undefined
@@ -578,6 +594,287 @@ const verifyPartialFlushOnInterruption = (kind: FragmentKind) =>
   })
 
 describe("SessionRunnerLLM", () => {
+  it.effect("unsettled accounting: V2 partial response without terminal usage remains unknown through replay", () =>
+    Effect.gen(function* () {
+      yield* setup
+      requests.length = 0
+      currentModel = SessionRunnerModel.withPricing(
+        Model.make({ id: "unsettled-priced", provider: "fake", route: OpenAIChat.route }),
+        [{ input: 2, output: 10, cache: { read: 0.1, write: 2.5 } }],
+      )
+      const session = yield* SessionV2.Service
+      const guard = yield* SpendGuard.Service
+      yield* guard.arm(sessionID, { usd: 1, unpricedSteps: 1 })
+      yield* session.prompt({
+        sessionID,
+        prompt: Prompt.make({ text: "Interrupt a received partial response" }),
+        resume: false,
+      })
+      const ready = yield* Deferred.make<void>()
+      responseStream = Stream.concat(
+        Stream.make(
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.textStart({ id: "unsettled-partial" }),
+          LLMEvent.textDelta({ id: "unsettled-partial", text: "Partial response" }),
+        ),
+        Stream.fromEffect(Deferred.succeed(ready, undefined)).pipe(Stream.flatMap(() => Stream.never)),
+      )
+      const runner = yield* SessionRunner.Service
+      const fiber = yield* runner.run({ sessionID, force: true }).pipe(Effect.forkChild)
+      yield* Deferred.await(ready)
+      yield* Fiber.interrupt(fiber)
+      yield* Fiber.await(fiber)
+      expect(requests).toHaveLength(1)
+      expect(yield* session.context(sessionID)).toMatchObject([
+        { type: "user" },
+        { type: "assistant", cost: 0, unpriced: true },
+      ])
+      expect(yield* session.get(sessionID)).toMatchObject({ cost: 0, unpricedSteps: 1 })
+      expect(yield* guard.snapshot(sessionID)).toMatchObject({ spentUsd: 0, steps: 1, unpricedSteps: 1 })
+      expect((yield* guard.snapshot(sessionID))?.stopped?.reason).toBe("unpriced")
+      yield* replaySessionProjection(sessionID)
+      yield* replaySessionProjection(sessionID)
+      expect(yield* session.get(sessionID)).toMatchObject({ cost: 0, unpricedSteps: 1 })
+      expect(requests).toHaveLength(1)
+    }),
+  )
+
+  it.effect("unsettled accounting: V2 cancellation before transport creates no billed or unknown attempt", () =>
+    Effect.gen(function* () {
+      yield* setup
+      requests.length = 0
+      currentModel = SessionRunnerModel.withPricing(
+        Model.make({ id: "unsettled-priced", provider: "fake", route: OpenAIChat.route }),
+        [{ input: 2, output: 10, cache: { read: 0.1, write: 2.5 } }],
+      )
+      const session = yield* SessionV2.Service
+      const guard = yield* SpendGuard.Service
+      yield* guard.arm(sessionID, { usd: 1, unpricedSteps: 1 })
+      yield* session.prompt({
+        sessionID,
+        prompt: Prompt.make({ text: "Stop before model resolution finishes" }),
+        resume: false,
+      })
+      const ready = yield* Deferred.make<void>()
+      const release = yield* Deferred.make<void>()
+      modelResolveHook = Deferred.succeed(ready, undefined).pipe(Effect.andThen(Deferred.await(release)))
+      const runner = yield* SessionRunner.Service
+      const fiber = yield* runner.run({ sessionID, force: true }).pipe(Effect.forkChild)
+      yield* Deferred.await(ready)
+      yield* Fiber.interrupt(fiber)
+      yield* Fiber.await(fiber)
+      expect(requests).toHaveLength(0)
+      const stored = yield* session.get(sessionID)
+      expect(stored.cost).toBe(0)
+      expect(stored.unpricedSteps ?? 0).toBe(0)
+      expect((yield* guard.snapshot(sessionID))?.steps).toBe(0)
+      expect(yield* session.context(sessionID)).toMatchObject([{ type: "user" }])
+    }),
+  )
+
+  it.effect("unsettled accounting: V2 guaranteed-free interruption preserves the unknown-cost allowance", () =>
+    Effect.gen(function* () {
+      yield* setup
+      requests.length = 0
+      currentModel = SessionRunnerModel.withFreeRoute(
+        Model.make({ id: "guaranteed-free", provider: "fake", route: OpenAIChat.route }),
+      )
+      const session = yield* SessionV2.Service
+      const guard = yield* SpendGuard.Service
+      yield* guard.arm(sessionID, { usd: 1, unpricedSteps: 1 })
+      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "A guaranteed-free response" }), resume: false })
+      const ready = yield* Deferred.make<void>()
+      responseStream = Stream.concat(
+        Stream.make(
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.textStart({ id: "unsettled-free" }),
+          LLMEvent.textDelta({ id: "unsettled-free", text: "Partial free response" }),
+        ),
+        Stream.fromEffect(Deferred.succeed(ready, undefined)).pipe(Stream.flatMap(() => Stream.never)),
+      )
+      const runner = yield* SessionRunner.Service
+      const fiber = yield* runner.run({ sessionID, force: true }).pipe(Effect.forkChild)
+      yield* Deferred.await(ready)
+      yield* Fiber.interrupt(fiber)
+      yield* Fiber.await(fiber)
+      expect(requests).toHaveLength(1)
+      // Incomplete token usage stays visible, but a guaranteed-free route cannot consume a dollar allowance.
+      expect(yield* session.get(sessionID)).toMatchObject({ cost: 0, unpricedSteps: 1 })
+      expect(yield* guard.snapshot(sessionID)).toMatchObject({
+        costKind: "free",
+        spentUsd: 0,
+        steps: 1,
+        unpricedSteps: 0,
+      })
+      expect((yield* guard.snapshot(sessionID))?.stopped).toBeUndefined()
+    }),
+  )
+
+  for (const usage of [
+    { inputTokens: 0, outputTokens: 0 },
+    { inputTokens: 1_000, outputTokens: 100 },
+  ]) {
+    it.effect(
+      `unsettled accounting: V2 terminal usage ${usage.inputTokens} survives cancellation and replay once`,
+      () =>
+        Effect.gen(function* () {
+          yield* setup
+          requests.length = 0
+          currentModel = SessionRunnerModel.withPricing(
+            Model.make({ id: "unsettled-priced", provider: "fake", route: OpenAIChat.route }),
+            [{ input: 2, output: 10, cache: { read: 0.1, write: 2.5 } }],
+          )
+          const expected = (usage.inputTokens * 2 + usage.outputTokens * 10) / 1_000_000
+          const session = yield* SessionV2.Service
+          const guard = yield* SpendGuard.Service
+          yield* guard.arm(sessionID, { usd: 1, unpricedSteps: 1 })
+          yield* session.prompt({
+            sessionID,
+            prompt: Prompt.make({ text: "Keep an explicit terminal usage report" }),
+            resume: false,
+          })
+          const ready = yield* Deferred.make<void>()
+          responseStream = Stream.concat(
+            Stream.make(
+              LLMEvent.stepStart({ index: 0 }),
+              LLMEvent.textStart({ id: "unsettled-known" }),
+              LLMEvent.textDelta({ id: "unsettled-known", text: "Reported usage" }),
+              LLMEvent.textEnd({ id: "unsettled-known" }),
+              LLMEvent.stepFinish({ index: 0, reason: "stop", usage }),
+            ),
+            Stream.fromEffect(Deferred.succeed(ready, undefined)).pipe(Stream.flatMap(() => Stream.never)),
+          )
+          const runner = yield* SessionRunner.Service
+          const fiber = yield* runner.run({ sessionID, force: true }).pipe(Effect.forkChild)
+          yield* Deferred.await(ready)
+          yield* Fiber.interrupt(fiber)
+          yield* Fiber.await(fiber)
+          expect(requests).toHaveLength(1)
+          expect((yield* session.get(sessionID)).cost).toBeCloseTo(expected)
+          expect((yield* session.get(sessionID)).unpricedSteps ?? 0).toBe(0)
+          expect(yield* guard.snapshot(sessionID)).toMatchObject({ spentUsd: expected, steps: 1, unpricedSteps: 0 })
+          yield* replaySessionProjection(sessionID)
+          yield* replaySessionProjection(sessionID)
+          expect((yield* session.get(sessionID)).cost).toBeCloseTo(expected)
+          expect((yield* session.get(sessionID)).unpricedSteps ?? 0).toBe(0)
+          const { db } = yield* Database.Service
+          const recorded = yield* db
+            .select()
+            .from(EventTable)
+            .where(eq(EventTable.aggregate_id, sessionID))
+            .all()
+            .pipe(Effect.orDie)
+          expect(
+            recorded.filter(
+              (event) =>
+                event.type ===
+                EventV2.versionedType(SessionEvent.Step.Ended.type, SessionEvent.Step.Ended.durable!.version),
+            ),
+          ).toHaveLength(1)
+          expect(requests).toHaveLength(1)
+        }),
+    )
+  }
+
+  for (const scenario of [
+    { name: "absent usage", usage: undefined, cost: 0, unpriced: true, free: false },
+    {
+      name: "explicit zero usage",
+      usage: { inputTokens: 0, outputTokens: 0 },
+      cost: 0,
+      unpriced: false,
+      free: false,
+    },
+    {
+      name: "known terminal usage",
+      usage: { inputTokens: 1_000, outputTokens: 100 },
+      cost: 0.003,
+      unpriced: false,
+      free: false,
+    },
+    {
+      name: "authoritative billed cost without token counters",
+      usage: { providerMetadata: { copilot: { totalNanoAiu: 3_000_000_000 } } },
+      cost: 0.03,
+      unpriced: false,
+      free: false,
+    },
+    {
+      name: "authoritative billed zero without token counters",
+      usage: { providerMetadata: { copilot: { totalNanoAiu: 0 } } },
+      cost: 0,
+      unpriced: false,
+      free: false,
+    },
+    { name: "guaranteed-free absent usage", usage: undefined, cost: 0, unpriced: true, free: true },
+  ]) {
+    it.effect(`terminal usage accounting: V2 ${scenario.name} remains distinct through replay`, () =>
+      Effect.gen(function* () {
+        yield* setup
+        const selected = Model.make({ id: "terminal-usage", provider: "fake", route: OpenAIChat.route })
+        currentModel = scenario.free
+          ? SessionRunnerModel.withFreeRoute(selected)
+          : SessionRunnerModel.withPricing(selected, [{ input: 2, output: 10, cache: { read: 0.1, write: 2.5 } }])
+        const session = yield* SessionV2.Service
+        const guard = yield* SpendGuard.Service
+        yield* guard.arm(sessionID, { usd: 1, unpricedSteps: 1 })
+        yield* session.prompt({ sessionID, prompt: Prompt.make({ text: scenario.name }), resume: false })
+        response = [
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.textStart({ id: "terminal-usage-text" }),
+          LLMEvent.textDelta({ id: "terminal-usage-text", text: "A finished response" }),
+          LLMEvent.textEnd({ id: "terminal-usage-text" }),
+          LLMEvent.stepFinish({
+            index: 0,
+            reason: "stop",
+            ...(scenario.usage === undefined ? {} : { usage: scenario.usage }),
+          }),
+          LLMEvent.finish({ reason: "stop" }),
+        ]
+
+        yield* session.resume(sessionID)
+
+        expect(requests).toHaveLength(1)
+        const context = yield* session.context(sessionID)
+        expect(context).toMatchObject([{ type: "user" }, { type: "assistant", cost: scenario.cost }])
+        const assistant = context[1]
+        expect(assistant?.type === "assistant" && Boolean(assistant.unpriced)).toBe(scenario.unpriced)
+        expect((yield* session.get(sessionID)).cost).toBeCloseTo(scenario.cost)
+        expect((yield* session.get(sessionID)).unpricedSteps ?? 0).toBe(scenario.unpriced ? 1 : 0)
+        const run = yield* guard.snapshot(sessionID)
+        expect(run).toMatchObject({
+          costKind: scenario.free ? "free" : "priced",
+          spentUsd: scenario.cost,
+          steps: 1,
+          unpricedSteps: scenario.unpriced && !scenario.free ? 1 : 0,
+        })
+        expect(run?.stopped?.reason).toBe(scenario.unpriced && !scenario.free ? "unpriced" : undefined)
+
+        yield* replaySessionProjection(sessionID)
+        yield* replaySessionProjection(sessionID)
+
+        expect((yield* session.get(sessionID)).cost).toBeCloseTo(scenario.cost)
+        expect((yield* session.get(sessionID)).unpricedSteps ?? 0).toBe(scenario.unpriced ? 1 : 0)
+        expect(yield* guard.snapshot(sessionID)).toEqual(run)
+        const { db } = yield* Database.Service
+        const recorded = yield* db
+          .select()
+          .from(EventTable)
+          .where(eq(EventTable.aggregate_id, sessionID))
+          .all()
+          .pipe(Effect.orDie)
+        expect(
+          recorded.filter(
+            (event) =>
+              event.type ===
+              EventV2.versionedType(SessionEvent.Step.Ended.type, SessionEvent.Step.Ended.durable!.version),
+          ),
+        ).toHaveLength(1)
+        expect(requests).toHaveLength(1)
+      }),
+    )
+  }
+
   it.effect("advertises and executes a globally attached application tool", () =>
     Effect.gen(function* () {
       yield* setup
@@ -798,6 +1095,8 @@ describe("SessionRunnerLLM", () => {
         resume: false,
       })
       yield* session.resume(sessionID)
+      // The earlier turn on the default model reported no usage, which counts as one incomplete (unpriced) step.
+      expect(yield* session.get(sessionID)).toMatchObject({ cost: 0, unpricedSteps: 1 })
 
       currentModel = Model.make({
         id: "compact",
@@ -841,10 +1140,11 @@ describe("SessionRunnerLLM", () => {
         billing: "codium",
         tokens: { input: 100_000, output: 1_000 },
       })
-      // The summary and the follow-up step are both Codium steps; neither adds a token or a dollar.
+      // The summary and the follow-up step are both Codium steps; neither adds a token or a dollar. Each Codium step
+      // also counts as unpriced, beside the earlier incomplete step.
       expect(yield* session.get(sessionID)).toMatchObject({
         cost: 0,
-        unpricedSteps: 2,
+        unpricedSteps: 3,
         codiumSteps: 2,
         tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
       })
@@ -1683,7 +1983,7 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
-  it.effect("counts what the compaction summary cost in the session totals", () =>
+  it.effect("counts the compaction summary once in session totals and the spend guard through replay", () =>
     Effect.gen(function* () {
       yield* setup
       const session = yield* SessionV2.Service
@@ -1722,6 +2022,419 @@ describe("SessionRunnerLLM", () => {
       expect(context[0]).toMatchObject({ type: "compaction", cost: 0.21, tokens: { input: 100_000, output: 1_000 } })
       // 100K input and 1K output at $2 and $10 per million tokens; the follow-up turn reported no usage.
       expect((yield* session.get(sessionID)).cost).toBeCloseTo(0.21)
+      const guard = yield* SpendGuard.Service
+      const run = yield* guard.snapshot(sessionID)
+      expect(run).toMatchObject({ spentUsd: 0.21, steps: 2, unpricedSteps: 1 })
+      yield* replaySessionProjection(sessionID)
+      yield* replaySessionProjection(sessionID)
+      expect((yield* session.get(sessionID)).cost).toBeCloseTo(0.21)
+      expect(yield* guard.snapshot(sessionID)).toEqual(run)
+      expect(requests).toHaveLength(2)
+    }),
+  )
+
+  const compactionAccountingModel = () =>
+    Model.make({
+      id: "compaction-accounting",
+      provider: "fake",
+      route: OpenAIChat.route.with({ limits: { context: 4_000, output: 50 } }),
+    })
+  const setupCompactionAccounting = Effect.gen(function* () {
+    yield* setup
+    const session = yield* SessionV2.Service
+    response = fragmentFixture("text", "accounting-earlier", ["Earlier answer"]).completeEvents
+    yield* session.prompt({
+      sessionID,
+      prompt: Prompt.make({ text: "Earlier question ".repeat(180) }),
+      resume: false,
+    })
+    yield* session.resume(sessionID)
+    currentModel = SessionRunnerModel.withPricing(compactionAccountingModel(), [
+      { input: 2, output: 10, cache: { read: 0, write: 0 } },
+    ])
+    requests.length = 0
+    yield* session.prompt({
+      sessionID,
+      prompt: Prompt.make({ text: "Recent exact request ".repeat(180) }),
+      resume: false,
+    })
+    return session
+  })
+  const compactionAccountingSummary = (text: string, usage = { inputTokens: 100_000, outputTokens: 1_000 }) => [
+    LLMEvent.stepStart({ index: 0 }),
+    LLMEvent.textStart({ id: "accounting-summary" }),
+    LLMEvent.textDelta({ id: "accounting-summary", text }),
+    LLMEvent.textEnd({ id: "accounting-summary" }),
+    LLMEvent.stepFinish({ index: 0, reason: "stop", usage }),
+    LLMEvent.finish({ reason: "stop" }),
+  ]
+  const recordedCompactionEvents = Effect.gen(function* () {
+    const { db } = yield* Database.Service
+    const recorded = yield* db
+      .select()
+      .from(EventTable)
+      .where(eq(EventTable.aggregate_id, sessionID))
+      .orderBy(asc(EventTable.seq))
+      .all()
+      .pipe(Effect.orDie)
+    return recorded.filter((event) => event.type.startsWith("session.next.compaction."))
+  })
+
+  for (const summary of ["## Goal\n- Preserve the task", "  "]) {
+    for (const limit of ["cap", "steps"] as const) {
+      it.effect(
+        `stops before ordinary continuation after a ${summary.trim() ? "complete" : "blank"} summary hits the ${limit}`,
+        () =>
+          Effect.gen(function* () {
+            const session = yield* setupCompactionAccounting
+            const guard = yield* SpendGuard.Service
+            yield* guard.arm(sessionID, limit === "cap" ? { usd: 0.2 } : { steps: 1 })
+            responses = [
+              compactionAccountingSummary(summary),
+              fragmentFixture("text", "must-not-follow-summary", ["Must not run"]).completeEvents,
+            ]
+
+            yield* session.resume(sessionID)
+
+            expect(requests).toHaveLength(1)
+            expect(yield* guard.snapshot(sessionID)).toMatchObject({
+              spentUsd: 0.21,
+              steps: 1,
+              stopped: { reason: limit },
+            })
+            expect((yield* session.get(sessionID)).cost).toBeCloseTo(0.21)
+            const recorded = yield* recordedCompactionEvents
+            expect(recorded).toHaveLength(2)
+            expect(recorded[1]).toMatchObject({ data: { cost: 0.21 } })
+            expect(recorded[1]?.type).toBe(
+              EventV2.versionedType(
+                summary.trim() ? SessionEvent.Compaction.Ended.type : SessionEvent.Compaction.Failed.type,
+                SessionEvent.Compaction.Ended.durable!.version,
+              ),
+            )
+          }),
+      )
+    }
+  }
+
+  it.effect("stops the recursive overflow continuation when the recovery summary crosses the spend cap", () =>
+    Effect.gen(function* () {
+      const session = yield* setupOverflowRecovery
+      currentModel = SessionRunnerModel.withPricing(
+        Model.make({
+          id: "recovery-accounting",
+          provider: "fake",
+          route: OpenAIChat.route.with({ limits: { context: 20_000, output: 1_000 } }),
+        }),
+        [{ input: 2, output: 10, cache: { read: 0, write: 0 } }],
+      )
+      const guard = yield* SpendGuard.Service
+      yield* guard.arm(sessionID, { usd: 0.2 })
+      responses = [
+        [LLMEvent.providerError({ message: "prompt too long", classification: "context-overflow" })],
+        compactionAccountingSummary("## Goal\n- Recover within the budget"),
+        fragmentFixture("text", "must-not-follow-overflow", ["Must not run"]).completeEvents,
+      ]
+      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Continue" }), resume: false })
+
+      yield* session.resume(sessionID)
+
+      expect(requests).toHaveLength(2)
+      expect(yield* guard.snapshot(sessionID)).toMatchObject({
+        spentUsd: 0.21,
+        steps: 1,
+        stopped: { reason: "cap" },
+      })
+      expect(yield* session.context(sessionID)).toMatchObject([{ type: "compaction", cost: 0.21 }])
+    }),
+  )
+
+  for (const scenario of ["unknown", "unrated", "incomplete", "free"] as const) {
+    it.effect(`classifies a ${scenario} compaction call with the ordinary spend rules`, () =>
+      Effect.gen(function* () {
+        const session = yield* setupCompactionAccounting
+        if (scenario === "unknown") currentModel = compactionAccountingModel()
+        if (scenario === "unrated")
+          currentModel = SessionRunnerModel.withPricing(compactionAccountingModel(), [
+            { input: 0, output: 0, cache: { read: 0, write: 0 } },
+          ])
+        if (scenario === "free") currentModel = SessionRunnerModel.withFreeRoute(compactionAccountingModel())
+        const guard = yield* SpendGuard.Service
+        yield* guard.arm(sessionID, { usd: 1, unpricedSteps: 1, ...(scenario === "free" ? { steps: 1 } : {}) })
+        responses = [
+          scenario === "incomplete" || scenario === "free"
+            ? fragmentFixture("text", "unpriced-summary", ["## Goal\n- Continue"]).completeEvents
+            : compactionAccountingSummary("## Goal\n- Continue"),
+          fragmentFixture("text", "must-not-follow-unpriced", ["Must not run"]).completeEvents,
+        ]
+
+        yield* session.resume(sessionID)
+
+        expect(requests).toHaveLength(1)
+        expect(yield* guard.snapshot(sessionID)).toMatchObject({
+          spentUsd: 0,
+          steps: 1,
+          costKind: scenario === "free" ? "free" : scenario === "incomplete" ? "priced" : "unknown",
+          unpricedSteps: scenario === "free" ? 0 : 1,
+          stopped: { reason: scenario === "free" ? "steps" : "unpriced" },
+        })
+        const recorded = yield* recordedCompactionEvents
+        expect(recorded).toHaveLength(2)
+        expect(recorded[1]).toMatchObject({ data: { cost: 0 } })
+        expect(Boolean(recorded[1]?.data.unpriced)).toBe(scenario !== "unrated")
+      }),
+    )
+  }
+
+  for (const usage of [undefined, { inputTokens: 100_000, outputTokens: 1_000 }]) {
+    it.effect(
+      `settles ${usage ? "known" : "missing"} compaction usage and failure before propagating cancellation`,
+      () =>
+        Effect.gen(function* () {
+          const session = yield* setupCompactionAccounting
+          const guard = yield* SpendGuard.Service
+          const runner = yield* SessionRunner.Service
+          const ready = yield* Deferred.make<void>()
+          if (usage) {
+            const events = yield* EventV2.Service
+            yield* events.listen((event) =>
+              event.type === SessionStatusEvent.Spend.type ? Effect.die("spend listener failed") : Effect.void,
+            )
+          }
+          responseStream = Stream.concat(
+            Stream.fromIterable([
+              LLMEvent.stepStart({ index: 0 }),
+              LLMEvent.textDelta({ id: "interrupted-summary", text: "Partial summary" }),
+              ...(usage ? [LLMEvent.stepFinish({ index: 0, reason: "stop", usage })] : []),
+            ]),
+            Stream.fromEffect(Deferred.succeed(ready, undefined)).pipe(Stream.flatMap(() => Stream.never)),
+          )
+          const fiber = yield* runner.run({ sessionID, force: true }).pipe(Effect.forkChild)
+          yield* Deferred.await(ready)
+          yield* Fiber.interrupt(fiber)
+          const result = yield* Fiber.await(fiber)
+
+          expect(result._tag).toBe("Failure")
+          expect(result._tag === "Failure" && Cause.hasInterrupts(result.cause)).toBe(true)
+          expect(requests).toHaveLength(1)
+          const run = yield* guard.snapshot(sessionID)
+          expect(run).toMatchObject({ spentUsd: usage ? 0.21 : 0, steps: 1, unpricedSteps: usage ? 0 : 1 })
+          expect((yield* session.get(sessionID)).cost).toBeCloseTo(usage ? 0.21 : 0)
+          const recorded = yield* recordedCompactionEvents
+          expect(recorded).toHaveLength(2)
+          expect(recorded[1]).toMatchObject({
+            type: EventV2.versionedType(
+              SessionEvent.Compaction.Failed.type,
+              SessionEvent.Compaction.Failed.durable!.version,
+            ),
+            data: { cost: usage ? 0.21 : 0 },
+          })
+          expect(yield* session.context(sessionID)).not.toContainEqual(expect.objectContaining({ type: "compaction" }))
+          yield* replaySessionProjection(sessionID)
+          yield* replaySessionProjection(sessionID)
+          expect((yield* session.get(sessionID)).cost).toBeCloseTo(usage ? 0.21 : 0)
+          expect(yield* guard.snapshot(sessionID)).toEqual(run)
+          if (!usage) {
+            responses = [
+              compactionAccountingSummary("## Goal\n- Resume the interrupted request"),
+              fragmentFixture("text", "resumed-after-interruption", ["Continued"]).completeEvents,
+            ]
+            yield* session.resume(sessionID)
+            expect(requests).toHaveLength(3)
+            expect(requests[1]?.cache).toBe("none")
+          }
+        }),
+    )
+  }
+
+  it.effect("does not charge a compaction canceled before its model call", () =>
+    Effect.gen(function* () {
+      const session = yield* setupCompactionAccounting
+      const guard = yield* SpendGuard.Service
+      const runner = yield* SessionRunner.Service
+      const events = yield* EventV2.Service
+      const ready = yield* Deferred.make<void>()
+      const release = yield* Deferred.make<void>()
+      const before = yield* session.get(sessionID)
+      yield* events.listen((event) =>
+        event.type === SessionEvent.Compaction.Started.type
+          ? Deferred.succeed(ready, undefined).pipe(Effect.andThen(Deferred.await(release)), Effect.asVoid)
+          : Effect.void,
+      )
+      const fiber = yield* runner.run({ sessionID, force: true }).pipe(Effect.forkChild)
+      yield* Deferred.await(ready)
+      const cancellation = yield* Fiber.interrupt(fiber).pipe(Effect.forkChild({ startImmediately: true }))
+      yield* Deferred.succeed(release, undefined)
+      yield* Fiber.join(cancellation)
+
+      expect(Exit.hasInterrupts(yield* Fiber.await(fiber))).toBe(true)
+      expect(requests).toHaveLength(0)
+      expect(yield* guard.snapshot(sessionID)).toMatchObject({ steps: 0, spentUsd: 0, unpricedSteps: 0 })
+      const after = yield* session.get(sessionID)
+      expect(after.cost).toBe(before.cost)
+      expect(after.unpricedSteps ?? 0).toBe(before.unpricedSteps ?? 0)
+      const recorded = yield* recordedCompactionEvents
+      expect(recorded).toHaveLength(2)
+      expect(recorded[1]?.data.cost).toBeUndefined()
+      expect(recorded[1]?.data.tokens).toBeUndefined()
+      expect(recorded[1]?.data.unpriced).toBeUndefined()
+    }),
+  )
+
+  it.effect("does not launch a compaction when a linked root stops during its started notification", () =>
+    Effect.gen(function* () {
+      const session = yield* setupCompactionAccounting
+      const guard = yield* SpendGuard.Service
+      const events = yield* EventV2.Service
+      const ready = yield* Deferred.make<void>()
+      const release = yield* Deferred.make<void>()
+      yield* guard.begin(otherSessionID, { usd: 0.2 })
+      yield* guard.link(sessionID, otherSessionID)
+      yield* events.listen((event) =>
+        event.type === SessionEvent.Compaction.Started.type
+          ? Deferred.succeed(ready, undefined).pipe(Effect.andThen(Deferred.await(release)), Effect.asVoid)
+          : Effect.void,
+      )
+      const fiber = yield* session.resume(sessionID).pipe(Effect.forkChild)
+      yield* Deferred.await(ready)
+      yield* guard.record(otherSessionID, {
+        costUsd: 0.2,
+        costKind: "priced",
+        contextTokens: 0,
+        cachedTokens: 0,
+        continues: true,
+        tools: [],
+        patched: false,
+      })
+      const root = yield* guard.snapshot(otherSessionID)
+      yield* Deferred.succeed(release, undefined)
+      yield* Fiber.join(fiber)
+
+      expect(requests).toHaveLength(0)
+      expect(yield* guard.snapshot(otherSessionID)).toEqual(root)
+      const recorded = yield* recordedCompactionEvents
+      expect(recorded).toHaveLength(2)
+      expect(recorded[1]?.data.cost).toBeUndefined()
+      expect(recorded[1]?.data.tokens).toBeUndefined()
+    }),
+  )
+
+  it.effect("retains known compaction spend and the original defect when the stream fails after usage", () =>
+    Effect.gen(function* () {
+      const session = yield* setupCompactionAccounting
+      const guard = yield* SpendGuard.Service
+      const runner = yield* SessionRunner.Service
+      const defect = new Error("summary stream defect")
+      responseStream = Stream.concat(
+        Stream.fromIterable(compactionAccountingSummary("Partial summary")),
+        Stream.fromEffect(Effect.die(defect)),
+      )
+
+      const result = yield* runner.run({ sessionID, force: true }).pipe(Effect.exit)
+
+      expect(result._tag).toBe("Failure")
+      expect(result._tag === "Failure" && Cause.squash(result.cause)).toBe(defect)
+      expect(requests).toHaveLength(1)
+      expect(yield* guard.snapshot(sessionID)).toMatchObject({ spentUsd: 0.21, steps: 1, unpricedSteps: 0 })
+      expect((yield* session.get(sessionID)).cost).toBeCloseTo(0.21)
+      expect(yield* recordedCompactionEvents).toMatchObject([
+        {},
+        {
+          type: EventV2.versionedType(
+            SessionEvent.Compaction.Failed.type,
+            SessionEvent.Compaction.Failed.durable!.version,
+          ),
+          data: { cost: 0.21 },
+        },
+      ])
+    }),
+  )
+
+  it.effect("persists a successful compaction before a live spend listener fails", () =>
+    Effect.gen(function* () {
+      const session = yield* setupCompactionAccounting
+      const guard = yield* SpendGuard.Service
+      const runner = yield* SessionRunner.Service
+      const events = yield* EventV2.Service
+      const defect = new Error("live spend listener failed")
+      yield* events.listen((event) => (event.type === SessionStatusEvent.Spend.type ? Effect.die(defect) : Effect.void))
+      response = compactionAccountingSummary("## Goal\n- Preserve the task")
+
+      const result = yield* runner.run({ sessionID, force: true }).pipe(Effect.exit)
+
+      expect(result._tag === "Failure" && Cause.squash(result.cause)).toBe(defect)
+      expect(requests).toHaveLength(1)
+      const run = yield* guard.snapshot(sessionID)
+      expect(run).toMatchObject({ spentUsd: 0.21, steps: 1, unpricedSteps: 0 })
+      expect((yield* session.get(sessionID)).cost).toBeCloseTo(0.21)
+      expect(yield* recordedCompactionEvents).toMatchObject([
+        {},
+        {
+          type: EventV2.versionedType(
+            SessionEvent.Compaction.Ended.type,
+            SessionEvent.Compaction.Ended.durable!.version,
+          ),
+          data: { cost: 0.21 },
+        },
+      ])
+      yield* replaySessionProjection(sessionID)
+      expect((yield* session.get(sessionID)).cost).toBeCloseTo(0.21)
+      expect(yield* guard.snapshot(sessionID)).toEqual(run)
+    }),
+  )
+
+  it.effect("counts known usage from a failed compaction stream before honoring the cap", () =>
+    Effect.gen(function* () {
+      const session = yield* setupCompactionAccounting
+      const guard = yield* SpendGuard.Service
+      yield* guard.arm(sessionID, { usd: 0.2 })
+      responseStream = Stream.concat(
+        Stream.fromIterable(compactionAccountingSummary("Partial summary")),
+        Stream.fail(providerUnavailable()),
+      )
+
+      yield* session.resume(sessionID)
+
+      expect(requests).toHaveLength(1)
+      expect(yield* guard.snapshot(sessionID)).toMatchObject({
+        spentUsd: 0.21,
+        steps: 1,
+        unpricedSteps: 0,
+        stopped: { reason: "cap" },
+      })
+      expect((yield* session.get(sessionID)).cost).toBeCloseTo(0.21)
+      expect(yield* recordedCompactionEvents).toMatchObject([
+        {},
+        {
+          type: EventV2.versionedType(
+            SessionEvent.Compaction.Failed.type,
+            SessionEvent.Compaction.Failed.durable!.version,
+          ),
+          data: { cost: 0.21 },
+        },
+      ])
+    }),
+  )
+
+  it.effect("charges a linked compaction to its root and rejects another helper under the stopped root", () =>
+    Effect.gen(function* () {
+      const session = yield* setupCompactionAccounting
+      const guard = yield* SpendGuard.Service
+      yield* guard.begin(otherSessionID, { usd: 0.2 })
+      yield* guard.link(sessionID, otherSessionID)
+      responses = [compactionAccountingSummary("## Goal\n- Linked task")]
+
+      yield* session.resume(sessionID)
+
+      expect(requests).toHaveLength(1)
+      const root = yield* guard.snapshot(otherSessionID)
+      expect(root).toMatchObject({ rootID: otherSessionID, spentUsd: 0.21, steps: 1, stopped: { reason: "cap" } })
+      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Pending work" }), resume: false })
+      yield* session.resume(sessionID)
+      expect(requests).toHaveLength(1)
+      expect(yield* guard.snapshot(otherSessionID)).toEqual(root)
+      const { db } = yield* Database.Service
+      expect(yield* SessionInput.hasPending(db, sessionID, "steer")).toBe(true)
     }),
   )
 
@@ -3865,6 +4578,321 @@ describe("SessionRunnerLLM", () => {
     }),
     LLMEvent.finish({ reason: input.call ? "tool-calls" : "stop" }),
   ]
+
+  const toolTurn = (id: string, name: string, input: Record<string, unknown>) => [
+    LLMEvent.stepStart({ index: 0 }),
+    LLMEvent.toolCall({ id, name, input }),
+    LLMEvent.stepFinish({ index: 0, reason: "tool-calls", usage: { inputTokens: 1, outputTokens: 1 } }),
+    LLMEvent.finish({ reason: "tool-calls" }),
+  ]
+
+  it.effect("pauses repeated errored V2 calls before another provider request", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const guard = yield* SpendGuard.Service
+      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Repeat this tool" }), resume: false })
+      executions.length = 0
+      responses = [
+        ...[1, 2, 3, 4].map((index) => toolTurn(`invalid-${index}`, "echo", { text: 17 })),
+        pricedTurn({ inputTokens: 1, outputTokens: 1 }),
+      ]
+
+      yield* session.resume(sessionID)
+
+      expect(requests).toHaveLength(3)
+      expect(executions).toEqual([])
+      const snapshot = yield* guard.snapshot(sessionID)
+      expect(snapshot).toMatchObject({ steps: 3, stopped: { reason: "loop" } })
+      expect(snapshot?.stopped?.message).toBe(
+        "Paused a repeating loop: `echo` failed with the same error 3 times in a row.",
+      )
+      expect((yield* session.context(sessionID)).at(-1)).toMatchObject({
+        type: "assistant",
+        finish: "error",
+        content: [{ type: "tool", state: { status: "error", input: { text: 17 } } }],
+      })
+    }),
+  )
+
+  it.effect("pauses identical successful V2 calls with unchanged results", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const guard = yield* SpendGuard.Service
+      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Repeat this tool" }), resume: false })
+      executions.length = 0
+      responses = [
+        ...[1, 2, 3, 4].map((index) => toolTurn(`same-${index}`, "echo", { text: "same" })),
+        pricedTurn({ inputTokens: 1, outputTokens: 1 }),
+      ]
+
+      yield* session.resume(sessionID)
+
+      expect(requests).toHaveLength(3)
+      expect(executions).toEqual(["same", "same", "same"])
+      expect(yield* guard.snapshot(sessionID)).toMatchObject({
+        steps: 3,
+        stopped: {
+          reason: "loop",
+          message:
+            "Paused a repeating loop: `echo` returned the same result for the same input 3 times, with no new results or file changes in between.",
+        },
+      })
+    }),
+  )
+
+  it.effect("keeps useful repeated V2 calls running when the same input returns new results", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const guard = yield* SpendGuard.Service
+      const registry = yield* ToolRegistry.Service
+      let progress = 0
+      yield* registry.register({
+        progress: Tool.make({
+          description: "Observe progress",
+          input: Schema.Struct({}),
+          output: Schema.Struct({ value: Schema.Number }),
+          execute: () => Effect.sync(() => ({ value: ++progress })),
+        }),
+      })
+      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Observe ongoing work" }), resume: false })
+      responses = [
+        toolTurn("repeat-1", "echo", { text: "same" }),
+        toolTurn("progress-1", "progress", {}),
+        toolTurn("repeat-2", "echo", { text: "same" }),
+        toolTurn("progress-2", "progress", {}),
+        toolTurn("repeat-3", "echo", { text: "same" }),
+        toolTurn("progress-3", "progress", {}),
+        pricedTurn({ inputTokens: 1, outputTokens: 1 }),
+      ]
+
+      yield* session.resume(sessionID)
+
+      expect(requests).toHaveLength(7)
+      expect(progress).toBe(3)
+      expect((yield* guard.snapshot(sessionID))?.stopped).toBeUndefined()
+    }),
+  )
+
+  it.effect("resets a V2 error streak after a successful call", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const guard = yield* SpendGuard.Service
+      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Recover from tool errors" }), resume: false })
+      responses = [
+        toolTurn("error-1", "missing", { attempt: 1 }),
+        toolTurn("error-2", "missing", { attempt: 2 }),
+        toolTurn("success", "echo", { text: "recovered" }),
+        toolTurn("error-3", "missing", { attempt: 3 }),
+        toolTurn("error-4", "missing", { attempt: 4 }),
+        pricedTurn({ inputTokens: 1, outputTokens: 1 }),
+      ]
+
+      yield* session.resume(sessionID)
+
+      expect(requests).toHaveLength(6)
+      const snapshot = yield* guard.snapshot(sessionID)
+      expect(snapshot?.stopped).toBeUndefined()
+      expect(snapshot?.loops.get(sessionID)?.errorStreak).toMatchObject({ tool: "missing", count: 2 })
+    }),
+  )
+
+  it.effect("clears V2 repeat memory when a successful tool changes files", () =>
+    Effect.gen(function* () {
+      yield* setup
+      snapshotVersion = 0
+      const session = yield* SessionV2.Service
+      const guard = yield* SpendGuard.Service
+      const registry = yield* ToolRegistry.Service
+      yield* registry.register({
+        write: Tool.make({
+          description: "Write progress",
+          input: Schema.Struct({}),
+          output: Schema.Struct({ text: Schema.String }),
+          execute: () =>
+            Effect.sync(() => {
+              snapshotVersion = (snapshotVersion ?? 0) + 1
+              return { text: "written" }
+            }),
+        }),
+      })
+      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Write progress three times" }), resume: false })
+      responses = [
+        ...[1, 2, 3].map((index) => toolTurn(`write-${index}`, "write", {})),
+        pricedTurn({ inputTokens: 1, outputTokens: 1 }),
+      ]
+
+      yield* session.resume(sessionID)
+
+      expect(requests).toHaveLength(4)
+      expect(snapshotVersion).toBe(3)
+      const snapshot = yield* guard.snapshot(sessionID)
+      expect(snapshot?.stopped).toBeUndefined()
+      expect(snapshot?.loops.get(sessionID)?.ring).toHaveLength(1)
+      expect((yield* session.context(sessionID)).filter((message) => message.type === "assistant")).toMatchObject([
+        { snapshot: { files: ["progress.txt"] } },
+        { snapshot: { files: ["progress.txt"] } },
+        { snapshot: { files: ["progress.txt"] } },
+        { snapshot: { files: [] } },
+      ])
+    }),
+  )
+
+  it.effect("starts fresh V2 loop memory for a later user prompt", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const guard = yield* SpendGuard.Service
+      for (const text of ["Check this work", "Check this work again"]) {
+        yield* session.prompt({ sessionID, prompt: Prompt.make({ text }), resume: false })
+        responses = [
+          toolTurn(`${text}-1`, "echo", { text: "same" }),
+          toolTurn(`${text}-2`, "echo", { text: "same" }),
+          pricedTurn({ inputTokens: 1, outputTokens: 1 }),
+        ]
+        yield* session.resume(sessionID)
+        const snapshot = yield* guard.snapshot(sessionID)
+        expect(snapshot).toMatchObject({ steps: 3 })
+        expect(snapshot?.stopped).toBeUndefined()
+        expect(snapshot?.loops.get(sessionID)?.ring).toHaveLength(2)
+      }
+      expect(requests).toHaveLength(6)
+    }),
+  )
+
+  it.effect("uses V2 call order when eager tools settle in another order", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const guard = yield* SpendGuard.Service
+      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Recover between failures" }), resume: false })
+      executions.length = 0
+      toolExecutionGate = yield* Deferred.make<void>()
+      const streamed = yield* Deferred.make<void>()
+      responseStream = Stream.fromIterable([
+        LLMEvent.stepStart({ index: 0 }),
+        LLMEvent.toolInputStart({ id: "success", name: "echo" }),
+        LLMEvent.toolCall({ id: "error-1", name: "missing", input: { attempt: 1 } }),
+        LLMEvent.toolCall({ id: "success", name: "echo", input: { text: "recovered" } }),
+        LLMEvent.toolCall({ id: "error-2", name: "missing", input: { attempt: 2 } }),
+        LLMEvent.toolCall({ id: "error-3", name: "missing", input: { attempt: 3 } }),
+        LLMEvent.stepFinish({ index: 0, reason: "tool-calls", usage: { inputTokens: 1, outputTokens: 1 } }),
+      ]).pipe(Stream.ensuring(Deferred.succeed(streamed, undefined)))
+      responses = [pricedTurn({ inputTokens: 1, outputTokens: 1 })]
+
+      const running = yield* session.resume(sessionID).pipe(Effect.forkChild)
+      yield* Deferred.await(streamed)
+      yield* Deferred.succeed(toolExecutionGate, undefined)
+      yield* Fiber.join(running)
+
+      expect(requests).toHaveLength(2)
+      expect(executions).toEqual(["recovered"])
+      const snapshot = yield* guard.snapshot(sessionID)
+      expect(snapshot?.stopped).toBeUndefined()
+      expect(snapshot?.loops.get(sessionID)?.ring.map((call) => call.tool)).toEqual([
+        "missing",
+        "echo",
+        "missing",
+        "missing",
+      ])
+      expect(snapshot?.loops.get(sessionID)?.errorStreak).toMatchObject({ tool: "missing", count: 2 })
+    }),
+  )
+
+  it.effect("counts a terminal hosted failure alongside settled local V2 calls", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const guard = yield* SpendGuard.Service
+      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Settle both tool calls" }), resume: false })
+      responses = [
+        [
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.toolCall({ id: "hosted", name: "web_search", input: { query: "effect" }, providerExecuted: true }),
+          LLMEvent.toolCall({ id: "local", name: "echo", input: { text: "settled" } }),
+          LLMEvent.stepFinish({ index: 0, reason: "tool-calls", usage: { inputTokens: 1, outputTokens: 1 } }),
+        ],
+        pricedTurn({ inputTokens: 1, outputTokens: 1 }),
+      ]
+
+      yield* session.resume(sessionID)
+
+      expect(requests).toHaveLength(2)
+      const snapshot = yield* guard.snapshot(sessionID)
+      expect(snapshot?.stopped).toBeUndefined()
+      expect(snapshot?.loops.get(sessionID)?.ring).toMatchObject([
+        { tool: "web_search", input: '{"query":"effect"}', error: "Provider did not return a tool result" },
+        { tool: "echo", input: '{"text":"settled"}', output: expect.any(String) },
+      ])
+    }),
+  )
+
+  for (const delivery of ["steer", "queue"] as const) {
+    for (const failed of [false, true]) {
+      it.effect(
+        `resets V2 ${failed ? "errors" : "repeats"} for promoted ${delivery} without renewing the run cap`,
+        () =>
+          Effect.gen(function* () {
+            yield* setup
+            currentModel = pricedModel()
+            const session = yield* SessionV2.Service
+            const guard = yield* SpendGuard.Service
+            const registry = yield* ToolRegistry.Service
+            let calls = 0
+            yield* registry.register({
+              recheck: Tool.make({
+                description: "Recheck the work",
+                input: Schema.Struct({}),
+                output: Schema.Struct({ text: Schema.String }),
+                execute: () =>
+                  Effect.gen(function* () {
+                    calls++
+                    if (calls === 2)
+                      yield* session
+                        .prompt({
+                          sessionID,
+                          prompt: Prompt.make({ text: "Recheck the same work" }),
+                          delivery,
+                          resume: false,
+                        })
+                        .pipe(Effect.orDie)
+                    if (failed) return yield* Effect.fail(new Tool.Failure({ message: "same failure" }))
+                    return { text: "same result" }
+                  }),
+              }),
+            })
+            yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Check this work" }), resume: false })
+            const steps = delivery === "steer" ? 5 : 6
+            yield* guard.arm(sessionID, { usd: 1, steps })
+            responses = [
+              toolTurn("before-1", "recheck", {}),
+              toolTurn("before-2", "recheck", {}),
+              ...(delivery === "queue" ? [pricedTurn({ inputTokens: 1, outputTokens: 1 })] : []),
+              toolTurn("after-1", "recheck", {}),
+              toolTurn("after-2", "recheck", {}),
+              pricedTurn({ inputTokens: 1, outputTokens: 1 }),
+            ]
+
+            yield* session.resume(sessionID)
+
+            expect(calls).toBe(4)
+            expect(requests).toHaveLength(steps)
+            expect(userTexts(requests[delivery === "steer" ? 2 : 3]!)).toEqual([
+              "Check this work",
+              "Recheck the same work",
+            ])
+            const snapshot = yield* guard.snapshot(sessionID)
+            expect(snapshot).toMatchObject({ steps, budget: { usd: 1, steps }, stopped: { reason: "steps" } })
+            expect(snapshot?.spentUsd).toBeCloseTo(steps * 0.000012, 8)
+            expect(snapshot?.loops.get(sessionID)?.ring).toHaveLength(2)
+            expect(snapshot?.loops.get(sessionID)?.errorStreak.count).toBe(failed ? 2 : 0)
+          }),
+      )
+    }
+  }
 
   it.effect("stops a guarded run at its dollar cap without another provider request", () =>
     Effect.gen(function* () {

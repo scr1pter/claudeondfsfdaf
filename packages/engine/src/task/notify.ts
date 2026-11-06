@@ -339,6 +339,21 @@ const layer = Layer.effect(
         return SubagentLifecycle.read(yield* sessions.get(note.taskID))?.attempt === note.attempt
       }).pipe(Effect.catch(() => Effect.succeed(false)))
 
+    // A later user run may have cleared the parent's stop, but an old stopped launch cannot start work again. The
+    // task's own child-only ceiling leaves a healthy parent free to respond; mixed healthy batches still do.
+    const launchStopped = (note: Note) =>
+      note.kind !== "result" || !note.taskID
+        ? Effect.succeed(false)
+        : sessions.get(note.taskID).pipe(
+            Effect.map(
+              (task) =>
+                SubagentLifecycle.read(task)?.budgetScopes?.some(
+                  (scope) => scope.stopped !== undefined && !(scope.kind === "child" && scope.id === note.taskID),
+                ) ?? false,
+            ),
+            Effect.catch(() => Effect.succeed(false)),
+          )
+
     // This parent's background jobs still running whose notes are not already held: while one runs, the window waits
     // its whole hold for that job's note too.
     const siblings = Effect.fnUntraced(function* (parentID: SessionID, window: Window) {
@@ -480,7 +495,9 @@ const layer = Layer.effect(
       })).flat()
       const lead = sent[0]
       if (!lead) return
-      const silent = coordinator || now || fenced.has(parentID) || halted || !sent.some((item) => wakes(item.note))
+      const stopped = yield* Effect.forEach(sent, (item) => launchStopped(item.note))
+      const silent =
+        coordinator || now || fenced.has(parentID) || halted || !sent.some((item, i) => wakes(item.note) && !stopped[i])
       // The parent's turn runs on its own: the window is free again once the message is on its way, so a note landing
       // during that turn joins it. A prompt that never wrote the message gives its claims back for recovery.
       const prompt = {

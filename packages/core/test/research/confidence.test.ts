@@ -42,6 +42,17 @@ describe("ResearchConfidence.section", () => {
     expect(level([cited("N1", "nature.com", true), cited("N2", "nature.com", true)]).level).toBe("medium")
   })
 
+  test("does not count the same publication mirrored on multiple sites twice", () => {
+    const items = [
+      { ...cited("N1", "journal.example", true), lineage: ["doi:10.1000/study"] },
+      { ...cited("N2", "news.example", true), lineage: ["doi:10.1000/study"] },
+    ]
+    expect(level(items).level).toBe("medium")
+    expect(level([...items, { ...cited("N3", "other.example", true), lineage: ["doi:10.1000/another"] }]).level).toBe(
+      "high",
+    )
+  })
+
   test("is not High when no site is primary", () => {
     expect(level([cited("N1", "bbc.co.uk", false), cited("N2", "theguardian.com", false)]).level).toBe("medium")
   })

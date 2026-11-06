@@ -1,0 +1,1 @@
+{"name":"relay-directory-candidate","private":true,"type":"module","scripts":{"start":"bun app.mjs","check":"bun --check app.mjs"}}

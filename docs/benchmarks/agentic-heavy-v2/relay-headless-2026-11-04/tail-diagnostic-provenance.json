@@ -1,0 +1,11 @@
+{
+  "kind": "post-run-diagnostic-provenance-v1",
+  "generatedSourceFilesVerifiedAgainstClosedManifests": 45,
+  "scriptSha256": "8862fe204f9feebfcc90214c7e106ae76b70e06d849d74035942c616b64d5a5c",
+  "resultSha256": "f5000ca67684b6048d13db261a4740c83869f084cd6887faffd3b0a1cf9283aa",
+  "sourceGateSha256": "2a2abb4a47accc790b62af406003a48c09e6b92ba5c7c4b84bea55f19ca84999",
+  "sourceRevision": "1a3d07c4a947674c3db68f6bbc7690a8c0288587",
+  "postRunAdjudicationOnly": true,
+  "originalGatesAndScoresUnchanged": true,
+  "providerCalls": 0
+}

@@ -1,0 +1,17 @@
+{
+  "kind": "consolidated-source-closure-validation-v1",
+  "sourceAndDataFilesVerified": 13,
+  "gitIndexVerified": true,
+  "freshWindowsAutocrlfTrueCheckoutVerified": true,
+  "requiredAncestorAttributesIncluded": [
+    ".gitattributes",
+    "scripts/benchmarks/funding-runtime/.gitattributes",
+    "scripts/benchmarks/funding-runtime/carry/.gitattributes",
+    "scripts/benchmarks/funding-runtime/continuation/.gitattributes"
+  ],
+  "gatewayImports": 0,
+  "providerCalls": 0,
+  "credentialReads": 0,
+  "archivedProgramDataAndManifestBytesChanged": false,
+  "distributionOnlyChange": "Parent attributes preserve sealed archive/continuation/carry source and data as raw bytes."
+}

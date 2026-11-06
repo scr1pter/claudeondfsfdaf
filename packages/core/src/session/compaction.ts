@@ -9,6 +9,7 @@ import { SessionEvent } from "./event"
 import { SessionMessage } from "./message"
 import { SessionSchema } from "./schema"
 import { Token } from "../util/token"
+import type { SpendGuard } from "../spend-guard"
 import { SessionRunnerModel } from "./runner/model"
 import { tokens as stepTokens } from "./runner/publish-llm-event"
 
@@ -73,6 +74,7 @@ type Settings = {
 
 type Dependencies = {
   readonly events: EventV2.Interface
+  readonly guard: SpendGuard.Interface
   readonly llm: {
     readonly stream: (request: LLMRequest) => Stream.Stream<LLMEvent, LLMError>
   }
@@ -194,6 +196,7 @@ export const make = (dependencies: Dependencies) => {
   // full-history request each time, so the next attempt waits until the history has grown past it.
   const failures = new Map<SessionSchema.ID, number>()
   const compactAfterOverflow = Effect.fn("SessionCompaction.compactAfterOverflow")(function* (input: Input) {
+    if (yield* dependencies.guard.stopped(input.sessionID)) return false
     const context = input.model.route.defaults.limits?.context
     if (context === undefined || context <= 0) return false
     const output = input.request.generation?.maxTokens ?? input.model.route.defaults.limits?.output ?? 0
@@ -206,70 +209,110 @@ export const make = (dependencies: Dependencies) => {
     })
     const summaryOutput = Math.min(output || SUMMARY_OUTPUT_TOKENS, SUMMARY_OUTPUT_TOKENS)
     if (Token.estimate(summaryPrompt) > context - summaryOutput) return false
-    const messageID = SessionMessage.ID.create()
-    yield* dependencies.events.publish(SessionEvent.Compaction.Started, {
-      sessionID: input.sessionID,
-      messageID,
-      timestamp: yield* DateTime.now,
-      reason: "auto",
-    })
-
-    const chunks: string[] = []
-    let failed = false
-    let usage: Usage | undefined
-    const summarized = yield* dependencies.llm
-      .stream(
-        LLM.request({
-          model: input.model,
-          messages: [Message.user(summaryPrompt)],
-          tools: [],
-          generation: { maxTokens: summaryOutput },
-          // The summary replaces this history, so nothing would read a cache write of it back.
-          cache: "none",
-        }),
-      )
-      .pipe(
-        Stream.runForEach((event) => {
-          if (LLMEvent.is.providerError(event)) failed = true
-          if (LLMEvent.is.textDelta(event)) chunks.push(event.text)
-          if (LLMEvent.is.stepFinish(event)) usage = event.usage
-          return Effect.void
-        }),
-        Effect.as(true),
-        Effect.catchTag("LLM.Error", () => Effect.succeed(false)),
-      )
-    const summary = chunks.join("")
-    const tokens = stepTokens(usage)
-    const cost = SessionRunnerModel.calculateCost(input.model, tokens, usage?.providerMetadata)
-    const used = tokens.input + tokens.output + tokens.reasoning + tokens.cache.read + tokens.cache.write
-    // The provider bills the request whether or not it produced a summary. As with a step, an unknown price is
-    // recorded as 0 and marked unpriced rather than read as free, and a Vector Codium summary, billed to the account's
-    // plan, is never priced here.
-    const spent = Billing.isCodium(input.model.provider)
-      ? { cost: 0, unpriced: true, billing: "codium" as const, tokens }
-      : { cost: cost ?? 0, ...(cost === undefined && used > 0 ? { unpriced: true } : {}), tokens }
-    if (!summarized || failed || !summary.trim()) {
-      failures.set(input.sessionID, requestSize(input.request))
-      yield* dependencies.events.publish(SessionEvent.Compaction.Failed, {
-        sessionID: input.sessionID,
-        messageID,
-        timestamp: yield* DateTime.now,
-        reason: "auto",
-        ...(usage ? spent : {}),
-      })
-      return false
-    }
-    failures.delete(input.sessionID)
-    yield* dependencies.events.publish(SessionEvent.Compaction.Ended, {
-      sessionID: input.sessionID,
-      messageID,
-      timestamp: yield* DateTime.now,
-      reason: "auto",
-      text: summary,
-      recent: selected.recent,
-      ...spent,
-    })
-    return true
+    return yield* Effect.uninterruptibleMask((restore) =>
+      Effect.gen(function* () {
+        const messageID = SessionMessage.ID.create()
+        yield* dependencies.events.publish(SessionEvent.Compaction.Started, {
+          sessionID: input.sessionID,
+          messageID,
+          timestamp: yield* DateTime.now,
+          reason: "auto",
+        })
+        const chunks: string[] = []
+        let attempted = false
+        let failed = false
+        let usage: Usage | undefined
+        const summarized = yield* restore(
+          Effect.gen(function* () {
+            // Started listeners may await while a linked session stops the root run.
+            if (yield* dependencies.guard.stopped(input.sessionID)) return false
+            return yield* Effect.suspend(() => {
+              attempted = true
+              return dependencies.llm
+                .stream(
+                  LLM.request({
+                    model: input.model,
+                    messages: [Message.user(summaryPrompt)],
+                    tools: [],
+                    generation: { maxTokens: summaryOutput },
+                    // The summary replaces this history, so nothing would read a cache write of it back.
+                    cache: "none",
+                  }),
+                )
+                .pipe(
+                  Stream.runForEach((event) => {
+                    if (LLMEvent.is.providerError(event)) failed = true
+                    if (LLMEvent.is.textDelta(event)) chunks.push(event.text)
+                    if (LLMEvent.is.stepFinish(event)) usage = event.usage
+                    return Effect.void
+                  }),
+                  Effect.as(true),
+                )
+            })
+          }),
+        ).pipe(
+          Effect.catchTag("LLM.Error", () => Effect.succeed(false)),
+          Effect.exit,
+        )
+        const summary = chunks.join("")
+        const tokens = stepTokens(usage)
+        const spend = SessionRunnerModel.spendStep(
+          input.model,
+          { tokens, providerMetadata: usage?.providerMetadata, incomplete: usage === undefined },
+          { continues: true, patched: false },
+        )
+        const used = tokens.input + tokens.output + tokens.reasoning + tokens.cache.read + tokens.cache.write
+        // A Vector Codium summary is billed to the account's plan, so it is never priced here; the guard still counts
+        // it as a Codium step through the spend's cost kind.
+        const spent = !attempted
+          ? {}
+          : Billing.isCodium(input.model.provider)
+            ? { cost: 0, unpriced: true, billing: "codium" as const, tokens }
+            : {
+                cost: spend.costUsd ?? 0,
+                ...(usage === undefined || (spend.costUsd === undefined && used > 0) ? { unpriced: true } : {}),
+                tokens,
+              }
+        const complete = summarized._tag === "Success" && summarized.value && !failed && summary.trim().length > 0
+        if (complete) failures.delete(input.sessionID)
+        if (!complete && attempted && summarized._tag === "Success")
+          failures.set(input.sessionID, requestSize(input.request))
+        const timestamp = yield* DateTime.now
+        // Persist the terminal event before record's live spend notification. Attempt both settlements even if a
+        // listener fails, and preserve the original stream cause after interruption or a defect.
+        const published = yield* (
+          complete
+            ? dependencies.events
+                .publish(SessionEvent.Compaction.Ended, {
+                  sessionID: input.sessionID,
+                  messageID,
+                  timestamp,
+                  reason: "auto",
+                  text: summary,
+                  recent: selected.recent,
+                  ...spent,
+                })
+                .pipe(Effect.asVoid)
+            : dependencies.events
+                .publish(SessionEvent.Compaction.Failed, {
+                  sessionID: input.sessionID,
+                  messageID,
+                  timestamp,
+                  reason: "auto",
+                  ...spent,
+                })
+                .pipe(Effect.asVoid)
+        ).pipe(Effect.exit)
+        // Replay projects the durable event; it never charges the process-global run a second time.
+        const recorded = yield* (attempted ? dependencies.guard.record(input.sessionID, spend) : Effect.void).pipe(
+          Effect.exit,
+        )
+        if (summarized._tag === "Failure") return yield* Effect.failCause(summarized.cause)
+        if (published._tag === "Failure") return yield* Effect.failCause(published.cause)
+        if (recorded._tag === "Failure") return yield* Effect.failCause(recorded.cause)
+        return complete
+      }),
+    )
   })
   const compactIfNeeded = Effect.fn("SessionCompaction.compactIfNeeded")(function* (input: Input) {
     if (!config.auto) return false

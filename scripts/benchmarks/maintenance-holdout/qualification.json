@@ -1,0 +1,2188 @@
+{
+  "kind": "maintenance-runtime-qualification-v1",
+  "status": "runtime_qualified",
+  "runtimeQualified": true,
+  "modelCalls": 0,
+  "expectedChecks": {
+    "api": 50,
+    "browser": 0,
+    "prerequisite": 4,
+    "total": 54
+  },
+  "positiveReference": {
+    "kind": "maintenance-native-gate-bridge-v1",
+    "verdict": "passed",
+    "sourceIntegrityStatus": "unchanged",
+    "checks": [
+      {
+        "name": "source-syntax",
+        "category": "prerequisite",
+        "status": "passed"
+      },
+      {
+        "name": "server-readiness",
+        "category": "prerequisite",
+        "status": "passed"
+      },
+      {
+        "name": "no-external-dependencies",
+        "category": "prerequisite",
+        "status": "passed"
+      },
+      {
+        "name": "legacy-health",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "legacy-list-accounts",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "legacy-get-account",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "legacy-list-usage",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "legacy-quote",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "legacy-create-account",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "legacy-record-usage",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "legacy-workspace-isolation",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "unknown-route",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "authentication-required",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "migration-v2-envelope",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "migration-exact-backup",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "migration-restart-idempotent",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "checksum-corruption-refused",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "future-version-refused",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "invalid-legacy-refused",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "stale-owner-lock-recovery",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "second-live-owner-refused",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "usage-exact-replay",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "usage-conflicting-replay",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "usage-input-validation",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "usage-utc-month-boundary",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "usage-concurrent-deduplication",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "account-plan-validation",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "invoice-snapshot-arithmetic",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "invoice-exact-replay",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "invoice-conflicting-replay",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "invoice-concurrent-period-uniqueness",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "reader-write-denied",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "billing-key-account-scope",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "key-management-owner-only",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "revocation-immediate",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "revoked-idempotent-replay-denied",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "revoked-inflight-body-denied",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "invoice-workspace-isolation",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "invoice-account-scope-isolation",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "late-usage-preserves-issued-invoice",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "invoice-restart-durability",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "credit-balance-arithmetic",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "credit-exact-replay",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "credit-conflicting-replay",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "overcredit-atomic-rejection",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "concurrent-credit-limit",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "credit-input-validation",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "credit-workspace-isolation",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "sdk-connected-workflows",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "sdk-strict-types",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "sdk-api-error-contract",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "cli-connected-workflows",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "cli-error-and-secret-contract",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "authored-source-unchanged",
+        "category": "prerequisite",
+        "status": "passed"
+      }
+    ],
+    "summary": {
+      "api": {
+        "passed": 50,
+        "failed": 0,
+        "not_run": 0
+      },
+      "browser": {
+        "passed": 0,
+        "failed": 0,
+        "not_run": 0
+      },
+      "prerequisite": {
+        "passed": 4,
+        "failed": 0,
+        "not_run": 0
+      }
+    },
+    "allIndependentRowsRetained": true,
+    "checksPassed": 54,
+    "checksTotal": 54
+  },
+  "workingSeed": {
+    "kind": "maintenance-native-gate-bridge-v1",
+    "verdict": "product_failure",
+    "sourceIntegrityStatus": "unchanged",
+    "checks": [
+      {
+        "name": "source-syntax",
+        "category": "prerequisite",
+        "status": "passed"
+      },
+      {
+        "name": "server-readiness",
+        "category": "prerequisite",
+        "status": "passed"
+      },
+      {
+        "name": "no-external-dependencies",
+        "category": "prerequisite",
+        "status": "passed"
+      },
+      {
+        "name": "legacy-health",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "legacy-list-accounts",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "legacy-get-account",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "legacy-list-usage",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "legacy-quote",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "legacy-create-account",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "legacy-record-usage",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "legacy-workspace-isolation",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "unknown-route",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "authentication-required",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "migration-v2-envelope",
+        "category": "api",
+        "status": "failed",
+        "error": "AssertionError: acceptance assertion failed"
+      },
+      {
+        "name": "migration-exact-backup",
+        "category": "api",
+        "status": "failed",
+        "error": "FileNotFoundError: fixture operation failed"
+      },
+      {
+        "name": "migration-restart-idempotent",
+        "category": "api",
+        "status": "failed",
+        "error": "FileNotFoundError: fixture operation failed"
+      },
+      {
+        "name": "checksum-corruption-refused",
+        "category": "api",
+        "status": "failed",
+        "error": "AssertionError: acceptance assertion failed"
+      },
+      {
+        "name": "future-version-refused",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "invalid-legacy-refused",
+        "category": "api",
+        "status": "failed",
+        "error": "AssertionError: unsafe startup served healthy data"
+      },
+      {
+        "name": "stale-owner-lock-recovery",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "second-live-owner-refused",
+        "category": "api",
+        "status": "failed",
+        "error": "AssertionError: unsafe startup served healthy data"
+      },
+      {
+        "name": "usage-exact-replay",
+        "category": "api",
+        "status": "failed",
+        "error": "AssertionError: acceptance assertion failed"
+      },
+      {
+        "name": "usage-conflicting-replay",
+        "category": "api",
+        "status": "failed",
+        "error": "AssertionError: acceptance assertion failed"
+      },
+      {
+        "name": "usage-input-validation",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "usage-utc-month-boundary",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "usage-concurrent-deduplication",
+        "category": "api",
+        "status": "failed",
+        "error": "AssertionError: acceptance assertion failed"
+      },
+      {
+        "name": "account-plan-validation",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "invoice-snapshot-arithmetic",
+        "category": "api",
+        "status": "failed",
+        "error": "AssertionError: invoice issue failed"
+      },
+      {
+        "name": "invoice-exact-replay",
+        "category": "api",
+        "status": "failed",
+        "error": "AssertionError: invoice issue failed"
+      },
+      {
+        "name": "invoice-conflicting-replay",
+        "category": "api",
+        "status": "failed",
+        "error": "AssertionError: invoice issue failed"
+      },
+      {
+        "name": "invoice-concurrent-period-uniqueness",
+        "category": "api",
+        "status": "failed",
+        "error": "ConnectionAbortedError: fixture operation failed"
+      },
+      {
+        "name": "reader-write-denied",
+        "category": "api",
+        "status": "failed",
+        "error": "AssertionError: acceptance assertion failed"
+      },
+      {
+        "name": "billing-key-account-scope",
+        "category": "api",
+        "status": "failed",
+        "error": "AssertionError: key creation failed"
+      },
+      {
+        "name": "key-management-owner-only",
+        "category": "api",
+        "status": "failed",
+        "error": "AssertionError: acceptance assertion failed"
+      },
+      {
+        "name": "revocation-immediate",
+        "category": "api",
+        "status": "failed",
+        "error": "AssertionError: key creation failed"
+      },
+      {
+        "name": "revoked-idempotent-replay-denied",
+        "category": "api",
+        "status": "failed",
+        "error": "AssertionError: key creation failed"
+      },
+      {
+        "name": "revoked-inflight-body-denied",
+        "category": "api",
+        "status": "failed",
+        "error": "AssertionError: key creation failed"
+      },
+      {
+        "name": "invoice-workspace-isolation",
+        "category": "api",
+        "status": "failed",
+        "error": "AssertionError: invoice issue failed"
+      },
+      {
+        "name": "invoice-account-scope-isolation",
+        "category": "api",
+        "status": "failed",
+        "error": "AssertionError: invoice issue failed"
+      },
+      {
+        "name": "late-usage-preserves-issued-invoice",
+        "category": "api",
+        "status": "failed",
+        "error": "AssertionError: invoice issue failed"
+      },
+      {
+        "name": "invoice-restart-durability",
+        "category": "api",
+        "status": "failed",
+        "error": "AssertionError: invoice issue failed"
+      },
+      {
+        "name": "credit-balance-arithmetic",
+        "category": "api",
+        "status": "failed",
+        "error": "AssertionError: invoice issue failed"
+      },
+      {
+        "name": "credit-exact-replay",
+        "category": "api",
+        "status": "failed",
+        "error": "AssertionError: invoice issue failed"
+      },
+      {
+        "name": "credit-conflicting-replay",
+        "category": "api",
+        "status": "failed",
+        "error": "AssertionError: invoice issue failed"
+      },
+      {
+        "name": "overcredit-atomic-rejection",
+        "category": "api",
+        "status": "failed",
+        "error": "AssertionError: invoice issue failed"
+      },
+      {
+        "name": "concurrent-credit-limit",
+        "category": "api",
+        "status": "failed",
+        "error": "AssertionError: invoice issue failed"
+      },
+      {
+        "name": "credit-input-validation",
+        "category": "api",
+        "status": "failed",
+        "error": "AssertionError: invoice issue failed"
+      },
+      {
+        "name": "credit-workspace-isolation",
+        "category": "api",
+        "status": "failed",
+        "error": "AssertionError: invoice issue failed"
+      },
+      {
+        "name": "sdk-connected-workflows",
+        "category": "api",
+        "status": "failed",
+        "error": "AssertionError: SDK workflows failed"
+      },
+      {
+        "name": "sdk-strict-types",
+        "category": "api",
+        "status": "failed",
+        "error": "AssertionError: strict SDK consumer rejected correct uses or accepted invalid uses"
+      },
+      {
+        "name": "sdk-api-error-contract",
+        "category": "api",
+        "status": "failed",
+        "error": "AssertionError: SDK error contract failed"
+      },
+      {
+        "name": "cli-connected-workflows",
+        "category": "api",
+        "status": "failed",
+        "error": "AssertionError: acceptance assertion failed"
+      },
+      {
+        "name": "cli-error-and-secret-contract",
+        "category": "api",
+        "status": "passed"
+      },
+      {
+        "name": "authored-source-unchanged",
+        "category": "prerequisite",
+        "status": "passed"
+      }
+    ],
+    "summary": {
+      "api": {
+        "passed": 16,
+        "failed": 34,
+        "not_run": 0
+      },
+      "browser": {
+        "passed": 0,
+        "failed": 0,
+        "not_run": 0
+      },
+      "prerequisite": {
+        "passed": 4,
+        "failed": 0,
+        "not_run": 0
+      }
+    },
+    "allIndependentRowsRetained": true,
+    "checksPassed": 20,
+    "checksTotal": 54
+  },
+  "damagedReferenceControls": [
+    {
+      "name": "checksum-bypass",
+      "target": "checksum-corruption-refused",
+      "rejected": true,
+      "trials": 1,
+      "observations": [
+        "rejected"
+      ],
+      "prerequisitesPassed": 4,
+      "allIndependentRowsRetained": true,
+      "report": {
+        "kind": "ledgerdesk-maintenance-gate-v1",
+        "mode": "bun-qualification",
+        "runtimeQualified": false,
+        "checks": [
+          {
+            "name": "source-syntax",
+            "scope": "prerequisite",
+            "passed": true
+          },
+          {
+            "name": "server-readiness",
+            "scope": "prerequisite",
+            "passed": true
+          },
+          {
+            "name": "no-external-dependencies",
+            "scope": "prerequisite",
+            "passed": true
+          },
+          {
+            "name": "legacy-health",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "legacy-list-accounts",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "legacy-get-account",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "legacy-list-usage",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "legacy-quote",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "legacy-create-account",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "legacy-record-usage",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "legacy-workspace-isolation",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "unknown-route",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "authentication-required",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "migration-v2-envelope",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "migration-exact-backup",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "migration-restart-idempotent",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "checksum-corruption-refused",
+            "scope": "business",
+            "passed": false,
+            "error": "AssertionError: unsafe startup served healthy data"
+          },
+          {
+            "name": "future-version-refused",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "invalid-legacy-refused",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "stale-owner-lock-recovery",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "second-live-owner-refused",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "usage-exact-replay",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "usage-conflicting-replay",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "usage-input-validation",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "usage-utc-month-boundary",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "usage-concurrent-deduplication",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "account-plan-validation",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "invoice-snapshot-arithmetic",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "invoice-exact-replay",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "invoice-conflicting-replay",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "invoice-concurrent-period-uniqueness",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "reader-write-denied",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "billing-key-account-scope",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "key-management-owner-only",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "revocation-immediate",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "revoked-idempotent-replay-denied",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "revoked-inflight-body-denied",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "invoice-workspace-isolation",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "invoice-account-scope-isolation",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "late-usage-preserves-issued-invoice",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "invoice-restart-durability",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "credit-balance-arithmetic",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "credit-exact-replay",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "credit-conflicting-replay",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "overcredit-atomic-rejection",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "concurrent-credit-limit",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "credit-input-validation",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "credit-workspace-isolation",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "sdk-connected-workflows",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "sdk-strict-types",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "sdk-api-error-contract",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "cli-connected-workflows",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "cli-error-and-secret-contract",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "authored-source-unchanged",
+            "scope": "prerequisite",
+            "passed": true
+          }
+        ],
+        "checksTotal": 54,
+        "checksPassed": 53,
+        "businessTotal": 50,
+        "businessPassed": 49,
+        "prerequisitesTotal": 4,
+        "prerequisitesPassed": 4,
+        "passed": false,
+        "sourceUnchanged": true,
+        "sourceSha256": {
+          "app.mjs": "c3d151b5f4f8f5b7bc71d493292c8848e782a7c1192c127812ebf7a6ca666559",
+          "cli.mjs": "fae4685f61611ed5dbf1d67e9ae0ae4ee9cb5f4257f89fe16d0ff3f270f631ba",
+          "package.json": "7c40bd752eaf5b1c50112bc01f4cf05f17f192f9ff087376f6522da12ff4a50d",
+          "sdk.d.mts": "048d7017cfb934b618517775536236bef0db7b9a4b1276c96ac962793b162866",
+          "sdk.mjs": "3b2e52a15ed80bd3499e6870e3fe48d540e339d0915436848d09d60332f86f60"
+        },
+        "seedPassesAreNotForcedToZero": true,
+        "providerCalls": 0
+      },
+      "damagedSourceSha256": "c3d151b5f4f8f5b7bc71d493292c8848e782a7c1192c127812ebf7a6ca666559"
+    },
+    {
+      "name": "credit-cap-bypass",
+      "target": "overcredit-atomic-rejection",
+      "rejected": true,
+      "trials": 1,
+      "observations": [
+        "rejected"
+      ],
+      "prerequisitesPassed": 4,
+      "allIndependentRowsRetained": true,
+      "report": {
+        "kind": "ledgerdesk-maintenance-gate-v1",
+        "mode": "bun-qualification",
+        "runtimeQualified": false,
+        "checks": [
+          {
+            "name": "source-syntax",
+            "scope": "prerequisite",
+            "passed": true
+          },
+          {
+            "name": "server-readiness",
+            "scope": "prerequisite",
+            "passed": true
+          },
+          {
+            "name": "no-external-dependencies",
+            "scope": "prerequisite",
+            "passed": true
+          },
+          {
+            "name": "legacy-health",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "legacy-list-accounts",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "legacy-get-account",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "legacy-list-usage",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "legacy-quote",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "legacy-create-account",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "legacy-record-usage",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "legacy-workspace-isolation",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "unknown-route",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "authentication-required",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "migration-v2-envelope",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "migration-exact-backup",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "migration-restart-idempotent",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "checksum-corruption-refused",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "future-version-refused",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "invalid-legacy-refused",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "stale-owner-lock-recovery",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "second-live-owner-refused",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "usage-exact-replay",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "usage-conflicting-replay",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "usage-input-validation",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "usage-utc-month-boundary",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "usage-concurrent-deduplication",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "account-plan-validation",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "invoice-snapshot-arithmetic",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "invoice-exact-replay",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "invoice-conflicting-replay",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "invoice-concurrent-period-uniqueness",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "reader-write-denied",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "billing-key-account-scope",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "key-management-owner-only",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "revocation-immediate",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "revoked-idempotent-replay-denied",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "revoked-inflight-body-denied",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "invoice-workspace-isolation",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "invoice-account-scope-isolation",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "late-usage-preserves-issued-invoice",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "invoice-restart-durability",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "credit-balance-arithmetic",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "credit-exact-replay",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "credit-conflicting-replay",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "overcredit-atomic-rejection",
+            "scope": "business",
+            "passed": false,
+            "error": "AssertionError: acceptance assertion failed"
+          },
+          {
+            "name": "concurrent-credit-limit",
+            "scope": "business",
+            "passed": false,
+            "error": "AssertionError: acceptance assertion failed"
+          },
+          {
+            "name": "credit-input-validation",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "credit-workspace-isolation",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "sdk-connected-workflows",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "sdk-strict-types",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "sdk-api-error-contract",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "cli-connected-workflows",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "cli-error-and-secret-contract",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "authored-source-unchanged",
+            "scope": "prerequisite",
+            "passed": true
+          }
+        ],
+        "checksTotal": 54,
+        "checksPassed": 52,
+        "businessTotal": 50,
+        "businessPassed": 48,
+        "prerequisitesTotal": 4,
+        "prerequisitesPassed": 4,
+        "passed": false,
+        "sourceUnchanged": true,
+        "sourceSha256": {
+          "app.mjs": "b9fbbc6a20bea0bb4f3a290095ab54eb730e9b4a29cca5ded446b9432756afc1",
+          "cli.mjs": "fae4685f61611ed5dbf1d67e9ae0ae4ee9cb5f4257f89fe16d0ff3f270f631ba",
+          "package.json": "7c40bd752eaf5b1c50112bc01f4cf05f17f192f9ff087376f6522da12ff4a50d",
+          "sdk.d.mts": "048d7017cfb934b618517775536236bef0db7b9a4b1276c96ac962793b162866",
+          "sdk.mjs": "3b2e52a15ed80bd3499e6870e3fe48d540e339d0915436848d09d60332f86f60"
+        },
+        "seedPassesAreNotForcedToZero": true,
+        "providerCalls": 0
+      },
+      "damagedSourceSha256": "b9fbbc6a20bea0bb4f3a290095ab54eb730e9b4a29cca5ded446b9432756afc1"
+    },
+    {
+      "name": "inflight-revocation",
+      "target": "revoked-inflight-body-denied",
+      "rejected": true,
+      "trials": 3,
+      "observations": [
+        "rejected",
+        "rejected",
+        "rejected"
+      ],
+      "prerequisitesPassed": 4,
+      "allIndependentRowsRetained": true,
+      "report": {
+        "kind": "ledgerdesk-maintenance-gate-v1",
+        "mode": "bun-qualification",
+        "runtimeQualified": false,
+        "checks": [
+          {
+            "name": "source-syntax",
+            "scope": "prerequisite",
+            "passed": true
+          },
+          {
+            "name": "server-readiness",
+            "scope": "prerequisite",
+            "passed": true
+          },
+          {
+            "name": "no-external-dependencies",
+            "scope": "prerequisite",
+            "passed": true
+          },
+          {
+            "name": "legacy-health",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "legacy-list-accounts",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "legacy-get-account",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "legacy-list-usage",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "legacy-quote",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "legacy-create-account",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "legacy-record-usage",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "legacy-workspace-isolation",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "unknown-route",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "authentication-required",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "migration-v2-envelope",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "migration-exact-backup",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "migration-restart-idempotent",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "checksum-corruption-refused",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "future-version-refused",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "invalid-legacy-refused",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "stale-owner-lock-recovery",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "second-live-owner-refused",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "usage-exact-replay",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "usage-conflicting-replay",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "usage-input-validation",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "usage-utc-month-boundary",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "usage-concurrent-deduplication",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "account-plan-validation",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "invoice-snapshot-arithmetic",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "invoice-exact-replay",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "invoice-conflicting-replay",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "invoice-concurrent-period-uniqueness",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "reader-write-denied",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "billing-key-account-scope",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "key-management-owner-only",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "revocation-immediate",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "revoked-idempotent-replay-denied",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "revoked-inflight-body-denied",
+            "scope": "business",
+            "passed": false,
+            "error": "AssertionError: acceptance assertion failed"
+          },
+          {
+            "name": "invoice-workspace-isolation",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "invoice-account-scope-isolation",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "late-usage-preserves-issued-invoice",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "invoice-restart-durability",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "credit-balance-arithmetic",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "credit-exact-replay",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "credit-conflicting-replay",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "overcredit-atomic-rejection",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "concurrent-credit-limit",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "credit-input-validation",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "credit-workspace-isolation",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "sdk-connected-workflows",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "sdk-strict-types",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "sdk-api-error-contract",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "cli-connected-workflows",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "cli-error-and-secret-contract",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "authored-source-unchanged",
+            "scope": "prerequisite",
+            "passed": true
+          }
+        ],
+        "checksTotal": 54,
+        "checksPassed": 53,
+        "businessTotal": 50,
+        "businessPassed": 49,
+        "prerequisitesTotal": 4,
+        "prerequisitesPassed": 4,
+        "passed": false,
+        "sourceUnchanged": true,
+        "sourceSha256": {
+          "app.mjs": "5addd0eadd45d50abdc0366e1f9229fc50411d73a1d20ea57d3ee28e7fc43da3",
+          "cli.mjs": "fae4685f61611ed5dbf1d67e9ae0ae4ee9cb5f4257f89fe16d0ff3f270f631ba",
+          "package.json": "7c40bd752eaf5b1c50112bc01f4cf05f17f192f9ff087376f6522da12ff4a50d",
+          "sdk.d.mts": "048d7017cfb934b618517775536236bef0db7b9a4b1276c96ac962793b162866",
+          "sdk.mjs": "3b2e52a15ed80bd3499e6870e3fe48d540e339d0915436848d09d60332f86f60"
+        },
+        "seedPassesAreNotForcedToZero": true,
+        "providerCalls": 0
+      },
+      "damagedSourceSha256": "5addd0eadd45d50abdc0366e1f9229fc50411d73a1d20ea57d3ee28e7fc43da3"
+    },
+    {
+      "name": "invoice-recalculation",
+      "target": "late-usage-preserves-issued-invoice",
+      "rejected": true,
+      "trials": 1,
+      "observations": [
+        "rejected"
+      ],
+      "prerequisitesPassed": 4,
+      "allIndependentRowsRetained": true,
+      "report": {
+        "kind": "ledgerdesk-maintenance-gate-v1",
+        "mode": "bun-qualification",
+        "runtimeQualified": false,
+        "checks": [
+          {
+            "name": "source-syntax",
+            "scope": "prerequisite",
+            "passed": true
+          },
+          {
+            "name": "server-readiness",
+            "scope": "prerequisite",
+            "passed": true
+          },
+          {
+            "name": "no-external-dependencies",
+            "scope": "prerequisite",
+            "passed": true
+          },
+          {
+            "name": "legacy-health",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "legacy-list-accounts",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "legacy-get-account",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "legacy-list-usage",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "legacy-quote",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "legacy-create-account",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "legacy-record-usage",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "legacy-workspace-isolation",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "unknown-route",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "authentication-required",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "migration-v2-envelope",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "migration-exact-backup",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "migration-restart-idempotent",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "checksum-corruption-refused",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "future-version-refused",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "invalid-legacy-refused",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "stale-owner-lock-recovery",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "second-live-owner-refused",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "usage-exact-replay",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "usage-conflicting-replay",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "usage-input-validation",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "usage-utc-month-boundary",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "usage-concurrent-deduplication",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "account-plan-validation",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "invoice-snapshot-arithmetic",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "invoice-exact-replay",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "invoice-conflicting-replay",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "invoice-concurrent-period-uniqueness",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "reader-write-denied",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "billing-key-account-scope",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "key-management-owner-only",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "revocation-immediate",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "revoked-idempotent-replay-denied",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "revoked-inflight-body-denied",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "invoice-workspace-isolation",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "invoice-account-scope-isolation",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "late-usage-preserves-issued-invoice",
+            "scope": "business",
+            "passed": false,
+            "error": "AssertionError: acceptance assertion failed"
+          },
+          {
+            "name": "invoice-restart-durability",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "credit-balance-arithmetic",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "credit-exact-replay",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "credit-conflicting-replay",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "overcredit-atomic-rejection",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "concurrent-credit-limit",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "credit-input-validation",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "credit-workspace-isolation",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "sdk-connected-workflows",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "sdk-strict-types",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "sdk-api-error-contract",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "cli-connected-workflows",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "cli-error-and-secret-contract",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "authored-source-unchanged",
+            "scope": "prerequisite",
+            "passed": true
+          }
+        ],
+        "checksTotal": 54,
+        "checksPassed": 53,
+        "businessTotal": 50,
+        "businessPassed": 49,
+        "prerequisitesTotal": 4,
+        "prerequisitesPassed": 4,
+        "passed": false,
+        "sourceUnchanged": true,
+        "sourceSha256": {
+          "app.mjs": "82b4d39823f0b8e4a8d8059c131d8cfb1be3bc4022b508629e33d041a0e79188",
+          "cli.mjs": "fae4685f61611ed5dbf1d67e9ae0ae4ee9cb5f4257f89fe16d0ff3f270f631ba",
+          "package.json": "7c40bd752eaf5b1c50112bc01f4cf05f17f192f9ff087376f6522da12ff4a50d",
+          "sdk.d.mts": "048d7017cfb934b618517775536236bef0db7b9a4b1276c96ac962793b162866",
+          "sdk.mjs": "3b2e52a15ed80bd3499e6870e3fe48d540e339d0915436848d09d60332f86f60"
+        },
+        "seedPassesAreNotForcedToZero": true,
+        "providerCalls": 0
+      },
+      "damagedSourceSha256": "82b4d39823f0b8e4a8d8059c131d8cfb1be3bc4022b508629e33d041a0e79188"
+    },
+    {
+      "name": "revoked-replay",
+      "target": "revoked-idempotent-replay-denied",
+      "rejected": true,
+      "trials": 1,
+      "observations": [
+        "rejected"
+      ],
+      "prerequisitesPassed": 4,
+      "allIndependentRowsRetained": true,
+      "report": {
+        "kind": "ledgerdesk-maintenance-gate-v1",
+        "mode": "bun-qualification",
+        "runtimeQualified": false,
+        "checks": [
+          {
+            "name": "source-syntax",
+            "scope": "prerequisite",
+            "passed": true
+          },
+          {
+            "name": "server-readiness",
+            "scope": "prerequisite",
+            "passed": true
+          },
+          {
+            "name": "no-external-dependencies",
+            "scope": "prerequisite",
+            "passed": true
+          },
+          {
+            "name": "legacy-health",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "legacy-list-accounts",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "legacy-get-account",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "legacy-list-usage",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "legacy-quote",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "legacy-create-account",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "legacy-record-usage",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "legacy-workspace-isolation",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "unknown-route",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "authentication-required",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "migration-v2-envelope",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "migration-exact-backup",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "migration-restart-idempotent",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "checksum-corruption-refused",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "future-version-refused",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "invalid-legacy-refused",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "stale-owner-lock-recovery",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "second-live-owner-refused",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "usage-exact-replay",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "usage-conflicting-replay",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "usage-input-validation",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "usage-utc-month-boundary",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "usage-concurrent-deduplication",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "account-plan-validation",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "invoice-snapshot-arithmetic",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "invoice-exact-replay",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "invoice-conflicting-replay",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "invoice-concurrent-period-uniqueness",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "reader-write-denied",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "billing-key-account-scope",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "key-management-owner-only",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "revocation-immediate",
+            "scope": "business",
+            "passed": false,
+            "error": "AssertionError: acceptance assertion failed"
+          },
+          {
+            "name": "revoked-idempotent-replay-denied",
+            "scope": "business",
+            "passed": false,
+            "error": "AssertionError: acceptance assertion failed"
+          },
+          {
+            "name": "revoked-inflight-body-denied",
+            "scope": "business",
+            "passed": false,
+            "error": "AssertionError: acceptance assertion failed"
+          },
+          {
+            "name": "invoice-workspace-isolation",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "invoice-account-scope-isolation",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "late-usage-preserves-issued-invoice",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "invoice-restart-durability",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "credit-balance-arithmetic",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "credit-exact-replay",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "credit-conflicting-replay",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "overcredit-atomic-rejection",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "concurrent-credit-limit",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "credit-input-validation",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "credit-workspace-isolation",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "sdk-connected-workflows",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "sdk-strict-types",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "sdk-api-error-contract",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "cli-connected-workflows",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "cli-error-and-secret-contract",
+            "scope": "business",
+            "passed": true
+          },
+          {
+            "name": "authored-source-unchanged",
+            "scope": "prerequisite",
+            "passed": true
+          }
+        ],
+        "checksTotal": 54,
+        "checksPassed": 51,
+        "businessTotal": 50,
+        "businessPassed": 47,
+        "prerequisitesTotal": 4,
+        "prerequisitesPassed": 4,
+        "passed": false,
+        "sourceUnchanged": true,
+        "sourceSha256": {
+          "app.mjs": "04d936852eaf49d2b38d894356198b7e727e78f574f82d52701e83ab4b64d2a4",
+          "cli.mjs": "fae4685f61611ed5dbf1d67e9ae0ae4ee9cb5f4257f89fe16d0ff3f270f631ba",
+          "package.json": "7c40bd752eaf5b1c50112bc01f4cf05f17f192f9ff087376f6522da12ff4a50d",
+          "sdk.d.mts": "048d7017cfb934b618517775536236bef0db7b9a4b1276c96ac962793b162866",
+          "sdk.mjs": "3b2e52a15ed80bd3499e6870e3fe48d540e339d0915436848d09d60332f86f60"
+        },
+        "seedPassesAreNotForcedToZero": true,
+        "providerCalls": 0
+      },
+      "damagedSourceSha256": "04d936852eaf49d2b38d894356198b7e727e78f574f82d52701e83ab4b64d2a4"
+    }
+  ],
+  "originalRequirementsUnchanged": true,
+  "privateReferenceOutsideTaskRoot": true,
+  "actualSeedBusinessPasses": 16,
+  "seedZeroRequired": false,
+  "sourceFreezeAggregateSha256": "c45c883bf4467fff724c9498e72813450b92a172527e3cc39f7d288be1492f2d",
+  "privateProofSha256": "2c37d516a6bc02b521da8238a024741a8b0126492fb5c8e0ac514438d54fba47"
+}

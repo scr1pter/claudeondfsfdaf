@@ -123,6 +123,7 @@ interface Track {
   name: Name
   sessionID: SessionID
   price?: ReviewPrice // set when this session's model is priced and the review has a dollar cap
+  cost?: Provider.Model["cost"] // actual invocation rates, including its long-context tiers
   cap: number
   steps: number
   seen: Set<string>
@@ -218,8 +219,11 @@ export const run: (
     reservations.set(name, { turn, finalize })
     return true
   }
-  const nextCost = (track: Pick<Track, "context" | "cached" | "price">) =>
-    track.price ? nextStepCostUsd(track.context + NEXT_STEP_SLACK, track.price, track.cached) : 0
+  const nextCost = (track: Pick<Track, "context" | "cached" | "price" | "cost">) => {
+    const cost = track.cost && Session.costAt(track.cost, track.context + NEXT_STEP_SLACK)
+    const price = track.price && ((cost && SpendGuard.priceOf(cost)) ?? track.price)
+    return price ? nextStepCostUsd(track.context + NEXT_STEP_SLACK, price, track.cached) : 0
+  }
   // Usage is settled by the processor lease before retry/continuation admission. Events only report progress.
   const identities = new Map<string, SessionV1.Assistant>()
   const unsubscribe = yield* events.listen((event) => {
@@ -431,6 +435,7 @@ export const run: (
             track.denied = true
             return
           }
+          track.cost = request.model.cost
           const estimate = nextCost(track)
           if (!reserve(track.name, estimate, track.finalizing ? 0 : estimate)) {
             track.stop = "budget"

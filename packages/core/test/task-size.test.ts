@@ -550,7 +550,7 @@ describe("TaskSize helpers", () => {
   // When to delegate is the subagent policy's, sent once in the system prompt; the Standard note does not repeat it.
   test("the Standard note leaves delegation to the policy; Light launches none", () => {
     expect(TaskSize.note("standard", { escalate: false, judge: false })).toBe(
-      "<task_size>Standard request: Track only substantial milestones or a user-requested plan.</task_size>",
+      "<task_size>Standard request: Track only substantial milestones or a user-requested plan, not routine tool calls.</task_size>",
     )
     expect(TaskSize.note("light", { escalate: false, judge: false })).toBe(
       "<task_size>Light request: do it directly, without a to-do list, and launch no subagents.</task_size>",

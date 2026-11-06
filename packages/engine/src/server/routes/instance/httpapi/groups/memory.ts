@@ -734,8 +734,8 @@ export const MemoryResearchSourceText = Schema.Struct({
 
 export const MemoryResearchExportQuery = Schema.Struct({
   ...WorkspaceRoutingQueryFields,
-  /** markdown (the default): the report with a bibliography. json: the run, its sources, notes and report. */
-  format: Schema.optional(Schema.Literals(["markdown", "json"])),
+  /** Markdown (default), Word or PDF: the report and bibliography. JSON: the run and all its saved evidence. */
+  format: Schema.optional(Schema.Literals(["markdown", "json", "docx", "pdf"])),
 })
 
 // Memory is the owner's own: every route is owner-only (ServerAuth), and a guest never reads it.
@@ -1331,14 +1331,23 @@ export const MemoryApi = HttpApi.make("memory")
         HttpApiEndpoint.get("exportResearch", `${root}/research/:runID/export`, {
           params: { runID: ResearchRunID },
           query: MemoryResearchExportQuery,
-          success: Schema.String.pipe(HttpApiSchema.asText({ contentType: "text/markdown" })),
+          success: Schema.Union([
+            Schema.String.pipe(HttpApiSchema.asText({ contentType: "text/markdown" })),
+            Schema.String.pipe(HttpApiSchema.asText({ contentType: "application/json" })),
+            Schema.Uint8Array.pipe(HttpApiSchema.asUint8Array({ contentType: "application/pdf" })),
+            Schema.Uint8Array.pipe(
+              HttpApiSchema.asUint8Array({
+                contentType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+              }),
+            ),
+          ]),
           error: MemoryApiError,
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "memory.research.export",
             summary: "Export a research run",
             description:
-              "The run as an attachment: the report with a bibliography as Markdown, or with `format=json` the run, its queries, sources, notes and report.",
+              "The run as an attachment: the report with a bibliography as Markdown (default), Word (`format=docx`) or PDF (`format=pdf`). JSON contains the run, queries, sources, notes and report. Word and PDF are generated locally from saved text; no image or URL is fetched.",
           }),
         ),
         HttpApiEndpoint.get("researchSource", `${root}/research/:runID/sources/:sourceID`, {

@@ -115,6 +115,68 @@ describe("readPage", () => {
 })
 
 describe("observePage", () => {
+  test("leaves geometry unknown when the DOM has no layout engine", () => {
+    page('<body><div style="width:548px">Wide content</div></body>')
+    expect(inPage(observePage)(window, { maxText: 100, maxElements: 10 }).layout).toBeUndefined()
+  })
+
+  test("reports focused password metadata without values or moving focus", () => {
+    page(
+      '<body><label>Password <input id="secret" type="password" value="private-focus-fixture"></label><button>Next</button></body>',
+    )
+    const field = document.getElementById("secret") as HTMLInputElement
+    field.focus()
+    const attributes = field.outerHTML
+    const observed = inPage(observePage)(window, { maxText: 100, maxElements: 50 })
+    expect(observed.focus).toEqual({
+      documentHasFocus: document.hasFocus(),
+      activeKind: "control",
+      focusedRef: "ref_1",
+      tag: "input",
+      type: "password",
+      tabIndex: 0,
+    })
+    expect(document.activeElement).toBe(field)
+    expect(field.outerHTML).toBe(attributes)
+    expect(JSON.stringify(observed)).not.toContain("private-focus-fixture")
+    expect(inPage(readPage)(window, { maxBytes: 1000 }).html).not.toContain("private-focus-fixture")
+    expect(document.activeElement).toBe(field)
+  })
+
+  test("keeps focus metadata when the active control is outside the bounded ref inventory", () => {
+    page('<body><button>First</button><input id="last" type="text"></body>')
+    ;(document.getElementById("last") as HTMLInputElement).focus()
+    const observed = inPage(observePage)(window, { maxText: 100, maxElements: 1 })
+    expect(observed.elements).toHaveLength(1)
+    expect(observed.focus).toMatchObject({ activeKind: "control", tag: "input", type: "text", tabIndex: 0 })
+    expect(observed.focus?.focusedRef).toBeUndefined()
+  })
+
+  test("follows focus into an open shadow root and reports body separately from other focusable nodes", () => {
+    page('<body tabindex="-1"><div id="host"></div><span id="other" tabindex="0">Note</span></body>')
+    const root = document.getElementById("host")!.attachShadow({ mode: "open" })
+    root.innerHTML = '<input type="text" aria-label="Shadow field">'
+    const field = root.querySelector("input")!
+    field.focus()
+    expect(inPage(observePage)(window, { maxText: 100, maxElements: 50 }).focus).toMatchObject({
+      activeKind: "control",
+      focusedRef: "ref_1",
+      tag: "input",
+    })
+    expect(root.activeElement).toBe(field)
+    ;(document.getElementById("other") as HTMLElement).focus()
+    expect(inPage(observePage)(window, { maxText: 100, maxElements: 50 }).focus).toMatchObject({
+      activeKind: "other",
+      tag: "span",
+      tabIndex: 0,
+    })
+    document.body.focus()
+    expect(inPage(observePage)(window, { maxText: 100, maxElements: 50 }).focus).toMatchObject({
+      activeKind: "body",
+      tag: "body",
+    })
+  })
+
   test("names the controls with ref handles, open shadow roots included", () => {
     page(`<html><head><title>Search</title></head><body>
       <p>Find studies about heat pumps.</p>

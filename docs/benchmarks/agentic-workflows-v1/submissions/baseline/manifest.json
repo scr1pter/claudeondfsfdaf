@@ -1,0 +1,1395 @@
+{
+  "kind": "workflow-runner-original-baseline-source-publication",
+  "atUtc": "2026-11-02T01:54:00.112431+00:00",
+  "scope": "Original synthetic Workflow Runner application source, never normalized blind-review copies",
+  "bytePreservation": "Every included source byte is copied from its original paid attempt archive; source/** Git attributes disable line-ending normalization. No application edits, renaming, or formatter changes.",
+  "exclusionPolicy": {
+    "exactTopLevelPrefix": ".verification/",
+    "rationale": "Inspected generated verification databases, screenshots, process markers, browser reports and test runtime artifacts; not authored application source. Authored tests and browser verification scripts outside this prefix are retained.",
+    "genericNestedBuildDistExclusions": false,
+    "excludedContentsPublished": false,
+    "excludedHashesPublished": true,
+    "otherExclusions": []
+  },
+  "scan": {
+    "includedSourceFilesScanned": 46,
+    "blockedFindings": 0,
+    "categories": [
+      "absoluteWindowsUserPath",
+      "providerKey",
+      "privateKey",
+      "credentialAssignment",
+      "companyDataIdentifier"
+    ],
+    "method": "Byte inventory plus UTF-8 source pattern scan and manual inspection of file inventory and authored browser/test scripts; no runtime artifact content published",
+    "limitations": "Pattern scanning and inspection do not constitute a formal secret audit; excluded runtime contents and credentials are not copied."
+  },
+  "executionByPublicationAuthor": {
+    "bunRuns": 0,
+    "providerCalls": 0,
+    "modelCalls": 0,
+    "applicationTestsRun": 0
+  },
+  "taskAndEvaluator": {
+    "agentVisibleTaskSha256": "26019f3d4a882cd5418dc01b1923c73b9dcf60452054fe8df2a2a3c387d05f4b",
+    "originalTaskSha256": "722a00ba024522e2e88aee585f778dad206b115a30a8d1caded38681cf7cd761",
+    "originalInstrumentGitRevision": "44f93362a683d39198ead037beb639abc828fb63",
+    "originalBrowserCheckSha256": "c59ce38fc7d08a8585713721875dc56e695351a64dcc042f686ead75387bd30b",
+    "correctedTaskSha256": "bc418928e76adaebed02f7de9339d23c881c0d10bca33adb7b4b5002b6de7547",
+    "correctedInstrumentGitRevision": "c027c80637c993fb9e873407403f2c4f6a1333c3",
+    "correctedRootManifestSha256": "26627463d87bb6a251ebdf50e91efea43084fb8949095b966af458841717a62f",
+    "apiEvaluatorSha256": "ce4837bff913f1670a6c1f7d2b2bd7323cc667b422aee2b4ae343bbc21c93cc4",
+    "correctedBrowserCheckSha256": "d68122e788b73e7e70b541a9c9807ae3b6962d0fe496987fb49243558caa0562",
+    "correctedReevaluationReport": "../../workflow-runner/instrument-revisions/postlaunch-keyboard-v2/unchanged-candidate-reevaluations.json"
+  },
+  "interpretation": "Corrected gate outcomes apply to the original unchanged archives. Published source excludes explicitly inventoried generated runtime artifacts and was not rerun by the publication author. File counts are provenance, not quality or cost evidence; original charges and repair costs remain retained.",
+  "submissions": [
+    {
+      "id": "codex-first",
+      "runtime": "codex",
+      "attempt": "attempt-00",
+      "originalArchiveId": "aw1/codex/attempts/attempt-00/source",
+      "sourceDirectory": "codex-first/source",
+      "originalArchiveFileCount": 235,
+      "includedFileCount": 17,
+      "excludedFileCount": 218,
+      "originalArchiveInventorySha256": "f433bdf5eca53da623b9224f49b098c1086c786fef2614ae09b812a232bbdea1",
+      "publishedSourceInventorySha256": "5a32e82b6535380d75b845ca3e732c460d384c4dd67cb7c1b3ba89e3d431b6a8",
+      "includedFiles": {
+        ".gitignore": {
+          "sha256": "d589704b1d4b705c9f8c0b693ddea423b8759f0ef0f20e24dcbfebdc21034266",
+          "bytes": 56
+        },
+        "bun.lock": {
+          "sha256": "eda955f696bb697e9a9affc709ad224f1a14d3a5815943f69e4b0213eb5cce7d",
+          "bytes": 18539
+        },
+        "package.json": {
+          "sha256": "3f5042e5b6d12305c3c324dcc4bdc4a1242c4f3a67a47d63d92a21aa07767f6f",
+          "bytes": 492
+        },
+        "public/app.js": {
+          "sha256": "b9363535670892388aca8e6069f8ab5779e1439caac952e19dfc98681847e575",
+          "bytes": 12517
+        },
+        "public/index.html": {
+          "sha256": "b9f2b73dc2c3867cad37952a41d3b276cc8b1073c3695ae22e1e263227485d89",
+          "bytes": 6404
+        },
+        "public/styles.css": {
+          "sha256": "e441244022ae950edabf84233f3dcb39e8d7b2b18d31a465775116853cc7b56b",
+          "bytes": 18141
+        },
+        "README.md": {
+          "sha256": "0fb42cb14a34856aa4e4d5c3e542d9a0bb6cf500944639e07a022984b803fe6c",
+          "bytes": 3976
+        },
+        "scripts/build.ts": {
+          "sha256": "6e5c03f3e0ad72cb4c17ba1c23153212e460ef546cf64c8de28a62e4d98fbd04",
+          "bytes": 222
+        },
+        "scripts/verify-browser.mjs": {
+          "sha256": "861a83d6e53e16e0305510d8d54c2115c1124dfdb8bd084cc03c96a080b7dc4e",
+          "bytes": 11568
+        },
+        "server/index.ts": {
+          "sha256": "de773020e7b94fa2421c2fe2fe13c14c6eb7de91b9c8023695ccb73481606183",
+          "bytes": 4714
+        },
+        "server/runner.ts": {
+          "sha256": "90b243104d93327fa7bc8e191158e11f20ff38c4cddfa98d69fe85a7d1af8707",
+          "bytes": 20673
+        },
+        "server/worker.ts": {
+          "sha256": "3945469bc2db109e9dc413133d098b0ab57c6ec692828b7327a0e119ca6cc294",
+          "bytes": 1353
+        },
+        "sql/v1.sql": {
+          "sha256": "a382ea33b2632e20a135454e7f27204bbf493f30d27b3f1deb6f27fc54a5226f",
+          "bytes": 404
+        },
+        "TASK.md": {
+          "sha256": "26019f3d4a882cd5418dc01b1923c73b9dcf60452054fe8df2a2a3c387d05f4b",
+          "bytes": 9789
+        },
+        "tests/smoke.test.ts": {
+          "sha256": "583b038b08c50f77e18616267cae8668e50effc1317e36acc4d4c856d2ce8912",
+          "bytes": 903
+        },
+        "tests/workflows.test.ts": {
+          "sha256": "d21ad2ff4d9d4fcf5d5f3ecc263fe3589e9fcc575030ba3f9aa2ff1332a481c8",
+          "bytes": 22771
+        },
+        "tsconfig.json": {
+          "sha256": "b9d30bbc7a8767f319455b1b97f8ff850d49377e6e67f533c5fdf31e332d567a",
+          "bytes": 332
+        }
+      },
+      "excludedFiles": {
+        ".verification/browser/desktop-viewport.png": {
+          "sha256": "2dfdd82361ce2f67dee4bf07b5c410b8288d5029168259a52df92312130e29d5",
+          "bytes": 102095,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/browser/desktop.png": {
+          "sha256": "197ee120d2571e1ac108b7ce5a8a30476613ab42d0b3cdb90e4181bf3e124689",
+          "bytes": 134207,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/browser/mobile-viewport.png": {
+          "sha256": "5ca383560cf1ef640978dfaa02b0ba48f82009f33a8db00f3de78c004a105c88",
+          "bytes": 33338,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/browser/mobile.png": {
+          "sha256": "aa62e9329eb6ca494c6a9f21b0e4d557177a89756828dde311134eef6bb15c1e",
+          "bytes": 184180,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/browser/report-first-run.json": {
+          "sha256": "6e627c96e38964b59e66f01385d61f53c67d49b4789d1a8ff11e7d6ae140c5fb",
+          "bytes": 1332,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/browser/report.json": {
+          "sha256": "743441d0185096f119647577dbd03bf768d0e63ba86843e69e4270462822f199",
+          "bytes": 1272,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/browser-data/markers/03378481-bf51-4828-b7b0-fc8318c7e0ea.1.started.json": {
+          "sha256": "15d13fa8248f2419bba30d6df9d4f65779bb7ac5c847e3596bf2b2e5f6afc76d",
+          "bytes": 86,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/browser-data/markers/0b27bf3e-f1f8-43a4-b483-0a04d05a746e.1.finished.json": {
+          "sha256": "3d78730672c5ec3f1da1e473feb97aba3c98ba752ac7fcb57b5f48e49548e284",
+          "bytes": 14,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/browser-data/markers/0b27bf3e-f1f8-43a4-b483-0a04d05a746e.1.started.json": {
+          "sha256": "321b9ab7f0fecccb83aae26a18c91cdfbb0ac41ce4600a60d5bca057d0378a4a",
+          "bytes": 86,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/browser-data/markers/0b27bf3e-f1f8-43a4-b483-0a04d05a746e.2.finished.json": {
+          "sha256": "6041df3e9b345d68be886f995c452395674ea950cd3ca9992c13b64f3aa9cbd0",
+          "bytes": 14,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/browser-data/markers/0b27bf3e-f1f8-43a4-b483-0a04d05a746e.2.started.json": {
+          "sha256": "3c802d8816228dccb021256b45d6f3cb3aa0c769ec647d97e904f82867d0e0e3",
+          "bytes": 87,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/browser-data/markers/2903ab82-51c3-44bd-8780-a9c818f2b646.1.finished.json": {
+          "sha256": "6041df3e9b345d68be886f995c452395674ea950cd3ca9992c13b64f3aa9cbd0",
+          "bytes": 14,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/browser-data/markers/2903ab82-51c3-44bd-8780-a9c818f2b646.1.started.json": {
+          "sha256": "4daae22e07067785543ec64887655439683ee3a66f663aee9f71346dd1dfdef5",
+          "bytes": 87,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/browser-data/markers/2ac25b4a-7fab-4e59-94aa-b219a582fb62.1.finished.json": {
+          "sha256": "6041df3e9b345d68be886f995c452395674ea950cd3ca9992c13b64f3aa9cbd0",
+          "bytes": 14,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/browser-data/markers/2ac25b4a-7fab-4e59-94aa-b219a582fb62.1.started.json": {
+          "sha256": "d474b26339a59f2474a64f65b02ec23fca75755aa310de6fb018afe797032e93",
+          "bytes": 87,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/browser-data/markers/45683135-2c6f-47e5-8464-22c580c75577.1.started.json": {
+          "sha256": "8fcdc1a90ac197a58818b23447e1f1f6078da605935e435441603ad649178a79",
+          "bytes": 87,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/browser-data/markers/479f73a9-d974-4c51-b2ae-ac3d54f03ff9.1.finished.json": {
+          "sha256": "3d78730672c5ec3f1da1e473feb97aba3c98ba752ac7fcb57b5f48e49548e284",
+          "bytes": 14,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/browser-data/markers/479f73a9-d974-4c51-b2ae-ac3d54f03ff9.1.started.json": {
+          "sha256": "17dd08ef6ed44fba552fea67f547fc7b6fed90da2ff99702255065f9108c5c7c",
+          "bytes": 87,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/browser-data/markers/50fc589a-c30a-4ae5-9b78-e48031bc8f14.1.finished.json": {
+          "sha256": "6041df3e9b345d68be886f995c452395674ea950cd3ca9992c13b64f3aa9cbd0",
+          "bytes": 14,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/browser-data/markers/50fc589a-c30a-4ae5-9b78-e48031bc8f14.1.started.json": {
+          "sha256": "aebbeacaa834f83c5ec9ef5c1da0307efcf17944036cf44ca65c8897e8e68a8d",
+          "bytes": 86,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/browser-data/markers/900c06ab-d89f-43ae-bbe8-bbd766bcc630.1.finished.json": {
+          "sha256": "3d78730672c5ec3f1da1e473feb97aba3c98ba752ac7fcb57b5f48e49548e284",
+          "bytes": 14,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/browser-data/markers/900c06ab-d89f-43ae-bbe8-bbd766bcc630.1.started.json": {
+          "sha256": "11d753d995ba750f1dea06662c5720a219bc43d237627044cd05e6cc489d4a80",
+          "bytes": 85,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/browser-data/markers/900c06ab-d89f-43ae-bbe8-bbd766bcc630.2.finished.json": {
+          "sha256": "6041df3e9b345d68be886f995c452395674ea950cd3ca9992c13b64f3aa9cbd0",
+          "bytes": 14,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/browser-data/markers/900c06ab-d89f-43ae-bbe8-bbd766bcc630.2.started.json": {
+          "sha256": "4137f27961d2548473389cbe90df8e6868337b696bd9a9af224fd1d2b7acd5ea",
+          "bytes": 87,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/browser-data/markers/a9f12c7c-a4f4-4cbd-b827-e4cdb54e4d7a.1.finished.json": {
+          "sha256": "6041df3e9b345d68be886f995c452395674ea950cd3ca9992c13b64f3aa9cbd0",
+          "bytes": 14,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/browser-data/markers/a9f12c7c-a4f4-4cbd-b827-e4cdb54e4d7a.1.started.json": {
+          "sha256": "372ad03f81b5f4823ef5a24c4bd96258d560040583071f13cce7e97f99b35a3b",
+          "bytes": 87,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/browser-data/workflow.sqlite": {
+          "sha256": "40cf07c52bfaa52b334ef341456f970787f6dc701ffe18ad3c572cb5056dbd70",
+          "bytes": 4096,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/browser-data/workflow.sqlite-shm": {
+          "sha256": "ebc9f50d98d319200eda71a395712b1d2de11e7d77b24b8ecb50462d27b35038",
+          "bytes": 32768,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/browser-data/workflow.sqlite-wal": {
+          "sha256": "60a88a39e573e0e53f4cec801e2785f66de0b23107c8f1684ec70b1685246b36",
+          "bytes": 943512,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/browser-data-final/markers/119e5984-1a99-4be3-8688-038fdc8a0b48.1.finished.json": {
+          "sha256": "6041df3e9b345d68be886f995c452395674ea950cd3ca9992c13b64f3aa9cbd0",
+          "bytes": 14,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/browser-data-final/markers/119e5984-1a99-4be3-8688-038fdc8a0b48.1.started.json": {
+          "sha256": "1300d6c725994882aec641f2c361b54d20b3eb61775350b449a7ff598fa17cb9",
+          "bytes": 86,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/browser-data-final/markers/53413750-f3cd-4e84-9acf-12978e0a0f4c.1.finished.json": {
+          "sha256": "6041df3e9b345d68be886f995c452395674ea950cd3ca9992c13b64f3aa9cbd0",
+          "bytes": 14,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/browser-data-final/markers/53413750-f3cd-4e84-9acf-12978e0a0f4c.1.started.json": {
+          "sha256": "5c6cb0f725f274a779bd27c2388ea145c0a0c5501426bab48ef1d617e7847040",
+          "bytes": 86,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/browser-data-final/markers/6d91eac4-00ad-45ba-a801-9ff577f5131a.1.finished.json": {
+          "sha256": "3d78730672c5ec3f1da1e473feb97aba3c98ba752ac7fcb57b5f48e49548e284",
+          "bytes": 14,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/browser-data-final/markers/6d91eac4-00ad-45ba-a801-9ff577f5131a.1.started.json": {
+          "sha256": "99d3ec43f100dec3bb8e9bc1bf5e93f62d6b82c3918cf8ea3de029c30862ebd7",
+          "bytes": 87,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/browser-data-final/markers/99f85e32-c661-470f-97f3-d8bb7ddded88.1.finished.json": {
+          "sha256": "3d78730672c5ec3f1da1e473feb97aba3c98ba752ac7fcb57b5f48e49548e284",
+          "bytes": 14,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/browser-data-final/markers/99f85e32-c661-470f-97f3-d8bb7ddded88.1.started.json": {
+          "sha256": "612f87876ef1ef909f9122fdbc4662b7169351d0ca0bcd2e79faccb63eb98d3a",
+          "bytes": 87,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/browser-data-final/markers/99f85e32-c661-470f-97f3-d8bb7ddded88.2.finished.json": {
+          "sha256": "6041df3e9b345d68be886f995c452395674ea950cd3ca9992c13b64f3aa9cbd0",
+          "bytes": 14,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/browser-data-final/markers/99f85e32-c661-470f-97f3-d8bb7ddded88.2.started.json": {
+          "sha256": "bc0d2fbe98708c5857ef975f250e9de1a76cbb388aaabf63055cf858766df463",
+          "bytes": 87,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/browser-data-final/markers/c7cba9d3-2200-4570-9473-32555e7f6ebc.1.started.json": {
+          "sha256": "bdf129b59cff0df15e8e47af04f37046325e39117c8a2d93f587798b993a6df4",
+          "bytes": 87,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/browser-data-final/markers/cc457ce6-7d59-4b96-bc33-fb83ba3d6fc1.1.started.json": {
+          "sha256": "2ffd1ed1bf93cce870caf0d51284e286c2de659ab075a7f240a66648c83d4beb",
+          "bytes": 86,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/browser-data-final/markers/ee6221fa-bfe4-4444-9ed2-e9af6fc6c6c0.1.finished.json": {
+          "sha256": "6041df3e9b345d68be886f995c452395674ea950cd3ca9992c13b64f3aa9cbd0",
+          "bytes": 14,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/browser-data-final/markers/ee6221fa-bfe4-4444-9ed2-e9af6fc6c6c0.1.started.json": {
+          "sha256": "b3b38f62c73c50275434b3b323b2f814977c5cf18ea8d89b8987a9d36093c712",
+          "bytes": 87,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/browser-data-final/workflow.sqlite": {
+          "sha256": "40cf07c52bfaa52b334ef341456f970787f6dc701ffe18ad3c572cb5056dbd70",
+          "bytes": 4096,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/browser-data-final/workflow.sqlite-shm": {
+          "sha256": "ba436d7facdbe7749fd543f35f70ee6423f0a84132abc0343f0babc0db5b4dd8",
+          "bytes": 32768,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/browser-data-final/workflow.sqlite-wal": {
+          "sha256": "aceb14effd971f79a28d45994e97e3ad2cee95150c82d8a1faa8ac76cc4bb772",
+          "bytes": 749872,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/browser-data-reviewed/markers/4eaaadaa-6cb1-4435-b7f0-0d8667ddd02e.1.finished.json": {
+          "sha256": "6041df3e9b345d68be886f995c452395674ea950cd3ca9992c13b64f3aa9cbd0",
+          "bytes": 14,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/browser-data-reviewed/markers/4eaaadaa-6cb1-4435-b7f0-0d8667ddd02e.1.started.json": {
+          "sha256": "55c1dafa939b538d6bfc456b3624ebf10807324cbc337c097d1ca370766500e3",
+          "bytes": 87,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/browser-data-reviewed/markers/8905ec0e-535b-49fd-85a4-47f5375c87ca.1.finished.json": {
+          "sha256": "6041df3e9b345d68be886f995c452395674ea950cd3ca9992c13b64f3aa9cbd0",
+          "bytes": 14,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/browser-data-reviewed/markers/8905ec0e-535b-49fd-85a4-47f5375c87ca.1.started.json": {
+          "sha256": "a3a2017d53c79a80f2afc9a6a65c4b7fb08154a3da081df737ef9e9fc2714248",
+          "bytes": 87,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/browser-data-reviewed/markers/902f3ebf-fe4a-4f7a-803c-6e6673e6fc62.1.started.json": {
+          "sha256": "d84d471f26c26c2d1de98ad7e539a6c2cab3347ac6f0f1371532c40be98b7e7d",
+          "bytes": 86,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/browser-data-reviewed/markers/a20aec85-a3e9-4b26-84a5-816becc4063a.1.finished.json": {
+          "sha256": "3d78730672c5ec3f1da1e473feb97aba3c98ba752ac7fcb57b5f48e49548e284",
+          "bytes": 14,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/browser-data-reviewed/markers/a20aec85-a3e9-4b26-84a5-816becc4063a.1.started.json": {
+          "sha256": "0d502e0deaad68eeecb569ce4d17fc884c6511f8bd451599063fc338ce960de0",
+          "bytes": 87,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/browser-data-reviewed/markers/a20aec85-a3e9-4b26-84a5-816becc4063a.2.finished.json": {
+          "sha256": "6041df3e9b345d68be886f995c452395674ea950cd3ca9992c13b64f3aa9cbd0",
+          "bytes": 14,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/browser-data-reviewed/markers/a20aec85-a3e9-4b26-84a5-816becc4063a.2.started.json": {
+          "sha256": "ea3d0abf7b5e72ff1ed7893b7c67be94e5acd20a5a4554c351771a4988f8f840",
+          "bytes": 87,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/browser-data-reviewed/markers/b694eb3a-de59-4dfa-9924-4367770db6a4.1.finished.json": {
+          "sha256": "3d78730672c5ec3f1da1e473feb97aba3c98ba752ac7fcb57b5f48e49548e284",
+          "bytes": 14,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/browser-data-reviewed/markers/b694eb3a-de59-4dfa-9924-4367770db6a4.1.started.json": {
+          "sha256": "ecabfb398fd3d48b356c3c753793597e34b238d4f75434904af62aded79d7ad4",
+          "bytes": 87,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/browser-data-reviewed/markers/cf697767-8865-4f97-8efd-b8167f9df440.1.started.json": {
+          "sha256": "a9c2b80d2e267525ed10ab251e4c48bd2dc58ace3ab8c91fbcadaf3b46033014",
+          "bytes": 87,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/browser-data-reviewed/markers/e6ff0f21-59a4-4889-8cab-a33610ff2dcf.1.finished.json": {
+          "sha256": "6041df3e9b345d68be886f995c452395674ea950cd3ca9992c13b64f3aa9cbd0",
+          "bytes": 14,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/browser-data-reviewed/markers/e6ff0f21-59a4-4889-8cab-a33610ff2dcf.1.started.json": {
+          "sha256": "9a63fb37f1a6093e47ba41ffe839dd53422b16dd5d1d24aca88ae671b21b32d2",
+          "bytes": 87,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/browser-data-reviewed/workflow.sqlite": {
+          "sha256": "40cf07c52bfaa52b334ef341456f970787f6dc701ffe18ad3c572cb5056dbd70",
+          "bytes": 4096,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/browser-data-reviewed/workflow.sqlite-shm": {
+          "sha256": "d7e60d6578c9147ac6b6ddc352c7a53f19ae6521beb02be7bcb9d7b243348116",
+          "bytes": 32768,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/browser-data-reviewed/workflow.sqlite-wal": {
+          "sha256": "9adbc99ea7a52e57049e2577967474fc258329eccf1af83ceef78bf95660c035",
+          "bytes": 749872,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-0S3NqR/markers/39833574-2e41-452e-a7c9-b7a27cb3548e.1.finished.json": {
+          "sha256": "6041df3e9b345d68be886f995c452395674ea950cd3ca9992c13b64f3aa9cbd0",
+          "bytes": 14,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-0S3NqR/markers/39833574-2e41-452e-a7c9-b7a27cb3548e.1.started.json": {
+          "sha256": "e82082b9642dff4f0047101e9a099ef38a43bacfbd1cf8258f5dd1cd6cd47de6",
+          "bytes": 86,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-0S3NqR/markers/913a23e8-42f7-4423-a025-a578c202014c.1.finished.json": {
+          "sha256": "3d78730672c5ec3f1da1e473feb97aba3c98ba752ac7fcb57b5f48e49548e284",
+          "bytes": 14,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-0S3NqR/markers/913a23e8-42f7-4423-a025-a578c202014c.1.started.json": {
+          "sha256": "25fd85bb56975f417624bee8f80a35debc1e9bcac6a3f112263dacb4fe3a4b8a",
+          "bytes": 87,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-0S3NqR/markers/913a23e8-42f7-4423-a025-a578c202014c.2.finished.json": {
+          "sha256": "6041df3e9b345d68be886f995c452395674ea950cd3ca9992c13b64f3aa9cbd0",
+          "bytes": 14,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-0S3NqR/markers/913a23e8-42f7-4423-a025-a578c202014c.2.started.json": {
+          "sha256": "b76c66a4306c9350431a698b7171e3f26f02449021b8ec3cbda9bb05781a1fa5",
+          "bytes": 87,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-0S3NqR/markers/f96e753d-df77-491e-9792-f95b0eb24280.1.finished.json": {
+          "sha256": "6041df3e9b345d68be886f995c452395674ea950cd3ca9992c13b64f3aa9cbd0",
+          "bytes": 14,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-0S3NqR/markers/f96e753d-df77-491e-9792-f95b0eb24280.1.release": {
+          "sha256": "cadaaa0b206dda528e902d40b22867935a96126e17e70256a6b6ee74d526d94d",
+          "bytes": 22,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-0S3NqR/markers/f96e753d-df77-491e-9792-f95b0eb24280.1.started.json": {
+          "sha256": "51af6ebdbf0cf2c9bc25fdcd8e58b159802d2a59e0c675475a3f70a28c7464c8",
+          "bytes": 87,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-0S3NqR/workflow.sqlite": {
+          "sha256": "40cf07c52bfaa52b334ef341456f970787f6dc701ffe18ad3c572cb5056dbd70",
+          "bytes": 4096,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-0S3NqR/workflow.sqlite-shm": {
+          "sha256": "0886293d700b8a34cbf65706091f2048634104e71a651fb0ca92d80b6e1dfe4a",
+          "bytes": 32768,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-0S3NqR/workflow.sqlite-wal": {
+          "sha256": "b00f849bb68d9880f01ad30f714a3c1990d455116e23fd89f8f2b01cec5d45c3",
+          "bytes": 304912,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-1IIu4M/workflow.sqlite": {
+          "sha256": "744c62c742129e5a106c0f1a4fe88284be074b7362b1d2e9dfdffa09fc301224",
+          "bytes": 24576,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-5EBRPl/markers/d31e4e9f-e9ef-4af5-bc3d-5260b0b3fdb4.1.started.json": {
+          "sha256": "547eb835ec5e090cb5b8354d62331c36fbea3010bc2f44a8155bc44d8ec0aa1f",
+          "bytes": 87,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-5EBRPl/workflow.sqlite": {
+          "sha256": "40cf07c52bfaa52b334ef341456f970787f6dc701ffe18ad3c572cb5056dbd70",
+          "bytes": 4096,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-5EBRPl/workflow.sqlite-shm": {
+          "sha256": "641e5f2ce6d34c3aa9a80679ee78f16860e8397d1e4f2c4b42c09513649794b2",
+          "bytes": 32768,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-5EBRPl/workflow.sqlite-wal": {
+          "sha256": "a7af78f141a0eb2a52ebdb07bf19975211e550d630f070203c2ea5bee7fdf1a5",
+          "bytes": 247232,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-ALtJdT/markers/54561324-7a1b-4223-9054-af8d1c943ebd.1.started.json": {
+          "sha256": "357195020601b0b5643dbd307342546c6f4b0080952a0bad4c7667e47380bd16",
+          "bytes": 87,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-ALtJdT/markers/afd57f60-3ca3-40e7-80ac-6dc4386936aa.1.started.json": {
+          "sha256": "41dfb85fdf47a8b8e9dd2ff77e1bd93a20e35f013d3453a3be1c9f3c0df32f59",
+          "bytes": 87,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-ALtJdT/workflow.sqlite": {
+          "sha256": "40cf07c52bfaa52b334ef341456f970787f6dc701ffe18ad3c572cb5056dbd70",
+          "bytes": 4096,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-ALtJdT/workflow.sqlite-shm": {
+          "sha256": "5466ded14dcb7ee4902d775e16a3146abca5315362fec2a4424dc8dadd924b82",
+          "bytes": 32768,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-ALtJdT/workflow.sqlite-wal": {
+          "sha256": "f018be18e2337412328b646f936a6247a807470a32860e9264c146099ebf1ed0",
+          "bytes": 271952,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-B6zsXH/markers/b46c2b8f-c18d-4def-bf05-eccdb62ac270.1.finished.json": {
+          "sha256": "6041df3e9b345d68be886f995c452395674ea950cd3ca9992c13b64f3aa9cbd0",
+          "bytes": 14,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-B6zsXH/markers/b46c2b8f-c18d-4def-bf05-eccdb62ac270.1.started.json": {
+          "sha256": "6e62e82dddea4003dc600be21762bb0343c019a076e1fd12a64efcdcea32f97d",
+          "bytes": 86,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-B6zsXH/markers/old_pending.1.finished.json": {
+          "sha256": "6041df3e9b345d68be886f995c452395674ea950cd3ca9992c13b64f3aa9cbd0",
+          "bytes": 14,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-B6zsXH/markers/old_pending.1.started.json": {
+          "sha256": "8d3c471b752a2dc911858f838bdb257055e9c182d61086bf16f464ad20ebd030",
+          "bytes": 61,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-B6zsXH/workflow.sqlite": {
+          "sha256": "7d265cd44ae55fa616bd29a938545604976a402f28e3bbdec126e95aa0c486e6",
+          "bytes": 20480,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-B6zsXH/workflow.sqlite-shm": {
+          "sha256": "8b55910bd15bef5033e3291358f55817325450b6166504648e42f95608013dcf",
+          "bytes": 32768,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-B6zsXH/workflow.sqlite-wal": {
+          "sha256": "b3343b1ba8e12a6df0780e799a631b9492e987cb40de8bd558d6bca7a3a74df4",
+          "bytes": 214272,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-BMpYwe/markers/354485d5-7d9b-4273-99c9-751bd7f24627.1.finished.json": {
+          "sha256": "6041df3e9b345d68be886f995c452395674ea950cd3ca9992c13b64f3aa9cbd0",
+          "bytes": 14,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-BMpYwe/markers/354485d5-7d9b-4273-99c9-751bd7f24627.1.started.json": {
+          "sha256": "fbff9fe37e78490bce639117f3e0e4d50c23dc5c79ddc5f4ee7234e684ae2f8c",
+          "bytes": 86,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-BMpYwe/markers/97465a85-9729-45e9-87b1-c0450b1ba053.2.finished.json": {
+          "sha256": "6041df3e9b345d68be886f995c452395674ea950cd3ca9992c13b64f3aa9cbd0",
+          "bytes": 14,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-BMpYwe/markers/97465a85-9729-45e9-87b1-c0450b1ba053.2.release": {
+          "sha256": "cadaaa0b206dda528e902d40b22867935a96126e17e70256a6b6ee74d526d94d",
+          "bytes": 22,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-BMpYwe/markers/97465a85-9729-45e9-87b1-c0450b1ba053.2.started.json": {
+          "sha256": "4de7ca256e2ba0e371eff0ca76717e1c1ae07bd9452b50e4e0381f7665c862f3",
+          "bytes": 87,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-BMpYwe/markers/bcfeb08d-76fe-485c-9547-645fa81d8645.1.finished.json": {
+          "sha256": "6041df3e9b345d68be886f995c452395674ea950cd3ca9992c13b64f3aa9cbd0",
+          "bytes": 14,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-BMpYwe/markers/bcfeb08d-76fe-485c-9547-645fa81d8645.1.started.json": {
+          "sha256": "859f74edc4ce7ffd249dbe86830d3330379b05a783766dde2e48508bc7fe47d2",
+          "bytes": 87,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-BMpYwe/workflow.sqlite": {
+          "sha256": "40cf07c52bfaa52b334ef341456f970787f6dc701ffe18ad3c572cb5056dbd70",
+          "bytes": 4096,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-BMpYwe/workflow.sqlite-shm": {
+          "sha256": "57fb631430f7730a9ae559af947839a4201c9e9dade024cd52351bffbd42d5da",
+          "bytes": 32768,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-BMpYwe/workflow.sqlite-wal": {
+          "sha256": "6b2f053ddc4108d4e73025cefcedc1db02c56e7ba48add0bbf5648bacd028d1a",
+          "bytes": 304912,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-dD5Xog/markers/251fe19c-7d52-420c-8c28-35db54e8b8b2.1.finished.json": {
+          "sha256": "6041df3e9b345d68be886f995c452395674ea950cd3ca9992c13b64f3aa9cbd0",
+          "bytes": 14,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-dD5Xog/markers/251fe19c-7d52-420c-8c28-35db54e8b8b2.1.started.json": {
+          "sha256": "493e785a35ae83973149b02674dea1e3a853b24f377dd4c26fcdf43601ceac0e",
+          "bytes": 87,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-dD5Xog/markers/4508119e-d88e-4d79-89c8-57add9d38b43.1.started.json": {
+          "sha256": "bd44f64d80dd34d9fbf4ec932705269c60ac30810d7b3bd967ed05b8da9b5063",
+          "bytes": 87,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-dD5Xog/markers/50354188-a186-4697-af86-6134e1dd7782.1.finished.json": {
+          "sha256": "6041df3e9b345d68be886f995c452395674ea950cd3ca9992c13b64f3aa9cbd0",
+          "bytes": 14,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-dD5Xog/markers/50354188-a186-4697-af86-6134e1dd7782.1.release": {
+          "sha256": "cadaaa0b206dda528e902d40b22867935a96126e17e70256a6b6ee74d526d94d",
+          "bytes": 22,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-dD5Xog/markers/50354188-a186-4697-af86-6134e1dd7782.1.started.json": {
+          "sha256": "35f64758375bdf50f152abdcfd8ca6451de65ade856d5994aeb425fd6d0dc8a8",
+          "bytes": 87,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-dD5Xog/workflow.sqlite": {
+          "sha256": "40cf07c52bfaa52b334ef341456f970787f6dc701ffe18ad3c572cb5056dbd70",
+          "bytes": 4096,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-dD5Xog/workflow.sqlite-shm": {
+          "sha256": "43d2677d562d8589b9aa2bba0f33e02e83febbaa67a1ab5083c5d31450907e39",
+          "bytes": 32768,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-dD5Xog/workflow.sqlite-wal": {
+          "sha256": "e39e5083b0da6bf3818b5c928868f55265effb0ce343c771ac9e31be07cb8f72",
+          "bytes": 304912,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-JcKEOl/workflow.sqlite": {
+          "sha256": "40cf07c52bfaa52b334ef341456f970787f6dc701ffe18ad3c572cb5056dbd70",
+          "bytes": 4096,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-JcKEOl/workflow.sqlite-shm": {
+          "sha256": "526e25d8b3fcdeb0a1014b4fb63145ad488fe813595a9061963bc34bb4bfb6ab",
+          "bytes": 32768,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-JcKEOl/workflow.sqlite-wal": {
+          "sha256": "88541629acff76c33bd220a343b614f678be25e9f377ef391ae845b50fd2321e",
+          "bytes": 111272,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-KqtEwj/markers/5b9ac2f2-2429-4d38-99dd-9e0b82fc3091.1.started.json": {
+          "sha256": "4dca806023674572504f6d2d1eabbc2998976346805e770514f21ef0e19d172f",
+          "bytes": 87,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-KqtEwj/markers/6559aca5-005f-4ecd-9834-47fc5aefdfe4.1.started.json": {
+          "sha256": "f33200bdd8b6c6df69ecb24a2386706dbbe22a612e2155abd421b9ab8974f3dc",
+          "bytes": 87,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-KqtEwj/markers/9f132b24-cf57-4a10-9ce1-564e4a8ce235.1.started.json": {
+          "sha256": "1b0358ee05251bf5c5d741ca89d708d93a20a0a5ab43727dc11ad3d5f72a33e3",
+          "bytes": 87,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-KqtEwj/workflow.sqlite": {
+          "sha256": "40cf07c52bfaa52b334ef341456f970787f6dc701ffe18ad3c572cb5056dbd70",
+          "bytes": 4096,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-KqtEwj/workflow.sqlite-shm": {
+          "sha256": "1bbfdf1fdb4c65fc80792955bdc9537085e53d8e2fd6d7f4d3a42c5dbd9fb2f6",
+          "bytes": 32768,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-KqtEwj/workflow.sqlite-wal": {
+          "sha256": "af5b5ed17909f77dfd5d2052252e5c768f37ff7200571c93151e25a8a5524740",
+          "bytes": 296672,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-Kr9mhY/markers/ab371995-d240-4608-a398-df3a3e83eb4b.1.finished.json": {
+          "sha256": "6041df3e9b345d68be886f995c452395674ea950cd3ca9992c13b64f3aa9cbd0",
+          "bytes": 14,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-Kr9mhY/markers/ab371995-d240-4608-a398-df3a3e83eb4b.1.started.json": {
+          "sha256": "4a8d5fc410818b45589e29f109b8fe62feb658006413a522f4349e6d8c96b947",
+          "bytes": 87,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-Kr9mhY/markers/old_pending.1.finished.json": {
+          "sha256": "6041df3e9b345d68be886f995c452395674ea950cd3ca9992c13b64f3aa9cbd0",
+          "bytes": 14,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-Kr9mhY/markers/old_pending.1.started.json": {
+          "sha256": "4d1f8caaf5fa4539606222b9fc835cd1a68a29863fb16cd81d6d238cecc668a1",
+          "bytes": 62,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-Kr9mhY/workflow.sqlite": {
+          "sha256": "7d265cd44ae55fa616bd29a938545604976a402f28e3bbdec126e95aa0c486e6",
+          "bytes": 20480,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-Kr9mhY/workflow.sqlite-shm": {
+          "sha256": "c3430ef7e120b7b5d73ac4d619f5a47d4c5bb5efa815f8dc0173c096f61470ae",
+          "bytes": 32768,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-Kr9mhY/workflow.sqlite-wal": {
+          "sha256": "5cba4dc206a9008d2c04cd3790609e8b8c3ed1f33bebfaa93e9cf8dcaea54ea0",
+          "bytes": 214272,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-ktkmhD/markers/8ba5c07e-4829-4eae-be1b-82e4f3bd9c2f.1.finished.json": {
+          "sha256": "6041df3e9b345d68be886f995c452395674ea950cd3ca9992c13b64f3aa9cbd0",
+          "bytes": 14,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-ktkmhD/markers/8ba5c07e-4829-4eae-be1b-82e4f3bd9c2f.1.release": {
+          "sha256": "cadaaa0b206dda528e902d40b22867935a96126e17e70256a6b6ee74d526d94d",
+          "bytes": 22,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-ktkmhD/markers/8ba5c07e-4829-4eae-be1b-82e4f3bd9c2f.1.started.json": {
+          "sha256": "6c21fee84c7d80b4a1e99331f58a543e3f50cb9660b630be29cc0cfbb8c23dd9",
+          "bytes": 87,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-ktkmhD/markers/ae79520b-3227-47f2-93b0-331f761ea6b4.1.finished.json": {
+          "sha256": "3d78730672c5ec3f1da1e473feb97aba3c98ba752ac7fcb57b5f48e49548e284",
+          "bytes": 14,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-ktkmhD/markers/ae79520b-3227-47f2-93b0-331f761ea6b4.1.started.json": {
+          "sha256": "e7d16dab567b5c87d260dd24ae704482223f165cfda137e7bea72d457d26944e",
+          "bytes": 87,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-ktkmhD/markers/ae79520b-3227-47f2-93b0-331f761ea6b4.2.finished.json": {
+          "sha256": "6041df3e9b345d68be886f995c452395674ea950cd3ca9992c13b64f3aa9cbd0",
+          "bytes": 14,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-ktkmhD/markers/ae79520b-3227-47f2-93b0-331f761ea6b4.2.started.json": {
+          "sha256": "ffa4b3fb8e19e09ed094316cb3b67167d10b86019e0dc2c3c8321d9645cdf389",
+          "bytes": 86,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-ktkmhD/markers/bb535f84-1e80-449c-9596-1c971adeabb2.1.finished.json": {
+          "sha256": "6041df3e9b345d68be886f995c452395674ea950cd3ca9992c13b64f3aa9cbd0",
+          "bytes": 14,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-ktkmhD/markers/bb535f84-1e80-449c-9596-1c971adeabb2.1.started.json": {
+          "sha256": "28564d065223a25f96dd9bce0d29fd1e3a3dce946a1e3f9fcdcbc377be735cc4",
+          "bytes": 87,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-ktkmhD/workflow.sqlite": {
+          "sha256": "40cf07c52bfaa52b334ef341456f970787f6dc701ffe18ad3c572cb5056dbd70",
+          "bytes": 4096,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-ktkmhD/workflow.sqlite-shm": {
+          "sha256": "6a0cd45620e5fbfd694179a6400a7b4eb554361fc26d940591d696c20be4c6cb",
+          "bytes": 32768,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-ktkmhD/workflow.sqlite-wal": {
+          "sha256": "d27d4e88a1d99050fb83f5c6786154cca1799609ba3ba3155753e59933084a66",
+          "bytes": 304912,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-pjF2A0/markers/557f09de-f663-463e-b5a6-c8ab917b6f09.1.finished.json": {
+          "sha256": "6041df3e9b345d68be886f995c452395674ea950cd3ca9992c13b64f3aa9cbd0",
+          "bytes": 14,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-pjF2A0/markers/557f09de-f663-463e-b5a6-c8ab917b6f09.1.started.json": {
+          "sha256": "b08d9e32e1ce15fc12baa351fd5390d537733d5dc49395a2c8a83396e1455bfd",
+          "bytes": 87,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-pjF2A0/markers/d975ef35-820c-40a1-81ca-81036d8e6ab6.2.finished.json": {
+          "sha256": "6041df3e9b345d68be886f995c452395674ea950cd3ca9992c13b64f3aa9cbd0",
+          "bytes": 14,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-pjF2A0/markers/d975ef35-820c-40a1-81ca-81036d8e6ab6.2.release": {
+          "sha256": "cadaaa0b206dda528e902d40b22867935a96126e17e70256a6b6ee74d526d94d",
+          "bytes": 22,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-pjF2A0/markers/d975ef35-820c-40a1-81ca-81036d8e6ab6.2.started.json": {
+          "sha256": "405455e00f74744048a05db448f004691b7a6700a1ad070d9fe2d1ac4e00458d",
+          "bytes": 87,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-pjF2A0/markers/f6f06fe1-66b3-478f-bcf3-e2618193840b.1.finished.json": {
+          "sha256": "6041df3e9b345d68be886f995c452395674ea950cd3ca9992c13b64f3aa9cbd0",
+          "bytes": 14,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-pjF2A0/markers/f6f06fe1-66b3-478f-bcf3-e2618193840b.1.started.json": {
+          "sha256": "399e8383810fda02ee61053e04c884a44000dc64c893de6238da9258eb7beaec",
+          "bytes": 87,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-pjF2A0/workflow.sqlite": {
+          "sha256": "40cf07c52bfaa52b334ef341456f970787f6dc701ffe18ad3c572cb5056dbd70",
+          "bytes": 4096,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-pjF2A0/workflow.sqlite-shm": {
+          "sha256": "1b6d2202e92697e3b74fee1add6b7eb5d8e2e4200fb1967b226991cb183ca692",
+          "bytes": 32768,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-pjF2A0/workflow.sqlite-wal": {
+          "sha256": "ad31eb771d823b3e783eb2d6f7b734b5415336623b6181af2af058c7636edf6c",
+          "bytes": 304912,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-PO5ZGF/markers/50f3899c-0eec-49c5-8e21-08b3217c01d5.1.finished.json": {
+          "sha256": "6041df3e9b345d68be886f995c452395674ea950cd3ca9992c13b64f3aa9cbd0",
+          "bytes": 14,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-PO5ZGF/markers/50f3899c-0eec-49c5-8e21-08b3217c01d5.1.started.json": {
+          "sha256": "3d009125f7234055c0ce21c01bf48a2699e8deee699a44ce1895b3c8b8dffdd0",
+          "bytes": 86,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-PO5ZGF/markers/db22e287-10b2-4b07-aaae-22945834e28b.1.finished.json": {
+          "sha256": "6041df3e9b345d68be886f995c452395674ea950cd3ca9992c13b64f3aa9cbd0",
+          "bytes": 14,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-PO5ZGF/markers/db22e287-10b2-4b07-aaae-22945834e28b.1.started.json": {
+          "sha256": "700e26cc81168ed282e22c932bdd3c2213102bd4e6a981583285aff4ca30e9fb",
+          "bytes": 87,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-PO5ZGF/workflow.sqlite": {
+          "sha256": "40cf07c52bfaa52b334ef341456f970787f6dc701ffe18ad3c572cb5056dbd70",
+          "bytes": 4096,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-PO5ZGF/workflow.sqlite-shm": {
+          "sha256": "ee6ee02508aaeeb2c3c1c9329fb412ebc73219cf4b57ecf950d48e963b17d237",
+          "bytes": 32768,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-PO5ZGF/workflow.sqlite-wal": {
+          "sha256": "a3f77f6ff2091aae5d4c423b05eea54b4a99d5581422c82d083f641a5b4314c6",
+          "bytes": 214272,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-QpudiJ/workflow.sqlite": {
+          "sha256": "40cf07c52bfaa52b334ef341456f970787f6dc701ffe18ad3c572cb5056dbd70",
+          "bytes": 4096,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-QpudiJ/workflow.sqlite-shm": {
+          "sha256": "c62d88a3d13706d2b428b8766c10c9c263808854605e5f2221788de58183af6b",
+          "bytes": 32768,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-QpudiJ/workflow.sqlite-wal": {
+          "sha256": "e06e94a8cb684ad9c1a7e722c2ae1d55a0a82db19d40731579d2b382fca7a1b4",
+          "bytes": 111272,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-QSFqTv/markers/88d45fd0-46e9-48fd-8fcd-ab61c017bfd8.1.finished.json": {
+          "sha256": "6041df3e9b345d68be886f995c452395674ea950cd3ca9992c13b64f3aa9cbd0",
+          "bytes": 14,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-QSFqTv/markers/88d45fd0-46e9-48fd-8fcd-ab61c017bfd8.1.started.json": {
+          "sha256": "8edc7d222dbe54ad98e2c92603863573b5225994ff809475582785b7ab041953",
+          "bytes": 87,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-QSFqTv/markers/a6394ddf-16df-415f-a901-5ac42d857f08.1.finished.json": {
+          "sha256": "6041df3e9b345d68be886f995c452395674ea950cd3ca9992c13b64f3aa9cbd0",
+          "bytes": 14,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-QSFqTv/markers/a6394ddf-16df-415f-a901-5ac42d857f08.1.started.json": {
+          "sha256": "0d7a854b54fa4d7ce63bdec15267717cdb796fc7b6376d4384846609c1cc25ed",
+          "bytes": 87,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-QSFqTv/workflow.sqlite": {
+          "sha256": "40cf07c52bfaa52b334ef341456f970787f6dc701ffe18ad3c572cb5056dbd70",
+          "bytes": 4096,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-QSFqTv/workflow.sqlite-shm": {
+          "sha256": "1ec266b05d50c34617498de16d11a4b58ec77909b9241e6bd3d9cb789fb17ad6",
+          "bytes": 32768,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-QSFqTv/workflow.sqlite-wal": {
+          "sha256": "2d175fb00a3dd9c1dcceffa1f1163006906d74cd33cc7cc66ba32c3fb43fe8a9",
+          "bytes": 214272,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-rKAicF/markers/467ec2cb-ee17-434c-b532-e21dce7b93bf.1.started.json": {
+          "sha256": "8c88ae4ae9dcc91e0e6665bb0c7576f5788e86115844e7b4559c8926164806cf",
+          "bytes": 87,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-rKAicF/markers/9323d998-8b2a-42e7-bcac-a33b7e7beb04.1.started.json": {
+          "sha256": "cdf1117af6ee785748cced66273e1370d23bdba27b54670d5309b6462a2bdc56",
+          "bytes": 87,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-rKAicF/workflow.sqlite": {
+          "sha256": "40cf07c52bfaa52b334ef341456f970787f6dc701ffe18ad3c572cb5056dbd70",
+          "bytes": 4096,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-rKAicF/workflow.sqlite-shm": {
+          "sha256": "5e32ef2b9f283ad1cfa1aaef27b15b06961928711da1b94db8ad9e2ea671c10d",
+          "bytes": 32768,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-rKAicF/workflow.sqlite-wal": {
+          "sha256": "73217b0b092bd4a8daea27830a5d33f073531f8a43a124e2952bedf52135e851",
+          "bytes": 271952,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-T3yJwV/markers/96105e13-2f27-4d10-9a5e-23d1ff1a1a58.1.started.json": {
+          "sha256": "201b555a3d0cb21a446c023e08de31e3b5ddfa0de2aa4cd473ec5e7c3a943c9a",
+          "bytes": 86,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-T3yJwV/workflow.sqlite": {
+          "sha256": "40cf07c52bfaa52b334ef341456f970787f6dc701ffe18ad3c572cb5056dbd70",
+          "bytes": 4096,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-T3yJwV/workflow.sqlite-shm": {
+          "sha256": "d6d24564a574c91919541d5b3bf578c8f217f5a726bb838d146b1da43e9802a2",
+          "bytes": 32768,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-T3yJwV/workflow.sqlite-wal": {
+          "sha256": "cab3c8bdf2e76970e47cb269a709268414f9e2677b9210a547c60240f3f8270f",
+          "bytes": 247232,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-WTJQa8/markers/8d0f8917-68ed-4ba9-9802-c831b241e181.1.finished.json": {
+          "sha256": "6041df3e9b345d68be886f995c452395674ea950cd3ca9992c13b64f3aa9cbd0",
+          "bytes": 14,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-WTJQa8/markers/8d0f8917-68ed-4ba9-9802-c831b241e181.1.started.json": {
+          "sha256": "16ffe7ebc056910be8ae5fce7b4b76c500517d613b46cf8bf65664f701bb357b",
+          "bytes": 87,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-WTJQa8/markers/8d1d699c-f27e-4708-8146-fa5efbdf57a9.1.finished.json": {
+          "sha256": "3d78730672c5ec3f1da1e473feb97aba3c98ba752ac7fcb57b5f48e49548e284",
+          "bytes": 14,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-WTJQa8/markers/8d1d699c-f27e-4708-8146-fa5efbdf57a9.1.started.json": {
+          "sha256": "57ac2f0234b4708ec61898fa609f6125b2e1a92f453a281614c3b88f8382e687",
+          "bytes": 87,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-WTJQa8/markers/8d1d699c-f27e-4708-8146-fa5efbdf57a9.2.finished.json": {
+          "sha256": "3d78730672c5ec3f1da1e473feb97aba3c98ba752ac7fcb57b5f48e49548e284",
+          "bytes": 14,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-WTJQa8/markers/8d1d699c-f27e-4708-8146-fa5efbdf57a9.2.started.json": {
+          "sha256": "5b0e1488c873b556f496b1fde15b24e4240686dacbcb3b679d296c795003969c",
+          "bytes": 87,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-WTJQa8/markers/8d1d699c-f27e-4708-8146-fa5efbdf57a9.3.finished.json": {
+          "sha256": "3d78730672c5ec3f1da1e473feb97aba3c98ba752ac7fcb57b5f48e49548e284",
+          "bytes": 14,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-WTJQa8/markers/8d1d699c-f27e-4708-8146-fa5efbdf57a9.3.started.json": {
+          "sha256": "10e88e5f147eac51059a72a9373b62badadb609034d36e261b8e8631fbeac745",
+          "bytes": 87,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-WTJQa8/markers/b8fd2804-cd24-4b15-a0f9-eb9ca638fba5.1.finished.json": {
+          "sha256": "6041df3e9b345d68be886f995c452395674ea950cd3ca9992c13b64f3aa9cbd0",
+          "bytes": 14,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-WTJQa8/markers/b8fd2804-cd24-4b15-a0f9-eb9ca638fba5.1.release": {
+          "sha256": "cadaaa0b206dda528e902d40b22867935a96126e17e70256a6b6ee74d526d94d",
+          "bytes": 22,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-WTJQa8/markers/b8fd2804-cd24-4b15-a0f9-eb9ca638fba5.1.started.json": {
+          "sha256": "b3b9f9f61be9c8747714b8eeac0a64a5b00b02fe57c3c882e1c1cfd44e2fbba1",
+          "bytes": 87,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-WTJQa8/workflow.sqlite": {
+          "sha256": "40cf07c52bfaa52b334ef341456f970787f6dc701ffe18ad3c572cb5056dbd70",
+          "bytes": 4096,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-WTJQa8/workflow.sqlite-shm": {
+          "sha256": "4a34996914b5dac244b7f85c1c3deef99a926b5b96343aa80e8410700104641e",
+          "bytes": 32768,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-WTJQa8/workflow.sqlite-wal": {
+          "sha256": "85a653f1add8a5b43593f26be97832c76a192f5414a52cf10d6d84e4bbdff58e",
+          "bytes": 424392,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-X97yoW/workflow.sqlite": {
+          "sha256": "744c62c742129e5a106c0f1a4fe88284be074b7362b1d2e9dfdffa09fc301224",
+          "bytes": 24576,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-xdc1FF/markers/32a5cdb1-b948-42fb-b059-0a938081ff37.1.finished.json": {
+          "sha256": "6041df3e9b345d68be886f995c452395674ea950cd3ca9992c13b64f3aa9cbd0",
+          "bytes": 14,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-xdc1FF/markers/32a5cdb1-b948-42fb-b059-0a938081ff37.1.started.json": {
+          "sha256": "3282cc02d677ab25669cb557b57c9af513698d77a87cacff4b2272dcffd00be3",
+          "bytes": 85,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-xdc1FF/markers/a8a58731-95b7-4726-8abc-2d290c514071.1.finished.json": {
+          "sha256": "6041df3e9b345d68be886f995c452395674ea950cd3ca9992c13b64f3aa9cbd0",
+          "bytes": 14,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-xdc1FF/markers/a8a58731-95b7-4726-8abc-2d290c514071.1.release": {
+          "sha256": "cadaaa0b206dda528e902d40b22867935a96126e17e70256a6b6ee74d526d94d",
+          "bytes": 22,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-xdc1FF/markers/a8a58731-95b7-4726-8abc-2d290c514071.1.started.json": {
+          "sha256": "1cc5e76cbe4bb0231ce07b0ca5f31abadae70d038b2a1d55b635f310c4e8ec9e",
+          "bytes": 85,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-xdc1FF/workflow.sqlite": {
+          "sha256": "40cf07c52bfaa52b334ef341456f970787f6dc701ffe18ad3c572cb5056dbd70",
+          "bytes": 4096,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-xdc1FF/workflow.sqlite-shm": {
+          "sha256": "13d92f8290f033718017b61c303a081205be0eb0ea3aacdc9200b1ac69b68d6c",
+          "bytes": 32768,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-xdc1FF/workflow.sqlite-wal": {
+          "sha256": "2339096f8b6464aa01a6370faf7869a4fb9d40c1b90d9c8205e1547c8b491cad",
+          "bytes": 304912,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-YEWtu7/markers/663e9d2e-58ee-47ca-8a03-09af16a38f4a.1.finished.json": {
+          "sha256": "6041df3e9b345d68be886f995c452395674ea950cd3ca9992c13b64f3aa9cbd0",
+          "bytes": 14,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-YEWtu7/markers/663e9d2e-58ee-47ca-8a03-09af16a38f4a.1.started.json": {
+          "sha256": "687cf3a791fed92047cc547ad2d23fa8a022a2df5d7004e5a77d4942d272a5ab",
+          "bytes": 87,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-YEWtu7/markers/8698278d-e6b6-420b-bf08-b752f0b12723.1.finished.json": {
+          "sha256": "6041df3e9b345d68be886f995c452395674ea950cd3ca9992c13b64f3aa9cbd0",
+          "bytes": 14,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-YEWtu7/markers/8698278d-e6b6-420b-bf08-b752f0b12723.1.release": {
+          "sha256": "cadaaa0b206dda528e902d40b22867935a96126e17e70256a6b6ee74d526d94d",
+          "bytes": 22,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-YEWtu7/markers/8698278d-e6b6-420b-bf08-b752f0b12723.1.started.json": {
+          "sha256": "b616e6eccab5c047cd3af28f782097b085af93f14a77bff395c2183b2348326c",
+          "bytes": 87,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-YEWtu7/markers/be544a40-ce2b-476b-bcf8-ab735475f230.1.finished.json": {
+          "sha256": "3d78730672c5ec3f1da1e473feb97aba3c98ba752ac7fcb57b5f48e49548e284",
+          "bytes": 14,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-YEWtu7/markers/be544a40-ce2b-476b-bcf8-ab735475f230.1.started.json": {
+          "sha256": "81b7e13894dfab8b833b495a3a9669f651af5504328b60fbb2eec6a98f423ad4",
+          "bytes": 87,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-YEWtu7/markers/be544a40-ce2b-476b-bcf8-ab735475f230.2.finished.json": {
+          "sha256": "3d78730672c5ec3f1da1e473feb97aba3c98ba752ac7fcb57b5f48e49548e284",
+          "bytes": 14,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-YEWtu7/markers/be544a40-ce2b-476b-bcf8-ab735475f230.2.started.json": {
+          "sha256": "b6a4ec964d9952ea9e9bb637046832d8e12446f4e4efda566437443669b65b15",
+          "bytes": 87,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-YEWtu7/markers/be544a40-ce2b-476b-bcf8-ab735475f230.3.finished.json": {
+          "sha256": "3d78730672c5ec3f1da1e473feb97aba3c98ba752ac7fcb57b5f48e49548e284",
+          "bytes": 14,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-YEWtu7/markers/be544a40-ce2b-476b-bcf8-ab735475f230.3.started.json": {
+          "sha256": "13f171b6b9e949c481e53f0c2bde14b227d9933e5c7daa2b7d12cc02a5ebd8da",
+          "bytes": 87,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-YEWtu7/workflow.sqlite": {
+          "sha256": "40cf07c52bfaa52b334ef341456f970787f6dc701ffe18ad3c572cb5056dbd70",
+          "bytes": 4096,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-YEWtu7/workflow.sqlite-shm": {
+          "sha256": "946faccf9ff4ffdeb15f04b3cfcf50d1891d06869cae32ee9a8f598cf2573e5d",
+          "bytes": 32768,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-YEWtu7/workflow.sqlite-wal": {
+          "sha256": "0d9a46a3e8b4ead5727a43a96a3d64a5b193466f76e9931edff5a3d994f0f5b3",
+          "bytes": 424392,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-za6ifx/markers/40c98208-01df-45c6-a06c-ae2241905652.1.started.json": {
+          "sha256": "e50b68f4937e15cf0579980aa8f129aecbf37277b55d5058c6254b1319b84c02",
+          "bytes": 86,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-za6ifx/markers/91c4250d-5020-4a92-8c66-2077dce9f02c.1.started.json": {
+          "sha256": "4f259d210bee198d12677b7567f75767a17ce081679af2f892b4f56c35c3b022",
+          "bytes": 85,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-za6ifx/markers/f972444b-3f17-43f8-8437-3283b173b50b.1.started.json": {
+          "sha256": "47168ac90c189860287720db2506722fa14df178d5a82551b14e88b10aaef3d1",
+          "bytes": 86,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-za6ifx/workflow.sqlite": {
+          "sha256": "40cf07c52bfaa52b334ef341456f970787f6dc701ffe18ad3c572cb5056dbd70",
+          "bytes": 4096,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-za6ifx/workflow.sqlite-shm": {
+          "sha256": "5cd97032efa8e28be88fa36cc61707f3b253a1da40658f8ad2e2aaa9091994a4",
+          "bytes": 32768,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        },
+        ".verification/tests/run-za6ifx/workflow.sqlite-wal": {
+          "sha256": "bb53c1ffe06b08255441307d9fa2d4a26bfc49870b06791b236815822d0da61d",
+          "bytes": 296672,
+          "reason": "Generated synthetic verification runtime artifact; excluded content, retained hash inventory"
+        }
+      },
+      "correctedIndependentGate": {
+        "exitCode": 0,
+        "verdict": "passed",
+        "apiPassed": 16,
+        "browserPassed": 8,
+        "sourceUnchanged": true,
+        "sourceFiles": 235,
+        "failedChecks": []
+      }
+    },
+    {
+      "id": "vector-first",
+      "runtime": "vector",
+      "attempt": "attempt-00",
+      "originalArchiveId": "aw1/vector/attempts/attempt-00/source",
+      "sourceDirectory": "vector-first/source",
+      "originalArchiveFileCount": 14,
+      "includedFileCount": 14,
+      "excludedFileCount": 0,
+      "originalArchiveInventorySha256": "dc95407d8e56ac63d72f5dc12b3fae8db7382ece7af1f740e1a512194238bebb",
+      "publishedSourceInventorySha256": "dc95407d8e56ac63d72f5dc12b3fae8db7382ece7af1f740e1a512194238bebb",
+      "includedFiles": {
+        ".gitignore": {
+          "sha256": "750088237782bb7edf2f1fd92cc8a97fee6c4491a2605b44d08d64ace821e14e",
+          "bytes": 41
+        },
+        "bun.lock": {
+          "sha256": "eda955f696bb697e9a9affc709ad224f1a14d3a5815943f69e4b0213eb5cce7d",
+          "bytes": 18539
+        },
+        "package.json": {
+          "sha256": "3f5042e5b6d12305c3c324dcc4bdc4a1242c4f3a67a47d63d92a21aa07767f6f",
+          "bytes": 492
+        },
+        "public/index.html": {
+          "sha256": "c404d2154b09c90976c803045996e03ec9981464785a54e04e9ab7728de86828",
+          "bytes": 15556
+        },
+        "README.md": {
+          "sha256": "c5e3c557a9d6a55efc809062dea7b21c0634eafa1437da9a3c7db9d72192e4ca",
+          "bytes": 2861
+        },
+        "scripts/build.ts": {
+          "sha256": "6e5c03f3e0ad72cb4c17ba1c23153212e460ef546cf64c8de28a62e4d98fbd04",
+          "bytes": 222
+        },
+        "server/index.ts": {
+          "sha256": "3614cba40dbbf5067a46c705945a2ecc8a7ae36a20d49fb0f88ef9cd2fa05ccf",
+          "bytes": 4105
+        },
+        "server/worker.ts": {
+          "sha256": "3945469bc2db109e9dc413133d098b0ab57c6ec692828b7327a0e119ca6cc294",
+          "bytes": 1353
+        },
+        "server/workflows.ts": {
+          "sha256": "476abf2463a5ed0a75a0d93c092529ae71e54b14ae438f19bd1f98fdeeabf734",
+          "bytes": 19419
+        },
+        "sql/v1.sql": {
+          "sha256": "a382ea33b2632e20a135454e7f27204bbf493f30d27b3f1deb6f27fc54a5226f",
+          "bytes": 404
+        },
+        "TASK.md": {
+          "sha256": "26019f3d4a882cd5418dc01b1923c73b9dcf60452054fe8df2a2a3c387d05f4b",
+          "bytes": 9789
+        },
+        "tests/smoke.test.ts": {
+          "sha256": "583b038b08c50f77e18616267cae8668e50effc1317e36acc4d4c856d2ce8912",
+          "bytes": 903
+        },
+        "tests/workflows.test.ts": {
+          "sha256": "81777e54631c19f534f2a500bb9919af81148a099dd34c914982f7cce4df1602",
+          "bytes": 18840
+        },
+        "tsconfig.json": {
+          "sha256": "b9d30bbc7a8767f319455b1b97f8ff850d49377e6e67f533c5fdf31e332d567a",
+          "bytes": 332
+        }
+      },
+      "excludedFiles": {},
+      "correctedIndependentGate": {
+        "exitCode": 0,
+        "verdict": "passed",
+        "apiPassed": 16,
+        "browserPassed": 8,
+        "sourceUnchanged": true,
+        "sourceFiles": 14,
+        "failedChecks": []
+      }
+    },
+    {
+      "id": "vector-repair",
+      "runtime": "vector",
+      "attempt": "attempt-01",
+      "originalArchiveId": "aw1/vector/attempts/attempt-01/source",
+      "sourceDirectory": "vector-repair/source",
+      "originalArchiveFileCount": 15,
+      "includedFileCount": 15,
+      "excludedFileCount": 0,
+      "originalArchiveInventorySha256": "c528ab4b0dcdff8779159a635d7fcfecca6266b772f4d5763ef623649b498277",
+      "publishedSourceInventorySha256": "c528ab4b0dcdff8779159a635d7fcfecca6266b772f4d5763ef623649b498277",
+      "includedFiles": {
+        ".gitignore": {
+          "sha256": "750088237782bb7edf2f1fd92cc8a97fee6c4491a2605b44d08d64ace821e14e",
+          "bytes": 41
+        },
+        "bun.lock": {
+          "sha256": "eda955f696bb697e9a9affc709ad224f1a14d3a5815943f69e4b0213eb5cce7d",
+          "bytes": 18539
+        },
+        "package.json": {
+          "sha256": "3f5042e5b6d12305c3c324dcc4bdc4a1242c4f3a67a47d63d92a21aa07767f6f",
+          "bytes": 492
+        },
+        "public/index.html": {
+          "sha256": "a415a8357b7d4f028b9b09669f69e42a0df6270d94aab860f434a35ff648e947",
+          "bytes": 16233
+        },
+        "README.md": {
+          "sha256": "a355d4e1c0f3f296ea3d26b6b89fb2b03a8e581a268b635f29d6df246fbffbf9",
+          "bytes": 3476
+        },
+        "scripts/build.ts": {
+          "sha256": "6e5c03f3e0ad72cb4c17ba1c23153212e460ef546cf64c8de28a62e4d98fbd04",
+          "bytes": 222
+        },
+        "scripts/verify-keyboard.cjs": {
+          "sha256": "8ecd260f6fdf35824eef94863a228b8ead5af2907930e7fe764ce8d387523b7e",
+          "bytes": 7369
+        },
+        "server/index.ts": {
+          "sha256": "3614cba40dbbf5067a46c705945a2ecc8a7ae36a20d49fb0f88ef9cd2fa05ccf",
+          "bytes": 4105
+        },
+        "server/worker.ts": {
+          "sha256": "3945469bc2db109e9dc413133d098b0ab57c6ec692828b7327a0e119ca6cc294",
+          "bytes": 1353
+        },
+        "server/workflows.ts": {
+          "sha256": "476abf2463a5ed0a75a0d93c092529ae71e54b14ae438f19bd1f98fdeeabf734",
+          "bytes": 19419
+        },
+        "sql/v1.sql": {
+          "sha256": "a382ea33b2632e20a135454e7f27204bbf493f30d27b3f1deb6f27fc54a5226f",
+          "bytes": 404
+        },
+        "TASK.md": {
+          "sha256": "26019f3d4a882cd5418dc01b1923c73b9dcf60452054fe8df2a2a3c387d05f4b",
+          "bytes": 9789
+        },
+        "tests/smoke.test.ts": {
+          "sha256": "583b038b08c50f77e18616267cae8668e50effc1317e36acc4d4c856d2ce8912",
+          "bytes": 903
+        },
+        "tests/workflows.test.ts": {
+          "sha256": "81777e54631c19f534f2a500bb9919af81148a099dd34c914982f7cce4df1602",
+          "bytes": 18840
+        },
+        "tsconfig.json": {
+          "sha256": "b9d30bbc7a8767f319455b1b97f8ff850d49377e6e67f533c5fdf31e332d567a",
+          "bytes": 332
+        }
+      },
+      "excludedFiles": {},
+      "correctedIndependentGate": {
+        "exitCode": 0,
+        "verdict": "passed",
+        "apiPassed": 16,
+        "browserPassed": 8,
+        "sourceUnchanged": true,
+        "sourceFiles": 15,
+        "failedChecks": []
+      }
+    }
+  ]
+}

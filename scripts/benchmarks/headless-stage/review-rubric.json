@@ -1,0 +1,41 @@
+{
+  "kind": "blinded-headless-quality-rubric-v1",
+  "maximumScore": 48,
+  "frozenBeforePaidExecution": true,
+  "sides": "Randomized A/B; no runtime, cost or native logs available to reviewer",
+  "dimensions": [
+    {
+      "name": "Functional completeness and coherent API semantics",
+      "maximumScore": 8
+    },
+    {
+      "name": "Transactional integrity, recovery and corruption handling",
+      "maximumScore": 8
+    },
+    {
+      "name": "Authorization boundaries and input/error validation",
+      "maximumScore": 8
+    },
+    {
+      "name": "Concurrency, capability/lease fencing and lifecycle",
+      "maximumScore": 8
+    },
+    {
+      "name": "CLI usability and typed SDK contract accuracy",
+      "maximumScore": 8
+    },
+    {
+      "name": "Maintainability and meaningful independent verification",
+      "maximumScore": 8
+    }
+  ],
+  "anchors": {
+    "0": "Absent or fundamentally broken",
+    "2": "Substantial gaps or unsafe shortcuts",
+    "4": "Partial implementation with material issues",
+    "6": "Strong implementation with bounded issues",
+    "8": "Complete, well supported implementation with no material issue found"
+  },
+  "requiredOutput": "Per-dimension scores, concrete file/line evidence, critical issues and limits. Score only observable implementation. Functional gate remains separate. No universal quality/security claim.",
+  "comparisonPolicy": "Any quality-preserving cost claim requires all54checks each, known settlement and native audit review, the same blinded reviewer pool, Vector no lower in every named score dimension, and no established material Vector-specific regression. Keep all original reviewer observations."
+}

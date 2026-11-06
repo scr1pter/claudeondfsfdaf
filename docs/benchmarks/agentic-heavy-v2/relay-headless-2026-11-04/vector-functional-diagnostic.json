@@ -1,0 +1,299 @@
+{
+  "kind": "headless-native-gate-bridge-v1",
+  "verdict": "product_failure",
+  "sourceIntegrityStatus": "unchanged",
+  "checks": [
+    {
+      "name": "owned-process-ready-contract",
+      "category": "prerequisite",
+      "status": "passed"
+    },
+    {
+      "name": "loopback-json-health",
+      "category": "prerequisite",
+      "status": "passed"
+    },
+    {
+      "name": "cli-help-is-usable",
+      "category": "prerequisite",
+      "status": "passed"
+    },
+    {
+      "name": "sdk-module-and-declarations-exist",
+      "category": "prerequisite",
+      "status": "passed"
+    },
+    {
+      "name": "workspace-validation-and-uniqueness",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "initial-directory-and-workspace-reads",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "authentication-and-body-transport-boundaries",
+      "category": "api",
+      "status": "failed",
+      "error": "AssertionError",
+      "detail": "acceptance assertion failed"
+    },
+    {
+      "name": "tenant-isolation-on-reads-and-writes",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "capability-issuance-validation",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "roles-cannot-cross-mutation-boundaries",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "revocation-and-repeat-event-accounting",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "staging-metadata-digest-and-redaction",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "csv-bom-crlf-quotes-and-normalization",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "csv-malformed-shape-rejected-atomically",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "csv-duplicate-identities-and-operation-validation",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "csv-field-validation-and-control-characters",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "import-row-and-byte-bounds",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "stage-base-version-is-optimistic-concurrency-boundary",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "stage-replay-is-canonical-and-event-free",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "stage-key-conflict-and-subject-scope",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "staged-and-approved-data-remain-unapplied",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "separation-of-duty-including-owner",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "approval-repeat-and-other-approver-conflict",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "rejection-reason-and-terminal-state",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "cancel-authority-and-lease-invalidation",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "claims-require-worker-and-approved-state",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "simultaneous-claims-have-one-winner",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "lease-bounds-expiry-and-reclaim",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "lease-epoch-fences-old-token",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "lease-cannot-be-used-by-another-worker",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "lease-binds-precise-capability-not-just-subject",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "revoked-worker-cannot-use-admitted-lease",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "commit-lifecycle-member-revisions-and-delete",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "commit-replay-remains-exactly-once-after-expiry",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "commit-replay-conflicts-on-body-and-worker",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "expired-uncommitted-lease-cannot-apply",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "revocation-is-rechecked-before-successful-replay",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "missing-delete-fails-the-entire-batch",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "unique-email-conflict-cannot-partially-apply",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "atomic-email-swaps-evaluate-final-state",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "stale-approved-base-version-never-applies",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "simultaneous-commits-serialize-version-fence",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "stable-sorted-reads-and-missing-resource-errors",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "audit-events-are-transactional-and-contiguous",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "audit-pagination-and-query-validation",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "capabilities-and-leases-never-leak-to-storage-or-logs",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "graceful-restart-preserves-data-authority-and-replays",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "abrupt-restart-recovers-dead-lock-and-outstanding-lease",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "second-live-writer-is-refused",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "partial-trailing-transaction-fails-closed",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "valid-json-transaction-tampering-fails-closed",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "cli-connected-workflow-and-structured-failures",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "sdk-connected-workflow-and-error-contract",
+      "category": "api",
+      "status": "passed"
+    },
+    {
+      "name": "sdk-types-compile-positive-and-reject-invalid-uses",
+      "category": "api",
+      "status": "passed"
+    }
+  ],
+  "summary": {
+    "api": {
+      "passed": 49,
+      "failed": 1,
+      "not_run": 0
+    },
+    "browser": {
+      "passed": 0,
+      "failed": 0,
+      "not_run": 0
+    },
+    "prerequisite": {
+      "passed": 4,
+      "failed": 0,
+      "not_run": 0
+    }
+  },
+  "allIndependentRowsRetained": true,
+  "checksPassed": 53,
+  "checksTotal": 54
+}

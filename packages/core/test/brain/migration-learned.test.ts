@@ -131,10 +131,12 @@ describe("Brain learned-skills migrations", () => {
       )
       .all()
     db.close()
-    expect(migrations.slice(-3)).toEqual([
+    expect(migrations.slice(-5)).toEqual([
       "20261202000000_facets",
+      "20261203000000_revocation",
       "20261210000000_learned_skills",
       "20261211000000_workflow",
+      "20261212000000_research_claims",
     ])
     expect(entries).toEqual([{ id: "m1a2b3", kind: "lesson", status: "active" }])
     // Unset settings read as the defaults: review, local-only, apply, no exploring.

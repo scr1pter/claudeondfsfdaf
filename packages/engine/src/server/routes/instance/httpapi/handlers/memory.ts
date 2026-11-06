@@ -12,6 +12,7 @@ import { BrainSkill } from "@vectordevai/core/brain/skill"
 import { BrainWorkflow } from "@vectordevai/core/brain/workflow"
 import { Flag } from "@vectordevai/core/flag/flag"
 import { ResearchStore } from "@vectordevai/core/research/store"
+import { ResearchExport } from "@vectordevai/core/research/export"
 import { Git } from "@/git"
 import { Instruction } from "@/session/instruction"
 import { SessionDistill } from "@/session/distill"
@@ -747,14 +748,30 @@ export const memoryHandlers = HttpApiBuilder.group(InstanceHttpApi, "memory", (h
     // An attachment, never something a browser renders.
     const exportResearch = Effect.fn("MemoryHttpApi.exportResearch")(function* (ctx: {
       params: { runID: string }
-      query: { format?: "markdown" | "json" }
+      query: { format?: "markdown" | "json" | "docx" | "pdf" }
     }) {
+      const format = ctx.query.format ?? "markdown"
       const exported = yield* research.export(
         yield* instruction.place(),
         ctx.params.runID,
-        ctx.query.format ?? "markdown",
+        format === "json" ? "json" : "markdown",
       )
       if (!exported) return yield* noRun(ctx.params.runID)
+      if (format === "docx" || format === "pdf") {
+        const converted = yield* Effect.tryPromise({
+          try: () => ResearchExport.render(exported.body, format),
+          catch: (cause) => refused(cause instanceof Error ? cause.message : "Vector could not export this report."),
+        })
+        return HttpServerResponse.uint8Array(converted.bytes, {
+          contentType: converted.type,
+          headers: {
+            "content-disposition": `attachment; filename="${exported.name.replace(/\.md$/, `.${format}`).replace(/[^A-Za-z0-9._-]/g, "_")}"`,
+            "x-content-type-options": "nosniff",
+            "content-security-policy": "sandbox",
+            "cache-control": "no-store",
+          },
+        })
+      }
       return HttpServerResponse.text(exported.body, {
         contentType: `${exported.type}; charset=utf-8`,
         headers: {

@@ -1,0 +1,34 @@
+{
+  "kind": "headless-runtime-freeze-v1",
+  "status": "runtime_qualified",
+  "files": {
+    ".gitattributes": "a79691a93b46e49ce460c26ef22afcc03d6eca1e63bf2edbc20e96159510f6c9",
+    "evaluate.py": "2a2abb4a47accc790b62af406003a48c09e6b92ba5c7c4b84bea55f19ca84999",
+    "gate_bridge.py": "484d5051eeaf31ddb30277a5a7b36fb43a3b8926e165100f914646f9a51163f9",
+    "headless_profile.py": "cf8d3008cfc3ac266eb5090a4f09b8a646613d03acc93689289133416804dee2",
+    "instrument/BUILD_SPEC.md": "a85c62de50f23145bfc3ee6db261db08c565889ff8df0a7808bae1143b968351",
+    "instrument/seed/app.mjs": "97c5eae9547890ceb27076df9662c3ac8151cc1968f6150a3d7329056965e938",
+    "instrument/seed/cli.mjs": "9c7d7733ce89172e2f3ea47863bb7a4c3493f36fd1134e90952a7c18561de243",
+    "instrument/seed/package.json": "b32e94a80bba0e3456df65801b7674505fdd16cba468f6529835eb8f9c06f3fe",
+    "instrument/seed/sdk.d.mts": "d603a6990f2bd5f965aeca95af40b869371ed2243c5a64c790e1b1f0069082ce",
+    "instrument/seed/sdk.mjs": "d6a0b4303d17486dffdda5db00f74e630bf05e6e68263830a7306a56421da8c6",
+    "INSTRUMENT_CORRECTIONS.md": "f9753c11d387d026b721c0f2ee31edfadbb1a0cc16c0d84bf0a93c8ac2f5a280",
+    "node-prequalification.json": "efd7d70e8882a29dfff4bb2c23da4bfb4a92dbb369ff6fbb0342f7e63ca9f1f4",
+    "original-contract.json": "c61b6f098715e255ca2d68288620b66e086da385d160b4c36faf4b298c1fcea1",
+    "owned_process.py": "efd2e2a3d6371be359ba03dc9c5df1c51ac7dbd46703337b9ffd6dc53a7b0589",
+    "qualify_bridge.py": "14e2ad11e906a2d61b19241d871a7b19419a0614c58022498bc7e4dd74577aa4",
+    "r1-profile.json": "2efe08f483e104d6df869dae6937e6c6a964ea15c43f411beacfdda9c0f4be59",
+    "README.md": "a52d25507191d0b1b266a4a5c1b542f36a106237faae5325a780e39cd75885b7",
+    "task.json": "8820a450c3b415d315bd19e7ce568aa16df55f382a19c7388d5fd29ff3aff0f3",
+    "test_gate_bridge.py": "3a0426e7b218c528c25787afb39c65ea928751076408b3089891c0bed1b67d06",
+    "test_owned_process.py": "7315118e3a3f291730f148d134f3e1d9e4b13cceb1e49fdf9141da18b6d47d85",
+    "test_source_contract.py": "51c69567fe897cbe9e5bf5ba6b5ebafe6ef2a23dd90213a4d78da07e1feaf86f"
+  },
+  "aggregateSha256": "0daf984c6d6e3e93382aadf4e6955bc0e8f1f37e0b513064114203bc2e59ec5c",
+  "qualificationReportSha256": "90bd7feb6e47bb482c892d9ce759adf08185ed360a5f8827072b6ca1c74200e1",
+  "binarySha256": {
+    "runtime": "0187f68d843f825a72ada4a7eca60db896ed753759a7f8252edcd31ac1bf1b9c",
+    "node": "ba93f9a70bd86fce3ebbb39ec758501458453467aa92a34a0a3602d1e3fc2b9c",
+    "typescript": "2cffde0b8c6760dfb0b5b0382bbb7e00ba6a8b2d981b9205b256a700a481d983"
+  }
+}

@@ -1,0 +1,63 @@
+{
+  "kind": "conservative-two-liability-continuation-v7-source-closure",
+  "baseRevision": "6f68b7e8e8e339d16552f6ca1baa44fd0feba99a",
+  "phasePlanCompactSha256": "315615748b0bb5f163a07fa85e9724d31b408faf878143df0fe9f07f25bf2add",
+  "phasePlanRawSha256": "a47f0ff191662b2a40a4fce8ee9f327030940b143e096043b1d1c8f9aab66750",
+  "runtimeModules": 6,
+  "actualCredentialsOrFinancialJournalsIncluded": false,
+  "productionPaidExecutionAsserted": false,
+  "files": {
+    "archive/budget_gateway.py": {
+      "sha256": "d54569bba65e82921fd77298810bb9263db14720ff1e68f03e383eadba74773d",
+      "bytes": 15102
+    },
+    "archive/budget_gateway_v2.py": {
+      "sha256": "bb548294383132f5a7c6cddc39b636f5018caf88f3e6b79995717389f7fbe0c7",
+      "bytes": 20756
+    },
+    "archive/budget_gateway_v3.py": {
+      "sha256": "e3aaacee4d172139e070689d44362f2f58db104cef8153389ca328f5cb2f5a55",
+      "bytes": 17668
+    },
+    "archive/budget_gateway_v4.py": {
+      "sha256": "f24d6590340f7356b92f923c34377b7bd9b15bdf141a6d77e04dec03142b13d1",
+      "bytes": 12087
+    },
+    "continuation/budget_gateway_v6.py": {
+      "sha256": "0afcb8139970af470a19f90b9a67114c822200bdaeedb8fe54bca8a9f7084df7",
+      "bytes": 29139
+    },
+    "continuation/test_budget_gateway_v6.py": {
+      "sha256": "42d91a5c0b668635dff8dfb340a532e893bca73d684022712aa7610eab0936d3",
+      "bytes": 36181
+    },
+    "continuation/approved-phase-plan.json": {
+      "sha256": "19ee7dbe02ff9e5d3ab2d8e41c1da1f738d1977f879a4a4be284947c793b1255",
+      "bytes": 1790
+    },
+    "carry/budget_gateway_v7.py": {
+      "sha256": "4bd121c1b856bc5bc2dd846b7e96025737ba54098844c14547d6d3464b6e523f",
+      "bytes": 26907
+    },
+    "carry/test_budget_gateway_v7.py": {
+      "sha256": "801b842dc274e73fd11b8ea8aad0919c791cb6805c9b26d5d3f9174086d2ddde",
+      "bytes": 16314
+    },
+    "carry/approved-phase-plan.json": {
+      "sha256": "a47f0ff191662b2a40a4fce8ee9f327030940b143e096043b1d1c8f9aab66750",
+      "bytes": 2489
+    },
+    "carry/README.md": {
+      "sha256": "5a1c1e72b6c1bce9e4b4c6d9039c316824dc2cd9abb7fca321febca05afc0c28",
+      "bytes": 4687
+    },
+    "carry/verify_source.py": {
+      "sha256": "8320c12bbb627f14ab46ca32a04c336cbc480ecb01ea1b82296f567cf1ed5130",
+      "bytes": 2585
+    },
+    "carry/.gitattributes": {
+      "sha256": "d59d8127f80ad0184e9420fb0c97892aba233566d72d07ad7e45c18103668b16",
+      "bytes": 47
+    }
+  }
+}

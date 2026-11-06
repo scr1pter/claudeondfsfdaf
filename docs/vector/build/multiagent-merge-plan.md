@@ -6,6 +6,30 @@ Written 5 November 2026 for your approval. Nothing has been merged into main and
 - `main` is at `1d853606` ("docs(catalog): record the Codium catalog merge and the release pin it needs").
 - `self-evolving` is 155 commits ahead of main. Main has 5 commits that `self-evolving` lacks: the Codium model catalog restoration and the approved fixes from pull request #19.
 
+## Main moved on 5 November 2026
+
+After this plan was written, main took 243 more commits (`4299d743`):
+
+- the tokenomics agent's consolidation: spend accounting, run budgets, guard spend, prompt cache boundaries, usage uncertainty, title limits, task-wait cancellation, stats and benchmark evidence;
+- research pull request #16: local OCR, scoped claims, document exports, and the combined research and revocation migrations.
+
+Merging main into `self-evolving` then had 33 conflicting files. Main was merged into `self-evolving` in the commit "Merge main into self-evolving", and every conflict was resolved. Main's tokenomics and research code is kept as main has it, and the multi-agent and Codium behaviour is added around it. Where this plan says the merge is clean or has no conflicts, it describes main before 5 November. Nothing was pushed, and main was not changed.
+
+The brain migrations run in date order: facets, revocation (main), learned skills and workflow (`self-evolving`), research claims (main). None was renumbered, and none had shipped in a release, so every existing brain.db upgrades.
+
+Judgement calls, in plain words:
+
+- **Subagent spend ceiling message.** When helpers stop at the shared spend ceiling because of steps it cannot price, the message now says "unpriced or incomplete steps". Main now also counts steps with incomplete usage there.
+- **Standard request note.** It keeps main's "not routine tool calls". It drops the older "do the work yourself" and "Subagents are not offered", because Standard requests may now hand work to helpers. The task-size test expects the new wording.
+- **Failed compaction.** As on main, a compaction call that was attempted always records its cost fields, even when it failed. On Codium that is cost 0, marked Codium.
+- **Codium title and memory requests.** Main now charges title and memory requests to the run. A Codium one counts as a Codium step, not as an unpriced one, so it can no longer trip main's unpriced-step stop. This was added in main's title-usage code and in the prompt's helper cost check. Every other model is charged exactly as on main.
+- **Codium usage.** A Codium step reports no provider-measured bill (`billed: false`). Before, the field was missing. Nothing behaves differently.
+- **Stats.** `vector stats` uses main's labels and main's counting of title and memory receipts. Codium requests are counted as Codium, never as unpriced/incomplete requests, tokens or dollars. For data without Codium every number matches main.
+- **Stopped launch notes.** Main's rule is unchanged: a note from a stopped launch does not restart work. It now sits in the one place `self-evolving` delivers helper notes from (TaskNotify), because the code main changed no longer exists in the task tool.
+- **Context display.** The sidebar keeps "N% of context used", the Codium wording. Main's test now checks that text. The app's ledger shows main's "cumulative chat usage" note when the engine has recorded this chat's own totals. Otherwise it says the bar is the latest turn's mix. Main's app test now gives its sample session the "own totals recorded" flags that the merged engine sets. It checks the same numbers.
+- **Helper forks.** A step's forks now settle inside main's cancel-proof step recording, so a cancel cannot settle them as aborted.
+- **Tests adjusted to the other side's rules, none weakened.** Main's brain migration test also expects the research claims migration, which main's own CI misses today (run 42130320793). A Codium compaction test now counts the earlier no-usage turn as one unpriced step, under main's rule that missing usage is not zero. Main's nested-activity CLI test shortens the helper note window to fit its 1-second idle limit. That test still fails without main's fix.
+
 ## Recommendation
 
 Merge `self-evolving` into main now. Do it through a pull request, and leave Codium's pages as they are. Git merges the two cleanly, with no conflicts. The result is `self-evolving` plus main's restored model catalog. Nothing goes on sale: Stripe is not connected, Codium sales are off, and no model route has been accepted, so every plan button on the pricing page says "Coming soon". The website still changes the moment main moves. It gets a new four-plan pricing page, a new account card, new docs pages marked "Coming in desktop 1.99.113", and new sign-in checks that today's desktop and CLI use. Desktop and CLI users get nothing new until you publish 1.99.113. Before you press merge, do three things. Let the pull request run the checks that have never run on this branch: typecheck, the 30-minute Verify capture and the API checks. Look at its preview. And decide whether to allow the timeline benchmark the repository asks for, which has not been run. After this merge, merge VectorScope, then Codium once track A finishes, then @vector and Hands. Each of those branches then fixes a few conflicts on its own side; Hands has the most, about 67 files.
@@ -14,7 +38,7 @@ Merge `self-evolving` into main now. Do it through a pull request, and leave Cod
 
 ### This merge
 
-There are none. An in-memory merge of main and `self-evolving` finished with no conflicts. Git merged one file on its own, `packages/web/test/model-plan-catalog.test.ts`.
+Against main as it was when this plan was written, there were none. Main then moved on 5 November, and the 33 files that conflicted were resolved by the merge of main into `self-evolving` (see "Main moved on 5 November 2026" above). The earlier in-memory merge had finished with no conflicts, and Git merged one file on its own, `packages/web/test/model-plan-catalog.test.ts`.
 
 Main and `self-evolving` both changed 37 of the same files. Here is how each side is kept:
 

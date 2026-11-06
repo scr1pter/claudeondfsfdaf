@@ -14,6 +14,7 @@ import { SessionProjector } from "@vectordevai/core/session/projector"
 import { eq } from "drizzle-orm"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { afterAll, expect, test } from "bun:test"
+import { $ } from "bun"
 import { Cause, Deferred, Duration, Effect, Exit, Fiber, Layer, Stream } from "effect"
 import path from "path"
 import { dynamicTool, jsonSchema, type Tool } from "ai"
@@ -68,6 +69,9 @@ import { awaitWithTimeout, pollWithTimeout, testEffect } from "../lib/effect"
 import { seen } from "../lib/file-state"
 import { reply, TestLLMServer, type Reply } from "../lib/llm-server"
 import { SpendGuard } from "@vectordevai/core/spend-guard"
+import { Brain } from "@vectordevai/core/brain/brain"
+import { BrainKnowledge } from "@vectordevai/core/brain/knowledge"
+import { FreeModelGuests } from "@vectordevai/core/free-model-guests"
 import { Auth } from "@/auth"
 import { isRecord } from "@/util/record"
 import { RuntimeFlags } from "@/effect/runtime-flags"
@@ -199,6 +203,9 @@ const runtimeFlags = RuntimeFlags.layer({ experimentalEventSystem: true })
 const testLLMServerNode = LayerNode.make({ service: TestLLMServer, layer: TestLLMServer.layer, deps: [] })
 
 const promptRoot = LayerNode.group([
+  Brain.node,
+  BrainKnowledge.node,
+  FreeModelGuests.node,
   SessionPrompt.node,
   Session.node,
   SessionProjector.node,
@@ -503,6 +510,14 @@ function providerCfg(url: string) {
       },
     },
   }
+}
+
+function systemPrefix(hit: { body: Record<string, unknown> }) {
+  return JSON.stringify(
+    Array.isArray(hit.body.messages)
+      ? hit.body.messages.filter((message) => isRecord(message) && message.role === "system")
+      : [],
+  )
 }
 
 const writeText = Effect.fn("test.writeText")(function* (file: string, text: string) {
@@ -1198,12 +1213,221 @@ it.instance("a session reads its instruction files once, so an edit mid-session 
     yield* turn(fresh.id, "inspect the repository")
 
     const bodies = (yield* llm.hits).map((hit) => JSON.stringify(hit.body))
+    const prefixes = (yield* llm.hits).map(systemPrefix)
     expect(bodies).toHaveLength(3)
+    expect(prefixes[0]).not.toBe("[]")
+    expect(prefixes[1]).toBe(prefixes[0])
+    expect(prefixes[2]).not.toBe(prefixes[0])
     expect(bodies[1]).toContain("# First rules")
     expect(bodies[1]).not.toContain("# Second rules")
     // A new session reads the files as they are now.
     expect(bodies[2]).toContain("# Second rules")
   }),
+)
+
+it.instance(
+  "explicitly forgetting pinned memory refreshes an active session without refreshing ordinary learned writes",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const instruction = yield* Instruction.Service
+      const brain = yield* Brain.Service
+      const place = yield* instruction.place()
+      const instance = yield* InstanceRef
+      if (!instance) return yield* Effect.die("no instance")
+      const rules = path.join(instance.directory, "AGENTS.md")
+      yield* Effect.promise(() => Bun.write(rules, "# First cached rules"))
+      const saved = yield* brain.propose(place, {
+        origin: "user",
+        scope: "repository",
+        kind: "decision",
+        text: "Reports use the sapphire forecast window.",
+      })
+      if (saved.type === "refused") return yield* Effect.die(saved.message)
+      yield* brain.update(place, saved.entry.id, { pinned: true }, "user")
+      const turn = (sessionID: SessionID) =>
+        Effect.gen(function* () {
+          yield* prompt.prompt({
+            sessionID,
+            agent: "build",
+            noReply: true,
+            parts: [{ type: "text", text: "inspect the repository" }],
+          })
+          yield* llm.text("ok")
+          yield* prompt.loop({ sessionID })
+        })
+      const chat = yield* sessions.create({
+        title: "Memory revocation",
+        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+      })
+      yield* turn(chat.id)
+      yield* Effect.promise(() => Bun.write(rules, "# Updated rules after ordinary learning"))
+      const learned = yield* brain.propose(place, {
+        origin: "agent",
+        scope: "repository",
+        kind: "preference",
+        text: "Prefer narrow source changes.",
+        evidence: { type: "message", quote: "Prefer narrow source changes.", verified: true },
+      })
+      expect(learned.type).not.toBe("refused")
+      yield* turn(chat.id)
+      expect(yield* brain.forget(place, saved.entry.id)).toBe("forgotten")
+      yield* turn(chat.id)
+
+      const bodies = (yield* llm.hits).map((hit) => JSON.stringify(hit.body))
+      expect(bodies).toHaveLength(3)
+      expect(bodies[0]).toContain("Reports use the sapphire forecast window.")
+      expect(bodies[1]).toContain("Reports use the sapphire forecast window.")
+      expect(bodies[1]).toContain("# First cached rules")
+      expect(bodies[1]).not.toContain("# Updated rules after ordinary learning")
+      expect(bodies[2]).not.toContain("Reports use the sapphire forecast window.")
+      expect(bodies[2]).toContain("# Updated rules after ordinary learning")
+    }),
+)
+
+it.instance(
+  "explicitly forgetting a document removes its cached index title from an active session",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const instruction = yield* Instruction.Service
+      const knowledge = yield* BrainKnowledge.Service
+      const place = yield* instruction.place()
+      const added = yield* knowledge.add(place, {
+        type: "text",
+        name: "SapphireMemo.md",
+        text: "# SapphireMemo\n\nThe forecast window spans sixteen weeks.",
+        origin: "upload",
+      })
+      if (added.type === "refused") return yield* Effect.die(added.message)
+      yield* knowledge.wait(place, added.document.id, "searchable", 20_000)
+      const turn = (sessionID: SessionID) =>
+        Effect.gen(function* () {
+          yield* prompt.prompt({
+            sessionID,
+            agent: "build",
+            noReply: true,
+            parts: [{ type: "text", text: "inspect the repository" }],
+          })
+          yield* llm.text("ok")
+          yield* prompt.loop({ sessionID })
+        })
+      const chat = yield* sessions.create({
+        title: "Document revocation",
+        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+      })
+      yield* turn(chat.id)
+      expect(yield* knowledge.remove(place, added.document.id)).toBe("removed")
+      expect(yield* knowledge.digest(place, { personal: true })).toBeUndefined()
+      yield* turn(chat.id)
+
+      const bodies = (yield* llm.hits).map((hit) => JSON.stringify(hit.body))
+      expect(bodies).toHaveLength(2)
+      expect(bodies[0]?.includes("SapphireMemo")).toBe(true)
+      expect(bodies[1]?.includes("SapphireMemo")).toBe(false)
+      expect(bodies[1]?.includes("Vector also holds 1 document")).toBe(false)
+    }),
+  30_000,
+)
+
+it.instance(
+  "making a shared document private refreshes a live guest session's cached titles",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const instruction = yield* Instruction.Service
+      const knowledge = yield* BrainKnowledge.Service
+      const guests = yield* FreeModelGuests.Service
+      const place = yield* instruction.place()
+      const added = yield* knowledge.add(place, {
+        type: "text",
+        name: "SapphireMemo.md",
+        title: "SapphireMemo",
+        text: "# SapphireMemo\n\nThe forecast window spans sixteen weeks.",
+        origin: "upload",
+      })
+      if (added.type === "refused") return yield* Effect.die(added.message)
+      yield* knowledge.wait(place, added.document.id, "searchable", 20_000)
+      yield* knowledge.update(place, added.document.id, { visibility: "repository" })
+      const chat = yield* sessions.create({
+        title: "Shared document privacy",
+        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+      })
+      yield* guests.mark(chat.id)
+      const turn = Effect.gen(function* () {
+        yield* prompt.prompt({
+          sessionID: chat.id,
+          agent: "build",
+          noReply: true,
+          parts: [{ type: "text", text: "inspect the repository" }],
+        })
+        yield* llm.text("ok")
+        yield* prompt.loop({ sessionID: chat.id })
+      })
+      yield* turn
+      expect((yield* llm.hits).map(systemPrefix)[0]?.includes("SapphireMemo")).toBe(true)
+      expect(yield* knowledge.update(place, added.document.id, { visibility: "private" })).toBe("updated")
+      expect(yield* knowledge.digest(place, { personal: false })).toBeUndefined()
+      expect(yield* knowledge.digest(place, { personal: true })).toContain("SapphireMemo")
+      yield* turn
+      const prefixes = (yield* llm.hits).map(systemPrefix)
+      expect(prefixes).toHaveLength(2)
+      expect(prefixes[1]?.includes("SapphireMemo")).toBe(false)
+    }),
+  30_000,
+)
+
+it.instance(
+  "turning repository documents off withdraws titles from an active session",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const instruction = yield* Instruction.Service
+      const knowledge = yield* BrainKnowledge.Service
+      const place = yield* instruction.place()
+      yield* writeText(path.join(place.root, "README.md"), "# CobaltManual\n\nUse cobalt values for archived reports.")
+      yield* Effect.promise(() => $`git add README.md`.cwd(place.root).quiet())
+      const added = yield* knowledge.add(place, {
+        type: "path",
+        path: "README.md",
+        title: "CobaltManual",
+        origin: "repository",
+      })
+      if (added.type === "refused") return yield* Effect.die(added.message)
+      yield* knowledge.wait(place, added.document.id, "searchable", 20_000)
+      const chat = yield* sessions.create({
+        title: "Repository document withdrawal",
+        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+      })
+      const turn = Effect.gen(function* () {
+        yield* prompt.prompt({
+          sessionID: chat.id,
+          agent: "build",
+          noReply: true,
+          parts: [{ type: "text", text: "inspect the repository" }],
+        })
+        yield* llm.text("ok")
+        yield* prompt.loop({ sessionID: chat.id })
+      })
+      yield* turn
+      expect((yield* llm.hits).map(systemPrefix)[0]?.includes("CobaltManual")).toBe(true)
+      yield* knowledge.configure(place, { repositoryDocs: false })
+      expect(yield* knowledge.digest(place, { personal: true })).toBeUndefined()
+      yield* turn
+      const prefixes = (yield* llm.hits).map(systemPrefix)
+      expect(prefixes).toHaveLength(2)
+      expect(prefixes[1]?.includes("CobaltManual")).toBe(false)
+    }),
+  { git: true },
+  30_000,
 )
 
 withMcpInstructions.instance(
@@ -5525,6 +5749,172 @@ withBackground.instance(
       expect(yield* llm.calls).toBe(3)
       expect(yield* llm.pending).toBe(1)
       expect((yield* guard.snapshot(chat.id))?.steps).toBe(3)
+    }),
+  120_000,
+)
+
+withBackground.instance(
+  "legacy accounting keeps a late background batch charge on its launch run after a new root run",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig((url) => {
+        const base = providerCfg(url)
+        return {
+          ...base,
+          provider: {
+            lmstudio: {
+              ...base.provider.lmstudio,
+              models: {
+                "accounting-background": {
+                  ...base.provider.lmstudio.models["test-model"],
+                  id: "accounting-background",
+                  cost: { input: 100, output: 1 },
+                },
+              },
+            },
+          },
+        }
+      })
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const guard = yield* SpendGuard.Service
+      const database = yield* Database.Service
+      const events = yield* EventV2Bridge.Service
+      const selected = { providerID: ProviderV2.ID.make("lmstudio"), modelID: ModelV2.ID.make("accounting-background") }
+      const chat = yield* sessions.create({
+        title: "Pinned",
+        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+      })
+      yield* prompt.prompt({
+        sessionID: chat.id,
+        agent: "build",
+        model: selected,
+        noReply: true,
+        size: "thorough",
+        judge: "off",
+        budget: { usd: 1 },
+        parts: [{ type: "text", text: "Start the accounting assignment" }],
+      })
+      const releaseChild = Promise.withResolvers<void>()
+      const releaseRoot = Promise.withResolvers<void>()
+      const child = asksFor("Inspect the bounded accounting fixture")
+      const next = asksFor("new independent accounting request")
+      const root = (hit: { body: Record<string, unknown> }) => !child(hit) && !next(hit)
+      yield* llm.pushMatch(
+        root,
+        reply()
+          .tool("task", {
+            tasks: [
+              {
+                description: "Inspect accounting",
+                prompt: "Inspect the bounded accounting fixture",
+                subagent_type: "general",
+                budget: { usd: 0.01 },
+              },
+            ],
+            budget: { usd: 0.02 },
+            background: true,
+          })
+          .usage({ input: 1_000, output: 100 }),
+        reply().wait(releaseRoot.promise).tool("first", { value: 1 }).usage({ input: 20_000, output: 100 }),
+      )
+      yield* llm.pushMatch(
+        child,
+        reply().wait(releaseChild.promise).tool("lookup", { value: 1 }).usage({ input: 10, output: 10 }),
+        reply().text("must not be requested").stop(),
+      )
+      yield* llm.pushMatch(next, reply().text("Independent request complete.").usage({ input: 30, output: 10 }).stop())
+      const unlock = Effect.sync(() => {
+        releaseChild.resolve()
+        releaseRoot.resolve()
+      })
+      yield* Effect.gen(function* () {
+        const running = yield* prompt.loop({ sessionID: chat.id }).pipe(Effect.forkChild)
+        yield* llm.wait(3)
+        releaseRoot.resolve()
+        expect(budgetStop((yield* Fiber.join(running)).info)?.reason).toBe("cap")
+        const [kid] = yield* sessions.children(chat.id)
+        expect(kid).toBeDefined()
+        if (!kid) return yield* Effect.die("The real task call did not create its child")
+        yield* prompt.prompt({
+          sessionID: chat.id,
+          agent: "build",
+          model: selected,
+          judge: "off",
+          budget: { usd: 1 },
+          parts: [{ type: "text", text: "new independent accounting request" }],
+        })
+        expect((yield* guard.snapshot(chat.id))?.spentUsd).toBeCloseTo(0.00301, 9)
+        releaseChild.resolve()
+        yield* pollWithTimeout(
+          MessageV2.filterCompactedEffect(kid.id).pipe(
+            Effect.map((messages) =>
+              messages.map((message) => budgetStop(message.info)).find((stop) => stop !== undefined),
+            ),
+          ),
+          "the old child never observed its launch run's stop",
+        )
+        yield* pollWithTimeout(
+          MessageV2.filterCompactedEffect(chat.id).pipe(
+            Effect.map((messages) =>
+              messages.findLast((message) =>
+                message.parts.some((part) => part.type === "text" && part.text.includes("Background task")),
+              ),
+            ),
+          ),
+          "the settled child never notified its root",
+        )
+        // As in the existing control, allow an unintended reply to the background notice to become observable.
+        yield* Effect.sleep("300 millis")
+        const settled = yield* sessions.get(kid.id)
+        const parent = yield* sessions.get(chat.id)
+        expect(settled.cost).toBeCloseTo(0.00101, 9)
+        expect(settled.tokens).toMatchObject({ input: 10, output: 10 })
+        expect(parent.cost).toBeCloseTo(2.10321, 9)
+        expect(parent.subagentCost).toBeCloseTo(0.00101, 9)
+        expect(parent.tokens).toMatchObject({ input: 21_030, output: 210 })
+        expect(parent.subagentTokens).toEqual({ input: 10, output: 10, reasoning: 0, cache: { read: 0, write: 0 } })
+        // Completed tasks persist their launch scopes before releasing the in-memory binding. The newer root run
+        // may have replaced the old last-run pointer, so the durable lifecycle record owns this settled receipt.
+        const scopes: readonly SpendGuard.ScopeSnapshot[] = settled.metadata?.subagent?.budgetScopes ?? []
+        expect(scopes.find((scope) => scope.kind === "run")?.spentUsd).toBeCloseTo(2.10121, 9)
+        expect(scopes.find((scope) => scope.kind === "run")?.steps).toBe(3)
+        expect(yield* llm.calls).toBe(4)
+        expect((yield* guard.snapshot(chat.id))?.spentUsd).toBeCloseTo(0.00301, 9)
+        expect((yield* guard.snapshot(chat.id))?.steps).toBe(1)
+        expect(scopes.find((scope) => scope.kind === "batch")?.spentUsd).toBeCloseTo(0.00101, 9)
+        expect(scopes.find((scope) => scope.kind === "child")?.spentUsd).toBeCloseTo(0.00101, 9)
+        const recorded = yield* database.db.select().from(EventTable).where(eq(EventTable.aggregate_id, kid.id)).all()
+        const settlement = recorded.find(
+          (event) =>
+            event.type.startsWith(`${SessionV1.Event.PartUpdated.type}.`) &&
+            (event.data as { part?: { type?: string } }).part?.type === "step-finish",
+        )
+        if (!settlement) return yield* Effect.die("Missing real background child settlement")
+        yield* events.replay({
+          id: settlement.id,
+          aggregateID: settlement.aggregate_id,
+          seq: settlement.seq,
+          type: settlement.type,
+          data: settlement.data,
+        })
+        expect((yield* sessions.get(chat.id)).subagentCost).toBeCloseTo(0.00101, 9)
+        expect((yield* sessions.get(kid.id)).metadata?.subagent?.budgetScopes).toEqual(scopes)
+        expect((yield* guard.snapshot(chat.id))?.spentUsd).toBeCloseTo(0.00301, 9)
+        expect(yield* llm.calls).toBe(4)
+        expect(yield* llm.pending).toBe(1)
+        yield* llm.pushMatch(next, reply().text("Continued by the user.").usage({ input: 20, output: 5 }).stop())
+        yield* prompt.prompt({
+          sessionID: chat.id,
+          agent: "build",
+          model: selected,
+          judge: "off",
+          budget: { usd: 1 },
+          parts: [{ type: "text", text: "Continue after the recorded stopped task" }],
+        })
+        expect(yield* llm.calls).toBe(5)
+        expect((yield* guard.snapshot(chat.id))?.spentUsd).toBeCloseTo(0.002005, 9)
+      }).pipe(Effect.ensuring(unlock))
     }),
   120_000,
 )

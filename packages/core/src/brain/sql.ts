@@ -133,6 +133,8 @@ export const BrainSourceTable = sqliteTable("brain_source", {
 export const BrainStateTable = sqliteTable("brain_state", {
   repository_id: text().primaryKey(),
   revision: integer().notNull().default(0),
+  // Explicit withdrawals and corrections only. Never reset by event retention or erasing a scope's content.
+  revocation_revision: integer().notNull().default(0),
   learning: integer({ mode: "boolean" }).notNull().default(true),
   consolidated_at: integer(),
   // Documents keep a revision of their own, so a memory write never invalidates what is cached about documents.
@@ -803,6 +805,7 @@ export const ResearchNoteTable = sqliteTable(
     // Whether the quote states the claim (BrainLexical.states); false is a paraphrase.
     support: integer({ mode: "boolean" }).notNull(),
     verdict: text().$type<Research.Verdict>(),
+    measurement: text({ mode: "json" }).$type<Research.Measurement>(),
     created_at: integer().notNull(),
   },
   (table) => [

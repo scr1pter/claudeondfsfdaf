@@ -1,0 +1,79 @@
+{
+  "kind": "post-run-journal-loss-diagnostic-v1",
+  "providerCalls": 0,
+  "sourceUnchanged": true,
+  "originalAcceptanceAndReviewScoresUnchanged": true,
+  "preRegisteredAcceptanceCheck": false,
+  "rows": [
+    {
+      "runtime": "codex",
+      "damage": "missing-journal",
+      "acknowledgedVersion": 1,
+      "acknowledgedMembers": 1,
+      "originalRecords": 9,
+      "announcedReady": true,
+      "readStatus": 401,
+      "refusedDamagedState": false,
+      "observedVersion": null,
+      "observedMembers": null,
+      "acknowledgedStatePreserved": false
+    },
+    {
+      "runtime": "codex",
+      "damage": "empty-journal",
+      "acknowledgedVersion": 1,
+      "acknowledgedMembers": 1,
+      "originalRecords": 9,
+      "announcedReady": true,
+      "readStatus": 401,
+      "refusedDamagedState": false,
+      "observedVersion": null,
+      "observedMembers": null,
+      "acknowledgedStatePreserved": false
+    },
+    {
+      "runtime": "codex",
+      "damage": "complete-record-tail-truncation",
+      "acknowledgedVersion": 1,
+      "acknowledgedMembers": 1,
+      "originalRecords": 9,
+      "announcedReady": true,
+      "readStatus": 200,
+      "refusedDamagedState": false,
+      "observedVersion": 0,
+      "observedMembers": 0,
+      "acknowledgedStatePreserved": false
+    },
+    {
+      "runtime": "vector",
+      "damage": "missing-journal",
+      "acknowledgedVersion": 1,
+      "acknowledgedMembers": 1,
+      "originalRecords": 10,
+      "announcedReady": false,
+      "startupExitCodeBeforeCleanup": 1,
+      "refusedDamagedState": true
+    },
+    {
+      "runtime": "vector",
+      "damage": "empty-journal",
+      "acknowledgedVersion": 1,
+      "acknowledgedMembers": 1,
+      "originalRecords": 10,
+      "announcedReady": false,
+      "startupExitCodeBeforeCleanup": 1,
+      "refusedDamagedState": true
+    },
+    {
+      "runtime": "vector",
+      "damage": "complete-record-tail-truncation",
+      "acknowledgedVersion": 1,
+      "acknowledgedMembers": 1,
+      "originalRecords": 10,
+      "announcedReady": false,
+      "startupExitCodeBeforeCleanup": 1,
+      "refusedDamagedState": true
+    }
+  ],
+  "scope": "Three intentionally damaged fresh synthetic directories per implementation. This is a post-run adjudication, not an added headline check or security certification."
+}

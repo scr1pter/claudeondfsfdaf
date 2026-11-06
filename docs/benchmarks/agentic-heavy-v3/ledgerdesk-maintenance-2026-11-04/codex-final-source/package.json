@@ -1,0 +1,12 @@
+{
+  "name": "ledgerdesk",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Local transactional usage billing, invoices, credits and scoped access",
+  "scripts": {
+    "start": "node app.mjs",
+    "test": "node verify.mjs",
+    "typecheck": "node verify-types.mjs"
+  }
+}

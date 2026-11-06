@@ -1,0 +1,23 @@
+{
+  "version": "outbox-private-reference-source-v1",
+  "sourceSha256": "8d5b30a010beefa5b87b594240014420ccdac3956d88508ab55ae2fae1300e34",
+  "files": {
+    ".bun-version": "56b0485099b6c5427d3b68c042fd05b632d5e52e924c5064473389812227164c",
+    ".node-version": "a1c56e968c358e10872d64220b3ae759ffe7feaffc4da95fae425dbcca43fe44",
+    "REFERENCE-NOTES.md": "1bf8c4f24deff5448fcefb897a31e26845fd2ba4b5c420d6ee3c3ab12448e5bb",
+    "TASK.md": "34fb7d00f6cbdf0d42bb3ed489b78f7091e5378f833580dd20a67bf051161509",
+    "bun.lock": "eda955f696bb697e9a9affc709ad224f1a14d3a5815943f69e4b0213eb5cce7d",
+    "fixtures/provider.ts": "b69416cb8ee8a664b1489a93dd5583ce8e9a455a33fc279ff8088bb3c71fef11",
+    "fixtures/tickets.json": "fb5a4c7c077db171ad00fd260b1091a6f377e3bd6b96f8901cb82a6ccb8cd4f4",
+    "package.json": "3f5042e5b6d12305c3c324dcc4bdc4a1242c4f3a67a47d63d92a21aa07767f6f",
+    "scripts/build.ts": "f3c9b0fd1e7ff6225b6b0b60778ab6f60102e4a39b0507245802faff6479e274",
+    "server/index.ts": "d65e028759668bd56f0aa3f774028766161acf844e87fc00165a32147520155a",
+    "tests/smoke.test.ts": "5ee0127767bc27c7d2acc409081d4bd84ee6320c5517eb4f08461a19039011af",
+    "tsconfig.json": "16bfe7b04a8c0d6176bd037e49cd3376d04deab59bde034875a2e166c563e34f",
+    "web/app.js": "0d295c14f9c4391fda41b8f84cb8c0a8842abe9a590bcaa04ee024f6365dc0be",
+    "web/index.html": "dcdcb92dc1387342914ef9523497ad5c80b31792296f62ece61e622d3bdadf3f",
+    "web/style.css": "20bff35d7743e55f17102f1652abd3f9876dafbcfb88adc0d4a25db73c36a828"
+  },
+  "runtimeProjectionSha256": "fef0795777b1f0872e6d1fdf6204a4b47b6cca0e670d43be602ebfc1f931a780",
+  "publication": "Private until all study arms finish; publish sanitized source outside frozen task root afterwards."
+}

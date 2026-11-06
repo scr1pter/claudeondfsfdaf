@@ -1,0 +1,252 @@
+{
+  "kind": "posthoc-held-body-revocation-diagnostic-v1",
+  "paidProviderCalls": 0,
+  "browserCalls": 0,
+  "originalGateOrQualityScoreChanges": false,
+  "schedule": "Send HTTP headers and all but the final JSON byte; hold one second; receive successful owner revocation and fresh-denial responses before releasing the final byte.",
+  "limits": [
+    "Server dispatch and the authorization checkpoint are not instrumented.",
+    "A positive accepted and persisted write establishes this schedule only.",
+    "Denial on this schedule does not establish safety for every schedule."
+  ],
+  "arms": {
+    "codex": {
+      "arm": "codex",
+      "posthoc": true,
+      "excludedFromOriginalGatesAndScores": true,
+      "dispatchInstrumented": false,
+      "serverInternalAuthorizationTimingObserved": false,
+      "requestMethod": "POST",
+      "resource": "customers",
+      "memberRole": "member",
+      "holdSecondsBeforeRevocation": 1.0,
+      "events": [
+        {
+          "event": "server_ready",
+          "elapsedMs": 1062.0
+        },
+        {
+          "event": "synthetic_fixture_ready",
+          "elapsedMs": 1281.0
+        },
+        {
+          "event": "no_revocation_control:headers_and_partial_body_sent",
+          "elapsedMs": 1296.0,
+          "totalBodyBytes": 67,
+          "partialBodyBytes": 66,
+          "withheldBodyBytes": 1
+        },
+        {
+          "event": "no_revocation_control:pre_release_observation",
+          "elapsedMs": 2296.0,
+          "responseBytesAvailable": false
+        },
+        {
+          "event": "no_revocation_control:body_release_started",
+          "elapsedMs": 2296.0
+        },
+        {
+          "event": "no_revocation_control:final_body_byte_sent",
+          "elapsedMs": 2296.0,
+          "finalBodyBytes": 1
+        },
+        {
+          "event": "no_revocation_control:response_received",
+          "elapsedMs": 2296.0,
+          "status": 201
+        },
+        {
+          "event": "revocation_case:headers_and_partial_body_sent",
+          "elapsedMs": 2312.0,
+          "totalBodyBytes": 61,
+          "partialBodyBytes": 60,
+          "withheldBodyBytes": 1
+        },
+        {
+          "event": "revocation_case:pre_release_observation",
+          "elapsedMs": 3312.0,
+          "responseBytesAvailable": false
+        },
+        {
+          "event": "owner_revocation_dispatch",
+          "elapsedMs": 3312.0
+        },
+        {
+          "event": "owner_revocation_response_received",
+          "elapsedMs": 3328.0,
+          "status": 204
+        },
+        {
+          "event": "fresh_after_revocation_response_received",
+          "elapsedMs": 3343.0,
+          "status": 404
+        },
+        {
+          "event": "revocation_case:body_release_started",
+          "elapsedMs": 3343.0
+        },
+        {
+          "event": "revocation_case:final_body_byte_sent",
+          "elapsedMs": 3343.0,
+          "finalBodyBytes": 1
+        },
+        {
+          "event": "revocation_case:response_received",
+          "elapsedMs": 3343.0,
+          "status": 201
+        },
+        {
+          "event": "owner_persistence_verification_completed",
+          "elapsedMs": 3359.0
+        }
+      ],
+      "noRevocationControlStatus": 201,
+      "noRevocationControlPersisted": true,
+      "revocationStatus": 204,
+      "freshAfterRevocationStatus": 404,
+      "heldAfterRevocationStatus": 201,
+      "heldAfterRevocationErrorCode": null,
+      "heldAfterRevocationPersisted": true,
+      "freshAfterRevocationPersisted": false,
+      "positiveStaleAuthorityWriteObserved": true,
+      "denialAndNoWriteObservedForThisSchedule": false,
+      "diagnosticCompleted": true,
+      "ownedProcessAliveBeforeCleanup": true,
+      "ownedProcessExitedAfterCleanup": true,
+      "cleanupTargetedOnlyOwnedPopenProcess": true,
+      "ownedPortClosedAfterCleanup": true,
+      "sourceIntegrity": {
+        "authoredFileCount": 22,
+        "originalManifestSha256Before": "e58f8c4110598636d830014f952d55add91754a8e67ceba2bb61032021921c16",
+        "originalManifestSha256After": "e58f8c4110598636d830014f952d55add91754a8e67ceba2bb61032021921c16",
+        "copiedManifestSha256Before": "e58f8c4110598636d830014f952d55add91754a8e67ceba2bb61032021921c16",
+        "copiedManifestSha256After": "e58f8c4110598636d830014f952d55add91754a8e67ceba2bb61032021921c16",
+        "originalUnchanged": true,
+        "copyUnchanged": true
+      }
+    },
+    "vector": {
+      "arm": "vector",
+      "posthoc": true,
+      "excludedFromOriginalGatesAndScores": true,
+      "dispatchInstrumented": false,
+      "serverInternalAuthorizationTimingObserved": false,
+      "requestMethod": "POST",
+      "resource": "customers",
+      "memberRole": "member",
+      "holdSecondsBeforeRevocation": 1.0,
+      "events": [
+        {
+          "event": "server_ready",
+          "elapsedMs": 1828.0
+        },
+        {
+          "event": "synthetic_fixture_ready",
+          "elapsedMs": 2063.0
+        },
+        {
+          "event": "no_revocation_control:headers_and_partial_body_sent",
+          "elapsedMs": 2078.0,
+          "totalBodyBytes": 67,
+          "partialBodyBytes": 66,
+          "withheldBodyBytes": 1
+        },
+        {
+          "event": "no_revocation_control:pre_release_observation",
+          "elapsedMs": 3078.0,
+          "responseBytesAvailable": false
+        },
+        {
+          "event": "no_revocation_control:body_release_started",
+          "elapsedMs": 3078.0
+        },
+        {
+          "event": "no_revocation_control:final_body_byte_sent",
+          "elapsedMs": 3078.0,
+          "finalBodyBytes": 1
+        },
+        {
+          "event": "no_revocation_control:response_received",
+          "elapsedMs": 3078.0,
+          "status": 201
+        },
+        {
+          "event": "revocation_case:headers_and_partial_body_sent",
+          "elapsedMs": 3110.0,
+          "totalBodyBytes": 61,
+          "partialBodyBytes": 60,
+          "withheldBodyBytes": 1
+        },
+        {
+          "event": "revocation_case:pre_release_observation",
+          "elapsedMs": 4110.0,
+          "responseBytesAvailable": false
+        },
+        {
+          "event": "owner_revocation_dispatch",
+          "elapsedMs": 4110.0
+        },
+        {
+          "event": "owner_revocation_response_received",
+          "elapsedMs": 4141.0,
+          "status": 204
+        },
+        {
+          "event": "fresh_after_revocation_response_received",
+          "elapsedMs": 4157.0,
+          "status": 404
+        },
+        {
+          "event": "revocation_case:body_release_started",
+          "elapsedMs": 4157.0
+        },
+        {
+          "event": "revocation_case:final_body_byte_sent",
+          "elapsedMs": 4157.0,
+          "finalBodyBytes": 1
+        },
+        {
+          "event": "revocation_case:response_received",
+          "elapsedMs": 4157.0,
+          "status": 404
+        },
+        {
+          "event": "owner_persistence_verification_completed",
+          "elapsedMs": 4188.0
+        }
+      ],
+      "noRevocationControlStatus": 201,
+      "noRevocationControlPersisted": true,
+      "revocationStatus": 204,
+      "freshAfterRevocationStatus": 404,
+      "heldAfterRevocationStatus": 404,
+      "heldAfterRevocationErrorCode": "workspace_not_found",
+      "heldAfterRevocationPersisted": false,
+      "freshAfterRevocationPersisted": false,
+      "positiveStaleAuthorityWriteObserved": false,
+      "denialAndNoWriteObservedForThisSchedule": true,
+      "diagnosticCompleted": true,
+      "ownedProcessAliveBeforeCleanup": true,
+      "ownedProcessExitedAfterCleanup": true,
+      "cleanupTargetedOnlyOwnedPopenProcess": true,
+      "ownedPortClosedAfterCleanup": true,
+      "sourceIntegrity": {
+        "authoredFileCount": 39,
+        "originalManifestSha256Before": "4675be85beaa531ce3525bceca3a673659ed3c0f8e9e225aae634daa743f352e",
+        "originalManifestSha256After": "4675be85beaa531ce3525bceca3a673659ed3c0f8e9e225aae634daa743f352e",
+        "copiedManifestSha256Before": "4675be85beaa531ce3525bceca3a673659ed3c0f8e9e225aae634daa743f352e",
+        "copiedManifestSha256After": "4675be85beaa531ce3525bceca3a673659ed3c0f8e9e225aae634daa743f352e",
+        "originalUnchanged": true,
+        "copyUnchanged": true
+      }
+    }
+  },
+  "bunVersion": "1.3.14",
+  "executedTestSourceSha256": "b4f187697d14cf81b7d97fa9a1efea3d485560dd5adac3fc02ef9c4e008191b0",
+  "executedTestSourceUnmodifiedAfterRun": true,
+  "newPosthocCasesPerArm": 1,
+  "localHttpOnly": true,
+  "paidProviderApiCalls": 0,
+  "cleanupVerifiedAllOwnedProcessesExited": true,
+  "cleanupVerifiedAllOwnedPortsClosed": true
+}

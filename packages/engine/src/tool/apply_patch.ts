@@ -43,9 +43,11 @@ export const ApplyPatchTool = Tool.define(
 
       // Parse the patch to get hunks
       let hunks: Patch.Hunk[]
+      let recoveredMissingBegin = false
       try {
         const parseResult = Patch.parsePatch(params.patchText)
         hunks = parseResult.hunks
+        recoveredMissingBegin = parseResult.recoveredMissingBegin === true
       } catch (error) {
         return yield* Effect.fail(new Error(`apply_patch verification failed: ${error}`))
       }
@@ -379,6 +381,7 @@ export const ApplyPatchTool = Tool.define(
           files: files(),
           diagnostics,
           fileStates,
+          ...(recoveredMissingBegin ? { recoveredMissingBegin: true } : {}),
           ...(guarded.links.length ? { [Instruction.LINKS]: guarded.links } : {}),
         },
         output: guarded.text ? `${output}\n\n${guarded.text}` : output,

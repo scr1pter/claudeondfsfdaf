@@ -1,0 +1,69 @@
+{
+  "kind": "readonly-vector-original-native-audit-diagnosis-v1",
+  "atUtc": "2026-11-05T02:24:22.834038+00:00",
+  "runtime": "vector",
+  "originalAuditVerdictRetained": "review_required",
+  "originalAuditFailureTypeRetained": "StudyError",
+  "originalResultRelabelled": false,
+  "originalEvidenceChanged": false,
+  "frozenInstrumentHashesChanged": false,
+  "copiedNativeTranscriptsVerified": 7,
+  "frozenSourceFilesVerified": {
+    "teamInstrumentFiles": 29,
+    "commonInstrumentFiles": 14,
+    "browserDriverFiles": 11
+  },
+  "replayScope": "Frozen original audit code on a separate copy of the seven privately collected native transcripts; only derived audit-event files in the new diagnostic copy may be written.",
+  "providerCalls": 0,
+  "bunCommands": 0,
+  "nativeRuntimeCommands": 0,
+  "applicationServersStarted": 0,
+  "outcome": {
+    "reproduced": true,
+    "exceptionType": "StudyError",
+    "message": "linked paths are not part of a frozen input",
+    "frames": [
+      {
+        "file": "scripts/benchmarks/matched-headless-stage/paired_runner.py",
+        "line": 746,
+        "function": "audit_descendants"
+      },
+      {
+        "file": "scripts/benchmarks/agentic-study/runner.py",
+        "line": 82,
+        "function": "manifest"
+      },
+      {
+        "file": "scripts/benchmarks/agentic-study/runner.py",
+        "line": 67,
+        "function": "inside"
+      },
+      {
+        "file": "scripts/benchmarks/agentic-study/runner.py",
+        "line": 44,
+        "function": "require"
+      }
+    ],
+    "diagnosticCallerFrameOmitted": true
+  },
+  "supportLinkInventory": {
+    "linkCount": 67,
+    "byType": {
+      "junction": 28,
+      "symlink": 39
+    },
+    "immediateTargetClassification": {
+      "immediate_target_within_owned_support": 67
+    },
+    "traversal": "Bounded os.walk with every observed link/reparse directory pruned before descent; target strings read with os.readlink only, never opened.",
+    "classificationLimit": "Immediate lexical target containment, not transitive path or hostile-filesystem proof. No target path or raw runtime entry name is published."
+  },
+  "sourceInterpretation": {
+    "site": "scripts/benchmarks/matched-headless-stage/paired_runner.py:746",
+    "cause": "The frozen audit reuses a strict frozen-source manifest for mutable owned support data. Its linked-path prohibition aborts the audit when synthetic verification leaves link/reparse entries.",
+    "notEstablished": "This exception does not itself establish unsafe browser use, a failed product acceptance check, or permission to relabel the original native audit as passed.",
+    "followup": "A future bounded owned-support inventory can classify links without traversing them and retain manual-review flags; original frozen evidence and score remain unchanged."
+  },
+  "generatedAppSourceMatchesPreservedAttempt": true,
+  "generatedAppSourceFileCount": 25
+}

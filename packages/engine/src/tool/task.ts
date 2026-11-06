@@ -75,11 +75,13 @@ const BACKGROUND_STARTED = [
   "The task is working in the background. You will be notified automatically when it finishes.",
   "Do not poll or duplicate delegated work. Use task_manage to answer a status question, steer, stop, or wait for a required result.",
   "Work on non-overlapping tasks, or briefly tell the user what you launched and end your response.",
+  "When no independent work remains, ending this response pauses your model turn while this engine remains running; the background task keeps working and its completion notification resumes you automatically unless the run was stopped. Do not repeat timeout waits just to keep the run alive.",
 ].join("\n")
 const BACKGROUND_STILL_WORKING = [
   "You will be notified once, when it finishes, with every report it wrote.",
   "Continue independent work. Use task_manage for a needed correction or user-requested status; never poll.",
   "Work on non-overlapping tasks, or briefly tell the user what you sent and end your response.",
+  "While this engine remains running, ending this response can pause your model turn without ending the session; a completion notification resumes you unless the run was stopped. Do not repeat timeout waits just to keep it alive.",
 ]
 const BACKGROUND_DELIVERED = [
   "Your message was added to the running background task's conversation. It reads it at its next step and carries on with it.",

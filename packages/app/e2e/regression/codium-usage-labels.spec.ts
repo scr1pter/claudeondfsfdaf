@@ -161,6 +161,8 @@ for (const mixed of [false, true]) {
       await expect(ledger.getByText("Codium", { exact: true })).toHaveCount(2)
       await expect(ledger.getByText("Input tokens", { exact: true })).toHaveCount(0)
       await expect(ledger.getByText("Output tokens", { exact: true })).toHaveCount(0)
+      await expect(ledger.getByText("Chat input tokens", { exact: true })).toHaveCount(0)
+      await expect(ledger.getByText("Chat output tokens", { exact: true })).toHaveCount(0)
     }
   })
 }

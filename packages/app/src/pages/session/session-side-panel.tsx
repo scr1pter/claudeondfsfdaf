@@ -139,6 +139,7 @@ import {
 import { showToast } from "@/utils/toast"
 import { resolveBrowserAddress, selectUnambiguousPreviewUrl } from "@/utils/browser-address"
 import { boundInlineCompletionContext, sanitizeInlineCompletion } from "@/utils/codespace-ai"
+import { createInlineCompletionQueue, requestInlineCompletion } from "@/utils/inline-completion-request"
 import { notifyWorkspaceFileSaved } from "@/utils/workspace-file-saved"
 import { announceWorkspaceMode } from "@/utils/workspace-mode"
 import type { ExternalAgent } from "@vectordevai/schema/external-agent"
@@ -2450,25 +2451,52 @@ export function CodespaceWorkbench(props: {
   let completionSessionKey = ""
   let completionTurns = 0
   const completionCache = new Map<string, string>()
+  const completionQueue = createInlineCompletionQueue()
   const AUTOCOMPLETE_SESSION_TURNS = 6
 
   const recycleCompletionSession = () => {
     completionSessionId = undefined
     completionTurns = 0
   }
-  onCleanup(recycleCompletionSession)
+  onCleanup(() => {
+    completionQueue.cancel()
+    recycleCompletionSession()
+  })
 
-  const completionSessionFor = async (model: { providerID: string; modelID: string }) => {
-    const parentID = editorSessionID()
-    const key = `${sdk().directory}:${parentID ?? ""}:${model.providerID}:${model.modelID}`
+  createEffect(
+    on(
+      () => {
+        const model = selectedModelPayload()
+        return [
+          sdk().url,
+          sdk().directory,
+          editorSessionID(),
+          selectedPath(),
+          model?.providerID,
+          model?.modelID,
+          settings.editor.aiAutocomplete(),
+          props.externalAgent,
+        ].join("\u0000")
+      },
+      () => completionQueue.cancel(),
+      { defer: true },
+    ),
+  )
+
+  const completionSessionFor = async (
+    model: { providerID: string; modelID: string },
+    server = sdk(),
+    parentID = editorSessionID(),
+  ) => {
+    const key = `${server.url}:${server.directory}:${parentID ?? ""}:${model.providerID}:${model.modelID}`
     if (completionSessionId && completionSessionKey === key && completionTurns < AUTOCOMPLETE_SESSION_TURNS) {
       return completionSessionId
     }
     if (completionSessionId) recycleCompletionSession()
     completionSessionKey = key
-    const created = await sdk()
-      .client.session.create({
-        directory: sdk().directory,
+    const created = await server.client.session
+      .create({
+        directory: server.directory,
         title: "Autocomplete",
         internal: "codespace.autocomplete",
         ...(parentID ? { parentID } : {}),
@@ -2481,49 +2509,72 @@ export function CodespaceWorkbench(props: {
     return completionSessionId
   }
 
-  const aiComplete = async (input: InlineCompleteInput) => {
-    if (props.externalAgent) return undefined
-    if (!settings.editor.aiAutocomplete()) return undefined
-    const model = selectedModelPayload()
-    if (!model) return undefined
+  const aiComplete = (input: InlineCompleteInput, signal?: AbortSignal) => {
     const context = boundInlineCompletionContext({ ...input, path: selectedPath() ?? input.path })
-    const cacheKey = [
-      model.providerID,
-      model.modelID,
-      context.path,
-      context.language,
-      context.prefix.slice(-2_000),
-      context.suffix.slice(0, 800),
-    ].join("\u0000")
-    const cached = completionCache.get(cacheKey)
-    if (cached) return cached
-    const sessionID = await completionSessionFor(model)
-    if (!sessionID) return undefined
-    completionTurns += 1
-    const result = await sdk()
-      .client.session.prompt({
-        sessionID,
-        directory: sdk().directory,
-        // The autocomplete agent sends only this request with its own short prompt and no tools, at the model's
-        // default effort: ghost text gains nothing from the conversation, project context or a thinking budget.
-        agent: "autocomplete",
-        model,
-        executionMode: "normal",
-        tools: { "*": false },
-        parts: [
-          {
-            type: "text",
-            text: `File: ${context.path}\nLanguage: ${context.language}\nCursor line: ${context.cursorLine}\n\nNearby code before the cursor:\n${context.prefix}\n\nNearby code after the cursor:\n${context.suffix}\n\nReturn only the insertion.`,
-          },
-        ],
-      })
-      .catch(() => undefined)
-    const text = extractModelText(result?.data)
-    const suggestion = text ? sanitizeInlineCompletion(text, context.suffix) : undefined
-    if (!suggestion) return
-    completionCache.set(cacheKey, suggestion)
-    if (completionCache.size > 40) completionCache.delete(completionCache.keys().next().value ?? "")
-    return suggestion
+    return completionQueue.run(signal, async (active) => {
+      if (props.externalAgent || !settings.editor.aiAutocomplete()) return
+      const model = selectedModelPayload()
+      if (!model) return
+      const server = sdk()
+      const parentID = editorSessionID()
+      const cacheKey = [
+        server.url,
+        server.directory,
+        parentID,
+        model.providerID,
+        model.modelID,
+        context.path,
+        context.language,
+        context.prefix.slice(-2_000),
+        context.suffix.slice(0, 800),
+      ].join("\u0000")
+      const cached = completionCache.get(cacheKey)
+      if (cached) return cached
+      const sessionID = await completionSessionFor(model, server, parentID)
+      if (!sessionID) return
+      if (active.aborted) {
+        recycleCompletionSession()
+        return
+      }
+      completionTurns += 1
+      const result = await requestInlineCompletion({
+        signal: active,
+        // Retire the cancelled helper so a late abort can never stop the replacement or the user's chat.
+        abort: async () => {
+          if (completionSessionId === sessionID) recycleCompletionSession()
+          await server.client.session.abort(
+            { sessionID, directory: server.directory },
+            { signal: AbortSignal.timeout(5_000) },
+          )
+        },
+        request: (signal) =>
+          server.client.session.prompt(
+            {
+              sessionID,
+              directory: server.directory,
+              // Ghost text uses only its bounded cursor context, with no tools or conversation history.
+              agent: "autocomplete",
+              model,
+              executionMode: "normal",
+              tools: { "*": false },
+              parts: [
+                {
+                  type: "text",
+                  text: `File: ${context.path}\nLanguage: ${context.language}\nCursor line: ${context.cursorLine}\n\nNearby code before the cursor:\n${context.prefix}\n\nNearby code after the cursor:\n${context.suffix}\n\nReturn only the insertion.`,
+                },
+              ],
+            },
+            { signal },
+          ),
+      }).catch(() => undefined)
+      if (active.aborted) return
+      const text = extractModelText(result?.data)
+      const suggestion = text ? sanitizeInlineCompletion(text, context.suffix) : undefined
+      if (!suggestion) return
+      completionCache.set(cacheKey, suggestion)
+      if (completionCache.size > 40) completionCache.delete(completionCache.keys().next().value ?? "")
+      return suggestion
+    })
   }
 
   // Cmd+K is an explicit edit action, so the returned replacement is applied to

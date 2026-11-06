@@ -22,7 +22,15 @@ import { chat, engine, send, setup } from "../session/learning-fixture"
 
 const it = testEffect(
   LayerNode.compile(
-    LayerNode.group([LSP.node, FSUtil.node, Format.node, EventV2Bridge.node, Truncate.node, Agent.node, Instruction.node]),
+    LayerNode.group([
+      LSP.node,
+      FSUtil.node,
+      Format.node,
+      EventV2Bridge.node,
+      Truncate.node,
+      Agent.node,
+      Instruction.node,
+    ]),
   ),
 )
 
@@ -100,6 +108,95 @@ const expectFailure = <A, E, R>(effect: Effect.Effect<A, E, R>, message?: string
 const expectReadFailure = (filepath: string) => expectFailure(readText(filepath))
 
 describe("tool.apply_patch freeform", () => {
+  it.instance("recovers a complete large add/update/delete patch and reports only a bounded flag", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const { ctx, calls } = makeCtx()
+      yield* writeText(path.join(test.directory, "update.txt"), "old\n")
+      yield* writeText(path.join(test.directory, "delete.txt"), "delete me\n")
+      const content = "x".repeat(24_000)
+      const patchText =
+        "*** Add File: large.txt\n+" +
+        content +
+        "\n*** Update File: update.txt\n@@\n-old\n+new\n*** Delete File: delete.txt\n*** End Patch"
+      const params = { patchText }
+      const result = yield* execute(params, ctx)
+      expect(yield* readText(path.join(test.directory, "large.txt"))).toBe(content + "\n")
+      expect(yield* readText(path.join(test.directory, "update.txt"))).toBe("new\n")
+      yield* expectReadFailure(path.join(test.directory, "delete.txt"))
+      expect(result.metadata.recoveredMissingBegin).toBe(true)
+      expect(params.patchText).toBe(patchText)
+      expect(calls).toHaveLength(1)
+      expect(calls[0].permission).toBe("edit")
+      expect(calls[0].patterns).toEqual(["large.txt", "update.txt", "delete.txt"])
+    }),
+    { git: true },
+  )
+
+  it.instance("rejected recovered envelopes and bodies make no target filesystem changes or permission requests", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const { ctx, calls } = makeCtx()
+      yield* writeText(path.join(test.directory, "unchanged.txt"), "original\n")
+      const before = yield* Effect.promise(() => fs.readdir(test.directory))
+      const body = "*** Add File: rejected.txt\n+created\n*** End Patch"
+      for (const patchText of [
+        "*** Add File: rejected.txt\n+truncated",
+        "*** Add File: rejected.txt\n+truncated\n*** End Pat",
+        "preamble\n" + body,
+        body + "\nstray prose",
+        "```diff\n" + body + "\n```",
+        body + "\n*** End Patch",
+        "*** Add File: rejected.txt\nmissing plus\n*** End Patch",
+        "*** Add File: rejected.txt\n+created\n*** Frobnicate File: other.txt\n*** End Patch",
+        "*** Update File: unchanged.txt\n*** End Patch",
+        "*** Update File: unchanged.txt\n@@\ninvalid context\n*** End Patch",
+        "*** Delete File: unchanged.txt\nunexpected body\n*** End Patch",
+      ]) {
+        yield* expectFailure(execute({ patchText }, ctx), "apply_patch verification failed")
+        expect(yield* Effect.promise(() => fs.readdir(test.directory))).toEqual(before)
+        expect(yield* readText(path.join(test.directory, "unchanged.txt"))).toBe("original\n")
+      }
+      expect(calls).toHaveLength(0)
+    }),
+  )
+
+  it.instance("recovered patches still validate all context before writing any earlier add", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const { ctx, calls } = makeCtx()
+      yield* writeText(path.join(test.directory, "unchanged.txt"), "original\n")
+      const patchText =
+        "*** Add File: rejected.txt\n+created\n*** Update File: unchanged.txt\n@@\n-missing\n+changed\n*** End Patch"
+      yield* expectFailure(execute({ patchText }, ctx), "Failed to find expected lines")
+      yield* expectReadFailure(path.join(test.directory, "rejected.txt"))
+      expect(yield* readText(path.join(test.directory, "unchanged.txt"))).toBe("original\n")
+      expect(calls).toHaveLength(0)
+    }),
+  )
+
+  it.instance("recovery never bypasses edit or external-directory permission denial", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const { ctx, calls } = makeCtx()
+      ctx.ask = (input) => {
+        calls.push(input)
+        return Effect.die(new Error("Permission denied by owned fixture"))
+      }
+      const local = path.join(test.directory, "denied.txt")
+      const external = path.join(test.directory, "..", path.basename(test.directory) + "-denied.txt")
+      for (const target of [local, external]) {
+        yield* expectFailure(
+          execute({ patchText: `*** Add File: ${target}\n+denied\n*** End Patch` }, ctx),
+          "Permission denied",
+        )
+        yield* expectReadFailure(target)
+      }
+      expect(calls.map((call) => call.permission)).toEqual(["edit", "external_directory"])
+    }),
+    { git: true },
+  )
+
   it.live("requires patchText", () =>
     Effect.gen(function* () {
       const { ctx } = makeCtx()

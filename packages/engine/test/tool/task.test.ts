@@ -3140,6 +3140,7 @@ describe("tool.task", () => {
       expect(text).toContain("partial notes")
       // Without a model the note would switch the parent to its agent's configured model.
       expect(notes[0]?.model).toEqual(ref)
+      expect(notes[0]?.noReply).toBeUndefined()
     }),
   )
 
@@ -3826,6 +3827,77 @@ describe("tool.task", () => {
       expect(text).toContain("report on the routes")
     }),
   )
+
+  for (const ceiling of ["child-only", "batch", "ancestor-run", "mixed"] as const) {
+    background.instance(
+      `notification preserves ${ceiling} launch scope ownership after a later parent run`,
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* Session.Service
+          const jobs = yield* BackgroundJob.Service
+          const guard = yield* SpendGuard.Service
+          const { chat, assistant } = yield* seed()
+          const definition = yield* (yield* TaskTool).init()
+          const gate = yield* Deferred.make<void>()
+          const notes: SessionPrompt.PromptInput[] = []
+          const promptOps: TaskPromptOps = {
+            ...stubOps(),
+            prompt: (input) => {
+              if (input.sessionID !== chat.id)
+                return Deferred.await(gate).pipe(Effect.as(reply(input, "Verified fixture")))
+              notes.push(input)
+              return Effect.succeed(reply(input, "Noted"))
+            },
+          }
+          const launch = (description: string, own: number, shared: number) =>
+            definition.execute(
+              {
+                tasks: [
+                  { description, prompt: `Inspect ${description}`, subagent_type: "general", budget: { usd: own } },
+                ],
+                budget: { usd: shared },
+                background: true,
+              },
+              taskContext({ sessionID: chat.id, messageID: assistant.id, promptOps }),
+            )
+          yield* guard.begin(chat.id, { usd: ceiling === "ancestor-run" || ceiling === "mixed" ? 0.01 : 1 })
+          yield* launch("Stopped assignment", ceiling === "child-only" ? 0.01 : 0.5, ceiling === "batch" ? 0.01 : 0.5)
+          const [first] = yield* sessions.children(chat.id)
+          const step: SpendGuard.Step = {
+            costKind: "priced",
+            costUsd: 0.02,
+            contextTokens: 0,
+            cachedTokens: 0,
+            continues: false,
+            tools: [],
+            patched: false,
+          }
+          yield* guard.record(first.id, step)
+          yield* guard.end(chat.id)
+          yield* guard.begin(chat.id, { usd: 1 })
+          if (ceiling === "mixed") {
+            yield* launch("Healthy assignment", 0.5, 0.5)
+            const healthy = (yield* sessions.children(chat.id)).find((child) => child.id !== first.id)
+            if (!healthy) return yield* Effect.die("Missing healthy background assignment")
+            yield* guard.record(healthy.id, { ...step, costUsd: 0.001 })
+          }
+          yield* Deferred.succeed(gate, undefined)
+          const children = yield* sessions.children(chat.id)
+          yield* Effect.forEach(children, (child) => jobs.wait({ id: child.id }))
+          yield* pollWithTimeout(
+            Effect.sync(() => (notes.length ? true : undefined)),
+            "No background notification",
+            "3 seconds",
+          )
+          expect(notes).toHaveLength(1)
+          expect(notes[0].parts).toHaveLength(ceiling === "mixed" ? 2 : 1)
+          expect(notes[0].noReply).toBe(ceiling === "batch" || ceiling === "ancestor-run" ? true : undefined)
+          const record = SubagentLifecycle.read(yield* sessions.get(first.id))
+          expect(record?.budgetScopes?.some((scope) => scope.stopped !== undefined)).toBe(true)
+        }),
+      { trusted: true, config: { provider: pricedProvider({ "test-model": {} }) } },
+    )
+  }
 
   background.instance("a background note says it is automated, carries usage, and escapes the report's markup", () =>
     Effect.gen(function* () {
