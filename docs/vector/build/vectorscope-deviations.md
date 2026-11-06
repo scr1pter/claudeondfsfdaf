@@ -684,3 +684,175 @@ generator input changed.
   guard stopped, or that was stopped, now expects the shared policy's exact
   note (`noteVerifyUnfinished(2, "unfinished")`) and the legacy note word for
   word, for both cases, where it only looked for "not re-checked".
+
+## 2026-11-06 · P0 Merge of main
+
+Contract §0.1 of `vectorscope-upgrade.md`, done before any VS-21 to VS-31
+package. P0 adds no key, type, function, export or behaviour. Its only code
+edit is the `REVIEW_PIPELINE_SOURCES` pin; the rest is the contract's
+citations and this entry.
+
+- **The merge.** `02c23b4c` merges `origin/main` at `4299d743` (246 commits)
+  into `dbcfbe8f` (`origin/vectorscope`) on the lane branch
+  `vectorscope-engine`; §0.1's `vectorscope-upgrade` was only an example
+  name. A read-only `git ls-remote origin` on 2026-11-06 still shows `main`
+  at `4299d743` and `vectorscope` at `dbcfbe8f`. The merge commit's tree
+  (`94638e25`) is exactly the one `git merge-tree --write-tree dbcfbe8f
+  4299d743` produces, so no hunk was resolved by hand: `run.ts`,
+  `run.test.ts` and `bun.lock` combined both sides automatically. The
+  merged dependencies (`pdf-lib` 1.17.1, `@pdf-lib/*`, `pako` 1.0.11) were
+  already installed, so no `bun install` ran.
+- **The pin, and no revision bump.** Of the ten `REVIEW_PIPELINE_FILES`,
+  only engine `review/run.ts` changed, through `3ae59867 fix(review):
+  reserve using actual context price tiers` (+7/-2); the other nine are
+  byte-identical to `dbcfbe8f`. `REVIEW_PIPELINE_SOURCES` goes from
+  `cebdc594212560b1` to `fa1d31befd5a4f77`. `REVIEW_PIPELINE_REVISION`
+  stays 1, as §0.1 asks:
+  - `3ae59867` changes only the price a reservation uses. `nextCost` now
+    prices the next step through `Session.costAt(track.cost, context +
+    NEXT_STEP_SLACK)` and `SpendGuard.priceOf` on the invocation model's
+    cost table (`run.ts:163,270-274,449`), so once a session's context
+    crosses a provider's context price tier it reserves at that tier's
+    rate. Its tests cover 272,000, 272,001 and 300,000 tokens
+    (`run.test.ts:427`). It changes no prompt, schema, selection,
+    anchoring or settled spend.
+  - Below a tier, the reservation price is unchanged as long as the
+    invocation model's base rates equal the price resolved for the review
+    (`review/model.ts:178`), which holds when both come from the same
+    catalog entry. The first reservation, at session creation
+    (`run.ts:386`), passes no cost table, so it still uses the resolved
+    price and ignores tiers.
+  - Scope caveat: under a tight `maxCostUsd`, a pass past that boundary
+    now reserves at the higher rate and may be refused (partial
+    `"budget"`) where it used to be admitted.
+  - `MODEL_EVIDENCE` is empty, so no certificate is affected. Only VS-31
+    bumps the revision (I-12).
+- **Outside the pin: settlement and transport.** The merge also changes V1
+  session code that every review session runs through. None of these files
+  is in `REVIEW_PIPELINE_FILES`, so by the pin's definition none moves the
+  digest, and none touches review prompts, selection or anchoring. They can
+  still change what a review reports and, under a cap, whether a pass runs.
+  This replaces the plan draft's "none changes review prompts, selection or
+  posting", which its review showed was too broad.
+  - Engine `session/session.ts` `getUsage`: a valid OpenRouter-reported
+    cost now wins over the catalog price for priced models too, a zero
+    charge included (`a369199d`). Absent or malformed counters make the
+    step incomplete and unpriced instead of reading as zero, and a
+    malformed total is dropped (`36a0e921`, `bd537fd2`).
+  - Engine `session/processor.ts`: completed-step spend is kept through
+    cancellation and publication defects, and interrupted turns keep their
+    uncertainty (`89525f44`, `94c27c67`, `9fbc670f`, `36a0e921`), helped
+    by the new `accepted` stream hook in engine `session/llm.ts`
+    (`9fbc670f`).
+  - Core `spend-guard.ts`: ancillary spend is bound to its launching scope
+    and attempt receipts are deduplicated (`e6ebdfc1`), and loop history
+    resets on promoted user input (`dae48615`). Reviews meet it through the
+    run guard under `budget.run` (`run.ts:543-545`).
+  - So, for the same provider responses, a review's settled and uncertain
+    spend (`settle`, `run.ts:476-499`), its cost kind (an unpriced message
+    makes it `"unknown"`, `run.ts:316-318,333-342`) and, under
+    `maxCostUsd`, a partial `"budget"` outcome and its posted note can
+    differ from `dbcfbe8f`, independently of `3ae59867`. OpenRouter reviews
+    are the most exposed.
+  - Engine `session/llm/request.ts` is where the default-on prompt-cache
+    marker comes from (`c96f83a1`, `70613cc4`); `provider.ts` only consumes
+    it (`promptCacheBreakpointBody` against `requestInput`,
+    `provider.ts:2505-2525`). It is on by default only for openai
+    `gpt-6.1-sol` with an API key at `api.openai.com`. It keeps the text
+    but changes the wire body, so a review on that model sends different
+    bytes.
+  - Also merged: core `session/runner/model.ts` gains V2 billed costs and
+    loop signatures (`fc26fbb7`, `fbe2b85d`, `9fbc670f`), and review
+    sessions are V1. Core `brain/knowledge.ts` invalidates forgotten and
+    re-scoped documents durably (`d7360894`). The review's requirement
+    cards read that store (`ReviewContext.requirements`), so at most a card
+    for a document forgotten or made private during extraction drops out,
+    as intended.
+  - Why this still needs no bump: §0.1 says not to; these change what a
+    review costs, how its spend is counted and whether a capped pass is
+    admitted, the same category as the `3ae59867` caveat; budgets bound a
+    review but are not part of what a certificate evaluates
+    (`model-evidence.ts:48-49`); and no certificate exists. From now on
+    each D3 parity test compares a runner with its own post-merge
+    behaviour, not with `dbcfbe8f`.
+- **Green.** Each file ran alone through `vector-serial` with
+  `--timeout 30000` from its package folder, with `TMPDIR` set to a fresh
+  `mktemp -d` folder under `/tmp/vector-vectorscope/`, fresh XDG roots and
+  `GITHUB_ACTIONS=false`. The engine's `test/preload.ts` derives its XDG
+  roots from `os.tmpdir()` and overrides the ones passed in, so `TMPDIR` is
+  what keeps engine test data out of loose `/tmp`; core's preload leaves
+  XDG alone. Counts on the re-pinned tree, all with 0 fail:
+  - core `test/review/`: 22 files, 423 pass. Before the re-pin the only
+    failure was the pin test, which printed `fa1d31befd5a4f77`.
+  - engine `test/review/`: 7 files, 97 pass (`run.test.ts` 41).
+  - engine `test/cli/` files that drive `Review.run`, beyond §0.1's ask and
+    read-only: `review` 24, `review.render` 10, `github.review` 40,
+    `github.review-api` 3.
+  - app `ai-review.test.ts`: 107 pass.
+  - eval scripts from `script/vectorscope-eval`: budget 21, certify 5, ci
+    18, judge 6, replay 18, report 21, run 14; `fixtures.test.ts` from
+    `packages/script`: 50.
+  - `bun typecheck` in core, engine and app, and `bun tsgo -p
+    ../../script/vectorscope-eval/tsconfig.json` from `packages/engine`
+    (as `typecheck.yml` runs it): all exit 0.
+  - No other merge fallout, so no code fix.
+- **Re-cited.** Every `path:line` in `vectorscope-upgrade.md` was checked on
+  `02c23b4c`, and its Citations bullet now names that commit. Four cited
+  files moved: engine `review/run.ts` (old lines 163-270 +1, 271-444 +4,
+  445 on +5), `provider/provider.ts` (2486-2495 +9, 2496-2501 +17, 2502 on
+  +24), engine `session/llm.ts` (+2 after old line 70) and core
+  `session/runner/model.ts` (+14 for every line after old line 245). No
+  citation was lost, so none is marked as gone.
+  - Ranges were checked, not only shifted. Core `model.ts:295-315` becomes
+    `308-330`, the whole `withoutUnconsentedTraining` block (the old range
+    missed its first comment line and its close). `session/llm.ts:320-356`
+    becomes `322-377`, the whole `if (flags.experimentalNativeLlm)` block:
+    the old range stopped inside the `native.type === "supported"` branch
+    (322-361), where the native stream is returned, and VS-23c also needs
+    the ai-sdk fallback that follows it (362-376, which logs
+    `native.reason`), because a `zdr` gate on the outer condition skips
+    both and a gate on the inner one would log a false reason.
+    VS-23c's "(post-P0 code)" placeholder becomes
+    `provider.ts:2505-2525`, and the provider row gains the same range. The
+    plan's review suggested `2509-2525`; the range starts at 2505 because
+    `requestInput` and the cache body are built from the headers and the
+    marker read at 2505-2508.
+  - `main:` is gone. `packages/schema/src/session-message.ts:179-200` and
+    `packages/desktop/src/main/parallel-workspaces.ts:136-168` are
+    byte-identical to `origin/main` on the merged commit, so their lines
+    hold, and the Citations bullet no longer lists the prefix.
+  - Checked and unchanged although their files changed in the merge:
+    `knowledge.ts:616-631`, `types.gen.ts:2416` (`export type Config`) and
+    `run.ts:1-5,90-131`. Every other citation is into a file the merge did
+    not change, and P0's own edits move none.
+  - One pre-existing range fixed, not merge fallout. `provider.ts:2329-2340`
+    (VS-23c step 3 and §10's `x-session-id` bullet) was off by one at both
+    ends on `dbcfbe8f` already: 2329 is a blank line, the `guestRequest`
+    comment starts at 2330 and the function closes at 2341. It becomes
+    `2330-2341`, and the provider row's `2329-2420` starts at 2330 too, as
+    the other ranges above were tightened.
+  - Two accuracy fixes. First, `ai-review.ts:1766` (`outcome.pr ===
+    undefined || finding.verified === true`) is itself a `=== true` check,
+    so it moves into the `=== true` lists of §1.2 and §10, together with
+    `script/vectorscope-eval/desktop.ts:179` (`verified: finding.verified
+    === true`), which neither named; a grep of non-test sources finds no
+    other. The other consumers gain `github.review.ts:737`, which passes
+    `verified` to `suggestionAllowed` (@vector's file, cited, not edited),
+    and `run.ts:747`, the engine's counterpart of `ai-review.ts:980`.
+    Second, `brain/code.ts:397-506` becomes `473-500`: the row is about
+    `resolve`, which runs 473-500; 397 starts `imports`, and 501-506 are
+    `coChange`'s doc comment.
+  - The research notes are not re-cited. Their citations are evidence as
+    gathered on `dbcfbe8f` (for example `vectorscope-today.md:52` quotes
+    the old pin), and the Citations bullet says so.
+- **Off by default, nothing user-facing.** P0 touches none of the runners
+  (`run.ts`, `ai-review.ts`, `provider.ts`, `session/llm.ts`,
+  `posting.ts`) and none of the files @vector owns. The pin is read only by
+  its test; it is not part of `EvidenceScope` or of a certificate.
+  `EvidenceScope.pipeline` stays 1, and `promptsDigest` and `policyDigest`
+  are unchanged, so the frozen `engine` baseline stays comparable and I-1
+  holds. No owner question (Q1-Q17) is decided, and no user-visible string
+  changes (D14).
+- **Nothing deferred.** P0 adds no test of its own: main's suites test the
+  merged settlement and transport changes, and the review suites above
+  pass on them. VS-21 starts from this tree.

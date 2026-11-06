@@ -5,7 +5,7 @@ Status: a proposed extension of the approved plan `docs/vector/build/vectorscope
 - **VS-21 to VS-31 are proposed packages.** The approved plan ends at VS-20, and the deviation log mentions none of them, so each needs owner approval (Q15). "VS-25 supersedes VS-17" would change an owner-approved plan item and is pending owner sign-off.
 - The approved decisions D1–D14 stay in force. Where this contract, or the owner's request, conflicts with one of them or with the plan's order of work, §7 says so and makes a recommendation. The decision wins until the owner changes it.
 - **Evidence.** `vectorscope-research/REPORT.md` and the eight research notes beside it in `docs/vector/build/vectorscope-research/`. Notes are cited by name, for example `[quality §6.1]` for `greptile-quality.md` section 6.1.
-- **Citations.** Code is cited as `path:line` on `origin/vectorscope` (`dbcfbe8f`), unless marked `main:`, `self-evolving:`, `codium:` or `vector-at-mention:`. P0 merges `origin/main`, which moves many of these lines, so they must be re-cited on the merged commit (§0.1).
+- **Citations.** Code is cited as `path:line` on the merged commit `02c23b4c` (P0: `origin/main` at `4299d743` merged into `origin/vectorscope` at `dbcfbe8f`), unless marked `self-evolving:`, `codium:` or `vector-at-mention:`. P0 re-cited every line (deviations log, 2026-11-06 · P0), and P0's own edits move none of them. The research notes keep their citations on `dbcfbe8f`.
 - **Name.** The plan calls the product VectorScope; so does this contract. `vectorscope` stays only in branch and path names. Some code strings still read "Vectorscope" (for example `format.ts:663`); changing user-visible text is out of scope here (D14).
 
 ## 0. Rules for the implementing agent
@@ -116,7 +116,7 @@ Surfaces: GitHub (existing posting, redaction, posting guard), CLI (print, exist
 ```
 
 - No stage before Tier 2 calls a model.
-- **Where the route check sits.** Every model call is already admitted by the reservation ledger's admission policy (`run.ts:423-497`, `SessionAdmission.Policy`). The route check goes in that policy's `admit`, before the step and budget logic, and in `ask()` before the session is created. It must not go inside `reserve()`, which returns `true` for an uncapped run (`run.ts:257-260`) and would therefore skip free, plan and local models. The transport backstop in VS-23c refuses anything that slips past.
+- **Where the route check sits.** Every model call is already admitted by the reservation ledger's admission policy (`run.ts:427-502`, `SessionAdmission.Policy`). The route check goes in that policy's `admit`, before the step and budget logic, and in `ask()` before the session is created. It must not go inside `reserve()`, which returns `true` for an uncapped run (`run.ts:258-261`) and would therefore skip free, plan and local models. The transport backstop in VS-23c refuses anything that slips past.
 
 ### 1.1 Opt-in keys
 
@@ -135,7 +135,7 @@ Surfaces: GitHub (existing posting, redaction, posting guard), CLI (print, exist
 | `runtime` | `off` / `ask` | none | VS-30 | policy key |
 | `mode` | `standard` / `precise` | `REVIEW_MODE` | VS-31 | expands into the keys above |
 
-There is no new verifier key. The cross-family verifier (VS-29a) uses the existing `triageModel`/`model` pair: the review and security passes run on `triageModel`, and the double-check runs on `model` (`types.ts:247-249`; `run.ts:225-226`). `EvidenceScope.triage` already records the pair (`model-evidence.ts:66-74`).
+There is no new verifier key. The cross-family verifier (VS-29a) uses the existing `triageModel`/`model` pair: the review and security passes run on `triageModel`, and the double-check runs on `model` (`types.ts:247-249`; `run.ts:226-227`). `EvidenceScope.triage` already records the pair (`model-evidence.ts:66-74`).
 
 **Where a key may come from (invariant I-2).** Today `parseReviewConfig` takes one JSON text and one environment, with no notion of where either came from (`config.ts:176-222`). VS-23a adds a merge that tags each source: the user's global engine config, `review.json` at the base commit, `review.json` in the working tree, and the environment.
 - **`privacy`** is the strictest of the global engine config's `review.privacy`, the `review.json` the surface reads, and `REVIEW_PRIVACY`. Any source may raise it; none may lower it.
@@ -225,7 +225,7 @@ export function runtimeVerdict(head: readonly RuntimeEvidence[], base: readonly 
 ```
 
 **Types that change**, each in one place:
-- `Finding` gains `verifiedBy?: "model" | "runtime"`; `verified` stays `boolean`. Widening `verified` to `boolean | "runtime"` would silently change every `=== true` check: `github-payload.ts:39`, `select.ts:374,386` and `eval.ts:604`. Its other consumers are `diff.ts:418-424` (`suggestionAllowed`), `select.ts:335`, `format.ts:316`, `eval.ts:146`, `ai-review.ts:980,1250,1766,1779` and `pull-requests.tsx:489`; a runtime confirmation sets both `verified: true` and `verifiedBy: "runtime"`.
+- `Finding` gains `verifiedBy?: "model" | "runtime"`; `verified` stays `boolean`. Widening `verified` to `boolean | "runtime"` would silently change every `=== true` check: `github-payload.ts:39`, `select.ts:374,386`, `eval.ts:604`, `ai-review.ts:1766` and `script/vectorscope-eval/desktop.ts:179`. Its other consumers are `diff.ts:418-424` (`suggestionAllowed`), `select.ts:335`, `format.ts:316`, `eval.ts:146`, `run.ts:747`, `ai-review.ts:980,1250,1779`, `github.review.ts:737` (which passes it to `suggestionAllowed`) and `pull-requests.tsx:489`; a runtime confirmation sets both `verified: true` and `verifiedBy: "runtime"`.
 - `ReviewOutcome.partial` (`types.ts:186`) and `run.ts`'s `Stop` (`run.ts:131`) gain `"privacy"` and `"budget-estimate"`.
 - `ReviewOutcome.specialists[].name` and `ReviewPass.name` (`types.ts:189,202`), and with them `run.ts`'s `Name` (`run.ts:130`), widen once to add `"lens"` (with a `lens?: string` field) and `"repro"`, together with codium's `"judge"` (`codium:packages/core/src/review/types.ts:199,214`), so the codium merge does not conflict twice.
 - `ReviewOutcome` gains `strict?: StrictResult`.
@@ -284,14 +284,14 @@ Until VS-10, these gaps are documented intentional differences (`vectorscope-pla
 | `packages/core/src/review/permission.ts:24-87` | export `CHECK_COMMANDS` (private today, `:27`); coverage-command allowlist per test runner | 30 |
 | `packages/core/src/review/format.ts` | notes: route refused, trivial, budget stop, depth reasons, runtime not run, strict result empty or incomplete; "Not reviewed" instead of "No issues found" when every file is unreviewed | 23–30 |
 | new `packages/core/src/review/{privacy,trivial,dispatch,impact,risk,guardrail,runtime}.ts` | the contracts in §1.2 | 23–30 |
-| `packages/core/src/brain/code.ts:397-506` | workspace-package and tsconfig path-alias resolution in `resolve`, used by Tier 1 | 25b |
+| `packages/core/src/brain/code.ts:473-500` | workspace-package and tsconfig path-alias resolution in `resolve`, used by Tier 1 | 25b |
 | `packages/core/src/free-model-catalog.ts:198-233` | reuses `openRouterModelRouting` and `denyDataCollection`; no change | 23 |
-| `packages/core/src/session/runner/model.ts:295-315` | no change here: review sessions are V1, V2 execution has no admission policy (`admission.ts:33`), and V2 `prepare` has no session ID. The V2 check moves to VS-10 | — |
-| `packages/engine/src/provider/provider.ts:2329-2420,2493-2594` | at the top of `resolveSDK`, before the plan and free-model branches (which return before the generic wrapper exists), refuse a `zdr`-registered session's model that the route rules refuse; in the generic fetch, apply `zdrRequestBody` to the final body (after main's `promptCacheBreakpointBody`, against `requestInput`) or throw before sending; refuse a body that is not a string or sits inside a `Request`, and a malformed `x-session-id`, while a `zdr` review is active | 23c |
-| `packages/engine/src/session/llm.ts:320-356` | the native runtime is not selected for `zdr`-registered sessions | 23c |
+| `packages/core/src/session/runner/model.ts:308-330` | no change here: review sessions are V1, V2 execution has no admission policy (`admission.ts:33`), and V2 `prepare` has no session ID. The V2 check moves to VS-10 | — |
+| `packages/engine/src/provider/provider.ts:2330-2420,2502-2618` | at the top of `resolveSDK`, before the plan and free-model branches (which return before the generic wrapper exists), refuse a `zdr`-registered session's model that the route rules refuse; in the generic fetch, apply `zdrRequestBody` to the final body (after main's `promptCacheBreakpointBody`, against `requestInput`, `:2505-2525`) or throw before sending; refuse a body that is not a string or sits inside a `Request`, and a malformed `x-session-id`, while a `zdr` review is active | 23c |
+| `packages/engine/src/session/llm.ts:322-377` | the native runtime is not selected for `zdr`-registered sessions | 23c |
 | new `packages/engine/src/review/route.ts` | `ReviewRoutes`: a session-ID-to-policy map registered by `Review.run`, falling back to: internal is `vectorscope.*` and the global `review.privacy` is `zdr` | 23b |
 | `packages/engine/src/review/model.ts:47-182` | route check for the review, triage and alternate models; no free fallback under `zdr` when the caller passes privacy (CLI and desktop now, GitHub after the merge); `local` keeps its pricing meaning (it includes LAN servers, `:141-143`) but grants nothing under `zdr`; `subject.choice` | 23b, 29b |
-| `packages/engine/src/review/run.ts:90-131,223-268,374-588,639-751` | `RunInput.forceFull` and projection hook; register sessions; route check in `admit` and before session creation; trivial and budget checks; impact slice; lenses; guardrail; repro sub-pass | 21b, 23b–30 |
+| `packages/engine/src/review/run.ts:90-131,224-269,378-593,644-756` | `RunInput.forceFull` and projection hook; register sessions; route check in `admit` and before session creation; trivial and budget checks; impact slice; lenses; guardrail; repro sub-pass | 21b, 23b–30 |
 | `packages/engine/src/review/context.ts:28-273` | `cards` gatherer (`links`, `search`) for the CLI | 26 |
 | new `packages/engine/src/review/{parse,impact,author,runtime}.ts` | parser; slice builder called from `Review.run` (greps the head tree-ish, as `relatedCode` does, `context.ts:44-60`); trusted authorship; executor | 25, 29b, 30 |
 | `packages/engine/src/session/posting.ts:14-83` | refuse when lineage is cut short or a lookup fails, with tests | VS-11, or before VS-28 lenses with the plan owner's agreement |
@@ -338,8 +338,8 @@ Split into three, landed in order. **Behaviour change:** none. **Depends on:** V
 **VS-21b Projection** (now)
 - **Files:** `packages/engine/src/review/run.ts` (`RunInput` hook), `packages/engine/test/fixture/` (a fake provider server, or the engine's existing one), `script/vectorscope-eval/replay.ts`.
 - **Implementation:**
-  1. `RunInput` gains a projection hook. Today `RunInput.observe` only watches, and the admission policy is built inside `ask` (`run.ts:425`), so nothing can replace it.
-  2. A projection runs `Review.run` against a fake local provider server that returns canned `StructuredOutput` reports *with findings*. Every pass then runs, including verify (whose candidates come from findings, `run.ts:688-697`), lenses, the guardrail and repro, and every retry. The projection records each pass's real wire body and its estimated tokens and dollars (from `estimateCostUsd` and the price snapshot). A projection in which every attempt is refused would never build the verify, lens or repro prompts and would undercount cost.
+  1. `RunInput` gains a projection hook. Today `RunInput.observe` only watches, and the admission policy is built inside `ask` (`run.ts:429`), so nothing can replace it.
+  2. A projection runs `Review.run` against a fake local provider server that returns canned `StructuredOutput` reports *with findings*. Every pass then runs, including verify (whose candidates come from findings, `run.ts:693-702`), lenses, the guardrail and repro, and every retry. The projection records each pass's real wire body and its estimated tokens and dollars (from `estimateCostUsd` and the price snapshot). A projection in which every attempt is refused would never build the verify, lens or repro prompts and would undercount cost.
   3. Network off: `VECTOR_DISABLE_MODELS_FETCH` and the other catalog flags, so booting providers fetches no free, plan or model catalogs; a dummy key for model resolution.
 - **Tests:** a projection makes zero outbound requests on a recording fetch; every pass's body is recorded.
 
@@ -431,9 +431,9 @@ Split into four. **Later halves:** per-project desktop policy after VS-10; the C
 - **Files:** engine `provider/provider.ts`, `session/llm.ts`.
 - **Implementation:**
   1. At the top of `resolveSDK`, before the plan (`planID`) and free-model branches, which return their own fetch before the generic wrapper exists (`provider.ts:2343-2415`): a `zdr`-registered session's model that the route rules refuse is refused there.
-  2. In the generic V1 fetch: apply `zdrRequestBody` to the final body, after main's `promptCacheBreakpointBody` and against `requestInput` (post-P0 code), or throw before sending. Today's OpenRouter check parses only string bodies (`provider.ts:2510`); under an active `zdr` review, a body that is not a string or sits inside a `Request` is refused.
-  3. **Attribution.** Every session request carries `x-session-id` by construction (`provider.ts:2329-2340`); a request with none is the owner's own non-session call (for example generating an agent from the terminal) and is left alone. A *malformed* header names no session that can be checked, so it is refused while a `zdr` review is active in the process. A test proves that every `vectorscope.*` request kind carries a parseable header.
-  4. The native runtime (`flags.experimentalNativeLlm`, `session/llm.ts:320-356`) sends through `@vectordevai/llm`, not `options.fetch`, so it is not selected for `zdr`-registered sessions.
+  2. In the generic V1 fetch: apply `zdrRequestBody` to the final body, after main's `promptCacheBreakpointBody` and against `requestInput` (`provider.ts:2505-2525`), or throw before sending. Today's OpenRouter check parses only string bodies (`provider.ts:2534`); under an active `zdr` review, a body that is not a string or sits inside a `Request` is refused.
+  3. **Attribution.** Every session request carries `x-session-id` by construction (`provider.ts:2330-2341`); a request with none is the owner's own non-session call (for example generating an agent from the terminal) and is left alone. A *malformed* header names no session that can be checked, so it is refused while a `zdr` review is active in the process. A test proves that every `vectorscope.*` request kind carries a parseable header.
+  4. The native runtime (`flags.experimentalNativeLlm`, `session/llm.ts:322-377`) sends through `@vectordevai/llm`, not `options.fetch`, so it is not selected for `zdr`-registered sessions.
   5. Prove with tests that no title, memory, compaction or other helper request is sent for a `vectorscope.*` session under `zdr`; suppress any that are.
 - **Tests:** new engine `test/provider/zdr-route.test.ts`, one case per path: the generic fetch (`provider.zdr: true`, `data_collection: "deny"`, no routing or plugin fields), the plan route, the free-model route, the native runtime, compaction, a non-string body, a body inside a `Request`, a malformed session header, an unattested provider (throws before the fetch), a LAN proxy `baseURL` (refused); requests from unregistered sessions are byte-identical to today's.
 
@@ -469,7 +469,7 @@ Split into four. **Later halves:** per-project desktop policy after VS-10; the C
      - JSON, YAML, TOML and INI config;
      - SQL and migrations.
   3. `Review.run` returns an outcome with zero attempts and a note. Only `RunInput.forceFull` (set by `review-full`) bypasses the skip; `mode: "full"` does not, since first reviews are full too. Replays of trivial controls use trigger `auto`, because `ReplayCase.trigger` defaults to `command` (`eval.ts:79-80`).
-  4. **Pre-dispatch check**, before `run.ts:639`.
+  4. **Pre-dispatch check**, before `run.ts:644`.
      - Build every planned pass's first prompt and estimate:
        - input tokens: characters divided by 3.5, the runner's existing rule (better: the serving provider's own count on an allowed route, or a calibrated local estimate, recounted per target model);
        - output tokens: `OUTPUT_PER_STEP` × steps;
@@ -487,7 +487,7 @@ Split into four. **Later halves:** per-project desktop policy after VS-10; the C
   5. **Cache layout and fan-out.**
      - A test pins the static prompt prefix as byte-identical across two cases.
      - The report shows each pass's cache-read and cache-write share.
-     - The review and security specialists start in parallel today (`run.ts:639-652`), so each pays its own cache write unless fan-out waits for the first streamed response or the cache is pre-warmed. Try "start the second specialist after the first one streams" as a measured variant; keep cache diagnostics to development (Anthropic's diagnostics are only "qualified" under ZDR).
+     - The review and security specialists start in parallel today (`run.ts:644-657`), so each pays its own cache write unless fan-out waits for the first streamed response or the cache is pre-warmed. Try "start the second specialist after the first one streams" as a measured variant; keep cache diagnostics to development (Anthropic's diagnostics are only "qualified" under ZDR).
 - **Tests:** new core `test/review/trivial.test.ts` (including a fixture for each trivial-looking bug: a directive comment, a Python indentation change, a `.mdx` component, a `requirements.txt` bump, an import-breaking rename, a case-only rename); `test/review/dispatch.test.ts` with the default `maxSteps`; engine `run.test.ts`: zero attempts on the observer for both stops, shrink notes, `forceFull`; app parity tests; a format golden for "Not reviewed".
 - **Done:** I-1, I-5 and I-7 hold.
 - **Measurable goal:**
@@ -634,7 +634,7 @@ Split into four. **Later halves:** per-project desktop policy after VS-10; the C
 ### VS-29 Cross-family verifier (29a) and authorship inversion (29b)
 
 **29a, now: measurement only, no new key.**
-- The cross-family verifier already exists: set `triageModel` to one model and `model` to an equal-tier model from another family. Triage mode also forces the double-check on every finding above a nit and reports only confirmed findings (`types.ts:247-249`; `run.ts:225-226`, `663-676`), which matches `precise`. `EvidenceScope.triage` records the pair.
+- The cross-family verifier already exists: set `triageModel` to one model and `model` to an equal-tier model from another family. Triage mode also forces the double-check on every finding above a nit and reports only confirmed findings (`types.ts:247-249`; `run.ts:226-227`, `668-681`), which matches `precise`. `EvidenceScope.triage` records the pair.
 - Both models must pass VS-23 and the no-training rule, and both must be in D6 (Q5).
 - After `codium` merges, build on its `reviewModels`, `checkedLabs` and `judgeModel` (`codium:packages/core/src/review/second-lab.ts`) rather than adding a mechanism (§0.5).
 - **Files:** `script/vectorscope-eval` variant `engine:cross-family`; no runtime code.
@@ -646,8 +646,8 @@ Split into four. **Later halves:** per-project desktop policy after VS-10; the C
 - **When:** after `codium` merges `model-lab.ts`, or the owner approves landing it on `main` first (Q6). Local only until CI provenance exists.
 - **Model choice:** pick between the owner-configured `model` and `alternateModel`, declared equal tier, so that `labOf(reviewer)` differs from the authoring lab, and say so in the notes (VS-07 never switches a model by itself).
 - **Trusted authorship signals, local only:**
-  - V2 `Assistant.model` with `snapshot.files` for the changed files (`main:packages/schema/src/session-message.ts:179-200`);
-  - desktop parallel-workspace records (`main:packages/desktop/src/main/parallel-workspaces.ts:136-168`).
+  - V2 `Assistant.model` with `snapshot.files` for the changed files (`packages/schema/src/session-message.ts:179-200`);
+  - desktop parallel-workspace records (`packages/desktop/src/main/parallel-workspaces.ts:136-168`).
 - **Untrusted claims** (PR body evidence lines, commit trailers, branch names) are recorded as `claimedAuthor` but never choose the model. A commit trailer is commit-message text the PR author controls.
 - **GitHub CI has no trusted authoring signal today**, so inversion does not run there. It can, after the @vector merge, only from provenance the PR author cannot forge: a run record @vector stores outside the PR, or a commit signed by the App's bot whose signature and author are verified through the GitHub API (a request to the @vector owner, V21).
 - **Files:** new engine `review/author.ts`; `model.ts` (`ResolveInput.author`).
@@ -666,7 +666,7 @@ Split into four. **Later halves:** per-project desktop policy after VS-10; the C
   - new core `review/runtime.ts`;
   - new engine `review/runtime.ts`;
   - core `permission.ts` (coverage allowlist);
-  - engine `run.ts`: a repro sub-pass after the verdicts at `run.ts:731`;
+  - engine `run.ts`: a repro sub-pass after the verdicts at `run.ts:736`;
   - engine `cli/cmd/review.ts`: through the existing `--checks` consent, no new flag.
 - **Implementation:**
   1. **One consent path (D10).** Runtime evidence extends `--checks`; it does not add `--verify-runtime`.
@@ -907,9 +907,9 @@ Two reviews of the first draft were checked against the research notes and again
 **Fixed as proposed (confirmed in code or notes), in brief:** ZDR transport paths that skip the generic fetch (plan and free routes, the native runtime, non-string bodies); key-driven steps moved inside `Review.run`, and the GitHub trivial skip moved to after the @vector merge; the trivial rules (indentation, directives, `.txt`/`.mdx`, renames); the pilot's power and its descriptive role; `privacy` removed from `precise`; codium's cross-lab checker reused instead of a new verifier key; the runner-wiring window and C-13; the posting guard's real behaviour; source-tagged key merging; LAN servers no longer "local" for privacy; OpenRouter attestation and plugins; the strict schema fields and import-free types; deletion defects and cross-file fixes in S3, S4 and S6; the shrink trigger; the projection's fake provider server and hook; the explicit variant registry; VS-30's isolation, sandbox, coverage-flag and verdict gaps; `--json` and `--checks` already existing; Brain `brief`; the `runnable` label; history in CI; `forceFull`; package splits; pilot headroom; the replay entry point's location; artifact fields; session bounds and pass-name unions; route-check placement; default-stable digests; re-citing after P0; per-runner parity; private exports and `BrainGraph.rank`; SDK regeneration; test directories; grammar licences and caps; grepping the head tree-ish; the existing header "Risk:"; reproducer assertions and single-use consent; the citation home for the notes. Every "missing" item from both reviews is now covered.
 
 **Fixed differently from the proposal:**
-- **`Finding.verified` is not widened.** The review proposed widening it and updating every consumer. Adding `verifiedBy` is safer: `github-payload.ts:39`, `select.ts:374,386` and `eval.ts:604` test `verified === true`, so a `"runtime"` value would silently count as unverified there.
+- **`Finding.verified` is not widened.** The review proposed widening it and updating every consumer. Adding `verifiedBy` is safer: `github-payload.ts:39`, `select.ts:374,386`, `eval.ts:604`, `ai-review.ts:1766` and `script/vectorscope-eval/desktop.ts:179` test `verified === true`, so a `"runtime"` value would silently count as unverified there.
 - **S6 keeps the finding with an unchecked fix, shown as a plain diff block, rather than with no fix**, because the owner asked for a copy-pasteable fix on every finding. The tension is logged as C-14 and Q17.
-- **Requests with no `x-session-id` are not refused.** The review asked to fail closed on any request without a parseable session ID while a `zdr` review is registered. By construction every session request carries the header (`provider.ts:2329-2340`), and a request without one is the owner's own non-session call, so refusing those would break unrelated work in the same process. Malformed headers are refused, and a test proves every `vectorscope.*` request kind carries a parseable header.
+- **Requests with no `x-session-id` are not refused.** The review asked to fail closed on any request without a parseable session ID while a `zdr` review is registered. By construction every session request carries the header (`provider.ts:2330-2341`), and a request without one is the owner's own non-session call, so refusing those would break unrelated work in the same process. Malformed headers are refused, and a test proves every `vectorscope.*` request kind carries a parseable header.
 - **Default-stable digests apply to new keys only.** Applying the rule to existing keys too would change VS-07's current digests for no gain.
 - **Consent keeps an expiry**, because the plan stores consent "with actor, scope, source/head SHA, patch digest and expiry" (`vectorscope-plan.md:221-222`). It is single-use and bound to the head SHA and command digest, so it is never standing preauthorization (D10).
 - **`require_parameters` is neither added nor removed.** `zdrRequestBody` does not add it, since it is not a privacy control; bodies that already carry it (the free route, the Codium gateway) keep it.
