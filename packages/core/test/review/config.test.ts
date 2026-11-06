@@ -283,6 +283,27 @@ describe("parseReviewConfig", () => {
       "REVIEW_MAX_COST_USD must be a number of at least 0; using 3.",
     ])
   })
+
+  // VS-32a: the value lands with the GitHub job's wiring, after vector-at-mention. Until then it is an unknown value,
+  // so it warns and keeps what the other sources say, exactly as today, and exit codes cannot change.
+  test("VS-32: blocking-or-incomplete is not a failOn value before the wiring", () => {
+    const json = '{"failOn":"blocking-or-incomplete"}'
+    const fromJson = parseReviewConfig({ json })
+    expect(fromJson.config.failOn).toBe("never")
+    expect(fromJson.config).toEqual(DEFAULT_REVIEW_CONFIG)
+    expect(fromJson.warnings).toEqual(['.vector/review.json: "failOn" must be "never", "blocking"; using "never".'])
+    expect(parseReviewConfig({ env: { REVIEW_FAIL_ON: "blocking-or-incomplete" } })).toEqual({
+      config: DEFAULT_REVIEW_CONFIG,
+      warnings: ['REVIEW_FAIL_ON must be "never", "blocking"; using "never".'],
+    })
+    const kept = parseReviewConfig({
+      json: '{"failOn":"blocking"}',
+      env: { REVIEW_FAIL_ON: "blocking-or-incomplete" },
+    })
+    expect(kept.config.failOn).toBe("blocking")
+    expect(kept.warnings).toEqual(['REVIEW_FAIL_ON must be "never", "blocking"; using "blocking".'])
+    expect(mergeReviewConfig({ surface: "github", json: { at: "base", text: json } })).toEqual(fromJson)
+  })
 })
 
 describe("mergeReviewConfig", () => {

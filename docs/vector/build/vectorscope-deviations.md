@@ -4157,3 +4157,424 @@ committed.
   - Nothing was sent to a model, no paid path ran, no workflow was
     dispatched, no dependency was added, and no user-visible string
     changed (D14).
+
+## 2026-11-06 · VS-32a Fail-closed review verdict (pure)
+
+Addendum A §2 VS-32, the Now part of §4: `reviewVerdict` only, with its
+result type, tests and this entry. Built at `376a52ad`. VS-32 is a proposal
+pending Q18, so nothing calls it and no key exists for it: `failOn` stays
+`"never" | "blocking"`. No `ReviewConfig`, config parse, prompt, state,
+format, runner or eval-script change. `run.ts`, `ai-review.ts`,
+`provider.ts`, `session/llm.ts`, `posting.ts`, `state.ts`, `types.ts`,
+`workflow.ts`, `command.ts`, `github.*`, `github-*.ts` and
+`vectorscope.astro` are untouched. It implements the VS-32a plan as
+corrected by its critique. All nine critique points were taken, two of
+them (2 and 4) in a different form (below), and so were the six review
+findings that followed, one of them in a different form (Review
+findings, below). Nothing is committed.
+
+- **What landed.**
+  - **New core `review/verdict.ts`** (not pinned; see Evidence scope).
+    Its imports are types only (`HeldFile`, `SkipReason`, `ReviewOutcome`,
+    `Severity`, `SkippedFile`), so it is browser-safe and loads nothing at
+    runtime.
+    - `REVIEW_VERDICTS` (`not-reviewed`, `policy-skip`, `incomplete`,
+      `blocking`, `findings`, `clean-complete`, in the order they are
+      tested) and `ReviewVerdict`.
+    - `reviewVerdict(input: VerdictInput): VerdictResult`, where
+      `VerdictInput` is a `kind`-tagged union: `outcome`, `skip` or
+      `failure`. The result is `{ verdict, causes, notes }`, with fresh
+      arrays on every call.
+    - `VerdictOutcome`: the parts of a `ReviewOutcome` it reads. A
+      `ReviewOutcome` is assignable as it is (the test passes full
+      outcomes).
+    - `VerdictSkip`, `StoredSkip`, `VerdictFailure`, `VerdictCause`,
+      `VerdictNote` and `VerdictList`.
+  - **New core `test/review/verdict.test.ts`**, and one new test in
+    `test/review/config.test.ts`.
+- **The rules, first match wins.**
+  1. **Failures.** `config` (a model or triage model that cannot start,
+     GitHub 401, 403 or 404, both checkout-mismatch `configError` exits,
+     the command-level setup failures) and `start` (GitHub or git failed
+     before the review started) give `not-reviewed`. `review` (a model or
+     tool failure caught inside the job) gives `incomplete`, as the
+     addendum's "a thrown review error" says. A stage the module does not
+     name gives `not-reviewed` with cause `failure-unknown`.
+  2. **Skips.** An exhaustive private table, so a new `SkipReason` fails
+     typecheck in `verdict.ts` until it is classified:
+     - `not-reviewed`: month-budget, pr-budget, too-large, and
+       spend-unreadable (the month spend could not be read while a month
+       cap is set);
+     - `policy-skip`: label, draft, author, branch, fork,
+       nothing-to-review, and VS-24's `trivial` (addendum §3);
+     - a reason the table does not name gives `not-reviewed` with cause
+       `skip-unknown`.
+  3. **Stored skips.**
+     - `already-reviewed` carries the stored verdict for the same head
+       (decideSkip only gives it when `state.head` is the head).
+     - When either stored skip hands on `not-reviewed` or `incomplete`,
+       it adds the `review-full` note: decideSkip keeps skipping that
+       head, so without the note a verify pass stopped for time would
+       leave the check red on every later push with nothing saying how to
+       finish it. A handed-on `blocking` needs a fix, not another review,
+       so it has no note.
+     - A `carry` hands on a stored failing verdict (`not-reviewed`,
+       `incomplete`, `blocking`), so a carried `incomplete` stays
+       `incomplete`. It never hands on a passing one, which belongs to the
+       pre-rebase head: that gives `not-reviewed` with the `review-full`
+       note.
+     - With no stored verdict, or a stored value outside
+       `REVIEW_VERDICTS`, either gives `not-reviewed`, with causes
+       `[reason, "no-stored-verdict"]` and the `review-full` note.
+  4. **Outcomes.**
+     - **Note.** `held-back-deletion` when a held file's status is
+       `deleted`, kept on every tier.
+     - **The zero-attempt stops.** A `privacy` or `budget-estimate`
+       partial gives `not-reviewed`, whatever else the outcome holds.
+     - **Unfinished**, every cause in this fixed order: any other
+       `partial`; `unreviewed`; a skipped file whose reason leaves the
+       review unfinished (`size-limit`); `skipped-unknown`, once, for any
+       skipped-file reason the table does not name; `held-back` (a held
+       file not deleted); `strict-incomplete` (`complete` anything but
+       exactly `true`); `specialist` (any status other than `ok`);
+       `no-reviewer` (no `review` or `security` entry).
+     - **VS-24's trivial outcome.** With `trivial` exactly `true`, no
+       specialist entry and no unfinished cause but `no-reviewer`, the
+       marker stands in for the missing reviewer and nothing else. With
+       nothing listed the verdict is `policy-skip` with cause `trivial`.
+       What it lists (an earlier finding still open) is read as on any
+       other outcome, so a still-open blocking finding gives `blocking`
+       and a still-open concern gives `findings`.
+     - Otherwise any unfinished cause gives `incomplete` with all of
+       them. Then a blocking finding in inline, overflow, outsideDiff,
+       elsewhere, nits or stillOpen gives `blocking` (so does a severity
+       other than `concern` or `nit`), any listed finding gives
+       `findings`, and nothing gives `clean-complete`.
+- **Critique points.**
+  1. *Skipped-file reasons fail open* (major): taken. `verdict.ts` holds
+     an exhaustive `Record<SkippedFile["reason"], VerdictCause | null>`,
+     so VS-34 wiring's `held-back` reason fails typecheck there until it
+     is classified. The test keeps its own typed table, and a mutation
+     mapping size-limit to complete breaks it.
+  2. *VS-24's trivial outcome would read as incomplete* (major): taken in
+     a stricter form. `VerdictOutcome.trivial?: true` is reserved beside
+     `strict` and `held`. It is read after the privacy and budget-estimate
+     stops and before the unfinished tier, as the critique asks, but it
+     excuses only the missing reviewer, and only on an outcome with no
+     specialist entry. A marker beside a partial value, unreviewed files,
+     a held change or an incomplete strict result, or on a run whose
+     passes ran, does not describe the outcome, so the outcome is read
+     instead. Corrected in review (finding 5, below): this entry first
+     said that kept the marker from hiding a blocking run, but the first
+     version returned `policy-skip` before reading the lists, so a
+     trivial outcome with a still-open blocking finding passed. The lists
+     are now read as on any outcome. Tested: trivial alone is
+     `policy-skip`; trivial with privacy is `not-reviewed`; no marker
+     with no specialists is `incomplete`; trivial with a still-open
+     blocking finding is `blocking` and with a still-open concern
+     `findings`; and each contradictory case.
+  3. *`other-command` and `no-write-access` as passing values* (major):
+     taken. Both are removed from `VerdictSkip`. Neither run reviews the
+     head: the job leaves at `github.review.ts:253-261` before reading the
+     change, and a passing head-bound verdict from an untrusted commenter
+     would fail open. A test pins with `@ts-expect-error` that neither
+     reason is accepted, so adding one is a reviewed decision.
+  4. *Carry across a rebase* (minor): taken (above), combining the two
+     forms the critique offers: a failing verdict carries with cause
+     `carry`, and a passing one gives `not-reviewed` with `review-full`.
+     It is the conservative choice, not a settled one. Whether a passing
+     verdict may carry across a rebase is open for the wiring and the
+     owner (Q18). Tested, including a carried `incomplete`.
+     - **Expected effect on dogfood red rates.** The addendum says
+       nothing about carries. The job carries only when history was
+       rewritten and every file's patch is unchanged (`source.ts:226-235`,
+       taken at `github.review.ts:511-515`); a rebase that changes a
+       patch is reviewed incrementally instead. Under the gate, every such
+       carry of a PR whose stored verdict passes (`clean-complete`,
+       `findings`, `policy-skip`) turns its check red with cause `carry`
+       until `/vector review full` runs, although nothing it reviewed
+       changed. So `carry` should appear in red PRs by cause roughly as
+       often as passing PRs are rebased onto a moved base without
+       conflicts, and on a team that rebases to update it can feed the
+       red-PR kill criterion by itself. The dogfood report must count
+       `carry` reds separately so the owner sees that cost apart from
+       real unfinished reviews.
+     - **What a Q18 answer changes.** The rule is one branch in
+       `storedVerdict` (`reason === "carry" && !FAILING[stored]`). An
+       answer that a passing verdict may carry when the patch is
+       unchanged flips that branch alone, before the wiring, together
+       with the carry test's PASSING loop and the VT1 row "a rebase carry
+       of a clean review". The failing half (a carried `blocking` or
+       `incomplete` stays red) does not depend on the answer.
+  5. *`stored` accepted on every skip* (minor): taken. The union is split,
+     so only `already-reviewed` and `carry` take `stored`. A
+     `@ts-expect-error` test pins it, and a mutation that widens the type
+     breaks typecheck.
+  6. *Test 17's title overclaims* (minor): taken. It is "VT1 path mapping
+     table (pure; the job's exit-path test is deferred)", and its header
+     says the job's own exit-path test, catch blocks included, and the D3
+     parity test land with the wiring.
+     - The "nothing left after classification" path
+       (`github.review.ts:548-559`) uses `nothing-to-review`. It is also
+       reached by a PR whose only files are binary, or deleted without a
+       patch (`ignore.ts:224-229`), so such a PR reads `policy-skip` by
+       the addendum's mapping. Recorded for Q18.
+  7. *Desktop outcomes do not fit* (minor): recorded, nothing changed.
+     The desktop's `ReviewOutcomeLite` (`ai-review.ts:220-250`) has no
+     `partial` and no `unreviewed`. Its `specialists` are review and
+     security only, with no `skipped` status (`ai-review.ts:213-218`), and
+     verify is `verification.status` (`ok`, `skipped` or `failed`,
+     `ai-review.ts:244`). The deferred desktop artifact field needs an
+     adapter that folds `verification.status` into a verify entry and
+     supplies `unreviewed`, or a documented difference with
+     `variant.applied: false`.
+  8. *Future specialist names* (minor): taken. `specialists[].name` also
+     takes the contract's `lens` and `repro` and codium's `judge`
+     (contract §1.2). `no-reviewer` means no `review` or `security`
+     entry, so an unknown pass never stands in for a reviewer (tested for
+     all three). Any of them that does not finish reads `incomplete`.
+     The packages that add those names must decide their verdict effect.
+  9. *types.ts carries the same merge exposure* (minor): taken in the
+     first form. `REVIEW_VERDICTS` and `ReviewVerdict` live in
+     `verdict.ts`, and `types.ts` is unchanged. Contract §0.2 lists
+     `types.ts` beside `state.ts` among codium's rewrites, and nothing
+     reads the type before `ReviewState.verdict`. Both move to `types.ts`
+     (which must stay import-free) with that field.
+- **Review findings** (same day, on the uncommitted change):
+  1. *Lookup misses fail open* (non-blocking, merged with 6): taken. An
+     outcome decoded from JSON (a §1a replay artifact, the desktop
+     adapter) can carry values the types do not name, and a lookup miss
+     read as complete, gave `verdict: undefined`, threw, or handed a
+     stored value back as it was. Now:
+     - an unnamed skipped-file reason (VS-34's later `held-back`, an
+       older or newer artifact) gives cause `skipped-unknown`, once,
+       after the table's causes so the order stays fixed. It is a
+       dedicated cause rather than a reused `size-limit`, so red PRs by
+       cause tell an unclassified reason apart from a size limit;
+     - an unnamed skip reason (`other-command`, for example) gives
+       `not-reviewed` with `skip-unknown`;
+     - an unnamed failure stage gives `not-reviewed` with
+       `failure-unknown` (it threw before);
+     - an unnamed stored verdict (`"pass"`, `""`, `null`, an inherited
+       key) reads as a missing one: `not-reviewed` with
+       `no-stored-verdict` and `review-full`.
+
+     The same principle covers three values the findings did not list,
+     each a one-line change: a severity other than `concern` or `nit`
+     reads as `blocking`; `strict.complete` must be exactly `true` (a
+     decoded `"true"` or `1` read as complete before); and `trivial` must
+     be exactly `true`. The strict comparison carries one
+     `oxlint-disable-next-line no-unnecessary-boolean-literal-compare`
+     with its reason, since the rule assumes the declared type. The new
+     tests decode every input from JSON, so none needs a type assertion,
+     and include inherited keys (`toString`, `constructor`,
+     `__proto__`, `hasOwnProperty`, `valueOf`) so a lookup that reads the
+     prototype fails them.
+  2. *A stored failing verdict gives no hint* (non-blocking): taken
+     (rule 3 above), for both `already-reviewed` and `carry`. The
+     already-reviewed test now covers every stored value with its note,
+     and feeds one stored verdict from a judged outcome whose verify
+     pass was stopped.
+  3. *The carry rule is fixed in code* (non-blocking): the conservative
+     default stays. Its expected effect on dogfood red rates, and the one
+     branch a Q18 answer would flip, are recorded under critique 4.
+  4. *Test style* (non-blocking): taken. The combinations are built with
+     `flatMap` into a `const` array whose length is asserted (7,056), and
+     the oracle is reduced to the invariant: a listed blocking finding
+     never passes, and the one pass without a finished run is a trivial
+     outcome with no pass entry and everything but the reviewer
+     finished. Exact tiers are left to the table tests. The listed
+     finding moved from `elsewhere` to `stillOpen`, the list a trivial
+     outcome carries.
+  5. *The trivial marker excused listed findings* (blocking): taken, in
+     a different form from both options offered. Both read the outcome
+     normally once anything (or anything blocking) is listed, which
+     gives a trivial outcome with a still-open blocking finding
+     `incomplete` with `no-reviewer`. With the `!listed.length` option, a
+     still-open concern goes red the same way, so a whitespace commit on
+     a PR with an earlier concern would turn a passing check red. Here
+     the marker stands in for the missing reviewer only, and the lists
+     are then read as on any outcome:
+     - a still-open blocking finding gives `blocking`. That is exit 1
+       under the gate, as under failOn "blocking", and red PRs by cause
+       name the open finding rather than a missing reviewer;
+     - a still-open concern gives `findings`, which passes, as it did
+       before the trivial commit.
+
+     The property test asserts the invariant for every severity, and
+     the trivial test covers blocking, concern, a held deletion beside a
+     blocking finding, and a contradictory partial value. Critique 2's
+     claim is corrected.
+  6. *Exhaustiveness rests on the type system* (non-blocking): taken
+     with 1 (above).
+- **Other decisions.**
+  - **Placement.** The addendum puts the function in `state.ts` next to
+    `nextState`. It is in its own `verdict.ts` because:
+    - `state.ts` imports `command.ts` (@vector-owned), `diff`, `prompt`
+      and `select` at runtime, while `verdict.ts` imports types only;
+    - codium rewrites `state.ts` (contract §0.2);
+    - the package's test is `verdict.test.ts`.
+
+    `ReviewState.verdict` and the `nextState` write still go into
+    `types.ts` and `state.ts` at wiring.
+  - **Fail-closed widenings**, each beyond the addendum's list:
+    - any status other than `ok` is unfinished, not only failed or
+      skipped. `run.ts:842-844` builds `partial` from the reviewer passes
+      only, so a verify pass that is stopped or times out sets no
+      `partial`, and only its status shows it (tested with findings
+      posted);
+    - an outcome with no review or security pass is `incomplete`;
+    - a `size-limit` skipped file (reusing `SkippedFile.reason`) is
+      `incomplete`;
+    - any partial value other than the two stops is `incomplete`;
+    - at runtime, values the types do not name fail closed (review
+      findings 1 and 6, above): every table lookup checks
+      `Object.hasOwn`, so an inherited key such as `toString` never
+      reads the prototype.
+  - **Lists.** `blocking` reads the job's `failOn: "blocking"` lists
+    (`github.review.ts:877-883`) plus nits, which never hold a blocking
+    finding (`select.ts:297`). `findings` counts nits and still-open
+    findings too. Fixed, dismissed and dropped findings are not listed
+    (tested).
+  - **Causes and notes are codes, not text** (D14). `format.ts` words
+    them at wiring. The causes feed the kill criteria: red PRs by cause,
+    and held-back as the only cause.
+  - **Policy skips never read earlier findings**, as with every
+    `decideSkip` skip today. Whether a skip should carry an earlier
+    blocking verdict is a wiring question (Q18).
+  - **Types that have not landed are read structurally.**
+    `ReviewOutcome.partial`, `SkipReason`, `SkippedFile` and `ReviewOutcome`
+    are not widened: VS-23b, VS-24, VS-27a and VS-34 own those changes.
+    `trivial` is in `VerdictSkip` for the GitHub-side trivial skip, which
+    waits for the @vector merge (contract VS-24).
+  - **A malformed input throws.** An input whose shape is wrong (a
+    missing list, an unknown `kind`) throws instead of returning a value.
+    The deferred decoder rejects such input first, and the wiring's catch
+    path must read a throw as the `review` failure (`incomplete`), never
+    as exit 0.
+  - **VS-34's two fields.** `held` (with its status) and the later
+    `held-back` `SkippedFile` reason must not double-count or contradict
+    each other. A held deletion must not read `incomplete` through the
+    skipped-file table while `held` exempts it. VS-34 wiring must
+    classify `held-back` in `verdict.ts` with that in mind.
+- **§0.3 items:**
+  1. key: none in Now;
+  2. parity: nothing calls it, and the existing suites pass unchanged;
+  3. evidence: no new key, so `EVIDENCE_POLICY_KEYS`, `EvidenceScope`,
+     `policyDigest` and `promptsDigest` are unchanged. `failOn` is "not a
+     policy key" (addendum §1);
+  4. variant: not applicable (§1a);
+  5. desktop: a documented difference, since the desktop has no CI exit
+     code (`variant.applied: false` once the artifact field exists; see
+     critique 7);
+  6. this entry.
+- **Evidence scope and pin.** `verdict.ts` is not in
+  `REVIEW_PIPELINE_FILES`. It changes neither what a review finds nor
+  what a model sees: it is a gate over the outcome, like its unpinned
+  peers `state.ts` and `format.ts`. No pinned file changed, so
+  `REVIEW_PIPELINE_SOURCES` stays `7addfcd0033ba579` (re-run) and
+  `REVIEW_PIPELINE_REVISION` stays 1, as with VS-22a.
+- **Owner questions: none decided.** Q13, Q18 and Q19 stay open. Q19
+  (retry or exit at once) changes exit timing, not the value: a model
+  error reads `incomplete` either way. The carry rule, the binary-only
+  `nothing-to-review` reading, and whether the comment-command and
+  write-access exits emit any verdict are raised under Q18.
+- **Deferred to after `vector-at-mention`** (citations at `376a52ad`):
+  - **The `blocking-or-incomplete` value**, read from base `review.json`
+    only, through VS-23a's source-tagged merge. Today `oneOf` is at
+    `config.ts:28-33` and `:170`, `REVIEW_FAIL_ON` at `:206`, and the
+    readers at `:255-257` (`parseReviewConfig`) and `:285`
+    (`mergeReviewConfig`). Until then the new config test pins today's
+    behaviour: the value warns and resolves to `never` from review.json,
+    `REVIEW_FAIL_ON` and the GitHub merge.
+  - **Exit codes**, catch paths included (`github.review.ts:200-221,
+    244-276, 385-430, 511-515, 548-559, 702-716, 959-978, 1108-1121,
+    1213-1229`).
+  - **`ReviewState.verdict`**, the `nextState` write (`types.ts:138-153`,
+    `state.ts:366`) and the stored-value decoder, with `REVIEW_VERDICTS`
+    and `ReviewVerdict` moved to `types.ts`.
+  - **Outputs.** `$GITHUB_OUTPUT` `vectorscope-verdict` and
+    `vectorscope-head`, and the summary marker.
+  - **Whether and what** the comment-command and write-access exits emit
+    (`github.review.ts:253-261`).
+  - **Tests.** The addendum's exit-path test (every exit path, catch
+    blocks included, existing exit-1 paths unchanged) and the D3 parity
+    test on the `github.review` tests.
+  - **The request** to the @vector owner for an always-running gate step.
+- **Deferred to eval or wiring follow-ups:**
+  - the recorded artifact field (§1a) in engine `eval.ts` and the desktop
+    adapter (critique 7);
+  - the check that 0 partial outcomes over saved replay artifacts give
+    `clean-complete`, and the injected-stop seed cases;
+  - VS-34 wiring's `held-back` classification (above);
+  - VS-24 wiring setting the `trivial` marker on its zero-attempt outcome;
+  - VS-24's GitHub-side trivial skip goes through `decideSkip` as
+    `{ kind: "skip", reason: "trivial" }`, which carries no outcome and
+    reads no still-open finding. So a trivial commit on a PR whose stored
+    verdict is `blocking` would read `policy-skip`. Like the other policy
+    skips (Q18), the wiring must decide whether it hands on a stored
+    failing verdict, as `already-reviewed` does;
+  - VS-27a's `strict`, and whether strict findings count;
+  - the dogfood measurement and the kill criteria.
+- **Deferred verification:**
+  - no saved replay artifacts exist in the repository (I-13);
+  - exit-code behaviour cannot be checked before the wiring.
+- **Evidence.** Each file ran alone through the lock with `--timeout 30000`,
+  `GITHUB_ACTIONS=false`, and `TMPDIR` and XDG roots under
+  `/tmp/vector-vectorscope/vs32a/`:
+
+  | Where | File | Pass |
+  |---|---|---|
+  | core | `test/review/verdict.test.ts` | 44 (new; 38 before the review findings) |
+  | core | `test/review/config.test.ts` | 35 (one added) |
+  | core | `test/review/skip.test.ts`, `state.test.ts`, `format.test.ts`, `holdback.test.ts` | 11, 42, 46, 16 |
+  | core | `test/review/model-evidence.test.ts` | 17 (pin re-run after the review fixes, unchanged) |
+  | engine | `test/cli/github.review.test.ts` | 40 (unchanged, I-1) |
+  | app | `src/features/pull-requests/ai-review.test.ts` | 107 (unchanged) |
+
+  - `verdict.test.ts` covers: every partial value; unreviewed present and
+    absent; every skipped-file reason; held changes and deletions;
+    strict complete, incomplete and absent; every specialist status on
+    each pass; the reviewer rule with future names; every skip reason;
+    every `decideSkip` reason, fed from `decideSkip` itself, with and
+    without its summary note; both stored skips over every stored value;
+    the three failures; the trivial marker, with still-open findings;
+    the VT1 mapping table; values the types do not name, decoded from
+    JSON; and purity on a deep-frozen input. A property test over 7,056
+    combinations (partial, unreviewed, held, strict, specialists, listed
+    severity, trivial) asserts that an unfinished review is never a pass
+    and a listed blocking finding never passes.
+  - After the review fixes, only `verdict.ts` and its test changed, and
+    nothing else imports `verdict.ts`. So `verdict.test.ts` and
+    `model-evidence.test.ts` were re-run, and so was core's `bun
+    typecheck`. The other rows above are from the first round, and no
+    file they load changed.
+  - `bun typecheck` passes in core, engine, app and desktop, and so does
+    the eval scripts' `tsgo -p ../../script/vectorscope-eval/tsconfig.json`.
+  - prettier passes on the three files, and oxlint reports no warning on
+    them. The test's tables avoid type assertions: each key list is
+    checked against its exhaustive record.
+  - **Mutation check.** Seventeen mutations each broke at least one test,
+    and the file was restored byte for byte after each (`cmp`):
+    - privacy read as incomplete; the deletion exemption dropped;
+      `!== "ok"` narrowed to `=== "failed"`; `no-reviewer` removed;
+      `no-reviewer` counting any non-verify pass;
+    - stillOpen not listed; pr-budget as a policy skip; `stored` ignored;
+      a carry handing on a passing verdict; size-limit read as complete;
+      the cause order swapped;
+    - trivial excusing a run whose passes ran; trivial excusing any
+      unfinished cause; a review error read as not-reviewed; the note
+      dropped on a stop;
+    - at typecheck: `other-command` added as a policy skip, and `stored`
+      accepted on every skip;
+    - after the review fixes, ten more, each breaking at least one test,
+      with the file restored byte for byte (`cmp`): trivial passing
+      whatever is listed; the skipped-file lookup reading the prototype;
+      `skipped-unknown` dropped; the skip-reason, failure-stage and
+      stored-value checks each dropped; `review-full` dropped on a
+      stored `incomplete`; an unnamed severity read as non-blocking;
+      `strict.complete` and `trivial` read as truthy.
+  - The full root typecheck was not run: nothing is pushed.
+  - Nothing was sent to a model, no paid path ran, no workflow was
+    dispatched, no dependency was added, and no user-visible string
+    changed (D14).
