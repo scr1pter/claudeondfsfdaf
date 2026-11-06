@@ -164,6 +164,8 @@ export class FakeStore {
         return this.hash(args[0]!).get(args[1]!) ?? null
       case "HSCAN":
         return ["0", [...this.hash(args[0]!)].flat()]
+      case "HGETALL":
+        return this.hashFields(args[0]!)
       case "ZADD": {
         const [key, ...rest] = args
         const flags = new Set<string>()

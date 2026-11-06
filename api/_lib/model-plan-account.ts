@@ -2406,6 +2406,12 @@ export async function auditModelPlanKey(id: string, fetcher: typeof fetch = fetc
 /** A hold on an account's pool for a charge made outside OpenRouter: a hosted block, or any other pool charge. */
 export type PoolHold = {
   ticket: string
+  /**
+   * The pool (key hash) the hold was placed on. A producer that settles in a later invocation (hosted blocks, WP A51)
+   * keeps it with the ticket, to give the hold back or record its debit with codium-pool.ts's `releaseHold` and
+   * `recordDebit` exactly as `settle` and `release` would.
+   */
+  pool: string
   micro: number
   expiresAt: number
   /**
@@ -2491,6 +2497,7 @@ export async function holdPool(
   if (!ticket) throw monthlyShortfall()
   return {
     ticket: ticket.ticket,
+    pool: ticket.pool,
     micro: ticket.micro,
     expiresAt: now + ttlMs,
     release: () => releaseHold(ticket, fetcher),

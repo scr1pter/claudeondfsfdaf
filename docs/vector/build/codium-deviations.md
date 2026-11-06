@@ -1811,3 +1811,71 @@ outcome, verdict, actor.login` pass. Every paid plan includes it while the plan 
   the repository twice (up to 15 minutes each) between `card` and `start`, and the binding alone already shuts out a
   copy read during that time. One cost: re-running only the capture job (a new proof) is refused; re-running the
   workflow mints a new ticket. Codex's V31 wiring is unchanged (the proof never leaves the capture job).
+
+## A51 Hosted core (5 Nov 2026)
+
+- **Files outside A51's list.** `api/_lib/codium-pool.ts` (the true-up's `LOWER` script and `lowerDebit`),
+  `api/_lib/model-plan-account.ts` (`PoolHold` gains `pool`, so a block's hold can be settled or released from another
+  invocation with `recordDebit`/`releaseHold`, exactly as its own `settle`/`release` would), `api/_lib/hosted-meter.ts`
+  and its import in `api/model-plans/status.ts` (`meters.hosted`), `api/_lib/model-plan-estimate.ts` (the hosted form),
+  `test/hosted-fixture.ts`, `HGETALL` in the Codium fake store, the reviewed list of `test/codium-pool.test.ts`'s
+  tripwire (adding `hosted-ledger.ts: holdPool(` is that producer's review), one expectation and a new case in
+  `packages/web/test/model-plan-estimate-api.test.ts`, `.env.example`, `docs/vector/MODEL-PLANS.md` and
+  `docs/vector/owner-actions/hosted-computer.md` (new, with only the ledger's section).
+- **"15-minute blocks held 20 minutes ahead"** is read as: before a block starts it holds 20 minutes at the charged
+  rate (the block's 15 and the 5 a paused or refused session may still run to wrap up, §4.4), and the hold lapses 30
+  minutes after it is placed. Renewing a block holds the next one first; the two holds overlap for the wrap-up minutes.
+- **"Attributed to the period active at settle."** When a renewal or an upgrade replaced the hold's key before the block
+  settled, the account's current key takes the charge as a debit of its own and the old hold is given back; otherwise
+  the hold becomes the debit on its own key. `holdPool`'s own `settle` keeps old-pool identity (A09/A17). For an upgrade
+  the two come to the same (the carry true-up waits for the live hold, then returns it in the carry); after a renewal the
+  replaced key spends nothing more, so only the current period can pay. A queued block records where its charge went
+  before anything else (`MARK`), so a retried settle never charges twice, even across a second renewal.
+- **Nothing a computer ran goes uncharged.** Minutes past a block's hold (a reaper that ran late) are an overrun: a
+  separate debit on the current key and an `overrun` line. A block nothing closed is charged its whole hold once the hold
+  lapses (`LAPSE`, run by `drainHostedSettles`, the reaper's ledger pass for A53).
+- **Storage, egress and retention have no hold placed ahead.** They accrue before anything could hold them, so each is
+  a debit with its own held member until applied (as the carry true-up's shortfall debits are). On a pool already
+  spent, the key's limit floors at zero and the remainder is Vector's: cents a day.
+- **Rates.** Snapshot storage is $0.08 per GB-month (Vercel Sandbox, read 2026-09-10 in `cloud-envs-plan.md`), charged
+  per GB-day over a 28-day month, plus 10%. `VECTOR_HOSTED_EGRESS_MICRO_USD_PER_GB` is read as what a GB costs Vector
+  (whole micro-dollars), charged plus 10%; unset it is $0.15 per GB, Vercel's highest published iad1 transfer rate,
+  until Vercel answers owner step 14. An invalid value stops new cloud computer work.
+- **True-up.** "Only lowers, never below cost" is built as `trueUpCharge`: the trued charge is min(current, actual
+  cost plus 10%, rounded up), so it never rises and never goes below the actual cost. The pool's debit is lowered in
+  place (`LOWER` also renames the debit's own held member while it is unapplied, so the ledger's READ still finds it at
+  its amount) and convergence raises the key's limit (M1). Only a charge on the current period's key is lowered: a
+  replaced key spends nothing more. The actual cost comes from the provider's usage (`computeCostMicro`: busy vCPU time
+  plus memory over the time the computer ran), which A53's nightly job supplies.
+- **The shared caps (A17's obligation).** The daily share is checked before each hold from today's spend as status
+  counts it, not in the same step as the hold: the common HOLD enforces the month only, and changing it was out of
+  scope. A model request admitted in between can pass the share by at most one block per hold in flight (Max runs one
+  computer; Ultra has no daily share unless its pool ramp sets one); ADMIT counts every live hold today, so model requests
+  never pass the share because of a block. Blocks carry no run id: compute belongs to a session, not to a run, so the
+  run ceiling and the run's pool binding stay about model requests (a session's model requests carry their run through
+  ADMIT), and a session spanning a renewal is not refused its next block. Purpose `hosted` never counts toward the Brain
+  share.
+- **Hours.** `hosted:minutes:<id>:<meterEpoch>` (§4.6) is a hash: `used` (settled weighted minutes, the large size
+  counting two), `r:<ref>` (a running block's reservation and when it lapses) and `d:<ref>` (counted once). A block
+  reserves its minutes when it opens, in the same step as its computer, so parallel sessions never pass the hours; its
+  settled minutes count in the period active at settle. When the hours run out mid-block, the session may still run to
+  the end of its hold to wrap up; those minutes are charged and counted, so a period's hours can be passed by at most
+  the wrap-up.
+- **Computers at once** are counted in `OPEN` (§WP A53 says "by lease"): a session's first block needs fewer running
+  blocks than the plan's computers. A53 can rely on it.
+- **Store keys not in §4.6,** under the Codium prefix: `hosted:settle:<id>` (ended blocks to settle), `hosted:settle-due`
+  and `hosted:lapse` (indexes for the reaper).
+- **New env `VECTOR_HOSTED_ACCOUNT_SALT`** (not in §4.16): ledger lines name the account by an HMAC under it, as Vault's
+  rows do, and A52 can name sandboxes from the same value. No block opens without it and Supabase.
+- **Codes not in §4.10:** 400 `HOSTED_REQUEST`, 409 `HOSTED_SESSION_RUNNING` and 409 `HOSTED_SESSION_MOVED`. A start
+  while the plan renews is 503 `MODEL_PLAN_RENEWING` (retry after 30 s); paused, frozen and not-included plans get
+  `HOSTED_PAUSED`, `HOSTED_FROZEN` and `HOSTED_NOT_INCLUDED {perk: "computer", plan}`.
+- **Disks after a plan ends.** An ended plan's 14 days are paid once from the final period, out of what it can still
+  cover (credits and carry less its model spend, debits and live holds, read from the final key's provider usage), and
+  shortened to whole days when it cannot. After a lost dispute the 30 days are Vector's cost, since that payment was
+  reversed; a frozen account's disks are kept and not charged. The trust ramp is recomputed at each read from the plan,
+  so a ramp that ended after the snapshot was written no longer applies.
+- **The estimate's hosted form** (A18 left it for A51): `{kind: "hosted", minutes, size}`, answered only while the
+  cloud computer can be started for the account (listed, or `VECTOR_HOSTED_ALLOW_ACCOUNTS`) and its plan includes the
+  size, minutes clamped to the plan's longest job now (the ramp applied), priced at the charged per-minute rate on the
+  same 1.5x grid and per-step cache as the model form.

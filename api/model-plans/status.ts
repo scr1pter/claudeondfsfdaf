@@ -6,6 +6,8 @@ import "../_lib/remote-meter.js"
 import "../_lib/vault-meter.js"
 // WP A49: registers `meters.shipDesk` (the share of the month's Ship Desk cards counted).
 import "../_lib/ship-desk-meter.js"
+// WP A51: registers `meters.hosted` (the share of the period's cloud computer hours used).
+import "../_lib/hosted-meter.js"
 
 export default function handler(request: ApiRequest, response: ApiResponse) {
   return handleModelPlanStatus(request, response)

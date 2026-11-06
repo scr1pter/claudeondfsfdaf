@@ -17,6 +17,10 @@ import {
 import { requireModelPlans } from "./model-plan-config.js"
 import { persistentStore } from "./persistent-store.js"
 import { ApiError, handleApiError, json, readJson, requireMethod, type ApiRequest, type ApiResponse } from "./http.js"
+import { Hosted } from "../../packages/schema/src/hosted.js"
+import type { EntitlementSnapshot } from "../../packages/schema/src/codium-entitlements.js"
+import { hostedCaps, hostedOpen, hostedSnapshot } from "./hosted-entitlement.js"
+import { chargeMinuteMicro } from "./hosted-rates.js"
 
 const MAX_BYTES = 4096
 /** Units and costs are rounded up to steps this far apart (P2). */
@@ -43,6 +47,7 @@ const Body = Schema.Struct({
   outputTokens: Schema.Number,
   requests: Schema.optional(Schema.Number),
 })
+const HostedBody = Schema.Struct({ kind: Schema.Literal("hosted"), minutes: Schema.Number, size: Schema.String })
 
 /**
  * `POST /api/model-plans/estimate` (§4.13, model form): roughly what a request would use, as a band of the month and
@@ -77,7 +82,14 @@ export async function handleModelPlanEstimate(
       { scope: "model-plan-estimate", identifier: account, limit: 20, windowSeconds: 60, requirePersistent: true },
       fetcher,
     )
-    const body = estimateBody(await readJson<unknown>(request, MAX_BYTES))
+    const raw = await readJson<unknown>(request, MAX_BYTES)
+    const hosted = hostedEstimateBody(raw)
+    if (hosted) {
+      const { snapshot, step } = await hostedEstimateStep(account, hosted, fetcher)
+      await answerStep(response, account, snapshot, step, fetcher)
+      return
+    }
+    const body = estimateBody(raw)
     const catalog = options.models ?? gatewayPlanModels()
     const model = catalog.find((candidate) => candidate.id === body.model)
     // As chat answers: a staged candidate is not served yet; anything else outside the catalog is an invalid request.
@@ -97,9 +109,6 @@ export async function handleModelPlanEstimate(
         },
       })
     if (!view.served) throw modelUnavailable()
-    const pool = await snapshotPool(account, snapshot, fetcher)
-    // Only until reconcile has made (or finished replacing) the period's key: read again shortly.
-    if (!pool) throw modelSpendStale()
     const step = estimateStep({
       inputTokens: Math.min(body.inputTokens, view.effective.contextLength),
       outputTokens: Math.min(body.outputTokens, view.effective.maxOutputTokens),
@@ -107,45 +116,101 @@ export async function handleModelPlanEstimate(
       inputPrice: model.inputPrice,
       outputPrice: model.outputPrice,
     })
-    const dailyShare = snapshot.caps.dailyShare
-    const key = codiumKey(
-      "estimate",
-      account,
-      snapshot.meterEpoch,
-      pool.ramped ? "ramp" : "full",
-      dailyShare ?? "none",
-      step,
-    )
-    const poolStep = floorStep(Math.max(1, pool.totalMicro))
-    const raw = await persistentStore(["GET", key], fetcher)
-    const saved = savedAnswer(raw, poolStep)
-    if (saved) {
-      json(response, 200, saved)
-      return
-    }
-    const answer = estimateAnswer(step, pool.totalMicro, dailyShare)
-    // The answer for this step stays until a day after the period ends. A first answer is set only while none is kept,
-    // so of two parallel first answers both callers get the one stored (unless it is from a higher pool step than
-    // theirs); an answer kept from a higher pool step than this one is replaced.
-    const stored = await persistentStore(
-      [
-        "SET",
-        key,
-        JSON.stringify({ answer, poolStep }),
-        ...(typeof raw === "string" ? [] : ["NX"]),
-        "PX",
-        Math.max(1, snapshot.periodEnd + 86_400_000 - now),
-      ],
-      fetcher,
-    )
-    json(
-      response,
-      200,
-      stored === "OK" ? answer : (savedAnswer(await persistentStore(["GET", key], fetcher), poolStep) ?? answer),
-    )
+    await answerStep(response, account, snapshot, step, fetcher)
   } catch (error) {
     handleApiError(response, error)
   }
+}
+
+/**
+ * Answers cost step `step` for the snapshot's period: the kept answer when there is one from this pool step or above,
+ * otherwise a new one, kept until a day after the period ends. The answer depends only on the cost step and the pool,
+ * so every kind of estimate shares one answer per step.
+ */
+async function answerStep(
+  response: ApiResponse,
+  account: string,
+  snapshot: EntitlementSnapshot,
+  step: number,
+  fetcher: typeof fetch,
+) {
+  const now = Date.now()
+  const pool = await snapshotPool(account, snapshot, fetcher)
+  // Only until reconcile has made (or finished replacing) the period's key: read again shortly.
+  if (!pool) throw modelSpendStale()
+  const dailyShare = snapshot.caps.dailyShare
+  const key = codiumKey(
+    "estimate",
+    account,
+    snapshot.meterEpoch,
+    pool.ramped ? "ramp" : "full",
+    dailyShare ?? "none",
+    step,
+  )
+  const poolStep = floorStep(Math.max(1, pool.totalMicro))
+  const raw = await persistentStore(["GET", key], fetcher)
+  const saved = savedAnswer(raw, poolStep)
+  if (saved) {
+    json(response, 200, saved)
+    return
+  }
+  const answer = estimateAnswer(step, pool.totalMicro, dailyShare)
+  // The answer for this step stays until a day after the period ends. A first answer is set only while none is kept,
+  // so of two parallel first answers both callers get the one stored (unless it is from a higher pool step than
+  // theirs); an answer kept from a higher pool step than this one is replaced.
+  const stored = await persistentStore(
+    [
+      "SET",
+      key,
+      JSON.stringify({ answer, poolStep }),
+      ...(typeof raw === "string" ? [] : ["NX"]),
+      "PX",
+      Math.max(1, snapshot.periodEnd + 86_400_000 - now),
+    ],
+    fetcher,
+  )
+  json(
+    response,
+    200,
+    stored === "OK" ? answer : (savedAnswer(await persistentStore(["GET", key], fetcher), poolStep) ?? answer),
+  )
+}
+
+/**
+ * The hosted form (`{kind: "hosted", minutes, size}`, WP A51): a cloud computer job of `minutes` on `size`, clamped
+ * to the plan's longest job now, priced at the per-minute rate its blocks are charged at (hosted-rates.ts, never sent).
+ * The minutes are put on the 1.5× grid and so is their cost, as the model form's units are (P2). Answered only while the
+ * cloud computer can be started for the account (`computer` listed, or the owner's list) and its plan includes it, with
+ * the service's refusals; the rate itself never leaves the server (P1).
+ */
+async function hostedEstimateStep(
+  account: string,
+  body: { minutes: number; size: Hosted.Size },
+  fetcher: typeof fetch,
+) {
+  if (!(await hostedOpen(account, fetcher)))
+    throw new ApiError(503, "HOSTED_UNAVAILABLE", "The cloud computer is not available on Vector yet.")
+  const now = Date.now()
+  const snapshot = await hostedSnapshot(account, fetcher, now)
+  const caps = hostedCaps(snapshot, now)!
+  if (!caps.sizes.includes(body.size))
+    throw new ApiError(403, "HOSTED_NOT_INCLUDED", "This computer size is not included in your plan.", {
+      detail: { perk: "computer", limit: "size", plan: "vector-200" },
+    })
+  const minutes = Math.min(body.minutes, caps.jobMin)
+  return {
+    snapshot,
+    step: stepOf(Math.max(1, Math.ceil(gridValue(minutes) * chargeMinuteMicro(body.size)))),
+  }
+}
+
+/** The hosted form's body, or undefined when the body is not a hosted estimate. Other kinds are refused as before. */
+function hostedEstimateBody(raw: unknown) {
+  if (typeof raw !== "object" || raw === null || !("kind" in raw) || raw.kind !== "hosted") return undefined
+  const body = Option.getOrUndefined(Schema.decodeUnknownOption(HostedBody)(raw))
+  if (!body || !Number.isSafeInteger(body.minutes) || body.minutes < 1 || !Hosted.isSize(body.size))
+    throw new ApiError(400, "HOSTED_REQUEST", "Include a job's minutes and a computer size.")
+  return { minutes: body.minutes, size: body.size }
 }
 
 /**
@@ -207,7 +272,7 @@ function gridValue(value: number) {
 }
 
 function estimateBody(raw: unknown) {
-  // Hosted minutes (A51), races (B06) and playbooks (Track B) get their rates with their own work packages.
+  // Hosted minutes have their form above (A51); races (B06) and playbooks (Track B) get theirs with their packages.
   if (typeof raw === "object" && raw !== null && "kind" in raw)
     throw new ApiError(400, "CODIUM_ESTIMATE_KIND", "This kind of estimate is not available yet.")
   const body = Option.getOrUndefined(Schema.decodeUnknownOption(Body)(raw))
