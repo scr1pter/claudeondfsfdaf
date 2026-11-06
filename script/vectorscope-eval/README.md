@@ -1020,3 +1020,14 @@ The tests need no provider:
 cd packages/core && bun test test/review/model-evidence.test.ts
 cd script/vectorscope-eval && bun test certify.test.ts
 ```
+
+## Round-two research scripts
+
+`research/` holds the scripts behind round two's own measurements (the
+ApacheJIT models, the Tier 1 grep, parse and slice timings, and the AACR-Bench
+band analysis), limited to inputs that are D8-clean today (VS-21d). They are
+Python, Node and shell, not TypeScript, so this folder's tsconfig, `test.yml`
+and the eval workflow never load them. Their numbers are internal diagnostics
+(D12) and their outputs are never committed (I-13). Inputs, pins, the finding
+each script backs and the scripts that stay gated are in
+[`research/README.md`](research/README.md).

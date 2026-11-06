@@ -2849,3 +2849,356 @@ points below supersede the entry above where they differ.
   - `prettier --check` passes on the six changed TypeScript files.
   - Nothing was sent, no paid path ran, no workflow was dispatched, and no
     dependency was added.
+
+## 2026-11-06 · VS-21d Round-two research scripts
+
+Addendum A §3, VS-21 "Reproducibility", in the "Now" window: eval-script work
+only. It adds no `ReviewConfig` key, no `types.ts` or `config.ts` change,
+nothing to `EVIDENCE_POLICY_KEYS`, `EvidenceScope` or `VARIANT_KEYS`, no
+replay variant and no TypeScript. Nothing under `packages/*/src` changed, so
+no runner, provider, LLM or posting file and no file @vector owns was
+touched. The contract's §0.3 items 1 to 5 (key, parity test, evidence scope,
+replay variant, desktop half) do not apply, since nothing changes behaviour;
+item 6 is this entry. Branch `vectorscope-engine` at `ab5e92e8`. It
+implements the VS-21d plan as corrected by its critique; every critique point
+was taken, and the bullets below say how. Nothing is committed. Addendum A is
+pending Q18 and VS-21 pending Q15; this decides neither, nor any of Q1 to
+Q34.
+
+- **What landed.**
+  - **`script/vectorscope-eval/research/`** (27 new files, mode 644):
+    - from the session's `scripts/`: `jitlib.py`, `jit.py`, `jit2.py`,
+      `jit3.py`, `pts.py`, `hist.py`, `hist2.py`, `hist_rev.py`,
+      `hist_eval.py`, `hist_eval2.py`;
+    - from `rpverify/`: `pp.py`, `selffix.py`, `sens.py` (its `jitlib.py` is
+      byte-identical to the one above, so one copy);
+    - from `g1/scripts/`: `deepnest.mjs`, `grepbench.sh`, `parsebench.mjs`,
+      `slicebench.mjs`, `slicebench_wt.mjs`, `slicebench_gate.mjs`;
+    - from `g2/bin/`: `aacr.py`, `aacr2.sh`, `stats.py`, and `feat.py` with
+      only `feats`;
+    - new: `aacr_jobs.py` (the AACR job list) and `outguard.py` (the
+      repository check for `--out`);
+    - `README.md` (inputs by URL and pinned commit, the finding IDs each
+      script backs, runtime, run commands, the gated and no-script lists, the
+      checks) and `.gitignore` (results and inputs: `*.csv`, `*.tsv`,
+      `*.json`, `*.jsonl`, `*.log`, `*.txt`, `*.out`, `*.err`, `*.numstat*`,
+      `*.git/`, `node_modules/`, `__pycache__/`).
+  - **`script/vectorscope-eval/README.md`**: a closing section, "Round-two
+    research scripts", pointing to `research/README.md`. No other line
+    changed, and no test reads the file.
+  - **`.prettierignore`** gains `script/vectorscope-eval/research/` (the
+    precedent is `script/vectorscope-eval/fixtures/`), and
+    **`.oxlintrc.json`** gains `script/vectorscope-eval/research/**` in
+    `ignorePatterns`, with the array now one entry per line and a comment.
+    `script/format.ts` runs `prettier --write .`, which would otherwise
+    restyle the `.mjs` copies and the README away from the session originals.
+    Neither file feeds a pipeline file, a test or CI.
+- **Selection rule.** A script is committed when the datasets it reads by
+  design are D8-clean today: ApacheJIT and the Apache repositories,
+  Kubernetes, vscode, Keycloak and the AACR permissive subset. The timing
+  scripts (`grepbench.sh`, `parsebench.mjs`, `slicebench*.mjs`) take any
+  repository path. They are committed with only their D8-clean round-two
+  inputs named, as the addendum's clean list anticipates. Their round-two
+  rows on Linux, Grafana, Sentry and Discourse (G1-7's Linux, Grafana and
+  Sentry grep rows; G1-8's Sentry, Discourse and Linux parse rows; G1-9's
+  Sentry and Linux slice rows, the Linux working-tree row included) are the
+  first row of the README's "Gated" table, gated on Q10 and Q26: the scripts
+  are committed but must not be run on those repositories, and their "Backs"
+  cells say the other rows are gated. The slice scripts' language table keeps `py` and
+  `c`, which round two ran only on Sentry and Linux; removing them would
+  change the copy, so the README marks them and says their grammars are not
+  needed for the clean rows.
+- **Not committed** (all listed in `research/README.md`, "Gated"):
+  - ReviewBench corpus repositories, gated on VS-22's per-repository licence
+    check: `fc.sh`, `rb_fc.py`, `sizes.py`, `rb_strat.py`, `producers.py`,
+    `grep_presence.py` (G1-1, G1-3, G1-4, GU7), and `gold.py` (G2-1 to G2-3
+    ReviewBench rows; also Q27 for cutpoint seeding);
+  - Martian goldens, gated on Q10 and Q26 (addendum A §3 gates every script
+    whose inputs include Linux, Grafana, Sentry, Discourse or Martian's
+    goldens on both): `martian_repo.py` (G1-6), `mart.py`
+    (G2-1 to G2-4 Martian rows), `depth.py` (G2-6), and the root-level
+    `agg.py`, `ana.py`, `boot.py`, `break.py`, `ctx.py`, `chk_gu4.py`,
+    `chk_gu4b.py` (GU3 to GU5);
+  - mixed job lists, gated on Q10 and Q26 and VS-22: `numstat.sh`, `jobs.py`
+    and `feat.py`'s main block. `numstat.sh` was the first numstat pass over Martian merge refs, the
+    ReviewBench mirrors and all 196 AACR pairs (with base and head swapped
+    and no merge base); `aacr2.sh` superseded it for AACR. The plan's "only
+    Martian merge refs and the ReviewBench mirrors" was wrong;
+  - the AACR all-positives figures, which include non-permissive
+    repositories, gated on the per-PR licence check (VS-22) and Q31: gap-2
+    §1.2's all-positives validation counts, the session `aacr.py`'s "all"
+    section, and gap-2 §2.1's all-positives median PR size (no script prints
+    that one). The README names them by section, not by value (D12);
+  - `lic.py` and `lic_fetch.sh`, VOI13's licence fetchers, which belong with
+    VS-22's per-PR check;
+  - `h2t.py`, an HTML-to-text helper that backs no finding.
+- **No surviving script** (ad hoc commands or arithmetic): G1-11, G1-12,
+  G1-7's Linux `--threads` and pathspec rows and its "old commit" figure,
+  G2-1's changed-line shares per band, G2-5, G2-7 and G2-13's recall
+  comparison, G3-1 and G3-2 and gap-3 §1.2's `change_line_count`
+  distribution, and RP6's hadoop count (`jit.py` and `jit2.py` drop hadoop
+  before printing).
+- **Changes from the session copies**, each I/O, a usage guard, a pin or a
+  failure mode; each file's header names its origin and lists them. The code
+  is not restyled and not brought to the TypeScript style guide.
+  - Python: `argparse` everywhere (so `--help`, and exit 2 on a missing
+    argument), and `runpy.run_path(<this folder>/jitlib.py)` in place of
+    `exec(open("jitlib.py").read())`, which depended on the working directory.
+    The history scripts load `jitlib.py` for `APACHE_REVS` only (they never
+    called `auc`).
+  - `hist.py`, `hist2.py`, `hist_rev.py`, `selffix.py`, `sens.py` walk
+    `APACHE_REVS[name]` (the round-two clone heads) instead of `HEAD`, with
+    `check=True`, so a clone without the pinned commit fails loudly instead of
+    matching 0 commits. Their git stderr is no longer captured
+    (`stdout=subprocess.PIPE`), so git's message shows; stdout is unchanged.
+  - The three history scripts write `--out` (required) instead of a fixed
+    file in the working directory; `hist_eval.py` and `hist_eval2.py` take
+    that CSV as an argument.
+  - `grepbench.sh`: `SCRATCH_DIR` argument; the loose `/tmp/gb.out` became a
+    `mktemp` file there, created before the `cd` and removed on exit; `-e`
+    before each name in the per-name loop (the combined row already had it),
+    so a name starting with `-` is a pattern, not an option such as
+    `-O<cmd>`.
+  - `aacr2.sh`: `OUT_DIR` argument in place of the scratchpad path, made
+    absolute (`realpath -m`) before any `cd`; `numstat/` and `git/` created
+    (the session relied on pre-made `out3/` and `git3/`); `cd "$G"` quoted;
+    `KEY` must be `aacr_` and 10 hex digits, the only form `aacr_jobs.py`
+    writes, since it names a folder that is removed (so a mistaken `OUT_DIR`
+    cannot turn it into `~/git/<project>`); `URL` must be
+    `https://github.com/OWNER/REPO`, `BASE` and `HEAD` 40-hex SHAs and
+    `SINCE` `YYYY-MM-DD`, each exiting 2 otherwise, since all four reach git
+    and git reads an option after a positional (`--upload-pack=<cmd>` on
+    fetch, `--output=<path>` on diff); `--end-of-options` before the
+    repository and revisions of `git fetch`, `git merge-base` and `git diff`
+    (all three accept it on git 2.43); exactly six arguments, and `--help`
+    exits 0.
+  - `aacr.py`: `runpy` for `stats.py` and `feat.py` (was an `exec` with string
+    surgery on `feat.py`); reads only the PRs `aacr_jobs.py` listed; the
+    unused per-PR licence-text parse (`lic` was never read) and the "all"
+    section removed, so it never reads a non-permissive numstat. Its
+    validation and comment-key lines now cover the permissive PRs (131 in
+    round two); its permissive section prints as before.
+  - `feat.py`: the `G = sys.argv[1]` line and the main block dropped.
+  - `aacr_jobs.py` (new) rebuilds the session's ad hoc AACR job list: base
+    `source_commit`, head `target_commit` (gap-2 §1.2), `--shallow-since` 120
+    days before `created_at`, key `aacr_` plus 10 hex of md5 of the PR URL,
+    and only repositories outside `NONPERM`, which moved here from
+    `aacr.py`. It exits 1 naming the sample when a `githubPrUrl` is not
+    exactly `https://github.com/OWNER/REPO/pull/N` (`re.fullmatch`, stricter
+    than a `^…$` pattern, whose `$` lets a trailing newline through) or a
+    permissive sample's `source_commit` or `target_commit` is not a 40-hex
+    SHA, so no field can shift a column of the TSV or reach `aacr2.sh` as an
+    option; all 196 dataset samples pass. Its argument parsing and output sit under
+    `if __name__ == "__main__"`; `aacr.py` does not load it, since filtering
+    by the job list already restricts it to the permissive subset.
+  - Node: an argument guard before `createRequire` or any `require`
+    (`--help` exits 0, wrong arity exits 2). The slice scripts' language
+    table moved above `createRequire`, so `LANG` is checked with
+    `Object.hasOwn` (and must be `go` in `slicebench_gate.mjs`, which builds
+    `k8s.io` import paths); `MODE` must be `commits` or `synthetic` (anything
+    else used to mean synthetic); counts must be positive integers. Beyond
+    the plan: `NODE_MODULES` is resolved to an absolute path, since
+    `createRequire` refuses a relative one, and `parsebench.mjs` checks
+    `MAX_FILES`. The usage comments of `slicebench_wt.mjs` and
+    `slicebench_gate.mjs` now name their own file.
+  - I-13 guard (critique): `--out` (through `outguard.py`), `OUT_DIR` and
+    `SCRATCH_DIR` are refused inside the repository that holds the scripts
+    (`git rev-parse --show-toplevel`), with exit 2, as `ci.ts` refuses
+    `EVAL_OUT_DIR`. Outside a git checkout nothing is refused.
+- **Corrections recorded, not edited** (the report and notes are dated
+  evidence):
+  - `notes/risk-prediction.md` §0 calls the four Apache clones "treeless";
+    the session clones are `--filter=blob:none` (blobless). The README's
+    "never `--filter=tree:0`" rule is scoped to those history clones;
+    `aacr2.sh`'s `--filter=tree:0 --shallow-since` fetch is deliberate.
+  - RP19's AUC is `hist_eval.py`'s `fixlast5` row on `hist_rev.py`'s CSV;
+    the `fixd90` row differs in the third decimal.
+  - The plan counted 41 session files; the four folders hold 40 (37 scripts
+    and 3 CSVs). Of the 37, 23 are copied (one in part), the duplicate
+    `jitlib.py` is not, and 13 are gated or back nothing.
+- **Open items for the owner** (raised, not decided):
+  - **ApacheJIT's licence.** D8 allows permissive licences only, and
+    `hosseinkshvrz/apachejit` has no LICENSE file at `ddfd547`, and its
+    readme states no licence. zenodo.org was refused in round two
+    (verify-open-items §0), and the GitHub REST API refuses repositories not
+    attached to the session (gap-1 §0), so no other licence statement could
+    be read. The addendum classes ApacheJIT as D8-clean;
+    that is the addendum's call, which this package follows, but the owner
+    or VS-22's licence check should confirm it.
+  - `aacr_jobs.NONPERM` is VOI13's outcome. VOI13's fetchers are not
+    committed, so the permissive subset cannot be re-derived from committed
+    code until VS-22's per-PR check. The per-PR licences stay pending (Q31).
+  - The README names the AACR repositories only through the pinned dataset
+    and `aacr_jobs.py`'s output, because the 40 permissive repositories
+    include open-source coding-agent CLIs (Q34). The gated table's
+    descriptions leave out the judge and model IDs that the Martian scripts
+    contain.
+- **Off by default and invariants.** I-1 holds by construction: nothing in
+  any runner or package imports or reads `research/`, and there is no key to
+  unset. I-12: no new key and no pipeline file changed, so
+  `REVIEW_PIPELINE_SOURCES` stays `54fbad71b62bdbda` and
+  `REVIEW_PIPELINE_REVISION` stays 1. I-13: no data or result is committed;
+  `.gitignore` and the path checks guard against it. I-10 and §0.5: these are
+  offline research simulations under `script/`, imported by nothing in the
+  engine or core, so they are not a third code reader beside `brain/code.ts`
+  and `review/symbols.ts`. D12 and D14: no user-visible string changed.
+- **Reproducibility.** The report's "not reproducible from the repository
+  today" label now applies only to the gated and no-script numbers (G1-11
+  and G1-12 among the latter are D8-clean, but were ad hoc commands); the
+  findings the README's script table lists trace to a committed script. The
+  report is not edited.
+- **Deferred.** Nothing in VS-21d belongs to the runner-wiring or a later
+  window. The gated scripts wait for Q10, Q26, VS-22's licence check, and
+  Q27 or Q31 where noted. VS-21's other §3 items (metric and β per external
+  comparison, repetition, stratification, the ablation) are not part of this
+  package. Verification deferred: the timing scripts against their reported
+  figures (not rerun: benchmarks and large clones, and Q26-neutral); whether
+  the npm tarballs ship the `.wasm` files under `--ignore-scripts`;
+  ApacheJIT's licence; the AACR per-PR licences (VS-22); the 140 AACR
+  fetches (not rerun; the copies were checked on the session's numstats).
+- **Review round.** Ten non-blocking findings, all taken; none was declined.
+  The bullets above already describe the result. This one lists what changed
+  and why:
+  - The README's "Gated" table gains a first row: the gated rows of
+    `grepbench.sh`, `parsebench.mjs`, `slicebench.mjs` and
+    `slicebench_wt.mjs`. They are G1-7 to G1-9 as measured on Linux,
+    Grafana, Sentry and Discourse, gated on Q10 and Q26. The scripts are
+    committed but must not be run on those repositories. The heading drops
+    "not committed", and the intro says which rows are committed. The
+    "Selection rule" bullet above now matches the table; it used to claim
+    rows the README did not have.
+  - The Martian rows, the root-level Martian re-analyses and the mixed
+    `numstat.sh`, `jobs.py` and `feat.py` main-block rows are now gated on
+    Q10 and Q26, not on Q10 alone. This follows addendum A §3, and the
+    README intro says why both are named.
+  - `aacr2.sh` and `aacr_jobs.py` validate every field that reaches git or
+    the TSV. The checks are described under "Changes from the session
+    copies". Two findings asked for the same URL check with different
+    patterns (`[^/]+` and `[A-Za-z0-9_.-]+`), and the stricter one was used.
+    `--end-of-options` is redundant once the formats are checked, but costs
+    nothing on git 2.43, so it was added as asked. `grepbench.sh` passes
+    `-e` in its per-name loop.
+  - The README's run block now starts with `set -euo pipefail` and an
+    `R=… W=…` line, and the reader is told to run it as a file. Pasted into
+    an interactive shell, `set -e` would close the shell, so chaining every
+    line with `&&` was the other option, and it was not taken because it is
+    unwieldy across about 40 lines.
+    - The depth-1 fetch and checkout are split onto two lines. Under
+      `set -e`, a failure on the left of `&&` inside a `for` loop lets the
+      loop run on (checked).
+    - One `python3 -I -c` command, run right after `npm install`, compares
+      `$W/ts/package-lock.json`'s integrity for the four packages the
+      scripts load against the table and exits 1 naming any mismatch. It
+      was checked against the session lock (exit 0) and against a copy with
+      one integrity changed (exit 1, naming `tree-sitter-go`).
+    - The transitive `node-addon-api` and `node-gyp-build` are left out of
+      that check. Their caret ranges may resolve to newer versions, and
+      nothing loads them under `--ignore-scripts`. The finding's alternative,
+      `npm ci` from a lock quoted in the README, was not taken: the check
+      above covers the loaded packages without a long lock in the README.
+    - The `aacr2.sh` loop skips exit 1, a PR whose SHAs GitHub no longer
+      serves (9 in round two), and stops on exit 2, a malformed row, through
+      `|| [ $? -eq 1 ]`. This was checked under `set -e`.
+  - The bare-clone `grepbench.sh` call has its own line in the run block,
+    with the note "only treeish_ms is meaningful; ignore worktree_ms". The
+    script is unchanged, so it stays close to the original. The session
+    original prints the same meaningless worktree figure, and gap-1 shows
+    "—" for it.
+  - D12: the README's AACR all-positives row, and this entry, now cite
+    gap-2 §1.2 and §2.1 instead of quoting the non-permissive figures.
+  - Re-checked from `/tmp/vector-vectorscope/vs21d-fix`:
+    - Parse checks: `py_compile` on 18 `.py`, `node --check` on 5 `.mjs`,
+      and `bash -n` on 2 `.sh` and on the README's run block.
+    - The argument, end-to-end and `aacr_jobs.py` checks listed under
+      "Evidence".
+    - The upstream-name rule on the 31 new and modified files (`git status`,
+      this log included): no hit.
+    - The other scripts were not touched, so their checks were not rerun.
+    - No package source changed, so no Bun typecheck applies. core
+      `test/review/model-evidence.test.ts` still passes 17 tests, and the
+      `REVIEW_PIPELINE_SOURCES` pin is unchanged.
+    - prettier reports no change inside this entry. The log's earlier
+      entries already differ from prettier at `HEAD`.
+- **Evidence.** Python and node checks ran from `/tmp/vector-vectorscope/vs21d`
+  (outside the repository, so no script depends on the working directory).
+  Bun ran through the lock with `--timeout 30000`, `GITHUB_ACTIONS=false`,
+  and `TMPDIR` and XDG roots under `/tmp/vector-vectorscope/vs21d/`.
+  - **Parse.** `python3 -I -X pycache_prefix=… -m py_compile` on 18 `.py`,
+    `node --check` on 5 `.mjs` and `bash -n` on 2 `.sh` all pass, and no
+    `__pycache__` is left in the folder.
+  - **Arguments.** The 14 runnable Python scripts, 5 `.mjs` and 2 `.sh`:
+    `--help` exits 0, no arguments exits 2; a bad `LANG` (including
+    `__proto__`), `MODE`, `CASES`, `FILES_PER_CASE`, `MAX_FILES`, `KEY`, or
+    `ts` for the gate, exits 2. `aacr2.sh` also exits 2, before creating
+    anything, on a `KEY` not of the `aacr_` form (`abc`, 9 hex digits,
+    `../aacr_…`), a `file://`, `--upload-pack=…`, multi-line or deeper
+    `URL`, a `BASE` or `HEAD` that is short, upper-case or `--upload-pack=…`
+    or `--output=…`, and a `SINCE` of `2025-1-1` or `--upload-pack=x`; no
+    command ran. `aacr_jobs.py` exits 1 naming the sample, and writes no TSV,
+    on a URL with `/files`, a trailing newline or a tab, and on a permissive
+    sample's commit that is `--upload-pack=x`, upper-case or ends in a tab; a
+    bad commit in a `NONPERM` sample leaves the list unchanged.
+  - **Paths inside the worktree.** Refused with exit 2 and nothing created:
+    `aacr2.sh` `OUT_DIR` inside and equal to the worktree, `grepbench.sh`
+    `SCRATCH_DIR`, `hist.py --out`, and `aacr_jobs.py --out` given as a
+    relative path into the worktree.
+  - **Helpers.** `runpy.run_path` of `jitlib.py`, `stats.py`, `feat.py`,
+    `outguard.py` and `aacr_jobs.py` (with a foreign `sys.argv`) exposes their
+    names and runs no main block.
+  - **stdout, copy against the session original (run in its own folder).**
+    Identical: `jit.py` (68 lines), `jit2.py` (79), `jit3.py` (16), `pts.py`
+    (39), `pp.py` (6), `selffix.py` (11), `sens.py` (9), `hist_eval.py` on
+    `hist_features.csv` (29) and on `hist_revert.csv` (26; the original run in
+    a temporary folder holding that CSV as `hist_features.csv`),
+    `hist_eval2.py` (17).
+  - **History CSVs.** The copies of `hist.py`, `hist2.py` and `hist_rev.py`
+    write CSVs byte-identical (`cmp`) to the session's; every dataset commit
+    of the four projects matched. The originals were not run, since they would
+    overwrite those CSVs.
+  - **`aacr_jobs.py`.** 140 rows in 40 repositories, equal row for row and in
+    order to the session job list's rows for those keys, before and after the
+    review fixes (`cmp`).
+  - **`aacr.py`.** On the session numstats, with and without `--defect`, its
+    output equals byte for byte the original's, run on a temporary scratchpad
+    whose numstat folder holds only the 131 permissive numstats (symlinks) and
+    an empty licence file, once the original's "all" section is removed; there
+    that section equals its permissive section. The figures match gap-2 §2.2's
+    AACR table. The original was never run on the full session folder.
+  - **Pinned-commit failure.** `hist.py` and `selffix.py` on a bare clone
+    without the pinned commit exit 1 with a `CalledProcessError` naming it.
+  - **End to end, offline, under `vs21d/e2e`** (rerun after the review fixes
+    under `vs21d-fix/e2e`). `aacr2.sh` with a relative `OUT_DIR` against a
+    two-commit local bare repository, reached as
+    `https://github.com/test/repo` through `url.file://….insteadOf` in
+    `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_0`/`GIT_CONFIG_VALUE_0`, since the
+    script now accepts only GitHub URLs: the numstat (2 files) and merge base
+    are right, `git/` is empty afterwards, a rerun exits 0, an unknown SHA
+    exits 1 with "not our ref" in `.err` and its clone removed.
+    `grepbench.sh` with a relative `SCRATCH_DIR`, two names on the checkout
+    and one on a bare clone: exit 0, temporary file removed, repository
+    unchanged; after the fix, the names `--open-files-in-pager=touch <file>`
+    and `-O` are grepped as patterns (0 files) and the file is not created. With the session's `node_modules` through a relative symlink:
+    `parsebench.mjs` (both Go grammars), `slicebench.mjs` (`go synthetic 1`;
+    `go commits 2`), `slicebench_wt.mjs` (`go synthetic 1 3`) and
+    `slicebench_gate.mjs` (`go commits 2`) exit 0; `deepnest.mjs` exits 0 and
+    again drops one capture at depth 200,000 (G1-15).
+  - **core `test/review/model-evidence.test.ts`.** 17 pass; the pin is
+    unchanged.
+  - **Eval scripts typecheck.** `typecheck.yml`'s command, from
+    `packages/engine`:
+    `bun tsgo -p ../../script/vectorscope-eval/tsconfig.json` exits 0, and
+    with `--listFilesOnly` it lists 19 eval files and none under `research/`.
+  - **Formatting and lint.** `prettier --check` passes on `.oxlintrc.json` and
+    the eval README; prettier skips `research/` (with
+    `--ignore-path /dev/null` it would flag the `.mjs` and README); `oxlint`
+    finds no files to lint under `research/`.
+  - **Name checks.** The upstream-name rule of `upstream-free.test.ts`,
+    replicated on the 30 new and modified files (the test reads
+    `git ls-files`, so it cannot see untracked files): no hit. No open-source
+    coding-agent CLI, judge or model ID appears under `research/`.
+
+  - No package's source changed, so no package `bun typecheck` applies; the
+    eval scripts' own typecheck above is the one this folder sits under.
+  - Nothing was sent, no paid path ran, no workflow was dispatched, no
+    dependency was added and the lockfile is unchanged. No result or data
+    file was written inside the worktree.
