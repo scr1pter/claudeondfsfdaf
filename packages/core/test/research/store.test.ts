@@ -452,6 +452,118 @@ describe("ResearchStore sources", () => {
 })
 
 describe("ResearchStore notes", () => {
+  test("persists optional quantitative metadata and refuses an annotation its quote does not state", async () => {
+    const measurement: Research.Measurement = {
+      metric: "revenue",
+      value: 1.2,
+      unit: "USD",
+      scale: "billion",
+      period: "2025",
+      geography: "Europe",
+    }
+    const quote = "Europe revenue in 2025 was USD 1.2 billion."
+    const result = await withStore((setup) =>
+      Effect.gen(function* () {
+        const run = yield* setup.store.start(setup.place, RUN)
+        yield* setup.store.addSource(setup.place, run.id, page("market", [quote]))
+      const annotated = { ...measurement, unexpected: "not part of the measurement contract" }
+      const saved = yield* setup.store.note(setup.place, run.id, { ...NOTE, claim: quote, quote, measurement: annotated })
+        const refused = yield* setup.store.note(setup.place, run.id, {
+          ...NOTE,
+          claim: quote,
+          quote,
+          measurement: { ...measurement, value: 9 },
+        })
+        return { saved, refused, detail: yield* setup.store.get(setup.place, run.id) }
+      }),
+    )
+    expect(result.saved).toMatchObject({ type: "saved", note: { measurement } })
+    expect(result.detail?.notes[0]?.measurement).toEqual(measurement)
+    expect(result.refused).toMatchObject({ type: "refused" })
+    expect(result.detail?.notes).toHaveLength(1)
+  })
+
+  test("refuses a forged PDF page instead of overwriting the source page", async () => {
+    const result = await withStore((setup) =>
+      Effect.gen(function* () {
+        const run = yield* setup.store.start(setup.place, RUN)
+        yield* setup.store.addSource(
+          setup.place,
+          run.id,
+          page("pdf", STUDY, {
+            chunks: STUDY.map((text, index) => ({ text, chunk: index + 1, page: index + 10 })),
+          }),
+        )
+        return {
+          wrong: yield* setup.store.note(setup.place, run.id, { ...NOTE, page: 99 }),
+          correct: yield* setup.store.note(setup.place, run.id, { ...NOTE, page: 11 }),
+          inferred: yield* setup.store.note(setup.place, run.id, NOTE),
+        }
+      }),
+    )
+    expect(result.wrong).toMatchObject({ type: "refused", message: expect.stringContaining("page") })
+    expect(result.correct).toMatchObject({ type: "saved", note: { page: 11 } })
+    expect(result.inferred).toMatchObject({ type: "saved", note: { page: 11 } })
+  })
+
+  test("a public researcher receives no comparison derived from a private source", async () => {
+    const result = await withStore((setup) =>
+      Effect.gen(function* () {
+        const run = yield* setup.store.start(setup.place, RUN)
+        const measurement: Research.Measurement = {
+          metric: "revenue",
+          value: 1.2,
+          unit: "USD",
+          scale: "billion",
+          period: "2025",
+          geography: "Europe",
+        }
+        const privateQuote = "Private ledger: Europe revenue in 2025 was USD 1.2 billion."
+        const publicQuote = "Published annual survey: Europe revenue in 2025 was USD 1.8 billion."
+        yield* setup.store.addSource(setup.place, run.id, page("private", [privateQuote], { private: true }))
+        yield* setup.store.note(setup.place, run.id, { ...NOTE, claim: privateQuote, quote: privateQuote, measurement })
+        yield* setup.store.addSource(setup.place, run.id, page("public", [publicQuote]))
+        const params = {
+          ...NOTE,
+          source: "S2",
+          claim: publicQuote,
+          quote: publicQuote,
+          measurement: { ...measurement, value: 1.8 },
+        }
+        return {
+          public: yield* setup.store.note(setup.place, run.id, { ...params, publicOnly: true }),
+          lead: yield* setup.store.note(setup.place, run.id, params),
+        }
+      }),
+    )
+    expect(result.public).toMatchObject({ type: "saved" })
+    if (result.public.type === "saved") expect(result.public.comparisons).toBeUndefined()
+    expect(result.lead).toMatchObject({
+      type: "saved",
+      comparisons: expect.arrayContaining([expect.objectContaining({ kind: "conflict" })]),
+    })
+  })
+
+  test("a repeated PDF quote can cite a later page where it genuinely occurs", async () => {
+    const result = await withStore((setup) =>
+      Effect.gen(function* () {
+        const run = yield* setup.store.start(setup.place, RUN)
+        yield* setup.store.addSource(
+          setup.place,
+          run.id,
+          page("repeated", [NOTE.quote], {
+            chunks: [
+              { text: NOTE.quote, chunk: 1, page: 1 },
+              { text: NOTE.quote, chunk: 2, page: 7 },
+            ],
+          }),
+        )
+        return yield* setup.store.note(setup.place, run.id, { ...NOTE, page: 7 })
+      }),
+    )
+    expect(result).toMatchObject({ type: "saved", note: { page: 7 } })
+  })
+
   test("a quote must be in its source; one that does not state the claim is saved as a paraphrase", async () => {
     const result = await withStore((setup) =>
       Effect.gen(function* () {
@@ -909,7 +1021,11 @@ describe("ResearchStore and erasing memory", () => {
       text: "Run the payments tests with bun before committing",
       scope: "repository",
       origin: "agent",
-      evidence: { type: "message", quote: "I always run the payments tests with bun before committing", verified: true },
+      evidence: {
+        type: "message",
+        quote: "I always run the payments tests with bun before committing",
+        verified: true,
+      },
       sessionID,
       pending: "review",
     })
@@ -1072,7 +1188,7 @@ describe("research migration", () => {
       declared: declared(table),
       stored: stored(db, getTableConfig(table).name),
     }))
-    const triggers = db.query("SELECT name FROM sqlite_master WHERE type = 'trigger'").all()
+    const triggers = db.query("SELECT name FROM sqlite_master WHERE type = 'trigger' ORDER BY name").all()
     db.close()
     const untouched = new Database(fixture, { readonly: true })
     const before = (untouched.query("SELECT id FROM migration").all() as { id: string }[]).length
@@ -1083,7 +1199,14 @@ describe("research migration", () => {
     expect(document).toEqual([{ id: "d1", origin: "upload", source_url: null, fetched_at: null, run_id: null }])
     expect(kept).toEqual({ entries: [{ id: "m1a2b3" }], postings: [{ term: 1, item: 1, count: 2 }] })
     for (const shape of shapes) expect(shape.stored).toEqual(shape.declared)
-    expect(triggers).toEqual([{ name: "research_report_forgotten" }])
+    expect(triggers).toEqual([
+      { name: "brain_document_visibility_revocation" },
+      { name: "brain_event_revocation" },
+      { name: "brain_repository_docs_initial_revocation" },
+      { name: "brain_repository_docs_revocation" },
+      { name: "brain_repository_document_revocation" },
+      { name: "research_report_forgotten" },
+    ])
   })
 })
 

@@ -1,0 +1,4 @@
+# Immutable evaluation fixtures preserve original CRLF and final empty lines.
+relay-headless/** -text whitespace=cr-at-eol,-blank-at-eof
+ledgerdesk-maintenance/** -text whitespace=cr-at-eol,-blank-at-eof
+harbor-ui/** -text whitespace=cr-at-eol,-blank-at-eof

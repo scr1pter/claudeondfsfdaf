@@ -110,6 +110,9 @@ describe("Brain knowledge migration", () => {
           sql`INSERT INTO brain_use (session_id, entry_id, tier, tokens, at) VALUES ('ses_1', 'm1a2b3', 'recall', 12, 1)`,
         )
         yield* db.run(sql`INSERT INTO brain_state (repository_id, revision, learning) VALUES ('repo-1', 7, false)`)
+        yield* db.run(
+          sql`INSERT INTO brain_event (entry_id, repository_id, at, action, actor) VALUES ('', 'repo-1', 1, 'forgotten', 'user')`,
+        )
       }).pipe(Effect.provide(SqliteClient.layer({ filename: file })), Effect.scoped),
     )
 
@@ -135,7 +138,7 @@ describe("Brain knowledge migration", () => {
     const migrations = db.query("SELECT id FROM migration ORDER BY id").all()
     const state = db
       .query(
-        "SELECT revision, learning, knowledge_revision, items, item_length_sum, repository_docs, keep_originals, scanned_at FROM brain_state",
+        "SELECT revision, revocation_revision, learning, knowledge_revision, items, item_length_sum, repository_docs, keep_originals, scanned_at FROM brain_state",
       )
       .all()
     const uses = db.query("SELECT entry_id, request_id, cited, outcome FROM brain_use ORDER BY id").all()
@@ -152,12 +155,14 @@ describe("Brain knowledge migration", () => {
       { id: "20261121000000_credited_once" },
       { id: "20261201000000_research" },
       { id: "20261202000000_facets" },
+      { id: "20261203000000_revocation" },
     ])
     // What was learned before private memory existed is not private.
     expect(entries).toEqual([{ id: "m1a2b3", private: 0 }])
     expect(state).toEqual([
       {
         revision: 7,
+        revocation_revision: 1,
         learning: 0,
         knowledge_revision: 0,
         items: 0,

@@ -1,0 +1,73 @@
+{
+  "controls": [
+    {
+      "control": "positive_accessible_live_contract",
+      "verdict": "passed",
+      "passed": 8,
+      "failed": 0
+    },
+    {
+      "control": "positive_delayed_form_with_early_legacy_content",
+      "verdict": "passed",
+      "passed": 8,
+      "failed": 0,
+      "earlyLegacyVisible": true,
+      "formInitiallyAbsent": true,
+      "formDelayMs": 1508
+    },
+    {
+      "control": "positive_healthy_wrap_from_last_events_button",
+      "verdict": "passed",
+      "passed": 8,
+      "failed": 0,
+      "keyboard": {
+        "startingControl": {
+          "tag": "button",
+          "text": "View events UI created"
+        },
+        "visibleCandidates": 8,
+        "tabLimit": 10,
+        "tabPresses": 4,
+        "bodyTransitions": 0,
+        "reachedControls": [
+          "Workflow name",
+          "Concurrency",
+          "Workflow definition",
+          "Create workflow"
+        ],
+        "missingControls": []
+      }
+    },
+    {
+      "control": "negative_form_excluded_from_native_tab_order",
+      "verdict": "product_failure",
+      "passed": 7,
+      "failed": 1,
+      "keyboard": {
+        "startingControl": {
+          "tag": "button",
+          "text": "View events UI created"
+        },
+        "visibleCandidates": 8,
+        "tabLimit": 10,
+        "tabPresses": 10,
+        "bodyTransitions": 2,
+        "reachedControls": [],
+        "missingControls": [
+          "Workflow name",
+          "Concurrency",
+          "Workflow definition",
+          "Create workflow"
+        ]
+      }
+    },
+    {
+      "control": "negative_missing_exact_label",
+      "verdict": "product_failure",
+      "passed": 5,
+      "failed": 3
+    }
+  ],
+  "modelCalls": 0,
+  "productPassClaim": false
+}

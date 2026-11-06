@@ -1,0 +1,105 @@
+{
+  "date": "2026-10-30",
+  "source_branch": "tokenomics-efficiency",
+  "source_head": "63a6525880fed62181902f26d82daa73e9b4c292",
+  "tests_run_serially": true,
+  "live_provider_calls": 0,
+  "runs": [
+    {
+      "label": "title-baseline",
+      "exit_code": 1,
+      "passed": 20,
+      "failed": 4,
+      "log_sha256": "dbe3628da6b2df7325c31b4cab2c9cb17ce9c3682b095341771ffe1557e19043",
+      "filename": "tokenomics-title-baseline.log"
+    },
+    {
+      "label": "title-fixed",
+      "exit_code": 0,
+      "passed": 24,
+      "failed": 0,
+      "log_sha256": "e7100ed722ad8f18bfe2290693c0904a21fa12faca3a40862db0b00882149012",
+      "filename": "tokenomics-title-fixed.log"
+    },
+    {
+      "label": "stats-baseline",
+      "exit_code": 1,
+      "passed": 3,
+      "failed": 5,
+      "log_sha256": "1d14a94d0fb329dc4d8db3f10d5a6c6b60c33dfcb45f279e3277909ac0128467",
+      "filename": "tokenomics-stats-baseline-repaired-fixture.log"
+    },
+    {
+      "label": "stats-fixed",
+      "exit_code": 0,
+      "passed": 8,
+      "failed": 0,
+      "log_sha256": "651d85c6a4b7876a9418188dd0efd0e0a707b76782a99a1695639486403a497b",
+      "filename": "tokenomics-stats-fixed-final.log"
+    },
+    {
+      "label": "sizing",
+      "exit_code": 0,
+      "passed": 19,
+      "failed": 0,
+      "log_sha256": "4c8498bbfd0a67e34a492c54b552a86f58135f9b22a07f1d9337cd4e1e18e7f2",
+      "filename": "tokenomics-tracking-fixed.log"
+    },
+    {
+      "label": "core-typecheck",
+      "exit_code": 0,
+      "passed": null,
+      "failed": null,
+      "log_sha256": "ae47736bb2a9401aa9743893f2f64b9a605e65a99d78cd991a8021e0f7722d87",
+      "filename": "tokenomics-core-typecheck.log"
+    },
+    {
+      "label": "engine-typecheck",
+      "exit_code": 0,
+      "passed": null,
+      "failed": null,
+      "log_sha256": "b87e65da9b27ca3bf63162dc8617a0e7d3c7bdf0c5a77e1bbf1ec1f490b2ccd3",
+      "filename": "tokenomics-engine-agent-typecheck.log"
+    },
+    {
+      "label": "accounting-contract-probe",
+      "exit_code": 1,
+      "passed": 5,
+      "failed": 2,
+      "log_sha256": "05acfbfff57e762f338e5624f80a39e32256c234d50a7899c8624d5200177859",
+      "filename": "tokenomics-accounting-probe-final.log"
+    },
+    {
+      "label": "memory-dependency-probe",
+      "exit_code": 0,
+      "passed": null,
+      "failed": null,
+      "log_sha256": "f755cf858e68fdd9a3457d10e3dd169462a1fceef1ab056fe6d770df1c45039d",
+      "filename": "tokenomics-memory-probe-final.log"
+    },
+    {
+      "label": "portable-footprint-smoke",
+      "exit_code": 0,
+      "passed": null,
+      "failed": null,
+      "log_sha256": "a09227df5abd62ac4635759b9b9dc86f45831a8cbf47ef65b20cf27b2886e703",
+      "filename": "portable-footprint-proof.log"
+    },
+    {
+      "label": "portable-accounting-probe",
+      "exit_code": 1,
+      "passed": 5,
+      "failed": 2,
+      "log_sha256": "3fe36881c0160317101a08967f9830c302afac216aa7d5f8d5cec88e42fe8194",
+      "filename": "portable-accounting-proof.log"
+    },
+    {
+      "label": "portable-memory-probe",
+      "exit_code": 0,
+      "passed": null,
+      "failed": null,
+      "log_sha256": "8a849098373d7c92388c30a69188ca052166d3085a6873c7866d7f6577f1b270",
+      "filename": "portable-memory-proof.log"
+    }
+  ]
+}

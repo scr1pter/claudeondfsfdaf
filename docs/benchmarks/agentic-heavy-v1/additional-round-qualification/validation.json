@@ -1,0 +1,136 @@
+{
+  "kind": "additional-round-current-toolchain-free-qualification-v1",
+  "recordedDate": "2026-11-04",
+  "realProviderCalls": 0,
+  "fundedMeterCalls": 0,
+  "codexVersion": "0.166.0-alpha.6",
+  "chromeVersion": "156.0.8078.80",
+  "methodology": "New toolchain qualification; not pooled with prior alpha.5.1/.79 proof or paid comparison. Existing unchanged actual adapter and smoke script with local fake provider, shell/API/browser and screenshot-preview fixtures.",
+  "instrumentManifestSha256": "31e50aa6094819aad8b0e8e137973d14b3ed137fb766b7fe9c859a0ab43087f9",
+  "runtimeProofs": {
+    "codex": {
+      "kind": "fake-actual-heavy-adapter-qualification-v1",
+      "runtime": "codex",
+      "realProviderCalls": 0,
+      "fundedMeterCalls": 0,
+      "sourceRevision": "587be6478aff24e2cdf98192269bc2bd3ca755bd",
+      "profileSha256": "6f70ed35534e60d66c832323bd5df78be68d20f22233c382c2b8633430bf194b",
+      "binarySha256": {
+        "bun": "0187f68d843f825a72ada4a7eca60db896ed753759a7f8252edcd31ac1bf1b9c",
+        "node": "ba93f9a70bd86fce3ebbb39ec758501458453467aa92a34a0a3602d1e3fc2b9c",
+        "codex_bin": "925c7d0665ffa49b0dcf748e034a805a04da984164ac92301432073b47789b99",
+        "chrome": "46461accbdc87dc88a5bdd6d611be095dd6147db009863d794f742ca90662efa",
+        "python": "f8b45d63047da9d9adf09892e4cc4317b859e86a93a478cc9616bc69d3b176e5",
+        "playwright_package": "f5c873af32da3a56849a77a73eb4e6acf9629d58564ba420077feea88800225c"
+      },
+      "fakeRequests": 37,
+      "unchangedRealSeed": true,
+      "expectedProductGate": "unchanged Foundry scaffold must remain negative under all 76 original checks",
+      "allSolHighAutoLow": true,
+      "capabilityEvidence": {
+        "successfulActualShellApiAndCommonBrowser": true,
+        "rootShellCallsObserved": 4,
+        "fixtureApiRequests": 2,
+        "fixtureBrowserPageRequests": 2
+      },
+      "backgroundEvidence": {
+        "applicable": false
+      },
+      "nativeImagePreviewRequests": 9,
+      "functionalVerdict": "product_failure",
+      "nativeAuditVerdict": "passed",
+      "stopReason": "product_failure_after_one_same_session_repair",
+      "reviewRequired": false,
+      "settlementComplete": true,
+      "providerRequests": 37,
+      "autonomousActorsAdmitted": 7,
+      "qualificationPassed": true,
+      "privateSourceSummarySha256": "84311a159f0b44dc66900d0c7bf5b730b3a8072be6019c2a94c528fe88d9a12e",
+      "privateResultSha256": "f455a4c733cdb6112add378cdfedb33bbc04378bde5e539d9adabe0ade26e303",
+      "allOwnedInvocationsQuiesced": true
+    },
+    "vector": {
+      "kind": "fake-actual-heavy-adapter-qualification-v1",
+      "runtime": "vector",
+      "realProviderCalls": 0,
+      "fundedMeterCalls": 0,
+      "sourceRevision": "587be6478aff24e2cdf98192269bc2bd3ca755bd",
+      "profileSha256": "6f70ed35534e60d66c832323bd5df78be68d20f22233c382c2b8633430bf194b",
+      "binarySha256": {
+        "bun": "0187f68d843f825a72ada4a7eca60db896ed753759a7f8252edcd31ac1bf1b9c",
+        "node": "ba93f9a70bd86fce3ebbb39ec758501458453467aa92a34a0a3602d1e3fc2b9c",
+        "codex_bin": "925c7d0665ffa49b0dcf748e034a805a04da984164ac92301432073b47789b99",
+        "chrome": "46461accbdc87dc88a5bdd6d611be095dd6147db009863d794f742ca90662efa",
+        "python": "f8b45d63047da9d9adf09892e4cc4317b859e86a93a478cc9616bc69d3b176e5",
+        "playwright_package": "f5c873af32da3a56849a77a73eb4e6acf9629d58564ba420077feea88800225c"
+      },
+      "fakeRequests": 32,
+      "unchangedRealSeed": true,
+      "expectedProductGate": "unchanged Foundry scaffold must remain negative under all 76 original checks",
+      "allSolHighAutoLow": true,
+      "capabilityEvidence": {
+        "successfulActualShellApiAndCommonBrowser": true,
+        "rootShellCallsObserved": 4,
+        "fixtureApiRequests": 2,
+        "fixtureBrowserPageRequests": 2
+      },
+      "backgroundEvidence": {
+        "applicable": true,
+        "backgroundTaskLaunches": 1,
+        "ownedCompletionNotifications": 1
+      },
+      "nativeImagePreviewRequests": 7,
+      "functionalVerdict": "product_failure",
+      "nativeAuditVerdict": "passed",
+      "stopReason": "product_failure_after_one_same_session_repair",
+      "reviewRequired": false,
+      "settlementComplete": true,
+      "providerRequests": 32,
+      "autonomousActorsAdmitted": 7,
+      "qualificationPassed": true,
+      "privateSourceSummarySha256": "994ad504b1938905a380449d46aa591e575d67d1139c49cb169d10928a4f9988",
+      "privateResultSha256": "00414f5599e894670dcc4635b14e4cebc9e29591c3b73b795239b6e35f1de4df",
+      "allOwnedInvocationsQuiesced": true
+    }
+  },
+  "pureControls": {
+    "wrapperMethodsPassed": 10,
+    "additionalAndOldFundingCancellationMethodsPassed": 27,
+    "ownedWitnessAndPairedMethodsPassed": 124,
+    "ownedWitnessAndPairedSkipped": 3,
+    "skipsAreNotPasses": true
+  },
+  "qualityOrCostWinClaim": false,
+  "historicalLiabilityStillUnsettled": true,
+  "noOldInstrumentOrApplicationEdits": true,
+  "planOnly": {
+    "exitCode": 0,
+    "planSha256": "c80ea2910feb23957c9b3df004a81dc202fe88a37b1114cf792e60d112d532d2",
+    "missingPrivateControllerAndReceiptsNotRead": true,
+    "runtimeOutputNotCreated": true,
+    "sourceRevision": "587be6478aff24e2cdf98192269bc2bd3ca755bd",
+    "phasePlanSha256": "b91f3cfdd0738299f44ffa23e9a8850ca5751665a521859cf5c1fc2507ee0d5d",
+    "taskFullManifestSha256": "a7344daea1d3cf591051b265d668ebba03545f6ef0b87cc25d93cfb97a579433",
+    "commonManifestSha256": "cb3ac98c0f31560f341ace4d489af1abf0d844393113a572c24f733d08304d96",
+    "browserManifestSha256": "611a66e2df0ae7bd5ec21b5d39fe33e48bc3afb3901ccdbca7d84c7cc05780c0",
+    "newMatchedManifestSha256": "31e50aa6094819aad8b0e8e137973d14b3ed137fb766b7fe9c859a0ab43087f9",
+    "wrapperManifestSha256": "d54863153e290f1660c6ccde2dcd12b111f384746b03ef2d73db412064573196"
+  },
+  "codexPackageHashes": {
+    "codex-code-mode-host.exe": "ddd144291738f99b3f2254e0d9759fd7f8adac057405883ed8f1ccd9ad4502b4",
+    "codex-command-runner.exe": "c7accb2c88250ed936e97905db5d0fb5feeed5b3d7b8252f545d076d95867e92",
+    "codex-windows-sandbox-setup.exe": "6b2fc892154c86ba977eb486f91977d3580b89ab3cec7ca71379aeb535261b94"
+  },
+  "preflightDiagnostics": [
+    {
+      "kind": "priorCLIremoved",
+      "providerCalls": 0,
+      "resolved": "current binary freshly qualified and pinned"
+    },
+    {
+      "kind": "exclusivePlanOutputAlreadyExists",
+      "providerCalls": 0,
+      "resolved": "provisional plan preserved; final freeze written to new output"
+    }
+  ]
+}

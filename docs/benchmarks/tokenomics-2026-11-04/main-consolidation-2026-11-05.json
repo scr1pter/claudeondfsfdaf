@@ -1,0 +1,336 @@
+{
+  "kind": "main-branch-consolidation-validation-v1",
+  "checkedAtUtc": "2026-11-05T23:29:05.201980+00:00",
+  "repository": "https://github.com/scr1pter/claudeondfsfdaf",
+  "targetBranch": "main",
+  "previousMainRevision": "1d8536066f7b69a8630c7dca7da488e9ceed8d08",
+  "testedIntegrationRevision": "2b77642776e9f99b6210245e7d30677d2f6b8fa3",
+  "deliveryRevision": "f2eb5a90f52309b3f77b67770686e484507c000d",
+  "namedBranchesIncluded": [
+    {
+      "branch": "benchmark-browser-policy",
+      "revision": "6683a088471822927f5315172e69c1933f5781f2",
+      "includedByAncestry": true
+    },
+    {
+      "branch": "cancellation-observation",
+      "revision": "b86c3fbf4824d46b2203de5a09de61359cdc285b",
+      "includedByAncestry": true
+    },
+    {
+      "branch": "codex-continuation",
+      "revision": "481ff836bbc2621c939c32947094c4676d313be0",
+      "includedByAncestry": true
+    },
+    {
+      "branch": "codex-resume",
+      "revision": "d3c52c7f68373a30eb973f531e13259d392a5a36",
+      "includedByAncestry": true
+    },
+    {
+      "branch": "compaction-accounting",
+      "revision": "1a3d07c4a947674c3db68f6bbc7690a8c0288587",
+      "includedByAncestry": true
+    },
+    {
+      "branch": "cost-profiler",
+      "revision": "ba05adb5300f1ebac62ab13c23a13498bd4cc703",
+      "includedByAncestry": true
+    },
+    {
+      "branch": "funding-carry",
+      "revision": "7c171eac9a5709a48272287653a80fd3ce6c7de2",
+      "includedByAncestry": true
+    },
+    {
+      "branch": "funding-continuation",
+      "revision": "6f68b7e8e8e339d16552f6ca1baa44fd0feba99a",
+      "includedByAncestry": true
+    },
+    {
+      "branch": "harbor-heavy",
+      "revision": "76ac36500fc116332c8fef4c0648095c24e26803",
+      "includedByAncestry": true
+    },
+    {
+      "branch": "harbor-round-two",
+      "revision": "367660e67ddd25c9f5b06e6ee150e2b55ec906e8",
+      "includedByAncestry": true
+    },
+    {
+      "branch": "harbor-runner",
+      "revision": "6abd514a5a467af62b96058f59a2bffb9873fd0c",
+      "includedByAncestry": true
+    },
+    {
+      "branch": "headless-holdout",
+      "revision": "a649ed19e1f028f09eeb7793fe9ceea0647361fb",
+      "includedByAncestry": true
+    },
+    {
+      "branch": "headless-stage",
+      "revision": "d858eda13c25d3e889c3fa8d86bdd7f52dd9c941",
+      "includedByAncestry": true
+    },
+    {
+      "branch": "headless-startup",
+      "revision": "39513195d5ddb2be3bda460a6864853a379a7b5e",
+      "includedByAncestry": true
+    },
+    {
+      "branch": "heavy-foundry",
+      "revision": "8ce4af881b98aaef2d73979073910f5a538c4f31",
+      "includedByAncestry": true
+    },
+    {
+      "branch": "heavy-funding",
+      "revision": "aef258212e5e320eb2e0ceed6432473d97997b93",
+      "includedByAncestry": true
+    },
+    {
+      "branch": "heavy-nav-fix",
+      "revision": "61fbc62b435db3c3912f4b74f447ea4532ff3c78",
+      "includedByAncestry": true
+    },
+    {
+      "branch": "heavy-team-policy",
+      "revision": "253936035a345bc9b93de3f1313472091d500fa8",
+      "includedByAncestry": true
+    },
+    {
+      "branch": "heavy-team-runner",
+      "revision": "ee12d1328ca3d63714a4aa61059924904ab9a3fa",
+      "includedByAncestry": true
+    },
+    {
+      "branch": "idle-heartbeat",
+      "revision": "661d3b36c34c68181d3b9c9b551862f8f40517ff",
+      "includedByAncestry": true
+    },
+    {
+      "branch": "investor-brief",
+      "revision": "30203938d4aad1281ae61c3bf5deb94295a58762",
+      "includedByAncestry": true
+    },
+    {
+      "branch": "layout-diagnostics",
+      "revision": "5a20e7faf764db2d6b4969a4fd028d091b986a90",
+      "includedByAncestry": true
+    },
+    {
+      "branch": "legacy-step-accounting",
+      "revision": "94c27c67185bbce343e0fa0eac4ec60bb801e343",
+      "includedByAncestry": true
+    },
+    {
+      "branch": "main",
+      "revision": "42346154b4da16657513a34d5dfce70a16071a3d",
+      "includedByAncestry": true
+    },
+    {
+      "branch": "maintenance-holdout",
+      "revision": "764c217b897a645c93cec5486e8b1f742e866a29",
+      "includedByAncestry": true
+    },
+    {
+      "branch": "maintenance-stage",
+      "revision": "4760d3854ea37f581779f1e96aa1002a7de6e572",
+      "includedByAncestry": true
+    },
+    {
+      "branch": "meter-source",
+      "revision": "6f1e4181d517822db7d33270785ef3b60983e095",
+      "includedByAncestry": true
+    },
+    {
+      "branch": "multiagent-study",
+      "revision": "c9e8f3b656d8da5373704a1fe2d3c16f70dfd6e6",
+      "includedByAncestry": true
+    },
+    {
+      "branch": "publication-accounting",
+      "revision": "89525f448be3d2c650af528b1328d210e822d149",
+      "includedByAncestry": true
+    },
+    {
+      "branch": "research-evidence",
+      "revision": "914a9decafee2c6491d09e952510e8d325ec966b",
+      "includedByAncestry": true
+    },
+    {
+      "branch": "support-inventory",
+      "revision": "7324b427b29d18abbc0b946a49674d35791c4843",
+      "includedByAncestry": true
+    },
+    {
+      "branch": "team-runner",
+      "revision": "698acd510d4109af67c345c89b83077aa4f7309f",
+      "includedByAncestry": true
+    },
+    {
+      "branch": "tokenomics-complete",
+      "revision": "587be6478aff24e2cdf98192269bc2bd3ca755bd",
+      "includedByAncestry": true
+    },
+    {
+      "branch": "tokenomics-context",
+      "revision": "1d0246d14af322cda477987b60b5dabafb4bf411",
+      "includedByAncestry": true
+    },
+    {
+      "branch": "tokenomics-delivery",
+      "revision": "f2eb5a90f52309b3f77b67770686e484507c000d",
+      "includedByAncestry": true
+    },
+    {
+      "branch": "tokenomics-efficiency",
+      "revision": "bd537fd2ccd35984bf705264daa1331bb4f39feb",
+      "includedByAncestry": true
+    },
+    {
+      "branch": "tokenomics-envelope",
+      "revision": "a35c03d6a9bb16f16ec0187ad69c6c6420d10f19",
+      "includedByAncestry": true
+    },
+    {
+      "branch": "tokenomics-focus",
+      "revision": "893b9629224dc4249f08c0e18712511437a35a22",
+      "includedByAncestry": true
+    },
+    {
+      "branch": "tokenomics-gaps",
+      "revision": "94312a121d639919bfa5e78aadc421a0c8485d95",
+      "includedByAncestry": true
+    },
+    {
+      "branch": "tokenomics-scale",
+      "revision": "479303cf229badc0fa2c770f27d7d845dfa4fa68",
+      "includedByAncestry": true
+    },
+    {
+      "branch": "tokenomics-unsettled",
+      "revision": "46e63cdd28d32382c14a9a1e55afbf53cf9ee18f",
+      "includedByAncestry": true
+    },
+    {
+      "branch": "tool-compose",
+      "revision": "1bfcc3fbbcd47692a503576aef5f8be7859e2ac5",
+      "includedByAncestry": true
+    },
+    {
+      "branch": "v2-loop-signatures",
+      "revision": "dae48615985f03e85c9dede9ba0b4556a3da39f2",
+      "includedByAncestry": true
+    }
+  ],
+  "sourceBranchesMissing": [],
+  "preservedUpstreamMain": true,
+  "historyRewritten": false,
+  "forcePush": false,
+  "conflictResolutions": [
+    "Task-size instruction retains main substantial-milestone/user-requested-plan wording and delivery prohibition on routine tool-call plans; main assertions retained.",
+    "Both revocation and research-claims migrations applied chronologically; migration-list and all-trigger expectations updated to assert the combined schema.",
+    "Both immutable-fixture attribute rule sets retained.",
+    "Newer qualified maintenance-holdout README and bridge kept; older branch ancestry retained."
+  ],
+  "validation": {
+    "coreInitialAfterDependencyRepair": {
+      "passed": 102,
+      "skipped": 5,
+      "failed": 2,
+      "files": 9,
+      "details": "Migration trigger expectation needed both branches; PDF cold import exceeded default 5s direct bun test timeout."
+    },
+    "coreCorrectedRerun": {
+      "passed": 40,
+      "failed": 0,
+      "files": 3,
+      "assertions": 234,
+      "command": "bun run test test/brain/database.test.ts test/research/export.test.ts test/research/store.test.ts",
+      "details": "Uses package configured 30s test timeout; failed cases passed. Counts overlap initial group."
+    },
+    "engine": {
+      "passed": 26,
+      "failed": 0,
+      "files": 6,
+      "assertions": 414,
+      "seconds": 119.61
+    },
+    "appDocumentModel": {
+      "passed": 29,
+      "failed": 0,
+      "assertions": 366
+    },
+    "webResearchDocs": {
+      "passed": 14,
+      "skipped": 1,
+      "failed": 0,
+      "assertions": 139
+    },
+    "cancellationWitness": {
+      "passed": 99,
+      "skipped": 3,
+      "failed": 0,
+      "details": "Optional actual-meter-source controls not configured."
+    },
+    "codexResumeAdoption": {
+      "passed": 31,
+      "failed": 0
+    },
+    "harborPython": {
+      "passed": 19,
+      "failed": 0
+    },
+    "harborNodeProxy": {
+      "passed": 6,
+      "failed": 0
+    },
+    "harborHoldoutWrapper": {
+      "passed": 10,
+      "failed": 0
+    },
+    "harborRoundTwoWrapper": {
+      "passed": 10,
+      "failed": 0
+    },
+    "additionalFunding": {
+      "passed": 6,
+      "failed": 0
+    },
+    "baseFoundryAdapter": {
+      "passed": 10,
+      "failed": 0
+    },
+    "navigationOverlay": {
+      "passed": 6,
+      "failed": 0
+    },
+    "retainedHistoricalNavigationAssertion": "Combined copied test_adapter+test_overlay run had 15 passes/1 documented historical original-helper hash failure; applicable original-adapter and updated-overlay suites passed separately. Original immutable provenance not modified.",
+    "navigationSyntax": "passed",
+    "archivedTransportClosure": {
+      "sourceAndDataFiles": 13,
+      "runtimeModules": 6,
+      "gitIndexVerified": true,
+      "providerCalls": 0,
+      "credentialReads": 0
+    },
+    "investorClaimChecks": {
+      "passed": 17,
+      "failed": 0
+    },
+    "investorPdfSha256": "d3bae79c2bf3f9cbf230d673413f3b3d283ce164f688c5f1dd8c4b1f6657e3e7",
+    "scannedIncomingFilesForCredentialPatterns": 1311,
+    "credentialPatternScan": "passed",
+    "independentProductMergeReview": "No blocking production regression found; upstream response deadline, titles, tests and egress behavior preserved.",
+    "requiredPrePushHook": "Enabled; runs all 23 workspace typechecks and rejects push if any fails."
+  },
+  "environmentNotes": [
+    "Fresh Windows dependency lifecycle compilation needs unavailable Visual Studio C++ tools. Pinned dependencies installed with frozen lockfile, ignore-scripts and force to repair incomplete extraction; no lockfile changes.",
+    "Five native OCR tests skipped because Tesseract is not configured. Poppler exists; no OCR success claimed.",
+    "One release-gated documentation test skipped under the current release catalog."
+  ],
+  "newPaidProviderCalls": 0,
+  "benchmarkOutcomesRecomputed": false,
+  "originalEvidenceAndPdfUnchanged": true,
+  "excludedFromPublication": "Credentials, private runtime/financial journals, dependency trees and vendor binaries are not source changes."
+}

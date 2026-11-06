@@ -148,6 +148,8 @@ const HOLDS: DocumentHold[] = [
 const WARNINGS: DocumentWarning[] = [
   "truncated",
   "scanned",
+  "ocr",
+  "ocr-incomplete",
   "encrypted",
   "macros-ignored",
   "external-links",
@@ -229,7 +231,7 @@ describe("documents page model", () => {
   test("explains every warning, naming the scanned pages", () => {
     expect(new Set(WARNINGS.map((warning) => warningLabel(warning))).size).toBe(WARNINGS.length)
     expect(warningLabel("scanned", { unread: [9, 3, 4, 5] })).toBe(
-      "Scanned pages (p.3-5, 9) are pictures of text, which Vector does not read.",
+      "Scanned pages (p.3-5, 9) have no readable text. Local OCR may be unavailable or could not recognize them.",
     )
     expect(pageList([1, 2, 3, 7, 9, 10])).toBe("p.1-3, 7, 9-10")
   })
@@ -474,7 +476,7 @@ describe("documents page model", () => {
     ])
     expect(highlight({ text: "Plain.", records: [] })).toEqual([{ text: "Plain." }])
     expect(pageHeading({ page: 3, pages: 9, unread: true })).toBe(
-      "Page 3 of 9: a picture of text, which Vector does not read.",
+      "Page 3 of 9: no readable text was extracted from this scanned page.",
     )
   })
 
@@ -502,9 +504,16 @@ describe("documents page model", () => {
     expect(anchorLine(anchor)).toBe(
       "src/upload.ts:2 MAX_UPLOAD_BYTES · sets the value (64 * 1024 * 1024) · unchanged since Vector linked it",
     )
-    expect(anchorLine({ ...anchor, method: "path", symbol: undefined, line: undefined, value: undefined, status: "missing" })).toBe(
-      "src/upload.ts · is the file it names · gone from the code",
-    )
+    expect(
+      anchorLine({
+        ...anchor,
+        method: "path",
+        symbol: undefined,
+        line: undefined,
+        value: undefined,
+        status: "missing",
+      }),
+    ).toBe("src/upload.ts · is the file it names · gone from the code")
     expect(evidence("Uploads are capped by MAX_UPLOAD_BYTES per file.", "MAX_UPLOAD_BYTES")).toEqual([
       { text: "Uploads are capped by ", mark: false },
       { text: "MAX_UPLOAD_BYTES", mark: true },
@@ -572,7 +581,13 @@ describe("documents page model", () => {
         kind: "held",
         a: "pheld00000001",
         subject: "Deploy guide",
-        detail: { type: "passage", hold: "instruction-like", document: "d1", title: "Deploy guide", text: "If you are an AI…" },
+        detail: {
+          type: "passage",
+          hold: "instruction-like",
+          document: "d1",
+          title: "Deploy guide",
+          text: "If you are an AI…",
+        },
         status: "open",
         createdAt: 1,
         updatedAt: 1,
@@ -605,13 +620,19 @@ describe("documents page model", () => {
       "A passage is held for your review: parts of it read like instructions to an AI. “If you are an AI…”",
     )
     expect(passage!.actions.map((action) => action.action)).toEqual(["approve", "reject"])
-    expect(whole!.text).toBe("The whole document is held for your review: this repository's settings are not trusted yet.")
+    expect(whole!.text).toBe(
+      "The whole document is held for your review: this repository's settings are not trusted yet.",
+    )
     // The summary counts what the engine says needs a look, conflicts and drift included.
     expect(documentsSummary({ documents: [doc({})], indexing: false }, 5)).toBe(
       "1 document · 5 to look at · only the parts a request needs are sent",
     )
     const words = [
-      ...[value, changed, conflict, passage, whole].flatMap((row) => [row!.title, row!.text, ...row!.actions.flatMap((action) => [action.label, action.done])]),
+      ...[value, changed, conflict, passage, whole].flatMap((row) => [
+        row!.title,
+        row!.text,
+        ...row!.actions.flatMap((action) => [action.label, action.done]),
+      ]),
       ...(["definition", "use", "route", "env", "constant", "path", "user", "outcome"] as const).map(anchorMethodLabel),
       ...(["fresh", "drifted", "missing"] as const).map(anchorStatusLabel),
     ]
@@ -639,16 +660,30 @@ describe("documents page model", () => {
     expect(historyLine({ at, action: "version", actor: "vector", detail: diff })).toBe(versionDiffLabel(diff))
     expect(historyLine({ at, action: "added", actor: "user", detail: { version: 1 } })).toBe("Added")
     expect(historyLine({ at, action: "added", actor: "agent", detail: { version: 1 } })).toBe("Kept by the agent")
-    expect(historyLine({ at, action: "added", actor: "vector", detail: { version: 1 } })).toBe("Read from the repository")
+    expect(historyLine({ at, action: "added", actor: "vector", detail: { version: 1 } })).toBe(
+      "Read from the repository",
+    )
     expect(
-      historyLine({ at, action: "changed", actor: "vector", record: "r1", detail: { version: 2, before: "30 s", after: "60 s" } }),
+      historyLine({
+        at,
+        action: "changed",
+        actor: "vector",
+        record: "r1",
+        detail: { version: 2, before: "30 s", after: "60 s" },
+      }),
     ).toBe("Changed in version 2: “30 s” became “60 s”")
     expect(
-      historyLine({ at, action: "linked", actor: "vector", record: "r1", detail: { path: "src/billing/invoice.ts", added: true } }),
+      historyLine({
+        at,
+        action: "linked",
+        actor: "vector",
+        record: "r1",
+        detail: { path: "src/billing/invoice.ts", added: true },
+      }),
     ).toBe("Linked to src/billing/invoice.ts when the code landed")
-    expect(historyLine({ at, action: "linked", actor: "user", record: "r1", detail: { path: "src/a.ts", symbol: "run" } })).toBe(
-      "You linked it to src/a.ts run",
-    )
+    expect(
+      historyLine({ at, action: "linked", actor: "user", record: "r1", detail: { path: "src/a.ts", symbol: "run" } }),
+    ).toBe("You linked it to src/a.ts run")
     expect(historyLine({ at, action: "pinned", actor: "user", record: "r1" })).toBe("You pinned it")
     expect(historyLine({ at, action: "made-memory", actor: "user", record: "r1" })).toBe("You made it a memory")
     expect(historyLine({ at, action: "kind", actor: "user", record: "r1", detail: { after: "constraint" } })).toBe(
@@ -657,12 +692,29 @@ describe("documents page model", () => {
     expect(usageLabel({ runs: 4, passed: 3, reverted: 1 })).toBe(
       "Used in 4 runs in the last 30 days · 3 passed their checks · 1 undone",
     )
-    expect(usageLabel({ runs: 0, passed: 0, reverted: 0 })).toBe("No run has cited or opened its cards in the last 30 days.")
+    expect(usageLabel({ runs: 0, passed: 0, reverted: 0 })).toBe(
+      "No run has cited or opened its cards in the last 30 days.",
+    )
     const words = [
       versionDiffLabel(diff),
       usageLabel({ runs: 4, passed: 3, reverted: 1 }),
-      ...["added", "version", "changed", "linked", "unlinked", "edited", "pinned", "unpinned", "not-applicable", "forget", "restored", "made-memory"].flatMap((action) =>
-        (["user", "agent", "vector"] as const).map((actor) => historyLine({ at, action, actor, detail: { path: "a.ts", version: 2 } })),
+      ...[
+        "added",
+        "version",
+        "changed",
+        "linked",
+        "unlinked",
+        "edited",
+        "pinned",
+        "unpinned",
+        "not-applicable",
+        "forget",
+        "restored",
+        "made-memory",
+      ].flatMap((action) =>
+        (["user", "agent", "vector"] as const).map((actor) =>
+          historyLine({ at, action, actor, detail: { path: "a.ts", version: 2 } }),
+        ),
       ),
     ]
     for (const word of words) expect(word.toLowerCase()).not.toContain("project")
@@ -704,8 +756,12 @@ describe("documents page model", () => {
     expect(DISTILL).toStartWith("Your default model reads the sections where Vector's rules found little.")
     expect(DISTILL).not.toMatch(/you choose/i)
     expect(distillCostLabel({ costKind: "free" })).toBe("The model is free.")
-    expect(distillCostLabel({ costKind: "unknown" })).toBe("The model has no listed price, so Vector cannot estimate what it costs.")
-    expect(distillCostLabel({ costKind: "priced", lowUsd: 0.0012, highUsd: 0.004 })).toBe("About $0.0012 to $0.0040 at catalog rates.")
+    expect(distillCostLabel({ costKind: "unknown" })).toBe(
+      "The model has no listed price, so Vector cannot estimate what it costs.",
+    )
+    expect(distillCostLabel({ costKind: "priced", lowUsd: 0.0012, highUsd: 0.004 })).toBe(
+      "About $0.0012 to $0.0040 at catalog rates.",
+    )
     // A refusal says why in the engine's words, and nothing is sent.
     expect(
       distillEstimateLabel({
@@ -723,7 +779,9 @@ describe("documents page model", () => {
         records: [record, record] as never,
         dropped: { invalid: 0, quote: 1, scan: 0 },
       }),
-    ).toBe("2 suggestions from lmstudio/test-model, waiting below for you to keep or drop. Dropped 1 suggestion that did not hold up against the document.")
+    ).toBe(
+      "2 suggestions from lmstudio/test-model, waiting below for you to keep or drop. Dropped 1 suggestion that did not hold up against the document.",
+    )
     expect(distilledLabel({ model: "m", records: [], dropped: { invalid: 0, quote: 0, scan: 0 } })).toBe(
       "No suggestions from m held their quotes.",
     )
@@ -739,7 +797,13 @@ describe("documents page model", () => {
         at: 2,
         action: "distilled",
         actor: "user" as const,
-        detail: { model: "lmstudio/test-model", kept: 2, tokens: { input: 1_400, output: 160 }, cost: 0.0042, costKind: "priced" },
+        detail: {
+          model: "lmstudio/test-model",
+          kept: 2,
+          tokens: { input: 1_400, output: 160 },
+          cost: 0.0042,
+          costKind: "priced",
+        },
       },
       { at: 1, action: "kept-suggestions", actor: "user" as const, detail: { count: 2 } },
     ]
@@ -754,13 +818,21 @@ describe("documents page model", () => {
         kind: "held",
         a: "r1",
         subject: "Billing",
-        detail: { type: "record", document: "d1", title: "Billing", text: "Refunds are approved by a support lead", suggested: true },
+        detail: {
+          type: "record",
+          document: "d1",
+          title: "Billing",
+          text: "Refunds are approved by a support lead",
+          suggested: true,
+        },
         status: "open",
         createdAt: 0,
         updatedAt: 0,
       },
     ])
-    expect(row!.text).toBe("A model suggested a record from it. Keep it if the document says so. “Refunds are approved by a support lead”")
+    expect(row!.text).toBe(
+      "A model suggested a record from it. Keep it if the document says so. “Refunds are approved by a support lead”",
+    )
     expect(row!.actions.map((action) => action.label)).toEqual(["Keep", "Drop"])
     for (const word of [DISTILL, distillEstimateLabel(estimate), row!.text, ...history.map(historyLine)]) {
       expect(word.toLowerCase()).not.toContain("project")

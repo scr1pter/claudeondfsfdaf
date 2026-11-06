@@ -6,7 +6,11 @@ import { Research } from "@vectordevai/schema/research"
 import { RunBudget } from "@vectordevai/schema/run-budget"
 import { Authorization } from "../middleware/authorization"
 import { InstanceContextMiddleware } from "../middleware/instance-context"
-import { WorkspaceRoutingMiddleware, WorkspaceRoutingQuery, WorkspaceRoutingQueryFields } from "../middleware/workspace-routing"
+import {
+  WorkspaceRoutingMiddleware,
+  WorkspaceRoutingQuery,
+  WorkspaceRoutingQueryFields,
+} from "../middleware/workspace-routing"
 import { described } from "./metadata"
 
 const root = "/memory"
@@ -299,7 +303,9 @@ export const MemoryDocumentDetail = Schema.Struct({
   /** At most 100. */
   anchors: Schema.Array(BrainSchema.Anchor),
   /** Passages and records held for the user's review, at most 50. */
-  held: Schema.Array(Schema.Struct({ id: Schema.String, hold: BrainSchema.Hold, page: Schema.optional(Schema.Finite) })),
+  held: Schema.Array(
+    Schema.Struct({ id: Schema.String, hold: BrainSchema.Hold, page: Schema.optional(Schema.Finite) }),
+  ),
   warnings: Schema.Array(BrainSchema.DocumentWarning),
   versions: Schema.Array(
     Schema.Struct({
@@ -575,15 +581,17 @@ export const MemoryResearchDetail = Schema.Struct({
 export const MemoryResearchSourceText = Schema.Struct({
   source: MemoryResearchSource,
   /** The page's saved text, chunk by chunk. Plain text; never render it as markup. */
-  chunks: Schema.Array(Schema.Struct({ chunk: Schema.Finite, page: Schema.optional(Schema.Finite), text: Schema.String })),
+  chunks: Schema.Array(
+    Schema.Struct({ chunk: Schema.Finite, page: Schema.optional(Schema.Finite), text: Schema.String }),
+  ),
   /** Read from the user's own computer or network. */
   private: Schema.Boolean,
 }).annotate({ identifier: "MemoryResearchSourceText" })
 
 export const MemoryResearchExportQuery = Schema.Struct({
   ...WorkspaceRoutingQueryFields,
-  /** markdown (the default): the report with a bibliography. json: the run, its sources, notes and report. */
-  format: Schema.optional(Schema.Literals(["markdown", "json"])),
+  /** Markdown (default), Word or PDF: the report and bibliography. JSON: the run and all its saved evidence. */
+  format: Schema.optional(Schema.Literals(["markdown", "json", "docx", "pdf"])),
 })
 
 // Memory is the owner's own: every route is owner-only (ServerAuth), and a guest never reads it.
@@ -708,7 +716,8 @@ export const MemoryApi = HttpApi.make("memory")
           OpenApi.annotations({
             identifier: "memory.tidy",
             summary: "Tidy memory now",
-            description: "Merge duplicates, drop what waited for review too long, archive what goes unused and mark stale entries.",
+            description:
+              "Merge duplicates, drop what waited for review too long, archive what goes unused and mark stale entries.",
           }),
         ),
         HttpApiEndpoint.get("settings", `${root}/settings`, {
@@ -736,7 +745,10 @@ export const MemoryApi = HttpApi.make("memory")
         ),
         HttpApiEndpoint.get("model", `${root}/model`, {
           query: WorkspaceRoutingQuery,
-          success: described(BrainSchema.ModelStatus, "The local search model, and how much of the repository's documents it has embedded"),
+          success: described(
+            BrainSchema.ModelStatus,
+            "The local search model, and how much of the repository's documents it has embedded",
+          ),
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "memory.model.get",
@@ -829,7 +841,8 @@ export const MemoryApi = HttpApi.make("memory")
           OpenApi.annotations({
             identifier: "memory.documents.get",
             summary: "Get a document",
-            description: "One document: its outline, counts, first records, code links, held passages, warnings and versions.",
+            description:
+              "One document: its outline, counts, first records, code links, held passages, warnings and versions.",
           }),
         ),
         HttpApiEndpoint.patch("updateDocument", `${root}/documents/:documentID`, {
@@ -931,7 +944,8 @@ export const MemoryApi = HttpApi.make("memory")
           OpenApi.annotations({
             identifier: "memory.records.get",
             summary: "Get a record",
-            description: "One record: the passage it came from, the code it is linked to, what it conflicts with and how it changed.",
+            description:
+              "One record: the passage it came from, the code it is linked to, what it conflicts with and how it changed.",
           }),
         ),
         HttpApiEndpoint.patch("updateRecord", `${root}/records/:recordID`, {
@@ -1040,7 +1054,8 @@ export const MemoryApi = HttpApi.make("memory")
           OpenApi.annotations({
             identifier: "memory.research.get",
             summary: "Get a research run",
-            description: "One run: its plan, the queries it sent, its sources (skipped ones too), its notes and its latest report.",
+            description:
+              "One run: its plan, the queries it sent, its sources (skipped ones too), its notes and its latest report.",
           }),
         ),
         HttpApiEndpoint.delete("forgetResearch", `${root}/research/:runID`, {
@@ -1072,14 +1087,23 @@ export const MemoryApi = HttpApi.make("memory")
         HttpApiEndpoint.get("exportResearch", `${root}/research/:runID/export`, {
           params: { runID: ResearchRunID },
           query: MemoryResearchExportQuery,
-          success: Schema.String.pipe(HttpApiSchema.asText({ contentType: "text/markdown" })),
+          success: Schema.Union([
+            Schema.String.pipe(HttpApiSchema.asText({ contentType: "text/markdown" })),
+            Schema.String.pipe(HttpApiSchema.asText({ contentType: "application/json" })),
+            Schema.Uint8Array.pipe(HttpApiSchema.asUint8Array({ contentType: "application/pdf" })),
+            Schema.Uint8Array.pipe(
+              HttpApiSchema.asUint8Array({
+                contentType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+              }),
+            ),
+          ]),
           error: MemoryApiError,
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "memory.research.export",
             summary: "Export a research run",
             description:
-              "The run as an attachment: the report with a bibliography as Markdown, or with `format=json` the run, its queries, sources, notes and report.",
+              "The run as an attachment: the report with a bibliography as Markdown (default), Word (`format=docx`) or PDF (`format=pdf`). JSON contains the run, queries, sources, notes and report. Word and PDF are generated locally from saved text; no image or URL is fetched.",
           }),
         ),
         HttpApiEndpoint.get("researchSource", `${root}/research/:runID/sources/:sourceID`, {
@@ -1091,7 +1115,8 @@ export const MemoryApi = HttpApi.make("memory")
           OpenApi.annotations({
             identifier: "memory.research.source",
             summary: "Read a research source",
-            description: "One source of a run and the text Vector saved from its page, chunk by chunk, as citations open it.",
+            description:
+              "One source of a run and the text Vector saved from its page, chunk by chunk, as citations open it.",
           }),
         ),
         HttpApiEndpoint.delete("forgetResearchSource", `${root}/research/:runID/sources/:sourceID`, {

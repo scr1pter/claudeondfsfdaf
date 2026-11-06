@@ -2483,6 +2483,15 @@ const layer = Layer.effect(
           ) !== undefined
         const chunkTimeout = options["chunkTimeout"] ?? (hosted ? LOCAL_CHUNK_TIMEOUT : undefined)
         const headerTimeout = options["headerTimeout"] ?? (hosted ? LOCAL_HEADER_TIMEOUT : undefined)
+        const promptCacheBreakpoints = ProviderTransform.promptCacheBreakpointsEnabled({
+          setting: options["promptCacheBreakpoints"],
+          providerID: model.providerID,
+          npm: model.api.npm,
+          modelID: model.api.id,
+          apiKey: credential?.type === "api" || (!credential && typeof options["apiKey"] === "string"),
+          url: baseURL,
+        })
+        delete options["promptCacheBreakpoints"]
         delete options["chunkTimeout"]
         delete options["headerTimeout"]
         delete options["preconnect"]
@@ -2493,12 +2502,27 @@ const layer = Layer.effect(
         options["fetch"] = async (input: any, init?: BunFetchRequestInit) => {
           const fetchFn = customFetch ?? fetch
           const opts = { ...init }
+          const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined))
+          const marker = headers.get(ProviderTransform.PROMPT_CACHE_PREFIX_HEADER)
+          headers.delete(ProviderTransform.PROMPT_CACHE_PREFIX_HEADER)
+          if (marker !== null) opts.headers = headers
+          const requestInput =
+            input instanceof Request && input.headers.has(ProviderTransform.PROMPT_CACHE_PREFIX_HEADER)
+              ? new Request(input, { headers })
+              : input
           const body = ProviderTransform.reasoningContextBody(
             model.api.npm,
             runtimeFlags.experimentalReasoningContext,
             init?.body,
           )
           if (body !== undefined) opts.body = body
+          const cacheBody = ProviderTransform.promptCacheBreakpointBody({
+            enabled: promptCacheBreakpoints,
+            url: input instanceof Request ? input.url : String(input),
+            marker,
+            body: opts.body,
+          })
+          if (cacheBody !== undefined) opts.body = cacheBody
           // A request that reaches OpenRouter here skips every free-model check, so it must not name a free model.
           // Model and provider options can replace the model the SDK sends (`model` in them overrides it). Their
           // fallbacks, presets and plugins still go out, but where they could let OpenRouter answer from another
@@ -2565,7 +2589,7 @@ const layer = Layer.effect(
           const res = ResponseTerminal.wrap(
             await Egress.fetch(
               policy.enabled ? inferenceSource(names, target, policy, holds) : "local-inference",
-              input,
+              requestInput,
               {
                 ...opts,
                 // @ts-ignore see here: https://github.com/oven-sh/bun/issues/16682

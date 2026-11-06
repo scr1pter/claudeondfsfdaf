@@ -1,0 +1,35 @@
+:root { font: 16px/1.5 system-ui, sans-serif; color: #182b38; background: #f4f6f8; }
+* { box-sizing: border-box; }
+body { margin: 0; }
+main { max-width: 1100px; margin: auto; padding: 24px; }
+header { margin-bottom: 24px; display: flex; align-items: center; justify-content: space-between; gap: 24px; border-bottom: 1px solid #d1dce3; padding-bottom: 20px; }
+h1, h2 { margin-bottom: 8px; }
+button, textarea { font: inherit; }
+button { padding: 8px 12px; margin: 4px; cursor: pointer; border: 1px solid #a8b7c1; border-radius: 5px; background: white; overflow-wrap: anywhere; }
+button:focus-visible, textarea:focus-visible, summary:focus-visible { outline: 3px solid #2675c9; outline-offset: 2px; }
+button:disabled { cursor: wait; opacity: .65; }
+button[aria-pressed=true] { background: #e1edf6; border-color: #2675c9; }
+#process, #save { background: #164a67; color: white; border-color: #164a67; }
+.eyebrow { color: #526d7e; font-size: 12px; letter-spacing: .08em; font-weight: 700; }
+.queue-tools { max-width: 360px; }
+#queue-status, .hint { font-size: 14px; color: #526d7e; }
+#processing:empty { display: none; }
+.message-body, .delivery-error, dd { white-space: pre-wrap; }
+.status { font-weight: 700; }
+article[data-status=delivered] { border-left: 4px solid #287956; }
+article[data-status=cancelled] { border-left: 4px solid #71808d; }
+article[data-status=queued], article[data-status=sending], article[data-status=retryable] { border-left: 4px solid #b68125; }
+.delivery-error { color: #8c391c; }
+dd { margin: 0 0 10px; overflow-wrap: anywhere; }
+dt { font-size: 13px; font-weight: 700; color: #526d7e; }
+form { margin-top: 24px; padding-top: 16px; border-top: 1px solid #d1dce3; }
+.workspace { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 24px; }
+nav button { display: block; width: 100%; text-align: left; }
+section { min-width: 0; }
+article { background: white; border: 1px solid #d1dce3; border-radius: 7px; padding: 16px; margin: 16px 0; overflow-wrap: anywhere; }
+label { display: block; font-weight: 600; }
+textarea { width: 100%; padding: 10px; }
+pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; }
+[role=alert] { padding: 12px; background: #fff0ee; color: #8c261c; }
+summary { cursor: pointer; padding: 8px 0; overflow-wrap: anywhere; }
+@media (max-width: 600px) { main { padding: 16px; } header { display: block; } .workspace { grid-template-columns: 1fr; gap: 12px; } nav button { width: auto; display: inline-block; } }

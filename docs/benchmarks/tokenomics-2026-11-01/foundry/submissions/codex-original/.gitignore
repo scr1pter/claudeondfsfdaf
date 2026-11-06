@@ -1,0 +1,4 @@
+node_modules/
+dist/
+.foundry-data/
+verification/artifacts/

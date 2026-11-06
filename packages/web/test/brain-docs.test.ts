@@ -4,7 +4,13 @@ import { Brain } from "@vectordevai/core/brain/brain"
 import { BrainKnowledge } from "@vectordevai/core/brain/knowledge"
 import { TaskSize } from "@vectordevai/core/task-size"
 import { BrainEmbedManifest } from "@vectordevai/core/brain/embed-manifest"
-import { brainBudgetRows, brainCommandRows, documentCommandRows, knowledgeEval, modelCommandRows } from "../src/data/docs-content"
+import {
+  brainBudgetRows,
+  brainCommandRows,
+  documentCommandRows,
+  knowledgeEval,
+  modelCommandRows,
+} from "../src/data/docs-content"
 import { brainRelease, publishedDesktopVersion } from "../src/data/vector-releases"
 import { docsMoved, docsNav } from "../src/data/docs-nav"
 
@@ -30,29 +36,35 @@ const vercel = (await Bun.file(path.join(repo, "vercel.json")).json()) as {
 }
 const localMemoryRedirect = vercel.redirects.find((redirect) => redirect.source === "/docs/local-memory")
 
-test.skipIf(brainPublished)("until desktop 1.99.110 is published, local memory keeps its page, beside the brain's", async () => {
-  expect(features.indexOf("local-memory")).toBe(features.indexOf("brain") - 1)
-  expect(docsNav.flatMap((group) => group.links).find((link) => link.id === "local-memory")?.blurb).toStartWith(
-    "Desktop 1.99.109 and earlier:",
-  )
-  expect(await localMemory.exists()).toBe(true)
-  const page = (await localMemory.text()).replace(/\s+/g, " ")
-  expect(page).toContain('<DocsPage id="local-memory">')
-  expect(page).toContain('{brainRelease.since} <a href="/docs/brain">Vector Brain</a> replaces local memory.')
-  expect(brainRelease.since).toBe("Coming in desktop 1.99.110:")
-  expect(brain).toContain('see <a href="/docs/local-memory">Local memory</a>')
-  // A permanent redirect would be cached by browsers, so neither it nor the /docs#local-memory shim may move readers on.
-  expect(localMemoryRedirect).toBeUndefined()
-  expect(docsMoved["local-memory"]).toBeUndefined()
-})
+test.skipIf(brainPublished)(
+  "until desktop 1.99.110 is published, local memory keeps its page, beside the brain's",
+  async () => {
+    expect(features.indexOf("local-memory")).toBe(features.indexOf("brain") - 1)
+    expect(docsNav.flatMap((group) => group.links).find((link) => link.id === "local-memory")?.blurb).toStartWith(
+      "Desktop 1.99.109 and earlier:",
+    )
+    expect(await localMemory.exists()).toBe(true)
+    const page = (await localMemory.text()).replace(/\s+/g, " ")
+    expect(page).toContain('<DocsPage id="local-memory">')
+    expect(page).toContain('{brainRelease.since} <a href="/docs/brain">Vector Brain</a> replaces local memory.')
+    expect(brainRelease.since).toBe("Coming in desktop 1.99.110:")
+    expect(brain).toContain('see <a href="/docs/local-memory">Local memory</a>')
+    // A permanent redirect would be cached by browsers, so neither it nor the /docs#local-memory shim may move readers on.
+    expect(localMemoryRedirect).toBeUndefined()
+    expect(docsMoved["local-memory"]).toBeUndefined()
+  },
+)
 
-test.if(brainPublished)("once desktop 1.99.110 is published, local memory's page is gone and its links land on the brain", async () => {
-  expect(features).not.toContain("local-memory")
-  expect(await localMemory.exists()).toBe(false)
-  expect(brain).not.toContain('href="/docs/local-memory"')
-  expect(docsMoved["local-memory"]).toBe("brain")
-  expect(localMemoryRedirect?.destination).toBe("/docs/brain")
-})
+test.if(brainPublished)(
+  "once desktop 1.99.110 is published, local memory's page is gone and its links land on the brain",
+  async () => {
+    expect(features).not.toContain("local-memory")
+    expect(await localMemory.exists()).toBe(false)
+    expect(brain).not.toContain('href="/docs/local-memory"')
+    expect(docsMoved["local-memory"]).toBe("brain")
+    expect(localMemoryRedirect?.destination).toBe("/docs/brain")
+  },
+)
 
 test("Vector Brain and Documents and code links are pages of their own", async () => {
   expect(features).toContain("brain")
@@ -121,7 +133,8 @@ test("the page sizes a greeting or a bare acknowledgement as TaskSize does", () 
     'A greeting or a bare acknowledgement, such as "hi" or "ok", is sized Chat unless work is waiting on you: one that answers a question the agent asked, follows a run that did not finish, or approves a plan from Plan mode is sized as the work it carries on.',
   )
   for (const text of ["hi", "ok"]) expect(TaskSize.classify({ text }).tier).toBe("chat")
-  for (const text of ["hi", "ok"]) expect(TaskSize.classify({ text, open: true, previous: "standard" }).tier).not.toBe("chat")
+  for (const text of ["hi", "ok"])
+    expect(TaskSize.classify({ text, open: true, previous: "standard" }).tier).not.toBe("chat")
   expect(TaskSize.classify({ text: "ok", plan: true, previous: "standard" }).tier).not.toBe("chat")
   expect(TaskSize.classify({ text: "hi", plan: true, previous: "standard" }).tier).toBe("chat")
 })
@@ -176,16 +189,26 @@ test("the eval figures in the docs are the dated report's", () => {
 })
 
 test("the brain's copy keeps to the owner's wording rules", () => {
-  for (const text of [brain, documents, meaning, knowledgeEval.summary, knowledgeEval.caveat, knowledgeEval.meaning, knowledgeEval.floor]) {
+  for (const text of [
+    brain,
+    documents,
+    meaning,
+    knowledgeEval.summary,
+    knowledgeEval.caveat,
+    knowledgeEval.meaning,
+    knowledgeEval.floor,
+  ]) {
     expect(text).not.toMatch(/\bexactly\b|never exceeds|absolute privacy|guaranteed/i)
     expect(text).not.toMatch(/\bprojects?\b/i)
     expect(text).not.toMatch(/(cheaper|faster) than Codex|Codex[^.]*(cheaper|faster)/i)
     // Only the eval's figures: no timings, which change with the machine.
     expect(text).not.toMatch(/\d\s?ms\b|\d+(\.\d+)? s\b/)
   }
-  // Every PDF and doc claim stays inside what the readers do: no text read from images until a later release.
-  expect(documents).toContain("Pictures of text, such as scanned pages, are named but not read")
-  expect(`${brain} ${documents}`).not.toMatch(/\bOCR\b/)
+  // OCR is explicit machine-level opt-in in development builds, not a promise about the published installer.
+  expect(documents).toContain("In development builds: scanned PDF pages can be read with Tesseract and Poppler")
+  expect(documents).toContain("VECTOR_OCR_TESSERACT")
+  expect(documents).toContain("VECTOR_OCR_PDFTOPPM")
+  expect(documents).toContain("Pages beyond those limits or that recognition cannot read remain listed as unread")
 })
 
 test("Search by meaning has its own page, from desktop 1.99.110, with the manifest's model, size, license and revision", async () => {
@@ -200,7 +223,9 @@ test("Search by meaning has its own page, from desktop 1.99.110, with the manife
   expect(meaning).toContain("arctic.revision.slice(0, 12)")
   expect(meaning).toContain("const graph = arctic.files.model.sha256")
   expect(meaning).toContain("{graph.slice(0, 16)}")
-  expect(BrainEmbedManifest.megabytes(BrainEmbedManifest.size(BrainEmbedManifest.MODELS["arctic-embed-xs-q8"]))).toBe("24 MB")
+  expect(BrainEmbedManifest.megabytes(BrainEmbedManifest.size(BrainEmbedManifest.MODELS["arctic-embed-xs-q8"]))).toBe(
+    "24 MB",
+  )
   expect(meaning).toContain("Nothing is downloaded until you ask")
   expect(meaning).toContain("Until you do, Vector searches documents by keywords and code links")
   expect(meaning).toContain(
@@ -237,7 +262,9 @@ test("Search by meaning has its own page, from desktop 1.99.110, with the manife
 test("the meaning figures are the dated report's, run with the pinned model", () => {
   const working = report.found.working
   const hops = report.found.hops
-  expect(report.dense.model).toBe(`${BrainEmbedManifest.MODELS["arctic-embed-xs-q8"].repo}@${BrainEmbedManifest.MODELS["arctic-embed-xs-q8"].revision.slice(0, 12)} int8`)
+  expect(report.dense.model).toBe(
+    `${BrainEmbedManifest.MODELS["arctic-embed-xs-q8"].repo}@${BrainEmbedManifest.MODELS["arctic-embed-xs-q8"].revision.slice(0, 12)} int8`,
+  )
   expect(knowledgeEval.meaning).toBe(
     `With the search model, the same requests found the governing requirement for ${working.meaning} of ${working.tasks} tasks by keywords and meaning alone, with no code links, against ${working.keywords} of ${working.tasks} by keywords alone; with every channel at once, for ${working.all} of ${working.tasks}, and ${hops.all} of ${hops.tasks} through an import. The ${report.fixture.irrelevant} unrelated requests carried no tokens with it either.`,
   )
@@ -260,5 +287,7 @@ test("the meaning floor's margin is the one the dated report's sweep measured", 
   for (const text of [knowledgeEval.floor, manifest, archive]) expect(text).not.toContain("room to spare")
   expect(archive).toContain("## The meaning floor")
   // The review only checks for free models labelled May train on your prompts, so no page claims more.
-  expect(await Bun.file(`${import.meta.dir}/../src/pages/docs/brain.astro`).text()).not.toMatch(/may not train on prompts/)
+  expect(await Bun.file(`${import.meta.dir}/../src/pages/docs/brain.astro`).text()).not.toMatch(
+    /may not train on prompts/,
+  )
 })

@@ -1,0 +1,37 @@
+{
+  "kind": "investor-brief-preliminary-qa",
+  "date": "2026-11-04",
+  "status": "preliminary-awaiting-new-round-and-parent-content-freeze",
+  "pages": 4,
+  "pageSizePoints": [
+    612,
+    792
+  ],
+  "renderDpi": 120,
+  "allRenderedPagesVisuallyInspected": true,
+  "visibleClippingOrOverlapObserved": false,
+  "fonts": "Embedded Arial regular and bold",
+  "pdfAuthor": "Vector",
+  "sourceMetricProvenanceMatches": true,
+  "sourceFilesSha256": {
+    "E1": "28cc386fd9d7b8c3b1c26eeedb148cfa19f4b602aa278c9f3c1219c6c36c389c",
+    "E2": "f6acc228a81f785de057b4ebe287b5c5c90e975c925e915ca0388db70aff7d71",
+    "E3": "863e6c6977a7428ceb388501abeaa4fa33228c45d5378c9d3fe2a8d87477d916",
+    "E4": "b629b90587862fdb3b4fbe759291398fa9a4b0bec83bde4489fa0a88e5dffd4f",
+    "E5": "31f293dfc3f0ef230bb033c21395edbbaeceae721f34bac2f548b4cf0d0fbfb2"
+  },
+  "dataSha256": "ddee80f25348e595e2cd145a155ab09a48042fb9ae31b4ff177cca5dfe2f06d2",
+  "buildScriptSha256": "cd7ad0cf7121906e317ac29b4228cdfa59b1043bea7739bbbc40a07ec6eb9870",
+  "negativeControlsRejected": [
+    "wrongtotal",
+    "lowerquality",
+    "pendingstudy",
+    "unsettledstudy"
+  ],
+  "fundedProviderCalls": 0,
+  "BunRuns": 0,
+  "ChromeRuns": 0,
+  "newPaidBenchmarkClaims": false,
+  "proprietaryCodeOrAlgorithmContentIncluded": false,
+  "pdfNotPublishedAsFinal": true
+}

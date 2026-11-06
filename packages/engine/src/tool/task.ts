@@ -57,11 +57,13 @@ const BACKGROUND_STARTED = [
   "The task is working in the background. You will be notified automatically when it finishes.",
   "Do not poll or duplicate delegated work. Use task_manage to answer a status question, steer, stop, or wait for a required result.",
   "Work on non-overlapping tasks, or briefly tell the user what you launched and end your response.",
+  "When no independent work remains, ending this response pauses your model turn while this engine remains running; the background task keeps working and its completion notification resumes you automatically unless the run was stopped. Do not repeat timeout waits just to keep the run alive.",
 ].join("\n")
 const BACKGROUND_STILL_WORKING = [
   "You will be notified once, when it finishes, with every report it wrote.",
   "Continue independent work. Use task_manage for a needed correction or user-requested status; never poll.",
   "Work on non-overlapping tasks, or briefly tell the user what you sent and end your response.",
+  "While this engine remains running, ending this response can pause your model turn without ending the session; a completion notification resumes you unless the run was stopped. Do not repeat timeout waits just to keep it alive.",
 ]
 const BACKGROUND_DELIVERED = [
   "Your message was added to the running background task's conversation. It reads it at its next step and carries on with it.",
@@ -422,7 +424,12 @@ export const TaskTool = Tool.define(
         Effect.gen(function* () {
           if (!(yield* launched(note, parentID))) return []
           const task = yield* sessions.get(note.taskID)
-          return SubagentLifecycle.read(task)?.attempt === note.attempt ? [note] : []
+          const record = SubagentLifecycle.read(task)
+          if (record?.attempt !== note.attempt) return []
+          const launchStopped = record.budgetScopes?.some(
+            (scope) => scope.stopped !== undefined && !(scope.kind === "child" && scope.id === note.taskID),
+          ) ?? false
+          return [{ ...note, launchStopped }]
         }),
       )).flat()
       const first = batch[0]
@@ -467,9 +474,9 @@ export const TaskTool = Tool.define(
               ...(latest.format ? { format: latest.format } : {}),
             }
           : { variant: first.variant }),
-        // A stopped subagent is recorded for the parent's next turn without starting one, so stopping work never makes
-        // the agent carry on alone. A batch with a finished task in it starts one turn for all of them.
-        ...(halted || batch.every((note) => note.state === "cancelled") ? { noReply: true } : {}),
+        // A later user run may have cleared the parent's stop, but an old stopped launch cannot start work again.
+        // The task's own child-only ceiling leaves a healthy parent free to respond; mixed healthy batches still do.
+        ...(halted || batch.every((note) => note.state === "cancelled" || note.launchStopped) ? { noReply: true } : {}),
         parts: batch.map((note) => ({
           type: "text" as const,
           synthetic: true,

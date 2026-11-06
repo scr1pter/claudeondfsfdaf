@@ -1,0 +1,131 @@
+{
+  "format": "evidence-workbench-postlaunch-validation-v1",
+  "phase": "POSTLAUNCH instrument correction",
+  "productionCandidateRevision": "893b9629224dc4249f08c0e18712511437a35a22",
+  "supersededTaskSha256": "0090ff679a4989b34b59ea51c5910794c322dc7805fffadc203e0da083523920",
+  "supersededCommit": "6d0e60da5d69cea4da6b7289e8d577577dafa6ec",
+  "originalPaidAttempt": {
+    "case": "aw3",
+    "arm": "codex",
+    "attempt": 0,
+    "cliExitCode": 0,
+    "providerReceipts": 31,
+    "chargedUsd": 0.7953841,
+    "recordedGateVerdict": "product_failure",
+    "checks": {
+      "passed": 25,
+      "failed": 1,
+      "not_run": 0
+    },
+    "sourceUnchanged": true,
+    "reportSha256": "8bd50385dce41b64c4743a42052213399b0dcd80d9a6db287a963c74dc22506e",
+    "originalReportAndChargesRetainedUnchanged": true
+  },
+  "assessment": {
+    "classification": "instrument_failure",
+    "falseFailure": "browser.import",
+    "reason": "Useful visible validation text used failed and must/nonblank phrasing outside the frozen matcher vocabulary.",
+    "publicContractChanged": false,
+    "inventoryChanged": false
+  },
+  "directBrowserEvidence": {
+    "httpStatus": 400,
+    "apiError": {
+      "code": "invalid_batch",
+      "message": "Source must be a nonblank string."
+    },
+    "visibleStatusTexts": [
+      "Batch import failed: Source must be a nonblank string."
+    ],
+    "inputPreserved": true,
+    "oldMatcherAccepted": false,
+    "sourceUnchanged": true,
+    "artifactSha256": "1a9b08a0113fea1becbc39d204e2441a9177dade7464f61907ab8bb2abbd5635"
+  },
+  "oldMatcherFreeReproduction": {
+    "verdict": "product_failure",
+    "exitCode": 1,
+    "checks": {
+      "passed": 25,
+      "failed": 1,
+      "not_run": 0
+    },
+    "sourceUnchanged": true,
+    "reportSha256": "8bd50385dce41b64c4743a42052213399b0dcd80d9a6db287a963c74dc22506e"
+  },
+  "correctedFreeGate": {
+    "verdict": "passed",
+    "exitCode": 0,
+    "checks": {
+      "passed": 26,
+      "failed": 0,
+      "not_run": 0
+    },
+    "sourceUnchanged": true,
+    "instrumentErrors": 0,
+    "reportSha256": "8e0c2ce897f9c4571116ea4f68f9105901bc599fcb7b549088fb86e53584fdae",
+    "sourceBeforeSha256": "686a1a6aaa857ecf7fd9d5b1d889cf0815adffff9b05e8256cf73a5a1ad5cd32",
+    "sourceAfterSha256": "686a1a6aaa857ecf7fd9d5b1d889cf0815adffff9b05e8256cf73a5a1ad5cd32",
+    "imageArtifactCount": 2,
+    "screenshots": [
+      {
+        "path": "browser-final.png",
+        "width": 1200,
+        "height": 850,
+        "sha256": "bd13065bbf16d6cb62b1dc48e8b893bc9636cd7d7dfed90cb766385c89f6911a"
+      },
+      {
+        "path": "browser-mobile.png",
+        "width": 390,
+        "height": 844,
+        "sha256": "6f4e6c8b4b675f8239783dddeb1b3806101d65180df1a5aa4d112f14b3eeb3c1"
+      }
+    ]
+  },
+  "pureControls": {
+    "pythonPassed": 27,
+    "nodePassed": 9,
+    "failed": 0
+  },
+  "scope": {
+    "applicationEdited": false,
+    "controllerOrApiChanged": false,
+    "investigationProviderCalls": 0,
+    "modelRepairPerformed": false,
+    "sharedDependencyWrites": false,
+    "privateFullDependencyCopy": true,
+    "userBrowserUsed": false,
+    "allRawArtifactsRetainedPrivately": true,
+    "appAssertionsAddedForImages": false,
+    "applicationFocusChangedForImages": false,
+    "viewportRestoredAfterImages": true
+  },
+  "retainedDiagnosticSetupFailure": {
+    "reason": "A manual command used a placeholder app path.",
+    "classification": "instrument_failure",
+    "checksNotRun": 26,
+    "rejectedBeforeBunBuild": true,
+    "reportSha256": "b624974155d40ceb42c578e10d7f3c72c3897856033f913f111580cd16f95a75",
+    "notExperimentalProductEvidence": true
+  },
+  "currentRevisionAdmittedToAnotherPaidCase": false,
+  "limitations": [
+    "The correction followed exposure to one paid app artifact and is explicitly postlaunch.",
+    "The corrected free gate does not retroactively create a preregistered pass under the original frozen instrument.",
+    "One actual unchanged app passed the corrected gate; this does not prove every correct implementation passes all checks."
+  ],
+  "initialCorrectedFreeGate": {
+    "verdict": "passed",
+    "exitCode": 0,
+    "checks": {
+      "passed": 26,
+      "failed": 0,
+      "not_run": 0
+    },
+    "sourceUnchanged": true,
+    "instrumentErrors": 0,
+    "reportSha256": "f42ead88f1bce74cd2c54a77f57cc34b1f971756a246477cb75947d5e664b46a",
+    "sourceBeforeSha256": "686a1a6aaa857ecf7fd9d5b1d889cf0815adffff9b05e8256cf73a5a1ad5cd32",
+    "sourceAfterSha256": "686a1a6aaa857ecf7fd9d5b1d889cf0815adffff9b05e8256cf73a5a1ad5cd32"
+  }
+}

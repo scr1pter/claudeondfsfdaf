@@ -1,0 +1,65 @@
+{
+  "kind": "reviewed-conservative-carry-v1",
+  "phaseID": "heavy-additional-20-carry-v1",
+  "authorizedAdditionalUsd": 20,
+  "originalHistoricalKnownMeasuredUsd": 29.579095,
+  "historicalKnownMeasuredUsd": 31.1626864,
+  "previousRoundKnownMeasuredUsd": 1.5835914,
+  "historicalLatestAdmittedSeq": 1419,
+  "historicalActorMeasuredUsd": {
+    "diagnostics": 0.3693985,
+    "foundry-codex": 10.5428177,
+    "foundry-vector": 17.6761006,
+    "saas-codex": 1.0112827,
+    "saas-vector": 1.5630869
+  },
+  "carriedUnsettled": [
+    {
+      "seq": 1340,
+      "actor": "foundry-codex",
+      "reservedUsd": 5.73,
+      "requestSha256": "bf9701d300414db23526c714e969a8a85537bf60a4231b4268413bb1c3517679",
+      "admissionCanonicalSha256": "9a7e1b150f5990ea1a48821935b45c0e628d737a34c074ba87ea59397425bc91",
+      "receiptCanonicalSha256": null
+    },
+    {
+      "seq": 1419,
+      "actor": "foundry-codex",
+      "reservedUsd": 1.447765,
+      "requestSha256": "9dbc7ef79e01a08c79e2563ecfe23469a6147b46cd4c1f14bc16f9b5dd2f2a3a",
+      "admissionCanonicalSha256": "472a782c36cd9920811e8b53b69a1e579975f4da59ab0b65fc0806e06c2a86ac",
+      "receiptCanonicalSha256": "f65ba4c3898b9277a05f5d8e428f72d76f8576f86dea1761c9acb53b313ff001"
+    }
+  ],
+  "historicalLiabilityUsd": 7.177765,
+  "remainingAdditionalExposureUsd": 16.9686436,
+  "cumulativeUpperExposureLimitUsd": 55.309095,
+  "actorLimitsUsd": {
+    "diagnostics": 0.3693985,
+    "foundry-codex": 34.6892263,
+    "foundry-vector": 37.6761006,
+    "saas-codex": 1.0112827,
+    "saas-vector": 1.5630869
+  },
+  "originalPhasePlanSha256": "b91f3cfdd0738299f44ffa23e9a8850ca5751665a521859cf5c1fc2507ee0d5d",
+  "previousPhaseFiles": {
+    "admissions-v2.jsonl": "327c19d08d430395ae7557e38a71298909a435b978b189ee80d4fa604e853c3e",
+    "receipts.jsonl": "ba042f95d025e78ac3201e7b777e874fc3b979beb49ef7d076ff441e48a452dc",
+    "status.json": "ae7a7fd43a5cba3ce5387aa012340912983c591199d04068d7d4484cd2f60d0a",
+    "phase-anchor-v6.json": "5b8c59d543de11b76b4ece7e5304c9240af6a064d8a5e1371b057a2af4429edd"
+  },
+  "previousPlacementSha256": "da788e90133ff29811e21bb8e0c821b7f2e7e9ccc782bb28b3c62335f31b5dfe",
+  "previousPhaseRowCounts": {
+    "admissions": 79,
+    "receipts": 79
+  },
+  "historicalPricingRates": {
+    "input": 2.0,
+    "read": 0.1,
+    "write30m": 2.5,
+    "write12h": 5.0,
+    "output": 10.0
+  },
+  "noLiabilityReleased": true,
+  "allHistoricalAdmissionsSettled": false
+}

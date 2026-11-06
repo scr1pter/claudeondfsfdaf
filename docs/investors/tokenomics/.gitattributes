@@ -1,0 +1,5 @@
+vector-tokenomics-brief.pdf -text
+
+# Keep the final authoring inputs identical to the hashes recorded in pdf-qa.json.
+build_brief.py -text whitespace=cr-at-eol
+report-data.json -text

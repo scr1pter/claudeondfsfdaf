@@ -1,0 +1,147 @@
+{
+  "version": "delivery-outbox-qualification-v1",
+  "status": "runtime-qualified-final-manifest-and-committed-byte-verification-govern-admission",
+  "candidateFrozenRef": "a35c03d6a9bb16f16ec0187ad69c6c6420d10f19",
+  "candidateFrozenBeforeFinalQualification": true,
+  "candidateSourceOrPaidOutputsInspected": false,
+  "runtimeProjectionSha256": "fef0795777b1f0872e6d1fdf6204a4b47b6cca0e670d43be602ebfc1f931a780",
+  "privateReferenceSourceSha256": "8d5b30a010beefa5b87b594240014420ccdac3956d88508ab55ae2fae1300e34",
+  "reviewedRuntimeEvidenceSha256": "321c40a864657777c65e04c9fe906b66f8d2d0f79b9f1339b1e161c641f06d62",
+  "evidenceDirectoryLabel": "outbox-qualification-20261102T024945Z",
+  "modelOrCloudCalls": 0,
+  "runtimeVersions": {
+    "bun": "1.3.14",
+    "node": "24.22.0",
+    "python": "3.12.14",
+    "chromeMajor": 156,
+    "playwright": "1.59.1",
+    "typescript": "5.8.2"
+  },
+  "inventory": {
+    "apiGroups": 18,
+    "browserChecks": 8,
+    "total": 26
+  },
+  "seed": {
+    "typecheck": "passed",
+    "build": "passed",
+    "publicSmokeTests": 1,
+    "publicSmokeAssertions": 7,
+    "gatePassed": 4,
+    "gateExpectedFailed": 22,
+    "gateNotRun": 0,
+    "verdict": "product_failure",
+    "sourceUnchanged": true,
+    "instrumentUnchanged": true
+  },
+  "reference": {
+    "typecheck": "passed",
+    "build": "passed",
+    "publicSmokeTests": 1,
+    "publicSmokeAssertions": 7,
+    "gatePassed": 26,
+    "gateFailed": 0,
+    "gateNotRun": 0,
+    "verdict": "passed",
+    "sourceUnchanged": true,
+    "instrumentUnchanged": true
+  },
+  "protectedProvider": {
+    "passed": 10,
+    "failed": 0,
+    "sourceUnchanged": true
+  },
+  "pureControls": {
+    "executedPassed": 63,
+    "failed": 0,
+    "allAuthoredControlsRun": true,
+    "gitResponses": "mocked in pure checker controls; actual final filter/index/HEAD byte comparisons are recorded externally after final freeze and coordinated staging/commit"
+  },
+  "browserTransportControls": {
+    "nodeTestsPassed": 10,
+    "failed": 0,
+    "seedAndReferenceSyntax": "passed",
+    "qualifiedProfiles": [
+      "old-focus",
+      "actual-envelope"
+    ],
+    "actualEnvelopeRawProfileGate": {
+      "passed": 26,
+      "failed": 0,
+      "notRun": 0,
+      "processExitCode": 0,
+      "sourceUnchanged": true,
+      "instrumentUnchanged": true,
+      "instrumentError": null,
+      "rawProfileMatchesPlannedMap": true
+    }
+  },
+  "semanticMutants": [
+    {
+      "fault": "retry-key-rotation",
+      "passed": 23,
+      "failed": 3,
+      "notRun": 0,
+      "verdict": "product_failure",
+      "sourceUnchanged": true,
+      "instrumentUnchanged": true
+    },
+    {
+      "fault": "false-cancel-after-accept",
+      "passed": 24,
+      "failed": 2,
+      "notRun": 0,
+      "verdict": "product_failure",
+      "sourceUnchanged": true,
+      "instrumentUnchanged": true
+    },
+    {
+      "fault": "forget-queued-on-restart",
+      "passed": 24,
+      "failed": 2,
+      "notRun": 0,
+      "verdict": "product_failure",
+      "sourceUnchanged": true,
+      "instrumentUnchanged": true
+    },
+    {
+      "fault": "false-delivered-after-failure",
+      "passed": 20,
+      "failed": 6,
+      "notRun": 0,
+      "verdict": "product_failure",
+      "sourceUnchanged": true,
+      "instrumentUnchanged": true
+    },
+    {
+      "fault": "under-count-replays",
+      "passed": 21,
+      "failed": 5,
+      "notRun": 0,
+      "verdict": "product_failure",
+      "sourceUnchanged": true,
+      "instrumentUnchanged": true
+    }
+  ],
+  "cleanup": {
+    "verifiedFinalBrowserDirectoriesRemoved": 64,
+    "supersededOwnedLeftoversRemoved": 4,
+    "port4123FreeAtSlotRelease": true,
+    "unrelatedPathsOrProcessesTouched": 0
+  },
+  "finalFreeze": "FREEZE-v1.json is authoritative once independently reviewed and created; paid admission additionally requires coordinated commit and verified physical/Git bytes.",
+  "referencePublication": "Publish sanitized exact source outside the frozen task root after all paid study arms finish.",
+  "actualEnvelopeProfileEvidenceSha256": "edefbd512832f46970ec319ef85f1eeccee694b0b3aea6cb4ceaa392a9ca038f",
+  "actualEnvelopeProfileReportSha256": "4af3c633ee1d195ae7cc9eabd847c421fc5fcea1ebbd39013826eeaefa5cfaec",
+  "browserHelperRawFileSha256": {
+    "client.cjs": "d1a98eaa5bb9931787313c518b53642b2de2412c3ca61d02ac07126c43efef4a",
+    "policy.cjs": "57a7acd1b1974d508e8967c1d9cc949b002bf1677aa455dec2279a202f99418e",
+    "policy.test.cjs": "9fed02c44067c603573dc070907bd051638d902c3960914149505dc151faa5a4",
+    "proxy.cjs": "293c56d7d75a97dab3b59223bfc9bf606691a459ba664c70ce1de566324834a9",
+    "proxy.test.cjs": "9b4a237caf4dad4afdd7132bbc48ba5f6a45df6db38432a4953007f4343586da",
+    "README.md": "b1fb9481b97c209983951110c9e5e31e5a57b539f2ec7869271a9c0e27a8ea27",
+    "server.cjs": "fde108c85e85b7a0ddb39d54b14e90b52d2b8db4f34cadfe6da0d132d6660f3b",
+    "smoke.cjs": "2226b54783ff1e953a20995eb9bab181ddf37b2b4d6ba5d99c5866cf29e1741c"
+  },
+  "browserHelperVariantProvenance": "Old focus and actual envelope differ in raw README.md, server.cjs and smoke.cjs line endings only; every helper file is exactly equal after CRLF-to-LF normalization. Both exact raw profiles received a complete 26/26 reference gate."
+}

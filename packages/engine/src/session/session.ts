@@ -448,7 +448,12 @@ export const costAt = (cost: Provider.Model["cost"] | undefined, contextTokens: 
   // experimentalOver200K is models.dev's 200K stand-in for the exact tiers, so it applies only without them.
   (cost?.experimentalOver200K && !cost.tiers?.length && contextTokens > 200_000 ? cost.experimentalOver200K : cost)
 
-export const getUsage = (input: { model: Provider.Model; usage: Usage; metadata?: ProviderMetadata }) => {
+export const getUsage = (input: {
+  model: Provider.Model
+  usage: Usage
+  metadata?: ProviderMetadata
+  incomplete?: boolean
+}) => {
   const safe = (value: number) => {
     if (!Number.isFinite(value)) return 0
     return Math.max(0, value)
@@ -456,29 +461,37 @@ export const getUsage = (input: { model: Provider.Model; usage: Usage; metadata?
   const inputTokens = safe(input.usage.inputTokens ?? 0)
   const outputTokens = safe(input.usage.outputTokens ?? 0)
   const reasoningTokens = safe(input.usage.reasoningTokens ?? 0)
-
   const cacheReadInputTokens = safe(input.usage.cacheReadInputTokens ?? 0)
-  const cacheWriteInputTokens = safe(
-    Number(
-      input.usage.cacheWriteInputTokens ??
-        input.metadata?.["anthropic"]?.["cacheCreationInputTokens"] ??
-        // google-vertex-anthropic returns metadata under "vertex" key
-        // (AnthropicMessagesLanguageModel custom provider key from 'vertex.anthropic.messages')
-        input.metadata?.["vertex"]?.["cacheCreationInputTokens"] ??
-        // @ts-expect-error
-        input.metadata?.["bedrock"]?.["usage"]?.["cacheWriteInputTokens"] ??
-        // @ts-expect-error
-        input.metadata?.["venice"]?.["usage"]?.["cacheCreationInputTokens"] ??
-        0,
-    ),
-  )
+  const reportedCacheWrite =
+    input.usage.cacheWriteInputTokens ??
+    input.metadata?.["anthropic"]?.["cacheCreationInputTokens"] ??
+    // google-vertex-anthropic returns metadata under "vertex" key
+    // (AnthropicMessagesLanguageModel custom provider key from 'vertex.anthropic.messages')
+    input.metadata?.["vertex"]?.["cacheCreationInputTokens"] ??
+    // @ts-expect-error
+    input.metadata?.["bedrock"]?.["usage"]?.["cacheWriteInputTokens"] ??
+    // @ts-expect-error
+    input.metadata?.["venice"]?.["usage"]?.["cacheCreationInputTokens"] ??
+    0
+  const cacheWriteInputTokens = safe(Number(reportedCacheWrite))
+  const valid = (value: unknown) => typeof value === "number" && Number.isFinite(value) && value >= 0
+  const complete =
+    !input.incomplete &&
+    [input.usage.inputTokens, input.usage.outputTokens].every(valid) &&
+    [input.usage.reasoningTokens, input.usage.cacheReadInputTokens, input.usage.totalTokens].every(
+      (value) => value === undefined || valid(value),
+    ) &&
+    valid(reportedCacheWrite) &&
+    cacheReadInputTokens + cacheWriteInputTokens <= inputTokens &&
+    reasoningTokens <= outputTokens
 
   // AI SDK v6 normalized inputTokens to include cached tokens across all providers
   // (including Anthropic/Bedrock which previously excluded them). Always subtract cache
   // tokens to get the non-cached input count for separate cost calculation.
   const adjustedInputTokens = safe(inputTokens - cacheReadInputTokens - cacheWriteInputTokens)
 
-  const total = input.usage.totalTokens
+  // Omit malformed reported totals so known usage can still pass durable receipt validation.
+  const total = valid(input.usage.totalTokens) ? input.usage.totalTokens : undefined
 
   const tokens = {
     total,
@@ -493,24 +506,22 @@ export const getUsage = (input: { model: Provider.Model; usage: Usage; metadata?
 
   const costInfo = costAt(input.model.cost, inputTokens)
   const totalNanoAiu = input.metadata?.["copilot"]?.["totalNanoAiu"]
-  // OpenRouter reports what it billed for each step. A model the catalog lists no price for, as an OpenRouter model
-  // added by hand often is, takes that amount instead of reading as unpriced.
+  // A valid provider-reported OpenRouter cost takes precedence over a catalog estimate, including a zero charge.
   // @ts-expect-error provider metadata is untyped JSON
   const reported: unknown = input.metadata?.["openrouter"]?.["usage"]?.["cost"]
-  const reportedCost =
-    input.model.cost?.unpriced === true && typeof reported === "number" && Number.isFinite(reported) && reported >= 0
-      ? reported
-      : undefined
+  const reportedCost = typeof reported === "number" && Number.isFinite(reported) && reported >= 0 ? reported : undefined
   const billed =
     (typeof totalNanoAiu === "number" && Number.isFinite(totalNanoAiu) && totalNanoAiu >= 0) ||
     reportedCost !== undefined
   return {
-    // The model lists no price and the provider reported no charge, so the cost below is 0 for want of a price.
-    // A step that used no tokens owes nothing either way.
+    // A measured bill is known even when the provider omitted token counters.
+    billed,
+    // Missing counters are not measured zero usage. Keep known subtotals while flagging incomplete usage or rates.
     unpriced:
-      !billed &&
-      input.model.cost?.unpriced === true &&
-      tokens.input + tokens.output + tokens.reasoning + tokens.cache.read + tokens.cache.write > 0,
+      !complete ||
+      (!billed &&
+        input.model.cost?.unpriced === true &&
+        tokens.input + tokens.output + tokens.reasoning + tokens.cache.read + tokens.cache.write > 0),
     cost:
       reportedCost !== undefined
         ? reportedCost
@@ -1391,18 +1402,9 @@ export function summarizeUsage(
     lifetimeTokens,
     lifetimeCost: activity.reduce((total, day) => total + day.cost, 0),
     ...(unpricedResponses ? { unpricedResponses } : {}),
-    inputTokens: tokens.reduce(
-      (total, tokens) => total + Math.max(0, Math.round(tokens.input)),
-      0,
-    ),
-    outputTokens: tokens.reduce(
-      (total, tokens) => total + Math.max(0, Math.round(tokens.output)),
-      0,
-    ),
-    reasoningTokens: tokens.reduce(
-      (total, tokens) => total + Math.max(0, Math.round(tokens.reasoning)),
-      0,
-    ),
+    inputTokens: tokens.reduce((total, tokens) => total + Math.max(0, Math.round(tokens.input)), 0),
+    outputTokens: tokens.reduce((total, tokens) => total + Math.max(0, Math.round(tokens.output)), 0),
+    reasoningTokens: tokens.reduce((total, tokens) => total + Math.max(0, Math.round(tokens.reasoning)), 0),
     cachedTokens: tokens.reduce(
       (total, tokens) => total + Math.max(0, Math.round(tokens.cache.read + tokens.cache.write)),
       0,

@@ -38,6 +38,33 @@ test("--research answers the run's read approval, and nothing else without --aut
 })
 
 describe("vector run --research", () => {
+  for (const format of ["docx", "pdf"] as const)
+    cliIt.concurrent(
+      `writes a binary ${format} research report chosen by the file extension`,
+      ({ home, llm, vector }) =>
+        Effect.gen(function* () {
+          const file = path.join(home, "out", `research.${format}`)
+          yield* llm.tool("research_plan", PLAN)
+          yield* llm.tool("research_report", {
+            title: "Heat pump evidence review",
+            answer: "The brain has no evidence for this question, so no measured result could be checked.",
+            sections: [],
+            open_questions: ["What do field studies measure?"],
+          })
+          yield* llm.text("The report identifies the missing evidence.")
+          const result = yield* vector.run("Research heat pump savings", {
+            extraArgs: ["--research", "--depth", "focused", "--scope", "brain", "--search", "none", "--report", file],
+          })
+          vector.expectExit(result, 0)
+          const bytes = yield* Effect.promise(() => Bun.file(file).arrayBuffer())
+          expect(new TextDecoder().decode(new Uint8Array(bytes).slice(0, format === "docx" ? 2 : 5))).toBe(
+            format === "docx" ? "PK" : "%PDF-",
+          )
+          expect(result.stderr).toContain("Report written to")
+        }),
+      90_000,
+    )
+
   cliIt.concurrent(
     "reads the pages the message names, streams a researcher's steps and writes the report",
     ({ home, llm, vector }) =>

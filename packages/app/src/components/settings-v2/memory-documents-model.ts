@@ -239,8 +239,12 @@ export function warningLabel(warning: DocumentWarning, document?: Pick<MemoryDoc
   if (warning === "truncated") return "Vector read the first part only; the rest was past its limits."
   if (warning === "scanned")
     return document?.unread.length
-      ? `Scanned pages (${pageList(document.unread)}) are pictures of text, which Vector does not read.`
-      : "Some pages are pictures of text, which Vector does not read."
+      ? `Scanned pages (${pageList(document.unread)}) have no readable text. Local OCR may be unavailable or could not recognize them.`
+      : "Some scanned pages have no readable text. Local OCR may be unavailable or could not recognize them."
+  if (warning === "ocr")
+    return "Text was recognized locally from scanned pages. Check important numbers and quotations against the original."
+  if (warning === "ocr-incomplete")
+    return "Local OCR could not read every scanned page. Check the unread pages and OCR setup before relying on full coverage."
   if (warning === "encrypted") return "Parts of it are password protected and were not read."
   if (warning === "macros-ignored") return "Its macros were ignored; they never run."
   if (warning === "external-links") return "Links to outside files were not followed."
@@ -495,10 +499,7 @@ export function versionDiffLabel(diff: NonNullable<MemoryDocumentDetail["diff"]>
     ...(total(diff.removed) ? [`${total(diff.removed).toLocaleString()} removed`] : []),
     ...(total(diff.unchanged) ? [`${total(diff.unchanged).toLocaleString()} unchanged`] : []),
   ]
-  const kept = [
-    ...(diff.edits ? [count(diff.edits, "edit")] : []),
-    ...(diff.pins ? [count(diff.pins, "pin")] : []),
-  ]
+  const kept = [...(diff.edits ? [count(diff.edits, "edit")] : []), ...(diff.pins ? [count(diff.pins, "pin")] : [])]
   const changes = parts.length ? parts.join(", ") : "nothing Vector learned changed"
   const yours = kept.length ? `; your ${kept.join(" and ")} ${diff.edits + diff.pins === 1 ? "is" : "are"} kept` : ""
   return `Version ${diff.version}: ${changes}${yours}.`
@@ -556,7 +557,10 @@ function distilledLine(detail: Record<string, unknown>) {
   const model = typeof detail.model === "string" ? detail.model : "a model"
   const kept = typeof detail.kept === "number" ? detail.kept : 0
   const used = detail.tokens && typeof detail.tokens === "object" ? (detail.tokens as Record<string, unknown>) : {}
-  const spent = [used.input, used.output].reduce<number>((sum, value) => sum + (typeof value === "number" ? value : 0), 0)
+  const spent = [used.input, used.output].reduce<number>(
+    (sum, value) => sum + (typeof value === "number" ? value : 0),
+    0,
+  )
   const cost = typeof detail.cost === "number" && detail.costKind === "priced" ? `, ${usd(detail.cost)}` : ""
   return `You asked ${model} to find more: ${kept === 0 ? "no suggestions" : count(kept, "suggestion")} kept (${spent.toLocaleString("en-US")} tokens${cost})`
 }
@@ -638,7 +642,7 @@ export function highlight(passage: Pick<MemoryDocumentPage["passages"][number], 
 
 /** What a page of the Pages view says above its text. */
 export function pageHeading(page: Pick<MemoryDocumentPage, "page" | "pages" | "unread">) {
-  if (page.unread) return `Page ${page.page} of ${page.pages}: a picture of text, which Vector does not read.`
+  if (page.unread) return `Page ${page.page} of ${page.pages}: no readable text was extracted from this scanned page.`
   return `Page ${page.page} of ${page.pages}`
 }
 
@@ -792,9 +796,11 @@ export function anchorStatusLabel(status: MemoryAnchor["status"]) {
 export function anchorLine(anchor: MemoryAnchor) {
   const where = `${anchor.path}${anchor.line ? `:${anchor.line}` : ""}`
   const value = anchor.value ? ` (${anchor.value.raw})` : ""
-  return [`${where}${anchor.symbol ? ` ${anchor.symbol}` : ""}`, `${anchorMethodLabel(anchor.method)}${value}`, anchorStatusLabel(anchor.status)].join(
-    " · ",
-  )
+  return [
+    `${where}${anchor.symbol ? ` ${anchor.symbol}` : ""}`,
+    `${anchorMethodLabel(anchor.method)}${value}`,
+    anchorStatusLabel(anchor.status),
+  ].join(" · ")
 }
 
 /** The words of a record that named the code, marked within its text. */
@@ -810,7 +816,10 @@ export function evidence(text: string, symbol: string | undefined) {
 }
 
 /** A document's links by record, in the order its records are listed; a link to a passage stands on its own. */
-export function codeLinks(anchors: readonly MemoryAnchor[], records: readonly Pick<MemoryRecord, "id" | "kind" | "card">[]) {
+export function codeLinks(
+  anchors: readonly MemoryAnchor[],
+  records: readonly Pick<MemoryRecord, "id" | "kind" | "card">[],
+) {
   const known = new Map(records.map((record) => [record.id, record]))
   const owners = [...new Set(anchors.map((anchor) => anchor.owner))]
   return owners
@@ -849,13 +858,18 @@ const CONFLICTS: Readonly<Record<string, string>> = {
   endpoint: "They give the same endpoint another method or status",
 }
 
-const DISMISS: ReviewAction = { action: "dismiss", label: "Dismiss", done: "Dismissed. It stays dismissed while both sides say the same." }
+const DISMISS: ReviewAction = {
+  action: "dismiss",
+  label: "Dismiss",
+  done: "Dismissed. It stays dismissed while both sides say the same.",
+}
 
 /** Each item that needs a look, worded for the page, with the decisions it takes. Vector never settles one itself. */
 export function reviewRows(items: readonly MemoryReviewItem[]): ReviewRow[] {
   return items.map((item) => {
     const detail = item.detail
-    const word = (value: unknown) => (typeof value === "string" ? value : typeof value === "number" ? String(value) : "")
+    const word = (value: unknown) =>
+      typeof value === "string" ? value : typeof value === "number" ? String(value) : ""
     if (item.kind === "drift") {
       const where = `${word(detail.path)}${detail.line ? `:${word(detail.line)}` : ""}`
       const text =
@@ -895,8 +909,18 @@ export function reviewRows(items: readonly MemoryReviewItem[]): ReviewRow[] {
         title: `${a.title} and ${b.title} disagree`,
         text: `${CONFLICTS[word(detail.type)] ?? "They disagree"}: “${word(said.a) || a.text}” against “${word(said.b) || b.text}”.${prefer ? ` Vector would go by ${prefer === a.id ? a.title : b.title}, but it is your call.` : ""}`,
         actions: [
-          { action: "keep", winner: a.id, label: `Keep ${a.title}`, done: `Kept ${a.title}. The other side is put away; you can restore it.` },
-          { action: "keep", winner: b.id, label: `Keep ${b.title}`, done: `Kept ${b.title}. The other side is put away; you can restore it.` },
+          {
+            action: "keep",
+            winner: a.id,
+            label: `Keep ${a.title}`,
+            done: `Kept ${a.title}. The other side is put away; you can restore it.`,
+          },
+          {
+            action: "keep",
+            winner: b.id,
+            label: `Keep ${b.title}`,
+            done: `Kept ${b.title}. The other side is put away; you can restore it.`,
+          },
           DISMISS,
         ],
       }
@@ -986,7 +1010,9 @@ export function embeddedLabel(status: Pick<MemoryModelStatus, "state" | "embedde
   const share = Math.min(100, Math.floor((embedded.done / embedded.total) * 100))
   const counted = `${embedded.done.toLocaleString("en-US")} of ${embedded.total.toLocaleString("en-US")} passages and records in this repository searchable by meaning (${share}%)`
   if (embedded.done >= embedded.total) return counted
-  return status.paused ? `${counted}. Paused: the rest waits until you resume.` : `${counted}. The rest is embedded in the background.`
+  return status.paused
+    ? `${counted}. Paused: the rest waits until you resume.`
+    : `${counted}. The rest is embedded in the background.`
 }
 
 /** How the model's last load was checked on this computer. */
@@ -1044,12 +1070,11 @@ export function modelPolling(status: Pick<MemoryModelStatus, "state" | "embedded
 }
 
 /** The one-time offer on the Documents tab: shown once there are documents and no model, until the user answers. */
-export function offerModel(
-  list: Pick<MemoryDocumentList, "documents" | "model"> | undefined,
-  dismissed: boolean,
-) {
+export function offerModel(list: Pick<MemoryDocumentList, "documents" | "model"> | undefined, dismissed: boolean) {
   if (!list || dismissed || list.documents.length === 0) return undefined
   if (list.model?.state !== "absent" || list.model.downloads === false) return undefined
   const option = defaultModel(list.model)
-  return option ? `Search these documents by meaning too: a one-time ${megabytes(option.bytes)} download, then it runs on this computer.` : undefined
+  return option
+    ? `Search these documents by meaning too: a one-time ${megabytes(option.bytes)} download, then it runs on this computer.`
+    : undefined
 }

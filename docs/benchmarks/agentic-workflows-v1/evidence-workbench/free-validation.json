@@ -1,0 +1,76 @@
+{
+  "format": "evidence-workbench-free-validation-v1",
+  "productionCandidateRevision": "893b9629224dc4249f08c0e18712511437a35a22",
+  "candidateFrozenBeforeFinalValidation": true,
+  "paidHoldoutCalls": 0,
+  "admittedToPaidStudyAtFreeze": false,
+  "pureControls": {
+    "pythonPassed": 27,
+    "nodePassed": 7,
+    "failed": 0
+  },
+  "seedChecks": {
+    "typecheck": "passed",
+    "publicSmokePassed": 2,
+    "publicSmokeFailed": 0,
+    "build": "passed",
+    "dependencies": "private full copy of existing pinned dependencies",
+    "dependencyInstallPerformed": false,
+    "sharedDependencyJunctionUsed": false
+  },
+  "negativeGate": {
+    "attempt": "02",
+    "verdict": "product_failure",
+    "exitCode": 1,
+    "passed": 3,
+    "failed": 23,
+    "notRun": 0,
+    "sourceUnchanged": true,
+    "instrumentErrors": 0,
+    "reportSha256": "4f68810938c82c635505596f5b62aab0627667a2e45d19ad4bce05171ea32db6",
+    "sourceBeforeSha256": "500379d88e25577764c7f5e8cf91e0ad75e0dd276f841c09982cf591e0b9fbbe",
+    "sourceAfterSha256": "500379d88e25577764c7f5e8cf91e0ad75e0dd276f841c09982cf591e0b9fbbe",
+    "rawArtifactsRetainedPrivately": true
+  },
+  "inventory": {
+    "apiGroups": 18,
+    "browserChecks": 8,
+    "totalChecks": 26
+  },
+  "browserFence": {
+    "proxySha256": "eaf075f2ddd585d188fff417a4478d8d0d25b9afbca5939b7318fbb9d15e163b",
+    "policySha256": "8a9f0a973d51c8951272912ef6dc4441188c7603b6005b39eb4243ec5cc7404f",
+    "strictHttpLoopbackProxy": true,
+    "routeFenceAlsoEnabled": true,
+    "freshOwnedProfile": true,
+    "nativeOsPathVariablesOnly": true,
+    "serviceWorkersDownloadsAndWebSocketsBlocked": true
+  },
+  "portableTaskLoader": "passed",
+  "postGateCorrection": "Removed redundant seed-relative TASK.md protectedFiles entry; public prompt remains explicitly protected by the evaluator and runner. No acceptance-check or effective-protection change; covered by two pure controls. No runtime rerun after this metadata correction. The copied lock working-tree CRLF newlines were normalized to its already-published LF Git bytes, with no dependency content/version change and no runtime rerun. A later independent pre-paid review corrected strict single-status browser reads to match all visible status regions; pure positive/negative controls passed, with no Bun/browser rerun during the separate paid pair.",
+  "retainedInstrumentHistory": [
+    {
+      "attempt": "01",
+      "verdict": "instrument_failure",
+      "reason": "common proxy uncaught Socket ECONNRESET before browser checks",
+      "sourceUnchanged": true,
+      "rawArtifactsRetainedPrivately": true,
+      "relabelledAsProductFailure": false
+    }
+  ],
+  "prelaunchCorrections": [
+    "Await legacy browser import completion before searching.",
+    "Await restarted-search response and first-page content rather than preexisting row count.",
+    "Classify malformed API response objects as product failures.",
+    "Classify server response-body resets/timeouts as product unavailability.",
+    "Reject empty ranges inside multibyte scalars and excerpts cutting original tokens.",
+    "Initial whole-directory dependency junction allowed transient .vite-temp metadata writes; no package content changed. Removed unnecessary Vite config and used a private full dependency copy for the final gate.",
+    "Freeze metadata uses explicit LF newlines so Git normalization cannot alter frozen task bytes; CLI freeze/verify control passed.",
+    "Match batch outcomes and validation errors across all visible status regions, rather than requiring exactly one status region in the entire page."
+  ],
+  "limitations": [
+    "No full positive v2 reference implementation was built.",
+    "Pure positive controls and an unchanged-v1 negative gate do not establish that every correct v2 implementation passes all acceptance checks."
+  ],
+  "freezeHistoryFile": "FREEZE_HISTORY.json"
+}

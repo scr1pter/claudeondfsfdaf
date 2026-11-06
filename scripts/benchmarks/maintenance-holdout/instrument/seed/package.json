@@ -1,0 +1,10 @@
+{
+  "name": "ledgerdesk-legacy-seed",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Working v1 service supplied for the LedgerDesk maintenance holdout",
+  "scripts": {
+    "start": "node app.mjs"
+  }
+}

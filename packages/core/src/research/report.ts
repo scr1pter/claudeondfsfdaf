@@ -2,6 +2,7 @@ export * as ResearchReport from "./report"
 
 import type { Research } from "@vectordevai/schema/research"
 import { ResearchConfidence } from "./confidence"
+import { ResearchClaim } from "./claim"
 import { ResearchSignals } from "./signals"
 
 // The report research_report writes, checked and rendered without a model. The checks are deterministic: every [N#]
@@ -108,6 +109,10 @@ export function render(input: Research.ReportInput, context: Context): Rendered 
   const used = cited(texts(input).join("\n")).filter((id) => notes.has(id))
   const footnoted = used.filter((id) => !out(id))
   const removed = used.filter(out)
+  const quantitative = ResearchClaim.comparisons(
+    footnoted.map((id) => notes.get(id)!),
+    context.sources,
+  )
   const sections = input.sections.map((section) => ({
     heading: section.heading,
     confidence: ResearchConfidence.section(
@@ -125,7 +130,7 @@ export function render(input: Research.ReportInput, context: Context): Rendered 
       return [
         `## ${inert(oneLine(section.heading))}`,
         `Confidence: ${ResearchConfidence.LABEL[confidence.level]} (Vector's estimate)${confidence.disagree ? ` · ${ResearchConfidence.DISAGREE}` : ""}`,
-        ...(confidence.disagree ? [disagreement(section.body, notes)] : []),
+        ...(confidence.disagree ? [disagreement(section.body, new Map([...notes].filter(([id]) => !out(id))))] : []),
         chips(section.body, notes, sources, out),
       ]
     }),
@@ -133,6 +138,15 @@ export function render(input: Research.ReportInput, context: Context): Rendered 
       ? [
           "## Where sources disagree",
           input.disagreements.map((line) => `- ${chips(line, notes, sources, out)}`).join("\n"),
+        ]
+      : []),
+    ...(quantitative.length
+      ? [
+          "## Quantitative comparisons",
+          "Comparisons use only the scope explicitly recorded from the quoted sources. A difference is a review flag, not a verdict on which source is correct. Omitted scope and unknown source relationships remain unverified. Values within 2% are labelled agreement; that tolerance does not establish statistical equivalence.",
+          ...quantitative.map((item) =>
+            chips(`- ${ResearchClaim.summary(item)} [${item.left}, ${item.right}]`, notes, sources, out),
+          ),
         ]
       : []),
     ...(input.open_questions.length > 0
@@ -210,6 +224,7 @@ function citedNote(note: Research.Note, sources: ReadonlyMap<string, Research.So
     note,
     site: (original ?? source)?.site ?? note.source,
     primary: !!(original ?? source)?.signals?.primary,
+    ...(source ? { lineage: ResearchClaim.lineage(source, [...sources.values()]) } : {}),
   }
 }
 

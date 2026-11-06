@@ -10,9 +10,10 @@ import { useServer } from "@/context/server"
 import { sessionHref } from "@/utils/session-route"
 import { LocalMemoryPanel } from "@/features/memory/local-memory-panel"
 import { Markdown } from "@vectordevai/session-ui/markdown"
-import { CITE_PREFIX, HELD, reportMarkdown, reportPath, size, statusLabel } from "@/features/research/research-model"
+import { CITE_PREFIX, HELD, reportMarkdown, size, statusLabel } from "@/features/research/research-model"
 import { SettingsMemoryDocuments } from "./memory-documents"
 import { SettingsMemorySearchModel } from "./memory-search-model"
+import { downloadResearch, type ReportFormat } from "@/features/research/report-download"
 import {
   ABOUT,
   ERASE_SESSION,
@@ -778,28 +779,13 @@ function ResearchRuns(props: { client: () => VectorClient | undefined; repositor
     setNotice(result.error ? errorMessage(result.error) : done)
     if (!result.error) setVersion((value) => value + 1)
   }
-  const download = async (runID: string, question: string, created: number, format: "markdown" | "json") => {
+  const download = async (runID: string, question: string, created: number, format: ReportFormat) => {
     const current = props.client()
     if (!current) return
-    const result = await current.memory.research.export({ runID, format }).catch(() => undefined)
-    const body = result?.data as unknown
-    if (body === undefined || body === null) {
-      setNotice("Vector could not export this research.")
-      return
-    }
-    const text = typeof body === "string" ? body : JSON.stringify(body, null, 2)
-    const name = reportPath(question, created)
-      .split("/")
-      .at(-1)!
-      .replace(/\.md$/, format === "json" ? ".json" : ".md")
-    const url = URL.createObjectURL(
-      new Blob([text], { type: format === "json" ? "application/json" : "text/markdown" }),
+    await downloadResearch(current, { runID, question, created, format }).then(
+      () => setNotice("Exported the research."),
+      (cause: unknown) => setNotice(errorMessage(cause)),
     )
-    const link = document.createElement("a")
-    link.href = url
-    link.download = name
-    link.click()
-    URL.revokeObjectURL(url)
   }
 
   return (
@@ -884,7 +870,7 @@ function ResearchRuns(props: { client: () => VectorClient | undefined; repositor
                           variant="ghost"
                           onClick={() => download(item.run.id, item.run.question, item.run.created_at, "markdown")}
                         >
-                          Export
+                          Export Markdown
                         </ButtonV2>
                         <ButtonV2
                           size="small"
@@ -892,6 +878,20 @@ function ResearchRuns(props: { client: () => VectorClient | undefined; repositor
                           onClick={() => download(item.run.id, item.run.question, item.run.created_at, "json")}
                         >
                           Export JSON
+                        </ButtonV2>
+                        <ButtonV2
+                          size="small"
+                          variant="ghost"
+                          onClick={() => download(item.run.id, item.run.question, item.run.created_at, "docx")}
+                        >
+                          Export Word
+                        </ButtonV2>
+                        <ButtonV2
+                          size="small"
+                          variant="ghost"
+                          onClick={() => download(item.run.id, item.run.question, item.run.created_at, "pdf")}
+                        >
+                          Export PDF
                         </ButtonV2>
                         <ButtonV2 size="small" variant="ghost" onClick={() => setConfirming(item.run.id)}>
                           Forget

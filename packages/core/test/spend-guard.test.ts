@@ -184,20 +184,20 @@ describe("SpendGuard.afterStep", () => {
   test("stops an unpriced model after 40 steps while spending nothing", () => {
     const result = play(
       { usd: 5 },
-      Array.from({ length: 40 }, () => step({ costKind: "unknown", costUsd: 3 })),
+      Array.from({ length: 40 }, () => step({ costKind: "unknown" })),
     )
     expect(result.verdicts.slice(0, 39).every((verdict) => verdict.state === "ok")).toBe(true)
     expect(result.verdicts[39]).toEqual({
       state: "stopped",
       reason: "unpriced",
       message:
-        "Stopped after 40 unpriced steps: Vector has no per-token price for this model, so it cannot count what they cost against your $5.00 cap. Without a dollar cap, step and loop limits still apply.",
+        "Stopped after 40 unpriced or incomplete steps: Vector cannot fully measure their cost against your $5.00 cap. Without a dollar cap, step and loop limits still apply.",
     })
     expect(result.run.spentUsd).toBe(0)
   })
 
   test("never stops a local model on dollars, however many steps it takes, but does on steps", () => {
-    const local = Array.from({ length: 100 }, () => step({ costKind: "local", costUsd: 3 }))
+    const local = Array.from({ length: 100 }, () => step({ costKind: "local", costUsd: 3, unpriced: true }))
     const capped = play({ usd: 1 }, local)
     expect(capped.verdicts.every((verdict) => verdict.state === "ok")).toBe(true)
     expect(capped.run).toMatchObject({ steps: 100, spentUsd: 0, unpricedSteps: 0, costKind: "local" })
@@ -218,7 +218,9 @@ describe("SpendGuard.afterStep", () => {
   })
 
   test("never stops plan or free models on dollars, but does on steps", () => {
-    const kinds = Array.from({ length: 60 }, (_, index) => step({ costKind: index % 2 ? "plan" : "free", costUsd: 10 }))
+    const kinds = Array.from({ length: 60 }, (_, index) =>
+      step({ costKind: index % 2 ? "plan" : "free", costUsd: 10, unpriced: true }),
+    )
     const result = play({ usd: 1, steps: 60 }, kinds)
     expect(result.verdicts.slice(0, 59).every((verdict) => verdict.state === "ok")).toBe(true)
     expect(result.verdicts[59]).toEqual({
@@ -235,9 +237,16 @@ describe("SpendGuard.afterStep", () => {
       step({ costKind: "unknown", costUsd: 2 }),
       step({ costUsd: 0.25 }),
     ])
-    expect(result.run.spentUsd).toBe(0.75)
+    expect(result.run.spentUsd).toBe(2.75)
     expect(result.run.unpricedSteps).toBe(1)
     expect(result.run.steps).toBe(3)
+  })
+
+  test("keeps a partial known subtotal and stops on incomplete usage even with a catalog price", () => {
+    const result = play({ usd: 5, unpricedSteps: 1 }, [step({ costUsd: 0.2, unpriced: true })])
+    expect(result.run.spentUsd).toBe(0.2)
+    expect(result.run.unpricedSteps).toBe(1)
+    expect(result.verdicts[0]).toMatchObject({ state: "stopped", reason: "unpriced" })
   })
 
   test("pauses the same input three times with no file change in between", () => {
@@ -461,6 +470,62 @@ describe("SpendGuard.afterStep", () => {
 const it = testEffect(LayerNode.compile(LayerNode.group([SpendGuard.node, EventV2.node])))
 
 describe("SpendGuard service", () => {
+  it.effect("captured ancillary usage settles each attempt once in its launching root, child and batch scopes", () =>
+    Effect.gen(function* () {
+      const guard = yield* SpendGuard.Service
+      yield* guard.begin(root, { usd: 1 })
+      yield* guard.link(child, root, { budget: { usd: 0.05 }, batch: { id: "capture-batch", budget: { usd: 0.2 } } })
+      const captured = yield* guard.capture(child)
+      const result = yield* captured.record("paid-attempt", step({ costUsd: 0.06 }))
+      yield* captured.record("paid-attempt", step({ costUsd: 0.06 }))
+      expect(result).toMatchObject({ state: "stopped", reason: "cap" })
+      expect((yield* guard.snapshot(root))?.spentUsd).toBe(0.06)
+      expect((yield* guard.snapshot(root))?.steps).toBe(1)
+      const scopes = yield* guard.scopes(child)
+      expect(scopes).toHaveLength(3)
+      expect(scopes.every((scope) => scope.spentUsd === 0.06 && scope.steps === 1)).toBe(true)
+      expect(yield* guard.stopped(root)).toBeUndefined()
+      yield* captured.release
+      yield* captured.release
+    }),
+  )
+
+  it.effect("late ancillary callbacks keep the old run and cannot overwrite or bill the new run", () =>
+    Effect.gen(function* () {
+      const guard = yield* SpendGuard.Service
+      const events = yield* EventV2.Service
+      const posted: unknown[] = []
+      const unsubscribe = yield* events.listen((event) =>
+        Effect.sync(() => {
+          posted.push(event)
+        }),
+      )
+      yield* guard.begin(root, { usd: 0.1 })
+      yield* guard.record(root, step({ costUsd: 0.09 }))
+      const captured = yield* guard.capture(root)
+      yield* guard.end(root)
+      // Reusing the root replaces its last-run pointer. The in-flight capture must keep the earlier ledger alive.
+      for (let index = 0; index < SpendGuard.LAST_RUNS + 1; index++) {
+        yield* guard.begin(root, { usd: 1 })
+        yield* guard.end(root)
+      }
+      yield* guard.begin(root, { usd: 1 })
+      const previousEvents = posted.length
+      expect(yield* captured.record("late-title", step({ costUsd: 0.03 }))).toMatchObject({
+        state: "stopped",
+        reason: "cap",
+      })
+      expect((yield* captured.stopped)?.reason).toBe("cap")
+      expect((yield* guard.snapshot(root))?.spentUsd).toBe(0)
+      expect(yield* guard.stopped(root)).toBeUndefined()
+      expect(posted).toHaveLength(previousEvents)
+      yield* captured.release
+      yield* captured.record("callback-after-release", step({ costUsd: 0.9 }))
+      expect((yield* guard.snapshot(root))?.spentUsd).toBe(0)
+      yield* unsubscribe
+    }),
+  )
+
   it.effect("counts a linked child against its root, raises a cap on arm, and keeps the last run", () =>
     Effect.gen(function* () {
       const guard = yield* SpendGuard.Service
@@ -607,6 +672,71 @@ describe("SpendGuard service", () => {
       expect(yield* guard.running(root)).toBe(true)
       yield* guard.end(root)
       expect(yield* guard.running(child)).toBe(false)
+    }),
+  )
+
+  it.effect("resets only the prompted Session's loop memory without renewing accounting scopes", () =>
+    Effect.gen(function* () {
+      const guard = yield* SpendGuard.Service
+      yield* guard.begin(root, { usd: 10, steps: 20 })
+      yield* guard.link(child, root, { budget: { usd: 4 }, batch: { id: "reset-batch", budget: { usd: 5 } } })
+      for (const sessionID of [root, child])
+        for (const index of [1, 2])
+          yield* guard.record(sessionID, step({ costUsd: 0.1, tools: [bash(`attempt-${index}`, "same failure")] }))
+      const before = yield* guard.snapshot(root)
+      const scopes = yield* guard.scopes(child)
+
+      yield* guard.resetLoops(child)
+
+      const after = yield* guard.snapshot(root)
+      expect(after && { ...after, loops: before?.loops }).toEqual(before)
+      expect(after?.loops.get(root)).toEqual(before?.loops.get(root))
+      expect(after?.loops.has(child)).toBe(false)
+      expect(yield* guard.scopes(child)).toEqual(scopes)
+      expect((yield* guard.record(child, step({ tools: [bash("attempt-3", "same failure")] }))).state).toBe("ok")
+      expect((yield* guard.record(root, step({ tools: [bash("attempt-3", "same failure")] }))).reason).toBe("loop")
+    }),
+  )
+
+  it.effect("resetting loop memory preserves an existing stop and its counters", () =>
+    Effect.gen(function* () {
+      const guard = yield* SpendGuard.Service
+      yield* guard.arm(root, { usd: 1, steps: 2 })
+      yield* guard.begin(root)
+      yield* guard.record(root, step({ costUsd: 0.2, tools: [bash("attempt", "same failure")] }))
+      yield* guard.record(root, step({ costUsd: 0.2 }))
+      const before = yield* guard.snapshot(root)
+      expect(before?.loops.has(root)).toBe(true)
+
+      yield* guard.resetLoops(root)
+
+      const after = yield* guard.snapshot(root)
+      expect(after && { ...after, loops: before?.loops }).toEqual(before)
+      expect(after?.loops.size).toBe(0)
+      expect(yield* guard.stopped(root)).toEqual(before?.stopped)
+      expect((yield* guard.record(root, step())).reason).toBe("steps")
+    }),
+  )
+
+  it.effect("resets a late linked Session in its launch run without changing a new root run", () =>
+    Effect.gen(function* () {
+      const guard = yield* SpendGuard.Service
+      yield* guard.begin(root)
+      yield* guard.link(child, root)
+      yield* guard.record(child, step({ tools: [bash("recheck")] }))
+      yield* guard.record(child, step({ tools: [bash("recheck")] }))
+      yield* guard.end(root)
+      yield* guard.begin(root)
+      yield* guard.record(root, step({ tools: [bash("recheck")] }))
+      yield* guard.record(root, step({ tools: [bash("recheck")] }))
+      const current = yield* guard.snapshot(root)
+
+      yield* guard.resetLoops(child)
+
+      expect(yield* guard.snapshot(root)).toEqual(current)
+      expect((yield* guard.snapshot(child))?.loops.has(child)).toBe(false)
+      expect((yield* guard.record(child, step({ tools: [bash("recheck")] }))).state).toBe("ok")
+      expect((yield* guard.record(root, step({ tools: [bash("recheck")] }))).reason).toBe("loop")
     }),
   )
 

@@ -1,6 +1,7 @@
 import type { PermissionV1 } from "@vectordevai/core/v1/permission"
 import { FSUtil } from "@vectordevai/core/fs-util"
 import { nextBackgroundEvent } from "./run/background-wait"
+import { runSessionAncestry } from "./run/ancestry"
 // CLI entry point for `vector run` and `vector --mini`.
 //
 // Handles three modes:
@@ -367,7 +368,7 @@ export const RunCommand = effectCmd({
       })
       .option("report", {
         type: "string",
-        describe: "with --research: write the report, with its sources, to this Markdown file",
+        describe: "with --research: write the report and sources to a .md, .json, .docx or .pdf file",
       })
       .option("auto", {
         type: "boolean",
@@ -975,14 +976,9 @@ export const RunCommand = effectCmd({
           // Subagents run in child sessions, and a request left unanswered there blocks the whole run, so the run
           // answers requests from any session that descends from its own.
           const tree = new Set([sessionID])
-          const inRun = async (id: string | undefined, depth = 0): Promise<boolean> => {
-            if (!id || depth > 4) return false
-            if (tree.has(id)) return true
-            const parent = (await client.session.get({ sessionID: id }).catch(() => undefined))?.data?.parentID
-            if (!(await inRun(parent, depth + 1))) return false
-            tree.add(id)
-            return true
-          }
+          const inRun = runSessionAncestry(tree, async (id) =>
+            (await client.session.get({ sessionID: id }, { signal: AbortSignal.timeout(5_000) }).catch(() => undefined))?.data,
+          )
           let error: string | undefined
           // A background subagent reports back in a follow-up turn after this session goes idle, and exiting would stop
           // it, so the run waits for each one it launched and for the turn that answers it. A stopped one starts no
@@ -1059,7 +1055,9 @@ export const RunCommand = effectCmd({
                     ? properties.part.sessionID
                     : undefined
               : undefined
-            if (owner && tree.has(owner)) activeAt = Date.now()
+            // Discover nested activity on its first event, before a step finishes
+            // or a permission prompt appears, in every output format.
+            if (owner && (await inRun(owner))) activeAt = Date.now()
 
             if (
               (event.type === "session.created" || event.type === "session.updated") &&
@@ -1540,7 +1538,7 @@ export function researchProgress(part: {
   return { icon: "⚙", title }
 }
 
-// Writes the run's latest report, with its sources, to `file` for `vector run --research --report`.
+// The extension selects the attachment format; unknown extensions keep the existing Markdown behavior.
 async function writeReport(client: VectorClient, sessionID: string, file: string) {
   const messages = (await client.session.messages({ sessionID }).catch(() => undefined))?.data ?? []
   const runID = messages
@@ -1560,15 +1558,23 @@ async function writeReport(client: VectorClient, sessionID: string, file: string
     process.exitCode = 1
     return
   }
+  const extension = path.extname(file).toLowerCase()
+  const format =
+    extension === ".pdf" ? "pdf" : extension === ".docx" ? "docx" : extension === ".json" ? "json" : "markdown"
+  const binary = format === "pdf" || format === "docx"
   const exported = await client.memory.research
-    .export({ runID, format: "markdown" })
+    .export({ runID, format }, { parseAs: binary ? "blob" : "text" })
     .catch((error: unknown) => ({ error, data: undefined }))
-  if (exported.error || typeof exported.data !== "string") {
+  const body: unknown = exported.data
+  if (exported.error || (binary ? !(body instanceof Blob) : typeof body !== "string")) {
     UI.error(`Could not read the report: ${formatRunError(exported.error)}`)
     process.exitCode = 1
     return
   }
-  await Bun.write(path.resolve(file), exported.data)
+  await Bun.write(
+    path.resolve(file),
+    body instanceof Blob ? new Uint8Array(await body.arrayBuffer()) : (body as string),
+  )
   process.stderr.write(`Report written to ${path.resolve(file)}${EOL}`)
 }
 

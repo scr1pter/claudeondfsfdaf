@@ -1,0 +1,40 @@
+{
+  "kind": "fresh-same-reviewer-static-snapshot-comparison",
+  "aliases": {
+    "elm": "vector-delivery",
+    "willow": "codex-interrupted"
+  },
+  "sourceReportSha256": {
+    "elm": "9cc5f2252f2af8b6eb8c0dae8a85a54a9e257503feff41a564e3f3f6e50c65ed",
+    "willow": "af482e2f7f2f5892e2cca0e387f1feb23ddd9c9cbed2e8fdd3c4972cde14c583"
+  },
+  "elmScoreLockedBeforeWillowInspected": true,
+  "elmReportHashUnchangedAfterSecondReview": true,
+  "sourceCostsRuntimeIdentitiesOriginalGateResultsAndPosthocFactsWithheldFromReviewer": true,
+  "runtimeExecutionsByReviewer": 0,
+  "nativePngScreenshotsReadPerPackage": 9,
+  "authoredVerdictProseExcluded": true,
+  "rawScores": {
+    "vector-delivery": {
+      "code": 36,
+      "codeMax": 48,
+      "visual": 23,
+      "visualMax": 40
+    },
+    "codex-interrupted": {
+      "code": 31,
+      "codeMax": 48,
+      "visual": 24,
+      "visualMax": 40
+    }
+  },
+  "historicalOtherReviewerScore": {
+    "vectorCode": 37,
+    "vectorVisual": 23,
+    "pooledWithThisReview": false,
+    "sourceReportSha256": "6f27c4e86e31e73f2febe1a284ca68265fd9d789ef6b531ebe9b6ffb1a16138e"
+  },
+  "notCompletedEquivalentRuntimeEpisodes": true,
+  "noUniversalQualityOrSecurityClaim": true,
+  "evaluationOverhead": "External static reviewer assistance excluded from both provider task totals. Native team-judge requests remain included when run; interrupted Codex had not created that role."
+}

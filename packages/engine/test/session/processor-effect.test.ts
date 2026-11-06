@@ -1,10 +1,12 @@
 import { SessionV1 } from "@vectordevai/core/v1/session"
+import { SpendGuard } from "@vectordevai/core/spend-guard"
+import { SessionStatusEvent } from "@vectordevai/schema/session-status-event"
 import { Database } from "@vectordevai/core/database/database"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { expect } from "bun:test"
 import { tool } from "ai"
-import { Cause, Effect, Exit, Fiber, Layer, Stream } from "effect"
+import { Cause, Effect, Exit, Fiber, Layer, Schema, Stream } from "effect"
 import path from "path"
 import z from "zod"
 import type { Agent } from "../../src/agent/agent"
@@ -23,6 +25,7 @@ import { provideTmpdirInstance, provideTmpdirServer } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 import { raw, reply, TestLLMServer } from "../lib/llm-server"
 import { RuntimeFlags } from "@/effect/runtime-flags"
+import { ModelSlots } from "@vectordevai/core/local-mode/model-slots"
 import { ProviderV2 } from "@vectordevai/core/provider"
 import { ModelV2 } from "@vectordevai/core/model"
 import { SessionProjector } from "@vectordevai/core/session/projector"
@@ -86,6 +89,20 @@ function providerCfg(url: string) {
           ...cfg.provider.lmstudio.options,
           baseURL: url,
         },
+      },
+    },
+  }
+}
+
+function accountingCfg(url: string) {
+  const configured = providerCfg(url)
+  return {
+    ...configured,
+    provider: {
+      lmstudio: {
+        ...configured.provider.lmstudio,
+        options: { ...configured.provider.lmstudio.options, concurrency: 1 },
+        models: { "test-model": { ...cfg.provider.lmstudio.models["test-model"], cost: { input: 3, output: 15 } } },
       },
     },
   }
@@ -172,6 +189,7 @@ const assistant = Effect.fn("TestSession.assistant")(function* (
 })
 
 const root = LayerNode.group([
+  ModelSlots.node,
   SessionProcessor.node,
   Session.node,
   SessionProjector.node,
@@ -179,6 +197,7 @@ const root = LayerNode.group([
   Database.node,
   EventV2Bridge.node,
   SessionStatus.node,
+  SpendGuard.node,
   CrossSpawnSpawner.node,
 ])
 const replacements = [
@@ -290,8 +309,98 @@ const unfinishedLLM = Layer.succeed(
   }),
 )
 const itUnfinished = testEffect(LayerNode.compile(root, [...replacements, [LLM.node, unfinishedLLM]]))
+const gatewayLLM = Layer.succeed(
+  LLM.Service,
+  LLM.Service.of({
+    stream: (input) =>
+      Stream.make(
+        LLMEvent.stepStart({ index: 0 }),
+        LLMEvent.stepFinish({
+          index: 0,
+          reason: "stop",
+          providerMetadata: { openrouter: { usage: { cost: Number(input.messages[0]?.content) } } },
+        }),
+        LLMEvent.finish({ reason: "stop" }),
+      ),
+  }),
+)
+const itGateway = testEffect(LayerNode.compile(root, [...replacements, [LLM.node, gatewayLLM]]))
 const itStalledSnapshot = testEffect(
   LayerNode.compile(root, [...replacements, [LLM.node, billedLLM], [Snapshot.node, stalledSnapshot()]]),
+)
+const itBilled = testEffect(LayerNode.compile(root, [...replacements, [LLM.node, billedLLM]]))
+const publicationLLM = Layer.succeed(
+  LLM.Service,
+  LLM.Service.of({
+    stream: (input) =>
+      Stream.make(
+        LLMEvent.stepStart({ index: 0 }),
+        LLMEvent.reasoningStart({ id: "pending-reasoning" }),
+        LLMEvent.reasoningDelta({ id: "pending-reasoning", text: "pending" }),
+        LLMEvent.stepFinish({
+          index: 0,
+          reason: "stop",
+          ...(input.messages[0]?.content === "unknown"
+            ? {}
+            : { usage: new Usage({ inputTokens: 10_000, outputTokens: 1_000, totalTokens: 11_000 }) }),
+        }),
+        LLMEvent.finish({ reason: "stop" }),
+      ),
+  }),
+)
+const itPublication = testEffect(LayerNode.compile(root, [...replacements, [LLM.node, publicationLLM]]))
+
+const confirmationGate = { started: defer<void>(), release: defer<void>(), tracks: 0, changed: false }
+const confirmationSnapshot = Layer.succeed(
+  Snapshot.Service,
+  Snapshot.Service.of({
+    init: () => Effect.void,
+    cleanup: () => Effect.void,
+    track: () =>
+      Effect.suspend(() => {
+        if (++confirmationGate.tracks < 6) return Effect.succeed("start")
+        confirmationGate.started.resolve()
+        return Effect.promise(() => confirmationGate.release.promise).pipe(Effect.as("end"))
+      }),
+    patch: () =>
+      Effect.succeed({
+        hash: "start",
+        files: confirmationGate.changed && confirmationGate.tracks >= 6 ? ["/changed.txt"] : [],
+      }),
+    restore: () => Effect.void,
+    revert: () => Effect.void,
+    diff: () => Effect.succeed(""),
+    diffFull: () => Effect.succeed([]),
+  }),
+)
+const repeatingBilledLLM = Layer.succeed(
+  LLM.Service,
+  LLM.Service.of({
+    stream: () =>
+      Stream.make(
+        LLMEvent.stepStart({ index: 0 }),
+        ...["call-1"].flatMap((id) => [
+          LLMEvent.toolInputStart({ id, name: "lookup" }),
+          LLMEvent.toolInputEnd({ id, name: "lookup" }),
+          LLMEvent.toolCall({ id, name: "lookup", input: {}, providerExecuted: true }),
+          LLMEvent.toolResult({
+            id,
+            name: "lookup",
+            result: { type: "text", value: "unchanged" },
+            providerExecuted: true,
+          }),
+        ]),
+        LLMEvent.stepFinish({
+          index: 0,
+          reason: "tool-calls",
+          usage: new Usage({ inputTokens: 10_000, outputTokens: 1_000, totalTokens: 11_000 }),
+        }),
+        LLMEvent.finish({ reason: "tool-calls" }),
+      ),
+  }),
+)
+const itConfirmation = testEffect(
+  LayerNode.compile(root, [...replacements, [LLM.node, repeatingBilledLLM], [Snapshot.node, confirmationSnapshot]]),
 )
 
 // The opening snapshot lands only when the test releases it; the closing one returns at once. Each landing is logged
@@ -1308,6 +1417,266 @@ itStalledSnapshot.live(
     ),
 )
 
+for (const unknown of [false, true]) {
+  for (const linked of [false, true]) {
+    const suite = unknown ? itProviderError : itBilled
+    suite.live(
+      `session.processor accounting retains a completed bill in the guard when cancelled during publication (${unknown ? "unknown" : "priced"}, ${linked ? "linked child" : "root"})`,
+      () =>
+        provideTmpdirInstance(
+          (dir) =>
+            Effect.gen(function* () {
+              const { processors, session, provider } = yield* boot()
+              const events = yield* EventV2Bridge.Service
+              const guard = yield* SpendGuard.Service
+              const owner = yield* session.create({})
+              yield* guard.begin(owner.id, { usd: 0.3, unpricedSteps: 1 })
+              const chat = linked ? yield* session.create({ parentID: owner.id }) : owner
+              if (linked) yield* guard.link(chat.id, owner.id)
+              const cost = unknown ? 0 : 0.315
+              const parent = yield* user(chat.id, "cancel billed publication")
+              const msg = yield* assistant(chat.id, parent.id, path.resolve(dir))
+              const mdl = yield* provider.getModel(ref.providerID, ref.modelID)
+              const published = defer<void>()
+              const release = defer<void>()
+              let gated = false
+              const off = yield* events.listen((event) => {
+                if (event.type !== SessionV1.Event.MessageUpdated.type || gated) return Effect.void
+                const data = Schema.decodeUnknownSync(SessionV1.Event.MessageUpdated.data)(event.data)
+                if (data.info.id !== msg.id || data.info.role !== "assistant" || data.info.finish !== "stop")
+                  return Effect.void
+                gated = true
+                published.resolve()
+                return Effect.promise(() => release.promise)
+              })
+              const handle = yield* processors.create({ assistantMessage: msg, sessionID: chat.id, model: mdl })
+              const run = yield* handle
+                .process({
+                  user: {
+                    id: parent.id,
+                    sessionID: chat.id,
+                    role: "user",
+                    time: parent.time,
+                    agent: "build",
+                    model: ref,
+                  },
+                  sessionID: chat.id,
+                  model: mdl,
+                  agent: agent(),
+                  system: [],
+                  messages: [{ role: "user", content: "cancel billed publication" }],
+                  tools: {},
+                })
+                .pipe(Effect.forkChild)
+              yield* Effect.promise(() => published.promise)
+              const cancelling = yield* Fiber.interrupt(run).pipe(Effect.forkChild({ startImmediately: true }))
+              release.resolve()
+              yield* Fiber.join(cancelling)
+              const exit = yield* Fiber.await(run)
+              yield* off
+              expect(Exit.isFailure(exit) && Cause.hasInterrupts(exit.cause)).toBe(true)
+              const saved = yield* MessageV2.get({ sessionID: chat.id, messageID: msg.id })
+              expect(saved.parts.filter((part) => part.type === "step-finish")).toHaveLength(1)
+              expect(saved.info).toMatchObject({ cost, error: { name: "MessageAbortedError" } })
+              expect((yield* session.get(chat.id)).cost).toBeCloseTo(cost)
+              expect((yield* session.usage({ directory: dir })).lifetimeCost).toBeCloseTo(cost)
+              expect(yield* guard.snapshot(chat.id)).toMatchObject({
+                spentUsd: cost,
+                steps: 1,
+                unpricedSteps: Number(unknown),
+              })
+              expect(yield* guard.snapshot(owner.id)).toMatchObject({
+                spentUsd: cost,
+                steps: 1,
+                unpricedSteps: Number(unknown),
+              })
+              expect((yield* guard.stopped(owner.id))?.reason).toBe(unknown ? "unpriced" : "cap")
+            }),
+          { trusted: true, config: accountingCfg("http://localhost:1/v1") },
+        ),
+    )
+  }
+}
+
+for (const publication of ["part", "message", "reasoning", "spend", "message-spend", "interrupt-part"] as const) {
+  for (const unknown of [false, true]) {
+    for (const linked of [false, true]) {
+      itPublication.live(
+        `session.processor publication defect retains terminal accounting (${publication}, ${unknown ? "unknown" : "priced"}, ${linked ? "linked child" : "root"})`,
+        () =>
+          provideTmpdirInstance(
+            (dir) =>
+              Effect.gen(function* () {
+                const { processors, session, provider } = yield* boot()
+                const events = yield* EventV2Bridge.Service
+                const guard = yield* SpendGuard.Service
+                const owner = yield* session.create({})
+                yield* guard.begin(owner.id, { usd: 0.04, unpricedSteps: 1 })
+                const chat = linked ? yield* session.create({ parentID: owner.id }) : owner
+                if (linked) yield* guard.link(chat.id, owner.id)
+                const parent = yield* user(chat.id, "terminal publication")
+                const msg = yield* assistant(chat.id, parent.id, path.resolve(dir))
+                const model = yield* provider.getModel(ref.providerID, ref.modelID)
+                const defect = new Error("terminal publication defect")
+                const interrupted = publication === "interrupt-part"
+                let failed = false
+                let secondarySpendFailed = false
+                const fail = Effect.gen(function* () {
+                  failed = true
+                  if (linked) {
+                    yield* guard.end(owner.id)
+                    yield* guard.begin(owner.id, { usd: 1 })
+                  }
+                  if (interrupted) yield* Effect.interrupt
+                  yield* Effect.die(defect)
+                })
+                yield* events.project(SessionV1.Event.PartUpdated, (event) => {
+                  const part = event.data.part
+                  if (failed || part.messageID !== msg.id) return Effect.void
+                  return ((publication === "part" || interrupted) && part.type === "step-finish") ||
+                    (publication === "reasoning" && part.type === "reasoning" && part.time.end !== undefined)
+                    ? fail
+                    : Effect.void
+                })
+                yield* events.project(SessionV1.Event.MessageUpdated, (event) =>
+                  !failed &&
+                  (publication === "message" || publication === "message-spend") &&
+                  event.data.info.id === msg.id &&
+                  event.data.info.role === "assistant" &&
+                  event.data.info.finish === "stop"
+                    ? fail
+                    : Effect.void,
+                )
+                const off = yield* events.listen((event) => {
+                  if (event.type !== SessionStatusEvent.Spend.type) return Effect.void
+                  const data = Schema.decodeUnknownSync(Schema.Struct({ sessionID: SessionID }))(event.data)
+                  if (data.sessionID !== chat.id && data.sessionID !== owner.id) return Effect.void
+                  if (publication === "message-spend" && failed && !secondarySpendFailed) {
+                    secondarySpendFailed = true
+                    return Effect.die(new Error("secondary spend notification defect"))
+                  }
+                  return !failed && publication === "spend" ? fail : Effect.void
+                })
+                const handle = yield* processors.create({ assistantMessage: msg, sessionID: chat.id, model })
+                const exit = yield* handle
+                  .process({
+                    user: {
+                      id: parent.id,
+                      sessionID: chat.id,
+                      role: "user",
+                      time: parent.time,
+                      agent: "build",
+                      model: ref,
+                    },
+                    sessionID: chat.id,
+                    model,
+                    agent: agent(),
+                    system: [],
+                    messages: [{ role: "user", content: unknown ? "unknown" : "priced" }],
+                    tools: {},
+                  })
+                  .pipe(Effect.exit)
+                expect(
+                  interrupted
+                    ? Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)
+                    : Exit.isSuccess(exit) && exit.value === "stop",
+                ).toBe(true)
+                yield* off
+                const cost = unknown ? 0 : 0.045
+                const saved = yield* MessageV2.get({ sessionID: chat.id, messageID: msg.id })
+                expect(saved.info).toMatchObject({
+                  cost,
+                  ...(unknown ? { unpriced: true } : {}),
+                  error: interrupted
+                    ? { name: "MessageAbortedError" }
+                    : { name: "UnknownError", data: { message: defect.message } },
+                })
+                expect(failed).toBe(true)
+                expect(saved.parts.filter((part) => part.type === "step-start")).toHaveLength(1)
+                expect(saved.parts.filter((part) => part.type === "step-finish")).toHaveLength(
+                  publication === "part" || interrupted ? 0 : 1,
+                )
+                // A rolled-back terminal part is absent; financial fallback does not invent a successful write.
+                expect((yield* session.get(chat.id)).cost).toBeCloseTo(publication === "part" || interrupted ? 0 : cost)
+                expect((yield* session.usage({ directory: dir })).lifetimeCost).toBeCloseTo(cost)
+                expect(yield* guard.snapshot(chat.id)).toMatchObject({
+                  spentUsd: cost,
+                  steps: 1,
+                  unpricedSteps: Number(unknown),
+                })
+                expect((yield* guard.stopped(chat.id))?.reason).toBe(unknown ? "unpriced" : "cap")
+                expect(secondarySpendFailed).toBe(publication === "message-spend")
+                if (linked) expect(yield* guard.snapshot(owner.id)).toMatchObject({ spentUsd: 0, steps: 0 })
+              }),
+            { trusted: true, config: accountingCfg("http://localhost:1/v1") },
+          ),
+      )
+    }
+  }
+}
+
+for (const outcome of ["cancelled", "cancelled_at_cap", "changed", "unchanged"] as const) {
+  itConfirmation.live(
+    `session.processor accounting settles a billed loop candidate when its snapshot is ${outcome}`,
+    () =>
+      provideTmpdirInstance(
+        (dir) =>
+          Effect.gen(function* () {
+            const cancelled = outcome === "cancelled" || outcome === "cancelled_at_cap"
+            confirmationGate.started = defer<void>()
+            confirmationGate.release = defer<void>()
+            confirmationGate.tracks = 0
+            confirmationGate.changed = outcome === "changed"
+            const session = yield* Session.Service
+            const guard = yield* SpendGuard.Service
+            const owner = yield* session.create({})
+            yield* guard.begin(owner.id, { usd: 5 })
+            const chat = yield* session.create({ parentID: owner.id })
+            yield* guard.link(chat.id, owner.id)
+            // Two real provider steps establish the loop history before the third needs snapshot confirmation.
+            for (let index = 0; index < 2; index++) {
+              const previous = yield* admissionTurn(dir, chat.id)
+              expect(yield* previous.run).toBe("continue")
+            }
+            const turn = yield* admissionTurn(dir, chat.id)
+            const run = yield* turn.run.pipe(Effect.forkChild)
+            yield* Effect.promise(() => confirmationGate.started.promise)
+            if (cancelled) {
+              // Tighten while the snapshot is pending; the final record must still apply the latest cap.
+              if (outcome === "cancelled_at_cap") yield* guard.tighten(owner.id, { usd: 0.1 })
+              // The already-launched child keeps charging its original run even while its owner starts another.
+              yield* guard.end(owner.id)
+              yield* guard.begin(owner.id, { usd: 5 })
+              const cancelling = yield* Fiber.interrupt(run).pipe(Effect.forkChild({ startImmediately: true }))
+              yield* Fiber.join(cancelling).pipe(
+                Effect.timeout("5 seconds"),
+                Effect.ensuring(Effect.sync(() => confirmationGate.release.resolve())),
+              )
+              const exit = yield* Fiber.await(run)
+              expect(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)).toBe(true)
+              expect(yield* guard.snapshot(owner.id)).toMatchObject({ spentUsd: 0, steps: 0 })
+              expect((yield* guard.stopped(chat.id))?.reason).toBe(outcome === "cancelled_at_cap" ? "cap" : "loop")
+            } else {
+              confirmationGate.release.resolve()
+              expect(yield* Fiber.join(run)).toBe(outcome === "changed" ? "continue" : "stop")
+              expect((yield* guard.stopped(owner.id))?.reason).toBe(outcome === "changed" ? undefined : "loop")
+            }
+            const saved = yield* MessageV2.get({ sessionID: chat.id, messageID: turn.handle.message.id })
+            expect(saved.parts.filter((part) => part.type === "step-finish")).toHaveLength(1)
+            expect(saved.info).toMatchObject({ cost: 0.045 })
+            if (cancelled) expect(saved.info).toMatchObject({ error: { name: "MessageAbortedError" } })
+            expect((yield* session.get(chat.id)).cost).toBeCloseTo(0.135)
+            expect((yield* session.usage({ directory: dir })).lifetimeCost).toBeCloseTo(0.135)
+            expect(yield* guard.snapshot(chat.id)).toMatchObject({ spentUsd: 0.135, steps: 3, unpricedSteps: 0 })
+          }),
+        {
+          trusted: true,
+          config: { ...accountingCfg("http://localhost:1/v1"), permission: { doom_loop: "allow" } },
+        },
+      ),
+  )
+}
+
 for (const guarded of [false, true]) {
   for (const outcome of ["stopped", "fail"] as const) {
     itUnfinished.live(
@@ -1418,7 +1787,11 @@ for (const guarded of [false, true]) {
 
 // The transport is the real AI SDK against the local HTTP fixture. These tests count provider requests, not just
 // admission callbacks, and deliberately request SDK retries to verify guarded attempts cannot hide another call.
-const admissionTurn = Effect.fn("test.admissionTurn")(function* (dir: string, sessionID: SessionID) {
+const admissionTurn = Effect.fn("test.admissionTurn")(function* (
+  dir: string,
+  sessionID: SessionID,
+  accepted?: () => void,
+) {
   const { processors, provider } = yield* boot()
   const parent = yield* user(sessionID, "admission")
   const msg = yield* assistant(sessionID, parent.id, path.resolve(dir))
@@ -1442,9 +1815,240 @@ const admissionTurn = Effect.fn("test.admissionTurn")(function* (dir: string, se
       messages: [{ role: "user", content: "admission" }],
       tools: {},
       retries: 3,
+      accepted,
     }),
   }
 })
+
+for (const scenario of [
+  { label: "a terminal step missing usage", runner: itProviderError },
+  { label: "a failed streaming step missing usage", runner: itFragmentFailure },
+]) {
+  scenario.runner.live(`session.processor accounting keeps ${scenario.label} uncertain on a priced model`, () =>
+    provideTmpdirInstance(
+      (dir) =>
+        Effect.gen(function* () {
+          const session = yield* Session.Service
+          const guard = yield* SpendGuard.Service
+          const chat = yield* session.create({})
+          yield* guard.begin(chat.id, { usd: 1, unpricedSteps: 1 })
+          const turn = yield* admissionTurn(dir, chat.id)
+          yield* turn.run
+          const stored = yield* MessageV2.get({ sessionID: chat.id, messageID: turn.handle.message.id })
+          const steps = stored.parts.filter((part) => part.type === "step-finish")
+          expect(steps).toHaveLength(1)
+          expect(steps[0]).toMatchObject({ cost: 0, unpriced: true })
+          expect(stored.info).toMatchObject({ cost: 0, unpriced: true })
+          expect((yield* session.get(chat.id)).unpricedSteps).toBe(1)
+          expect(yield* guard.snapshot(chat.id)).toMatchObject({
+            costKind: "priced",
+            spentUsd: 0,
+            steps: 1,
+            unpricedSteps: 1,
+          })
+          expect((yield* guard.stopped(chat.id))?.reason).toBe("unpriced")
+        }),
+      {
+        trusted: true,
+        config: {
+          provider: {
+            lmstudio: {
+              ...cfg.provider.lmstudio,
+              models: {
+                "test-model": { ...cfg.provider.lmstudio.models["test-model"], cost: { input: 3, output: 15 } },
+              },
+            },
+          },
+        },
+      },
+    ),
+  )
+}
+
+for (const selected of [
+  { cost: 0, catalog: false },
+  { cost: 0.03, catalog: false },
+  { cost: 0, catalog: true },
+  { cost: 0.03, catalog: true },
+]) {
+  const cost = selected.cost
+  itGateway.live(
+    `session.processor accounting preserves a metadata-only gateway bill of $${cost} with catalog=${selected.catalog}`,
+    () =>
+      provideTmpdirInstance(
+        (dir) =>
+          Effect.gen(function* () {
+            const { session, processors, provider } = yield* boot()
+            const guard = yield* SpendGuard.Service
+            const chat = yield* session.create({})
+            const parent = yield* user(chat.id, String(cost))
+            const msg = yield* assistant(chat.id, parent.id, path.resolve(dir))
+            const listed = yield* provider.getModel(ref.providerID, ref.modelID)
+            const model = {
+              ...listed,
+              cost: selected.catalog
+                ? { input: 2, output: 10, cache: { read: 0.1, write: 2.5 } }
+                : { ...listed.cost, unpriced: true },
+            }
+            const handle = yield* processors.create({ assistantMessage: msg, sessionID: chat.id, model })
+            yield* guard.begin(chat.id, { usd: 1, unpricedSteps: 1 })
+            yield* handle.process({
+              user: { ...parent, model: ref },
+              sessionID: chat.id,
+              model,
+              agent: agent(),
+              system: [],
+              messages: [{ role: "user", content: String(cost) }],
+              tools: {},
+            })
+            const stored = yield* MessageV2.get({ sessionID: chat.id, messageID: msg.id })
+            expect(stored.info).toMatchObject({ cost, unpriced: true })
+            expect(stored.parts.find((part) => part.type === "step-finish")).toMatchObject({ cost, unpriced: true })
+            expect(yield* guard.snapshot(chat.id)).toMatchObject({
+              costKind: "priced",
+              spentUsd: cost,
+              steps: 1,
+              unpricedSteps: 0,
+            })
+            expect(yield* guard.stopped(chat.id)).toBeUndefined()
+          }),
+        {
+          trusted: true,
+          config: {
+            provider: {
+              lmstudio: {
+                ...cfg.provider.lmstudio,
+                options: { ...cfg.provider.lmstudio.options, baseURL: "https://example.invalid/v1" },
+              },
+            },
+          },
+        },
+      ),
+  )
+}
+
+it.live("unsettled accounting: accepted ordinary HTTP cancellation before a chunk remains durably unknown", () =>
+  provideTmpdirServer(
+    ({ dir, llm }) =>
+      Effect.gen(function* () {
+        const { session, processors } = yield* boot()
+        const guard = yield* SpendGuard.Service
+        yield* llm.push(raw({ head: [], hang: true }))
+        const chat = yield* session.create({})
+        yield* guard.begin(chat.id, { usd: 1, unpricedSteps: 1 })
+        const accepted = defer<void>()
+        const turn = yield* admissionTurn(dir, chat.id, () => accepted.resolve())
+        const fiber = yield* turn.run.pipe(Effect.forkChild)
+        yield* Effect.promise(() => accepted.promise).pipe(Effect.timeout("5 seconds"))
+        yield* Fiber.interrupt(fiber)
+        yield* Fiber.await(fiber)
+        yield* processors.settle(chat.id)
+        expect(yield* llm.calls).toBe(1)
+        const stored = yield* MessageV2.get({ sessionID: chat.id, messageID: turn.handle.message.id })
+        expect(stored.info).toMatchObject({ cost: 0, unpriced: true })
+        expect(stored.parts.filter((part) => part.type === "step-finish")).toMatchObject([
+          { cost: 0, unpriced: true, reason: "abort" },
+        ])
+        expect(yield* session.get(chat.id)).toMatchObject({ cost: 0, unpricedSteps: 1 })
+        expect(yield* guard.snapshot(chat.id)).toMatchObject({ spentUsd: 0, steps: 1, unpricedSteps: 1 })
+        expect((yield* guard.stopped(chat.id))?.reason).toBe("unpriced")
+        yield* processors.settle(chat.id)
+        expect(
+          (yield* MessageV2.parts(turn.handle.message.id)).filter((part) => part.type === "step-finish"),
+        ).toHaveLength(1)
+        expect(yield* session.get(chat.id)).toMatchObject({ cost: 0, unpricedSteps: 1 })
+      }),
+    { trusted: true, config: accountingCfg },
+  ),
+)
+
+it.live("unsettled accounting: cancellation while queued before transport creates no billed or unknown attempt", () =>
+  provideTmpdirServer(
+    ({ dir, llm }) =>
+      Effect.gen(function* () {
+        const { session } = yield* boot()
+        const guard = yield* SpendGuard.Service
+        const slots = yield* ModelSlots.Service
+        const origin = new URL(llm.url).origin
+        const chat = yield* session.create({})
+        yield* guard.begin(chat.id, { usd: 1, unpricedSteps: 1 })
+        const turn = yield* admissionTurn(dir, chat.id)
+        yield* Effect.acquireUseRelease(
+          Effect.promise(() => slots.acquire({ origin, permits: 1, priority: "user" })),
+          () =>
+            Effect.gen(function* () {
+              const fiber = yield* turn.run.pipe(Effect.forkChild)
+              yield* waitFor(
+                Effect.sync(() => (slots.queue(origin).waiting === 1 ? true : undefined)),
+                "request never entered the local model queue",
+              )
+              expect(yield* llm.calls).toBe(0)
+              yield* Fiber.interrupt(fiber)
+              yield* Fiber.await(fiber)
+              const stored = yield* MessageV2.get({ sessionID: chat.id, messageID: turn.handle.message.id })
+              expect(stored.info.role === "assistant" && stored.info.cost).toBe(0)
+              expect(stored.info.role === "assistant" && stored.info.unpriced).not.toBe(true)
+              expect(stored.parts.filter((part) => part.type === "step-finish")).toHaveLength(0)
+              expect((yield* session.get(chat.id)).unpricedSteps ?? 0).toBe(0)
+              expect((yield* guard.snapshot(chat.id))?.steps).toBe(0)
+              expect(yield* llm.calls).toBe(0)
+            }),
+          (release) => Effect.sync(release),
+        )
+      }),
+    { trusted: true, config: accountingCfg },
+  ),
+)
+
+it.live("unsettled accounting: rejected HTTP does not invent a charge or streamed step", () =>
+  provideTmpdirServer(
+    ({ dir, llm }) =>
+      Effect.gen(function* () {
+        const { session } = yield* boot()
+        const guard = yield* SpendGuard.Service
+        yield* llm.error(400, { error: { message: "Rejected before generation", type: "invalid_request_error" } })
+        const chat = yield* session.create({})
+        yield* guard.begin(chat.id, { usd: 1, unpricedSteps: 1 })
+        const turn = yield* admissionTurn(dir, chat.id)
+        expect(yield* turn.run).toBe("stop")
+        const stored = yield* MessageV2.get({ sessionID: chat.id, messageID: turn.handle.message.id })
+        expect(stored.info.role === "assistant" && stored.info.cost).toBe(0)
+        expect(stored.parts.filter((part) => part.type === "step-finish")).toHaveLength(0)
+        expect((yield* session.get(chat.id)).unpricedSteps ?? 0).toBe(0)
+        expect((yield* guard.snapshot(chat.id))?.steps).toBe(0)
+        expect(yield* llm.calls).toBe(1)
+      }),
+    { trusted: true, config: accountingCfg },
+  ),
+)
+
+it.live("unsettled accounting: explicit zero usage remains measured zero without duplicate projection", () =>
+  provideTmpdirServer(
+    ({ dir, llm }) =>
+      Effect.gen(function* () {
+        const { session } = yield* boot()
+        const guard = yield* SpendGuard.Service
+        yield* llm.push(reply().text("Measured zero").usage({ input: 0, output: 0 }).stop())
+        const chat = yield* session.create({})
+        yield* guard.begin(chat.id, { usd: 1, unpricedSteps: 1 })
+        const turn = yield* admissionTurn(dir, chat.id)
+        expect(yield* turn.run).toBe("continue")
+        const stored = yield* MessageV2.get({ sessionID: chat.id, messageID: turn.handle.message.id })
+        expect(stored.info.role === "assistant" && stored.info.cost).toBe(0)
+        expect(stored.info.role === "assistant" && stored.info.unpriced).not.toBe(true)
+        const finished = stored.parts.find((part) => part.type === "step-finish")
+        expect(finished).toBeDefined()
+        if (finished) yield* session.updatePart(finished)
+        expect((yield* session.get(chat.id)).unpricedSteps ?? 0).toBe(0)
+        expect(yield* guard.snapshot(chat.id)).toMatchObject({ spentUsd: 0, steps: 1, unpricedSteps: 0 })
+        expect(
+          (yield* MessageV2.parts(turn.handle.message.id)).filter((part) => part.type === "step-finish"),
+        ).toHaveLength(1)
+        expect(yield* llm.calls).toBe(1)
+      }),
+    { trusted: true, config: accountingCfg },
+  ),
+)
 
 it.live("session admission refusal stops before the provider without a retryable error", () =>
   provideTmpdirServer(

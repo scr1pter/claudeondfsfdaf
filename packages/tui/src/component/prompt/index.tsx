@@ -38,9 +38,10 @@ import { usePromptStash } from "../../prompt/stash"
 import { DialogStash } from "../dialog-stash"
 import { type AutocompleteRef, Autocomplete } from "./autocomplete"
 import { useRenderer, useTerminalDimensions, type JSX } from "@opentui/solid"
-import type { AssistantMessage, FilePart, UserMessage } from "@vectordevai/sdk/v2"
+import type { FilePart, UserMessage } from "@vectordevai/sdk/v2"
 import { BrainSchema } from "@vectordevai/core/brain/schema"
 import { Locale } from "../../util/locale"
+import { getSessionContext } from "../../util/session-context"
 import { errorMessage } from "../../util/error"
 import { formatDuration } from "../../util/format"
 import { createColors, createFrames } from "../../ui/spinner"
@@ -250,14 +251,13 @@ export function Prompt(props: PromptProps) {
     if (!props.sessionID) return
     const session = sync.session.get(props.sessionID)
     const msg = sync.data.message[props.sessionID] ?? []
-    const last = msg.findLast((item): item is AssistantMessage => item.role === "assistant" && item.tokens.output > 0)
-    if (!last) return
+    const context = getSessionContext(msg)
+    if (!context) return
 
-    const tokens =
-      last.tokens.input + last.tokens.output + last.tokens.reasoning + last.tokens.cache.read + last.tokens.cache.write
-    if (tokens <= 0) return
-
-    const model = sync.data.provider.find((item) => item.id === last.providerID)?.models[last.modelID]
+    const tokens = context.tokens
+    const model = sync.data.provider.find((item) => item.id === context.message.providerID)?.models[
+      context.message.modelID
+    ]
     const pct = model?.limit.context ? `${Math.round((tokens / model.limit.context) * 100)}%` : undefined
     const spend = Locale.sessionSpend(session)
     return {

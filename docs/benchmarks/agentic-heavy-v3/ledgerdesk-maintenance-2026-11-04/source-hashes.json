@@ -1,0 +1,38 @@
+{
+  "codex": {
+    "app.mjs": "5e809360e5e9e5c837afbaeec79c404066fd075f669ef8d86a8b0d4058443998",
+    "backend/api.mjs": "515ac7b1c30f9553cdef8a98622b541b67c5f70f92694ac488cf5534d09d38fa",
+    "backend/data.mjs": "62d399f912762a77799a73ad164a2aae83500a5a76851206d595ad80781a8f55",
+    "BUILD_SPEC.md": "86834277bf53afa9b8d8725556c919eae4f9ebb789d3ef8272f5c0bd0f4da5b8",
+    "cli.mjs": "7b68d5f53f50db567d4951f98df8fdf56f1537f16af0862fe7669d9cf3091418",
+    "package.json": "bf8467b75aabfca1fc5940f843f7100930cac2336fe1dccec25928d7f1380359",
+    "qa-verify.mjs": "77d96f93ab8113ba746b65c7cd2a35c62d204c90756d552225dbc3a20a97b945",
+    "README.md": "0dfcb280b099ef4bb9a6ecd5023f8219a3204a86e7cfffad7bc7889f3984fdf9",
+    "sdk-types.test.mts": "bfe433da75d0e06f33e23c292fa9789dcc33d32a7688afdb2fc15fc48c6079ab",
+    "sdk.d.mts": "23ab04787ea7e648aafa058a0e54ad6b866310e5cddd30c508e4d5bc2cfd343b",
+    "sdk.mjs": "d5c2d6f42155de7c538f900ef5d6fb92e3901510a5f54ba673d002bf72cbfca5",
+    "verify-types.mjs": "667d498452d8e2855c72f2459a891e62534e9dc9d6878b55f5e3a405cdffc3cf",
+    "verify.mjs": "f917714a547e19d4dc02205c1bf67550c383e104220343fd0a5c09b912bab753"
+  },
+  "vector": {
+    "app.mjs": "dc0e3e618e4412938eea5c065d25c5ad899a51c653d83470bf48c3053b1db5bb",
+    "backend/api.mjs": "d01385fccd52b6ef129361196d0313567f96398ea79be1d114546268fb1f4ffd",
+    "backend/api.test.mjs": "befa5ab1c0bf4bad3fa5dcc10e36aef8b033ac78026a2756be54c3636558c344",
+    "backend/data.test.mjs": "f1c67cf81757baa52d5e2f9200983802d05ff51da4c31453a186af8bdc1630cb",
+    "backend/store.mjs": "1561ccedf380b7f14069bda8a949ed4db2f59640584ad7e9b2daa72a1e78bcf7",
+    "backend/validation.mjs": "0e79b9f42aa19dcca7894e3ab700b9da19a416f47a5652bc49d7ead41dc0f842",
+    "BUILD_SPEC.md": "86834277bf53afa9b8d8725556c919eae4f9ebb789d3ef8272f5c0bd0f4da5b8",
+    "cli.mjs": "75e37b9c0bd7b893ba1521731bad2c906b8c3517bb887d8b924a7748ca9541bc",
+    "client-tests/fixtures.mjs": "ab675dc68a944696cc74456bb3d6e5c81a7ba23da368a14374a0ca6bc597e83e",
+    "client-tests/live-api.test.mjs": "17b8ea41c744fed5615862b70e0f1f3e3282805c2979f269853a1a9d9a2d70f3",
+    "client-tests/README.md": "d5960beb55ff902792981b0aab8768630f9187e4ffb6421530f1c81a196445ec",
+    "client-tests/transport.test.mjs": "42af0d38ae34b2ec099d8ff3182bad5f7ada87d221e5de10ae123ad0adb7cc6b",
+    "client-tests/types.mts": "a0ed35ac1d58c87451086ad0b6ddaf7989fa993ae5ee64a85d223c388e705cd3",
+    "package.json": "addd3d6f4c5e72d6df0aed4fbcb4962d11a17e4d3f4e1938632d6d14663e8bdb",
+    "README.md": "51fa8ddb64bbf53180bd7c42cc5da09e282429663971a8edef7f060cd4c2d115",
+    "sdk.d.mts": "42f258c5627fd085f5b9c1b9cf60ce1c53fd8a837159398a46fbf7fa0af966c7",
+    "sdk.mjs": "56a948d89b16e6cdffd96a60cb000acb23bc370a5d0b70b6ca6528c6234466c3",
+    "tests/verify-final.mjs": "e59d7a1972abc26b289b17aa0d30268848e993a5cd2163f516dd50d4edd9ff49",
+    "tests/verify-restart.mjs": "f31ab0e7d21b96237d9937f85438b810d72253b9f9bc71e8beb8acd187170d7b"
+  }
+}
