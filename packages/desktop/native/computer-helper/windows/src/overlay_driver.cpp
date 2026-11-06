@@ -268,11 +268,11 @@ winrt::handle medium_token(const TokenIdentity& original, HANDLE output) {
   DWORD count = SECURITY_MAX_SID_SIZE; require(CreateWellKnownSid(WinMediumLabelSid, nullptr, label.sid.data(), &count) != FALSE, L"medium_token_unavailable"); label.label.Label.Sid = label.sid.data(); label.label.Label.Attributes = SE_GROUP_INTEGRITY;
   require(SetTokenInformation(token.get(), TokenIntegrityLevel, &label.label, static_cast<DWORD>(offsetof(Label, sid) + count)) != FALSE, L"medium_token_unavailable");
   const auto observed = observe_token_handle(token.get()); require(serving_token_allowed(observed) && same_context(original, observed), L"parent_invalid");
-  const auto proof = bootstrap_token_diagnostic(output, token.get(), "restricted");
+  (void)bootstrap_token_diagnostic(output, token.get(), "restricted");
   // Match the never-shipped Caller's proven startup boundary on this newly owned candidate only.
-  // Unknown access fails closed; source/high/linked tokens and process/global ACLs are never changed.
-  require(proof.process_dacl == 'g' || proof.process_dacl == 'd', L"bootstrap_failed");
-  if (proof.process_dacl == 'd') (void)caller_token_acl::ensure_owned_restricted(token.get());
+  // Its supported unknown preproof still needs exact readback, unchanged authority and a positive
+  // conservative postproof. Source/high/linked tokens and process/global ACLs are never changed.
+  (void)caller_token_acl::ensure_owned_restricted(token.get());
   require(same_token(observed, observe_token_handle(token.get())), L"parent_invalid"); return token;
 }
 class QuotaPrivilege final {
