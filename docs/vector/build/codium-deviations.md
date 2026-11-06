@@ -1879,3 +1879,59 @@ outcome, verdict, actor.login` pass. Every paid plan includes it while the plan 
   cloud computer can be started for the account (listed, or `VECTOR_HOSTED_ALLOW_ACCOUNTS`) and its plan includes the
   size, minutes clamped to the plan's longest job now (the ramp applied), priced at the charged per-minute rate on the
   same 1.5x grid and per-step cache as the model form.
+
+## A52 Provider adapter and reconciler (5 Nov 2026)
+
+- **The run token is injected by the provider's egress proxy, not into the computer.** The contract's "only injected
+  credential" is the `vht_` token, added by Vercel's network policy (a `transform` rule) to requests for the run-API
+  host only. It is never in the sandbox's environment (none is set), files or disk, and Vercel redacts it when a policy
+  is read back. `setHostedRunToken` replaces it in place.
+- **Two shared constants in `packages/schema/src/hosted.ts`** (A51's file): `Hosted.RUN_API_HOST =
+  "hosted-run.vectordev.ai"` and `Hosted.VIEWER_PORT = 6080`, so A53's routes, A54's image (its Chromium URL policy and
+  viewer proxy) and this adapter name the same host and port. The host is fixed because the image's browser policy is
+  static (as A42 fixed the relay host). New env `VECTOR_HOSTED_RUN_HOST` (not in §4.16) may move it outside production
+  only, for a preview in Stripe test mode; Vector's own sites are refused. The run host is handed to A53's boot step in
+  `startHostedComputer`'s answer instead of an environment variable, since a persistent sandbox's environment cannot be
+  changed after creation.
+- **Deny list.** `HOSTED_DENIED_SUBNETS` holds every block the contract names, private (RFC 1918), loopback, link-local
+  (with 169.254.169.254) and 0.0.0.0/8, 192.0.0.0/24, `::/128`, `ff00::/8`, `64:ff9b:1::/48` and `2002::/16`. AWS's IPv6
+  metadata address is inside `fc00::/7`. Shared address space (100.64.0.0/10) and benchmarking networks (198.18.0.0/15)
+  are left out: the contract does not name them and a provider may use them for its own plumbing, which could not be
+  tried here. Every block's first address is also refused by `safe-fetch.ts` (S8).
+- **Modes.** The name keeps the contract's format, `vh-<HMAC(account)[0:16]>-<n>` (from A51's `hostedAccount`,
+  numbered 1 to 3), so it carries no mode. Every computer is tagged `vector-mode: live|test` (and `vector-size`); the
+  adapter lists only its mode's computers and never resumes, changes, stops or deletes one of another mode or an untagged
+  one (`start` refuses it, `stop` and `destroy` answer `missing`). The owner should still give Preview its own Vercel
+  project or salt.
+- **Store keys not in §4.6,** under the Codium prefix: `hosted:computer:<name>` (`{v, account, computer, session,
+  startedAt}`, written before the provider is asked and kept past the session's timeout plus an hour) and
+  `hosted:reconcile` (the reconciler's throttle). Plain commands only, so no Valkey case was added.
+- **"A live session row"** is read as: the computer's session record names this computer, and that session's running
+  block (A51's `hosted:running:<account>`) still holds its time, before the hold lapses and no later than two minutes
+  past its stopBy. A53 has no session rows yet; it can tighten `sessionLive` with its own rows.
+- **The reconciler is a function, not a route.** A52's file list has no route and §4.19 no reconcile cron, so
+  `reconcileHostedComputers` throttles itself to every 3 minutes and A53's reaper (every minute) calls it. With the
+  `hosted` switch at `stop` it stops every running computer. A store failure stops nothing (the provider's own timeout
+  still ends the session); a stop or a failed stop emails the owner once in 6 hours, naming computers only.
+- **Beyond the contract, on money:** `startHostedComputer` starts a computer only for a session whose block is held now
+  (M8, 409 `HOSTED_SESSION_MOVED` otherwise). The Vercel provider is configured only on the team the spend guard watches
+  (`VERCEL_HOSTED_TEAM_ID` equal to `VECTOR_HOSTED_VERCEL_TEAM_ID`, with `VERCEL_SPEND_WEBHOOK_SECRET_HOSTED`) and never
+  on `VERCEL_MAIN_TEAM_ID` (M9). Credentials always go to the SDK explicitly, so it cannot fall back to the deployment's
+  own OIDC token.
+- **Every session boots clean.** A running computer is stopped (its disk saved) before the session's settings are
+  applied and it is resumed, so A54's boot step runs on every session. Resuming one still saving its disk is tried up to
+  4 times, 2 s apart.
+- **Retention.** `snapshotExpiration` and `keepLastSnapshots {count: 1, deleteEvicted: true}` are the plan's
+  `diskDays`, set at creation and on every start; the SDK cannot change an existing snapshot's expiry, so a change of
+  plan applies from the next stop. A disk past its retention (`snapshot_not_found`) is deleted with its sandbox and
+  made again from the base snapshot; `destroy` counts such a computer as deleted, since no data of the subscriber's is
+  left at Vercel. Disks after a plan ends (14 days, dispute holds) stay A53's provisioner's job.
+- **Region iad1 with no failover** (`failoverRegions: []` on resume), because the rates are iad1's.
+- **`@vercel/sandbox` 3.8.0** (published 2026-10-13), not 3.9.0 (2026-10-22, only just two weeks old). `bun.lock` gains
+  it and its dependencies, and bun re-hoisted `lru-cache` (root 10.4.3, the 11.5.1 users nested) and `tar-stream` (root
+  3.1.7, `archiver` keeps 3.2.0); no project code imports either. The SDK is loaded only by a dynamic import on the first
+  provider call, and the adapter's calls are typed against the SDK's own declarations.
+- **Cloudflare** is an interface stub that is never configured and refuses every call; the provider contract suite in
+  `test/hosted-provider.test.ts` runs in full against Vercel (with a fake SDK) and is a `todo` for Cloudflare.
+- **Files outside A52's list:** `packages/schema/src/hosted.ts` (two constants), `.env.example`, `docs/vector/MODEL-PLANS.md`,
+  `docs/vector/owner-actions/hosted-computer.md`, `bun.lock`.

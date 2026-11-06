@@ -36,6 +36,20 @@ export type Access = (typeof ACCESS)[number]
 export const WRAP_MS = 5 * 60_000
 
 /**
+ * The one port a cloud computer exposes (WP A52): its viewer proxy (WP A54), which serves the live view and take-over
+ * behind the single-use viewer tokens of WP A53. Nothing else on the computer is reachable from outside.
+ */
+export const VIEWER_PORT = 6080
+
+/**
+ * The dedicated host a cloud computer reaches Vector's API through (WP A52). The provider's egress proxy adds the
+ * session's `vht_` run token to requests for this host only, so the token never exists inside the computer, and the
+ * computer's browser is barred from it by its URL policy (WP A54), so no web page can borrow it. The API refuses
+ * requests here that carry `Origin`, `Sec-Fetch-*` or cookies (S7, WP A53).
+ */
+export const RUN_API_HOST = "hosted-run.vectordev.ai"
+
+/**
  * What happens to a computer's disk when nothing may run (§4.4): kept for the plan's `diskDays` while a plan is live;
  * kept `ENDED_DISK_DAYS` for download after a plan ends (with a notice), then deleted; kept while a dispute is open and
  * deleted `LOST_DISPUTE_DISK_DAYS` after it is lost.
