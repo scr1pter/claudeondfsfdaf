@@ -471,7 +471,7 @@ describe("deployments → Release Guard", () => {
     expect(releases()).toBe(0)
   })
 
-  test("the plan and the service decide: no watch while paused, frozen, ended, on Pro, or with ops off", async () => {
+  test("the plan and the service decide: no watch while paused, frozen, ended, on Pro, with ops off or unlisted", async () => {
     await ready()
     for (const state of ["paused", "frozen", "ended"] as const) {
       world.seed(MAX, "vector-100", state)
@@ -487,6 +487,11 @@ describe("deployments → Release Guard", () => {
     expect(await route(event("deployment_status", deploymentStatus()))).toEqual({ kind: "ignored", reason: "off" })
     expect(releases()).toBe(0)
     process.env.VECTOR_OPS_ENABLED = "true"
+    // Release Guard not listed, and the account not on the owner's allowlist: no watch either.
+    delete process.env.VECTOR_OPS_ALLOW_ACCOUNTS
+    expect(await route(event("deployment_status", deploymentStatus()))).toEqual({ kind: "ignored", reason: "not-listed" })
+    expect(releases()).toBe(0)
+    process.env.CODIUM_LISTED_PERKS = "release-guard"
     world.seed(MAX, "vector-100", "renewing")
     expect((await route(event("deployment_status", deploymentStatus()))).kind).toBe("release")
   })

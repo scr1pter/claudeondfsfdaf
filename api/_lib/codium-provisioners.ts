@@ -8,7 +8,14 @@ import { relayConfigured, relayErase, relayKill, relaySuspend, type RelaySuspend
 import { trackOpsAccount } from "./ops-accounts.js"
 import { eraseAccountOps } from "./ops-cleanup.js"
 import { opsCall, opsConfigured, opsPlanFor } from "./ops-worker.js"
-import { eraseAccountVault, holdVault, lapseVault, releaseVault, vaultStoreConfigured } from "./vault-store.js"
+import {
+  eraseAccountVault,
+  holdVault,
+  lapseVault,
+  releaseVault,
+  vaultQuotaBytes,
+  vaultStoreConfigured,
+} from "./vault-store.js"
 import { eraseAccountPushSubscriptions, pushConfigured } from "./web-push.js"
 import type { EntitlementSnapshot } from "../../packages/schema/src/codium-entitlements.js"
 
@@ -231,21 +238,27 @@ export const remote: PerkProvisioner = {
 
 // ── vault ──────────────────────────────────────────────────────────────────────────────────────────────────────────
 
-/** What the vault should hold for a snapshot (§4.4's Brain Vault row). */
+/**
+ * What the vault should hold for a snapshot (§4.4's Brain Vault row). A live or paused plan that no longer includes
+ * Brain Vault (a move down to Plus) is a lapse too: Vault access ended, so the notice and the 30 read-only days apply,
+ * and a move back up releases the vault again.
+ */
 export function vaultPolicy(snapshot: EntitlementSnapshot | undefined): "erase" | "hold" | "release" | "lapse" {
   if (snapshot?.state === "ended" && snapshot.reason === "closing") return "erase"
   if (snapshot?.state === "frozen") return "hold"
-  if (snapshot?.state === "active" || snapshot?.state === "renewing" || snapshot?.state === "paused") return "release"
+  if (snapshot?.state === "active" || snapshot?.state === "renewing" || snapshot?.state === "paused")
+    return vaultQuotaBytes(snapshot.caps.vault?.gb ?? 0) > 0 ? "release" : "lapse"
   return "lapse"
 }
 
 /**
  * `vault` (WP A44, §4.4's Brain Vault row), converging the account's vault (vault-store.ts) to the snapshot. Uploads
  * themselves are decided by each request from the snapshot; this keeps what the daily cleanup may delete in line:
- * - active, renewing and paused: no hold and no deletion date (paused refuses uploads and keeps everything);
+ * - active, renewing and paused on a plan with Brain Vault: no hold and no deletion date (paused refuses uploads and
+ *   keeps everything);
  * - frozen: held, so nothing is deleted, not even versions past their days, until the dispute or warning is settled;
- * - ended (or no plan any more): read-only for 30 days counted from an emailed notice, sent once, then deleted by the
- *   cleanup; a plan that starts again before then clears the date;
+ * - ended (or no plan any more), or a plan without Brain Vault (Plus): read-only for 30 days counted from an emailed
+ *   notice, sent once, then deleted by the cleanup; a plan with Brain Vault before then clears the date;
  * - account deletion (`closing`): the vault is erased at once, the wrapped key first (P5).
  * A call is made only when the policy changes, or always when the previous snapshot is unknown (the sweep's
  * catch-up); each is idempotent. Configured while the store is, so erasure still works after Vault is turned off.

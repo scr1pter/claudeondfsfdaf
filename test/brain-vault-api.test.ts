@@ -10,7 +10,7 @@ import { handleVaultCleanup } from "../api/vault/cleanup"
 import { mintCliToken } from "../api/_lib/cli-token"
 import { codiumKey } from "../api/_lib/codium-keys"
 import { listedPerks, perkServices } from "../api/_lib/codium-perks"
-import { vault as vaultProvisioner } from "../api/_lib/codium-provisioners"
+import { vault as vaultProvisioner, vaultPolicy } from "../api/_lib/codium-provisioners"
 import { buildSnapshot, snapshotKey, type SnapshotFacts } from "../api/_lib/codium-snapshot"
 import type { ApiRequest, ApiResponse } from "../api/_lib/http"
 import { readVaultMeter } from "../api/_lib/vault-meter"
@@ -40,6 +40,8 @@ import { jsonHeaders } from "./support-reports-fixture"
 
 const DAY = 86_400_000
 const HOUR = 3_600_000
+/** Past the life of every upload link signed now, and the grace after it: a queued blob can then be deleted. */
+const LINKS = VAULT_LIMITS.linkSeconds * 1000 + VAULT_LIMITS.linkGraceMs + 1
 const BASE = Date.now() - (Date.now() % 1000)
 let offset = 0
 const clock = () => BASE + offset
@@ -202,6 +204,8 @@ async function backUp(account: string, version: string, objects: { id: string; s
 }
 
 const r2Keys = () => [...w.bucket.objects.keys()].sort()
+const cleanupNow = () => api(handleVaultCleanup, { authorization: `Bearer ${VAULT_ENVIRONMENT.CRON_SECRET}` })
+const deletes = () => w.bucket.calls.filter((call) => call.method === "DELETE").map((call) => call.key.split("/").pop())
 const hashOf = (account: string) => vaultAccount(account)
 const live = async (account: string) =>
   (await backend.blobs(hashOf(account))).filter((blob) => blob.state === "pending" || blob.state === "stored")
@@ -511,6 +515,63 @@ describe("quota is a server gate", () => {
     for (const n of [10, 11, 12, 13]) expect((await uploads(PRO, { version: versionId(n), objects: [] })).status).toBe(200)
     const fifth = await uploads(PRO, { version: versionId(14), objects: [] })
     expect([fifth.status, fifth.body.error.code]).toEqual([429, "RATE_LIMITED"])
+    // A backup with no request for an hour can no longer commit, so it stops counting before the cleanup sweeps it.
+    offset += VAULT_LIMITS.reserveMs - 1_000
+    expect((await uploads(PRO, { version: versionId(15), objects: [] })).status).toBe(429)
+    offset += 1_001
+    expect((await uploads(PRO, { version: versionId(16), objects: [] })).status).toBe(200)
+    expect((await backend.versions(hashOf(PRO))).filter((item) => !item.committed)).toHaveLength(5)
+  })
+
+  test("past the version cap a backup makes room: the oldest version goes, with what only it names", async () => {
+    seedPlan(PRO, "vector-50")
+    const vault = await createVault(PRO)
+    // Several computers sharing one vault back up far more than twice a day; every version is inside its 30 days.
+    const ids: string[] = []
+    for (let n = 1; n <= VAULT_LIMITS.versions; n++) {
+      ids.push(versionId(n))
+      await backUp(PRO, ids.at(-1)!, [{ id: object(1), size: 1_000 }, { id: object(1_000 + n), size: 100 }], 300)
+      offset += 60_000
+    }
+    const next = versionId(61)
+    const declared = await uploads(PRO, { version: next, objects: [{ id: object(1), size: 1_000 }, { id: object(2_000), size: 100 }] })
+    expect(declared.status).toBe(200)
+    expect(declared.body.present).toEqual([object(1)])
+    const listing = await api(handleVaultSnapshots, { account: PRO })
+    expect(listing.body.snapshots).toHaveLength(VAULT_LIMITS.versions - 1)
+    expect(listing.body.snapshots.map((item: { id: string }) => item.id)).not.toContain(ids[0])
+    // The dropped version's manifest and the object only it named are queued; the shared object stays.
+    const blobs = await backend.blobs(hashOf(PRO))
+    const state = (kind: string, id: string) => blobs.find((blob) => blob.kind === kind && blob.id === id)?.state
+    expect([state("manifest", ids[0]!), state("object", object(1_001)), state("object", object(1))]).toEqual([
+      "trash",
+      "trash",
+      "stored",
+    ])
+    await put(declared.body.uploads[0].url, 100)
+    const last = await uploads(PRO, { version: next, objects: [], manifest: { size: 300 } })
+    await put(last.body.manifest.url, 300)
+    expect((await commit(PRO, next, 2)).status).toBe(200)
+    const after = (await api(handleVaultSnapshots, { account: PRO })).body.snapshots.map((item: { id: string }) => item.id)
+    expect(after).toHaveLength(VAULT_LIMITS.versions)
+    expect(after[0]).toBe(next)
+    expect(after.at(-1)).toBe(ids[1])
+    offset += LINKS
+    await cleanupNow()
+    const prefix = `test/${hashOf(PRO)}/${vault}`
+    expect(r2Keys()).not.toContain(`${prefix}/versions/${ids[0]}`)
+    expect(r2Keys()).not.toContain(`${prefix}/objects/${object(1_001)}`)
+    expect(r2Keys()).toContain(`${prefix}/objects/${object(1)}`)
+
+    // A held vault (frozen) loses nothing it committed, so at the cap it refuses instead of dropping.
+    const active = snapshotFor(PRO, "vector-50")
+    await vaultProvisioner.apply(
+      { account: PRO, from: active, to: { ...snapshotFor(PRO, "vector-50", "frozen"), version: active.version + 1 }, cause: "disputed" },
+      w.fetcher,
+    )
+    const held = await uploads(PRO, { version: versionId(62), objects: [] })
+    expect([held.status, held.body.error.code]).toEqual([402, "VAULT_QUOTA"])
+    expect((await api(handleVaultSnapshots, { account: PRO })).body.snapshots).toHaveLength(VAULT_LIMITS.versions)
   })
 })
 
@@ -532,11 +593,13 @@ describe("commit", () => {
     expect((await commit(PRO, id, 5)).body.error.code).toBe("VAULT_SIZE_MISMATCH")
     const refused = await commit(PRO, id, 2)
     expect([refused.status, refused.body.error.code]).toEqual([409, "VAULT_SIZE_MISMATCH"])
-    expect(w.bucket.calls.filter((call) => call.method === "DELETE").map((call) => call.key.split("/").pop()).sort()).toEqual(
-      [object(1), object(2)].sort(),
-    )
-    expect(r2Keys().some((key) => key.endsWith(object(1)))).toBe(false)
+    // Both are queued at once (the quota no longer counts them), and deleted once no upload link can write them.
     expect((await live(PRO)).map((blob) => blob.kind)).toEqual(["manifest"])
+    expect(deletes()).toEqual([])
+    offset += LINKS
+    expect((await cleanupNow()).body).toMatchObject({ deleted: 2 })
+    expect(deletes().sort()).toEqual([object(1), object(2)].sort())
+    expect(r2Keys().some((key) => key.endsWith(object(1)))).toBe(false)
     // Running the backup again (a new version) uploads both and commits.
     const again = versionId(2)
     const { done } = await backUp(PRO, again, objects)
@@ -635,7 +698,9 @@ describe("the Vault client against these routes", () => {
     // P1: bytes and counts only.
     expect(JSON.stringify(listing)).not.toMatch(/\$|usd|credit|cents/i)
 
-    // Forgetting the first version deletes only its manifest: every object is still named by the second.
+    // Forgetting the first version deletes only its manifest: every object is still named by the second. (The upload
+    // links have expired by now, so the deletes happen at once.)
+    offset += LINKS
     const before = r2Keys()
     await VaultBackup.forget({ store, opened: created, version: first.snapshot.id })
     expect(before.filter((key) => !r2Keys().includes(key))).toEqual([
@@ -664,6 +729,7 @@ describe("deletion", () => {
     await backUp(PRO, a, [1, 2].map((n) => ({ id: object(n), size: 1_000 })), 500)
     await backUp(PRO, b, [2, 3].map((n) => ({ id: object(n), size: 1_000 })), 600)
     expect((await api(handleVaultSnapshots, { account: PRO })).body.usage.usedBytes).toBe(4_100)
+    offset += LINKS
     const forgotten = await api(handleVaultSnapshot, { method: "DELETE", account: PRO, id: a })
     expect(forgotten.body).toEqual({ forgotten: true })
     expect((await api(handleVaultSnapshots, { account: PRO })).body).toMatchObject({
@@ -693,14 +759,62 @@ describe("deletion", () => {
     // The same vault id cannot come back while it is being deleted; a new vault can be made at once.
     expect((await api(handleVaultSetup, { method: "POST", account: PRO, body: { vault: vaultHex(1), key: wrapped(vaultHex(1)) } })).body.error.code).toBe("VAULT_EXISTS")
     await createVault(PRO, vaultHex(2))
+    // Once the upload links are dead the cleanup claims them; storage still down, the deletes fail and stay claimed.
+    offset += LINKS
+    expect((await cleanupNow()).body).toMatchObject({ deleted: 0, failed: 4 })
+    expect(r2Keys()).toHaveLength(4)
     w.bucket.state.down = false
     offset += VAULT_LIMITS.claimStaleMs + 1
-    const cleaned = await api(handleVaultCleanup, { authorization: `Bearer ${VAULT_ENVIRONMENT.CRON_SECRET}` })
+    const cleaned = await cleanupNow()
     expect(cleaned.body).toMatchObject({ enabled: true, deleted: 4, failed: 0 })
     expect(r2Keys()).toEqual([])
     expect((await backend.vaults(hashOf(PRO))).map((row) => row.vault)).toEqual([vaultHex(2)])
     expect((await api(handleVaultDelete, { method: "DELETE", account: PRO })).status).toBe(200)
     expect((await api(handleVaultDelete, { method: "DELETE", account: PRO })).body.error.code).toBe("VAULT_NOT_FOUND")
+  })
+})
+
+describe("upload links and deletion", () => {
+  test("a blob queued while an upload link still works is deleted only after the link expires, so a late PUT leaves nothing", async () => {
+    seedPlan(PRO, "vector-50")
+    await createVault(PRO)
+    const id = versionId()
+    const declared = await uploads(PRO, { version: id, objects: [{ id: object(1), size: 1_000 }] })
+    const manifest = await uploads(PRO, { version: id, objects: [], manifest: { size: 500 } })
+    await put(manifest.body.manifest.url, 500)
+    // Nothing arrived for object 1: the commit queues it and answers 409, and its own purge deletes nothing yet.
+    expect((await commit(PRO, id, 1)).body.error.code).toBe("VAULT_SIZE_MISMATCH")
+    expect(deletes()).toEqual([])
+    // The old link still works, so the bytes land in storage after the queueing; the quota no longer counts them.
+    expect((await put(declared.body.uploads[0].url, 1_000)).status).toBe(200)
+    expect(r2Keys().some((key) => key.endsWith(object(1)))).toBe(true)
+    expect((await api(handleVaultSnapshots, { account: PRO })).body.usage.usedBytes).toBe(500)
+    // A cleanup inside the link's life and its grace leaves it queued; the first one after deletes what the PUT wrote.
+    offset += VAULT_LIMITS.linkSeconds * 1000
+    expect((await cleanupNow()).body).toMatchObject({ deleted: 0 })
+    expect((await backend.blobs(hashOf(PRO))).find((blob) => blob.id === object(1))?.state).toBe("trash")
+    offset += VAULT_LIMITS.linkGraceMs + 1
+    expect((await cleanupNow()).body).toMatchObject({ deleted: 1 })
+    expect(r2Keys().some((key) => key.endsWith(object(1)))).toBe(false)
+    expect((await backend.blobs(hashOf(PRO))).find((blob) => blob.id === object(1))).toBeUndefined()
+    // And the link is dead now, so nothing comes back.
+    expect((await put(declared.body.uploads[0].url, 1_000)).status).toBe(403)
+
+    // A queued object reserved again (the backup run again at once) is pending with a new link: nothing deletes it.
+    const again = versionId(2)
+    await uploads(PRO, { version: again, objects: [{ id: object(2), size: 1_000 }] })
+    const second = await uploads(PRO, { version: again, objects: [], manifest: { size: 500 } })
+    await put(second.body.manifest.url, 500)
+    expect((await commit(PRO, again, 1)).status).toBe(409)
+    const state = async () => (await backend.blobs(hashOf(PRO))).find((blob) => blob.id === object(2))?.state
+    expect(await state()).toBe("trash")
+    const retried = await uploads(PRO, { version: versionId(3), objects: [{ id: object(2), size: 1_000 }] })
+    expect(retried.body.uploads.map((item: { id: string }) => item.id)).toEqual([object(2)])
+    expect((await put(retried.body.uploads[0].url, 1_000)).status).toBe(200)
+    offset += LINKS
+    await cleanupNow()
+    expect(r2Keys().some((key) => key.endsWith(object(2)))).toBe(true)
+    expect(await state()).toBe("pending")
   })
 })
 
@@ -764,6 +878,7 @@ describe("cleanup", () => {
     const won = { ...active, version: frozen.version + 1 }
     await vaultProvisioner.apply({ account: PRO, from: frozen, to: won, cause: "dispute_won" }, w.fetcher)
     expect((await backend.vaults(hashOf(PRO)))[0]).toMatchObject({ held: false })
+    offset += LINKS
     expect((await cron()).body).toMatchObject({ pruned: 1, collected: 1, deleted: 2 })
   })
 
@@ -824,9 +939,59 @@ describe("cleanup", () => {
     w.log.length = 0
     await vaultProvisioner.apply({ account: ULTRA, from: active, to: closing, cause: "closing" }, w.fetcher)
     expect(w.log[0]).toBe("rpc:destroy")
+    expect(await backend.vaults(hashOf(ULTRA))).toEqual([
+      { vault: vaultHex(1), wrappedKey: null, deleting: true, held: false, noticeAt: null, deleteAt: null },
+    ])
+    expect(w.emails).toEqual([])
+    // The backup's upload links still work, so its objects go with the first cleanup after they expire.
+    expect(r2Keys()).toHaveLength(3)
+    offset += LINKS
+    expect((await cron()).body).toMatchObject({ deleted: 3 })
     expect(r2Keys()).toEqual([])
     expect(await backend.vaults(hashOf(ULTRA))).toEqual([])
-    expect(w.emails).toEqual([])
+  })
+
+  test("a plan without Brain Vault (Pro down to Plus) turns the vault read-only with the notice; a plan with it clears that", async () => {
+    w.users.set(PRO, "pro@example.invalid")
+    seedPlan(PRO, "vector-50")
+    await createVault(PRO)
+    await backUp(PRO, versionId(), [{ id: object(1), size: 1_000 }])
+    const pro = snapshotFor(PRO, "vector-50")
+    const plus = { ...snapshotFor(PRO, "vector-10"), version: pro.version + 1 }
+    expect([vaultPolicy(pro), vaultPolicy(plus), vaultPolicy({ ...plus, state: "paused" })]).toEqual([
+      "release",
+      "lapse",
+      "lapse",
+    ])
+    await vaultProvisioner.apply({ account: PRO, from: pro, to: plus, cause: "downgrade" }, w.fetcher)
+    await vaultProvisioner.apply({ account: PRO, from: pro, to: plus, cause: "downgrade" }, w.fetcher)
+    expect(w.emails).toHaveLength(1)
+    expect(w.emails[0]!.text).toContain("no longer includes Brain Vault")
+    expect(w.emails[0]!.text).not.toMatch(/\$|usd|credit|\b\d+ ?GB\b/i)
+    const row = (await backend.vaults(hashOf(PRO)))[0]!
+    expect(row.deleteAt! - Date.now()).toBeGreaterThan(30 * DAY - 60_000)
+    expect(row.deleteAt! - Date.now()).toBeLessThanOrEqual(30 * DAY)
+    seedPlan(PRO, "vector-10")
+    expect((await api(handleVaultSnapshots, { account: PRO })).body).toMatchObject({ readOnly: true, deleteAt: row.deleteAt })
+    expect((await uploads(PRO, { version: versionId(2), objects: [] })).body.error.code).toBe("CODIUM_PERK_REQUIRED")
+
+    // Back up to a plan with Brain Vault before the date: the date goes, and nothing is deleted.
+    const back = { ...pro, version: plus.version + 1 }
+    await vaultProvisioner.apply({ account: PRO, from: plus, to: back, cause: "upgrade" }, w.fetcher)
+    expect((await backend.vaults(hashOf(PRO)))[0]).toMatchObject({ noticeAt: null, deleteAt: null })
+    offset = row.deleteAt! - BASE + DAY
+    expect((await cron()).body).toMatchObject({ lapsed: 0 })
+    expect(r2Keys()).toHaveLength(2)
+
+    // Down to Plus for good: 30 days after the notice the vault and its objects go.
+    offset = 0
+    const again = { ...plus, version: back.version + 1 }
+    await vaultProvisioner.apply({ account: PRO, from: back, to: again, cause: "downgrade" }, w.fetcher)
+    expect(w.emails).toHaveLength(2)
+    const deleteAt = (await backend.vaults(hashOf(PRO)))[0]!.deleteAt!
+    offset = deleteAt - BASE + 1
+    expect((await cron()).body).toMatchObject({ lapsed: 1, deleted: 2 })
+    expect(await backend.vaults(hashOf(PRO))).toEqual([])
   })
 })
 

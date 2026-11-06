@@ -63,6 +63,12 @@ export const OTHER = "a47a47a4-0000-4000-8000-000000000006"
 
 export const OPS_ENVIRONMENT = {
   NODE_ENV: "test",
+  // The ops perks are not listed in these tests; the owner's allowlist lets the fixture's accounts use them (a test that
+  // checks the listing gate deletes it). ops-listing.ts.
+  VECTOR_OPS_ALLOW_ACCOUNTS: [MAX, ULTRA, PRO, FREE, OTHER].join(","),
+  // Cleared for each world and put back after it, so a test that sets them never reaches the next one.
+  CODIUM_LISTED_PERKS: undefined,
+  MODEL_PLAN_REQUIRE_MARKED_TOKENS: undefined,
   VECTOR_CLI_TOKEN_SECRET: "ops-fixture-cli-secret-".padEnd(48, "c"),
   VECTOR_ABUSE_SECRET: "ops-fixture-abuse-secret-".padEnd(48, "b"),
   SUPABASE_URL: SUPABASE,
@@ -276,7 +282,7 @@ export type FakePull = {
   merge_commit_sha?: string
   commits: number
   base: { ref: string; repo: { id: number } }
-  head: { ref: string; repo: { id: number } }
+  head: { ref: string; sha?: string; repo: { id: number } }
   user: { login: string; type: string }
 }
 
@@ -289,7 +295,10 @@ const sha40 = (seed: string) => createHash("sha1").update(seed).digest("hex")
  * `fail` makes the next matching requests fail, as an unreachable or refusing GitHub does.
  */
 export class FakeGithub {
-  readonly repos = new Map<number, { fullName: string; defaultBranch: string; installationId: number }>()
+  readonly repos = new Map<
+    number,
+    { fullName: string; defaultBranch: string; installationId: number; private?: boolean }
+  >()
   readonly tokens = new Map<string, { repositoryId: number; permissions: Record<string, string>; revoked: boolean }>()
   readonly minted: { repositoryId: number; installationId: number; permissions: Record<string, string> }[] = []
   readonly optIns = new Map<string, string | null>()
@@ -420,7 +429,13 @@ export class FakeGithub {
       return this.json({
         total_count: 1,
         repositories: [
-          { id: repoId, full_name: repo.fullName, default_branch: repo.defaultBranch, private: true, archived: false },
+          {
+            id: repoId,
+            full_name: repo.fullName,
+            default_branch: repo.defaultBranch,
+            private: repo.private ?? true,
+            archived: false,
+          },
         ],
       })
     const can = (permission: string) => token.permissions[permission] === "write"
@@ -437,13 +452,18 @@ export class FakeGithub {
         title: body?.variables?.title,
         body: body?.variables?.body,
         base: { ref: pull.base.ref, repo: { id: repoId } },
-        head: { ref: `revert-${pull.number}-${pull.head.ref}`, repo: { id: repoId } },
+        head: { ref: `revert-${pull.number}-${pull.head.ref}`, sha: this.newSha(), repo: { id: repoId } },
         user: { login: `${APP_SLUG}[bot]`, type: "Bot" },
       })
       return this.json({
         data: {
           revertPullRequest: {
-            revertPullRequest: { number: created.number, url: created.html_url, headRefName: created.head.ref },
+            revertPullRequest: {
+              number: created.number,
+              url: created.html_url,
+              headRefName: created.head.ref,
+              headRefOid: created.head.sha,
+            },
           },
         },
       })
@@ -517,7 +537,7 @@ export class FakeGithub {
         title: body?.title,
         body: body?.body,
         base: { ref: body?.base, repo: { id: repoId } },
-        head: { ref: body?.head, repo: { id: repoId } },
+        head: { ref: body?.head, sha: this.refs.get(`${repoId}:${body?.head}`), repo: { id: repoId } },
         user: { login: `${APP_SLUG}[bot]`, type: "Bot" },
       })
       return this.json(created, 201)

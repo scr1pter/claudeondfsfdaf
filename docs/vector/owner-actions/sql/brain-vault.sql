@@ -15,6 +15,10 @@
 -- The quota counts pending and stored blobs. Every write to a vault's blobs first locks the vault's row, so two
 -- reservations can never pass the quota together.
 --
+-- signed_until is when the last PUT link signed for a blob stops working (the link's life plus a grace for clock skew
+-- and an upload still sending). A blob in trash is not deleted from R2 before then: a PUT through a link still alive
+-- would otherwise recreate the object after its row was gone, where no quota counts it and no cleanup finds it.
+--
 -- Times are milliseconds since the epoch and come from the server (`now` in each request).
 begin;
 
@@ -65,12 +69,15 @@ create table if not exists public.vector_brain_vault_blobs (
   size bigint not null check (size >= 0),
   state text not null check (state in ('pending', 'stored', 'trash', 'claimed')),
   reserved_until bigint,
+  signed_until bigint,
   claimed_at bigint,
   updated_at bigint not null,
   primary key (vault_id, kind, id),
   check ((kind = 'object' and id ~ '^[0-9a-f]{64}$') or (kind = 'manifest' and id ~ '^v[0-9]{13}-[0-9a-f]{8}$')),
   check ((state = 'claimed') = (claimed_at is not null))
 );
+-- A table made by an earlier copy of this file gets the column too.
+alter table public.vector_brain_vault_blobs add column if not exists signed_until bigint;
 create index if not exists vector_brain_vault_blobs_state on public.vector_brain_vault_blobs (vault_id, state);
 create index if not exists vector_brain_vault_blobs_trash on public.vector_brain_vault_blobs (updated_at)
   where state in ('trash', 'claimed');
@@ -108,6 +115,10 @@ declare
   v_sizes bigint[];
   v_present text[];
   v_sign text[];
+  v_signed bigint;
+  v_drop bigint := 0;
+  v_dropped text[];
+  v_orphans text[];
   n_lapsed bigint := 0;
   n_versions bigint := 0;
   n_pending bigint := 0;
@@ -130,6 +141,7 @@ begin
   end if;
 
   -- ── Deletion from R2: claim queued blobs, then remove those the server deleted ─────────────────────────────────────
+  -- Only blobs no live PUT link can write to any more: one queued while a link still works waits for a later claim.
   if v_action = 'claim' then
     if jsonb_typeof(request->'staleMs') is distinct from 'number' then
       return jsonb_build_object('status', 'invalid');
@@ -140,6 +152,7 @@ begin
         from public.vector_brain_vault_blobs b
         join public.vector_brain_vaults v on v.id = b.vault_id
        where v.mode = v_mode and (v_account is null or v.account = v_account)
+         and coalesce(b.signed_until, 0) < v_now
          and (b.state = 'trash' or (b.state = 'claimed' and b.claimed_at < v_now - (request->>'staleMs')::bigint))
        order by b.updated_at, b.id
        limit v_limit
@@ -330,12 +343,14 @@ begin
     if v_version is null or jsonb_typeof(request->'objects') is distinct from 'array'
        or jsonb_typeof(request->'versionAt') is distinct from 'number' or jsonb_typeof(request->'quota') is distinct from 'number'
        or jsonb_typeof(request->'reserveMs') is distinct from 'number'
+       or jsonb_typeof(request->'signedMs') is distinct from 'number'
        or jsonb_typeof(request->'versionDays') is distinct from 'number'
        or jsonb_typeof(request->'limits') is distinct from 'object'
        or (request ? 'manifest' and jsonb_typeof(request->'manifest') is distinct from 'number') then
       return jsonb_build_object('status', 'invalid');
     end if;
     v_manifest := case when request ? 'manifest' then (request->>'manifest')::bigint end;
+    v_signed := v_now + (request->>'signedMs')::bigint;
     select coalesce(array_agg(s.id order by s.id), '{}'::text[]), coalesce(array_agg(s.size order by s.id), '{}'::bigint[])
       into v_ids, v_sizes
       from (select distinct on (e->>'id') e->>'id' as id, (e->>'size')::bigint as size
@@ -357,12 +372,20 @@ begin
       return jsonb_build_object('status', 'committed');
     end if;
     if not v_exists then
-      if (select count(*) from public.vector_brain_vault_versions s where s.vault_id = item.id and not s.committed)
+      -- Backups in progress: only those with a request within the reservation time. One that died (a dropped
+      -- connection, a refused commit) stops counting once it could no longer commit, before the cleanup sweeps it.
+      if (select count(*) from public.vector_brain_vault_versions s
+           where s.vault_id = item.id and not s.committed
+             and s.touched_at >= v_now - (request->>'reserveMs')::bigint)
          >= (request->'limits'->>'open')::bigint then
         return jsonb_build_object('status', 'open');
       end if;
-      if (select count(*) from public.vector_brain_vault_versions s where s.vault_id = item.id and s.committed)
-         >= (request->'limits'->>'versions')::bigint then
+      -- At the version cap the oldest committed versions make room (never the newest), once everything below is
+      -- checked. A held vault loses nothing it committed, so it is refused instead.
+      select count(*) into v_count
+        from public.vector_brain_vault_versions s where s.vault_id = item.id and s.committed;
+      v_drop := greatest(v_count - (request->'limits'->>'versions')::bigint + 1, 0);
+      if v_drop > 0 and (item.held or v_drop > v_count - 1) then
         return jsonb_build_object('status', 'versions');
       end if;
     end if;
@@ -409,7 +432,27 @@ begin
     if v_refs + v_added > (request->'limits'->>'refs')::bigint then
       return jsonb_build_object('status', 'quota', 'usedBytes', v_used);
     end if;
-    -- Everything checked: reserve.
+    -- Everything checked: make room at the version cap, then reserve.
+    if v_drop > 0 then
+      -- The oldest committed versions, as forgetting them would: their manifests and the objects no other version
+      -- names (nor this request, which is about to name them) are queued for deletion.
+      select coalesce(array_agg(o.id), '{}'::text[]) into v_dropped from (
+        select s.id from public.vector_brain_vault_versions s
+         where s.vault_id = item.id and s.committed
+         order by s.created_at, s.id
+         limit v_drop) o;
+      select coalesce(array_agg(distinct r.object), '{}'::text[]) into v_orphans
+        from public.vector_brain_vault_refs r where r.vault_id = item.id and r.version = any(v_dropped);
+      delete from public.vector_brain_vault_versions s where s.vault_id = item.id and s.id = any(v_dropped);
+      update public.vector_brain_vault_blobs b
+         set state = 'trash', reserved_until = null, updated_at = v_now
+       where b.vault_id = item.id and b.kind = 'manifest' and b.id = any(v_dropped) and b.state in ('pending', 'stored');
+      update public.vector_brain_vault_blobs b
+         set state = 'trash', reserved_until = null, updated_at = v_now
+       where b.vault_id = item.id and b.kind = 'object' and b.id = any(v_orphans) and not (b.id = any(v_ids))
+         and b.state in ('pending', 'stored')
+         and not exists (select 1 from public.vector_brain_vault_refs r where r.vault_id = b.vault_id and r.object = b.id);
+    end if;
     if v_exists then
       update public.vector_brain_vault_versions s set touched_at = greatest(s.touched_at, v_now)
        where s.vault_id = item.id and s.id = v_version;
@@ -419,20 +462,31 @@ begin
     end if;
     update public.vector_brain_vaults v set version_days = (request->>'versionDays')::integer, updated_at = v_now
      where v.id = item.id;
-    insert into public.vector_brain_vault_blobs as b (vault_id, kind, id, size, state, reserved_until, claimed_at, updated_at)
-    select item.id, 'object', i.id, i.size, 'pending', v_now + (request->>'reserveMs')::bigint, null, v_now
+    -- Every row reserved here gets a PUT link (the stored ones are left as they are), so each records when its newest
+    -- link stops working.
+    insert into public.vector_brain_vault_blobs as b
+      (vault_id, kind, id, size, state, reserved_until, signed_until, claimed_at, updated_at)
+    select item.id, 'object', i.id, i.size, 'pending', v_now + (request->>'reserveMs')::bigint, v_signed, null, v_now
       from unnest(v_ids, v_sizes) as i(id, size)
     on conflict (vault_id, kind, id) do update
        set size = excluded.size, state = 'pending', claimed_at = null, updated_at = excluded.updated_at,
-           reserved_until = greatest(coalesce(b.reserved_until, 0), excluded.reserved_until)
+           reserved_until = greatest(coalesce(b.reserved_until, 0), excluded.reserved_until),
+           signed_until = greatest(coalesce(b.signed_until, 0), excluded.signed_until)
      where b.state in ('pending', 'trash');
     if v_manifest is not null then
-      insert into public.vector_brain_vault_blobs as b (vault_id, kind, id, size, state, reserved_until, claimed_at, updated_at)
-      values (item.id, 'manifest', v_version, v_manifest, 'pending', v_now + (request->>'reserveMs')::bigint, null, v_now)
+      insert into public.vector_brain_vault_blobs as b
+        (vault_id, kind, id, size, state, reserved_until, signed_until, claimed_at, updated_at)
+      values (item.id, 'manifest', v_version, v_manifest, 'pending', v_now + (request->>'reserveMs')::bigint, v_signed,
+              null, v_now)
       on conflict (vault_id, kind, id) do update
          set size = excluded.size, state = 'pending', claimed_at = null, updated_at = excluded.updated_at,
-             reserved_until = greatest(coalesce(b.reserved_until, 0), excluded.reserved_until)
+             reserved_until = greatest(coalesce(b.reserved_until, 0), excluded.reserved_until),
+             signed_until = greatest(coalesce(b.signed_until, 0), excluded.signed_until)
        where b.state in ('pending', 'trash');
+      -- The manifest is signed even when a commit round already confirmed it.
+      update public.vector_brain_vault_blobs b
+         set signed_until = greatest(coalesce(b.signed_until, 0), v_signed)
+       where b.vault_id = item.id and b.kind = 'manifest' and b.id = v_version;
     end if;
     insert into public.vector_brain_vault_refs (vault_id, version, object)
     select item.id, v_version, i.id from unnest(v_ids) as i(id)

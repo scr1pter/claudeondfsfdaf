@@ -1,4 +1,5 @@
 import { ApiError, handleApiError, json, type ApiRequest, type ApiResponse } from "../_lib/http.js"
+import { modelPlanRequireMarkedTokens } from "../_lib/model-plan-config.js"
 import { opsRateLimit, readOpsBody, requireOpsCaller } from "../_lib/ops-api.js"
 import { listIncidents, snoozeIncident, startIncidentFix, unsnoozeIncident } from "../_lib/ops-incidents.js"
 
@@ -20,7 +21,10 @@ const FIELDS = ["id", "action", "hours", "repositoryId"] as const
  * - `POST {id, action: "snooze", hours}`: no alerts and no automatic revert for that URL, or that repository and
  *   environment, for 1 to 24 hours. `{id, action: "unsnooze"}` ends it.
  * - `POST {id, action: "fix", repositoryId?}`: "Fix it", a run of Vector's GitHub agent in the person's own repository,
- *   started only by this request (never on its own), within the plan's fix runs a day and one per incident.
+ *   started only by this request (never on its own), within the plan's fix runs a day and one per incident. It spends
+ *   the account's Codium, so only a website session or a marked token (the desktop's own sign-in, `vector login`) may
+ *   ask; a token copied from vectordev.ai/auth/cli gets 401 CODIUM_SIGN_IN_REQUIRED (§4.9, S2), unless the owner set
+ *   MODEL_PLAN_REQUIRE_MARKED_TOKENS=false.
  *
  * Callers: an unrevoked `vct_` account token or a website session; run tokens get 401 (S3). Writes take 60 an hour.
  */
@@ -47,6 +51,12 @@ export async function handleOpsIncidents(
       case "unsnooze":
         return json(response, 200, await unsnoozeIncident(caller.account, body.id, fetcher))
       case "fix":
+        if (caller.via === "token" && !caller.client && modelPlanRequireMarkedTokens())
+          throw new ApiError(
+            401,
+            "CODIUM_SIGN_IN_REQUIRED",
+            "Sign in to Vector again or run vector login to use Vector Codium.",
+          )
         return json(
           response,
           200,

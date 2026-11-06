@@ -93,6 +93,8 @@ type BlobRow = {
   size: number
   state: "pending" | "stored" | "trash" | "claimed"
   reservedUntil: number | null
+  /** When the newest PUT link signed for it stops working; it is not deleted from R2 before. */
+  signedUntil: number | null
   claimedAt: number | null
   updatedAt: number
 }
@@ -185,6 +187,7 @@ export class MemoryVaultBackend implements VaultBackend {
           return (
             row?.mode === mode &&
             (account === undefined || row.account === account) &&
+            (blob.signedUntil ?? 0) < now &&
             (blob.state === "trash" || (blob.state === "claimed" && blob.claimedAt! < now - r.staleMs))
           )
         })
@@ -331,6 +334,7 @@ export class MemoryVaultBackend implements VaultBackend {
         typeof r.versionAt !== "number" ||
         typeof r.quota !== "number" ||
         typeof r.reserveMs !== "number" ||
+        typeof r.signedMs !== "number" ||
         typeof r.versionDays !== "number" ||
         !r.limits ||
         ("manifest" in r && typeof r.manifest !== "number")
@@ -346,10 +350,14 @@ export class MemoryVaultBackend implements VaultBackend {
       if (!row) return { status: "not_found" }
       const existing = this.versionRows.find((item) => item.vaultId === row.id && item.id === version)
       if (existing?.committed) return { status: "committed" }
+      let drop = 0
       if (!existing) {
         const versions = this.versionRows.filter((item) => item.vaultId === row.id)
-        if (versions.filter((item) => !item.committed).length >= r.limits.open) return { status: "open" }
-        if (versions.filter((item) => item.committed).length >= r.limits.versions) return { status: "versions" }
+        const open = versions.filter((item) => !item.committed && item.touchedAt >= now - r.reserveMs)
+        if (open.length >= r.limits.open) return { status: "open" }
+        const committed = versions.filter((item) => item.committed).length
+        drop = Math.max(committed - r.limits.versions + 1, 0)
+        if (drop > 0 && (row.held || drop > committed - 1)) return { status: "versions" }
       }
       const blobs = ids.map((id) => [id, this.blob(row.id, "object", id)] as const)
       const manifestBlob = this.blob(row.id, "manifest", version)
@@ -373,6 +381,25 @@ export class MemoryVaultBackend implements VaultBackend {
         return { status: "quota", usedBytes: used.bytes }
       const refs = new Set(this.refRows.filter((ref) => ref.vaultId === row.id && ref.version === version).map((ref) => ref.object))
       if (refs.size + ids.filter((id) => !refs.has(id)).length > r.limits.refs) return { status: "quota", usedBytes: used.bytes }
+      if (drop > 0) {
+        const dropped = this.versionRows
+          .filter((item) => item.vaultId === row.id && item.committed)
+          .sort((a, b) => a.createdAt - b.createdAt || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+          .slice(0, drop)
+          .map((item) => item.id)
+        const orphans = new Set(
+          this.refRows.filter((ref) => ref.vaultId === row.id && dropped.includes(ref.version)).map((ref) => ref.object),
+        )
+        for (const id of dropped) {
+          this.dropVersion(row.id, id)
+          const blob = this.blob(row.id, "manifest", id)
+          if (blob && LIVE.has(blob.state)) this.trash(blob, now)
+        }
+        for (const id of orphans) {
+          const blob = this.blob(row.id, "object", id)
+          if (blob && LIVE.has(blob.state) && !declared.has(id) && !this.referenced(row.id, id)) this.trash(blob, now)
+        }
+      }
       if (existing) existing.touchedAt = Math.max(existing.touchedAt, now)
       else
         this.versionRows.push({
@@ -396,6 +423,7 @@ export class MemoryVaultBackend implements VaultBackend {
             size,
             state: "pending",
             reservedUntil: now + r.reserveMs,
+            signedUntil: now + r.signedMs,
             claimedAt: null,
             updatedAt: now,
           })
@@ -406,10 +434,16 @@ export class MemoryVaultBackend implements VaultBackend {
             claimedAt: null,
             updatedAt: now,
             reservedUntil: Math.max(blob.reservedUntil ?? 0, now + r.reserveMs),
+            signedUntil: Math.max(blob.signedUntil ?? 0, now + r.signedMs),
           })
       }
       for (const id of ids) upsert("object", id, declared.get(id)!)
-      if (manifest !== undefined) upsert("manifest", version, manifest)
+      if (manifest !== undefined) {
+        upsert("manifest", version, manifest)
+        // The manifest is signed even when a commit round already confirmed it.
+        const signed = this.blob(row.id, "manifest", version)!
+        signed.signedUntil = Math.max(signed.signedUntil ?? 0, now + r.signedMs)
+      }
       for (const id of ids) if (!refs.has(id)) this.refRows.push({ vaultId: row.id, version, object: id })
       return {
         status: "ok",
@@ -576,6 +610,7 @@ export class MemoryVaultBackend implements VaultBackend {
       size,
       state: "stored",
       reservedUntil: null,
+      signedUntil: null,
       claimedAt: null,
       updatedAt: 1,
     })

@@ -1,5 +1,6 @@
 import type { Argv } from "yargs"
 import { spawn } from "node:child_process"
+import { randomBytes } from "node:crypto"
 import { constants as fsConstants, existsSync } from "node:fs"
 import fs from "node:fs/promises"
 import os from "node:os"
@@ -23,7 +24,10 @@ import { UI } from "../ui"
 // computer, all labelled ship-desk.
 //
 // `vector ship ticket` asks for the ticket with the run's own token, in the job that minted that token, before the
-// repository is checked out, and hands it to the capture job as the job's `capture` output.
+// repository is checked out, and hands it to the capture job as the job's `capture` output. GitHub prints a step's
+// environment in its log, so the ticket can be read there (vectordev.ai mints none for a public repository): each
+// capture makes a random proof, never written anywhere, and sends it with every request; the first request binds the
+// ticket to it, so a ticket copied from the log is of no use.
 //
 // It runs under Node; it never needs a Vector account.
 
@@ -103,15 +107,17 @@ export function siteOrigin(value: string | undefined) {
   return url.origin
 }
 
-export function captureApi(input: { site: string; ticket: string; send?: Send }): CaptureApi {
+export function captureApi(input: { site: string; ticket: string; send?: Send; proof?: string }): CaptureApi {
   const sender = input.send ?? send
+  // This capture's own proof: the server binds the ticket to it on the first request.
+  const proof = input.proof ?? randomBytes(32).toString("base64url")
   const post = async <T>(body: Record<string, unknown>): Promise<T> => {
     let response: Response
     try {
       response = await sender(`${input.site}/api/ops/uploads`, {
         method: "POST",
         headers: { authorization: `Bearer ${input.ticket}`, "content-type": "application/json" },
-        body: JSON.stringify(body),
+        body: JSON.stringify({ ...body, proof }),
         redirect: "error",
         signal: AbortSignal.timeout(CAPTURE_LIMITS.requestMs),
       })
@@ -514,8 +520,9 @@ const ShipTicketCommand = cmd({
       UI.println(`Ship Desk: no capture ticket. ${result.reason}`)
       return
     }
-    // The ticket goes to the capture job as this job's output. It is not masked (GitHub drops a masked output): it can
-    // only add screenshots to this run's own card for 15 minutes, and the capture job's own code can read it anyway.
+    // The ticket goes to the capture job as this job's output. It is not masked (GitHub drops a masked output), so the
+    // capture job's log shows it: vectordev.ai mints none for a public repository, and the capture's first request
+    // binds it to that capture's own proof, so a copy from the log cannot upload.
     if (process.env.GITHUB_OUTPUT) await fs.appendFile(process.env.GITHUB_OUTPUT, `capture=${result.ticket}\n`)
     else UI.println(result.ticket)
     UI.println("Ship Desk: capture ticket ready.")

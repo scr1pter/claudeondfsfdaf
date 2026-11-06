@@ -87,7 +87,8 @@ export async function handleOpsDomains(
     if (body.verify !== undefined && typeof body.verify !== "boolean")
       throw new ApiError(400, "OPS_INVALID", "Send verify: true to check the domain now.")
     await requireOpsService(fetcher, now)
-    const caps = await requireOpsCaps(caller.account, fetcher, now)
+    // Verified domains serve On Call's monitors and Release Guard's production URL.
+    const caps = await requireOpsCaps(caller.account, ["on-call", "release-guard"], fetcher, now)
     if (body.verify !== true)
       return json(response, 200, await addOpsDomain(caller.account, body.domain, caps, fetcher, now))
     await opsRateLimit(request, response, "ops-verify", caller.account, 20, fetcher)

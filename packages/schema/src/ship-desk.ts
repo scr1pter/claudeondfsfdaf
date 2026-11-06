@@ -8,7 +8,9 @@ export * as ShipDesk from "./ship-desk.js"
  * verdict and before/after screenshots. The screenshots come from a separate capture job in the person's own repository,
  * which holds no `id-token` and no run token: only a capture ticket (`vcap_…`) that the run's own token asked for. A
  * ticket names one run, and so one pull request; it uploads at most `LIMITS.files` images, all inside one 15-minute
- * window that opens when the capture first uploads.
+ * window that opens when the capture first uploads. A ticket is only for private repositories, and its first request
+ * binds it to a random proof the capture job made and sends with every request (`PROOF`): GitHub prints a job's
+ * environment in its log, so the ticket alone can be read by anyone who reads the repository's logs.
  */
 
 export const LIMITS = {
@@ -43,6 +45,8 @@ export const LIMITS = {
 export const TICKET_PREFIX = "vcap_"
 /** `vcap_` and 32 random bytes in base64url. */
 export const TICKET = /^vcap_[A-Za-z0-9_-]{43}$/
+/** The capture job's own proof: 32 random bytes in base64url, made by `vector ship capture` and never logged. */
+export const PROOF = /^[A-Za-z0-9_-]{43}$/
 export const CAPTURE_ID = /^cap_[A-Za-z0-9_-]{22}$/
 export const CARD_ID = /^crd_[A-Za-z0-9_-]{22}$/
 
@@ -180,7 +184,10 @@ export function parseShipJson(text: string): ShipJson | undefined {
 /** `{action: "ticket"}` with the run's own `vrt_` token. */
 export type TicketAnswer = { ticket: string; expiresAt: number }
 
-/** `{action: "card", pr}` with the ticket: the pull request the ticket may capture. Starts nothing. */
+/**
+ * `{action: "card", pr, proof}` with the ticket: the pull request the ticket may capture. Starts nothing. Every request
+ * with a ticket carries `proof`; the first one binds the ticket to it.
+ */
 export type CardAnswer = {
   repository: string
   number: number

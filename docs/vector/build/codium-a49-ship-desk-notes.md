@@ -90,3 +90,23 @@ screens and its readiness check.
   with the marker make cards, and no card has a verdict.
 - A local try-out mode for `.vector/ship.json` (`vector ship capture` needs a ticket and a card).
 - Nothing was pushed or deployed. `bun.lock` was not touched.
+
+## P7 review fixes (5 Nov 2026)
+
+- **Private repositories only.** `mintCaptureTicket` reads the repository's visibility with a read-only `ship` App
+  token (reason `ship-ticket`, revoked and audited like the others) and refuses a public one with 403
+  `SHIP_DESK_PUBLIC_REPOSITORY`: GitHub prints a step's environment in its log, so the capture job's log shows the
+  ticket. GitHub unreachable is 503 `GITHUB_UNAVAILABLE` (no ticket; the capture job does not run).
+- **The ticket is bound to its first caller.** `vector ship capture` makes a random 32-byte proof (`ShipDesk.PROOF`)
+  and sends it as `proof` with every request; the server stores its SHA-256 on the ticket (`proof`, `boundAt`) at the
+  first request of any action, and answers 403 `SHIP_DESK_TICKET_BOUND` to any other proof, 400 to none. The 15-minute
+  upload window still opens at the first `start` (codium-deviations.md, "P7 review decisions"). For Codex's V31: no
+  change to the wiring; a re-run of the capture job alone is refused (new proof), a re-run of the workflow mints a new
+  ticket.
+- **Listing.** A new card and a capture ticket need `ship-desk` listed or the account in `VECTOR_OPS_ALLOW_ACCOUNTS`
+  (intake `not-listed`, ticket 503 `OPS_UNAVAILABLE`); a card made before keeps following its pull request.
+- **Tests:** `test/ship-desk.test.ts` (25 pass, 1 CI-only skip; the helper sends one proof per ticket): the binding (no
+  proof, a short one, another one at card, start and finish; only the hash stored; no window opened by `card`), a public
+  repository refused with the token revoked, GitHub down, unlisted refused, the intake's `not-listed` without a token
+  minted, and an existing card updated while unlisted. `packages/engine/test/cli/ship.test.ts` (11 pass): every API
+  request carries one proof, never in a child's environment.

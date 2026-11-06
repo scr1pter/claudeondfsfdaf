@@ -17,6 +17,7 @@ import {
   utcDay,
   type IndexEntry,
 } from "./ops-records.js"
+import { opsPerkOpen, requireOpsPerk } from "./ops-listing.js"
 import { readOpsSettings, repositoryBinding, urlHost, type OpsRepo } from "./ops-settings.js"
 import { requireOpsService } from "./ops-worker.js"
 import type { StripeMode } from "./model-plan-stripe.js"
@@ -42,7 +43,9 @@ import { sendServerAlert } from "./web-push.js"
  * - `monitor.down` (On Call: a verified URL failed twice in a row) opens an incident and sends a phone alert, which On
  *   Call keeps sending while a payment is retried (§4.4: `allowPaused`). `monitor.up` resolves it.
  * - `release.regressed` (Release Guard) opens an incident, opens the one revert pull request (release-guard.ts) when the
- *   repository is still bound to the account with Release Guard on and the plan allows it now, and alerts the phone.
+ *   repository is still bound to the account with Release Guard on, the plan allows it now, and Release Guard is on at
+ *   Vector (the owner's `ops` switch, the ops services and its listing: a Worker still reporting after the switch went
+ *   off writes nothing), and alerts the phone.
  * - `release.passed` marks the release record passed.
  *
  * The Worker sends each report until it gets a 2xx, with the same event ids (packages/ops-worker/src/protocol.ts), so
@@ -630,6 +633,16 @@ async function decideRevert(
     if (error instanceof ApiError && error.code === "PERSISTENT_STORE_UNAVAILABLE") throw error
     return manual("plan")
   }
+  // A service switched off stops new work (§2, §4.16): the Worker may still report while its kill flag propagates, or
+  // after a flag sync failed, and no revert token is minted then. Nor while Release Guard is not listed.
+  try {
+    await requireOpsService(fetcher, now)
+  } catch (error) {
+    if (error instanceof ApiError && (error.code === "OPS_PAUSED" || error.code === "OPS_UNAVAILABLE"))
+      return manual("off")
+    throw error
+  }
+  if (!(await opsPerkOpen(account, ["release-guard"], fetcher))) return manual("off")
   try {
     const result = await openRevert(
       {
@@ -659,7 +672,8 @@ async function decideRevert(
 // ── The account's cards ────────────────────────────────────────────────────────────────────────────────────────────
 
 export type IncidentUndo =
-  | { kind: "pull-request"; method: "revert-pr" | "restore"; number: number; url: string }
+  /** `headSha`: the commit Undo merges at (GitHub refuses the merge when the branch moved since). */
+  | { kind: "pull-request"; method: "revert-pr" | "restore"; number: number; url: string; headSha?: string }
   | { kind: "manual"; reason: string; openUrl?: string; rollback?: { host: string; url: string } }
   | { kind: "pending" }
 
@@ -697,6 +711,9 @@ export function incidentView(incident: Incident, snoozed?: number): IncidentView
       method: release.revert.method,
       number: release.revert.number,
       url: release.revert.url,
+      ...(typeof release.revert.headSha === "string" && SHA.test(release.revert.headSha)
+        ? { headSha: release.revert.headSha }
+        : {}),
     }
   else if (release && (release.revert?.state === "manual" || incident.snoozed))
     undo = {
@@ -845,8 +862,9 @@ function fixPrompt(incident: Incident) {
 
 /**
  * "Fix it" on an incident card, only ever from the person's tap (this route; nothing starts a fix run on its own). The
- * plan must allow ops now (fix runs are off while a payment is owed, §4.4), within its fix runs a day, one per
- * incident; the repository must be in the account's ops settings and still bound to it.
+ * incident's perk must be listed (On Call for a monitor, Release Guard for a release), the plan must allow ops now (fix
+ * runs are off while a payment is owed, §4.4), within its fix runs a day, one per incident; the repository must be in
+ * the account's ops settings and still bound to it. The route admits only callers that may spend Codium.
  */
 export async function startIncidentFix(
   account: string,
@@ -860,6 +878,7 @@ export async function startIncidentFix(
   const starter = runStarter
   if (!starter) throw new ApiError(503, "OPS_FIX_UNAVAILABLE", "Fix runs are not available yet.")
   await requireOpsService(fetcher, now)
+  await requireOpsPerk(account, [incident.kind === "release" ? "release-guard" : "on-call"], fetcher)
   const snapshot = await requireEntitlement(account, "ops", fetcher, now)
   const cap = snapshot.caps.ops?.onCall.fixRunsPerDay ?? 0
   if (cap < 1)

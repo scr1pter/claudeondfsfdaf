@@ -17,7 +17,7 @@ export default function handler(request: ApiRequest, response: ApiResponse) {
   return handleOpsUploads(request, response)
 }
 
-const FIELDS = ["action", "pr", "files", "capture"] as const
+const FIELDS = ["action", "pr", "files", "capture", "proof"] as const
 
 function header(request: ApiRequest, name: string) {
   const value = request.headers[name]
@@ -32,13 +32,14 @@ function signInRequired() {
  * `POST /api/ops/uploads` (WP A49): Ship Desk's screenshots, from `vector ship capture` in the person's own repository.
  *
  * - `{action: "ticket"}` with the run's own token (`Bearer vrt_…`, verified by the registered run verifier, the account
- *   not revoked): a capture ticket for that run. This is the only ops request a run token is accepted for (S3: a run
- *   token reaches its own service's endpoints only), and it can do nothing but ask for a ticket. 120 an hour.
+ *   not revoked): a capture ticket for that run, in a private repository with Ship Desk listed. This is the only ops
+ *   request a run token is accepted for (S3: a run token reaches its own service's endpoints only), and it can do
+ *   nothing but ask for a ticket. 120 an hour.
  * - With the ticket (`Bearer vcap_…`), which the capture job holds instead of any `id-token` or run token:
  *   `{action: "card", pr}` (what to capture; starts nothing), `{action: "start", pr, files}` (opens the 15-minute
  *   window on first use; one signed upload per file, at most the card's image count, PNG or WebP up to 5 MB each) and
  *   `{action: "finish", pr, capture}` (each upload checked by its signature and size; the card shows what passed).
- *   120 an hour per ticket.
+ *   Each carries the capture job's `proof`; the first request binds the ticket to it. 120 an hour per ticket.
  */
 export async function handleOpsUploads(
   request: ApiRequest,
@@ -100,14 +101,18 @@ export async function handleOpsUploads(
     )
     switch (input.action) {
       case "card":
-        return json(response, 200, await captureCard({ ticket: bearer, pr: input.pr }, shared))
+        return json(response, 200, await captureCard({ ticket: bearer, pr: input.pr, proof: input.proof }, shared))
       case "start":
-        return json(response, 200, await startCapture({ ticket: bearer, pr: input.pr, files: input.files }, shared))
+        return json(
+          response,
+          200,
+          await startCapture({ ticket: bearer, pr: input.pr, files: input.files, proof: input.proof }, shared),
+        )
       case "finish":
         return json(
           response,
           200,
-          await finishCapture({ ticket: bearer, pr: input.pr, capture: input.capture }, shared),
+          await finishCapture({ ticket: bearer, pr: input.pr, capture: input.capture, proof: input.proof }, shared),
         )
     }
     throw new ApiError(400, "SHIP_DESK_CAPTURE_INVALID", "Choose card, start or finish.")

@@ -14,6 +14,7 @@ import {
   type OpsRepo,
   type OpsSettings,
 } from "../ops-settings.js"
+import { opsPerkOpen } from "../ops-listing.js"
 import { opsConfigured, requireOpsService } from "../ops-worker.js"
 import { hostPage, releaseIntake } from "../release-guard.js"
 
@@ -24,7 +25,7 @@ import { hostPage, releaseIntake } from "../release-guard.js"
  *   whose ops settings turn Release Guard on and name this deployment's environment (compared without case; transient
  *   environments never count), is sent to the ops Worker to watch (`release`). The account's plan must allow Release
  *   Guard now (active or renewing within grace, a plan with ops caps: §4.4's Release Guard row), the ops services must
- *   be configured and the owner's `ops` switch on. The URLs are the production URL joined with each path, on domains the
+ *   be configured, the owner's `ops` switch on and Release Guard listed (ops-listing.ts). The URLs are the production URL joined with each path, on domains the
  *   account verified, at most the plan's path count. Release Guard's intake (release-guard.ts, WP A48) then dedupes by
  *   (repository, environment, sha), checks the repository's .vector/ops.json opts in for this account and counts the
  *   plan's releases a day (dedupe before increment) before the Worker watches it.
@@ -252,6 +253,7 @@ async function deployment(
     if (error instanceof ApiError && error.code === "PERSISTENT_STORE_UNAVAILABLE") throw error
     return ignored("off")
   }
+  if (!(await opsPerkOpen(account, ["release-guard"], fetcher))) return ignored("not-listed")
   const caps = await releaseCaps(account, fetcher, now)
   if (!caps) return ignored("plan")
   const verified = new Set(verifiedDomains(settings, now))

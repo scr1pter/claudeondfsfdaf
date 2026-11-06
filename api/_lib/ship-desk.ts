@@ -14,6 +14,7 @@ import {
 import type { OpsPullRequest } from "./github-webhook-handlers/ops.js"
 import { ApiError } from "./http.js"
 import { stripeMode, type StripeMode } from "./model-plan-stripe.js"
+import { opsPerkOpen, requireOpsPerk } from "./ops-listing.js"
 import { appendCapped, indexMembers, readRecord, readRecords, updateRecord } from "./ops-records.js"
 import { readOpsSettings, repositoryBinding } from "./ops-settings.js"
 import { requireOpsService } from "./ops-worker.js"
@@ -33,7 +34,8 @@ import { sendServerAlert } from "./web-push.js"
  * - the marker names a run of that repository; for `github-actions[bot]`, which anyone with write access can act as,
  *   Codex's run record must also say the run is this account's, in this repository (the App's bot cannot be acted as);
  * - the plan allows new cards now (active, or renewing within grace, with `caps.ops.shipDesk`: §4.4's Ship Desk row),
- *   the ops services are configured, the owner's `ops` switch is on and the GitHub App is set up here;
+ *   the ops services are configured, the owner's `ops` switch is on, Ship Desk is listed (ops-listing.ts) and the
+ *   GitHub App is set up here;
  * - the repository's `.vector/ops.json` on the pull request's base branch names the account's ops id with
  *   `shipDesk: true` (read with a read-only one-repository App token, revoked after use);
  * - one script, in one step, finds no card for this (repository, pull request) and no card for this run, then counts the
@@ -48,10 +50,12 @@ import { sendServerAlert } from "./web-push.js"
  * token, refreshed when a card is opened.
  *
  * Capture. `vector ship capture --pr <n>` runs in a separate job with no `id-token` and no run token. The run's own token
- * asks `POST /api/ops/uploads {action: "ticket"}` for a capture ticket for its run (so for one pull request); the
- * capture job then uploads at most `shipDesk.images` PNG or WebP files straight to R2 through signed links, inside one
- * 15-minute window from the ticket's first upload, and each file is checked by its signature and size before the card
- * shows it. Images are read back only by the card's account, through 60-second signed links (image.ts).
+ * asks `POST /api/ops/uploads {action: "ticket"}` for a capture ticket for its run (so for one pull request), in a
+ * private repository only; the capture job then uploads at most `shipDesk.images` PNG or WebP files straight to R2
+ * through signed links, inside one 15-minute window from the ticket's first upload, and each file is checked by its
+ * signature and size before the card shows it. GitHub prints a job's environment in its log, so the ticket can be read
+ * there by anyone who reads the repository's logs: the capture job's first request therefore binds the ticket to a
+ * random proof that job made (`proof`, stored hashed), and every later request must carry it. Images are read back only by the card's account, through 60-second signed links (image.ts).
  *
  * Vector's server never merges: Approve opens the pull request in GitHub, or the desktop merges it with the person's own
  * GitHub sign-in (A50).
@@ -265,6 +269,9 @@ export type Ticket = {
   rid: string
   mintedAt: number
   expiresAt: number
+  /** SHA-256 (hex) of the proof the first request carried: the capture job this ticket now belongs to. */
+  proof?: string
+  boundAt?: number
   firstUse?: number
   finished?: boolean
 }
@@ -279,6 +286,8 @@ function decodeTicket(value: unknown): Ticket | undefined {
     ShipDesk.runRepository(ticket.rid) !== ticket.repositoryId ||
     !time(ticket.mintedAt) ||
     !time(ticket.expiresAt) ||
+    (ticket.proof !== undefined && (typeof ticket.proof !== "string" || !/^[0-9a-f]{64}$/.test(ticket.proof))) ||
+    (ticket.boundAt !== undefined && !time(ticket.boundAt)) ||
     (ticket.firstUse !== undefined && !time(ticket.firstUse)) ||
     (ticket.finished !== undefined && typeof ticket.finished !== "boolean")
   )
@@ -503,6 +512,7 @@ export type ShipDeskOutcome =
         | "not-installed"
         | "opt-in"
         | "limit"
+        | "not-listed"
     }
 
 function readerOf(context: ShipDeskContext) {
@@ -634,6 +644,7 @@ async function create(
     if (storeDown(error)) throw error
     return ignored("off")
   }
+  if (!(await opsPerkOpen(account, ["ship-desk"], fetcher))) return ignored("not-listed")
   const held = await persistentStore(["GET", cardRunKey(account, rid)], fetcher)
   if (held !== null && held !== undefined) return ignored("run-used")
 
@@ -896,9 +907,11 @@ function mediaUnavailable() {
 /**
  * A capture ticket for a run of Vector's GitHub agent, asked for with the run's own token (`vrt_`, verified by the
  * registered run verifier; the caller passes the account and run it proved). The run id names its repository, which
- * must be bound to the account with Ship Desk on; the plan must allow Ship Desk now. The ticket uploads only to the
- * card of the pull request carrying this run's marker; it must be first used before the run's deadline plus an hour,
- * and the capture then has 15 minutes.
+ * must be bound to the account with Ship Desk on, and private (read with a read-only App token: a public repository's
+ * Actions logs, which show the ticket, are public); Ship Desk must be listed and the plan must allow it now. The ticket
+ * uploads only to the card of the pull request carrying this run's marker; it must be first used before the run's
+ * deadline plus an hour, its first request binds it to that capture job's proof, and the capture then has 15 minutes
+ * from its first start.
  */
 export async function mintCaptureTicket(
   input: { account: string; rid: string; deadline: number },
@@ -915,6 +928,7 @@ export async function mintCaptureTicket(
     )
   await requireOpsService(fetcher, now)
   if (!r2Configured("media")) throw mediaUnavailable()
+  await requireOpsPerk(input.account, ["ship-desk"], fetcher)
   const snapshot = requireUsableSnapshot(await readSnapshot(input.account, fetcher), now)
   if (!snapshot.caps.ops?.shipDesk)
     throw new ApiError(403, "CODIUM_PERK_REQUIRED", "Your Vector Codium plan does not include Ship Desk.", {
@@ -924,8 +938,38 @@ export async function mintCaptureTicket(
   if (binding?.account !== input.account)
     throw new ApiError(409, "OPS_REPO_NOT_BOUND", "Connect this repository to your Vector account first.")
   const { settings } = await readOpsSettings(input.account, fetcher)
-  if (!settings?.repos.some((repo) => repo.repositoryId === repositoryId && repo.shipDesk))
-    throw new ApiError(403, "SHIP_DESK_OFF", "Ship Desk is not on for this repository.")
+  const repo = settings?.repos.find((item) => item.repositoryId === repositoryId && item.shipDesk)
+  if (!repo) throw new ApiError(403, "SHIP_DESK_OFF", "Ship Desk is not on for this repository.")
+  // GitHub prints a step's environment in its log, which anyone can read on a public repository.
+  let visible: boolean
+  try {
+    visible = await withRepositoryToken(
+      {
+        account: input.account,
+        repositoryId,
+        repository: binding.repository,
+        ...((repo.installationId ?? binding.installationId) !== undefined
+          ? { installationId: repo.installationId ?? binding.installationId }
+          : {}),
+        purpose: "ship",
+        reason: "ship-ticket",
+      },
+      async (client) => !client.repository.private,
+      { fetcher, now, ...context.github },
+    )
+  } catch (error) {
+    if (githubServerError(error)) {
+      if (error.kind === "unavailable") throw githubUnavailable()
+      throw new ApiError(403, "SHIP_DESK_OFF", "Vector's GitHub App is not installed on this repository.")
+    }
+    throw error
+  }
+  if (visible)
+    throw new ApiError(
+      403,
+      "SHIP_DESK_PUBLIC_REPOSITORY",
+      "Ship Desk takes screenshots in private repositories only: a public repository's Actions logs are public.",
+    )
 
   const ticket = `${ShipDesk.TICKET_PREFIX}${randomBytes(32).toString("base64url")}`
   const expiresAt = Math.min(
@@ -949,14 +993,39 @@ export async function mintCaptureTicket(
   return { ticket, expiresAt }
 }
 
-async function readTicket(ticket: unknown, fetcher: typeof fetch, now: number) {
+/**
+ * The ticket, bound to the capture job that first used it: the first request (of any action) stores the hash of the
+ * proof it carried, and every later one must carry the same proof. A ticket read from a job's log is then of no use.
+ */
+async function readTicket(ticket: unknown, proof: unknown, fetcher: typeof fetch, now: number) {
   if (typeof ticket !== "string" || !ShipDesk.TICKET.test(ticket)) throw ticketInvalid()
+  if (typeof proof !== "string" || !ShipDesk.PROOF.test(proof))
+    throw new ApiError(400, "SHIP_DESK_CAPTURE_INVALID", "Send the capture's proof. Update Vector in the workflow.")
   const hash = ticketHash(ticket)
-  const { value } = await readRecord(ticketKey(hash), decodeTicket, fetcher)
+  const mine = createHash("sha256").update(proof).digest("hex")
+  let { value } = await readRecord(ticketKey(hash), decodeTicket, fetcher)
   if (!value) throw ticketInvalid()
-  const open = value.firstUse === undefined ? now <= value.expiresAt : now <= value.firstUse + ShipDesk.LIMITS.windowMs
-  if (!open)
+  const open = (current: Ticket) =>
+    current.firstUse === undefined ? now <= current.expiresAt : now <= current.firstUse + ShipDesk.LIMITS.windowMs
+  if (!open(value))
     throw new ApiError(410, "SHIP_DESK_TICKET_EXPIRED", "This capture ticket's time is up. Run the capture again.")
+  if (value.proof === undefined) {
+    const expiresAt = value.expiresAt
+    value = await updateRecord(
+      ticketKey(hash),
+      decodeTicket,
+      (current) => (current && current.proof === undefined ? { ...current, proof: mine, boundAt: now } : undefined),
+      Math.max(1, expiresAt + ShipDesk.LIMITS.windowMs + ShipDesk.LIMITS.ticketGraceMs - now),
+      fetcher,
+    )
+    if (!value) throw ticketInvalid()
+  }
+  if (value.proof !== mine)
+    throw new ApiError(
+      403,
+      "SHIP_DESK_TICKET_BOUND",
+      "Another capture job already uses this capture ticket. Run the whole workflow again for a new one.",
+    )
   return { ticket: value, hash }
 }
 
@@ -987,12 +1056,12 @@ function imageLimit(card: Card, snapshot: EntitlementSnapshot | undefined) {
 
 /** `{action: "card", pr}`: what the capture shoots. Starts nothing. */
 export async function captureCard(
-  input: { ticket: unknown; pr: unknown },
+  input: { ticket: unknown; pr: unknown; proof: unknown },
   context: ShipDeskContext = {},
 ): Promise<ShipDesk.CardAnswer> {
   const fetcher = context.fetcher ?? fetch
   const now = context.now ?? Date.now()
-  const { ticket } = await readTicket(input.ticket, fetcher, now)
+  const { ticket } = await readTicket(input.ticket, input.proof, fetcher, now)
   const card = await ticketCard(ticket, input.pr, fetcher, now)
   return {
     repository: card.repository,
@@ -1094,14 +1163,14 @@ async function prefix(response: Response, bytes: number) {
  * the pending capture (a failed upload is retried this way).
  */
 export async function startCapture(
-  input: { ticket: unknown; pr: unknown; files: unknown },
+  input: { ticket: unknown; pr: unknown; files: unknown; proof: unknown },
   context: ShipDeskContext = {},
 ): Promise<ShipDesk.StartAnswer> {
   const fetcher = context.fetcher ?? fetch
   const now = context.now ?? Date.now()
   if (!r2Configured("media")) throw mediaUnavailable()
   await requireOpsService(fetcher, now)
-  const { ticket, hash } = await readTicket(input.ticket, fetcher, now)
+  const { ticket, hash } = await readTicket(input.ticket, input.proof, fetcher, now)
   if (ticket.finished)
     throw new ApiError(409, "SHIP_DESK_CAPTURE_DONE", "This capture ticket already finished. Run the capture again.")
   const card = await ticketCard(ticket, input.pr, fetcher, now)
@@ -1184,13 +1253,13 @@ export async function startCapture(
  * signed. Anything else is deleted. The card then shows this capture's images, and the previous capture's are deleted.
  */
 export async function finishCapture(
-  input: { ticket: unknown; pr: unknown; capture: unknown },
+  input: { ticket: unknown; pr: unknown; capture: unknown; proof: unknown },
   context: ShipDeskContext = {},
 ): Promise<ShipDesk.FinishAnswer> {
   const fetcher = context.fetcher ?? fetch
   const now = context.now ?? Date.now()
   if (!r2Configured("media")) throw mediaUnavailable()
-  const { ticket, hash } = await readTicket(input.ticket, fetcher, now)
+  const { ticket, hash } = await readTicket(input.ticket, input.proof, fetcher, now)
   const card = await ticketCard(ticket, input.pr, fetcher, now)
   if (
     typeof input.capture !== "string" ||

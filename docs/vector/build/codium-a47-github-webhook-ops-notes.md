@@ -75,3 +75,11 @@ this route is deployed.
 - `.vector/ops.json` is not read by the server (A48, with its App credentials).
 - Codex's handler and the binding reader are registered only at A59; until then no repository can be set up.
 - Nothing was pushed or deployed.
+
+## P7 review fixes (5 Nov 2026)
+
+Adding a domain, a monitor or a repository now also needs the perk it serves listed (`api/_lib/ops-listing.ts`;
+domains On Call or Release Guard, monitors On Call, a repository each of Release Guard and Ship Desk it turns on), or the
+account in `VECTOR_OPS_ALLOW_ACCOUNTS`; otherwise 503 `OPS_UNAVAILABLE`. `requireOpsCaps(account, perks, fetcher, now)`
+takes those perks. The deployment handler ignores an unlisted Release Guard (`not-listed`). `requireOpsCaller` returns
+the token's `client` marker. Details and tests: the A48 notes' "P7 review fixes" and `codium-deviations.md`.

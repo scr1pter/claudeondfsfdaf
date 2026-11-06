@@ -459,9 +459,22 @@ export type ManualReason =
   | "not-bound"
   /** The plan does not allow a new revert now (paused, ended, frozen, no Release Guard). */
   | "plan"
+  /** Release Guard was off on Vector: the owner's `ops` switch, the ops services, or its listing (§2, §4.16). */
+  | "off"
 
 export type RevertOutcome =
-  | { state: "opened"; method: "revert-pr" | "restore"; number: number; url: string; branch?: string }
+  | {
+      state: "opened"
+      method: "revert-pr" | "restore"
+      number: number
+      url: string
+      branch?: string
+      /**
+       * The revert pull request's head commit when Vector opened (or found) it. Undo merges at this commit, so a commit
+       * someone pushed to the branch afterwards, which nobody looked at, is never merged with it.
+       */
+      headSha?: string
+    }
   | { state: "manual"; reason: ManualReason }
 
 /** What a card shows about the range a revert undoes. */
@@ -891,10 +904,15 @@ export function revertBody(input: RevertInput, facts: RevertFacts) {
 const REVERT_MUTATION = [
   "mutation($id: ID!, $title: String!, $body: String!) {",
   "  revertPullRequest(input: {pullRequestId: $id, title: $title, body: $body, draft: false}) {",
-  "    revertPullRequest { number url headRefName }",
+  "    revertPullRequest { number url headRefName headRefOid }",
   "  }",
   "}",
 ].join("\n")
+
+/** A head commit GitHub answered, when it is a full sha. */
+function headSha(value: unknown) {
+  return typeof value === "string" && SHA.test(value.toLowerCase()) ? value.toLowerCase() : undefined
+}
 
 /** An open pull request into `base` whose head branch is in this repository and matches `head`. */
 async function findOpenPull(client: GithubRepoClient, base: string, head: (ref: string) => boolean, exact?: string) {
@@ -911,8 +929,10 @@ async function findOpenPull(client: GithubRepoClient, base: string, head: (ref: 
       typeof ref === "string" &&
       head(ref) &&
       typeof pull?.html_url === "string"
-    )
-      return { number, url: pull.html_url, ref }
+    ) {
+      const sha = headSha(record(pull.head)?.sha)
+      return { number, url: pull.html_url, ref, ...(sha ? { sha } : {}) }
+    }
   }
   return undefined
 }
@@ -928,7 +948,14 @@ async function revertPullRequest(
   const existing =
     (await findOpenPull(client, plan.base, (ref) => ref.startsWith(prefix), `${prefix}${plan.pull.headRef}`)) ??
     (await findOpenPull(client, plan.base, (ref) => ref.startsWith(prefix)))
-  if (existing) return { state: "opened", method: "revert-pr", number: existing.number, url: existing.url }
+  if (existing)
+    return {
+      state: "opened",
+      method: "revert-pr",
+      number: existing.number,
+      url: existing.url,
+      ...(existing.sha ? { headSha: existing.sha } : {}),
+    }
   const data = await client.graphql(
     REVERT_MUTATION,
     {
@@ -941,7 +968,8 @@ async function revertPullRequest(
   const created = record(record(data.revertPullRequest)?.revertPullRequest)
   const number = positive(created?.number)
   if (!number || typeof created?.url !== "string") throw new GithubServerError("unavailable")
-  return { state: "opened", method: "revert-pr", number, url: created.url }
+  const sha = headSha(created.headRefOid)
+  return { state: "opened", method: "revert-pr", number, url: created.url, ...(sha ? { headSha: sha } : {}) }
 }
 
 async function restoreCommit(
@@ -956,9 +984,12 @@ async function restoreCommit(
     const parents = Array.isArray(commit?.parents) ? commit.parents.map(record) : []
     return record(commit?.tree)?.sha === plan.goodTree && parents.length === 1 && parents[0]?.sha === input.sha
   }
+  // The restore commit the branch holds: the pull request's head when Vector opened it.
+  let restored: string | undefined
   const existingRef = record(await client.get(`/git/ref/heads/${encodeBranch(branch)}`))
   if (existingRef) {
     if (!(await ours(record(existingRef.object)?.sha))) return { state: "manual", reason: "branch-exists" }
+    restored = headSha(record(existingRef.object)?.sha)
   } else {
     const message = [
       `Revert to ${input.goodSha.slice(0, 7)} (Release Guard)`,
@@ -976,6 +1007,7 @@ async function restoreCommit(
     )
     const sha = commit?.sha
     if (typeof sha !== "string" || !SHA.test(sha)) throw new GithubServerError("unavailable")
+    restored = sha
     try {
       await client.write("POST", "/git/refs", { ref: `refs/heads/${branch}`, sha }, { kind: "branch", ref: branch })
     } catch (error) {
@@ -983,10 +1015,15 @@ async function restoreCommit(
       if (!githubServerError(error) || error.kind !== "conflict") throw error
       const raced = record(await client.get(`/git/ref/heads/${encodeBranch(branch)}`))
       if (!(await ours(record(raced?.object)?.sha))) return { state: "manual", reason: "branch-exists" }
+      restored = headSha(record(raced?.object)?.sha)
     }
   }
+  const opened = (number: number, url: string, sha?: string) => {
+    const head = sha ?? restored
+    return { state: "opened" as const, method: "restore" as const, number, url, branch, ...(head ? { headSha: head } : {}) }
+  }
   const open = await findOpenPull(client, plan.base, (ref) => ref === branch, branch)
-  if (open) return { state: "opened", method: "restore", number: open.number, url: open.url, branch }
+  if (open) return opened(open.number, open.url, open.sha)
   let created: Record<string, unknown> | undefined
   try {
     created = record(
@@ -1005,12 +1042,12 @@ async function restoreCommit(
   } catch (error) {
     if (!githubServerError(error) || error.kind !== "conflict") throw error
     const raced = await findOpenPull(client, plan.base, (ref) => ref === branch, branch)
-    if (raced) return { state: "opened", method: "restore", number: raced.number, url: raced.url, branch }
+    if (raced) return opened(raced.number, raced.url, raced.sha)
     throw error
   }
   const number = positive(created?.number)
   if (!number || typeof created?.html_url !== "string") throw new GithubServerError("unavailable")
-  return { state: "opened", method: "restore", number, url: created.html_url, branch }
+  return opened(number, created.html_url, headSha(record(created.head)?.sha))
 }
 
 // ── Erasure (P5) ───────────────────────────────────────────────────────────────────────────────────────────────────

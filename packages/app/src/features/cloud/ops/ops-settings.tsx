@@ -337,7 +337,14 @@ function IncidentCard(props: {
                 <MergeButton
                   label="Undo here"
                   busy={props.busy}
-                  onMerge={() => props.merge({ repository: release()!.repository!, number: undo().number })}
+                  onMerge={() =>
+                    props.merge({
+                      repository: release()!.repository!,
+                      number: undo().number,
+                      // At the commit Vector opened: GitHub refuses the merge if someone pushed to the branch since.
+                      ...(undo().headSha ? { headSha: undo().headSha } : {}),
+                    })
+                  }
                 />
               </Show>
             </>

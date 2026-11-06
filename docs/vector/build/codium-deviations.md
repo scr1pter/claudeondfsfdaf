@@ -1266,7 +1266,8 @@ outcome, verdict, actor.login` pass. Every paid plan includes it while the plan 
   `Vault.ERROR_CODES`. An upload to a committed version is 409 `VAULT_EXISTS`. `GET /api/vault/snapshots` without a
   vault is 404 `VAULT_NOT_FOUND`, which the A43 client reads as "holds nothing yet".
 - **Not decided here:** an account that downgrades to Plus keeps its stored vault (read-only by 403, no deletion date),
-  because §4.4 deletes only after a plan ends. The owner may want a lapse for that case too.
+  because §4.4 deletes only after a plan ends. The owner may want a lapse for that case too. (Decided in "P7 review
+  decisions" below: it is a lapse.)
 
 ## A45 Desktop vault and Settings → Memory → Backup (4 Nov 2026)
 
@@ -1755,3 +1756,58 @@ outcome, verdict, actor.login` pass. Every paid plan includes it while the plan 
   `packages/core/src/local-mode/sources.ts`, the desktop's `ipc.ts`, `preload/index.ts`, `preload/types.ts` and
   `renderer/index.tsx`, `packages/web/test/codium-configuration.test.ts`, `docs/vector/MODEL-PLANS.md` and
   `docs/vector/owner-actions/hosted-ops.md`.
+
+## P7 review decisions (5 Nov 2026)
+
+- **A44: deletion waits for the upload links.** A blob queued for deletion (a commit's discard, a forget, a vault
+  deletion, account deletion, the cleanup) is deleted from R2 only once every PUT link signed for it has stopped
+  working: `vector_brain_vault_blobs.signed_until`, set by `reserve` on every row it signs (the manifest included) to
+  the link's 900 seconds plus a 5-minute grace (`VAULT_LIMITS.linkGraceMs`, clock skew and an upload still sending),
+  and checked by `claim`. Before this a PUT through a live link after the delete recreated the object with no row
+  behind it, uncounted and never found again (the bucket has no lifecycle rule). So the immediate purges in commit,
+  forget, destroy and account deletion now delete only what is past its links; the rest goes with the next daily
+  cleanup. The wrapped key still goes at once. `brain-vault.sql` adds the column with `add column if not exists`.
+- **A44: the version cap makes room instead of refusing.** At 60 committed versions a new backup drops the oldest
+  committed version (never the newest), the way forgetting it would, inside the reservation's locked transaction and
+  only once every other check passed (a refused request drops nothing). Objects the new backup declares are kept. A
+  held vault (frozen) refuses with 402 `VAULT_QUOTA` instead, since it loses nothing it committed. Before this an
+  account that averaged more than two backups a day (computers sharing a vault) was refused as "full".
+- **A44: dead backups stop counting.** The four-backups-at-once limit counts only uncommitted versions with a request
+  within the last hour (`reserveMs`), the same hour after which the cleanup sweeps them; a backup that failed after its
+  first request no longer blocks the account until 03:40.
+- **A44: a plan without Vault is a lapse.** The open point above is decided: `vaultPolicy` answers `lapse` for an
+  active, renewing or paused plan whose `vault.gb` is 0 (Plus), so a move down from Pro, Max or Ultra gets the notice
+  and the 30 read-only days, then deletion; a plan with Vault before then releases it. The notice now says the plan "no
+  longer includes Brain Vault on Vector" (it was "has ended"), which reads right for both.
+- **A47–A50: the ops perks are gated by their listing on the server.** §4.14 makes listing a display matter, but
+  `VECTOR_OPS_ENABLED=true` and the App's registration come before listing and before §8.2 step 16's outside review of
+  the revert path, so every ops path that starts new work now needs its perk in `listedPerks()` (503 `OPS_UNAVAILABLE`
+  for the routes; the webhook ignores with `not-listed`; a revert is `manual` with the new reason `off`), as Vault's
+  writes already did. Domains need On Call or Release Guard (verified domains serve both), monitors On Call, a
+  repository each of Release Guard and Ship Desk it turns on (either one when neither is on), the deployment intake and
+  every revert Release Guard, a new Ship Desk card and a capture ticket Ship Desk, a fix run the incident's perk.
+  Reading, removing and updating what already exists never check it. New env `VECTOR_OPS_ALLOW_ACCOUNTS` (not in
+  §4.17's list) lets the owner try the perks with named accounts before listing, as `VECTOR_HOSTED_ALLOW_ACCOUNTS` does
+  for the cloud computer; those accounts still need the plan, the services and the switch. The ops tests' fixture sets
+  it for its accounts; the gate's own cases delete it.
+- **A48: a revert needs the service on.** `decideRevert` also checks `requireOpsService` (the `ops` switch and the
+  Worker's settings) before minting a revert token, so a regression the Worker still reports while its kill flag
+  spreads, or after a flag sync failed, writes nothing (§2, §4.16).
+- **A48/A50: Undo merges at the revert's head.** `RevertOutcome` keeps `headSha` (GraphQL `headRefOid`, a reused pull
+  request's `head.sha`, or the restore commit) and the incident's Undo passes it to the desktop's merge, so a commit
+  pushed to the revert branch after Vector opened it is never merged unseen; GitHub's 409 is shown as "new commits
+  landed". Outcomes recorded before this have no `headSha` and merge as before.
+- **A48: fix runs take only callers that may spend Codium.** `requireOpsCaller` returns the token's `client` marker,
+  and `POST /api/ops/incidents {action: "fix"}` refuses an unmarked `vct_` token (one copied from /auth/cli) with 401
+  `CODIUM_SIGN_IN_REQUIRED` unless `MODEL_PLAN_REQUIRE_MARKED_TOKENS=false`, as `model-plan-caller.ts` does. Snooze and
+  the reads still take it.
+- **A49: capture tickets.** GitHub prints a step's environment in its log, so the unmasked `capture` output is
+  readable by anyone who reads the repository's logs. A ticket is now minted for a private repository only, read with
+  a read-only `ship` App token at `{action: "ticket"}` (403 `SHIP_DESK_PUBLIC_REPOSITORY` otherwise; GitHub unreachable
+  is 503 `GITHUB_UNAVAILABLE`, which `vector ship ticket` reports as no ticket). And the capture job's first request (of
+  any action) binds the ticket to a random proof `vector ship capture` makes and sends as `proof` with every request;
+  only its SHA-256 is stored, and another proof gets 403 `SHIP_DESK_TICKET_BOUND`. The review suggested opening the
+  15-minute window at that first use too; it still opens at the first `start`, because the capture installs and builds
+  the repository twice (up to 15 minutes each) between `card` and `start`, and the binding alone already shuts out a
+  copy read during that time. One cost: re-running only the capture job (a new proof) is refused; re-running the
+  workflow mints a new ticket. Codex's V31 wiring is unchanged (the proof never leaves the capture job).

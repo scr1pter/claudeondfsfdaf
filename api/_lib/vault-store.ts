@@ -20,7 +20,10 @@ import { presignR2, r2Configured } from "./r2-presign.js"
  * - **Deletion.** Forgetting a version, deleting the vault, the daily cleanup and account deletion only queue blobs
  *   (`trash`, which no longer counts against the quota); `purgeVaults` claims them, deletes them from R2 and removes
  *   their rows. A claimed blob cannot be reserved again until its deletion finishes, so a delete in flight never
- *   removes a fresh upload of the same object.
+ *   removes a fresh upload of the same object. A queued blob is claimed only once every PUT link signed for it has
+ *   stopped working (`signed_until`, the link's life plus `linkGraceMs`): a PUT through a live link after the delete
+ *   would otherwise recreate the object with no row behind it, uncounted and never deleted. So a blob queued within
+ *   15 minutes of its upload links waits for the next cleanup.
  *
  * Names: an account is the HMAC of its id under VECTOR_VAULT_ACCOUNT_SALT (`vaultAccount`), so neither the database
  * nor the bucket names a Vector account. The salt must never change: a new salt is a new, empty vault for everyone.
@@ -43,11 +46,19 @@ export const VAULT_LIMITS = Object.freeze({
   manifestBytes: Vault.LIMIT.manifest + VAULT_OBJECT_OVERHEAD,
   /** Signed links live this long (r2-presign.ts's maximum). */
   linkSeconds: 900,
+  /**
+   * How long after a PUT link expires its blob may still be written: clock skew between this server and R2, and an
+   * upload that started just before the link expired and is still sending. A queued blob is deleted only after both.
+   */
+  linkGraceMs: 5 * 60_000,
   /** A reservation, and a version that never commits, are swept this long after their last request. */
   reserveMs: 60 * 60_000,
-  /** Committed versions one vault holds; beyond them a new backup is refused until one is forgotten. */
+  /**
+   * Committed versions one vault holds. At the cap a new backup makes room by dropping the oldest (never the newest),
+   * as forgetting it would; only a held vault, which loses nothing it committed, is refused.
+   */
   versions: 60,
-  /** Backups in progress at once (computers backing up together). */
+  /** Backups in progress at once (computers backing up together); one idle past `reserveMs` no longer counts. */
   open: 4,
   /** Objects one vault holds. */
   objects: 2_000_000,
@@ -374,6 +385,8 @@ export async function reserveUploads(
   },
   options: Options = {},
 ): Promise<Reservation> {
+  // One time for the store and the links: each row records when the links signed below stop working.
+  const now = Math.trunc(options.now ?? Date.now())
   const answer = await rpc(
     {
       action: "reserve",
@@ -385,9 +398,10 @@ export async function reserveUploads(
       quota: input.quotaBytes,
       versionDays: input.versionDays,
       reserveMs: VAULT_LIMITS.reserveMs,
+      signedMs: VAULT_LIMITS.linkSeconds * 1000 + VAULT_LIMITS.linkGraceMs,
       limits: { open: VAULT_LIMITS.open, versions: VAULT_LIMITS.versions, objects: VAULT_LIMITS.objects, refs: VAULT_LIMITS.refs },
     },
-    options,
+    { ...options, now },
   )
   if (["not_found", "committed", "quota", "versions", "open", "mismatch", "busy"].includes(answer.status))
     return { status: answer.status as Exclude<Reservation["status"], "ok"> }
@@ -399,7 +413,6 @@ export async function reserveUploads(
   const present = ids(answer.present, OBJECT_ID)
   if (sign.some((id) => !sizes.has(id)) || present.some((id) => !sizes.has(id))) throw unavailable()
   if (answer.manifest && input.manifest === undefined) throw unavailable()
-  const now = options.now ?? Date.now()
   const put = (kind: BlobKind, id: string, size: number) =>
     presignR2("vault", {
       method: "PUT",
@@ -598,13 +611,14 @@ export async function holdVault(user: string, options: Options = {}) {
   if ((await rpc({ action: "hold", ...account(user) }, options)).status !== "ok") throw unavailable()
 }
 
-/** Active, renewing or paused: no hold, and no deletion date. */
+/** Active, renewing or paused on a plan with Brain Vault: no hold, and no deletion date. */
 export async function releaseVault(user: string, options: Options = {}) {
   if ((await rpc({ action: "release", ...account(user) }, options)).status !== "ok") throw unavailable()
 }
 
 /**
- * The plan ended: the vault turns read-only for `VAULT_LIMITS.lapseDays` from the notice, then the cleanup deletes it.
+ * The plan ended, or no longer includes Brain Vault: the vault turns read-only for `VAULT_LIMITS.lapseDays` from the
+ * notice, then the cleanup deletes it.
  * The notice is emailed once (an idempotency key per snapshot version keeps a retried send from going twice) and only
  * then recorded, so a vault is never deleted without it. An account whose identity is already gone gets no email.
  */
@@ -623,7 +637,10 @@ export async function lapseVault(user: string, options: Options & { readonly ver
   return { notice: "sent" as const, deleteAt: optionalTime(answer.deleteAt) ?? deleteAt }
 }
 
-/** Account deletion (P5): the vault goes at once (wrapped key first), and its blobs as far as a short budget allows. */
+/**
+ * Account deletion (P5): the vault goes at once (wrapped key first), and its blobs as far as a short budget allows;
+ * those an upload link can still write go with the next cleanup.
+ */
 export async function eraseAccountVault(user: string, options: Options = {}) {
   if (!vaultStoreConfigured()) return false
   const erased = await destroyVault(user, options)
@@ -662,7 +679,7 @@ async function sendVaultNotice(user: string, deleteAt: number, idempotencyKey: s
       to: [record.email],
       subject: "Your Brain Vault is read-only",
       text: [
-        "Your Vector Codium plan has ended, so Brain Vault on Vector takes no new backups.",
+        "Your Vector Codium plan no longer includes Brain Vault on Vector, so it takes no new backups.",
         `Your backups stay readable until ${date}. Restore them from the Vector app or with \`vector vault restore\`.`,
         "After that date Vector deletes them.",
         "",

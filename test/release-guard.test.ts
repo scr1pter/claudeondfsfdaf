@@ -520,11 +520,15 @@ describe("reverts", () => {
     expect(world.github.live()).toEqual([])
     expect(merges()).toEqual([])
     const [incident] = await incidents()
+    // Undo merges at the revert pull request's head when Vector opened it (GitHub's headRefOid).
+    const head = world.github.pulls.get(`${REPO}#901`)!.head.sha
+    expect(head).toMatch(/^[0-9a-f]{40}$/)
     expect(incident.release.undo).toEqual({
       kind: "pull-request",
       method: "revert-pr",
       number: 901,
       url: `https://github.com/${FULL}/pull/901`,
+      headSha: head,
     })
     expect(incident.release.commits).toEqual([{ sha: BAD, title: "Change number 1", author: "octo-person" }])
     expect(alerts).toEqual([
@@ -612,7 +616,10 @@ describe("reverts", () => {
     )
     expect(optInReads).toHaveLength(3)
     const [incident] = await incidents()
-    expect(incident.release.undo).toMatchObject({ kind: "pull-request", method: "restore" })
+    // Undo merges at the restore commit Vector made, the branch's head when the pull request opened.
+    const restored = world.github.refs.get(`${REPO}:${branch}`)
+    expect(incident.release.undo).toMatchObject({ kind: "pull-request", method: "restore", headSha: restored })
+    expect(world.github.commits.get(`${REPO}:${restored}`)).toEqual({ tree: GOOD_TREE, parents: [BAD] })
     expect(incident.release.commits.map((item: { sha: string }) => item.sha)).toEqual([BAD, sha("c2"), sha("c1")])
     expect(merges()).toEqual([])
   })
@@ -721,6 +728,34 @@ describe("reverts", () => {
     expect(reasons).toEqual(["not-bound", "not-bound", "plan"])
   })
 
+  test("Release Guard off at Vector (the owner's switch, the services, its listing): a report still taken mints no revert token", async () => {
+    await ready()
+    await deployBoth()
+    squashRange()
+    // The Worker still reports while its kill flag propagates, or after a flag sync failed.
+    world.switchOff("ops")
+    expect((await report(MAX, [regression()])).status).toBe(200)
+    world.fakes.store.remove([...world.fakes.store.keys()].find((key) => key.endsWith(":switch:ops"))!)
+    delete process.env.VECTOR_OPS_ALLOW_ACCOUNTS
+    expect((await report(MAX, [regression({ sha: sha("off-2") })])).status).toBe(200)
+    expect(writes()).toEqual([])
+    expect(world.github.minted.filter((token) => token.permissions.contents === "write")).toEqual([])
+    expect((await incidents()).map((incident) => incident.release.undo.reason)).toEqual(["off", "off"])
+    // The phone still heard about both.
+    expect(alerts.filter((alert) => alert.tag === "release-guard")).toHaveLength(2)
+    // Listed, Release Guard opens the revert again.
+    process.env.CODIUM_LISTED_PERKS = "release-guard"
+    world.advance(60_000)
+    const other = sha("off-3")
+    world.github.compares.set(`${REPO}:${GOOD}...${other}`, world.github.compares.get(`${REPO}:${GOOD}...${BAD}`)!)
+    world.github.commitPulls.set(`${REPO}:${other}`, [
+      { number: 7, merged_at: "2026-11-04T11:00:00Z", merge_commit_sha: other, base: { ref: "main", repo: { id: REPO } } },
+    ])
+    world.github.addPull(REPO, { number: 7, merge_commit_sha: other, commits: 1 })
+    await report(MAX, [regression({ sha: other })])
+    expect(writes()).toEqual(["POST /graphql"])
+  })
+
   test("the App not installed on the repository, or GitHub refusing the write, leaves Undo to the person", async () => {
     await ready()
     await deployBoth()
@@ -789,7 +824,8 @@ describe("a report sent again opens one pull request", () => {
     })
     await report(MAX, [regression()])
     expect(writes()).toEqual([])
-    expect((await incidents())[0].release.undo).toMatchObject({ kind: "pull-request", number: 950 })
+    // The branch's restore commit is the head Undo merges at, even when the listing gave none.
+    expect((await incidents())[0].release.undo).toMatchObject({ kind: "pull-request", number: 950, headSha: made })
 
     // The revertPullRequest path: GitHub's revert-<n>-<branch> pull request is already open.
     world.advance(60_000)
@@ -1089,6 +1125,43 @@ describe("Fix it", () => {
       body: { error: { code: "OPS_LIMIT", limit: "fix-runs", max: 3 } },
     })
     expect(triggers.map((trigger) => trigger.target)).toEqual(Array(3).fill({ kind: "github-run", repositoryId: REPO }))
+  })
+
+  test("a fix run spends Codium: a session or a marked token only, and only while the incident's perk is listed", async () => {
+    registerOpsRunStarter(starter)
+    await ready()
+    await deployBoth()
+    squashRange()
+    await report(MAX, [regression()])
+    const [incident] = await incidents()
+    const act = (authorization: string, body: Record<string, unknown>) =>
+      invoke((request, response) => handleOpsIncidents(request, response, world.fetcher(), () => world.now), {
+        method: "POST",
+        authorization,
+        body,
+      })
+    // A token copied from vectordev.ai/auth/cli (no client marker) may snooze, never spend.
+    const unmarked = world.token(MAX, "unmarked")
+    expect(await act(unmarked, { id: incident.id, action: "fix" })).toMatchObject({
+      status: 401,
+      body: { error: { code: "CODIUM_SIGN_IN_REQUIRED" } },
+    })
+    expect((await act(unmarked, { id: incident.id, action: "snooze", hours: 1 })).status).toBe(200)
+    expect(triggers).toEqual([])
+    // Not listed and not on the owner's allowlist: no fix run, from anyone.
+    delete process.env.VECTOR_OPS_ALLOW_ACCOUNTS
+    expect(await act(world.session(MAX), { id: incident.id, action: "fix" })).toMatchObject({
+      status: 503,
+      body: { error: { code: "OPS_UNAVAILABLE" } },
+    })
+    process.env.CODIUM_LISTED_PERKS = "release-guard"
+    expect((await act(world.session(MAX), { id: incident.id, action: "fix" })).status).toBe(200)
+    // The owner's legacy override admits unmarked tokens, as the gateway does.
+    await report(MAX, [regression({ sha: sha("fix-2") })])
+    const second = (await incidents()).find((item) => item.release.sha === sha("fix-2"))
+    process.env.MODEL_PLAN_REQUIRE_MARKED_TOKENS = "false"
+    expect((await act(unmarked, { id: second.id, action: "fix" })).status).toBe(200)
+    expect(triggers).toHaveLength(2)
   })
 
   test("a paused plan, Pro, an unbound repository, a starter that fails or a run token: refused, nothing counted", async () => {

@@ -129,6 +129,28 @@ types) and are clean.
 ## Not done
 
 - The desktop backup and Settings → Memory → Backup (A45); account deletion's erase marker (A57); listing (A60).
-- An active account that downgrades to Plus keeps its stored vault with no deletion date; recorded as an open point in
-  the deviations.
+- (Done in the P7 review: an account that moves to Plus now gets the notice and the 30 read-only days.)
 - bun.lock was not touched. Nothing was pushed or deployed.
+
+## P7 review fixes (5 Nov 2026)
+
+- **Deletion waits for the upload links.** `vector_brain_vault_blobs.signed_until` (new column, `add column if not
+  exists`) records when the newest PUT link signed for a blob stops working: `reserve` sets it on every row it signs,
+  the manifest included, to now + 900 s + `VAULT_LIMITS.linkGraceMs` (5 minutes), with the server's time computed once
+  for the store and the links. `claim` takes only rows past it, stale claims included. The purges right after a
+  commit's discard, a forget, a vault deletion and account deletion therefore delete only what no live link can write
+  again, and the next cleanup the rest, so a PUT through an old link can no longer leave an object no row counts.
+- **The version cap drops the oldest.** At `VAULT_LIMITS.versions` committed versions, a reservation for a new version
+  drops the oldest committed ones (never the newest) after every other check passed, queuing their manifests and the
+  objects nothing else names; objects the request declares are kept. A held vault answers `versions` (402).
+- **Dead backups stop counting** toward `open`: only uncommitted versions touched within `reserveMs`.
+- **A plan without Vault lapses.** `vaultPolicy` answers `lapse` for an active, renewing or paused snapshot whose
+  `vault.gb` is 0, so a move to Plus gets the notice and the 30 read-only days; a move back up releases. The notice text
+  now says the plan "no longer includes Brain Vault on Vector".
+- **Tests** (`test/brain-vault-api.test.ts`, 23 pass): the late PUT after a 409 is deleted only after its link and grace
+  and never comes back, and an object queued then reserved again is kept; 60 backups plus one inside 30 days drop the
+  oldest and its unshared object, and a held vault refuses; a backup idle for an hour stops counting; Pro to Plus sends
+  one notice and sets the date, a move back up clears it, staying on Plus deletes after the date. Cases that deleted at
+  once now advance past the links first, or check that the deletion waits for the cleanup (the commit's discard, the
+  vault deleted while storage is down, account deletion).
+- No edits to `api/_lib/model-plan-*.ts`.

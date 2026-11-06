@@ -251,6 +251,55 @@ describe("domains", () => {
   })
 })
 
+describe("listing", () => {
+  test("adding needs the perk it serves listed, or the owner's allowlist; reading and removing work regardless", async () => {
+    world.seed(MAX, "vector-100")
+    await verified(MAX, "shop.example.com")
+    world.bind(42, MAX)
+    const off = { status: 503, body: { error: { code: "OPS_UNAVAILABLE" } } }
+    const repo = {
+      repositoryId: 42,
+      environment: "Production",
+      productionUrl: "https://shop.example.com",
+      paths: ["/"],
+      releaseGuard: true,
+      shipDesk: false,
+    }
+    // Nothing listed (VECTOR_OPS_ENABLED and the App come before listing): a Max subscriber calling directly gets 503.
+    delete process.env.VECTOR_OPS_ALLOW_ACCOUNTS
+    expect(await domains(world.token(MAX), "POST", { domain: "two.example.com" })).toMatchObject(off)
+    expect(await domains(world.token(MAX), "POST", { domain: "shop.example.com", verify: true })).toMatchObject(off)
+    expect(await monitors(world.token(MAX), "POST", { url: "https://shop.example.com/health" })).toMatchObject(off)
+    expect(await repos(world.token(MAX), "POST", repo)).toMatchObject(off)
+    expect(await repos(world.token(MAX), "POST", { ...repo, releaseGuard: false })).toMatchObject(off)
+    expect((await domains(world.token(MAX), "GET")).body.domains).toHaveLength(1)
+    expect(lastConfig(MAX)?.monitors ?? []).toEqual([])
+    // Release Guard listed: domains (its production URL) and its repositories, not monitors or Ship Desk.
+    process.env.CODIUM_LISTED_PERKS = "release-guard"
+    expect((await domains(world.token(MAX), "POST", { domain: "two.example.com" })).status).toBe(200)
+    expect(await monitors(world.token(MAX), "POST", { url: "https://shop.example.com/health" })).toMatchObject(off)
+    expect((await repos(world.token(MAX), "POST", repo)).status).toBe(200)
+    expect(await repos(world.token(MAX), "POST", { ...repo, shipDesk: true })).toMatchObject(off)
+    // The owner's allowlist lets an account try what is not listed yet; the plan still decides.
+    process.env.VECTOR_OPS_ALLOW_ACCOUNTS = `${MAX},not-an-account`
+    expect((await monitors(world.token(MAX), "POST", { url: "https://shop.example.com/health" })).status).toBe(200)
+    expect((await repos(world.token(MAX), "POST", { ...repo, shipDesk: true })).status).toBe(200)
+    process.env.VECTOR_OPS_ALLOW_ACCOUNTS = PRO
+    world.seed(PRO, "vector-50")
+    expect(error(await monitors(world.token(PRO), "POST", { url: "https://shop.example.com/health" }))).toMatchObject({
+      code: "CODIUM_PERK_REQUIRED",
+    })
+    // Removing works whatever the listing.
+    delete process.env.VECTOR_OPS_ALLOW_ACCOUNTS
+    delete process.env.CODIUM_LISTED_PERKS
+    expect(await domains(world.token(MAX), "DELETE", { domain: "two.example.com" })).toMatchObject({
+      status: 200,
+      body: { removed: true },
+    })
+    expect((await repos(world.token(MAX), "DELETE", { repositoryId: 42 })).body).toEqual({ removed: true })
+  })
+})
+
 // ── Verification ────────────────────────────────────────────────────────────────────────────────────────────────────
 
 describe("verification", () => {

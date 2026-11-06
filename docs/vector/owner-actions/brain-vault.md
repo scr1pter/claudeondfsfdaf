@@ -27,7 +27,8 @@ Never put a key in this repository, a chat or a ticket.
 1. **The tables.** Review `docs/vector/owner-actions/sql/brain-vault.sql`, then run it once in the Supabase SQL editor
    of the project that holds Vector's accounts. It creates four tables with row-level security and no access for
    `anon` or `authenticated`, and one function, `vector_brain_vault`, that only `service_role` may call (security
-   invoker). Running it again is safe.
+   invoker). Running it again is safe, and is how a later copy of the file (such as the `signed_until` column) is
+   applied.
 2. **The bucket.** In Cloudflare R2, create `vector-vault` (or set `VECTOR_R2_VAULT_BUCKET`) and an API token scoped to
    that bucket alone with Object Read & Write. Give it **no lifecycle rule**: the API deletes what it no longer needs,
    and a rule would delete live backups. Set `VECTOR_R2_ACCOUNT_ID`, `VECTOR_R2_VAULT_ACCESS_KEY_ID` and
@@ -53,11 +54,18 @@ Never put a key in this repository, a chat or a ticket.
 - **The `vault` switch** (owner page) stops new backups within 30 seconds without a redeploy. Restores, forgetting a
   version and deleting a vault keep working, so nobody loses access to their data.
 - **Quotas** are the plan's `vault.gb` in decimal gigabytes (Pro 10, Max 25, Ultra 50), checked before any upload is
-  signed. A vault also holds at most 60 versions and 2 million objects, and four backups may run at once.
-- **When a plan ends**, the vault turns read-only and the person gets one email naming the day it will be deleted, 30
-  days later. A new plan before then keeps it. During a payment dispute or a fraud warning nothing is deleted, not even
+  signed. A vault also holds at most 60 versions and 2 million objects, and four backups may run at once. At 60
+  versions a new backup drops the oldest one (never the newest), as forgetting it would, so computers sharing a vault
+  never run into it; a vault held by a dispute refuses instead. A backup with no request for an hour no longer counts
+  among the four.
+- **When a plan ends, or moves to Plus** (no Brain Vault), the vault turns read-only and the person gets one email naming
+  the day it will be deleted, 30 days later. A plan with Brain Vault before then keeps it. During a payment dispute or a fraud warning nothing is deleted, not even
   versions past their 30 days. Account deletion erases the vault at once (A57 wires the full deletion; the `vault`
   provisioner already erases it when an account closes).
+- **Deleting from R2** waits until every upload link signed for an object has stopped working (15 minutes and a
+  5-minute grace): an upload through a live link after the delete would recreate the object where nothing counts or
+  finds it. So what a commit, a forget or a vault deletion queues within those minutes of an upload is deleted by the
+  next daily cleanup, not at once. The wrapped key still goes at once.
 - **The cleanup** answers counts only. A run that cannot finish in its minute leaves the rest for the next day. It
   cleans the server's own Stripe mode only: Vercel runs crons on Production, so a Preview's test vaults are cleaned
   only when you call it there yourself (`curl -H "Authorization: Bearer $CRON_SECRET" <preview>/api/vault/cleanup`).

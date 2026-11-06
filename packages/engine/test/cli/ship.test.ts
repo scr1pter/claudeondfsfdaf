@@ -242,6 +242,13 @@ describe("the capture", () => {
     )
     expect(puts.every((call) => call.headers?.authorization === undefined)).toBe(true)
     expect(run.envs.every((env) => env.VECTOR_CAPTURE_TICKET === undefined && env.PORT === "4100")).toBe(true)
+    // Every request carries this capture's own proof, which binds the ticket to it; the proof is never in a child's
+    // environment and never goes to storage.
+    const proofs = new Set(api.calls.filter((call) => call.action).map((call) => call.body.proof))
+    expect(proofs.size).toBe(1)
+    expect([...proofs][0]).toMatch(ShipDesk.PROOF)
+    expect(run.envs.every((env) => !Object.values(env).includes([...proofs][0]))).toBe(true)
+    expect(captureApi({ site: "https://vectordev.ai", ticket: TICKET }).card).toBeInstanceOf(Function)
   })
 
   test("waits for the card while the pull request's event reaches vectordev.ai", async () => {

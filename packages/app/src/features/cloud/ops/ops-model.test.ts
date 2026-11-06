@@ -178,7 +178,20 @@ describe("incidents", () => {
     expect(rollbackLabel("host")).toBe("Roll back at your host")
     expect(manualReason("workflows")).toContain("workflow files")
     expect(manualReason("snoozed")).toContain("snoozed")
+    expect(manualReason("off")).toContain("Release Guard was off")
     expect(manualReason("something-new")).toBe("Vector did not open a revert pull request for this release.")
+    // The revert pull request's head commit, which Undo merges at; anything but a full sha is dropped.
+    const at = (headSha: unknown) =>
+      decodeIncidents({
+        incidents: [{ ...release, release: { ...release.release, undo: { ...release.release.undo, headSha } } }],
+      })[0]!.release!.undo
+    expect(at("e".repeat(40))).toEqual({
+      kind: "pull-request",
+      number: 7,
+      url: "https://github.com/octo/shop/pull/7",
+      headSha: "e".repeat(40),
+    })
+    expect(at("main")).toEqual({ kind: "pull-request", number: 7, url: "https://github.com/octo/shop/pull/7" })
     // An undo the screens cannot read waits for the server.
     expect(
       decodeIncidents({ incidents: [{ ...release, release: { ...release.release, undo: 3 } }] })[0]!.release!.undo,

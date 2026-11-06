@@ -32,6 +32,7 @@ import {
   type OpsSettings,
 } from "./ops-settings.js"
 import { healthView, readHealth, type DomainHealthView } from "./ops-health.js"
+import { requireOpsPerk, type OpsPerk } from "./ops-listing.js"
 import { opsConfigured } from "./ops-worker.js"
 import { persistentStore } from "./persistent-store.js"
 import { requireUnrevokedAccount, requireUnrevokedCliToken } from "./revocation.js"
@@ -44,16 +45,22 @@ import { phoneAppOrigin } from "./web-push.js"
  * - Who: a Vector account token (`vct_`, unrevoked) or a website session; run tokens (`vrt_`, `vht_`) get 401 (S3).
  * - Reading and removing work whatever the plan, so settings can always be seen and taken away.
  * - Adding or changing anything needs the ops services configured and the owner's `ops` switch on (503 OPS_UNAVAILABLE,
- *   OPS_PAUSED), and a plan whose snapshot includes the ops perks now: Max or Ultra, active or renewing within grace
- *   (`requireEntitlement(account, "ops")`, S1). Every count comes from the snapshot's caps (ENTITLEMENTS ops): domains
- *   and URLs from `onCall`, paths from `releaseGuard`. A patched client cannot widen any of them.
+ *   OPS_PAUSED), the perk it serves listed (503 OPS_UNAVAILABLE; ops-listing.ts: domains On Call or Release Guard,
+ *   monitors On Call, a repository Release Guard and Ship Desk as it turns them on), and a plan whose snapshot includes
+ *   the ops perks now: Max or Ultra, active or renewing within grace (`requireEntitlement(account, "ops")`, S1). Every
+ *   count comes from the snapshot's caps (ENTITLEMENTS ops): domains and URLs from `onCall`, paths from `releaseGuard`.
+ *   A patched client cannot widen any of them.
  * - A monitor or a Release Guard production URL must be on a domain the account verified (403 OPS_DOMAIN_UNVERIFIED).
  * - A repository can be set up only while it is bound to the account (409 OPS_REPO_NOT_BOUND; the binding is Codex's).
  *
  * After a change to domains or monitors the Worker's copy is updated (`synced` in the answer says whether it took it).
  */
 
-export type OpsCaller = { account: string; via: "token" | "session" }
+/**
+ * Who is asking. A token's `client` is its marker (`desktop` from the desktop's own sign-in, `cli` from `vector login`);
+ * an unmarked token is one copied from vectordev.ai/auth/cli, which may not spend Codium (§4.9, S2).
+ */
+export type OpsCaller = { account: string; via: "token" | "session"; client?: "desktop" | "cli" }
 export type OpsCaps = NonNullable<Entitlements["ops"]>
 
 function header(request: Pick<ApiRequest, "headers">, name: string) {
@@ -70,8 +77,14 @@ export async function requireOpsCaller(
   const bearer = /^Bearer\s+(\S+)$/i.exec(header(request, "authorization"))?.[1]
   if (!bearer || bearer.length > 8192 || bearer.startsWith("vrt_") || bearer.startsWith("vht_"))
     throw new ApiError(401, "SIGN_IN_REQUIRED", "Sign in to Vector to set up production checks.")
-  if (bearer.startsWith("vct_"))
-    return { account: (await requireUnrevokedCliToken(bearer, fetcher, now)).id, via: "token" }
+  if (bearer.startsWith("vct_")) {
+    const claims = await requireUnrevokedCliToken(bearer, fetcher, now)
+    return {
+      account: claims.id,
+      via: "token",
+      ...(claims.client === "desktop" || claims.client === "cli" ? { client: claims.client } : {}),
+    }
+  }
   const user = await requireAccountUser(request, fetcher)
   await requireUnrevokedAccount(user.id, fetcher)
   return { account: user.id, via: "session" }
@@ -109,10 +122,27 @@ export async function readOpsBody(request: ApiRequest, fields: readonly string[]
   return body as Record<string, unknown>
 }
 
-/** The plan's ops caps when it allows adding ops settings now (S1), or the plan's refusal. Reads only the snapshot. */
-export async function requireOpsCaps(account: string, fetcher: typeof fetch = fetch, now = Date.now()) {
+/**
+ * The plan's ops caps when it allows adding ops settings now (S1), or the refusal: none of `perks` listed (503
+ * OPS_UNAVAILABLE), or the plan's own. Reads only the snapshot and the listing.
+ */
+export async function requireOpsCaps(
+  account: string,
+  perks: readonly OpsPerk[],
+  fetcher: typeof fetch = fetch,
+  now = Date.now(),
+) {
+  await requireOpsPerk(account, perks, fetcher)
   const snapshot = await requireEntitlement(account, "ops", fetcher, now)
   return snapshot.caps.ops!
+}
+
+/** The perks a repository's settings turn on: Release Guard, Ship Desk, or (neither on) either of them. */
+export function repoPerks(input: Pick<OpsRepoInput, "releaseGuard" | "shipDesk">): OpsPerk[][] {
+  const wanted: OpsPerk[][] = []
+  if (input.releaseGuard) wanted.push(["release-guard"])
+  if (input.shipDesk) wanted.push(["ship-desk"])
+  return wanted.length ? wanted : [["release-guard", "ship-desk"]]
 }
 
 /** The plan's ops caps for display, or null when the plan does not allow ops now. Never throws for the plan's state. */

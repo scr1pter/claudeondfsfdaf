@@ -199,6 +199,15 @@ describe("merges with the person's own GitHub sign-in", () => {
       code: "GITHUB_REFUSED",
     })
     expect(blocked.merges).toHaveLength(3)
+    // The branch moved past the commit the card showed (an Undo's revert branch someone pushed to): nothing merged.
+    const moved = world(() => Response.json({}))
+    moved.refuseNext(409)
+    expect(await moved.ops.merge({ repository: "octo/shop", number: 12, headSha: "a".repeat(40) })).toMatchObject({
+      ok: false,
+      code: "GITHUB_REFUSED",
+      message: expect.stringContaining("Open it in GitHub"),
+    })
+    expect(moved.merges).toHaveLength(1)
     const signedOut = createDesktopOps({
       token: async () => TOKEN,
       github: async () => undefined,

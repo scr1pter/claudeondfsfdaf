@@ -5,10 +5,12 @@ import {
   parseOpsRepo,
   readOpsBody,
   removeOpsRepo,
+  repoPerks,
   requireOpsCaller,
   requireOpsCaps,
   saveOpsRepo,
 } from "../_lib/ops-api.js"
+import { requireOpsPerk } from "../_lib/ops-listing.js"
 import { requireOpsService } from "../_lib/ops-worker.js"
 
 export default function handler(request: ApiRequest, response: ApiResponse) {
@@ -27,8 +29,8 @@ const REPO_FIELDS = ["repositoryId", "environment", "productionUrl", "paths", "r
  *   bound to the account (409 OPS_REPO_NOT_BOUND otherwise). `environment` is the deployment environment Release Guard
  *   watches (GitHub's name for it, such as Production). Release Guard needs `productionUrl` on a verified domain (403
  *   OPS_DOMAIN_UNVERIFIED); `paths` are joined to it, at most the plan's count. Answers the settings, the
- *   .vector/ops.json to commit (contract §4.15) and the URLs Release Guard will check. Needs the ops services and a plan
- *   with them.
+ *   .vector/ops.json to commit (contract §4.15) and the URLs Release Guard will check. Needs the ops services, each perk
+ *   it turns on listed (ops-listing.ts), and a plan with them.
  * - `DELETE {repositoryId}`: removes one, whatever the plan.
  *
  * Writes take 60 an hour per account.
@@ -55,7 +57,10 @@ export async function handleOpsRepos(
       return json(response, 200, await removeOpsRepo(caller.account, body.repositoryId, fetcher, now))
     const input = parseOpsRepo(body)
     await requireOpsService(fetcher, now)
-    const caps = await requireOpsCaps(caller.account, fetcher, now)
+    // Each perk the settings turn on must be listed (one of them when neither is on).
+    const [first, ...others] = repoPerks(input)
+    const caps = await requireOpsCaps(caller.account, first!, fetcher, now)
+    for (const perks of others) await requireOpsPerk(caller.account, perks, fetcher)
     json(response, 200, await saveOpsRepo(caller.account, input, caps, fetcher, now))
   } catch (error) {
     handleApiError(response, error)

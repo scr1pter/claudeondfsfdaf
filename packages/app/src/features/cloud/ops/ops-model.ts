@@ -79,7 +79,8 @@ export const PART_LINES: Record<OpsPerk, string> = {
 // ── Incidents ──────────────────────────────────────────────────────────────────────────────────────────────────────
 
 export type OpsUndo =
-  | { kind: "pull-request"; number: number; url: string }
+  /** `headSha`: the commit the revert pull request had when Vector opened it; Undo merges only at that commit. */
+  | { kind: "pull-request"; number: number; url: string; headSha?: string }
   | { kind: "manual"; reason: string; openUrl?: string; rollback?: { host: string; url: string } }
   | { kind: "pending" }
 
@@ -110,7 +111,12 @@ export type OpsIncident = {
 function decodeUndo(value: unknown): OpsUndo {
   if (!isRecord(value)) return { kind: "pending" }
   if (value.kind === "pull-request" && count(value.number) && https(value.url))
-    return { kind: "pull-request", number: value.number, url: value.url as string }
+    return {
+      kind: "pull-request",
+      number: value.number,
+      url: value.url as string,
+      ...(typeof value.headSha === "string" && /^[0-9a-f]{40}$/.test(value.headSha) ? { headSha: value.headSha } : {}),
+    }
   if (value.kind === "manual") {
     const rollback = isRecord(value.rollback) && https(value.rollback.url) ? value.rollback : undefined
     return {
@@ -255,6 +261,7 @@ const MANUAL: Record<string, string> = {
   "branch-exists": "A branch Vector would use already exists.",
   "not-bound": "This repository is no longer connected to your account.",
   plan: "Your plan does not allow a new revert right now.",
+  off: "Release Guard was off on Vector when this happened, so it opened no revert pull request.",
   snoozed: "Release Guard was snoozed when this happened, so it opened no revert pull request.",
 }
 

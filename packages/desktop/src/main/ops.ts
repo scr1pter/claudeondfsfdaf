@@ -170,6 +170,13 @@ export function createDesktopOps(deps: Dependencies) {
       } catch (cause) {
         const status = (cause as { status?: unknown } | null)?.status
         if (status === 405) continue
+        // GitHub answers 409 when the branch moved past the commit the card showed: nobody has looked at that commit.
+        if (status === 409)
+          return {
+            ok: false,
+            code: "GITHUB_REFUSED",
+            message: "New commits landed on this pull request after Vector showed it. Open it in GitHub to review them.",
+          }
         if (status === 401 || status === 403 || status === 404)
           return {
             ok: false,

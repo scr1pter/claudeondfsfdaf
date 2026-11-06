@@ -73,3 +73,30 @@ revert path (§8.2 step 16), A50's screens and its readiness checks.
 - The `on-call` and `release-guard` readiness checks (A50).
 - "Fix it" needs Codex's starter (A59); repositories need Codex's binding reader (A59).
 - No screens (A50). Nothing was pushed or deployed. `bun.lock` was not touched.
+
+## P7 review fixes (5 Nov 2026)
+
+- **Listing on the server.** New `api/_lib/ops-listing.ts` (`opsPerkOpen`, `requireOpsPerk`, `opsAllowedAccounts`):
+  new ops work needs its perk in `listedPerks()`, or the account in `VECTOR_OPS_ALLOW_ACCOUNTS` (new env, for the
+  owner's own try-out before listing). The deployment intake ignores an unlisted Release Guard (`not-listed`);
+  `requireOpsCaps(account, perks, …)` now takes the perks a route serves (A47's routes: domains On Call or Release
+  Guard, monitors On Call, repositories each perk they turn on).
+- **A revert needs Release Guard on at Vector.** `decideRevert` checks `requireOpsService` and the listing before
+  `openRevert`; either refusing records Undo as `manual` with the new `ManualReason` `off`, and no revert token is
+  minted. The store being down still throws for a resend.
+- **Undo's head commit.** `RevertOutcome` (opened) keeps `headSha`: GraphQL `revertPullRequest { … headRefOid }`, a
+  reused open pull request's `head.sha`, or the restore commit Vector made (or found on its branch). `IncidentUndo`
+  carries it when it is a full sha.
+- **Fix runs.** `startIncidentFix` needs the incident's perk listed (On Call for a monitor, Release Guard for a
+  release). `OpsCaller` now has `client` (the token's marker), and the incidents route refuses `fix` from an unmarked
+  token with 401 `CODIUM_SIGN_IN_REQUIRED` unless `MODEL_PLAN_REQUIRE_MARKED_TOKENS=false`.
+- **Tests** (`test/release-guard.test.ts`, 36 pass, 1 CI-only skip): Undo carries the head of the GraphQL revert, the
+  restore commit and a reused pull request; the `ops` switch off and an unlisted Release Guard both leave `off` and mint
+  no write token while alerts still go out, and listing it opens the revert again; a fix run refuses an unmarked token
+  (snooze still works), refuses while unlisted, starts once listed, and takes an unmarked token under the legacy
+  override. `test/github-webhook.test.ts` (27 pass): an unlisted Release Guard watches nothing. `test/on-call.test.ts`
+  (30 pass, 1 skip): each route refuses its unlisted perk, Release Guard listed opens domains and its repositories but
+  not monitors or Ship Desk, the allowlist opens the rest and the plan still decides, removing works regardless.
+  `test/ops-fixture.ts` sets the allowlist for its accounts, clears `CODIUM_LISTED_PERKS` and
+  `MODEL_PLAN_REQUIRE_MARKED_TOKENS` per world, gives pull requests head shas and repositories a visibility.
+- No edits to `api/_lib/model-plan-*.ts` (`model-plan-config.ts`'s `modelPlanRequireMarkedTokens` is only imported).

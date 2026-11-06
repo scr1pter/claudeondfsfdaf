@@ -21,7 +21,8 @@ export default function handler(request: ApiRequest, response: ApiResponse) {
  *   domains, among the plan's URLs, in the order added); the plan's URL count and check interval; whether the Worker has
  *   the current list. 240 an hour per account.
  * - `POST {url}`: adds an https URL on a verified domain (403 OPS_DOMAIN_UNVERIFIED otherwise), within the plan's URL
- *   count (429 OPS_LIMIT). The same URL again answers it unchanged. Needs the ops services and a plan with On Call.
+ *   count (429 OPS_LIMIT). The same URL again answers it unchanged. Needs the ops services, On Call listed and a plan
+ *   with it.
  * - `DELETE {id}`: removes one, whatever the plan.
  *
  * Writes take 60 an hour per account. The Worker gets the new list after every change.
@@ -47,7 +48,7 @@ export async function handleOpsMonitors(
     if (request.method === "DELETE")
       return json(response, 200, await removeOpsMonitor(caller.account, body.id, fetcher, now))
     await requireOpsService(fetcher, now)
-    const caps = await requireOpsCaps(caller.account, fetcher, now)
+    const caps = await requireOpsCaps(caller.account, ["on-call"], fetcher, now)
     json(response, 200, await addOpsMonitor(caller.account, body.url, caps, fetcher, now))
   } catch (error) {
     handleApiError(response, error)

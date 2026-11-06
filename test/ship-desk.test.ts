@@ -383,11 +383,16 @@ const cards = (authorization: string, query = "") =>
     authorization,
     url: `/api/ops/cards${query}`,
   })
-const uploads = (authorization: string, body: unknown) =>
+/** The capture job's own proof, which `vector ship capture` sends with every ticket request. */
+const PROOF = "p".repeat(43)
+const uploads = (authorization: string, body: unknown, proof: string | null = PROOF) =>
   invoke((request, response) => handleOpsUploads(request, response, fetcher(), () => world.now), {
     method: "POST",
     authorization,
-    body,
+    body:
+      authorization.startsWith("vcap_") && proof !== null && body && typeof body === "object" && !("proof" in body)
+        ? { ...body, proof }
+        : body,
     url: "/api/ops/uploads",
   })
 const image = (authorization: string, card: string, n: number | string) =>
@@ -565,6 +570,13 @@ describe("cards", () => {
     process.env.VECTOR_GITHUB_APP_ENABLED = "false"
     expect(await intake()).toEqual({ kind: "ignored", reason: "off" })
     process.env.VECTOR_GITHUB_APP_ENABLED = enabled
+    // Ship Desk not listed (and the account not on the owner's allowlist): no new card, nothing read from GitHub.
+    const allowed = process.env.VECTOR_OPS_ALLOW_ACCOUNTS
+    const mints = world.github.minted.length
+    delete process.env.VECTOR_OPS_ALLOW_ACCOUNTS
+    expect(await intake()).toEqual({ kind: "ignored", reason: "not-listed" })
+    expect(world.github.minted.length).toBe(mints)
+    process.env.VECTOR_OPS_ALLOW_ACCOUNTS = allowed
 
     // .vector/ops.json on the base branch must name this account's ops id with shipDesk: true.
     for (const optIn of [null, { opsId: "ops_" + "x".repeat(22) }, { shipDesk: false }, "{not json"] as const) {
@@ -737,6 +749,12 @@ describe("cards", () => {
     const third = `gh-${REPO}-7006-1-9006`
     await shipDeskIntake(pull(settings, { action: "synchronize", rid: third, author: "actions" }), context())
     expect((await readCard(MAX, cardId(REPO, 12), fetcher()))?.rid).toBe(next)
+    // Once Ship Desk is no longer listed, a card made before still follows its pull request.
+    delete process.env.VECTOR_OPS_ALLOW_ACCOUNTS
+    expect(await shipDeskIntake(pull(settings, { action: "closed", merged: true }), context())).toMatchObject({
+      kind: "updated",
+    })
+    expect((await readCard(MAX, cardId(REPO, 12), fetcher()))?.state).toBe("merged")
   })
 })
 
@@ -1033,6 +1051,63 @@ describe("capture", () => {
     expect(
       (await uploads(ticket, { action: "card", pr: 12, extra: true } as Record<string, unknown>)).body.error.code,
     ).toBe("SHIP_DESK_CAPTURE_INVALID")
+  })
+
+  test("the first request binds the ticket to its capture job: a copy from the log, with another proof or none, does nothing", async () => {
+    await withCard()
+    const { ticket } = await ticketFor()
+    const mine = "m".repeat(43)
+    const theirs = "x".repeat(43)
+    expect((await uploads(ticket, { action: "card", pr: 12 }, null)).body.error.code).toBe("SHIP_DESK_CAPTURE_INVALID")
+    expect((await uploads(ticket, { action: "card", pr: 12, proof: "short" })).body.error.code).toBe(
+      "SHIP_DESK_CAPTURE_INVALID",
+    )
+    expect((await uploads(ticket, { action: "card", pr: 12, proof: mine })).status).toBe(200)
+    const stored = JSON.parse(world.fakes.store.get(ticketKey(ticketHash(ticket)))!)
+    // Only the proof's hash is kept, and asking for the card opened no window.
+    expect(stored).toMatchObject({ proof: createHash("sha256").update(mine).digest("hex"), boundAt: world.now })
+    expect(stored.firstUse).toBeUndefined()
+    expect(JSON.stringify(stored)).not.toContain(mine)
+    // Someone who read the ticket while the capture job installs and builds can neither start nor finish.
+    world.advance(20 * 60_000)
+    for (const body of [
+      { action: "card", pr: 12, proof: theirs },
+      { action: "start", pr: 12, files: files(1), proof: theirs },
+    ])
+      expect(await uploads(ticket, body)).toMatchObject({ status: 403, body: { error: { code: "SHIP_DESK_TICKET_BOUND" } } })
+    const started = await uploads(ticket, { action: "start", pr: 12, files: files(1), proof: mine })
+    expect(started.status).toBe(200)
+    await put(started.body.uploads[0], png())
+    expect(
+      (await uploads(ticket, { action: "finish", pr: 12, capture: started.body.capture, proof: theirs })).body.error.code,
+    ).toBe("SHIP_DESK_TICKET_BOUND")
+    expect((await uploads(ticket, { action: "finish", pr: 12, capture: started.body.capture, proof: mine })).body).toEqual({
+      images: 1,
+      refused: [],
+    })
+  })
+
+  test("no ticket for a public repository, whose Actions logs anyone can read, or while Ship Desk is not listed", async () => {
+    await withCard()
+    world.github.repos.get(REPO)!.private = false
+    expect(await uploads(runToken(MAX), { action: "ticket" })).toMatchObject({
+      status: 403,
+      body: { error: { code: "SHIP_DESK_PUBLIC_REPOSITORY" } },
+    })
+    // Read with a read-only token for that repository, revoked after use.
+    expect(world.github.minted.at(-1)).toMatchObject({ repositoryId: REPO })
+    expect(Object.values(world.github.minted.at(-1)!.permissions)).not.toContain("write")
+    expect(world.github.live()).toEqual([])
+    world.github.repos.get(REPO)!.private = true
+    expect((await uploads(runToken(MAX), { action: "ticket" })).status).toBe(200)
+    world.github.down = true
+    expect((await uploads(runToken(MAX), { action: "ticket" })).body.error.code).toBe("GITHUB_UNAVAILABLE")
+    world.github.down = false
+    delete process.env.VECTOR_OPS_ALLOW_ACCOUNTS
+    expect(await uploads(runToken(MAX), { action: "ticket" })).toMatchObject({
+      status: 503,
+      body: { error: { code: "OPS_UNAVAILABLE" } },
+    })
   })
 
   test("a closed pull request takes no images; a frozen plan takes none either", async () => {

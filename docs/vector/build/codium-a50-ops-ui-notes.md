@@ -107,3 +107,13 @@ perks only after the App and the outside review of the revert path.
 - Account deletion's wiring (A57) and the Codex hand-offs (A59) are their own packages.
 - The phone adds no domains or URLs (it checks a pending domain); adding and removing are on the desktop.
 - Nothing was pushed or deployed. `bun.lock` was not touched.
+
+## P7 review fixes (5 Nov 2026)
+
+- **Undo merges at the revert's head.** `OpsUndo` (pull request) decodes `headSha` (full shas only) and the incident
+  card's "Undo here" passes it to the desktop's merge, as Approve already did; GitHub's 409 (the branch moved) now reads
+  "New commits landed on this pull request after Vector showed it. Open it in GitHub to review them."
+- **`off`.** `manualReason("off")`: "Release Guard was off on Vector when this happened, so it opened no revert pull
+  request." (the phone shows the same text).
+- **Tests:** `packages/app/src/features/cloud/ops/ops-model.test.ts` (14 pass), `packages/desktop/src/main/ops.test.ts`
+  (8 pass, with the 409 case).
