@@ -70,6 +70,10 @@ jobs:
           - name: ops-worker
             directory: packages/ops-worker
             command: bun typecheck
+          # WP A54: the cloud computer's image, hostd and the viewer proxy.
+          - name: hosted-computer
+            directory: packages/hosted-computer
+            command: bun typecheck
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
       - uses: ./.github/actions/setup-bun
@@ -235,6 +239,42 @@ jobs:
       - name: Smoke-test the ops Worker bundle under miniflare
         working-directory: packages/ops-worker
         run: bun run smoke
+
+  # WP A54: the cloud computer's image. It is built here with a stand-in for the Vector CLI (the image workflow, WP A58,
+  # builds it with the real one), booted in a privileged container and checked from inside: ports, sudo, the VNC bind,
+  # viewer tokens, the credential guard, the profile wipe, and that boot fails closed without the right to load its
+  # firewall. Nothing is pushed anywhere; no secret is used.
+  hosted-image:
+    name: Cloud computer image (Docker)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - uses: ./.github/actions/setup-bun
+        with:
+          install-flags: --frozen-lockfile
+
+      - name: Build hostd and the viewer proxy for Node
+        working-directory: packages/hosted-computer
+        run: bun run build
+
+      - name: Build the image with a stand-in CLI
+        working-directory: packages/hosted-computer
+        run: |
+          set -euo pipefail
+          mkdir -p bin
+          printf '#!/bin/sh\necho "vector (image check stand-in)"\n' > bin/vector
+          docker build --file image/Dockerfile --build-arg VECTOR_IMAGE_GENERATION=1 --tag vector-hosted-computer:ci .
+
+      - name: Boot the image and check it from inside
+        working-directory: packages/hosted-computer
+        env:
+          VECTOR_TEST_HOSTED_IMAGE: vector-hosted-computer:ci
+        run: bun test --timeout 600000 ./test/image.test.ts
 
   browser:
     name: Codium browser specs

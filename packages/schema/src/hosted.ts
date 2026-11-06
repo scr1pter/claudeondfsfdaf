@@ -201,8 +201,18 @@ export type SessionView = {
 }
 
 /**
+ * Why the computer asks for the person (WP A54): its credential guard met a password or one-time-code field
+ * (`credential`) or a card field (`payment_details`), a CAPTCHA (`captcha`), or the agent asked (`other`). The agent's
+ * own words never travel: the reason is all the server hears.
+ */
+export const HANDOFFS = ["credential", "payment_details", "captcha", "other"] as const
+export type Handoff = (typeof HANDOFFS)[number]
+
+/**
  * The computer's daemon's report (`POST …/heartbeat`). Counters are cumulative for the session; the server works out
- * what changed. `archiveBytes` answers a download request with the size of the packed files.
+ * what changed. `archiveBytes` answers a download request with the size of the packed files. `generation` is the base
+ * image generation the computer's disk was made from (WP A54), and `handoff` the latest hand-over the person has not
+ * taken yet.
  */
 export type Heartbeat = {
   cpu?: number
@@ -213,6 +223,8 @@ export type Heartbeat = {
   done?: boolean
   archiveBytes?: number
   uploaded?: boolean
+  generation?: number
+  handoff?: Handoff
 }
 
 /** What the daemon is told on each heartbeat. */
@@ -228,6 +240,8 @@ export type HeartbeatAnswer = {
   viewerKey: string
   /** The job, until the daemon says it booted. */
   job?: { prompt: string; title?: string }
-  /** Where to upload the packed files, when the person asked for them. */
+  /** The person asked for the session's files: pack them and report their size as `archiveBytes` (WP A54). */
+  pack?: boolean
+  /** Where to upload the packed files, once their size is known. */
   upload?: { url: string; headers: Record<string, string>; expiresAt: number }
 }

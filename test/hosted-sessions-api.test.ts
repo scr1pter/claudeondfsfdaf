@@ -21,6 +21,8 @@ import {
   hostedJobKey,
   hostedLeaseKey,
   hostedViewerKey,
+  parseHeartbeat,
+  readBeat,
   readSessionRecord,
   verifyHostedRunToken,
 } from "../api/_lib/hosted-sessions"
@@ -417,6 +419,22 @@ describe("the computer's heartbeat (S3, S7)", () => {
     expect((await beat(w, session.id, {})).body.job).toBeUndefined()
   })
 
+  test("the daemon's image generation and hand-over reason are kept; anything else is dropped (WP A54)", async () => {
+    expect(parseHeartbeat({ generation: 3, handoff: "captcha" })).toEqual({ generation: 3, handoff: "captcha" })
+    expect(parseHeartbeat({ generation: 0, handoff: "Please type the password hunter2" })).toEqual({})
+    expect(parseHeartbeat({ generation: 1.5, handoff: "admin_prompt" })).toEqual({})
+    const w = await hostedWorld(ledger)
+    const session = await started(w)
+    await beat(w, session.id, { booted: true, generation: 2, handoff: "credential" })
+    const first = await readBeat(session.id, w.fetcher)
+    expect(first).toMatchObject({ generation: 2, handoff: { reason: "credential", since: w.fakes.clock.now } })
+    w.fakes.clock.advance(30_000)
+    await beat(w, session.id, { generation: 2, handoff: "credential" })
+    expect((await readBeat(session.id, w.fetcher))?.handoff?.since).toBe(first!.handoff!.since)
+    await beat(w, session.id, { generation: 2 })
+    expect((await readBeat(session.id, w.fetcher))?.handoff).toBeUndefined()
+  })
+
   test("browser-shaped requests, another session's id and account tokens are refused", async () => {
     const w = await hostedWorld(ledger)
     const session = await started(w)
@@ -478,7 +496,12 @@ describe("the session's files", () => {
     const asked = await action(w, session.id, "download")
     expect(asked.status).toBe(202)
     expect(asked.body).toEqual({ ready: false })
+    // WP A54: the computer learns of the request from the heartbeat, packs, then reports the size.
+    const told = await beat(w, session.id, {})
+    expect(told.body.pack).toBe(true)
+    expect(told.body.upload).toBeUndefined()
     const packed = await beat(w, session.id, { archiveBytes: 4096 })
+    expect(packed.body.pack).toBeUndefined()
     expect(packed.body.upload.url).toStartWith(`https://${R2_HOST}/`)
     expect(packed.body.upload.headers["content-length"]).toBe("4096")
     const key = decodeURIComponent(new URL(packed.body.upload.url).pathname.split("/").slice(2).join("/"))

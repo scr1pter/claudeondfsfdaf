@@ -2025,3 +2025,90 @@ outcome, verdict, actor.login` pass. Every paid plan includes it while the plan 
   each), `packages/schema/src/hosted.ts`, `vercel.json`, `.env.example`, `docs/vector/MODEL-PLANS.md`,
   `docs/vector/owner-actions/hosted-computer.md`, `packages/web/test/fixture/codium-fakes.ts` (`HDEL`, `INCRBY`,
   `PEXPIRE`), `test/hosted-sessions-fixture.ts`.
+
+## A54 Image and hostd (5 Nov 2026)
+
+- **Where the image comes from.** `image/Dockerfile` builds on the Alpine base the Vector CLI container already pins
+  by digest. The image workflow (A58) pushes it to the hosted team's container registry and `script/bake-snapshot.ts`
+  starts one sandbox from it (by digest, no network, tagged `vector-bake`, never `vector-mode`), checks it there and
+  stops it, so the provider saves the base snapshot. The Vector CLI binary for Linux (musl) goes in at `bin/vector`;
+  CI's image job uses a stand-in.
+- **"Reinstalls verified system components from the base snapshot".** A resumed Vercel computer restores its whole
+  saved disk, so the base snapshot is not there to copy from. boot.sh reinstalls `/opt/vector` and the browser policy
+  on every boot from a root-only archive in the image, whose SHA-256 the image build stamps into boot.sh, and replaces
+  both folders whole, so anything added or changed there is gone. A newer base snapshot reaches computers that already
+  have a disk only when their disk is made again.
+- **"Refuses a disk below the minimum image generation".** A disk records the image generation it was made with on its
+  first boot (`/var/lib/vector/disk-generation`); boot.sh refuses one older than `VECTOR_MIN_DISK_GENERATION`, stamped
+  at build (default 1). hostd also reports the generation in every heartbeat (`Hosted.Heartbeat.generation`, kept in
+  the session's beat) so the server can enforce a floor later; no package enforces one there yet.
+- **10 GB quota.** The agent's disk is a sparse file of exactly 10,000,000,000 bytes with its own ext4, loop-mounted at
+  `/data` (nosuid, nodev, discard), so the kernel enforces the quota. Decimal, so the 6 GB image cap plus the data fit
+  A53's 16 GB storage charge. boot.sh fails closed if it cannot mount it. Scratch space (`/tmp`, `/var/tmp`, `/dev/shm`),
+  the browser's profile and home, the recorder's segments and hostd's state are memory disks, so nothing else the agent
+  or the browser writes reaches the saved disk.
+- **More users than the contract names.** Besides the agent (10001): viewer 10002 (the viewer proxy), git 10003
+  (token-carrying git steps), browser 10004 (Chromium), display 10005 (Xvfb, x11vnc, the recorder); groups share 10010
+  (downloads) and x 10011 (the display cookie). The agent has no access to the display, so it cannot type into the
+  browser except through hostd, where the credential guard sits.
+- **No sudo binary at all,** no setuid or setgid file (stripped at build and at every boot), and every service started
+  with no new privileges and no capabilities. A53's Vercel `boot` step runs with `sudo: true`; the image's default user
+  is root. If the provider needs a `sudo` binary for that flag, the real-microVM check shows it and A53's boot call
+  changes, not the image.
+- **Firewall beyond egress.** Input is dropped too, except the viewer port and replies; the agent and the browser may not
+  reach the viewer port even on loopback; QUIC is off (no udp/443, and the browser policy turns QUIC off); bytes the
+  agent, git and browser users send are counted (`counter egress`) for the fair-use meter. Whether the provider's own
+  control of the computer survives the input drop is one of the real-microVM check's items.
+- **hostd's action API** is HTTP on a Unix socket only the agent's user can open (`/run/vector/hostd/actions.sock`):
+  `POST /v1/computer {v: 1, input, format?}`, `POST /v1/tool {phase, id, pgid?}`, `POST /v1/git {op, repository,
+  directory, branch?}`, `GET /v1/status`. The computer-use format is not on this branch, so `src/actions.ts` repeats its
+  action names, fields, limits, error codes, hand-over reasons and batch text without importing them. `list_apps`,
+  `open_app`, `focus_window`, `read_ui` and `ui_N` references answer `unsupported_action` (one display, no app list or
+  accessibility tree). A frame's `hash` identifies the image's content (SHA-256), not a perceptual hash. A batch runs its
+  `actions`, then the top-level action last.
+- **Credential guard.** `image/credential-guard.js` is injected over the browser's debugging pipe (only hostd holds it;
+  there is no debugging port) into an isolated world of every frame. hostd asks it before typing (text, and any key
+  combination other than navigation keys) and before pressing; it refuses typing into password, one-time-code and card
+  fields (`secure_field`) and pressing inside CAPTCHAs (`blocked`), and fails closed when a frame does not answer. The
+  hand-over reason goes to the server as `Hosted.Heartbeat.handoff` (credential, payment_details, captcha, other); the
+  agent's own words never do.
+- **Git.** "While the agent's process group is stopped" is done for every process of the agent's user. Token steps run
+  as the git user in bare mirrors only hostd configures, with hooks, helpers, proxies and URL rewrites switched off on
+  the command line; the token is an HTTP header in git's environment, scoped to https://github.com/. No git process of
+  the git user reads the agent's repository: a push goes through a bundle the agent's git writes (opened without
+  following links before it is shared). Pushes are to `vector/…` branches only, never forced. Tokens come from
+  `POST /api/hosted/sessions/<id>/git-token`, which no package has built (sessions name no repository yet), so git steps
+  fail until a later package adds it.
+- **"Processes not spawned by the current tool call are killed when it ends"** is read as: when a tool call ends, hostd
+  kills the call's process group and any agent process started during the call that is no longer under the agent's main
+  process (a daemon, a double fork). The agent and what it keeps under it stay. The agent marks a call's bounds on
+  `/v1/tool`; the agent-side hook belongs to the computer-use build.
+- **"Viewer proxy on localhost VNC"** is stricter: the VNC server listens on a Unix socket only (`-unixsockonly`, never
+  TCP, not even loopback), in a folder only the viewer user can enter, so no other process on the computer can reach it.
+- **Viewer proxy.** Checks the token's session, not the computer's name, which the computer does not know (a session
+  runs on one computer). It speaks HTTP itself over `node:net`, so the same code runs on Node and under the tests. Only
+  RFB 3.8 with no VNC password; the shared flag is forced on; a view token's keyboard, pointer and clipboard messages are
+  dropped at the proxy; a control token's connection is closed when control goes back to the agent. Close codes 4000 (no
+  token), 4001 (control ended), 4002 (session ended), 4003 (token refused). The page (`viewer.html`, `viewer.js`) is a
+  small VNC client (Raw, CopyRect, DesktopSize) and may be framed only by vectordev.ai and remote.vectordev.ai.
+- **Recorder.** H.264 in 1-minute MPEG-TS segments on a memory disk, capped at 720 segments or 192 MB. Uploading them is
+  Done by Morning's (A55).
+- **Schema and A53 server changes.** `Hosted.Heartbeat` gains `generation` and `handoff`; `Hosted.HeartbeatAnswer` gains
+  `pack`. A53 answered the upload link only once the computer had reported the packed size, but never told the computer
+  that the person had asked for the files: `pack: true` is that signal. `api/_lib/hosted-sessions.ts` parses and keeps
+  the two report fields in the session's beat and sends `pack`; `test/hosted-sessions-api.test.ts` covers both.
+- **The agent's launch** is `vector run --format json [--title …] -- <prompt>` as the agent, umask 022, with no secret
+  in its environment (`VECTOR_HOSTED_SESSION`, `VECTOR_HOSTED_RUN_HOST`, `VECTOR_COMPUTER_SOCKET`). Routing its Codium
+  requests through the run-API host, and driving the computer through hostd's socket, belong to the computer-use build.
+  The run-API host refuses `Sec-Fetch-*`; Node's fetch adds `sec-fetch-mode: cors` by itself (checked here), which is
+  why hostd uses `node:https`, and the agent's Codium client must not send it either.
+- **The files a person downloads** are the agent's work folder (`/data/work`), not its home.
+- **Tests.** The Docker job runs in `vector-codium.yml` (`hosted-image`); A58 may move it into `vector-hosted-ci.yml`.
+  Inside that container only, Chromium runs with `--no-sandbox`, because containers lack the user namespaces its sandbox
+  needs; production and the real-microVM check keep it on. The real-microVM check is `script/microvm-check.ts`, run by
+  `vector-codium-e2e.yml` with `hosted: true` and four new `codium-test` secrets (`CODIUM_E2E_HOSTED_*`).
+- **Files outside A54's list:** `src/{actions,computer,daemon,guard,limits,procs,rfb,run,run-api,websocket}.ts`,
+  `image/{boot-lib.sh,viewer.html,viewer.js}`, `script/microvm-check.ts`, `test/docker/in-image.mjs`, the other test
+  files, the package's manifest and configuration, `bun.lock` (the workspace entry only), `vector-codium.yml`,
+  `vector-codium-e2e.yml`, `packages/schema/src/hosted.ts`, `api/_lib/hosted-sessions.ts`,
+  `test/hosted-sessions-api.test.ts`, `docs/vector/MODEL-PLANS.md`, `docs/vector/owner-actions/hosted-computer.md`.

@@ -2,8 +2,8 @@
 
 A computer Vector hosts for Max and Ultra subscribers (working name; the product name follows the computer-use brand).
 Its core, the ledger that holds and charges its time in the subscriber's Codium pool, is Codium build WP A51, and
-the provider adapter that starts and stops the computers is WP A52 (this page so far). Sessions and crons (A53), the
-image (A54), Done by Morning (A55) and the desktop and phone (A56) add their own sections. How it works is in
+the provider adapter that starts and stops the computers is WP A52. Sessions and crons (A53) and the image (A54) have
+their sections below; Done by Morning (A55) and the desktop and phone (A56) add theirs. How it works is in
 [MODEL-PLANS.md](../MODEL-PLANS.md#the-cloud-computers-ledger). Nothing on this page has been created, applied or tried
 against Supabase or Vercel yet.
 
@@ -154,3 +154,43 @@ switch and the accounts on hold; `POST {action}` with `drain` (no new sessions),
 minute), `resume`, `suspend {account, reason?}` or `release {account}`. The same switch is on the owner page, and the
 hosted team's spend webhook moves it to `no-new` at 75% and `stop` at 100% by itself.
 
+## The image (WP A54)
+
+The computer's software lives in `packages/hosted-computer`. Nothing here has been built, pushed or baked yet.
+
+**What it is.** An Alpine image pinned by digest (`image/Dockerfile`, the same base as the Vector CLI container) with
+Chromium, a virtual display, a VNC server, ffmpeg, xdotool, git, nftables, Node and the Vector CLI. Each session Vector
+runs `/opt/vector/boot.sh` as root. It reinstalls the computer's own programs from an archive whose digest the image
+build stamped into it, loads the firewall (out: port 443, DNS to the resolver, loopback; in: the viewer port), mounts the
+agent's 10 GB disk, and starts the display, the viewer proxy and hostd. If any of that fails it stops, the computer never
+reports, and Vector stops it within minutes. The agent runs as its own user with no sudo; the browser runs as another
+with its own sandbox on, its profile wiped after every job; only the viewer proxy listens on the network, and it needs a
+single-use viewer token for that session.
+
+**Building and baking (owner step 14, after Vercel's written OK).** The image workflow (WP A58) does this in the
+`hosted-production` environment:
+
+1. `bun run build` in `packages/hosted-computer` (hostd and the viewer proxy, for Node), and the Vector CLI for Linux
+   (musl) at `packages/hosted-computer/bin/vector`.
+2. `docker build --file image/Dockerfile --build-arg VECTOR_IMAGE_GENERATION=<n> .` from that folder. Raise the
+   generation with every rebuild. `VECTOR_MIN_DISK_GENERATION` (default 1) is the oldest disk generation this image
+   accepts; raise it only when a change makes older disks unsafe, because computers with older disks then stop booting.
+3. Push it to the hosted team's container registry and note its digest.
+4. `bun script/bake-snapshot.ts --image <image>@sha256:<digest> --generation <n>` with `VECTOR_HOSTED_VERCEL_TOKEN`,
+   `VECTOR_HOSTED_VERCEL_TEAM_ID` and `VECTOR_HOSTED_VERCEL_PROJECT_ID`. It starts one sandbox with no network, checks the
+   image there (at most 6 GB, no setuid file, no sudo), stops it and prints `VECTOR_HOSTED_BASE_SNAPSHOT=<id>`.
+5. Set `VECTOR_HOSTED_BASE_SNAPSHOT` in Vercel. New computers start from it. Computers that already have a disk keep
+   their own programs until their disk is made again (after its retention lapses, or when you delete it).
+
+**The real-microVM check.** Before listing `computer`, run `vector-codium-e2e.yml` with `hosted: true`. It boots a
+throwaway computer from the snapshot on the hosted test team and checks the firewall, the agent's egress, the disk and
+Chromium's sandbox from inside, then stops it. It needs `CODIUM_E2E_HOSTED_VERCEL_TOKEN`,
+`CODIUM_E2E_HOSTED_VERCEL_TEAM_ID`, `CODIUM_E2E_HOSTED_VERCEL_PROJECT_ID` and `CODIUM_E2E_HOSTED_SNAPSHOT` in the
+`codium-test` environment. Three things only this check can show: that the provider's kernel loads the firewall and the
+loop-mounted disk, that the provider still controls the computer after the firewall is up, and that Chromium's sandbox
+starts. If any fails, the image needs a change before anyone can use a cloud computer.
+
+**What it still needs from later packages.** The agent's side: Vector's CLI sending Codium requests through the run-API
+host and driving the computer through hostd's socket (the computer-use build). GitHub tokens for git: hostd asks
+`/api/hosted/sessions/<id>/git-token`, which no package has built yet, so git steps fail until it exists. Uploading
+recordings (Done by Morning, A55). Showing the hand-over reason and the live view (A56).

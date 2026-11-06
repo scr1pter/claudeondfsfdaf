@@ -501,6 +501,19 @@
         "why-is-node-running": "3.2.2",
       },
     },
+    "packages/hosted-computer": {
+      "name": "@vectordevai/hosted-computer",
+      "dependencies": {
+        "@vectordevai/schema": "workspace:*",
+      },
+      "devDependencies": {
+        "@tsconfig/bun": "catalog:",
+        "@types/bun": "catalog:",
+        "@types/node": "catalog:",
+        "@typescript/native-preview": "catalog:",
+        "@vercel/sandbox": "3.8.0",
+      },
+    },
     "packages/http-recorder": {
       "name": "@vectordevai/http-recorder",
       "version": "1.17.14",
@@ -2342,6 +2355,8 @@
     "@vectordevai/effect-sqlite-node": ["@vectordevai/effect-sqlite-node@workspace:packages/effect-sqlite-node"],
 
     "@vectordevai/engine": ["@vectordevai/engine@workspace:packages/engine"],
+
+    "@vectordevai/hosted-computer": ["@vectordevai/hosted-computer@workspace:packages/hosted-computer"],
 
     "@vectordevai/http-recorder": ["@vectordevai/http-recorder@workspace:packages/http-recorder"],
 

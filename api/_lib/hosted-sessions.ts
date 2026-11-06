@@ -986,6 +986,10 @@ export type Beat = {
   booted: boolean
   done: boolean
   archiveBytes?: number
+  /** The base image generation the computer's disk was made from (WP A54). */
+  generation?: number
+  /** The latest hand-over to the person the daemon reported, and since when (WP A54). */
+  handoff?: { reason: Hosted.Handoff; since: number }
 }
 
 /** The daemon's last report for a session, or undefined. */
@@ -1020,6 +1024,8 @@ export function parseHeartbeat(input: unknown): Hosted.Heartbeat {
   const pageLoads = count(body.pageLoads, 10_000_000)
   const egressBytes = count(body.egressBytes, Number.MAX_SAFE_INTEGER)
   const archiveBytes = count(body.archiveBytes, ARCHIVE_MAX_BYTES)
+  const generation = count(body.generation, 1_000_000)
+  const handoff = Hosted.HANDOFFS.find((reason) => reason === body.handoff)
   return {
     ...(cpu !== undefined ? { cpu } : {}),
     ...(activeAt !== undefined ? { activeAt } : {}),
@@ -1029,6 +1035,8 @@ export function parseHeartbeat(input: unknown): Hosted.Heartbeat {
     ...(body.done === true ? { done: true } : {}),
     ...(archiveBytes !== undefined && archiveBytes > 0 ? { archiveBytes } : {}),
     ...(body.uploaded === true ? { uploaded: true } : {}),
+    ...(generation !== undefined && generation > 0 ? { generation } : {}),
+    ...(handoff ? { handoff } : {}),
   }
 }
 
@@ -1099,6 +1107,10 @@ export async function recordHeartbeat(
     booted: Boolean(previous?.booted || beat.booted),
     done: Boolean(previous?.done || beat.done),
     ...(beat.archiveBytes !== undefined ? { archiveBytes: beat.archiveBytes } : previous?.archiveBytes !== undefined ? { archiveBytes: previous.archiveBytes } : {}),
+    ...(beat.generation !== undefined ? { generation: beat.generation } : {}),
+    ...(beat.handoff
+      ? { handoff: { reason: beat.handoff, since: previous?.handoff?.reason === beat.handoff ? previous.handoff.since : now } }
+      : {}),
   }
   await store(
     ["SET", hostedBeatKey(id), JSON.stringify(next), "PX", Math.max(60_000, record.deadline + TIMEOUT_GRACE_MS + DAY_MS - now)],
@@ -1131,7 +1143,10 @@ export async function recordHeartbeat(
               : undefined,
           { fetcher, clock },
         )
-    } else if (next.archiveBytes !== undefined) {
+    } else if (next.archiveBytes === undefined) {
+      // The person asked for the files and the computer has not packed them yet (WP A54).
+      answer.pack = true
+    } else {
       const put = presignR2("media", {
         method: "PUT",
         key,
