@@ -1,29 +1,33 @@
-import { createHash } from "node:crypto"
+import { createHash, randomBytes } from "node:crypto"
 import fs from "fs/promises"
 import path from "path"
 import open from "open"
 import { Global } from "@vectordevai/core/global"
 import { truthy } from "@vectordevai/core/flag/flag"
 import { InstallationVersion } from "@vectordevai/core/installation/version"
+import { Option, Schema } from "effect"
 import { UI } from "./ui"
 import { VectorAccount } from "@vectordevai/core/vector-account"
 import { Egress } from "@vectordevai/core/local-mode/egress"
 import { LocalPolicy } from "@vectordevai/core/local-mode/policy"
 import { LocalSources } from "@vectordevai/core/local-mode/sources"
+import { listenLoopback } from "@vectordevai/core/oauth/loopback"
 
 export const readVectorToken = VectorAccount.readVectorToken
 
 /**
  * Vector CLI account gate.
  *
- * The `vector` terminal agent is free, but requires a Vector account. Tokens
- * are minted at {site}/auth/cli after signing in and pasted into the CLI once;
- * they are verified against the Vector API and cached with an offline grace
- * window so flaky networks never lock anyone out of their own terminal.
+ * The `vector` terminal agent is free, but requires a Vector account. `vector login` opens {site}/auth/cli, where the
+ * person approves this terminal; the browser hands a one-use code back to a listener on 127.0.0.1 and the CLI exchanges
+ * it, with its PKCE verifier, for a CLI grant it stores and never shows. A token copied from {site}/auth/cli still
+ * works (`vector login --token`), for free models only. Tokens are verified against the Vector API and cached with an
+ * offline grace window so flaky networks never lock anyone out of their own terminal.
  */
 
 const AUTH_FILE = path.join(Global.Path.data, "cli-auth.json")
-const SITE = (process.env.VECTOR_SITE_URL ?? "https://vectordev.ai").replace(/\/+$/, "")
+// Read on each call, not when this module loads: a command, or a test, may set VECTOR_SITE_URL after an import.
+const site = () => (process.env.VECTOR_SITE_URL ?? "https://vectordev.ai").replace(/\/+$/, "")
 const DAY = 24 * 60 * 60 * 1000
 const OFFLINE_GRACE = 7 * DAY
 // Late enough that the command has opened its own database before the usage report reads it.
@@ -99,7 +103,7 @@ type VerifyResult =
 const ACCOUNT_SOURCE = LocalSources.get("vector-account")!
 const USAGE_SOURCE = LocalSources.get("usage-checkin")!
 const offline = (source: LocalSources.Source) =>
-  LocalPolicy.decide(Egress.policy(), { purpose: source.purpose, url: SITE, source: source.id }).decision !== "allow"
+  LocalPolicy.decide(Egress.policy(), { purpose: source.purpose, url: site(), source: source.id }).decision !== "allow"
 const LOCAL_SIGN_IN =
   "Vector Local blocks requests to vectordev.ai, so Vector cannot check a token now. Sign in once with Vector Local off, or allow the vector-account source."
 
@@ -111,7 +115,7 @@ const REJECTION_CODES = new Set(["CLI_TOKEN_INVALID", "CLI_TOKEN_EXPIRED"])
 // per account per UTC day from these headers unless VECTOR_DISABLE_USAGE turns that off. Nothing else is sent.
 async function verifyToken(token: string): Promise<VerifyResult> {
   if (offline(ACCOUNT_SOURCE)) return { status: "local" }
-  const response = await Egress.fetch(ACCOUNT_SOURCE.id, `${SITE}/api/account/cli-verify`, {
+  const response = await Egress.fetch(ACCOUNT_SOURCE.id, `${site()}/api/account/cli-verify`, {
     method: "POST",
     headers: {
       "content-type": "application/json",
@@ -155,36 +159,28 @@ export function scheduleUsageReport(token: string, delay = USAGE_REPORT_DELAY) {
   if (truthy("VECTOR_DISABLE_USAGE")) return
   if (offline(USAGE_SOURCE)) return
   setTimeout(() => {
-    usageReport.send({ token, site: SITE }).catch(() => undefined)
+    usageReport.send({ token, site: site() }).catch(() => undefined)
   }, delay).unref()
 }
 
-// Prompt on stderr so a piped stdout never receives prompt text.
-function ask(prompt: string): Promise<string> {
-  const readline = require("readline") as typeof import("readline")
-  const rl = readline.createInterface({ input: process.stdin, output: process.stderr })
-  return new Promise((resolve) => rl.question(prompt, (answer: string) => (rl.close(), resolve(answer.trim()))))
+export type LoginOptions = {
+  /** Opens the sign-in page; the system browser unless a caller (or a test) supplies one. */
+  openBrowser?: (url: string) => Promise<unknown>
+  /** Ends a waiting sign-in: the listener closes and nothing is stored. */
+  signal?: AbortSignal
+  /** The callback port on 127.0.0.1; 0 or omitted picks a free one. Fixed, it can be forwarded over SSH. */
+  port?: number
+  timeoutMs?: number
 }
 
-export async function login(provided?: string): Promise<CliUser | undefined> {
-  const url = `${SITE}/auth/cli`
-  let token = provided?.trim() ?? ""
-  if (!token) {
-    UI.empty()
-    UI.println(UI.Style.TEXT_NORMAL_BOLD + "Sign in to Vector")
-    UI.println(UI.Style.TEXT_DIM + "The Vector agent is free — it just needs a Vector account.")
-    UI.empty()
-    UI.println("1. Your browser is opening " + UI.Style.TEXT_INFO_BOLD + url + UI.Style.TEXT_NORMAL)
-    UI.println("2. Sign in (or create a free account) and copy the command it shows you")
-    UI.println("3. Run that command — or paste just the token below")
-    UI.empty()
-    await open(url).catch(() => undefined)
-    token = (await ask("CLI token: ")).trim()
-  }
-  if (!token) {
-    UI.error("No token entered.")
-    return undefined
-  }
+/**
+ * Signs this terminal in. With `provided`, a token copied from {site}/auth/cli, which stays unmarked and works with free
+ * models only. Without it, the browser sign-in that stores a CLI grant, which Vector Codium also accepts.
+ */
+export async function login(provided?: string, options: LoginOptions = {}): Promise<CliUser | undefined> {
+  const url = `${site()}/auth/cli`
+  const token = provided?.trim()
+  if (!token) return browserLogin(options)
   if (!token.startsWith("vct_")) {
     UI.error(`That does not look like a Vector CLI token (they start with vct_). Get one at ${url}`)
     return undefined
@@ -203,6 +199,148 @@ export async function login(provided?: string): Promise<CliUser | undefined> {
     return undefined
   }
   await save({ token, user: verified.user, verifiedAt: Date.now() })
+  // A copied token was never minted for this CLI, so Vector Codium refuses it.
+  if (!tokenMarked(token))
+    UI.println(
+      UI.Style.TEXT_DIM +
+        "A copied token works with free models only. Run vector login without --token to use Vector Codium in this terminal.",
+    )
+  return signedIn(verified.user)
+}
+
+async function browserLogin(options: LoginOptions) {
+  if (offline(ACCOUNT_SOURCE)) {
+    UI.error(LOCAL_SIGN_IN)
+    return undefined
+  }
+  const signal = options.signal ?? new AbortController().signal
+  const verifier = randomBytes(32).toString("base64url")
+  const state = randomBytes(32).toString("base64url")
+  const listener = await listenLoopback({
+    redirect: new URL(`http://127.0.0.1:${options.port ?? 0}/callback`),
+    state,
+    signal,
+    timeoutMs: options.timeoutMs,
+    name: "Vector sign-in",
+  }).catch((error: unknown) => {
+    UI.error(error instanceof Error ? error.message : "Vector could not start its sign-in listener.")
+    return undefined
+  })
+  if (!listener) return undefined
+  const url = `${site()}/auth/cli?${new URLSearchParams({
+    desktop: "1",
+    state,
+    code_challenge: createHash("sha256").update(verifier).digest("base64url"),
+    code_challenge_method: "S256",
+    purpose: "cli",
+    port: listener.redirect.port,
+  })}`
+  UI.empty()
+  UI.println(UI.Style.TEXT_NORMAL_BOLD + "Sign in to Vector")
+  UI.println(UI.Style.TEXT_DIM + "The Vector agent is free — it just needs a Vector account.")
+  UI.empty()
+  UI.println("Approve this terminal in your browser. If it did not open, visit:")
+  UI.println(UI.Style.TEXT_INFO_BOLD + url + UI.Style.TEXT_NORMAL)
+  UI.println(
+    UI.Style.TEXT_DIM +
+      `The browser returns to 127.0.0.1:${listener.redirect.port} on this computer. Over SSH, forward that port, or run vector login --port <port> to choose it.`,
+  )
+  UI.empty()
+  await (options.openBrowser ?? open)(url).catch(() => undefined)
+  const exchanged = await listener.code
+    .then((code) => exchange({ code, state, verifier }, listener.signal))
+    .catch((error: unknown) => ({ error: error instanceof Error ? error.message : "Vector sign-in failed." }))
+    .finally(listener.close)
+  if (exchanged.error !== undefined) {
+    UI.error(exchanged.error)
+    return undefined
+  }
+  // A copied token's sign-in for another account goes, with that account's team choice and checked tokens, as with
+  // `vector login --token`: its team would otherwise stop every command from loading its configuration.
+  const replaced = await load()
+  if (replaced && replaced.user.id !== exchanged.user.id) await signOut()
+  await save({ token: exchanged.token, user: exchanged.user, verifiedAt: Date.now() })
+  return signedIn(exchanged.user)
+}
+
+// The one-use code and its verifier buy the grant once. Only a CLI grant is stored: a code minted for another purpose
+// (a desktop sign-in or a deletion) would buy another credential, which this terminal must not keep.
+async function exchange(input: { code: string; state: string; verifier: string }, signal: AbortSignal) {
+  const response = await Egress.fetch(ACCOUNT_SOURCE.id, `${site()}/api/account/cli-exchange`, {
+    method: "POST",
+    headers: { "content-type": "application/json", accept: "application/json" },
+    body: JSON.stringify(input),
+    redirect: "error",
+    signal: AbortSignal.any([signal, AbortSignal.timeout(10_000)]),
+  }).catch(() => undefined)
+  if (!response) return { error: "Vector could not reach vectordev.ai to finish signing in. Run vector login again." }
+  const payload = (await response.json().catch(() => undefined)) as
+    | { token?: unknown; user?: { id?: unknown; email?: unknown }; error?: { message?: unknown } }
+    | undefined
+  const message = payload?.error?.message
+  if (!response.ok)
+    return { error: typeof message === "string" ? message : "Vector sign-in failed. Run vector login again." }
+  const token = payload?.token
+  const user = payload?.user
+  const claims = typeof token === "string" ? tokenClaims(token) : undefined
+  if (
+    typeof token !== "string" ||
+    typeof user?.id !== "string" ||
+    typeof user.email !== "string" ||
+    claims?.client !== "cli" ||
+    typeof claims.jti !== "string" ||
+    claims.sub !== user.id
+  )
+    return { error: "vectordev.ai did not return a CLI sign-in. Run vector login again." }
+  return { token, user: { id: user.id, email: user.email } }
+}
+
+// The claims a vct_ token carries, read without verifying it: only the server can verify the signature, and these
+// decide nothing beyond what this CLI keeps and shows.
+function tokenClaims(token: string) {
+  const payload = token.startsWith("vct_") ? token.slice(4).split(".") : []
+  if (payload.length !== 2) return undefined
+  const decoded = Buffer.from(payload[0]!, "base64url").toString("utf8")
+  const claims = Schema.decodeUnknownOption(
+    Schema.fromJsonString(
+      Schema.Struct({
+        sub: Schema.optional(Schema.String),
+        client: Schema.optional(Schema.String),
+        jti: Schema.optional(Schema.String),
+      }),
+    ),
+  )(decoded)
+  return Option.getOrUndefined(claims)
+}
+
+/** Whether a token was minted for a Vector client (this CLI's sign-in or the desktop's), which Vector Codium accepts. */
+export function tokenMarked(token: string) {
+  const client = tokenClaims(token)?.client
+  return client === "cli" || client === "desktop"
+}
+
+/** The stored sign-in's token kind, for display: Codium refuses a copied token. */
+export async function storedTokenMarked() {
+  const stored = await load()
+  return stored ? tokenMarked(stored.token) : undefined
+}
+
+/**
+ * Whether the stored sign-in still stands, asked of vectordev.ai now rather than at the day's first command: a grant
+ * revoked or expired since then is signed out here, so `vector login` signs in again instead of calling it current.
+ * Only a refusal counts; an unreachable site or Vector Local keeps the sign-in, as the daily check does.
+ */
+export async function confirmStoredSignIn() {
+  const stored = await load()
+  if (!stored) return false
+  const verified = await verifyToken(stored.token)
+  if (verified.status === "ok") await save({ token: stored.token, user: verified.user, verifiedAt: Date.now() })
+  if (verified.status !== "invalid") return true
+  await signOut()
+  return false
+}
+
+async function signedIn(user: CliUser) {
   const { VectorTeams } = await import("@/teams")
   await VectorTeams.runtime
     .runPromise((teams) => teams.refresh())
@@ -212,7 +350,7 @@ export async function login(provided?: string): Promise<CliUser | undefined> {
       ),
     )
   UI.empty()
-  UI.println(UI.Style.TEXT_SUCCESS_BOLD + "✓ Signed in as " + verified.user.email)
+  UI.println(UI.Style.TEXT_SUCCESS_BOLD + "✓ Signed in as " + user.email)
   UI.empty()
   UI.println(
     "Now run " +
@@ -221,7 +359,7 @@ export async function login(provided?: string): Promise<CliUser | undefined> {
       UI.Style.TEXT_NORMAL +
       " inside any repository to start the agent — you type to it there, not at the shell prompt.",
   )
-  return verified.user
+  return user
 }
 
 /**
@@ -243,7 +381,7 @@ export async function ensureVectorAccount(): Promise<void> {
       UI.error(`A free Vector account is required, and VECTOR_CLI_TOKEN has not been checked yet. ${LOCAL_SIGN_IN}`)
       process.exit(1)
     }
-    UI.error("VECTOR_CLI_TOKEN is not valid. Generate a new token at " + `${SITE}/auth/cli`)
+    UI.error("VECTOR_CLI_TOKEN is not valid. Generate a new token at " + `${site()}/auth/cli`)
     process.exit(1)
   }
 
@@ -280,7 +418,7 @@ export async function ensureVectorAccount(): Promise<void> {
 
   if (!process.stdin.isTTY) {
     UI.error(
-      `A free Vector account is required. Run "vector login" in a terminal, or set VECTOR_CLI_TOKEN (create one at ${SITE}/auth/cli).`,
+      `A free Vector account is required. Run "vector login" in a terminal, or set VECTOR_CLI_TOKEN (create one at ${site()}/auth/cli).`,
     )
     process.exit(1)
   }

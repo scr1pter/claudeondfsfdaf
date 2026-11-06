@@ -18,6 +18,7 @@ test("spendCapLabel shows spend against the cap only when the run has a dollar c
   expect(spendCapLabel({ spentUsd: 0.84, capUsd: 2 })).toBe("$0.84 of $2.00")
   expect(spendCapLabel({ spentUsd: 5.021, capUsd: 5 })).toBe("$5.02 of $5.00")
   expect(spendCapLabel({ spentUsd: 0.84 })).toBeUndefined()
+  expect(spendCapLabel({ spentUsd: 0, capUsd: 2 })).toBeUndefined()
   expect(spendCapLabel(undefined)).toBeUndefined()
 })
 
@@ -79,7 +80,7 @@ test("the sidebar updates context for a cached zero-output turn without changing
     }
     setState("messages", [previous, cached])
     await shows("1,000 tokens")
-    await shows("50% used")
+    await shows("50% of context used")
     await shows("$1.25 spent")
     setState("messages", [
       previous,

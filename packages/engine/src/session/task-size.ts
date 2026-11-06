@@ -29,6 +29,22 @@ export type Carried = {
   /** Files the summarised part of the request changed since its last verdict. */
   readonly files: readonly string[]
   readonly agents: readonly string[]
+  /** The request's snapshot, which was recorded on the message the summary replaced. */
+  readonly snapshot?: readonly TaskSize.Running[]
+}
+
+/** Where a request's opening message records the subagents still working when it opened, on a synthetic text part. */
+export const SNAPSHOT = "subagentSnapshot"
+
+/** Reason a request gains when a message that joined it said "no subagents". */
+export const CAPPED_JOINED = "capped:joined"
+
+/** A size note and the user message it rides on. */
+export type Note = {
+  readonly user: SessionV1.WithParts
+  /** What the rules said over the request's user messages up to this one. */
+  readonly result: TaskSize.Result
+  readonly judge: TaskSize.JudgeMode
 }
 
 export type Request = {
@@ -46,9 +62,34 @@ export type Request = {
   readonly escalated: boolean
   /** The size whose tools and policies the request is sent with; see `offered` in `size`. */
   readonly offered: TaskSize.Tier
+  /**
+   * Whether the provider's prompt cache still holds the work before this request: it caches, an earlier request was
+   * more than a greeting, and this one started within the cache's lifetime of that one's end. A learned workflow
+   * default keeps the effort the request before it ran with while this holds, so thinking settings never change on a
+   * warm cache.
+   */
+  readonly warm: boolean
   readonly judge: TaskSize.JudgeMode
   /** What a compaction recorded of this request, when the summary replaced the message that opened it. */
   readonly carried?: Carried
+  /** The subagents launched earlier that were still working when the request opened, as its opening message records. */
+  readonly snapshot: readonly TaskSize.Running[]
+  /**
+   * The highest size of the requests that launched the subagents whose completion notes arrived in this one, so a
+   * report can be acted on with the tools it was launched with.
+   */
+  readonly notified?: TaskSize.Tier
+  /**
+   * Size notes, oldest first: one on the opening message, and one on each joined message that changed the size, the
+   * "no subagents" cap or the judge. Each comes from the messages up to its own, so a later join changes no earlier one.
+   */
+  readonly notes: readonly Note[]
+  /**
+   * The request whose delegated spend ledger this one's subagents share: the opening message, or for a Chat message a
+   * note made work, the request that launched the subagent or command it is about, so a "thanks" never opens a fresh
+   * ledger.
+   */
+  readonly ledgerRequestID: string
 }
 
 export type Input = {
@@ -77,7 +118,9 @@ export function size(input: Input): Request[] {
   // A compaction that recorded nothing (one from before Vector recorded requests) still leaves work to continue: a
   // "continue" or a "yes" after it is work of unknown size, so Standard with tools and history, never a bare reply.
   const compacted = input.messages.some((message) => message.parts.some((part) => part.type === "compaction"))
-  for (const group of groups(input.messages)) {
+  const all = groups(input.messages)
+  const launches = launchesOf(all)
+  for (const [position, group] of all.entries()) {
     const previous = sized.at(-1)
     // What a "continue" or a "yes" continues: the last request that was more than a greeting, since a "thanks" and its
     // reply in between are not the work.
@@ -94,47 +137,78 @@ export function size(input: Input): Request[] {
         : false
     // Whether that work is a plan from Plan mode that nobody has carried out yet, so "yes" or "build it" carries it out.
     const plan = prior?.messages.findLast((message) => message.info.role === "assistant")?.info.agent === "plan"
-    const rules = group.users.reduce<TaskSize.Result | undefined>(
-      (current, user) => {
-        const next = TaskSize.classify({
-          ...describe(user),
-          previous: current?.tier ?? prior?.tier ?? (compacted ? "standard" : undefined),
-          open: current ? false : open,
-          plan: current ? false : plan,
-          auto: input.auto,
-        })
-        if (!current) return next
-        // A message that joined the run raises it; it never shrinks what the request already is.
-        return TaskSize.rank(next.tier) > TaskSize.rank(current.tier)
-          ? { ...next, judge: next.judge && current.judge }
-          : current
-      },
-      group.carried && {
-        tier: group.carried.tier,
-        source: "auto",
-        reasons: ["compacted"],
-        judge: group.carried.judge !== "off",
-        agents: group.carried.agents,
-      },
-    )!
+    // What a compaction recorded stands in for the opening message it replaced.
+    const summarised: TaskSize.Result | undefined = group.carried && {
+      tier: group.carried.tier,
+      source: "auto",
+      reasons: ["compacted"],
+      judge: group.carried.judge !== "off",
+      agents: group.carried.agents,
+    }
+    // The rules after each user message of the request.
+    const states = group.users.reduce<{ user: SessionV1.WithParts; result: TaskSize.Result }[]>((list, user) => {
+      const current = list.at(-1)?.result ?? summarised
+      const next = TaskSize.classify({
+        ...describe(user),
+        previous: current?.tier ?? prior?.tier ?? (compacted ? "standard" : undefined),
+        open: current ? false : open,
+        plan: current ? false : plan,
+        auto: input.auto,
+      })
+      return [...list, { user, result: current ? joined(current, next) : next }]
+    }, [])
+    const rules = states.at(-1)?.result ?? summarised!
     // The quick lane offers escalate, so a message the rules took for social can still go on as Work.
-    const result: TaskSize.Result =
+    const escalated: TaskSize.Result =
       rules.tier === "chat" && escalatedChat(group.messages)
         ? { ...rules, tier: "standard", reasons: ["escalated"] }
         : rules
-    // The user's "no subagents" or "don't be thorough" holds against escalate and a judge FAIL alike.
-    const raised = capped(result) ? undefined : escalation(group.messages)
+    // The notes that started a turn in the request, by the request that launched the work each is about (undefined
+    // when that launch is out of view, as after a compaction): a child's result, a child's report sent with wake, and a
+    // background command's exit. A Chat message a note joined is work: the note is handled with the tools of the
+    // request that launched the work, never on the quick lane.
+    const notes = reported(group.messages)
+    const launchers = notes.map((note) => launcher(launches, note, position))
+    const tierOf = (list: readonly (number | undefined)[]) => {
+      const sources = list.flatMap((at) =>
+        at !== undefined && at < position && sized[at]!.tier !== "chat" ? [at] : [],
+      )
+      const top = sources.reduce<TaskSize.Tier | undefined>(
+        (highest, at) => TaskSize.max(highest ?? sized[at]!.tier, sized[at]!.tier),
+        list.includes(undefined) ? "standard" : undefined,
+      )
+      return { sources, top }
+    }
+    const { sources, top: reportedTier } = tierOf(launchers)
+    // `notified` counts children's completion notes alone: on Light it lets the agent resume the child that reported.
+    const completions = launchers.filter((_, index) => notes[index]!.kind === "result")
+    const completedTier = tierOf(completions).top
+    const upgraded = launchers.length > 0 && escalated.tier === "chat"
+    const result: TaskSize.Result = upgraded
+      ? { ...escalated, tier: TaskSize.max("standard", reportedTier ?? "standard"), reasons: ["notified"] }
+      : escalated
+    // The user's "no subagents" or "don't be thorough" in the message that opened the request holds against escalate
+    // and a judge FAIL alike. Said in a message that joined the run, it stops new launches and lowers nothing.
+    const raised = !group.carried && states[0] && held(states[0].result) ? undefined : escalation(group.messages)
     const tier = raised ? TaskSize.max(result.tier, raised) : result.tier
+    // A child this request launched itself reports at this request's size.
+    const notified = completions.includes(position) ? TaskSize.max(completedTier ?? tier, tier) : completedTier
     const start = (group.users[0] ?? group.messages[0]).info.time.created
-    const offered =
-      tier === "chat" || !input.caching || sticky === undefined || start - end > input.lifetime
-        ? tier
-        : TaskSize.max(sticky, tier)
+    const warm = tier !== "chat" && input.caching && sticky !== undefined && start - end <= input.lifetime
+    const offered = warm ? TaskSize.max(sticky!, tier) : tier
     // A greeting goes out on its own small request shape, so it neither reads nor refreshes the main cached prefix.
     if (tier !== "chat") {
       sticky = offered
       end = Math.max(start, ...group.messages.map(finishedAt))
     }
+    const configured = group.carried?.judge ?? input.judge
+    const opened = group.carried?.opened ?? group.users[0]?.info.id ?? group.messages[0]!.info.id
+    // The launching request that set the size, the latest of equals; else, with the launch out of view, the work before.
+    const source = sources.reduce<number | undefined>((best, at) => {
+      if (best === undefined) return at
+      const rank = TaskSize.rank(sized[at]!.tier) - TaskSize.rank(sized[best]!.tier)
+      return rank > 0 || (rank === 0 && at > best) ? at : best
+    }, undefined)
     sized.push({
       users: group.users,
       messages: group.messages,
@@ -142,13 +216,17 @@ export function size(input: Input): Request[] {
       tier,
       escalated: raised !== undefined,
       offered,
-      judge: judgeMode(
-        group.users,
-        group.carried?.judge ?? input.judge,
-        result.judge,
-        result.reasons.includes("explicit:judge"),
-      ),
+      warm,
+      judge: judgeMode(group.users, configured, result.judge, result.reasons.includes("explicit:judge")),
       ...(group.carried ? { carried: group.carried } : {}),
+      snapshot: group.carried ? (group.carried.snapshot ?? []) : ((group.users[0] && snapshotOf(group.users[0])) ?? []),
+      ...(notified && notified !== "chat" ? { notified } : {}),
+      notes: noteEntries(group, summarised, states, configured, result === rules ? undefined : result),
+      ledgerRequestID: upgraded
+        ? source !== undefined
+          ? sized[source]!.ledgerRequestID
+          : (prior?.ledgerRequestID ?? opened)
+        : opened,
     })
   }
   return sized
@@ -178,6 +256,7 @@ export function carry(request: Request, hidden: (message: SessionV1.WithParts) =
     text: requestText(request).slice(0, 8000),
     files: [...new Set([...(verdict ? [] : (request.carried?.files ?? [])), ...changedFiles({ messages }, verdict)])],
     agents: request.result.agents,
+    ...(request.snapshot.length > 0 ? { snapshot: request.snapshot } : {}),
   }
 }
 
@@ -267,9 +346,158 @@ export function dismissed(messages: readonly SessionV1.WithParts[]) {
   )
 }
 
-/** The user said "no subagents" or "don't be thorough": the request stays Work, and escalate may not raise it. */
+/**
+ * The user said "no subagents": no new subagents for the request. Said in the message that opened it, the request also
+ * stays Work and escalate may not raise it.
+ */
 export function capped(result: TaskSize.Result) {
-  return result.reasons.includes("capped")
+  return result.reasons.includes("capped") || result.reasons.includes(CAPPED_JOINED)
+}
+
+/** The user kept the request at its size ("no subagents" or "don't be thorough"): escalate may not raise it. */
+export function held(result: TaskSize.Result) {
+  return capped(result) || result.reasons.includes(TaskSize.CAPPED_THOROUGH)
+}
+
+/**
+ * The subagents a request's opening message records as still working when it opened; undefined when it records none.
+ */
+export function snapshotOf(message: SessionV1.WithParts): TaskSize.Running[] | undefined {
+  for (const part of message.parts) {
+    const value = part.type === "text" ? part.metadata?.[SNAPSHOT] : undefined
+    if (!isRecord(value) || !Array.isArray(value.ids)) continue
+    const titles: unknown[] = Array.isArray(value.titles) ? value.titles : []
+    return value.ids.flatMap((id: unknown, index) =>
+      typeof id === "string" ? [{ id, title: typeof titles[index] === "string" ? titles[index] : "" }] : [],
+    )
+  }
+  return undefined
+}
+
+/** The synthetic text part that records a request's snapshot on its opening message. */
+export function snapshotPart(children: readonly TaskSize.Running[], at: number) {
+  return {
+    text: TaskSize.running(children, "work") ?? "",
+    metadata: {
+      [SNAPSHOT]: { ids: children.map((child) => child.id), titles: children.map((child) => child.title), at },
+    },
+  }
+}
+
+// A message that joined the run raises the request; it never shrinks what the request already is. Its "no subagents"
+// caps the request from then on, whether or not it raised it.
+function joined(current: TaskSize.Result, next: TaskSize.Result): TaskSize.Result {
+  const raised =
+    TaskSize.rank(next.tier) > TaskSize.rank(current.tier) ? { ...next, judge: next.judge && current.judge } : current
+  if (!next.reasons.includes("capped") || raised.reasons.includes(CAPPED_JOINED)) return raised
+  return { ...raised, reasons: [...raised.reasons, CAPPED_JOINED] }
+}
+
+// The request's size notes: the opening message always has one, and a joined message one only when the size, the cap
+// or the judge changed. On a request whose opening a compaction summarised, the first note rides on the first user
+// message still in view. A Chat request the agent escalated or a report made work is noted at the size it runs at.
+function noteEntries(
+  group: Group,
+  summarised: TaskSize.Result | undefined,
+  states: readonly { user: SessionV1.WithParts; result: TaskSize.Result }[],
+  configured: TaskSize.JudgeMode | undefined,
+  // The request's result when escalate or a note made a Chat request work.
+  adjusted: TaskSize.Result | undefined,
+): Note[] {
+  const mode = (users: readonly SessionV1.WithParts[], result: TaskSize.Result) =>
+    judgeMode(users, configured, result.judge, result.reasons.includes("explicit:judge"))
+  const first = group.messages.find((message) => message.info.role === "user")
+  const start: Note[] =
+    summarised && first && first !== group.users[0]
+      ? [{ user: first, result: summarised, judge: mode([], summarised) }]
+      : []
+  return states
+    .reduce<Note[]>((notes, state, index) => {
+      const note = {
+        user: state.user,
+        result: state.result,
+        judge: mode(group.users.slice(0, index + 1), state.result),
+      }
+      const last = notes.at(-1)
+      return last &&
+        last.result.tier === note.result.tier &&
+        capped(last.result) === capped(note.result) &&
+        (last.judge === "off") === (note.judge === "off")
+        ? notes
+        : [...notes, note]
+    }, start)
+    .map((note) =>
+      adjusted && note.result.tier === "chat"
+        ? { ...note, result: { ...note.result, tier: adjusted.tier, reasons: adjusted.reasons } }
+        : note,
+    )
+}
+
+type Reported = { taskID: string; messageID: string; kind: "result" | "message" | "shell" }
+
+// Notes in these messages that start a turn (4.6): a child's result that was not cancelled or recorded quiet, a
+// child's `task_manage report` delivered with a turn, and a background command's exit that was not a stop. A note
+// delivered without a turn carries `taskQuiet`. `taskID` is the child's session, or the command's `shl_` ID.
+function reported(messages: readonly SessionV1.WithParts[]) {
+  return messages.flatMap((message) =>
+    message.info.role !== "user"
+      ? []
+      : message.parts.flatMap((part): Reported[] => {
+          if (part.type !== "text" || part.metadata?.[QUIET] === true) return []
+          const messageID = message.info.id
+          const note = part.metadata?.taskNotification
+          if (isRecord(note))
+            return typeof note.taskID !== "string" || note.state === "cancelled" || note.quiet === true
+              ? []
+              : [{ taskID: note.taskID, messageID, kind: "result" }]
+          const report = part.metadata?.taskMessage
+          if (isRecord(report))
+            return typeof report.taskID === "string" ? [{ taskID: report.taskID, messageID, kind: "message" }] : []
+          const shell = part.metadata?.shellNotification
+          if (isRecord(shell))
+            return typeof shell.shellID !== "string" || shell.state === "stopped" || shell.state === "interrupted"
+              ? []
+              : [{ taskID: shell.shellID, messageID, kind: "shell" }]
+          return []
+        }),
+  )
+}
+
+type Launch = { messageID: string; request: number }
+
+// Every task call's children, by child, and every background command, by its `shl_` ID: the request whose message
+// launched or resumed it, oldest first.
+function launchesOf(list: readonly Group[]) {
+  const launches = new Map<string, Launch[]>()
+  const add = (id: string, launch: Launch) => launches.set(id, [...(launches.get(id) ?? []), launch])
+  for (const [request, group] of list.entries())
+    for (const message of group.messages) {
+      if (message.info.role !== "assistant") continue
+      for (const part of message.parts) {
+        if (part.type !== "tool" || !("metadata" in part.state)) continue
+        const metadata = part.state.metadata
+        if (!isRecord(metadata)) continue
+        // The shell tool's part names a command it started in the background (5.H).
+        if (metadata.background === true && typeof metadata.shellID === "string" && metadata.shellID.startsWith("shl_"))
+          add(metadata.shellID, { messageID: message.info.id, request })
+        if (part.tool !== "task") continue
+        const entries: unknown[] = Array.isArray(metadata.tasks) ? metadata.tasks : [metadata]
+        for (const entry of entries)
+          if (isRecord(entry) && typeof entry.sessionId === "string")
+            add(entry.sessionId, { messageID: message.info.id, request })
+      }
+    }
+  return launches
+}
+
+// The request that last launched or resumed a child before its note; undefined when that launch is out of view.
+function launcher(
+  launches: ReadonlyMap<string, readonly Launch[]>,
+  note: { taskID: string; messageID: string },
+  at: number,
+) {
+  const launch = launches.get(note.taskID)?.findLast((item) => item.messageID < note.messageID)
+  return launch && launch.request <= at ? launch.request : undefined
 }
 
 // Whether the agent escalated a Chat request: the quick lane's escalate raised it from Chat to Work.
@@ -385,6 +613,18 @@ export function real(message: SessionV1.WithParts) {
   )
 }
 
+/** Where a note Vector recorded without starting a turn is marked, on its text parts' metadata. */
+export const QUIET = "taskQuiet"
+
+// A user message made only of such notes.
+function quiet(message: SessionV1.WithParts) {
+  return (
+    message.info.role === "user" &&
+    message.parts.length > 0 &&
+    message.parts.every((part) => part.type === "text" && part.metadata?.[QUIET] === true)
+  )
+}
+
 type Group = { users: SessionV1.WithParts[]; messages: SessionV1.WithParts[]; closed: boolean; carried?: Carried }
 
 function groups(messages: readonly SessionV1.WithParts[]) {
@@ -407,6 +647,8 @@ function groups(messages: readonly SessionV1.WithParts[]) {
         },
       ]
     }
+    // A note recorded without a turn (noReply) belongs to no request, so it never reopens a finished one.
+    if (quiet(message)) return list
     const current = list.at(-1)
     if (real(message)) {
       // A message sent while the run is going joins it; one sent after the run answered opens the next request.
@@ -484,6 +726,15 @@ function carriedOf(message: SessionV1.WithParts): Carried | undefined {
     agents: Array.isArray(value.agents)
       ? value.agents.filter((agent): agent is string => typeof agent === "string")
       : [],
+    ...(Array.isArray(value.snapshot)
+      ? {
+          snapshot: value.snapshot.flatMap((child: unknown) =>
+            isRecord(child) && typeof child.id === "string"
+              ? [{ id: child.id, title: typeof child.title === "string" ? child.title : "" }]
+              : [],
+          ),
+        }
+      : {}),
   }
 }
 

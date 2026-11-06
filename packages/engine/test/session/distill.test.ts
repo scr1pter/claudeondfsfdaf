@@ -17,6 +17,7 @@ import { Ripgrep } from "@vectordevai/core/ripgrep"
 import { SpendGuard } from "@vectordevai/core/spend-guard"
 import { FSUtil } from "@vectordevai/core/fs-util"
 import { FreeModels } from "@vectordevai/core/free-models"
+import { ModelPlans } from "@vectordevai/core/model-plans"
 import { FreeModelGuests } from "@vectordevai/core/free-model-guests"
 import { EventTable } from "@vectordevai/core/event/sql"
 import { MessageTable, PartTable, SessionMessageTable } from "@vectordevai/core/session/sql"
@@ -59,6 +60,7 @@ import { Auth } from "@/auth"
 import { TestInstance } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 import { reply, TestLLMServer } from "../lib/llm-server"
+import { codiumModel } from "../../../core/test/fixture/codium-gateway"
 
 // "Find more with a model…" end to end against the fake LLM server, with no paid model call: the model's suggestions are
 // read in a hidden helper session, a verbatim quote is kept as a proposed record and an invented one is dropped, what
@@ -190,6 +192,19 @@ const it = testEffect(
     [RuntimeFlags.node, RuntimeFlags.layer({ experimentalEventSystem: true })],
     [Global.node, Global.layerWith({ config })],
     [
+      ModelPlans.node,
+      Layer.effect(
+        ModelPlans.Service,
+        Effect.gen(function* () {
+          const llm = yield* TestLLMServer
+          return ModelPlans.Service.of({
+            catalog: () => Effect.succeed({ enabled: true, models: [codiumModel] }),
+            request: (_url, init) => fetch(`${llm.url}/chat/completions`, init),
+          })
+        }),
+      ).pipe(Layer.provide(TestLLMServer.layer), Layer.orDie),
+    ],
+    [
       FreeModels.node,
       Layer.succeed(FreeModels.Service, {
         catalog: () => Effect.succeed({ enabled: false, updatedAt: 0, models: [] }),
@@ -202,7 +217,14 @@ const it = testEffect(
     [
       FreeModels.credentialsNode,
       Layer.succeed(FreeModels.CredentialsService, {
-        get: (provider) => Effect.succeed(provider === "openrouter" ? "synthetic-key" : undefined),
+        get: (provider) =>
+          Effect.succeed(
+            provider === "openrouter"
+              ? "synthetic-key"
+              : provider === "vector"
+                ? "vct_synthetic-distill-account.token"
+                : undefined,
+          ),
       }),
     ],
   ]),
@@ -333,13 +355,16 @@ it.instance(
       const estimate = yield* distill.estimate(place, { document })
       expect(estimate).toMatchObject({ enabled: true, model: "lmstudio/test-model", costKind: "priced", output: 4_000 })
       expect(estimate.sections).toBeGreaterThan(0)
-      expect(estimate.highUsd).toBeGreaterThan(estimate.lowUsd!)
+      if (estimate.lowUsd === undefined || estimate.highUsd === undefined)
+        throw new Error("Priced estimate has no range")
+      expect(estimate.highUsd).toBeGreaterThan(estimate.lowUsd)
       expect(yield* requests(llm)).toHaveLength(0)
 
       yield* llm.push(reply().tool("StructuredOutput", { records: [VERBATIM, INVENTED] }).usage({ input: 1_400, output: 160 }))
       const result = yield* distill.run(place, { document, sessionID: launching.id })
       expect(result.type).toBe("distilled")
       if (result.type !== "distilled") return
+      if (result.cost === undefined) throw new Error("Priced distillation has no cost")
 
       // One request, offering only StructuredOutput, with the sections as untrusted data and the output capped.
       const sent = yield* requests(llm)
@@ -410,6 +435,52 @@ it.instance(
       expect((yield* sessions.usage()).helpers?.find((item) => item.id === "brain.distill")?.cost).toBeCloseTo(result.cost)
     }),
   90_000,
+)
+
+it.instance(
+  "Codium omits token and dollar figures from estimates, results and History while keeping a private receipt",
+  () =>
+    Effect.gen(function* () {
+      const { llm, knowledge, place, document, distill } = yield* setup()
+      const estimate = yield* distill.estimate(place, { document, model: "vector-plan/vendor/coder" })
+      expect(estimate).toMatchObject({ enabled: true, model: "vector-plan/vendor/coder", costKind: "codium" })
+      expect(estimate.sections).toBeGreaterThan(0)
+      expect(estimate).not.toHaveProperty("input")
+      expect(estimate).not.toHaveProperty("output")
+      expect(estimate).not.toHaveProperty("lowUsd")
+      expect(estimate).not.toHaveProperty("highUsd")
+      expect(yield* requests(llm)).toHaveLength(0)
+
+      yield* llm.push(
+        reply()
+          .tool("StructuredOutput", { records: [VERBATIM, INVENTED] })
+          .usage({ input: 1_400, output: 160 }),
+      )
+      const result = yield* distill.run(place, { document, model: "vector-plan/vendor/coder" })
+      if (result.type !== "distilled") throw new Error(`Codium distillation refused: ${result.reason}`)
+      expect(result).toMatchObject({ model: "vector-plan/vendor/coder", costKind: "codium" })
+      expect(result.records.map((record) => record.quote)).toEqual([VERBATIM.quote])
+      expect(result.dropped).toEqual({ invalid: 0, quote: 1, scan: 0 })
+      expect(result).not.toHaveProperty("tokens")
+      expect(result).not.toHaveProperty("cost")
+      expect(yield* requests(llm)).toHaveLength(1)
+
+      const detail = yield* knowledge.document(place, document, { personal: true })
+      const event = detail!.history.find((item) => item.action === "distilled")
+      expect(event?.detail).toMatchObject({ model: "vector-plan/vendor/coder", costKind: "codium", kept: 1 })
+      expect(event?.detail).not.toHaveProperty("tokens")
+      expect(event?.detail).not.toHaveProperty("cost")
+
+      // This proves the omission does not depend on a gateway omitting measurements or receiving a zero-token reply.
+      const sessions = yield* Session.Service
+      const receipt = yield* sessions.messages({ sessionID: result.sessionID })
+      expect(receipt.find((message) => message.info.role === "assistant")?.info).toMatchObject({
+        billing: "codium",
+        tokens: { input: 1_400, output: 160 },
+      })
+      expect(receipt.flatMap((message) => message.parts)).toEqual([])
+    }),
+  30_000,
 )
 
 it.instance(

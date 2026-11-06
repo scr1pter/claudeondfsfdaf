@@ -1,3 +1,4 @@
+import { Billing } from "@vectordevai/schema/billing"
 import { providerEnabled, providerRuntimeEnabled } from "@vectordevai/schema/provider-policy"
 import { Button } from "@vectordevai/ui/button"
 import { useDialog } from "@vectordevai/ui/context/dialog"
@@ -30,7 +31,7 @@ const PROVIDER_NOTES = [
   { match: (id: string) => id === "vercel", key: "dialog.provider.vercel.note" },
 ] as const
 
-const HIDDEN_PROVIDER_IDS = new Set(["vector", "vector-plan"])
+const HIDDEN_PROVIDER_IDS = new Set(["vector", Billing.CODIUM_PROVIDER_ID])
 
 const providerDisplayName = (id: string, name: string) => brandProviderName(id, name)
 

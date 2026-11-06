@@ -17,6 +17,7 @@ import { SessionPrompt } from "@/session/prompt"
 import { SessionRevert } from "@/session/revert"
 import { SessionRunState } from "@/session/run-state"
 import { SessionStatus } from "@/session/status"
+import { SubagentLifecycle } from "@/tool/subagent-lifecycle"
 import { SessionSummary } from "@/session/summary"
 import { Todo } from "@/session/todo"
 import { ModelV2 } from "@vectordevai/core/model"
@@ -50,6 +51,9 @@ import * as SessionError from "./session-errors"
 import { RequestPrincipal } from "@vectordevai/protocol/middleware/authorization"
 import { ForbiddenError } from "@vectordevai/protocol/errors"
 import { isHelperName } from "@vectordevai/core/session/helper"
+import { RequestOwner } from "@vectordevai/server/request-owner"
+import { SessionAudienceHttp } from "@vectordevai/server/session-audience"
+import { SessionAudience } from "@vectordevai/core/session/audience"
 import { allowsSessionID, allowsSessionLocation } from "./session-access"
 
 const tryParseJson = (text: string) =>
@@ -100,7 +104,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
           ),
         )
       const principal = yield* RequestPrincipal
-      return sessions.filter((item) => allowsSessionLocation(principal, item))
+      return yield* Effect.filter(sessions, (item) => allowsSessionLocation(principal, item))
     })
 
     const status = Effect.fn("SessionHttpApi.status")(function* () {
@@ -111,6 +115,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     })
 
     const requireSession = Effect.fn("SessionHttpApi.requireSession")(function* (sessionID: SessionID) {
+      yield* SessionAudienceHttp.assertSession(sessionID, yield* RequestOwner.owner)
       return yield* SessionError.mapStorageNotFound(session.get(sessionID))
     })
 
@@ -121,7 +126,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       readonly permission?: readonly PermissionV1.Rule[]
       readonly tools?: Readonly<Record<string, boolean>>
     }) {
-      if ((yield* RequestPrincipal).kind === "owner") return
+      if (yield* RequestOwner.owner) return
       if (!input.permission?.some((rule) => rule.action !== "deny") && !Object.values(input.tools ?? {}).includes(true))
         return
       return yield* new ForbiddenError({ message: "Only the server owner can allow tools in a session" })
@@ -133,7 +138,10 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
 
     const children = Effect.fn("SessionHttpApi.children")(function* (ctx: { params: { sessionID: SessionID } }) {
       yield* requireSession(ctx.params.sessionID)
-      return yield* session.children(ctx.params.sessionID)
+      const principal = yield* RequestPrincipal
+      return yield* Effect.filter(yield* session.children(ctx.params.sessionID), (item) =>
+        allowsSessionLocation(principal, item),
+      )
     })
 
     const todo = Effect.fn("SessionHttpApi.todo")(function* (ctx: { params: { sessionID: SessionID } }) {
@@ -145,6 +153,8 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       params: { sessionID: SessionID }
       query: typeof DiffQuery.Type
     }) {
+      // The diff endpoint declares no not-found error, so only the privacy gate runs before the summary read.
+      yield* SessionAudienceHttp.assertSession(ctx.params.sessionID, yield* RequestOwner.owner)
       return yield* summary.diff({ sessionID: ctx.params.sessionID, messageID: ctx.query.messageID })
     })
 
@@ -192,6 +202,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     const message = Effect.fn("SessionHttpApi.message")(function* (ctx: {
       params: { sessionID: SessionID; messageID: MessageID }
     }) {
+      yield* requireSession(ctx.params.sessionID)
       return yield* SessionError.mapStorageNotFound(
         MessageV2.get({ sessionID: ctx.params.sessionID, messageID: ctx.params.messageID }),
       )
@@ -207,7 +218,19 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
           message: "internal must name one of Vector's helpers",
           field: "internal",
         })
-      return yield* shareSvc.create(ctx.payload)
+      const owner = yield* RequestOwner.owner
+      if (ctx.payload?.parentID) yield* SessionAudienceHttp.admit(ctx.payload.parentID, owner)
+      const created = yield* shareSvc
+        .create(ctx.payload, owner ? "owner" : "guest")
+        .pipe(
+          Effect.catchDefect((error) =>
+            error instanceof SessionAudience.Denied
+              ? Effect.fail(new ForbiddenError({ message: error.message }))
+              : Effect.die(error),
+          ),
+        )
+      yield* SessionAudienceHttp.admit(created.id, owner)
+      return created
     })
 
     // A guest's session may hang only under a session the guest may open. A helper session is left out of every
@@ -217,7 +240,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       readonly internal?: string
     }) {
       const principal = yield* RequestPrincipal
-      if (principal.kind === "owner") return
+      if (yield* RequestOwner.owner) return
       if (input.parentID === undefined && input.internal === undefined) return
       if (input.parentID === undefined)
         return yield* new ForbiddenError({ message: "A guest's helper session must belong to one of its sessions" })
@@ -268,7 +291,9 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
         yield* session.setTitle({ sessionID: ctx.params.sessionID, title: ctx.payload.title })
       }
       if (ctx.payload.metadata !== undefined) {
-        yield* session.setMetadata({ sessionID: ctx.params.sessionID, metadata: ctx.payload.metadata })
+        yield* SubagentLifecycle.setPublicMetadata(session, ctx.params.sessionID, ctx.payload.metadata).pipe(
+          Effect.catchTag("NotFoundError", (error) => Effect.fail(notFound(error.message))),
+        )
       }
       if (ctx.payload.permission !== undefined) {
         yield* session.setPermission({
@@ -286,6 +311,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       params: { sessionID: SessionID }
       payload?: typeof ForkPayload.Type
     }) {
+      yield* requireSession(ctx.params.sessionID)
       const forked = yield* SessionError.mapStorageNotFound(
         session.fork({
           sessionID: ctx.params.sessionID,
@@ -294,6 +320,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       )
       // A fork copies the history, a guest's messages included, so it keeps the source's guest mark (FreeModelGuests).
       if (yield* guests.marked(ctx.params.sessionID)) yield* guests.mark(forked.id)
+      yield* SessionAudienceHttp.admit(forked.id, yield* RequestOwner.owner)
       return forked
     })
 
@@ -366,7 +393,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       // Compaction sends the whole history to the model it names, so a guest may not name one that may train: the
       // owner's acceptance is not the guest's. The request itself would be refused where it is sent (FreeModelGuests);
       // this refuses it before a compaction is recorded.
-      if ((yield* RequestPrincipal).kind !== "owner") {
+      if (!(yield* RequestOwner.owner)) {
         const chosen = yield* provider
           .getModel(ctx.payload.providerID, ctx.payload.modelID)
           .pipe(Effect.catchIf(Provider.ModelNotFoundError.isInstance, () => Effect.succeed(undefined)))
@@ -400,10 +427,15 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     // guest never accepted the free-model training notice, so the owner's acceptance does not carry a guest's prompt to
     // a model that may train. Where research searches is the owner's choice too.
     const promptOptions = Effect.gen(function* () {
-      return (yield* RequestPrincipal).kind === "owner"
+      return (yield* RequestOwner.owner)
         ? { userFile: () => true }
         : { tightenBudget: true, refuseTrainingFreeModels: true, dropResearchOptions: true }
     })
+
+    // An isolated task, or a descendant of a retired one, is refused here with a client error before anything is
+    // stored, instead of failing inside the run.
+    const admitted = (sessionID: SessionID) =>
+      promptSvc.admit(sessionID).pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))
 
     const prompt = Effect.fn("SessionHttpApi.prompt")(function* (ctx: {
       params: { sessionID: SessionID }
@@ -411,6 +443,8 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     }) {
       yield* requireSession(ctx.params.sessionID)
       yield* requireOwnerToAllow({ tools: ctx.payload.tools })
+      yield* admitted(ctx.params.sessionID)
+      yield* SessionAudienceHttp.admit(ctx.params.sessionID, yield* RequestOwner.owner)
       const message = yield* promptSvc
         .prompt({ ...ctx.payload, sessionID: ctx.params.sessionID }, yield* promptOptions)
         .pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))
@@ -425,6 +459,8 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     }) {
       yield* requireSession(ctx.params.sessionID)
       yield* requireOwnerToAllow({ tools: ctx.payload.tools })
+      yield* admitted(ctx.params.sessionID)
+      yield* SessionAudienceHttp.admit(ctx.params.sessionID, yield* RequestOwner.owner)
       yield* promptSvc.prompt({ ...ctx.payload, sessionID: ctx.params.sessionID }, yield* promptOptions).pipe(
         Effect.catchCause((cause) =>
           Effect.gen(function* () {
@@ -445,7 +481,11 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       payload: { messageID: MessageID; modelID: ModelV2.ID }
     }) {
       yield* requireSession(ctx.params.sessionID)
-      const owner = (yield* RequestPrincipal).kind === "owner"
+      const owner = yield* RequestOwner.owner
+      yield* promptSvc
+        .admit(ctx.params.sessionID)
+        .pipe(Effect.mapError((error) => new InvalidRequestError({ message: error.message })))
+      yield* SessionAudienceHttp.admit(ctx.params.sessionID, owner)
       yield* promptSvc
         .resumeFreeModels({ ...ctx.payload, sessionID: ctx.params.sessionID }, { refuseTrainingFreeModels: !owner })
         .pipe(
@@ -462,6 +502,8 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       payload: typeof CommandPayload.Type
     }) {
       yield* requireSession(ctx.params.sessionID)
+      yield* admitted(ctx.params.sessionID)
+      yield* SessionAudienceHttp.admit(ctx.params.sessionID, yield* RequestOwner.owner)
       return yield* promptSvc
         .command({ ...ctx.payload, sessionID: ctx.params.sessionID })
         .pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))
@@ -472,6 +514,8 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       payload: typeof ShellPayload.Type
     }) {
       yield* requireSession(ctx.params.sessionID)
+      yield* admitted(ctx.params.sessionID)
+      yield* SessionAudienceHttp.admit(ctx.params.sessionID, yield* RequestOwner.owner)
       return yield* SessionError.mapBusy(promptSvc.shell({ ...ctx.payload, sessionID: ctx.params.sessionID }))
     })
 

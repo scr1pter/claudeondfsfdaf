@@ -105,7 +105,7 @@ export function outcomeFromSession(input: {
   const measured = measureUsage(infos)
   // No reported usage means nothing worth learning from — a session that never
   // reached a provider tells us nothing about that model.
-  if (!measured) return undefined
+  if (!measured || measured.codium || input.spend?.codiumSteps || input.spend?.subagentCodiumSteps) return undefined
 
   const costUsd = totalSessionCost(input.spend, measured.costUsd)
 

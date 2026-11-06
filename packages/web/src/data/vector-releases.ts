@@ -75,6 +75,20 @@ export function release112Copy(published: string) {
 
 export const release112 = release112Copy(publishedDesktopVersion)
 
+// Learned skills, workflow insights and the prompt guard arrive in desktop 1.99.113. Their docs say they are coming in it
+// until the download page offers it, and from then on that they are in it. test/release-113-docs.test.ts holds the
+// pages to this.
+export const release113Version = "1.99.113"
+
+export function release113Copy(published: string) {
+  const [major = 0, minor = 0, patch = 0] = published.split(".").map(Number)
+  if (major > 1 || (major === 1 && (minor > 99 || (minor === 99 && patch >= 113))))
+    return { since: "From desktop 1.99.113:", stage: "Desktop 1.99.113", shipped: true }
+  return { since: "Coming in desktop 1.99.113:", stage: "Coming in 1.99.113", shipped: false }
+}
+
+export const release113 = release113Copy(publishedDesktopVersion)
+
 export const releaseSeries: VectorRelease[] = [
   {
     version: "1.0",

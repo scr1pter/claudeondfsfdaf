@@ -11,12 +11,19 @@ export type ApiResponse = ServerResponse & {
 }
 
 export class ApiError extends Error {
+  /** Extra fields for the error body, such as `{reason, action}` or `{perk, plan}`. They never replace `code` or `message`. */
+  readonly detail?: Readonly<Record<string, unknown>>
+  /** Sent as the `retry-after` header, in seconds. */
+  readonly retryAfterSeconds?: number
   constructor(
     readonly statusCode: number,
     readonly code: string,
     message: string,
+    options: { detail?: Readonly<Record<string, unknown>>; retryAfterSeconds?: number } = {},
   ) {
     super(message)
+    if (options.detail) this.detail = options.detail
+    if (options.retryAfterSeconds !== undefined) this.retryAfterSeconds = options.retryAfterSeconds
   }
 }
 
@@ -86,7 +93,9 @@ export function queryValue(request: ApiRequest, key: string) {
 
 export function handleApiError(response: ApiResponse, error: unknown) {
   if (error instanceof ApiError) {
-    json(response, error.statusCode, { error: { code: error.code, message: error.message } })
+    if (error.retryAfterSeconds !== undefined)
+      response.setHeader("retry-after", String(Math.max(1, Math.ceil(error.retryAfterSeconds))))
+    json(response, error.statusCode, { error: { ...error.detail, code: error.code, message: error.message } })
     return
   }
   console.error("Vector API error", error)

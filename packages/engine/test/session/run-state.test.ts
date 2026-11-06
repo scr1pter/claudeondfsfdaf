@@ -93,7 +93,12 @@ describe("SessionRunState.cancel with nothing running", () => {
         const settled = SubagentLifecycle.read(yield* sessions.get(child.id))
         expect(settled).toMatchObject({ ...record("cancelled").subagent, usage: { cost: 0, total: 0, steps: 0 } })
         expect(settled?.completedAt).toBeGreaterThanOrEqual(before)
-        expect(seen).toHaveLength(1)
+        // Settling the orphan and recording that the user stopped it are separate lifecycle writes.
+        expect(seen).toHaveLength(2)
+        expect(seen[0]).toMatchObject({ info: { metadata: { subagent: { status: "cancelled" } } } })
+        expect(seen[1]).toMatchObject({
+          info: { metadata: { subagent: { status: "cancelled", stop: { by: "user" } } } },
+        })
         expect(yield* within(idle, "stop never reported the session idle")).toEqual({
           sessionID: child.id,
           status: { type: "idle" },

@@ -5,6 +5,7 @@ import { DateTime, Effect } from "effect"
 import type { Provider } from "@/provider/provider"
 import { Session } from "./session"
 import { SpendGuard } from "@vectordevai/core/spend-guard"
+import { Billing } from "@vectordevai/schema/billing"
 
 export function create(input: {
   sessionID: Session.Info["id"]
@@ -29,6 +30,8 @@ export function create(input: {
     const kind =
       input.costKind ??
       SpendGuard.costKindOf({
+        // A Vector Codium request is billed to the account's plan, so it counts as a Codium step, never an unpriced one.
+        codium: Billing.isCodium(input.model.providerID),
         free: input.model.freeModel !== undefined,
         oauthPlan: false,
         listed: input.model.cost.input > 0 || input.model.cost.output > 0,
@@ -46,6 +49,7 @@ export function create(input: {
           ...(measured || usage.billed || usage.cost > 0 ? { cost: usage.cost } : {}),
           ...(measured ? { tokens: usage.tokens } : {}),
           ...(uncertain ? { unpriced: true } : {}),
+          ...(usage.billing ? { billing: usage.billing } : {}),
           ...(incomplete ? { incomplete: true } : {}),
         },
         { id },

@@ -1,7 +1,7 @@
 import { afterAll, expect } from "bun:test"
 import { rmSync } from "node:fs"
 import path from "path"
-import { Effect } from "effect"
+import { Deferred, Effect, Fiber } from "effect"
 import { Brain } from "@vectordevai/core/brain/brain"
 import { FSUtil } from "@vectordevai/core/fs-util"
 import { Global } from "@vectordevai/core/global"
@@ -12,6 +12,9 @@ import { SessionMemory } from "../../src/session/memory"
 import { MessageID, type SessionID } from "../../src/session/schema"
 import { ResearchRun } from "../../src/tool/research-run"
 import { SubagentLifecycle } from "../../src/tool/subagent-lifecycle"
+import { TaskLimits } from "../../src/task/limits"
+import { pollWithTimeout } from "../lib/effect"
+import { reply } from "../lib/llm-server"
 import { FakeBridge } from "../lib/fake-bridge"
 import { calls, output, plan, ref, runtime, send, setup } from "../lib/research"
 import { FakeWeb } from "../../../core/test/lib/fake-web"
@@ -785,4 +788,174 @@ it.instance(
       expect(yield* sessions.children(build.id)).toEqual([])
     }),
   90_000,
+)
+
+it.instance(
+  "a research lead's brief holds a slot for each researcher its run may have",
+  () =>
+    Effect.gen(function* () {
+      yield* setup()
+      const sessions = yield* Session.Service
+      const research = yield* ResearchRun.Service
+      const build = yield* sessions.create({ title: "Build" })
+      const reserve = (taskSize: { tier: "standard" | "thorough"; capped?: boolean }) =>
+        research
+          .brief({
+            agent: ResearchRun.LEAD,
+            ctx: {
+              sessionID: build.id,
+              messageID: MessageID.make("msg_research_reserve"),
+              agent: "build",
+              abort: AbortSignal.any([]),
+              messages: [],
+              metadata: () => Effect.void,
+              ask: () => Effect.void,
+              extra: { taskSize },
+            },
+            prompt: "How do heat pumps age in cold climates?",
+            extra: [],
+          })
+          .pipe(
+            Effect.scoped,
+            Effect.map((brief) => (brief.type === "ok" ? brief.reserve : brief.message)),
+          )
+      // Focused runs have up to 2 researchers and Deep ones 4, so a Deep lead takes 5 slots in all.
+      expect(yield* reserve({ tier: "standard" })).toBe(ResearchRun.LIMITS.focused.researchers)
+      expect(yield* reserve({ tier: "thorough" })).toBe(ResearchRun.LIMITS.deep.researchers)
+      // "No subagents": the lead launches no researcher, so it holds no slot for one.
+      expect(yield* reserve({ tier: "standard", capped: true })).toBeUndefined()
+    }),
+  60_000,
+)
+
+it.instance(
+  "a Deep lead's researchers start on the slots it holds while seven other subagents fill the conversation",
+  () =>
+    Effect.gen(function* () {
+      const test = yield* setup()
+      const sessions = yield* Session.Service
+      const limits = yield* TaskLimits.Service
+      const build = yield* sessions.create({ title: "Build" })
+      const researcher = (hit: { body: Record<string, unknown> }) =>
+        JSON.stringify(hit.body).includes("research_assignment")
+      const question = "How do heat pumps age in cold climates?"
+      // The lead's step that launches its researchers waits until the other subagents hold the conversation's slots.
+      const gate = Promise.withResolvers<void>()
+      yield* test.llm.tool("research", { question, depth: "deep", background: false })
+      yield* test.llm.toolMatch(lead, "research_plan", plan({ question, depth: "deep" }))
+      yield* test.llm.pushMatch(
+        lead,
+        reply()
+          .wait(gate.promise)
+          .tool("task", {
+            tasks: [
+              { description: "Field studies", prompt: "What did field studies measure?", subagent_type: "researcher" },
+              { description: "Lifetimes", prompt: "How long do heat pumps last in the cold?", subagent_type: "researcher" },
+            ],
+          }),
+      )
+      yield* test.llm.textMatch(researcher, "Found A.")
+      yield* test.llm.textMatch(researcher, "Found B.")
+      yield* test.llm.textMatch(lead, "They lose a little efficiency each year.")
+      yield* test.llm.text("Done.")
+      const sending = yield* send({
+        sessionID: build.id,
+        agent: "build",
+        text: "Research how heat pumps age, thoroughly.",
+        size: "thorough",
+      }).pipe(Effect.forkChild)
+      // The lead's launching step has been asked for: it runs, holding its slot and four for its researchers.
+      yield* pollWithTimeout(
+        test.llm.pending.pipe(Effect.map((left) => (left === 4 ? true : undefined))),
+        "the lead must reach the step that launches its researchers",
+        "60 seconds",
+      )
+      expect(yield* limits.status(build.id)).toMatchObject({ running: 1, queued: 0, limit: 8 })
+      // Seven other subagents of the conversation: three take the slots left and four wait.
+      const release = yield* Deferred.make<void>()
+      const others = yield* Effect.forEach(Array.from({ length: 7 }, (_, index) => `ses_other_${index}`), (childID) =>
+        limits.run({ conversationID: build.id, childID, origin: "root" }, Deferred.await(release)).pipe(Effect.forkChild),
+      )
+      yield* pollWithTimeout(
+        limits.status(build.id).pipe(
+          Effect.map((status) => (status.running === 4 && status.queued === 4 ? true : undefined)),
+        ),
+        "three other subagents must run and four wait",
+      )
+      gate.resolve()
+      yield* Fiber.join(sending)
+
+      const [leadSession] = yield* sessions.children(build.id)
+      expect(SubagentLifecycle.read(leadSession!)?.agent).toBe(ResearchRun.LEAD)
+      const [launch] = yield* calls(leadSession!.id, "task")
+      expect(launch?.state.status).toBe("completed")
+      expect(output(launch)).toContain("Found A.")
+      expect(output(launch)).toContain("Found B.")
+      const researchers = yield* sessions.children(leadSession!.id)
+      expect(researchers.map((child) => SubagentLifecycle.read(child)?.agent)).toEqual([
+        ResearchRun.RESEARCHER,
+        ResearchRun.RESEARCHER,
+      ])
+      yield* Deferred.succeed(release, undefined)
+      yield* Effect.forEach(others, Fiber.join, { discard: true })
+      expect(yield* limits.status(build.id)).toMatchObject({ running: 0, queued: 0 })
+      expect(guard.outside()).toEqual([])
+    }),
+  120_000,
+)
+
+it.instance(
+  "a Deep lead in a conversation that runs four subagents has three researchers, each on a slot it holds",
+  () =>
+    Effect.gen(function* () {
+      // Four at once: the lead holds its own slot and three for its researchers, so its run may have three.
+      const test = yield* setup({ budget: { subagents: { running: 4 } } })
+      const sessions = yield* Session.Service
+      const limits = yield* TaskLimits.Service
+      const build = yield* sessions.create({ title: "Build" })
+      const researcher = (hit: { body: Record<string, unknown> }) =>
+        JSON.stringify(hit.body).includes("research_assignment")
+      const question = "How do heat pumps age in cold climates?"
+      const entry = (area: string) => ({
+        description: area,
+        prompt: `What do studies say about ${area.toLowerCase()}?`,
+        subagent_type: "researcher",
+      })
+      yield* test.llm.tool("research", { question, depth: "deep", background: false })
+      yield* test.llm.toolMatch(lead, "research_plan", plan({ question, depth: "deep" }))
+      // Four researchers in one call: the run's fourth is refused with its own count, not for want of a slot.
+      yield* test.llm.toolMatch(lead, "task", {
+        tasks: ["Field studies", "Lifetimes", "Defrost cycles", "Refrigerants"].map(entry),
+      })
+      yield* test.llm.toolMatch(lead, "task", { tasks: ["Field studies", "Lifetimes", "Defrost cycles"].map(entry) })
+      yield* test.llm.textMatch(researcher, "Found A.")
+      yield* test.llm.textMatch(researcher, "Found B.")
+      yield* test.llm.textMatch(researcher, "Found C.")
+      yield* test.llm.textMatch(lead, "They lose a little efficiency each year.")
+      yield* test.llm.text("Done.")
+      yield* send({
+        sessionID: build.id,
+        agent: "build",
+        text: "Research how heat pumps age, thoroughly.",
+        size: "thorough",
+      })
+
+      const [leadSession] = yield* sessions.children(build.id)
+      expect(SubagentLifecycle.read(leadSession!)?.agent).toBe(ResearchRun.LEAD)
+      const [four, three] = yield* calls(leadSession!.id, "task")
+      expect(four?.state.status).toBe("error")
+      expect(output(four)).toContain("has its 3 researchers")
+      expect(output(four)).not.toContain("subagent slots")
+      expect(three?.state.status).toBe("completed")
+      for (const found of ["Found A.", "Found B.", "Found C."]) expect(output(three)).toContain(found)
+      const researchers = yield* sessions.children(leadSession!.id)
+      expect(researchers.map((child) => SubagentLifecycle.read(child)?.agent)).toEqual([
+        ResearchRun.RESEARCHER,
+        ResearchRun.RESEARCHER,
+        ResearchRun.RESEARCHER,
+      ])
+      expect(yield* limits.status(build.id)).toMatchObject({ running: 0, queued: 0, limit: 4 })
+      expect(guard.outside()).toEqual([])
+    }),
+  120_000,
 )

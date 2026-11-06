@@ -4,7 +4,7 @@ import { SessionV1 } from "@vectordevai/core/v1/session"
 import { EventV2 } from "@vectordevai/core/event"
 import { ModelV2 } from "@vectordevai/core/model"
 import { SessionEvent } from "@vectordevai/schema/session-event"
-import { summarizeUsage } from "@/session/session"
+import { stepUsage, summarizeUsage } from "@/session/session"
 import { SessionID } from "@/session/schema"
 
 describe("session usage", () => {
@@ -67,6 +67,130 @@ describe("session usage", () => {
     expect(result.conversations).toBe(1)
     expect(result.days[0]?.tasks).toBe(2)
     expect(result.helpers).toEqual([{ id: "vectorscope.review", sessions: 1, responses: 1, tokens: 900, cost: 0.4 }])
+  })
+
+  test("keeps Codium activity while excluding every Codium token and cost subtotal", () => {
+    const today = new Date()
+    today.setHours(12, 0, 0, 0)
+    const yesterday = new Date(today)
+    yesterday.setDate(yesterday.getDate() - 1)
+    const own = assistant(today.getTime(), 100, 0.5, 1_000)
+    const codium = {
+      ...assistant(yesterday.getTime(), 9_000, 42, 20_000, { providerID: "vector-plan", variant: "max" }),
+      tokens: { input: 5_000, output: 1_000, reasoning: 1_000, cache: { read: 1_000, write: 1_000 } },
+    }
+    const result = summarizeUsage([own, codium])
+    expect(result).toMatchObject({
+      lifetimeTokens: 100,
+      lifetimeCost: 0.5,
+      inputTokens: 100,
+      outputTokens: 0,
+      reasoningTokens: 0,
+      cachedTokens: 0,
+      peakTokens: 100,
+      longestTaskMs: 20_000,
+      longestTaskTokens: 0,
+      averageTokensPerChat: 100,
+      completedChats: 2,
+      modelResponses: 2,
+      conversations: 1,
+      activeDays: 2,
+      currentStreak: 2,
+      longestStreak: 2,
+      unpricedResponses: 1,
+      codiumResponses: 1,
+    })
+    expect(result.days[0]).toMatchObject({ tokens: 0, cost: 0, tasks: 1, codium: 1 })
+    expect(result.favoriteModels).toEqual([
+      { providerID: "test-provider", modelID: "test-model", tokens: 100, responses: 1, percentage: 100 },
+    ])
+    expect(result.effortLevels).toEqual([
+      { id: "default", label: "Default", tokens: 100, responses: 1, percentage: 100 },
+    ])
+    expect(codium.tokens.input).toBe(5_000)
+  })
+
+  test("counts Codium helpers and deduplicated ancillary attempts without exposing their usage", () => {
+    const now = Date.now()
+    const title = { ...ancillary(now), billing: "codium" as const, sessionID: SessionID.make("ses_review") }
+    const result = summarizeUsage(
+      [{ ...assistant(now, 10_000, 12, 50_000, { sessionID: "ses_review" }), billing: "codium" }],
+      [title, title],
+      new Map([["ses_review", "vectorscope.review"]]),
+    )
+    expect(result).toMatchObject({
+      lifetimeTokens: 0,
+      lifetimeCost: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      reasoningTokens: 0,
+      cachedTokens: 0,
+      codiumResponses: 2,
+      unpricedResponses: 2,
+      modelResponses: 1,
+      completedChats: 0,
+      activeDays: 0,
+    })
+    expect(result.favoriteModels).toEqual([])
+    expect(result.effortLevels).toEqual([])
+    expect(result.days[0]).toMatchObject({ tokens: 0, cost: 0, tasks: 0, codium: 2 })
+    expect(result.helpers).toEqual([
+      { id: "vectorscope.review", sessions: 1, responses: 1, tokens: 0, cost: 0, codiumSteps: 2 },
+    ])
+  })
+
+  test("keeps Codium-only days and excludes Codium from zero-token preference percentages", () => {
+    const now = Date.now()
+    const codium = assistant(now, 0, 0, 1_000, { providerID: "vector-plan" })
+    const result = summarizeUsage([codium])
+    expect(result.days).toHaveLength(1)
+    expect(result.days[0]).toMatchObject({ tokens: 0, tasks: 1, codium: 1 })
+    expect(result).toMatchObject({
+      completedChats: 1,
+      modelResponses: 1,
+      activeDays: 1,
+      codiumResponses: 1,
+      unpricedResponses: 1,
+    })
+    expect(result.favoriteModels).toEqual([])
+    const mixed = summarizeUsage([codium, assistant(now + 1, 0, 0, 1_000)])
+    expect(mixed.favoriteModels[0]?.percentage).toBe(100)
+    expect(mixed.effortLevels[0]?.percentage).toBe(100)
+  })
+
+  test("preserves the V2 stored billing flag and hides Codium compaction usage", () => {
+    const sessionID = SessionID.make("ses_codium_v2")
+    const base = {
+      id: "msg_codium_v2",
+      sessionID,
+      type: "assistant",
+      created: Date.now(),
+      completed: Date.now() + 100,
+      agent: "build",
+      model: JSON.stringify({ id: "m", providerID: "test-provider" }),
+      cost: 9,
+      unpriced: 0,
+      billing: "codium",
+      tokens: JSON.stringify({ input: 50, output: 10, reasoning: 5, cache: { read: 4, write: 3 } }),
+      finish: "stop",
+      error: null,
+    }
+    const messages = stepUsage([base, { ...base, id: "msg_compaction", type: "compaction", model: null }])
+    expect(messages).toHaveLength(2)
+    expect(messages.every((message) => message.billing === "codium")).toBe(true)
+    const result = summarizeUsage(messages)
+    expect(result).toMatchObject({
+      lifetimeTokens: 0,
+      lifetimeCost: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      cachedTokens: 0,
+      codiumResponses: 2,
+      unpricedResponses: 2,
+      modelResponses: 2,
+      completedChats: 1,
+    })
+    expect(result.favoriteModels).toEqual([])
   })
 
   test("returns an empty summary before the first model response", () => {

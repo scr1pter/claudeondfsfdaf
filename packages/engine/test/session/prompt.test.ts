@@ -59,12 +59,14 @@ import { SystemPrompt } from "../../src/session/system"
 import { Shell } from "@vectordevai/core/shell"
 import { Snapshot } from "../../src/snapshot"
 import { ToolRegistry } from "@/tool/registry"
+import { SubagentLifecycle } from "@/tool/subagent-lifecycle"
 import { Truncate } from "@/tool/truncate"
 import { CrossSpawnSpawner } from "@vectordevai/core/cross-spawn-spawner"
 import { Ripgrep } from "@vectordevai/core/ripgrep"
 import { Format } from "../../src/format"
 import { TestInstance, tmpdirScoped, trustWorkspace } from "../fixture/fixture"
 import { awaitWithTimeout, pollWithTimeout, testEffect } from "../lib/effect"
+import { seen } from "../lib/file-state"
 import { reply, TestLLMServer, type Reply } from "../lib/llm-server"
 import { SpendGuard } from "@vectordevai/core/spend-guard"
 import { Brain } from "@vectordevai/core/brain/brain"
@@ -78,7 +80,7 @@ import { ModelV2 } from "@vectordevai/core/model"
 import { LocationServiceMap, locationServiceMapLayer } from "@vectordevai/core/location-services"
 import { WorkspaceTrust } from "@vectordevai/core/workspace-trust/workspace-trust"
 import { Global } from "@vectordevai/core/global"
-import { codiumGateway, codiumModel } from "../../../core/test/fixture/codium-gateway"
+import { codiumCatalogV2, codiumGateway, codiumModel } from "../../../core/test/fixture/codium-gateway"
 
 const summary = Layer.succeed(
   SessionSummary.Service,
@@ -411,7 +413,8 @@ const codiumPrompts = testEffect(
       Layer.succeed(ModelPlans.Service, {
         catalog: (token) =>
           Effect.succeed(
-            token === codiumToken ? { enabled: true, models: [codiumModel] } : { enabled: false, models: [] },
+            // The v2 catalog names Codium Auto, whose floor is the helper model titles use (A19).
+            token === codiumToken ? codiumCatalogV2 : { enabled: false, models: [] },
           ),
         request: gateway.forward,
       }),
@@ -982,7 +985,7 @@ it.instance("a title on a model server on this computer is brief, and one cut of
   }),
 )
 
-codiumPrompts.instance("a Codium session's title goes through the gateway and counts its tokens, not dollars", () =>
+codiumPrompts.instance("a Codium session's title goes through the gateway and counts as a Codium step", () =>
   Effect.gen(function* () {
     gateway.state.mode = "text"
     const prompt = yield* SessionPrompt.Service
@@ -1007,18 +1010,24 @@ codiumPrompts.instance("a Codium session's title goes through the gateway and co
     const recorded = yield* database.db.select().from(EventTable).where(eq(EventTable.aggregate_id, chat.id)).all()
     const usage = recorded.filter((event) => event.type === `${SessionEvent.AncillaryUsage.type}.2`)
     expect(usage).toHaveLength(1)
-    // Title spend counts toward the session in tokens; credits are a share of the plan, never dollars to add up.
+    // The title's record keeps its tokens beside the Codium flag; the session counts it as a Codium step, and its
+    // totals carry neither those tokens nor dollars.
     expect(usage[0]?.data).toMatchObject({
       purpose: "title",
       model: { providerID: ModelPlans.PROVIDER_ID, id: codiumModel.id },
       cost: 0,
       unpriced: true,
+      billing: "codium",
     })
     expect(usage[0]?.data.tokens).toMatchObject({ input: 200, output: 6 })
+    const totals = yield* sessions.get(chat.id)
+    expect(totals.codiumSteps).toBeGreaterThan(0)
+    expect(totals.codiumSteps).toBe(totals.unpricedSteps)
+    expect(totals.tokens).toEqual({ input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } })
   }),
 )
 
-codiumPrompts.instance("a Codium subagent's steps count once, in tokens, and add no dollars", () =>
+codiumPrompts.instance("a Codium subagent's steps count once, as Codium steps, and add no tokens or dollars", () =>
   Effect.gen(function* () {
     gateway.state.mode = "text"
     const prompt = yield* SessionPrompt.Service
@@ -1052,6 +1061,14 @@ codiumPrompts.instance("a Codium subagent's steps count once, in tokens, and add
     expect(parent.subagentUnpricedSteps).toBe(spent.unpricedSteps)
     expect((parent.cost ?? 0) + (parent.subagentCost ?? 0)).toBe(0)
     expect((parent.unpricedSteps ?? 0) + (parent.subagentUnpricedSteps ?? 0)).toBe(sent.length)
+    // Every one of those steps ran on Codium, so each is a Codium step, and no token total counts them.
+    const none = { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }
+    expect(spent.codiumSteps).toBe(spent.unpricedSteps)
+    expect(parent.codiumSteps ?? 0).toBe(parent.unpricedSteps ?? 0)
+    expect(parent.subagentCodiumSteps).toBe(spent.unpricedSteps)
+    expect(spent.tokens).toEqual(none)
+    expect(parent.tokens).toEqual(none)
+    expect(parent.subagentTokens).toBeUndefined()
   }),
 )
 
@@ -1567,16 +1584,19 @@ it.instance(
 )
 
 it.instance(
-  "loop tells the model to do the work itself and delegate only what is cheaper split up",
+  "loop tells the model when a child does it better, and to do small or coupled work itself",
   () =>
     Effect.gen(function* () {
       const body = yield* firstRequestBody({})
-      expect(body).toContain("Do the work yourself by default, multi-file changes included")
-      expect(body).toContain("Launch a general Subagent (omit subagent_type) only when that costs less")
-      expect(body).toContain("small fixes, single-file changes and lookups you do yourself")
-      expect(body).toContain("Delegated batches run in the background by default")
-      expect(body).toContain("Use task_manage")
+      // 5.A.3: delegation is the model's call, for independent substantial parts, broad searches and new work.
+      expect(body).toContain("Delegate when a child does it better than you would, not by default")
+      expect(body).toContain("Do it yourself when it is small, a single file or a known lookup")
+      expect(body).toContain("Put every independent brief you already know about in one task call, in the background")
+      expect(body).toContain("To correct a running child, use task_manage message")
+      expect(body).toContain("Background by default for the whole batch")
+      expect(body).toContain("Omit subagent_type for general")
       expect(body).toContain("never poll")
+      expect(body).not.toContain("Do the work yourself by default")
       expect(body).not.toContain("MUST launch general Subagents")
       expect(body).not.toContain("General Subagents are turned off")
       expect(body).not.toContain("You are a Subagent working on a brief")
@@ -1630,24 +1650,26 @@ it.instance(
   15_000,
 )
 
+// Work requests carry the task tool, so only the policy says when a search goes to a child (5.A.3): the provider
+// prompt does not steer every search to explore as well.
 it.instance(
-  "loop suggests explore for a search that spans several areas while explore is on",
+  "loop leaves broad searches to the policy, without a provider-prompt explore preference",
   () =>
     Effect.gen(function* () {
       const body = yield* firstRequestBody({})
-      expect(body).toContain('prefer it with subagent_type \\"explore\\"')
+      expect(body).toContain("broad searches or research whose raw output would flood your context")
+      expect(body).not.toContain('prefer it with subagent_type \\"explore\\"')
     }),
   15_000,
 )
 
 // With explore turned off a prompt that still suggested it would send the model's first task call to a missing agent.
 it.instance(
-  "loop points a search at the task tool's list when config turns explore off",
+  "loop names no explore agent when config turns explore off",
   () =>
     Effect.gen(function* () {
       const body = yield* firstRequestBody({ config: { agent: { explore: { disable: true } } } })
       expect(body).not.toContain('subagent_type \\"explore\\"')
-      expect(body).toContain("prefer it with a search specialist from the task tool's list")
       expect(body).not.toContain("explore for read-only discovery")
     }),
   15_000,
@@ -2178,6 +2200,7 @@ for (const order of [
           title: "Pinned",
           permission: [{ permission: "*", pattern: "*", action: "allow" }],
         })
+        yield* seen(session.id, file)
         const calls = {
           edit: { filePath: file, oldString: "before", newString: "after" },
           bash: { command: "cat value.txt", description: "Show the value" },
@@ -4267,6 +4290,60 @@ trainingPrompts.instance(
       expect(
         (yield* prompt.prompt({ sessionID: chat.id, model: freeRef, noReply: true, parts }, guest)).info,
       ).toMatchObject({ model: freeRef })
+    }),
+  { trusted: true },
+)
+
+trainingPrompts.instance(
+  "a guest's refused prompt gives back the task notes it recovered, so the next prompt carries them",
+  () =>
+    Effect.gen(function* () {
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const laguna = { providerID: ProviderV2.ID.openrouter, modelID: ModelV2.ID.make(lagunaFree.id) }
+      const chat = yield* sessions.create({ title: "Shared" })
+      const parts = [{ type: "text" as const, text: "hello" }]
+      const launch = yield* prompt.prompt({ sessionID: chat.id, model: freeRef, noReply: true, parts })
+      // A helper the last engine ran, whose report never reached the parent before a restart.
+      const helper = yield* sessions.create({
+        parentID: chat.id,
+        metadata: {
+          subagent: {
+            kind: "subagent",
+            custom: false,
+            agent: "general",
+            title: "Survey",
+            parentSessionID: chat.id,
+            parentMessageID: launch.info.id,
+            model: freeRef,
+            background: true,
+            status: "completed",
+            startedAt: Date.now(),
+            runtimeID: "previous-process",
+            attempt: 1,
+            notification: { text: "A compact finding", state: "completed", launchID: launch.info.id },
+          },
+        },
+      })
+
+      const refused = yield* prompt
+        .prompt(
+          { sessionID: chat.id, model: laguna, noReply: true, parts },
+          { tightenBudget: true, refuseTrainingFreeModels: true },
+        )
+        .pipe(Effect.exit)
+      expect(Exit.isFailure(refused)).toBe(true)
+      expect(SubagentLifecycle.read(yield* sessions.get(helper.id))?.notification).toEqual({
+        text: "A compact finding",
+        state: "completed",
+        launchID: launch.info.id,
+      })
+
+      const next = yield* prompt.prompt({ sessionID: chat.id, model: freeRef, noReply: true, parts })
+      expect(
+        next.parts.flatMap((part) => (part.type === "text" && part.synthetic ? [part.metadata?.taskNotification] : [])),
+      ).toEqual([{ taskID: helper.id, state: "completed", recovered: true }])
+      expect(SubagentLifecycle.read(yield* sessions.get(helper.id))?.notification?.messageID).toBe(next.info.id)
     }),
   { trusted: true },
 )

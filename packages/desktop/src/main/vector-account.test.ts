@@ -1,9 +1,13 @@
 import { expect, test } from "bun:test"
 import { createHash, randomBytes } from "node:crypto"
-import { createVectorAccount, syncVectorAccount } from "./vector-account"
+import { createVectorAccount, refreshVectorModels, syncVectorAccount } from "./vector-account"
 
 const PHOTO = "https://lh3.googleusercontent.com/a/fixture=s96-c"
 const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3])
+
+const claims = (value: Record<string, unknown>) => Buffer.from(JSON.stringify(value)).toString("base64url")
+const desktopToken = (extra: Record<string, unknown> = {}) =>
+  `vct_${claims({ sub: "account-fixture", client: "desktop", ...extra })}.${randomBytes(32).toString("base64url")}`
 
 function fixture() {
   const state = {
@@ -13,6 +17,8 @@ function fixture() {
     failStorage: false,
     fetchDelay: undefined as Promise<void> | undefined,
     syncDelay: undefined as Promise<void> | undefined,
+    // Holds the local server's read of the account's models until a test resolves it.
+    modelsDelay: undefined as Promise<void> | undefined,
     failSync: false,
     codium: {} as Record<string, unknown>,
     name: undefined as string | undefined,
@@ -35,13 +41,16 @@ function fixture() {
   const fetched: string[] = []
   const urls: string[] = []
   const tokens: Array<string | undefined> = []
+  // Every credential write the local server got, in order: a sync (sign-in, sign-out) or a models read.
+  const engine: Array<[string, string | undefined]> = []
   const statuses: unknown[] = []
   const requests: RequestInit[] = []
   const windows: string[] = []
   const focused: true[] = []
   const writes: unknown[] = []
   const secrets = new Map<string, string>()
-  const token = `vct_${randomBytes(32).toString("base64url")}.synthetic`
+  // A sign-in token minted for the desktop: its claims say client "desktop" (only vectordev.ai checks the signature).
+  const token = desktopToken()
   const controller = createVectorAccount({
     read: () => state.stored,
     write: (value) => {
@@ -90,8 +99,13 @@ function fixture() {
     },
     sync: async (value) => {
       tokens.push(value)
+      engine.push(["sync", value])
       await state.syncDelay
       if (state.failSync) throw new Error("WSL termination not confirmed")
+    },
+    models: async (value) => {
+      engine.push(["models", value])
+      await state.modelsDelay
     },
     changed: (status) => statuses.push(status),
     billingWindow: async (url) => {
@@ -106,7 +120,21 @@ function fixture() {
   })
   const callback = () =>
     `vector://auth/callback?${new URLSearchParams({ code: randomBytes(32).toString("base64url"), state: new URL(urls.at(-1)!).searchParams.get("state")! })}`
-  return { controller, state, urls, tokens, statuses, requests, fetched, token, callback, windows, writes, focused }
+  return {
+    controller,
+    state,
+    urls,
+    tokens,
+    engine,
+    statuses,
+    requests,
+    fetched,
+    token,
+    callback,
+    windows,
+    writes,
+    focused,
+  }
 }
 
 async function signedIn() {
@@ -166,6 +194,34 @@ test("desktop owns PKCE exchange and only ciphertext/status cross persistence an
   expect(app.tokens.at(-1)).toBeUndefined()
   expect(app.state.stored).toBeUndefined()
   expect(app.controller.status()).toEqual({ authenticated: false, pending: false })
+})
+
+test("the desktop keeps only a sign-in minted for it: a CLI grant or an unmarked token stores nothing", async () => {
+  for (const issued of [
+    desktopToken({ client: "cli", jti: "cli-grant" }),
+    `vct_${claims({ sub: "account-fixture" })}.${randomBytes(32).toString("base64url")}`,
+    `vct_${randomBytes(32).toString("base64url")}.synthetic`,
+    `vct_${Buffer.from("not json").toString("base64url")}.signature`,
+  ]) {
+    const app = fixture()
+    app.state.exchange = () =>
+      Response.json({ token: issued, expiresAt: app.state.now + 100_000, user: { email: "fixture@example.test" } })
+    await app.controller.start()
+    await app.controller.consume([app.callback()])
+    expect(app.state.stored).toBeUndefined()
+    expect(app.tokens).toEqual([])
+    expect(app.controller.status()).toEqual({
+      authenticated: false,
+      pending: false,
+      error: "Vector could not complete sign-in. The link may have expired; start sign-in again.",
+    })
+    expect(JSON.stringify([app.statuses, app.writes])).not.toContain(issued)
+  }
+  // The same answer with the desktop's own client signs in.
+  const app = fixture()
+  await app.controller.start()
+  await app.controller.consume([app.callback()])
+  expect(app.tokens).toEqual([app.token])
 })
 
 test("the main-process token is available only while signed in and unexpired", async () => {
@@ -251,6 +307,119 @@ test("local credential sync uses authenticated engine routes and refuses remote 
   )
   expect(requests[2].init.method).toBe("DELETE")
   expect(requests[2].init.body).toBeUndefined()
+  // A models read writes the same credential and reloads nothing, under the same local-only rule.
+  requests.length = 0
+  await expect(
+    refreshVectorModels(
+      { url: "https://foreign.example", username: "vector", password: "synthetic" },
+      "vct_fixture",
+      fetcher,
+    ),
+  ).rejects.toThrow("local server")
+  await refreshVectorModels(
+    { url: "http://127.0.0.1:9999", username: "vector", password: "synthetic" },
+    "vct_fixture",
+    fetcher,
+  )
+  expect(requests.map((item) => [item.url, item.init.method, item.init.redirect])).toEqual([
+    ["http://127.0.0.1:9999/auth/vector", "PUT", "error"],
+  ])
+  expect(JSON.parse(String(requests[0].init.body))).toEqual({ type: "api", key: "vct_fixture" })
+})
+
+test("after a purchase the local server reads the models again for the stored account, and not while signed out", async () => {
+  const signedOut = fixture()
+  await signedOut.controller.refreshModels()
+  expect(signedOut.engine).toEqual([])
+
+  const app = await signedIn()
+  app.engine.length = 0
+  await app.controller.refreshModels()
+  // The same token again, without the reload a sign-in makes, so running sessions carry on.
+  expect(app.engine).toEqual([["models", app.token]])
+  expect(app.fetched).toEqual([])
+  // An expired sign-in is a signed-out one.
+  app.state.now += app.state.ttl
+  await app.controller.refreshModels()
+  expect(app.engine).toEqual([["models", app.token]])
+})
+
+test("a sign-out asked for before the models read wins, and one asked for after it waits for it", async () => {
+  const before = await signedIn()
+  before.engine.length = 0
+  const held = Promise.withResolvers<void>()
+  before.state.syncDelay = held.promise
+  const loggingOut = before.controller.logout()
+  const refreshing = before.controller.refreshModels()
+  held.resolve()
+  await Promise.all([loggingOut, refreshing])
+  // The read ran after the sign-out and found no account, so the token never reached the server again.
+  expect(before.engine).toEqual([["sync", undefined]])
+  expect(before.controller.status().authenticated).toBe(false)
+
+  const after = await signedIn()
+  after.engine.length = 0
+  const reading = Promise.withResolvers<void>()
+  after.state.modelsDelay = reading.promise
+  const refresh = after.controller.refreshModels()
+  for (let count = 0; count < 50 && !after.engine.length; count++) await Bun.sleep(1)
+  const logout = after.controller.logout()
+  await Bun.sleep(5)
+  // The sign-out waits for the read under way; nothing writes the token after it.
+  expect(after.engine).toEqual([["models", after.token]])
+  reading.resolve()
+  await Promise.all([refresh, logout])
+  expect(after.engine).toEqual([
+    ["models", after.token],
+    ["sync", undefined],
+  ])
+  expect(after.controller.status().authenticated).toBe(false)
+})
+
+test("switching accounts never writes the earlier account's token after the new one", async () => {
+  const app = await signedIn()
+  app.engine.length = 0
+  const second = desktopToken({ sub: "second-account" })
+  app.state.exchange = () =>
+    Response.json({ token: second, expiresAt: app.state.now + app.state.ttl, user: { email: "second@example.test" } })
+  // A read asked for while the new sign-in is being saved runs after it, with the new account's token.
+  const saving = Promise.withResolvers<void>()
+  app.state.syncDelay = saving.promise
+  await app.controller.start()
+  const switching = app.controller.consume([app.callback()])
+  for (let count = 0; count < 50 && !app.engine.length; count++) await Bun.sleep(1)
+  const refresh = app.controller.refreshModels()
+  saving.resolve()
+  await Promise.all([switching, refresh])
+  expect(app.engine).toEqual([
+    ["sync", second],
+    ["models", second],
+  ])
+
+  // A read already under way when another sign-in lands finishes before that sign-in is written, and a read asked
+  // for while that sign-in waits its turn reads the account it saved, not the one stored when it was asked for.
+  app.engine.length = 0
+  app.state.syncDelay = undefined
+  const third = desktopToken({ sub: "third-account" })
+  app.state.exchange = () =>
+    Response.json({ token: third, expiresAt: app.state.now + app.state.ttl, user: { email: "third@example.test" } })
+  const reading = Promise.withResolvers<void>()
+  app.state.modelsDelay = reading.promise
+  const earlier = app.controller.refreshModels()
+  for (let count = 0; count < 50 && !app.engine.length; count++) await Bun.sleep(1)
+  await app.controller.start()
+  const next = app.controller.consume([app.callback()])
+  await Bun.sleep(5)
+  const later = app.controller.refreshModels()
+  expect(app.engine).toEqual([["models", second]])
+  reading.resolve()
+  await Promise.all([earlier, next, later])
+  expect(app.engine).toEqual([
+    ["models", second],
+    ["sync", third],
+    ["models", third],
+  ])
+  expect(app.controller.status()).toMatchObject({ authenticated: true, email: "third@example.test" })
 })
 
 test("cancelling an exchange in flight prevents storage and expired saved grants are removed", async () => {
@@ -513,19 +682,71 @@ test("billing posts the account token and JSON to vectordev.ai and shows only th
   expect(JSON.parse(String(request.body))).toEqual({ plan: "vector-10" })
   expect(app.windows).toEqual(["https://checkout.stripe.com/c/pay/cs_fixture"])
 
+  // An upgrade is a POST to /change that answers the upgrade's checkout, shown in the same window.
   app.state.outcome = "cancelled"
-  expect(await app.controller.billing({ kind: "topup", pack: "codium-topup-50" })).toEqual({ outcome: "cancelled" })
-  expect(JSON.parse(String(app.requests.at(-1)!.body))).toEqual({ pack: "codium-topup-50" })
+  expect(await app.controller.billing({ kind: "change", plan: "vector-100" })).toEqual({ outcome: "cancelled" })
+  expect(app.fetched.at(-1)).toBe("https://vectordev.ai/api/model-plans/change")
+  expect(app.requests.at(-1)!.method).toBe("POST")
+  expect(JSON.parse(String(app.requests.at(-1)!.body))).toEqual({ plan: "vector-100" })
+  expect(app.windows.at(-1)).toBe("https://checkout.stripe.com/c/pay/cs_fixture")
 
-  // The portal answers a billing.stripe.com address, and Vector can open it at a plan change.
+  // The portal answers a billing.stripe.com address: its home, cancelling, or updating the card.
   app.state.billing = () => Response.json({ url: "https://billing.stripe.com/p/session/fixture" })
   app.state.outcome = "closed"
-  expect(await app.controller.billing({ kind: "portal", flow: "change" })).toEqual({ outcome: "closed" })
+  expect(await app.controller.billing({ kind: "portal", flow: "payment_method_update" })).toEqual({ outcome: "closed" })
   expect(app.fetched.at(-1)).toBe("https://vectordev.ai/api/model-plans/portal")
-  expect(JSON.parse(String(app.requests.at(-1)!.body))).toEqual({ flow: "change" })
+  expect(JSON.parse(String(app.requests.at(-1)!.body))).toEqual({ flow: "payment_method_update" })
+  expect(await app.controller.billing({ kind: "portal", flow: "cancel" })).toEqual({ outcome: "closed" })
+  expect(JSON.parse(String(app.requests.at(-1)!.body))).toEqual({ flow: "cancel" })
   expect(await app.controller.billing({ kind: "portal" })).toEqual({ outcome: "closed" })
   expect(JSON.parse(String(app.requests.at(-1)!.body))).toEqual({})
   expect(JSON.stringify([app.statuses, app.windows])).not.toContain(app.token)
+})
+
+test("a smaller plan is scheduled for renewal and Keep my plan drops it, with no billing window", async () => {
+  const app = await signedIn()
+  const at = Date.UTC(2026, 10, 1, 12)
+  app.state.billing = () => Response.json({ scheduled: { plan: "vector-10", at } })
+  expect(await app.controller.billing({ kind: "change", plan: "vector-10" })).toEqual({
+    outcome: "scheduled",
+    plan: "vector-10",
+    at,
+  })
+  expect(app.fetched).toEqual(["https://vectordev.ai/api/model-plans/change"])
+  expect(JSON.parse(String(app.requests[0]!.body))).toEqual({ plan: "vector-10" })
+
+  app.state.billing = () => Response.json({ scheduled: false })
+  expect(await app.controller.billing({ kind: "keep" })).toEqual({ outcome: "kept" })
+  const keep = app.requests.at(-1)!
+  expect(app.fetched.at(-1)).toBe("https://vectordev.ai/api/model-plans/change")
+  expect(keep.method).toBe("DELETE")
+  // vectordev.ai takes /change only as JSON (requireTrustedJsonRequest), the DELETE included.
+  expect(new Headers(keep.headers).get("content-type")).toBe("application/json")
+  expect(new Headers(keep.headers).get("authorization")).toBe(`Bearer ${app.token}`)
+  expect(app.windows).toEqual([])
+
+  // vectordev.ai refuses a change it cannot make, such as one while another is scheduled; the app says why.
+  app.state.billing = () =>
+    Response.json(
+      { error: { code: "MODEL_PLAN_CHANGE_UNAVAILABLE", message: "Change plans on vectordev.ai/account." } },
+      { status: 409 },
+    )
+  expect(await app.controller.billing({ kind: "change", plan: "vector-100" })).toEqual({
+    outcome: "failed",
+    message: "Change plans on vectordev.ai/account.",
+  })
+  // An answer that is neither a checkout nor a schedule, or a keep that kept nothing, is a failure, not a success.
+  for (const answer of [{ scheduled: { plan: "vector-10" } }, { scheduled: true }, {}]) {
+    app.state.billing = () => Response.json(answer)
+    expect(await app.controller.billing({ kind: "change", plan: "vector-10" })).toMatchObject({ outcome: "failed" })
+    expect(await app.controller.billing({ kind: "keep" })).toMatchObject({ outcome: "failed" })
+  }
+  // An older vectordev.ai without /change sends the person to the account page.
+  app.state.billing = () => new Response("Not found", { status: 404 })
+  expect(await app.controller.billing({ kind: "change", plan: "vector-100" })).toEqual({ outcome: "website" })
+  expect(app.urls.at(-1)).toBe("https://vectordev.ai/account")
+  expect(await app.controller.billing({ kind: "keep" })).toEqual({ outcome: "website" })
+  expect(app.windows).toEqual([])
 })
 
 test("billing never opens a page vectordev.ai did not send from Stripe, nor a request the app did not offer", async () => {
@@ -548,7 +769,11 @@ test("billing never opens a page vectordev.ai did not send from Stripe, nor a re
     { kind: "refund" },
     { kind: "checkout", plan: "../admin" },
     { kind: "checkout" },
-    { kind: "topup", pack: "A".repeat(41) },
+    { kind: "change" },
+    { kind: "change", plan: "A".repeat(41) },
+    // Codium sells no top-ups, and the portal no longer changes plans.
+    { kind: "topup", pack: "codium-topup-10" },
+    { kind: "portal", flow: "change" },
     { kind: "portal", flow: "upgrade" },
     "checkout",
     undefined,
@@ -609,8 +834,9 @@ test("a request while a billing window is open brings it forward and never takes
   const checkout = app.controller.billing({ kind: "checkout", plan: "vector-10" })
   // Say Usage, or the purchase dialog, asks to cancel the plan while checkout is open.
   expect(await app.controller.billing({ kind: "portal", flow: "cancel" })).toEqual({ outcome: "busy" })
-  expect(await app.controller.billing({ kind: "topup", pack: "codium-topup-10" })).toEqual({ outcome: "busy" })
-  expect(app.focused).toHaveLength(2)
+  expect(await app.controller.billing({ kind: "change", plan: "vector-100" })).toEqual({ outcome: "busy" })
+  expect(await app.controller.billing({ kind: "keep" })).toEqual({ outcome: "busy" })
+  expect(app.focused).toHaveLength(3)
   open.resolve()
   expect(await checkout).toEqual({ outcome: "completed" })
   // No Stripe session was made for them.
@@ -642,7 +868,9 @@ test("the billing portal for a sign-in from before 1.99.109 opens on the website
       },
       { status: 403 },
     )
-  expect(await app.controller.billing({ kind: "portal", flow: "change" })).toEqual({ outcome: "website" })
+  expect(await app.controller.billing({ kind: "portal", flow: "payment_method_update" })).toEqual({
+    outcome: "website",
+  })
   expect(app.urls.at(-1)).toBe("https://vectordev.ai/account")
   expect(app.windows).toEqual([])
 })
@@ -654,10 +882,10 @@ test("offers are read from the public configuration without the account token", 
     plans: [{ id: "vector-10", name: "Plus", price: 10, available: false, tasks: [] }],
     topups: [{ id: "codium-topup-10", name: "$10 credit top-up", price: 10, available: false }],
   }
+  // An older site's top-ups are not read: Codium sells monthly plans only.
   expect(await app.controller.offers()).toEqual({
     enabled: false,
     plans: [{ id: "vector-10", name: "Plus", price: 10, available: false }],
-    topups: [{ id: "codium-topup-10", name: "$10 credit top-up", price: 10, available: false }],
   })
   expect(app.fetched).toEqual(["https://vectordev.ai/api/model-plans/config"])
   expect(new Headers(app.requests[0]!.headers).get("authorization")).toBeNull()

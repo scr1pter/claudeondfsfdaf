@@ -4,6 +4,7 @@ import { HttpApi, HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "
 import { BrainSchema } from "@vectordevai/core/brain/schema"
 import { Research } from "@vectordevai/schema/research"
 import { RunBudget } from "@vectordevai/schema/run-budget"
+import { TaskSize } from "@vectordevai/schema/task-size"
 import { Authorization } from "../middleware/authorization"
 import { InstanceContextMiddleware } from "../middleware/instance-context"
 import {
@@ -31,6 +32,8 @@ export const MemoryStats = Schema.Struct({
   learned: Schema.Finite,
   digestTokens: Schema.Finite,
   learning: Schema.Boolean,
+  /** Learned skills in use and waiting for review, which the counts above leave out. */
+  skills: Schema.Struct({ active: Schema.Finite, review: Schema.Finite }),
 }).annotate({ identifier: "MemoryStats" })
 
 export const MemoryList = Schema.Struct({
@@ -93,6 +96,14 @@ export const MemorySettings = Schema.Struct({
   keepOriginals: Schema.Boolean,
   facets: MemoryFacets,
   modelLearner: MemoryModelLearner,
+  /** Learned skills: wait for your review (the default), go live after a second matching success, or are not drafted. */
+  skills: BrainSchema.SkillLearning,
+  /** When a model may word a skill's draft: never, only with Vector Local on (the default), or with any model. */
+  skillDrafter: BrainSchema.SkillDrafter,
+  /** Workflow insights: apply learned defaults (the default), only record runs, or neither. */
+  workflow: BrainSchema.WorkflowLearning,
+  /** Try a setting cheaper by construction on one request in ten, while it has too few runs to decide. */
+  workflowExplore: Schema.Boolean,
 }).annotate({ identifier: "MemorySettings" })
 
 export const MemorySettingsPayload = Schema.Struct({
@@ -111,6 +122,136 @@ export const MemorySettingsPayload = Schema.Struct({
     }),
   ),
   modelLearner: Schema.optional(MemoryModelLearner),
+  skills: Schema.optional(BrainSchema.SkillLearning),
+  skillDrafter: Schema.optional(BrainSchema.SkillDrafter),
+  workflow: Schema.optional(BrainSchema.WorkflowLearning),
+  workflowExplore: Schema.optional(Schema.Boolean),
+})
+
+// Learned skills (Settings > Memory > Skills): what Vector drafted after a run turned a failing check green, kept apart
+// from the rest of memory and changed only here.
+
+export const MemorySkillListQuery = Schema.Struct({
+  ...WorkspaceRoutingQueryFields,
+  /** active (the default): in use. review: drafts waiting for you. archived: put away, replaced or shared. */
+  filter: Schema.optional(Schema.Literals(["active", "review", "archived", "all"])),
+})
+
+export const MemorySkillList = Schema.Struct({
+  /** Each entry carries its skill: the procedure, checks, commands, version and counters. */
+  skills: Schema.Array(BrainSchema.Entry),
+  settings: Schema.Struct({ skills: BrainSchema.SkillLearning, skillDrafter: BrainSchema.SkillDrafter }),
+}).annotate({ identifier: "MemorySkillList" })
+
+export const MemorySkillUses = Schema.Struct({
+  loads: Schema.Finite,
+  passes: Schema.Finite,
+  fails: Schema.Finite,
+  ignored: Schema.Finite,
+  reverts: Schema.Finite,
+}).annotate({ identifier: "MemorySkillUses" })
+
+export const MemorySkillDetail = Schema.Struct({
+  entry: BrainSchema.Entry,
+  evidence: Schema.Array(BrainSchema.Evidence),
+  /** Every version of the skill's key, newest first. */
+  versions: Schema.Array(BrainSchema.SkillVersion),
+  /** Lifetime counts, which outlive the 30 days memory keeps its uses for. */
+  uses: MemorySkillUses,
+}).annotate({ identifier: "MemorySkillDetail" })
+
+export const MemorySkillUpdatePayload = Schema.Struct({
+  description: Schema.optional(Schema.String),
+  procedure: Schema.optional(Schema.String),
+  checks: Schema.optional(Schema.Array(Schema.String)),
+  commands: Schema.optional(Schema.Array(Schema.String)),
+  /** rollback copies `version` into a new version; restore of a replaced skill is a rollback too. */
+  action: Schema.optional(Schema.Literals(["approve", "reject", "archive", "restore", "undo", "rollback"])),
+  version: Schema.optional(Schema.Finite),
+})
+
+export const MemorySkillSharePayload = Schema.Struct({
+  /** Replace a SKILL.md already at the path. */
+  force: Schema.optional(Schema.Boolean),
+})
+
+export const MemorySkillShared = Schema.Struct({
+  /** The file written, relative to the repository. */
+  path: Schema.String,
+  /** The repository's settings changed, so it asks to be trusted again. */
+  trust: Schema.Literal("changed"),
+  /** Dispose the instance once no session of the directory is busy. */
+  reload: Schema.Literal("when-idle"),
+}).annotate({ identifier: "MemorySkillShared" })
+
+export const MemorySkillSharePreview = Schema.Struct({
+  /** Where sharing would write, relative to the repository. */
+  path: Schema.String,
+  /** The file as sharing would write it, byte for byte. */
+  text: Schema.String,
+  /** A file is already there, so sharing needs `force`. */
+  exists: Schema.Boolean,
+}).annotate({ identifier: "MemorySkillSharePreview" })
+
+// Workflow insights (Settings > Memory > Workflow insights): what the build agent's runs here passed with and cost, by
+// size, and the cheaper default they support. Numbers only: no prompt or file text.
+
+const WorkflowArm = Schema.Struct({
+  effortTier: TaskSize.Tier,
+  effort: Schema.String,
+  split: Schema.Literals(["solo", "subagents"]),
+  providerID: Schema.String,
+  modelID: Schema.String,
+  subagentModel: Schema.optional(Schema.Literals(["parent", "small"])),
+})
+
+export const MemoryWorkflowArm = Schema.Struct({
+  arm: WorkflowArm,
+  rows: Schema.Finite,
+  /** Runs weighed by how recent they are. */
+  weight: Schema.Finite,
+  /** Weight of the runs a check, the judge or a revert decided. */
+  signal: Schema.Finite,
+  passRate: Schema.optional(Schema.Finite),
+  lower: Schema.optional(Schema.Finite),
+  checkedShare: Schema.Finite,
+  /** Mean dollars over priced runs; absent when no run's cost is known. */
+  costUsd: Schema.optional(Schema.Finite),
+  pricedWeight: Schema.Finite,
+  tokens: Schema.optional(Schema.Finite),
+  lastAt: Schema.Finite,
+}).annotate({ identifier: "MemoryWorkflowArm" })
+
+export const MemoryWorkflowAdvice = Schema.Struct({
+  effortTier: TaskSize.Tier,
+  effort: Schema.optional(Schema.Literal("default")),
+  split: Schema.optional(Schema.Literal("solo")),
+  subagentModel: Schema.optional(Schema.Literal("small")),
+  source: Schema.Literals(["learned", "explore"]),
+  reason: Schema.String,
+  basis: Schema.Struct({ chosen: MemoryWorkflowArm, instead: MemoryWorkflowArm }),
+}).annotate({ identifier: "MemoryWorkflowAdvice" })
+
+export const MemoryWorkflowInsights = Schema.Struct({
+  mode: BrainSchema.WorkflowLearning,
+  explore: Schema.Boolean,
+  tiers: Schema.Array(
+    Schema.Struct({
+      tier: TaskSize.Tier,
+      arms: Schema.Array(MemoryWorkflowArm),
+      advice: Schema.optional(MemoryWorkflowAdvice),
+      /** What would apply in Apply mode, while the mode is Observe only or Off. */
+      wouldAdvise: Schema.optional(MemoryWorkflowAdvice),
+      /** Runs left out because someone chose their effort, or they read the web. */
+      excluded: Schema.Finite,
+    }),
+  ),
+}).annotate({ identifier: "MemoryWorkflowInsights" })
+
+export const MemoryWorkflowResetQuery = Schema.Struct({
+  ...WorkspaceRoutingQueryFields,
+  /** One size's runs; every size's when absent. */
+  tier: Schema.optional(Schema.Literals(["light", "standard", "thorough"])),
 })
 
 export const MemoryExportQuery = Schema.Struct({
@@ -172,6 +313,7 @@ export class MemoryTooLargeError extends Schema.ErrorClass<MemoryTooLargeError>(
 ) {}
 
 const MemoryID = Schema.String.annotate({ description: "A memory entry's short id, such as m4k2q" })
+const SkillID = Schema.String.annotate({ description: "A learned skill's id, such as s4k2q7m" })
 const DocumentID = Schema.String.annotate({ description: "A document's id, such as d4k2q7m3x" })
 const RecordID = Schema.String.annotate({ description: "A record's id, such as r4k2q7m3x9ab" })
 
@@ -369,8 +511,8 @@ export const MemoryDistillEstimate = Schema.Struct({
   refused: Schema.optional(Schema.Struct({ reason: DistillReason, message: Schema.String })),
   /** Sections that would be sent, the tokens sent, and the output cap. */
   sections: Schema.Finite,
-  input: Schema.Finite,
-  output: Schema.Finite,
+  input: Schema.optional(Schema.Finite),
+  output: Schema.optional(Schema.Finite),
   costKind: Schema.optional(RunBudget.CostKind),
   /** At catalog rates, for a priced model. */
   lowUsd: Schema.optional(Schema.Finite),
@@ -394,14 +536,16 @@ export const MemoryDistillResult = Schema.Struct({
   duplicate: Schema.Finite,
   /** Suggestions dropped: not readable, a quote not in the document, or text a scan failed. */
   dropped: Schema.Struct({ invalid: Schema.Finite, quote: Schema.Finite, scan: Schema.Finite }),
-  tokens: Schema.Struct({
-    input: Schema.Finite,
-    output: Schema.Finite,
-    reasoning: Schema.Finite,
-    cacheRead: Schema.Finite,
-    cacheWrite: Schema.Finite,
-  }),
-  cost: Schema.Finite,
+  tokens: Schema.optional(
+    Schema.Struct({
+      input: Schema.Finite,
+      output: Schema.Finite,
+      reasoning: Schema.Finite,
+      cacheRead: Schema.Finite,
+      cacheWrite: Schema.Finite,
+    }),
+  ),
+  cost: Schema.optional(Schema.Finite),
   costKind: RunBudget.CostKind,
   /** Why the model gave nothing usable, when it did not. */
   error: Schema.optional(Schema.String),
@@ -645,7 +789,7 @@ export const MemoryApi = HttpApi.make("memory")
             identifier: "memory.update",
             summary: "Change a memory entry",
             description:
-              "Edit, pin or unpin, approve or reject a held entry, archive or restore. `undo` takes back what Vector learned: it is archived as your decision and Vector does not learn it again.",
+              "Edit, pin or unpin, approve or reject a held entry, archive or restore. `undo` takes back what Vector learned: it is archived as your decision and Vector does not learn it again. A learned skill is refused with reason `skill-entry`: change it under /memory/skills.",
           }),
         ),
         HttpApiEndpoint.delete("remove", `${root}/:memoryID`, {
@@ -658,7 +802,7 @@ export const MemoryApi = HttpApi.make("memory")
             identifier: "memory.remove",
             summary: "Forget a memory entry",
             description:
-              "Delete an entry for good. Vector keeps only a hash of its text so it does not learn it again. Entries from a file are changed in the file.",
+              "Delete an entry for good. Vector keeps only a hash of its text so it does not learn it again. Entries from a file are changed in the file. A learned skill is refused with reason `skill-entry`: forget it under /memory/skills.",
           }),
         ),
         HttpApiEndpoint.post("erase", `${root}/erase`, {
@@ -670,7 +814,7 @@ export const MemoryApi = HttpApi.make("memory")
             identifier: "memory.erase",
             summary: "Erase learned memory",
             description:
-              "Erase what Vector learned for this repository, for the user, or everywhere. The repository's Deep research runs go with its memory, and every run with everything; erasing what Vector learned about the user keeps them. Files people wrote are left alone.",
+              "Erase what Vector learned for this repository, for the user, or everywhere. Erasing a repository or everything also erases its learned skills and workflow insights. The repository's Deep research runs go with its memory, and every run with everything; erasing what Vector learned about the user keeps them. Files people wrote are left alone.",
           }),
         ),
         HttpApiEndpoint.delete("eraseSession", `${root}/sessions/:sessionID`, {
@@ -682,7 +826,7 @@ export const MemoryApi = HttpApi.make("memory")
             identifier: "memory.eraseSession",
             summary: "Erase what Vector learned in a session",
             description:
-              "Forget every entry Vector learned whose only evidence is this session, so it is not learned again. The Deep research runs the session started are forgotten too. What you wrote and what other sessions also taught stay. The session keeps its messages until you delete them.",
+              "Forget every entry Vector learned whose only evidence is this session, so it is not learned again, with its workflow records; a learned skill that session taught goes back to the text other sessions taught, or goes. The Deep research runs the session started are forgotten too. What you wrote and what other sessions also taught stay. The session keeps its messages until you delete them.",
           }),
         ),
         HttpApiEndpoint.get("export", `${root}/export`, {
@@ -740,7 +884,107 @@ export const MemoryApi = HttpApi.make("memory")
             identifier: "memory.settings.update",
             summary: "Change memory settings",
             description:
-              "Turn Vector's learning on or off, each facet of how you work it may learn, the optional model learner, reading the repository's own docs, and keeping originals of added documents. Memory already saved stays until you erase it; turning repository docs off forgets what Vector read of them, and turning originals off deletes the kept copies.",
+              "Turn Vector's learning on or off, each facet of how you work it may learn, the optional model learner, learned skills and their drafter, workflow insights and their exploration, reading the repository's own docs, and keeping originals of added documents. Memory already saved stays until you erase it; turning repository docs off forgets what Vector read of them, and turning originals off deletes the kept copies.",
+          }),
+        ),
+        HttpApiEndpoint.get("skills", `${root}/skills`, {
+          query: MemorySkillListQuery,
+          success: described(MemorySkillList, "The repository's learned skills, with the skill settings"),
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "memory.skills.list",
+            summary: "List learned skills",
+            description:
+              "Skills Vector drafted for the repository at `directory` after a run turned a failing check green: in use, waiting for your review (`filter=review`), put away (`filter=archived`) or all of them. Each carries its procedure, checks, commands, version and counts.",
+          }),
+        ),
+        HttpApiEndpoint.get("skill", `${root}/skills/:memoryID`, {
+          params: { memoryID: SkillID },
+          query: WorkspaceRoutingQuery,
+          success: described(MemorySkillDetail, "One learned skill with its evidence, versions and uses"),
+          error: MemoryApiError,
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "memory.skills.get",
+            summary: "Get a learned skill",
+            description:
+              "One learned skill: the runs that vouch for it, every version of its text, and how its loads fared.",
+          }),
+        ),
+        HttpApiEndpoint.patch("updateSkill", `${root}/skills/:memoryID`, {
+          params: { memoryID: SkillID },
+          query: WorkspaceRoutingQuery,
+          payload: MemorySkillUpdatePayload,
+          success: described(MemorySkillDetail, "The skill after the change"),
+          error: MemoryApiError,
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "memory.skills.update",
+            summary: "Change a learned skill",
+            description:
+              "Edit its description, steps, checks or commands (a new version, checked like a draft), approve or reject a draft, archive it, restore it, undo the version in use, or roll back to `version`. Checks and commands must be on the allow lists.",
+          }),
+        ),
+        HttpApiEndpoint.delete("forgetSkill", `${root}/skills/:memoryID`, {
+          params: { memoryID: SkillID },
+          query: WorkspaceRoutingQuery,
+          success: described(Schema.Struct({ forgotten: Schema.Literal(true) }), "The skill was forgotten"),
+          error: MemoryApiError,
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "memory.skills.forget",
+            summary: "Forget a learned skill",
+            description:
+              "Delete every version of the skill, its uses and the sessions' listings of it, and keep only a hash of its key so Vector does not draft it again.",
+          }),
+        ),
+        HttpApiEndpoint.get("previewSkillShare", `${root}/skills/:memoryID/share`, {
+          params: { memoryID: SkillID },
+          query: WorkspaceRoutingQuery,
+          success: described(MemorySkillSharePreview, "The file sharing would write"),
+          error: MemoryApiError,
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "memory.skills.sharePreview",
+            summary: "Preview sharing a learned skill",
+            description:
+              "The file sharing the skill would write and where, after the same checks sharing makes, or the refusal it would give. Writes nothing.",
+          }),
+        ),
+        HttpApiEndpoint.post("shareSkill", `${root}/skills/:memoryID/share`, {
+          params: { memoryID: SkillID },
+          query: WorkspaceRoutingQuery,
+          payload: MemorySkillSharePayload,
+          success: described(MemorySkillShared, "The file written for the team"),
+          error: MemoryApiError,
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "memory.skills.share",
+            summary: "Share a learned skill to the repository",
+            description:
+              "Write a skill you approved to `.vector/skills/<name>/SKILL.md` for your team to commit, with no error excerpt, session ids or counts, after checking it against your personal memory (refused with reason `personal` and the sentences to edit). It changes the repository's settings, so the app reloads the directory once no session in it is busy and you trust them again. Refused with reason `exists` unless `force`.",
+          }),
+        ),
+        HttpApiEndpoint.get("workflow", `${root}/workflow`, {
+          query: WorkspaceRoutingQuery,
+          success: described(MemoryWorkflowInsights, "What the build agent's runs here passed with and cost, by size"),
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "memory.workflow.get",
+            summary: "Get workflow insights",
+            description:
+              "For each size, the effort, subagent split and subagent model the build agent ran with in this repository, how often their checks passed and what they cost, and the cheaper default the runs support. Runs where you, the agent or config chose the effort are left out, and unknown cost stays unknown.",
+          }),
+        ),
+        HttpApiEndpoint.delete("resetWorkflow", `${root}/workflow`, {
+          query: MemoryWorkflowResetQuery,
+          success: described(Schema.Struct({ removed: Schema.Finite }), "How many runs were forgotten"),
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "memory.workflow.reset",
+            summary: "Reset workflow insights",
+            description:
+              "Forget the runs workflow insights learned from in this repository, for one size (`tier`) or every size. Learned defaults start again from nothing.",
           }),
         ),
         HttpApiEndpoint.get("model", `${root}/model`, {

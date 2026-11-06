@@ -6,7 +6,7 @@ import { ButtonV2 } from "@vectordevai/ui/v2/button-v2"
 import { useSDK } from "@/context/sdk"
 import { useSync } from "@/context/sync"
 import { ERASE_SESSION, UNDONE, entryText } from "@/components/settings-v2/memory-model"
-import { chipLabel, learnedFrom, watchLearned } from "./learned"
+import { SKILL_ID, chipLabel, learnedFrom, watchLearned } from "./learned"
 import "./learned-chip.css"
 
 /** Draws what Vector learned from a request under the reply that answered it. */
@@ -19,9 +19,10 @@ type Done = "undone" | "approved" | "rejected" | `failed-${Action}`
 
 /**
  * "Learned 2 things" under a reply: what Vector's learner kept from the request's typed words, or from what the user
- * ticked on the reply's plan card. Opened, it lists each item with Undo, or Approve and Reject for one waiting for
- * review, and offers to erase what Vector learned in this session. Each entry is read from the owner's memory routes;
- * an entry they refuse (a guest) or that is gone shows nothing.
+ * ticked on the reply's plan card, and a skill it drafted from the run. Opened, it lists each item with Undo, or
+ * Approve and Reject for one waiting for review, and offers to erase what Vector learned in this session. Each entry is
+ * read from the owner's memory routes, a skill from the skill routes; one they refuse (a guest) or that is gone shows
+ * nothing.
  */
 function LearnedChip(props: { message: AssistantMessage }) {
   const sdk = useSDK()
@@ -46,12 +47,13 @@ function LearnedChip(props: { message: AssistantMessage }) {
     () => (ids().length > 0 ? { ids: ids(), version: version(), client: sdk().client } : false),
     (input) =>
       Promise.all(
-        input.ids.map((memoryID) =>
-          input.client.memory
-            .get({ memoryID }, { throwOnError: false })
-            .then((result) => result.data?.entry)
-            .catch(() => undefined),
-        ),
+        input.ids.map((memoryID) => {
+          // A learned skill is read from its own route.
+          const read: Promise<{ data?: { entry: MemoryEntry } }> = SKILL_ID.test(memoryID)
+            ? input.client.memory.skills.get({ memoryID }, { throwOnError: false })
+            : input.client.memory.get({ memoryID }, { throwOnError: false })
+          return read.then((result) => result.data?.entry).catch(() => undefined)
+        }),
       ).then((found) => found.filter((entry): entry is MemoryEntry => entry !== undefined)),
   )
   // Read only once resolved: reading a resource still loading for the first time suspends the whole timeline.
@@ -59,16 +61,26 @@ function LearnedChip(props: { message: AssistantMessage }) {
     entries.state === "ready" || entries.state === "refreshing" ? (entries.latest ?? []) : [],
   )
   const label = createMemo(() =>
-    chipLabel(items().map((entry) => ({ text: entryText(entry), status: entry.status, typed: typed().has(entry.id) }))),
+    chipLabel(
+      items().map((entry) => ({
+        text: entry.skill?.name ?? entryText(entry),
+        status: entry.status,
+        typed: typed().has(entry.id),
+        skill: entry.skill !== undefined,
+      })),
+    ),
   )
 
   const act = async (entry: MemoryEntry, action: Action) => {
-    const result = await sdk()
-      .client.memory.update({ memoryID: entry.id, action })
-      .then(
-        (): Done => (action === "undo" ? "undone" : action === "approve" ? "approved" : "rejected"),
-        (): Done => `failed-${action}`,
-      )
+    const client = sdk().client
+    // A learned skill changes only through its own routes.
+    const change: Promise<unknown> = entry.skill
+      ? client.memory.skills.update({ memoryID: entry.id, action })
+      : client.memory.update({ memoryID: entry.id, action })
+    const result = await change.then(
+      (): Done => (action === "undo" ? "undone" : action === "approve" ? "approved" : "rejected"),
+      (): Done => `failed-${action}`,
+    )
     setDone((current) => ({ ...current, [entry.id]: result }))
   }
 
@@ -112,9 +124,15 @@ function LearnedChip(props: { message: AssistantMessage }) {
             <For each={items()}>
               {(entry) => (
                 <li data-slot="learned-chip-item">
-                  <p data-slot="learned-chip-text">{entryText(entry)}</p>
+                  <p data-slot="learned-chip-text">
+                    {entry.skill ? `${entry.skill.name}: ${entry.skill.description}` : entryText(entry)}
+                  </p>
                   <p data-slot="learned-chip-meta">
-                    {typed().has(entry.id) ? "From what you typed" : "From what you ticked on the plan card"}
+                    {entry.skill
+                      ? "A skill drafted from how this run turned a failing check green"
+                      : typed().has(entry.id)
+                        ? "From what you typed"
+                        : "From what you ticked on the plan card"}
                     {entry.scope === "personal" ? " · every repository" : " · this repository"}
                   </p>
                   <Actions entry={entry} done={done()[entry.id]} act={act} />

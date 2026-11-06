@@ -2,9 +2,8 @@ import { createHash } from "node:crypto"
 import { Option, Schema } from "effect"
 import { PublicSession } from "../../packages/schema/src/public-session.js"
 import { enforceRateLimit, requireTrustedJsonRequest } from "./abuse.js"
-import { verifyCliToken } from "./cli-token.js"
 import { ApiError, json, readJson, type ApiRequest, type ApiResponse } from "./http.js"
-import { requireUnrevokedAccount } from "./revocation.js"
+import { requireUnrevokedAccount, requireUnrevokedCliToken } from "./revocation.js"
 
 const decodeCreate = Schema.decodeUnknownOption(PublicSession.Create, { onExcessProperty: "error" })
 const decodeUpdate = Schema.decodeUnknownOption(PublicSession.Update, { onExcessProperty: "error" })
@@ -59,8 +58,7 @@ export async function publicShares(request: ApiRequest, response: ApiResponse, i
   requireTrustedJsonRequest(request, PublicSession.MAX_BYTES)
   const token = /^Bearer (vct_[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)$/.exec(request.headers.authorization ?? "")?.[1]
   if (!token) throw new ApiError(401, "SIGN_IN_REQUIRED", "Sign in to Vector to publish or remove a public session.")
-  const user = verifyCliToken(token)
-  await requireUnrevokedAccount(user.id)
+  const user = await requireUnrevokedCliToken(token)
   await limit(request, response, "share-write", 60, 60, user.id)
   const body = await readJson<unknown>(request, PublicSession.MAX_BYTES)
 

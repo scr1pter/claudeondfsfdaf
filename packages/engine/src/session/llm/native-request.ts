@@ -1,5 +1,5 @@
 import type { JsonSchema, LLMRequest, ProviderMetadata } from "@vectordevai/llm"
-import { LLM, Message, SystemPart, ToolCallPart, ToolDefinition, ToolResultPart } from "@vectordevai/llm"
+import { CacheHint, LLM, Message, SystemPart, ToolCallPart, ToolDefinition, ToolResultPart } from "@vectordevai/llm"
 import {
   AmazonBedrock,
   Anthropic,
@@ -32,6 +32,10 @@ export type RequestInput = {
   readonly maxOutputTokens?: number
   readonly providerOptions?: LLMRequest["providerOptions"]
   readonly headers?: Record<string, string>
+  /** False for a request whose prefix is never sent again: no cache breakpoints at all. */
+  readonly cache?: boolean
+  /** The index in `messages` of a fork's last inherited message, which takes a cache breakpoint beside the policy's. */
+  readonly boundary?: number
 }
 
 const providerMetadata = (value: unknown): ProviderMetadata | undefined => {
@@ -102,14 +106,23 @@ const contentPart = (part: unknown) => {
 const content = (value: ModelMessage["content"]) =>
   typeof value === "string" ? [{ type: "text" as const, text: value }] : value.map(contentPart)
 
-const messages = (input: readonly ModelMessage[]) => {
+// A breakpoint on the last part of a message that can carry one: a fork's request names where the parent's prefix ends,
+// so Anthropic's look-back finds the parent's cache entry and sibling forks share one.
+const BREAKPOINT = new CacheHint({ type: "ephemeral" })
+const marked = (parts: ReturnType<typeof content>) => {
+  const at = parts.findLastIndex((part) => part.type === "text" || part.type === "tool-result")
+  return at < 0 ? parts : parts.map((part, index) => (index === at ? { ...part, cache: BREAKPOINT } : part))
+}
+
+const messages = (input: readonly ModelMessage[], boundary?: number) => {
   const system = input.flatMap((message) => (message.role === "system" ? [SystemPart.make(message.content)] : []))
-  const messages = input.flatMap((message) => {
+  const messages = input.flatMap((message, index) => {
     if (message.role === "system") return []
+    const parts = content(message.content)
     return [
       Message.make({
         role: message.role,
-        content: content(message.content),
+        content: index === boundary ? marked(parts) : parts,
         native: isRecord(message.providerOptions) ? { providerOptions: message.providerOptions } : undefined,
       }),
     ]
@@ -179,7 +192,7 @@ export const model = (input: Provider.Model | RequestInput, headers?: Record<str
 }
 
 export const request = (input: RequestInput) => {
-  const converted = messages(input.messages)
+  const converted = messages(input.messages, input.boundary)
   // This is the only native adapter boundary that should construct canonical
   // @vectordevai/llm request objects from vector's session/AI SDK-shaped data.
   return LLM.request({
@@ -190,6 +203,7 @@ export const request = (input: RequestInput) => {
     toolChoice: input.toolChoice,
     generation: generation(input),
     providerOptions: input.providerOptions,
+    ...(input.cache === false ? { cache: "none" as const } : {}),
   })
 }
 

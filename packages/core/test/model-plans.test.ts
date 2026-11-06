@@ -2,7 +2,8 @@ import { afterAll, expect, test } from "bun:test"
 import { mkdtemp } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
-import { Effect, Layer, Stream } from "effect"
+import { Effect, Fiber, Layer, Stream } from "effect"
+import { TestClock } from "effect/testing"
 import { FetchHttpClient } from "effect/unstable/http"
 import { LLM, LLMError } from "@vectordevai/llm"
 import { LLMClient, RequestExecutor } from "@vectordevai/llm/route"
@@ -13,7 +14,9 @@ import { ModelV2 } from "../src/model"
 import { ProviderV2 } from "../src/provider"
 import { codiumError, modelPlanRoute } from "../src/session/runner/model-plan-route"
 import { SessionRunnerModel } from "../src/session/runner/model"
-import { codiumGateway, codiumModel } from "./fixture/codium-gateway"
+import { InstallationVersion } from "../src/installation/version"
+import { codiumCatalogV2, codiumGateway, codiumModel } from "./fixture/codium-gateway"
+import { it } from "./lib/effect"
 
 const token = "vct_synthetic-private-account.token"
 const gateway = codiumGateway(token)
@@ -31,7 +34,7 @@ const info = ModelV2.Info.make({
   },
   limit: { context: 32_000, output: 4096 },
 })
-const service = (catalog = active) =>
+const service = (catalog: ModelPlans.Catalog = active) =>
   ModelPlans.Service.of({ catalog: () => Effect.succeed(catalog), request: gateway.forward })
 const credentials = (value: string | undefined = token) =>
   FreeModels.CredentialsService.of({ get: () => Effect.succeed(value) })
@@ -143,6 +146,11 @@ test("a fresh engine lists the account's last catalog while vectordev.ai is slow
   const restarted = ModelPlans.createClient({ file, timeout: 5, request: slow })
   expect(await restarted.catalog(account)).toEqual(active)
   expect(await restarted.catalog("vct_another-account.token")).toEqual(off)
+  // Both late answers are still on their way and each saves the file when it lands, which on a slow machine could be
+  // after the refusal below is saved. A forced read settles each account's refresh (the older read then saves nothing,
+  // and this one saves before it resolves), so nothing from this launch writes the file after this point.
+  await restarted.catalog(account, { force: true })
+  await restarted.catalog("vct_another-account.token", { force: true })
   // A refused token replaces what was saved.
   await ModelPlans.createClient({ file, request: async () => new Response("revoked", { status: 403 }) }).catalog(
     account,
@@ -181,9 +189,107 @@ test("a hung catalog cannot stall model selection, and its late answer serves th
   expect(await client.catalog("account")).toEqual(active)
 })
 
-test("the catalog reads the signed-in account's models from the gateway", async () => {
+// What vectordev.ai lists for the account after an upgrade: one model more than before it.
+const upgraded = { enabled: true, models: [codiumModel, { ...codiumModel, id: "vendor/upgraded", name: "Upgraded" }] }
+
+// Each catalog request waits until the test answers it.
+const held = () => {
+  const answers: PromiseWithResolvers<Response>[] = []
+  const request = () => {
+    const answer = Promise.withResolvers<Response>()
+    answers.push(answer)
+    return answer.promise
+  }
+  return { answers, request }
+}
+
+test("a forced read starts after what changed the plan: an older read never replaces it, and plain reads wait on it", async () => {
+  const clock = { now: 0 }
+  const gatewayReads = held()
+  const client = ModelPlans.createClient({ timeout: 1_000, now: () => clock.now, request: gatewayReads.request })
+  // A read starts its request once the account's saved catalog has been looked for.
+  const started = () => Bun.sleep(1)
+  const first = client.catalog("account")
+  await started()
+  gatewayReads.answers[0].resolve(Response.json(active))
+  expect(await first).toEqual(active)
+  // The kept minute lapses and a plain read starts a refresh, which vectordev.ai has not answered when the purchase
+  // lands; the forced read after it does not join that refresh but starts its own.
+  clock.now = 61_000
+  const older = client.catalog("account")
+  await started()
+  const forced = client.catalog("account", { force: true })
+  await started()
+  expect(gatewayReads.answers).toHaveLength(3)
+  // The refresh from before the purchase answers first: it is not kept, so a plain read still waits on the forced one.
+  gatewayReads.answers[1].resolve(Response.json(active))
+  await started()
+  const waiting = client.catalog("account")
+  await started()
+  expect(gatewayReads.answers).toHaveLength(3)
+  gatewayReads.answers[2].resolve(Response.json(upgraded))
+  expect(await Promise.all([older, forced, waiting])).toEqual([upgraded, upgraded, upgraded])
+  // The forced answer is the kept one now, for a minute, with no other request.
+  expect(await client.catalog("account")).toEqual(upgraded)
+  expect(gatewayReads.answers).toHaveLength(3)
+
+  // Within a fresh minute too, a forced read asks again, and a plain read meanwhile no longer gets the kept catalog.
+  const again = client.catalog("account", { force: true })
+  await started()
+  const meanwhile = client.catalog("account")
+  await started()
+  expect(gatewayReads.answers).toHaveLength(4)
+  gatewayReads.answers[3].resolve(Response.json(off))
+  expect(await Promise.all([again, meanwhile])).toEqual([off, off])
+})
+
+it.effect("writing the account credential reads its catalog now, waiting at most CREDENTIAL_READ for it", () =>
+  Effect.gen(function* () {
+    const gatewayReads = held()
+    const client = ModelPlans.createClient({ timeout: 5, request: gatewayReads.request })
+    const written = (value: string | undefined) =>
+      ModelPlans.credentialWritten(value).pipe(
+        Effect.provideService(ModelPlans.Service, {
+          catalog: (account, options) => Effect.promise(() => client.catalog(account, options)),
+          request: gateway.forward,
+        }),
+      )
+    const settle = Effect.promise(() => Bun.sleep(1))
+    // Signed out, there is no account to read.
+    yield* written(undefined)
+    expect(gatewayReads.answers).toEqual([])
+
+    // vectordev.ai answers in time: the write returns once the account's catalog is in place.
+    const prompt = yield* written("account").pipe(Effect.forkChild)
+    yield* settle
+    expect(gatewayReads.answers).toHaveLength(1)
+    expect(prompt.pollUnsafe()).toBeUndefined()
+    gatewayReads.answers[0].resolve(Response.json(active))
+    yield* Fiber.join(prompt)
+    expect(yield* Effect.promise(() => client.catalog("account"))).toEqual(active)
+    expect(gatewayReads.answers).toHaveLength(1)
+
+    // vectordev.ai is slow: the write stops waiting at the bound, and the answer still lands for the next read.
+    const slow = yield* written("account").pipe(Effect.forkChild)
+    yield* settle
+    expect(gatewayReads.answers).toHaveLength(2)
+    yield* TestClock.adjust(ModelPlans.CREDENTIAL_READ)
+    yield* Fiber.join(slow)
+    gatewayReads.answers[1].resolve(Response.json(upgraded))
+    yield* settle
+    expect(yield* Effect.promise(() => client.catalog("account"))).toEqual(upgraded)
+    expect(gatewayReads.answers).toHaveLength(2)
+  }),
+)
+
+test("the catalog reads the signed-in account's models from the gateway as a current client", async () => {
   const client = ModelPlans.createClient({ request: gateway.forward })
-  expect(await client.catalog(token)).toEqual(active)
+  const before = gateway.seen.length
+  expect(await client.catalog(token)).toEqual(codiumCatalogV2)
+  // The client says which release it is and that it decodes the v2 catalog (§4.9); neither grants anything.
+  expect(gateway.seen.slice(before)).toMatchObject([
+    { path: "/api/model-plans/models", client: InstallationVersion, catalog: "2", purpose: null },
+  ])
   expect(await client.catalog("vct_someone-else.token")).toEqual(off)
   gateway.state.mode = "disabled"
   expect(await client.catalog(token, { force: true })).toEqual(off)
@@ -220,6 +326,10 @@ test("legacy SDK transport fixes destination and credentials while enforcing the
     expect(call.init.redirect).toBe("error")
     expect(new Headers(call.init.headers).get("authorization")).toBe(`Bearer ${account}`)
     expect(new Headers(call.init.headers).get("x-private")).toBeNull()
+    expect(new Headers(call.init.headers).get("x-vector-client")).toBe(InstallationVersion)
+    expect(new Headers(call.init.headers).get("x-vector-catalog")).toBe("2")
+    // No purpose given: the request is a chat turn.
+    expect(new Headers(call.init.headers).get("x-vector-purpose")).toBe("chat")
     expect(JSON.parse(String(call.init.body))).toEqual({
       model: codiumModel.id,
       messages: [{ role: "user", content: "hello" }],
@@ -242,17 +352,23 @@ test("signed-out, disabled and retired selections answer like the gateway withou
         return new Response()
       },
     })("https://vectordev.ai/api/model-plans/chat", { body: JSON.stringify({ messages: [{ role: "user" }] }) })
-    return ModelPlans.gatewayFailure(response.status, await response.text())
+    return { status: response.status, ...ModelPlans.gatewayFailure(response.status, await response.text()) }
   }
   expect(await attempt(undefined, active)).toMatchObject({
+    status: 401,
     kind: "sign-in",
     message: "Sign in to Vector to use Vector Codium.",
   })
+  // Codium switched off is final: a client error, which the AI SDK's own retries (408, 409, 429, 5xx) never repeat.
   expect(await attempt(token, off)).toMatchObject({
+    status: 400,
+    code: "CODIUM_UNAVAILABLE",
     kind: "unavailable",
+    retry: false,
     message: "Vector Codium is not available right now. Choose another model.",
   })
   expect(await attempt(token, { enabled: true, models: [{ ...codiumModel, id: "vendor/other" }] })).toMatchObject({
+    status: 400,
     kind: "unavailable",
     message: "This model is no longer included in Vector Codium. Choose another model.",
   })
@@ -318,14 +434,14 @@ test("a native Codium turn streams text and a tool call and leaves its credits o
   // The step spent credits, not dollars Vector could add up, so its cost is unknown and it is recorded unpriced.
   expect(finish.usage).toMatchObject({ inputTokens: 1000, outputTokens: 50 })
   expect(SessionRunnerModel.calculateCost(route, tokens, finish.usage?.providerMetadata)).toBeUndefined()
-  // The run guard counts it the same way: an unpriced step, never $0 and never a priced one.
+  // The run guard counts Codium separately, without treating it as unknown dollar spend.
   expect(
     SessionRunnerModel.spendStep(
       route,
       { tokens, providerMetadata: finish.usage?.providerMetadata },
       { continues: true, patched: false },
     ),
-  ).toMatchObject({ costUsd: undefined, costKind: "unknown" })
+  ).toMatchObject({ costUsd: undefined, costKind: "codium" })
   const sent = gateway.seen.slice(before)
   expect(sent.map((item) => item.path)).toEqual(["/api/model-plans/chat"])
   expect(sent[0].authorization).toBe(`Bearer ${token}`)
@@ -333,18 +449,26 @@ test("a native Codium turn streams text and a tool call and leaves its credits o
 })
 
 test("out of credits, plans disabled and an over-long context fail the turn at once without retrying", async () => {
-  for (const [mode, tag, message, action] of [
+  for (const [mode, tag, message, action, code] of [
     [
       "credits",
       "QuotaExceeded",
-      `Your monthly Codium credits cannot cover this model's largest request right now. Wait for running requests to finish, choose a model that uses fewer credits, or add a top-up. Monthly credits renew each billing period. Buy credits at ${ModelPlans.PURCHASE_URL}`,
+      `Your monthly Codium credits cannot cover this model's largest request right now. Wait for running requests to finish, choose a model that uses fewer credits, or add a top-up. Monthly credits renew each billing period. See plans at ${ModelPlans.PURCHASE_URL}`,
       "credits",
+      "MODEL_PLAN_EXHAUSTED",
     ],
-    ["disabled", "InvalidRequest", "Vector Codium is not available yet. Choose another model.", "unavailable"],
+    [
+      "disabled",
+      "InvalidRequest",
+      "Vector Codium is not available right now. Choose another model.",
+      "unavailable",
+      "MODEL_PLANS_DISABLED",
+    ],
     [
       "context",
       "InvalidRequest",
       "This conversation is too long for the Codium model. Compact it before continuing.",
+      undefined,
       undefined,
     ],
   ] as const) {
@@ -359,7 +483,7 @@ test("out of credits, plans disabled and an over-long context fail the turn at o
     expect(failure.reason.retryable).toBe(false)
     if (mode === "context") expect(failure.reason).toMatchObject({ classification: "context-overflow" })
     // The V2 session records the action, so a client can offer Buy credits next to the message.
-    expect(codiumError(failure)).toEqual(action && { type: "codium", action, message })
+    expect(codiumError(failure)).toEqual(action && { type: "codium", action, message, code })
     // Exactly one request: never retried, and never sent anywhere else.
     expect(gateway.seen.slice(before).map((item) => item.path)).toEqual(["/api/model-plans/chat"])
     expect(JSON.stringify(failure)).not.toContain(token)
@@ -378,9 +502,9 @@ test("short model capacity is retried as temporary and never asks for a purchase
   expect(failure.reason).toMatchObject({
     _tag: "RateLimit",
     message:
-      "Vector Codium could not run this request: model capacity may be short for a moment, or your credits may have reached their limit. Vector will try again shortly; if it keeps failing, check your balance.",
+      "Vector Codium could not run this request: model capacity may be short for a moment. Vector will try again shortly.",
   })
-  expect(failure.reason.message).not.toContain("Buy credits")
+  expect(failure.reason.message).not.toContain("See plans")
   expect(codiumError(failure)).toBeUndefined()
   // The first answer and the executor's two retries, all to the gateway.
   expect(gateway.seen.slice(before).map((item) => item.path)).toEqual(Array(3).fill("/api/model-plans/chat"))
@@ -393,55 +517,342 @@ test("plan requests reject invalid response limits and excessive UTF-8 context",
   ).toThrow("Context too large")
 })
 
-test("gateway answers map to the action that fixes them", () => {
-  const body = (code: string, message = "Server message.") => JSON.stringify({ error: { code, message } })
-  for (const code of [
-    "MODEL_PLAN_REQUIRED",
-    "MODEL_PLAN_PAYMENT_REQUIRED",
-    "MODEL_PLAN_EXHAUSTED",
-    "MODEL_TOPUP_EXHAUSTED",
-  ])
-    expect(ModelPlans.gatewayFailure(402, body(code))).toEqual({
+test("gateway answers map by code to their kind, the stored action and whether they are retried", () => {
+  const body = (code: string, extra: Record<string, unknown> = {}) =>
+    JSON.stringify({ error: { code, message: "Server message.", ...extra } })
+  const table: [number, string, ModelPlanStatus.Kind, ModelPlanStatus.Action | undefined, boolean][] = [
+    [429, "RATE_LIMITED", "busy", undefined, true],
+    [429, "MODEL_PLAN_BUSY", "busy", undefined, true],
+    [503, "MODEL_PLAN_RENEWING", "busy", undefined, true],
+    [429, "MODEL_PLAN_CONCURRENCY", "wait", undefined, true],
+    [402, "MODEL_PLAN_CAPACITY", "capacity", undefined, true],
+    [401, "CODIUM_SIGN_IN_REQUIRED", "sign-in", "sign-in", false],
+    [401, "MODEL_PLAN_RUN_EXPIRED", "run", "unavailable", false],
+    [429, "MODEL_PLAN_RUN_LIMIT", "run", "unavailable", false],
+    [429, "MODEL_PLAN_BRAIN_SHARE", "run", "unavailable", false],
+    [429, "MODEL_PLAN_DAILY_LIMIT", "daily", "unavailable", false],
+    [402, "MODEL_PLAN_REQUIRED", "credits", "credits", false],
+    [402, "MODEL_PLAN_PAYMENT_REQUIRED", "credits", "credits", false],
+    [402, "MODEL_PLAN_EXHAUSTED", "credits", "credits", false],
+    [403, "MODEL_PLAN_UPGRADE_REQUIRED", "upgrade", "credits", false],
+    [403, "CODIUM_PERK_REQUIRED", "upgrade", "credits", false],
+    [403, "MODEL_PLAN_BLOCKED", "contact", "unavailable", false],
+    [409, "MODEL_PLAN_EXISTS", "plan", "credits", false],
+    [409, "MODEL_PLAN_CHANGE_UNAVAILABLE", "plan", "credits", false],
+    [409, "HOSTED_SESSION_PAUSED", "wait", "unavailable", false],
+    [426, "CODIUM_UPDATE_REQUIRED", "update", "unavailable", false],
+    [503, "MODEL_PLANS_DISABLED", "unavailable", "unavailable", false],
+    [503, "CODIUM_SALES_PAUSED", "unavailable", "unavailable", false],
+    [503, "MODEL_PLANS_CONFIGURATION", "unavailable", "unavailable", false],
+    [503, "MODEL_PLAN_POOL_UNAVAILABLE", "unavailable", "unavailable", false],
+    [503, "MODEL_PLAN_MODEL_UNAVAILABLE", "unavailable", "unavailable", false],
+    [409, "MODEL_PLAN_ACCOUNT_CLOSING", "unavailable", "unavailable", false],
+    [400, "MODEL_PLAN_MODEL", "unavailable", "unavailable", false],
+    [400, "MODEL_PLAN_ADDONS", "unavailable", "unavailable", false],
+    [400, "CODIUM_ESTIMATE_KIND", "unavailable", "unavailable", false],
+  ]
+  for (const [status, code, kind, action, retry] of table) {
+    const answer = ModelPlans.gatewayFailure(status, body(code))
+    expect({ code, kind: answer?.kind, action: answer?.action, retry: answer?.retry }).toEqual({
       code,
-      kind: "credits",
-      message: `Server message. Buy credits at ${ModelPlans.PURCHASE_URL}`,
+      kind,
+      action,
+      retry,
     })
-  // The provider refusing for want of credit: Vector's capacity, or the account key's own limit.
-  expect(ModelPlans.gatewayFailure(402, body("MODEL_PLAN_CAPACITY"))).toMatchObject({ kind: "capacity" })
+    // The code decides, so an answer that reaches the client under another status reads the same.
+    expect(ModelPlans.gatewayFailure(400, body(code))?.kind).toBe(kind)
+    expect(ModelPlanStatus.failureKind(code)).toBe(kind)
+  }
+  // A daily, run or Brain limit never offers a purchase: Codium sells no top-ups.
+  for (const code of ["MODEL_PLAN_DAILY_LIMIT", "MODEL_PLAN_RUN_LIMIT", "MODEL_PLAN_BRAIN_SHARE"])
+    expect(ModelPlans.gatewayFailure(429, body(code))?.message).not.toContain("See plans")
+  expect(ModelPlans.gatewayFailure(402, body("MODEL_PLAN_EXHAUSTED"))?.message).toBe(
+    `Server message. See plans at ${ModelPlans.PURCHASE_URL}`,
+  )
+  expect(ModelPlans.gatewayFailure(402, body("MODEL_PLAN_PAYMENT_REQUIRED", { action: "update-card" }))?.message).toBe(
+    `Server message. Update your card at ${ModelPlanStatus.MANAGE_URL}`,
+  )
+  expect(ModelPlans.gatewayFailure(503, body("MODEL_PLAN_POOL_UNAVAILABLE"))?.message).toBe(
+    "Vector Codium could not verify your usage right now. Choose another model.",
+  )
+  // Removed and internal codes are not classified; neither is a transient gateway failure, so the usual 5xx retry
+  // still applies to it.
+  for (const code of ["MODEL_TOPUP_EXHAUSTED", "MODEL_PLAN_CANCELLED", "SOMETHING_NEW", "MODEL_PLAN_UPSTREAM"])
+    expect(ModelPlans.gatewayFailure(503, body(code))).toBeUndefined()
+  for (const code of ["MODEL_PLAN_STREAM", "MODEL_PLAN_UNAVAILABLE", "MODEL_PLAN_KEY_INVALID"])
+    expect(ModelPlans.gatewayFailure(503, body(code))).toBeUndefined()
   expect(ModelPlans.gatewayFailure(402, "not json")).toBeUndefined()
-  expect(ModelPlans.gatewayFailure(402, body("SOMETHING_NEW"))).toBeUndefined()
-  expect(ModelPlans.gatewayFailure(401, body("CLI_TOKEN_INVALID"))).toMatchObject({ kind: "sign-in" })
-  expect(ModelPlans.gatewayFailure(503, body("MODEL_PLANS_DISABLED"))).toMatchObject({ kind: "unavailable" })
-  expect(ModelPlans.gatewayFailure(503, body("MODEL_PLANS_CONFIGURATION"))).toMatchObject({ kind: "unavailable" })
-  expect(ModelPlans.gatewayFailure(409, body("MODEL_PLAN_ACCOUNT_CLOSING"))).toMatchObject({ kind: "unavailable" })
-  expect(ModelPlans.gatewayFailure(400, body("MODEL_PLAN_MODEL"))).toMatchObject({ kind: "unavailable" })
-  // Busy and upstream failures are left to the normal retry policy.
-  expect(ModelPlans.gatewayFailure(429, body("MODEL_PLAN_BUSY"))).toBeUndefined()
-  expect(ModelPlans.gatewayFailure(503, body("MODEL_PLAN_UPSTREAM"))).toBeUndefined()
+  expect(ModelPlans.gatewayFailure(401, body("CLI_TOKEN_INVALID"))).toMatchObject({ kind: "sign-in", retry: false })
+  // An answer given after the gateway sent the request to the provider is committed in full, so it is final whatever
+  // its code, including the busy and capacity codes that are retried when refused before dispatch.
+  for (const [status, code] of [
+    [429, "MODEL_PLAN_BUSY"],
+    [402, "MODEL_PLAN_CAPACITY"],
+    [503, "MODEL_PLAN_UPSTREAM"],
+    [503, "MODEL_PLAN_UNAVAILABLE"],
+  ] as const)
+    expect(ModelPlans.gatewayFailure(status, body(code, { dispatched: true }))).toEqual({
+      code,
+      kind: "unavailable",
+      action: "unavailable",
+      message:
+        "The model provider could not finish this request. It counts toward your Codium usage, so Vector did not send it again. Try again shortly. Choose another model.",
+      retry: false,
+    })
   expect(ModelPlans.contextFailure(body("MODEL_PLAN_CONTEXT"))).toBe(true)
+})
+
+test("the SDK transport passes only a known purpose and turns final answers into client errors the SDK never retries", async () => {
+  const purposes: (string | null)[] = []
+  const answers: Response[] = []
+  const transport = ModelPlans.createFetch({
+    modelID: codiumModel.id,
+    credential: async () => token,
+    catalog: async () => active,
+    request: async (_url, init) => {
+      purposes.push(new Headers(init.headers).get("x-vector-purpose"))
+      return answers.shift()!
+    },
+  })
+  const send = (purpose?: string) =>
+    transport("https://vectordev.ai/api/model-plans/chat", {
+      headers: purpose ? { "X-Vector-Purpose": purpose } : {},
+      body: JSON.stringify({ messages: [{ role: "user", content: "hello" }] }),
+    })
+  const answer = (status: number, code: string, headers: Record<string, string> = {}) =>
+    Response.json({ error: { code, message: "Server message." } }, { status, headers })
+  for (const [status, code] of [
+    [429, "MODEL_PLAN_DAILY_LIMIT"],
+    [429, "MODEL_PLAN_RUN_LIMIT"],
+    [503, "MODEL_PLAN_POOL_UNAVAILABLE"],
+    [503, "MODEL_PLANS_CONFIGURATION"],
+    [409, "MODEL_PLAN_ACCOUNT_CLOSING"],
+  ] as const) {
+    answers.push(answer(status, code))
+    const response = await send("title")
+    expect(response.status).toBe(400)
+    expect(ModelPlans.gatewayFailure(response.status, await response.text())).toMatchObject({ code, retry: false })
+  }
+  // Temporary answers keep their status and retry-after, so the SDK and the session wait and try again.
+  answers.push(answer(503, "MODEL_PLAN_RENEWING", { "retry-after": "30" }))
+  const renewing = await send("brain")
+  expect(renewing.status).toBe(503)
+  expect(renewing.headers.get("retry-after")).toBe("30")
+  answers.push(answer(429, "MODEL_PLAN_CONCURRENCY", { "retry-after-ms": "2000" }))
+  expect((await send("judge")).status).toBe(429)
+  // A transient gateway failure is not a Codium answer and keeps its 503.
+  answers.push(answer(503, "MODEL_PLAN_UPSTREAM"))
+  expect((await send("cloud-agents")).status).toBe(503)
+  // The same failures after dispatch are committed in full, so the SDK must not resend them.
+  for (const [status, code] of [
+    [503, "MODEL_PLAN_UPSTREAM"],
+    [429, "MODEL_PLAN_BUSY"],
+  ] as const) {
+    answers.push(Response.json({ error: { code, message: "Server message.", dispatched: true } }, { status }))
+    const response = await send("title")
+    expect(response.status).toBe(400)
+    expect(ModelPlans.gatewayFailure(response.status, await response.text())).toMatchObject({ code, retry: false })
+  }
+  answers.push(new Response("data: [DONE]\n\n", { headers: { "content-type": "text/event-stream" } }))
+  expect((await send()).status).toBe(200)
+  // Desktop and CLI callers cannot claim a run token's service purpose; unknown values read as chat.
+  expect(purposes).toEqual([
+    "title",
+    "title",
+    "title",
+    "title",
+    "title",
+    "brain",
+    "judge",
+    "chat",
+    "title",
+    "title",
+    "chat",
+  ])
+})
+
+test("current clients decode the v2 catalog leniently and keep Codium Auto only when its models are usable", async () => {
+  const decode = (body: unknown) =>
+    ModelPlans.createClient({ request: async () => Response.json(body) }).catalog(token, { force: true })
+  const deep = { id: "deepseek/flash", name: "DeepSeek", contextLength: 1_000_000, maxOutputTokens: 8192 }
+  const luna = { id: "vendor/luna", name: "Luna", contextLength: 256_000, maxOutputTokens: 8192 }
+  const sol = { id: "vendor/sol", name: "Sol", contextLength: 128_000, maxOutputTokens: 8192 }
+  const auto = {
+    id: ModelPlans.AUTO_ID,
+    name: "Codium Auto",
+    contextLength: 128_000,
+    maxOutputTokens: 8192,
+    auto: { floor: luna.id, default: deep.id, ceiling: sol.id },
+  }
+  const decoded = await decode({
+    enabled: true,
+    plan: null,
+    limits: { inFlight: 2 },
+    models: [
+      { ...deep, lab: "deepseek", weight: 1, role: "default" },
+      auto,
+      { ...luna, lab: "a-new-lab", role: "a-new-role", weight: -1, manualOnly: "yes" },
+      { ...sol, locked: { plan: "vector-50", name: "Pro" }, preview: { until: "soon" } },
+    ],
+    judges: { [deep.id]: luna.id, [luna.id]: "vendor/unlisted" },
+    review: { triage: deep.id, confirm: "vendor/unlisted" },
+  })
+  // An unknown lab or role and malformed extras drop only those fields; plan null means Plus's locks and limits.
+  expect(decoded.models.find((model) => model.id === luna.id)).toEqual(luna)
+  expect(decoded).toMatchObject({ plan: null, limits: { inFlight: 2 }, judges: { [deep.id]: luna.id } })
+  expect(decoded.review).toEqual({ triage: deep.id })
+  // Auto's ceiling is locked, so Auto is left out rather than offered with a model the plan cannot use.
+  expect(decoded.models.map((model) => model.id)).toEqual([deep.id, luna.id, sol.id])
+  expect(decoded.models.find((model) => model.id === sol.id)?.locked).toEqual({ plan: "vector-50", name: "Pro" })
+  const unlocked = await decode({ enabled: true, models: [deep, auto, luna, { ...sol, manualOnly: true }] })
+  expect(unlocked.models.map((model) => model.id)).toEqual([deep.id, luna.id, sol.id])
+  const offered = await decode({ enabled: true, models: [deep, auto, luna, sol] })
+  expect(offered.models.find((model) => model.id === ModelPlans.AUTO_ID)?.auto).toEqual(auto.auto)
+  // Only Auto carries roles; any other entry's map is dropped.
+  const extra = await decode({ enabled: true, models: [{ ...deep, auto: auto.auto }] })
+  expect(extra.models[0]).toEqual(deep)
+  // What a picker is given of each entry: lab, role, locks and Auto's models, never the hidden weight.
+  expect(ModelPlans.listing(decoded.models[0]!)).toEqual({ lab: "deepseek", role: "default" })
+  expect(ModelPlans.listing(decoded.models.find((model) => model.id === sol.id)!)).toEqual({
+    locked: { plan: "vector-50", name: "Pro" },
+  })
+  expect(ModelPlans.listing(offered.models.find((model) => model.id === ModelPlans.AUTO_ID)!)).toEqual({
+    auto: auto.auto,
+  })
+  // The four fields older releases decode stay strict: one malformed entry still rejects the answer.
+  expect(await decode({ enabled: true, models: [{ ...deep, contextLength: "big" }] })).toEqual(off)
+})
+
+test("Codium Auto itself is never sent to the gateway", async () => {
+  const requests: string[] = []
+  const response = await ModelPlans.createFetch({
+    modelID: ModelPlans.AUTO_ID,
+    credential: async () => token,
+    catalog: async () => codiumCatalogV2,
+    request: async (url) => {
+      requests.push(url)
+      return new Response()
+    },
+  })("https://vectordev.ai/api/model-plans/chat", { body: JSON.stringify({ messages: [{ role: "user" }] }) })
+  expect(ModelPlans.gatewayFailure(response.status, await response.text())).toMatchObject({
+    code: "CODIUM_AUTO",
+    action: "unavailable",
+    retry: false,
+  })
+  expect(requests).toEqual([])
+})
+
+test("a native Codium turn on Codium Auto goes to Auto's default model, and Auto is refused without one", async () => {
+  const auto = ModelV2.Info.make({ ...info, id: ModelV2.ID.make(ModelPlans.AUTO_ID) })
+  const before = gateway.seen.length
+  await stream(modelPlanRoute(auto, service(codiumCatalogV2), credentials()))
+  expect(gateway.seen.slice(before)).toMatchObject([{ path: "/api/model-plans/chat", body: { model: codiumModel.id } }])
+  // An older gateway's catalog lists no Auto: nothing is sent and the turn says Auto could not pick a model.
+  const start = gateway.seen.length
+  const result = await stream(modelPlanRoute(auto, service(), credentials()))
+  if (result._tag !== "Failure" || !(result.failure instanceof LLMError)) throw new Error("Expected Auto to fail")
+  expect(codiumError(result.failure)).toMatchObject({ type: "codium", action: "unavailable", code: "CODIUM_AUTO" })
+  expect(gateway.seen.length).toBe(start)
+})
+
+test("a native Codium turn sends the client headers and fails once on a final answer, retrying only temporary ones", async () => {
+  const before = gateway.seen.length
+  await stream(modelPlanRoute(info, service(), credentials()))
+  expect(gateway.seen.slice(before)).toMatchObject([
+    { path: "/api/model-plans/chat", client: InstallationVersion, catalog: "2", purpose: "chat" },
+  ])
+  for (const [status, code] of [
+    [429, "MODEL_PLAN_DAILY_LIMIT"],
+    [503, "MODEL_PLAN_POOL_UNAVAILABLE"],
+    [401, "MODEL_PLAN_RUN_EXPIRED"],
+    [426, "CODIUM_UPDATE_REQUIRED"],
+  ] as const) {
+    gateway.state.answer = { status, code }
+    const start = gateway.seen.length
+    const result = await stream(modelPlanRoute(info, service(), credentials()))
+    if (result._tag !== "Failure" || !(result.failure instanceof LLMError)) throw new Error(`Expected ${code} to fail`)
+    expect(result.failure.reason.retryable).toBe(false)
+    expect(result.failure.reason).toMatchObject({ providerMetadata: { codium: { code } } })
+    // The stored error keeps the code, so a surface can tell a daily limit from a plan that cannot run.
+    expect(codiumError(result.failure)).toMatchObject({ type: "codium", code })
+    expect(gateway.seen.length - start).toBe(1)
+  }
+  for (const code of ["MODEL_PLAN_RENEWING", "MODEL_PLAN_CONCURRENCY"]) {
+    gateway.state.answer = {
+      status: code === "MODEL_PLAN_RENEWING" ? 503 : 429,
+      code,
+      headers: { "retry-after-ms": "1" },
+    }
+    const start = gateway.seen.length
+    const result = await stream(modelPlanRoute(info, service(), credentials()))
+    if (result._tag !== "Failure" || !(result.failure instanceof LLMError)) throw new Error(`Expected ${code} to fail`)
+    expect(result.failure.reason._tag).toBe("RateLimit")
+    expect(codiumError(result.failure)).toBeUndefined()
+    // The first answer and the executor's two retries.
+    expect(gateway.seen.length - start).toBe(3)
+  }
+  // A transient gateway failure is retried as any provider's 5xx is.
+  gateway.state.answer = { status: 503, code: "MODEL_PLAN_UPSTREAM" }
+  const start = gateway.seen.length
+  await stream(modelPlanRoute(info, service(), credentials()))
+  expect(gateway.seen.length - start).toBe(3)
+  // After dispatch the same answers are committed in full, so the executor sends each once.
+  for (const [status, code] of [
+    [503, "MODEL_PLAN_UPSTREAM"],
+    [429, "MODEL_PLAN_BUSY"],
+    [402, "MODEL_PLAN_CAPACITY"],
+  ] as const) {
+    gateway.state.answer = { status, code, dispatched: true }
+    const first = gateway.seen.length
+    const result = await stream(modelPlanRoute(info, service(), credentials()))
+    if (result._tag !== "Failure" || !(result.failure instanceof LLMError)) throw new Error(`Expected ${code} to fail`)
+    expect(result.failure.reason.retryable).toBe(false)
+    expect(codiumError(result.failure)).toMatchObject({ type: "codium", action: "unavailable", code })
+    expect(gateway.seen.length - first).toBe(1)
+  }
+  gateway.state.answer = undefined
 })
 
 test("status reads the plan and the share of each balance left, never an amount, and flags a low balance", async () => {
   const before = gateway.seen.length
   const status = await ModelPlanStatus.fetchStatus(token, gateway.forward)
   expect(gateway.seen.slice(before)).toEqual([
-    { path: "/api/model-plans/status", authorization: `Bearer ${token}`, body: undefined },
+    {
+      path: "/api/model-plans/status",
+      authorization: `Bearer ${token}`,
+      client: InstallationVersion,
+      catalog: "2",
+      purpose: null,
+      body: undefined,
+    },
   ])
   expect(status).toEqual({
     signedIn: true,
     enabled: true,
     access: true,
     customer: true,
-    plan: { id: "vector-50", name: "Pro", left: 0.06, renewsAt: 1_790_000_000_000, cancelAtPeriodEnd: false },
-    purchased: { bought: true, state: "low" },
+    plan: {
+      id: "vector-50",
+      name: "Pro",
+      left: 0.06,
+      renewsAt: 1_790_000_000_000,
+      cancelAtPeriodEnd: false,
+      state: "active",
+      today: { used: 0.42, resetsAt: 1_789_000_000_000, reached: false },
+    },
+    listed: [],
+    purchased: { bought: false },
     empty: false,
     low: true,
   })
   expect(ModelPlanStatus.describe(status)).toEqual([
-    `Plan: Pro, 6% of this month's credits left, renews ${ModelPlanStatus.formatDate(1_790_000_000_000)}`,
-    "Purchased credits: running low",
-    "You are running low on Codium credits.",
+    `Plan: Pro, 6% left this month, renews ${ModelPlanStatus.formatDate(1_790_000_000_000)}`,
+    "Today: 42% of today's limit used",
+    "Less than 10% of this month's Codium usage is left.",
+    `Change plan: ${ModelPlanStatus.MANAGE_URL}`,
   ])
+  // No top-ups: nothing offers to buy more.
+  expect(ModelPlanStatus.describe(status).join(" ")).not.toMatch(/buy|credits/i)
   // No balance amount reaches the app or the CLI: with the purchase price it would reveal what a purchase buys.
   expect(JSON.stringify(status)).not.toMatch(/"(credits|remaining)"/)
   expect(JSON.stringify(status)).not.toContain(token)
@@ -474,8 +885,8 @@ test("status without credits, signed out, expired or unreachable says what to do
   })
   expect(ModelPlanStatus.describe(empty)).toEqual([
     "Plan: Free",
-    "Purchased credits: none",
-    "You have no Codium credits available. Buy credits to use Codium models.",
+    "Choose a Codium plan to use Codium models.",
+    `See plans: ${ModelPlanStatus.PURCHASE_URL}`,
   ])
   gateway.state.status = {
     enabled: false,
@@ -485,9 +896,11 @@ test("status without credits, signed out, expired or unreachable says what to do
     empty: true,
     low: false,
   }
-  expect(ModelPlanStatus.describe(await ModelPlanStatus.fetchStatus(token, gateway.forward)).at(-1)).toBe(
-    "Vector Codium is not available yet.",
-  )
+  // Codium off is said first, and no plan page is offered while it is.
+  expect(ModelPlanStatus.describe(await ModelPlanStatus.fetchStatus(token, gateway.forward))).toEqual([
+    "Vector Codium is not available right now.",
+    "Plan: Free",
+  ])
   gateway.state.status = saved
 
   const before = gateway.seen.length
@@ -499,7 +912,7 @@ test("status without credits, signed out, expired or unreachable says what to do
   })
   expect(await ModelPlanStatus.fetchStatus(token, () => Promise.reject(new Error("offline")))).toMatchObject({
     signedIn: true,
-    error: "Vector could not load your Codium balance. Try again shortly.",
+    error: "Vector could not load your Codium usage. Try again shortly.",
   })
 })
 
@@ -518,14 +931,14 @@ test("a subscriber whose monthly credits are spent is told so, even though the p
   const renews = ModelPlanStatus.formatDate(1_790_000_000_000)
   expect(ModelPlanStatus.notice(status)).toEqual({
     kind: "empty",
-    text: `Too few of your monthly Codium credits are left for a reply. They renew on ${renews}; buy credits to keep using Codium models before then.`,
+    text: `This month's Codium usage is used up. It renews on ${renews}; change your plan to keep using Codium models before then.`,
   })
-  expect(ModelPlanStatus.describe(status).at(-1)).toBe(ModelPlanStatus.notice(status)?.text)
+  expect(ModelPlanStatus.describe(status).at(-2)).toBe(ModelPlanStatus.notice(status)?.text)
   expect(
     ModelPlanStatus.notice(ModelPlanStatus.fromRemote({ ...spent, plan: { ...spent.plan, cancelAtPeriodEnd: true } }))
       ?.text,
   ).toBe(
-    `Too few Codium credits are left for a reply, and your plan ends on ${renews}. Buy credits to keep using Codium models.`,
+    `This month's Codium usage is used up, and your plan ends on ${renews}. See plans to keep using Codium models.`,
   )
   // Purchased credits too low for a reply, with no plan.
   expect(
@@ -534,7 +947,7 @@ test("a subscriber whose monthly credits are spent is told so, even though the p
     ),
   ).toEqual({
     kind: "empty",
-    text: "Too few Codium credits are left for a reply. Buy credits to keep using Codium models.",
+    text: "Too little Codium usage is left for a reply. See plans to continue.",
   })
   expect(ModelPlanStatus.fromRemote({ ...spent, purchased: { bought: false, state: "available" } }).purchased).toEqual({
     bought: false,
@@ -588,23 +1001,20 @@ test("the offers Vector shows carry names and prices only, and nothing is availa
     ],
   })
   const offers = await ModelPlanStatus.fetchOffers(answer(config(true)))
-  // A plan or top-up Vector knows shows its current name; one it does not know keeps the name the site gave it.
+  // A plan Vector knows shows its current name, whatever name the site gave it.
+  // Codium sells monthly plans only: an old site's top-ups are not read, so nothing can offer one.
   expect(offers).toEqual({
     enabled: true,
     plans: [
       { id: "vector-10", name: "Plus", price: 10, available: true },
       { id: "vector-50", name: "Pro", price: 50, available: true },
     ],
-    topups: [
-      { id: "codium-topup-10", name: "$10 credit top-up", price: 10, available: true },
-      { id: "vector-team", name: "Team", price: 30, available: true },
-    ],
   })
-  expect(JSON.stringify(offers)).not.toMatch(/multiple|tasks|5\.2|credits/)
+  expect(JSON.stringify(offers)).not.toMatch(/multiple|tasks|5\.2|credits|topup|Team/)
   // While Codium is off, an item the server marks available still cannot be bought.
   const off = await ModelPlanStatus.fetchOffers(answer(config(false)))
   expect(off?.enabled).toBe(false)
-  expect([...off!.plans, ...off!.topups].every((offer) => !offer.available)).toBe(true)
+  expect(off!.plans.every((offer) => !offer.available)).toBe(true)
   expect(await ModelPlanStatus.fetchOffers(answer({ error: "unavailable" }, 503))).toBeUndefined()
   expect(await ModelPlanStatus.fetchOffers(answer({ enabled: true }))).toBeUndefined()
   expect(await ModelPlanStatus.fetchOffers(() => Promise.reject(new Error("offline")))).toBeUndefined()
@@ -635,31 +1045,21 @@ test("status keeps no amount, even from a server that still sends one", async ()
   const saved = gateway.state.status
   gateway.state.status = { ...saved, credits: 25, remaining: 1.5, wallet: { credits: 10, used: 9.5, remaining: 0.5 } }
   const status = await ModelPlanStatus.fetchStatus(token, gateway.forward)
-  expect(JSON.stringify(status)).not.toMatch(/credits|remaining|used|wallet|25|1\.5|9\.5/)
+  // Only shares remain (today's `used` is a share of the daily limit); none of the amounts or their keys.
+  expect(JSON.stringify(status)).not.toMatch(/credits|remaining|wallet|25|1\.5|9\.5/)
   // An answer that is not shares, such as an old server's amounts, is refused rather than shown as a share.
   gateway.state.status = { ...saved, plan: { ...(saved.plan as object), left: 1.5 } }
   expect(await ModelPlanStatus.fetchStatus(token, gateway.forward)).toMatchObject({
-    error: "Vector could not load your Codium balance. Try again shortly.",
+    error: "Vector could not load your Codium usage. Try again shortly.",
   })
   gateway.state.status = saved
 })
 
-test("purchased credits read as a state, not as a share of every top-up ever bought", () => {
-  // A long-time buyer's share of every top-up ever bought would read "under 1% left" right after a fresh purchase.
+test("purchased credits are decoded for old answers but never shown", () => {
   const buyer = (purchased: { bought: boolean; state?: "available" | "low" | "used" }) =>
     ModelPlanStatus.fromRemote({ enabled: true, access: true, purchased, empty: false, low: false })
-  expect(
-    [
-      buyer({ bought: true, state: "available" }),
-      buyer({ bought: true, state: "low" }),
-      buyer({ bought: true, state: "used" }),
-      buyer({ bought: true }),
-      buyer({ bought: false }),
-    ].map((status) => ModelPlanStatus.formatPurchased(status.purchased)),
-  ).toEqual(["Available", "Running low", "Used up", "Balance unavailable", "None"])
-  expect(ModelPlanStatus.describe(buyer({ bought: true, state: "available" }))).toContain(
-    "Purchased credits: available",
-  )
+  // Codium sells no top-ups any more, so the text surfaces leave purchased credits out.
+  expect(ModelPlanStatus.describe(buyer({ bought: true, state: "available" })).join(" ")).not.toMatch(/purchased/i)
   // A state is kept only for credits that were bought.
   expect(buyer({ bought: false, state: "available" }).purchased).toEqual({ bought: false })
 })
@@ -676,6 +1076,94 @@ test("the app recognises a failed Codium turn from the engine's error and from a
     undefined,
   )
   expect(ModelPlanStatus.failureAction({ type: "codium", action: "capacity", message: "x" })).toBeUndefined()
+})
+
+test("the app reads a failed turn's code and splits off the step the engine's message ends with", () => {
+  expect(
+    ModelPlanStatus.failureCode({
+      name: "APIError",
+      data: { message: "x", metadata: { codium: "credits", kind: "credits", code: "MODEL_PLAN_EXHAUSTED" } },
+    }),
+  ).toBe("MODEL_PLAN_EXHAUSTED")
+  expect(ModelPlanStatus.failureCode({ type: "codium", action: "credits", code: "MODEL_PLAN_REQUIRED" })).toBe(
+    "MODEL_PLAN_REQUIRED",
+  )
+  expect(ModelPlanStatus.failureCode({ name: "APIError", data: { metadata: { codium: "credits" } } })).toBeUndefined()
+  expect(ModelPlanStatus.failureCode("MODEL_PLAN_EXHAUSTED")).toBeUndefined()
+
+  const body = (code: string, action?: string) =>
+    JSON.stringify({ error: { code, message: "Server message.", ...(action ? { action } : {}) } })
+  const parts = (status: number, code: string, action?: string) =>
+    ModelPlanStatus.failureParts(ModelPlanStatus.gatewayFailure(status, body(code, action))!.message)
+  // Every sentence the engine ends a final answer with comes back as its kind and payment step, and only the server's
+  // own message is left.
+  expect(parts(402, "MODEL_PLAN_REQUIRED")).toEqual({ text: "Server message.", kind: "credits" })
+  expect(parts(402, "MODEL_PLAN_EXHAUSTED")).toEqual({ text: "Server message.", kind: "credits" })
+  expect(parts(402, "MODEL_PLAN_PAYMENT_REQUIRED", "update-card")).toEqual({
+    text: "Server message.",
+    kind: "credits",
+    payment: "update-card",
+  })
+  expect(parts(402, "MODEL_PLAN_PAYMENT_REQUIRED", "confirm-payment")).toEqual({
+    text: "Server message.",
+    kind: "credits",
+    payment: "confirm-payment",
+  })
+  expect(parts(403, "MODEL_PLAN_UPGRADE_REQUIRED")).toEqual({ text: "Server message.", kind: "upgrade" })
+  expect(parts(409, "MODEL_PLAN_EXISTS")).toEqual({ text: "Server message.", kind: "plan" })
+  // A daily, run or Brain limit, or a sign-in, ends with no purchase step, so nothing is split off.
+  for (const code of ["MODEL_PLAN_DAILY_LIMIT", "MODEL_PLAN_RUN_LIMIT", "MODEL_PLAN_BRAIN_SHARE"])
+    expect(parts(429, code)).toEqual({ text: "Server message." })
+  expect(parts(401, "CODIUM_SIGN_IN_REQUIRED").kind).toBeUndefined()
+  // Turns stored before Codium stopped selling top-ups end "Buy credits at"; the link is a credit step too.
+  expect(ModelPlanStatus.failureParts(`Out of credits. Buy credits at ${ModelPlanStatus.PURCHASE_URL}`)).toEqual({
+    text: "Out of credits.",
+    kind: "credits",
+  })
+  // Only an ending counts: a URL inside the text is the server's.
+  const inside = `See plans at ${ModelPlanStatus.PURCHASE_URL} first.`
+  expect(ModelPlanStatus.failureParts(inside)).toEqual({ text: inside })
+})
+
+test("a Codium entry the plan does not include is badged, and only usable entries are ever picked automatically", () => {
+  const locked = { plan: "vector-50", name: "Pro" }
+  expect(ModelPlanStatus.listingBadge({ locked })).toEqual({
+    label: "Codium · Pro",
+    title: "Included in Pro and above",
+  })
+  expect(
+    ModelPlanStatus.listingBadge({ locked: { plan: "vector-200", name: "Ultra", previewUntil: 1_900_000_000_000 } }),
+  ).toEqual({ label: "Preview · Ultra", title: "Only in Ultra during its preview" })
+  expect(ModelPlanStatus.listingBadge({ preview: { until: 1_900_000_000_000 } })?.label).toBe("Preview")
+  for (const plain of [undefined, {}, { manualOnly: true }, { auto: { floor: "a", default: "b", ceiling: "c" } }])
+    expect(ModelPlanStatus.listingBadge(plain)).toBeUndefined()
+  // No badge names credits, a price or an amount.
+  expect(JSON.stringify(ModelPlanStatus.listingBadge({ locked }))).not.toMatch(/credit|\$|\d/)
+
+  const entry = (codium?: ModelPlanStatus.Listing, id = "vendor/model") => ({ id, codium })
+  expect(ModelPlanStatus.automatic(entry())).toBe(true)
+  expect(ModelPlanStatus.automatic(entry({ lab: "deepseek", role: "default" }))).toBe(true)
+  expect(ModelPlanStatus.automatic(entry({ locked }))).toBe(false)
+  expect(ModelPlanStatus.automatic(entry({ manualOnly: true }))).toBe(false)
+  expect(ModelPlanStatus.automatic(entry({ auto: { floor: "a", default: "b", ceiling: "c" } }))).toBe(false)
+  // Auto by its id alone, as an older listing without metadata names it.
+  expect(ModelPlanStatus.automatic(entry(undefined, ModelPlanStatus.AUTO_ID))).toBe(false)
+  expect(ModelPlanStatus.isAuto(entry(undefined, ModelPlanStatus.AUTO_ID))).toBe(true)
+  expect(ModelPlanStatus.isLocked(entry({ locked }))).toBe(true)
+  expect(ModelPlanStatus.isLocked(entry({ manualOnly: true }))).toBe(false)
+})
+
+test("a session continues on the model its last message selected, else on the one it ran with its variant", () => {
+  const ran = { providerID: "vector-plan", modelID: "vendor/default", variant: "high" }
+  expect(ModelPlanStatus.sessionModel({ model: ran })).toEqual(ran)
+  // Codium Auto picks again for the next message, so neither the model it picked nor that model's variant is kept.
+  expect(
+    ModelPlanStatus.sessionModel({
+      model: ran,
+      selected: { providerID: "vector-plan", modelID: ModelPlanStatus.AUTO_ID },
+    }),
+  ).toEqual({ providerID: "vector-plan", modelID: ModelPlanStatus.AUTO_ID })
+  expect(ModelPlanStatus.sessionModel({})).toBeUndefined()
 })
 
 test("automatic choices try connected providers, then shared free models, and never Codium", () => {

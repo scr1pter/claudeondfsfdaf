@@ -803,6 +803,10 @@ describe("learning in the brain", () => {
       learning: true,
       facets: { format: true, workflow: true, vocabulary: true, tooling: true, sources: true, style: true },
       modelLearner: "local-only",
+      skills: "review",
+      skillDrafter: "local-only",
+      workflow: "apply",
+      workflowExplore: false,
     })
     expect(result.after.facets.format).toBe(false)
     expect(result.read).toEqual(result.after)

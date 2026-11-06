@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { parseModel, recentModels } from "../../src/context/local"
+import { parseModel, recentModels, toggledFavorites } from "../../src/context/local"
 
 test("parses model IDs containing slashes", () => {
   expect(parseModel("provider/family/model")).toEqual({
@@ -43,4 +43,15 @@ test("a saved model from a retired provider falls back without a notice", async 
   const live = parseModel("anthropic/claude-sonnet-4")
   const valid = (model: { providerID: string }) => model.providerID === "anthropic"
   expect(unavailableModel([retired, live], valid, (providerID) => providerID === "anthropic")).toBeUndefined()
+})
+
+test("a favorite is removed even when it is no longer valid; only adding one asks", () => {
+  // Locked after a downgrade: no longer valid, but still under Favorites with its badge.
+  const locked = parseModel("vector-plan/anthropic/claude-opus-5.5")
+  const other = parseModel("anthropic/claude-sonnet-4")
+  const valid = (model: { providerID: string }) => model.providerID !== "vector-plan"
+  expect(toggledFavorites(locked, [locked, other], valid)).toEqual([other])
+  expect(toggledFavorites(locked, [other], valid)).toBeUndefined()
+  expect(toggledFavorites(other, [locked], valid)).toEqual([other, locked])
+  expect(toggledFavorites(other, [locked, other], valid)).toEqual([locked])
 })

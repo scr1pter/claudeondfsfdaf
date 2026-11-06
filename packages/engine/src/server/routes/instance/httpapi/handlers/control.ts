@@ -5,11 +5,15 @@ import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { RootHttpApi } from "../api"
 import { LogInput } from "../groups/control"
 import { ProviderV2 } from "@vectordevai/core/provider"
+import { FreeModels } from "@vectordevai/core/free-models"
+import { ModelPlans } from "@vectordevai/core/model-plans"
 import { ConflictError } from "../errors"
 
 export const controlHandlers = HttpApiBuilder.group(RootHttpApi, "control", (handlers) =>
   Effect.gen(function* () {
     const auth = yield* Auth.Service
+    const credentials = yield* FreeModels.CredentialsService
+    const plans = yield* ModelPlans.Service
 
     const authExists = Effect.fn("ControlHttpApi.authExists")(function* (ctx: {
       params: { providerID: ProviderV2.ID }
@@ -27,6 +31,12 @@ export const controlHandlers = HttpApiBuilder.group(RootHttpApi, "control", (han
         Effect.catchTag("AuthError", Effect.die),
         Effect.mapError((error) => new ConflictError({ message: error.message, resource: error.providerID })),
       )
+      // The Vector account's credential decides which Codium models are listed. Written at sign-in, on an account
+      // switch and by the desktop after a purchase, it reads them now rather than when the kept list lapses.
+      if (ctx.params.providerID === ProviderV2.ID.vector)
+        yield* ModelPlans.credentialWritten(yield* credentials.get("vector")).pipe(
+          Effect.provideService(ModelPlans.Service, plans),
+        )
       return true
     })
 

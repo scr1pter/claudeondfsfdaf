@@ -1,0 +1,108 @@
+{
+  "schemaVersion": 1,
+  "runId": 41260729498,
+  "jobId": 124713274950,
+  "instrumentationSha": "c7335646bed8b3ca6c95998e1f430a3d96222c78",
+  "artifactId": 13065630149,
+  "artifactBytes": 100530,
+  "artifactSha256": "bb84312cc8bca10c52e25b9430b6f2c2cc673ea0241a6657fd19af452d513a44",
+  "files": {
+    "bootstrap.json": {
+      "bytes": 1535,
+      "sha256": "0ee24b3bf19e47482b6c3b2d6d11f337fbaf7fd1db47dc3a9fc268d45a0491ea"
+    },
+    "catalog.json": {
+      "bytes": 696,
+      "sha256": "90f31e2d3eb57cc52c97b63f3353e179d5adc8456b43e12758ae517ef9d57b5c"
+    },
+    "engine.log": {
+      "bytes": 12876,
+      "sha256": "feaae02dc5d7788eff812ad72ec61c2f3315d999deb179f146fe1a803156a236"
+    },
+    "events-1.json": {
+      "bytes": 14038,
+      "sha256": "8dd0e75bd9f0d4390dad177ac7469b33317886ad5260a5d43d15170456f4949e"
+    },
+    "events-2.json": {
+      "bytes": 14667,
+      "sha256": "df462e4fbb85b5d753db425b872a9d540d413e686274e0c1cba9b279e1c2a070"
+    },
+    "extraction.log": {
+      "bytes": 14945,
+      "sha256": "9e98877e1931da7c9e5cff3bebc19d5f2708fc68a2159137b1c78fd60ca1f5a2"
+    },
+    "fake-provider.json": {
+      "bytes": 538,
+      "sha256": "c04b740fef437036a513023a5d38e67df4638597a5c98eb3df4a3faa37870b18"
+    },
+    "grant-1.json": {
+      "bytes": 972,
+      "sha256": "4f0c4940964bdf09fb400a18b153ca64e924d7f2aa6f25985dedba6012d35bba"
+    },
+    "grant-2.json": {
+      "bytes": 975,
+      "sha256": "74eb4788eabfba4f27da8c8d83e238a4a8437c7ee9dbc75ec71bf5114e86b462"
+    },
+    "grants.json": {
+      "bytes": 99,
+      "sha256": "d7d6c41993355a0bc27537a83d8116f945cb2930c7ce6caf11f51a2a724b99cb"
+    },
+    "linux.json": {
+      "bytes": 711,
+      "sha256": "bb84eeea5193b89d3576d64fee7721621752e33ebfbb607d5f807d2d1efe4f03"
+    },
+    "messages-1.json": {
+      "bytes": 2992,
+      "sha256": "fc974fe9f967423310ff9786111257b2f436b8db22552ba37bac4bcb52482088"
+    },
+    "messages-2.json": {
+      "bytes": 3665,
+      "sha256": "97f97bd7de31e6c1a3d445767e52f9f345831bf2b5d2237eed5317ca88601ba1"
+    },
+    "network-blocks.jsonl": {
+      "bytes": 118,
+      "sha256": "bf12af6fa08c77e718c12f720fcdb9f5ff11b347bff5d3e9b75bd6057d62c67e"
+    },
+    "prompt-1.json": {
+      "bytes": 427,
+      "sha256": "05ce42a105ae23db3452aba12799bd3c1ecb2baeac7899f4772c3ccafa3622d3"
+    },
+    "prompt-2.json": {
+      "bytes": 427,
+      "sha256": "05ce42a105ae23db3452aba12799bd3c1ecb2baeac7899f4772c3ccafa3622d3"
+    },
+    "provenance.json": {
+      "bytes": 989,
+      "sha256": "4333670221ce7aa8ebeb4ffe9731c99f2e2a7831ed215c956a723bb226ffd0b6"
+    },
+    "report.json": {
+      "bytes": 34291,
+      "sha256": "9f9ec615867a9357bd5b739b586f165c2aff47417c6e1261b794c579290eaa28"
+    },
+    "request-1.json": {
+      "bytes": 39339,
+      "sha256": "8c4a86f9410261b9f3f3f6b8ab1fd76bdf492996899758fd2eab3fa850d720d6"
+    },
+    "request-2.json": {
+      "bytes": 39832,
+      "sha256": "ca46ce770eed85f6a543dc382566e50b9323371f3be2178715005dff23d72646"
+    },
+    "response-1.sse": {
+      "bytes": 2047,
+      "sha256": "a954cb47aa98754db0d18da238bb092b0b08049800e218cf1739940702332625"
+    },
+    "response-2.sse": {
+      "bytes": 2053,
+      "sha256": "eea071e937c96500b52595309c6ade634ae59c0618ee96666cc2aff97d29ecfb"
+    },
+    "run.json": {
+      "bytes": 496,
+      "sha256": "33bce46abc59ed39d3b77b8f03af6a6a5da9b60b73475b8691b7f8888ebd5494"
+    },
+    "veto-loaded.json": {
+      "bytes": 16,
+      "sha256": "fd81c6dba4ecccb7ef731c2e4bc6034cc8cc51b8fc0c2e73fbacb53c3d50e801"
+    }
+  },
+  "omitted": "Synthetic runtime profile databases, Git snapshot internals and project files remain in the original CI artifact; project contents are fixed by the driver and report hashes."
+}

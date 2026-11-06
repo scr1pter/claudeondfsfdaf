@@ -1,0 +1,28 @@
+{
+  "sessionID": "ses_e6b4c951effeTo8XnAKkb5WpFw",
+  "ordinal": 1,
+  "attemptedAt": "2026-11-01T01:22:29.570Z",
+  "state": "recorded",
+  "usage": {
+    "inputTokens": 2048,
+    "cachedInputTokens": 0,
+    "outputTokens": 8,
+    "reasoningTokens": 2
+  },
+  "actualCostUsd": null,
+  "model": "gpt-6.1-sol",
+  "effort": "medium",
+  "maxOutputTokens": 512,
+  "requestSha256": "8c4a86f9410261b9f3f3f6b8ab1fd76bdf492996899758fd2eab3fa850d720d6",
+  "systemSha256": "15f5cc89856b6433fbbc069f5b7d08ab7f6e5d5b85a591e65b19da79eef5f744",
+  "toolsSha256": "17b15ed8dec8b75a5d925d0a18153c7a459f03e026d60b65fbcd72edc38f6f1e",
+  "toolCount": 14,
+  "firstSystemBlockSha256": "1a6042f6782d3ab938cb9c002d8f9fc744a152c981c79800599ae88319c41f1b",
+  "cacheKey": "ses_e6b4c951effeTo8XnAKkb5WpFw",
+  "requestBytes": 39339,
+  "httpStatus": 200,
+  "responseSha256": "a954cb47aa98754db0d18da238bb092b0b08049800e218cf1739940702332625",
+  "responseBytes": 2047,
+  "error": null,
+  "synthetic": true
+}

@@ -4,6 +4,7 @@ import type { JSONSchema7 } from "@ai-sdk/provider"
 import type * as Provider from "./provider"
 import type { ModelCatalog } from "@vectordevai/core/model-catalog"
 import type { TaskSize } from "@vectordevai/core/task-size"
+import { JsonSchemaCheck } from "@vectordevai/core/json-schema-check"
 import { Option, Schema } from "effect"
 import type { RuntimeFlags } from "@/effect/runtime-flags"
 import { iife } from "@/util/iife"
@@ -453,9 +454,12 @@ function normalizeMessages(
   return msgs
 }
 
-function applyCaching(msgs: ModelMessage[], model: Provider.Model): ModelMessage[] {
+// Breakpoints go on the first two system messages and the last two others. With a `boundary` (a fork's last inherited
+// message) the earlier of those two goes there instead, so the provider's look-back from it finds the parent's entry.
+function applyCaching(msgs: ModelMessage[], model: Provider.Model, boundary?: ModelMessage): ModelMessage[] {
   const system = msgs.filter((msg) => msg.role === "system").slice(0, 2)
-  const final = msgs.filter((msg) => msg.role !== "system").slice(-2)
+  const rest = msgs.filter((msg) => msg.role !== "system")
+  const final = boundary && boundary.role !== "system" ? unique([boundary, rest.at(-1)!]) : rest.slice(-2)
 
   const providerOptions = {
     anthropic: {
@@ -582,11 +586,68 @@ export function usesCacheBreakpoints(model: Provider.Model) {
   )
 }
 
-export function message(msgs: ModelMessage[], model: Provider.Model, options: Record<string, unknown>, cache = true) {
+/** Whether the provider caches the prompt prefix, so a smaller tool set on the next request would write it again. */
+export function caches(model: Provider.Model) {
+  return usesCacheBreakpoints(model) || (model.cost?.cache?.read ?? 0) > 0
+}
+
+// Whether a request with these provider options runs an Anthropic model with thinking on, directly, on Vertex or on
+// Bedrock. Anthropic refuses forced tool use while extended thinking is on.
+function anthropicThinking(model: Provider.Model, options: Record<string, any>) {
+  const on = (setting: unknown) => isPlainObject(setting) && (setting.type === "enabled" || setting.type === "adaptive")
+  if (model.api.npm === "@ai-sdk/anthropic" || model.api.npm === "@ai-sdk/google-vertex/anthropic")
+    return on(options.thinking)
+  if (model.api.npm === "@ai-sdk/amazon-bedrock")
+    return (model.api.id.includes("anthropic") || model.api.id.includes("claude")) && on(options.reasoningConfig)
+  return false
+}
+
+/**
+ * The tool choice a request can send: "required" becomes "auto" for an Anthropic model with thinking on, which refuses
+ * forced tool use. The caller follows such a step with a closing one that turns thinking off (`withoutThinking`).
+ */
+export function toolChoice(
+  model: Provider.Model,
+  options: Record<string, any>,
+  requested?: "auto" | "required" | "none",
+): "auto" | "required" | "none" | undefined {
+  if (requested === "required" && anthropicThinking(model, options)) return "auto"
+  return requested
+}
+
+/** Provider options with Anthropic thinking turned off, for a step that must force a tool call. */
+export function withoutThinking(options: Record<string, any>): Record<string, any> {
+  const { thinking: _thinking, reasoningConfig: _reasoning, ...rest } = options
+  return rest
+}
+
+// Marks the boundary message through the transforms below, which may copy, drop or insert messages. Object spread
+// copies a symbol key, and request bodies never carry one.
+const BOUNDARY = Symbol("vector.cache-boundary")
+type Marked = ModelMessage & { [BOUNDARY]?: true }
+
+/** `boundary` is the index in `msgs` of a fork's last inherited message, which takes the non-final cache breakpoint. */
+export function message(
+  msgs: ModelMessage[],
+  model: Provider.Model,
+  options: Record<string, unknown>,
+  cache = true,
+  boundary?: number,
+) {
+  if (boundary !== undefined && msgs[boundary])
+    msgs = msgs.map((msg, index) => {
+      if (index !== boundary) return msg
+      const copy: Marked = { ...msg }
+      copy[BOUNDARY] = true
+      return copy
+    })
   msgs = unsupportedParts(msgs, model)
   msgs = normalizeMessages(msgs, model, options)
+  const marked =
+    boundary === undefined ? undefined : msgs.find((msg): msg is Marked => (msg as Marked)[BOUNDARY] === true)
+  if (marked) delete marked[BOUNDARY]
   if (cache && usesCacheBreakpoints(model)) {
-    msgs = applyCaching(msgs, model)
+    msgs = applyCaching(msgs, model, marked)
   }
 
   // Remap providerOptions keys from stored providerID to expected SDK key
@@ -1460,6 +1521,53 @@ export function effortOptions(model: Provider.Model, effort: TaskSize.Effort): R
   return model.variants?.high ?? {}
 }
 
+type Level = "off" | "low" | "medium" | "high"
+
+/** The level an effort or variant name stands for: high, xhigh and max are high; low and minimal low; none off. */
+export function level(value: unknown): Level | undefined {
+  if (value === "none" || value === "off" || value === "disabled") return "off"
+  if (value === "minimal" || value === "low") return "low"
+  if (value === "medium") return "medium"
+  if (value === "high" || value === "xhigh" || value === "max") return "high"
+  return undefined
+}
+
+// The reasoning level set options name, if they name one.
+function optionsLevel(options: Record<string, any>): Level | undefined {
+  const named = level(options.reasoningEffort) ?? level(options.reasoning_effort) ?? level(options.effort)
+  if (named) return named
+  if (isPlainObject(options.reasoning)) {
+    if (options.reasoning.enabled === false) return "off"
+    const effort = level(options.reasoning.effort)
+    if (effort) return effort
+  }
+  for (const setting of [options.thinking, options.reasoningConfig]) {
+    if (!isPlainObject(setting)) continue
+    if (setting.type === "disabled") return "off"
+    if (setting.type === "enabled" || setting.type === "adaptive") return "high"
+  }
+  if (isPlainObject(options.thinkingConfig)) {
+    if (options.thinkingConfig.thinkingBudget === 0) return "off"
+    const thinking = level(options.thinkingConfig.thinkingLevel)
+    if (thinking) return thinking
+  }
+  if (options.enable_thinking === false) return "off"
+  return undefined
+}
+
+/**
+ * The reasoning level a model runs at when nothing picks one: no variant, no size and no agent option. For example
+ * medium on GPT-5, which Vector sends at medium, and off for an Anthropic model, which thinks only when asked.
+ */
+export function defaultEffort(model: Provider.Model): Level {
+  if (!model.capabilities.reasoning) return "off"
+  const found = optionsLevel(mergeDeep(options({ model, sessionID: "" }), model.options ?? {}))
+  if (found) return found
+  if (model.api.npm.includes("anthropic") || model.api.id.includes("claude") || model.api.id.includes("anthropic"))
+    return "off"
+  return "medium"
+}
+
 // Maps model ID prefix to provider slug used in providerOptions.
 // Example: "amazon/nova-2-lite" → "bedrock"
 const SLUG_OVERRIDES: Record<string, string> = {
@@ -1633,7 +1741,98 @@ function sanitizeOpenAISchema(value: unknown): unknown {
   return result
 }
 
-export function schema(model: Provider.Model, schema: JSONSchema7): JSONSchema7 {
+// Bounds a provider's schema path drops: OpenAI's subset above, and the Google SDK's conversion. With `restate`, each is
+// restated in its node's description so the model still reads it; the engine checks it either way.
+const NUMBER_AND_COUNT_BOUNDS = [
+  "minimum",
+  "maximum",
+  "exclusiveMinimum",
+  "exclusiveMaximum",
+  "multipleOf",
+  "maxLength",
+  "minItems",
+  "maxItems",
+  "uniqueItems",
+  "minProperties",
+  "maxProperties",
+]
+const OPENAI_DROPS = [...NUMBER_AND_COUNT_BOUNDS, "minLength"]
+const GOOGLE_DROPS = [...NUMBER_AND_COUNT_BOUNDS, "additionalProperties"]
+
+function droppedBounds(model: Provider.Model): readonly string[] {
+  if (model.api.npm === "@ai-sdk/openai" || model.api.npm === "@ai-sdk/azure") return OPENAI_DROPS
+  if (model.api.npm === "@ai-sdk/google" || model.api.npm === "@ai-sdk/google-vertex") return GOOGLE_DROPS
+  return []
+}
+
+function restateBounds(node: unknown, keys: readonly string[]): unknown {
+  if (!isPlainObject(node)) return node
+  const result: JsonRecord = { ...node }
+  const said = keys.flatMap((key) => {
+    const value = node[key]
+    if (value === undefined || (key === "additionalProperties" && value !== false)) return []
+    if (key === "uniqueItems" && value !== true) return []
+    return [`${key}: ${JSON.stringify(value)}`]
+  })
+  if (said.length > 0)
+    result.description = `${typeof node.description === "string" && node.description ? `${node.description} ` : ""}(${said.join(", ")})`
+  const each = (value: unknown) =>
+    isPlainObject(value)
+      ? Object.fromEntries(Object.entries(value).map(([key, item]) => [key, restateBounds(item, keys)]))
+      : value
+  for (const key of ["properties", "$defs", "definitions"]) if (key in node) result[key] = each(node[key])
+  for (const key of ["items", "additionalProperties", "not"])
+    if (key in node) result[key] = restateBounds(node[key], keys)
+  for (const key of ["anyOf", "oneOf", "allOf"]) {
+    const list = node[key]
+    if (Array.isArray(list)) result[key] = list.map((item) => restateBounds(item, keys))
+  }
+  return result
+}
+
+export function schema(model: Provider.Model, schema: JSONSchema7, options: { restate?: boolean } = {}): JSONSchema7 {
+  if (options.restate) {
+    const checked = JsonSchemaCheck.accept(schema)
+    if (checked.ok) {
+      let structural = false
+      const lower = (value: unknown): unknown => {
+        if (typeof value === "boolean") {
+          structural = true
+          // OpenAI cannot take a boolean schema. The exact rule remains in the bounded engine contract below.
+          return model.api.npm === "@ai-sdk/openai" || model.api.npm === "@ai-sdk/azure" ? {} : value
+        }
+        if (!isPlainObject(value)) return value
+        const next: JsonRecord = { ...value }
+        for (const key of ["properties", "$defs", "definitions"])
+          if (isPlainObject(value[key]))
+            next[key] = Object.fromEntries(Object.entries(value[key]).map(([name, child]) => [name, lower(child)]))
+        for (const key of ["items", "not"]) if (key in value) next[key] = lower(value[key])
+        if (isPlainObject(value.additionalProperties)) next.additionalProperties = lower(value.additionalProperties)
+        for (const key of ["anyOf", "oneOf", "allOf"]) if (Array.isArray(value[key])) next[key] = value[key].map(lower)
+        structural ||= "not" in value || value.nullable === true
+        if (value.nullable === true && (model.api.npm === "@ai-sdk/openai" || model.api.npm === "@ai-sdk/azure")) {
+          delete next.nullable
+          return { anyOf: [next, { type: "null" }] }
+        }
+        if (typeof value.$ref === "string" && Object.keys(value).some((key) => key !== "$ref")) {
+          structural = true
+          // Moonshot rejects ref siblings. Keep their conjunction and root definitions instead of deleting them.
+          if (model.providerID === "moonshotai" || model.api.id.toLowerCase().includes("kimi")) {
+            const { $ref, $defs, definitions, ...siblings } = next
+            return { ...($defs ? { $defs } : {}), ...(definitions ? { definitions } : {}), allOf: [{ $ref }, siblings] }
+          }
+        }
+        return next
+      }
+      schema = lower(schema) as JSONSchema7
+      // Some SDK wire formats cannot express not/boolean/ref-sibling rules. Preserve their exact meaning for the
+      // model, with at most the already accepted 16 KiB schema, while the engine checks the original on every call.
+      if (structural)
+        schema.description = `${schema.description ? `${schema.description}\n` : ""}Your response must satisfy this JSON Schema: ${checked.normalized}`
+    }
+    const dropped = droppedBounds(model)
+    if (dropped.length > 0) schema = restateBounds(schema, dropped) as JSONSchema7
+  }
   /*
   if (["openai", "azure"].includes(providerID)) {
     if (schema.type === "object" && schema.properties) {

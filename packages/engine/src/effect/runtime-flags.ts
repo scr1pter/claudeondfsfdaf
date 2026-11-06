@@ -46,6 +46,9 @@ export class Service extends ConfigService.Service<Service>()("@vector/RuntimeFl
   outputTokenMax: positiveInteger("VECTOR_EXPERIMENTAL_OUTPUT_TOKEN_MAX"),
   bashDefaultTimeoutMs: positiveInteger("VECTOR_EXPERIMENTAL_BASH_DEFAULT_TIMEOUT_MS"),
   runBackgroundWaitMs: positiveInteger("VECTOR_RUN_BACKGROUND_WAIT_MS"),
+  // The completion-note window's quiet time and longest hold (TaskNotify), so tests can run it in milliseconds.
+  noteQuietMs: positiveInteger("VECTOR_EXPERIMENTAL_NOTE_QUIET_MS"),
+  noteHoldMs: positiveInteger("VECTOR_EXPERIMENTAL_NOTE_HOLD_MS"),
   experimentalNativeLlm: bool("VECTOR_EXPERIMENTAL_NATIVE_LLM"),
   experimentalWebSockets: bool("VECTOR_EXPERIMENTAL_WEBSOCKETS"),
   disableWebSockets: bool("VECTOR_DISABLE_WEBSOCKETS"),

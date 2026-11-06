@@ -231,6 +231,8 @@ function harness(options: {
   // `prompted` says whether this session has been prompted in this harness,
   // so a reading can differ before and after the run.
   spend?: (sessionId: string, prompted: boolean) => unknown
+  sessionModel?: { providerID: string; id: string }
+  sessionUsage?: (completed: boolean) => Record<string, unknown>
   promptFailure?: string
   // How the turn's last assistant message finished, "stop" unless set.
   finish?: string
@@ -243,7 +245,7 @@ function harness(options: {
   const promptedAt = new Map<string, number>()
   const created: string[] = []
   const createdModels: unknown[] = []
-  const spendChecks: Array<{ runId: string; source: string; reserve?: boolean }> = []
+  const spendChecks: Array<{ runId: string; source: string; reserve?: boolean; billing?: "codium" }> = []
   const reserved = new Map<string, number>()
   const released: string[] = []
   const prompts: unknown[] = []
@@ -255,6 +257,7 @@ function harness(options: {
     source: string
     totalCostUsd?: number
     totalTokens?: number
+    billing?: "codium"
   }> = []
   let contextPolls = 0
 
@@ -274,6 +277,7 @@ function harness(options: {
     spend: async () => ({
       checkAllowance: async (input) => {
         spendChecks.push(input)
+        if (input.billing === "codium") return { allowed: true, state: "ok", unmeasuredRuns: 0 }
         const allowance = {
           unmeasuredRuns: 0,
           ...(options.allowance ?? { allowed: true, state: "ok" as const }),
@@ -321,13 +325,17 @@ function harness(options: {
         return {
           data: {
             cost: completed ? 0.25 : 0,
+            // The default transport represents a modern engine with separated own-token aggregates.
+            tokensOwnOnly: true,
+            subagentTokensOwnOnly: true,
             tokens: {
               input: completed ? 10 : 0,
               output: completed ? 5 : 0,
               reasoning: 0,
               cache: { read: 0, write: 0 },
             },
-            model: { providerID: "provider-test", id: "model-test" },
+            model: options.sessionModel ?? { providerID: "provider-test", id: "model-test" },
+            ...options.sessionUsage?.(completed),
           },
         }
       }
@@ -868,9 +876,7 @@ describe("legacy single-directory records", () => {
     const record = harnessed.record("task-legacy")
     expect(harnessed.created).toEqual([])
     expect(record?.directory).toBe("/repos/legacy")
-    expect(record?.results?.map((result) => [result.directory, result.status])).toEqual([
-      ["/repos/legacy", "failed"],
-    ])
+    expect(record?.results?.map((result) => [result.directory, result.status])).toEqual([["/repos/legacy", "failed"]])
     expect(record?.status).toBe("scheduled")
     expect(record?.results?.[0]?.error).toContain("saved without a model")
     expect(new Date(record?.runAt ?? 0).getDate()).toBe(20)
@@ -1059,3 +1065,93 @@ describe("manual runs and reporting", () => {
     expect(harnessed.runtime.workState().inFlightRuns).toBe(0)
   })
 })
+
+test("a saved Codium schedule cannot bypass dollars when its existing session now uses an own key", async () => {
+  const harnessed = harness({
+    at: new Date(2026, 7, 19, 10, 0),
+    records: [
+      scheduledRecord({
+        model: { providerID: "vector-plan", id: "codium-model" },
+        targets: [{ directory: "/repos/alpha", sessionId: "ses_established" }],
+      }),
+    ],
+    sessionModel: { providerID: "provider-own", id: "own-model" },
+    allowance: { allowed: false, state: "blocked", reason: "Own-key dollars exhausted" },
+  })
+  await harnessed.runtime.tick()
+  expect(harnessed.spendChecks[0]?.billing).toBeUndefined()
+  expect(harnessed.prompts).toEqual([])
+  expect(harnessed.record()?.results?.[0]?.error).toContain("Own-key dollars exhausted")
+})
+
+test("a continued Codium session uses its actual model despite an older own-key schedule", async () => {
+  const harnessed = harness({
+    at: new Date(2026, 7, 19, 10, 0),
+    records: [scheduledRecord({ targets: [{ directory: "/repos/alpha", sessionId: "ses_established" }] })],
+    sessionModel: { providerID: "vector-plan", id: "codium-model" },
+    allowance: { allowed: false, state: "blocked", reason: "Own-key dollars exhausted" },
+  })
+  await harnessed.runtime.tick()
+  expect(harnessed.spendChecks[0]?.billing).toBe("codium")
+  expect(harnessed.prompts).toHaveLength(1)
+  expect(harnessed.reserved.size).toBe(0)
+})
+
+for (const mixed of [false, true]) {
+  test(`${mixed ? "mixed" : "Codium-only"} scheduled usage passes separated own totals and Codium to the ledger`, async () => {
+    const harnessed = harness({
+      at: new Date(2026, 7, 19, 10),
+      records: [scheduledRecord({ model: { providerID: "vector-plan", id: "coding" } })],
+      sessionModel: { providerID: "vector-plan", id: "coding" },
+      sessionUsage: (completed) => ({
+        cost: completed && mixed ? 0.12 : 0,
+        tokens: { input: completed && mixed ? 80 : 0 },
+        codiumSteps: completed ? 3 : 0,
+      }),
+    })
+    await harnessed.runtime.tick()
+    expect(harnessed.spendChecks[0]?.billing).toBe("codium")
+    expect(harnessed.spendRecords[0]).toMatchObject({
+      totalCostUsd: mixed ? 0.12 : 0,
+      totalTokens: mixed ? 80 : 0,
+      billing: "codium",
+    })
+    expect(harnessed.reserved.size).toBe(0)
+  })
+}
+
+test("an own scheduled recurrence does not inherit Codium billing from earlier turns", async () => {
+  const harnessed = harness({
+    at: new Date(2026, 7, 19, 10),
+    records: [scheduledRecord({ targets: [{ directory: "/repos/alpha", sessionId: "ses_established" }] })],
+    sessionUsage: () => ({ codiumSteps: 5 }),
+  })
+  await harnessed.runtime.tick()
+  expect(harnessed.spendRecords[0]).toMatchObject({ totalCostUsd: 0.25, totalTokens: 15 })
+  expect(harnessed.spendRecords[0]?.billing).toBeUndefined()
+})
+
+for (const proof of [undefined, false]) {
+  test(`legacy scheduled totals with ${proof === undefined ? "missing" : "unknown"} provenance keep own dollars but hide tokens`, async () => {
+    const harnessed = harness({
+      at: new Date(2026, 7, 19, 10),
+      records: [scheduledRecord({ targets: [{ directory: "/repos/alpha", sessionId: "ses_established" }] })],
+      sessionUsage: (completed) => ({
+        cost: completed ? 0.12 : 0,
+        tokens: { input: completed ? 9_080 : 9_000 },
+        tokensOwnOnly: proof,
+        // Existing modern counts plus a new Codium turn still cannot prove the old aggregate is separated.
+        codiumSteps: completed ? 8 : 5,
+      }),
+    })
+    await harnessed.runtime.tick()
+    expect(harnessed.record()?.status).toBe("completed")
+    expect(harnessed.spendRecords).toHaveLength(1)
+    expect(harnessed.spendRecords[0]).toMatchObject({
+      totalCostUsd: 0.12,
+      billing: "codium",
+      provider: "provider-test",
+    })
+    expect(harnessed.spendRecords[0]?.totalTokens).toBeUndefined()
+  })
+}

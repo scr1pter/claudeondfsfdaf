@@ -113,9 +113,15 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
       last: undefined,
     })
 
+    // A Codium model the plan no longer includes is never restored, defaulted or cycled to: every request to it would
+    // be refused. The person chooses it from the picker, which opens Change plan instead.
     const validModel = (model: ModelKey) => {
-      const provider = providers.all().get(model.providerID)
-      return !!provider?.models[model.modelID] && connected().has(model.providerID)
+      const info = providers.all().get(model.providerID)?.models[model.modelID]
+      return (
+        !!info &&
+        connected().has(model.providerID) &&
+        !(model.providerID === ModelPlanStatus.PROVIDER_ID && ModelPlanStatus.isLocked(info))
+      )
     }
 
     // A Vector choice stays on the shared allowance, even when the user's own OpenRouter account lists the same model.
@@ -341,7 +347,14 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
       setStore("draft", state)
     }
 
-    const recent = createMemo(() => models.recent.list().map(models.find).filter(Boolean))
+    const recent = createMemo(() =>
+      models.recent
+        .list()
+        .map(models.find)
+        .filter(
+          (item) => item && !(item.provider.id === ModelPlanStatus.PROVIDER_ID && ModelPlanStatus.isLocked(item)),
+        ),
+    )
 
     const model = {
       ready: models.ready,
@@ -470,17 +483,24 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
           setStore("promoting", next)
           setStore("draft", undefined)
         },
-        restore(msg: { sessionID: string; agent: string; model: ModelKey }) {
+        restore(msg: {
+          sessionID: string
+          agent: string
+          model: ModelKey
+          selected?: { providerID: string; modelID: string }
+        }) {
           const session = id()
           if (!session) return
           if (msg.sessionID !== session) return
           if (saved.session[session] !== undefined) return
           if (handoff.has(handoffKey(serverSDK().scope, sdk().directory, session))) return
 
+          // A session on Codium Auto shows Auto again, not the model it picked for the last message.
+          const model = ModelPlanStatus.sessionModel(msg)
           setSaved("session", session, {
             agent: msg.agent,
-            model: msg.model,
-            variant: msg.model?.variant ?? null,
+            model,
+            variant: model?.variant ?? null,
           })
         },
       },

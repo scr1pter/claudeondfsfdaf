@@ -10,47 +10,55 @@ export type CodiumSummary =
   | {
       kind: "plan"
       plan: string
-      /** The share of this month's credits left, from 0 to 1, when the gateway could verify it. */
+      /** The share of this month's usage left, from 0 to 1, when the gateway could verify it. */
       left?: number
-      credits?: string
+      usage?: string
       renewal?: { label: "Renews" | "Ends"; date: string }
-      purchased: string
+      /** A smaller plan that starts at renewal, which Keep my plan drops. */
+      scheduled?: { name: string; date: string }
+      /** What starts a paused plan again: a new card, or confirming the payment with the bank. */
+      payment?: "update-card" | "confirm-payment"
       notice?: ReturnType<typeof ModelPlanStatus.notice>
-      /** Whether vectordev.ai keeps billing for this account: a plan, a purchase or past invoices to manage. */
+      /** Whether vectordev.ai keeps billing for this account: a plan or past invoices to manage. */
       billing: boolean
     }
 
 /**
  * What Settings > Account shows for Vector Codium. The status only ever carries shares and states, and this keeps it
- * that way: a percentage of this month's credits and a state for purchased credits, never an amount, so the markup on
- * a purchase cannot be worked out. While Codium is not on sale and the account has never paid for it, it is Coming soon.
+ * that way: a percentage of this month's usage, never an amount, so the markup cannot be worked out. Codium sells
+ * monthly plans only, so nothing here speaks of credits or top-ups. While Codium is not on sale and the account has
+ * never paid for it, it is Coming soon.
  */
 export function codiumSummary(status?: ModelPlanStatus.Status): CodiumSummary {
   if (!status) return { kind: "loading" }
   if (status.error) return { kind: "error", text: status.error }
   if (!status.signedIn) return { kind: "signed-out" }
   const plan = status.plan
-  if (!status.enabled && !plan && !status.purchased.bought && !status.customer) return { kind: "coming-soon" }
+  if (!status.enabled && !plan && !status.customer) return { kind: "coming-soon" }
   return {
     kind: "plan",
-    // Free without a subscription, as the sidebar says, whatever top-up credits the account holds.
     plan: plan?.name ?? CodiumPlan.FREE,
     ...(plan?.left === undefined ? {} : { left: plan.left }),
     ...(plan
       ? {
-          credits:
+          usage:
             plan.left === undefined
-              ? "Balance unavailable"
-              : `${ModelPlanStatus.formatShare(plan.left)} of this month's credits left`,
+              ? "Usage unavailable"
+              : `${ModelPlanStatus.formatShare(plan.left)} of this month's usage left`,
           renewal: {
             label: plan.cancelAtPeriodEnd ? ("Ends" as const) : ("Renews" as const),
             date: ModelPlanStatus.formatDate(plan.renewsAt),
           },
         }
       : {}),
-    purchased: ModelPlanStatus.formatPurchased(status.purchased),
+    ...(plan?.scheduled
+      ? { scheduled: { name: plan.scheduled.name, date: ModelPlanStatus.formatDate(plan.scheduled.at) } }
+      : {}),
+    ...(plan?.state === "paused"
+      ? { payment: plan.action === "confirm-payment" ? ("confirm-payment" as const) : ("update-card" as const) }
+      : {}),
     notice: ModelPlanStatus.notice(status),
-    billing: Boolean(plan || status.purchased.bought || status.customer),
+    billing: Boolean(plan || status.customer),
   }
 }
 

@@ -1,6 +1,6 @@
 /* Settings > Account. It sits in the Settings workspace shell and takes its
    charcoal tokens; Vector violet is kept for the avatar, the one primary
-   action and the credits meter. */
+   action and the usage meter. */
 .settings-account-page {
   --settings-account-radius: 12px;
 }
@@ -184,6 +184,20 @@
 }
 
 .settings-account-notice {
+  margin: 0;
+  color: var(--settings-muted);
+  font-size: 12px;
+}
+
+/* A smaller plan scheduled for renewal, beside Keep my plan. */
+.settings-account-scheduled {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+
+.settings-account-scheduled p {
   margin: 0;
   color: var(--settings-muted);
   font-size: 12px;

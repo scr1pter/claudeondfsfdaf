@@ -1,9 +1,9 @@
 import { requireAccountUser } from "./account.js"
 import { enforceRateLimit, requireTrustedJsonRequest } from "./abuse.js"
 import { verifyDesktopToken } from "./cli-token.js"
-import { modelPlanCheckout, modelPlanPortal, modelTopupCheckout } from "./model-plan-account.js"
+import { modelPlanChange, modelPlanCheckout, modelPlanPortal } from "./model-plan-account.js"
 import { requireModelPlanUser } from "./model-plan-chat.js"
-import { modelPlansEnabled, requireModelPlans, requireModelTopups } from "./model-plan-config.js"
+import { modelPlansEnabled, requireModelPlans } from "./model-plan-config.js"
 import { ApiError, handleApiError, json, readJson, requireMethod, type ApiRequest, type ApiResponse } from "./http.js"
 
 /**
@@ -51,30 +51,20 @@ export async function handleModelPlanCheckout(
   }
 }
 
-export async function handleModelTopupCheckout(
-  request: ApiRequest,
-  response: ApiResponse,
-  fetcher: typeof fetch = fetch,
-) {
-  try {
-    requireMethod(request, "POST")
-    requireTrustedJsonRequest(request, 4096)
-    requireModelTopups()
-    const account = await requireBillingUser(request, fetcher)
-    await enforceRateLimit(request, response, {
-      scope: "model-topup-checkout",
-      identifier: account.id,
-      limit: 10,
-      windowSeconds: 3600,
-      requirePersistent: true,
-    })
-    const body = await readJson<{ pack?: unknown }>(request, 4096)
-    if (typeof body.pack !== "string")
-      throw new ApiError(400, "MODEL_TOPUP_INVALID", "Choose an available Codium credit pack.")
-    json(response, 200, await modelTopupCheckout(account, body.pack, fetcher))
-  } catch (error) {
-    handleApiError(response, error)
-  }
+/**
+ * `/api/model-plans/topup`. Codium sells monthly plans only, so the route that sold top-ups answers every request, from
+ * any caller and with any method, with JSON 410 `MODEL_TOPUP_REMOVED`. It reads nothing, calls no service and sells
+ * nothing; an older Vector that still offers a top-up shows the message instead of a bare 404.
+ */
+export function handleModelTopupRemoved(_request: ApiRequest, response: ApiResponse) {
+  handleApiError(
+    response,
+    new ApiError(
+      410,
+      "MODEL_TOPUP_REMOVED",
+      "Vector Codium no longer sells top-ups. Choose or change a monthly plan instead.",
+    ),
+  )
 }
 
 export async function handleModelPlanPortal(request: ApiRequest, response: ApiResponse, fetcher: typeof fetch = fetch) {
@@ -92,11 +82,39 @@ export async function handleModelPlanPortal(request: ApiRequest, response: ApiRe
       windowSeconds: 3600,
       requirePersistent: true,
     })
-    // The website sends no body and opens the portal's home; Vector can ask for the plan change or cancel step.
+    // Home and payment/cancellation flows remain reachable while sales are paused; old change requests get 409.
     const flow = (await readJson<{ flow?: unknown } | null>(request, 4096))?.flow
-    if (flow !== undefined && flow !== "change" && flow !== "cancel")
-      throw new ApiError(400, "BILLING_FLOW_INVALID", "Choose plan changes or cancellation.")
+    if (flow !== undefined && flow !== "change" && flow !== "cancel" && flow !== "payment_method_update")
+      throw new ApiError(400, "BILLING_FLOW_INVALID", "Choose payment-method updates or cancellation.")
     json(response, 200, await modelPlanPortal(account.id, fetcher, { flow }))
+  } catch (error) {
+    handleApiError(response, error)
+  }
+}
+
+/** Plan changes spend only for the signed-in web account or the desktop's own token. */
+export async function handleModelPlanChange(request: ApiRequest, response: ApiResponse, fetcher: typeof fetch = fetch) {
+  try {
+    if (request.method !== "POST" && request.method !== "DELETE") requireMethod(request, "POST")
+    requireTrustedJsonRequest(request, 4096)
+    // Undoing a scheduled downgrade remains available when sales or the gateway is paused.
+    const account = await requireBillingUser(request, fetcher, { desktop: true })
+    await enforceRateLimit(request, response, {
+      scope: "model-plan-change",
+      identifier: account.id,
+      limit: 10,
+      windowSeconds: 3600,
+      requirePersistent: true,
+    })
+    if (request.method === "DELETE") {
+      json(response, 200, await modelPlanChange(account, undefined, fetcher))
+      return
+    }
+    requireModelPlans()
+    const body = await readJson<{ plan?: unknown }>(request, 4096)
+    if (typeof body?.plan !== "string")
+      throw new ApiError(400, "MODEL_PLAN_INVALID", "Choose an available Codium subscription.")
+    json(response, 200, await modelPlanChange(account, body.plan, fetcher))
   } catch (error) {
     handleApiError(response, error)
   }

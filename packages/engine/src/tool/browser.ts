@@ -738,11 +738,18 @@ export const BrowserTool = Tool.define<typeof Parameters, Metadata, never>(
             ],
             ...(ctx.callID ? { tool: { messageID: MessageID.make(ctx.messageID), callID: ctx.callID } } : {}),
           })
-          .pipe(Effect.catchTag("QuestionRejectedError", () => Effect.succeed(undefined)))
-        if (answers?.[0]?.[0] !== CONTINUE)
+          .pipe(
+            Effect.catchTag("QuestionRejectedError", (error) =>
+              Effect.succeed(error.timedOut ? ("timed-out" as const) : undefined),
+            ),
+          )
+        if (answers === "timed-out" || answers?.[0]?.[0] !== CONTINUE)
           return {
             title: "Handoff cancelled",
-            output: "The user did not continue in the browser. Carry on without that page.",
+            output:
+              answers === "timed-out"
+                ? Question.TIMED_OUT
+                : "The user did not continue in the browser. Carry on without that page.",
             metadata: metadata({ handoff: "cancelled" }),
           }
         const reached = yield* Effect.promise(() =>

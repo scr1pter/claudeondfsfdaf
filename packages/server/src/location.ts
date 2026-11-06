@@ -4,11 +4,14 @@ import { PtyTicket } from "@vectordevai/core/pty/ticket"
 import { AbsolutePath } from "@vectordevai/core/schema"
 import { WorkspaceV2 } from "@vectordevai/core/workspace"
 import { Effect, Layer } from "effect"
-import { HttpServerRequest } from "effect/unstable/http"
+import { HttpRouter, HttpServerRequest } from "effect/unstable/http"
 import { HttpApiMiddleware } from "effect/unstable/httpapi"
 import { ForbiddenError, InvalidRequestError } from "@vectordevai/protocol/errors"
 import { guestWorkspaceDirectory, RequestPrincipal } from "@vectordevai/protocol/middleware/authorization"
 import { outdatedDirectoryHeader, OUTDATED_CLIENT_MESSAGE } from "./location-headers"
+import { SessionAudience } from "@vectordevai/core/session/audience"
+import { RequestOwner } from "./request-owner"
+import path from "node:path"
 
 export type LocationServices = Layer.Success<ReturnType<(typeof LocationServiceMap.Service)["get"]>>
 
@@ -55,6 +58,7 @@ export const layer = Layer.effect(
   Effect.gen(function* () {
     const locations = yield* LocationServiceMap.Service
     const tickets = yield* PtyTicket.Service
+    const audience = yield* SessionAudience.Service
     return LocationMiddleware.of((effect) =>
       Effect.gen(function* () {
         const request = yield* HttpServerRequest.HttpServerRequest
@@ -67,6 +71,22 @@ export const layer = Layer.effect(
           })
         const requested = ref(request)
         const principal = yield* RequestPrincipal
+        const owner = yield* RequestOwner.owner
+        const route = yield* HttpRouter.RouteContext
+        for (const value of RequestOwner.fileSelectors(request, route.route.path))
+          if (!owner && (yield* audience.overlapsPrivateDirectory(path.resolve(requested.directory, value))))
+            return yield* new ForbiddenError({
+              message: "This filesystem selection includes an owner-only working directory.",
+            })
+        for (const value of RequestOwner.paths(request))
+          if (
+            !owner &&
+            ((yield* audience.isPrivateDirectory(value)) ||
+              (yield* audience.isPrivateDirectory(path.resolve(requested.directory, value))))
+          )
+            return yield* new ForbiddenError({ message: "This working directory is available only to the owner." })
+        if (!owner && (yield* audience.isPrivateDirectory(requested.directory)))
+          return yield* new ForbiddenError({ message: "This working directory is available only to the owner." })
         if (principal.kind === "pty-ticket") {
           const valid = yield* tickets.consume({
             ptyID: principal.ptyID,
@@ -84,6 +104,16 @@ export const layer = Layer.effect(
           principal.kind === "guest"
             ? Location.Ref.make({ directory: AbsolutePath.make(guestDirectory!), workspaceID: requested.workspaceID })
             : requested
+        if (!owner && (yield* audience.isPrivateDirectory(location.directory)))
+          return yield* new ForbiddenError({ message: "This working directory is available only to the owner." })
+        for (const value of RequestOwner.fileSelectors(request, route.route.path))
+          if (!owner && (yield* audience.overlapsPrivateDirectory(path.resolve(location.directory, value))))
+            return yield* new ForbiddenError({
+              message: "This filesystem selection includes an owner-only working directory.",
+            })
+        for (const value of RequestOwner.paths(request))
+          if (!owner && (yield* audience.isPrivateDirectory(path.resolve(location.directory, value))))
+            return yield* new ForbiddenError({ message: "This working directory is available only to the owner." })
         return yield* effect.pipe(Effect.provide(locations.get(location)))
       }),
     )

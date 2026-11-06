@@ -112,4 +112,12 @@ describe("combineCostKinds", () => {
     expect(combineCostKinds(["free", "unknown"])).toBe("unknown")
     expect(combineCostKinds([])).toBe("unknown")
   })
+
+  // Codium mixed with a priced or a subscription pass is left to the review wording that shows "$X + Codium".
+  test("a review whose passes ran on Vector Codium, alone or beside free passes, is a Codium review", () => {
+    expect(combineCostKinds(["codium"])).toBe("codium")
+    expect(combineCostKinds(["codium", "codium"])).toBe("codium")
+    expect(combineCostKinds(["free", "codium"])).toBe("codium")
+    expect(combineCostKinds(["codium", "free", "free"])).toBe("codium")
+  })
 })

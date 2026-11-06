@@ -1,5 +1,6 @@
 ---
 import DocsPage from "../../layouts/DocsPage.astro"
+import { release113 } from "../../data/vector-releases"
 
 export const prerender = true
 ---
@@ -24,6 +25,21 @@ export const prerender = true
           </p>
           <p>
             Every merge checkpoints your repository before it writes anything: Vector saves main's uncommitted changes as a patch and keeps a copy of each file the merge replaces. <strong>Commit all changes to main</strong> also records a git commit, which you can undo with <code>git reset --soft HEAD~1</code>.
+          </p>
+          <h3 id="subagent-merges">Subagent merges</h3>
+          <p>
+            {release113.since} merging a subagent's worktree checkpoints too. Before the first write, Vector records the
+            files the merge will change and keeps a copy of each, and if the merge fails part-way it restores them; a
+            merge that Vector's own stop interrupted is undone or finished the next time Vector opens the repository. A
+            merge with a conflict, or one that would overwrite an untracked file of yours, is refused before anything is
+            written.
+          </p>
+          <p>
+            {release113.since} a full merge keeps the merged changes as a patch, and Discard keeps a patch of what it
+            threw away, so a discarded worktree can be recovered. Both are in Vector's data folder, under
+            <code>task-isolation</code>, and Discard names its patch. A partial merge, with only some files, keeps the
+            rest waiting for review. A subagent with a worktree of its own cannot be rewound with Rewind code + chat;
+            review, merge or discard its changes from Background tasks instead.
           </p>
           <p>To review a whole branch before you push, see <a href="/docs/vectorscope#before-you-push">Vectorscope</a>.</p>
 </DocsPage>

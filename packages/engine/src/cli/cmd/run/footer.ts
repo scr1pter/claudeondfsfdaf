@@ -52,6 +52,7 @@ import type {
   RunAgent,
   RunCommand,
   RunDiffStyle,
+  RunHelperActions,
   RunInput,
   RunPrompt,
   RunProvider,
@@ -67,7 +68,7 @@ type CycleResult = {
   variants?: string[]
 }
 
-type RunFooterOptions = {
+type RunFooterOptions = RunHelperActions & {
   directory: string
   findFiles: (query: string) => Promise<string[]>
   agents: RunAgent[]
@@ -329,6 +330,8 @@ export class RunFooter implements FooterApi {
               onQuestionReject: footer.handleQuestionReject,
               onCycle: footer.handleCycle,
               onInterrupt: footer.handleInterrupt,
+              onInterruptAll: options.onInterruptAll ? footer.handleInterruptAll : undefined,
+              onResumeInterrupted: options.onResumeInterrupted ? footer.handleResumeInterrupted : undefined,
               onBackground: options.onBackground,
               onEditorOpen: options.onEditorOpen,
               onInputClear: footer.handleInputClear,
@@ -982,6 +985,28 @@ export class RunFooter implements FooterApi {
     this.setNotice("interrupting")
     this.options.onInterrupt?.()
     return true
+  }
+
+  // "Stop including helpers" (5.I.6) needs no second press: it is chosen from the palette or its own key, and it
+  // works while the main turn is idle too.
+  private handleInterruptAll = (): void => {
+    if (this.isClosed) {
+      return
+    }
+
+    this.clearInterruptTimer()
+    this.patch({ interrupt: 0 })
+    this.setNotice("stopping helpers")
+    this.options.onInterruptAll?.()
+  }
+
+  private handleResumeInterrupted = (): void => {
+    if (this.isClosed) {
+      return
+    }
+
+    this.setNotice("resuming interrupted helpers")
+    this.options.onResumeInterrupted?.()
   }
 
   private handleExit = (): boolean => {

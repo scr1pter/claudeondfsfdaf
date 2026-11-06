@@ -1,6 +1,6 @@
 ---
 import DocsPage from "../../layouts/DocsPage.astro"
-import { release111 } from "../../data/vector-releases"
+import { release111, release113 } from "../../data/vector-releases"
 import policyJson from "../../data/local/vector.json?raw"
 import policyProfile from "../../data/local/ai.vector.managed.mobileconfig?raw"
 
@@ -33,6 +33,13 @@ Set-ItemProperty -Path $key -Name Config -Value $json -Type String`
             The agent, subagents, the judge, Vectorscope, Deep research, memory search and the helpers that write titles
             and summaries all use the servers on your list. Web pages and searches you approve still reach those sites
             unless you set Web access to None.
+          </p>
+          <p>
+            {release113.since} learned skills and workflow insights are learned on this computer, by plain code with no
+            model call, and stored only in <code>brain.db</code>. The optional skill drafter, which lets a model word a
+            skill's draft, has its own setting in Settings → Memory → Skills: by default it runs only with Vector Local
+            on, so its request goes to a server on your list. Set to Always, it sends one run's commands, file names and a
+            short redacted error excerpt to whichever model provider the session uses.
           </p>
           <p class="note">
             Vector Local is a policy inside Vector, not a firewall. A person with administrator rights on the computer

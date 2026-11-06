@@ -259,6 +259,68 @@ test("sends the local usage report with the check-in, read with the same engine 
   })
 })
 
+test("learned skills and workflow insights leave the check-in's values as they were", async () => {
+  const sessions = [
+    { id: "ses_root", updated: at(9) },
+    { id: "ses_child", parentID: "ses_root", updated: at(10) },
+  ]
+  const plain = fixture()
+  plain.state.usage = summary()
+  plain.state.sessions = sessions
+  // The same history from an engine whose summary also carried what Vector learned, as a later one might: the skill
+  // drafter runs in the session it learned from, and workflow insights start no session, so the counts match too.
+  const learning = fixture()
+  learning.state.usage = {
+    ...summary(),
+    skills: { active: 2, review: 1, names: ["learned-bun-typecheck-src"] },
+    workflow: { tiers: [{ tier: "thorough", advice: { effort: "default", reason: "passed 9 of 10" } }] },
+  }
+  learning.state.sessions = sessions
+
+  expect(await plain.usage.checkin()).toBe(true)
+  expect(await learning.usage.checkin()).toBe(true)
+
+  const values = (body: unknown) => ({ ...(body as Record<string, unknown>), installId: undefined })
+  expect(values(learning.checkins[0].body)).toEqual(values(plain.checkins[0].body))
+  expect(JSON.stringify(learning.checkins[0].body)).not.toMatch(/skill|workflow|learned/i)
+  expect(learning.store.get("sent")).toEqual(plain.store.get("sent"))
+})
+
+test("sends Codium activity with zero own usage and no Codium-specific fields", async () => {
+  const app = fixture()
+  app.state.usage = {
+    ...summary({ lifetimeTokens: 0, modelResponses: 2 }),
+    lifetimeCost: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    reasoningTokens: 0,
+    cachedTokens: 0,
+    codiumResponses: 3,
+    unpricedResponses: 3,
+    completedChats: 2,
+    conversations: 1,
+    activeDays: 1,
+    favoriteModels: [],
+    effortLevels: [],
+    days: [{ date: "2026-10-09", tokens: 0, cost: 0, tasks: 2, codium: 3 }],
+    helpers: [{ id: "vectorscope.review", sessions: 1, responses: 1, tokens: 0, cost: 0, codiumSteps: 1 }],
+  }
+  expect(await app.usage.checkin()).toBe(true)
+  const sent = app.checkins[0].body as {
+    usage: {
+      lifetimeTokens: number
+      lifetimeCost: number
+      modelResponses: number
+      days: unknown[]
+      favoriteModels: unknown[]
+    }
+  }
+  expect(sent.usage).toMatchObject({ lifetimeTokens: 0, lifetimeCost: 0, modelResponses: 2, completedChats: 2 })
+  expect(sent.usage.days).toEqual([{ date: "2026-10-09", tokens: 0, cost: 0, tasks: 2 }])
+  expect(sent.usage.favoriteModels).toEqual([])
+  expect(JSON.stringify(sent)).not.toMatch(/codium|vector-plan|vectorscope/)
+})
+
 test("marks the engine's history as reported only after an accepted check-in that carried the report", async () => {
   const marks: string[] = []
   const app = fixture({ checkinStatus: 503 })

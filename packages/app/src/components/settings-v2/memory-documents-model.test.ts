@@ -963,3 +963,26 @@ describe("the search model card", () => {
     }
   })
 })
+
+test("Codium distillation estimates and history never expose raw billing quantities", () => {
+  const estimate = {
+    enabled: true,
+    model: "Vector Flash",
+    costKind: "codium" as const,
+    sections: 3,
+    input: 90000,
+    output: 10000,
+    lowUsd: 9,
+    highUsd: 12,
+  }
+  expect(distillEstimateLabel(estimate)).toBe("Runs on Vector Flash (Codium).")
+  expect(distillCostLabel(estimate)).toBe("Codium")
+  expect(
+    historyLine({
+      at: 2,
+      action: "distilled",
+      actor: "user",
+      detail: { model: "Vector Flash", kept: 2, tokens: { input: 90000, output: 10000 }, cost: 9, costKind: "codium" },
+    }),
+  ).toBe("You asked Vector Flash to find more: 2 suggestions kept (Codium)")
+})

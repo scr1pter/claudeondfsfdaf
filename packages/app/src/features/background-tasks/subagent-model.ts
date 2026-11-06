@@ -3,6 +3,7 @@ import type { Task } from "@vectordevai/schema/task"
 import { GENERAL_SUBAGENT_ID, subagentIdentity } from "@vectordevai/session-ui/subagent-identity"
 import { taskBatchEntries, taskItemState } from "@vectordevai/ui/task-batch"
 import { isInternalSession } from "@/utils/internal-sessions"
+import { english, type TaskTranslate } from "./task-limits"
 
 /*
  * Pure derivation behind the Background tasks panel and the inline task chips.
@@ -45,6 +46,60 @@ export type TaskModel = {
   short: string
 }
 
+/*
+ * The 1.99.113 fields (4.5, 4.6). Each is read from the task part's metadata first, the child's record next, and a
+ * board observation last, so chips show before the board refreshes. Enums the engine may extend stay strings.
+ */
+
+/** A checked answer: `format` "json" for an output_schema child; `valid` once checked. */
+export type TaskResult = { format: string; valid?: boolean; attempts?: number }
+
+/** The child's own worktree or copy. Never the directory: the record keeps none and the board strips it for viewers. */
+export type TaskIsolation = {
+  mode: string
+  state: string
+  branch?: string
+  files?: number
+  additions?: number
+  deletions?: number
+  merged?: string[]
+  skipped?: string[]
+  conflicts?: string[]
+  error?: string
+}
+
+/** An unanswered permission or question. */
+export type TaskWaiting = { kind: string; since: number; summary?: string }
+
+/** Stopped by a restart, a crash or an instance disposal; nothing resumes it on its own. */
+export type TaskInterrupted = { at: number; cause: string; resumedAt?: number; dismissedAt?: number }
+
+export type TaskWorkflowStage = {
+  id: string
+  title: string
+  phase: string
+  total?: number
+  done: number
+  failed: number
+  skipped: number
+  running: number
+  waiting: number
+}
+
+/** A workflow run (`role` "run") or one of its agents (`role` "agent"). */
+export type TaskWorkflow = {
+  role: string
+  runID?: string
+  title?: string
+  stage?: string
+  phase?: string
+  item?: string
+  round?: number
+  verified?: boolean
+  stages?: TaskWorkflowStage[]
+  agents?: { launched: number; max: number; running: number }
+}
+
 export type TaskAgent = {
   key: string
   partID?: string
@@ -64,15 +119,28 @@ export type TaskAgent = {
   startedAt?: number
   endedAt?: number
   tokens?: number
+  tokensOwnOnly?: boolean
   toolUses?: number
   model?: TaskModel
   error?: string
   task?: Task.Info
   cost?: number
   unpricedSteps?: number
+  codiumSteps?: number
   currentStep?: string
   ownedPaths?: readonly string[]
   dependsOn?: readonly string[]
+  /** The effort the child runs at, when the call or Thorough set one: "default", "low", "medium" or "high". */
+  effort?: string
+  /** Started from the whole conversation (`fork: true`). */
+  fork?: boolean
+  result?: TaskResult
+  isolation?: TaskIsolation
+  /** Why a queued child has not started, e.g. "Waiting for a free subagent slot". */
+  queuedReason?: string
+  waiting?: TaskWaiting
+  interrupted?: TaskInterrupted
+  workflow?: TaskWorkflow
   /**
    * Later task parts that only added to this agent's live run (a task_id call
    * on a job still running). They get no row, square or chip of their own.
@@ -103,8 +171,11 @@ export type TaskCard = {
   startedAt?: number
   endedAt?: number
   tokens?: number
+  tokensOwnOnly?: boolean
   agents: TaskAgent[]
   phases: TaskPhase[]
+  /** A workflow run's card: its run row and whichever of its agents have been loaded. */
+  runID?: string
 }
 
 export type TaskSource = {
@@ -253,9 +324,116 @@ export function modelShortName(name: string) {
 }
 
 // ---------------------------------------------------------------------------
+// Labels for the 1.99.113 fields (5.I.3). Every value a model or child wrote is returned as text for a text node.
+
+/** "Opus 5 · high": the model column. "default" adds nothing, so it is left out. */
+export function modelEffortLabel(
+  agent: Pick<TaskAgent, "model" | "effort">,
+  t: TaskTranslate = english,
+): string | undefined {
+  const effort = agent.effort && agent.effort !== "default" ? agent.effort : undefined
+  if (!agent.model) return effort
+  return effort ? t("backgroundTasks.effort", { model: agent.model.short, effort }) : agent.model.short
+}
+
+/** "Queued: waiting for a free subagent slot", from the engine's slot reason. */
+export function queuedLabel(reason: string, t: TaskTranslate = english) {
+  const trimmed = reason.trim()
+  const lowered = /^[A-Z][a-z]/.test(trimmed) ? trimmed[0]!.toLowerCase() + trimmed.slice(1) : trimmed
+  return t("backgroundTasks.queued", { reason: lowered })
+}
+
+/** "Needs your permission · 3m" or "Needs your answer · <1m". */
+export function waitingLabel(waiting: TaskWaiting, now: number, t: TaskTranslate = english) {
+  const minutes = Math.floor(Math.max(0, now - waiting.since) / 60_000)
+  const time =
+    minutes < 1 ? t("backgroundTasks.waiting.justNow") : t("backgroundTasks.waiting.minutes", { count: minutes })
+  return waiting.kind === "question"
+    ? t("backgroundTasks.waiting.question", { time })
+    : t("backgroundTasks.waiting.permission", { time })
+}
+
+/**
+ * The JSON chip: "valid" (green), "invalid" (red) or "pending". Its text says which too ("JSON valid"), so the state
+ * is never shown by colour alone, and its tooltip adds the attempts.
+ */
+export function resultChip(result: TaskResult | undefined, t: TaskTranslate = english) {
+  if (!result || result.format !== "json") return undefined
+  const state: "valid" | "invalid" | "pending" =
+    result.valid === true ? "valid" : result.valid === false ? "invalid" : "pending"
+  const base = t(`backgroundTasks.json.${state}`)
+  const title =
+    result.attempts !== undefined && result.attempts > 1
+      ? t("backgroundTasks.json.attempts", { label: base, count: result.attempts })
+      : base
+  return { state, label: t(`backgroundTasks.json.label.${state}`), title }
+}
+
+/**
+ * What a workflow stage's count says beside done/total: its failed and skipped agents and whether one waits on the user.
+ * The stage's bar shows them by colour only, and is hidden from screen readers.
+ */
+export function stageNotes(
+  stage: Pick<Task.WorkflowStage, "failed" | "skipped" | "waiting">,
+  t: TaskTranslate = english,
+): string[] {
+  return [
+    ...(stage.failed > 0 ? [t("backgroundTasks.workflow.failed", { count: stage.failed })] : []),
+    ...(stage.skipped > 0 ? [t("backgroundTasks.workflow.skipped", { count: stage.skipped })] : []),
+    ...(stage.waiting > 0 ? [t("backgroundTasks.workflow.waiting")] : []),
+  ]
+}
+
+/**
+ * Below a review patch that was cut short: what the user can do to see the rest. The pane never holds the checkout's
+ * folder, so a worktree's branch is named for git, and a copy (which has no branch) is merged whole.
+ */
+export function patchTruncatedText(isolation: Pick<TaskIsolation, "branch">, t: TaskTranslate = english) {
+  return isolation.branch
+    ? t("backgroundTasks.worktree.patchTruncated.branch", { branch: isolation.branch })
+    : t("backgroundTasks.worktree.patchTruncated.copy")
+}
+
+/** "Worktree: vector/task-ses_1 · changed · 3 files changed". */
+export function isolationLabel(isolation: TaskIsolation, t: TaskTranslate = english) {
+  const kind = isolation.mode === "copy" ? t("backgroundTasks.worktree.copy") : t("backgroundTasks.worktree")
+  const files =
+    isolation.files === undefined
+      ? []
+      : [t(`backgroundTasks.worktree.files.${isolation.files === 1 ? "one" : "other"}`, { count: isolation.files })]
+  return `${kind}: ${[...(isolation.branch ? [isolation.branch] : []), isolation.state, ...files].join(" · ")}`
+}
+
+/** Interrupted by a restart and neither resumed nor dismissed since. */
+export function isInterrupted(agent: Pick<TaskAgent, "interrupted" | "status">) {
+  const interrupted = agent.interrupted
+  return (
+    !!interrupted &&
+    !isLive(agent.status) &&
+    interrupted.resumedAt === undefined &&
+    interrupted.dismissedAt === undefined
+  )
+}
+
+/** A workflow agent whose run row stands for it: one stop, one spend and one count per run. */
+export function coveredByRun(agent: Pick<TaskAgent, "task">, runs: ReadonlySet<string>) {
+  const workflow = agent.task?.workflow
+  return workflow?.role === "agent" && runs.has(workflow.runID)
+}
+
+/** The workflow runs listed among these agents, by run ID. */
+export function runIDs(agents: readonly Pick<TaskAgent, "task">[]) {
+  return new Set(
+    agents.flatMap((agent) =>
+      agent.task?.workflow?.role === "run" ? [agent.task.workflow.runID || agent.task.id] : [],
+    ),
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Lifecycle fields, read defensively from either surface
 
-type Usage = { total?: number; toolUses?: number; cost?: number; unpricedSteps?: number }
+type Usage = { total?: number; toolUses?: number; cost?: number; unpricedSteps?: number; codiumSteps?: number }
 
 type Lifecycle = {
   kind?: SubagentKind
@@ -275,6 +453,15 @@ type Lifecycle = {
   ownedPaths?: readonly string[]
   dependsOn?: readonly string[]
   model?: { providerID: string; modelID: string; variant?: string }
+  effort?: string
+  fork?: boolean
+  result?: TaskResult
+  isolation?: TaskIsolation
+  queuedReason?: string
+  waiting?: TaskWaiting
+  interrupted?: TaskInterrupted
+  workflow?: TaskWorkflow
+  groupID?: string
 }
 
 const LIFECYCLE_STATUSES: readonly string[] = ["queued", "running", "completed", "error", "cancelled"]
@@ -314,8 +501,135 @@ function readUsage(value: unknown): Usage | undefined {
     : undefined
   const total = finite(item.total) ?? summed
   const toolUses = finite(item.toolUses)
-  if (total === undefined && toolUses === undefined) return undefined
-  return { total, toolUses, ...definedFields({ cost: finite(item.cost), unpricedSteps: finite(item.unpricedSteps) }) }
+  if (total === undefined && toolUses === undefined && item.codiumSteps === undefined) return undefined
+  return {
+    total,
+    toolUses,
+    ...definedFields({
+      cost: finite(item.cost),
+      unpricedSteps: finite(item.unpricedSteps),
+      codiumSteps: finite(item.codiumSteps),
+    }),
+  }
+}
+
+// A short lowercase word ("low", "high"); anything else is not an effort.
+const EFFORT = /^[a-z][a-z-]{0,15}$/
+const CONFLICTS_MAX = 50
+
+function count(value: unknown) {
+  const number = finite(value)
+  return number !== undefined && number >= 0 ? number : undefined
+}
+
+function strings(value: unknown, max: number) {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string").slice(0, max)
+    : undefined
+}
+
+/** `result` as the board sends it, or `structured` as the part ({valid, attempts}) and the record (schema too) keep it. */
+function readResult(result: unknown, structured: unknown): TaskResult | undefined {
+  const board = record(result)
+  const format = text(board?.format)
+  if (board && format)
+    return definedFields({
+      format,
+      valid: typeof board.valid === "boolean" ? board.valid : undefined,
+      attempts: count(board.attempts),
+    }) as TaskResult
+  const checked = record(structured)
+  if (!checked) return undefined
+  return definedFields({
+    format: "json",
+    valid: typeof checked.valid === "boolean" ? checked.valid : undefined,
+    attempts: count(checked.attempts),
+  }) as TaskResult
+}
+
+/** Isolation without its directory, which only the owner may see and the pane never shows. */
+export function readIsolation(value: unknown): TaskIsolation | undefined {
+  const item = record(value)
+  const mode = text(item?.mode)
+  const state = text(item?.state)
+  if (!item || !mode || !state) return undefined
+  return definedFields({
+    mode,
+    state,
+    branch: text(item.branch),
+    files: count(item.files),
+    additions: count(item.additions),
+    deletions: count(item.deletions),
+    merged: strings(item.merged, 500),
+    skipped: strings(item.skipped, 500),
+    conflicts: strings(item.conflicts, CONFLICTS_MAX),
+    error: text(item.error),
+  }) as TaskIsolation
+}
+
+function readWaiting(value: unknown): TaskWaiting | undefined {
+  const item = record(value)
+  const kind = text(item?.kind)
+  const since = finite(item?.since)
+  if (!item || !kind || since === undefined) return undefined
+  return definedFields({ kind, since, summary: text(item.summary) }) as TaskWaiting
+}
+
+/** The record's `interruption` or the board's `interrupted`; a cause it does not know reads as "unknown". */
+function readInterrupted(value: unknown): TaskInterrupted | undefined {
+  const item = record(value)
+  const at = finite(item?.at)
+  if (!item || at === undefined) return undefined
+  return definedFields({
+    at,
+    cause: text(item.cause) ?? "unknown",
+    resumedAt: finite(item.resumedAt),
+    dismissedAt: finite(item.dismissedAt),
+  }) as TaskInterrupted
+}
+
+function readStage(value: unknown): TaskWorkflowStage | undefined {
+  const item = record(value)
+  const id = text(item?.id)
+  if (!item || !id) return undefined
+  return definedFields({
+    id,
+    title: text(item.title) ?? id,
+    phase: text(item.phase) ?? "",
+    total: count(item.total),
+    done: count(item.done) ?? 0,
+    failed: count(item.failed) ?? 0,
+    skipped: count(item.skipped) ?? 0,
+    running: count(item.running) ?? 0,
+    waiting: count(item.waiting) ?? 0,
+  }) as TaskWorkflowStage
+}
+
+/** The board's `workflow`, or the record's (a run keeps its stages in `progress`). */
+export function readWorkflow(value: unknown): TaskWorkflow | undefined {
+  const item = record(value)
+  const role = text(item?.role)
+  if (!item || !role) return undefined
+  const progress = record(item.progress)
+  const stages = (Array.isArray(item.stages) ? item.stages : Array.isArray(progress?.stages) ? progress.stages : [])
+    .map(readStage)
+    .filter((stage): stage is TaskWorkflowStage => !!stage)
+  const agents = record(item.agents) ?? record(progress?.agents)
+  const launched = count(agents?.launched)
+  const max = count(agents?.max)
+  return definedFields({
+    role,
+    runID: text(item.runID),
+    title: text(item.title),
+    stage: text(item.stage),
+    phase: text(item.phase),
+    item: text(item.item),
+    round: count(item.round),
+    verified: typeof item.verified === "boolean" ? item.verified : undefined,
+    stages: stages.length ? stages : undefined,
+    agents:
+      launched !== undefined && max !== undefined ? { launched, max, running: count(agents?.running) ?? 0 } : undefined,
+  }) as TaskWorkflow
 }
 
 /** Reads lifecycle fields from a task part's metadata (parentMessageId, sessionId) or a child record (parentMessageID). */
@@ -324,6 +638,7 @@ export function readLifecycle(value: unknown): Lifecycle {
   if (!item) return {}
   const kind = item.kind === "subagent" || item.kind === "specialist" ? item.kind : undefined
   const status = typeof item.status === "string" && LIFECYCLE_STATUSES.includes(item.status) ? item.status : undefined
+  const effort = text(item.effort)
   return {
     kind,
     agent: text(item.agent),
@@ -349,6 +664,17 @@ export function readLifecycle(value: unknown): Lifecycle {
       ? item.dependsOn.filter((id): id is string => typeof id === "string")
       : undefined,
     model: readModel(item.model),
+    effort: effort && EFFORT.test(effort) ? effort : undefined,
+    // The part says `fork: true`; the record keeps `{point, callID, …}`.
+    fork: item.fork === true || record(item.fork) ? true : undefined,
+    result: readResult(item.result, item.structured),
+    isolation: readIsolation(item.isolation),
+    // The part mirrors the record's slotReason as queuedReason.
+    queuedReason: text(item.queuedReason) ?? text(item.slotReason),
+    waiting: readWaiting(item.waiting),
+    interrupted: readInterrupted(item.interruption ?? item.interrupted),
+    workflow: readWorkflow(item.workflow),
+    groupID: text(item.groupID),
   }
 }
 
@@ -454,12 +780,14 @@ export function aggregateStatus(statuses: readonly TaskStatus[]): TaskStatus {
 
 type ChildFacts = {
   tokens?: number
+  tokensOwnOnly?: boolean
   toolUses?: number
   last?: StatusInput["last"]
   lastModel?: { providerID: string; modelID: string; variant?: string }
   currentStep?: string
   cost?: number
   unpricedSteps?: number
+  codiumSteps?: number
 }
 
 function tokenSum(tokens: unknown) {
@@ -481,7 +809,9 @@ export function childFacts(source: TaskSource, sessionID: string | undefined): C
   if (!sessionID) return {}
   const messages = source.messages(sessionID) ?? []
   let steps = 0
-  let stepTokens = 0
+  let stepTokens: number | undefined
+  let stepCodium = 0
+  let messageCodium = 0
   let toolUses: number | undefined
   let messageTokens: number | undefined
   let last: ChildFacts["last"]
@@ -489,7 +819,10 @@ export function childFacts(source: TaskSource, sessionID: string | undefined): C
   let currentStep: string | undefined
   for (const message of messages) {
     if (message.role !== "assistant") continue
-    messageTokens = (messageTokens ?? 0) + tokenSum(message.tokens)
+    const codium = Boolean(Billing.of(message))
+    messageCodium += Number(codium)
+    const own = Billing.hasOwnIdentity(message)
+    if (own) messageTokens = (messageTokens ?? 0) + tokenSum(message.tokens)
     last = {
       created: finite(message.time?.created),
       completed: finite(message.time?.completed),
@@ -508,20 +841,38 @@ export function childFacts(source: TaskSource, sessionID: string | undefined): C
       }
       if (part.type === "step-finish") {
         steps += 1
-        stepTokens += tokenSum(part.tokens)
+        const billed = codium || Boolean(Billing.of(part))
+        stepCodium += Number(billed)
+        if (!billed && own) stepTokens = (stepTokens ?? 0) + tokenSum(part.tokens)
       }
     }
   }
-  const row = tokenSum(source.session(sessionID)?.tokens)
-  const tokens = steps > 0 ? stepTokens : row > 0 ? row : messageTokens
+  const session = source.session(sessionID)
+  const legacy =
+    session?.tokensOwnOnly !== true &&
+    Boolean(messageCodium || (session?.codiumSteps ?? 0) > 0 || (session && Billing.of(session)))
+  const row = tokenSum(session?.tokens)
+  const tokens =
+    steps > 0
+      ? stepTokens
+      : messageCodium
+        ? messageTokens
+        : legacy
+          ? messageTokens
+          : session?.tokensOwnOnly === true && row > 0
+            ? row
+            : messageTokens
+  const codiumSteps = Math.max(session?.codiumSteps ?? 0, steps ? stepCodium : messageCodium, legacy ? 1 : 0)
   return {
     tokens,
+    tokensOwnOnly: tokens !== undefined,
     toolUses,
     last,
     lastModel,
     currentStep,
     cost: finite(source.session(sessionID)?.cost),
     unpricedSteps: finite(source.session(sessionID)?.unpricedSteps),
+    ...(codiumSteps ? { codiumSteps } : {}),
   }
 }
 
@@ -606,6 +957,8 @@ function buildAgent(source: TaskSource, seed: AgentSeed): TaskAgent {
   const title =
     run.title || subagentTitle(input.description, input.prompt) || stripSubagentSuffix(child?.title) || "Subagent task"
   const model = modelRef(source, run.model ?? stored?.model ?? facts.lastModel ?? sessionModel(child))
+  const codiumSteps =
+    run.usage?.codiumSteps ?? facts.codiumSteps ?? (Billing.isCodium(model?.providerID) ? 1 : undefined)
   const error =
     run.error ?? partError ?? (facts.last?.error && facts.last.error !== ABORTED ? facts.last.error : undefined)
   return {
@@ -625,12 +978,15 @@ function buildAgent(source: TaskSource, seed: AgentSeed): TaskAgent {
     background,
     startedAt,
     endedAt: endedAt !== undefined && startedAt !== undefined ? Math.max(endedAt, startedAt) : endedAt,
-    tokens: run.usage?.total ?? facts.tokens,
+    // Lifecycle metadata is editable and may carry copied historical totals. Only loaded accounting facts certify tokens.
+    tokens: facts.tokens,
+    tokensOwnOnly: facts.tokensOwnOnly === true,
     toolUses: run.usage?.toolUses ?? facts.toolUses,
     model,
     error: status === "failed" ? error : undefined,
     cost: facts.cost ?? run.usage?.cost,
     unpricedSteps: facts.unpricedSteps ?? run.usage?.unpricedSteps,
+    codiumSteps,
     currentStep: facts.currentStep,
     ownedPaths:
       run.ownedPaths ??
@@ -642,6 +998,20 @@ function buildAgent(source: TaskSource, seed: AgentSeed): TaskAgent {
       (Array.isArray(input.depends_on)
         ? input.depends_on.filter((id): id is string => typeof id === "string")
         : undefined),
+    ...definedFields({
+      effort: run.effort,
+      fork: run.fork,
+      result: run.result,
+      isolation: run.isolation,
+      queuedReason: status === "pending" ? run.queuedReason : undefined,
+      waiting: run.waiting,
+      interrupted: run.interrupted,
+      // A run's record does not name itself; its session is the run.
+      workflow:
+        run.workflow?.role === "run" && !run.workflow.runID && sessionID
+          ? { ...run.workflow, runID: sessionID }
+          : run.workflow,
+    }),
   }
 }
 
@@ -970,23 +1340,32 @@ export function locateTaskPart(cards: readonly TaskCard[], partID: string): Task
   return taskPartLocations(cards).get(partID)
 }
 
-type CountedCard = { agents: readonly Pick<TaskAgent, "key" | "sessionID" | "status">[] }
+type CountedCard = { agents: readonly Pick<TaskAgent, "key" | "sessionID" | "status" | "task">[] }
+
+/**
+ * A card's agents as one count each. A workflow run's loaded agents are left out while its run row is listed: the run
+ * stands for them, as it does for Stop and spend, so opening a run's stages never changes the counts.
+ */
+function counted(card: CountedCard) {
+  const runs = runIDs(card.agents)
+  return runs.size ? card.agents.filter((agent) => !coveredByRun(agent, runs)) : card.agents
+}
 
 /** Distinct agents still running, waiting or queued: what keeps the clock ticking. */
 export function liveAgentCount(cards: readonly CountedCard[]) {
-  return countAgents(cards.flatMap((card) => card.agents.filter((agent) => isLive(agent.status))))
+  return countAgents(cards.flatMap((card) => counted(card).filter((agent) => isLive(agent.status))))
 }
 
 /** Distinct agents running or waiting on you, for the header badge; queued ones have not started. */
 export function runningAgentCount(cards: readonly CountedCard[]) {
   return countAgents(
-    cards.flatMap((card) => card.agents.filter((agent) => agent.status === "running" || agent.status === "waiting")),
+    cards.flatMap((card) => counted(card).filter((agent) => agent.status === "running" || agent.status === "waiting")),
   )
 }
 
 /** Distinct agents blocked on a permission or question, including resumed runs. */
 export function waitingAgentCount(cards: readonly CountedCard[]) {
-  return countAgents(cards.flatMap((card) => card.agents.filter((agent) => agent.status === "waiting")))
+  return countAgents(cards.flatMap((card) => counted(card).filter((agent) => agent.status === "waiting")))
 }
 
 /**
@@ -1015,3 +1394,4 @@ export function isDismissed(card: Pick<TaskCard, "live" | "endedAt">, dismissedA
   if (card.live || dismissedAt === undefined) return false
   return card.endedAt === undefined || card.endedAt <= dismissedAt
 }
+import { Billing } from "@vectordevai/schema/billing"

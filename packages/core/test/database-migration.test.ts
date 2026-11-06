@@ -26,10 +26,14 @@ import { SessionTable } from "@vectordevai/core/session/sql"
 import sessionMetadataMigration from "@vectordevai/core/database/migration/20260511173437_session-metadata"
 import sessionInternalHelpersMigration from "@vectordevai/core/database/migration/20261011044552_session_internal_helpers"
 import classifyEarlyReviewHelpersMigration from "@vectordevai/core/database/migration/20261015171500_classify_early_review_helpers"
+import backgroundJobMigration from "@vectordevai/core/database/migration/20261028021005_background_job"
+import sessionCodiumStepsMigration from "@vectordevai/core/database/migration/20261031070337_session_codium_steps"
+import sessionTokenProvenanceMigration from "@vectordevai/core/database/migration/20261101020803_session_token_provenance"
 import type { SqlClient as SqlClientService } from "effect/unstable/sql/SqlClient"
 import { Database } from "@vectordevai/core/database/database"
 import { SessionProjector } from "@vectordevai/core/session/projector"
 import { SessionV1 } from "@vectordevai/core/v1/session"
+import { WorkflowCheckpointStore } from "@vectordevai/core/workflow-checkpoint-store"
 import { tmpdir } from "./fixture/tmpdir"
 
 const run = <A, E>(effect: Effect.Effect<A, E, SqlClientService>) =>
@@ -40,6 +44,37 @@ const run = <A, E>(effect: Effect.Effect<A, E, SqlClientService>) =>
 const makeDb = EffectDrizzleSqlite.makeWithDefaults()
 
 describe("DatabaseMigration", () => {
+  test("token provenance starts unknown for old rows with missing history and for generic later inserts", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        yield* db.run(
+          sql`CREATE TABLE session (id text PRIMARY KEY, tokens_input integer NOT NULL DEFAULT 0, cost real NOT NULL DEFAULT 0, codium_steps integer NOT NULL DEFAULT 0, metadata text)`,
+        )
+        yield* db.run(
+          sql`INSERT INTO session (id, tokens_input, cost, codium_steps, metadata) VALUES ('old', 900, 0.12, 1, '{"tokensOwnOnly":true,"subagentTokensOwnOnly":true}'), ('empty', 0, 0, 0, NULL)`,
+        )
+        // No messages remain to inspect, and even a positive modern Codium count says nothing about older totals.
+        yield* DatabaseMigration.applyOnly(db, [sessionTokenProvenanceMigration])
+        expect(
+          yield* db.all(sql`SELECT id, tokens_own_only, subagent_tokens_own_only FROM session ORDER BY id`),
+        ).toEqual([
+          { id: "empty", tokens_own_only: 0, subagent_tokens_own_only: 0 },
+          { id: "old", tokens_own_only: 0, subagent_tokens_own_only: 0 },
+        ])
+        expect(yield* db.get(sql`SELECT tokens_input, cost, codium_steps FROM session WHERE id = 'old'`)).toEqual({
+          tokens_input: 900,
+          cost: 0.12,
+          codium_steps: 1,
+        })
+        yield* db.run(sql`INSERT INTO session (id) VALUES ('later')`)
+        expect(
+          yield* db.get(sql`SELECT tokens_own_only, subagent_tokens_own_only FROM session WHERE id = 'later'`),
+        ).toEqual({ tokens_own_only: 0, subagent_tokens_own_only: 0 })
+      }),
+    )
+  })
+
   test("serializes concurrent embedded initialization for one database path", async () => {
     await using tmp = await tmpdir()
     const filename = path.join(tmp.path, "embedded.sqlite")
@@ -97,6 +132,78 @@ describe("DatabaseMigration", () => {
           { name: "session_message_session_time_created_id_idx" },
           { name: "session_message_session_type_seq_idx" },
         ])
+      }),
+    )
+  })
+
+  test("creates the background job table and its indexes, and a deleted session takes its rows along", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        yield* db.run(sql`PRAGMA foreign_keys = ON`)
+        yield* DatabaseMigration.apply(db)
+        // The migration itself, as an existing database runs it.
+        yield* db.run(sql`DROP TABLE background_job`)
+        yield* db.run(sql`DELETE FROM migration WHERE id = ${backgroundJobMigration.id}`)
+        yield* DatabaseMigration.applyOnly(db, [backgroundJobMigration])
+
+        expect(
+          yield* db.all(
+            sql`SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'background_job' AND name NOT LIKE 'sqlite_%' ORDER BY name`,
+          ),
+        ).toEqual([{ name: "background_job_parent_idx" }, { name: "background_job_status_directory_idx" }])
+        expect(
+          yield* db.all(sql`SELECT name FROM pragma_index_info('background_job_status_directory_idx') ORDER BY seqno`),
+        ).toEqual([{ name: "status" }, { name: "directory" }])
+
+        yield* db.run(
+          sql`INSERT INTO project (id, worktree, time_created, time_updated, sandboxes) VALUES ('global', '/project', 1, 1, '[]')`,
+        )
+        yield* db.run(
+          sql`INSERT INTO session (id, project_id, slug, directory, title, version, time_created, time_updated) VALUES ('session', 'global', 'session', '/project', 'Parent', 'test', 1, 1)`,
+        )
+        yield* db.run(
+          sql`INSERT INTO background_job (id, type, parent_session_id, directory, status, owner_runtime, owner_pid, owner_boot, owner_machine, started_at, time_created, time_updated) VALUES ('job', 'task', 'session', '/project', 'running', 'process:instance', 1, 1, 'machine', 1, 1, 1)`,
+        )
+        expect(yield* db.get(sql`SELECT background, reported_at FROM background_job WHERE id = 'job'`)).toEqual({
+          background: 0,
+          reported_at: null,
+        })
+
+        yield* db.run(sql`DELETE FROM session WHERE id = 'session'`)
+        expect(yield* db.get(sql`SELECT count(*) AS count FROM background_job`)).toEqual({ count: 0 })
+      }),
+    )
+  })
+
+  test("keeps one workflow checkpoint per run: a stale attempt never replaces it, and its session takes it along", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        yield* db.run(sql`PRAGMA foreign_keys = ON`)
+        yield* DatabaseMigration.apply(db)
+        yield* db.run(
+          sql`INSERT INTO project (id, worktree, time_created, time_updated, sandboxes) VALUES ('global', '/project', 1, 1, '[]')`,
+        )
+        yield* db.run(
+          sql`INSERT INTO session (id, project_id, slug, directory, title, version, time_created, time_updated) VALUES ('ses_run', 'global', 'run', '/project', 'Run', 'test', 1, 1)`,
+        )
+        const store = WorkflowCheckpointStore.make(db as never)
+        expect(yield* store.write({ sessionID: "ses_run", attempt: 2, data: '{"version":1,"n":2}' })).toBe(true)
+        // An older attempt's late save is refused and leaves the newer checkpoint in place.
+        expect(yield* store.write({ sessionID: "ses_run", attempt: 1, data: '{"version":1,"n":1}' })).toBe(false)
+        expect(yield* store.read("ses_run")).toEqual({
+          sessionID: "ses_run",
+          attempt: 2,
+          digest: WorkflowCheckpointStore.digest('{"version":1,"n":2}'),
+          data: '{"version":1,"n":2}',
+        })
+        // The same text again is a successful no-op; a newer attempt takes over even identical text.
+        expect(yield* store.write({ sessionID: "ses_run", attempt: 2, data: '{"version":1,"n":2}' })).toBe(true)
+        expect(yield* store.write({ sessionID: "ses_run", attempt: 3, data: '{"version":1,"n":2}' })).toBe(true)
+        expect((yield* store.read("ses_run"))?.attempt).toBe(3)
+        yield* db.run(sql`DELETE FROM session WHERE id = 'ses_run'`)
+        expect(yield* store.read("ses_run")).toBeUndefined()
       }),
     )
   })
@@ -517,6 +624,57 @@ describe("DatabaseMigration", () => {
           { id: "vecbot", internal: "vectorscope.security", cost: 0.75 },
           { id: "vecbot-cli", internal: "vectorscope.review", cost: 0.75 },
         ])
+      }),
+    )
+  })
+
+  test("adds the Codium step counts to existing sessions at 0 and leaves their totals as they were", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        yield* db.run(
+          sql`CREATE TABLE session (id text PRIMARY KEY, cost real DEFAULT 0 NOT NULL, unpriced_steps integer DEFAULT 0 NOT NULL, subagent_unpriced_steps integer DEFAULT 0 NOT NULL, tokens_input integer DEFAULT 0 NOT NULL)`,
+        )
+        // Recorded before the counts existed: Codium steps among them stay in these totals (no backfill).
+        yield* db.run(
+          sql`INSERT INTO session (id, cost, unpriced_steps, subagent_unpriced_steps, tokens_input) VALUES ('parent', 0.5, 2, 3, 40), ('child', 0, 3, 0, 12)`,
+        )
+
+        yield* DatabaseMigration.applyOnly(db, [sessionCodiumStepsMigration])
+
+        expect(
+          yield* db.all(
+            sql`SELECT id, cost, unpriced_steps, subagent_unpriced_steps, tokens_input, codium_steps, subagent_codium_steps FROM session ORDER BY id`,
+          ),
+        ).toEqual([
+          {
+            id: "child",
+            cost: 0,
+            unpriced_steps: 3,
+            subagent_unpriced_steps: 0,
+            tokens_input: 12,
+            codium_steps: 0,
+            subagent_codium_steps: 0,
+          },
+          {
+            id: "parent",
+            cost: 0.5,
+            unpriced_steps: 2,
+            subagent_unpriced_steps: 3,
+            tokens_input: 40,
+            codium_steps: 0,
+            subagent_codium_steps: 0,
+          },
+        ])
+        // A session created afterwards takes the defaults too.
+        yield* db.run(sql`INSERT INTO session (id) VALUES ('later')`)
+        expect(yield* db.get(sql`SELECT codium_steps, subagent_codium_steps FROM session WHERE id = 'later'`)).toEqual({
+          codium_steps: 0,
+          subagent_codium_steps: 0,
+        })
+        expect(yield* db.get(sql`SELECT id FROM migration WHERE id = ${sessionCodiumStepsMigration.id}`)).toEqual({
+          id: sessionCodiumStepsMigration.id,
+        })
       }),
     )
   })

@@ -1,4 +1,5 @@
 import { freeModelRegionLabel, freeModelTrainingLabel } from "@vectordevai/core/free-model-choice"
+import { Billing } from "@vectordevai/schema/billing"
 import { Popover as Kobalte } from "@kobalte/core/popover"
 import {
   Component,
@@ -26,9 +27,11 @@ import { Dialog as DialogV2, DialogBody, DialogTitle } from "@vectordevai/ui/v2/
 import { useLanguage } from "@/context/language"
 import { decode64 } from "@/utils/base64"
 import { offInLocalProviders, type OffModel } from "@/features/local/local-model"
+import { useCodiumPurchase } from "@/components/codium-purchase"
 import {
   brandProviderName,
   buildModelSections,
+  codiumBadge,
   contextLabel,
   modelAriaLabel,
   modelTitle,
@@ -38,6 +41,7 @@ import {
   pickerModelKey,
   pickerModelName,
   pickerNavigation,
+  pickModel,
   pickerRowKey,
   pickerSectionLabel,
   pickerSectionViews,
@@ -144,7 +148,7 @@ function createPointerGuard() {
 
 /** Vector's own models (Free models inside of Vector, Vector Codium) carry Vector's chip, drawn in the text colour like
     every other provider's mark. */
-const VECTOR_MARKS = new Set(["vector", "vector-plan"])
+const VECTOR_MARKS = new Set(["vector", Billing.CODIUM_PROVIDER_ID])
 
 function ProviderMark(props: { id?: string }) {
   return (
@@ -183,6 +187,7 @@ function ModelRow(props: { item: ModelItem; mark: boolean }) {
       <Show when={freeModelRegionLabel(props.item)}>
         {(label) => <span data-slot="model-row-region">{label()}</span>}
       </Show>
+      <Show when={codiumBadge(props.item)}>{(badge) => <span data-slot="model-row-badge">{badge().label}</span>}</Show>
       <span data-slot="model-row-context">{contextLabel(props.item.limit?.context)}</span>
     </>
   )
@@ -353,6 +358,7 @@ export function ModelSelectorPopoverV2(props: {
   const serverSync = useServerSync()
   const language = useLanguage()
   const dialog = useDialog()
+  const codiumPlans = useCodiumPurchase()
   // `now` is captured when the popover opens, so what search and spoken labels say about a model's age can't change
   // while it's showing.
   const [store, setStore] = createStore({ open: false, search: "", active: "", now: Date.now() })
@@ -418,7 +424,10 @@ export function ModelSelectorPopoverV2(props: {
     if (document.activeElement !== searchRef) setTimeout(() => searchRef?.focus())
   }
   const select = (item: ModelItem) => {
-    model.set({ modelID: item.id, providerID: item.provider.id }, { recent: true })
+    pickModel(item, {
+      set: (chosen) => model.set({ modelID: chosen.id, providerID: chosen.provider.id }, { recent: true }),
+      plans: codiumPlans,
+    })
     props.onClose?.()
   }
   const selectModel = (item: ModelItem) => {
@@ -591,6 +600,7 @@ export const DialogSelectModelV2: Component<{ provider?: string; model?: ModelSt
   const serverSync = useServerSync()
   const language = useLanguage()
   const dialog = useDialog()
+  const codiumPlans = useCodiumPurchase()
   const directory = () => decode64(local.slug())
   // Account models can arrive after the list was first read, as when vectordev.ai answers a first Codium catalog
   // read slowly; opening the picker reads the list again so they show up.
@@ -632,10 +642,17 @@ export const DialogSelectModelV2: Component<{ provider?: string; model?: ModelSt
     scrollToActive()
   }
 
-  const select = (item: ModelItem) => {
-    model.set({ modelID: item.id, providerID: item.provider.id }, { recent: true })
-    dialog.close()
-  }
+  const select = (item: ModelItem) =>
+    pickModel(item, {
+      set: (chosen) => {
+        model.set({ modelID: chosen.id, providerID: chosen.provider.id }, { recent: true })
+        dialog.close()
+      },
+      plans: () => {
+        dialog.close()
+        codiumPlans()
+      },
+    })
   const moveTo = (key: string) => {
     setPicked(key)
     scrollToActive()

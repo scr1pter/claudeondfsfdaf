@@ -1,3 +1,4 @@
+import { ModelPlanStatus } from "@vectordevai/core/model-plan-status"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { llmClient } from "@vectordevai/core/effect/app-node-platform"
 import { PermissionV1 } from "@vectordevai/core/v1/permission"
@@ -60,11 +61,24 @@ export type StreamInput = {
   // Reasoning effort from the request's task size (LLMRequestPrep.prepare).
   effort?: TaskSize.Effort
   tools: Record<string, Tool>
+  // What a Vector Codium request is for (X-Vector-Purpose): "title", "brain", a Vectorscope review's "review"; without
+  // one, a judge agent's request is "judge" and anything else "chat".
+  purpose?: ModelPlanStatus.Purpose
   retries?: number
+  // "required" is sent as "auto" where the provider refuses forced tool use with thinking on
+  // (ProviderTransform.toolChoice); `chose` hears what was sent.
   toolChoice?: "auto" | "required" | "none"
+  chose?: (toolChoice: "auto" | "required" | "none" | undefined) => void
+  // false turns Anthropic thinking off, for a closing step that must force a tool call.
+  thinking?: false
   // false for a request whose prefix is never sent again, such as a compaction summary: cache breakpoints would only
   // make the provider bill its whole input at the cache-write premium.
   cache?: boolean
+  // The prompt cache key to send instead of the session's (promptCacheKey, prompt_cache_key), such as a fork's root's
+  // on its first request. Affinity and session headers keep the session's own IDs.
+  cacheKey?: string
+  // The index in `messages` of a fork's last inherited message, which takes the non-final cache breakpoint.
+  boundary?: number
   // Called with usage the provider reports as it starts a response, before the step finishes. Interrupted streams
   // may report nothing more, so these counters remain a known subtotal with incomplete final usage.
   started?: (usage: UsageInput) => void
@@ -200,6 +214,10 @@ const live: Layer.Layer<
         typeof item.options.fetch === "function"
       )
         Object.assign(prepared.headers, { [REQUEST_ID_HEADER]: input.requestID })
+      const options =
+        input.thinking === false ? ProviderTransform.withoutThinking(prepared.params.options) : prepared.params.options
+      const toolChoice = ProviderTransform.toolChoice(input.model, options, input.toolChoice)
+      input.chose?.(toolChoice)
 
       // Wire up toolExecutor for DWS workflow models so that tool calls
       // from the workflow service are executed via vector's tool system
@@ -329,14 +347,19 @@ const live: Layer.Layer<
           llmClient,
           messages: prepared.messages,
           tools: prepared.tools,
-          toolChoice: input.toolChoice,
+          toolChoice,
           temperature: prepared.params.temperature,
           topP: prepared.params.topP,
           topK: prepared.params.topK,
           maxOutputTokens: prepared.params.maxOutputTokens,
-          providerOptions: prepared.params.options,
+          providerOptions: options,
           headers: prepared.headers,
           abort: input.abort,
+          ...(input.cache === false ? { cache: false } : {}),
+          // Native messages are not merged as the AI SDK's prompt is, so the boundary needs no promptIndex.
+          ...(input.boundary === undefined
+            ? {}
+            : { boundary: prepared.messages.length - input.messages.length + input.boundary }),
         })
         if (native.type === "supported") {
           yield* Effect.logInfo("llm runtime selected", {
@@ -426,12 +449,12 @@ const live: Layer.Layer<
           temperature: prepared.params.temperature,
           topP: prepared.params.topP,
           topK: prepared.params.topK,
-          providerOptions: ProviderTransform.providerOptions(input.model, prepared.params.options),
+          providerOptions: ProviderTransform.providerOptions(input.model, options),
           activeTools: Object.keys(prepared.tools).filter((x) => x !== "invalid"),
           // A workflow model runs its tools inside its own stream, so holding a shell call back to the end would wait
           // on itself.
           tools: isWorkflow ? prepared.tools : ToolOrder.tools(prepared.tools, input.abort),
-          toolChoice: input.toolChoice,
+          toolChoice,
           maxOutputTokens: prepared.params.maxOutputTokens,
           abortSignal: input.abort,
           headers: prepared.headers,
@@ -450,6 +473,12 @@ const live: Layer.Layer<
                       input.model,
                       prepared.messageTransformOptions,
                       input.cache !== false,
+                      input.boundary === undefined
+                        ? undefined
+                        : LLMRequestPrep.promptIndex(
+                            prepared.messages,
+                            prepared.messages.length - input.messages.length + input.boundary,
+                          ),
                     )
                   }
                   return args.params
@@ -462,7 +491,7 @@ const live: Layer.Layer<
               },
               NativePatch.middleware({
                 model: input.model,
-                options: prepared.params.options,
+                options,
                 tool: prepared.tools.apply_patch,
               }),
               ...(isWorkflow ? [] : [ToolOrder.middleware()]),

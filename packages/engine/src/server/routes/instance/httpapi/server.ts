@@ -1,5 +1,7 @@
 import { registerRuntimeCleanup } from "@/effect/runtime-cleanup"
 import { PublicSessionShare } from "@vectordevai/core/public-session-share"
+import { SessionAudience } from "@vectordevai/core/session/audience"
+import { AppProcess } from "@vectordevai/core/process"
 import { Config as EffectConfig, Context, Effect, Layer } from "effect"
 import { HttpApiBuilder, OpenApi } from "effect/unstable/httpapi"
 import { HttpClient, HttpMiddleware, HttpRouter, HttpServer, HttpServerResponse } from "effect/unstable/http"
@@ -10,6 +12,12 @@ import { Agent } from "@/agent/agent"
 import { Auth } from "@/auth"
 import { BackgroundJob } from "@/background/job"
 import { TaskManager } from "@/task/manager"
+import { WorkflowOwner } from "@/orchestration/owner"
+import { TaskNotify } from "@/task/notify"
+import { TaskLimits } from "@/task/limits"
+import { TaskRecovery } from "@/task/recovery"
+import { TaskAttention } from "@/task/attention"
+import { TaskSignals } from "@/task/signals"
 import { DesktopTasks } from "@/task/desktop"
 import { Command } from "@/command"
 import { Config } from "@/config/config"
@@ -64,6 +72,9 @@ import { FreeModelGuests } from "@vectordevai/core/free-model-guests"
 import { Brain } from "@vectordevai/core/brain/brain"
 import { BrainEmbed } from "@vectordevai/core/brain/embed"
 import { BrainKnowledge } from "@vectordevai/core/brain/knowledge"
+import { BrainSkill } from "@vectordevai/core/brain/skill"
+import { BrainWorkflow } from "@vectordevai/core/brain/workflow"
+import { LearnedSkill } from "@/skill/learned"
 import { ResearchStore } from "@vectordevai/core/research/store"
 import { LocalProbe } from "@vectordevai/core/local-mode/probe"
 import { ModelCatalog } from "@vectordevai/core/model-catalog"
@@ -111,6 +122,7 @@ import { projectHandlers } from "./handlers/project"
 import { projectCopyHandlers } from "./handlers/project-copy"
 import { providerHandlers } from "./handlers/provider"
 import { FreeModels } from "@vectordevai/core/free-models"
+import { ModelPlans } from "@vectordevai/core/model-plans"
 import { ptyConnectHandlers, ptyHandlers } from "./handlers/pty"
 import { questionHandlers } from "./handlers/question"
 import { sessionHandlers } from "./handlers/session"
@@ -245,9 +257,18 @@ const app = LayerNode.group([
   Plugin.node,
   ModelCatalog.node,
   FreeModels.node,
+  // The control routes read the Vector account's Codium models when its credential is written.
+  FreeModels.credentialsNode,
+  ModelPlans.node,
   FreeModelGuests.node,
+  SessionAudience.node,
+  // The server package's filesystem routes probe Git metadata before a guest read.
+  AppProcess.node,
   Brain.node,
   BrainKnowledge.node,
+  BrainSkill.node,
+  BrainWorkflow.node,
+  LearnedSkill.node,
   BrainEmbed.node,
   ResearchStore.node,
   LocalProbe.holdsNode,
@@ -265,6 +286,12 @@ const app = LayerNode.group([
   SessionStatus.node,
   BackgroundJob.node,
   TaskManager.node,
+  WorkflowOwner.node,
+  TaskNotify.node,
+  TaskLimits.node,
+  TaskRecovery.node,
+  TaskAttention.node,
+  TaskSignals.node,
   DesktopTasks.node,
   RuntimeFlags.node,
   EventV2Bridge.node,

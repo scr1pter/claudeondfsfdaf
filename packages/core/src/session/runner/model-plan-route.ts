@@ -44,6 +44,7 @@ export function modelPlanRoute(
                   modelID: model.id,
                   credential: () => Effect.runPromise(credentials.get("vector")),
                   catalog: (token) => Effect.runPromise(client.catalog(token, { wait: true })),
+                  auto: "default",
                 }),
               catch: (cause) => invalidRequest(cause),
             })
@@ -60,7 +61,8 @@ export function modelPlanRoute(
               request: LLMRequest.update(input.request, { http: new HttpOptions({}) }),
               endpoint: { ...input.endpoint, baseURL: ModelPlans.CHAT_URL, path: "" },
               auth: Auth.bearer(Auth.value(route.token)),
-              headers: () => ({}),
+              // Core V2 runs session turns only; its helpers do not reach Codium yet.
+              headers: () => ({ ...ModelPlans.clientHeaders(), "X-Vector-Purpose": "chat" }),
               encodeBody: () => body,
             })
           }),
@@ -82,25 +84,23 @@ export function modelPlanRoute(
     .model({ id: model.id })
 }
 
-// The shared executor retries 5xx and 429 answers. Codium saying it is not available is final, so it arrives as a
-// client error and fails the turn at once; short model capacity is temporary, so it arrives as a rate limit and the
-// executor retries it.
+// The shared executor retries 5xx and 429 answers. A final Codium answer (§4.10) arrives as a client error and fails
+// the turn at once (ModelPlans.finalAnswer); short model capacity is temporary, so it arrives as a rate limit and the
+// executor retries it, as it retries the other temporary answers with their retry-after.
 function finalAnswers(fetch: typeof globalThis.fetch) {
   return Object.assign(
     async (input: RequestInfo | URL, init?: RequestInit) => {
       const response = await fetch(input, init)
-      if (response.status < 402 || (response.status > 402 && response.status < 500)) return response
+      if (response.status !== 402) return ModelPlans.finalAnswer(response)
       const body = await response.clone().text()
-      const answer = ModelPlans.gatewayFailure(response.status, body)
-      if (answer?.kind === "capacity") return new Response(body, { status: 429, headers: response.headers })
-      if (!answer || response.status < 500) return response
-      return new Response(body, { status: 400, headers: response.headers })
+      if (ModelPlans.gatewayFailure(response.status, body)?.kind !== "capacity") return response
+      return new Response(body, { status: 429, headers: response.headers })
     },
     { preconnect: fetch.preconnect },
   )
 }
 
-// Billing and availability answers fail the turn with a clear message, and the action that fixes them, at once.
+// Plan and availability answers fail the turn with a clear message, and the action that fixes them, at once.
 function gatewayError<E>(error: E) {
   if (!(error instanceof LLMError) || !("http" in error.reason) || !error.reason.http) return error
   const http = error.reason.http
@@ -114,11 +114,8 @@ function gatewayError<E>(error: E) {
         http,
       }),
     })
-  const answer = ModelPlans.gatewayFailure(
-    // A capacity answer reaches here as the 429 finalAnswers made of it, once the executor's retries ran out.
-    http.response?.status === 429 ? 402 : http.response?.status,
-    http.body,
-  )
+  // Classified by code, whatever status finalAnswers gave it.
+  const answer = ModelPlans.gatewayFailure(http.response?.status, http.body)
   if (!answer) return error
   return new LLMError({ module: "ModelPlans", method: "request", reason: reason(answer, http) })
 }
@@ -127,12 +124,13 @@ function failure(answer: ModelPlans.Failure) {
   return Effect.fail(new LLMError({ module: "ModelPlans", method: "request", reason: reason(answer) }))
 }
 
-// The session records providerMetadata.codium.action, so a client can offer Buy credits or Sign in to Vector.
+// The session records providerMetadata.codium.action, so a client can offer See plans or Sign in to Vector. A
+// temporary answer that ran out of retries is a rate limit and offers nothing.
 function reason(answer: ModelPlans.Failure, http?: HttpContext) {
-  if (answer.kind === "capacity") return new RateLimitReason({ message: answer.message, http })
-  const providerMetadata = { codium: { action: answer.kind, code: answer.code } }
-  if (answer.kind === "credits") return new QuotaExceededReason({ message: answer.message, providerMetadata, http })
-  if (answer.kind === "sign-in")
+  if (!answer.action) return new RateLimitReason({ message: answer.message, http })
+  const providerMetadata = { codium: { action: answer.action, kind: answer.kind, code: answer.code } }
+  if (answer.action === "credits") return new QuotaExceededReason({ message: answer.message, providerMetadata, http })
+  if (answer.action === "sign-in")
     return new AuthenticationReason({ message: answer.message, kind: "expired", providerMetadata, http })
   return new InvalidRequestReason({ message: answer.message, providerMetadata, http })
 }
@@ -141,7 +139,9 @@ function reason(answer: ModelPlans.Failure, http?: HttpContext) {
 export function codiumError(error: LLMError): SessionMessage.CodiumError | undefined {
   const metadata = "providerMetadata" in error.reason ? error.reason.providerMetadata?.codium : undefined
   const action = ModelPlanStatus.failureAction({ type: "codium", action: metadata?.action })
-  return action && { type: "codium", action, message: error.reason.message }
+  if (!action) return undefined
+  const code = typeof metadata?.code === "string" ? metadata.code : undefined
+  return { type: "codium", action, message: error.reason.message, ...(code ? { code } : {}) }
 }
 
 function invalidRequest(cause: unknown) {

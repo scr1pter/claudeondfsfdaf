@@ -1,3 +1,5 @@
+import { Database } from "@vectordevai/core/database/database"
+import { SessionAccountingOutput } from "@vectordevai/core/session/accounting-output"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { InstanceState } from "@/effect/instance-state"
 import { GlobalBus } from "@/bus/global"
@@ -12,6 +14,9 @@ import * as Sse from "effect/unstable/encoding/Sse"
 import { EventApi } from "../groups/event"
 import { IncomingMessage } from "node:http"
 import { RequestPrincipal } from "@vectordevai/protocol/middleware/authorization"
+import { SessionAudience } from "@vectordevai/core/session/audience"
+import { RequestOwner } from "@vectordevai/server/request-owner"
+import { SessionAudienceHttp } from "@vectordevai/server/session-audience"
 
 type Presence = EventV2.Data<typeof ServerEvent.ClientJoined>
 
@@ -59,10 +64,13 @@ function isOwnJoin(event: EventV2.Payload, clientID: string) {
   return typeof data === "object" && data !== null && "clientID" in data && data.clientID === clientID
 }
 
-function eventResponse(events: EventV2.Interface, request: HttpServerRequest.HttpServerRequest, self: Presence) {
+export function eventResponse(events: EventV2.Interface, request: HttpServerRequest.HttpServerRequest, self: Presence) {
   return Effect.gen(function* () {
+    const database = yield* Database.Service
     const instance = yield* InstanceState.context
     const workspaceID = yield* InstanceState.workspaceID
+    const owner = yield* RequestOwner.owner
+    const audience = yield* SessionAudience.Service
     const hangup = yield* Deferred.make<void>()
     const unwatch = onHangup(request, () => {
       Deferred.doneUnsafe(hangup, Effect.void)
@@ -97,6 +105,10 @@ function eventResponse(events: EventV2.Interface, request: HttpServerRequest.Htt
           // We already know we are here; the roster snapshot below covers everyone else.
           !isOwnJoin(event, self.clientID),
       ),
+      Stream.filterEffect((event) =>
+        SessionAudienceHttp.envelope(event, owner).pipe(Effect.provideService(SessionAudience.Service, audience)),
+      ),
+      Stream.mapEffect((event) => SessionAccountingOutput.project(database.db, event)),
       Stream.map((event) => ({ id: event.id, type: event.type, properties: event.data })),
     )
     const disposed = Stream.callback<{ id: string; type: string; properties: unknown }>((queue) => {
@@ -135,6 +147,9 @@ function eventResponse(events: EventV2.Interface, request: HttpServerRequest.Htt
     return HttpServerResponse.stream(
       opening.pipe(
         Stream.concat(output.pipe(Stream.merge(heartbeat, { haltStrategy: "left" }))),
+        Stream.filterEffect((event) =>
+          SessionAudienceHttp.envelope(event, owner).pipe(Effect.provideService(SessionAudience.Service, audience)),
+        ),
         Stream.map(eventData),
         Stream.pipeThroughChannel(Sse.encode()),
         Stream.encodeText,
