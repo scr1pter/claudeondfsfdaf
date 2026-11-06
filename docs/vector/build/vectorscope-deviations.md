@@ -2,6 +2,8 @@
 
 Notes on where the code had to differ from `vectorscope-plan.md`. Each entry is
 dated, names its work package, and is committed with the work it explains.
+Entries are written before the package's commit step, so "Nothing is committed"
+in an entry describes that moment; `git log` has the commit that carries it.
 
 ## 2026-11-03 · VS-01 Dataset contract
 
