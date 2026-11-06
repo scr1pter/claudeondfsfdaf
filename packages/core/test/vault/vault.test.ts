@@ -276,13 +276,14 @@ describe("VaultBackup", () => {
   test("a store that prunes keeps its newest versions and the pieces they name, and forget drops only its own", async () => {
     const { store, opened } = await fresh({ keep: 3 })
     const ids: string[] = []
+    // Each file is under the chunker's minimum, so it is exactly one piece whatever this vault's random cut points.
     for (let i = 0; i < 5; i++) {
       const done = await VaultBackup.backup({
         store,
         opened,
         files: [
-          { path: "memory/personal.json", section: "memory", bytes: encoder.encode(prose("same", 30_000)), repository: "" },
-          { path: "memory/repository-1.json", section: "memory", bytes: encoder.encode(prose(`changes ${i}`, 30_000)), repository: "r" },
+          { path: "memory/personal.json", section: "memory", bytes: encoder.encode(prose("same", 12_000)), repository: "" },
+          { path: "memory/repository-1.json", section: "memory", bytes: encoder.encode(prose(`changes ${i}`, 12_000)), repository: "r" },
         ],
         now: Date.now() + i * 1000,
       })
