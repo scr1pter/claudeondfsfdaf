@@ -203,6 +203,8 @@ describe("scope", () => {
       // The route settings (VS-23a) are scope, not policy: EvidenceScope.route, set only by a runner enforcing them.
       { privacy: "zdr" as const },
       { zdrAttested: ["openrouter"] },
+      // VS-33's attestation objects are route settings too.
+      { zdrAttested: [{ id: "openrouter", operator: "openrouter", region: "eu" as const, extendedCache: true }] },
     ])
       expect(policyDigest({ ...DEFAULT_REVIEW_CONFIG, ...change })).toBe(base)
   })

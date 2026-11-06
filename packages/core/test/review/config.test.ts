@@ -343,6 +343,12 @@ describe("mergeReviewConfig", () => {
       `${REVIEW_CONFIG_PATH}: unknown key "privacy" is ignored.`,
       `${REVIEW_CONFIG_PATH}: unknown key "zdrAttested" is ignored.`,
     ])
+    // VS-33's attestation objects too.
+    const structured = parseReviewConfig({
+      json: JSON.stringify({ zdrAttested: [{ id: "openrouter", operator: "openrouter", region: "eu" }] }),
+    })
+    expect(structured.config).toEqual(DEFAULT_REVIEW_CONFIG)
+    expect(structured.warnings).toEqual([`${REVIEW_CONFIG_PATH}: unknown key "zdrAttested" is ignored.`])
   })
 
   test("privacy is raised by any source and lowered by none", () => {
@@ -480,6 +486,119 @@ describe("mergeReviewConfig", () => {
     expect(empty).toEqual(parseReviewConfig())
   })
 
+  test("zdrAttested takes attestation objects from the trusted sources alone (VS-33)", () => {
+    const entry = { id: "amazon-bedrock", operator: "aws", project: "123456789012", verify: "api" as const }
+    const local = mergeReviewConfig({ surface: "local", global: { zdrAttested: ["openrouter", entry] } })
+    expect(local.config.zdrAttested).toEqual(["openrouter", entry])
+    expect(local.warnings).toEqual([])
+    const text = JSON.stringify({ zdrAttested: [entry, "openrouter"] })
+    const base = mergeReviewConfig({ surface: "github", json: { at: "base", text } })
+    expect(base.config.zdrAttested).toEqual([entry, "openrouter"])
+    expect(base.warnings).toEqual([])
+    // Every other source is ignored with today's warning: a working tree, the CLI's base with --pr and the desktop's
+    // base blob locally, and the global config, a working tree or a base blob read for privacy alone in CI.
+    const onlyGlobal = `"zdrAttested" is read only from the global config.`
+    const onlyBase = `"zdrAttested" is read only from ${REVIEW_CONFIG_PATH} on the base branch.`
+    const ignored: [Parameters<typeof mergeReviewConfig>[0], string][] = [
+      [
+        { surface: "local", json: { at: "working-tree", text } },
+        `${REVIEW_CONFIG_PATH}: "zdrAttested" is ignored: ${onlyGlobal}`,
+      ],
+      [
+        { surface: "local", json: { at: "base", text } },
+        `${REVIEW_CONFIG_PATH}: "zdrAttested" is ignored: ${onlyGlobal}`,
+      ],
+      [
+        { surface: "local", json: { at: "base", text, privacyOnly: true } },
+        `${REVIEW_CONFIG_PATH}: "zdrAttested" is ignored: ${onlyGlobal}`,
+      ],
+      [
+        { surface: "github", json: { at: "working-tree", text } },
+        `${REVIEW_CONFIG_PATH}: "zdrAttested" is ignored: ${onlyBase}`,
+      ],
+      [
+        { surface: "github", json: { at: "base", text, privacyOnly: true } },
+        `${REVIEW_CONFIG_PATH}: "zdrAttested" is ignored: ${onlyBase}`,
+      ],
+      [
+        { surface: "github", global: { zdrAttested: [entry] } },
+        `review.zdrAttested in the global config is ignored: ${onlyBase}`,
+      ],
+    ]
+    for (const [input, warning] of ignored) {
+      const result = mergeReviewConfig(input)
+      expect(Object.hasOwn(result.config, "zdrAttested")).toBe(false)
+      expect(result.warnings).toEqual([warning])
+    }
+    // No environment variable is read for it, in any shape.
+    const env = mergeReviewConfig({ surface: "github", env: { REVIEW_ZDR_ATTESTED: JSON.stringify([entry]) } })
+    expect(Object.hasOwn(env.config, "zdrAttested")).toBe(false)
+    expect(env.warnings).toEqual([])
+  })
+
+  test("an attestation object the rules cannot read is dropped with its reason, never with its other fields", () => {
+    const label = "review.zdrAttested in the global config"
+    const result = mergeReviewConfig({
+      surface: "local",
+      global: {
+        zdrAttested: [
+          { id: "amazon-bedrock", project: "123456789012" },
+          "openrouter",
+          { id: "https://api.openai.com", operator: "openai", project: "proj_secret" },
+          { id: "openai", operator: "openai", regoin: "eu", project: "proj_secret" },
+          { id: "vertex", operator: "google", project: 42 },
+          { operator: "aws", project: "123456789012" },
+        ],
+      },
+    })
+    expect(result.config.zdrAttested).toEqual(["openrouter"])
+    expect(result.warnings).toEqual([
+      `${label}: the entry for "amazon-bedrock" has no "operator", the platform operator that processes the data, so it was dropped; entry 3 has an "id" that names neither a provider ID nor a host, so it was dropped; the entry for "openai" has the unknown key "regoin", so it was dropped; the entry for "vertex" has a "project" that is not text, so it was dropped; entry 6 has no "id", so it was dropped.`,
+    ])
+    // A project can be an account ID, and a run log can be public.
+    for (const value of ["123456789012", "proj_secret", "42"]) expect(result.warnings.join("\n")).not.toContain(value)
+    // An attestation list whose every entry was dropped is left out like the default.
+    const none = mergeReviewConfig({ surface: "github", json: { at: "base", text: '{"zdrAttested": [{"id": "x"}]}' } })
+    expect(Object.hasOwn(none.config, "zdrAttested")).toBe(false)
+    expect(none.warnings).toEqual([
+      `${REVIEW_CONFIG_PATH}: "zdrAttested": the entry for "x" has no "operator", the platform operator that processes the data, so it was dropped.`,
+    ])
+  })
+
+  test("zdrAttested's notes keep their order, and name an ID that text and an object share", () => {
+    const label = "review.zdrAttested in the global config"
+    const flagged = { id: "openai", operator: "openai", extendedCache: true }
+    const eu = { id: "openrouter", operator: "openrouter", region: "eu" as const }
+    const result = mergeReviewConfig({
+      surface: "local",
+      global: {
+        zdrAttested: [
+          flagged,
+          "openai",
+          1,
+          "gpu box",
+          { id: "openai" },
+          eu,
+          { id: "openrouter", operator: "openrouter" },
+          ["x"],
+        ],
+      },
+    })
+    expect(result.config.zdrAttested).toEqual([flagged, "openai", eu, { id: "openrouter", operator: "openrouter" }])
+    expect(result.warnings).toEqual([
+      `${label}: entries that are not text were dropped; "gpu box" names neither a provider ID nor a host, so it was dropped; write a server as its host, such as "gpu-box:8080"; the entry for "openai" has no "operator", the platform operator that processes the data, so it was dropped; "openai" is also listed as text, which accepts no "extendedCache", and the strictest of every entry that attests a route applies, whatever its ID; "openrouter" is listed more than once, and the strictest of every entry that attests a route applies, whatever its ID.`,
+    ])
+    // Without a model the config cannot tell that entries of other IDs attest the same route, so they get no note;
+    // the notes above state the wider rule, and decideRoute applies it.
+    const hosts = mergeReviewConfig({ surface: "local", global: { zdrAttested: [flagged, "api.openai.com"] } })
+    expect(hosts.config.zdrAttested).toEqual([flagged, "api.openai.com"])
+    expect(hosts.warnings).toEqual([])
+    // Text alone keeps today's notes: a repeated name is not one.
+    const repeated = mergeReviewConfig({ surface: "local", global: { zdrAttested: ["openai", " openai "] } })
+    expect(repeated.config.zdrAttested).toEqual(["openai", "openai"])
+    expect(repeated.warnings).toEqual([])
+  })
+
   test("the desktop's base blob raises privacy, and changes nothing else", () => {
     const blob = mergeReviewConfig({
       surface: "local",
@@ -520,6 +639,11 @@ describe("mergeReviewConfig", () => {
     result.config.zdrAttested?.push("mutated")
     result.config.skipLabels.push("mutated")
     expect(global.zdrAttested).toEqual(["openrouter"])
+    // And new attestation objects (VS-33).
+    const entry = { id: "openrouter", operator: "openrouter" }
+    const structured = mergeReviewConfig({ surface: "local", global: { zdrAttested: [entry] } })
+    expect(structured.config.zdrAttested?.[0]).toEqual(entry)
+    expect(structured.config.zdrAttested?.[0]).not.toBe(entry)
     expect(DEFAULT_REVIEW_CONFIG.skipLabels).toEqual(["vector:skip", "no-review"])
     expect(Object.hasOwn(DEFAULT_REVIEW_CONFIG, "zdrAttested")).toBe(false)
   })

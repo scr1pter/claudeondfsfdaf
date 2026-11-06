@@ -580,6 +580,10 @@ describe("notes", () => {
     expect(notePrivacyRefused({ model: "vector-plan/auto", refusal: "codium-unaccepted", attempts: 0 })).toBe(
       '**Not reviewed.** `vector-plan/auto` has no zero data retention route Vector may use while `privacy` is `"zdr"`: Vector does not yet accept Vector Codium or the free models Vector provides as zero data retention routes. Nothing was sent. Vector does not retry the review on another model.',
     )
+    // VS-33: OpenAI keeps the cache, and the route may be attested by text or by several entries.
+    expect(notePrivacyRefused({ model: "openai/gpt-5.5", refusal: "extended-cache-unattested", attempts: 0 })).toBe(
+      '**Not reviewed.** `openai/gpt-5.5` has no zero data retention route Vector may use while `privacy` is `"zdr"`: OpenAI keeps this model\'s prompt cache for up to 24 hours, and not every `zdrAttested` entry for its route accepts that (`extendedCache`). Nothing was sent. Vector does not retry the review on another model.',
+    )
     // The model's name comes from configuration, so it cannot close the code span.
     expect(notePrivacyRefused({ model: "acme/odd`name", refusal: "free-model", attempts: 0 })).toContain(
       "`acme/odd'name`",

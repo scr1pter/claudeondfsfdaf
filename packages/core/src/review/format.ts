@@ -520,6 +520,16 @@ const PRIVACY_REFUSAL: Record<RouteRefusal, string> = {
   "unreadable-body": "Vector could not read the request it would send.",
   "unattributed-request": "Vector could not tell which review the request belongs to.",
   "unknown-destination": "Vector cannot tell where its requests go.",
+  "server-tool":
+    "the request uses a tool other than function calling, such as one of OpenRouter's server tools, or a file stored with OpenRouter, which zero data retention may not cover.",
+  "provider-options": "the request sets per-provider options, which may change what a provider keeps.",
+  "extended-cache-unattested":
+    "OpenAI keeps this model's prompt cache for up to 24 hours, and not every `zdrAttested` entry for its route accepts that (`extendedCache`).",
+  "grounding-tool":
+    "the request turns on a Google tool other than function calling, such as Search grounding, which may keep what it is sent.",
+  "durable-cache": "its Google Cloud project may keep cached prompts in durable storage.",
+  "anthropic-non-zdr-feature":
+    "the request uses an Anthropic feature that zero data retention does not cover, or one Vector cannot tell is covered, such as the MCP connector, code execution, the Files API or message threads.",
 }
 
 // A review stopped by the route rules (privacy.ts) before it sent code to `model`. `attempts` counts the requests the

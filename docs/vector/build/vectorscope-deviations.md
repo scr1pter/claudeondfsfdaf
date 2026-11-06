@@ -3202,3 +3202,537 @@ Q34.
   - Nothing was sent, no paid path ran, no workflow was dispatched, no
     dependency was added and the lockfile is unchanged. No result or data
     file was written inside the worktree.
+
+## 2026-11-06 · VS-33a ZDR refusal list v2 and structured attestations
+
+Addendum A §2 VS-33, items 1, 3 and 4, in the Now window (§4): the new
+`RouteRefusal` values and their pure checks in core `review/privacy.ts`, and
+the attestation-object parser over the trusted inputs `mergeReviewConfig`
+already takes (base `review.json` on `github`; the untyped `global` input on
+`local`, which no engine schema fills before VS-23d). Built on VS-23a's
+`privacy.ts`, `decideRoute` and `RouteRefusal` at `2bc90691`. VS-33 is a
+proposal pending Q18, so everything is off by default and nothing calls it.
+No runner, provider, LLM or posting file and no file @vector owns changed:
+`run.ts`, `ai-review.ts`, `provider.ts`, `session/llm.ts`, `posting.ts`,
+`workflow.ts`, `command.ts`, `github.*`, `github-*.ts`, `vectorscope.astro`,
+`packages/engine/src/config/*`, the generated SDK and client, and
+`script/vectorscope-eval/*` are untouched. It implements the VS-33a plan as
+corrected by its critique; every critique point was taken, two of them
+differently (below). Nothing is committed.
+
+- **What landed.**
+  - **Core `types.ts`** (still import-free): `ZdrAttestation`
+    (`{ id, operator, project?, region?: "eu" | "us", extendedCache?,
+    verify?: "attest" | "api" }`) and `ZdrAttestedEntry = string |
+    ZdrAttestation`; `ReviewConfig.zdrAttested?: ZdrAttestedEntry[]`. Its
+    comment says text is the legacy form with today's meaning, and that
+    VS-23b's admission must refuse a listed `verify: "api"` attestation until
+    a verifier exists, and an OpenAI one unless Q20 approves an admin
+    credential. `DEFAULT_REVIEW_CONFIG` is unchanged.
+  - **Core `privacy.ts`** (pinned):
+    - `ROUTE_REFUSALS` gains, in this order after the thirteen, which keep
+      theirs: `server-tool`, `provider-options`, `extended-cache-unattested`,
+      `grounding-tool`, `durable-cache`, `anthropic-non-zdr-feature`. The
+      comment names each value's producer.
+    - `RouteDecision`'s allowed arm gains `attestations?: readonly
+      ZdrAttestation[]`.
+    - `decideRoute`'s `policy.attested` takes `readonly ZdrAttestedEntry[]`.
+    - New exports `readZdrAttestation`, `extendedCacheOnly`,
+      `zdrFeatureRefusal`, `ZdrRequestFormat` and `NOT_A_NAME`.
+    - `zdrBodyRefusal` gains `server-tool`, `provider-options` and
+      `anthropic-non-zdr-feature`;
+      `zdrRequestBody`'s code is unchanged and its doc says an empty
+      `options` is kept.
+    - The header names VS-33's parts, says they have no caller, and states
+      the admission's duty for `verify: "api"` and that only its Vertex
+      metadata call can give `durable-cache`.
+  - **Core `config.ts`**: imports `readZdrAttestation` and `NOT_A_NAME` as
+    values. The
+    private `attestations` field is one ordered pass over the list (text,
+    attestation objects, anything else). `expected`, `parseReviewConfig`,
+    `RAISE_ONLY`, `TRUSTED_ONLY`, `SOURCED_REVIEW_KEYS` and every source
+    rule are unchanged (I-2). Comments on the field, `TRUSTED_ONLY` and
+    `mergeReviewConfig` mention attestation objects.
+  - **Core `format.ts`**: six new `PRIVACY_REFUSAL` reasons. No existing
+    string changed (D14), and none names VectorScope (the existing test
+    checks every refusal's note).
+  - **Core `model-evidence.ts`**: the pin only.
+- **Rule decisions.**
+  - **Entries.** Text is read exactly as VS-23a reads it (trimmed ID, and
+    `attestedHost`), with `extendedCache` false. An attestation object reads
+    its `id` the same way. An entry `readZdrAttestation` cannot read, and any
+    value that is neither, attests nothing. Under `standard` every entry is
+    ignored, as before.
+  - **Region.** A `region` pins only an OpenRouter account: such an entry
+    attests no host and no provider on any other route, and no OpenRouter
+    hop's host. On an OpenRouter route whose account entries name a region,
+    at least one https OpenRouter destination must exist and every one must
+    be `<region>.openrouter.ai` for every region named, compared on
+    `hostOf(origin)` with trailing dots stripped (`eu.openrouter.ai.`
+    passes). Two regions never hold, and text beside a pin keeps the pin
+    (strictest). A loopback stand-in alone cannot show the region, so it is
+    refused under a pin and passes beside the regional host. A mismatch
+    reuses `unattested-openrouter`, which keeps the vocabulary to the
+    addendum's list; its note ("the OpenRouter account it uses is not listed
+    in `zdrAttested`") reads wrong for a listed account on the wrong host,
+    and rewording it is a VS-23b item. Requirement on VS-23b's caller,
+    stated in `decideRoute`'s doc: a URL the configuration replaces (the
+    catalog's shipped URL under a provider base URL) goes in
+    `defaultOrigins`, not `destinations`, or every region-pinned account is
+    refused.
+  - **Extended caching.** After a route passes, it is refused as
+    `extended-cache-unattested` when `extendedCacheOnly([modelID, apiID])`
+    holds and any entry that attests one of its destinations lacks
+    `extendedCache: true`. That is the strictest reading: text, or an object
+    without the flag, beside a flagged object still refuses. An entry that
+    attests none of the destinations does not count, and a route on this
+    computer alone has no entries, so it is exempt. This is the one rule
+    change visible to text-only lists: a gpt-5.5-or-later route attested by
+    text alone is now refused. That is the design's own refusal, and it is
+    unreachable until wiring.
+  - **`attestations`.** Every attestation object that attests one of the
+    route's destinations, whichever entry decided the route. For a
+    destination these are the matching host entries plus the provider's
+    entries when the origin is one of `defaultOrigins` (never on your
+    network). On an OpenRouter route they are the account's entries, then
+    each hop's host entries. They are listed in destination order,
+    de-duplicated by position in `policy.attested`, and left out when there
+    are none, so text-only decisions are byte-identical (tested with
+    `toStrictEqual`).
+  - **Version table** (`extendedCacheOnly`, the one place; VS-23c reuses
+    it). `gpt`, then a `-`, a `_` or nothing, then the major version, is
+    matched anywhere in the lowercased ID, every occurrence (so
+    `chatgpt-5.5`, `gpt5.5` and `gpt_5.5` match). The minor version follows
+    a dot, or a `-` or `_` as one or two digits that no digit follows
+    (`gpt-5-5` is 5.5; a dated `gpt-5-2025-08-07` and `gpt-4-0613` read as
+    5.0 and 4.0). A two-digit run without a minor is major and minor, as
+    `transform.ts` `gpt5OrNewer` reads it (core cannot import engine):
+    `gpt-55` is 5.5, `gpt-35-turbo` 3.5, Venice's `openai-gpt-54-pro` 5.4.
+    The exception is a run from 10 to 29, which no OpenAI model has been:
+    it is the major version, so a future `gpt-10` is 10 and refused. It is
+    true for 5.5 and later. Accepted cost of leaning to refusal: an open
+    model such as Cerebras-GPT-13B (`cerebras-gpt-13b`) reads as 13, so on an
+    attested host it needs `extendedCache: true`. The comment says to update
+    the table when OpenAI names later models otherwise.
+  - **`readZdrAttestation`.** The first problem wins, as a phrase that
+    follows "the entry", in this order: not an object; any set key outside
+    the six (`__proto__` included, as `JSON.parse` makes it an own key);
+    no `id`; an `id` that is a URL, has a space, user, query, fragment or
+    backslash (`NOT_A_NAME`, one exported const that `attestedHost` and
+    `config.ts`'s text entries share) or a control
+    character; `operator` missing or blank; `operator` not text;
+    `project` not text; `region` not exactly `eu` or `us`; `extendedCache`
+    not a boolean; `verify` not exactly `attest` or `api`. A key set to
+    undefined is unset. The result is a new, trimmed object with only the
+    keys set.
+  - **`zdrBodyRefusal`** (OpenRouter bodies), after the plugins check:
+    - a `tools` value that is not absent, null or a list of objects is
+      `unreadable-body`, and so is message content nested more than 16
+      lists deep;
+    - a `tool_choice` that is not absent or null is `server-tool` unless it
+      is one of the strings none, auto, required or any, or an object
+      whose `type` is one of those or function or tool; any other value is
+      `unreadable-body`;
+    - `server-tool`: any tool outside the allow list (critique 1), a
+      `deferred_tools` field (OpenRouter's deferred-tool protocol is its
+      tool-search server tool in another shape), or a stored-file
+      reference in `messages` or a Responses `input`, through nested
+      `content` and `output` lists and a custom-content document's
+      `source.content`. A stored-file reference is a non-blank `file_id`,
+      `file.file_id` or `source.file_id`, a `source.type` of `file`, or a
+      `container_upload` block. Inline files, data URLs and text that
+      mentions a file pass;
+    - `anthropic-non-zdr-feature`, after `server-tool`: an own
+      `mcp_servers`, `container` or `thread` set to anything, or a tool whose
+      `allowed_callers` is set to anything but a non-empty all-"direct" list.
+      OpenRouter serves Anthropic's Messages API (`/api/v1/messages`), and
+      this is that route's only body check, so it refuses what
+      `zdrFeatureRefusal` refuses in an Anthropic body, with the same
+      field list and the same callers check (`codeCallable`);
+    - `provider-options`: `provider.options` other than absent, undefined or
+      an empty plain object (`null`, lists and scalars are refused). Fail
+      closed throughout.
+  - **`zdrFeatureRefusal`** (`{ format: "anthropic" | "google", body,
+    path? }`) is an allow list on both halves (critique 2). It never changes
+    its input; deciding a request's format is VS-23c's.
+    - **Google:** every tool must be function calling. That is an object
+      whose set keys are only `functionDeclarations` or
+      `function_declarations`, each a list, or a `type: "function"` tool
+      with only OpenAI function-tool keys. Anything else is
+      `grounding-tool`: Search, Search retrieval, Maps, URL context,
+      enterprise, Parallel and Exa search, retrieval, code execution,
+      computer use, `{}`, and a function tool with a grounding key beside
+      it.
+    - **Anthropic paths:** `path` (a URL or path) must end in
+      `/v1/messages` or `/v1/messages/count_tokens` after trailing slashes,
+      so a base-URL prefix still matches (OpenRouter's `/api/v1/messages`),
+      or be Claude's endpoint on Vertex (`.../publishers/anthropic/models/
+      <model>:rawPredict` or `:streamRawPredict`) or on Bedrock
+      (`/model/<model>/invoke` or `/invoke-with-response-stream`), as the
+      pinned `@ai-sdk/google-vertex/anthropic` and
+      `@ai-sdk/amazon-bedrock/anthropic` build them (read from their
+      `dist`). Batch returns `batch`: `/v1/messages/batches` and below,
+      Vertex's `batchPredictionJobs` and Bedrock's `model-invocation-job(s)`.
+      That is the existing name, returned here so the check is not
+      fail-open for a caller that runs only it. The doc says the transport
+      must pass `path` for an Anthropic request; without it only the body is
+      checked. Every other path, including Files, Skills, Tunnels,
+      Managed Agents, `vaults` and `user_profiles`, is
+      `anthropic-non-zdr-feature`. This supersedes the plan's "user_profiles
+      is not refused (no prompts or outputs)": an allow list refuses what a
+      review never calls.
+    - **Anthropic body:** an own `mcp_servers`, `container` or `thread` set
+      to anything (null and empty lists included) is refused. So is a stored
+      file anywhere in `messages`, with the same check as above, a
+      custom-content document's `source.content` included.
+    - **Anthropic tools:** allowed are no type or `custom`; the client
+      tools `bash_`, `text_editor_`, `memory_`, `computer_`,
+      `computer_toolset_` and `browser_toolset_` with a date; `advisor_`
+      with a date; `tool_search_tool_regex` and `tool_search_tool_bm25`,
+      dated or not; `web_search_20250305` and `web_fetch_20250910`. A dated
+      `web_search_` or `web_fetch_` from 20260209 on is allowed only with
+      `allowed_callers` exactly `["direct"]`. Any tool whose
+      `allowed_callers` is set to anything but a non-empty all-"direct"
+      list is refused (programmatic tool calling). Every other type is
+      refused: `mcp_toolset`, `code_execution_*`, `foo_20270101`, an
+      unlisted `web_search_20251001`, bare `bash`. Basic web search and
+      fetch stay allowed because Anthropic marks them ZDR-eligible.
+  - **`durable-cache`** is in the vocabulary with no producer: only VS-23b's
+    Vertex `getCacheConfig` admission can tell.
+  - **Unchanged and pinned by tests:** `eu.openrouter.ai` and
+    `us.openrouter.ai` are OpenRouter through `isOpenRouterURL`.
+    `RETENTION_REQUIRED` matches Bedrock IDs, cross-region and global
+    profiles, a system-defined inference-profile ARN, and Vertex `@`
+    versions.
+- **Config decisions.**
+  - One ordered pass: text is trimmed; blank text, numbers, null and lists
+    are "not text"; text matching `NOT_A_NAME` is dropped with today's exact
+    note. A plain object goes through `readZdrAttestation`, and a problem
+    drops it with `<subject> <problem>, so it was dropped`. The subject is
+    `the entry for "<id>"` when the ID is readable, else `entry <n>` (its
+    1-based place in the list). No other field is ever echoed (critique 11:
+    a `project` can be an account ID in a public CI log; tested).
+  - Notes, joined by "; ": "entries that are not text were dropped"; the
+    named-text note; one note per object problem; then one note per ID that
+    an object shares with another kept entry. Text beside an object gives
+    `"<id>" is also listed as text, which accepts no "extendedCache", and
+    the strictest of every entry that attests a route applies, whatever
+    its ID`. Objects alone give `"<id>" is listed more than once, and the
+    strictest of every entry that attests a route applies, whatever its
+    ID` (critique 7, generalised). Known limit: without a model the config
+    cannot tell which entries of other IDs attest the same route, so text
+    `api.openai.com` beside an `openai` object gets no note (tested), while
+    `decideRoute` still applies the strictest reading; the note's wording
+    states that wider rule. Text-only repeats get no note, so a list of
+    text alone yields exactly today's value and warnings (the existing
+    tests pass unchanged).
+  - `readZdrAttestation`'s problem result carries the readable `id`, a small
+    deviation from the plan's `{ problem }`, so `config.ts` can name the
+    entry without reading the object a second way.
+  - `config.ts` now imports `privacy.ts` as a value. This supersedes VS-23a's
+    "`config.ts` does not import `privacy.ts`". It keeps one reader of the
+    shape in the pinned file. The import is bundle-safe:
+    `browser-bundle.test.ts` now expects `packages/core/src/review/privacy.ts`
+    among the walked modules (VS-23a's deferred item) and still finds no Node
+    or Bun module.
+  - `expected` is kept ("a list of provider IDs and model server hosts").
+  - An attestation list whose every entry is dropped is left out like the
+    default (tested).
+- **Tests changed in place** (both tighten the rule; none was loosened):
+  - The refusal-vocabulary test lists nineteen values.
+  - "an attestation entry that is not text attests nothing, and does not
+    throw" is renamed "an attestation entry the rules cannot read attests
+    nothing, and does not throw". It keeps its four cases and adds seven
+    unreadable objects, `__proto__` included.
+  - `zdrRequestBody`'s kept preferences now carry `options: {}`. The former
+    `options: { anthropic: { cache: true } }` moves into the new
+    `provider-options` refusal test.
+- **Critique of the plan, point by point.**
+  1. *Server-tool deny list* (major): taken as an allow list. Function
+     tools (`type: "function"`), custom tools (`custom` or no type) and
+     Anthropic's `bash_<date>` are allowed. OpenRouter returns that bash
+     tool to the client (bash.mdx:217-227); it is allowed only with no
+     `parameters` or `engine` key, since the sandbox is chosen by
+     `engine: "openrouter"`. Every other type is refused, including
+     `text_editor_*`, which OpenRouter's docs do not say runs client-side.
+     The `tool_choice` allow list is as above, and `allowed_tools` is
+     refused (Vector does not send it). `deferred_tools` is refused too.
+     Tested: `web_search`, `web_search_preview`, `web_search_20250305`,
+     `web_fetch_20250910`, `tool_search`, `tool_search_tool_regex_20251119`,
+     `code_interpreter`, `file_search`, `mcp`, `image_generation`,
+     `computer_use_preview`, `shell`, `local_shell`, `apply_patch`, nine
+     `openrouter:` names and odd spellings. Evidence, OpenRouterTeam/docs at
+     `f1ededbc`: `openapi/openapi.yaml` `ServerTool.aliases` (:32523, "Every
+     spelling accepted in `tools[].type`", example `web_search_20250305` at
+     :32731); `ChatServerToolChoice` (:8590, `web_search`,
+     `web_search_preview`); `Legacy_WebSearchServerTool` (:17838,
+     `type: 'web_search'`); `tool-search.mdx`:150 (hosted tools passed
+     through) and :185-194 (aliases, BM25 400).
+  2. *Anthropic deny list* (major): taken as allow lists for paths and tool
+     types, as above, with tests that `foo_20270101` and `/v1/vaults` are
+     refused. Taken differently in one respect: `/v1/messages/batches`
+     returns `batch` here rather than being left only to VS-23c (fail
+     closed).
+  3. *`verify: "api"` bypass* (major): taken. `attestations` lists every
+     attestation object that attests a destination, whichever entry won.
+     Tested: a host text entry beside a `verify: "api"` provider object
+     still lists the object. The admission's duty is stated in the header,
+     in `types.ts` and here. Taken differently: "entries that name the
+     providerID" is read as entries that attest a destination. A provider
+     object covers only its `defaultOrigins`, so it is not listed when the
+     base URL moved elsewhere (tested), and a region object is not listed
+     off OpenRouter, since neither attests anything there. Not taken:
+     refusing `verify: "api"` inside `decideRoute`. That would decide Q20
+     and need a refusal outside the addendum's list; it stays the
+     admission's, in the runner-wiring window.
+  4. *Region reuse of `unattested-openrouter`* (minor): taken, pinned by a
+     test; the note wording is a VS-23b item.
+  5. *Re-check line on regional hosts* (minor): taken; corrected below.
+  6. *extended-cache note wording* (minor): taken as suggested, pinned
+     exactly in `format.test.ts`.
+  7. *Text beside an object* (minor): taken, generalised to any ID an object
+     shares (above), appended after the existing notes, tested.
+  8. *IDs that hide the model* (minor): taken. The test uses a
+     system-defined profile ARN with the model name (refused), and an
+     opaque application-inference-profile ARN and an Azure-style deployment
+     `prod` are recorded as not caught. Both are deferred below.
+  9. *Region normalisation* (minor): taken (above); the `defaultOrigins`
+     requirement is in the doc and here.
+  10. *Local base without `privacyOnly`* (minor): taken; the structured
+      list from `{ surface: "local", json: { at: "base" } }` is ignored with
+      today's exact warning.
+  11. *Warnings echo the object* (minor): taken (above).
+  12. *De-duplication* (minor): taken: by position in `policy.attested`,
+      over the union across verdicts in destination order. Tested with two
+      origins attested by one object, and with an OpenRouter account plus a
+      hop.
+- **Review of the build, point by point** (eleven findings, two of them
+  blocking; each is fixed or answered here; nothing is committed).
+  1. *Stored file in a custom-content document* (blocking): fixed.
+     `contentBlocks` also walks a block's `source.content`, so a
+     file-sourced image inside `{ type: "document", source: { type:
+     "content", content: [...] } }` (the beta Files API types) is a stored
+     file: `anthropic-non-zdr-feature` from `zdrFeatureRefusal` and
+     `server-tool` from `zdrBodyRefusal`. Both stored-file tests gained that
+     fixture, and an inline-text custom-content document that still passes.
+  2. *Vertex and Bedrock paths* (non-blocking): fixed by the allow list
+     rather than the doc, so the transport can pass `path` on every
+     Anthropic-format route. Added: Vertex `<model>:rawPredict` and
+     `:streamRawPredict` under `/publishers/anthropic/models/`, and Bedrock
+     `/model/<model>/invoke` and `/invoke-with-response-stream`; Batch
+     on them is `batch` (Vertex `batchPredictionJobs`, Bedrock
+     `model-invocation-job(s)`). Evidence, the pinned SDKs' `dist`:
+     `@ai-sdk/google-vertex` `dist/anthropic/index.mjs`:124 builds
+     `${baseURL}/${modelId}:rawPredict` or `:streamRawPredict`;
+     `@ai-sdk/amazon-bedrock` 4.0.112 `dist/anthropic/index.mjs`:348 builds
+     `/model/${encodeURIComponent(modelId)}/invoke` or
+     `/invoke-with-response-stream`, while its default provider sends
+     Converse bodies to `/converse` and `/converse-stream`
+     (`dist/index.mjs`:1081, :1203). The two Batch paths are recalled from
+     the vendors' API references, not fetched in this round; a wrong one
+     only changes which refusal a Batch request gets, since every unlisted
+     path is refused. Tests pin each shape, and refuse `:predict`, a Google
+     publisher, `/converse` and an unencoded ARN. The VS-23c record is under
+     Deferred.
+  3. *Shared-ID note* (non-blocking): fixed. The notes now say the strictest
+     of every entry that attests a route applies, whatever its ID, and the
+     field comment, this entry and a test record the limit: without a model
+     the config cannot tell that text `api.openai.com` and an `openai`
+     object attest the same route, so that pair gets no note.
+  4. *Separators in the version table* (non-blocking): fixed. `gpt[-_]?`,
+     and a minor after `-` or `_` as well as a dot (with 9).
+  5. *Gemini `fileData.fileUri`* (non-blocking): recorded under Deferred
+     beside `cachedContent`, and stated in `zdrFeatureRefusal`'s doc.
+  6. *`NOT_A_NAME` copy* (non-blocking): fixed. `privacy.ts` exports
+     `NOT_A_NAME` and `config.ts` uses it; behaviour is unchanged, and the
+     existing text-only config tests still pin it.
+  7. *Anthropic features in an OpenRouter body* (blocking): fixed.
+     `zdrBodyRefusal` refuses `mcp_servers`, `container`, `thread` and a
+     code-callable tool, after `server-tool`. It returns
+     `anthropic-non-zdr-feature`, not `server-tool`: the addendum names these
+     features under that refusal, its note already describes them, and
+     `server-tool` stays OpenRouter's own tools and files. The field list
+     (`ANTHROPIC_NON_ZDR_FIELDS`) and the callers check (`codeCallable`) are
+     shared with `zdrFeatureRefusal`. The header, the `ROUTE_REFUSALS`
+     comment and the `ZdrRequestFormat` comment now agree with this log:
+     `zdrBodyRefusal` alone checks a body sent to OpenRouter, and the
+     transport need not run `zdrFeatureRefusal` there. A new test covers
+     each key (null and an empty list included) and five `allowed_callers`
+     shapes; the pin was updated.
+  8. *`verify: "api"` allowed by default* (non-blocking): the second option.
+     The duty is recorded in VS-23b's plan (Deferred, Admission), and the
+     core test that pins such a decision says so. Not taken: an exported
+     helper. With no caller, a core test could only show that the helper
+     returns the object, which does not pin the wiring's duty, and refusing
+     inside `decideRoute` would decide Q20 (critique 3).
+  9. *Version-table defaults* (non-blocking): fixed, with one disagreement.
+     A dotless run from 10 to 29 is the major version, so `gpt-10` is 10
+     and refused, and `gpt-5-5` and `gpt5.5` are caught (with 4). The
+     finding's rule as written ("major plus minor only when the first digit
+     is below 5") would still read `gpt-10` as 1.0, against its own example,
+     and would read a 5x run as 50 to 59. That part is not taken: Venice's
+     `openai-gpt-54-pro` is GPT-5.4 Pro (the `gpt5OrNewer` comment in
+     `transform.ts`), so reading it as 54 would refuse a real pre-5.5 model,
+     and a 6x to 9x run is true either way. Accepted cost: Cerebras-GPT-13B
+     reads as 13 (above). Tests cover each spelling.
+  10. *`path` optional* (non-blocking): the doc now says the transport must
+      pass it for an Anthropic request, and that without it only the body
+      is checked. It also says that Google's path, `cachedContent` and
+      `fileData` file references are left to VS-23b and VS-23c. `path` is
+      not made required: with 2 the transport can pass it on every route,
+      and a required type would not stop a caller from passing the wrong
+      path.
+  11. *`NOT_A_NAME` copy, again* (non-blocking): the same as 6.
+- **Plan steps taken differently, besides the critique.** The problem
+  strings are predicate phrases (`has an "operator" that is not text`
+  rather than `"operator" must be text`), so a note reads "the entry for
+  "x" has ...". `extendedCacheOnly` checks every `gpt` occurrence, not the
+  first. The file walk uses the same stored-file check for both formats
+  (strictest).
+- **Scope and pin.** `privacy.ts` changed, so `REVIEW_PIPELINE_SOURCES`
+  moves from `54fbad71b62bdbda` to `ff321bd841f716ee` (`b411f7f92e654981`
+  before the review fixes below). It was set after `privacy.ts` was final
+  (prettier included), and the pin test was re-run.
+  `REVIEW_PIPELINE_REVISION` stays 1: no runner reads the file.
+  `EVIDENCE_POLICY_KEYS` and `EvidenceScope` are unchanged, since
+  `zdrAttested` is a route key: a new `model-evidence.test.ts` case shows an
+  attestation-object list leaves `policyDigest` default-stable.
+- **Off by default (I-1).** No new `ReviewConfig` key; `zdrAttested` stays
+  optional and absent; `DEFAULT_REVIEW_CONFIG`, `parseReviewConfig` (a
+  structured `zdrAttested` in review.json is still "unknown key", tested),
+  `policyDigest`, `promptsDigest`, `EvidenceScope`, `VARIANT_KEYS` and every
+  artifact are byte-identical. `decideRoute`, `zdrBodyRefusal`,
+  `zdrRequestBody`, `zdrFeatureRefusal`, `readZdrAttestation`,
+  `extendedCacheOnly`, `mergeReviewConfig` and `notePrivacyRefused` have no
+  runner caller. `engine:privacy-zdr` stays pending VS-23c. The engine
+  (`run.test.ts`) and desktop (`ai-review.test.ts`) D3 parity suites pass
+  unchanged. The desktop half follows VS-23d through the same `privacy.ts`
+  (§1a); until then it is a documented difference.
+- **Owner questions: none decided.** Q1 and the proposed D15: the default
+  stays `standard`. Q2: attestation is still the mechanism, now with
+  objects. Q7: no eval key setup. Q13: nothing wired. Q16: no global config
+  schema. Q18: VS-33 stays a proposal; this is its off-by-default Now part.
+  Q20: `verify: "api"` is parsed and surfaced in `attestations`, and nothing
+  checks it; refusing it, for OpenAI or until a verifier exists, is the
+  admission's. Q21: the refusal plus the `extendedCache` flag. If the answer
+  is "refuse gpt-5.5 and later under zdr", the flag is ignored, a
+  one-condition change in `decided`.
+- **Lane-note re-checks** (vendor pages re-read 2026-11-06):
+  - **G4-6** confirmed. `input-output-logging.mdx`:62-64: I/O logging does
+    not apply on `eu.openrouter.ai` or `us.openrouter.ai`.
+    `in-region-routing.mdx`:24: regional routing is on the Business and
+    Enterprise plans.
+  - **Corrected** (critique 5), from `server-tools.mdx`:121-136. Global
+    only: Files, sandboxed Bash, Shell, Fusion, Image Generation and Web
+    Fetch. Web Search runs on US with Exa only. Apply Patch, client-side
+    Bash, Advisor, Subagent, Datetime, Tool Search and Search Models run on
+    US and EU. The Files API returns 403 on regional hosts
+    (`files-api.mdx`:35-37). Advisor and Subagent inner generations receive
+    the request's `provider` preferences, `zdr` included (:129-130), while
+    Fusion's do not (:131, G4-4 confirmed). Refusing every server tool is
+    the addendum's conservative choice, even though Advisor and Subagent
+    inherit `zdr`.
+  - **G5-7** confirmed on Anthropic's page: structured outputs cache only
+    the JSON schema, for up to 24 hours since last use. It is for VS-47 and
+    not built here.
+  - **VOI7** is not used.
+- **Deferred** (runner-wiring window or later):
+  - **Transport normalisation (VS-23c):** `X-OpenRouter-Cache: false` and
+    refusing `true`; `store: false` on OpenAI-family requests, Azure and
+    Mantle included; `prompt_cache_retention: "in_memory"` with `ttl`
+    stripped before gpt-5.5, with the SDK pin test; `@ai-sdk/google`
+    `store: false`; re-asserting `provider.zdr` and `data_collection` after
+    merges [VOI1].
+  - **Admission (VS-23b, Q20):** the `verify: "api"` metadata calls
+    (Bedrock `GetAccountDataRetention`, Vertex `getCacheConfig` and
+    `fetchPublisherModelConfig`), the OpenAI `verify: "api"` refusal, and
+    `durable-cache`'s producer. `decideRoute` allows a route that only a
+    `verify: "api"` object attests and lists it in `attestations`, so one
+    forgotten check at wiring would make that entry attest-only. VS-23b's
+    plan must therefore include an admission test with a route covered only
+    by a `verify: "api"` entry (core's Bedrock case in "the decision lists
+    every attestation...", whose comment says so), and that test must expect
+    a refusal until a verifier exists.
+  - **Schema (VS-23d):** the engine global config schema, the SDK build and
+    `bun run generate`.
+  - **Transport format choice (VS-23c):** choosing the request format,
+    and Google request paths (`cachedContents`, files, batch), which
+    `zdrFeatureRefusal` does not check. OpenRouter's `/api/v1/messages`
+    needs no `zdrFeatureRefusal` call any more: `zdrBodyRefusal`, that
+    route's only body check, now refuses the same Anthropic fields. The
+    transport must pass `path` for every Anthropic-format request, Vertex's
+    and Bedrock's included, which the allow list now takes (review fix 2);
+    Bedrock's own Converse format (`/converse`, the default
+    `@ai-sdk/amazon-bedrock` provider) is not an Anthropic body, and its
+    check is VS-23c's to choose.
+  - Re-checking the body's `model` against the extended-cache attestation.
+  - The settings-level `models` case [VOI1].
+  - Notes naming the operator, the region-mismatch note wording, and
+    `EvidenceScope` route qualifiers (I-12), with VS-23b.
+  - G4-8: 404 or 503 text chooses only note wording.
+  - Bedrock and Google-managed Claude needing a cloud-account attestation
+    (VS-23 §3): not enforced, because text entries must keep working.
+  - Model IDs that hide the model: an opaque Bedrock application inference
+    profile (no Covered Model check) and an Azure deployment name (no
+    extended-cache check). Both need admission metadata (VS-23b and VS-23c,
+    Q20).
+  - Gemini explicit `cachedContent` as a possible `durable-cache` producer,
+    considered and not built. Beside it, a Gemini body that refers to a
+    stored Files API upload (`contents[].parts[].fileData.fileUri` on
+    `generativelanguage.googleapis.com/.../files/...`, kept 48 hours) passes
+    `zdrFeatureRefusal`, which checks only Google tools. VS-23c, or a later
+    refusal update, decides both explicitly; the function's doc says so.
+  - The `smallOptions` `store: false` engine fix, outside this contract.
+  - The Codium gateway (later).
+- **Deferred verification.** Wire-level checks, and Done-when's count of 0
+  bodies under `engine:privacy-zdr`, run on VS-21b's fake server after
+  VS-23c. Vendor field shapes come from docs only; no live API call was
+  made.
+- **Evidence.** Vendor sources re-read, each in its own empty folder under
+  `/tmp/vector-vectorscope/vs33a-vendor/`:
+  - OpenRouterTeam/docs cloned at `f1ededbc` (`.source-commit` `c793667a`),
+    the same commit planning used;
+  - openai/openai-openapi at `9752a7f1`: `prompt_cache_retention` says "For
+    `gpt-5.5`, `gpt-5.5-pro`, and future models, only `24h` is supported";
+  - platform.claude.com "API and data retention" (the feature eligibility
+    table), the server tools page ("ZDR and allowed_callers") and the tool
+    reference (every tool type), all fetched 2026-11-06.
+
+  Each test file was run alone through the lock with `--timeout 30000`,
+  `GITHUB_ACTIONS=false`, and `TMPDIR` and XDG roots under
+  `/tmp/vector-vectorscope/vs33a/`:
+
+  | Where | File | Pass |
+  |---|---|---|
+  | core | `test/review/privacy.test.ts` | 48 (24 before; 47 before the review fixes) |
+  | core | `test/review/config.test.ts` | 34 (31 before; one case extended in the review fixes) |
+  | core | `test/review/format.test.ts` | 46 (one assertion added) |
+  | core | `test/review/model-evidence.test.ts` | 17 (one case added; pin re-run) |
+  | engine | `test/review/eval.test.ts`, `test/review/run.test.ts` | 26, 44 |
+  | app | `src/browser-bundle.test.ts`, `src/features/pull-requests/ai-review.test.ts` | 4, 107 |
+  | eval scripts | `replay.test.ts` | 32 |
+
+  - `bun typecheck` in core, engine, app and desktop, and
+    `bun tsgo -p ../../script/vectorscope-eval/tsconfig.json` from
+    `packages/engine`, exit 0.
+  - `prettier --check` passes on the ten changed TypeScript files. `oxlint`
+    on the changed core files reports only warnings the code had before
+    (the `record` cast, `config.ts`'s assertions, two `format.ts` lines not
+    touched, the test's existing `as unknown as` cast).
+  - A mutation check, in one run, disabled the region pin and the
+    extended-cache rule and moved the 20260209 date, then restored the file
+    byte for byte. Exactly the three matching tests failed. In the review
+    round, a second check removed the `source.content` walk and
+    `zdrBodyRefusal`'s Anthropic-fields check: exactly the three matching
+    tests failed, and the file was restored byte for byte.
+  - Review fixes re-run, each file alone through the lock, with `TMPDIR`
+    and XDG roots under `/tmp/vector-vectorscope/vs33a-fix/`: core
+    `privacy.test.ts` 48, `config.test.ts` 34, `format.test.ts` 46,
+    `model-evidence.test.ts` 17 (pin re-run), app `browser-bundle.test.ts`
+    4; `bun typecheck` in core, app, engine and desktop; `prettier --check`
+    on the changed files; `oxlint` on `privacy.ts` and `config.ts` shows
+    only the earlier warnings.
+  - The full root typecheck was not run: nothing is pushed.
+  - Nothing was sent to a model, no paid path ran, no workflow was
+    dispatched, no dependency was added, and no existing user-visible
+    string changed (D14).

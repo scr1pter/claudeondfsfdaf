@@ -3,7 +3,15 @@
 // request. Pure and browser-safe.
 
 import { minimatch } from "minimatch"
-import { DEFAULT_REVIEW_CONFIG, SEVERITIES, SHARED_VERIFY_DEFAULT, type ReviewConfig, type Trigger } from "./types"
+import { NOT_A_NAME, readZdrAttestation } from "./privacy"
+import {
+  DEFAULT_REVIEW_CONFIG,
+  SEVERITIES,
+  SHARED_VERIFY_DEFAULT,
+  type ReviewConfig,
+  type Trigger,
+  type ZdrAttestedEntry,
+} from "./types"
 
 export const REVIEW_CONFIG_PATH = ".vector/review.json"
 export const REVIEW_RULES_PATHS = [".vector/review.md", ".vector/REVIEW.md"] as const
@@ -74,28 +82,61 @@ const paths: Field = {
   expected: 'a list of { "path", "instructions" } objects',
 }
 
-// Provider IDs and model server hosts (privacy.ts reads them). An entry with a scheme, path, user or space, such as a
-// URL, names neither, so it is dropped: a server is written as its host alone, for every port, or with one port.
+// How privacy.ts reads the entries for one route, as the notes on a shared ID state it.
+const STRICTEST = "the strictest of every entry that attests a route applies, whatever its ID"
+
+// Provider IDs and model server hosts (privacy.ts reads them), as text or as VS-33's attestation objects, in one pass
+// that keeps their order. Text with a scheme, path, user or space, such as a URL, names neither, so it is dropped: a
+// server is written as its host alone, for every port, or with one port. An object privacy.ts's readZdrAttestation
+// cannot read is dropped with its reason, naming the entry by its `id`, or by its place when that is unreadable, and
+// never echoing the rest of it (a `project` can be an account ID in a public run log). A list of text alone gives
+// exactly the value and notes it gave before VS-33.
 const attestations: Field = {
   parse: (value) => {
-    const parsed = strings.parse(value)
-    const list = Array.isArray(parsed?.value)
-      ? parsed.value.filter((item): item is string => typeof item === "string")
-      : undefined
-    if (!list) return undefined
-    const named = list.filter((item) => /[\s/@?#\\]/.test(item))
+    if (!Array.isArray(value)) return undefined
+    const read = value.map((item, index) => attestedEntry(item, index))
+    const kept = read.flatMap((item) => (item.entry === undefined ? [] : [item.entry]))
+    const named = read.flatMap((item) => item.named ?? [])
+    const idOf = (entry: ZdrAttestedEntry) => (typeof entry === "string" ? entry : entry.id)
+    // privacy.ts applies the strictest of every entry that attests a route, whatever its ID, so an object beside text
+    // accepts no more. Without a model this cannot tell which entries attest the same route, so it notes only an ID an
+    // object shares (an `openai` object beside the text "api.openai.com" gets none), and the note states the wider rule.
+    const shared = [...new Set(kept.flatMap((entry) => (typeof entry === "string" ? [] : [entry.id])))].filter(
+      (id) => kept.filter((entry) => idOf(entry) === id).length > 1,
+    )
     const notes = [
-      parsed?.note,
+      read.some((item) => item.notText) ? "entries that are not text were dropped" : undefined,
       named.length
         ? `${named.map((item) => JSON.stringify(item)).join(", ")} ${named.length === 1 ? "names" : "name"} neither a provider ID nor a host, so ${named.length === 1 ? "it was" : "they were"} dropped; write a server as its host, such as "gpu-box:8080"`
         : undefined,
+      ...read.flatMap((item) => item.problem ?? []),
+      ...shared.map((id) =>
+        kept.includes(id)
+          ? `${JSON.stringify(id)} is also listed as text, which accepts no "extendedCache", and ${STRICTEST}`
+          : `${JSON.stringify(id)} is listed more than once, and ${STRICTEST}`,
+      ),
     ].filter((note) => note !== undefined)
-    return {
-      value: list.filter((item) => !named.includes(item)),
-      note: notes.length ? notes.join("; ") : undefined,
-    }
+    return { value: kept, note: notes.length ? notes.join("; ") : undefined }
   },
   expected: "a list of provider IDs and model server hosts",
+}
+
+// One item of `zdrAttested`: text, kept trimmed unless it names neither a provider ID nor a host; an attestation
+// object, kept as readZdrAttestation reads it; or anything else, which is not text.
+function attestedEntry(
+  item: unknown,
+  index: number,
+): { entry?: ZdrAttestedEntry; notText?: true; named?: string; problem?: string } {
+  if (typeof item === "string") {
+    const text = item.trim()
+    if (!text) return { notText: true }
+    return NOT_A_NAME.test(text) ? { named: text } : { entry: text }
+  }
+  if (typeof item !== "object" || item === null || Array.isArray(item)) return { notText: true }
+  const read = readZdrAttestation(item)
+  if ("attestation" in read) return { entry: read.attestation }
+  const subject = read.id === undefined ? `entry ${index + 1}` : `the entry for ${JSON.stringify(read.id)}`
+  return { problem: `${subject} ${read.problem}, so it was dropped` }
 }
 
 // Keys whose sources are tagged (contract §1.1, invariant I-2). parseReviewConfig reads none of them: review.json's
@@ -106,7 +147,8 @@ const attestations: Field = {
 const RAISE_ONLY = {
   privacy: { levels: ["standard", "zdr"], env: "REVIEW_PRIVACY" },
 } as const satisfies Partial<Record<keyof ReviewConfig, { levels: readonly string[]; env: string }>>
-// - Trusted-only: read from the surface's trusted source alone, never from the working tree or the environment.
+// - Trusted-only: read from the surface's trusted source alone, never from the working tree or the environment. This
+//   holds for `zdrAttested`'s attestation objects (VS-33) as for its text entries.
 const TRUSTED_ONLY = { zdrAttested: attestations } satisfies Partial<Record<keyof ReviewConfig, Field>>
 
 export type SourcedReviewKey = keyof typeof RAISE_ONLY | keyof typeof TRUSTED_ONLY
@@ -235,8 +277,10 @@ export function parseReviewConfig(
  * strictest of the global config, review.json and REVIEW_PRIVACY, and a review.json that cannot be read but mentions it
  * counts as "zdr". `zdrAttested` comes from the trusted source alone: the global config on "local" (your own branch can
  * hold other people's commits), review.json at the base on "github" (a pull request can edit the workflow and its
- * environment). It has no environment variable, and a value from any other source is ignored with a warning. Neither
- * key is set when it has its default, so with both unset the result is parseReviewConfig's.
+ * environment). It has no environment variable, and a value from any other source is ignored with a warning. Its
+ * entries are text or VS-33's attestation objects (`{ id, operator, project?, region?, extendedCache?, verify? }`,
+ * read by privacy.ts's readZdrAttestation); an entry that is neither, or an object that cannot be read, is dropped with
+ * a warning. Neither key is set when it has its default, so with both unset the result is parseReviewConfig's.
  */
 export function mergeReviewConfig(input: {
   surface: "local" | "github"

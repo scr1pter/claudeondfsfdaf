@@ -207,6 +207,24 @@ export interface ReviewPass {
   cacheRead: number
 }
 
+// VS-33 (addendum A; Q2, Q20, Q21): one `zdrAttested` entry with what the owner attests beyond its ID. `id` is read as
+// a text entry is, as a provider ID and as a host. `operator` (required) is the platform operator that processes the
+// data, such as "aws" for Claude on Bedrock or "anthropic" for the Claude API. `project` is the cloud project or account
+// it covers. `region` pins an OpenRouter account to eu.openrouter.ai or us.openrouter.ai and attests nothing else.
+// `extendedCache` accepts OpenAI's 24-hour extended prompt caching (gpt-5.5 and later). `verify: "api"` asks admission
+// to check the account itself; absent means "attest". Nothing checks it yet: until a verifier exists (Q20), VS-23b's
+// admission must refuse a route whose decision lists an attestation with `verify: "api"`, and must refuse an OpenAI
+// one unless Q20 approves an admin credential.
+export interface ZdrAttestation {
+  id: string
+  operator: string
+  project?: string
+  region?: "eu" | "us"
+  extendedCache?: boolean
+  verify?: "attest" | "api"
+}
+export type ZdrAttestedEntry = string | ZdrAttestation
+
 // `.vector/review.json`. Environment variables override it, and it overrides DEFAULT_REVIEW_CONFIG.
 export interface ReviewConfig {
   incremental: boolean
@@ -234,8 +252,9 @@ export interface ReviewConfig {
   // config and its digest stay as they were. Only mergeReviewConfig reads it, and no runner calls that before VS-23b.
   privacy?: "standard" | "zdr"
   // The routes the owner attests are zero data retention (Q2): provider IDs, `openrouter` for an OpenRouter account,
-  // and model server hosts. Read only from a trusted source (mergeReviewConfig); absent means none.
-  zdrAttested?: string[]
+  // and model server hosts. A text entry is the legacy form and keeps its meaning; an attestation object (VS-33) adds
+  // what the owner attests beyond the ID. Read only from a trusted source (mergeReviewConfig); absent means none.
+  zdrAttested?: ZdrAttestedEntry[]
   failOn: "never" | "blocking" // "blocking" fails the job while blocking findings are open
   ignore: string[] // added to the defaults
   ignoreDefaults: boolean
