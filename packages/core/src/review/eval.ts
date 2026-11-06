@@ -155,6 +155,10 @@ export interface LabelledDefect {
   cause: string
   locations: DefectLocation[]
   alternatives: DefectLocation[]
+  // VS-22a's failure class: one of the five classes, or "other". No case sets it until VS-22a maps the dataset's label,
+  // and VS-22a may change its shape. Class-scoped recall (eval-report.ts) counts only defects with a class other than
+  // "other".
+  failureClass?: string
 }
 
 // Where a judge can read the code a case changed, so an unexpected finding is checked against the code and not only
@@ -172,6 +176,13 @@ export interface EvalCase {
   size?: { files: number; additions: number; deletions: number }
   defects: LabelledDefect[] // empty for a control
   code?: CodeReference
+  // The dataset's "cross-file" trait: the defect, or its fix, spans more than one file. Cross-file recall counts the
+  // defects of these cases.
+  crossFile?: boolean
+  // A trivial control's kind (VS-22a: whitespace, docs, a rename and the like), on a control only. Trivial controls are
+  // reported on their own and never count toward false alarms per clean pull request (the D2 figure). No case sets it
+  // until VS-22a, which may change its shape.
+  trivialKind?: string
 }
 
 export interface EvalFinding {
@@ -200,18 +211,29 @@ export interface EvalRun {
   proposed: EvalFinding[] // what the reviewers reported
   posted: EvalFinding[] // what survived verification and selection and would be posted
   ms?: number
+  // The provider attempts the run's admission let through; 0 is a review that spent no token (a zero-token stop).
+  // Absent when the output does not say.
+  attempts?: number
+  stop?: string // why the review stopped early (ReviewOutcome.partial); "privacy" is a route refusal (VS-23)
+  passes?: { pass: string; ms: number }[] // wall time of each pass that ran
   spend: {
     costUsd?: number // known spend; absent when none was reported
     uncertainUsd: number // kept for attempts whose cost is not known, never read as zero
     usageMissing: boolean
     admitted: boolean // the eval ledger admitted the run's paid attempts; true when it made none
   }
-  tokens?: { input: number; output: number }
+  // input counts the prompt tokens neither read from nor written to the provider's cache, as the engine reports them.
+  tokens?: { input: number; output: number; cacheRead?: number; cacheWrite?: number }
   violations: string[] // trust or consent checks the run broke
   startedAt?: string
 }
 
 export type PlanEntry = Pick<EvalRun, "variant" | "model" | "case" | "repetition">
+
+// A trivial control (VS-22a), which never counts toward false alarms per clean pull request.
+export function isTrivialControl(evalCase: Pick<EvalCase, "kind" | "trivialKind">) {
+  return evalCase.kind === "control" && evalCase.trivialKind !== undefined
+}
 
 export type Verdict =
   | { kind: "match"; defect: string } // identifies the cause of this labelled defect
@@ -506,7 +528,8 @@ export function summarize(
   const scores = entries.map((entry) => entry.score)
   const reviewed = entries.filter((entry) => entry.score.status === "completed" || entry.score.status === "partial")
   const completed = scores.filter((score) => score.status === "completed")
-  const controls = reviewed.filter((entry) => entry.evalCase.kind === "control")
+  // Behaviour-preserving controls only: a trivial one is reported on its own (eval-report.ts).
+  const controls = reviewed.filter((entry) => entry.evalCase.kind === "control" && !isTrivialControl(entry.evalCase))
   const judgedOf = (score: RunScore) => score.matched + score.extra + score.duplicates + score.falseAlarms
   const found = sum(scores.map((score) => score.matched + score.extra))
   const judged = sum(scores.map(judgedOf))

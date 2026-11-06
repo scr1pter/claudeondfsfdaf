@@ -11,7 +11,9 @@ import {
   type KeyObject,
 } from "node:crypto"
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs"
-import { basename, isAbsolute, join, resolve } from "node:path"
+import { devNull } from "node:os"
+import { basename, dirname, isAbsolute, join, resolve } from "node:path"
+import { VARIANT_NAME } from "../../packages/core/src/review/eval"
 import {
   defaultLimits,
   formatSummary,
@@ -22,8 +24,10 @@ import {
   type Limits,
   type Price,
 } from "./budget"
+import { loadManifest, manifestProblems, SEED_MANIFEST, untrustedGitEnv, type Manifest } from "./dataset"
 import { fixtureProblems, listFixtures, loadFixture } from "./fixture"
 import { outsideRepository, REPO_ROOT } from "./paths"
+import { PILOT, pilotProblems, pilotRemaining, replayBudget, variantRecord } from "./replay"
 import {
   DEFAULT_BASE_URL,
   estimateCases,
@@ -36,15 +40,27 @@ import {
 
 // The vectorscope eval workflow's entry point (.github/workflows/vectorscope-eval.yml; VectorScope plan, VS-03). The
 // workflow hands the dispatch inputs over as environment variables and never writes one into a shell command. This
-// script validates them and starts run.ts with an argument array, so no input is parsed by a shell.
+// script validates them and starts run.ts, or for the replay pipeline the engine's entry point
+// (packages/engine/script/vectorscope-replay.ts, VS-21c), with an argument array, so no input is parsed by a shell.
 //
-//   plan    Validates the inputs and the fixtures and estimates the worst case. Sends nothing and needs no key.
-//   paid    Runs each model in turn. Every request is admitted by one budget ledger whose journal all the runs
-//           share, and is sent with the vectorscope-eval environment's own key (D7). No model starts once the ledger
-//           has stopped admitting.
-//   report  Summarises the ledger journal, also after a cancelled or timed-out run.
-//   seal    Encrypts the reports, logs and journal to the owner's public key, for the run's artifact.
-//   unseal  On the owner's machine: decrypts a sealed artifact with the matching private key.
+// Two pipelines (EVAL_PIPELINE): "smoke", the default, sends the review prompt for each synthetic fixture to each
+// model (run.ts); "replay" runs the dataset's cases through the engine's review pipeline, for each registry variant in
+// EVAL_VARIANTS (engine and engine:shared-verify when empty).
+//
+//   plan     Validates the inputs and estimates the worst case. Smoke checks the fixtures. Replay projects every
+//            seed case, every split, for each variant against a canned model on this computer, which spends nothing,
+//            and fails on any projection problem. Sends nothing and needs no key.
+//   mirrors  Fetches the local mirrors a replay prepares its checkouts from: anonymous https fetches of the committed
+//            seed manifest's repositories at its commits, nothing else.
+//   project  For the paid job's replay: projects the development cases it is about to pay for into the output
+//            directory, sending nothing and with no key, so the report can measure the estimate error. What it
+//            prints goes to a log in that directory, sealed with the paid run's.
+//   paid     Runs each model in turn. Every request is admitted by one budget ledger whose journal all the runs
+//            share, and is sent with the vectorscope-eval environment's own key (D7). No model starts once the ledger
+//            has stopped admitting. A paid replay stays within the D5 pilot's limits.
+//   report   Summarises the ledger journal, also after a cancelled or timed-out run.
+//   seal     Encrypts the reports, logs and journal to the owner's public key, for the run's artifact.
+//   unseal   On the owner's machine: decrypts a sealed artifact with the matching private key.
 //
 // The repository is public, so its Actions logs, step summaries and artifacts can be read by anyone. Results stay
 // internal until a held-out run passes D2 and the owner reviews the aggregate (D12), so a paid run prints only the
@@ -57,6 +73,11 @@ export const KEY_ENV = EVAL_KEY_ENV
 // to start without it, so no result can reach the artifact unsealed.
 export const PUBLIC_KEY_ENV = "VECTORSCOPE_EVAL_PUBLIC_KEY"
 export const MODES = ["dry-run", "paid"] as const
+export const PIPELINES = ["smoke", "replay"] as const
+// The replay pipeline's variants when none are named: the frozen pipeline and VS-06's shared verify policy.
+export const DEFAULT_VARIANTS = ["engine", "engine:shared-verify"]
+export const ENGINE_DIR = join(REPO_ROOT, "packages", "engine")
+export const REPLAY_ENTRY = join(ENGINE_DIR, "script", "vectorscope-replay.ts")
 export const JOURNAL = "ledger.jsonl"
 export const SEALED = "vectorscope-eval.sealed.json"
 export const SEALED_SCHEMA = "vectorscope-sealed/1"
@@ -68,14 +89,18 @@ const AMOUNT = /^\d{1,6}(?:\.\d{1,4})?$/
 const FIXTURES = /^[a-z0-9-]+(?:,[a-z0-9-]+)*$/
 
 export type Mode = (typeof MODES)[number]
+export type Pipeline = (typeof PIPELINES)[number]
 
 export interface Inputs {
   mode: Mode
+  pipeline: Pipeline
   models: { id: string; price: Price }[]
   limits?: Limits
-  maxTokens: number
+  maxTokens: number // the smoke pipeline's output limit; a replay runs under the engine's own
   repeat: number
   fixtures?: string[]
+  variants: string[] // registry names for the replay pipeline; empty for smoke
+  pilotSpentUsd?: number // replay only: what the pilot's earlier dispatches settled; absent when none was given
 }
 
 type Env = Record<string, string | undefined>
@@ -141,15 +166,69 @@ export function parseInputs(env: Env): { inputs: Inputs } | { problems: string[]
   if (fixtures && !FIXTURES.test(fixtures))
     problems.push(`fixtures must be comma-separated fixture names, not ${JSON.stringify(fixtures)}`)
 
+  const pipeline = env.EVAL_PIPELINE?.trim() || "smoke"
+  if (!PIPELINES.includes(pipeline as Pipeline))
+    problems.push(`pipeline must be ${PIPELINES.join(" or ")}, not ${JSON.stringify(env.EVAL_PIPELINE)}`)
+  const named = (env.EVAL_VARIANTS ?? "")
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+  if (pipeline === "smoke" && named.length)
+    problems.push("variants name replay pipelines: leave them empty for the smoke pipeline")
+  if (pipeline === "replay") {
+    // A malformed entry gets a fixed message with the entry quoted, so its text can never start a line of the log; a
+    // well-formed one holds only lowercase letters, digits, "-" and ":", and resolveVariant's detail adds registry text.
+    problems.push(
+      ...named.flatMap((entry) => {
+        if (!VARIANT_NAME.test(entry))
+          return [
+            `variants entry ${JSON.stringify(entry)} is not a variant name: a runner, then optionally ":" and a registered suffix, such as engine:shared-verify`,
+          ]
+        const resolved = variantRecord(entry)
+        return resolved.ok ? [] : [`variants entry ${JSON.stringify(entry)}: ${resolved.detail}`]
+      }),
+    )
+    const twice = named.filter((entry, index) => named.indexOf(entry) !== index)
+    if (twice.length)
+      problems.push(
+        `variants lists ${[...new Set(twice)].map((entry) => JSON.stringify(entry)).join(", ")} more than once`,
+      )
+    if (fixtures) problems.push("fixtures belong to the smoke pipeline: a replay runs the dataset's cases")
+  }
+  // What the pilot's earlier dispatches settled, from their sealed ledgers: one pilot's dispatches share D5's $50.
+  const spent = env.EVAL_PILOT_SPENT_USD?.trim() ?? ""
+  if (spent && !AMOUNT.test(spent))
+    problems.push(
+      `pilot_spent_usd must be a USD amount such as 12.40, or empty for none, not ${JSON.stringify(env.EVAL_PILOT_SPENT_USD)}`,
+    )
+  if (spent && pipeline !== "replay")
+    problems.push("pilot_spent_usd belongs to the replay pipeline's pilot: leave it empty for the smoke pipeline")
+  const spentUsd = spent && AMOUNT.test(spent) ? Number(spent) : undefined
+  // D5: a paid replay is the pilot, within its limits and what its earlier dispatches left. Checked here, where the
+  // earlier spend is given, so the dry run fails before the owner is asked to approve; the entry point holds each
+  // dispatch to the whole $50 and refuses the other limits itself.
+  if (pipeline === "replay" && mode === "paid" && limits)
+    problems.push(
+      ...pilotProblems({
+        limits,
+        repeat: Number(repeat),
+        split: "development",
+        ...(spentUsd !== undefined ? { spentUsd } : {}),
+      }),
+    )
+
   if (problems.length) return { problems }
   return {
     inputs: {
       mode: mode as Mode,
+      pipeline: pipeline as Pipeline,
       models,
       ...(limits ? { limits } : {}),
       maxTokens: Number(maxTokens),
       repeat: Number(repeat),
       ...(fixtures ? { fixtures: fixtures.split(",") } : {}),
+      variants: pipeline === "replay" ? (named.length ? named : [...DEFAULT_VARIANTS]) : [],
+      ...(spentUsd !== undefined ? { pilotSpentUsd: spentUsd } : {}),
     },
   }
 }
@@ -184,6 +263,69 @@ export function runArgs(inputs: Inputs, index: number, outDir?: string): string[
   ]
 }
 
+// The engine entry point's arguments for one model (packages/engine/script/vectorscope-replay.ts). Without a target it is
+// the plan's dry projection of every seed case, every split, writing nothing. With one that does not send, it projects
+// the development cases into the output directory (the paid job's projections, for the estimate error). With one that
+// sends, it replays the development cases with the eval's own key, charging the ledger journal every model shares.
+// The entry point decides for itself whether it may send (its replayMode), and refuses outside the protected
+// environment; these arguments never name a key, an endpoint or a manifest other than the committed seed.
+export function replayArgs(
+  inputs: Inputs,
+  index: number,
+  dirs: { mirrors: string; work: string },
+  target?: { outDir: string; send: boolean },
+): string[] {
+  const model = inputs.models[index]!
+  return [
+    "--model",
+    `${model.id}=${model.price.input}:${model.price.output}`,
+    "--manifest",
+    SEED_MANIFEST,
+    "--mirrors",
+    dirs.mirrors,
+    "--work",
+    dirs.work,
+    ...inputs.variants.flatMap((variant) => ["--variant", variant]),
+    "--repeat",
+    String(inputs.repeat),
+    ...(inputs.limits
+      ? ["--budget-usd", String(inputs.limits.totalUsd), "--case-budget-usd", String(inputs.limits.caseUsd)]
+      : []),
+    ...(!target
+      ? ["--split", "all", "--dry-run"]
+      : target.send
+        ? ["--split", "development", "--ledger", join(target.outDir, JOURNAL), "--out", target.outDir]
+        : ["--split", "development", "--dry-run", "--out", target.outDir]),
+  ]
+}
+
+// The local mirrors a replay's checkouts are prepared from (replay.ts prepareCheckout): one bare repository per
+// repository of the manifest, at <owner>/<name>.git (where dataset.ts mirrorLocator finds it), with the heads and bases
+// of its cases. Each commit is fetched into its own ref so that a later gc keeps it.
+export function mirrorPlan(manifest: Pick<Manifest, "cases">) {
+  return Object.entries(Object.groupBy(manifest.cases, (item) => item.repository.url)).map(([url, cases]) => {
+    const [owner = "", name = ""] = new URL(url).pathname.split("/").filter(Boolean)
+    return {
+      url,
+      dir: join(owner, `${name}.git`),
+      shas: [...new Set((cases ?? []).flatMap((item) => [item.candidate.head, item.candidate.base]))],
+    }
+  })
+}
+
+// Git for the mirror fetch: none of the user's or the system's config (untrustedGitEnv), no hooks or fsmonitor, and https
+// alone of the remote transports, so a fetch reaches GitHub's https endpoint and nothing else.
+export const MIRROR_GIT = [
+  "-c",
+  `core.hooksPath=${devNull}`,
+  "-c",
+  "core.fsmonitor=false",
+  "-c",
+  "protocol.allow=never",
+  "-c",
+  "protocol.https.allow=always",
+] as const
+
 function runName(inputs: Inputs, index: number) {
   return `${index + 1}-${inputs.models[index]!.id.replace(/[^A-Za-z0-9._-]/g, "_")}`
 }
@@ -197,7 +339,9 @@ export interface Child {
 
 export interface Deps {
   env?: Env
-  spawn?: (argv: string[], env: Record<string, string>) => Child
+  spawn?: (argv: string[], env: Record<string, string>, cwd?: string) => Child
+  // Runs git with these arguments (after "git") for the mirror fetch.
+  git?: (argv: string[], env: Record<string, string | undefined>) => { code: number; stderr: string }
   stdout?: (text: string) => void
   stderr?: (text: string) => void
 }
@@ -212,9 +356,10 @@ export async function main(command: string | undefined, deps: Deps = {}, args: s
   if (command === "report") return report({ env, out, summary })
   if (command === "seal") return sealCommand({ env, out, err })
   if (command === "unseal") return unsealCommand(args, { out, err })
-  if (command !== "plan" && command !== "paid") {
+  if (command === "mirrors") return fetchMirrors({ env, out, err, git: deps.git ?? git })
+  if (command !== "plan" && command !== "paid" && command !== "project") {
     err(
-      "Usage: bun script/vectorscope-eval/ci.ts plan|paid|report|seal (inputs come from EVAL_* environment variables)\n" +
+      "Usage: bun script/vectorscope-eval/ci.ts plan|mirrors|project|paid|report|seal (inputs come from EVAL_* environment variables)\n" +
         "       bun script/vectorscope-eval/ci.ts unseal <sealed.json> <private-key.pem> <directory>\n",
     )
     return 2
@@ -226,7 +371,11 @@ export async function main(command: string | undefined, deps: Deps = {}, args: s
     return 1
   }
   const inputs = parsed.inputs
-  if (command === "plan") return plan(inputs, { out, err, summary })
+  if (command === "plan")
+    return inputs.pipeline === "replay"
+      ? planReplay(inputs, { env, out, err, summary, spawn: deps.spawn ?? spawn })
+      : plan(inputs, { out, err, summary })
+  if (command === "project") return project(inputs, { env, out, err, spawn: deps.spawn ?? spawn })
   if (inputs.mode !== "paid") {
     err("The paid job runs only when mode is paid.\n")
     return 1
@@ -282,6 +431,153 @@ async function plan(
   return 0
 }
 
+// The replay pipeline's dry run: the engine entry point projects every seed case for each variant against a canned
+// model on this computer, under the strict egress guard, and fails on any projection problem. Its child gets a path, a
+// home and a temporary directory, and no key, whatever the job's environment holds.
+async function planReplay(
+  inputs: Inputs,
+  io: {
+    env: Env
+    out: (text: string) => void
+    err: (text: string) => void
+    summary: (text: string) => void
+    spawn: NonNullable<Deps["spawn"]>
+  },
+) {
+  const dirs = replayDirs(io.env)
+  if (typeof dirs === "string") {
+    io.err(`${dirs}\n`)
+    return 1
+  }
+  const value = await loadManifest(SEED_MANIFEST)
+  const invalid = manifestProblems(value)
+  if (invalid.length) {
+    io.err(`The seed manifest is not valid:\n${invalid.map((line) => `  ${line}`).join("\n")}\n`)
+    return 1
+  }
+  const codes = []
+  for (const [index, model] of inputs.models.entries()) {
+    const child = io.spawn(
+      [process.execPath, REPLAY_ENTRY, ...replayArgs(inputs, index, dirs)],
+      plainEnv(io.env),
+      ENGINE_DIR,
+    )
+    const [text, errors, code] = await Promise.all([child.stdout, child.stderr ?? Promise.resolve(""), child.exited])
+    if (errors) io.err(errors.endsWith("\n") ? errors : `${errors}\n`)
+    io.out(`${text}${text.endsWith("\n") ? "" : "\n"}`)
+    io.summary(block(`Dry projection: ${model.id}`, text))
+    codes.push(code)
+  }
+  const development = (value as Manifest).cases.filter((item) => item.split === "development").length
+  const spent = inputs.pilotSpentUsd ?? 0
+  const text = [
+    `Mode ${inputs.mode}, replay pipeline. ${inputs.variants.length} variant(s) (${inputs.variants.join(", ")}) for each of ${inputs.models.length} model(s); max_tokens applies to the smoke pipeline only.`,
+    ...(inputs.limits
+      ? [
+          `A paid replay runs the ${development} development case(s) x ${inputs.variants.length} variant(s) x ${inputs.repeat} x ${inputs.models.length} model(s). ${replayBudget(development * inputs.variants.length * inputs.repeat * inputs.models.length, inputs.limits).text}`,
+        ]
+      : ["No budget was given, so a paid run could not start."]),
+    `The D5 pilot's $${money(PILOT.totalUsd, 2)} is shared by all its dispatches: $${money(spent, 2)} settled by earlier ones (pilot_spent_usd), so $${money(pilotRemaining(spent), 2)} is left for this one. Split a pilot's dispatches by variants and models, never repeating a case, variant and model.`,
+    inputs.mode === "paid"
+      ? "The paid job waits for the owner's approval in the vectorscope-eval environment."
+      : "Dry run: nothing was sent, and no key was used.",
+  ].join("\n")
+  io.out(text + "\n")
+  io.summary(block("Dry run", text))
+  return codes.every((code) => code === 0) ? 0 : 1
+}
+
+// The paid job's projections of the development cases it is about to replay, into the output directory beside the
+// paid artifacts, so the sealed report can join each paid run with its projection. It sends nothing and holds no key.
+// It runs in the paid job, so its output goes where the paid step's does: to a log only the sealed artifact carries,
+// with the public log given each model's exit code alone (D12).
+async function project(
+  inputs: Inputs,
+  io: { env: Env; out: (text: string) => void; err: (text: string) => void; spawn: NonNullable<Deps["spawn"]> },
+) {
+  if (inputs.pipeline !== "replay") {
+    io.err("Projections run for the replay pipeline only.\n")
+    return 1
+  }
+  const outDir = outputDir(io.env)
+  if (typeof outDir !== "string") {
+    io.err(`${outDir.problem}\n`)
+    return 1
+  }
+  const dirs = replayDirs(io.env)
+  if (typeof dirs === "string") {
+    io.err(`${dirs}\n`)
+    return 1
+  }
+  mkdirSync(outDir, { recursive: true })
+  const codes = []
+  for (const [index, model] of inputs.models.entries()) {
+    const child = io.spawn(
+      [process.execPath, REPLAY_ENTRY, ...replayArgs(inputs, index, dirs, { outDir, send: false })],
+      plainEnv(io.env),
+      ENGINE_DIR,
+    )
+    const [text, errors, code] = await Promise.all([child.stdout, child.stderr ?? Promise.resolve(""), child.exited])
+    writeFileSync(
+      join(outDir, `${runName(inputs, index)}-projection.log`),
+      `${errors}${errors && text ? "\n" : ""}${text}`,
+    )
+    io.out(`${model.id}: the projection exited with ${code}. Its log is in the sealed artifact.\n`)
+    codes.push(code)
+  }
+  return codes.every((code) => code === 0) ? 0 : 1
+}
+
+// Fetches each seed repository's commits into a bare mirror under EVAL_MIRRORS_DIR. Every URL comes from the committed
+// seed manifest, never from an input, and git runs with no user or system config and https as its only transport.
+async function fetchMirrors(io: {
+  env: Env
+  out: (text: string) => void
+  err: (text: string) => void
+  git: NonNullable<Deps["git"]>
+}) {
+  const root = outputDir(io.env, "EVAL_MIRRORS_DIR")
+  if (typeof root !== "string") {
+    io.err(`${root.problem}\n`)
+    return 1
+  }
+  const value = await loadManifest(SEED_MANIFEST)
+  const invalid = manifestProblems(value)
+  if (invalid.length) {
+    io.err(`The seed manifest is not valid:\n${invalid.map((line) => `  ${line}`).join("\n")}\n`)
+    return 1
+  }
+  const failed = mirrorPlan(value as Manifest).filter((entry) => {
+    const target = join(root, entry.dir)
+    mkdirSync(dirname(target), { recursive: true })
+    const steps = [
+      ["init", "--bare", "--quiet", target],
+      [
+        "-C",
+        target,
+        "fetch",
+        "--quiet",
+        "--no-tags",
+        "--no-recurse-submodules",
+        entry.url,
+        ...entry.shas.map((sha) => `${sha}:refs/vectorscope/${sha}`),
+      ],
+      ...entry.shas.map((sha) => ["-C", target, "cat-file", "-e", `${sha}^{commit}`]),
+    ]
+    const broken = steps.find((step) => {
+      const result = io.git([...MIRROR_GIT, ...step], untrustedGitEnv())
+      if (result.code === 0) return false
+      io.err(
+        `${entry.url}: git ${step[0] === "-C" ? step[2] : step[0]} failed: ${JSON.stringify(result.stderr.trim())}\n`,
+      )
+      return true
+    })
+    if (!broken) io.out(`${entry.url}: ${entry.shas.length} commit(s) in ${target}\n`)
+    return broken !== undefined
+  })
+  return failed.length ? 1 : 0
+}
+
 async function paid(
   inputs: Inputs,
   io: {
@@ -313,6 +609,11 @@ async function paid(
   const outDir = outputDir(io.env)
   if (typeof outDir !== "string") {
     io.err(`${outDir.problem}\n`)
+    return 1
+  }
+  const dirs = inputs.pipeline === "replay" ? replayDirs(io.env) : undefined
+  if (typeof dirs === "string") {
+    io.err(`${dirs}\n`)
     return 1
   }
   mkdirSync(outDir, { recursive: true })
@@ -348,14 +649,20 @@ async function paid(
         status = 1
         break
       }
-      // run.ts's output holds scores, findings and model text. It goes to a log beside its report, which only the
-      // sealed artifact carries; the public log and summary get the ledger's spend and counts alone (D12).
-      child = io.spawn([process.execPath, RUN, ...runArgs(inputs, index, outDir)], childEnv)
+      // run.ts's output, and the replay's, hold scores, findings and model text. It goes to a log beside its report,
+      // which only the sealed artifact carries; the public log and summary get the ledger's spend and counts alone (D12).
+      child = dirs
+        ? io.spawn(
+            [process.execPath, REPLAY_ENTRY, ...replayArgs(inputs, index, dirs, { outDir, send: true })],
+            childEnv,
+            ENGINE_DIR,
+          )
+        : io.spawn([process.execPath, RUN, ...runArgs(inputs, index, outDir)], childEnv)
       const [text, errors, code] = await Promise.all([child.stdout, child.stderr ?? Promise.resolve(""), child.exited])
       child = undefined
       writeFileSync(join(outDir, `${runName(inputs, index)}.log`), `${errors}${errors && text ? "\n" : ""}${text}`)
       const spend = existsSync(journal) ? ledgerText(journal) : "No ledger journal: no paid attempt was admitted."
-      const line = `${model.id}: run.ts exited with ${code}. Its report and log are in the sealed artifact.`
+      const line = `${model.id}: ${dirs ? "the replay" : "run.ts"} exited with ${code}. Its report and log are in the sealed artifact.`
       io.out(`${line}\n${spend}\n`)
       io.summary(block(model.id, `${line}\n${spend}`))
       if (code !== 0) status = 1
@@ -530,6 +837,24 @@ function stoppedReason(journal: string) {
   }
 }
 
+// A replay's mirrors and its working directory, both outside the repository, or why not.
+function replayDirs(env: Env): { mirrors: string; work: string } | string {
+  const mirrors = outputDir(env, "EVAL_MIRRORS_DIR")
+  if (typeof mirrors !== "string") return mirrors.problem
+  const work = outputDir(env, "EVAL_WORK_DIR")
+  if (typeof work !== "string") return work.problem
+  return { mirrors, work }
+}
+
+// What a child that sends nothing gets of the job's environment: a path, a home and a temporary directory. No key.
+function plainEnv(env: Env) {
+  return Object.fromEntries(
+    Object.entries({ PATH: env.PATH, HOME: env.HOME, TMPDIR: env.TMPDIR }).filter(
+      (entry): entry is [string, string] => entry[1] !== undefined,
+    ),
+  )
+}
+
 // Reports and the journal live in the runner's temporary directory, never in the repository.
 function outputDir(env: Env, name = "EVAL_OUT_DIR"): string | { problem: string } {
   const dir = env[name]
@@ -538,14 +863,19 @@ function outputDir(env: Env, name = "EVAL_OUT_DIR"): string | { problem: string 
   return dir
 }
 
-function spawn(argv: string[], env: Record<string, string>): Child {
-  const child = Bun.spawn(argv, { env, stdout: "pipe", stderr: "pipe", stdin: "ignore" })
+function spawn(argv: string[], env: Record<string, string>, cwd?: string): Child {
+  const child = Bun.spawn(argv, { env, ...(cwd ? { cwd } : {}), stdout: "pipe", stderr: "pipe", stdin: "ignore" })
   return {
     stdout: new Response(child.stdout).text(),
     stderr: new Response(child.stderr).text(),
     exited: child.exited,
     kill: (signal) => child.kill(signal),
   }
+}
+
+function git(argv: string[], env: Record<string, string | undefined>) {
+  const result = Bun.spawnSync(["git", ...argv], { env, stdout: "pipe", stderr: "pipe", stdin: "ignore" })
+  return { code: result.exitCode, stderr: result.stderr.toString() }
 }
 
 // A step summary section. The text is escaped inside <pre>, so model output in it cannot become markup or links.

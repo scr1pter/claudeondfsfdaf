@@ -4,6 +4,7 @@ import { existsSync, statSync } from "node:fs"
 import { join, resolve } from "node:path"
 import { parseArgs } from "node:util"
 import { VARIANT_NAME } from "../../packages/core/src/review/eval"
+import type { ProjectedRun } from "../../packages/core/src/review/eval-report"
 import type { ReviewConfig } from "../../packages/core/src/review/types"
 import type {
   AttemptRecord,
@@ -46,7 +47,9 @@ import {
 // each case's checkout from a local mirror: the candidate head and its history only, so neither the fix nor anything
 // after the candidate is in the repository the reviewer reads, with the base checked out, as CI leaves an untrusted
 // change. It sends no model request: a replay that spends money is admitted by the eval budget ledger (admitReplay
-// below, VS-03) and runs only in the protected vectorscope-eval environment (D5, D7), and nothing can start one yet.
+// below, VS-03) and runs only in the protected vectorscope-eval environment (D5, D7), within the D5 pilot's limits
+// (pilotProblems). The engine entry point that runs replays and dry projections in-process is
+// packages/engine/script/vectorscope-replay.ts (VS-21c), started by ci.ts; it is dry unless every send rule holds.
 
 const REPO_ROOT = join(import.meta.dir, "..", "..")
 const FULL_SHA = /^[0-9a-f]{40}$/
@@ -265,6 +268,91 @@ export function variantAdapter(name: string) {
   return name.split(":")[0] ?? name
 }
 
+// A variant name as the engine entry point (VS-21c) takes it: a registry name built for the engine, with the record
+// ReviewEval.replay and ReviewEval.project take as `variant`, which the frozen pipeline has none of. A malformed,
+// unknown or pending name is refused with resolveVariant's detail, and a desktop one because only the engine runs here.
+export function variantRecord(
+  name: string,
+): { ok: true; name: string; record?: Omit<VariantRecord, "applied"> } | { ok: false; detail: string } {
+  const resolved = resolveVariant(name)
+  if (!resolved.ok) return { ok: false, detail: resolved.detail }
+  if (resolved.adapter !== "engine")
+    return {
+      ok: false,
+      detail: `${resolved.name} runs on the desktop runner; replays and projections here run the engine.`,
+    }
+  const record = recordOf(resolved)
+  return { ok: true, name: resolved.name, ...(record ? { record } : {}) }
+}
+
+function recordOf(resolved: Extract<VariantResolution, { ok: true }>): Omit<VariantRecord, "applied"> | undefined {
+  if (resolved.frozen) return undefined
+  return { name: resolved.name, keys: resolved.keys, ...(resolved.models ? { models: resolved.models } : {}) }
+}
+
+// The D5 pilot (vectorscope-plan.md D5): one pilot, capped at $50 in total and $0.75 a case, one repetition, on the
+// development split only. A paid replay is refused outside these limits, each with its reason; a held-out or larger run
+// waits for a budget the owner sets after reading the pilot report, and a code change that names it. How many cases
+// and variants the pilot runs (Q9) is the owner's: these limits bound it, they do not choose it.
+//
+// A pilot that needs more than one dispatch shares the $50 across them: `spentUsd` is what its earlier dispatches
+// settled, read by the owner from their sealed ledgers, since nothing carries spend from one dispatch to the next. A
+// dispatch's budget is then at most what is left. Without it each dispatch is held to the whole $50.
+export const PILOT = { totalUsd: 50, caseUsd: 0.75, repeat: 1, split: "development" } as const
+
+// What is left of the pilot's $50 after its earlier dispatches settled `spentUsd`, never below $0.
+export function pilotRemaining(spentUsd: number) {
+  return Math.max(0, Math.round((PILOT.totalUsd - spentUsd) * 1e4) / 1e4)
+}
+
+export function pilotProblems(input: { limits: Limits; repeat: number; split: string; spentUsd?: number }): string[] {
+  const spent = input.spentUsd ?? 0
+  const remaining = pilotRemaining(spent)
+  return [
+    ...(input.limits.totalUsd > remaining
+      ? [
+          spent > 0
+            ? `a paid replay's budget is at most what is left of the D5 pilot's $${PILOT.totalUsd} after the $${spent} its earlier dispatches settled, $${remaining}, not $${input.limits.totalUsd}`
+            : `a paid replay's budget is at most the D5 pilot's $${PILOT.totalUsd}, not $${input.limits.totalUsd}`,
+        ]
+      : []),
+    ...(input.limits.caseUsd > PILOT.caseUsd
+      ? [`a paid replay's case bound is at most the D5 pilot's $${PILOT.caseUsd}, not $${input.limits.caseUsd}`]
+      : []),
+    ...(input.repeat !== PILOT.repeat
+      ? [`a paid replay runs each case once, as the D5 pilot does, not ${input.repeat} times`]
+      : []),
+    ...(input.split !== PILOT.split
+      ? [`a paid replay runs the ${PILOT.split} split only, as the D5 pilot does, not ${input.split}`]
+      : []),
+  ]
+}
+
+// A projection record (VS-21b) as the report reads it: what it would send and its estimated dollars, summed over its
+// passes, joined with paid runs by variant, case and model. Read only a record projectionProblems passes.
+export function projectedRun(record: ProjectionRecord): ProjectedRun {
+  const requests = record.passes.flatMap((pass) => pass.requests)
+  return {
+    variant: replayVariant("engine", record.variant),
+    model: record.models.review.id,
+    models: [record.models.review.id, ...(record.models.triage ? [record.models.triage.id] : [])],
+    case: record.label,
+    repetition: record.repetition,
+    usd: {
+      low: record.passes.reduce((total, pass) => total + (pass.usd?.low ?? 0), 0),
+      high: record.passes.reduce((total, pass) => total + (pass.usd?.high ?? 0), 0),
+    },
+    tokens: {
+      first: record.passes.reduce((total, pass) => total + (pass.promptTokens ?? 0), 0),
+      sent: requests.reduce((total, request) => total + request.tokens, 0),
+    },
+    passes: record.passes.length,
+    requests: requests.length,
+    over: record.cap.over.length,
+    outside: record.egress.outside,
+  }
+}
+
 // Why a projection record (VS-21b, ReviewEval.project) does not show what every pass of its case would send, if it
 // does not. A record is untrusted JSON, read field by field under the record's own type names. It needs a body for
 // every planned pass, each pass finished, every request paired with an admitted attempt and every attempt with a
@@ -406,18 +494,11 @@ export function admitReplay(
   })
   if (!admission.admitted) return admission
   const ticket = admission.ticket
+  const record = recordOf(resolved)
   return {
     admitted: true,
     config: { maxCostUsd: ledger.limits.caseUsd },
-    ...(resolved.frozen
-      ? {}
-      : {
-          variant: {
-            name: resolved.name,
-            keys: resolved.keys,
-            ...(resolved.models ? { models: resolved.models } : {}),
-          },
-        }),
+    ...(record ? { variant: record } : {}),
     ticket,
     settle: (artifact) => (artifact ? ticket.settle(replayCharge(artifact.attempts)) : ticket.settle()),
   }

@@ -43,6 +43,10 @@ export interface DesktopAttempt {
   unpriced?: boolean
   tokens?: { input: number; output: number }
   error?: string
+  // When the prompt call started, after the first prompt of the replay, and how long it took to answer or fail, in
+  // milliseconds (VS-21c). Absent in an artifact written before them.
+  startMs?: number
+  ms?: number
 }
 
 export interface DesktopArtifact {
@@ -59,7 +63,7 @@ export interface DesktopArtifact {
   // the pipeline revision, prompts, the review settings the runner read and the triage model it ran with.
   scope: EvidenceScope
   sessions: { pass: string; title: string; permission: string }[] // permission is a digest of the session's rules
-  passes: { pass: string; model?: string; digest: string; chars: number }[]
+  passes: { pass: string; model?: string; digest: string; chars: number; startMs?: number; ms?: number }[]
   attempts: DesktopAttempt[]
   aborted: string[] // passes the runner aborted (a timeout or a stop)
   outcome?: ReviewOutcomeLite // absent when there was nothing to review or the runner failed
@@ -93,7 +97,7 @@ export interface DesktopReplayInput {
 // body are neutral; the case's id names the artifact only and never reaches the runner.
 export async function desktopReplay(input: DesktopReplayInput): Promise<DesktopArtifact> {
   const item = input.planned.case
-  const recording = recordingClient(input.client)
+  const recording = recordingClient(input.client, input.now)
   const variant = input.variant
   // The runner never takes settings from a review.json the pull request changes (runReview's setting()), and then reads
   // that file only as a changed file. So a case whose change touches it gets no variant and keeps its own text, and
@@ -166,6 +170,8 @@ export async function desktopReplay(input: DesktopReplayInput): Promise<DesktopA
       ...(attempt.model ? { model: attempt.model } : {}),
       digest: attempt.digest,
       chars: attempt.chars,
+      ...(attempt.startMs !== undefined ? { startMs: attempt.startMs } : {}),
+      ...(attempt.ms !== undefined ? { ms: attempt.ms } : {}),
     })),
     attempts: recording.attempts,
     aborted: recording.aborted,
@@ -261,12 +267,14 @@ function jsonObject(text: string): Record<string, unknown> {
   }
 }
 
-// A client that passes every call through and keeps a record of the sessions, prompts and aborts.
-export function recordingClient(inner: ReviewClient) {
+// A client that passes every call through and keeps a record of the sessions, prompts and aborts, with each prompt
+// call's start after the first one's and its duration, on `now`'s clock.
+export function recordingClient(inner: ReviewClient, now: () => number = Date.now) {
   const sessions: DesktopArtifact["sessions"] = []
   const attempts: DesktopAttempt[] = []
   const aborted: string[] = []
   const passOf = new Map<string, string>()
+  const clock: { first?: number } = {}
   const client: ReviewClient = {
     ...inner,
     session: {
@@ -280,6 +288,8 @@ export function recordingClient(inner: ReviewClient) {
       },
       prompt: async (request) => {
         const text = (request.parts ?? []).map((part) => part.text).join("\n")
+        const started = now()
+        clock.first ??= started
         const attempt: DesktopAttempt = {
           seq: attempts.length + 1,
           pass: passOf.get(request.sessionID) ?? "unknown",
@@ -294,12 +304,15 @@ export function recordingClient(inner: ReviewClient) {
           digest: digest(text),
           chars: text.length,
           answered: false,
+          startMs: started - clock.first,
         }
         attempts.push(attempt)
         const result = await inner.session.prompt(request).catch((error: unknown) => {
           attempt.error = error instanceof Error ? error.message : String(error)
+          attempt.ms = now() - started
           throw error
         })
+        attempt.ms = now() - started
         const info = result.data?.info
         attempt.answered = !!result.data
         if (info?.cost !== undefined) attempt.costUsd = info.cost

@@ -1,10 +1,12 @@
 // The canned model a projection runs against (VS-21b, ReviewEval.project): one blocking finding on the first changed
 // line of every file, a security finding on the first sensitive one, and every candidate confirmed, so the review,
 // security and verify passes all run and verify's prompt carries every candidate. A finalizer gets the same answer
-// as its pass. It and the fake server (../lib/llm-server) are test code, which can change without a review of the eval
-// path: VS-21c's entry point (packages/engine/script/vectorscope-replay.ts) does not import them from here. It moves
-// this canned model and the server's record-and-respond surface to a module outside the test tree first, or the
-// deviation log records that it imports test fixtures on purpose.
+// as its pass. It and the fake server (../lib/llm-server, TestLLMServer.loopback) are test code that VS-21c's entry
+// point (packages/engine/script/vectorscope-replay.ts) imports on purpose, in its dry branch only, as the deviation log
+// records (2026-11-06, VS-21c). A dry projection's safety never rests on them: ReviewEval.project refuses a run without
+// the strict egress guard and checks where every model's requests would go, and the entry point fails a run whose
+// guard saw a connection off this computer. The paid branch never loads either. A change here changes what a dry
+// projection records, so review it as eval code.
 
 import { Effect } from "effect"
 import type { DiffFile } from "@vectordevai/core/review/diff"

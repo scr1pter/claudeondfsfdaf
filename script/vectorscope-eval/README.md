@@ -199,15 +199,17 @@ inputs, the fixtures and the dataset manifest, estimates the worst case for
 each model and sends nothing. The budget inputs default to empty, so a paid run
 needs every amount typed in.
 
-| Input             | Meaning                                                                                  |
-| ----------------- | ---------------------------------------------------------------------------------------- |
-| `mode`            | `dry-run` (default) or `paid`                                                            |
-| `models`          | `model=input:output` entries, USD per million tokens: `anthropic/claude-sonnet-4.5=3:15` |
-| `budget_usd`      | Total for the whole run, every model and retry included (needed for `paid`)              |
-| `case_budget_usd` | Bound for one fixture reviewed once by one model (needed for `paid`)                     |
-| `max_tokens`      | Output token limit for each request (default 16000)                                      |
-| `repeat`          | Runs per fixture, 1–5                                                                    |
-| `fixtures`        | Comma-separated fixture names, or empty for all                                          |
+| Input             | Meaning                                                                                    |
+| ----------------- | ------------------------------------------------------------------------------------------ |
+| `mode`            | `dry-run` (default) or `paid`                                                              |
+| `models`          | `model=input:output` entries, USD per million tokens: `anthropic/claude-sonnet-4.5=3:15`   |
+| `budget_usd`      | Total for the whole run, every model and retry included (needed for `paid`)                |
+| `case_budget_usd` | Bound for one fixture reviewed once by one model (needed for `paid`)                       |
+| `max_tokens`      | Output token limit for each request (default 16000)                                        |
+| `repeat`          | Runs per fixture, 1–5                                                                      |
+| `fixtures`        | Comma-separated fixture names, or empty for all                                            |
+| `pipeline`        | `smoke` (default): the fixtures through `run.ts`; `replay`: the dataset through the engine |
+| `variants`        | Replay only: registry names, or empty for `engine,engine:shared-verify`                    |
 
 The inputs reach `ci.ts` as environment variables and are validated there; no
 input is written into a shell command, and `run.ts` is started with an argument
@@ -242,6 +244,57 @@ The approved pilot (D5) is one paid run of $50 in total and at most $0.75 per
 case, one repetition, on the development split only, with the current default
 review model and one cheaper model from the catalog (D6). The held-out run gets
 its own budget after the owner has read the pilot's report.
+
+### The replay pipeline (VS-21c)
+
+With `pipeline: replay` the workflow runs the dataset's cases through the
+engine's own review pipeline instead of the fixtures, for each variant named in
+`variants` (registry names built for the engine; empty means `engine` and
+`engine:shared-verify`). `ci.ts` refuses a malformed, unknown, pending,
+desktop or repeated name, quoting what it refuses, and refuses `fixtures` with
+it. `max_tokens` applies to the smoke pipeline only.
+
+- **Mirrors.** Both jobs first install ripgrep and run `ci.ts mirrors`, which
+  fetches each seed repository's heads and bases into a bare mirror under the
+  runner's temporary directory (`<owner>/<name>.git`, each commit in its own
+  `refs/vectorscope/<sha>` ref, so a later gc keeps it). Every URL is one of
+  the committed seed manifest's `https://github.com/<owner>/<name>` URLs, never
+  an input; git runs with no user or system config, no hooks, and https as its
+  only transport, with no secret. Heads come with their full history, as the
+  GitHub review job's `fetch-depth: 0` checks them out; for the ten seed
+  repositories that was 71 MB in 10 s on 2026-11-06.
+- **Dry run.** The plan job runs the engine entry point
+  (`packages/engine/script/vectorscope-replay.ts`, below) once per model, with a
+  path, a home and a temporary directory and no key. It projects every seed
+  case, held-out included, for each variant against a canned model on the
+  runner, and fails on any projection problem or any connection off the
+  runner. Nothing is uploaded from it.
+- **Paid run.** The eval job first runs `ci.ts project`, which projects the
+  development cases it will pay for into the output directory, with no key, so
+  the report can measure the estimate error; what it prints goes to a log
+  that is sealed with the rest, and the job log gets each model's exit code
+  alone. Then `ci.ts paid` replays them with the eval key, sealed as before.
+  A paid replay stays within the D5 pilot's limits: at most $50 in total and
+  $0.75 a case, one repetition, the development split only. `ci.ts` refuses
+  inputs outside them in the dry run, before approval, and the entry point
+  refuses them too.
+- **Timeouts.** For replay the plan job may take 45 minutes, the eval job 360
+  and its paid step 300 (15, 75 and 60 for smoke). A review can take the
+  engine's 12-minute timeout and replays run one at a time, so one dispatch
+  covers only the cases that fit, and the proposed pilot of 54 case-runs (Q9)
+  could need more than one dispatch. An attempt in flight when the step times
+  out keeps its whole reservation in the ledger journal. Parallel paid replays
+  are deferred.
+- **One pilot, several dispatches.** The dispatches of one pilot share D5's
+  $50; they never get $50 each. Nothing carries spend from one dispatch to the
+  next (each ledger journal lives in its own runner's temporary directory), so
+  before each later dispatch the owner reads what the earlier dispatches'
+  sealed ledgers settled, their uncertain reservations included, and gives
+  the sum as `pilot_spent_usd`. `ci.ts`
+  refuses a `budget_usd` above $50 less that sum, and the dry run prints what
+  is left. Each dispatch restarts at the first development case, so the
+  dispatches split the pilot by the `variants` and `models` inputs and never
+  repeat a case, variant and model: one dispatch per model, for example.
 
 ### Owner setup (D7)
 
@@ -491,11 +544,12 @@ bun script/vectorscope-eval/replay.ts --mirrors <dir> --prepare <out>
   `false`. A variant with no key, or with a key outside `VARIANT_KEYS.desktop`
   (keys the desktop runner does not act on until its half lands), is not
   handed to the runner either, and is recorded `applied: false`. Such a case
-  ran without the variant and must be left out of a comparison. `report.ts`
-  does not load desktop artifacts yet (VS-21c), so the desktop comparison
-  cannot be run there until it does, the desktop artifact has no per-pass
-  timing until then, and `certify.ts` refuses a variant's run that was not
-  applied.
+  ran without the variant and must be left out of a comparison: `report.ts`
+  loads desktop artifacts (VS-21c) and leaves such a run out, listing it, and
+  `certify.ts` refuses a variant's run that was not applied. Since VS-21c each
+  recorded prompt call, and its `passes` entry, carries `startMs` (after the
+  first prompt of the replay) and `ms` (until it answered or failed), on the
+  replay's clock.
 
 Nothing here sends a model request. A replay that spends money is admitted by
 the eval budget ledger: `admitReplay(ledger, { id, models, variant:
@@ -507,12 +561,12 @@ provider attempt the review admits, retries and the finalizer included, is
 covered by money the ledger set aside. Afterwards the case settles at its
 artifact's reported costs, with unsettled or incomplete attempts kept at their
 estimates, and a model without a price is refused. `replay.ts --budget-usd
-<usd> --case-budget-usd <usd>` shows how many cases a budget could admit. No
-engine entry point can start a paid replay yet, and it would run only in the
-protected `vectorscope-eval` environment (D5, D7), so the driver stops at the
-plan. `--adapter desktop` plans the same cases for `desktopReplay`; a paid
-desktop replay needs an engine server and the ledger's admission as well, and
-is not wired either.
+<usd> --case-budget-usd <usd>` shows how many cases a budget could admit. The
+driver stops at the plan: replays and projections run in the engine entry
+point (VS-21c, below), which sends only in the protected `vectorscope-eval`
+environment within the D5 pilot's limits (D5, D7). `--adapter desktop` plans
+the same cases for `desktopReplay`; a paid desktop replay needs an engine
+server and the ledger's admission as well, and is not wired.
 
 The replay's tests use the engine's fake model server and real git checkouts:
 
@@ -596,8 +650,8 @@ word, so only the registry keeps model ids out.
 A projection runs a case's replay against a fake model server on this computer,
 so every pass runs and its real wire body is recorded with its estimated tokens
 and dollars, at no cost. `ReviewEval.project` in
-`packages/engine/src/review/eval.ts` is the adapter. Nothing calls it yet: the
-entry point and `ci.ts PIPELINE=replay` are VS-21c.
+`packages/engine/src/review/eval.ts` is the adapter. The entry point below
+calls it, for `ci.ts` with `PIPELINE=replay` (VS-21c).
 
 - **What it lifts.** `Review.run`'s optional `projection` hook is asked about
   each decision the dollar cap would refuse, at four places: before a pass's
@@ -618,8 +672,9 @@ entry point and `ci.ts PIPELINE=replay` are VS-21c.
   review, security and verify all run and verify's prompt carries every
   candidate. A finalizer gets its pass's answer. Its usage is each body's
   characters divided by 3.5, as admission counts them. Both files are test
-  code: VS-21c's entry point moves them out of the test tree first, or records
-  in the deviation log that it imports them on purpose.
+  code, which VS-21c's entry point imports on purpose in its dry branch only
+  (the deviation log, VS-21c); `TestLLMServer.loopback` is the same server
+  listening on 127.0.0.1 alone.
 - **The record** (`ProjectionRecord`, `kind: "projection"`, so `report.ts` and
   `certify.ts` never read it as a replay) has the replay's source, runtime and
   isolation, settings, rules and context digests, variant, scope, models with
@@ -698,6 +753,84 @@ cd packages/engine && bun test --timeout 30000 test/review/run.test.ts
 cd script/vectorscope-eval && bun test replay.test.ts
 ```
 
+### Paid entry point (VS-21c)
+
+`packages/engine/script/vectorscope-replay.ts` runs dataset cases through the
+engine's review pipeline in its own process, as the engine tests boot it. It
+is not a user-facing command: `ci.ts` starts it from `packages/engine` for the
+replay pipeline.
+
+```
+cd packages/engine && bun script/vectorscope-replay.ts --model anthropic/claude-sonnet-4.5=3:15 \
+  --mirrors <dir> --work <dir> [--split development|calibration|held-out|all] \
+  [--variant engine --variant engine:shared-verify] [--out <dir>]
+```
+
+- **Dry by default.** Without `--budget-usd` and `--case-budget-usd`, or with
+  `--dry-run`, it projects (`ReviewEval.project`) each planned case,
+  repetition 1 only, for each variant, against the canned model on a fake
+  server listening on 127.0.0.1, and sends nothing. The strict egress guard is
+  installed before any engine module loads, and the run fails if any
+  connection went off this computer or any record has a `projectionProblems`
+  problem. It ends with the guard's count:
+  `Dry run: nothing was sent. The strict egress guard logged N connection attempts, M off this computer.`
+  A dry run plans any split, the held-out cases included (a projection reads
+  no label and scores nothing); its dollar cap is the case bound, $0.75 when
+  none is given. A run that plans no case fails, so an empty projection never
+  passes, and a case whose checkout or instance cannot be prepared is a line
+  naming it, with git's output quoted on that line.
+- **Flags** are checked strictly: an unknown option, a missing value, a stray
+  argument, a malformed manifest or a value given to a switch
+  (`--dry-run=true`) is refused with exit 2 before anything is created.
+- **The send rules** (`replayMode`), all of which must hold, or nothing is
+  sent and nothing is created: a budget; input and output prices above zero;
+  `GITHUB_ACTIONS=true`, `VECTORSCOPE_EVAL_ENVIRONMENT=vectorscope-eval` and
+  `VECTORSCOPE_EVAL_API_KEY`, as `ci.ts paid` sets them in the protected job;
+  `--ledger` and `--out`; and the D5 pilot's limits: at most $50 in total and
+  $0.75 a case, one repetition, the development split only. The entry point
+  holds each dispatch to the whole $50; `ci.ts` also takes off what the
+  pilot's earlier dispatches settled (`pilot_spent_usd`, above). There is no
+  loopback exception: a paid replay always goes to OpenRouter.
+- **The price** given must be the committed catalog's
+  (`packages/web/public/models/api.json`, which both branches boot with as
+  `VECTOR_MODELS_PATH`), since the engine reserves at that price; the model
+  must call tools.
+- **Isolation.** Fresh XDG roots and home under `--work`, no catalog fetch,
+  `VECTOR_PURE`, no project config, no update check or usage report, no
+  search model, the session database in memory, and one provider in
+  `VECTOR_CONFIG_CONTENT` with `lsp`, `formatter` and `snapshot` off. Every
+  provider key the catalog names is removed from the environment first, and a
+  dry run removes the eval key too. The paid branch names its key only as the
+  literal `{env:VECTORSCOPE_EVAL_API_KEY}`. Each case, variant and repetition
+  gets a fresh checkout, checked clean at its base, and removed afterwards;
+  what the run created under `--work` is removed when it ends.
+- **The paid branch** (never run by any test) imports the backstop first,
+  resolves the model as CI does, refuses one not priced at the given price,
+  admits each case through `admitReplay`, runs `ReviewEval.replay` with the
+  CLI's headless posting check, settles from the artifact (or at the whole
+  bound when the replay failed), stops at the first case the ledger refuses
+  and on SIGINT or SIGTERM, and writes each artifact straight into `--out`
+  (`ci.ts seal` seals top-level files only). It has no egress allowlist for
+  OpenRouter alone yet: that is a precondition for D7, in the deviation log.
+- **Files.** `<model>--<case>--<variant>--r<n>.json` for a replay artifact and
+  `<model>--<case>--<variant>--r1.projection.json` for a projection record,
+  with `/` and `:` written as `_`, so two models sharing `--out` never collide.
+- **Test-tree imports.** The dry branch imports the fake server and the canned
+  model from `packages/engine/test` on purpose (the deviation log): its safety
+  rests on the strict guard, `ReviewEval.project`'s refusals and the egress
+  count, never on them, and the paid branch never loads them.
+- **Fidelity limits,** beyond the projection's own: the catalog's exact
+  long-context tiers are not carried (the config has only
+  `context_over_200k`, which is carried; seed prompts sit far below it); the
+  dry model is sent through `@ai-sdk/openai-compatible`, so its bodies are
+  that SDK's where OpenRouter's SDK would send its own; and each canned pass
+  takes one step.
+
+```
+cd packages/engine && bun test --timeout 30000 test/review/vectorscope-replay.test.ts
+cd script/vectorscope-eval && bun test ci.test.ts
+```
+
 ## Causal judging and the release gate
 
 The report Phase 0 decides on. A saved run (a `run.ts --out` report or a
@@ -751,6 +884,32 @@ How it works:
   - severity agreement, location validity, anchoring and suggestion validity
   - run statuses, spend and wall time
   - breakdowns by language, trust mode, size and defect category
+  - since VS-21c, operations over the runs that were sent: cost per review
+    (the reported USD of the admitted attempts, judges excluded, a zero-token
+    review at $0, over the runs whose spend is known; a run with an attempt
+    kept at its reserved bound or with missing usage is counted apart and left
+    out, so a bound or an unknown never reads as what a review cost) and
+    tokens per review, wall time end to end and per pass (each with its mean,
+    median and p90; a desktop pass from its first call's start to its last
+    call's end), cache reads and writes, the zero-token rate, early stops by
+    reason and route refusals (VS-23's `privacy` stops, 0 until it lands)
+  - the estimate error, `|projected low - settled| / settled`, for each run
+    joined with a projection record of the same variant, case and model id
+    after its provider; a projection over its dollar cap is counted apart and
+    left out, since from there it describes an uncapped run, and so is a run
+    whose spend is not known
+  - class-scoped recall (defects in the five failure classes) and cross-file
+    recall (cases with the `cross-file` trait), which read n/a until the
+    labels exist (VS-22a), and trivial controls on their own, never counted
+    toward false alarms per clean pull request
+  - the dry projections, in a table of their own
+
+  `report.ts` reads engine and desktop replay artifacts and projection
+  records. A desktop run whose variant never reached its runner
+  (`variant.applied: false`) is left out and listed, so its case shows as
+  missing; a desktop artifact's paid attempts read as unaccounted, since no
+  paid desktop replay is wired. A projection record with a
+  `projectionProblems` problem is listed and left out.
 
   Failed, unsent and missing runs stay in the denominators: replay artifacts
   plan every case of their split, so a lost artifact shows as missing. A rate

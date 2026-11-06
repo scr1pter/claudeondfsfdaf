@@ -449,3 +449,183 @@ describe("the report", () => {
     expect(text).toContain("Judging is blinded")
   })
 })
+
+// VS-21c: operations, the estimate error against dry projections, class-scoped and cross-file recall, and trivial
+// controls apart from the behaviour-preserving ones. No seed case sets the new labels, so figures from inputs without
+// them must not move.
+describe("operations and the new breakdowns", () => {
+  const timed = (run: EvalRun, index: number): EvalRun => ({
+    ...run,
+    ms: 1000 * (index + 1),
+    attempts: index === 0 ? 0 : 3,
+    ...(index === 1 ? { stop: "budget" } : index === 2 ? { stop: "privacy" } : {}),
+    passes: [
+      { pass: "review", ms: 100 * (index + 1) },
+      { pass: "verify", ms: 10 },
+    ],
+    spend: {
+      costUsd: index === 0 ? 0 : 0.1 * index,
+      uncertainUsd: index === 3 ? 0.05 : 0,
+      usageMissing: index === 2,
+      admitted: true,
+    },
+    tokens: { input: 1000, output: 100, cacheRead: 500, cacheWrite: 100 },
+  })
+
+  test("cost, tokens, cache, wall time, zero-token reviews, stops and route refusals over the present runs", () => {
+    const built = scenario({ bugs: 4, controls: 0, baseline: false })
+    const runs = [
+      ...built.runs.map(timed),
+      { ...built.runs[0]!, case: "bug-0", repetition: 2, status: "not-sent" as const },
+    ]
+    const result = buildReport({ title: "t", ...built, runs, candidate: CANDIDATE })
+    const operations = result.groups[0]!.operations
+    expect(operations.runs).toBe(4)
+    // $0 and $0.1, with type-7 quantiles, so the median is the usual one. bug-2's usage is missing and bug-3 kept
+    // $0.05 at its bound: neither is what a review cost, so both are counted apart and left out.
+    expect(operations.costUsd!.n).toBe(2)
+    expect(operations.costUsd!.mean).toBeCloseTo(0.05)
+    expect(operations.costUsd!.p50).toBeCloseTo(0.05)
+    expect(operations.costUsd!.p90).toBeCloseTo(0.09)
+    expect(operations.unsettled).toBe(2)
+    expect(operations.tokens).toMatchObject({ n: 4, mean: 1100, p50: 1100 })
+    expect(operations.cache).toEqual({ read: 2000, write: 400, share: 2000 / (4000 + 2000 + 400) })
+    expect(operations.wallMs).toMatchObject({ n: 4, mean: 2500, p50: 2500 })
+    expect(Object.keys(operations.passMs)).toEqual(["review", "verify"])
+    expect(operations.passMs.review).toMatchObject({ n: 4, p50: 250 })
+    expect(operations.zeroToken).toMatchObject({ count: 1, total: 4 })
+    expect(operations.stops).toEqual({ budget: 1, privacy: 1 })
+    expect(operations.routeRefusals).toBe(1)
+    const text = renderReport(result)
+    expect(text).toContain("| Cost per review (known spend) | 2 | $0.0500 | $0.0500 | $0.0900 |")
+    expect(text).toContain("Cost per review leaves out 2 run(s) whose spend is uncertain or whose usage is missing")
+    expect(text).toContain("| Wall time, review | 4 |")
+    expect(text).toContain("Zero-token reviews: 25.0% (1/4)")
+    expect(text).toContain("Early stops: budget 1, privacy 1. Route refusals: 1.")
+  })
+
+  test("joins projections by variant, case and the model after its provider, and leaves capped and unknown ones out", () => {
+    const built = scenario({ bugs: 4, controls: 0, baseline: false })
+    const runs = built.runs.map((run, index) => ({
+      ...run,
+      model: "router/vendor/candidate",
+      // bug-3's replay failed, so its whole bound is kept as uncertain spend, with no usage reported.
+      spend:
+        index === 3
+          ? { uncertainUsd: 0.75, usageMissing: true, admitted: true }
+          : { costUsd: 0.1 * (index + 1), uncertainUsd: 0, usageMissing: false, admitted: true },
+    }))
+    const projected = runs.map((run, index) => ({
+      variant: run.variant,
+      model: "loopback/vendor/candidate",
+      case: run.case,
+      repetition: 1,
+      usd: { low: 0.1, high: 0.15 },
+      tokens: { first: 1000, sent: 3000 },
+      passes: 2,
+      requests: 3,
+      over: index === 2 ? 1 : 0,
+      outside: 0,
+    }))
+    const result = buildReport({
+      title: "t",
+      ...built,
+      runs,
+      projected,
+      candidate: { variant: CANDIDATE.variant, model: "router/vendor/candidate" },
+    })
+    const estimate = result.groups[0]!.operations.estimate
+    // bug-0 settled at the low estimate, bug-1 twice it; bug-2's projection went over its cap; bug-3's spend is its
+    // bound, not what it spent, so the estimate is not compared with it.
+    expect(estimate.error!.n).toBe(2)
+    expect(estimate.error!.mean).toBeCloseTo(0.25)
+    expect(estimate.inRange).toMatchObject({ count: 1, total: 2 })
+    expect(estimate.capped).toBe(1)
+    expect(estimate.uncertain).toBe(1)
+    expect(result.groups[0]!.operations.unsettled).toBe(1)
+    expect(result.projections).toEqual([
+      expect.objectContaining({
+        variant: CANDIDATE.variant,
+        model: "loopback/vendor/candidate",
+        runs: 4,
+        cases: 4,
+        requests: 12,
+        capped: 1,
+        outside: 0,
+      }),
+    ])
+    const text = renderReport(result)
+    expect(text).toContain("## Projections")
+    expect(text).toContain(
+      `| ${CANDIDATE.variant} · loopback/vendor/candidate | 4 | 4 | 12 | $0.1000 / $0.1000 / $0.1000 |`,
+    )
+    expect(text).toContain(
+      "1 run(s) left out because their projection went over its dollar cap, 1 because their spend is uncertain or their usage is missing.",
+    )
+    // Without projections there is no section and the estimate reads n/a.
+    const plain = buildReport({ title: "t", ...built, candidate: CANDIDATE })
+    expect(plain.projections).toEqual([])
+    expect(plain.groups[0]!.operations.estimate.error).toBeNull()
+    expect(renderReport(plain)).not.toContain("## Projections")
+  })
+
+  test("class-scoped and cross-file recall count only their defects, and read n/a until the labels exist", () => {
+    const built = scenario({ bugs: 4, controls: 0, misses: 1, baseline: false })
+    const plain = buildReport({ title: "t", ...built, candidate: CANDIDATE })
+    expect(plain.groups[0]!.breakdowns.classScoped).toMatchObject({ count: 0, total: 0, value: null })
+    expect(plain.groups[0]!.breakdowns.crossFile).toMatchObject({ count: 0, total: 0, value: null })
+    expect(renderReport(plain)).toContain("Recall, class-scoped (defects in the five failure classes): n/a (0 of 0)")
+    const cases = built.cases.map((item, index) => ({
+      ...item,
+      ...(index < 2 ? { crossFile: true } : {}),
+      defects: item.defects.map((defect) => ({ ...defect, failureClass: index === 0 ? "other" : "logic" })),
+    }))
+    const labelled = buildReport({ title: "t", ...built, cases, candidate: CANDIDATE })
+    // bug-3 is the miss: class-scoped counts bug-1 to bug-3, cross-file bug-0 and bug-1.
+    expect(labelled.groups[0]!.breakdowns.classScoped).toMatchObject({ count: 2, total: 3 })
+    expect(labelled.groups[0]!.breakdowns.crossFile).toMatchObject({ count: 2, total: 2 })
+    expect(labelled.groups[0]!.stages.posted.recall).toMatchObject(plain.groups[0]!.stages.posted.recall)
+  })
+
+  test("trivial controls are reported apart and never count toward false alarms per clean PR or the gate", () => {
+    const options = { bugs: 2, controls: 4, cleanAlarms: 2, baseline: false }
+    const plain = report(options)
+    const built = scenario(options)
+    // clean-0 and clean-1 raise the false alarms; marking them trivial takes them out of the D2 figure.
+    const cases = built.cases.map((item) =>
+      item.id === "clean-0" || item.id === "clean-1" ? { ...item, trivialKind: "whitespace" } : item,
+    )
+    const marked = report(options, { cases })
+    expect(plain.groups[0]!.stages.posted.falseAlarmsPerCleanPr).toMatchObject({ count: 2, exposure: 4 })
+    expect(plain.groups[0]!.trivial).toMatchObject({ planned: 0, reviewed: 0 })
+    expect(marked.groups[0]!.stages.posted.falseAlarmsPerCleanPr).toMatchObject({ count: 0, exposure: 2 })
+    expect(marked.groups[0]!.trivial).toMatchObject({ planned: 2, reviewed: 2, falseAlarms: { count: 2, exposure: 2 } })
+    // Every other figure is unchanged.
+    expect(marked.groups[0]!.stages.posted.falseAlarmsPerPr).toEqual(plain.groups[0]!.stages.posted.falseAlarmsPerPr)
+    expect(marked.groups[0]!.stages.posted.recall).toEqual(plain.groups[0]!.stages.posted.recall)
+    expect(renderReport(marked)).toContain(
+      "Trivial controls, apart from the behaviour-preserving controls above: 2 planned, 2 reviewed",
+    )
+  })
+
+  test("an unjudged finding on a trivial control does not hold the clean-PR rule for review", () => {
+    const built = scenario({ bugs: 2, controls: 4, baseline: false })
+    const alarm = finding("Unjudged", 7)
+    const runs = built.runs.map((run) =>
+      run.case === "clean-0" ? { ...run, posted: [alarm], proposed: [alarm] } : run,
+    )
+    const rule = (cases: EvalCase[]) =>
+      buildReport({
+        title: "t",
+        split: "held-out",
+        frozen: true,
+        ...built,
+        cases,
+        runs,
+        candidate: CANDIDATE,
+      }).decision!.rules.find((entry) => entry.rule === "maxFalseAlarmsPerCleanPr")!
+    expect(rule(built.cases).detail).toContain("on clean pull requests have no settled verdict")
+    const marked = built.cases.map((item) => (item.id === "clean-0" ? { ...item, trivialKind: "docs" } : item))
+    expect(rule(marked).detail).not.toContain("have no settled verdict")
+  })
+})

@@ -20,19 +20,31 @@ import {
   renderReport,
   type GateConfig,
   type Group,
+  type ProjectedRun,
 } from "../../packages/core/src/review/eval-report"
 import type { Finding, ModelFinding } from "../../packages/core/src/review/types"
-import type { ReplayArtifact } from "../../packages/engine/src/review/eval"
+import type { ProjectionRecord, ReplayArtifact } from "../../packages/engine/src/review/eval"
 import { Ledger, readJournal, type Entry, type Summary } from "./budget"
 import { caseView, manifestProblems, SEED_MANIFEST, SPLITS, type Case, type Manifest } from "./dataset"
+import type { DesktopArtifact } from "./desktop"
 import { listFixtures, loadFixture, type Fixture } from "./fixture"
 import { outsideRepository, REPO_ROOT } from "./paths"
-import { replayCaseKey, replayCharge, replayVariant, resolveVariant, variantProblems } from "./replay"
+import {
+  projectedRun,
+  projectionProblems,
+  replayCaseKey,
+  replayCharge,
+  replayVariant,
+  resolveVariant,
+  variantProblems,
+} from "./replay"
 
 export { outsideRepository }
 
-// The causal report (VectorScope plan, VS-04). It re-scores saved eval outputs (run.ts --out reports and the engine
-// replay's artifacts) against the settled verdicts in a judgement file from judge.ts, and evaluates the release gate,
+// The causal report (VectorScope plan, VS-04). It re-scores saved eval outputs (run.ts --out reports, the engine
+// replay's and the desktop replay's artifacts) against the settled verdicts in a judgement file from judge.ts, and
+// reports the dry projections beside them (VS-21c), joined with the paid runs for the estimate error. It evaluates the
+// release gate,
 // by default the owner's approved D2 gate. It reads files and sends nothing, so a revised rubric or gate is applied to
 // the same outputs without another provider call. With --empty-control it adds Phase 0's empty-finding baseline: a
 // completed, admitted, free review of every planned case that reports nothing, which shows how each denominator
@@ -62,12 +74,15 @@ export interface Outputs {
   frozen: boolean
   sources: Record<string, string>
   ledger?: { open: number; spentUsd: number; uncertainUsd: number; overshootUsd: number; halted?: string }
+  projected: ProjectedRun[]
   problems: string[]
 }
 
 // Every saved output under the given paths, as runs with the cases they review and the plan of runs that should exist.
 // A directory is read for its .json files. A run.ts report plans each of its fixtures for every repetition; replay
-// artifacts plan every case of the split for each model and repetition seen, so a lost artifact shows as missing.
+// artifacts, the engine's and the desktop's, plan every case of the split for each variant, model and repetition seen,
+// so a lost artifact shows as missing, and so does a desktop run whose variant never reached its runner. A projection
+// record that projectionProblems passes is a projected run; one it does not is listed with its problems.
 export async function loadOutputs(input: {
   paths: readonly string[]
   manifest?: string
@@ -80,18 +95,44 @@ export async function loadOutputs(input: {
   )
   const reports = values.filter((entry) => isRunReport(entry.value))
   const artifacts = values.filter((entry) => isArtifact(entry.value))
-  const unknown = values.filter((entry) => !isRunReport(entry.value) && !isArtifact(entry.value))
+  const desktops = values.filter((entry) => isDesktopArtifact(entry.value))
+  const projections = values.filter((entry) => isProjection(entry.value))
+  const unknown = values.filter(
+    (entry) =>
+      !isRunReport(entry.value) &&
+      !isArtifact(entry.value) &&
+      !isDesktopArtifact(entry.value) &&
+      !isProjection(entry.value),
+  )
   const journal = input.ledger ? readJournal(resolve(input.ledger)) : []
   const fixtures = reports.length ? await Promise.all((await listFixtures()).map(loadFixture)) : []
   const fromReports = reports.map((entry) => fromRunReport(entry.value as RunReport, fixtures))
   const manifestPath = input.manifest ? resolve(input.manifest) : SEED_MANIFEST
-  const manifestText = artifacts.length ? await Bun.file(manifestPath).text() : undefined
+  const replayed = artifacts.length + desktops.length + projections.length
+  const manifestText = replayed ? await Bun.file(manifestPath).text() : undefined
   const manifestValue: unknown = manifestText === undefined ? undefined : JSON.parse(manifestText)
   const invalid = manifestValue === undefined ? [] : manifestProblems(manifestValue)
   const manifest = manifestValue !== undefined && !invalid.length ? (manifestValue as Manifest) : undefined
   const split = input.split ?? "development"
-  const replays = artifacts.map((entry) => fromArtifact(entry.value as ReplayArtifact, manifest, journal))
-  const groups = [...new Map(replays.map((run) => [`${run.variant}\n${run.model}`, run])).values()]
+  const engineRuns = artifacts.map((entry) => fromArtifact(entry.value as ReplayArtifact, manifest, journal))
+  const desktopRuns = desktops.map((entry) => ({
+    entry,
+    run: fromDesktopArtifact(entry.value as DesktopArtifact, manifest),
+  }))
+  const replays = [...engineRuns, ...desktopRuns.flatMap((item) => (item.run ? [item.run] : []))]
+  // Every replayed group, a desktop run left out included, so its cases stay planned and show as missing.
+  const seen = [
+    ...engineRuns,
+    ...desktops.map((entry) => {
+      const artifact = entry.value as DesktopArtifact
+      return {
+        variant: replayVariant("desktop", artifact.variant),
+        model: artifact.models.review.id,
+        repetition: artifact.repetition,
+      }
+    }),
+  ]
+  const groups = [...new Map(seen.map((run) => [`${run.variant}\n${run.model}`, run])).values()]
   const replayPlan = manifest
     ? manifest.cases
         .filter((item) => item.split === split)
@@ -100,7 +141,7 @@ export async function loadOutputs(input: {
             Array.from(
               {
                 length: Math.max(
-                  ...replays
+                  ...seen
                     .filter((run) => run.variant === group.variant && run.model === group.model)
                     .map((run) => run.repetition),
                 ),
@@ -110,6 +151,7 @@ export async function loadOutputs(input: {
           ),
         )
     : []
+  const checked = projections.map((entry) => ({ entry, problems: projectionProblems(entry.value) }))
   const summaries = input.ledger
     ? [Ledger.inspect(resolve(input.ledger))]
     : ledgerSummaries(reports.map((entry) => entry.value as RunReport))
@@ -117,7 +159,7 @@ export async function loadOutputs(input: {
     cases: [...fixtures.map(fixtureCase), ...(manifest ? manifest.cases.map(manifestCase) : [])],
     runs: [...fromReports.flatMap((entry) => entry.runs), ...replays],
     plan: [...fromReports.flatMap((entry) => entry.plan), ...replayPlan],
-    split: artifacts.length ? split : "fixtures",
+    split: replayed ? split : "fixtures",
     frozen: !reports.length && !!manifest?.freeze,
     sources: {
       ...Object.fromEntries(
@@ -134,10 +176,14 @@ export async function loadOutputs(input: {
             manifest: `${relative(REPO_ROOT, manifestPath)} sha256 ${createHash("sha256").update(manifestText).digest("hex")}`,
           }
         : {}),
-      ...(artifacts.length
+      ...(replayed
         ? {
             vector: [
-              ...new Set(artifacts.map((entry) => (entry.value as ReplayArtifact).source.vector ?? "unknown")),
+              ...new Set(
+                [...artifacts, ...desktops, ...projections].map(
+                  (entry) => (entry.value as Pick<ReplayArtifact, "source">).source?.vector ?? "unknown",
+                ),
+              ),
             ].join(", "),
           }
         : {}),
@@ -153,16 +199,37 @@ export async function loadOutputs(input: {
           },
         }
       : {}),
+    projected: checked.flatMap((item) =>
+      item.problems.length ? [] : [projectedRun(item.entry.value as ProjectionRecord)],
+    ),
     problems: [
-      ...unknown.map((entry) => `${entry.file} is neither a run.ts report nor a replay artifact, and is left out`),
+      ...unknown.map(
+        (entry) =>
+          `${entry.file} is neither a run.ts report, a replay artifact nor a projection record, and is left out`,
+      ),
       ...invalid.map((problem) => `manifest ${manifestPath}: ${problem}`),
-      ...(artifacts.length && reports.length ? ["run.ts reports and replay artifacts are reported together"] : []),
+      ...(replayed && reports.length ? ["run.ts reports and replay artifacts are reported together"] : []),
       // A variant record the registry does not bear out names a run it may not be.
       ...artifacts.flatMap((entry) =>
         variantProblems("engine", (entry.value as ReplayArtifact).variant).map(
           (problem) => `${entry.file}: ${problem}`,
         ),
       ),
+      ...desktops.flatMap((entry) =>
+        variantProblems("desktop", (entry.value as DesktopArtifact).variant).map(
+          (problem) => `${entry.file}: ${problem}`,
+        ),
+      ),
+      // A desktop run whose variant never reached its runner ran the frozen pipeline, so it is not compared (as
+      // certify.ts leaves it out); its case stays planned and shows as missing.
+      ...desktopRuns.flatMap((item) =>
+        item.run
+          ? []
+          : [
+              `${item.entry.file} asked for ${(item.entry.value as DesktopArtifact).variant?.name ?? "a variant"}, but it never reached the runner, so it is left out`,
+            ],
+      ),
+      ...checked.flatMap((item) => item.problems.map((problem) => `${item.entry.file}: ${problem}`)),
     ],
   }
 }
@@ -361,6 +428,7 @@ export function fromArtifact(
   const variant = replayVariant("engine", artifact.variant)
   const caseKey = replayCaseKey({ variant, models, id: artifact.label, repetition: artifact.repetition })
   const tokens = artifact.attempts.flatMap((attempt) => (attempt.settled?.tokens ? [attempt.settled.tokens] : []))
+  const timed = artifact.passes.flatMap((pass) => (pass.ms === undefined ? [] : [{ pass: pass.pass, ms: pass.ms }]))
   const written = artifact.posted
     .flatMap((write) =>
       write.write === "createReview"
@@ -380,6 +448,9 @@ export function fromArtifact(
     proposed: (outcome?.report.findings ?? []).map((finding) => evalFinding(finding)),
     posted: failed ? [] : posted,
     ...(outcome ? { ms: outcome.durationMs } : {}),
+    attempts: artifact.attempts.filter((attempt) => attempt.admitted).length,
+    ...(outcome?.partial ? { stop: outcome.partial } : {}),
+    ...(timed.length ? { passes: timed } : {}),
     spend: {
       ...(paid ? { costUsd: charge.costUsd } : {}),
       uncertainUsd: charge.uncertainUsd ?? 0,
@@ -393,6 +464,7 @@ export function fromArtifact(
           tokens: {
             input: tokens.reduce((total, entry) => total + entry.input, 0),
             output: tokens.reduce((total, entry) => total + entry.output, 0),
+            ...cacheTokens(artifact.passes),
           },
         }
       : {}),
@@ -411,6 +483,130 @@ export function fromArtifact(
             : []),
         ]
       : [],
+  }
+}
+
+// A desktop replay's artifact (desktop.ts): the desktop runner on a dataset case, or a variant of it. Its reviewers'
+// findings are what was proposed, and what the panel's Post button would send is what would be posted: the line
+// comments, then the findings its summary lists. A run whose variant never reached the runner (variant.applied false)
+// ran the frozen pipeline under another name, so it is left out (undefined) and its case shows as missing. A paid
+// desktop replay is not wired, so the eval ledger never admits one: any attempt with a cost reads as unaccounted.
+export function fromDesktopArtifact(artifact: DesktopArtifact, manifest: Manifest | undefined): EvalRun | undefined {
+  if (artifact.variant?.applied === false) return undefined
+  const item = manifest?.cases.find((entry) => entry.id === artifact.label)
+  const outcome = artifact.outcome
+  // The desktop runner's specialists are its reviewers; its double-check is reported apart, as `verification`.
+  const reviewers = outcome?.specialists ?? []
+  const failed =
+    artifact.error !== undefined || (reviewers.length > 0 && reviewers.every((entry) => entry.status === "failed"))
+  const unfinished = [
+    ...reviewers.filter((entry) => entry.status !== "ok").map((entry) => `${entry.name} ${entry.status}`),
+    ...(outcome?.verification?.status === "failed" ? ["verify failed"] : []),
+  ]
+  const status = failed
+    ? "failed"
+    : !outcome
+      ? "partial"
+      : artifact.aborted.length || unfinished.length
+        ? "partial"
+        : "completed"
+  const detail =
+    status === "failed"
+      ? (artifact.error ?? reviewers.find((entry) => entry.detail)?.detail ?? "every reviewer failed")
+      : !outcome
+        ? "nothing was reviewed"
+        : status === "partial"
+          ? [...(artifact.aborted.length ? [`aborted ${artifact.aborted.join(", ")}`] : []), ...unfinished].join(", ")
+          : undefined
+  const selection = outcome?.selection
+  const posted =
+    selection && artifact.proposed && !failed
+      ? [
+          ...selection.inline.map((finding) => evalFinding(finding, true)),
+          ...[...selection.overflow, ...selection.outsideDiff, ...selection.elsewhere, ...selection.nits].map(
+            (finding) => evalFinding(finding, false),
+          ),
+        ]
+      : []
+  const priced = artifact.attempts.filter((attempt) => attempt.costUsd !== undefined)
+  const tokens = artifact.attempts.flatMap((attempt) => (attempt.tokens ? [attempt.tokens] : []))
+  // A pass's wall time runs from its first prompt call's start to its last one's end, so calls that overlap (several at
+  // once, or a retry) count once, never as the sum of their durations.
+  const timed = Object.entries(
+    Object.groupBy(
+      artifact.attempts.flatMap((attempt) =>
+        attempt.startMs !== undefined && attempt.ms !== undefined
+          ? [
+              {
+                pass: attempt.pass.replace(/^vectorscope\./, ""),
+                start: attempt.startMs,
+                end: attempt.startMs + attempt.ms,
+              },
+            ]
+          : [],
+      ),
+      (span) => span.pass,
+    ),
+  ).map(([pass, spans = []]) => ({
+    pass,
+    ms: Math.max(...spans.map((span) => span.end)) - Math.min(...spans.map((span) => span.start)),
+  }))
+  const written = artifact.proposed
+    ? [artifact.proposed.body, ...artifact.proposed.comments.map((comment) => comment.body)].join("\n")
+    : ""
+  return {
+    variant: replayVariant("desktop", artifact.variant),
+    model: artifact.models.review.id,
+    models: [artifact.models.review.id],
+    case: artifact.label,
+    repetition: artifact.repetition,
+    trust: artifact.trust ?? "untrusted",
+    status,
+    ...(detail ? { detail } : {}),
+    proposed: (outcome?.report.findings ?? []).map((finding) => evalFinding(finding)),
+    posted,
+    ...(outcome ? { ms: outcome.durationMs } : {}),
+    attempts: artifact.attempts.length,
+    ...(timed.length ? { passes: timed } : {}),
+    spend: {
+      ...(priced.length ? { costUsd: priced.reduce((total, attempt) => total + (attempt.costUsd ?? 0), 0) } : {}),
+      uncertainUsd: 0,
+      usageMissing: artifact.attempts.some((attempt) => attempt.unpriced || (attempt.answered && !attempt.tokens)),
+      admitted: !artifact.attempts.some((attempt) => (attempt.costUsd ?? 0) > 0),
+    },
+    ...(tokens.length
+      ? {
+          tokens: {
+            input: tokens.reduce((total, entry) => total + entry.input, 0),
+            output: tokens.reduce((total, entry) => total + entry.output, 0),
+          },
+        }
+      : {}),
+    violations: item
+      ? [
+          ...((artifact.trust ?? "untrusted") === "untrusted"
+            ? []
+            : [`reviewed as ${artifact.trust}, though dataset cases replay untrusted`]),
+          ...(artifact.source.base === item.candidate.base && artifact.source.head === item.candidate.head
+            ? []
+            : [
+                `reviewed ${artifact.source.base.slice(0, 12)}..${artifact.source.head.slice(0, 12)}, not the case's candidate`,
+              ]),
+          ...(item.fix && written.includes(item.fix.sha.slice(0, 7))
+            ? ["the fix commit appears in what would be posted"]
+            : []),
+        ]
+      : [],
+  }
+}
+
+// The cache reads and writes of a replay's passes, when any pass recorded them.
+function cacheTokens(passes: ReplayArtifact["passes"]) {
+  const recorded = passes.filter((pass) => pass.cacheRead !== undefined || pass.cacheWrite !== undefined)
+  if (!recorded.length) return {}
+  return {
+    cacheRead: recorded.reduce((total, pass) => total + (pass.cacheRead ?? 0), 0),
+    cacheWrite: recorded.reduce((total, pass) => total + (pass.cacheWrite ?? 0), 0),
   }
 }
 
@@ -453,6 +649,8 @@ export function manifestCase(item: Case): EvalCase {
     language: item.language,
     size: item.candidate.changed,
     code: { repository: view.repository, base: view.base, head: view.head },
+    // VS-22a maps failureClass and trivialKind from its own labels; the cross-file trait exists today.
+    ...(item.traits?.includes("cross-file") ? { crossFile: true } : {}),
     defects: item.labels.defects.map((defect) => ({
       id: defect.id,
       category: defect.category,
@@ -491,7 +689,8 @@ const USAGE = `Usage: bun script/vectorscope-eval/report.ts [options]
 
 Re-scores saved eval outputs against settled judgements and evaluates the release gate. Sends nothing.
 
-  --outputs <path>         A run.ts --out report or a replay artifact, or a directory of them (repeatable)
+  --outputs <path>         A run.ts --out report, an engine or desktop replay artifact or a projection record, or a
+                           directory of them (repeatable)
   --judgements <path>      Judgement file from judge.ts (without one, every finding is unjudged)
   --manifest <path>        Dataset manifest for replay artifacts (default: the seed manifest)
   --split <name>           Split the replay artifacts come from: ${SPLITS.join(", ")} (default development)
@@ -584,6 +783,7 @@ export async function main(argv: string[]): Promise<{ code: number; stdout: stri
       ...(baseline ? { baseline } : {}),
       judging: judgements?.calls ?? [],
       ...(loaded.ledger ? { ledger: loaded.ledger } : {}),
+      projected: loaded.projected,
       problems: loaded.problems,
     },
     gate,
@@ -646,6 +846,22 @@ function isArtifact(value: unknown): value is ReplayArtifact {
     item.adapter === "engine" &&
     typeof item.label === "string"
   )
+}
+
+function isDesktopArtifact(value: unknown): value is DesktopArtifact {
+  const item = value as DesktopArtifact | undefined
+  return (
+    !!item &&
+    typeof item === "object" &&
+    item.version === 1 &&
+    item.adapter === "desktop" &&
+    typeof item.label === "string"
+  )
+}
+
+function isProjection(value: unknown): boolean {
+  const item = value as ProjectionRecord | undefined
+  return !!item && typeof item === "object" && item.version === 1 && item.kind === "projection"
 }
 
 function isSummary(value: unknown): value is Summary {

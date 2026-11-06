@@ -1591,3 +1591,489 @@ below say where a point was taken differently.
   - The other engine suites in the table above were not re-run. This round
     touched no runner (`run.ts`'s pin is unchanged), no test helper and no
     CLI.
+
+## 2026-11-06 · VS-21c Paid entry point and CI
+
+Contract §4 VS-21c of `vectorscope-upgrade.md`, in the "Now" window: a new
+engine file that nothing in the product calls, eval-script work, and pure core
+report code. It adds no `ReviewConfig` key, no `types.ts` or `config.ts`
+change, no `EVIDENCE_POLICY_KEYS` or `EvidenceScope` change and nothing to
+`VARIANT_KEYS`, and flips no `VARIANTS` half. Nothing under
+`packages/engine/src` changed, so no runner, provider, LLM or posting file and
+no file @vector owns was touched. It implements the VS-21c plan as corrected
+by its critique; the critique bullets below say where a point was taken
+differently. The branch moved during the work from `765ef4ec` to `13b9db02`
+(another lane's test-only commit, touching five test files, none of these);
+the citations and evidence below are on `13b9db02`. Nothing is committed.
+
+- **What landed.**
+  - **`packages/engine/script/vectorscope-replay.ts`**, the entry point. It
+    runs from `packages/engine` (its bunfig and `@/` paths) and is typechecked
+    by the engine's `bun typecheck`. Exports, all pure except `main` and
+    `projectionModel`:
+    - `PROJECTION_PROVIDER` (`vectorscope-projection`), `PAID_PROVIDER`
+      (`openrouter`), `CATALOG` (the committed
+      `packages/web/public/models/api.json`), `USAGE`;
+    - `parseReplayArgs(argv)`: `--model <id>=<in>:<out>`, `--manifest`,
+      `--mirrors`, `--work` (absolute, outside the repository), `--split`
+      (development by default, or calibration, held-out, all), `--variant`
+      (repeatable, default `engine`; each through `variantRecord`),
+      `--repeat` 1-5, `--budget-usd` with `--case-budget-usd`, `--ledger` and
+      `--out` (outside the repository), `--dry-run`;
+    - `replayMode(flags, env)`: dry without a budget or with `--dry-run`;
+      otherwise paid only when every send rule holds, else refused (below);
+    - `catalogModel(catalog, id, price)`: the committed catalog's OpenRouter
+      entry, read as untrusted JSON with `Object.hasOwn`, refused when missing,
+      tool-less, unpriced or priced other than the price given;
+    - `providerKeys(catalog)`: every provider `env` name the catalog lists,
+      the eval key aside;
+    - `engineEnvironment(root)`: XDG roots and `HOME` under `root`,
+      `VECTOR_DISABLE_MODELS_FETCH=1`, `VECTOR_MODELS_PATH` the committed
+      catalog, `VECTOR_PURE=1`, `VECTOR_DISABLE_PROJECT_CONFIG=1`,
+      `VECTOR_DISABLE_AUTOUPDATE=1`, `VECTOR_DISABLE_USAGE=1`,
+      `VECTOR_BRAIN_EMBED=off`, `VECTOR_AGENT_DB=:memory:`. No key;
+    - `engineConfig(input)`: `VECTOR_CONFIG_CONTENT` with `lsp`, `formatter`
+      and `snapshot` off and `enabled_providers` naming one provider. Dry: the
+      catalog entry under `vectorscope-projection` at the fake server with a
+      dummy key (its `cost` with `cache_read`, `cache_write` and
+      `context_over_200k`). Paid: OpenRouter with `apiKey` the literal
+      `{env:VECTORSCOPE_EVAL_API_KEY}`;
+    - `projectionModel(id)`: the dry `ResolvedModel` from the booted model,
+      priced with `SpendGuard.priceOf(loaded.cost)`;
+    - `main(argv, io)`.
+  - **The dry branch** (`projectDry`). It installs `EgressGuard.installStrict()`
+    before the first engine module loads, runs under `TestLLMServer.loopback`,
+    sets the dry config before the first instance loads, and for each planned
+    case and variant (repetition 1) prepares a fresh checkout, checks it clean
+    at its base, loads an instance on it, answers with `projectionReplies`, runs
+    `ReviewEval.project` with the strict guard's `attempts` as `egress`, and
+    disposes the instance and removes the checkout. A failure is a line naming
+    the case, never a throw. Each record goes through `projectionProblems`;
+    with `--out` it is written as
+    `<model>--<case>--<variant>--r1.projection.json`. It prints a line per
+    case and variant, `renderProjections`, and
+    `Dry run: nothing was sent. The strict egress guard logged N connection attempts, M off this computer.`
+    It exits 0 only when every case and variant was projected with no problem
+    and M is 0.
+  - **The paid branch** (`replayPaid`, run by no test). It imports the
+    backstop first, sets the paid config, opens the ledger with its journal,
+    and wires SIGINT and SIGTERM to `ledger.cancel` and an `AbortController`
+    passed to `AppRuntime.runPromiseExit`. For each development case, variant
+    and repetition, until the ledger halts or is cancelled: a fresh checkout;
+    `resolveReviewModel({ trigger: "command", env: { MODEL } })`, refused
+    unless priced at the given input and output price; `admitReplay`, which
+    stops the loop when it refuses; `ReviewEval.replay` with
+    `recordingPosting()`, the CLI's headless posting check through
+    `EffectBridge`, and the key as a secret to redact; `Effect.onExit` settling
+    from the artifact, or at the whole bound when the replay failed; and the
+    artifact written straight into `--out` as
+    `<model>--<case>--<variant>--r<n>.json`. It exits 1 on any refusal or
+    failure, or when the ledger halted or was cancelled.
+  - **`script/vectorscope-eval/ci.ts`.**
+    - `PIPELINES` (`smoke`, `replay`), `DEFAULT_VARIANTS`
+      (`engine`, `engine:shared-verify`), `ENGINE_DIR`, `REPLAY_ENTRY`,
+      `MIRROR_GIT`; `Inputs.pipeline` and `Inputs.variants`.
+    - `parseInputs`: `EVAL_PIPELINE` (empty is smoke), `EVAL_VARIANTS` (smoke
+      must leave it empty; replay checks each name, refuses repeats, refuses
+      `EVAL_FIXTURES`, and for a paid replay applies `pilotProblems`).
+    - `replayArgs(inputs, index, dirs, target?)`: the plan's dry run of every
+      split; a `{ send: false }` target, the eval job's projection of the
+      development cases into `--out`; a `{ send: true }` target, the paid
+      replay with `--ledger` and `--out`. `runArgs` is unchanged.
+    - `mirrorPlan(manifest)` and the `mirrors` command; the `project` command;
+      `plan` and `paid` under replay; `Deps.spawn` takes a `cwd` and
+      `Deps.git` runs the mirror fetch.
+  - **`script/vectorscope-eval/replay.ts`**: `variantRecord`, `PILOT` and
+    `pilotProblems`, `projectedRun`, and the header. `admitReplay` now builds
+    its variant record with the same private `recordOf`; its output and every
+    message are unchanged.
+  - **`script/vectorscope-eval/report.ts`**: desktop artifacts
+    (`fromDesktopArtifact`), projection records, the new run fields in
+    `fromArtifact` (`attempts`, `stop`, `passes`, cache tokens), and
+    `manifestCase` mapping the `cross-file` trait.
+  - **`script/vectorscope-eval/desktop.ts`**: `recordingClient(inner, now)`
+    times each prompt call (`startMs`, `ms`), and `passes` carry the same
+    fields; `desktopReplay` passes `input.now`. No app file changed.
+  - **Core `review/eval.ts`**: `LabelledDefect.failureClass?`,
+    `EvalCase.crossFile?` and `trivialKind?`, `EvalRun.attempts?`, `stop?`,
+    `passes?` and `tokens.cacheRead?`/`cacheWrite?`, `isTrivialControl`, and
+    `summarize` counting behaviour-preserving controls only in
+    `falseAlarmsPerCleanPr`.
+  - **Core `review/eval-report.ts`**: `Spread` (type-7 quantiles),
+    `Operations`, `ProjectedRun`, `ProjectionGroup`, `spread`,
+    `projectionGroups`, `renderProjections`; per group
+    `breakdowns.classScoped`, `breakdowns.crossFile`, `trivial` and
+    `operations`; `Report.projections`; `ReportInput.projected`;
+    `evaluateGate`'s unjudged clean findings leave trivial controls out; and
+    the rendering.
+  - **`.github/workflows/vectorscope-eval.yml`**: the `pipeline` (choice,
+    default `smoke`) and `variants` (default empty) inputs; in both jobs,
+    under `if: inputs.pipeline == 'replay'`, "Install ripgrep" and "Fetch the
+    dataset mirrors" (no secret); in the eval job, "Project the paid cases,
+    sending nothing" (no secret, before the paid step); the replay env on the
+    plan and paid steps; timeouts by expression.
+  - **`packages/engine/test/lib/llm-server.ts`**: the layer is
+    `TestLLMServer.serve(options)`; `layer` is `serve({ port: 0 })`, as before,
+    and the new `loopback` is `serve({ port: 0, host: "127.0.0.1" })`. The
+    diff without whitespace is those lines.
+  - **`packages/engine/test/fixture/projection.ts`**: the header only.
+  - **The README**: "The replay pipeline (VS-21c)" under Budgeted CI runs, a
+    "Paid entry point (VS-21c)" subsection under Production replay, the
+    report's new metrics and outputs, and the stale "no entry point" and
+    "report.ts does not load desktop artifacts" text replaced.
+- **The send rules, and dry by default.** A run sends only with a budget, input
+  and output prices above zero, `GITHUB_ACTIONS=true`,
+  `VECTORSCOPE_EVAL_ENVIRONMENT=vectorscope-eval`, `VECTORSCOPE_EVAL_API_KEY`,
+  `--ledger` and `--out`, and the D5 pilot's limits. Each rule is its own
+  refusal with a test, and `replayMode` reads those three variables and no
+  other (a test reads the environment through a recording proxy). A refusal
+  comes before anything is created or any engine module loads: a test shows
+  `--work`, `--ledger` and `--out` do not exist afterwards. The paid branch's
+  decision is tested only as `replayMode`'s answer; nothing runs it.
+- **The critique, point by point.** All twelve were taken; two in part or
+  differently.
+  1. *The dry price* (blocker): taken. `projectionModel` reads the booted
+     model and prices it with `SpendGuard.priceOf(loaded.cost)`, which carries
+     the cache rates. `catalogModel` and the paid check compare input and
+     output only. The dry config also carries `cache_read`, `cache_write` and
+     `context_over_200k`, so the dry snapshot is the one the paid branch's
+     `resolveReviewModel` gives (3, 15, 0.3, 3.75 for the seed model). An
+     engine test in `eval.test.ts` boots that config, checks the price, passes
+     `routeRefusal` with it, and shows a price built from the flat fields
+     alone is refused with "price snapshot is not its provider's price".
+  2. *No projections beside the paid artifacts* (major): taken. `ci.ts
+     project` runs the dry entry point with `--out` on the development cases,
+     variants and models being paid for, with no key, in a new eval-job step
+     before the paid step. The plan job still writes and uploads nothing. A
+     `ci.test.ts` assertion checks the step holds no secret and runs before
+     the paid step.
+  3. *D5 in part*: taken as "enforce all of D5": `PILOT` and `pilotProblems`
+     in `replay.ts` refuse a paid replay over $50 in total, over $0.75 a case,
+     with more than one repetition, or off the development split, each with
+     its own message and test. The entry point applies them in `replayMode`,
+     and `ci.ts` in `parseInputs` for a paid replay, so the dry run fails
+     before the owner is asked to approve. Q9's case and variant counts are
+     not decided: the limits bound the pilot, they do not choose it.
+  4. *Shared checkouts*: taken. Each case, variant and repetition gets
+     `checkoutDirectory(cases, "<id>#<variant>#<rep>")`, removed after its
+     run; the clean-tree and base check stays as an assertion.
+  5. *Mirror git and reachability*: taken. The mirror command's git goes
+     through `Deps.git`, and a test asserts the exact argv on a fake. Each
+     commit is fetched into `refs/vectorscope/<sha>`. The README says heads
+     come with full history and how long the seed set took.
+  6. *Record names*: taken: `<model>--<case>--<variant>--r1.projection.json`.
+  7. *Quoting*: taken as "check `VARIANT_NAME` first and print a fixed
+     message": a malformed entry is quoted with `JSON.stringify`; a
+     well-formed one holds only `[a-z0-9:-]`, and `resolveVariant`'s detail
+     adds registry text only. A test feeds newlines followed by `::warning::`,
+     `::add-mask::` and `::set-env` and checks no problem line has a newline
+     or starts with `::`. The mirror command quotes git's stderr too.
+  8. *Label names*: taken: `failureClass` and `trivialKind`, as VS-22a names
+     them, which VS-22a may reshape (for example as a separate case kind).
+     `crossFile` is mapped now from the existing `cross-file` trait, with a
+     test; no seed case has it, so the figure reads n/a.
+  9. *Paid isolation*: taken, the key part differently. `VECTOR_DISABLE_USAGE=1`
+     is set; the backstop is the paid branch's first import; the OpenRouter
+     allowlist is listed below as a precondition for D7. **Taken
+     differently:** provider keys are deleted, not refused: every `env` name
+     the catalog lists (216 today) is removed before the engine loads, and a
+     dry run removes the eval key too. In CI the child's environment already
+     holds only `PATH`, `HOME`, `TMPDIR`, the two marks and the key (ci.ts
+     `childEnv`), so a refusal would never fire there, and locally deleting
+     lets a dry run proceed on a machine that has keys set, which is the safer
+     of the two since nothing then reaches the engine.
+  10. *Held-out*: taken. Cases are planned after `replayMode`, and a paid run
+      plans `development` alone whatever `--split` says. The rule departed
+      from is `replay.ts main`'s "held-out cases replay only from a frozen
+      manifest", for the dry branch only, beside D5. Tests refuse
+      `--split held-out` and `all` with budget flags in the protected
+      environment.
+  11. *The timeout*: taken. The README and the workflow comment say the eval
+      job (360 minutes for replay, GitHub's maximum) and its paid step (300)
+      bound how much of a pilot one dispatch covers: 54 sequential case-runs
+      at up to 12 minutes each could need 10.8 hours, so a larger pilot needs
+      more dispatches. Those dispatches share D5's $50 (corrected in review,
+      below: this first said "each with its own budget"). An attempt cut off
+      keeps its whole reservation in the ledger journal. Parallel paid
+      replays stay deferred, as the remedy.
+  12. *Smaller gaps*: taken. A subprocess test runs the dry branch inside a
+      complete protected environment (`GITHUB_ACTIONS=true`, the mark and a
+      dummy key, no budget) and checks the dummy key is nowhere in the
+      records or the output, nothing went off this computer, and `--work` is
+      empty afterwards. The estimate error leaves out projections with
+      `cap.over` entries and counts them as `capped`. `admitReplay`'s
+      message is unchanged; `variantRecord` has its own wording.
+- **Where this departs from the contract or the plan.**
+  1. **Test-tree imports, on purpose.** The dry branch imports
+     `TestLLMServer` and the canned model from `packages/engine/test`:
+     - its safety rests on the strict guard, `ReviewEval.project`'s refusals
+       and the egress count, never on them;
+     - the paid branch never loads them;
+     - moving the 836-line server would churn the 32 test files that use it.
+     Precedent: `script/httpapi-exercise.ts` imports `../test`. It adds
+     `TestLLMServer.loopback`.
+  2. **Dry projects every split**, held-out included, so the Done check covers
+     all ten seed cases. A projection reads no label and scores nothing, the
+     labels are committed in `seed.json` anyway, and nothing is uploaded from
+     the plan job. A paid replay runs development only (D5).
+  3. **Dry projects repetition 1 only**, since the canned model answers the
+     same way each time, and the estimate join ignores repetition.
+  4. **The price given must equal the committed catalog's**, which the engine
+     reserves with; both branches boot with `VECTOR_MODELS_PATH` set to it.
+  5. **The projection model** is the catalog entry under a loopback provider;
+     `context_over_200k` is carried, the exact `tiers` are not (the config
+     has no field for them). It goes through `@ai-sdk/openai-compatible`, so
+     its bodies are that SDK's where OpenRouter's would send its own.
+  6. **The estimate join** is by variant, case and the model id after its
+     provider (`vectorscope-projection/...` against `openrouter/...`).
+  7. **The `mirrors` command and step** are anonymous https fetches of the
+     committed manifest's URLs only; **the `project` command and step** are
+     new, from the critique.
+  8. **Timeouts** grow for replay only, by expression (45, 360, 300, and 30
+     for the projection step; 15, 75 and 60 for smoke), so one key-holding
+     step remains.
+  9. **Desktop runs with `applied: false`** are left out and listed; their
+     group and cases stay planned, so they show as missing. A desktop
+     artifact's usage is missing when an attempt was unpriced or answered
+     without tokens, and its paid attempts read as unaccounted.
+  10. **Class-scoped recall, cross-file recall and trivial controls** are
+      computed now; `failureClass` and `trivialKind` come with VS-22a, so
+      until then the first and last read n/a, and cross-file reads n/a while
+      no seed case has the trait.
+  11. **Route refusals** count `stop: "privacy"`, VS-23's, so 0 until VS-23.
+  12. **The paid branch has no egress allowlist** for OpenRouter alone. This
+      is a precondition for D7, not an optional later item.
+  13. **`enabled_providers`** narrows each branch to its one provider, and
+      **`VECTOR_AGENT_DB=:memory:`** keeps no session database on disk; the
+      plan named neither.
+  14. **`PILOT.caseUsd`** in `replay.ts` is the dry cap's default, in place of
+      the plan's `PILOT_CASE_USD`, so one constant serves both.
+  15. **The two subprocess tests run on Linux and macOS only**, as
+      `test/server/httpapi-pty.test.ts` does for its own: the child gets a
+      POSIX environment alone, on Windows a process needs more to start and
+      `HOME` does not move the home directory, and the entry point runs on the
+      eval workflow's Linux runners.
+  16. **Nothing under `packages/engine/src` changed.**
+- **Off by default (I-1).**
+  - No runner, provider, LLM, posting or @vector file is touched, and nothing
+    under `packages/engine/src` changes. No CLI command is added (D14).
+  - With every input at its default the workflow is the old one: `pipeline`
+    defaults to `smoke`; `parseInputs` gives the old inputs plus
+    `pipeline: "smoke"` and `variants: []` (the updated `ci.test.ts`
+    assertion); `runArgs` is unchanged; every new step runs only under
+    `if: inputs.pipeline == 'replay'`; the timeouts evaluate to 15, 75 and 60.
+  - The entry point is dry unless budget flags are given, and refuses to send
+    outside every rule above, before anything loads.
+  - `TestLLMServer.layer` behaves as before: 32 test files use it, and the
+    suites run here (below) pass unchanged.
+  - Report figures are unchanged for outputs without the new fields: the
+    existing 14 `eval-report`, 22 `report` and 42 core `eval` tests pass
+    unchanged, and a test shows marking no case trivial moves nothing.
+- **Pin.** No pinned file changed: `REVIEW_PIPELINE_SOURCES` stays
+  `228a42cb975134ce` and `REVIEW_PIPELINE_REVISION` stays 1. The pin test was
+  re-run (16 pass).
+- **Owner questions.** None of Q1-Q17 is decided. Q9 (the pilot's size), Q7
+  and Q15 stay open. Q13 is not needed: nothing is wired into a runner.
+- **Evidence.** Each file was run alone through the lock with
+  `--timeout 30000`, `GITHUB_ACTIONS=false`, and `TMPDIR` and XDG roots under
+  a fresh `/tmp/vector-vectorscope/vs21c-*`:
+
+  | Where | File | Pass |
+  |---|---|---|
+  | engine | `test/review/vectorscope-replay.test.ts` | 11 (new) |
+  | engine | `test/review/eval.test.ts` | 26 (25 before) |
+  | engine | `test/review/run.test.ts` | 44 |
+  | engine | `test/session/prompt.test.ts` | 144, 1 skip (the pre-existing `.skip`) |
+  | engine | `test/cli/review.test.ts` | 24 |
+  | engine | `test/compliance/egress-inventory.test.ts` | 5 |
+  | core | `test/review/eval-report.test.ts` | 19 (14 before) |
+  | core | `test/review/eval.test.ts` | 42 |
+  | core | `test/review/eval-judge.test.ts` | 11 |
+  | core | `test/review/model-evidence.test.ts` | 16 (pin unchanged) |
+  | eval scripts | `ci` | 29 (18 before) |
+  | eval scripts | `report` | 27 (22 before) |
+  | eval scripts | `replay` | 31 (27 before) |
+  | eval scripts | `certify`, `judge`, `run`, `budget` | 6, 6, 14, 21 |
+  | `packages/script` | `fixtures.test.ts` | 50 |
+
+  - **Typecheck.** `bun typecheck` in core and engine (the engine's covers the
+    entry point and, through its imports, the eval modules it loads), and
+    `bun tsgo -p ../../script/vectorscope-eval/tsconfig.json` from
+    `packages/engine`, all exit 0.
+  - **Formatting.** `prettier --check` passes on every changed code file, the
+    workflow and the README. This log keeps its own style, as before.
+  - Nothing is committed or pushed, so the full turbo typecheck the lane
+    rules require before a push has not run. No dependency was added, so no
+    `bun install` ran. No user-visible string changed (D14).
+- **The Done check, on the real seed set.** Anonymous read-only clones of
+  public GitHub repositories work in this container (the lane lead checked
+  `git ls-remote`), so the check ran on the ten seed repositories, with
+  nothing spent and no model called. Mirrors and outputs stayed under
+  `/tmp/vector-vectorscope/` and nothing of them is committed.
+  - `EVAL_MIRRORS_DIR=<fresh dir> bun script/vectorscope-eval/ci.ts mirrors`
+    fetched the ten repositories' heads and bases with full history from
+    `https://github.com` in 9.8 s, 71 MB in all, exit 0 (844 to 6,161 commits
+    each, none shallow).
+  - `EVAL_MODE=dry-run EVAL_PIPELINE=replay EVAL_MODELS=anthropic/claude-sonnet-4.5=3:15 EVAL_MAX_TOKENS=16000 EVAL_REPEAT=1`
+    with those mirrors and a work directory, `bun script/vectorscope-eval/ci.ts plan`,
+    in a clean environment (`env -i` with `PATH`, `HOME` and `TMPDIR`), took
+    1 min 50 s and exited 0. Every seed case, all ten across the three
+    splits, was projected for `engine` and `engine:shared-verify`: 20
+    records, 0 problems, 42 requests (review and verify for each, and a
+    security pass too for `honojs-hono-1`, whose `src/utils/jwt/jwt.ts` is a
+    sensitive path, checked by projecting it alone), and
+    "The strict egress guard logged 42 connection attempts, 0 off this
+    computer." The projected low estimate per case was $0.27 mean, $0.25
+    median and $0.35 p90 at the seed model's catalog price; estimates, not
+    spend.
+  - `ci.ts project` with a $50 budget and $0.75 cap projected the six
+    development cases for both variants into an output directory (12
+    records, 24 connection attempts, 0 off this computer, 50 s), and
+    `report.ts --outputs` over those records rendered the projections table.
+- **Deferred.**
+  - VS-22a's `failureClass` and `trivialKind` mapping in `manifestCase`.
+  - A split input for calibration and held-out paid runs, after an owner
+    budget.
+  - Parallel paid replays (the remedy for the job timeout).
+  - An egress allowlist for `openrouter.ai` alone in the paid branch, a
+    precondition for D7.
+  - Desktop projection and a paid desktop replay (after VS-10).
+  - Anthropic's messages protocol in the fake server.
+  - Per-lens matching of passes (VS-28).
+  - A calibrated estimate (VS-24).
+
+### 2026-11-06 · VS-21c review fixes
+
+Twelve review findings, two of them blocking. Every one was fixed; four were
+fixed another way than the finding suggested, and each says why. Nothing
+under `packages/engine/src` changed, no pinned file changed, and nothing is
+committed.
+
+- **Blocking: a switch with a value** (`vectorscope-replay.ts`
+  `parseReplayArgs`). `parseArgs` runs unstrict, and unstrict it reads
+  `--dry-run=true` as the string `"true"`, which `dryRun` read as unset: with
+  budget flags, `--ledger` and `--out` in the protected environment that was
+  `{ mode: "paid" }`. Every boolean option in `OPTIONS` whose value is not
+  exactly `true` is now refused ("--dry-run takes no value"), next to the
+  missing-value check, so `--help=x` is refused too. Tests: `--dry-run=true`,
+  `=1`, `=false` and `=` are refused by `parseReplayArgs`, and `main` returns 2
+  for `--dry-run=true` and `=1` with every send rule holding, before the send
+  decision, creating nothing; `--no-dry-run` stays an unknown option.
+- **Blocking: one pilot, several dispatches** (D5, I-5, I-13). The workflow
+  header and the README said a larger pilot needs more dispatches "each with
+  its own budget", which would let each dispatch spend $50. Both now say the
+  dispatches share D5's $50, that each dispatch's `budget_usd` is at most $50
+  less what the earlier dispatches' sealed ledgers settled (uncertain
+  reservations included), and that the dispatches split the pilot by the
+  `variants` and `models` inputs, never repeating a case, variant and model,
+  since each restarts at the first development case. The finding's "better
+  still" was built too:
+  - a new `pilot_spent_usd` workflow input (default empty), passed as
+    `EVAL_PILOT_SPENT_USD` to the plan, project and paid steps (the three
+    that call `parseInputs`), never into a shell command;
+  - `parseInputs` checks it with `AMOUNT` (quoted when refused), refuses it
+    for the smoke pipeline, keeps it as `Inputs.pilotSpentUsd` (absent when
+    empty, so the default inputs are unchanged) and passes it to
+    `pilotProblems` for a paid replay;
+  - `replay.ts` `pilotRemaining(spent)` and an optional `spentUsd` on
+    `pilotProblems`: the budget must be at most what is left, with its own
+    message; with nothing spent the message and result are as before;
+  - the replay `plan` prints what is left of the pilot.
+  **Taken differently:** the entry point gets no such flag. It holds each
+  dispatch to the whole $50, as before. The earlier spend is an amount the
+  owner reads from sealed ledgers, and `ci.ts` already refuses a budget above
+  what is left in the dry run, before approval, and again in the paid step.
+  The same amount handed to the entry point would add no check. Tests:
+  `replay.test.ts` (the remaining amount, rounding and the refusal at
+  $20.01 spent), `ci.test.ts` (parsing, refusals, the plan line, and the
+  workflow input with its env on all three steps).
+- **A load failure in the dry branch** (`projectDry`). The instance loads
+  inside the exit now, with `Effect.acquireUseRelease(store.load(...), use,
+  store.dispose)`, so a case whose instance cannot load is a `not projected`
+  line, not a thrown run.
+- **An empty projection passed.** `main` now fails with exit 1 and "No case
+  of <manifest> was planned for --split <name>." when nothing is planned.
+  **Placed differently:** in `main`, after planning and before anything is
+  created or any engine module loads, not in `projectDry`, so it covers both
+  branches and boots nothing. Variants are never empty, so planned cases are
+  the only empty case. Test: an in-process `main` with a manifest whose one
+  case is outside `--split calibration` returns 1 and leaves `--work`
+  uncreated.
+- **The projection's output in the paid job** (D12). `ci.ts project` now
+  writes each child's stderr and stdout to
+  `<outDir>/<run>-projection.log`, sealed with the rest, and prints only
+  "<model>: the projection exited with <code>. Its log is in the sealed
+  artifact." The plan job still prints its projections publicly, as before:
+  they are estimates from a canned model. Test: `ci.test.ts`.
+- **Desktop pass wall time** (`report.ts fromDesktopArtifact`). Per pass, from
+  the earliest `startMs` to the latest `startMs + ms` over the attempts that
+  have both, so overlapping calls count once. An attempt with no `ms` (still
+  in flight) is not timed. Test: three overlapping attempts read 3000 ms, not
+  their 5000 ms sum.
+- **Style** (`eval.test.ts`): the env restore uses an early return in place
+  of `else`.
+- **A malformed `--manifest`** now exits 2 with "Invalid manifest <path>: not
+  JSON." It parses with `Schema.decodeUnknownOption(Schema.UnknownFromJsonString)`
+  (effect is already a static import, so the load order is unchanged). Test:
+  an in-process `main` on `{ not json`.
+- **Estimate error and cost per review** (core `eval-report.ts`, I-5). A run
+  has known spend when its usage is not missing and nothing is kept at its
+  bound (`uncertainUsd` 0).
+  - The estimate error joins only runs with known spend above $0. The rest
+    are counted in a new `estimate.uncertain` and named in the rendered line.
+  - `Operations.costUsd` is the spread over runs with known spend, and the
+    rest are counted in a new `Operations.unsettled`. The row is now "Cost
+    per review (known spend)", followed by a line giving that count.
+  This also settles the desktop finding below, since it is one rule in the
+  report. Tests: the core operations test now has a run with missing usage
+  and one with a kept bound, both left out. The join test gains a failed
+  replay with its bound kept, counted as uncertain. `report.test.ts`'s
+  end-to-end join shows the default artifact (an unsettled verify attempt)
+  reads n/a and is counted, and a fully settled one reads a 20.0% error.
+- **Desktop spend never read as zero** (I-5). **Fixed another way:** in the
+  core rule above, not in `fromDesktopArtifact`. A desktop run with
+  `usageMissing` is left out of `costUsd` and counted in `unsettled`, as an
+  engine run is. `fromDesktopArtifact` still reports `uncertainUsd: 0`,
+  because a desktop replay reserves nothing, and its run-level spend line is
+  unchanged.
+- **Git's stderr on the public log** (`checkout`). A checkout failure is now
+  `checkout failed: <JSON string>` on one line, as the mirror command quotes
+  git. **Not cut to 300 characters**, unlike `failure()`, so git's own
+  message stays readable after the long command it echoes; the stderr of a
+  local fetch is short. Test: a subprocess run against a mirror that is not
+  a repository prints the case's line quoted, and no line of the output
+  starts with git's `fatal`, `error` or `Please`.
+- **An invalid seed in `planReplay`.** The seed manifest is loaded and
+  checked with `manifestProblems` before any child starts, and the plan
+  returns 1 with the problems listed, as `mirrors` does. There is no test of
+  the invalid case, since `SEED_MANIFEST` is a constant: a test would have to
+  change the committed seed.
+- **Evidence.** Each file was run alone through the lock with
+  `--timeout 30000`, `GITHUB_ACTIONS=false`, and `TMPDIR` and XDG roots under
+  `/tmp/vector-vectorscope/vs21c-fix`:
+
+  | Where | File | Pass |
+  |---|---|---|
+  | engine | `test/review/vectorscope-replay.test.ts` | 13 (11 before) |
+  | engine | `test/review/eval.test.ts` | 26 |
+  | core | `test/review/eval-report.test.ts` | 19 (two tests extended) |
+  | core | `test/review/eval.test.ts` | 42 |
+  | core | `test/review/model-evidence.test.ts` | 16 (pin unchanged) |
+  | eval scripts | `ci` | 30 (29 before) |
+  | eval scripts | `replay` | 32 (31 before) |
+  | eval scripts | `report` | 27 (two tests extended) |
+
+  - `bun typecheck` in core and engine, and
+    `bun tsgo -p ../../script/vectorscope-eval/tsconfig.json` from
+    `packages/engine`, exit 0. `prettier --check` passes on every changed code
+    file, the workflow and the README.
+  - **The Done check again.** With the mirrors from the first check, in a
+    clean environment (`env -i` with `PATH`, `HOME` and `TMPDIR`),
+    `EVAL_MODE=dry-run EVAL_PIPELINE=replay bun script/vectorscope-eval/ci.ts plan`
+    took 1 min 54 s and exited 0. Every seed case was projected for `engine`
+    and `engine:shared-verify`: 20 lines, 42 connection attempts, 0 off this
+    computer. It printed "The D5 pilot's $50.00 is shared by all its
+    dispatches: $0.00 settled by earlier ones (pilot_spent_usd), so $50.00 is
+    left for this one."
+  - Nothing was sent and no paid path ran. The workflow was not dispatched.
+    No dependency was added and no user-visible string changed (D14).

@@ -22,7 +22,11 @@ import {
   admitReplay,
   checkoutDirectory,
   main,
+  PILOT,
+  pilotProblems,
+  pilotRemaining,
   prepareCheckout,
+  projectedRun,
   projectionProblems,
   replayBudget,
   replayCharge,
@@ -32,6 +36,7 @@ import {
   variantAdapter,
   variantNames,
   variantProblems,
+  variantRecord,
   VARIANTS,
   type PlannedReplay,
   type VariantEntry,
@@ -651,6 +656,30 @@ describe("the desktop replay", () => {
     expect(artifact.placed).toEqual([])
   })
 
+  // VS-21c: each prompt call's start and duration, on the replay's clock, closing VS-21a's per-pass timing deferral.
+  test("times each prompt call from the first one's start, and its passes carry the same times", async () => {
+    const directory = checkoutDirectory(join(root, "desktop-timed"), planned.id)
+    expect(prepareCheckout({ mirror: mirror.dir, view, directory })).toEqual([])
+    const clock = { now: 1_000 }
+    const artifact = await desktopReplay({
+      planned,
+      directory,
+      diff: candidateDiff(directory, view),
+      model,
+      client: fakeClient(directory).client,
+      now: () => (clock.now += 10),
+    })
+    expect(artifact.error).toBeUndefined()
+    const [review, verify] = artifact.attempts
+    expect(review?.startMs).toBe(0)
+    expect(review?.ms).toBeGreaterThan(0)
+    expect(verify?.startMs).toBeGreaterThanOrEqual((review?.startMs ?? 0) + (review?.ms ?? 0))
+    expect(verify?.ms).toBeGreaterThan(0)
+    expect(artifact.passes.map((entry) => [entry.pass, entry.startMs, entry.ms])).toEqual(
+      artifact.attempts.map((attempt) => [attempt.pass, attempt.startMs, attempt.ms]),
+    )
+  })
+
   // VS-06: the verify policy replayed as a variant, as the engine replay takes it, so both runners can be compared.
   test("replays a verify policy variant as the case's own review.json would carry it, keeping the base's verify", async () => {
     // The base sets "verify": "blocking", which the desktop's legacy rule reads as "all" and the shared policy does not.
@@ -910,5 +939,107 @@ describe("projection records (VS-21b)", () => {
     const pending = { name: "engine:privacy-zdr", keys: { verifyPolicy: "shared" as const } }
     expect(variantProblems("engine", pending)).not.toEqual([])
     expect(projectionProblems(record({ variant: pending }))).toEqual(variantProblems("engine", pending))
+  })
+
+  // VS-21c: what the report reads of a record, summed over its passes.
+  test("a projected run sums its passes' dollars and tokens and names its variant, case and models", () => {
+    const capped = record({
+      variant: { name: "engine:shared-verify", keys: { verifyPolicy: "shared" } },
+      cap: { maxCostUsd: 0.001, over: [{ pass: "review", phase: "turn", site: "pass", estimateUsd: 0.01 }] },
+      passes: [pass("review"), pass("verify", { usd: { low: 0.02, high: 0.1 }, promptTokens: 6 })],
+    })
+    const projected = projectedRun(capped)
+    expect(projected).toEqual({
+      variant: "engine:shared-verify",
+      model: "lmstudio/test-model",
+      models: ["lmstudio/test-model"],
+      case: "case",
+      repetition: 1,
+      usd: { low: expect.any(Number), high: expect.any(Number) },
+      tokens: { first: 10, sent: 8 },
+      passes: 2,
+      requests: 2,
+      over: 1,
+      outside: 0,
+    })
+    expect(projected.usd.low).toBeCloseTo(0.03)
+    expect(projected.usd.high).toBeCloseTo(0.15)
+    expect(projectedRun(record()).variant).toBe("engine")
+  })
+})
+
+// VS-21c: the entry point's variant records, and the D5 pilot's limits on a paid replay.
+describe("the entry point's variants and the pilot's limits", () => {
+  test("a variant record is the registry's, the frozen pipeline has none, and only the engine's names pass", () => {
+    expect(variantRecord("engine")).toEqual({ ok: true, name: "engine" })
+    expect(variantRecord("engine:shared-verify")).toEqual({
+      ok: true,
+      name: "engine:shared-verify",
+      record: { name: "engine:shared-verify", keys: { verifyPolicy: "shared" } },
+    })
+    expect(variantRecord("desktop")).toEqual({
+      ok: false,
+      detail: "desktop runs on the desktop runner; replays and projections here run the engine.",
+    })
+    expect(variantRecord("engine:privacy-zdr")).toEqual({
+      ok: false,
+      detail: expect.stringContaining("registered for VS-23c"),
+    })
+    expect(variantRecord("not a name")).toEqual({ ok: false, detail: expect.stringContaining("is not a variant name") })
+    // admitReplay keeps its own wording for a desktop name, and hands out the same record.
+    const ledger = Ledger.open({ limits: { totalUsd: 10, caseUsd: 1, reserveUsd: 1 } })
+    const models = [{ id: "lmstudio/test-model", costKind: "priced" as const, price: { input: 1, output: 1 } }]
+    expect(admitReplay(ledger, { id: "c", models, variant: "desktop" })).toEqual({
+      admitted: false,
+      reason: "variant",
+      detail: "admitReplay admits engine replays, not desktop.",
+    })
+    const admitted = admitReplay(ledger, { id: "c", models, variant: "engine:shared-verify" })
+    if (!admitted.admitted) throw new Error(admitted.detail)
+    const recorded = variantRecord("engine:shared-verify")
+    expect(recorded.ok && recorded.record).toEqual(admitted.variant)
+    ledger.close()
+  })
+
+  test("a paid replay is the D5 pilot: $50 in all, $0.75 a case, one repetition, the development split", () => {
+    expect(PILOT).toEqual({ totalUsd: 50, caseUsd: 0.75, repeat: 1, split: "development" })
+    const limits = { totalUsd: 50, caseUsd: 0.75, reserveUsd: 5 }
+    expect(pilotProblems({ limits, repeat: 1, split: "development" })).toEqual([])
+    expect(pilotProblems({ limits: { ...limits, totalUsd: 60 }, repeat: 1, split: "development" })).toEqual([
+      "a paid replay's budget is at most the D5 pilot's $50, not $60",
+    ])
+    expect(pilotProblems({ limits: { ...limits, caseUsd: 1 }, repeat: 1, split: "development" })).toEqual([
+      "a paid replay's case bound is at most the D5 pilot's $0.75, not $1",
+    ])
+    expect(pilotProblems({ limits, repeat: 2, split: "development" })).toEqual([
+      "a paid replay runs each case once, as the D5 pilot does, not 2 times",
+    ])
+    expect(pilotProblems({ limits, repeat: 1, split: "held-out" })).toEqual([
+      "a paid replay runs the development split only, as the D5 pilot does, not held-out",
+    ])
+    // A smaller pilot is within the limits.
+    expect(
+      pilotProblems({ limits: { totalUsd: 10, caseUsd: 0.5, reserveUsd: 1 }, repeat: 1, split: "development" }),
+    ).toEqual([])
+  })
+
+  test("a pilot's dispatches share its $50: each budget is at most what the earlier ones left", () => {
+    const limits = { totalUsd: 30, caseUsd: 0.75, reserveUsd: 3 }
+    expect(pilotRemaining(0)).toBe(50)
+    expect(pilotRemaining(12.34)).toBe(37.66)
+    expect(pilotRemaining(50)).toBe(0)
+    expect(pilotRemaining(61)).toBe(0)
+    expect(pilotProblems({ limits, repeat: 1, split: "development", spentUsd: 20 })).toEqual([])
+    expect(pilotProblems({ limits, repeat: 1, split: "development", spentUsd: 20.01 })).toEqual([
+      "a paid replay's budget is at most what is left of the D5 pilot's $50 after the $20.01 its earlier dispatches settled, $29.99, not $30",
+    ])
+    // Once the $50 is settled, no budget fits.
+    expect(
+      pilotProblems({ limits: { ...limits, totalUsd: 1 }, repeat: 1, split: "development", spentUsd: 50 }),
+    ).toHaveLength(1)
+    // With nothing settled before, the whole $50 is this dispatch's, as before.
+    expect(
+      pilotProblems({ limits: { ...limits, totalUsd: 50 }, repeat: 1, split: "development", spentUsd: 0 }),
+    ).toEqual([])
   })
 })

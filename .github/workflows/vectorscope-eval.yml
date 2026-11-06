@@ -12,6 +12,18 @@ name: vectorscope eval
 # its artifacts. Results stay internal until the owner reviews them (D12), so a paid run logs only the budget ledger's
 # spend and counts, and its reports are uploaded only after ci.ts seals them to the owner's public key
 # (the VECTORSCOPE_EVAL_PUBLIC_KEY variable of the vectorscope-eval environment).
+#
+# The replay pipeline (pipeline: replay, VS-21c) runs the dataset's cases through the engine's review pipeline instead,
+# for each registry variant named (engine and engine:shared-verify when empty). Both jobs fetch the seed repositories'
+# commits into local mirrors first: anonymous https fetches of the committed manifest's URLs, with no secret. The dry
+# run projects every seed case for each variant against a canned model on the runner, under a strict egress guard, and
+# uploads nothing. A paid replay projects the development cases it will pay for, with no key, then replays them with the
+# eval key, within the D5 pilot's limits; both go into the sealed artifact. Its timeouts are longer, and one dispatch
+# covers only what fits in them. A pilot larger than that needs more dispatches, and they share D5's $50: each
+# dispatch's budget_usd is at most $50 less what the earlier dispatches' sealed ledgers settled (their uncertain
+# reservations included), given as pilot_spent_usd, and the dispatches split the pilot by the variants and models
+# inputs, never repeating a case, variant and model. Each dispatch restarts at the first development case, and nothing
+# carries spend between them.
 
 on:
   workflow_dispatch:
@@ -53,6 +65,24 @@ on:
         required: false
         default: ""
         type: string
+      pipeline:
+        description: "smoke sends the prompt for each fixture; replay runs the dataset's cases through the engine"
+        required: true
+        default: smoke
+        type: choice
+        options:
+          - smoke
+          - replay
+      variants:
+        description: "replay only: comma-separated registry names (empty for engine,engine:shared-verify)"
+        required: false
+        default: ""
+        type: string
+      pilot_spent_usd:
+        description: "replay only: USD the pilot's earlier dispatches settled, from their sealed ledgers (empty for none)"
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: read
@@ -65,7 +95,7 @@ jobs:
   plan:
     name: Dry run
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: ${{ inputs.pipeline == 'replay' && 45 || 15 }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -74,6 +104,17 @@ jobs:
 
       - name: Setup Bun
         uses: ./.github/actions/setup-bun
+
+      # The dry projection runs under a strict egress guard, so Vector may not download ripgrep: it has to be installed.
+      - name: Install ripgrep
+        if: inputs.pipeline == 'replay'
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends ripgrep && rg --version
+
+      - name: Fetch the dataset mirrors
+        if: inputs.pipeline == 'replay'
+        env:
+          EVAL_MIRRORS_DIR: ${{ runner.temp }}/vectorscope-mirrors
+        run: bun script/vectorscope-eval/ci.ts mirrors
 
       - name: Validate the inputs and estimate the cost
         env:
@@ -84,6 +125,11 @@ jobs:
           EVAL_MAX_TOKENS: ${{ inputs.max_tokens }}
           EVAL_REPEAT: ${{ inputs.repeat }}
           EVAL_FIXTURES: ${{ inputs.fixtures }}
+          EVAL_PIPELINE: ${{ inputs.pipeline }}
+          EVAL_VARIANTS: ${{ inputs.variants }}
+          EVAL_PILOT_SPENT_USD: ${{ inputs.pilot_spent_usd }}
+          EVAL_MIRRORS_DIR: ${{ runner.temp }}/vectorscope-mirrors
+          EVAL_WORK_DIR: ${{ runner.temp }}/vectorscope-work
         run: bun script/vectorscope-eval/ci.ts plan
 
       - name: Validate the dataset manifest
@@ -96,7 +142,9 @@ jobs:
     runs-on: ubuntu-24.04
     # Protected: the owner is its only required reviewer, and the eval key is a secret of this environment alone.
     environment: vectorscope-eval
-    timeout-minutes: 75
+    # A replay review can take the engine's 12-minute timeout, and replays run one at a time, so a dispatch covers only
+    # the cases that fit; an attempt cut off by the timeout keeps its whole reservation in the ledger journal.
+    timeout-minutes: ${{ inputs.pipeline == 'replay' && 360 || 75 }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -106,8 +154,39 @@ jobs:
       - name: Setup Bun
         uses: ./.github/actions/setup-bun
 
+      - name: Install ripgrep
+        if: inputs.pipeline == 'replay'
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends ripgrep && rg --version
+
+      - name: Fetch the dataset mirrors
+        if: inputs.pipeline == 'replay'
+        env:
+          EVAL_MIRRORS_DIR: ${{ runner.temp }}/vectorscope-mirrors
+        run: bun script/vectorscope-eval/ci.ts mirrors
+
+      # The development cases this run will pay for, projected with no key, so the sealed report can measure how far
+      # each estimate was from what the replay settled at.
+      - name: Project the paid cases, sending nothing
+        if: inputs.pipeline == 'replay'
+        timeout-minutes: 30
+        env:
+          EVAL_MODE: ${{ inputs.mode }}
+          EVAL_MODELS: ${{ inputs.models }}
+          EVAL_BUDGET_USD: ${{ inputs.budget_usd }}
+          EVAL_CASE_BUDGET_USD: ${{ inputs.case_budget_usd }}
+          EVAL_MAX_TOKENS: ${{ inputs.max_tokens }}
+          EVAL_REPEAT: ${{ inputs.repeat }}
+          EVAL_FIXTURES: ${{ inputs.fixtures }}
+          EVAL_PIPELINE: ${{ inputs.pipeline }}
+          EVAL_VARIANTS: ${{ inputs.variants }}
+          EVAL_PILOT_SPENT_USD: ${{ inputs.pilot_spent_usd }}
+          EVAL_MIRRORS_DIR: ${{ runner.temp }}/vectorscope-mirrors
+          EVAL_WORK_DIR: ${{ runner.temp }}/vectorscope-work
+          EVAL_OUT_DIR: ${{ runner.temp }}/vectorscope-eval
+        run: bun script/vectorscope-eval/ci.ts project
+
       - name: Run each model within the budget
-        timeout-minutes: 60
+        timeout-minutes: ${{ inputs.pipeline == 'replay' && 300 || 60 }}
         env:
           VECTORSCOPE_EVAL_API_KEY: ${{ secrets.VECTORSCOPE_EVAL_API_KEY }}
           EVAL_MODE: ${{ inputs.mode }}
@@ -117,6 +196,11 @@ jobs:
           EVAL_MAX_TOKENS: ${{ inputs.max_tokens }}
           EVAL_REPEAT: ${{ inputs.repeat }}
           EVAL_FIXTURES: ${{ inputs.fixtures }}
+          EVAL_PIPELINE: ${{ inputs.pipeline }}
+          EVAL_VARIANTS: ${{ inputs.variants }}
+          EVAL_PILOT_SPENT_USD: ${{ inputs.pilot_spent_usd }}
+          EVAL_MIRRORS_DIR: ${{ runner.temp }}/vectorscope-mirrors
+          EVAL_WORK_DIR: ${{ runner.temp }}/vectorscope-work
           EVAL_OUT_DIR: ${{ runner.temp }}/vectorscope-eval
           # This job's environment, which run.ts requires before it sends to a hosted endpoint.
           EVAL_ENVIRONMENT: vectorscope-eval

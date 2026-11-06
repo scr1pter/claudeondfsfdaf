@@ -5,11 +5,17 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { Ledger, defaultLimits } from "./budget"
 import {
+  DEFAULT_VARIANTS,
+  ENGINE_DIR,
   JOURNAL,
   KEY_ENV,
   main,
+  MIRROR_GIT,
+  mirrorPlan,
   parseInputs,
   PUBLIC_KEY_ENV,
+  REPLAY_ENTRY,
+  replayArgs,
   runArgs,
   SEALED,
   seal,
@@ -17,6 +23,7 @@ import {
   type Child,
   type Inputs,
 } from "./ci"
+import { loadManifest, SEED_MANIFEST, type Manifest } from "./dataset"
 import { outsideRepository, REPO_ROOT } from "./paths"
 
 // The workflow's entry point and the workflow file itself. Nothing here sends a request or starts run.ts with a key:
@@ -66,16 +73,20 @@ function problems(env: Record<string, string>): string[] {
 }
 
 describe("dispatch inputs", () => {
-  test("a dry run needs models and limits but no budget", () => {
+  test("a dry run needs models and limits but no budget, and runs the smoke pipeline by default", () => {
     expect(inputs(DRY)).toEqual({
       mode: "dry-run",
+      pipeline: "smoke",
       models: [
         { id: "anthropic/claude-sonnet-4.5", price: { input: 3, output: 15 } },
         { id: "openai/gpt-5-mini", price: { input: 0.25, output: 2 } },
       ],
       maxTokens: 16000,
       repeat: 1,
+      variants: [],
     })
+    expect(inputs({ ...DRY, EVAL_PIPELINE: "" })).toEqual(inputs(DRY))
+    expect(inputs({ ...DRY, EVAL_PIPELINE: "smoke" })).toEqual(inputs(DRY))
   })
 
   test("a paid run needs a finite positive budget and a per-case bound it can admit", () => {
@@ -365,6 +376,386 @@ describe("modes", () => {
   })
 })
 
+// VS-21c: the replay pipeline. The engine entry point is never started here: every child is a stand-in that records
+// how it was started. The entry point's own refusals are tested from packages/engine.
+describe("the replay pipeline", () => {
+  const REPLAY = { ...DRY, EVAL_PIPELINE: "replay" }
+  const PAID_REPLAY = { ...PAID, EVAL_PIPELINE: "replay" }
+  const dirs = { EVAL_MIRRORS_DIR: join(root, "mirrors"), EVAL_WORK_DIR: join(root, "work") }
+
+  test("takes the default variants, or registry names built for the engine, and refuses everything else", () => {
+    expect(inputs(REPLAY)).toMatchObject({ pipeline: "replay", variants: DEFAULT_VARIANTS })
+    expect(inputs({ ...REPLAY, EVAL_VARIANTS: " engine:shared-verify " }).variants).toEqual(["engine:shared-verify"])
+    expect(problems({ ...REPLAY, EVAL_VARIANTS: "engine:privacy-zdr" }).join("\n")).toContain("VS-23c")
+    expect(problems({ ...REPLAY, EVAL_VARIANTS: "desktop" }).join("\n")).toContain("runs on the desktop runner")
+    expect(problems({ ...REPLAY, EVAL_VARIANTS: "engine:nothing" }).join("\n")).toContain("not a registered variant")
+    expect(problems({ ...REPLAY, EVAL_VARIANTS: "engine,engine" }).join("\n")).toContain("more than once")
+    expect(problems({ ...DRY, EVAL_VARIANTS: "engine" })).toEqual([
+      "variants name replay pipelines: leave them empty for the smoke pipeline",
+    ])
+    expect(problems({ ...REPLAY, EVAL_FIXTURES: "order-search-sql" }).join("\n")).toContain("smoke pipeline")
+    expect(problems({ ...DRY, EVAL_PIPELINE: "nightly" })).toEqual(['pipeline must be smoke or replay, not "nightly"'])
+  })
+
+  test("quotes what it refuses, so no input text can start a line of the log as a workflow command", () => {
+    for (const env of [
+      { ...REPLAY, EVAL_VARIANTS: "engine\n::warning::x" },
+      { ...REPLAY, EVAL_VARIANTS: "engine:x\n::add-mask::y" },
+      { ...REPLAY, EVAL_VARIANTS: "Engine;rm -rf" },
+      { ...DRY, EVAL_PIPELINE: "replay\n::set-env name=X::y" },
+    ]) {
+      const found = problems(env)
+      expect(found.length).toBeGreaterThan(0)
+      for (const line of found) {
+        expect(line.split("\n")).toHaveLength(1)
+        expect(line.startsWith("::")).toBe(false)
+      }
+    }
+  })
+
+  test("a paid replay stays within the D5 pilot's limits, and the dry run says so before approval", () => {
+    expect(inputs(PAID_REPLAY).limits).toEqual(defaultLimits(50, 0.75))
+    expect(problems({ ...PAID_REPLAY, EVAL_REPEAT: "2" }).join("\n")).toContain("runs each case once")
+    expect(problems({ ...PAID_REPLAY, EVAL_CASE_BUDGET_USD: "1" }).join("\n")).toContain("case bound is at most")
+    expect(problems({ ...PAID_REPLAY, EVAL_BUDGET_USD: "60" }).join("\n")).toContain("budget is at most")
+    // The smoke pipeline keeps its own limits.
+    expect(problems({ ...PAID, EVAL_REPEAT: "2" })).toEqual([])
+  })
+
+  test("a pilot's dispatches share its $50: a budget above what the earlier ones left is refused", () => {
+    expect(inputs(PAID_REPLAY)).not.toHaveProperty("pilotSpentUsd")
+    expect(inputs({ ...PAID_REPLAY, EVAL_PILOT_SPENT_USD: "" })).not.toHaveProperty("pilotSpentUsd")
+    expect(inputs({ ...PAID_REPLAY, EVAL_BUDGET_USD: "30", EVAL_PILOT_SPENT_USD: " 20 " }).pilotSpentUsd).toBe(20)
+    expect(inputs({ ...PAID_REPLAY, EVAL_PILOT_SPENT_USD: "0" }).pilotSpentUsd).toBe(0)
+    expect(problems({ ...PAID_REPLAY, EVAL_BUDGET_USD: "30", EVAL_PILOT_SPENT_USD: "20.01" })).toEqual([
+      "a paid replay's budget is at most what is left of the D5 pilot's $50 after the $20.01 its earlier dispatches settled, $29.99, not $30",
+    ])
+    expect(problems({ ...PAID_REPLAY, EVAL_PILOT_SPENT_USD: "50" }).join("\n")).toContain("$0, not $50")
+    // A dry run takes it too, to say what is left, and refuses nothing for it.
+    expect(inputs({ ...REPLAY, EVAL_PILOT_SPENT_USD: "61.5" }).pilotSpentUsd).toBe(61.5)
+    for (const bad of ["-1", "1e3", "$5", "5,00", "NaN", "12.345678", "1\n::warning::x"]) {
+      const found = problems({ ...PAID_REPLAY, EVAL_PILOT_SPENT_USD: bad })
+      expect(found).toEqual([
+        `pilot_spent_usd must be a USD amount such as 12.40, or empty for none, not ${JSON.stringify(bad)}`,
+      ])
+    }
+    expect(problems({ ...PAID, EVAL_PILOT_SPENT_USD: "5" })).toEqual([
+      "pilot_spent_usd belongs to the replay pipeline's pilot: leave it empty for the smoke pipeline",
+    ])
+  })
+
+  test("the entry point gets an argument array with the committed manifest: dry, projecting, or sending", () => {
+    const replay = inputs({ ...PAID_REPLAY, EVAL_VARIANTS: "engine,engine:shared-verify" })
+    const where = { mirrors: "/runner/tmp/mirrors", work: "/runner/tmp/work" }
+    const common = [
+      "--model",
+      "anthropic/claude-sonnet-4.5=3:15",
+      "--manifest",
+      SEED_MANIFEST,
+      "--mirrors",
+      "/runner/tmp/mirrors",
+      "--work",
+      "/runner/tmp/work",
+      "--variant",
+      "engine",
+      "--variant",
+      "engine:shared-verify",
+      "--repeat",
+      "1",
+      "--budget-usd",
+      "50",
+      "--case-budget-usd",
+      "0.75",
+    ]
+    expect(replayArgs(replay, 0, where)).toEqual([...common, "--split", "all", "--dry-run"])
+    expect(replayArgs(replay, 0, where, { outDir: "/runner/tmp/out", send: false })).toEqual([
+      ...common,
+      "--split",
+      "development",
+      "--dry-run",
+      "--out",
+      "/runner/tmp/out",
+    ])
+    expect(replayArgs(replay, 0, where, { outDir: "/runner/tmp/out", send: true })).toEqual([
+      ...common,
+      "--split",
+      "development",
+      "--ledger",
+      `/runner/tmp/out/${JOURNAL}`,
+      "--out",
+      "/runner/tmp/out",
+    ])
+    expect(replayArgs(replay, 1, where)[1]).toBe("openai/gpt-5-mini=0.25:2")
+    // A dry plan without a budget passes none, so its cap is the D5 case bound.
+    expect(replayArgs(inputs(REPLAY), 0, where)).not.toContain("--budget-usd")
+  })
+
+  test("the mirror plan is one bare mirror per seed repository, with its cases' heads and bases", async () => {
+    const seed = (await loadManifest()) as Manifest
+    const plan = mirrorPlan(seed)
+    expect(plan).toHaveLength(new Set(seed.cases.map((item) => item.repository.url)).size)
+    for (const entry of plan) {
+      expect(entry.url).toMatch(/^https:\/\/github\.com\/[^/]+\/[^/]+$/)
+      expect(entry.dir).toBe(`${entry.url.split("/")[3]}/${entry.url.split("/")[4]}.git`)
+      const cases = seed.cases.filter((item) => item.repository.url === entry.url)
+      expect(entry.shas.toSorted()).toEqual(
+        [...new Set(cases.flatMap((item) => [item.candidate.head, item.candidate.base]))].toSorted(),
+      )
+    }
+  })
+
+  test("mirrors fetches the committed manifest's commits with hooks off, https only, into refs, and fails on any error", async () => {
+    const calls: { argv: string[]; env: Record<string, string | undefined> }[] = []
+    const out: string[] = []
+    const err: string[] = []
+    const mirrors = join(root, "fetched-mirrors")
+    const code = await main("mirrors", {
+      env: { EVAL_MIRRORS_DIR: mirrors },
+      git: (argv, env) => (calls.push({ argv, env }), { code: 0, stderr: "" }),
+      stdout: (text) => void out.push(text),
+      stderr: (text) => void err.push(text),
+    })
+    expect(code).toBe(0)
+    const plan = mirrorPlan((await loadManifest()) as Manifest)
+    const first = plan[0]!
+    const target = join(mirrors, first.dir)
+    expect(calls.slice(0, 2 + first.shas.length).map((call) => call.argv)).toEqual([
+      [...MIRROR_GIT, "init", "--bare", "--quiet", target],
+      [
+        ...MIRROR_GIT,
+        "-C",
+        target,
+        "fetch",
+        "--quiet",
+        "--no-tags",
+        "--no-recurse-submodules",
+        first.url,
+        ...first.shas.map((sha) => `${sha}:refs/vectorscope/${sha}`),
+      ],
+      ...first.shas.map((sha) => [...MIRROR_GIT, "-C", target, "cat-file", "-e", `${sha}^{commit}`]),
+    ])
+    expect(MIRROR_GIT).toContain("protocol.allow=never")
+    expect(MIRROR_GIT).toContain("protocol.https.allow=always")
+    // Every URL fetched is one of the committed manifest's, and git reads none of the user's config.
+    const fetched = calls
+      .filter((call) => call.argv.includes("fetch"))
+      .map((call) => call.argv[call.argv.indexOf("--no-recurse-submodules") + 1])
+    expect(fetched).toEqual(plan.map((entry) => entry.url))
+    for (const call of calls) expect(call.env).toMatchObject({ GIT_CONFIG_NOSYSTEM: "1", GIT_TERMINAL_PROMPT: "0" })
+    expect(out.join("")).toContain(`${first.url}: ${first.shas.length} commit(s)`)
+
+    const failing = await main("mirrors", {
+      env: { EVAL_MIRRORS_DIR: join(root, "failing-mirrors") },
+      git: (argv) =>
+        argv.includes("fetch") ? { code: 128, stderr: "fatal: unreachable\n::warning::x" } : { code: 0, stderr: "" },
+      stdout: () => {},
+      stderr: (text) => void err.push(text),
+    })
+    expect(failing).toBe(1)
+    expect(err.join("")).toContain('git fetch failed: "fatal: unreachable\\n::warning::x"')
+    expect(
+      err
+        .join("")
+        .split("\n")
+        .some((line) => line.startsWith("::")),
+    ).toBe(false)
+    const inside = await main("mirrors", { env: { EVAL_MIRRORS_DIR: join(REPO_ROOT, "mirrors") }, stderr: () => {} })
+    expect(inside).toBe(1)
+  })
+
+  test("plan projects with the entry point from packages/engine, with no key, and relays what it printed", async () => {
+    const started: { argv: string[]; env: Record<string, string>; cwd?: string }[] = []
+    const out: string[] = []
+    const summary = join(root, "replay-plan-summary.md")
+    const code = await main("plan", {
+      env: {
+        ...REPLAY,
+        ...dirs,
+        PATH: "/usr/bin",
+        [KEY_ENV]: "must-not-pass",
+        OPENROUTER_API_KEY: "must-not-pass",
+        GITHUB_STEP_SUMMARY: summary,
+      },
+      spawn: (argv, env, cwd) => {
+        started.push({ argv, env, ...(cwd ? { cwd } : {}) })
+        return {
+          stdout: Promise.resolve(
+            "Dry run: nothing was sent. The strict egress guard logged 4 connection attempts, 0 off this computer.\n",
+          ),
+          stderr: Promise.resolve(""),
+          exited: Promise.resolve(0),
+          kill: () => {},
+        }
+      },
+      stdout: (text) => void out.push(text),
+      stderr: () => {},
+    })
+    expect(code).toBe(0)
+    expect(started).toHaveLength(2)
+    for (const [index, child] of started.entries()) {
+      expect(child.argv).toEqual([
+        process.execPath,
+        REPLAY_ENTRY,
+        ...replayArgs(inputs(REPLAY), index, { mirrors: dirs.EVAL_MIRRORS_DIR, work: dirs.EVAL_WORK_DIR }),
+      ])
+      expect(child.cwd).toBe(ENGINE_DIR)
+      expect(child.env).toEqual({ PATH: "/usr/bin" })
+    }
+    expect(out.join("")).toContain("0 off this computer")
+    expect(out.join("")).toContain("Dry run: nothing was sent, and no key was used.")
+    expect(out.join("")).toContain(
+      "The D5 pilot's $50.00 is shared by all its dispatches: $0.00 settled by earlier ones (pilot_spent_usd), so $50.00 is left for this one.",
+    )
+    expect(readFileSync(summary, "utf8")).toContain("Dry projection: anthropic/claude-sonnet-4.5")
+    const later: string[] = []
+    expect(
+      await main("plan", {
+        env: { ...REPLAY, ...dirs, EVAL_PILOT_SPENT_USD: "12.5" },
+        spawn: () => ({ stdout: Promise.resolve(""), exited: Promise.resolve(0), kill: () => {} }),
+        stdout: (text) => void later.push(text),
+        stderr: () => {},
+      }),
+    ).toBe(0)
+    expect(later.join("")).toContain(
+      "$12.50 settled by earlier ones (pilot_spent_usd), so $37.50 is left for this one.",
+    )
+
+    // A projection problem fails the plan, and a replay plan needs both directories outside the repository.
+    const failed = await main("plan", {
+      env: { ...REPLAY, ...dirs },
+      spawn: () => ({ stdout: Promise.resolve(""), exited: Promise.resolve(1), kill: () => {} }),
+      stdout: () => {},
+      stderr: () => {},
+    })
+    expect(failed).toBe(1)
+    const err: string[] = []
+    const quiet = { stdout: () => {}, stderr: (text: string) => void err.push(text) }
+    const spawn = () => {
+      throw new Error("must not start")
+    }
+    expect(await main("plan", { ...quiet, spawn, env: { ...REPLAY, EVAL_WORK_DIR: dirs.EVAL_WORK_DIR } })).toBe(1)
+    expect(
+      await main("plan", { ...quiet, spawn, env: { ...REPLAY, ...dirs, EVAL_WORK_DIR: join(REPO_ROOT, "work") } }),
+    ).toBe(1)
+    expect(err.join("")).toContain("EVAL_MIRRORS_DIR must be an absolute directory outside the repository")
+    expect(err.join("")).toContain("EVAL_WORK_DIR must be outside the repository")
+  })
+
+  test("project writes the paid cases' projections to the output directory with no key, for the replay pipeline only", async () => {
+    const started: { argv: string[]; env: Record<string, string>; cwd?: string }[] = []
+    const outDir = join(root, "projected")
+    const printed = "pallets-werkzeug-1  engine  projected, 2 request(s)\n| engine · m | 1 | 1 | 2 | $0.2500 |\n"
+    const spawn = (argv: string[], env: Record<string, string>, cwd?: string): Child => {
+      started.push({ argv, env, ...(cwd ? { cwd } : {}) })
+      return {
+        stdout: Promise.resolve(printed),
+        stderr: Promise.resolve("a warning\n"),
+        exited: Promise.resolve(0),
+        kill: () => {},
+      }
+    }
+    const env = { ...PAID_REPLAY, ...JOB, ...dirs, EVAL_OUT_DIR: outDir, PATH: "/usr/bin", [KEY_ENV]: "must-not-pass" }
+    const out: string[] = []
+    const err: string[] = []
+    expect(
+      await main("project", {
+        env,
+        spawn,
+        stdout: (text) => void out.push(text),
+        stderr: (text) => void err.push(text),
+      }),
+    ).toBe(0)
+    expect(started.map((child) => child.argv.slice(-5))).toEqual([
+      ["--split", "development", "--dry-run", "--out", outDir],
+      ["--split", "development", "--dry-run", "--out", outDir],
+    ])
+    expect(
+      started.every((child) => child.cwd === ENGINE_DIR && !JSON.stringify(child.env).includes("must-not-pass")),
+    ).toBe(true)
+    // It runs in the paid job: what the projection printed goes to a log that is sealed with the rest, and the public
+    // log gets each model's exit code alone (D12).
+    expect(out.join("")).toBe(
+      "anthropic/claude-sonnet-4.5: the projection exited with 0. Its log is in the sealed artifact.\n" +
+        "openai/gpt-5-mini: the projection exited with 0. Its log is in the sealed artifact.\n",
+    )
+    expect(err).toEqual([])
+    expect(readFileSync(join(outDir, "1-anthropic_claude-sonnet-4.5-projection.log"), "utf8")).toBe(
+      `a warning\n\n${printed}`,
+    )
+    expect(existsSync(join(outDir, "2-openai_gpt-5-mini-projection.log"))).toBe(true)
+    const refused: string[] = []
+    expect(
+      await main("project", {
+        env: { ...env, EVAL_PIPELINE: "smoke" },
+        spawn,
+        stdout: () => {},
+        stderr: (text) => void refused.push(text),
+      }),
+    ).toBe(1)
+    expect(refused.join("")).toContain("replay pipeline only")
+  })
+
+  test("paid replays each model through the entry point with only the eval key and the shared journal", async () => {
+    const started: { argv: string[]; env: Record<string, string>; cwd?: string }[] = []
+    const dir = join(root, "paid-replay")
+    const code = await main("paid", {
+      env: {
+        ...PAID_REPLAY,
+        ...JOB,
+        ...dirs,
+        EVAL_OUT_DIR: dir,
+        [KEY_ENV]: "test-key",
+        OPENROUTER_API_KEY: "must-not-pass",
+        PATH: "/usr/bin",
+      },
+      spawn: (argv, env, cwd) => {
+        started.push({ argv, env, ...(cwd ? { cwd } : {}) })
+        return {
+          stdout: Promise.resolve("pallets-werkzeug-1  engine  r1  replayed: 3 admitted attempt(s)\n"),
+          exited: Promise.resolve(0),
+          kill: () => {},
+        }
+      },
+      stdout: () => {},
+      stderr: () => {},
+    })
+    expect(code).toBe(0)
+    expect(started).toHaveLength(2)
+    expect(started[0]!.argv).toEqual([
+      process.execPath,
+      REPLAY_ENTRY,
+      ...replayArgs(
+        inputs(PAID_REPLAY),
+        0,
+        { mirrors: dirs.EVAL_MIRRORS_DIR, work: dirs.EVAL_WORK_DIR },
+        { outDir: dir, send: true },
+      ),
+    ])
+    expect(started[0]!.cwd).toBe(ENGINE_DIR)
+    expect(started[0]!.env).toEqual({
+      PATH: "/usr/bin",
+      GITHUB_ACTIONS: "true",
+      VECTORSCOPE_EVAL_ENVIRONMENT: "vectorscope-eval",
+      [KEY_ENV]: "test-key",
+    })
+    expect(started[0]!.argv.join(" ")).not.toContain("test-key")
+    // The replay's output goes to the sealed log only.
+    expect(readFileSync(join(dir, "1-anthropic_claude-sonnet-4.5.log"), "utf8")).toContain("replayed")
+    const err: string[] = []
+    expect(
+      await main("paid", {
+        env: { ...PAID_REPLAY, ...JOB, EVAL_OUT_DIR: dir, [KEY_ENV]: "k" },
+        spawn: () => {
+          throw new Error("must not start")
+        },
+        stdout: () => {},
+        stderr: (text) => void err.push(text),
+      }),
+    ).toBe(1)
+    expect(err.join("")).toContain("EVAL_MIRRORS_DIR")
+  })
+})
+
 describe("the workflow", () => {
   const text = readFileSync(WORKFLOW, "utf8")
   const workflow = Bun.YAML.parse(text) as {
@@ -440,5 +831,68 @@ describe("the workflow", () => {
       EVAL_ENVIRONMENT: workflow.jobs.eval!.environment,
       [PUBLIC_KEY_ENV]: `\${{ vars.${PUBLIC_KEY_ENV} }}`,
     })
+  })
+
+  type Step = {
+    name: string
+    if?: string
+    run?: string
+    env?: Record<string, string>
+    "timeout-minutes"?: string | number
+  }
+
+  test("adds the replay pipeline off by default: smoke and no variants unless chosen, with the old timeouts", () => {
+    const inputs = workflow.on.workflow_dispatch!.inputs
+    expect(inputs.pipeline).toMatchObject({ default: "smoke", options: ["smoke", "replay"], required: true })
+    expect(inputs.variants!.default).toBe("")
+    expect(inputs.pilot_spent_usd).toMatchObject({ default: "", required: false })
+    const jobs = workflow.jobs as Record<string, { "timeout-minutes"?: string | number; steps: Step[] }>
+    // Every step that validates the inputs gets what the pilot's earlier dispatches settled.
+    const validating = Object.values(jobs).flatMap((job) =>
+      job.steps.filter((step) => /ci\.ts (plan|project|paid)$/.test(step.run ?? "")),
+    )
+    expect(validating).toHaveLength(3)
+    for (const step of validating)
+      expect(step.env).toMatchObject({ EVAL_PILOT_SPENT_USD: "${{ inputs.pilot_spent_usd }}" })
+    expect(jobs.plan!["timeout-minutes"]).toBe("${{ inputs.pipeline == 'replay' && 45 || 15 }}")
+    expect(jobs.eval!["timeout-minutes"]).toBe("${{ inputs.pipeline == 'replay' && 360 || 75 }}")
+    const paidStep = jobs.eval!.steps.find((step) => step.run === "bun script/vectorscope-eval/ci.ts paid")
+    expect(paidStep!["timeout-minutes"]).toBe("${{ inputs.pipeline == 'replay' && 300 || 60 }}")
+    // Every step the replay pipeline added runs only for it.
+    const added = ["Install ripgrep", "Fetch the dataset mirrors", "Project the paid cases, sending nothing"]
+    for (const job of Object.values(jobs))
+      for (const step of job.steps.filter((entry) => added.includes(entry.name)))
+        expect(step.if).toBe("inputs.pipeline == 'replay'")
+  })
+
+  test("fetches the mirrors in both jobs without a secret, and projects the paid cases before paying, with no key", () => {
+    const jobs = workflow.jobs as Record<string, { steps: Step[] }>
+    for (const name of ["plan", "eval"]) {
+      const steps = jobs[name]!.steps
+      const mirrors = steps.find((step) => step.run === "bun script/vectorscope-eval/ci.ts mirrors")
+      expect(mirrors!.env).toEqual({ EVAL_MIRRORS_DIR: "${{ runner.temp }}/vectorscope-mirrors" })
+      const runner = steps.find((step) => step.run?.includes("ci.ts plan") || step.run?.includes("ci.ts paid"))
+      expect(steps.indexOf(mirrors!)).toBeLessThan(steps.indexOf(runner!))
+    }
+    const steps = jobs.eval!.steps
+    const projection = steps.find((step) => step.run === "bun script/vectorscope-eval/ci.ts project")
+    const paidStep = steps.find((step) => step.run === "bun script/vectorscope-eval/ci.ts paid")
+    expect(JSON.stringify(projection)).not.toContain("secrets.")
+    expect(projection!.env).toMatchObject({
+      EVAL_PIPELINE: "${{ inputs.pipeline }}",
+      EVAL_OUT_DIR: "${{ runner.temp }}/vectorscope-eval",
+      EVAL_MIRRORS_DIR: "${{ runner.temp }}/vectorscope-mirrors",
+    })
+    expect(steps.indexOf(projection!)).toBeLessThan(steps.indexOf(paidStep!))
+    expect(paidStep!.env).toMatchObject({
+      EVAL_PIPELINE: "${{ inputs.pipeline }}",
+      EVAL_VARIANTS: "${{ inputs.variants }}",
+      EVAL_MIRRORS_DIR: "${{ runner.temp }}/vectorscope-mirrors",
+      EVAL_WORK_DIR: "${{ runner.temp }}/vectorscope-work",
+    })
+    // The plan job uploads nothing: its projections are written nowhere.
+    expect(JSON.stringify(jobs.plan)).not.toContain("upload-artifact")
+    const plan = jobs.plan!.steps.find((step) => step.run === "bun script/vectorscope-eval/ci.ts plan")
+    expect(plan!.env).not.toHaveProperty("EVAL_OUT_DIR")
   })
 })

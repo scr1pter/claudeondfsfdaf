@@ -5,9 +5,10 @@ import { join } from "node:path"
 import { RUBRIC_VERSION, runKey, type EvalRun, type Judgement } from "../../packages/core/src/review/eval"
 import type { ModelFinding } from "../../packages/core/src/review/types"
 import { DEFAULT_GATE } from "../../packages/core/src/review/eval-report"
-import type { ReplayArtifact } from "../../packages/engine/src/review/eval"
+import type { ProjectionRecord, ReplayArtifact } from "../../packages/engine/src/review/eval"
 import { Ledger } from "./budget"
 import { loadManifest, type Manifest } from "./dataset"
+import type { DesktopArtifact } from "./desktop"
 import { listFixtures, loadFixture } from "./fixture"
 import {
   EMPTY_CONTROL,
@@ -15,6 +16,7 @@ import {
   evalFinding,
   fixtureCase,
   fromArtifact,
+  fromDesktopArtifact,
   fromRunReport,
   JUDGEMENTS_SCHEMA,
   ledgerSummaries,
@@ -775,4 +777,266 @@ test("evalFinding keys a finding the same before and after selection", () => {
   expect(posted.key).toBe(proposed.key)
   expect(posted.anchored).toBe(true)
   expect(proposed).not.toHaveProperty("anchored")
+})
+
+// VS-21c: the operations fields of an engine replay, desktop artifacts, projection records and the cross-file trait.
+describe("VS-21c outputs", () => {
+  function desktop(overrides: Partial<DesktopArtifact> = {}): DesktopArtifact {
+    const engine = artifact()
+    const outcome = engine.outcome!
+    return {
+      version: 1,
+      label: bug.id,
+      adapter: "desktop",
+      repetition: 1,
+      runtime: { node: "v22.0.0", platform: "darwin", arch: "arm64" },
+      source: { base: bug.candidate.base, head: bug.candidate.head, vector: "abc123" },
+      trust: "untrusted",
+      models: { review: { id: "vendor/reviewer-large", costKind: "priced", price: { input: 3, output: 15 } } },
+      scope: {} as DesktopArtifact["scope"],
+      sessions: [],
+      passes: [],
+      attempts: [
+        {
+          seq: 1,
+          pass: "vectorscope.review",
+          format: "report",
+          digest: "d1",
+          chars: 10,
+          answered: true,
+          costUsd: 0,
+          tokens: { input: 4000, output: 300 },
+          startMs: 0,
+          ms: 2500,
+        },
+        {
+          seq: 2,
+          pass: "vectorscope.verify",
+          format: "verify",
+          digest: "d2",
+          chars: 10,
+          answered: true,
+          costUsd: 0,
+          tokens: { input: 1000, output: 100 },
+          startMs: 2600,
+          ms: 700,
+        },
+      ],
+      aborted: [],
+      outcome: {
+        head: bug.candidate.head,
+        baseRef: "base",
+        checkout: { trust: "untrusted" },
+        label: "l",
+        report: outcome.report,
+        selection: outcome.selection,
+        skipped: [],
+        files: [],
+        anchored: {},
+        durationMs: 3500,
+        specialists: [{ name: "review", status: "ok" }],
+        sessions: [],
+        banners: [],
+        notes: [],
+      } as unknown as DesktopArtifact["outcome"],
+      placed: [],
+      proposed: { body: "review", comments: [], untrusted: true },
+      ...overrides,
+    }
+  }
+
+  test("an engine replay says how many attempts it made, why it stopped, each pass's time and its cache use", () => {
+    const run = fromArtifact(
+      artifact({
+        passes: [
+          { pass: "review", model: "m", digest: "d", chars: 1, startMs: 0, ms: 3000, cacheRead: 1200, cacheWrite: 300 },
+          { pass: "verify", model: "m", digest: "d", chars: 1, startMs: 3100, ms: 400, cacheRead: 100, cacheWrite: 0 },
+          { pass: "security", model: "m", digest: "d", chars: 1 },
+        ],
+      }),
+      seed,
+      [],
+    )
+    expect(run.attempts).toBe(2)
+    expect(run.passes).toEqual([
+      { pass: "review", ms: 3000 },
+      { pass: "verify", ms: 400 },
+    ])
+    expect(run.tokens).toEqual({ input: 5000, output: 500, cacheRead: 1300, cacheWrite: 300 })
+    expect(run.stop).toBeUndefined()
+    expect(fromArtifact(artifact({}, { partial: "budget" }), seed, []).stop).toBe("budget")
+    // An artifact written before the timing fields has none, and no cache count.
+    const old = fromArtifact(artifact(), seed, [])
+    expect(old.passes).toBeUndefined()
+    expect(old.tokens).toEqual({ input: 5000, output: 500 })
+  })
+
+  test("a desktop replay becomes a run of its own runner, timed per pass, its paid attempts unaccounted", () => {
+    const run = fromDesktopArtifact(desktop(), seed)!
+    expect(run).toMatchObject({
+      variant: "desktop",
+      model: "vendor/reviewer-large",
+      case: bug.id,
+      status: "completed",
+      ms: 3500,
+      attempts: 2,
+      passes: [
+        { pass: "review", ms: 2500 },
+        { pass: "verify", ms: 700 },
+      ],
+      tokens: { input: 5000, output: 400 },
+      spend: { costUsd: 0, uncertainUsd: 0, usageMissing: false, admitted: true },
+      violations: [],
+    })
+    expect(run.proposed.map((finding) => finding.title)).toContain("Low confidence guess")
+    expect(run.posted.map((finding) => [finding.title, finding.anchored])).toEqual([
+      ["The default argument may be None", true],
+      ["Unrelated concern", false],
+    ])
+    // A pass's wall time is from its first call's start to its last call's end: overlapping calls count once.
+    const first = desktop().attempts[0]!
+    const overlapping = desktop({
+      attempts: [
+        { ...first, seq: 1, startMs: 0, ms: 2000 },
+        { ...first, seq: 2, startMs: 500, ms: 2500 },
+        { ...first, seq: 3, startMs: 1000, ms: 500 },
+        // Still in flight: not timed.
+        {
+          seq: 4,
+          pass: "vectorscope.review",
+          format: "report",
+          digest: "d4",
+          chars: 10,
+          answered: false,
+          startMs: 9000,
+        },
+      ],
+    })
+    expect(fromDesktopArtifact(overlapping, seed)!.passes).toEqual([{ pass: "review", ms: 3000 }])
+    const paid = desktop({ attempts: [{ ...desktop().attempts[0]!, costUsd: 0.02 }] })
+    expect(fromDesktopArtifact(paid, seed)!.spend).toMatchObject({ costUsd: 0.02, admitted: false })
+    expect(fromDesktopArtifact(desktop({ error: "boom", outcome: undefined }), seed)).toMatchObject({
+      status: "failed",
+      detail: "boom",
+      posted: [],
+    })
+    expect(fromDesktopArtifact(desktop({ aborted: ["vectorscope.security"] }), seed)).toMatchObject({
+      status: "partial",
+      detail: "aborted vectorscope.security",
+    })
+    expect(fromDesktopArtifact(desktop({ trust: "trusted" }), seed)!.violations).toEqual([
+      "reviewed as trusted, though dataset cases replay untrusted",
+    ])
+    const variant = desktop({
+      variant: { name: "desktop:shared-verify", keys: { verifyPolicy: "shared" }, applied: true },
+    })
+    expect(fromDesktopArtifact(variant, seed)!.variant).toBe("desktop:shared-verify")
+  })
+
+  test("a desktop run whose variant never reached its runner is left out and listed, and its case stays planned", async () => {
+    const dir = join(root, "desktop-replays")
+    mkdirSync(dir)
+    const skipped = desktop({
+      variant: { name: "desktop:shared-verify", keys: { verifyPolicy: "shared" }, applied: false },
+    })
+    expect(fromDesktopArtifact(skipped, seed)).toBeUndefined()
+    writeFileSync(join(dir, "applied.json"), JSON.stringify(desktop()))
+    writeFileSync(join(dir, "skipped.json"), JSON.stringify(skipped))
+    const loaded = await loadOutputs({ paths: [dir] })
+    expect(loaded.runs.map((run) => run.variant)).toEqual(["desktop"])
+    expect(
+      loaded.plan.filter((entry) => entry.variant === "desktop:shared-verify" && entry.case === bug.id),
+    ).toHaveLength(1)
+    expect(loaded.problems).toContain(
+      `${join(dir, "skipped.json")} asked for desktop:shared-verify, but it never reached the runner, so it is left out`,
+    )
+  })
+
+  test("projection records are projected runs; one with a problem is listed and left out", async () => {
+    const dir = join(root, "projections")
+    mkdirSync(dir)
+    const request = { seq: 1, phase: "turn", estimateUsd: 0.1, digest: "d", chars: 4, tokens: 2, body: "body" }
+    const record = {
+      version: 1,
+      kind: "projection",
+      label: bug.id,
+      repetition: 1,
+      source: { base: bug.candidate.base, head: bug.candidate.head, mergeBase: bug.candidate.base, vector: "abc123" },
+      variant: { name: "engine:shared-verify", keys: { verifyPolicy: "shared" } },
+      models: { review: { id: "vectorscope-projection/vendor/reviewer-large", context: 1, costKind: "priced" } },
+      files: { reviewed: [labelled.path], skipped: [] },
+      cap: { maxCostUsd: 0.75, over: [] },
+      passes: [
+        {
+          pass: "review",
+          model: "m",
+          maxSteps: 20,
+          status: "ok",
+          digest: "p",
+          chars: 4,
+          requests: [request, { ...request, seq: 2, tokens: 3 }],
+          promptTokens: 2,
+          usd: { low: 0.1, high: 0.5 },
+          unsent: 0,
+          unadmitted: 0,
+        },
+      ],
+      unattributed: 0,
+      egress: { attempts: 2, outside: 0 },
+    } as unknown as ProjectionRecord
+    writeFileSync(join(dir, "good.projection.json"), JSON.stringify(record))
+    writeFileSync(join(dir, "bad.projection.json"), JSON.stringify({ ...record, egress: { attempts: 2, outside: 1 } }))
+    const loaded = await loadOutputs({ paths: [dir] })
+    expect(loaded.projected).toEqual([
+      {
+        variant: "engine:shared-verify",
+        model: "vectorscope-projection/vendor/reviewer-large",
+        models: ["vectorscope-projection/vendor/reviewer-large"],
+        case: bug.id,
+        repetition: 1,
+        usd: { low: 0.1, high: 0.5 },
+        tokens: { first: 2, sent: 5 },
+        passes: 1,
+        requests: 2,
+        over: 0,
+        outside: 0,
+      },
+    ])
+    expect(loaded.problems).toContain(`${join(dir, "bad.projection.json")}: 1 connections went outside this computer`)
+    expect(loaded.runs).toEqual([])
+    expect(loaded.sources.vector).toBe("abc123")
+    // The report joins a projection with the paid replay of the same variant, case and model. This replay kept its
+    // unsettled verify attempt at its bound, so its spend is not known and the estimate is not compared with it.
+    const paid = {
+      variant: { name: "engine:shared-verify", keys: { verifyPolicy: "shared" } },
+      models: { review: { id: "openrouter/vendor/reviewer-large", context: 1, costKind: "priced" } },
+    }
+    writeFileSync(join(dir, "paid.json"), JSON.stringify(artifact(paid)))
+    const bounded = await main(["--outputs", dir])
+    expect(bounded.code).toBe(0)
+    expect(bounded.stdout).toContain("## Projections")
+    expect(bounded.stdout).toContain(
+      "| engine:shared-verify · vectorscope-projection/vendor/reviewer-large | 1 | 1 | 2 |",
+    )
+    expect(bounded.stdout).toContain("Estimate error, |projected low - settled| / settled: n/a (0 of 0)")
+    expect(bounded.stdout).toContain("0 run(s) left out because their projection went over its dollar cap, 1 because")
+    // Every attempt settled from reported usage: $0.125 against the projected low of $0.10.
+    const settled = {
+      seq: 1,
+      pass: "review",
+      phase: "step",
+      admitted: true,
+      estimateUsd: 0.2,
+      settled: { costUsd: 0.125, complete: true, tokens: { input: 5000, output: 500 } },
+    }
+    writeFileSync(join(dir, "paid.json"), JSON.stringify(artifact({ ...paid, attempts: [settled] })))
+    const result = await main(["--outputs", dir])
+    expect(result.code).toBe(0)
+    expect(result.stdout).toContain("Estimate error, |projected low - settled| / settled: mean 20.0%")
+  })
+
+  test("a case with the dataset's cross-file trait is a cross-file case", () => {
+    expect(manifestCase(bug).crossFile).toBeUndefined()
+    expect(manifestCase({ ...bug, traits: ["cross-file"] }).crossFile).toBe(true)
+  })
 })

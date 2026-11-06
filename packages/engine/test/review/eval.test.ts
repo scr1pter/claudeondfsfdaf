@@ -73,6 +73,7 @@ import { NetworkGuard } from "../../../core/test/lib/network-guard"
 import { testEffect } from "../lib/effect"
 import { httpError, reply, TestLLMServer } from "../lib/llm-server"
 import { testProviderConfig } from "../lib/test-provider"
+import { CATALOG, catalogModel, engineConfig, projectionModel } from "../../script/vectorscope-replay"
 
 // ReviewEval.replay against the fake LLM over real git checkouts: the production review pipeline end to end, with
 // GitHub's writes going to a recording adapter. Requests are matched by the prompt they answer, since the review and
@@ -1671,6 +1672,56 @@ describe("ReviewEval.project", () => {
         expect(yield* checked.llm.hits).toHaveLength(0)
       }),
     GIT,
+    TIMEOUT,
+  )
+
+  // VS-21c: the entry point's dry model is the committed catalog's entry under its loopback provider, priced as the
+  // engine loads it. Its price snapshot must carry the cache rates the catalog stores as flat fields, or the route check
+  // would refuse every projection; a price built from those flat fields by hand lacks them, and is refused here.
+  it.instance(
+    "passes the route check with the entry point's dry model from the committed catalog, cache rates included",
+    () => {
+      const saved = process.env.VECTOR_CONFIG_CONTENT
+      return Effect.gen(function* () {
+        const llm = yield* TestLLMServer
+        const id = "anthropic/claude-sonnet-4.5"
+        const chosen = catalogModel(yield* Effect.promise(() => Bun.file(CATALOG).json()), id, { input: 3, output: 15 })
+        if ("problem" in chosen) throw new Error(chosen.problem)
+        process.env.VECTOR_CONFIG_CONTENT = engineConfig({ mode: "dry", server: llm.url, id, entry: chosen.entry })
+        const model = yield* projectionModel(id)
+        const provider = yield* Provider.Service
+        const info = yield* provider.getProvider(model.providerID)
+        const loaded = yield* provider.getModel(model.providerID, model.modelID)
+        const route = (price: NonNullable<typeof model.price>) =>
+          ReviewEval.routeRefusal({
+            name: `${model.providerID}/${model.modelID}`,
+            providerID: model.providerID,
+            server: llm.url,
+            model: loaded,
+            options: info.options,
+            price,
+          })
+        expect(model).toMatchObject({
+          context: chosen.entry.limit.context,
+          costKind: "priced",
+          price: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
+        })
+        expect(route(model.price!)).toBeUndefined()
+        expect(route({ input: chosen.entry.cost.input, output: chosen.entry.cost.output })).toBe(
+          `${model.providerID}/${model.modelID}'s price snapshot is not its provider's price.`,
+        )
+      }).pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            if (saved === undefined) {
+              delete process.env.VECTOR_CONFIG_CONTENT
+              return
+            }
+            process.env.VECTOR_CONFIG_CONTENT = saved
+          }),
+        ),
+      )
+    },
     TIMEOUT,
   )
 

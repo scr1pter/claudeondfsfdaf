@@ -2,7 +2,10 @@
 // and "Budget, privacy and release gate"). buildReport scores saved runs from their settled judgements, for each
 // pipeline variant and model at both the proposed and the posted stage, with intervals, coverage, spend, judging status
 // and breakdowns, and evaluates the gate for the candidate against the frozen pipeline. It reads only saved outputs, so
-// a revised rubric or gate re-scores them without another provider call.
+// a revised rubric or gate re-scores them without another provider call. Each group also reports its operations (cost
+// per review, tokens, cache, wall time, zero-token reviews, early stops and route refusals, and the estimate error
+// against dry projections), class-scoped and cross-file recall, and trivial controls apart from the behaviour-preserving
+// ones (VS-21c). Dry projections are reported on their own.
 //
 // The gate needs its intervals to settle each statistical rule: a rule whose interval straddles its threshold is sent
 // to human review, as is any rule whose findings are not all judged. Only a held-out run on a frozen manifest, collected
@@ -11,7 +14,9 @@
 import {
   DEFAULT_SLACK,
   RUBRIC_VERSION,
+  isTrivialControl,
   pairedRecall,
+  poissonInterval,
   proportion,
   runKey,
   scoreRun,
@@ -20,6 +25,7 @@ import {
   type EvalCase,
   type EvalRun,
   type Judgement,
+  type LabelledDefect,
   type Metrics,
   type PairedRecall,
   type PlanEntry,
@@ -92,6 +98,66 @@ export interface ReportInput {
   collected?: string // YYYY-MM-DD the results were collected; from the runs' start times when absent
   slack?: number
   problems?: readonly string[] // found while loading the outputs; any of them keeps the report from a release decision
+  // Dry projections of the planned runs (VS-21b's records, through replay.ts projectedRun): what each would send and
+  // its estimated dollars. They are reported on their own and joined with the runs for the estimate error.
+  projected?: readonly ProjectedRun[]
+}
+
+// A distribution's count, mean, median and 90th percentile, with type-7 quantiles (linear between order statistics),
+// so p50 is the usual median. Null where there is nothing to count.
+export interface Spread {
+  n: number
+  mean: number
+  p50: number
+  p90: number
+}
+
+// What a group's reviews cost and how long they took (VectorScope upgrade contract, §6.2), over its present runs: the
+// planned runs that exist and were sent. Stage-independent: the runs are the same at both stages.
+export interface Operations {
+  runs: number
+  // Per review whose spend is known: the reported USD of its admitted attempts, so a zero-token review costs $0. A run
+  // with uncertain spend (an attempt kept at its whole reserved bound) or missing usage is left out and counted in
+  // `unsettled`, so a bound or an unknown is never read as what a review cost (I-5). Judge calls are charged to the
+  // judging line, never here.
+  costUsd: Spread | null
+  unsettled: number
+  tokens: Spread | null // input and output tokens per review that reports them
+  // Cache tokens summed over the reviews that report tokens, and the share of their prompt tokens read from the cache.
+  cache: { read: number; write: number; share: number | null }
+  wallMs: Spread | null // end to end
+  passMs: Record<string, Spread> // per pass that ran
+  zeroToken: Proportion // reviews that made no provider attempt, of those whose output says how many they made
+  stops: Record<string, number> // early stops by reason (ReviewOutcome.partial)
+  routeRefusals: number // stops for "privacy", VS-23's route refusal; 0 until VS-23 lands
+  // |projected low - settled| / settled, for each review joined with a projection of the same variant, case and model
+  // (the model id after its provider, any repetition) that stayed under its dollar cap and whose known spend is above
+  // $0. A projection over its cap describes an uncapped run from there, so it is counted in `capped` and left out; a
+  // run whose spend is uncertain or whose usage is missing would compare the estimate with a bound or an unknown, so it
+  // is counted in `uncertain` and left out.
+  estimate: { error: Spread | null; inRange: Proportion; capped: number; uncertain: number }
+}
+
+// One projection record as the report reads it (script/vectorscope-eval/replay.ts projectedRun).
+export interface ProjectedRun extends PlanEntry {
+  models?: string[]
+  usd: { low: number; high: number } // the passes' estimateCostUsd, summed
+  tokens: { first: number; sent: number } // the passes' first requests, and every request sent
+  passes: number
+  requests: number
+  over: number // dollar-cap decisions the projection ran anyway
+  outside: number // connections that went off this computer
+}
+
+export interface ProjectionGroup extends Group {
+  runs: number
+  cases: number
+  requests: number
+  capped: number // runs with a decision over the cap: their dollars describe an uncapped run from there
+  outside: number
+  usdLow: Spread | null
+  usdHigh: Spread | null
+  sentTokens: Spread | null
 }
 
 export type Slice = Pick<Metrics, "planned" | "coverage" | "recall" | "precision" | "falseAlarmsPerCleanPr">
@@ -104,7 +170,12 @@ export interface GroupReport extends Group {
     trust: Record<string, Slice>
     size: Record<string, Slice>
     category: Record<string, Proportion> // end-to-end recall of the defects in each category
+    classScoped: Proportion // end-to-end recall of the defects in one of the five failure classes (VS-22a)
+    crossFile: Proportion // end-to-end recall of the defects of cross-file cases
   }
+  // Trivial controls (VS-22a), reported apart from the behaviour-preserving controls the D2 figure counts.
+  trivial: { planned: number; reviewed: number; falseAlarms: Rate }
+  operations: Operations
 }
 
 export type Outcome = "pass" | "fail" | "review"
@@ -136,6 +207,7 @@ export interface Report {
   rubric: number
   gate: { config: GateConfig; digest: string }
   groups: GroupReport[]
+  projections: ProjectionGroup[]
   judging: ReturnType<typeof judgingStatus> & {
     calls: number
     paid: number
@@ -252,8 +324,11 @@ export function buildReport(input: ReportInput, gate: GateConfig = DEFAULT_GATE)
         return [{ score, evalCase, ...(run ? { run } : {}) }]
       })
   const options = { confidence: gate.confidence }
+  const projected = new Map((input.projected ?? []).map((run) => [projectionKey(run), run]))
   const reports = groups.map((group): GroupReport & { entries: Entry[] } => {
     const entries = scored(group, gate.stage)
+    const trivial = entries.filter((entry) => isTrivialControl(entry.evalCase))
+    const reviewedTrivial = trivial.filter(isReviewed)
     return {
       ...group,
       stages: {
@@ -265,7 +340,23 @@ export function buildReport(input: ReportInput, gate: GateConfig = DEFAULT_GATE)
         trust: slices(entries, (entry) => entry.run?.trust ?? "not run", options),
         size: slices(entries, (entry) => sizeBucket(entry.evalCase), options),
         category: categories(entries, gate.confidence),
+        classScoped: recallOf(
+          entries,
+          (_, defect) => defect.failureClass !== undefined && defect.failureClass !== "other",
+          gate.confidence,
+        ),
+        crossFile: recallOf(entries, (entry) => entry.evalCase.crossFile === true, gate.confidence),
       },
+      trivial: {
+        planned: trivial.length,
+        reviewed: reviewedTrivial.length,
+        falseAlarms: rateOf(
+          reviewedTrivial.reduce((total, entry) => total + entry.score.falseAlarms, 0),
+          reviewedTrivial.length,
+          gate.confidence,
+        ),
+      },
+      operations: operations(entries, projected, gate.confidence),
       entries,
     }
   })
@@ -287,7 +378,10 @@ export function buildReport(input: ReportInput, gate: GateConfig = DEFAULT_GATE)
       model: entry.model,
       stages: entry.stages,
       breakdowns: entry.breakdowns,
+      trivial: entry.trivial,
+      operations: entry.operations,
     })),
+    projections: projectionGroups(input.projected ?? []),
     judging: {
       ...status,
       calls: calls.length,
@@ -350,6 +444,119 @@ export function buildReport(input: ReportInput, gate: GateConfig = DEFAULT_GATE)
 
 type Entry = { score: RunScore; evalCase: EvalCase; run?: EvalRun }
 
+// Dry projections grouped by variant and model, in the order they first appear.
+export function projectionGroups(projected: readonly ProjectedRun[]): ProjectionGroup[] {
+  return dedupeGroups(projected).map((group) => {
+    const runs = projected.filter((run) => same(run, group))
+    return {
+      ...group,
+      runs: runs.length,
+      cases: new Set(runs.map((run) => run.case)).size,
+      requests: sum(runs.map((run) => run.requests)),
+      capped: runs.filter((run) => run.over > 0).length,
+      outside: sum(runs.map((run) => run.outside)),
+      usdLow: spread(runs.map((run) => run.usd.low)),
+      usdHigh: spread(runs.map((run) => run.usd.high)),
+      sentTokens: spread(runs.map((run) => run.tokens.sent)),
+    }
+  })
+}
+
+// The projections as a table. A projection's dollars are estimates from the wire bodies it would send, never spend.
+export function renderProjections(groups: readonly ProjectionGroup[]): string[] {
+  const cell = (value: Spread | null, show: (value: number) => string) =>
+    value ? `${show(value.mean)} / ${show(value.p50)} / ${show(value.p90)}` : "n/a"
+  return [
+    "| Variant · model | Runs | Cases | Requests | USD low (mean / median / p90) | USD high (mean / median / p90) | Tokens sent (mean / median / p90) | Over the cap | Off this computer |",
+    "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+    ...groups.map(
+      (group) =>
+        `| ${group.variant} · ${group.model} | ${group.runs} | ${group.cases} | ${group.requests} | ${cell(group.usdLow, (value) => `$${value.toFixed(4)}`)} | ${cell(group.usdHigh, (value) => `$${value.toFixed(4)}`)} | ${cell(group.sentTokens, (value) => String(Math.round(value)))} | ${group.capped} | ${group.outside} |`,
+    ),
+    "",
+    "A projection runs every pass against a canned model on this computer and prices the bodies it would send (estimateCostUsd, from the price snapshot). Its dollars are estimates, not spend. A run over its dollar cap describes an uncapped run from that decision on.",
+  ]
+}
+
+// What a group's present runs cost and how long they took, with the estimate error against their projections.
+function operations(
+  entries: readonly Entry[],
+  projected: ReadonlyMap<string, ProjectedRun>,
+  confidence: number,
+): Operations {
+  const present = entries.flatMap((entry) => (entry.run && entry.run.status !== "not-sent" ? [entry.run] : []))
+  // Known spend: every attempt settled from reported usage, with nothing kept at its bound.
+  const known = (run: EvalRun) => !run.spend.usageMissing && run.spend.uncertainUsd === 0
+  const settled = (run: EvalRun) => run.spend.costUsd ?? 0
+  const counted = present.filter((run) => run.attempts !== undefined)
+  const tokens = present.flatMap((run) => (run.tokens ? [run.tokens] : []))
+  const read = sum(tokens.map((entry) => entry.cacheRead ?? 0))
+  const write = sum(tokens.map((entry) => entry.cacheWrite ?? 0))
+  const prompt = sum(tokens.map((entry) => entry.input)) + read + write
+  const stops = present.flatMap((run) => (run.stop ? [run.stop] : []))
+  const passes = present.flatMap((run) => run.passes ?? [])
+  const joined = present.flatMap((run) => {
+    const projection = projected.get(projectionKey(run))
+    return projection ? [{ run, projection }] : []
+  })
+  const uncapped = joined.filter((entry) => entry.projection.over === 0 && known(entry.run) && settled(entry.run) > 0)
+  const priced = present.filter(known)
+  return {
+    runs: present.length,
+    costUsd: spread(priced.map(settled)),
+    unsettled: present.length - priced.length,
+    tokens: spread(tokens.map((entry) => entry.input + entry.output)),
+    cache: { read, write, share: prompt > 0 ? read / prompt : null },
+    wallMs: spread(present.flatMap((run) => (run.ms === undefined ? [] : [run.ms]))),
+    passMs: Object.fromEntries(
+      [...new Set(passes.map((pass) => pass.pass))].toSorted().flatMap((name) => {
+        const times = spread(passes.filter((pass) => pass.pass === name).map((pass) => pass.ms))
+        return times ? [[name, times]] : []
+      }),
+    ),
+    zeroToken: proportion(counted.filter((run) => run.attempts === 0).length, counted.length, confidence),
+    stops: Object.fromEntries(
+      [...new Set(stops)].toSorted().map((reason) => [reason, stops.filter((stop) => stop === reason).length]),
+    ),
+    routeRefusals: stops.filter((stop) => stop === "privacy").length,
+    estimate: {
+      error: spread(
+        uncapped.map((entry) => Math.abs(entry.projection.usd.low - settled(entry.run)) / settled(entry.run)),
+      ),
+      inRange: proportion(
+        uncapped.filter(
+          (entry) => entry.projection.usd.low <= settled(entry.run) && settled(entry.run) <= entry.projection.usd.high,
+        ).length,
+        uncapped.length,
+        confidence,
+      ),
+      capped: joined.filter((entry) => entry.projection.over > 0).length,
+      uncertain: joined.filter((entry) => entry.projection.over === 0 && !known(entry.run)).length,
+    },
+  }
+}
+
+// A projection and a run of the same variant and case on the same model, whichever provider served it: a projection
+// runs on a provider on this computer and a paid replay on its router. Repetition is ignored, since the canned model a
+// projection runs against answers the same way every time.
+function projectionKey(run: Pick<PlanEntry, "variant" | "case" | "model">) {
+  return [run.variant, run.case, run.model.slice(run.model.indexOf("/") + 1)].join(" ")
+}
+
+export function spread(values: readonly number[]): Spread | null {
+  const sorted = values.filter((value) => Number.isFinite(value)).toSorted((a, b) => a - b)
+  if (!sorted.length) return null
+  return { n: sorted.length, mean: sum(sorted) / sorted.length, p50: quantile(sorted, 0.5), p90: quantile(sorted, 0.9) }
+}
+
+// Type 7: linear between the order statistics around (n - 1)p.
+function quantile(sorted: readonly number[], p: number) {
+  const at = (sorted.length - 1) * p
+  const low = Math.floor(at)
+  const high = Math.min(low + 1, sorted.length - 1)
+  return sorted[low] + (at - low) * (sorted[high] - sorted[low])
+}
+
 function evaluateGate(input: {
   gate: GateConfig
   candidate: GroupReport & { entries: Entry[] }
@@ -366,7 +573,7 @@ function evaluateGate(input: {
   const reviewed = metrics.status.completed + metrics.status.partial
   const unjudged = metrics.findings.unjudged
   const cleanUnjudged = input.candidate.entries
-    .filter((entry) => entry.evalCase.kind === "control")
+    .filter((entry) => entry.evalCase.kind === "control" && !isTrivialControl(entry.evalCase))
     .reduce((total, entry) => total + entry.score.unjudged, 0)
   const paired = input.baseline
     ? pairedRecall(input.candidate.entries, input.baseline.entries, { confidence: gate.confidence })
@@ -565,6 +772,7 @@ export function renderReport(report: Report): string {
         ]
       : []),
     ...report.groups.flatMap((group) => renderGroup(group, gate.stage)),
+    ...(report.projections.length ? ["", "## Projections", "", ...renderProjections(report.projections)] : []),
     ...(report.decision ? renderDecision(report.decision, gate) : ["", "## Gate", "", "Not evaluated: no candidate."]),
     ...(report.problems.length || judging.problems.length
       ? ["", "## Problems", "", ...[...report.problems, ...judging.problems].map((problem) => `- ${problem}`)]
@@ -621,6 +829,10 @@ function renderGroup(group: GroupReport, stage: Stage) {
     `Runs: ${describeStatus(metrics)}.`,
     `Spend: $${spend.costUsd.toFixed(4)} reported, $${spend.uncertainUsd.toFixed(4)} uncertain (kept in full because the cost is not known); ${spend.usageMissing} run(s) missing usage; ${spend.unaccounted} not admitted by the ledger. Tokens ${spend.tokens.input} in, ${spend.tokens.output} out${spend.tokensMissing ? ` (${spend.tokensMissing} reviewed run(s) reported none)` : ""}.`,
     `Wall time: ${(metrics.wallMs.total / 1000).toFixed(1)}s over ${metrics.wallMs.runs} run(s)${metrics.wallMs.median === null ? "" : `, median ${(metrics.wallMs.median / 1000).toFixed(1)}s`}.`,
+    ...renderOperations(group.operations),
+    "",
+    `Recall, class-scoped (defects in the five failure classes): ${share(group.breakdowns.classScoped)}. Recall, cross-file cases: ${share(group.breakdowns.crossFile)}.`,
+    `Trivial controls, apart from the behaviour-preserving controls above: ${group.trivial.planned} planned, ${group.trivial.reviewed} reviewed, false alarms per trivial PR ${perPr(group.trivial.falseAlarms)}.`,
     ...(metrics.adversarial.planned
       ? [
           `Adversarial (prompt-injection) cases, left out of every rate above: ${metrics.adversarial.planned} planned, ${metrics.adversarial.reviewed} reviewed, ${metrics.adversarial.violated} with a failed trust or consent check.`,
@@ -647,6 +859,33 @@ function renderGroup(group: GroupReport, stage: Stage) {
           ),
         ]
       : []),
+  ]
+}
+
+function renderOperations(operations: Operations) {
+  const row = (name: string, value: Spread | null, show: (value: number) => string) =>
+    value
+      ? `| ${name} | ${value.n} | ${show(value.mean)} | ${show(value.p50)} | ${show(value.p90)} |`
+      : `| ${name} | 0 | n/a | n/a | n/a |`
+  const usd = (value: number) => `$${value.toFixed(4)}`
+  const seconds = (value: number) => `${(value / 1000).toFixed(1)}s`
+  const stops = Object.entries(operations.stops)
+  const estimate = operations.estimate
+  return [
+    "",
+    `Operations over ${operations.runs} present run(s):`,
+    "",
+    "| Measure | Runs | Mean | Median | p90 |",
+    "| --- | --- | --- | --- | --- |",
+    row("Cost per review (known spend)", operations.costUsd, usd),
+    row("Tokens per review (in + out)", operations.tokens, (value) => String(Math.round(value))),
+    row("Wall time, end to end", operations.wallMs, seconds),
+    ...Object.entries(operations.passMs).map(([pass, value]) => row(`Wall time, ${pass}`, value, seconds)),
+    "",
+    `Cost per review leaves out ${operations.unsettled} run(s) whose spend is uncertain or whose usage is missing: a reserved bound or an unknown is not what a review cost.`,
+    `Cache: ${operations.cache.read} token(s) read, ${operations.cache.write} written; ${operations.cache.share === null ? "n/a (no prompt tokens reported)" : `${percent(operations.cache.share)} of prompt tokens read from the cache`}.`,
+    `Zero-token reviews: ${share(operations.zeroToken)}. Early stops: ${stops.length ? stops.map(([reason, count]) => `${reason} ${count}`).join(", ") : "none"}. Route refusals: ${operations.routeRefusals}.`,
+    `Estimate error, |projected low - settled| / settled: ${estimate.error ? `mean ${percent(estimate.error.mean)}, median ${percent(estimate.error.p50)}, p90 ${percent(estimate.error.p90)} over ${estimate.error.n} run(s)` : "n/a (0 of 0)"}; settled within the projected range ${share(estimate.inRange)}; ${estimate.capped} run(s) left out because their projection went over its dollar cap, ${estimate.uncertain} because their spend is uncertain or their usage is missing.`,
   ]
 }
 
@@ -706,6 +945,35 @@ function categories(entries: Entry[], confidence: number) {
       return [category, proportion(items.filter((item) => item.found).length, items.length, confidence)]
     }),
   )
+}
+
+// End-to-end recall of the labelled defects `counts` picks, adversarial cases left out.
+function recallOf(entries: Entry[], counts: (entry: Entry, defect: LabelledDefect) => boolean, confidence: number) {
+  const found = entries
+    .filter((entry) => entry.evalCase.kind !== "adversarial")
+    .flatMap((entry) =>
+      entry.evalCase.defects
+        .filter((defect) => counts(entry, defect))
+        .map((defect) => entry.score.detected.includes(defect.id)),
+    )
+  return proportion(found.filter(Boolean).length, found.length, confidence)
+}
+
+function rateOf(count: number, exposure: number, confidence: number): Rate {
+  return {
+    count,
+    exposure,
+    value: exposure > 0 ? count / exposure : null,
+    interval: poissonInterval(count, exposure, confidence),
+  }
+}
+
+function isReviewed(entry: Entry) {
+  return entry.score.status === "completed" || entry.score.status === "partial"
+}
+
+function sum(values: readonly number[]) {
+  return values.reduce((total, value) => total + value, 0)
 }
 
 // Changed lines, as the dataset records them: under 100, under 1,000, and 1,000 or more.
