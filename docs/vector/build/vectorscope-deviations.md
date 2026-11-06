@@ -3736,3 +3736,424 @@ differently (below). Nothing is committed.
   - Nothing was sent to a model, no paid path ran, no workflow was
     dispatched, no dependency was added, and no existing user-visible
     string changed (D14).
+
+## 2026-11-06 · VS-34a Pure secret holdback
+
+Addendum A §2 VS-34, the Now part of §4: a pure core
+`review/holdback.ts` (`holdbackFiles` with its own result type), one
+additive `BrainScan` reading, two exported permission lists, the pipeline
+pin, tests and this entry. Built at `9be2e8b3`. VS-34 is a proposal pending
+Q18, so everything is off by default and nothing calls it. No `ReviewConfig`
+key, config, prompt, runner or eval-script change. `run.ts`, `ai-review.ts`,
+`provider.ts`, `session/llm.ts`, `posting.ts`, `workflow.ts`, `command.ts`,
+`github.*`, `github-*.ts` and `vectorscope.astro` are untouched. It implements
+the VS-34a plan as corrected by its critique. Every critique point was
+taken, three in a different form (below). A review round followed; its
+fixes are folded in below and listed under **Review round**. Nothing is
+committed.
+
+- **What landed.**
+  - **New core `review/holdback.ts`** (pinned). `holdbackFiles(files,
+    { headFiles?, ignored, env?, reading? })` returns `{ files, headFiles?, held,
+    redactions, ignoredCommitted }`, with `HeldFile { path, oldPath?,
+    status, reason }` and `HoldbackRedaction { path, diff, head }`.
+    `reason` is `secret-file`, `env-file` or `credential-file`.
+    - The header says it is pure (`env` defaults to `{}`, no git call),
+      browser-safe in its imports, and uncalled.
+    - It also says that only prompt rendering may use its output (critique
+      9).
+  - **Core `brain/scan.ts`**:
+    - adds `Reading.shapes`, with its doc;
+    - adds `KEY_LAST`, `AWS_IDS` and `byLine`;
+    - adds four branches in `scrub` and one in `secrets`, each under
+      `reading.shapes` (below).
+
+    With `shapes` unset every existing reading is unchanged (tested).
+  - **Core `review/permission.ts`**:
+    - `SECRET_FILES` is exported, its literal unchanged;
+    - the read tool's two env patterns become the exported `ENV_FILES`
+      (`["*.env", "*.env.*"]`), which `reviewPermissionRules` spreads in
+      their old place;
+    - both lists are `as const`, so no importer can change them.
+
+    The rules it returns are byte-identical, pinned by a literal copy.
+  - **Core `model-evidence.ts`**: the pin only.
+- **Rule decisions (hold back by path).**
+  - **Order:**
+    1. `SECRET_FILES` (`secret-file`), so `.aws/credentials` is a secret
+       file;
+    2. then the env rule (`env-file`);
+    3. then the credential list (`credential-file`).
+
+    The new path is judged, then `oldPath`. That covers deletions, renames
+    away from a sensitive name and renames to one. A copy has no `oldPath`,
+    so it is judged on its new path, and value redaction still applies to
+    it (tested with a copy of `id_rsa`).
+  - **Matching** is the read tool's `Wildcard.match` on the lowercased
+    path, because every pattern is lowercase (critique 8):
+    - the result is the same on every platform, and stricter than the
+      read tool, which is case-sensitive on Linux and macOS;
+    - `.ENV`, `ID_RSA`, `Server.PEM` and `Credentials` are held (tested).
+  - **Env files** (critique 2):
+    - the read tool's `ENV_FILES`, so `prod.env`, `deploy/app.env` and
+      `config/production.env.local` are held;
+    - except templates by final suffix (`.example`, `.sample`,
+      `.template`, `.dist`, `.defaults`): `.env.local.example` is sent,
+      `.env.example.bak` is held;
+    - and except a `*.env.*` whose final extension is a source extension
+      (`ignore.ts` `isCodePath`, reused), unless it is a dotfile `.env.*`
+      or a shell or SQL script (`sh`, `bash`, `zsh`, `ps1`, `sql`, which
+      `CODE_EXTENSIONS` counts as source but which set values). So
+      `src/config.env.ts` and `src/vite.env.d.ts` are sent, while
+      `.env.ts`, `docker/app.env.json`, `deploy/prod.env.sh`,
+      `secrets.env.ps1`, `staging.env.bash`, `scripts/dev.env.zsh` and
+      `db/seed.env.sql` are held.
+    - A head file whose own path would be held is dropped too, whether or
+      not a changed file has it (`Review.run` builds head files from the
+      changed files today, so this is defensive).
+  - **Credential list:**
+    - the addendum's basenames, each in a root and a `*/` form, plus
+      `*.ppk`, `*.pfx`, `*.jks` and `*.keystore`;
+    - plus `id_ecdsa_sk` and `id_ed25519_sk`, OpenSSH's default private
+      key names for security keys. That is the one widening, recorded here
+      (critique 11).
+    - `id_*` is not taken. It would hold every `id_`-prefixed source file
+      and the public keys `id_rsa.pub`.
+  - **`ignoredCommitted`**:
+    - non-deleted changed paths found exactly in `ignored`, in file order;
+    - held files are included, deletions excluded, and nothing is dropped.
+  - **Naming and counts:**
+    - the addendum's `headText` is `headFiles`, as in `RunInput` and
+      `PromptInput`;
+    - `env` is optional, defaults to `{}`, and is never `process.env`;
+    - `reading` is optional and defaults to `{ shapes: true }`. Nothing
+      passes it and no key sets it. It exists only so that the
+      measurement window can run the generic reading (`{ code: true }`)
+      through the same function. A test shows the generic reading
+      redacting `DB_PASSWORD=S3cretPassw0rdXY`, which the shapes tier
+      sends;
+    - `redactions` counts the placeholders added per path, split into
+      `diff` (hunk headers and line texts) and `head`. The patch is not
+      counted, so no value is counted twice;
+    - `HeldFile.status` is added (critique 11) so that VS-32 and VS-27
+      need no rejoin.
+- **Value redaction (in place).**
+  - **One text per path** (critique 3, in a stronger form).
+    - **Exact head file.** When the head file is exact, not annotated, and
+      the diff's post-image (`matchPostImage`), the text read is its lines
+      with the diff's removed lines put back where they were (as
+      `renderAnnotated` places them), then the hunk headers' sections.
+      - A removed or added line of a key's body is then read inside its
+        block.
+      - A line the diff and the head file share is redacted once. They
+        still match, so `packChanges` still annotates the head file
+        (`pack.ts:63`; asserted with `matchPostImage` after holdback).
+    - **Otherwise** the text is:
+      - the hunks;
+      - then a hunks-only head file's own hunks (parsed);
+      - or the head file's lines, when it is annotated or does not match.
+    - One `BrainScan.named(text, env, { shapes: true })` pass covers the
+      whole text. No value list is substituted. Substituting through
+      `redactSecrets` skips values under 12 characters (short passwords, a
+      key's short last line), and a per-line pass cannot see a key's
+      header (critique 1).
+  - **`patch`, and a hunks-only head file's text** (critique 5, the
+    "better still" form). Each line a hunk accounts for is written from
+    the redacted hunk line at the same position:
+    - the line is checked against the original, and its prefix and any
+      `\r` are kept;
+    - `\ No newline at end of file` passes;
+    - a line no hunk counts (a file header) is read on its own.
+
+    A re-parse equals the redacted hunks, and a hunks-only head file equals
+    `renderPatch` of the redacted file (both tested).
+  - **The `shapes` reading** reads only what a value's shape gives away:
+    - a private key's body;
+    - an address's password;
+    - redact.ts's `TOKEN_SHAPES` (through `redactSecrets`, so they are
+      reused, not copied) and `SECRET_SHAPES`;
+    - the environment's values;
+    - AWS key IDs and the secret beside them.
+
+    It does not apply the generic rules that read names or words around a
+    value, `credential`, or OPAQUE (the kill criterion, below). Only the
+    value is replaced:
+    - **address**: the password only. `postgres://app:[redacted]@db:5432/app",
+      x = 1` keeps its quote and the code after it, for a long and a short
+      password. That fixes critique 1's `hide(match)` destruction. A second
+      reading changes nothing (tested), so the critique's `[redacted]`
+      exemption is not needed.
+    - **key**: every body line, its markers kept. `KEY_LAST` also takes
+      the short last line before END (critique 7), but not the `+` that
+      joins lines in code.
+    - **AWS**: a 40-character run of pure hex beside a key ID is skipped,
+      as `opaque` does. A bare `ASIA` ID is redacted (critique 6).
+      `TOKEN_SHAPES` is unchanged, so posted-text redaction is too.
+    - **line breaks**: a value that spans one (a multi-line env value) is
+      replaced a line at a time (`byLine`), so line counts never change.
+    - **Bearer/Basic across a line break**: found while building. The
+      existing `\s+` lets a "// Basic" comment take a long identifier on
+      the next line, so under `shapes` a shape match that spans a line
+      break is kept.
+
+    The default reading of all of these is unchanged and asserted.
+  - **Speed.** A draft `KEY_LAST` was quadratic under V8: Node 22 took
+    40 s on 40 KB of spaces, while Bun stayed linear. The final form uses
+    an unambiguous run and atomic marks, as `PRIVATE_KEY` does, and takes
+    1 to 6 ms on 48 KB cases in a Node bundle of the real `scan.ts`. The
+    existing performance test now also runs the `shapes` reading.
+- **Value-redaction tier: the kill criterion applied at the start.**
+  - **What was measured.** A local proxy survey on this repository's own
+    2009 non-test, non-generated files under
+    `packages/{core,engine,app,web,desktop,sdk}`. It is not an eval: no
+    model, no dataset, and no VS-22 case.
+  - **The addendum's literal reading.** `BrainScan.secrets` values (read as
+    code) through `redactSecrets`, re-run here:
+    - it changed 146 files (7.3%);
+    - with a per-line `BrainScan.named` added, 223 (11.1%);
+    - the plan measured 99 (4.9%) without OPAQUE (not re-run).
+
+    It also rewrites code the security pass must read
+    (`if (password === confirm)`, `const token = await getToken()`,
+    checksums, UUIDs, SRI hashes, public keys). That breaks the addendum's
+    2% rule, so only the shape tier was built.
+  - **The built module** (`/tmp/vector-vectorscope/vs34a/survey.ts`, not
+    committed): each file is sent as a new file with its exact head file.
+    - It changed 9 files (0.45%), held none, and changed no line count.
+    - All 9 are secret-shaped placeholders: synthetic `vct_` tokens, a
+      `postgresql://user:pass@` placeholder and an address in a comment.
+    - Bun took 3.2 s; a Node bundle took 1.4 s, and its slowest file, a
+      one-line 5 MB JSON, took 125 ms.
+  - **What stays open.** The generic reading stays measurable through
+    `holdbackFiles` itself (the `reading` input), because `BrainScan`
+    without `shapes` is unchanged. The contract's stated measurement for
+    the kill criterion has not run: this proxy is not it.
+    - Before runner-wiring adopts a tier, the measurement window must
+      compare the generic tier with the shapes tier on VS-22 cases and
+      apply the 2% threshold there.
+    - Choosing the tier from this proxy decides no owner question. It is
+      raised for owner visibility next to Q23, because requiring
+      `holdback: secrets` under zdr would make the tier's residual (the
+      plaintext passwords below) a zdr property.
+- **Known gaps** (kept so that I-1 holds, or out of the Now window):
+  - **Plaintext assigned passwords** in files on no list
+    (`docker-compose.yml` `POSTGRES_PASSWORD: hunter2`, `config.yml`)
+    reach the model. The shape tier gives a plaintext password away only
+    inside an address (critique 10).
+  - **No exact post-image head file.** This covers no head files, the
+    engine's hunks-only head file for files over 40 KB, and a stale head.
+    In those cases:
+    - an AWS secret whose key ID is in neither the hunks nor the head file
+      is kept;
+    - so are key body lines whose header lies outside the hunk context,
+      because OPAQUE is dropped.
+
+    Pinned by a test. With an exact head file both are redacted (tested).
+  - **Key body.** A short body line that is not the last (no PEM encoder
+    writes one) and the last line of a key without an END line are kept
+    unless they have 16 or more characters.
+  - **Addresses.** Of two addresses joined without a space
+    (`a://u:p@h,b://v:q@k`), only the first password is redacted:
+    `CREDENTIALED`'s rest takes `\S+` (unchanged rule).
+  - **Bearer/Basic.** A token on the line after "Bearer" or "Basic" is not
+    redacted under `shapes` (the trade above).
+  - **Backups and other `id_` names.** `id_rsa.bak`, `id_rsa.old`,
+    `id_xmss` and other `id_*` names are sent (pinned by a test).
+  - **Binary key files.** `.p12`, `.pfx`, `.jks` and `.keystore` are
+    classified binary and skipped before `RunInput.files` today
+    (`ignore.ts:65-72,208`). The holdback rule is a backstop.
+  - **Differences from the read tool.** It denies `src/config.env.ts` and
+    `.env.local.example`; holdback sends them value-redacted. Shell and
+    SQL `*.env.*` scripts are held, as the read tool denies them.
+  - **AWS secret beside a key ID: a known false positive** (pinned by a
+    test). In a path whose text holds an `AKIA` or `ASIA` ID anywhere,
+    every 40-character run of `[A-Za-z0-9/+]` that is not pure hex is
+    replaced, so `name=thisIsAVeryLongIdentifierNameForTesting1` becomes
+    `name=[redacted]` twenty lines away. Left as it is (the review's
+    alternative), for three reasons:
+    - the proximity rule would fail open: when the head file is stale,
+      annotated or hunks only, the hunks and the head file are read one
+      after the other, so a hunk's secret line is far from the head
+      file's key ID in the joined text and would be sent;
+    - the content rule (a digit and both letter cases, or a `/`) does not
+      exclude the pinned identifier, which has all three;
+    - the kill metric counts files with at least one redaction that holds
+      no real secret. A file with a key ID already carries one (the ID),
+      so the extra placeholders do not move it; they cost only the
+      readability of such files.
+
+    The measurement window can revisit it on VS-22.
+  - **Desktop renderer.** `Wildcard.match` reads `process.platform` at call
+    time, which a sandboxed renderer lacks. With lowercasing the result no
+    longer depends on the platform, but the read remains, so the desktop
+    half must provide it or record a difference.
+- **Critique of the plan, point by point.**
+  1. *Per-line `named` destroys addresses* (major): taken differently.
+     There is no per-line pass. The single positional pass replaces only
+     the password whether or not `found` is passed, and exact-text
+     assertions cover the long and short forms in both test files.
+  2. *Env files the read tool denies* (major): taken, as above, with the
+     narrow `*.env.*` form and the decision recorded.
+  3. *One value set per path* (major): taken as one text per path (above),
+     which also keeps `matchPostImage` true. Fixtures cover a hunk that
+     changes only the AWS secret line with the key ID only in the head
+     file, and a middle-body PEM edit whose header is only in the head
+     file; the no-head gap is pinned.
+  4. *Test C pins nothing* (major): taken. A literal ten-pattern list
+     inside the full read deny list, plus deep-equality of both exports.
+  5. *Patch redaction* (minor): taken in the "better still" form, with a
+     `\ No newline` fixture and the re-parse assertion.
+  6. *AWS hex and ASIA* (minor): taken both, with a holdback fixture (key
+     ID, commit, `ASIA`) and scan regressions without `shapes`.
+  7. *Short PEM last line* (minor): taken (`KEY_LAST`). Fixtures use a
+     realistic short last line (`QmF6PQ==`, `AAAAEw==`).
+  8. *Case* (minor): taken (lowercase, case fixtures).
+  9. *Where the redacted copy may flow* (minor): taken (header comment,
+     Deferred).
+  10. *State the tier's basis and the plaintext residual* (minor): taken
+      (above).
+  11. *`id_*` and `status`* (minor): `status` taken. The two `_sk` names
+      are added with the reason above. Taken differently: `id_*` is not
+      taken; the gap is logged and pinned.
+- **Plan steps taken differently, besides the critique:**
+  - `holdback.ts` imports `REDACTED` only from `redact.ts` (for counts);
+    the token shapes reach it through `BrainScan`;
+  - `permission.ts` also exports `ENV_FILES`;
+  - `isCodePath` comes from `ignore.ts`;
+  - the plan's private `ENV_FILES` and `SHAPES`-plus-values redactor are
+    replaced as above.
+- **Scope and pin.**
+  - `holdback.ts` joins `REVIEW_PIPELINE_FILES` after `privacy.ts`, with
+    the comment extended. `REVIEW_PIPELINE_SOURCES` moves from
+    `ff321bd841f716ee` to `7addfcd0033ba579` (`552618178a9627b2` before
+    the review round). It was set after
+    `holdback.ts` was final (prettier included), and the pin test was
+    re-run.
+  - `scan.ts`, `redact.ts` and `permission.ts` are not pinned, as before.
+  - `REVIEW_PIPELINE_REVISION` stays 1: nothing calls the file.
+  - There is no new key, so `EVIDENCE_POLICY_KEYS`, `EvidenceScope`,
+    `policyDigest` and `promptsDigest` are unchanged.
+- **Off by default (I-1).**
+  - `holdbackFiles` has no caller. `reviewPermissionRules`' output is
+    byte-identical, and every `BrainScan` reading without `shapes` is
+    unchanged.
+  - The engine grep and structured-output review tests and the desktop
+    D3 parity suite (`ai-review.test.ts`) pass unchanged.
+- **Owner questions: none decided.** Q1, Q13, Q16, Q18 and Q23 stay open.
+  The tier choice above is a Now-window build decision. The measurement
+  window can revisit it on VS-22.
+- **Deferred to runner-wiring (Q13) or later** (citations at `9be2e8b3`):
+  - **The `holdback: off | secrets` key:**
+    - `ReviewConfig`;
+    - the raise-only `config.ts` merge and `REVIEW_HOLDBACK`;
+    - the hidden global engine config field, with SDK and client
+      regeneration;
+    - the `EVIDENCE_POLICY_KEYS` entry with a default-stable digest.
+  - **The call.** The `Review.run` call goes before prompt building
+    (`run.ts:655-686`, `packChanges` at 655). Only prompt rendering
+    (`packChanges` inputs, so the inline diff and the head files) may use
+    the output. Skips, review state and fingerprints, anchors
+    (`buildAnchorIndex`, `anchorText`), `suggestionAllowed`, `applyPatch`,
+    `patchIdOf` and `RunInput.anchors` keep the unredacted files.
+  - **Value redaction of the other untrusted blocks:** `context.related`,
+    history, human comments, PR title and body, and the impact slice.
+  - **Tool rules.** Read deny rules for the credential list (export it
+    then). The grep-output backstop works by path. There is no path rule
+    for grep, because its permission pattern is the search regex
+    (`grep.ts:42-43`); its per-file read check is at `grep.ts:94-109`.
+  - **The ignored list:** `git check-ignore --no-index`.
+  - **The `held-back` reason.**
+    - It is a new `SkippedFile` reason (`types.ts:157`), with labels in
+      `format.ts:62`, `review.render.ts:44` and `ai-review.ts:147`.
+    - It stays out of `state.unreviewed` (`types.ts:147`; `skip.ts:66-67`).
+    - The zero-token note is part of this item.
+  - **The input-redaction prompt sentence** goes beside `prompt.ts:125`,
+    entering `promptsDigest` only under the key.
+  - **Variant and parity:**
+    - the `engine:holdback-secrets` variant;
+    - projection wire-body fixtures (read and grep on a held path, and a
+      token in a non-listed file);
+    - D3 parity tests;
+    - the desktop half (`ai-review.ts`, and the `process.platform` read)
+      or a documented difference.
+  - **Measurement:** the false-positive measurement on VS-22 cases (2%
+    threshold) and the defect-location check. It must compare the generic
+    tier with the shapes tier (both through `holdbackFiles`, by its
+    `reading` input) before runner-wiring adopts either; raised for owner
+    visibility next to Q23.
+- **Deferred verification:**
+  - Windows path handling: none expected after lowercasing;
+  - the renderer's runtime behaviour of `Wildcard`;
+  - wire-body assertions through VS-21b;
+  - false positives on VS-22 and on repositories with real committed
+    secrets;
+  - whether any VS-22 bug case loses its defect location.
+- **Evidence.** Each file ran alone through the lock with `--timeout 30000`,
+  `GITHUB_ACTIONS=false`, and `TMPDIR` and XDG roots under
+  `/tmp/vector-vectorscope/vs34a/`:
+
+  | Where | File | Pass |
+  |---|---|---|
+  | core | `test/review/holdback.test.ts` | 16 (new) |
+  | core | `test/brain/scan.test.ts` | 20 (one added, one extended) |
+  | core | `test/review/permission.test.ts` | 10 (one added) |
+  | core | `test/review/model-evidence.test.ts` | 17 (pin re-run) |
+  | core | `test/review/redact.test.ts`, `test/brain/knowledge-scan.test.ts`, `test/brain/document-security.test.ts` | 6, 6, 10 |
+  | engine | `test/tool/grep.test.ts`, `test/review/structured-output-review.test.ts` | 19, 3 |
+  | app | `src/features/pull-requests/ai-review.test.ts` | 107 |
+
+  - `bun typecheck` passes in core, engine, app and desktop, and prettier
+    passes on the changed files.
+  - `oxlint` adds no warning to `holdback.ts` or `scan.ts`. Its new test
+    warnings are the deliberate runtime assembly of token-like literals
+    (`no-useless-concat`, `no-unnecessary-template-expression`), as the
+    existing scan tests do.
+  - **Mutation check.** Fourteen mutations each broke at least one test,
+    and each file was restored byte for byte:
+    - the address rest, `KEY_LAST` and its letter rule, the hex skip and
+      `ASIA`;
+    - the splice, lowercasing, the dotfile and source-file env rules and
+      the old-path check;
+    - the line-break rule, `byLine`, the patch rewrite and a
+      `SECRET_FILES` edit.
+
+    One more (the `*.env` term of a draft env rule) broke nothing; the
+    term was redundant and was removed. The review round added four, each
+    of which broke a test and was restored byte for byte: the per-line
+    list copy in `removedBefore` (the speed test took 20.5 s), the shell
+    and SQL env term, the head file's own-path filter, and `.` in
+    `byLine`.
+  - The full root typecheck was not run: nothing is pushed.
+- **Review round** (eleven findings, one blocking, two pairs
+  overlapping; all fixed but one, left with the reason above):
+  1. *Quadratic `removedBefore`* (blocking): fixed. Each list grows in
+     place. 80 000 removed lines beside an exact one-line head file took
+     12.3 s and take 135 ms (124 ms without the head file). A new test
+     runs 100 000 removed lines and asserts under 1 s, as `scan.test.ts`
+     does.
+  2. *Shell and SQL `*.env.*` scripts sent* (two findings): fixed by
+     `ENV_SCRIPTS` (above). The five names are held cases in the test.
+  3. *A head file held by its own path*: fixed (above), with a test.
+  4. *Item 3's measurement has not run*: recorded under **What stays
+     open** and **Deferred**, and raised next to Q23.
+  5. *AWS secret over-redaction*: not changed; logged as a known false
+     positive with its reasons and pinned by a test (above).
+  6. *Missing fixtures* (two findings): added `infra/.aws/config`,
+     `home/.aws/credentials`, `vendor/x/.git/config`,
+     `vendor/lib/.git/config` and `certs/tls.key` to the held cases, and
+     `gho_`, `ghu_`, `ghs_` and `ghr_` lines to the token-shape fixture.
+  7. *Style*: `removedBefore` is a reduce over hunks; `pieces` and
+     `redactions` are inlined; the redactor is passed as one `read`
+     function instead of `env`; `rewriteDiff` keeps its cursor, with a
+     comment saying why (one walk, each line compared only with the next
+     one the hunks expect).
+  8. *`byLine` and lone line separators* (`scan.ts`): fixed. It matches
+     `[^\n]*` in place of `.`, so a lone `\r`, U+2028 or U+2029 inside an
+     environment value no longer leaves the value's tail. The shapes test
+     in `scan.test.ts` covers all three. Only the `shapes` reading uses
+     `byLine`.
+  9. *The tier fixed in code*: fixed by the optional `reading` input
+     (above), with a test.
+  - Nothing was sent to a model, no paid path ran, no workflow was
+    dispatched, no dependency was added, and no user-visible string
+    changed (D14).

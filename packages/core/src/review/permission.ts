@@ -7,8 +7,11 @@ import type { PermissionV1 } from "@vectordevai/core/v1/permission"
 const READ_ONLY_TOOLS = ["read", "grep", "glob", "list"]
 
 // The read tool asks with a path relative to the worktree, and Wildcard's `*` crosses `/`, so each directory has a
-// root form (`.git/*`) and a nested one (`*/.git/*`).
-const SECRET_FILES = [
+// root form (`.git/*`) and a nested one (`*/.git/*`). holdback.ts reads these lists to keep the same files out of the
+// model payload (VS-34); they are readonly so no importer can change what the read tool denies.
+export const ENV_FILES = ["*.env", "*.env.*"] as const
+
+export const SECRET_FILES = [
   "*.pem",
   "*.key",
   "*.p12",
@@ -19,7 +22,7 @@ const SECRET_FILES = [
   ".git/*",
   "*/.git/*",
   "*.npmrc",
-]
+] as const
 
 // Only for the opt-in local `--checks`: the project's test and typecheck commands, bare or with paths and test names,
 // but never with a flag, because flags such as `go test -exec`, `npm test --script-shell`, `cargo test --config`,
@@ -64,8 +67,7 @@ export function reviewPermissionRules(input: {
   return [
     rule("*", "*", "deny"),
     ...READ_ONLY_TOOLS.map((tool) => rule(tool, "*", "allow")),
-    rule("read", "*.env", "deny"),
-    rule("read", "*.env.*", "deny"),
+    ...ENV_FILES.map((pattern) => rule("read", pattern, "deny")),
     rule("read", "*.env.example", "allow"),
     ...SECRET_FILES.map((pattern) => rule("read", pattern, "deny")),
     // The MCP resource tools ask for read with `mcp:<server>:<uri>`, so the read allow would reach the user's MCP

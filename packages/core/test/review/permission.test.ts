@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { reviewPermissionRules } from "@vectordevai/core/review/permission"
+import { ENV_FILES, reviewPermissionRules, SECRET_FILES } from "@vectordevai/core/review/permission"
 import { Wildcard } from "@vectordevai/core/util/wildcard"
 import type { PermissionV1 } from "@vectordevai/core/v1/permission"
 
@@ -166,6 +166,36 @@ describe("reviewPermissionRules", () => {
     expect(evaluate("external_directory", "C:\\work\\files\\*", dirs)).toBe("allow")
     expect(evaluate("external_directory", "/opt/cache/*", dirs)).toBe("allow")
     expect(evaluate("external_directory", truncateGlob, dirs)).toBe("deny")
+  })
+
+  // holdback.ts reuses both lists (VS-34a). The deny list is written out here, not built from them, so a change to
+  // either fails this test.
+  test("exports ENV_FILES and SECRET_FILES, and the read rules they make are unchanged", () => {
+    const secretFiles = [
+      "*.pem",
+      "*.key",
+      "*.p12",
+      ".ssh/*",
+      "*/.ssh/*",
+      ".aws/*",
+      "*/.aws/*",
+      ".git/*",
+      "*/.git/*",
+      "*.npmrc",
+    ]
+    const envFiles: readonly string[] = ENV_FILES
+    const listed: readonly string[] = SECRET_FILES
+    expect(envFiles).toEqual(["*.env", "*.env.*"])
+    expect(listed).toEqual(secretFiles)
+    const read = (pattern: string, action: Rule["action"]): Rule => ({ permission: "read", pattern, action })
+    expect(plain.filter((rule) => rule.permission === "read")).toEqual([
+      read("*", "allow"),
+      read("*.env", "deny"),
+      read("*.env.*", "deny"),
+      read("*.env.example", "allow"),
+      ...secretFiles.map((pattern) => read(pattern, "deny")),
+      read("mcp:*", "deny"),
+    ])
   })
 
   test("starts with the deny and ends with StructuredOutput, so nothing can ask", () => {

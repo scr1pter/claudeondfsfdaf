@@ -26,7 +26,8 @@ import { DEFAULT_REVIEW_CONFIG, type ReviewConfig } from "@vectordevai/core/revi
 
 // The review pipeline's sources, from the repository root: both runners, the core code they share for planning,
 // packing, selection, anchoring and the prompts (whose length limits promptsDigest cannot see), the route rules
-// (VS-23a), and the review and security agents' own prompts. REVIEW_PIPELINE_SOURCES pins a digest of them.
+// (VS-23a), the payload holdback (VS-34a), and the review and security agents' own prompts. REVIEW_PIPELINE_SOURCES
+// pins a digest of them.
 const REVIEW_PIPELINE_FILES = [
   "packages/engine/src/review/run.ts",
   "packages/app/src/features/pull-requests/ai-review.ts",
@@ -37,6 +38,7 @@ const REVIEW_PIPELINE_FILES = [
   "packages/core/src/review/fingerprint.ts",
   "packages/core/src/review/prompt.ts",
   "packages/core/src/review/privacy.ts",
+  "packages/core/src/review/holdback.ts",
   "packages/engine/src/agent/prompt/review.txt",
   "packages/engine/src/agent/prompt/security.txt",
 ]
