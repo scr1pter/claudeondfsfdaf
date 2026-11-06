@@ -63,6 +63,12 @@ import {
   hasGeneratedHeader,
   parseGitAttributes,
 } from "@vectordevai/core/review/ignore"
+import {
+  estimateDispatch,
+  type DispatchEstimate,
+  type PassEstimate,
+  type Shrink,
+} from "@vectordevai/core/review/dispatch"
 import { VARIANT_KEYS, VARIANT_NAME } from "@vectordevai/core/review/eval"
 import { evidenceScope, type EvidenceScope } from "@vectordevai/core/review/model-evidence"
 import { estimateCostUsd, nextStepCostUsd, type ReviewPrice } from "@vectordevai/core/review/plan"
@@ -78,6 +84,7 @@ import { redactSecrets } from "@vectordevai/core/review/redact"
 import { nextState } from "@vectordevai/core/review/state"
 import {
   DEFAULT_REVIEW_CONFIG,
+  UNAPPLIED_REVIEW_KEYS,
   type CostKind,
   type ReviewConfig,
   type ReviewOutcome,
@@ -133,9 +140,11 @@ export interface ReplayInput {
   // maxCostUsd must be a positive cap, and it alone sets maxCostUsd, maxSteps and timeoutMinutes (the defaults where
   // it leaves the last two out). It never sets a variant's key (VARIANT_KEYS.engine): that goes in `variant`. Nor does
   // it set a route setting (SOURCED_REVIEW_KEYS: privacy, zdrAttested), which comes only from a trusted source through
-  // mergeReviewConfig once a runner enforces it (VS-23b). The type says so, and step 0b refuses either from an
-  // untyped caller.
-  config?: Partial<Omit<ReviewConfig, (typeof VARIANT_KEYS.engine)[number] | SourcedReviewKey>>
+  // mergeReviewConfig once a runner enforces it (VS-23b). Nor a key no runner applies yet (core UNAPPLIED_REVIEW_KEYS:
+  // VS-24's trivial and maxInputTokens). The type says so, and step 0b refuses any of them from an untyped caller.
+  config?: Partial<
+    Omit<ReviewConfig, (typeof VARIANT_KEYS.engine)[number] | SourcedReviewKey | (typeof UNAPPLIED_REVIEW_KEYS)[number]>
+  >
   // The pipeline variant the eval admitted the replay for (admitReplay), applied over the base's settings and `config`.
   // Absent for the frozen pipeline.
   variant?: Omit<VariantRecord, "applied">
@@ -184,11 +193,12 @@ export interface VariantRecord {
 // before VS-21a. Read it with replayVariant (script/vectorscope-eval/replay.ts), which names both.
 export type ReplayVariant = VariantRecord | { verifyPolicy?: ReviewConfig["verifyPolicy"]; applied?: boolean }
 
-// One step of VS-24's pre-dispatch shrink, in the order it ran, with the low estimate after it. VS-24 owns this shape
-// and aligns it with core dispatch.ts's DispatchEstimate when that lands; nothing writes it before then.
+// One step of VS-24's pre-dispatch shrink, in the order it ran: the lever core dispatch.ts's decideDispatch named, and
+// the estimate after it, which holds both the legacy range the gate decides on and VS-40's v2 beside it, per pass.
+// Nothing writes it before VS-24 wiring.
 export interface ShrinkStep {
-  step: string
-  estimate: { lowTokens: number; lowUsd?: number }
+  step: Shrink
+  estimate: DispatchEstimate
 }
 
 export interface PlacedRecord {
@@ -250,7 +260,9 @@ export interface ReplayArtifact {
     cacheRead?: number
     cacheWrite?: number
   }[]
-  // VS-24's pre-dispatch shrink steps, in order. Absent until VS-24.
+  // VS-24's first pre-dispatch estimate, before any shrink, then its shrink steps, in order. Both absent until VS-24
+  // wiring.
+  dispatch?: DispatchEstimate
   shrink?: ShrinkStep[]
   attempts: AttemptRecord[]
   tools: { pass?: Pass; tool: string; status: string; input: Record<string, string | number | boolean> }[]
@@ -324,6 +336,10 @@ export interface ProjectedPass {
   requests: ProjectedRequest[]
   promptTokens?: number // its first request's tokens
   usd?: { low: number; high: number } // estimateCostUsd({ promptTokens, maxSteps, price }), with its model's price
+  // VS-40's estimate v2 of the same first request (core dispatch.ts estimateDispatch), with its model's price. The
+  // projection cannot see whether the route caches, so it assumes what the legacy low band does: a price that lists a
+  // cache read is a caching route.
+  v2?: PassEstimate["v2"]
   lifted?: ProjectedOverCap // its first decision the dollar cap refused and the projection ran
   unsent: number // admitted attempts in its sessions that no request carried
   unadmitted: number // requests in its sessions that no admitted attempt accounts for
@@ -585,8 +601,12 @@ const replayWith = Effect.fn("ReviewEval.replay")(function* (input: ReplayInput,
   const variant = input.variant
   const policy = variant?.keys.verifyPolicy
   const parsed = parseReviewConfig({ json, env: policy ? { REVIEW_VERIFY_POLICY: policy } : {}, trigger })
+  // Keys config.ts parses and no runner applies yet (UNAPPLIED_REVIEW_KEYS) are dropped, so a base review.json that sets
+  // one is replayed, and recorded, without it. Its "not applied" warning stays in the artifact's warnings.
+  const applied: ReviewConfig = { ...parsed.config }
+  UNAPPLIED_REVIEW_KEYS.forEach((key) => delete applied[key])
   const config: ReviewConfig = {
-    ...parsed.config,
+    ...applied,
     ...input.config,
     ...variant?.keys,
     maxCostUsd: cap,
@@ -1033,7 +1053,19 @@ function projectionOf(input: {
       requests,
       ...(first ? { promptTokens: first.tokens } : {}),
       ...(first && price
-        ? { usd: estimateCostUsd({ promptTokens: first.tokens, maxSteps: event.maxSteps, price }) }
+        ? {
+            usd: estimateCostUsd({ promptTokens: first.tokens, maxSteps: event.maxSteps, price }),
+            v2: estimateDispatch([
+              {
+                pass: event.pass,
+                model: event.model,
+                promptTokens: first.tokens,
+                maxSteps: event.maxSteps,
+                price,
+                cached: price.cacheRead !== undefined,
+              },
+            ]).passes[0]?.v2,
+          }
         : {}),
       ...(decision ? { lifted: decision } : {}),
       unsent: paired.reduce((total, entry) => total + entry.unsent, 0),
@@ -1122,6 +1154,9 @@ function variantProblem(input: ReplayInput) {
   const sourced = SOURCED_REVIEW_KEYS.filter((key) => input.config && Object.hasOwn(input.config, key))
   if (sourced.length)
     return `config sets ${sourced.join(", ")}, a route setting a replay cannot apply: route settings come only from trusted settings once a runner enforces them.`
+  const unwired = UNAPPLIED_REVIEW_KEYS.filter((key) => input.config && Object.hasOwn(input.config, key))
+  if (unwired.length)
+    return `config sets ${unwired.join(", ")}, which no runner applies yet (VS-24 wiring), so the artifact would record a setting the run did not have.`
   const variant = input.variant
   if (!variant) return undefined
   if (!variant.name.startsWith("engine:") || !VARIANT_NAME.test(variant.name))

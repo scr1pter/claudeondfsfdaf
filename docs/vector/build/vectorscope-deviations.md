@@ -4578,3 +4578,629 @@ findings, below). Nothing is committed.
   - Nothing was sent to a model, no paid path ran, no workflow was
     dispatched, no dependency was added, and no user-visible string
     changed (D14).
+
+## 2026-11-06 · VS-24c Trivial classifier and pre-dispatch estimate (core)
+
+Contract §1.2 `trivial.ts` and `dispatch.ts`, §4 VS-24 items 1, 2 and the
+core half of item 4; addendum A VS-40 items 1 and 2 and §3 VS-24
+"Estimator"; the Now window of contract §5 and addendum §4. Built at
+`8f38f824`. VS-24 is a proposal pending Q15, and VS-40 one pending Q18, so
+nothing calls the new code: no runner reads either new key, and
+`classifyTrivial`, `estimateDispatch`, `decideDispatch`, `shrinkStepCap`,
+`cacheReadShare` and `remainingUsd` have no caller. `run.ts`,
+`ai-review.ts`, `provider.ts`, `session/llm.ts`, `posting.ts`, `format.ts`,
+`prompt.ts`, `schema.ts`, `select.ts`, `state.ts`, `verdict.ts`,
+`workflow.ts`, `command.ts`, `cli/cmd/github.*`, `cli/cmd/review.ts`,
+`github-*.ts`, `vectorscope.astro` and `script/vectorscope-eval/*` are
+untouched. No dependency was added (minimatch is already a core
+dependency), so there was no `bun install`, generator run or SDK
+regeneration (no protocol or global-config change). It implements the
+VS-24c plan as corrected by its critique: all fourteen critique points were
+taken, three of them in a different or stronger form (below). Nothing is
+committed.
+
+- **What landed.**
+  - **`packages/core/src/review/plan.ts`** (pinned).
+    - `OUTPUT_PER_STEP` is exported (contract §3), still 600.
+    - New `EstimateBand`, `estimateBands(maxSteps)` (today's band rule:
+      low S = min(5, cap) at R 2,000, high S = cap at R 4,000) and
+      `passInputTokens(P, band)` = S·P + R·S(S−1)/2.
+    - `estimateCostUsd` gains VS-40's optional `cacheReadShare`,
+      `writePrice` and `outputPerStep`. With none of them the result is
+      bit-identical to `8f38f824`: the legacy low band keeps its (S−1)·P
+      cache-read rule, the legacy high band keeps no cache-read term at all
+      (so its floating-point sum is the same), and `price.input` and 600
+      stay the defaults. A share applies only when the price lists a cache
+      read; a share that is not a number reads as 0. `nextStepCostUsd`,
+      `diffBudgetChars` and the verify policy are unchanged.
+  - **New `packages/core/src/review/dispatch.ts`** (pinned; imports `./plan`
+    and a type from `./types`).
+    - `PassPlan` (`pass`, `model`, `promptTokens`, `maxSteps`, `price?`,
+      `cached?`), `PassEstimate`, `DispatchEstimate`, `Range`,
+      `DispatchLimit`, `DispatchDecision`, `Shrink`, `SHRINK_ORDER`
+      (lenses, cards, steps:verify, steps:security, steps:review,
+      dependents, diff), `STEP_CAP_FRACTION` (0.5),
+      `CALIBRATED_OUTPUT_PER_STEP` (`{ tokens: 1_800, fitted: "2026-09-14",
+      cases: 1 }`).
+    - `estimateDispatch(passes)`: per pass, input tokens per band, output
+      tokens (S·600), the legacy `usd` from `estimateCostUsd`, the first
+      turn's admission figure `firstStepUsd` = `nextStepCostUsd(P +
+      NEXT_STEP_SLACK)` (what `run.ts`'s `ask` reserves), and `v2`: h(S)
+      per band, output at S·1,800, and dollars from the same
+      `estimateCostUsd` with VS-40's inputs (I-10). Sums: first-turn
+      tokens over every pass (free, plan and local included), dollars over
+      priced passes only, `unpriced` naming the rest.
+    - `decideDispatch(estimate, { maxInputTokens, remainingUsd?,
+      available? })`: over `input-tokens` when the cap is above 0 (or NaN)
+      and first-turn tokens are not at or under it; over `usd` when a
+      remainder is given, a pass is priced, and the legacy LOW estimate is
+      not at or under it. It never reads the high band or v2. When over, it
+      names the first available lever in `SHRINK_ORDER` that can lower a
+      limit that is over, and lists the levers it passed over as
+      `ineffective`; with none left it stops with `budget-estimate`.
+    - `shrinkStepCap(passes, pass, fraction?)`: Math.floor(cap · fraction),
+      at least 1, never above the current cap; a fraction that is not a
+      positive number, or above 1, leaves the cap; input not mutated.
+    - `cacheReadShare(P, band)` = 1 − (P + (S−1)R) / (S·P + R·S(S−1)/2)
+      [G3-6], 0 for one step or a non-positive or non-finite input.
+    - `remainingUsd(config, spent?)` (VS-40 item 3, pure), `spent` being
+      `{ trigger, prUsd?, monthUsd? }`: the smallest of `maxCostUsd`, the
+      per-PR cap less `spent.prUsd` (automatic reviews only, as in
+      `decideSkip`), and the month cap less `spent.monthUsd` (every
+      trigger); caps of 0 (none) and spends not passed are left out, so
+      without `spent` it is `maxCostUsd`; a spend that is not a number of
+      at least 0 leaves nothing of its cap; undefined when no cap applies.
+  - **New `packages/core/src/review/trivial.ts`** (pinned; imports
+    minimatch, `./diff`'s types, `./ignore`'s
+    `classifyPath`, `hasGeneratedHeader`, `isBinaryPath`,
+    `isSensitivePath` and `LOCKFILES`).
+    - `TRIVIAL_KINDS`, `TRIVIAL_REFUSALS` (46 codes), `SourceRange`,
+      `CommentRange`, `TrivialDecision`, `TrivialInput`, and
+      `classifyTrivial(files, input)`.
+    - Rules, files in input order, first refusal wins: per path (new and
+      old) hidden or control characters, then sensitive
+      (`isSensitivePath`, which always applies, or the caller's
+      `sensitive`), any dot segment, CI, container, infrastructure,
+      dependencies (Q11), build, config, SQL, migration, binary, no
+      extension; then per file the patch must hold every counted line, no
+      hunk line, context included, may be longer than 2,000 characters
+      (`long-line`, before any pattern reads a line), no changed line may
+      hold a hidden or control character, and no hunk line may be a
+      submodule pointer or a generated-code marker; then
+      docs (`.md`, `.rst`, `.adoc` only), other doc-like extensions
+      (refused), added or deleted code (refused), renames, a modified file
+      with no hunk (refused), and the whitespace and comment rules hunk by
+      hunk. A hunk whose two sides hold the same lines once trailing
+      spaces and tabs are stripped and blank lines dropped (leading
+      whitespace kept, context lines included) is a whitespace hunk; any
+      other is read as a comment hunk.
+  - **`packages/core/src/review/types.ts`**: `ReviewConfig.trivial?:
+    "review" | "skip"` (`:255`) and `maxInputTokens?: number` (`:281`),
+    both left out of `DEFAULT_REVIEW_CONFIG`; new
+    `OPTIONAL_REVIEW_DEFAULTS = { trivial: "review", maxInputTokens: 0 }`
+    (`:324`), its widened view `OPTIONAL_REVIEW_DEFAULT_OF` (`:330`) that
+    `config.ts` and `model-evidence.ts` share, and `UNAPPLIED_REVIEW_KEYS =
+    ["trivial", "maxInputTokens"]` (`:336`), the parsed keys no runner
+    applies yet, typed as a subset of the optional keys. The file stays
+    import-free.
+  - **`packages/core/src/review/config.ts`**: `FIELDS` gains `trivial`
+    (`:171`) and `maxInputTokens` (`:186`, an integer of at least 0);
+    `ENV` gains `REVIEW_TRIVIAL` and `REVIEW_MAX_INPUT_TOKENS`; a bad value's
+    warning names the default for an absent optional key (`using
+    "review"`, `using 0`), and every existing warning keeps its text
+    (`model` still reads `using undefined`); `settle` adds the
+    "not applied" warnings (critique 8, below) from a record keyed by
+    `UNAPPLIED_REVIEW_KEYS`, so a key cannot join or leave that list
+    without its warning. Neither is a sourced key.
+  - **`packages/core/src/review/skip.ts`**: `SkipReason` gains `"trivial"`
+    (`:24`), types only. `decideSkip` never returns it; `skipNote`
+    (`github.review.ts:433-468`) is non-exhaustive and `verdict.ts`
+    already classifies it as `policy-skip`.
+  - **`packages/core/src/review/model-evidence.ts`**: `trivial` joins
+    `EVIDENCE_POLICY_KEYS` (`:70`); `policyDigest` (`:274`) is
+    default-stable: a key with an `OPTIONAL_REVIEW_DEFAULTS` entry counts
+    only when set to another value, and every other key counts as before.
+    A key in `UNAPPLIED_REVIEW_KEYS` reads as absent whatever its value,
+    so before VS-24 wiring `trivial` never moves the digest.
+    `REVIEW_PIPELINE_SOURCES` `7addfcd0033ba579` → `a3cb5477a0a829b7`.
+  - **`packages/engine/src/review/eval.ts`** (eval code, not a held-back
+    runner).
+    - `ShrinkStep` (`:199`) is `{ step: Shrink; estimate: DispatchEstimate
+      }`, so each step records both estimates per pass. New
+      `ReplayArtifact.dispatch?: DispatchEstimate` (`:265`), the first
+      estimate before any shrink. Nothing writes either before VS-24
+      wiring.
+    - Core's `UNAPPLIED_REVIEW_KEYS`: `ReplayInput.config`'s type leaves
+      out `trivial` and `maxInputTokens`, and `variantProblem` refuses
+      either from an untyped caller (`:1157`). A base review.json that sets
+      either is replayed and recorded without it: each listed key is
+      deleted from a copy of the parsed config (`:607`).
+    - `ProjectedPass.v2?` (`:342`, filled at `:1059`): VS-40's v2 of each
+      pass's first request beside the legacy `usd` (critique 13).
+  - **Tests**: new core `test/review/trivial.test.ts` and
+    `test/review/dispatch.test.ts`; additions to core `plan.test.ts`,
+    `config.test.ts`, `skip.test.ts`, `model-evidence.test.ts` and engine
+    `test/review/eval.test.ts`.
+- **Critique points.**
+  1. *Docs that code loads* (blocker): taken. `CONTEXT.md`, `BRAIN.md`,
+     `MEMORY.md` and `RULES.md` join the agent-instruction basenames (the
+     engine's instruction loader reads the first three). Every docs path,
+     not only renamed and deleted ones, needs the new
+     `referencedByCode(path)` callback: absent gives
+     `references-unchecked`, true gives `referenced-by-code`. Renamed and
+     deleted docs also need `referencesOldPath`. Fixtures:
+     `packages/core/src/plugin/skill/customize-vector.md` (imported as a
+     skill prompt by `skill.ts:9`) and a README that `include_str!` loads.
+     Wiring must pass the engine config's `instructions` globs through
+     `sensitive` (deferred list).
+  2. *Line terminators* (blocker): taken in a stronger form. A new
+     `control-characters` refusal covers every control character but the
+     tab (a lone `\r`, `\v`, `\f`, ESC, DEL, the C1 range with NEL) and
+     U+2028 and U+2029, in changed lines and in paths, for every file,
+     not only code files. The invisible set gains U+061C, U+00AD, U+180E,
+     U+3164, U+FFA0, U+115F and U+1160 as asked, plus U+034F, U+17B4,
+     U+17B5, the variation selectors and Unicode tags (U+E0000-E007F,
+     U+E0100-E01EF), which carry invisible prompt text. It is a code-point
+     range table rather than a regex class, since the class needed
+     combining characters (oxlint `no-misleading-character-class`). Fixtures
+     for each terminator in a `.ts` and a `.java` comment; a CRLF line
+     ending (the trailing `\r` the parser drops) still reads as a comment
+     change.
+  3. *Generated-code markers* (major): taken. `ignore.ts`'s
+     `hasGeneratedHeader` is called on each hunk line (refusal
+     `generated-marker`, every file kind) and on each line of every comment
+     range a changed line touches (`directive`), so `GENERATED_HEADER`
+     stays private and no pattern is copied. Go's `//export`, `//extern`,
+     `//sys` and `//sysnb` join the Go extras. Fixtures add and remove `//
+     @generated` and `// Code generated by gen. DO NOT EDIT.` in a `.ts`
+     and a `.go` file.
+  4. *Docusaurus reads `.md` as MDX* (major): taken. In `.md` a hunk line
+     with an `import`/`export` statement, a capitalised JSX tag, or a brace
+     outside inline code is `doc-code`, and the whole-file state (5)
+     treats an ESM, expression or component line as a run to the next
+     blank line. Fixture: `docs/intro.md` with an import and `<Button
+     onClick>`, and a `{props.name}` expression.
+  5. *State outside the hunk* (major): taken, not deferred. New
+     `docText(path, side)` callback; without it, or when it returns
+     undefined, a doc with changed lines is `doc-code-unchecked`. Every hunk
+     line must equal the text's own line (`doc-text-mismatch` otherwise),
+     and no changed line may fall inside front matter, a fenced or
+     delimited block, an indented block (4 spaces or a tab in Markdown, any
+     indentation in reStructuredText and AsciiDoc), a doctest run (from
+     `>>>` or `iex>` to the next blank line), an MDX run, an HTML comment
+     or a raw `script`/`style`/`iframe`/`object`/`embed`/`form`/`svg`/
+     `math`/`template` block, or reStructuredText and AsciiDoc directives,
+     fields, block attributes, macros and line comments. One fixture per
+     case: a fence, long front matter, an indented block, doctest output 5
+     lines below its prompt, a multi-line HTML comment, an rst literal
+     block, an AsciiDoc listing block and an MDX expression, each with its
+     opening line outside the hunk.
+  6. *Patch completeness* (major): taken for every kind. When the hunks'
+     added and deleted lines do not equal `file.additions` and
+     `file.deletions`, the file is `patch-incomplete`, before any kind
+     rule. Fixture: a patchless README with 40 additions. A GitHub rename
+     whose patch was omitted now reads `patch-incomplete`; the plan had
+     `rename-with-changes` for it, which a rename with a patch still gets.
+  7. *Go and Rust comment-borne tests* (major): taken. On the whitespace
+     path `.go` and `.rs` need comment ranges too. A hunk line, context
+     included, inside a Rust doc-comment range (`///`, `//!`, `/**`,
+     `/*!`) is `directive`, and so is a hunk line inside any comment range
+     of a Go `_test.go` file. On the comment path every comment change in
+     a Go `_test.go` file is `directive`. Fixtures: a trailing space 5 lines
+     below `// Output:`, outside its hunk, and a `///` doctest string.
+  8. *Parsing before enforcing* (major): taken in the first form; the
+     precedent's fallback (no parsing) is not used, since the brief asks
+     for the keys parsed.
+     - When a value would change a review, `settle` adds `"trivial":
+       "skip" is not applied yet: every change is still reviewed.` or
+       `"maxInputTokens" is not applied yet: no input-token cap is
+       enforced.` Their defaults written out, or the keys unset, warn about
+       nothing (tested), so with nothing set the parse is byte-identical.
+     - The replay records a base review.json's keys as unapplied: both are
+       left out of the run's config, so `config.value`, `config.digest` and
+       `scope.policy` carry neither, and the parser's warnings stay in
+       `config.warnings` (tested). `input.config` refuses them as planned.
+     - No runner's scope moves for `trivial: "skip"` before wiring:
+       `policyDigest` reads every key in `UNAPPLIED_REVIEW_KEYS` as absent,
+       so the engine, desktop and GitHub scopes claim the full review they
+       ran, and `modelEvidence: "warn"` gives no spurious no-certificate
+       note. (The first version let the digest move and accepted it as
+       fail-to-match only; review finding 11 changed that, below.) The
+       warning says the key is not applied.
+  9. *Levers that cannot act* (major): taken. `decideDispatch` names a
+     lever only when it can lower a limit that is over: a step cap never
+     lowers first-turn tokens, and lowers the low dollars only when
+     `estimateDispatch(shrinkStepCap(...))` gives a lower low estimate,
+     which needs a cap below 10 (S_low = min(5, cap)). Lenses, cards,
+     dependents and diff trim shorten prompts, so they count whenever the
+     caller lists them. Passed-over levers come back as `ineffective`, for
+     the notes. The walk tests show the default caps skipping all three
+     step-cap levers, and caps of 8 using each in VS-40's order.
+     **Contract tension for the owner (not decided):** VS-40 puts step caps
+     before dependents and diff trim, but at the default caps no step-cap
+     shrink can change the gate's decision, so with lenses, cards and
+     dependents unwired at VS-24 wiring, diff trim is the only lever that
+     can act until a calibrated S replaces the fixed 5. The step-cap shrink
+     still lowers the high estimate and the real step ceiling; whether it
+     should fire anyway (for the ceiling) is the wiring package's and the
+     owner's call, under VS-40's kill criterion on lost verified findings.
+  10. *`remainingUsd` semantics* (minor): taken. `dispatch.ts`'s header
+      states that undefined means no dollar check and that a ReviewConfig
+      cap of 0 means none, and the pure `remainingUsd(config, spent?)`
+      drops those zero caps, with VS-40's tests (prior spend included,
+      `maxCostUsd` without `spent`, 0 means none, an uncapped review goes).
+      `RunInput.spent` stays deferred.
+  11. *Range semantics* (minor): taken. A string range runs from the line
+      its literal opens on to the line its closing delimiter is on, and a
+      changed line n is inside when start ≤ n < end, so a one-line string
+      covers no line. A comment range is inclusive and carries its text one
+      line per source line. Both are in the type comments; malformed ranges
+      (not whole positive lines, an end before the start, or comment text
+      with the wrong line count) read as missing. Boundary fixtures cover a
+      literal's opening line (refused), its closing line (allowed), a
+      one-line string (allowed), and the last line of a block comment
+      (inside).
+  12. *Submodules, symlinks, routing directories* (minor): taken. A hunk
+      line starting `Subproject commit ` is `submodule`. The routing globs
+      gain `netlify`, `functions`, `plugins`, `middleware`, `server`,
+      `commands` (Django `management/commands`, oclif) and, beyond the
+      critique, `locales` and `i18n`. Symlinks are a residual (below), and
+      `TrivialInput.sensitive`'s comment says wiring passes symlink,
+      submodule and executable modes through it.
+  13. *v2 in projections* (minor): taken. `ProjectedPass.v2` holds
+      `estimateDispatch`'s v2 for the pass's first request. The projection
+      cannot see whether a route caches, so it takes the legacy low band's
+      own assumption: a price that lists a cache read is a caching route.
+      The engine projection test pins it against `estimateDispatch`. The
+      report summary of v2 waits for the VS-21c report fields (VS-40 item
+      5), since `script/vectorscope-eval` is untouched.
+  14. *Prompt injection through skipped text* (minor): recorded, not
+      decided (residuals, below).
+- **Signature deviations from contract §1.2.**
+  - `TrivialDecision.because` is the `TrivialRefusal` union, not `string`,
+    and a refusal carries `path`, the first refusing file (absent only for
+    `empty`).
+  - `TrivialInput` gains `strings` (the contract's "outside string
+    literals (by parser tokens)" needs them, and no signature carried
+    them), `docText` (critique 5) and `referencedByCode` (critique 1).
+    `sensitive` only adds to `isSensitivePath`.
+  - `PassPlan` gains `cached`. `DispatchEstimate.outputTokens` is a `Range`
+    (the low dollars use min(5, cap) steps of output), and it gains
+    `passes`, `unpriced`, `firstStepUsd` and `v2`.
+  - `DispatchDecision`'s `shrink: true` is the `Shrink` to apply, and both
+    refusals carry `over` and `ineffective`. `decideDispatch`'s limits gain
+    `available`.
+  - New exports: `estimateBands`, `passInputTokens`, `EstimateBand`,
+    `cacheReadShare`, `shrinkStepCap`, `remainingUsd`, `SHRINK_ORDER`,
+    `STEP_CAP_FRACTION`, `CALIBRATED_OUTPUT_PER_STEP`, `TRIVIAL_KINDS`,
+    `TRIVIAL_REFUSALS`, `OPTIONAL_REVIEW_DEFAULTS`.
+- **Rules stricter than contract VS-24 item 1, with their reasons.**
+  - Every dot segment, not only `.github/**` and `.vector/**`: `.gitlab-ci.yml`,
+    `.husky`, `.devcontainer`, `.env*`, `.npmrc`, `.gitattributes`,
+    `.gitmodules`, `.editorconfig` and tool rc files change behaviour.
+  - Extensionless files (`Jenkinsfile`, `LICENSE`, scripts) are refused.
+  - Renames: docs, and in-place pure renames of TS/JS/Python files outside
+    test, routing and conventional names only. The contract's "a non-code
+    file" would pass `Makefile`, `BUILD`, `.gitignore` and assets served by
+    URL; Java public classes, Go packages, Rust's module tree, PHP PSR-4
+    and Rails autoloading tie a name to behaviour; Next.js, SvelteKit,
+    Remix and serverless functions route by file. A rename into a default
+    ignored path (`dist/`, `vendor/`, `*.generated.*`) is
+    `rename-into-ignored`, since every later change to the file would be
+    skipped unreviewed.
+  - The reference checks are required: an absent callback refuses.
+  - Docs: `doc-code` on hunk lines and over the whole text (4, 5), HTML
+    comments (hidden text and tool markers such as `prettier-ignore`),
+    `javascript:` links and `on*=` attributes, template tags.
+  - Whitespace only in VS-25a's grammar set minus Python (TS/JS family, Go,
+    Rust, Java); comments in that set plus Python. Shell, PHP, Ruby, CSS,
+    Vue and the rest are never whitespace- or comment-trivial.
+  - Every hunk needs an unchanged line before and after its change, except
+    at the ends of the file, for every language (the plan had a trailing
+    rule for Go only); a `-U0` diff is refused.
+  - A comment-only line must hold nothing but comment text, column for
+    column: the comment pieces that cover it must account for every
+    non-blank character (the plan's containment test). A blank changed line
+    passes only inside a comment.
+  - `comment-structure` compares, for every unchanged line of the file, the
+    comment text on it on both sides, which also catches a block closed
+    early in the middle of an unchanged line (the plan compared line
+    coverage only).
+  - The whitespace test compares the whole hunk side, context included, so
+    a line moved past an unchanged one is not whitespace.
+  - The directive list, plus language extras: Rust doc comments, JSDoc
+    types in JavaScript, Java unicode escapes, cgo markers and `import
+    "C"`, Go Example output and linker/syscall directives, licence and
+    copyright lines, bundler hints, lint and coverage suppressions,
+    encodings and shebangs.
+- **Estimate decisions.**
+  - The gate decides on the legacy low estimate and first-turn tokens;
+    first-turn tokens are summed over the planned passes (the contract
+    says neither sum nor max; `PassEstimate.promptTokens` keeps each pass's
+    value so wiring can change it).
+  - v2 is recorded and never decides (tested: an uncached v2 low of $0.789
+    is over the pilot's $0.75 while the legacy low of $0.372 goes). It
+    prices a cache-read share only for passes the caller marks `cached`
+    whose price lists a cache read, and the rest at the catalog's
+    `cacheWrite` (else input) on a caching route.
+  - At the default caps (review 30, security 20, verify 10) on a small
+    review (5,300, 5,300 and 3,000 prompt tokens, Sonnet-like prices) the
+    legacy range is $0.372 to $9.465 and the input tokens 128,000 to
+    2,975,000 (growth alone 2,680,000): a high-estimate gate would fire at
+    both the $2 default and the pilot's $0.75, and the low one fires at
+    neither (tested).
+  - `CALIBRATED_OUTPUT_PER_STEP` is 1,800, fitted 2026-09-14 on one case.
+- **Config and evidence.**
+  - Parsed through `FIELDS` and `ENV` per the brief, which differs from the
+    VS-23a and VS-32a precedent of leaving new keys unparsed until
+    enforced. Critique 8's warnings and replay handling make that honest.
+  - `trivial` is a policy key with a default-stable digest:
+    `policyDigest(DEFAULT_REVIEW_CONFIG)` stays `70512122f41ec160`
+    (printed at `8f38f824`, pinned in a test). Until a runner applies it,
+    no value of it moves the digest (`"skip"`, `"review"` or absent), nor
+    does any `maxInputTokens`; once VS-24 wiring takes it off
+    `UNAPPLIED_REVIEW_KEYS`, `"skip"` moves it and `"review"` and absent do
+    not. `maxInputTokens` is a budget, not a policy key (contract §1.1).
+    `promptsDigest` and `EvidenceScope` are unchanged.
+  - `trivial.ts` and `dispatch.ts` join `REVIEW_PIPELINE_FILES`, and
+    `REVIEW_PIPELINE_SOURCES` moves `7addfcd0033ba579` → `a3cb5477a0a829b7`.
+    `REVIEW_PIPELINE_REVISION` stays 1: no runner reads either new module,
+    and `plan.ts`'s defaults are bit-identical (pinned), so no review finds
+    or posts anything different (only VS-31 bumps it).
+- **§0.3 items.**
+  1. keys: `trivial` and `maxInputTokens`, off by default, parsed, applied
+     by no runner;
+  2. parity: with both unset, `parseReviewConfig()` returns the same config
+     and no warning (tested), `estimateCostUsd` returns bit-identical
+     numbers (so `run.ts:749-751`, `ai-review.ts`, `github.review.ts:459`
+     and the projection compute the same), and the runner suites pass
+     unchanged;
+  3. evidence: above;
+  4. variant: `engine:trivial-skip` stays pending "VS-24 wiring" and
+     `VARIANT_KEYS` is unchanged; the replay refuses a variant setting
+     `trivial` (tested). VS-40 has no variant (addendum §1a);
+  5. desktop: a documented difference until wiring. `classifyTrivial` and
+     the token estimate arrive with VS-24 wiring in `ai-review.ts`; the
+     desktop has no dollar cap (`ai-review.ts:110`), so `remainingUsd` does
+     not apply there until VS-10 and Q32; its eval adapter writes
+     `variant.applied: false`;
+  6. this entry.
+- **Owner questions: none decided.** Q11 (manifests and lockfiles stay
+  never-trivial, the stricter answer [GU22]), Q13 (no wiring), Q15 and Q18
+  (proposals; only uncalled code), Q32 (no desktop cap), Q9 (other step-cap
+  fractions only in projections or the funded ablation); Q3 is unaffected.
+  The step-cap ordering tension (critique 9) and the prompt-injection
+  residual are raised for the owner.
+- **Deferred to the runner-wiring window or later.**
+  - `Review.run`'s trivial skip, its zero-attempt outcome, note and the
+    `trivial` outcome marker `verdict.ts` reads; `RunInput.forceFull`;
+    `ReviewOutcome.partial` and `Stop` gaining `budget-estimate`;
+    `format.ts` notes and "Not reviewed"; CLI `review.ts`; the `ai-review.ts`
+    half; the GitHub trivial skip through `decideSkip` after the @vector
+    merge.
+  - The pre-dispatch check before the specialists fan out
+    (`run.ts:689-695`), the shrink loop and its levers (diff trim now;
+    lenses, cards and dependents with VS-28, VS-26 and VS-25), the verify
+    `PassPlan` bounded at max(4, 2 · maxComments), first-prompt token
+    counts (chars / 3.5, or the serving provider's count on an allowed
+    route, C-12), and writing `artifact.dispatch` and `artifact.shrink`.
+  - The callbacks' providers: `referencesOldPath` and `referencedByCode`
+    (`git grep` of the head tree-ish), `docText` (`ReviewSource.show` at
+    base and head), `comments` and `strings` (VS-25a), and `sensitive`
+    fed with the engine config's `instructions` globs, the repository's
+    ignore globs and linguist attributes, and symlink, submodule and
+    executable modes, none of which `DiffFile` carries.
+  - Flipping `engine:trivial-skip` and `VARIANT_KEYS`; replaying trivial
+    controls with trigger `auto`; VS-24 item 5 (static-prefix pin, cache
+    shares, the fan-out variant).
+  - Addendum §3 VS-24 payload rules (byte cap, commit-message thinning,
+    1,024-character subject truncation, "not included" warnings).
+  - `RunInput.spent` and the GitHub prior-spend wiring (VS-40 item 3, after
+    `vector-at-mention`), the 5 s fan-out hold (item 4), the VS-21c report
+    fields including v2 in the report summary (item 5), re-review
+    budgeting (VS-41), the desktop cap (Q32), and making v2 the gate, only
+    if the pilot shows a median error at least 5 points lower.
+  - Recalibrating `estimateCostUsd` on replay data before the check leaves
+    opt-in.
+  - `script/vectorscope-eval/dataset.ts:64` keeps its own copy of
+    `TRIVIAL_KINDS` (identical); importing core's waits for an eval-script
+    package.
+- **Deferred verification.** Phase A (0 bug cases trivial, at least 80% of
+  trivial controls skipped at 0 tokens) needs wiring and a replay of the
+  curated controls (VS-22b); estimate error against settled cost needs the
+  D7 pilot. Parser-dependent rules are tested on a fixture lexer's ranges
+  only. The strict rules (reference checks on every doc, indented blocks,
+  any indentation in rst and adoc, every dot path) will lower the skip
+  rate; Phase A measures by how much.
+- **Residuals** (not caught today; none decided):
+  - symlinks: `DiffFile` carries no mode, so a `.md` symlink retargeted at
+    another file reads as a docs change (wiring passes modes through
+    `sensitive`); likewise a rename that also changes the mode;
+  - computed module or doc paths a `git grep` cannot see (dynamic imports
+    by template, `require` of a built name, a doc read by a joined path);
+  - added or removed comment and blank lines shift line numbers seen by
+    line-sensitive tests and stack traces;
+  - **prompt injection through skipped text:** a comment-only or docs-only
+    skip lets text that later reviews read as context (comments, README,
+    docs) reach the base unreviewed, including text aimed at later
+    reviews. The contract allows these skips; the HTML-comment, hidden and
+    tag-character refusals narrow it, but plain visible prose is not
+    checked. For Q11- and Q18-adjacent owner review.
+- **Review fixes (2026-11-06, round one).** Thirteen findings, three of
+  them blocking; all taken, four in a different form (below). Nothing is
+  committed.
+  1. *A comment line after a backslash continuation* (blocking): taken.
+     `commentRefusal` refuses `line-continuation` when any hunk line ends
+     in a backslash once trailing spaces and tabs are dropped, right after
+     `hasContext`, as the whitespace path already did. Fixture: the
+     review's Python probe (a `# two` line inserted after `x = 1 + \`),
+     which `ast.parse` rejects, now gives `line-continuation`.
+  2. *Comment changes that alter the build* (minor): taken, more widely.
+     `@deprecated` is in the global `DIRECTIVES`, not only Java's extras,
+     since TypeScript's `no-deprecated` lint rules fail on it too, and Go
+     gains `Deprecated:` (staticcheck SA1019). The cgo residual is closed
+     by the structural rule the review offered, not by a `hasCgo` fact: in
+     Go the line after each comment run that holds a changed line, or that
+     a changed blank line borders, must be in the hunk (where `directive`
+     sees an `import "C"`), else `hunk-context`. Run ends come from the
+     whole file's comment ranges. Fixtures: a plain-C preamble edited four
+     lines above `import "C"`, a blank line that splits a preamble, and the
+     cost case below.
+  3. *A self-default `maxSteps`* (minor): taken; `maxSteps: 31` now must
+     move the digest.
+  4. *A tautological runtime expect* (minor): taken; the `SkipReason` test
+     keeps the assignment and adds an `@ts-expect-error` for a misspelled
+     reason, so it tests only types.
+  5. *A coverage check fed by earlier tests* (minor): taken in the table
+     form. `EXAMPLES: Record<TrivialRefusal, () => TrivialDecision>` holds
+     one self-contained example per code, so a new code without one is a
+     type error, and the test runs alone (checked with
+     `--test-name-pattern`). The module-level `seen` set is gone.
+  6. *Style* (minor): taken. `docCodeLines` is a reduce over `{ close, run,
+     code }`; `mapBack` and its non-null assertion are gone (item 10's
+     mapper replaces it and `mapLine`); `types.ts` exports one widened view,
+     `OPTIONAL_REVIEW_DEFAULT_OF`, for `config.ts` and `model-evidence.ts`.
+  7. *The rename-to-drop destructure* (minor): taken in a different form.
+     `applied` is derived from the list by deleting each
+     `UNAPPLIED_REVIEW_KEYS` key from a copy of the parsed config, which
+     stays typed without a cast (`Object.fromEntries` would need one), and
+     the list moved to core so the engine, the parser and the digest share
+     it.
+  8. *Unbounded pattern work* (blocking): taken. New refusal `long-line`
+     (`MAX_LINE_CHARS` 2,000) for any hunk line, context included, checked
+     in `linesRefusal` before any pattern reads a line; `trimEnd` walks
+     back over spaces and tabs only (no other whitespace, as before)
+     instead of `/[ \t]+$/`; the tag rule is `/<\s*(?:\/\s*)?(script|...)\b/i`.
+     Beyond the finding, the event-handler rule reads each tag once
+     (`<letter` to its `>`, then `\son[a-z]+\s*=` inside it), since
+     `/<[a-z][^>]*\son.../` rescans the rest of the line from every `<`.
+     Lines outside the hunks (a doc's whole text, a comment range's other
+     lines) are not capped: every pattern that reads them is linear. Probe
+     on the new code (`/tmp/vector-vectorscope/vs24c-fix/bench/`, not
+     committed): a 1 MB line of spaces then `x` in a `.ts` hunk is refused
+     in 19 ms; a `.md` whose text outside the hunk holds 1 MB lines of
+     `<a` and `< ` classifies in 62 ms. Fixtures: the 2,000-character
+     boundary both ways, a 100,000-space changed line, a 50,000-space
+     context line and a 100,000-character `<a` doc line.
+  9. *A lane-rule violation in a fixture* (blocking): taken. The
+     free-model fixture is `vector/free-model`; a case-insensitive grep of
+     the diff and the new files for the forbidden name finds nothing.
+  10. *Quadratic comment structure* (minor): taken. Each side's comment
+      ranges are indexed once by line (`indexComments`: the pieces on each
+      line in source order, and each comment run's last line), and
+      `commentOnly`, the touched-range directive check (now deduplicated),
+      the Rust and Go test checks and `sameStructure` read the index.
+      `otherSide` maps lines in either direction by bisecting the hunks'
+      spans and reading their lines from a map, and string ranges are a
+      sorted list with running maximum ends, read by bisection. A `.ts`
+      file of 120,000 lines with 60,000 one-line comments and 3,000 comment
+      hunks classifies in 257 ms. The optional range-count cap is not
+      taken: with the index the work is linear in the comment text the
+      provider returns, which VS-25a bounds by the file.
+  11. *A scope that claims an unapplied policy* (minor): taken.
+      `policyDigest` reads every `UNAPPLIED_REVIEW_KEYS` key as absent, so
+      no value of `trivial` moves any runner's scope before wiring (critique
+      8's third bullet is rewritten above). Its default-stable branch is
+      still exercised: the unapplied key reaches it as absent, and dropping
+      the absent case breaks the pinned `70512122f41ec160`.
+  12. *Per-PR spend on a command review* (minor): taken. `spent` carries
+      the trigger, and the per-PR term applies only to `auto`, as in
+      `decideSkip`; the month cap applies to every trigger. Tests: a
+      `command`, `local` or `desktop` review past the per-PR cap keeps
+      `maxCostUsd` and goes, and an automatic one stops with
+      `budget-estimate`.
+  13. *Denylist gaps* (minor): taken, each with a fixture:
+      `//lint:ignore` and `//lint:file-ignore`, `pytype:`, `rome-ignore`;
+      `AGENTS.*.md` (`AGENTS.override.md`), `WARP.md`, `QWEN.md`.
+  - **What the fixes cost the skip rate** (for Phase A to measure, none
+    decided): a Markdown paragraph written on one line longer than 2,000
+    characters is refused; a Go comment change more than the diff's
+    context above the end of its comment run is refused (tested: the first
+    line of a five-line doc comment), whether or not the file uses cgo; a
+    backslash at the end of any hunk line refuses a comment hunk, near the
+    change or not; `@deprecated` refuses a comment hunk in every language.
+  - Mutation check of the fixes: 22 mutations, each restored byte for byte
+    (`cmp`); 21 broke at least one test: the comment-path continuation
+    guard, the long-line check, the Go preamble check on each path, its
+    run lookup and its blank-neighbour lookup, `@deprecated`, Go
+    `Deprecated:`, `lint:ignore`, `pytype:`, `rome-ignore`, `WARP.md`, the
+    event-handler rule, the mapper's offset after a hunk, its in-hunk
+    lookup, a string range's end read as inclusive, a doc line marked one
+    off, a doc block that never closes and a doctest run a blank line does
+    not end (these two survived at first and broke once new positive
+    fixtures were added: prose after a closed fence, after a closed HTML
+    comment and after a doctest's blank line), the unapplied key counted
+    in the digest (two tests) and an absent optional key counted. One
+    survives by design: counting an optional key set to its own default,
+    which no applied policy key can show until VS-24 wiring takes
+    `trivial` off `UNAPPLIED_REVIEW_KEYS`; the wiring package's digest test
+    (`"review"` equal to absent) covers it then.
+- **Evidence.** Each file ran alone through the lock with `--timeout
+  30000`, `GITHUB_ACTIONS=false`, and `TMPDIR` and XDG roots under
+  `/tmp/vector-vectorscope/vs24c/`:
+  (the review fixes under `/tmp/vector-vectorscope/vs24c-fix/`; counts are
+  after them)
+
+  | Where | File | Pass |
+  |---|---|---|
+  | core | `test/review/trivial.test.ts` | 44 (new; 275 expects) |
+  | core | `test/review/dispatch.test.ts` | 22 (new) |
+  | core | `test/review/plan.test.ts` | 21 (3 added) |
+  | core | `test/review/config.test.ts` | 41 (6 added) |
+  | core | `test/review/skip.test.ts` | 12 (1 added) |
+  | core | `test/review/model-evidence.test.ts` | 18 (1 added; pin updated) |
+  | core | `verdict`, `pipeline`, `ignore`, `diff`, `format`, `state`, `eval` | 44, 2, 13, 45, 46, 42, 42 (unchanged) |
+  | engine | `test/review/eval.test.ts` | 27 (1 added, 3 extended) |
+  | engine | `test/review/run.test.ts`, `test/cli/github.review.test.ts`, `test/review/vectorscope-replay.test.ts` | 44, 40, 13 (unchanged, I-1) |
+  | app | `src/features/pull-requests/ai-review.test.ts` (`--preload ./happydom.ts`) | 107 (unchanged) |
+  | eval scripts | `script/vectorscope-eval/replay.test.ts` | 32 (unchanged) |
+
+  - `trivial.test.ts` builds each fixture from base and head texts through
+    a small LCS diff helper read back by `parseUnifiedDiff`, plus
+    `fromGitHubFiles` for GitHub shapes, with comment and string ranges
+    from a fixture lexer. Every contract fixture (a directive comment, a
+    Python indentation change, an `.mdx` component, a `requirements.txt`
+    bump, an import-breaking rename, a case-only rename) is non-trivial
+    with the most generous callbacks. The last test runs `EXAMPLES`, one
+    self-contained example per code in `TRIVIAL_REFUSALS`, typed so none
+    can be missing, and checks each gives exactly its code. Invisible and
+    control characters are built with `String.fromCodePoint`, never
+    written into a source file.
+  - `bun typecheck` passes in core, engine, app and desktop, and so does
+    `tsgo -p ../../script/vectorscope-eval/tsconfig.json`.
+  - prettier passes on all fifteen changed files. oxlint reports no warning
+    on `trivial.ts`, `dispatch.ts` and their tests; the warnings left in the
+    other changed files are on lines this package did not change.
+  - **Mutation check.** 39 mutations each broke at least one test, and the
+    file was restored byte for byte after each (`cmp`):
+    - `trivial.ts` (24): `isSensitivePath` dropped; the dot-path rule
+      dropped; `.mdx` allowlisted; the directive list dropped; the
+      comment-structure check skipped; leading whitespace compared loosely;
+      case-only renames allowed; hidden characters in lines, control
+      characters, generated markers, the whole-doc check,
+      `referencedByCode`, the patch-completeness check, the Rust doc
+      extra, the code rename's reference check, the agent-file rule, the
+      whitespace language gate and the dependency rule each dropped; a
+      string range's end read as inclusive; hunk context always accepted;
+      Go test-file comments allowed; rename-into-ignored dropped for code;
+      the MDX rules dropped; a line with code beside its comment read as a
+      comment;
+    - `dispatch.ts` (7): deciding on the high estimate; deciding on v2; a
+      step cap above the current cap; step-cap levers always acting;
+      `remainingUsd` keeping caps of 0; the token cap ignoring unpriced
+      passes; v2 ignoring the `cached` flag;
+    - `plan.ts` (3): the legacy write price taking `cacheWrite`; the legacy
+      output per step drifting to 1,800; a share applying without a
+      cache-read price;
+    - `model-evidence.ts` (1): the default-stable digest broken
+      (`trivial: "review"` counted; superseded by the review fixes'
+      digest mutations above);
+    - `config.ts` (2): the "not applied" warnings dropped; the warning
+      naming no default;
+    - engine `eval.ts` (2): the base config's VS-24 keys kept; the
+      `input.config` refusal dropped.
+  - The full root typecheck was not run: nothing is pushed.
+  - Nothing was sent to a model, no paid path ran, no workflow was
+    dispatched, no dependency was added, and no user-visible string
+    changed (D14); the two new warnings appear only when a new key is set
+    to a value that would change a review.

@@ -23,7 +23,8 @@ import {
   type ReviewConfig,
   type ReviewOutcome,
 } from "@vectordevai/core/review/types"
-import { evidenceScope } from "@vectordevai/core/review/model-evidence"
+import { estimateDispatch } from "@vectordevai/core/review/dispatch"
+import { evidenceScope, policyDigest } from "@vectordevai/core/review/model-evidence"
 import { SpendGuard } from "@vectordevai/core/spend-guard"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { Agent } from "../../src/agent/agent"
@@ -825,6 +826,43 @@ describe("ReviewEval.replay", () => {
     TIMEOUT,
   )
 
+  // VS-24c: config.ts parses VS-24's keys, and no runner applies them yet, so a base review.json that sets one is
+  // replayed and recorded without it, with the parser's "not applied" warning, and its scope claims no such policy.
+  it.instance(
+    "replays a base review.json that sets VS-24's keys without them, keeping the parser's warnings",
+    () =>
+      Effect.gen(function* () {
+        const settings = JSON.stringify({ trivial: "skip", maxInputTokens: 1_000, minConfidence: 0.75 })
+        const { directory, llm, base, head } = yield* checkout({
+          base: { "src/list.ts": LIST_BASE, ".vector/review.json": settings },
+          head: { "src/list.ts": LIST_HEAD },
+          price: PRICE,
+        })
+        yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report()))
+        const artifact = yield* ReviewEval.replay({
+          case: replayCase(directory, base, head),
+          model: MODEL,
+          config: { maxCostUsd: 2, verify: "off" },
+          posting: ReviewEval.recordingPosting(),
+          check: recordingCheck().check,
+        })
+        expect(Object.hasOwn(artifact.config.value, "trivial")).toBe(false)
+        expect(Object.hasOwn(artifact.config.value, "maxInputTokens")).toBe(false)
+        expect(artifact.config.value.minConfidence).toBe(0.75)
+        expect(artifact.config.warnings).toEqual([
+          '"trivial": "skip" is not applied yet: every change is still reviewed.',
+          '"maxInputTokens" is not applied yet: no input-token cap is enforced.',
+        ])
+        expect(artifact.scope.policy).toBe(policyDigest(artifact.config.value))
+        // It claims no skip policy: until a runner applies `trivial`, no value of it moves the digest.
+        expect(artifact.scope.policy).toBe(policyDigest({ ...artifact.config.value, trivial: "skip" }))
+        // The run was a review, not a skip.
+        expect(artifact.attempts.filter((attempt) => attempt.admitted).length).toBeGreaterThan(0)
+      }),
+    GIT,
+    TIMEOUT,
+  )
+
   it.instance(
     "a variant on the shared verify policy gets the policy's default unless the base's review.json sets verify",
     () =>
@@ -934,6 +972,18 @@ describe("ReviewEval.replay", () => {
           "config sets privacy, zdrAttested, a route setting a replay cannot apply",
         )
         expect(yield* refused({ config: { privacy: "standard" } })).toContain("config sets privacy, a route setting")
+        // Nor VS-24's keys (VS-24c), which no runner applies before VS-24 wiring.
+        // @ts-expect-error VS-24's keys are parsed but applied by no runner, so a typed caller cannot put one in config.
+        const unwired: ReplayInput["config"] = { trivial: "skip" }
+        expect(unwired).toBeDefined()
+        expect(yield* refused({ config: { trivial: "skip", maxInputTokens: 5 } })).toContain(
+          "config sets trivial, maxInputTokens, which no runner applies yet (VS-24 wiring)",
+        )
+        expect(yield* refused({ config: { trivial: "review" } })).toContain("config sets trivial, which no runner")
+        // A pending variant's key is refused as a key this replay does not apply.
+        expect(yield* refused({ variant: { name: "engine:trivial-skip", keys: { trivial: "skip" } } })).toContain(
+          "engine:trivial-skip sets trivial, which this replay does not apply",
+        )
         // A pending name with nothing to set would be the frozen pipeline.
         expect(yield* refused({ variant: { name: "engine:trivial-skip", keys: {} } })).toContain(
           "sets no key and no model requirement, so it would run the frozen pipeline under its name",
@@ -1000,6 +1050,7 @@ describe("ReviewEval.replay", () => {
         expect(artifact.outcome?.passes?.find((entry) => entry.name === pass?.pass)?.cacheRead).toBe(400)
         // Typed for VS-25b and VS-24, and absent until they fill them.
         expect(artifact.tier1).toBeUndefined()
+        expect(artifact.dispatch).toBeUndefined()
         expect(artifact.shrink).toBeUndefined()
       }),
     GIT,
@@ -1386,6 +1437,19 @@ describe("ReviewEval.project", () => {
           expect(pass.promptTokens).toBe(first.tokens)
           expect(pass.usd).toEqual(
             estimateCostUsd({ promptTokens: first.tokens, maxSteps: pass.maxSteps, price: PRICE }),
+          )
+          // VS-40's v2 beside it, from the same estimator. PRICE lists no cache read, so the route is read as uncached.
+          expect(pass.v2).toEqual(
+            estimateDispatch([
+              {
+                pass: pass.pass,
+                model: pass.model,
+                promptTokens: first.tokens,
+                maxSteps: pass.maxSteps,
+                price: PRICE,
+                cached: false,
+              },
+            ]).passes[0]?.v2,
           )
           expect(first.phase).toBe("turn")
         }

@@ -26,10 +26,29 @@ export interface ReviewPrice {
 // 5 and 4 steps, and R = 2,000 makes S·P + R·S·(S−1)/2 match their measured 79.3k input tokens. HIGH_GROWTH is
 // unchanged (the largest one-step growth was 4,032). That run averaged 1,800 output tokens a step, reasoning
 // included; OUTPUT_PER_STEP also prices the budget check's next step, so it stays until a priced run confirms it.
-const OUTPUT_PER_STEP = 600
+// Exported for dispatch.ts, whose VS-40 estimate prices output at the measured 1,800 instead.
+export const OUTPUT_PER_STEP = 600
 const LOW_STEPS = 5
 const LOW_GROWTH = 2_000
 const HIGH_GROWTH = 4_000
+
+// One side of estimateCostUsd's range: S steps, each adding R tokens to the next one's input.
+export interface EstimateBand {
+  steps: number
+  growth: number
+}
+
+// The two bands estimateCostUsd prices. Low: S = 5 (or maxSteps if lower) and R = 2,000. High: S = maxSteps (at least
+// one) and R = 4,000.
+export function estimateBands(maxSteps: number): { low: EstimateBand; high: EstimateBand } {
+  const steps = Math.max(1, Math.floor(maxSteps))
+  return { low: { steps: Math.min(LOW_STEPS, steps), growth: LOW_GROWTH }, high: { steps, growth: HIGH_GROWTH } }
+}
+
+// A session's input over a band, cache reads included: S·P plus the growth R·S·(S−1)/2.
+export function passInputTokens(promptTokens: number, band: EstimateBand): number {
+  return band.steps * promptTokens + (band.growth * band.steps * (band.steps - 1)) / 2
+}
 
 // `review` always runs. `security` runs when it is "always", or "auto" and a sensitive path changed.
 export function planSpecialists(
@@ -181,20 +200,49 @@ function usd(tokens: number, perMillion: number) {
 // A range for a review of a prompt of P tokens. Over S steps the input is S·P plus the growth R·S·(S−1)/2, and the
 // output S·600. Low: S = 5 (or maxSteps if lower) and R = 2,000, with the cache-read price for (S−1)·P when one is
 // known. High: S = maxSteps and R = 4,000, all at the full input price.
-export function estimateCostUsd(input: { promptTokens: number; maxSteps: number; price: ReviewPrice }): {
+//
+// VS-40's estimate v2 (dispatch.ts) passes three more inputs, and with none of them the result is exactly the one
+// above. `cacheReadShare` is the share of each band's input read from the cache, h(S), in place of the (S−1)·P rule; it
+// applies only when the price lists a cache read, and a value that is not a number reads as 0. The rest of the input is
+// priced at `writePrice` (the catalog's cache-write price on a caching route) instead of the input price, and output at
+// `outputPerStep` tokens a step instead of 600.
+export function estimateCostUsd(input: {
+  promptTokens: number
+  maxSteps: number
+  price: ReviewPrice
+  cacheReadShare?: { low: number; high: number }
+  writePrice?: number
+  outputPerStep?: number
+}): {
   low: number
   high: number
 } {
   const { promptTokens, price } = input
-  const high = Math.max(1, Math.floor(input.maxSteps))
-  const low = Math.min(LOW_STEPS, high)
-  const cached = price.cacheRead === undefined ? 0 : (low - 1) * promptTokens
-  const lowInput = low * promptTokens - cached + (LOW_GROWTH * low * (low - 1)) / 2
-  const highInput = high * promptTokens + (HIGH_GROWTH * high * (high - 1)) / 2
-  return {
-    low: usd(lowInput, price.input) + usd(cached, price.cacheRead ?? 0) + usd(low * OUTPUT_PER_STEP, price.output),
-    high: usd(highInput, price.input) + usd(high * OUTPUT_PER_STEP, price.output),
+  const bands = estimateBands(input.maxSteps)
+  const share = price.cacheRead === undefined ? undefined : input.cacheReadShare
+  const write = input.writePrice ?? price.input
+  const output = input.outputPerStep ?? OUTPUT_PER_STEP
+  // The legacy low band reads (S−1)·P from the cache when there is a cache-read price; the legacy high band reads none
+  // and has no cache-read term at all, so its sum is the same floating-point sum as before VS-40.
+  const lowCached =
+    price.cacheRead === undefined
+      ? 0
+      : share
+        ? readShare(share.low) * passInputTokens(promptTokens, bands.low)
+        : (bands.low.steps - 1) * promptTokens
+  const highCached = share ? readShare(share.high) * passInputTokens(promptTokens, bands.high) : undefined
+  const bandUsd = (band: EstimateBand, cached: number | undefined) => {
+    const uncached = band.steps * promptTokens - (cached ?? 0) + (band.growth * band.steps * (band.steps - 1)) / 2
+    const out = usd(band.steps * output, price.output)
+    return cached === undefined
+      ? usd(uncached, write) + out
+      : usd(uncached, write) + usd(cached, price.cacheRead ?? 0) + out
   }
+  return { low: bandUsd(bands.low, lowCached), high: bandUsd(bands.high, highCached) }
+}
+
+function readShare(share: number) {
+  return Number.isFinite(share) ? Math.min(1, Math.max(0, share)) : 0
 }
 
 // What the next step of a session will cost: its whole context as input plus one step of output. `cachedTokens` is

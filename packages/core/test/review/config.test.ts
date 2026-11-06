@@ -8,7 +8,7 @@ import {
   rulesForPaths,
   SOURCED_REVIEW_KEYS,
 } from "@vectordevai/core/review/config"
-import { DEFAULT_REVIEW_CONFIG } from "@vectordevai/core/review/types"
+import { DEFAULT_REVIEW_CONFIG, OPTIONAL_REVIEW_DEFAULTS } from "@vectordevai/core/review/types"
 
 describe("parseReviewConfig", () => {
   test("returns the defaults in new arrays", () => {
@@ -732,5 +732,89 @@ describe("review.md rules", () => {
     expect(wide.truncated).toBe(true)
     expect(wide.global).not.toContain("\uFFFD")
     expect(new TextEncoder().encode(wide.global).length).toBeLessThanOrEqual(MAX_RULES_BYTES)
+  })
+})
+
+// VS-24c: `trivial` and `maxInputTokens` are parsed, and no runner reads them before VS-24 wiring. With neither set,
+// nothing changes (I-1); with a value that would change a review, the parser says it is not applied yet.
+describe("VS-24's keys", () => {
+  const SKIP = '"trivial": "skip" is not applied yet: every change is still reviewed.'
+  const CAP = '"maxInputTokens" is not applied yet: no input-token cap is enforced.'
+
+  test("neither has a default entry, so the defaults and their digests stay as they were", () => {
+    const { config, warnings } = parseReviewConfig()
+    for (const key of ["trivial", "maxInputTokens"] as const) {
+      expect(Object.hasOwn(DEFAULT_REVIEW_CONFIG, key)).toBe(false)
+      expect(Object.hasOwn(config, key)).toBe(false)
+    }
+    expect(warnings).toEqual([])
+    expect(OPTIONAL_REVIEW_DEFAULTS).toEqual({ trivial: "review", maxInputTokens: 0 })
+  })
+
+  test("review.json sets them, and a value that would change a review says it is not applied", () => {
+    const set = parseReviewConfig({ json: JSON.stringify({ trivial: "skip", maxInputTokens: 200_000 }) })
+    expect(set.config).toEqual({ ...DEFAULT_REVIEW_CONFIG, trivial: "skip", maxInputTokens: 200_000 })
+    expect(set.warnings).toEqual([SKIP, CAP])
+    // Their defaults, written out, change nothing a runner would do, so they warn about nothing.
+    const defaults = parseReviewConfig({ json: JSON.stringify({ trivial: "review", maxInputTokens: 0 }) })
+    expect(defaults.config).toEqual({ ...DEFAULT_REVIEW_CONFIG, trivial: "review", maxInputTokens: 0 })
+    expect(defaults.warnings).toEqual([])
+  })
+
+  test("the environment overrides review.json, read without case or surrounding space", () => {
+    const { config, warnings } = parseReviewConfig({
+      json: JSON.stringify({ trivial: "review", maxInputTokens: 5 }),
+      env: { REVIEW_TRIVIAL: " Skip ", REVIEW_MAX_INPUT_TOKENS: "1e5" },
+    })
+    expect(config.trivial).toBe("skip")
+    expect(config.maxInputTokens).toBe(100_000)
+    expect(warnings).toEqual([SKIP, CAP])
+  })
+
+  test("a bad value warns naming the value in use, which for an unset key is its default", () => {
+    expect(parseReviewConfig({ json: JSON.stringify({ trivial: "sometimes", maxInputTokens: "lots" }) })).toEqual({
+      config: DEFAULT_REVIEW_CONFIG,
+      warnings: [
+        `${REVIEW_CONFIG_PATH}: "trivial" must be "review", "skip"; using "review".`,
+        `${REVIEW_CONFIG_PATH}: "maxInputTokens" must be a number of at least 0; using 0.`,
+      ],
+    })
+    expect(parseReviewConfig({ env: { REVIEW_TRIVIAL: "always", REVIEW_MAX_INPUT_TOKENS: "abc" } })).toEqual({
+      config: DEFAULT_REVIEW_CONFIG,
+      warnings: [
+        'REVIEW_TRIVIAL must be "review", "skip"; using "review".',
+        "REVIEW_MAX_INPUT_TOKENS must be a number of at least 0; using 0.",
+      ],
+    })
+    // A set value is the one named.
+    expect(
+      parseReviewConfig({ json: JSON.stringify({ trivial: "skip" }), env: { REVIEW_TRIVIAL: "x" } }).warnings,
+    ).toEqual(['REVIEW_TRIVIAL must be "review", "skip"; using "skip".', SKIP])
+    // A key with no default keeps today's text, which names nothing.
+    expect(parseReviewConfig({ json: JSON.stringify({ model: "nope" }) }).warnings).toEqual([
+      `${REVIEW_CONFIG_PATH}: "model" must be a "provider/model" string; using undefined.`,
+    ])
+  })
+
+  test("a negative or fractional cap is clamped to a whole number of at least 0", () => {
+    expect(parseReviewConfig({ env: { REVIEW_MAX_INPUT_TOKENS: "-5" } })).toEqual({
+      config: { ...DEFAULT_REVIEW_CONFIG, maxInputTokens: 0 },
+      warnings: ["REVIEW_MAX_INPUT_TOKENS: -5 is out of range; using 0."],
+    })
+    expect(parseReviewConfig({ json: JSON.stringify({ maxInputTokens: 1_000.6 }) })).toEqual({
+      config: { ...DEFAULT_REVIEW_CONFIG, maxInputTokens: 1_001 },
+      warnings: [`${REVIEW_CONFIG_PATH}: "maxInputTokens": 1000.6 is out of range; using 1001.`, CAP],
+    })
+  })
+
+  test("mergeReviewConfig reads them as parseReviewConfig does, on every surface", () => {
+    const text = JSON.stringify({ trivial: "skip", maxInputTokens: 50_000 })
+    const env = { REVIEW_MAX_INPUT_TOKENS: "60000" }
+    expect(mergeReviewConfig({ surface: "github", json: { at: "base", text }, env, trigger: "auto" })).toEqual(
+      parseReviewConfig({ json: text, env, trigger: "auto" }),
+    )
+    expect(mergeReviewConfig({ surface: "local", json: { at: "working-tree", text }, trigger: "desktop" })).toEqual(
+      parseReviewConfig({ json: text, trigger: "desktop" }),
+    )
   })
 })

@@ -22,12 +22,12 @@ import {
   type ModelCertificate,
   type ModelSubject,
 } from "@vectordevai/core/review/model-evidence"
-import { DEFAULT_REVIEW_CONFIG, type ReviewConfig } from "@vectordevai/core/review/types"
+import { DEFAULT_REVIEW_CONFIG, UNAPPLIED_REVIEW_KEYS, type ReviewConfig } from "@vectordevai/core/review/types"
 
 // The review pipeline's sources, from the repository root: both runners, the core code they share for planning,
 // packing, selection, anchoring and the prompts (whose length limits promptsDigest cannot see), the route rules
-// (VS-23a), the payload holdback (VS-34a), and the review and security agents' own prompts. REVIEW_PIPELINE_SOURCES
-// pins a digest of them.
+// (VS-23a), the payload holdback (VS-34a), the trivial gate and the pre-dispatch estimate (VS-24c), and the review and
+// security agents' own prompts. REVIEW_PIPELINE_SOURCES pins a digest of them.
 const REVIEW_PIPELINE_FILES = [
   "packages/engine/src/review/run.ts",
   "packages/app/src/features/pull-requests/ai-review.ts",
@@ -39,6 +39,8 @@ const REVIEW_PIPELINE_FILES = [
   "packages/core/src/review/prompt.ts",
   "packages/core/src/review/privacy.ts",
   "packages/core/src/review/holdback.ts",
+  "packages/core/src/review/trivial.ts",
+  "packages/core/src/review/dispatch.ts",
   "packages/engine/src/agent/prompt/review.txt",
   "packages/engine/src/agent/prompt/security.txt",
 ]
@@ -207,8 +209,33 @@ describe("scope", () => {
       { zdrAttested: ["openrouter"] },
       // VS-33's attestation objects are route settings too.
       { zdrAttested: [{ id: "openrouter", operator: "openrouter", region: "eu" as const, extendedCache: true }] },
+      // VS-24's token cap is a budget, and its trivial gate is applied by no runner yet.
+      { maxInputTokens: 200_000 },
+      { trivial: "review" as const },
+      { trivial: "skip" as const },
     ])
       expect(policyDigest({ ...DEFAULT_REVIEW_CONFIG, ...change })).toBe(base)
+  })
+
+  // VS-24c: `trivial` is a policy key (a skipped change is not reviewed) that no runner applies before VS-24 wiring, so
+  // it never enters the digest yet: a review whose config sets `trivial: "skip"` runs, and is scoped as, the full
+  // review. Once a runner applies it (it leaves UNAPPLIED_REVIEW_KEYS), it counts only when set to "skip", so the digest
+  // of every config made before it, the frozen engine baseline's included, still holds.
+  test("the policy digest leaves out VS-24's trivial until a runner applies it", () => {
+    // Printed by policyDigest at 8f38f824, before `trivial` was a policy key.
+    expect(policyDigest(DEFAULT_REVIEW_CONFIG)).toBe("70512122f41ec160")
+    const base = policyDigest(DEFAULT_REVIEW_CONFIG)
+    expect(UNAPPLIED_REVIEW_KEYS).toContain("trivial")
+    for (const trivial of ["skip", "review", undefined] as const)
+      expect(policyDigest({ ...DEFAULT_REVIEW_CONFIG, trivial })).toBe(base)
+    const skip: ReviewConfig = { ...DEFAULT_REVIEW_CONFIG, trivial: "skip" }
+    expect(evidenceScope({ adapter: "engine", config: skip })).toEqual(SCOPE)
+    expect(evidenceScope({ adapter: "desktop", config: skip })).toEqual(
+      evidenceScope({ adapter: "desktop", config: DEFAULT_REVIEW_CONFIG }),
+    )
+    // Every other key keeps its digest behaviour: a changed value still moves it, with trivial set or not.
+    expect(policyDigest({ ...skip, maxComments: 3 })).not.toBe(policyDigest(skip))
+    expect(policyDigest({ ...DEFAULT_REVIEW_CONFIG, maxSteps: 31 })).not.toBe(base)
   })
 
   test("a route is in the scope only when the caller enforced it", () => {

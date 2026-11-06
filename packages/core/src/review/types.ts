@@ -247,6 +247,12 @@ export interface ReviewConfig {
   // (model-evidence.ts): unvetted, expired, retired or rerouted models, and free models whose providers may train on
   // the code. It never changes which model runs. "off" keeps today's review.
   modelEvidence: "off" | "warn"
+  // VS-24's opt-in (D3): "skip" ends a review whose every changed file is trivial (trivial.ts: whitespace, docs, rename
+  // or comment-only under strict rules) with zero attempts and a note. Absent means "review" (OPTIONAL_REVIEW_DEFAULTS),
+  // and DEFAULT_REVIEW_CONFIG leaves it out, so every config and its digest stay as they were. Parsed, and read by no
+  // runner until VS-24 wiring (UNAPPLIED_REVIEW_KEYS), so the parser warns that "skip" is not applied; the GitHub skip
+  // waits for the @vector merge.
+  trivial?: "review" | "skip"
   // VS-23's opt-in (D3, Q1): "zdr" sends code only on zero data retention routes (privacy.ts). Raise-only: any source
   // may set it and none may lower it. Absent means "standard", and DEFAULT_REVIEW_CONFIG leaves it out, so every
   // config and its digest stay as they were. Only mergeReviewConfig reads it, and no runner calls that before VS-23b.
@@ -268,6 +274,11 @@ export interface ReviewConfig {
   maxCostUsd: number // per review; 0 = no dollar cap
   maxCostUsdPerPr: number // across automatic reviews of one PR; 0 = none
   maxCostUsdPerMonth: number // 0 = none; install writes REVIEW_MAX_COST_USD_PER_MONTH=50 for paid models
+  // VS-24: a cap on the first-turn input tokens of a review's planned passes, summed (dispatch.ts, decideDispatch); it
+  // counts free, plan and local models too. Absent or 0 means none. A budget, not a policy key, and an estimate: admission
+  // and the dollar caps stay the real bounds. Parsed, and read by no runner until VS-24 wiring (UNAPPLIED_REVIEW_KEYS),
+  // so the parser warns that a cap is not applied.
+  maxInputTokens?: number
   timeoutMinutes: number
   model?: string // "provider/model"
   // A cheaper "provider/model" for the first pass. The review and security reviewers run on it, and every finding
@@ -307,6 +318,25 @@ export const DEFAULT_REVIEW_CONFIG: ReviewConfig = {
   nits: false,
   paths: [],
 }
+
+// What an optional key reads as when a config leaves it out. DEFAULT_REVIEW_CONFIG leaves these out, so configs and
+// their digests made before the key existed stay as they were.
+export const OPTIONAL_REVIEW_DEFAULTS = {
+  trivial: "review",
+  maxInputTokens: 0,
+} as const satisfies Partial<ReviewConfig>
+
+// The same, read by any ReviewConfig key, for lookups that do not know which keys have an entry.
+export const OPTIONAL_REVIEW_DEFAULT_OF: Partial<Record<keyof ReviewConfig, unknown>> = OPTIONAL_REVIEW_DEFAULTS
+
+// Keys config.ts parses that no runner applies yet, each optional with a default above. The parser warns when one would
+// change a review, policyDigest reads them as absent whatever their value, so no evidence scope claims a policy its
+// review did not run under, and the eval replay neither takes nor records them. VS-24 wiring takes a key off this list
+// when a runner applies it.
+export const UNAPPLIED_REVIEW_KEYS = [
+  "trivial",
+  "maxInputTokens",
+] as const satisfies readonly (keyof typeof OPTIONAL_REVIEW_DEFAULTS)[]
 
 // The verify setting a review gets under verifyPolicy "shared" when neither review.json nor REVIEW_VERIFY sets one:
 // the plan's proposed default. Today's default stays DEFAULT_REVIEW_CONFIG.verify while the policy is "legacy".

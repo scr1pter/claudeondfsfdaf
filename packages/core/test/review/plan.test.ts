@@ -4,13 +4,17 @@ import {
   combineCostKinds,
   contextRefusal,
   diffBudgetChars,
+  estimateBands,
   estimateCostUsd,
   MIN_CONTEXT,
   nextStepCostUsd,
+  OUTPUT_PER_STEP,
+  passInputTokens,
   planSpecialists,
   verifyCandidates,
   verifyUnanswered,
   verifyUnconfirmed,
+  type ReviewPrice,
   type VerifyRule,
 } from "@vectordevai/core/review/plan"
 import type { Finding, ReviewConfig, Severity, Trust } from "@vectordevai/core/review/types"
@@ -85,6 +89,90 @@ describe("estimateCostUsd", () => {
     const cached = estimateCostUsd({ promptTokens: 20_000, maxSteps: 30, price }).low
     const uncached = estimateCostUsd({ promptTokens: 20_000, maxSteps: 30, price: { input: 3, output: 15 } }).low
     expect(uncached).toBeGreaterThan(cached)
+  })
+
+  // VS-40 (addendum A): with none of its inputs, estimateCostUsd returns exactly what it returned before them. Each
+  // number was printed by estimateCostUsd at 8f38f824, before VS-24c, and is compared bit for bit.
+  test("with none of VS-40's inputs it returns today's numbers, bit for bit", () => {
+    const sonnet = { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 }
+    const cases: [Parameters<typeof estimateCostUsd>[0], { low: number; high: number }][] = [
+      [
+        { promptTokens: 5_300, maxSteps: 30, price: sonnet },
+        { low: 0.12725999999999998, high: 5.9670000000000005 },
+      ],
+      [
+        { promptTokens: 5_300, maxSteps: 20, price: sonnet },
+        { low: 0.12725999999999998, high: 2.778 },
+      ],
+      [
+        { promptTokens: 3_000, maxSteps: 10, price: sonnet },
+        { low: 0.11760000000000001, high: 0.72 },
+      ],
+      [
+        { promptTokens: 5_300, maxSteps: 30, price: { input: 3, output: 15 } },
+        { low: 0.1845, high: 5.9670000000000005 },
+      ],
+      [
+        { promptTokens: 1_234.5, maxSteps: 7.9, price: { input: 1.1, output: 4.4, cacheRead: 0.11 } },
+        { low: 0.03710113, high: 0.12038565000000001 },
+      ],
+      [
+        { promptTokens: 80_000, maxSteps: 0, price: { input: 15, output: 75, cacheRead: 1.5, cacheWrite: 18.75 } },
+        { low: 1.2449999999999999, high: 1.2449999999999999 },
+      ],
+      [
+        { promptTokens: 10_000, maxSteps: 30, price },
+        { low: 0.147, high: 6.390000000000001 },
+      ],
+    ]
+    for (const [input, today] of cases) {
+      const now = estimateCostUsd(input)
+      expect(now.low).toBe(today.low)
+      expect(now.high).toBe(today.high)
+    }
+    expect(estimateCostUsd({ promptTokens: Number.NaN, maxSteps: 30, price: sonnet })).toEqual({
+      low: Number.NaN,
+      high: Number.NaN,
+    })
+    expect(OUTPUT_PER_STEP).toBe(600)
+  })
+
+  test("its bands are today's: low 5 steps (or fewer) at R 2,000, high maxSteps at R 4,000", () => {
+    expect(estimateBands(30)).toEqual({ low: { steps: 5, growth: 2_000 }, high: { steps: 30, growth: 4_000 } })
+    expect(estimateBands(3)).toEqual({ low: { steps: 3, growth: 2_000 }, high: { steps: 3, growth: 4_000 } })
+    expect(estimateBands(0)).toEqual({ low: { steps: 1, growth: 2_000 }, high: { steps: 1, growth: 4_000 } })
+    expect(estimateBands(7.9).high.steps).toBe(7)
+    // S·P + R·S(S−1)/2: 5·5,300 + 2,000·10 and 30·5,300 + 4,000·435.
+    expect(passInputTokens(5_300, estimateBands(30).low)).toBe(46_500)
+    expect(passInputTokens(5_300, estimateBands(30).high)).toBe(1_899_000)
+    expect(passInputTokens(9, { steps: 1, growth: 4_000 })).toBe(9)
+  })
+
+  test("VS-40's inputs each move the estimate as hand-computed", () => {
+    const at = (extra: Partial<Parameters<typeof estimateCostUsd>[0]>, over: ReviewPrice = price) =>
+      estimateCostUsd({ promptTokens: 10_000, maxSteps: 30, price: over, ...extra })
+    // Output at 1,800 tokens a step: 5 and 30 steps of 1,200 more tokens at $15.
+    expect(at({ outputPerStep: 1_800 }).low).toBeCloseTo(0.147 + 5 * 1_200 * 15e-6, 12)
+    expect(at({ outputPerStep: 1_800 }).high).toBeCloseTo(6.39 + 30 * 1_200 * 15e-6, 12)
+    // The uncached input at $6: low 30k (10k + 20k growth), high 2.04M.
+    expect(at({ writePrice: 6 }).low).toBeCloseTo(0.147 + 30_000 * 3e-6, 12)
+    expect(at({ writePrice: 6 }).high).toBeCloseTo(6.39 + 2_040_000 * 3e-6, 12)
+    // Half of each band's input from the cache: low 70k, high 2.04M.
+    const half = at({ cacheReadShare: { low: 0.5, high: 0.5 } })
+    expect(half.low).toBeCloseTo(35_000 * 3e-6 + 35_000 * 0.3e-6 + 3_000 * 15e-6, 12)
+    expect(half.high).toBeCloseTo(1_020_000 * 3e-6 + 1_020_000 * 0.3e-6 + 18_000 * 15e-6, 12)
+    // A share outside 0..1 is clamped, and one that is not a number reads as no cache read.
+    expect(at({ cacheReadShare: { low: 2, high: -1 } })).toEqual({
+      low: 70_000 * 0.3e-6 + 3_000 * 15e-6,
+      high: 2_040_000 * 3e-6 + 18_000 * 15e-6,
+    })
+    expect(at({ cacheReadShare: { low: Number.NaN, high: Number.NaN } }).low).toBeCloseTo(
+      70_000 * 3e-6 + 3_000 * 15e-6,
+      12,
+    )
+    // Without a cache-read price the share is ignored, so the result is the legacy one.
+    const uncached = { input: 3, output: 15 }
+    expect(at({ cacheReadShare: { low: 0.9, high: 0.9 } }, uncached)).toEqual(at({}, uncached))
   })
 })
 

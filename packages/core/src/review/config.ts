@@ -6,8 +6,10 @@ import { minimatch } from "minimatch"
 import { NOT_A_NAME, readZdrAttestation } from "./privacy"
 import {
   DEFAULT_REVIEW_CONFIG,
+  OPTIONAL_REVIEW_DEFAULT_OF,
   SEVERITIES,
   SHARED_VERIFY_DEFAULT,
+  UNAPPLIED_REVIEW_KEYS,
   type ReviewConfig,
   type Trigger,
   type ZdrAttestedEntry,
@@ -167,6 +169,7 @@ const FIELDS: Record<PlainKey, Field> = {
   verify: oneOf(["blocking", "all", "off"]),
   verifyPolicy: oneOf(["legacy", "shared"]),
   modelEvidence: oneOf(["off", "warn"]),
+  trivial: oneOf(["review", "skip"]),
   failOn: oneOf(["never", "blocking"]),
   ignore: strings,
   ignoreDefaults: bool,
@@ -181,6 +184,7 @@ const FIELDS: Record<PlainKey, Field> = {
   maxCostUsd: number({ min: 0 }),
   maxCostUsdPerPr: number({ min: 0 }),
   maxCostUsdPerMonth: number({ min: 0 }),
+  maxInputTokens: number({ min: 0, integer: true }),
   timeoutMinutes: number({ min: 1, max: 120 }),
   model,
   triageModel: model,
@@ -203,17 +207,37 @@ const ENV: { name: string; key: PlainKey; kind: "number" | "text" }[] = [
   { name: "REVIEW_VERIFY", key: "verify", kind: "text" },
   { name: "REVIEW_VERIFY_POLICY", key: "verifyPolicy", kind: "text" },
   { name: "REVIEW_MODEL_EVIDENCE", key: "modelEvidence", kind: "text" },
+  { name: "REVIEW_TRIVIAL", key: "trivial", kind: "text" },
   { name: "REVIEW_FAIL_ON", key: "failOn", kind: "text" },
   { name: "REVIEW_MAX_COST_USD", key: "maxCostUsd", kind: "number" },
   { name: "REVIEW_MAX_COST_USD_PER_PR", key: "maxCostUsdPerPr", kind: "number" },
   { name: "REVIEW_MAX_COST_USD_PER_MONTH", key: "maxCostUsdPerMonth", kind: "number" },
+  { name: "REVIEW_MAX_INPUT_TOKENS", key: "maxInputTokens", kind: "number" },
   { name: "REVIEW_TIMEOUT_MINUTES", key: "timeoutMinutes", kind: "number" },
 ]
+
+// Keys parsed before any runner applies them (UNAPPLIED_REVIEW_KEYS), so a value that would change a review says it
+// does not yet. Keyed by that list, so a key cannot join or leave it without its warning.
+const UNAPPLIED: Record<
+  (typeof UNAPPLIED_REVIEW_KEYS)[number],
+  { applies: (config: ReviewConfig) => boolean; warning: string }
+> = {
+  trivial: {
+    applies: (config) => config.trivial === "skip",
+    warning: '"trivial": "skip" is not applied yet: every change is still reviewed.',
+  },
+  maxInputTokens: {
+    applies: (config) => (config.maxInputTokens ?? 0) > 0,
+    warning: '"maxInputTokens" is not applied yet: no input-token cap is enforced.',
+  },
+}
 
 function assign(config: ReviewConfig, key: PlainKey, value: unknown, label: string, warnings: string[]) {
   const parsed = FIELDS[key].parse(value)
   if (!parsed) {
-    warnings.push(`${label} must be ${FIELDS[key].expected}; using ${JSON.stringify(config[key])}.`)
+    warnings.push(
+      `${label} must be ${FIELDS[key].expected}; using ${JSON.stringify(config[key] ?? OPTIONAL_REVIEW_DEFAULT_OF[key])}.`,
+    )
     return
   }
   if (parsed.note) warnings.push(`${label}: ${parsed.note}.`)
@@ -402,6 +426,9 @@ function settle(
     )
     config.verify = "all"
   }
+  warnings.push(
+    ...UNAPPLIED_REVIEW_KEYS.filter((key) => UNAPPLIED[key].applies(config)).map((key) => UNAPPLIED[key].warning),
+  )
   return config
 }
 

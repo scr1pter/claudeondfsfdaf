@@ -27,7 +27,13 @@ import {
   type VerifyPromptInput,
 } from "./prompt"
 import { REVIEW_REPORT_JSON_SCHEMA, VERIFY_JSON_SCHEMA } from "./schema"
-import type { Finding, PriorFinding, ReviewConfig } from "./types"
+import {
+  OPTIONAL_REVIEW_DEFAULT_OF,
+  UNAPPLIED_REVIEW_KEYS,
+  type Finding,
+  type PriorFinding,
+  type ReviewConfig,
+} from "./types"
 
 // Bump when a change to the review pipeline changes what a review finds or posts: either runner (engine review/run.ts,
 // the desktop's ai-review.ts), the core code they share for planning, packing, selection and anchoring, the route rules
@@ -40,14 +46,16 @@ export const REVIEW_PIPELINE_REVISION = 1
 // A digest of the pipeline's sources (REVIEW_PIPELINE_FILES in core test/review/model-evidence.test.ts), which that
 // test pins, so CI fails when one of them changes and nobody decided whether REVIEW_PIPELINE_REVISION goes up. When it
 // fails: bump the revision if the change alters what a review finds or posts, then set this to the digest it prints.
-export const REVIEW_PIPELINE_SOURCES = "7addfcd0033ba579"
+export const REVIEW_PIPELINE_SOURCES = "a3cb5477a0a829b7"
 
 // The longest a certificate may run from its approval. The plan asks for an expiry and sets none; a hosted model can
 // change underneath its id, so the evidence is re-earned on this cadence.
 export const MAX_CERTIFICATE_DAYS = 90
 
 // The review settings that change what a review finds or posts. A certificate covers reviews under exactly these.
-// Budgets, time limits, ignores and skips bound or route a review but are not part of what it is evaluated on.
+// Budgets, time limits, ignores and skips bound or route a review but are not part of what it is evaluated on. VS-24's
+// `trivial` is one (a skipped change is not reviewed), counted from VS-24 wiring on (policyDigest); its
+// `maxInputTokens` is a budget.
 export const EVIDENCE_POLICY_KEYS = [
   "security",
   "verify",
@@ -59,6 +67,7 @@ export const EVIDENCE_POLICY_KEYS = [
   "maxComments",
   "maxSteps",
   "maxDiffChars",
+  "trivial",
 ] as const satisfies readonly (keyof ReviewConfig)[]
 
 export type EvidenceAdapter = "engine" | "desktop"
@@ -258,8 +267,20 @@ export function promptsDigest(): string {
   return prompts
 }
 
+// Default-stable (contract §0.3): a key with an entry in OPTIONAL_REVIEW_DEFAULTS counts only when set to another value,
+// so every digest made before it stays as it was; every other key counts as it always has. A key no runner applies yet
+// (UNAPPLIED_REVIEW_KEYS, all optional) reads as absent, so it never counts: a review under `trivial: "skip"` before
+// VS-24 wiring runs the full review, and its scope says so.
 export function policyDigest(config: Pick<ReviewConfig, (typeof EVIDENCE_POLICY_KEYS)[number]>): string {
-  return fnv1a64(JSON.stringify(EVIDENCE_POLICY_KEYS.map((key) => [key, config[key]])))
+  return fnv1a64(
+    JSON.stringify(
+      EVIDENCE_POLICY_KEYS.flatMap((key) => {
+        const value = UNAPPLIED_REVIEW_KEYS.some((unapplied) => unapplied === key) ? undefined : config[key]
+        if (!Object.hasOwn(OPTIONAL_REVIEW_DEFAULT_OF, key)) return [[key, value]]
+        return value === undefined || value === OPTIONAL_REVIEW_DEFAULT_OF[key] ? [] : [[key, value]]
+      }),
+    ),
+  )
 }
 
 // `route` is the caller's to set, only when it enforced the route rules; it is never read from the config, so no scope
