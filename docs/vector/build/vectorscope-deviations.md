@@ -5204,3 +5204,602 @@ committed.
     dispatched, no dependency was added, and no user-visible string
     changed (D14); the two new warnings appear only when a new key is set
     to a value that would change a review.
+
+## 2026-11-06 · VS-25a Pinned tree-sitter parser and grammars
+
+Contract §4 VS-25a items 1 to 5 and its extractor decision; addendum A VS-38
+item 5 (parser safety) and §3 VS-25 "No whole-repository parse"; the Now
+window of contract §5 and addendum §4. Built at `5a16dfaf`. VS-25 is a
+proposal pending Q15 (and "VS-25 supersedes VS-17" is pending sign-off),
+VS-38 one pending Q18, so nothing calls the new parser: no runner, CLI, app
+or desktop file imports `review/parse.ts`, no `ReviewConfig` key was added,
+and `run.ts`, `ai-review.ts`, `provider.ts`, `session/llm.ts`, `posting.ts`,
+`prompt.ts`, `types.ts`, `config.ts`, `trivial.ts`, `symbols.ts`,
+`brain/code.ts`, `workflow.ts`, `command.ts`, `cli/cmd/github.*`,
+`cli/cmd/review.ts`, `github-*.ts`, `vectorscope.astro` and
+`script/vectorscope-eval/*` are untouched. It implements the VS-25a plan as
+corrected by its critique: all sixteen critique points were taken, three of
+them (2, 3 and 8) in a different or stronger form (below). Nothing is committed (the lane brief
+overrides the plan's commit step).
+
+- **What landed.**
+  - **New `packages/engine/src/util/tree-sitter.ts`**: `resolveWasm` and the
+    lazy `runtime` (one `Parser.init` per process), moved verbatim from
+    `tool/shell.ts`, plus the process-wide poisoned flag (`poison()`,
+    `poisoned()`; review round, below). In web-tree-sitter 0.25.10 `Parser.init` replaces the
+    library's one global wasm binding (`tree-sitter.js:3776-3781`), so a
+    second init would strand every parser and language loaded before it:
+    the shell tool and the review parser must share one. Behaviour-neutral:
+    the Node bundle is one file with no splitting, so `import.meta.url`
+    resolves relative assets the same from either module (proved below by
+    the Node-bundled bench loading every grammar).
+  - **`packages/engine/src/tool/shell.ts`**: imports `TreeSitter` and calls
+    `TreeSitter.runtime()` and `TreeSitter.resolveWasm(asset)` in `grammar`;
+    the local copies and the now unused `fileURLToPath` import are gone.
+    Its `parse` also treats a poisoned runtime as a command it cannot parse
+    (review round, below); nothing poisons the runtime until VS-25b wiring,
+    so the shell behaves as before. Nothing else changed.
+  - **New `packages/engine/src/review/parse.ts`** (`ReviewParse`, pinned):
+    - `PARSE_LANGUAGES` (typescript, tsx, javascript, python, go, rust,
+      java), `PARSE_EXTENSIONS` (exactly VS-24c's sets: ts tsx mts cts js
+      jsx mjs cjs go rs java py pyi), `REPORTED_LANGUAGES` and
+      `REPORTED_EXTENSIONS` (c, cpp, csharp, php: refused with a `reported`
+      field so VS-38 can count them separately, VOI13), `languageOf` and
+      `reportedOf` (trivial.ts's extension rule, `Object.hasOwn` so
+      `x.constructor` is no language).
+    - `GRAMMARS` (package, exact version, wasm file, ABI), `QUERY_VERSION`
+      (1), `RULES` per language, `ROLES`, `querySource`.
+    - `PARSE_LIMITS` = `{ inputBytes: 1_048_576, grammarBytes: 4_194_304,
+      parseMs: 1_000, extractMs: 2_000, depth: 16_384 }`.
+    - `DEFINITION_KINDS`, `REFERENCE_KINDS`, `PARSE_REFUSALS` (language,
+      binary, too-large, grammar, timeout, nesting, capture-count,
+      parser-error) and the records `ParsedDefinition` (name, kind, 1-based
+      inclusive lines, exported, signature, container?, aliases?),
+      `ParsedReference` (name, line, UTF-16 column, kind, enclosing?),
+      `ParseInput` (path label, text, names?, deadline?), `ParsedFile`
+      (hasError, error lines, definitions, references, VS-24c's
+      `CommentRange[]` and `SourceRange[]`, depth, parseMs, walkMs,
+      extractMs) and `UnparsedFile` (the VS-38 unsupported-file record:
+      because, detail of at most 200 characters, never source text).
+    - `grammar(language)` (path, bytes, ABI; for tests and the bench) and
+      `parse(input, limits?)`, an `Effect<ParseResult, never>`.
+  - **`packages/engine/package.json`**: exact runtime pins
+    `tree-sitter-go` 0.25.0, `tree-sitter-java` 0.23.5,
+    `tree-sitter-javascript` 0.23.1, `tree-sitter-python` 0.25.0,
+    `tree-sitter-rust` 0.24.0, `tree-sitter-typescript` 0.23.2;
+    `web-tree-sitter` stays 0.25.10.
+  - **`bun.lock`**: re-resolved through the local ghserve. The diff is the
+    six workspace entries, the six packages and six nested
+    `node-addon-api@8.8.0` entries; nothing else moved, and
+    `bun install --frozen-lockfile` then passes. Each tarball's sha512
+    equals the one fetched for the plan probe. All six were published
+    between 2024-11 and 2025-09, well past `minimumReleaseAge`.
+  - **`DEPENDENCY_NOTICES.md`**: regenerated with `bun
+    script/dependency-notices.ts` (1,108 packages); the diff is the six MIT
+    sections only. `licenses/dependencies/` and `platform-notices.json` are
+    unchanged (below).
+  - **New `packages/engine/script/vectorscope-parse-bench.ts`**: the
+    throughput bench (git ls-files, the round-two parsebench seed-7
+    shuffle, `--limits default|generous`, `--min-bytes`, `--names`; one
+    JSON line, no file written; Node-API only, so it also runs bundled for
+    Node). Nothing calls it.
+  - **Core pin**: `REVIEW_PIPELINE_FILES` gains
+    `packages/engine/src/review/parse.ts`, and its comment now names the
+    parser and says why `util/tree-sitter.ts` and `shell.ts` stay out (the
+    runtime init decides nothing a review finds). `REVIEW_PIPELINE_SOURCES`
+    `a3cb5477a0a829b7` → `244e9c3d52f44f83` (`dc0ce0af6fd47a55` before the
+    review round). `REVIEW_PIPELINE_REVISION`
+    stays 1: no runner reads the parser.
+  - **New `packages/engine/test/review/parse.test.ts`** (53 tests, below).
+- **Grammar choice.**
+  - The per-language upstream packages, not `@vscode/tree-sitter-wasm`
+    0.3.1: each grammar version is explicit (the future fact cache keys on
+    blob, grammar version and query version), they follow the shell's
+    pattern, and the contract names them. Six of the seven `.wasm` files
+    are byte-identical (sha256) to @vscode's; @vscode's Rust build differs
+    and states no grammar commit.
+  - `tree-sitter-javascript` 0.23.1, not 0.25.0: `tree-sitter-typescript`
+    0.23.2 depends on `^0.23.1`, so one copy is installed and the two
+    grammars share their 0.23 node names.
+  - ABIs under 0.25.10 (which reads 13 to 15), checked at load and pinned
+    in `GRAMMARS`: TypeScript 14, TSX 14, JavaScript 14, Python 15, Go 15,
+    Rust 14, Java 14. Every grammar loads under Bun and under the Node
+    bundle (Node 22.23.4).
+  - Not added to the root `trustedDependencies`: their `install:
+    node-gyp-build` builds only a native binding this code never loads, so
+    bun's blocked-postinstall notice is expected. The prebuilds sit unused
+    in `node_modules`, as `tree-sitter-bash`'s do. Never `tree-sitter-wasms`
+    (a test asserts it is absent).
+  - Licence entries: all six packages ship a LICENSE, so their entries are
+    the regenerated `DEPENDENCY_NOTICES.md` sections.
+    `licenses/dependencies/*.txt` holds overrides only for packages that
+    ship no licence text, and `script/dependency-notices.ts:389-395` fails
+    on an unused override, so adding one would have broken generation.
+- **How the parser works, and why it differs from the plan's shape.**
+  - **One query per language of bare one-node patterns**, `(type) @role`,
+    one per node type (13 roles: definition, comment, string, reference,
+    call, import, wrapper, scope, container, decorator, assignment, default,
+    error),
+    instead of the plan's three structured queries. A bare pattern
+    completes on the node it starts on, so the query holds no match in
+    progress (probed: `matchLimit: 1` returns every capture), and every
+    capture can be counted against the tree.
+  - **The capture-count check** (critique 3, stronger form). The iterative
+    depth walk, which always runs (critique 9: no `DEPTH_SLACK` shortcut),
+    also counts the nodes of every queried type through a per-language
+    `Uint8Array` of type ids. A query that returns any other number of
+    captures is refused as `capture-count`, so a silent drop, whatever its
+    cause, can never yield a short record. On about 21,000 real files in
+    seven languages (below) it never fired.
+  - **No parent or sibling calls.** tree-sitter finds a node's parent by
+    walking down from the root, which is quadratic over a wide file, so
+    one sweep over the captures in document order keeps a stack of the
+    definitions, wrappers, scopes, imports and containers around each
+    capture. Module scope, containers, export wrappers, import regions and
+    enclosing definitions come from that stack; callees from bare call
+    anchors whose callee field ends where the identifier does; decorator
+    and attribute runs from adjacency with only whitespace and comments
+    between. A pre-pass gathers what only the whole file says (export
+    clauses, `module.exports`, `__all__`, Rust trait visibility).
+  - **Separate parse and extraction boxes** (critique 6): `parseMs` 1,000
+    (G1-8: no parse over 290 ms in about 30,000 files) and `extractMs`
+    2,000, about ten times the slowest real file at or above 256 KiB
+    (202 ms, vscode, Bun), which still lets a 1 MiB numeric array (1.4 s)
+    through. A caller's `deadline` bounds both. Every test not about time
+    passes generous boxes.
+  - **0.25.10's `captures()` never calls its progress callback** (new
+    finding). Probed on G1-15's chain: 0 calls in `captures()` against
+    1,552 in `matches()`, and the query ran 38.4 s. `timeoutMicros`, which
+    0.25.10 honours, stopped the same query at 533 ms, so the extraction
+    box goes in as `timeoutMicros` (clamped to at least 1, since 0 means no
+    limit), with the callback kept for versions that call it. The parse's
+    progress callback does work (a 70,000-line file refused within 2 s at
+    `parseMs: 1`).
+  - **Signatures never hold a value** (critique 4; corrected in the review
+    round): variables, consts, statics and fields end before their
+    initialiser (name, type annotation and modifier keywords; Java
+    annotations are left out, since their arguments are literals);
+    functions and methods run to their body, and every parameter default in
+    a TS, JS or Python head reads `…`: TS/JS `assignment_pattern.right` and
+    `object_assignment_pattern.right` (destructured defaults included), the
+    `value` of TS `required_parameter` and `optional_parameter`
+    (constructor parameter properties included), and Python
+    `default_parameter.value` and `typed_default_parameter.value`. A Python
+    head stops at its own colon, so a comment after it stays out.
+    Whitespace collapsed; 240 UTF-16 units, never cut inside a surrogate
+    pair. The first version said "a token-shaped literal ... never appears
+    in any signature", but its fixtures held tokens only in variables and
+    fields: a default parameter value (`connect(key = "<token>")`, a TS
+    constructor parameter property, an arrow's default, Python
+    `def f(token="<token>")`) was copied verbatim. Now token-shaped
+    defaults sit in the TS, JS and Python fixtures and no signature holds
+    one. Still verbatim, since none is a value a variable or parameter
+    holds: decorator and annotation arguments inside a parameter list
+    (`@Inject("x") k`, Java `@Named("x") String k`), Python class keyword
+    arguments (`class A(B, key="x")`), TS literal types and Go struct tags.
+    VS-34's in-place redaction still applies at wiring.
+- **Export rules** (critique 5, all taken; what VS-25b greps).
+  - TS/JS: a direct `export` wrapper; or, at module scope, a name in an
+    export clause, `export default name`, `export = name` or, in
+    JavaScript, `module.exports = name | { a, b: c }`; `exports.x =` and
+    `module.exports.x =` are exported definitions, and so is
+    `module.exports = class Foo {}` or `= function named() {}` (named after
+    its value, alias "default"; "default" when it has no name). An export
+    clause's `as` name, and "default", go into `aliases`. Anonymous default
+    exports are a definition named "default". Only the members directly in
+    a class or interface body are recorded (not an object literal's or a
+    type literal's methods); a member is exported when its class or
+    interface is exported and it is neither `private` nor `#private`
+    (protected counts), and an anonymous class's members are in no
+    container. Members of a namespace follow the namespace, and every
+    declaration in a `declare module "name"` is exported.
+  - Python: no leading underscore, dunders public; class members follow
+    their class; definitions inside functions are local; a module-level
+    `__all__` list or tuple of strings decides module exports.
+  - Go: an upper-case first rune, at top level (local types are not).
+  - Rust: any `pub` but `pub(self)` and `pub(in self)`; a trait's methods
+    follow the trait; methods of `impl Trait for T` follow `Trait` when it
+    is declared in the file, and are exported otherwise (an outside trait,
+    such as `Display`). Private items that child modules reach through
+    `super::` are not marked exported.
+  - Java: not `private`, not local, and a container that is exported
+    (package-private is visible to the package's other files).
+- **Additions beyond the contract text, and smaller decisions.**
+  1. The shared runtime and the `shell.ts` edit, forced by the single init;
+     the contract's Files list does not name them.
+  2. String ranges and `errors`: VS-24c's `strings` callback needs them.
+     TS `template_literal_type` counts as a string (a whitespace edit inside
+     one changes the type, so refusing is safer); so do Python f-strings and
+     implicit concatenations, Rust byte, raw and C strings, Go raw strings,
+     Java text blocks and JSX attribute strings; char and rune literals and
+     regular expressions do not. A comment inside a template substitution is
+     a comment. A comment's text keeps any `\r`, which trivial.ts strips.
+  3. `names`, `deadline`, `container`, `aliases`, reference `kind` and
+     `reported`, shaped for VS-25b and VS-38. `names` is a filter on the
+     output only: on vscode it changed total throughput from 3.13 to
+     3.11 MB/s, and on a 1 MiB identifier-dense file it saved 14% of
+     extraction, because `captures()` converts every capture first.
+  4. The depth limit, 16,384, four times under the 65,536 levels past which
+     0.25.10's query cursor drops captures. Reproduced here: a 70,000-deep
+     array with the limit lifted is refused as `capture-count`, while a
+     flat file of 70,000 identifiers returns all 70,000 references (no
+     capture-count cap in a wide, shallow file; critique 3). Bumping
+     web-tree-sitter past PR #6038 stays a separate decision.
+  5. `match-limit` dropped from the refusals (critique 2, second form):
+     no pattern can hold a match in progress, so the limit cannot be
+     reached; the capture count covers any drop.
+  6. A wasm trap or abort (`WebAssembly.RuntimeError`) poisons the shared
+     runtime for the process (`TreeSitter.poison()`): every later file is
+     `parser-error`, detail `runtime-disabled` (critique 7), and the shell
+     tool's `parse` refuses every later command (review round). The runtime
+     is shared with the shell tool's command parser, which feeds its
+     permission scan, so before the round a trap would have left that scan
+     on a runtime that may misread a command without failing. The chosen
+     interim option is the shared flag: the shell then throws "Failed to
+     parse command", its existing path for a command with no tree, so the
+     tool call fails closed (stricter than the finding's "ask for
+     permission", which would need a scan with no tree). A synchronous
+     parse of up to 1 s per file still blocks the event loop; whether to
+     parse in-process or in a Worker (which would also isolate the shell's
+     runtime) stays for the runner-wiring window, not decided here.
+  7. Other throws (a non-string input, a throwing `names`) become
+     `parser-error` with the error's name as the detail, never its
+     message; the parser is reset before every parse, so a cancelled or
+     failed parse never resumes into the next file.
+  8. Grammars: the `.wasm` path and size are cached once found, and a
+     failed import, stat or read resets its lazy, so a transient error is
+     retried on the next file; an ABI mismatch or query compile error stays
+     cached (deterministic). The grammar cap is checked from `stat` outside
+     the lazy, with the file's read length when `stat` fails (review
+     round), and the read is checked against that size (critique 10). A
+     load failure's message (at most 200 characters, never source text) is
+     the refusal's detail.
+  9. Resources (critique 11): a timed-out parse returns no tree and is
+     handled before extraction; the release deletes the tree when there is
+     one; the cursor has its own nested `acquireUseRelease`. The comment
+     states the real invariant (each `parse()` and query call is
+     synchronous, and a finished tree no longer depends on its parser).
+  10. Recorded as definitions, beyond the plan's list: TS/JS class fields
+      (as Java fields are), anonymous default exports and CommonJS
+      exports. Not recorded: destructured declarations, chained Python
+      assignments past the first target, module-level Python assignments
+      inside `if` blocks, and object or type literal methods. Rust doc
+      comments do not open a definition's span; attributes do.
+      `container` names only what a definition is directly declared in:
+      nothing for a definition in a function body (TS, Python, Rust), an
+      anonymous class's members (TS, Java) or a Java local class.
+  11. Plan deviation: the plan's commit step (§6 step 10) was not done; the
+      lane brief says not to commit.
+- **Critique points**: 1 (catch the whole per-file body, including the
+  grammar load and every helper, as one `Effect.catchDefect` boundary;
+  tests for a non-string input and a throw inside extraction after a real
+  parse, each asserting a Success exit); 2 (second form, item 5); 3
+  (stronger form: the runtime capture count plus both fixtures); 4; 5; 6;
+  7; 8 (the 16,000-deep fixture, a query-box test, and the `timeoutMicros`
+  finding); 9; 10; 11; 12 (the RSS test uses a large numeric array,
+  `Bun.gc(true)` before each sample and generous boxes; the poisoned-repo
+  checks run in one fresh subprocess); 13 (the extension-family test, the
+  pinned disagreement table, `fallback` renamed `reported` with its
+  meaning documented); 14 (a CRLF trivial-contract test and the string
+  variants); 15 (the pin comment); 16 (binary size measured, below). None
+  was rejected.
+- **BrainCode cross-check** (critique 13). Every parsed extension is the
+  same family in `BrainCode.language`. On the fixtures, the two readers'
+  exported names differ only as pinned in the test:
+  - TypeScript: the parser alone exports `Internal` (export clause),
+    `Open` and `value` (namespace), `ambient` and `declared` (ambient
+    module), and the members `area`, `label`, `onClick`, `run` and `shown`
+    (BrainCode never exports a method);
+  - JavaScript: the parser alone exports the CommonJS exports `VERSION`,
+    `read`, `write`, `hidden`, `shown` and `Cache` (from
+    `module.exports = class Cache`), and `Cache`'s member `put`;
+  - Python: the parser alone exports `__init__`, `label` (members) and
+    `_forced` (`__all__`); BrainCode alone exports `API_KEY`, `unlisted`,
+    `connect` and `Holder`, which `__all__` leaves out;
+  - Go: none;
+  - Rust: the parser alone exports `call` (trait method), `deep` (`pub` in
+    a module) and `fmt` (`impl Display`); BrainCode alone exports
+    `pub(self) fn private_fn`;
+  - Java: the parser alone exports the package-private and member
+    definitions (`Api`, `LIMIT`, `Mode`, `Nested`, `PackagePrivate`,
+    `Spawner`, `block`, `call`, `count`, `m`, `shown`, `spawn`).
+  - These are BrainCode's regex limits, not a third reader: the import
+    graph stays BrainCode's (extractor decision), and VS-25b decides where
+    the parser's answer replaces `symbols.ts`.
+- **Throughput, Bun 1.3.14** (this machine: 4 vCPU, warm cache; 4,000-file
+  seed-7 samples, or the whole set when smaller; default limits; parse and
+  extraction together; trees deleted after each file). Inputs, cloned
+  `--depth 1` (blobless, sparse where noted) into scratch, not committed:
+  kubernetes `671745e4` (Apache-2.0, `pkg cmd staging`), keycloak
+  `30cf6834` (Apache-2.0, `*.java`), rust-lang/cargo `111443f3`
+  (MIT/Apache-2.0), django `d9d05f10` (BSD-3, `django tests`),
+  nodejs/node `9d8a9adf` (MIT, `lib`), vscode `50bea175` (MIT, `src`), and
+  this repository at `5a16dfaf`. No GPL repository was used (Q26).
+
+  | Repository, files | Parsed | MB | Parse MB/s | Total MB/s | p95 / p99 / max ms | Walk share | Error trees | Peak RSS |
+  |---|---|---|---|---|---|---|---|---|
+  | kubernetes, .go | 3,999 (+1 too-large) | 35.8 | 7.07 | 3.34 | 9.7 / 32.6 / 121 | 14% | 1% | 276 MB |
+  | keycloak, .java | 4,000 | 23.5 | 7.68 | 3.49 | 6.1 / 15.1 / 51 | 12% | 0% | 270 MB |
+  | cargo, .rs | 1,379 | 10.3 | 5.62 | 2.92 | 11.7 / 33.2 / 70 | 12% | 38% | 259 MB |
+  | django, .py | 2,922 | 18.5 | 6.34 | 2.96 | 8.5 / 25.6 / 125 | 13% | 0% | 272 MB |
+  | node lib, .js | 434 | 5.7 | 6.53 | 2.94 | 15.1 / 27.8 / 51 | 13% | 0% | 337 MB |
+  | vscode, .ts | 3,999 (+1 too-large) | 58.9 | 6.63 | 3.02 | 16.0 / 45.4 / 339 | 14% | 0% | 353 MB |
+  | this repo, .ts | 3,953 (+1 too-large) | 35.2 | 5.80 | 2.66 | 12.0 / 23.9 / 127 | 14% | 0% | 306 MB |
+  | this repo, .tsx | 601 | 6.5 | 5.42 | 2.41 | 14.2 / 35.8 / 99 | 15% | 1% | 257 MB |
+  | this repo, JS family | 178 | 1.6 | 4.64 | 1.92 | 13.5 / 39.9 / 57 | 16% | 0% | 266 MB |
+  | this repo, .py | 225 | 2.9 | 4.55 | 2.09 | 25.2 / 37.7 / 69 | 15% | 0% | 255 MB |
+
+  No timeout, nesting or capture-count refusal in any run; the only
+  refusals are files over 1 MiB. Grammar load: 31 to 62 ms each. RSS with
+  every tree deleted stays at 255 to 353 MB, against round one's 770 MB
+  with all trees held. The cargo error trees are almost all one grammar
+  quirk: `str![...]`, a macro named like the primitive type `str` (cargo's
+  snapshot macro; the first error line of at least 465 of the 525 files),
+  plus cargo-script frontmatter (`---` blocks and `#![feature(frontmatter)]`);
+  error recovery still yields their definitions.
+- **Throughput, Node 22.23.4** (the bench bundled with `bun build
+  --target=node`; the seven grammars and the runtime emitted as assets and
+  found through `resolveWasm`'s relative path):
+
+  | Repository | Parse MB/s | Total MB/s | p99 / max ms | Walk share | Peak RSS |
+  |---|---|---|---|---|---|
+  | kubernetes .go | 5.80 | 2.28 | 42.6 / 162 | 25% | 210 MB |
+  | keycloak .java | 6.35 | 2.40 | 21.5 / 56 | 22% | 181 MB |
+  | cargo .rs | 4.89 | 2.18 | 40.5 / 86 | 22% | 168 MB |
+  | django .py | 5.42 | 2.18 | 35.8 / 158 | 23% | 196 MB |
+  | node lib .js | 5.65 | 2.21 | 43.5 / 61 | 26% | 158 MB |
+  | vscode .ts | 5.58 | 2.15 | 61.0 / 505 | 25% | 293 MB |
+  | this repo .ts | 4.82 | 1.86 | 34.3 / 218 | 25% | 200 MB |
+  | this repo .tsx | 4.98 | 1.90 | 49.7 / 139 | 28% | 175 MB |
+
+  Parse-only throughput (4.8 to 7.7 MB/s on both runtimes) is in line with
+  G1-8's 4 to 10 MB/s (Node, parse only). Round one's 4.75 to 4.83 s
+  (0.27.1, TypeScript only, parse only) was for 2,735 files of this
+  repository; its 3,953 TypeScript files now take about 6.1 s of parse time
+  under Bun (35.2 MB at 5.8 MB/s), so 0.25.10 is no slower. Extraction
+  roughly halves end-to-end throughput; the depth walk is 12 to 16% of a
+  file's time under Bun and 22 to 28% under Node.
+- **Near 1 MiB** (generous boxes, Bun): real files of 256 KiB or more
+  (kubernetes 21, vscode 31, django 2, this repository 4) parse in at most
+  155 ms and extract in at most 202 ms. Synthetic worst cases at 1 MiB:
+  `[a,a,...]` (524,279 references) parses in 1.6 s and extracts in 2.0 s,
+  so the default boxes refuse it as `timeout`; a numeric array parses in
+  0.8 s and extracts in 1.3 to 1.4 s (accepted); 36,923 one-line
+  declarations, 0.16 s and 0.52 s.
+- **Binary and install size.**
+  - Now: 0 bytes. Nothing imports `parse.ts`: no importer in any
+    `packages/*/src` or `script` file, and the Node bundle's module graph
+    (`bun build src/node.ts --target=node --metafile`, 4,511 inputs)
+    holds `util/tree-sitter.ts` and `shell.ts` but not `review/parse.ts`,
+    and emits only the runtime, bash and PowerShell wasm. (The static
+    tracer `script/trace-imports.ts` was not used: it reads `./shell` as
+    the `tool/shell/` folder. The CLI entry's graph was not built here: it
+    needs the platform packages only `build.ts` supplies.)
+  - Projected at wiring, per platform binary and per Node bundle: the seven
+    grammars are 5,410,649 bytes (TS 1,413,849; TSX 1,445,638; JS 358,909;
+    Python 457,883; Go 217,182; Rust 1,102,547; Java 414,641), the bundle
+    emits them uncompressed, and the largest is 2.9 times under the 4 MiB
+    cap. Measured on this host (linux-x64): a compiled binary of an entry
+    that imports `parse.ts` is 5,455,872 bytes larger than one that
+    imports only the shared runtime, Effect and web-tree-sitter. The
+    desktop sidecar's Node bundle grows by the same grammars.
+  - Install: 77,196,511 bytes unpacked for the six packages, mostly C
+    sources and native prebuilds that are never loaded.
+- **§0.3 items.**
+  1. Key: none. The `impact` key belongs to VS-25b; no `EVIDENCE_POLICY_KEYS`
+     or `EvidenceScope` change, so `policyDigest` and `promptsDigest` do not
+     move.
+  2. Parity: no runner changed; the engine runner, GitHub runner, replay,
+     desktop runner and shell suites pass unchanged (evidence below).
+  3. Evidence: the pin moves; the revision stays 1.
+  4. Variant: none yet; `engine:impact-graph` stays pending VS-25b wiring,
+     and `VARIANT_KEYS` is unchanged.
+  5. Desktop: a documented difference until VS-10 (the renderer never
+     imports the engine runtime, I-11); the desktop adapter keeps writing
+     `variant.applied: false`.
+  6. This entry.
+- **Owner questions: none decided.** Q13 (runner wiring), Q15 (VS-25 and
+  "supersedes VS-17"), Q18 (VS-38), Q26 (permissive repositories only were
+  used). A C grammar (69% error trees on kernel-style C, G1-8) is a
+  separate owner decision; C, C++, C# and PHP stay on the regex fallback.
+- **Deferred to the runner-wiring window or later.**
+  - VS-25b: the slice, the `impact` key, core `impact.ts`, BrainCode
+    workspace and alias resolution, `<untrusted_impact>`, and replacing
+    `symbols.ts` where a grammar exists.
+  - VS-24 wiring: the comment and string providers into `classifyTrivial`
+    (the contract test below proves the shapes fit).
+  - VS-36 to VS-38: the scan plan, partial clones, the review time box
+    (`deadline` is ready), `ImpactSlice` records and the separate counts of
+    C, C++, C# and PHP files in the artifact.
+  - The in-process or Worker decision (item 6).
+  - Later: the conditional fact cache and the Actions cache.
+  - Not verified here: the full `build.ts` compiled binaries (a smoke
+    binary from `bun build --compile` was, in the review round), grammar
+    loads on macOS and Windows (Linux x64 only), and the desktop sidecar.
+- **Evidence.** Each file ran alone through the lock with `--timeout 30000`,
+  `GITHUB_ACTIONS=false` and TMPDIR and XDG roots under scratch:
+
+  | Package | File | Tests |
+  |---|---|---|
+  | engine | `test/review/parse.test.ts` | 53 (new; 46 before the review round) |
+  | engine | `test/tool/shell.test.ts`, `test/tool/shell-sandbox-local.test.ts`, `test/tool/parameters.test.ts` | 62, 6 (+5 skipped), 60 (unchanged) |
+  | engine | `test/review/run.test.ts`, `test/cli/github.review.test.ts`, `test/review/vectorscope-replay.test.ts`, `test/review/context.test.ts` | 44, 40, 13, 6 (unchanged, I-1) |
+  | engine | `test/local-mode/local-run.test.ts` | 30, 1 fail (pre-existing, below) |
+  | engine | `test/util/lazy.test.ts` | 3 |
+  | engine | `test/compliance/generated-artifacts`, `dependency-notices`, `platform-notices`, `runtime-notices`, `node-bundle-guard`, `egress-inventory` | 2, 7, 8, 3, 3, 5 |
+  | core | `test/review/model-evidence.test.ts` | 18 (pin updated) |
+  | app | `src/features/pull-requests/ai-review.test.ts` (`--preload ./happydom.ts`) | 107 (unchanged) |
+
+  - `parse.test.ts` covers: every grammar loading from the engine's own
+    dependencies at its pinned ABI and version; bare patterns only; literal
+    module specifiers; the grammar cap; extensions and BrainCode families;
+    a fixture per language (definitions, spans, exports, containers,
+    aliases, signatures, references and their kinds, comments, strings);
+    no value in any signature; the 240-unit cap; UTF-16 columns; the names
+    filter; CRLF comment text; syntax errors; interleaved fibers giving the
+    same records; binary input; the exact 1 MiB input cap (UTF-8 bytes);
+    parse, extraction, caller-deadline and query time boxes; nesting past
+    the limit and G1-15's chain; a 16,000-deep fixture within the default
+    boxes; G1-15's dropped capture caught by the count; 70,000 references
+    in a flat file; twenty large trees leaving memory bounded; non-string
+    input and a throw during extraction as records with a Success exit;
+    a genuine wasm trap (a one-function `unreachable` module) disabling
+    the parser and setting the shell's poisoned flag in a fresh process;
+    and, from the review round: frozen tables, parameter defaults read as
+    `…` (nested ones too), `module.exports = class` and `= function`,
+    member containers, the Rust turbofish, `parseMs` without the grammar
+    load, the 16,000-deep fixture complete under generous boxes, 48,000
+    decorators or attributes within 3 s, and one stalled item turning the
+    file into a timeout; grammar files planted in the working
+    directory, `node_modules` and `NODE_PATH` of a fresh process never
+    loaded; `classifyTrivial` over parsed ranges of a CRLF file (comment
+    edit trivial, whitespace inside a template string `string-literal`,
+    whitespace outside it trivial); and the BrainCode table.
+  - **The one failure is pre-existing and comes from the environment**:
+    `local-run.test.ts` "changes nothing with Vector Local off" lists an
+    `amazon-bedrock` provider in this container, as recorded in the VS-21b
+    entry; it still fails with an isolated HOME and only lists providers.
+  - `bun typecheck` passes in engine (which covers `script/` and `test/`)
+    and core. App and desktop are untouched.
+  - prettier passes on every changed source and test file. oxlint reports
+    no warning on `parse.ts`, `util/tree-sitter.ts` and the bench; three on
+    `parse.test.ts`, each a deliberate cast that feeds invalid input (a
+    number as text, no path, a throwing `names`; the review round's
+    stalling `names` is a `Set` subclass, so it needs no cast); the warnings in
+    `shell.ts` and `model-evidence.test.ts` are on lines this package did
+    not change.
+  - **Mutation check.** 22 mutations of `parse.ts`, each applied to the
+    final file and run against its targeted tests, each broke at least one
+    test, and the file was restored byte for byte after each (`cmp`): the
+    per-file catch boundary dropped; the capture-count check, the depth
+    limit, the query's `timeoutMicros`, `tree.delete`, the parse progress
+    callback, `parser.reset` before each parse, the binary check, the
+    grammar cap, the names filter, the callee record and the export-clause
+    aliases each dropped; TS members not inheriting their class's export;
+    a variable's value in its signature; the runtime left enabled after a
+    trap; the input cap off by one; prototype keys read as extensions; Rust
+    trait methods on their own visibility; `pub(self)` read as public; a
+    doc comment keeping its newline; Python's `__all__` ignored; and a
+    grammar loaded from the working directory. The RSS threshold (150 MB)
+    sits between 2 MB of growth with deletion and 1,726 MB without.
+    Not mutation-tested: the lazies' reset after an I/O error (no fault
+    injection without mocks) and `cursor.delete` (its memory is too small
+    to measure). The review round added 13 more, each caught and restored
+    the same way: `parseMs` timed from the top of `parse`; the turbofish
+    callee; the member-body check; the member owner taken from any
+    container; Java's direct-container rule; the default cuts; the
+    post-sweep clock check; `module.exports = class` (caught by its own
+    test and by the JS fixture); Python's and Rust's local containers;
+    Python's colon stop; the trap's poison; and the old quadratic
+    adjacency (the 48,000-decorator test fails). Not mutation-tested: the shell's
+    poisoned check (testing it needs the shell tool booted in a fresh
+    process, since the flag is process-wide) and the grammar `stat`
+    fallback (no fault injection without mocks).
+  - The full root typecheck was not run: nothing is pushed.
+  - Nothing was sent to a model, no paid path ran, no workflow was
+    dispatched, nothing was published, and no user-visible string changed
+    (D14).
+
+- **Review round (2026-11-06).** Thirteen findings on the uncommitted
+  package, two of them blocking. All are fixed in the code and none was
+  rejected; where a fix differs from the suggestion, it says so below.
+  Built on the same `5a16dfaf`; nothing is committed.
+  1. **Blocking: a run of decorators or attributes could bypass the
+     extraction box.** `adjacent` filtered every collected comment for
+     every decorator and spread-copied the run at each step, so a run of D
+     decorators with comments between them cost O(D²), and the sweep
+     checked the clock only between items. Fix: one backward pass over the
+     run with a moving comment index (both lists are in document order),
+     reading each gap's text once; `adjacent` returns only the run's first
+     decorator, which is all `definition` uses. `extract` now also checks
+     the clock after the sweep, so a single item that overruns makes the
+     file a `timeout` (detail `sweep`), never a late success. Measured
+     with the default limits under Bun: `class A {` + `@a /**/ ` × 48,000 +
+     `m() {} }` (384 KB) took 28,440 ms before (the reviewer's figure) and
+     408 ms now (parse 132, extraction 268); the Rust form `#[a] /**/ ` ×
+     48,000 + `fn f() {}` (480 KB) 405 ms; the one-per-line forms 299 and
+     406 ms; near 1 MiB (130,000 decorators, 104,000 attributes) 779 and
+     765 ms. All four parsed.
+  2. **Blocking: signatures held default parameter values.** Fixed and
+     tested as described under "Signatures never hold a value" above. A new
+     `default` role (`RULES[language].defaults`: the node type and the
+     field of its default) captures each default-bearing parameter or
+     pattern; the sweep records each default value's range, and heads are
+     read after the sweep, since a default sits after the head that holds
+     it. Each outermost default reads `…`, with one binary search per cut,
+     so a cut default's nested defaults cost nothing more. The deviation
+     sentence that claimed no signature holds a literal is corrected above.
+  3. `parseMs` is timed around `parser.parse` alone, not from the top of
+     `parse()` (which also covered the binary check, the byte count, the
+     grammar `stat` and the 31 to 62 ms first-file grammar load). The bench
+     loads every grammar before it measures, so its tables stand.
+  4. `module.exports = class Foo { bar() {} }` and `= function named() {}`
+     now yield an exported definition named after the value (alias
+     "default"), or "default" when it has no name, and `bar` is an exported
+     method of `Foo`. A JS fixture line and a separate test (named,
+     anonymous class, arrow, and a plain value that yields nothing) pin it.
+  5. `container` now names only what a definition is directly declared
+     in. TS/JS members are recorded only directly in a `class_body` or
+     `interface_body` (both captured; `object_type` is now captured as a
+     scope, so a type literal's members are skipped), and their container
+     is the class or interface whose body it is (each class or interface
+     definition records its body's start, and the frame of that body knows
+     it). Java members take a container only when the nearest frame is a
+     class, interface or enum declaration. Beyond the finding, the same
+     defect is fixed where it had the same root: a TS declaration in a
+     function body, a Python definition in a function body and a Rust item
+     in a function body had taken the class or module around that function.
+     Java's local class `Local` is now in no container (the fixture moved
+     from "in Main"). Fixture lines in TS, Python, Rust and Java pin each.
+  6. A Rust turbofish (`parse::<u8>()`, `items.collect::<Vec<u8>>()`) is a
+     `call`: for a `generic_function` callee, the end of its `function`
+     field is recorded. A Rust fixture line pins both forms.
+  7. A sibling of the 16,000-deep test runs under generous boxes and
+     asserts a complete record (`depth > 16,000`, references `a` and `b`,
+     both definitions); the default-box test stays for the timing.
+  8. Every exported table (`PARSE_LANGUAGES`, `REPORTED_LANGUAGES`,
+     `PARSE_EXTENSIONS`, `REPORTED_EXTENSIONS`, `GRAMMARS`,
+     `PARSE_LIMITS`, `DEFINITION_KINDS`, `REFERENCE_KINDS`,
+     `PARSE_REFUSALS`, `ROLES`, `RULES`) is frozen all the way down, and
+     the `ParseLimits`, `Rules` and `Grammar` fields are `readonly`. A test
+     walks every table and checks that a write throws.
+  9. The grammar cap falls back to the file's read length when `stat`
+     fails. A compiled-binary smoke check (`bun build --compile`, Bun
+     1.3.14, linux-x64, of an entry that imports `parse.ts`): all seven
+     grammars resolved to `/$bunfs/root/...`, `stat` returned their sizes,
+     each loaded at its pinned ABI and parsed a sample (with defaults read
+     as `…`). The full `build.ts` binaries are still not verified.
+  10. `child()` in `parse.test.ts` uses the engine's `tmpdir` fixture
+      (`test/fixture/fixture.ts`) instead of its own `mkdtemp`.
+  11. The poisoned flag moved to `util/tree-sitter.ts` (item 6 above):
+      `TreeSitter.poison()` on a trap, `TreeSitter.poisoned()` read by the
+      review parser and by the shell tool's `parse`, which then refuses the
+      command as unparseable. This is the chosen interim option; the Worker
+      decision stays deferred. The trap test asserts the flag before and
+      after; the shell's check itself has no test (above).
+  12. The bench uses `lstatSync`, so a symbolic link (or anything else that
+      is not a regular file) is left out and never read or followed.
+  - `QUERY_VERSION` stays 1 although `RULES` changed: no version-1 output
+    ever left this worktree (nothing is committed or cached).
+  - Throughput re-run with the pinned packages after the round (this
+    repository's `.ts`, 3,954 files, default limits, Bun 1.3.14): parse
+    6.00 MB/s, total 2.59 MB/s, p95 / p99 / max 12.4 / 26.4 / 138 ms, peak
+    RSS 313 MB, against 5.80, 2.66, 12.0 / 23.9 / 127 and 306 MB before:
+    within run-to-run noise with the extra default captures. No refusal
+    but the one file over 1 MiB.
+  - Pin: `REVIEW_PIPELINE_SOURCES` `dc0ce0af6fd47a55` → `244e9c3d52f44f83`
+    (only `parse.ts` changed among the pinned files);
+    `REVIEW_PIPELINE_REVISION` stays 1, since no runner reads the parser.
+  - Evidence, each file alone through the lock with `--timeout 30000`,
+    `GITHUB_ACTIONS=false` and TMPDIR and XDG roots under scratch: engine
+    `test/review/parse.test.ts` 53 pass; `test/tool/shell.test.ts` 62,
+    `test/tool/shell-sandbox-local.test.ts` 6 (+5 skipped),
+    `test/tool/parameters.test.ts` 60 and `test/review/run.test.ts` 44, all
+    unchanged; core `test/review/model-evidence.test.ts` 18.
+    `bun typecheck` passes in engine and core; prettier passes on every
+    changed source and test file; oxlint reports only the three deliberate
+    casts in
+    `parse.test.ts` and the unchanged `shell.ts` lines.
+  - Nothing was sent to a model, no paid path ran, no workflow was
+    dispatched, nothing was published, and no user-visible string changed
+    (D14).

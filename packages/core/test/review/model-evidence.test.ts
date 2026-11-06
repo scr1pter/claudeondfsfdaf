@@ -26,8 +26,10 @@ import { DEFAULT_REVIEW_CONFIG, UNAPPLIED_REVIEW_KEYS, type ReviewConfig } from 
 
 // The review pipeline's sources, from the repository root: both runners, the core code they share for planning,
 // packing, selection, anchoring and the prompts (whose length limits promptsDigest cannot see), the route rules
-// (VS-23a), the payload holdback (VS-34a), the trivial gate and the pre-dispatch estimate (VS-24c), and the review and
-// security agents' own prompts. REVIEW_PIPELINE_SOURCES pins a digest of them.
+// (VS-23a), the payload holdback (VS-34a), the trivial gate and the pre-dispatch estimate (VS-24c), the tree-sitter
+// parser (VS-25a), and the review and security agents' own prompts. REVIEW_PIPELINE_SOURCES pins a digest of them. The
+// web-tree-sitter runtime init the parser shares with the shell tool (engine util/tree-sitter.ts) is left out on
+// purpose: it decides nothing a review finds, and pinning it would tie shell changes to the review pin.
 const REVIEW_PIPELINE_FILES = [
   "packages/engine/src/review/run.ts",
   "packages/app/src/features/pull-requests/ai-review.ts",
@@ -41,6 +43,7 @@ const REVIEW_PIPELINE_FILES = [
   "packages/core/src/review/holdback.ts",
   "packages/core/src/review/trivial.ts",
   "packages/core/src/review/dispatch.ts",
+  "packages/engine/src/review/parse.ts",
   "packages/engine/src/agent/prompt/review.txt",
   "packages/engine/src/agent/prompt/security.txt",
 ]
