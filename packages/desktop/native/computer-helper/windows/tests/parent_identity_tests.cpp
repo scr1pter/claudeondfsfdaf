@@ -31,18 +31,18 @@ void parent_identity_tests() {
   const auto actual = observe_token(GetCurrentProcess());
   HANDLE raw = nullptr;
   require(OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &raw) != FALSE, "parent.direct-token-open-query-only");
-  winrt::handle token(raw);
-  const auto direct = observe_token_handle(token.get());
+  winrt::handle borrowed_token(raw);
+  const auto direct = observe_token_handle(borrowed_token.get());
   require(same_token(actual, direct), "parent.process-and-direct-token-readers-agree");
   DWORD session = 0, returned = 0;
-  require(GetTokenInformation(token.get(), TokenSessionId, &session, sizeof(session), &returned) != FALSE && returned == sizeof(session) && session == direct.session,
+  require(GetTokenInformation(borrowed_token.get(), TokenSessionId, &session, sizeof(session), &returned) != FALSE && returned == sizeof(session) && session == direct.session,
     "parent.direct-token-reader-preserves-borrowed-handle");
-  require(same_token(direct, observe_token_handle(token.get())), "parent.borrowed-token-remains-readable");
+  require(same_token(direct, observe_token_handle(borrowed_token.get())), "parent.borrowed-token-remains-readable");
   bool token_as_process_refused = false, process_as_token_refused = false;
-  try { (void)observe_token(token.get()); } catch (const TokenObservationError&) { token_as_process_refused = true; }
+  try { (void)observe_token(borrowed_token.get()); } catch (const TokenObservationError&) { token_as_process_refused = true; }
   try { (void)observe_token_handle(GetCurrentProcess()); } catch (const TokenObservationError&) { process_as_token_refused = true; }
   require(token_as_process_refused && process_as_token_refused, "parent.process-and-token-handle-kinds-are-distinct");
-  require(same_token(actual, observe_token(GetCurrentProcess())) && same_token(direct, observe_token_handle(token.get())),
+  require(same_token(actual, observe_token(GetCurrentProcess())) && same_token(direct, observe_token_handle(borrowed_token.get())),
     "parent.wrong-handle-kind-refusal-preserves-readers");
   const auto value = fixture();
   require(parent_evidence_allowed(value), "parent.unsigned-stability-posture");
