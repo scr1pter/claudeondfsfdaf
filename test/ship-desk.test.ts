@@ -1204,7 +1204,8 @@ describe.skipIf(!valkeyURL)("Ship Desk's CARD script on Valkey", () => {
         card,
         String(cap),
         "60000",
-        String(NOW + 3_600_000),
+        // The meter's expiry is an absolute wall-clock time Valkey checks against its own clock.
+        String(Date.now() + 3_600_000),
         String(at),
         String(at - 10_000),
         "2",

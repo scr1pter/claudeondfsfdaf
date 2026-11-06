@@ -16,6 +16,9 @@ import {
   registerRepoBindingReader,
   updateOpsSettings,
   newOpsSettings,
+  configHash,
+  workerConfig,
+  OPS_SETTINGS_LIMITS,
   OPS_SETTINGS_SCRIPTS,
 } from "../api/_lib/ops-settings"
 import { SafeFetchError, type SafeTransport } from "../api/_lib/safe-fetch"
@@ -919,6 +922,14 @@ describe.skipIf(!valkeyURL)("A47's store scripts on Valkey", () => {
     await updateOpsSettings(ULTRA, () => ({ ...newOpsSettings(), repos: [repo(2, 9)] }), fetcher, NOW)
     expect((await client!.send("SMEMBERS", [opsRepoIndexKey(2)])).sort()).toEqual([MAX, ULTRA].sort())
     expect((await client!.send("SMEMBERS", [opsInstallationIndexKey(9)])).sort()).toEqual([MAX, ULTRA].sort())
+    // The Worker has not been sent the domain yet, so its retry comes before the weekly re-check.
+    expect(Number(await client!.send("ZSCORE", [opsDomainsDueKey(), MAX]))).toBe(NOW + OPS_SETTINGS_LIMITS.resyncMs)
+    await updateOpsSettings(
+      MAX,
+      (current) => ({ ...current!, synced: configHash(workerConfig(MAX, current!, NOW)) }),
+      fetcher,
+      NOW,
+    )
     expect(Number(await client!.send("ZSCORE", [opsDomainsDueKey(), MAX]))).toBe(NOW + 7 * DAY)
     // A stale expected value writes nothing.
     const result = await fetcher("https://kv.invalid", {

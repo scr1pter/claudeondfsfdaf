@@ -7,13 +7,13 @@
 // The Worker probes only https URLs on hosts the account verified, never follows a redirect, and reports to the API
 // (POST <API_ORIGIN>/api/ops/worker, signed). It never logs an account, a URL or an answer.
 
-import { INTERNAL_ACTIONS, KILL_KEY, NONCE_HEADER, OpsAccount, SIGNED_AT_HEADER, answer, failure } from "./ops-account"
+import { INTERNAL_ACTIONS, NONCE_HEADER, OpsAccount, SIGNED_AT_HEADER, answer, failure } from "./ops-account"
 import { accountHandle, internalSecret, verifyInternalSignature } from "./internal"
 import { OPS_LIMITS } from "./limits"
 import { OPS_INTERNAL_PREFIX } from "./protocol"
 import { workersRuntime, type Env, type Runtime } from "./runtime"
 
-export { OpsAccount, KILL_KEY }
+export { OpsAccount }
 
 /** The object that records nonces for calls not about one account (the kill flag). Account names are 64 hex digits. */
 const CONTROL_OBJECT = "control"
