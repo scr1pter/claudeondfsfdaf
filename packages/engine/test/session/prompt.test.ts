@@ -2599,7 +2599,9 @@ raceNoLLMServer.instance(
       }
     }),
   { trusted: true, config: cfg },
-  3_000,
+  // A hang still fails fast, but Windows runners spend about 2 s booting each instance here, and the sibling
+  // cancel tests take 3 to 5 s there, so 3 s timed out on a passing run.
+  15_000,
 )
 
 noLLMServer.instance(
