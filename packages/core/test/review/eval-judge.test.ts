@@ -131,6 +131,21 @@ describe("blind", () => {
     expect(large.findings.find((item) => item.title === CAUSE.title)!.body).toBe(CAUSE.body)
   })
 
+  test("a task shows a defect's label without the annotators' failure class", () => {
+    const labelled = { ...CASE, defects: CASE.defects.map((defect) => ({ ...defect, failureClass: "crash" })) }
+    const blinded = blind({ runs: RUNS, cases: [labelled], seed: "seed-1" })
+    expect(blinded.tasks).toHaveLength(2)
+    for (const task of blinded.tasks) {
+      expect(task.defects).toEqual(CASE.defects)
+      for (const defect of task.defects) expect(defect).not.toHaveProperty("failureClass")
+    }
+    expect(JSON.stringify(blinded.tasks)).not.toContain("crash")
+    // The task is the same as for the unlabelled case, byte for byte.
+    expect(JSON.stringify(blinded.tasks)).toBe(
+      JSON.stringify(blind({ runs: RUNS, cases: [CASE], seed: "seed-1" }).tasks),
+    )
+  })
+
   test("a task says where to read the case's code, and that names nothing about the run", () => {
     const code = {
       repository: "https://github.com/acme/ledger",

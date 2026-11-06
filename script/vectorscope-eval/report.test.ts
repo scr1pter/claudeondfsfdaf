@@ -779,7 +779,7 @@ test("evalFinding keys a finding the same before and after selection", () => {
   expect(proposed).not.toHaveProperty("anchored")
 })
 
-// VS-21c: the operations fields of an engine replay, desktop artifacts, projection records and the cross-file trait.
+// VS-21c: the operations fields of an engine replay, desktop artifacts and projection records; VS-22a: the case labels.
 describe("VS-21c outputs", () => {
   function desktop(overrides: Partial<DesktopArtifact> = {}): DesktopArtifact {
     const engine = artifact()
@@ -1035,8 +1035,19 @@ describe("VS-21c outputs", () => {
     expect(result.stdout).toContain("Estimate error, |projected low - settled| / settled: mean 20.0%")
   })
 
-  test("a case with the dataset's cross-file trait is a cross-file case", () => {
-    expect(manifestCase(bug).crossFile).toBeUndefined()
-    expect(manifestCase({ ...bug, traits: ["cross-file"] }).crossFile).toBe(true)
+  test("a case's VS-22a labels reach its eval case", () => {
+    expect(bug.id).toBe("pallets-werkzeug-1")
+    expect(manifestCase(bug).crossFile).toBe(false)
+    expect(manifestCase({ ...bug, labels: { ...bug.labels, crossFile: true } }).crossFile).toBe(true)
+    expect(manifestCase({ ...bug, labels: { ...bug.labels, crossFile: undefined } })).not.toHaveProperty("crossFile")
+    expect(manifestCase(bug).defects.map((defect) => defect.failureClass)).toEqual(["crash", "other"])
+    const control = seed.cases.find((item) => item.kind === "control")!
+    expect(manifestCase(control)).not.toHaveProperty("trivialKind")
+    const trivial = {
+      ...control,
+      kind: "trivial" as const,
+      labels: { ...control.labels, trivialKind: "docs" as const },
+    }
+    expect(manifestCase(trivial)).toMatchObject({ kind: "control", trivialKind: "docs", defects: [] })
   })
 })

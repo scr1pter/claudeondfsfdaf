@@ -2077,3 +2077,349 @@ committed.
     left for this one."
   - Nothing was sent and no paid path ran. The workflow was not dispatched.
     No dependency was added and no user-visible string changed (D14).
+
+## 2026-11-06 · VS-22a Dataset schema and label tests
+
+Contract §4 VS-22a of `vectorscope-upgrade.md`, in the "Now" window: eval
+scripts, their docs and the seed manifest, plus comments in core `eval.ts` and
+the blinded judge task in core `eval-judge.ts` (a review fix, below). It
+adds no `ReviewConfig` key, no `types.ts` or `config.ts` change, nothing to
+`EVIDENCE_POLICY_KEYS`, `EvidenceScope` or `VARIANT_KEYS`, and no replay
+variant. Nothing under `packages/engine/src` or `packages/app/src` changed, so
+no runner, provider, LLM or posting file and no file @vector owns was touched.
+Branch `vectorscope-engine` at `0f772e6e`. It implements the VS-22a plan as
+corrected by its critique; the critique bullets below say where a point was
+taken differently. Nothing is committed.
+
+- **What landed.**
+  - **`script/vectorscope-eval/dataset.ts`.** `SCHEMA` is now
+    `vectorscope-dataset/2`. New exports: `FAILURE_CLASSES` (the contract's
+    five), `DEFECT_CLASSES` (those and `other`), `MECHANISMS` (§1.2's
+    `FailureInfo.mechanism`), `PENDING_Q4` (`data-exposure`,
+    `concurrency-wrong-result`), `TRIVIAL_KINDS` (§1.2's `TrivialKind`),
+    `CI_RESULTS` (`passed`, `failed`, `none`), `AUTHORING_SOURCES`
+    (`commit-trailer`, `bot-account`, `synthetic`) and `TARGETS` (VS-22b's
+    numbers). `KINDS` gains `trivial`; `TRAITS` loses `cross-file` and gains
+    `trivial-looking` and `dependency-bump`; `EXCLUSION_REASONS` gains
+    `not-trivial` and `mixed-trivial`.
+    - Types: `Defect` gains `failureClass?`, `mechanism?`, `pendingQ4?`;
+      `Case.labels` gains `crossFile?`, `runnable?` (`status`, `check?`,
+      `evidence`, `date`, `note?`), `authoring?` (`lab`, `source`,
+      `evidence`) and `trivialKind?`; each `Annotation.passes` entry gains
+      `labels?` (`defects` by the case's ids with `failureClass`, `mechanism`
+      and `pendingQ4`, and `crossFile`). Absent always means not yet labelled.
+    - Validator: a `trivial` kind (`trivialProblems`: the control rules plus
+      one `trivialKind`); `labelProblems` on every kind (`trivialKind` only on
+      a trivial control; `crossFile` a boolean, only with labelled defects,
+      and `true` only when one defect's locations and alternatives name two
+      files other than tests; the `runnable` and `authoring` shapes, with
+      `runnable.evidence` reading the case's own base commit;
+      `trivial-looking` only on a bug case); a cross-case check that a
+      repository's cases are of one kind and at most `PER_REPOSITORY` (2); `classProblems` on every defect and every pass record
+      (`pendingQ4` only on `other`, and `concurrency-wrong-result` only with
+      mechanism `concurrency`); `passLabelProblems` and `agrees` for each
+      pass's own labels; and the freeze check below.
+    - `dryRunReport`: with no trivial case, the header and split table are as
+      before; otherwise the header names the trivial controls and the table
+      gains a TRIVIAL column. New lines for failure classes (with the
+      production-breaking count), mechanisms, Q4 markers, cross-file,
+      runnable, authoring, trivial kinds when present, and the targets.
+    - `assignSplits`, `heldOutDigest`, `caseView` and `objectProblems`: no
+      code change. The case view is still repository, base and head only.
+  - **`dataset/seed.json`**: schema 2, the labels below, a 2026-11-06 pass-1
+    entry on each bug case recording its own labels and saying "runnable and
+    authoring not examined", and one more sentence in the description. No
+    split, selection or exclusion changed.
+  - **`report.ts` `manifestCase`**: a trivial case maps to
+    `{ kind: "control", trivialKind }`; `crossFile` comes from
+    `labels.crossFile` (in place of the trait) and each defect's
+    `failureClass` is passed on for class-scoped recall. Mechanism and the Q4
+    marker stay in the dataset, since nothing reads them yet. `report.ts` and
+    `report.test.ts` are outside the contract's VS-22a file list (`dataset.ts`,
+    the guide, the rubric, `fixtures.test.ts`). They changed because retiring
+    the `cross-file` trait and adding the `trivial` kind would otherwise break
+    VS-21c's `crossFile` and `trivialKind` mapping, and the change stays within
+    the Now window's eval-script work.
+  - **Core `review/eval-judge.ts`** (review fix): `blind()` maps each defect
+    to a `TaskDefect` (id, category, severity, summary, cause, locations,
+    alternatives), so judges never see the annotators' `failureClass` and a
+    task is byte-identical to the one for the unlabelled case (tested in
+    `eval-judge.test.ts`). Not a pinned file.
+  - **Core `review/eval.ts`**: comments only, on `failureClass`, `crossFile`
+    and `trivialKind`. Not a pinned file.
+  - **Docs.** `annotation-guide.md`: the trivial control; the two exclusion
+    reasons; the new traits; "Labels added in VS-22a" (definitions, the
+    mechanism order, how to read `runnable` and map every conclusion,
+    authoring's limits); "Trivial controls" (VS-24 items 1-2 copied with a
+    pointer, one kind per case, what happens to a candidate that fails);
+    per-pass labels in the two-pass procedure; splits and freezing; and the
+    dated sampling rule. `judging-rubric.md`: "Failure classes and
+    production-breaking" with the leak scope pending Q4, and metrics rows for
+    class-scoped recall, cross-file recall and trivial controls, which
+    document VS-21c's computations. `README.md`: kinds, schema 2, the seed's
+    label state, the tests and the report bullet.
+- **Decisions.**
+  - **D-a. Trivial is a dataset kind** (`kind: "trivial"`, with
+    `labels.trivialKind`), as the contract's "a new control kind" says.
+    `assignSplits` already splits each kind on its own, so trivial controls
+    split separately with no change to the split code and move no other case
+    (tested). Core keeps `EvalCase.kind` as bug, control or adversarial;
+    `manifestCase` maps the kind to a control with its `trivialKind`, which
+    VS-21c's `isTrivialControl` and `summarize` already keep apart.
+  - **D-b. `labels.crossFile` replaces the `cross-file` trait**, with three
+    states (true, false, unlabelled). No committed manifest had the trait.
+  - **D-c. Class, mechanism and the Q4 marker are per defect**, as core's
+    `LabelledDefect.failureClass` already is. Mechanisms take the first that
+    applies of concurrency, access, resource, logic, regression.
+  - **D-d. Q4 stays open through `pendingQ4`.** Labels follow the narrow
+    reading (`leak` is a resource leak); a defect that a wider answer would
+    move into a class is `other` with a marker, so either answer can be
+    computed without relabelling, even after a freeze.
+  - **D-e. `runnable` comes only from recorded public CI**, never by running
+    anything (I-13). Every status needs the API link read and its date;
+    `passed` and `failed` name the test check; `none` needs a note. The guide
+    maps every check-run conclusion and status state. VS-22b's "15 runnable"
+    target counts `passed` only, because runtime confirmation (VS-30) needs a
+    suite that passes at the base; the dry run shows every status, so the
+    contract's wider "tests ran" reading (passed or failed) stays computable.
+  - **D-f. `authoring` is optional, self-declared and for stratifying
+    only**: from commit trailers or bot accounts, never PR title, body or
+    branch text, and never VS-29b's trusted authorship or any invocation field
+    (I-2). The field is `lab` (not the contract's "family"), because
+    `Case.family` already means related cases; its values are codium `labOf`
+    lab ids, checked against that list when codium merges. No mapping or lab
+    list is written here (I-10). `synthetic` is accepted, but no synthetic
+    case is admitted before Q12.
+  - **D-g. Absent means unlabelled**, never a null sentinel. It is made
+    explicit by the guide, the dry run's unlabelled counts, the freeze check,
+    a seed test that pins which labels are unset, and the seed's own pass
+    method ("runnable and authoring not examined").
+  - **D-h. The freeze needs VS-22a's labels.** A frozen held-out bug case must
+    have `failureClass` and `mechanism` on every defect, `crossFile`,
+    `runnable`, and two passes' own labels: none can be added after a freeze
+    without re-freezing, and class-scoped recall (Q3/D16) and kappa need
+    them. The pass-label item is reported only for a settled label, since an
+    unsettled one is already refused for its missing pass or agreement.
+  - **D-i. The sampling rule is recorded up front**, dated 2026-11-06, in the
+    guide, before any VS-22b candidate or result.
+  - **Schema version 2.** Retiring the trait makes `manifestProblems` refuse
+    a value version 1 accepted, and version 2 adds a kind an old reader would
+    refuse, so the schema is bumped rather than keeping the trait as an
+    alias. A version-1 manifest is refused (tested); the seed was the only
+    one.
+  - **Class definitions** (`judging-rubric.md`), chosen so the seed labels
+    follow them:
+    - `crash` is abnormal termination: an exception or panic the code does not
+      handle (a framework's top-level handler turning it into a 500 or an exit
+      status still counts), a fatal error or signal, or a process that exits
+      at startup. An error returned on purpose, such as a rejected
+      configuration, is `other` unless the evidence shows the process exits.
+    - `data-corruption` is data stored, or passed on for another system to
+      store. A wrong value only computed, shown or returned is `other`, and so
+      is diagnostic output (logs, traces, metrics, telemetry).
+    - Two readings beyond the owner's wording are recorded as this build's
+      decisions, not settled vocabulary, and the rubric says so: a deadlock
+      or a request that never completes counts as `runaway-loop`, and an
+      injection that lets a caller run commands or queries beyond its rights
+      counts as `auth-bypass`. No seed defect depends on either; if the owner
+      narrows them, only defects of those kinds are relabelled.
+  - **Sampling-rule decisions** (the guide's last section):
+    - VS-22b writes a new manifest, `dataset/upgrade.json`, because a
+      manifest has one `selection` and the seed's says "hand-picked". It
+      carries the seed's ten cases and exclusions over with their ids, so one
+      split covers the whole set; splits are then recomputed and click and
+      hono may leave held-out, which is allowed since nothing is frozen.
+      `seed.json` stays the replay default until the new manifest is frozen.
+    - At most two cases per repository, counting the seed, where the seed's
+      own rule was one: about 125 cases at one per repository would need as
+      many repositories, and two keeps the set diverse while a repository's
+      cases always share a split.
+    - The cases one repository supplies are of one kind, because
+      `assignSplits` groups by repository within a kind only, so a bug case
+      and a control from one repository could otherwise sit in different
+      splits. `family` does not help here: it also groups within a kind.
+    - The licences are spelled as `LICENCES` names them.
+  - **Trivial controls take one kind.** A trivial candidate that mixes kinds
+    is excluded as `mixed-trivial`, so it can be admitted if the label later
+    becomes a list (VS-24's `classifyTrivial` returns a list of kinds).
+  - **A candidate that fails the trivial rules** is first considered for the
+    behaviour-preserving control or trivial-looking bug stratum, and is
+    excluded as `not-trivial` only when it fits neither. A dependency bump
+    that preserves behaviour is admitted as a `control` with the
+    `dependency-bump` trait, so Q11 can reclassify it without finding it
+    again.
+- **Seed labels** (pass 1, 2026-11-06, only from each case's recorded cause,
+  locations and evidence):
+
+  | Case | Defect | Class | Mechanism | crossFile |
+  |---|---|---|---|---|
+  | pallets-werkzeug-1 | server-name-none | crash (AttributeError on every plain-HTTP request) | logic | false |
+  | pallets-werkzeug-1 | port-appended-to-host | other (wrong server name) | logic | |
+  | fastify-fastify-1 | response-time-unset | other (diagnostic output) | logic | false |
+  | nats-io-nats-server-1 | lds-data-race | other, `pendingQ4: concurrency-wrong-result` | concurrency | false |
+  | caddyserver-caddy-1 | srv-upstream-rejected | other (a configuration rejected at load; the case files do not show the process exiting) | regression | **true**: `reverseproxy.go:207-213` with the `hosts.go:83` alternative, outside the one-file change |
+  | vitejs-vite-1 | legacy-marker-in-ssr | crash (ReferenceError in the SSR bundle) | regression | false |
+  | tokio-rs-tracing-1 | scoped-default-clobbers-global | other (events dropped: diagnostic output) | logic | false |
+  | pallets-click-1 | eof-on-iteration | crash (EOFError aborts the command), at concern | regression | false (its test-file alternative is a test the change edited) |
+  | honojs-hono-1 | jwt-time-truncation | auth-bypass (expired tokens accepted) | access | false |
+
+  Production-breaking (blocking, in the five classes): 3 of 9 defects
+  (werkzeug's crash, vite, hono). `runnable` and `authoring` are unset on all
+  ten cases: the case files hold no CI status and no authoring evidence.
+  Controls carry no new label. Status stays `draft`.
+  **Disputes pass 2 may raise:** caddy (crash, if issue 3753 shows startup
+  exiting with such a config); tracing (data-corruption, under a reading that
+  counts lost telemetry, and logic against regression); hono (severity, since
+  it triggers only after 2038, and its mechanism: `access` by the order,
+  though the cause is an integer truncation); nats (Q4, and a torn Go string
+  read can crash, which the case files do not show); click (a crash at
+  concern severity, so not production-breaking). The `cross-file`
+  confirmation for caddy was read with read-only git on the VS-21c mirror:
+  `hosts.go:83` is `LookupSRV`, and the change touches only
+  `reverseproxy.go`.
+- **Critique of the plan, point by point.**
+  1. *Per-pass labels* (major): taken. `annotation.passes[].labels` records
+     each pass's own labels by defect id; ids must exist, may not repeat, and
+     each pass records them once. Once any pass of a double-annotated or
+     adjudicated case records them, two must; `agreed: true` needs passes
+     whose labels are the case's. The seed's 2026-11-06 entry carries them,
+     and the freeze needs them on held-out bug cases (D-h). A pass record
+     names only defects the final labels keep; a defect a pass proposed that
+     adjudication dropped goes in the adjudication note.
+  2. *Definitions against labels* (major): taken, by narrowing. Tracing stays
+     `other` because `data-corruption` now excludes telemetry by definition;
+     caddy is relabelled `other` because `crash` is abnormal termination
+     only. The deadlock and injection readings are recorded decisions (above).
+     Caddy, tracing and hono are listed as disputes.
+  3. *VS-24's rules paraphrased wrongly* (major): taken. The guide copies
+     VS-24 items 1-2 verbatim with a pointer, so the conditional rename rule,
+     the docs exclusions, doctests, licence headers and shebang and encoding
+     lines are as the contract has them, and adds VS-24's `.mdx`,
+     `requirements.txt` and case-only-rename fixtures to the trivial-looking
+     examples.
+  4. *`not-trivial` throws candidates away*: taken (above).
+  5. *`runnable`*: taken. Evidence and date for every status, every
+     conclusion mapped, `none` with a note, and "target counts passed"
+     recorded (D-e).
+  6. *`authoring`*: taken, including the rename to `lab` (D-f).
+  7. *Explicitly unlabelled*: taken, in the seed's pass method and its pass
+     record.
+  8. *Sampling-rule gaps*: taken (above).
+  9. *Retiring the trait without a schema bump*: taken as a bump to version 2.
+  10. *Mechanism order and hono*: taken. Hono's mechanism is a listed dispute,
+      and VS-27's strict prompt stating the same definitions and order is
+      deferred (below).
+  11. *`trivialKind` takes one value*: taken as "one kind per case", with
+      `mixed-trivial` exclusions. **Not taken:** a `trivialKinds` list beside
+      it; the contract names one `trivialKind`, and the exclusions keep the
+      mixed candidates findable.
+- **Off by default (I-1).** No key, no runner and no request changed, so no
+  parity test applies. The only output changes are the eval tooling's: the
+  dry run's new lines and its schema name, class-scoped and cross-file recall
+  now computable on the seed, and `manifestProblems` refusing a version-1
+  manifest, the retired trait, runnable evidence from another commit or
+  repository, and a repository whose cases span kinds or exceed two. Judges'
+  blinded tasks are unchanged: they leave the class out.
+- **Pin, revision and rubric.** No file in `REVIEW_PIPELINE_FILES` changed:
+  `REVIEW_PIPELINE_SOURCES` stays `228a42cb975134ce` and
+  `REVIEW_PIPELINE_REVISION` stays 1 (`model-evidence.test.ts`, 16 pass).
+  `RUBRIC_VERSION` stays 1: the classes are label vocabulary, and no verdict,
+  settlement or gate rule changed. The metrics rows describe what VS-21c
+  already computes.
+- **Owner questions: none decided.** Q3 stays open (class-scoped recall is
+  computable and the freeze keeps classes on held-out cases); Q4 through
+  `pendingQ4`; Q11 through the `dependency-bump` trait, with no dependency
+  `trivialKind`; Q12 through no synthetic case; Q14 through the
+  contract's own targets; Q15 open.
+- **Held-out digest.** The seed is not frozen. Its held-out digest moves from
+  `sha256:56c3cb497c5097bde7eed81bb11adb8ceaaef3678e38ad5ca9994baa56b57ac3`
+  to `sha256:dc56133cf9d417526f0d534ae89aaebfcdaa414b6f1aa0c085a09897f4a6e98d`,
+  because click and hono gained labels.
+- **Evidence.** Each file was run alone through the lock with
+  `--timeout 30000`, `GITHUB_ACTIONS=false`, and `TMPDIR` and XDG roots under
+  `/tmp/vector-vectorscope/vs22a-*`:
+
+  | Where | File | Pass |
+  |---|---|---|
+  | `packages/script` | `../../script/vectorscope-eval/fixtures.test.ts` | 65 (50 before) |
+  | eval scripts | `report` | 27 (one test replaced) |
+  | eval scripts | `replay`, `ci`, `judge`, `certify`, `run`, `budget` | 32, 30, 6, 6, 14, 21 |
+  | engine | `test/review/vectorscope-replay.test.ts` (reads the seed) | 13 |
+  | core | `test/review/eval.test.ts`, `eval-judge.test.ts`, `eval-report.test.ts`, `model-evidence.test.ts` | 42, 12 (11 before), 19, 16 |
+
+  - In `fixtures.test.ts`, three existing tests' setup changed and no
+    expectation did. "A control has no fix and no defects" removes the
+    synthetic bug's VS-22a labels with its defects, since they describe the
+    defect. "Rejects a licence outside MIT, Apache-2.0 and BSD" builds its
+    case with the GPL repository rather than overwriting it, and "rejects
+    repeated ids and repeated candidates" gives the copy the first case's
+    labels, so their `runnable` evidence reads the repository and base they
+    name. The synthetic helpers carry the new labels, and the synthetic
+    `runnable` evidence is built from the case's own repository URL, so the
+    freeze tests' expectations are unchanged.
+  - `bun typecheck` in core and engine, and
+    `bun tsgo -p ../../script/vectorscope-eval/tsconfig.json` from
+    `packages/engine`, exit 0.
+  - `prettier --check` passes on every changed code file, the seed, the guide
+    and the README. `judging-rubric.md` was not prettier-clean before (its
+    tables are compact), so its additions keep its style and its existing
+    tables are untouched.
+  - `bun dataset.ts` exits 0 and prints the new lines. `--mirrors` on the
+    VS-21c mirrors exits 1 only because those mirrors hold no fix commits by
+    design (`mirrorPlan` fetches heads and bases), so the location checks did
+    not run there; no label location changed.
+  - Nothing was sent, no paid path ran, no workflow was dispatched, no
+    dependency was added, and no user-visible product string changed (D14).
+- **Review fixes** (same day, before any VS-22b candidate was examined).
+  Every finding was taken; none was left with a recorded disagreement.
+  - *`runnable.evidence` accepted any https link.* It must now be
+    `https://api.github.com/repos/<owner>/<name>/commits/<base>/check-runs`
+    or `.../status`, built from the case's `repository.url` and
+    `candidate.base`, with any query and the owner and name in any case
+    (GitHub matches them so). A link to the head's or the fix's checks,
+    another repository, the web page or a fragment is refused with its own
+    message, which names the two links expected. The check runs only once the
+    repository URL and base are well formed, so a malformed one is reported
+    once. Tested, with the head SHA among the refused links.
+  - *One kind, and the cap, per repository, were unvalidated.* Both are now
+    enforced in `manifestProblems` after the shape checks, grouping by
+    `repositoryKey` (so URL case does not split a repository): cases of more
+    than one kind from one repository are refused, since `assignSplits`
+    groups by repository within a kind only; so are more than
+    `PER_REPOSITORY` (2) cases from one. The cap is enforced, not
+    reported-only like `TARGETS`, because it is a fixed rule of the sampling
+    and a case past it already has an exclusion reason (`quota`); `TARGETS`
+    are minimums a growing set only approaches. The guide's "Splits" and
+    sampling rule item 3 say so; the rule itself is unchanged. A `family`
+    spanning kinds is still not checked; nothing in the seed has one.
+  - *`crossFile: true` counted a test alternative.* The two files are now
+    counted without the fix's `regressionTest.paths` and test-looking paths
+    (`TEST_PATH`: a `test`, `tests`, `__tests__` or `spec` directory,
+    `test_<name>`, or `.test`, `_test`, `.spec`, `_spec` before the
+    extension), as the guide states. Caddy keeps its two source files; a
+    test-file alternative alone, or a regression test path, is refused
+    (tested), and `src/click/testing.py` still counts. The heuristic can
+    miss a test file named otherwise (`testing/`, `it/`), which only lets a
+    wrong `true` through as before; it cannot refuse a defect whose second
+    file is source unless that file is named like a test.
+  - *Judges saw `failureClass`.* Fixed in `blind()` (above) rather than by
+    documenting it, since no verdict rule reads the class.
+  - *Single-use `traits`.* Inlined; likewise the cross-file check's
+    regression paths.
+  - *Unlisted files.* `report.ts` and `report.test.ts` are recorded above as
+    outside the contract's VS-22a file list; `eval-judge.ts`, its test and
+    the README's test list changed for the review fixes.
+- **Deferred.**
+  - VS-22b: curation, pass 2 (blind, with its own labels), the owner's
+    adjudication, kappa on `failureClass`, `runnable` labels from public CI
+    (read-only, rate-limited when anonymous), and the held-out freeze.
+  - When VS-27a and VS-24 land: a test that `FAILURE_CLASSES`, `MECHANISMS`
+    and `TRIVIAL_KINDS` equal core's, or `dataset.ts` importing them.
+  - VS-27's strict prompt states the same class definitions and mechanism
+    order, so a strict finding's `FailureInfo` can be compared with its label.
+  - When codium merges: checking `authoring.lab` against its `LABS`.
+  - The report counting unlabelled defects, and offering the wide Q4 reading
+    from the markers.
+  - Replays of trivial controls with trigger `auto` (VS-24 wiring).
+  - Adversarial cases with PR text need PR text in `ReplayCase`; the case view
+    has none today.

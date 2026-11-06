@@ -645,12 +645,15 @@ export function manifestCase(item: Case): EvalCase {
   const view = caseView(item)
   return {
     id: item.id,
-    kind: item.kind,
+    // A trivial control is a control with its trivialKind, which the report keeps apart from the behaviour-preserving
+    // ones (isTrivialControl).
+    kind: item.kind === "trivial" ? "control" : item.kind,
     language: item.language,
     size: item.candidate.changed,
     code: { repository: view.repository, base: view.base, head: view.head },
-    // VS-22a maps failureClass and trivialKind from its own labels; the cross-file trait exists today.
-    ...(item.traits?.includes("cross-file") ? { crossFile: true } : {}),
+    // VS-22a's labels, each only when labelled. Mechanism and the Q4 marker stay in the dataset: nothing reads them yet.
+    ...(item.labels.crossFile !== undefined ? { crossFile: item.labels.crossFile } : {}),
+    ...(item.labels.trivialKind ? { trivialKind: item.labels.trivialKind } : {}),
     defects: item.labels.defects.map((defect) => ({
       id: defect.id,
       category: defect.category,
@@ -659,6 +662,7 @@ export function manifestCase(item: Case): EvalCase {
       cause: defect.cause,
       locations: defect.locations,
       alternatives: defect.alternatives,
+      ...(defect.failureClass ? { failureClass: defect.failureClass } : {}),
     })),
   }
 }

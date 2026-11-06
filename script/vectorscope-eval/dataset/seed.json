@@ -1,7 +1,7 @@
 {
-  "schema": "vectorscope-dataset/1",
+  "schema": "vectorscope-dataset/2",
   "name": "vectorscope-seed",
-  "description": "Seed of VectorScope's real-change dataset: eight bug-fix cases and two clean controls from public, permissively licensed repositories, each pinned to immutable commits and checked read-only against GitHub. Labels are one draft model-assisted pass. Curating the full set of about 125 cases, its second annotation pass and the owner's adjudication are later dataset work.",
+  "description": "Seed of VectorScope's real-change dataset: eight bug-fix cases and two clean controls from public, permissively licensed repositories, each pinned to immutable commits and checked read-only against GitHub. Labels are one draft model-assisted pass; VS-22a added failure classes, mechanisms and cross-file labels to it from the case files, and runnable and authoring are not yet examined. Curating the full set of about 125 cases, its second annotation pass and the owner's adjudication are later dataset work.",
   "created": "2026-11-03",
   "selection": {
     "method": "Hand-picked seed, not a random sample.",
@@ -50,6 +50,8 @@
             "id": "server-name-none",
             "category": "correctness",
             "severity": "blocking",
+            "failureClass": "crash",
+            "mechanism": "logic",
             "summary": "bind_to_environ strips the default port from the server_name argument instead of the Host header, and crashes when server_name is None.",
             "cause": "In the HTTP_HOST branch the new code tests and slices server_name, the caller's optional argument, instead of wsgi_server_name, the value it has just read from the Host header. With the default server_name=None, every plain-HTTP request evaluates None.endswith(':80') and raises AttributeError. When a server_name is passed, the Host header's explicit :80 or :443 is never removed, so implicit and explicit default ports still compare unequal, which is what the change set out to fix.",
             "locations": [{ "path": "werkzeug/routing.py", "line": 1187, "endLine": 1192 }],
@@ -59,6 +61,8 @@
             "id": "port-appended-to-host",
             "category": "correctness",
             "severity": "blocking",
+            "failureClass": "other",
+            "mechanism": "logic",
             "summary": "SERVER_PORT is appended to the server name even when the name came from the Host header, which already carries any port.",
             "cause": "The block that appends ':' + SERVER_PORT used to run only in the SERVER_NAME fallback; the change moves it after both branches. A request with Host: localhost:5000 and SERVER_PORT 5000 now yields localhost:5000:5000, and a proxied request whose Host has no port gains the backend's port, so server-name and subdomain matching fail.",
             "locations": [{ "path": "werkzeug/routing.py", "line": 1197, "endLine": 1199 }],
@@ -66,7 +70,25 @@
           }
         ],
         "regressionTest": { "status": "none", "note": "The fix commit adds no test." },
-        "annotation": { "status": "draft", "passes": [{ "pass": 1, "method": "model-assisted", "date": "2026-11-03" }] }
+        "crossFile": false,
+        "annotation": {
+          "status": "draft",
+          "passes": [
+            { "pass": 1, "method": "model-assisted", "date": "2026-11-03" },
+            {
+              "pass": 1,
+              "method": "model-assisted, VS-22a labels: failureClass, mechanism and crossFile; runnable and authoring not examined",
+              "date": "2026-11-06",
+              "labels": {
+                "defects": [
+                  { "id": "server-name-none", "failureClass": "crash", "mechanism": "logic" },
+                  { "id": "port-appended-to-host", "failureClass": "other", "mechanism": "logic" }
+                ],
+                "crossFile": false
+              }
+            }
+          ]
+        }
       },
       "provenance": {
         "found": "GitHub commit search: repo:pallets/werkzeug \"introduced in\"",
@@ -98,6 +120,8 @@
             "id": "response-time-unset",
             "category": "correctness",
             "severity": "concern",
+            "failureClass": "other",
+            "mechanism": "logic",
             "summary": "With a logger configured, the request start time is never recorded, so the logged responseTime is NaN.",
             "cause": "hasLogger is set to true only in the branch where no logger was given, so it means 'no logger', and the rest of the change reads it that way (a no-op response callback, finish listeners registered when it is false). The start-time line reads it the other way round: res._startTime = hasLogger ? now() : undefined records the time only when there is no logger. With logging on, onResponseCallback computes now() - undefined and every completed request logs responseTime as NaN, which serializes as null.",
             "locations": [{ "path": "fastify.js", "line": 208 }],
@@ -112,7 +136,22 @@
           "paths": ["test/internals/logger.test.js", "test/logger.test.js"],
           "note": "The fix adds logger tests that check responseTime (issue 826)."
         },
-        "annotation": { "status": "draft", "passes": [{ "pass": 1, "method": "model-assisted", "date": "2026-11-03" }] }
+        "crossFile": false,
+        "annotation": {
+          "status": "draft",
+          "passes": [
+            { "pass": 1, "method": "model-assisted", "date": "2026-11-03" },
+            {
+              "pass": 1,
+              "method": "model-assisted, VS-22a labels: failureClass, mechanism and crossFile; runnable and authoring not examined",
+              "date": "2026-11-06",
+              "labels": {
+                "defects": [{ "id": "response-time-unset", "failureClass": "other", "mechanism": "logic" }],
+                "crossFile": false
+              }
+            }
+          ]
+        }
       },
       "provenance": {
         "found": "GitHub commit search: repo:fastify/fastify regression introduced",
@@ -144,6 +183,9 @@
             "id": "lds-data-race",
             "category": "concurrency",
             "severity": "concern",
+            "failureClass": "other",
+            "mechanism": "concurrency",
+            "pendingQ4": "concurrency-wrong-result",
             "summary": "processLeafSub reads the account's loop-detection subject without the account lock while another connection may be writing it.",
             "cause": "initLeafNodeSmap sets acc.lds lazily while holding acc.mu, and it runs for each new leafnode connection on the account. processLeafSub compares the incoming subject with c.acc.lds while holding only the client lock c.mu. A subscription arriving on one leafnode connection while another connection initialises the same account is therefore an unsynchronised read and write of the same string, a data race in which the reader can see a stale or torn value. The read needs the account lock.",
             "locations": [{ "path": "server/leafnode.go", "line": 1204 }],
@@ -154,7 +196,29 @@
           "status": "none",
           "note": "The fix adds no test; its message reports a data race in the leafnode loop-detection code."
         },
-        "annotation": { "status": "draft", "passes": [{ "pass": 1, "method": "model-assisted", "date": "2026-11-03" }] }
+        "crossFile": false,
+        "annotation": {
+          "status": "draft",
+          "passes": [
+            { "pass": 1, "method": "model-assisted", "date": "2026-11-03" },
+            {
+              "pass": 1,
+              "method": "model-assisted, VS-22a labels: failureClass, mechanism and crossFile; runnable and authoring not examined",
+              "date": "2026-11-06",
+              "labels": {
+                "defects": [
+                  {
+                    "id": "lds-data-race",
+                    "failureClass": "other",
+                    "mechanism": "concurrency",
+                    "pendingQ4": "concurrency-wrong-result"
+                  }
+                ],
+                "crossFile": false
+              }
+            }
+          ]
+        }
       },
       "provenance": {
         "found": "GitHub commit search: repo:nats-io/nats-server race introduced",
@@ -187,6 +251,8 @@
             "id": "srv-upstream-rejected",
             "category": "error-path",
             "severity": "blocking",
+            "failureClass": "other",
+            "mechanism": "regression",
             "summary": "Provisioning now parses every upstream's dial address, so upstreams that use lookup_srv, which have none, fail to load.",
             "cause": "An upstream may set lookup_srv instead of dial (Upstream.LookupSRV in hosts.go, outside this change); its address is resolved per request and Dial stays empty. The new check calls caddy.ParseNetworkAddress(upstream.Dial) for every upstream and returns its error, so any reverse_proxy configuration with an SRV upstream is rejected at load (issue 3753). The parse and the port-range check have to be skipped when LookupSRV is set.",
             "locations": [{ "path": "modules/caddyhttp/reverseproxy/reverseproxy.go", "line": 207, "endLine": 213 }],
@@ -198,7 +264,22 @@
           "paths": ["caddytest/integration/reverseproxy_test.go"],
           "note": "The fix adds integration tests that load an SRV upstream and reject dial or active health checks combined with lookup_srv."
         },
-        "annotation": { "status": "draft", "passes": [{ "pass": 1, "method": "model-assisted", "date": "2026-11-03" }] }
+        "crossFile": true,
+        "annotation": {
+          "status": "draft",
+          "passes": [
+            { "pass": 1, "method": "model-assisted", "date": "2026-11-03" },
+            {
+              "pass": 1,
+              "method": "model-assisted, VS-22a labels: failureClass, mechanism and crossFile; runnable and authoring not examined",
+              "date": "2026-11-06",
+              "labels": {
+                "defects": [{ "id": "srv-upstream-rejected", "failureClass": "other", "mechanism": "regression" }],
+                "crossFile": true
+              }
+            }
+          ]
+        }
       },
       "provenance": {
         "found": "GitHub commit search: repo:caddyserver/caddy regression introduced",
@@ -231,6 +312,8 @@
             "id": "legacy-marker-in-ssr",
             "category": "correctness",
             "severity": "blocking",
+            "failureClass": "crash",
+            "mechanism": "regression",
             "summary": "Skipping renderChunk in SSR builds leaves the import.meta.env.LEGACY placeholder unreplaced in server output.",
             "cause": "The legacy-env plugin, which this change leaves alone, still defines import.meta.env.LEGACY as the bare identifier __VITE_IS_LEGACY__ for every build, and only renderChunk rewrites that identifier to a boolean. The new early return in renderChunk for config.build.ssr skips the rewrite, so an SSR bundle that reads import.meta.env.LEGACY throws ReferenceError: __VITE_IS_LEGACY__ is not defined. The define has to be false for SSR builds as well.",
             "locations": [{ "path": "packages/plugin-legacy/index.js", "line": 233, "endLine": 235 }],
@@ -242,7 +325,22 @@
           "paths": ["packages/playground/legacy/__tests__/ssr/legacy-ssr.spec.ts"],
           "note": "The fix adds an SSR playground test that expects import.meta.env.LEGACY to render as false."
         },
-        "annotation": { "status": "draft", "passes": [{ "pass": 1, "method": "model-assisted", "date": "2026-11-03" }] }
+        "crossFile": false,
+        "annotation": {
+          "status": "draft",
+          "passes": [
+            { "pass": 1, "method": "model-assisted", "date": "2026-11-03" },
+            {
+              "pass": 1,
+              "method": "model-assisted, VS-22a labels: failureClass, mechanism and crossFile; runnable and authoring not examined",
+              "date": "2026-11-06",
+              "labels": {
+                "defects": [{ "id": "legacy-marker-in-ssr", "failureClass": "crash", "mechanism": "regression" }],
+                "crossFile": false
+              }
+            }
+          ]
+        }
       },
       "provenance": {
         "found": "GitHub commit search: repo:vitejs/vite regression introduced",
@@ -274,6 +372,8 @@
             "id": "scoped-default-clobbers-global",
             "category": "correctness",
             "severity": "blocking",
+            "failureClass": "other",
+            "mechanism": "logic",
             "summary": "Dropping a scoped default set before any global default leaves the thread pinned to NoSubscriber, so a global default set later is ignored on that thread.",
             "cause": "With this change an empty thread-local slot (None) means 'use the global default', and Dispatch::none() is no longer treated as a placeholder. set_default still records the prior value as get_global().cloned().unwrap_or_else(Dispatch::none) when the slot was empty, so if no global default exists yet the guard stores NoSubscriber, and DefaultGuard::drop writes Some(NoSubscriber) back. From then on that thread never falls back to the global default, even after set_global_default succeeds, and its events are silently dropped. The guard has to remember None and restore None.",
             "locations": [{ "path": "tracing-core/src/dispatcher.rs", "line": 687, "endLine": 693 }],
@@ -285,7 +385,22 @@
           "paths": ["tracing/tests/scoped_clobbers_default.rs"],
           "note": "The fix adds a test that sets a scoped default before the global one and checks that the global default still records afterwards."
         },
-        "annotation": { "status": "draft", "passes": [{ "pass": 1, "method": "model-assisted", "date": "2026-11-03" }] }
+        "crossFile": false,
+        "annotation": {
+          "status": "draft",
+          "passes": [
+            { "pass": 1, "method": "model-assisted", "date": "2026-11-03" },
+            {
+              "pass": 1,
+              "method": "model-assisted, VS-22a labels: failureClass, mechanism and crossFile; runnable and authoring not examined",
+              "date": "2026-11-06",
+              "labels": {
+                "defects": [{ "id": "scoped-default-clobbers-global", "failureClass": "other", "mechanism": "logic" }],
+                "crossFile": false
+              }
+            }
+          ]
+        }
       },
       "provenance": {
         "found": "GitHub commit search: repo:tokio-rs/tracing regression introduced",
@@ -317,6 +432,8 @@
             "id": "eof-on-iteration",
             "category": "error-path",
             "severity": "concern",
+            "failureClass": "crash",
+            "mechanism": "regression",
             "summary": "CliRunner's input stream now raises EOFError when iteration ends, so a command that iterates its input fails instead of finishing.",
             "cause": "The new _NamedTextIOWrapper.__next__ turns StopIteration into EOFError. Python's iterator protocol ends a for loop with StopIteration, so any command run under CliRunner that iterates its input stream (for line in stdin, a File('-') argument, chained processors reading lines) raises EOFError when input runs out, and the runner reports an abort. Only the prompt helpers need EOFError at end of input; the conversion belongs in them, not on the stream's iterator. The same change edits the chain test to expect the abort.",
             "locations": [{ "path": "src/click/testing.py", "line": 119, "endLine": 124 }],
@@ -332,7 +449,22 @@
           "paths": ["tests/test_chain.py"],
           "note": "The fix restores the chain test's expectation that reading all input ends without an exception (issue 2939)."
         },
-        "annotation": { "status": "draft", "passes": [{ "pass": 1, "method": "model-assisted", "date": "2026-11-03" }] }
+        "crossFile": false,
+        "annotation": {
+          "status": "draft",
+          "passes": [
+            { "pass": 1, "method": "model-assisted", "date": "2026-11-03" },
+            {
+              "pass": 1,
+              "method": "model-assisted, VS-22a labels: failureClass, mechanism and crossFile; runnable and authoring not examined",
+              "date": "2026-11-06",
+              "labels": {
+                "defects": [{ "id": "eof-on-iteration", "failureClass": "crash", "mechanism": "regression" }],
+                "crossFile": false
+              }
+            }
+          ]
+        }
       },
       "provenance": {
         "found": "GitHub commit search: repo:pallets/click \"introduced in\"",
@@ -364,6 +496,8 @@
             "id": "jwt-time-truncation",
             "category": "security",
             "severity": "blocking",
+            "failureClass": "auth-bypass",
+            "mechanism": "access",
             "summary": "JWT verification computes the current time with | 0, which wraps negative after January 2038, so expired tokens are accepted.",
             "cause": "(Date.now() / 1000) | 0 converts the timestamp to a signed 32-bit integer. Unix time passes 2^31 - 1 on 2038-01-19, after which now is negative: payload.exp <= now is never true, so expired tokens pass verification, while payload.nbf > now rejects every token that sets nbf. Math.floor, which this replaces, has no such limit. The sibling Max-Age change in cookie.ts is bounded by its 400-day check and is not a defect.",
             "locations": [{ "path": "src/utils/jwt/jwt.ts", "line": 77 }],
@@ -375,7 +509,22 @@
           "paths": ["src/utils/jwt/jwt.test.ts"],
           "note": "The fix adds a test that rejects an expired token when the clock is past the 2038 boundary."
         },
-        "annotation": { "status": "draft", "passes": [{ "pass": 1, "method": "model-assisted", "date": "2026-11-03" }] }
+        "crossFile": false,
+        "annotation": {
+          "status": "draft",
+          "passes": [
+            { "pass": 1, "method": "model-assisted", "date": "2026-11-03" },
+            {
+              "pass": 1,
+              "method": "model-assisted, VS-22a labels: failureClass, mechanism and crossFile; runnable and authoring not examined",
+              "date": "2026-11-06",
+              "labels": {
+                "defects": [{ "id": "jwt-time-truncation", "failureClass": "auth-bypass", "mechanism": "access" }],
+                "crossFile": false
+              }
+            }
+          ]
+        }
       },
       "provenance": {
         "found": "GitHub commit search: repo:honojs/hono regression",

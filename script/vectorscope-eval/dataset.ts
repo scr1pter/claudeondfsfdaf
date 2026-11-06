@@ -5,11 +5,11 @@ import { devNull } from "node:os"
 import { join, resolve } from "node:path"
 import { parseArgs } from "node:util"
 
-// The real-change dataset behind VectorScope's eval. A manifest lists public bug-fix cases, clean controls and
-// adversarial (prompt-injection) cases, each pinned to immutable commits in a permissively licensed repository, and
-// holds no code. A bug case names the candidate change a reviewer is shown (base..head) and the later fix, which stays
-// hidden as ground truth. An adversarial case is a separate trust test, never a defect or a clean change in the
-// quality metrics. annotation-guide.md says how cases are found, checked and labelled.
+// The real-change dataset behind VectorScope's eval. A manifest lists public bug-fix cases, clean controls, trivial
+// controls and adversarial (prompt-injection) cases, each pinned to immutable commits in a permissively licensed
+// repository, and holds no code. A bug case names the candidate change a reviewer is shown (base..head) and the later
+// fix, which stays hidden as ground truth. An adversarial case is a separate trust test, never a defect or a clean change
+// in the quality metrics. annotation-guide.md says how cases are found, checked and labelled.
 //
 // Run as a script it is a dry run: it validates a manifest, recomputes the grouped split, checks the held-out freeze
 // and lists the exclusions. It never makes a network request. Given local mirrors (--mirrors) it also checks commits,
@@ -17,14 +17,24 @@ import { parseArgs } from "node:util"
 
 export const DATASET_DIR = join(import.meta.dir, "dataset")
 export const SEED_MANIFEST = join(DATASET_DIR, "seed.json")
-export const SCHEMA = "vectorscope-dataset/1"
+// Version 2 (VS-22a) adds the trivial kind, the failure-class, mechanism, cross-file, runnable and authoring labels and
+// each pass's own labels, and retires the cross-file trait for labels.crossFile.
+export const SCHEMA = "vectorscope-dataset/2"
 
 // D8: public repositories under MIT, Apache-2.0 or BSD licences, as the GitHub licence endpoint names them.
 export const LICENCES = ["MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause"] as const
 export const SPLITS = ["development", "calibration", "held-out"] as const
 export const CATEGORIES = ["correctness", "security", "concurrency", "persistence", "error-path", "resource"] as const
 export const SEVERITIES = ["blocking", "concern"] as const
-export const TRAITS = ["cross-file", "outside-diff", "rename", "incremental", "fork", "large"] as const
+export const TRAITS = [
+  "outside-diff",
+  "rename",
+  "incremental",
+  "fork",
+  "large",
+  "trivial-looking",
+  "dependency-bump",
+] as const
 export const ANNOTATION_STATUSES = ["draft", "double-annotated", "adjudicated"] as const
 export const REGRESSION_TEST = ["added-by-fix", "existing", "none"] as const
 export const EXCLUSION_REASONS = [
@@ -36,7 +46,40 @@ export const EXCLUSION_REASONS = [
   "duplicate",
   "sensitive-content",
   "quota",
+  "not-trivial",
+  "mixed-trivial",
 ] as const
+
+// VS-22a's labels. The five failure classes are the contract's (vectorscope-upgrade.md §1.2), which VS-27a adds to core
+// review/types.ts; a defect in none of them is "other". judging-rubric.md defines each one.
+export const FAILURE_CLASSES = ["crash", "data-corruption", "leak", "runaway-loop", "auth-bypass"] as const
+export const DEFECT_CLASSES = [...FAILURE_CLASSES, "other"] as const
+// §1.2's FailureInfo.mechanism, so a strict finding's mechanism can later be compared with its label.
+export const MECHANISMS = ["logic", "concurrency", "regression", "resource", "access"] as const
+// The readings of owner question Q4 that would move an "other" defect into a class: data exposure as a leak, and a
+// concurrency defect whose only effect is a wrong result. Marking them keeps either answer computable without
+// relabelling.
+export const PENDING_Q4 = ["data-exposure", "concurrency-wrong-result"] as const
+// §1.2's TrivialKind. A dependency bump is no kind while Q11 is open.
+export const TRIVIAL_KINDS = ["whitespace", "docs", "rename", "comment"] as const
+// The base commit's recorded public CI: its test check passed or failed, or no test run counts.
+export const CI_RESULTS = ["passed", "failed", "none"] as const
+// Where an authoring label comes from. A trailer or a bot account is self-declared; "synthetic" waits for Q12.
+export const AUTHORING_SOURCES = ["commit-trailer", "bot-account", "synthetic"] as const
+// VS-22b's coverage targets (contract §4). The dry run reports against them; nothing enforces them.
+export const TARGETS = {
+  bugs: 100,
+  perClass: 12,
+  crossFile: 30,
+  runnable: 15,
+  controls: 25,
+  trivial: 20,
+  trivialLooking: 3,
+  adversarial: 10,
+} as const
+// The sampling rule's cap on the cases one repository supplies, counting the seed's (annotation-guide.md, "Sampling
+// rule"). Unlike TARGETS it is enforced: a case past it is excluded as quota.
+export const PER_REPOSITORY = 2
 
 export type Split = (typeof SPLITS)[number]
 
@@ -54,18 +97,31 @@ export interface Defect {
   cause: string // the causal explanation a matching finding must give, not just its location
   locations: Location[] // where a finding should point
   alternatives: Location[] // other places a finding that explains the same cause may cite
+  // VS-22a. Absent means not yet labelled, never "other".
+  failureClass?: (typeof DEFECT_CLASSES)[number]
+  mechanism?: (typeof MECHANISMS)[number]
+  pendingQ4?: (typeof PENDING_Q4)[number] // on an "other" defect that an answer to Q4 would move into a class
 }
 
 export interface Annotation {
   status: (typeof ANNOTATION_STATUSES)[number]
-  passes: { pass: number; method: string; date: string }[]
+  // A pass's labels record the VS-22a labels it gave, by the case's own defect ids (a defect it did not label is left
+  // out), so the two passes can be compared after the case's labels settle (Cohen's kappa on failureClass, VS-22b).
+  passes: {
+    pass: number
+    method: string
+    date: string
+    labels?: { defects: Pick<Defect, "id" | "failureClass" | "mechanism" | "pendingQ4">[]; crossFile?: boolean }
+  }[]
   // A double-annotated label's two passes were compared: true when they agreed, so the label stands as it is (D8), and
   // false while a disagreement waits for the owner's adjudication.
   agreed?: boolean
   adjudication?: { by: string; date: string; note?: string }
 }
 
-export const KINDS = ["bug", "control", "adversarial"] as const
+// A trivial control is a control whose change VS-24's trivial rules cover (whitespace, docs, a rename or comments). It
+// is split and reported apart from the behaviour-preserving controls.
+export const KINDS = ["bug", "control", "adversarial", "trivial"] as const
 
 export interface Case {
   id: string // neutral by convention (<owner>-<name>-<n>); it never reaches a reviewer, not even as a directory name
@@ -88,6 +144,15 @@ export interface Case {
     regressionTest?: { status: (typeof REGRESSION_TEST)[number]; paths?: string[]; note?: string }
     rationale?: string // a control's argument that it preserves behaviour
     injection?: string // an adversarial case's injected instruction, where it is, and what a safe reviewer does
+    // VS-22a. Each is absent until labelled; absent never means false or none.
+    crossFile?: boolean // explaining a labelled defect's cause needs code in a second file
+    // Whether the repository's tests ran at the base commit, read only from its recorded public CI, never by running
+    // anything (I-13). evidence is the check-runs or status API link for the base commit, read on date.
+    runnable?: { status: (typeof CI_RESULTS)[number]; check?: string; evidence: string; date: string; note?: string }
+    // Self-declared authorship, used only to stratify the dataset: never VS-29b's trusted authorship or any invocation
+    // field (I-2). lab is a lab id as codium's labOf names them, checked against that list once codium merges.
+    authoring?: { lab: string; source: (typeof AUTHORING_SOURCES)[number]; evidence: string }
+    trivialKind?: (typeof TRIVIAL_KINDS)[number] // a trivial control's one kind
     annotation: Annotation
   }
   provenance: {
@@ -137,6 +202,9 @@ export async function loadManifest(path = SEED_MANIFEST): Promise<unknown> {
 
 const REPOSITORY = /^https:\/\/github\.com\/[A-Za-z0-9][A-Za-z0-9-]*\/(?!\.{1,2}$)[A-Za-z0-9_.-]+$/
 const SLUG = /^[a-z0-9]+(-[a-z0-9]+)*$/
+// A test file by the common conventions: under a test or spec directory, test_<name>, or <name>.test, _test, .spec or
+// _spec with any extension.
+const TEST_PATH = /(^|\/)(test|tests|__tests__|spec)\/|(^|\/)test_[^/]+$|[._](test|spec)\.[^/]+$/
 
 // Everything wrong with a manifest, without git or the network; empty when it is valid. Checks that span cases
 // (duplicates, the split rule and the freeze) run once every case is well formed.
@@ -181,6 +249,20 @@ export function manifestProblems(value: unknown): string[] {
         (item) => item.candidate && candidates.includes(`${repositoryKey(item.repository)}@${item.candidate.head}`),
       )
       .map((item) => `the exclusion of ${item.repository} at ${short(item.candidate!.head)} is also an admitted case`),
+    // The split groups a repository's cases within a kind only, so one repository that supplied a bug case and a
+    // control could put them on both sides of the held-out boundary. The sampling rule keeps it to one kind.
+    ...Object.values(Object.groupBy(typed.cases, (item) => repositoryKey(item.repository.url))).flatMap(
+      (group = []) => [
+        ...need(
+          new Set(group.map((item) => item.kind)).size === 1,
+          `${group[0]?.repository.url} supplies cases of more than one kind (${group.map((item) => `${item.id} ${item.kind}`).join(", ")}); a repository's cases are of one kind`,
+        ),
+        ...need(
+          group.length <= PER_REPOSITORY,
+          `${group[0]?.repository.url} supplies ${group.length} cases (${group.map((item) => item.id).join(", ")}); the sampling rule allows ${PER_REPOSITORY}, and the rest are excluded as quota`,
+        ),
+      ],
+    ),
     ...typed.cases
       .filter((item) => splits.get(item.id) !== item.split)
       .map(
@@ -242,10 +324,13 @@ function caseProblems(value: unknown, index: number): string[] {
     ),
     ...(item.kind === "control"
       ? controlProblems(label, item, labels)
-      : item.kind === "adversarial"
-        ? adversarialProblems(label, item, candidate, labels)
-        : bugProblems(label, item, candidate, labels)),
-    ...annotationProblems(label, record(labels?.annotation)),
+      : item.kind === "trivial"
+        ? trivialProblems(label, item, labels)
+        : item.kind === "adversarial"
+          ? adversarialProblems(label, item, candidate, labels)
+          : bugProblems(label, item, candidate, labels)),
+    ...labelProblems(label, item, labels),
+    ...annotationProblems(label, record(labels?.annotation), labels),
     ...need(
       !!provenance && text(provenance.found) && text(provenance.evidence),
       `${label}: provenance must say how the case was found and what identifies the candidate`,
@@ -315,6 +400,104 @@ function controlProblems(label: string, item: Record<string, unknown>, labels: R
   ]
 }
 
+// A trivial control is a control, so it carries no defect label, and it names the one kind of change it makes.
+function trivialProblems(label: string, item: Record<string, unknown>, labels: Record<string, unknown> | undefined) {
+  return [
+    ...controlProblems(label, item, labels),
+    ...need(
+      oneOf(TRIVIAL_KINDS, labels?.trivialKind),
+      `${label}: a trivial control needs labels.trivialKind, one of ${TRIVIAL_KINDS.join(", ")}`,
+    ),
+  ]
+}
+
+// VS-22a's case labels, on every kind. Each is optional: absent means not yet labelled.
+function labelProblems(label: string, item: Record<string, unknown>, labels: Record<string, unknown> | undefined) {
+  const defects = (Array.isArray(labels?.defects) ? labels.defects : []).map(record)
+  const runnable = record(labels?.runnable)
+  const authoring = record(labels?.authoring)
+  const url = record(item.repository)?.url
+  const base = record(item.candidate)?.base
+  // The base commit's API prefix that runnable's evidence must read, once the repository and the base are well formed
+  // (each is reported on its own otherwise).
+  const commits =
+    typeof url === "string" && REPOSITORY.test(url) && isSha(base)
+      ? `https://api.github.com/repos/${new URL(url).pathname.slice(1).replace(/\.git$/, "")}/commits/${base}/`
+      : undefined
+  return [
+    ...need(
+      labels?.trivialKind === undefined || item.kind === "trivial",
+      `${label}: only a trivial control has labels.trivialKind`,
+    ),
+    ...need(
+      labels?.crossFile === undefined || typeof labels.crossFile === "boolean",
+      `${label}: labels.crossFile must be true or false`,
+    ),
+    ...need(
+      labels?.crossFile === undefined || defects.length > 0,
+      `${label}: labels.crossFile describes a labelled defect, and this case has none`,
+    ),
+    ...need(
+      labels?.crossFile !== true ||
+        defects.some((defect) => sourceFilesOf(defect, record(labels?.regressionTest)?.paths).size >= 2),
+      `${label}: labels.crossFile is true, but no labelled defect names locations in two files other than tests`,
+    ),
+    ...need(
+      labels?.runnable === undefined ||
+        (!!runnable &&
+          oneOf(CI_RESULTS, runnable.status) &&
+          isLink(runnable.evidence) &&
+          isDay(runnable.date) &&
+          (runnable.status === "none" ? text(runnable.note) : text(runnable.check)) &&
+          (runnable.check === undefined || text(runnable.check)) &&
+          (runnable.note === undefined || text(runnable.note))),
+      `${label}: labels.runnable needs a status (passed, failed or none), the base commit's check-runs or status API link as evidence, and a YYYY-MM-DD date; passed and failed name the test check, and none says in a note why no test run counts`,
+    ),
+    ...need(
+      !commits || !isLink(runnable?.evidence) || readsBaseCi(String(runnable?.evidence), commits),
+      `${label}: labels.runnable.evidence must read the base commit's recorded CI: ${commits}check-runs or ${commits}status, with any query`,
+    ),
+    ...need(
+      labels?.authoring === undefined ||
+        (!!authoring &&
+          typeof authoring.lab === "string" &&
+          SLUG.test(authoring.lab) &&
+          oneOf(AUTHORING_SOURCES, authoring.source) &&
+          text(authoring.evidence)),
+      `${label}: labels.authoring needs a lowercase lab id, a source (commit-trailer, bot-account or synthetic), and the evidence`,
+    ),
+    ...need(
+      !(Array.isArray(item.traits) && item.traits.includes("trivial-looking")) || item.kind === "bug",
+      `${label}: only a bug case has the trivial-looking trait`,
+    ),
+  ]
+}
+
+// The distinct files a defect's locations and alternatives name, other than tests: an alternative may be a test the
+// change edited to hide the failure, which does not make the defect cross-file. A test is one of the fix's regression
+// test paths, or a path TEST_PATH matches.
+function sourceFilesOf(defect: Record<string, unknown> | undefined, tests: unknown) {
+  const cited = [
+    ...(Array.isArray(defect?.locations) ? defect.locations : []),
+    ...(Array.isArray(defect?.alternatives) ? defect.alternatives : []),
+  ]
+  return new Set(
+    cited
+      .map((location) => record(location)?.path)
+      .filter(
+        (path) => typeof path === "string" && !(Array.isArray(tests) && tests.includes(path)) && !TEST_PATH.test(path),
+      ),
+  )
+}
+
+// Whether a link reads the base commit's check-runs or status API, as the guide's gh api commands do, with any query.
+// GitHub matches the owner and name in any case.
+function readsBaseCi(link: string, commits: string) {
+  const url = new URL(link)
+  const read = `${url.origin}${url.pathname}`.toLowerCase()
+  return !url.hash && [`${commits}check-runs`, `${commits}status`].some((path) => path.toLowerCase() === read)
+}
+
 // A prompt-injection case: a change carrying text that tries to instruct the reviewer. Its labels say what the text
 // asks and what a safe reviewer does. It may also label real defects the injection tries to hide, and then needs their
 // fix like a bug case; it is still left out of recall and of false alarms per clean pull request.
@@ -355,6 +538,30 @@ function defectProblems(label: string, value: unknown) {
     ...[...locations, ...(Array.isArray(defect.alternatives) ? defect.alternatives : [])].flatMap((location) =>
       locationProblems(label, location),
     ),
+    ...classProblems(label, defect),
+  ]
+}
+
+// VS-22a's labels of one defect, on the case or in one pass's own record. Each is optional: absent means not yet
+// labelled.
+function classProblems(label: string, defect: Record<string, unknown>) {
+  return [
+    ...need(
+      defect.failureClass === undefined || oneOf(DEFECT_CLASSES, defect.failureClass),
+      `${label}: failureClass must be one of ${DEFECT_CLASSES.join(", ")}`,
+    ),
+    ...need(
+      defect.mechanism === undefined || oneOf(MECHANISMS, defect.mechanism),
+      `${label}: mechanism must be one of ${MECHANISMS.join(", ")}`,
+    ),
+    ...need(
+      defect.pendingQ4 === undefined || (oneOf(PENDING_Q4, defect.pendingQ4) && defect.failureClass === "other"),
+      `${label}: pendingQ4 must be one of ${PENDING_Q4.join(", ")}, on a defect whose failureClass is other`,
+    ),
+    ...need(
+      defect.pendingQ4 !== "concurrency-wrong-result" || defect.mechanism === "concurrency",
+      `${label}: pendingQ4 concurrency-wrong-result needs mechanism concurrency`,
+    ),
   ]
 }
 
@@ -372,13 +579,21 @@ function locationProblems(label: string, value: unknown) {
   )
 }
 
-// D8: two independent model-assisted passes, with the owner adjudicating their disagreements.
-function annotationProblems(label: string, annotation: Record<string, unknown> | undefined) {
+// D8: two independent model-assisted passes, with the owner adjudicating their disagreements. A pass may record its own
+// VS-22a labels; once one does, a double-annotated or adjudicated case needs two that do, so the passes can be compared.
+function annotationProblems(
+  label: string,
+  annotation: Record<string, unknown> | undefined,
+  labels: Record<string, unknown> | undefined,
+) {
   if (!annotation) return [`${label}: labels.annotation is missing`]
   const passes = Array.isArray(annotation.passes) ? annotation.passes.map(record) : []
   const numbers = new Set(passes.map((pass) => pass?.pass))
   const adjudication = record(annotation.adjudication)
   const required = annotation.status === "draft" ? 1 : 2
+  const ids = (Array.isArray(labels?.defects) ? labels.defects : []).map((defect) => record(defect)?.id)
+  const recorded = passes.filter((pass) => pass?.labels !== undefined)
+  const recordedNumbers = recorded.map((pass) => pass?.pass)
   return [
     ...need(
       oneOf(ANNOTATION_STATUSES, annotation.status),
@@ -403,7 +618,62 @@ function annotationProblems(label: string, annotation: Record<string, unknown> |
           (annotation.status === "double-annotated" || (annotation.status === "adjudicated" && !annotation.agreed))),
       `${label}: agreed records whether a double-annotated label's two passes agreed; an adjudicated label's did not`,
     ),
+    ...recorded.flatMap((pass) => passLabelProblems(`${label}: pass ${String(pass?.pass)}`, pass?.labels, ids)),
+    ...need(
+      new Set(recordedNumbers).size === recordedNumbers.length,
+      `${label}: a pass records its own labels in more than one entry`,
+    ),
+    ...need(
+      recorded.length === 0 || annotation.status === "draft" || new Set(recordedNumbers).size >= 2,
+      `${label}: a ${String(annotation.status)} label whose passes record their own labels needs two passes that do`,
+    ),
+    ...need(
+      annotation.agreed !== true || recorded.every((pass) => agrees(record(pass?.labels), labels)),
+      `${label}: agreed is true, but a pass's own labels differ from the case's labels`,
+    ),
   ]
+}
+
+// One pass's own VS-22a labels. They name the case's defects by id.
+function passLabelProblems(label: string, value: unknown, ids: unknown[]) {
+  const own = record(value)
+  if (!own || !Array.isArray(own.defects)) return [`${label}: labels needs a defects list (it may be empty)`]
+  const entries = own.defects.map(record)
+  const named = entries.map((entry) => entry?.id)
+  return [
+    ...entries
+      .filter((entry) => !entry || !ids.includes(entry.id))
+      .map((entry) => `${label}: labels name defect ${JSON.stringify(entry?.id)}, which the case does not have`),
+    ...named
+      .filter((id, index) => named.indexOf(id) !== index)
+      .map((id) => `${label}: labels name defect ${String(id)} twice`),
+    ...entries.flatMap((entry) => (entry ? classProblems(`${label}: defect ${String(entry.id)}`, entry) : [])),
+    ...need(
+      own.crossFile === undefined || typeof own.crossFile === "boolean",
+      `${label}: labels.crossFile must be true or false`,
+    ),
+  ]
+}
+
+// A pass agrees with the case's labels when it labelled every defect, and every label it records is the case's.
+function agrees(own: Record<string, unknown> | undefined, labels: Record<string, unknown> | undefined) {
+  const defects = (Array.isArray(labels?.defects) ? labels.defects : []).map(record)
+  const entries = (Array.isArray(own?.defects) ? own.defects : []).map(record)
+  const same = (mine: unknown, theirs: unknown) => mine === undefined || mine === theirs
+  return (
+    entries.length === defects.length &&
+    entries.every((entry) => {
+      const defect = defects.find((item) => item?.id === entry?.id)
+      return (
+        !!defect &&
+        same(entry?.failureClass, defect.failureClass) &&
+        same(entry?.mechanism, defect.mechanism) &&
+        // No Q4 marker on a labelled class means none applies, so it is compared whenever the class is.
+        (entry?.failureClass === undefined || entry.pendingQ4 === defect.pendingQ4)
+      )
+    }) &&
+    same(own?.crossFile, labels?.crossFile)
+  )
 }
 
 // D8: the owner adjudicates only disagreements. A label stands, and may be frozen, once it is adjudicated or its two
@@ -436,7 +706,8 @@ function exclusionProblems(value: unknown, index: number) {
 
 // Freezing records a digest of the held-out cases once their labels are settled (adjudicated, or two passes that
 // agreed), before any prompt tuning. Any later change to a held-out case, or to which cases are held out, breaks the
-// digest.
+// digest. A held-out bug case is frozen only with VS-22a's labels and both passes' own record of them, since none of
+// them can be added afterwards without a new freeze, and class-scoped recall (Q3) and the passes' agreement need them.
 function freezeProblems(manifest: Manifest) {
   if (manifest.freeze === undefined) return []
   const freeze = record(manifest.freeze)
@@ -454,6 +725,22 @@ function freezeProblems(manifest: Manifest) {
         (item) =>
           `case ${item.id}: held-out labels were frozen before they were settled (two passes that agreed, or the owner's adjudication)`,
       ),
+    ...manifest.cases
+      .filter((item) => item.split === "held-out" && item.kind === "bug")
+      .flatMap((item) => {
+        const missing = [
+          ...(item.labels.defects.every((defect) => defect.failureClass !== undefined) ? [] : ["failureClass"]),
+          ...(item.labels.defects.every((defect) => defect.mechanism !== undefined) ? [] : ["mechanism"]),
+          ...(item.labels.crossFile === undefined ? ["crossFile"] : []),
+          ...(item.labels.runnable === undefined ? ["runnable"] : []),
+          // An unsettled label is reported above for its missing pass or agreement.
+          ...(labelSettled(item.labels.annotation) &&
+          new Set(item.labels.annotation.passes.filter((pass) => pass.labels).map((pass) => pass.pass)).size < 2
+            ? ["two passes' own labels"]
+            : []),
+        ]
+        return missing.length ? [`case ${item.id}: held-out labels were frozen without ${missing.join(", ")}`] : []
+      }),
     ...need(
       heldOutDigest(manifest) === freeze.digest,
       "the held-out cases changed after the freeze: their digest no longer matches freeze.digest",
@@ -470,9 +757,9 @@ export function heldOutDigest(manifest: Pick<Manifest, "cases">) {
 
 type SplitInput = Pick<Case, "id" | "kind" | "family" | "repository" | "candidate"> & { fix?: { date: string } }
 
-// The split rule. Bug cases, controls and adversarial cases are split separately, each roughly 60/20/20. Cases that
-// share a repository
-// or a family form one group and always land together, so a related fix cannot sit on both sides. Groups are ordered
+// The split rule. Bug cases, controls, trivial controls and adversarial cases are split separately, each roughly
+// 60/20/20. Cases of one kind that share a repository or a family form one group and always land together, so a related
+// fix cannot sit on both sides (manifestProblems keeps one repository's cases to one kind). Groups are ordered
 // by their latest date (the fix for a bug, the candidate for a control): the oldest fill development, then
 // calibration, and the newest are held out, so nothing tuned on can postdate what it is tested on. Calibration and
 // held-out each take round(n / 5) cases; a group that straddles a boundary goes to the earlier split.
@@ -675,7 +962,9 @@ export function mirrorLocator(dir: string) {
 export function dryRunReport(manifest: Manifest, objects?: ObjectCheck) {
   const bugs = manifest.cases.filter((item) => item.kind === "bug")
   const controls = manifest.cases.filter((item) => item.kind === "control")
+  const trivial = manifest.cases.filter((item) => item.kind === "trivial")
   const adversarial = manifest.cases.filter((item) => item.kind === "adversarial")
+  const defects = bugs.flatMap((item) => item.labels.defects)
   const repositories = new Set(manifest.cases.map((item) => repositoryKey(item.repository.url)))
   const tally = (values: string[]) =>
     Object.entries(Object.groupBy(values, (value) => value))
@@ -694,13 +983,20 @@ export function dryRunReport(manifest: Manifest, objects?: ObjectCheck) {
     .toSorted()
     .join(", ")
   return [
-    `${manifest.name} (${manifest.schema}): ${manifest.cases.length} cases, ${bugs.length} bug fixes and ${controls.length} controls${adversarial.length ? `, and ${adversarial.length} adversarial` : ""}, from ${repositories.size} repositories`,
+    `${manifest.name} (${manifest.schema}): ${manifest.cases.length} cases, ${bugs.length} bug fixes${trivial.length ? `, ${controls.length} controls and ${trivial.length} trivial controls` : ` and ${controls.length} controls`}${adversarial.length ? `, and ${adversarial.length} adversarial` : ""}, from ${repositories.size} repositories`,
     formatTable([
-      ["SPLIT", "BUGS", "CONTROLS", ...(adversarial.length ? ["ADVERSARIAL"] : [])],
+      [
+        "SPLIT",
+        "BUGS",
+        "CONTROLS",
+        ...(trivial.length ? ["TRIVIAL"] : []),
+        ...(adversarial.length ? ["ADVERSARIAL"] : []),
+      ],
       ...SPLITS.map((split) => [
         split,
         String(bugs.filter((item) => item.split === split).length),
         String(controls.filter((item) => item.split === split).length),
+        ...(trivial.length ? [String(trivial.filter((item) => item.split === split).length)] : []),
         ...(adversarial.length ? [String(adversarial.filter((item) => item.split === split).length)] : []),
       ]),
     ]),
@@ -708,6 +1004,17 @@ export function dryRunReport(manifest: Manifest, objects?: ObjectCheck) {
     `Languages: ${tally(manifest.cases.map((item) => item.language))}`,
     `Licences: ${tally(manifest.cases.map((item) => item.repository.licence))}`,
     `Defect categories: ${tally(bugs.flatMap((item) => item.labels.defects.map((defect) => defect.category))) || "none"}`,
+    // VS-22a's labels, over the bug cases; absent labels are counted as unlabelled, never as other or false.
+    `Failure classes: ${tally(defects.flatMap((defect) => (defect.failureClass ? [defect.failureClass] : []))) || "none labelled"}; ${defects.filter((defect) => !defect.failureClass).length} unlabelled. Production-breaking (blocking, in the five classes): ${defects.filter((defect) => defect.severity === "blocking" && oneOf(FAILURE_CLASSES, defect.failureClass)).length} of ${defects.length} defects.`,
+    `Mechanisms: ${tally(defects.flatMap((defect) => (defect.mechanism ? [defect.mechanism] : []))) || "none labelled"}; ${defects.filter((defect) => !defect.mechanism).length} unlabelled.`,
+    `Class pending owner Q4: ${tally(defects.flatMap((defect) => (defect.pendingQ4 ? [defect.pendingQ4] : []))) || "none"}.`,
+    `Cross-file: ${bugs.filter((item) => item.labels.crossFile === true).length} of ${bugs.length} bug cases; ${bugs.filter((item) => item.labels.crossFile === undefined).length} unlabelled.`,
+    `Runnable, from the base commit's recorded public CI: ${tally(bugs.flatMap((item) => (item.labels.runnable ? [item.labels.runnable.status] : []))) || "none labelled"}; ${bugs.filter((item) => !item.labels.runnable).length} bug cases unlabelled.`,
+    `Authoring: ${tally(manifest.cases.flatMap((item) => (item.labels.authoring ? [`${item.labels.authoring.lab} (${item.labels.authoring.source})`] : []))) || "none recorded"}.`,
+    ...(trivial.length
+      ? [`Trivial kinds: ${tally(trivial.map((item) => item.labels.trivialKind ?? "unlabelled"))}.`]
+      : []),
+    `Targets (VS-22b, reported, not enforced): ${bugs.length}/${TARGETS.bugs} bug cases; by class ${FAILURE_CLASSES.map((name) => `${name} ${bugs.filter((item) => item.labels.defects.some((defect) => defect.failureClass === name)).length}/${TARGETS.perClass}`).join(", ")}; cross-file ${bugs.filter((item) => item.labels.crossFile === true).length}/${TARGETS.crossFile}; runnable (passed) ${bugs.filter((item) => item.labels.runnable?.status === "passed").length}/${TARGETS.runnable}; ${controls.length}/${TARGETS.controls} controls; ${trivial.length}/${TARGETS.trivial} trivial controls; ${bugs.filter((item) => item.traits?.includes("trivial-looking")).length}/${TARGETS.trivialLooking} trivial-looking bug cases; ${adversarial.length}/${TARGETS.adversarial} adversarial.`,
     `Labels: ${ANNOTATION_STATUSES.map((status) => `${statuses.filter((entry) => entry === status).length} ${status}`).join(", ")}`,
     manifest.freeze
       ? `Freeze: held-out cases frozen on ${manifest.freeze.date} (${manifest.freeze.digest}).`

@@ -40,9 +40,16 @@ export interface TaskFinding {
   suggestion?: string
 }
 
+// What a judge sees of a labelled defect: what a verdict is given against. Annotators' failureClass is left out: no
+// verdict rule reads it, and a class shown beside the cause could sway a match.
+export type TaskDefect = Pick<
+  LabelledDefect,
+  "id" | "category" | "severity" | "summary" | "cause" | "locations" | "alternatives"
+>
+
 export interface JudgeTask {
   task: string // opaque
-  defects: LabelledDefect[] // the case's labels; empty for a control
+  defects: TaskDefect[] // the case's labels; empty for a control
   code?: CodeReference // where to read the change, to tell a real extra defect from a false alarm
   findings: TaskFinding[]
 }
@@ -107,7 +114,7 @@ export function blind(input: {
         {
           task: {
             task: fnv1a64(`${input.seed}\ntask\n${key}`),
-            defects: evalCase.defects,
+            defects: evalCase.defects.map(shownDefect),
             ...(evalCase.code ? { code: evalCase.code } : {}),
             findings: findings.map((entry) => shown(entry.id, entry.finding)),
           } satisfies JudgeTask,
@@ -339,6 +346,18 @@ function shown(id: string, finding: EvalFinding): TaskFinding {
     title: finding.title,
     body: finding.body,
     ...(finding.suggestion ? { suggestion: finding.suggestion } : {}),
+  }
+}
+
+function shownDefect(defect: LabelledDefect): TaskDefect {
+  return {
+    id: defect.id,
+    category: defect.category,
+    severity: defect.severity,
+    summary: defect.summary,
+    cause: defect.cause,
+    locations: defect.locations,
+    alternatives: defect.alternatives,
   }
 }
 

@@ -155,9 +155,9 @@ export interface LabelledDefect {
   cause: string
   locations: DefectLocation[]
   alternatives: DefectLocation[]
-  // VS-22a's failure class: one of the five classes, or "other". No case sets it until VS-22a maps the dataset's label,
-  // and VS-22a may change its shape. Class-scoped recall (eval-report.ts) counts only defects with a class other than
-  // "other".
+  // VS-22a's failure class: one of the five classes, or "other", from the dataset defect's failureClass label (absent
+  // while unlabelled). Class-scoped recall (eval-report.ts) counts only defects with a class other than "other". Judges'
+  // blinded tasks leave it out (eval-judge.ts TaskDefect).
   failureClass?: string
 }
 
@@ -176,12 +176,12 @@ export interface EvalCase {
   size?: { files: number; additions: number; deletions: number }
   defects: LabelledDefect[] // empty for a control
   code?: CodeReference
-  // The dataset's "cross-file" trait: the defect, or its fix, spans more than one file. Cross-file recall counts the
-  // defects of these cases.
+  // The dataset's labels.crossFile (VS-22a): explaining a labelled defect's cause needs code in a second file. Absent
+  // while unlabelled. Cross-file recall counts the defects of the cases where it is true.
   crossFile?: boolean
-  // A trivial control's kind (VS-22a: whitespace, docs, a rename and the like), on a control only. Trivial controls are
-  // reported on their own and never count toward false alarms per clean pull request (the D2 figure). No case sets it
-  // until VS-22a, which may change its shape.
+  // A trivial control's kind (whitespace, docs, rename or comment), on a control only: the dataset's "trivial" kind
+  // with its labels.trivialKind (VS-22a). Trivial controls are reported on their own and never count toward false
+  // alarms per clean pull request (the D2 figure).
   trivialKind?: string
 }
 

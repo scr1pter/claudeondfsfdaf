@@ -396,10 +396,21 @@ bun script/vectorscope-eval/dataset.ts --mirrors <dir>    # clones at <dir>/<own
   It is a seed, not the Phase 0 set: the sampled ~100 bug cases and at least 25
   controls, with rename, cross-file, incremental, fork and adversarial
   (prompt-injection) cases, are still to be collected.
-- A case's `kind` is `bug`, `control` or `adversarial`. An adversarial case
-  carries prompt-injection text and records it in `labels.injection`; it is a
-  separate trust test, split on its own and never counted toward recall or
-  false alarms per clean pull request.
+- A case's `kind` is `bug`, `control`, `trivial` or `adversarial`. An
+  adversarial case carries prompt-injection text and records it in
+  `labels.injection`; it is a separate trust test, split on its own and never
+  counted toward recall or false alarms per clean pull request. A trivial
+  control is a control whose change VS-24's trivial rules cover, with its
+  `labels.trivialKind`; it is split on its own and reported apart from the
+  behaviour-preserving controls.
+- Schema version 2 (VS-22a) adds labels, each absent until labelled: on a
+  defect, `failureClass` (the five failure classes or `other`), `mechanism`
+  and an owner-Q4 marker; on a case, `crossFile`, `runnable` (from the base
+  commit's recorded public CI only) and `authoring`; and each annotation
+  pass's own `labels`, so the two passes can be compared. The seed's bug cases
+  carry failure classes, mechanisms and cross-file labels from their case
+  files; `runnable` and `authoring` are not yet examined. The dry run counts
+  every label and the unlabelled ones, and reports VS-22b's targets.
 - `annotation-guide.md` says how cases are found, checked, labelled, split and
   frozen.
 
@@ -420,7 +431,12 @@ the saved runs against the hidden labels.
 
 `fixtures.test.ts` covers the dataset with local fixture repositories (missing
 objects, wrong ancestry, post-fix leakage, a reverse diff, split grouping and
-the freeze) and needs no network.
+the freeze) and VS-22a's labels (the class and mechanism enums, the Q4
+marker, cross-file locations in two files other than tests, trivial controls,
+runnable with the base commit's CI as evidence, authoring, each pass's own
+labels, the held-out freeze's label check, one kind and at most two cases per
+repository, and adversarial cases kept out of the quality rates), and needs no
+network.
 
 ## Production replay
 
@@ -898,10 +914,10 @@ How it works:
     after its provider; a projection over its dollar cap is counted apart and
     left out, since from there it describes an uncapped run, and so is a run
     whose spend is not known
-  - class-scoped recall (defects in the five failure classes) and cross-file
-    recall (cases with the `cross-file` trait), which read n/a until the
-    labels exist (VS-22a), and trivial controls on their own, never counted
-    toward false alarms per clean pull request
+  - class-scoped recall (defects whose `failureClass` is one of the five
+    failure classes) and cross-file recall (cases whose `labels.crossFile` is
+    true), both labelled on the seed since VS-22a, and trivial controls on
+    their own, never counted toward false alarms per clean pull request
   - the dry projections, in a table of their own
 
   `report.ts` reads engine and desktop replay artifacts and projection

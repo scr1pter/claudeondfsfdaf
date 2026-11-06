@@ -48,6 +48,58 @@ never a false alarm, on a clean control too. If extras show a label is missing,
 tell the dataset's annotators. Labels change only through their two passes and
 adjudication, and a held-out label only with a new freeze.
 
+## Failure classes and production-breaking
+
+Annotators give each labelled defect a `failureClass` (`annotation-guide.md`,
+"Labels added in VS-22a"). These are label vocabulary set by annotators, not
+verdict rules: a finding is judged by the verdicts above whatever its defect's
+class, so they do not change the rubric version. They decide which defects
+class-scoped recall counts and what "production-breaking" means.
+
+| Class | A defect is in it when |
+| --- | --- |
+| `crash` | A process, thread, request, job or command terminates abnormally because of it: an exception or panic the code does not handle (even when a framework's top-level handler turns it into an error response or an exit status), a fatal error or signal, or a process that exits at startup. An error the program detects and returns on purpose, such as a configuration it rejects with a message, is `other` unless the evidence shows the process then exits. |
+| `data-corruption` | Data the program stores, or passes on for another system to store, is written wrongly, overwritten, truncated, duplicated or lost: files, databases, caches, queues, messages, uploads and replicated records. A wrong value that is only computed, compared, shown or returned (a wrong response included) is `other`, and so is diagnostic output: logs, traces, metrics and other telemetry that are lost or wrong. |
+| `leak` | See the leak scope below. |
+| `runaway-loop` | Work that never ends or repeats without bound: an infinite loop or recursion, a retry, poll or reconnect with no bound or backoff, or a loop that feeds itself. |
+| `auth-bypass` | An authentication, authorization or trust check accepts what it should refuse: an expired, forged or unsigned token or credential, a skipped or wrong permission check, or a request that crosses a tenant or access boundary. |
+| `other` | Everything else, including wrong results, valid input or configuration refused, and diagnostic output. |
+
+- **Concurrency defects are classed by their effect.** A race that corrupts
+  stored data is `data-corruption`; one that crashes is `crash`. One whose only
+  effect is a wrong or stale result is `other`, with
+  `pendingQ4: concurrency-wrong-result` (below).
+- **This build's readings, not the owner's wording**, recorded in
+  `docs/vector/build/vectorscope-deviations.md` (2026-11-06 · VS-22a) and open
+  to the owner's change: a deadlock or a request that never completes counts
+  as `runaway-loop`, and an injection that lets a caller run commands or
+  queries beyond its rights counts as `auth-bypass`. No seed defect depends on
+  either.
+- **Production-breaking** means labelled `blocking` and in one of the five
+  classes. This is VS-27's S2 and what "No verified production-breaking
+  issues" claims. Class-scoped recall counts the defects in the five classes
+  at any severity; whether precise mode is judged on it is owner question Q3
+  (D16).
+
+### Leak scope (pending owner Q4)
+
+Q4 asks whether "leaks" includes data exposure, and whether concurrency bugs
+with wrong results count. Until the owner answers, `leak` is a **resource
+leak** only: something the program acquires is not released, so its use grows
+while the program runs (memory, file handles, sockets, connections, threads,
+goroutines, timers, subscriptions). Each defect that a wider answer would move
+into a class stays `other` and carries a marker:
+
+- `pendingQ4: data-exposure`: a secret or private data reaches someone who
+  should not see it, without a bypassed check (a bypassed check is
+  `auth-bypass`).
+- `pendingQ4: concurrency-wrong-result`: a concurrency defect whose only
+  effect is a wrong or stale result.
+
+Either answer can then be computed from the labels without relabelling.
+
+## Duplicates
+
 **Duplicates are not judged; they are counted.** Within one run, the first
 finding matched to a defect, or to an extra issue, counts. Later findings on
 the same defect are duplicates. A duplicate stays in the precision denominator
@@ -56,8 +108,10 @@ also reported as duplicates per pull request.
 
 ## Blinding and settlement
 
-- **Blinded tasks.** A judge gets one task per run, holding the case's labels,
-  the run's findings under opaque ids, and where to read the case's code: the
+- **Blinded tasks.** A judge gets one task per run, holding the case's labels
+  (each defect's id, category, severity, summary, cause, locations and
+  alternatives, without the annotators' `failureClass`), the run's findings
+  under opaque ids, and where to read the case's code: the
   repository URL with the candidate's base and head commits for a dataset case,
   or the change itself as a diff for a synthetic fixture. Read the code there
   before calling an unexpected finding a false alarm. Nothing names the
@@ -106,7 +160,9 @@ missing detects nothing.
 
 Each metric is reported for the proposed and the posted findings, for each
 pipeline variant and model. Breakdowns by language, trust mode, change size and
-defect category use the gate's stage.
+defect category use the gate's stage. Adversarial (prompt-injection) cases
+count only toward spend, wall time and trust violations: every rate below
+leaves them out, the defects they label included.
 
 | Metric | Definition |
 | --- | --- |
@@ -114,15 +170,18 @@ defect category use the gate's stage.
 | Recall, end to end | Labelled defects detected over the defects of every planned run. |
 | Recall, completed runs | The same over completed runs only. |
 | Recall, macro | The mean of each bug case's end-to-end recall. |
+| Recall, class-scoped | End-to-end recall of the defects whose `failureClass` is one of the five classes. Unlabelled and `other` defects are left out. |
+| Recall, cross-file | End-to-end recall of the defects of cases whose `labels.crossFile` is true. |
 | Actionable precision | Matched plus extra findings over the judged actionable findings (matched, extra, duplicate and false alarm). Unjudged findings are left out and counted. |
 | Precision, macro | The mean precision of the runs with judged findings. |
 | F1 | From precision and end-to-end recall. |
-| False alarms per clean PR | False alarms on the controls a run reviewed, per reviewed control. |
+| False alarms per clean PR | False alarms on the behaviour-preserving controls a run reviewed, per reviewed control. Trivial controls are left out. |
 | False alarms, comments and duplicates per PR | Per reviewed run (completed or partial). |
 | Severity agreement | Matched findings whose severity equals the label's. |
 | Location validity | Matched findings that cite one of the defect's locations or alternatives, within the slack (3 lines). |
 | Anchored | Posted findings placed on a diff line rather than only in the summary. |
 | Valid suggestions | Valid over rated suggestions. |
+| Trivial controls | Planned and reviewed trivial controls, and false alarms per reviewed trivial control, reported apart. |
 | Spend | Reported cost, uncertain cost (reservations kept in full when usage is missing), runs missing usage, and runs not admitted by the ledger. |
 
 A rate with nothing to count is shown as n/a with its counts, never as 1. For
