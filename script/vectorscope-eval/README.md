@@ -492,7 +492,15 @@ bun script/vectorscope-eval/replay.ts --mirrors <dir> --prepare <out>
     and a verify pass planned and skipped for budget or time has none of the
     four; the outcome lists only the passes that reported usage;
   - `tier1` and `shrink`, typed for VS-25b's impact slice and VS-24's
-    pre-dispatch shrink, and absent until those packages fill them.
+    pre-dispatch shrink, and absent until those packages' wiring fills them.
+    `tier1` is core `impact.ts`'s `ImpactRecord`: `stages` (candidates and
+    gated files, confirmed and packed call sites), `dropped` (ignored,
+    unchecked, gate, cap, time, budget and definitions), `plan`,
+    `gitVersion`, `clone`, `grepMs`, `parseMs`, `ms`, `tokens` (what the
+    rendered `<untrusted_impact>` block costs, 0 when it renders nothing),
+    `tests`, `unsupported`, and `incomplete` and `unsearched` when the search
+    was incomplete. Once VS-25b wiring builds the slice in `Review.run`,
+    `context.locations` also gains the slice's locations.
 - The attempt record comes from `Review.run`'s optional `observe` hook. It is
   off unless a caller sets it, and a test shows the same review sends the same
   requests and returns the same outcome with it off, on, or throwing.

@@ -1106,8 +1106,9 @@ Prompt tuning in VS-42, VS-43, VS-44 and VS-49 waits for the held-out freeze (I-
 
 ## 5. New owner questions
 
-- **Q18.** Are VS-32 to VS-49 approved as proposed additions, on the same terms as Q15? Beyond the packages themselves, that approval includes two things:
+- **Q18.** Are VS-32 to VS-49 approved as proposed additions, on the same terms as Q15? Beyond the packages themselves, that approval includes three things:
   - the I-8 amendment allowing `git cat-file --batch` on objects of the head tree-ish (VS-36);
+  - with it, a reading of I-8: that "`git show` or `git grep` of the head tree-ish" also allows commands that read trees and object metadata but no file content (`git ls-tree`, `git rev-list --objects --missing=print`, `git config` and `git version`). The VS-25b builder runs them to list a partial clone's missing objects without fetching (`vectorscope-deviations.md`, VS-25b, decision 2 and its review fixes). Nothing calls the builder before VS-25b wiring, so either answer stays possible;
   - under `instructionScope: scoped`, sending nested AGENTS.md and CLAUDE.md files and `.github/instructions/*.instructions.md` from the base commit to review models. This is the same trust class as the root AGENTS.md, which is already sent from the base commit, and it passes I-4's redaction (formerly Q33).
 - **Q19.** Under `failOn: blocking-or-incomplete`, should a provider or model error exit non-zero at once, or retry and recheck first (VS-32)?
 - **Q20.** May admission make metadata-only calls on the review's own credentials (Bedrock `GetAccountDataRetention`, Vertex `getCacheConfig` and `fetchPublisherModelConfig`) when an attestation sets `verify: "api"`, refusing on any failure or timeout? For OpenAI, project `data_retention` needs an admin key. Should `verify: "api"` stay refused for OpenAI (attestation only), or may a separate admin credential be read from the trusted global config only (VS-33)?

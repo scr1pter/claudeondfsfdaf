@@ -529,7 +529,8 @@ function codeLine(line: string, ext: string) {
 // never trivial.
 
 const RENAME_EXTENSIONS = new Set("ts tsx mts cts js jsx mjs cjs py".split(" "))
-const TEST_PATHS = [
+// Also the impact slice's tests (impact.ts, VS-25b).
+export const TEST_PATHS = [
   "**/*.test.*",
   "**/*.spec.*",
   "**/*_test.*",

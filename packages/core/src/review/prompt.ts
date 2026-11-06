@@ -1,6 +1,7 @@
 // The prompts for the review, security, verify and finalize steps. Everything the pull request's author or its
 // commenters control is placed inside escaped <untrusted_*> tags, and the trusted instructions come last.
 
+import type { ImpactIncomplete, ImpactPrompt } from "./impact"
 import { REDACTED } from "./redact"
 import type { Category, Finding, FocusHunk, PriorFinding, Trust } from "./types"
 
@@ -61,6 +62,7 @@ export interface PromptInput {
   focus?: FocusHunk[]
   headFiles?: HeadFile[]
   related?: RelatedCode[]
+  impact?: ImpactPrompt // VS-25b's Tier 1 slice, set only under `impact: "graph"` (no runner sets it before VS-25b wiring)
   history?: HistoryEntry[]
   // Requirements and contracts from the user's documents linked to the changed files, with drift flags (Vector's brain)
   requirements?: string
@@ -104,6 +106,22 @@ const MAX_TEAM_PATTERNS = 30
 const MAX_CHECKS = 20
 const MAX_CHECK_CHARS = 4_000
 const MAX_REQUIREMENT_CHARS = 1_600
+
+// Second-line caps of the <untrusted_impact> block (VS-25b). impact.ts's packSlice packs within them and charges each
+// block the size these renderers give it, so every location a slice records is a block the model is shown.
+export const IMPACT_CAPS = Object.freeze({ definitions: 40, sites: 60, windowChars: 2_000, tests: 20 })
+
+// The trusted sentence "## The change" carries whenever the block renders. impact.ts's packSlice charges it, with the
+// line break before it, to the slice's budget; ImpactSlice.tokens counts the block alone.
+export const IMPACT_INSTRUCTION =
+  "`<untrusted_impact>` lists the definitions this change touches and call sites Vector found in files that import them or share their package, most connected first, with three lines either side. It is a starting point, not a limit: open the files to follow a call further."
+
+const IMPACT_REASONS: Record<ImpactIncomplete, string> = {
+  time: "its time limit",
+  "partial-clone": "files missing from a partial clone",
+  output: "git output over its limit",
+  error: "a git error",
+}
 
 const TOOLS = "You can use read, grep, glob and list. You cannot edit files, run commands or browse the web."
 
@@ -325,6 +343,8 @@ function data(input: PromptInput, open: PriorFinding[], notInlined: NonNullable<
     target.push(
       "`<ci_checks>` holds this commit's CI results. A failing check is evidence: when the change causes it, report the defect behind it at the code that causes it. Do not report failures the change did not cause.",
     )
+  const impact = impactBlock(input.impact)
+  if (impact) target.push(IMPACT_INSTRUCTION)
   if (notInlined.length)
     target.push(
       input.trust === "untrusted"
@@ -383,6 +403,7 @@ function data(input: PromptInput, open: PriorFinding[], notInlined: NonNullable<
         ),
       ),
     )
+  if (impact) out.push(impact)
   const checks = (input.checks ?? []).slice(0, MAX_CHECKS)
   if (checks.length)
     out.push(
@@ -435,6 +456,53 @@ function data(input: PromptInput, open: PriorFinding[], notInlined: NonNullable<
       ),
     )
   return out
+}
+
+/**
+ * VS-25b's <untrusted_impact> block: the slice's changed definitions and call sites, then the dependents that are
+ * tests, then a note when the search was incomplete, or nothing when the slice has none of these (an empty slice is
+ * valid and adds no padding).
+ */
+export function impactBlock(slice: ImpactPrompt | undefined): string {
+  if (!slice || (!slice.changed.length && !slice.dependents.length && !slice.incomplete?.length)) return ""
+  const tests = slice.tests.slice(0, IMPACT_CAPS.tests)
+  return [
+    "<untrusted_impact>",
+    ...slice.changed.slice(0, IMPACT_CAPS.definitions).map(impactDefinition),
+    ...slice.dependents.slice(0, IMPACT_CAPS.sites).map(impactCallSite),
+    ...(tests.length ? [wrapUntrusted("tests", tests.join("\n"))] : []),
+    ...(slice.incomplete?.length ? [wrapUntrusted("impact_note", impactNote(slice.incomplete, slice.unsearched))] : []),
+    "</untrusted_impact>",
+  ].join("\n")
+}
+
+export function impactDefinition(definition: ImpactPrompt["changed"][number]): string {
+  return wrapUntrusted("changed_definition", definition.signature, {
+    path: definition.path,
+    line: definition.start,
+    end_line: definition.end,
+    side: definition.side,
+    kind: definition.kind,
+  })
+}
+
+export function impactCallSite(site: ImpactPrompt["dependents"][number]): string {
+  return wrapUntrusted("call_site", clip(site.window, IMPACT_CAPS.windowChars), {
+    path: site.path,
+    line: site.line,
+    symbol: site.name,
+    in: site.enclosing,
+  })
+}
+
+// The one-line "context considered" note (VS-38 item 6): impact incompleteness is context, never coverage.
+function impactNote(incomplete: readonly ImpactIncomplete[], unsearched: number | undefined): string {
+  const reasons = incomplete.map((reason) =>
+    reason === "partial-clone" && unsearched
+      ? `${unsearched} ${unsearched === 1 ? "file" : "files"} not searched, missing from a partial clone`
+      : IMPACT_REASONS[reason],
+  )
+  return `Context considered: the impact search is incomplete (${reasons.join("; ")}). Look further yourself.`
 }
 
 // Instructions from the base branch (CI) and the review rules. They are trusted, so they come after every

@@ -17,6 +17,7 @@ import { sameModel } from "./eval"
 import type { Report } from "./eval-report"
 import { fnv1a64 } from "./fingerprint"
 import { codeSpan } from "./format"
+import type { ImpactPrompt } from "./impact"
 import {
   buildFinalizePrompt,
   buildReviewPrompt,
@@ -46,7 +47,7 @@ export const REVIEW_PIPELINE_REVISION = 1
 // A digest of the pipeline's sources (REVIEW_PIPELINE_FILES in core test/review/model-evidence.test.ts), which that
 // test pins, so CI fails when one of them changes and nobody decided whether REVIEW_PIPELINE_REVISION goes up. When it
 // fails: bump the revision if the change alters what a review finds or posts, then set this to the digest it prints.
-export const REVIEW_PIPELINE_SOURCES = "244e9c3d52f44f83"
+export const REVIEW_PIPELINE_SOURCES = "5e30549464914097"
 
 // The longest a certificate may run from its approval. The plan asks for an expiry and sets none; a hosted model can
 // change underneath its id, so the evidence is re-earned on this cadence.
@@ -55,7 +56,8 @@ export const MAX_CERTIFICATE_DAYS = 90
 // The review settings that change what a review finds or posts. A certificate covers reviews under exactly these.
 // Budgets, time limits, ignores and skips bound or route a review but are not part of what it is evaluated on. VS-24's
 // `trivial` is one (a skipped change is not reviewed), counted from VS-24 wiring on (policyDigest); its
-// `maxInputTokens` is a budget.
+// `maxInputTokens` is a budget. VS-25's `impact` is one (the slice is context the model reviews with), counted from
+// VS-25b wiring on, and then only as "graph".
 export const EVIDENCE_POLICY_KEYS = [
   "security",
   "verify",
@@ -68,6 +70,7 @@ export const EVIDENCE_POLICY_KEYS = [
   "maxSteps",
   "maxDiffChars",
   "trivial",
+  "impact",
 ] as const satisfies readonly (keyof ReviewConfig)[]
 
 export type EvidenceAdapter = "engine" | "desktop"
@@ -224,6 +227,37 @@ const POPULATED_INPUT: PromptInput = {
   settled: ["src/settled.ts"],
 }
 
+// VS-25b's slice with every part the <untrusted_impact> block can show: a changed definition, a call site with its
+// enclosing function, a test, and the note with every reason and an unsearched count.
+const CANONICAL_IMPACT: ImpactPrompt = {
+  changed: [
+    {
+      path: "src/example.ts",
+      side: "RIGHT",
+      name: "example",
+      kind: "function",
+      start: 1,
+      end: 2,
+      exported: true,
+      signature: "export function example()",
+    },
+  ],
+  dependents: [
+    {
+      path: "src/caller.ts",
+      line: 2,
+      name: "example",
+      enclosing: "caller",
+      importsChanged: true,
+      rank: 1,
+      window: '1: import { example } from "./example"\n2: example()',
+    },
+  ],
+  tests: ["src/example.test.ts"],
+  incomplete: ["time", "partial-clone", "output", "error"],
+  unsearched: 1,
+}
+
 const POPULATED_VERIFY: Omit<VerifyPromptInput, "trust"> = {
   head: CANONICAL_INPUT.head,
   uncommitted: true,
@@ -234,8 +268,17 @@ const POPULATED_VERIFY: Omit<VerifyPromptInput, "trust"> = {
 
 // The prompts promptsDigest is built from, for its test: for trusted and untrusted reviews, the review and security
 // prompts bare and with every input set (full and incremental, with and without nits, a commit and uncommitted
-// changes), the verify prompt bare and with every input set, the finalizer and the owner's memory block.
-export function canonicalPrompts(): string[] {
+// changes), the verify prompt bare and with every input set, the finalizer and the owner's memory block. A section a key
+// enables is rendered only under that key (contract §0.3): under `impact: "graph"`, the review and security prompts
+// with every input set and VS-25b's slice are added, so the default digest stays as it was.
+export function canonicalPrompts(keys: Partial<Pick<ReviewConfig, "impact">> = {}): string[] {
+  const impact =
+    keys.impact === "graph"
+      ? (["trusted", "untrusted"] as const).flatMap((trust) => {
+          const input: PromptInput = { ...POPULATED_INPUT, trust, impact: CANONICAL_IMPACT }
+          return [buildReviewPrompt(input), buildSecurityPrompt(input)]
+        })
+      : []
   return [
     ...(["trusted", "untrusted"] as const).flatMap((trust) => {
       const headFiles = trust === "untrusted" ? [{ path: "src/example.ts", text: "", exact: true }] : undefined
@@ -255,16 +298,21 @@ export function canonicalPrompts(): string[] {
     }),
     buildFinalizePrompt(),
     ownerBlock(["Example."]),
+    ...impact,
   ]
 }
 
-let prompts: string | undefined
+const prompts = new Map<string, string>()
 
 // A digest of the core review prompts and output schemas, built from fixed inputs so it changes only when their text
-// does (canonicalPrompts).
-export function promptsDigest(): string {
-  prompts ??= fnv1a64(JSON.stringify([...canonicalPrompts(), REVIEW_REPORT_JSON_SCHEMA, VERIFY_JSON_SCHEMA]))
-  return prompts
+// does (canonicalPrompts). Memoised per set of prompt keys; with none set it is the digest it has always been.
+export function promptsDigest(keys: Partial<Pick<ReviewConfig, "impact">> = {}): string {
+  const key = keys.impact === "graph" ? "impact:graph" : ""
+  const cached = prompts.get(key)
+  if (cached) return cached
+  const digest = fnv1a64(JSON.stringify([...canonicalPrompts(keys), REVIEW_REPORT_JSON_SCHEMA, VERIFY_JSON_SCHEMA]))
+  prompts.set(key, digest)
+  return digest
 }
 
 // Default-stable (contract §0.3): a key with an entry in OPTIONAL_REVIEW_DEFAULTS counts only when set to another value,
@@ -294,7 +342,12 @@ export function evidenceScope(input: {
   return {
     adapter: input.adapter,
     pipeline: REVIEW_PIPELINE_REVISION,
-    prompts: promptsDigest(),
+    // The impact block enters the prompts only once a runner applies the key (it leaves UNAPPLIED_REVIEW_KEYS).
+    prompts: promptsDigest(
+      input.config.impact === "graph" && !UNAPPLIED_REVIEW_KEYS.some((key) => key === "impact")
+        ? { impact: "graph" }
+        : {},
+    ),
     policy: policyDigest(input.config),
     ...(input.triage ? { triage: input.triage } : {}),
     ...(input.route ? { route: input.route } : {}),

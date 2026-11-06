@@ -27,9 +27,12 @@ import { DEFAULT_REVIEW_CONFIG, UNAPPLIED_REVIEW_KEYS, type ReviewConfig } from 
 // The review pipeline's sources, from the repository root: both runners, the core code they share for planning,
 // packing, selection, anchoring and the prompts (whose length limits promptsDigest cannot see), the route rules
 // (VS-23a), the payload holdback (VS-34a), the trivial gate and the pre-dispatch estimate (VS-24c), the tree-sitter
-// parser (VS-25a), and the review and security agents' own prompts. REVIEW_PIPELINE_SOURCES pins a digest of them. The
-// web-tree-sitter runtime init the parser shares with the shell tool (engine util/tree-sitter.ts) is left out on
-// purpose: it decides nothing a review finds, and pinning it would tie shell changes to the review pin.
+// parser (VS-25a), the Tier 1 impact slice and its builder (VS-25b), and the review and security agents' own prompts.
+// REVIEW_PIPELINE_SOURCES pins a digest of them. The web-tree-sitter runtime init the parser shares with the shell tool
+// (engine util/tree-sitter.ts) is left out on purpose: it decides nothing a review finds, and pinning it would tie shell
+// changes to the review pin. So, for now, are the slice's shared readers, BrainCode and BrainGraph (core brain/code.ts
+// and graph.ts, which also rank the desktop's files) and the changedSymbols fallback (review/symbols.ts): no runner
+// reaches them through the slice before VS-25b wiring, which adds them here when it makes them decide the slice.
 const REVIEW_PIPELINE_FILES = [
   "packages/engine/src/review/run.ts",
   "packages/app/src/features/pull-requests/ai-review.ts",
@@ -44,6 +47,8 @@ const REVIEW_PIPELINE_FILES = [
   "packages/core/src/review/trivial.ts",
   "packages/core/src/review/dispatch.ts",
   "packages/engine/src/review/parse.ts",
+  "packages/core/src/review/impact.ts",
+  "packages/engine/src/review/impact.ts",
   "packages/engine/src/agent/prompt/review.txt",
   "packages/engine/src/agent/prompt/security.txt",
 ]
@@ -123,6 +128,8 @@ describe("scope", () => {
     })
     expect(promptsDigest()).toMatch(/^[0-9a-f]{16}$/)
     expect(promptsDigest()).toBe(promptsDigest())
+    // Printed at 6e2f1d04, before VS-25b: a section a key enables enters the digest only under that key (contract §0.3).
+    expect(promptsDigest()).toBe("5d59e9ee06077c23")
     expect(evidenceScope({ adapter: "desktop", config: DEFAULT_REVIEW_CONFIG, triage: "acme/cheap" })).toMatchObject({
       adapter: "desktop",
       triage: "acme/cheap",
@@ -174,6 +181,33 @@ describe("scope", () => {
       expect(text).toContain(section)
   })
 
+  // VS-25b: the <untrusted_impact> block renders only when a slice is set, which only `impact: "graph"` will do, so it
+  // enters the digest only under that key and the default digest holds.
+  test("the prompts digest covers the impact block under impact: graph only", () => {
+    expect(promptsDigest({})).toBe(promptsDigest())
+    expect(promptsDigest({ impact: "grep" })).toBe(promptsDigest())
+    expect(promptsDigest({ impact: "graph" })).not.toBe(promptsDigest())
+    expect(promptsDigest({ impact: "graph" })).toBe(promptsDigest({ impact: "graph" }))
+    expect(canonicalPrompts().join("\n")).not.toContain("untrusted_impact")
+    expect(canonicalPrompts({ impact: "grep" })).toEqual(canonicalPrompts())
+    const graph = canonicalPrompts({ impact: "graph" })
+    expect(graph.slice(0, canonicalPrompts().length)).toEqual(canonicalPrompts())
+    const text = graph.join("\n")
+    for (const section of [
+      "`<untrusted_impact>` lists the definitions this change touches",
+      "<untrusted_impact>\n",
+      "<untrusted_changed_definition ",
+      "<untrusted_call_site ",
+      'in="caller"',
+      "<untrusted_tests>",
+      "<untrusted_impact_note>",
+      "its time limit; 1 file not searched, missing from a partial clone; git output over its limit; a git error",
+    ])
+      expect(text).toContain(section)
+    // Both trusts, the review and security prompts.
+    expect(graph.length - canonicalPrompts().length).toBe(4)
+  })
+
   // The runners and the core code they share have no digest a review can compute, so this pins one: a change to any of
   // these files fails here until someone decides whether REVIEW_PIPELINE_REVISION goes up and updates the pin.
   test("the pipeline's sources are pinned next to REVIEW_PIPELINE_REVISION", () => {
@@ -216,6 +250,9 @@ describe("scope", () => {
       { maxInputTokens: 200_000 },
       { trivial: "review" as const },
       { trivial: "skip" as const },
+      // VS-25's impact slice is applied by no runner yet either.
+      { impact: "grep" as const },
+      { impact: "graph" as const },
     ])
       expect(policyDigest({ ...DEFAULT_REVIEW_CONFIG, ...change })).toBe(base)
   })
@@ -239,6 +276,20 @@ describe("scope", () => {
     // Every other key keeps its digest behaviour: a changed value still moves it, with trivial set or not.
     expect(policyDigest({ ...skip, maxComments: 3 })).not.toBe(policyDigest(skip))
     expect(policyDigest({ ...DEFAULT_REVIEW_CONFIG, maxSteps: 31 })).not.toBe(base)
+  })
+
+  // VS-25b: `impact` is a policy key (the slice is context the model reviews with) that no runner applies before VS-25b
+  // wiring, so neither the policy digest nor the prompts digest of a scope moves with it yet. Once a runner applies it,
+  // only "graph" counts, in both.
+  test("the scope leaves out VS-25b's impact until a runner applies it", () => {
+    const base = policyDigest(DEFAULT_REVIEW_CONFIG)
+    expect(UNAPPLIED_REVIEW_KEYS).toContain("impact")
+    for (const impact of ["graph", "grep", undefined] as const)
+      expect(policyDigest({ ...DEFAULT_REVIEW_CONFIG, impact })).toBe(base)
+    const graph: ReviewConfig = { ...DEFAULT_REVIEW_CONFIG, impact: "graph" }
+    expect(evidenceScope({ adapter: "engine", config: graph })).toEqual(SCOPE)
+    expect(evidenceScope({ adapter: "engine", config: graph }).prompts).toBe(promptsDigest())
+    expect(policyDigest({ ...graph, nits: true })).not.toBe(policyDigest(graph))
   })
 
   test("a route is in the scope only when the caller enforced it", () => {

@@ -70,6 +70,7 @@ import {
   type Shrink,
 } from "@vectordevai/core/review/dispatch"
 import { VARIANT_KEYS, VARIANT_NAME } from "@vectordevai/core/review/eval"
+import type { ImpactRecord } from "@vectordevai/core/review/impact"
 import { evidenceScope, type EvidenceScope } from "@vectordevai/core/review/model-evidence"
 import { estimateCostUsd, nextStepCostUsd, type ReviewPrice } from "@vectordevai/core/review/plan"
 import type { RelatedCode } from "@vectordevai/core/review/prompt"
@@ -141,7 +142,8 @@ export interface ReplayInput {
   // it leaves the last two out). It never sets a variant's key (VARIANT_KEYS.engine): that goes in `variant`. Nor does
   // it set a route setting (SOURCED_REVIEW_KEYS: privacy, zdrAttested), which comes only from a trusted source through
   // mergeReviewConfig once a runner enforces it (VS-23b). Nor a key no runner applies yet (core UNAPPLIED_REVIEW_KEYS:
-  // VS-24's trivial and maxInputTokens). The type says so, and step 0b refuses any of them from an untyped caller.
+  // VS-24's trivial and maxInputTokens, VS-25b's impact). The type says so, and step 0b refuses any of them from an
+  // untyped caller.
   config?: Partial<
     Omit<ReviewConfig, (typeof VARIANT_KEYS.engine)[number] | SourcedReviewKey | (typeof UNAPPLIED_REVIEW_KEYS)[number]>
   >
@@ -243,8 +245,10 @@ export interface ReplayArtifact {
     // The changed files, history and instructions carry no line and are left out. Absent before VS-21a.
     locations?: string[]
   }
-  // VS-25b's Tier 1 impact slice, how long it took to build. Absent until VS-25b.
-  tier1?: { ms: number }
+  // VS-25b's Tier 1 impact slice as core impact.ts's ImpactRecord: its stage counts and drops, the scan plan, git's
+  // version, the clone mode, grep, parse and total time, tokens, tests, unsupported files and why it is incomplete.
+  // Absent until VS-25b wiring builds the slice inside Review.run; context.locations then gains the slice's locations.
+  tier1?: ImpactRecord
   files: { reviewed: string[]; skipped: SkippedFile[] }
   // Each pass's prompt, and, for a pass that had a session, its wall time and cache use from the messages of every
   // session of that name: `startMs` after the first message of any pass, `ms` from its first message created to its
@@ -1143,6 +1147,13 @@ export function quotedLocations(related: readonly RelatedCode[]) {
   ]
 }
 
+// The package whose wiring applies each key no runner applies yet.
+const WIRING: Record<(typeof UNAPPLIED_REVIEW_KEYS)[number], string> = {
+  trivial: "VS-24 wiring",
+  maxInputTokens: "VS-24 wiring",
+  impact: "VS-25b wiring",
+}
+
 // Why a replay's settings cannot name its run, if they cannot: a variant's key set through `config`, which would leave
 // the run unnamed, a route setting there, which nothing would enforce, or a variant that would run the frozen pipeline,
 // or anything but itself, under its name.
@@ -1155,8 +1166,14 @@ function variantProblem(input: ReplayInput) {
   if (sourced.length)
     return `config sets ${sourced.join(", ")}, a route setting a replay cannot apply: route settings come only from trusted settings once a runner enforces them.`
   const unwired = UNAPPLIED_REVIEW_KEYS.filter((key) => input.config && Object.hasOwn(input.config, key))
-  if (unwired.length)
-    return `config sets ${unwired.join(", ")}, which no runner applies yet (VS-24 wiring), so the artifact would record a setting the run did not have.`
+  if (unwired.length) {
+    const packages = [...new Set(unwired.map((key) => WIRING[key]))]
+    const wiring =
+      packages.length === 1
+        ? packages[0]
+        : packages.map((item) => `${item} for ${unwired.filter((key) => WIRING[key] === item).join(", ")}`).join("; ")
+    return `config sets ${unwired.join(", ")}, which no runner applies yet (${wiring}), so the artifact would record a setting the run did not have.`
+  }
   const variant = input.variant
   if (!variant) return undefined
   if (!variant.name.startsWith("engine:") || !VARIANT_NAME.test(variant.name))

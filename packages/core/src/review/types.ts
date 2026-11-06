@@ -253,6 +253,11 @@ export interface ReviewConfig {
   // runner until VS-24 wiring (UNAPPLIED_REVIEW_KEYS), so the parser warns that "skip" is not applied; the GitHub skip
   // waits for the @vector merge.
   trivial?: "review" | "skip"
+  // VS-25's opt-in (D3, Q15). Under "graph", Review.run will build the Tier 1 impact slice (impact.ts) and send it as
+  // <untrusted_impact>. Absent means "grep" (OPTIONAL_REVIEW_DEFAULTS), and DEFAULT_REVIEW_CONFIG leaves it out, so every
+  // config and its digest stay as they were. Parsed, and read by no runner until VS-25b wiring (UNAPPLIED_REVIEW_KEYS),
+  // so the parser warns that "graph" is not applied.
+  impact?: "grep" | "graph"
   // VS-23's opt-in (D3, Q1): "zdr" sends code only on zero data retention routes (privacy.ts). Raise-only: any source
   // may set it and none may lower it. Absent means "standard", and DEFAULT_REVIEW_CONFIG leaves it out, so every
   // config and its digest stay as they were. Only mergeReviewConfig reads it, and no runner calls that before VS-23b.
@@ -324,6 +329,7 @@ export const DEFAULT_REVIEW_CONFIG: ReviewConfig = {
 export const OPTIONAL_REVIEW_DEFAULTS = {
   trivial: "review",
   maxInputTokens: 0,
+  impact: "grep",
 } as const satisfies Partial<ReviewConfig>
 
 // The same, read by any ReviewConfig key, for lookups that do not know which keys have an entry.
@@ -331,11 +337,12 @@ export const OPTIONAL_REVIEW_DEFAULT_OF: Partial<Record<keyof ReviewConfig, unkn
 
 // Keys config.ts parses that no runner applies yet, each optional with a default above. The parser warns when one would
 // change a review, policyDigest reads them as absent whatever their value, so no evidence scope claims a policy its
-// review did not run under, and the eval replay neither takes nor records them. VS-24 wiring takes a key off this list
-// when a runner applies it.
+// review did not run under, and the eval replay neither takes nor records them. VS-24 or VS-25b wiring takes a key off
+// this list when a runner applies it.
 export const UNAPPLIED_REVIEW_KEYS = [
   "trivial",
   "maxInputTokens",
+  "impact",
 ] as const satisfies readonly (keyof typeof OPTIONAL_REVIEW_DEFAULTS)[]
 
 // The verify setting a review gets under verifyPolicy "shared" when neither review.json nor REVIEW_VERIFY sets one:

@@ -24,7 +24,7 @@ import {
   type ReviewOutcome,
 } from "@vectordevai/core/review/types"
 import { estimateDispatch } from "@vectordevai/core/review/dispatch"
-import { evidenceScope, policyDigest } from "@vectordevai/core/review/model-evidence"
+import { evidenceScope, policyDigest, promptsDigest } from "@vectordevai/core/review/model-evidence"
 import { SpendGuard } from "@vectordevai/core/spend-guard"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { Agent } from "../../src/agent/agent"
@@ -863,6 +863,40 @@ describe("ReviewEval.replay", () => {
     TIMEOUT,
   )
 
+  // VS-25b: the same for `impact`. A base review.json under "graph" is replayed with related code from git grep, as every
+  // runner still reviews, and its scope claims neither the policy nor the prompts the impact block would add.
+  it.instance(
+    "replays a base review.json that sets VS-25b's impact without it, keeping the parser's warning",
+    () =>
+      Effect.gen(function* () {
+        const { directory, llm, base, head } = yield* checkout({
+          base: { "src/list.ts": LIST_BASE, ".vector/review.json": JSON.stringify({ impact: "graph" }) },
+          head: { "src/list.ts": LIST_HEAD },
+          price: PRICE,
+        })
+        yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report()))
+        const artifact = yield* ReviewEval.replay({
+          case: replayCase(directory, base, head),
+          model: MODEL,
+          config: { maxCostUsd: 2, verify: "off" },
+          posting: ReviewEval.recordingPosting(),
+          check: recordingCheck().check,
+        })
+        expect(Object.hasOwn(artifact.config.value, "impact")).toBe(false)
+        expect(artifact.config.warnings).toEqual([
+          '"impact": "graph" is not applied yet: related code still comes from git grep.',
+        ])
+        expect(artifact.scope.policy).toBe(policyDigest({ ...artifact.config.value, impact: "graph" }))
+        expect(artifact.scope.prompts).toBe(promptsDigest())
+        expect(artifact.scope.prompts).not.toBe(promptsDigest({ impact: "graph" }))
+        expect(lastUserText((yield* llm.hits).find(REVIEW)!.body)).not.toContain("untrusted_impact")
+        expect(artifact.tier1).toBeUndefined()
+        expect(artifact.attempts.filter((attempt) => attempt.admitted).length).toBeGreaterThan(0)
+      }),
+    GIT,
+    TIMEOUT,
+  )
+
   it.instance(
     "a variant on the shared verify policy gets the policy's default unless the base's review.json sets verify",
     () =>
@@ -980,6 +1014,13 @@ describe("ReviewEval.replay", () => {
           "config sets trivial, maxInputTokens, which no runner applies yet (VS-24 wiring)",
         )
         expect(yield* refused({ config: { trivial: "review" } })).toContain("config sets trivial, which no runner")
+        // Nor VS-25b's impact, named by its own wiring package, and grouped by package when both are set.
+        expect(yield* refused({ config: { impact: "graph" } })).toContain(
+          "config sets impact, which no runner applies yet (VS-25b wiring), so the artifact would record a setting the run did not have.",
+        )
+        expect(yield* refused({ config: { trivial: "skip", impact: "grep" } })).toContain(
+          "config sets trivial, impact, which no runner applies yet (VS-24 wiring for trivial; VS-25b wiring for impact)",
+        )
         // A pending variant's key is refused as a key this replay does not apply.
         expect(yield* refused({ variant: { name: "engine:trivial-skip", keys: { trivial: "skip" } } })).toContain(
           "engine:trivial-skip sets trivial, which this replay does not apply",

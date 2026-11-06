@@ -170,6 +170,7 @@ const FIELDS: Record<PlainKey, Field> = {
   verifyPolicy: oneOf(["legacy", "shared"]),
   modelEvidence: oneOf(["off", "warn"]),
   trivial: oneOf(["review", "skip"]),
+  impact: oneOf(["grep", "graph"]),
   failOn: oneOf(["never", "blocking"]),
   ignore: strings,
   ignoreDefaults: bool,
@@ -208,6 +209,7 @@ const ENV: { name: string; key: PlainKey; kind: "number" | "text" }[] = [
   { name: "REVIEW_VERIFY_POLICY", key: "verifyPolicy", kind: "text" },
   { name: "REVIEW_MODEL_EVIDENCE", key: "modelEvidence", kind: "text" },
   { name: "REVIEW_TRIVIAL", key: "trivial", kind: "text" },
+  { name: "REVIEW_IMPACT", key: "impact", kind: "text" },
   { name: "REVIEW_FAIL_ON", key: "failOn", kind: "text" },
   { name: "REVIEW_MAX_COST_USD", key: "maxCostUsd", kind: "number" },
   { name: "REVIEW_MAX_COST_USD_PER_PR", key: "maxCostUsdPerPr", kind: "number" },
@@ -229,6 +231,10 @@ const UNAPPLIED: Record<
   maxInputTokens: {
     applies: (config) => (config.maxInputTokens ?? 0) > 0,
     warning: '"maxInputTokens" is not applied yet: no input-token cap is enforced.',
+  },
+  impact: {
+    applies: (config) => config.impact === "graph",
+    warning: '"impact": "graph" is not applied yet: related code still comes from git grep.',
   },
 }
 

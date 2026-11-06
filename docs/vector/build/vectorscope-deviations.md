@@ -5805,3 +5805,612 @@ overrides the plan's commit step).
   - Nothing was sent to a model, no paid path ran, no workflow was
     dispatched, nothing was published, and no user-visible string changed
     (D14).
+
+## 2026-11-06 · VS-25b Tier 1 impact slice (core and uncalled engine builder)
+
+Contract §1.2 (`impact.ts`) and §4 VS-25b; addendum A VS-36 items 1, 2, 4 and 5,
+VS-38 items 1, 3, 4, 6 and 7, and §3 VS-25; the Now window of contract §5 and
+addendum §4. Built at `6e2f1d04`. VS-25 (and "VS-25 supersedes VS-17") waits on
+Q15 and VS-36 to VS-38 on Q18, so everything sits behind the new `impact` key,
+which defaults to `grep`, and nothing reads it: no runner, CLI, app or desktop
+file imports either `impact.ts`. `run.ts`, `ai-review.ts`, `provider.ts`,
+`session/llm.ts`, `posting.ts`, engine `review/context.ts` and `review/parse.ts`,
+`cli/cmd/review.ts`, `workflow.ts`, `command.ts`, `cli/cmd/github.*`,
+`github-*.ts`, `vectorscope.astro`, core `review/symbols.ts` and `brain/graph.ts`,
+desktop `repo-index.ts`, `brain/knowledge.ts` and `script/vectorscope-eval/replay.ts`
+(its `VARIANTS`) are untouched. It implements the VS-25b plan as corrected by its
+critique: every critique point was taken, three of them in part or in another
+form (items 4, 9 and 16 under "Critique points", with reasons). Nothing is committed (the lane brief
+overrides the plan's commit step).
+
+- **What landed.**
+  - **Core `review/types.ts`**: `ReviewConfig.impact?: "grep" | "graph"`;
+    `OPTIONAL_REVIEW_DEFAULTS.impact = "grep"`; `"impact"` joins
+    `UNAPPLIED_REVIEW_KEYS`. `DEFAULT_REVIEW_CONFIG` is unchanged.
+  - **Core `review/config.ts`**: a plain key (`FIELDS.impact`, env
+    `REVIEW_IMPACT` after `REVIEW_TRIVIAL`), with the warning
+    `"impact": "graph" is not applied yet: related code still comes from git grep.`
+    Not raise-only, not trusted-only: `mergeReviewConfig` reads it exactly as
+    `parseReviewConfig` does.
+  - **Core `brain/code.ts`**: `INDEX_FILES` exported (same value); new
+    `WorkspacePackage`, `PathAliases`, `Workspace` and `workspace(manifests)`;
+    `resolve` and `dependencies` take an optional fifth argument. Only with it,
+    and only for `typescript` and `markup` specifiers that neither the relative
+    attempt nor a sibling resolved, the tsconfig or jsconfig path aliases of the
+    nearest folder are tried (an exact pattern, else the `*` pattern with the
+    longest prefix, each target in order, then `baseUrl`), then the workspace
+    package with the longest matching name (an exact `exports` key, else the `*`
+    key with the longest prefix; without `exports`, `main`, then `module`, then
+    the folder's index file, and any subpath as a file under the folder).
+    Whatever that leaves unresolved falls through to the suffix match unchanged.
+  - **Core `review/trivial.ts`**: `TEST_PATHS` exported (same value).
+  - **New core `review/impact.ts`** (pure, Node-only through BrainCode):
+    `IMPACT_LIMITS`, `IMPACT_INCOMPLETE` (`time`, `partial-clone`, `output`,
+    `error`), the `Definition`, `Reference`, `Dependent`, `ImpactSlice`,
+    `ImpactPrompt` and `ImpactRecord` types, and `changedDefinitions`,
+    `movedNames`, `impactNames`, `barrels`, `selectDependents`, `wordHits`,
+    `packSlice` and `changedPaths`.
+  - **Core `review/prompt.ts`**: `PromptInput.impact?: ImpactPrompt` (a type-only
+    import), `IMPACT_CAPS` (40 definitions, 60 call sites, 2,000 window
+    characters, 20 tests), and the exported renderers `impactBlock`,
+    `impactDefinition` and `impactCallSite`. The `<untrusted_impact>` block
+    follows `</related_code>`, with one trusted sentence in "## The change", and
+    renders only when the slice has a changed definition, a call site or an
+    incomplete reason. The cacheable "## How to work" prefix is untouched.
+  - **Core `review/model-evidence.ts`**: `"impact"` joins `EVIDENCE_POLICY_KEYS`
+    after `"trivial"`; `CANONICAL_IMPACT`; `canonicalPrompts(keys)` and
+    `promptsDigest(keys)` (memoised per key set) add the review and security
+    prompts with the slice, for both trusts, only under `impact: "graph"`;
+    `evidenceScope` asks for that digest only once a runner applies the key
+    (it leaves `UNAPPLIED_REVIEW_KEYS`). `REVIEW_PIPELINE_SOURCES`
+    `244e9c3d52f44f83` → `0d1995975936c407`; `REVIEW_PIPELINE_REVISION` stays 1.
+  - **New engine `review/impact.ts`** (`ReviewImpact`, uncalled): `ARG_CHARS`,
+    `IMPORT_LINE`, `ChangedFiles` (each side's text, definitions, comments and
+    strings keyed as VS-24c's `TrivialInput` takes them, plus `unsupported`,
+    `missing` and `parseMs`), `BuildInput`, `parseChanged`, `importLines` and
+    `build`. Node APIs only; no `fetch(` text and no address, so the
+    egress-inventory lint passes.
+  - **Engine `review/eval.ts`**: `ReplayArtifact.tier1` is now `ImpactRecord`
+    (absent until wiring); the unwired-key refusal names each key's wiring
+    package (`(VS-24 wiring)` stays byte-identical when only VS-24 keys are set;
+    with both, `(VS-24 wiring for trivial; VS-25b wiring for impact)`); the
+    `ReplayInput.config` comment names `impact`.
+  - **`script/vectorscope-eval/README.md`**: `tier1`'s fields.
+  - **New tests**: core `test/review/impact.test.ts` (28),
+    `test/brain/code-workspace.test.ts` (8); engine `test/review/impact.test.ts`
+    (12). **Extended**: core `prompt.test.ts` (+4), `config.test.ts` (+4, and
+    `OPTIONAL_REVIEW_DEFAULTS` gains `impact`), `model-evidence.test.ts` (+2, the
+    pin, the pinned `promptsDigest()` literal); engine `eval.test.ts` (+1 replay,
+    +2 refusals).
+- **How the slice is built** (`ReviewImpact.build`, about a 4 s box,
+  `IMPACT_LIMITS.timeBoxMs`; every git call through `Git.Service` with
+  `GIT_NO_LAZY_FETCH=1` and `Effect.timeoutOption(remaining)`):
+  1. Refuse a base or head that starts with `-` (incomplete `error`).
+  2. Scan, tree-ish plan only (VS-38 item 1): `git version`, and `git config
+     --get-regexp` for `extensions.partialclone`, `remote.*.promisor` and
+     `core.sparsecheckout` (`clone.partial`, `clone.sparse`).
+  3. In a partial clone only: `rev-list --objects --no-walk --missing=print
+     --filter=blob:none <head>` (a missing tree means nothing can be read safely:
+     incomplete `partial-clone`, nothing read), then the same without the filter
+     for head and base, whose listed paths are what the clone has.
+  4. Concurrently: `ls-tree -r -z --full-tree <head>` (64 MiB cap; `-l` for sizes
+     only when the clone is not partial), and each changed file's head and base
+     side through `git show --no-textconv <rev>:<path>` (1 MiB + 1 cap; a side
+     the clone lacks is never shown and goes to `ChangedFiles.missing`), parsed
+     with VS-25a's parser.
+  5. The missing head blobs (`unsearched`) become `:(top,exclude,literal)`
+     excludes, collapsed to the highest folders whose every blob is missing;
+     when they cannot fit `ARG_CHARS`, no search runs.
+  6. Names: `impactNames` over `changedDefinitions` plus a fallback of
+     `movedNames`, `changedSymbols` for refused grammar-language files and
+     `BrainCode.symbols` at added lines for files without a grammar (at most 40).
+  7. Concurrently: the manifests (`git grep -n -z -I -e ""` of `package.json`,
+     `tsconfig.json`, `jsconfig.json` and the root `pnpm-workspace.yaml`,
+     node_modules excluded) into `BrainCode.workspace`; and the candidates, one
+     uncapped `git grep -l -z -w -F -I --no-color --no-column --full-name -f -
+     <head> -- :/ <excludes>` with the names on stdin (VS-36 item 1).
+  8. The gate: the import lines of code candidates and barrels, then
+     `selectDependents` (VS-36 item 2), the 200-file cap applying only to
+     confirmation.
+  9. Confirm in rank order (concurrency 4) until the deadline: `git show`, parse
+     with the names (import-kind references left out), or `wordHits` where the
+     parser refuses; then `packSlice`.
+  The slice never touches coverage or completeness (VS-38 item 7): it has no such
+  field, and a test says so.
+- **Decisions and deviations.**
+  1. **Gate first** (VS-36 items 1, 2, 4 and 5), replacing the brief's cap
+     before the gate. The names go through `-f -` on stdin, so argv stays
+     bounded; a test shows the one grep finds the files the per-name greps find.
+     No 5,000-candidate prefilter, so no `dropped.prefilter` or
+     `stages.prefiltered`. An empty slice is valid and renders nothing.
+  2. **Gate reads** use one tree-ish `git grep` of import lines per chunk of at
+     most 24,000 pathspec characters (git grep has no `--pathspec-from-file`,
+     probed on 2.43, and Windows caps a command line at 32,767), with chunk
+     concurrency 2. `cat-file --batch` waits for Q18 and the I-8 amendment; blobs
+     are read with `git show --no-textconv`. The metadata reads (`ls-tree`,
+     `rev-list --missing=print`, `git config`, `git version`) read no file
+     content.
+  3. **Finding: several `-e` patterns are pathological on git 2.43.** The six
+     import-line patterns as six `-e` took over 30 s on 100 candidate files of
+     this repository (bun.lock and DEPENDENCY_NOTICES.md among them; 17 s with
+     only two patterns), against 89 ms for the same six as one alternation in one
+     `-e`, which gives the same lines (371,959 bytes either way on 100 code
+     files: 217 ms against 17 ms). So `IMPORT_LINE` is sent as one alternation.
+     And only code is read at the gate (`BrainCode.language` neither undefined
+     nor `text`): any other candidate is checked by its path (no import, so
+     `dropped.gate`), and a code file over the parser's 1 MiB cap is left
+     unchecked (`dropped.unchecked`), since it could not be confirmed.
+  4. **Finding: lazy fetching off makes a tree-ish `git grep` fail, not skip.**
+     On git 2.43.0 here (which honours `GIT_NO_LAZY_FETCH` and prints "lazy
+     fetching disabled"), a grep of a partial clone's head exits 128 at the first
+     missing blob, so VS-38 item 3's "searches only blobs present locally" does
+     not hold. Instead `rev-list --objects --no-walk --missing=print`, which
+     never fetches on any version that has `--missing`, lists what is missing
+     (probed: the counts are the same before and after), and the builder never
+     names a missing object: missing paths are excluded from every grep, never
+     candidates and never shown. So nothing is ever fetched, stricter than
+     "fetch only gated candidates", and independent of the git version (the
+     critique's point; VS-38's 2.44 version gate is not needed). Also found:
+     `ls-tree -l` needs each blob's size, so in a partial clone it fetches (or,
+     with lazy fetching off, fails); `-l` is used only when the clone is not
+     partial. `GIT_NO_LAZY_FETCH=1` stays on every call as a backstop, and a
+     test shows it holds (`parseChanged` asked to show a missing blob gets
+     nothing, and nothing is fetched). On 2.43 a partial clone sets
+     `remote.origin.promisor` and `partialclonefilter`, not
+     `extensions.partialclone`; both are read.
+  5. **Additions to the contract shapes**, each because a stage or count needs
+     it: `incomplete` is a list with `output` and `error` reasons; `dropped` has
+     `ignored` (ignore rules, generated headers), `unchecked` (never
+     gate-checked: time, git's limit, or over the parser cap), `time` (gated,
+     left unread) and `definitions` (changed definitions that did not fit:
+     `path:start`, or `base:path:start` for LEFT); `Definition` has `side`,
+     `container` and `aliases`; the record has `clone` and `unsearched`. Stage
+     arithmetic: `candidates = ignored + unchecked + gate + gated`, `gated ≥ cap
+     + time`, `confirmed = packed + budget`, every dependent in `locations`.
+  6. **Changed definitions** (critique 1 and 2): the innermost definition of each
+     changed line, plus the nearest exported one around it when it is local, so
+     an edit inside a helper of an exported function still names that function;
+     a base definition with a head twin (same name, kind and container) becomes
+     the twin, so a removal-only hunk keeps a head location. Overloads: only the
+     signatures a hunk touches are listed, under one grepped name. A pure rename
+     or a deletion greps the old path's exported names (`movedNames`, critique
+     3), and the old path is in the gate's reach.
+  7. **The gate** (`selectDependents`): `BrainCode.dependencies` (with the
+     workspace) of the import lines; index-file re-exports followed two hops, in
+     the changed module's folder and two folders above (other re-exporters are a
+     limitation); a Go import reaches a changed module when it resolves into its
+     folder (critique 4: BrainCode resolves a Go package folder to its first 8
+     files, so a 12-file package whose changed file sorts last would be dropped;
+     `resolve` itself is unchanged); Python `from X import Y` also resolves `X.Y`
+     and `from . import Y` resolves `.Y` (critique 5, option a; BrainCode
+     resolves `.` to `__init__.py` and `pkg` to the folder's first 8 files);
+     Go, Java and Kotlin files in a changed module's folder pass without an
+     import (`importsChanged: false`), by extension, so C# (which BrainCode reads
+     as `java`) does not (critique 17). Generated headers (`hasGeneratedHeader`,
+     the first five lines, with the markers added to the import-line patterns)
+     and `ignored` paths are set aside before the gate and cap (critique 14); a
+     licence header longer than five lines hides a marker, as it does for the
+     review's own ignore rule (Kubernetes puts it after about 15 lines).
+  8. **Rank**: `BrainGraph.rank` alone, over import edges (`WEIGHT.imports` and
+     `WEIGHT.imported`) from gated files and reached barrels to the changed
+     modules they reach, seeded on every changed module; rank descending, then
+     path. The path tie-break is redundant with the path pre-sort of the
+     candidates (each alone survives its mutation; both removed are caught).
+  9. **Packing** (critique 12): the budget is min(6,000, floor(15% of the
+     context)) tokens at 3.5 characters a token (the runner's rule), charged at
+     each block's rendered size through prompt.ts's own renderers after
+     reserving the frame, the first 20 tests and the longest note, so the
+     rendered block never exceeds it and every recorded location is a block the
+     model is shown (tested at 8,000, 20,000 and 1,000,000 tokens). Definitions
+     first (at most 40), then call sites (at most 60) with ±3-line windows of
+     lines no earlier window of the file showed, `N: text` cut at 200
+     characters, `\r` stripped. The first block over the budget stops packing,
+     in strict rank order; a kind's cap ends only that kind (found in the
+     timing run below: with 40 definitions, the cap had ended all packing, so
+     nothing but definitions was packed).
+  10. **Errors** (critique 8): an exit other than 0, or 1 with an empty stderr
+      where "no match" is allowed, adds `error` (Git.Service turns a spawn
+      failure into exit 1 with a message), so a failed search never reads as
+      "nothing imports this". Git's output limit adds `output`.
+  11. **Git output** (critique 7 and 15): every grep passes `--no-color
+      --no-column --full-name`; every pathspec carries `top` (`:/`,
+      `:(top,literal)`, `:(top,exclude,…)`), so a subdirectory as `directory`
+      gives the same slice (tested with `color.ui`, `color.grep`, `grep.column`,
+      `grep.lineNumber` and `grep.fullName` set).
+  12. **Workspace resolution** (critique 13): members are the root and the
+      folders the root `package.json` `workspaces` (a list or `{packages}`) or
+      `pnpm-workspace.yaml` `packages` globs match, negations included, or every
+      manifest when neither declares any; a name two members claim resolves
+      nothing (`ambiguous`), so it falls through to the suffix match, as do
+      manifests outside the workspace. Each package keeps its dependency names
+      (for VS-38 item 2). TS and JS only: `extends` is not followed, `go.mod`,
+      Cargo and Python package roots are not read, and the manifests are the
+      head's. `pnpm-workspace.yaml` is read for its `packages` list by a small
+      line reader rather than the `yaml` package, which `brain/code.ts` (loaded
+      by the desktop's file ranking) would otherwise import. The manifests steer
+      context only, never an invocation field (I-2).
+  13. **The fallback** and a contract finding: `changedSymbols` reads exactly the
+      grammar languages, so files without a grammar (C, C++, C#, PHP, Ruby) take
+      `BrainCode.symbols` declarations at added lines, an existing reader (no
+      third reader); `wordHits` mirrors `git grep -w -F` on text already read.
+      C callers include a header, not the changed `.c` file, so the gate drops
+      them: a limitation of the file-level import graph, outside the grammar
+      set. C, C++, C# and PHP are counted offline from `unsupported` by VS-25a's
+      `REPORTED_EXTENSIONS` (VOI13).
+  14. **Placement**: core `impact.ts` is pure but Node-only (BrainCode's
+      `node:path`, and `node:crypto` through BrainAnchor); `prompt.ts`,
+      `model-evidence.ts` and engine `eval.ts` take only its types, and the
+      shared caps and renderers live in `prompt.ts`, so the renderer bundle gains
+      nothing. The Node bundle (`bun build src/node.ts --target=node
+      --metafile`, 4,512 inputs) holds neither `impact.ts`; `brain/code.ts` was
+      already in it and now imports `jsonc-parser` and `minimatch`, both already
+      bundled.
+  15. **The pin** (critique 20, choice recorded): `REVIEW_PIPELINE_FILES` gains
+      core and engine `review/impact.ts` only. `brain/code.ts`, `brain/graph.ts`
+      and `review/symbols.ts` join at VS-25b wiring, when a runner reaches them
+      through the slice: today the slice decides nothing, and pinning them would
+      tie the desktop's file ranking and Brain changes to the review pin, as the
+      comment says (the reason `util/tree-sitter.ts` stays out).
+  16. **Default-stable digests**: `promptsDigest(keys)` is the mechanism for
+      key-gated prompt sections. `promptsDigest()` is `5d59e9ee06077c23`, printed
+      at `6e2f1d04` and pinned as a literal; `promptsDigest({ impact: "graph" })`
+      is `9998c006759a7781`; `policyDigest(DEFAULT_REVIEW_CONFIG)` stays
+      `70512122f41ec160`.
+  17. Only the head and base tree-ishes are read: uncommitted and staged local
+      reviews need a working-tree reader at wiring (VS-38's working-tree plan).
+- **Critique points**: all 21 taken, these three in part or in another form. 4:
+  the folder rule is
+  Go's only; a Java import names a class file, which BrainCode resolves to that
+  file, a wildcard `import a.b.*;` is not read by `BrainCode.imports` at all, and
+  same-folder Java and Kotlin pass by the same-package rule. 9: unread
+  candidates go to `dropped.unchecked` and the chunks run two at a time, but the
+  box cannot be placed between two chunks deterministically without a fault
+  hook, so the test runs the box at 0, 1, 20 and 150 ms (each stops at another
+  step) and checks the stage arithmetic every time, and a core test sends unread
+  candidates to `unchecked`. 16: `ls-tree` is
+  bounded (overrun: `output`, changed definitions only), sizes skip files over
+  the parser cap before reading when the clone is not partial, and `rev-list`
+  runs only in a partial clone; reading the confirm set through one chunked
+  `git grep -e ""` is deferred (the confirm stage stayed within the box in the
+  timing run below; Windows spawn cost is unmeasured, and Q18's `cat-file
+  --batch` is the planned batch read).
+- **§0.3 items.**
+  1. Key: `impact`, parsed, unapplied (`UNAPPLIED_REVIEW_KEYS`), warned on
+     `graph`.
+  2. Parity: no runner reads it; the runner, replay and desktop suites pass
+     unchanged.
+  3. Evidence: a policy key, read as absent while unapplied; the impact block
+     enters `promptsDigest` only under `graph`; the pin moves; revision 1.
+  4. Variant: `engine:impact-graph` stays pending at "VS-25b wiring";
+     `VARIANT_KEYS` is unchanged; the replay drops `impact` from a base
+     `review.json` and keeps its warning (tested).
+  5. Desktop: a documented difference until VS-10 (`variant.applied: false`).
+  6. This entry.
+- **Owner questions: none decided.** Q13, Q15, Q18 (with the I-8 amendment) and
+  Q26 stay open; only this repository was used for timing.
+- **Deferred to the runner-wiring window or later.**
+  - VS-36 item 3: the lexical and co-change rankers, RRF and its determinism
+    test (graph rank alone first; the kill criterion compares them); the
+    5,000-candidate prefilter.
+  - VS-37: tiers a and b and call-site windows widened to the enclosing
+    statement.
+  - VS-38: the working-tree plan, pathspec and workspace scoping (skipped if the
+    tree-ish p95 holds), and their byte-identity test.
+  - The 2k to 8k budget sweep, the conditional fact cache, VS-49 utilisation, and
+    the desktop half after VS-10.
+  - Runner wiring: the `Review.run` call and the block in runner prompts; the
+    diff ordered by impact rank before `budgetDiff`, with files over the budget
+    listed as not reviewed; artifact `tier1` and `context.locations`; the
+    `format.ts` "context considered" review note; the dispatch `dependents`
+    shrink; comment ranges into `classifyTrivial` (`ChangedFiles` is shaped for
+    it); whether `graph` replaces `related_code`, and `symbols.ts` replaced
+    where a grammar exists; the in-process or Worker parse decision; the Brain
+    files and `symbols.ts` in the pin.
+  - VS-27b: the test that impact incompleteness never changes
+    `StrictResult.complete`.
+  - Later: the Actions cache, and the `cat-file --batch` reads with their I-8
+    parse test (Q18).
+  - Deferred verification: macOS and Windows git (pathspec magic, argv length;
+    the FIFO interruption test is POSIX-only and skips on Windows), git without
+    `GIT_NO_LAZY_FETCH` (the design never asks for a missing object, but only
+    2.43 was run), the 50k-file-or-more and blobless-sparse latency bands, and
+    the optional `vectorscope-impact-bench.ts` over Kubernetes, Keycloak and
+    vscode, which was not written (a Kubernetes run would need a
+    `--shallow-since=2025-11-01` blobless clone, since VS-25a's is `--depth 1`).
+- **Timing** (a scratch script, not committed, not the bench): `build` over nine
+  commits of this repository (`6e2f1d04` back to `7cadfcb8`, each against its
+  parent; 1 to 16 files changed; Bun 1.3.14, git 2.43.0, 4 vCPU): total 94 to
+  2,497 ms, grep 30 to 650 ms, parse 9 to 1,145 ms, up to 1,772 candidates, 61
+  gated, 245 confirmed and 31 packed call sites, 5,909 tokens; no time-box hit
+  and no cap. Before the two fixes above (one alternation, code-only gate
+  reads), four of the nine hit the 4 s box in the gate with grep near 3.6 s.
+- **Evidence.** Each file ran alone through the lock with `--timeout 30000`,
+  `GITHUB_ACTIONS=false` and TMPDIR and XDG roots under scratch:
+
+  | Package | File | Tests |
+  |---|---|---|
+  | core | `test/review/impact.test.ts` | 28 (new) |
+  | core | `test/brain/code-workspace.test.ts` | 8 (new; the golden table) |
+  | core | `test/review/prompt.test.ts`, `config.test.ts`, `model-evidence.test.ts` | 30, 45, 20 |
+  | engine | `test/review/impact.test.ts` | 12 (new; real git, partial clones from `file://` with `uploadpack.allowfilter`) |
+  | engine | `test/review/eval.test.ts` | 28 |
+  | core | `test/review/trivial`, `symbols`, `pipeline`, `plan`, `select`, `eval`; `test/brain/code-index`, `graph` | 44, 5, 2, 21, 43, 42, 8, 7 (unchanged) |
+  | engine | `test/review/parse`, `context`, `run`, `vectorscope-replay`, `source`; `test/cli/github.review` | 53, 6, 44, 13, 16, 40 (unchanged, I-1) |
+  | engine | `test/compliance/egress-inventory`, `node-bundle-guard`, `upstream-free` | 5, 3, 11 + 1 fail (pre-existing, below) |
+  | app | `src/features/pull-requests/ai-review.test.ts` (`--preload ./happydom.ts`) | 107 (unchanged) |
+  | desktop | `src/main/repo-index.test.ts` (`bun --no-env-file test`) | 16 (unchanged) |
+
+  - The golden table: `BrainCode.resolve` over 32 rows (relative TS
+    specifiers, aliases, `@/review/eval` ambiguous between two folders,
+    workspace packages and subpaths, duplicate and excluded names, npm names,
+    a Go and a Python file under a TS package, and the code-index fixture's
+    Python, Go, Rust, Java, C, Ruby and PHP rows) and `dependencies` of every
+    fixture file, printed at `6e2f1d04` from the HEAD copy of `code.ts` before
+    the change; without a workspace every result is identical, and with one only
+    the eight TS and markup rows listed in the test change.
+  - The engine tests cover: a fork review whose working tree is the merge-base,
+    with an untracked decoy and a working-tree edit, never read; the stages,
+    windows, locations, tests and `ChangedFiles` callbacks; a subdirectory and
+    colour or column settings; the one grep against per-name greps; a pure
+    rename; Go (package import, same-package test, a generated file set aside)
+    and Ruby by word; a corrupt object (`error`); the time box at 0, 1, 20 and
+    150 ms keeping the stage arithmetic, and the 200-file cap; the box killing a
+    git blocked on a FIFO config include (the FIFO then has no reader: ENXIO);
+    import lines (wrapped `import(` and `require(`, Go blocks, Python lists,
+    Rust, markup, Java, Ruby, PHP, C, CSS) giving the same `BrainCode.imports` as
+    whole files; a blobless sparse clone missing 700 blobs in two folders
+    (searched through two folder excludes, where 700 file excludes would not fit
+    `ARG_CHARS`; nothing fetched, the missing base side never read); a blobless
+    clone with nothing checked out; and a treeless clone (nothing read or
+    fetched).
+  - **The one failure is pre-existing and comes from the environment**:
+    `upstream-free.test.ts` "a GitHub token does not take the default model from
+    an OpenAI key" gets `amazon-bedrock` as the default provider in this
+    container, the same cause as the `local-run.test.ts` failure recorded in the
+    VS-21b and VS-25a entries; nothing here touches providers.
+  - `bun typecheck` passes in core, engine, app and desktop, and `bun tsgo -p
+    ../../script/vectorscope-eval/tsconfig.json` from `packages/engine`.
+  - prettier passes on every new file, and on the added lines of `prompt.ts`,
+    `brain/code.ts` and `prompt.test.ts` (each was not prettier-clean at HEAD, so
+    their untouched lines keep their formatting). oxlint reports no warning on
+    the new files or on any added line of a changed file.
+  - **Mutation check.** 41 mutations, each applied to the final file and run
+    against its test file, each restored byte for byte (`cmp`). 39 caught: cap
+    before gate; barrel following removed; re-export depth one hop; the
+    same-package rule removed; C# in the same-package rule; the Go folder reach
+    removed; the Python submodule rule removed; the generated-header filter
+    dropped; the rank tie-break and the path pre-sort removed together; the 15%
+    share removed; window radius 2; overlapping windows repeated;
+    skip-and-continue packing; a kind's cap ending all packing; the bare window
+    charged instead of the rendered block; the site cap not applied; the
+    nearest exported container not taken; the LEFT twin not taken; the first
+    alias instead of the longest prefix; the workspace applied to every
+    language; ambiguous names resolved to the first; the workspace globs
+    ignored; the missing-path excludes dropped; one exclude per missing file;
+    `GIT_NO_LAZY_FETCH` dropped (the backstop test then fetches); a
+    working-tree candidate grep; import-kind references kept; `--no-color` and
+    `--no-column` dropped; the time box removed (the FIFO test hangs); the
+    treeless check removed; the error reason removed; moved names not grepped;
+    `ls-tree -l` in a partial clone; missing base blobs read anyway; an empty
+    slice rendered as a frame; impact prompts in the default digest; `impact`
+    counted while unapplied; `grep` warned as not applied; `impact` named as
+    VS-24 wiring. Survived, as expected: the tie-break alone (redundant with
+    the pre-sort) and six `-e` patterns instead of the alternation (the same
+    lines; the choice is a measured speed-up, decision 3).
+  - The full root typecheck was not run: nothing is pushed.
+  - Nothing was sent to a model, no paid run, no workflow dispatched, nothing
+    published, and no user-visible string changed (D14).
+
+### 2026-11-06 · VS-25b review fixes
+
+Seventeen review findings, four of them blocking (two pairs overlap: the two
+on `parseChanged`, and the two on the prompt sentence). Every one was fixed;
+none was declined. Where a finding offered two ways, the bullet says which
+was taken. Core `review/impact.ts`, `brain/code.ts`, `review/prompt.ts` and
+`model-evidence.ts` (the pin), engine `review/impact.ts`, their tests, Q18
+in addendum A and `tier1.tokens` in `script/vectorscope-eval/README.md`
+changed; no runner, provider, LLM or posting file and no
+file @vector owns. Nothing is committed. The points below supersede the entry
+above where they differ.
+
+- **Blocking: `tokens` counted the reserved frame.** Taken as suggested. The
+  reservation (frame, tests, the longest note, and now the trusted sentence)
+  is used for the budget check only. The new core `impactTokens(slice)` is
+  `ceil(impactBlock(slice).length / 3.5)`: `packSlice` reports it for what it
+  packed (no note), and the builder's `finish` recounts it once `incomplete`
+  and `unsearched` are known, so every path (`packOnly`, an early stop, a
+  full build) reports the block as rendered with its note, and 0 when it
+  renders nothing. Tests: core "an empty slice renders nothing and costs
+  nothing" (also with tests set), "tokens count the block as rendered, never
+  the space reserved for a note" (with and without a note, and a note
+  alone); engine `invariants` now asserts `tokens = ceil(rendered / 3.5)` for
+  every slice built (with the partial-clone and error notes among them), and
+  "a change that touches no definition gives an empty slice, which costs
+  nothing".
+- **Blocking: a removal in a later overload took the first overload as its
+  twin.** Taken as suggested: the twin is the head definition at the same
+  index among the same (name, kind, container) definitions sorted by start,
+  and the first only when the two sides hold different numbers of them. Test:
+  head and base `f@1`, `f@2`, `f@3-5`; removing line 4 gives `f@3-5` with its
+  signature and the location `src/a.ts:3`, removing line 2 gives `f@2`, and
+  with two head overloads against three base ones the first is taken.
+- **Blocking: `workspace()` was unbounded on the head's manifests.** Taken,
+  and taken further, because a probe found that one short glob is enough:
+  minimatch's patterns backtrack, so `*a*a*c` took 28 s against a folder name
+  of 1,000 characters, `*a*c` 6.9 s against 4,000, and an extglob of 20
+  groups 2.1 s against 40 characters. Now (`BrainCode.WORKSPACE_LIMIT`):
+  - a glob longer than 256 characters, or with more than one `*` in a
+    segment other than `**`, is dropped; at most 64 globs are kept, each
+    compiled once (`new Minimatch`) with `noext: true` and at most 16 brace
+    expansions. Extglob syntax is read as text and `packages/*-*`-style
+    globs are dropped, both rare in workspace declarations;
+  - a folder whose path is over 1,024 characters or has a name over 255 is
+    not a member; at most 5,000 package.json files outside the root are
+    matched, 2,000 member manifests and 2,000 tsconfig or jsconfig files are
+    read, and a tsconfig's `paths` and a package's `exports` keep 256 entries;
+  - `workspace(manifests, { deadline })` stops reading past the deadline;
+    `Workspace.truncated` records a cap or the deadline;
+  - `resolvePackage` and `resolveAlias` look packages up by name and aliases
+    by folder (a WeakMap index per workspace), so a resolution costs the
+    specifier's segments and one entry's patterns;
+  - `pnpmPackages` cut comments and quotes with string searches: its
+    patterns `\s+#.*$` and `(.+?)\s*(?:#.*)?$` were quadratic on a long run
+    of spaces. A differential run over 200,000 generated inputs found no
+    membership difference from the old reader (a lone carriage return inside
+    a line is the one input they could read differently);
+  - the builder calls `BrainCode.workspace` only before the deadline, with
+    the deadline, inside `Effect.try`: a throw leaves the workspace out and
+    adds `error`, and a deadline passed after it adds `time`.
+  The adversarial cases measured after the change: 64 one-star globs of 240
+  characters against 5,000 folders of 255-character names took 119 ms, the
+  same with character classes 199 ms, and globstars 290 ms. Tests (core
+  `code-workspace.test.ts`, "bounds on what a manifest can make it do"): a
+  70 KB glob is dropped rather than thrown; `*a*a*a*a*c` and an 11-group
+  extglob against a 250-character name finish under 2 s with the safe glob
+  still applied; 3,000 globs by 3,000 manifests finish under 2 s (33.6 s
+  before) keeping the first 64 in path order; an expired deadline reads
+  nothing and sets `truncated`; a 300,000-space pnpm line reads in under 1 s.
+  The golden table and every earlier workspace test pass unchanged.
+- **Blocking: presence was keyed by the path rev-list prints first.** Taken
+  as suggested. `presence` first checks the head's (and base's) trees with
+  `rev-list --filter=blob:none --missing=print`, then reads
+  `ls-tree -r -z --full-tree` of each (trees only, no `-l`), and collects the
+  missing object IDs from the `?<oid>` lines of one `rev-list --objects
+  --no-walk --missing=print <head> <base>`. A path is missing exactly when its
+  entry's object ID is in that set; a base whose trees are missing leaves
+  every base side unread; a submodule entry counts as lacking, since its
+  commit is never in the clone. In a partial clone the head listing is the
+  tree the build uses, so no second `ls-tree` runs. Test: "files with the
+  same content are each searched: presence is by object, not by the path git
+  lists first" (a blobless clone with every blob present, two identical
+  importers in two folders and an empty `__init__.py` in each; the test shows
+  rev-list never prints `b/y.ts`): both are dependents, `unsearched` and
+  `incomplete` are absent and nothing is missing. The two earlier
+  partial-clone tests pass unchanged (700 unsearched, the note now asserted).
+- **Confirmation matched every changed name.** Taken as suggested.
+  `Selection.confirm[].reaches` lists the changed modules each file reaches:
+  directly, through a barrel (and the barrels it reaches), through a header
+  (below), or as a same-package neighbour. The builder keeps only references
+  to the names those modules give (their changed exported definitions with
+  aliases, and their fallback names: moved exports, `changedSymbols`, and
+  `BrainCode.symbols`; a moved file under both paths), and passes the same set
+  to the parser. The fallback names are kept per file for this, with the same
+  40-name limit and order. Test (engine): two changed modules sharing no
+  names, where the importer of one also uses its own local of the other's
+  name: only the imported name's call site is packed. Measured on `561fd593`
+  (VS-25a, 11 files): confirmed call sites fall from 245 to 11, and the 31
+  packed sites that go are all `parse` and `runtime` hits in files that do
+  not import `parse.ts`.
+- **The word-match fallback kept import lines.** Taken the second way: the
+  new `BrainCode.importLines(text, language)`, beside `imports`, gives the
+  lines its own patterns match, from the statement's last `import` or
+  `export` keyword (a TypeScript `import … from` match can run on from an
+  earlier quote-free `export` line), with Go's import blocks and Python's
+  parenthesised lists. The builder drops word hits on those lines. The gate's
+  import-line text was not used: its keyword pattern also matches lines such
+  as `export const z = computeTotal()`, which are call sites. Tests: core
+  `importLines` (TypeScript, Python, Go, C, PHP); engine "C: a caller
+  including the changed source's header is confirmed by word, without its
+  include line".
+- **C and C++ callers never passed the gate.** Taken the first way: a changed
+  C or C++ source (`c`, `cc`, `cpp`, `cxx`, `m`, `mm`) and its headers of the
+  same file name (`h`, `hh`, `hpp`, `hxx`), beside it or under an `include`
+  folder of its folder or an ancestor, are one module for the gate's reach;
+  an include of the header reaches the source with `importsChanged: true`.
+  Also found: BrainCode's suffix match already reaches `compute.c` from
+  `#include "compute.h"` when the relative attempt fails, so the cases that
+  failed were a caller beside the header and an include path with folders
+  (`<x/foo.h>`). Tests: core "C and C++: an include of a changed source's
+  header reaches the source" (both cases, and an unrelated include gated
+  out) and the engine C test above.
+- **`parseChanged` and `importLines` read without the presence check (two
+  findings).** Taken the first way: both run the clone scan and `presence`
+  before any read (`lacking`), default to a deadline of
+  `IMPACT_LIMITS.timeBoxMs` from the call, and refuse a revision that could
+  pass for an option. A `parseChanged` caller that passes `missing` takes the
+  check on itself, which the header now says; the backstop test does exactly
+  that (`missing: () => false`), and a new assertion shows the default call
+  lists `base:src/util.ts` and `src/util.ts` as missing and `importLines`
+  leaves the missing path out, with nothing fetched.
+- **An unreadable config failed open.** Taken the second way: when `git
+  config` gives no result or an exit other than 0 or a quiet 1, the clone is
+  `guarded` and takes the partial path (the presence check, no `ls-tree -l`).
+  `clone.partial` stays false, since it is not known, and `partial-clone` is
+  added only when the clone is known to be partial (so a time-box stop does
+  not report it). Not covered by a test: every git command fails on a config
+  that `git config --get-regexp` cannot read.
+- **A barrel that was also a candidate was linked twice.** Taken as
+  suggested: the (source, target) pairs are deduplicated before the edges
+  are built. Test: a barrel candidate ranks exactly as a plain importer of
+  the same module.
+- **The trusted sentence (two findings).** Reworded now ("in files that
+  import them or share their package") and exported as `IMPACT_INSTRUCTION`;
+  `packSlice` reserves its length and the line break before it, and
+  `ImpactSlice.tokens` is documented as the data block only. Only the
+  `graph` prompts change: `promptsDigest()` stays `5d59e9ee06077c23`, and
+  `promptsDigest({ impact: "graph" })` moves from `9998c006759a7781` to
+  `fd944d83f8d705ad`. The wording may change again before the held-out
+  freeze. Test: the budget test now checks block plus sentence; the prompt
+  test uses the constant.
+- **Names with whitespace reached `git grep -f -`.** Taken: `impactNames`
+  and `movedNames` keep only names matching `/^[\p{L}\p{M}\p{N}_$]+$/u`
+  (never `default`). Test: aliases `"a\n\nb"`, `"x y"` and `""` are dropped,
+  `$ok` and `café_1` kept.
+- **`changedDefinitions` was O(changed lines × definitions).** Taken the first
+  way: the innermost definition of each line is found by a union-find sweep
+  over the sorted changed lines (definitions in innermost order, each line
+  handed out once), and twins are indexed by key. 4,000 definitions against
+  40,000 changed lines on each side went from 1,532 ms to 112 ms. Test:
+  8,000 definitions against 40,000 lines each side under 1 s (about 3 s
+  before). Every earlier `changedDefinitions` test passes unchanged.
+- **Style.** `readImports`' `else` is an early return; the re-export passes
+  are an `Array.from(...).forEach`, `wordHits` is one boundary regex per name
+  (escaped) with no `let`, and `parseChanged` returns `yield*` directly.
+- **I-8 and the desktop half.** The metadata reading of I-8 (`ls-tree`,
+  `rev-list --missing=print`, `config`, `version`) is now put to the owner
+  as a third item of Q18 in addendum A §5, beside the `cat-file --batch`
+  amendment, rather than left in this log. Not decided here. For VS-10, core
+  `impact.ts`'s header says the desktop half calls the slice through the
+  engine, unless BrainCode's path handling first becomes posix string helpers
+  a renderer can import.
+- **Pin.** `REVIEW_PIPELINE_SOURCES` `0d1995975936c407` →
+  `5e30549464914097`, set after the last source edit and re-run;
+  `REVIEW_PIPELINE_REVISION` stays 1 (nothing calls the slice);
+  `policyDigest(DEFAULT_REVIEW_CONFIG)` stays `70512122f41ec160`. With
+  `impact` unset nothing any runner does changes (I-1).
+- **Timing** (the same scratch script and nine commits as above): 98 to
+  2,538 ms in all, grep 34 to 649 ms, parse 9 to 1,221 ms, up to 1,772
+  candidates and 61 gated, at most 56 confirmed and 23 packed call sites,
+  at most 5,792 tokens; no time-box hit, no cap. Two commits now give 0 and
+  70 tokens (one touches no definition; the other has changed definitions
+  and no candidate), where the reserved frame was counted before.
+- **Mutation check.** Fourteen mutations, each applied to the final file,
+  run against its test file and restored byte for byte (`cmp`); all were
+  caught: the first overload as twin; tokens from the reserved frame; edges
+  not deduplicated; no header rule; the old name filter; the sentence not
+  reserved; every glob kept; no glob cap; the deadline ignored; every changed
+  name wanted; import lines kept; presence by path in `lacks`; presence by
+  the listed paths in the search; tokens not recounted with the note.
+- **Evidence.** Each file ran alone through the lock with `--timeout 30000`,
+  `GITHUB_ACTIONS=false` and TMPDIR and XDG roots under
+  `/tmp/vector-vectorscope/vs25b-fix/`:
+
+  | Package | File | Tests |
+  |---|---|---|
+  | core | `test/review/impact.test.ts` | 35 (28 before) |
+  | core | `test/brain/code-workspace.test.ts` | 14 (8 before) |
+  | core | `test/review/prompt.test.ts`, `model-evidence.test.ts`, `config.test.ts` | 30, 20, 45 |
+  | core | `test/brain/code-index`, `graph`; `test/review/trivial`, `symbols` | 8, 7, 44, 5 (unchanged) |
+  | engine | `test/review/impact.test.ts` | 16 (12 before) |
+  | engine | `test/review/eval`, `run`, `context`, `vectorscope-replay` | 28, 44, 6, 13 (unchanged, I-1) |
+  | engine | `test/compliance/egress-inventory`, `node-bundle-guard` | 5, 3 |
+  | app | `src/features/pull-requests/ai-review.test.ts` (`--preload ./happydom.ts`) | 107 (unchanged) |
+  | desktop | `src/main/repo-index.test.ts` (`bun --no-env-file test`) | 16 (unchanged) |
+
+  - `bun typecheck` passes in core, engine, app and desktop, and `bun tsgo -p
+    ../../script/vectorscope-eval/tsconfig.json` from `packages/engine`.
+  - prettier passes on every new file and on the added lines of `code.ts`
+    and `prompt.ts`; oxlint reports nothing on any added line.
+  - The full root typecheck was not run: nothing is pushed.
+  - Nothing was sent to a model, no paid run, no workflow dispatched, nothing
+    published, and no user-visible string changed (D14).

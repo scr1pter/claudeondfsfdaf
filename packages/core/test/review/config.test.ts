@@ -748,7 +748,7 @@ describe("VS-24's keys", () => {
       expect(Object.hasOwn(config, key)).toBe(false)
     }
     expect(warnings).toEqual([])
-    expect(OPTIONAL_REVIEW_DEFAULTS).toEqual({ trivial: "review", maxInputTokens: 0 })
+    expect(OPTIONAL_REVIEW_DEFAULTS).toEqual({ trivial: "review", maxInputTokens: 0, impact: "grep" })
   })
 
   test("review.json sets them, and a value that would change a review says it is not applied", () => {
@@ -810,6 +810,55 @@ describe("VS-24's keys", () => {
   test("mergeReviewConfig reads them as parseReviewConfig does, on every surface", () => {
     const text = JSON.stringify({ trivial: "skip", maxInputTokens: 50_000 })
     const env = { REVIEW_MAX_INPUT_TOKENS: "60000" }
+    expect(mergeReviewConfig({ surface: "github", json: { at: "base", text }, env, trigger: "auto" })).toEqual(
+      parseReviewConfig({ json: text, env, trigger: "auto" }),
+    )
+    expect(mergeReviewConfig({ surface: "local", json: { at: "working-tree", text }, trigger: "desktop" })).toEqual(
+      parseReviewConfig({ json: text, trigger: "desktop" }),
+    )
+  })
+})
+
+// VS-25b: `impact` is parsed, and no runner reads it before VS-25b wiring. Unset, nothing changes (I-1); "graph" says it
+// is not applied yet. A plain key: every surface reads it from review.json and REVIEW_IMPACT, as parseReviewConfig does.
+describe("VS-25b's impact key", () => {
+  const GRAPH = '"impact": "graph" is not applied yet: related code still comes from git grep.'
+
+  test("has no default entry, so the defaults and their digests stay as they were", () => {
+    const { config, warnings } = parseReviewConfig()
+    expect(Object.hasOwn(DEFAULT_REVIEW_CONFIG, "impact")).toBe(false)
+    expect(Object.hasOwn(config, "impact")).toBe(false)
+    expect(warnings).toEqual([])
+    expect(OPTIONAL_REVIEW_DEFAULTS.impact).toBe("grep")
+  })
+
+  test("review.json and REVIEW_IMPACT set it; graph says it is not applied, grep says nothing", () => {
+    expect(parseReviewConfig({ json: JSON.stringify({ impact: "graph" }) })).toEqual({
+      config: { ...DEFAULT_REVIEW_CONFIG, impact: "graph" },
+      warnings: [GRAPH],
+    })
+    expect(parseReviewConfig({ json: JSON.stringify({ impact: "grep" }) })).toEqual({
+      config: { ...DEFAULT_REVIEW_CONFIG, impact: "grep" },
+      warnings: [],
+    })
+    const env = parseReviewConfig({ json: JSON.stringify({ impact: "grep" }), env: { REVIEW_IMPACT: " Graph " } })
+    expect(env.config.impact).toBe("graph")
+    expect(env.warnings).toEqual([GRAPH])
+  })
+
+  test("a bad value warns naming the value in use", () => {
+    expect(parseReviewConfig({ json: JSON.stringify({ impact: "tree" }) })).toEqual({
+      config: DEFAULT_REVIEW_CONFIG,
+      warnings: [`${REVIEW_CONFIG_PATH}: "impact" must be "grep", "graph"; using "grep".`],
+    })
+    expect(
+      parseReviewConfig({ json: JSON.stringify({ impact: "graph" }), env: { REVIEW_IMPACT: "x" } }).warnings,
+    ).toEqual(['REVIEW_IMPACT must be "grep", "graph"; using "graph".', GRAPH])
+  })
+
+  test("mergeReviewConfig reads it as parseReviewConfig does, on every surface", () => {
+    const text = JSON.stringify({ impact: "graph" })
+    const env = { REVIEW_IMPACT: "grep" }
     expect(mergeReviewConfig({ surface: "github", json: { at: "base", text }, env, trigger: "auto" })).toEqual(
       parseReviewConfig({ json: text, env, trigger: "auto" }),
     )
