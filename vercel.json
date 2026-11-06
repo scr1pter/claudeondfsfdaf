@@ -21,6 +21,12 @@
       "permanent": false
     },
     {
+      "source": "/((?!api/hosted/sessions/|api/model-plans/chat|api/model-plans/models|api/model-plans/estimate).*)",
+      "has": [{ "type": "host", "value": "hosted-run.vectordev.ai" }],
+      "destination": "https://vectordev.ai/",
+      "permanent": false
+    },
+    {
       "source": "/phone/:path*",
       "has": [{ "type": "host", "value": "vectordev.ai" }],
       "destination": "https://remote.vectordev.ai/phone/:path*",
@@ -545,6 +551,18 @@
     {
       "path": "/api/model-plans/sweep",
       "schedule": "23 4 * * *"
+    },
+    {
+      "path": "/api/hosted/reaper",
+      "schedule": "* * * * *"
+    },
+    {
+      "path": "/api/hosted/drift",
+      "schedule": "*/10 * * * *"
+    },
+    {
+      "path": "/api/hosted/nightly",
+      "schedule": "30 2 * * *"
     },
     {
       "path": "/api/vault/cleanup",

@@ -6,6 +6,7 @@ import { githubServerConfigured } from "./github-app-server.js"
 import { modelPlansEnabled } from "./model-plan-config.js"
 import { reviewPanelServed, secondOpinionServed } from "./model-plan-models.js"
 import { readDisabledSet, readSwitch, type SwitchName } from "./codium-switches.js"
+import { hostedSessionsConfigured } from "./hosted-sessions.js"
 import { opsConfigured } from "./ops-worker.js"
 import { playbooksReady } from "./playbooks.js"
 import { r2Configured } from "./r2-presign.js"
@@ -74,6 +75,11 @@ export const perkServices: PerkServices = {
   "on-call": () => opsConfigured(),
   "release-guard": () => opsConfigured() && githubServerConfigured(),
   "ship-desk": () => opsConfigured() && githubServerConfigured() && r2Configured("media"),
+  // WP A53: the cloud computer needs its provider (VECTOR_HOSTED_PROVIDER, set only after the provider's written OK,
+  // with the hosted team's settings and the base snapshot), the ledger (Supabase and the account salt) and both
+  // signing keys (run tokens and viewer tokens). The `hosted` switch is checked with the other switches below. Listing
+  // it stays the owner's call after the computer-use build, the brand name and the security review (contract §1.2).
+  computer: () => hostedSessionsConfigured(),
 }
 
 const switches: Readonly<Partial<Record<PerkId, SwitchName>>> = {

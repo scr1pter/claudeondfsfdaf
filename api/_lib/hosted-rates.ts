@@ -166,3 +166,15 @@ export function hostedRatesProblems(env: Record<string, string | undefined> = pr
     return ["VECTOR_HOSTED_EGRESS_MICRO_USD_PER_GB is invalid"]
   }
 }
+
+/**
+ * The most a computer's saved disk can hold, in GB (WP A53): the base image, at most 6 GB (WP A54's bake refuses a
+ * larger one), plus the 10 GB quota on the data path. The provider's listing does not say how large each saved disk
+ * is, so storage is charged at this size, the worst case, and never below what the disk can cost (M8).
+ */
+export const HOSTED_DISK_GB_MAX = 16
+
+/** What a weighted minute of a cloud computer can cost the provider at worst: a standard minute (a large one is two). */
+export function weightedMinuteCostMicro() {
+  return costMinuteMicro("standard")
+}

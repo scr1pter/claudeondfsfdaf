@@ -162,6 +162,26 @@ export class FakeStore {
         return 1
       case "HGET":
         return this.hash(args[0]!).get(args[1]!) ?? null
+      case "HDEL": {
+        const fields = this.hash(args[0]!)
+        const removed = args.slice(1).reduce((sum, field) => sum + (fields.delete(field) ? 1 : 0), 0)
+        this.prune(args[0]!)
+        return removed
+      }
+      case "INCRBY": {
+        const current = this.live(args[0]!)
+        if (current && current.kind !== "string") throw new Error("WRONGTYPE")
+        const value = Number(current?.value ?? "0") + Number(args[1])
+        const at = this.expires.get(args[0]!)
+        this.set(args[0]!, String(value))
+        if (at !== undefined) this.expires.set(args[0]!, at)
+        return value
+      }
+      case "PEXPIRE": {
+        if (!this.live(args[0]!)) return 0
+        this.expires.set(args[0]!, this.clock.now + Number(args[1]))
+        return 1
+      }
       case "HSCAN":
         return ["0", [...this.hash(args[0]!)].flat()]
       case "HGETALL":

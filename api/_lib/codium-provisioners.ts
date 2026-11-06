@@ -17,6 +17,9 @@ import {
   vaultStoreConfigured,
 } from "./vault-store.js"
 import { eraseAccountPushSubscriptions, pushConfigured } from "./web-push.js"
+import { applyHostedTransition } from "./hosted-crons.js"
+import { hostedLedgerConfigured } from "./hosted-ledger.js"
+import { hostedProviderConfigured } from "./hosted-provider.js"
 import type { EntitlementSnapshot } from "../../packages/schema/src/codium-entitlements.js"
 
 /*
@@ -25,9 +28,8 @@ import type { EntitlementSnapshot } from "../../packages/schema/src/codium-entit
  * each new snapshot version, and the outbox runs it (codium-provision.ts).
  *
  * WP A06 builds `github-runs` and `owner-notify`; WP A31 builds `founding`; WP A37 builds `push`; WP A40 builds
- * `remote`; WP A44 builds `vault`; WP A48 builds `ops`. The others are stubs, not configured, so they get no items: each
- * service's work package replaces its stub here (hosted) and the daily sweep then catches every account up to its
- * snapshot.
+ * `remote`; WP A44 builds `vault`; WP A48 builds `ops`; WP A53 builds `hosted`. A stub is not configured, so it gets no
+ * items; the daily sweep catches every account up to its snapshot once a provisioner is configured.
  */
 
 const DAY_MS = 86_400_000
@@ -304,12 +306,26 @@ export const ops: PerkProvisioner = {
   },
 }
 
-// ── Stubs ──────────────────────────────────────────────────────────────────────────────────────────────────────────
+// ── hosted ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 
-/** A service not built yet: never configured, so it gets no items and does nothing. */
-function stub(id: string): PerkProvisioner {
-  return { id, configured: () => false, apply: async () => {} }
+/**
+ * `hosted` (WP A53, §4.4's cloud computer row; hosted-crons.ts `applyHostedTransition`): paused accounts' sessions wrap
+ * up within five minutes, ended and frozen accounts' sessions stop at once; an ended plan's disks are kept 14 days for
+ * download (paid from the final period) and a lost dispute's 30 days, then deleted by the nightly job; frozen disks are
+ * kept with no date; account deletion (`closing`) stops and deletes everything at the provider, erases the ledger's
+ * store state (its pseudonymous lines stay) and every hosted record (P5). The roster the budget and nightly jobs read is
+ * kept here too. Configured while the provider or the ledger is, so stops and erasure still work after the owner turns
+ * new work off.
+ */
+export const hosted: PerkProvisioner = {
+  id: "hosted",
+  configured: () => hostedProviderConfigured() || hostedLedgerConfigured(),
+  async apply(t, fetcher = fetch) {
+    await applyHostedTransition(t, { fetcher })
+  },
 }
+
+// ── Stubs ──────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 /** Every provisioner, in the order their items are written. */
 export const PROVISIONERS: readonly PerkProvisioner[] = [
@@ -317,7 +333,7 @@ export const PROVISIONERS: readonly PerkProvisioner[] = [
   remote,
   push,
   vault,
-  stub("hosted"),
+  hosted,
   ops,
   founding,
   ownerNotify,

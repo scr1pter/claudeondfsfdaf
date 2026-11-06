@@ -949,7 +949,11 @@ describe("boundaries", () => {
     w.fakes.clock.advance(6 * MINUTE)
     await eraseAccountHostedLedger(id, w.options)
     expect((await rows()).map((row) => [row.ref, row.units, row.chargedMicro])).toEqual([["hb-s1-0", 6, 37_500]])
-    expect(w.fakes.store.keys().filter((key) => key.includes(":hosted:") && key.includes(id))).toEqual([])
+    // WP A53's `hosted` provisioner is configured with the ledger, so reconcile queues an outbox item for it: that is
+    // the outbox's record, not the ledger's state.
+    expect(
+      w.fakes.store.keys().filter((key) => key.includes(":hosted:") && key.includes(id) && !key.includes(":outbox:")),
+    ).toEqual([])
     expect([
       ...w.fakes.store.zset(hostedLapseKey()).keys(),
       ...w.fakes.store.zset(hostedSettleDueKey()).keys(),

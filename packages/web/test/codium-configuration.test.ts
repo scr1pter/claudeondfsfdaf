@@ -65,11 +65,15 @@ describe("Codium deployment configuration", () => {
     ])
     // WP A44 built the Vault cleanup (contract §4.19, 03:40 UTC) and WP A47 the ops domain job (04:10 UTC: weekly
     // re-verification, with A50's certificate, expiry and DNS checks); WP A50 the ops guard (every 10 minutes) and the
-    // ops cleanup (04:40 UTC). The hosted crons are to come.
+    // ops cleanup (04:40 UTC); WP A53 the hosted reaper (every minute), drift check (every 10 minutes) and nightly job
+    // (02:30 UTC).
     expect(crons.filter((cron) => /^\/api\/vault\//.test(cron.path))).toEqual([
       { path: "/api/vault/cleanup", schedule: "40 3 * * *" },
     ])
     expect(crons.filter((cron) => /^\/api\/(hosted|ops)\//.test(cron.path))).toEqual([
+      { path: "/api/hosted/reaper", schedule: "* * * * *" },
+      { path: "/api/hosted/drift", schedule: "*/10 * * * *" },
+      { path: "/api/hosted/nightly", schedule: "30 2 * * *" },
       { path: "/api/ops/domains", schedule: "10 4 * * *" },
       { path: "/api/ops/guard", schedule: "*/10 * * * *" },
       { path: "/api/ops/cleanup", schedule: "40 4 * * *" },

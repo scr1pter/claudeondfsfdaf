@@ -1935,3 +1935,93 @@ outcome, verdict, actor.login` pass. Every paid plan includes it while the plan 
   `test/hosted-provider.test.ts` runs in full against Vercel (with a fake SDK) and is a `todo` for Cloudflare.
 - **Files outside A52's list:** `packages/schema/src/hosted.ts` (two constants), `.env.example`, `docs/vector/MODEL-PLANS.md`,
   `docs/vector/owner-actions/hosted-computer.md`, `bun.lock`.
+
+## A53 Sessions API, reaper and nightly (5 Nov 2026)
+
+- **The boot step is part of the provider interface.** A52's `HostedProvider` gains `boot(name, {runHost, session})`.
+  Vercel runs `Hosted.BOOT_COMMAND` (`/opt/vector/boot.sh`) as root, detached, with exactly `--run-host <host>
+  --session <id>` and no environment (`bootArguments` refuses anything else); the Cloudflare stub refuses it. A54's
+  boot.sh takes these two arguments. The job is pulled, not pushed: the computer's daemon calls
+  `POST https://<run host>/api/hosted/sessions/<id>/heartbeat` with no credential of its own (the provider's proxy adds
+  the run token), and the answers carry the job (until the daemon says it booted), the state, who has control, the
+  deadline, whether the browser may be used, the viewer tokens' public key and, when asked, an upload link.
+- **Run tokens** are `vht_<payload>.<HMAC-SHA-256>` under `VECTOR_HOSTED_RUN_SIGNING_KEY` with the domain
+  `vector-hosted-v1`, bound to one account and session, and live until 10 minutes after the block they were minted with
+  may run to (`stopBy`), at most an hour and never past the deadline plus 5 minutes. The reaper mints the next one with
+  each block (`setHostedRunToken`) and again when one has under 8 minutes left. Every acceptance also needs the session
+  not stopping or ended and the account's run tokens not revoked (`runTokensRevokedBefore`, A06).
+- **S7 on the API side:** a request carrying a run token is refused with 403 `HOSTED_RUN_REFUSED` when it carries
+  `Origin`, any `Sec-Fetch-*` header or a cookie, at the heartbeat and in the gateway's caller gate
+  (`api/_lib/model-plan-caller.ts`, one line). `vercel.json` sends every path on `hosted-run.vectordev.ai` except
+  `/api/hosted/sessions/*`, chat, `/models` and estimate to the website.
+- **Computers at once, by lease:** `hosted:lease:<account>` (HASH computer → `<sid>:<until>`, the CLAIM and LEASE
+  scripts) picks the computer number, held until 2 minutes past the block's stopBy and renewed with each block; A51's
+  OPEN still counts running blocks against the plan's computers.
+- **Store keys not in §4.6** (under the Codium prefix): `hosted:session:<sid>` (record, compare-and-set with SAVE, kept
+  35 days after it ends), `hosted:sessions:<account>`, `hosted:live`, `hosted:lease:<account>`, `hosted:job:<sid>`,
+  `hosted:beat:<sid>`, `hosted:model:<sid>`, `hosted:viewer:<jti>`, `hosted:computers:<account>`, `hosted:names`,
+  `hosted:suspend:<account>`, `hosted:suspended`, `hosted:egress:<account>:<day>`, `hosted:pages:<account>:<hour>`,
+  `hosted:recent`, `hosted:trueup:<account>`, `hosted:disk-due`, `hosted:roster`, `hosted:budget`, `hosted:usage`.
+- **Error codes not in §4.10:** 404 `HOSTED_SESSION_NOT_FOUND`, 409 `HOSTED_SESSION_ENDED {state}`, 409
+  `HOSTED_TAKEOVER_REQUIRED`, 403 `HOSTED_RUN_REFUSED`, 409 `HOSTED_DOWNLOAD_UNAVAILABLE` (410 once the files are gone),
+  added to `Hosted.ERROR_CODES` with A51's `HOSTED_REQUEST`, `HOSTED_SESSION_RUNNING`, `HOSTED_SESSION_MOVED`. A held
+  account (fair use or the owner) gets the existing 403 `HOSTED_FROZEN` with `reason: "fair-use" | "owner"`.
+- **Viewer tokens:** `vvt1.<payload>.<Ed25519 signature over "vector-viewer-token-v1." + payload>`, claims `{aud:
+  "vector-viewer", sid, computer, mode, jti, iat, exp}` (5 minutes), in the URL fragment `#vt=`. "Single use" is
+  enforced where the token is spent, by the computer's viewer proxy (A54) keeping the jtis it accepted; the server
+  records each jti it issues (`SET NX`, 5 minutes). `checkViewerToken` in hosted-tokens.ts is the reference check.
+  Control links only during a take-over.
+- **Download "link 24 h":** A37's presign cap is 15 minutes, so the 24-hour link is an API URL carrying an HMAC token
+  (`vhd1.`, the session id and expiry only, no account id) that redirects to a fresh 15-minute signed R2 GET each time.
+  The files are packed by the computer when the person asks (heartbeat `archiveBytes` → a signed PUT for exactly that
+  size, at most 5 GiB, under `hosted/<mode>/<HMAC>/<sid>/files.tar.gz` in `vector-media`) and checked with a HEAD after
+  `uploaded`. Only a running session can pack its files.
+- **Fair use (§4.2):** page loads are counted per UTC hour (not a rolling hour) and egress per UTC day, both per
+  account and from the daemon's own counters (the provider's figures are what is charged); "busy" is a heartbeat CPU
+  of 80% or more. Passing one stops the session, holds the account's cloud computer (`hosted:suspend`) and emails the
+  owner; the owner releases it with `/api/hosted/admin/flags`.
+- **Reaper order and reasons:** a session told to wrap up ends for its wrap reason once `wrapBy` passes, before the
+  heartbeat and idle checks. The next block is held from 3 minutes before the current one ends; a refusal wraps the
+  session up within min(5 minutes, its stopBy) with reason `hours`, `usage`, `plan`, `frozen` or `lapsed`, and a store
+  or provider failure is retried each minute until 5 minutes before stopBy. A first heartbeat is due within 5 minutes of
+  the start, later ones within 3. The reaper reads the snapshot from the store only (M4).
+- **Stops:** the block is closed at the moment the provider confirmed the stop, so exactly what ran is charged. A stop
+  the provider cannot make leaves the session `stopping` and is retried every minute; 30 minutes past its stopBy the
+  session ends anyway, its block having lapsed and been charged in full. A provider start that fails charges nothing
+  (the block is closed at its own start); a computer that started but could not boot is stopped and charged.
+- **admin/flags** also drains, stops and resumes (the `hosted` switch, through `writeSwitch` and its audit) besides
+  holding single accounts. `requireRecentGoogleSignIn` is now exported from `codium-owner-api.ts` for it.
+- **Budget:** `GET /api/hosted/admin/budget?cycleEnd=<ms>` (the workflow knows Vercel's cycle) answers, for the roster's
+  accounts, the hours left this period (cached nightly) plus the full hours of every period that starts before the
+  cycle ends, at the worst-case cost of a weighted minute, plus each included computer's disk at the worst-case size
+  until the cycle ends, as `worstCaseUsd`. It is owner-side only (the workflow's secret).
+- **Storage** is charged nightly at `HOSTED_DISK_GB_MAX` (16 GB) per computer per day while the plan is live, because
+  the provider's listing does not say how large a saved disk is; A54's bake must keep the base image at 6 GB or less.
+  Storage is never trued up. A frozen account's storage is not charged.
+- **True-up** runs per computer, only on a night when no session runs on it, for the sessions that ended on it since
+  the last reading: each block line's actual cost is its memory for its billed minutes plus its share (billed minutes
+  times vCPUs) of all CPU time the provider reports since the last reading (the computer's whole life when there is no
+  reading). That can only overstate a line's cost, so a charge never falls below it. A computer whose cumulative figure
+  went down (made again) is left at its charges.
+- **Drift** compares minutes: each session's lifecycle this period (first block to the confirmed stop, rounded up)
+  against the ledger's block and overrun minutes plus running and queued blocks, with a tolerance of one minute per
+  block plus one. Only charges falling behind are emailed (accounts and minutes).
+- **The provisioner** is configured while the provider or the ledger is. Its stops and wrap-ups are best effort (the
+  reaper finishes them from the same snapshot), so the outbox does not dead-letter on a provider outage; account
+  deletion is not best effort. A move to a plan without a cloud computer is treated as an end for the disks (14 days,
+  charged to the current key). The first deletion date set stands (`ZADD NX`); a returning plan clears it.
+- **Done by Morning hook:** `registerHostedJobsRunner` lets A55 run `hosted:jobs:due` from the reaper.
+- **Website sessions** start sessions with source `phone` when the request's Origin is the phone app's, else `desktop`.
+- **Session ids** are `hs_` plus 26 base32 letters. `Hosted.SESSION_ID` is an object with `test`, because A51's test
+  keeps `$` out of the schema's code.
+- **Not built:** `/api/hosted/spend` from §4.19's list (the hosted team's spend webhook is A13's
+  `/api/owner/spend-vercel`), downloading the disk of a session that is not running (an ended plan's 14 days for
+  download need a download-only start, for A56 or later), and Done by Morning itself (A55).
+- **Test expectations changed:** `packages/web/test/codium-configuration.test.ts` now lists the three hosted crons;
+  `test/hosted-ledger.test.ts`'s key scan leaves out the outbox's item for the now-configured `hosted` provisioner.
+- **Files outside A53's list:** `api/_lib/hosted-tokens.ts`, `hosted-crons.ts`, `hosted-api.ts`, `hosted-run.ts`,
+  `hosted-provider.ts`, `hosted-provider-vercel.ts`, `hosted-provider-cloudflare.ts`, `hosted-rates.ts`,
+  `codium-perks.ts`, `codium-owner-api.ts`, `model-plan-caller.ts`, the chat, `/models` and estimate routes (one import
+  each), `packages/schema/src/hosted.ts`, `vercel.json`, `.env.example`, `docs/vector/MODEL-PLANS.md`,
+  `docs/vector/owner-actions/hosted-computer.md`, `packages/web/test/fixture/codium-fakes.ts` (`HDEL`, `INCRBY`,
+  `PEXPIRE`), `test/hosted-sessions-fixture.ts`.

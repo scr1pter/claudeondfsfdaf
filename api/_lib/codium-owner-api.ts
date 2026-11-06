@@ -192,7 +192,8 @@ function invalid() {
 }
 
 /** Supabase verified this token above; refreshing JWT/MFA must not refresh the original OAuth sign-in. */
-function requireRecentGoogleSignIn(request: ApiRequest, now: number) {
+/** S5: an owner change needs a Google sign-in under 10 minutes old, from the OAuth `amr` timestamp (not `iat`). */
+export function requireRecentGoogleSignIn(request: Pick<ApiRequest, "headers">, now: number) {
   const value = request.headers.authorization
   const header = Array.isArray(value) ? value[0] : value
   const token = /^Bearer\s+(.+)$/i.exec(header ?? "")?.[1]

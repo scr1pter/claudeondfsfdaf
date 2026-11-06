@@ -1,13 +1,14 @@
 import type { NetworkPolicy, Sandbox } from "@vercel/sandbox"
 import { Hosted } from "../../packages/schema/src/hosted.js"
 import { unavailable } from "./hosted-entitlement.js"
-import type {
-  ComputerConfig,
-  ComputerInfo,
-  ComputerStatus,
-  HostedProvider,
-  StartedComputer,
-  StopResult,
+import {
+  bootArguments,
+  type ComputerConfig,
+  type ComputerInfo,
+  type ComputerStatus,
+  type HostedProvider,
+  type StartedComputer,
+  type StopResult,
 } from "./hosted-provider.js"
 import type { StripeMode } from "./model-plan-stripe.js"
 
@@ -217,6 +218,23 @@ export function vercelProvider(options: {
       if (typeof sandbox === "string") throw unavailable()
       try {
         await sandbox.update({ networkPolicy: vercelNetworkPolicy(config) }, { signal: signal() })
+      } catch {
+        throw unavailable()
+      }
+    },
+
+    async boot(name, input) {
+      const { sdk, credentials } = await ready()
+      const sandbox = await find(sdk, credentials, name)
+      if (typeof sandbox === "string" || !ACTIVE.includes(computerStatus(sandbox.status))) throw unavailable()
+      try {
+        // Detached: the daemon keeps running after this call returns. No environment, so nothing secret is passed.
+        await sandbox.runCommand({
+          cmd: Hosted.BOOT_COMMAND,
+          args: bootArguments(input),
+          sudo: true,
+          detached: true,
+        })
       } catch {
         throw unavailable()
       }

@@ -28,6 +28,7 @@ export function cloudflareProvider(): HostedProvider {
     problems: () => ["VECTOR_HOSTED_PROVIDER=cloudflare names a provider that is not built yet"],
     start: refuse,
     setRunToken: refuse,
+    boot: refuse,
     stop: refuse,
     destroy: refuse,
     list: refuse,

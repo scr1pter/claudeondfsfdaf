@@ -98,6 +98,15 @@ export type StartedComputer = {
 
 export type StopResult = "stopped" | "stopping" | "not-running" | "missing"
 
+/** What the boot step is told: where the run API is and which session the computer runs. Never a credential. */
+export type BootInput = { runHost: string; session: string }
+
+/** The boot step's arguments, exactly (WP A54's boot.sh reads these and nothing else). */
+export function bootArguments(input: BootInput) {
+  if (!HOST.test(input.runHost) || !Hosted.SESSION_ID.test(input.session)) throw request()
+  return ["--run-host", input.runHost, "--session", input.session]
+}
+
 /**
  * What a provider does. Every method is idempotent and refuses (503 `HOSTED_UNAVAILABLE`) when the provider is not
  * configured, so nothing reaches a provider before the owner switched it on. A provider never touches a computer that
@@ -112,6 +121,11 @@ export interface HostedProvider {
   start(config: ComputerConfig): Promise<Omit<StartedComputer, "runHost">>
   /** Replaces the injected run token, keeping the rest of the egress policy. */
   setRunToken(config: Pick<ComputerConfig, "name" | "injection" | "deniedSubnets">): Promise<void>
+  /**
+   * Runs the boot step on a running computer (WP A53): `Hosted.BOOT_COMMAND --run-host <host> --session <id>`, as
+   * root, detached, with no environment and no credential.
+   */
+  boot(name: string, input: BootInput): Promise<void>
   /** Stops a computer; its disk is saved and kept for its retention. */
   stop(name: string): Promise<StopResult>
   /** Deletes a computer and its saved disks (account deletion, a disk past its retention). */
@@ -342,6 +356,39 @@ export async function setHostedRunToken(
     .catch((error: unknown) => {
       throw providerFailure(error)
     })
+}
+
+/**
+ * Runs the boot step on `account`'s computer number `computer` for `session` (WP A53, right after
+ * `startHostedComputer`): the computer's daemon starts and asks the run-API host for its job.
+ */
+export async function bootHostedComputer(
+  account: string,
+  input: { computer: number; session: string; runHost: string },
+  options: ProviderOptions = {},
+) {
+  const provider = readyProvider(options)
+  const args = bootArguments({ runHost: input.runHost, session: input.session })
+  await provider
+    .boot(computerName(account, input.computer), { runHost: args[1]!, session: args[3]! })
+    .catch((error: unknown) => {
+      throw providerFailure(error)
+    })
+}
+
+/**
+ * Deletes one of `account`'s computers and its saved disk (the person's own request, WP A53). The caller makes sure no
+ * session runs on it. Answers whether there was one to delete.
+ */
+export async function destroyHostedComputer(account: string, computer: number, options: ProviderOptions = {}) {
+  const fetcher = options.fetcher ?? fetch
+  const provider = readyProvider(options)
+  const name = computerName(account, computer)
+  const result = await provider.destroy(name).catch((error: unknown) => {
+    throw providerFailure(error)
+  })
+  await persistentStore(["DEL", hostedComputerKey(name)], fetcher)
+  return result
 }
 
 /** Stops `account`'s computer number `computer`; its disk is saved. Idempotent. */

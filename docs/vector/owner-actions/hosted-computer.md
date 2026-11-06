@@ -93,7 +93,8 @@ Never put a token in this repository, a chat or a ticket. Do these only after Ve
    (the empty project). The server always passes these to Vercel itself; it never uses the main deployment's own
    credentials for a computer.
 3. **The run-API host.** Add `hosted-run.vectordev.ai` as a domain of the main vectordev.ai Vercel project, where the
-   API runs. WP A53 makes that host answer only the computers' own routes.
+   API runs. `vercel.json` sends every path on that host except the computers' own routes (the session heartbeat,
+   chat, `/models`, estimate) to the website (WP A53).
 4. **The snapshot.** Run the image workflow (WP A54/A58) and set `VECTOR_HOSTED_BASE_SNAPSHOT` to the snapshot id it
    prints. The sandbox the bake runs in must not carry the `vector-mode` tag, or the reconciler would treat it as a
    computer.
@@ -102,3 +103,54 @@ Never put a token in this repository, a chat or a ticket. Do these only after Ve
 6. **Previews.** A preview testing in Stripe test mode should use its own Vercel project (or its own salt), and may set
    `VECTOR_HOSTED_RUN_HOST` to the preview's own API host. Production ignores that setting. Computers are tagged with
    the mode, and a server never touches the other mode's computers.
+
+## Sessions, the reaper and the nightly job (WP A53)
+
+A session is one job on one computer. It starts from the desktop, the CLI or the phone (`POST /api/hosted/sessions`),
+holds its first 15-minute block of time, starts the computer with a run token that lives about one block, and runs the
+boot step on it: `/opt/vector/boot.sh --run-host hosted-run.vectordev.ai --session <id>`, with no credential. The
+computer's daemon then reports every 30 seconds through the run-API host, and its first answer carries the job.
+
+**What runs on its own** (all with `CRON_SECRET`, already in `vercel.json`):
+- `/api/hosted/reaper`, every minute: settles the ledger's queue, holds each running session's next block 3 minutes
+  before the current one ends (or wraps the session up within 5 minutes when it cannot), stops sessions that are idle
+  for 10 minutes, whose computer stopped reporting for 3 minutes, whose job's deadline passed, whose plan no longer
+  allows them, or that passed a fair-use limit (§4.2), gives control back after a 30-minute take-over, runs the orphan
+  reconciler and the pool's unapplied debits.
+- `/api/hosted/drift`, every 10 minutes: emails you when an account's sessions ran longer this period than the ledger
+  charged (accounts and minutes only). Nothing is changed automatically; check the settle queue and the reaper's runs.
+- `/api/hosted/nightly`, 02:30 UTC: deletes disks whose retention ran out, charges each computer's day of storage (at
+  the worst-case disk size, 16 GB, while the plan is live) and its egress, lowers the block charges of ended sessions
+  towards the provider's actual cost plus 10% (never below it), and caches the figures the budget answer reads.
+
+**Fair use.** A session that passes 600 page loads an hour, 5 GB (Max) or 15 GB (Ultra) of egress a day, or 30 minutes
+above 80% of the processor with no model request is stopped, the account's cloud computer is put on hold and you get an
+email. Release it from the owner's hosted flags once you have looked.
+
+### One-time setup
+
+Never put a key in this repository, a chat or a ticket. Set these in Production (and, with their own values, in the
+Preview environment that tests in Stripe test mode):
+
+1. **Run-token key.** `VECTOR_HOSTED_RUN_SIGNING_KEY`, at least 32 random characters:
+   `node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"`. It signs each session's run token
+   and the 24-hour download links. Changing it ends every running session's model access at its next request.
+2. **Viewer key.** `VECTOR_HOSTED_VIEWER_SIGNING_KEY`, an Ed25519 private key as base64url PKCS#8 DER:
+   `node -e "const {generateKeyPairSync}=require('crypto');console.log(generateKeyPairSync('ed25519').privateKey.export({format:'der',type:'pkcs8'}).toString('base64url'))"`.
+   The computers get its public half from each heartbeat answer, so nothing is baked into the image.
+3. **Budget read secret.** `VECTOR_HOSTED_BUDGET_READ_SECRET`, at least 32 random characters, also stored in the
+   `hosted-production` GitHub environment for the budget workflow (WP A56). It reads only
+   `GET /api/hosted/admin/budget?cycleEnd=<ms>`, the hosted team's worst case for the rest of the billing cycle.
+4. **Files for download.** Session downloads use the `vector-media` bucket (`VECTOR_R2_MEDIA_*`). Add a lifecycle rule
+   that deletes objects under `hosted/` after 2 days (the links last 24 hours), and keep it away from `playbooks/`.
+5. **Listing.** `computer` is ready to list once the provider, the ledger and both keys are set. List it only after the
+   computer-use build, the brand name and the outside security review of isolation and the viewer (contract §1.2),
+   starting with `VECTOR_HOSTED_ALLOW_ACCOUNTS` set to your own account.
+
+### The owner's hosted flags
+
+`/api/hosted/admin/flags` (your Google session; changes need a sign-in under 10 minutes old): `GET` shows the `hosted`
+switch and the accounts on hold; `POST {action}` with `drain` (no new sessions), `stop` (every session stops within a
+minute), `resume`, `suspend {account, reason?}` or `release {account}`. The same switch is on the owner page, and the
+hosted team's spend webhook moves it to `no-new` at 75% and `stop` at 100% by itself.
+
