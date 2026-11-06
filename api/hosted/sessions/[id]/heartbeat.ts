@@ -1,5 +1,7 @@
 import { handleHostedHeartbeat } from "../../../_lib/hosted-api.js"
 import type { ApiRequest, ApiResponse } from "../../../_lib/http.js"
+// A Done by Morning job's session also gets its recording links here (WP A55).
+import "../../../_lib/hosted-jobs-runtime.js"
 
 export const maxDuration = 30
 

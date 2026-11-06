@@ -1,4 +1,4 @@
-import type { Hosted } from "@vectordevai/schema/hosted"
+import { Hosted } from "@vectordevai/schema/hosted"
 import { WRAP_SLACK_MS } from "./limits"
 import type { Report } from "./run-api"
 
@@ -12,10 +12,16 @@ import type { Report } from "./run-api"
  * - `wrapping` with `wrapBy`: the agent is asked to finish (SIGTERM) and ended shortly before `wrapBy`;
  * - `browser: false`: the browser is closed (and not opened);
  * - `pack` and `upload`: the agent's work is packed for the person's download link and uploaded;
+ * - `recording` (a Done by Morning job, WP A55): finished recording segments are reported and uploaded to the signed
+ *   links the next answers carry, as the job runs, so the report keeps the last minutes even if the session ends
+ *   abruptly; when the job ends, the last segments are flushed before `done` (for at most `RECORDING_FLUSH_MS`);
  * - `stopping` or `ended`, or a refusal that means the session is over: everything stops.
  * When the job ends, for whatever reason, the browser is stopped and its profile wiped, the recorder stopped, and `done`
  * reported. Nothing here holds a credential.
  */
+
+/** How long the end of a job waits for its last recording segments to upload before it reports `done`. */
+export const RECORDING_FLUSH_MS = 60_000
 
 export type Job = { prompt: string; title?: string }
 
@@ -45,6 +51,15 @@ export interface RecorderControl {
   running(): boolean
 }
 
+/** The recorder's finished segments and their upload (WP A55). */
+export interface RecordingControl {
+  /** The segments on disk, oldest first, with their files. */
+  segments(): Promise<{ number: number; bytes: number; file: string }[]>
+  /** Resolves once a stopped recorder closed its last segment. */
+  settled(): Promise<void>
+  upload(link: NonNullable<Hosted.HeartbeatAnswer["recording"]>["uploads"][number], file: string): Promise<void>
+}
+
 export type DaemonDeps = {
   session: string
   generation: number
@@ -53,6 +68,8 @@ export type DaemonDeps = {
   agent: AgentControl
   browser: BrowserControl
   recorder: RecorderControl
+  /** Uploads a job's recording when the server asks for it (WP A55); without it nothing is uploaded. */
+  recording?: RecordingControl
   wipe: () => Promise<void>
   /** Writes what the viewer proxy needs (session, key, who has control). */
   viewer: (state: { session: string; key: string; control: "agent" | "person" }) => Promise<void>
@@ -84,6 +101,11 @@ export class Daemon {
   private uploaded = false
   private ticking: Promise<Hosted.HeartbeatAnswer | undefined> | undefined
   private again = false
+  /** The server keeps this session's recording (a Done by Morning job). */
+  private recordingWanted = false
+  /** Recording segments uploaded, by number. */
+  private readonly segmentsUploaded = new Set<number>()
+  private segmentsUploading = false
   private readonly clock: () => number
   private readonly schedule: (ms: number, run: () => void) => { cancel(): void }
 
@@ -132,6 +154,75 @@ export class Daemon {
       ...(this.uploaded ? { uploaded: true } : {}),
       generation: this.deps.generation,
       ...(this.handoff ? { handoff: this.handoff } : {}),
+      ...(await this.recordingReport()),
+    }
+  }
+
+  /**
+   * The recording part of a report, once the server asked for this session's recording: finished segments among the
+   * last `RECORDING_SEGMENTS` not uploaded yet (the oldest few), and the ones uploaded.
+   */
+  private async recordingReport(): Promise<Pick<Report, "segments" | "uploadedSegments">> {
+    if (!this.recordingWanted || !this.deps.recording) return {}
+    const all = await this.deps.recording.segments().catch(() => [])
+    // The segment being written is not finished.
+    const finished = (this.deps.recorder.running() ? all.slice(0, -1) : all).slice(-Hosted.RECORDING_SEGMENTS)
+    const segments = finished
+      .filter(
+        (segment) =>
+          !this.segmentsUploaded.has(segment.number) && segment.bytes > 0 && segment.bytes <= Hosted.RECORDING_SEGMENT_MAX_BYTES,
+      )
+      .slice(0, Hosted.RECORDING_REPORT_MAX)
+      .map((segment) => ({ n: segment.number, bytes: segment.bytes }))
+    const uploaded = [...this.segmentsUploaded].sort((a, b) => a - b).slice(-Hosted.RECORDING_SEGMENTS)
+    return { ...(segments.length ? { segments } : {}), ...(uploaded.length ? { uploadedSegments: uploaded } : {}) }
+  }
+
+  /** PUTs each segment the answer signed a link for; a failed one is reported again and gets a new link. */
+  private async uploadSegments(uploads: NonNullable<Hosted.HeartbeatAnswer["recording"]>["uploads"]) {
+    const recording = this.deps.recording
+    if (!recording || this.segmentsUploading || !uploads.length) return false
+    this.segmentsUploading = true
+    let any = false
+    try {
+      const files = new Map((await recording.segments()).map((segment) => [segment.number, segment]))
+      for (const link of uploads) {
+        const segment = files.get(link.n)
+        if (!segment || this.segmentsUploaded.has(link.n)) continue
+        try {
+          await recording.upload(link, segment.file)
+          this.segmentsUploaded.add(link.n)
+          any = true
+        } catch {
+          this.deps.log?.(`uploading recording segment ${link.n} failed`)
+        }
+      }
+    } finally {
+      this.segmentsUploading = false
+    }
+    return any
+  }
+
+  /**
+   * At the end of a job whose recording the server keeps: waits for the recorder to close its last segment, then reports
+   * and uploads the segments not yet uploaded, for at most `RECORDING_FLUSH_MS`, before `done` is reported.
+   */
+  private async flushRecording() {
+    const recording = this.deps.recording
+    if (!recording || !this.recordingWanted) return
+    await recording.settled().catch(() => {})
+    const until = this.clock() + RECORDING_FLUSH_MS
+    for (let round = 0; round < 4 && this.clock() < until; round++) {
+      const report = await this.report()
+      if (!report.segments?.length) return
+      let answer: Hosted.HeartbeatAnswer
+      try {
+        answer = await this.deps.api.heartbeat(report)
+      } catch {
+        return
+      }
+      if (answer.state === "ended" || answer.state === "stopping" || !answer.recording?.uploads.length) return
+      await this.uploadSegments(answer.recording.uploads)
     }
   }
 
@@ -166,6 +257,15 @@ export class Daemon {
     await this.deps.viewer({ session: this.deps.session, key: answer.viewerKey, control: answer.control }).catch(() => {})
     if (answer.state === "ended" || answer.state === "stopping") return this.finish("session over")
     this.browserAllowed = answer.browser === true
+    if (answer.recording && this.deps.recording) {
+      const first = !this.recordingWanted
+      this.recordingWanted = true
+      if (answer.recording.uploads.length && !this.finishing)
+        void this.uploadSegments(answer.recording.uploads).then((uploaded) => {
+          if (uploaded) void this.tick()
+        })
+      else if (first && !this.finishing) this.again = true
+    }
 
     if (answer.job && !this.booted && !this.done) {
       this.booted = true
@@ -236,7 +336,10 @@ export class Daemon {
     }
   }
 
-  /** Ends the job: the agent, the browser (profile wiped), the recorder; then reports `done`. Runs once. */
+  /**
+   * Ends the job: the agent, the browser (profile wiped), the recorder, the last recording segments (unless the session
+   * is already over); then reports `done`. Runs once.
+   */
   finish(why: string): Promise<void> {
     this.finishing ??= (async () => {
       this.deps.log?.(`finishing: ${why}`)
@@ -245,6 +348,7 @@ export class Daemon {
       await this.deps.agent.kill().catch(() => {})
       await this.deps.browser.stop().catch(() => {})
       await this.deps.wipe().catch(() => this.deps.log?.("profile wipe failed"))
+      if (why !== "session over") await this.flushRecording().catch(() => {})
       this.done = true
       void this.tick()
     })()

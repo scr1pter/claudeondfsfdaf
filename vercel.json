@@ -21,7 +21,7 @@
       "permanent": false
     },
     {
-      "source": "/((?!api/hosted/sessions/|api/model-plans/chat|api/model-plans/models|api/model-plans/estimate).*)",
+      "source": "/((?!api/hosted/sessions/|api/hosted/jobs/jb_|api/model-plans/chat|api/model-plans/models|api/model-plans/estimate).*)",
       "has": [{ "type": "host", "value": "hosted-run.vectordev.ai" }],
       "destination": "https://vectordev.ai/",
       "permanent": false

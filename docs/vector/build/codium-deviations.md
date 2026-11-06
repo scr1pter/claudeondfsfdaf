@@ -2112,3 +2112,78 @@ outcome, verdict, actor.login` pass. Every paid plan includes it while the plan 
   files, the package's manifest and configuration, `bun.lock` (the workspace entry only), `vector-codium.yml`,
   `vector-codium-e2e.yml`, `packages/schema/src/hosted.ts`, `api/_lib/hosted-sessions.ts`,
   `test/hosted-sessions-api.test.ts`, `docs/vector/MODEL-PLANS.md`, `docs/vector/owner-actions/hosted-computer.md`.
+
+## A55 Done by Morning (5 Nov 2026)
+
+- **Files outside A55's list.** `api/_lib/hosted-jobs-api.ts` (the route handlers, as A53 keeps its in `hosted-api.ts`)
+  and `api/_lib/hosted-jobs-runtime.ts` (registers the queue's runner and the heartbeat hook, imported only by
+  `api/hosted/reaper.ts` and `api/hosted/sessions/[id]/heartbeat.ts`, so the tests that register their own runner never
+  load it); `packages/schema/src/hosted.ts` (job vocabulary, `DELIVER_LABEL`, the heartbeat's `segments` and
+  `uploadedSegments`, the answer's `recording`, five error codes); `api/_lib/hosted-sessions.ts`
+  (`registerHostedHeartbeatHook`, called at the end of a live session's heartbeat; a hook that fails is skipped);
+  `api/_lib/hosted-run.ts` (the gateway hook also logs each hosted request's model and lab);
+  `api/_lib/codium-provisioners.ts` (the `hosted` provisioner runs Done by Morning's part first, both parts always run,
+  the first failure is rethrown); `api/_lib/codium-perks.ts` (`overnight`'s readiness); `api/_lib/model-plan-models.ts`
+  (`servedJudges`, an export of the plan's served judges and labs); `vercel.json` (the run-API host also passes
+  `/api/hosted/jobs/jb_…`); `packages/hosted-computer/src/{daemon,hostd,recorder}.ts` and a new test (recording
+  uploads); docs.
+- **"perNight at enqueue".** A night is the UTC calendar date of the job's deliver-by time; nothing server-side knows the
+  person's time zone. A recurring job's run counts against `recurringPerDay` on the UTC date of the run, never against
+  `perNight`. Both counters are checked and raised in one script with queueing the job. A queued job the person cancels
+  gives its count back. Gaming the date boundary costs the subscriber's own pool, since every minute is charged as any
+  session's (M8).
+- **"atOnce and hours at start".** Jobs at once is a running set per account (SLOT), taken before the session starts and
+  freed when the job ends; A53's start then checks the plan's computers by lease and its hours. A job is marked running
+  before its computer starts, so overlapping passes never start it twice. Refusals: hours used or the month used up
+  miss the job at once; a busy computer, a renewal, a payment pause, the daily limit or a service outage leave it
+  queued.
+- **"Aims to deliver by".** A job is queued 30 minutes to a day ahead, with 15 minutes up to the plan's longest job (the
+  trust ramp applied) that must fit between its start and its time; the default is the longest that fits. A job still
+  queued at its time is `missed`, never started late. Every surface uses `Hosted.DELIVER_LABEL`.
+- **"Judge from another lab".** The report has two steps. With the work (`{summary, links?, pullRequest?}`) the server
+  picks the judge: one of the plan's Second opinion judges (§4.12, as the gateway serves them now) whose lab none of the
+  session's own model requests used, the judge of its most used model first. The verdict (`{judge, results}`, one pass
+  or fail per criterion) is accepted only for that model and only once the gateway logged a request of the session to it
+  after the work arrived. When no such judge is served the report stands unjudged and says so (`judged: false`). No route
+  is accepted today (A60), so every report is unjudged until then. The gateway's log is a new store key,
+  `hosted:jobs:models:<session>` (two days).
+- **"Report accepted only with that job's token".** The job's session's own `vht_` run token, with no browser headers
+  (S7), on `POST /api/hosted/jobs/<id>/report` through the run-API host, while the session runs. Another session's token
+  gets 403 `HOSTED_RUN_REFUSED`; account tokens 401.
+- **"Recordings 30 days, owner only".** hostd uploads a job's last ten one-minute segments as they finish, into ten
+  rotating slots (`recordings/<mode>/<HMAC(account)[0:32]>/<job>/slot-<n mod 10>.ts` in `vector-media`), so a session that
+  ends abruptly still has them; at the end of a job it waits for the recorder to close its last segment and flushes the
+  rest (at most 60 seconds) before reporting `done`. The server signs one PUT per reported segment in the heartbeat
+  answer's new `recording` field (only for a session that runs a job), counts a segment only after a HEAD shows its exact
+  size, and gives only the job's owner 15-minute GET links, for 30 days after the job ended. A lifecycle rule on
+  `recordings/` deletes them after 31 days (owner step). Interactive sessions upload nothing.
+- **"Approve opens the PR (no server merge)".** Approve records when and answers the pull request's address (a
+  `github.com` pull request or compare page, checked when the report names it) for the person's own client to open. The
+  server writes nothing to any repository. A job cannot push yet: hostd's `/api/hosted/sessions/<id>/git-token` (A54's
+  ask) is not built here, because a server-issued write token for a subscriber's repository needs the repository binding
+  (A59) and a decision under S9, which allows server writes only where `.vector/ops.json` opts in.
+- **"Recurring jobs on public pages only".** A recurring job names one to five https pages that pass S8's name and
+  address rules, and no repository (no job carries one: the trigger's hosted-job target has none). Its prompt says to
+  work only from those pages and never sign in; the browser profile is wiped after every job and the credential guard
+  hands every sign-in to a person, so an unattended run cannot sign in. Times are UTC (minutes after midnight and
+  weekdays); a run more than two hours late is skipped. An account keeps at most `recurringPerDay` recurring jobs.
+- **§4.4.** Renewing: nothing new starts. Paused: the queue waits; a job still queued at its time is missed (reason
+  `paused`). Frozen: queued jobs are cancelled; recurring jobs are kept but do not run while frozen, so a won dispute
+  brings them back. Ended, no plan, or a plan without Done by Morning: queued jobs are cancelled and recurring jobs
+  removed. Closing: everything is erased, recordings first. The runner also cancels a queued job whose plan stopped
+  before any transition reached it.
+- **Queueing** needs `overnight` listed or the account on `VECTOR_HOSTED_ALLOW_ACCOUNTS`, the `hosted` switch at `on`,
+  no hold on the account's cloud computer and a plan with Done by Morning; a paused plan gets 402 `HOSTED_PAUSED`, a
+  renewing one may queue.
+- **New error codes** (§4.10 names none for jobs): `HOSTED_JOB_NOT_FOUND` 404, `HOSTED_JOB_LIMIT` 429 `{limit:
+  "per-night" | "recurring-per-day" | "recurring", cap}`, `HOSTED_JOB_STATE` 409, `HOSTED_JOB_REFUSED` 403 `{reason:
+  "source-unavailable"}`, `HOSTED_JOB_JUDGE` 409.
+- **Store keys not in §4.6** (all under the Codium prefix): `hosted:jobs:item:<job>`, `hosted:jobs:account:<account>`,
+  `hosted:jobs:live`, `hosted:jobs:running:<account>`, `hosted:jobs:session:<session>`, `hosted:jobs:claim:<job>`,
+  `hosted:jobs:night:<account>:<date>`, `hosted:jobs:rday:<account>:<date>`, `hosted:jobs:recurring:<account>`,
+  `hosted:jobs:recurring-due`, `hosted:jobs:rec:<job>`, `hosted:jobs:models:<session>`. §4.6's `hosted:jobs:due` holds
+  queued jobs by their start.
+- **Phone alerts.** A title-only alert, tag `overnight` (the phone app already routes it to the computer page), when a
+  job is ready, did not finish or could not start in time; never the job's own words (P7).
+- **Routes.** `/api/hosted/jobs/:id` serves jobs (`jb_…`) and recurring jobs (`jr_…`); cancelling is
+  `POST {action: "cancel"}` for both.

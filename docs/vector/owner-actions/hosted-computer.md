@@ -2,8 +2,8 @@
 
 A computer Vector hosts for Max and Ultra subscribers (working name; the product name follows the computer-use brand).
 Its core, the ledger that holds and charges its time in the subscriber's Codium pool, is Codium build WP A51, and
-the provider adapter that starts and stops the computers is WP A52. Sessions and crons (A53) and the image (A54) have
-their sections below; Done by Morning (A55) and the desktop and phone (A56) add theirs. How it works is in
+the provider adapter that starts and stops the computers is WP A52. Sessions and crons (A53), the image (A54) and Done
+by Morning (A55) have their sections below; the desktop and phone (A56) add theirs. How it works is in
 [MODEL-PLANS.md](../MODEL-PLANS.md#the-cloud-computers-ledger). Nothing on this page has been created, applied or tried
 against Supabase or Vercel yet.
 
@@ -193,4 +193,33 @@ starts. If any fails, the image needs a change before anyone can use a cloud com
 **What it still needs from later packages.** The agent's side: Vector's CLI sending Codium requests through the run-API
 host and driving the computer through hostd's socket (the computer-use build). GitHub tokens for git: hostd asks
 `/api/hosted/sessions/<id>/git-token`, which no package has built yet, so git steps fail until it exists. Uploading
-recordings (Done by Morning, A55). Showing the hand-over reason and the live view (A56).
+recordings is Done by Morning's (A55, below). Showing the hand-over reason and the live view (A56).
+
+## Done by Morning (WP A55)
+
+Jobs queued before bed with success criteria, each run as one session on the subscriber's cloud computer, ending with a
+report that a model from another lab checked against each criterion. How it works is in
+[MODEL-PLANS.md](../MODEL-PLANS.md#the-cloud-computers-ledger). Nothing here has been tried against a real computer,
+bucket or phone yet.
+
+### One-time setup
+
+1. **Recordings.** A job's screen recording (its last ten one-minute segments) goes to the `vector-media` bucket under
+   `recordings/<live|test>/…`. Add a lifecycle rule that deletes objects under `recordings/` after 31 days. Vector stops
+   giving links to them after 30 days by itself; the rule is what deletes them. Keep the rule away from `playbooks/`, and
+   keep the 2-day `hosted/` rule away from `recordings/`.
+2. **Listing.** `overnight` is ready to list once everything `computer` needs is set and the media bucket is configured.
+   It is listed only together with `computer` (it requires it), so list both after the same checks (contract §1.2).
+   Before that, `VECTOR_HOSTED_ALLOW_ACCOUNTS` lets your own account queue jobs.
+3. **Phone alerts.** Done by Morning sends a title-only alert (tag `overnight`) when a job is ready, did not finish or
+   could not start in time, while phone alerts are configured and the plan allows them. Nothing to set beyond the alerts'
+   own setup.
+
+### What it needs from later work
+
+- **Judges.** A report is checked by one of the plan's Second opinion judges from a lab the job's own requests did not
+  use. Until A60 accepts the judges' routes no judge is served, so reports stand unjudged and say so.
+- **Pull requests.** The computer cannot push yet: hostd's `/api/hosted/sessions/<id>/git-token` is still not built, so a
+  job that changes a repository cannot leave a pull request. Approve works for any pull request a report names.
+- **The agent's side.** Vector's CLI on the computer must send the report itself (the job's prompt says how). That is the
+  computer-use build's.

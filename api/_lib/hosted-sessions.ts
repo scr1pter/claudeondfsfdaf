@@ -1043,6 +1043,28 @@ export function parseHeartbeat(input: unknown): Hosted.Heartbeat {
 export function utcDay(at: number) {
   return new Date(at).toISOString().slice(0, 10)
 }
+
+/**
+ * Something a later package adds to a running session's heartbeat answer (WP A55: Done by Morning's recording links).
+ * It gets the session, the daemon's raw report (fields this module does not know are its to read) and the answer to
+ * add to. A hook that fails is skipped: the heartbeat itself never fails because of one.
+ */
+export type HostedHeartbeatHook = (context: {
+  record: SessionRecord
+  input: unknown
+  answer: Hosted.HeartbeatAnswer
+  now: number
+  fetcher: typeof fetch
+  clock: () => number
+}) => Promise<void>
+const heartbeatHooks = new Map<string, HostedHeartbeatHook>()
+
+/** Registers a heartbeat hook once per id, by static import from the heartbeat's route (hosted-jobs-runtime.ts). */
+export function registerHostedHeartbeatHook(id: string, hook: HostedHeartbeatHook) {
+  if (!/^[a-z][a-z0-9-]{0,63}$/.test(id) || heartbeatHooks.has(id))
+    throw new Error("A hosted heartbeat hook must have one unique id.")
+  heartbeatHooks.set(id, hook)
+}
 export function utcHour(at: number) {
   return new Date(at).toISOString().slice(0, 13)
 }
@@ -1158,6 +1180,8 @@ export async function recordHeartbeat(
       answer.upload = { url: put.url, headers: put.headers, expiresAt: put.expiresAt }
     }
   }
+  for (const hook of heartbeatHooks.values())
+    await hook({ record, input, answer, now, fetcher, clock }).catch(() => undefined)
   return answer
 }
 

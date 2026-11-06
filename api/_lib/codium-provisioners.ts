@@ -18,6 +18,7 @@ import {
 } from "./vault-store.js"
 import { eraseAccountPushSubscriptions, pushConfigured } from "./web-push.js"
 import { applyHostedTransition } from "./hosted-crons.js"
+import { applyHostedJobsTransition } from "./hosted-jobs.js"
 import { hostedLedgerConfigured } from "./hosted-ledger.js"
 import { hostedProviderConfigured } from "./hosted-provider.js"
 import type { EntitlementSnapshot } from "../../packages/schema/src/codium-entitlements.js"
@@ -315,13 +316,20 @@ export const ops: PerkProvisioner = {
  * kept with no date; account deletion (`closing`) stops and deletes everything at the provider, erases the ledger's
  * store state (its pseudonymous lines stay) and every hosted record (P5). The roster the budget and nightly jobs read is
  * kept here too. Configured while the provider or the ledger is, so stops and erasure still work after the owner turns
- * new work off.
+ * new work off. Done by Morning's queue (WP A55, hosted-jobs.ts `applyHostedJobsTransition`) goes first, so a cancelled
+ * queue starts nothing while the sessions stop: a dispute or an ended plan cancels it, account deletion erases it. Both
+ * parts run even when the first fails; the first failure is rethrown so the outbox retries.
  */
 export const hosted: PerkProvisioner = {
   id: "hosted",
   configured: () => hostedProviderConfigured() || hostedLedgerConfigured(),
   async apply(t, fetcher = fetch) {
+    let failure: unknown
+    await applyHostedJobsTransition(t, { fetcher }).catch((error: unknown) => {
+      failure = error
+    })
     await applyHostedTransition(t, { fetcher })
+    if (failure !== undefined) throw failure
   },
 }
 

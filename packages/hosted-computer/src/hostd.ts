@@ -490,6 +490,16 @@ export async function main(argv: readonly string[], transport: Transport = https
     agent,
     browser,
     recorder,
+    recording: {
+      segments: async () =>
+        (await recorder.segments()).map((segment) => ({
+          number: segment.number,
+          bytes: segment.bytes,
+          file: path.join(recordings, segment.name),
+        })),
+      settled: () => recorder.settled(),
+      upload: (link, file) => api.upload(link, file),
+    },
     wipe: async () => {
       await wipeBrowser()
     },

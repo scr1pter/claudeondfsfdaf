@@ -80,6 +80,10 @@ export const perkServices: PerkServices = {
   // signing keys (run tokens and viewer tokens). The `hosted` switch is checked with the other switches below. Listing
   // it stays the owner's call after the computer-use build, the brand name and the security review (contract §1.2).
   computer: () => hostedSessionsConfigured(),
+  // WP A55: Done by Morning runs each job as a cloud computer session, so it needs everything `computer` needs, plus the
+  // media bucket its reports' recordings go to. It also requires `computer` listed (CodiumCopy.requires), so it lists
+  // with the computer and never before it (contract §1.2).
+  overnight: () => hostedSessionsConfigured() && r2Configured("media"),
 }
 
 const switches: Readonly<Partial<Record<PerkId, SwitchName>>> = {

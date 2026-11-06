@@ -17,7 +17,8 @@ import {
 
 /*
  * The session recorder (contract WP A54): the screen at 2 frames a second in 1-minute segments, so a job's report can
- * show what happened (Done by Morning, WP A55, uploads them; recordings are kept 30 days and only the owner sees them).
+ * show what happened (Done by Morning, WP A55: the daemon uploads a job's last ten segments as they finish; recordings
+ * are kept 30 days and only the owner sees them).
  * It is off while the person holds control: nothing of a take-over is recorded. Segments sit on a memory disk with a
  * cap, so a recording never grows the computer's saved disk.
  */
@@ -78,6 +79,8 @@ const realSpawn: Spawner = (file, args, options) =>
 export class Recorder {
   private child: ChildProcess | undefined
   private next = 0
+  /** Resolves once the last stopped ffmpeg exited (it closes its segment on the way out). */
+  private exiting: Promise<void> = Promise.resolve()
 
   constructor(
     private readonly dir: string,
@@ -113,11 +116,22 @@ export class Recorder {
     const child = this.child
     this.child = undefined
     if (!child) return
+    this.exiting = new Promise<void>((resolve) => {
+      child.once("exit", () => resolve())
+      child.once("error", () => resolve())
+      const give = setTimeout(resolve, 4_000)
+      give.unref?.()
+    })
     child.kill("SIGINT")
     const timer = setTimeout(() => child.kill("SIGKILL"), 3_000)
     timer.unref?.()
     // Whatever segment was being written ends here; the next start begins a new one.
     this.next++
+  }
+
+  /** Resolves once a stopped recorder closed its last segment (at most about 4 seconds), at once if none was running. */
+  settled() {
+    return this.exiting
   }
 
   /** The segments on disk, oldest first. */

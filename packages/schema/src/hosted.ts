@@ -75,6 +75,12 @@ export const ERROR_CODES = {
   HOSTED_TAKEOVER_REQUIRED: 409,
   HOSTED_RUN_REFUSED: 403,
   HOSTED_DOWNLOAD_UNAVAILABLE: 409,
+  // Done by Morning (WP A55).
+  HOSTED_JOB_NOT_FOUND: 404,
+  HOSTED_JOB_LIMIT: 429,
+  HOSTED_JOB_STATE: 409,
+  HOSTED_JOB_REFUSED: 403,
+  HOSTED_JOB_JUDGE: 409,
 } as const
 export type ErrorCode = keyof typeof ERROR_CODES
 
@@ -225,6 +231,12 @@ export type Heartbeat = {
   uploaded?: boolean
   generation?: number
   handoff?: Handoff
+  /**
+   * Done by Morning (WP A55): finished recording segments not yet uploaded (their numbers and sizes, at most
+   * `RECORDING_REPORT_MAX`), and the segments uploaded since. Sent only after an answer carried `recording`.
+   */
+  segments?: { n: number; bytes: number }[]
+  uploadedSegments?: number[]
 }
 
 /** What the daemon is told on each heartbeat. */
@@ -244,4 +256,133 @@ export type HeartbeatAnswer = {
   pack?: boolean
   /** Where to upload the packed files, once their size is known. */
   upload?: { url: string; headers: Record<string, string>; expiresAt: number }
+  /**
+   * Done by Morning (WP A55): this session runs a queued job, so its screen recording is kept for the job's report.
+   * Present (possibly with no links) on every answer to such a session; `uploads` signs one PUT per segment reported.
+   */
+  recording?: { uploads: { n: number; url: string; headers: Record<string, string>; expiresAt: number }[] }
+}
+
+// ── Done by Morning (WP A55) ───────────────────────────────────────────────────────────────────────────────────────
+
+/**
+ * A queued job (Done by Morning): the person queues it with success criteria and a time it aims to be delivered by; it
+ * waits in the queue until its start, runs as one session on the person's cloud computer, and ends with a report that a
+ * model from another lab checked against each criterion. Its states:
+ * - `queued`      waiting for its start, a free computer and the plan's jobs at once;
+ * - `running`     its session runs (and, once the agent reported, waits for the second lab's pass or fail);
+ * - `reported`    the report is in (checked by a second lab, or saying why it could not be);
+ * - `incomplete`  the session ended with no report;
+ * - `cancelled`   the person cancelled it, or the plan's queue was cancelled (ended plan, dispute, account deletion);
+ * - `missed`      it could not start before the time it aimed to deliver by.
+ */
+export const JOB_STATES = ["queued", "running", "reported", "incomplete", "cancelled", "missed"] as const
+export type JobState = (typeof JOB_STATES)[number]
+/** The states a job no longer leaves. */
+export const JOB_FINAL_STATES: readonly JobState[] = ["reported", "incomplete", "cancelled", "missed"]
+
+/**
+ * Why a job was cancelled or missed, or (for `incomplete`) why its session ended (`END_REASONS`): the person cancelled
+ * it; the plan's queue was cancelled (`plan`, `frozen`, `closing`); it could not start in time because the plan's hours
+ * or the month's usage ran out, the queue was paused or closed, or the plan no longer allowed it (`late`, `refused`).
+ */
+export const JOB_REASONS = ["cancelled", "plan", "frozen", "closing", "hours", "usage", "paused", "late", "refused"] as const
+export type JobReason = (typeof JOB_REASONS)[number] | EndReason
+
+/** The queue as the person's surfaces show it: open, waiting (a renewal or a pause by Vector), paused (a payment), closed. */
+export const QUEUE_STATES = ["open", "waiting", "paused", "closed"] as const
+export type QueueState = (typeof QUEUE_STATES)[number]
+
+/** Job ids: `jb_` and 26 lower-case base32 letters. Recurring job ids: `jr_` and 26. */
+const JOB_ID_START = /^jb_[a-z2-7]{26}/
+const RECURRING_ID_START = /^jr_[a-z2-7]{26}/
+export const JOB_ID = {
+  test: (value: string) => typeof value === "string" && value.length === 29 && JOB_ID_START.test(value),
+} as const
+export const RECURRING_ID = {
+  test: (value: string) => typeof value === "string" && value.length === 29 && RECURRING_ID_START.test(value),
+} as const
+
+/** A job's own words: at most this many characters, so the session's prompt (with the criteria and rules) fits. */
+export const JOB_PROMPT_MAX = 24_000
+/** Success criteria: at least one, at most this many, each at most `CRITERION_MAX` characters on one line. */
+export const CRITERIA_MAX = 10
+export const CRITERION_MAX = 300
+/** Public pages a job may name (a recurring job must name at least one): https, port 443, at most 2,048 characters. */
+export const PAGES_MAX = 5
+export const PAGE_URL_MAX = 2_048
+/** A job is queued for at most a day ahead and to deliver at least this long after it is queued. */
+export const DELIVER_MIN_MS = 30 * 60_000
+export const DELIVER_MAX_MS = 24 * 3_600_000
+/** The shortest job, in minutes. */
+export const JOB_MINUTES_MIN = 15
+/**
+ * The copy every surface uses for a job's time: Vector aims for it and promises nothing (H3). A job that cannot start
+ * in time is `missed`, never started late.
+ */
+export const DELIVER_LABEL = "Aims to deliver by"
+
+/** A report: a summary, links, an optional pull request to approve, and a pass or fail per criterion. */
+export const SUMMARY_MAX = 4_000
+export const LINKS_MAX = 20
+export const LINK_TITLE_MAX = 120
+export const NOTE_MAX = 500
+
+/**
+ * The report's recording: the last `RECORDING_SEGMENTS` one-minute segments of the job's screen (nothing of a
+ * take-over is recorded), each at most `RECORDING_SEGMENT_MAX_BYTES`, kept `RECORDING_DAYS` days after the job ended and
+ * shown only to the job's owner. A heartbeat reports at most `RECORDING_REPORT_MAX` segments at a time.
+ */
+export const RECORDING_SEGMENTS = 10
+export const RECORDING_SEGMENT_MAX_BYTES = 32 * 1024 * 1024
+export const RECORDING_DAYS = 30
+export const RECORDING_REPORT_MAX = 3
+
+/** A recurring job runs once on each chosen UTC weekday (0 = Sunday) at a UTC time of day (minutes after midnight). */
+export type RecurringView = {
+  id: string
+  title?: string
+  prompt: string
+  criteria: string[]
+  pages: string[]
+  size: Size
+  jobMinutes: number
+  timeOfDay: number
+  days: number[]
+  createdAt: number
+  nextAt: number
+}
+
+/** A report as its owner sees it. `judge` names the model from another lab that checked it, when one could. */
+export type ReportView = {
+  summary: string
+  links: { title?: string; url: string }[]
+  pullRequest?: string
+  submittedAt: number
+  judged: boolean
+  judge?: { model: string; lab: string }
+  results?: { criterion: string; pass: boolean; note?: string }[]
+}
+
+/** A job as its owner sees it: states, times, counts and its own words only, never an amount (P1). */
+export type JobView = {
+  id: string
+  state: JobState
+  reason?: JobReason
+  title?: string
+  prompt: string
+  criteria: string[]
+  pages?: string[]
+  size: Size
+  jobMinutes: number
+  deliverBy: number
+  startAfter: number
+  createdAt: number
+  startedAt?: number
+  endedAt?: number
+  session?: string
+  recurring?: string
+  report?: ReportView
+  recording?: { segments: number; until: number }
+  approvedAt?: number
 }

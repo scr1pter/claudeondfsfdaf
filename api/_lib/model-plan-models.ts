@@ -166,6 +166,24 @@ function planCatalog(
 }
 
 /**
+ * WP A55: the Second opinion judges `plan` can use among the models the gateway serves now (worker → judge, as
+ * `/models` lists them), and each served model's lab, for picking a Done by Morning report's judge from another lab.
+ */
+export async function servedJudges(
+  plan: CodiumPlan.PlanId,
+  fetcher: typeof fetch = fetch,
+  options: ModelPlanCatalogOptions = {},
+) {
+  const catalog = planCatalog(await servedPlanModels(options, fetcher), plan, options)
+  return {
+    judges: (catalog.judges ?? {}) as Readonly<Record<string, string>>,
+    labs: Object.fromEntries(catalog.listed.map((model) => [model.id, model.lab])) as Readonly<
+      Record<string, string | undefined>
+    >,
+  }
+}
+
+/**
  * WP A35: whether Second opinion can be listed. Every plan that includes it must have at least one judge pair it can
  * use among the models the gateway serves now (catalog minus `models-off` minus routes without accepted evidence), so
  * the listing never promises a judge nobody can reach. The store read failing throws, and the listing then shows
