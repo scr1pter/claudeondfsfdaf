@@ -1136,3 +1136,458 @@ critique point was taken differently or left out, the bullets below say why.
   and `prettier --check` passes on the changed files. `run.test.ts`,
   `prompt.test.ts` and the core suites were not re-run: this round touched
   no runner, no core file and no test helper.
+
+## 2026-11-06 · VS-21b Projection
+
+Contract §4 VS-21b of `vectorscope-upgrade.md`, in the "Now" window: eval work
+plus one `RunInput` hook that changes nothing when unset. It adds no
+`ReviewConfig` key, no `types.ts` or `config.ts` change, no
+`EVIDENCE_POLICY_KEYS` or `EvidenceScope` change and nothing to `VARIANT_KEYS`,
+and flips no `VARIANTS` half. It touches none of `ai-review.ts`,
+`provider.ts`, `session/llm.ts` or `posting.ts`, and no file @vector owns. It
+implements the VS-21b plan as corrected by its critique; the critique bullets
+below say where a point was taken differently.
+
+- **What landed.**
+  - **`packages/engine/src/review/run.ts`, the hook.**
+    - `RunInput.projection?: Projection`, with
+      `Projection { overCap(decision: OverCap): boolean }` and
+      `OverCap { pass; phase; site: "pass" | "attempt" | "finalizer" | "verify"; estimateUsd; sessionID? }`.
+    - A private `lift(decision)` is false when the hook is unset, and false
+      when it throws (the same try/catch as `observe`), so the cap holds.
+    - `reserve(name, turn, finalize, at)` asks `lift` only when the cap would
+      refuse: before a pass's session (`pass`), at a provider attempt
+      (`attempt`, with the session), and at the finalizer's reservation
+      (`finalizer`, with the session).
+    - Verify's pre-check asks it only when verify would otherwise run, so a
+      verify skipped for time is never asked about.
+    - The `pass` Observation gains `maxSteps` (the pass's step cap).
+    - Nothing else in `run.ts` changed. Its two `/ 3.5` literals stay.
+  - **`packages/engine/src/review/eval.ts`**, `ReviewEval.project`, which
+    nothing calls yet:
+    - `replay` is now `replayWith(input, false)` and returns the same
+      artifact. `replayWith(input, true)` is the only place that sets the
+      hook, and `ReplayInput` has no field for it, so the paid path (VS-21c)
+      cannot lift its cap;
+    - types `WireRequest`, `ProjectionInput` (a replay's input without
+      `posting`, `check` and `secrets`, plus `server`, `received` and
+      `egress`),
+      `ProjectedOverCap`, `ProjectedRequest`, `ProjectedPass` and
+      `ProjectionRecord` (`kind: "projection"`);
+    - `projectionRefusal` and `routeRefusal` (below);
+    - `CHARS_PER_TOKEN` (3.5).
+  - **`packages/engine/test/lib/llm-server.ts`**, additive:
+    - `Hit` is exported and gains `text` (the raw body) and `session` (the
+      `X-Session-Id` header);
+    - the body is parsed with `Schema.UnknownFromJsonString` from that text,
+      `{}` on failure as before;
+    - `respond(answer)` answers what nothing queued matches until `reset`.
+  - **`packages/engine/test/fixture/projection.ts`**, the canned model. It
+    has `projectionFindings`, `projectionReplies`, `projectionVerdicts`,
+    `received` and `firstUserText`. It is test code: VS-21c's entry point does
+    not import it from the test tree (see the review fixes, item 10).
+  - **`script/vectorscope-eval/replay.ts`**: `projectionProblems(record)`,
+    which reads the record as untrusted JSON through field names typed against
+    `ProjectionRecord`.
+  - **The README**: a "Projection (VS-21b)" subsection under Production
+    replay.
+  - **Core `model-evidence.ts`**: the pin.
+- **The precondition, in three stages.**
+  1. **Before anything touches `Provider.Service`, git or the instance.**
+     `projectionRefusal` refuses:
+     - `VECTOR_DISABLE_MODELS_FETCH` unset (it is read when `flag.ts` loads,
+       so it must be in the environment before any engine module loads);
+     - no strict egress guard installed (`EgressGuard.strictInstalled()`,
+       added to core `local-mode/guard.ts` in the review fixes);
+     - a fake server (`ProjectionInput.server`) that is not a loopback
+       http(s) URL;
+     - a model on `vector` or `ModelPlans.PROVIDER_ID`;
+     - a model that is not `priced`, or has no price.
+  2. **Then `getProvider` and `getModel` for each model.** `routeRefusal`
+     follows where `getLanguage` would send (`provider.ts` `resolveSDK`,
+     mirroring the private `offInLocal`/`requestOrigins`, as its comment
+     says). It refuses:
+     - a model that is missing;
+     - a `freeModel`;
+     - a function in the provider's `options.fetch`;
+     - anything `sendsToOpenRouter` (reused from core `free-model-catalog.ts`);
+     - an SDK other than `@ai-sdk/openai-compatible` and `@ai-sdk/openai`;
+     - no base URL where the SDK sends (`resolveBaseURL`: the configured
+       base URL, else the catalog's);
+     - an `options.baseURL`, catalog `api.url` or `preconnect` that is not a
+       loopback http(s) URL with no `${VAR}` left;
+     - a destination or `preconnect` whose origin is not the fake server's;
+     - a price snapshot that is not `SpendGuard.priceOf(model.cost)`.
+  3. **After the replay.** It fails when the fake server received requests
+     and the egress log saw none of them.
+- **The record.**
+  - `ProjectionRecord` copies the replay's runtime (isolation included),
+    source, trust, trigger, config digest, variant, scope, rules and context
+    digests, models and files.
+  - Each pass, from the `pass` events in order, has:
+    - its requests, from the projection's `received` log. Each session's k-th
+      admitted attempt (seq order) is paired with the k-th request carrying
+      that session header (arrival order);
+    - per request: `seq`, `phase`, `estimateUsd`, `lifted?`, `digest`,
+      `chars`, `tokens = ceil(chars / 3.5)`, and
+      `stepUsd = nextStepCostUsd(tokens, price)`;
+    - `promptTokens`, and `usd = estimateCostUsd({ promptTokens, maxSteps, price })`;
+    - `lifted` (its first lifted decision), and `unsent`/`unadmitted`.
+  - `unattributed` counts requests naming no session an attempt names.
+  - `cap: { maxCostUsd, over }`.
+  - `egress: { attempts, outside }`, where `outside` is
+    `!allowed || !LocalPolicy.loopback(host)` over the strict guard's attempts
+    made from the start of `project`, providers booting included.
+- **Cap semantics** (corrected from the plan, whose two claims were wrong).
+  - A capped paid run's refusal stops only that pass: it runs its finalizer,
+    and verify gets fewer candidates. Reservations are released when a pass
+    ends and replaced at each settlement, so a later, smaller decision can fit
+    again.
+  - Once one decision is lifted, its spend and reservation count against
+    every other pass. So from `cap.over[0]` on, a record describes an
+    uncapped run: the upper side of the cost estimate, not a projection of
+    the capped paid run.
+  - `cap.over[0]` is not "where a paid run would have stopped".
+  - A request admitted through a lift at admission is `lifted: true`.
+    `ProjectedOverCap.attempt` is the seq of the attempt it admitted, for
+    `site: "attempt"`, since admission observes that attempt synchronously
+    right after the decision.
+- **Where this departs from the contract.**
+  1. **The hook decides only dollar-cap refusals.** It does not replace the
+     admission policy: step and time stops, retries and the reservation
+     bookkeeping stay the review's. It cannot refuse what the cap admits, so
+     a declining hook behaves exactly like none. Every attempt is still
+     admitted and reserved (I-5).
+  2. **The projection lives in engine `eval.ts`** (private `replayWith`), not
+     in a new file or in `replay.ts`. That keeps the cap lift out of
+     `ReplayInput`. `replay.ts` holds the validator.
+  3. **`TestLLMServer` is reused** with additive raw-body, session-header and
+     responder changes. The canned model is in `test/fixture`.
+  4. **"Zero outbound requests on a recording fetch"** is checked on the
+     strict egress guard's own attempt log (`NetworkGuard.use()`), which sees
+     fetch, sockets, node:http and WebSocket. It does not use a replaced
+     `globalThis.fetch` (AGENTS.md: no mocks of globals).
+  5. **The `pass` Observation gains `maxSteps`.** `CHARS_PER_TOKEN` is defined
+     in engine `eval.ts`, citing `run.ts`'s two literals, not exported from
+     `run.ts`.
+  6. **The lens, guardrail and repro passes do not exist yet.** The record is
+     per pass name, so they appear when VS-27, VS-28 and VS-30 add them.
+- **Departures from the plan.**
+  - `reserve(name, turn, finalize, at)` instead of
+    `reserve(name, phase, turn, finalize)`.
+  - `OverCap` gains `site` and `sessionID`. `site` was not asked for, but
+    without it the finalizer's reservation and the finalizer's admission look
+    the same (both a session and phase `finalize`).
+  - `replayWith` takes a boolean, not a `Projection`.
+  - `routeRefusal` is new.
+  - `ProjectionInput` gains `egress`.
+  - The record gains `trust`, `trigger`, `runtime`, `rules`, `context`,
+    `egress`, request `seq` and `lifted`, and pass `chars` and `lifted`.
+  - The fixture also exports `projectionVerdicts` and `firstUserText`.
+- **The critique, point by point.** All twelve were taken; two differently.
+  1. *Precondition order* (major): taken, as the two stages above. A test runs
+     `project` with a `Provider.Service` whose every method dies, on a case
+     directory that does not exist. The Vector-route and unpriced refusals
+     come back with 0 server hits, so no provider booted and no git ran. The
+     flag and guard branches are tested through `projectionRefusal`'s input
+     only, since the flag is fixed when the engine loads.
+  2. *Destination check* (major): taken, as `routeRefusal`, with a unit case
+     for each refusal (17 refused routes and 3 accepted ones). A real
+     stage-two refusal also runs through `project`: a provider with base URL
+     `https://api.example.com/v1` is refused with 0 server hits.
+     - **Taken differently:** OpenRouter is refused through core's
+       `sendsToOpenRouter` (provider ID, npm or URL), rather than by an
+       npm-name check of its own. That is stricter, and reuses main's check
+       (I-10).
+  3. *Egress* (major): taken. Stage one refuses without a guard, the record
+     carries `egress`, and `projectionProblems` flags `outside > 0` or a
+     missing egress record.
+     - **Limit, closed in the review fixes (item 1):** `EgressGuard.installed()`
+       is also true for the CLI's Vector Local backstop, which logs nothing
+       while Vector Local is off. Stage one now requires
+       `EgressGuard.strictInstalled()`, `project` fails when the log saw none
+       of the fake server's requests, and `projectionProblems` flags such a
+       record.
+  4. *Cap semantics* (major): taken, as above. Both claims were dropped from
+     this entry and the README.
+  5. *Circular assertions*: taken. The engine test checks things that do not
+     come from the same hits:
+     - the digest of a text part of each pass's first user message (decoded
+       from the wire) equals the pass digest `Review.run` observed;
+     - the finalizer request's last user text is `buildFinalizePrompt()`;
+     - the review body lacks the security prompt's opening, and the reverse;
+     - verify's decoded prompt names exactly the candidate ids, computed
+       separately with `normalizeFindings`;
+     - the same canned model through `ReviewEval.replay` leaves verify `ok`
+       with no `rejected-by-verify` or `unconfirmed` drops, and every placed
+       finding verified.
+
+     The formula checks stay, as wiring checks.
+  6. *Parity tied to HEAD*: taken.
+     - **The HEAD comparison.** Before `run.ts` was edited, a scratch test
+       (outside the worktree, under `/tmp/vector-vectorscope/`) ran three
+       dollar-cap scenarios with no hook: refused before the session; a
+       second attempt and the finalizer refused; verify's pre-check refused.
+       It recorded SHA-256 prefixes of each request body (instance directory
+       normalised) and of each outcome (without `durationMs` and `sessions`).
+       After the change the same test printed identical digests:
+
+       | Scenario | Requests | Body | Outcome |
+       |---|---|---|---|
+       | `pass` | 0 | none | `0f7f1481373662fb` |
+       | `attempt` | 1 | `62bae14a1870cfda` | `0cb333061c68c382` |
+       | `verify` | 1 | `62bae14a1870cfda` | `50571dfdb7d0fcef` |
+
+     - **Taken differently:** the digests are recorded here, not pinned in a
+       test. The bodies hold the engine's whole system prompt and tool
+       definitions, so a pinned digest would break on any unrelated prompt or
+       tool change, the next merge of main included.
+     - **In the file.** `run.test.ts` has the permanent D3 test: the same three
+       scenarios, unset, declining and throwing, with identical bodies and
+       outcomes, and the declining hook asked at exactly
+       `[pass]`, `[attempt, finalizer]` and `[verify]`.
+     - Test counts below are from the runs. `run.test.ts` reports 41 tests at
+       HEAD: 37 declarations, two of them inside loops of three (the
+       "retains incomplete" usage cases and the context-tier finalizer
+       cases), so 35 + 3 + 3.
+  7. *`CHARS_PER_TOKEN`*: taken. It is in engine `eval.ts`, and `run.ts`'s
+     literals are untouched.
+  8. *Late verify*: taken. `late` is computed first, and `lift` is asked only
+     when `verifyText !== "" && !late`. A test with `timeoutMinutes: 1` shows
+     no decision asked, and verify skipped for budget as before.
+  9. *Validator gaps*: taken. `projectionProblems` reports:
+     - a pass that is not `ok`;
+     - no pass while files were reviewed;
+     - a missing egress record, or connections outside;
+     - plus the plan's checks (no request, an empty body, `chars` mismatch, no
+       `usd`, unsent/unadmitted/unattributed, `variantProblems`).
+
+     `replay.test.ts` has a case for each.
+  10. *Verify responder*: taken. `projectionVerdicts` reads the decoded first
+      user message. The test also shows the raw JSON body yields no id.
+  11. *Record fields and handling*: taken. Runtime with isolation, and the
+      context and rules digests, are copied. The README says records are
+      sealed eval outputs, never committed (I-13), uploaded only as sealed
+      artifacts in VS-21c.
+  12. *Test and setup details*: taken. The test computes
+      `LocalPolicy.loopback(attempt.host)`. The README and the VS-21c
+      deferral say the flag must be set before any engine module loads.
+- **Fidelity limits** (also in the README).
+  - Transforms keyed on the destination do not run at loopback:
+    `isOpenRouterURL`'s `denyDataCollection`, and the `api.openai.com`
+    prompt-cache marker.
+  - Only the chat completions and responses protocols are covered (no
+    Anthropic messages).
+  - Each canned pass takes one step, so growth over several steps shows only
+    in `usd`'s range.
+  - Tokens are characters over 3.5 of the JSON body, whose escaping inflates
+    them. There is no tokenizer and no `count_tokens` (C-12).
+- **Off by default (I-1).**
+  - Only `ReviewEval.project` sets `RunInput.projection`. `review.ts` and
+    `github.review.ts` never set it and are not edited.
+  - Unset, every `lift()` is false, so all four decisions, the requests and
+    the outcomes are byte-identical. The HEAD digests and the D3 test above
+    show it, along with the existing 41 `run.test.ts` and 16 `eval.test.ts`
+    cases, which pass unchanged.
+  - `ReviewEval.replay`'s artifact is unchanged.
+  - No key was added, so `policyDigest`, `promptsDigest` and `EvidenceScope`
+    do not move.
+  - **Desktop:** `ai-review.ts` has no projection hook. This is an intentional
+    difference (`vectorscope-plan.md:320`) until VS-10.
+- **Pin.** `REVIEW_PIPELINE_SOURCES` moved from `fa1d31befd5a4f77` to
+  `228a42cb975134ce` (`run.ts` is in the pinned files). No revision bump:
+  - nothing changes with the hook unset;
+  - projection records never feed a certificate (`kind: "projection"`, and
+    `certify.ts` reads replays only).
+
+  `REVIEW_PIPELINE_FILES` is unchanged, and `REVIEW_PIPELINE_REVISION` stays 1.
+- **Owner questions.** None of Q1-Q17 is decided. Q13 is not needed: the hook
+  is off by default, as the lane notes allow. Q15 stays open.
+- **Evidence.** Each file was run alone through the lock with
+  `--timeout 30000`, `GITHUB_ACTIONS=false`, and `TMPDIR` and XDG roots under a
+  fresh `/tmp/vector-vectorscope/vs21b-*`:
+
+  | Where | File | Pass |
+  |---|---|---|
+  | engine | `test/review/run.test.ts` | 44 (41 before) |
+  | engine | `test/review/eval.test.ts` | 23 (16 before) |
+  | engine | `test/session/prompt.test.ts` | 144, 1 skip (the pre-existing `.skip`) |
+  | engine | `test/session/memory-every-agent.test.ts` | 14 |
+  | engine | `test/cli/review.test.ts` | 24 |
+  | engine | `test/cli/review.render.test.ts` | 10 |
+  | engine | `test/cli/github.review.test.ts` | 40 |
+  | engine | `test/cli/github.review-api.test.ts` | 3 |
+  | engine | `test/local-mode/local-run.test.ts` | 30, 1 fail (pre-existing, below) |
+  | core | `test/review/model-evidence.test.ts` | 16 (pin updated) |
+  | eval scripts | `replay` | 27 (25 before) |
+  | eval scripts | `report` | 22 |
+  | eval scripts | `certify` | 6 |
+  | eval scripts | `ci` | 18 |
+
+  - **The one failure is pre-existing and comes from the environment.**
+    `local-run.test.ts` "changes nothing with Vector Local off" lists an
+    `amazon-bedrock` provider in this container. The same case fails the same
+    way on HEAD's engine, extracted with `git archive` into scratch (no
+    worktree was added, since the git directory is the owner's checkout).
+    It only lists providers, which this package does not touch.
+  - **Typecheck.** `bun typecheck` in core and engine, and
+    `bun tsgo -p ../../script/vectorscope-eval/tsconfig.json` from
+    `packages/engine`, all exit 0.
+  - **Formatting.** `prettier --check` passes on every changed file except
+    `run.ts`, whose two pre-existing unformatted lines (the `context` type at
+    line 105 and the `claims` ternary at 690 on HEAD) were left alone, to keep
+    `run.ts`'s diff to the hook.
+  - Nothing is committed or pushed, so the full turbo typecheck the lane
+    rules require before a push has not run.
+  - No dependency was added, so no `bun install` ran. No user-visible string
+    changed (D14).
+- **Deferred to VS-21c.**
+  - The entry point, `packages/engine/script/vectorscope-replay.ts`:
+    `EgressGuard.installStrict` as its first import, whose `attempts` it
+    passes as `egress`; `VECTOR_DISABLE_MODELS_FETCH`,
+    `VECTOR_DISABLE_PROJECT_CONFIG`, `VECTOR_PURE`,
+    `VECTOR_DISABLE_AUTOUPDATE` and `VECTOR_BRAIN_EMBED=off` set in the
+    environment before any engine module loads; a dummy key in its provider
+    config; the fake server's base URL as `server`; serving the canned model,
+    after moving it and the server's record-and-respond surface out of the
+    test tree (or recording here that it imports test fixtures on purpose).
+  - `ci.ts PIPELINE=replay`, projecting seed cases ×
+    {`engine`, `engine:shared-verify`} and failing on any
+    `projectionProblems`.
+  - A variant-record resolver for projections. There is no ledger: a
+    projection spends nothing.
+  - The estimate-error metric (projection versus paid).
+  - Rendering projections in the report.
+- **Deferred to later.**
+  - Desktop projection, after VS-10.
+  - Anthropic's messages protocol in the fake server.
+  - Canned sessions of several steps.
+- **Review fixes (same day).** Eleven findings, one blocking. All were taken;
+  three were taken in part, and the bullets say why. Nothing is committed.
+  1. *The egress precondition failed open* (blocking): taken, all three
+     parts.
+     - Core `local-mode/guard.ts` (not @vector's, and no runner) gains
+       `strictInstalled()`, true only while `installStrict`'s guard is in
+       place. It is named beside `installed()`, not `strict()`, which names
+       NetworkGuard's installer in tests. `guard.test.ts` checks it true and
+       then false around the strict guard's uninstall, and false under
+       Vector Local's guard while `installed()` is true.
+     - `projectionRefusal` takes `strictGuard` in place of `guarded`, and
+       `project` passes `EgressGuard.strictInstalled()`. The refusal no longer
+       claims that nothing can leave this computer; it says the strict guard
+       refuses connections off it and logs every attempt the record counts.
+     - After the replay, `project` fails with a `ReviewEvalError` when the
+       fake server received requests and the egress log saw none of them. An
+       engine test passes `egress: () => []` under the file's strict guard
+       and gets that error.
+     - `projectionProblems` reports a record whose `egress.attempts` is 0
+       while its passes sent requests (see item 4).
+  2. *The dollar cap lifted for any loopback destination*: taken.
+     `ProjectionInput.server` is the fake server's base URL. Stage one refuses
+     one that is not a loopback http(s) URL. `routeRefusal` requires the
+     origin of where the SDK sends, and of any `preconnect`, to be
+     `LocalPolicy.origin(server)`. Unit cases refuse another port, another
+     name for this computer (`localhost` against `127.0.0.1`), `https`
+     against `http`, a stray `preconnect`, and a server that is not a URL.
+     - **Taken differently.** The finding asked for every named URL to match.
+       The engine's test provider has the catalog `api.url`
+       `http://127.0.0.1:1234/v1` (LM Studio's default port), which its
+       configured base URL replaces; the first run of the engine tests
+       refused every projection for it. So the origin rule follows
+       `provider.ts` `resolveBaseURL`: the configured base URL, else the
+       catalog's. A catalog URL that a base URL replaces must still be on
+       this computer, as before, but it is not sent to.
+     - **Also fixed.** A provider with only a `preconnect` passed the "names
+       no base URL" check, and its SDK would have chosen where to send. It is
+       now refused, with a unit case.
+  3. *The egress window opened after providers booted*: taken. `earlier` is
+     the first statement of `project`, so the record counts connections made
+     in step 2. The `received` snapshot stays before the replay.
+  4. *An empty egress log read as clean*: taken. `projectionProblems` reports
+     "it has no egress record" when `attempts` or `outside` is not a number,
+     and "its egress log saw none of its N requests, so no strict guard
+     recorded the run" when `attempts` is 0 while the passes sent N. Both are
+     cases in `replay.test.ts`, with a record that sent nothing and logged
+     nothing passing.
+     - **Taken in part.** The check is `attempts === 0`, as asked, not
+       `attempts < N`. The guard keeps only its last 2,000 attempts, so a
+       count would fail a long run for a reason that is not egress. The
+       engine tests do assert that the strict guard logged at least one
+       attempt per request, in the main projection and the retry case.
+  5. *Files and `unattributed`*: taken. "its files are not a record" comes
+     first when `files.reviewed` is not a list, so a record with no passes
+     and no files is no longer clean. A missing `unattributed` reads "it has
+     no unattributed count". Each has a `replay.test.ts` case.
+  6. *Retries were not covered*: taken. A new engine test queues
+     `httpError(500)` for review, then the canned model. The review pass has
+     two `turn` requests with increasing seqs. The server's review hits are
+     exactly the two recorded bodies, in order, the failed one first.
+     `unsent`, `unadmitted` and `unattributed` are 0.
+     - **Taken in part.** The test does not call `projectionProblems`. It
+       lives in `script/vectorscope-eval/replay.ts`, and imports run from the
+       scripts to the engine only. The test asserts each field
+       `projectionProblems` reads instead, and `replay.test.ts` covers the
+       function.
+  7. *No lifted finalizer*: taken. In "runs what the cap refuses", the
+     `attempt` scenario runs with the lifting hook: a read, a lifted second
+     turn that answers in prose, then the finalizer's reservation and its
+     admission, both lifted. The finalizer request reaches the server, review
+     is `ok`, and the hook was asked `[attempt, turn]`,
+     `[finalizer, finalize]` and `[attempt, finalize]`, all for review's
+     session.
+  8. *`CHARS_PER_TOKEN` could drift from admission*: taken, as an
+     `eval.test.ts` assertion. Under the tight cap, verify's pre-check
+     `estimateUsd` equals the low side of
+     `estimateCostUsd({ promptTokens: ceil(verify.chars / CHARS_PER_TOKEN), maxSteps, price })`.
+     Verify's pre-check is the site that divides the prompt alone. The
+     `pass` site adds the schema and `NEXT_STEP_SLACK`. `run.ts` is
+     untouched, so the pin does not move.
+  9. *The record comment understated what it holds*: taken. The
+     `ProjectionRecord` comment and the README's "Records are sealed"
+     bullet now say that a replay artifact names prompts by digest and holds
+     redacted posts, while a projection record holds every raw request body,
+     unredacted, and is handled at least as strictly as a checkout.
+     - **Optional part not taken.** Redacting the stored body with `secrets`
+       is not done. The contract asks for each pass's real wire body. A
+       redacted copy beside a raw `chars` and `digest` would fail
+       `projectionProblems`' check that `chars` is the body's length, or need
+       a second count. A replay's `secrets` redact posts, and a projection
+       has none. Sealing the records is the control.
+  10. *The fixture invited a runtime import of test code*: taken as a
+      comment. `test/fixture/projection.ts`, the README and VS-21c's deferral
+      say the entry point moves the canned model and the server's
+      record-and-respond surface out of the test tree first, or records here
+      that it imports them on purpose.
+  11. *An explicit annotation*: taken. `const info` is inferred, with a
+      comment that `getProvider` indexes the booted providers, so an unknown
+      ID is undefined at runtime whatever its type says. The guard stays.
+
+  Re-run after the fixes, each file alone through the lock with
+  `--timeout 30000`, `GITHUB_ACTIONS=false`, and `TMPDIR` and XDG roots under
+  a fresh `/tmp/vector-vectorscope/vs21b-fix-*`:
+
+  | Where | File | Pass |
+  |---|---|---|
+  | engine | `test/review/eval.test.ts` | 25 (23 before) |
+  | engine | `test/review/run.test.ts` | 44 (one test extended) |
+  | core | `test/local-mode/guard.test.ts` | 45, 2 fail (pre-existing, below) |
+  | core | `test/review/model-evidence.test.ts` | 16 (pin unchanged) |
+  | eval scripts | `replay` | 27 (two tests extended) |
+
+  - **The two `guard.test.ts` failures are pre-existing.** They fail the same
+    way with HEAD's `guard.test.ts`, which was copied in for one run and then
+    replaced with this round's copy: "sends what it allows to this computer
+    around the proxy environment" lists `127.0.0.1` twice in `destinations`,
+    and "reads NO_PROXY the way Bun's fetch does" has a child process that
+    cannot listen on `::1` (`EADDRINUSE`). Both come from this container's
+    network setup. The new `strictInstalled()` assertions sit in two other
+    tests, which pass.
+  - **Typecheck.** `bun typecheck` in core and engine, and
+    `bun tsgo -p ../../script/vectorscope-eval/tsconfig.json` from
+    `packages/engine`, all exit 0.
+  - **Formatting.** `prettier --check` passes on every code file changed in
+    this round and on the README. This log fails it at HEAD too (its italics
+    and wrapped code spans), so it keeps its own style.
+  - The other engine suites in the table above were not re-run. This round
+    touched no runner (`run.ts`'s pin is unchanged), no test helper and no
+    CLI.

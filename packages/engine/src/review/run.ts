@@ -2,7 +2,9 @@
 // finalize prompt for a session stopped early, a verify pass, then selection and cost. The engine's agent `steps`
 // limit only adds text-only prompt guidance, which conflicts with this runner's required StructuredOutput tool.
 // Review admits each provider attempt, including retries, and one separate finalizer. Dollar reservations are
-// estimates; reported usage can exceed them, so they are not a hard billing cap.
+// estimates; reported usage can exceed them, so they are not a hard billing cap. An eval projection (VS-21b,
+// ReviewEval.project) may run what the dollar cap alone refuses, against a fake provider on this computer; nothing
+// else sets it, and unset it changes nothing.
 
 import path from "path"
 import { Cause, Duration, Effect, Exit, Option, Scope } from "effect"
@@ -125,15 +127,38 @@ export interface RunInput {
   // The certificates model evidence (VS-07) compares the models with when config.modelEvidence is "warn":
   // MODEL_EVIDENCE when absent. The eval and tests pass their own.
   certificates?: readonly ModelCertificate[]
+  // VS-21b: asked about each decision the dollar cap would refuse. Off unless set, and only ReviewEval.project sets
+  // it, after refusing any provider that sends off this computer.
+  projection?: Projection
 }
 
 type Name = ReviewOutcome["specialists"][number]["name"]
 type Stop = "budget" | "steps" | "timeout"
 type Phase = "turn" | "finalize"
 
+// A decision the review's dollar cap would refuse, and where it was made: before a pass's session ("pass"), at a
+// provider attempt ("attempt"), at the finalizer's reservation ("finalizer"), or at verify's pre-check ("verify").
+// `sessionID` is the pass's session, at an attempt and at the finalizer's reservation.
+export interface OverCap {
+  pass: Name
+  phase: Phase
+  site: "pass" | "attempt" | "finalizer" | "verify"
+  estimateUsd: number
+  sessionID?: SessionID
+}
+
+// VS-21b. ReviewEval.project runs the review against a fake provider on this computer, so the dollar cap must not cut
+// a pass short there. `overCap` is asked only about a decision the cap would refuse, never about one it admits, a step
+// or time stop, or an uncapped review. True runs it anyway, and its reservation is kept like any other; false, or a
+// projection that throws, refuses it as the cap would.
+export interface Projection {
+  overCap: (decision: OverCap) => boolean
+}
+
 export type Observation =
-  // A pass is about to run with this prompt, or was planned and skipped (verify with no budget or time left).
-  | { type: "pass"; pass: Name; model: string; text: string }
+  // A pass is about to run with this prompt and step cap, or was planned and skipped (verify with no budget or time
+  // left).
+  | { type: "pass"; pass: Name; model: string; text: string; maxSteps: number }
   // One provider attempt the review's admission was asked for, retries included. A refused one was never sent.
   | {
       type: "attempt"
@@ -254,16 +279,29 @@ export const run: (
       return
     }
   }
+  // Whether a projection runs a decision the dollar cap refuses. Unset, or throwing, it never does, so the cap holds.
+  const lift = (decision: OverCap) => {
+    if (!input.projection) return false
+    try {
+      return input.projection.overCap(decision) === true
+    } catch {
+      return false
+    }
+  }
 
   // Reservations are estimates, not billed spend. Replace this specialist's old reservation in one synchronous
   // operation: parallel specialists must not each spend the same remainder, including a pending finalization.
-  const reserve = (name: Name, turn: number, finalize: number) => {
+  const reserve = (name: Name, turn: number, finalize: number, at: Pick<OverCap, "phase" | "site" | "sessionID">) => {
     if (!capped) return true
     const others = [...reservations].reduce(
       (total, [owner, amount]) => total + (owner === name ? 0 : amount.turn + amount.finalize),
       0,
     )
-    if (state.spent + state.uncertain + others + turn + finalize > config.maxCostUsd) return false
+    if (
+      state.spent + state.uncertain + others + turn + finalize > config.maxCostUsd &&
+      !lift({ pass: name, estimateUsd: turn, ...at })
+    )
+      return false
     reservations.set(name, { turn, finalize })
     return true
   }
@@ -384,8 +422,8 @@ export const run: (
       const context = Math.ceil((spec.text.length + JSON.stringify(spec.schema).length) / 3.5)
       const price = priceOf(spec.model)
       const firstCost = nextCost({ context, cached: 0, price })
-      observe({ type: "pass", pass: spec.name, model: nameOf(spec.model), text: spec.text })
-      if (!reserve(spec.name, firstCost, firstCost)) {
+      observe({ type: "pass", pass: spec.name, model: nameOf(spec.model), text: spec.text, maxSteps: spec.cap })
+      if (!reserve(spec.name, firstCost, firstCost, { phase: "turn", site: "pass" })) {
         observe({
           type: "attempt",
           pass: spec.name,
@@ -448,7 +486,13 @@ export const run: (
           }
           track.cost = request.model.cost
           const estimate = nextCost(track)
-          if (!reserve(track.name, estimate, track.finalizing ? 0 : estimate)) {
+          if (
+            !reserve(track.name, estimate, track.finalizing ? 0 : estimate, {
+              phase,
+              site: "attempt",
+              sessionID: session.id,
+            })
+          ) {
             track.stop = "budget"
             track.denied = true
             observe({ ...attempt, admitted: false, stop: "budget", estimateUsd: estimate })
@@ -551,7 +595,7 @@ export const run: (
 
       // The first prompt is now idle. Unknown exposure stays in the review's ledger; only unused future work is
       // released. The finalizer must still fit beside every other specialist's admitted work.
-      if (!reserve(track.name, nextCost(track), 0)) {
+      if (!reserve(track.name, nextCost(track), 0, { phase: "finalize", site: "finalizer", sessionID: session.id })) {
         observe({
           type: "attempt",
           pass: spec.name,
@@ -708,10 +752,14 @@ export const run: (
           price: verifyPrice,
         }).low
       : 0
-    const unaffordable = capped && state.spent + state.uncertain + estimate > config.maxCostUsd
     const late = deadline - Date.now() < VERIFY_MIN_MS
+    // A projection is asked only about a verify pass that would otherwise run: one skipped for time never mattered.
+    const unaffordable =
+      capped &&
+      state.spent + state.uncertain + estimate > config.maxCostUsd &&
+      !(verifyText !== "" && !late && lift({ pass: "verify", phase: "turn", site: "verify", estimateUsd: estimate }))
     if (verifyText && (unaffordable || late)) {
-      observe({ type: "pass", pass: "verify", model: nameOf(input.model), text: verifyText })
+      observe({ type: "pass", pass: "verify", model: nameOf(input.model), text: verifyText, maxSteps: VERIFY_STEPS })
       observe({
         type: "attempt",
         pass: "verify",

@@ -10,7 +10,12 @@ import { VERIFY_JSON_SCHEMA } from "../../packages/core/src/review/schema"
 import { DEFAULT_REVIEW_CONFIG } from "../../packages/core/src/review/types"
 import { Ledger, type Limits } from "./budget"
 import { gitEnv, loadManifest, type Manifest } from "./dataset"
-import type { ReplayVariant, VariantRecord } from "../../packages/engine/src/review/eval"
+import type {
+  ProjectedPass,
+  ProjectionRecord,
+  ReplayVariant,
+  VariantRecord,
+} from "../../packages/engine/src/review/eval"
 import { candidateDiff, desktopReplay, withReviewSettings } from "./desktop"
 import {
   ADAPTERS,
@@ -18,6 +23,7 @@ import {
   checkoutDirectory,
   main,
   prepareCheckout,
+  projectionProblems,
   replayBudget,
   replayCharge,
   replayPlan,
@@ -773,5 +779,136 @@ describe("the desktop replay", () => {
     // A missing file, or one that is not a JSON object, reads as the variant's keys alone.
     for (const text of ["", "not json", "[1, 2]"])
       expect(JSON.parse((await read(settings(text), ".vector/review.json"))!)).toEqual({ verifyPolicy: "shared" })
+  })
+})
+
+describe("projection records (VS-21b)", () => {
+  const pass = (name: ProjectedPass["pass"], overrides: Partial<ProjectedPass> = {}): ProjectedPass => ({
+    pass: name,
+    model: "lmstudio/test-model",
+    maxSteps: name === "verify" ? 10 : 15,
+    status: "ok",
+    digest: "d".repeat(64),
+    chars: 1_000,
+    requests: [
+      {
+        seq: 1,
+        phase: "turn",
+        estimateUsd: 0.01,
+        digest: "e".repeat(64),
+        chars: 13,
+        tokens: 4,
+        stepUsd: 0.001,
+        body: '{"model":"m"}',
+      },
+    ],
+    promptTokens: 4,
+    usd: { low: 0.01, high: 0.05 },
+    unsent: 0,
+    unadmitted: 0,
+    ...overrides,
+  })
+  const record = (overrides: Partial<ProjectionRecord> = {}): ProjectionRecord => ({
+    version: 1,
+    kind: "projection",
+    label: "case",
+    repetition: 1,
+    runtime: {
+      node: "v22",
+      platform: "linux",
+      arch: "x64",
+      isolation: { pure: true, projectConfig: false, trusted: false, lsp: false, formatter: false, snapshot: false },
+    },
+    source: { base: "a".repeat(40), head: "b".repeat(40), mergeBase: "a".repeat(40) },
+    trust: "untrusted",
+    trigger: "command",
+    config: { digest: "c".repeat(64) },
+    scope: evidenceScope({ adapter: "engine", config: DEFAULT_REVIEW_CONFIG }),
+    rules: { digest: "f".repeat(64) },
+    context: { digest: "0".repeat(64) },
+    models: {
+      review: { id: "lmstudio/test-model", context: 100_000, costKind: "priced", price: { input: 1, output: 1 } },
+    },
+    files: { reviewed: ["src/a.ts"], skipped: [] },
+    cap: { maxCostUsd: 1, over: [] },
+    passes: [pass("review"), pass("security"), pass("verify")],
+    unattributed: 0,
+    egress: { attempts: 3, outside: 0 },
+    ...overrides,
+  })
+
+  test("a whole projection has no problem, and the decisions the cap refused are not one", () => {
+    expect(projectionProblems(record())).toEqual([])
+    expect(
+      projectionProblems(
+        record({
+          cap: { maxCostUsd: 0.001, over: [{ pass: "review", phase: "turn", site: "pass", estimateUsd: 0.01 }] },
+        }),
+      ),
+    ).toEqual([])
+    expect(
+      projectionProblems(record({ variant: { name: "engine:shared-verify", keys: { verifyPolicy: "shared" } } })),
+    ).toEqual([])
+  })
+
+  test("names what keeps a record from showing every pass's body", () => {
+    const [request] = pass("review").requests
+    if (!request) throw new Error("expected a request")
+    expect(projectionProblems(null)).toEqual(["the projection is not an object"])
+    expect(projectionProblems({ ...record(), kind: "replay" })).toEqual(["it is not a version 1 projection record"])
+    expect(projectionProblems({ ...record(), passes: "all" })).toEqual(["its passes are not a list"])
+    expect(projectionProblems(record({ passes: [] }))).toEqual(["it planned no pass for 1 reviewed files"])
+    expect(projectionProblems(record({ passes: [], files: { reviewed: [], skipped: [] } }))).toEqual([])
+    // A record with no pass and no files to tell it planned none for nothing.
+    const { files: _files, ...unfiled } = record({ passes: [] })
+    expect(projectionProblems(unfiled)).toEqual(["its files are not a record"])
+    expect(projectionProblems({ ...record({ passes: [] }), files: { reviewed: "src/a.ts" } })).toEqual([
+      "its files are not a record",
+    ])
+    expect(
+      projectionProblems(record({ passes: [pass("review"), pass("verify", { status: "skipped", requests: [] })] })),
+    ).toEqual(["verify sent no request, so its body was not projected"])
+    expect(projectionProblems(record({ passes: [pass("review", { status: "stopped" })] }))).toEqual([
+      "review did not finish (stopped)",
+    ])
+    expect(projectionProblems(record({ passes: [pass("review", { status: undefined })] }))).toEqual([
+      "review did not finish (undefined)",
+    ])
+    expect(projectionProblems(record({ passes: [pass("review", { requests: [{ ...request, body: "" }] })] }))).toEqual([
+      "review's request 1 has no body",
+    ])
+    expect(projectionProblems(record({ passes: [pass("review", { requests: [{ ...request, chars: 99 }] })] }))).toEqual(
+      ["review's request 1 does not count its body's characters"],
+    )
+    expect(projectionProblems(record({ passes: [pass("review", { usd: undefined })] }))).toEqual([
+      "review has no dollar estimate (no price snapshot)",
+    ])
+    expect(projectionProblems(record({ passes: [pass("review", { unsent: 1, unadmitted: 2 })] }))).toEqual([
+      "review has 1 admitted attempts no request carried",
+      "review sent 2 requests no admitted attempt accounts for",
+    ])
+    expect(projectionProblems(record({ unattributed: 1 }))).toEqual(["1 requests name no session any attempt names"])
+    const { unattributed: _unattributed, ...uncounted } = record()
+    expect(projectionProblems(uncounted)).toEqual(["it has no unattributed count"])
+    expect(projectionProblems(record({ egress: { attempts: 4, outside: 1 } }))).toEqual([
+      "1 connections went outside this computer",
+    ])
+    const { egress: _egress, ...unguarded } = record()
+    expect(projectionProblems(unguarded)).toEqual(["it has no egress record"])
+    expect(projectionProblems({ ...record(), egress: { outside: 0 } })).toEqual(["it has no egress record"])
+    // Zero outside means nothing from a log that saw none of the passes' requests: Vector Local's guard, installed
+    // while Vector Local is off, logs nothing.
+    expect(projectionProblems(record({ egress: { attempts: 0, outside: 0 } }))).toEqual([
+      "its egress log saw none of its 3 requests, so no strict guard recorded the run",
+    ])
+    expect(
+      projectionProblems(
+        record({ passes: [], files: { reviewed: [], skipped: [] }, egress: { attempts: 0, outside: 0 } }),
+      ),
+    ).toEqual([])
+    // A pending variant's name carrying a built one's keys is the registry's problem, as in report.ts.
+    const pending = { name: "engine:privacy-zdr", keys: { verifyPolicy: "shared" as const } }
+    expect(variantProblems("engine", pending)).not.toEqual([])
+    expect(projectionProblems(record({ variant: pending }))).toEqual(variantProblems("engine", pending))
   })
 })

@@ -8,6 +8,9 @@ import type { ReviewConfig } from "../../packages/core/src/review/types"
 import type {
   AttemptRecord,
   ModelRecord,
+  ProjectedPass,
+  ProjectedRequest,
+  ProjectionRecord,
   ReplayCase,
   ReplayVariant,
   VariantRecord,
@@ -260,6 +263,82 @@ export function variantProblems(adapter: string, record?: ReplayVariant): string
 // The runner a replayVariant name runs on.
 export function variantAdapter(name: string) {
   return name.split(":")[0] ?? name
+}
+
+// Why a projection record (VS-21b, ReviewEval.project) does not show what every pass of its case would send, if it
+// does not. A record is untrusted JSON, read field by field under the record's own type names. It needs a body for
+// every planned pass, each pass finished, every request paired with an admitted attempt and every attempt with a
+// request, a price snapshot for every pass, an egress log that saw the run and no connection off this computer, and
+// its variant record as the registry has it. The decisions the dollar cap refused (`cap.over`) are reported, never a
+// problem: from the first one on the record describes an uncapped run, the upper side of the cost estimate.
+export function projectionProblems(record: unknown): string[] {
+  if (typeof record !== "object" || record === null) return ["the projection is not an object"]
+  if (field<ProjectionRecord>(record, "version") !== 1 || field<ProjectionRecord>(record, "kind") !== "projection")
+    return ["it is not a version 1 projection record"]
+  const passes = field<ProjectionRecord>(record, "passes")
+  if (!Array.isArray(passes)) return ["its passes are not a list"]
+  const reviewed = field<ProjectionRecord["files"]>(field<ProjectionRecord>(record, "files"), "reviewed")
+  const egress = field<ProjectionRecord>(record, "egress")
+  const attempts = field<ProjectionRecord["egress"]>(egress, "attempts")
+  const outside = field<ProjectionRecord["egress"]>(egress, "outside")
+  const unattributed = field<ProjectionRecord>(record, "unattributed")
+  const sent = passes.flatMap((pass) => {
+    const requests = field<ProjectedPass>(pass, "requests")
+    return Array.isArray(requests) ? requests : []
+  }).length
+  return [
+    ...(!Array.isArray(reviewed) ? ["its files are not a record"] : []),
+    ...(passes.length === 0 && Array.isArray(reviewed) && reviewed.length > 0
+      ? [`it planned no pass for ${reviewed.length} reviewed files`]
+      : []),
+    ...passes.flatMap(passProblems),
+    ...(typeof unattributed !== "number" ? ["it has no unattributed count"] : []),
+    ...(typeof unattributed === "number" && unattributed > 0
+      ? [`${unattributed} requests name no session any attempt names`]
+      : []),
+    ...(typeof attempts !== "number" || typeof outside !== "number" ? ["it has no egress record"] : []),
+    // The strict guard logs a connection for every request, so a log that saw none of the passes' requests is not its
+    // log (Vector Local's guard logs nothing while it is off), and its zero outside measured nothing.
+    ...(attempts === 0 && sent > 0
+      ? [`its egress log saw none of its ${sent} requests, so no strict guard recorded the run`]
+      : []),
+    ...(typeof outside === "number" && outside > 0 ? [`${outside} connections went outside this computer`] : []),
+    // variantProblems reads an untrusted record itself, one that is not an object included.
+    ...variantProblems("engine", field<ProjectionRecord>(record, "variant") as ReplayVariant | undefined),
+  ]
+}
+
+function passProblems(pass: unknown): string[] {
+  const name = String(field<ProjectedPass>(pass, "pass"))
+  const requests = field<ProjectedPass>(pass, "requests")
+  if (!Array.isArray(requests) || requests.length === 0)
+    return [`${name} sent no request, so its body was not projected`]
+  const status = field<ProjectedPass>(pass, "status")
+  const unsent = field<ProjectedPass>(pass, "unsent")
+  const unadmitted = field<ProjectedPass>(pass, "unadmitted")
+  return [
+    ...(status !== "ok" ? [`${name} did not finish (${String(status)})`] : []),
+    ...requests.flatMap((request, index) => {
+      const body = field<ProjectedRequest>(request, "body")
+      if (typeof body !== "string" || body === "") return [`${name}'s request ${index + 1} has no body`]
+      return field<ProjectedRequest>(request, "chars") === body.length
+        ? []
+        : [`${name}'s request ${index + 1} does not count its body's characters`]
+    }),
+    ...(field<ProjectedPass>(pass, "usd") === undefined ? [`${name} has no dollar estimate (no price snapshot)`] : []),
+    ...(typeof unsent !== "number" || unsent > 0
+      ? [`${name} has ${String(unsent)} admitted attempts no request carried`]
+      : []),
+    ...(typeof unadmitted !== "number" || unadmitted > 0
+      ? [`${name} sent ${String(unadmitted)} requests no admitted attempt accounts for`]
+      : []),
+  ]
+}
+
+// One field of an untrusted value, named as the type `T` names it, so a renamed field fails the typecheck here.
+function field<T>(value: unknown, key: keyof T & string): unknown {
+  if (typeof value !== "object" || value === null) return undefined
+  return Object.entries(value).find(([name]) => name === key)?.[1]
 }
 
 function sortedJson(value: object) {

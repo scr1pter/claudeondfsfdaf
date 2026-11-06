@@ -20,10 +20,20 @@
 // which the artifact records with the run. The registry (script/vectorscope-eval/replay.ts) refuses a variant whose
 // package has not landed; this replay cannot see the registry, so it refuses any variant that would run the frozen
 // pipeline under its name: one with no key and no model requirement, or a key outside VARIANT_KEYS.engine.
+//
+// ReviewEval.project (VS-21b) runs the same replay against a fake model server on this computer, so every pass runs,
+// verify, the finalizer and retries included, and records each pass's real wire body with its estimated tokens and
+// dollars. It is the only caller of Review.run's projection hook, which runs what the dollar cap alone would refuse;
+// so before anything boots a provider it refuses a run with model catalogs fetched, without the strict egress guard,
+// against a fake server that is not on this computer, or on a model with no price snapshot or a Vector route, and then
+// any model whose requests could go anywhere but that fake server. A run whose egress log saw none of the requests
+// the fake server received fails, since that log is not the strict guard's. Its record names every decision the cap
+// refused, and from the first one on it describes an uncapped run: the upper side of the cost estimate, not the
+// capped paid run. Nothing calls it yet (VS-21c).
 
 import { createHash } from "node:crypto"
 import path from "path"
-import { Cause, Effect, Exit, Schema } from "effect"
+import { Cause, Effect, Exit, Option, Schema } from "effect"
 import {
   parseReviewConfig,
   parseReviewRules,
@@ -53,9 +63,15 @@ import {
 } from "@vectordevai/core/review/ignore"
 import { VARIANT_KEYS, VARIANT_NAME } from "@vectordevai/core/review/eval"
 import { evidenceScope, type EvidenceScope } from "@vectordevai/core/review/model-evidence"
-import type { ReviewPrice } from "@vectordevai/core/review/plan"
+import { estimateCostUsd, nextStepCostUsd, type ReviewPrice } from "@vectordevai/core/review/plan"
 import type { RelatedCode } from "@vectordevai/core/review/prompt"
 import { Flag } from "@vectordevai/core/flag/flag"
+import { sendsToOpenRouter } from "@vectordevai/core/free-model-catalog"
+import { EgressGuard } from "@vectordevai/core/local-mode/guard"
+import { LocalPolicy } from "@vectordevai/core/local-mode/policy"
+import { ModelPlans } from "@vectordevai/core/model-plans"
+import { ProviderV2 } from "@vectordevai/core/provider"
+import { SpendGuard } from "@vectordevai/core/spend-guard"
 import { redactSecrets } from "@vectordevai/core/review/redact"
 import { nextState } from "@vectordevai/core/review/state"
 import {
@@ -72,6 +88,7 @@ import { measureCost } from "@/cli/cmd/github.evidence"
 import { Config } from "@/config/config"
 import { InstanceRef } from "@/effect/instance-ref"
 import { Git } from "@/git"
+import { Provider } from "@/provider/provider"
 import { SessionID } from "@/session/schema"
 import { Session } from "@/session/session"
 import { ReviewContext } from "./context"
@@ -254,14 +271,247 @@ export class ReviewEvalError extends Schema.TaggedErrorClass<ReviewEvalError>()(
   message: Schema.String,
 }) {}
 
+// A request the loopback provider received (VS-21b): its X-Session-Id header and its raw body, exactly as they
+// arrived. No other header is kept.
+export interface WireRequest {
+  sessionID?: string
+  path: string
+  body: string
+}
+
+// A projection's input: a replay's, with the posting adapter and check its own (a recording adapter and a check that
+// passes every part), and the logs it records against.
+export interface ProjectionInput extends Omit<ReplayInput, "posting" | "check" | "secrets"> {
+  // The fake server's base URL, on this computer. Every URL a model's requests may name must have its origin: a
+  // gateway elsewhere on this computer may forward to a paid API.
+  server: string
+  // Every request the loopback provider has received so far, in the order they arrived.
+  received: Effect.Effect<readonly WireRequest[]>
+  // The strict egress guard's log of connection attempts (EgressGuard.Handle["attempts"]): the one installStrict
+  // returns in VS-21c's entry point, NetworkGuard's in tests.
+  egress: EgressGuard.Handle["attempts"]
+}
+
+// A dollar-cap decision the projection ran anyway (Review.OverCap). `attempt` is the seq of the provider attempt it
+// admitted, for a decision made at admission ("attempt"); the others came before a session, a finalizer or verify.
+export type ProjectedOverCap = Review.OverCap & { attempt?: number }
+
+// One request a pass sent, paired with the admitted attempt it was sent for.
+export interface ProjectedRequest {
+  seq: number // the attempt's seq in the replay's attempt order
+  phase: "turn" | "finalize"
+  estimateUsd: number // admission's estimate for it
+  lifted?: true // admitted only because the projection ran a decision the dollar cap refused
+  digest: string
+  chars: number
+  tokens: number // chars / CHARS_PER_TOKEN, rounded up: the whole JSON body, system prompt and tools included
+  stepUsd?: number // nextStepCostUsd(tokens, price): this request as input plus one step of output
+  body: string
+}
+
+// One planned pass: its prompt, every request its sessions sent, and what estimateCostUsd makes of its first one.
+export interface ProjectedPass {
+  pass: Pass
+  model: string
+  maxSteps: number
+  status?: ReviewOutcome["specialists"][number]["status"]
+  digest: string // of its prompt
+  chars: number
+  requests: ProjectedRequest[]
+  promptTokens?: number // its first request's tokens
+  usd?: { low: number; high: number } // estimateCostUsd({ promptTokens, maxSteps, price }), with its model's price
+  lifted?: ProjectedOverCap // its first decision the dollar cap refused and the projection ran
+  unsent: number // admitted attempts in its sessions that no request carried
+  unadmitted: number // requests in its sessions that no admitted attempt accounts for
+}
+
+// What ReviewEval.project records. It has no outcome, placed findings or posts: those come from the fake model.
+// `kind` keeps report.ts and certify.ts from ever reading one as a replay. A replay's artifact names prompts only by
+// digest and holds redacted posts; this record holds every raw request body, unredacted: whole prompts, the case's
+// code and the pull request's untrusted text. It is a sealed eval output, handled at least as strictly as a checkout,
+// and is never committed.
+export interface ProjectionRecord {
+  version: 1
+  kind: "projection"
+  label: string
+  repetition: number
+  runtime: ReplayArtifact["runtime"]
+  source: ReplayArtifact["source"]
+  trust: Trust
+  trigger: Trigger
+  config: { digest: string }
+  variant?: ReplayVariant
+  scope: EvidenceScope
+  rules: { digest: string }
+  context: { digest: string }
+  models: ReplayArtifact["models"]
+  files: ReplayArtifact["files"]
+  // Every decision the dollar cap refused, which the projection ran. From the first on, the record describes an
+  // uncapped run: a capped paid run would have stopped that pass there, and every lifted reservation and settlement
+  // counts against the other passes too.
+  cap: { maxCostUsd: number; over: ProjectedOverCap[] }
+  passes: ProjectedPass[]
+  unattributed: number // requests that name no session any attempt names
+  // The connection attempts the guard logged during the run, and how many of them were refused or went to a host that
+  // is not this computer by its name or address.
+  egress: { attempts: number; outside: number }
+}
+
 const FULL_SHA = /^[0-9a-f]{40}([0-9a-f]{24})?$/
 // buildPrompt's related_code caps (core review/prompt.ts:99-100, MAX_SYMBOLS and MAX_HITS), which quotedLocations
 // applies. They are copied, not imported: prompt.ts is in the pipeline pin and exports neither. The engine eval test
 // renders a prompt past both caps and checks quotedLocations against it.
 const PROMPT_RELATED_SYMBOLS = 10
 const PROMPT_RELATED_HITS = 15
+// How Review.run's admission turns prompt text into tokens (run.ts, `/ 3.5` in ask and in verify's estimate), which a
+// projection applies to each wire body. Copied, not exported from run.ts, so this package edits run.ts only for its hook.
+export const CHARS_PER_TOKEN = 3.5
+// The SDKs whose requests the loopback provider answers: chat completions and responses.
+const PROJECTION_SDKS = ["@ai-sdk/openai-compatible", "@ai-sdk/openai"]
 
-export const replay = Effect.fn("ReviewEval.replay")(function* (input: ReplayInput) {
+export const replay = (input: ReplayInput) => replayWith(input, false).pipe(Effect.map((result) => result.artifact))
+
+// ReviewEval.project (VS-21b): the replay against the loopback provider, with every decision the dollar cap refuses
+// run anyway, and each pass's real wire body recorded with its estimated tokens and dollars.
+export const project = Effect.fn("ReviewEval.project")(function* (input: ProjectionInput) {
+  // The egress log first, so the record counts the connections providers make as they boot in step 2: a catalog
+  // fetch, which VECTOR_DISABLE_MODELS_FETCH stops, would be one.
+  const earlier = new Set(input.egress())
+
+  // 1. What needs no provider, before anything boots one: booting providers with catalogs on would fetch them.
+  const chosen = [input.model, ...(input.triage ? [input.triage] : [])]
+  const refused = projectionRefusal({
+    modelsFetchDisabled: Flag.VECTOR_DISABLE_MODELS_FETCH,
+    strictGuard: EgressGuard.strictInstalled(),
+    server: input.server,
+    models: chosen,
+  })
+  if (refused) return yield* new ReviewEvalError({ message: refused })
+
+  // 2. Where each model's requests would go, as the provider builds them, before any git work or request.
+  const provider = yield* Provider.Service
+  const unrouted = yield* Effect.forEach(chosen, (model) =>
+    Effect.gen(function* () {
+      // getProvider indexes the booted providers by ID, so an unknown one is undefined, whatever its type says.
+      const info = yield* provider.getProvider(model.providerID)
+      const loaded = yield* provider.getModel(model.providerID, model.modelID).pipe(Effect.option)
+      return routeRefusal({
+        name: `${model.providerID}/${model.modelID}`,
+        providerID: model.providerID,
+        server: input.server,
+        ...(Option.isSome(loaded) ? { model: loaded.value } : {}),
+        ...(info ? { options: info.options } : {}),
+        ...(model.price ? { price: model.price } : {}),
+      })
+    }),
+  )
+  const unroutable = unrouted.find((message) => message !== undefined)
+  if (unroutable) return yield* new ReviewEvalError({ message: unroutable })
+
+  // 3. The replay, with the fake server's log taken before and after it.
+  const before = (yield* input.received).length
+  const replayed = yield* replayWith(
+    { ...input, posting: recordingPosting(), check: (call) => Effect.succeed(call.parts) },
+    true,
+  )
+  const wire = (yield* input.received).slice(before)
+  const attempts = input.egress().filter((attempt) => !earlier.has(attempt))
+  // Each request the fake server received was a connection the strict guard logs. A log that saw none of them is not
+  // its log, and a record built on it would claim connections nothing observed.
+  if (wire.length > 0 && attempts.length === 0)
+    return yield* new ReviewEvalError({
+      message: `The egress log saw none of the ${wire.length} requests the fake server received, so it is not the strict guard's log.`,
+    })
+  return projectionOf({ ...replayed, wire, attempts })
+})
+
+// Why a projection cannot start, from what needs no provider: model catalogs that booting a provider would fetch
+// (VECTOR_DISABLE_MODELS_FETCH, read when the engine loads, so it must be set in the environment before then), no
+// strict egress guard (Vector Local's guard is installed too, but follows the user's policy and logs nothing while
+// Vector Local is off), a fake server that is not on this computer, a model whose route chooses its own destination
+// (Vector's free models and plans, provider.ts offInLocal), and a model with no price snapshot, whose dollars cannot
+// be estimated. It never reads a key.
+export function projectionRefusal(input: {
+  modelsFetchDisabled: boolean
+  strictGuard: boolean
+  server: string
+  models: readonly Pick<ResolvedModel, "providerID" | "modelID" | "costKind" | "price">[]
+}): string | undefined {
+  if (!input.modelsFetchDisabled)
+    return "A projection boots providers without fetching model catalogs: set VECTOR_DISABLE_MODELS_FETCH=1 in the environment before the engine loads."
+  if (!input.strictGuard)
+    return "A projection runs only under the strict egress guard (EgressGuard.installStrict), which refuses connections off this computer and logs every attempt the record counts."
+  if (!loopbackURL(input.server))
+    return `A projection reads its requests from a fake server on this computer, and ${input.server} is not one.`
+  const routed = input.models.find(
+    (model) => model.providerID === ProviderV2.ID.vector || model.providerID === ModelPlans.PROVIDER_ID,
+  )
+  if (routed)
+    return `${routed.providerID}/${routed.modelID} goes through Vector's own route, which chooses where it sends; a projection needs a model on a server on this computer.`
+  const unpriced = input.models.find((model) => model.costKind !== "priced" || !model.price)
+  if (unpriced)
+    return `${unpriced.providerID}/${unpriced.modelID} has no price snapshot, so a projection cannot estimate its dollars.`
+  return undefined
+}
+
+// Why a model's requests could go anywhere but the projection's fake server, or to something it cannot answer, if
+// they could. It follows where Provider.getLanguage sends them (provider.ts resolveSDK, and the private offInLocal and
+// requestOrigins it mirrors): the free-model and OpenRouter routes, a plugin's or sign-in's own fetch, the SDK, and
+// every base URL and preconnect a request may name, each of which must be on this computer. The projection lifts the
+// dollar cap, so where the SDK sends (provider.ts resolveBaseURL: the configured base URL, else the catalog's) and the
+// preconnect must be the fake server itself: this computer alone is not enough, since a gateway on it (a LiteLLM-style
+// proxy) may forward to a paid API. A catalog URL a configured base URL replaces (LM Studio's default port, say) is
+// not sent to. The price snapshot must be the provider's own price, re-derived from its rates.
+export function routeRefusal(input: {
+  name: string
+  providerID: string
+  server: string // the fake server's base URL (ProjectionInput.server)
+  model?: { freeModel?: unknown; api: { npm: string; url: string }; cost: Parameters<typeof SpendGuard.priceOf>[0] }
+  options?: Record<string, unknown>
+  price?: ReviewPrice
+}): string | undefined {
+  const model = input.model
+  const options = input.options
+  if (!model || !options) return `${input.name} is not available to this engine.`
+  if (model.freeModel) return `${input.name} is a free model, which goes through Vector's free-model route.`
+  if (typeof options["fetch"] === "function")
+    return `${input.name}'s provider sends through a fetch of its own (a plugin or sign-in), which need not go to its base URL.`
+  if (
+    sendsToOpenRouter({
+      providerID: input.providerID,
+      destinations: [model.api.url, model.api.npm, options["baseURL"]],
+    })
+  )
+    return `${input.name} goes to OpenRouter.`
+  if (!PROJECTION_SDKS.includes(model.api.npm))
+    return `${input.name} uses ${model.api.npm}; the loopback provider answers only ${PROJECTION_SDKS.join(" and ")} requests.`
+  const sent = typeof options["baseURL"] === "string" && options["baseURL"] !== "" ? options["baseURL"] : model.api.url
+  if (!sent) return `${input.name} names no base URL, so its SDK would choose where it sends.`
+  const named = [options["baseURL"], model.api.url, options["preconnect"]].filter(
+    (url) => url !== undefined && url !== "",
+  )
+  const away = named.find((url) => !loopbackURL(url))
+  if (away !== undefined) return `${input.name} may send to ${String(away)}, which is not this computer.`
+  const server = LocalPolicy.origin(input.server)
+  const elsewhere = [sent, options["preconnect"]]
+    .filter((url) => url !== undefined && url !== "")
+    .find((url) => server === undefined || LocalPolicy.origin(String(url)) !== server)
+  if (elsewhere !== undefined)
+    return `${input.name} may send to ${String(elsewhere)}, which is not the projection's fake server at ${input.server}.`
+  const rates = SpendGuard.priceOf(model.cost)
+  if (!rates || !input.price || digest(rates) !== digest(input.price))
+    return `${input.name}'s price snapshot is not its provider's price.`
+  return undefined
+}
+
+// An http(s) URL, with no variable left to fill in, whose host is this computer by its name or address.
+function loopbackURL(value: unknown) {
+  if (typeof value !== "string" || value.includes("${") || !URL.canParse(value)) return false
+  const url = new URL(value)
+  return (url.protocol === "http:" || url.protocol === "https:") && LocalPolicy.loopback(url.hostname)
+}
+
+const replayWith = Effect.fn("ReviewEval.replay")(function* (input: ReplayInput, projecting: boolean) {
   const git = yield* Git.Service
   const sessions = yield* Session.Service
   const item = input.case
@@ -484,7 +734,7 @@ export const replay = Effect.fn("ReviewEval.replay")(function* (input: ReplayInp
       posted,
       ...(refusal.message !== undefined ? { refused: refusal.message } : {}),
     }
-    return nothing
+    return { artifact: nothing, observed: [], over: [] }
   }
 
   // 5. Context Vector gathers itself, and for an untrusted change its files, which go in the prompt.
@@ -502,8 +752,10 @@ export const replay = Effect.fn("ReviewEval.replay")(function* (input: ReplayInp
   })
   const known = yield* ReviewSource.knownPath({ directory, rev: item.head })
 
-  // 6. The review.
+  // 6. The review. A projection runs every decision the dollar cap refuses and keeps it; one made at admission is
+  // followed at once by the attempt it admitted, so that attempt's seq is the next one.
   const observed: Observation[] = []
+  const over: ProjectedOverCap[] = []
   const outcome = yield* Review.run({
     directory,
     trigger,
@@ -531,6 +783,17 @@ export const replay = Effect.fn("ReviewEval.replay")(function* (input: ReplayInp
     rulesSource: "base branch",
     inlinePosted: 0,
     observe: (event) => observed.push(event),
+    ...(projecting
+      ? {
+          projection: {
+            overCap: (decision: Review.OverCap) => {
+              const next = observed.filter((event) => event.type === "attempt").length + 1
+              over.push({ ...decision, ...(decision.site === "attempt" ? { attempt: next } : {}) })
+              return true
+            },
+          },
+        }
+      : {}),
   })
 
   // 7. What a first review posts: the line comments as one review, then the summary; a review whose every reviewer
@@ -706,8 +969,98 @@ export const replay = Effect.fn("ReviewEval.replay")(function* (input: ReplayInp
     posted,
     ...(refusal.message !== undefined ? { refused: refusal.message } : {}),
   }
-  return artifact
+  return { artifact, observed, over }
 })
+
+// The projection's record: each planned pass in order, with its admitted attempts paired with the requests its
+// sessions sent. For each session the k-th admitted attempt, in seq order, goes with the k-th request that names it,
+// in arrival order; what is left on either side is unsent or unadmitted. A pass's price is its model's snapshot.
+function projectionOf(input: {
+  artifact: ReplayArtifact
+  observed: readonly Observation[]
+  over: readonly ProjectedOverCap[]
+  wire: readonly WireRequest[]
+  attempts: readonly EgressGuard.Attempt[]
+}): ProjectionRecord {
+  const artifact = input.artifact
+  const lifted = new Set(input.over.flatMap((decision) => (decision.attempt === undefined ? [] : [decision.attempt])))
+  const named = new Set<string>(artifact.attempts.flatMap((attempt) => (attempt.sessionID ? [attempt.sessionID] : [])))
+  const events = input.observed.flatMap((event) => (event.type === "pass" ? [event] : []))
+  // One pass event per pass name today; VS-28's lenses add several "lens" passes and must match them by lens too.
+  const planned = events.filter((event, index) => events.findIndex((other) => other.pass === event.pass) === index)
+  const passes = planned.map((event): ProjectedPass => {
+    const price = [artifact.models.review, artifact.models.triage].find((model) => model?.id === event.model)?.price
+    const tried = artifact.attempts.filter((attempt) => attempt.pass === event.pass)
+    const sessions = [...new Set(tried.flatMap((attempt) => (attempt.sessionID ? [attempt.sessionID] : [])))]
+    const paired = sessions.map((sessionID) => {
+      const admitted = tried.filter((attempt) => attempt.admitted && attempt.sessionID === sessionID)
+      const sent = input.wire.filter((request) => request.sessionID === sessionID)
+      const requests = admitted.flatMap((attempt, index) => {
+        const request = sent[index]
+        if (!request) return []
+        const tokens = Math.ceil(request.body.length / CHARS_PER_TOKEN)
+        return [
+          {
+            seq: attempt.seq,
+            phase: attempt.phase,
+            estimateUsd: attempt.estimateUsd,
+            ...(lifted.has(attempt.seq) ? { lifted: true as const } : {}),
+            digest: digest(request.body),
+            chars: request.body.length,
+            tokens,
+            ...(price ? { stepUsd: nextStepCostUsd(tokens, price) } : {}),
+            body: request.body,
+          } satisfies ProjectedRequest,
+        ]
+      })
+      return { requests, unsent: admitted.length - requests.length, unadmitted: sent.length - requests.length }
+    })
+    const requests = paired.flatMap((entry) => entry.requests).toSorted((a, b) => a.seq - b.seq)
+    const first = requests[0]
+    const status = artifact.outcome?.specialists.find((entry) => entry.name === event.pass)?.status
+    const decision = input.over.find((entry) => entry.pass === event.pass)
+    return {
+      pass: event.pass,
+      model: event.model,
+      maxSteps: event.maxSteps,
+      ...(status ? { status } : {}),
+      digest: digest(event.text),
+      chars: event.text.length,
+      requests,
+      ...(first ? { promptTokens: first.tokens } : {}),
+      ...(first && price
+        ? { usd: estimateCostUsd({ promptTokens: first.tokens, maxSteps: event.maxSteps, price }) }
+        : {}),
+      ...(decision ? { lifted: decision } : {}),
+      unsent: paired.reduce((total, entry) => total + entry.unsent, 0),
+      unadmitted: paired.reduce((total, entry) => total + entry.unadmitted, 0),
+    }
+  })
+  return {
+    version: 1,
+    kind: "projection",
+    label: artifact.label,
+    repetition: artifact.repetition,
+    runtime: artifact.runtime,
+    source: artifact.source,
+    trust: artifact.trust,
+    trigger: artifact.trigger,
+    config: { digest: artifact.config.digest },
+    ...(artifact.variant ? { variant: artifact.variant } : {}),
+    scope: artifact.scope,
+    rules: artifact.rules,
+    context: { digest: artifact.context.digest },
+    models: artifact.models,
+    files: artifact.files,
+    cap: { maxCostUsd: artifact.config.value.maxCostUsd, over: [...input.over] },
+    passes,
+    unattributed: input.wire.filter((request) => !request.sessionID || !named.has(request.sessionID)).length,
+    egress: {
+      attempts: input.attempts.length,
+      outside: input.attempts.filter((attempt) => !attempt.allowed || !LocalPolicy.loopback(attempt.host)).length,
+    },
+  }
+}
 
 // A posting adapter that sends nothing and keeps every write, in order.
 export function recordingPosting() {

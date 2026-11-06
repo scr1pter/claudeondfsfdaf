@@ -1930,3 +1930,195 @@ describe("model evidence (VS-07)", () => {
     TIMEOUT,
   )
 })
+
+// VS-21b: the projection hook, which only ReviewEval.project sets. It is asked about each decision the dollar cap
+// would refuse, and nothing else.
+describe("the projection hook (VS-21b)", () => {
+  // Three reviews whose dollar cap refuses something, and where: review refused before its session; review's second
+  // attempt and then its finalizer's reservation; and verify's pre-check after review's report.
+  const scenarios = (
+    directory: string,
+  ): {
+    name: string
+    config: ReviewConfig
+    replies: () => ReturnType<typeof reply>[]
+    sites: Review.OverCap["site"][]
+  }[] => [
+    { name: "pass", config: config({ maxCostUsd: 0.00001 }), replies: () => [], sites: ["pass"] },
+    {
+      name: "attempt",
+      config: config({ maxCostUsd: 0.8 }),
+      replies: () => [
+        reply()
+          .tool("read", { filePath: path.join(directory, "src/list.ts") })
+          .usage({ input: 40_000, output: 100 }),
+      ],
+      sites: ["attempt", "finalizer"],
+    },
+    {
+      name: "verify",
+      config: config({ verify: "blocking", maxCostUsd: 0.6 }),
+      replies: () => [
+        reply()
+          .tool("StructuredOutput", report([finding()]))
+          .usage({ input: 50_000, output: 100 }),
+      ],
+      sites: ["verify"],
+    },
+  ]
+
+  // What one review sends and returns, without its duration and session IDs, which differ between runs.
+  const observeRun = (llm: TestLLMServer["Service"], run: Review.RunInput, replies: ReturnType<typeof reply>[]) =>
+    Effect.gen(function* () {
+      yield* llm.reset
+      for (const item of replies) yield* llm.pushMatch(REVIEW, item)
+      const outcome = yield* Review.run(run)
+      const { durationMs: _duration, sessions: _sessions, ...rest } = outcome
+      return {
+        bodies: (yield* modelRequests(llm)).map((body) => JSON.stringify(body)),
+        outcome: rest,
+        sessions: outcome.sessions,
+      }
+    })
+
+  it.instance(
+    "D3: unset, declining or throwing, the review sends the same requests and returns the same outcome",
+    () =>
+      Effect.gen(function* () {
+        const { llm, directory } = yield* useServer(PRICE)
+        for (const scenario of scenarios(directory)) {
+          const asked: Review.OverCap[] = []
+          const run = input(directory, { model: priced, config: scenario.config })
+          const unset = yield* observeRun(llm, run, scenario.replies())
+          const declining = yield* observeRun(
+            llm,
+            { ...run, projection: { overCap: (decision) => (asked.push(decision), false) } },
+            scenario.replies(),
+          )
+          const throwing = yield* observeRun(
+            llm,
+            {
+              ...run,
+              projection: {
+                overCap: () => {
+                  throw new Error("a projection that throws refuses")
+                },
+              },
+            },
+            scenario.replies(),
+          )
+          expect(declining.bodies).toEqual(unset.bodies)
+          expect(throwing.bodies).toEqual(unset.bodies)
+          expect(declining.outcome).toEqual(unset.outcome)
+          expect(throwing.outcome).toEqual(unset.outcome)
+          // The declining hook was asked about exactly the decisions the cap refused, where it refused them.
+          expect(asked.map((decision) => decision.site)).toEqual(scenario.sites)
+          for (const decision of asked) {
+            expect(decision.estimateUsd).toBeGreaterThan(0)
+            expect(decision.sessionID !== undefined).toBe(decision.site === "attempt" || decision.site === "finalizer")
+            expect(decision.phase).toBe(decision.site === "finalizer" ? "finalize" : "turn")
+          }
+          const session = asked.find((decision) => decision.sessionID)?.sessionID
+          if (session) expect(declining.sessions).toContain(session)
+        }
+        expect(scenarios(directory).map((scenario) => scenario.name)).toEqual(["pass", "attempt", "verify"])
+      }),
+    TIMEOUT,
+  )
+
+  it.instance(
+    "runs what the cap refuses when the hook says so, and is never asked about what the cap admits",
+    () =>
+      Effect.gen(function* () {
+        const { llm, directory } = yield* useServer(PRICE)
+        const asked: Review.OverCap[] = []
+        const lifting: Review.Projection = { overCap: (decision) => (asked.push(decision), true) }
+
+        // The cap refuses review before its session and at its attempt; lifted, review runs and reports.
+        yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report()).usage({ input: 1_000, output: 100 }))
+        const lifted = yield* Review.run(
+          input(directory, { model: priced, config: config({ maxCostUsd: 0.00001 }), projection: lifting }),
+        )
+        expect(lifted.specialists).toEqual([{ name: "review", status: "ok", steps: 1 }])
+        expect(yield* modelRequests(llm)).toHaveLength(1)
+        expect(asked.map((decision) => [decision.pass, decision.site])).toEqual([
+          ["review", "pass"],
+          ["review", "attempt"],
+        ])
+        expect(asked[1]?.sessionID).toBe(SessionID.make(lifted.sessions[0]!))
+
+        // The "attempt" scenario: after a read, the cap refuses review's second attempt. Lifted, that turn answers in
+        // prose, so review is finalized; the cap refuses the finalizer's reservation and its admission, and lifted,
+        // the finalizer reaches the server and review reports.
+        asked.length = 0
+        yield* llm.reset
+        const attempt = scenarios(directory).find((scenario) => scenario.name === "attempt")!
+        for (const item of attempt.replies()) yield* llm.pushMatch(REVIEW, item)
+        yield* llm.pushMatch(REVIEW, reply().text("I looked around.").usage({ input: 40_000, output: 100 }).stop())
+        yield* llm.pushMatch(FINALIZE, reply().tool("StructuredOutput", report()).usage({ input: 1_000, output: 100 }))
+        const finalized = yield* Review.run(
+          input(directory, { model: priced, config: attempt.config, projection: lifting }),
+        )
+        expect(finalized.specialists[0]).toMatchObject({ name: "review", status: "ok" })
+        expect((yield* llm.hits).filter(FINALIZE)).toHaveLength(1)
+        expect(asked.map((decision) => [decision.site, decision.phase])).toEqual([
+          ["attempt", "turn"],
+          ["finalizer", "finalize"],
+          ["attempt", "finalize"],
+        ])
+        expect(asked.every((decision) => decision.sessionID === SessionID.make(finalized.sessions[0]!))).toBe(true)
+
+        // A cap that admits everything, and an uncapped review, never ask.
+        asked.length = 0
+        yield* llm.reset
+        yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report()).usage({ input: 1_000, output: 100 }))
+        const admitted = yield* Review.run(
+          input(directory, { model: priced, config: config({ maxCostUsd: 100 }), projection: lifting }),
+        )
+        yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report()).usage({ input: 1_000, output: 100 }))
+        const uncapped = yield* Review.run(
+          input(directory, {
+            model: { ...priced, costKind: "plan" },
+            config: config({ maxCostUsd: 0.00001 }),
+            projection: lifting,
+          }),
+        )
+        expect([admitted.specialists, uncapped.specialists]).toEqual([
+          [{ name: "review", status: "ok", steps: 1 }],
+          [{ name: "review", status: "ok", steps: 1 }],
+        ])
+        expect(asked).toEqual([])
+      }),
+    TIMEOUT,
+  )
+
+  it.instance(
+    "is not asked about a verify pass that is skipped for time",
+    () =>
+      Effect.gen(function* () {
+        const { llm, directory } = yield* useServer(PRICE)
+        const asked: Review.OverCap[] = []
+        yield* llm.pushMatch(
+          REVIEW,
+          reply()
+            .tool("StructuredOutput", report([finding()]))
+            .usage({ input: 50_000, output: 100 }),
+        )
+        // A one-minute review leaves verify less than its two minutes, and the cap refuses it too.
+        const outcome = yield* Review.run(
+          input(directory, {
+            model: priced,
+            config: config({ verify: "blocking", maxCostUsd: 0.6, timeoutMinutes: 1 }),
+            projection: { overCap: (decision) => (asked.push(decision), true) },
+          }),
+        )
+        expect(outcome.specialists).toEqual([
+          { name: "review", status: "ok", steps: 1 },
+          { name: "verify", status: "skipped", steps: 0, detail: "budget" },
+        ])
+        expect(asked).toEqual([])
+        expect((yield* llm.hits).filter(VERIFY)).toHaveLength(0)
+      }),
+    TIMEOUT,
+  )
+})

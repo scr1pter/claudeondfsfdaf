@@ -12,7 +12,11 @@ import { Ripgrep } from "@vectordevai/core/ripgrep"
 import { ProviderV2 } from "@vectordevai/core/provider"
 import { ModelV2 } from "@vectordevai/core/model"
 import { parseUnifiedDiff } from "@vectordevai/core/review/diff"
-import { buildReviewPrompt } from "@vectordevai/core/review/prompt"
+import { buildFinalizePrompt, buildReviewPrompt } from "@vectordevai/core/review/prompt"
+import { estimateCostUsd, nextStepCostUsd } from "@vectordevai/core/review/plan"
+import { EgressGuard } from "@vectordevai/core/local-mode/guard"
+import { LocalPolicy } from "@vectordevai/core/local-mode/policy"
+import { ModelPlans } from "@vectordevai/core/model-plans"
 import {
   DEFAULT_REVIEW_CONFIG,
   type ModelFinding,
@@ -58,6 +62,14 @@ import { ReviewEval, type PostingCheck, type ReplayCase, type ReplayInput } from
 import { Review, type Observation } from "../../src/review/run"
 import { ReviewSource } from "../../src/review/source"
 import { TestInstance, trustWorkspace } from "../fixture/fixture"
+import {
+  firstUserText,
+  projectionFindings,
+  projectionReplies,
+  projectionVerdicts,
+  received,
+} from "../fixture/projection"
+import { NetworkGuard } from "../../../core/test/lib/network-guard"
 import { testEffect } from "../lib/effect"
 import { httpError, reply, TestLLMServer } from "../lib/llm-server"
 import { testProviderConfig } from "../lib/test-provider"
@@ -163,6 +175,9 @@ const root = LayerNode.group([
   RuntimeFlags.node,
   LayerNode.make({ service: TestLLMServer, layer: TestLLMServer.layer, deps: [] }),
 ])
+
+// The strict egress guard for this file, whose attempt log a projection records (VS-21b).
+const guard = NetworkGuard.use()
 
 const it = testEffect(
   LayerNode.compile(root, [
@@ -280,6 +295,7 @@ const checkout = (input: {
   head: Record<string, string | null>
   untrusted?: boolean
   price?: typeof PRICE
+  baseURL?: string
 }) =>
   Effect.gen(function* () {
     const directory = (yield* TestInstance).directory
@@ -290,6 +306,7 @@ const checkout = (input: {
     if (input.untrusted) yield* git(directory, "checkout", "-q", "--detach", base)
     const provider = testProviderConfig(llm.url)
     if (input.price) provider.provider.lmstudio.models["test-model"].cost = input.price
+    if (input.baseURL) provider.provider.lmstudio.options.baseURL = input.baseURL
     yield* Effect.promise(() =>
       Bun.write(
         path.join(directory, "vector.json"),
@@ -1265,3 +1282,495 @@ describe("Review.run observation", () => {
 function comparable(outcome: ReviewOutcome) {
   return { ...outcome, sessions: outcome.sessions.length, durationMs: 0 }
 }
+
+// VS-21b. ReviewEval.project against the canned model on the fake server: every pass runs, verify included, and the
+// record holds each one's real wire body. The file's strict egress guard logs every connection the run makes.
+describe("ReviewEval.project", () => {
+  // Every text part of every user message in a wire body, as the provider decoded it.
+  const userTexts = (body: string) => {
+    const decoded: unknown = JSON.parse(body)
+    const messages: unknown[] = isRecord(decoded) && Array.isArray(decoded.messages) ? decoded.messages : []
+    return messages
+      .filter((message) => isRecord(message) && message.role === "user")
+      .flatMap((message) => {
+        const content = isRecord(message) ? message.content : undefined
+        if (typeof content === "string") return [content]
+        const parts: unknown[] = Array.isArray(content) ? content : []
+        return parts.flatMap((part) => (isRecord(part) && typeof part.text === "string" ? [part.text] : []))
+      })
+  }
+
+  const project = (
+    input: { directory: string; base: string; head: string; llm: TestLLMServer["Service"] },
+    maxCostUsd: number,
+    egress = guard.attempts,
+  ) =>
+    ReviewEval.project({
+      case: replayCase(input.directory, input.base, input.head),
+      model: MODEL,
+      config: { maxCostUsd },
+      server: input.llm.url,
+      received: received(input.llm),
+      egress,
+    })
+
+  it.instance(
+    "projects review, security and verify, with each pass's real wire body and no connection off this computer",
+    () =>
+      Effect.gen(function* () {
+        const checked = yield* checkout({
+          base: { "src/list.ts": LIST_BASE, "src/auth/session.ts": AUTH_BASE },
+          head: { "src/list.ts": LIST_HEAD, "src/auth/session.ts": AUTH_HEAD },
+          price: PRICE,
+        })
+        const llm = checked.llm
+        const anchors = yield* ReviewSource.prDiff({
+          directory: checked.directory,
+          mergeBase: checked.base,
+          head: checked.head,
+        })
+        yield* llm.respond(projectionReplies({ files: anchors }))
+        const earlier = new Set(guard.attempts())
+
+        const record = yield* project(checked, DEFAULT_REVIEW_CONFIG.maxCostUsd)
+        const made = guard.attempts().filter((attempt) => !earlier.has(attempt))
+
+        expect(record.kind).toBe("projection")
+        expect(record.version).toBe(1)
+        const byName = new Map(record.passes.map((pass) => [pass.pass, pass]))
+        expect(record.passes.map((pass) => [pass.pass, pass.status, pass.requests.length]).toSorted()).toEqual([
+          ["review", "ok", 1],
+          ["security", "ok", 1],
+          ["verify", "ok", 1],
+        ])
+        expect([
+          byName.get("review")?.maxSteps,
+          byName.get("security")?.maxSteps,
+          byName.get("verify")?.maxSteps,
+        ]).toEqual([DEFAULT_REVIEW_CONFIG.maxSteps, Math.ceil((DEFAULT_REVIEW_CONFIG.maxSteps * 2) / 3), 10])
+        // Nothing went unpaired, and nothing went anywhere but the fake server on this computer.
+        expect(record.passes.map((pass) => [pass.unsent, pass.unadmitted])).toEqual([
+          [0, 0],
+          [0, 0],
+          [0, 0],
+        ])
+        expect(record.unattributed).toBe(0)
+        // The strict guard logged at least one connection for each request the passes sent.
+        expect(made.length).toBeGreaterThanOrEqual(record.passes.flatMap((pass) => pass.requests).length)
+        expect(made.every((attempt) => attempt.allowed && LocalPolicy.loopback(attempt.host))).toBe(true)
+        expect(record.egress).toEqual({ attempts: made.length, outside: 0 })
+        // The default cap admits everything, so nothing was lifted.
+        expect(record.cap).toEqual({ maxCostUsd: DEFAULT_REVIEW_CONFIG.maxCostUsd, over: [] })
+        expect(record.passes.flatMap((pass) => pass.requests).some((request) => request.lifted)).toBe(false)
+
+        // Each body is what the server received, and its first user message is exactly the prompt the pass observed.
+        const hits = (yield* llm.hits).map((hit) => hit.text)
+        for (const pass of record.passes) {
+          const first = pass.requests[0]
+          if (!first) throw new Error(`${pass.pass} sent no request`)
+          expect(hits).toContain(first.body)
+          expect(userTexts(first.body).map((text) => ReviewEval.digest(text))).toContain(pass.digest)
+          // Wiring: the record's figures are the estimators' own.
+          expect(first.chars).toBe(first.body.length)
+          expect(first.tokens).toBe(Math.ceil(first.body.length / ReviewEval.CHARS_PER_TOKEN))
+          expect(first.stepUsd).toBe(nextStepCostUsd(first.tokens, PRICE))
+          expect(pass.promptTokens).toBe(first.tokens)
+          expect(pass.usd).toEqual(
+            estimateCostUsd({ promptTokens: first.tokens, maxSteps: pass.maxSteps, price: PRICE }),
+          )
+          expect(first.phase).toBe("turn")
+        }
+        const bodyOf = (name: "review" | "security" | "verify") => byName.get(name)?.requests[0]?.body ?? ""
+        expect(bodyOf("review")).not.toContain("You are Vector's security reviewer")
+        expect(bodyOf("security")).not.toContain("You are Vector's code reviewer")
+        // Verify was asked about every canned finding, and its canned answer, read from the decoded prompt as the
+        // server reads it, confirms each of them.
+        const canned = projectionFindings(anchors)
+        const candidates = [
+          ...Review.normalizeFindings(canned.review, "review", anchors),
+          ...Review.normalizeFindings(canned.security, "security", anchors),
+        ].map((finding) => finding.id)
+        expect(candidates).toHaveLength(3)
+        expect(
+          projectionVerdicts(firstUserText(JSON.parse(bodyOf("verify"))))
+            .map((entry) => entry.id)
+            .toSorted(),
+        ).toEqual(candidates.toSorted())
+        expect(projectionVerdicts(bodyOf("verify"))).toEqual([])
+
+        expect(record.files.reviewed.toSorted()).toEqual(["src/auth/session.ts", "src/list.ts"])
+        expect(record.models.review.price).toEqual(PRICE)
+        expect(record.runtime.isolation).toMatchObject({ pure: false, projectConfig: true })
+        expect(record.context.digest).toMatch(/^[0-9a-f]{64}$/)
+        expect(record.scope).toEqual(evidenceScope({ adapter: "engine", config: DEFAULT_REVIEW_CONFIG }))
+
+        // The same canned model through the paid path's replay: verify confirmed every candidate, so none was dropped
+        // as rejected or unconfirmed, and every placed finding is verified. (Selection merges the review and security
+        // findings on the same line of src/auth/session.ts.)
+        const artifact = yield* ReviewEval.replay({
+          case: replayCase(checked.directory, checked.base, checked.head),
+          model: MODEL,
+          config: { maxCostUsd: DEFAULT_REVIEW_CONFIG.maxCostUsd },
+          posting: ReviewEval.recordingPosting(),
+          check: recordingCheck().check,
+        })
+        expect(artifact.outcome?.specialists.find((entry) => entry.name === "verify")).toEqual({
+          name: "verify",
+          status: "ok",
+          steps: 1,
+        })
+        expect(
+          artifact.outcome?.selection.dropped.filter(
+            (entry) => entry.reason === "rejected-by-verify" || entry.reason === "unconfirmed",
+          ),
+        ).toEqual([])
+        expect(artifact.placed.length).toBeGreaterThan(0)
+        expect(artifact.placed.every((finding) => finding.verified && candidates.includes(finding.id))).toBe(true)
+      }),
+    GIT,
+    TIMEOUT,
+  )
+
+  it.instance(
+    "runs every decision a tight cap refuses, marks the requests it admitted, and still projects every pass",
+    () =>
+      Effect.gen(function* () {
+        const checked = yield* checkout({
+          base: { "src/list.ts": LIST_BASE, "src/auth/session.ts": AUTH_BASE },
+          head: { "src/list.ts": LIST_HEAD, "src/auth/session.ts": AUTH_HEAD },
+          price: PRICE,
+        })
+        const anchors = yield* ReviewSource.prDiff({
+          directory: checked.directory,
+          mergeBase: checked.base,
+          head: checked.head,
+        })
+        yield* checked.llm.respond(projectionReplies({ files: anchors }))
+
+        const record = yield* project(checked, 0.001)
+
+        expect(record.passes.map((pass) => [pass.pass, pass.status]).toSorted()).toEqual([
+          ["review", "ok"],
+          ["security", "ok"],
+          ["verify", "ok"],
+        ])
+        const requests = record.passes.flatMap((pass) => pass.requests)
+        expect(requests).toHaveLength(3)
+        // Every request was admitted only because the projection ran a decision the cap refused.
+        expect(requests.every((request) => request.lifted)).toBe(true)
+        const atAdmission = record.cap.over.filter((decision) => decision.site === "attempt")
+        expect(atAdmission.map((decision) => decision.attempt).toSorted()).toEqual(
+          requests.map((request) => request.seq).toSorted(),
+        )
+        // Each pass was refused before its session too, verify at its pre-check first, and each pass names the first.
+        expect(
+          record.cap.over
+            .filter((decision) => decision.site !== "attempt")
+            .map((decision) => [decision.pass, decision.site])
+            .toSorted(),
+        ).toEqual([
+          ["review", "pass"],
+          ["security", "pass"],
+          ["verify", "pass"],
+          ["verify", "verify"],
+        ])
+        for (const pass of record.passes)
+          expect(pass.lifted).toEqual(record.cap.over.find((decision) => decision.pass === pass.pass))
+        expect(record.cap.maxCostUsd).toBe(0.001)
+        expect(record.egress.outside).toBe(0)
+        // Admission counts prompt tokens with the projection's CHARS_PER_TOKEN, which eval.ts copies from run.ts:
+        // verify's pre-check estimate is the low side of estimateCostUsd over its prompt's characters so divided.
+        const verify = record.passes.find((pass) => pass.pass === "verify")
+        if (!verify) throw new Error("verify was not planned")
+        expect(record.cap.over.find((decision) => decision.site === "verify")?.estimateUsd).toBe(
+          estimateCostUsd({
+            promptTokens: Math.ceil(verify.chars / ReviewEval.CHARS_PER_TOKEN),
+            maxSteps: verify.maxSteps,
+            price: PRICE,
+          }).low,
+        )
+      }),
+    GIT,
+    TIMEOUT,
+  )
+
+  it.instance(
+    "pairs a finalizer's request with its own attempt",
+    () =>
+      Effect.gen(function* () {
+        const checked = yield* checkout({
+          base: { "src/list.ts": LIST_BASE },
+          head: { "src/list.ts": LIST_HEAD },
+          price: PRICE,
+        })
+        const anchors = yield* ReviewSource.prDiff({
+          directory: checked.directory,
+          mergeBase: checked.base,
+          head: checked.head,
+        })
+        // Review's first turn answers in prose, so it is finalized; the canned model answers the finalizer.
+        yield* checked.llm.pushMatch(
+          REVIEW,
+          reply().text("I looked around.").usage({ input: 1_000, output: 10 }).stop(),
+        )
+        yield* checked.llm.respond(projectionReplies({ files: anchors }))
+
+        const record = yield* project(checked, DEFAULT_REVIEW_CONFIG.maxCostUsd)
+
+        const review = record.passes.find((pass) => pass.pass === "review")
+        expect(review?.requests.map((request) => request.phase)).toEqual(["turn", "finalize"])
+        expect(review?.status).toBe("ok")
+        const finalizer = review?.requests[1]
+        expect(finalizer && userTexts(finalizer.body).at(-1)).toBe(buildFinalizePrompt())
+        expect(review?.requests[0]?.body).not.toContain(buildFinalizePrompt())
+        expect([review?.unsent, review?.unadmitted, record.unattributed]).toEqual([0, 0, 0])
+      }),
+    GIT,
+    TIMEOUT,
+  )
+
+  it.instance(
+    "pairs a retried attempt and the failed request before it with their own seqs",
+    () =>
+      Effect.gen(function* () {
+        const checked = yield* checkout({
+          base: { "src/list.ts": LIST_BASE },
+          head: { "src/list.ts": LIST_HEAD },
+          price: PRICE,
+        })
+        const anchors = yield* ReviewSource.prDiff({
+          directory: checked.directory,
+          mergeBase: checked.base,
+          head: checked.head,
+        })
+        // Review's first request fails with a server error, which its session retries; the canned model answers it.
+        yield* checked.llm.pushMatch(REVIEW, httpError(500, { error: { message: "temporary failure" } }))
+        yield* checked.llm.respond(projectionReplies({ files: anchors }))
+
+        const record = yield* project(checked, DEFAULT_REVIEW_CONFIG.maxCostUsd)
+
+        const review = record.passes.find((pass) => pass.pass === "review")
+        if (!review) throw new Error("review was not planned")
+        expect(review.status).toBe("ok")
+        expect(review.requests.map((request) => request.phase)).toEqual(["turn", "turn"])
+        const [failed, retried] = review.requests
+        if (!failed || !retried) throw new Error("review sent fewer than two requests")
+        expect(failed.seq).toBeLessThan(retried.seq)
+        // The failed request's body is recorded as the server received it, in the order the server received them.
+        expect((yield* checked.llm.hits).filter(REVIEW).map((hit) => hit.text)).toEqual([failed.body, retried.body])
+        expect([review.unsent, review.unadmitted, record.unattributed]).toEqual([0, 0, 0])
+        // What projectionProblems (script/vectorscope-eval/replay.ts, which engine tests do not import) reads: every
+        // planned pass finished and sent requests whose bodies it counted, with a dollar estimate, and the egress log
+        // saw connections, none outside.
+        expect(record.passes.map((pass) => pass.pass).toSorted()).toEqual(["review", "verify"])
+        for (const pass of record.passes) {
+          expect([pass.pass, pass.status, pass.unsent, pass.unadmitted]).toEqual([pass.pass, "ok", 0, 0])
+          expect(pass.requests.length).toBeGreaterThan(0)
+          expect(pass.requests.every((request) => request.body !== "" && request.chars === request.body.length)).toBe(
+            true,
+          )
+          expect(pass.usd).toBeDefined()
+        }
+        expect(record.egress.attempts).toBeGreaterThanOrEqual(record.passes.flatMap((pass) => pass.requests).length)
+        expect(record.egress.outside).toBe(0)
+      }),
+    GIT,
+    TIMEOUT,
+  )
+
+  it.instance(
+    "fails a run whose egress log saw none of the requests the fake server received",
+    () =>
+      Effect.gen(function* () {
+        // The strict guard is installed here, so the precondition holds; the log handed in is not its log.
+        expect(EgressGuard.strictInstalled()).toBe(true)
+        const checked = yield* checkout({
+          base: { "src/list.ts": LIST_BASE },
+          head: { "src/list.ts": LIST_HEAD },
+          price: PRICE,
+        })
+        const anchors = yield* ReviewSource.prDiff({
+          directory: checked.directory,
+          mergeBase: checked.base,
+          head: checked.head,
+        })
+        yield* checked.llm.respond(projectionReplies({ files: anchors }))
+        const before = (yield* checked.llm.hits).length
+
+        const error = yield* project(checked, DEFAULT_REVIEW_CONFIG.maxCostUsd, () => []).pipe(Effect.flip)
+
+        const sent = (yield* checked.llm.hits).length - before
+        expect(sent).toBeGreaterThan(0)
+        expect(error.message).toBe(
+          `The egress log saw none of the ${sent} requests the fake server received, so it is not the strict guard's log.`,
+        )
+      }),
+    GIT,
+    TIMEOUT,
+  )
+
+  it.instance(
+    "refuses a Vector route or an unpriced model before any provider boots or any git work",
+    () =>
+      Effect.gen(function* () {
+        const llm = yield* TestLLMServer
+        const unbooted = Provider.Service.of({
+          list: () => Effect.die("booted a provider"),
+          unavailable: () => Effect.die("booted a provider"),
+          getProvider: () => Effect.die("booted a provider"),
+          getModel: () => Effect.die("booted a provider"),
+          getLanguage: () => Effect.die("booted a provider"),
+          line: () => Effect.die("booted a provider"),
+          preconnect: () => Effect.die("booted a provider"),
+          closest: () => Effect.die("booted a provider"),
+          getSmallModel: () => Effect.die("booted a provider"),
+          defaultModel: () => Effect.die("booted a provider"),
+          savedModel: () => Effect.die("booted a provider"),
+          freeSignIn: () => Effect.die("booted a provider"),
+        })
+        // Not a checkout at all: a refusal after any git work would say so instead.
+        const nowhere = replayCase("/nonexistent/vs21b", "a".repeat(40), "b".repeat(40))
+        const refusals = yield* Effect.forEach(
+          [
+            { ...MODEL, providerID: ProviderV2.ID.vector },
+            { ...MODEL, costKind: "plan" as const },
+          ],
+          (model) =>
+            ReviewEval.project({
+              case: nowhere,
+              model,
+              config: { maxCostUsd: 1 },
+              server: llm.url,
+              received: received(llm),
+              egress: guard.attempts,
+            }).pipe(Effect.flip, Effect.provideService(Provider.Service, unbooted)),
+        )
+        expect(refusals.map((error) => error.message)).toEqual([
+          "vector/test-model goes through Vector's own route, which chooses where it sends; a projection needs a model on a server on this computer.",
+          "lmstudio/test-model has no price snapshot, so a projection cannot estimate its dollars.",
+        ])
+        expect(yield* llm.hits).toHaveLength(0)
+      }),
+    TIMEOUT,
+  )
+
+  it.instance(
+    "refuses a provider whose base URL is not this computer, before any request",
+    () =>
+      Effect.gen(function* () {
+        const checked = yield* checkout({
+          base: { "src/list.ts": LIST_BASE },
+          head: { "src/list.ts": LIST_HEAD },
+          price: PRICE,
+          baseURL: "https://api.example.com/v1",
+        })
+        const error = yield* project(checked, 1).pipe(Effect.flip)
+        expect(error.message).toBe(
+          "lmstudio/test-model may send to https://api.example.com/v1, which is not this computer.",
+        )
+        expect(yield* checked.llm.hits).toHaveLength(0)
+      }),
+    GIT,
+    TIMEOUT,
+  )
+
+  test("refuses a run that would fetch catalogs, has no strict guard or fake server here, or a model it cannot place or price", () => {
+    const fine = { modelsFetchDisabled: true, strictGuard: true, server: "http://127.0.0.1:4096/v1", models: [MODEL] }
+    expect(ReviewEval.projectionRefusal(fine)).toBeUndefined()
+    expect(ReviewEval.projectionRefusal({ ...fine, server: "http://[::1]:4096/v1" })).toBeUndefined()
+    expect(ReviewEval.projectionRefusal({ ...fine, modelsFetchDisabled: false })).toContain(
+      "VECTOR_DISABLE_MODELS_FETCH=1",
+    )
+    // Vector Local's guard is installed too, but it is not the strict guard: it may allow the internet and logs nothing.
+    expect(ReviewEval.projectionRefusal({ ...fine, strictGuard: false })).toContain("strict egress guard")
+    for (const server of ["https://api.example.com/v1", "http://192.168.1.10:4096/v1", "http://${HOST}/v1", ""])
+      expect(ReviewEval.projectionRefusal({ ...fine, server })).toContain("is not one")
+    for (const providerID of [ProviderV2.ID.vector, ProviderV2.ID.make(ModelPlans.PROVIDER_ID)])
+      expect(ReviewEval.projectionRefusal({ ...fine, models: [MODEL, { ...MODEL, providerID }] })).toContain(
+        "Vector's own route",
+      )
+    for (const model of [
+      { ...MODEL, costKind: "free" as const },
+      { ...MODEL, costKind: "local" as const },
+      { ...MODEL, price: undefined },
+    ])
+      expect(ReviewEval.projectionRefusal({ ...fine, models: [model] })).toContain("no price snapshot")
+  })
+
+  test("refuses every route that could go anywhere but the fake server or that it cannot answer", () => {
+    const route = {
+      name: "lmstudio/test-model",
+      providerID: "lmstudio",
+      server: "http://127.0.0.1:4096/v1",
+      model: { api: { npm: "@ai-sdk/openai-compatible", url: "" }, cost: { input: 10, output: 10 } },
+      options: { baseURL: "http://127.0.0.1:4096/v1", apiKey: "test-key" },
+      price: PRICE,
+    }
+    expect(ReviewEval.routeRefusal(route)).toBeUndefined()
+    expect(
+      ReviewEval.routeRefusal({
+        ...route,
+        server: "http://[::1]:4096/v1",
+        options: { baseURL: "http://[::1]:4096/v1", preconnect: "http://[::1]:4096" },
+        model: { ...route.model, api: { npm: route.model.api.npm, url: "http://[::1]:4096/v1" } },
+      }),
+    ).toBeUndefined()
+    expect(
+      ReviewEval.routeRefusal({ ...route, model: { ...route.model, api: { npm: "@ai-sdk/openai", url: "" } } }),
+    ).toBeUndefined()
+    // This computer is not enough: a gateway on another port, or under another name, may forward to a paid API.
+    for (const [baseURL, preconnect] of [
+      ["http://127.0.0.1:4097/v1", undefined],
+      ["http://localhost:4096/v1", undefined],
+      ["https://127.0.0.1:4096/v1", undefined],
+      ["http://127.0.0.1:4096/v1", "http://127.0.0.1:11434"],
+    ])
+      expect(
+        ReviewEval.routeRefusal({
+          ...route,
+          options: { ...route.options, baseURL, ...(preconnect ? { preconnect } : {}) },
+        }),
+      ).toBe(
+        `lmstudio/test-model may send to ${preconnect ?? baseURL}, which is not the projection's fake server at http://127.0.0.1:4096/v1.`,
+      )
+    // The catalog's URL is where the SDK sends only when no base URL replaces it, as LM Studio's default port is here.
+    const catalog = { ...route.model, api: { npm: route.model.api.npm, url: "http://127.0.0.1:1234/v1" } }
+    expect(ReviewEval.routeRefusal({ ...route, model: catalog })).toBeUndefined()
+    expect(ReviewEval.routeRefusal({ ...route, model: catalog, options: { apiKey: "test-key" } })).toBe(
+      "lmstudio/test-model may send to http://127.0.0.1:1234/v1, which is not the projection's fake server at http://127.0.0.1:4096/v1.",
+    )
+    expect(ReviewEval.routeRefusal({ ...route, server: "not a url" })).toContain(
+      "which is not the projection's fake server",
+    )
+    // A preconnect alone leaves the SDK to choose where it sends.
+    expect(ReviewEval.routeRefusal({ ...route, options: { preconnect: "http://127.0.0.1:4096" } })).toContain(
+      "names no base URL",
+    )
+    const refused: [string, Parameters<typeof ReviewEval.routeRefusal>[0]][] = [
+      ["not available", { ...route, model: undefined }],
+      ["not available", { ...route, options: undefined }],
+      ["free model", { ...route, model: { ...route.model, freeModel: { source: "openrouter" } } }],
+      ["a fetch of its own", { ...route, options: { ...route.options, fetch: async () => new Response() } }],
+      ["goes to OpenRouter", { ...route, providerID: "openrouter" }],
+      [
+        "goes to OpenRouter",
+        { ...route, model: { ...route.model, api: { npm: "@openrouter/ai-sdk-provider", url: "" } } },
+      ],
+      ["uses @ai-sdk/anthropic", { ...route, model: { ...route.model, api: { npm: "@ai-sdk/anthropic", url: "" } } }],
+      ["names no base URL", { ...route, options: { apiKey: "test-key" } }],
+      ["https://api.example.com/v1", { ...route, options: { baseURL: "https://api.example.com/v1" } }],
+      ["http://192.168.1.10:4096/v1", { ...route, options: { baseURL: "http://192.168.1.10:4096/v1" } }],
+      ["${HOST}", { ...route, options: { baseURL: "http://${HOST}:4096/v1" } }],
+      ["ftp://127.0.0.1/v1", { ...route, options: { baseURL: "ftp://127.0.0.1/v1" } }],
+      [
+        "https://models.example.com",
+        { ...route, model: { ...route.model, api: { npm: route.model.api.npm, url: "https://models.example.com" } } },
+      ],
+      ["https://chatgpt.com", { ...route, options: { ...route.options, preconnect: "https://chatgpt.com" } }],
+      ["not its provider's price", { ...route, price: { input: 1, output: 1 } }],
+      ["not its provider's price", { ...route, price: undefined }],
+      ["not its provider's price", { ...route, model: { ...route.model, cost: { input: 0, output: 0 } } }],
+    ]
+    for (const [reason, input] of refused) expect(ReviewEval.routeRefusal(input)).toContain(reason)
+  })
+})

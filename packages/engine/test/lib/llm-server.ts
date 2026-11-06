@@ -1,6 +1,6 @@
 import { NodeHttpServer, NodeHttpServerRequest } from "@effect/platform-node"
 import * as Http from "node:http"
-import { Deferred, Effect, Layer, Context, Stream } from "effect"
+import { Deferred, Effect, Layer, Context, Option, Schema, Stream } from "effect"
 import * as HttpServer from "effect/unstable/http/HttpServer"
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
 
@@ -16,9 +16,13 @@ type Flow =
   | { type: "tool-args"; text: string }
   | { type: "usage"; usage: Usage }
 
-type Hit = {
+// One request the server received: its parsed body as before, and, for a projection's record (VS-21b), the raw body
+// text exactly as it arrived and its X-Session-Id header.
+export type Hit = {
   url: URL
   body: Record<string, unknown>
+  text: string
+  session?: string
 }
 
 type Match = (hit: Hit) => boolean
@@ -611,10 +615,13 @@ function item(input: Item | Reply) {
   return input instanceof Reply ? input.item() : input
 }
 
-function hit(url: string, body: unknown) {
+function hit(url: string, text: string, session: string | undefined) {
+  const body = Option.getOrUndefined(Schema.decodeUnknownOption(Schema.UnknownFromJsonString)(text))
   return {
     url: new URL(url, "http://localhost"),
     body: body && typeof body === "object" ? (body as Record<string, unknown>) : {},
+    text,
+    ...(session !== undefined ? { session } : {}),
   } satisfies Hit
 }
 
@@ -640,6 +647,11 @@ namespace TestLLMServer {
     readonly hold: (value: string, wait: PromiseLike<unknown>) => Effect.Effect<void>
     /** What every title request is answered with from now on, instead of "E2E Title". */
     readonly title: (value: string) => Effect.Effect<void>
+    /**
+     * What answers every request nothing queued matches from now on, instead of "ok", until reset: a projection's
+     * canned model (VS-21b). Title requests keep their own answer; undefined falls back to "ok".
+     */
+    readonly respond: (answer: (hit: Hit) => Item | Reply | undefined) => Effect.Effect<void>
     readonly reset: Effect.Effect<void>
     readonly hits: Effect.Effect<Hit[]>
     readonly calls: Effect.Effect<number>
@@ -662,6 +674,7 @@ export class TestLLMServer extends Context.Service<TestLLMServer, TestLLMServer.
       let waits: Wait[] = []
       let misses: Hit[] = []
       let titleText = "E2E Title"
+      let answer: ((hit: Hit) => Item | Reply | undefined) | undefined
 
       const queue = (...input: (Item | Reply)[]) => {
         list = [...list, ...input.map((value) => ({ item: item(value) }))]
@@ -688,8 +701,9 @@ export class TestLLMServer extends Context.Service<TestLLMServer, TestLLMServer.
 
       const handle = Effect.fn("TestLLMServer.handle")(function* (mode: "chat" | "responses") {
         const req = yield* HttpServerRequest.HttpServerRequest
-        const body = yield* req.json.pipe(Effect.orElseSucceed(() => ({})))
-        const current = hit(req.originalUrl, body)
+        const text = yield* req.text.pipe(Effect.orElseSucceed(() => ""))
+        const current = hit(req.originalUrl, text, req.headers["x-session-id"])
+        const body = current.body
         if (isTitleRequest(body)) {
           hits = [...hits, current]
           yield* notify()
@@ -697,7 +711,8 @@ export class TestLLMServer extends Context.Service<TestLLMServer, TestLLMServer.
           if (mode === "responses") return send(responses(auto, modelFrom(body)))
           return send(auto)
         }
-        const next = pull(current)
+        const answered = pull(current) ?? answer?.(current)
+        const next = answered === undefined ? undefined : item(answered)
         if (!next) {
           hits = [...hits, current]
           yield* notify()
@@ -786,12 +801,16 @@ export class TestLLMServer extends Context.Service<TestLLMServer, TestLLMServer.
         title: Effect.fn("TestLLMServer.title")(function* (value: string) {
           titleText = value
         }),
+        respond: Effect.fn("TestLLMServer.respond")(function* (value: (hit: Hit) => Item | Reply | undefined) {
+          answer = value
+        }),
         reset: Effect.sync(() => {
           hits = []
           list = []
           waits = []
           misses = []
           titleText = "E2E Title"
+          answer = undefined
         }),
         hits: Effect.sync(() => [...hits]),
         calls: Effect.sync(() => hits.length),

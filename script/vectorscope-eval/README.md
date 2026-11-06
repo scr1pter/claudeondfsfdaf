@@ -591,6 +591,113 @@ word, so only the registry keeps model ids out.
   the certificate. `replayVariant` names a record that is not an object the
   frozen pipeline, as VS-06's reader did.
 
+### Projection (VS-21b)
+
+A projection runs a case's replay against a fake model server on this computer,
+so every pass runs and its real wire body is recorded with its estimated tokens
+and dollars, at no cost. `ReviewEval.project` in
+`packages/engine/src/review/eval.ts` is the adapter. Nothing calls it yet: the
+entry point and `ci.ts PIPELINE=replay` are VS-21c.
+
+- **What it lifts.** `Review.run`'s optional `projection` hook is asked about
+  each decision the dollar cap would refuse, at four places: before a pass's
+  session (`pass`), at a provider attempt (`attempt`), at the finalizer's
+  reservation (`finalizer`) and at verify's pre-check (`verify`). A projection
+  runs them all, and their reservations count like any other. It is never asked
+  about a decision the cap admits, a step or time stop, a verify pass skipped
+  for time, or an uncapped review, and a hook that declines or throws refuses as
+  the cap would. Step and time limits, retries and the reservation bookkeeping
+  stay the review's. Only `ReviewEval.project` sets the hook: `ReplayInput` has
+  no field for it, so the paid replay cannot lift its cap.
+- **The fake model.** The engine's `TestLLMServer`
+  (`packages/engine/test/lib/llm-server.ts`) records each request's raw body
+  and its `X-Session-Id` header, and `respond` answers whatever nothing queued
+  matches. `packages/engine/test/fixture/projection.ts` is the canned model:
+  one blocking finding on the first changed line of each file, a security
+  finding on the first sensitive file, and every candidate confirmed, so
+  review, security and verify all run and verify's prompt carries every
+  candidate. A finalizer gets its pass's answer. Its usage is each body's
+  characters divided by 3.5, as admission counts them. Both files are test
+  code: VS-21c's entry point moves them out of the test tree first, or records
+  in the deviation log that it imports them on purpose.
+- **The record** (`ProjectionRecord`, `kind: "projection"`, so `report.ts` and
+  `certify.ts` never read it as a replay) has the replay's source, runtime and
+  isolation, settings, rules and context digests, variant, scope, models with
+  their price snapshots and files, and:
+  - per planned pass, in order: its model, `maxSteps`, status, prompt digest,
+    every request its sessions sent (each paired with the admitted attempt it
+    was sent for: `seq`, `phase`, admission's `estimateUsd`, the body, its
+    digest, `chars`, `tokens` as `ceil(chars / 3.5)` and `stepUsd` from
+    `nextStepCostUsd`), `promptTokens` (its first request's tokens), `usd`
+    from `estimateCostUsd({ promptTokens, maxSteps, price })`, and `unsent`
+    and `unadmitted` for attempts and requests left unpaired;
+  - `cap.over`: every decision the cap refused, with the seq of the attempt one
+    at admission let through. A request admitted that way is `lifted`, and each
+    pass names its first lifted decision. From the first one on, the record
+    describes an uncapped run: the upper side of the cost estimate, not the
+    capped paid run, which would have stopped that pass there (review and
+    security run in parallel, so another pass then gets more room, or verify
+    fewer candidates);
+  - `unattributed`: requests that name no session an attempt names;
+  - `egress`: the connection attempts the strict egress guard logged from the
+    start of `project` (providers booting included), and how many were refused
+    or went to a host that is not this computer.
+- **Preconditions,** refused before any provider boots: the run needs
+  `VECTOR_DISABLE_MODELS_FETCH=1` in the environment before any engine module
+  loads (it is read at load, and it gates `model-catalog.ts`, `model-plans.ts`,
+  `free-models.ts` and `provider-remote-policy.ts`); the strict egress guard
+  installed (`EgressGuard.strictInstalled()`: `EgressGuard.installStrict` in
+  VS-21c's entry point, whose attempt log the caller passes as `egress`; Vector
+  Local's guard is installed in the CLI too, but follows the user's policy and
+  logs nothing while Vector Local is off, so it does not count); the fake
+  server's base URL (`server`) on this computer; and priced models with a
+  price snapshot, neither on a Vector route (`vector`, Codium plans). Then,
+  from the booted provider, it refuses a free model, a provider with its own
+  `fetch` (a plugin or sign-in), anything bound for OpenRouter, an SDK other
+  than `@ai-sdk/openai-compatible` and `@ai-sdk/openai`, no base URL, a base
+  URL, catalog API URL or `preconnect` that is not a loopback http(s) URL (a
+  `${VAR}` left in one included), a destination or `preconnect` whose origin
+  is not the fake server's (a gateway on this computer may forward to a paid
+  API; the destination is the configured base URL, else the catalog's), and a
+  price snapshot that is not the provider's own rates. After the run, it fails
+  if the fake server received requests and the egress log saw none of them:
+  that log is not the strict guard's. A dummy key goes in the caller's
+  provider config. It reads no key.
+- **Fidelity limits.**
+  - Transforms keyed on the destination do not run at loopback: OpenRouter's
+    `denyDataCollection` (`isOpenRouterURL`) and the `api.openai.com` prompt
+    cache marker.
+  - Only the chat completions and responses protocols are covered, not
+    Anthropic's messages API.
+  - Each pass takes one step, so growth over several steps shows only in
+    `usd`'s range.
+  - Tokens are characters over 3.5 of the JSON body, whose escaping inflates
+    them; there is no tokenizer and no `count_tokens`.
+  - The lens, guardrail and repro passes do not exist yet; the record is per
+    pass name, so they appear when VS-27, VS-28 and VS-30 add them.
+- **Records are sealed eval outputs,** and hold more than replays do. A
+  replay's artifact names prompts only by digest and holds redacted posts; a
+  projection record holds every raw request body, unredacted: whole prompts,
+  the case's code and the pull request's untrusted text. Records are handled
+  at least as strictly as checkouts, are never committed (I-13), and leave a
+  run only as sealed artifacts (VS-21c).
+- `projectionProblems(record)` in `replay.ts` reads a record as untrusted JSON
+  and lists what keeps it from showing every pass's body: files that are not a
+  record, a planned pass that sent nothing (a verify skipped for budget or time
+  included) or did not finish, a request without a body or whose `chars` is
+  not its length, a pass without `usd`, unpaired attempts or requests,
+  unattributed requests or no count of them, no egress record, an egress log
+  that saw none of the passes' requests (no strict guard recorded the run, so
+  its zero outside measured nothing), any connection outside, no pass for a
+  case with reviewed files, and its variant record's `variantProblems`.
+  `cap.over` is never a problem.
+
+```
+cd packages/engine && bun test --timeout 30000 test/review/eval.test.ts
+cd packages/engine && bun test --timeout 30000 test/review/run.test.ts
+cd script/vectorscope-eval && bun test replay.test.ts
+```
+
 ## Causal judging and the release gate
 
 The report Phase 0 decides on. A saved run (a `run.ts --out` report or a
