@@ -3,7 +3,15 @@ import { createHash } from "node:crypto"
 import { existsSync, statSync } from "node:fs"
 import { join, resolve } from "node:path"
 import { parseArgs } from "node:util"
-import type { AttemptRecord, ModelRecord, ReplayCase } from "../../packages/engine/src/review/eval"
+import { VARIANT_NAME } from "../../packages/core/src/review/eval"
+import type { ReviewConfig } from "../../packages/core/src/review/types"
+import type {
+  AttemptRecord,
+  ModelRecord,
+  ReplayCase,
+  ReplayVariant,
+  VariantRecord,
+} from "../../packages/engine/src/review/eval"
 import {
   defaultLimits,
   limitProblems,
@@ -89,22 +97,177 @@ function planned(item: Case, mirror: string | undefined): PlannedReplay {
   }
 }
 
-// A pipeline variant a replay can run (VS-06): the verify policy, which the engine replay takes in its config and
-// the desktop driver as the case's review.json would carry it.
-export type ReplayVariant = { verifyPolicy?: "legacy" | "shared" }
+// The pipeline variants a replay can be asked for (VS-21a), by suffix: "engine:shared-verify" is the "shared-verify"
+// entry on the engine runner, and the runner's name alone ("engine", "desktop") is the frozen pipeline. Each entry says
+// what it sets and, per runner, whether its half is built: `from` names the package whose keys made it change what that
+// runner does, `pending` the package that will. A pending half is refused (resolveVariant), because a replay under its
+// name would run the frozen pipeline. A half flips to built only in the package that makes its keys change what the
+// runner does, with that package's D3 parity test: a ReviewConfig key or a core module landing alone never flips it.
+// Names never hold a model id or "=" (VARIANT_NAME in core review/eval.ts). Every older name is one of these:
+// "engine", "engine:shared-verify", "desktop", "desktop:shared-verify", and VS-06's { verifyPolicy } records, which
+// replayVariant reads; so there are no aliases.
+export type VariantHalf = { from: string } | { pending: string }
+export interface VariantEntry {
+  planned: string // what the variant sets, in words, so a pending name says what it will be
+  keys?: Partial<ReviewConfig> // what it sets over the base's review.json, once a half is built
+  models?: VariantRecord["models"] // what it needs of the replay's models instead of, or with, keys
+  engine: VariantHalf
+  desktop: VariantHalf
+}
 
-// The name the report gives a replay's pipeline: its runner, followed by the variant when the eval asked for one other
-// than the frozen pipeline's, so "engine" is the frozen engine pipeline and "engine:shared-verify" the shared verify
-// policy on it. It has no "=", which separates a variant from its model in report.ts --candidate and --baseline.
-export function replayVariant(adapter: string, variant?: ReplayVariant) {
-  return variant?.verifyPolicy && variant.verifyPolicy !== "legacy"
-    ? `${adapter}:${variant.verifyPolicy}-verify`
-    : adapter
+export const VARIANTS = {
+  "shared-verify": {
+    planned: 'verifyPolicy: "shared"',
+    keys: { verifyPolicy: "shared" },
+    engine: { from: "VS-06" },
+    desktop: { from: "VS-06" },
+  },
+  "privacy-zdr": {
+    planned: 'privacy: "zdr", enforced inside Review.run (VS-23b) and at the transport (VS-23c)',
+    engine: { pending: "VS-23c" },
+    desktop: { pending: "VS-23d" },
+  },
+  "trivial-skip": {
+    planned: 'trivial: "skip"',
+    engine: { pending: "VS-24 wiring" },
+    desktop: { pending: "VS-24 wiring" },
+  },
+  "impact-graph": {
+    planned: 'impact: "graph"',
+    engine: { pending: "VS-25b wiring" },
+    desktop: { pending: "VS-25's desktop half, after VS-10" },
+  },
+  "cards-brain": {
+    planned: 'cards: "brain", in a local-only eval with a Brain seeded from the base commit',
+    engine: { pending: "VS-26" },
+    desktop: { pending: "VS-26's desktop half, after VS-10" },
+  },
+  "guardrail-strict": {
+    planned: 'guardrail: "strict"',
+    engine: { pending: "VS-27c" },
+    desktop: { pending: "VS-27c" },
+  },
+  "depth-auto": {
+    planned: 'depth: "auto"',
+    engine: { pending: "VS-28 wiring" },
+    desktop: { pending: "VS-28's desktop half, after VS-10" },
+  },
+  // Lenses run only on the high band under depth "auto", so this variant sets both, and its ablation baseline is
+  // engine:depth-auto. VS-28 may revise it before it flips.
+  "lenses-high": {
+    planned: 'depth: "auto" and lenses: "high"',
+    engine: { pending: "VS-28 wiring" },
+    desktop: { pending: "VS-28's desktop half, after VS-10" },
+  },
+  // No key: the existing triageModel/model pair, equal tier from two families. The family check is codium's
+  // (labOf, checkedLabs), never built here.
+  "cross-family": {
+    planned: "a triage model other than the review model, at equal tier from another family; no new key",
+    models: "triage-pair",
+    engine: { pending: "VS-29a" },
+    desktop: { pending: "VS-29a" },
+  },
+  precise: {
+    planned: 'mode: "precise", which never sets privacy',
+    engine: { pending: "VS-31" },
+    desktop: { pending: "VS-31" },
+  },
+} as const satisfies Record<string, VariantEntry>
+
+export type VariantResolution =
+  | {
+      ok: true
+      name: string
+      adapter: Adapter
+      keys: Partial<ReviewConfig>
+      models?: VariantRecord["models"]
+      frozen: boolean // the runner's name alone: no variant
+    }
+  | { ok: false; reason: "malformed" | "unknown" | "pending"; detail: string; package?: string }
+
+// A variant name as the eval takes it, in replay admission and report.ts --candidate and --baseline.
+export function resolveVariant(name: string): VariantResolution {
+  if (!VARIANT_NAME.test(name))
+    return {
+      ok: false,
+      reason: "malformed",
+      detail: `"${name}" is not a variant name: a runner, then optionally ":" and a registered suffix, such as engine:shared-verify.`,
+    }
+  const [adapter = "", suffix] = name.split(":")
+  if (!Object.hasOwn(ADAPTERS, adapter))
+    return { ok: false, reason: "unknown", detail: `${name} names no runner (${Object.keys(ADAPTERS).join(", ")}).` }
+  const runner = adapter as Adapter
+  if (suffix === undefined) return { ok: true, name, adapter: runner, keys: {}, frozen: true }
+  if (!Object.hasOwn(VARIANTS, suffix))
+    return {
+      ok: false,
+      reason: "unknown",
+      detail: `${name} is not a registered variant (${variantNames(runner).join(", ")}).`,
+    }
+  const entry: VariantEntry = VARIANTS[suffix as keyof typeof VARIANTS]
+  const half = entry[runner]
+  if ("pending" in half)
+    return {
+      ok: false,
+      reason: "pending",
+      package: half.pending,
+      detail: `${name} is registered for ${half.pending}, which has not landed (${entry.planned}); until it does, a replay under this name would run the frozen pipeline, so it is refused.`,
+    }
+  return {
+    ok: true,
+    name,
+    adapter: runner,
+    keys: { ...entry.keys },
+    ...(entry.models ? { models: entry.models } : {}),
+    frozen: false,
+  }
+}
+
+// Every name the registry gives a runner, the frozen pipeline first, built or pending.
+export function variantNames(adapter: Adapter) {
+  return [adapter, ...Object.keys(VARIANTS).map((suffix) => `${adapter}:${suffix}`)]
+}
+
+// The name the report gives a replay's pipeline: its runner alone for the frozen pipeline, or the variant's registry
+// name. A record written before VS-21a holds VS-06's verify policy, which names "engine:shared-verify" (for "shared")
+// or the frozen pipeline (for "legacy"). An artifact is untrusted JSON: a record that is not an object, or a name that
+// is not a string, names the frozen pipeline, as VS-06's reader took it, and variantProblems lists it.
+export function replayVariant(adapter: string, record?: ReplayVariant) {
+  if (typeof record !== "object" || record === null) return adapter
+  if ("name" in record) return typeof record.name === "string" ? record.name : adapter
+  return record.verifyPolicy && record.verifyPolicy !== "legacy" ? `${adapter}:${record.verifyPolicy}-verify` : adapter
+}
+
+// Why an artifact's variant record does not match the registry, if it does not: a record that is not an object, a name
+// that is not a built variant of its own runner, or keys or models other than the registry's. A record written before
+// VS-21a has none.
+export function variantProblems(adapter: string, record?: ReplayVariant): string[] {
+  if (record === undefined) return []
+  if (typeof record !== "object" || record === null) return ["its variant record is not an object"]
+  if (!("name" in record)) return []
+  if (typeof record.name !== "string") return ["its variant record's name is not a string"]
+  const resolved = resolveVariant(record.name)
+  if (!resolved.ok) return [resolved.detail]
+  if (resolved.adapter !== adapter) return [`its variant ${record.name} is another runner's, not ${adapter}'s`]
+  if (resolved.frozen) return [`its variant record names the frozen pipeline, ${record.name}, which has none`]
+  if (sortedJson(record.keys) !== sortedJson(resolved.keys) || record.models !== resolved.models)
+    return [
+      `its variant ${record.name} set ${sortedJson({ keys: record.keys, models: record.models })}, not the registry's ${sortedJson({ keys: resolved.keys, models: resolved.models })}`,
+    ]
+  return []
 }
 
 // The runner a replayVariant name runs on.
 export function variantAdapter(name: string) {
   return name.split(":")[0] ?? name
+}
+
+function sortedJson(value: object) {
+  return JSON.stringify(value, (_key, entry: unknown) =>
+    entry && typeof entry === "object" && !Array.isArray(entry)
+      ? Object.fromEntries(Object.entries(entry).toSorted(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
+      : entry,
+  )
 }
 
 // A replay's case in the eval ledger: its pipeline variant, its models, the case and the repetition. admitReplay admits
@@ -118,31 +281,41 @@ export function replayCaseKey(input: { variant: string; models: readonly string[
 // against the review's maxCostUsd, as long as its models are priced. So the eval ledger reserves the case's whole bound
 // before a replay starts and hands Review.run that bound as its cap: every attempt is admitted against money the
 // ledger has set aside. A model without a price cannot be bounded, so it is refused and the ledger stops admitting.
-// The engine replay's config carries the variant too, so the artifact names the variant the replay was admitted for.
+// The variant is a registry name (resolveVariant): one that is not built for the engine is refused before the ledger
+// sees it, so it writes no entry. The admission hands ReviewEval.replay the variant's record, so the artifact names
+// the variant the replay was admitted for. (No built variant has a model requirement yet; VS-29a, which builds the
+// first, checks the pair here too. ReviewEval.replay already refuses a triage-pair variant without one.)
 export function admitReplay(
   ledger: Ledger,
   input: {
     id: string
     repetition?: number
+    // The review model first, then the triage model when there is one.
     models: readonly Pick<ModelRecord, "id" | "costKind" | "price">[]
-    variant?: ReplayVariant
+    variant?: string // a registry name, such as "engine:shared-verify"; absent or "engine" for the frozen pipeline
   },
 ):
   | {
       admitted: true
-      // The case's cap and the variant, applied over the base's review.json: ReviewEval.replay's config.
-      config: { maxCostUsd: number } & ReplayVariant
+      // The case's cap: ReviewEval.replay's config.
+      config: { maxCostUsd: number }
+      // The variant's record: ReviewEval.replay's variant. Absent for the frozen pipeline.
+      variant?: Omit<VariantRecord, "applied">
       ticket: Ticket
       // Settles the case from its artifact's attempts; with no artifact (the replay failed), the whole bound is kept.
       settle(artifact?: { attempts: readonly ReplayAttempt[] }): Settlement
     }
-  | { admitted: false; reason: Refusal; detail: string } {
+  | { admitted: false; reason: Refusal | "variant"; detail: string } {
+  const resolved = resolveVariant(input.variant ?? "engine")
+  if (!resolved.ok) return { admitted: false, reason: "variant", detail: resolved.detail }
+  if (resolved.adapter !== "engine")
+    return { admitted: false, reason: "variant", detail: `admitReplay admits engine replays, not ${resolved.name}.` }
+  const models = input.models.map((item) => item.id)
   const priced =
     input.models.length > 0 && input.models.every((model) => model.costKind === "priced" && model.price !== undefined)
-  const models = input.models.map((item) => item.id)
   const admission = ledger.admit({
     case: replayCaseKey({
-      variant: replayVariant("engine", input.variant),
+      variant: resolved.name,
       models,
       id: input.id,
       ...(input.repetition !== undefined ? { repetition: input.repetition } : {}),
@@ -156,10 +329,16 @@ export function admitReplay(
   const ticket = admission.ticket
   return {
     admitted: true,
-    config: {
-      maxCostUsd: ledger.limits.caseUsd,
-      ...(input.variant?.verifyPolicy ? { verifyPolicy: input.variant.verifyPolicy } : {}),
-    },
+    config: { maxCostUsd: ledger.limits.caseUsd },
+    ...(resolved.frozen
+      ? {}
+      : {
+          variant: {
+            name: resolved.name,
+            keys: resolved.keys,
+            ...(resolved.models ? { models: resolved.models } : {}),
+          },
+        }),
     ticket,
     settle: (artifact) => (artifact ? ticket.settle(replayCharge(artifact.attempts)) : ticket.settle()),
   }

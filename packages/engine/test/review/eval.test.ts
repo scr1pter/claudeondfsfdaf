@@ -1,5 +1,5 @@
 import { $ } from "bun"
-import { describe, expect } from "bun:test"
+import { describe, expect, test } from "bun:test"
 import fs from "fs/promises"
 import path from "path"
 import { Effect, Layer } from "effect"
@@ -12,7 +12,13 @@ import { Ripgrep } from "@vectordevai/core/ripgrep"
 import { ProviderV2 } from "@vectordevai/core/provider"
 import { ModelV2 } from "@vectordevai/core/model"
 import { parseUnifiedDiff } from "@vectordevai/core/review/diff"
-import { DEFAULT_REVIEW_CONFIG, type ModelFinding, type ReviewOutcome } from "@vectordevai/core/review/types"
+import { buildReviewPrompt } from "@vectordevai/core/review/prompt"
+import {
+  DEFAULT_REVIEW_CONFIG,
+  type ModelFinding,
+  type ReviewConfig,
+  type ReviewOutcome,
+} from "@vectordevai/core/review/types"
 import { evidenceScope } from "@vectordevai/core/review/model-evidence"
 import { SpendGuard } from "@vectordevai/core/spend-guard"
 import { EventV2Bridge } from "@/event-v2-bridge"
@@ -48,7 +54,7 @@ import { ToolRegistry } from "@/tool/registry"
 import { Truncate } from "@/tool/truncate"
 import { Format } from "../../src/format"
 import { RuntimeFlags } from "@/effect/runtime-flags"
-import { ReviewEval, type PostingCheck, type ReplayCase } from "../../src/review/eval"
+import { ReviewEval, type PostingCheck, type ReplayCase, type ReplayInput } from "../../src/review/eval"
 import { Review, type Observation } from "../../src/review/run"
 import { ReviewSource } from "../../src/review/source"
 import { TestInstance, trustWorkspace } from "../fixture/fixture"
@@ -344,6 +350,14 @@ const replayCase = (
   baseRef: "main",
   pr: { number: 7, title: "Rewrite last()", body: "Simplifies last().", author: "alice" },
   ...overrides,
+})
+
+// The registry's record of engine:shared-verify (script/vectorscope-eval/replay.ts), as admitReplay hands it out.
+const SHARED = { name: "engine:shared-verify", keys: { verifyPolicy: "shared" as const } }
+
+// A fake reply's wait of `ms` after its request arrives: a thenable starts its timer only when it is awaited.
+const held = (ms: number): PromiseLike<void> => ({
+  then: (resolve, reject) => new Promise<void>((done) => setTimeout(done, ms)).then(resolve, reject),
 })
 
 const byPath = <T extends { path: string }>(items: readonly T[]) =>
@@ -807,24 +821,25 @@ describe("ReviewEval.replay", () => {
               head: { "src/list.ts": LIST_HEAD },
             })
             yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report()))
-            const replay = (config: Partial<typeof DEFAULT_REVIEW_CONFIG>) =>
+            const replay = (variant?: ReplayInput["variant"]) =>
               ReviewEval.replay({
                 case: replayCase(directory, base, head),
                 model: MODEL,
-                config: { maxCostUsd: 2, ...config },
+                config: { maxCostUsd: 2 },
+                ...(variant ? { variant } : {}),
                 posting: ReviewEval.recordingPosting(),
                 check: recordingCheck().check,
               }).pipe(Effect.map((artifact) => ({ ...artifact.config.value, variant: artifact.variant })))
-            const shared = yield* replay({ verifyPolicy: "shared" })
+            const shared = yield* replay(SHARED)
             yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report()))
-            const legacy = yield* replay({})
+            const legacy = yield* replay()
             return { shared, legacy }
           })
         const plain = yield* replayed()
         expect(plain.shared).toMatchObject({ verifyPolicy: "shared", verify: "all" })
         expect(plain.legacy).toMatchObject({ verifyPolicy: "legacy", verify: "blocking" })
         // The artifact names the variant the eval asked for, so the report keeps its runs apart from the frozen pipeline's.
-        expect(plain.shared.variant).toEqual({ verifyPolicy: "shared" })
+        expect(plain.shared.variant).toEqual(SHARED)
         expect(plain.legacy.variant).toBeUndefined()
         const explicit = yield* replayed({ verify: "blocking" })
         expect(explicit.shared).toMatchObject({ verifyPolicy: "shared", verify: "blocking" })
@@ -861,6 +876,212 @@ describe("ReviewEval.replay", () => {
     TIMEOUT,
   )
 
+  // VS-21a: a variant arrives only as `variant`, and one that would run the frozen pipeline, or anything but itself,
+  // under its name is refused. The registry's pending names are refused before they get here; this replay cannot see
+  // the registry, so it refuses what it can tell: no key, a key it does not apply, or a model requirement left unmet.
+  it.instance(
+    "refuses a variant it cannot apply, and a variant's key in config, before any model call",
+    () =>
+      Effect.gen(function* () {
+        const { directory, llm, base, head } = yield* checkout({
+          base: { "src/list.ts": LIST_BASE },
+          head: { "src/list.ts": LIST_HEAD },
+        })
+        // Typed as an untyped caller's settings would be: ReplayInput's own config type leaves a variant's keys out.
+        const refused = (input: Pick<ReplayInput, "variant" | "triage"> & { config?: Partial<ReviewConfig> }) =>
+          ReviewEval.replay({
+            case: replayCase(directory, base, head),
+            model: MODEL,
+            config: { maxCostUsd: 2, ...input.config },
+            ...(input.variant ? { variant: input.variant } : {}),
+            ...(input.triage ? { triage: input.triage } : {}),
+            posting: ReviewEval.recordingPosting(),
+            check: recordingCheck().check,
+          }).pipe(
+            Effect.flip,
+            Effect.map((error) => error.message),
+          )
+
+        // @ts-expect-error A variant's key is never the eval's own setting, so a typed caller cannot put it in config.
+        const typed: ReplayInput["config"] = { verifyPolicy: "shared" }
+        expect(typed).toBeDefined()
+        expect(yield* refused({ config: { verifyPolicy: "shared" } })).toContain(
+          "config sets verifyPolicy, a pipeline variant's setting: pass the variant in `variant`",
+        )
+        // A pending name with nothing to set would be the frozen pipeline.
+        expect(yield* refused({ variant: { name: "engine:trivial-skip", keys: {} } })).toContain(
+          "sets no key and no model requirement, so it would run the frozen pipeline under its name",
+        )
+        // Keys this replay does not apply as a variant's, the eval's own limits among them, or a key with no value.
+        for (const keys of [{ verify: "all" as const }, { maxCostUsd: 5 }, { verifyPolicy: undefined }])
+          expect(yield* refused({ variant: { name: "engine:shared-verify", keys } })).toContain(
+            `sets ${Object.keys(keys)[0]}, which this replay does not apply`,
+          )
+        // A name that is not an engine variant's.
+        for (const name of ["desktop:shared-verify", "engine", "engine:shared-verify=lmstudio/test-model", "Engine:x"])
+          expect(yield* refused({ variant: { ...SHARED, name } })).toContain(
+            "is named engine:<name> from the eval registry",
+          )
+        // A variant made by its models needs a triage model other than the review model.
+        const pair = { name: "engine:cross-family", keys: {}, models: "triage-pair" as const }
+        for (const triage of [undefined, MODEL])
+          expect(yield* refused({ variant: pair, ...(triage ? { triage } : {}) })).toContain(
+            "needs a triage model other than the review model",
+          )
+        expect(yield* llm.hits).toHaveLength(0)
+      }),
+    GIT,
+    TIMEOUT,
+  )
+
+  it.instance(
+    "records the code locations it quoted, and each pass's wall time and cache use",
+    () =>
+      Effect.gen(function* () {
+        // The change declares tallyItems, which a new file imports and calls: two related-code call sites.
+        const tally = "export function tallyItems(items: number[]) {\n  return items.length\n}\n"
+        const { directory, llm, base, head } = yield* checkout({
+          base: { "src/list.ts": LIST_BASE },
+          head: {
+            "src/list.ts": LIST_BASE + tally,
+            "src/use.ts": 'import { tallyItems } from "./list"\nexport const count = tallyItems([1, 2])\n',
+          },
+          price: PRICE,
+        })
+        yield* llm.pushMatch(
+          REVIEW,
+          reply().wait(held(150)).tool("StructuredOutput", report()).usage({ input: 1_000, output: 10, cached: 400 }),
+        )
+
+        const artifact = yield* ReviewEval.replay({
+          case: replayCase(directory, base, head),
+          model: MODEL,
+          config: { maxCostUsd: 2, verify: "off" },
+          posting: ReviewEval.recordingPosting(),
+          check: recordingCheck().check,
+        })
+
+        expect(artifact.context.related).toBe(1)
+        expect(artifact.context.locations).toEqual(["src/use.ts:1", "src/use.ts:2"])
+        // Each location is in the prompt, as the related-code block quotes it.
+        const text = lastUserText((yield* llm.hits).find(REVIEW)!.body)
+        for (const location of artifact.context.locations ?? []) expect(text).toContain(`${location}: `)
+        expect(artifact.passes).toHaveLength(1)
+        const pass = artifact.passes[0]
+        expect(pass).toMatchObject({ pass: "review", startMs: 0, cacheRead: 400, cacheWrite: 0 })
+        expect(pass?.ms).toBeGreaterThanOrEqual(150)
+        // The outcome's pass of the same name, matched by name and not by position, counted the same cache reads.
+        expect(artifact.outcome?.passes?.find((entry) => entry.name === pass?.pass)?.cacheRead).toBe(400)
+        // Typed for VS-25b and VS-24, and absent until they fill them.
+        expect(artifact.tier1).toBeUndefined()
+        expect(artifact.shrink).toBeUndefined()
+      }),
+    GIT,
+    TIMEOUT,
+  )
+
+  it.instance(
+    "records each pass's timing and cache use from its own session, by name, and none for a verify pass it skipped",
+    () =>
+      Effect.gen(function* () {
+        const { directory, llm, base, head } = yield* checkout({
+          base: { "src/list.ts": LIST_BASE },
+          head: { "src/list.ts": LIST_HEAD },
+          price: PRICE,
+        })
+        const anchors = yield* ReviewSource.prDiff({ directory, mergeBase: base, head })
+        const [bugID] = Review.normalizeFindings([listBug], "review", anchors).map((item) => item.id)
+        // The review's reply waits 150 ms, so the verify pass's session starts at least that long after the review's.
+        yield* llm.pushMatch(
+          REVIEW,
+          reply()
+            .wait(held(150))
+            .tool("StructuredOutput", report([listBug]))
+            .usage({ input: 1_000, output: 10, cached: 400 }),
+        )
+        yield* llm.pushMatch(
+          VERIFY,
+          reply()
+            .tool("StructuredOutput", { results: [{ id: bugID, verdict: "confirmed", reason: "Reproduced." }] })
+            .usage({ input: 2_000, output: 20, cached: 1_500 }),
+        )
+        const replay = (maxCostUsd: number) =>
+          ReviewEval.replay({
+            case: replayCase(directory, base, head),
+            model: MODEL,
+            config: { maxCostUsd },
+            posting: ReviewEval.recordingPosting(),
+            check: recordingCheck().check,
+          })
+
+        const both = yield* replay(2)
+        expect(both.outcome?.specialists.map((entry) => [entry.name, entry.status])).toEqual([
+          ["review", "ok"],
+          ["verify", "ok"],
+        ])
+        expect(both.passes.map((entry) => [entry.pass, entry.startMs === 0, entry.cacheRead])).toEqual([
+          ["review", true, 400],
+          ["verify", false, 1_500],
+        ])
+        expect(both.passes[1]?.startMs).toBeGreaterThanOrEqual(150)
+        // Each pass's cache reads are the outcome's pass of the same name's.
+        for (const entry of both.passes)
+          expect(entry.cacheRead).toBe(both.outcome?.passes?.find((pass) => pass.name === entry.pass)?.cacheRead)
+
+        // Under a cap the review fits but the double-check does not, verify is planned and skipped before any session:
+        // its entry has its prompt and none of the four.
+        yield* llm.pushMatch(
+          REVIEW,
+          reply()
+            .tool("StructuredOutput", report([listBug]))
+            .usage({ input: 1_000, output: 10 }),
+        )
+        const capped = yield* replay(0.2)
+        expect(capped.outcome?.specialists.at(-1)).toEqual({
+          name: "verify",
+          status: "skipped",
+          steps: 0,
+          detail: "budget",
+        })
+        expect(capped.passes.map((entry) => entry.pass)).toEqual(["review", "verify"])
+        expect(capped.passes[0]).toMatchObject({ startMs: 0, cacheRead: 0 })
+        const skipped = capped.passes[1]
+        expect(skipped?.chars).toBeGreaterThan(0)
+        for (const key of ["startMs", "ms", "cacheRead", "cacheWrite"]) expect(skipped).not.toHaveProperty(key)
+        expect((yield* llm.hits).filter(VERIFY)).toHaveLength(1)
+      }),
+    GIT,
+    TIMEOUT,
+  )
+
+  test("lists as context only the related code the prompt quotes, past both of its caps", () => {
+    // Twelve symbols with sixteen call sites each, after one with none: more than the prompt quotes either way.
+    const related = [
+      { symbol: "unused", path: "src/unused.ts", hits: [] },
+      ...Array.from({ length: 12 }, (_, symbol) => ({
+        symbol: `symbol${symbol}`,
+        path: `src/symbol${symbol}.ts`,
+        hits: Array.from({ length: 16 }, (_, hit) => ({
+          path: `src/caller${symbol}.ts`,
+          line: hit + 1,
+          text: `symbol${symbol}()`,
+        })),
+      })),
+    ]
+    const prompt = buildReviewPrompt({
+      mode: "full",
+      trust: "trusted",
+      base: "a".repeat(40),
+      head: "b".repeat(40),
+      diff: "",
+      maxComments: 10,
+      related,
+    })
+    const quoted = [...prompt.matchAll(/^(src\/caller\d+\.ts:\d+): /gm)].map((match) => match[1])
+    expect(quoted).toHaveLength(10 * 15)
+    expect(ReviewEval.quotedLocations(related)).toEqual(quoted)
+  })
+
   it.instance(
     "posts the nothing-to-review note without asking a model when only ignored files changed",
     () =>
@@ -882,9 +1103,21 @@ describe("ReviewEval.replay", () => {
         expect(artifact.outcome).toBeUndefined()
         expect(artifact.files).toEqual({ reviewed: [], skipped: [{ path: "bun.lock", reason: "lockfile" }] })
         expect(artifact.attempts).toEqual([])
+        expect(artifact.context.locations).toEqual([])
         expect(yield* llm.hits).toHaveLength(0)
         const note = posting.writes[0]
         expect(note?.write === "createIssueComment" ? note.body : "").toContain("Nothing to review")
+        // A variant's replay that reviews nothing still names its variant.
+        const named = yield* ReviewEval.replay({
+          case: replayCase(directory, base, head),
+          model: MODEL,
+          config: { maxCostUsd: 2 },
+          variant: SHARED,
+          posting: ReviewEval.recordingPosting(),
+          check: recordingCheck().check,
+        })
+        expect(named.variant).toEqual(SHARED)
+        expect(yield* llm.hits).toHaveLength(0)
       }),
     GIT,
     TIMEOUT,

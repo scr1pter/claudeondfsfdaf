@@ -5,7 +5,8 @@ import { join, resolve } from "node:path"
 import { parseArgs } from "node:util"
 import type { Report } from "../../packages/core/src/review/eval-report"
 import { certify, type EvidenceScope, type ModelCertificate } from "../../packages/core/src/review/model-evidence"
-import { replayVariant, variantAdapter, type ReplayVariant } from "./replay"
+import type { ReplayVariant } from "../../packages/engine/src/review/eval"
+import { replayVariant, variantAdapter, variantProblems } from "./replay"
 
 // Model evidence (VectorScope plan, VS-07): turns a held-out report whose gate passed into a model certificate, for the
 // owner to approve. The certificate names the report file by digest, the frozen manifest by its freeze digest, the gate
@@ -53,7 +54,7 @@ type Artifact = {
   adapter: string
   label: string
   models: { review: { id: string; variant?: string } }
-  variant?: ReplayVariant & { applied?: boolean } // applied: false when it never reached the desktop runner
+  variant?: ReplayVariant // applied: false when it never reached the desktop runner
   scope?: EvidenceScope
 }
 
@@ -90,7 +91,8 @@ export async function main(argv: string[]): Promise<{ code: number; stdout: stri
   ).filter((entry): entry is { file: string; value: Artifact } => isArtifact(entry.value))
   const candidate = report.decision?.candidate
   // The candidate's runs: the artifacts of its model whose pipeline variant is the report's (replayVariant, such as
-  // "engine" or "engine:shared-verify"). A desktop replay whose variant never reached the runner ran without it.
+  // "engine" or "engine:shared-verify"). A desktop replay whose variant never reached the runner ran without it, and
+  // a variant record the registry does not bear out (variantProblems) may not be the run it names.
   const asked = candidate
     ? artifacts.filter(
         (entry) =>
@@ -134,6 +136,9 @@ export async function main(argv: string[]): Promise<{ code: number; stdout: stri
       ? [`--variant ${claimed} is not the model variant the candidate's runs used (${variant ?? "none"})`]
       : []),
     ...unapplied.map((entry) => `${entry.file} asked for the variant, but it never reached the runner`),
+    ...runs.flatMap((entry) =>
+      variantProblems(entry.value.adapter, entry.value.variant).map((problem) => `${entry.file}: ${problem}`),
+    ),
     ...unscoped.map((entry) => `${entry.file} records no evidence scope (made before VS-07), so it is left out`),
     ...result.problems,
   ]

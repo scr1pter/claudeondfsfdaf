@@ -457,6 +457,12 @@ describe("saved replay artifacts", () => {
       variant: "engine",
       spend: { admitted: true },
     })
+    // VS-21a's record names the same run, under the same case, as VS-06's.
+    const named = artifact({ variant: { name: "engine:shared-verify", keys: { verifyPolicy: "shared" } } })
+    expect(fromArtifact(named, seed, journal(sharedKey))).toMatchObject({
+      variant: "engine:shared-verify",
+      spend: { admitted: true },
+    })
   })
 
   test("partial, failed and empty replays are not complete", () => {
@@ -622,6 +628,95 @@ describe("report.ts", () => {
     expect(saved.decision.candidate).toEqual({ variant: "engine:shared-verify", model: "vendor/reviewer-large" })
     expect(saved.decision.baseline).toEqual({ variant: "engine", model: "vendor/reviewer-large" })
     expect(saved.problems.join(" ")).not.toContain("has no planned runs")
+  })
+
+  // VS-21a: a variant record the registry does not bear out may not be the run it names.
+  test("lists each artifact whose variant record the registry does not bear out, and refuses a pending name", async () => {
+    const dir = join(root, "variant-records")
+    mkdirSync(dir)
+    writeFileSync(
+      join(dir, "named.json"),
+      JSON.stringify(artifact({ variant: { name: "engine:shared-verify", keys: { verifyPolicy: "shared" } } })),
+    )
+    writeFileSync(
+      join(dir, "pending.json"),
+      JSON.stringify(artifact({ label: "pending", variant: { name: "engine:trivial-skip", keys: {} } })),
+    )
+    writeFileSync(
+      join(dir, "mismatched.json"),
+      JSON.stringify(
+        artifact({ label: "mismatched", variant: { name: "engine:shared-verify", keys: { verifyPolicy: "legacy" } } }),
+      ),
+    )
+    // A pending name carrying a built variant's keys: ReviewEval.replay, which cannot see the registry, would run it.
+    writeFileSync(
+      join(dir, "mislabeled.json"),
+      JSON.stringify(
+        artifact({ label: "mislabeled", variant: { name: "engine:privacy-zdr", keys: { verifyPolicy: "shared" } } }),
+      ),
+    )
+    // A hand-edited record that is not an object is listed, not thrown on.
+    writeFileSync(
+      join(dir, "primitive.json"),
+      JSON.stringify(artifact({ label: "primitive", variant: "engine:shared-verify" })),
+    )
+    const loaded = await loadOutputs({ paths: [dir] })
+    const problems = loaded.problems.filter((problem) => problem.startsWith(dir))
+    expect(problems).toHaveLength(4)
+    expect(problems[0]).toStartWith(join(dir, "mislabeled.json"))
+    expect(problems[0]).toContain("engine:privacy-zdr is registered for VS-23c, which has not landed")
+    expect(problems[1]).toStartWith(join(dir, "mismatched.json"))
+    expect(problems[1]).toContain("not the registry's")
+    expect(problems[2]).toStartWith(join(dir, "pending.json"))
+    expect(problems[2]).toContain("registered for VS-24 wiring, which has not landed")
+    expect(problems[3]).toBe(`${join(dir, "primitive.json")}: its variant record is not an object`)
+    // The record that is not an object names the frozen pipeline, as VS-06's reader took it.
+    expect(loaded.runs.find((run) => run.case === "primitive")?.variant).toBe("engine")
+    // Any of them keeps the report from a release decision.
+    const out = join(root, "variant-records-report.json")
+    const result = await main([
+      "--outputs",
+      dir,
+      "--candidate",
+      "engine:shared-verify=vendor/reviewer-large",
+      "--out",
+      out,
+    ])
+    expect(result.code).toBe(0)
+    expect(result.stdout).toContain("not the registry's")
+    const saved = await Bun.file(out).json()
+    expect(saved.problems).toEqual(expect.arrayContaining(problems))
+    expect(saved.decision.release.eligible).toBe(false)
+    expect(saved.decision.release.reasons.join(" ")).toContain("input or judging problem(s) are listed in the report")
+    // A pending, unknown or malformed variant cannot be the candidate or the baseline, a mistyped runner included;
+    // only single-prompt and the empty control pass as given.
+    for (const [flag, value, detail] of [
+      ["--candidate", "engine:trivial-skip=vendor/reviewer-large", "registered for VS-24 wiring"],
+      ["--baseline", "engine:verify=vendor/reviewer-large", "not a registered variant"],
+      ["--candidate", "engine:Shared=vendor/reviewer-large", "is not a variant name"],
+      ["--candidate", "Engine:shared-verify=vendor/reviewer-large", '"Engine:shared-verify" is not a variant name'],
+      ["--baseline", "engine :shared-verify=vendor/reviewer-large", '"engine :shared-verify" is not a variant name'],
+      ["--baseline", "codium=vendor/reviewer-large", "codium names no runner"],
+      ["--candidate", "engine", "--candidate takes <variant>=<model>."],
+    ] as const) {
+      const refused = await main(["--outputs", dir, flag, value])
+      expect(refused.code).toBe(2)
+      expect(refused.stderr).toContain(detail)
+    }
+    expect((await main(["--outputs", savedRun.dir, "--candidate", `single-prompt=${MODEL}`])).code).toBe(0)
+    expect(
+      (
+        await main([
+          "--outputs",
+          savedRun.dir,
+          "--empty-control",
+          "--candidate",
+          `single-prompt=${MODEL}`,
+          "--baseline",
+          `${EMPTY_CONTROL.variant}=${EMPTY_CONTROL.model}`,
+        ])
+      ).code,
+    ).toBe(0)
   })
 
   test("refuses output inside the repository, an unknown split and an invalid gate", async () => {

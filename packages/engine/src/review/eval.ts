@@ -15,6 +15,11 @@
 // artifact records that isolation. The case's label names the artifact only and never reaches a prompt. The review's
 // dollar reservations are its usual estimates; an eval's total budget and per-case bound are a separate ledger in the
 // eval driver.
+//
+// A pipeline variant (VS-21a) arrives only as `variant`: a registry name and the keys it sets over the base's settings,
+// which the artifact records with the run. The registry (script/vectorscope-eval/replay.ts) refuses a variant whose
+// package has not landed; this replay cannot see the registry, so it refuses any variant that would run the frozen
+// pipeline under its name: one with no key and no model requirement, or a key outside VARIANT_KEYS.engine.
 
 import { createHash } from "node:crypto"
 import path from "path"
@@ -46,8 +51,10 @@ import {
   hasGeneratedHeader,
   parseGitAttributes,
 } from "@vectordevai/core/review/ignore"
+import { VARIANT_KEYS, VARIANT_NAME } from "@vectordevai/core/review/eval"
 import { evidenceScope, type EvidenceScope } from "@vectordevai/core/review/model-evidence"
 import type { ReviewPrice } from "@vectordevai/core/review/plan"
+import type { RelatedCode } from "@vectordevai/core/review/prompt"
 import { Flag } from "@vectordevai/core/flag/flag"
 import { redactSecrets } from "@vectordevai/core/review/redact"
 import { nextState } from "@vectordevai/core/review/state"
@@ -60,6 +67,8 @@ import {
   type Trigger,
   type Trust,
 } from "@vectordevai/core/review/types"
+import type { SessionV1 } from "@vectordevai/core/v1/session"
+import { measureCost } from "@/cli/cmd/github.evidence"
 import { Config } from "@/config/config"
 import { InstanceRef } from "@/effect/instance-ref"
 import { Git } from "@/git"
@@ -101,9 +110,14 @@ export interface ReplayInput {
   case: ReplayCase
   model: ResolvedModel
   triage?: ResolvedModel
-  // The eval variant's settings, applied over the base's review.json. Its maxCostUsd must be a positive cap, and it
-  // alone sets maxCostUsd, maxSteps and timeoutMinutes (the defaults where it leaves the last two out).
-  config?: Partial<ReviewConfig>
+  // The eval's own settings, applied over the base's review.json: its limits, and settings a test fixes. Its
+  // maxCostUsd must be a positive cap, and it alone sets maxCostUsd, maxSteps and timeoutMinutes (the defaults where
+  // it leaves the last two out). It never sets a variant's key (VARIANT_KEYS.engine): that goes in `variant`. The type
+  // says so, and step 0b refuses one from an untyped caller.
+  config?: Partial<Omit<ReviewConfig, (typeof VARIANT_KEYS.engine)[number]>>
+  // The pipeline variant the eval admitted the replay for (admitReplay), applied over the base's settings and `config`.
+  // Absent for the frozen pipeline.
+  variant?: Omit<VariantRecord, "applied">
   posting: Posting
   check: PostingCheck
   secrets?: string[] // values redacted from everything posted
@@ -133,6 +147,29 @@ export type PostedRecord =
   | { write: "createReview"; pr: number; payload: CreateReviewPayload }
   | { write: "createIssueComment"; pr: number; body: string }
 
+// A pipeline variant as a replay records it (VS-21a). `name` is its registry name (script/vectorscope-eval/replay.ts,
+// VARIANTS), such as "engine:shared-verify". `keys` are the settings it set over the base's review.json, as the runner
+// read them. `models: "triage-pair"` marks a variant made by its models rather than a key: a triage model other than
+// the review model (VS-29a's cross-family pair). `applied` is false when the desktop adapter could not hand every key
+// to its runner, so the run was the frozen pipeline's; the engine replay never sets it.
+export interface VariantRecord {
+  name: string
+  keys: Partial<ReviewConfig>
+  models?: "triage-pair"
+  applied?: boolean
+}
+
+// What an artifact's `variant` may hold: VS-21a's record, or VS-06's, the verify policy alone, in an artifact written
+// before VS-21a. Read it with replayVariant (script/vectorscope-eval/replay.ts), which names both.
+export type ReplayVariant = VariantRecord | { verifyPolicy?: ReviewConfig["verifyPolicy"]; applied?: boolean }
+
+// One step of VS-24's pre-dispatch shrink, in the order it ran, with the low estimate after it. VS-24 owns this shape
+// and aligns it with core dispatch.ts's DispatchEstimate when that lands; nothing writes it before then.
+export interface ShrinkStep {
+  step: string
+  estimate: { lowTokens: number; lowUsd?: number }
+}
+
 export interface PlacedRecord {
   id: string
   path: string
@@ -156,17 +193,44 @@ export interface ReplayArtifact {
   trust: Trust
   trigger: Trigger
   config: { digest: string; warnings: string[]; value: ReviewConfig }
-  // The pipeline variant the eval asked for, when it set one (VS-06's verify policy), so the report can tell a
-  // variant's replays from the frozen pipeline's.
-  variant?: { verifyPolicy: ReviewConfig["verifyPolicy"] }
+  // The pipeline variant the eval asked for, when it named one, so the report can tell a variant's replays from the
+  // frozen pipeline's. This replay writes a VariantRecord; an artifact written before VS-21a holds VS-06's record.
+  variant?: ReplayVariant
   // What a model certificate (core model-evidence.ts, VS-07) made from this replay would cover: the runner, pipeline
   // revision, prompts, review settings and triage model.
   scope: EvidenceScope
   rules: { digest: string }
   models: { review: ModelRecord; triage?: ModelRecord }
-  context: { digest: string; related: number; history: number; instructions: boolean; headFiles: number }
+  context: {
+    digest: string
+    related: number
+    history: number
+    instructions: boolean
+    headFiles: number
+    // "path:line" of every code location the prompt quotes as context, in prompt order and each once, to be joined
+    // with the case's labels offline only: today the related-code call sites, and VS-25b's impact slice after them.
+    // The changed files, history and instructions carry no line and are left out. Absent before VS-21a.
+    locations?: string[]
+  }
+  // VS-25b's Tier 1 impact slice, how long it took to build. Absent until VS-25b.
+  tier1?: { ms: number }
   files: { reviewed: string[]; skipped: SkippedFile[] }
-  passes: { pass: Pass; model: string; digest: string; chars: number }[]
+  // Each pass's prompt, and, for a pass that had a session, its wall time and cache use from the messages of every
+  // session of that name: `startMs` after the first message of any pass, `ms` from its first message created to its
+  // last completed, and the cache reads and writes measureCost counts, so `cacheRead` is the outcome's `passes` entry
+  // of the same name's. A pass planned and skipped, or refused before its session, has none of the four.
+  passes: {
+    pass: Pass
+    model: string
+    digest: string
+    chars: number
+    startMs?: number
+    ms?: number
+    cacheRead?: number
+    cacheWrite?: number
+  }[]
+  // VS-24's pre-dispatch shrink steps, in order. Absent until VS-24.
+  shrink?: ShrinkStep[]
   attempts: AttemptRecord[]
   tools: { pass?: Pass; tool: string; status: string; input: Record<string, string | number | boolean> }[]
   outcome?: ReviewOutcome // absent when nothing was left to review and no model was asked
@@ -191,6 +255,11 @@ export class ReviewEvalError extends Schema.TaggedErrorClass<ReviewEvalError>()(
 }) {}
 
 const FULL_SHA = /^[0-9a-f]{40}([0-9a-f]{24})?$/
+// buildPrompt's related_code caps (core review/prompt.ts:99-100, MAX_SYMBOLS and MAX_HITS), which quotedLocations
+// applies. They are copied, not imported: prompt.ts is in the pipeline pin and exports neither. The engine eval test
+// renders a prompt past both caps and checks quotedLocations against it.
+const PROMPT_RELATED_SYMBOLS = 10
+const PROMPT_RELATED_HITS = 15
 
 export const replay = Effect.fn("ReviewEval.replay")(function* (input: ReplayInput) {
   const git = yield* Git.Service
@@ -209,6 +278,9 @@ export const replay = Effect.fn("ReviewEval.replay")(function* (input: ReplayInp
       message:
         "A replay needs the eval's own positive config.maxCostUsd, such as the case bound admitReplay hands out; a dataset's review.json never sets it.",
     })
+  // 0b. The variant's name and keys, before any git or instance work.
+  const unnamed = variantProblem(input)
+  if (unnamed) return yield* new ReviewEvalError({ message: unnamed })
 
   // 1. The checkout: the reviewer's tools read the engine instance's directory, so it must be this one, holding both
   // commits, with a trusted head checked out and an untrusted one not, as the GitHub job requires.
@@ -249,17 +321,20 @@ export const replay = Effect.fn("ReviewEval.replay")(function* (input: ReplayInp
     snapshot: effective.snapshot !== false,
   }
 
-  // 2. Settings from the base commit, then the eval variant's.
+  // 2. Settings from the base commit, then the eval's, then the variant's, so the variant's keys are what the runner
+  // reads.
   const json = yield* show(item.base, REVIEW_CONFIG_PATH)
   const rulesTexts = yield* Effect.forEach(REVIEW_RULES_PATHS, (file) => show(item.base, file))
   const attributesText = yield* show(item.base, ".gitattributes")
   // A variant that sets the verify policy (VS-06) is read as a repository that chose it would be: under "shared" the
   // base's own "verify" still wins, and without one the policy's default applies.
-  const policy = input.config?.verifyPolicy
+  const variant = input.variant
+  const policy = variant?.keys.verifyPolicy
   const parsed = parseReviewConfig({ json, env: policy ? { REVIEW_VERIFY_POLICY: policy } : {}, trigger })
   const config: ReviewConfig = {
     ...parsed.config,
     ...input.config,
+    ...variant?.keys,
     maxCostUsd: cap,
     maxSteps: input.config?.maxSteps ?? DEFAULT_REVIEW_CONFIG.maxSteps,
     timeoutMinutes: input.config?.timeoutMinutes ?? DEFAULT_REVIEW_CONFIG.timeoutMinutes,
@@ -336,7 +411,15 @@ export const replay = Effect.fn("ReviewEval.replay")(function* (input: ReplayInp
     trust: item.trust,
     trigger,
     config: { digest: digest(config), warnings: parsed.warnings, value: config },
-    ...(policy ? { variant: { verifyPolicy: policy } } : {}),
+    ...(variant
+      ? {
+          variant: {
+            name: variant.name,
+            keys: variant.keys,
+            ...(variant.models ? { models: variant.models } : {}),
+          } satisfies VariantRecord,
+        }
+      : {}),
     scope: evidenceScope({ adapter: "engine", config, ...(triaged ? { triage: triaged } : {}) }),
     rules: { digest: digest(rules) },
     models: { review: modelRecord(input.model), ...(input.triage ? { triage: modelRecord(input.triage) } : {}) },
@@ -393,7 +476,7 @@ export const replay = Effect.fn("ReviewEval.replay")(function* (input: ReplayInp
     yield* post({ write: "createIssueComment", pr: prNumber, body: note }, [])
     const nothing: ReplayArtifact = {
       ...common,
-      context: { digest: digest({}), related: 0, history: 0, instructions: false, headFiles: 0 },
+      context: { digest: digest({}), related: 0, history: 0, instructions: false, headFiles: 0, locations: [] },
       passes: [],
       attempts: [],
       tools: [],
@@ -548,31 +631,34 @@ export const replay = Effect.fn("ReviewEval.replay")(function* (input: ReplayInp
     yield* post({ write: "createIssueComment", pr: prNumber, body: summary }, outcome.sessions)
   }
 
-  // 8. The record: each pass's prompt by digest, every attempt with its settlement, and the tool calls each session
-  // made, with this checkout's paths made relative.
+  // 8. The record: each pass's prompt by digest with its session's timing and cache use, every attempt with its
+  // settlement, and the tool calls each session made, with this checkout's paths made relative. Each session's
+  // messages are read once.
   const attempts = foldAttempts(observed)
   const passOf = new Map(attempts.flatMap((attempt) => (attempt.sessionID ? [[attempt.sessionID, attempt.pass]] : [])))
-  const tools = (yield* Effect.forEach(outcome.sessions, (id) =>
+  const recorded = yield* Effect.forEach(outcome.sessions, (id) =>
     sessions.messages({ sessionID: SessionID.make(id) }).pipe(
-      Effect.map((messages) =>
-        messages
-          .flatMap((message) => message.parts)
-          .flatMap((part) =>
-            part.type === "tool"
-              ? [
-                  {
-                    ...(passOf.has(SessionID.make(id)) ? { pass: passOf.get(SessionID.make(id)) } : {}),
-                    tool: part.tool,
-                    status: part.state.status,
-                    input: relativeInput(part.state.input, directory),
-                  },
-                ]
-              : [],
-          ),
-      ),
-      Effect.catch(() => Effect.succeed([])),
+      Effect.map((messages) => ({ pass: passOf.get(SessionID.make(id)), messages })),
+      Effect.catch(() => Effect.succeed({ pass: passOf.get(SessionID.make(id)), messages: [] })),
     ),
-  )).flat()
+  )
+  const tools = recorded.flatMap((session) =>
+    session.messages
+      .flatMap((message) => message.parts)
+      .flatMap((part) =>
+        part.type === "tool"
+          ? [
+              {
+                ...(session.pass ? { pass: session.pass } : {}),
+                tool: part.tool,
+                status: part.state.status,
+                input: relativeInput(part.state.input, directory),
+              },
+            ]
+          : [],
+      ),
+  )
+  const start = Math.min(...recorded.flatMap((session) => session.messages.map((message) => message.info.time.created)))
 
   const artifact: ReplayArtifact = {
     ...common,
@@ -582,10 +668,24 @@ export const replay = Effect.fn("ReviewEval.replay")(function* (input: ReplayInp
       history: gathered.history.length,
       instructions: gathered.instructions !== undefined,
       headFiles: headFiles?.length ?? 0,
+      locations: quotedLocations(gathered.related),
     },
+    // Every session of a pass counts toward it. One pass event per pass name today; VS-28's lenses add several "lens"
+    // passes and must match them by lens too.
     passes: observed.flatMap((event) =>
       event.type === "pass"
-        ? [{ pass: event.pass, model: event.model, digest: digest(event.text), chars: event.text.length }]
+        ? [
+            {
+              pass: event.pass,
+              model: event.model,
+              digest: digest(event.text),
+              chars: event.text.length,
+              ...passUsage(
+                recorded.flatMap((session) => (session.pass === event.pass ? session.messages : [])),
+                start,
+              ),
+            },
+          ]
         : [],
     ),
     attempts,
@@ -638,6 +738,64 @@ export function digest(value: unknown) {
   return createHash("sha256")
     .update(text ?? "")
     .digest("hex")
+}
+
+// "path:line" of each related-code location the prompt quotes, in prompt order and each once, selected as buildPrompt
+// selects them for its related_code block, so a location is listed only when the model saw it, whatever ReviewContext
+// gathered.
+export function quotedLocations(related: readonly RelatedCode[]) {
+  return [
+    ...new Set(
+      related
+        .filter((entry) => entry.hits.length)
+        .slice(0, PROMPT_RELATED_SYMBOLS)
+        .flatMap((entry) => entry.hits.slice(0, PROMPT_RELATED_HITS).map((hit) => `${hit.path}:${hit.line}`)),
+    ),
+  ]
+}
+
+// Why a replay's settings cannot name its run, if they cannot: a variant's key set through `config`, which would leave
+// the run unnamed, or a variant that would run the frozen pipeline, or anything but itself, under its name.
+function variantProblem(input: ReplayInput) {
+  const misplaced = VARIANT_KEYS.engine.filter((key) => input.config && Object.hasOwn(input.config, key))
+  if (misplaced.length)
+    return `config sets ${misplaced.join(", ")}, a pipeline variant's setting: pass the variant in \`variant\`, as admitReplay hands it out, so the artifact names the run.`
+  const variant = input.variant
+  if (!variant) return undefined
+  if (!variant.name.startsWith("engine:") || !VARIANT_NAME.test(variant.name))
+    return `A replay's variant is named engine:<name> from the eval registry, not "${variant.name}".`
+  const allowed: readonly string[] = VARIANT_KEYS.engine
+  const keys = Object.entries(variant.keys)
+  const unapplied = keys.filter(([key, value]) => value === undefined || !allowed.includes(key)).map(([key]) => key)
+  if (unapplied.length)
+    return `${variant.name} sets ${unapplied.join(", ")}, which this replay does not apply (it applies ${allowed.join(", ")}, each with a value), so the run would not be ${variant.name}.`
+  if (!keys.length && !variant.models)
+    return `${variant.name} sets no key and no model requirement, so it would run the frozen pipeline under its name.`
+  const triaged = input.triage && modelRecord(input.triage).id !== modelRecord(input.model).id
+  if (variant.models === "triage-pair" && !triaged)
+    return `${variant.name} is made by its models: it needs a triage model other than the review model.`
+  return undefined
+}
+
+// A pass's wall time and cache use, from the messages of every session it had: `startMs` after `start` (the first
+// message of any pass), `ms` from its first message created to its last one completed, and the cache reads and writes
+// measureCost counts, as Review.run's ReviewPass does.
+function passUsage(messages: readonly SessionV1.WithParts[], start: number) {
+  if (!messages.length) return {}
+  const first = Math.min(...messages.map((message) => message.info.time.created))
+  const last = Math.max(
+    ...messages.map((message) =>
+      message.info.role === "assistant"
+        ? (message.info.time.completed ?? message.info.time.created)
+        : message.info.time.created,
+    ),
+  )
+  const cost = measureCost(messages)
+  return {
+    startMs: first - start,
+    ms: last - first,
+    ...(cost ? { cacheRead: cost.cacheRead, cacheWrite: cost.cacheWrite } : {}),
+  }
 }
 
 // Each attempt in the order admission saw it, with the settlement that followed it.

@@ -405,6 +405,25 @@ bun script/vectorscope-eval/replay.ts --mirrors <dir> --prepare <out>
   never counted as free. It also keeps the tool calls each session made (paths
   made relative), the whole `ReviewOutcome` for re-scoring without new model
   calls, the placed findings and every posted payload.
+- Since VS-21a the artifact also records:
+  - `variant`: `{ name, keys }` for a pipeline variant (below), the registry
+    name and every key it set, as the runner read them;
+  - `context.locations`: `path:line` of every code location the prompt quotes
+    as context, in prompt order and each once (today the related-code call
+    sites, selected with the prompt's own caps by `quotedLocations`, so a hit
+    the context gathered but the prompt left out is not listed; VS-25b's
+    impact slice adds its own). They are joined with the case's labels
+    offline only, never in the replay. The changed files, history and
+    instructions carry no line and are left out;
+  - per pass that had a session: `startMs` (after the first message of any
+    pass), `ms` (its first message created to its last completed), and
+    `cacheRead` and `cacheWrite` through `measureCost`, as
+    `ReviewOutcome.passes` counts them, over every session of that pass's
+    name. Match the two by pass name: the artifact lists every planned pass,
+    and a verify pass planned and skipped for budget or time has none of the
+    four; the outcome lists only the passes that reported usage;
+  - `tier1` and `shrink`, typed for VS-25b's impact slice and VS-24's
+    pre-dispatch shrink, and absent until those packages fill them.
 - The attempt record comes from `Review.run`'s optional `observe` hook. It is
   off unless a caller sets it, and a test shows the same review sends the same
   requests and returns the same outcome with it off, on, or throwing.
@@ -413,8 +432,20 @@ bun script/vectorscope-eval/replay.ts --mirrors <dir> --prepare <out>
   `maxCostUsd`, `maxSteps` and `timeoutMinutes` only from the eval's config (the
   defaults where it leaves the last two out), so a base `review.json` cannot
   lift them.
-- The verify policy (VS-06) is measured as the config variant
-  `{ "verifyPolicy": "shared" }` against the frozen pipeline's default
+- `config` holds the eval's own settings (its limits, and settings a test
+  fixes); a pipeline variant arrives only as `variant`, `{ name, keys }`, so
+  no run is unnamed. `replay()` refuses `config` that sets a variant's key, a
+  variant name that is not `engine:<suffix>`, a key outside
+  `VARIANT_KEYS.engine` (core `review/eval.ts`) or one without a value, a
+  variant that sets no key and has no model requirement, and a `triage-pair`
+  variant without a triage model other than the review model. It cannot see
+  the registry, so it refuses whatever would run the frozen pipeline under a
+  variant's name; that a name and its keys are the registry's is checked by
+  `admitReplay`, `report.ts` and `certify.ts`. `ReplayInput.config`'s type
+  leaves `VARIANT_KEYS.engine` out, so a typed caller cannot set one there;
+  the refusal is the backstop for an untyped one.
+- The verify policy (VS-06) is measured as the variant `engine:shared-verify`,
+  `{ "verifyPolicy": "shared" }`, against the frozen pipeline's default
   (`"legacy"`). The replay reads it as a repository that opted in would be: the
   base's own `verify` still wins, and without one the policy's default, `all`,
   applies. The artifact's `variant` records the variant the eval asked for, so
@@ -448,24 +479,30 @@ bun script/vectorscope-eval/replay.ts --mirrors <dir> --prepare <out>
   prompt by pass and digest with what it reported spending, the sessions and
   their permission digests) plus what the panel's Post button would send,
   which is never sent.
-- `desktopReplay` takes the verify policy variant as the engine replay does,
-  `config: { verifyPolicy: "shared" }`. The desktop reads no environment, so
-  the variant reaches it as the case's own `.vector/review.json` would carry
-  it: the base's file with `verifyPolicy` set, its `verify` kept. Only the
-  runner's settings read gets that text; any later read of the file gets the
-  file as it is. The runner never takes settings from a `review.json` the
-  change itself edits, so for such a case, decided from the diff before the
-  runner starts, the driver does not touch the file, the artifact's scope is
-  the defaults' and `variant.applied` is `false`. Such a case ran without the
-  variant and must be left out of a comparison. `report.ts` does not load
-  desktop artifacts yet, so the desktop comparison cannot be run there until
-  it does, and `certify.ts` refuses a variant's run that was not applied.
+- `desktopReplay` takes a pipeline variant as the engine replay does,
+  `variant: { name: "desktop:shared-verify", keys: { verifyPolicy: "shared" } }`.
+  The desktop reads no environment, so the variant reaches it as the case's own
+  `.vector/review.json` would carry it: the base's file with the variant's keys
+  set, its `verify` kept. Only the runner's settings read gets that text; any
+  later read of the file gets the file as it is. The runner never takes
+  settings from a `review.json` the change itself edits, so for such a case,
+  decided from the diff before the runner starts, the driver does not touch
+  the file, the artifact's scope is the defaults' and `variant.applied` is
+  `false`. A variant with no key, or with a key outside `VARIANT_KEYS.desktop`
+  (keys the desktop runner does not act on until its half lands), is not
+  handed to the runner either, and is recorded `applied: false`. Such a case
+  ran without the variant and must be left out of a comparison. `report.ts`
+  does not load desktop artifacts yet (VS-21c), so the desktop comparison
+  cannot be run there until it does, the desktop artifact has no per-pass
+  timing until then, and `certify.ts` refuses a variant's run that was not
+  applied.
 
 Nothing here sends a model request. A replay that spends money is admitted by
-the eval budget ledger: `admitReplay` reserves the case's whole bound before
-the replay starts, under a case named by the pipeline variant, the models, the
-case and the repetition, and passes the bound, with the variant, to
-`Review.run` as the review's cap and config, so each
+the eval budget ledger: `admitReplay(ledger, { id, models, variant:
+"engine:shared-verify" })` resolves the variant, reserves the case's whole
+bound before the replay starts, under a case named by the pipeline variant,
+the models, the case and the repetition, and hands the bound as the replay's
+`config` and the variant's record as its `variant`, so each
 provider attempt the review admits, retries and the finalizer included, is
 covered by money the ledger set aside. Afterwards the case settles at its
 artifact's reported costs, with unsettled or incomplete attempts kept at their
@@ -497,6 +534,62 @@ cd script/vectorscope-eval && bun test ci.test.ts
 In CI, `test.yml` runs every `script/vectorscope-eval/*.test.ts` file, each in
 its own Bun process, and `typecheck.yml` checks the scripts with
 `script/vectorscope-eval/tsconfig.json`, since `script/` is in no package.
+
+### Pipeline variants
+
+`VARIANTS` in `replay.ts` is the registry (VS-21a). A variant's name is its
+runner, then `:` and a registered suffix; the runner's name alone is the frozen
+pipeline. Names never hold a model id or `=`, which separates a variant from
+its model in `report.ts --candidate` and `--baseline`. The grammar is
+`VARIANT_NAME` in core `review/eval.ts`; it cannot tell a model id from a
+word, so only the registry keeps model ids out.
+
+| Suffix             | Sets                                                                         | Engine                | Desktop              |
+| ------------------ | ---------------------------------------------------------------------------- | --------------------- | -------------------- |
+| `shared-verify`    | `verifyPolicy: "shared"`                                                     | built (VS-06)         | built (VS-06)        |
+| `privacy-zdr`      | `privacy: "zdr"`, enforced in `Review.run` and at the transport              | pending VS-23c        | pending VS-23d       |
+| `trivial-skip`     | `trivial: "skip"`                                                            | pending VS-24 wiring  | pending VS-24 wiring |
+| `impact-graph`     | `impact: "graph"`                                                            | pending VS-25b wiring | pending, after VS-10 |
+| `cards-brain`      | `cards: "brain"`, local-only eval                                            | pending VS-26         | pending, after VS-10 |
+| `guardrail-strict` | `guardrail: "strict"`                                                        | pending VS-27c        | pending VS-27c       |
+| `depth-auto`       | `depth: "auto"`                                                              | pending VS-28 wiring  | pending, after VS-10 |
+| `lenses-high`      | `depth: "auto"` and `lenses: "high"`                                         | pending VS-28 wiring  | pending, after VS-10 |
+| `cross-family`     | no key: a triage model other than the review model (`models: "triage-pair"`) | pending VS-29a        | pending VS-29a       |
+| `precise`          | `mode: "precise"`                                                            | pending VS-31         | pending VS-31        |
+
+- `resolveVariant(name)` gives a built variant's keys, or refuses the name as
+  malformed, unknown (prototype names such as `constructor` included) or
+  pending, naming the package it waits for. A pending name is refused
+  everywhere a name is taken: `admitReplay`, which then writes no ledger
+  entry, and `report.ts --candidate` and `--baseline`. A replay under a
+  pending name would run the frozen pipeline. `--candidate` and `--baseline`
+  take `single-prompt` (run.ts reports), `empty` (the control) or a built
+  registry name; anything else, a mistyped runner such as `Engine:` or
+  `engine :` included, is refused with `resolveVariant`'s detail rather
+  than matching no runs.
+- **The flip rule.** A runner's half turns built only in the package that
+  makes its keys change what that runner does, with that package's D3 parity
+  test, and that package adds the keys to that runner's `VARIANT_KEYS`.
+  Adding a `ReviewConfig` key, or landing a core module (VS-24's `trivial`
+  and `dispatch`, VS-25b's core slice, VS-28's `risk.ts`), never flips one.
+  Readiness is per runner: the engine half of a variant can be built while
+  its desktop half waits for VS-10.
+- `lenses-high` sets `depth: "auto"` too, because lenses run only on the high
+  band under depth `auto`; its ablation baseline is `engine:depth-auto`.
+  VS-28 may revise this before it flips.
+- There are no aliases: every older name (`engine`, `engine:shared-verify`,
+  `desktop`, `desktop:shared-verify`) is a registry name, and an artifact
+  written before VS-21a holds VS-06's `{ verifyPolicy }`, which
+  `replayVariant` still names (`shared` is `<runner>:shared-verify`,
+  `legacy` the frozen pipeline).
+- `variantProblems` checks an artifact's record against the registry: a
+  record that is not an object (an artifact is untrusted JSON), a name that
+  is not a built variant of its own runner, such as a pending name carrying a
+  built variant's keys, which `ReviewEval.replay` cannot tell apart, or keys
+  or models other than the registry's. `report.ts` lists each as a problem,
+  which keeps the report from a release decision, and `certify.ts` refuses
+  the certificate. `replayVariant` names a record that is not an object the
+  frozen pipeline, as VS-06's reader did.
 
 ## Causal judging and the release gate
 
@@ -561,6 +654,7 @@ How it works:
   nothing, whose precision is n/a with its counts, end-to-end recall 0 and
   false alarms 0. Runs that shared one ledger journal are counted once in the
   report's ledger line, and `--ledger` gives that journal directly.
+
 - **The gate.** The default gate is D2 as the owner approved it:
   - no trust or consent check failed
   - no unaccounted paid attempt

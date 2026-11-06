@@ -7,6 +7,7 @@
 // reported as no value with its counts.
 
 import { fnv1a64 } from "./fingerprint"
+import type { ReviewConfig } from "./types"
 
 export interface EvalExpectation {
   id: string
@@ -97,6 +98,29 @@ function rates(truePositives: number, falsePositives: number, falseNegatives: nu
     f1: precision + recall === 0 ? 0 : (2 * precision * recall) / (precision + recall),
   }
 }
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Replay pipeline variants (VS-21a). The eval registry (script/vectorscope-eval/replay.ts, VARIANTS) maps each
+// variant's name to the settings it replays; the engine replay (packages/engine/src/review/eval.ts) and the desktop
+// adapter (script/vectorscope-eval/desktop.ts) apply them. The two values below are shared by all three, since the
+// eval scripts may import only types from the engine.
+
+// A variant's name: its runner, then ":" and a suffix the registry defines, such as "engine:shared-verify"; the runner
+// alone is the frozen pipeline. A name never has "=", which separates a variant from its model in report.ts
+// --candidate and --baseline, nor "/", whitespace or capitals. Only the registry keeps model ids out: a suffix such as
+// "gpt5" fits this grammar.
+export const VARIANT_NAME = /^[a-z]+(:[a-z][a-z0-9]*(-[a-z0-9]+)*)?$/
+
+// The settings a variant may set over the base's review.json, per runner. A key joins a runner's list only in the
+// package that makes it change what that runner does, with that package's D3 parity test; adding a ReviewConfig key
+// alone never adds it. The eval's own limits are never a variant's.
+export const VARIANT_KEYS = {
+  engine: ["verifyPolicy"],
+  desktop: ["verifyPolicy"],
+} as const satisfies Record<
+  string,
+  readonly Exclude<keyof ReviewConfig, "maxCostUsd" | "maxSteps" | "timeoutMinutes">[]
+>
 
 // ---------------------------------------------------------------------------------------------------------------------
 // Causal judging (VectorScope plan, VS-04; Phase 0 "Metrics and judging").

@@ -4,7 +4,8 @@ import { Deferred, Effect, Layer, Context, Stream } from "effect"
 import * as HttpServer from "effect/unstable/http/HttpServer"
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
 
-export type Usage = { input: number; output: number }
+// cached: prompt tokens the provider served from its cache, sent only when set.
+export type Usage = { input: number; output: number; cached?: number }
 
 type Line = Record<string, unknown>
 
@@ -63,6 +64,7 @@ function tokens(input?: Usage) {
     prompt_tokens: input.input,
     completion_tokens: input.output,
     total_tokens: input.input + input.output,
+    ...(input.cached !== undefined ? { prompt_tokens_details: { cached_tokens: input.cached } } : {}),
   }
 }
 
@@ -156,7 +158,7 @@ function responseCompleted(input: { seq: number; usage?: Usage }) {
       service_tier: null,
       usage: {
         input_tokens: input.usage?.input ?? 0,
-        input_tokens_details: { cached_tokens: null },
+        input_tokens_details: { cached_tokens: input.usage?.cached ?? null },
         output_tokens: input.usage?.output ?? 0,
         output_tokens_details: { reasoning_tokens: null },
       },
@@ -320,9 +322,14 @@ function flow(item: Sse) {
     if (part && typeof part === "object" && "usage" in part && part.usage && typeof part.usage === "object") {
       const raw = part.usage as Record<string, unknown>
       if (typeof raw.prompt_tokens === "number" && typeof raw.completion_tokens === "number") {
+        const details = raw.prompt_tokens_details as { cached_tokens?: unknown } | undefined
         out.push({
           type: "usage",
-          usage: { input: raw.prompt_tokens, output: raw.completion_tokens },
+          usage: {
+            input: raw.prompt_tokens,
+            output: raw.completion_tokens,
+            ...(typeof details?.cached_tokens === "number" ? { cached: details.cached_tokens } : {}),
+          },
         })
       }
     }

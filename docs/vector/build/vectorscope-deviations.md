@@ -856,3 +856,283 @@ citations and this entry.
 - **Nothing deferred.** P0 adds no test of its own: main's suites test the
   merged settlement and transport changes, and the review suites above
   pass on them. VS-21 starts from this tree.
+
+## 2026-11-06 · VS-21a Variant registry and artifact fields
+
+Contract §4 VS-21a of `vectorscope-upgrade.md`, in the "Now" window: eval
+work only. It touches no runner, no `ReviewConfig` key and no file @vector
+owns. It implements the VS-21a plan as corrected by its critique; where a
+critique point was taken differently or left out, the bullets below say why.
+
+- **What landed.**
+  - **The registry**, `VARIANTS` in `script/vectorscope-eval/replay.ts`. It
+    has the contract's ten suffixes (`shared-verify`, `privacy-zdr`,
+    `trivial-skip`, `impact-graph`, `cards-brain`, `guardrail-strict`,
+    `depth-auto`, `lenses-high`, `cross-family`, `precise`). Each entry has a
+    `planned` text, `keys` once a half is built, an optional `models`
+    requirement, and an `engine` and a `desktop` half. Each half is either
+    `{ from }` (built) or `{ pending }`.
+  - **Resolution**:
+    - `resolveVariant` gives a built variant's keys, or refuses the name as
+      `malformed`, `unknown` (prototype names included, through
+      `Object.hasOwn`) or `pending`, naming the package it waits for;
+    - `variantNames` lists the names;
+    - `replayVariant` reads both record shapes;
+    - `variantProblems` checks an artifact's record against the registry.
+  - **`admitReplay`** takes a registry name (`variant: "engine:shared-verify"`),
+    not `{ verifyPolicy }`. It returns `config: { maxCostUsd }` and the
+    variant's record as `variant`.
+  - **Core `review/eval.ts`** gains `VARIANT_NAME` (the name grammar) and
+    `VARIANT_KEYS` (`engine` and `desktop`: `["verifyPolicy"]`), shared by the
+    engine replay, the registry's tests and `desktop.ts`. The script may
+    import only types from the engine, but it may import core values.
+  - **Engine `review/eval.ts`**:
+    - `ReplayInput.variant` (`Omit<VariantRecord, "applied">`);
+    - the types `VariantRecord { name; keys; models?; applied? }`,
+      `ReplayVariant` (that record, or VS-06's `{ verifyPolicy }`) and
+      `ShrinkStep`;
+    - artifact fields: `variant`, `context.locations`, `tier1?`, `shrink?`,
+      and `passes[].startMs`, `ms`, `cacheRead` and `cacheWrite`;
+    - step 0b, the refusals below.
+  - **`desktop.ts`** takes `variant: { name, keys }` and records
+    `{ name, keys, applied }`.
+  - **`report.ts`** resolves the variants named in `--candidate` and
+    `--baseline`, and lists each artifact's `variantProblems`.
+  - **`certify.ts`** lists the `variantProblems` of the candidate's runs.
+  - **The engine test helper** `test/lib/llm-server.ts`: `Usage.cached`.
+    Without it every caller sends the same bytes.
+  - **The README**: a "Pipeline variants" subsection and the new artifact
+    fields.
+- **Pending variants are refused, and where.**
+  - **By name.**
+    - `resolveVariant` refuses every pending name: today, all except
+      `engine:shared-verify` and `desktop:shared-verify`.
+    - `admitReplay` refuses it before `ledger.admit`, so no ledger entry is
+      written.
+    - `report.ts --candidate` and `--baseline` exit 2 with the detail. Only
+      `single-prompt` and `empty` pass unresolved, so a mistyped runner
+      (`Engine:shared-verify`, `engine :x`) is refused as malformed too.
+    - An artifact carrying a pending name is a `report.ts` problem, which
+      keeps the report from a release decision (`eval-report.ts:94,462`),
+      and `certify.ts` refuses it.
+  - **In the engine.** `ReviewEval.replay` cannot see the registry, so it
+    refuses what would run the frozen pipeline, or something else, under a
+    variant's name:
+    - `config` that sets a key in `VARIANT_KEYS.engine` (a variant now
+      arrives only as `variant`, so no run is unnamed). The type of
+      `ReplayInput.config` leaves those keys out
+      (`Omit<ReviewConfig, (typeof VARIANT_KEYS.engine)[number]>`), so the
+      compiler refuses one from a typed caller, and this check is the
+      backstop for an untyped one;
+    - a name that is not `engine:<suffix>` under `VARIANT_NAME`;
+    - a key outside `VARIANT_KEYS.engine`, the eval's limits included, or a
+      key with no value (spreading `{ verifyPolicy: undefined }` would erase
+      the parsed value);
+    - no key and no model requirement;
+    - a `triage-pair` variant without a triage model other than the review
+      model.
+
+    The engine cannot catch a registered name that carries another built
+    variant's keys (say `engine:trivial-skip` with `verifyPolicy: "shared"`),
+    so `variantProblems` does, in `report.ts` and `certify.ts`. A
+    `report.test.ts` case shows it listed as pending:
+    `{ name: "engine:privacy-zdr", keys: { verifyPolicy: "shared" } }`.
+  - **Pending labels name the package that wires the key into the runner**,
+    not the one that adds its type: `VS-23c`, `VS-24 wiring`,
+    `VS-25b wiring`, `VS-26`, `VS-27c`, `VS-28 wiring` (`depth-auto` and
+    `lenses-high`), `VS-29a` and `VS-31`. The desktop halves wait for
+    `VS-23d`, `VS-24 wiring`, `VS-27c`, `VS-29a` and `VS-31`, or for "after
+    VS-10" (`impact-graph`, `cards-brain`, `depth-auto`, `lenses-high`). The
+    README's flip rule: a half turns built only in the package that makes its
+    keys change what that runner does, with its D3 parity test, and that
+    package adds the keys to that runner's `VARIANT_KEYS`. Landing a
+    `ReviewConfig` key or a core module (VS-24's `trivial` and `dispatch`,
+    VS-25b's core slice, VS-28's `risk.ts`) never flips one.
+- **The critique, point by point.**
+  1. *Engine-side refusal* (major): taken. The rule is "a non-empty subset of
+     `VARIANT_KEYS.engine`, each with a value, or a model requirement", with
+     tests (`{ name: "engine:trivial-skip", keys: {} }` and
+     `{ name: "engine:shared-verify", keys: { verify: "all" } }` among them,
+     0 LLM hits). It differs from the critique in two ways:
+     - `VARIANT_KEYS` lives in core rather than in engine `eval.ts`, so the
+       registry test checks every built half against the list its runner
+       really uses;
+     - the plan's separate `LIMIT_KEYS` check is gone, because `VARIANT_KEYS`
+       is typed to exclude `maxCostUsd`, `maxSteps` and `timeoutMinutes`, so a
+       limit can never become a variant key.
+  2. *Per-runner readiness* (major): taken. Entries have `engine` and
+     `desktop` halves, so today only `desktop:shared-verify` resolves on the
+     desktop. In `desktop.ts`, `applied` holds only when the runner read its
+     settings and the keys are a non-empty subset of `VARIANT_KEYS.desktop`,
+     each with a value. A variant the desktop cannot apply in full is not
+     handed to the runner at all, so the run is cleanly the frozen pipeline's,
+     not a mix. Tested with `{ verifyPolicy: "shared", nits: true }`, `{}` and
+     `{ verifyPolicy: undefined }`: each `applied: false`, with the frozen
+     run's scope and verification.
+  3. *`cross-family` as a model requirement* (major): taken, as
+     `models?: "triage-pair"` on `VariantEntry` and `VariantRecord`.
+     `variantProblems` compares it, and the engine refuses it without a
+     distinct triage model; the entry stays pending for VS-29a. No family or
+     lab check was built (codium's `labOf`/`checkedLabs`, §0.5, I-10). Two
+     choices:
+     - The engine accepts a `triage-pair` variant that has a distinct triage
+       model, so VS-29a can flip the entry in the script alone, as the
+       contract's VS-29a file list says (script only, no runtime code).
+     - `admitReplay`'s check that it got two distinct models is **not**
+       built. No built entry has a model requirement, so that branch could
+       not be reached or tested through the real registry. VS-29a adds it
+       with its flip. Until then the engine's refusal is the backstop.
+  4. *Wall-time flake*: taken. The reply waits on a thenable that starts its
+     150 ms timer only when the server awaits it, at request time, and the
+     test asserts a lower bound only.
+  5. *Aliases and labels*: taken. `legacy-verify` is dropped, because no code
+     ever produced it. There is no alias table: every older name (`engine`,
+     `engine:shared-verify`, `desktop`, `desktop:shared-verify`) is
+     canonical, VS-06's records still name their runs, and tests prove both.
+     The labels read "VS-24 wiring", "VS-25b wiring" and "VS-28 wiring".
+  6. *The grammar defined twice*: taken differently. Instead of a copied
+     literal there is one `VARIANT_NAME` in core, used by the engine and the
+     registry. The registry test asserts every name matches it and has no
+     `=`. The README says only the registry keeps model ids out.
+  7. *Match passes by name*: taken, in the test and in the doc comments.
+  8. *A union type for old artifacts*: taken. `ReplayArtifact.variant` is
+     `ReplayVariant`, exported from engine `eval.ts`. `report.ts` and
+     `certify.ts` read it through `replayVariant` and `variantProblems`. The
+     "old artifacts still load" tests stay, and a VS-21a record now pairs
+     under the same case key as VS-06's.
+  9. *`ShrinkStep` and locations*: taken. `ShrinkStep` is
+     `{ step: string; estimate: { lowTokens; lowUsd? } }`, and VS-24 owns it
+     and aligns it with `DispatchEstimate`. `context.locations` leaves out
+     the changed files (already in `files.reviewed`), instructions and
+     history on purpose: they carry no line.
+  10. *Regression coverage and fan-out*: taken.
+      - `test/session/prompt.test.ts`, whose `@ai-sdk/openai` case drives
+        the helper's responses path, ran as well as `run.test.ts`.
+      - `passes[].startMs` (each pass's first message after the first
+        message of any pass) was added beside `ms`, so the parallel-start
+        stagger behind VS-24 step 5 and `REPORT.md:372` shows offline.
+- **Where this departs from the contract text.**
+  - **Files.** The contract names `replay.ts`, `report.ts`, the README and
+    engine `eval.ts`. The record shape `{ name, keys, applied? }` is shared
+    by both adapters, so `desktop.ts` and `certify.ts` change too, along with
+    core `review/eval.ts` (the shared constants), the engine test helper and
+    the tests.
+  - **Cache figures** come from each pass's own session through
+    `measureCost`, the function `ReviewPass` uses, not from
+    `ReviewPass.cacheRead`. `ReviewPass` has no `cacheWrite`, and adding one
+    would change `ReviewOutcome`, a runner output (I-1). `cacheRead` equals
+    the outcome's pass of the same name by construction, and the test checks
+    it (400 cached tokens from the fake server, which also shows that the
+    chat protocol's `prompt_tokens_details.cached_tokens` reaches
+    `tokens.cache.read`).
+  - **Wall time** comes from session message timestamps (first created to
+    last completed). It adds no observation event to `run.ts`.
+  - **`ReplayInput.config` now refuses `verifyPolicy`.** This changes the eval
+    harness, not a runner, and nothing outside the tests calls
+    `ReviewEval.replay` yet.
+  - **`lenses-high`** is `depth: "auto"` plus `lenses: "high"`, because lenses
+    run only on the high band under depth `auto` (VS-28 step 2). Its ablation
+    baseline is therefore `engine:depth-auto`. VS-28 may revise this before
+    it flips.
+  - **`context.locations`** holds today's related-code call sites, in prompt
+    order. `quotedLocations` (engine `eval.ts`) selects them as `buildPrompt`
+    does: entries with hits, the first 10, 15 hits each (`prompt.ts:99-100`,
+    copied as named constants because `prompt.ts` is in the pipeline pin and
+    exports neither). So the list does not depend on ReviewContext's caps
+    (`context.ts:15-16`) staying equal to the prompt's. A test renders a
+    prompt past both caps (12 symbols, 16 hits each) and checks the list
+    against the prompt's own lines. `tier1` and `shrink` are typed only.
+  - **Per-pass usage** combines every session of a pass name, so a retry,
+    finalizer or lens in a new session would still be counted. Today
+    `run.ts` has one session per pass. VS-28's lenses, several pass events
+    of one name, must also match by lens.
+  - **The desktop artifact** gets no per-pass timing until `report.ts` loads
+    desktop artifacts (VS-21c). This is a documented difference.
+- **Off by default (I-1).**
+  - No runner is touched: not `run.ts`, `ai-review.ts`, `provider.ts`,
+    `session/llm.ts` or `posting.ts`. No @vector file, no generated code, no
+    `ReviewConfig` or `config.ts` change, and no `EVIDENCE_POLICY_KEYS` or
+    `EvidenceScope` change.
+  - With no variant, the frozen replay is unchanged: the environment passed
+    to `parseReviewConfig`, `config.value`, scope, rules, prompts, attempts,
+    tools and posts. The artifact only gains optional fields.
+  - `REVIEW_PIPELINE_SOURCES` stays `fa1d31befd5a4f77` (the pin test was
+    re-run) and `REVIEW_PIPELINE_REVISION` stays 1.
+  - No dependency was added, so no `bun install` ran. No user-visible string
+    changed (D14).
+- **Owner questions.** None of Q1-Q17 is decided. Q13 stays open: nothing is
+  wired into a runner. Q15 stays open: registering a name approves no
+  package. Q9's ablation budgets are untouched.
+- **Evidence.** Each file was run alone through the lock with
+  `--timeout 30000`, `GITHUB_ACTIONS=false`, and `TMPDIR` and XDG roots
+  under a fresh `/tmp/vector-vectorscope/vs21a-*`. All have 0 fail:
+
+  | Where | File | Pass |
+  |---|---|---|
+  | engine | `test/review/eval.test.ts` | 16 (12 before) |
+  | engine | `test/review/run.test.ts` | 41 |
+  | engine | `test/session/prompt.test.ts` | 144 (1 skip, the pre-existing `.skip` at line 1905) |
+  | core | `test/review/model-evidence.test.ts` | 16 (pin unchanged) |
+  | core | `test/review/eval.test.ts` | 42 |
+  | eval scripts | `replay` | 25 (18 before) |
+  | eval scripts | `report` | 22 (21 before) |
+  | eval scripts | `certify` | 6 (5 before) |
+  | eval scripts | `judge` | 6 |
+  | eval scripts | `ci` | 18 |
+  | `packages/script` | `fixtures.test.ts` | 50 |
+
+  `bun typecheck` in core and engine, and `bun tsgo -p
+  ../../script/vectorscope-eval/tsconfig.json` from `packages/engine`, all
+  exit 0. Nothing is committed or pushed, so the full turbo typecheck that
+  the lane rules require before a push has not run yet.
+- **Deferred.**
+  - VS-21b: the `RunInput` projection hook and the projection driver.
+  - VS-21c:
+    - `VARIANTS`/`PIPELINE` validation in `ci.ts`, which will use
+      `resolveVariant`;
+    - the report metrics on the new fields (wall time per pass, cache
+      shares);
+    - loading desktop artifacts in `report.ts`, and then their per-pass
+      timing.
+  - VS-29a: `admitReplay`'s two-model check, with its flip.
+  - VS-28: per-lens pass matching.
+  - A registry digest that `admitReplay` hands out and `ReviewEval.replay`
+    echoes (the review's optional suggestion). Not built: nothing would read
+    it before VS-21c's `ci.ts` validation, and `variantProblems` already
+    flags a mismatched record downstream.
+  - VS-25b: filling `tier1` and appending the slice's locations.
+  - VS-24: filling `shrink`.
+- **Review fixes (same day).** All eight review findings were taken, none
+  blocking:
+  1. `replayVariant` and `variantProblems` guard a record that is not an
+     object, or a name that is not a string, before the `in` check. A
+     primitive record names the frozen pipeline (VS-06's reader did the same)
+     and is listed as `its variant record is not an object`, so `report.ts`
+     blocks the release decision and `certify.ts` refuses. This is tested in
+     `replay`, `report` and `certify`.
+  2. `ReplayInput.config` leaves `VARIANT_KEYS.engine` out of its type. A
+     `@ts-expect-error` line in the engine test pins that, and the runtime
+     refusal still covers an untyped caller.
+  3. A new engine test runs review and verify, each in its own session. It
+     checks that verify's `startMs` is at least 150 ms and that each pass's
+     `cacheRead` (400 and 1,500) equals the outcome's same-named entry. Under
+     a $0.20 cap, verify is planned, skipped for budget, and has none of the
+     four fields.
+  4. and 6. `report.ts` `group()` passes only `single-prompt` and `empty`
+     as given and resolves every other name, so a capitalised or
+     space-padded runner is refused as malformed and an unrelated word as
+     naming no runner.
+  5. `context.locations` applies the prompt's own selection (above), with a
+     test past both caps.
+  7. Taken as a test, in `report.test.ts` and `replay.test.ts`. The optional
+     registry digest is deferred (see Deferred, above).
+  8. Combined, as above. No per-pass `sessions` count was added: with every
+     session counted, it would show nothing more.
+
+  Re-run after the fixes, each alone through the lock as above: engine
+  `test/review/eval.test.ts` 16, `replay` 25, `report` 22, `certify` 6 and
+  core `test/review/model-evidence.test.ts` 16 (pin unchanged), all with
+  0 fail. `bun typecheck` in the engine and the scripts' `tsgo` both exit 0,
+  and `prettier --check` passes on the changed files. `run.test.ts`,
+  `prompt.test.ts` and the core suites were not re-run: this round touched
+  no runner, no core file and no test helper.

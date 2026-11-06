@@ -4,11 +4,13 @@ import { tmpdir } from "node:os"
 import { basename, dirname, join } from "node:path"
 import type { ReviewClient, ReviewMessage, ReviewModel } from "../../packages/app/src/features/pull-requests/ai-review"
 import { parseReviewConfig } from "../../packages/core/src/review/config"
+import { VARIANT_KEYS, VARIANT_NAME } from "../../packages/core/src/review/eval"
 import { evidenceScope } from "../../packages/core/src/review/model-evidence"
 import { VERIFY_JSON_SCHEMA } from "../../packages/core/src/review/schema"
 import { DEFAULT_REVIEW_CONFIG } from "../../packages/core/src/review/types"
 import { Ledger, type Limits } from "./budget"
 import { gitEnv, loadManifest, type Manifest } from "./dataset"
+import type { ReplayVariant, VariantRecord } from "../../packages/engine/src/review/eval"
 import { candidateDiff, desktopReplay, withReviewSettings } from "./desktop"
 import {
   ADAPTERS,
@@ -20,8 +22,13 @@ import {
   replayCharge,
   replayPlan,
   replayVariant,
+  resolveVariant,
   variantAdapter,
+  variantNames,
+  variantProblems,
+  VARIANTS,
   type PlannedReplay,
+  type VariantEntry,
 } from "./replay"
 
 // The replay driver without any model or network: the plan it builds from the seed manifest, and checkouts prepared
@@ -210,11 +217,13 @@ describe("replay admission", () => {
   test("admits the frozen pipeline and a variant on one case separately, each with its own bound and config", () => {
     const ledger = Ledger.open({ limits })
     const legacy = admitReplay(ledger, { id: "case-a", models: [priced] })
-    const shared = admitReplay(ledger, { id: "case-a", models: [priced], variant: { verifyPolicy: "shared" } })
+    const shared = admitReplay(ledger, { id: "case-a", models: [priced], variant: "engine:shared-verify" })
     if (!legacy.admitted || !shared.admitted) throw new Error("both replays should be admitted")
-    // The variant goes into the replay's config, so the artifact names the variant it was admitted for.
+    // The variant's record goes to the replay as its variant, so the artifact names the variant it was admitted for.
     expect(legacy.config).toEqual({ maxCostUsd: 3 })
-    expect(shared.config).toEqual({ maxCostUsd: 3, verifyPolicy: "shared" })
+    expect(legacy.variant).toBeUndefined()
+    expect(shared.config).toEqual({ maxCostUsd: 3 })
+    expect(shared.variant).toEqual({ name: "engine:shared-verify", keys: { verifyPolicy: "shared" } })
     expect(ledger.summary().outstandingUsd).toBe(6)
     expect(ledger.entries.flatMap((entry) => (entry.type === "admit" ? [entry.case] : []))).toEqual([
       "engine test/review case-a#1",
@@ -225,10 +234,35 @@ describe("replay admission", () => {
     expect(replayVariant("desktop", { verifyPolicy: "shared" })).toBe("desktop:shared-verify")
     expect(variantAdapter("engine:shared-verify")).toBe("engine")
     // A second replay of the same variant and case is still held to that case's one bound.
-    expect(admitReplay(ledger, { id: "case-a", models: [priced], variant: { verifyPolicy: "shared" } })).toMatchObject({
+    expect(admitReplay(ledger, { id: "case-a", models: [priced], variant: "engine:shared-verify" })).toMatchObject({
       admitted: false,
       reason: "case",
     })
+    // The frozen pipeline's own name is the frozen pipeline, under the same case.
+    expect(admitReplay(ledger, { id: "case-a", models: [priced], variant: "engine" })).toMatchObject({
+      admitted: false,
+      reason: "case",
+    })
+  })
+
+  // VS-21a: a name whose package has not landed would replay the frozen pipeline under its name.
+  test("refuses a pending, unknown, malformed or desktop variant before the ledger sees it", () => {
+    const ledger = Ledger.open({ limits })
+    const before = ledger.entries.length
+    for (const [variant, detail] of [
+      ["engine:trivial-skip", "registered for VS-24 wiring, which has not landed"],
+      ["engine:cross-family", "registered for VS-29a, which has not landed"],
+      ["engine:verify", "not a registered variant"],
+      ["engine:shared-verify=test/review", "is not a variant name"],
+      ["desktop:shared-verify", "admitReplay admits engine replays"],
+    ] as const)
+      expect(admitReplay(ledger, { id: "case-a", models: [priced], variant })).toEqual({
+        admitted: false,
+        reason: "variant",
+        detail: expect.stringContaining(detail),
+      })
+    expect(ledger.entries.length).toBe(before)
+    expect(admitReplay(ledger, { id: "case-a", models: [priced] })).toMatchObject({ admitted: true })
   })
 
   test("refuses a model without a price, and the ledger stops admitting", () => {
@@ -282,6 +316,172 @@ describe("replay admission", () => {
     expect(result.stdout).toContain("Each case reserves its $0.7500 bound before it starts")
     expect((await main(["--budget-usd", "50"])).code).toBe(2)
     expect((await main(["--budget-usd", "1", "--case-budget-usd", "5"])).code).toBe(2)
+  })
+})
+
+// VS-21a: every variant name maps to its settings, and a name whose package has not landed is refused, never run as
+// the frozen pipeline.
+describe("the variant registry", () => {
+  const entries: [string, VariantEntry][] = Object.entries(VARIANTS)
+
+  test("names the contract's variants by runner and suffix, with no '=' and no model id", () => {
+    expect(variantNames("engine")).toEqual([
+      "engine",
+      "engine:shared-verify",
+      "engine:privacy-zdr",
+      "engine:trivial-skip",
+      "engine:impact-graph",
+      "engine:cards-brain",
+      "engine:guardrail-strict",
+      "engine:depth-auto",
+      "engine:lenses-high",
+      "engine:cross-family",
+      "engine:precise",
+    ])
+    for (const adapter of ["engine", "desktop"] as const)
+      for (const name of variantNames(adapter)) {
+        expect(name).toMatch(VARIANT_NAME)
+        expect(name).not.toContain("=")
+        expect(variantAdapter(name)).toBe(adapter)
+      }
+  })
+
+  test("old names still resolve, and a variant's record names it again", () => {
+    expect(resolveVariant("engine")).toEqual({ ok: true, name: "engine", adapter: "engine", keys: {}, frozen: true })
+    for (const [adapter, name] of [
+      ["engine", "engine:shared-verify"],
+      ["desktop", "desktop:shared-verify"],
+    ] as const) {
+      const resolved = resolveVariant(name)
+      expect(resolved).toEqual({
+        ok: true,
+        name,
+        adapter,
+        keys: { verifyPolicy: "shared" },
+        frozen: false,
+      })
+      if (!resolved.ok) continue
+      const record = { name: resolved.name, keys: resolved.keys }
+      expect(replayVariant(resolved.adapter, record)).toBe(name)
+      expect(variantProblems(resolved.adapter, record)).toEqual([])
+    }
+    expect(resolveVariant("desktop")).toMatchObject({ ok: true, frozen: true })
+    // VS-06's records, in artifacts written before VS-21a, name the same runs.
+    expect(replayVariant("engine")).toBe("engine")
+    expect(replayVariant("engine", { verifyPolicy: "legacy" })).toBe("engine")
+    expect(replayVariant("engine", { verifyPolicy: "shared" })).toBe("engine:shared-verify")
+    expect(replayVariant("desktop", { verifyPolicy: "shared", applied: false })).toBe("desktop:shared-verify")
+    expect(variantProblems("engine", { verifyPolicy: "shared" })).toEqual([])
+  })
+
+  test("a built half sets keys its runner applies, and a pending half names the package it waits for", () => {
+    const built = entries.flatMap(([suffix, entry]) =>
+      (["engine", "desktop"] as const).flatMap((adapter) =>
+        "from" in entry[adapter] ? [{ name: `${adapter}:${suffix}`, adapter, entry }] : [],
+      ),
+    )
+    expect(built.map((item) => item.name)).toEqual(["engine:shared-verify", "desktop:shared-verify"])
+    for (const item of built) {
+      const keys = Object.keys(item.entry.keys ?? {})
+      expect(keys.length > 0 || item.entry.models !== undefined).toBe(true)
+      const allowed: readonly string[] = VARIANT_KEYS[item.adapter]
+      for (const key of keys) expect(allowed).toContain(key)
+    }
+    const pending = entries.flatMap(([suffix, entry]) =>
+      (["engine", "desktop"] as const).flatMap((adapter) => {
+        const half = entry[adapter]
+        return "pending" in half ? [{ name: `${adapter}:${suffix}`, package: half.pending }] : []
+      }),
+    )
+    expect(pending).toHaveLength(2 * (entries.length - 1))
+    for (const item of pending)
+      expect(resolveVariant(item.name)).toEqual({
+        ok: false,
+        reason: "pending",
+        package: item.package,
+        detail: expect.stringContaining("so it is refused"),
+      })
+    // Each pending engine half names the package that wires its key into the runner, not one that only adds its type.
+    expect(
+      Object.fromEntries(
+        pending.filter((item) => item.name.startsWith("engine:")).map((item) => [item.name, item.package]),
+      ),
+    ).toEqual({
+      "engine:privacy-zdr": "VS-23c",
+      "engine:trivial-skip": "VS-24 wiring",
+      "engine:impact-graph": "VS-25b wiring",
+      "engine:cards-brain": "VS-26",
+      "engine:guardrail-strict": "VS-27c",
+      "engine:depth-auto": "VS-28 wiring",
+      "engine:lenses-high": "VS-28 wiring",
+      "engine:cross-family": "VS-29a",
+      "engine:precise": "VS-31",
+    })
+    // The cross-family pair is made by its models, never by a key.
+    expect(VARIANTS["cross-family"]).toMatchObject({ models: "triage-pair" })
+    expect(Object.hasOwn(VARIANTS["cross-family"], "keys")).toBe(false)
+  })
+
+  test("refuses malformed names and names it does not know, prototype names included", () => {
+    for (const name of [
+      "",
+      "engine=vendor/model",
+      "engine:shared-verify=vendor/model",
+      "engine/shared-verify",
+      "Engine",
+      "engine:",
+      "engine::shared-verify",
+      "engine:shared-verify:x",
+      " engine",
+      "engine:Shared-verify",
+      "engine:shared_verify",
+      "engine:__proto__",
+    ])
+      expect(resolveVariant(name)).toMatchObject({ ok: false, reason: "malformed" })
+    for (const name of ["codium", "codium:shared-verify", "constructor", "engine:constructor", "engine:tostring"])
+      expect(resolveVariant(name)).toMatchObject({ ok: false, reason: "unknown" })
+  })
+
+  test("checks an artifact's record against the registry", () => {
+    expect(variantProblems("engine")).toEqual([])
+    expect(variantProblems("engine", { name: "engine:shared-verify", keys: { verifyPolicy: "legacy" } })).toEqual([
+      'its variant engine:shared-verify set {"keys":{"verifyPolicy":"legacy"}}, not the registry\'s {"keys":{"verifyPolicy":"shared"}}',
+    ])
+    expect(
+      variantProblems("engine", {
+        name: "engine:shared-verify",
+        keys: { verifyPolicy: "shared" },
+        models: "triage-pair",
+      }),
+    ).toHaveLength(1)
+    expect(variantProblems("engine", { name: "desktop:shared-verify", keys: { verifyPolicy: "shared" } })).toEqual([
+      "its variant desktop:shared-verify is another runner's, not engine's",
+    ])
+    expect(variantProblems("engine", { name: "engine", keys: {} })).toEqual([
+      "its variant record names the frozen pipeline, engine, which has none",
+    ])
+    expect(variantProblems("engine", { name: "engine:trivial-skip", keys: {} })[0]).toContain(
+      "registered for VS-24 wiring",
+    )
+    expect(variantProblems("engine", { name: "engine:bogus", keys: {} })[0]).toContain("not a registered variant")
+    // A pending name carrying a built variant's keys, which ReviewEval.replay would run, is still pending.
+    expect(variantProblems("engine", { name: "engine:privacy-zdr", keys: { verifyPolicy: "shared" } })[0]).toContain(
+      "engine:privacy-zdr is registered for VS-23c, which has not landed",
+    )
+  })
+
+  test("reads a hand-edited record that is not an object, or has no string name, without throwing", () => {
+    // An artifact is untrusted JSON: what its variant holds is not known to be a record.
+    const untyped = (value: unknown) => value as ReplayVariant
+    for (const value of ["engine:shared-verify", 1, true, null]) {
+      expect(replayVariant("engine", untyped(value))).toBe("engine")
+      expect(variantProblems("engine", untyped(value))).toEqual(["its variant record is not an object"])
+    }
+    expect(replayVariant("engine", untyped({ name: 1, keys: {} }))).toBe("engine")
+    expect(variantProblems("engine", untyped({ name: 1, keys: {} }))).toEqual([
+      "its variant record's name is not a string",
+    ])
+    expect(variantProblems("engine", untyped({ name: "engine:shared-verify" }))[0]).toContain("not the registry's")
   })
 })
 
@@ -451,7 +651,7 @@ describe("the desktop replay", () => {
     const settled = buildMirror(join(root, "mirror-settings"), { ".vector/review.json": '{"verify":"blocking"}' })
     const caseView = { repository: view.repository, base: settled.base, head: settled.head }
     const concern = { ...bug, severity: "concern", title: "total() of an empty list is not tested" }
-    const replay = async (name: string, config?: { verifyPolicy: "legacy" | "shared" }) => {
+    const replay = async (name: string, variant?: Pick<VariantRecord, "name" | "keys">) => {
       const directory = checkoutDirectory(join(root, `desktop-${name}`), planned.id)
       expect(prepareCheckout({ mirror: settled.dir, view: caseView, directory })).toEqual([])
       return desktopReplay({
@@ -460,14 +660,30 @@ describe("the desktop replay", () => {
         diff: candidateDiff(directory, caseView),
         model,
         client: fakeClient(directory, [bug, concern]).client,
-        ...(config ? { config } : {}),
+        ...(variant ? { variant } : {}),
       })
     }
     const legacy = await replay("legacy")
-    const shared = await replay("shared", { verifyPolicy: "shared" })
+    const resolved = resolveVariant("desktop:shared-verify")
+    if (!resolved.ok) throw new Error(resolved.detail)
+    const shared = await replay("shared", { name: resolved.name, keys: resolved.keys })
     for (const artifact of [legacy, shared]) expect(artifact.error).toBeUndefined()
     expect(legacy.variant).toBeUndefined()
-    expect(shared.variant).toEqual({ verifyPolicy: "shared", applied: true })
+    expect(shared.variant).toEqual({ name: "desktop:shared-verify", keys: { verifyPolicy: "shared" }, applied: true })
+    expect(variantProblems("desktop", shared.variant)).toEqual([])
+    // A variant the desktop runner does not apply in full, or one that sets nothing, is not handed to it: the run is
+    // the frozen pipeline's, and the artifact says so.
+    for (const [index, variant] of [
+      { name: "desktop:shared-verify", keys: { verifyPolicy: "shared" as const, nits: true } },
+      { name: "desktop:trivial-skip", keys: {} },
+      { name: "desktop:shared-verify", keys: { verifyPolicy: undefined } },
+    ].entries()) {
+      const unapplied = await replay(`unapplied-${index}`, variant)
+      expect(unapplied.error).toBeUndefined()
+      expect(unapplied.variant).toEqual({ ...variant, applied: false })
+      expect(unapplied.scope).toEqual(legacy.scope)
+      expect(unapplied.outcome?.verification).toEqual(legacy.outcome?.verification)
+    }
     // Each artifact's evidence scope is of the settings the runner read: the base's, with the variant over them.
     const settings = (json: object) => parseReviewConfig({ json: JSON.stringify(json), trigger: "desktop" }).config
     expect(legacy.scope).toEqual(evidenceScope({ adapter: "desktop", config: settings({ verify: "blocking" }) }))
@@ -496,7 +712,7 @@ describe("the desktop replay", () => {
       { ".vector/review.json": '{"verify":"off"}\n' },
     )
     const caseView = { repository: view.repository, base: edited.base, head: edited.head }
-    const replay = async (name: string, config?: { verifyPolicy: "shared" }) => {
+    const replay = async (name: string, variant?: Pick<VariantRecord, "name" | "keys">) => {
       const directory = checkoutDirectory(join(root, `desktop-edits-${name}`), planned.id)
       expect(prepareCheckout({ mirror: edited.dir, view: caseView, directory })).toEqual([])
       const fake = fakeClient(directory)
@@ -506,15 +722,19 @@ describe("the desktop replay", () => {
         diff: candidateDiff(directory, caseView),
         model,
         client: fake.client,
-        ...(config ? { config } : {}),
+        ...(variant ? { variant } : {}),
       })
       return { artifact, prompts: fake.prompts }
     }
     const legacy = await replay("legacy")
-    const shared = await replay("shared", { verifyPolicy: "shared" })
+    const shared = await replay("shared", { name: "desktop:shared-verify", keys: { verifyPolicy: "shared" } })
     for (const run of [legacy, shared]) expect(run.artifact.error).toBeUndefined()
     expect(legacy.artifact.variant).toBeUndefined()
-    expect(shared.artifact.variant).toEqual({ verifyPolicy: "shared", applied: false })
+    expect(shared.artifact.variant).toEqual({
+      name: "desktop:shared-verify",
+      keys: { verifyPolicy: "shared" },
+      applied: false,
+    })
     // The runner ran under the defaults, and the scope says so, not the base's file or the variant.
     for (const run of [legacy, shared])
       expect(run.artifact.scope).toEqual(evidenceScope({ adapter: "desktop", config: DEFAULT_REVIEW_CONFIG }))

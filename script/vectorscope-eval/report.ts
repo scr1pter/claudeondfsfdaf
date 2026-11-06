@@ -27,7 +27,7 @@ import { Ledger, readJournal, type Entry, type Summary } from "./budget"
 import { caseView, manifestProblems, SEED_MANIFEST, SPLITS, type Case, type Manifest } from "./dataset"
 import { listFixtures, loadFixture, type Fixture } from "./fixture"
 import { outsideRepository, REPO_ROOT } from "./paths"
-import { replayCaseKey, replayCharge, replayVariant } from "./replay"
+import { replayCaseKey, replayCharge, replayVariant, resolveVariant, variantProblems } from "./replay"
 
 export { outsideRepository }
 
@@ -40,6 +40,10 @@ export { outsideRepository }
 
 export const JUDGEMENTS_SCHEMA = "vectorscope-judgements/1"
 export const EMPTY_CONTROL = { variant: "empty", model: "none" } as const
+// The run.ts harness's variant (fromRunReport). It and the empty control are the only variants the replay registry
+// does not name.
+const SINGLE_PROMPT = "single-prompt"
+const UNREGISTERED: readonly string[] = [SINGLE_PROMPT, EMPTY_CONTROL.variant]
 
 // The judge's record of every pass, adjudication and judge call, kept by the coordinator outside the repository. It
 // holds the seed that blinds the worksheets, so it is never given to a judge.
@@ -153,6 +157,12 @@ export async function loadOutputs(input: {
       ...unknown.map((entry) => `${entry.file} is neither a run.ts report nor a replay artifact, and is left out`),
       ...invalid.map((problem) => `manifest ${manifestPath}: ${problem}`),
       ...(artifacts.length && reports.length ? ["run.ts reports and replay artifacts are reported together"] : []),
+      // A variant record the registry does not bear out names a run it may not be.
+      ...artifacts.flatMap((entry) =>
+        variantProblems("engine", (entry.value as ReplayArtifact).variant).map(
+          (problem) => `${entry.file}: ${problem}`,
+        ),
+      ),
     ],
   }
 }
@@ -253,7 +263,7 @@ export function fromRunReport(report: RunReport, fixtures: readonly Fixture[]) {
     const settlements = settled(key)
     const findings = (run.report?.findings ?? []).map((finding) => evalFinding(finding))
     return {
-      variant: "single-prompt",
+      variant: SINGLE_PROMPT,
       model: report.model,
       case: run.fixture,
       repetition: run.attempt,
@@ -287,7 +297,7 @@ export function fromRunReport(report: RunReport, fixtures: readonly Fixture[]) {
       .filter((name) => fixtures.some((fixture) => fixture.name === name))
       .flatMap((name) =>
         Array.from({ length: report.repeat }, (_, index) => ({
-          variant: "single-prompt",
+          variant: SINGLE_PROMPT,
           model: report.model,
           case: name,
           repetition: index + 1,
@@ -296,10 +306,11 @@ export function fromRunReport(report: RunReport, fixtures: readonly Fixture[]) {
   }
 }
 
-// A replay artifact: the engine pipeline, or a variant of it (replayVariant), on a dataset case. The reviewers' findings
-// are what was proposed; the line comments and the findings the summary lists are what would be posted, when those
-// writes got through the posting check. Its spend is its attempts' settlements, with unsettled or incomplete ones kept
-// at their estimates, and its paid attempts are accounted for only when the eval ledger's journal admitted the replay.
+// A replay artifact: the engine pipeline, or a variant of it (replayVariant, which reads VS-21a's and VS-06's variant
+// records), on a dataset case. The reviewers' findings are what was proposed; the line comments and the findings the
+// summary lists are what would be posted, when those writes got through the posting check. Its spend is its attempts'
+// settlements, with unsettled or incomplete ones kept at their estimates, and its paid attempts are accounted for only
+// when the eval ledger's journal admitted the replay.
 export function fromArtifact(
   artifact: ReplayArtifact,
   manifest: Manifest | undefined,
@@ -484,8 +495,10 @@ Re-scores saved eval outputs against settled judgements and evaluates the releas
   --judgements <path>      Judgement file from judge.ts (without one, every finding is unjudged)
   --manifest <path>        Dataset manifest for replay artifacts (default: the seed manifest)
   --split <name>           Split the replay artifacts come from: ${SPLITS.join(", ")} (default development)
-  --candidate <v>=<model>  Pipeline variant and model the gate decides on (default: the only one); a replay's
-                           variant is engine, or engine:shared-verify for the shared verify policy
+  --candidate <v>=<model>  Pipeline variant and model the gate decides on (default: the only one): single-prompt
+                           for run.ts reports, empty for the control, or a registry name from replay.ts (engine,
+                           engine:shared-verify, ...); any other name, or one whose package has not landed, is
+                           refused
   --baseline <v>=<model>   The frozen pipeline to compare recall with on paired cases, such as engine=<model>
   --gate <path>            Gate config JSON (default: the owner's approved D2 gate)
   --ledger <path>          Eval ledger journal, which shows what each replay was admitted for; its summary is the
@@ -526,9 +539,10 @@ export async function main(argv: string[]): Promise<{ code: number; stdout: stri
   if (!outputs.length) return usage("Give at least one --outputs path.")
   const split = text("split")
   if (split !== undefined && !SPLITS.includes(split as (typeof SPLITS)[number])) return usage(`Unknown split ${split}.`)
-  const candidate = group(text("candidate"))
-  const baseline = group(text("baseline"))
-  if (candidate === null || baseline === null) return usage("--candidate and --baseline take <variant>=<model>.")
+  const candidate = group("candidate", text("candidate"))
+  const baseline = group("baseline", text("baseline"))
+  if (typeof candidate === "string") return usage(candidate)
+  if (typeof baseline === "string") return usage(baseline)
   const out = text("out") ? resolve(text("out")!) : undefined
   if (out && !outsideRepository(out)) return usage(`--out must be outside the repository (${REPO_ROOT}).`)
 
@@ -589,11 +603,19 @@ function usage(problem: string) {
   return { code: 2, stdout: "", stderr: `${problem}\n\n${USAGE}` }
 }
 
-function group(value: string | undefined): Group | undefined | null {
+// A --candidate or --baseline group, or what is wrong with it. Apart from single-prompt and the empty control, a variant
+// is a registry name, refused with resolveVariant's detail when it is malformed (a capitalised or space-padded runner
+// among them), unknown or not built, so a mistyped name is explained instead of silently matching no runs.
+function group(flag: string, value: string | undefined): Group | undefined | string {
   if (value === undefined) return undefined
   const at = value.indexOf("=")
-  if (at < 1 || at === value.length - 1) return null
-  return { variant: value.slice(0, at), model: value.slice(at + 1) }
+  if (at < 1 || at === value.length - 1) return `--${flag} takes <variant>=<model>.`
+  const variant = value.slice(0, at)
+  const model = value.slice(at + 1)
+  if (UNREGISTERED.includes(variant)) return { variant, model }
+  const resolved = resolveVariant(variant)
+  if (!resolved.ok) return `--${flag}: ${resolved.detail}`
+  return { variant: resolved.name, model }
 }
 
 function jsonFiles(path: string): string[] {

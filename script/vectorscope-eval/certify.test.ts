@@ -228,4 +228,39 @@ describe("certify.ts", () => {
     expect(unapplied.code).toBe(1)
     expect(unapplied.stderr).toContain("asked for the variant, but it never reached the runner")
   })
+
+  // VS-21a: the record names the variant and every key it set, and must be the registry's.
+  test("takes VS-21a's variant record, and refuses one the registry does not bear out", async () => {
+    const named = (label: string, keys: object) =>
+      artifact(label, {
+        variant: { name: "engine:shared-verify", keys },
+        scope: { ...SCOPE, policy: "1".repeat(16) },
+      })
+    const matching = await main(
+      files("record-matching", {
+        report: report({ variant: "engine:shared-verify" }),
+        artifacts: [named("a", { verifyPolicy: "shared" }), named("b", { verifyPolicy: "shared" })],
+      }).args(),
+    )
+    expect(matching.stderr).toBe("")
+    expect(matching.code).toBe(0)
+    const mismatched = await main(
+      files("record-mismatched", {
+        report: report({ variant: "engine:shared-verify" }),
+        artifacts: [named("a", { verifyPolicy: "shared" }), named("b", { verifyPolicy: "legacy" })],
+      }).args(),
+    )
+    expect(mismatched.code).toBe(1)
+    expect(mismatched.stderr).toContain("1.json: its variant engine:shared-verify set")
+    expect(mismatched.stderr).toContain("not the registry's")
+    // A hand-edited record that is not an object names the frozen pipeline and is refused, not thrown on.
+    const primitive = await main(
+      files("record-primitive", {
+        report: report(),
+        artifacts: [artifact("a"), artifact("b", { variant: "engine:shared-verify" })],
+      }).args(),
+    )
+    expect(primitive.code).toBe(1)
+    expect(primitive.stderr).toContain("1.json: its variant record is not an object")
+  })
 })

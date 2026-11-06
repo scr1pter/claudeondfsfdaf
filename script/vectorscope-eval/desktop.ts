@@ -10,11 +10,12 @@ import {
 } from "../../packages/app/src/features/pull-requests/ai-review"
 import { parseReviewConfig, REVIEW_CONFIG_PATH } from "../../packages/core/src/review/config"
 import { parseUnifiedDiff } from "../../packages/core/src/review/diff"
+import { VARIANT_KEYS } from "../../packages/core/src/review/eval"
 import { evidenceScope, type EvidenceScope } from "../../packages/core/src/review/model-evidence"
 import type { ReviewPrice } from "../../packages/core/src/review/plan"
 import { REVIEW_REPORT_JSON_SCHEMA, VERIFY_JSON_SCHEMA } from "../../packages/core/src/review/schema"
 import type { CostKind, ReviewConfig, Trust } from "../../packages/core/src/review/types"
-import type { PlacedRecord } from "../../packages/engine/src/review/eval"
+import type { PlacedRecord, VariantRecord } from "../../packages/engine/src/review/eval"
 import { untrustedGitEnv, UNTRUSTED_GIT } from "./dataset"
 import type { PlannedReplay } from "./replay"
 
@@ -65,9 +66,10 @@ export interface DesktopArtifact {
   placed: PlacedRecord[]
   // What the panel's Post button would send, which is never sent here.
   proposed?: { body: string; comments: LineComment[]; untrusted: boolean }
-  // The config variant replayed (VS-06), and whether it reached the runner: it never reads a review.json that the
-  // change itself edits, so such a case ran under the default settings and cannot be compared.
-  variant?: { verifyPolicy: ReviewConfig["verifyPolicy"]; applied: boolean }
+  // The pipeline variant replayed (VS-21a), and whether it reached the runner. It did not when the change itself
+  // edits review.json, which the runner then never reads its settings from, or when the variant sets nothing the
+  // desktop runner applies (VARIANT_KEYS.desktop); either case ran the frozen pipeline and cannot be compared.
+  variant?: VariantRecord & { applied: boolean }
   error?: string // why runReview failed, when it threw
 }
 
@@ -81,9 +83,9 @@ export interface DesktopReplayInput {
   source?: { vector?: string; manifest?: string }
   timeoutMs?: number
   now?: () => number
-  // A config variant, as the engine replay's `config` takes it: the verify policy (VS-06), read as a repository that
-  // chose it would be.
-  config?: Partial<Pick<ReviewConfig, "verifyPolicy">>
+  // The pipeline variant, a registry name and its keys (resolveVariant in replay.ts), as the engine replay's `variant`
+  // takes it. Its keys are read as a repository that chose them would set them.
+  variant?: Pick<VariantRecord, "name" | "keys">
 }
 
 // Replays one case through the desktop runner as a pull request from someone else's fork: untrusted, with no viewer,
@@ -92,12 +94,14 @@ export interface DesktopReplayInput {
 export async function desktopReplay(input: DesktopReplayInput): Promise<DesktopArtifact> {
   const item = input.planned.case
   const recording = recordingClient(input.client)
-  const policy = input.config?.verifyPolicy
+  const variant = input.variant
   // The runner never takes settings from a review.json the pull request changes (runReview's setting()), and then reads
   // that file only as a changed file. So a case whose change touches it gets no variant and keeps its own text, and
-  // its settings are the defaults; the artifact says the variant was not applied.
+  // its settings are the defaults. A variant whose keys the desktop runner does not all apply is not handed over
+  // either, so the run is the frozen pipeline's. The artifact says the variant was not applied.
   const touched = changesFile(input.diff, REVIEW_CONFIG_PATH)
-  const settings = policy && !touched ? withReviewSettings(recording.client, { verifyPolicy: policy }) : undefined
+  const settings =
+    variant && !touched && appliable(variant.keys) ? withReviewSettings(recording.client, variant.keys) : undefined
   const read = settingsReader(settings?.client ?? recording.client, { ignore: touched })
   const repository = item.repository?.url
   const pr = {
@@ -179,7 +183,7 @@ export async function desktopReplay(input: DesktopReplayInput): Promise<DesktopA
       verified: finding.verified === true,
     })),
     ...(posting ? { proposed: { body: posting.body, comments: posting.comments, untrusted: posting.untrusted } } : {}),
-    ...(policy ? { variant: { verifyPolicy: policy, applied: settings?.served() ?? false } } : {}),
+    ...(variant ? { variant: { name: variant.name, keys: variant.keys, applied: settings?.served() ?? false } } : {}),
     ...(outcome instanceof Error ? { error: outcome.message } : {}),
   }
 }
@@ -230,6 +234,14 @@ function settingsReader(inner: ReviewClient, options: { ignore?: boolean } = {})
     },
   }
   return { client, text: () => text }
+}
+
+// Whether the desktop runner applies every one of these keys: at least one, each with a value, all in
+// VARIANT_KEYS.desktop. A key it does not apply would leave the run the frozen pipeline's under the variant's name.
+function appliable(keys: Partial<ReviewConfig>) {
+  const allowed: readonly string[] = VARIANT_KEYS.desktop
+  const entries = Object.entries(keys)
+  return entries.length > 0 && entries.every(([key, value]) => value !== undefined && allowed.includes(key))
 }
 
 // Whether a unified diff changes this path, at either end of a rename, compared without case as the runner does.
