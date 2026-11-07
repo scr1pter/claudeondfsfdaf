@@ -174,6 +174,8 @@ const FIELDS: Record<PlainKey, Field> = {
   guardrail: oneOf(["off", "strict"]),
   scopeGate: oneOf(["off", "introduced"]),
   verifyEvidence: oneOf(["off", "certificate"]),
+  depth: oneOf(["fixed", "auto"]),
+  lenses: oneOf(["off", "high"]),
   failOn: oneOf(["never", "blocking"]),
   ignore: strings,
   ignoreDefaults: bool,
@@ -214,6 +216,8 @@ const ENV: { name: string; key: PlainKey; kind: "number" | "text" }[] = [
   { name: "REVIEW_TRIVIAL", key: "trivial", kind: "text" },
   { name: "REVIEW_IMPACT", key: "impact", kind: "text" },
   { name: "REVIEW_GUARDRAIL", key: "guardrail", kind: "text" },
+  { name: "REVIEW_DEPTH", key: "depth", kind: "text" },
+  { name: "REVIEW_LENSES", key: "lenses", kind: "text" },
   { name: "REVIEW_FAIL_ON", key: "failOn", kind: "text" },
   { name: "REVIEW_MAX_COST_USD", key: "maxCostUsd", kind: "number" },
   { name: "REVIEW_MAX_COST_USD_PER_PR", key: "maxCostUsdPerPr", kind: "number" },
@@ -254,6 +258,15 @@ const UNAPPLIED: Record<
     applies: (config) => config.verifyEvidence === "certificate" && config.guardrail === "strict",
     warning:
       '"verifyEvidence": "certificate" is not applied yet: verify verdicts are still read without a certificate.',
+  },
+  depth: {
+    applies: (config) => config.depth === "auto",
+    warning: '"depth": "auto" is not applied yet: every review still runs its usual passes.',
+  },
+  // Only under "auto": without it the key is ignored (settle's note), so it is never also "not applied".
+  lenses: {
+    applies: (config) => config.lenses === "high" && config.depth === "auto",
+    warning: '"lenses": "high" is not applied yet: no lens passes run.',
   },
 }
 
@@ -460,6 +473,18 @@ function settle(
   if (config.verifyEvidence === "certificate" && config.guardrail !== "strict")
     warnings.push(
       '"verifyEvidence": "certificate" is ignored without "guardrail": "strict": certificate-backed verification runs only inside the strict guardrail.',
+    )
+  // VS-28's lenses run only on the high band of an automatic depth. The value is kept as written.
+  if (config.lenses === "high" && config.depth !== "auto")
+    warnings.push(
+      '"lenses": "high" is ignored without "depth": "auto": lens passes run only on the high band of an automatic depth.',
+    )
+  // An explicit "off" wins over every band (plan.ts planDepth), so the depth that runs is said, not silently less.
+  if (config.depth === "auto" && config.security === "off")
+    warnings.push(
+      config.lenses === "high"
+        ? '"depth": "auto" keeps "security": "off": no band adds the security pass or the access lens.'
+        : '"depth": "auto" keeps "security": "off": no band adds the security pass.',
     )
   warnings.push(
     ...UNAPPLIED_REVIEW_KEYS.filter((key) => UNAPPLIED[key].applies(config)).map((key) => UNAPPLIED[key].warning),

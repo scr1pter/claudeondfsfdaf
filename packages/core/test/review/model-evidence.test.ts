@@ -37,8 +37,9 @@ import { DEFAULT_REVIEW_CONFIG, UNAPPLIED_REVIEW_KEYS, type ReviewConfig } from 
 // strict guardrail (VS-27b's guardrail.ts) is pinned from the day it lands, though no runner calls it before VS-27c: it
 // decides what a strict review posts, and its shared rule pass is the one report.ts's offline re-selection applies, so
 // a change to either moves this pin on purpose. So is the rule citation check (VS-43a's citation.ts), pinned from the
-// day it lands, as guardrail.ts is: it will decide what a review drops or strips. verdict.ts and format.ts are left
-// out: completeness decides wording and the verdict, not what a review finds or posts.
+// day it lands, as guardrail.ts is: it will decide what a review drops or strips. So is the change-risk band (VS-28c's
+// risk.ts), pinned from the day it lands: once wired it decides which passes run under `depth: "auto"`. verdict.ts and
+// format.ts are left out: completeness decides wording and the verdict, not what a review finds or posts.
 const REVIEW_PIPELINE_FILES = [
   "packages/engine/src/review/run.ts",
   "packages/app/src/features/pull-requests/ai-review.ts",
@@ -52,6 +53,7 @@ const REVIEW_PIPELINE_FILES = [
   "packages/core/src/review/holdback.ts",
   "packages/core/src/review/trivial.ts",
   "packages/core/src/review/dispatch.ts",
+  "packages/core/src/review/risk.ts",
   "packages/core/src/review/guardrail.ts",
   "packages/core/src/review/citation.ts",
   "packages/engine/src/review/parse.ts",
@@ -315,6 +317,85 @@ describe("scope", () => {
     expect(certGated).toBe("0f3ff2dd0f7c1d7d")
   })
 
+  // VS-28c: the four lens prompts render only under `depth: "auto"` with `lenses: "high"`, so they move the digest only
+  // under that pair; either key alone, and every other set of keys, keeps its digest.
+  test("the prompts digest covers VS-28's lens prompts under depth: auto with lenses: high only", () => {
+    for (const keys of [
+      { depth: "auto" as const },
+      { lenses: "high" as const },
+      { depth: "fixed" as const, lenses: "high" as const },
+      { depth: "auto" as const, lenses: "off" as const },
+    ]) {
+      expect(promptsDigest(keys)).toBe(promptsDigest())
+      expect(canonicalPrompts(keys)).toEqual(canonicalPrompts())
+      expect(promptsDigest({ ...keys, impact: "graph" })).toBe(promptsDigest({ impact: "graph" }))
+      expect(promptsDigest({ ...keys, guardrail: "strict" })).toBe(promptsDigest({ guardrail: "strict" }))
+    }
+    const lensed = canonicalPrompts({ depth: "auto", lenses: "high" })
+    expect(lensed.slice(0, canonicalPrompts().length)).toEqual(canonicalPrompts())
+    // Four lenses, each over the review prompts' six inputs for both trusts.
+    expect(lensed.length - canonicalPrompts().length).toBe(48)
+    const text = lensed.slice(canonicalPrompts().length).join("\n")
+    for (const section of [
+      "You are Vector's concurrency reviewer.",
+      "You are Vector's resource reviewer.",
+      "You are Vector's access reviewer.",
+      "You are Vector's data-integrity reviewer.",
+      "- Anything that is not a concurrency defect.",
+      "- Anything that is not a resource defect.",
+      "- Anything that is not an access-control defect.",
+      "- Anything that is not a data-integrity defect.",
+      "Report at most 4 findings",
+      "The working tree is the base branch.",
+      // The input matrix: nits asked for and not, incremental, and uncommitted.
+      "Nit means a clarity or style point; nits come last.",
+      "Do not report nits.",
+      "The last review was of `",
+      "Reviewing the uncommitted changes in the working tree against",
+    ])
+      expect(text).toContain(section)
+    expect(text).not.toContain("<untrusted_impact>")
+    // Under impact: "graph" too, each lens also renders with each slice, for both trusts, after its input matrix.
+    const graph = canonicalPrompts({ impact: "graph" })
+    const lensedGraph = canonicalPrompts({ impact: "graph", depth: "auto", lenses: "high" })
+    expect(lensedGraph.slice(0, graph.length)).toEqual(graph)
+    expect(lensedGraph.length - graph.length).toBe(48 + 16)
+    const graphText = lensedGraph.slice(graph.length).join("\n")
+    expect(graphText).toContain("<untrusted_impact>")
+    for (const lens of ["concurrency", "resource", "access", "data-integrity"])
+      expect(
+        lensedGraph
+          .slice(graph.length)
+          .filter(
+            (prompt) => prompt.includes(`You are Vector's ${lens} reviewer.`) && prompt.includes("<untrusted_impact>"),
+          ),
+      ).toHaveLength(4)
+    expect(canonicalPrompts().join("\n")).not.toContain("Report at most 4 findings, the most important first.\n")
+    const lenses = promptsDigest({ depth: "auto", lenses: "high" })
+    const lensesGraph = promptsDigest({ impact: "graph", depth: "auto", lenses: "high" })
+    const lensesStrict = promptsDigest({ guardrail: "strict", depth: "auto", lenses: "high" })
+    expect(
+      new Set([
+        promptsDigest(),
+        promptsDigest({ impact: "graph" }),
+        promptsDigest({ guardrail: "strict" }),
+        lenses,
+        lensesGraph,
+        lensesStrict,
+      ]).size,
+    ).toBe(6)
+    // VS-28c held every earlier digest, and printed these (built at 0e4c5d1d). VS-28 wiring moves them on purpose when
+    // the lens agent prompt joins under the pair.
+    expect(promptsDigest()).toBe("5d59e9ee06077c23")
+    expect(promptsDigest({ impact: "graph" })).toBe("74a2111826c226b1")
+    expect(promptsDigest({ guardrail: "strict" })).toBe("b98afb0e878dfe26")
+    expect(promptsDigest({ guardrail: "strict", scopeGate: "introduced" })).toBe("4aa712221043a3a7")
+    expect(promptsDigest({ guardrail: "strict", verifyEvidence: "certificate" })).toBe("d209592d08bb1e0c")
+    expect(lenses).toBe("dd09332295a99649")
+    expect(lensesGraph).toBe("31c1a0612c0f9541")
+    expect(lensesStrict).toBe("0ebaacbe7aca1b58")
+  })
+
   // The runners and the core code they share have no digest a review can compute, so this pins one: a change to any of
   // these files fails here until someone decides whether REVIEW_PIPELINE_REVISION goes up and updates the pin.
   test("the pipeline's sources are pinned next to REVIEW_PIPELINE_REVISION", () => {
@@ -370,6 +451,11 @@ describe("scope", () => {
       { verifyEvidence: "off" as const },
       { verifyEvidence: "certificate" as const },
       { guardrail: "strict" as const, verifyEvidence: "certificate" as const },
+      // Nor VS-28's depth and lenses, alone or together.
+      { depth: "fixed" as const },
+      { depth: "auto" as const },
+      { lenses: "high" as const },
+      { depth: "auto" as const, lenses: "high" as const },
     ])
       expect(policyDigest({ ...DEFAULT_REVIEW_CONFIG, ...change })).toBe(base)
   })
@@ -460,6 +546,28 @@ describe("scope", () => {
       evidenceScope({ adapter: "desktop", config: { ...cert, scopeGate: "introduced", impact: "graph" } }),
     ).toEqual(evidenceScope({ adapter: "desktop", config: DEFAULT_REVIEW_CONFIG }))
     expect(policyDigest({ ...cert, nits: true })).not.toBe(policyDigest(cert))
+  })
+
+  // VS-28c: `depth` and `lenses` are policy keys (they choose which passes look for defects) that no runner applies
+  // before VS-28 wiring, so neither the policy digest nor the prompts digest of a scope moves with them yet. Once a
+  // runner applies both, the prompts digest counts the lens prompts only under the pair, and the policy digest counts
+  // `lenses` only under `depth: "auto"` (dormant now; VS-28 wiring's test shows "fixed" with "high" equals the default).
+  test("the scope leaves out VS-28's depth and lenses until a runner applies them", () => {
+    const base = policyDigest(DEFAULT_REVIEW_CONFIG)
+    for (const key of ["depth", "lenses"] as const) {
+      expect(EVIDENCE_POLICY_KEYS).toContain(key)
+      expect(UNAPPLIED_REVIEW_KEYS).toContain(key)
+    }
+    for (const depth of ["auto", "fixed", undefined] as const)
+      for (const lenses of ["high", "off", undefined] as const)
+        expect(policyDigest({ ...DEFAULT_REVIEW_CONFIG, depth, lenses })).toBe(base)
+    const lensed: ReviewConfig = { ...DEFAULT_REVIEW_CONFIG, depth: "auto", lenses: "high" }
+    expect(evidenceScope({ adapter: "engine", config: lensed })).toEqual(SCOPE)
+    expect(evidenceScope({ adapter: "engine", config: lensed }).prompts).toBe(promptsDigest())
+    expect(evidenceScope({ adapter: "desktop", config: { ...lensed, impact: "graph", guardrail: "strict" } })).toEqual(
+      evidenceScope({ adapter: "desktop", config: DEFAULT_REVIEW_CONFIG }),
+    )
+    expect(policyDigest({ ...lensed, nits: true })).not.toBe(policyDigest(lensed))
   })
 
   test("a route is in the scope only when the caller enforced it", () => {

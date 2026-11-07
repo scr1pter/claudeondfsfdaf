@@ -799,6 +799,8 @@ describe("VS-24's keys", () => {
       guardrail: "off",
       scopeGate: "off",
       verifyEvidence: "off",
+      depth: "fixed",
+      lenses: "off",
     })
   })
 
@@ -1123,6 +1125,103 @@ describe("VS-44's verifyEvidence key", () => {
     for (const text of [
       JSON.stringify({ verifyEvidence: "certificate" }),
       JSON.stringify({ guardrail: "strict", verifyEvidence: "certificate" }),
+    ]) {
+      expect(mergeReviewConfig({ surface: "github", json: { at: "base", text }, trigger: "auto" })).toEqual(
+        parseReviewConfig({ json: text, trigger: "auto" }),
+      )
+      expect(mergeReviewConfig({ surface: "local", json: { at: "working-tree", text }, trigger: "desktop" })).toEqual(
+        parseReviewConfig({ json: text, trigger: "desktop" }),
+      )
+    }
+  })
+})
+
+// VS-28c: `depth` and `lenses` are parsed, and no runner reads them before VS-28 wiring. `lenses` acts only under
+// `depth: "auto"`, so without it the key is ignored with a note; under "auto", an explicit `security: "off"` is said,
+// since no band then adds the security pass (gap-6 G6-2: a depth that cannot run in full says so).
+describe("VS-28's depth and lenses keys", () => {
+  const DEPTH = '"depth": "auto" is not applied yet: every review still runs its usual passes.'
+  const LENSES = '"lenses": "high" is not applied yet: no lens passes run.'
+  const IGNORED =
+    '"lenses": "high" is ignored without "depth": "auto": lens passes run only on the high band of an automatic depth.'
+  const OFF = '"depth": "auto" keeps "security": "off": no band adds the security pass.'
+  const OFF_LENSES = '"depth": "auto" keeps "security": "off": no band adds the security pass or the access lens.'
+  const json = (value: Record<string, unknown>, env?: Record<string, string>) =>
+    parseReviewConfig({ json: JSON.stringify(value), env })
+
+  test("neither has a default entry, so the defaults and their digests stay as they were", () => {
+    const { config, warnings } = parseReviewConfig()
+    for (const key of ["depth", "lenses"] as const) {
+      expect(Object.hasOwn(DEFAULT_REVIEW_CONFIG, key)).toBe(false)
+      expect(Object.hasOwn(config, key)).toBe(false)
+      expect(UNAPPLIED_REVIEW_KEYS).toContain(key)
+      expect(SOURCED_REVIEW_KEYS).not.toContain(key)
+    }
+    expect(warnings).toEqual([])
+    expect(OPTIONAL_REVIEW_DEFAULTS.depth).toBe("fixed")
+    expect(OPTIONAL_REVIEW_DEFAULTS.lenses).toBe("off")
+  })
+
+  test("under auto each says it is not applied; lenses without auto is ignored with a note, its value kept", () => {
+    expect(json({ depth: "auto" })).toEqual({ config: { ...DEFAULT_REVIEW_CONFIG, depth: "auto" }, warnings: [DEPTH] })
+    expect(json({ depth: "auto", lenses: "high" })).toEqual({
+      config: { ...DEFAULT_REVIEW_CONFIG, depth: "auto", lenses: "high" },
+      warnings: [DEPTH, LENSES],
+    })
+    for (const value of [{ lenses: "high" }, { depth: "fixed", lenses: "high" }] as const)
+      expect(json(value)).toEqual({ config: { ...DEFAULT_REVIEW_CONFIG, ...value }, warnings: [IGNORED] })
+    // Their defaults, written out, change nothing a runner would do, so they warn about nothing.
+    expect(json({ depth: "fixed", lenses: "off" })).toEqual({
+      config: { ...DEFAULT_REVIEW_CONFIG, depth: "fixed", lenses: "off" },
+      warnings: [],
+    })
+    expect(json({ depth: "auto", lenses: "off" }).warnings).toEqual([DEPTH])
+  })
+
+  test("REVIEW_DEPTH and REVIEW_LENSES override review.json, read without case or surrounding space", () => {
+    expect(json({ lenses: "high" }, { REVIEW_DEPTH: " Auto " })).toEqual({
+      config: { ...DEFAULT_REVIEW_CONFIG, depth: "auto", lenses: "high" },
+      warnings: [DEPTH, LENSES],
+    })
+    expect(json({ depth: "auto", lenses: "high" }, { REVIEW_DEPTH: "fixed" }).warnings).toEqual([IGNORED])
+    expect(json({ depth: "auto" }, { REVIEW_LENSES: "HIGH" }).config.lenses).toBe("high")
+    expect(json({ depth: "auto", lenses: "high" }, { REVIEW_LENSES: "off" }).warnings).toEqual([DEPTH])
+  })
+
+  test("an explicit security off under auto is said, never silently less", () => {
+    expect(json({ depth: "auto", security: "off" })).toEqual({
+      config: { ...DEFAULT_REVIEW_CONFIG, depth: "auto", security: "off" },
+      warnings: [OFF, DEPTH],
+    })
+    expect(json({ depth: "auto", lenses: "high", security: "off" }).warnings).toEqual([OFF_LENSES, DEPTH, LENSES])
+    expect(json({ depth: "auto" }, { REVIEW_SECURITY: "off" }).warnings).toEqual([OFF, DEPTH])
+    // Without auto, or with security on, there is nothing to say.
+    for (const value of [
+      { security: "off" },
+      { depth: "fixed", security: "off" },
+      { depth: "auto", security: "always" },
+    ])
+      expect(json(value).warnings).not.toContain(OFF)
+  })
+
+  test("a bad value warns naming the value in use", () => {
+    expect(json({ depth: "deep", lenses: "on" })).toEqual({
+      config: DEFAULT_REVIEW_CONFIG,
+      warnings: [
+        `${REVIEW_CONFIG_PATH}: "depth" must be "fixed", "auto"; using "fixed".`,
+        `${REVIEW_CONFIG_PATH}: "lenses" must be "off", "high"; using "off".`,
+      ],
+    })
+    expect(parseReviewConfig({ env: { REVIEW_DEPTH: "risk" } }).warnings).toEqual([
+      'REVIEW_DEPTH must be "fixed", "auto"; using "fixed".',
+    ])
+  })
+
+  test("mergeReviewConfig reads them as parseReviewConfig does, on every surface", () => {
+    for (const text of [
+      JSON.stringify({ depth: "auto" }),
+      JSON.stringify({ lenses: "high" }),
+      JSON.stringify({ depth: "auto", lenses: "high", security: "off" }),
     ]) {
       expect(mergeReviewConfig({ surface: "github", json: { at: "base", text }, trigger: "auto" })).toEqual(
         parseReviewConfig({ json: text, trigger: "auto" }),

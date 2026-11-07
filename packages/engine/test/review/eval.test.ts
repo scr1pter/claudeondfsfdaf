@@ -1059,6 +1059,50 @@ describe("ReviewEval.replay", () => {
     TIMEOUT,
   )
 
+  // VS-28c: the same for `depth` and `lenses`. A base review.json that sets them is replayed and recorded without them,
+  // keeping the parser's warnings: the review runs its usual passes, with no security pass or lens it would not have run
+  // anyway, and the scope claims neither the policy nor the lens prompts.
+  it.instance(
+    "replays a base review.json that sets VS-28's depth and lenses without them, running the usual passes",
+    () =>
+      Effect.gen(function* () {
+        const DEPTH = '"depth": "auto" is not applied yet: every review still runs its usual passes.'
+        const LENSES = '"lenses": "high" is not applied yet: no lens passes run.'
+        const IGNORED =
+          '"lenses": "high" is ignored without "depth": "auto": lens passes run only on the high band of an automatic depth.'
+        for (const [settings, warnings] of [
+          [{ depth: "auto", lenses: "high" }, [DEPTH, LENSES]],
+          [{ lenses: "high" }, [IGNORED]],
+        ] as const) {
+          const { directory, llm, base, head } = yield* checkout({
+            base: { "src/list.ts": LIST_BASE, ".vector/review.json": JSON.stringify(settings) },
+            head: { "src/list.ts": LIST_HEAD },
+            price: PRICE,
+          })
+          yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", { ...report(), findings: [listBug] }))
+          const artifact = yield* ReviewEval.replay({
+            case: replayCase(directory, base, head),
+            model: MODEL,
+            config: { maxCostUsd: 2, verify: "off", minConfidence: 0.5 },
+            posting: ReviewEval.recordingPosting(),
+            check: recordingCheck().check,
+          })
+          for (const key of ["depth", "lenses"]) expect(Object.hasOwn(artifact.config.value, key)).toBe(false)
+          expect(artifact.config.warnings).toEqual([...warnings])
+          expect(artifact.scope.policy).toBe(policyDigest({ ...artifact.config.value, ...settings }))
+          expect(artifact.scope.prompts).toBe(promptsDigest())
+          expect(artifact.scope.prompts).not.toBe(promptsDigest({ depth: "auto", lenses: "high" }))
+          expect(artifact.outcome?.specialists.map((entry) => [entry.name, entry.status])).toEqual([["review", "ok"]])
+          for (const body of yield* llm.inputs)
+            for (const lens of ["concurrency", "resource", "access", "data-integrity", "security"])
+              expect(JSON.stringify(body)).not.toContain(`You are Vector's ${lens} reviewer`)
+          expect((artifact.outcome?.selection.inline ?? []).map((finding) => finding.title)).toEqual([listBug.title])
+        }
+      }),
+    GIT,
+    TIMEOUT,
+  )
+
   it.instance(
     "a variant on the shared verify policy gets the policy's default unless the base's review.json sets verify",
     () =>
@@ -1202,6 +1246,16 @@ describe("ReviewEval.replay", () => {
           yield* refused({ config: { guardrail: "strict", scopeGate: "introduced", verifyEvidence: "off" } }),
         ).toContain(
           "config sets guardrail, scopeGate, verifyEvidence, which no runner applies yet (VS-27c for guardrail; VS-42 wiring for scopeGate; VS-44 wiring for verifyEvidence)",
+        )
+        // Nor VS-28's depth and lenses, which VS-28 wiring applies, alone or together.
+        expect(yield* refused({ config: { depth: "auto" } })).toContain(
+          "config sets depth, which no runner applies yet (VS-28 wiring), so the artifact would record a setting the run did not have.",
+        )
+        expect(yield* refused({ config: { depth: "fixed", lenses: "high" } })).toContain(
+          "config sets depth, lenses, which no runner applies yet (VS-28 wiring)",
+        )
+        expect(yield* refused({ config: { guardrail: "strict", lenses: "off" } })).toContain(
+          "config sets guardrail, lenses, which no runner applies yet (VS-27c for guardrail; VS-28 wiring for lenses)",
         )
         // A pending variant's key is refused as a key this replay does not apply.
         expect(yield* refused({ variant: { name: "engine:trivial-skip", keys: { trivial: "skip" } } })).toContain(

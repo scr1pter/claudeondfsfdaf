@@ -20,6 +20,7 @@ import { codeSpan } from "./format"
 import type { ImpactPrompt } from "./impact"
 import {
   buildFinalizePrompt,
+  buildLensPrompt,
   buildReviewPrompt,
   buildSecurityPrompt,
   buildVerifyPrompt,
@@ -36,10 +37,12 @@ import {
 } from "./schema"
 import {
   OPTIONAL_REVIEW_DEFAULT_OF,
+  REVIEW_LENSES,
   UNAPPLIED_REVIEW_KEYS,
   type Finding,
   type PriorFinding,
   type ReviewConfig,
+  type Trust,
 } from "./types"
 
 // Bump when a change to the review pipeline changes what a review finds or posts: either runner (engine review/run.ts,
@@ -53,7 +56,7 @@ export const REVIEW_PIPELINE_REVISION = 1
 // A digest of the pipeline's sources (REVIEW_PIPELINE_FILES in core test/review/model-evidence.test.ts), which that
 // test pins, so CI fails when one of them changes and nobody decided whether REVIEW_PIPELINE_REVISION goes up. When it
 // fails: bump the revision if the change alters what a review finds or posts, then set this to the digest it prints.
-export const REVIEW_PIPELINE_SOURCES = "e8054845bd8f2858"
+export const REVIEW_PIPELINE_SOURCES = "5cd3fb178c514179"
 
 // The longest a certificate may run from its approval. The plan asks for an expiry and sets none; a hosted model can
 // change underneath its id, so the evidence is re-earned on this cadence.
@@ -67,6 +70,8 @@ export const MAX_CERTIFICATE_DAYS = 90
 // on, and then only as "strict". VS-42's `scopeGate` is one (S9 drops what would be posted), counted from VS-42 wiring
 // on, and then only as "introduced" under `guardrail: "strict"`. VS-44's `verifyEvidence` is one (S1's certificate check
 // drops what would be posted), counted from VS-44 wiring on, and then only as "certificate" under `guardrail: "strict"`.
+// VS-28's `depth` and `lenses` are two (they choose which passes look for defects), counted from VS-28 wiring on, and
+// then only as non-default values, `lenses` only under `depth: "auto"` (POLICY_ONLY_WITH).
 export const EVIDENCE_POLICY_KEYS = [
   "security",
   "verify",
@@ -83,6 +88,8 @@ export const EVIDENCE_POLICY_KEYS = [
   "guardrail",
   "scopeGate",
   "verifyEvidence",
+  "depth",
+  "lenses",
 ] as const satisfies readonly (keyof ReviewConfig)[]
 
 export type EvidenceAdapter = "engine" | "desktop"
@@ -360,7 +367,11 @@ const POPULATED_VERIFY: Omit<VerifyPromptInput, "trust"> = {
 // with every input set and VS-25b's slice are added, and then the same with VS-37a's slice packed in tiers, so the
 // default digest stays as it was. Which packing a run used is the eval's variant parameters, not this digest. Under
 // `guardrail: "strict"`, promptsDigest adds VS-27a's strict schemas; VS-27c adds the strict task text here, under the key.
-export function canonicalPrompts(keys: Partial<Pick<ReviewConfig, "impact">> = {}): string[] {
+// Under `depth: "auto"` with `lenses: "high"`, VS-28's four lens prompts come last, each over the review prompts' inputs
+// for both trusts and, under `impact: "graph"` too, with each slice; either key alone adds nothing, as `lenses` runs
+// only under an automatic depth. A lens prompt differs from the review prompt only in TASKS, OTHER_CLASSES and its cap
+// (prompt.ts), so a lens-only branch added to build() must add the inputs that reach it here.
+export function canonicalPrompts(keys: Partial<Pick<ReviewConfig, "impact" | "depth" | "lenses">> = {}): string[] {
   const impact =
     keys.impact === "graph"
       ? [CANONICAL_IMPACT, CANONICAL_IMPACT_TIERS].flatMap((slice) =>
@@ -370,26 +381,44 @@ export function canonicalPrompts(keys: Partial<Pick<ReviewConfig, "impact">> = {
           }),
         )
       : []
+  const lenses =
+    keys.depth === "auto" && keys.lenses === "high"
+      ? REVIEW_LENSES.flatMap((lens) => [
+          ...(["trusted", "untrusted"] as const).flatMap((trust) =>
+            canonicalInputs(trust).map((input) => buildLensPrompt(input, lens)),
+          ),
+          ...(keys.impact === "graph" ? [CANONICAL_IMPACT, CANONICAL_IMPACT_TIERS] : []).flatMap((slice) =>
+            (["trusted", "untrusted"] as const).map((trust) =>
+              buildLensPrompt({ ...POPULATED_INPUT, trust, impact: slice }, lens),
+            ),
+          ),
+        ])
+      : []
   return [
-    ...(["trusted", "untrusted"] as const).flatMap((trust) => {
-      const headFiles = trust === "untrusted" ? [{ path: "src/example.ts", text: "", exact: true }] : undefined
-      const inputs: PromptInput[] = [
-        { ...CANONICAL_INPUT, trust, ...(headFiles ? { headFiles } : {}) },
-        { ...CANONICAL_INPUT, trust, mode: "incremental", since: "2".repeat(40) },
-        { ...POPULATED_INPUT, trust, nits: true },
-        { ...POPULATED_INPUT, trust, nits: false, uncommitted: true },
-        { ...POPULATED_INPUT, trust, mode: "incremental", since: "2".repeat(40), nits: true },
-        { ...POPULATED_INPUT, trust, mode: "incremental", since: "2".repeat(40), uncommitted: true },
-      ]
-      return [
-        ...inputs.flatMap((input) => [buildReviewPrompt(input), buildSecurityPrompt(input)]),
-        buildVerifyPrompt({ trust, head: CANONICAL_INPUT.head, candidates: [CANONICAL_FINDING] }),
-        buildVerifyPrompt({ ...POPULATED_VERIFY, trust }),
-      ]
-    }),
+    ...(["trusted", "untrusted"] as const).flatMap((trust) => [
+      ...canonicalInputs(trust).flatMap((input) => [buildReviewPrompt(input), buildSecurityPrompt(input)]),
+      buildVerifyPrompt({ trust, head: CANONICAL_INPUT.head, candidates: [CANONICAL_FINDING] }),
+      buildVerifyPrompt({ ...POPULATED_VERIFY, trust }),
+    ]),
     buildFinalizePrompt(),
     ownerBlock(["Example."]),
     ...impact,
+    ...lenses,
+  ]
+}
+
+// The review and security prompts' inputs for one trust, and the lens prompts' under their keys: bare (an untrusted
+// review with a head file), incremental, and with every input set (full and incremental, with and without nits, a
+// commit and uncommitted changes).
+function canonicalInputs(trust: Trust): PromptInput[] {
+  const headFiles = trust === "untrusted" ? [{ path: "src/example.ts", text: "", exact: true }] : undefined
+  return [
+    { ...CANONICAL_INPUT, trust, ...(headFiles ? { headFiles } : {}) },
+    { ...CANONICAL_INPUT, trust, mode: "incremental", since: "2".repeat(40) },
+    { ...POPULATED_INPUT, trust, nits: true },
+    { ...POPULATED_INPUT, trust, nits: false, uncommitted: true },
+    { ...POPULATED_INPUT, trust, mode: "incremental", since: "2".repeat(40), nits: true },
+    { ...POPULATED_INPUT, trust, mode: "incremental", since: "2".repeat(40), uncommitted: true },
   ]
 }
 
@@ -400,9 +429,10 @@ const prompts = new Map<string, string>()
 // strict schemas (VS-27a) come last, and only under `guardrail: "strict"`, so the digest of every other set of keys
 // stays as it was. VS-42's `scopeGate: "introduced"` changes them (the result schema's `pre-existing` drop) only under
 // strict, so it joins the memo key only there. VS-44's `verifyEvidence: "certificate"` adds the certificate verify schema
-// (verifyCertJsonSchema) after them, also only under strict.
+// (verifyCertJsonSchema) after them, also only under strict. VS-28's lens prompts join canonicalPrompts only under
+// `depth: "auto"` with `lenses: "high"`, so only that pair joins the memo key.
 export function promptsDigest(
-  keys: Partial<Pick<ReviewConfig, "impact" | "guardrail" | "scopeGate" | "verifyEvidence">> = {},
+  keys: Partial<Pick<ReviewConfig, "impact" | "guardrail" | "scopeGate" | "verifyEvidence" | "depth" | "lenses">> = {},
 ): string {
   const strict = keys.guardrail === "strict"
   const key = [
@@ -410,6 +440,7 @@ export function promptsDigest(
     strict ? "guardrail:strict" : "",
     strict && keys.scopeGate === "introduced" ? "scopeGate:introduced" : "",
     strict && keys.verifyEvidence === "certificate" ? "verifyEvidence:certificate" : "",
+    keys.depth === "auto" && keys.lenses === "high" ? "lenses:high" : "",
   ]
     .filter(Boolean)
     .join(",")
@@ -425,15 +456,28 @@ export function promptsDigest(
   return digest
 }
 
+// Policy keys that act only beside another setting, as the parser's "ignored without" notes say: `lenses` runs only under
+// `depth: "auto"`, so a review under `depth: "fixed"` and `lenses: "high"` is scoped as one without lenses. Dormant
+// until VS-28 wiring takes both keys off UNAPPLIED_REVIEW_KEYS.
+const POLICY_ONLY_WITH: Partial<
+  Record<(typeof EVIDENCE_POLICY_KEYS)[number], (config: Pick<ReviewConfig, "depth">) => boolean>
+> = {
+  lenses: (config) => config.depth === "auto",
+}
+
 // Default-stable (contract §0.3): a key with an entry in OPTIONAL_REVIEW_DEFAULTS counts only when set to another value,
 // so every digest made before it stays as it was; every other key counts as it always has. A key no runner applies yet
 // (UNAPPLIED_REVIEW_KEYS, all optional) reads as absent, so it never counts: a review under `trivial: "skip"` before
-// VS-24 wiring runs the full review, and its scope says so.
+// VS-24 wiring runs the full review, and its scope says so. A key in POLICY_ONLY_WITH reads as absent without the
+// setting it depends on.
 export function policyDigest(config: Pick<ReviewConfig, (typeof EVIDENCE_POLICY_KEYS)[number]>): string {
   return fnv1a64(
     JSON.stringify(
       EVIDENCE_POLICY_KEYS.flatMap((key) => {
-        const value = UNAPPLIED_REVIEW_KEYS.some((unapplied) => unapplied === key) ? undefined : config[key]
+        const value =
+          UNAPPLIED_REVIEW_KEYS.some((unapplied) => unapplied === key) || POLICY_ONLY_WITH[key]?.(config) === false
+            ? undefined
+            : config[key]
         if (!Object.hasOwn(OPTIONAL_REVIEW_DEFAULT_OF, key)) return [[key, value]]
         return value === undefined || value === OPTIONAL_REVIEW_DEFAULT_OF[key] ? [] : [[key, value]]
       }),
@@ -470,6 +514,12 @@ export function evidenceScope(input: {
       input.config.verifyEvidence === "certificate" &&
       !UNAPPLIED_REVIEW_KEYS.some((key) => key === "guardrail" || key === "verifyEvidence")
         ? { verifyEvidence: "certificate" as const }
+        : {}),
+      // VS-28's lens prompts, only once a runner applies both keys.
+      ...(input.config.depth === "auto" &&
+      input.config.lenses === "high" &&
+      !UNAPPLIED_REVIEW_KEYS.some((key) => key === "depth" || key === "lenses")
+        ? { depth: "auto" as const, lenses: "high" as const }
         : {}),
     }),
     policy: policyDigest(input.config),

@@ -4,7 +4,8 @@
 
 import type { DiffFile } from "./diff"
 import { isSensitivePath } from "./ignore"
-import type { CostKind, Finding, ReviewConfig, Trust } from "./types"
+import type { RiskAssessment, RiskBand } from "./risk"
+import { REVIEW_LENSES, type CostKind, type Finding, type ReviewConfig, type ReviewLens, type Trust } from "./types"
 
 export type Specialist = "review" | "security"
 
@@ -61,6 +62,78 @@ export function planSpecialists(
     (file) => isSensitivePath(file.path) || (!!file.oldPath && isSensitivePath(file.oldPath)),
   )
   return sensitive ? ["review", "security"] : ["review"]
+}
+
+// The most sessions one review may open (contract §4 VS-28 item 4): review, security, verify, up to four lenses and
+// VS-30's repro. Finalizers run inside their own session. Read by no runner before VS-28 wiring, which enforces it.
+export const MAX_REVIEW_SESSIONS = 8
+
+// Why a plan runs less than its band asks: "security-off" is an explicit `security: "off"`, which drops the security
+// pass and the access lens wherever the band would add them.
+export type DepthLimit = "security-off"
+
+// What a review runs at a depth. `effective` is the depth that ran: "fixed", or the band an automatic depth planned
+// for (gap-6 G6-2: the output carries the effective depth, and a request that cannot run in full says so in `limited`).
+// `sessions` is the most the plan can open: its specialists and lenses and one verify pass; VS-30's repro adds one.
+export interface DepthPlan {
+  requested: "fixed" | "auto"
+  effective: "fixed" | RiskBand
+  specialists: Specialist[]
+  lenses: ReviewLens[]
+  sessions: number
+  limited: DepthLimit[]
+}
+
+// An automatic depth always has a band: riskOf is pure and needs only the files, and a feature it lacks (history,
+// dependents) is listed in its `missing`, not a missing band. So "auto" without a risk does not type-check.
+export type DepthInput =
+  | { depth: "fixed"; files: Pick<DiffFile, "path" | "oldPath">[]; config: Pick<ReviewConfig, "security"> }
+  | {
+      depth: "auto"
+      files: Pick<DiffFile, "path" | "oldPath">[]
+      config: Pick<ReviewConfig, "security" | "lenses">
+      risk: Pick<RiskAssessment, "band">
+    }
+
+/**
+ * The passes for a requested depth (contract §4 VS-28's depth table, addendum A VS-39 item 7). Nothing calls it before
+ * VS-28 wiring, which calls it in place of planSpecialists under `depth: "auto"`.
+ * - "fixed" is exactly planSpecialists: today's passes, no lens (D3).
+ * - "auto" plans by band. Low runs what planSpecialists runs under `security: "auto"` (the review, and security only on
+ *   a sensitive path); medium runs the review and security; high adds the four lenses when `lenses` is "high".
+ *   `security: "always"` adds security on every band. `security: "off"` wins over every band: no security pass and no
+ *   access lens (it looks for authentication and authorization defects, the security pass's ground), and "security-off"
+ *   in `limited` wherever the band would have added either.
+ * So under any security setting an automatic depth runs at least the passes a fixed one runs (I-2: no input lowers a
+ * review below today's default).
+ */
+export function planDepth(input: DepthInput): DepthPlan {
+  if (input.depth === "fixed") {
+    const specialists = planSpecialists(input.files, input.config)
+    return {
+      requested: "fixed",
+      effective: "fixed",
+      specialists,
+      lenses: [],
+      sessions: specialists.length + 1,
+      limited: [],
+    }
+  }
+  const band = input.risk.band
+  const security = input.config.security
+  const wanted = band === "low" ? planSpecialists(input.files, { security: "auto" }).includes("security") : true
+  const lensed = band === "high" && input.config.lenses === "high"
+  const specialists: Specialist[] =
+    security === "always" || (security === "auto" && wanted) ? ["review", "security"] : ["review"]
+  const lenses = lensed ? REVIEW_LENSES.filter((lens) => security !== "off" || lens !== "access") : []
+  return {
+    requested: "auto",
+    effective: band,
+    specialists,
+    lenses,
+    sessions: specialists.length + lenses.length + 1,
+    limited: security === "off" && (wanted || lensed) ? ["security-off"] : [],
+  }
 }
 
 // The verify policy (VS-06). After the review and security passes, a second pass on the review model re-reads the

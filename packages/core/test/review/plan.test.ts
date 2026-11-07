@@ -6,18 +6,28 @@ import {
   diffBudgetChars,
   estimateBands,
   estimateCostUsd,
+  MAX_REVIEW_SESSIONS,
   MIN_CONTEXT,
   nextStepCostUsd,
   OUTPUT_PER_STEP,
   passInputTokens,
+  planDepth,
   planSpecialists,
   verifyCandidates,
   verifyUnanswered,
   verifyUnconfirmed,
+  type DepthInput,
   type ReviewPrice,
   type VerifyRule,
 } from "@vectordevai/core/review/plan"
-import type { Finding, ReviewConfig, Severity, Trust } from "@vectordevai/core/review/types"
+import { RISK_BANDS } from "@vectordevai/core/review/risk"
+import {
+  REVIEW_LENSES,
+  type Finding,
+  type ReviewConfig,
+  type Severity,
+  type Trust,
+} from "@vectordevai/core/review/types"
 
 describe("planSpecialists", () => {
   test("adds security for sensitive paths when it is auto", () => {
@@ -39,6 +49,109 @@ describe("planSpecialists", () => {
   test("follows always and off", () => {
     expect(planSpecialists([{ path: "src/list.ts" }], { security: "always" })).toEqual(["review", "security"])
     expect(planSpecialists([{ path: "src/db.ts" }], { security: "off" })).toEqual(["review"])
+  })
+})
+
+// VS-28c: the depth planner (contract §4 VS-28's depth table). Nothing calls it before VS-28 wiring.
+describe("planDepth", () => {
+  const PLAIN = [{ path: "src/list.ts" }]
+  const SENSITIVE = [{ path: "src/list.ts" }, { path: "src/auth.ts" }]
+  const SECURITY = ["auto", "always", "off"] as const
+  const auto = (
+    files: { path: string; oldPath?: string }[],
+    security: ReviewConfig["security"],
+    band: (typeof RISK_BANDS)[number],
+    lenses?: ReviewConfig["lenses"],
+  ) => planDepth({ depth: "auto", files, config: { security, ...(lenses ? { lenses } : {}) }, risk: { band } })
+
+  test("fixed depth is exactly planSpecialists, with no lens and no limit (D3)", () => {
+    for (const files of [PLAIN, SENSITIVE, [{ path: "src/renamed.ts", oldPath: "src/auth.ts" }]])
+      for (const security of SECURITY) {
+        const plan = planDepth({ depth: "fixed", files, config: { security } })
+        const specialists = planSpecialists(files, { security })
+        expect(plan).toEqual({
+          requested: "fixed",
+          effective: "fixed",
+          specialists,
+          lenses: [],
+          sessions: specialists.length + 1,
+          limited: [],
+        })
+      }
+  })
+
+  test("auto plans by band: low as planSpecialists under auto, medium adds security, high the lenses", () => {
+    expect(auto(PLAIN, "auto", "low")).toEqual({
+      requested: "auto",
+      effective: "low",
+      specialists: ["review"],
+      lenses: [],
+      sessions: 2,
+      limited: [],
+    })
+    expect(auto(SENSITIVE, "auto", "low").specialists).toEqual(["review", "security"])
+    expect(auto(PLAIN, "auto", "medium").specialists).toEqual(["review", "security"])
+    expect(auto(PLAIN, "auto", "high")).toMatchObject({
+      effective: "high",
+      specialists: ["review", "security"],
+      lenses: [],
+    })
+    expect(auto(PLAIN, "auto", "high", "high")).toEqual({
+      requested: "auto",
+      effective: "high",
+      specialists: ["review", "security"],
+      lenses: ["concurrency", "resource", "access", "data-integrity"],
+      sessions: 7,
+      limited: [],
+    })
+    // Lenses run on the high band only, and only under lenses: "high".
+    for (const band of ["low", "medium"] as const) expect(auto(SENSITIVE, "auto", band, "high").lenses).toEqual([])
+    expect(auto(PLAIN, "auto", "high", "off").lenses).toEqual([])
+    // Fixed depth never runs a lens, whatever the band would be.
+    expect(planDepth({ depth: "fixed", files: PLAIN, config: { security: "always" } }).lenses).toEqual([])
+    // An automatic depth always has a band: riskOf needs only the files, so a missing one is a caller's bug, caught by
+    // the type alone (planDepth has no runtime guard for it).
+    // @ts-expect-error "auto" without a risk does not type-check.
+    const unbanded: DepthInput = { depth: "auto", files: PLAIN, config: { security: "auto" } }
+    void unbanded
+  })
+
+  test("security always adds security on every band", () => {
+    for (const band of RISK_BANDS) expect(auto(PLAIN, "always", band).specialists).toEqual(["review", "security"])
+  })
+
+  // An explicit "off" wins over every band, and drops the access lens too (it looks for authentication and
+  // authorization defects); the plan says so wherever the band would have added either.
+  test("security off wins over every band, drops the access lens, and says so in limited", () => {
+    expect(auto(PLAIN, "off", "low")).toMatchObject({ specialists: ["review"], limited: [] })
+    expect(auto(SENSITIVE, "off", "low")).toMatchObject({ specialists: ["review"], limited: ["security-off"] })
+    expect(auto(PLAIN, "off", "medium")).toMatchObject({ specialists: ["review"], limited: ["security-off"] })
+    expect(auto(PLAIN, "off", "high", "high")).toEqual({
+      requested: "auto",
+      effective: "high",
+      specialists: ["review"],
+      lenses: ["concurrency", "resource", "data-integrity"],
+      sessions: 5,
+      limited: ["security-off"],
+    })
+  })
+
+  test("auto never plans fewer passes than fixed, and never more sessions than the bound", () => {
+    const sets = [PLAIN, SENSITIVE, [{ path: "test/auth.test.ts" }], []]
+    for (const files of sets)
+      for (const security of SECURITY)
+        for (const band of RISK_BANDS)
+          for (const lenses of [undefined, "off", "high"] as const) {
+            const plan = auto(files, security, band, lenses)
+            const fixed = planDepth({ depth: "fixed", files, config: { security } })
+            for (const specialist of fixed.specialists) expect(plan.specialists).toContain(specialist)
+            expect(plan.sessions).toBe(plan.specialists.length + plan.lenses.length + 1)
+            // One session stays for VS-30's repro.
+            expect(plan.sessions).toBeLessThanOrEqual(MAX_REVIEW_SESSIONS - 1)
+            for (const lens of plan.lenses) expect(REVIEW_LENSES).toContain(lens)
+            expect(plan.effective).toBe(band)
+          }
+    expect(MAX_REVIEW_SESSIONS).toBe(8)
   })
 })
 

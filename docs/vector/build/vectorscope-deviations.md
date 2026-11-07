@@ -9581,3 +9581,671 @@ committed. Where these points differ from the entry above, they supersede it.
   - **Not done.** Nothing was sent to a model; there was no paid run, no
     workflow dispatched, nothing published and nothing committed; no
     user-visible string changed (D14).
+
+## 2026-11-07 · VS-28c Change-risk features and bands (core)
+
+Contract §1.2 (`risk.ts`) and §4 VS-28 item 1 with its depth table, core
+halves only, as amended by addendum A VS-39 items 1 to 3, 7 and 8 (the
+round-two amendments override the brief's additive points), with §1's "no
+new key for VS-36 to VS-39", §1a's VS-39 row (changes `engine:depth-auto`;
+desktop follows VS-28's half), §3 VS-28 (adopt VS-39; effective depth
+recorded) and §4's windows. Evidence: round-two REPORT §5 [G2-1, G2-2,
+G2-7, G2-9, RP4, RP6, RP7, RP8, RP12, RP13], risk note §1, §2 and §8,
+gap-2 and gap-6 §2 (G6-2: an explicit depth that cannot run fails loudly,
+and the output carries the effective depth). Built at `0e4c5d1d` (VS-44a).
+Now window only: a new pure core module, additive uncalled code in pinned
+core files, two parsed and unapplied keys, an eval-replay `WIRING` entry
+and an eval research script. Nothing calls the new code and no runner
+reads the keys. It implements the VS-28c plan as corrected by its
+critique: all thirteen critique points were taken, three by their stated
+alternative (decisions (f), (m) and (n)); none was declined. Nothing is
+committed (the lane brief).
+
+- **Scope beyond the Now entries (critique point 2).** Contract §5 defines
+  Now as "new files, `types.ts`/`config.ts` additions and eval scripts",
+  and addendum §4 lists VS-39 in Now as `risk.ts` only. The brief also
+  directs a pure depth planner in `plan.ts` and `buildLensPrompt` in
+  `prompt.ts`, so the package extends both entries to additive, uncalled
+  edits in those two pinned files (VS-25b and VS-43a set the precedent for
+  `prompt.ts`). `planSpecialists` is byte-identical, and so are the review
+  and security prompts: every pinned `promptsDigest` holds (below).
+- **Citations re-located at `0e4c5d1d`.** `ReviewConfig` is `types.ts:381`
+  (contract: `:211-283`), `OPTIONAL_REVIEW_DEFAULTS` `:502` and
+  `UNAPPLIED_REVIEW_KEYS` `:518`; `config.ts` FIELDS `:160-197`, ENV
+  `:206-223`, UNAPPLIED `:227-258`, `settle` `:409-468` (contract:
+  `:77-222`); `plan.ts` `planSpecialists` `:53-64`; `prompt.ts`
+  `PromptInput` `:52`, `SECURITY_TASK` `:165`, the builders `:238-244` and
+  `build()` `:276` (contract: `:50-78,231-305`); `model-evidence.ts`
+  `EVIDENCE_POLICY_KEYS` `:70-86`, `canonicalPrompts` `:363-391`,
+  `promptsDigest` `:404-424`, `policyDigest` `:432-443`, `evidenceScope`
+  `:446-478` (contract: `:32-74,224-258`); `select.ts` `computeRisk` `:127`
+  and `selection.risk =` `:359` (contract: `:122-141`); `format.ts` "Risk:"
+  `:708` (contract: `:663`). Unchanged: engine `context.ts:82-144` (5
+  commits per file at `:110`) and `workflow.ts:211` (`fetch-depth: 1`).
+  `model-evidence.test.ts` `REVIEW_PIPELINE_FILES` was `:42-62`; engine
+  `eval.ts` `WIRING` `:1151-1158` and `ReplayInput.config` `:136-149`.
+- **Untouched:** `run.ts`, `ai-review.ts`, `provider.ts`, `session/llm.ts`,
+  `posting.ts`, `select.ts`, `format.ts`, `trivial.ts`, `impact.ts`,
+  `dispatch.ts`, `ignore.ts`, `diff.ts`, engine `context.ts`,
+  `script/vectorscope-eval/replay.ts` and `desktop.ts`, and every @vector
+  file (`workflow.ts`, `command.ts`, `github.*`, `github-*.ts`, the
+  GitHub sections of `vectorscope.astro`).
+
+- **What landed.**
+  - **New core `review/risk.ts`** (pure, browser-safe; imports
+    `minimatch`, `isCodePath` and `isSensitivePath` from `ignore.ts`,
+    `TEST_PATHS` from `trivial.ts`, and the `DiffFile` type; I-10 reuse):
+    - Constants, each `Object.freeze`d with nested objects frozen too
+      (critique point 12): `RISK_BANDS` (`low`, `medium`, `high`; its own
+      `RiskBand` type, not `types.ts` `Risk`, which is `Selection.risk`'s),
+      `REACH_BANDS` (`narrow`, `moderate`, `wide`), `REACH_THRESHOLDS`
+      `{ narrow: 3, moderate: 25 }`, `RISK_IMPACT_FLAGS` (`sensitive`,
+      `deletion-heavy`), `DELETION_HEAVY` `{ minLines: 20 }`,
+      `RISK_TIE_BREAKERS` `{ dirs: { weight: 0.25, cap: 7 }, entropy:
+      { weight: 0.25, cap: 3 } }`, `RISK_CUTPOINTS` `{ medium: 6.88, high:
+      9.11 }` (provenance in its comment and below), `RISK_OPTIONAL_FEATURES`
+      (`churn`, `fixCommits`, `reverts`, `dependents`), `FIX_SUBJECT` and
+      `REVERT_SUBJECT`.
+    - Types: `RiskHistory`, `RiskFeatures` (the contract's shape plus
+      `codeAdded`, `codeDeleted`, `testOnly` and `reverts`) and
+      `RiskAssessment` (`band`, `likelihood { score, band }`, `reach?`,
+      `impact`, `testOnly`, `reasons`, `missing`).
+    - `riskFeatures(files, { history?, dependents?, changed? })`,
+      `countHistory(subjects)` and `riskOf(features, cutpoints =
+      RISK_CUTPOINTS)`. `changed` is the change's whole file list, before
+      `classifyFiles` (review fix, below).
+  - **Core `review/types.ts`** (still import-free): after
+    `ZdrAttestedEntry`, `REVIEW_LENSES` (`concurrency`, `resource`,
+    `access`, `data-integrity`) with `ReviewLens`, and `LENS_LIMITS`
+    `{ steps: 5, findings: 4, parallel: 3 }` (contract VS-28 item 3).
+    `ReviewConfig.depth?: "fixed" | "auto"` and `lenses?: "off" | "high"`
+    after `verifyEvidence`, commented in the existing style;
+    `OPTIONAL_REVIEW_DEFAULTS` gains `depth: "fixed"` and `lenses: "off"`;
+    `UNAPPLIED_REVIEW_KEYS` gains both, and its comment names VS-28
+    wiring. `DEFAULT_REVIEW_CONFIG` is unchanged.
+  - **Core `review/config.ts`:** `FIELDS.depth = oneOf(["fixed", "auto"])`
+    and `FIELDS.lenses = oneOf(["off", "high"])`; `ENV` gains
+    `REVIEW_DEPTH` and `REVIEW_LENSES` after `REVIEW_GUARDRAIL` (§1.1).
+    `UNAPPLIED`: `depth` under `"auto"` warns `"depth": "auto" is not
+    applied yet: every review still runs its usual passes.`; `lenses`
+    under `"high"` with `"auto"` warns `"lenses": "high" is not applied
+    yet: no lens passes run.` `settle` adds two notes after
+    `verifyEvidence`'s, keeping every value as written: `"lenses": "high"
+    is ignored without "depth": "auto": lens passes run only on the high
+    band of an automatic depth.`, and under `"auto"` with `security:
+    "off"`, `"depth": "auto" keeps "security": "off": no band adds the
+    security pass.` (with `or the access lens` when `lenses` is `"high"`).
+  - **Core `review/plan.ts`:** `MAX_REVIEW_SESSIONS = 8`, `DepthLimit`
+    (`"security-off"`), `DepthPlan` (`requested`, `effective`,
+    `specialists`, `lenses`, `sessions`, `limited`), `DepthInput` (a union
+    on `depth`: `"auto"` requires `risk`) and `planDepth(input)`. Imports
+    only types from `risk.ts`. `planSpecialists` and every other export
+    are unchanged.
+  - **Core `review/prompt.ts`:** `LENS_TASKS` (four single-class task texts
+    in `SECURITY_TASK`'s shape, untuned, I-13), a private `PromptKind`,
+    `TASKS` and `OTHER_CLASSES` lookups (the security entry byte-identical
+    to the old `skip.push`), `build(input, kind: PromptKind)` reading them,
+    and the limit `LENS_LIMITS.findings` for a lens while review and
+    security keep `Math.max(4, 2 * maxComments)`.
+    `buildLensPrompt(input, lens)` sits after `buildSecurityPrompt`, away
+    from codium's `buildJudgePrompt`. One pre-existing long line that
+    prettier would reflow was kept as it was, to add no unrelated hunk (the
+    file was already off-format at HEAD).
+  - **Core `review/model-evidence.ts`:** `EVIDENCE_POLICY_KEYS` gains
+    `depth` and `lenses` at the end, with a comment.
+    `canonicalPrompts(keys)` takes `depth` and `lenses` and, under `depth:
+    "auto"` with `lenses: "high"` only, appends the lens prompts after the
+    impact ones: each lens over the review prompts' six inputs for both
+    trusts (48), and under `impact: "graph"` also with each slice for both
+    trusts (16 more). The six inputs sit in a private
+    `canonicalInputs(trust)` that the review prompts read too, so their
+    output is unchanged (review fix, below).
+    `promptsDigest` takes both keys and joins `lenses:high` to the memo key
+    only under the pair. A private `POLICY_ONLY_WITH` makes `policyDigest`
+    read `lenses` as absent unless `depth` is `"auto"` (decision (n)).
+    `evidenceScope` passes the pair only when both are set and neither is
+    unapplied, which is never now. `REVIEW_PIPELINE_SOURCES` moves from
+    `e8054845bd8f2858` to `5cd3fb178c514179` (plan.ts and prompt.ts
+    changed, risk.ts joined; `e169148d060d546b` before the review fixes); `REVIEW_PIPELINE_REVISION` stays 1, since
+    nothing a runner finds or posts changes and only VS-31 bumps it.
+  - **Engine `review/eval.ts`** (the eval replay, not a runner):
+    `WIRING.depth` and `WIRING.lenses` are `"VS-28 wiring"` (the `Record`
+    over `UNAPPLIED_REVIEW_KEYS` requires them), and the `ReplayInput.config`
+    comment names them.
+  - **Pin:** `REVIEW_PIPELINE_FILES` gains `packages/core/src/review/risk.ts`
+    after `dispatch.ts`, and its header says why (once wired it decides
+    which passes run).
+  - **Eval research script** `script/vectorscope-eval/research/risk_seed.py`
+    (new, mode 644, `python3 -I` with numpy; addendum §3 VS-21
+    "Reproducibility"): takes `aacr_jobs.py`'s TSV and `aacr2.sh`'s
+    numstat folder, reads only the listed keys, computes risk.ts's score
+    (the header says to keep them in step), and prints the job counts, the
+    exact and rounded cutpoints with band shares of PRs and of changed
+    lines for the raw numstats, the same for the filtered numstats (a
+    mirror of ignore.ts's default ignores) at the raw cutpoints and at
+    their own, and two `example` scores that `risk.test.ts` pins (critique
+    points 3 and 11). It writes nothing. `research/README.md` gains its
+    script-table row, the "Used by" cell of the AACR permissive inputs
+    row, and a run line after `aacr.py`. `research/.gitignore` already
+    covers any output; no result is committed.
+  - **Tests.** New core `test/review/risk.test.ts` (46; 44 before the
+    review fixes). Added: core
+    `plan.test.ts` +5 (planDepth), `prompt.test.ts` +3
+    (buildLensPrompt), `config.test.ts` +6, `model-evidence.test.ts` +2,
+    engine `eval.test.ts` +1 (a replay of a base review.json that sets the
+    keys, recorded without them, plus refusal lines in the existing
+    test). Changed on purpose: config.test.ts's `OPTIONAL_REVIEW_DEFAULTS`
+    equality gains the two defaults; model-evidence.test.ts's "no others"
+    policy list gains four cases; the pin. No existing assertion was
+    loosened.
+
+- **How `riskOf` decides.**
+  1. **Score** = log2(1 + added + deleted) + 0.25 · min(max(dirs − 1, 0),
+     7) / 7 + 0.25 · min(entropy, 3) / 3. The tie-breakers together add at
+     most 0.5, half a doubling of the changed lines. A negative or
+     non-finite count reads as 0.
+  2. **Likelihood band:** high above `cutpoints.high`, medium above
+     `cutpoints.medium`, otherwise low; a score exactly at a cutpoint takes
+     the lower band.
+  3. **Reach** from `dependents` through `REACH_THRESHOLDS` (≤ 3 narrow,
+     ≤ 25 moderate, above wide; inference [RP8]); absent, and `dependents`
+     listed in `missing`, when the slice is off.
+  4. **Impact flags:** `sensitive` when a path or old path is sensitive
+     (as `planSpecialists` reads it); `deletion-heavy` when the code files
+     outside the test paths delete more lines than they add, and at least
+     20.
+  5. **Floors, raise-only:** either flag gives at least medium; sensitive
+     with wide reach gives high. There is no floor for reach alone
+     (decision (d)).
+  6. **Test-only** (at least one file, and every path and set old path in
+     `TEST_PATHS`, over the reviewed files and, when `changed` is given,
+     every file the change touched) makes the band low whatever the size
+     or flags: the only way the band is lowered. `testDelta` never moves
+     it.
+  7. **History** has zero weight: churn, fix commits and reverts go into
+     one reason only. Absent fields are listed in `missing`, in
+     `RISK_OPTIONAL_FEATURES` order.
+  8. **Reasons** are counts and fixed text in a fixed order: size and
+     spread with the likelihood band; reach; each floor (or, for a
+     test-only change, `Only test files changed, so the band is low.`);
+     the test delta with "tests never lower the band"; history "which does
+     not change the band". None carries a path, branch name or commit
+     subject (I-2), and none uses a forecast word (C-8). Untuned (I-13).
+- **How `planDepth` decides.**
+  - `depth: "fixed"` is exactly `planSpecialists(files, config)`, no lens,
+    `effective: "fixed"`, no limit (D3).
+  - `depth: "auto"` takes the band: low runs what `planSpecialists` runs
+    under `security: "auto"` (security only on a sensitive path), medium
+    adds security, high adds security and, under `lenses: "high"`, the
+    four lenses. `security: "always"` adds security on every band.
+    `security: "off"` wins over every band and also drops the access lens;
+    `limited` gets `"security-off"` wherever the band would have added
+    either. `effective` is the band.
+  - `sessions` = specialists + lenses + one verify, at most 7, leaving one
+    of `MAX_REVIEW_SESSIONS` for VS-30's repro.
+
+- **The seed.**
+  - **Numbers** (`risk_seed.py` on the inputs below): jobs 140, with a
+    numstat 131, skipped 9. Raw: p50 6.8783, p85 9.1100, rounded to 6.88
+    and 9.11; at those, low 66 PRs (50.4%, 11.4% of changed lines),
+    medium 45 (34.4%, 39.8%), high 20 (15.3%, 48.8%). Filtered: p50
+    6.8612, p85 9.1100; at the raw cutpoints the counts are unchanged (66,
+    45, 20; 11.5%, 39.9%, 48.6% of lines), and at its own (6.86, 9.11) 65,
+    46 and 20. Both meet Phase A's bounds (high ≤ 20% of PRs and ≤ 50% of
+    lines). p80 would give 19.8% of PRs but 58.5% of lines (the plan's
+    sweep), so p85 was chosen (decision (b)). The `example` lines print
+    6.91067 and 10.50000, the values risk.test.ts pins.
+  - **After the floors** (a scratch check, never committed, critique
+    point 3: DiffFile stubs from each numstat through `classifyFiles` with
+    the default config, `riskFeatures` and `riskOf`): its likelihood bands
+    equal the Python filtered variant exactly (66/45/20; 11.5/39.9/48.6%
+    of lines), so the mirror holds on this population. After floors: low
+    58 (44.3%, 14.7% of lines), medium 55 (42.0%, 42.0%), high 18 (13.7%,
+    43.4%); 19 PRs sensitive, 16 deletion-heavy, 4 test-only; 10 raised by
+    a floor and 2 (both high by likelihood) lowered by test-only. No
+    dependents exist offline, so reach plays no part. Re-run after the
+    review fixes with `changed` set to each PR's whole numstat list: the
+    same numbers, since none of the 4 test-only PRs touches a skipped
+    non-test file.
+  - **Provenance** (critique point 11): `positive_samples.json` from
+    `alibaba/aacr-bench` at `ee9d7fe` (sha256 `02c8561f…2097`, the
+    README's pin); the job list rebuilt by the committed `aacr_jobs.py`
+    (140 rows, `cmp`-equal to the plan's list); the numstats are round
+    two's (session scratchpad `g2/out3`, read through VS-21d's folder of
+    the 131 permissive numstats), written by the session's `aacr2.sh`,
+    whose fetch and `git diff --no-renames --numstat` from the merge base
+    the committed `aacr2.sh` keeps (VS-21d's equivalence check). Not
+    re-fetched. Percentiles are numpy's default linear interpolation; the
+    shares were computed with the rounded cutpoints.
+  - **Method differences:**
+    - `--no-renames`: a renamed file counts as a deletion plus an addition
+      in the seed, and as its own edits in `riskFeatures` when the surface
+      detects the rename. risk.test.ts pins the size of this: a 200-line
+      file renamed with 3 edits scores 2.0 (low) as a rename and 8.73
+      (medium) as a deletion plus an addition.
+    - The raw seed counts lockfiles and binaries; `riskFeatures` sees the
+      reviewed files after `classifyFiles`. The filtered variant measures
+      this directly (it replaces the plan's citation of gap-2, whose "same
+      to two decimals" was about the points bands, not this score).
+    - The 9 positives GitHub no longer serves are excluded (REPORT §5.2).
+    - VS-22's `seed.json` is not in the seed: its 10 cases are single
+      commits, not PRs, and 2 are held out (I-13).
+    - Unsupervised: no label was read.
+
+- **Off by default (I-1, I-12).**
+  - **The keys.** Optional, absent from `DEFAULT_REVIEW_CONFIG`, in
+    `UNAPPLIED_REVIEW_KEYS`; the parser only warns or notes. `policyDigest`
+    reads both as absent whatever their values, and `evidenceScope` never
+    passes them.
+  - **Nothing calls the new code.** A grep over `packages/engine/src`,
+    `packages/app/src`, `packages/desktop/src`, `packages/web/src` and
+    `script` (research folder aside) finds none of `riskOf`,
+    `riskFeatures`, `countHistory`, `planDepth`, `buildLensPrompt`,
+    `MAX_REVIEW_SESSIONS`, `REVIEW_LENSES`, `LENS_LIMITS`,
+    `RISK_CUTPOINTS`, `DepthPlan`, `review/risk`, `config.depth`,
+    `config.lenses`, `REVIEW_DEPTH` or `REVIEW_LENSES`, except eval.ts's two
+    `WIRING` entries.
+  - **Digests** (printed at HEAD and on the finished tree, all held):
+    `promptsDigest()` `5d59e9ee06077c23`; graph `74a2111826c226b1`; strict
+    `b98afb0e878dfe26`; strict with graph `3ba21b5bc883cd70`; strict with
+    scopeGate `4aa712221043a3a7`, with graph `8335adf9de513ee5`;
+    certificate `d209592d08bb1e0c`, with graph `468fcac8cde18fe2`, with
+    scopeGate `0f3ff2dd0f7c1d7d`; `policyDigest(DEFAULT_REVIEW_CONFIG)`
+    `70512122f41ec160`, also with both keys; `{ depth: "auto" }` and
+    `{ lenses: "high" }` alone equal the default. Three new key-gated
+    digests are pinned, each moving only under the pair: `{ depth:
+    "auto", lenses: "high" }` `dd09332295a99649`; with graph
+    `31c1a0612c0f9541`; with strict `0ebaacbe7aca1b58` (`6a0bc9f036acb7c3`,
+    `8109d0c66af6e371` and `225fa4c9b7acd746` before the review fixes
+    widened the lens inputs). VS-28 wiring moves them on purpose when the
+    lens agent prompt joins under the pair.
+  - **The replay.** A base review.json that sets the pair, or `lenses`
+    alone, is replayed and recorded without them, keeping the parser's
+    warnings; only the review pass runs (no security pass, no lens
+    request) and the scope claims neither the policy nor the lens
+    prompts. `ReplayInput.config` refuses either key, alone and beside the
+    guardrail.
+  - **Runner suites** pass with unchanged counts (table below).
+  - **§0.3 items 4 and 5.** `engine:depth-auto` and `engine:lenses-high`
+    stay pending "VS-28 wiring" in `replay.ts`, untouched; the desktop half
+    is a documented difference until VS-10 (`variant.applied: false`).
+
+- **Decisions.**
+  - (a) **Tie-breakers are a bounded additive term** (at most half a size
+    doubling), not exact-equality ordering, which would almost never fire
+    on integer line counts.
+  - (b) **p50 and p85**, not p80, so the seed population meets both of
+    Phase A's bounds (≤ 20% of PRs and ≤ 50% of lines high).
+  - (c) **Deletion-heavy over code files outside the test paths**
+    (critique point 4, taken with a narrower reading than "outside
+    tests"): `isCodePath` and `TEST_PATHS`, both reused, so test, doc,
+    config and data deletions never raise the band. That follows the risk
+    note's "deletion-heavy code change"; deletions in workflows,
+    Dockerfiles or Terraform still raise it through the sensitive flag. On
+    the seed (filtered files) the rules flag 17 PRs over the whole PR, 18
+    over every file outside the tests, and 16 over code outside the tests.
+    The rule and its 20-line minimum are inference [RP6].
+  - (d) **No floor for wide reach alone** (critique major point, taken).
+    VS-39 item 1 names exactly two impact flags and one combined rule; the
+    risk note's wide-only floor was superseded, and PR-Agent bands
+    projects, not files, so in a monorepo it would push many small PRs to
+    medium with cost Phase A never measured. It is a candidate for Phase
+    A's reach fit. Sensitive with wide reach still gives high. A
+    truth-table row and a mutation pin its absence.
+  - (e) **Test-only overrides the floors**, and the flags that hold are
+    still listed. Under `security: "auto"` the low band still adds
+    security on a sensitive path through `planDepth`, so a test-only
+    change to `test/auth.test.ts` gets the security pass as it does today.
+  - (f) **An explicit `security: "off"` wins under auto**, said at parse
+    time and in `DepthPlan.limited`, and also drops the access lens
+    (critique point 6, its second option): that lens looks for
+    authentication and authorization defects, the security pass's
+    ground. A plan test pins it; the owner may reverse it with a one-line
+    change.
+  - (g) **The word list.** `FIX_SUBJECT` matches fix, fixes, fixed,
+    fixing (critique point 9), bug, bugs, bugfix(es, ed, ing), bug-fix and
+    hotfix(es, ed, ing), word-anchored; prefix, debug, fixture, fixup,
+    suffix, postfix, affixed and Bugzilla do not match. A revert, even of
+    a fix, counts as a revert only. A subject that only mentions a bug
+    ("Add a bug report template") counts as a fix; history has zero
+    weight, so this affects only the printed count.
+  - (h) **Plain keys** with `REVIEW_DEPTH` and `REVIEW_LENSES`, per §1.1;
+    not source-tagged. `depthRules` (VS-48) is the trusted-only one, and
+    is deferred.
+  - (i) **Where the types live.** Risk types in `risk.ts`; the lens
+    constants in import-free `types.ts`, so `plan.ts` and `prompt.ts`
+    share them without a value import between them. `plan.ts` takes only
+    types from `risk.ts`.
+  - (j) **Runner-only limits kept** (critique point 12): `LENS_LIMITS.steps`,
+    `LENS_LIMITS.parallel` and `MAX_REVIEW_SESSIONS` are read only by tests
+    before wiring, and say so; the contract names them, and wiring reads
+    them from here.
+  - (k) **Auto never plans fewer passes than fixed** with the same
+    security setting (I-2), tested over every band, security setting and
+    lens value.
+  - (l) **No variant flip and no replay.ts change** (§0.3 item 4 waits for
+    wiring); the desktop half is a documented difference (item 5).
+  - (m) **`DepthInput` is a union** (critique point 5, its first option):
+    `depth: "auto"` requires `risk`, so there is no `risk-missing` limit.
+    `riskOf` needs only the files; a missing feature is in `missing`, not a
+    missing band. A test pins it with `@ts-expect-error` on a `DepthInput`
+    value. `planDepth` has no runtime guard, so there is no runtime
+    assertion (review fix, below).
+  - (n) **`lenses` counts in `policyDigest` only under `depth: "auto"`**
+    (critique point 7, its alternative: the condition is in now). It is
+    dormant while both keys are unapplied, so no test or mutation can
+    reach it yet; VS-28 wiring's test must show `depth: "fixed"` with
+    `lenses: "high"` equals the default policy digest. The same latent gap
+    exists for `scopeGate` and `verifyEvidence`, whose comments say they
+    count only under strict but whose digest has no such condition; VS-42
+    and VS-44 wiring can add them to `POLICY_ONLY_WITH`.
+  - (o) **The seed is raw** (round two's convention and the plan); the
+    filtered variant differs by 0.017 at p50 and not at p85, and gives the
+    same band counts at the shipped cutpoints.
+  - (p) **The lens prompts share `build()`** and its "Untrusted text"
+    section, so a lens is also told to report instructions aimed at AI
+    reviewers as a security finding. The lens classes follow the
+    contract's mechanisms (concurrency, resource, access) and the
+    data-corruption class; the text is untuned (I-13), and Q3 and Q4 bear
+    on it. Nothing yet says which category a lens finding takes; both are
+    hand-offs to VS-28 wiring (below).
+  - (q) **Entropy is summed from +0**, so a one-file change has entropy 0,
+    never −0.
+
+- **Deferred (record).**
+  - **From the brief, to later windows:** the per-repository refit after
+    200 PRs (VS-39 item 2; `riskOf`'s `cutpoints` parameter is the hook);
+    `order(files)` in `budgetDiff` and VS-19 batching (item 5); the
+    focus-hunk band under `rereview: focused` (VS-41, item 4); Phase A's
+    cost projections (item 6); the band in `--json` (Q28; notes only
+    until then); `depthRules` (VS-48); history risk areas (VS-46); §3
+    VS-28's validator lens and taxonomy mapping; the equal-token control
+    arm (the funded Q9 ablation).
+  - **Hand-offs to VS-28 wiring** (runner-wiring window; Q13, Q15, Q18):
+    - `riskFeatures` from `RunInput.files` after `classifyFiles` on the
+      whole PR, with `changed` set to the whole file list before
+      `classifyFiles` (so test-only follows VS-39 item 1: no non-test file
+      changed, ignored ones included) and `dependents` from the slice's
+      gated count (`ImpactSlice.stages.gated`), a lower bound when the
+      slice is incomplete, said in the notes;
+    - the history gatherer's bounded 90-day window, one subject per
+      distinct commit, into `countHistory`; history `missing` in CI unless
+      the CLI fetches the window;
+    - `planDepth` in place of `planSpecialists` under `depth: "auto"`
+      (the fixed path keeps today's call, with D3 parity tests);
+    - every `DepthPlan.limited` entry, the effective depth, the band and
+      its reasons as run notes (G6-2), tested; never the "Risk:" header and
+      never `Selection.risk`;
+    - the lens agent prompt file and its pin entry;
+    - the category a lens finding takes (for example one Category per
+      lens, or `bug` for all four), and what a lens does with instructions
+      aimed at AI reviewers: drop `build()`'s injection-reporting clause for
+      lens kinds, or route such findings to the security pass so they are
+      not reported twice (decision (p)); pinned in `prompt.test.ts` and by
+      the lens digests when wiring moves them;
+    - lens passes at ≤ 5 steps, ≤ 4 findings and ≤ 3 in parallel on the
+      review model, as `ReviewOutcome.specialists` `name: "lens"` with
+      `lens`, their findings unioned, deduped and verified, then the
+      guardrail;
+    - the budget shrink dropping lenses first (dispatch.ts's lever);
+    - `posting.ts` failing closed on cut lineage (I-4) before any lens;
+    - the session bound (`MAX_REVIEW_SESSIONS`) and lineage bound tests in
+      run.test.ts;
+    - `VARIANT_KEYS.engine` gaining both keys and `engine:depth-auto` and
+      `engine:lenses-high` flipping, with D3 parity tests;
+    - both keys leaving `UNAPPLIED_REVIEW_KEYS` and `WIRING`, which makes
+      `POLICY_ONLY_WITH` live (decision (n)) and moves the three lens
+      digests on purpose;
+    - revisiting (f), the access lens under `security: "off"`, with the
+      owner's answer (owner questions, below).
+  - **The codium merge:** its panel judge would be a 9th session, so the
+    bound must be re-decided with the codium owner before both land.
+  - **One test-path matcher (I-10).** `risk.ts` `isTestFile`, `trivial.ts`'s
+    private `matches(path, TEST_PATHS)` and `impact.ts`'s inline filter
+    each call `minimatch` over `TEST_PATHS` with `{ dot: true, nocase:
+    true }`, and `risk.ts` copies `trivial.ts`'s private `dirname`. When
+    `trivial.ts` is next touched (it is pinned, so with its own pin
+    update), export one `isTestPath(path)` from it and use it in
+    `risk.ts` and `impact.ts`. Until then a `risk.test.ts` case pins that
+    `risk.ts` and `trivial.ts` agree on a list of paths (review fix,
+    below).
+- **Deferred verification.**
+  - Phase A band shares on Martian (Q10) and ReviewBench (Q27); the reach
+    fit, which needs VS-25b wiring artifacts; recall by band; CI and local
+    agreement on real artifacts. For equal inputs they agree by
+    construction; the known source of disagreement is rename and copy
+    detection (GitHub's similarity and its `copied` status, which has no
+    old path, against local `diff.renames` and `renameLimit`; the seed
+    used `--no-renames`), sized by the rename test above (critique point
+    8).
+  - The lens prompts were never sent to any model.
+  - The Python and TypeScript cross-check is manual: risk.test.ts pins the
+    two `example` values the script prints, and the scratch check matched
+    the filtered bands, but no test runs Python.
+- **Owner questions.** None new. Q9, Q10, Q13, Q15, Q18, Q27, Q28 and Q31
+  stay open; this package is neutral on them, since nothing calls it. If
+  Q31 is answered no, re-seed the two cutpoints from VS-22b's PR cases. Q3
+  and Q4 bear on the lens classes. Lane readings the owner may reverse
+  with local changes: (c) code files only, (d) no wide-only floor, (f) an
+  explicit `security: "off"` under `depth: "auto"`, (g) the word list.
+  (f) decides policy for an owner-facing key pair the contract's depth
+  table is silent on, in two halves the owner may reverse apart: `off`
+  winning over every band (no security pass on medium or high), and the
+  access lens dropped with it. The neutral alternative to the second half
+  keeps all four lenses under `off` and records only `security-off` in
+  `limited`; either is a one-line change in `planDepth` and one plan test.
+- **Predicted merge conflicts.** Read-only: a three-way `git merge-file`
+  of each touched file that either branch changes, comparing HEAD and the
+  working tree against each branch's merge base and tip.
+  - `origin/codium` (`5a079cbd`) changes `config.ts`, `prompt.ts`,
+    `types.ts` and `plan.test.ts`; `origin/self-evolving` (`f062bcce`)
+    changes `types.ts` and `plan.test.ts`. `risk.ts`, `plan.ts`,
+    `model-evidence.ts`, engine `eval.ts`, the other tests and the
+    research files are untouched by both.
+  - `config.ts`, `prompt.ts` and `plan.test.ts`: no conflict, at HEAD or
+    with VS-28c. In the merged `prompt.ts`, codium's `buildJudgePrompt`
+    sits after `buildVerifyPrompt` and does not call `build()`, whose only
+    callers stay the review, security and lens builders.
+  - `types.ts`: 2 conflict hunks with codium and 1 with self-evolving,
+    byte-identical at HEAD and with VS-28c (the VS-27a pass-name lines).
+    No new conflict hunk.
+- **Evidence.** Each file was run alone through the lock with `--timeout
+  30000`, from its package directory; the engine ones with fresh XDG roots
+  under `/tmp/vector-vectorscope/vs28c/xdg/`. Counts are at HEAD → with
+  VS-28c.
+
+  | File | HEAD | VS-28c |
+  |---|---|---|
+  | core `test/review/risk.test.ts` | — | 46 (44 before the review fixes) |
+  | core `test/review/plan.test.ts` | 21 | 26 |
+  | core `test/review/prompt.test.ts` | 36 | 39 |
+  | core `test/review/config.test.ts` | 59 | 65 |
+  | core `test/review/model-evidence.test.ts` | 26 | 28 |
+  | core `test/review/select.test.ts` | 45 | 45 |
+  | core `test/review/format.test.ts` | 51 | 51 |
+  | core `test/review/trivial.test.ts` | 44 | 44 |
+  | core `test/review/impact.test.ts` | 59 | 59 |
+  | core `test/review/dispatch.test.ts` | 22 | 22 |
+  | core `test/review/pipeline.test.ts` | 2 | 2 |
+  | engine `test/review/eval.test.ts` | 31 | 32 |
+  | engine `test/review/run.test.ts` | 44 | 44 |
+  | engine `test/cli/github.review.test.ts` | 40 | 40 |
+  | app `ai-review.test.ts` (`--preload ./happydom.ts`) | 107 | 107 |
+  | eval `replay.test.ts` (from `script/vectorscope-eval`) | 32 | 32 |
+  | eval `report.test.ts` (from `script/vectorscope-eval`) | 33 | 33 |
+  | eval `certify.test.ts` (from `script/vectorscope-eval`, critique point 10) | 6 | 6 |
+
+  - **Typecheck.** `bun typecheck` passes in core, engine and app. The eval
+    scripts pass `bun tsgo -p ../../script/vectorscope-eval/tsconfig.json`
+    from `packages/engine`.
+  - **Lint.** prettier is clean on every changed TypeScript file except
+    `prompt.ts`, whose one off-format line predates this package (above).
+    oxlint reports 0 warnings on `risk.ts` and `risk.test.ts`, and no new
+    warning on the other changed files.
+  - **The seed script.** `py_compile` passes; `--help` exits 0; no
+    arguments or `--medium 0.9 --high 0.5` exit 2; a malformed key or a
+    folder with no numstat exits 1; the full run printed the numbers above.
+  - **Mutations.** Each was applied alone, its test file run, and the file
+    restored byte for byte (checked by hash). All 41 were caught:
+    - risk.ts (19): each cap dropped (2); `>` as `≥` at the cutpoints; the
+      test-only override dropped; `testDelta` lowering the band; the
+      deletion minimum dropped; `>` as `≥` in the deletion rule; deletions
+      over every file; each reach boundary moved by one (2); sensitive
+      with wide reach giving medium; a wide-alone floor added; history in
+      the score; the fix regex unanchored; `fixing` dropped from it; a
+      revert counted as a fix; old paths ignored for sensitive and for
+      test files (2); a missing feature not listed.
+    - plan.ts (7): security `off` ignored; lenses on medium; lenses under
+      fixed; security always in low; fixed differing from
+      `planSpecialists`; the access lens kept under `off`; no limit
+      recorded.
+    - prompt.ts (3): the lens given the review limit; a lens skip line
+      dropped; the security skip line changed.
+    - model-evidence.ts (4): `lenses:high` dropped from the memo key; lens
+      prompts under `lenses` alone; the pair passed in `evidenceScope`
+      while unapplied; `depth` dropped from the policy keys.
+    - config.ts and types.ts (7): the ignored note, the security-off note
+      and the depth warning each dropped; the lenses warning without auto;
+      each environment entry dropped (2); the depth default changed.
+    - engine eval.ts (1): `WIRING.depth` naming another package.
+    - Not reachable: `POLICY_ONLY_WITH` (decision (n)).
+  - **Not run.** The full root typecheck was not run, since nothing is
+    pushed.
+  - **Not done.** Nothing was sent to a model; there was no paid run, no
+    workflow dispatched, nothing published and nothing committed; no
+    user-visible string changed (D14).
+
+### 2026-11-07 · VS-28c review fixes
+
+Nine review findings, none blocking. Six were fixed in code, one in a wider
+form than its finding asks (the lens inputs, which also takes a second
+finding's deferred half now). Three asked for no code change now; they are
+recorded in the entry above, as owner readings or hand-offs. Only core
+`review/risk.ts`, `review/model-evidence.ts` (the lens inputs and the
+pin), `test/review/risk.test.ts`, `test/review/plan.test.ts` and
+`test/review/model-evidence.test.ts` changed, with this log. No runner,
+provider, LLM or posting file, no prompt text and no file @vector owns
+changed. The entry above is updated in place where its facts changed (the
+`riskFeatures` signature, test-only, the lens prompts, the pin, three
+digests, decision (m), the hand-offs, the owner questions and the risk test
+count). Nothing is committed.
+
+- **The lens prompts over the review prompts' inputs** (findings on
+  `model-evidence.ts:381`, both). Taken now, as the first option of the
+  first finding and with the second finding's deferred part, because the
+  three lens digests are new in this package and uncommitted, so widening
+  their inputs moves no recorded digest.
+  - `canonicalPrompts` renders each lens over the six inputs per trust that
+    the review and security prompts use (bare with the untrusted head file,
+    incremental, and populated with and without nits, full and
+    incremental, a commit and uncommitted): 48 prompts, up from 8. Under
+    `impact: "graph"` with the pair, each lens also renders with both
+    slices for both trusts (16 more), so the graph lens digest covers the
+    lens-plus-impact prompt a wired run sends.
+  - The six inputs moved from the per-trust closure into a private
+    `canonicalInputs(trust)`, read by the review prompts and the lenses.
+    The review prompts' output is unchanged: every earlier digest still
+    matches its pin (`promptsDigest()` `5d59e9ee06077c23`, graph
+    `74a2111826c226b1`, strict `b98afb0e878dfe26`, and the rest printed by
+    the scratch script, identical to the finished tree's but for the pair).
+  - The comment also says what the first finding's second option asks: a
+    lens prompt differs from the review prompt only in `TASKS`,
+    `OTHER_CLASSES` and its cap, so a lens-only branch added to `build()`
+    must add the inputs that reach it.
+  - The lens digests move to `dd09332295a99649`, graph
+    `31c1a0612c0f9541`, strict `0ebaacbe7aca1b58`. The test now checks 48
+    and 64 lens prompts, the nits, incremental and uncommitted lines in
+    the lens text, no impact block without graph, and four lens-plus-impact
+    prompts per lens with it.
+- **Test-only over every changed file** (finding on `risk.ts:127`). Taken
+  as the first option. `riskFeatures` takes an optional `changed`: every
+  file the change touched, the ones `classifyFiles` leaves out included.
+  Test-only reads it beside `files`, so a non-test file the review skips
+  (ignored by default or by `ignore`, generated, vendored, binary, or a
+  deletion with no patch) keeps the change from being test-only, as VS-39
+  item 1 defines it. A skipped file in a test path, such as a binary
+  fixture or a `.snap` under a `*.test.*` name, does not. Without
+  `changed`, test-only reads `files` alone, as before, so no default
+  changes. Every other feature still comes from `files`. The VS-28 wiring
+  hand-off now says to pass the whole list. A new `risk.test.ts` case runs
+  real `classifyFiles` over a test file with `dist/` and `vendor/` files:
+  test-only without `changed`, not with it, every other feature equal; a
+  900-line test change with one ignored `dist/` line is low without
+  `changed` and high with it. On the seed population the result is the
+  same with `changed` set (entry above).
+- **`security: "off"` under auto, decision (f)** (finding on
+  `plan.ts:281`). Behaviour kept, as the finding's first option says. The
+  owner-questions paragraph now names (f) explicitly, in both halves the
+  owner may reverse apart, with the neutral alternative (all four lenses,
+  `security-off` in `limited` only).
+- **The `toThrow()` assertion** (finding on `plan.test.ts:113`). Dropped,
+  as the finding's first option says. The `@ts-expect-error` now sits on a
+  `DepthInput` value (`const unbanded: DepthInput = { depth: "auto", ... }`,
+  then `void unbanded`, as `skip.test.ts` does), so nothing runs and the
+  type is the guarantee. `bun typecheck` passing shows the directive is
+  still used. No named runtime error was added: `DepthInput` already
+  rules the case out, and a guard nobody can reach adds nothing.
+- **Redundant annotations** (finding on `risk.ts:150`). Taken: `likely` and
+  `floor` lose `: RiskBand`; both infer the literal union, and `band` still
+  type-checks against `RiskAssessment`.
+- **Import order** (finding on `plan.test.ts:11`). Taken:
+  `MAX_REVIEW_SESSIONS` moves before `MIN_CONTEXT`.
+- **Lens categories and the injection clause** (finding on
+  `prompt.ts:327`). No code change, as the finding says. A new VS-28 wiring
+  hand-off: decide the category a lens finding takes, and either drop
+  `build()`'s injection-reporting clause for lens kinds or route such
+  findings to the security pass, with `prompt.test.ts` and the lens digest
+  pins covering it. Decision (p) points to it.
+- **One test-path matcher** (finding on `risk.ts:239`). No change to
+  `trivial.ts` or `impact.ts` now, as the finding says; the single
+  `isTestPath` export is a deferred I-10 item in the entry above. The
+  finding asks to keep a case that checks agreement, and none existed, so
+  one was added. `risk.test.ts` now checks 18 paths (test and non-test
+  names, test directories, mixed case, near misses such as `testing/`,
+  `contest.py`, `latest.ts` and `attest/`). For each, `riskFeatures`
+  calls a one-file change test-only exactly when `classifyTrivial`
+  refuses a pure, in-place rename from that path to `zz.ts` in the same
+  directory as `test-path`. Trivial's earlier refusals limit the check to
+  paths that are not sensitive and have no dot segment: a first draft with
+  `e2e/cypress/login.ts` failed because `login` is sensitive. So the check
+  covers `nocase` but not `dot`.
+- **Off by default (I-1, I-12).** Unchanged from the entry above. With
+  every new key unset, every digest and every runner path is as before:
+  `promptsDigest` with no key and with every earlier set of keys, the
+  policy digest and the scope all match their pins. `riskFeatures` without
+  `changed` returns what it did. Nothing outside core's tests calls the new
+  code.
+- **Pin (I-12).** `REVIEW_PIPELINE_SOURCES` moves from `e169148d060d546b`
+  to `5cd3fb178c514179` because `risk.ts` changed.
+  `REVIEW_PIPELINE_REVISION` stays 1. `model-evidence.ts` is not a pinned
+  file.
+- **Evidence.** Each file was run alone through the lock with `--timeout
+  30000`, from its package directory; the engine one with fresh XDG roots
+  under `/tmp/vector-vectorscope/vs28c/xdg/fix/`.
+
+  | File | Count |
+  |---|---|
+  | core `test/review/risk.test.ts` | 46 (2 new) |
+  | core `test/review/plan.test.ts` | 26 |
+  | core `test/review/model-evidence.test.ts` | 28 |
+  | core `test/review/prompt.test.ts` | 39 |
+  | engine `test/review/eval.test.ts` | 32 |
+
+  - **Typecheck.** `bun typecheck` passes in core, engine and app.
+  - **Lint.** prettier is clean on the five changed TypeScript files.
+    oxlint reports 0 warnings on `risk.ts` and `risk.test.ts`, and no new
+    warning on the others (the remaining ones are on lines this package
+    does not touch).
+  - **Mutations.** Each was applied alone, its test file run, and the file
+    restored byte for byte (checked by hash). All four were caught (one
+    test failed each):
+    - risk.ts against `risk.test.ts`: test-only read from `files` alone,
+      ignoring `changed`; `isTestFile` without `nocase`.
+    - model-evidence.ts against `model-evidence.test.ts`: the lenses over
+      `POPULATED_INPUT` alone; the lenses without the impact slices under
+      graph.
+  - **Not run.** The full root typecheck was not run, since nothing is
+    pushed.
+  - **Not done.** Nothing was sent to a model; there was no paid run, no
+    workflow dispatched, nothing published and nothing committed; no
+    user-visible string changed (D14).

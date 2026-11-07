@@ -377,6 +377,15 @@ export interface ZdrAttestation {
 }
 export type ZdrAttestedEntry = string | ZdrAttestation
 
+// VS-28's single-class lenses (contract §4 VS-28 items 2 and 3): on the high band of `depth: "auto"` with
+// `lenses: "high"`, one pass per class on the review model. Here so plan.ts and prompt.ts share them without importing
+// each other. ReviewOutcome.specialists[].lens names the class a lens pass looked for.
+export const REVIEW_LENSES = Object.freeze(["concurrency", "resource", "access", "data-integrity"] as const)
+export type ReviewLens = (typeof REVIEW_LENSES)[number]
+// A lens pass's bounds (VS-28 item 3): at most 5 steps and 4 findings, and at most 3 lenses at once. Before VS-28
+// wiring only the lens prompt reads one of them (`findings`); the wiring applies `steps` and `parallel` in Review.run.
+export const LENS_LIMITS = Object.freeze({ steps: 5, findings: 4, parallel: 3 })
+
 // `.vector/review.json`. Environment variables override it, and it overrides DEFAULT_REVIEW_CONFIG.
 export interface ReviewConfig {
   incremental: boolean
@@ -431,6 +440,18 @@ export interface ReviewConfig {
   // digest stay as they were. No environment variable reads it. Parsed, and read by no runner until VS-44 wiring
   // (UNAPPLIED_REVIEW_KEYS), so the parser warns that "certificate" is not applied.
   verifyEvidence?: "off" | "certificate"
+  // VS-28's opt-in (D3, Q15), as amended by VS-39 (Q18). Under "auto", Review.run will compute the change's risk band
+  // (risk.ts riskOf) and plan its passes by band (plan.ts planDepth): low runs the review, and security only on a
+  // sensitive path; medium adds security; high adds security and, with `lenses: "high"`, four single-class lenses.
+  // "fixed" runs today's passes. Absent means "fixed" (OPTIONAL_REVIEW_DEFAULTS), and DEFAULT_REVIEW_CONFIG leaves it
+  // out, so every config and its digest stay as they were. Parsed, and read by no runner until VS-28 wiring
+  // (UNAPPLIED_REVIEW_KEYS), so the parser warns that "auto" is not applied.
+  depth?: "fixed" | "auto"
+  // VS-28's lens opt-in. Under "high", the high band of an automatic depth adds the lenses (REVIEW_LENSES). It is
+  // effective only with `depth: "auto"`; set without it, it is ignored with a parser note. Absent means "off"
+  // (OPTIONAL_REVIEW_DEFAULTS), and DEFAULT_REVIEW_CONFIG leaves it out. Parsed, and read by no runner until VS-28
+  // wiring (UNAPPLIED_REVIEW_KEYS), so the parser warns that "high" is not applied.
+  lenses?: "off" | "high"
   // VS-23's opt-in (D3, Q1): "zdr" sends code only on zero data retention routes (privacy.ts). Raise-only: any source
   // may set it and none may lower it. Absent means "standard", and DEFAULT_REVIEW_CONFIG leaves it out, so every
   // config and its digest stay as they were. Only mergeReviewConfig reads it, and no runner calls that before VS-23b.
@@ -506,6 +527,8 @@ export const OPTIONAL_REVIEW_DEFAULTS = {
   guardrail: "off",
   scopeGate: "off",
   verifyEvidence: "off",
+  depth: "fixed",
+  lenses: "off",
 } as const satisfies Partial<ReviewConfig>
 
 // The same, read by any ReviewConfig key, for lookups that do not know which keys have an entry.
@@ -513,8 +536,8 @@ export const OPTIONAL_REVIEW_DEFAULT_OF: Partial<Record<keyof ReviewConfig, unkn
 
 // Keys config.ts parses that no runner applies yet, each optional with a default above. The parser warns when one would
 // change a review, policyDigest reads them as absent whatever their value, so no evidence scope claims a policy its
-// review did not run under, and the eval replay neither takes nor records them. VS-24, VS-25b, VS-27c, VS-42 or VS-44
-// wiring takes a key off this list when a runner applies it.
+// review did not run under, and the eval replay neither takes nor records them. VS-24, VS-25b, VS-27c, VS-42, VS-44 or
+// VS-28 wiring takes a key off this list when a runner applies it.
 export const UNAPPLIED_REVIEW_KEYS = [
   "trivial",
   "maxInputTokens",
@@ -522,6 +545,8 @@ export const UNAPPLIED_REVIEW_KEYS = [
   "guardrail",
   "scopeGate",
   "verifyEvidence",
+  "depth",
+  "lenses",
 ] as const satisfies readonly (keyof typeof OPTIONAL_REVIEW_DEFAULTS)[]
 
 // The verify setting a review gets under verifyPolicy "shared" when neither review.json nor REVIEW_VERIFY sets one:

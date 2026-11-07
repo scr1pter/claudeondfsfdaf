@@ -1,10 +1,18 @@
-// The prompts for the review, security, verify and finalize steps. Everything the pull request's author or its
+// The prompts for the review, security, lens, verify and finalize steps. Everything the pull request's author or its
 // commenters control is placed inside escaped <untrusted_*> tags, and the trusted instructions come last.
 
 // Types only: impact.ts reads paths through BrainCode (node:path), and the desktop renderer imports this file.
 import type { EnclosingScope, ImpactFallback, ImpactIncomplete, ImpactPrompt, OutboundSignature } from "./impact"
 import { REDACTED } from "./redact"
-import type { Category, Finding, FocusHunk, PriorFinding, Trust } from "./types"
+import {
+  LENS_LIMITS,
+  type Category,
+  type Finding,
+  type FocusHunk,
+  type PriorFinding,
+  type ReviewLens,
+  type Trust,
+} from "./types"
 
 // A pattern the team dismissed before, read from Vector's own finding markers (st=d) across the repository.
 export interface TeamPattern {
@@ -170,6 +178,32 @@ const SECURITY_TASK = [
   `Report only security defects, each with the category security; leave every other defect to the code reviewer. Never write out a secret value; write ${REDACTED} in its place.`,
 ].join(" ")
 
+// VS-28's single-class lenses, each in SECURITY_TASK's shape: one class of defect and nothing else, beside the code and
+// security reviewers. Sent only on the high band of `depth: "auto"` with `lenses: "high"`, which no runner applies
+// before VS-28 wiring. Untuned: the wording may change before the held-out freeze (I-13).
+const LENS_TASKS: Record<ReviewLens, string> = {
+  concurrency:
+    "You are Vector's concurrency reviewer. Find concurrency defects that this change introduces or exposes, and nothing else: races, lost updates, deadlocks, unsafe shared state, missing locks or awaits, and ordering that breaks when work runs in parallel or interleaves. Report only concurrency defects; leave every other defect to the other reviewers.",
+  resource:
+    "You are Vector's resource reviewer. Find resource defects that this change introduces or exposes, and nothing else: leaked memory, file handles, connections, timers or subscriptions, unbounded growth, cleanup skipped on an error path, and loops or retries that never end. Report only resource defects; leave every other defect to the other reviewers.",
+  access:
+    "You are Vector's access reviewer. Find access-control defects that this change introduces or exposes, and nothing else: authentication or authorization checks that are missing or can be bypassed, privilege escalation, and data or actions reachable by the wrong user or tenant. Report only access-control defects; leave every other defect to the other reviewers.",
+  "data-integrity":
+    "You are Vector's data-integrity reviewer. Find data-integrity defects that this change introduces or exposes, and nothing else: data that is lost, duplicated, truncated or corrupted, partial writes left without a rollback, broken invariants between stored records, and unsafe migrations or conversions. Report only data-integrity defects; leave every other defect to the other reviewers.",
+}
+
+type PromptKind = "review" | "security" | ReviewLens
+
+// The task each kind of reviewer is given, and the "Do not report" line that keeps it to its own class.
+const TASKS: Record<PromptKind, string> = { review: REVIEW_TASK, security: SECURITY_TASK, ...LENS_TASKS }
+const OTHER_CLASSES: Partial<Record<PromptKind, string>> = {
+  security: "- Anything that is not a security defect.",
+  concurrency: "- Anything that is not a concurrency defect.",
+  resource: "- Anything that is not a resource defect.",
+  access: "- Anything that is not an access-control defect.",
+  "data-integrity": "- Anything that is not a data-integrity defect.",
+}
+
 // Every tag the prompt is built from. Untrusted text can mention none of them, so it cannot close its own block
 // or open a trusted one.
 const STRUCTURE_TAG =
@@ -243,6 +277,12 @@ export function buildSecurityPrompt(input: PromptInput): string {
   return build(input, "security")
 }
 
+// A lens pass's prompt (VS-28): the review prompt's sections with one lens's task, its "Do not report" line and a cap
+// of LENS_LIMITS.findings findings. Nothing calls it before VS-28 wiring.
+export function buildLensPrompt(input: PromptInput, lens: ReviewLens): string {
+  return build(input, lens)
+}
+
 export function buildVerifyPrompt(input: VerifyPromptInput): string {
   const sections = [
     [
@@ -273,7 +313,7 @@ export function buildFinalizePrompt(): string {
   return "Stop investigating. Return the findings you have confirmed so far. Call StructuredOutput now."
 }
 
-function build(input: PromptInput, kind: "review" | "security"): string {
+function build(input: PromptInput, kind: PromptKind): string {
   const open = (input.prior ?? []).filter((prior) => prior.status === "open")
   const notInlined = input.notInlined ?? []
   const nits = input.nits === true
@@ -288,12 +328,13 @@ function build(input: PromptInput, kind: "review" | "security"): string {
     "- Anything that matches `<team_dismissed>` unless it is clearly more serious.",
     "- TODOs this diff did not add.",
   ]
-  if (kind === "security") skip.push("- Anything that is not a security defect.")
+  const other = OTHER_CLASSES[kind]
+  if (other) skip.push(other)
 
   // Every section up to "## Untrusted text" is the same for every change reviewed with the same settings, so a
   // provider's prompt cache can reuse it; what depends on the change comes after it.
   const sections = [
-    kind === "security" ? SECURITY_TASK : REVIEW_TASK,
+    TASKS[kind],
     [
       "## How to work",
       "The diff is not enough. Open the changed files in full, follow the callers and callees of changed functions, and read the types, tests and config they depend on. `<related_code>` lists call sites Vector already found; `<history>` shows recent commits and blame for the changed lines.",
@@ -319,8 +360,9 @@ function build(input: PromptInput, kind: "review" | "security"): string {
     skip.join("\n"),
     [
       "## Limits",
-      // maxComments may be 0 (no inline comments); findings still reach the summary, so keep a small floor.
-      `No findings is a valid answer. Report at most ${Math.max(4, 2 * input.maxComments)} findings, the most important first.`,
+      // maxComments may be 0 (no inline comments); findings still reach the summary, so keep a small floor. A lens has
+      // its own cap (VS-28 item 3).
+      `No findings is a valid answer. Report at most ${kind === "review" || kind === "security" ? Math.max(4, 2 * input.maxComments) : LENS_LIMITS.findings} findings, the most important first.`,
     ].join("\n"),
     [
       "## Untrusted text",
