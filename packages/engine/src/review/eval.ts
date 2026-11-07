@@ -143,7 +143,8 @@ export interface ReplayInput {
   // it set a route setting (SOURCED_REVIEW_KEYS: privacy, zdrAttested), which comes only from a trusted source through
   // mergeReviewConfig once a runner enforces it (VS-23b). Nor a key no runner applies yet (core UNAPPLIED_REVIEW_KEYS:
   // VS-24's trivial and maxInputTokens, VS-25b's impact, VS-27's guardrail, VS-42's scopeGate, VS-44's verifyEvidence,
-  // VS-28's depth and lenses). The type says so, and step 0b refuses any of them from an untyped caller.
+  // VS-28's depth and lenses, and VS-30's runtime, which is also trusted-only). The type says so, and step 0b refuses
+  // any of them from an untyped caller.
   config?: Partial<
     Omit<ReviewConfig, (typeof VARIANT_KEYS.engine)[number] | SourcedReviewKey | (typeof UNAPPLIED_REVIEW_KEYS)[number]>
   >
@@ -1157,6 +1158,7 @@ const WIRING: Record<(typeof UNAPPLIED_REVIEW_KEYS)[number], string> = {
   verifyEvidence: "VS-44 wiring",
   depth: "VS-28 wiring",
   lenses: "VS-28 wiring",
+  runtime: "the VS-30 executor",
 }
 
 // Why a replay's settings cannot name its run, if they cannot: a variant's key set through `config`, which would leave
@@ -1166,8 +1168,11 @@ function variantProblem(input: ReplayInput) {
   const misplaced = VARIANT_KEYS.engine.filter((key) => input.config && Object.hasOwn(input.config, key))
   if (misplaced.length)
     return `config sets ${misplaced.join(", ")}, a pipeline variant's setting: pass the variant in \`variant\`, as admitReplay hands it out, so the artifact names the run.`
-  // Nothing enforces the route rules in a replay yet, so its artifact may not record a route setting.
-  const sourced = SOURCED_REVIEW_KEYS.filter((key) => input.config && Object.hasOwn(input.config, key))
+  // Nothing enforces the route rules in a replay yet, so its artifact may not record a route setting. A sourced key that
+  // no runner applies yet (VS-30's runtime) gets the unwired message below, which names what applies it.
+  const sourced = SOURCED_REVIEW_KEYS.filter(
+    (key) => input.config && Object.hasOwn(input.config, key) && !UNAPPLIED_REVIEW_KEYS.some((item) => item === key),
+  )
   if (sourced.length)
     return `config sets ${sourced.join(", ")}, a route setting a replay cannot apply: route settings come only from trusted settings once a runner enforces them.`
   const unwired = UNAPPLIED_REVIEW_KEYS.filter((key) => input.config && Object.hasOwn(input.config, key))

@@ -38,8 +38,10 @@ import { DEFAULT_REVIEW_CONFIG, UNAPPLIED_REVIEW_KEYS, type ReviewConfig } from 
 // decides what a strict review posts, and its shared rule pass is the one report.ts's offline re-selection applies, so
 // a change to either moves this pin on purpose. So is the rule citation check (VS-43a's citation.ts), pinned from the
 // day it lands, as guardrail.ts is: it will decide what a review drops or strips. So is the change-risk band (VS-28c's
-// risk.ts), pinned from the day it lands: once wired it decides which passes run under `depth: "auto"`. verdict.ts and
-// format.ts are left out: completeness decides wording and the verdict, not what a review finds or posts.
+// risk.ts), pinned from the day it lands: once wired it decides which passes run under `depth: "auto"`. So is the
+// runtime evidence contract (VS-30c's runtime.ts), pinned from the day it lands: once the VS-30 executor runs it,
+// runtimeVerdict decides which findings are verified at runtime. verdict.ts and format.ts are left out: completeness
+// decides wording and the verdict, not what a review finds or posts.
 const REVIEW_PIPELINE_FILES = [
   "packages/engine/src/review/run.ts",
   "packages/app/src/features/pull-requests/ai-review.ts",
@@ -56,6 +58,7 @@ const REVIEW_PIPELINE_FILES = [
   "packages/core/src/review/risk.ts",
   "packages/core/src/review/guardrail.ts",
   "packages/core/src/review/citation.ts",
+  "packages/core/src/review/runtime.ts",
   "packages/engine/src/review/parse.ts",
   "packages/core/src/review/impact.ts",
   "packages/engine/src/review/impact.ts",
@@ -396,6 +399,84 @@ describe("scope", () => {
     expect(lensesStrict).toBe("0ebaacbe7aca1b58")
   })
 
+  // VS-30c: the runtime instruction and its <untrusted_runtime_evidence> block render only under `runtime: "ask"`,
+  // standalone and last, so they move the digest only under that key; "off", and every other set of keys, keeps its
+  // digest.
+  test("the prompts digest covers VS-30's runtime block under runtime: ask only", () => {
+    expect(promptsDigest({ runtime: "off" })).toBe(promptsDigest())
+    expect(canonicalPrompts({ runtime: "off" })).toEqual(canonicalPrompts())
+    expect(promptsDigest({ impact: "graph", runtime: "off" })).toBe(promptsDigest({ impact: "graph" }))
+    expect(promptsDigest({ guardrail: "strict", runtime: "off" })).toBe(promptsDigest({ guardrail: "strict" }))
+    expect(canonicalPrompts().join("\n")).not.toContain("runtime_evidence")
+    const ask = canonicalPrompts({ runtime: "ask" })
+    expect(ask.slice(0, -2)).toEqual(canonicalPrompts())
+    expect(ask.length - canonicalPrompts().length).toBe(2)
+    expect(ask.at(-2)).toStartWith("`<untrusted_runtime_evidence>` holds what this project's own tests printed")
+    const block = ask.at(-1) ?? ""
+    // Under every cap, so no "not shown" line renders.
+    expect(block).not.toContain("not shown")
+    for (const section of [
+      "<untrusted_runtime_evidence>\n",
+      "<untrusted_runtime_run ",
+      'side="head"',
+      'side="base"',
+      'finding="000000000000"',
+      'failure="assertion"',
+      'stopped="timeout"',
+      'command="bun test --coverage --coverage-reporter=lcov" kind="coverage" side="head"',
+      "<untrusted_runtime_coverage ",
+      "src/example.ts: 1 of 4 changed lines ran; not run: 2, 4-5",
+      "src/types.ts: the coverage report lists none of its changed lines",
+      "src/other.ts: the coverage report has no record of this file",
+      "</untrusted_runtime_evidence>",
+    ])
+      expect(block).toContain(section)
+    // With the other keys, the block still comes last.
+    const lensed = canonicalPrompts({ impact: "graph", depth: "auto", lenses: "high", runtime: "ask" })
+    expect(lensed.slice(0, -2)).toEqual(canonicalPrompts({ impact: "graph", depth: "auto", lenses: "high" }))
+    expect(lensed.slice(-2)).toEqual(ask.slice(-2))
+    const runtime = promptsDigest({ runtime: "ask" })
+    const runtimeGraph = promptsDigest({ impact: "graph", runtime: "ask" })
+    const runtimeStrict = promptsDigest({ guardrail: "strict", runtime: "ask" })
+    const runtimeLenses = promptsDigest({ depth: "auto", lenses: "high", runtime: "ask" })
+    expect(runtime).toBe(promptsDigest({ runtime: "ask" }))
+    expect(
+      new Set([
+        promptsDigest(),
+        promptsDigest({ impact: "graph" }),
+        promptsDigest({ guardrail: "strict" }),
+        promptsDigest({ depth: "auto", lenses: "high" }),
+        runtime,
+        runtimeGraph,
+        runtimeStrict,
+        runtimeLenses,
+      ]).size,
+    ).toBe(8)
+    // VS-30c held every earlier digest, and printed these (built at 213aabe9, with its coverage-run kind and the
+    // instruction's coverage sentence). The VS-30 executor moves them on purpose when its repro or verify prompt joins
+    // under the key.
+    expect(promptsDigest()).toBe("5d59e9ee06077c23")
+    expect(promptsDigest({ impact: "graph" })).toBe("74a2111826c226b1")
+    expect(promptsDigest({ guardrail: "strict" })).toBe("b98afb0e878dfe26")
+    expect(promptsDigest({ impact: "graph", guardrail: "strict" })).toBe("3ba21b5bc883cd70")
+    expect(promptsDigest({ guardrail: "strict", scopeGate: "introduced" })).toBe("4aa712221043a3a7")
+    expect(promptsDigest({ impact: "graph", guardrail: "strict", scopeGate: "introduced" })).toBe("8335adf9de513ee5")
+    expect(promptsDigest({ guardrail: "strict", verifyEvidence: "certificate" })).toBe("d209592d08bb1e0c")
+    expect(promptsDigest({ impact: "graph", guardrail: "strict", verifyEvidence: "certificate" })).toBe(
+      "468fcac8cde18fe2",
+    )
+    expect(promptsDigest({ guardrail: "strict", scopeGate: "introduced", verifyEvidence: "certificate" })).toBe(
+      "0f3ff2dd0f7c1d7d",
+    )
+    expect(promptsDigest({ depth: "auto", lenses: "high" })).toBe("dd09332295a99649")
+    expect(promptsDigest({ impact: "graph", depth: "auto", lenses: "high" })).toBe("31c1a0612c0f9541")
+    expect(promptsDigest({ guardrail: "strict", depth: "auto", lenses: "high" })).toBe("0ebaacbe7aca1b58")
+    expect(runtime).toBe("7d9147298f5cdbaf")
+    expect(runtimeGraph).toBe("3bf0c1afc17e08d9")
+    expect(runtimeStrict).toBe("8c5154b47a05f952")
+    expect(runtimeLenses).toBe("bcb1c5c5258319f1")
+  })
+
   // The runners and the core code they share have no digest a review can compute, so this pins one: a change to any of
   // these files fails here until someone decides whether REVIEW_PIPELINE_REVISION goes up and updates the pin.
   test("the pipeline's sources are pinned next to REVIEW_PIPELINE_REVISION", () => {
@@ -456,6 +537,9 @@ describe("scope", () => {
       { depth: "auto" as const },
       { lenses: "high" as const },
       { depth: "auto" as const, lenses: "high" as const },
+      // Nor VS-30's runtime, which no runner applies before the VS-30 executor.
+      { runtime: "off" as const },
+      { runtime: "ask" as const },
     ])
       expect(policyDigest({ ...DEFAULT_REVIEW_CONFIG, ...change })).toBe(base)
   })
@@ -568,6 +652,29 @@ describe("scope", () => {
       evidenceScope({ adapter: "desktop", config: DEFAULT_REVIEW_CONFIG }),
     )
     expect(policyDigest({ ...lensed, nits: true })).not.toBe(policyDigest(lensed))
+  })
+
+  // VS-30c: `runtime` is a policy key (a runtime confirmation changes what is verified, and so what is posted) that no
+  // runner applies before the VS-30 executor, so neither the policy digest nor the prompts digest of a scope moves with
+  // it yet. Once the executor applies it, only "ask" counts, in both; whether the scope then records "ask" or the
+  // evidence that actually ran is the executor's decision.
+  test("the scope leaves out VS-30's runtime until a runner applies it", () => {
+    const base = policyDigest(DEFAULT_REVIEW_CONFIG)
+    expect(base).toBe("70512122f41ec160")
+    expect(EVIDENCE_POLICY_KEYS).toContain("runtime")
+    expect(UNAPPLIED_REVIEW_KEYS).toContain("runtime")
+    for (const runtime of ["ask", "off", undefined] as const)
+      expect(policyDigest({ ...DEFAULT_REVIEW_CONFIG, runtime })).toBe(base)
+    const ask: ReviewConfig = { ...DEFAULT_REVIEW_CONFIG, runtime: "ask" }
+    expect(evidenceScope({ adapter: "engine", config: ask })).toEqual(SCOPE)
+    expect(evidenceScope({ adapter: "engine", config: ask }).prompts).toBe(promptsDigest())
+    expect(
+      evidenceScope({
+        adapter: "desktop",
+        config: { ...ask, impact: "graph", guardrail: "strict", depth: "auto", lenses: "high" },
+      }),
+    ).toEqual(evidenceScope({ adapter: "desktop", config: DEFAULT_REVIEW_CONFIG }))
+    expect(policyDigest({ ...ask, nits: true })).not.toBe(policyDigest(ask))
   })
 
   test("a route is in the scope only when the caller enforced it", () => {

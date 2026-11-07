@@ -10249,3 +10249,617 @@ count). Nothing is committed.
   - **Not done.** Nothing was sent to a model; there was no paid run, no
     workflow dispatched, nothing published and nothing committed; no
     user-visible string changed (D14).
+
+## 2026-11-07 · VS-30c Runtime evidence contract (core)
+
+Contract §1.1 (`runtime`: `off` / `ask`, a policy key, trusted sources
+only), §1.2 (`runtime.ts`), §2 I-2, I-4, I-6 and I-12, §3's rows for
+`permission.ts` and `prompt.ts`, and §4 VS-30 items 1 to 6 with its Tests
+line, the core contract only. Addendum A §3 VS-30 ("checks not run"
+reasons from Greptile's blocker taxonomy [GP17]; simulation first, no
+network or secrets, and fix validation are executor work) and §3 VS-27
+(evidence attaches to its finding [GP3]), with the round-two amendment that
+adds a typed "checks not run" reason union. Evidence: research REPORT §4.6,
+`evidence.md` §5.1 (the oracle problem: only a base and head differential
+counts) and §5.2 (Bun's lcov flags; with only the lcov reporter the
+threshold check exits 0), round-two `notes/greptile-primary.md` §7 and
+§11 (the TREX blockers). Built at `213aabe9` (VS-28c). Now window only: a
+new pure core module, additive uncalled code in pinned core files, a
+trusted-only key that is parsed and applied by nothing, a frozen coverage
+allowlist that nothing runs, a prompt-block builder no runner calls, and
+one eval-replay `WIRING` entry. It implements the VS-30c plan as corrected
+by its critique: all thirteen critique points were taken, two by the
+first of their stated options (the failure location, (c); the verdict
+bound to its finding, (k)); none was declined. Nothing is committed (the
+lane brief).
+
+- **Citations re-located at `213aabe9`** (the contract cites `02c23b4c`).
+  `permission.ts` `CHECK_COMMANDS` `:30-43` (contract `:24-40`), the
+  `--checks` rules `:77-86` (contract `:75-84`), `reviewPermissionRules`
+  `:54-89`; `types.ts` `Finding.verifiedBy` `:66`, `VERIFIED_BY` `:93`,
+  `ReviewConfig` `:390-489` (contract `:211-283`), `zdrAttested` `:462`,
+  `OPTIONAL_REVIEW_DEFAULTS` `:523-532`, `UNAPPLIED_REVIEW_KEYS`
+  `:541-550`; `config.ts` `TRUSTED_ONLY` `:154`, `SOURCED_REVIEW_KEYS`
+  `:156-157`, `UNAPPLIED` `:231-271`, `mergeReviewConfig` `:347-419` (its
+  trusted loop `:401-417`), `settle` `:422-493`; `model-evidence.ts`
+  `REVIEW_PIPELINE_SOURCES` `:59`, `EVIDENCE_POLICY_KEYS` `:75-93`,
+  `canonicalPrompts` `:374-408`, `promptsDigest` `:434-457`,
+  `policyDigest` `:473-486`, `evidenceScope` `:490-529`; `prompt.ts`
+  `MAX_CHECK_CHARS` `:117`, `STRUCTURE_TAG` `:209` (already escapes every
+  `untrusted_\w*` tag), `wrapUntrusted` `:259`, `impactBlock` `:539`,
+  `trusted()` `:629`, `clipEnd` `:704`; `model-evidence.test.ts`
+  `REVIEW_PIPELINE_FILES` `:43-64`; engine `eval.ts` `ReplayInput.config`
+  `:136-149`, `WIRING` `:1151-1160`, `variantProblem` `:1165-1194`, the
+  untrusted-replay note `:13` (contract `eval.ts:75`); engine `run.ts`
+  verify verdicts `:784-798` (contract `:736`); `sandbox.ts` `offline()`
+  `:252-270` (contract `:211-254`); `cli/cmd/review.ts` `--checks`
+  `:349-359` and `:750-751`.
+- **Untouched:** `run.ts`, `ai-review.ts`, `provider.ts`, `session/llm.ts`,
+  `posting.ts`, `cli/cmd/review.ts`, `sandbox.ts`, `select.ts`,
+  `format.ts`, `trivial.ts`, `ignore.ts`, `diff.ts`, the eval scripts, and
+  every @vector file (`workflow.ts`, `command.ts`, `github.*`,
+  `github-*.ts`, the GitHub sections of `vectorscope.astro`).
+  `REVIEW_PIPELINE_REVISION` stays 1.
+
+- **What landed.**
+  - **New core `review/runtime.ts`** (pure, browser-safe; imports
+    `minimatch`, `isCodePath` from `ignore.ts`, `COVERAGE_COMMANDS` from
+    `permission.ts`, `TEST_PATHS` from `trivial.ts`, and the `DiffFile` and
+    `Finding` types; I-10 reuse). Its header says nothing calls it before
+    the VS-30 executor, that test and coverage output is untrusted (I-2),
+    that only the executor's exit codes decide, and that only "confirmed"
+    changes a finding.
+    - Frozen constants: `RUNTIME_VERDICTS` (`confirmed`, `inconclusive`,
+      `contradicted`); `RUNTIME_STOPS` (`timeout`, `output-limit`: runs the
+      executor stopped); `RUNTIME_FAILURES` (`assertion`, `error`);
+      `RUNTIME_LIMITS` `{ commandMs: 120_000, outputBytes: 81_920,
+      reproducers: 3, runs: 2 }` (contract VS-30 items 2 and 4; only `runs`
+      is read here); `SIGNAL_EXIT` 128; `LCOV_LIMITS` `{ chars: 32 MiB,
+      files: 20_000, lines: 1_000_000, lineChars: 4_096, lineNumber:
+      10_000_000 }`; `MAX_UNCOVERED_LINES` 200; and `CHECKS_NOT_RUN`
+      (decision (j)) with its `ChecksNotRun` type.
+    - Types: `ChangedCoverage` (`path`, `changed`, `covered`,
+      `uncovered`, `unmeasured?`), `RuntimeEvidence` (`command`, `side`,
+      `commit`, `exit`, `ms`, `runs`, `failure?`, `stopped?`,
+      `coverage?`, `reproducerFor?`, `output?`), `RuntimeTie` (`finding`,
+      `assertion: "tied" | "untied" | "unchecked"`), `RuntimeResult`
+      (`finding`, `verdict`), `LcovFile` and `LcovReport` (`files`,
+      `malformed`, `tooLarge?`).
+    - `parseLcov(text, { cwd?, root?, paths? })`: reads `SF:` and `DA:`
+      only; skips the other record types (`TN`, `FN`, `FNDA`, `FNF`,
+      `FNH`, `FNL`, `FNA`, `BRDA`, `BRF`, `BRH`, `LF`, `LH`, `VER`);
+      counts as malformed a bad `DA:` line (`/^DA:(\d{1,10}),(\d{1,20})(?:,.*)?$/`,
+      line 1 to `lineNumber`), a `DA:` outside a record, an empty `SF:`,
+      a line over `lineChars` (never copied out of the text), an `SF:`
+      before the previous `end_of_record` (which closes that record, also
+      when the `SF:` is over `lineChars` and so opens nothing), and
+      any other line; keeps a record open at the end; merges a file listed
+      twice by its highest hits per line, in first-seen order, in a `Map`.
+      Over `chars` it returns `tooLarge` without scanning; over `files`
+      kept files or `lines` kept line entries it refuses the whole report.
+      Path rules: decision (e).
+    - `changedLineCoverage(lcov, files, { cwd?, root? })`: maps each diff
+      file that is not deleted or binary, is code (`isCodePath`), lies
+      outside `TEST_PATHS` and adds a line, by its head path, parsing with
+      `paths` set to those files so memory follows the change. A file the
+      report omits is `unmeasured`; `undefined` when the report is too
+      large.
+    - `runtimeVerdict(head, base, tie, commits)` and
+      `applyRuntimeVerdict(finding, result)`: decisions (a) to (d) and (k).
+  - **Core `review/permission.ts`:** `CHECK_COMMANDS` is exported and
+    `Object.freeze`d (`as const`), the same twelve commands; its comment
+    says VS-30's executor will read it. `COVERAGE_COMMANDS` (frozen,
+    nested too) holds `bun: { command: "bun test --coverage
+    --coverage-reporter=lcov", report: "coverage/lcov.info" }`, with
+    `CoverageRunner`. Its comment (critique point 8): for the trusted
+    executor only, never the model's shell, which `* -*` still denies;
+    nothing runs it; `report` is Bun's default as probed, and the
+    project's bunfig.toml can move it (`coverageDir`), change the reporters
+    and add preloads, so a missing report is no coverage, never 0%; the
+    coverage run's exit code is no pass or fail (Bun's threshold check
+    exits 0 with only the lcov reporter) and never feeds `runtimeVerdict`;
+    other runners wait for verified flags. `isCoverageCommand(command)`
+    says whether a command is a `COVERAGE_COMMANDS` command, bare or
+    followed by a space and arguments; `runtime.ts` and `prompt.ts` share
+    it. `reviewPermissionRules` is unchanged and its output byte-identical
+    (golden test below).
+  - **Core `review/types.ts`** (still import-free):
+    `ReviewConfig.runtime?: "off" | "ask"` after `zdrAttested`, commented
+    as proposed with Q8 open (critique point 12): under "ask" a trusted
+    local review would ask, per operation through `--checks`, before
+    running tests, coverage and reproducers in isolation; trusted sources
+    only; absent means "off". `OPTIONAL_REVIEW_DEFAULTS` gains `runtime:
+    "off"`; `UNAPPLIED_REVIEW_KEYS` gains `runtime`, and its comment names
+    the VS-30 executor. `DEFAULT_REVIEW_CONFIG` is unchanged.
+  - **Core `review/config.ts`:** `TRUSTED_ONLY` gains `runtime:
+    oneOf(["off", "ask"])`, so `SOURCED_REVIEW_KEYS` gains it:
+    `parseReviewConfig` never reads it (review.json's copy stays
+    `unknown key "runtime" is ignored.`, as at HEAD) and there is no `ENV`
+    entry. `UNAPPLIED.runtime` warns `"runtime": "ask" is not applied yet:
+    no runtime checks run, and --checks works as before.` In
+    `mergeReviewConfig`'s trusted loop a default is left out (decision
+    (h)), and after the loop the sourced keys' not-applied warnings are
+    pushed, since `settle` never sees a sourced key. The docstring names
+    `runtime` beside `zdrAttested`.
+  - **Core `review/prompt.ts`:** a type-only import from `runtime.ts`,
+    `isCoverageCommand` from `permission.ts` (browser-safe, type-only
+    imports of its own) and `redactSecrets` beside `REDACTED`;
+    caps `MAX_RUNTIME_RECORDS` 20, `MAX_COVERAGE_FILES` 30,
+    `MAX_UNCOVERED_RANGES` 20 (output reuses `MAX_CHECK_CHARS` through
+    `clipEnd`); `RUNTIME_EVIDENCE_INSTRUCTION`, the trusted sentence; and
+    `runtimeEvidenceBlock(evidence, secrets)` with private `coverageLine`,
+    `notShown` and `lineRanges`, placed after the impact helpers and before
+    `trusted()`, away from codium's hunks. Decision (g).
+  - **Core `review/model-evidence.ts`:** `EVIDENCE_POLICY_KEYS` gains
+    `runtime` at the end, with a comment. A literal `CANONICAL_RUNTIME`
+    (a reproducer's head runs failing at an assertion with output, its base
+    runs passing, a stopped run, and a head coverage run with a measured
+    file whose uncovered lines compress, a file whose changed lines the
+    report does not list, and an unmeasured file). `canonicalPrompts` takes
+    `runtime` and, under "ask" only, appends `RUNTIME_EVIDENCE_INSTRUCTION`
+    and the block last. `promptsDigest` takes `runtime` and adds
+    `runtime:ask` to the memo key. `evidenceScope` gets a dormant clause
+    that passes `runtime: "ask"` only once the key leaves
+    `UNAPPLIED_REVIEW_KEYS`, with a comment that wiring decides whether the
+    scope then records "ask" or the evidence that ran (critique point 12).
+    `policyDigest` needs no change. `REVIEW_PIPELINE_SOURCES` moves from
+    `5cd3fb178c514179` to `dd477fd3a04e6efb` (`prompt.ts` changed,
+    `runtime.ts` joined).
+  - **Engine `review/eval.ts`** (the eval replay, not a runner):
+    `WIRING.runtime = "the VS-30 executor"`; `variantProblem`'s sourced
+    check leaves out keys that are also unapplied (decision (i)); the
+    `ReplayInput.config` comment names VS-30's runtime. The type already
+    excluded the key (it is both sourced and unapplied).
+  - **Pin:** `REVIEW_PIPELINE_FILES` gains
+    `packages/core/src/review/runtime.ts` after `citation.ts`, and its
+    header says why (critique point 11: once the executor runs it,
+    `runtimeVerdict` decides which findings are verified at runtime).
+  - **Tests.** New core `test/review/runtime.test.ts` (37). Added: core
+    `permission.test.ts` +4, `config.test.ts` +7, `prompt.test.ts` +8
+    (and the type-import test now covers `./runtime`),
+    `model-evidence.test.ts` +2; engine `eval.test.ts`'s refusal test gains
+    a typed `@ts-expect-error` case and three refusal lines. Changed on purpose: `config.test.ts`'s
+    `OPTIONAL_REVIEW_DEFAULTS` equality gains `runtime: "off"`;
+    `model-evidence.test.ts`'s "no others" policy list gains `{ runtime:
+    "off" }` and `{ runtime: "ask" }`; the pin. No existing assertion was
+    loosened.
+
+- **The lcov probe** (scratch under `/tmp/vector-vectorscope/lcov-probe/`
+  and `lcov-probe2/`, never committed). Bun 1.3.14's `bun test --coverage
+  --coverage-reporter=lcov` writes `coverage/lcov.info` with `TN:`, `SF:`
+  relative to the directory the tests ran in, `FNF`/`FNH`, `DA:<line>,<hits>`
+  for executable lines (0 included; not every line, e.g. a `return` after
+  a `const` was not listed), `LF`/`LH` and `end_of_record`; no `BRDA`; the
+  test file is left out. Run from a sibling package (`pkg-b`) whose test
+  imports `../../pkg-a/src/lib`, it writes `SF:../pkg-a/src/lib.ts` and
+  `SF:local.ts` (critique point 1). Both reports are inlined in
+  `runtime.test.ts`, the sibling one shortened. The coverage run exited 0.
+
+- **Decisions and deviations from the contract.**
+  - (a) **`runtimeVerdict(head, base, tie, commits): RuntimeResult`**, not
+    the contract's `(head, base) → verdict`. The two-argument form cannot
+    say that the failing assertion is the finding's (`tie`), which commits
+    the runs were of (`commits`, critique point 3), or which finding the
+    verdict is for (the result's `finding`, critique point 9). Only records
+    whose `reproducerFor` is the tie's finding count, and never a run of a
+    `COVERAGE_COMMANDS` command, bare or with arguments
+    (`isCoverageCommand`; critique point 8), so the project's
+    suites, coverage runs and other findings' reproducers never decide.
+    An empty finding ID decides nothing.
+  - (b) **One record per distinct outcome** (critique point 6): `runs`
+    runs of one command on one side with the same exit, failure location
+    and stop, `ms` their total. The same command, exit and failure twice on
+    a side is refused (inconclusive), so a run cannot be counted in both a
+    run-length and a per-run record. The plan's claim that both forms give
+    the same verdict is dropped. `commit`, `failure?`, `stopped?` and
+    `output?` are additions to the contract's interface (`output` must be
+    carried to be wrapped as untrusted).
+  - (c) **"The failing assertion" needs a location the executor sets, and
+    signals decide nothing** (critique point 2, its first option). Exit
+    codes alone cannot tell a failed assertion from an import or compile
+    error: a reproducer that imports a symbol the change renamed fails on
+    head and passes on base, which would "confirm" the change's intended
+    behaviour. So `RuntimeEvidence.failure` (`assertion` or `error`) is
+    set by the executor from its own runs' exit codes, never from the
+    run's output (for example a control run of the reproducer without its
+    assertions, which must pass on both sides; the mechanism is executor
+    work), and "confirmed" needs `failure: "assertion"` on every failing
+    head record. A failure without a location never confirms. A status of
+    128 or more (`SIGNAL_EXIT`: a signal, 128 + n, or a Windows NTSTATUS)
+    is inconclusive on either side, since a kill for memory or time can
+    differ between head and base; the plan's 139 case now expects
+    inconclusive, and an import-error case was added. This is stricter
+    than the contract's "every head run fails", and it is how this package
+    reads "the failing assertion is tied to the finding".
+  - (d) **The truth table** (assertion "tied", two runs each): only head
+    fails at an assertion with base passing is "confirmed"; head passes
+    gives "contradicted" whatever base did, unless a base run was stopped;
+    every other cell, fails/fails included (a pre-existing defect or a
+    broken test), is "inconclusive". "untied" and "unchecked" make every
+    cell inconclusive. It is also inconclusive when a side has no run, a
+    run is of another side or commit, a run is stopped or signalled, a
+    count or status is not a whole number, a failure location sits on a
+    passing run, a command ran on one side only or fewer than
+    `RUNTIME_LIMITS.runs` times on a side, an outcome is recorded twice, or
+    an expected commit is empty. So "contradicted" also needs a tie and
+    complete, bound runs on both sides.
+  - (e) **Coverage** adds `uncovered` (ascending, capped at 200;
+    `changed` and `covered` stay exact) and `unmeasured`, so an unloaded
+    file never reads as 0% or 100%; docs and test paths are not mapped.
+    **Paths** (critique point 1): `cwd` is the directory the coverage
+    command ran in, repository-relative (or absolute under `root`); a
+    relative `SF:` path is joined onto it and normalised (`.`, empty
+    segments and `..` applied); `root` strips only absolute paths, which
+    are skipped without it; only a path that still leaves the repository
+    is rejected, silently. Backslashes read as `/`. The unmeasured wording
+    is "the coverage report has no record of this file". Other lcov lines
+    that are not a known record type count as malformed (the plan ignored
+    them silently).
+  - (f) **`CHECK_COMMANDS` exported frozen; `COVERAGE_COMMANDS` is Bun
+    only, with its report path.** pytest (needs a plugin), `go test` (its
+    cover profile is not lcov), cargo and the npm-family runners wait for
+    verified exact flags.
+  - (g) **The block is a standalone builder plus a trusted instruction
+    constant**, with no `PromptInput` field: its consumer (the repro pass
+    prompt or the verify prompt) is executor work. It renders each record
+    (at most 20) as `<untrusted_runtime_run>` with `command`, `kind`
+    (`coverage` on a coverage run only), `side`, `commit` (short), `exit`,
+    `runs`, `ms`, `finding`, `failure` and `stopped`, and the end of its
+    output; after a head record with coverage,
+    `<untrusted_runtime_coverage>` (at most 30 files, at most 20 ranges, an
+    ellipsis when cut). Past the record or file cap a line says how many
+    are not shown (`(N more run records not shown)`, `(N more changed files
+    not shown)`), so a cut list never reads as complete (I-7). Coverage on
+    a base record is not shown (critique point 7: it maps head lines only).
+    The caller redacts `output` first, as CI log excerpts are redacted
+    upstream (critique point 13, I-4); the block redacts it again with the
+    `secrets` it is given and `redactSecrets`' token shapes, before it keeps
+    the end and escapes it. The instruction adds that a `kind="coverage"`
+    run's exit status is not a check result. Its digest entry is gated on
+    `runtime: "ask"`.
+  - (h) **The `runtime` key is trusted-only and unapplied.**
+    `mergeReviewConfig` leaves out a default, generalising "an empty list
+    is left out" to `Array.isArray(v) ? v.length > 0 : v !==
+    OPTIONAL_REVIEW_DEFAULT_OF[key]` (read through `Object.entries`, with
+    no cast), so an explicit "off" changes nothing and `zdrAttested`
+    behaves as before. The not-applied warning comes from
+    `mergeReviewConfig`. On github it is read from the base review.json,
+    per §1.1, while the refusal in CI stays the executor's reason `ci`, so
+    either answer to Q8 stays possible.
+  - (i) **The engine eval's sourced check** leaves sourced keys that are
+    also unapplied to the unwired message, so `runtime` reads `config sets
+    runtime, which no runner applies yet (the VS-30 executor), so the
+    artifact would record a setting the run did not have.`; the
+    route-setting message for `privacy` and `zdrAttested` is unchanged.
+  - (j) **`CHECKS_NOT_RUN`** (22, in order): `no-consent`, `pr`, `fork`,
+    `untrusted`, `ci`, `surface-unsupported`, `uncommitted`,
+    `network-unfiltered`, `isolation-unavailable`, `base-unavailable`,
+    `no-command`, `dependencies-unavailable`, `services-unavailable`,
+    `config-unavailable`, `fixtures-unavailable`, `no-reproducer`,
+    `route-refused`, `reproducer-refused`, `timeout`, `output-limit`,
+    `budget`, `head-moved`. Beyond the amendment's list: `fork` and
+    `no-command` (the plan), and, from critique point 5, `uncommitted`
+    (worktrees for uncommitted changes are deferred), `base-unavailable`
+    (no base commit or merge base in a shallow clone), `output-limit` (it
+    is a stop, as `timeout` is), `reproducer-refused` (a write outside the
+    test paths, traversal or a symlink), `no-reproducer` (the repro pass
+    returned none or failed), `route-refused` (I-3 refused the repro
+    model call), `budget` (the runtime budget; the p90 goal is 6 minutes)
+    and `surface-unsupported` (the desktop before VS-10, GitHub before its
+    job). `network-unfiltered` also covers reachable loopback. Their note
+    text waits for wiring (D14).
+  - (k) **`applyRuntimeVerdict(finding, result)`** is the testable form of
+    "only confirmed changes anything": a confirmation whose `finding` is
+    this finding's ID returns a copy with `verified: true` and `verifiedBy:
+    "runtime"`; anything else returns the same object.
+  - (l) **`RuntimeTie`** (critique point 4): "tied" comes only from a
+    trusted check independent of the reproducer's author (deterministic,
+    or a separate pass that did not write the reproducer), never from the
+    reproducer, its output or PR text; without one the tie is
+    "unchecked". It is a necessary condition, never a sufficient one, so
+    model output never acts as a verdict (I-2). Which check is executor
+    work, so either design stays possible.
+  - (m) **§0.3 item 4: no replay variant.** VS-30 refuses on the untrusted
+    CI checkouts eval replays use (`eval.ts:13`), and its measurable goal
+    needs a local-only trusted harness, so the variant comes with the
+    executor.
+  - (n) **§0.3 item 5: the desktop is a documented difference** until VS-10
+    and VS-12 (`variant.applied: false` once a variant exists).
+  - (o) **VS-42's open question (q).** A confirmation needs every base run
+    to pass, so a runtime-confirmed defect is one its reproducer does not
+    show at the base. Whether that exempts the finding from S9 stays VS-42
+    wiring's decision.
+
+- **Deferred.**
+  - **To the VS-30 executor** (after `self-evolving`, VS-12 and VS-18):
+    head and base worktrees through a trusted `self-evolving` API; the
+    `offline()` refusal and loopback denial; a clean environment with
+    `CI=1` and no keys, writes only inside the worktree; the 120 s and
+    80 KB limits; the dependency check; aborting when the head moves;
+    reading `coverage/lcov.info` only inside the worktree with a byte cap
+    before parsing (`LCOV_LIMITS.chars` is checked on a string already in
+    memory; critique point 8); the repro pass (at most 3 files,
+    StructuredOutput, no write tools) and its prompt; the trusted tie
+    check (decision (l)) and the failure location (decision (c)); redacting
+    output before any prompt, with the environment's secret values passed
+    to `runtimeEvidenceBlock` as well, and an end-to-end test that a secret
+    a reproducer prints never reaches the prompt; worktrees for uncommitted
+    local changes;
+    simulation-first runs on past PRs, posting nothing [GP17]; fix
+    validation by re-running the deterministic check that raised a
+    finding [CF12]; and the no-network and no-secrets enforcement (already
+    I-6).
+  - **To VS-12:** the `--checks` consent integration, single-use and bound
+    to the head SHA and the command digest (D10).
+  - **To the next package that touches `trivial.ts`:** one exported
+    `isTestPath(path)` there, used by `runtime.ts`, `impact.ts` and
+    `risk.ts`, which each hold the same `TEST_PATHS` minimatch predicate
+    today (review fixes below).
+  - **To wiring:** the "checks not run: <reason>" notes and their text
+    (D14); the `ReviewOutcome` field (the types move to `types.ts` then,
+    as VS-27a's did); attaching evidence to its finding and
+    `StrictFinding.verifier` (addendum §3 VS-27); whether the evidence
+    scope records "ask" or the runtime evidence that ran, since consent is
+    per run (critique point 12); `runtime` leaving `UNAPPLIED_REVIEW_KEYS`
+    and `WIRING`, which moves the runtime digests on purpose.
+  - **To the @vector merge:** the GitHub unprivileged job (V16).
+  - **To after VS-10:** the desktop half.
+  - **Never, until measured:** OpenTelemetry. **Never:** eBPF (§9).
+- **Deferred verification.** Real lcov from runners other than Bun; macOS
+  and Windows path forms are tested only as strings; a Windows drive
+  letter's case is not normalised (VS-30 refuses on Windows anyway); the
+  full root typecheck before any push.
+- **Off by default (I-1, I-12).**
+  - `parseReviewConfig`, which every surface reads today, is unchanged for
+    every input: `runtime` is a sourced key, so review.json's copy was
+    and stays an unknown key, and there is no environment variable.
+  - `mergeReviewConfig` has no caller; its output is unchanged for every
+    input without `runtime`, and an explicit "off" is left out.
+  - `reviewPermissionRules` is byte-identical: four golden digests printed
+    at `213aabe9` before the edit (`03ee3c8b157dfcba`, `907b31028ef0edd2`,
+    `93945324ead2fea5`, `10537fa7f8acdd1d`) still hold.
+  - No prompt builder changed. The block enters `canonicalPrompts` and
+    `promptsDigest` only under `runtime: "ask"`, and `evidenceScope` passes
+    it only once applied, so every pinned digest holds: `5d59e9ee06077c23`,
+    `74a2111826c226b1`, `b98afb0e878dfe26`, `3ba21b5bc883cd70`,
+    `4aa712221043a3a7`, `8335adf9de513ee5`, `d209592d08bb1e0c`,
+    `468fcac8cde18fe2`, `0f3ff2dd0f7c1d7d`, `dd09332295a99649`,
+    `31c1a0612c0f9541`, `0ebaacbe7aca1b58`. New, pinned: runtime
+    `7d9147298f5cdbaf`, with graph `3bf0c1afc17e08d9`, with strict
+    `8c5154b47a05f952`, with the lens pair `bcb1c5c5258319f1`.
+  - `policyDigest` of the default stays `70512122f41ec160` for `runtime`
+    "ask", "off" and absent.
+  - No runner, CLI, desktop or GitHub file changed, so each runner's
+    requests and outcomes are identical; the parity suites below are
+    green with their HEAD counts.
+- **Owner questions.** None new. Q8, Q13, Q15 and Q18 stay open, and this
+  package is neutral on them: nothing runs, the key is read only from
+  trusted sources on both surfaces, and the reasons cover either answer.
+  Q1 to Q17 and Q19 to Q34 are untouched.
+- **Predicted merge conflicts.** Read-only: a three-way `git merge-file`
+  of each touched file that either branch changes, at HEAD and with
+  VS-30c, against each branch's merge base and tip, into
+  `/tmp/vector-vectorscope/vs30c/merge/`. `origin/codium` (`5a079cbd`)
+  changes `config.ts`, `prompt.ts` and `types.ts`; `origin/self-evolving`
+  (`f062bcce`) changes `types.ts`. Neither touches `permission.ts`,
+  `model-evidence.ts`, engine `eval.ts` or the tests, and neither has
+  runtime code. `config.ts` and `prompt.ts`: no conflict, at HEAD or with
+  VS-30c. `types.ts`: 2 conflict hunks with codium and 1 with
+  self-evolving, the same hunks at HEAD and with VS-30c (VS-27a's
+  pass-name lines); VS-30c's three hunks merge cleanly.
+- **Evidence.** Each file was run alone through the lock with `--timeout
+  30000`, from its package directory, with `TMPDIR` and fresh XDG roots
+  under `/tmp/vector-vectorscope/vs30c/`. Counts are at HEAD → with VS-30c.
+
+  | File | HEAD | VS-30c |
+  |---|---|---|
+  | core `test/review/runtime.test.ts` | — | 37 |
+  | core `test/review/permission.test.ts` | 10 | 14 |
+  | core `test/review/config.test.ts` | 65 | 72 |
+  | core `test/review/prompt.test.ts` | 39 | 47 |
+  | core `test/review/model-evidence.test.ts` | 28 | 30 |
+  | core `test/review/diff.test.ts` | 52 | 52 |
+  | core `test/review/select.test.ts` | 45 | 45 |
+  | core `test/review/format.test.ts` | 51 | 51 |
+  | core `test/review/guardrail.test.ts` | 59 | 59 |
+  | core `test/review/schema.test.ts` | 64 | 64 |
+  | core `test/review/pipeline.test.ts` | 2 | 2 |
+  | core `test/review/plan.test.ts` | 26 | 26 |
+  | core `test/review/holdback.test.ts` | 16 | 16 |
+  | core `test/review/privacy.test.ts` | 48 | 48 |
+  | core `test/review/verdict.test.ts` | 45 | 45 |
+  | core `test/review/risk.test.ts` | 46 | 46 |
+  | engine `test/review/eval.test.ts` | 32 | 32 |
+  | engine `test/review/run.test.ts` | 44 | 44 |
+  | engine `test/cli/github.review.test.ts` | 40 | 40 |
+  | engine `test/cli/review.test.ts` (critique point 10) | 24 | 24 |
+  | engine `test/review/structured-output-review.test.ts` (critique point 10) | 3 | 3 |
+  | app `ai-review.test.ts` (`--preload ./happydom.ts`) | 107 | 107 |
+  | app `src/browser-bundle.test.ts` | 4 | 4 |
+  | eval `replay.test.ts` (from `script/vectorscope-eval`) | 32 | 32 |
+  | eval `report.test.ts` (from `script/vectorscope-eval`) | 33 | 33 |
+
+  - **Typecheck.** `bun typecheck` passes in core, engine and app (exit 0;
+    core was clean at HEAD too). The eval scripts pass `bun tsgo -p
+    ../../script/vectorscope-eval/tsconfig.json` from `packages/engine`.
+  - **Lint.** prettier is clean on every changed TypeScript file except
+    `prompt.ts`, whose one off-format line (`input.requirements`) predates
+    this package; VS-30c's hunks there are prettier-clean. oxlint reports
+    0 warnings on `runtime.ts` and `runtime.test.ts`, and none of the
+    warnings on the other changed files falls in a VS-30c hunk (checked
+    line by line against `git diff -U0`).
+  - **Mutations.** Each was applied alone, its test file run, and the file
+    restored byte for byte (checked by hash, copies under
+    `/tmp/vector-vectorscope/vs30c/mut/`; no `git stash` or reset). All 57
+    were caught; one ("a deleted file mapped") first survived, because the
+    deleted case had no added lines, and is caught since a deleted file
+    whose hunks claim added lines joined the test.
+    - `runtimeVerdict` (16): the tie check dropped; a stopped run allowed;
+      the run minimum dropped; a mixed base allowed; "contradicted" before
+      the tie check; "confirmed" with one failing head run; the
+      `reproducerFor` filter dropped; the command-set check dropped; a side
+      mismatch accepted; the commit binding dropped; signal exits allowed;
+      the failure location dropped; duplicate outcomes allowed; coverage
+      runs counted; a failure location on a passing run accepted; an empty
+      expected commit accepted.
+    - `applyRuntimeVerdict` (2): un-verifying on "contradicted"; the
+      finding ID check dropped.
+    - `parseLcov` (12): the character, file, line and line-length caps
+      dropped (4); line 0 accepted; a `DA:` outside a record accepted;
+      last-wins merging; the root not stripped; an escape past the root
+      accepted; `cwd` ignored; an `SF:` before `end_of_record` not counted;
+      every skipped record type counted malformed.
+    - `changedLineCoverage` (5): deleted files mapped; test files mapped;
+      the uncovered cap dropped; an unmeasured file read as 0%; the `paths`
+      filter dropped.
+    - `prompt.ts` (8): the output not escaped; an empty list rendering;
+      clipping from the start; base coverage shown; the record cap dropped;
+      the range cap dropped; the ellipsis for an upstream cap dropped; an
+      unmeasured file worded as measured.
+    - `model-evidence.ts` (4): `runtime:ask` dropped from the memo key; the
+      block rendered without the key; `evidenceScope` passing `runtime`
+      while unapplied; `runtime` dropped from `EVIDENCE_POLICY_KEYS`.
+    - `config.ts` (5): the working tree trusted; the environment read as a
+      trusted source; an explicit "off" assigned; the not-applied warning
+      dropped; the global config trusted on github.
+    - `permission.ts` (3): the coverage command allowed to the model;
+      `CHECK_COMMANDS` not frozen; the coverage command loosened.
+    - engine `eval.ts` (2): `WIRING.runtime` naming another package; the
+      sourced filter dropped.
+  - **Not run.** The full root typecheck was not run, since nothing is
+    pushed.
+  - **Not done.** Nothing was sent to a model; there was no paid run, no
+    workflow dispatched, nothing published and nothing committed; no MCP
+    access changed and no user-visible string changed (D14).
+
+### 2026-11-07 · VS-30c review fixes
+
+Eight review findings, one of them blocking; two of the non-blocking ones
+are the same finding (the cap markers). Six were fixed in code, the
+redaction one both in code and as an executor test requirement. One
+(`isTestPath`) asked for no change now and is handed off in the entry
+above. Only core `review/runtime.ts`, `review/permission.ts`,
+`review/prompt.ts`, `review/model-evidence.ts` (one call, one comment and
+the pin) and their tests changed, with this log. No runner, provider, LLM
+or posting file, no prompt builder and no file @vector owns changed. The
+entry above is updated in place where its facts changed (`parseLcov`'s
+SF rule, `isCoverageCommand`, the block's signature, attributes, markers
+and redaction, decision (a), decision (g), the pin, the four runtime
+digests, the hand-offs and two test counts). Nothing is committed.
+
+- **An over-cap `SF:` left the open record open** (blocking,
+  `runtime.ts:232`). Confirmed: `SF:src/a.ts`, `DA:1,1`, an `SF:` over
+  `lineChars`, `DA:7,0`, `end_of_record` gave `src/a.ts` the lines
+  `[[1,1],[7,0]]`, so a hostile or broken report could make another
+  file's changed line read as covered once hits merge. Fixed as suggested:
+  a line over the cap that starts with `SF:` counts one more malformed when
+  a record is open and closes it (`open = false`, `lines = undefined`), so
+  its `DA:` lines fall outside any record and count as malformed. The
+  over-cap branch now runs before the line is sliced, so the text is still
+  never copied. The docstring says the rule holds for an over-cap `SF:`.
+  Tests: the unterminated `src/a.ts` before an over-cap `SF:` with two `DA:`
+  lines keeps only its own line (malformed 4: the long line, the record it
+  closed, and its two `DA:` lines), with LF and CRLF, under a `paths`
+  filter, and after an earlier `src/a.ts` record whose line 7 has 0 hits
+  (it stays 0, not 5); an over-cap line that is not an `SF:` (a long `FN:`)
+  leaves the record open.
+- **Coverage runs were excluded only by an exact command match**
+  (`runtime.ts:306`). Fixed, in one place rather than two: core
+  `permission.ts` gains `isCoverageCommand(command)`, true for a
+  `COVERAGE_COMMANDS` command bare or followed by a space and arguments,
+  and `runtime.ts`'s `decides()` uses it (the `COVERAGE_RUNS` set is gone).
+  `prompt.ts` uses the same predicate for the next fix but one. Tests: a
+  coverage command with a test path, and one with `-t race`, tagged with
+  the finding, decide nothing; `permission.test.ts` gains a case for the
+  predicate (bare, a path, a test name; not a longer flag, a leading
+  space, any `CHECK_COMMANDS` entry, `bun test --coverage` or the empty
+  string).
+- **The block cut runs and coverage files without saying so**
+  (`prompt.ts:651` and `:667`, two findings). Fixed: past
+  `MAX_RUNTIME_RECORDS` a line `(N more run records not shown)` comes after
+  the last run, inside `<untrusted_runtime_evidence>`; past
+  `MAX_COVERAGE_FILES` a line `(N more changed files not shown)` ends the
+  coverage body (singular for 1), from a private `notShown`. "Run records"
+  rather than "runs", since each record's `runs` attribute already counts
+  runs. Both render only past a cap, and `CANONICAL_RUNTIME` is under every
+  cap, so these lines move no digest; its comment says so. Tests: the caps
+  test asserts each marker at 21 and 25 records and at 31 and 35 files, and
+  none at exactly 20 records or 30 files; `model-evidence.test.ts` asserts
+  the canonical block has none.
+- **Style in `parseLcov` and `normalised()`** (`runtime.ts:223`, `:370`).
+  `parseLcov` keeps its `let` bindings and index loop, with a comment that
+  the scan is imperative on purpose so a report up to `LCOV_LIMITS.chars`
+  is never split into an array of lines. `normalised()` is now a `reduce`
+  over `path.split("/")` that returns undefined on an escape. It changes
+  its accumulator in place (`push`, `pop`), as `lineRanges` in `prompt.ts`
+  does, because a copying reduce is quadratic in segments and one `SF:`
+  line under `lineChars` can hold about 2,000 of them; the comment says so.
+- **Redaction was left to the caller alone** (`prompt.ts:647`). Both
+  options taken. `runtimeEvidenceBlock(evidence, secrets)` takes a
+  required `secrets` list and runs `redactSecrets` on each output before
+  `clipEnd`, so a secret across the cut is never half shown, and the
+  token shapes are redacted even when the list is empty. The caller still
+  redacts first (I-4), and redacting twice is harmless. Required rather
+  than optional, so a future caller has to name the secrets.
+  `canonicalPrompts` passes `[]`; "Example." holds no token shape, so no
+  digest moved for this. The entry's executor hand-off now names an
+  end-to-end test that a secret a reproducer prints never reaches the
+  prompt. Tests: a given secret and a `ghp_` token are replaced with
+  `[redacted]`; a token is replaced with no secrets passed; a secret at
+  the start of an output cut to its end leaves no tail.
+- **A third copy of the test-path predicate** (`runtime.ts:392`). Not
+  changed now, as the finding suggests: one `isTestPath` exported from
+  `trivial.ts` would touch `trivial.ts`, `impact.ts` and `risk.ts`, all
+  pinned. Handed off in the entry above to the next package that touches
+  `trivial.ts`.
+- **A coverage run's exit read like a check result** (`prompt.ts:636`).
+  Fixed by the attribute option: a run whose command `isCoverageCommand`
+  matches carries `kind="coverage"` after `command`, and
+  `RUNTIME_EVIDENCE_INSTRUCTION` ends with `A run marked kind="coverage"
+  only measured which lines ran: its exit status is not a check result.`
+  `exit` stays on coverage runs: a signal or a crash still says whether
+  the coverage it measured can be whole, and the attribute and the
+  sentence already say it is no pass or fail. `prompt.ts` now imports
+  `isCoverageCommand` from `permission.ts`, which is browser-safe (one
+  type-only import); the app's browser-bundle test still passes. Both
+  changes are in the canonical block under `runtime: "ask"`, so only the
+  four runtime digests moved, re-pinned: runtime `0e1733163ed4d01f` →
+  `7d9147298f5cdbaf`, with graph `158cac2848b3d329` → `3bf0c1afc17e08d9`,
+  with strict `c7e148dbe32420c2` → `8c5154b47a05f952`, with the lens pair
+  `471a3d77a34ad531` → `bcb1c5c5258319f1`. The twelve earlier digests and
+  `policyDigest`'s `70512122f41ec160` hold. Tests: a coverage run, bare and
+  with a path, is marked; a reproducer, `bun test` and `bun test
+  --coverage` are not; an output that writes the attribute stays escaped;
+  the instruction test asserts the sentence; `model-evidence.test.ts`
+  asserts the marked coverage run in the canonical block.
+
+- **Pin.** `REVIEW_PIPELINE_SOURCES` `f0821f198d7efda6` →
+  `dd477fd3a04e6efb` (`runtime.ts` and `prompt.ts` changed;
+  `permission.ts` and `model-evidence.ts` are not pipeline files).
+  `REVIEW_PIPELINE_REVISION` stays 1.
+- **Off by default (I-1).** No runner, CLI, desktop, GitHub or prompt
+  builder file changed, and nothing calls `runtimeEvidenceBlock`,
+  `runtimeVerdict`, `parseLcov` or `isCoverageCommand` outside tests and
+  `canonicalPrompts` (under `runtime: "ask"` only). `reviewPermissionRules`'
+  four golden digests still hold.
+- **Evidence.** Each file alone through the lock with `--timeout 30000`,
+  from its package directory, with `TMPDIR` and fresh XDG roots under
+  `/tmp/vector-vectorscope/vs30c-fix/`: core `runtime.test.ts` 37 pass
+  (cases extended, no new tests), `permission.test.ts` 14 (13 before),
+  `prompt.test.ts` 47 (45 before), `model-evidence.test.ts` 30; app
+  `src/browser-bundle.test.ts` 4. `bun typecheck` passes in core, engine
+  and app. prettier is clean on every file changed here except
+  `prompt.ts`'s one older `input.requirements` line, left as it was;
+  oxlint reports nothing in these hunks. Sixteen mutations, each applied
+  alone, its test file run and the file restored by hash (scripts under
+  `/tmp/vector-vectorscope/vs30c-fix/mut/`), all caught: the over-cap
+  `SF:` close dropped, and not counted; the exact-match coverage guard;
+  `isCoverageCommand` without arguments, and without the space; the run
+  marker dropped, the file marker dropped, and a marker at zero; no
+  redaction, the secrets ignored, and redaction after the cut; `kind`
+  dropped (in `prompt.test.ts` and in `model-evidence.test.ts`) and on
+  every run; `normalised()` accepting an escape, and keeping `.`.
+- **Not run.** The full root typecheck, since nothing is pushed.
+- **Not done.** Nothing was sent to a model; there was no paid run, no
+  workflow dispatched, nothing published and nothing committed; no MCP
+  access changed and no user-visible string changed (D14).

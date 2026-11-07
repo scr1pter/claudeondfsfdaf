@@ -25,9 +25,12 @@ import {
   buildSecurityPrompt,
   buildVerifyPrompt,
   ownerBlock,
+  RUNTIME_EVIDENCE_INSTRUCTION,
+  runtimeEvidenceBlock,
   type PromptInput,
   type VerifyPromptInput,
 } from "./prompt"
+import type { RuntimeEvidence } from "./runtime"
 import {
   REVIEW_REPORT_JSON_SCHEMA,
   strictReportJsonSchema,
@@ -56,7 +59,7 @@ export const REVIEW_PIPELINE_REVISION = 1
 // A digest of the pipeline's sources (REVIEW_PIPELINE_FILES in core test/review/model-evidence.test.ts), which that
 // test pins, so CI fails when one of them changes and nobody decided whether REVIEW_PIPELINE_REVISION goes up. When it
 // fails: bump the revision if the change alters what a review finds or posts, then set this to the digest it prints.
-export const REVIEW_PIPELINE_SOURCES = "5cd3fb178c514179"
+export const REVIEW_PIPELINE_SOURCES = "dd477fd3a04e6efb"
 
 // The longest a certificate may run from its approval. The plan asks for an expiry and sets none; a hosted model can
 // change underneath its id, so the evidence is re-earned on this cadence.
@@ -71,7 +74,9 @@ export const MAX_CERTIFICATE_DAYS = 90
 // on, and then only as "introduced" under `guardrail: "strict"`. VS-44's `verifyEvidence` is one (S1's certificate check
 // drops what would be posted), counted from VS-44 wiring on, and then only as "certificate" under `guardrail: "strict"`.
 // VS-28's `depth` and `lenses` are two (they choose which passes look for defects), counted from VS-28 wiring on, and
-// then only as non-default values, `lenses` only under `depth: "auto"` (POLICY_ONLY_WITH).
+// then only as non-default values, `lenses` only under `depth: "auto"` (POLICY_ONLY_WITH). VS-30's `runtime` is one (a
+// runtime confirmation changes what is verified, and so what is posted), counted from the VS-30 executor on, and then
+// only as "ask".
 export const EVIDENCE_POLICY_KEYS = [
   "security",
   "verify",
@@ -90,6 +95,7 @@ export const EVIDENCE_POLICY_KEYS = [
   "verifyEvidence",
   "depth",
   "lenses",
+  "runtime",
 ] as const satisfies readonly (keyof ReviewConfig)[]
 
 export type EvidenceAdapter = "engine" | "desktop"
@@ -352,6 +358,58 @@ const CANONICAL_IMPACT_TIERS: ImpactPrompt = {
   ],
 }
 
+// VS-30's runtime evidence with every part the <untrusted_runtime_evidence> block can show: a reproducer's head runs,
+// failing at an assertion with output, and its base runs, passing; a run the executor stopped; and a head coverage run
+// (marked kind="coverage") with a measured file whose uncovered lines compress into ranges, a file whose changed lines
+// the report does not list, and a file it has no record of. The caps' "not shown" lines and ellipsis render only past a
+// cap, so they are left out. Written out literally, so this file takes only types from runtime.ts.
+const CANONICAL_RUNTIME: RuntimeEvidence[] = [
+  {
+    command: "bun test test/example.test.ts",
+    side: "head",
+    commit: "1".repeat(40),
+    exit: 1,
+    ms: 2_000,
+    runs: 2,
+    failure: "assertion",
+    reproducerFor: CANONICAL_FINDING.id,
+    output: "Example.",
+  },
+  {
+    command: "bun test test/example.test.ts",
+    side: "base",
+    commit: "0".repeat(40),
+    exit: 0,
+    ms: 2_000,
+    runs: 2,
+    reproducerFor: CANONICAL_FINDING.id,
+    output: "Example.",
+  },
+  {
+    command: "bun test",
+    side: "head",
+    commit: "1".repeat(40),
+    exit: 143,
+    ms: 120_000,
+    runs: 1,
+    stopped: "timeout",
+    output: "Example.",
+  },
+  {
+    command: "bun test --coverage --coverage-reporter=lcov",
+    side: "head",
+    commit: "1".repeat(40),
+    exit: 0,
+    ms: 3_000,
+    runs: 1,
+    coverage: [
+      { path: "src/example.ts", changed: 4, covered: 1, uncovered: [2, 4, 5] },
+      { path: "src/types.ts", changed: 0, covered: 0, uncovered: [] },
+      { path: "src/other.ts", changed: 0, covered: 0, uncovered: [], unmeasured: true },
+    ],
+  },
+]
+
 const POPULATED_VERIFY: Omit<VerifyPromptInput, "trust"> = {
   head: CANONICAL_INPUT.head,
   uncommitted: true,
@@ -370,8 +428,12 @@ const POPULATED_VERIFY: Omit<VerifyPromptInput, "trust"> = {
 // Under `depth: "auto"` with `lenses: "high"`, VS-28's four lens prompts come last, each over the review prompts' inputs
 // for both trusts and, under `impact: "graph"` too, with each slice; either key alone adds nothing, as `lenses` runs
 // only under an automatic depth. A lens prompt differs from the review prompt only in TASKS, OTHER_CLASSES and its cap
-// (prompt.ts), so a lens-only branch added to build() must add the inputs that reach it here.
-export function canonicalPrompts(keys: Partial<Pick<ReviewConfig, "impact" | "depth" | "lenses">> = {}): string[] {
+// (prompt.ts), so a lens-only branch added to build() must add the inputs that reach it here. Under `runtime: "ask"`,
+// VS-30's trusted instruction and its <untrusted_runtime_evidence> block come last, standalone like the owner's block:
+// no prompt builder renders them before the VS-30 executor, whose repro or verify prompt joins here under the key.
+export function canonicalPrompts(
+  keys: Partial<Pick<ReviewConfig, "impact" | "depth" | "lenses" | "runtime">> = {},
+): string[] {
   const impact =
     keys.impact === "graph"
       ? [CANONICAL_IMPACT, CANONICAL_IMPACT_TIERS].flatMap((slice) =>
@@ -404,6 +466,7 @@ export function canonicalPrompts(keys: Partial<Pick<ReviewConfig, "impact" | "de
     ownerBlock(["Example."]),
     ...impact,
     ...lenses,
+    ...(keys.runtime === "ask" ? [RUNTIME_EVIDENCE_INSTRUCTION, runtimeEvidenceBlock(CANONICAL_RUNTIME, [])] : []),
   ]
 }
 
@@ -430,9 +493,12 @@ const prompts = new Map<string, string>()
 // stays as it was. VS-42's `scopeGate: "introduced"` changes them (the result schema's `pre-existing` drop) only under
 // strict, so it joins the memo key only there. VS-44's `verifyEvidence: "certificate"` adds the certificate verify schema
 // (verifyCertJsonSchema) after them, also only under strict. VS-28's lens prompts join canonicalPrompts only under
-// `depth: "auto"` with `lenses: "high"`, so only that pair joins the memo key.
+// `depth: "auto"` with `lenses: "high"`, so only that pair joins the memo key. VS-30's runtime block joins only under
+// `runtime: "ask"`.
 export function promptsDigest(
-  keys: Partial<Pick<ReviewConfig, "impact" | "guardrail" | "scopeGate" | "verifyEvidence" | "depth" | "lenses">> = {},
+  keys: Partial<
+    Pick<ReviewConfig, "impact" | "guardrail" | "scopeGate" | "verifyEvidence" | "depth" | "lenses" | "runtime">
+  > = {},
 ): string {
   const strict = keys.guardrail === "strict"
   const key = [
@@ -441,6 +507,7 @@ export function promptsDigest(
     strict && keys.scopeGate === "introduced" ? "scopeGate:introduced" : "",
     strict && keys.verifyEvidence === "certificate" ? "verifyEvidence:certificate" : "",
     keys.depth === "auto" && keys.lenses === "high" ? "lenses:high" : "",
+    keys.runtime === "ask" ? "runtime:ask" : "",
   ]
     .filter(Boolean)
     .join(",")
@@ -520,6 +587,11 @@ export function evidenceScope(input: {
       input.config.lenses === "high" &&
       !UNAPPLIED_REVIEW_KEYS.some((key) => key === "depth" || key === "lenses")
         ? { depth: "auto" as const, lenses: "high" as const }
+        : {}),
+      // VS-30's runtime block, only once the executor applies the key. Whether the scope then counts "ask" or the
+      // evidence that actually ran (consent is per run) is the executor's decision.
+      ...(input.config.runtime === "ask" && !UNAPPLIED_REVIEW_KEYS.some((key) => key === "runtime")
+        ? { runtime: "ask" as const }
         : {}),
     }),
     policy: policyDigest(input.config),

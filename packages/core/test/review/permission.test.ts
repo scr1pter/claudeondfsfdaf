@@ -1,5 +1,13 @@
 import { describe, expect, test } from "bun:test"
-import { ENV_FILES, reviewPermissionRules, SECRET_FILES } from "@vectordevai/core/review/permission"
+import { fnv1a64 } from "@vectordevai/core/review/fingerprint"
+import {
+  CHECK_COMMANDS,
+  COVERAGE_COMMANDS,
+  ENV_FILES,
+  isCoverageCommand,
+  reviewPermissionRules,
+  SECRET_FILES,
+} from "@vectordevai/core/review/permission"
 import { Wildcard } from "@vectordevai/core/util/wildcard"
 import type { PermissionV1 } from "@vectordevai/core/v1/permission"
 
@@ -204,5 +212,74 @@ describe("reviewPermissionRules", () => {
     expect(plain.some((rule) => rule.action === "ask")).toBe(false)
     expect(plain.some((rule) => rule.permission === "bash")).toBe(false)
     expect(reviewPermissionRules({})).toHaveLength(plain.length - 1)
+  })
+
+  // VS-30c exports CHECK_COMMANDS for the executor and adds COVERAGE_COMMANDS beside it. Neither changes a rule: these
+  // digests were printed from reviewPermissionRules at 213aabe9, before the edit.
+  test("the rules are byte-identical to before VS-30c", () => {
+    const digest = (input: Parameters<typeof reviewPermissionRules>[0]) =>
+      fnv1a64(JSON.stringify(reviewPermissionRules(input)))
+    expect(digest({ truncateGlob })).toBe("03ee3c8b157dfcba")
+    expect(digest({ checks: true, truncateGlob })).toBe("907b31028ef0edd2")
+    expect(digest({ allowDirs: ["/tmp/review-head/", "C:\\work\\files"], checks: true, truncateGlob })).toBe(
+      "93945324ead2fea5",
+    )
+    expect(digest({})).toBe("10537fa7f8acdd1d")
+  })
+})
+
+describe("the executor's command lists (VS-30)", () => {
+  test("exports CHECK_COMMANDS frozen, with the twelve commands --checks allows", () => {
+    expect(Object.isFrozen(CHECK_COMMANDS)).toBe(true)
+    expect([...CHECK_COMMANDS]).toEqual([
+      "bun test",
+      "bun run test",
+      "bun typecheck",
+      "bun run typecheck",
+      "npm test",
+      "npm run test",
+      "pnpm test",
+      "pnpm run test",
+      "yarn test",
+      "pytest",
+      "cargo test",
+      "go test",
+    ])
+    // Each one is allowed bare and with arguments under --checks, and nowhere else.
+    for (const command of CHECK_COMMANDS) {
+      expect([command, evaluate("bash", command, agent, checks)]).toEqual([command, "allow"])
+      expect([command, evaluate("bash", `${command} src`, agent, checks)]).toEqual([command, "allow"])
+      expect([command, evaluate("bash", command, agent, plain)]).toEqual([command, "deny"])
+    }
+  })
+
+  test("COVERAGE_COMMANDS holds Bun's exact coverage command, which the model's shell can never run", () => {
+    expect(COVERAGE_COMMANDS).toEqual({
+      bun: { command: "bun test --coverage --coverage-reporter=lcov", report: "coverage/lcov.info" },
+    })
+    expect(Object.isFrozen(COVERAGE_COMMANDS)).toBe(true)
+    for (const entry of Object.values(COVERAGE_COMMANDS)) {
+      expect(Object.isFrozen(entry)).toBe(true)
+      // A test command with the flags coverage needs, so it extends --checks rather than adding a second path.
+      expect(CHECK_COMMANDS.some((command) => entry.command.startsWith(`${command} -`))).toBe(true)
+      // The flags are exactly what `* -*` denies the model, with --checks or without, and with directories allowed.
+      for (const rules of [plain, checks, reviewPermissionRules({ allowDirs: ["/tmp/x"], checks: true, truncateGlob })])
+        expect([entry.command, evaluate("bash", entry.command, agent, rules)]).toEqual([entry.command, "deny"])
+    }
+    for (const rules of [plain, checks]) expect(rules.some((rule) => rule.pattern.includes("--coverage"))).toBe(false)
+  })
+
+  // A coverage run's exit status is no pass or fail, so it must read as a coverage run however the executor extends it.
+  test("isCoverageCommand matches a coverage command bare or with arguments, and nothing else", () => {
+    for (const entry of Object.values(COVERAGE_COMMANDS)) {
+      expect(isCoverageCommand(entry.command)).toBe(true)
+      expect(isCoverageCommand(`${entry.command} test/x.test.ts`)).toBe(true)
+      expect(isCoverageCommand(`${entry.command} -t "a name"`)).toBe(true)
+      // A longer flag that only starts the same way is another command.
+      expect(isCoverageCommand(`${entry.command}x`)).toBe(false)
+      expect(isCoverageCommand(` ${entry.command}`)).toBe(false)
+    }
+    for (const command of [...CHECK_COMMANDS, "bun test test/x.test.ts", "bun test --coverage", ""])
+      expect([command, isCoverageCommand(command)]).toEqual([command, false])
   })
 })

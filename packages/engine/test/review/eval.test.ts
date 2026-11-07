@@ -1257,6 +1257,20 @@ describe("ReviewEval.replay", () => {
         expect(yield* refused({ config: { guardrail: "strict", lenses: "off" } })).toContain(
           "config sets guardrail, lenses, which no runner applies yet (VS-27c for guardrail; VS-28 wiring for lenses)",
         )
+        // Nor VS-30's runtime (VS-30c), which is trusted-only and which the VS-30 executor applies: it gets the message
+        // that names what applies it, not the route-setting one, and a route setting beside it keeps its own message.
+        // @ts-expect-error VS-30's runtime is trusted-only and applied by no runner, so a typed caller cannot set it.
+        const runtime: ReplayInput["config"] = { runtime: "ask" }
+        expect(runtime).toBeDefined()
+        expect(yield* refused({ config: { runtime: "ask" } })).toContain(
+          "config sets runtime, which no runner applies yet (the VS-30 executor), so the artifact would record a setting the run did not have.",
+        )
+        expect(yield* refused({ config: { runtime: "off", depth: "auto" } })).toContain(
+          "config sets depth, runtime, which no runner applies yet (VS-28 wiring for depth; the VS-30 executor for runtime)",
+        )
+        expect(yield* refused({ config: { zdrAttested: ["openrouter"], runtime: "ask" } })).toContain(
+          "config sets zdrAttested, a route setting a replay cannot apply",
+        )
         // A pending variant's key is refused as a key this replay does not apply.
         expect(yield* refused({ variant: { name: "engine:trivial-skip", keys: { trivial: "skip" } } })).toContain(
           "engine:trivial-skip sets trivial, which this replay does not apply",

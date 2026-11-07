@@ -801,6 +801,7 @@ describe("VS-24's keys", () => {
       verifyEvidence: "off",
       depth: "fixed",
       lenses: "off",
+      runtime: "off",
     })
   })
 
@@ -1230,5 +1231,120 @@ describe("VS-28's depth and lenses keys", () => {
         parseReviewConfig({ json: text, trigger: "desktop" }),
       )
     }
+  })
+})
+
+// VS-30c: `runtime` is trusted-only (contract §1.1, invariant I-2), so parseReviewConfig never reads it and
+// mergeReviewConfig takes it from the surface's trusted source alone. No runner applies it before the VS-30 executor,
+// and whether a review may run checks at all (consent, --pr, CI) stays the executor's decision (Q8).
+describe("VS-30's runtime key", () => {
+  const ASK = '"runtime": "ask" is not applied yet: no runtime checks run, and --checks works as before.'
+  const ONLY_GLOBAL = '"runtime" is read only from the global config.'
+  const ONLY_BASE = `"runtime" is read only from ${REVIEW_CONFIG_PATH} on the base branch.`
+  const ASK_JSON = '{"runtime": "ask"}'
+
+  test("is sourced and unapplied, with no default entry", () => {
+    expect(SOURCED_REVIEW_KEYS).toContain("runtime")
+    expect(UNAPPLIED_REVIEW_KEYS).toContain("runtime")
+    expect(OPTIONAL_REVIEW_DEFAULTS.runtime).toBe("off")
+    expect(Object.hasOwn(DEFAULT_REVIEW_CONFIG, "runtime")).toBe(false)
+    expect(Object.hasOwn(parseReviewConfig().config, "runtime")).toBe(false)
+  })
+
+  test("parseReviewConfig ignores it in review.json, as before, and reads no environment variable", () => {
+    expect(parseReviewConfig({ json: ASK_JSON })).toEqual({
+      config: DEFAULT_REVIEW_CONFIG,
+      warnings: [`${REVIEW_CONFIG_PATH}: unknown key "runtime" is ignored.`],
+    })
+    expect(parseReviewConfig({ env: { REVIEW_RUNTIME: "ask", REVIEW_CHECKS: "ask" } })).toEqual({
+      config: DEFAULT_REVIEW_CONFIG,
+      warnings: [],
+    })
+  })
+
+  test("locally, it comes only from the global config, and says it is not applied", () => {
+    expect(mergeReviewConfig({ surface: "local", global: { runtime: "ask" } })).toEqual({
+      config: { ...DEFAULT_REVIEW_CONFIG, runtime: "ask" },
+      warnings: [ASK],
+    })
+    // Your working tree, the base a pull request is reviewed against, and the desktop's base blob.
+    for (const json of [
+      { at: "working-tree" as const, text: ASK_JSON },
+      { at: "base" as const, text: ASK_JSON },
+      { at: "base" as const, text: ASK_JSON, privacyOnly: true },
+    ]) {
+      const result = mergeReviewConfig({ surface: "local", json, trigger: "desktop" })
+      expect(Object.hasOwn(result.config, "runtime")).toBe(false)
+      expect(result.warnings).toEqual([`${REVIEW_CONFIG_PATH}: "runtime" is ignored: ${ONLY_GLOBAL}`])
+    }
+    // The working tree can neither raise nor lower the global setting.
+    const lowered = mergeReviewConfig({
+      surface: "local",
+      global: { runtime: "ask" },
+      json: { at: "working-tree", text: '{"runtime": "off"}' },
+    })
+    expect(lowered.config.runtime).toBe("ask")
+    expect(lowered.warnings).toEqual([`${REVIEW_CONFIG_PATH}: "runtime" is ignored: ${ONLY_GLOBAL}`, ASK])
+    // No environment variable is read for it.
+    const env = mergeReviewConfig({ surface: "local", env: { REVIEW_RUNTIME: "ask", RUNTIME: "ask" } })
+    expect(env).toEqual(parseReviewConfig())
+  })
+
+  test("in CI, it comes only from the base branch's review.json", () => {
+    expect(mergeReviewConfig({ surface: "github", json: { at: "base", text: ASK_JSON }, trigger: "auto" })).toEqual({
+      config: { ...DEFAULT_REVIEW_CONFIG, runtime: "ask" },
+      warnings: [ASK],
+    })
+    const global = mergeReviewConfig({ surface: "github", global: { runtime: "ask" } })
+    expect(Object.hasOwn(global.config, "runtime")).toBe(false)
+    expect(global.warnings).toEqual([`review.runtime in the global config is ignored: ${ONLY_BASE}`])
+    for (const json of [
+      { at: "working-tree" as const, text: ASK_JSON },
+      { at: "base" as const, text: ASK_JSON, privacyOnly: true },
+    ]) {
+      const result = mergeReviewConfig({ surface: "github", json })
+      expect(Object.hasOwn(result.config, "runtime")).toBe(false)
+      expect(result.warnings).toEqual([`${REVIEW_CONFIG_PATH}: "runtime" is ignored: ${ONLY_BASE}`])
+    }
+    const env = mergeReviewConfig({ surface: "github", env: { REVIEW_RUNTIME: "ask" } })
+    expect(env).toEqual(parseReviewConfig())
+  })
+
+  test("a value that is not off or ask is ignored", () => {
+    const label = "review.runtime in the global config"
+    for (const runtime of ["yes", "ASK", true, 1, ["ask"], null])
+      expect(mergeReviewConfig({ surface: "local", global: { runtime } })).toEqual({
+        config: DEFAULT_REVIEW_CONFIG,
+        warnings: [`${label} must be "off", "ask"; it is ignored.`],
+      })
+    expect(mergeReviewConfig({ surface: "github", json: { at: "base", text: '{"runtime": "on"}' } })).toEqual({
+      config: DEFAULT_REVIEW_CONFIG,
+      warnings: [`${REVIEW_CONFIG_PATH}: "runtime" must be "off", "ask"; it is ignored.`],
+    })
+  })
+
+  test("an explicit off is left out, like its default, so the result is parseReviewConfig's", () => {
+    expect(mergeReviewConfig({ surface: "local", global: { runtime: "off" } })).toEqual(parseReviewConfig())
+    expect(mergeReviewConfig({ surface: "github", json: { at: "base", text: '{"runtime": "off"}' } })).toEqual(
+      parseReviewConfig({ json: "{}" }),
+    )
+    // Beside the other sourced keys, each keeps its own rule.
+    expect(
+      mergeReviewConfig({ surface: "local", global: { runtime: "ask", zdrAttested: ["openrouter"], privacy: "zdr" } }),
+    ).toEqual({
+      config: { ...DEFAULT_REVIEW_CONFIG, privacy: "zdr", zdrAttested: ["openrouter"], runtime: "ask" },
+      warnings: [ASK],
+    })
+    expect(mergeReviewConfig({ surface: "local", global: { runtime: "off", zdrAttested: [] } })).toEqual(
+      parseReviewConfig(),
+    )
+  })
+
+  test("a base review.json that cannot be read leaves it unset, even when it mentions it", () => {
+    const result = mergeReviewConfig({ surface: "github", json: { at: "base", text: '{"runtime": "ask",' } })
+    expect(Object.hasOwn(result.config, "runtime")).toBe(false)
+    expect(result.config).toEqual(DEFAULT_REVIEW_CONFIG)
+    expect(result.warnings).toHaveLength(1)
+    expect(result.warnings[0]).toStartWith(`${REVIEW_CONFIG_PATH} is not valid JSON`)
   })
 })

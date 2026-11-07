@@ -150,8 +150,11 @@ const RAISE_ONLY = {
   privacy: { levels: ["standard", "zdr"], env: "REVIEW_PRIVACY" },
 } as const satisfies Partial<Record<keyof ReviewConfig, { levels: readonly string[]; env: string }>>
 // - Trusted-only: read from the surface's trusted source alone, never from the working tree or the environment. This
-//   holds for `zdrAttested`'s attestation objects (VS-33) as for its text entries.
-const TRUSTED_ONLY = { zdrAttested: attestations } satisfies Partial<Record<keyof ReviewConfig, Field>>
+//   holds for `zdrAttested`'s attestation objects (VS-33) as for its text entries, and for VS-30's `runtime`.
+const TRUSTED_ONLY = {
+  zdrAttested: attestations,
+  runtime: oneOf(["off", "ask"]),
+} satisfies Partial<Record<keyof ReviewConfig, Field>>
 
 export type SourcedReviewKey = keyof typeof RAISE_ONLY | keyof typeof TRUSTED_ONLY
 export const SOURCED_REVIEW_KEYS = Object.keys({ ...RAISE_ONLY, ...TRUSTED_ONLY }) as readonly SourcedReviewKey[]
@@ -268,6 +271,11 @@ const UNAPPLIED: Record<
     applies: (config) => config.lenses === "high" && config.depth === "auto",
     warning: '"lenses": "high" is not applied yet: no lens passes run.',
   },
+  // A sourced key (TRUSTED_ONLY): settle never sees it, so mergeReviewConfig gives this warning.
+  runtime: {
+    applies: (config) => config.runtime === "ask",
+    warning: '"runtime": "ask" is not applied yet: no runtime checks run, and --checks works as before.',
+  },
 }
 
 function assign(config: ReviewConfig, key: PlainKey, value: unknown, label: string, warnings: string[]) {
@@ -337,12 +345,15 @@ export function parseReviewConfig(
  *
  * Every key outside RAISE_ONLY and TRUSTED_ONLY is read exactly as parseReviewConfig reads it. `privacy` is the
  * strictest of the global config, review.json and REVIEW_PRIVACY, and a review.json that cannot be read but mentions it
- * counts as "zdr". `zdrAttested` comes from the trusted source alone: the global config on "local" (your own branch can
- * hold other people's commits), review.json at the base on "github" (a pull request can edit the workflow and its
- * environment). It has no environment variable, and a value from any other source is ignored with a warning. Its
- * entries are text or VS-33's attestation objects (`{ id, operator, project?, region?, extendedCache?, verify? }`,
- * read by privacy.ts's readZdrAttestation); an entry that is neither, or an object that cannot be read, is dropped with
- * a warning. Neither key is set when it has its default, so with both unset the result is parseReviewConfig's.
+ * counts as "zdr". `zdrAttested` and VS-30's `runtime` come from the trusted source alone: the global config on "local"
+ * (your own branch can hold other people's commits), review.json at the base on "github" (a pull request can edit the
+ * workflow and its environment). Neither has an environment variable, and a value from any other source is ignored with
+ * a warning. `zdrAttested`'s entries are text or VS-33's attestation objects (`{ id, operator, project?, region?,
+ * extendedCache?, verify? }`, read by privacy.ts's readZdrAttestation); an entry that is neither, or an object that
+ * cannot be read, is dropped with a warning. `runtime` is "off" or "ask", and "ask" warns that it is not applied yet
+ * (UNAPPLIED_REVIEW_KEYS); whether a review may run checks at all (consent, `--pr`, CI) stays the VS-30 executor's
+ * decision. No sourced key is set when it has its default, so with all of them unset the result is
+ * parseReviewConfig's.
  */
 export function mergeReviewConfig(input: {
   surface: "local" | "github"
@@ -412,9 +423,17 @@ export function mergeReviewConfig(input: {
         continue
       }
       if (parsed.note) warnings.push(`${label}: ${parsed.note}.`)
-      // An empty list is the default, and is left out like one.
-      if (!Array.isArray(parsed.value) || parsed.value.length) Object.assign(config, { [key]: parsed.value })
+      // A default, an empty list or an optional key's default value, is left out like one.
+      const value = parsed.value
+      const fallback = Object.entries(OPTIONAL_REVIEW_DEFAULT_OF).find(([name]) => name === key)?.[1]
+      if (Array.isArray(value) ? value.length > 0 : value !== fallback) Object.assign(config, { [key]: value })
     }
+  // settle never sees a sourced key, so a sourced key no runner applies yet warns here.
+  warnings.push(
+    ...UNAPPLIED_REVIEW_KEYS.filter(
+      (key) => SOURCED_REVIEW_KEYS.some((item) => item === key) && UNAPPLIED[key].applies(config),
+    ).map((key) => UNAPPLIED[key].warning),
+  )
   return { config, warnings }
 }
 

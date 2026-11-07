@@ -460,6 +460,14 @@ export interface ReviewConfig {
   // and model server hosts. A text entry is the legacy form and keeps its meaning; an attestation object (VS-33) adds
   // what the owner attests beyond the ID. Read only from a trusted source (mergeReviewConfig); absent means none.
   zdrAttested?: ZdrAttestedEntry[]
+  // VS-30's opt-in (D10), as proposed: contract §1.1 and §4 VS-30, with owner question Q8 open. Under "ask", a trusted
+  // local review would ask, per operation and through `--checks`, before running the project's tests, coverage and
+  // reproducers on the head and base commits in isolation (runtime.ts holds the evidence contract). Read only from a
+  // trusted source (mergeReviewConfig), never from the working tree or the environment. Absent means "off"
+  // (OPTIONAL_REVIEW_DEFAULTS), and DEFAULT_REVIEW_CONFIG leaves it out, so every config and its digest stay as they
+  // were. Read by no runner until the VS-30 executor (UNAPPLIED_REVIEW_KEYS), so mergeReviewConfig warns that "ask" is
+  // not applied.
+  runtime?: "off" | "ask"
   failOn: "never" | "blocking" // "blocking" fails the job while blocking findings are open
   ignore: string[] // added to the defaults
   ignoreDefaults: boolean
@@ -529,6 +537,7 @@ export const OPTIONAL_REVIEW_DEFAULTS = {
   verifyEvidence: "off",
   depth: "fixed",
   lenses: "off",
+  runtime: "off",
 } as const satisfies Partial<ReviewConfig>
 
 // The same, read by any ReviewConfig key, for lookups that do not know which keys have an entry.
@@ -537,7 +546,7 @@ export const OPTIONAL_REVIEW_DEFAULT_OF: Partial<Record<keyof ReviewConfig, unkn
 // Keys config.ts parses that no runner applies yet, each optional with a default above. The parser warns when one would
 // change a review, policyDigest reads them as absent whatever their value, so no evidence scope claims a policy its
 // review did not run under, and the eval replay neither takes nor records them. VS-24, VS-25b, VS-27c, VS-42, VS-44 or
-// VS-28 wiring takes a key off this list when a runner applies it.
+// VS-28 wiring, or the VS-30 executor, takes a key off this list when a runner applies it.
 export const UNAPPLIED_REVIEW_KEYS = [
   "trivial",
   "maxInputTokens",
@@ -547,6 +556,7 @@ export const UNAPPLIED_REVIEW_KEYS = [
   "verifyEvidence",
   "depth",
   "lenses",
+  "runtime",
 ] as const satisfies readonly (keyof typeof OPTIONAL_REVIEW_DEFAULTS)[]
 
 // The verify setting a review gets under verifyPolicy "shared" when neither review.json nor REVIEW_VERIFY sets one:
