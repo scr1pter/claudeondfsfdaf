@@ -283,6 +283,7 @@ describe("grammars", () => {
       ReviewParse.PARSE_REFUSALS,
       ReviewParse.ROLES,
       ReviewParse.RULES,
+      ReviewParse.STATEMENTS,
     ]
     const thawed = (value: unknown): boolean =>
       typeof value === "object" && value !== null && (!Object.isFrozen(value) || Object.values(value).some(thawed))
@@ -1153,3 +1154,150 @@ function diff(file: string, base: string, head: string) {
     "",
   ].join("\n")
 }
+
+// VS-37a: each reference's statement, only when asked. A simple statement gives its lines; a compound one (an `if`, a
+// loop) its first line through the reference's; a type in a signature, and a Rust tail expression, give none.
+describe("statements", () => {
+  const at = (file: ParsedFile, name: string) =>
+    file.references
+      .filter((ref) => ref.name === name)
+      .map((ref) => `${ref.line}:${ref.statement ? `${ref.statement.start}-${ref.statement.end}` : "none"}`)
+
+  test("are left out unless asked for, and asking changes nothing else", async () => {
+    for (const [language, fixture] of Object.entries(FIXTURES)) {
+      const plain = await parsed(fixture.path, fixture.text)
+      expect(plain.references.some((ref) => "statement" in ref)).toBe(false)
+      const asked = await parsed(fixture.path, fixture.text, { statements: true })
+      expect(
+        asked.references.some((ref) => ref.statement !== undefined),
+        language,
+      ).toBe(true)
+      const { references, parseMs, walkMs, extractMs, ...rest } = asked
+      const { references: before, parseMs: a, walkMs: b, extractMs: c, ...same } = plain
+      expect([parseMs, walkMs, extractMs, a, b, c].every((ms) => ms >= 0)).toBe(true)
+      expect(rest).toEqual(same)
+      // The same references, each with its statement added.
+      expect(references).toHaveLength(before.length)
+      expect(references).toMatchObject(before)
+    }
+  })
+
+  test("TypeScript and JavaScript", async () => {
+    const file = await parsed(
+      "run.ts",
+      lines(
+        "export function run(items: Item[]) {",
+        "  const total = compute(",
+        "    items,",
+        "  )",
+        "  if (check(total)) {",
+        "    notify(total)",
+        "  }",
+        "  return finish(total)",
+        "}",
+        "class Box { field = make() }",
+      ),
+      { statements: true },
+    )
+    expect(at(file, "compute")).toEqual(["2:2-4"])
+    expect(at(file, "check")).toEqual(["5:5-5"])
+    expect(at(file, "notify")).toEqual(["6:6-6"])
+    expect(at(file, "finish")).toEqual(["8:8-8"])
+    expect(at(file, "Item")).toEqual(["1:none"])
+    expect(at(file, "make")).toEqual(["10:10-10"])
+    const loop = await parsed("loop.js", lines("do {", "  step()", "} while (more())"), { statements: true })
+    expect(at(loop, "more")).toEqual(["3:1-3"])
+    expect(at(loop, "step")).toEqual(["2:2-2"])
+  })
+
+  test("Python", async () => {
+    const file = await parsed(
+      "run.py",
+      lines(
+        "def run(x):",
+        "    value = compute(",
+        "        x,",
+        "    )",
+        "    if check(value):",
+        "        notify(value)",
+        "    for item in items():",
+        "        pass",
+        "    return finish(value)",
+      ),
+      { statements: true },
+    )
+    expect(at(file, "compute")).toEqual(["2:2-4"])
+    expect(at(file, "check")).toEqual(["5:5-5"])
+    expect(at(file, "notify")).toEqual(["6:6-6"])
+    expect(at(file, "items")).toEqual(["7:7-7"])
+    expect(at(file, "finish")).toEqual(["9:9-9"])
+  })
+
+  test("Go", async () => {
+    const file = await parsed(
+      "run.go",
+      lines(
+        "package main",
+        "",
+        "func run() {",
+        "\tif err := check(); err != nil {",
+        "\t\tnotify(err)",
+        "\t}",
+        "\tvalue := compute(",
+        "\t\t1,",
+        "\t)",
+        "\tdefer finish(value)",
+        "}",
+      ),
+      { statements: true },
+    )
+    expect(at(file, "check")).toEqual(["4:4-4"])
+    expect(at(file, "notify")).toEqual(["5:5-5"])
+    expect(at(file, "compute")).toEqual(["7:7-9"])
+    expect(at(file, "finish")).toEqual(["10:10-10"])
+  })
+
+  test("Rust: a tail expression is in no statement", async () => {
+    const file = await parsed(
+      "run.rs",
+      lines(
+        "fn run() -> u8 {",
+        "    let value = compute(",
+        "        1,",
+        "    );",
+        "    notify(value);",
+        "    finish(value)",
+        "}",
+      ),
+      { statements: true },
+    )
+    expect(at(file, "compute")).toEqual(["2:2-4"])
+    expect(at(file, "notify")).toEqual(["5:5-5"])
+    expect(at(file, "finish")).toEqual(["6:none"])
+  })
+
+  test("Java", async () => {
+    const file = await parsed(
+      "Run.java",
+      lines(
+        "class Run {",
+        "  private final Box box = make();",
+        "  int run() {",
+        "    int value = compute(",
+        "      1);",
+        "    if (check(value)) {",
+        "      notify(value);",
+        "    }",
+        "    return finish(value);",
+        "  }",
+        "}",
+      ),
+      { statements: true },
+    )
+    expect(at(file, "make")).toEqual(["2:2-2"])
+    expect(at(file, "compute")).toEqual(["4:4-5"])
+    expect(at(file, "check")).toEqual(["6:6-6"])
+    expect(at(file, "notify")).toEqual(["7:7-7"])
+    expect(at(file, "finish")).toEqual(["9:9-9"])
+  })
+})

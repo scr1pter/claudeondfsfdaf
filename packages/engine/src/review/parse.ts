@@ -78,7 +78,8 @@ export const GRAMMARS = frozen({
   java: { package: "tree-sitter-java", version: "0.23.5", wasm: "tree-sitter-java.wasm", abi: 14 },
 } as const satisfies Record<ParseLanguage, Grammar>)
 
-// Bumped whenever RULES or the extraction below changes what a file yields.
+// Bumped whenever RULES or the extraction below changes what a file yields by default. ParseInput.statements adds a field
+// only when asked, so it does not bump it.
 export const QUERY_VERSION = 1
 
 // Static specifiers, so the bundler resolves each grammar from this package's own dependencies and embeds it: no path
@@ -165,6 +166,9 @@ export interface ParsedReference {
   column: number // 0-based, UTF-16 units
   kind: ReferenceKind
   enclosing?: string // the innermost definition around it
+  // Only with ParseInput.statements (VS-37a): the 1-based lines of the innermost simple statement around it, or a
+  // compound statement's (an `if`, a loop) first line through this reference's line; absent outside every statement.
+  statement?: { start: number; end: number }
 }
 
 export interface ParseInput {
@@ -172,6 +176,9 @@ export interface ParseInput {
   text: string
   names?: ReadonlySet<string> // keep only references to these names (a filter on the output)
   deadline?: number // a performance.now() time after which this file is refused (VS-38's time box)
+  // VS-37a: also give each reference its statement (STATEMENTS). Off by default, so every other caller's records are
+  // unchanged; a future fact cache keys on it as well as on QUERY_VERSION.
+  statements?: boolean
 }
 
 export interface ParsedFile {
@@ -320,6 +327,7 @@ interface Loaded {
   parser: Parser
   query: Query
   anchors: Uint8Array // 1 for every node type id the query captures
+  statements: Uint8Array // 1 for a simple statement's node type id, 2 for a compound one's (STATEMENTS)
 }
 
 const ERROR_ID = 65_535
@@ -393,7 +401,15 @@ async function compile(language: ParseLanguage, Runtime: typeof Parser, bytes: U
       anchors[id] = 1
     })
   anchors[ERROR_ID] = 1
-  return { language: grammar, parser, query, anchors }
+  const statements = new Uint8Array(ERROR_ID + 1)
+  Array.from({ length: grammar.nodeTypeCount }, (_, id) => id)
+    .filter((id) => grammar.nodeTypeIsNamed(id))
+    .forEach((id) => {
+      const type = grammar.nodeTypeForId(id) ?? ""
+      if (STATEMENTS[language].simple.includes(type)) statements[id] = 1
+      if (STATEMENTS[language].compound.includes(type)) statements[id] = 2
+    })
+  return { language: grammar, parser, query, anchors, statements }
 }
 
 // One bare pattern per node type, named by its role: a bare pattern completes on the node it starts on, so the query
@@ -658,6 +674,97 @@ export const RULES: Readonly<Record<ParseLanguage, Rules>> = frozen({
   },
 })
 
+// VS-37a's statements per language, read only when ParseInput.statements asks: a simple statement's span is a call
+// site's window, and a compound statement (whose body holds other statements) gives its header through the
+// reference's line, for a call in an `if` condition or a loop head. Declarations that hold a body (a class, a
+// function) are neither, so a type in a signature has no statement. Rust's `if` and `match` are expressions inside an
+// expression statement, and its tail expressions are in no statement.
+const SCRIPT_SIMPLE = [
+  "expression_statement",
+  "lexical_declaration",
+  "variable_declaration",
+  "return_statement",
+  "throw_statement",
+]
+const SCRIPT_COMPOUND = [
+  "if_statement",
+  "for_statement",
+  "for_in_statement",
+  "while_statement",
+  "do_statement",
+  "switch_statement",
+  "switch_case",
+  "with_statement",
+]
+
+export const STATEMENTS: Readonly<Record<ParseLanguage, { simple: readonly string[]; compound: readonly string[] }>> =
+  frozen({
+    typescript: { simple: [...SCRIPT_SIMPLE, "public_field_definition"], compound: SCRIPT_COMPOUND },
+    tsx: { simple: [...SCRIPT_SIMPLE, "public_field_definition"], compound: SCRIPT_COMPOUND },
+    javascript: { simple: [...SCRIPT_SIMPLE, "field_definition"], compound: SCRIPT_COMPOUND },
+    python: {
+      simple: ["expression_statement", "return_statement", "raise_statement", "assert_statement", "delete_statement"],
+      compound: [
+        "if_statement",
+        "elif_clause",
+        "for_statement",
+        "while_statement",
+        "with_statement",
+        "match_statement",
+        "case_clause",
+        "except_clause",
+      ],
+    },
+    go: {
+      simple: [
+        "expression_statement",
+        "short_var_declaration",
+        "assignment_statement",
+        "inc_statement",
+        "dec_statement",
+        "send_statement",
+        "go_statement",
+        "defer_statement",
+        "return_statement",
+        "var_spec",
+        "const_spec",
+      ],
+      compound: [
+        "if_statement",
+        "for_statement",
+        "expression_switch_statement",
+        "type_switch_statement",
+        "select_statement",
+        "expression_case",
+        "communication_case",
+      ],
+    },
+    rust: { simple: ["expression_statement", "let_declaration", "const_item", "static_item"], compound: [] },
+    java: {
+      simple: [
+        "expression_statement",
+        "local_variable_declaration",
+        "return_statement",
+        "throw_statement",
+        "yield_statement",
+        "assert_statement",
+        "explicit_constructor_invocation",
+        "field_declaration",
+        "constant_declaration",
+      ],
+      compound: [
+        "if_statement",
+        "for_statement",
+        "enhanced_for_statement",
+        "while_statement",
+        "do_statement",
+        "switch_expression",
+        "try_with_resources_statement",
+        "synchronized_statement",
+      ],
+    },
+  })
+
 // Every node type of a table, under one role.
 function each(table: Readonly<Record<string, unknown>>, role: Role) {
   return Object.fromEntries(Object.keys(table).map((type) => [type, role]))
@@ -684,7 +791,14 @@ interface Extraction {
 function extract(x: Extraction): ParseResult {
   const begun = performance.now()
   const late = () => performance.now() > x.deadline
-  const walked = walk(x.cursor, x.loaded.anchors, x.limits.depth, late)
+  const spans: Span[] = []
+  const walked = walk(
+    x.cursor,
+    x.loaded.anchors,
+    x.limits.depth,
+    late,
+    x.input.statements ? { table: x.loaded.statements, spans } : undefined,
+  )
   if (walked === "timeout") return x.refuse("timeout", { language: x.language, detail: "walk" })
   if (walked === "nesting") return x.refuse("nesting", { language: x.language })
   const walkMs = performance.now() - begun
@@ -706,7 +820,7 @@ function extract(x: Extraction): ParseResult {
       return [{ node, role, type: node.type, start: node.startIndex, end: node.endIndex }]
     })
     .sort((a, b) => a.start - b.start || b.end - a.end)
-  const swept = sweep(x.input, x.language, items, late)
+  const swept = sweep(x.input, x.language, items, late, spans)
   // The sweep checks the clock between items; a single item that ran past the box still makes the file a timeout.
   if (!swept || late()) return x.refuse("timeout", { language: x.language, detail: "sweep" })
   return {
@@ -724,12 +838,41 @@ function extract(x: Extraction): ParseResult {
   }
 }
 
-// Every node once, without recursion, stopping at the first level past the limit.
-function walk(cursor: TreeCursor, anchors: Uint8Array, limit: number, late: () => boolean) {
+// A statement node the walk saw (VS-37a): its character range, its 1-based lines, and whether it is compound.
+interface Span {
+  start: number
+  end: number
+  first: number
+  last: number
+  compound: boolean
+}
+
+// Every node once, without recursion, stopping at the first level past the limit. Asked for statements, it also
+// records each statement node it passes, in document order with a parent before its children, read from the cursor
+// alone, so no node is ever asked for its parent.
+function walk(
+  cursor: TreeCursor,
+  anchors: Uint8Array,
+  limit: number,
+  late: () => boolean,
+  statements?: { table: Uint8Array; spans: Span[] },
+) {
   const at = { depth: 0, deepest: 0, anchors: 0, seen: 0 }
   for (;;) {
     at.anchors += anchors[cursor.nodeTypeId]
     at.seen++
+    const role = statements?.table[cursor.nodeTypeId]
+    if (role) {
+      const first = cursor.startPosition
+      const end = cursor.endPosition
+      statements?.spans.push({
+        start: cursor.startIndex,
+        end: cursor.endIndex,
+        first: first.row + 1,
+        last: end.column === 0 && end.row > first.row ? end.row : end.row + 1,
+        compound: role === 2,
+      })
+    }
     if (at.seen % 8_192 === 0 && late()) return "timeout" as const
     if (cursor.gotoFirstChild()) {
       at.depth++
@@ -794,10 +937,17 @@ interface Facts {
   traits: Map<string, boolean>
 }
 
-function sweep(input: ParseInput, language: ParseLanguage, items: readonly Item[], late: () => boolean) {
+function sweep(
+  input: ParseInput,
+  language: ParseLanguage,
+  items: readonly Item[],
+  late: () => boolean,
+  spans: readonly Span[],
+) {
   const text = input.text
   const facts = gather(language, text, items)
   const stack: Frame[] = []
+  const statementAt = statementFinder(spans)
   const out = {
     errors: [] as { start: number; end: number }[],
     references: [] as ParsedReference[],
@@ -855,12 +1005,15 @@ function sweep(input: ParseInput, language: ParseLanguage, items: readonly Item[
       if (names.has(item.start)) return true
       const name = text.slice(item.start, item.end)
       if (input.names && !input.names.has(name)) return true
+      const line = item.node.startPosition.row + 1
+      const statement = input.statements ? statementAt(item.start, line) : undefined
       out.references.push({
         name,
-        line: item.node.startPosition.row + 1,
+        line,
         column: item.node.startPosition.column,
         kind: referenceKind(language, item, name, top, callees),
         ...(top?.enclosing ? { enclosing: top.enclosing.name } : {}),
+        ...(statement ? { statement } : {}),
       })
       return true
     }
@@ -889,6 +1042,26 @@ function sweep(input: ParseInput, language: ParseLanguage, items: readonly Item[
   // A default value sits after the head that holds it, so heads are read once every default is known.
   const sorted = cuts.toSorted((a, b) => a.start - b.start || b.end - a.end)
   return { ...out, definitions: defs.map((def) => publicDefinition(def, text, sorted)) }
+}
+
+// The statement around each reference, asked in document order: a stack of the statements open at that point, so the
+// cost is one pass over the statements however many references there are. The innermost simple statement gives its
+// lines; an innermost compound one gives its first line through the reference's.
+function statementFinder(spans: readonly Span[]) {
+  const open: Span[] = []
+  const next = { index: 0 }
+  return (index: number, line: number) => {
+    while (next.index < spans.length && spans[next.index].start <= index) {
+      const span = spans[next.index]
+      while (open.length && open[open.length - 1].end <= span.start) open.pop()
+      open.push(span)
+      next.index++
+    }
+    while (open.length && open[open.length - 1].end <= index) open.pop()
+    const top = open.at(-1)
+    if (!top) return undefined
+    return top.compound ? { start: top.first, end: Math.max(top.first, line) } : { start: top.first, end: top.last }
+  }
 }
 
 function publicDefinition(def: Def, text: string, cuts: readonly Range[]): ParsedDefinition {

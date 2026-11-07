@@ -57,7 +57,10 @@ function invariants(slice: ImpactSlice) {
     slice.dropped.ignored.length + slice.dropped.unchecked.length + slice.dropped.gate.length + slice.stages.gated,
   )
   expect(slice.stages.gated).toBeGreaterThanOrEqual(slice.dropped.cap.length + slice.dropped.time.length)
-  expect(slice.stages.confirmed).toBe(slice.stages.packed + slice.dropped.budget.length)
+  // A slice packed in tiers (VS-37a) also leaves the call sites past top-k out.
+  expect(slice.stages.confirmed).toBe(
+    slice.stages.packed + slice.dropped.budget.length + (slice.tiers?.dropped.rank.length ?? 0),
+  )
   expect(slice.stages.packed).toBe(slice.dependents.length)
   for (const dependent of slice.dependents) expect(slice.locations).toContain(`${dependent.path}:${dependent.line}`)
   // The tokens are what the block costs as the prompt renders it, with its note: 0 when it renders nothing.
@@ -65,6 +68,23 @@ function invariants(slice: ImpactSlice) {
   // Impact incompleteness is context, never coverage (VS-38 item 7).
   for (const key of ["complete", "coverage", "unreviewed", "reviewed"]) expect(Object.hasOwn(slice, key)).toBe(false)
 }
+
+// The real Git service, with every command it runs recorded: what a build read, never what it would have read.
+const recorded = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+  Effect.gen(function* () {
+    const service = yield* Git.Service
+    const calls: string[][] = []
+    const result = yield* effect.pipe(
+      Effect.provideService(Git.Service, {
+        ...service,
+        run: (args, options) => {
+          calls.push(args)
+          return service.run(args, options)
+        },
+      }),
+    )
+    return { result, shown: calls.filter((args) => args[0] === "show").map((args) => args.at(-1) ?? "") }
+  })
 
 const UTIL_BASE =
   "export function computeTotal(items: number[]) {\n  return items.length\n}\nexport const placeholder = 1\n"
@@ -450,6 +470,253 @@ describe("ReviewImpact.build", () => {
   )
 })
 
+// VS-37a: the slice packed in tiers, only when the eval-only `packing` is passed.
+describe("ReviewImpact.build in tiers", () => {
+  const body = (count: number) => Array.from({ length: count }, (_, at) => `  const step${at} = ${at}`).join("\n")
+  const TIERED_BASE = [
+    'import { scale } from "./math"',
+    'import { other } from "./other"',
+    "",
+    "export function computeTotal(items: number[]) {",
+    body(4),
+    "  return items.length",
+    body(4),
+    "}",
+    "",
+  ].join("\n")
+  const TIERED_HEAD = [
+    'import { scale } from "./math"',
+    'import { other } from "./other"',
+    "",
+    "export function computeTotal(items: number[]) {",
+    body(4),
+    "  return scale(items.length)",
+    body(4),
+    "}",
+    "",
+  ].join("\n")
+  const tieredFixture = (dir: string, extra: Record<string, string> = {}, head: Record<string, string> = {}) =>
+    Effect.gen(function* () {
+      const base = yield* commit(dir, "base", {
+        "src/util.ts": TIERED_BASE,
+        "src/math.ts": "export function scale(value: number): number {\n  return value * 2\n}\n",
+        "src/other.ts": "export const other = 1\n",
+        "src/a.ts":
+          'import { computeTotal } from "./util"\n\nexport function a() {\n  const total = computeTotal(\n    [1],\n  )\n  return total\n}\n',
+        ...extra,
+      })
+      const next = yield* commit(dir, "head", { "src/util.ts": TIERED_HEAD, ...head })
+      const files = yield* ReviewSource.prDiff({ directory: dir, mergeBase: base, head: next })
+      return { base, head: next, files }
+    })
+
+  it.live("packing unset builds VS-25b's slice: no tier fields, no statements, no file read beyond VS-25b's", () =>
+    Effect.gen(function* () {
+      const dir = (yield* scopedTmpdir({ git: true })).path
+      const { base, head, files } = yield* tieredFixture(dir)
+      const plain = yield* recorded(build({ directory: dir, base, head, files }))
+      const slice = plain.result.slice
+      for (const key of ["scopes", "outbound", "fallback", "tiers"]) expect(Object.hasOwn(slice, key)).toBe(false)
+      expect(slice.dependents.some((item) => "statement" in item)).toBe(false)
+      expect(slice.dependents.map((item) => item.window)).toEqual([
+        '1: import { computeTotal } from "./util"\n2: \n3: export function a() {\n4:   const total = computeTotal(\n5:     [1],\n6:   )\n7:   return total',
+      ])
+      // The changed file at each side and the confirmed dependent: tier b's target is never read.
+      expect(plain.shown.toSorted()).toEqual(
+        [`${base}:src/util.ts`, `${head}:src/a.ts`, `${head}:src/util.ts`].toSorted(),
+      )
+      expect(impactBlock(slice)).not.toContain("untrusted_enclosing_scope")
+      invariants(slice)
+      // The same build twice is the same slice, timings aside.
+      const again = (yield* build({ directory: dir, base, head, files })).slice
+      const steady = (item: ImpactSlice) => ({ ...item, ms: 0, grepMs: 0, parseMs: 0 })
+      expect(steady(again)).toEqual(steady(slice))
+    }),
+  )
+
+  it.live("packs the changed definition whole, the signature it calls, and the call site's statement", () =>
+    Effect.gen(function* () {
+      const dir = (yield* scopedTmpdir({ git: true })).path
+      const { base, head, files } = yield* tieredFixture(dir)
+      const tiered = yield* recorded(build({ directory: dir, base, head, files, packing: {} }))
+      const slice = tiered.result.slice
+      expect(slice.scopes?.map((scope) => `${scope.path}:${scope.name}:${scope.start}-${scope.end}`)).toEqual([
+        "src/util.ts:computeTotal:4-14",
+      ])
+      expect(slice.scopes?.[0]?.excerpt.split("\n").slice(0, 4)).toEqual([
+        '1: import { scale } from "./math"',
+        "⋯",
+        "4: export function computeTotal(items: number[]) {",
+        "5:   const step0 = 0",
+      ])
+      expect(slice.outbound).toEqual([
+        {
+          path: "src/math.ts",
+          name: "scale",
+          kind: "function",
+          start: 1,
+          end: 3,
+          signature: expect.stringContaining("scale(value: number): number"),
+          usedIn: "src/util.ts:9",
+        },
+      ])
+      expect(slice.dependents.map((item) => [item.line, item.statement, item.window])).toEqual([
+        [4, { start: 4, end: 6 }, "4:   const total = computeTotal(\n5:     [1],\n6:   )"],
+      ])
+      expect(slice.changed).toEqual([])
+      expect(slice.fallback).toEqual([])
+      expect(slice.tiers).toMatchObject({
+        packing: { tiers: ["a", "b", "c"], shares: { a: 0.4, b: 0.15, c: 0.45 } },
+        view: { inline: [], diffHidden: [] },
+        shown: { a: ["src/util.ts:1-1", "src/util.ts:4-14"], b: ["src/math.ts:1-1"], c: ["src/a.ts:4-6"] },
+        external: 0,
+      })
+      expect(slice.locations).toEqual(["src/util.ts:4", "src/math.ts:1", "src/a.ts:4"])
+      // The target was read once, from the head tree-ish; `other` is imported but unused, so its file is not.
+      expect(tiered.shown).toContain(`${head}:src/math.ts`)
+      expect(tiered.shown).not.toContain(`${head}:src/other.ts`)
+      expect(impactBlock(slice)).toContain("<untrusted_outbound_signature ")
+      invariants(slice)
+    }),
+  )
+
+  it.live("an ignored, excluded or generated target is never shown, and the first two are never read", () =>
+    Effect.gen(function* () {
+      const dir = (yield* scopedTmpdir({ git: true })).path
+      const head = [
+        'import { scale } from "./math"',
+        'import { skip } from "./skip"',
+        'import { gen } from "./gen"',
+        'import { vend } from "../vendor/vend"',
+        "",
+        "export function computeTotal(items: number[]) {",
+        body(4),
+        "  return skip(gen(vend(items.length)))",
+        body(4),
+        "}",
+        "",
+      ].join("\n")
+      const {
+        base,
+        head: next,
+        files,
+      } = yield* tieredFixture(
+        dir,
+        {
+          "src/skip.ts": "export function skip(value: number) {\n  return value\n}\n",
+          "src/gen.ts": "// @generated by a tool\nexport function gen(value: number) {\n  return value\n}\n",
+          "vendor/vend.ts": "export function vend(value: number) {\n  return value\n}\n",
+        },
+        { "src/util.ts": head },
+      )
+      const tiered = yield* recorded(
+        build({ directory: dir, base, head: next, files, packing: {}, ignore: ["**/skip.ts"] }),
+      )
+      const slice = tiered.result.slice
+      expect(slice.outbound).toEqual([])
+      // In sorted order, whichever read finished first.
+      expect(slice.tiers?.dropped.targets).toEqual([
+        "excluded:vendor/vend.ts",
+        "generated:src/gen.ts",
+        "ignored:src/skip.ts",
+      ])
+      expect(tiered.shown).not.toContain(`${next}:src/skip.ts`)
+      expect(tiered.shown).not.toContain(`${next}:vendor/vend.ts`)
+      // None of these is a fallback the model is told about.
+      expect(slice.fallback).toEqual([])
+      // An `ignored` callback sets a target aside as the ignore globs do.
+      const called = yield* build({
+        directory: dir,
+        base,
+        head: next,
+        files,
+        packing: {},
+        ignored: (file) => file === "src/skip.ts",
+      })
+      expect(called.slice.tiers?.dropped.targets).toContain("ignored:src/skip.ts")
+      invariants(slice)
+    }),
+  )
+
+  it.live("a changed target the ignore rules cover is set aside before its changed parse is used", () =>
+    Effect.gen(function* () {
+      const dir = (yield* scopedTmpdir({ git: true })).path
+      // `scale` is unchanged and outside the diff's context, so only the ignore rules keep it out of tier b.
+      const math = (value: number) =>
+        [
+          "export function scale(value: number): number {",
+          "  return value * 2",
+          "}",
+          ...Array.from({ length: 10 }, (_, at) => `// filler ${at}`),
+          "export function other2() {",
+          `  return ${value}`,
+          "}",
+          "",
+        ].join("\n")
+      const { base, head, files } = yield* tieredFixture(dir, { "src/math.ts": math(1) }, { "src/math.ts": math(2) })
+      const open = yield* build({ directory: dir, base, head, files, packing: {} })
+      expect(open.slice.outbound?.map((item) => `${item.path}:${item.name}`)).toEqual(["src/math.ts:scale"])
+      const { slice } = yield* build({ directory: dir, base, head, files, packing: {}, ignore: ["src/math.ts"] })
+      expect(slice.outbound).toEqual([])
+      expect(slice.tiers?.dropped.targets).toEqual(["ignored:src/math.ts"])
+      invariants(slice)
+    }),
+  )
+
+  it.live("changed files the parser cannot read are named in the fallback note", () =>
+    Effect.gen(function* () {
+      const dir = (yield* scopedTmpdir({ git: true })).path
+      const large = "export const filler = 1\n".repeat(50_000)
+      const { base, head, files } = yield* tieredFixture(
+        dir,
+        { "lib/tool.rb": "def tool\n  1\nend\n", "src/big.ts": large },
+        { "lib/tool.rb": "def tool\n  2\nend\n", "src/big.ts": `${large}export const more = 2\n` },
+      )
+      const { slice, changed } = yield* build({ directory: dir, base, head, files, packing: {} })
+      expect(changed.large).toEqual(["base:src/big.ts", "src/big.ts"])
+      expect(slice.fallback).toEqual([
+        { kind: "a:unsupported", count: 1 },
+        { kind: "a:over-cap", count: 1 },
+      ])
+      expect(impactBlock(slice)).toContain(
+        "Context fell back (1 changed file in a language Vector does not parse: no enclosing scope; 1 changed file or definition over the size limit: no enclosing scope). Open the files yourself.",
+      )
+      invariants(slice)
+    }),
+  )
+
+  it.live("tier b reads start after confirmation, so a time box never drops more call sites with tiers on", () =>
+    Effect.gen(function* () {
+      const dir = (yield* scopedTmpdir({ git: true })).path
+      const { base, head, files } = yield* tieredFixture(dir)
+      for (const budgetMs of [0, 1, 20, 150]) {
+        const { slice } = yield* ReviewImpact.build({
+          directory: dir,
+          base,
+          head,
+          files,
+          context: 200_000,
+          budgetMs,
+          packing: {},
+        })
+        invariants(slice)
+        // Every tiered slice reads as tiered, even one that stopped before packing.
+        expect(slice.scopes).toBeDefined()
+        expect(slice.tiers?.packing.tiers).toEqual(["a", "b", "c"])
+        // A call site left unread by the box means the box ran out before any target was read.
+        if (slice.dropped.time.length) {
+          expect(slice.outbound).toEqual([])
+          expect(slice.tiers?.dropped.targets.every((entry) => entry.startsWith("time:"))).toBe(true)
+        }
+        if (budgetMs === 0) expect(slice).toMatchObject({ incomplete: ["time"], stages: { candidates: 0 } })
+      }
+      // Target reads never mark the slice incomplete: with a generous box the tiered slice is complete.
+      const { slice } = yield* build({ directory: dir, base, head, files, packing: {} })
+      expect(slice.incomplete).toBeUndefined()
+    }),
+  )
+})
+
 describe("ReviewImpact.importLines", () => {
   it.live("rebuilds every line BrainCode.imports reads, wrapped imports and Python lists included", () =>
     Effect.gen(function* () {
@@ -623,6 +890,33 @@ describe("partial clones", () => {
       expect(slice.unsearched).toBeUndefined()
       expect(changed.missing).toEqual([])
       expect(slice.dependents.map((item) => `${item.path}:${item.line}`)).toEqual(["a/x.ts:2", "b/y.ts:2"])
+      invariants(slice)
+    }),
+  )
+
+  it.live("tier b never reads a target a partial clone lacks: it is b:missing, and nothing is fetched", () =>
+    Effect.gen(function* () {
+      const root = (yield* scopedTmpdir({ git: true })).path
+      yield* git(root, "config", "uploadpack.allowfilter", "true")
+      yield* git(root, "config", "uploadpack.allowanysha1inwant", "true")
+      const util = (call: string) =>
+        `import { helper } from "../lib/helper"\n\nexport function computeTotal(items: number[]) {\n${call}\n}\n`
+      const base = yield* commit(root, "base", {
+        "src/util.ts": util("  return items.length"),
+        "lib/helper.ts": "export function helper(value: number) {\n  return value\n}\n",
+      })
+      const head = yield* commit(root, "head", { "src/util.ts": util("  return helper(items.length)") })
+      const dir = path.join(root, "..", `${path.basename(root)}-tier-b`)
+      yield* Effect.addFinalizer(() => Effect.promise(() => fs.rm(dir, { recursive: true, force: true })))
+      yield* clone(root, dir, "--filter=blob:none", "--sparse")
+      yield* git(dir, "sparse-checkout", "set", "src")
+      const files = yield* ReviewSource.prDiff({ directory: root, mergeBase: base, head })
+      const before = yield* missing(dir, head)
+      const { slice } = yield* build({ directory: dir, base, head, files, packing: {} })
+      expect(slice.tiers?.dropped.targets).toEqual(["missing:lib/helper.ts"])
+      expect(slice.fallback).toContainEqual({ kind: "b:missing", count: 1 })
+      expect(slice.outbound).toEqual([])
+      expect(yield* missing(dir, head)).toBe(before)
       invariants(slice)
     }),
   )

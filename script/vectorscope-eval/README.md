@@ -499,8 +499,18 @@ bun script/vectorscope-eval/replay.ts --mirrors <dir> --prepare <out>
     `gitVersion`, `clone`, `grepMs`, `parseMs`, `ms`, `tokens` (what the
     rendered `<untrusted_impact>` block costs, 0 when it renders nothing),
     `tests`, `unsupported`, and `incomplete` and `unsearched` when the search
-    was incomplete. Once VS-25b wiring builds the slice in `Review.run`,
-    `context.locations` also gains the slice's locations.
+    was incomplete. A slice packed in VS-37a's three tiers (only with the
+    eval-only packing parameters, which no runner passes yet) also records
+    `fallback` (which tiers fell back, with counts, as the prompt's one-line
+    note names them) and `tiers`: `packing` (the tiers, shares and top-k
+    used), `view` (the changed paths treated as shown whole or without their
+    diff), `tokens` per tier, `shown` (the line ranges each tier's blocks
+    show, so every arm's slice recall is measured on ranges), `external`
+    (used imports that name no repository file) and `dropped` (per tier,
+    plus tier b's unread targets as `reason:path` and the call sites past
+    top-k). The scopes and outbound signatures themselves are code text, so
+    the record leaves them out. Once VS-25b wiring builds the slice in
+    `Review.run`, `context.locations` also gains the slice's locations.
 - The attempt record comes from `Review.run`'s optional `observe` hook. It is
   off unless a caller sets it, and a test shows the same review sends the same
   requests and returns the same outcome with it off, on, or throwing.

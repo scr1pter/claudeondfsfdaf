@@ -6414,3 +6414,471 @@ above where they differ.
   - The full root typecheck was not run: nothing is pushed.
   - Nothing was sent to a model, no paid run, no workflow dispatched, nothing
     published, and no user-visible string changed (D14).
+
+## 2026-11-07 · VS-37a Three-tier slice packing (core and uncalled engine builder)
+
+Addendum A VS-37 ("amends VS-25b step 5"), its §1 eval-only parameters, its §1a
+row (as VS-36), its §3 VS-25 "Adopt VS-37" and its §4 Now window ("VS-36, VS-37,
+VS-38 (core and uncalled engine impact files)"); round-two REPORT §4.2 (context
+levels and forward context [LCI2, LCI8, RR5, RR6, RR7]) and §4.4 item 4. Built
+at `6356a8c0`. VS-37 waits on Q18, so the tiers are reached only through
+`ReviewImpact.build` with an eval-only `packing` argument, which nothing passes:
+no key, no config or env parse, no runner. `run.ts`, `ai-review.ts`,
+`provider.ts`, `session/llm.ts`, `posting.ts`, `cli/cmd/review.ts`, engine
+`review/eval.ts` (code), `script/vectorscope-eval/replay.ts` (`VARIANTS`),
+`review/types.ts`, `review/config.ts` and every @vector file (`workflow.ts`,
+`command.ts`, `cli/cmd/github.*`, `github-*.ts`, `vectorscope.astro`) are
+untouched. It implements the VS-37a plan as corrected by its critique: every
+critique point was taken, two in another form and one by keeping the plan's
+choice with the reason stated (items 5, 10 and 15 under "Critique points").
+Nothing is committed (the lane brief).
+
+- **What landed.**
+  - **Core `review/impact.ts`** (pure, Node-only as before; `packSlice` and
+    every VS-25b export unchanged, `changedDefinitions` gains an optional
+    `{ ancestors?: boolean }` whose default is the old behaviour):
+    `IMPACT_TIERS` (shares a 0.4, b 0.15, c 0.45; 3 signatures per target file,
+    20 target reads, 8-line statement windows, 8 import lines per scope),
+    `IMPACT_TIER_NAMES`, `IMPACT_FALLBACK_KINDS` (`a:unsupported`, `a:over-cap`,
+    `a:missing`, `b:unsupported`, `b:over-cap`, `b:missing`, `c:no-statement`),
+    `DEFAULT_PACKING`, the `ImpactPacking`, `ImpactPackingInput`,
+    `SourceReference`, `TierSource`, `EnclosingScope`, `OutboundSignature`,
+    `OutboundUse`, `ImpactFallback` and `ImpactTiers` types, and
+    `impactPacking`, `outboundUses`, `outboundSpecifier`, `reexportTargets` and
+    `packTiers`. `Reference` gains `statement?`; `ImpactSlice` gains `scopes?`,
+    `outbound?`, `fallback?` and `tiers?`, set only by a tiered build, so a
+    VS-25b slice is unchanged. `ImpactPrompt` picks the three new prompt fields;
+    `ImpactRecord` also leaves out `scopes` and `outbound` (code text), so the
+    artifact gains `fallback` and `tiers` only.
+  - **Core `brain/code.ts`**: two additive exports.
+    `importStatements(text, language)` gives each statement `imports` reads with
+    its lines, its specifier line and its specifier (a Go block per entry, a
+    Python `from` list to its `)`, a Rust `use` to its `;`, each within 4,000
+    characters, and a Python list also before the next `from` or `import`
+    line), from the same
+    `IMPORT_PATTERNS`; `resolveWorkspace(file, specifier, files, workspace)` is
+    `resolve`'s alias and package steps alone. `resolve` and `dependencies` are
+    untouched, so `selectDependents` resolves exactly as before. Not a third
+    code reader (I-10): it is `brain/code.ts`.
+  - **Core `review/prompt.ts`**: `IMPACT_TIER_CAPS` (20 scopes, 6,000 characters
+    a scope, 10 outbound signatures), `IMPACT_TIERS_INSTRUCTION`, and the
+    renderers `impactScope` (`<untrusted_enclosing_scope … container="…">`) and
+    `impactOutbound` (`<untrusted_outbound_signature … used_in="…">`).
+    `impactBlock` renders scopes, changed definitions, outbound signatures, call
+    sites, tests, the incomplete note, then the fallback note
+    (`<untrusted_impact_fallback>`, one line). The trusted sentence is
+    `IMPACT_TIERS_INSTRUCTION` when `impact.scopes` is set (a tiered slice
+    always sets it, an empty list at least), else `IMPACT_INSTRUCTION`. The
+    import from `impact.ts` stays type-only and the fallback wording is written
+    out in `prompt.ts`; a new test reads both files' import statements.
+  - **Core `review/model-evidence.ts`**: `CANONICAL_IMPACT_TIERS` (literal,
+    every part the tiered block can show);
+    `canonicalPrompts({ impact: "graph" })` appends the review and security
+    prompts of the tiered slice for both trusts after VS-25b's four: 8 instead
+    of 4. `REVIEW_PIPELINE_SOURCES` `5e30549464914097` → `491223f3c097098f`;
+    `REVIEW_PIPELINE_REVISION` stays 1; `REVIEW_PIPELINE_FILES` needs no new
+    file (`impact.ts`, `prompt.ts` and engine `parse.ts` are already pinned;
+    `brain/code.ts` stays out, as the VS-25b entry explains).
+  - **Engine `review/parse.ts`** (uncalled: only `review/impact.ts` and the
+    VS-25a bench script import it): `ParseInput.statements?` and
+    `ParsedReference.statement?`, and the frozen `STATEMENTS` table. Asked for
+    statements, the depth walk records each statement node from the cursor alone
+    (no `node.parent`, which tree-sitter answers by walking down from the root,
+    the quadratic cost the extractor avoids) and the sweep keeps a stack of open
+    statements, one pass however many references. Without the flag nothing
+    changes: no query or `RULES` change, so the capture count is the same, and
+    `QUERY_VERSION` stays 1 (a future fact cache keys on the flag too).
+  - **Engine `review/impact.ts`** (still uncalled): `BuildInput.packing?`
+    (eval-only), `inline?` and `diffShown?`; `ChangedFiles.references?` (the
+    parser's references on each side's changed lines, filled by `readChanged`
+    from the parse it already ran) and `large?` (sides over the parser's cap,
+    which `readChanged` already detected); the definition mapping moved into a
+    shared `definitionOf` and the unsupported list into `unsupportedOf`, both
+    byte-identical in effect.
+  - **`script/vectorscope-eval/README.md`**: `tier1`'s `fallback` and `tiers`.
+- **How a tiered slice is packed** (`packTiers`). The budget is packSlice's
+  (min(6,000, 15% of the context) tokens at 3.5 characters). The frame reserved
+  first is the block with the tests, every incomplete reason with
+  `MAX_SAFE_INTEGER` unsearched, every fallback kind at `MAX_SAFE_INTEGER`, and
+  `IMPACT_TIERS_INSTRUCTION` with its line break. Three accounts share what is
+  left, in order a, b, c: each may spend floor(share × what is left) plus what
+  earlier accounts left unused, so a disabled or empty tier's share carries on;
+  each block is charged its rendered length plus a line break.
+  - **Tier a.** The changed definitions innermost to a changed line
+    (`changedDefinitions` with `ancestors: false`), outer ones first, each
+    packed whole: the import lines its changed lines use (each statement's lines
+    that name one of its references, plus the statement's specifier line, at
+    most 8, in line order, with a `⋯` line at each gap), then its own lines,
+    with the signature of the innermost class, interface, struct, trait, enum or
+    module around it (named as its container when it has one) as `container`. A
+    definition is skipped, keeping its signature anchor, when tier a is off, its
+    file is shown whole (`inline`, head side only), or the diff shows every line
+    of it (`diffShown`). One inside a packed scope is covered. An exported
+    ancestor that `changedDefinitions` names only because a changed local one
+    sits inside it is never the scope: it is the header, or keeps VS-25b's
+    signature anchor when it is no container (a function around a local helper).
+    Past 20 scopes, or past tier a's share, a definition keeps its anchor with
+    no excerpt built: the count is checked first, then the share against the
+    scope's frame and then the frame plus its own lines (both are part of any
+    block it could render). Only a scope whose own lines or excerpt are over
+    6,000 characters counts as `a:over-cap`. Each changed side's lines,
+    containers, references and import statements are read once, however many
+    definitions it has.
+    Then every other changed definition gets VS-25b's anchor, in
+    `changedDefinitions`' order; the first anchor that does not fit closes the
+    account (packSlice's rule).
+  - **Tier b.** `outboundUses` ties each name on an added line to the import
+    statement that brings it in: the name is written on the statement's lines
+    (strings left out), or the line names it through a module the statement
+    binds (`ns.f()` after `import * as ns`, a default import or a `require`; any
+    name of a Python, Go, Rust or Java statement, with Go's package name from
+    the specifier). A TypeScript named import is a value, so `db.save()` after
+    `import { db }` binds `db` only; a name the file defines itself is never an
+    import's; `{ format as fmt }` looks `format` up, never `fmt`, and
+    `{ default as x }` is a default import. Specifiers resolve strictly
+    (`outboundSpecifier`, below). For each use in order, the exported
+    definitions of its targets (and of what their barrels re-export) with that
+    name or alias (`default` only for a default import) are taken by start,
+    skipping one already taken, a changed definition, one inside a packed scope,
+    one in a file shown whole, and one whose first line the diff shows. At most
+    3 per target file (a `.d.ts` or `.pyi` included) and 10 in all; the first
+    that does not fit closes the account. Removed code gets no tier b.
+  - **Tier c.** packSlice's call sites in packSlice's order. Top-k keeps the
+    sites of the first k dependent files (tier c off is top-k 0); the rest go to
+    `tiers.dropped.rank`, so confirmed = packed + `dropped.budget` +
+    `tiers.dropped.rank`. A site's window is its statement clipped to the file;
+    past 8 lines it is the 8 lines from min(max(line − 3, start), end − 7). With
+    no statement it is ±3 lines, and each file with such a packed site counts
+    once as `c:no-statement`. Windows never repeat a line, at most 60 sites, and
+    the first that does not fit closes the account.
+  - **Records.** `locations` as VS-25b (head-side scopes and anchors as
+    `path:start`, outbound as `path:start`, sites as `path:line`); `fallback`
+    (the builder's kinds merged with `a:over-cap` and `c:no-statement`, summed,
+    zeros dropped, in kind order); `tiers.packing` (normalised), `tiers.view`
+    (the changed paths treated as shown whole or without their diff: empty under
+    the defaults), `tiers.tokens` per account, `tiers.shown` (ranges per tier:
+    scope ranges and their import-line runs, anchors and outbound signatures as
+    one line, call-site window runs; `base:` for base-side ranges),
+    `tiers.external`, and `tiers.dropped` (`inline`, `shown`, `covered`,
+    `scope`, `outbound`, `targets`, `rank`). Every list is sorted before use
+    (`tiers.dropped.targets` too, which the builder fills as its concurrent
+    reads finish), so
+    input order never matters (tested by reversing every input).
+- **How the builder reads tier b** (`readTargets`, only when `packing` names
+  tier b). After step 7's confirmation, never alongside it, so tier b never
+  takes time from confirmation: at most `TARGET_CONCURRENCY` (2) `git show`
+  processes run while it does, and none run while confirmation's 4 do. The
+  targets of the uses, in use order, at most 20 reads, then up to two more
+  rounds for what their index files re-export. First, changed or not, a target
+  is set aside, as `reason:path` in `tiers.dropped.targets`, when
+  `input.ignored` or an ignore glob matches it (`ignored`; the globs through
+  `classifyPath` itself, with `ignoreDefaults: false`, so a glob matches as in
+  the review's file list, with core's minimatch) or `BrainCode.excluded` covers
+  it (`excluded`). Then a changed target is read from the changed files' parse.
+  Before any other read, a target is set aside when the head tree has no such
+  blob (`absent`), a partial clone lacks it (`missing`, `b:missing`, never
+  fetched: I-8), it is over the parser's cap (`large`, `b:over-cap`), no
+  grammar reads it (`unsupported`, `b:unsupported`), or the read cap is
+  reached (`cap`, `b:over-cap`). After a
+  read, a generated header sets it aside (`generated`); a timeout is `time`
+  (`b:over-cap`); a failed read is `error`. `ignored`, `excluded`, `generated`,
+  `absent`, `binary` and `error` are never named to the model. Target reads run
+  through a runner with its own incomplete set, so they never mark the slice
+  incomplete. Reads are `git show --no-textconv <head>:<path>` only.
+- **Builder fallbacks.** `a:unsupported` counts changed code files with no
+  grammar (not binary files, failed reads, other refusals or large files);
+  `a:over-cap` counts changed files over the parser's cap (`ChangedFiles.large`)
+  plus, from `packTiers`, scopes over 6,000 characters; `a:missing` counts
+  changed paths a partial clone lacks. A scope that only misses its share or
+  the 20-scope cap is recorded in `tiers.dropped.scope` and told to nobody: its
+  signature anchor still marks it. `packTiers` keeps an `a:` kind only when
+  tier a packs, a `b:` kind only when tier b does and `c:no-statement` only
+  when tier c does, so an arm never names a tier it left off.
+- **Deviation from the lane brief: the parameters are not in `EvidenceScope`.**
+  The brief says to record tier shares and top-k in `EvidenceScope`. Addendum A
+  §1 says "`EvidenceScope` keeps key-driven fields only" and puts eval-only
+  parameters in the artifact's variant record through a VS-21a follow-up
+  (`VariantEntry.params`, `VariantRecord.params`, `VARIANT_PARAMS.engine`, an
+  eval-only `RunInput` field), which has not landed. So they are a builder
+  argument, never parsed from config or env, recorded in `tiers.packing` (and so
+  in the artifact's `tier1` once VS-25b wiring fills it), and swept only in
+  offline projections until the follow-up lands. `EvidenceScope`,
+  `EVIDENCE_POLICY_KEYS`, `policyDigest` and `types.ts` are unchanged.
+- **Correction to the VS-25b entry** (append-only; past entries are not edited).
+  Its "Deferred" list put "VS-37: tiers a and b and call-site windows widened to
+  the enclosing statement" in the runner-wiring window or later. Addendum §4
+  puts VS-37's core and uncalled engine files in the Now window; this package
+  builds them, and only VS-37's wiring stays deferred.
+- **Scope of the engine half.** The brief allows "its uncalled engine side if
+  the addendum lists one"; addendum §4 lists the uncalled engine impact files.
+  Engine `review/parse.ts` is not named there, but it is runner-unreachable
+  (imported only by `review/impact.ts` and `script/vectorscope-parse-bench.ts`)
+  and its flag is the statement source tier c needs without a third reader, so
+  it sits in the Now window with the builder. As a subagent this package could
+  not ask the orchestrator first (critique item 16); a core-only split would
+  move the parse.ts and builder changes to a VS-37b with the core API unchanged.
+- **Interpretations.**
+  - Top-k counts dependent files, not call sites. Only an unset top-k keeps
+    every file; a set one that is negative or not a finite number is 0.
+  - Statement windows replace ±3 lines, at most 8 lines; a compound statement
+    (an `if`, a loop head, a `case`) gives its first line through the call's
+    line.
+  - VS-25b's signature anchors are kept and charged to tier a, also when tier a
+    is off (so "c-only" is anchors plus call sites, VS-25b's content, and no
+    `a:` or `b:` fallback note). Under the
+    default shares the anchors are capped at tier a's share.
+  - Shares are caps with carry-forward. The defaults are untuned: swept in
+    offline projections, frozen before the held-out split (I-13).
+  - `packSlice` stays the VS-25b arm. With tier c alone, whole shares and no
+    statements, `packTiers` packs exactly packSlice's blocks (tested), and its
+    `tiers.shown` gives their ranges; so the offline projection can measure
+    every arm, VS-25b's included, on `tiers.shown`, or derive the untiered arm's
+    ranges from its anchors and windows.
+  - The fallback note renders alone, as the incomplete note does: a change
+    Vector could not read still says so in one line (LCI18). With no fallback,
+    an empty change still renders nothing.
+  - Removed code gets no tier b (its uses no longer run).
+  - Defaults when the builder gets no view: no file inline, every diff shown
+    (the runner sends each file's diff unless it lists the file as not inlined);
+    recorded in `tiers.view` so arms stay comparable.
+  - Tier b covers names bound to an import; same-package Go and Java callees (no
+    import) and globals are not resolved.
+- **`outboundSpecifier`** (critique item 1). Stricter than `BrainCode.resolve`,
+  which falls through to a sibling attempt and a suffix match for any bare
+  specifier (`path`, `react`, `json` land on `src/path.ts`,
+  `src/react/index.ts`, `json.py`): a relative TypeScript, JavaScript or Python
+  specifier resolves through `resolve`; a bare TypeScript or JavaScript one only
+  through the workspace (`resolveWorkspace`); a Python, Go, Rust or Java module
+  path only when at least two of its segments match the target's path (one after
+  Rust's `crate::`, `self::`, `super::` or in a `mod` declaration); a target in
+  another language is dropped. Bound pairs that resolve to nothing are counted
+  in `tiers.external`. `selectDependents` keeps `resolve` as it is.
+- **Limitations.**
+  - Rust `impl` blocks give no header (the parser has no `impl` definition), and
+    Rust `if`/`match` in statement position sit inside an expression statement,
+    so a call in their head gets that statement clipped to 8 lines; Rust tail
+    expressions have no statement (`c:no-statement`).
+  - Statement types are a per-language allowlist (`STATEMENTS`), not inferred.
+  - A Go package import resolves to at most 8 of the folder's files
+    (`matchSuffix`), so a callee in a ninth file is missed.
+  - A Python `from pkg import f` with `f` defined in `pkg/__init__.py` gives
+    nothing: `pkg` is one bare segment, never resolved under the strict rule.
+  - Barrels are followed only for TypeScript and JavaScript index files and
+    Python `__init__.py` relative imports, up to two more read rounds, within
+    the 20-read cap.
+  - A qualifier is matched as the single name before `.`, `?.` or `::`.
+- **Critique points**: all 16 taken; three in another form or kept with reasons.
+  1. Strict resolution: taken (`outboundSpecifier`, `resolveWorkspace`, the
+     same-language filter, `tiers.external`); the fixture test has
+     `src/path.ts`, `src/react/index.ts`, `json.py`, `os/path.py`,
+     `fmt/print.go`, `serde.rs` and `java/List.java`.
+  2. Binding names to imports: taken (`importStatements`, qualifiers, renames,
+     the file's own definitions skipped), with tests for a local helper an
+     import also exports, a method on a local object, a member of a named
+     import, and `import * as ns` with `ns.fn()`.
+  3. Innermost scope with its container as header: taken; an edit in a private
+     method of an exported 200-line class packs the method under `container`.
+  4. Target filters: taken (`ignored`, ignore globs, `excluded`, generated
+     header), each as `reason:path`, never a model-visible fallback; the engine
+     test shows the ignored and excluded targets are never `git show`n.
+  5. Time box: taken in another form. Target reads run after confirmation, so
+     they cannot push gated files into `dropped.time`, and through a runner that
+     marks nothing incomplete. Comparing `dropped.time` between two timed runs
+     is not deterministic, so the sweep (0, 1, 20, 150 ms) asserts the
+     structural guarantee instead: whenever confirmation lost a file to the box,
+     no target was read (every unread target is `time:`).
+  6. Fallback kinds: taken (`large` exposed; `a:unsupported` for no-grammar code
+     files only; a share overflow is `tiers.dropped.scope` only; the over-cap
+     wording covers files and definitions).
+  7. The fallback note alone: taken; it renders alone (tested).
+  8. Type-only imports: taken, with a test over `prompt.ts` and
+     `model-evidence.ts`.
+  9. Resolution gaps: barrels followed (`reexportTargets`, read rounds),
+     Python's submodule expansion reused (same module), Go's 8 files listed.
+  10. Statements: taken in another form. A per-language allowlist of simple
+      statements and of compound ones (header through the call's line), read in
+      the depth walk instead of `node.parent` (the extractor never asks for a
+      parent); Rust tail expressions have none; the instruction now says "with
+      its statement or nearby lines".
+  11. The Git layer: taken; a thin wrapper around the real `Git.Service` records
+      commands (`recorded`), no behaviour mocked; `invariants()` adds
+      `tiers.dropped.rank` only when `tiers` is present.
+  12. View defaults: taken (inline none, every diff shown, `tiers.view`).
+  13. Recall units: taken (`tiers.shown`, and the c-only equivalence test).
+  14. The VS-25b entry: corrected above.
+  15. The graph digest: kept. `promptsDigest` must render every section a prompt
+      can have under a key, and under `graph` a runner may render either block;
+      which packing a run used belongs to the eval's variant parameters, not
+      this digest. It is harmless now: `impact` is in `UNAPPLIED_REVIEW_KEYS`,
+      `MODEL_EVIDENCE` is empty, and VS-25b wiring recomputes the graph digest
+      when it picks a packing.
+  16. Scope of `parse.ts`: recorded above.
+- **Digests.** `promptsDigest()` stays `5d59e9ee06077c23`;
+  `promptsDigest({ impact: "grep" })` equals it;
+  `policyDigest(DEFAULT_REVIEW_CONFIG)` stays `70512122f41ec160`;
+  `promptsDigest({ impact: "graph" })` moved from `fd944d83f8d705ad` to
+  `74a2111826c226b1` (pinned in the test); the pipeline pin moved as above;
+  revision 1.
+- **§0.3 items.**
+  1. Key: none (addendum §1: "No new key for VS-36 to VS-39").
+  2. Parity: no runner reads it; with `packing` unset the builder takes the
+     VS-25b path (no statements asked, no target read, packSlice), tested with
+     the recorded Git commands; the runner, replay and desktop suites pass
+     unchanged.
+  3. Evidence: no policy key; only the graph prompts digest moves; revision 1.
+  4. Variant: none; `engine:impact-graph` stays pending VS-25b wiring, and the
+     arms are computed offline from `tiers.shown`, `tiers.dropped` and `stages`.
+  5. Desktop: a documented difference, `variant.applied: false`, until the VS-25
+     desktop half or VS-10.
+  6. This entry.
+- **Owner questions: none decided.** Q13, Q15 and Q18 stay open, and so do Q9
+  (the funded ablation) and Q26.
+- **Deferred to the runner-wiring window or later.**
+  - Which packing VS-25b wiring uses under `graph`, and the runner's `inline`
+    and `diffShown` inputs (head files shown whole, files not inlined).
+    Precondition for that wiring, written into `BuildInput`: `files` must be
+    the set left after the secret holdback (VS-34) and the privacy rules, and
+    `diffShown` or `inline` never stand in for a refusal (a file with no diff
+    shown gets more of it in tier a, not less). `ignored` must carry
+    `classifyPath`'s whole rule (default ignores, `.gitattributes`), as it does
+    for `selectDependents`.
+  - The VS-21a params follow-up and its eval-only `RunInput` field.
+  - The Done-when projection: slice recall per context level needs the VS-22a
+    follow-up's context-level label.
+  - The kill-criteria arms (c, a+c, a+b+c; top-k 1, 3, 5) at equal packed
+    tokens, with p50 and p90 tokens used; the separate C, C++, C# and PHP
+    report; the Q9 funded ablation; the 2k to 8k budget sweep.
+  - VS-36 item 3's RRF in tier c's order (tier c uses `selectDependents`' graph
+    rank as it stands).
+  - Deferred verification: macOS and Windows git, model behaviour, and latency
+    on large repositories (the 50k-file band, VS-38).
+- **Timing** (a scratch script, not committed): `build` with and without
+  `packing: {}` over ten commits of this repository (`6356a8c0`, then `6e2f1d04`
+  back to `7cadfcb8`, each against its parent; 1 to 19 files; Bun 1.3.14, git
+  2.43.0, 4 vCPU, the default 4 s box). Untiered 82 to 3,932 ms, tiered 86 to
+  3,605 ms; per commit the tiered build took −327 to +148 ms against the
+  untiered one (the first untiered run also loads the grammars). No time-box hit
+  or `dropped.time` either way, no incomplete reason. Tiered: up to 8 scopes, 34
+  anchors, 10 outbound signatures, tier tokens up to 2,207 (a), 750 (b) and
+  2,984 (c), `external` up to 19, no unread target; fallbacks seen: `a:over-cap`
+  (a scope over 6,000 characters) and `c:no-statement`.
+- **Evidence.** Each file ran alone through the lock with `--timeout 30000`,
+  `GITHUB_ACTIONS=false` and TMPDIR and XDG roots under scratch:
+
+  | Package | File                                                                                                                                               | Tests                                              |
+  | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------- |
+  | core    | `test/review/impact.test.ts`                                                                                                                       | 59 (35 + 24 new)                                   |
+  | core    | `test/review/prompt.test.ts`                                                                                                                       | 36 (30 + 6 new)                                    |
+  | core    | `test/review/model-evidence.test.ts`                                                                                                               | 20 (one extended; the pin)                         |
+  | engine  | `test/review/parse.test.ts`                                                                                                                        | 59 (53 + 6 new; `STATEMENTS` frozen)               |
+  | engine  | `test/review/impact.test.ts`                                                                                                                       | 23 (16 + 7 new; real git, a blobless sparse clone) |
+  | core    | `test/review/config`, `trivial`, `symbols`, `plan`, `select`, `eval`, `pipeline`; `test/brain/code-workspace`, `code-index`, `migration-knowledge` | 45, 44, 5, 21, 43, 42, 2, 14, 8, 3 (unchanged)     |
+  | engine  | `test/review/eval`, `run`, `context`, `vectorscope-replay`; `test/cli/github.review`; `test/compliance/egress-inventory`, `node-bundle-guard`      | 28, 44, 6, 13, 40, 5, 3 (unchanged, I-1)           |
+  | app     | `src/features/pull-requests/ai-review.test.ts` (`--preload ./happydom.ts`)                                                                         | 107 (unchanged)                                    |
+  - `bun typecheck` passes in core, engine and app (tests included), and
+    `bun tsgo -p ../../script/vectorscope-eval/tsconfig.json` from
+    `packages/engine`.
+  - prettier passes on the new and changed lines (`brain/code.ts`, `prompt.ts`
+    and `prompt.test.ts` were not prettier-clean at HEAD, so their untouched
+    lines keep their formatting); oxlint reports no warning on any added line.
+  - **Mutation check.** 20 mutations, each applied alone, run against its test
+    file and restored byte for byte; all 20 caught: shares ignored; carry
+    dropped; inline not skipped; nested scope not covered; a scope overflow
+    closing tier a; the outer ancestor packed as the scope; tier b not
+    deduplicated against the diff; tier b's per-file cap removed; tier b names
+    not tied to an import; tier b qualifiers ignored; the statement not clipped
+    to 8 lines; ±3 lines despite a statement; top-k counted by sites; the
+    fallback reservation removed; the fallback note never rendered alone;
+    `packTiers` used with `packing` unset; statements asked for with `packing`
+    unset; a partial clone's missing target read; an ignored target read; a
+    compound statement read as simple.
+  - The full root typecheck was not run: nothing is pushed.
+  - Nothing was sent to a model, no paid run, no workflow dispatched, nothing
+    published, and no user-visible string changed (D14).
+
+- **Review findings, round one** (ten findings, three blocking; fixed before
+  any commit, so the text above already describes the fixed code).
+  1. Blocking: `tiers.dropped.targets` came in the order concurrent target
+     reads finished. Fixed in core: `packTiers` sorts `unread`, for any
+     caller. The determinism test passes `unread` and its reverse; the engine
+     test compares the list without sorting it first.
+  2. Blocking: Python `from x import (` with no `)` of its own ran to the next
+     `)` anywhere in the file (`pythonEnd` was unbounded, unlike the Rust
+     4,000-character bound), so `importsOf` and `outboundUses` worked over
+     whole-file bodies: 8.6 s for one 1 MB file, outside the time box. Fixed in
+     `brain/code.ts`: the `)` counts only within 4,000 characters
+     (`STATEMENT_CHARS`, shared with the Rust bound) and before the next line
+     that starts with `from` or `import`, else the statement is its line. A
+     core test checks the statement spans of a 1 MB file, a list closing past
+     the bound and one closing before it (spans, not wall time).
+  3. Blocking: tier a built an excerpt (re-splitting the file and re-running
+     `importsOf`) for every innermost changed definition before checking the
+     scope cap or the share, and `holder` scanned every changed definition for
+     each one: 4.1 s for 1,000 changed functions in 350 KB, 26.2 s for 3,000
+     in 1 MB, for 13 packed scopes. Fixed: each changed side is read once
+     (`input.source` memoised; one scope view per side holds its lines,
+     containers, references by line and the import lines each word is on);
+     the scope cap and the share are checked against the scope's frame, then
+     the frame plus its own lines, before any excerpt is built; `holder` is a
+     binary search over each side's innermost changed definitions with a
+     suffix minimum of their ends. The reviewer's scratch benches now take
+     32 ms (1,000 functions) and 59 ms (3,000), and the Python one 146 ms for
+     1 MB. A core test changes 3,000 functions and checks that the side is
+     read exactly as often as with 5 (once from `source`) and that the 2,980
+     past the cap fall back quietly. One ordering change: a definition over
+     6,000 characters only through its import lines, when tier a has no room
+     for its frame and own lines, is now a quiet share miss rather than
+     `a:over-cap`; one over the cap through its own lines still counts.
+  4. The 20-scope cap counted `a:over-cap` ("over the size limit") for every
+     definition past it. Fixed with item 3: the count cap is a quiet
+     `tiers.dropped.scope` entry, never a fallback; tested there.
+  5. A renamed import also matched the local alias against the target's
+     exports. Fixed: tier b looks a use up by `original ?? name` only, and
+     `{ default as x }` counts as a default import. Tested with targets that
+     also export the alias.
+  6. `readChanged` built every side's references for every caller. Fixed:
+     each side's are picked out on its first ask (`changedReferences`, cached
+     per side), so an untiered build and a `parseChanged` caller that never
+     asks do no extra work.
+  7. Builder fallbacks were counted whichever tiers were on, so the c-only arm
+     carried `a:unsupported`. Fixed in `packTiers`: an `a:` kind counts only
+     with tier a, `b:` with tier b, `c:` with tier c. Tested with tiers
+     `["c"]`, `["a", "c"]`, `["b"]` and all three.
+  8. Tier b's ignore check had its own `minimatch` call (engine pins 10.0.3,
+     core 10.2.5). Fixed: the globs go through `classifyPath` with
+     `ignoreDefaults: false`, and the engine file no longer imports
+     `minimatch`. Taken in part: the default ignores and `.gitattributes` stay
+     with the caller's `ignored` callback, as for `selectDependents`, because
+     the builder takes globs, not a `ReviewConfig`, and `ignoreDefaults` is a
+     config key wiring owns; `BuildInput` now says so. The binary-path check
+     comes with `classifyPath` but never fires (a target must be in the
+     changed file's language).
+  9. Holdback and privacy: taken as a written precondition (`BuildInput` doc
+     and the deferred list above), and the optional reorder taken: `ignored`
+     and `excluded` run before the changed-target shortcut, so an ignored
+     changed file is never read from the changed parse either. An engine test
+     shows an ignored changed target's unchanged export packed without the
+     rule and set aside with it.
+  10. A negative or non-finite top-k meant every dependent file. Fixed: a set
+      top-k is floored and clamped at 0, a non-finite one is 0, and only
+      `undefined` keeps every file (documented on `impactPacking`; tested).
+  - Pin: `REVIEW_PIPELINE_SOURCES` is `491223f3c097098f` (core and engine
+    `impact.ts` changed); `REVIEW_PIPELINE_REVISION` stays 1; `promptsDigest`
+    values are unchanged (no prompt text moved).
+  - Re-run after the fixes, each alone through the lock: core
+    `test/review/impact.test.ts` (59), `prompt.test.ts` (36),
+    `model-evidence.test.ts` (20), `ignore.test.ts` (13),
+    `test/brain/code-index.test.ts` (8), `code-workspace.test.ts` (14); engine
+    `test/review/impact.test.ts` (23). `bun typecheck` passes in core and
+    engine. No runner-reached file changed (`ignore.ts` is untouched, and the
+    `brain/code.ts` change is inside `importStatements`, which only VS-37a
+    calls), so the runner, replay and app suites were not re-run.
+  - Mutation check of the fixes: ten mutations, each applied alone and
+    restored byte for byte, all caught: `unread` left unsorted; `pythonEnd`
+    unbounded again; the local alias matched; fallbacks unfiltered by tier;
+    `a:over-cap` counted at the scope cap; `input.source` not memoised; the
+    scope view not memoised; `holder` never true; a negative top-k unset; the
+    changed-target shortcut before the ignore check.
+  - prettier is clean on core and engine `impact.ts` and both `impact.test.ts`
+    files, and on the changed lines of `brain/code.ts`; oxlint reports
+    nothing on a changed line.

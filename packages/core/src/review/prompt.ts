@@ -1,7 +1,8 @@
 // The prompts for the review, security, verify and finalize steps. Everything the pull request's author or its
 // commenters control is placed inside escaped <untrusted_*> tags, and the trusted instructions come last.
 
-import type { ImpactIncomplete, ImpactPrompt } from "./impact"
+// Types only: impact.ts reads paths through BrainCode (node:path), and the desktop renderer imports this file.
+import type { EnclosingScope, ImpactFallback, ImpactIncomplete, ImpactPrompt, OutboundSignature } from "./impact"
 import { REDACTED } from "./redact"
 import type { Category, Finding, FocusHunk, PriorFinding, Trust } from "./types"
 
@@ -115,6 +116,31 @@ export const IMPACT_CAPS = Object.freeze({ definitions: 40, sites: 60, windowCha
 // line break before it, to the slice's budget; ImpactSlice.tokens counts the block alone.
 export const IMPACT_INSTRUCTION =
   "`<untrusted_impact>` lists the definitions this change touches and call sites Vector found in files that import them or share their package, most connected first, with three lines either side. It is a starting point, not a limit: open the files to follow a call further."
+
+// VS-37a's second-line caps for a slice packed in tiers (impact.ts's packTiers): enclosing scopes, the characters of
+// one scope's excerpt, and outbound signatures. packTiers packs within them, as packSlice does within IMPACT_CAPS.
+export const IMPACT_TIER_CAPS = Object.freeze({ scopes: 20, scopeChars: 6_000, outbound: 10 })
+
+// The trusted sentence for a slice packed in tiers, in place of IMPACT_INSTRUCTION. packTiers charges it, with the line
+// break before it, to the slice's budget. Untuned: the wording may change before the held-out freeze (I-13).
+export const IMPACT_TIERS_INSTRUCTION =
+  "`<untrusted_impact>` holds context Vector computed for this change: each changed definition whole, with its container's signature and the imports its changed lines use, or its signature alone; the signatures of what the changed lines call in other files; and call sites in files that import the changed code or share its package, most connected first, each with its statement or nearby lines. It is a starting point, not a limit: open the files to follow a call further."
+
+// What each fallback kind tells the model (VS-37a's fallback note, addendum A VS-37), singular and plural. Written out
+// here rather than imported, so this file takes only types from impact.ts.
+const IMPACT_FALLBACKS: Record<ImpactFallback["kind"], readonly [string, string, string]> = {
+  "a:unsupported": ["changed file", "changed files", "in a language Vector does not parse: no enclosing scope"],
+  "a:over-cap": [
+    "changed file or definition",
+    "changed files or definitions",
+    "over the size limit: no enclosing scope",
+  ],
+  "a:missing": ["changed file", "changed files", "missing from a partial clone: no enclosing scope"],
+  "b:unsupported": ["dependency file", "dependency files", "in a language Vector does not parse: no signatures"],
+  "b:over-cap": ["dependency file", "dependency files", "over the size, file or time limit: no signatures"],
+  "b:missing": ["dependency file", "dependency files", "missing from a partial clone: no signatures"],
+  "c:no-statement": ["file", "files", "with call sites outside a known statement: three lines either side"],
+}
 
 const IMPACT_REASONS: Record<ImpactIncomplete, string> = {
   time: "its time limit",
@@ -344,7 +370,8 @@ function data(input: PromptInput, open: PriorFinding[], notInlined: NonNullable<
       "`<ci_checks>` holds this commit's CI results. A failing check is evidence: when the change causes it, report the defect behind it at the code that causes it. Do not report failures the change did not cause.",
     )
   const impact = impactBlock(input.impact)
-  if (impact) target.push(IMPACT_INSTRUCTION)
+  // A slice packed in tiers always carries `scopes`, even an empty list; a VS-25b slice never does.
+  if (impact) target.push(input.impact?.scopes !== undefined ? IMPACT_TIERS_INSTRUCTION : IMPACT_INSTRUCTION)
   if (notInlined.length)
     target.push(
       input.trust === "untrusted"
@@ -461,19 +488,58 @@ function data(input: PromptInput, open: PriorFinding[], notInlined: NonNullable<
 /**
  * VS-25b's <untrusted_impact> block: the slice's changed definitions and call sites, then the dependents that are
  * tests, then a note when the search was incomplete, or nothing when the slice has none of these (an empty slice is
- * valid and adds no padding).
+ * valid and adds no padding). A slice packed in tiers (VS-37a) also shows its enclosing scopes first and its outbound
+ * signatures after the changed definitions, and ends with a one-line note naming the tiers that fell back; that note
+ * renders alone too, as the incomplete note does, so a change Vector could not read still says so. A VS-25b slice has
+ * none of these fields and renders exactly as before.
  */
 export function impactBlock(slice: ImpactPrompt | undefined): string {
-  if (!slice || (!slice.changed.length && !slice.dependents.length && !slice.incomplete?.length)) return ""
+  if (
+    !slice ||
+    (!slice.changed.length &&
+      !slice.dependents.length &&
+      !slice.incomplete?.length &&
+      !slice.scopes?.length &&
+      !slice.outbound?.length &&
+      !slice.fallback?.length)
+  )
+    return ""
   const tests = slice.tests.slice(0, IMPACT_CAPS.tests)
   return [
     "<untrusted_impact>",
+    ...(slice.scopes ?? []).slice(0, IMPACT_TIER_CAPS.scopes).map(impactScope),
     ...slice.changed.slice(0, IMPACT_CAPS.definitions).map(impactDefinition),
+    ...(slice.outbound ?? []).slice(0, IMPACT_TIER_CAPS.outbound).map(impactOutbound),
     ...slice.dependents.slice(0, IMPACT_CAPS.sites).map(impactCallSite),
     ...(tests.length ? [wrapUntrusted("tests", tests.join("\n"))] : []),
     ...(slice.incomplete?.length ? [wrapUntrusted("impact_note", impactNote(slice.incomplete, slice.unsearched))] : []),
+    ...(slice.fallback?.length ? [wrapUntrusted("impact_fallback", impactFallbackNote(slice.fallback))] : []),
     "</untrusted_impact>",
   ].join("\n")
+}
+
+// Tier a (VS-37a): one changed definition whole, at its side, after the import lines its changed lines use, with the
+// signature of the class, interface, struct, trait, enum or module it sits in.
+export function impactScope(scope: EnclosingScope): string {
+  return wrapUntrusted("enclosing_scope", clip(scope.excerpt, IMPACT_TIER_CAPS.scopeChars), {
+    path: scope.path,
+    line: scope.start,
+    end_line: scope.end,
+    side: scope.side,
+    kind: scope.kind,
+    container: scope.header,
+  })
+}
+
+// Tier b (VS-37a): the signature of a definition in another file that a changed line uses, and where it is used.
+export function impactOutbound(item: OutboundSignature): string {
+  return wrapUntrusted("outbound_signature", item.signature, {
+    path: item.path,
+    line: item.start,
+    kind: item.kind,
+    symbol: item.name,
+    used_in: item.usedIn,
+  })
 }
 
 export function impactDefinition(definition: ImpactPrompt["changed"][number]): string {
@@ -503,6 +569,16 @@ function impactNote(incomplete: readonly ImpactIncomplete[], unsearched: number 
       : IMPACT_REASONS[reason],
   )
   return `Context considered: the impact search is incomplete (${reasons.join("; ")}). Look further yourself.`
+}
+
+// VS-37a's one-line fallback note (addendum A VS-37, LCI18): which tiers fell back and why, with counts, in the order
+// the slice lists them.
+function impactFallbackNote(fallback: readonly ImpactFallback[]): string {
+  const parts = fallback.map((item) => {
+    const [one, many, why] = IMPACT_FALLBACKS[item.kind]
+    return `${item.count} ${item.count === 1 ? one : many} ${why}`
+  })
+  return `Context fell back (${parts.join("; ")}). Open the files yourself.`
 }
 
 // Instructions from the base branch (CI) and the review rules. They are trusted, so they come after every

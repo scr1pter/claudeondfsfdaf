@@ -454,6 +454,76 @@ export function importLines(text: string, language: Language) {
 const GO_IMPORT_LINES = [/^import\s*\(([\s\S]*?)^\)/gm, /^import\s+(?:[\w.]+\s+)?"([^"]+)"/gm]
 const PYTHON_LIST = /^[ \t]*from\s+[.\w]+\s+import\s*\([^)]*\)/gm
 
+/**
+ * The import statements `imports` reads (VS-37a), each with the 1-based lines it spans (from its keyword, as
+ * importLines reads it), the line its specifier is on, and the specifier as written, so a name on an import line can
+ * be tied to the module it comes from. A Go block gives one statement per entry; a Python `from X import` statement
+ * runs to the end of its parenthesised list or its line, and a Rust `use` to its semicolon, each at most 4,000
+ * characters past its keyword. Sorted by start, then specifier; at most `LIMIT.imports`.
+ */
+export function importStatements(text: string, language: Language) {
+  const offsets = lineOffsets(text)
+  const statement = (start: number, specifierAt: number, end: number, specifier: string) => ({
+    start: lineAt(offsets, start),
+    end: lineAt(offsets, Math.max(start, end)),
+    line: lineAt(offsets, specifierAt),
+    specifier,
+  })
+  const found =
+    language === "go"
+      ? [
+          ...[...text.matchAll(GO_IMPORT_LINES[0])].flatMap((block) => {
+            const inner = (block.index ?? 0) + block[0].indexOf(block[1])
+            return [...block[1].matchAll(/"([^"]+)"/g)].map((entry) => {
+              const at = inner + (entry.index ?? 0)
+              return statement(at, at, at, entry[1])
+            })
+          }),
+          ...[...text.matchAll(GO_IMPORT_LINES[1])].map((single) => {
+            const at = single.index ?? 0
+            return statement(at, at + single[0].lastIndexOf(single[1]), at + single[0].length - 1, single[1])
+          }),
+        ]
+      : IMPORT_PATTERNS[language].flatMap((pattern) =>
+          [...text.matchAll(pattern)].flatMap((match) => {
+            const specifier = match[1]?.trim()
+            if (!specifier) return []
+            const at = match.index ?? 0
+            const close = at + match[0].length
+            const end =
+              language === "python" && /^[ \t]*from\s/.test(match[0])
+                ? pythonEnd(text, close)
+                : language === "rust" && /\buse\s/.test(match[0])
+                  ? semicolonEnd(text, close)
+                  : close - 1
+            return [statement(at + statementStart(match[0]), at + match[0].lastIndexOf(match[1]), end, specifier)]
+          }),
+        )
+  return [...new Map(found.map((item) => [`${item.start}\0${item.specifier}`, item] as const)).values()]
+    .toSorted((left, right) => left.start - right.start || compare(left.specifier, right.specifier))
+    .slice(0, LIMIT.imports)
+}
+
+// How far past its keyword a Python `from` list or a Rust `use` statement may run, in characters.
+const STATEMENT_CHARS = 4_000
+
+// Where a Python `from X import …` statement ends: its parenthesised list's ")" when one opens it and closes within
+// STATEMENT_CHARS characters, before any later line that starts another import; else its line. So a file of
+// `from x import (` lines with no ")" of their own never gives each statement the rest of the file.
+function pythonEnd(text: string, from: number) {
+  const open = text.slice(from, from + 200).match(/^[ \t]*\(/)
+  const close = open ? text.slice(from, from + STATEMENT_CHARS).match(/\)|\n[ \t]*(?:from|import)\s/) : null
+  if (close?.[0] === ")") return from + (close.index ?? 0)
+  const newline = text.indexOf("\n", from)
+  return newline < 0 ? text.length - 1 : newline - 1
+}
+
+// Where a Rust `use` statement ends: its semicolon, at most STATEMENT_CHARS characters on, else the end of its match.
+function semicolonEnd(text: string, from: number) {
+  const semicolon = text.slice(from, from + STATEMENT_CHARS).indexOf(";")
+  return semicolon < 0 ? from - 1 : from + semicolon
+}
+
 // Where a match's statement starts: at its last `import` or `export` keyword, else at its first character that is not
 // the delimiter its pattern allows before the keyword.
 function statementStart(match: string) {
@@ -1003,6 +1073,17 @@ function indexOf(workspace: Workspace) {
   }
   INDEXES.set(workspace, index)
   return index
+}
+
+/**
+ * The repository files a bare TypeScript, JavaScript or markup specifier names through the workspace alone (VS-37a):
+ * the tsconfig or jsconfig path aliases of the file's folder, then the workspace's package names and their `exports`,
+ * as `resolve` tries them, without its sibling attempt or its suffix match, so `react` or `path` never lands on a
+ * repository file that only shares the name.
+ */
+export function resolveWorkspace(file: string, specifier: string, files: Lookup, workspace: Workspace) {
+  const named = resolveAlias(file, specifier, files, workspace)
+  return named.length ? named : resolvePackage(specifier, files, workspace)
 }
 
 // TypeScript's rule: the aliases of the nearest tsconfig around the file; an exact pattern, else the "*" pattern with the

@@ -202,10 +202,25 @@ describe("scope", () => {
       "<untrusted_tests>",
       "<untrusted_impact_note>",
       "its time limit; 1 file not searched, missing from a partial clone; git output over its limit; a git error",
+      // VS-37a's slice packed in tiers, with every part its block can show.
+      "`<untrusted_impact>` holds context Vector computed for this change",
+      '<untrusted_enclosing_scope path="src/example.ts" line="4" end_line="6" side="RIGHT" kind="method" container="export class Example">',
+      "⋯",
+      'side="LEFT" kind="function">',
+      "<untrusted_outbound_signature ",
+      'used_in="src/example.ts:5"',
+      "<untrusted_impact_fallback>",
+      "1 changed file in a language Vector does not parse: no enclosing scope; 2 changed files or definitions over the size limit: no enclosing scope; 1 changed file missing from a partial clone: no enclosing scope; 1 dependency file in a language Vector does not parse: no signatures; 2 dependency files over the size, file or time limit: no signatures; 1 dependency file missing from a partial clone: no signatures; 2 files with call sites outside a known statement: three lines either side",
     ])
       expect(text).toContain(section)
-    // Both trusts, the review and security prompts.
-    expect(graph.length - canonicalPrompts().length).toBe(4)
+    // Both trusts, the review and security prompts, for VS-25b's slice and then VS-37a's.
+    expect(graph.length - canonicalPrompts().length).toBe(8)
+    expect(graph.slice(canonicalPrompts().length, canonicalPrompts().length + 4).join("\n")).not.toContain(
+      "untrusted_enclosing_scope",
+    )
+    // The default digest holds; the graph digest moved from fd944d83f8d705ad when VS-37a's prompts joined it.
+    expect(promptsDigest()).toBe("5d59e9ee06077c23")
+    expect(promptsDigest({ impact: "graph" })).toBe("74a2111826c226b1")
   })
 
   // The runners and the core code they share have no digest a review can compute, so this pins one: a change to any of

@@ -47,7 +47,7 @@ export const REVIEW_PIPELINE_REVISION = 1
 // A digest of the pipeline's sources (REVIEW_PIPELINE_FILES in core test/review/model-evidence.test.ts), which that
 // test pins, so CI fails when one of them changes and nobody decided whether REVIEW_PIPELINE_REVISION goes up. When it
 // fails: bump the revision if the change alters what a review finds or posts, then set this to the digest it prints.
-export const REVIEW_PIPELINE_SOURCES = "5e30549464914097"
+export const REVIEW_PIPELINE_SOURCES = "491223f3c097098f"
 
 // The longest a certificate may run from its approval. The plan asks for an expiry and sets none; a hosted model can
 // change underneath its id, so the evidence is re-earned on this cadence.
@@ -258,6 +258,81 @@ const CANONICAL_IMPACT: ImpactPrompt = {
   unsearched: 1,
 }
 
+// VS-37a's slice packed in tiers, with every part its block can show: a scope with a container header and an import
+// line before a gap, a LEFT scope, a signature anchor, an outbound signature, a call site with a statement window, a
+// test, the incomplete note with every reason, and the fallback note with every kind. Written out literally, so this
+// file takes only types from impact.ts.
+const CANONICAL_IMPACT_TIERS: ImpactPrompt = {
+  scopes: [
+    {
+      path: "src/example.ts",
+      side: "RIGHT",
+      name: "load",
+      kind: "method",
+      start: 4,
+      end: 6,
+      header: "export class Example",
+      excerpt: '1: import { helper } from "./helper"\n⋯\n4:   load() {\n5:     return helper()\n6:   }',
+    },
+    {
+      path: "src/old.ts",
+      side: "LEFT",
+      name: "gone",
+      kind: "function",
+      start: 1,
+      end: 2,
+      excerpt: "1: function gone() {\n2: }",
+    },
+  ],
+  changed: [
+    {
+      path: "src/example.ts",
+      side: "RIGHT",
+      name: "example",
+      kind: "function",
+      start: 10,
+      end: 12,
+      exported: true,
+      signature: "export function example()",
+    },
+  ],
+  outbound: [
+    {
+      path: "src/helper.ts",
+      name: "helper",
+      kind: "function",
+      start: 1,
+      end: 3,
+      signature: "export function helper(): number",
+      usedIn: "src/example.ts:5",
+    },
+  ],
+  dependents: [
+    {
+      path: "src/caller.ts",
+      line: 3,
+      name: "example",
+      enclosing: "caller",
+      importsChanged: true,
+      rank: 1,
+      statement: { start: 2, end: 4 },
+      window: "2: const value = example(\n3:   1,\n4: )",
+    },
+  ],
+  tests: ["src/example.test.ts"],
+  incomplete: ["time", "partial-clone", "output", "error"],
+  unsearched: 1,
+  fallback: [
+    { kind: "a:unsupported", count: 1 },
+    { kind: "a:over-cap", count: 2 },
+    { kind: "a:missing", count: 1 },
+    { kind: "b:unsupported", count: 1 },
+    { kind: "b:over-cap", count: 2 },
+    { kind: "b:missing", count: 1 },
+    { kind: "c:no-statement", count: 2 },
+  ],
+}
+
 const POPULATED_VERIFY: Omit<VerifyPromptInput, "trust"> = {
   head: CANONICAL_INPUT.head,
   uncommitted: true,
@@ -270,14 +345,17 @@ const POPULATED_VERIFY: Omit<VerifyPromptInput, "trust"> = {
 // prompts bare and with every input set (full and incremental, with and without nits, a commit and uncommitted
 // changes), the verify prompt bare and with every input set, the finalizer and the owner's memory block. A section a key
 // enables is rendered only under that key (contract §0.3): under `impact: "graph"`, the review and security prompts
-// with every input set and VS-25b's slice are added, so the default digest stays as it was.
+// with every input set and VS-25b's slice are added, and then the same with VS-37a's slice packed in tiers, so the
+// default digest stays as it was. Which packing a run used is the eval's variant parameters, not this digest.
 export function canonicalPrompts(keys: Partial<Pick<ReviewConfig, "impact">> = {}): string[] {
   const impact =
     keys.impact === "graph"
-      ? (["trusted", "untrusted"] as const).flatMap((trust) => {
-          const input: PromptInput = { ...POPULATED_INPUT, trust, impact: CANONICAL_IMPACT }
-          return [buildReviewPrompt(input), buildSecurityPrompt(input)]
-        })
+      ? [CANONICAL_IMPACT, CANONICAL_IMPACT_TIERS].flatMap((slice) =>
+          (["trusted", "untrusted"] as const).flatMap((trust) => {
+            const input: PromptInput = { ...POPULATED_INPUT, trust, impact: slice }
+            return [buildReviewPrompt(input), buildSecurityPrompt(input)]
+          }),
+        )
       : []
   return [
     ...(["trusted", "untrusted"] as const).flatMap((trust) => {

@@ -9,27 +9,43 @@
 // fetching, what a partial clone lacks, which it then leaves out of every read, so nothing is ever fetched, whatever
 // git's version. A caller of `parseChanged` that passes `missing` takes that check on itself. `build` never fails: an
 // error becomes an empty or incomplete slice, and the slice never touches what a review counts as reviewed.
+//
+// VS-37a: given eval-only `packing` parameters, `build` packs the slice in three tiers (core packTiers): it asks the
+// confirmation parse for statements and, after confirmation, reads the files the changed lines' imports name, so
+// tier b's reads never take time from confirmation and never mark the slice incomplete. Without `packing` it builds
+// VS-25b's slice exactly as before. Nothing passes `packing` yet: the eval's variant parameters (addendum A §1) and
+// VS-25b wiring decide that.
 
 import { Effect, Option, Stream } from "effect"
 import { Git } from "@/git"
 import { BrainCode } from "@vectordevai/core/brain/code"
 import type { DiffFile } from "@vectordevai/core/review/diff"
+import { classifyPath, hasGeneratedHeader } from "@vectordevai/core/review/ignore"
 import {
   IMPACT_INCOMPLETE,
   IMPACT_LIMITS,
+  IMPACT_TIERS,
   barrels,
   changedDefinitions,
   changedPaths,
   impactNames,
+  impactPacking,
   impactTokens,
   movedNames,
+  outboundUses,
   packSlice,
+  packTiers,
+  reexportTargets,
   selectDependents,
   wordHits,
   type Definition,
+  type ImpactFallback,
   type ImpactIncomplete,
+  type ImpactPackingInput,
   type ImpactSlice,
   type Reference,
+  type SourceReference,
+  type TierSource,
 } from "@vectordevai/core/review/impact"
 import { changedSymbols } from "@vectordevai/core/review/symbols"
 import type { CommentRange, SourceRange } from "@vectordevai/core/review/trivial"
@@ -43,6 +59,8 @@ const MANIFEST_BYTES = 8 * 1024 * 1024
 const TREE_BYTES = 64 * 1024 * 1024
 const READ_CONCURRENCY = 4
 const CHUNK_CONCURRENCY = 2
+// Tier b's target reads run after confirmation, so at most this many git processes run while they do.
+const TARGET_CONCURRENCY = 2
 // A backstop on git versions that honour it: no command may fetch a missing object.
 const ENV = { GIT_NO_LAZY_FETCH: "1" }
 const MANIFESTS = [
@@ -75,8 +93,11 @@ export interface ChangedFiles {
   definitions: (path: string, side: Side) => readonly Definition[] | undefined
   comments: (path: string, side: Side) => readonly CommentRange[] | undefined
   strings: (path: string, side: Side) => readonly SourceRange[] | undefined
+  // VS-37a: the parser's references on the changed lines of each side (added lines for RIGHT, removed for LEFT).
+  references?: (path: string, side: Side) => readonly SourceReference[] | undefined
   unsupported: string[] // paths the parser did not read
   missing: string[] // "path" (head) or "base:path" a partial clone does not have, never read
+  large?: string[] // VS-37a: "path" or "base:path" over the parser's cap, never parsed
   parseMs: number
 }
 
@@ -90,6 +111,15 @@ export interface BuildInput {
   context: number // the review model's context window, in tokens
   budgetMs?: number // the time box, IMPACT_LIMITS.timeBoxMs by default
   changed?: ChangedFiles
+  // VS-37a, eval-only (never parsed from config or env): pack in three tiers with these parameters. Unset builds
+  // VS-25b's slice, unchanged. Tier a sends changed definitions whole and tier b signatures from files outside the
+  // diff, so a tiered build needs `files` to be the set already left after the secret holdback (VS-34) and the
+  // privacy rules: a file the prompt must not carry is left out of `files`, never passed with `diffShown` false or
+  // `inline` false, which only say how much of it the prompt already shows (a file with no diff shown gets more of
+  // it in tier a, not less). `ignored` is where classifyPath's whole rule goes, as selectDependents takes it.
+  packing?: ImpactPackingInput
+  inline?: (path: string) => boolean // a changed file the prompt shows whole; by default none
+  diffShown?: (path: string) => boolean // a changed file whose diff the prompt carries; by default every one
 }
 
 type Confirmed =
@@ -157,13 +187,31 @@ export const build = Effect.fn("ReviewImpact.build")(function* (input: BuildInpu
   const timing = { grepMs: 0, parseMs: 0 }
   const run = runner(git, input.directory, deadline, incomplete)
   const scan = { gitVersion: "", clone: { partial: false, sparse: false }, unsearched: 0 }
+  const tiered = input.packing ? impactPacking(input.packing) : undefined
   // The tokens are counted here, from the block as rendered with its note, once `incomplete` and `unsearched` are known.
+  // A tiered slice that stopped before packing still carries its (empty) tiers, so it reads as tiered.
   const finish = (
     slice: Partial<ImpactSlice>,
     changed: ChangedFiles,
   ): { slice: ImpactSlice; changed: ChangedFiles } => {
     const done = {
       ...emptySlice(),
+      ...(tiered && slice.scopes === undefined
+        ? tiersOf(
+            packTiers({
+              files: input.files,
+              changed: [],
+              source: () => undefined,
+              references: [],
+              ranks: new Map(),
+              text: () => undefined,
+              context: input.context,
+              fallback: changedFallback(input.files, changed),
+              packing: tiered,
+              ...views(input),
+            }),
+          )
+        : {}),
       ...slice,
       plan: "tree-ish" as const,
       gitVersion: scan.gitVersion,
@@ -178,6 +226,30 @@ export const build = Effect.fn("ReviewImpact.build")(function* (input: BuildInpu
   }
   const given = input.changed ?? noFiles()
   const packOnly = (changed: ChangedFiles) => {
+    if (tiered) {
+      const packed = packTiers({
+        files: input.files,
+        changed: changedDefinitions(input.files, changed.definitions),
+        source: tierSource(changed),
+        references: [],
+        ranks: new Map(),
+        text: () => undefined,
+        context: input.context,
+        fallback: changedFallback(input.files, changed),
+        packing: tiered,
+        ...views(input),
+      })
+      return finish(
+        {
+          changed: packed.changed,
+          locations: packed.locations,
+          unsupported: changed.unsupported.toSorted(),
+          dropped: { ...emptySlice().dropped, definitions: packed.definitions },
+          ...tiersOf(packed),
+        },
+        changed,
+      )
+    }
     const packed = packSlice({
       changed: changedDefinitions(input.files, changed.definitions),
       references: [],
@@ -390,12 +462,21 @@ export const build = Effect.fn("ReviewImpact.build")(function* (input: BuildInpu
           ...(enclosing ? { enclosing } : {}),
           importsChanged: entry.importsChanged,
         })
-        const parsed = yield* ReviewParse.parse({ path: entry.path, text, names: wanted, deadline })
+        const parsed = yield* ReviewParse.parse({
+          path: entry.path,
+          text,
+          names: wanted,
+          deadline,
+          ...(tiered ? { statements: true } : {}),
+        })
         if (parsed.parsed) {
           timing.parseMs += parsed.parseMs + parsed.extractMs
           const references = parsed.references
             .filter((item) => item.kind !== "import" && wanted.has(item.name))
-            .map((item) => reference(item.line, item.name, item.enclosing))
+            .map((item) => ({
+              ...reference(item.line, item.name, item.enclosing),
+              ...(item.statement ? { statement: item.statement } : {}),
+            }))
           return { kind: "read", path: entry.path, text, references, parsed: true } satisfies Confirmed
         }
         if (parsed.because === "timeout" && performance.now() >= deadline) return left("time")
@@ -413,7 +494,68 @@ export const build = Effect.fn("ReviewImpact.build")(function* (input: BuildInpu
   if (confirmed.some((item) => item.kind === "error")) incomplete.add("error")
   const texts = new Map(confirmed.flatMap((item) => (item.kind === "read" ? [[item.path, item.text] as const] : [])))
 
-  // 8. Pack.
+  // 8. Tiered only (VS-37a): tier b's targets, read after confirmation, inside what is left of the box.
+  if (tiered) {
+    const outbound = tiered.tiers.includes("b")
+      ? yield* readTargets(runner(git, input.directory, deadline, new Set()), {
+          head: input.head,
+          files: input.files,
+          changed,
+          lookup,
+          workspace,
+          blobs,
+          own,
+          unread,
+          ignore: input.ignore ?? [],
+          ignored: input.ignored,
+          deadline,
+        })
+      : undefined
+    const packed = packTiers({
+      files: input.files,
+      changed: definitions,
+      source: tierSource(changed),
+      ...(outbound ? { outbound } : {}),
+      references: confirmed.flatMap((item) => (item.kind === "read" ? item.references : [])),
+      ranks: new Map(selection.confirm.map((entry) => [entry.path, entry.rank])),
+      text: (file) => texts.get(file),
+      context: input.context,
+      tests: selection.tests,
+      fallback: [...changedFallback(input.files, changed), ...(outbound?.fallback ?? [])],
+      unread: outbound?.unread ?? [],
+      external: outbound?.external ?? 0,
+      packing: tiered,
+      ...views(input),
+    })
+    return finish(
+      {
+        changed: packed.changed,
+        dependents: packed.dependents,
+        tests: selection.tests,
+        unsupported: unsupportedOf(changed, confirmed),
+        locations: packed.locations,
+        stages: {
+          candidates: candidates.length,
+          gated: selection.confirm.length + selection.cap.length,
+          confirmed: packed.confirmed,
+          packed: packed.dependents.length,
+        },
+        dropped: {
+          ignored: selection.ignored,
+          unchecked: selection.unchecked,
+          gate: selection.gate,
+          cap: selection.cap,
+          time,
+          budget: packed.budget,
+          definitions: packed.definitions,
+        },
+        ...tiersOf(packed),
+      },
+      changed,
+    )
+  }
+
+  // 9. Pack.
   const packed = packSlice({
     changed: definitions,
     references: confirmed.flatMap((item) => (item.kind === "read" ? item.references : [])),
@@ -427,14 +569,7 @@ export const build = Effect.fn("ReviewImpact.build")(function* (input: BuildInpu
       changed: packed.changed,
       dependents: packed.dependents,
       tests: selection.tests,
-      unsupported: [
-        ...new Set([
-          ...changed.unsupported,
-          ...confirmed.flatMap((item) =>
-            item.kind === "unsupported" || (item.kind === "read" && !item.parsed) ? [item.path] : [],
-          ),
-        ]),
-      ].toSorted(),
+      unsupported: unsupportedOf(changed, confirmed),
       locations: packed.locations,
       stages: {
         candidates: candidates.length,
@@ -545,25 +680,15 @@ const readChanged = Effect.fnUntraced(function* (
         ? [
             [
               key(item.path, item.side),
-              parsed.definitions.map(
-                (definition): Definition => ({
-                  path: item.path,
-                  side: item.side,
-                  name: definition.name,
-                  kind: definition.kind,
-                  start: definition.start,
-                  end: definition.end,
-                  exported: definition.exported,
-                  signature: definition.signature,
-                  ...(definition.container ? { container: definition.container } : {}),
-                  ...(definition.aliases ? { aliases: definition.aliases } : {}),
-                }),
-              ),
+              parsed.definitions.map((definition) => definitionOf(item.path, item.side, definition)),
             ] as const,
           ]
         : []
     }),
   )
+  // Only tiers a and b read the references on the changed lines, so each side's are picked out on its first ask: a
+  // build without tiers, or a parseChanged caller that never asks, does no more than before.
+  const references = new Map<string, readonly SourceReference[] | undefined>()
   return {
     text: (path, side) => {
       const item = byKey.get(key(path, side))
@@ -572,6 +697,11 @@ const readChanged = Effect.fnUntraced(function* (
     definitions: (path, side) => definitions.get(key(path, side)),
     comments: (path, side) => parsedOf(path, side)?.comments,
     strings: (path, side) => parsedOf(path, side)?.strings,
+    references: (path, side) => {
+      const at = key(path, side)
+      if (!references.has(at)) references.set(at, changedReferences(input.files, parsedOf(path, side), path, side))
+      return references.get(at)
+    },
     unsupported: [
       ...new Set(
         read.filter((item) => !("missing" in item) && !parsedOf(item.path, item.side)).map((item) => item.path),
@@ -579,6 +709,10 @@ const readChanged = Effect.fnUntraced(function* (
     ].toSorted(),
     missing: read
       .filter((item) => "missing" in item)
+      .map((item) => (item.side === "RIGHT" ? item.path : `base:${item.path}`))
+      .toSorted(),
+    large: read
+      .filter((item) => "large" in item)
       .map((item) => (item.side === "RIGHT" ? item.path : `base:${item.path}`))
       .toSorted(),
     parseMs: read.reduce((sum, item) => {
@@ -872,6 +1006,240 @@ function moduleNames(
   )
 }
 
+// A parsed definition as the slice holds it, at its side's path.
+function definitionOf(path: string, side: Side, definition: ReviewParse.ParsedDefinition): Definition {
+  return {
+    path,
+    side,
+    name: definition.name,
+    kind: definition.kind,
+    start: definition.start,
+    end: definition.end,
+    exported: definition.exported,
+    signature: definition.signature,
+    ...(definition.container ? { container: definition.container } : {}),
+    ...(definition.aliases ? { aliases: definition.aliases } : {}),
+  }
+}
+
+// What a slice records about the files it could not read: the changed files and the confirm-stage files the parser
+// did not read, unique and sorted.
+function unsupportedOf(changed: ChangedFiles, confirmed: readonly Confirmed[]) {
+  return [
+    ...new Set([
+      ...changed.unsupported,
+      ...confirmed.flatMap((item) =>
+        item.kind === "unsupported" || (item.kind === "read" && !item.parsed) ? [item.path] : [],
+      ),
+    ]),
+  ].toSorted()
+}
+
+// The parser's references on one side's changed lines: added lines for RIGHT, removed lines for LEFT (the old path).
+function changedReferences(
+  files: readonly DiffFile[],
+  parsed: { references: readonly ReviewParse.ParsedReference[] } | undefined,
+  path: string,
+  side: Side,
+): SourceReference[] | undefined {
+  const file = files.findLast((item) => (side === "RIGHT" ? item.path : (item.oldPath ?? item.path)) === path)
+  if (!parsed || !file) return undefined
+  const lines = new Set(
+    file.hunks
+      .flatMap((hunk) => hunk.lines)
+      .flatMap((line) =>
+        side === "RIGHT"
+          ? line.kind === "add" && line.newLine
+            ? [line.newLine]
+            : []
+          : line.kind === "del" && line.oldLine
+            ? [line.oldLine]
+            : [],
+      ),
+  )
+  return parsed.references
+    .filter((reference) => lines.has(reference.line))
+    .map((reference) => ({
+      name: reference.name,
+      line: reference.line,
+      column: reference.column,
+      kind: reference.kind,
+    }))
+}
+
+// One side of a changed file as tiers a and b read it, from the changed files' parse.
+function tierSource(changed: ChangedFiles) {
+  return (path: string, side: Side): TierSource | undefined => {
+    const text = changed.text(path, side)
+    const definitions = changed.definitions(path, side)
+    if (text === undefined || !definitions) return undefined
+    return { text, definitions, references: changed.references?.(path, side) ?? [] }
+  }
+}
+
+// Tier a's fallbacks, counted by changed path: a code file with no grammar ("a:unsupported"; a binary file, a failed
+// read or another refusal is not one), a file over the parser's cap ("a:over-cap") and a file a partial clone lacks
+// ("a:missing").
+function changedFallback(files: readonly DiffFile[], changed: ChangedFiles): ImpactFallback[] {
+  const bare = (entry: string) => (entry.startsWith("base:") ? entry.slice("base:".length) : entry)
+  const large = new Set((changed.large ?? []).map(bare))
+  const paths = new Set(files.filter((file) => !file.binary).flatMap((file) => [file.path, file.oldPath ?? file.path]))
+  const unsupported = new Set(
+    changed.unsupported.filter(
+      (file) => paths.has(file) && !large.has(file) && importable(file) && !ReviewParse.languageOf(file),
+    ),
+  )
+  const counted: [ImpactFallback["kind"], number][] = [
+    ["a:unsupported", unsupported.size],
+    ["a:over-cap", large.size],
+    ["a:missing", new Set(changed.missing.map(bare)).size],
+  ]
+  return counted.flatMap(([kind, count]) => (count ? [{ kind, count }] : []))
+}
+
+// What the prompt shows of the changed files, for tier a: by default no file whole and every file's diff.
+function views(input: Pick<BuildInput, "inline" | "diffShown">) {
+  return {
+    ...(input.inline ? { inline: input.inline } : {}),
+    ...(input.diffShown ? { diffShown: input.diffShown } : {}),
+  }
+}
+
+// The fields only a slice packed in tiers carries.
+function tiersOf(packed: ReturnType<typeof packTiers>): Partial<ImpactSlice> {
+  return { scopes: packed.scopes, outbound: packed.outbound, fallback: packed.fallback, tiers: packed.tiers }
+}
+
+/**
+ * Tier b's targets (VS-37a): the files the changed lines' imports name (core outboundUses), read from the head
+ * tree-ish after confirmation, at most IMPACT_TIERS.targets of them, TARGET_CONCURRENCY at a time, with what their
+ * barrels re-export followed for up to IMPACT_LIMITS.reexportDepth more rounds. First the ignore rules (`ignored`, and
+ * the ignore globs through classifyPath) and BrainCode.excluded set a target aside, changed or not; then a changed
+ * target is read from the changed files' parse. Before any other read, a target is set aside when the tree has no
+ * such blob, a partial clone lacks it ("b:missing", never fetched), it is over the parser's cap ("b:over-cap") or no
+ * grammar reads it ("b:unsupported"); past the read cap it is "b:over-cap" too. After a read, a generated header sets
+ * it aside, and a timeout counts as "b:over-cap". Set-aside targets go to tiers.dropped.targets as "reason:path", which
+ * packTiers sorts (the reads finish in any order); ignored, excluded and generated ones are never named to the model.
+ * `run` marks nothing incomplete.
+ */
+const readTargets = Effect.fnUntraced(function* (
+  run: Run,
+  input: {
+    head: string
+    files: readonly DiffFile[]
+    changed: ChangedFiles
+    lookup: BrainCode.Lookup
+    workspace?: BrainCode.Workspace
+    blobs: ReadonlyMap<string, { size?: number }>
+    own: ReadonlySet<string>
+    unread: ReadonlySet<string>
+    ignore: readonly string[]
+    ignored?: (path: string) => boolean
+    deadline: number
+  },
+) {
+  const found = outboundUses({
+    files: input.files,
+    source: tierSource(input.changed),
+    lookup: input.lookup,
+    workspace: input.workspace,
+  })
+  const definitions = new Map<string, readonly Definition[]>()
+  const reexports = new Map<string, string[]>()
+  const unread: string[] = []
+  const fell = { "b:unsupported": new Set<string>(), "b:over-cap": new Set<string>(), "b:missing": new Set<string>() }
+  const seen = new Set<string>()
+  const reads = { count: 0 }
+  const leave = (reason: string, target: string, kind?: keyof typeof fell) => {
+    unread.push(`${reason}:${target}`)
+    if (kind) fell[kind].add(target)
+    return "skip" as const
+  }
+  // The ignore globs go through classifyPath, the classifier's own matcher, so a glob means the same here as in the
+  // review's file list; the default ignores and .gitattributes come through `ignored`, as the caller's config has them.
+  const config = { ignore: [...input.ignore], ignoreDefaults: false }
+  const ignored = (target: string) => input.ignored?.(target) === true || classifyPath(target, { config }) !== undefined
+  // Synchronous, in order, so the read cap takes the first targets the uses name. Ignored and excluded files go first,
+  // so a changed one is never read from the changed files' parse either.
+  const plan = (target: string) => {
+    if (ignored(target)) return leave("ignored", target)
+    if (BrainCode.excluded(target)) return leave("excluded", target)
+    if (input.own.has(target)) return "changed" as const
+    const size = input.blobs.get(target)?.size
+    if (!input.blobs.has(target)) return leave("absent", target)
+    if (input.unread.has(target)) return leave("missing", target, "b:missing")
+    if (size !== undefined && size > ReviewParse.PARSE_LIMITS.inputBytes) return leave("large", target, "b:over-cap")
+    if (!ReviewParse.languageOf(target)) return leave("unsupported", target, "b:unsupported")
+    if (reads.count >= IMPACT_TIERS.targets) return leave("cap", target, "b:over-cap")
+    reads.count++
+    return "read" as const
+  }
+  const read = (target: string) =>
+    Effect.gen(function* () {
+      if (performance.now() >= input.deadline) return leave("time", target, "b:over-cap")
+      const shown = yield* run(["show", "--no-textconv", `${input.head}:${target}`], {
+        maxOutputBytes: ReviewParse.PARSE_LIMITS.inputBytes + 1,
+      })
+      if (!shown) return leave("time", target, "b:over-cap")
+      if (shown.exitCode !== 0) return leave("error", target)
+      if (shown.truncated) return leave("large", target, "b:over-cap")
+      if (shown.stdout.includes(0)) return leave("binary", target)
+      const text = shown.text()
+      if (hasGeneratedHeader(text)) return leave("generated", target)
+      const parsed = yield* ReviewParse.parse({ path: target, text, names: new Set(), deadline: input.deadline })
+      if (!parsed.parsed)
+        return parsed.because === "timeout"
+          ? leave("time", target, "b:over-cap")
+          : leave("unsupported", target, "b:unsupported")
+      definitions.set(
+        target,
+        parsed.definitions.map((definition) => definitionOf(target, "RIGHT", definition)),
+      )
+      reexports.set(target, reexportTargets({ path: target, text, lookup: input.lookup, workspace: input.workspace }))
+      return "read" as const
+    })
+  const round = (targets: readonly string[], depth: number): Effect.Effect<void> =>
+    Effect.gen(function* () {
+      const fresh = [...new Set(targets)].filter((target) => !seen.has(target))
+      fresh.forEach((target) => seen.add(target))
+      const planned = fresh.map((target) => ({ target, plan: plan(target) }))
+      planned
+        .filter((item) => item.plan === "changed")
+        .forEach((item) => {
+          const own = input.changed.definitions(item.target, "RIGHT")
+          const text = input.changed.text(item.target, "RIGHT")
+          if (own) definitions.set(item.target, own)
+          if (text !== undefined)
+            reexports.set(
+              item.target,
+              reexportTargets({ path: item.target, text, lookup: input.lookup, workspace: input.workspace }),
+            )
+        })
+      yield* Effect.forEach(
+        planned.filter((item) => item.plan === "read").map((item) => item.target),
+        read,
+        { concurrency: TARGET_CONCURRENCY, discard: true },
+      )
+      const next = fresh.flatMap((target) => reexports.get(target) ?? [])
+      if (depth < IMPACT_LIMITS.reexportDepth && next.length) yield* round(next, depth + 1)
+    })
+  yield* round(
+    found.uses.flatMap((use) => use.targets),
+    0,
+  )
+  const fallback: ImpactFallback[] = (["b:unsupported", "b:over-cap", "b:missing"] as const).flatMap((kind) =>
+    fell[kind].size ? [{ kind, count: fell[kind].size }] : [],
+  )
+  return {
+    uses: found.uses,
+    definitionsOf: (target: string) => definitions.get(target),
+    reexports: (target: string) => reexports.get(target),
+    unread,
+    external: found.external,
+    fallback,
+  }
+})
+
 function importable(file: string) {
   const language = BrainCode.language(file)
   return language !== undefined && language !== "text"
@@ -887,8 +1255,10 @@ function noFiles(): ChangedFiles {
     definitions: () => undefined,
     comments: () => undefined,
     strings: () => undefined,
+    references: () => undefined,
     unsupported: [],
     missing: [],
+    large: [],
     parseMs: 0,
   }
 }
