@@ -419,6 +419,21 @@ bun script/vectorscope-eval/dataset.ts --mirrors <dir>    # clones at <dir>/<own
   carry failure classes, mechanisms and cross-file labels from their case
   files; `runnable` and `authoring` are not yet examined. The dry run counts
   every label and the unlabelled ones, and reports VS-22b's targets.
+- Schema version 3 (VS-22c, addendum A's VS-22a follow-up) adds, each absent
+  until labelled: on a defect, `contextLevel` (hunk, file or repo: the context
+  a reviewer needs), `scope` (ReviewBench's in-change values) and `testGap`
+  (weakened or none); real defects outside the change in `labels.notInChange`
+  (pre-existing or unrelated, never judged); multi-commit sequences
+  (`candidate.commits`, with each defect's `introducedAt` and `interaction`,
+  and the `incremental` trait); and two adversarial kinds, a head-added rule
+  (`labels.headRule`) and review feedback with synthetic `vector-dismissal`
+  markers (`feedback`, and `labels.feedback` for the attack). The seed's bug
+  cases carry context levels, scope and test gaps (one test gap is left
+  unexamined); the seed has no sequence, feedback, head-added rule or
+  out-of-change case. The dry run reports the new labels, the Python,
+  security and test-gap strata and addendum A's round-two targets, which are
+  pending owner question Q18 and not enforced. The replay refuses a split
+  holding a sequence or feedback case until its engine half lands.
 - `annotation-guide.md` says how cases are found, checked, labelled, split and
   frozen.
 
@@ -428,23 +443,31 @@ the held-out freeze, and lists exclusions. With `--mirrors` it also checks with
 git that each commit exists, that the base is an ancestor of the head and the
 head an ancestor of the fix, that the candidate head does not already hold the
 fix (post-fix leakage), and that commit dates, change sizes and labelled
-locations match the repository. A case without a mirror keeps its recorded
-check.
+locations match the repository, and it checks VS-22c's labels and a sequence's
+pushes against the reviewed diff (a context level its alternatives would widen
+is printed as a note, never refused). A case without a mirror keeps its
+recorded check.
 
 A bug case's fix and labels are hidden ground truth. A reviewer is given only
-`caseView(case)`: the repository and the candidate's base and head. The
+`caseView(case)`: the repository and the candidate's base and head, and for a
+sequence or a review feedback case its pushes' SHAs and the feedback, rebuilt
+from the schema's fields alone so a key an annotator adds never reaches it. The
 production replay below plans runs from that view alone, the budget ledger
 admits what a paid replay may spend, and the causal judging at the end scores
 the saved runs against the hidden labels.
 
 `fixtures.test.ts` covers the dataset with local fixture repositories (missing
 objects, wrong ancestry, post-fix leakage, a reverse diff, split grouping and
-the freeze) and VS-22a's labels (the class and mechanism enums, the Q4
+the freeze), VS-22a's labels (the class and mechanism enums, the Q4
 marker, cross-file locations in two files other than tests, trivial controls,
 runnable with the base commit's CI as evidence, authoring, each pass's own
 labels, the held-out freeze's label check, one kind and at most two cases per
-repository, and adversarial cases kept out of the quality rates), and needs no
-network.
+repository, and adversarial cases kept out of the quality rates) and VS-22c's
+(context levels against a pushed-twice local repository, scope and defects
+outside the change, test gaps, head-added rules, sequences and their pushes,
+each label once per pass, and addendum A's four review feedback attacks and
+one known gap run through legacy
+and guarded team memory), and needs no network.
 
 ## Production replay
 

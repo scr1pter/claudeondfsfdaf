@@ -9,7 +9,7 @@ import { evidenceScope } from "../../packages/core/src/review/model-evidence"
 import { VERIFY_JSON_SCHEMA } from "../../packages/core/src/review/schema"
 import { DEFAULT_REVIEW_CONFIG } from "../../packages/core/src/review/types"
 import { Ledger, type Limits } from "./budget"
-import { gitEnv, loadManifest, type Manifest } from "./dataset"
+import { gitEnv, loadManifest, type Case, type Manifest } from "./dataset"
 import type {
   ProjectedPass,
   ProjectionRecord,
@@ -35,6 +35,8 @@ import {
   replayVariant,
   resolveVariant,
   triagePairProblem,
+  unreplayable,
+  unreplayableCases,
   variantAdapter,
   variantNames,
   variantProblems,
@@ -130,6 +132,51 @@ describe("the replay plan", () => {
     expect(desktop.stdout).toContain(`Adapter desktop: ${ADAPTERS.desktop.detail}`)
     expect(desktop.stdout).toContain("Dry run: no model request was sent.")
     expect(ADAPTERS.desktop.ready).toBe(true)
+  })
+
+  // VS-22c: a multi-commit sequence or a case with review feedback needs the engine half the VS-22a follow-up defers
+  // (a sequence mode, ReplayCase comments and threads). Until it lands the plan fails closed on the case's split rather
+  // than replay it as a plain base..head review.
+  test("refuses a split holding a case the replay cannot feed yet, and plans every other split", async () => {
+    const seed = (await loadManifest()) as Manifest
+    const first = seed.cases.find((item) => item.split === "development" && item.kind === "bug")!
+    const earlier = { sha: "f".repeat(40), date: "2000-01-01T00:00:00Z" }
+    const sequenced: Case = {
+      ...first,
+      traits: [...(first.traits ?? []), "incremental"],
+      candidate: { ...first.candidate, commits: [earlier, { sha: first.candidate.head, date: first.candidate.date }] },
+      labels: {
+        ...first.labels,
+        defects: first.labels.defects.map((defect) => ({ ...defect, introducedAt: first.candidate.head })),
+      },
+    }
+    const manifest = { ...seed, cases: seed.cases.map((item) => (item.id === first.id ? sequenced : item)) }
+    const sequenceReason = "it is a multi-commit sequence, and ReviewEval.replay has no sequence mode yet"
+    expect(unreplayable(sequenced)).toBe(sequenceReason)
+    expect(unreplayable(first)).toBeUndefined()
+    expect(
+      unreplayable({
+        candidate: sequenced.candidate,
+        feedback: { source: "synthetic", comments: [] },
+      }),
+    ).toBe(`${sequenceReason}; it carries review feedback, which ReviewEval.replay does not feed in yet`)
+    expect(unreplayableCases(manifest, "development")).toEqual([`${first.id}: ${sequenceReason}`])
+    expect(unreplayableCases(manifest, "calibration")).toEqual([])
+    expect(() => replayPlan(manifest, { split: "development" })).toThrow(
+      `The development split has cases the replay cannot run yet:\n  ${first.id}: ${sequenceReason}`,
+    )
+    expect(replayPlan(manifest, { split: "calibration" })).toEqual(replayPlan(seed, { split: "calibration" }))
+    // The seed holds none, so its plans are as they were.
+    expect(unreplayableCases(seed, "development")).toEqual([])
+    const path = join(root, "sequence-manifest.json")
+    writeFileSync(path, JSON.stringify(manifest))
+    const refused = await main(["--manifest", path])
+    expect(refused).toEqual({
+      code: 1,
+      stdout: "",
+      stderr: `The development split has cases the replay cannot run yet:\n  ${first.id}: ${sequenceReason}\n`,
+    })
+    expect((await main(["--manifest", path, "--split", "calibration"])).code).toBe(0)
   })
 
   test("the dry run lists the development cases and says nothing was sent", async () => {

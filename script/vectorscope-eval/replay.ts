@@ -75,14 +75,42 @@ export interface PlannedReplay {
 }
 
 // Each case of one split as the engine's replay input. Only the case view goes in: the repository and the candidate's
-// two commits, reviewed untrusted on a writer's request, as a public change from outside would be.
+// two commits, reviewed untrusted on a writer's request, as a public change from outside would be. It fails closed on a
+// split with a case the replay cannot feed yet (unreplayableCases): such a case is never replayed as a plain base..head
+// review and scored as one, so until the engine half lands it blocks its split.
 export function replayPlan(
   manifest: Manifest,
   options: { split: Split; locate?: (url: string) => string | undefined },
 ) {
+  const refused = unreplayableCases(manifest, options.split)
+  if (refused.length)
+    throw new Error(
+      `The ${options.split} split has cases the replay cannot run yet:\n${refused.map((line) => `  ${line}`).join("\n")}`,
+    )
   return manifest.cases
     .filter((item) => item.split === options.split)
     .map((item) => planned(item, options.locate?.(item.repository.url)))
+}
+
+// Why the engine's replay cannot run a case yet, or undefined when it can (VS-22c). A multi-commit sequence needs
+// ReviewEval.replay's sequence mode, and review feedback needs ReplayCase comments and threads; both are the deferred
+// engine half of the VS-22a follow-up.
+export function unreplayable(item: Pick<Case, "candidate" | "feedback">) {
+  const reasons = [
+    ...(item.candidate.commits
+      ? ["it is a multi-commit sequence, and ReviewEval.replay has no sequence mode yet"]
+      : []),
+    ...(item.feedback ? ["it carries review feedback, which ReviewEval.replay does not feed in yet"] : []),
+  ]
+  return reasons.length ? reasons.join("; ") : undefined
+}
+
+// Every case of one split the replay cannot run yet, as "<id>: <reason>".
+export function unreplayableCases(manifest: Pick<Manifest, "cases">, split: Split) {
+  return manifest.cases.flatMap((item) => {
+    const reason = item.split === split ? unreplayable(item) : undefined
+    return reason ? [`${item.id}: ${reason}`] : []
+  })
 }
 
 function planned(item: Case, mirror: string | undefined): PlannedReplay {
@@ -687,6 +715,13 @@ export async function main(argv: string[]): Promise<{ code: number; stdout: stri
       code: 1,
       stdout: "",
       stderr: "Held-out cases replay only from a frozen manifest, and this one is not frozen.\n",
+    }
+  const refused = unreplayableCases(manifest, split as Split)
+  if (refused.length)
+    return {
+      code: 1,
+      stdout: "",
+      stderr: `The ${split} split has cases the replay cannot run yet:\n${refused.map((line) => `  ${line}`).join("\n")}\n`,
     }
   const mirrors = text("mirrors")
   const plan = replayPlan(manifest, {

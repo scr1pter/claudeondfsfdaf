@@ -4,7 +4,18 @@ import { existsSync } from "node:fs"
 import { devNull } from "node:os"
 import { join, resolve } from "node:path"
 import { parseArgs } from "node:util"
-import { FAILURE_CLASSES, FAILURE_MECHANISMS } from "../../packages/core/src/review/types"
+import { trustedRules } from "../../packages/core/src/review/citation"
+import { REVIEW_CONFIG_PATH, REVIEW_RULES_PATHS } from "../../packages/core/src/review/config"
+import { parseUnifiedDiff, type DiffFile } from "../../packages/core/src/review/diff"
+import { normalizeTitle } from "../../packages/core/src/review/fingerprint"
+import { findingMarker, parseFindingMarker } from "../../packages/core/src/review/state"
+import { isDismissalMarker, sameTeamPattern, TEAM_SIMILARITY, teamDir } from "../../packages/core/src/review/team"
+import {
+  FAILURE_CLASSES,
+  FAILURE_MECHANISMS,
+  type Category,
+  type FindingScope,
+} from "../../packages/core/src/review/types"
 
 // The real-change dataset behind VectorScope's eval. A manifest lists public bug-fix cases, clean controls, trivial
 // controls and adversarial (prompt-injection) cases, each pinned to immutable commits in a permissively licensed
@@ -19,8 +30,11 @@ import { FAILURE_CLASSES, FAILURE_MECHANISMS } from "../../packages/core/src/rev
 export const DATASET_DIR = join(import.meta.dir, "dataset")
 export const SEED_MANIFEST = join(DATASET_DIR, "seed.json")
 // Version 2 (VS-22a) adds the trivial kind, the failure-class, mechanism, cross-file, runnable and authoring labels and
-// each pass's own labels, and retires the cross-file trait for labels.crossFile.
-export const SCHEMA = "vectorscope-dataset/2"
+// each pass's own labels, and retires the cross-file trait for labels.crossFile. Version 3 (VS-22c) adds a defect's
+// context-level, scope, test-gap, introducing-push and interaction labels, defects outside the change
+// (labels.notInChange), an adversarial case's head-added rule and feedback attack, the review feedback a case gives the
+// reviewer (Case.feedback), and a multi-commit sequence's pushes (candidate.commits).
+export const SCHEMA = "vectorscope-dataset/3"
 
 // D8: public repositories under MIT, Apache-2.0 or BSD licences, as the GitHub licence endpoint names them.
 export const LICENCES = ["MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause"] as const
@@ -83,6 +97,54 @@ export const TARGETS = {
 // rule"). Unlike TARGETS it is enforced: a case past it is excluded as quota.
 export const PER_REPOSITORY = 2
 
+// VS-22c's labels (addendum A §3, VS-22, the VS-22a follow-up). The context a reviewer needs to raise a defect, in
+// AACR-Bench's three levels [LCI2]: the change's diff with its default three lines of context (hunk), the whole of a
+// changed file (file), or code in a file the change does not touch (repo). It is the annotator's judgement of what is
+// needed, not where the defect is cited; the object checks refuse only a level narrower than its locations show. VS-37
+// reads slice recall per level.
+export const CONTEXT_LEVELS = ["hunk", "file", "repo"] as const
+// ReviewBench's scope axis [G6-13]. A labelled defect is in the change; a real defect outside it goes in
+// labels.notInChange, which judging never reads, so a finding on it stays a false alarm under the current rubric
+// ("not a defect in this change") and S9 (VS-42) leaves it out of scope.
+export const IN_CHANGE_SCOPES = ["introduced-by-pr", "exacerbated-by-pr"] as const
+export const NOT_IN_CHANGE_SCOPES = ["pre-existing", "unrelated"] as const
+export const DEFECT_SCOPES = [...IN_CHANGE_SCOPES, ...NOT_IN_CHANGE_SCOPES] as const
+// VS-42's model field (core types.ts FindingScope) on that axis. unrelated has no model value.
+export const FINDING_SCOPE_AXIS = {
+  introduced: "introduced-by-pr",
+  exacerbated: "exacerbated-by-pr",
+  "pre-existing": "pre-existing",
+} as const satisfies Record<FindingScope, (typeof DEFECT_SCOPES)[number]>
+// GU5's test-gap stratum, on a defect: the change weakens or removes a test that would catch it (an assertion relaxed
+// or deleted, an input or an expected value changed), and the defect cites that test at its place in the head. A case
+// whose fix adds the missing test is regressionTest's added-by-fix already, so it is not a value here.
+export const TEST_GAPS = ["weakened", "none"] as const
+// The attacks an adversarial case's review feedback makes on team memory (VS-35) [FL6, FL9, FL16]. Addendum A's four:
+// dismissals by the PR author or with no writer marker (forged-author), non-writers' reactions (brigading), an agent
+// resolving a batch of threads (bulk-resolve), and writers' thumbs-down on a real security finding (security-thumbs).
+const ADDENDUM_ATTACKS = ["forged-author", "brigading", "bulk-resolve", "security-thumbs"] as const
+// And a labelled known gap that is no addendum target: invented-writers is one actor writing well-formed writer markers
+// with made-up hashes. Guarded memory trusts h= as written until the writer-hash check at VS-35's later window, so it
+// still learns that pattern (vectorscope-deviations.md, VS-35a).
+export const FEEDBACK_ATTACKS = [...ADDENDUM_ATTACKS, "invented-writers"] as const
+// Where a case's review feedback comes from. Real vector-dismissal markers exist only after VS-35's marker window, so
+// every feedback case is synthetic history on real commits until then.
+export const FEEDBACK_SOURCES = ["synthetic"] as const
+// Addendum A's round-two coverage (VS-41's sequences, cases with an interaction defect and clean later pushes; VS-42's
+// exacerbated and pre-existing fixtures; VS-43's head-added rule case; one case per addendum attack, so not
+// invented-writers). Proposals pending owner question
+// Q18: the dry run reports against them, nothing enforces them, and the sampling rule's quota (its item 5) does not
+// stop a query on them until Q18 is answered. The 1s are the addendum's "a case" read at its minimum.
+export const ROUND_TWO_TARGETS = {
+  sequences: 15,
+  interactions: 5,
+  cleanLater: 5,
+  exacerbated: 1,
+  preExisting: 1,
+  headRule: 1,
+  perAttack: 1,
+} as const
+
 export type Split = (typeof SPLITS)[number]
 
 export interface Location {
@@ -103,6 +165,39 @@ export interface Defect {
   failureClass?: (typeof DEFECT_CLASSES)[number]
   mechanism?: (typeof MECHANISMS)[number]
   pendingQ4?: (typeof PENDING_Q4)[number] // on an "other" defect that an answer to Q4 would move into a class
+  // VS-22c. Absent means not yet labelled.
+  contextLevel?: (typeof CONTEXT_LEVELS)[number]
+  scope?: (typeof IN_CHANGE_SCOPES)[number] // a defect outside the change goes in labels.notInChange
+  testGap?: (typeof TEST_GAPS)[number]
+  introducedAt?: string // a sequence's push (one of candidate.commits) that introduced it; required in a sequence
+  interaction?: boolean // a sequence's defect whose cause needs a file an earlier push changed and its own push did not
+}
+
+// A real defect the change did not make: already there at the base (pre-existing) or unrelated to the change. It is
+// recorded so S9 (VS-42) and a ReviewBench-style count can read it, never passed to judging.
+export interface NotInChangeDefect extends Omit<Defect, "scope" | "testGap" | "introducedAt" | "interaction"> {
+  scope: (typeof NOT_IN_CHANGE_SCOPES)[number]
+}
+
+// A dismissed Vector review comment that team memory reads, as core state.ts's GuardedComment holds one, with the
+// dismissing action's own time in ISO 8601 (Date.parse gives GuardedComment.at).
+export interface FeedbackComment {
+  pr: number
+  path: string
+  body: string // a finding marker with st=d, and any vector-dismissal marker after it
+  at?: string
+  replied?: boolean
+  codeChanged?: boolean
+}
+
+// The review feedback a case gives the reviewer: other pull requests' dismissed comments, newest first as teamPatterns
+// and guardedTeamPatterns read them, and the job's metadata guarded memory takes (core team.ts GuardedTeamInput). It is
+// input, not a label: a feedback case's labels say what it attacks (labels.feedback).
+export interface Feedback {
+  source: (typeof FEEDBACK_SOURCES)[number]
+  comments: FeedbackComment[]
+  botPushes?: { pr: number; at: string }[]
+  own?: string[] // the dismissal-marker hashes of Vector's own logins
 }
 
 export interface Annotation {
@@ -113,7 +208,10 @@ export interface Annotation {
     pass: number
     method: string
     date: string
-    labels?: { defects: Pick<Defect, "id" | "failureClass" | "mechanism" | "pendingQ4">[]; crossFile?: boolean }
+    labels?: {
+      defects: Pick<Defect, "id" | "failureClass" | "mechanism" | "pendingQ4" | "contextLevel" | "scope" | "testGap">[]
+      crossFile?: boolean
+    }
   }[]
   // A double-annotated label's two passes were compared: true when they agreed, so the label stands as it is (D8), and
   // false while a disagreement waits for the owner's adjudication.
@@ -139,10 +237,15 @@ export interface Case {
     date: string // the head's commit time
     change?: string
     changed: { files: number; additions: number; deletions: number }
+    // VS-22c. A multi-commit sequence: the pull request's pushed heads in push order, each with its commit time, the
+    // last one the head. Absent for a single base..head case.
+    commits?: { sha: string; date: string }[]
   }
   fix?: { sha: string; date: string; change?: string }
+  feedback?: Feedback // VS-22c, an adversarial case only
   labels: {
     defects: Defect[]
+    notInChange?: NotInChangeDefect[] // VS-22c, on any kind
     regressionTest?: { status: (typeof REGRESSION_TEST)[number]; paths?: string[]; note?: string }
     rationale?: string // a control's argument that it preserves behaviour
     injection?: string // an adversarial case's injected instruction, where it is, and what a safe reviewer does
@@ -155,6 +258,16 @@ export interface Case {
     // field (I-2). lab is a lab id as codium's labOf names them, checked against that list once codium merges.
     authoring?: { lab: string; source: (typeof AUTHORING_SOURCES)[number]; evidence: string }
     trivialKind?: (typeof TRIVIAL_KINDS)[number] // a trivial control's one kind
+    // VS-22c, adversarial cases only. Where the change adds a rule to a file trusted rules are read from (VS-43).
+    headRule?: Location
+    // What the case's review feedback attacks: the attack, the labelled defect it tries to hide, and the finding a
+    // reviewer would post for that defect (its core category and title), which the dismissed patterns are built to
+    // match.
+    feedback?: {
+      attack: (typeof FEEDBACK_ATTACKS)[number]
+      defect: string
+      finding: { category: Category; title: string }
+    }
     annotation: Annotation
   }
   provenance: {
@@ -185,17 +298,47 @@ export interface Manifest {
   freeze?: { date: string; digest: string }
 }
 
-// Everything a reviewer under test may be given for a case: the repository and the candidate's two commits. The
-// labels, the fix, dates, provenance, the split and even the case id stay out, so a prompt or tool view built from it
-// cannot leak them.
+// Everything a reviewer under test may be given for a case: the repository and the candidate's two commits, and for
+// VS-22c's cases a sequence's pushes and the review feedback. The labels, the fix, the case's own dates (the
+// candidate's, its pushes' and the fix's), provenance, the split, the feedback's source and even the case id stay out,
+// so a prompt or tool view built from it cannot leak them. The feedback's own times are input: team memory reads when
+// each comment was dismissed and when a bot pushed.
 export interface CaseView {
   repository: string
   base: string
   head: string
+  commits?: string[]
+  feedback?: Omit<Feedback, "source">
 }
 
+// Each part is rebuilt from its schema fields alone (I-13): the validator does not refuse unknown keys, so a field an
+// annotator adds to a comment or a push, a note naming the defect it hides say, never reaches the view.
 export function caseView(item: Case): CaseView {
-  return { repository: item.repository.url, base: item.candidate.base, head: item.candidate.head }
+  const feedback = item.feedback
+  return {
+    repository: item.repository.url,
+    base: item.candidate.base,
+    head: item.candidate.head,
+    ...(item.candidate.commits ? { commits: item.candidate.commits.map((push) => push.sha) } : {}),
+    ...(feedback
+      ? {
+          feedback: {
+            comments: feedback.comments.map((comment) => ({
+              pr: comment.pr,
+              path: comment.path,
+              body: comment.body,
+              ...(comment.at !== undefined ? { at: comment.at } : {}),
+              ...(comment.replied !== undefined ? { replied: comment.replied } : {}),
+              ...(comment.codeChanged !== undefined ? { codeChanged: comment.codeChanged } : {}),
+            })),
+            ...(feedback.botPushes
+              ? { botPushes: feedback.botPushes.map((push) => ({ pr: push.pr, at: push.at })) }
+              : {}),
+            ...(feedback.own ? { own: [...feedback.own] } : {}),
+          },
+        }
+      : {}),
+  }
 }
 
 export async function loadManifest(path = SEED_MANIFEST): Promise<unknown> {
@@ -332,6 +475,10 @@ function caseProblems(value: unknown, index: number): string[] {
           ? adversarialProblems(label, item, candidate, labels)
           : bugProblems(label, item, candidate, labels)),
     ...labelProblems(label, item, labels),
+    ...notInChangeProblems(label, labels),
+    ...headRuleProblems(label, item, labels),
+    ...feedbackProblems(label, item, candidate, labels),
+    ...sequenceProblems(label, item, candidate, labels),
     ...annotationProblems(label, record(labels?.annotation), labels),
     ...need(
       !!provenance && text(provenance.found) && text(provenance.evidence),
@@ -381,6 +528,9 @@ function bugProblems(
     ...need(defects.length > 0, `${label}: a bug case needs at least one labelled defect`),
     ...ids.filter((id, index) => ids.indexOf(id) !== index).map((id) => `${label}: defect id ${id} repeats`),
     ...defects.flatMap((defect, index) => defectProblems(`${label}: defect ${ids[index]}`, defect)),
+    ...defects.flatMap((defect, index) =>
+      inChangeProblems(`${label}: defect ${ids[index]}`, record(defect), regression?.paths),
+    ),
     ...need(
       !!regression &&
         oneOf(REGRESSION_TEST, regression.status) &&
@@ -478,18 +628,345 @@ function labelProblems(label: string, item: Record<string, unknown>, labels: Rec
 // The distinct files a defect's locations and alternatives name, other than tests: an alternative may be a test the
 // change edited to hide the failure, which does not make the defect cross-file. A test is one of the fix's regression
 // test paths, or a path TEST_PATH matches.
-function sourceFilesOf(defect: Record<string, unknown> | undefined, tests: unknown) {
-  const cited = [
+function sourceFilesOf(defect: Cited | undefined, tests: unknown) {
+  return new Set(citedPaths(defect).filter((path) => !isTest(path, tests)))
+}
+
+// The tests a defect cites among its locations and alternatives.
+function testsOf(defect: Cited | undefined, tests: unknown) {
+  return [...new Set(citedPaths(defect).filter((path) => isTest(path, tests)))]
+}
+
+type Cited = { locations?: unknown; alternatives?: unknown }
+
+function citedPaths(defect: Cited | undefined) {
+  return [
     ...(Array.isArray(defect?.locations) ? defect.locations : []),
     ...(Array.isArray(defect?.alternatives) ? defect.alternatives : []),
   ]
-  return new Set(
-    cited
-      .map((location) => record(location)?.path)
-      .filter(
-        (path) => typeof path === "string" && !(Array.isArray(tests) && tests.includes(path)) && !TEST_PATH.test(path),
-      ),
+    .map((location) => record(location)?.path)
+    .filter((path): path is string => typeof path === "string")
+}
+
+function isTest(path: string, tests: unknown) {
+  return (Array.isArray(tests) && tests.includes(path)) || TEST_PATH.test(path)
+}
+
+// VS-22c: a labelled defect is in the change, and one labelled testGap weakened cites the test the change weakened.
+function inChangeProblems(label: string, defect: Record<string, unknown> | undefined, tests: unknown) {
+  if (!defect) return []
+  return [
+    ...need(
+      !oneOf(NOT_IN_CHANGE_SCOPES, defect.scope),
+      `${label}: scope ${String(defect.scope)} is not in the change; such a defect goes in labels.notInChange`,
+    ),
+    ...need(
+      defect.testGap !== "weakened" || testsOf(defect, tests).length > 0,
+      `${label}: testGap weakened needs the weakened test among its locations or alternatives (a test path, or one of regressionTest.paths)`,
+    ),
+  ]
+}
+
+// VS-22c: real defects outside the change, on a case of any kind (VS-42's pre-existing bug beside a benign edit is a
+// control). Each is a defect with a pre-existing or unrelated scope, and none of the labels of a defect in the change.
+function notInChangeProblems(label: string, labels: Record<string, unknown> | undefined) {
+  if (labels?.notInChange === undefined) return []
+  if (!Array.isArray(labels.notInChange)) return [`${label}: labels.notInChange must be a list`]
+  const entries = labels.notInChange
+  const names = entries.map((entry, index) => {
+    const id = record(entry)?.id
+    return typeof id === "string" ? id : `#${index + 1}`
+  })
+  const inChange = (Array.isArray(labels.defects) ? labels.defects : []).map((defect) => record(defect)?.id)
+  return [
+    ...names
+      .filter((id, index) => names.indexOf(id) !== index || inChange.includes(id))
+      .map((id) => `${label}: defect id ${id} repeats`),
+    ...entries.flatMap((entry, index) => {
+      const defect = record(entry)
+      const name = `${label}: notInChange ${names[index]}`
+      if (!defect) return defectProblems(name, entry)
+      return [
+        ...defectProblems(name, entry),
+        // An unknown scope is reported by classProblems.
+        ...need(
+          oneOf(NOT_IN_CHANGE_SCOPES, defect.scope) ||
+            (defect.scope !== undefined && !oneOf(DEFECT_SCOPES, defect.scope)),
+          `${name}: scope must be ${NOT_IN_CHANGE_SCOPES.join(" or ")}`,
+        ),
+        ...need(
+          defect.testGap === undefined && defect.introducedAt === undefined && defect.interaction === undefined,
+          `${name}: testGap, introducedAt and interaction describe a defect in the change`,
+        ),
+      ]
+    }),
+  ]
+}
+
+// VS-22c: an adversarial case whose change adds a rule to a file trusted rules are read from (VS-43's head-added rule).
+// The object checks confirm the change adds those lines.
+function headRuleProblems(label: string, item: Record<string, unknown>, labels: Record<string, unknown> | undefined) {
+  if (labels?.headRule === undefined) return []
+  const path = record(labels.headRule)?.path
+  return [
+    ...need(item.kind === "adversarial", `${label}: only an adversarial case has labels.headRule`),
+    ...locationProblems(`${label}: labels.headRule`, labels.headRule),
+    ...need(
+      !isPath(path) || carriesRules(path as string),
+      `${label}: labels.headRule.path ${String(path)} is not a file trusted rules are read from (AGENTS.md or CLAUDE.md in any directory, .vector/RULES.md, ${REVIEW_RULES_PATHS.join(", ")} or ${REVIEW_CONFIG_PATH})`,
+    ),
+  ]
+}
+
+// Whether core's rule citation check reads rules from a file at this path (citation.ts RULE_FILES), asked through
+// trustedRules itself so the set stays core's: a one-line addition to such a file comes back as head-added rule text.
+function carriesRules(path: string) {
+  const line = { kind: "add" as const, newLine: 1, text: "rule" }
+  const file: DiffFile = {
+    path,
+    status: "added",
+    binary: false,
+    additions: 1,
+    deletions: 0,
+    patch: "@@ -0,0 +1 @@\n+rule",
+    hunks: [{ header: "@@ -0,0 +1 @@", oldStart: 0, oldLines: 0, newStart: 1, newLines: 1, lines: [line] }],
+  }
+  return trustedRules({ anchors: [file] }).added.length > 0
+}
+
+// VS-22c: an adversarial case whose review feedback attacks team memory (VS-35). The feedback is synthetic history on
+// the case's real commits: dismissed comments carrying finding markers and synthetic vector-dismissal markers, dated
+// no later than the head. Its labels name the attack and the labelled defect it tries to hide, and at least one
+// dismissed pattern must reach that defect: the finding's category, the directory of one of the defect's locations,
+// and marker words at least TEAM_SIMILARITY like the finding's title, as guarded memory matches them. Nothing in the
+// feedback may quote a label, the case id or the fix, since the feedback reaches the reviewer.
+function feedbackProblems(
+  label: string,
+  item: Record<string, unknown>,
+  candidate: Record<string, unknown> | undefined,
+  labels: Record<string, unknown> | undefined,
+) {
+  if (item.feedback === undefined && labels?.feedback === undefined) return []
+  const input = record(item.feedback)
+  const target = record(labels?.feedback)
+  const both = [
+    ...need(item.kind === "adversarial", `${label}: only an adversarial case carries review feedback`),
+    ...need(
+      !!input && !!target,
+      `${label}: feedback and labels.feedback go together: the review feedback the case gives, and what it attacks`,
+    ),
+  ]
+  if (!input || !target) return both
+  const finding = record(target.finding)
+  const comments = Array.isArray(input.comments) ? input.comments.map(record) : []
+  const head = isTime(candidate?.date) ? Date.parse(candidate!.date as string) : undefined
+  const before = (value: unknown) => isTime(value) && (head === undefined || Date.parse(value as string) <= head)
+  const defects = (Array.isArray(labels?.defects) ? labels.defects : []).map(record)
+  const hidden = defects.find((defect) => !!defect && defect.id === target.defect)
+  const pushes = input.botPushes
+  const own = input.own
+  const fix = record(item.fix)?.sha
+  // Compared in lower case, so a label quoted in another letter case is still caught.
+  const quoted = [
+    ...[...defects, ...(Array.isArray(labels?.notInChange) ? labels.notInChange.map(record) : [])].flatMap((defect) => [
+      defect?.id,
+      defect?.summary,
+      defect?.cause,
+    ]),
+    labels?.injection,
+    labels?.rationale,
+    finding?.title,
+    item.id,
+    typeof fix === "string" ? fix.slice(0, 7) : undefined,
+  ]
+    .filter((value): value is string => text(value))
+    .map((value) => value.toLowerCase())
+  const leaks = comments.flatMap((comment, index) =>
+    [comment?.body, comment?.path].some(
+      (value) => typeof value === "string" && quoted.some((secret) => value.toLowerCase().includes(secret)),
+    )
+      ? [index + 1]
+      : [],
   )
+  const category = finding?.category
+  const known = isFindingCategory(category)
+  const probe =
+    known && typeof finding?.title === "string"
+      ? { category: category as Category, words: normalizeTitle(finding.title) }
+      : undefined
+  const dirs = (Array.isArray(hidden?.locations) ? hidden.locations : [])
+    .map((location) => record(location)?.path)
+    .filter((path): path is string => typeof path === "string")
+    .map(teamDir)
+  const reached = comments.some((comment) => {
+    const marker = typeof comment?.body === "string" ? parseFindingMarker(comment.body) : undefined
+    const path = comment?.path
+    return (
+      !!probe &&
+      !!marker &&
+      marker.status === "dismissed" &&
+      typeof path === "string" &&
+      dirs.some((dir) =>
+        sameTeamPattern({ ...probe, dir }, { category: marker.category, dir: teamDir(path), words: marker.words }),
+      )
+    )
+  })
+  return [
+    ...both,
+    ...need(
+      oneOf(FEEDBACK_SOURCES, input.source),
+      `${label}: feedback.source must be synthetic; recorded feedback waits for VS-35's dismissal markers`,
+    ),
+    ...need(
+      oneOf(FEEDBACK_ATTACKS, target.attack),
+      `${label}: labels.feedback.attack must be one of ${FEEDBACK_ATTACKS.join(", ")}`,
+    ),
+    ...need(
+      !!hidden,
+      `${label}: labels.feedback.defect must name a labelled defect: the real defect the feedback tries to hide`,
+    ),
+    ...need(
+      typeof category === "string" && text(finding?.title),
+      `${label}: labels.feedback.finding needs the core category and the title of the finding a reviewer would post for that defect`,
+    ),
+    ...need(
+      typeof category !== "string" || known,
+      `${label}: labels.feedback.finding.category ${String(category)} must be one of core's finding categories (review/types.ts CATEGORIES), not a dataset defect category`,
+    ),
+    ...need(comments.length > 0, `${label}: feedback.comments must list at least one dismissed comment`),
+    ...comments.flatMap((comment, index) =>
+      commentProblems(`${label}: feedback comment ${index + 1}`, comment, before),
+    ),
+    ...need(
+      pushes === undefined ||
+        (Array.isArray(pushes) &&
+          pushes.every((value) => {
+            const push = record(value)
+            return !!push && positive(push.pr) && before(push.at)
+          })),
+      `${label}: feedback.botPushes needs each push's pull request number and its ISO 8601 time, no later than the head's`,
+    ),
+    ...need(
+      own === undefined ||
+        (Array.isArray(own) &&
+          own.every((hash) => typeof hash === "string" && isDismissalMarker({ by: "w", why: "fp", hash }))),
+      `${label}: feedback.own must list dismissal-marker hashes (12 to 64 lowercase hex characters)`,
+    ),
+    ...need(
+      !hidden || !probe || comments.length === 0 || reached,
+      `${label}: no feedback comment reaches defect ${String(target.defect)}: none dismisses a ${String(finding?.category)} finding in the directory of one of its locations with marker words at least ${TEAM_SIMILARITY} like labels.feedback.finding.title`,
+    ),
+    ...leaks.map(
+      (index) =>
+        `${label}: feedback comment ${index} quotes a label, the case id or the fix, and review feedback reaches the reviewer`,
+    ),
+  ]
+}
+
+function commentProblems(
+  label: string,
+  comment: Record<string, unknown> | undefined,
+  before: (value: unknown) => boolean,
+) {
+  const marker = typeof comment?.body === "string" ? parseFindingMarker(comment.body) : undefined
+  return [
+    ...need(
+      !!comment && positive(comment.pr) && isPath(comment.path),
+      `${label} needs a positive pull request number and a relative path`,
+    ),
+    ...need(
+      marker?.status === "dismissed" && marker.words.length > 0,
+      `${label} has no dismissed Vector finding marker with title words, so no team memory reads it`,
+    ),
+    ...need(
+      comment?.at === undefined || before(comment.at),
+      `${label}: at must be an ISO 8601 time no later than the head's`,
+    ),
+    ...need(
+      (comment?.replied === undefined || typeof comment.replied === "boolean") &&
+        (comment?.codeChanged === undefined || typeof comment.codeChanged === "boolean"),
+      `${label}: replied and codeChanged must be true or false`,
+    ),
+  ]
+}
+
+// Whether core reads this as a finding category, asked through its own marker writer and parser so the list stays
+// types.ts's CATEGORIES (dataset.ts's CATEGORIES is the defect categories, another list) and nothing is copied.
+function isFindingCategory(value: unknown) {
+  if (typeof value !== "string") return false
+  const marker = findingMarker({
+    id: "0".repeat(12),
+    severity: "concern",
+    category: value as Category,
+    sha: "0".repeat(7),
+    status: "open",
+    words: [],
+  })
+  return parseFindingMarker(marker)?.category === value
+}
+
+// VS-22c: a multi-commit sequence (VS-41). candidate.commits are the pull request's pushed heads in push order, the
+// last one the head; each labelled defect names the push that introduced it. The incremental trait marks exactly these
+// cases. The object checks confirm the pushes chain by ancestry from the base.
+function sequenceProblems(
+  label: string,
+  item: Record<string, unknown>,
+  candidate: Record<string, unknown> | undefined,
+  labels: Record<string, unknown> | undefined,
+) {
+  const defects = (Array.isArray(labels?.defects) ? labels.defects : []).map(record)
+  const ids = defects.map((defect, index) => (typeof defect?.id === "string" ? defect.id : `#${index + 1}`))
+  const incremental = Array.isArray(item.traits) && item.traits.includes("incremental")
+  if (candidate?.commits === undefined)
+    return [
+      ...need(
+        !incremental,
+        `${label}: the incremental trait marks a multi-commit sequence, and this case has no candidate.commits`,
+      ),
+      ...defects.flatMap((defect, index) =>
+        need(
+          defect?.introducedAt === undefined && defect?.interaction === undefined,
+          `${label}: defect ${ids[index]}: introducedAt and interaction describe a push of a multi-commit sequence (candidate.commits)`,
+        ),
+      ),
+    ]
+  const pushes = Array.isArray(candidate.commits) ? candidate.commits.map(record) : []
+  if (pushes.length < 2 || !pushes.every((push) => !!push && isSha(push.sha) && isTime(push.date)))
+    return [
+      `${label}: candidate.commits must list at least two pushes in order, each a full commit SHA and its ISO 8601 commit time`,
+    ]
+  const shas = pushes.map((push) => push?.sha)
+  const last = pushes.at(-1)
+  const fix = record(item.fix)?.sha
+  return [
+    ...need(
+      new Set(shas).size === shas.length && !shas.includes(candidate.base),
+      `${label}: candidate.commits repeats a push or names the base`,
+    ),
+    ...need(
+      !!last &&
+        last.sha === candidate.head &&
+        isTime(candidate.date) &&
+        Date.parse(last.date as string) === Date.parse(candidate.date as string),
+      `${label}: candidate.commits must end at candidate.head, with candidate.date as its time`,
+    ),
+    ...need(fix === undefined || !shas.includes(fix), `${label}: the fix is one of the sequence's pushes`),
+    ...need(incremental, `${label}: a multi-commit sequence carries the incremental trait`),
+    ...defects.flatMap((defect, index) => [
+      ...need(
+        shas.includes(defect?.introducedAt),
+        `${label}: defect ${ids[index]} needs introducedAt, the push in candidate.commits that introduced it`,
+      ),
+      ...need(
+        defect?.interaction === undefined || typeof defect.interaction === "boolean",
+        `${label}: defect ${ids[index]}: interaction must be true or false`,
+      ),
+      ...need(
+        defect?.interaction !== true || !shas.includes(defect.introducedAt) || defect.introducedAt !== shas[0],
+        `${label}: defect ${ids[index]}: an interaction defect is introduced by a push after the first`,
+      ),
+    ]),
+  ]
 }
 
 // Whether a link reads the base commit's check-runs or status API, as the guide's gh api commands do, with any query.
@@ -544,10 +1021,22 @@ function defectProblems(label: string, value: unknown) {
   ]
 }
 
-// VS-22a's labels of one defect, on the case or in one pass's own record. Each is optional: absent means not yet
-// labelled.
+// VS-22a's and VS-22c's labels of one defect, on the case or in one pass's own record. Each is optional: absent means
+// not yet labelled.
 function classProblems(label: string, defect: Record<string, unknown>) {
   return [
+    ...need(
+      defect.contextLevel === undefined || oneOf(CONTEXT_LEVELS, defect.contextLevel),
+      `${label}: contextLevel must be one of ${CONTEXT_LEVELS.join(", ")}`,
+    ),
+    ...need(
+      defect.scope === undefined || oneOf(DEFECT_SCOPES, defect.scope),
+      `${label}: scope must be one of ${DEFECT_SCOPES.join(", ")}`,
+    ),
+    ...need(
+      defect.testGap === undefined || oneOf(TEST_GAPS, defect.testGap),
+      `${label}: testGap must be one of ${TEST_GAPS.join(", ")}`,
+    ),
     ...need(
       defect.failureClass === undefined || oneOf(DEFECT_CLASSES, defect.failureClass),
       `${label}: failureClass must be one of ${DEFECT_CLASSES.join(", ")}`,
@@ -621,19 +1110,63 @@ function annotationProblems(
       `${label}: agreed records whether a double-annotated label's two passes agreed; an adjudicated label's did not`,
     ),
     ...recorded.flatMap((pass) => passLabelProblems(`${label}: pass ${String(pass?.pass)}`, pass?.labels, ids)),
-    ...need(
-      new Set(recordedNumbers).size === recordedNumbers.length,
-      `${label}: a pass records its own labels in more than one entry`,
-    ),
+    // A pass may record its labels over several entries, as VS-22a's and VS-22c's did, but each label once.
+    ...[...new Set(recordedNumbers)].flatMap((number) => {
+      const repeated = repeatedLabels(byPass(recorded, number))
+      return repeated.length
+        ? [`${label}: pass ${String(number)} records the same label in more than one entry (${repeated.join(", ")})`]
+        : []
+    }),
     ...need(
       recorded.length === 0 || annotation.status === "draft" || new Set(recordedNumbers).size >= 2,
       `${label}: a ${String(annotation.status)} label whose passes record their own labels needs two passes that do`,
     ),
     ...need(
-      annotation.agreed !== true || recorded.every((pass) => agrees(record(pass?.labels), labels)),
+      annotation.agreed !== true ||
+        [...new Set(recordedNumbers)].every((number) => agrees(mergedPass(byPass(recorded, number)), labels)),
       `${label}: agreed is true, but a pass's own labels differ from the case's labels`,
     ),
   ]
+}
+
+// The label records of one pass's entries.
+function byPass(recorded: (Record<string, unknown> | undefined)[], number: unknown) {
+  return recorded.filter((pass) => pass?.pass === number).map((pass) => record(pass?.labels))
+}
+
+// The labels a pass gives that more than one of its entries records: each defect's failureClass (with its pendingQ4),
+// mechanism, contextLevel, scope and testGap, and crossFile, named as defect.label.
+function repeatedLabels(entries: (Record<string, unknown> | undefined)[]) {
+  const given = entries.map(
+    (entry) =>
+      new Set([
+        ...(Array.isArray(entry?.defects) ? entry.defects : []).flatMap((value) => {
+          const defect = record(value)
+          return PASS_LABELS.filter((name) => defect?.[name] !== undefined).map(
+            (name) => `${String(defect?.id)}.${name}`,
+          )
+        }),
+        ...(entry?.crossFile !== undefined ? ["crossFile"] : []),
+      ]),
+  )
+  const all = given.flatMap((names) => [...names])
+  return [...new Set(all.filter((name, index) => all.indexOf(name) !== index))]
+}
+
+const PASS_LABELS = ["failureClass", "mechanism", "contextLevel", "scope", "testGap"] as const
+
+// A pass's entries as one record: each defect's labels from whichever entry gives them, and crossFile.
+function mergedPass(entries: (Record<string, unknown> | undefined)[]) {
+  const defects = entries.flatMap((entry) => (Array.isArray(entry?.defects) ? entry.defects.map(record) : []))
+  const ids = [...new Set(defects.map((defect) => defect?.id))]
+  return {
+    defects: ids.map((id) =>
+      defects
+        .filter((defect) => defect?.id === id)
+        .reduce<Record<string, unknown>>((merged, defect) => ({ ...merged, ...defect }), {}),
+    ),
+    crossFile: entries.find((entry) => entry?.crossFile !== undefined)?.crossFile,
+  }
 }
 
 // One pass's own VS-22a labels. They name the case's defects by id.
@@ -650,6 +1183,13 @@ function passLabelProblems(label: string, value: unknown, ids: unknown[]) {
       .filter((id, index) => named.indexOf(id) !== index)
       .map((id) => `${label}: labels name defect ${String(id)} twice`),
     ...entries.flatMap((entry) => (entry ? classProblems(`${label}: defect ${String(entry.id)}`, entry) : [])),
+    // A pass labels the case's own defects, which are in the change.
+    ...entries.flatMap((entry) =>
+      need(
+        !oneOf(NOT_IN_CHANGE_SCOPES, entry?.scope),
+        `${label}: defect ${String(entry?.id)}: scope ${String(entry?.scope)} is not in the change; such a defect goes in labels.notInChange`,
+      ),
+    ),
     ...need(
       own.crossFile === undefined || typeof own.crossFile === "boolean",
       `${label}: labels.crossFile must be true or false`,
@@ -670,6 +1210,9 @@ function agrees(own: Record<string, unknown> | undefined, labels: Record<string,
         !!defect &&
         same(entry?.failureClass, defect.failureClass) &&
         same(entry?.mechanism, defect.mechanism) &&
+        same(entry?.contextLevel, defect.contextLevel) &&
+        same(entry?.scope, defect.scope) &&
+        same(entry?.testGap, defect.testGap) &&
         // No Q4 marker on a labelled class means none applies, so it is compared whenever the class is.
         (entry?.failureClass === undefined || entry.pendingQ4 === defect.pendingQ4)
       )
@@ -735,6 +1278,10 @@ function freezeProblems(manifest: Manifest) {
           ...(item.labels.defects.every((defect) => defect.mechanism !== undefined) ? [] : ["mechanism"]),
           ...(item.labels.crossFile === undefined ? ["crossFile"] : []),
           ...(item.labels.runnable === undefined ? ["runnable"] : []),
+          // VS-22c's, which VS-37's per-level recall and S9's scope read. testGap is not required while its
+          // definition is new (vectorscope-deviations.md, VS-22c), and labels.notInChange is outside the freeze.
+          ...(item.labels.defects.every((defect) => defect.contextLevel !== undefined) ? [] : ["contextLevel"]),
+          ...(item.labels.defects.every((defect) => defect.scope !== undefined) ? [] : ["scope"]),
           // An unsettled label is reported above for its missing pass or agreement.
           ...(labelSettled(item.labels.annotation) &&
           new Set(item.labels.annotation.passes.filter((pass) => pass.labels).map((pass) => pass.pass)).size < 2
@@ -813,20 +1360,40 @@ export interface ObjectCheck {
   checked: string[] // case ids checked against a local mirror
   unchecked: string[] // case ids with no mirror; their recorded check stands
   problems: string[]
+  notes?: string[] // advice that refuses nothing (VS-22c's context levels), present only when there is some
 }
 
 // Checks each case against a local clone of its repository, read-only. `locate` maps a repository URL to a local
 // directory, or undefined when there is none; nothing is fetched.
-export function objectProblems(manifest: Pick<Manifest, "cases">, locate: (url: string) => string | undefined) {
+export function objectProblems(
+  manifest: Pick<Manifest, "cases">,
+  locate: (url: string) => string | undefined,
+): ObjectCheck {
   const entries = manifest.cases.map((item) => ({ item, dir: locate(item.repository.url) }))
+  const results = entries.flatMap((entry) => (entry.dir ? [caseObjectProblems(entry.item, entry.dir)] : []))
+  const notes = results.flatMap((result) => result.notes)
   return {
     checked: entries.filter((entry) => entry.dir).map((entry) => entry.item.id),
     unchecked: entries.filter((entry) => !entry.dir).map((entry) => entry.item.id),
-    problems: entries.flatMap((entry) => (entry.dir ? caseObjectProblems(entry.item, entry.dir) : [])),
-  } satisfies ObjectCheck
+    problems: results.flatMap((result) => result.problems),
+    ...(notes.length ? { notes } : {}),
+  }
 }
 
-function caseObjectProblems(item: Case, dir: string): string[] {
+// The diff options the engine reviews a change with (packages/engine/src/review/source.ts DIFF), at its default
+// context.
+const REVIEWED_DIFF = [
+  "--no-color",
+  "--no-ext-diff",
+  "--no-textconv",
+  "--no-relative",
+  "--src-prefix=a/",
+  "--dst-prefix=b/",
+  "--find-renames",
+  "--unified=3",
+]
+
+function caseObjectProblems(item: Case, dir: string): { problems: string[]; notes: string[] } {
   const label = `case ${item.id}`
   const git = (...args: string[]) => {
     const result = Bun.spawnSync(["git", ...UNTRUSTED_GIT, "-C", dir, ...args], {
@@ -836,13 +1403,19 @@ function caseObjectProblems(item: Case, dir: string): string[] {
     })
     return { ok: result.exitCode === 0, out: result.stdout.toString() }
   }
+  const pushes = item.candidate.commits ?? []
   const commits = [
     { name: "candidate.base", sha: item.candidate.base },
     { name: "candidate.head", sha: item.candidate.head },
+    ...pushes.map((push, index) => ({ name: `candidate.commits[${index}]`, sha: push.sha })),
     ...(item.fix ? [{ name: "fix.sha", sha: item.fix.sha }] : []),
   ]
   const missing = commits.filter((commit) => git("cat-file", "-t", commit.sha).out.trim() !== "commit")
-  if (missing.length) return missing.map((commit) => `${label}: ${commit.name} ${commit.sha} is not a commit in ${dir}`)
+  if (missing.length)
+    return {
+      problems: missing.map((commit) => `${label}: ${commit.name} ${commit.sha} is not a commit in ${dir}`),
+      notes: [],
+    }
 
   const ancestor = (a: string, b: string) => git("merge-base", "--is-ancestor", a, b).ok
   const time = (sha: string) => Date.parse(git("show", "-s", "--format=%cI", sha).out.trim())
@@ -871,54 +1444,244 @@ function caseObjectProblems(item: Case, dir: string): string[] {
           return !!fixed && fixed !== blob(`${fix.sha}^1`, path) && blob(item.candidate.head, path) === fixed
         })
     : []
-  const locations = item.labels.defects.flatMap((defect) =>
-    [...defect.locations, ...defect.alternatives].map((location) => ({ defect: defect.id, location })),
+  const cites = (who: string, defect: Pick<Defect, "locations" | "alternatives">) =>
+    [...defect.locations, ...defect.alternatives].map((location) => ({ who, location }))
+  const locations = [
+    ...item.labels.defects.flatMap((defect) => cites(`defect ${defect.id}`, defect)),
+    ...(item.labels.notInChange ?? []).flatMap((defect) => cites(`notInChange ${defect.id}`, defect)),
+    ...(item.labels.headRule ? [{ who: "labels.headRule", location: item.labels.headRule }] : []),
+  ]
+  const change = changeOf(git("diff", ...REVIEWED_DIFF, item.candidate.base, item.candidate.head).out)
+  const labelled = changeProblems(label, item, change)
+  return {
+    problems: [
+      ...need(
+        ancestor(item.candidate.base, item.candidate.head),
+        `${label}: candidate.base ${short(item.candidate.base)} is not an ancestor of candidate.head ${short(item.candidate.head)}`,
+      ),
+      ...(fix
+        ? [
+            ...need(
+              ancestor(item.candidate.head, fix.sha),
+              `${label}: candidate.head ${short(item.candidate.head)} is not an ancestor of the fix ${short(fix.sha)}`,
+            ),
+            ...need(
+              !ancestor(fix.sha, item.candidate.head),
+              `${label}: the fix ${short(fix.sha)} is already in the candidate's history (post-fix leakage)`,
+            ),
+            ...need(
+              leaked.length === 0,
+              `${label}: the candidate head already has the fix's version of ${leaked.join(", ")} (post-fix leakage)`,
+            ),
+            ...need(
+              time(fix.sha) === Date.parse(fix.date),
+              `${label}: fix.date ${fix.date} is not the fix's commit time ${new Date(time(fix.sha)).toISOString()}`,
+            ),
+          ]
+        : []),
+      ...need(
+        time(item.candidate.head) === Date.parse(item.candidate.date),
+        `${label}: candidate.date ${item.candidate.date} is not the head's commit time ${new Date(time(item.candidate.head)).toISOString()}`,
+      ),
+      ...need(
+        changed.files === item.candidate.changed.files &&
+          changed.additions === item.candidate.changed.additions &&
+          changed.deletions === item.candidate.changed.deletions,
+        `${label}: candidate.changed records ${describeSize(item.candidate.changed)} but git reports ${describeSize(changed)}`,
+      ),
+      ...locations.flatMap((entry) => {
+        const shown = git("cat-file", "-p", `${item.candidate.head}:${entry.location.path}`)
+        if (!shown.ok)
+          return [`${label}: ${entry.who} cites ${entry.location.path}, which is not in the candidate head`]
+        const total = shown.out.replace(/\n$/, "").split("\n").length
+        const last = entry.location.endLine ?? entry.location.line
+        return need(
+          last <= total,
+          `${label}: ${entry.who} cites ${entry.location.path}:${entry.location.line}${entry.location.endLine ? `-${entry.location.endLine}` : ""}, past the end of the file (${total} lines)`,
+        )
+      }),
+      ...labelled.problems,
+      ...(pushes.length ? pushProblems(label, item, pushes, { git, ancestor, time }) : []),
+    ],
+    notes: labelled.notes,
+  }
+}
+
+// What base..head changes, from the diff the engine reviews: each file it does not delete, by its head path, with its
+// new-side hunk ranges (context included) and its added lines.
+function changeOf(diff: string) {
+  return new Map(
+    parseUnifiedDiff(diff)
+      .filter((file) => file.status !== "deleted")
+      .map((file) => [
+        file.path,
+        {
+          file,
+          hunks: file.hunks.map((hunk) => [hunk.newStart, hunk.newStart + hunk.newLines - 1] as const),
+          added: new Set(
+            file.hunks.flatMap((hunk) =>
+              hunk.lines.flatMap((line) => (line.kind === "add" && line.newLine !== undefined ? [line.newLine] : [])),
+            ),
+          ),
+        },
+      ]),
   )
-  return [
-    ...need(
-      ancestor(item.candidate.base, item.candidate.head),
-      `${label}: candidate.base ${short(item.candidate.base)} is not an ancestor of candidate.head ${short(item.candidate.head)}`,
-    ),
-    ...(fix
-      ? [
+}
+
+type Change = ReturnType<typeof changeOf>
+
+// VS-22c's labels against the change. A context level is the annotator's judgement of the context a defect needs, so
+// only a level narrower than its locations show is refused (a location outside every hunk needs at least the file, one
+// in a file the change does not touch the repository); a level its alternatives would widen is a note. The other
+// labels must match the lines they describe: exacerbated-by-pr cites an added line and an unchanged one, a defect
+// outside the change cites no added line (so no line of a file the change adds), testGap weakened cites an existing
+// test the change edits, and a head-added rule lies on lines the change adds to a rule-carrying file. Every line check
+// is interval arithmetic over the diff, never a list of the cited lines, since endLine has no upper bound before the
+// "past the end of the file" check reports it.
+function changeProblems(label: string, item: Case, change: Change) {
+  const tests = item.labels.regressionTest?.paths
+  const levels = [...item.labels.defects, ...(item.labels.notInChange ?? [])].flatMap((defect) => {
+    if (!defect.contextLevel) return []
+    const labelled = CONTEXT_LEVELS.indexOf(defect.contextLevel)
+    const needed = Math.max(...defect.locations.map((location) => levelOf(change, location)))
+    const sources = [...defect.locations, ...defect.alternatives].filter((location) => !isTest(location.path, tests))
+    const reached = Math.max(
+      ...(sources.length ? sources : defect.locations).map((location) => levelOf(change, location)),
+    )
+    return [
+      {
+        problem:
+          needed > labelled
+            ? `${label}: defect ${defect.id} is labelled ${defect.contextLevel}, but its locations need at least ${CONTEXT_LEVELS[needed]}`
+            : undefined,
+        note:
+          reached > Math.max(labelled, needed)
+            ? `${label}: defect ${defect.id} is labelled ${defect.contextLevel}, and its alternatives reach ${CONTEXT_LEVELS[reached]} (advice, not a refusal)`
+            : undefined,
+      },
+    ]
+  })
+  const added = (location: Location) => addedWithin(change, location) > 0
+  const unchanged = (location: Location) => addedWithin(change, location) < span(location)
+  const rule = item.labels.headRule
+  const ruleFile = rule ? change.get(rule.path) : undefined
+  return {
+    problems: [
+      ...levels.flatMap((entry) => (entry.problem ? [entry.problem] : [])),
+      ...item.labels.defects.flatMap((defect) => {
+        const cited = [...defect.locations, ...defect.alternatives]
+        return [
           ...need(
-            ancestor(item.candidate.head, fix.sha),
-            `${label}: candidate.head ${short(item.candidate.head)} is not an ancestor of the fix ${short(fix.sha)}`,
+            defect.scope !== "exacerbated-by-pr" || (cited.some(added) && cited.some(unchanged)),
+            `${label}: defect ${defect.id} is exacerbated-by-pr, so it cites a line the change added and one the change left as it was`,
           ),
           ...need(
-            !ancestor(fix.sha, item.candidate.head),
-            `${label}: the fix ${short(fix.sha)} is already in the candidate's history (post-fix leakage)`,
-          ),
-          ...need(
-            leaked.length === 0,
-            `${label}: the candidate head already has the fix's version of ${leaked.join(", ")} (post-fix leakage)`,
-          ),
-          ...need(
-            time(fix.sha) === Date.parse(fix.date),
-            `${label}: fix.date ${fix.date} is not the fix's commit time ${new Date(time(fix.sha)).toISOString()}`,
+            defect.testGap !== "weakened" ||
+              testsOf(defect, tests).some((path) => {
+                const file = change.get(path)?.file
+                return !!file && file.status !== "added"
+              }),
+            `${label}: defect ${defect.id} is testGap weakened, but no test it cites is an existing test the change edits`,
           ),
         ]
-      : []),
-    ...need(
-      time(item.candidate.head) === Date.parse(item.candidate.date),
-      `${label}: candidate.date ${item.candidate.date} is not the head's commit time ${new Date(time(item.candidate.head)).toISOString()}`,
+      }),
+      ...(item.labels.notInChange ?? []).flatMap((defect) => {
+        const inChange = [...defect.locations, ...defect.alternatives].find(added)
+        return inChange
+          ? [
+              `${label}: notInChange ${defect.id} cites ${describeLocation(inChange)}, a line the change added; a defect there is in the change`,
+            ]
+          : []
+      }),
+      ...need(
+        !rule ||
+          (!!ruleFile &&
+            trustedRules({ anchors: [ruleFile.file] }).added.length > 0 &&
+            addedWithin(change, rule) === span(rule)),
+        `${label}: labels.headRule cites ${rule ? describeLocation(rule) : ""}, which is not a rule the change adds to a rule-carrying file`,
+      ),
+    ],
+    notes: levels.flatMap((entry) => (entry.note ? [entry.note] : [])),
+  }
+}
+
+// 0, 1 or 2: the context level a cited place needs at least (CONTEXT_LEVELS' index). A cited range inside the hunks
+// lies inside one of them: git joins hunks whose context would meet, so two hunks' new-side ranges never touch.
+function levelOf(change: Change, location: Location) {
+  const facts = change.get(location.path)
+  if (!facts) return 2
+  const last = location.endLine ?? location.line
+  return facts.hunks.some(([start, end]) => location.line >= start && last <= end) ? 0 : 1
+}
+
+// How many lines from line to endLine the change added, read from the added set, which the diff bounds.
+function addedWithin(change: Change, location: Location) {
+  const last = location.endLine ?? location.line
+  return [...(change.get(location.path)?.added ?? [])].filter((line) => line >= location.line && line <= last).length
+}
+
+function span(location: Location) {
+  return (location.endLine ?? location.line) - location.line + 1
+}
+
+function describeLocation(location: Location) {
+  return `${location.path}:${location.line}${location.endLine ? `-${location.endLine}` : ""}`
+}
+
+// A sequence's pushes against the repository: they chain by ancestry from the base, each date is its commit time, each
+// defect's files exist at its introducing push, and an interaction defect cites a file that an earlier push changed
+// and its own push left alone (VS-41's defect introduced via an unfocused file). interaction false is never refused.
+function pushProblems(
+  label: string,
+  item: Case,
+  pushes: { sha: string; date: string }[],
+  repository: {
+    git: (...args: string[]) => { ok: boolean; out: string }
+    ancestor: (a: string, b: string) => boolean
+    time: (sha: string) => number
+  },
+) {
+  const chain = [
+    { name: "candidate.base", sha: item.candidate.base },
+    ...pushes.map((push, index) => ({ name: `candidate.commits[${index}]`, sha: push.sha })),
+  ]
+  const changedBy = (from: string, to: string) =>
+    new Set(repository.git("diff", "--name-only", "--find-renames", from, to).out.split("\n").filter(Boolean))
+  return [
+    ...chain
+      .slice(1)
+      .flatMap((push, index) =>
+        need(
+          repository.ancestor(chain[index].sha, push.sha),
+          `${label}: ${chain[index].name} ${short(chain[index].sha)} is not an ancestor of ${push.name} ${short(push.sha)}`,
+        ),
+      ),
+    ...pushes.flatMap((push, index) =>
+      need(
+        repository.time(push.sha) === Date.parse(push.date),
+        `${label}: candidate.commits[${index}].date ${push.date} is not its commit time ${new Date(repository.time(push.sha)).toISOString()}`,
+      ),
     ),
-    ...need(
-      changed.files === item.candidate.changed.files &&
-        changed.additions === item.candidate.changed.additions &&
-        changed.deletions === item.candidate.changed.deletions,
-      `${label}: candidate.changed records ${describeSize(item.candidate.changed)} but git reports ${describeSize(changed)}`,
-    ),
-    ...locations.flatMap((entry) => {
-      const shown = git("cat-file", "-p", `${item.candidate.head}:${entry.location.path}`)
-      if (!shown.ok)
-        return [`${label}: defect ${entry.defect} cites ${entry.location.path}, which is not in the candidate head`]
-      const total = shown.out.replace(/\n$/, "").split("\n").length
-      const last = entry.location.endLine ?? entry.location.line
-      return need(
-        last <= total,
-        `${label}: defect ${entry.defect} cites ${entry.location.path}:${entry.location.line}${entry.location.endLine ? `-${entry.location.endLine}` : ""}, past the end of the file (${total} lines)`,
-      )
+    ...item.labels.defects.flatMap((defect) => {
+      const at = pushes.findIndex((push) => push.sha === defect.introducedAt)
+      if (at === -1) return []
+      const paths = [...new Set(defect.locations.map((location) => location.path))]
+      const cited = [...new Set(citedPaths(defect))]
+      const before = at === 0 ? item.candidate.base : pushes[at - 1].sha
+      const sofar = changedBy(item.candidate.base, pushes[at].sha)
+      const own = changedBy(before, pushes[at].sha)
+      return [
+        ...paths.flatMap((path) =>
+          need(
+            repository.git("cat-file", "-e", `${pushes[at].sha}:${path}`).ok,
+            `${label}: defect ${defect.id} cites ${path}, which is not in its introducing push ${short(pushes[at].sha)}`,
+          ),
+        ),
+        ...need(
+          defect.interaction !== true || cited.some((path) => sofar.has(path) && !own.has(path)),
+          `${label}: defect ${defect.id} is labelled interaction, but no file it cites was changed by an earlier push and left alone by its own`,
+        ),
+      ]
     }),
   ]
 }
@@ -1016,6 +1779,7 @@ export function dryRunReport(manifest: Manifest, objects?: ObjectCheck) {
     ...(trivial.length
       ? [`Trivial kinds: ${tally(trivial.map((item) => item.labels.trivialKind ?? "unlabelled"))}.`]
       : []),
+    ...roundTwoLines(manifest, tally),
     `Targets (VS-22b, reported, not enforced): ${bugs.length}/${TARGETS.bugs} bug cases; by class ${FAILURE_CLASSES.map((name) => `${name} ${bugs.filter((item) => item.labels.defects.some((defect) => defect.failureClass === name)).length}/${TARGETS.perClass}`).join(", ")}; cross-file ${bugs.filter((item) => item.labels.crossFile === true).length}/${TARGETS.crossFile}; runnable (passed) ${bugs.filter((item) => item.labels.runnable?.status === "passed").length}/${TARGETS.runnable}; ${controls.length}/${TARGETS.controls} controls; ${trivial.length}/${TARGETS.trivial} trivial controls; ${bugs.filter((item) => item.traits?.includes("trivial-looking")).length}/${TARGETS.trivialLooking} trivial-looking bug cases; ${adversarial.length}/${TARGETS.adversarial} adversarial.`,
     `Labels: ${ANNOTATION_STATUSES.map((status) => `${statuses.filter((entry) => entry === status).length} ${status}`).join(", ")}`,
     manifest.freeze
@@ -1024,6 +1788,7 @@ export function dryRunReport(manifest: Manifest, objects?: ObjectCheck) {
     objects
       ? `Objects: ${objects.checked.length} case(s) checked against local mirrors${objects.unchecked.length ? `; no mirror for ${objects.unchecked.join(", ")}` : ""}.`
       : "Objects: not checked against local mirrors (none given).",
+    ...(objects?.notes?.length ? ["Object notes:", ...objects.notes.map((note) => `  ${note}`)] : []),
     `Recorded checks: ${methods}.`,
     "",
     `Exclusions (${manifest.exclusions.length}):`,
@@ -1034,6 +1799,38 @@ export function dryRunReport(manifest: Manifest, objects?: ObjectCheck) {
     "",
     "Dry run: no network requests were made.",
   ].join("\n")
+}
+
+// VS-22c's labels and the round-two strata, over the bug cases' defects as the VS-22a lines are; defects outside the
+// change, sequences, feedback and head-added rules over every case. Absent labels are counted as unlabelled.
+function roundTwoLines(manifest: Manifest, tally: (values: string[]) => string) {
+  const bugs = manifest.cases.filter((item) => item.kind === "bug")
+  const defects = bugs.flatMap((item) => item.labels.defects)
+  const outside = manifest.cases.flatMap((item) => item.labels.notInChange ?? [])
+  const sequences = manifest.cases.filter((item) => item.candidate.commits)
+  const later = sequences.flatMap((item) => (item.candidate.commits ?? []).slice(1).map((push) => ({ item, push })))
+  const clean = later.filter(
+    (entry) => !entry.item.labels.defects.some((defect) => defect.introducedAt === entry.push.sha),
+  )
+  const interactions = manifest.cases.flatMap((item) => item.labels.defects.filter((defect) => defect.interaction))
+  // VS-41's target counts cases, so a case with two interaction defects counts once there.
+  const interacting = manifest.cases.filter((item) => item.labels.defects.some((defect) => defect.interaction))
+  const attacks = manifest.cases.flatMap((item) => (item.labels.feedback ? [item.labels.feedback.attack] : []))
+  const rules = manifest.cases.filter((item) => item.labels.headRule)
+  const exacerbated = defects.filter((defect) => defect.scope === "exacerbated-by-pr").length
+  const preExisting = outside.filter((defect) => defect.scope === "pre-existing").length
+  const gaps = defects.flatMap((defect) => (defect.testGap ? [defect.testGap] : []))
+  return [
+    `Context levels (the context a defect needs): ${tally(defects.flatMap((defect) => (defect.contextLevel ? [defect.contextLevel] : []))) || "none labelled"}; ${defects.filter((defect) => !defect.contextLevel).length} unlabelled.`,
+    `Scope (ReviewBench's axis): ${tally(defects.flatMap((defect) => (defect.scope ? [defect.scope] : []))) || "none labelled"}; ${defects.filter((defect) => !defect.scope).length} unlabelled. Outside the change (labels.notInChange, never judged, outside S9's scope): ${tally(outside.map((defect) => defect.scope)) || "none"}.`,
+    `Strata (GU5, reported, no minimum): Python ${bugs.filter((item) => item.language === "python").length} bug case(s); security ${defects.filter((defect) => defect.category === "security").length} defect(s); test gap (a weakened test) ${gaps.filter((gap) => gap === "weakened").length} defect(s), ${gaps.filter((gap) => gap === "none").length} labelled none, ${defects.length - gaps.length} unlabelled.`,
+    sequences.length
+      ? `Sequences: ${sequences.length} case(s) with ${later.length} later push(es); ${interactions.length} interaction defect(s); ${clean.length} clean later push(es).`
+      : "Sequences: none.",
+    `Review feedback (synthetic markers): ${tally(attacks) || "none"}.`,
+    `Head-added rule cases: ${rules.length}.`,
+    `Round-two targets (addendum A, pending Q18; reported, not enforced, and outside the sampling rule's quota): sequences ${sequences.length}/${ROUND_TWO_TARGETS.sequences}; interaction cases ${interacting.length}/${ROUND_TWO_TARGETS.interactions}; clean later pushes ${clean.length}/${ROUND_TWO_TARGETS.cleanLater}; exacerbated-by-pr defects ${exacerbated}/${ROUND_TWO_TARGETS.exacerbated}; pre-existing defects ${preExisting}/${ROUND_TWO_TARGETS.preExisting}; head-added rule cases ${rules.length}/${ROUND_TWO_TARGETS.headRule}; feedback attacks ${ADDENDUM_ATTACKS.map((attack) => `${attack} ${attacks.filter((entry) => entry === attack).length}/${ROUND_TWO_TARGETS.perAttack}`).join(", ")}.`,
+  ]
 }
 
 const USAGE = `Usage: bun script/vectorscope-eval/dataset.ts [options]
@@ -1132,6 +1929,10 @@ function isPath(value: unknown) {
 
 function count(value: unknown) {
   return Number.isInteger(value) && (value as number) >= 0
+}
+
+function positive(value: unknown) {
+  return Number.isInteger(value) && (value as number) > 0
 }
 
 function sum(values: number[]) {

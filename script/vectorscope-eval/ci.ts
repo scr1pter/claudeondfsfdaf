@@ -357,7 +357,16 @@ export function mirrorPlan(manifest: Pick<Manifest, "cases">) {
     return {
       url,
       dir: join(owner, `${name}.git`),
-      shas: [...new Set((cases ?? []).flatMap((item) => [item.candidate.head, item.candidate.base]))],
+      // A multi-commit sequence's pushes too (VS-22c), so its object checks and a later sequence replay find each one.
+      shas: [
+        ...new Set(
+          (cases ?? []).flatMap((item) => [
+            item.candidate.head,
+            item.candidate.base,
+            ...(item.candidate.commits ?? []).map((push) => push.sha),
+          ]),
+        ),
+      ],
     }
   })
 }

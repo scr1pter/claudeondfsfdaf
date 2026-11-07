@@ -609,6 +609,32 @@ describe("the replay pipeline", () => {
     }
   })
 
+  // VS-22c: every push of a multi-commit sequence, once each, after the head and the base.
+  test("the mirror plan covers every push of a multi-commit sequence", async () => {
+    const seed = (await loadManifest()) as Manifest
+    const first = seed.cases[0]!
+    const earlier = "f".repeat(40)
+    const sequenced = {
+      ...first,
+      candidate: {
+        ...first.candidate,
+        commits: [
+          { sha: earlier, date: "2000-01-01T00:00:00Z" },
+          { sha: first.candidate.head, date: first.candidate.date },
+        ],
+      },
+    }
+    const plan = mirrorPlan({ cases: [sequenced] })
+    expect(plan).toEqual([
+      {
+        url: first.repository.url,
+        dir: `${first.repository.url.split("/")[3]}/${first.repository.url.split("/")[4]}.git`,
+        shas: [first.candidate.head, first.candidate.base, earlier],
+      },
+    ])
+    expect(mirrorPlan({ cases: [first] })[0]!.shas).toEqual([first.candidate.head, first.candidate.base])
+  })
+
   test("mirrors fetches the committed manifest's commits with hooks off, https only, into refs, and fails on any error", async () => {
     const calls: { argv: string[]; env: Record<string, string | undefined> }[] = []
     const out: string[] = []

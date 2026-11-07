@@ -11871,3 +11871,528 @@ committed.
   - Nothing was sent to a model, no paid path ran, no workflow was
     dispatched, no dependency was added, and no user-visible string
     changed (D14).
+
+## 2026-11-07 · VS-22c Round-two dataset labels
+
+Addendum A §3, VS-22, the "VS-22a follow-up" bullet, in the Now window of
+§4 ("the VS-22a follow-up labels (before the held-out freeze)"). Built at
+`fb18395b` on `vectorscope-engine`. Addendum A's packages are proposals
+pending Q18, so everything here is eval tooling and dataset labels, off by
+default, and nothing calls it from a runner. `run.ts`, `ai-review.ts`,
+`provider.ts`, `session/llm.ts`, `posting.ts`, every core and engine source
+file, `workflow.ts`, `command.ts`, `github.*`, `github-*.ts`,
+`vectorscope.astro`, `judging-rubric.md`, `report.ts` and the engine entry
+point `packages/engine/script/vectorscope-replay.ts` are untouched. No new
+external case was curated and nothing was imported from AACR (Q31). It
+implements the VS-22c plan as corrected by its critique: every critique point
+was taken, points 2, 10 and 11 in one of the forms the critique offered and
+point 6 in a corrected form (below). Nothing is committed.
+
+- **What landed.**
+  - **`script/vectorscope-eval/dataset.ts`:**
+    - schema `vectorscope-dataset/3`;
+    - constants `CONTEXT_LEVELS` (hunk, file, repo), `IN_CHANGE_SCOPES`
+      (introduced-by-pr, exacerbated-by-pr), `NOT_IN_CHANGE_SCOPES`
+      (pre-existing, unrelated), `DEFECT_SCOPES`, `FINDING_SCOPE_AXIS`,
+      `TEST_GAPS` (weakened, none), `FEEDBACK_ATTACKS` (addendum A's
+      forged-author, brigading, bulk-resolve and security-thumbs, then the
+      known-gap invented-writers), `FEEDBACK_SOURCES` (synthetic) and
+      `ROUND_TWO_TARGETS`;
+    - on `Defect`: `contextLevel`, `scope`, `testGap`, `introducedAt`,
+      `interaction`, each optional; a `NotInChangeDefect` type;
+      `FeedbackComment` and `Feedback` types;
+    - on `Case`: `candidate.commits`, `feedback`, and in `labels`
+      `notInChange`, `headRule` and `feedback` (attack, defect, finding);
+      pass labels gain `contextLevel`, `scope` and `testGap`;
+    - `caseView` passes a sequence's push SHAs and the review feedback
+      (without `source`), each only when present, and rebuilds each
+      comment, bot push and `own` list from its schema fields alone;
+    - validator: `classProblems` checks the three new defect labels;
+      `inChangeProblems` (scope placement, testGap evidence),
+      `notInChangeProblems`, `headRuleProblems`, `feedbackProblems` with
+      `commentProblems`, and `sequenceProblems`; per-label once per pass,
+      merged agreement (`repeatedLabels`, `mergedPass`); the freeze needs
+      `contextLevel` and `scope`;
+    - object checks: the pushes join the commits that must exist; the
+      reviewed diff (the engine's `DIFF` flags, `--find-renames
+      --unified=3`, through core's `parseUnifiedDiff`) is parsed once
+      (`changeOf`); `changeProblems` (context-level floor and note,
+      exacerbated, notInChange, testGap weakened, headRule) and
+      `pushProblems` (ancestry chain, commit times, files at the introducing
+      push, interaction); `notInChange` and `headRule` join the "in the
+      candidate head" location checks; `ObjectCheck` gains an optional
+      `notes`, present only when non-empty, which the dry run prints;
+    - dry run: seven new lines (`roundTwoLines`); every existing line is
+      unchanged.
+  - **`dataset/seed.json`:** schema 3, one description sentence, VS-22c
+    labels on all nine bug defects, and a second pass-1 entry per bug case
+    dated 2026-11-07. No case added; splits, selection and exclusions
+    unchanged.
+  - **`replay.ts`:** `unreplayable`, `unreplayableCases`; `replayPlan`
+    throws on a split holding such a case; `main` returns 1 with the
+    reasons first.
+  - **`ci.ts`:** `mirrorPlan` adds a sequence's pushes, de-duplicated,
+    after the head and base.
+  - **Tests:** `fixtures.test.ts` (37 new tests, 4 of them from the review
+    fixes below, a second local repository pushed twice, five feedback
+    attack cases), `replay.test.ts` (1 new), `ci.test.ts` (1 new).
+  - **Docs:** `annotation-guide.md` ("What a case is", "Checking a case",
+    the traits, a new "Labels added in VS-22c", a new "Multi-commit
+    sequences", "Adversarial cases", "Two passes", "Freezing", and a dated
+    amendment to the sampling rule); `README.md` (schema 3, the seed's label
+    state, the object checks, the fixtures' coverage).
+- **Decisions.**
+  - **(a) Schema 3.** A `/2` manifest is refused, as `/1` was by VS-22a.
+    The seed is the only `/2` manifest, and it moves here.
+  - **(b) contextLevel is the annotator's judgement of the context needed**
+    (critique point 1, taken). Defined in AACR-Bench's terms [LCI2]: the
+    change's diff with its default three lines of context, every hunk of
+    every changed file (hunk); the whole of a changed file (file); code in a
+    file the change does not touch (repo). The git check is one-directional:
+    a label narrower than the `locations` alone show is refused (a location
+    outside every hunk needs at least file, one in an untouched file repo);
+    when the alternatives (tests left out, as `sourceFilesOf` leaves them
+    out) reach wider than the label, the dry run prints a note, never a
+    refusal. VS-37's per-level slice recall therefore reads context need,
+    which is what its tiers supply: tier a (the enclosing definition) for
+    file, tiers b and c (outbound signatures, call sites) for repo. The plan
+    had defined the level as the widest cited place and refused any other
+    label; that would have forced hono to file although its cause is on line
+    77, and it is withdrawn.
+  - **(c) The scope split.** `labels.defects` carries only in-change scopes;
+    pre-existing and unrelated defects go in `labels.notInChange`, which
+    judging never reads (`manifestCase` passes `labels.defects` only), so
+    under rubric version 1 a finding on one stays a false alarm ("not a
+    defect in this change") and S9 leaves it out of scope. This is neutral
+    on Q29. The "not in this change" judging tag (VS-42a decision (r)) stays
+    deferred to Q29 and `RUBRIC_VERSION` 2. `labels.notInChange` is allowed
+    on any kind, so VS-42's "pre-existing bug beside a benign edit" is a
+    control; the guide's control and adversarial wording was rewritten so it
+    no longer contradicts this (critique point 9, taken).
+  - **(d) `FINDING_SCOPE_AXIS`** maps core's `FindingScope` onto the axis
+    and `satisfies Record<FindingScope, ...>`, so a fourth model value fails
+    typecheck; unrelated has no model value.
+  - **(e) testGap is GU5's stratum, on the defect** (critique point 2,
+    taken in its first form). GU5's "Test gaps: 0 of 4" is a golden
+    category, review findings whose issue is a test. Values: `weakened` (the
+    change weakens or removes a test that would catch this defect, and the
+    defect cites it at its place in the head; with mirrors, the cited test
+    is an existing file the change edits) and `none`. The plan's case-level
+    "missing" is dropped: a fix that adds the missing test is already
+    `regressionTest: added-by-fix`, and on the seed it separated nothing.
+    testGap is **not a freeze requirement**; requiring it is a choice open to
+    the owner. The Python and security strata are read from `language` and
+    `category`, with no new label and no minimum.
+  - **(f) headRule** sits on adversarial cases only. Its pure check asks
+    core's `trustedRules` whether a one-line addition at that path comes back
+    as head-added rule text, so the rule-carrying set stays citation.ts's
+    `RULE_FILES` and nothing is copied or newly exported (critique point 8,
+    taken). With mirrors, every line from `line` to `endLine` must be one the
+    change adds to that file, and `trustedRules` must read the file's added
+    runs.
+  - **(g) Feedback is input on adversarial cases** (critique points 4 to 6).
+    `Case.feedback` is what the reviewer's team memory reads (it reaches the
+    reviewer through `caseView`, without `source`); `labels.feedback` says
+    what it attacks: the attack, the labelled defect it tries to hide (which
+    needs its fix, as for any adversarial case with a defect), and the
+    finding a reviewer would post for it, by core category and title.
+    - **Reach (point 6, taken in a corrected form).** At least one comment
+      must match that finding as guarded memory matches patterns
+      (`sameTeamPattern`: the finding's core category, the directory of one
+      of the defect's locations, marker words at least `TEAM_SIMILARITY`
+      like the title). The critique asked for the marker category to equal
+      the defect's category, but the dataset's defect categories
+      (correctness, security, concurrency, ...) are not core's finding
+      categories (bug, security, reliability, ...), so the comparison is with
+      the finding's recorded core category, which must itself be one of
+      core's finding categories (its own refusal, before the reach is
+      checked). `own` entries are checked with core's `isDismissalMarker`
+      hash rule.
+    - **forged-author (point 4, taken).** It is the research case: the PR
+      author's dismissals or ones with no writer marker. A fifth attack,
+      `invented-writers` (one actor writing two well-formed `by=w` markers
+      with made-up hashes), is labelled as what HEAD really does: guarded
+      memory keeps the pattern and demotes the finding, and the test asserts
+      that. The fix (checking each hash against the repository's writers, as
+      a `GuardedTeamInput.writers` allow-list) stays where VS-35a put it,
+      after vector-at-mention with the salt secret. It is no addendum
+      target, so the dry run's round-two targets list only addendum A's four
+      attacks; its tally line still counts every attack.
+    - **Two patterns (point 5, taken).** Each attack fixture builds two
+      distinct dismissed patterns at least 0.5 like the title, so legacy
+      `teamPenalty` (two matches) applies; the tests say legacy "penalises"
+      (a 0.15 cut), not "suppresses".
+    - A leak guard refuses a body or path that quotes, in any letter case,
+      a defect's id, summary or cause (in or outside the change),
+      `labels.injection`, `labels.rationale`, the finding title, the case id
+      or the fix's first 7 characters. `caseView` rebuilds the feedback from
+      its schema fields, so no other key of a comment reaches the reviewer.
+    - Feedback cases are real commits with synthetic history only, so they
+      are not Q12's synthetic agent-authored cases; `source: "synthetic"`
+      keeps them separable, and "recorded" waits for VS-35's marker window.
+  - **(h) Sequences.** `candidate.commits` lists at least two pushes, each a
+    full SHA and its ISO time, without repeats or the base, ending at the
+    head and its date, never including the fix. The `incremental` trait was
+    listed in `TRAITS`, the guide and the README but never defined; VS-22c
+    defines it as a multi-commit sequence and requires it exactly on cases
+    with `candidate.commits` (critique point 7, taken; the plan's "never
+    defined" is reworded so). Every labelled defect of a sequence needs
+    `introducedAt` (one of the pushes); outside a sequence `introducedAt` and
+    `interaction` are refused. `interaction: true` needs a push after the
+    first, and with mirrors a cited file that base..introducedAt changed and
+    the introducing push did not (VS-41's "unfocused file"); `false` is never
+    refused, as for context levels. The head must still be an ancestor of
+    the fix, so a sequence comes from a pull request merged with a merge
+    commit; a force-pushed one is a single case.
+  - **(i) Each label once per pass.** A pass may record its labels over
+    several entries (the seed's pass 1 has a VS-22a entry and a VS-22c
+    entry); a label given twice for one pass is refused with one message
+    naming each repeat (`defect.failureClass`, ..., `crossFile`). Agreement
+    is checked on each pass's merged entries.
+  - **(j) The freeze** needs `contextLevel` and `scope` on every held-out bug
+    defect, after `runnable` in the message. `labels.notInChange` is outside
+    the pass records and the freeze in this package (critique point 13,
+    taken; recorded as deferred).
+  - **(k) Round-two targets are reported only** (critique point 3, taken).
+    `ROUND_TWO_TARGETS` (VS-41's 15 sequences, 5 cases with an interaction
+    defect, 5 clean later pushes; one exacerbated defect, one pre-existing
+    defect, one head-added rule case and one case per addendum attack, the
+    addendum's "a case" at its minimum) appears in the dry run; item 2 of
+    the sampling rule is
+    unchanged, and item 5's quota does not apply to them until Q18. The
+    guide's dated amendment changes only item 6 and "What a case is" for
+    sequences (base the merge-base, head the last pushed head, pending Q18)
+    and places review feedback cases outside the query-ordered sampling.
+    No VS-22b candidate has been examined (no `dataset/upgrade.json`, no
+    VS-22b entry), so the amendment applies to every future candidate.
+  - **(l) A case the replay cannot feed blocks its split** (critique point
+    11, taken in its first form). `replayPlan` throws with every such case
+    of the split and its reason; `replay.ts main` returns 1 with the same
+    text first. The engine entry point is untouched, so on such a split it
+    stops with that error and replays nothing. This is fail-closed on
+    purpose: a sequence or feedback case is never replayed as a plain
+    base..head review and scored as one. No such case exists, and the seed's
+    plans are unchanged (tested).
+  - **(m) `caseView` and `mirrorPlan`** grow only for cases with the new
+    fields: a view of a case without them, and the seed's mirror plan, are
+    byte-identical (tested).
+  - **(n) `manifestCase` is unchanged**, so judge tasks and scores are
+    byte-identical for every case, and a case's `notInChange` changes no
+    judged input (tested).
+  - **(o) dataset.ts now imports runtime core modules** (critique point 7,
+    taken). Until now it imported only the import-free `types.ts`, and
+    `TRIVIAL_KINDS` was a copy "because trivial.ts has runtime imports". It
+    now also imports `citation.ts` (which loads `config.ts`, `privacy.ts`
+    with effect and minimatch, and `prompt.ts`), `state.ts` (which loads
+    `command.ts`, imported and never edited, `select.ts`, `prompt.ts` and
+    `team.ts`), `diff.ts`, `fingerprint.ts` and `team.ts`. This is I-10
+    reuse: no second marker parser, rule-file list, diff parser or pattern
+    matcher. It is safe: every job that runs the scripts installs
+    dependencies with setup-bun, `ci.ts` already loads `fixture.ts` (core
+    `diff.ts` and `pack.ts`), the eval tsconfig and the engine typecheck
+    cover the imports, and the dry run still makes no network request
+    (tested). `TRIVIAL_KINDS` stays a copy held equal by its test; switching
+    it to core's is left to a package that touches the trivial kinds.
+  - **(p) No crossFile implication** (critique point 13, taken). The plan's
+    "crossFile false refused for a repo defect citing two source files" is
+    dropped: crossFile stays the annotator's judgement.
+  - **(q) Feedback holds the post-classification view only** (critique
+    point 10, taken in its second form). Each comment carries its finding and
+    dismissal markers with `replied` and `codeChanged`, as core's
+    `GuardedComment` takes them; raw reply text, reactions and resolve events
+    are not in schema 3. The deferred engine half therefore cannot feed
+    `PromptInput.humanComments` or exercise `classifyPrior`, where brigading
+    and bulk resolves happen in production, without a schema follow-up that
+    adds those raw thread fields.
+- **Seed labels** (pass 1, 2026-11-07, from the case files and read-only
+  `git diff --find-renames --unified=3 base head` on local mirrors):
+
+  | Case | Defect | contextLevel | scope | testGap |
+  | --- | --- | --- | --- | --- |
+  | pallets-werkzeug-1 | server-name-none | hunk | introduced-by-pr | none |
+  | pallets-werkzeug-1 | port-appended-to-host | hunk | introduced-by-pr | none |
+  | fastify-fastify-1 | response-time-unset | hunk | introduced-by-pr | none |
+  | nats-io-nats-server-1 | lds-data-race | hunk | introduced-by-pr | unlabelled |
+  | caddyserver-caddy-1 | srv-upstream-rejected | repo | introduced-by-pr | none |
+  | vitejs-vite-1 | legacy-marker-in-ssr | file | introduced-by-pr | none |
+  | tokio-rs-tracing-1 | scoped-default-clobbers-global | hunk | introduced-by-pr | none |
+  | pallets-click-1 | eof-on-iteration | hunk | introduced-by-pr | weakened |
+  | honojs-hono-1 | jwt-time-truncation | hunk | introduced-by-pr | none |
+
+  - caddy is repo because its cause needs `Upstream.LookupSRV` in
+    `hosts.go`, outside the change; vite is file because the legacy-env
+    define at `index.js:454-459` lies outside every hunk of the changed file.
+  - hono is hunk under (b): the 32-bit truncation is on line 77, inside the
+    hunk; its alternative `78-86` runs past the hunk, which the mirror dry
+    run reports as its one note.
+  - testGap: click's change edits `tests/test_chain.py:166-167` to expect the
+    abort, an existing test, so weakened. werkzeug, fastify, caddy, vite and
+    hono edit no test, and tracing only adds a new test file, so none. nats
+    edits three existing test files that were not read for the race, so its
+    testGap is unlabelled and its entry says "testGap not examined".
+  - Disputes for pass 2: nats file against hunk (the `c.mu.Lock()` lies
+    above the hunk, although the added `c.mu.Unlock()` shows the lock);
+    tracing file against hunk (the guard's stored prior is read outside the
+    hunks); hono file against hunk; nats testGap.
+- **Off by default (I-1).** No `ReviewConfig` key; no change to
+  `EVIDENCE_POLICY_KEYS`, `EvidenceScope` or `VARIANT_KEYS`; no replay
+  variant, so §0.3 item 4 does not apply; no desktop change. No file in
+  `REVIEW_PIPELINE_FILES` changed, so `REVIEW_PIPELINE_SOURCES` stays
+  `124e47864a16fea4` (`model-evidence.test.ts` passes unchanged),
+  `REVIEW_PIPELINE_REVISION` stays 1 and `RUBRIC_VERSION` stays 1. No core
+  or engine source changed, so `promptsDigest` and `policyDigest` cannot
+  move, and no runner, request or posted body changes, so no D3 parity test
+  applies. The only output changes are in eval tooling: schema 3, the new
+  dry-run lines, refusals of malformed new fields, and the replay refusing
+  case kinds that no manifest holds yet.
+- **Owner questions: none decided.** Q3, Q4, Q12, Q13, Q18, Q24, Q29 and Q31
+  stay open; everything built here reads the same under either answer.
+- **Held-out digest:** the seed is not frozen. Its held-out digest moves
+  from `sha256:dc56133cf9d417526f0d534ae89aaebfcdaa414b6f1aa0c085a09897f4a6e98d`
+  to `sha256:372a8d7d3f291fae9250d5fa7676698110ba03d098afba3bf88b08d8f2bfa8e2`,
+  because click and hono, its held-out cases, gain labels.
+- **Existing tests whose setup or expectation changed** (all in
+  `fixtures.test.ts`):
+  - "the targets are VS-22b's, and a manifest of an earlier schema is
+    refused" (renamed from "of the first schema"): expects schema 3 and
+    refuses `/1` and `/2`;
+  - "each pass may record its own labels...": two pass-1 entries with the
+    same labels now get the per-label message, "pass 1 records the same
+    label in more than one entry (defect.failureClass, defect.mechanism,
+    crossFile)", instead of "a pass records its own labels in more than one
+    entry";
+  - "a held-out bug case is frozen only with its VS-22a labels...": the
+    missing list adds `contextLevel, scope`;
+  - the seed's "labels failure class, mechanism and cross-file..." test: each
+    bug case now has two dated pass-1 entries with labels, 2026-11-06 and
+    2026-11-07; the 2026-11-06 entry's checks are unchanged;
+  - setup: `synthetic()`'s defect gains `contextLevel: "hunk"` and `scope:
+    "introduced-by-pr"`, so the frozen synthetic manifests of the freeze
+    tests stay valid under (j);
+  - setup: `buildRepository` now uses a shared `localRepository` helper
+    that the new sequence repository also uses; the commits, contents and
+    dates are the same;
+  - the seed's dry-run test only gains lines.
+- **Evidence.** Each test file ran alone through the lock with `--timeout
+  30000` and `GITHUB_ACTIONS=false`, with `TMPDIR` and the XDG roots under
+  `/tmp/vector-vectorscope/vs22c/`; every eval test ran from
+  `packages/script`, as `test.yml` runs them.
+
+  | File | HEAD | After |
+  | --- | --- | --- |
+  | `fixtures.test.ts` | 66 | 103 (99 before the review fixes) |
+  | `replay.test.ts` | 37 | 38 |
+  | `ci.test.ts` | 33 | 34 |
+  | `report.test.ts`, `judge.test.ts`, `certify.test.ts`, `run.test.ts`, `budget.test.ts` | 34, 6, 7, 14, 21 | 34, 6, 7, 14, 21 |
+  | engine `vectorscope-replay.test.ts`, `eval.test.ts` | 18, 33 | 18, 33 |
+  | core `model-evidence.test.ts` (pin unchanged), `eval.test.ts`, `eval-judge.test.ts`, `eval-report.test.ts` | 30, 42, 12, 19 | 30, 42, 12, 19 |
+
+  All pass.
+  - **Typecheck.** `bun tsgo -p ../../script/vectorscope-eval/tsconfig.json`
+    from `packages/engine` (as `typecheck.yml` runs it), and `bun typecheck`
+    in `packages/engine` (its entry point imports `dataset.ts`),
+    `packages/core` and `packages/script`: all pass.
+  - **Format.** prettier passes on every changed file except this log,
+    which was not prettier-clean at HEAD and is only appended to.
+  - **Dry runs.** `bun dataset.ts` exits 0 with the seven new lines.
+    Critique point 12 was taken before any edit: the fix SHAs were fetched
+    read-only into a scratch copy of the VS-21c mirrors
+    (`/tmp/vector-vectorscope/vs22c/mirrors`), and `bun dataset.ts --mirrors`
+    at HEAD then exited 0 with all 10 cases checked and no problem, the
+    first run of the git checks on the seed with its fixes. After the change
+    it exits 0 again, 10 cases checked, with one note (hono, above). The
+    mirrors are scratch and never committed.
+  - **Mutation check.** Thirteen mutations, each applied alone with the
+    named test file run through the lock and the file restored after each
+    (`git diff --stat` compared before and after): the context-level floor
+    dropped; pre-existing scope allowed in `labels.defects`; the
+    one-entry-per-pass rule restored (the seed's "is valid" fails); feedback
+    allowed on a bug case; the attack leaked into `caseView`; the replay
+    refusal stopped; the pushes dropped from `mirrorPlan`; scope dropped from
+    the freeze list; the reach check dropped; the head-rule file check
+    dropped; the interaction object check dropped; the testGap object check
+    dropped; the incremental-trait coupling dropped. All were caught. The
+    review fixes (below) added ten more, all caught.
+  - Nothing was sent to a model, no paid path ran, no workflow was
+    dispatched, no dependency was added, and no user-visible string changed
+    (D14).
+- **Merge prediction** (read-only `git merge-tree --write-tree --name-only`
+  at HEAD, and `git diff --name-only` from each branch's merge base): no file
+  this package touches changes on `origin/codium` (`5a079cbd`),
+  `origin/self-evolving` (`f062bcce`) or `origin/vector-at-mention`
+  (`0b68e8f6`), so it adds no conflict. The conflicts merge-tree lists at
+  HEAD against codium and self-evolving are in other packages' files
+  (`types.ts`, `ai-review.ts`, `run.ts`, `test.yml` and others) and predate
+  this package. The new imports read `state.ts`, which all three branches
+  change, but only `parseFindingMarker`, which they keep.
+- **Deferred to a later eval package** (it needs no runner change, so it
+  can come before runner-wiring, but it is beyond this package's labels):
+  - the engine half of the addendum's "Where": `ReplayCase` comments and
+    threads, and a `ReviewEval.replay` sequence mode (a full review of the
+    first push, then incremental with `since`, prior findings and state).
+    `RunInput` already has `since`, `mode`, `prior` and
+    `context.teamDismissed`/`humanComments`. Until VS-35 wiring it can feed
+    only legacy `teamPatterns`, and it needs the raw-thread schema follow-up
+    in (q). When it lands, the refusal in (l) is lifted for what it feeds;
+  - the report's use of the labels: slice recall per context level (VS-37,
+    VS-36), an S9-scope and ReviewBench-parity count with `notInChange`,
+    recall by stratum (VS-21), and per-push recall and false alarms on clean
+    later pushes (VS-41);
+  - `labels.notInChange` in the pass records and the freeze.
+- **Deferred to their windows or owners:**
+  - the "not in this change" judging tag: Q29, `RUBRIC_VERSION` 2;
+  - real cases of each new kind and stratum: VS-22b curation, the AACR
+    subset (Q31) and per-PR licence checks;
+  - real `vector-dismissal` markers and `source: "recorded"`: VS-35's later
+    window with the salt secret, which also brings the writer-hash check
+    that would make `invented-writers` fail to teach a pattern;
+  - nats's testGap and every label's pass 2;
+  - stripping third-party bot blocks from PR bodies: the dataset holds no PR
+    text yet;
+  - the large-repository slice (VS-38);
+  - `TRIVIAL_KINDS` importing core's (o).
+- **Deferred verification:**
+  - no real sequence, feedback, head-added rule or out-of-change case
+    exists, so their git checks have run only on the local fixture
+    repository;
+  - kappa on the new labels needs pass 2;
+  - the legacy and guarded comparison runs as pure functions (`teamPatterns`
+    with `teamPenalty`, `guardedTeamPatterns` with `teamDemotion`), not
+    replays; legacy's prompt rule, which suppresses on one pattern, is not
+    exercised;
+  - the engine entry point's stop on a refused split is not run in the
+    engine suite; `replayPlan`'s throw is tested in `replay.test.ts`.
+
+### 2026-11-07 · VS-22c review fixes
+
+Nine review findings, one of them blocking; two pairs overlap (the two on
+`caseView`, and the two on `lineRange`), so there are seven distinct fixes.
+All nine were fixed, none by narrowing a comment. Only `dataset.ts`,
+`fixtures.test.ts`, `annotation-guide.md`, `README.md` and this log changed;
+`seed.json`, `replay.ts`, `ci.ts` and every core and engine file are as the
+entry above left them, so the seed's held-out digest, `manifestCase`, the
+mirror plan and `REVIEW_PIPELINE_SOURCES` cannot move. The entry above is
+updated in place where its facts changed (the constants, `caseView`, the test
+count, (g)'s reach, invented-writers and leak guard, (k)'s targets, the test
+table and the mutation note). Nothing is committed.
+
+- **`caseView` passed the manifest's feedback objects by reference**
+  (blocking, `dataset.ts:325`, and the non-blocking one at `:315`). Fixed as
+  the findings asked. Each comment is rebuilt as `{ pr, path, body }` plus
+  `at`, `replied` and `codeChanged` when present, each bot push as
+  `{ pr, at }`, and `own` is a copy, so a key the validator lets through
+  never reaches the view. The `CaseView` comment now says the case's own
+  dates stay out and the feedback's own times are input. A new test puts a
+  `note` holding the hidden defect's summary on the feedback, on every
+  comment and on every bot push: the manifest stays valid (the validator
+  refuses no unknown key), the view equals the clean case's view and holds
+  no note, and the view's `own` is not the manifest's array. The existing
+  view test passes unchanged. The optional part, making `commentProblems`
+  refuse unknown keys, was not taken: no other part of the schema refuses
+  unknown keys, the view is now the boundary and fails closed on its own,
+  and the guide now tells annotators to keep notes in `labels` anyway. It
+  stays open to a later schema package.
+- **The line checks built a list of every cited line** (`dataset.ts:1418`
+  and `:1583`). Fixed by interval arithmetic, so `lineRange` is gone.
+  `levelOf` asks whether `[line, endLine]` lies inside one hunk; this is
+  the old "every line in some hunk" exactly, because git joins hunks whose
+  context would meet, so two hunks' new-side ranges never touch (a comment
+  says so). `addedWithin` counts the added lines that fall inside the range,
+  walking the added set, which the diff bounds; "cites an added line" is a
+  count above zero, "cites an unchanged line" a count below the range's
+  span, and a head-added rule needs a count equal to the span. So a typo
+  such as `endLine: 1000000000` is reported "past the end of the file" at
+  once. A new test cites that endLine on a defect's alternative, a
+  `notInChange` location and a head-added rule, and gets only the past-end
+  messages (and the rule's own refusal). Two range cases now pin the
+  arithmetic: a location running one line out of lib.py's hunk (17-21, and
+  18-22 past the end) needs file, and a `notInChange` range whose only added
+  line is its last (19-21) is refused. The finding's alternative, running
+  the label checks only on locations that passed the past-end check, was
+  not needed once nothing is materialised.
+- **The interaction target counted defects, VS-41 counts cases**
+  (`dataset.ts:1778`). Fixed. The round-two targets line now reads
+  "interaction cases N/5", counting cases with at least one interaction
+  defect; the "Sequences" line keeps its interaction-defect count, so both
+  are reported. `ROUND_TWO_TARGETS.interactions` stays 5, and its comment,
+  the guide's amendment and (k) above now say cases. A new dry-run test has
+  one sequence case with two interaction defects: "2 interaction defect(s)"
+  on the Sequences line, "interaction cases 1/5" on the targets line.
+- **The pre-existing "is new in the change" check could never fire alone**
+  (`dataset.ts:1552`). Removed, as the finding said: every line of a file
+  the change adds is an added line, so such a location already gets "a line
+  the change added", and the check only repeated it. `changeProblems`'
+  comment now says a defect outside the change cites no added line, "so no
+  line of a file the change adds". No separate message was wanted, so no
+  new test; the existing added-line test stands.
+- **`labels.feedback.finding.category` was cast without a check**
+  (`dataset.ts:775`). Fixed. A category core does not read gets its own
+  refusal, "labels.feedback.finding.category <value> must be one of core's
+  finding categories (review/types.ts CATEGORIES), not a dataset defect
+  category", and the probe (so the reach check) is built only once it
+  passes, so the curator is no longer pointed at the comments. A non-string
+  category keeps the old "needs the core category and the title" message.
+  `dataset.ts` exports its own `CATEGORIES` (the defect categories) and
+  AGENTS.md forbids aliased and star imports, so core's list is not
+  imported by name: `isFindingCategory` asks core's `findingMarker` and
+  `parseFindingMarker` (the parser the finding names) whether the value
+  round-trips, as `carriesRules` asks `trustedRules`, so nothing is copied.
+  A new test refuses "correctness" and "Bug" with that message alone, keeps
+  the old message for a number, accepts every core category (the test
+  imports core's `CATEGORIES`, which it can name), and shows a valid
+  category the feedback does not dismiss failing only the reach.
+- **invented-writers was reported as a round-two target**
+  (`dataset.ts:132`). Fixed as the finding offered first: the value stays a
+  labelled known-gap fixture, and the targets line lists only addendum A's
+  four attacks. `FEEDBACK_ATTACKS` is now built from a module-private
+  `ADDENDUM_ATTACKS` plus `invented-writers`, so its value and order are
+  unchanged (its test passes as it was); the "Review feedback" tally still
+  counts every attack. The new dry-run test checks an invented-writers case
+  appears in the tally and not in the targets line; the two existing
+  targets lines lost ", invented-writers 0/1". The guide says the first
+  four attacks are the addendum's.
+- **The leak guard's quoted list was narrow and case-sensitive**
+  (`dataset.ts:759`). Fixed. It now also holds `labels.injection`,
+  `labels.rationale` and the id of each defect and `notInChange` entry, and
+  compares in lower case on both sides. The leak test gained the defect id,
+  the injection text, an upper-cased summary and a lower-cased injection, and
+  a case with a rationale and a `notInChange` entry (valid on its own) whose
+  rationale, id, summary and cause are each refused. The price is that a
+  short defect id is refused wherever a body happens to contain it; the
+  curator renames the id or rewords the body, which is the fail-closed
+  direction. `own` hashes are still not compared with the fix's short SHA:
+  no finding asked, and they are validated as 12 to 64 hex characters.
+- **Evidence.** Each run went through the lock with `--timeout 30000` and
+  `GITHUB_ACTIONS=false`, with `TMPDIR` and the XDG roots under
+  `/tmp/vector-vectorscope/vs22c-fix/`, one file at a time from
+  `packages/script` (eval) or `packages/engine`:
+  - `fixtures.test.ts` 103 pass (99 before; four new tests, and new
+    expectations in five: the leak test, the context-level and
+    `notInChange` object tests, and the two targets lines);
+    `replay.test.ts` 38, `run.test.ts` 14,
+    `report.test.ts` 34 and engine `test/review/vectorscope-replay.test.ts`
+    18, all as before;
+  - typecheck: `bun tsgo -p ../../script/vectorscope-eval/tsconfig.json`
+    from `packages/engine`, and `bun typecheck` in `packages/engine` and
+    `packages/script`, pass;
+  - prettier: clean on `dataset.ts`, `fixtures.test.ts`, the guide and the
+    README;
+  - dry runs: `bun dataset.ts` exits 0, and its only changed line is the
+    round-two targets line ("interaction cases 0/5", no invented-writers),
+    diffed against the same run with the two targets edits reverted on a
+    restored scratch copy;
+    `--mirrors /tmp/vector-vectorscope/vs22c/mirrors` exits 0 with 10 cases
+    checked and the same one note (hono);
+  - mutation check, ten mutations each applied alone to a scratch copy of
+    `dataset.ts`, `fixtures.test.ts` run through the lock, and the file
+    restored and compared after (`git diff --stat` and `cmp`): comments,
+    bot pushes or `own` passed by reference; the case-sensitive compare;
+    `labels.injection` dropped from the quoted list; any string accepted as
+    a finding category; the targets line counting defects; the targets line
+    listing every attack; `levelOf` reading only the first line; the added
+    count reading only the first line. All ten were caught;
+  - the full root typecheck was not run: nothing is pushed.
+- Off by default as before: no `ReviewConfig` key, no change to
+  `EVIDENCE_POLICY_KEYS`, `EvidenceScope` or `VARIANT_KEYS`, no runner or
+  core change, no user-visible string (D14), no owner question decided, and
+  nothing sent to a model.
